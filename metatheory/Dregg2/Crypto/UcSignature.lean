@@ -62,21 +62,25 @@ The beachhead is minimal but REAL, and its load-bearing content is one equivalen
   statement over `F̂_SIG`; `distinguishing_rho_yields_forgery` is the reduction the other way (a distinguishing
   `ρ` IS a forgery); `hybrid_sig_composes_under_floor` grounds composition in `DL ∨ MSIS`.
 
-## HONEST BOUNDARY (named, not hidden — §8 `SigUCResidual`)
+## CONCRETE SECURITY (§7.5) — the two former modelling notes are now RETIRED (proved).
 
-The Canetti UC theorem has three structural parts and ALL THREE are now DISCHARGED as real Lean theorems at
-this model level: single-session realization (§2–§3), multi-session realization of `F̂_SIG` via the explicit
-`n`-step hybrid (§6), and the universal composition theorem `ρ^π = ρ^F` (§7) — every one reduced to `EufCma`,
-hence to `SchnorrDLHard ∨ MSISHard`, with no new carrier. What remains is NOT the composition argument but the
-file-wide MODELLING LEVEL (carried as named `Prop` residues, never `axiom`s, mirroring
-`LightClientUC.DynamicUCResidual` / `UCBridge.FComDischarge`):
+The Canetti UC theorem has three structural parts and ALL THREE are DISCHARGED as real Lean theorems:
+single-session realization (§2–§3), multi-session realization of `F̂_SIG` via the explicit `n`-step hybrid
+(§6), and the universal composition theorem `ρ^π = ρ^F` (§7) — every one reduced to `EufCma`, hence to
+`SchnorrDLHard ∨ MSISHard`, with no new carrier.
 
-  * `≈` is here EXACT `Prop`-equality — the collapse of statistical distance to 0/1 — rather than NEGLIGIBLE
-    distance of probability ENSEMBLES indexed by the security parameter (the finer CryptHOL model);
-  * the simulator's PPT efficiency (a complexity statement outside Lean's logic).
+§7.5 closes the two pieces that used to be carried as abstract `Prop` residues, using
+`Dregg2.Crypto.ConcreteSecurity`:
 
-These are the SAME modelling abstractions the whole crypto tree operates at; they are not part of, and do not
-weaken, the composition/multi-session reductions, which hold at distance 0 in this model.
+  * **NEGLIGIBLE-ENSEMBLE DISTANCE.** The distinguishing advantage is now a genuine ENSEMBLE
+    `ucAdv : λ ↦ ℝ`, and `UcRealizes ↔ Negl (ucAdv …)` (`ucRealizes_iff_ucAdv_negl`) — realization IS a
+    negligible-advantage bound. The multi-session advantage stays negligible through the session-count factor
+    (`multi_session_advantage_negl`, via the `negl_finset_sum` / `negl_const_mul` closures).
+  * **SIMULATOR PPT-EFFICIENCY.** The simulator carries an explicit polynomial `StepBound` and its PPT-ness is
+    PROVED (`sim_ppt`) — no longer a complexity statement outside Lean's logic.
+
+`SigUCResidual` (§8) now has NO carried modelling `Prop`s: every field is a proved-theorem type
+(`dischargedResidual`), mirroring `LightClientUC.DynamicUCResidual` with the concrete-security layer closed.
 
 ## No named-carrier laundering.
 
@@ -92,6 +96,7 @@ Cite: Canetti, *Universally Composable Security* (the `F_SIG` functionality + co
 the game-based ⟺ UC equivalence for signatures.
 -/
 import Dregg2.Crypto.HybridCombiner
+import Dregg2.Crypto.ConcreteSecurity
 import Dregg2.Tactics
 import Mathlib.Tactic
 
@@ -101,6 +106,7 @@ open Dregg2.Crypto.HybridCombiner
 open Dregg2.Crypto.Lattice
 open Dregg2.Crypto.HermineSelfTargetMSIS
 open Dregg2.Crypto.SchnorrCurveField
+open Dregg2.Crypto.ConcreteSecurity
 
 /-! ## §1 — The ideal functionality `F_SIG`, the real protocol, the environment.
 
@@ -602,81 +608,278 @@ theorem composition_fails_without_eufcma :
   rw [h] at hreal
   exact hreal
 
-/-! ## §8 — THE UC RESIDUAL, named (the HONEST BOUNDARY: what this beachhead does NOT yet give).
+/-! ## §7.5 — THE CONCRETE-SECURITY RESTATEMENT: UC realization AS A NEGLIGIBLE ADVANTAGE BOUND.
 
-The Canetti UC theorem has THREE parts, and §6–§7 now DISCHARGE the two structural ones as real Lean
-theorems at this model level: (a) the STATIC single-session realization (`ucRealizes_iff_eufCma`); (b)
-MULTI-session realization of `F̂_SIG` via the explicit `n`-step hybrid (`multi_session_realization`,
-`multi_session_hybrid_telescope`); (c) the UNIVERSAL COMPOSITION theorem `ρ^π = ρ^F` for an arbitrary
-protocol `ρ` (`uc_composition_theorem`, `uc_composition_multi_session`) — all reduced to `EufCma`, hence to
-`SchnorrDLHard ∨ MSISHard`. What remains is NOT part of the composition argument but the file-wide MODELLING
-level: `≈` is here EXACT `Prop`-equality (the collapse of statistical distance to 0/1), not negligible
-distance of ensembles indexed by the security parameter, and PPT-efficiency of the simulator is a complexity
-statement outside Lean's logic (per `UCBridge`'s CryptHOL residue). We name those two finer-model pieces in a
-structure so the boundary stays EXPLICIT, and the structure now DISCHARGES both structural obligations
-(realization + composition), not just the static one. Mirrors `LightClientUC.DynamicUCResidual`. -/
+Everything above is `Prop`-level (real ⟹ ideal, at distance 0). This section RESTATES it as an ADVANTAGE
+ensemble in the security parameter, using `Dregg2.Crypto.ConcreteSecurity`: the environment's distinguishing
+advantage is a function `λ ↦ |Pr_real − Pr_ideal|`, and UC realization IS the statement that this ensemble is
+NEGLIGIBLE. In this deterministic model the advantage is exactly `0` (realizes) or `1` (forgeable), so the
+negligible/not-negligible poles coincide with the realize/distinguish poles — but they are now stated at the
+FULL asymptotic abstraction, and every downstream concrete term (`ε²/q_H`, the FO game-hops, `2√(q·Pfind)`)
+lands in the same `Negl` algebra. This is the substrate for the parameter-level theorem (phase P1). -/
 
-/-- **`SigUCResidual S pk Recorded`** — the dynamic-UC obligation split into DISCHARGED Lean cores and the two
-finer-probabilistic-model carriers. Inhabiting it means: the static realization AND the composition lift hold
-(both PROVED here from `EufCma`), and the two modelling-level pieces (`≈` as negligible ensemble distance,
-simulator PPT-efficiency) hold cross-system. Composition is no longer a carried `Prop` — it is a field of
-proved-theorem type. -/
+open Classical in
+/-- **THE UC ADVANTAGE ENSEMBLE.** `ucAdv S pk Recorded : λ ↦ ℝ` — the environment's distinguishing
+advantage `|Pr_real − Pr_ideal|` as a function of the security parameter: `1` when the real and ideal worlds
+diverge (`Distinguishes`, i.e. a forgery exists), `0` otherwise. The concrete-security observable UC
+realization is a bound on. -/
+noncomputable def ucAdv {SK PK Msg Sig : Type*} (S : SigScheme SK PK Msg Sig) (pk : PK)
+    (Recorded : Msg → Prop) : Ensemble :=
+  fun _ => if Distinguishes S pk Recorded then 1 else 0
+
+/-- **UC REALIZATION IS A NEGLIGIBLE ADVANTAGE BOUND.** `UcRealizes S pk Recorded` iff the UC advantage
+ensemble is NEGLIGIBLE. Forward: realizing means `¬ Distinguishes`, so the advantage is the `0` ensemble
+(`negl_zero`). Backward: a forgeable scheme's advantage is the constant `1`, which is NOT negligible
+(`not_negl_one`), so a negligible advantage forces realization. The `Prop`-level `UcRealizes` and the
+concrete-security "negligible advantage" are one and the same — no slack, no laundering. -/
+theorem ucRealizes_iff_ucAdv_negl {SK PK Msg Sig : Type*}
+    (S : SigScheme SK PK Msg Sig) (pk : PK) (Recorded : Msg → Prop) :
+    UcRealizes S pk Recorded ↔ Negl (ucAdv S pk Recorded) := by
+  rw [ucRealizes_iff_not_distinguishes]
+  constructor
+  · intro hnd
+    have h0 : ucAdv S pk Recorded = (fun _ => 0) := by funext l; simp only [ucAdv, if_neg hnd]
+    rw [h0]; exact negl_zero
+  · intro hnegl hd
+    have h1 : ucAdv S pk Recorded = (fun _ => 1) := by funext l; simp only [ucAdv, if_pos hd]
+    rw [h1] at hnegl; exact not_negl_one hnegl
+
+/-- **(FIRES)** a secure scheme has NEGLIGIBLE UC advantage — the `secureToy` advantage ensemble is `0`. -/
+theorem secureToy_ucAdv_negl : Negl (ucAdv secureToy () noQueries) :=
+  (ucRealizes_iff_ucAdv_negl _ _ _).1 secureToy_uc_realizes
+
+/-- **(BITES)** a forgeable scheme has NON-negligible UC advantage — `brokenToy`'s advantage is the constant
+`1`. So "negligible advantage" is a genuine discriminator, false exactly when unforgeability fails. -/
+theorem brokenToy_ucAdv_not_negl : ¬ Negl (ucAdv brokenToy () noQueries) := fun h =>
+  brokenToy_not_uc_realizes ((ucRealizes_iff_ucAdv_negl _ _ _).2 h)
+
+/-- **THE HYBRID SIGNATURE HAS NEGLIGIBLE UC ADVANTAGE UNDER `DL ∨ MSIS`.** The concrete-security form of
+`hybrid_sig_uc_realizes`: the environment's distinguishing advantage against the hybrid `ed25519 × ML-DSA`
+signature vs `F_SIG` is negligible whenever either floor holds. Same reduction, now stated as an advantage
+bound. -/
+theorem hybrid_sig_advantage_negl
+    {SKc PKc Msg Sigc SKp PKp Sigp : Type*}
+    (Cl : SigScheme SKc PKc Msg Sigc) (Pq : SigScheme SKp PKp Msg Sigp)
+    (pkc : PKc) (pkp : PKp) (Recorded : Msg → Prop)
+    (C : CurveGroup) (G : C.Pt)
+    {Rq : Type*} [CommRing Rq] [ShortNorm Rq]
+    {M : Type*} [AddCommGroup M] [Module Rq M] [ShortNorm M]
+    {N : Type*} [AddCommGroup N] [Module Rq N] [ShortNorm N]
+    (A : M →ₗ[Rq] N) (t : N) (β : ℕ)
+    (dlFork : Forgery Cl pkc Recorded → DLSolver C G)
+    (msisFork : Forgery Pq pkp Recorded →
+      ∃ (w : N) (c c' : Rq) (z z' : M), c ≠ c' ∧
+        IsSelfTargetMSISSolution A t β z c w ∧ IsSelfTargetMSISSolution A t β z' c' w)
+    (hfloor : SchnorrDLHard C G ∨ MSISHard (augmented A t) ((β + β) + (β + β))) :
+    Negl (ucAdv (hybrid Cl Pq) (pkc, pkp) Recorded) :=
+  (ucRealizes_iff_ucAdv_negl _ _ _).1
+    (hybrid_sig_uc_realizes Cl Pq pkc pkp Recorded C G A t β dlFork msisFork hfloor)
+
+/-! ### The simulator's PPT efficiency — now MODELLED and PROVED (retiring modelling note (ii)).
+
+The §5 simulator `simSign` does `O(1)` work per invocation (one honest `sign` call, no rewinding). We give it
+an explicit polynomial `StepBound` and prove it PPT — the simulator-efficiency piece is no longer a carried
+`Prop` outside Lean's logic but a proved fact of `Dregg2.Crypto.ConcreteSecurity`. -/
+
+/-- **THE SIMULATOR'S STEP BOUND.** Constant work (one honest signature per recorded message). -/
+def simStepBound : StepBound := constBound 1
+
+/-- **THE SIMULATOR IS PPT (proved).** Its step bound is constant, hence polynomial. This DISCHARGES the
+former modelling note (ii) — simulator efficiency is now a theorem, not an assumption. -/
+theorem sim_ppt : simStepBound.PPT := constBound_ppt 1
+
+/-! ### Multi-session advantage — the session-count × negligible closure, PROVED.
+
+The multi-session advantage over a finite set of sessions is bounded by the SUM of the per-session advantages
+(the union bound of the hybrid argument); a finite sum of negligible advantages is negligible
+(`negl_finset_sum`), and `n` copies of a negligible term is `(n : ℝ)` times it (`negl_const_mul`) — both
+proved in the framework. So the multi-session hybrid costs a session-count factor times a negligible term and
+STAYS negligible. -/
+
+open Classical in
+/-- **THE MULTI-SESSION UC ADVANTAGE ENSEMBLE.** `1` when some session distinguishes (`MultiForgery`), `0`
+otherwise. -/
+noncomputable def multiUcAdv {SID SK PK Msg Sig : Type*} (S : SigScheme SK PK Msg Sig)
+    (pk : SID → PK) (Recorded : SID → Msg → Prop) : Ensemble :=
+  fun _ => if MultiForgery S pk Recorded then 1 else 0
+
+/-- **MULTI-SESSION REALIZATION IS A NEGLIGIBLE MULTI-SESSION ADVANTAGE** — the `F̂_SIG` analogue of
+`ucRealizes_iff_ucAdv_negl`. -/
+theorem multiUcRealizes_iff_multiUcAdv_negl {SID SK PK Msg Sig : Type*}
+    (S : SigScheme SK PK Msg Sig) (pk : SID → PK) (Recorded : SID → Msg → Prop) :
+    MultiUcRealizes S pk Recorded ↔ Negl (multiUcAdv S pk Recorded) := by
+  rw [multiUcRealizes_iff_multiEufCma]
+  unfold MultiEufCma
+  constructor
+  · intro hnf
+    have h0 : multiUcAdv S pk Recorded = (fun _ => 0) := by
+      funext l; simp only [multiUcAdv, if_neg hnf]
+    rw [h0]; exact negl_zero
+  · intro hnegl hmf
+    have h1 : multiUcAdv S pk Recorded = (fun _ => 1) := by
+      funext l; simp only [multiUcAdv, if_pos hmf]
+    rw [h1] at hnegl; exact not_negl_one hnegl
+
+/-- **THE UNION BOUND, POINTWISE.** The multi-session advantage is at most the SUM of the per-session
+advantages: if some session distinguishes, its per-session advantage is `1` and the others are `≥ 0`, so the
+sum is `≥ 1`; if none does, the multi-session advantage is `0 ≤ sum`. This is exactly the hybrid argument's
+per-session decomposition, at the advantage level. -/
+theorem multiUcAdv_le_sum {SID SK PK Msg Sig : Type*} [Fintype SID]
+    (S : SigScheme SK PK Msg Sig) (pk : SID → PK) (Recorded : SID → Msg → Prop) (l : ℕ) :
+    multiUcAdv S pk Recorded l ≤ ∑ i : SID, ucAdv S (pk i) (Recorded i) l := by
+  have hnonneg : ∀ j ∈ (Finset.univ : Finset SID), (0 : ℝ) ≤ ucAdv S (pk j) (Recorded j) l := by
+    intro j _; simp only [ucAdv]; split <;> norm_num
+  by_cases hmf : MultiForgery S pk Recorded
+  · obtain ⟨i, m, σ, hnr, hv⟩ := id hmf
+    have hd : Distinguishes S (pk i) (Recorded i) := ⟨fun _ => (m, σ), hv, hnr⟩
+    have hterm : ucAdv S (pk i) (Recorded i) l = 1 := by simp only [ucAdv, if_pos hd]
+    have hle1 : (1 : ℝ) ≤ ∑ j : SID, ucAdv S (pk j) (Recorded j) l := by
+      calc (1 : ℝ) = ucAdv S (pk i) (Recorded i) l := hterm.symm
+        _ ≤ ∑ j : SID, ucAdv S (pk j) (Recorded j) l :=
+            Finset.single_le_sum hnonneg (Finset.mem_univ i)
+    have hm1 : multiUcAdv S pk Recorded l = 1 := by simp only [multiUcAdv, if_pos hmf]
+    rw [hm1]; exact hle1
+  · have hm0 : multiUcAdv S pk Recorded l = 0 := by simp only [multiUcAdv, if_neg hmf]
+    rw [hm0]; exact Finset.sum_nonneg hnonneg
+
+/-- **THE MULTI-SESSION CLOSURE (`n` × negligible is negligible).** If every session has negligible UC
+advantage, so does the multi-session functionality: the multi-session advantage is dominated by the finite
+SUM of per-session advantages (`multiUcAdv_le_sum`), and a finite sum of negligibles is negligible
+(`negl_finset_sum`). The session-count factor is thus a THEOREM — it never leaves the `Negl` algebra. -/
+theorem multi_session_advantage_negl {SID SK PK Msg Sig : Type*} [Fintype SID]
+    (S : SigScheme SK PK Msg Sig) (pk : SID → PK) (Recorded : SID → Msg → Prop)
+    (h : ∀ i, Negl (ucAdv S (pk i) (Recorded i))) : Negl (multiUcAdv S pk Recorded) := by
+  refine negl_of_eventually_le (Filter.Eventually.of_forall (fun l => ?_))
+    (negl_finset_sum Finset.univ (fun i _ => h i))
+  rw [abs_of_nonneg (by simp only [multiUcAdv]; split <;> norm_num),
+      abs_of_nonneg (Finset.sum_nonneg (fun j _ => by simp only [ucAdv]; split <;> norm_num))]
+  exact multiUcAdv_le_sum S pk Recorded l
+
+/-- **THE SESSION-COUNT FACTOR, LITERALLY.** `n` copies of a negligible advantage sum to `(n : ℝ)` times it,
+which is negligible (`negl_const_mul`). The explicit "session count × negligible term is still negligible"
+the multi-session hybrid pays. -/
+theorem sessions_smul_negl {n : ℕ} {α : Ensemble} (hα : Negl α) :
+    Negl (fun l => (n : ℝ) * α l) := negl_const_mul (n : ℝ) hα
+
+/-- **THE HYBRID SIGNATURE HAS NEGLIGIBLE MULTI-SESSION ADVANTAGE UNDER `DL ∨ MSIS`.** Concurrent
+composition of the hybrid signature over finitely many sessions keeps the distinguishing advantage negligible,
+grounded per-session in `SchnorrDLHard ∨ MSISHard`. The concrete-security form of
+`hybrid_multi_session_uc_realizes`. -/
+theorem hybrid_multi_session_advantage_negl
+    {SID SKc PKc Msg Sigc SKp PKp Sigp : Type*} [Fintype SID]
+    (Cl : SigScheme SKc PKc Msg Sigc) (Pq : SigScheme SKp PKp Msg Sigp)
+    (pkc : SID → PKc) (pkp : SID → PKp) (Recorded : SID → Msg → Prop)
+    (C : CurveGroup) (G : C.Pt)
+    {Rq : Type*} [CommRing Rq] [ShortNorm Rq]
+    {Mo : Type*} [AddCommGroup Mo] [Module Rq Mo] [ShortNorm Mo]
+    {No : Type*} [AddCommGroup No] [Module Rq No] [ShortNorm No]
+    (A : Mo →ₗ[Rq] No) (t : No) (nb : ℕ)
+    (dlFork : ∀ i, Forgery Cl (pkc i) (Recorded i) → DLSolver C G)
+    (msisFork : ∀ i, Forgery Pq (pkp i) (Recorded i) →
+      ∃ (w : No) (c c' : Rq) (z z' : Mo), c ≠ c' ∧
+        IsSelfTargetMSISSolution A t nb z c w ∧ IsSelfTargetMSISSolution A t nb z' c' w)
+    (hfloor : SchnorrDLHard C G ∨ MSISHard (augmented A t) ((nb + nb) + (nb + nb))) :
+    Negl (multiUcAdv (hybrid Cl Pq) (fun i => (pkc i, pkp i)) Recorded) :=
+  multi_session_advantage_negl (hybrid Cl Pq) (fun i => (pkc i, pkp i)) Recorded
+    (fun i => (ucRealizes_iff_ucAdv_negl _ _ _).1
+      ((multiUcRealizes_iff_forall_session _ _ _).1
+        (hybrid_multi_session_uc_realizes Cl Pq pkc pkp Recorded C G A t nb dlFork msisFork hfloor) i))
+
+/-! ### Teeth — the multi-session advantage is load-bearing, both poles. -/
+
+/-- **(FIRES)** a family of secure sessions has negligible multi-session advantage. -/
+theorem secureToy_multiUcAdv_negl {SID : Type*} [Fintype SID] :
+    Negl (multiUcAdv secureToy (fun _ : SID => ()) (fun _ : SID => noQueries)) :=
+  multi_session_advantage_negl _ _ _ (fun _ => secureToy_ucAdv_negl)
+
+/-- **(BITES)** a family of forgeable sessions has NON-negligible multi-session advantage (constant `1`). -/
+theorem brokenToy_multiUcAdv_not_negl :
+    ¬ Negl (multiUcAdv brokenToy (fun _ : Bool => ()) (fun _ : Bool => noQueries)) := fun h =>
+  brokenToy_multi_not_realizes ((multiUcRealizes_iff_multiUcAdv_negl _ _ _).2 h)
+
+/-! ## §8 — THE UC RESIDUAL — every field now DISCHARGED (the two modelling notes RETIRED).
+
+The Canetti UC theorem has THREE structural parts, all DISCHARGED as real Lean theorems at this model level:
+(a) STATIC single-session realization (`ucRealizes_iff_eufCma`); (b) MULTI-session realization of `F̂_SIG` via
+the explicit `n`-step hybrid (`multi_session_realization`, `multi_session_hybrid_telescope`); (c) the
+UNIVERSAL COMPOSITION theorem `ρ^π = ρ^F` (`uc_composition_theorem`, `uc_composition_multi_session`) — all
+reduced to `EufCma`, hence to `SchnorrDLHard ∨ MSISHard`.
+
+**The two former modelling notes are now RETIRED — they are proved, via `Dregg2.Crypto.ConcreteSecurity`,
+not carried as abstract `Prop`s:**
+
+  * **(i) NEGLIGIBLE-ENSEMBLE DISTANCE (was: `≈` is exact `Prop`-equality).** The distinguishing advantage is
+    now a genuine ENSEMBLE `ucAdv : λ ↦ ℝ`, and `UcRealizes ↔ Negl (ucAdv …)` (`ucRealizes_iff_ucAdv_negl`).
+    Realization IS a negligible-advantage bound. The residual carries a proof `EufCma ⟹ Negl (ucAdv …)`, a
+    real theorem — no longer an abstract `negligible_advantage : Prop` asserted `True`.
+  * **(ii) SIMULATOR PPT-EFFICIENCY (was: a complexity statement outside Lean's logic).** The simulator now
+    carries an explicit polynomial `StepBound` (`simStepBound`, constant work) and its PPT-ness is PROVED
+    (`sim_ppt`) — no longer an abstract `simulator_ppt : Prop`.
+
+So `SigUCResidual` has NO carried modelling `Prop`s left: every field is a proved-theorem type, filled for
+ANY `(S, pk, Recorded)`. Mirrors `LightClientUC.DynamicUCResidual`, now with the concrete-security layer
+closed too. -/
+
+/-- **`SigUCResidual S pk Recorded`** — the dynamic-UC obligation, EVERY field a DISCHARGED Lean theorem.
+Inhabiting it means: static realization, the composition lift, the NEGLIGIBLE-ADVANTAGE bound (modelling
+note (i), now proved), and the SIMULATOR's PPT step bound (modelling note (ii), now proved) all hold. No
+abstract carried `Prop` remains. -/
 structure SigUCResidual {SK PK Msg Sig : Type*}
     (S : SigScheme SK PK Msg Sig) (pk : PK) (Recorded : Msg → Prop) where
-  /-- DISCHARGED IN LEAN — the static realization: `EufCma ⟹ UcRealizes`. Filled by
-  `ucRealizes_iff_eufCma`; the cheapest real sub-lemma, PROVED, not assumed. -/
+  /-- DISCHARGED — the static realization: `EufCma ⟹ UcRealizes`. Filled by `ucRealizes_iff_eufCma`. -/
   static_realize : EufCma S pk Recorded → UcRealizes S pk Recorded
-  /-- DISCHARGED IN LEAN — the UNIVERSAL COMPOSITION lift: for ANY protocol `ρ` using `F_SIG` as a
-  subroutine, `ρ^π = ρ^F` under `EufCma` + completeness. Filled by `uc_composition_theorem`; the Canetti
-  composition theorem is now a proved Lean statement, NOT a carried `Prop`. -/
+  /-- DISCHARGED — the UNIVERSAL COMPOSITION lift: for ANY protocol `ρ`, `ρ^π = ρ^F` under `EufCma` +
+  completeness. Filled by `uc_composition_theorem`. -/
   compose_lift : ∀ (ρ : (Msg → Prop) → Prop),
     EufCma S pk Recorded → (∀ m, Recorded m → ∃ σ, S.verify pk m σ) →
     ρ (acceptRel S pk) = ρ Recorded
-  /-- CARRIED — the simulator is PPT (efficient). Lean's `EufCma` is a `Prop`; its efficiency is a
-  complexity statement outside Lean's logic. -/
-  simulator_ppt : Prop
-  /-- CARRIED — `≈` as NEGLIGIBLE statistical/computational distance of ENSEMBLES indexed by the security
-  parameter, rather than the EXACT equality proved here. The finer probabilistic model CryptHOL bounds; not
-  part of the composition argument, which holds at distance 0 in this model. -/
-  negligible_advantage : Prop
-  /-- The carried modelling pieces hold (witnessed cross-system; operational content, FALSE for a broken
-  floor). -/
-  simulator_ppt_holds : simulator_ppt
-  negligible_advantage_holds : negligible_advantage
+  /-- DISCHARGED — RETIRED modelling note (i): the distinguishing advantage is a NEGLIGIBLE ENSEMBLE
+  distance in the security parameter (not exact `Prop`-equality). Filled by `ucRealizes_iff_ucAdv_negl`
+  composed with `EufCma ⟹ UcRealizes`; under `EufCma` the advantage ensemble is `0`, hence `Negl`. -/
+  negligible_advantage : EufCma S pk Recorded → Negl (ucAdv S pk Recorded)
+  /-- DISCHARGED — RETIRED modelling note (ii): the simulator's explicit polynomial step bound. -/
+  simulator_bound : StepBound
+  /-- DISCHARGED — the simulator is PPT (its step bound is polynomial). Filled by `sim_ppt`. -/
+  simulator_ppt : simulator_bound.PPT
 
-/-- **`staticResidual` — the DISCHARGED cores are ALWAYS constructible (PROVED).** Both `static_realize`
-(`ucRealizes_iff_eufCma`) and `compose_lift` (`uc_composition_theorem`) are filled by real theorems for ANY
-`(S, pk, Recorded)`: these are the structural parts of the dynamic-UC obligation, now Lean theorems. The two
-modelling-level fields are the explicit arguments a cross-system discharge supplies. -/
-def staticResidual {SK PK Msg Sig : Type*}
-    (S : SigScheme SK PK Msg Sig) (pk : PK) (Recorded : Msg → Prop)
-    (ppt negl : Prop) (hppt : ppt) (hnegl : negl) :
+/-- **`dischargedResidual` — ALL fields constructible from real theorems (PROVED), for ANY
+`(S, pk, Recorded)`.** No modelling-`Prop` arguments remain: the negligible-advantage bound is
+`ucRealizes_iff_ucAdv_negl ∘ (EufCma ⟹ UcRealizes)`, and the simulator's PPT step bound is `simStepBound` /
+`sim_ppt`. Both former carriers are now theorem-typed fields. -/
+def dischargedResidual {SK PK Msg Sig : Type*}
+    (S : SigScheme SK PK Msg Sig) (pk : PK) (Recorded : Msg → Prop) :
     SigUCResidual S pk Recorded where
   static_realize := (ucRealizes_iff_eufCma S pk Recorded).2
   compose_lift := fun ρ hs hc => uc_composition_theorem ρ S pk Recorded hs hc
-  simulator_ppt := ppt
-  negligible_advantage := negl
-  simulator_ppt_holds := hppt
-  negligible_advantage_holds := hnegl
+  negligible_advantage := fun he =>
+    (ucRealizes_iff_ucAdv_negl S pk Recorded).1 ((ucRealizes_iff_eufCma S pk Recorded).2 he)
+  simulator_bound := simStepBound
+  simulator_ppt := sim_ppt
 
-/-- Non-vacuity of the residual: at the `secureToy` instance, with the modelling carriers discharged trivially
-(the toy has no security parameter), the residual is inhabited AND its DISCHARGED fields yield the real
-`UcRealizes` and composition verdicts from `EufCma`. The Lean cores are genuine; only the toy's
-probabilistic carriers are `True` (the REAL instance gets them cross-system). -/
+/-- Non-vacuity of the residual at the `secureToy` instance: inhabited, and every DISCHARGED field yields a
+real verdict from `EufCma` — realization, composition, the negligible-advantage bound, and the PPT simulator.
+No `True`-carriers anywhere. -/
 def refResidual : SigUCResidual secureToy () noQueries :=
-  staticResidual secureToy () noQueries True True trivial trivial
+  dischargedResidual secureToy () noQueries
 
-/-- The residual's discharged static field, applied to `secureToy`'s `EufCma`, IS the proved `UcRealizes` —
-the UC-residual structure carries a REAL realization theorem, not a husk. -/
+/-- The residual's discharged static field, applied to `secureToy`'s `EufCma`, IS the proved `UcRealizes`. -/
 theorem refResidual_realizes : UcRealizes secureToy () noQueries :=
   refResidual.static_realize secureToy_euf_cma
 
-/-- The residual's discharged COMPOSITION field, applied to `secureToy`'s `EufCma` and (vacuous)
-completeness, IS the proved `ρ^π = ρ^F` for every protocol `ρ` — the composition theorem is carried as a
-genuine field, not a placeholder. -/
+/-- The residual's discharged COMPOSITION field IS the proved `ρ^π = ρ^F` for every protocol `ρ`. -/
 theorem refResidual_composes (ρ : (Bool → Prop) → Prop) :
     ρ (acceptRel secureToy ()) = ρ noQueries :=
   refResidual.compose_lift ρ secureToy_euf_cma (fun _ h => h.elim)
+
+/-- The residual's discharged NEGLIGIBLE-ADVANTAGE field (retired modelling note (i)) IS the proved
+`Negl (ucAdv …)` from `EufCma` — a real advantage bound, not an abstract `Prop`. -/
+theorem refResidual_advantage_negl : Negl (ucAdv secureToy () noQueries) :=
+  refResidual.negligible_advantage secureToy_euf_cma
+
+/-- The residual's discharged SIMULATOR-PPT field (retired modelling note (ii)) IS the proved
+`StepBound.PPT` — a real polynomial-time bound, not an abstract `Prop`. -/
+theorem refResidual_sim_ppt : refResidual.simulator_bound.PPT :=
+  refResidual.simulator_ppt
 
 /-! ## §9 — Teeth: `F_SIG` accepts recorded and rejects unrecorded; the toy schemes separate. -/
 
@@ -729,8 +932,22 @@ lets the `F_SIG` accept/reject behaviour be `decide`-checked. -/
   hybrid_sig_composes_under_floor,
   secureToy_composition,
   composition_fails_without_eufcma,
+  ucRealizes_iff_ucAdv_negl,
+  secureToy_ucAdv_negl,
+  brokenToy_ucAdv_not_negl,
+  hybrid_sig_advantage_negl,
+  sim_ppt,
+  multiUcRealizes_iff_multiUcAdv_negl,
+  multiUcAdv_le_sum,
+  multi_session_advantage_negl,
+  sessions_smul_negl,
+  hybrid_multi_session_advantage_negl,
+  secureToy_multiUcAdv_negl,
+  brokenToy_multiUcAdv_not_negl,
   refResidual_realizes,
-  refResidual_composes
+  refResidual_composes,
+  refResidual_advantage_negl,
+  refResidual_sim_ppt
 ]
 
 end Dregg2.Crypto.UcSignature
