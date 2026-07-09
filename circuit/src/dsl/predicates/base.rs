@@ -7,11 +7,9 @@
 
 use crate::field::{BABYBEAR_P, BabyBear};
 use crate::poseidon2;
-use crate::stark::{self, StarkProof};
 
 use crate::dsl::circuit::{
-    BoundaryDef, BoundaryRow, CircuitDescriptor, ColumnDef, ColumnKind, ConstraintExpr, DslCircuit,
-    PolyTerm,
+    BoundaryDef, BoundaryRow, CircuitDescriptor, ColumnDef, ColumnKind, ConstraintExpr, PolyTerm,
 };
 
 // ============================================================================
@@ -92,20 +90,6 @@ pub type PredicateType = PredicateOp;
 
 /// Number of bits used for range proofs (backward-compatible constant).
 pub const PREDICATE_DIFF_BITS: usize = NUM_DIFF_BITS;
-
-/// Backward-compatible alias: prove a predicate using the DSL circuit.
-pub fn prove_predicate(witness: PredicateWitness) -> Option<PredicateProof> {
-    prove_predicate_dsl(&witness).ok()
-}
-
-/// Backward-compatible alias: verify a predicate proof.
-pub fn verify_predicate(
-    proof: &PredicateProof,
-    threshold: BabyBear,
-    fact_commitment: BabyBear,
-) -> Result<(), String> {
-    verify_predicate_dsl(proof, threshold, fact_commitment)
-}
 
 /// Legacy AIR struct (constraint-prover interface).
 pub struct PredicateAir;
@@ -695,109 +679,4 @@ pub fn generate_in_range_traces(
         PredicateOp::InRangeHigh,
     );
     Some((low_trace, high_trace))
-}
-
-// ============================================================================
-// Prove / Verify API
-// ============================================================================
-
-/// A complete predicate proof result.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub struct PredicateProof {
-    /// The type of predicate that was proven.
-    pub op: PredicateOp,
-    /// The threshold (public input).
-    pub threshold: BabyBear,
-    /// The fact commitment (public input).
-    pub fact_commitment: BabyBear,
-    /// The STARK proof.
-    pub stark_proof: StarkProof,
-}
-
-/// Generate a predicate proof from a witness.
-///
-/// Returns `Err` if the predicate is not satisfiable or proof generation fails.
-pub fn prove_predicate_dsl(witness: &PredicateWitness) -> Result<PredicateProof, String> {
-    // Check satisfiability.
-    let satisfiable = match witness.predicate_type {
-        PredicateOp::Gte | PredicateOp::InRangeLow => witness.private_value >= witness.threshold,
-        PredicateOp::Lte | PredicateOp::InRangeHigh => witness.private_value <= witness.threshold,
-        PredicateOp::Gt => witness.private_value > witness.threshold,
-        PredicateOp::Lt => witness.private_value < witness.threshold,
-        PredicateOp::Neq => witness.private_value != witness.threshold,
-    };
-    if !satisfiable {
-        return Err("predicate not satisfiable".into());
-    }
-
-    let descriptor = predicate_descriptor();
-    let circuit = DslCircuit::new(descriptor);
-    let (trace, pi) = generate_predicate_trace_full(witness.clone());
-    let stark_proof = stark::prove(&circuit, &trace, &pi);
-
-    Ok(PredicateProof {
-        op: witness.predicate_type,
-        threshold: witness.threshold,
-        fact_commitment: witness.fact_commitment,
-        stark_proof,
-    })
-}
-
-/// Verify a predicate proof against expected public inputs.
-pub fn verify_predicate_dsl(
-    proof: &PredicateProof,
-    threshold: BabyBear,
-    fact_commitment: BabyBear,
-) -> Result<(), String> {
-    if proof.threshold != threshold || proof.fact_commitment != fact_commitment {
-        return Err("public input mismatch".into());
-    }
-    let descriptor = predicate_descriptor();
-    let circuit = DslCircuit::new(descriptor);
-    let pi = vec![threshold, fact_commitment, BabyBear::new(proof.op.tag())];
-    stark::verify(&circuit, &proof.stark_proof, &pi)
-}
-
-/// Prove an in-range predicate: value >= low AND value <= high.
-///
-/// Returns a pair of proofs (low_bound, high_bound) or an error.
-pub fn prove_in_range(
-    value: BabyBear,
-    low: BabyBear,
-    high: BabyBear,
-    fact_commitment: BabyBear,
-) -> Result<(PredicateProof, PredicateProof), String> {
-    let low_witness = PredicateWitness {
-        private_value: value,
-        threshold: low,
-        predicate_type: PredicateOp::InRangeLow,
-        fact_commitment,
-        fact_hash: None,
-        state_root: None,
-        blinding: None,
-    };
-    let high_witness = PredicateWitness {
-        private_value: value,
-        threshold: high,
-        predicate_type: PredicateOp::InRangeHigh,
-        fact_commitment,
-        fact_hash: None,
-        state_root: None,
-        blinding: None,
-    };
-    let low_proof = prove_predicate_dsl(&low_witness)?;
-    let high_proof = prove_predicate_dsl(&high_witness)?;
-    Ok((low_proof, high_proof))
-}
-
-/// Verify an in-range proof pair: value >= low AND value <= high.
-pub fn verify_in_range(
-    low_proof: &PredicateProof,
-    high_proof: &PredicateProof,
-    low: BabyBear,
-    high: BabyBear,
-    fact_commitment: BabyBear,
-) -> bool {
-    verify_predicate_dsl(low_proof, low, fact_commitment).is_ok()
-        && verify_predicate_dsl(high_proof, high, fact_commitment).is_ok()
 }

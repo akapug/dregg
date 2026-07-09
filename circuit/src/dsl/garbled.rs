@@ -1,32 +1,18 @@
-//! Production garbled circuit evaluation — DSL-native implementation.
+//! Production garbled circuit evaluation — DSL-native descriptor.
 //!
-//! This module provides the canonical prove/verify API for garbled circuit evaluation
-//! using the DSL `CircuitDescriptor` infrastructure. It supersedes the hand-written
-//! `circuit/src/garbled_air.rs` with the extended 56-column layout supporting:
+//! This module provides the garbled circuit evaluation `CircuitDescriptor` and
+//! trace-generation infrastructure with the extended 56-column layout supporting:
 //!
 //! - Multi-gate chaining (linear chains via `chain_flag`)
 //! - Gate type selectors (AND/OR/XOR/NOT)
 //! - Topological ordering enforcement (gate_index_delta)
 //! - Padding support for power-of-two trace alignment
 //! - Fan-out wiring (chain_flag=0 for non-adjacent gate inputs)
-//!
-//! # Usage
-//!
-//! ```ignore
-//! use dregg_dsl_runtime::garbled::{
-//!     prove_garbled_evaluation_dsl, verify_garbled_evaluation_dsl,
-//!     GarbledDslProof, ExtendedGateRecord, GateType,
-//! };
-//! ```
-//!
-//! For the basic comparison-circuit workflow, use `prove_comparison_circuit_dsl()`
-//! which handles the record conversion internally.
 
 use crate::binding::WideHash;
 use crate::field::BabyBear;
-use crate::garbled::{self, GateEvalRecord};
+use crate::garbled::GateEvalRecord;
 use crate::garbled_air::{GARBLED_EVAL_AIR_WIDTH, col};
-use crate::stark::{self, StarkProof};
 
 use crate::dsl::circuit::{
     BoundaryDef, BoundaryRow, CircuitDescriptor, ColumnDef, ColumnKind, ConstraintExpr, DslCircuit,
@@ -93,21 +79,6 @@ pub struct ExtendedGateRecord {
     pub gate_type: GateType,
     /// Whether this gate's output chains to the next gate's left input.
     pub chains_to_next: bool,
-}
-
-// ============================================================================
-// Proof type
-// ============================================================================
-
-/// A DSL-native garbled evaluation proof.
-#[derive(Clone, Debug)]
-pub struct GarbledDslProof {
-    /// The circuit commitment (public, 124-bit WideHash).
-    pub circuit_commitment: WideHash,
-    /// Hash of the output label (public, 124-bit WideHash).
-    pub output_label_hash: WideHash,
-    /// The STARK proof of correct evaluation.
-    pub stark_proof: StarkProof,
 }
 
 // ============================================================================
@@ -484,108 +455,4 @@ pub fn comparison_records_to_extended(gate_trace: &[GateEvalRecord]) -> Vec<Exte
             chains_to_next: idx + 1 < num_gates,
         })
         .collect()
-}
-
-// ============================================================================
-// Production prove/verify API
-// ============================================================================
-
-/// Generate a STARK proof of correct garbled circuit evaluation (DSL-native).
-///
-/// This is the production replacement for `circuit::garbled::prove_private_threshold`.
-/// It uses the extended 56-column DSL descriptor with full multi-gate support.
-///
-/// Returns `None` if the evaluation yields the "false" output.
-pub fn prove_garbled_evaluation_dsl(
-    gate_trace: &[GateEvalRecord],
-    circuit_commitment: &WideHash,
-    output_label_hash: &WideHash,
-) -> GarbledDslProof {
-    let extended_records = comparison_records_to_extended(gate_trace);
-    prove_garbled_evaluation_extended_dsl(&extended_records, circuit_commitment, output_label_hash)
-}
-
-/// Generate a STARK proof from extended gate records (explicit gate types and chaining).
-///
-/// Use this when you have non-comparison circuits (mixed gate types, fan-out, etc.).
-pub fn prove_garbled_evaluation_extended_dsl(
-    records: &[ExtendedGateRecord],
-    circuit_commitment: &WideHash,
-    output_label_hash: &WideHash,
-) -> GarbledDslProof {
-    let dsl_circuit = garbled_dsl_circuit();
-    let (trace, public_inputs) =
-        generate_extended_garbled_trace(records, circuit_commitment, output_label_hash);
-
-    let stark_proof = stark::prove(&dsl_circuit, &trace, &public_inputs);
-
-    GarbledDslProof {
-        circuit_commitment: *circuit_commitment,
-        output_label_hash: *output_label_hash,
-        stark_proof,
-    }
-}
-
-/// Verify a DSL-native garbled evaluation proof.
-///
-/// Checks:
-/// 1. The circuit commitment matches the expected garbled circuit.
-/// 2. The output label hash matches the expected "true" output.
-/// 3. The STARK proof verifies against the DSL circuit descriptor.
-pub fn verify_garbled_evaluation_dsl(
-    proof: &GarbledDslProof,
-    expected_circuit_commitment: &WideHash,
-    expected_output_label_hash: &WideHash,
-) -> bool {
-    // Check commitments.
-    if proof.circuit_commitment != *expected_circuit_commitment {
-        return false;
-    }
-    if proof.output_label_hash != *expected_output_label_hash {
-        return false;
-    }
-
-    // Reconstruct public inputs — the first 4 felts of each 8-felt WideHash (the in-circuit binding;
-    // the full 8-felt match is enforced by the struct equality checks above). Mirrors the prover.
-    let mut public_inputs = Vec::with_capacity(8);
-    for &elem in &expected_circuit_commitment.as_slice()[..4] {
-        public_inputs.push(elem);
-    }
-    for &elem in &expected_output_label_hash.as_slice()[..4] {
-        public_inputs.push(elem);
-    }
-
-    let dsl_circuit = garbled_dsl_circuit();
-    stark::verify(&dsl_circuit, &proof.stark_proof, &public_inputs).is_ok()
-}
-
-/// High-level: prove a private threshold check using the DSL-native garbled circuit.
-///
-/// Evaluates the garbled circuit and produces a STARK proof of correct evaluation.
-/// Returns `None` if the value doesn't meet the threshold (output_bit == false).
-pub fn prove_private_threshold_dsl(
-    circuit: &garbled::GarbledCircuit,
-    my_labels: &[garbled::WireLabel],
-) -> Option<GarbledDslProof> {
-    let eval = garbled::evaluate_garbled_circuit(circuit, my_labels);
-
-    if !eval.output_bit {
-        return None;
-    }
-
-    let output_label_hash = garbled::hash_label(&eval.output_label);
-    Some(prove_garbled_evaluation_dsl(
-        &eval.gate_trace,
-        &circuit.circuit_commitment,
-        &output_label_hash,
-    ))
-}
-
-/// High-level: verify a private threshold proof (DSL-native).
-pub fn verify_private_threshold_dsl(
-    proof: &GarbledDslProof,
-    expected_circuit_commitment: &WideHash,
-    true_output_label_hash: &WideHash,
-) -> bool {
-    verify_garbled_evaluation_dsl(proof, expected_circuit_commitment, true_output_label_hash)
 }

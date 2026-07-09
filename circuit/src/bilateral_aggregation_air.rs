@@ -295,12 +295,6 @@ pub const OUTER_BILATERAL_CONSISTENT: usize = OUTER_N_CELLS + 1;
 pub const OUTER_BASE_COUNT: usize = OUTER_BILATERAL_CONSISTENT + 1;
 
 // ---------------------------------------------------------------------------
-// AIR shape
-// ---------------------------------------------------------------------------
-
-use crate::stark::{BoundaryConstraint, StarkAir};
-
-// ---------------------------------------------------------------------------
 // Witness construction
 // ---------------------------------------------------------------------------
 
@@ -703,88 +697,6 @@ impl<AB: AirBuilder> Air<AB> for CrossSideExistenceAir {
     }
 }
 
-impl StarkAir for CrossSideExistenceAir {
-    fn width(&self) -> usize {
-        CSE_WIDTH
-    }
-
-    fn constraint_degree(&self) -> usize {
-        // present*(sign^2 - 1) is degree 3.
-        3
-    }
-
-    fn has_chain_continuity(&self) -> bool {
-        false
-    }
-
-    fn air_name(&self) -> &'static str {
-        Self::AIR_NAME
-    }
-
-    fn eval_constraints(
-        &self,
-        local: &[BabyBear],
-        next: &[BabyBear],
-        _public_inputs: &[BabyBear],
-        alpha: BabyBear,
-    ) -> BabyBear {
-        let mut combined = BabyBear::ZERO;
-        let mut pow = BabyBear::ONE;
-        let mut add = |c: BabyBear| {
-            combined += pow * c;
-            pow *= alpha;
-        };
-
-        let one = BabyBear::ONE;
-        let present = local[CSE_PRESENT_COL];
-        let sign = local[CSE_SIGN_COL];
-        let fp = local[CSE_EDGE_FP_COL];
-        let balance = local[CSE_BALANCE_COL];
-
-        // present ∈ {0,1}.
-        add(present * (present - one));
-        // present*(sign^2 - 1) == 0.
-        add(present * (sign * sign - one));
-        // (1-present)*sign == 0.
-        add((one - present) * sign);
-        // (1-present)*fp == 0 (canonical padding).
-        add((one - present) * fp);
-
-        // Balance prefix-sum transition: balance[i+1] = balance[i] +
-        // sign[i+1]*fp[i+1]. eval_constraints applies uniformly to rows
-        // 0..n-2 (the transition vanishing polynomial excludes the last row),
-        // so this expresses exactly the recurrence.
-        let bal_next = next[CSE_BALANCE_COL];
-        let sign_next = next[CSE_SIGN_COL];
-        let fp_next = next[CSE_EDGE_FP_COL];
-        add(bal_next - (balance + sign_next * fp_next));
-
-        combined
-    }
-
-    fn boundary_constraints(
-        &self,
-        _public_inputs: &[BabyBear],
-        trace_len: usize,
-    ) -> Vec<BoundaryConstraint> {
-        let mut cs = Vec::new();
-        if trace_len < 2 {
-            return cs;
-        }
-        // Row 0 seed: balance[0] == sign[0]*fp[0]. We cannot express the
-        // product as a fixed boundary value (it depends on the witness), but
-        // the verifier re-derives the canonical edge multiset and the row-0
-        // values from it, so the seed is pinned externally. The algebraic
-        // boundary we *can* fix is balance[last] == 0.
-        cs.push(BoundaryConstraint {
-            row: trace_len - 1,
-            col: CSE_BALANCE_COL,
-            value: BabyBear::ZERO,
-        });
-        cs
-    }
-}
-
 /// One materialised half-edge row for the cross-side existence AIR.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CrossSideHalfEdge {
@@ -1054,67 +966,6 @@ impl<AB: AirBuilder> Air<AB> for BundleTreeFoldAir {
         // compress(acc_in, digest) is enforced cryptographically by the
         // verifier recomputing the chain (custom-STARK has no in-AIR
         // Poseidon gadget). See the StarkAir impl docs for the residual.
-    }
-}
-
-impl StarkAir for BundleTreeFoldAir {
-    fn width(&self) -> usize {
-        FOLD_WIDTH
-    }
-
-    fn constraint_degree(&self) -> usize {
-        // All constraints are linear (degree 1) in the trace columns.
-        2
-    }
-
-    fn has_chain_continuity(&self) -> bool {
-        false
-    }
-
-    fn air_name(&self) -> &'static str {
-        Self::AIR_NAME
-    }
-
-    fn eval_constraints(
-        &self,
-        local: &[BabyBear],
-        next: &[BabyBear],
-        _public_inputs: &[BabyBear],
-        alpha: BabyBear,
-    ) -> BabyBear {
-        let mut combined = BabyBear::ZERO;
-        let mut pow = BabyBear::ONE;
-        let mut add = |c: BabyBear| {
-            combined += pow * c;
-            pow *= alpha;
-        };
-        // Chain continuity: acc_out[i] - acc_in[i+1] == 0 (rows 0..n-2).
-        add(local[FOLD_ACC_OUT_COL] - next[FOLD_ACC_IN_COL]);
-        combined
-    }
-
-    fn boundary_constraints(
-        &self,
-        public_inputs: &[BabyBear],
-        trace_len: usize,
-    ) -> Vec<BoundaryConstraint> {
-        let mut cs = Vec::new();
-        if public_inputs.len() != FOLD_PI_COUNT || trace_len < 2 {
-            return cs;
-        }
-        // Row 0: acc_in == initial accumulator.
-        cs.push(BoundaryConstraint {
-            row: 0,
-            col: FOLD_ACC_IN_COL,
-            value: public_inputs[FOLD_PI_INITIAL],
-        });
-        // Last row: acc_out == final accumulator.
-        cs.push(BoundaryConstraint {
-            row: trace_len - 1,
-            col: FOLD_ACC_OUT_COL,
-            value: public_inputs[FOLD_PI_FINAL],
-        });
-        cs
     }
 }
 

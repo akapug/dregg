@@ -1658,8 +1658,10 @@ impl TurnExecutor {
         turn: &Turn,
         ledger: Option<&Ledger>,
     ) -> Result<(), TurnError> {
+        use dregg_circuit::descriptor_ir2::{
+            DreggStarkConfig, Ir2BatchProof, verify_vm_descriptor2,
+        };
         use dregg_circuit::effect_action_air as eaa;
-        use dregg_circuit::stark;
 
         // Build the canonical DFS-order effect list once, mirroring
         // `compute_turn_identity_pi`'s `dfs_collect`.
@@ -1741,19 +1743,46 @@ impl TurnExecutor {
                 )));
             }
 
-            // STARK-verify the proof against the reconstructed PI.
-            let proof = stark::proof_from_bytes(&bp.proof_bytes).map_err(|e| {
+            // STARK-verify the proof against the reconstructed PI. The
+            // effect-binding proof is an IR-v2 descriptor batch proof over the
+            // schema's effect-action descriptor (`effect_action_to_descriptor2`);
+            // decode `postcard(Ir2BatchProof)`, then `verify_vm_descriptor2`
+            // against the descriptor with the executor-reconstructed public inputs
+            // (`exp_pi_bb`), which the descriptor pins to row 0 — a proof committed
+            // to different typed bytes is UNSAT. Decode/verify run under
+            // `catch_unwind` so a malformed blob is a fail-closed rejection.
+            let proof: Ir2BatchProof<DreggStarkConfig> = postcard::from_bytes(&bp.proof_bytes)
+                .map_err(|e| {
+                    TurnError::InvalidExecutionProof(format!(
+                        "effect_binding_proofs[{}]: deserialize: {}",
+                        i, e
+                    ))
+                })?;
+            let desc = eaa::effect_action_to_descriptor2(&schema).map_err(|e| {
                 TurnError::InvalidExecutionProof(format!(
-                    "effect_binding_proofs[{}]: deserialize: {}",
-                    i, e
+                    "effect_binding_proofs[{}]: schema {:?} did not lower to a descriptor: {}",
+                    i, bp.schema_id, e
                 ))
             })?;
-            eaa::verify_effect_action(schema, &exp_fields, &exp_amounts, &proof).map_err(|e| {
-                TurnError::ProofVerificationFailed(format!(
-                    "effect_binding_proofs[{}] (schema {:?}, effect {}): {}",
-                    i, bp.schema_id, bp.effect_index, e
-                ))
-            })?;
+            let verified = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                verify_vm_descriptor2(&desc, &proof, &exp_pi_bb)
+            }));
+            match verified {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    return Err(TurnError::ProofVerificationFailed(format!(
+                        "effect_binding_proofs[{}] (schema {:?}, effect {}): {}",
+                        i, bp.schema_id, bp.effect_index, e
+                    )));
+                }
+                Err(_) => {
+                    return Err(TurnError::ProofVerificationFailed(format!(
+                        "effect_binding_proofs[{}] (schema {:?}, effect {}): descriptor verifier \
+                         panicked on malformed proof",
+                        i, bp.schema_id, bp.effect_index
+                    )));
+                }
+            }
         }
 
         // ---- 2) Cross-effect within-turn chain pinning ----

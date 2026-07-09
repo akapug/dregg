@@ -3,7 +3,6 @@
 //! The production implementation lives in [`crate::dsl::predicates`].
 
 pub use crate::dsl::predicates::{
-    PREDICATE_DIFF_BITS, PredicateAir, PredicateOp, PredicateProof, PredicateType,
-    PredicateWitness, compute_fact_commitment, prove_in_range, prove_predicate,
-    prove_predicate_dsl, verify_in_range, verify_predicate, verify_predicate_dsl,
+    PREDICATE_DIFF_BITS, PredicateAir, PredicateOp, PredicateType, PredicateWitness,
+    compute_fact_commitment,
 };

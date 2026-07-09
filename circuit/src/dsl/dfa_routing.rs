@@ -52,7 +52,6 @@
 
 use crate::field::{BABYBEAR_P, BabyBear};
 use crate::poseidon2::{hash_2_to_1, hash_4_to_1};
-use crate::stark::{self, StarkProof};
 
 use crate::dsl::circuit::{
     BoundaryDef, BoundaryRow, CircuitDescriptor, ColumnDef, ColumnKind, ConstraintExpr, DslCircuit,
@@ -469,67 +468,6 @@ pub fn build_routing_witness(
     Some((witness, public_inputs))
 }
 
-// ============================================================================
-// Prove / verify
-// ============================================================================
-
-/// Prove a routing classification: build the trace for `symbols` against the
-/// transition table and produce a STARK over the `dregg-dfa-routing-v1` AIR.
-/// Returns the proof and its public inputs `[initial_state, final_state,
-/// table_commitment, route_commitment]`.
-pub fn prove_dfa_routing(
-    name: &str,
-    transitions: &[(u32, u32, u32)],
-    start_state: u32,
-    symbols: &[u32],
-) -> Option<(StarkProof, Vec<BabyBear>)> {
-    let (witness, public_inputs) = build_routing_witness(transitions, start_state, symbols)?;
-    let descriptor = dfa_routing_descriptor(name, transitions);
-    let n = witness.get("current_state").map(|v| v.len()).unwrap_or(0);
-    let circuit = DslCircuit::new(descriptor.clone());
-    let trace = build_trace_from_witness(&descriptor, &witness, n)?;
-    let proof = stark::try_prove(&circuit, &trace, &public_inputs).ok()?;
-    Some((proof, public_inputs))
-}
-
-/// Verify a routing-classification proof against the descriptor and public inputs.
-pub fn verify_dfa_routing(
-    name: &str,
-    transitions: &[(u32, u32, u32)],
-    proof: &StarkProof,
-    public_inputs: &[BabyBear],
-) -> Result<(), String> {
-    let circuit = dfa_routing_circuit(name, transitions);
-    stark::verify(&circuit, proof, public_inputs).map_err(|e| format!("{e:?}"))
-}
-
-/// Assemble a row-major trace from the witness column map (name → per-row values),
-/// in column-index order. Mirrors `CellProgram::generate_trace` without needing a
-/// `CellProgram` wrapper.
-fn build_trace_from_witness(
-    descriptor: &CircuitDescriptor,
-    witness: &std::collections::HashMap<String, Vec<BabyBear>>,
-    num_rows: usize,
-) -> Option<Vec<Vec<BabyBear>>> {
-    if num_rows < 2 || !num_rows.is_power_of_two() {
-        return None;
-    }
-    let mut trace = Vec::with_capacity(num_rows);
-    for row_idx in 0..num_rows {
-        let mut row = vec![BabyBear::ZERO; descriptor.trace_width];
-        for col_def in &descriptor.columns {
-            if let Some(values) = witness.get(&col_def.name) {
-                if values.len() != num_rows {
-                    return None;
-                }
-                row[col_def.index] = values[row_idx];
-            }
-        }
-        trace.push(row);
-    }
-    Some(trace)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -551,117 +489,6 @@ mod tests {
 
     const NAME: &str = "dregg-dfa-routing-v1";
 
-    /// TOOTH (valid admits): an accepting route verifies, and its public
-    /// `route_commitment`/`final_state` are bound by the proof.
-    #[test]
-    fn correct_route_verifies_and_binds_commitment() {
-        let transitions = router_transitions();
-        // internal, external, internal: IDLE -> LOCAL -> REMOTE -> LOCAL.
-        let (proof, pi) = prove_dfa_routing(NAME, &transitions, 0, &[0, 1, 0])
-            .expect("accepting route must be provable");
-
-        // Final state is LOCAL=1 (the genuine classification).
-        assert_eq!(pi[pi::FINAL_STATE], BabyBear::new(1), "classified to LOCAL");
-        // The route commitment is the running hash (non-trivial binding value).
-        assert_ne!(
-            pi[pi::ROUTE_COMMITMENT],
-            BabyBear::ZERO,
-            "route commitment must be a real running hash"
-        );
-
-        verify_dfa_routing(NAME, &transitions, &proof, &pi)
-            .expect("a correct route must verify against its route_commitment");
-    }
-
-    /// TOOTH (forged final state rejected): a router that claims a delivery it did
-    /// not make — substituting a different `final_state` in the public inputs while
-    /// keeping the honest proof — is rejected by the B2 boundary. This is the core
-    /// "can't claim a route you didn't make" guarantee.
-    #[test]
-    fn forged_final_state_is_rejected() {
-        let transitions = router_transitions();
-        let (proof, pi) = prove_dfa_routing(NAME, &transitions, 0, &[0, 1, 0])
-            .expect("accepting route must be provable");
-
-        // Claim REJECT=3 instead of the real LOCAL=1.
-        let mut forged = pi.clone();
-        forged[pi::FINAL_STATE] = BabyBear::new(3);
-        assert!(
-            verify_dfa_routing(NAME, &transitions, &proof, &forged).is_err(),
-            "a forged final_state must fail the B2 boundary"
-        );
-    }
-
-    /// TOOTH (forged route commitment rejected): substituting a different
-    /// `route_commitment` fails the B3 boundary — the commitment binds the trace.
-    #[test]
-    fn forged_route_commitment_is_rejected() {
-        let transitions = router_transitions();
-        let (proof, pi) = prove_dfa_routing(NAME, &transitions, 0, &[0, 1, 0])
-            .expect("accepting route must be provable");
-
-        let mut forged = pi.clone();
-        forged[pi::ROUTE_COMMITMENT] = BabyBear::new(0xDEAD);
-        assert!(
-            verify_dfa_routing(NAME, &transitions, &proof, &forged).is_err(),
-            "a forged route_commitment must fail the B3 boundary"
-        );
-    }
-
-    /// TOOTH (forged table commitment rejected): the running-hash seed is the table
-    /// commitment (pi[2]); claiming a different table while presenting the same
-    /// proof breaks the seed constraint's PI binding and the route commitment no
-    /// longer matches — a router cannot reuse a route under a different table.
-    #[test]
-    fn forged_table_commitment_is_rejected() {
-        let transitions = router_transitions();
-        let (proof, pi) = prove_dfa_routing(NAME, &transitions, 0, &[0, 1, 0])
-            .expect("accepting route must be provable");
-
-        let mut forged = pi.clone();
-        forged[pi::TABLE_COMMITMENT] = BabyBear::new(0xBAD);
-        assert!(
-            verify_dfa_routing(NAME, &transitions, &proof, &forged).is_err(),
-            "a forged table_commitment must fail the seed PI binding"
-        );
-    }
-
-    /// TOOTH (a REJECT route is classified to REJECT, not LOCAL): a `[unknown, …]`
-    /// input lands in REJECT=3 and the proof's final_state is provably REJECT — a
-    /// rejecting message cannot present a LOCAL classification.
-    #[test]
-    fn rejecting_input_classifies_reject_not_local() {
-        let transitions = router_transitions();
-        // unknown, internal, external: IDLE -> REJECT (absorbing) -> REJECT -> REJECT.
-        let (proof, pi) = prove_dfa_routing(NAME, &transitions, 0, &[3, 0, 1])
-            .expect("rejecting route is still a valid (provable) DFA run");
-        assert_eq!(
-            pi[pi::FINAL_STATE],
-            BabyBear::new(3),
-            "rejecting input classifies to REJECT=3, not LOCAL=1"
-        );
-        assert_ne!(pi[pi::FINAL_STATE], BabyBear::new(1), "REJECT ≠ LOCAL");
-        verify_dfa_routing(NAME, &transitions, &proof, &pi)
-            .expect("the honest REJECT route verifies (to REJECT, not LOCAL)");
-    }
-
-    /// TOOTH (route commitment binds the trace): two DIFFERENT input sequences yield
-    /// DIFFERENT route commitments — the commitment discriminates the routed trace
-    /// (the empirical shadow of the Lean `route_commitment_binds_trace`).
-    #[test]
-    fn distinct_routes_have_distinct_commitments() {
-        let transitions = router_transitions();
-        let (_p1, pi1) =
-            prove_dfa_routing(NAME, &transitions, 0, &[0, 1, 0]).expect("route 1 provable");
-        let (_p2, pi2) =
-            prove_dfa_routing(NAME, &transitions, 0, &[1, 0, 1]).expect("route 2 provable");
-        assert_ne!(
-            pi1[pi::ROUTE_COMMITMENT],
-            pi2[pi::ROUTE_COMMITMENT],
-            "distinct routed traces must have distinct route commitments"
-        );
-    }
-
     /// The descriptor validates for deployment as a `CellProgram`.
     #[test]
     fn descriptor_is_deployable() {
@@ -669,32 +496,5 @@ mod tests {
         descriptor
             .validate()
             .expect("dregg-dfa-routing-v1 descriptor must be deployable");
-    }
-
-    /// TOOTH (a tampered transition is rejected): a trace row asserting an invalid
-    /// `(state, symbol, next)` (next ≠ step(state, symbol)) fails the TableFunction /
-    /// entry-hash constraints at prove time — a router cannot route along an edge the
-    /// table forbids.
-    #[test]
-    fn tampered_transition_fails_proving() {
-        let transitions = router_transitions();
-        let (mut witness, public_inputs) =
-            build_routing_witness(&transitions, 0, &[0, 1, 0]).expect("honest witness builds");
-
-        // Tamper: claim row 1's next_state is LOCAL=1 instead of the real REMOTE=2.
-        // (IDLE-internal->LOCAL, then LOCAL-external-> should be REMOTE=2.) The
-        // TableFunction (next == step(state,symbol)) and the entry hash both reject
-        // this fabricated edge.
-        if let Some(next_states) = witness.get_mut("next_state") {
-            next_states[1] = BabyBear::new(1);
-        }
-        let descriptor = dfa_routing_descriptor(NAME, &transitions);
-        let circuit = DslCircuit::new(descriptor.clone());
-        let n = witness.get("current_state").map(|v| v.len()).unwrap_or(0);
-        let trace = build_trace_from_witness(&descriptor, &witness, n).expect("trace assembles");
-        assert!(
-            stark::try_prove(&circuit, &trace, &public_inputs).is_err(),
-            "a fabricated transition edge must fail to prove"
-        );
     }
 }

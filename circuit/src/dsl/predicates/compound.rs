@@ -64,7 +64,6 @@
 
 use crate::field::{BABYBEAR_P, BabyBear};
 use crate::poseidon2::{hash_2_to_1, hash_fact};
-use crate::stark::{self, StarkProof};
 
 use crate::dsl::circuit::{
     BoundaryDef, BoundaryRow, CircuitDescriptor, ColumnDef, ColumnKind, ConstraintExpr, DslCircuit,
@@ -878,66 +877,4 @@ pub fn three_level_gate_tree() -> Vec<Gate> {
         Gate::Or(6, 7),  // index 9: OR(AND(0,1), AND(2,3))
         Gate::Or(9, 8),  // index 10: OR(above, AND(4,5))
     ]
-}
-
-// ============================================================================
-// Prove / Verify API
-// ============================================================================
-
-/// A complete compound predicate proof result.
-#[derive(Clone, Debug)]
-pub struct CompoundPredicateProof {
-    pub formula: BooleanFormula,
-    pub tree_hash: BabyBear,
-    pub stark_proof: StarkProof,
-}
-
-/// Prove a compound predicate.
-pub fn prove_compound_dsl(
-    sub_results: &[bool],
-    formula: &BooleanFormula,
-    commitments: Option<&[BabyBear]>,
-) -> Result<CompoundPredicateProof, String> {
-    let composed = evaluate_formula(formula, sub_results);
-    if !composed {
-        return Err("compound predicate not satisfiable".into());
-    }
-
-    let circuit = compound_predicate_dsl_circuit();
-    let (trace, pi) = generate_compound_trace_full(sub_results, formula, commitments);
-    let stark_proof = stark::prove(&circuit, &trace, &pi);
-
-    let tree_hash = compute_tree_hash(formula, sub_results);
-
-    Ok(CompoundPredicateProof {
-        formula: formula.clone(),
-        tree_hash,
-        stark_proof,
-    })
-}
-
-/// Verify a compound predicate proof.
-pub fn verify_compound_dsl(
-    proof: &CompoundPredicateProof,
-    expected_pi: &[BabyBear],
-) -> Result<(), String> {
-    let circuit = compound_predicate_dsl_circuit();
-    stark::verify(&circuit, &proof.stark_proof, expected_pi)
-}
-
-/// Backward-compatible alias for `prove_compound_dsl`.
-pub fn prove_compound_predicate(
-    sub_results: &[bool],
-    formula: &BooleanFormula,
-    commitments: Option<&[BabyBear]>,
-) -> Result<CompoundPredicateProof, String> {
-    prove_compound_dsl(sub_results, formula, commitments)
-}
-
-/// Backward-compatible alias for `verify_compound_dsl`.
-pub fn verify_compound_predicate(
-    proof: &CompoundPredicateProof,
-    expected_pi: &[BabyBear],
-) -> Result<(), String> {
-    verify_compound_dsl(proof, expected_pi)
 }

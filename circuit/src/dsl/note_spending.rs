@@ -25,7 +25,6 @@ use crate::note_spending_air::{
     merkle_col, pi,
 };
 use crate::poseidon2::{hash_fact, hash_many};
-use crate::stark::{self, StarkProof};
 
 use crate::dsl::circuit::{
     BoundaryDef, BoundaryRow, CircuitDescriptor, ColumnDef, ColumnKind, ConstraintExpr, DslCircuit,
@@ -728,119 +727,6 @@ pub fn generate_note_spending_trace_with_value_hi(
 }
 
 // ============================================================================
-// Production prove/verify API
-// ============================================================================
-
-/// Generate a DSL-native STARK proof for note spending.
-///
-/// This replaces `prove_note_spend` from `circuit/src/note_spending_air.rs`.
-pub fn prove_note_spend_dsl(witness: &NoteSpendingWitness) -> StarkProof {
-    let circuit = note_spending_dsl_circuit();
-    let (trace, public_inputs) = generate_note_spending_trace(witness);
-    stark::prove(&circuit, &trace, &public_inputs)
-}
-
-/// Generate a DSL-native STARK proof binding a FULL u64 value (30-bit-trunc fix).
-///
-/// `value_hi` is the upper-34-bit limb of the note's u64 amount; the witness's
-/// `value` field supplies the low-30 limb that participates in the commitment.
-/// Pair with [`verify_note_spend_dsl_full`].
-pub fn prove_note_spend_dsl_full(witness: &NoteSpendingWitness, value_hi: BabyBear) -> StarkProof {
-    let circuit = note_spending_dsl_circuit();
-    let (trace, public_inputs) = generate_note_spending_trace_with_value_hi(witness, value_hi);
-    stark::prove(&circuit, &trace, &public_inputs)
-}
-
-/// Verify a DSL-native note spending STARK proof.
-///
-/// For local (non-bridge) spends, pass `BabyBear::ZERO` for `destination_federation`.
-/// For bridge proofs, pass the destination federation's identity (as a BabyBear felt);
-/// the verifier rejects any proof whose trace destination_federation does not match.
-///
-/// This replaces `verify_note_spend` from `circuit/src/note_spending_air.rs`.
-pub fn verify_note_spend_dsl(
-    nullifier: BabyBear,
-    merkle_root: BabyBear,
-    value: BabyBear,
-    asset_type: BabyBear,
-    proof: &StarkProof,
-) -> Result<(), String> {
-    verify_note_spend_dsl_with_destination(
-        nullifier,
-        merkle_root,
-        value,
-        asset_type,
-        BabyBear::ZERO,
-        proof,
-    )
-}
-
-/// Verify a DSL-native note spending STARK proof with an explicit destination
-/// federation public input.
-///
-/// This is the bridge-aware variant of `verify_note_spend_dsl`. Use
-/// `BabyBear::ZERO` for `destination_federation` when verifying a local
-/// (non-bridge) spend. For bridge-mint paths, pass the destination
-/// federation's BabyBear identity; the proof verifies only if the prover
-/// committed to the same destination at trace-generation time.
-pub fn verify_note_spend_dsl_with_destination(
-    nullifier: BabyBear,
-    merkle_root: BabyBear,
-    value: BabyBear,
-    asset_type: BabyBear,
-    destination_federation: BabyBear,
-    proof: &StarkProof,
-) -> Result<(), String> {
-    if proof.trace_len < 4 {
-        return Err("Proof trace too short for note spending circuit".to_string());
-    }
-
-    // BabyBear-typed callers bind a felt-sized value; the high limb is zero.
-    verify_note_spend_dsl_full(
-        nullifier,
-        merkle_root,
-        value,
-        BabyBear::ZERO,
-        asset_type,
-        destination_federation,
-        proof,
-    )
-}
-
-/// Verify a note-spending proof binding the FULL u64 value via both limbs.
-///
-/// 30-bit-trunc fix (CAVEAT-LAYER-COVERAGE.md §6.5). `value_lo` is the low-30
-/// limb (the felt that participates in the note commitment) and `value_hi` is
-/// the upper 34 bits. The verifier rejects any proof whose trace `VALUE_HI`
-/// column does not match `value_hi` — so two amounts differing above bit 30
-/// (same low limb, different high limb) cannot share a proof.
-#[allow(clippy::too_many_arguments)]
-pub fn verify_note_spend_dsl_full(
-    nullifier: BabyBear,
-    merkle_root: BabyBear,
-    value_lo: BabyBear,
-    value_hi: BabyBear,
-    asset_type: BabyBear,
-    destination_federation: BabyBear,
-    proof: &StarkProof,
-) -> Result<(), String> {
-    if proof.trace_len < 4 {
-        return Err("Proof trace too short for note spending circuit".to_string());
-    }
-
-    let circuit = note_spending_dsl_circuit();
-    let public_inputs = vec![
-        nullifier,
-        merkle_root,
-        value_lo,
-        asset_type,
-        destination_federation,
-        value_hi,
-    ];
-    stark::verify(&circuit, proof, &public_inputs)
-}
-
-// ============================================================================
 // The FELT-DOMAIN bridge-mint identity (the AIR-recomputable mint_hash)
 // ============================================================================
 
@@ -850,8 +736,8 @@ pub fn verify_note_spend_dsl_full(
 /// `hash_fact(hash_fact(nullifier, [merkle_root, destination_federation,
 /// asset_type]), [value_lo, value_hi])`
 ///
-/// over the SAME six compressed felts [`verify_note_spend_dsl_full`] binds the
-/// note-spend STARK to (the executor's `apply_bridge_mint` PI vector). This is
+/// over the SAME six compressed felts the note-spend STARK binds
+/// to (the executor's `apply_bridge_mint` PI vector). This is
 /// the ONE canonical definition; the executor/SDK projectors
 /// (`effect_vm_bridge.rs`, `cipherclerk::convert_effects_to_vm`) derive the
 /// AIR-facing `VmEffect::BridgeMint.mint_hash` from it, and the recursion
@@ -880,8 +766,7 @@ pub fn note_spend_mint_hash_felt(
 /// [`note_spend_mint_hash_felt`] from the RAW byte-domain bridge material — the
 /// executor/SDK entry point (the projectors hold `PortableNoteProof` bytes, not
 /// felts). Performs EXACTLY the compressions `apply_bridge_mint`'s
-/// `verify_stark` closure performs before calling
-/// [`verify_note_spend_dsl_full`]:
+/// `verify_stark` closure performs before verifying the note-spend proof:
 ///
 ///   * `nullifier` / `note_tree_root` / `destination_federation`: 32-byte
 ///     values compressed via `BabyBear::encode_hash` → Poseidon2 `hash_many`
@@ -917,28 +802,4 @@ pub fn bridge_mint_hash_felt(
         compress(destination_federation),
         value_hi,
     )
-}
-
-// ============================================================================
-// Backward-compatible aliases
-// ============================================================================
-
-/// Backward-compatible alias: prove note spending using the DSL-native circuit.
-pub fn prove_note_spend(witness: &NoteSpendingWitness) -> StarkProof {
-    prove_note_spend_dsl(witness)
-}
-
-/// Backward-compatible alias: verify note spending using the DSL-native circuit.
-///
-/// This variant uses `BabyBear::ZERO` for `destination_federation` (local-spend
-/// semantics). For bridge proofs, call `verify_note_spend_dsl_with_destination`
-/// directly.
-pub fn verify_note_spend(
-    nullifier: BabyBear,
-    merkle_root: BabyBear,
-    value: BabyBear,
-    asset_type: BabyBear,
-    proof: &StarkProof,
-) -> Result<(), String> {
-    verify_note_spend_dsl(nullifier, merkle_root, value, asset_type, proof)
 }

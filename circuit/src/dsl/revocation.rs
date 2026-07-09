@@ -2,8 +2,6 @@
 //!
 //! This module provides the canonical implementation for non-revocation proofs:
 //! - [`DslRevocationTree`] — sorted binary Merkle tree (hash_fact-based)
-//! - [`prove_non_revocation_dsl`] — generate a STARK proof of non-membership
-//! - [`verify_non_revocation_dsl`] — verify a STARK non-membership proof
 //! - [`revocation_hash_to_field`] — convert 32-byte revocation hash to BabyBear
 //!
 //! Supersedes the old `dregg_circuit::non_revocation_air` (4-ary, hand-written AIR)
@@ -11,7 +9,6 @@
 
 use crate::field::BabyBear;
 use crate::poseidon2::{hash_fact, hash_many};
-use crate::stark::{self, StarkProof};
 
 use crate::dsl::circuit::{
     BoundaryDef, BoundaryRow, CircuitDescriptor, ColumnDef, ColumnKind, ConstraintExpr, DslCircuit,
@@ -832,47 +829,6 @@ pub fn generate_non_revocation_trace(
     // boundary binds and the ordering constraints bracket.
     let public_inputs = vec![revocation_root, witness.ancestor_hash];
     (trace, public_inputs)
-}
-
-// ============================================================================
-// Production prove / verify API
-// ============================================================================
-
-/// Generate a STARK proof that `item_hash` is NOT in the given revocation tree.
-///
-/// Returns `Err` if the item IS in the tree (cannot prove non-membership).
-pub fn prove_non_revocation_dsl(
-    tree: &DslRevocationTree,
-    item_hash: BabyBear,
-) -> Result<StarkProof, String> {
-    let witness = tree
-        .prove_non_membership(&item_hash)
-        .ok_or_else(|| "item is in the revocation tree (revoked)".to_string())?;
-
-    let root = tree.root();
-    let (trace, public_inputs) = generate_non_revocation_trace(&witness, root);
-    let circuit = non_revocation_dsl_circuit();
-    Ok(stark::prove(&circuit, &trace, &public_inputs))
-}
-
-/// Verify a STARK non-revocation proof against the given root and item hash.
-///
-/// The verifier supplies the revocation `root` (committed by the federation)
-/// AND the `item_hash` whose freshness it expects this proof to attest. Both
-/// are public inputs (`[revocation_root, queried_item]`): the proof is bound
-/// in-circuit to BOTH, so a proof of freshness for a DIFFERENT item is
-/// rejected (the row-0 QUERIED_ITEM boundary fails). In privacy-preserving
-/// composition the caller may pass the item it independently expects (e.g. a
-/// turn's nullifier); the item is no longer hidden from a verifier that
-/// chooses to bind it.
-pub fn verify_non_revocation_dsl(
-    proof: &StarkProof,
-    root: BabyBear,
-    item_hash: BabyBear,
-) -> Result<(), String> {
-    let circuit = non_revocation_dsl_circuit();
-    let public_inputs = vec![root, item_hash];
-    stark::verify(&circuit, proof, &public_inputs)
 }
 
 // ============================================================================

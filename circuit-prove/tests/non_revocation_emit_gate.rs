@@ -35,7 +35,7 @@ use dregg_circuit::poseidon2::hash_2_to_1;
 /// The BYTE-IDENTICAL wire string Lean's `emitVmJson2 nonRevocationDesc` emits (pinned by the
 /// `#guard` in `NonRevocationEmit.lean`). If Lean's emitter drifts, that `#guard` fails; if this
 /// literal drifts, the `decoded == hand_built` assertion fails. Neither can silently diverge.
-const GOLDEN_JSON: &str = r#"{"name":"dregg-non-revocation-sorted-tree::poseidon2-v1","ir":2,"trace_width":27,"public_input_count":2,"tables":[{"id":2,"name":"range","arity":1,"sem":"range","bits":30}],"constraints":[{"t":"lookup","table":1,"tuple":[{"t":"const","v":2},{"t":"var","v":1},{"t":"var","v":2},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"var","v":9},{"t":"var","v":13},{"t":"var","v":14},{"t":"var","v":15},{"t":"var","v":16},{"t":"var","v":17},{"t":"var","v":18},{"t":"var","v":19}]},{"t":"lookup","table":1,"tuple":[{"t":"const","v":2},{"t":"var","v":10},{"t":"var","v":11},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"var","v":12},{"t":"var","v":20},{"t":"var","v":21},{"t":"var","v":22},{"t":"var","v":23},{"t":"var","v":24},{"t":"var","v":25},{"t":"var","v":26}]},{"t":"gate","body":{"t":"add","l":{"t":"var","v":10},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":9}}}},{"t":"gate","body":{"t":"add","l":{"t":"add","l":{"t":"add","l":{"t":"var","v":5},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":0}}},"r":{"t":"var","v":1}},"r":{"t":"const","v":1}}},{"t":"gate","body":{"t":"add","l":{"t":"add","l":{"t":"add","l":{"t":"var","v":6},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":2}}},"r":{"t":"var","v":0}},"r":{"t":"const","v":1}}},{"t":"gate","body":{"t":"add","l":{"t":"add","l":{"t":"var","v":7},"r":{"t":"var","v":5}},"r":{"t":"const","v":-1006632959}}},{"t":"gate","body":{"t":"add","l":{"t":"add","l":{"t":"var","v":8},"r":{"t":"var","v":6}},"r":{"t":"const","v":-1006632959}}},{"t":"lookup","table":2,"tuple":[{"t":"var","v":7}]},{"t":"lookup","table":2,"tuple":[{"t":"var","v":8}]},{"t":"lookup","table":2,"tuple":[{"t":"var","v":5}]},{"t":"lookup","table":2,"tuple":[{"t":"var","v":6}]},{"t":"gate","body":{"t":"add","l":{"t":"add","l":{"t":"var","v":4},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":3}}},"r":{"t":"const","v":-1}}},{"t":"pi_binding","row":"first","col":12,"pi_index":0},{"t":"pi_binding","row":"first","col":0,"pi_index":1}],"hash_sites":[],"ranges":[]}"#;
+const GOLDEN_JSON: &str = r#"{"name":"dregg-non-revocation-sorted-tree::poseidon2-v1","ir":2,"trace_width":27,"public_input_count":2,"tables":[{"id":2,"name":"range","arity":1,"sem":"range","bits":30}],"constraints":[{"t":"lookup","table":1,"tuple":[{"t":"const","v":2},{"t":"var","v":1},{"t":"var","v":2},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"var","v":9},{"t":"var","v":13},{"t":"var","v":14},{"t":"var","v":15},{"t":"var","v":16},{"t":"var","v":17},{"t":"var","v":18},{"t":"var","v":19}]},{"t":"lookup","table":1,"tuple":[{"t":"const","v":2},{"t":"var","v":10},{"t":"var","v":11},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"var","v":12},{"t":"var","v":20},{"t":"var","v":21},{"t":"var","v":22},{"t":"var","v":23},{"t":"var","v":24},{"t":"var","v":25},{"t":"var","v":26}]},{"t":"gate","body":{"t":"add","l":{"t":"var","v":10},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":9}}}},{"t":"gate","body":{"t":"add","l":{"t":"add","l":{"t":"add","l":{"t":"var","v":5},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":0}}},"r":{"t":"var","v":1}},"r":{"t":"const","v":1}}},{"t":"gate","body":{"t":"add","l":{"t":"add","l":{"t":"add","l":{"t":"var","v":6},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":2}}},"r":{"t":"var","v":0}},"r":{"t":"const","v":1}}},{"t":"gate","body":{"t":"add","l":{"t":"add","l":{"t":"var","v":7},"r":{"t":"var","v":5}},"r":{"t":"const","v":-1006632959}}},{"t":"gate","body":{"t":"add","l":{"t":"add","l":{"t":"var","v":8},"r":{"t":"var","v":6}},"r":{"t":"const","v":-1006632959}}},{"t":"lookup","table":2,"tuple":[{"t":"var","v":7}]},{"t":"lookup","table":2,"tuple":[{"t":"var","v":8}]},{"t":"lookup","table":2,"tuple":[{"t":"var","v":5}]},{"t":"lookup","table":2,"tuple":[{"t":"var","v":6}]},{"t":"gate","body":{"t":"add","l":{"t":"add","l":{"t":"var","v":4},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":3}}},"r":{"t":"const","v":-1}}},{"t":"pi_binding","row":"first","col":12,"pi_index":0},{"t":"pi_binding","row":"first","col":0,"pi_index":1},{"t":"boundary","row":"last","body":{"t":"add","l":{"t":"var","v":10},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":9}}}},{"t":"boundary","row":"last","body":{"t":"add","l":{"t":"add","l":{"t":"add","l":{"t":"var","v":5},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":0}}},"r":{"t":"var","v":1}},"r":{"t":"const","v":1}}},{"t":"boundary","row":"last","body":{"t":"add","l":{"t":"add","l":{"t":"add","l":{"t":"var","v":6},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":2}}},"r":{"t":"var","v":0}},"r":{"t":"const","v":1}}},{"t":"boundary","row":"last","body":{"t":"add","l":{"t":"add","l":{"t":"var","v":7},"r":{"t":"var","v":5}},"r":{"t":"const","v":-1006632959}}},{"t":"boundary","row":"last","body":{"t":"add","l":{"t":"add","l":{"t":"var","v":8},"r":{"t":"var","v":6}},"r":{"t":"const","v":-1006632959}}},{"t":"boundary","row":"last","body":{"t":"add","l":{"t":"add","l":{"t":"var","v":4},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":3}}},"r":{"t":"const","v":-1}}}],"hash_sites":[],"ranges":[]}"#;
 
 // --- Trace column layout (must match `NonRevocationEmit.lean` §1). ---
 const X: usize = 0;
@@ -95,6 +95,14 @@ fn chip2_lookup(a: usize, b: usize, out_col: usize, lane_base: usize) -> VmConst
 /// The independently-hand-built twin of the Lean `nonRevocationDesc`.
 fn hand_built_desc() -> EffectVmDescriptor2 {
     let gate = |b: LeanExpr| VmConstraint2::Base(VmConstraint::Gate(b));
+    // The LAST-ROW FIX: each semantic binding gate re-lowered as a `when_last_row` boundary so it
+    // fires on the last row too (matching the deployed hand AIR's every-row binding).
+    let boundary_last = |b: LeanExpr| {
+        VmConstraint2::Base(VmConstraint::Boundary {
+            row: VmRow::Last,
+            body: b,
+        })
+    };
     let range_lookup = |w: usize| {
         VmConstraint2::Lookup(LookupSpec {
             table: TID_RANGE,
@@ -156,18 +164,18 @@ fn hand_built_desc() -> EffectVmDescriptor2 {
         constraints: vec![
             chip2_lookup(LEAF_L, LEAF_R, PAR0, LEVEL0_LANE_BASE),
             chip2_lookup(CUR1, SIB1, PAR1, LEVEL1_LANE_BASE),
-            gate(cont),
-            gate(diff_l),
-            gate(diff_r),
-            gate(range_l_bind),
-            gate(range_r_bind),
+            gate(cont.clone()),
+            gate(diff_l.clone()),
+            gate(diff_r.clone()),
+            gate(range_l_bind.clone()),
+            gate(range_r_bind.clone()),
             range_lookup(RL),
             range_lookup(RR),
             // LOWER-BOUND FIX: direct range-lookups on the diff wires pin diff ∈ [0,HALF]
             // (excludes the negative window that let a member be proven "fresh").
             range_lookup(DIFF_L),
             range_lookup(DIFF_R),
-            gate(adj),
+            gate(adj.clone()),
             VmConstraint2::Base(VmConstraint::PiBinding {
                 row: VmRow::First,
                 col: PAR1,
@@ -178,6 +186,14 @@ fn hand_built_desc() -> EffectVmDescriptor2 {
                 col: X,
                 pi_index: 1,
             }),
+            // LAST-ROW FIX: the six semantic binding bodies re-lowered as `when_last_row` boundaries
+            // (same order as the gates) — a HEIGHT-1 / last-row trace can no longer free them.
+            boundary_last(cont),
+            boundary_last(diff_l),
+            boundary_last(diff_r),
+            boundary_last(range_l_bind),
+            boundary_last(range_r_bind),
+            boundary_last(adj),
         ],
         hash_sites: vec![],
         ranges: vec![],

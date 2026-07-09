@@ -38,11 +38,9 @@
 //! `[threshold, fact_commitment]`
 
 use crate::field::{BABYBEAR_P, BabyBear};
-use crate::stark::{self, StarkProof};
 
 use crate::dsl::circuit::{
-    BoundaryDef, BoundaryRow, CircuitDescriptor, ColumnDef, ColumnKind, ConstraintExpr, DslCircuit,
-    PolyTerm,
+    BoundaryDef, BoundaryRow, CircuitDescriptor, ColumnDef, ColumnKind, ConstraintExpr, PolyTerm,
 };
 
 // ============================================================================
@@ -1632,67 +1630,6 @@ fn fill_aux_columns(
             _ => {}
         }
     }
-}
-
-// ============================================================================
-// Prove / Verify API
-// ============================================================================
-
-/// A complete arithmetic predicate proof result.
-#[derive(Clone, Debug)]
-pub struct ArithmeticPredicateProof {
-    pub predicate: ArithPredicate,
-    pub num_inputs: usize,
-    pub threshold: BabyBear,
-    pub fact_commitment: BabyBear,
-    pub stark_proof: StarkProof,
-}
-
-/// Prove an arithmetic predicate.
-pub fn prove_arithmetic_dsl(
-    inputs: &[u32],
-    predicate: &ArithPredicate,
-    fact_commitment: BabyBear,
-) -> Result<ArithmeticPredicateProof, String> {
-    let num_inputs = inputs.len();
-    let (descriptor, _layout, _ca, _cb, _dk) =
-        build_arithmetic_predicate_descriptor(predicate, num_inputs);
-    let circuit = DslCircuit::new(descriptor);
-    let (trace, pi) = generate_full_trace(inputs, predicate, fact_commitment);
-    let stark_proof = stark::prove(&circuit, &trace, &pi);
-
-    Ok(ArithmeticPredicateProof {
-        predicate: predicate.clone(),
-        num_inputs,
-        threshold: pi[0],
-        fact_commitment,
-        stark_proof,
-    })
-}
-
-/// Verify an arithmetic predicate proof.
-pub fn verify_arithmetic_dsl(
-    proof: &ArithmeticPredicateProof,
-    threshold: BabyBear,
-    fact_commitment: BabyBear,
-) -> Result<(), String> {
-    if proof.threshold != threshold || proof.fact_commitment != fact_commitment {
-        return Err("public input mismatch".into());
-    }
-    let (descriptor, _layout, _ca, _cb, _dk) =
-        build_arithmetic_predicate_descriptor(&proof.predicate, proof.num_inputs);
-    let circuit = DslCircuit::new(descriptor);
-    let pi = vec![threshold, fact_commitment];
-    stark::verify(&circuit, &proof.stark_proof, &pi)
-}
-
-/// Backward-compatible alias for `verify_arithmetic_dsl`.
-pub fn verify_arithmetic_predicate(
-    proof: &ArithmeticPredicateProof,
-    threshold: BabyBear,
-    fact_commitment: BabyBear,
-) -> Result<(), String> {
-    verify_arithmetic_dsl(proof, threshold, fact_commitment)
 }
 
 /// Backward-compatible: compute fact commitment for arithmetic predicates.

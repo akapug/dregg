@@ -38,6 +38,24 @@ pub struct AtomicProofEntry {
     pub balance_delta: i64,
 }
 
+/// Wire encoding of `AtomicProofEntry::proof`.
+///
+/// The old hand-STARK proof embedded its own public inputs; the p3 descriptor
+/// prover's `Ir2BatchProof` does NOT — the PI vector must be supplied to
+/// `verify_vm_descriptor2`. So the on-wire `proof` bytes are a `postcard`
+/// encoding of this struct: the u32 public-input vector alongside the IR-v2
+/// batch proof. The verifier reads `public_inputs` to reconstruct the PI vector
+/// (forwarding non-commitment slots, overriding OLD/NEW_COMMIT with
+/// verifier-derived Poseidon2 commitments) and then descriptor-verifies `proof`
+/// against that reconstruction.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct AtomicProofWire {
+    public_inputs: Vec<u32>,
+    proof: dregg_circuit::descriptor_ir2::Ir2BatchProof<
+        dregg_circuit::descriptor_ir2::DreggStarkConfig,
+    >,
+}
+
 /// A mixed atomic turn containing both sovereign (proof-carrying) and hosted
 /// (federation-executed) cells in a single atomic operation.
 ///
@@ -650,7 +668,6 @@ impl TurnExecutor {
         ledger: &mut Ledger,
     ) -> Result<(Vec<[u8; 32]>, Vec<TurnReceipt>), AtomicTurnError> {
         use dregg_circuit::field::BabyBear;
-        use dregg_circuit::stark;
 
         // 0. Basic validation.
         if atomic_turn.proofs.is_empty() {
@@ -735,61 +752,60 @@ impl TurnExecutor {
                 });
             }
 
-            let proof = stark::proof_from_bytes(&entry.proof).map_err(|e| {
-                AtomicTurnError::ProofFailed {
+            let wire: AtomicProofWire =
+                postcard::from_bytes(&entry.proof).map_err(|e| AtomicTurnError::ProofFailed {
                     cell: entry.cell_id,
-                    reason: e,
-                }
-            })?;
+                    reason: e.to_string(),
+                })?;
 
             // Phase C: reconstruct Effect VM PI in the PI v3 layout
             // (resolves REVIEW[effect-vm-coord]). Commitments are 8 GENUINE
             // Poseidon2 felts each (~124-bit collision floor, matching FRI);
-            // other PIs are forwarded from the proof and bound by the AIR's
-            // boundary/transition constraints + the PI matching loop below.
+            // other PIs are forwarded from the wire PI vector and bound by the
+            // AIR's boundary/transition constraints + the PI matching loop below.
             let old_commit_8 = Self::commitment_to_8bb(&entry.old_commitment);
             let new_commit_8 = Self::commitment_to_8bb(&entry.new_commitment);
 
             use dregg_circuit::effect_vm::pi;
             let min_pi_count = pi::ACTIVE_BASE_COUNT;
-            if proof.public_inputs.len() < min_pi_count {
+            if wire.public_inputs.len() < min_pi_count {
                 return Err(AtomicTurnError::ProofFailed {
                     cell: entry.cell_id,
                     reason: format!(
                         "proof has {} public inputs, expected at least {} (PI v3 layout)",
-                        proof.public_inputs.len(),
+                        wire.public_inputs.len(),
                         min_pi_count
                     ),
                 });
             }
 
-            // Forward all PI elements from the proof, then override
+            // Forward all PI elements from the wire, then override
             // commitment slots with verifier-derived values.
             let mut public_inputs: Vec<BabyBear> = (0..min_pi_count)
-                .map(|i| BabyBear::new_canonical(proof.public_inputs[i]))
+                .map(|i| BabyBear::new_canonical(wire.public_inputs[i]))
                 .collect();
             public_inputs[pi::OLD_COMMIT_BASE..(pi::OLD_COMMIT_BASE + pi::OLD_COMMIT_LEN)]
                 .copy_from_slice(&old_commit_8[..pi::OLD_COMMIT_LEN]);
             public_inputs[pi::NEW_COMMIT_BASE..(pi::NEW_COMMIT_BASE + pi::NEW_COMMIT_LEN)]
                 .copy_from_slice(&new_commit_8[..pi::NEW_COMMIT_LEN]);
 
-            // Append custom proof entries from the proof's PIs.
+            // Append custom proof entries from the wire PIs.
             let custom_count_val = public_inputs[pi::CUSTOM_EFFECT_COUNT].0 as usize;
             for i in 0..custom_count_val {
                 let base = pi::CUSTOM_PROOFS_BASE + i * pi::CUSTOM_ENTRY_SIZE;
-                if base + pi::CUSTOM_ENTRY_SIZE > proof.public_inputs.len() {
+                if base + pi::CUSTOM_ENTRY_SIZE > wire.public_inputs.len() {
                     break;
                 }
                 for j in 0..pi::CUSTOM_ENTRY_SIZE {
-                    public_inputs.push(BabyBear::new_canonical(proof.public_inputs[base + j]));
+                    public_inputs.push(BabyBear::new_canonical(wire.public_inputs[base + j]));
                 }
             }
 
-            // Verify reconstructed commitment PIs match the proof's embedded PIs
+            // Verify reconstructed commitment PIs match the wire's embedded PIs
             // (all 8 felts each, Phase C widening — the full 8-felt off-AIR match
             // is what lifts the collision floor to ~124 bits).
             for i in 0..pi::OLD_COMMIT_LEN {
-                let proof_v = BabyBear::new_canonical(proof.public_inputs[pi::OLD_COMMIT_BASE + i]);
+                let proof_v = BabyBear::new_canonical(wire.public_inputs[pi::OLD_COMMIT_BASE + i]);
                 if proof_v != old_commit_8[i] {
                     return Err(AtomicTurnError::ProofFailed {
                         cell: entry.cell_id,
@@ -801,7 +817,7 @@ impl TurnExecutor {
                 }
             }
             for i in 0..pi::NEW_COMMIT_LEN {
-                let proof_v = BabyBear::new_canonical(proof.public_inputs[pi::NEW_COMMIT_BASE + i]);
+                let proof_v = BabyBear::new_canonical(wire.public_inputs[pi::NEW_COMMIT_BASE + i]);
                 if proof_v != new_commit_8[i] {
                     return Err(AtomicTurnError::ProofFailed {
                         cell: entry.cell_id,
@@ -813,16 +829,33 @@ impl TurnExecutor {
                 }
             }
 
-            // Verify against custom program or default AIR (EffectVmAir).
+            // Verify against custom program (lowered to the IR-v2 descriptor).
             let vk_hash = self.get_cell_vk_hash(&entry.cell_id, ledger);
             if let Some(vk) = vk_hash {
                 if let Some(program) = self.program_registry.get(&vk) {
-                    program
-                        .verify_transition(&public_inputs, &entry.proof)
+                    let desc =
+                        dregg_circuit_prove::custom_leaf_adapter::cellprogram_to_descriptor2(
+                            program,
+                        )
                         .map_err(|e| AtomicTurnError::ProofFailed {
                             cell: entry.cell_id,
-                            reason: e.to_string(),
+                            reason: e,
                         })?;
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        dregg_circuit::descriptor_ir2::verify_vm_descriptor2(
+                            &desc,
+                            &wire.proof,
+                            &public_inputs,
+                        )
+                    }))
+                    .map_err(|_| AtomicTurnError::ProofFailed {
+                        cell: entry.cell_id,
+                        reason: "descriptor verifier panicked on malformed proof".to_string(),
+                    })?
+                    .map_err(|e| AtomicTurnError::ProofFailed {
+                        cell: entry.cell_id,
+                        reason: e,
+                    })?;
                 } else {
                     return Err(AtomicTurnError::ProofFailed {
                         cell: entry.cell_id,
@@ -836,7 +869,7 @@ impl TurnExecutor {
                 // The v1 default hand-AIR (`EffectVmAir`) verify for a no-VK cell is RETIRED.
                 // A no-VK cell's transition is attested through the rotated proof-carrying path,
                 // so an atomic entry with a v1 default-AIR proof fails closed.
-                let _ = &proof;
+                let _ = &wire;
                 return Err(AtomicTurnError::ProofFailed {
                     cell: entry.cell_id,
                     reason: "cell has no custom program VK; the v1 default-AIR verify is retired \
@@ -993,7 +1026,6 @@ impl TurnExecutor {
         // one TurnReceipt per cell touched (sovereign + hosted), chain it to
         // that cell's prior receipt, and record the new chain head.
         use dregg_circuit::field::BabyBear;
-        use dregg_circuit::stark;
 
         if mixed_turn.sovereign_entries.is_empty() && mixed_turn.hosted_actions.is_empty() {
             return Err(AtomicTurnError::EmptyProofs);
@@ -1072,12 +1104,11 @@ impl TurnExecutor {
                 });
             }
 
-            let proof = stark::proof_from_bytes(&entry.proof).map_err(|e| {
-                AtomicTurnError::ProofFailed {
+            let wire: AtomicProofWire =
+                postcard::from_bytes(&entry.proof).map_err(|e| AtomicTurnError::ProofFailed {
                     cell: entry.cell_id,
-                    reason: e,
-                }
-            })?;
+                    reason: e.to_string(),
+                })?;
 
             // Phase C: reconstruct Effect VM PI in the PI v3 layout
             // (resolves REVIEW[effect-vm-coord]). 8 genuine commitment felts.
@@ -1086,40 +1117,40 @@ impl TurnExecutor {
 
             use dregg_circuit::effect_vm::pi;
             let min_pi_count = pi::ACTIVE_BASE_COUNT;
-            if proof.public_inputs.len() < min_pi_count {
+            if wire.public_inputs.len() < min_pi_count {
                 return Err(AtomicTurnError::ProofFailed {
                     cell: entry.cell_id,
                     reason: format!(
                         "proof has {} public inputs, expected at least {} (PI v3 layout)",
-                        proof.public_inputs.len(),
+                        wire.public_inputs.len(),
                         min_pi_count
                     ),
                 });
             }
 
             let mut public_inputs: Vec<BabyBear> = (0..min_pi_count)
-                .map(|i| BabyBear::new_canonical(proof.public_inputs[i]))
+                .map(|i| BabyBear::new_canonical(wire.public_inputs[i]))
                 .collect();
             public_inputs[pi::OLD_COMMIT_BASE..(pi::OLD_COMMIT_BASE + pi::OLD_COMMIT_LEN)]
                 .copy_from_slice(&old_commit_8[..pi::OLD_COMMIT_LEN]);
             public_inputs[pi::NEW_COMMIT_BASE..(pi::NEW_COMMIT_BASE + pi::NEW_COMMIT_LEN)]
                 .copy_from_slice(&new_commit_8[..pi::NEW_COMMIT_LEN]);
 
-            // Append custom proof entries from the proof's PIs.
+            // Append custom proof entries from the wire PIs.
             let custom_count_val = public_inputs[pi::CUSTOM_EFFECT_COUNT].0 as usize;
             for i in 0..custom_count_val {
                 let base = pi::CUSTOM_PROOFS_BASE + i * pi::CUSTOM_ENTRY_SIZE;
-                if base + pi::CUSTOM_ENTRY_SIZE > proof.public_inputs.len() {
+                if base + pi::CUSTOM_ENTRY_SIZE > wire.public_inputs.len() {
                     break;
                 }
                 for j in 0..pi::CUSTOM_ENTRY_SIZE {
-                    public_inputs.push(BabyBear::new_canonical(proof.public_inputs[base + j]));
+                    public_inputs.push(BabyBear::new_canonical(wire.public_inputs[base + j]));
                 }
             }
 
             // Verify commitment PIs match (8 felts each, Phase C).
             for i in 0..pi::OLD_COMMIT_LEN {
-                let proof_v = BabyBear::new_canonical(proof.public_inputs[pi::OLD_COMMIT_BASE + i]);
+                let proof_v = BabyBear::new_canonical(wire.public_inputs[pi::OLD_COMMIT_BASE + i]);
                 if proof_v != old_commit_8[i] {
                     return Err(AtomicTurnError::ProofFailed {
                         cell: entry.cell_id,
@@ -1131,7 +1162,7 @@ impl TurnExecutor {
                 }
             }
             for i in 0..pi::NEW_COMMIT_LEN {
-                let proof_v = BabyBear::new_canonical(proof.public_inputs[pi::NEW_COMMIT_BASE + i]);
+                let proof_v = BabyBear::new_canonical(wire.public_inputs[pi::NEW_COMMIT_BASE + i]);
                 if proof_v != new_commit_8[i] {
                     return Err(AtomicTurnError::ProofFailed {
                         cell: entry.cell_id,
@@ -1143,16 +1174,33 @@ impl TurnExecutor {
                 }
             }
 
-            // Verify against custom program or default EffectVmAir.
+            // Verify against custom program (lowered to the IR-v2 descriptor).
             let vk_hash = self.get_cell_vk_hash(&entry.cell_id, ledger);
             if let Some(vk) = vk_hash {
                 if let Some(program) = self.program_registry.get(&vk) {
-                    program
-                        .verify_transition(&public_inputs, &entry.proof)
+                    let desc =
+                        dregg_circuit_prove::custom_leaf_adapter::cellprogram_to_descriptor2(
+                            program,
+                        )
                         .map_err(|e| AtomicTurnError::ProofFailed {
                             cell: entry.cell_id,
-                            reason: e.to_string(),
+                            reason: e,
                         })?;
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        dregg_circuit::descriptor_ir2::verify_vm_descriptor2(
+                            &desc,
+                            &wire.proof,
+                            &public_inputs,
+                        )
+                    }))
+                    .map_err(|_| AtomicTurnError::ProofFailed {
+                        cell: entry.cell_id,
+                        reason: "descriptor verifier panicked on malformed proof".to_string(),
+                    })?
+                    .map_err(|e| AtomicTurnError::ProofFailed {
+                        cell: entry.cell_id,
+                        reason: e,
+                    })?;
                 } else {
                     return Err(AtomicTurnError::ProofFailed {
                         cell: entry.cell_id,
@@ -1163,7 +1211,7 @@ impl TurnExecutor {
                 // The v1 default hand-AIR (`EffectVmAir`) verify for a no-VK cell is RETIRED
                 // (the no-VK cell's transition is attested through the rotated proof-carrying
                 // path), so it fails closed.
-                let _ = &proof;
+                let _ = &wire;
                 return Err(AtomicTurnError::ProofFailed {
                     cell: entry.cell_id,
                     reason: "cell has no custom program VK; the v1 default-AIR verify is retired \

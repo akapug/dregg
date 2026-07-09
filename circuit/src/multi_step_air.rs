@@ -10,7 +10,6 @@ use crate::derivation_air::{
 use crate::dsl::derivation::MULTI_STEP_DSL_WIDTH;
 use crate::field::BabyBear;
 use crate::poseidon2::hash_2_to_1;
-use crate::stark::{self, StarkProof};
 
 /// Multi-step AIR width.
 pub const MULTI_STEP_AIR_WIDTH: usize = DERIVATION_AIR_WIDTH + 5;
@@ -162,155 +161,9 @@ pub fn prove_authorization(
     crate::constraint_prover::ConstraintProof::generate(&air)
 }
 
-/// Multi-step StarkAir struct.
-///
-/// DEPRECATED: This is a stub that delegates to `crate::dsl::derivation`.
-/// Use `prove_authorization_stark` which already uses the DSL internally.
-#[deprecated(
-    note = "Use prove_authorization_stark (DSL-native) instead of constructing this directly"
-)]
-pub struct MultiStepStarkAir {
-    pub num_steps: usize,
-}
-
-impl MultiStepStarkAir {
-    pub fn new(num_steps: usize) -> Self {
-        Self { num_steps }
-    }
-}
-
-impl crate::stark::StarkAir for MultiStepStarkAir {
-    fn width(&self) -> usize {
-        MULTI_STEP_DSL_WIDTH
-    }
-    fn constraint_degree(&self) -> usize {
-        3
-    }
-    fn air_name(&self) -> &'static str {
-        "dregg-multi_step-v1"
-    }
-    fn has_chain_continuity(&self) -> bool {
-        true
-    }
-    fn eval_constraints(
-        &self,
-        _local: &[BabyBear],
-        _next: &[BabyBear],
-        _public_inputs: &[BabyBear],
-        _alpha: BabyBear,
-    ) -> BabyBear {
-        // Constraint evaluation delegates to DSL runtime.
-        BabyBear::ZERO
-    }
-    fn boundary_constraints(
-        &self,
-        _public_inputs: &[BabyBear],
-        _trace_len: usize,
-    ) -> Vec<crate::stark::BoundaryConstraint> {
-        vec![]
-    }
-}
-
 /// Generate the multi-step trace.
 pub fn generate_multi_step_trace(
     witness: &MultiStepWitness,
 ) -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
     crate::dsl::derivation::generate_multi_step_trace_dsl(witness)
-}
-
-/// Prove multi-step authorization using STARK.
-/// Prove authorization, enforcing the delegation chain depth cap.
-///
-/// Returns a StarkProof if the witness is valid and within depth limits.
-///
-/// # Panics
-///
-/// Panics if the delegation chain exceeds [`MAX_DELEGATION_DEPTH`] steps.
-/// Callers that want a Result should use [`try_prove_authorization_stark`] instead.
-pub fn prove_authorization_stark(witness: &MultiStepWitness) -> StarkProof {
-    assert!(
-        witness.steps.len() <= MAX_DELEGATION_DEPTH,
-        "Delegation chain too deep: {} > {} (MAX_DELEGATION_DEPTH). \
-         Consider revoking intermediate delegates or flattening the chain.",
-        witness.steps.len(),
-        MAX_DELEGATION_DEPTH,
-    );
-    let air = MultiStepStarkAir::new(witness.steps.len());
-    let (trace, public_inputs) = generate_multi_step_trace(witness);
-    stark::prove(&air, &trace, &public_inputs)
-}
-
-/// Try to prove authorization, returning an error if the chain is too deep.
-///
-/// This is the fallible version of [`prove_authorization_stark`]. Use when you
-/// want to handle depth violations gracefully (e.g., return an error to the user
-/// suggesting chain restructuring).
-pub fn try_prove_authorization_stark(witness: &MultiStepWitness) -> Result<StarkProof, String> {
-    if witness.steps.len() > MAX_DELEGATION_DEPTH {
-        return Err(format!(
-            "Delegation chain too deep: {} steps exceeds maximum of {}. \
-             Proving time would be approximately {}s which exceeds acceptable limits.",
-            witness.steps.len(),
-            MAX_DELEGATION_DEPTH,
-            witness.steps.len() as f64 * 0.5,
-        ));
-    }
-    Ok(prove_authorization_stark(witness))
-}
-
-/// Verify a multi-step authorization STARK proof.
-///
-/// # Security Warning
-///
-/// This function verifies ONLY that the derivation rules were applied correctly.
-/// It does NOT verify that the body facts referenced in the derivation actually
-/// exist in any committed Merkle tree. A malicious prover can fabricate arbitrary
-/// body facts and still produce a valid derivation proof.
-///
-/// **For security-critical verification, use
-/// [`body_membership::verify_authorization_with_membership`] instead**, which
-/// additionally requires Merkle membership proofs for every body fact used.
-///
-/// This function is safe to use only when:
-/// - The body facts are independently verified by the caller (e.g., the executor
-///   already confirmed fact existence before proof generation)
-/// - The context is testing or non-adversarial
-///
-/// See: `circuit/src/body_membership.rs` for the composed proof that closes this gap.
-pub(crate) fn verify_authorization_stark(
-    conclusion: BabyBear,
-    accumulated_hash: BabyBear,
-    proof: &StarkProof,
-) -> Result<(), String> {
-    if proof.public_inputs.len() != 6 {
-        return Err(format!(
-            "Expected 6 public inputs, got {}",
-            proof.public_inputs.len()
-        ));
-    }
-
-    let proof_conclusion = BabyBear::new_canonical(proof.public_inputs[pi::CONCLUSION]);
-    let proof_acc_hash = BabyBear::new_canonical(proof.public_inputs[pi::FINAL_ACCUMULATED_HASH]);
-
-    if proof_conclusion != conclusion {
-        return Err(format!(
-            "Conclusion mismatch: expected {}, proof contains {}",
-            conclusion.0, proof_conclusion.0
-        ));
-    }
-    if proof_acc_hash != accumulated_hash {
-        return Err(format!(
-            "Accumulated hash mismatch: expected {}, proof contains {}",
-            accumulated_hash.0, proof_acc_hash.0
-        ));
-    }
-
-    let num_steps = proof.public_inputs[pi::NUM_STEPS] as usize;
-    let air = MultiStepStarkAir::new(num_steps);
-    let public_inputs: Vec<BabyBear> = proof
-        .public_inputs
-        .iter()
-        .map(|&v| BabyBear::new_canonical(v))
-        .collect();
-    stark::verify(&air, proof, &public_inputs)
 }

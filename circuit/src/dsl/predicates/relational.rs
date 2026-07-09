@@ -5,11 +5,9 @@
 
 use crate::field::{BABYBEAR_P, BabyBear};
 use crate::poseidon2;
-use crate::stark::{self, StarkProof};
 
 use crate::dsl::circuit::{
-    BoundaryDef, BoundaryRow, CircuitDescriptor, ColumnDef, ColumnKind, ConstraintExpr, DslCircuit,
-    PolyTerm,
+    BoundaryDef, BoundaryRow, CircuitDescriptor, ColumnDef, ColumnKind, ConstraintExpr, PolyTerm,
 };
 
 // ============================================================================
@@ -66,29 +64,11 @@ pub enum RelationalOp {
 pub type RelationType = RelationalOp;
 
 /// Backward-compatible type alias.
-pub type RelationalPredicateProof = RelationalProof;
-
-/// Backward-compatible type alias.
 pub type RelationalPredicateWitness = RelationalWitness;
 
 /// Backward-compatible alias for `compute_commitment`.
 pub fn compute_value_commitment(value: BabyBear, blinding: BabyBear) -> BabyBear {
     compute_commitment(value, blinding)
-}
-
-/// Backward-compatible alias for `prove_relational_dsl`.
-pub fn prove_relational(witness: &RelationalWitness) -> Result<RelationalProof, String> {
-    prove_relational_dsl(witness)
-}
-
-/// Backward-compatible alias for `verify_relational_dsl`.
-pub fn verify_relational(
-    proof: &RelationalProof,
-    commitment_a: BabyBear,
-    commitment_b: BabyBear,
-    _result_bit: BabyBear,
-) -> Result<(), String> {
-    verify_relational_dsl(proof, commitment_a, commitment_b)
 }
 
 // ============================================================================
@@ -570,47 +550,4 @@ pub fn generate_relational_trace_full(
     let public_inputs = vec![commitment_a, commitment_b, BabyBear::ONE];
     let trace = vec![row.clone(), row];
     (trace, public_inputs)
-}
-
-// ============================================================================
-// Prove / Verify API
-// ============================================================================
-
-/// A complete relational predicate proof result.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub struct RelationalProof {
-    pub op: RelationalOp,
-    pub commitment_a: BabyBear,
-    pub commitment_b: BabyBear,
-    pub stark_proof: StarkProof,
-}
-
-/// Prove a relational predicate.
-pub fn prove_relational_dsl(witness: &RelationalWitness) -> Result<RelationalProof, String> {
-    let descriptor = relational_predicate_descriptor();
-    let circuit = DslCircuit::new(descriptor);
-    let (trace, pi) = generate_relational_trace_full(witness.clone());
-    let stark_proof = stark::prove(&circuit, &trace, &pi);
-
-    Ok(RelationalProof {
-        op: witness.op,
-        commitment_a: pi[0],
-        commitment_b: pi[1],
-        stark_proof,
-    })
-}
-
-/// Verify a relational predicate proof.
-pub fn verify_relational_dsl(
-    proof: &RelationalProof,
-    commitment_a: BabyBear,
-    commitment_b: BabyBear,
-) -> Result<(), String> {
-    if proof.commitment_a != commitment_a || proof.commitment_b != commitment_b {
-        return Err("public input mismatch".into());
-    }
-    let descriptor = relational_predicate_descriptor();
-    let circuit = DslCircuit::new(descriptor);
-    let pi = vec![commitment_a, commitment_b, BabyBear::ONE];
-    stark::verify(&circuit, &proof.stark_proof, &pi)
 }

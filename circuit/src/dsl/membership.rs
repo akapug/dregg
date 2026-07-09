@@ -22,11 +22,8 @@
 
 use crate::field::BabyBear;
 use crate::poseidon2::hash_fact;
-use crate::stark::{self, StarkProof};
 
-use crate::dsl::descriptors::{
-    self, blinded_merkle_poseidon2_circuit, merkle_col, merkle_poseidon2_circuit,
-};
+use crate::dsl::descriptors::{self, merkle_col};
 
 // ============================================================================
 // Trace Generation: Standard Merkle Poseidon2
@@ -243,115 +240,6 @@ pub fn generate_blinded_merkle_poseidon2_trace(
 }
 
 // ============================================================================
-// Production Prove/Verify: Standard Merkle Poseidon2
-// ============================================================================
-
-/// Prove Merkle membership using the DSL circuit.
-///
-/// Generates a STARK proof that `leaf` is a member of the Poseidon2 Merkle tree
-/// whose root is computed from the given siblings and positions.
-///
-/// Returns a `StarkProof` on success, or an error message on failure.
-pub fn prove_membership_dsl(
-    leaf: BabyBear,
-    siblings: &[[BabyBear; 3]],
-    positions: &[u8],
-) -> Result<StarkProof, String> {
-    if siblings.len() < 2 {
-        return Err("need at least depth 2 for STARK".into());
-    }
-    if siblings.len() != positions.len() {
-        return Err("siblings/positions length mismatch".into());
-    }
-
-    let (trace, public_inputs) = generate_merkle_poseidon2_trace(leaf, siblings, positions);
-    let circuit = merkle_poseidon2_circuit();
-    let proof = stark::prove(&circuit, &trace, &public_inputs);
-    Ok(proof)
-}
-
-/// Verify a Merkle membership proof produced by [`prove_membership_dsl`].
-///
-/// Checks that the proof is valid for the given leaf and root.
-pub fn verify_membership_dsl(
-    proof: &StarkProof,
-    leaf: BabyBear,
-    root: BabyBear,
-) -> Result<(), String> {
-    let public_inputs = vec![leaf, root];
-    let circuit = merkle_poseidon2_circuit();
-    stark::verify(&circuit, proof, &public_inputs)
-}
-
-/// Verify a Merkle membership proof with arbitrary public inputs.
-///
-/// This is used when the proof has additional public inputs beyond [leaf, root]
-/// (e.g., action binding, composition commitment, revealed facts commitment).
-pub fn verify_membership_dsl_full(
-    proof: &StarkProof,
-    public_inputs: &[BabyBear],
-) -> Result<(), String> {
-    let circuit = merkle_poseidon2_circuit();
-    stark::verify(&circuit, proof, public_inputs)
-}
-
-// ============================================================================
-// Production Prove/Verify: Blinded Merkle Poseidon2
-// ============================================================================
-
-/// Prove blinded (ring) Merkle membership using the DSL circuit.
-///
-/// Generates a STARK proof that the prover knows a leaf in the tree, without
-/// revealing which leaf. The public inputs are [blinded_leaf, root] where:
-///   blinded_leaf = hash_fact(leaf, [blinding])
-///
-/// The blinding factor should be fresh random per presentation for unlinkability.
-pub fn prove_blinded_membership_dsl(
-    leaf: BabyBear,
-    siblings: &[[BabyBear; 3]],
-    positions: &[u8],
-    blinding: BabyBear,
-) -> Result<StarkProof, String> {
-    if siblings.len() < 2 {
-        return Err("need at least depth 2 for STARK".into());
-    }
-    if siblings.len() != positions.len() {
-        return Err("siblings/positions length mismatch".into());
-    }
-
-    let (trace, public_inputs) =
-        generate_blinded_merkle_poseidon2_trace(leaf, siblings, positions, blinding);
-    let circuit = blinded_merkle_poseidon2_circuit();
-    let proof = stark::prove(&circuit, &trace, &public_inputs);
-    Ok(proof)
-}
-
-/// Verify a blinded Merkle membership proof produced by [`prove_blinded_membership_dsl`].
-///
-/// Checks that the proof is valid for the given blinded_leaf and root.
-pub fn verify_blinded_membership_dsl(
-    proof: &StarkProof,
-    blinded_leaf: BabyBear,
-    root: BabyBear,
-) -> Result<(), String> {
-    let public_inputs = vec![blinded_leaf, root];
-    let circuit = blinded_merkle_poseidon2_circuit();
-    stark::verify(&circuit, proof, &public_inputs)
-}
-
-/// Verify a blinded membership proof with arbitrary public inputs.
-///
-/// This is used when the proof has additional public inputs beyond [blinded_leaf, root]
-/// (e.g., action binding, composition commitment).
-pub fn verify_blinded_membership_dsl_full(
-    proof: &StarkProof,
-    public_inputs: &[BabyBear],
-) -> Result<(), String> {
-    let circuit = blinded_merkle_poseidon2_circuit();
-    stark::verify(&circuit, proof, public_inputs)
-}
-
-// ============================================================================
 // Legacy compatibility types (re-exported from merkle_types.rs)
 // ============================================================================
 
@@ -379,75 +267,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn prove_verify_standard_membership() {
-        let leaf = BabyBear::new(42424242);
-        let (siblings, positions, root) = create_test_witness(leaf, 4);
-
-        let proof = prove_membership_dsl(leaf, &siblings, &positions).unwrap();
-        let result = verify_membership_dsl(&proof, leaf, root);
-        assert!(
-            result.is_ok(),
-            "Standard membership should verify: {:?}",
-            result.err()
-        );
-    }
-
-    #[test]
-    fn prove_verify_standard_depth_8() {
-        let leaf = BabyBear::new(7777);
-        let (siblings, positions, root) = create_test_witness(leaf, 8);
-
-        let proof = prove_membership_dsl(leaf, &siblings, &positions).unwrap();
-        let result = verify_membership_dsl(&proof, leaf, root);
-        assert!(
-            result.is_ok(),
-            "Depth-8 membership should verify: {:?}",
-            result.err()
-        );
-    }
-
-    #[test]
-    fn standard_wrong_leaf_rejected() {
-        let leaf = BabyBear::new(42424242);
-        let (siblings, positions, root) = create_test_witness(leaf, 4);
-
-        let proof = prove_membership_dsl(leaf, &siblings, &positions).unwrap();
-        let result = verify_membership_dsl(&proof, BabyBear::new(99999), root);
-        assert!(result.is_err(), "Wrong leaf should be rejected");
-    }
-
-    #[test]
-    fn standard_wrong_root_rejected() {
-        let leaf = BabyBear::new(42424242);
-        let (siblings, positions, _root) = create_test_witness(leaf, 4);
-
-        let proof = prove_membership_dsl(leaf, &siblings, &positions).unwrap();
-        let result = verify_membership_dsl(&proof, leaf, BabyBear::new(99999));
-        assert!(result.is_err(), "Wrong root should be rejected");
-    }
-
-    #[test]
-    fn prove_verify_blinded_membership() {
-        let leaf = BabyBear::new(42424242);
-        let (siblings, positions, _root) = create_test_witness(leaf, 4);
-        let blinding = BabyBear::new(987654321);
-
-        let proof = prove_blinded_membership_dsl(leaf, &siblings, &positions, blinding).unwrap();
-
-        let (_, pi) =
-            generate_blinded_merkle_poseidon2_trace(leaf, &siblings, &positions, blinding);
-        let blinded_leaf = pi[0];
-        let root = pi[1];
-
-        let result = verify_blinded_membership_dsl(&proof, blinded_leaf, root);
-        assert!(
-            result.is_ok(),
-            "Blinded membership should verify: {:?}",
-            result.err()
-        );
-    }
-
-    #[test]
     fn blinded_unlinkability() {
         let leaf = BabyBear::new(42424242);
         let (siblings, positions, _root) = create_test_witness(leaf, 4);
@@ -464,47 +283,5 @@ mod tests {
         assert_eq!(pi_1[1], pi_2[1]);
         // Different blinded_leaf (unlinkable)
         assert_ne!(pi_1[0], pi_2[0]);
-    }
-
-    #[test]
-    fn blinded_wrong_root_rejected() {
-        let leaf = BabyBear::new(42424242);
-        let (siblings, positions, _root) = create_test_witness(leaf, 4);
-        let blinding = BabyBear::new(555555);
-
-        let proof = prove_blinded_membership_dsl(leaf, &siblings, &positions, blinding).unwrap();
-
-        let (_, pi) =
-            generate_blinded_merkle_poseidon2_trace(leaf, &siblings, &positions, blinding);
-        let blinded_leaf = pi[0];
-
-        let result = verify_blinded_membership_dsl(&proof, blinded_leaf, BabyBear::new(99999));
-        assert!(result.is_err(), "Wrong root should be rejected");
-    }
-
-    #[test]
-    fn blinded_wrong_blinded_leaf_rejected() {
-        let leaf = BabyBear::new(42424242);
-        let (siblings, positions, _root) = create_test_witness(leaf, 4);
-        let blinding = BabyBear::new(555555);
-
-        let proof = prove_blinded_membership_dsl(leaf, &siblings, &positions, blinding).unwrap();
-
-        let (_, pi) =
-            generate_blinded_merkle_poseidon2_trace(leaf, &siblings, &positions, blinding);
-        let root = pi[1];
-
-        let result = verify_blinded_membership_dsl(&proof, BabyBear::new(77777), root);
-        assert!(result.is_err(), "Wrong blinded_leaf should be rejected");
-    }
-
-    #[test]
-    fn air_name_matches_descriptor() {
-        let circuit = merkle_poseidon2_circuit();
-        use crate::stark::StarkAir;
-        assert_eq!(circuit.air_name(), MERKLE_POSEIDON2_AIR_NAME);
-
-        let blinded_circuit = blinded_merkle_poseidon2_circuit();
-        assert_eq!(blinded_circuit.air_name(), BLINDED_MERKLE_AIR_NAME);
     }
 }

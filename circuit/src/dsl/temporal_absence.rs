@@ -31,7 +31,6 @@
 
 use crate::field::{BABYBEAR_P, BabyBear};
 use crate::poseidon2::hash_fact;
-use crate::stark::{self, StarkProof};
 
 use crate::dsl::circuit::{
     BoundaryDef, BoundaryRow, CircuitDescriptor, ColumnDef, ColumnKind, ConstraintExpr, DslCircuit,
@@ -272,25 +271,6 @@ impl TemporalAbsenceDslWitness {
 }
 
 // ============================================================================
-// Proof type
-// ============================================================================
-
-/// A DSL-native temporal absence proof.
-#[derive(Clone, Debug)]
-pub struct TemporalAbsenceDslProof {
-    /// Start of the proven absence window.
-    pub t1: u32,
-    /// End of the proven absence window.
-    pub t2: u32,
-    /// The attribute hash that was proven absent.
-    pub excluded_attribute_hash: BabyBear,
-    /// The timeline root this proof is bound to.
-    pub timeline_root: BabyBear,
-    /// The STARK proof.
-    pub stark_proof: StarkProof,
-}
-
-// ============================================================================
 // Trace generation
 // ============================================================================
 
@@ -351,68 +331,4 @@ pub fn generate_temporal_absence_trace(
     ];
 
     (trace, public_inputs)
-}
-
-// ============================================================================
-// Production prove/verify API
-// ============================================================================
-
-/// Generate a temporal absence proof (DSL-native).
-///
-/// Proves that no event for `excluded_attribute_hash` occurred in the timeline
-/// between blocks `t1` and `t2` (inclusive).
-///
-/// Returns `None` if the witness is invalid.
-pub fn prove_temporal_absence_dsl(
-    witness: &TemporalAbsenceDslWitness,
-) -> Option<TemporalAbsenceDslProof> {
-    if !witness.is_valid() {
-        return None;
-    }
-
-    let dsl_circuit = temporal_absence_dsl_circuit();
-    let (trace, public_inputs) = generate_temporal_absence_trace(witness);
-
-    let stark_proof = stark::prove(&dsl_circuit, &trace, &public_inputs);
-
-    Some(TemporalAbsenceDslProof {
-        t1: witness.t1,
-        t2: witness.t2,
-        excluded_attribute_hash: witness.excluded_attribute_hash,
-        timeline_root: witness.entry_before.merkle_root,
-        stark_proof,
-    })
-}
-
-/// Verify a temporal absence proof (DSL-native).
-///
-/// Checks that the proof correctly demonstrates no event for the excluded
-/// attribute occurred in [t1, t2] within the timeline at `timeline_root`.
-pub fn verify_temporal_absence_dsl(
-    proof: &TemporalAbsenceDslProof,
-    t1: u32,
-    t2: u32,
-    excluded_attribute_hash: BabyBear,
-    timeline_root: BabyBear,
-) -> bool {
-    // Check claimed parameters match expected.
-    if proof.t1 != t1 || proof.t2 != t2 {
-        return false;
-    }
-    if proof.excluded_attribute_hash != excluded_attribute_hash {
-        return false;
-    }
-    if proof.timeline_root != timeline_root {
-        return false;
-    }
-
-    let public_inputs = vec![
-        BabyBear::new(t1),
-        BabyBear::new(t2),
-        excluded_attribute_hash,
-        timeline_root,
-    ];
-
-    let dsl_circuit = temporal_absence_dsl_circuit();
-    stark::verify(&dsl_circuit, &proof.stark_proof, &public_inputs).is_ok()
 }

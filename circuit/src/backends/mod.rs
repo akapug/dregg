@@ -34,7 +34,6 @@
 /// use the native Plonky3 prover with inline Poseidon2 constraints for full
 /// algebraic soundness. Without the feature, falls back to the custom STARK.
 /// Implements the full `FullProofBackend` trait hierarchy.
-pub mod plonky3;
 
 // ============================================================================
 // Field-agnostic abstract types for backend trait boundaries.
