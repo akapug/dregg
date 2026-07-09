@@ -33,6 +33,17 @@ struct GenesisValidator {
     /// so a future genesis carrying it deserializes everywhere unchanged.
     #[serde(skip_serializing_if = "Option::is_none")]
     ml_dsa_public_key: Option<String>,
+    /// OPTIONAL hex-encoded 32-byte HYBRID member id
+    /// (`dregg_types::hybrid_id_commitment(ed25519_pk, ml_dsa_pk)`) — the
+    /// cryptographic enroll+pin of this member's post-quantum key INTO its
+    /// identity. When present, the enrolled ML-DSA roster is DERIVABLE from the
+    /// member ids: a verifier recomputes the commitment from a presented
+    /// `(ed25519_pk, ml_dsa_pk)` and rejects any ML-DSA key that does not hash
+    /// into `hybrid_id` (`dregg_types::verify_committed_ml_dsa`), rather than
+    /// trusting a separate out-of-band roster table. Absent (skipped) when the
+    /// member has no ML-DSA key, so today's genesis.json is byte-identical.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hybrid_id: Option<String>,
 }
 
 /// An initial cell in the genesis configuration.
@@ -157,6 +168,14 @@ pub fn run_genesis(validators: usize, epoch_length: u64, checkpoint_interval: u6
             dregg_federation::frost::MlDsaSigningKey::from_seed(&key_bytes);
         let ml_dsa_pk_hex = hex_encode(&ml_dsa_pk.0);
 
+        // HYBRID IDENTITY BINDING: the member's canonical id COMMITS to both its
+        // ed25519 key and its ML-DSA key, so the enrolled PQ roster is derivable
+        // from the id rather than a separate out-of-band table. A verifier
+        // recomputes this and rejects any presented ML-DSA key that does not
+        // hash into it (`dregg_types::verify_committed_ml_dsa`).
+        let hybrid_id = dregg_types::hybrid_id_commitment(&public_key.to_bytes(), &ml_dsa_pk.0);
+        let hybrid_id_hex = hex_encode(&hybrid_id);
+
         committee_pubkeys.push(dregg_types::PublicKey(public_key.to_bytes()));
         genesis_validators.push(GenesisValidator {
             name: format!("node-{i}"),
@@ -164,6 +183,8 @@ pub fn run_genesis(validators: usize, epoch_length: u64, checkpoint_interval: u6
             xmss_root: xmss_root_hex,
             // HybridPq: the published ML-DSA-65 public key (quantum-safe finality).
             ml_dsa_public_key: Some(ml_dsa_pk_hex),
+            // The member id that cryptographically enrolls+pins the ML-DSA key.
+            hybrid_id: Some(hybrid_id_hex),
         });
 
         // Write the key file as raw 32 bytes (matching what the runtime expects).
