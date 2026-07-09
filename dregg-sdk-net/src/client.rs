@@ -570,6 +570,10 @@ impl SiloClient {
             token_id: token_id.to_string(),
             authority: PublicKey(self.cclerk.public_key().0),
             authority_sig: Signature(sig.0),
+            // Client seam (GAP #5 wire authority-sig): the ed25519-only sdk-net client has no seed here,
+            // so it emits no PQ authority half; an enrolled authority builds SubmitRevocation with the
+            // ML-DSA half directly. Fail-closed on the verifier side when the authority is PQ-enrolled.
+            pq_authority_sig: None,
             nonce,
             timestamp: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
