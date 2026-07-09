@@ -1,0 +1,24 @@
+[package]
+name = "crypto-hashrand"
+version = "0.1.0"
+edition = "2021"
+description = "Spec-faithful REFERENCE implementation of a HashRand-style POST-QUANTUM randomness beacon (eprint 2023/1755, ACM CCS 2024) — hash-only commit-then-reveal, replacing a classical BLS threshold beacon. Pinned to the Lean security framework metatheory/Dregg2/Crypto/RandomnessBeacon.lean (unbiasability + unpredictability, both reduced to hash collision-resistance HashCR). Implements the SYNCHRONOUS commit-reveal safety core; the batched asynchronous weak-VSS + Gather + Approximate-Agreement liveness layer is FLAGGED, not faked. Pre-audit, NOT deployment-grade."
+license = "AGPL-3.0-only"
+publish = false
+
+# Standalone: opt out of the breadstuffs root workspace (staged reference
+# work — deliberately NOT a member; builds in its own dir, like crypto-hermine).
+[workspace]
+
+[dependencies]
+# The collision-resistant, programmable-QROM-modelled hash carrier — the
+# beacon's ONE cryptographic dependency. A HashRand-style beacon needs no
+# threshold signature, no pairing, no DKG, no group-public key: just a CR hash
+# and pairwise secure channels. blake3 is a pure-Rust PQ-secure CR hash (sha3
+# is an equally valid drop-in carrier).
+blake3 = "1"
+# The network-ceremony shape (src/ceremony.rs): round messages are serde types
+# so a real transport can carry them; the in-memory reference channel routes
+# serde_json BYTES (the messages provably survive a byte transport).
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
