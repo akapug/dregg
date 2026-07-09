@@ -424,7 +424,10 @@ pub(super) async fn tool_fulfill_intent(params: &Value, state: &NodeState) -> Mc
         ));
     }
 
-    let predicate_proofs: Vec<(usize, dregg_circuit::PredicateProof)> = vec![];
+    // The retired hand-STARK `PredicateProof` is gone; intent's fulfillment now carries the bridge's
+    // descriptor-backed `BridgePredicateProof`. This simple MCP flow attaches none (guarded above),
+    // so the empty vec's element type is inferred from the `FulfillmentWithPredicates` field.
+    let predicate_proofs = vec![];
 
     let fulfillment_with_preds = dregg_intent::fulfillment::FulfillmentWithPredicates {
         base: base_fulfillment,
