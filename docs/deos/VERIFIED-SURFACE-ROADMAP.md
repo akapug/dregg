@@ -60,6 +60,45 @@ every keystone stays `#assert_axioms`-clean (⊆ {propext, Classical.choice, Quo
   noninterference / sealed-value integrity surface. Integrity is proven; end-to-end
   *confidentiality* of the live PIR / sealed / private-voting paths is NOT yet an apex (below).
 
+### Cryptographic floors — the hybrid perimeter and the DKG (SETTLED 2026-07-09)
+The convention holds sharpest here: **the hardness floors are named `Prop` assumptions
+(`SchnorrDLHard`, `MSISHard`, `MLWESearchHard`), never axioms and never proved.** Each
+keystone reduces a scheme TO one of these, and is `#assert_axioms`/`#assert_all_clean`.
+- **`hybrid_secure_if_either_floor`** (`Dregg2/Crypto/HybridCombiner.lean:213`) — the
+  `ed25519 × ML-DSA` hybrid signature is EUF-CMA-unforgeable if EITHER the discrete-log
+  floor `SchnorrDLHard` OR the Module-SIS floor `MSISHard` holds ("hybrid, not PQ-only";
+  commit `a875a9104`). The classical leg is discharged to DL for real
+  (`SchnorrEufCma.schnorr_euf_cma_reduces_to_dl`, `:278`, commit `db1214a9f`); the PQ leg
+  to MSIS through the proved SelfTargetMSIS extraction (`:194`).
+- **`hybrid_kem_ind_cca_if_either`** (`HybridCombiner.lean:406`) + **`ml_kem_ind_cca_
+  reduces_to_mlwe`** (`MlKemIndCca.lean:312`, commit `38e83fac8`) — the `X25519 × ML-KEM`
+  X-Wing KEM is IND-CCA if EITHER component is, under an explicit dual-PRF; the PQ leg
+  reduces to `MLWESearchHard` + the named QROM idealisation (full probabilistic QROM-FO
+  advantage bound honestly open).
+- **`chain_unforgeable_under_hybrid_floor`** (`CapabilityChain.lean:237`, commit
+  `cc99ab01c`) — biscuit/credential attenuation soundness rides the same hybrid floor:
+  a forged accepting chain forces a signature forgery, so soundness reduces to
+  `SchnorrDLHard ∨ MSISHard`; `chain_only_attenuates` (`:210`) proves offline delegation
+  only shrinks authority.
+- **The joint-Feldman DKG apex** (`Dregg2/Crypto/HermineDkg.lean`, commit `f59fab338`) —
+  Pedersen's joint-Feldman DKG (NO trusted dealer) modelled in Lean, closing the gap
+  where `crypto-hermine/src/dkg.rs` ran ahead of the metatheory. Three theorems:
+  correctness `dkg_group_key_eq` (`:105`, the broadcasts assemble to `A·s`); Feldman
+  soundness `dkg_share_verify_sound` (`:141`, a passing share IS the committed
+  evaluation, so an off-polynomial cheater is caught); secrecy `dkg_secrecy_reduces`
+  (`:233`) — a COMPOSITION whose two legs are DISCHARGED from proved theorems
+  (`HermineLossiness` pigeonhole + `ShamirPrivacy.shamir_t_privacy`), with the
+  computational hiding of the short secret named as the separate MLWE/MSIS floor, not
+  re-asserted. `#assert_axioms`-clean.
+- **`sortition_{unique,fair,unpredictable}`** (`SortitionGame.lean:71,124,138`, commit
+  `5baae1f25`) — VRF leader-sortition is fair + unpredictable + unique, each derived
+  from the VRF's own `UniqueOutputs` / `Pseudorandom` properties (no new carrier).
+
+The one honest boundary carried through all of these: the game predicates (EUF-CMA /
+IND-CCA / Pseudorandom) are modelled at the Prop level, and the dual-PRF / QROM are
+named idealisations — disclosed in each file, never a hidden lattice carrier. See
+`docs/PQ-CRYPTO.md` for the full reduction chain and the laundering audit.
+
 ## The new chain-safety apex (`Dregg2/Consensus/Safety.lean`)
 
 **The gap it closes.** Every consensus-safety theorem above this module fixes ONE lace or ONE

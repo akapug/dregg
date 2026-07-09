@@ -8,10 +8,24 @@ cryptographic carrier by name, against the carrier floor the assurance case publ
 The short answer: **the umem memory argument is hash-based and carries no
 elliptic-curve / discrete-log assumption of its own — it is plausibly post-quantum
 modulo hash output sizing. The non-PQ exposure lives entirely in the surrounding
-signature (ed25519) and value-commitment (Pedersen / DLog) carriers, not in the
-memory argument.** So yes, umem is the post-quantum-est part of dregg — but "the
-whole umem *path* end-to-end" is not yet fully PQ, because the token that authorizes
-a memory write is an ed25519 signature.
+signature and value-commitment (Pedersen / DLog) carriers, not in the memory
+argument.** So yes, umem is the post-quantum-est part of dregg.
+
+**Update (2026-07-09) — the authorization carrier is no longer a bare ed25519
+signature.** The turn-authorization token is now the CLASSICAL HALF of a HYBRID
+signature: ed25519 **∧** ML-DSA-65 (FIPS 204), verifying only when both halves
+check (`Authorization::HybridSignature`, `turn/src/action.rs:457`; `turn/src/pq.rs`).
+The hybrid's security **reduces to `discrete-log` OR `Module-SIS`** — unforgeable if
+EITHER floor holds (`HybridCombiner.hybrid_secure_if_either_floor`,
+`metatheory/Dregg2/Crypto/HybridCombiner.lean:213`; classical leg → DL in
+`SchnorrEufCma.lean:278`, PQ leg → MSIS in `HybridCombiner.lean:194`; commits
+`a875a9104` / `db1214a9f`). The transport/session KEM is the matching `X25519 ×
+ML-KEM` X-Wing hybrid, reducing to `MLWE` on the PQ side (`MlKemIndCca.lean:312`,
+commit `38e83fac8`). So the "one carrier swap away" caveat below is now BUILT and
+staged (default-off `require_pq`, fail-closed); the residual work is the rollout
+FLIP and the Pedersen value-commitment path, not a missing PQ signature. `MSIS`,
+`MLWE`, and `DL` are named ASSUMPTIONS the reductions rest on — see
+`docs/PQ-CRYPTO.md` for the full chain.
 
 ## What umem actually is (the object under analysis)
 
@@ -116,16 +130,21 @@ The memory argument is already on PQ-plausible primitives. To make the *end-to-e
 path* — "an authorized turn produces a sound memory commitment a light client can
 trust" — fully post-quantum, three changes:
 
-1. **Replace ed25519 with a PQ signature.** This is the load-bearing one: today the
-   token that authorizes a memory write is a DLog signature (`action.rs`,
-   `AssuranceCase.lean:34,149-155`). Swap the `AuthPortal` / `CryptoKernel.verify`
-   carrier to a NIST PQ scheme — ML-DSA (Dilithium) or SLH-DSA (SPHINCS+, itself
-   hash-based and thus the most conservative). The Lean side already routes this
-   through a `Prop`-portal (item 3 of the floor), so the proof structure is unchanged;
-   only the realized carrier and the wire format change. *(No PQ signature crate is
-   currently wired into the workspace — the only "dilithium/sphincs/falcon" hits in
-   the tree are a wordlist entry and transitive Cargo.lock substrings, not authority
-   code.)*
+1. **Replace ed25519 with a PQ signature. — DONE (staged).** This was the
+   load-bearing one, and it is now built: the token that authorizes a memory write is
+   a HYBRID `ed25519 ∧ ML-DSA-65` signature (`Authorization::HybridSignature`,
+   `turn/src/action.rs:457`; `turn/src/pq.rs`; ML-DSA-65 via `fips204` in
+   `dregg-pq/src/mldsa.rs`), verifying only when both halves check. Rather than swap
+   ed25519 OUT (which would drop the classical floor), the hybrid welds ML-DSA ON, so
+   authority survives a break of EITHER — its EUF-CMA reduces to `discrete-log OR
+   Module-SIS` (`HybridCombiner.hybrid_secure_if_either_floor`,
+   `metatheory/Dregg2/Crypto/HybridCombiner.lean:213`). The capability-chain (biscuit)
+   soundness rides the same floor (`CapabilityChain.chain_unforgeable_under_hybrid_floor`,
+   `:237`). The Lean side routes through the `SigScheme`/`EufCma` predicate portal, so
+   the proof structure is unchanged; only the realized carrier and wire format changed.
+   The roll is STAGED (`TurnExecutor::require_pq`, default off, fail-closed on a
+   present-but-invalid PQ half — `turn/src/executor/authorize.rs:1054,1064`); the
+   remaining step is the human FLIP of `require_pq`, not new construction.
 
 2. **Remove / replace Pedersen value hiding.** If confidential values are wanted PQ,
    Pedersen (DLog) must go — to a hash-based or lattice commitment. The case already
@@ -164,17 +183,22 @@ proof system. That is the whole reason this analysis comes out favorable.
   and X25519 transport. Those are the parts that *fall* to a CRQC, not merely shrink.
 
 - The honest caveat against overclaiming: **"umem is PQ" ≠ "the umem path is PQ."** A
-  light client trusting a Q-chain trusts the STARK (PQ-plausible) *and* the ed25519
-  signature that authorized the turn (NOT PQ). Until the signature carrier is swapped
-  for a PQ scheme, an adversary with a quantum computer forges authority *before* the
-  memory argument ever runs — the sound memory commitment then faithfully records a
-  forged turn. The memory argument is honest; its input authority is not yet
-  quantum-safe.
+  light client trusting a Q-chain trusts the STARK (PQ-plausible) *and* the signature
+  that authorized the turn. As of 2026-07-09 that signature is the HYBRID `ed25519 ∧
+  ML-DSA` (its EUF-CMA reduces to `DL OR MSIS`), so a quantum adversary that breaks
+  ed25519's discrete log still faces ML-DSA's Module-SIS — the "forge authority before
+  the memory argument runs" gap is closed for the authorization carrier once
+  `require_pq` is flipped. The residual non-PQ carriers on the *whole* path are the
+  Pedersen value commitment (only when values are committed, and the case proves
+  committed = cleartext) and the X25519 transport leg — the latter now covered by the
+  `X25519 × ML-KEM` X-Wing hybrid KEM reducing to MLWE. The memory argument is honest;
+  its input authority is now hybrid-quantum-safe, staged.
 
 The carrier floor that grounds all of this: `AssuranceCase.lean:21-41` (the eight
 items), `docs/STARK-FLOOR.md` (the FRI/Poseidon2 envelope), and
 `Dregg2/Circuit/Poseidon2Binding.lean:158-169` (the sole in-circuit crypto carrier the
 umem boundary roots ride). The one-line summary: dregg's *memory commitment* is built
-on the post-quantum side of the cryptographic ledger; its *authority tokens* are not —
-and closing that gap is one carrier swap (ed25519 → ML-DSA/SLH-DSA) plus a hash-width
-sizing pass.
+on the post-quantum side of the cryptographic ledger; its *authority tokens* are now
+HYBRID (`ed25519 ∧ ML-DSA`, EUF-CMA reducing to `DL OR MSIS`) and staged default-off —
+closing that gap is now the `require_pq` FLIP plus the Pedersen path and a hash-width
+sizing pass, not a missing PQ signature. See `docs/PQ-CRYPTO.md`.
