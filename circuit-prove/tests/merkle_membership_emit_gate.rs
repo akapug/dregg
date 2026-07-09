@@ -37,7 +37,7 @@ use dregg_circuit::poseidon2::hash_4_to_1;
 /// The BYTE-IDENTICAL wire string Lean's `emitVmJson2 merkleMembershipDesc` emits (pinned by the
 /// `#guard` in `MerkleMembershipEmit.lean`). If Lean's emitter drifts, that `#guard` fails; if this
 /// literal drifts, the `decoded == hand_built` assertion fails. Neither can silently diverge.
-const GOLDEN_JSON: &str = r#"{"name":"merkle-membership-depth2-4ary::poseidon2-v1","ir":2,"trace_width":24,"public_input_count":1,"tables":[],"constraints":[{"t":"lookup","table":1,"tuple":[{"t":"const","v":4},{"t":"var","v":0},{"t":"var","v":1},{"t":"var","v":2},{"t":"var","v":3},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"var","v":4},{"t":"var","v":10},{"t":"var","v":11},{"t":"var","v":12},{"t":"var","v":13},{"t":"var","v":14},{"t":"var","v":15},{"t":"var","v":16}]},{"t":"lookup","table":1,"tuple":[{"t":"const","v":4},{"t":"var","v":5},{"t":"var","v":6},{"t":"var","v":7},{"t":"var","v":8},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"var","v":9},{"t":"var","v":17},{"t":"var","v":18},{"t":"var","v":19},{"t":"var","v":20},{"t":"var","v":21},{"t":"var","v":22},{"t":"var","v":23}]},{"t":"gate","body":{"t":"add","l":{"t":"var","v":5},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":4}}}},{"t":"pi_binding","row":"first","col":9,"pi_index":0}],"hash_sites":[],"ranges":[]}"#;
+const GOLDEN_JSON: &str = r#"{"name":"merkle-membership-depth2-4ary::poseidon2-v1","ir":2,"trace_width":24,"public_input_count":1,"tables":[],"constraints":[{"t":"lookup","table":1,"tuple":[{"t":"const","v":4},{"t":"var","v":0},{"t":"var","v":1},{"t":"var","v":2},{"t":"var","v":3},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"var","v":4},{"t":"var","v":10},{"t":"var","v":11},{"t":"var","v":12},{"t":"var","v":13},{"t":"var","v":14},{"t":"var","v":15},{"t":"var","v":16}]},{"t":"lookup","table":1,"tuple":[{"t":"const","v":4},{"t":"var","v":5},{"t":"var","v":6},{"t":"var","v":7},{"t":"var","v":8},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"var","v":9},{"t":"var","v":17},{"t":"var","v":18},{"t":"var","v":19},{"t":"var","v":20},{"t":"var","v":21},{"t":"var","v":22},{"t":"var","v":23}]},{"t":"gate","body":{"t":"add","l":{"t":"var","v":5},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":4}}}},{"t":"pi_binding","row":"first","col":9,"pi_index":0},{"t":"boundary","row":"last","body":{"t":"add","l":{"t":"var","v":5},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":4}}}}],"hash_sites":[],"ranges":[]}"#;
 
 // --- Trace column layout (must match `MerkleMembershipEmit.lean` §1). ---
 const LEAF: usize = 0;
@@ -81,14 +81,25 @@ fn chip4_lookup(input_cols: [usize; 4], out_col: usize, lane_base: usize) -> VmC
 /// shape): two arity-4 child→parent chip lookups, the chain-continuity gate (`CUR1 - PARENT0`), and
 /// the root pin (`PARENT1 == PI[0]`).
 fn hand_built_desc() -> EffectVmDescriptor2 {
-    let continuity = VmConstraint2::Base(VmConstraint::Gate(LeanExpr::add(
-        LeanExpr::Var(CUR1),
-        LeanExpr::mul(LeanExpr::Const(-1), LeanExpr::Var(PARENT0)),
-    )));
+    // `CUR1 - PARENT0` — the level-tie body, shared by the transition gate and the last-row boundary.
+    let cont_body = || {
+        LeanExpr::add(
+            LeanExpr::Var(CUR1),
+            LeanExpr::mul(LeanExpr::Const(-1), LeanExpr::Var(PARENT0)),
+        )
+    };
+    let continuity = VmConstraint2::Base(VmConstraint::Gate(cont_body()));
     let root_pin = VmConstraint2::Base(VmConstraint::PiBinding {
         row: VmRow::First,
         col: PARENT1,
         pi_index: 0,
+    });
+    // The last-row continuity fix: the transition `Gate` above is vacuous on the last row, so this
+    // `Boundary{Last}` counterpart enforces `CUR1 == PARENT0` there too (every-row level-tie). Without
+    // it a height-1 trace leaves CUR1 free — the forged-non-member hole this gate closes.
+    let continuity_last = VmConstraint2::Base(VmConstraint::Boundary {
+        row: VmRow::Last,
+        body: cont_body(),
     });
     EffectVmDescriptor2 {
         name: "merkle-membership-depth2-4ary::poseidon2-v1".to_string(),
@@ -100,6 +111,7 @@ fn hand_built_desc() -> EffectVmDescriptor2 {
             chip4_lookup([CUR1, SIB1A, SIB1B, SIB1C], PARENT1, LEVEL1_LANE_BASE),
             continuity,
             root_pin,
+            continuity_last,
         ],
         hash_sites: vec![],
         ranges: vec![],

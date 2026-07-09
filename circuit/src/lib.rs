@@ -113,10 +113,7 @@ pub mod air_descriptor;
 pub mod babybear8;
 pub mod binding;
 pub mod body_membership;
-pub mod chunked_derivation;
 pub mod constraint_prover;
-#[allow(deprecated)]
-pub mod cross_state_derivation;
 pub mod dsl;
 pub mod faithful8;
 pub mod field;
@@ -220,7 +217,6 @@ pub mod predicate_program;
 pub mod quantified_absence;
 pub mod schnorr_curve;
 pub mod schnorr_sig;
-pub mod stark;
 pub mod stark_zk;
 
 pub mod temporal_predicate_dsl;
@@ -394,10 +390,6 @@ pub mod proof_tier;
 #[allow(deprecated)]
 mod tests;
 
-#[cfg(test)]
-#[allow(deprecated)]
-mod soundness_tests;
-
 // Proof tier types — prevents scaffold/test proofs from satisfying production verifiers.
 pub use proof_tier::{CryptographicProof, ProofTier, VerifiedProof};
 
@@ -410,19 +402,11 @@ pub use binding::{
     compute_action_binding, compute_action_binding_narrow, compute_presentation_tag,
     compute_presentation_tag_narrow,
 };
-pub use body_membership::{
-    BodyFactMerkleProof, BodyMembershipProof, MembershipEntry, collect_body_fact_hashes,
-    prove_authorization_with_membership, verify_authorization_with_membership,
-};
-pub use chunked_derivation::{
-    ChunkedAuthorizationProof, DEFAULT_CHUNK_SIZE, prove_chunked_authorization,
-    verify_chunked_authorization,
-};
+pub use body_membership::{BodyFactMerkleProof, collect_body_fact_hashes};
 #[allow(deprecated)]
 pub use committed_threshold::{
-    CommittedThresholdAir, CommittedThresholdProof, CommittedThresholdWitness,
-    compute_threshold_commitment, generate_blinding, prove_committed_threshold,
-    verify_committed_threshold,
+    CommittedThresholdAir, CommittedThresholdWitness, compute_threshold_commitment,
+    generate_blinding,
 };
 #[doc(hidden)]
 pub use constraint_prover::MockProof;
@@ -433,10 +417,6 @@ pub use constraint_prover::MockProver;
 pub use constraint_prover::{
     Air, ConstraintCheckResult, ConstraintProof, ConstraintProver, ConstraintViolation,
 };
-pub use cross_state_derivation::{
-    CombiningRule, CrossStateDerivationProof, SourceDerivation, SourceInput,
-    prove_cross_state_derivation, verify_cross_state_derivation,
-};
 // `EffectVmAir` (the v1 hand-AIR) is RETIRED; the rotated IR-v2 descriptor path
 // is the sole effect-VM circuit.
 pub use effect_vm::{
@@ -446,44 +426,33 @@ pub use effect_vm::{
 };
 pub use field::BabyBear;
 pub use ivc::{
-    FoldDelta, FoldMembershipEntry, FoldStepWitness, IvcBackend, IvcBackendProof, IvcBuilder,
-    IvcPresentationProof, IvcProof, IvcVerification, MAX_FOLD_DEPTH, StateTransitionAir,
-    ValidatedIvcProof, ValidatedIvcVerification, prove_ivc, prove_ivc_stark, prove_validated_ivc,
-    verify_ivc, verify_ivc_stark, verify_validated_ivc,
+    FoldDelta, FoldStepWitness, IvcBackend, IvcBackendProof, IvcBuilder, IvcPresentationProof,
+    IvcProof, IvcVerification, MAX_FOLD_DEPTH, StateTransitionAir, prove_ivc, verify_ivc,
 };
 pub use non_membership::{
-    AugmentedDerivation, DerivationNonMembershipCheck, NonMembershipCheck, NonMembershipProof,
-    NonMembershipProver, SetIdentifier, compute_set_accumulator, derive_alpha_for_set,
-    verify_augmented_derivation, verify_non_membership_proof,
+    NonMembershipCheck, NonMembershipProver, SetIdentifier, compute_set_accumulator,
+    derive_alpha_for_set,
 };
 pub use presentation::{
     AuthorizationProof, PresentationAir, PresentationProof, PresentationVerification,
-    PresentationWitness, RealPresentationProof, prove_authorization,
+    PresentationWitness, prove_authorization,
 };
 // Re-export predicate types at crate root for backward compatibility.
-pub use predicate_air::{
-    PredicateAir, PredicateProof, PredicateType, PredicateWitness, compute_fact_commitment,
-    prove_in_range, prove_predicate, verify_in_range, verify_predicate,
-};
+pub use predicate_air::{PredicateAir, PredicateType, PredicateWitness, compute_fact_commitment};
 
 // Re-export arithmetic predicate types at crate root.
 pub use arithmetic_predicate_air::{
-    ArithExpr, ArithPredicate, ArithmeticPredicateProof, ArithmeticPredicateWitness, CompareOp,
-    compute_arithmetic_fact_commitment, prove_arithmetic_dsl, prove_arithmetic_predicate,
-    verify_arithmetic_dsl, verify_arithmetic_predicate,
+    ArithExpr, ArithPredicate, ArithmeticPredicateWitness, CompareOp,
+    compute_arithmetic_fact_commitment,
 };
 
 // Re-export relational predicate types at crate root.
 pub use relational_predicate_air::{
-    RelationType, RelationalPredicateProof, RelationalPredicateWitness, RelationalProof,
-    RelationalWitness, compute_value_commitment, prove_relational, prove_value_comparison,
-    verify_relational,
+    RelationType, RelationalPredicateWitness, RelationalWitness, compute_value_commitment,
 };
 
-// Re-export multi-step authorization proving functions.
-pub use multi_step_air::{
-    MAX_DELEGATION_DEPTH, prove_authorization_stark, try_prove_authorization_stark,
-};
+// Re-export multi-step authorization constants.
+pub use multi_step_air::MAX_DELEGATION_DEPTH;
 
 /// Backward-compatible module alias for predicate types.
 pub mod predicate_types {

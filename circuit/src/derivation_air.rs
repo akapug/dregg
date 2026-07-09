@@ -6,7 +6,6 @@
 
 use crate::field::BabyBear;
 use crate::poseidon2::{hash_2_to_1, hash_fact, hash_many};
-use crate::stark::StarkProof;
 
 /// Trace width for the derivation AIR.
 pub const DERIVATION_AIR_WIDTH: usize = 371;
@@ -405,65 +404,6 @@ impl crate::constraint_prover::Air for DerivationAir {
     fn generate_trace(&self) -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
         crate::dsl::derivation::generate_derivation_trace_dsl(&self.witness)
     }
-}
-
-/// Legacy StarkAir struct for derivation.
-///
-/// DEPRECATED: This is a stub that delegates all logic to `crate::dsl::derivation`.
-/// Use `crate::dsl::derivation::prove_derivation_dsl` directly.
-#[deprecated(note = "Use crate::dsl::derivation::{prove,verify}_derivation_dsl instead")]
-pub struct DerivationStarkAir {
-    pub witness: DerivationWitness,
-}
-
-impl DerivationStarkAir {
-    pub fn new(witness: DerivationWitness) -> Self {
-        Self { witness }
-    }
-}
-
-impl crate::stark::StarkAir for DerivationStarkAir {
-    fn width(&self) -> usize {
-        crate::dsl::derivation::EXTENDED_TRACE_WIDTH
-    }
-    fn constraint_degree(&self) -> usize {
-        2
-    }
-    fn air_name(&self) -> &'static str {
-        "dregg-derivation-v1"
-    }
-    fn has_chain_continuity(&self) -> bool {
-        false
-    }
-    fn eval_constraints(
-        &self,
-        _local: &[BabyBear],
-        _next: &[BabyBear],
-        _public_inputs: &[BabyBear],
-        _alpha: BabyBear,
-    ) -> BabyBear {
-        BabyBear::ZERO
-    }
-    fn boundary_constraints(
-        &self,
-        _public_inputs: &[BabyBear],
-        _trace_len: usize,
-    ) -> Vec<crate::stark::BoundaryConstraint> {
-        vec![]
-    }
-}
-
-/// Prove a derivation step (delegates to DSL).
-pub fn prove_derivation_stark(witness: &DerivationWitness) -> Option<StarkProof> {
-    crate::dsl::derivation::prove_derivation_dsl(witness)
-}
-
-/// Verify a derivation STARK proof (delegates to DSL).
-pub fn verify_derivation_stark(
-    proof: &StarkProof,
-    public_inputs: &[BabyBear],
-) -> Result<(), String> {
-    crate::dsl::derivation::verify_derivation_dsl(proof, public_inputs)
 }
 
 /// Helper: create a test derivation witness.

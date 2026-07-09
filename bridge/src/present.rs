@@ -19,10 +19,11 @@ use dregg_circuit::fold_types::{FoldWitness, RemovedFact};
 use dregg_circuit::merkle_air::{MerkleLevelWitness, MerkleWitness};
 use dregg_circuit::merkle_types::compute_parent_poseidon2;
 use dregg_circuit::poseidon2;
-use dregg_circuit::presentation::{DescriptorProofWire, verify_descriptor_wire};
+use dregg_circuit::presentation::{
+    DescriptorProofWire, build_descriptor_wire, verify_descriptor_wire,
+};
 use dregg_circuit::{
     BabyBear, PresentationAir, PresentationProof, PresentationVerification, PresentationWitness,
-    RealPresentationProof,
 };
 use dregg_commit::merkle::{MerkleProof, MerkleTree};
 use dregg_commit::{Fact, FieldElement, FoldDelta, SymbolTable, TokenState};
@@ -138,6 +139,138 @@ pub struct BridgePresentationBuilder {
     revealed_facts_commitment: WideHash,
 }
 
+/// Bridge-side real presentation proof: the two committed in-circuit descriptor wires
+/// (bound-presentation auth + blinded ring-membership) plus the fold/derivation roots the
+/// composition-commitment binding recomputes over.
+///
+/// This replaced the retired `dregg_circuit::RealPresentationProof` when the presentation family
+/// flipped off the hand-`StarkProof` onto the two committed descriptors. The cryptographic content
+/// lives entirely in the two [`DescriptorProofWire`]s (each verified via `descriptor_by_name` →
+/// `verify_vm_descriptor2`); `fold_step_roots` / `derivation_state_root` are the non-cryptographic
+/// roots the composition commitment is recomputed over (they formerly rode inside the legacy
+/// constraint-checked fold/derivation proofs, which carried no independent cryptographic weight).
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct RealPresentationProof {
+    /// AUTH descriptor wire: the bound-presentation proof (`dregg-bound-presentation::v1`) —
+    /// action_binding + revealed_facts + the in-circuit presentation-tag binding.
+    /// Verified via `descriptor_by_name` → `verify_vm_descriptor2`; PIs `[summary(19), verifier_nonce]`.
+    pub bound_presentation: DescriptorProofWire,
+    /// RING/UNLINKABILITY descriptor wire: the depth-general 4-ary blinded ring-membership proof
+    /// (issuer ∈ federation, unlinkable). PIs `[blinded_leaf, root]`.
+    pub blinded_membership: DescriptorProofWire,
+    /// Per-fold-step `[old_root, new_root]` pairs — the fold-chain roots the composition
+    /// commitment is recomputed over.
+    pub fold_step_roots: Vec<[BabyBear; 2]>,
+    /// The final derivation state root — the second element the composition commitment binds.
+    pub derivation_state_root: BabyBear,
+}
+
+impl RealPresentationProof {
+    /// Total proof size in bytes (the two committed descriptor blobs).
+    pub fn total_proof_size_bytes(&self) -> usize {
+        self.bound_presentation.blob.len() + self.blinded_membership.blob.len()
+    }
+
+    /// Human-readable proof size.
+    pub fn proof_size_display(&self) -> String {
+        let bytes = self.total_proof_size_bytes();
+        if bytes < 1024 {
+            format!("{bytes} B")
+        } else if bytes < 1024 * 1024 {
+            format!("{:.1} KiB", bytes as f64 / 1024.0)
+        } else {
+            format!("{:.1} MiB", bytes as f64 / (1024.0 * 1024.0))
+        }
+    }
+}
+
+/// Build the bridge-side [`RealPresentationProof`] from a presentation witness.
+///
+/// This is the descriptor-wire PRODUCER that replaced the retired
+/// `PresentationAir::prove_stark_poseidon2()`: issuer membership and bound-presentation auth are
+/// each proven through the real IR-v2 prover and carried in wire form, verified by the consumer
+/// via `descriptor_by_name` → `verify_vm_descriptor2`. Returns `None` (fail-closed) if either
+/// descriptor fails to prove or the blinded ring-membership root does not bind the federation root.
+fn build_real_presentation_proof(w: &PresentationWitness) -> Option<RealPresentationProof> {
+    // The fold-chain roots + derivation state root the composition-commitment recompute hashes over.
+    let fold_step_roots: Vec<[BabyBear; 2]> = w
+        .fold_chain
+        .iter()
+        .map(|f| [f.old_root, f.new_root])
+        .collect();
+    let derivation_state_root = w.derivation.state_root;
+
+    let final_root = if let Some(last_fold) = w.fold_chain.last() {
+        last_fold.new_root
+    } else {
+        w.derivation.state_root
+    };
+
+    // (a) RING/UNLINKABILITY — the depth-general 4-ary BLINDED ring-membership descriptor.
+    //     PIs [blinded_leaf, root]; the member leaf_hash + blinding factor stay hidden.
+    let siblings: Vec<[BabyBear; 3]> = w
+        .issuer_membership
+        .levels
+        .iter()
+        .map(|l| l.siblings)
+        .collect();
+    let positions: Vec<u8> = w
+        .issuer_membership
+        .levels
+        .iter()
+        .map(|l| l.position)
+        .collect();
+    let depth = siblings.len();
+    let (blinded_trace, blinded_pis) =
+        dregg_circuit::blinded_membership_witness::blinded_membership_witness_4ary(
+            w.issuer_membership.leaf_hash,
+            w.blinding_factor,
+            &siblings,
+            &positions,
+        )
+        .ok()?;
+    // Fail-closed: the committed root MUST be the federation root, else the proof would not bind
+    // the issuer to this federation.
+    if blinded_pis
+        .get(dregg_circuit::blinded_membership_witness::PI_ROOT_4ARY)
+        .copied()
+        != Some(w.issuer_membership.expected_root)
+    {
+        return None;
+    }
+    let blinded_desc =
+        dregg_circuit::blinded_membership_witness::blinded_membership_descriptor_of_depth_4ary(
+            depth,
+        );
+    let blinded_membership = build_descriptor_wire(&blinded_desc, &blinded_trace, &blinded_pis)?;
+
+    // (b) AUTH — the bound-presentation descriptor: action_binding + revealed_facts + the
+    //     presentation_tag internalized in-circuit. PIs [summary(19), verifier_nonce].
+    let revealed_facts: [BabyBear; 8] = *w.revealed_facts_commitment.as_slice();
+    let (bound_trace, bound_pis) =
+        dregg_circuit::bound_presentation_witness::bound_presentation_witness_h4(
+            w.federation_root,
+            w.request_predicate,
+            w.timestamp,
+            revealed_facts,
+            final_root,
+            w.presentation_randomness,
+            w.verifier_nonce,
+        )
+        .ok()?;
+    let bound_desc = dregg_circuit::descriptor_by_name::descriptor_by_name(
+        dregg_circuit::bound_presentation_witness::BOUND_PRESENTATION_NAME,
+    )?;
+    let bound_presentation = build_descriptor_wire(&bound_desc, &bound_trace, &bound_pis)?;
+
+    Some(RealPresentationProof {
+        bound_presentation,
+        blinded_membership,
+        fold_step_roots,
+        derivation_state_root,
+    })
+}
+
 /// The complete bridge presentation proof.
 ///
 /// Contains both the ZK proof (circuit-level) and the supporting metadata
@@ -160,16 +293,6 @@ pub struct BridgePresentationProof {
     /// This is the preferred proof for long attenuation chains where proof size matters.
     /// `None` when using the non-IVC prove paths.
     pub ivc_proof: Option<dregg_circuit::IvcPresentationProof>,
-    /// Validated IVC proof for the fold chain: chain STARK + per-step fold membership STARKs.
-    ///
-    /// This is the fully STARK-proven fold chain proof that closes the fold-validity gap.
-    /// When present, a remote verifier can cryptographically verify:
-    /// 1. The hash-chain ordering (via the chain STARK)
-    /// 2. Each fold step's removal was valid (via per-step Merkle membership STARKs)
-    ///
-    /// Generated by [`prove_validated_ivc()`](Self::prove_validated_ivc).
-    /// `None` when using other prove paths.
-    pub validated_ivc_proof: Option<dregg_circuit::ValidatedIvcProof>,
     /// The authorization trace (for debugging / off-chain verification).
     ///
     /// **SECURITY: This field MUST NOT be transmitted over the wire.** It contains
@@ -213,10 +336,7 @@ impl BridgePresentationProof {
     /// For proofs from `prove_fast()`, use `is_constraint_checked()` to determine
     /// if the constraint system passed (useful for development, NOT for security).
     pub fn is_valid(&self) -> bool {
-        if self.real_stark_proof.is_none()
-            && self.ivc_proof.is_none()
-            && self.validated_ivc_proof.is_none()
-        {
+        if self.real_stark_proof.is_none() && self.ivc_proof.is_none() {
             return false;
         }
         self.verification == PresentationVerification::Valid
@@ -285,7 +405,6 @@ impl BridgePresentationProof {
             circuit_proof: self.circuit_proof,
             real_stark_proof: self.real_stark_proof,
             ivc_proof: self.ivc_proof,
-            validated_ivc_proof: self.validated_ivc_proof,
             verification: self.verification,
             revealed_facts_commitment: self.revealed_facts_commitment,
             composition_commitment: self.composition_commitment,
@@ -327,12 +446,6 @@ pub struct WirePresentationProof {
     pub real_stark_proof: Option<RealPresentationProof>,
     /// IVC proof for the fold chain.
     pub ivc_proof: Option<dregg_circuit::IvcPresentationProof>,
-    /// Validated IVC proof: chain STARK + per-step fold membership STARKs.
-    ///
-    /// When present, the remote verifier calls `verify_validated_ivc()` to
-    /// cryptographically verify the entire attenuation chain without trusting
-    /// the prover's local constraint checks.
-    pub validated_ivc_proof: Option<dregg_circuit::ValidatedIvcProof>,
     /// Verification result from the circuit layer.
     pub verification: PresentationVerification,
     /// Commitment to the selectively revealed facts.
@@ -768,7 +881,6 @@ impl BridgePresentationBuilder {
             circuit_proof,
             real_stark_proof: None,
             ivc_proof: None,
-            validated_ivc_proof: None,
             trace,
             chain_length: self.chain.len(),
             final_state_root: final_root_bytes,
@@ -782,9 +894,8 @@ impl BridgePresentationBuilder {
     /// Generate a STARK-backed presentation proof using Poseidon2 hashing.
     ///
     /// This is the internal implementation of [`prove`](Self::prove). It calls
-    /// `PresentationAir::prove_stark_poseidon2()` to produce a real STARK proof
-    /// for the issuer membership sub-circuit using collision-resistant Poseidon2
-    /// hashing.
+    /// [`build_real_presentation_proof`] to produce the two committed descriptor-wire proofs
+    /// (bound-presentation auth + blinded ring-membership) via the real IR-v2 prover.
     ///
     /// # Arguments
     ///
@@ -816,11 +927,11 @@ impl BridgePresentationBuilder {
         let air = PresentationAir::new(circuit_witness.clone());
         let verification = air.verify_all();
 
-        // Generate the real STARK proof with Poseidon2 hash constraints.
-        // This is the cryptographically-sound, collision-resistant proof of
-        // issuer membership that is transmitted over the wire.
-        let stark_proof = air.prove_stark_poseidon2().ok_or_else(|| {
-            AuthError::InvalidRequest("Poseidon2 STARK proof generation failed".into())
+        // Generate the two committed descriptor-wire proofs (bound-presentation auth + blinded
+        // ring-membership). This is the descriptor-wire flip off the retired hand-STARK issuer
+        // proof: both descriptors are proven through the real IR-v2 prover and carried in wire form.
+        let stark_proof = build_real_presentation_proof(&circuit_witness).ok_or_else(|| {
+            AuthError::InvalidRequest("descriptor-wire presentation proof generation failed".into())
         })?;
 
         // Also generate the constraint proof for the circuit_proof field.
@@ -829,14 +940,13 @@ impl BridgePresentationBuilder {
             .ok_or_else(|| AuthError::InvalidRequest("proof generation failed".into()))?;
 
         // The composition_commitment was computed in build_circuit_witness_poseidon2
-        // and is now embedded in the STARK proof's public inputs via the witness.
+        // and binds the sub-proof roots (fold chain + derivation) to the presentation tag.
         let composition_commitment = circuit_witness.composition_commitment;
 
         Ok(BridgePresentationProof {
             circuit_proof,
             real_stark_proof: Some(stark_proof),
             ivc_proof: None,
-            validated_ivc_proof: None,
             trace,
             chain_length: self.chain.len(),
             final_state_root: final_root_bytes,
@@ -905,7 +1015,6 @@ impl BridgePresentationBuilder {
             circuit_proof,
             real_stark_proof: None,
             ivc_proof: Some(ivc_proof),
-            validated_ivc_proof: None,
             trace,
             chain_length: self.chain.len(),
             final_state_root: final_root_bytes,
@@ -960,208 +1069,6 @@ impl BridgePresentationBuilder {
         }
 
         Ok((main_proof, pred_proofs))
-    }
-
-    /// Generate a STARK-proven presentation proof with validated fold chain.
-    ///
-    /// This is the strongest proving path: it produces real STARK proofs for:
-    /// 1. **Issuer membership** (ring membership STARK, same as `prove()`)
-    /// 2. **Fold chain hash-chain ordering** (StateTransitionAir STARK)
-    /// 3. **Per-step fold validity** (Merkle membership STARK for each removed fact)
-    ///
-    /// A remote verifier trusting only the STARKs gets cryptographic guarantees on
-    /// the entire attenuation history, not just issuer membership.
-    ///
-    /// # Arguments
-    ///
-    /// * `request` - The authorization request to prove.
-    ///
-    /// # Returns
-    ///
-    /// A `BridgePresentationProof` backed by both a real STARK issuer membership proof
-    /// AND a `ValidatedIvcProof` covering the fold chain, or an error if authorization
-    /// fails or the proof cannot be generated.
-    pub fn prove_validated_ivc(
-        &mut self,
-        request: &AuthRequest,
-    ) -> Result<BridgePresentationProof, AuthError> {
-        use dregg_circuit::ivc::prove_validated_ivc;
-
-        // 1. Get the final state.
-        let final_step = self.chain.last().ok_or(AuthError::EmptyState)?;
-        let final_state = &final_step.state;
-
-        // 2. Evaluate authorization against the auth_state.
-        let trace = authorize::authorize_with_trace(&self.auth_state, request, &self.symbols)?;
-
-        // 3. Compute the final state root.
-        let final_root_bytes = final_state.root_immutable();
-
-        // 4. Build the circuit witness with Poseidon2-compatible issuer membership.
-        let circuit_witness = self.build_circuit_witness_poseidon2(&trace, request)?;
-
-        // 5. Generate the Poseidon2 STARK proof for issuer membership.
-        let air = PresentationAir::new(circuit_witness.clone());
-        let verification = air.verify_all();
-
-        let stark_proof = air.prove_stark_poseidon2().ok_or_else(|| {
-            AuthError::InvalidRequest("Poseidon2 STARK proof generation failed".into())
-        })?;
-
-        let circuit_proof = air
-            .prove()
-            .ok_or_else(|| AuthError::InvalidRequest("proof generation failed".into()))?;
-
-        // 6. Build the fold chain and extract FoldStepWitnesses for validated IVC.
-        let fold_step_witnesses = self.build_fold_step_witnesses()?;
-
-        // 7. Generate the validated IVC proof (chain STARK + per-step membership STARKs).
-        let validated_ivc = if fold_step_witnesses.is_empty() {
-            // No fold steps (unrestricted token) — no validated IVC needed.
-            None
-        } else {
-            let initial_root = fold_step_witnesses[0].old_root;
-            match prove_validated_ivc(initial_root, &fold_step_witnesses) {
-                Ok(proof) => Some(proof),
-                Err(e) => {
-                    return Err(AuthError::InvalidRequest(format!(
-                        "Validated IVC proof generation failed: {}",
-                        e
-                    )));
-                }
-            }
-        };
-
-        // The composition_commitment was computed in build_circuit_witness_poseidon2
-        // and is now embedded in the STARK proof's public inputs via the witness.
-        let composition_commitment = circuit_witness.composition_commitment;
-
-        Ok(BridgePresentationProof {
-            circuit_proof,
-            real_stark_proof: Some(stark_proof),
-            ivc_proof: None,
-            validated_ivc_proof: validated_ivc,
-            trace,
-            chain_length: self.chain.len(),
-            final_state_root: final_root_bytes,
-            federation_root: self.federation_root,
-            verification,
-            revealed_facts_commitment: self.revealed_facts_commitment,
-            composition_commitment,
-        })
-    }
-
-    /// Build `FoldStepWitness` instances for the validated IVC path.
-    ///
-    /// Each `FoldStepWitness` contains the Merkle proof (siblings + positions) that
-    /// the removed fact existed in the tree at the step's old_root. This is the data
-    /// needed by `prove_validated_ivc()` to generate per-step membership STARKs.
-    fn build_fold_step_witnesses(
-        &self,
-    ) -> Result<Vec<dregg_circuit::ivc::FoldStepWitness>, AuthError> {
-        use dregg_circuit::ivc::FoldStepWitness;
-        use dregg_circuit::poseidon2::hash_fact;
-
-        let mut witnesses = Vec::new();
-
-        for i in 1..self.chain.len() {
-            let delta = match &self.chain[i].delta {
-                Some(d) => d,
-                None => continue,
-            };
-
-            let old_facts = &self.chain[i - 1].facts;
-            let new_facts = &self.chain[i].facts;
-
-            // Compute fact hashes in the Poseidon2 domain for the old state.
-            let old_leaf_hashes: Vec<BabyBear> = old_facts
-                .iter()
-                .map(|fact| {
-                    let pred_bb = bytes_to_babybear(&fact.predicate.0);
-                    let terms = [
-                        bytes_to_babybear(&fact.terms[0].0),
-                        bytes_to_babybear(&fact.terms[1].0),
-                        bytes_to_babybear(&fact.terms[2].0),
-                    ];
-                    hash_fact(pred_bb, &terms)
-                })
-                .collect();
-
-            // Build a Poseidon2 Merkle tree over the old state's fact hashes.
-            let tree_depth = 4;
-            let (old_root, old_proofs) = build_shared_tree(&old_leaf_hashes, tree_depth);
-
-            // Index old-leaf hash → first index, so each removed fact's lookup is
-            // O(1) instead of an O(old) linear scan. `or_insert` keeps the FIRST
-            // index for duplicate hashes, matching `.position()`'s semantics.
-            let old_leaf_index: std::collections::HashMap<BabyBear, usize> = {
-                let mut m = std::collections::HashMap::with_capacity(old_leaf_hashes.len());
-                for (idx, h) in old_leaf_hashes.iter().enumerate() {
-                    m.entry(*h).or_insert(idx);
-                }
-                m
-            };
-
-            // Compute the new state's Poseidon2 root.
-            let new_leaf_hashes: Vec<BabyBear> = new_facts
-                .iter()
-                .map(|fact| {
-                    let pred_bb = bytes_to_babybear(&fact.predicate.0);
-                    let terms = [
-                        bytes_to_babybear(&fact.terms[0].0),
-                        bytes_to_babybear(&fact.terms[1].0),
-                        bytes_to_babybear(&fact.terms[2].0),
-                    ];
-                    hash_fact(pred_bb, &terms)
-                })
-                .collect();
-            let (new_root, _) = build_shared_tree(&new_leaf_hashes, tree_depth);
-
-            // For each removed fact, build its FoldStepWitness.
-            // The validated IVC expects ONE removed fact per step. If there are multiple
-            // removals in a single fold delta, we produce one witness per removal and
-            // chain the roots accordingly.
-            for (fact, _commit_proof) in &delta.removed {
-                let pred_bb = bytes_to_babybear(&fact.predicate.0);
-                let terms = [
-                    bytes_to_babybear(&fact.terms[0].0),
-                    bytes_to_babybear(&fact.terms[1].0),
-                    bytes_to_babybear(&fact.terms[2].0),
-                ];
-                let fact_hash = hash_fact(pred_bb, &terms);
-
-                // Find this fact's index in the old state to get its Merkle proof.
-                let proof_idx = *old_leaf_index.get(&fact_hash).ok_or_else(|| {
-                    AuthError::InvalidRequest(
-                        "removed fact not found in old state for validated IVC".into(),
-                    )
-                })?;
-
-                let merkle_witness = &old_proofs[proof_idx];
-
-                // Convert MerkleWitness levels to the flat (siblings, positions) format.
-                let merkle_siblings: Vec<[BabyBear; 3]> = merkle_witness
-                    .levels
-                    .iter()
-                    .map(|level| level.siblings)
-                    .collect();
-                let merkle_positions: Vec<u8> = merkle_witness
-                    .levels
-                    .iter()
-                    .map(|level| level.position)
-                    .collect();
-
-                witnesses.push(FoldStepWitness {
-                    old_root,
-                    new_root,
-                    removed_fact_hash: fact_hash,
-                    merkle_siblings,
-                    merkle_positions,
-                });
-            }
-        }
-
-        Ok(witnesses)
     }
 
     /// Build the circuit-level presentation witness from the authorization trace.
@@ -2163,26 +2070,17 @@ pub fn verify_presentation_full(
     //    chain from another.
     if !proof.composition_commitment.is_zero() {
         // Recompute the composition commitment from the sub-proof data.
-        let fold_chain_commitment = if real.fold_proofs.is_empty() {
+        let fold_chain_commitment = if real.fold_step_roots.is_empty() {
             BabyBear::ZERO
         } else {
             let fold_roots: Vec<BabyBear> = real
-                .fold_proofs
+                .fold_step_roots
                 .iter()
-                .filter(|fp| fp.public_inputs.len() >= 2)
-                .flat_map(|fp| [fp.public_inputs[0], fp.public_inputs[1]])
+                .flat_map(|r| [r[0], r[1]])
                 .collect();
-            if fold_roots.is_empty() {
-                BabyBear::ZERO
-            } else {
-                poseidon2::hash_many(&fold_roots)
-            }
+            poseidon2::hash_many(&fold_roots)
         };
-        let derivation_state_root = if real.derivation_proof.public_inputs.is_empty() {
-            BabyBear::ZERO
-        } else {
-            real.derivation_proof.public_inputs[0]
-        };
+        let derivation_state_root = real.derivation_state_root;
         let presentation_tag = proof.circuit_proof.public_inputs.presentation_tag;
         // The circuit PI already stores the narrow (single-element) presentation tag,
         // which is compute_presentation_tag_narrow(). Use it directly — no re-hashing.
@@ -2475,31 +2373,22 @@ pub fn verify_proof_complete(
         // For single-step tokens (no attenuation chain), a zero composition is acceptable
         // only if there are no fold proofs. Multi-step proofs MUST have a non-zero
         // composition commitment to bind the sub-proofs together.
-        if !real.fold_proofs.is_empty() {
+        if !real.fold_step_roots.is_empty() {
             return Err(VerifyError::MissingComposition);
         }
     } else {
         // Recompute the composition commitment from the sub-proof data.
-        let fold_chain_commitment = if real.fold_proofs.is_empty() {
+        let fold_chain_commitment = if real.fold_step_roots.is_empty() {
             BabyBear::ZERO
         } else {
             let fold_roots: Vec<BabyBear> = real
-                .fold_proofs
+                .fold_step_roots
                 .iter()
-                .filter(|fp| fp.public_inputs.len() >= 2)
-                .flat_map(|fp| [fp.public_inputs[0], fp.public_inputs[1]])
+                .flat_map(|r| [r[0], r[1]])
                 .collect();
-            if fold_roots.is_empty() {
-                BabyBear::ZERO
-            } else {
-                poseidon2::hash_many(&fold_roots)
-            }
+            poseidon2::hash_many(&fold_roots)
         };
-        let derivation_state_root = if real.derivation_proof.public_inputs.is_empty() {
-            BabyBear::ZERO
-        } else {
-            real.derivation_proof.public_inputs[0]
-        };
+        let derivation_state_root = real.derivation_state_root;
         let presentation_tag = wire_proof.circuit_proof.public_inputs.presentation_tag;
 
         let recomputed = WideHash::from_poseidon2(
@@ -2594,100 +2483,39 @@ pub fn verify_presentation_structural(proof: &BridgePresentationProof) -> bool {
     proof.is_valid()
 }
 
-/// Verify the validated IVC fold chain proof in a presentation.
+/// Verify a presentation's fold chain.
 ///
-/// This is the verifier-side entry point for validated fold chain proofs.
-/// When a `BridgePresentationProof` contains a `validated_ivc_proof`, this
-/// function cryptographically verifies:
-/// 1. The hash-chain STARK (sequential ordering of root transitions).
-/// 2. Each per-step Merkle membership STARK (each removed fact existed in the tree).
-/// 3. Root continuity across all steps.
-///
-/// Returns `true` if the validated IVC proof is present and verifies successfully.
-/// Returns `false` if no validated IVC proof is present or verification fails.
-///
-/// # Arguments
-///
-/// * `proof` - The presentation proof to verify.
-///
-/// # Security
-///
-/// A remote verifier SHOULD call this in addition to `verify_presentation()` (which
-/// checks issuer membership). Together they provide full cryptographic guarantees:
-/// - Issuer membership STARK: token originated from a federated issuer
-/// - Validated IVC: the entire attenuation chain is valid (no fabricated steps)
-pub fn verify_fold_chain(proof: &BridgePresentationProof) -> bool {
-    match &proof.validated_ivc_proof {
-        Some(validated) => {
-            dregg_circuit::verify_validated_ivc(validated)
-                == dregg_circuit::ValidatedIvcVerification::Valid
-        }
-        None => false,
-    }
+/// Validated-IVC fold-chain proofs (chain STARK + per-step Merkle membership STARKs) were retired
+/// with the descriptor-wire flip; the fold chain is now bound via the composition commitment
+/// checked in [`verify_proof_complete`] / [`verify_presentation_complete`]. There is no separate
+/// validated-IVC proof to check here, so this returns `false` (fail-closed).
+pub fn verify_fold_chain(_proof: &BridgePresentationProof) -> bool {
+    // Validated-IVC fold-chain proofs were retired with the descriptor-wire flip. The fold chain
+    // is now bound via the composition commitment (recomputed and checked in
+    // `verify_proof_complete` / `verify_presentation_complete`), not a separate validated-IVC
+    // proof. With no such proof to check, this reports unverified (fail-closed).
+    false
 }
 
-/// Verify a fold chain with an expected initial root anchor.
+/// Verify a wire presentation proof's fold chain.
 ///
-/// This is the secure variant of [`verify_fold_chain`] that ensures the IVC proof's
-/// initial state corresponds to the expected root (e.g., derived from the issuer's
-/// original token state). Without this check, a valid IVC proof could start from
-/// an arbitrary initial state, allowing an attacker to fabricate the beginning of
-/// the attenuation chain.
-///
-/// # Arguments
-///
-/// * `proof` - The presentation proof containing the validated IVC proof.
-/// * `expected_initial_root` - The expected initial state root (before any attenuations).
-///
-/// # Security
-///
-/// Callers MUST provide `expected_initial_root` from a trusted source (e.g., the
-/// issuer's committed original state root). If this value comes from the proof itself,
-/// the check provides no security.
-pub fn verify_fold_chain_anchored(
-    proof: &BridgePresentationProof,
-    expected_initial_root: BabyBear,
-) -> bool {
-    match &proof.validated_ivc_proof {
-        Some(validated) => {
-            // First verify the IVC proof itself is structurally valid.
-            if dregg_circuit::verify_validated_ivc(validated)
-                != dregg_circuit::ValidatedIvcVerification::Valid
-            {
-                return false;
-            }
-            // Then verify the initial root matches the expected anchor.
-            validated.initial_root == expected_initial_root
-        }
-        None => false,
-    }
-}
-
-/// Verify a wire presentation proof's fold chain (validated IVC).
-///
-/// Same as [`verify_fold_chain`] but operates on the wire-safe representation.
-pub fn verify_wire_fold_chain(proof: &WirePresentationProof) -> bool {
-    match &proof.validated_ivc_proof {
-        Some(validated) => {
-            dregg_circuit::verify_validated_ivc(validated)
-                == dregg_circuit::ValidatedIvcVerification::Valid
-        }
-        None => false,
-    }
+/// Validated-IVC fold-chain proofs were retired; there is no separate fold-chain proof on the
+/// wire form to check, so this returns `false` (fail-closed). The fold chain is bound via the
+/// composition commitment checked by [`verify_proof_complete`].
+pub fn verify_wire_fold_chain(_proof: &WirePresentationProof) -> bool {
+    false
 }
 
 /// Full cryptographic verification of a presentation proof: issuer + fold chain.
 ///
-/// This combines `verify_presentation()` (issuer membership STARK) with
-/// `verify_fold_chain()` (validated IVC fold chain STARKs) to provide complete
-/// cryptographic verification of the entire proof.
+/// This verifies issuer membership (via `verify_presentation()`) and, for multi-step chains,
+/// the fold chain binding via the composition commitment (recomputed from the fold-step roots +
+/// derivation state root and checked against the committed value).
 ///
 /// Returns `true` only if BOTH:
-/// 1. The issuer membership STARK verifies against `federation_root`
-/// 2. The validated IVC fold chain STARKs verify (if a fold chain is present)
-///
-/// For proofs without a fold chain (unrestricted tokens), only issuer membership
-/// is checked.
+/// 1. The issuer membership descriptor verifies against `federation_root`
+/// 2. Either the token is single-step, or the composition commitment binding the fold chain
+///    recomputes to the committed value.
 ///
 /// # Arguments
 ///
@@ -2703,18 +2531,12 @@ pub fn verify_presentation_complete(
         return false;
     }
 
-    // 2. Verify the fold chain if a validated IVC proof is present.
-    if proof.validated_ivc_proof.is_some() {
-        return verify_fold_chain(proof);
-    }
-
-    // 3. No validated IVC proof. Check whether the proof is still complete:
+    // 2. Check whether the proof is complete:
     //    - chain_length <= 1: no fold chain to prove (single-step token).
-    //    - real_stark_proof with non-zero composition_commitment: the issuer STARK
-    //      cryptographically binds the fold chain via the composition_commitment
-    //      public input. This is the standard prove() path for multi-step chains
-    //      that don't use IVC recursion. The composition_commitment ensures no
-    //      sub-proof substitution is possible.
+    //    - real_stark_proof with non-zero composition_commitment: the descriptor-wire proof
+    //      binds the fold chain via the composition_commitment (recomputed below from the
+    //      fold-step roots + derivation state root). This is the standard prove() path for
+    //      multi-step chains; the composition_commitment ensures no sub-proof substitution.
     if proof.chain_length <= 1 {
         return true;
     }
@@ -2734,26 +2556,17 @@ pub fn verify_presentation_complete(
     }
 
     // Recompute composition commitment from the sub-proof data.
-    let fold_chain_commitment = if real.fold_proofs.is_empty() {
+    let fold_chain_commitment = if real.fold_step_roots.is_empty() {
         BabyBear::ZERO
     } else {
         let fold_roots: Vec<BabyBear> = real
-            .fold_proofs
+            .fold_step_roots
             .iter()
-            .filter(|fp| fp.public_inputs.len() >= 2)
-            .flat_map(|fp| [fp.public_inputs[0], fp.public_inputs[1]])
+            .flat_map(|r| [r[0], r[1]])
             .collect();
-        if fold_roots.is_empty() {
-            BabyBear::ZERO
-        } else {
-            poseidon2::hash_many(&fold_roots)
-        }
+        poseidon2::hash_many(&fold_roots)
     };
-    let derivation_state_root = if real.derivation_proof.public_inputs.is_empty() {
-        BabyBear::ZERO
-    } else {
-        real.derivation_proof.public_inputs[0]
-    };
+    let derivation_state_root = real.derivation_state_root;
     let presentation_tag = proof.circuit_proof.public_inputs.presentation_tag;
     // The circuit PI already stores the narrow (single-element) presentation tag,
     // which is compute_presentation_tag_narrow(). Use it directly — no re-hashing.
@@ -2809,14 +2622,21 @@ pub struct BridgePredicateProof {
 }
 
 /// Inner proof representation -- single proof for simple predicates, pair for InRange.
+///
+/// Each arm carries the `postcard`-encoded IR-v2 descriptor batch proof
+/// (`dregg_circuit::descriptor_ir2::Ir2BatchProof`), not the retired hand-STARK
+/// proof type. Only the ≥ (`Gte`) predicate has an emitted descriptor
+/// (`dregg-predicate-arith-ge::threshold-v1`); the `Range` / `CommittedThreshold`
+/// arms have no IR-v2 descriptor yet and are fail-closed at verify.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum BridgePredicateProofInner {
-    /// A single predicate proof (GTE, LTE, GT, LT, NEQ).
-    Single(dregg_circuit::PredicateProof),
-    /// A pair of proofs for InRange (lower bound + upper bound).
-    Range(dregg_circuit::PredicateProof, dregg_circuit::PredicateProof),
-    /// A committed-threshold proof where both value and threshold are hidden.
-    CommittedThreshold(dregg_circuit::CommittedThresholdProof),
+    /// A single predicate proof (only `Gte` has a descriptor). `postcard(Ir2BatchProof)`.
+    Single(Vec<u8>),
+    /// A pair of proofs for InRange (lower bound + upper bound). No descriptor (fail-closed).
+    Range(Vec<u8>, Vec<u8>),
+    /// A committed-threshold proof where both value and threshold are hidden. No descriptor
+    /// (fail-closed).
+    CommittedThreshold(Vec<u8>),
 }
 
 /// Generate a predicate proof for a specific fact attribute in a token state.
@@ -2845,52 +2665,39 @@ pub fn prove_predicate_for_fact(
     state_root: BabyBear,
     predicate: &Predicate,
 ) -> Option<BridgePredicateProof> {
-    let value_bb = BabyBear::new(private_value);
+    use dregg_circuit::descriptor_by_name::descriptor_by_name;
+    use dregg_circuit::descriptor_ir2::{MemBoundaryWitness, prove_vm_descriptor2};
+    use dregg_circuit::predicate_arith_witness::{PREDICATE_ARITH_NAME, predicate_arith_witness};
+
     let fact_commitment = dregg_circuit::compute_fact_commitment(fact_hash, state_root);
 
-    match predicate {
-        Predicate::InRange(low, high) => {
-            let (low_proof, high_proof) = dregg_circuit::prove_in_range(
-                value_bb,
-                BabyBear::new(*low),
-                BabyBear::new(*high),
-                fact_commitment,
-            )
-            .ok()?;
-            Some(BridgePredicateProof {
-                predicate: predicate.clone(),
-                proof: BridgePredicateProofInner::Range(low_proof, high_proof),
-                fact_commitment,
-            })
-        }
-        _ => {
-            let (threshold, predicate_type) = match predicate {
-                Predicate::Gte(t) => (*t, dregg_circuit::PredicateType::Gte),
-                Predicate::Lte(t) => (*t, dregg_circuit::PredicateType::Lte),
-                Predicate::Gt(t) => (*t, dregg_circuit::PredicateType::Gt),
-                Predicate::Lt(t) => (*t, dregg_circuit::PredicateType::Lt),
-                Predicate::Neq(t) => (*t, dregg_circuit::PredicateType::Neq),
-                Predicate::InRange(..) => unreachable!(),
-            };
+    // Only the ≥ (`Gte`) predicate has an emitted IR-v2 descriptor
+    // (`dregg-predicate-arith-ge::threshold-v1`, PIs `[threshold, fact_commitment]`).
+    // The other operators (Lte/Gt/Lt/Neq) and `InRange` have no descriptor, so no
+    // proof can be produced for them (the retired hand-AIR gadgets are gone).
+    let threshold = match predicate {
+        Predicate::Gte(t) => *t,
+        Predicate::Lte(_)
+        | Predicate::Gt(_)
+        | Predicate::Lt(_)
+        | Predicate::Neq(_)
+        | Predicate::InRange(..) => return None,
+    };
 
-            let witness = dregg_circuit::PredicateWitness {
-                private_value: value_bb,
-                threshold: BabyBear::new(threshold),
-                predicate_type,
-                fact_commitment,
-                blinding: None,
-                fact_hash: Some(fact_hash),
-                state_root: Some(state_root),
-            };
-
-            let proof = dregg_circuit::prove_predicate(witness)?;
-            Some(BridgePredicateProof {
-                predicate: predicate.clone(),
-                proof: BridgePredicateProofInner::Single(proof),
-                fact_commitment,
-            })
-        }
-    }
+    let desc = descriptor_by_name(PREDICATE_ARITH_NAME)?;
+    // `predicate_arith_witness` computes `DIFF = value − threshold` and lets the
+    // descriptor's range lookup be the judge; a `value < threshold` witness has no
+    // satisfying decomposition and prove refuses (→ `None`, the false-statement pole).
+    let (trace, pis) =
+        predicate_arith_witness(private_value as u64, threshold as u64, fact_commitment, 2).ok()?;
+    let proof =
+        prove_vm_descriptor2(&desc, &trace, &pis, &MemBoundaryWitness::default(), &[]).ok()?;
+    let proof_bytes = postcard::to_allocvec(&proof).ok()?;
+    Some(BridgePredicateProof {
+        predicate: predicate.clone(),
+        proof: BridgePredicateProofInner::Single(proof_bytes),
+        fact_commitment,
+    })
 }
 
 /// Verify a predicate proof.
@@ -2909,40 +2716,48 @@ pub fn verify_predicate_proof(
         return false;
     }
 
+    use dregg_circuit::descriptor_by_name::descriptor_by_name;
+    use dregg_circuit::descriptor_ir2::{DreggStarkConfig, Ir2BatchProof, verify_vm_descriptor2};
+    use dregg_circuit::predicate_arith_witness::PREDICATE_ARITH_NAME;
+
     match &proof.proof {
         BridgePredicateProofInner::Single(inner) => {
+            // Only the ≥ (`Gte`) predicate has an emitted descriptor; any other
+            // operator fails closed (never accepted against the wrong comparison).
             let threshold = match &proof.predicate {
-                Predicate::Gte(t)
-                | Predicate::Lte(t)
-                | Predicate::Gt(t)
-                | Predicate::Lt(t)
-                | Predicate::Neq(t) => BabyBear::new(*t),
-                Predicate::InRange(..) => return false,
+                Predicate::Gte(t) => BabyBear::new(*t),
+                Predicate::Lte(_)
+                | Predicate::Gt(_)
+                | Predicate::Lt(_)
+                | Predicate::Neq(_)
+                | Predicate::InRange(..) => return false,
             };
-            dregg_circuit::verify_predicate(inner, threshold, expected_fact_commitment).is_ok()
-        }
-        BridgePredicateProofInner::Range(low_proof, high_proof) => {
-            let (low, high) = match &proof.predicate {
-                Predicate::InRange(l, h) => (BabyBear::new(*l), BabyBear::new(*h)),
-                _ => return false,
+            let desc = match descriptor_by_name(PREDICATE_ARITH_NAME) {
+                Some(d) => d,
+                None => return false,
             };
-            dregg_circuit::verify_in_range(
-                low_proof,
-                high_proof,
-                low,
-                high,
-                expected_fact_commitment,
-            )
+            let batch: Ir2BatchProof<DreggStarkConfig> = match postcard::from_bytes(inner) {
+                Ok(p) => p,
+                Err(_) => return false,
+            };
+            // PIs `[threshold, fact_commitment]`, both host-supplied; the descriptor
+            // pins them, so a proof committed to a different threshold / fact, or a
+            // `value < threshold` witness, is UNSAT. Any panic → rejection.
+            let pis = vec![threshold, expected_fact_commitment];
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                verify_vm_descriptor2(&desc, &batch, &pis).is_ok()
+            }))
+            .unwrap_or(false)
         }
-        BridgePredicateProofInner::CommittedThreshold(ct_proof) => {
-            // For committed-threshold proofs, verify against the threshold commitment
-            // embedded in the proof. The verifier must independently check the
-            // threshold_commitment against their expected value.
-            dregg_circuit::verify_committed_threshold(
-                ct_proof,
-                ct_proof.threshold_commitment,
-                expected_fact_commitment,
-            )
+        BridgePredicateProofInner::Range(_low_proof, _high_proof) => {
+            // The two-bound InRange predicate has no emitted IR-v2 descriptor (only
+            // the one-sided ≥ threshold descriptor exists) — fail closed.
+            false
+        }
+        BridgePredicateProofInner::CommittedThreshold(_ct_proof) => {
+            // The committed-threshold (hidden threshold) predicate has no emitted
+            // IR-v2 descriptor — fail closed rather than accept an unverified claim.
+            false
         }
     }
 }
@@ -2959,8 +2774,9 @@ pub fn verify_predicate_proof(
 /// Public inputs are only the two commitments (threshold + fact).
 #[derive(Clone, Debug)]
 pub struct BridgeCommittedThresholdProof {
-    /// The circuit-level proof.
-    pub proof: dregg_circuit::CommittedThresholdProof,
+    /// The circuit-level proof (`postcard`-encoded IR-v2 batch proof). No IR-v2
+    /// committed-threshold descriptor is emitted yet, so this is currently unpopulated.
+    pub proof: Vec<u8>,
     /// The threshold commitment (for verifier cross-check).
     pub threshold_commitment: BabyBear,
     /// The fact commitment (binding to token state).
@@ -2998,26 +2814,11 @@ pub fn prove_committed_threshold(
     fact_hash: BabyBear,
     state_root: BabyBear,
 ) -> Option<BridgeCommittedThresholdProof> {
-    let value_bb = BabyBear::new(private_value);
-    let threshold_bb = BabyBear::new(threshold);
-    let blinding_bb = BabyBear::new(blinding);
-    let fact_commitment = dregg_circuit::compute_fact_commitment(fact_hash, state_root);
-
-    let witness = dregg_circuit::CommittedThresholdWitness {
-        private_value: value_bb,
-        threshold: threshold_bb,
-        blinding: blinding_bb,
-        fact_commitment,
-    };
-
-    let threshold_commitment = witness.compute_threshold_commitment();
-    let proof = dregg_circuit::prove_committed_threshold(witness)?;
-
-    Some(BridgeCommittedThresholdProof {
-        proof,
-        threshold_commitment,
-        fact_commitment,
-    })
+    // The committed-threshold (hidden value + hidden threshold) predicate has no
+    // emitted IR-v2 descriptor, so no proof can be produced (the retired hand-AIR
+    // gadget is gone). Fail-closed: no proof.
+    let _ = (private_value, threshold, blinding, fact_hash, state_root);
+    None
 }
 
 /// Verify a committed-threshold proof.
@@ -3040,16 +2841,29 @@ pub fn verify_committed_threshold_proof(
     expected_threshold_commitment: BabyBear,
     expected_fact_commitment: BabyBear,
 ) -> bool {
-    dregg_circuit::verify_committed_threshold(
-        &proof.proof,
+    // No emitted IR-v2 committed-threshold descriptor — fail closed rather than
+    // accept an unverified claim.
+    let _ = (
+        proof,
         expected_threshold_commitment,
         expected_fact_commitment,
-    )
+    );
+    false
 }
 
 // =============================================================================
 // Programmable Predicate Programs
 // =============================================================================
+
+/// An opaque programmable-predicate program proof: the `postcard`-encoded IR-v2
+/// batch proof(s) for the compiled program. No IR-v2 descriptor is emitted for the
+/// programmable-predicate compiler yet, so this currently carries no producible
+/// proof (the proving entry points are fail-closed).
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct ProgramProof {
+    /// The serialized proof payload (empty until a program descriptor is emitted).
+    pub bytes: Vec<u8>,
+}
 
 /// Error from the predicate program proving pipeline.
 #[derive(Clone, Debug)]
@@ -3058,6 +2872,8 @@ pub enum ProgramProveError {
     CompileError(dregg_circuit::predicate_program::CompileError),
     /// Proof generation failed.
     ProveError(dregg_circuit::predicate_program::ProveError),
+    /// The compiled program has no emitted IR-v2 descriptor, so no proof can be produced.
+    Unsupported(String),
 }
 
 impl std::fmt::Display for ProgramProveError {
@@ -3065,6 +2881,7 @@ impl std::fmt::Display for ProgramProveError {
         match self {
             Self::CompileError(e) => write!(f, "compile error: {e}"),
             Self::ProveError(e) => write!(f, "prove error: {e}"),
+            Self::Unsupported(m) => write!(f, "unsupported: {m}"),
         }
     }
 }
@@ -3123,21 +2940,17 @@ pub fn prove_predicate_program(
     program: &dregg_circuit::predicate_program::PredicateProgram,
     private_values: &std::collections::HashMap<String, u64>,
     state_root: BabyBear,
-) -> Result<dregg_circuit::predicate_program::ProgramProof, ProgramProveError> {
-    use dregg_circuit::predicate_program::{PrivateState, compile_predicate, prove_program};
+) -> Result<ProgramProof, ProgramProveError> {
+    use dregg_circuit::predicate_program::compile_predicate;
 
-    // Compile the program to a proof plan.
-    let compiled = compile_predicate(program)?;
-
-    // Build the private state from the provided values.
-    let private_state = PrivateState {
-        values: private_values.clone(),
-        ..PrivateState::default()
-    };
-
-    // Generate the proof.
-    let proof = prove_program(&compiled, &private_state, state_root)?;
-    Ok(proof)
+    // Compilation still validates the program shape; but the compiled plan has no
+    // emitted IR-v2 descriptor, so no proof can be produced (the retired hand-AIR
+    // program prover is gone). Fail-closed.
+    compile_predicate(program)?;
+    let _ = (private_values, state_root);
+    Err(ProgramProveError::Unsupported(
+        "programmable predicate programs have no emitted IR-v2 descriptor yet".to_string(),
+    ))
 }
 
 /// Compile and prove a predicate program with full private state (including temporal history).
@@ -3149,12 +2962,14 @@ pub fn prove_predicate_program_full(
     program: &dregg_circuit::predicate_program::PredicateProgram,
     private_state: &dregg_circuit::predicate_program::PrivateState,
     state_root: BabyBear,
-) -> Result<dregg_circuit::predicate_program::ProgramProof, ProgramProveError> {
-    use dregg_circuit::predicate_program::{compile_predicate, prove_program};
+) -> Result<ProgramProof, ProgramProveError> {
+    use dregg_circuit::predicate_program::compile_predicate;
 
-    let compiled = compile_predicate(program)?;
-    let proof = prove_program(&compiled, private_state, state_root)?;
-    Ok(proof)
+    compile_predicate(program)?;
+    let _ = (private_state, state_root);
+    Err(ProgramProveError::Unsupported(
+        "programmable predicate programs have no emitted IR-v2 descriptor yet".to_string(),
+    ))
 }
 
 /// Verify a predicate program proof.
@@ -3168,18 +2983,14 @@ pub fn prove_predicate_program_full(
 /// Returns `true` if the proof is valid.
 pub fn verify_predicate_program(
     program: &dregg_circuit::predicate_program::PredicateProgram,
-    proof: &dregg_circuit::predicate_program::ProgramProof,
+    proof: &ProgramProof,
     expected_commitments: &std::collections::HashMap<String, BabyBear>,
     state_root: BabyBear,
 ) -> bool {
-    use dregg_circuit::predicate_program::{compile_predicate, verify_program};
-
-    let compiled = match compile_predicate(program) {
-        Ok(c) => c,
-        Err(_) => return false,
-    };
-
-    verify_program(proof, &compiled, expected_commitments, state_root)
+    // No emitted IR-v2 descriptor for the programmable-predicate compiler — fail
+    // closed rather than accept an unverified program proof.
+    let _ = (program, proof, expected_commitments, state_root);
+    false
 }
 
 #[cfg(test)]

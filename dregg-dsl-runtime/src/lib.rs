@@ -57,51 +57,39 @@ pub use dregg_circuit::dsl::{
 };
 
 // Re-export production garbled circuit evaluation API.
-pub use dregg_circuit::dsl::garbled::{
-    ExtendedGateRecord, GarbledDslProof, GateType as GarbledGateType, prove_garbled_evaluation_dsl,
-    prove_garbled_evaluation_extended_dsl, prove_private_threshold_dsl,
-    verify_garbled_evaluation_dsl, verify_private_threshold_dsl,
-};
+pub use dregg_circuit::dsl::garbled::{ExtendedGateRecord, GateType as GarbledGateType};
 
 // Re-export production temporal absence API.
-pub use dregg_circuit::dsl::temporal_absence::{
-    DslTimelineEntry, TemporalAbsenceDslProof, TemporalAbsenceDslWitness,
-    prove_temporal_absence_dsl, verify_temporal_absence_dsl,
-};
+pub use dregg_circuit::dsl::temporal_absence::{DslTimelineEntry, TemporalAbsenceDslWitness};
 
 // Re-export production non-revocation proving API.
 pub use dregg_circuit::dsl::revocation::{
     DslRevocationTree, NonMembershipWitnessDsl, REVOCATION_TREE_DEPTH, SENTINEL_MAX, SENTINEL_MIN,
     TREE_DEPTH, generate_non_revocation_trace, non_revocation_dsl_circuit,
-    prove_non_revocation_dsl, revocation_hash_to_field, verify_non_revocation_dsl,
+    revocation_hash_to_field,
 };
 
 // Re-export DSL-native fold proving API.
 pub use dregg_circuit::dsl::fold::{
     FOLD_DSL_PI_COUNT, FOLD_DSL_WIDTH, fold_circuit_descriptor, fold_dsl_circuit,
-    generate_fold_trace, prove_fold_dsl, prove_fold_stark, verify_fold_dsl, verify_fold_stark,
+    generate_fold_trace,
 };
 
 // Re-export DSL-native note spending proving API.
 pub use dregg_circuit::dsl::note_spending::{
     generate_note_spending_trace, note_spending_circuit_descriptor, note_spending_dsl_circuit,
-    prove_note_spend, prove_note_spend_dsl, verify_note_spend, verify_note_spend_dsl,
-    verify_note_spend_dsl_with_destination,
 };
 
 // Re-export DSL-native accumulator proving API.
 pub use dregg_circuit::dsl::accumulator::{
     ACCUMULATOR_DSL_WIDTH, accumulator_circuit_descriptor, accumulator_dsl_circuit,
-    generate_accumulator_trace, prove_accumulator_non_revocation,
-    prove_accumulator_non_revocation_dsl, verify_accumulator_non_revocation,
-    verify_accumulator_non_revocation_dsl,
+    generate_accumulator_trace,
 };
 
 // Re-export DSL-native derivation proving API.
 pub use dregg_circuit::dsl::derivation::{
     BODY_HASH_INV_START, EXTENDED_TRACE_WIDTH, MULTI_STEP_DSL_WIDTH, derivation_circuit_descriptor,
     derivation_dsl_circuit, generate_derivation_trace_dsl, generate_multi_step_trace_dsl,
-    prove_authorization_dsl, prove_derivation_dsl, verify_authorization_dsl, verify_derivation_dsl,
 };
 
 /// Error returned when a caveat constraint is violated at runtime.

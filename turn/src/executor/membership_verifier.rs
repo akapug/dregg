@@ -55,12 +55,14 @@ use dregg_circuit::descriptor_ir2::{
 use dregg_circuit::dsl::circuit::ProgramRegistry;
 use dregg_circuit::dsl::membership::generate_merkle_poseidon2_trace;
 use dregg_circuit::membership_descriptor_4ary::membership_witness_4ary;
-use dregg_circuit::predicate_air::{
-    PredicateProof, PredicateType, verify_in_range, verify_predicate,
-};
-use dregg_circuit::temporal_predicate_dsl::{
-    TemporalPredicateProof, TemporalPredicateRequirement, verify_temporal_predicate,
-};
+use dregg_circuit::predicate_air::PredicateType;
+use dregg_circuit::predicate_arith_witness::PREDICATE_ARITH_NAME;
+use dregg_circuit::temporal_predicate_dsl::TemporalPredicateRequirement;
+use dregg_circuit_prove::custom_leaf_adapter::cellprogram_to_descriptor2;
+
+/// The emitted temporal-predicate (≥) descriptor name (`descriptor_by_name` key);
+/// PIs are `[num_steps, threshold, initial_state_root, final_state_root]`.
+const TEMPORAL_PREDICATE_DESCRIPTOR_NAME: &str = "dregg-temporal-predicate-gte::dsl-v1";
 
 const KIND_NAME: &str = "MerkleMembership";
 
@@ -524,17 +526,20 @@ pub fn verify_nullifier_nonmembership(
 #[derive(serde::Serialize, serde::Deserialize)]
 struct DfaProofWire {
     public_inputs: Vec<u32>,
-    stark: Vec<u8>,
+    /// The IR-v2 descriptor-prover batch proof for the program's lowered
+    /// (`cellprogram_to_descriptor2`) transition descriptor, `postcard`-encoded.
+    proof: Ir2BatchProof<DreggStarkConfig>,
 }
 
 /// Real DSL-circuit-backed verifier for [`WitnessedPredicateKind::Dfa`].
 ///
 /// Holds a host-installed [`ProgramRegistry`] of deployed DSL programs. The
 /// predicate `commitment` is the program `vk_hash`; the verifier looks the
-/// program up and calls `CellProgram::verify_transition`, which runs
-/// `dregg_circuit::stark::verify` over the program's AIR. A `vk_hash` absent
-/// from the registry fails closed (an unknown / self-declared circuit is never
-/// trusted). Verification is the authoritative STARK gate — not a field compare.
+/// program up, lowers its `CircuitDescriptor` to the IR-v2 descriptor via
+/// `cellprogram_to_descriptor2`, and runs `verify_vm_descriptor2` over the
+/// program's descriptor. A `vk_hash` absent from the registry fails closed (an
+/// unknown / self-declared circuit is never trusted). Verification is the
+/// authoritative STARK gate — not a field compare.
 #[derive(Clone)]
 pub struct DslCircuitDfaVerifier {
     programs: Arc<ProgramRegistry>,
@@ -582,12 +587,33 @@ impl WitnessedPredicateVerifier for DslCircuitDfaVerifier {
             .iter()
             .map(|v| BabyBear::new(*v))
             .collect();
-        program
-            .verify_transition(&public_inputs, &wire.stark)
-            .map_err(|e| WitnessedPredicateError::Rejected {
+        // Lower the host-trusted program's `CircuitDescriptor` to the IR-v2
+        // descriptor (fail-closed on a lowering refusal) and verify the batch
+        // proof against the reconstructed public inputs. The program is resolved
+        // from the registry by `vk_hash`, so a prover cannot swap in their own
+        // circuit; the descriptor pins the transition, and a proof committed to a
+        // different transition/PI is UNSAT.
+        let desc =
+            cellprogram_to_descriptor2(program).map_err(|e| WitnessedPredicateError::Rejected {
                 kind_name: "Dfa",
-                reason: format!("DSL-circuit transition STARK rejected: {e:?}"),
-            })
+                reason: format!("DSL program did not lower to an IR-v2 descriptor: {e}"),
+            })?;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            verify_vm_descriptor2(&desc, &wire.proof, &public_inputs)
+        }));
+        match result {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => Err(WitnessedPredicateError::Rejected {
+                kind_name: "Dfa",
+                reason: format!("DSL-circuit transition STARK rejected: {e}"),
+            }),
+            Err(_) => Err(WitnessedPredicateError::Rejected {
+                kind_name: "Dfa",
+                reason:
+                    "DSL-circuit transition proof decode/verify panicked (treated as rejection)"
+                        .into(),
+            }),
+        }
     }
 }
 
@@ -622,12 +648,28 @@ pub fn prove_dfa_transition(
     let program = programs
         .get(vk_hash)
         .ok_or_else(|| "no DSL program registered for vk_hash".to_string())?;
-    let stark = program
-        .prove_transition(witness_values, num_rows, public_inputs)
+    // Lower the program to its IR-v2 descriptor and prove the transition through
+    // the descriptor prover. The program trace is widened to the lowered
+    // descriptor width (the lowering may append accumulator/lane columns).
+    let desc = cellprogram_to_descriptor2(program)?;
+    let mut base_trace = program
+        .generate_trace(witness_values, num_rows)
         .map_err(|e| format!("{e:?}"))?;
+    for row in &mut base_trace {
+        if row.len() < desc.trace_width {
+            row.resize(desc.trace_width, BabyBear::ZERO);
+        }
+    }
+    let proof = prove_vm_descriptor2(
+        &desc,
+        &base_trace,
+        public_inputs,
+        &MemBoundaryWitness::default(),
+        &[],
+    )?;
     let wire = DfaProofWire {
         public_inputs: public_inputs.iter().map(|f| f.as_u32()).collect(),
-        stark,
+        proof,
     };
     Ok(postcard::to_allocvec(&wire).expect("DfaProofWire serialization is infallible"))
 }
@@ -702,11 +744,11 @@ impl WitnessedPredicateVerifier for TemporalPredicateStarkVerifier {
         _input: &PredicateInput<'_>,
         proof_bytes: &[u8],
     ) -> Result<(), WitnessedPredicateError> {
-        let proof: TemporalPredicateProof =
+        let wire: TemporalProofWire =
             postcard::from_bytes(proof_bytes).map_err(|e| WitnessedPredicateError::Rejected {
                 kind_name: "Temporal",
                 reason: format!(
-                    "Temporal proof wire did not decode (expected TemporalPredicateProof): {e}"
+                    "Temporal proof wire did not decode (expected TemporalProofWire): {e}"
                 ),
             })?;
         let policy =
@@ -720,36 +762,72 @@ impl WitnessedPredicateVerifier for TemporalPredicateStarkVerifier {
                             .into(),
                 })?;
 
-        // Enforce the host policy against the proof's plain fields first (cheap
-        // gate: predicate type + minimum duration). These are re-bound by the
-        // STARK below, but checking them here yields precise rejection reasons.
-        if !policy.requirement.is_satisfied_by(&proof) {
+        // The emitted temporal descriptor is the ≥ ("held at least `threshold`")
+        // predicate; a non-`Gte` policy has no IR-v2 descriptor and fails closed
+        // (never accepted against the wrong comparison).
+        if policy.requirement.predicate_type != PredicateType::Gte {
             return Err(WitnessedPredicateError::Rejected {
                 kind_name: "Temporal",
-                reason: "temporal proof does not satisfy the host policy (predicate type, \
-                         threshold floor, or minimum duration)"
-                    .into(),
+                reason: format!(
+                    "temporal predicate op {:?} has no IR-v2 descriptor (only Gte / \
+                     `dregg-temporal-predicate-gte::dsl-v1` is emitted)",
+                    policy.requirement.predicate_type
+                ),
             });
         }
 
-        // Authoritative STARK gate: reconstruct PI from the HOST policy's
-        // threshold / num_steps / roots (not the proof's self-claimed values).
-        // A proof whose embedded values disagree with the policy yields a PI
-        // that mismatches the STARK boundary commitments and is rejected.
-        let threshold = BabyBear::new(policy.requirement.threshold as u32);
-        let initial = BabyBear::new(policy.initial_state_root);
-        let final_ = BabyBear::new(policy.final_state_root);
-        if verify_temporal_predicate(&proof, threshold, policy.num_steps, initial, final_) {
-            Ok(())
-        } else {
-            Err(WitnessedPredicateError::Rejected {
+        // Authoritative STARK gate: reconstruct the descriptor's public inputs
+        // `[num_steps, threshold, initial_state_root, final_state_root]` from the
+        // HOST policy (not any proof-embedded, prover-chosen values). The
+        // descriptor pins each to its trace slot (last-row accumulator, first-row
+        // threshold, first/last-row state root), so a proof committed to different
+        // steps / threshold / roots is UNSAT and rejected. Decode+verify run under
+        // `catch_unwind` so a malformed blob is a fail-closed rejection.
+        let pis = vec![
+            BabyBear::new(policy.num_steps),
+            BabyBear::new(policy.requirement.threshold as u32),
+            BabyBear::new(policy.initial_state_root),
+            BabyBear::new(policy.final_state_root),
+        ];
+        let desc = descriptor_by_name(TEMPORAL_PREDICATE_DESCRIPTOR_NAME).ok_or_else(|| {
+            WitnessedPredicateError::Rejected {
                 kind_name: "Temporal",
-                reason: "temporal-predicate STARK rejected (the predicate did not hold \
-                         continuously over the policy's step range against the policy's roots)"
+                reason: format!(
+                    "no temporal descriptor dispatches for {TEMPORAL_PREDICATE_DESCRIPTOR_NAME:?} \
+                     (fail-closed)"
+                ),
+            }
+        })?;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            verify_vm_descriptor2(&desc, &wire.proof, &pis)
+        }));
+        match result {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => Err(WitnessedPredicateError::Rejected {
+                kind_name: "Temporal",
+                reason: format!(
+                    "temporal-predicate STARK rejected (the predicate did not hold continuously \
+                     over the policy's step range against the policy's roots): {e}"
+                ),
+            }),
+            Err(_) => Err(WitnessedPredicateError::Rejected {
+                kind_name: "Temporal",
+                reason: "temporal-predicate proof decode/verify panicked (treated as rejection)"
                     .into(),
-            })
+            }),
         }
     }
+}
+
+/// Wire encoding for a [`WitnessedPredicateKind::Temporal`] proof: the IR-v2
+/// descriptor-prover batch proof for `dregg-temporal-predicate-gte::dsl-v1`,
+/// `postcard`-encoded. The `[num_steps, threshold, initial, final]` public
+/// inputs are NOT transmitted — the verifier reconstructs them from the
+/// host-trusted [`TemporalPolicy`], so a prover cannot lower the threshold /
+/// shorten the duration / swap the roots independently of the STARK binding.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct TemporalProofWire {
+    proof: Ir2BatchProof<DreggStarkConfig>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -1130,8 +1208,11 @@ impl BridgePredicatePolicyAuthority for StaticBridgePredicatePolicy {
 /// requirement.
 #[derive(serde::Serialize, serde::Deserialize)]
 enum BridgePredicateWire {
-    Single(PredicateProof),
-    Range(PredicateProof, PredicateProof),
+    Single(Ir2BatchProof<DreggStarkConfig>),
+    Range(
+        Ir2BatchProof<DreggStarkConfig>,
+        Ir2BatchProof<DreggStarkConfig>,
+    ),
 }
 
 /// Real predicate-AIR-STARK-backed verifier for
@@ -1200,60 +1281,66 @@ impl WitnessedPredicateVerifier for BridgePredicateStarkVerifier {
                 BridgePredicateRequirement::Threshold { op, threshold },
                 BridgePredicateWire::Single(proof),
             ) => {
-                // Pin the operator: verify_predicate binds the proof's OWN `op`
-                // tag into the PI, so a Gte proof presented under an Lte policy
-                // would slip past a threshold-only check. Reject the mismatch.
-                if proof.op != op {
+                // Only the ≥ ("value ≥ threshold") predicate has an emitted IR-v2
+                // descriptor (`dregg-predicate-arith-ge::threshold-v1`). Any other
+                // operator (Lte/Gt/Lt/Neq) has no descriptor and fails closed — it
+                // is never accepted against the wrong comparison.
+                if op != PredicateType::Gte {
                     return Err(WitnessedPredicateError::Rejected {
                         kind_name: "BridgePredicate",
                         reason: format!(
-                            "proof operator {:?} does not match the host policy operator {op:?}",
-                            proof.op
+                            "predicate operator {op:?} has no IR-v2 descriptor (only Gte / \
+                             `dregg-predicate-arith-ge::threshold-v1` is emitted)"
                         ),
                     });
                 }
-                // Authoritative STARK gate: threshold + fact_commitment come from
-                // the host policy, not the proof. A proof whose embedded values
-                // disagree yields a PI that mismatches the STARK boundary and is
-                // rejected by verify_predicate.
-                verify_predicate(&proof, BabyBear::new(threshold), fact_commitment).map_err(|e| {
+                // Authoritative STARK gate: the descriptor pins its public inputs
+                // `[threshold, fact_commitment]` to the trace, both reconstructed
+                // from the HOST policy / committed fact (not the proof). A proof
+                // committed to a different threshold / fact, or one whose private
+                // value is `< threshold` (its `DIFF` wraps out of the range
+                // lookup), is UNSAT and rejected.
+                let desc = descriptor_by_name(PREDICATE_ARITH_NAME).ok_or_else(|| {
                     WitnessedPredicateError::Rejected {
                         kind_name: "BridgePredicate",
-                        reason: format!("predicate STARK rejected: {e}"),
+                        reason: format!(
+                            "no predicate descriptor dispatches for {PREDICATE_ARITH_NAME:?} \
+                             (fail-closed)"
+                        ),
                     }
-                })
+                })?;
+                let pis = vec![BabyBear::new(threshold), fact_commitment];
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    verify_vm_descriptor2(&desc, &proof, &pis)
+                }));
+                match result {
+                    Ok(Ok(())) => Ok(()),
+                    Ok(Err(e)) => Err(WitnessedPredicateError::Rejected {
+                        kind_name: "BridgePredicate",
+                        reason: format!("predicate STARK rejected: {e}"),
+                    }),
+                    Err(_) => Err(WitnessedPredicateError::Rejected {
+                        kind_name: "BridgePredicate",
+                        reason: "predicate proof decode/verify panicked (treated as rejection)"
+                            .into(),
+                    }),
+                }
             }
             (
-                BridgePredicateRequirement::InRange { low, high },
-                BridgePredicateWire::Range(low_proof, high_proof),
+                BridgePredicateRequirement::InRange { low: _, high: _ },
+                BridgePredicateWire::Range(_low_proof, _high_proof),
             ) => {
-                if low_proof.op != PredicateType::InRangeLow
-                    || high_proof.op != PredicateType::InRangeHigh
-                {
-                    return Err(WitnessedPredicateError::Rejected {
-                        kind_name: "BridgePredicate",
-                        reason: format!(
-                            "range proof operators must be (InRangeLow, InRangeHigh); got ({:?}, {:?})",
-                            low_proof.op, high_proof.op
-                        ),
-                    });
-                }
-                if verify_in_range(
-                    &low_proof,
-                    &high_proof,
-                    BabyBear::new(low),
-                    BabyBear::new(high),
-                    fact_commitment,
-                ) {
-                    Ok(())
-                } else {
-                    Err(WitnessedPredicateError::Rejected {
-                        kind_name: "BridgePredicate",
-                        reason: "in-range predicate STARK rejected (value not in [low, high] \
-                                 against the policy bounds and committed fact)"
-                            .into(),
-                    })
-                }
+                // The two-bound `low ≤ value ≤ high` predicate has no emitted IR-v2
+                // descriptor (only the one-sided ≥ threshold descriptor exists), so
+                // it fails closed rather than accept an unverified range claim.
+                let _ = fact_commitment;
+                Err(WitnessedPredicateError::Rejected {
+                    kind_name: "BridgePredicate",
+                    reason: "InRange predicate has no IR-v2 descriptor yet (only the one-sided \
+                             `dregg-predicate-arith-ge::threshold-v1` ≥ threshold is emitted); \
+                             fails closed"
+                        .into(),
+                })
             }
             // Wire shape disagrees with the policy shape (single-vs-range).
             (BridgePredicateRequirement::Threshold { .. }, BridgePredicateWire::Range(..)) => {
@@ -1290,8 +1377,8 @@ pub fn bridge_predicate_commitment_bytes(fact_commitment: BabyBear) -> [u8; 32] 
 /// `dregg_circuit::prove_predicate`); the returned bytes verify under
 /// [`BridgePredicateStarkVerifier`] when the host policy's operator + threshold
 /// match the proof's bound statement.
-pub fn bridge_predicate_proof_bytes(proof: &PredicateProof) -> Vec<u8> {
-    postcard::to_allocvec(&BridgePredicateWire::Single(proof.clone()))
+pub fn bridge_predicate_proof_bytes(proof: Ir2BatchProof<DreggStarkConfig>) -> Vec<u8> {
+    postcard::to_allocvec(&BridgePredicateWire::Single(proof))
         .expect("BridgePredicateWire serialization is infallible")
 }
 
@@ -1299,14 +1386,11 @@ pub fn bridge_predicate_proof_bytes(proof: &PredicateProof) -> Vec<u8> {
 /// from the `(low_bound, high_bound)` pair (e.g. from
 /// `dregg_circuit::prove_in_range`).
 pub fn bridge_predicate_range_proof_bytes(
-    low_proof: &PredicateProof,
-    high_proof: &PredicateProof,
+    low_proof: Ir2BatchProof<DreggStarkConfig>,
+    high_proof: Ir2BatchProof<DreggStarkConfig>,
 ) -> Vec<u8> {
-    postcard::to_allocvec(&BridgePredicateWire::Range(
-        low_proof.clone(),
-        high_proof.clone(),
-    ))
-    .expect("BridgePredicateWire serialization is infallible")
+    postcard::to_allocvec(&BridgePredicateWire::Range(low_proof, high_proof))
+        .expect("BridgePredicateWire serialization is infallible")
 }
 
 // ─────────────────────────────────────────────────────────────────────────

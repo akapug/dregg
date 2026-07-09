@@ -55,7 +55,7 @@ use dregg_circuit::lean_descriptor_air::{LeanExpr, VmConstraint, VmRow};
 /// The BYTE-IDENTICAL wire string Lean's `emitVmJson2 presentationFreshnessDesc` emits (pinned by
 /// the `#guard` in `PresentationEmit.lean`). If Lean's emitter drifts, that `#guard` fails; if this
 /// literal drifts, the `decoded == hand_built` assertion fails. Neither can silently diverge.
-const GOLDEN_JSON: &str = r#"{"name":"dregg-presentation-freshness::summary-v1","ir":2,"trace_width":23,"public_input_count":20,"tables":[{"id":2,"name":"range","arity":1,"sem":"range","bits":30}],"constraints":[{"t":"pi_binding","row":"first","col":0,"pi_index":0},{"t":"pi_binding","row":"first","col":1,"pi_index":1},{"t":"pi_binding","row":"first","col":2,"pi_index":2},{"t":"pi_binding","row":"first","col":3,"pi_index":3},{"t":"pi_binding","row":"first","col":4,"pi_index":4},{"t":"pi_binding","row":"first","col":5,"pi_index":5},{"t":"pi_binding","row":"first","col":6,"pi_index":6},{"t":"pi_binding","row":"first","col":7,"pi_index":7},{"t":"pi_binding","row":"first","col":8,"pi_index":8},{"t":"pi_binding","row":"first","col":9,"pi_index":9},{"t":"pi_binding","row":"first","col":10,"pi_index":10},{"t":"pi_binding","row":"first","col":11,"pi_index":11},{"t":"pi_binding","row":"first","col":12,"pi_index":12},{"t":"pi_binding","row":"first","col":13,"pi_index":13},{"t":"pi_binding","row":"first","col":14,"pi_index":14},{"t":"pi_binding","row":"first","col":15,"pi_index":15},{"t":"pi_binding","row":"first","col":16,"pi_index":16},{"t":"pi_binding","row":"first","col":17,"pi_index":17},{"t":"pi_binding","row":"first","col":18,"pi_index":18},{"t":"pi_binding","row":"first","col":19,"pi_index":19},{"t":"gate","body":{"t":"add","l":{"t":"add","l":{"t":"var","v":21},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":20}}},"r":{"t":"var","v":19}}},{"t":"gate","body":{"t":"add","l":{"t":"add","l":{"t":"var","v":21},"r":{"t":"var","v":22}},"r":{"t":"const","v":-1006632960}}},{"t":"lookup","table":2,"tuple":[{"t":"var","v":21}]},{"t":"lookup","table":2,"tuple":[{"t":"var","v":22}]}],"hash_sites":[],"ranges":[]}"#;
+const GOLDEN_JSON: &str = r#"{"name":"dregg-presentation-freshness::summary-v1","ir":2,"trace_width":23,"public_input_count":20,"tables":[{"id":2,"name":"range","arity":1,"sem":"range","bits":30}],"constraints":[{"t":"pi_binding","row":"first","col":0,"pi_index":0},{"t":"pi_binding","row":"first","col":1,"pi_index":1},{"t":"pi_binding","row":"first","col":2,"pi_index":2},{"t":"pi_binding","row":"first","col":3,"pi_index":3},{"t":"pi_binding","row":"first","col":4,"pi_index":4},{"t":"pi_binding","row":"first","col":5,"pi_index":5},{"t":"pi_binding","row":"first","col":6,"pi_index":6},{"t":"pi_binding","row":"first","col":7,"pi_index":7},{"t":"pi_binding","row":"first","col":8,"pi_index":8},{"t":"pi_binding","row":"first","col":9,"pi_index":9},{"t":"pi_binding","row":"first","col":10,"pi_index":10},{"t":"pi_binding","row":"first","col":11,"pi_index":11},{"t":"pi_binding","row":"first","col":12,"pi_index":12},{"t":"pi_binding","row":"first","col":13,"pi_index":13},{"t":"pi_binding","row":"first","col":14,"pi_index":14},{"t":"pi_binding","row":"first","col":15,"pi_index":15},{"t":"pi_binding","row":"first","col":16,"pi_index":16},{"t":"pi_binding","row":"first","col":17,"pi_index":17},{"t":"pi_binding","row":"first","col":18,"pi_index":18},{"t":"pi_binding","row":"first","col":19,"pi_index":19},{"t":"gate","body":{"t":"add","l":{"t":"add","l":{"t":"var","v":21},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":20}}},"r":{"t":"var","v":19}}},{"t":"gate","body":{"t":"add","l":{"t":"add","l":{"t":"var","v":21},"r":{"t":"var","v":22}},"r":{"t":"const","v":-1006632960}}},{"t":"lookup","table":2,"tuple":[{"t":"var","v":21}]},{"t":"lookup","table":2,"tuple":[{"t":"var","v":22}]},{"t":"boundary","row":"last","body":{"t":"add","l":{"t":"add","l":{"t":"var","v":21},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":20}}},"r":{"t":"var","v":19}}},{"t":"boundary","row":"last","body":{"t":"add","l":{"t":"add","l":{"t":"var","v":21},"r":{"t":"var","v":22}},"r":{"t":"const","v":-1006632960}}}],"hash_sites":[],"ranges":[]}"#;
 
 // --- Trace column layout (must match `PresentationEmit.lean` §1). ---
 const FEDERATION_ROOT: usize = 0;
@@ -77,8 +77,9 @@ const HALF_P: u32 = 1_006_632_960;
 
 /// The independently-hand-built twin of the Lean `presentationFreshnessDesc`: 19 summary
 /// `PiBinding` copies (`col i == pi[i]`), the `verifier_block_height` anchor pin, the diff-binding
-/// gate (`diff = not_after − verifier`), the bound gate (`diff + hi = p/2`), and the two range
-/// lookups (`diff`, `hi` in `[0, 2^30)`).
+/// gate (`diff = not_after − verifier`), the bound gate (`diff + hi = p/2`), the two range
+/// lookups (`diff`, `hi` in `[0, 2^30)`), and the two LAST-ROW boundary counterparts of the gates
+/// (`presFreshLastFix` — so the freshness binding also fires on the single deployed (= last) row).
 fn hand_built_desc() -> EffectVmDescriptor2 {
     let mut constraints: Vec<VmConstraint2> = Vec::new();
     // 19 summary copies (PresentationAir::constraints).
@@ -116,6 +117,27 @@ fn hand_built_desc() -> EffectVmDescriptor2 {
     constraints.push(VmConstraint2::Lookup(LookupSpec {
         table: TID_RANGE,
         tuple: vec![LeanExpr::Var(HI)],
+    }));
+    // The LAST-ROW freshness fix (the `adjLastOrderFix` pattern): the diff-binding and bound bodies
+    // re-lowered as `Boundary{Last}` so the freshness gadget binds on the last row too (the deployed
+    // trace is a single summary row — its only row IS the last row, where the transition-only `Gate`
+    // forms are vacuous). Matches `presFreshLastFix` in `PresentationEmit.lean`.
+    constraints.push(VmConstraint2::Base(VmConstraint::Boundary {
+        row: VmRow::Last,
+        body: LeanExpr::add(
+            LeanExpr::add(
+                LeanExpr::Var(DIFF),
+                LeanExpr::mul(LeanExpr::Const(-1), LeanExpr::Var(NOT_AFTER)),
+            ),
+            LeanExpr::Var(VERIFIER),
+        ),
+    }));
+    constraints.push(VmConstraint2::Base(VmConstraint::Boundary {
+        row: VmRow::Last,
+        body: LeanExpr::add(
+            LeanExpr::add(LeanExpr::Var(DIFF), LeanExpr::Var(HI)),
+            LeanExpr::Const(-(HALF_P as i64)),
+        ),
     }));
     EffectVmDescriptor2 {
         name: "dregg-presentation-freshness::summary-v1".to_string(),

@@ -24,9 +24,7 @@
 //! - pi[4]: root_transition_hash
 //! - pi[5]: checks_commitment_narrow
 
-use crate::binding::WideHash;
 use crate::field::BabyBear;
-use crate::stark::{self, StarkProof};
 
 use crate::dsl::circuit::{
     BoundaryDef, BoundaryRow, CircuitDescriptor, ColumnDef, ColumnKind, ConstraintExpr, DslCircuit,
@@ -822,60 +820,4 @@ pub fn generate_fold_trace(witness: &FoldWitness) -> (Vec<Vec<BabyBear>>, Vec<Ba
     ];
 
     (trace, public_inputs)
-}
-
-// ============================================================================
-// Production prove/verify API
-// ============================================================================
-
-/// Generate a DSL-native STARK proof for a fold step.
-///
-/// This replaces `prove_fold_stark` from `circuit/src/fold_types.rs`.
-pub fn prove_fold_dsl(witness: &FoldWitness) -> Option<StarkProof> {
-    let circuit = fold_dsl_circuit();
-    let (trace, public_inputs) = generate_fold_trace(witness);
-
-    // Validate: delta must be nonempty (at least one removal or check)
-    if witness.removed_facts.is_empty() && witness.num_added_checks == 0 {
-        return None;
-    }
-
-    // Validate: checks_commitment must be ZERO when num_added_checks == 0
-    if witness.num_added_checks == 0 && witness.added_checks_commitment != WideHash::ZERO {
-        return None;
-    }
-
-    Some(stark::prove(&circuit, &trace, &public_inputs))
-}
-
-/// Verify a DSL-native STARK proof for a fold step.
-///
-/// This replaces `verify_fold_stark` from `circuit/src/fold_types.rs`.
-pub fn verify_fold_dsl(proof: &StarkProof, public_inputs: &[BabyBear]) -> Result<(), String> {
-    let circuit = fold_dsl_circuit();
-
-    // Validate checks_commitment_zero_when_no_checks at the verifier level.
-    // pi[3] == check_count, pi[5] == checks_commitment_narrow.
-    if public_inputs.len() >= 6
-        && public_inputs[3] == BabyBear::ZERO
-        && public_inputs[5] != BabyBear::ZERO
-    {
-        return Err("non-zero checks commitment with zero check count".to_string());
-    }
-
-    stark::verify(&circuit, proof, public_inputs)
-}
-
-// ============================================================================
-// Backward-compatible aliases
-// ============================================================================
-
-/// Backward-compatible alias: prove a fold step using the DSL-native circuit.
-pub fn prove_fold_stark(witness: &FoldWitness) -> Option<StarkProof> {
-    prove_fold_dsl(witness)
-}
-
-/// Backward-compatible alias: verify a fold step using the DSL-native circuit.
-pub fn verify_fold_stark(proof: &StarkProof, public_inputs: &[BabyBear]) -> Result<(), String> {
-    verify_fold_dsl(proof, public_inputs)
 }

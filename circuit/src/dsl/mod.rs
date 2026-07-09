@@ -48,29 +48,21 @@ pub use circuit::{
 };
 
 // Re-export production garbled circuit evaluation API.
-pub use garbled::{
-    ExtendedGateRecord, GarbledDslProof, GateType, prove_garbled_evaluation_dsl,
-    prove_garbled_evaluation_extended_dsl, prove_private_threshold_dsl,
-    verify_garbled_evaluation_dsl, verify_private_threshold_dsl,
-};
+pub use garbled::{ExtendedGateRecord, GateType};
 
 // Re-export production temporal absence API.
-pub use temporal_absence::{
-    DslTimelineEntry, TemporalAbsenceDslProof, TemporalAbsenceDslWitness,
-    prove_temporal_absence_dsl, verify_temporal_absence_dsl,
-};
+pub use temporal_absence::{DslTimelineEntry, TemporalAbsenceDslWitness};
 
 // Re-export the production DFA message-routing (route-commitment-binding) API.
 pub use dfa_routing::{
     build_routing_witness, compute_table_commitment, dfa_routing_circuit, dfa_routing_descriptor,
-    prove_dfa_routing, verify_dfa_routing,
 };
 
 // Re-export production non-revocation proving API.
 pub use revocation::{
     DslRevocationTree, NonMembershipWitnessDsl, REVOCATION_TREE_DEPTH, SENTINEL_MAX, SENTINEL_MIN,
     TREE_DEPTH, generate_non_revocation_trace, non_revocation_dsl_circuit,
-    prove_non_revocation_dsl, revocation_hash_to_field, verify_non_revocation_dsl,
+    revocation_hash_to_field,
 };
 
 // Re-export DSL-native fold proving API.
@@ -78,8 +70,7 @@ pub use fold::{
     FOLD_AIR_WIDTH, FOLD_DSL_PI_COUNT, FOLD_DSL_WIDTH, FoldAir, FoldWitness, RemovedFact,
     build_membership_proof, build_shared_tree, compute_root_transition_hash,
     compute_test_checks_commitment, create_test_fold, fold_circuit_descriptor, fold_dsl_circuit,
-    generate_fold_trace, prove_fold_dsl, prove_fold_stark, verify_fold_dsl, verify_fold_stark,
-    verify_root_transition,
+    generate_fold_trace, verify_root_transition,
 };
 
 // Re-export legacy Merkle types for backward compatibility.
@@ -92,34 +83,26 @@ pub use crate::merkle_types::{
 pub use note_spending::{
     dsl_commitment, dsl_merkle_root, dsl_nullifier, generate_note_spending_trace,
     generate_note_spending_trace_with_value_hi, note_spending_circuit_descriptor,
-    note_spending_dsl_circuit, prove_note_spend, prove_note_spend_dsl, prove_note_spend_dsl_full,
-    verify_note_spend, verify_note_spend_dsl, verify_note_spend_dsl_full,
-    verify_note_spend_dsl_with_destination,
+    note_spending_dsl_circuit,
 };
 
 // Re-export DSL-native accumulator proving API.
 pub use accumulator::{
     ACCUMULATOR_DSL_WIDTH, accumulator_circuit_descriptor, accumulator_dsl_circuit,
-    generate_accumulator_trace, prove_accumulator_non_revocation,
-    prove_accumulator_non_revocation_dsl, verify_accumulator_non_revocation,
-    verify_accumulator_non_revocation_dsl,
+    generate_accumulator_trace,
 };
 
 // Re-export DSL-native committed-threshold proving API.
 pub use committed_threshold::{
     committed_threshold_circuit_descriptor, committed_threshold_dsl_circuit,
-    generate_committed_threshold_trace, prove_committed_threshold_dsl,
-    verify_committed_threshold_dsl,
+    generate_committed_threshold_trace,
 };
 
 // Re-export DSL-native derivation proving API.
 pub use derivation::{
     BODY_HASH_INV_START, EXTENDED_TRACE_WIDTH, MULTI_STEP_DSL_WIDTH, derivation_circuit_descriptor,
     derivation_dsl_circuit, generate_derivation_trace_dsl, generate_multi_step_trace_dsl,
-    prove_authorization_dsl, prove_derivation_dsl, verify_authorization_dsl, verify_derivation_dsl,
 };
 
 // Re-export tiered revocation API.
-pub use tiered_revocation::{
-    CHECKPOINT_INTERVAL, DEFAULT_HOT_CAPACITY, TieredNonRevocationProof, TieredRevocationSet,
-};
+pub use tiered_revocation::{CHECKPOINT_INTERVAL, DEFAULT_HOT_CAPACITY, TieredRevocationSet};

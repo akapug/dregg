@@ -39,7 +39,6 @@
 use crate::constraint_prover::{Air, Constraint};
 use crate::field::BabyBear;
 use crate::garbled::GateEvalRecord;
-use crate::stark::{BoundaryConstraint, StarkAir};
 
 // ============================================================================
 // Column layout
@@ -138,85 +137,6 @@ impl GarbledEvaluationAir {
             circuit_commitment,
             output_label_hash,
         }
-    }
-}
-
-impl StarkAir for GarbledEvaluationAir {
-    fn width(&self) -> usize {
-        GARBLED_EVAL_AIR_WIDTH
-    }
-
-    fn constraint_degree(&self) -> usize {
-        2
-    }
-
-    fn has_chain_continuity(&self) -> bool {
-        false
-    }
-
-    fn air_name(&self) -> &'static str {
-        "dregg-garbled-evaluation-v1"
-    }
-
-    fn eval_constraints(
-        &self,
-        local: &[BabyBear],
-        _next: &[BabyBear],
-        public_inputs: &[BabyBear],
-        alpha: BabyBear,
-    ) -> BabyBear {
-        let mut combined = BabyBear::ZERO;
-        let mut alpha_pow = BabyBear::ONE;
-
-        // C1-C4: circuit_commitment[0..4] matches public_inputs[0..4]
-        for i in 0..4 {
-            let c = local[col::CIRCUIT_COMMITMENT + i] - public_inputs[i];
-            combined += alpha_pow * c;
-            alpha_pow *= alpha;
-        }
-
-        // C5-C8: output_label_hash[0..4] matches public_inputs[4..8]
-        for i in 0..4 {
-            let c = local[col::OUTPUT_LABEL_HASH + i] - public_inputs[4 + i];
-            combined += alpha_pow * c;
-            alpha_pow *= alpha;
-        }
-
-        // C9-C16: Decryption correctness: output_label = table_entry - hash_output
-        for i in 0..8 {
-            let c = local[col::output(i)] - (local[col::table_entry(i)] - local[col::hash_out(i)]);
-            combined += alpha_pow * c;
-            alpha_pow *= alpha;
-        }
-
-        combined
-    }
-
-    // crypto index loops kept verbatim
-    #[allow(clippy::needless_range_loop)]
-    fn boundary_constraints(
-        &self,
-        public_inputs: &[BabyBear],
-        _trace_len: usize,
-    ) -> Vec<BoundaryConstraint> {
-        let mut constraints = vec![];
-        if public_inputs.len() >= 8 {
-            for i in 0..4 {
-                constraints.push(BoundaryConstraint {
-                    row: 0,
-                    col: col::CIRCUIT_COMMITMENT + i,
-                    value: public_inputs[i],
-                });
-            }
-            for i in 0..4 {
-                constraints.push(BoundaryConstraint {
-                    row: 0,
-                    col: col::OUTPUT_LABEL_HASH + i,
-                    value: public_inputs[4 + i],
-                });
-            }
-        }
-        constraints
     }
 }
 
