@@ -940,3 +940,15 @@ lean_lib QueryRouteProven where
 @[default_target] lean_lib CorsAcaoProven where
   srcDir := "."
   roots := #[`Proto.CorsAcaoProven]
+
+@[default_target] lean_lib NotFoundProven where
+  srcDir := "."
+  roots := #[`Proto.NotFoundProven]
+
+@[default_target] lean_lib StatusLine200Proven where
+  srcDir := "."
+  roots := #[`Proto.StatusLine200Proven]
+
+@[default_target] lean_lib ContentLengthProven where
+  srcDir := "."
+  roots := #[`Proto.ContentLengthProven]

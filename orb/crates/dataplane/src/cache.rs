@@ -380,6 +380,23 @@ fn cache_key(req: &[u8]) -> Option<Vec<u8>> {
     if method != b"GET" {
         return None;
     }
+    // Bypass the cache for conditional / range requests. The response cache keys only on
+    // method+target and is not `Vary`-aware, so a stored plain-200 would be replayed for an
+    // `If-None-Match` / `If-Match` / `Range` request — masking the 304 / 412 / 206 the
+    // conformant serve computes (and, conversely, replaying a 304 for a plain GET). Return
+    // None so these re-serve through the pipeline. (Found via the RFC ext-probe: this pre-
+    // existing key bug masked both the conditional stages and Range 206/416.)
+    let head_end = find(req, b"\r\n\r\n").map(|p| p + 4).unwrap_or(req.len());
+    let head_lower: Vec<u8> = req[..head_end].iter().map(u8::to_ascii_lowercase).collect();
+    for hdr in [
+        b"\r\nif-none-match:".as_slice(),
+        b"\r\nif-match:".as_slice(),
+        b"\r\nrange:".as_slice(),
+    ] {
+        if find(&head_lower, hdr).is_some() {
+            return None;
+        }
+    }
     let mut key = Vec::with_capacity(method.len() + 1 + target.len());
     key.extend_from_slice(method);
     key.push(b' ');

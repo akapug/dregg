@@ -5,6 +5,7 @@ import Reactor.Stage.RequestHeadLimit
 import Reactor.Stage.ConditionalRequest
 import Reactor.Serialize
 import Proto.RequestSerialize
+import Proto.ResponseParse
 
 /-!
 # Reactor.ServeConformant — the RFC-conformance WRAPPER around the deployed serve
@@ -56,6 +57,8 @@ open Reactor.Stage.RequestValidation
 open Reactor.Stage.FramingValidation (framingValidationStage expectationFailedResp)
 open Reactor.Stage.DateHeader (dateName mHEAD)
 open Reactor.Stage.RequestHeadLimit (headBytesTooLarge requestHeaderFieldsTooLargeResp)
+open Reactor.Stage.ConditionalRequest
+  (conditionalRewrite headerVal ifNoneMatchNameLower ifMatchNameLower)
 
 /-! ## The Date value (fixed placeholder — see residual) -/
 
@@ -585,6 +588,76 @@ keeping its output byte-identical to the deployed serve. -/
 def reqBytes (input : ByteArray) : Bytes :=
   (input.toList).dropWhile (· == (0 : UInt8))
 
+/-! ## The conditional-request finisher, wired at the response-byte boundary (H1/H2/H3/H5)
+
+`Reactor.Stage.ConditionalRequest.conditionalRewrite` rewrites a `Response` RECORD
+(`200`+ETag+precondition ⇒ `304`/`412`). The conformant wrapper post-processes
+SERIALIZED bytes, so wiring it means a RECORD round-trip: parse the inner serve's
+serialized response (`Proto.ResponseParse.parse`, proven inverse of `serialize`),
+apply `conditionalRewrite`, re-`serialize` (+Date). That round-trip re-cons the whole
+body as a `List`, so it is GATED on the request actually carrying `If-None-Match` /
+`If-Match` (`hasConditional`): a request with no precondition header NEVER pays it and
+takes the DENSE `injectDateBA` splice — so the common `/bulk` path is untouched. -/
+
+/-- Whether the request carries a precondition header (`If-None-Match` or `If-Match`).
+Only such a request is routed through the record round-trip; everything else stays
+dense. A pure `Bool` on the parsed request — identical in the spec and dense paths. -/
+def hasConditional (req : Request) : Bool :=
+  (headerVal ifNoneMatchNameLower req.headers).isSome ||
+  (headerVal ifMatchNameLower req.headers).isSome
+
+/-- **The conditional finisher over serialized bytes.** Parse the inner response
+(`Proto.ResponseParse.parse`), apply the proven `conditionalRewrite` (which fires only
+on a `200` carrying an `ETag`), re-serialize with `Date` (F1). If the inner bytes do
+not parse as a well-formed response (never, for `serialize`-shaped output) fall back to
+the plain `Date` splice — so this is total and never drops a response. -/
+def condRewriteBytes (req : Request) (innerBytes : Bytes) : Bytes :=
+  match Proto.ResponseParse.parse innerBytes with
+  | some resp => serialize (addDate (conditionalRewrite req resp))
+  | none => injectDate innerBytes
+
+/-- The request with any `If-None-Match` / `If-Match` header REMOVED. The inner serve
+(`drorbServe`) applies its OWN direction-blind precondition handling (a matching tag ⇒
+`304` for BOTH `If-Match` and `If-None-Match`), so feeding it the precondition headers
+would let it answer a `304` that masks the correct `412` (H5). Stripping them makes the
+inner return the plain `200` representation, so the PROVEN `conditionalRewrite`
+(`If-None-Match` ⇒ `304`, `If-Match` non-match ⇒ `412`) is the SOLE authority for the
+precondition semantics. Only the (rare) conditional path re-serializes; `/bulk` is
+untouched. -/
+def stripCondReq (req : Request) : Request :=
+  { req with headers := req.headers.filter (fun kv =>
+      let n := Reactor.Stage.FramingValidation.lowerBytes kv.1
+      n != ifNoneMatchNameLower && n != ifMatchNameLower) }
+
+/-- The inner input for a conditional request: the precondition-stripped request,
+re-serialized so `inner` routes it identically but sees NO precondition header. -/
+def condInnerInput (req : Request) : ByteArray :=
+  ByteArray.mk (Proto.RequestSerialize.serialize (stripCondReq req)).toArray
+
+/-- The accepted-path response bytes (LIST spec): a conditional request feeds `inner`
+the precondition-STRIPPED request (so `inner` returns the plain `200`) and takes the
+record round-trip (`condRewriteBytes` — the proven `conditionalRewrite`); everything
+else takes the dense `Date` splice (`injectDate`) on the verbatim `innerInput`. -/
+def acceptedRaw (inner : ByteArray → ByteArray) (req : Request) (innerInput : ByteArray) : Bytes :=
+  if hasConditional req then condRewriteBytes req (inner (condInnerInput req)).toList
+  else injectDate (inner innerInput).toList
+
+/-- The accepted-path response bytes (DENSE `ByteArray`): the non-conditional branch is
+the native `injectDateBA` splice (the `/bulk` fast path — no body re-cons); the
+conditional branch materializes the (rare) precondition-stripped record round-trip. -/
+def acceptedRawBA (inner : ByteArray → ByteArray) (req : Request) (innerInput : ByteArray) : ByteArray :=
+  if hasConditional req then ByteArray.mk (condRewriteBytes req (inner (condInnerInput req)).toList).toArray
+  else injectDateBA (inner innerInput)
+
+/-- **Dense accepted = spec accepted.** Both branches read back to the list spec:
+the conditional branch by `mk_toArray_toList`, the dense branch by `injectDateBA_toList`. -/
+theorem acceptedRawBA_toList (inner : ByteArray → ByteArray) (req : Request) (innerInput : ByteArray) :
+    (acceptedRawBA inner req innerInput).toList = acceptedRaw inner req innerInput := by
+  unfold acceptedRawBA acceptedRaw
+  split
+  · exact mk_toArray_toList _
+  · exact injectDateBA_toList _
+
 /-- The response bytes BEFORE the HEAD-strip: the reject `4xx/5xx` (+Date), or the
 Date-injected inner serve. Two request gates run in front of `inner`, in order:
 `validationStage` (C1/C2/B2/G1/C3 — version/method/Host, absolute-form normalize)
@@ -604,7 +677,7 @@ def respBytesRaw (inner : ByteArray → ByteArray) (input : ByteArray) : Bytes :
             let innerInput :=
               if c''.req.target == req.target then input
               else ByteArray.mk (Proto.RequestSerialize.serialize c''.req).toArray
-            injectDate (inner innerInput).toList
+            acceptedRaw inner req innerInput
 
 /-- **The DENSE deployed response bytes.** The `ByteArray`-native mirror of
 `respBytesRaw`: identical control flow (same parse/validation/framing gates, same
@@ -624,7 +697,7 @@ def respBytesRawBA (inner : ByteArray → ByteArray) (input : ByteArray) : ByteA
             let innerInput :=
               if c''.req.target == req.target then input
               else ByteArray.mk (Proto.RequestSerialize.serialize c''.req).toArray
-            injectDateBA (inner innerInput)
+            acceptedRawBA inner req innerInput
 
 /-- **Dense = spec.** The dense deployed bytes read back exactly as the list spec —
 so every `respBytesRaw` conformance theorem (reject statuses, `Date` present) governs
@@ -642,7 +715,7 @@ theorem respBytesRawBA_toList (inner : ByteArray → ByteArray) (input : ByteArr
     · exact mk_toArray_toList _
     · split
       · exact mk_toArray_toList _
-      · exact injectDateBA_toList _
+      · exact acceptedRawBA_toList _ _ _
 
 /-- Whether the request is a `HEAD` (drives the B1 body strip). -/
 def isHeadReq (input : ByteArray) : Bool :=
@@ -703,10 +776,12 @@ theorem conformant_date_present_accept
     (hp : Proto.RequestSerialize.parse (reqBytes input) = some req)
     (hr : validationStage.onRequest (mkCtx input req) = .continue c')
     (hf : framingValidationStage.onRequest c' = .continue c'')
-    (htgt : c''.req.target = req.target) :
+    (htgt : c''.req.target = req.target)
+    (hnc : hasConditional req = false) :
     ∃ pre suf, respBytesRaw inner input = pre ++ (crlf ++ dateHdr) ++ suf := by
   have hraw : respBytesRaw inner input = injectDate (inner input).toList := by
-    simp only [respBytesRaw, hp, hr, hf, htgt, beq_self_eq_true, if_true]
+    simp only [respBytesRaw, hp, hr, hf, htgt, beq_self_eq_true, if_true, acceptedRaw,
+      hnc, Bool.false_eq_true, if_false]
   rw [hraw]
   exact injectDate_date_present _
 
@@ -854,6 +929,94 @@ theorem conformant_te_status : (addDate badRequestResp).status = 400 :=
 theorem conformant_expect_status : (addDate expectationFailedResp).status = 417 :=
   Reactor.Stage.FramingValidation.expectationFailedResp_status
 
+/-! ## H1/H2 conditional end-to-end witness (the deployed conformant path)
+
+A real `If-None-Match` request that PASSES validation + framing, whose inner serve
+returns an `ETag`-bearing `200`: the wrapper answers the `304` (body stripped). The
+request parse is pinned by `Proto.RequestSerialize.parse_serialize`, the inner
+response round-trip by `Proto.ResponseParse.parse_serialize`, and the rewrite by the
+proven `ConditionalRequest.conditionalRewrite_ifNoneMatch` — so no step is vacuous. -/
+
+open Reactor.Stage.ConditionalRequest
+  (reqINM etagNameWire etag9e notModifiedOf notModifiedOf_status
+   reqINM_inm reqINM_im_ok)
+open Reactor.Stage.RequestValidation (normalizeTarget)
+
+/-- The inner serve's `200` static response carrying the live `ETag` validator — a
+concrete `Response` with EXPLICIT ASCII bytes (so every guard `decide`s without
+reducing `String.toUTF8`). -/
+def condResp : Response :=
+  { status := 200, reason := [79, 75],  -- "OK"
+    headers := [(etagNameWire, etag9e)], body := [104, 105, 33] }  -- "hi!"
+
+theorem condResp_WF : Proto.ResponseParse.WF condResp := by
+  refine ⟨by decide, ?_⟩
+  intro kv hkv
+  simp only [condResp, List.mem_singleton] at hkv
+  subst hkv; exact ⟨by decide, by decide, by decide⟩
+
+/-- An inner serve that returns the `ETag`-bearing `200` for any input. -/
+def condInner : ByteArray → ByteArray :=
+  fun _ => ByteArray.mk (serialize condResp).toArray
+
+/-- The `If-None-Match: "9e983f35"` request on the wire (the probe H1 request). -/
+def condInput : ByteArray := ByteArray.mk (Proto.RequestSerialize.serialize reqINM).toArray
+
+theorem reqINM_WF : Proto.RequestSerialize.WF reqINM := by
+  refine ⟨by decide, by decide, by decide, by decide⟩
+
+theorem condInput_parses :
+    Proto.RequestSerialize.parse (reqBytes condInput) = some reqINM := by
+  have h1 : condInput.toList = Proto.RequestSerialize.serialize reqINM := by
+    rw [ba_toList_eq condInput]; exact Array.toList_toArray _
+  have h2 : reqBytes condInput = Proto.RequestSerialize.serialize reqINM := by
+    unfold reqBytes; rw [h1]; rfl
+  rw [h2]; exact Proto.RequestSerialize.parse_serialize reqINM reqINM_WF
+
+/-- `hasConditional` genuinely fires on the `If-None-Match` request (it is routed to
+the record round-trip, not the dense splice). -/
+theorem reqINM_isConditional : hasConditional reqINM = true := by decide
+
+/-- The validation + framing gates both PASS the `If-None-Match` request, with the
+origin-form target preserved (so `inner` is fed the verbatim input). -/
+theorem condReq_valid_pass :
+    validationStage.onRequest (mkCtx condInput reqINM)
+      = .continue (mkCtx condInput { reqINM with target := normalizeTarget reqINM.target }) :=
+  Reactor.Stage.RequestValidation.validationStage_passes_valid
+    (mkCtx condInput reqINM) (by decide) (by decide) (by decide)
+
+theorem condReq_framing_pass :
+    framingValidationStage.onRequest (mkCtx condInput { reqINM with target := normalizeTarget reqINM.target })
+      = .continue (mkCtx condInput { reqINM with target := normalizeTarget reqINM.target }) :=
+  Reactor.Stage.FramingValidation.framingValidationStage_passes _ (by decide) (by decide) (by decide)
+
+/-- **H1 + H2, end to end.** The `If-None-Match: "9e983f35"` request, served by an
+`ETag`-bearing inner `200`, produces `serialize (addDate (304 ⋯))` — a `304` whose
+body is stripped by `notModifiedOf` — for the deployed conformant path. -/
+theorem cond_witness_304 :
+    respBytesRaw condInner condInput
+      = serialize (addDate (notModifiedOf (Proto.ResponseParse.wireForm condResp))) := by
+  have hnt : normalizeTarget reqINM.target = reqINM.target := by decide
+  have hinner : (condInner (condInnerInput reqINM)).toList = serialize condResp := mk_toArray_toList _
+  have hpr : Proto.ResponseParse.parse (serialize condResp)
+      = some (Proto.ResponseParse.wireForm condResp) :=
+    Proto.ResponseParse.parse_serialize condResp condResp_WF
+  have hetag : Reactor.Stage.ConditionalRequest.respETag (Proto.ResponseParse.wireForm condResp)
+      = some etag9e := by decide
+  have h200 : ((Proto.ResponseParse.wireForm condResp).status == 200) = true := by decide
+  have hcr : conditionalRewrite reqINM (Proto.ResponseParse.wireForm condResp)
+      = notModifiedOf (Proto.ResponseParse.wireForm condResp) :=
+    Reactor.Stage.ConditionalRequest.conditionalRewrite_ifNoneMatch
+      reqINM (Proto.ResponseParse.wireForm condResp) etag9e h200 hetag reqINM_im_ok reqINM_inm
+  simp only [respBytesRaw, condInput_parses, condReq_valid_pass, condReq_framing_pass]
+  rw [hnt]
+  simp only [mkCtx, beq_self_eq_true, if_true, acceptedRaw,
+    reqINM_isConditional, if_true, condRewriteBytes, hinner, hpr, hcr]
+
+theorem cond_witness_304_status :
+    (addDate (notModifiedOf (Proto.ResponseParse.wireForm condResp))).status = 304 := by
+  rw [addDate_status]; exact notModifiedOf_status _
+
 /-! ## Axiom audit -/
 
 #print axioms conformant_framing_reject_eq
@@ -877,5 +1040,14 @@ theorem conformant_expect_status : (addDate expectationFailedResp).status = 417 
 #print axioms stripBodyBA_toList
 #print axioms respBytesRawBA_toList
 #print axioms conformantServe_toList
+
+/-! ### Axiom audit — the CONDITIONAL wiring (H1/H2/H3/H5) -/
+
+#print axioms acceptedRawBA_toList
+#print axioms condInput_parses
+#print axioms condReq_valid_pass
+#print axioms condReq_framing_pass
+#print axioms cond_witness_304
+#print axioms cond_witness_304_status
 
 end Reactor.ServeConformant
