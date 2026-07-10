@@ -940,6 +940,7 @@ impl PermWorld {
                 expires_at: None,
                 allowed_effects: None,
                 stored_epoch: None,
+                provenance: [0u8; 32],
             },
         };
         let mut turn = bare_turn(self.principal, nonce, vec![effect]);

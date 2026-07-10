@@ -650,6 +650,11 @@ impl SealPair {
             expires_at,
             allowed_effects,
             stored_epoch,
+            // The seal wire format predates the provenance field; a decoded cap
+            // gets the documented legacy/unprovenanced sentinel (`[0u8; 32]`),
+            // matching the `#[serde(default)]` decode path. See
+            // `CapabilityRef::provenance`.
+            provenance: [0u8; 32],
         })
     }
 
@@ -713,6 +718,7 @@ mod tests {
             expires_at: None,
             allowed_effects: None,
             stored_epoch: None,
+            provenance: [0u8; 32],
         }
     }
     fn make_test_cap_with_breadstuff(seed: u8) -> CapabilityRef {
@@ -730,6 +736,7 @@ mod tests {
             expires_at: None,
             allowed_effects: None,
             stored_epoch: None,
+            provenance: [0u8; 32],
         }
     }
 
@@ -843,6 +850,7 @@ mod tests {
                 expires_at: None,
                 allowed_effects: None,
                 stored_epoch: None,
+                provenance: [0u8; 32],
             };
             assert_eq!(pair.unseal(&pair.seal(&cap)).unwrap().permissions, perm);
         }
@@ -918,6 +926,7 @@ mod tests {
             expires_at: Some(12345),
             allowed_effects: Some(EFFECT_TRANSFER | EFFECT_EMIT_EVENT),
             stored_epoch: None,
+            provenance: [0u8; 32],
         };
         let sealed = pair.seal(&cap);
         let unsealed = pair.unseal(&sealed).unwrap();
