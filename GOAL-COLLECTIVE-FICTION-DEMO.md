@@ -253,3 +253,20 @@ LEDGER: real prev-linked hash-chain (adversarial truncate/reorder/splice caught)
 Honest throughout: authentic leg a fixture (input-integrity ≠ model-authenticity); /verify per-entry-labelled.
 The player can't rewrite the rules; the model can't exceed its powers; the ledger can't be rewritten. A true
 attested AI MUD, running against a real local LLM.
+
+## STATUS: THE ATTESTED-AI-MUD DEMO IS DONE. One externally-blocked leftover.
+The goal — a true attested AI MUD, all claims earned + driven — is COMPLETE and committed:
+- INPUT: player can't rewrite the DM's rules (slot_confinement Lean + wired + slot-escape refused vs the real
+  service; 30/30 attested-dm tests, non-vacuous).
+- OUTPUT: model can't exceed its powers (prose is not power, driven vs real gemma2 — jailbreak → grant(crown) →
+  overcap → crown NOT HELD).
+- LEDGER: real prev-linked hash-chain (adversarial truncate/reorder/splice caught).
+- RUNS: node demo/serve.mjs → /dungeon (stand-in, instant) or DUNGEON_BIND=127.0.0.1:7878 + DM_PORT=7878 for the
+  real gemma2. + The Commons collective-vote demo + passkey voter (earned chain).
+LEFTOVER, BLOCKED (not part of the attested-AI-MUD demo — a parked wasm fix from the collective-fiction work):
+- the wasm bindings_story OPEN_BRANCH_POLL idempotency fix is ON DISK, correct + tested, but the wasm build is
+  broken by ANOTHER TERMINAL's in-flight dregg-lean-ffi refactor: `mlkem_decaps_real_present`/`lean_mlkem_decaps_
+  real` missing from the not(lean_lib_present) STUB ffi module (the SAME pattern as the fips204 stubs I fixed on
+  07-10 — real module gains _real fns, stub lags). It is THEIR active uncommitted work (dregg-lean-ffi modified),
+  so NOT mine to fix (would collide). Verify + commit the idempotency fix the moment their refactor lands + the
+  wasm build is green.
