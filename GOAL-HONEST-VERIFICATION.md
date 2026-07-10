@@ -262,3 +262,16 @@ AirSoundness.lean:234). `fold_close_of_two_alpha`/`friProximity_discharge` are f
   `starkSound_of_verifyAlgo` = `carrier.extract ∘ href`. Doc-comment "PROVEN verifier algorithm" corrected in-file.
   DEBT-A obligations: #1 ✅ · #2 FRI@deployed-params (in flight) · #3 FriProximity bridge (in flight) · #4 real
   FriExtract (in flight) · #5 DeployedRefines (NOBODY has attempted — firing now).
+- ◐ DEBT-A brick 3 `c9e8439ad` — FRI proximity INSTANTIATED at the deployed RATE (log_blowup=3 ⇒ 1/8, |L|=16) and
+  at the 2-adicity cap (|L|=2^27, ω=31^15 via a 26-step squaring chain); geometry axioms proved GENERAL in m.
+  ⚠⚠ THREE measured limits: deployed domain size is PER-PROOF (trace_height<<log_blowup), not static; **our fold
+  is ARITY-2 (squaring quotient) while the deployed PROD_FRI_MAX_LOG_ARITY=3 folds up to 8-to-1** (a sixth
+  obligation, `b404d4b9f`); the `FriProximity` name-collision has NO bridge (AirSoundness doesn't even import
+  FriSoundness) — bridge statement now PRECISE, `hFRI` half supplied, `hcode_sat` open,
+  `air_binds_of_proximity` is the proved codeword half.
+- ⚠⚠ DEBT-A #4 REFRAMED `3ee8b5ee8` — `FriExtract` is a KNOWLEDGE-EXTRACTION obligation, NOT a FRI one:
+  friProximity_discharge takes a transcript ⟹ a property; FriExtract takes a property ⟹ must yield a witness.
+  **The direction is wrong** — no FRI work discharges it (needs in-circuit⟹native extraction + oracle_binding).
+  Also PROVED: the committed `wit_friExtract` is ACTIVELY HOLLOW (`degenerate_extracts_absurd` certifies a
+  time-reversed `brokenSeg`, lastNew = -999). A non-degenerate instantiation exists but its FriExtract is a
+  TAUTOLOGY at its CVS (`the_gap_is_reflection`) — stated plainly, not claimed as a discharge.
