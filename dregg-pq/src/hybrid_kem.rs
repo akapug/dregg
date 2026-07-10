@@ -59,6 +59,7 @@
 use hkdf::Hkdf;
 use ml_kem::kem::{Decapsulate, Encapsulate};
 use ml_kem::{Ciphertext, Encoded, EncodedSizeUser, KemCore, MlKem768};
+use rand_core::RngCore;
 use sha2::Sha256;
 use std::sync::OnceLock;
 use x25519_dalek::{PublicKey, StaticSecret};
@@ -168,6 +169,78 @@ pub enum MlKemDecapsCoreInstall {
     ExportAbsent,
 }
 
+/// A pluggable, Lean-VERIFIED **REAL, FULL-BYTE** ML-KEM-768 ENCAPS backend (BRICK K5 — the ENCAPS mirror of
+/// the K6 decaps core above), installed by an integration layer. It carries the full-dimension ML-KEM-768
+/// deterministic FO encapsulation over the actual `ek ‖ m` bytes.
+///
+/// The extracted core is `Dregg2.Crypto.MlKemEncaps.mlkemEncapsRealFFI` over `mlkemEncaps` (the FIPS 203 Alg 16
+/// FO encaps: `H(ek)` SHA3-256, `G(m ‖ H(ek))` SHA3-512 split, K-PKE.Encrypt over the real n=256 negacyclic
+/// ring / NTT / real 1184/1088-byte codec), `@[export]`ed as `dregg_mlkem_encaps_real` and compiled to
+/// leanc-native code. It is PROVED (`native_decide`) BYTE-EXACT vs the `ml-kem` v0.2.3 crate's
+/// `EncapsulateDeterministic` (`encaps_matches_crate`) and to round-trip through the verified K4 decaps
+/// (`encaps_decaps_roundtrip`). `dregg-lean-ffi::shadow_mlkem_encaps_real` runs it natively.
+///
+/// dregg-pq stays a LIGHT leaf (it never depends on the ~195 MB Lean archive): it takes a function pointer.
+/// An integration layer that CAN link the archive installs the native core via
+/// [`install_lean_kem_encaps_core_real`]; once installed, [`initiate`] produces the ML-KEM ciphertext + shared
+/// secret from the Lean-verified object over the real bytes — the `ml-kem` crate is NO LONGER the encaps
+/// authority (its `.encapsulate` is not called). The initiator supplies its own 32-byte `m` (as the crate does
+/// internally). The wire is `"hex(ek) hex(m)"`; the reply is `"hex(ct) hex(K)"` / `"ERR"` (malformed → fail
+/// closed).
+type LeanKemEncapsCoreReal = fn(wire: &str) -> Option<String>;
+static LEAN_KEM_ENCAPS_CORE_REAL: OnceLock<LeanKemEncapsCoreReal> = OnceLock::new();
+
+/// Install the extracted, Lean-verified REAL, full-byte ML-KEM-768 encaps core (e.g.
+/// `|w| dregg_lean_ffi::shadow_mlkem_encaps_real(w).ok()`). Once installed, [`initiate`] routes the ML-KEM
+/// encaps through it — taking the `ml-kem` crate OUT of the encaps TCB. Returns `false` if one is already
+/// installed (once-per-process; the verified core is not hot-swappable).
+pub fn install_lean_kem_encaps_core_real(core: LeanKemEncapsCoreReal) -> bool {
+    LEAN_KEM_ENCAPS_CORE_REAL.set(core).is_ok()
+}
+
+/// Whether a Lean-verified REAL ML-KEM encaps core has been installed (so [`initiate`] produces the ML-KEM
+/// ciphertext + shared secret from the Lean-verified object rather than the `ml-kem` crate's `.encapsulate`).
+/// A deployed, verified node installs one at startup.
+pub fn mlkem_encaps_real_core_installed() -> bool {
+    LEAN_KEM_ENCAPS_CORE_REAL.get().is_some()
+}
+
+/// Outcome of installing the Lean-verified REAL ML-KEM encaps core as [`initiate`]'s authority (via
+/// [`install_verified_mlkem_encaps_core`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MlKemEncapsCoreInstall {
+    /// The real core was installed by THIS call — the `ml-kem` crate is now out of the encaps TCB.
+    Installed,
+    /// A core was already installed this process (install is once-per-process) — crate still out of TCB.
+    AlreadyInstalled,
+    /// The linked Lean archive does not export the real encaps core; the `ml-kem`-crate fallback stays in
+    /// place (a valid FIPS-203 encaps, but NOT the Lean-verified authority).
+    ExportAbsent,
+}
+
+/// THE ONE install every deployed, archive-linked process calls to make the Lean-verified REAL, full-byte
+/// ML-KEM-768 encaps core ([`install_lean_kem_encaps_core_real`]) the ciphertext+secret AUTHORITY behind
+/// [`initiate`] — taking the `ml-kem` crate OUT of that process's KEM-encaps TCB.
+///
+/// dregg-pq stays a LIGHT leaf: the archive-dependent symbols are INJECTED as `fn` pointers rather than
+/// depended on. Gated on `export_available()`: install ONLY when the linked archive actually EXPORTS the real
+/// core. When the export is absent we return [`MlKemEncapsCoreInstall::ExportAbsent`] and keep the
+/// `ml-kem`-crate fallback (a valid FIPS-203 encaps) rather than bricking encaps. Idempotent and
+/// once-per-process.
+pub fn install_verified_mlkem_encaps_core(
+    export_available: fn() -> bool,
+    shadow: fn(wire: &str) -> Option<String>,
+) -> MlKemEncapsCoreInstall {
+    if !export_available() {
+        return MlKemEncapsCoreInstall::ExportAbsent;
+    }
+    if install_lean_kem_encaps_core_real(shadow) {
+        MlKemEncapsCoreInstall::Installed
+    } else {
+        MlKemEncapsCoreInstall::AlreadyInstalled
+    }
+}
+
 /// THE ONE install every deployed, archive-linked process calls to make the Lean-verified REAL, full-byte
 /// ML-KEM-768 decaps core ([`install_lean_kem_decaps_core_real`]) the shared-secret AUTHORITY behind
 /// [`HybridResponder::finish`] — taking the `ml-kem` crate OUT of that process's KEM-decaps TCB.
@@ -240,6 +313,59 @@ fn decode_ss_hex(reply: &str) -> Option<[u8; 32]> {
         out[i] = (nibble(chunk[0])? << 4) | nibble(chunk[1])?;
     }
     Some(out)
+}
+
+/// Marshal `(ek, m)` into the byte wire the Lean real encaps core reads: `"hex(ek) hex(m)"` (two
+/// space-separated lowercase-hex fields).
+fn real_encaps_wire(ek: &[u8], m: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut s = String::with_capacity((ek.len() + m.len()) * 2 + 1);
+    for (i, field) in [ek, m].into_iter().enumerate() {
+        if i != 0 {
+            s.push(' ');
+        }
+        for &b in field {
+            s.push(HEX[(b >> 4) as usize] as char);
+            s.push(HEX[(b & 0x0f) as usize] as char);
+        }
+    }
+    s
+}
+
+/// Decode the Lean real encaps core's reply — `"hex(ct) hex(K)"` (two space-separated lowercase-hex fields:
+/// the 1088-byte ciphertext + 32-byte shared secret) — into `(ct_bytes, ss)`. `None` on any malformed reply
+/// (wrong field count, wrong length, non-hex, or `"ERR"`), which the caller treats as a fail-closed encaps
+/// fault.
+fn decode_ct_ss_hex(reply: &str) -> Option<(Vec<u8>, [u8; 32])> {
+    fn nibble(c: u8) -> Option<u8> {
+        match c {
+            b'0'..=b'9' => Some(c - b'0'),
+            b'a'..=b'f' => Some(c - b'a' + 10),
+            b'A'..=b'F' => Some(c - b'A' + 10),
+            _ => None,
+        }
+    }
+    fn hex_bytes(field: &str) -> Option<Vec<u8>> {
+        let b = field.as_bytes();
+        if b.is_empty() || b.len() % 2 != 0 {
+            return None;
+        }
+        let mut out = Vec::with_capacity(b.len() / 2);
+        for chunk in b.chunks_exact(2) {
+            out.push((nibble(chunk[0])? << 4) | nibble(chunk[1])?);
+        }
+        Some(out)
+    }
+    let mut fields = reply.split(' ');
+    let ct_hex = fields.next()?;
+    let k_hex = fields.next()?;
+    if fields.next().is_some() {
+        return None; // exactly two fields
+    }
+    let ct = hex_bytes(ct_hex)?;
+    let k = hex_bytes(k_hex)?;
+    let ss: [u8; 32] = k.try_into().ok()?;
+    Some((ct, ss))
 }
 
 type Ek = <MlKem768 as KemCore>::EncapsulationKey;
@@ -412,15 +538,30 @@ pub fn initiate(offer: &HybridOffer) -> Result<(HybridInitiatorMessage, [u8; 32]
         .diffie_hellman(&PublicKey::from(offer.x25519_pk))
         .to_bytes();
 
-    // Post-quantum half: encapsulate to the offer's ML-KEM key.
+    // Post-quantum half: encapsulate to the offer's ML-KEM key. Length-gate the encapsulation key first (a
+    // wrong-length ek is a malformed-wire fault on BOTH paths); `ek_encoded` is consumed by the crate fallback.
     let ek_encoded =
         Encoded::<Ek>::try_from(offer.mlkem_ek.as_slice()).map_err(|_| HybridError::BadEncapKey)?;
-    let ek = Ek::from_bytes(&ek_encoded);
-    let (ct, ss_mlkem) = ek
-        .encapsulate(&mut rng)
-        .map_err(|_| HybridError::Encapsulation)?;
-    let ss_mlkem = shared_to_array(ss_mlkem);
-    let ct_bytes = ct.as_slice().to_vec();
+    let (ct_bytes, ss_mlkem) = if let Some(core) = LEAN_KEM_ENCAPS_CORE_REAL.get() {
+        // AUTHORITY: the Lean-verified real encaps core over the real bytes. The `ml-kem` crate's
+        // `.encapsulate` is NOT consulted on this path — it has left the KEM-encaps TCB. We generate our own
+        // 32-byte `m` (fresh OS entropy, exactly as the crate's randomized encaps does internally); the core
+        // deterministically produces `(ct, K)` from `(ek, m)`. A `None` (archive fault) or malformed
+        // (`"ERR"` / wrong-length / non-hex) reply fails CLOSED as an encapsulation fault.
+        let mut m = [0u8; 32];
+        rng.fill_bytes(&mut m);
+        let wire = real_encaps_wire(&offer.mlkem_ek, &m);
+        let reply = core(&wire).ok_or(HybridError::Encapsulation)?;
+        m.zeroize();
+        decode_ct_ss_hex(&reply).ok_or(HybridError::Encapsulation)?
+    } else {
+        // FALLBACK (no verified core installed): the `ml-kem` crate primitive.
+        let ek = Ek::from_bytes(&ek_encoded);
+        let (ct, ss_mlkem) = ek
+            .encapsulate(&mut rng)
+            .map_err(|_| HybridError::Encapsulation)?;
+        (ct.as_slice().to_vec(), shared_to_array(ss_mlkem))
+    };
 
     let t = transcript(&offer.x25519_pk, &offer.mlkem_ek, &x25519_pk, &ct_bytes);
     let session_key = combine(&ss_x25519, &ss_mlkem, &t);
@@ -698,6 +839,78 @@ mod tests {
             decode_ss_hex(&format!("{}zz", &hex[..62])),
             None,
             "non-hex reply fails closed"
+        );
+    }
+
+    /// BRICK K5 marshalling: the `ek ‖ m` wire the Lean real encaps core reads is `"hex(ek) hex(m)"`, and its
+    /// `"hex(ct) hex(K)"` reply decodes back to `(ct_bytes, ss)`; a malformed reply (`"ERR"`, wrong field
+    /// count, odd-length hex, wrong K length, non-hex) fails closed to `None`. These are the pure marshallers
+    /// `initiate` uses on the Lean-routed path; the end-to-end real-core install + byte-exact encaps + full
+    /// handshake is the running-binary gate `node/tests/mlkem_live_encaps.rs` (which links the archive).
+    #[test]
+    fn real_encaps_wire_and_reply_roundtrip() {
+        // Wire is two space-separated lowercase-hex fields.
+        assert_eq!(
+            real_encaps_wire(&[0x00, 0xff, 0x10], &[0xab, 0x01]),
+            "00ff10 ab01"
+        );
+        assert_eq!(real_encaps_wire(&[], &[]), " ");
+
+        // A `(ct, K)` reply round-trips: a 3-byte ct + a 32-byte K.
+        let ct = vec![0xde, 0xad, 0xbe];
+        let ss = [
+            0x00u8, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd,
+            0xee, 0xff, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0xfe, 0xdc, 0xba, 0x98,
+            0x76, 0x54, 0x32, 0x10,
+        ];
+        let ct_hex: String = ct.iter().map(|b| format!("{b:02x}")).collect();
+        let ss_hex: String = ss.iter().map(|b| format!("{b:02x}")).collect();
+        let reply = format!("{ct_hex} {ss_hex}");
+        assert_eq!(decode_ct_ss_hex(&reply), Some((ct.clone(), ss)));
+
+        // Fail-closed replies decode to None.
+        assert_eq!(
+            decode_ct_ss_hex("ERR"),
+            None,
+            "the malformed sentinel fails closed"
+        );
+        assert_eq!(decode_ct_ss_hex(""), None, "empty reply fails closed");
+        assert_eq!(
+            decode_ct_ss_hex(&ct_hex),
+            None,
+            "one field (no K) fails closed"
+        );
+        assert_eq!(
+            decode_ct_ss_hex(&format!("{ct_hex} {ss_hex} extra")),
+            None,
+            "three fields fail closed"
+        );
+        assert_eq!(
+            decode_ct_ss_hex(&format!("{ct_hex} {}", &ss_hex[..62])),
+            None,
+            "a 31-byte K fails closed (wrong shared-secret length)"
+        );
+        assert_eq!(
+            decode_ct_ss_hex(&format!("{ct_hex} {}zz", &ss_hex[..62])),
+            None,
+            "non-hex K fails closed"
+        );
+    }
+
+    /// The shared encaps install seam reports `ExportAbsent` (and does NOT install) when the archive lacks the
+    /// real encaps export — the gate that keeps the `ml-kem`-crate fallback rather than bricking encaps. (Kept
+    /// export-absent so it never touches the once-per-process `LEAN_KEM_ENCAPS_CORE_REAL` cell that the
+    /// running-binary gate installs.)
+    #[test]
+    fn mlkem_encaps_install_seam_export_absent_keeps_fallback() {
+        assert_eq!(
+            install_verified_mlkem_encaps_core(|| false, |_| None),
+            MlKemEncapsCoreInstall::ExportAbsent,
+            "an absent export must NOT install a core (crate fallback stays)"
+        );
+        assert!(
+            !mlkem_encaps_real_core_installed(),
+            "no real KEM encaps core is installed by the export-absent path"
         );
     }
 
