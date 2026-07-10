@@ -15,6 +15,8 @@
  * On any failure the previous world is torn down (never silently kept behind an error).
  */
 
+import { renderRoomMap, type MapRoom } from "./roommap";
+
 declare const window: any;
 
 interface Exit { name: string; to: string; toName: string; locked: boolean; gateReason: string | null }
@@ -125,15 +127,21 @@ const tale: LogRow[] = [];
 // ── the editor (plain textarea + a synced line-number gutter) ─────────────────────
 function editorEl(): HTMLTextAreaElement { return $("editor") as HTMLTextAreaElement; }
 
+// Live-lint markers, keyed by 1-based source line → severity (drawn in the gutter as a dot).
+const LINT_MARKERS = new Map<number, "error" | "warning">();
+
 function syncGutter(): void {
   const ta = editorEl();
   const gutter = $("gutter");
   const n = ta.value.split("\n").length;
-  if (gutter.childElementCount !== n) {
-    const rows: string[] = [];
-    for (let i = 1; i <= n; i++) rows.push(`<span>${i}</span>`);
-    gutter.innerHTML = rows.join("");
+  const rows: string[] = [];
+  for (let i = 1; i <= n; i++) {
+    const sev = LINT_MARKERS.get(i);
+    const cls = sev === "error" ? ' class="glm-err"' : sev === "warning" ? ' class="glm-warn"' : "";
+    const title = sev ? ` title="${sev} on line ${i}"` : "";
+    rows.push(`<span${cls}${title}>${i}</span>`);
   }
+  gutter.innerHTML = rows.join("");
   gutter.scrollTop = ta.scrollTop;
 }
 
@@ -220,6 +228,100 @@ function setStatus(dot: "ok" | "bad" | "", text: string): void {
   $("statusDot").className = "dot" + (dot ? " " + dot : "");
 }
 
+// ── the room map — after a successful author, draw the shape of the world you just wrote ────────
+async function renderForgeMap(currentRoomId: string | null): Promise<void> {
+  const el = document.getElementById("roomMap");
+  if (!el) return;
+  try {
+    const rooms = await jget<MapRoom[]>("/game/map");
+    // In the forge you WROTE every room, so all read as known/solid; the start is highlighted, and
+    // a room disconnected from the graph shows up flagged (spot a stray room at a glance).
+    renderRoomMap(el, rooms, { currentRoomId, allKnown: true });
+  } catch (e) {
+    el.innerHTML = '<div class="rm-empty">the map is unavailable right now.</div>';
+  }
+}
+function clearForgeMap(): void {
+  const el = document.getElementById("roomMap");
+  if (el) el.innerHTML = '<div class="rm-empty">author a world (▶ Play) to see its map.</div>';
+}
+
+// ── LIVE VALIDATION — as you type (debounced ~400ms), pure-lint the source via /game/validate and
+// surface problems in the gutter + a compact panel BEFORE ▶ Play. ▶ Play stays the authoritative
+// fail-closed compile; this is only an early warning so the author sees issues sooner.
+interface LintResp { ok: boolean; stage?: "parse" | "validate" | "clean"; line?: number; message?: string; issues?: Issue[] }
+let lintTimer: any = null;
+let lintSeq = 0;
+
+function scheduleLint(): void {
+  if (lintTimer) clearTimeout(lintTimer);
+  lintTimer = setTimeout(() => void runLint(), 400);
+}
+
+async function runLint(): Promise<void> {
+  const source = editorEl().value;
+  const seq = ++lintSeq;
+  let resp: LintResp;
+  try {
+    resp = await jpost<LintResp>("/game/validate", { source });
+  } catch (e) {
+    return; // the linter is an aid; a transient failure just leaves the last state on screen
+  }
+  if (seq !== lintSeq) return; // a newer keystroke already superseded this lint
+  renderLint(resp);
+}
+
+/** Paint the live-lint result into the gutter markers + the #lint panel. Idempotent. */
+function renderLint(resp: LintResp): void {
+  LINT_MARKERS.clear();
+  const panel = $("lint");
+
+  if (resp.stage === "parse") {
+    if (resp.line && resp.line > 0) LINT_MARKERS.set(resp.line, "error");
+    panel.className = "live errors";
+    const where = resp.line && resp.line > 0 ? ` on line ${resp.line}` : "";
+    panel.innerHTML =
+      `<div class="lint-head">❌ syntax error${where}</div>` +
+      `<div class="lint-row err"><span class="ln">${resp.line && resp.line > 0 ? resp.line : "—"}</span>` +
+      `<span class="sev">parse</span><span>${escapeHtml(resp.message || "the source did not parse")}</span></div>`;
+    window.__FORGE_LINT = { stage: "parse", line: resp.line || 0, errors: 1, warnings: 0, markers: [{ line: resp.line || 0, sev: "error" }] };
+    syncGutter();
+    return;
+  }
+
+  const issues = resp.issues || [];
+  const errs = issues.filter((i) => i.severity === "error");
+  const warns = issues.filter((i) => i.severity === "warning");
+  for (const i of issues) {
+    if (i.line > 0 && (i.severity === "error" || !LINT_MARKERS.has(i.line))) {
+      LINT_MARKERS.set(i.line, i.severity === "error" ? "error" : "warning");
+    }
+  }
+
+  if (!issues.length) {
+    panel.className = "live clean";
+    panel.innerHTML = `<div class="lint-head">✓ clean — it parses and validates · hit ▶ Play to mount it</div>`;
+  } else {
+    panel.className = errs.length ? "live errors" : "live warns";
+    const head = errs.length
+      ? `❌ ${errs.length} error${errs.length === 1 ? "" : "s"}${warns.length ? ` · ⚠ ${warns.length} warning${warns.length === 1 ? "" : "s"}` : ""} — fix before ▶ Play`
+      : `⚠ ${warns.length} warning${warns.length === 1 ? "" : "s"} — it would still play`;
+    const rows = issues.map((i) => {
+      const cls = i.severity === "error" ? "lint-row err" : "lint-row warn";
+      const tag = i.severity === "error" ? "❌" : "⚠";
+      return `<div class="${cls}"><span class="ln">${i.line > 0 ? i.line : "—"}</span>` +
+        `<span class="sev">${tag}</span><span>${escapeHtml(i.message)}</span></div>`;
+    }).join("");
+    panel.innerHTML = `<div class="lint-head">${head}</div>` + rows;
+  }
+  window.__FORGE_LINT = {
+    stage: resp.stage || (errs.length ? "validate" : "clean"),
+    errors: errs.length, warnings: warns.length,
+    markers: Array.from(LINT_MARKERS.entries()).map(([line, sev]) => ({ line, sev })),
+  };
+  syncGutter();
+}
+
 // ── tearing the play surface down (fail-closed: never keep a stale world) ──────────
 function teardownStage(): void {
   MOUNTED = false;
@@ -232,6 +334,7 @@ function teardownStage(): void {
   renderChain(0, "");
   const badge = $("verifyBadge"); badge.className = "verify"; badge.textContent = "";
   renderWarnings([]);
+  clearForgeMap();
 }
 
 // ── the play surface (mirrors /vault: room, exits, inventory, items, log, rail) ────
@@ -456,6 +559,10 @@ async function play(text: string): Promise<AuthorResp> {
     renderLog();
     await renderVerifyBadge();
     renderWarnings(resp.warnings);
+    // The authored world's room graph — draw its shape (the start room highlighted).
+    await renderForgeMap(s.room?.id ?? null);
+    // The source just authored, so the live-lint reads clean (surfacing any advisory warnings).
+    renderLint({ ok: true, stage: "clean", issues: resp.warnings || [] });
     const c = counts(text);
     setStatus("ok", `forged — ${c.rooms} room${c.rooms === 1 ? "" : "s"}, ${c.exits} exit${c.exits === 1 ? "" : "s"}. play it →`);
     window.__FORGE_STATE = {
@@ -487,7 +594,7 @@ async function loadSample(key: string): Promise<void> {
 
 function wireControls(): void {
   const ta = editorEl();
-  ta.addEventListener("input", () => { syncGutter(); updateCounts(); });
+  ta.addEventListener("input", () => { syncGutter(); updateCounts(); scheduleLint(); });
   ta.addEventListener("scroll", () => { $("gutter").scrollTop = ta.scrollTop; });
   ta.addEventListener("keydown", (ev) => {
     if (ev.key === "Tab") {
@@ -496,6 +603,7 @@ function wireControls(): void {
       ta.value = ta.value.slice(0, s) + "  " + ta.value.slice(e);
       ta.selectionStart = ta.selectionEnd = s + 2;
       syncGutter();
+      scheduleLint();
     }
     if ((ev.metaKey || ev.ctrlKey) && ev.key === "Enter") { ev.preventDefault(); void play(ta.value); }
   });
@@ -507,10 +615,18 @@ function wireControls(): void {
 // ── test seams (also power the driven run) ─────────────────────────────────────────
 function installTestHooks(): void {
   window.__forgePlay = (text?: string) => play(typeof text === "string" ? text : editorEl().value);
-  window.__forgeSetText = (t: string) => { editorEl().value = t; syncGutter(); updateCounts(); };
+  window.__forgeSetText = (t: string) => { editorEl().value = t; syncGutter(); updateCounts(); scheduleLint(); };
   window.__forgeSample = (key: string) => loadSample(key);
   window.__forgeAct = (c: string) => act(c);
   window.__forgeVerify = () => jget("/game/verify");
+  // Live-lint seams for the driven run: set text + lint SYNCHRONOUSLY (no debounce wait), and read
+  // the last lint verdict (stage / error+warning counts / gutter markers).
+  window.__forgeLintNow = (t?: string) => {
+    if (typeof t === "string") { editorEl().value = t; syncGutter(); updateCounts(); }
+    return runLint();
+  };
+  window.__forgeLintState = () => window.__FORGE_LINT || null;
+  window.__forgeMapData = () => jget<MapRoom[]>("/game/map");
   window.__forgeState = () => ({
     mounted: MOUNTED,
     error: LAST_ERROR,

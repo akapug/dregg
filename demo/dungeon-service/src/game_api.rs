@@ -790,6 +790,53 @@ pub fn handle_state(gs: &Mutex<GameState>) -> WebResponse {
     WebResponse::json(state_json(&g).to_string().into_bytes())
 }
 
+/// `GET /game/map` — the CURRENT session's world as a room graph for the map visualizer:
+/// `[{id, name, exits:[{name, to, toName, locked, gateReason}]}]`. Additive + read-only: it
+/// derives from `session.map()` (the room adjacency) + `session.world()` (the live flags/
+/// inventory), mutating nothing. `locked` mirrors the play surface — a gate not yet satisfied —
+/// so the map's barred edges OPEN as the player unlocks them (refetch it after a move).
+pub fn handle_map(gs: &Mutex<GameState>) -> WebResponse {
+    let g = gs.lock().unwrap();
+    let session = &g.session;
+    let world = session.world();
+    let map = session.map();
+    let rooms: Vec<Value> = map
+        .rooms
+        .values()
+        .map(|r| {
+            let exits: Vec<Value> = r
+                .exits
+                .iter()
+                .map(|(dir, exit)| {
+                    let (locked, reason) = match &exit.gate {
+                        None => (false, Value::Null),
+                        Some(gt) => {
+                            if gate_satisfied(gt, world) {
+                                (false, Value::Null)
+                            } else {
+                                (true, json!(gate_reason_str(gt)))
+                            }
+                        }
+                    };
+                    let to_name = map
+                        .room(&exit.to_room)
+                        .map(|rr| rr.name.clone())
+                        .unwrap_or_else(|| exit.to_room.clone());
+                    json!({
+                        "name": dir,
+                        "to": exit.to_room,
+                        "toName": to_name,
+                        "locked": locked,
+                        "gateReason": reason,
+                    })
+                })
+                .collect();
+            json!({ "id": r.id, "name": r.name, "exits": exits })
+        })
+        .collect();
+    WebResponse::json(json!(rooms).to_string().into_bytes())
+}
+
 /// `POST /game/act {"command":"<free text>"}` — the AI narrates + proposes a typed action;
 /// the world resolves it; a legal move lands as one verified turn; a refused move leaves the
 /// world unchanged (the AI's flavor prose may still show, but `outcome:"refused"`).
@@ -1028,6 +1075,60 @@ pub fn handle_author(gs: &Mutex<GameState>, body: &[u8]) -> WebResponse {
             "ok": true,
             "warnings": warnings,
             "state": state,
+        })
+        .to_string()
+        .into_bytes(),
+    )
+}
+
+/// `POST /game/validate {"source":"<.dungeon text>"}` — PURE LINT for the live authoring gutter:
+/// `parse_world` then `validate`, WITHOUT opening a session (NO state change — the live world is
+/// untouched). Mirrors the fail-closed stages of `/game/author` but decides nothing about the
+/// mounted world:
+///   * a SYNTAX error   → {ok:false, stage:"parse",    line, message}
+///   * SEMANTIC errors  → {ok:false, stage:"validate", issues:[…]}   (EVERY issue, line-pinned)
+///   * else             → {ok:true,  stage:"clean",    issues:[…]}   (advisory warnings, if any)
+/// `/game/author` remains the AUTHORITATIVE fail-closed compile; this only surfaces problems as
+/// the author types, so they see them before hitting ▶ Play.
+pub fn handle_validate(body: &[u8]) -> WebResponse {
+    let parsed: Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return WebResponse::error(400, format!("bad JSON: {e}")),
+    };
+    let source = match parsed.get("source").and_then(Value::as_str) {
+        Some(s) => s.to_string(),
+        None => return WebResponse::error(400, "missing string field `source`"),
+    };
+
+    // Stage 1 — SYNTAX (line-pinned, fail-closed shape identical to /game/author).
+    let world = match attested_dm::parse_world(&source) {
+        Ok(w) => w,
+        Err(e) => {
+            return WebResponse::json(
+                json!({
+                    "ok": false,
+                    "stage": "parse",
+                    "line": e.line,
+                    "message": e.message,
+                })
+                .to_string()
+                .into_bytes(),
+            );
+        }
+    };
+
+    // Stage 2 — SEMANTICS. Report every issue (errors AND advisory warnings), best-effort line-
+    // pinned the same way /game/author does. An `Error` marks the source unsound (`ok:false`);
+    // warnings-only stays `clean` (it would still play).
+    let issues = attested_dm::validate(&world);
+    let issues_json: Vec<Value> = issues.iter().map(|i| issue_json(&source, i)).collect();
+    let has_error = issues.iter().any(|i| i.is_error());
+    let stage = if has_error { "validate" } else { "clean" };
+    WebResponse::json(
+        json!({
+            "ok": !has_error,
+            "stage": stage,
+            "issues": issues_json,
         })
         .to_string()
         .into_bytes(),
