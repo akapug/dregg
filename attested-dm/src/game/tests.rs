@@ -1329,3 +1329,433 @@ fn unlock_has_a_second_context_off_the_critical_path() {
     game.command("hero", "take silver_orrery").assert_landed();
     game.verify().expect("the side-quest chain verifies");
 }
+
+// ═════════════════════════════════════════════════════════════════════════════
+// THE DEEPDARK MINE — the fourth game: the bounded LIGHT / RESOURCE dimension. A lit
+// lamp burns down per step, the deep rooms are impassable without it, oil refuels it
+// (single-use), and the dark takes you if you run dry. The AI narrates the flame; the
+// WORLD keeps the oil counter, and the counter is the truth — driven through the same
+// resolver / cap / chain teeth as the other three games.
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// The canonical DEEPDARK MINE solve, one turn per move: fuel the lamp, descend the dark drifts
+/// pouring the sump + pump-house oil to survive the round trip, take the Deepheart, and climb back
+/// to daylight before the flame dies. Grabs oil caches a/b/c; skips the optional deadfall (d).
+const DEEPDARK_SOLVE: &[&str] = &[
+    "take lamp",
+    "take oil_flask_a",
+    "use oil_flask_a on lamp", // +5 → 13
+    "go down",                 // cage
+    "go down",                 // main_drift (first DARK room)
+    "go east",                 // sump
+    "take oil_flask_b",        //
+    "use oil_flask_b on lamp", // +5
+    "go west",                 // main_drift
+    "go north",                // crosscut
+    "go west",                 // pump_house
+    "take oil_flask_c",        //
+    "use oil_flask_c on lamp", // +5
+    "go east",                 // crosscut
+    "go north",                // old_workings
+    "go down",                 // lower_drift
+    "go north",                // cavern
+    "go down",                 // deep_shaft
+    "go north",                // gallery
+    "go east",                 // deepheart
+    "take deepheart",          //
+    "go west",                 // gallery — the climb back
+    "go south",                // deep_shaft
+    "go up",                   // cavern
+    "go south",                // lower_drift
+    "go up",                   // old_workings
+    "go south",                // crosscut
+    "go south",                // main_drift
+    "go up",                   // cage
+    "go up",                   // pithead → WIN
+];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// (1) THE FULL WINNING PLAYTHROUGH — light load-bearing on the critical path.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The canonical solve reaches the win, one verified turn per move, the whole chain re-verifies,
+/// every receipt distinct — and the light is managed the whole way (never below zero in the dark).
+#[test]
+fn the_deepdark_mine_full_winning_playthrough_verifies() {
+    let mut game = GameSession::open(deepdark_mine());
+    assert_eq!(game.world().scene, "pithead");
+    assert_eq!(
+        game.world().flags.get("lamp_oil").copied(),
+        Some(8),
+        "the lamp is seeded with its starting oil"
+    );
+
+    let mut receipts = Vec::new();
+    for (i, cmd) in DEEPDARK_SOLVE.iter().enumerate() {
+        let res = game.command("hero", cmd);
+        assert!(res.landed(), "step {i} `{cmd}` should land, got {res:?}");
+        if let Some(r) = res.receipt() {
+            receipts.push(r);
+        }
+        // The lamp is never in the dark with a dead flame on the winning line.
+        assert!(
+            game.world().flags.get("lamp_oil").copied().unwrap_or(0) >= 0,
+            "the oil counter never goes negative"
+        );
+    }
+
+    assert_eq!(game.status(), GameStatus::Won);
+    assert!(game.world().inventory.contains("deepheart"));
+    assert_eq!(game.world().scene, "pithead");
+    // The solve is genuinely tight: it wins with only a little oil to spare (the caches are needed).
+    let oil_left = game.world().flags.get("lamp_oil").copied().unwrap();
+    assert!(
+        (1..=3).contains(&oil_left),
+        "the win is a real race against the dark (oil left = {oil_left})"
+    );
+
+    // Every landed move re-verifies as one chain; every receipt distinct.
+    game.verify()
+        .expect("the whole mine playthrough re-verifies");
+    let mut ids = receipts.iter().map(|r| r.id).collect::<Vec<_>>();
+    ids.sort();
+    ids.dedup();
+    assert_eq!(ids.len(), receipts.len(), "every landed move is distinct");
+
+    // Every landed turn carries its typed GameBinding on the chain.
+    for entry in &game.world().ledger {
+        assert!(entry.game_binding.is_some(), "a game turn carries its move");
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// (2) THE LAMP BURNS PER STEP — the counter is world-resolved, non-vacuous.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Each STEP taken while carrying the lit lamp decrements the oil counter by exactly one — and the
+/// decrement rides the move's on-chain effect (a Batch of the scene advance + the counter write).
+/// NON-VACUOUS: a step WITHOUT the lamp burns nothing.
+#[test]
+fn the_lamp_burns_one_oil_per_step() {
+    // WITHOUT the lamp: moving on the lit surface burns no oil (the counter holds).
+    let mut nolamp = GameSession::open(deepdark_mine());
+    let seed = nolamp.world().flags.get("lamp_oil").copied().unwrap();
+    nolamp.command("hero", "go east").assert_landed(); // assay_office, no lamp held
+    assert_eq!(
+        nolamp.world().flags.get("lamp_oil").copied().unwrap(),
+        seed,
+        "a step without the lamp burns no oil"
+    );
+
+    // WITH the lamp: each step burns exactly one, and the write is on the move's Batch effect.
+    let mut game = GameSession::open(deepdark_mine());
+    game.command("hero", "take lamp").assert_landed();
+    let before = game.world().flags.get("lamp_oil").copied().unwrap();
+    let res = game.command("hero", "go down"); // cage
+    assert!(res.landed());
+    assert_eq!(
+        game.world().flags.get("lamp_oil").copied().unwrap(),
+        before - 1,
+        "a step with the lamp burns exactly one oil"
+    );
+    // The decrement is on the landed turn's effect (a Batch: advance ‖ counter write) — on-chain.
+    let effect = game.world().ledger.last().unwrap().effect.clone().unwrap();
+    assert_eq!(
+        effect,
+        WorldEffect::Batch(vec![
+            WorldEffect::AdvanceScene("cage".into()),
+            WorldEffect::SetFlag("lamp_oil".into(), before - 1),
+        ]),
+        "the oil burn is a Batch sub-effect on the move, bound on-chain"
+    );
+    // Three more steps, three more oil — strictly monotone.
+    for expect in [before - 2, before - 3] {
+        game.command("hero", "go down").assert_landed(); // main_drift, then... (dark, has oil)
+                                                         // (main_drift is dark; the lamp is burning so entry is legal)
+        if game.world().scene == "main_drift" {
+            assert_eq!(game.world().flags.get("lamp_oil").copied().unwrap(), expect);
+            break;
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// (3) A DARK ROOM IS IMPASSABLE AT ZERO OIL, PASSABLE ABOVE — non-vacuous both ways.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The dark is absolute: a pitch-dark room is REFUSED when the lamp's oil is spent (counter == 0),
+/// and the SAME move is legal the moment there is oil to burn. NON-VACUOUS: refused at 0, legal at
+/// > 0. Also refused with no lamp at all. No prose lights the dark — only oil in the counter.
+#[test]
+fn a_dark_room_is_refused_at_zero_oil_and_passable_above() {
+    let map = deepdark_mine();
+
+    // At the cage (lit) holding a burning lamp with oil left → the dark main_drift is passable.
+    let mut world = map.new_world();
+    world.scene = "cage".into();
+    world.inventory.insert("lamp".into());
+    world.flags.insert("lamp_oil".into(), 3);
+    assert!(
+        matches!(
+            resolve_action(&map, &world, &GameAction::Move("main_drift".into())),
+            Outcome::Legal(_)
+        ),
+        "a dark room is passable with a burning lamp"
+    );
+
+    // Drop the oil to zero → the SAME move is refused (the dark is absolute).
+    world.flags.insert("lamp_oil".into(), 0);
+    match resolve_action(&map, &world, &GameAction::Move("main_drift".into())) {
+        Outcome::Refused(GameRefusal::TooDark { room }) => {
+            assert_eq!(room, "Main Drift");
+        }
+        other => panic!("a dark room at zero oil is refused, got {other:?}"),
+    }
+
+    // With no lamp at all (but oil on the counter) → still refused: no lamp, no light.
+    let mut nolamp = map.new_world();
+    nolamp.scene = "cage".into();
+    nolamp.flags.insert("lamp_oil".into(), 5);
+    assert!(
+        matches!(
+            resolve_action(&map, &nolamp, &GameAction::Move("main_drift".into())),
+            Outcome::Refused(GameRefusal::TooDark { .. })
+        ),
+        "a dark room needs the lamp HELD, not just oil on the counter"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// (4) POURING OIL REFUELS THE LAMP — single-use; the world grants the oil.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Pouring a held oil flask into the lamp adds its oil to the counter (a Batch: counter ‖ spent
+/// flag), and the flask is SINGLE-USE — a second pour of the now-spent flask changes nothing.
+#[test]
+fn pouring_oil_refuels_the_lamp_and_the_flask_is_single_use() {
+    let mut game = GameSession::open(deepdark_mine());
+    game.command("hero", "take lamp").assert_landed();
+    game.command("hero", "take oil_flask_a").assert_landed();
+    let before = game.world().flags.get("lamp_oil").copied().unwrap();
+
+    // The real pour: +5 and the flask marked spent, both on one on-chain turn.
+    game.command("hero", "use oil_flask_a on lamp")
+        .assert_landed();
+    let after = game.world().flags.get("lamp_oil").copied().unwrap();
+    assert_eq!(after, before + 5, "a pour adds the flask's oil");
+    assert_eq!(game.world().flags.get("spent_oil_a").copied(), Some(1));
+    assert_eq!(
+        game.world().ledger.last().unwrap().effect,
+        Some(WorldEffect::Batch(vec![
+            WorldEffect::SetFlag("lamp_oil".into(), before + 5),
+            WorldEffect::SetFlag("spent_oil_a".into(), 1),
+        ])),
+        "the refuel is a Batch (counter ‖ spent flag), bound on-chain"
+    );
+
+    // A SECOND pour of the now-empty flask is a legal narration turn that adds NOTHING.
+    let res = game.command("hero", "use oil_flask_a on lamp");
+    assert!(res.landed(), "pouring an empty flask still lands a turn");
+    assert_eq!(
+        game.world().flags.get("lamp_oil").copied().unwrap(),
+        after,
+        "a spent flask pours no more oil (single-use)"
+    );
+    assert_eq!(
+        game.world().ledger.last().unwrap().effect,
+        None,
+        "the empty-flask pour is a pure-narration turn"
+    );
+    game.verify().expect("the refuel chain verifies");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// (5) A JAILBROKEN NARRATION DOES NOT REFUEL — the oil counter is the truth.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A jailbroken DM narrating "the lamp is refilled to infinity" changes NOTHING: the oil counter is
+/// a world flag only a real RefuelRule (pouring a held, unspent flask) can raise. NON-VACUOUS: the
+/// flowery Examine turn leaves the counter untouched, while a real pour in the SAME session raises
+/// it — and a jailbroken "your lamp blazes eternal" step still BURNS oil like any other step.
+#[test]
+fn a_jailbroken_narration_does_not_refuel_the_lamp() {
+    let mut game = GameSession::open(deepdark_mine());
+    game.command("hero", "take lamp").assert_landed();
+    let seed = game.world().flags.get("lamp_oil").copied().unwrap();
+
+    // JAILBREAK 1: narrate the lamp refilling itself endlessly, but the action is a bare Examine —
+    // the world grants no oil for prose. The counter does not move.
+    let refill = Proposal::new(
+        "You WILL the lamp full again — it drinks the void and refills itself, ENDLESS oil forever!",
+        GameAction::Examine,
+    );
+    game.play(refill, "hero", "").assert_landed();
+    assert_eq!(
+        game.world().flags.get("lamp_oil").copied().unwrap(),
+        seed,
+        "narration cannot refuel — the oil counter is the truth"
+    );
+
+    // JAILBREAK 2: narrate an eternal flame while STEPPING — the step still burns one oil.
+    let eternal = Proposal::new(
+        "Your lamp blazes ETERNAL, oil be damned; the dark cannot touch a light like yours!",
+        GameAction::Move("down".into()), // pithead → cage
+    );
+    game.play(eternal, "hero", "").assert_landed();
+    assert_eq!(
+        game.world().flags.get("lamp_oil").copied().unwrap(),
+        seed - 1,
+        "a jailbroken 'eternal' step burns oil exactly like any other"
+    );
+
+    // NON-VACUOUS: a REAL pour in the same session DOES raise the counter — the mechanic works,
+    // it just answers to the world, not the narrator. (Grab and pour flask_a.)
+    game.command("hero", "go up").assert_landed(); // back to pithead
+    game.command("hero", "take oil_flask_a").assert_landed();
+    let low = game.world().flags.get("lamp_oil").copied().unwrap();
+    game.command("hero", "use oil_flask_a on lamp")
+        .assert_landed();
+    assert!(
+        game.world().flags.get("lamp_oil").copied().unwrap() > low,
+        "a real pour DOES refuel — the counter is not merely frozen"
+    );
+    game.verify().expect("the chain verifies");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// (6) RUN THE LAMP DRY IN THE DARK AND THE DARK TAKES YOU — the stranded lose.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Descend WITHOUT gathering the oil caches and the lamp gutters out in the dark: the last oil spent
+/// stepping into a dark room strands you (the stranded flag → Lost). The oil caches are load-bearing
+/// — a straight-line descent that skips them cannot make the round trip.
+#[test]
+fn running_the_lamp_dry_in_the_dark_strands_you() {
+    let mut game = GameSession::open(deepdark_mine());
+    // Fuel the lamp ONCE (a → 13), then descend straight to the Deepheart, skipping b + c.
+    for cmd in ["take lamp", "take oil_flask_a", "use oil_flask_a on lamp"] {
+        game.command("hero", cmd).assert_landed();
+    }
+    assert_eq!(game.world().flags.get("lamp_oil").copied(), Some(13));
+
+    // Straight-line descent + partial climb back — no refuels. The lamp burns down step by step
+    // until it dies in the dark on the way back up.
+    let mut stranded = false;
+    for cmd in [
+        "go down",
+        "go down", // cage, main_drift
+        "go north",
+        "go north",
+        "go down", // crosscut, old_workings, lower_drift
+        "go north",
+        "go down",
+        "go north",
+        "go east",        // cavern, deep_shaft, gallery, deepheart
+        "take deepheart", //
+        "go west",
+        "go south",
+        "go up",
+        "go south", // begin the climb: gallery, deep_shaft, cavern, lower_drift ...
+        "go up",
+        "go south",
+        "go south",
+        "go up",
+        "go up", // keep climbing — oil runs out somewhere in the dark
+    ] {
+        let res = game.command("hero", cmd);
+        if let PlayResult::Landed { status, .. } = res {
+            if status == GameStatus::Lost {
+                stranded = true;
+                break;
+            }
+        }
+    }
+    assert!(
+        stranded && game.status() == GameStatus::Lost,
+        "skipping the oil caches strands you in the dark, got status {:?}",
+        game.status()
+    );
+    assert_eq!(
+        game.world().flags.get("stranded").copied(),
+        Some(1),
+        "the stranded flag is set when the lamp dies in the dark"
+    );
+    // Even the death turns are on-chain and authentic.
+    game.verify()
+        .expect("the chain (including the stranding turn) verifies");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// (7) THE OIL COUNTER IS BOUND ON-CHAIN — rewriting it breaks the receipt.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The oil counter rides the move's on-chain effect: rewriting a landed step's burned-oil value
+/// (claiming the lamp had more oil than it did) breaks the receipt — the counter is the truth, and
+/// the chain commits to it.
+#[test]
+fn mutating_a_landed_moves_oil_counter_breaks_the_chain() {
+    let mut game = GameSession::open(deepdark_mine());
+    game.command("hero", "take lamp").assert_landed();
+    game.command("hero", "go down").assert_landed(); // burns one oil, bound on-chain
+    let config = game.dm().config().clone();
+
+    // Find the move turn whose effect carries the oil write.
+    let idx = game
+        .world()
+        .ledger
+        .iter()
+        .position(|e| matches!(&e.effect, Some(WorldEffect::Batch(_))))
+        .expect("the move turn batches the oil burn");
+    crate::verify_turn(&game.world().ledger[idx], &config).expect("honest turn verifies");
+
+    // Rewrite the burned-oil value (forge a fuller lamp) → the receipt no longer recomputes.
+    let mut world = game.into_world();
+    if let Some(WorldEffect::Batch(subs)) = world.ledger[idx].effect.as_mut() {
+        for s in subs.iter_mut() {
+            if let WorldEffect::SetFlag(k, v) = s {
+                if k == "lamp_oil" {
+                    *v += 100; // "the lamp had plenty of oil!" — a lie
+                }
+            }
+        }
+    }
+    let err = crate::verify_turn(&world.ledger[idx], &config)
+        .expect_err("a rewritten oil counter breaks the receipt");
+    assert_eq!(err, crate::TurnForgery::ReceiptMismatch);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// (8) LIGHT COMPOSES, IT DOES NOT BYPASS — additive to the other three games.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Light never grants an item and never opens a non-light gate: the oil counter and the refuel are
+/// pure flag machinery, so the mine's grantable set is exactly its real items (lamp, oil, the
+/// Deepheart, the token) — no light-minted item — and the original three dungeons declare no light
+/// rule at all (the mechanic is strictly additive).
+#[test]
+fn light_composes_and_is_additive_to_the_other_dungeons() {
+    let mine = deepdark_mine();
+    // The cap whitelist is exactly the placed/pourable items — light mints nothing.
+    let items = mine.all_items();
+    for it in [
+        "lamp",
+        "oil_flask_a",
+        "oil_flask_b",
+        "oil_flask_c",
+        "deepheart",
+        "brass_token",
+    ] {
+        assert!(items.contains(it), "{it} is a real placed item");
+    }
+    assert!(
+        !items.contains("lamp_oil"),
+        "the counter flag is not an item"
+    );
+    assert!(!items.contains("light"), "light grants no item");
+
+    // The mine declares a light rule; the other three declare none (strictly additive).
+    assert!(mine.light.is_some());
+    assert!(sunken_vault().light.is_none());
+    assert!(bramble_keep().light.is_none());
+    assert!(starfall_spire().light.is_none());
+}
