@@ -831,7 +831,7 @@ async fn handle_library(ctx: &Context, command: &CommandInteraction, state: &Bot
 async fn handle_verify(ctx: &Context, command: &CommandInteraction) {
     let channel = command.channel_id.get();
     let (verified, count, name, break_msg) = {
-        let store = sessions().lock().unwrap();
+        let store = sessions().lock().unwrap_or_else(|e| e.into_inner());
         match store.get(&channel) {
             None => {
                 drop(store);
@@ -900,7 +900,7 @@ async fn open_generic_and_post(
     // Build the session + first round inside the lock, snapshot the render data, then narrate
     // OUTSIDE the lock (narration hits the network).
     let (room_name, room_desc, snap) = {
-        let mut store = sessions().lock().unwrap();
+        let mut store = sessions().lock().unwrap_or_else(|e| e.into_inner());
         let game = GameSession::open(world);
         let options = round_options(game.map(), game.world());
         let room = game.current_room();
@@ -960,7 +960,7 @@ async fn handle_close(ctx: &Context, command: &CommandInteraction) {
     }
 
     let render = {
-        let mut store = sessions().lock().unwrap();
+        let mut store = sessions().lock().unwrap_or_else(|e| e.into_inner());
         match store.get_mut(&channel) {
             None => CloseRender::NoSession,
             Some(sess) => match sess.round.winner() {
@@ -1065,11 +1065,13 @@ async fn handle_close(ctx: &Context, command: &CommandInteraction) {
     }
 }
 
-/// Whether option `idx` shares its (winning) vote count with a lower-indexed option — i.e. the
-/// deterministic lowest-index tie-break was exercised.
+/// Whether the winning option `idx` shares its vote count with ANY OTHER option — i.e. the
+/// deterministic lowest-index tie-break was exercised. (`idx` is the winner, always the lowest
+/// index at the max count, so a *lower*-only scan would always be false; we must scan every other
+/// option.)
 fn is_tie(tally: &[usize], idx: usize) -> bool {
     let top = tally.get(idx).copied().unwrap_or(0);
-    tally.iter().take(idx).any(|&c| c == top)
+    tally.iter().enumerate().any(|(j, &c)| j != idx && c == top)
 }
 
 /// A plain-language account of a play result for the channel.
@@ -1161,7 +1163,7 @@ pub async fn handle_component(ctx: &Context, component: &ComponentInteraction, s
     }
 
     let reply = {
-        let mut store = sessions().lock().unwrap();
+        let mut store = sessions().lock().unwrap_or_else(|e| e.into_inner());
         match store.get_mut(&channel) {
             None => Reply::Ephemeral(
                 "There is no dungeon open in this channel. Start one with `/dungeon start`."
