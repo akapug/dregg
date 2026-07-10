@@ -162,10 +162,12 @@ fn a_tampered_session_is_rejected() {
     let err = world
         .verify_ledger(dm.config())
         .expect_err("a tampered session is caught");
-    assert_eq!(err.seq, 0);
     assert!(matches!(
-        err.reason,
-        TurnForgery::Attestation(ZkOracleError::NotAuthentic(_))
+        err,
+        LedgerBreak::EntryInvalid {
+            seq: 0,
+            reason: TurnForgery::Attestation(ZkOracleError::NotAuthentic(_))
+        }
     ));
 }
 
@@ -368,4 +370,181 @@ fn federation_reject_refuses_the_narration_and_leaves_no_receipt() {
     // Anti-ghost across the seam: the world advanced not at all, no receipt landed.
     assert!(world.ledger.is_empty());
     assert_eq!(node.len(), 0);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// (5) THE HASH-CHAIN TEETH — the ledger is an un-rewritable chain, not a bag of
+// independently-verified rows. Each of these adversarial edits FAILS on the pre-chain
+// per-entry loop (every survivor still verified in isolation) and is CAUGHT now.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Build an honest three-turn ledger (two player turns straddling a DM scene-advance,
+/// which exercises the effect binding in the chain hash).
+fn honest_three_turn_world(dm: &DungeonMaster<RecordedDm>) -> WorldCell {
+    let mut world = WorldCell::new(SCENE);
+    dm.narrate_turn(&mut world, &PlayerMessage::new("mara", "I light a torch"))
+        .unwrap();
+    dm.narrate_move(
+        &mut world,
+        DmMove::act(
+            "The passage opens onto a dripping stair.",
+            WorldEffect::AdvanceScene("dripping stair".into()),
+        ),
+    )
+    .unwrap();
+    dm.narrate_turn(&mut world, &PlayerMessage::new("mara", "I descend"))
+        .unwrap();
+    world
+}
+
+#[test]
+fn an_untampered_ledger_verifies() {
+    // NON-VACUITY: the honest chain passes both the internal walk AND the head anchor. A
+    // check that never accepts would be worthless; this proves the teeth are not trivially-
+    // failing.
+    let dm = dm();
+    let world = honest_three_turn_world(&dm);
+    let head = world.head();
+
+    world
+        .verify_ledger(dm.config())
+        .expect("the honest chain re-verifies internally");
+    world
+        .verify_ledger_against_head(dm.config(), head)
+        .expect("the honest chain re-verifies against its own head");
+
+    // Structural sanity: seqs are 0,1,2; the first prev is the genesis seed; every prev is
+    // the predecessor's receipt id; the head is the last receipt id.
+    assert_eq!(
+        world.ledger.iter().map(|e| e.seq).collect::<Vec<_>>(),
+        vec![0, 1, 2]
+    );
+    assert_eq!(world.ledger[0].prev, genesis_prev());
+    assert_eq!(world.ledger[1].prev, world.ledger[0].receipt);
+    assert_eq!(world.ledger[2].prev, world.ledger[1].receipt);
+    assert_eq!(head, world.ledger[2].receipt);
+}
+
+#[test]
+fn truncating_the_ledger_is_caught() {
+    let dm = dm();
+    let mut world = honest_three_turn_world(&dm);
+    // A stranger anchored the honest head out of band.
+    let known_head = world.head();
+
+    // The adversary drops the last turn from the tip.
+    world.ledger.pop();
+
+    // HONEST LIMITATION, stated as a test: the truncated chain is still INTERNALLY
+    // consistent — the per-entry loop (the old behaviour) and even the chain walk accept
+    // it. Truncation is only detectable against a known head.
+    world
+        .verify_ledger(dm.config())
+        .expect("a truncated prefix is internally consistent (chain walk alone can't see it)");
+
+    // Against the anchored head, truncation is caught.
+    let err = world
+        .verify_ledger_against_head(dm.config(), known_head)
+        .expect_err("truncation is caught against the known head");
+    assert!(
+        matches!(err, LedgerBreak::Truncated { found_head, .. } if found_head == world.head()),
+        "expected Truncated, got {err:?}"
+    );
+}
+
+#[test]
+fn reordering_two_turns_is_caught() {
+    let dm = dm();
+    let mut world = honest_three_turn_world(&dm);
+
+    // Every entry still verifies in ISOLATION after a swap (the pre-chain defect); the
+    // chain walk catches the reorder because seqs/links no longer line up with position.
+    for entry in &world.ledger {
+        verify_turn(entry, dm.config()).expect("each entry still verifies in isolation");
+    }
+    world.ledger.swap(0, 1);
+
+    let err = world
+        .verify_ledger(dm.config())
+        .expect_err("reordering is caught");
+    // The entry now at index 0 carries seq 1.
+    assert!(
+        matches!(
+            err,
+            LedgerBreak::SeqMismatch {
+                index: 0,
+                found_seq: 1
+            }
+        ),
+        "expected SeqMismatch at index 0, got {err:?}"
+    );
+}
+
+#[test]
+fn splicing_a_fabricated_entry_is_caught() {
+    let dm = dm();
+    let mut world = honest_three_turn_world(&dm);
+
+    // The adversary MINTS a plausible entry with the in-tree fixture carrier — a genuinely
+    // `verify_zkoracle`-valid attestation (the authentic leg is a fixture by default). They
+    // even link it correctly to the real predecessor (entry 0) and recompute its receipt id,
+    // so the spliced entry itself is internally flawless.
+    let carrier = DmAttestationCarrier::default();
+    let (att, field) = carrier
+        .attest_narration("a fabricated corridor yawns open, granting passage")
+        .expect("the fixture carrier mints a valid attestation");
+    let narration = String::from_utf8_lossy(&field).into_owned();
+    let seq = 1u64;
+    let prev = world.ledger[0].receipt;
+    let receipt = chain_receipt_id(seq, &prev, &narration, &None, &att);
+    let fabricated = LedgerEntry {
+        seq,
+        prev,
+        narration,
+        effect: None,
+        attestation: att,
+        receipt,
+    };
+    // The spliced entry on its own passes verify_turn — the fixture defeats attestation
+    // authenticity as a barrier, exactly as the doc warns.
+    verify_turn(&fabricated, dm.config()).expect("the fabricated entry verifies in isolation");
+
+    // Splice it into the HISTORY at index 1: [e0, FAKE, e1, e2].
+    world.ledger.insert(1, fabricated);
+
+    // Caught: the displaced genuine successor (now at index 2) still carries seq 1.
+    let err = world
+        .verify_ledger(dm.config())
+        .expect_err("a spliced fabricated entry is caught");
+    assert!(
+        matches!(
+            err,
+            LedgerBreak::SeqMismatch { index: 2, .. } | LedgerBreak::LinkBroken { index: 2 }
+        ),
+        "expected the splice to break the chain at index 2, got {err:?}"
+    );
+}
+
+#[test]
+fn mutating_a_past_narration_is_caught() {
+    // REGRESSION: in-place mutation of a landed entry was the ONE thing the pre-chain loop
+    // already caught; it must still bite.
+    let dm = dm();
+    let mut world = honest_three_turn_world(&dm);
+
+    world.ledger[0].narration = "the DM secretly hands troll the crown".into();
+
+    let err = world
+        .verify_ledger(dm.config())
+        .expect_err("a mutated past narration is caught");
+    assert!(
+        matches!(
+            err,
+            LedgerBreak::EntryInvalid {
+                seq: 0,
+                reason: TurnForgery::NarrationNotAttested
+            }
+        ),
+        "expected EntryInvalid(NarrationNotAttested) at seq 0, got {err:?}"
+    );
 }
