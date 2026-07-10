@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>The Commons — a crowd authors a verifiable story</title>
+  <style>
+    :root {
+      --parchment: #f2ecdd;
+      --parchment-2: #e9e1cd;
+      --card: #fbf8f0;
+      --ink: #1d1a2e;
+      --ink-soft: #4a4560;
+      --ink-faint: #7d768f;
+      --rule: #d8cfb8;
+      --violet: #6b5ce0;
+      --violet-deep: #4a3aa8;
+      --teal: #2b7f7a;
+      --green: #3f8f57;
+      --amber: #bd7b2c;
+      --shadow: 24px 30px 60px -30px rgba(29, 26, 46, .35);
+      --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+      --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; }
+    body {
+      font-family: var(--sans);
+      color: var(--ink);
+      background:
+        radial-gradient(120% 80% at 50% -10%, #f7f2e6 0%, var(--parchment) 45%, var(--parchment-2) 100%);
+      min-height: 100vh;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+    .page { max-width: 46rem; margin: 0 auto; padding: 4.5rem 1.5rem 6rem; }
+
+    /* ── masthead ── */
+    .eyebrow {
+      font-size: .72rem; letter-spacing: .22em; text-transform: uppercase;
+      color: var(--violet-deep); font-weight: 600; margin: 0 0 1rem;
+    }
+    h1.title {
+      font-family: var(--serif); font-weight: 600; font-size: clamp(2.3rem, 6vw, 3.6rem);
+      line-height: 1.04; letter-spacing: -.01em; margin: 0; text-wrap: balance;
+      color: var(--ink);
+    }
+    h1.title .amp { color: var(--violet); font-style: italic; }
+    .lede {
+      font-family: var(--serif); font-size: 1.2rem; color: var(--ink-soft);
+      margin: 1.1rem 0 0; max-width: 34rem; text-wrap: pretty;
+    }
+    .rule { height: 1px; background: linear-gradient(90deg, var(--rule), transparent); margin: 2.4rem 0; border: 0; }
+
+    /* ── status line ── */
+    .status {
+      font-size: .82rem; letter-spacing: .04em; color: var(--ink-faint);
+      font-variant-numeric: tabular-nums; min-height: 1.2em; display: flex; align-items: center; gap: .5rem;
+    }
+    .status::before {
+      content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--violet);
+      box-shadow: 0 0 0 0 rgba(107, 92, 224, .5); animation: pulse 2s infinite;
+    }
+    @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(107,92,224,.5);} 70%{ box-shadow: 0 0 0 7px rgba(107,92,224,0);} 100%{box-shadow:0 0 0 0 rgba(107,92,224,0);} }
+    @media (prefers-reduced-motion: reduce) { .status::before { animation: none; } }
+
+    /* ── the signing beat (the custody write, made legible) ── */
+    .signing {
+      margin: 1rem 0 0; padding: 0 1rem; max-height: 0; overflow: hidden; opacity: 0;
+      border-radius: 10px; background: linear-gradient(90deg, #efe9ff, #f6f2ff);
+      border: 1px solid #d9d0ff; color: var(--violet-deep); font-size: .9rem;
+      transition: max-height .25s ease, opacity .2s ease, padding .25s ease, margin .2s ease;
+    }
+    .signing.live { max-height: 4rem; opacity: 1; padding: .7rem 1rem; margin-top: 1rem; }
+    .signing .pen { font-size: 1.05rem; }
+    .signing .what { color: var(--ink-soft); }
+
+    /* ── the mounted <dregg-story> centerpiece: framed as an inset charter page ── */
+    .stage {
+      margin: 1.2rem 0 0; padding: 1.5rem; border-radius: 16px;
+      background: var(--card); border: 1px solid var(--rule);
+      box-shadow: var(--shadow);
+      position: relative;
+    }
+    .stage::before {
+      content: "the assembly floor"; position: absolute; top: -.62rem; left: 1.3rem;
+      font-size: .64rem; letter-spacing: .18em; text-transform: uppercase; font-weight: 600;
+      color: var(--ink-faint); background: var(--card); padding: 0 .5rem;
+    }
+    dregg-story { display: block; }
+    dregg-story a { color: var(--violet-deep); }
+
+    /* ── the receipt-chain rail ── */
+    .chain { margin: 1.4rem 0 0; }
+    .chain-links { display: flex; flex-wrap: wrap; align-items: center; gap: .15rem; font-size: 1rem; color: var(--green); line-height: 1; }
+    .chain-links .link { color: var(--green); }
+    .chain-links .link.empty { color: var(--ink-faint); }
+    .chain-links .rope { color: var(--rule); margin: 0 .05rem; }
+    .chain-meta { margin-top: .5rem; font-size: .78rem; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+    .chain-meta code { font-family: var(--mono); color: var(--ink-soft); font-size: .74rem; }
+
+    /* ── the verify badge (the payoff) ── */
+    .verify {
+      margin: 1.6rem 0 0; padding: .95rem 1.15rem; border-radius: 12px; font-size: .98rem; font-weight: 600;
+      opacity: 0; transform: translateY(6px); transition: opacity .4s ease, transform .4s ease;
+      border: 1px solid transparent;
+    }
+    .verify.ok, .verify.bad { opacity: 1; transform: none; }
+    .verify.ok { background: #e7f4ea; border-color: #bfe2c7; color: var(--green); }
+    .verify.bad { background: #fbeaea; border-color: #f0c9c9; color: #b02a37; }
+
+    /* ── controls + legend ── */
+    .controls { margin: 1.6rem 0 0; display: flex; gap: .6rem; flex-wrap: wrap; align-items: center; }
+    button.ctrl {
+      font: inherit; font-size: .84rem; padding: .5rem .9rem; border-radius: 9px;
+      border: 1px solid var(--violet); background: #fff; color: var(--violet-deep); cursor: pointer;
+      transition: background .15s, color .15s;
+    }
+    button.ctrl:hover { background: var(--violet); color: #fff; }
+    button.ctrl:focus-visible { outline: 2px solid var(--violet-deep); outline-offset: 2px; }
+    .hint { font-size: .8rem; color: var(--ink-faint); }
+
+    .legend {
+      margin: 3rem 0 0; padding: 1.4rem 1.5rem; border-radius: 12px;
+      background: rgba(255,255,255,.5); border: 1px solid var(--rule); font-size: .86rem; color: var(--ink-soft);
+    }
+    .legend h2 { font-family: var(--serif); font-size: 1.05rem; margin: 0 0 .7rem; color: var(--ink); font-weight: 600; }
+    .legend ul { margin: 0; padding-left: 1.1rem; display: grid; gap: .45rem; }
+    .legend b { color: var(--ink); font-weight: 600; }
+    .legend .tag { font-family: var(--mono); font-size: .78rem; color: var(--violet-deep); }
+    footer { margin-top: 2.4rem; font-size: .76rem; color: var(--ink-faint); }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <p class="eyebrow">A verifiable story · the crowd decides every branch</p>
+    <h1 class="title">The Commons</h1>
+    <p class="lede">
+      A hundred settlers reach the river's bend and must found a town — together, by vote.
+      Watch the assembly cast custody-signed ballots on a real quorum engine; the winning
+      branch advances as one verified turn, and at the end a stranger's replay proves
+      <span class="amp">nothing was quietly rewritten.</span>
+    </p>
+
+    <hr class="rule" />
+
+    <div id="status" class="status">warming up…</div>
+    <div id="signing" class="signing" aria-live="polite"></div>
+
+    <section class="stage" aria-label="the live story">
+      <!-- The REAL shipping element, running in-page over the real wasm StoryWorld.
+           No extension: the page injects a collective StoryEngine via the story port. -->
+      <dregg-story id="commons" collective src="dregg://story/b3_c0117ec">
+        <a href="https://dregg.net/d/story/b3_c0117ec">Founding the Commons (open the story)</a>
+      </dregg-story>
+    </section>
+
+    <div id="chain" class="chain"></div>
+    <div id="verifyBadge" class="verify" role="status"></div>
+
+    <div class="controls">
+      <button id="pauseBtn" class="ctrl" type="button" onclick="window.__demoTogglePause && window.__demoTogglePause()">⏸ pause (vote yourself)</button>
+      <span class="hint">Pause, then click an option inside the story to cast your own ballot as <b>you</b>.</span>
+    </div>
+
+    <aside class="legend">
+      <h2>What is actually real here</h2>
+      <ul>
+        <li>The world is a real <span class="tag">StoryWorld</span> compiled from <span class="tag">the-commons.scene</span> — a spween choose-your-own-adventure running as verified turns, in your tab. No server, no extension.</li>
+        <li>Each ballot is a real <b>custody-signed turn</b> on the same federation-grade <span class="tag">CollectiveChoiceEngine</span> (write-once ballots, monotone tallies, an <span class="tag">AffineLe</span> quorum gate) that governs a federation — one voter, one vote, ineligible voters refused.</li>
+        <li>Closing a branch <b>advances the winner</b> as one cap-gated verified turn; the receipt chain grows and the commitment moves.</li>
+        <li><b>The stranger's check:</b> <span class="tag">verify()</span> re-drives a fresh world through the recorded choices — if any receipt were altered, the replay would fail.</li>
+      </ul>
+    </aside>
+
+    <footer>Founding the Commons · dregg verifiable story demo · self-contained, page-SDK.</footer>
+  </main>
+
+  <!-- The wasm-bindgen glue (no-modules): binds a top-level `let wasm_bindgen`
+       (a lexical global, NOT a window property). -->
+  <script src="dregg_wasm.js"></script>
+  <!-- Bridge the lexical binding onto window so the bundled module can reach it. -->
+  <script>window.wasm_bindgen = wasm_bindgen;</script>
+  <!-- The demo wiring (bundled from app.ts): engine + element + auto-play. -->
+  <script src="app.js"></script>
+</body>
+</html>

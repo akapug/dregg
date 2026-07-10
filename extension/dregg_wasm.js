@@ -1203,6 +1203,304 @@ let wasm_bindgen = (function(exports) {
     exports.PollWorld = PollWorld;
 
     /**
+     * **A spween story running as verifiable turns, in the tab.** Owns a `spween-dregg`
+     * [`WorldCell`] + [`Driver`] at `NodeTarget::Local` (the default — in-process, no
+     * networking). Each [`Self::advance`] runs the stock `spween::Runtime`'s gate-checked
+     * `select_choice` and flushes the resulting cell writes as ONE cap-gated verified turn,
+     * appending its receipt to the chain; [`Self::verify`] replays that chain against a fresh
+     * world — the "stranger checks the story" tooth.
+     */
+    class StoryWorld {
+        __destroy_into_raw() {
+            const ptr = this.__wbg_ptr;
+            this.__wbg_ptr = 0;
+            StoryWorldFinalization.unregister(this);
+            return ptr;
+        }
+        free() {
+            const ptr = this.__destroy_into_raw();
+            wasm.__wbg_storyworld_free(ptr, 0);
+        }
+        /**
+         * **Advance the story by taking choice `index` — as ONE verified turn.** Runs the
+         * stock `select_choice` (which checks the gate, runs the effects, navigates) and
+         * flushes the buffered cell writes as a single cap-gated turn, appending its receipt.
+         *
+         * Returns JSON `{ ok, passage, receiptCount, commitmentHex, error? }`. FAIL-CLOSED: a
+         * gated (condition-not-met) or out-of-range choice — or a choice on an already-ended
+         * scene — returns `{ ok: false, error }` and NOTHING commits (`receiptCount` and
+         * `commitmentHex` still describe the last good state). This is the story advancing
+         * only ever along an eligible edge.
+         * @param {number} index
+         * @returns {string}
+         */
+        advance(index) {
+            let deferred1_0;
+            let deferred1_1;
+            try {
+                const ret = wasm.storyworld_advance(this.__wbg_ptr, index);
+                deferred1_0 = ret[0];
+                deferred1_1 = ret[1];
+                return getStringFromWasm0(ret[0], ret[1]);
+            } finally {
+                wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+            }
+        }
+        /**
+         * The current branch tally as JSON `[{ label, count }]` (in ballot-option order).
+         * Empty when no poll is open.
+         * @returns {string}
+         */
+        branchTally() {
+            let deferred1_0;
+            let deferred1_1;
+            try {
+                const ret = wasm.storyworld_branchTally(this.__wbg_ptr);
+                deferred1_0 = ret[0];
+                deferred1_1 = ret[1];
+                return getStringFromWasm0(ret[0], ret[1]);
+            } finally {
+                wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+            }
+        }
+        /**
+         * **CAST ONE BALLOT** — `voter` picks ballot option `option_index` (a real
+         * `cast_vote` turn on the collective_choice engine). Returns JSON
+         * `{ ok, tally: [{ label, count }], error? }`. ONE vote per voter: a second ballot
+         * from the same voter hits the ballot's consumed nullifier and is refused
+         * (`{ ok: false, error }`), the tally unchanged. FAIL-CLOSED: no open poll, an
+         * out-of-range option, or a voter outside the configured electorate all return
+         * `{ ok: false, error }` and nothing counts.
+         * @param {string} voter
+         * @param {number} option_index
+         * @returns {string}
+         */
+        castVote(voter, option_index) {
+            let deferred2_0;
+            let deferred2_1;
+            try {
+                const ptr0 = passStringToWasm0(voter, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+                const len0 = WASM_VECTOR_LEN;
+                const ret = wasm.storyworld_castVote(this.__wbg_ptr, ptr0, len0, option_index);
+                deferred2_0 = ret[0];
+                deferred2_1 = ret[1];
+                return getStringFromWasm0(ret[0], ret[1]);
+            } finally {
+                wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+            }
+        }
+        /**
+         * The choices at the current passage as JSON: `[{index, text, available}]`.
+         * `available` is the condition-gated availability the stock runtime already computes
+         * against the cell-backed state (`spween-dregg`'s [`ChoiceView`](spween_dregg::ChoiceView)).
+         * The `<dregg-story>` element renders an unavailable choice as disabled; a call to
+         * [`Self::advance`] on it is refused in-band regardless (fail-closed at the turn).
+         * @returns {string}
+         */
+        choicesJson() {
+            let deferred1_0;
+            let deferred1_1;
+            try {
+                const ret = wasm.storyworld_choicesJson(this.__wbg_ptr);
+                deferred1_0 = ret[0];
+                deferred1_1 = ret[1];
+                return getStringFromWasm0(ret[0], ret[1]);
+            } finally {
+                wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+            }
+        }
+        /**
+         * **CLOSE THE POLL and ADVANCE the story along the winning branch — as ONE verified
+         * turn.** Resolves the winner off the (monotone) tally through the engine's quorum
+         * `AffineLe` gate, maps the winning ballot option to its spween `choice_index`, and
+         * fires it via [`Driver::advance`] — the exact one-cap-gated-turn path single-player
+         * uses. Returns JSON `{ ok, winningChoice, winningLabel, tally, passage,
+         * receiptCount, commitmentHex, error? }` — `winningChoice` is the spween choice index,
+         * `passage` the new passage, and `receiptCount`/`commitmentHex` the grown audit tape.
+         *
+         * FAIL-CLOSED: with no open poll, or no ballots cast (below quorum), the poll does not
+         * resolve — returns `{ ok: false, error }`, NOTHING advances, and (for the no-ballots
+         * case) the poll stays OPEN so the crowd can keep voting. A resolved winner that the
+         * executor then refuses also returns `{ ok: false, error }` with nothing committed.
+         * @returns {string}
+         */
+        closeBranchPoll() {
+            let deferred1_0;
+            let deferred1_1;
+            try {
+                const ret = wasm.storyworld_closeBranchPoll(this.__wbg_ptr);
+                deferred1_0 = ret[0];
+                deferred1_1 = ret[1];
+                return getStringFromWasm0(ret[0], ret[1]);
+            } finally {
+                wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+            }
+        }
+        /**
+         * The world-cell's current committed state commitment (hex) — the `post_state_hash` of
+         * the last committed turn (genesis if no choice has been taken yet). This is the
+         * stranger's check surface: it MOVES on every advance and pins exactly one committed
+         * history.
+         * @returns {string}
+         */
+        commitmentHex() {
+            let deferred1_0;
+            let deferred1_1;
+            try {
+                const ret = wasm.storyworld_commitmentHex(this.__wbg_ptr);
+                deferred1_0 = ret[0];
+                deferred1_1 = ret[1];
+                return getStringFromWasm0(ret[0], ret[1]);
+            } finally {
+                wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+            }
+        }
+        /**
+         * The current passage name (empty once the scene has ended).
+         * @returns {string}
+         */
+        currentPassage() {
+            let deferred1_0;
+            let deferred1_1;
+            try {
+                const ret = wasm.storyworld_currentPassage(this.__wbg_ptr);
+                deferred1_0 = ret[0];
+                deferred1_1 = ret[1];
+                return getStringFromWasm0(ret[0], ret[1]);
+            } finally {
+                wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+            }
+        }
+        /**
+         * The configured electorate as JSON `[voterId]` (the eligible crowd roster).
+         * @returns {string}
+         */
+        electorateJson() {
+            let deferred1_0;
+            let deferred1_1;
+            try {
+                const ret = wasm.storyworld_electorateJson(this.__wbg_ptr);
+                deferred1_0 = ret[0];
+                deferred1_1 = ret[1];
+                return getStringFromWasm0(ret[0], ret[1]);
+            } finally {
+                wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+            }
+        }
+        /**
+         * Whether a collective branch poll is currently open.
+         * @returns {boolean}
+         */
+        hasOpenPoll() {
+            const ret = wasm.storyworld_hasOpenPoll(this.__wbg_ptr);
+            return ret !== 0;
+        }
+        /**
+         * Whether the scene has ended (no further choices).
+         * @returns {boolean}
+         */
+        isEnded() {
+            const ret = wasm.storyworld_isEnded(this.__wbg_ptr);
+            return ret !== 0;
+        }
+        /**
+         * **Compile a spween `.scene` source into a verifiable world and start the
+         * playthrough.** FAIL-CLOSED: a source that does not parse to a scene is a `JsError`
+         * (no half-deployed world). The intro passage's entry effects commit as the genesis
+         * turn, so the story's first receipt exists before any choice is taken.
+         * @param {string} scene_source
+         */
+        constructor(scene_source) {
+            const ptr0 = passStringToWasm0(scene_source, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ret = wasm.storyworld_new(ptr0, len0);
+            if (ret[2]) {
+                throw takeFromExternrefTable0(ret[1]);
+            }
+            this.__wbg_ptr = ret[0];
+            StoryWorldFinalization.register(this, this.__wbg_ptr, this);
+            return this;
+        }
+        /**
+         * **OPEN A BRANCH POLL over the current passage's AVAILABLE choices.** Returns JSON
+         * `{ passage, round, options: [{ choiceIndex, label }] }`. FAIL-CLOSED: if the scene
+         * has ended or the current passage offers no available choice, returns `{ error }`
+         * and opens nothing (the crowd cannot vote on a branch that does not exist). Only
+         * AVAILABLE choices (the runtime's gate already enforced) go on the ballot, mapped to
+         * [`VoteOption`]s; the option→`choice_index` map is held for the close. Opening
+         * REPLACES any prior open poll (a fresh round).
+         * @returns {string}
+         */
+        openBranchPoll() {
+            let deferred1_0;
+            let deferred1_1;
+            try {
+                const ret = wasm.storyworld_openBranchPoll(this.__wbg_ptr);
+                deferred1_0 = ret[0];
+                deferred1_1 = ret[1];
+                return getStringFromWasm0(ret[0], ret[1]);
+            } finally {
+                wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+            }
+        }
+        /**
+         * The current passage's narrative prose — the text to render. Reads spween's own
+         * per-passage prose (`Runtime::current_prose`); empty once the scene has ended.
+         * @returns {string}
+         */
+        passageProse() {
+            let deferred1_0;
+            let deferred1_1;
+            try {
+                const ret = wasm.storyworld_passageProse(this.__wbg_ptr);
+                deferred1_0 = ret[0];
+                deferred1_1 = ret[1];
+                return getStringFromWasm0(ret[0], ret[1]);
+            } finally {
+                wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+            }
+        }
+        /**
+         * The committed-receipt count — the audit-tape length (the genesis turn plus one per
+         * advanced choice). Proves each advance was a real verified turn, not a local poke.
+         * @returns {number}
+         */
+        receiptCount() {
+            const ret = wasm.storyworld_receiptCount(this.__wbg_ptr);
+            return ret >>> 0;
+        }
+        /**
+         * **Configure the eligible crowd roster** for collective branching — a
+         * comma-separated list of voter ids (whitespace trimmed, empties dropped). The real
+         * [`CollectiveChoiceEngine`] gates eligibility to this declared electorate: only a
+         * listed voter can hold a ballot cap, so a poll opened after this admits exactly
+         * these voters' ballots. Re-calling replaces the roster (it takes effect on the NEXT
+         * [`Self::open_branch_poll`]; the current poll keeps the electorate it opened with).
+         * @param {string} voters_csv
+         */
+        setElectorate(voters_csv) {
+            const ptr0 = passStringToWasm0(voters_csv, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            wasm.storyworld_setElectorate(this.__wbg_ptr, ptr0, len0);
+        }
+        /**
+         * **Verify the whole playthrough by replay** — the un-retconnable "stranger checks the
+         * story" check. Re-drives a FRESH, identically-seeded world through the recorded choice
+         * sequence and confirms it reproduces the exact committed state at every step, AND that
+         * the receipt chain links cleanly (`spween-dregg/src/verify.rs` — both teeth). A forged
+         * (ineligible) choice is refused by the executor on replay; a tampered receipt breaks
+         * the chain. Returns `true` iff the playthrough is authentic.
+         * @returns {boolean}
+         */
+        verify() {
+            const ret = wasm.storyworld_verify(this.__wbg_ptr);
+            return ret !== 0;
+        }
+    }
+    if (Symbol.dispose) StoryWorld.prototype[Symbol.dispose] = StoryWorld.prototype.free;
+    exports.StoryWorld = StoryWorld;
+
+    /**
      * The tally-board card, driven from the browser tab over its own embedded verified executor.
      * One `TallyWorld` owns one runtime with one tally-cell (agent 0); each tally is a model slot
      * and each `+1`/`-1` click fires a REAL cap-gated verified turn — the wasm realization of a
@@ -5606,6 +5904,9 @@ let wasm_bindgen = (function(exports) {
     const PollWorldFinalization = (typeof FinalizationRegistry === 'undefined')
         ? { register: () => {}, unregister: () => {} }
         : new FinalizationRegistry(ptr => wasm.__wbg_pollworld_free(ptr, 1));
+    const StoryWorldFinalization = (typeof FinalizationRegistry === 'undefined')
+        ? { register: () => {}, unregister: () => {} }
+        : new FinalizationRegistry(ptr => wasm.__wbg_storyworld_free(ptr, 1));
     const TallyWorldFinalization = (typeof FinalizationRegistry === 'undefined')
         ? { register: () => {}, unregister: () => {} }
         : new FinalizationRegistry(ptr => wasm.__wbg_tallyworld_free(ptr, 1));
