@@ -129,6 +129,13 @@ impl TurnExecutor {
         action_target: &CellId,
         actor: &CellId,
         journal: &mut LedgerJournal,
+        // The creating turn's pre-execution INPUT hash (`wake.hash()`). Folded
+        // into the provenance of any capability this effect INSTALLS (grant /
+        // introduce) so a revoke-then-regrant at the same `(cell, slot)` in a
+        // different turn is collision-free. Ignored by the ~40 non-cap-installing
+        // arms. MUST be the input hash, never the post-execution turn/receipt
+        // hash (which depends on this very effect — circular).
+        created_by_turn: [u8; 32],
     ) -> Result<(), (TurnError, Vec<usize>)> {
         match effect {
             Effect::SetField { cell, index, value } => self.apply_set_field(
@@ -160,6 +167,7 @@ impl TurnExecutor {
                 from,
                 to,
                 cap,
+                created_by_turn,
             ),
             Effect::RevokeCapability { cell, slot } => self.apply_revoke_capability(
                 ledger,
@@ -250,6 +258,7 @@ impl TurnExecutor {
                 journal,
                 *cap_slot,
                 inner_effects,
+                created_by_turn,
             ),
             Effect::PipelinedSend { target, .. } => self.apply_pipelined_send(path, target),
 
@@ -266,6 +275,7 @@ impl TurnExecutor {
                 recipient,
                 target,
                 permissions,
+                created_by_turn,
             ),
 
             Effect::SpawnWithDelegation {
@@ -596,6 +606,7 @@ impl TurnExecutor {
         from: &CellId,
         to: &CellId,
         cap: &CapabilityRef,
+        created_by_turn: [u8; 32],
     ) -> Result<(), (TurnError, Vec<usize>)> {
         if from != action_target {
             self.check_cross_cell_permission(
@@ -710,12 +721,22 @@ impl TurnExecutor {
         // properly attenuated. The circuit (Phase B2) already enforces the
         // submask + lattice + expiry-monotone semantics; this makes the
         // executor MATCH it.
-        let granted_slot = to_cell.capabilities.grant_ref(cap).ok_or_else(|| {
-            (
-                TurnError::CapabilitySlotOverflow { cell: *to },
-                path.to_vec(),
-            )
-        })?;
+        // PROVENANCE THREADING: install via the provenanced variant so the
+        // entry's provenance folds the creating turn (`created_by_turn`), NOT the
+        // context-free `NO_TURN_CONTEXT = [0u8;32]` sentinel `grant_ref` uses. The
+        // executor RECOMPUTES provenance chaining `cap.provenance` (the untrusted
+        // wire value = parent) + `created_by_turn`, so a revoke-then-regrant at the
+        // same `(to, slot)` in a later turn is a DISTINCT provenance and the slot
+        // is not poisoned by the revoked instance's `cred_nul`.
+        let granted_slot = to_cell
+            .capabilities
+            .grant_ref_provenanced(cap, created_by_turn)
+            .ok_or_else(|| {
+                (
+                    TurnError::CapabilitySlotOverflow { cell: *to },
+                    path.to_vec(),
+                )
+            })?;
         journal.record_grant_capability(*to, granted_slot);
         Ok(())
     }
@@ -1961,6 +1982,7 @@ impl TurnExecutor {
         journal: &mut LedgerJournal,
         cap_slot: u32,
         inner_effects: &[Effect],
+        created_by_turn: [u8; 32],
     ) -> Result<(), (TurnError, Vec<usize>)> {
         let actor_cell = ledger
             .get(actor)
@@ -2199,8 +2221,18 @@ impl TurnExecutor {
         }
 
         // Execute each inner effect against the capability's target cell.
+        // Forward the SAME `created_by_turn` this exercise received: an inner
+        // grant/introduce derives its provenance from the same creating turn.
         for inner_effect in inner_effects {
-            self.apply_effect(inner_effect, ledger, path, &cap_target, actor, journal)?;
+            self.apply_effect(
+                inner_effect,
+                ledger,
+                path,
+                &cap_target,
+                actor,
+                journal,
+                created_by_turn,
+            )?;
         }
 
         Ok(())
@@ -2237,6 +2269,7 @@ impl TurnExecutor {
         recipient: &CellId,
         target: &CellId,
         permissions: &dregg_cell::AuthRequired,
+        created_by_turn: [u8; 32],
     ) -> Result<(), (TurnError, Vec<usize>)> {
         let intro_cell = ledger
             .get(introducer)
@@ -2266,6 +2299,10 @@ impl TurnExecutor {
                     path.to_vec(),
                 )
             })?;
+        // Capture the held (parent) cap's provenance NOW, before the mutable
+        // borrow of the recipient below: the introduced cap is a NEW derivation
+        // node CHAINING this parent + the creating turn.
+        let parent_provenance = held_cap.provenance;
         // KERNEL ALIGNMENT / authority-over-time: the introducer's held cap must
         // be LIVE at the current height. The exercise path
         // (`apply_exercise_via_capability`) already refuses an expired cap; the
@@ -2321,9 +2358,24 @@ impl TurnExecutor {
         }
         let recipient_cell = ledger.get_mut(recipient).unwrap();
         let expires_at = self.block_height + self.max_introduction_lifetime;
+        // PROVENANCE THREADING: install the introduced cap via the provenanced
+        // constructor, CHAINING the introducer's held-cap provenance (parent) and
+        // the creating turn (`created_by_turn`) instead of the context-free
+        // mint-rooted `grant_with_expiry` (parent = mint, turn = 0). This binds the
+        // introduced cap to the conferring edge and makes a re-introduction after a
+        // revoke collision-free at the same `(recipient, slot)`.
         let granted_slot = recipient_cell
             .capabilities
-            .grant_with_expiry(*target, permissions.clone(), expires_at)
+            .grant_provenanced(
+                *target,
+                permissions.clone(),
+                None,             // breadstuff
+                Some(expires_at), // expires_at
+                None,             // allowed_effects
+                None,             // stored_epoch
+                parent_provenance,
+                created_by_turn,
+            )
             .ok_or_else(|| {
                 (
                     TurnError::CapabilitySlotOverflow { cell: *recipient },
@@ -3810,7 +3862,15 @@ mod react_executor_tests {
         let mut ledger = Ledger::new();
         let mut journal = LedgerJournal::new();
         executor
-            .apply_effect(&notify, &mut ledger, &[0], &cell, &cell, &mut journal)
+            .apply_effect(
+                &notify,
+                &mut ledger,
+                &[0],
+                &cell,
+                &cell,
+                &mut journal,
+                [0u8; 32],
+            )
             .expect("notify deposits the hole");
         assert_eq!(
             executor.reactive_registry.lock().unwrap().len(),
@@ -3830,7 +3890,15 @@ mod react_executor_tests {
         let react = react_effect(&wake, condition.clone(), proof.clone());
         let mut journal1 = LedgerJournal::new();
         executor
-            .apply_effect(&react, &mut ledger, &[1], &cell, &cell, &mut journal1)
+            .apply_effect(
+                &react,
+                &mut ledger,
+                &[1],
+                &cell,
+                &cell,
+                &mut journal1,
+                [0u8; 32],
+            )
             .expect("a genuine react resolves once");
         assert!(
             executor
@@ -3850,7 +3918,15 @@ mod react_executor_tests {
         // This is the genuine double-spend refusal — NOT an unconditional Err:
         // the executor finds pending_id already in note_nullifiers and refuses.
         let mut journal2 = LedgerJournal::new();
-        let twice = executor.apply_effect(&react, &mut ledger, &[2], &cell, &cell, &mut journal2);
+        let twice = executor.apply_effect(
+            &react,
+            &mut ledger,
+            &[2],
+            &cell,
+            &cell,
+            &mut journal2,
+            [0u8; 32],
+        );
         let (err, _) = twice.expect_err("react-twice MUST be rejected by the nullifier gate");
         match err {
             TurnError::InvalidEffect { reason } => assert!(
@@ -3885,7 +3961,7 @@ mod react_executor_tests {
         let react = react_effect(&wake, condition.clone(), proof.clone());
         let mut j1 = LedgerJournal::new();
         executor
-            .apply_effect(&react, &mut ledger, &[0], &cell, &cell, &mut j1)
+            .apply_effect(&react, &mut ledger, &[0], &cell, &cell, &mut j1, [0u8; 32])
             .expect("first react spends the hole id");
         assert!(
             executor
@@ -3908,12 +3984,13 @@ mod react_executor_tests {
         };
         let mut jn = LedgerJournal::new();
         executor
-            .apply_effect(&notify, &mut ledger, &[1], &cell, &cell, &mut jn)
+            .apply_effect(&notify, &mut ledger, &[1], &cell, &cell, &mut jn, [0u8; 32])
             .expect("re-notify deposits a fresh live hole");
         assert_eq!(executor.reactive_registry.lock().unwrap().len(), 1);
 
         let mut j2 = LedgerJournal::new();
-        let replay = executor.apply_effect(&react, &mut ledger, &[2], &cell, &cell, &mut j2);
+        let replay =
+            executor.apply_effect(&react, &mut ledger, &[2], &cell, &cell, &mut j2, [0u8; 32]);
         let (err, _) = replay.expect_err("a replayed pending_id MUST be refused");
         assert!(
             matches!(err, TurnError::InvalidEffect { reason } if reason.contains("double-spend")),
@@ -3941,7 +4018,15 @@ mod react_executor_tests {
         };
         let mut ledger = Ledger::new();
         let mut journal = LedgerJournal::new();
-        let r = executor.apply_effect(&forged, &mut ledger, &[0], &cell, &cell, &mut journal);
+        let r = executor.apply_effect(
+            &forged,
+            &mut ledger,
+            &[0],
+            &cell,
+            &cell,
+            &mut journal,
+            [0u8; 32],
+        );
         let (err, _) = r.expect_err("a mismatched wake/pending_id MUST be refused");
         assert!(
             matches!(err, TurnError::InvalidEffect { reason } if reason.contains("binding")),
@@ -3972,7 +4057,15 @@ mod react_executor_tests {
         let react = react_effect(&wake, condition.clone(), wrong);
         let mut ledger = Ledger::new();
         let mut journal = LedgerJournal::new();
-        let r = executor.apply_effect(&react, &mut ledger, &[0], &cell, &cell, &mut journal);
+        let r = executor.apply_effect(
+            &react,
+            &mut ledger,
+            &[0],
+            &cell,
+            &cell,
+            &mut journal,
+            [0u8; 32],
+        );
         assert!(
             matches!(r, Err((TurnError::InvalidEffect { .. }, _))),
             "a wrong proof is refused"
@@ -3992,7 +4085,15 @@ mod react_executor_tests {
         let good_react = react_effect(&wake, cond2, good);
         let mut journal2 = LedgerJournal::new();
         executor
-            .apply_effect(&good_react, &mut ledger, &[1], &cell, &cell, &mut journal2)
+            .apply_effect(
+                &good_react,
+                &mut ledger,
+                &[1],
+                &cell,
+                &cell,
+                &mut journal2,
+                [0u8; 32],
+            )
             .expect("the genuine proof discharges the hole");
         assert!(
             executor
@@ -4185,6 +4286,7 @@ mod shielded_executor_tests {
             &cell,
             &cell,
             &mut journal,
+            [0u8; 32],
         )
     }
 
