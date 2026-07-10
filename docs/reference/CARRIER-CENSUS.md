@@ -372,3 +372,14 @@ QUOTIENT-CONSISTENCY step: verifyAlgo checks `C(ζ) = Z_H(ζ)·q(ζ)` at a rando
 MainAirAccept. The FRI low-degree half is banked (#2); the OOD-ζ consistency over the deployed descriptor is the
 unwritten keystone. Same SHAPE as DEBT-B's finite-map refinement (make the proof faithful to the deployed object).
 The `MainAirAccept ⟹ Satisfied2` half is already proved (6/8 legs @ transferV3, `AirLegsDischarged`).
+
+## ⚠⚠ DEBT-A K′(a) FINDING (2026-07-10, `e5820e030`, codex-proved + type-gated): committed MainAirAccept-over-ℤ is the WRONG MODEL
+The committed `MainAirAccept`/`arithResidual` (my brick-5 `d569bf31e`, over raw ℤ) is a MODELING MISMATCH:
+strictly STRONGER than the deployed field AIR, and FALSE for honest traces. Proof: `mainAirAcceptF_does_not_imply
+_MainAirAcceptZ` — the deployed gate `((col₀+col₁)*col₂)` at canonical columns `(p−1,1,1)` (all in [0,p),
+p=2013265921 prime) has integer residual `p ≠ 0` but BabyBear residual `0` (intermediate `(p−1)+1 = p ≡ 0`). So
+`≡0 mod p ⇏ =0 over ℤ` for compound multiplicative gates; additive/transition arms DO lift. The deployed prover is
+over BabyBear — its constraints ARE field constraints; raw-ℤ was the artifact. FIX (in progress, ADDITIVE): the
+field-faithful chain `MainAirAcceptF ⟹ Satisfied2`, fed by K′(a) `ood_forces_mainAirAccept_field` + K′(b)
+`constraintPoly` — built alongside; the ℤ chain (AirChecksSatisfied/AirLegsDischarged/AlgoStarkSoundInstance)
+retired at cutover, not mutated in place. This is a faithfulness correction toward the deployed object.
