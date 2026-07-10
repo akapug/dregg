@@ -400,6 +400,10 @@ impl TurnExecutor {
         excess: &mut i64,
         turn_nonce: u64,
         turn_agent: &CellId,
+        // The turn's pre-execution INPUT hash (`wake.hash()` / `turn.hash()`),
+        // threaded to `apply_effect` so any capability an effect INSTALLS folds the
+        // creating turn into its provenance (collision-free across slot reuse).
+        created_by_turn: [u8; 32],
     ) -> Result<(), (TurnError, Vec<usize>)> {
         let action = &tree.action;
 
@@ -789,7 +793,15 @@ impl TurnExecutor {
                 }
             }
 
-            self.apply_effect(effect, ledger, &path, &action.target, parent_cell, journal)?;
+            self.apply_effect(
+                effect,
+                ledger,
+                &path,
+                &action.target,
+                parent_cell,
+                journal,
+                created_by_turn,
+            )?;
             effects_hashes.push(effect.hash());
             // Mid-forest yield point: snapshot the live executor state between two
             // effects when the journal prefix reaches the configured boundary
@@ -811,7 +823,15 @@ impl TurnExecutor {
                 ));
             }
 
-            self.apply_effect(effect, ledger, &path, &action.target, parent_cell, journal)?;
+            self.apply_effect(
+                effect,
+                ledger,
+                &path,
+                &action.target,
+                parent_cell,
+                journal,
+                created_by_turn,
+            )?;
             effects_hashes.push(effect.hash());
             // Mid-forest yield point (permission-effect tail): same checkpoint.
             self.maybe_umem_yield(ledger, journal);
@@ -1158,6 +1178,7 @@ impl TurnExecutor {
                 excess,
                 turn_nonce,
                 turn_agent,
+                created_by_turn,
             )?;
         }
 

@@ -1067,6 +1067,10 @@ impl TurnExecutor {
                 &mut excess,
                 turn.nonce,
                 &turn.agent,
+                // `created_by_turn`: the pre-execution turn INPUT hash. NOT the
+                // post-execution receipt hash (which depends on the effects this
+                // turn applies — circular). Folded into installed-cap provenance.
+                turn.hash(),
             );
 
             if let Err((error, path)) = result {

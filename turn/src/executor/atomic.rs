@@ -1392,6 +1392,9 @@ impl TurnExecutor {
                     &action.target,
                     &mixed_turn.agent,
                     &mut journal,
+                    // `created_by_turn`: the mixed-atomic turn's pre-execution
+                    // structural INPUT hash — stable, input-only, non-circular.
+                    Self::mixed_atomic_turn_hash(mixed_turn),
                 ) {
                     journal.rollback(
                         ledger,

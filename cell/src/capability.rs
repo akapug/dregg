@@ -461,6 +461,45 @@ impl CapabilitySet {
         Some(slot)
     }
 
+    /// The provenanced twin of [`Self::grant_ref`]: the executor's
+    /// `GrantCapability` arm calls this, threading the creating turn's INPUT hash
+    /// (`wake.hash()`) as `created_by_turn`, so a revoke-then-regrant of the SAME
+    /// `(cell, slot)` in a DIFFERENT turn yields a DISTINCT provenance instead of
+    /// the context-free (turn = 0) collision `grant_ref` produces. The incoming
+    /// `cap.provenance` (from the wire) is treated as the untrusted PARENT and a
+    /// fresh chained provenance is RECOMPUTED on install — never copied — so the
+    /// installed cap cannot dodge a revoke of its source and cannot be born
+    /// carrying a revoked instance's `cred_nul`.
+    ///
+    /// Returns the assigned slot number, or `None` if the slot counter would
+    /// overflow.
+    pub fn grant_ref_provenanced(
+        &mut self,
+        cap: &CapabilityRef,
+        created_by_turn: [u8; 32],
+    ) -> Option<u32> {
+        // INVALIDATE the cached cap-root: this method appends to the c-list.
+        self.invalidate_cap_root_cache();
+        let slot = self.next_slot;
+        self.next_slot = self.next_slot.checked_add(1)?;
+        // A grant is a NEW derivation node at a NEW slot: derive a fresh
+        // provenance CHAINING the source cap's provenance (its parent) AND the
+        // creating turn — binding it to the source and distinguishing a regrant
+        // after a revoke from the revoked instance.
+        let provenance = cap_provenance(&cap.target, slot, &cap.provenance, &created_by_turn);
+        self.refs.push(CapabilityRef {
+            target: cap.target,
+            slot,
+            permissions: cap.permissions.clone(),
+            breadstuff: cap.breadstuff,
+            expires_at: cap.expires_at,
+            allowed_effects: cap.allowed_effects,
+            stored_epoch: cap.stored_epoch,
+            provenance,
+        });
+        Some(slot)
+    }
+
     /// Grant a capability carrying an R7 delegation-snapshot epoch: the
     /// grantor's `delegation_epoch` at store time. Exercise via the executor
     /// re-checks `stored_epoch >= grantor.delegation_epoch()` so the stored
