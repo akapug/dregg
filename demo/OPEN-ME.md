@@ -1,3 +1,43 @@
+# ▶ START HERE — the verifiable-fiction arcade
+
+**One command serves everything:**
+
+```
+node demo/serve.mjs          # → http://127.0.0.1:8787/hub   (the front door: every game)
+```
+
+The **collective stories** play out of the box. The **AI dungeon games** also need the game service
+(a real local LLM narrates them — needs `ollama` running `gemma2:2b`):
+
+```
+# terminal 1 — the attested dungeon service
+cargo run -p dungeon-service              # binds 127.0.0.1:7878
+# terminal 2 — the pages, proxying to it
+DM_PORT=7878 node demo/serve.mjs          # → http://127.0.0.1:8787/hub
+```
+> To vote with a passkey on The Commons, open `localhost` (not `127.0.0.1`) — WebAuthn rejects a bare IP.
+
+| game | route | what it is |
+|---|---|---|
+| **The Sunken Vault** | `/vault` | AI dungeon crawler — narrate yourself through a locked door, watch it refuse |
+| **Bramble Keep** | `/vault` (picker) | world-bounded NPCs + multi-turn combat — the AI can't make the Witch hand you the key |
+| **The Starfall Spire** | `/vault` (picker) | bounded spellcasting — an unlearned or unlisted spell does nothing |
+| **The Collective Dungeon** | `/party` | a crowd votes the party's move; the world still resolves it |
+| **The Attested Dungeon** | `/dungeon` | jailbreak the AI; it crowns you king; the ledger says you hold no crown |
+| **The Commons** | `/` | a crowd co-authors a story; the founding record cannot be rewritten |
+| **The Drowned Library** | `/` | collective adventure — carry the witnessed record out before the tide |
+
+**The one idea:** the AI narrates · the world resolves · the crowd decides · the chain remembers.
+**Prose is not power.**
+
+**Driven proofs** (each writes a screenshot + transcript under `demo/run/`):
+`node demo/run-vault.mjs` · `run-games.mjs` · `run-party.mjs` · `run-dungeon.mjs` · `run.mjs`
+
+**Native engine playthroughs** (no browser needed):
+`cargo run -p attested-dm --example play` (Sunken Vault) · `play2` (Bramble Keep) · `play3` (Starfall Spire)
+
+---
+
 # The Commons — a crowd authors a verifiable story
 
 A self-contained web page you open in the morning and **watch a crowd collectively
