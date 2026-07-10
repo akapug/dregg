@@ -275,3 +275,11 @@ AirSoundness.lean:234). `fold_close_of_two_alpha`/`friProximity_discharge` are f
   Also PROVED: the committed `wit_friExtract` is ACTIVELY HOLLOW (`degenerate_extracts_absurd` certifies a
   time-reversed `brokenSeg`, lastNew = -999). A non-degenerate instantiation exists but its FriExtract is a
   TAUTOLOGY at its CVS (`the_gap_is_reflection`) — stated plainly, not claimed as a discharge.
+- ⚠⚠⚠ DEBT-A TRUE BLOCKER `77d4b27cc` — modeling `verifyBatch` discharges only the CODE half
+  (DeployedRefines/DeployedMatchesModel, KAT-dischargeable via the existing dregg-lean-ffi harness+goldens).
+  `AlgoStarkSound.extract` contains `FriExtract` = a PROOF-OF-KNOWLEDGE obligation FRI cannot manufacture.
+  **Modeling verifyBatch does NOT finish DEBT-A.** The blocker is knowledge extraction, not FRI soundness.
+- ⚖ METHOD near-miss, recorded: a lane claimed "Merkle is STUBBED true — dangerous"; I nearly committed it. FALSE
+  — `friQueryCheck` calls `merkleVerify := decide (merkleRecompute … = root)`, ON the accept path. `merklePaths`
+  is a REDUNDANT field, as its doc-comment says. I read a SHAPE instead of the ARGUMENT. The rule cuts both ways.
+  VERIFIED GOOD: `fullChecks` implements every verifyAlgo sub-check for real — that claim checks out.
