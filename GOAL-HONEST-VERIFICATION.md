@@ -106,4 +106,11 @@ the sibling lane settles — not mine to touch/stash.
   (bites — false before). THE VACUITY IS GONE. Whole tree GREEN 4530.
   (Also: FinFrameHash needed `import Mathlib.Logic.Equiv.Finset` — a concurrent import-slimming lane trimmed
   the Mathlib.Tactic umbrella from Crypto/Primitives.lean. Diagnosed by controlled test; not the roots.)
-- ▶ NEXT: STEP 2 the delta de-risk (one-effect prototype) — decides delta-refactor vs bridge+tactic.
+- ✅ STEP 2 DELTA DE-RISK (DeltaProto.lean, green 1432, audited by type) — **YES, with costs separated.**
+  RECURRING square: ZERO per-cell by_cases (`denote_applyDelta` is effect-free, proved once). ONE-TIME migration
+  lemma: 2 per-cell by_cases (disclosed, isolated); VANISHES under redefinition (guard split only). Blast radius
+  of redefining the deployed ops: 150 files / 112 proof sites (re-derived independently).
+  DECISION: adopt the delta model for R3-continuation (Option A, low risk); DEFER redefinition (Option B) as its
+  own scoped campaign — 112 sites incl. the apex is not a DEBT-B move. Recorded in DELTA-FUTURE.md.
+- ▶ NEXT: STEP 3 R3-CONTINUATION — the remaining effects' squares via the delta model (note: `denote_applyDelta`
+  leverage is per-FIELD; CellDelta models balanceChange only — caps/lifecycle/heaps need their own field deltas).
