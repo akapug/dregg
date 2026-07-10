@@ -557,3 +557,13 @@ Real bugs found + fixed (each traced before touching, tests added, committed pat
 OPTIONAL follow-ups (lower priority, from the reviews): DSL duplicate-room-id silent overwrite → fail-closed;
 `items:lantern` no-space → diagnostic; combat hp<=0 / negative-damage → validator reject; fiction.rs no-vote-close
 auto-plays option 0 (behavioral). Bot deploy still auto-parked on the turn rev-converge.
+
+## ══ EXPANSION MODE (post-hardening, ember: "improve engine + frontend + discord, etc!") ══
+Building wide on the hardened base. Roadmap across 3 fronts:
+- ENGINE (attested-dm): consumables + status effects [FIRING a1266a3] → then save/load persistence → trade/economy.
+- FRONTEND (demo/): room-map visualizer + live-validating forge [FIRING ad398ba].
+- DISCORD (fiction.rs): GATED on the external turn rev-converge (can't compile yet); improve once it builds.
+Two lanes firing DISJOINT (attested-dm vs demo/); shared seam = the dungeon-service build (consumes attested-dm) —
+verify the COMBINED on-disk state at harvest. Discipline unchanged: additive, no GameAction variant, keep
+dungeon-service + the 4 games + DSL green, verify by driving, teeth whole.
+Aside: @DreggNet is fielding a real prospect (@itplaysout) — drafted 3 reply options; "the GM can't lie" is the pick.
