@@ -62,7 +62,7 @@ fn describe_op(op: &Op) -> String {
         Op::Add { id, content, after } => format!(
             "+ add {} '{}' after {}",
             atom_short(*id),
-            preview(content, 40),
+            preview(&content.render_text(), 40),
             atom_short(*after)
         ),
         Op::Delete { id } => format!("× delete {}", atom_short(*id)),
@@ -307,7 +307,7 @@ pub fn render_docgraph_nodes(doc: &Doc) -> AnyElement {
             };
             col = col.child(node_box(
                 &atom_short(a.id),
-                &format!("{status} · {}", preview(&a.content, 40)),
+                &format!("{status} · {}", preview(&a.content.render_text(), 40)),
                 true,
                 false,
             ));

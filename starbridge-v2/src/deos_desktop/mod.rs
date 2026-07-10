@@ -2740,7 +2740,15 @@ impl DeosDesktop {
     /// hypothetical boundary from an UNcommitted graph (a confined branch or a
     /// held conflict state).
     fn live_doc_boundary(&self, cell: &CellId) -> Option<[u8; 32]> {
-        Some(self.world.borrow().ledger().get(cell)?.state.heap_root)
+        Some(
+            self.world
+                .borrow()
+                .ledger()
+                .get(cell)?
+                .state
+                .heap_root
+                .to_bytes32(),
+        )
     }
 
     /// A short hex of a umem boundary root (the first/last bytes), for a face-row readout.
@@ -7360,7 +7368,7 @@ impl DeosDesktop {
             } else {
                 "dead·tombstone"
             };
-            let content_preview: String = a.content.chars().take(36).collect();
+            let content_preview: String = a.content.render_text().chars().take(36).collect();
             let label = if is_root {
                 "ROOT (anchor)".to_string()
             } else {
