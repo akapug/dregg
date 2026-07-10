@@ -298,5 +298,81 @@ theorem sign_produces_valid_sig :
     Dregg2.Crypto.MlDsaVerifyReal.verifyCore signPk.toList signMsg []
       (signCore signSk.toList signMsg []) = true := by native_decide
 
+/-! ## THE REAL, FULL-BYTE ML-DSA-65 SIGN over the wire (the brick-8 SIGN analog: the crate leaves the
+SIGN TCB).
+
+`signCore (sk msg ctx : List UInt8) : List UInt8` is the FULL-DIMENSION deterministic (`rnd = 0`) signer,
+proved byte-exact vs the `fips204` crate's deterministic signature (`sign_matches_crate_deterministic`).
+This section `@[export]`s it over a byte wire — the SAME `String → String` ABI `Fips204Verify.verifyRealFFI`
+uses (so the existing C string bridge + `leanc` link carry it unchanged) — so the DEPLOYED
+`dregg-pq::MlDsaKey::sign` — over the actual `sk ‖ msg ‖ ctx` bytes — runs the Lean-verified `signCore` as
+leanc-native code, and the `fips204` crate genuinely leaves the SIGN TCB.
+
+The wire is three SPACE-separated lowercase-hex fields `hex(sk) hex(msg) hex(ctx)`. An empty field (e.g.
+`ctx = ε`) is the empty token between two spaces. The reply is `hex(sig)` (the 3309-byte ML-DSA-65
+signature). Fail-CLOSED (`"ERR"`) on any malformed wire: not exactly three fields, an odd-length field, or
+a non-hex character. Because `signCore` is `rnd = 0` deterministic, the exported signer is deterministic —
+the FIPS 204 deterministic variant, spec-valid. -/
+
+/-- One lowercase/uppercase hex nibble → its `[0,16)` value; `none` on a non-hex char. -/
+def hexNibble? (c : Char) : Option UInt8 :=
+  let n := c.toNat
+  if '0'.toNat ≤ n ∧ n ≤ '9'.toNat then some (UInt8.ofNat (n - '0'.toNat))
+  else if 'a'.toNat ≤ n ∧ n ≤ 'f'.toNat then some (UInt8.ofNat (n - 'a'.toNat + 10))
+  else if 'A'.toNat ≤ n ∧ n ≤ 'F'.toNat then some (UInt8.ofNat (n - 'A'.toNat + 10))
+  else none
+
+/-- Decode a hex char list to bytes; `none` on an odd length or any non-hex char (fail-closed). -/
+def decodeHexChars : List Char → Option (List UInt8)
+  | [] => some []
+  | [_] => none
+  | hi :: lo :: rest => do
+    let h ← hexNibble? hi
+    let l ← hexNibble? lo
+    let rest' ← decodeHexChars rest
+    pure (UInt8.ofNat (h.toNat * 16 + l.toNat) :: rest')
+
+/-- One byte → two lowercase-hex chars. -/
+def toHexDigit (n : UInt8) : Char :=
+  let n := n.toNat
+  if n < 10 then Char.ofNat ('0'.toNat + n) else Char.ofNat ('a'.toNat + n - 10)
+
+/-- Encode bytes as a lowercase-hex string (`decodeHexChars` is its left inverse). -/
+def hexEncode (bs : List UInt8) : String :=
+  String.ofList (bs.foldr (fun b acc => toHexDigit (b / 16) :: toHexDigit (b % 16) :: acc) [])
+
+/-- The real byte wire `hex(sk) hex(msg) hex(ctx)` the SIGN FFI reads. -/
+def realSignWire (sk M ctx : List UInt8) : String :=
+  hexEncode sk ++ " " ++ hexEncode M ++ " " ++ hexEncode ctx
+
+/-- **FFI entry** (Rust→Lean) for the REAL, FULL-BYTE ML-DSA-65 SIGN (the brick-8 SIGN analog): parse the
+three hex fields `hex(sk) hex(msg) hex(ctx)`, run the Lean-verified `signCore` over the decoded bytes, and
+return `hex(sig)` (the 3309-byte signature). This runs the FULL-DIMENSION deterministic signer (`rnd = 0`,
+proved byte-exact vs the crate) as native code — the actual 4032-byte secret key → 3309-byte signature.
+Any malformed wire fails CLOSED (`"ERR"`). -/
+@[export dregg_fips204_sign_real]
+def signRealFFI (input : String) : String :=
+  match input.splitOn " " with
+  | [skH, msgH, ctxH] =>
+    match decodeHexChars skH.toList, decodeHexChars msgH.toList, decodeHexChars ctxH.toList with
+    | some sk, some m, some ctx => hexEncode (signCore sk m ctx)
+    | _, _, _ => "ERR"
+  | _ => "ERR"
+
+/-! ### Teeth — the byte-wire SIGN is NON-VACUOUS: the REAL crate's DETERMINISTIC signature is reproduced.
+
+The whole wire path (hex encode → split → hex decode → `signCore` → hex encode) reproduces the `fips204`
+v0.4.6 crate's deterministic signature `signSigDet` byte-for-byte, driven at build time with `native_decide`
+on the compiled `def`s. If ExpandMask, the rejection loop, MakeHint, skDecode, or the hex codec were wrong
+this reds. -/
+
+theorem signRealFFI_matches_crate_deterministic :
+    signRealFFI (realSignWire signSk.toList signMsg []) = hexEncode signSigDet.toList := by
+  native_decide
+
+-- A malformed wire fails CLOSED (interpreted `#guard`, fast): non-hex, wrong field count, odd-length hex.
+#guard signRealFFI "zz zz zz" = "ERR"
+#guard signRealFFI "00 00" = "ERR"
+#guard signRealFFI "0 0 0" = "ERR"
 
 end Dregg2.Crypto.MlDsaSignReal

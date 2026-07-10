@@ -266,6 +266,14 @@ fn build_dregg2_archive(meta: &Path, sysroot: &Path, archive: &Path, out_dir: &P
         // emitted and the splice picks up the export. This is the object `dregg-pq::HybridResponder::finish`
         // routes through to take the `ml-kem` crate OUT of the deployed KEM-decaps TCB.
         "Dregg2.Crypto.MlKemDecaps",
+        // FIPS-204-SIGN-REAL extraction (the brick-8 SIGN analog): the verified REAL, FULL-BYTE ML-DSA-65
+        // sign core (`@[export] dregg_fips204_sign_real` over `signCore` — the deterministic (`rnd = 0`)
+        // Fiat–Shamir-with-aborts signer: skDecode / ExpandMask / NTT / SampleInBall / MakeHint / rejection
+        // loop over the real 4032/3309-byte codec, proved byte-exact vs the crate's deterministic signature),
+        // OUTSIDE the FFI closure — build it so its `.c` IR is emitted and the splice picks up the export.
+        // This is the object `dregg-pq::MlDsaKey::sign` routes through to take the `fips204` crate OUT of the
+        // deployed SIGN TCB. Its OWN module `Dregg2.Crypto.MlDsaSignReal` (distinct from `Fips204Verify`).
+        "Dregg2.Crypto.MlDsaSignReal",
         // GRAIN R3 whole-history verify extraction: the verified R3-accept DECISION over the
         // whole-chain STARK verified-status + the R1 head binding (`@[export] dregg_grain_r3_verify`),
         // OUTSIDE the FFI closure — build it so its `.c` IR is emitted and the splice picks up the
@@ -1351,6 +1359,7 @@ fn main() {
     println!("cargo::rustc-check-cfg=cfg(dregg_fips204_verify_present)");
     println!("cargo::rustc-check-cfg=cfg(dregg_fips204_verify_real_present)");
     println!("cargo::rustc-check-cfg=cfg(dregg_fips204_sign_present)");
+    println!("cargo::rustc-check-cfg=cfg(dregg_fips204_sign_real_present)");
     println!("cargo::rustc-check-cfg=cfg(dregg_fips203_encaps_present)");
     println!("cargo::rustc-check-cfg=cfg(dregg_fips203_decaps_present)");
     println!("cargo::rustc-check-cfg=cfg(dregg_mlkem_decaps_real_present)");
@@ -1737,6 +1746,17 @@ fn main() {
         println!("cargo:rustc-cfg=dregg_fips204_sign_present");
     }
 
+    // FIPS-204-SIGN-REAL extraction (the brick-8 SIGN analog): probe the spliced archive for the
+    // `@[export] dregg_fips204_sign_real` symbol — the FULL-BYTE, full-dimension ML-DSA-65 sign
+    // (`MlDsaSignReal.signCore` over the real 4032/3309-byte key/signature, not the `A=id` scalar toy).
+    // Its module is `Dregg2.Crypto.MlDsaSignReal` (its OWN module, distinct from `Fips204Verify`), so like
+    // the K6 decaps core DREGG_FIPS204_SIGN_REAL gates BOTH the per-export extern+bridge AND the module
+    // initializer. Present ⇒ gate the Rust `extern "C"` block, the C shim string bridge, and the module init.
+    let fips204_sign_real_present = archive_exports(&build_archive, "dregg_fips204_sign_real");
+    if fips204_sign_real_present {
+        println!("cargo:rustc-cfg=dregg_fips204_sign_real_present");
+    }
+
     // FIPS-203-KEM extraction: probe the spliced archive for the `@[export] dregg_fips203_encaps` /
     // `dregg_fips203_decaps` symbols (the extracted, Lean-verified ML-KEM encaps/decaps cores). Present ⇒
     // gate the Rust `extern "C"` block, the C shim string bridges, and the module initializer. Both are
@@ -1828,6 +1848,12 @@ fn main() {
     }
     if fips204_sign_present {
         shim.define("DREGG_FIPS204_SIGN", None);
+    }
+    // FIPS-204-SIGN-REAL (the brick-8 SIGN analog): its own module `Dregg2.Crypto.MlDsaSignReal`, so
+    // DREGG_FIPS204_SIGN_REAL gates BOTH the per-export extern+bridge AND the module initializer (unlike the
+    // co-located `dregg_fips204_sign` which shares the verify module's init).
+    if fips204_sign_real_present {
+        shim.define("DREGG_FIPS204_SIGN_REAL", None);
     }
     // Either ML-KEM export present ⇒ define DREGG_FIPS203 (one module init serves both cores).
     if fips203_encaps_present || fips203_decaps_present {

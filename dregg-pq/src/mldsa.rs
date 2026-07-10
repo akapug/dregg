@@ -204,6 +204,136 @@ pub fn ml_dsa_sign_core(wire: &str) -> Option<Option<String>> {
     }
 }
 
+/// A pluggable, Lean-VERIFIED **REAL, FULL-BYTE** ML-DSA SIGN backend (the brick-8 SIGN analog), installed
+/// by an integration layer. Where [`LeanSignCore`] carries the `A=id` SCALAR reduction over a 5-int toy
+/// wire, THIS core carries the FULL-DIMENSION ML-DSA-65 signer over the actual `sk ‖ msg ‖ ctx` bytes.
+///
+/// The extracted core is `Dregg2.Crypto.MlDsaSignReal.signRealFFI` over `signCore` (the `n=256` negacyclic
+/// ring / NTT / SampleInBall / ExpandA / MakeHint / rejection loop / real 4032/3309-byte codec), `@[export]`ed
+/// as `dregg_fips204_sign_real` and compiled to leanc-native code. It is PROVED (`native_decide`) to
+/// reproduce a genuine `fips204` v0.4.6 crate DETERMINISTIC signature byte-for-byte
+/// (`sign_matches_crate_deterministic` / `signRealFFI_matches_crate_deterministic`), and its output is
+/// ACCEPTED by the verified `MlDsaVerifyReal.verifyCore` (`sign_produces_valid_sig`).
+/// `dregg-lean-ffi::shadow_fips204_sign_real` runs it natively.
+///
+/// dregg-pq stays a LIGHT leaf (it never depends on the 195 MB Lean archive): it takes a function pointer.
+/// An integration layer that CAN link the archive installs the native core via
+/// [`install_lean_sign_core_real`]; once installed, [`MlDsaKey::try_sign`] / [`ml_dsa_sign_from_seed`]
+/// PRODUCE the signature via the Lean-verified object over the real bytes — the `fips204` crate is NO LONGER
+/// the signing authority. The wire is `"hex(sk) hex(msg) hex(ctx)"`; the reply is `hex(sig)` (accepted) or
+/// `"ERR"` (malformed wire).
+///
+/// ⚠ DETERMINISTIC: the Lean `signCore` is the `rnd = 0` deterministic variant, so on the installed path the
+/// deployed signer is DETERMINISTIC (the FIPS 204 deterministic signing variant — spec-valid; the crate
+/// fallback path is hedged/randomized). Same 32-byte seed + ctx + message ⇒ identical signature bytes.
+type LeanSignCoreReal = fn(wire: &str) -> Option<String>;
+static LEAN_SIGN_CORE_REAL: OnceLock<LeanSignCoreReal> = OnceLock::new();
+
+/// Install the extracted, Lean-verified REAL, full-byte ML-DSA sign core (e.g.
+/// `|w| dregg_lean_ffi::shadow_fips204_sign_real(w).ok()`). Once installed, [`MlDsaKey::try_sign`] PRODUCES
+/// the signature through it — taking the `fips204` crate OUT of the sign TCB. Returns `false` if one is
+/// already installed (once-per-process; the verified core is not hot-swappable).
+pub fn install_lean_sign_core_real(core: LeanSignCoreReal) -> bool {
+    LEAN_SIGN_CORE_REAL.set(core).is_ok()
+}
+
+/// Whether a Lean-verified REAL sign core has been installed (so [`MlDsaKey::try_sign`] is Lean-backed rather
+/// than crate-signed). A deployed, verified node installs one at startup.
+pub fn lean_sign_core_real_installed() -> bool {
+    LEAN_SIGN_CORE_REAL.get().is_some()
+}
+
+/// Outcome of installing the Lean-verified REAL ML-DSA sign core as [`MlDsaKey::try_sign`]'s producer
+/// (via [`install_verified_mldsa_sign_core_real`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MlDsaSignCoreRealInstall {
+    /// The real core was installed by THIS call — the `fips204` crate is now out of the sign TCB.
+    Installed,
+    /// A core was already installed this process (install is once-per-process) — crate still out of TCB.
+    AlreadyInstalled,
+    /// The linked Lean archive does not export the real sign core; the `fips204`-crate fallback stays in
+    /// place (a valid FIPS-204 sign, but NOT the Lean-verified producer).
+    ExportAbsent,
+}
+
+/// THE ONE install every deployed, archive-linked process calls to make the Lean-verified REAL, full-byte
+/// ML-DSA sign core ([`install_lean_sign_core_real`]) the PRODUCER behind [`MlDsaKey::try_sign`] /
+/// [`ml_dsa_sign_from_seed`] — taking the `fips204` crate OUT of that process's sign TCB.
+///
+/// dregg-pq stays a LIGHT leaf: the two archive-dependent symbols are INJECTED as `fn` pointers rather than
+/// depended on. Every host passes the SAME two `dregg-lean-ffi` symbols:
+///
+/// ```ignore
+/// dregg_pq::install_verified_mldsa_sign_core_real(
+///     dregg_lean_ffi::fips204_sign_real_core_available,
+///     |w| dregg_lean_ffi::shadow_fips204_sign_real(w).ok(),
+/// )
+/// ```
+///
+/// Gated on `export_available()` (the `fips204_sign_real_core_available()` check): install ONLY when the
+/// linked archive actually EXPORTS the real core. A stale archive lacking it would make the installed core
+/// return `None` on every call and — because [`MlDsaKey::try_sign`] fails CLOSED on a core fault — produce
+/// no signature; so when the export is absent we return [`MlDsaSignCoreRealInstall::ExportAbsent`] and keep
+/// the `fips204`-crate fallback (a valid FIPS-204 sign) rather than bricking sign. Idempotent and
+/// once-per-process.
+pub fn install_verified_mldsa_sign_core_real(
+    export_available: fn() -> bool,
+    shadow: fn(wire: &str) -> Option<String>,
+) -> MlDsaSignCoreRealInstall {
+    if !export_available() {
+        return MlDsaSignCoreRealInstall::ExportAbsent;
+    }
+    if install_lean_sign_core_real(shadow) {
+        MlDsaSignCoreRealInstall::Installed
+    } else {
+        MlDsaSignCoreRealInstall::AlreadyInstalled
+    }
+}
+
+/// Marshal `(sk, msg, ctx)` into the byte wire the Lean real sign core reads:
+/// `"hex(sk) hex(msg) hex(ctx)"` (three space-separated lowercase-hex fields; an empty field is the empty
+/// token between two spaces).
+fn real_sign_wire(sk: &[u8], msg: &[u8], ctx: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut s = String::with_capacity((sk.len() + msg.len() + ctx.len()) * 2 + 2);
+    for (i, field) in [sk, msg, ctx].into_iter().enumerate() {
+        if i != 0 {
+            s.push(' ');
+        }
+        for &b in field {
+            s.push(HEX[(b >> 4) as usize] as char);
+            s.push(HEX[(b & 0x0f) as usize] as char);
+        }
+    }
+    s
+}
+
+/// Decode a lowercase-hex string (the Lean real sign core's `hex(sig)` reply) back to bytes. Returns `None`
+/// on an odd length or any non-hex character (so a `"ERR"` reply or a garbled wire fails CLOSED at the
+/// caller — no partial/spurious signature).
+fn decode_hex(s: &str) -> Option<Vec<u8>> {
+    if s.len() % 2 != 0 {
+        return None;
+    }
+    fn nibble(c: u8) -> Option<u8> {
+        match c {
+            b'0'..=b'9' => Some(c - b'0'),
+            b'a'..=b'f' => Some(c - b'a' + 10),
+            b'A'..=b'F' => Some(c - b'A' + 10),
+            _ => None,
+        }
+    }
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len() / 2);
+    for pair in bytes.chunks_exact(2) {
+        out.push((nibble(pair[0])? << 4) | nibble(pair[1])?);
+    }
+    Some(out)
+}
+
+/// Serialized length of an ML-DSA-65 secret key (FIPS 204 = 4032 bytes).
+pub const ML_DSA_SK_LEN: usize = ml_dsa_65::SK_LEN;
+
 /// Serialized length of an ML-DSA-65 public key (FIPS 204 = 1952 bytes).
 pub const ML_DSA_PK_LEN: usize = ml_dsa_65::PK_LEN;
 
@@ -255,7 +385,33 @@ impl MlDsaKey {
     /// Sign `message` under the caller-supplied FIPS 204 `ctx`. `None` only on
     /// the vanishingly rare internal RNG failure, which then fails CLOSED at
     /// verification (a present-but-absent PQ half rejects the hybrid).
+    ///
+    /// # The signature bytes come from the Lean-verified core, not the crate
+    ///
+    /// When a Lean-verified REAL sign core is installed ([`install_lean_sign_core_real`], done by any
+    /// process that can link `dregg-lean-ffi`), the 3309-byte signature is PRODUCED by the extracted,
+    /// full-dimension `MlDsaSignReal.signCore` (the brick-8 SIGN analog) over the actual `sk ‖ msg ‖ ctx`
+    /// bytes — running as leanc-native code, PROVED to reproduce a genuine crate DETERMINISTIC signature
+    /// byte-for-byte. On that path the `fips204` crate is NO LONGER trusted to sign: it is not consulted at
+    /// all. The signer becomes DETERMINISTIC (`rnd = 0`, the FIPS 204 deterministic variant — spec-valid).
+    ///
+    /// When NO verified core is installed (a caller that has not wired the Lean archive), this falls back to
+    /// the hedged `fips204` crate primitive. `dregg-pq` is a light leaf that cannot itself link the 195 MB
+    /// Lean archive, so the routing is an install-time seam; a deployed, verified node installs the real core
+    /// at startup and thereby leaves the crate out of the sign TCB.
     pub fn try_sign(&self, ctx: &[u8], message: &[u8]) -> Option<Vec<u8>> {
+        // AUTHORITY: the Lean-verified real sign core over the real bytes, when installed. The `fips204`
+        // crate is not consulted on this path — it has left the sign TCB.
+        if let Some(core) = LEAN_SIGN_CORE_REAL.get() {
+            let sk_bytes = self.secret.clone().into_bytes();
+            let wire = real_sign_wire(&sk_bytes, message, ctx);
+            // A `None` (FFI/archive fault), a `"ERR"` reply, or a wrong-length decode fails CLOSED (`None`),
+            // which then rejects at verification — never a partial/spurious signature.
+            let sig = decode_hex(core(&wire).as_deref()?)?;
+            return (sig.len() == ml_dsa_65::SIG_LEN).then_some(sig);
+        }
+
+        // FALLBACK (no verified core installed): the hedged `fips204` crate primitive.
         self.secret.try_sign(message, ctx).ok().map(|s| s.to_vec())
     }
 }

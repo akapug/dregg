@@ -229,6 +229,20 @@ extern lean_object *initialize_Dregg2_Dregg2_Crypto_MlKemDecaps(uint8_t builtin)
 extern lean_object *dregg_mlkem_decaps_real(lean_object *input);
 #endif
 
+/* THE brick-8 SIGN analog — the REAL, FULL-BYTE ML-DSA-65 SIGN export
+ * (`Dregg2.Crypto.MlDsaSignReal.signRealFFI`): decodes the wire `"hex(sk) hex(msg) hex(ctx)"`, runs the
+ * FULL-DIMENSION Lean-verified `signCore` (skDecode / ExpandMask / NTT / SampleInBall / ExpandA / MakeHint /
+ * the Fiat–Shamir-with-aborts rejection loop over the real 4032-byte sk — NOT the `A=id` scalar toy of
+ * `Fips204Verify`) and returns `hex(sig)` (the 3309-byte signature) or `"ERR"` on a malformed wire. This is
+ * the object that takes the `fips204` crate OUT of the deployed SIGN TCB. Unlike the co-located
+ * `dregg_fips204_sign`, this lives in its OWN module `Dregg2.Crypto.MlDsaSignReal`, so it needs its OWN
+ * initializer `initialize_Dregg2_Dregg2_Crypto_MlDsaSignReal` (run below). GATED on DREGG_FIPS204_SIGN_REAL
+ * (build.rs probes + defines it when the symbol is present). */
+#ifdef DREGG_FIPS204_SIGN_REAL
+extern lean_object *initialize_Dregg2_Dregg2_Crypto_MlDsaSignReal(uint8_t builtin);
+extern lean_object *dregg_fips204_sign_real(lean_object *input);
+#endif
+
 /* The @[export]ed Lean `String -> String` VERIFIED GRAIN R3 whole-history verify core
  * (`Dregg2.Grain.R3Verify.r3VerifyFFI`): decodes the wire `"aggregateVerified aggregateHead
  * anchoredHead"` (three decimal ints), runs the PROVED `r3VerifyCore`
@@ -387,6 +401,20 @@ int dregg_ffi_init(void) {
         return 1;
     }
     lean_dec_ref(kdres);
+#endif
+#ifdef DREGG_FIPS204_SIGN_REAL
+    /* THE brick-8 SIGN analog — the REAL, FULL-BYTE ML-DSA-65 sign-core module
+     * (`Dregg2.Crypto.MlDsaSignReal`) is OUTSIDE the FFI closure and is its OWN module (distinct from
+     * `Fips204Verify`), so initialize it explicitly so `dregg_fips204_sign_real` is callable. Its dependency
+     * closure (Crypto.Keccak / MlDsaRing / MlDsaSampleInBall / MlDsaExpandA / MlDsaCodec / MlDsaVerifyReal)
+     * is re-entrant-safe under Lean's init guards (shared with the real verify-core module above). */
+    lean_object *sdres = initialize_Dregg2_Dregg2_Crypto_MlDsaSignReal(1);
+    if (!lean_io_result_is_ok(sdres)) {
+        lean_io_result_show_error(sdres);
+        lean_dec_ref(sdres);
+        return 1;
+    }
+    lean_dec_ref(sdres);
 #endif
     /* NOTE: DREGG_GRAIN_R3_VERIFY needs NO module initializer here — `dregg_grain_r3_verify`'s
      * generated C is self-contained (static-const string literals + a lazy once-cell), and calling
@@ -593,6 +621,30 @@ size_t dregg_fips204_sign_str(const char *in_utf8, char *out, size_t out_cap) {
     }
     lean_object *in_obj = lean_mk_string(in_utf8);
     lean_object *res = dregg_fips204_sign(in_obj);
+    const char *cstr = lean_string_cstr(res);
+    size_t full = strlen(cstr);
+    size_t copy = (full < out_cap - 1) ? full : (out_cap - 1);
+    memcpy(out, cstr, copy);
+    out[copy] = '\0';
+    lean_dec_ref(res);
+    return full;
+}
+#endif
+
+#ifdef DREGG_FIPS204_SIGN_REAL
+/* dregg_fips204_sign_real_str — the C string bridge over the VERIFIED Lean `String -> String` REAL,
+ * FULL-BYTE ML-DSA-65 sign export (`Dregg2.Crypto.MlDsaSignReal.signRealFFI`, the brick-8 SIGN analog).
+ * Input: `"hex(sk) hex(msg) hex(ctx)"` (three space-separated lowercase-hex fields over the real 4032-byte
+ * secret key). Output: `hex(sig)` (the 3309-byte signature as lowercase hex) or `"ERR"` (the fail-closed
+ * answer for any malformed wire). Runs the FULL-DIMENSION `signCore` (proved to reproduce a genuine crate
+ * deterministic signature byte-for-byte by `signRealFFI_matches_crate_deterministic`) — the object that
+ * takes the `fips204` crate OUT of the deployed SIGN TCB. Same return contract as the bridges above. */
+size_t dregg_fips204_sign_real_str(const char *in_utf8, char *out, size_t out_cap) {
+    if (out == 0 || out_cap == 0) {
+        return (size_t)-1;
+    }
+    lean_object *in_obj = lean_mk_string(in_utf8);
+    lean_object *res = dregg_fips204_sign_real(in_obj);
     const char *cstr = lean_string_cstr(res);
     size_t full = strlen(cstr);
     size_t copy = (full < out_cap - 1) ? full : (out_cap - 1);
