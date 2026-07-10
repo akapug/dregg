@@ -34,7 +34,7 @@ fn setup_sovereign_cell(balance: u64) -> (AgentCipherclerk, CellId, Ledger) {
     cell.mode = CellMode::Sovereign;
     let cell_id = cell.id();
 
-    let nullifier_root = [0u8; 32];
+    let nullifier_root = dregg_circuit::heap_root::empty_heap_root_8();
     let commitments_root = [0u8; 32];
     let mut ctx_ledger = Ledger::new();
     let _ = ctx_ledger.insert_cell(cell.clone());
@@ -188,7 +188,7 @@ mod record_pin_anchor {
         cell.mode = CellMode::Sovereign;
         let cell_id = cell.id();
 
-        let nullifier_root = [0u8; 32];
+        let nullifier_root = dregg_circuit::heap_root::empty_heap_root_8();
         let commitments_root = [0u8; 32];
         let mut ctx_ledger = Ledger::new();
         let _ = ctx_ledger.insert_cell(cell.clone());
@@ -307,7 +307,7 @@ mod record_pin_anchor {
         );
 
         // Witness context, mirroring the cipherclerk producer's single-cell sovereign turn.
-        let nullifier_root = [0u8; 32];
+        let nullifier_root = dregg_circuit::heap_root::empty_heap_root_8();
         let commitments_root = [0u8; 32];
         let receipt_hashes: Vec<[u8; 32]> = Vec::new();
         let mut ctx_ledger = Ledger::new();
@@ -512,7 +512,7 @@ mod record_pin_anchor {
             "the forgery must move the authority digest off the honest post-value"
         );
 
-        let nullifier_root = [0u8; 32];
+        let nullifier_root = dregg_circuit::heap_root::empty_heap_root_8();
         let commitments_root = [0u8; 32];
         let receipt_hashes: Vec<[u8; 32]> = Vec::new();
         let mut ctx_ledger = Ledger::new();
@@ -664,7 +664,7 @@ mod record_pin_anchor {
         mutate(&mut cell);
         let cell_id = cell.id();
 
-        let nullifier_root = [0u8; 32];
+        let nullifier_root = dregg_circuit::heap_root::empty_heap_root_8();
         let commitments_root = [0u8; 32];
         let mut ctx_ledger = Ledger::new();
         let _ = ctx_ledger.insert_cell(cell.clone());
@@ -758,7 +758,7 @@ mod record_pin_anchor {
 
         let vm_effects = AgentCipherclerk::convert_effects_to_vm(&cell_id, effects);
 
-        let nullifier_root = [0u8; 32];
+        let nullifier_root = dregg_circuit::heap_root::empty_heap_root_8();
         let commitments_root = [0u8; 32];
         let receipt_hashes: Vec<[u8; 32]> = Vec::new();
         let mut ctx_ledger = Ledger::new();
@@ -1136,7 +1136,7 @@ mod record_pin_anchor {
         cell.mode = CellMode::Hosted;
         let cell_id = cell.id();
 
-        let nullifier_root = [0u8; 32];
+        let nullifier_root = dregg_circuit::heap_root::empty_heap_root_8();
         let commitments_root = [0u8; 32];
         let mut ctx_ledger = Ledger::new();
         let _ = ctx_ledger.insert_cell(cell.clone());
@@ -1249,7 +1249,7 @@ mod whole_turn_forest {
         cell.mode = CellMode::Sovereign;
         let cell_id = cell.id();
 
-        let nullifier_root = [0u8; 32];
+        let nullifier_root = dregg_circuit::heap_root::empty_heap_root_8();
         let commitments_root = [0u8; 32];
         let mut ctx_ledger = Ledger::new();
         let _ = ctx_ledger.insert_cell(cell.clone());
@@ -1450,7 +1450,7 @@ mod wall_a {
             direction: 1, // outgoing
         }];
 
-        let nullifier_root = [0u8; 32];
+        let nullifier_root = dregg_circuit::heap_root::empty_heap_root_8();
         let commitments_root = [0u8; 32];
         let receipt_hashes: Vec<[u8; 32]> = Vec::new();
         let mut ctx_ledger = Ledger::new();
@@ -1639,7 +1639,7 @@ mod multi_residue_record_pin {
         cell.mode = CellMode::Sovereign;
         let cell_id = cell.id();
 
-        let nullifier_root = [0u8; 32];
+        let nullifier_root = dregg_circuit::heap_root::empty_heap_root_8();
         let commitments_root = [0u8; 32];
         let mut ctx_ledger = Ledger::new();
         let _ = ctx_ledger.insert_cell(cell.clone());

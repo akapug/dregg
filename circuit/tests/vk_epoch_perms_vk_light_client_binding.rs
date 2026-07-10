@@ -184,7 +184,7 @@ fn setpermissions_forced_on_wire_rejects_forged_perms_anchor_disabled() {
     let mut after_cell = producer_cell(balance, 1); // nonce ticks
     after_cell.permissions = new_perms.clone();
     ledger.insert_cell(after_cell.clone()).unwrap();
-    let nullifier_root = [0u8; 32];
+    let nullifier_root = dregg_circuit::heap_root::empty_heap_root_8();
     let commitments_root = [0u8; 32];
     let receipt_log: Vec<[u8; 32]> = vec![[3u8; 32]];
 
@@ -367,7 +367,7 @@ fn setvk_forced_on_wire_rejects_forged_vk_anchor_disabled() {
     let mut after_cell = producer_cell(balance, 1);
     after_cell.verification_key = new_vk.clone();
     ledger.insert_cell(after_cell.clone()).unwrap();
-    let nullifier_root = [0u8; 32];
+    let nullifier_root = dregg_circuit::heap_root::empty_heap_root_8();
     let commitments_root = [0u8; 32];
     let receipt_log: Vec<[u8; 32]> = vec![[3u8; 32]];
 

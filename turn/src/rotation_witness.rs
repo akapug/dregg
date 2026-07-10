@@ -246,6 +246,16 @@ pub fn root_felt(root: &[u8; 32]) -> BabyBear {
     hash_bytes(root)
 }
 
+/// The faithful 8-felt root of the EMPTY nullifier accumulator — the native `CanonicalHeapTree8`
+/// empty root (only the MIN/MAX sentinels). THE value a producer passes for `nullifier_root` when
+/// no live accumulator root is threaded (a turn with no note-spend). Byte-identical to a fresh
+/// `dregg_cell::nullifier_set::NullifierSet::root8` (both fold the same empty `CanonicalHeapTree8`),
+/// so the empty default and a live-advanced root ride the SAME lanes.
+#[inline]
+pub fn empty_nullifier_root_8() -> dregg_circuit::Faithful8 {
+    dregg_circuit::heap_root::empty_heap_root_8()
+}
+
 /// **THE `cells_root` PRODUCER** — the turn-level boundary view over the present cells.
 ///
 /// The sorted-Poseidon2 root over one existence leaf per present cell (`value = 1`,
@@ -340,7 +350,7 @@ pub fn wire_commit_8(pre_limbs: &[BabyBear], iroot: BabyBear) -> dregg_circuit::
 pub fn produce(
     cell: &Cell,
     ledger: &Ledger,
-    nullifier_root: &[u8; 32],
+    nullifier_root: &dregg_circuit::Faithful8,
     commitments_root: &[u8; 32],
     receipt_hashes: &[[u8; 32]],
     material: &dregg_cell::commitment::RotationCarrierMaterial,
@@ -393,8 +403,14 @@ pub fn produce(
     // to `commitment::compute_rotated_pre_limbs`.
     dregg_cell::commitment::compute_canonical_capability_root_8(&cell.capabilities)
         .write_lanes(&mut pre_limbs, [25, 51, 52, 53, 54, 55, 56, 57]);
-    // limb 26: nullifier_root (the noteSpend shielded-set root).
-    pre_limbs[26] = root_felt(nullifier_root);
+    // limb 26: nullifier_root lane-0 (welded) ‖ extras 67..=73: the SEVEN nullifier-root completion
+    // felts. THE FAITHFUL 8-FELT NULLIFIER ROOT — the native `CanonicalHeapTree8` node8 (arity-16)
+    // sorted-Poseidon2 accumulator root the circuit's 8-felt `nullifier_root` column GROUP carries
+    // (lane 0 = limb 26, lanes 1..7 = limbs 67..73). The producer feeds the SAME `Faithful8` the cell
+    // twin's `V9RotationContext.nullifier_root` carries, so limbs [26,67..73] are byte-identical to
+    // `commitment::compute_rotated_pre_limbs`. This REPLACES the lossy 1-felt `root_felt(nullifier_root)`
+    // — the degraded-felt gate is satisfied for nullifier_root (the nullifier GENTIAN law).
+    nullifier_root.write_lanes(&mut pre_limbs, [26, 67, 68, 69, 70, 71, 72, 73]);
     // limb 27: commitments_root (the noteCreate shielded-set root — the flag-day new limb).
     pre_limbs[27] = root_felt(commitments_root);
     // limb 28: heap_root lane-0 (welded) ‖ extras 58..=64: the SEVEN heap-root completion felts
@@ -514,7 +530,7 @@ pub fn mint_rotated_participant_leg(
     effects: &[dregg_circuit::effect_vm::Effect],
     before_cell: &Cell,
     after_cell: &Cell,
-    nullifier_root: &[u8; 32],
+    nullifier_root: &dregg_circuit::Faithful8,
     commitments_root: &[u8; 32],
     receipt_log: &[[u8; 32]],
     turn_id: Option<BabyBear>,
@@ -697,7 +713,7 @@ pub fn mint_custom_wide_rotated_participant_leg(
     effects: &[dregg_circuit::effect_vm::Effect],
     before_cell: &Cell,
     after_cell: &Cell,
-    nullifier_root: &[u8; 32],
+    nullifier_root: &dregg_circuit::Faithful8,
     commitments_root: &[u8; 32],
     receipt_log: &[[u8; 32]],
     turn_id: Option<BabyBear>,
@@ -767,7 +783,7 @@ pub fn mint_welded_umem_rotated_participant_leg(
     effects: &[dregg_circuit::effect_vm::Effect],
     before_cell: &Cell,
     after_cell: &Cell,
-    nullifier_root: &[u8; 32],
+    nullifier_root: &dregg_circuit::Faithful8,
     commitments_root: &[u8; 32],
     receipt_log: &[[u8; 32]],
     turn_id: Option<BabyBear>,
@@ -855,7 +871,7 @@ pub fn mint_welded_wide_umem_rotated_participant_leg(
     effects: &[dregg_circuit::effect_vm::Effect],
     before_cell: &Cell,
     after_cell: &Cell,
-    nullifier_root: &[u8; 32],
+    nullifier_root: &dregg_circuit::Faithful8,
     commitments_root: &[u8; 32],
     receipt_log: &[[u8; 32]],
     turn_id: Option<BabyBear>,
@@ -939,7 +955,7 @@ pub fn mint_welded_wide_umem_cap_write_rotated_participant_leg(
     effects: &[dregg_circuit::effect_vm::Effect],
     before_cell: &Cell,
     after_cell: &Cell,
-    nullifier_root: &[u8; 32],
+    nullifier_root: &dregg_circuit::Faithful8,
     commitments_root: &[u8; 32],
     receipt_log: &[[u8; 32]],
     turn_id: Option<BabyBear>,
@@ -1029,7 +1045,7 @@ pub fn mint_welded_wide_umem_multidomain_rotated_participant_leg(
     effects: &[dregg_circuit::effect_vm::Effect],
     before_cell: &Cell,
     after_cell: &Cell,
-    nullifier_root: &[u8; 32],
+    nullifier_root: &dregg_circuit::Faithful8,
     commitments_root: &[u8; 32],
     receipt_log: &[[u8; 32]],
     turn_id: Option<BabyBear>,
@@ -1533,7 +1549,7 @@ mod tests {
         ledger.insert_cell(base.clone()).unwrap();
         let ctx = V9RotationContext {
             cells_root: cells_root(&ledger),
-            nullifier_root: [0u8; 32],
+            nullifier_root: empty_nullifier_root_8(),
             commitments_root: [0u8; 32],
             iroot: BabyBear::new(7),
             material: Default::default(),

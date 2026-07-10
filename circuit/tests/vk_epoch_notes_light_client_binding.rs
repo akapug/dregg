@@ -169,7 +169,7 @@ fn notespend_forced_on_wire_rejects_forged_nullifier_root_anchor_disabled() {
     let before_cell = producer_cell(before_balance, 0);
     let after_cell = producer_cell(before_balance + value as i64, 1);
     ledger.insert_cell(after_cell.clone()).unwrap();
-    let nullifier_root = [0u8; 32];
+    let nullifier_root = dregg_circuit::heap_root::empty_heap_root_8();
     let commitments_root = [0u8; 32];
     let receipt_log: Vec<[u8; 32]> = vec![[7u8; 32]];
 
@@ -335,7 +335,7 @@ fn notecreate_forced_on_wire_rejects_forged_commitments_root_anchor_disabled() {
     let before_cell = producer_cell(before_balance, 0);
     let after_cell = producer_cell(before_balance + value as i64, 1);
     ledger.insert_cell(after_cell.clone()).unwrap();
-    let nullifier_root = [0u8; 32];
+    let nullifier_root = dregg_circuit::heap_root::empty_heap_root_8();
     let commitments_root = [0u8; 32];
     let receipt_log: Vec<[u8; 32]> = vec![[11u8; 32]];
 
@@ -522,7 +522,7 @@ fn notecreate_forced_on_wire_through_live_wide_producer() {
     let before_cell = producer_cell(before_balance, 0);
     let after_cell = producer_cell(before_balance + value as i64, 1);
     ledger.insert_cell(after_cell.clone()).unwrap();
-    let nullifier_root = [0u8; 32];
+    let nullifier_root = dregg_circuit::heap_root::empty_heap_root_8();
     let commitments_root = [0u8; 32];
     let receipt_log: Vec<[u8; 32]> = vec![[11u8; 32]];
 

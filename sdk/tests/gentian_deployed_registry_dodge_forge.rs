@@ -167,7 +167,7 @@ fn declared_capacity_dodge_verifies_through_deployed_lightclient() {
     let before_cell = producer_cell(before_balance);
     let after_cell = producer_cell(before_balance - amount as i64);
     ledger.insert_cell(after_cell.clone()).unwrap();
-    let nullifier_root = [0u8; 32];
+    let nullifier_root = dregg_circuit::heap_root::empty_heap_root_8();
     let commitments_root = [0u8; 32];
     let receipt_log: Vec<[u8; 32]> = vec![[3u8; 32]];
     let before_w = rw::produce(
@@ -355,7 +355,7 @@ fn gate_b_discriminator_alone_rejects_declared_bare_route() {
     let before_cell = producer_cell(before_balance);
     let after_cell = producer_cell(before_balance - amount as i64);
     ledger.insert_cell(after_cell.clone()).unwrap();
-    let nullifier_root = [0u8; 32];
+    let nullifier_root = dregg_circuit::heap_root::empty_heap_root_8();
     let commitments_root = [0u8; 32];
     let receipt_log: Vec<[u8; 32]> = vec![[3u8; 32]];
     let before_w = rw::produce(

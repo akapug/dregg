@@ -252,6 +252,9 @@ pub fn rotation_witness_for_self_sovereign(
     receipt_hashes: &[[u8; 32]],
     effects: &[dregg_turn::Effect],
 ) -> Option<dregg_sdk::RotationTurnWitness> {
+    // The empty-frontier default (no live accumulator threaded — a non-spend turn on a node whose
+    // durable nullifier frontier is not seeded onto this per-turn executor). The native
+    // `CanonicalHeapTree8` empty root, NOT `[0u8; 32]`.
     rotation_witness_for_self_sovereign_impl(
         pre_balance,
         pre_nonce,
@@ -259,6 +262,36 @@ pub fn rotation_witness_for_self_sovereign(
         after_cell,
         receipt_hashes,
         effects,
+        &dregg_turn::rotation_witness::empty_nullifier_root_8(),
+    )
+}
+
+/// As [`rotation_witness_for_self_sovereign`], but the committed `nullifier_root` (limbs [26,67..73])
+/// is the LIVE nullifier-accumulator frontier the executor carries — `dregg_turn::TurnExecutor`'s
+/// `note_nullifiers.lock().root8()` (the native `CanonicalHeapTree8` root over the executor's live
+/// (nf, value) map). The live commit path (`blocklace_sync::execute_finalized_turn`) threads THIS so
+/// the rotated commitment binds the node's REAL spent-note frontier rather than a hardcoded default —
+/// closing the "committed nullifier root never reaches the state" gap for the non-spend rotated legs.
+/// A non-spend turn does not advance the frontier, so `nullifier_root` rides both the before and after
+/// block (before == after == the current frontier).
+#[allow(clippy::too_many_arguments)]
+pub fn rotation_witness_for_self_sovereign_with_root(
+    pre_balance: u64,
+    pre_nonce: u64,
+    before_cell: &dregg_cell::Cell,
+    after_cell: &dregg_cell::Cell,
+    receipt_hashes: &[[u8; 32]],
+    effects: &[dregg_turn::Effect],
+    nullifier_root: &dregg_circuit::Faithful8,
+) -> Option<dregg_sdk::RotationTurnWitness> {
+    rotation_witness_for_self_sovereign_impl(
+        pre_balance,
+        pre_nonce,
+        before_cell,
+        after_cell,
+        receipt_hashes,
+        effects,
+        nullifier_root,
     )
 }
 
@@ -278,6 +311,7 @@ pub fn rotation_witness_for_capability(
     receipt_hashes: &[[u8; 32]],
     effects: &[dregg_turn::Effect],
 ) -> Option<dregg_sdk::RotationTurnWitness> {
+    // The empty-frontier default (native `CanonicalHeapTree8` empty root, NOT `[0u8; 32]`).
     rotation_witness_for_capability_turn(
         pre_balance,
         pre_nonce,
@@ -286,6 +320,33 @@ pub fn rotation_witness_for_capability(
         after_cell,
         receipt_hashes,
         effects,
+        &dregg_turn::rotation_witness::empty_nullifier_root_8(),
+    )
+}
+
+/// As [`rotation_witness_for_capability`], but the committed `nullifier_root` (limbs [26,67..73]) is
+/// the executor's LIVE nullifier frontier (`note_nullifiers.lock().root8()`), threaded from the live
+/// commit path so a capability-gated non-spend turn binds the node's REAL spent-note frontier.
+#[allow(clippy::too_many_arguments)]
+pub fn rotation_witness_for_capability_with_root(
+    pre_balance: u64,
+    pre_nonce: u64,
+    pre_capability_root: BabyBear,
+    before_cell: &dregg_cell::Cell,
+    after_cell: &dregg_cell::Cell,
+    receipt_hashes: &[[u8; 32]],
+    effects: &[dregg_turn::Effect],
+    nullifier_root: &dregg_circuit::Faithful8,
+) -> Option<dregg_sdk::RotationTurnWitness> {
+    rotation_witness_for_capability_turn(
+        pre_balance,
+        pre_nonce,
+        pre_capability_root,
+        before_cell,
+        after_cell,
+        receipt_hashes,
+        effects,
+        nullifier_root,
     )
 }
 
@@ -343,9 +404,14 @@ fn rotation_witness_for_cap_less_turn(
         &cell,
         receipt_hashes,
         effects,
+        // The cap-less note-spend synthetic path opens the limb-26 grow-gate against the BEFORE
+        // nullifier set via `prove_and_verify_finalized_turn_freshness`'s `before_nullifiers` +
+        // `wide_commit_anchors`; the base producer carries the native empty frontier default here.
+        &dregg_turn::rotation_witness::empty_nullifier_root_8(),
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn rotation_witness_for_self_sovereign_impl(
     pre_balance: u64,
     pre_nonce: u64,
@@ -353,6 +419,7 @@ fn rotation_witness_for_self_sovereign_impl(
     after_cell: &dregg_cell::Cell,
     receipt_hashes: &[[u8; 32]],
     effects: &[dregg_turn::Effect],
+    nullifier_root: &dregg_circuit::Faithful8,
 ) -> Option<dregg_sdk::RotationTurnWitness> {
     use dregg_turn::rotation_witness as rw;
 
@@ -380,8 +447,10 @@ fn rotation_witness_for_self_sovereign_impl(
     let mut ctx_ledger = dregg_cell::Ledger::new();
     let _ = ctx_ledger.insert_cell(before_cell.clone());
 
-    // The non-spend self-sovereign turn spends no note → the empty nullifier root.
-    let nullifier_root = [0u8; 32];
+    // The non-spend self-sovereign turn spends no note, so it does not ADVANCE the nullifier
+    // frontier: the committed `nullifier_root` rides both the before and after block unchanged. Its
+    // value is the caller-threaded frontier (`rotation_witness_for_self_sovereign_with_root` passes
+    // the executor's live `note_nullifiers.root8()`; the bare entry passes the native empty root).
     let commitments_root = [0u8; 32];
 
     // COHORT GATE (PATH-PRESERVE §1/§4 Shape-1 cutover): the rotated effect-vm prover
@@ -423,7 +492,7 @@ fn rotation_witness_for_self_sovereign_impl(
     let before_w = rw::produce(
         before_cell,
         &ctx_ledger,
-        &nullifier_root,
+        nullifier_root,
         &commitments_root,
         receipt_hashes,
         &dregg_cell::commitment::RotationCarrierMaterial::default(),
@@ -431,7 +500,7 @@ fn rotation_witness_for_self_sovereign_impl(
     let after_w = rw::produce(
         after_cell,
         &ctx_ledger,
-        &nullifier_root,
+        nullifier_root,
         &commitments_root,
         receipt_hashes,
         &after_material,
@@ -472,6 +541,7 @@ fn rotation_witness_for_self_sovereign_impl(
 /// former zero-FIELDS demand — a field-bearing cap-holding cell now rotates (its real fields[0..8]
 /// flow through the seeded `initial_vm_state`; fields[8..16] + the authority residue ride the
 /// witness-carried r23). Any divergence ⇒ `None` and the byte-identical v1 cap leg runs.
+#[allow(clippy::too_many_arguments)]
 fn rotation_witness_for_capability_turn(
     pre_balance: u64,
     pre_nonce: u64,
@@ -480,6 +550,7 @@ fn rotation_witness_for_capability_turn(
     after_cell: &dregg_cell::Cell,
     receipt_hashes: &[[u8; 32]],
     effects: &[dregg_turn::Effect],
+    nullifier_root: &dregg_circuit::Faithful8,
 ) -> Option<dregg_sdk::RotationTurnWitness> {
     use dregg_turn::rotation_witness as rw;
 
@@ -511,11 +582,12 @@ fn rotation_witness_for_capability_turn(
     let mut ctx_ledger = dregg_cell::Ledger::new();
     let _ = ctx_ledger.insert_cell(before_cell.clone());
 
-    // A capability-gated turn carries no note in the cohort case routed here → the empty nullifier
-    // root (a cap-gated turn that ALSO spends fails the cohort gate below — its lead effect is not a
-    // single rotated note-spend member — and falls back to the v1 leg, which keeps the freshness
-    // tooth).
-    let nullifier_root = [0u8; 32];
+    // A capability-gated turn carries no note in the cohort case routed here → it does not advance
+    // the nullifier frontier (a cap-gated turn that ALSO spends fails the cohort gate below — its
+    // lead effect is not a single rotated note-spend member — and falls back to the v1 leg, which
+    // keeps the freshness tooth). The committed `nullifier_root` is the caller-threaded frontier
+    // (the executor's live `note_nullifiers.root8()` via `rotation_witness_for_capability_with_root`,
+    // or the native empty root via the bare entry), unchanged across the before/after block.
     let commitments_root = [0u8; 32];
 
     // COHORT GATE (PATH-PRESERVE §1/§4 Shape-1 cutover — identical to the self-sovereign builder):
@@ -563,7 +635,7 @@ fn rotation_witness_for_capability_turn(
     let before_w = rw::produce(
         before_cell,
         &ctx_ledger,
-        &nullifier_root,
+        nullifier_root,
         &commitments_root,
         receipt_hashes,
         &dregg_cell::commitment::RotationCarrierMaterial::default(),
@@ -571,7 +643,7 @@ fn rotation_witness_for_capability_turn(
     let after_w = rw::produce(
         after_cell,
         &ctx_ledger,
-        &nullifier_root,
+        nullifier_root,
         &commitments_root,
         receipt_hashes,
         &after_material,

@@ -742,8 +742,13 @@ pub const V9_NUM_PRE_LIMBS: usize = 1 + V9_NUM_REGISTERS + 4 + 3 + 5 + 75 + 57; 
 pub struct V9RotationContext {
     /// The turn-level boundary `cells_root` felt (limb 0).
     pub cells_root: dregg_circuit::field::BabyBear,
-    /// The cell's committed nullifier-map root (limb 26).
-    pub nullifier_root: [u8; 32],
+    /// The cell's committed FAITHFUL 8-felt nullifier-accumulator root (limb 26 lane-0 ‖ completion
+    /// lanes 67..=73). The native `CanonicalHeapTree8` node8 (arity-16) sorted-Poseidon2 accumulator
+    /// root the noteSpend grow-gate opens against (`EffectVmEmitRotationV3` writesTo8), sourced from
+    /// `dregg_cell::nullifier_set::NullifierSet::root8` (the live (nf, value) map). The empty-accumulator
+    /// default is `dregg_turn::rotation_witness::empty_nullifier_root_8` (=
+    /// `dregg_circuit::heap_root::empty_heap_root_8`).
+    pub nullifier_root: dregg_circuit::Faithful8,
     /// The committed note-COMMITMENTS-set root (limb 27 — the `commitments_root` flag-day limb).
     /// The shielded note-commitment set's accumulator root the noteCreate grow-gate opens against
     /// (`EffectVmEmitRotationV3.commitmentsInsertOp`). A turn-level set root, like `nullifier_root`.
@@ -1075,8 +1080,15 @@ pub fn compute_rotated_pre_limbs(
     // ledgerless). Byte-identical to `rotation_witness`'s producer fill.
     compute_canonical_capability_root_8(&cell.capabilities)
         .write_lanes(&mut pre, [25, 51, 52, 53, 54, 55, 56, 57]);
-    // limb 26: nullifier_root (the noteSpend shielded-set root).
-    pre[26] = hash_bytes(&ctx.nullifier_root);
+    // limb 26: nullifier_root lane-0 (welded) ‖ extras 67..=73: the SEVEN nullifier-root completion
+    // felts. THE FAITHFUL 8-FELT NULLIFIER ROOT — the native `CanonicalHeapTree8` node8 (arity-16)
+    // sorted-Poseidon2 accumulator root the circuit's 8-felt `nullifier_root` column GROUP carries
+    // (lane 0 = limb 26, lanes 1..7 = limbs 67..73). The in-circuit noteSpend grow-gate FORCES the
+    // AFTER group to the `writesTo8` native insert, so a ~31-bit collision at lane-0 differing in any
+    // completion felt is UNSAT (the nullifier GENTIAN law). This REPLACES the lossy 1-felt
+    // `hash_bytes(&ctx.nullifier_root)`. Byte-identical to `rotation_witness::produce`.
+    ctx.nullifier_root
+        .write_lanes(&mut pre, [26, 67, 68, 69, 70, 71, 72, 73]);
     // limb 27: commitments_root (the noteCreate shielded-set root — the flag-day new limb).
     pre[27] = hash_bytes(&ctx.commitments_root);
     // limb 28: heap_root lane-0 (welded) ‖ extras 58..=64: the SEVEN heap-root completion felts
@@ -1436,6 +1448,69 @@ mod tests {
         cell.verification_key = Some(crate::cell::VerificationKey::new(b"new-vk".to_vec()));
         let after = compute_canonical_state_commitment(&cell);
         assert_ne!(before, after);
+    }
+
+    /// VK-EPOCH RUST GHOST MIRROR — the nullifier accumulator root is committed FAITHFULLY across
+    /// all 8 rotated lanes ([26, 67..73]), not squeezed to the old lossy 1-felt, and it DISTINGUISHES
+    /// different nullifier frontiers. This is the cross-node anti-replay property that makes the whole
+    /// flip worth doing: two nodes with different spent-nullifier sets commit DIFFERENT state roots, so
+    /// a double-spend cannot finalize (an honest node's re-execution diverges → consensus rejects it).
+    #[test]
+    fn nullifier_root_faithful_8felt_and_cross_node_distinguishing() {
+        let cell = Cell::new(test_key(7), test_token(11));
+        let mk_ctx = |nr: dregg_circuit::Faithful8| V9RotationContext {
+            cells_root: BabyBear::ZERO,
+            nullifier_root: nr,
+            commitments_root: [0u8; 32],
+            iroot: BabyBear::ZERO,
+            material: RotationCarrierMaterial::default(),
+        };
+
+        // Two DIFFERENT nullifier frontiers (different spent nullifiers).
+        let mut set_a = crate::NullifierSet::new();
+        set_a
+            .insert(crate::note::Nullifier(test_key(3)), 100)
+            .unwrap();
+        let mut set_b = crate::NullifierSet::new();
+        set_b
+            .insert(crate::note::Nullifier(test_key(9)), 200)
+            .unwrap();
+        let root_a = set_a.root8();
+        let root_b = set_b.root8();
+
+        let limbs_a = compute_rotated_pre_limbs(&cell, &mk_ctx(root_a));
+        let limbs_b = compute_rotated_pre_limbs(&cell, &mk_ctx(root_b));
+
+        // (a) WRITE CORRECTNESS: committed limbs [26, 67..73] ARE the root's 8 lanes.
+        let ra = root_a.limbs();
+        assert_eq!(limbs_a[26], ra[0], "limb 26 must be root lane 0");
+        for i in 0..7 {
+            assert_eq!(
+                limbs_a[67 + i],
+                ra[1 + i],
+                "completion limb {} must be root lane {}",
+                67 + i,
+                1 + i
+            );
+        }
+
+        // (b) NON-VACUOUS: the completion lanes are NOT all zero (the old bug filled only lane 0).
+        assert!(
+            ra[1..8].iter().any(|&x| x != BabyBear::ZERO),
+            "faithful completion lanes 67..73 must be non-zero for a non-empty frontier"
+        );
+
+        // (c) CROSS-NODE ANTI-REPLAY: different frontiers -> different committed roots.
+        let committed = |l: &[BabyBear]| -> Vec<BabyBear> {
+            std::iter::once(l[26])
+                .chain(l[67..74].iter().copied())
+                .collect()
+        };
+        assert_ne!(
+            committed(&limbs_a),
+            committed(&limbs_b),
+            "different nullifier sets MUST commit different roots (else a double-spend finalizes cross-node)"
+        );
     }
 
     /// Canonical capability root must change with any capability addition.
@@ -2125,7 +2200,7 @@ mod tests {
     fn v9_ctx(cells_root: u32, iroot: u32) -> V9RotationContext {
         V9RotationContext {
             cells_root: BabyBear::new(cells_root),
-            nullifier_root: [0u8; 32],
+            nullifier_root: dregg_circuit::heap_root::empty_heap_root_8(),
             commitments_root: [0u8; 32],
             iroot: BabyBear::new(iroot),
             material: Default::default(),

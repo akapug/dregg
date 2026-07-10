@@ -132,7 +132,7 @@ fn carrier_inputs(
     cell.state.set_committed_height(committed_height as u64);
     let mut ledger = Ledger::new();
     ledger.insert_cell(cell.clone()).unwrap();
-    let nullifier_root = [0u8; 32];
+    let nullifier_root = dregg_circuit::heap_root::empty_heap_root_8();
     let commitments_root = [0u8; 32];
     let receipt_log: Vec<[u8; 32]> = vec![[1u8; 32], [2u8; 32]];
     let w = rw::produce(
