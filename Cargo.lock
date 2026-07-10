@@ -5371,6 +5371,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "dregg-dice"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "dregg-directory"
 version = "0.1.0"
 dependencies = [

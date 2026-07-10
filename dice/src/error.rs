@@ -1,0 +1,55 @@
+//! Error types for verification and drawing.
+
+use thiserror::Error;
+
+/// A verifier rejected randomness evidence.
+///
+/// Every variant is a *detectable* failure a re-executing light client raises
+/// when re-deriving the seed from `(request, evidence)`. None of these are
+/// availability/abort failures — those are a policy concern outside the pure
+/// verifier (see the crate docs on selective abort).
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum VerifyError {
+    /// The evidence's opening does not match its bound commitment (e.g. a
+    /// tampered commit-reveal `server_reveal` no longer hashes to the recorded
+    /// `server_commitment`).
+    #[error("commitment mismatch: evidence opening does not match its bound commitment")]
+    CommitmentMismatch,
+
+    /// The draw transcript recomputed from the re-derived seed does not match
+    /// the transcript commitment in the evidence. This fires when `draw_count`,
+    /// `event_kind`, the action, the pre-state, or any seed input was altered
+    /// after the evidence was produced — i.e. **grinding was detected**.
+    #[error("draw-transcript mismatch: seed/draw_count grinding detected")]
+    TranscriptMismatch,
+
+    /// The evidence's source kind is not the one this verifier understands
+    /// (e.g. calling `CommitReveal::seed` on `EvidenceKind::Beacon` evidence).
+    #[error("evidence source kind does not match this verifier")]
+    SourceMismatch,
+
+    /// The evidence was produced under a derivation version this build does not
+    /// support.
+    #[error("unsupported derivation version {found} (this build derives v{expected})")]
+    UnsupportedVersion { expected: u32, found: u32 },
+
+    /// The source requires an external backend that is not wired in this slice
+    /// (the `ServerVrf` / `Hybrid` stubs). The trait shape is fixed; the backend
+    /// is a documented follow-up.
+    #[error("source backend unavailable: {0}")]
+    BackendUnavailable(&'static str),
+}
+
+/// A draw was requested outside the bounds fixed by the request.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum DrawError {
+    /// `index >= draw_count`. `draw_count` is bound into the `EventId`, so the
+    /// legal index range is fixed before the seed exists; an out-of-range draw
+    /// is never part of a valid transcript.
+    #[error("draw index {index} out of range (draw_count = {draw_count})")]
+    IndexOutOfRange { index: u32, draw_count: u32 },
+
+    /// A bounded draw was requested with `n == 0`; `0..0` is empty.
+    #[error("bounded draw requires a non-zero bound")]
+    ZeroBound,
+}
