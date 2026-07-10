@@ -40,21 +40,23 @@ use crate::proxy_dial::{self, Fleet};
 use crate::serve::{Seam, ServeGateway};
 
 /// Step-result tag: the serve is DONE, the rest of the output is the response.
-const TAG_DONE: u8 = 0;
+pub(crate) const TAG_DONE: u8 = 0;
 /// Step-result tag: YIELDED `proxyDial` — byte 1 is the proven-chosen backend id,
 /// bytes 2.. are the request to forward.
-const TAG_YIELD_PROXY: u8 = 1;
+pub(crate) const TAG_YIELD_PROXY: u8 = 1;
 /// Step-result tag: YIELDED `cacheLookup` — bytes 1.. are the proven cache key.
-const TAG_YIELD_CACHE_LOOKUP: u8 = 2;
+pub(crate) const TAG_YIELD_CACHE_LOOKUP: u8 = 2;
 /// Step-result tag: YIELDED `cacheStore` — byte layout
 /// `[1] lifetime(4 BE) :: keyLen(4 BE) :: key :: resp`.
-const TAG_YIELD_CACHE_STORE: u8 = 3;
+pub(crate) const TAG_YIELD_CACHE_STORE: u8 = 3;
 
 /// Is the effect/continuation seam enabled? Gated behind `DRORB_EFFECT_SEAM=1` so
 /// the seam is opt-in and the default path stays on the established hooks + metered
 /// serve until the reconcile owner promotes it.
 pub fn enabled() -> bool {
-    std::env::var("DRORB_EFFECT_SEAM").map(|v| v == "1").unwrap_or(false)
+    std::env::var("DRORB_EFFECT_SEAM")
+        .map(|v| v == "1")
+        .unwrap_or(false)
 }
 
 /// A conservative host-side ROUTING PREFILTER (not the decision): should this
@@ -103,9 +105,39 @@ pub fn lb_selector() -> u8 {
     }
 }
 
+/// The live health/breaker bitmask the proven proxy pick reads; `0` when no fleet
+/// is configured (a cache/plain request needs no backends). Shared with the async
+/// io_uring step path so it frames the SAME mask the blocking interpreter does.
+pub fn current_mask() -> u8 {
+    fleet().map(|f| f.mask()).unwrap_or(0)
+}
+
+/// The step/resume seams and framing prefix the running deployment dials with — the
+/// SAME selection [`run_effect_serve`] makes, factored out so the async io_uring
+/// step path (`uring::submit_step` / `uring::submit_resume`) crosses the identical
+/// seam pair and threads the identical prefix. See `run_effect_serve` for the
+/// selection rationale (config-policy seams under `DRORB_CONFIG`, else the legacy
+/// `DRORB_LB_POLICY` selector).
+pub fn seams() -> (Seam, Seam, Option<u8>) {
+    if let Some(dep) = crate::config::get() {
+        (
+            Seam::ServeStepPol,
+            Seam::ServeResumePol,
+            Some(dep.lb_policy),
+        )
+    } else {
+        let sel = lb_selector();
+        if sel == 0 {
+            (Seam::ServeStep, Seam::ServeResume, None)
+        } else {
+            (Seam::ServeStepCfg, Seam::ServeResumeCfg, Some(sel))
+        }
+    }
+}
+
 /// Frame the step input the proven core decodes: `mask :: request` (default) or
 /// `prefix :: mask :: request` (a selector / LB-policy byte, when present).
-fn frame_step(prefix: Option<u8>, mask: u8, req: &[u8], buf: &mut PooledBuf) {
+pub(crate) fn frame_step(prefix: Option<u8>, mask: u8, req: &[u8], buf: &mut PooledBuf) {
     buf.clear();
     if let Some(p) = prefix {
         buf.push(p);
@@ -117,7 +149,13 @@ fn frame_step(prefix: Option<u8>, mask: u8, req: &[u8], buf: &mut PooledBuf) {
 /// Frame the resume input: `[prefix ::] mask :: reqLen(4 BE) :: request :: count ::
 /// (resultLen(4 BE) :: result)*`, so the proven core recovers `(mask, request)` to
 /// replay plus the GROWING list of recorded effect results.
-fn frame_resume(prefix: Option<u8>, mask: u8, req: &[u8], results: &[Vec<u8>], buf: &mut PooledBuf) {
+pub(crate) fn frame_resume(
+    prefix: Option<u8>,
+    mask: u8,
+    req: &[u8],
+    results: &[Vec<u8>],
+    buf: &mut PooledBuf,
+) {
     buf.clear();
     if let Some(p) = prefix {
         buf.push(p);
@@ -144,24 +182,15 @@ pub fn run_effect_serve(
 ) -> Option<Vec<u8>> {
     // The mask is the live health/breaker bitmask the proven proxy pick reads; 0
     // when no fleet is configured (a cache/plain request needs no backends).
-    let mask = fleet().map(|f| f.mask()).unwrap_or(0);
+    let mask = current_mask();
 
-    // Choose the step/resume seams and the framing prefix:
+    // Choose the step/resume seams and the framing prefix (see `seams`):
     //  * an ARBITRARY operator config (DRORB_CONFIG, parsed at boot) drives the
     //    config-POLICY seams (`ServeStepPol`/`ServeResumePol`), threading the parsed
     //    pool's LB-policy byte — the running dial runs the config's declared policy;
     //  * else the legacy `DRORB_LB_POLICY` selector: `0` the default step/resume
     //    (byte-identical), non-zero the named-deployment config seams.
-    let (step_seam, resume_seam, prefix) = if let Some(dep) = crate::config::get() {
-        (Seam::ServeStepPol, Seam::ServeResumePol, Some(dep.lb_policy))
-    } else {
-        let sel = lb_selector();
-        if sel == 0 {
-            (Seam::ServeStep, Seam::ServeResume, None)
-        } else {
-            (Seam::ServeStepCfg, Seam::ServeResumeCfg, Some(sel))
-        }
-    };
+    let (step_seam, resume_seam, prefix) = seams();
 
     // 1. STEP: ask the proven core what to do with this request.
     let mut step_in = gw.pool().take();
@@ -212,12 +241,36 @@ pub fn run_effect_serve(
                 let key = &cur[1..];
                 match crate::cache::global().lookup_coalescing(key) {
                     Some(hit) => {
-                        eprintln!("dataplane: serveStep YIELDED cacheLookup -> HIT/coalesced (handler NOT run)");
+                        eprintln!(
+                            "dataplane: serveStep YIELDED cacheLookup -> HIT/coalesced (handler NOT run)"
+                        );
                         results.push(hit);
                     }
                     None => {
-                        eprintln!("dataplane: serveStep YIELDED cacheLookup -> MISS/leader (core runs the fold once)");
-                        results.push(Vec::new());
+                        // HOT miss (this caller leads the cold key). Consult the
+                        // durable COLD tier before running the fold: a fresh disk
+                        // entry is promoted into the hot tier (waking any coalesced
+                        // waiters) and served stamped X-Cache: HIT — the handler is
+                        // NOT run. Gated by DRORB_DISK_CACHE (else a no-op miss).
+                        let disk = crate::cache_disk::global();
+                        match if disk.enabled() {
+                            disk.promote_on_miss(key, crate::cache_disk::now_secs())
+                        } else {
+                            None
+                        } {
+                            Some(hit) => {
+                                eprintln!(
+                                    "dataplane: serveStep YIELDED cacheLookup -> COLD-tier HIT (promoted, handler NOT run)"
+                                );
+                                results.push(hit);
+                            }
+                            None => {
+                                eprintln!(
+                                    "dataplane: serveStep YIELDED cacheLookup -> MISS/leader (core runs the fold once)"
+                                );
+                                results.push(Vec::new());
+                            }
+                        }
                     }
                 }
             }
@@ -237,6 +290,16 @@ pub fn run_effect_serve(
                     resp.len()
                 );
                 crate::cache::global().store(&key, &resp, lifetime);
+                // Also write the durable COLD tier so the entry survives a
+                // restart (gated by DRORB_DISK_CACHE; a no-op otherwise). The
+                // proven core already decided cacheability/key/lifetime.
+                let disk = crate::cache_disk::global();
+                if disk.enabled()
+                    && lifetime != 0
+                    && let Err(e) = disk.put(&key, &resp, crate::cache_disk::now_secs(), lifetime)
+                {
+                    eprintln!("dataplane: disk-cache write failed (advisory): {e}");
+                }
                 results.push(Vec::new()); // store ack (ignored by the core)
             }
 

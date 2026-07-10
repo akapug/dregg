@@ -61,7 +61,15 @@ pub enum Frame {
     NeedMore,
     /// A complete request occupies the first `usize` bytes of the buffer.
     Complete(usize),
-    /// The request exceeds [`REQUEST_CAP`]; the connection must be closed.
+    /// The request must be refused by closing the connection: either it exceeds
+    /// [`REQUEST_CAP`], or its body framing is ambiguous/malformed (a
+    /// `Content-Length` overlapping a chunked `Transfer-Encoding`, or a
+    /// duplicate/conflicting/non-integer `Content-Length` — RFC 9112 §6.1/§6.3).
+    /// The framing-ambiguity case mirrors the machine-checked
+    /// `Body.Smuggling.decide` / `Body.Framing.frameFixed` (`.reject`) decision,
+    /// proven never to resolve such a message to a fixed-length body
+    /// (`Body.Framing.frame_no_smuggle`), so no octet is reinterpreted as a
+    /// smuggled second request.
     Oversize,
 }
 
@@ -82,6 +90,10 @@ pub fn next_request(data: &[u8]) -> Frame {
 
     // 2. Frame the body.
     match body_frame(&data[..head_end]) {
+        // Ambiguous/malformed framing (CL.TE overlap, duplicate/invalid
+        // Content-Length): a single, unsplittable fate — close the connection.
+        // Matches the proven `Body.Framing.frameFixed = .reject` decision.
+        BodyFrame::Reject => Frame::Oversize,
         BodyFrame::Fixed(n) => {
             let total = head_end + n;
             if total > REQUEST_CAP {
@@ -118,6 +130,9 @@ enum BodyFrame {
     Fixed(usize),
     /// Body is chunked; the host must scan chunk framing to find its end.
     Chunked,
+    /// Framing is ambiguous or malformed and the message must be refused
+    /// (CL.TE overlap, duplicate/conflicting or invalid Content-Length).
+    Reject,
 }
 
 /// Case-insensitive search for `needle` (lowercase ASCII) in `hay`.
@@ -147,7 +162,9 @@ fn header_value<'a>(head: &'a [u8], name: &[u8]) -> Option<&'a [u8]> {
         if let Some(colon) = line.iter().position(|&c| c == b':') {
             let (n, v) = line.split_at(colon);
             if n.len() == name.len()
-                && n.iter().zip(name).all(|(a, b)| a.to_ascii_lowercase() == *b)
+                && n.iter()
+                    .zip(name)
+                    .all(|(a, b)| a.to_ascii_lowercase() == *b)
             {
                 let val = &v[1..]; // skip ':'
                 let start = val
@@ -167,18 +184,92 @@ fn header_value<'a>(head: &'a [u8], name: &[u8]) -> Option<&'a [u8]> {
     None
 }
 
+/// Collect every value of header `name` (lowercase, colon-free) in the head
+/// block, in wire order. Used to detect duplicate/conflicting framing headers
+/// that `header_value`'s first-match lookup would hide.
+fn header_values<'a>(head: &'a [u8], name: &[u8]) -> Vec<&'a [u8]> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < head.len() {
+        let line_end = head[i..]
+            .windows(2)
+            .position(|w| w == b"\r\n")
+            .map(|p| i + p)
+            .unwrap_or(head.len());
+        let line = &head[i..line_end];
+        if let Some(colon) = line.iter().position(|&c| c == b':') {
+            let (n, v) = line.split_at(colon);
+            if n.len() == name.len()
+                && n.iter()
+                    .zip(name)
+                    .all(|(a, b)| a.to_ascii_lowercase() == *b)
+            {
+                let val = &v[1..];
+                let start = val
+                    .iter()
+                    .position(|&c| c != b' ' && c != b'\t')
+                    .unwrap_or(val.len());
+                let end = val
+                    .iter()
+                    .rposition(|&c| c != b' ' && c != b'\t')
+                    .map(|p| p + 1)
+                    .unwrap_or(start);
+                out.push(&val[start..end]);
+            }
+        }
+        i = line_end + 2;
+    }
+    out
+}
+
 /// Given the head bytes (through CRLFCRLF), decide how the body is framed.
+///
+/// This mirrors the proven `Body.Smuggling.decide` / `Body.Framing.frameFixed`
+/// classifier (Lean): a `Content-Length` that overlaps a chunked
+/// `Transfer-Encoding`, or two conflicting / a non-integer `Content-Length`, is
+/// *rejected* rather than framed one way — closing the request-smuggling
+/// (CL.TE / TE.CL / dup-CL) desync class that `header_value`'s first-match
+/// lookup would otherwise leave open. On the safe cases (a single well-formed
+/// `Content-Length`, or `chunked` alone, or neither) the decision is unchanged.
 fn body_frame(head: &[u8]) -> BodyFrame {
-    if let Some(te) = header_value(head, b"transfer-encoding") {
-        if find_ci(te, b"chunked").is_some() {
-            return BodyFrame::Chunked;
+    let te_chunked = header_values(head, b"transfer-encoding")
+        .iter()
+        .any(|te| find_ci(te, b"chunked").is_some());
+
+    // Classify Content-Length: absent, a single agreed value, conflicting
+    // (`dup`), or non-integer (`invalid`).
+    let mut cl_present = false;
+    let mut cl_bad = false;
+    let mut cl_val: Option<usize> = None;
+    for cl in header_values(head, b"content-length") {
+        cl_present = true;
+        match std::str::from_utf8(cl)
+            .ok()
+            .map(str::trim)
+            .and_then(|s| s.parse::<usize>().ok())
+        {
+            Some(n) => match cl_val {
+                Some(prev) if prev != n => cl_bad = true, // conflicting values
+                _ => cl_val = Some(n),
+            },
+            None => cl_bad = true, // non-integer value
         }
     }
-    if let Some(cl) = header_value(head, b"content-length") {
-        let s = std::str::from_utf8(cl).ok().map(str::trim).unwrap_or("");
-        if let Ok(n) = s.parse::<usize>() {
-            return BodyFrame::Fixed(n);
-        }
+
+    // RFC 9112 §6.1: Content-Length together with Transfer-Encoding: chunked is
+    // the CL.TE/TE.CL overlap — refuse it (no fixed-length interpretation).
+    if te_chunked && cl_present {
+        return BodyFrame::Reject;
+    }
+    // Duplicate/conflicting or non-integer Content-Length — refuse it.
+    if cl_bad {
+        return BodyFrame::Reject;
+    }
+    if te_chunked {
+        return BodyFrame::Chunked;
+    }
+    if let Some(n) = cl_val {
+        return BodyFrame::Fixed(n);
     }
     BodyFrame::Fixed(0)
 }

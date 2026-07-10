@@ -33,7 +33,10 @@ fn main() {
             .arg("--print-prefix")
             .output()
             .expect("`lean --print-prefix` failed — is the Lean toolchain (elan) on PATH?");
-        assert!(out.status.success(), "`lean --print-prefix` returned non-zero");
+        assert!(
+            out.status.success(),
+            "`lean --print-prefix` returned non-zero"
+        );
         PathBuf::from(String::from_utf8(out.stdout).unwrap().trim())
     };
     let lean_include = prefix.join("include");
@@ -66,7 +69,11 @@ fn main() {
     assert!(status.success(), "ar on drorb_ffi.o failed");
 
     // 2. The leanc-compiled proven serve archive (built by build-dataplane-lib.sh).
-    let drorb_a = repo_root.join(".lake").join("build").join("lib").join("libdrorb.a");
+    let drorb_a = repo_root
+        .join(".lake")
+        .join("build")
+        .join("lib")
+        .join("libdrorb.a");
     assert!(
         drorb_a.exists(),
         "missing {} — run ffi/build-dataplane-lib.sh first (lake build Dataplane:static + archive)",
@@ -110,7 +117,10 @@ fn main() {
         println!("cargo:rerun-if-changed={}", crypto_shim.display());
         println!("cargo:rustc-link-arg={}", crypto_shim.display());
     } else {
-        println!("cargo:warning=crypto shim {} absent — linking without it (fine when the serve closure references no crypto)", crypto_shim.display());
+        println!(
+            "cargo:warning=crypto shim {} absent — linking without it (fine when the serve closure references no crypto)",
+            crypto_shim.display()
+        );
     }
 
     // The CGI process-spawn shim (`ffi/cgi_exec.o`, a POSIX fork/execve/pipe/waitpid
@@ -122,7 +132,9 @@ fn main() {
         println!("cargo:rerun-if-changed={}", cgi_exec.display());
         println!("cargo:rustc-link-arg={}", cgi_exec.display());
     } else {
-        println!("cargo:warning=ffi/cgi_exec.o absent — run ffi/build-cgi-shim.sh (the serve closure now reaches the CGI route)");
+        println!(
+            "cargo:warning=ffi/cgi_exec.o absent — run ffi/build-cgi-shim.sh (the serve closure now reaches the CGI route)"
+        );
     }
 
     // The QUIC datagram fork (`drorb_serve_datagram`) reaches `QuicHeaderProt`,
@@ -138,7 +150,9 @@ fn main() {
         println!("cargo:rerun-if-changed={}", mac_udp.display());
         println!("cargo:rustc-link-arg={}", mac_udp.display());
     } else {
-        println!("cargo:warning=ffi/mac_udp.o absent — linking without it (fine when the serve closure references no QUIC header protection)");
+        println!(
+            "cargo:warning=ffi/mac_udp.o absent — linking without it (fine when the serve closure references no QUIC header protection)"
+        );
     }
 
     // The TLS front door (`drorb_tls_serve`) does its own blocking socket I/O
@@ -152,7 +166,9 @@ fn main() {
         println!("cargo:rerun-if-changed={}", derp_net.display());
         println!("cargo:rustc-link-arg={}", derp_net.display());
     } else {
-        println!("cargo:warning=ffi/derp_net.o absent — run ffi/build-derp-net.sh (the TLS front door needs its TCP byte-mover)");
+        println!(
+            "cargo:warning=ffi/derp_net.o absent — run ffi/build-derp-net.sh (the TLS front door needs its TCP byte-mover)"
+        );
     }
 
     // The RFC 8446 §9.1 certificate signature backend (`ffi/tls_p256_shim.o`:
@@ -167,7 +183,30 @@ fn main() {
         println!("cargo:rerun-if-changed={}", tls_p256.display());
         println!("cargo:rustc-link-arg={}", tls_p256.display());
     } else {
-        println!("cargo:warning=ffi/tls_p256_shim.o absent — run ffi/build-tls-p256-shim.sh (the TLS front door's RSA/ECDSA cert pool needs its HACL* signer)");
+        println!(
+            "cargo:warning=ffi/tls_p256_shim.o absent — run ffi/build-tls-p256-shim.sh (the TLS front door's RSA/ECDSA cert pool needs its HACL* signer)"
+        );
+    }
+
+    // The cake--pancake-compiled native /health responder (`ffi/health/
+    // libhealthserve.a`: health.S from `cake --pancake` + the re-entrant driver
+    // health_ffi.c). Runtime-free — it carries its own CakeML heap/GC, so it needs
+    // no Lean runtime. Linked WHEN PRESENT; `serve.rs` gates the native path behind
+    // both this `drorb_health_native` cfg and the `DRORB_HEALTH_NATIVE` env, so the
+    // default build and default runtime are entirely unaffected. Build the archive
+    // with `ffi/health/build-health-lib.sh`.
+    println!("cargo::rustc-check-cfg=cfg(drorb_health_native)");
+    let health_dir = repo_root.join("ffi").join("health");
+    let health_lib = health_dir.join("libhealthserve.a");
+    if health_lib.exists() {
+        println!("cargo:rerun-if-changed={}", health_lib.display());
+        println!("cargo:rustc-link-search=native={}", health_dir.display());
+        println!("cargo:rustc-link-lib=static=healthserve");
+        println!("cargo:rustc-cfg=drorb_health_native");
+    } else {
+        println!(
+            "cargo:warning=ffi/health/libhealthserve.a absent — native /health demo disabled (run ffi/health/build-health-lib.sh)"
+        );
     }
 
     let aes_dir = repo_root.join("target").join("release");
@@ -175,7 +214,9 @@ fn main() {
         println!("cargo:rustc-link-search=native={}", aes_dir.display());
         println!("cargo:rustc-link-lib=static=aes_fallback");
     } else {
-        println!("cargo:warning=libaes_fallback.a absent — linking without it (fine when the serve closure references no crypto)");
+        println!(
+            "cargo:warning=libaes_fallback.a absent — linking without it (fine when the serve closure references no crypto)"
+        );
     }
 
     // HACL*/EverCrypt distribution (external toolchain). Overridable via
@@ -184,11 +225,16 @@ fn main() {
         let home = std::env::var("HOME").unwrap();
         format!("{home}/src/hacl-star/dist/gcc-compatible")
     });
-    if std::path::Path::new(&hacl_dist).join("libevercrypt.a").exists() {
+    if std::path::Path::new(&hacl_dist)
+        .join("libevercrypt.a")
+        .exists()
+    {
         println!("cargo:rustc-link-search=native={hacl_dist}");
         println!("cargo:rustc-link-lib=static=evercrypt");
     } else {
-        println!("cargo:warning=libevercrypt.a absent under {hacl_dist} — linking without it (fine when the serve closure references no crypto)");
+        println!(
+            "cargo:warning=libevercrypt.a absent under {hacl_dist} — linking without it (fine when the serve closure references no crypto)"
+        );
     }
 
     // Find the runtime dylibs (libleanshared + its libleanshared_1 sibling) at

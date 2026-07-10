@@ -209,9 +209,11 @@ impl Fleet {
     pub fn spawn_health_checks(self: Arc<Self>, interval: Duration) {
         std::thread::Builder::new()
             .name("drorb-proxy-health".into())
-            .spawn(move || loop {
-                self.probe_once();
-                std::thread::sleep(interval);
+            .spawn(move || {
+                loop {
+                    self.probe_once();
+                    std::thread::sleep(interval);
+                }
             })
             .expect("failed to spawn the proxy health-check thread");
     }
@@ -333,11 +335,11 @@ fn read_response(sock: &mut TcpStream) -> std::io::Result<Vec<u8>> {
     Ok(buf)
 }
 
-fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
+pub(crate) fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
 }
 
-fn content_length(head: &[u8]) -> Option<usize> {
+pub(crate) fn content_length(head: &[u8]) -> Option<usize> {
     for line in head.split(|&c| c == b'\n') {
         let line = line.strip_suffix(b"\r").unwrap_or(line);
         if line.len() >= 15 && line[..15].eq_ignore_ascii_case(b"content-length:") {
@@ -346,6 +348,365 @@ fn content_length(head: &[u8]) -> Option<usize> {
         }
     }
     None
+}
+
+/// Whether the response head declares `Transfer-Encoding: chunked`.
+pub(crate) fn is_chunked(head: &[u8]) -> bool {
+    for line in head.split(|&c| c == b'\n') {
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        if line.len() >= 18 && line[..18].eq_ignore_ascii_case(b"transfer-encoding:") {
+            let v = trim_ascii(&line[18..]).to_ascii_lowercase();
+            return v.windows(7).any(|w| w == b"chunked");
+        }
+    }
+    false
+}
+
+/// The outcome of a STREAMED proxy forward: the metadata the host records for a
+/// response whose body it wrote straight to the client instead of buffering.
+pub struct Streamed {
+    /// The response head (status line + headers, through CRLFCRLF) as written to
+    /// the client — annotated with the host's connection disposition. The host
+    /// reads only the status line off it (metrics / access log).
+    pub head: Vec<u8>,
+    /// Total bytes written to the client (annotated head + streamed body).
+    pub bytes: u64,
+    /// Whether the upstream framing lets the client connection stay open
+    /// (Content-Length or chunked, AND the request asked for keep-alive, AND the
+    /// body streamed to its framed end). A close-delimited body or a mid-stream
+    /// error forces the connection closed.
+    pub keepalive: bool,
+    /// Whether the body reached its framed end with no upstream/client error — a
+    /// clean forward, for the circuit breaker.
+    pub complete: bool,
+}
+
+/// The bounded copy buffer for the streaming body pump: one block held at a time,
+/// so peak host memory for a forward is this plus the response head regardless of
+/// the upstream body size. A slow client back-pressures the upstream because the
+/// next upstream read only happens after the current block is written to the
+/// client (TCP flow control on the upstream socket then throttles the backend).
+const STREAM_CHUNK: usize = 64 * 1024;
+
+/// Forward `req` to `addr` and STREAM the upstream response to `client` as it
+/// arrives — the head first (so time-to-first-byte tracks the upstream, not the
+/// whole body), then the body copied block-by-block with a bounded buffer — rather
+/// than reading the whole reply into memory and returning it. The host annotates
+/// the head with its keep-alive disposition (never overriding an upstream
+/// `Connection` header, preserving the proven serve's header contract), then
+/// frames the body by Content-Length, chunked (streamed verbatim up to its
+/// terminating zero-chunk), or, with neither, connection close (streamed to EOF).
+///
+/// `Err` is returned ONLY when nothing has reached the client yet (dial failure,
+/// request-write failure, or the upstream closing before a full response head) so
+/// the caller may still send a 502. Once the head is on the wire a later error
+/// just stops the stream and surfaces as `complete = false`; the caller closes the
+/// connection rather than corrupting the response already in flight.
+pub fn forward_streaming<W: Write>(
+    addr: SocketAddr,
+    req: &[u8],
+    timeout: Duration,
+    keepalive_req: bool,
+    client: &mut W,
+) -> std::io::Result<Streamed> {
+    let mut up = TcpStream::connect_timeout(&addr, timeout)?;
+    up.set_nodelay(true).ok();
+    up.set_read_timeout(Some(timeout)).ok();
+    up.set_write_timeout(Some(timeout)).ok();
+    up.write_all(req)?;
+    up.flush()?;
+
+    // 1. Read the response head (through CRLFCRLF). A single read may over-read
+    //    into the body; those bytes are kept in `buf` past `head_end`.
+    let mut buf = Vec::with_capacity(4096);
+    let mut chunk = vec![0u8; STREAM_CHUNK];
+    let head_end = loop {
+        if let Some(p) = find(&buf, b"\r\n\r\n") {
+            break p + 4;
+        }
+        let n = up.read(&mut chunk)?;
+        if n == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "upstream closed before a full response head",
+            ));
+        }
+        buf.extend_from_slice(&chunk[..n]);
+    };
+
+    // 2. Framing + keep-alive disposition from the head.
+    let clen = content_length(&buf[..head_end]);
+    let chunked = is_chunked(&buf[..head_end]);
+    let self_delimited = clen.is_some() || chunked;
+    let keepalive = keepalive_req && self_delimited;
+
+    // 3. Annotate the head with the host's connection disposition (only when the
+    //    upstream states none), then write it. From here a failure is mid-stream.
+    let mut head = buf[..head_end].to_vec();
+    crate::http::annotate_connection(&mut head, keepalive);
+    if client.write_all(&head).is_err() {
+        return Ok(Streamed {
+            head,
+            bytes: 0,
+            keepalive: false,
+            complete: false,
+        });
+    }
+    let mut bytes = head.len() as u64;
+
+    // 4. Stream the body per its framing. `leftover` is the body bytes already
+    //    read while finding the head end.
+    let leftover = &buf[head_end..];
+    let complete = match clen {
+        Some(clen) => stream_fixed(&mut up, client, leftover, clen, &mut chunk, &mut bytes),
+        None if chunked => stream_chunked(&mut up, client, leftover, &mut chunk, &mut bytes),
+        None => stream_to_eof(&mut up, client, leftover, &mut chunk, &mut bytes),
+    };
+
+    Ok(Streamed {
+        head,
+        bytes,
+        keepalive: keepalive && complete,
+        complete,
+    })
+}
+
+/// Stream exactly `clen` body bytes from `up` to `client`, starting with the
+/// already-read `leftover`. Returns whether the full body was delivered.
+fn stream_fixed<W: Write>(
+    up: &mut TcpStream,
+    client: &mut W,
+    leftover: &[u8],
+    clen: usize,
+    chunk: &mut [u8],
+    bytes: &mut u64,
+) -> bool {
+    let mut remaining = clen;
+    let take = leftover.len().min(remaining);
+    if take > 0 {
+        if client.write_all(&leftover[..take]).is_err() {
+            return false;
+        }
+        *bytes += take as u64;
+        remaining -= take;
+    }
+    while remaining > 0 {
+        let n = match up.read(chunk) {
+            Ok(0) => return false, // upstream truncated the body
+            Ok(n) => n,
+            Err(_) => return false,
+        };
+        let w = n.min(remaining);
+        if client.write_all(&chunk[..w]).is_err() {
+            return false;
+        }
+        *bytes += w as u64;
+        remaining -= w;
+    }
+    true
+}
+
+/// Stream a close-delimited body (no Content-Length, not chunked) to EOF. The
+/// connection cannot be kept alive, but events are forwarded as they arrive — an
+/// upstream that drips (e.g. `text/event-stream`) reaches the client incrementally.
+fn stream_to_eof<W: Write>(
+    up: &mut TcpStream,
+    client: &mut W,
+    leftover: &[u8],
+    chunk: &mut [u8],
+    bytes: &mut u64,
+) -> bool {
+    if !leftover.is_empty() {
+        if client.write_all(leftover).is_err() {
+            return false;
+        }
+        *bytes += leftover.len() as u64;
+    }
+    loop {
+        let n = match up.read(chunk) {
+            Ok(0) => return true, // upstream closed: the response is complete
+            Ok(n) => n,
+            Err(_) => return false,
+        };
+        if client.write_all(&chunk[..n]).is_err() {
+            return false;
+        }
+        *bytes += n as u64;
+    }
+}
+
+/// Stream a chunked body verbatim to the client, parsing a copy just enough to
+/// detect the terminating zero-chunk so the client connection can stay open
+/// without waiting for the upstream to close. Same bounded buffer / back-pressure
+/// as the fixed path. Returns whether the terminator was reached cleanly.
+fn stream_chunked<W: Write>(
+    up: &mut TcpStream,
+    client: &mut W,
+    leftover: &[u8],
+    chunk: &mut [u8],
+    bytes: &mut u64,
+) -> bool {
+    let mut parser = ChunkedParser::new();
+    if !leftover.is_empty() {
+        if client.write_all(leftover).is_err() {
+            return false;
+        }
+        *bytes += leftover.len() as u64;
+        if parser.advance(leftover) {
+            return true;
+        }
+    }
+    loop {
+        let n = match up.read(chunk) {
+            Ok(0) => return false, // upstream closed before the terminating chunk
+            Ok(n) => n,
+            Err(_) => return false,
+        };
+        if client.write_all(&chunk[..n]).is_err() {
+            return false;
+        }
+        *bytes += n as u64;
+        if parser.advance(&chunk[..n]) {
+            return true;
+        }
+    }
+}
+
+/// An incremental HTTP/1.1 chunked-transfer parser. It never buffers the body; it
+/// only tracks enough state across streamed blocks to report when the terminating
+/// zero-length chunk (and its trailer/CRLF) has been fully seen.
+pub(crate) struct ChunkedParser {
+    st: ChunkSt,
+    size: usize,
+}
+
+enum ChunkSt {
+    /// Reading the chunk-size hex line; `size` accumulates.
+    Size,
+    /// In a chunk extension (`;…`) on the size line — skip to CR.
+    SizeExt,
+    /// Saw the CR of the size line; the next byte is its LF.
+    SizeCr,
+    /// Consuming this many remaining data bytes of the current chunk.
+    Data(usize),
+    /// After the chunk data, the CR of its trailing CRLF.
+    DataCr,
+    /// After the chunk-data CR, its LF.
+    DataLf,
+    /// Start of a trailer line after the last-chunk (or the final CRLF).
+    TrailerStart,
+    /// Within a trailer line, before its CR.
+    TrailerLine,
+    /// Saw the CR of a trailer line; the next byte is its LF.
+    TrailerLineCr,
+    /// Saw the CR of the final empty line; the next byte is its LF → done.
+    TrailerFinalCr,
+    /// The terminating zero-chunk has been fully consumed.
+    Done,
+}
+
+impl ChunkedParser {
+    pub(crate) fn new() -> Self {
+        ChunkedParser {
+            st: ChunkSt::Size,
+            size: 0,
+        }
+    }
+
+    /// Advance the parser over `data`. Returns `true` once the terminating
+    /// zero-chunk (with any trailers and the final CRLF) has been consumed.
+    pub(crate) fn advance(&mut self, data: &[u8]) -> bool {
+        let mut i = 0;
+        while i < data.len() {
+            match self.st {
+                ChunkSt::Size => {
+                    let b = data[i];
+                    match b {
+                        b'0'..=b'9' => {
+                            self.size = self.size * 16 + (b - b'0') as usize;
+                            i += 1;
+                        }
+                        b'a'..=b'f' => {
+                            self.size = self.size * 16 + (b - b'a' + 10) as usize;
+                            i += 1;
+                        }
+                        b'A'..=b'F' => {
+                            self.size = self.size * 16 + (b - b'A' + 10) as usize;
+                            i += 1;
+                        }
+                        b'\r' => {
+                            self.st = ChunkSt::SizeCr;
+                            i += 1;
+                        }
+                        b';' => {
+                            self.st = ChunkSt::SizeExt;
+                            i += 1;
+                        }
+                        _ => i += 1, // tolerate stray whitespace on the size line
+                    }
+                }
+                ChunkSt::SizeExt => {
+                    if data[i] == b'\r' {
+                        self.st = ChunkSt::SizeCr;
+                    }
+                    i += 1;
+                }
+                ChunkSt::SizeCr => {
+                    i += 1; // consume the LF
+                    self.st = if self.size == 0 {
+                        ChunkSt::TrailerStart
+                    } else {
+                        ChunkSt::Data(self.size)
+                    };
+                }
+                ChunkSt::Data(n) => {
+                    let take = n.min(data.len() - i);
+                    i += take;
+                    let left = n - take;
+                    self.st = if left == 0 {
+                        ChunkSt::DataCr
+                    } else {
+                        ChunkSt::Data(left)
+                    };
+                }
+                ChunkSt::DataCr => {
+                    i += 1; // consume the CR after the chunk data
+                    self.st = ChunkSt::DataLf;
+                }
+                ChunkSt::DataLf => {
+                    i += 1; // consume the LF
+                    self.size = 0;
+                    self.st = ChunkSt::Size;
+                }
+                ChunkSt::TrailerStart => {
+                    if data[i] == b'\r' {
+                        self.st = ChunkSt::TrailerFinalCr;
+                        i += 1;
+                    } else {
+                        self.st = ChunkSt::TrailerLine;
+                    }
+                }
+                ChunkSt::TrailerLine => {
+                    if data[i] == b'\r' {
+                        self.st = ChunkSt::TrailerLineCr;
+                    }
+                    i += 1;
+                }
+                ChunkSt::TrailerLineCr => {
+                    i += 1; // consume the LF ending a trailer line
+                    self.st = ChunkSt::TrailerStart;
+                }
+                ChunkSt::TrailerFinalCr => {
+                    // The final LF closes the terminating zero-chunk; the response
+                    // is done and any bytes past it belong to no more of this reply.
+                    self.st = ChunkSt::Done;
+                    return true;
+                }
+                ChunkSt::Done => return true,
+            }
+        }
+        matches!(self.st, ChunkSt::Done)
+    }
 }
 
 /// A `502 Bad Gateway` response (the chosen backend could not be reached).
@@ -361,41 +722,95 @@ pub fn service_unavailable() -> Vec<u8> {
         .to_vec()
 }
 
-/// The whole reverse-proxy hop for one request, given a `pick` that returns the
-/// PROVEN backend choice (the `drorb_proxy_pick` seam: `(mask, key) → id`).
+/// What the host records after a STREAMED proxy hop: the response head (status
+/// line for metrics / the access log), the total bytes written, whether the
+/// client connection may stay open, and the dialled backend (for the log / metric
+/// per-backend counter). The body itself was already written straight to the
+/// client by [`forward_streaming`], never buffered.
+pub struct StreamOutcome {
+    pub head: Vec<u8>,
+    pub bytes: u64,
+    pub keepalive: bool,
+    pub backend: Option<String>,
+}
+
+/// The whole streaming reverse-proxy hop for one request: the proven pick +
+/// breaker + sticky-affinity discipline, but the upstream response is STREAMED to
+/// `client` as it arrives (via [`forward_streaming`]) instead of buffered and
+/// returned. The backend is ALWAYS the proven pick's; this function never selects.
 ///
-/// * ask the proven selector which backend, feeding it the live mask + sticky key;
-/// * map the id to its socket and dial it, forwarding the request;
-/// * record breaker success/failure so repeated upstream failures open the breaker;
-/// * on no eligible backend → 503; on a dial/forward error → 502.
-///
-/// The backend is ALWAYS the proven pick's; this function never selects. Returns
-/// the response bytes and, on a successful forward, the dialled backend address
-/// (for the access log; `None` on 502/503).
-pub fn handle<P>(req: &[u8], fleet: &Fleet, pick: P) -> (Vec<u8>, Option<String>)
+/// It writes the whole response (a streamed upstream reply, or a 502/503 when no
+/// backend is eligible / reachable) to `client` and returns the [`StreamOutcome`]
+/// the host records. `Err` is only the case where a client write failed and the
+/// connection must be dropped.
+pub fn handle_streaming<P, W: Write>(
+    req: &[u8],
+    keepalive_req: bool,
+    fleet: &Fleet,
+    client: &mut W,
+    pick: P,
+) -> std::io::Result<StreamOutcome>
 where
     P: Fn(u8, &[u8]) -> Option<u32>,
 {
     let key = sticky_key(req);
     let id = match pick(fleet.mask(), &key) {
         Some(id) => id,
-        None => return (service_unavailable(), None),
+        None => {
+            let resp = service_unavailable();
+            client.write_all(&resp)?;
+            return Ok(StreamOutcome {
+                bytes: resp.len() as u64,
+                head: resp,
+                keepalive: false,
+                backend: None,
+            });
+        }
     };
     let addr = match fleet.addr(id) {
         Some(a) => a,
-        None => return (bad_gateway(), None),
+        None => {
+            let resp = bad_gateway();
+            client.write_all(&resp)?;
+            return Ok(StreamOutcome {
+                bytes: resp.len() as u64,
+                head: resp,
+                keepalive: false,
+                backend: None,
+            });
+        }
     };
     fleet.inflight_inc(id);
-    let out = forward(addr, req, fleet.dial_timeout);
+    let out = forward_streaming(addr, req, fleet.dial_timeout, keepalive_req, client);
     fleet.inflight_dec(id);
     match out {
-        Ok(resp) => {
-            fleet.record_success(id);
-            (resp, Some(addr.to_string()))
+        Ok(s) => {
+            // A clean forward closes the breaker; a mid-stream truncation counts
+            // as a failure, the same as a buffered forward that errored.
+            if s.complete {
+                fleet.record_success(id);
+            } else {
+                fleet.record_failure(id);
+            }
+            Ok(StreamOutcome {
+                head: s.head,
+                bytes: s.bytes,
+                keepalive: s.keepalive,
+                backend: Some(addr.to_string()),
+            })
         }
         Err(_) => {
+            // Nothing reached the client yet (dial / no valid response head): the
+            // breaker takes the failure and the host can still send a real 502.
             fleet.record_failure(id);
-            (bad_gateway(), None)
+            let resp = bad_gateway();
+            client.write_all(&resp)?;
+            Ok(StreamOutcome {
+                bytes: resp.len() as u64,
+                head: resp,
+                keepalive: false,
+                backend: None,
+            })
         }
     }
 }
@@ -406,8 +821,12 @@ mod tests {
 
     #[test]
     fn parses_fleet_spec_and_mask() {
-        let f = Fleet::parse("0=127.0.0.1:9400,2=127.0.0.1:9402", 3, Duration::from_millis(50))
-            .unwrap();
+        let f = Fleet::parse(
+            "0=127.0.0.1:9400,2=127.0.0.1:9402",
+            3,
+            Duration::from_millis(50),
+        )
+        .unwrap();
         assert_eq!(f.mask(), 0b101);
         assert_eq!(f.addr(0), Some("127.0.0.1:9400".parse().unwrap()));
         assert_eq!(f.addr(1), None);
@@ -437,6 +856,43 @@ mod tests {
         assert_eq!(
             sticky_key(b"GET /api/x HTTP/1.1\r\nHost: y\r\n\r\n"),
             b"/api/x".to_vec()
+        );
+    }
+
+    #[test]
+    fn chunked_parser_detects_terminator() {
+        // Two data chunks then the last-chunk with no trailers.
+        let body = b"5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n";
+        let mut p = ChunkedParser::new();
+        assert!(p.advance(body));
+
+        // Split across feeds: the terminator must be detected on the last feed.
+        let mut p = ChunkedParser::new();
+        assert!(!p.advance(b"5\r\nhel"));
+        assert!(!p.advance(b"lo\r\n0\r\n"));
+        assert!(p.advance(b"\r\n"));
+
+        // A trailer line before the final CRLF is consumed too.
+        let mut p = ChunkedParser::new();
+        assert!(p.advance(b"0\r\nX-Trailer: v\r\n\r\n"));
+
+        // An unterminated stream is not "done".
+        let mut p = ChunkedParser::new();
+        assert!(!p.advance(b"5\r\nhello\r\n"));
+    }
+
+    #[test]
+    fn detects_chunked_and_content_length() {
+        assert!(is_chunked(
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+        ));
+        assert!(is_chunked(
+            b"HTTP/1.1 200 OK\r\ntransfer-encoding: gzip, chunked\r\n\r\n"
+        ));
+        assert!(!is_chunked(b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\n"));
+        assert_eq!(
+            content_length(b"HTTP/1.1 200 OK\r\nContent-Length: 42\r\n\r\n"),
+            Some(42)
         );
     }
 }

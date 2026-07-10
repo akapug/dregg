@@ -39,6 +39,16 @@ inductive RingEvent where
   | timerFired (slot : Proto.TimerSlot)
   | peerClosed
   | closeRequested
+  /-- **The effect-completion edge (the effect-scheduler seam).** A serve effect the
+  reactor submitted (`connectUpstream`/`sendUpstream` for a proxy dial, or a cache
+  read/write) completed on the ring; `result` is the effect's result bytes (the
+  stored response on a cache HIT, `[]` on a MISS, the upstream reply for a dial).
+  Unlike the wire events above it does NOT drive the `Proto` connection FSM: its
+  bytes are threaded into the SERVE continuation (`Reactor.ServeStep.resumeStep`, via
+  `Reactor.DriveCache.driveServe`), which is where the effect result belongs — the
+  serve effect program is a layer above the wire FSM. At the wire reactor it is
+  inert. -/
+  | effectComplete (result : Bytes)
 deriving Repr
 
 /-- Reactor submissions — what the reactor asks the ring to do. -/
@@ -68,6 +78,11 @@ def toInput : RingEvent → Proto.Input
   | .timerFired slot => .timerFired slot
   | .peerClosed => .peerClosed
   | .closeRequested => .closeRequested
+  -- Effect completions are NOT wire-FSM inputs (their result bytes are threaded to the
+  -- serve continuation, not `Proto.step`); this case exists only so `toInput` is total.
+  -- `step` never routes an `effectComplete` through `toInput` — its arm holds the wire
+  -- state (see `step`), so this value is unreachable from `step`.
+  | .effectComplete _ => .writeReady
 
 /-- Translate one FSM output to a ring submission (faithful, no output dropped).
 Note: no FSM output is a buffer recycle — recycling is the reactor's own
@@ -96,11 +111,19 @@ output to a submission, and — on a recv completion — append the recycle of t
 buffer (the bytes were copied into the FSM accumulation, so the lease is done). -/
 def step (cfg : Proto.Config) (s : Proto.State) (e : RingEvent) :
     Proto.State × List RingSubmission :=
-  let r := Proto.step cfg s (toInput e)
-  let subs := r.2.map ofOutput
   match e with
-  | .recvInto bid _ => (r.1, subs ++ [RingSubmission.recycleBuffer bid])
-  | _ => (r.1, subs)
+  | .effectComplete _ =>
+      -- An effect completion is NOT a wire-FSM input: its result bytes are threaded
+      -- into the SERVE continuation (`Reactor.DriveCache.driveServe` → `resumeStep`),
+      -- not `Proto.step`. At the wire reactor it is inert — no submission, no state
+      -- change — so the copy-once discipline below is untouched.
+      (s, [])
+  | .recvInto bid data =>
+      let r := Proto.step cfg s (.bytesReceived data)
+      (r.1, r.2.map ofOutput ++ [RingSubmission.recycleBuffer bid])
+  | e =>
+      let r := Proto.step cfg s (toInput e)
+      (r.1, r.2.map ofOutput)
 
 /-- No FSM output translates to a buffer recycle — recycling is exclusively the
 reactor's copy-once obligation. -/
@@ -135,6 +158,7 @@ theorem non_recv_no_recycle (cfg : Proto.Config) (s : Proto.State) (e : RingEven
     (step cfg s e).2.filter RingSubmission.isRecycle = [] := by
   cases e with
   | recvInto bid data => exact absurd rfl (h bid data)
+  | effectComplete r => rfl
   | _ => simp only [step]; exact map_ofOutput_no_recycle _
 
 /-- The reactor step is total (a plain `def`) — no event is a stuck state. -/

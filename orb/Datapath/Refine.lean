@@ -96,6 +96,23 @@ theorem byteArray_get!_set!_ne (b : ByteArray) (j k : Nat) (v : UInt8) (hne : k 
   show (b.data.set! j v).size = b.data.size
   simp [Array.set!, Array.setD, Array.size_setIfInBounds]
 
+/-- A byte read back at the store index (in bounds) is the value just written. -/
+theorem byteArray_get!_set!_self (b : ByteArray) (j : Nat) (v : UInt8) (h : j < b.size) :
+    (b.set! j v).get! j = v := by
+  show (b.data.set! j v).get! j = v
+  have hj : j < b.data.size := h
+  simp only [Array.set!, Array.setD, Array.get!, Array.getD, Array.size_setIfInBounds]
+  rw [dif_pos hj]
+  simp
+
+/-- An in-bounds `get!` is the underlying indexed element. -/
+theorem byteArray_get!_eq_getElem (b : ByteArray) (i : Nat) (h : i < b.size) :
+    b.get! i = b.data[i]'h := by
+  show b.data.get! i = b.data[i]'h
+  have h' : i < b.data.size := h
+  simp only [Array.get!, Array.getD, dif_pos h']
+  rfl
+
 /-- **`denote_store_disjoint` — the no-aliasing / separation obligation, proven.**
 A single-byte store at index `j` DISJOINT from the read window `[off, off+len)`
 leaves the read span's denotation unchanged: an in-place write that does not touch
@@ -114,6 +131,102 @@ theorem denote_store_disjoint (s : SpanBytes) (j : Nat) (v : UInt8)
   show (s.buf.set! j v).get! (s.off + i) = s.buf.get! (s.off + i)
   apply byteArray_get!_set!_ne
   omega
+
+/-! ## The in-place multi-byte write — a store-fold, and its separation
+
+`denote_store_disjoint` preserves a read window across ONE disjoint store; a real
+response is MANY bytes. `storeFrom` folds one store per response byte into the
+borrowed buffer — no fresh allocation, the zero-copy write — and the two results
+below lift the framework to the whole write:
+- **`storeFrom_get!_at`** — the write is byte-for-byte faithful (the readback):
+  what you store is what you read back, provided the buffer has room.
+- **`denote_storeFrom_disjoint`** — the write is separated: a response written
+  into a region disjoint from a live request window preserves that window's
+  denotation across EVERY store, not just one. -/
+
+/-- Fold single-byte stores of `bs` into `buf`, starting at index `base`: the
+in-place response write, one `set!` per byte, no fresh buffer. -/
+def storeFrom (buf : ByteArray) (base : Nat) : List UInt8 → ByteArray
+  | [] => buf
+  | b :: bs => storeFrom (buf.set! base b) (base + 1) bs
+
+@[simp] theorem storeFrom_size (buf : ByteArray) (base : Nat) (bs : List UInt8) :
+    (storeFrom buf base bs).size = buf.size := by
+  induction bs generalizing buf base with
+  | nil => rfl
+  | cons b bs ih =>
+    show (storeFrom (buf.set! base b) (base + 1) bs).size = buf.size
+    rw [ih]; exact byteArray_size_set! buf base b
+
+/-- A byte strictly below the write cursor is untouched by the whole store-fold. -/
+theorem storeFrom_get!_below (buf : ByteArray) (base : Nat) (bs : List UInt8)
+    (k : Nat) (hk : k < base) :
+    (storeFrom buf base bs).get! k = buf.get! k := by
+  induction bs generalizing buf base with
+  | nil => rfl
+  | cons b bs ih =>
+    show (storeFrom (buf.set! base b) (base + 1) bs).get! k = buf.get! k
+    rw [ih (buf.set! base b) (base + 1) (by omega)]
+    exact byteArray_get!_set!_ne buf base k b (by omega)
+
+/-- **The store-fold readback.** When the buffer has room, the byte read back at
+`base + i` is exactly the `i`-th byte written — the in-place write is faithful. -/
+theorem storeFrom_get!_at (buf : ByteArray) (base : Nat) (bs : List UInt8)
+    (hcap : base + bs.length ≤ buf.size) (i : Nat) (hi : i < bs.length) :
+    (storeFrom buf base bs).get! (base + i) = bs[i] := by
+  induction bs generalizing buf base i with
+  | nil => exact absurd hi (by simp)
+  | cons b bs ih =>
+    match i with
+    | 0 =>
+      show (storeFrom (buf.set! base b) (base + 1) bs).get! base = b
+      rw [storeFrom_get!_below (buf.set! base b) (base + 1) bs base (by omega)]
+      have hb : base < buf.size := by simp only [List.length_cons] at hcap; omega
+      exact byteArray_get!_set!_self buf base b hb
+    | Nat.succ j =>
+      show (storeFrom (buf.set! base b) (base + 1) bs).get! (base + (j + 1)) = (b :: bs)[j + 1]
+      have he : base + (j + 1) = (base + 1) + j := by omega
+      have hcap' : (base + 1) + bs.length ≤ (buf.set! base b).size := by
+        rw [byteArray_size_set!]; simp only [List.length_cons] at hcap; omega
+      have hj : j < bs.length := by simp only [List.length_cons] at hi; omega
+      rw [he, ih (buf.set! base b) (base + 1) hcap' j hj]
+      rfl
+
+/-- **Separation across the whole in-place write.** A response written by the
+store-fold into a region `[base, base + bs.length)` disjoint from the read window
+`[off, off + len)` preserves the read span's denotation — for EVERY store, not
+just one. This lifts `denote_store_disjoint` to the multi-byte response write:
+writing the response in place cannot corrupt a request span still being read. -/
+theorem denote_storeFrom_disjoint (s : SpanBytes) (base : Nat) (bs : List UInt8)
+    (hw : s.Wf) (hdisj : s.off + s.len ≤ base ∨ base + bs.length ≤ s.off) :
+    ({ s with buf := storeFrom s.buf base bs } : SpanBytes).denote = s.denote := by
+  induction bs generalizing s base with
+  | nil => rfl
+  | cons b bs ih =>
+    have hd1 : base < s.off ∨ s.off + s.len ≤ base := by
+      rcases hdisj with h | h
+      · exact Or.inr h
+      · exact Or.inl (by simp only [List.length_cons] at h; omega)
+    have hstep : ({ s with buf := s.buf.set! base b } : SpanBytes).denote = s.denote :=
+      denote_store_disjoint s base b hw hd1
+    have hw' : ({ s with buf := s.buf.set! base b } : SpanBytes).Wf := by
+      show s.off + s.len ≤ (s.buf.set! base b).size
+      rw [byteArray_size_set!]; exact hw
+    have hdisj' :
+        ({ s with buf := s.buf.set! base b } : SpanBytes).off
+            + ({ s with buf := s.buf.set! base b } : SpanBytes).len ≤ base + 1
+        ∨ (base + 1) + bs.length ≤ ({ s with buf := s.buf.set! base b } : SpanBytes).off := by
+      rcases hdisj with h | h
+      · exact Or.inl (by show s.off + s.len ≤ base + 1; omega)
+      · exact Or.inr (by
+          show (base + 1) + bs.length ≤ s.off
+          simp only [List.length_cons] at h; omega)
+    calc ({ s with buf := storeFrom s.buf base (b :: bs) } : SpanBytes).denote
+        = ({ ({ s with buf := s.buf.set! base b } : SpanBytes) with
+              buf := storeFrom ({ s with buf := s.buf.set! base b } : SpanBytes).buf (base + 1) bs } :
+            SpanBytes).denote := rfl
+      _ = ({ s with buf := s.buf.set! base b } : SpanBytes).denote := ih _ (base + 1) hw' hdisj'
+      _ = s.denote := hstep
 
 /-! ## THE FIRST REFINEMENT — the zero-copy request parse
 

@@ -29,8 +29,8 @@
 //! listeners). This module owns only the counting and the Prometheus rendering.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 static REQUESTS: AtomicU64 = AtomicU64::new(0);
 static R2XX: AtomicU64 = AtomicU64::new(0);
@@ -48,9 +48,17 @@ static BACKENDS: Mutex<BTreeMap<String, u64>> = Mutex::new(BTreeMap::new());
 /// request — the dialled backend's count. Cheap and lock-free except the
 /// per-backend map (touched only on a proxied request).
 pub fn record(resp: &[u8], backend: Option<&str>) {
+    record_streamed(resp, resp.len() as u64, backend);
+}
+
+/// Record one served request whose body was STREAMED to the client (so the whole
+/// response bytes were never in hand): the status class is read from the response
+/// `head`, and the byte total is the caller's exact streamed count. Otherwise
+/// identical to [`record`].
+pub fn record_streamed(head: &[u8], bytes: u64, backend: Option<&str>) {
     REQUESTS.fetch_add(1, Ordering::Relaxed);
-    BYTES_OUT.fetch_add(resp.len() as u64, Ordering::Relaxed);
-    match status_class(resp) {
+    BYTES_OUT.fetch_add(bytes, Ordering::Relaxed);
+    match status_class(head) {
         Some(2) => &R2XX,
         Some(3) => &R3XX,
         Some(4) => &R4XX,
@@ -63,6 +71,17 @@ pub fn record(resp: &[u8], backend: Option<&str>) {
             *map.entry(b.to_string()).or_insert(0) += 1;
         }
     }
+}
+
+/// Total requests served through the host loop (the `/admin/connections`
+/// projection).
+pub fn requests_total() -> u64 {
+    REQUESTS.load(Ordering::Relaxed)
+}
+
+/// Total response bytes written (the `/admin/connections` projection).
+pub fn bytes_out_total() -> u64 {
+    BYTES_OUT.load(Ordering::Relaxed)
 }
 
 /// The leading digit of the HTTP status code in a response head

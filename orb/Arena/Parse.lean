@@ -46,6 +46,22 @@ structure Span where
 def sliceSpan (bs : Bytes) (s : Span) : Bytes :=
   (bs.drop s.off).take s.len
 
+/-- Index-native span slice over a flat buffer: `Array.extract` is `O(len)` (it
+copies only the window), whereas `sliceSpan`'s `bs.drop s.off` walks `O(off)`
+cons cells from the head — so slicing header `k` (offset ≈ head length) is
+`O(head)`, and the per-header sweep is `O(head²)`. `sliceArr` reads the same
+bytes in `O(len)` from the buffer the head is converted to *once*. -/
+def sliceArr (arr : Array UInt8) (s : Span) : Bytes :=
+  (arr.extract s.off (s.off + s.len)).toList
+
+/-- `sliceArr` on the buffer view of `bs` reads exactly `sliceSpan bs`. -/
+theorem sliceArr_toArray (bs : Bytes) (s : Span) :
+    sliceArr bs.toArray s = sliceSpan bs s := by
+  unfold sliceArr sliceSpan
+  rw [Array.toList_extract, Array.toList_toArray, List.extract_eq_drop_take]
+  congr 1
+  omega
+
 /-- Offset of the first `CRLFCRLF`, if any. -/
 def findDoubleCrlf : Bytes → Option Nat
   | a :: rest@(b :: c :: d :: _) =>
@@ -57,6 +73,94 @@ def findDoubleCrlf : Bytes → Option Nat
 def crlfPositions (bs : Bytes) : List Nat :=
   (List.range bs.length).filter fun i =>
     bs.getD i 0 == CR && bs.getD (i + 1) 0 == LF
+
+/-! ### Linear-time `crlfPositions`
+
+The `List.range … |>.filter` reading of `crlfPositions` indexes the cons-list
+with `getD i` at every position, and `getD i` on a list is `O(i)`, so the sweep
+is `O(n²)` in the head length — the dominant super-linear cost on the request
+parse. `crlfPositionsFast` computes the identical list of positions in a single
+left-to-right pass (each step peels one cons and does `O(1)` work), so the sweep
+is `O(n)`. `crlfPositions_eq_fast` proves the two agree and installs the linear
+pass as the compiled implementation (`@[csimp]`); every theorem about
+`crlfPositions` (`crlfPositions_lt`, `crlfPositions_pairwise`, the span-scan
+refinements) keeps referring to the unchanged spec. -/
+
+/-- Single left-to-right pass recording each `CR,LF` adjacency at its running
+index. Peels one cons per step (`O(1)` work) ⇒ the whole sweep is `O(n)`. -/
+def crlfPositionsGo : Nat → Bytes → List Nat
+  | _, [] => []
+  | _, [_] => []
+  | i, a :: b :: rest =>
+    if a == CR && b == LF then i :: crlfPositionsGo (i + 1) (b :: rest)
+    else crlfPositionsGo (i + 1) (b :: rest)
+
+/-- The linear `crlfPositions`: one pass from index `0`. -/
+def crlfPositionsFast (bs : Bytes) : List Nat := crlfPositionsGo 0 bs
+
+/-- filter/map swap (proved locally to avoid depending on a core lemma name). -/
+private theorem filter_map_swap (l : List Nat) (p : Nat → Bool) (f : Nat → Nat) :
+    List.filter p (List.map f l) = List.map f (List.filter (fun x => p (f x)) l) := by
+  induction l with
+  | nil => rfl
+  | cons a t ih =>
+    simp only [List.map_cons, List.filter_cons]
+    by_cases h : p (f a) <;> simp [h, ih]
+
+/-- Cons unfolding of the spec: the head contributes offset `0` iff it starts a
+`CR,LF`, and every tail position shifts up by one. -/
+theorem crlfPositions_cons (x : UInt8) (xs : Bytes) :
+    crlfPositions (x :: xs) =
+      (if x == CR && xs.getD 0 0 == LF then [0] else [])
+        ++ (crlfPositions xs).map (· + 1) := by
+  unfold crlfPositions
+  have hFM :
+      List.filter (fun i => (x :: xs).getD i 0 == CR && (x :: xs).getD (i + 1) 0 == LF)
+          (List.map Nat.succ (List.range xs.length))
+        = List.map (· + 1)
+            (List.filter (fun i => xs.getD i 0 == CR && xs.getD (i + 1) 0 == LF)
+              (List.range xs.length)) := by
+    rw [filter_map_swap]
+    simp only [List.getD_cons_succ]
+  rw [List.length_cons, List.range_succ_eq_map, List.filter_cons, hFM]
+  simp only [List.getD_cons_zero, List.getD_cons_succ, Nat.zero_add]
+  by_cases h : x == CR && xs.getD 0 0 == LF
+  · rw [if_pos h, if_pos h]; rfl
+  · rw [if_neg h, if_neg h]; rfl
+
+/-- The linear pass equals the spec up to the running-index shift. -/
+theorem crlfPositionsGo_eq (bs : Bytes) :
+    ∀ base, crlfPositionsGo base bs = (crlfPositions bs).map (· + base) := by
+  have hcomp : ∀ base : Nat, ((· + base) ∘ (· + 1)) = (fun x => x + (base + 1)) := by
+    intro base; funext x; simp; omega
+  induction bs with
+  | nil => intro base; simp [crlfPositionsGo, crlfPositions]
+  | cons a xs ih =>
+    intro base
+    match xs, ih with
+    | [], _ =>
+      show ([] : List Nat) = List.map (· + base) (crlfPositions [a])
+      have hlf : ((0 : UInt8) == LF) = false := by decide
+      rw [crlfPositions_cons a [], show crlfPositions ([] : Bytes) = [] from rfl]
+      simp [List.getD_nil, hlf]
+    | b :: rest, ih =>
+      show (if a == CR && b == LF then base :: crlfPositionsGo (base + 1) (b :: rest)
+              else crlfPositionsGo (base + 1) (b :: rest)) =
+            List.map (· + base) (crlfPositions (a :: b :: rest))
+      rw [crlfPositions_cons a (b :: rest), ih (base + 1)]
+      simp only [List.getD_cons_zero]
+      by_cases h : a == CR && b == LF
+      · rw [if_pos h, if_pos h]
+        simp only [List.singleton_append, List.map_cons, Nat.zero_add, List.map_map, hcomp]
+      · rw [if_neg h, if_neg h]
+        simp only [List.nil_append, List.map_map, hcomp]
+
+/-- **The linear/spec agreement.** `crlfPositionsFast` computes the same offsets
+as `crlfPositions`, in `O(n)`. -/
+@[csimp] theorem crlfPositions_eq_fast : @crlfPositions = @crlfPositionsFast := by
+  funext bs
+  rw [crlfPositionsFast, crlfPositionsGo_eq bs 0]
+  simp
 
 /-- Cut `[start, headLen)` into the segments between the given `CRLF`
 positions (each position `p` consumes bytes `p` and `p+1`). -/
@@ -158,6 +262,33 @@ def canonNameEntry (input sidecar : Bytes) (sp : Span) : Bytes × Entry :=
   else
     (sidecar, mkEntry .headerName sp.off sp.len)
 
+/-- Flat-buffer `canonNameEntry` with a **flat sidecar accumulator**: the raw
+name bytes are read by `sliceArr` (`O(len)`), and the sidecar is an `Array` — its
+length is `O(1)` (`Array.size`) and appending a lowered name is amortized
+`O(name)` (`Array.append` into the uniquely-owned accumulator), instead of the
+spec's `sidecar ++ …` List append that copies the whole growing sidecar and
+`sidecar.length` that walks it (`O(sidecar²)` over a header run that lowercases). -/
+def canonNameEntryAcc (arr : Array UInt8) (sidecar : Array UInt8) (sp : Span) :
+    Array UInt8 × Entry :=
+  let raw := sliceArr arr sp
+  if hasUpper raw then
+    (sidecar ++ (raw.map lowerByte).toArray,
+     mkEntry .headerName (sidecarBaseNat + sidecar.size) sp.len)
+  else
+    (sidecar, mkEntry .headerName sp.off sp.len)
+
+/-- The flat-accumulator name entry matches the spec: reading back the array
+sidecar as a list, `canonNameEntryAcc` produces the same `(sidecar, Entry)` as
+`canonNameEntry` on the list sidecar. -/
+theorem canonNameEntryAcc_toArray (input : Bytes) (sacc : Array UInt8) (sp : Span) :
+    (fun p => (Array.toList p.1, p.2)) (canonNameEntryAcc input.toArray sacc sp)
+      = canonNameEntry input sacc.toList sp := by
+  unfold canonNameEntryAcc canonNameEntry
+  rw [sliceArr_toArray]
+  by_cases h : hasUpper (sliceSpan input sp)
+  · simp [h, Array.toList_append, Array.toList_toArray, Array.length_toList]
+  · simp [h]
+
 /-! ## The parse outcome -/
 
 /-- Typed error classes of the head parse. -/
@@ -217,6 +348,76 @@ def parseHeaders (input : Bytes) (spans : List Span) (sidecar : Bytes) :
       let valueEntry := mkEntry .headerValue raw.value.off raw.value.len
       let (sidecar'', parsed) ← parseHeaders input rest sidecar'
       some (sidecar'', { name := nameEntry, value := valueEntry } :: parsed)
+
+/-! ### Linear-time header parse
+
+`parseHeaders` carries two super-linear costs over a run of header lines:
+* it re-slices every header line straight out of the cons-list `input`
+  (`sliceSpan input sp`, again inside `canonNameEntry`), and `sliceSpan` walks
+  `O(off)` cons cells from the head — header `k` at offset ≈ head length ⇒ the
+  per-header sweep is `O(head²)`;
+* the sidecar is grown by `sidecar ++ …` (a List append that copies the whole
+  growing accumulator) and indexed by `sidecar.length` (which walks it) — a run
+  that lowercases `H` names is `O(sidecar²)`.
+
+`parseHeadersAcc` removes both: it reads every header window by index (`sliceArr`)
+out of a flat buffer the head is materialized to **once**, and threads the sidecar
+as a flat `Array` whose length is `O(1)` and whose append is amortized `O(name)`.
+`parseHeaders_eq_fast` proves it computes the same result and installs it as the
+compiled implementation (`@[csimp]`): `parse` — the spec every theorem references
+— is untouched; only the runtime changes. The recursion is on `parseHeadersAcc`
+itself (carrying the already-converted buffer + array sidecar), so the conversion
+happens once, not once per header. -/
+
+/-- Flat-buffer header parse with a flat `Array` sidecar accumulator: every header
+window is read by index (`sliceArr`) out of `arr`, and the sidecar's length and
+append are `O(1)`/amortized-`O(name)`. Recurses on itself carrying both — no
+re-conversion per header. Result sidecar is the accumulator's `toList`. -/
+def parseHeadersAcc (arr : Array UInt8) (spans : List Span) (sidecar : Array UInt8) :
+    Option (Bytes × List ParsedHeader) :=
+  match spans with
+  | [] => some (sidecar.toList, [])
+  | sp :: rest =>
+    if sp.len == 0 then
+      none
+    else do
+      let raw ← parseHeaderLine sp.off (sliceArr arr sp)
+      let (sidecar', nameEntry) := canonNameEntryAcc arr sidecar raw.name
+      let valueEntry := mkEntry .headerValue raw.value.off raw.value.len
+      let (sidecar'', parsed) ← parseHeadersAcc arr rest sidecar'
+      some (sidecar'', { name := nameEntry, value := valueEntry } :: parsed)
+
+/-- The flat header pass equals the spec: reading the array sidecar back as a list
+at the boundary, `parseHeadersAcc` on the buffer view yields the same
+`(sidecar, headers)` as `parseHeaders`. -/
+theorem parseHeadersAcc_toArray (input : Bytes) (spans : List Span) (sacc : Array UInt8) :
+    parseHeadersAcc input.toArray spans sacc = parseHeaders input spans sacc.toList := by
+  induction spans generalizing sacc with
+  | nil => rfl
+  | cons sp rest ih =>
+    unfold parseHeadersAcc parseHeaders
+    rw [sliceArr_toArray]
+    by_cases hlen : sp.len == 0
+    · simp [hlen]
+    · simp only [hlen, Bool.false_eq_true, if_false]
+      rcases hpl : parseHeaderLine sp.off (sliceSpan input sp) with _ | raw
+      · rfl
+      · have hce := canonNameEntryAcc_toArray input sacc raw.name
+        rcases hp : canonNameEntryAcc input.toArray sacc raw.name with ⟨sA, neA⟩
+        rw [hp] at hce
+        simp [hp, ← hce, ih sA]
+
+/-- The compiled header parse: materialize the head into a flat buffer once, then
+slice every header window by index, growing the sidecar in a flat array. -/
+def parseHeadersFast (input : Bytes) (spans : List Span) (sidecar : Bytes) :
+    Option (Bytes × List ParsedHeader) :=
+  parseHeadersAcc input.toArray spans sidecar.toArray
+
+/-- **The linear/spec agreement for the header parse.** `parseHeadersFast`
+computes the same result as `parseHeaders`, in `O(head)`. -/
+@[csimp] theorem parseHeaders_eq_fast : @parseHeaders = @parseHeadersFast := by
+  funext input spans sidecar
+  rw [parseHeadersFast, parseHeadersAcc_toArray, Array.toList_toArray]
 
 /-- Default header-count bound: the number of header lines a head may carry
 before the parser refuses it. `64` matches the slot cap the hand-written

@@ -31,6 +31,7 @@ unsafe extern "C" {
     fn lean_io_mark_end_initialization();
     fn initialize_Dataplane(builtin: u8, world: *mut LeanObject) -> *mut LeanObject;
     fn drorb_serve(input: *mut LeanObject) -> *mut LeanObject;
+    fn drorb_serve_flat(input: *mut LeanObject) -> *mut LeanObject;
 
     fn drorb_sarray_of_bytes(p: *const u8, n: usize) -> *mut LeanObject;
     fn drorb_sarray_len(o: *mut LeanObject) -> usize;
@@ -60,6 +61,21 @@ fn serve_once(req: &[u8], out: &mut Vec<u8>) -> usize {
     unsafe {
         let input = drorb_sarray_of_bytes(req.as_ptr(), req.len());
         let output = drorb_serve(input);
+        let len = drorb_sarray_len(output);
+        out.clear();
+        out.extend_from_slice(std::slice::from_raw_parts(drorb_sarray_ptr(output), len));
+        drorb_obj_dec(output);
+        len
+    }
+}
+
+/// One full seam crossing through the FLAT serve (`drorb_serve_flat`) — the A/B
+/// twin of `serve_once`, byte-identical output, flat response materialization.
+#[inline(never)]
+fn serve_once_flat(req: &[u8], out: &mut Vec<u8>) -> usize {
+    unsafe {
+        let input = drorb_sarray_of_bytes(req.as_ptr(), req.len());
+        let output = drorb_serve_flat(input);
         let len = drorb_sarray_len(output);
         out.clear();
         out.extend_from_slice(std::slice::from_raw_parts(drorb_sarray_ptr(output), len));
@@ -127,7 +143,10 @@ fn http_get(target: &str, pad: usize) -> Vec<u8> {
 
 /// First line of a response, for a status sanity-check.
 fn status_line(bytes: &[u8]) -> String {
-    let end = bytes.iter().position(|&b| b == b'\r').unwrap_or(bytes.len().min(40));
+    let end = bytes
+        .iter()
+        .position(|&b| b == b'\r')
+        .unwrap_or(bytes.len().min(40));
     String::from_utf8_lossy(&bytes[..end]).into_owned()
 }
 
@@ -149,12 +168,23 @@ fn main() {
 
     // Sanity: show the status each request actually serves, so the A/B is honest.
     let mut out = Vec::new();
-    for (name, req) in [("/health", &health), ("/admin", &admin), ("/nope", &unknown)] {
+    let mut outf = Vec::new();
+    for (name, req) in [
+        ("/health", &health),
+        ("/admin", &admin),
+        ("/nope", &unknown),
+    ] {
         serve_once(req, &mut out);
+        serve_once_flat(req, &mut outf);
         println!(
-            "sanity {name:<9} -> {} ({} resp bytes)",
+            "sanity {name:<9} -> {} ({} resp bytes){}",
             status_line(&out),
-            out.len()
+            out.len(),
+            if out == outf {
+                "  [flat==list ok]"
+            } else {
+                "  [FLAT MISMATCH!]"
+            }
         );
     }
     println!("N={n} iters/trial, {trials} trials\n");
@@ -163,16 +193,31 @@ fn main() {
     let mut ob = Vec::new();
     let (mf_min, mf_med) = bench(n, trials, || marshal_floor(&health));
     let (h_min, h_med) = bench(n, trials, || serve_once(&health, &mut ob));
+    let (hf_min, hf_med) = bench(n, trials, || serve_once_flat(&health, &mut ob));
     let (a_min, a_med) = bench(n, trials, || serve_once(&admin, &mut ob));
+    let (af_min, af_med) = bench(n, trials, || serve_once_flat(&admin, &mut ob));
     let (u_min, u_med) = bench(n, trials, || serve_once(&unknown, &mut ob));
+    let (uf_min, uf_med) = bench(n, trials, || serve_once_flat(&unknown, &mut ob));
 
-    println!("{:<26} {:>12} {:>12}", "lever", "min ns/call", "med ns/call");
+    println!(
+        "{:<26} {:>12} {:>12}",
+        "lever", "min ns/call", "med ns/call"
+    );
     println!("{}", "-".repeat(52));
     let row = |name: &str, mn: f64, md: f64| println!("{name:<26} {mn:>12.1} {md:>12.1}");
     row("FFI marshal floor", mf_min, mf_med);
     row("/health full (200)", h_min, h_med);
+    row("/health FLAT (200)", hf_min, hf_med);
     row("/admin short-circuit(401)", a_min, a_med);
+    row("/admin FLAT (401)", af_min, af_med);
     row("/nope full (404)", u_min, u_med);
+    row("/nope FLAT (404)", uf_min, uf_med);
+    println!(
+        "  flat vs list (min ns/call): /health {:+.1}  /admin {:+.1}  /nope {:+.1}",
+        hf_min - h_min,
+        af_min - a_min,
+        uf_min - u_min
+    );
 
     // Size sensitivity: does the per-call cost grow with request size on the
     // SUCCESS path (/health, runs handler + all transforms) or on the
@@ -180,7 +225,10 @@ fn main() {
     // padded success-path calls get expensive fast.
     let sn = (n / 20).max(2000);
     println!("\nsize sensitivity (min ns/call, N={sn}):");
-    println!("{:<10} {:>12} {:>14} {:>14}", "pad", "req bytes", "/health(200)", "/nope(403)");
+    println!(
+        "{:<10} {:>12} {:>14} {:>14}",
+        "pad", "req bytes", "/health(200)", "/nope(403)"
+    );
     let mut pts: Vec<(f64, f64)> = Vec::new();
     for pad in [0usize, 64, 128, 256, 512, 1024] {
         let hreq = http_get("/health", pad);

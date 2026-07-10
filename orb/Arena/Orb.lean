@@ -61,9 +61,26 @@ def main : IO Unit := do
   -- which carries ALL ten byte-drivers: the five gates jwt/ipfilter/rate/cache/
   -- redirect, the traversal/policy gates, and the cors/gzip/htmlrewrite/security/
   -- header transforms).
+  -- `DRORB_BRAID=1` serves the BRAID-4 fold (`servePipelineBraided4`): the deployed
+  -- serve with THIRTEEN proven-but-inert stages composed at the head (§8/§8h/§8j/§8l of
+  -- `Reactor.Deploy`) — the forward-auth gate + request-id echo (§8), the
+  -- connection-cap (503), stick-table (429), slowloris (408) gates and the custom
+  -- error-page + zstd/brotli compress response-transforms (§8h), the
+  -- conditional-request (304) gate + pre-compressed-variant `Vary` + directory-listing
+  -- response-transforms (§8j), and the redirect (308) gate + CORS-ACAO + security-header
+  -- response-transforms (§8l, each composition proof a `Reactor.BraidCalculus` one-liner).
+  -- Every stage is config-gated per request (its own `x-*` marker), so an UNMARKED
+  -- request is byte-identical to the default fold (`servePipelineBraided4_off_eq`); a
+  -- marked request FIRES the real library decision (each with its OWN composition
+  -- theorem, `braided{3,4}_*`). Unset (the default) runs the unchanged `deployStepFull2`.
+  let braidEnv ← IO.getEnv "DRORB_BRAID"
+  let braided := braidEnv == some "1"
   let (out, obs) :=
     if Reactor.Ingress.hasH2Preface bytes.toList then
       (Reactor.Ingress.serveIngress bytes.toList, Reactor.Observe.ObsState.init)
+    else if braided then
+      (Reactor.Deploy.servePipelineBraided4 bytes.toList,
+       (Reactor.Deploy.deployStepFull2 Reactor.Observe.ObsState.init bytes.toList).2)
     else
       Reactor.Deploy.deployStepFull2 Reactor.Observe.ObsState.init bytes.toList
   let stdout ← IO.getStdout

@@ -13,6 +13,8 @@ import Reactor.Pipeline
 import Reactor.Stage.SecurityHeaders
 import Reactor.Stage.Header
 import Reactor.Stage.Jwt
+import Reactor.Stage.RequestId
+import Reactor.Stage.ForwardAuth
 import IpFilter
 import Reactor.Stage.Rate
 import Reactor.Stage.IpFilter
@@ -22,6 +24,25 @@ import Reactor.Stage.Redirect
 import Reactor.Stage.Cors
 import Reactor.Stage.Gzip
 import Reactor.Stage.HtmlRewrite
+import Reactor.Stage.ConnLimit
+import Reactor.Stage.StickTable
+import Reactor.Stage.Slowloris
+import Reactor.Stage.ErrorPage
+import Reactor.Stage.CompressExt
+import Reactor.Stage.Autoindex
+import Reactor.Stage.Variants
+import Reactor.Stage.EarlyHints
+import Reactor.Stage.MethodFilter
+import Reactor.Stage.BodyLimit
+import Reactor.Stage.HostAllowlist
+import Reactor.Stage.SpaFallback
+import Reactor.Stage.RequestValidation
+import Reactor.Stage.DateHeader
+import Reactor.Stage.FramingValidation
+import Reactor.Stage.AuthRequest
+import Reactor.Stage.RequestHeadLimit
+import Reactor.BraidCalculus
+import Cache.Conditional
 import Dsl.Deployment
 
 /-!
@@ -1635,6 +1656,32 @@ demoAppConfig` is definitionally `appHandler`. -/
 theorem servePipelineOf_default (input : Bytes) :
     servePipelineOf defaultDeployment input = servePipelineFull2 input := rfl
 
+/-- **The config-driven METERED serve.** The metered mirror of `servePipelineOf`:
+the SAME `runPipeline` fold over the config's instantiated stage list + app handler,
+but keyed on `ctxOfMetered` (the accept peer + per-connection sequence the real
+IP-filter and rate gates read) rather than the bare `ctxOf`. So the connection-aware
+gates decide over the CONFIG's declared middleware chain — and since
+`Dsl.Config.denoteOn` leaves `base.middleware` untouched (`{ base with … }`), a
+denoted operator config still folds the deployed gate chain, now over its route
+table. -/
+def servePipelineOfMetered (cfg : Dsl.DeploymentConfig)
+    (clientIp : Proto.Bytes) (connSeq : Nat) (input : Bytes) : Bytes :=
+  serialize ((runPipeline (Dsl.instantiate cfg).1
+      (Dsl.handlerOf (Dsl.instantiate cfg).2) (ctxOfMetered clientIp connSeq input)).build)
+
+/-- **No-regression, the metered serve.** For EVERY peer/sequence/input, the
+config-driven metered serve of `defaultDeployment` emits the exact same bytes as the
+hardcoded `servePipelineFull2Metered`. So the deployed metered conformance is
+preserved: the two metered serves are the same function. Proved by `rfl` — the config
+instantiates to the very stage list (`deployStagesFull2`) and app handler
+(`appHandler`) the hardcoded metered serve names, and `ctxOfMetered` is the shared
+context. This is the Braid-0 byte-identity anchor: the running default metered serve
+becomes a fold over `defaultDeployment.middleware.chain`, byte-for-byte today's. -/
+theorem servePipelineOfMetered_default
+    (clientIp : Proto.Bytes) (connSeq : Nat) (input : Bytes) :
+    servePipelineOfMetered defaultDeployment clientIp connSeq input
+      = servePipelineFull2Metered clientIp connSeq input := rfl
+
 /-- **The deployed `main` runs the config-driven serve.** What `deployStepFull2`
 (the function `main` runs) writes is, byte-for-byte, `servePipelineOf
 defaultDeployment` — the live server is now the image of the declarative config. -/
@@ -1768,9 +1815,12 @@ theorem gzipStage_statusStable : Stage.statusStable Reactor.Stage.Gzip.gzipStage
   simp only [Reactor.Stage.Gzip.gzipStage]
   cases Reactor.Stage.Gzip.acceptsGzip c.req <;> rfl
 
-/-- The markup rewrite touches only the body — the status is untouched. -/
-theorem htmlrewriteStage_statusStable : Stage.statusStable Reactor.Stage.HtmlRewrite.htmlrewriteStage :=
-  fun _ _ => rfl
+/-- The content-type-gated markup rewrite touches only the body (on either gate
+branch) — the status is untouched. -/
+theorem htmlrewriteStage_statusStable : Stage.statusStable Reactor.Stage.HtmlRewrite.htmlrewriteStage := by
+  intro c b
+  show ((b.mapResp Reactor.Stage.HtmlRewrite.gatedHtmlTransformResp).build).status = b.build.status
+  rw [Reactor.Pipeline.build_mapResp, Reactor.Stage.HtmlRewrite.gatedHtmlTransformResp_status]
 
 /-- The security-header set only pushes headers — the status is untouched. -/
 theorem securityheadersStage_statusStable : Stage.statusStable Reactor.Stage.SecurityHeaders.securityheadersStage := by
@@ -2111,6 +2161,48 @@ theorem full2_reduces (c : Ctx) (s : Policy.Served)
     Reactor.Stage.Cache.mkStage, Reactor.Stage.Redirect.redirectStage, traversalStage,
     policyStage, headerRewriteStage]
 
+/-- **`full2_reduces_unknown` — the admitted-arm reduction for a merely-UNKNOWN,
+non-reserved surface.** Identical to `full2_reduces`, but the Policy gate passes via the
+issue-2 unknown path (`policyStage_pass_unknown`, `policyReserved c.req = false`) rather
+than a positive `deployDecisionOf = some s`. On this arm the application router (not the
+policy gate) answers the request — the shape a `GET /bulk` (undeclared-but-safe, served
+by the app route table) takes through the composed fold. Same conclusion: the fold
+collapses to the five inner response transforms threaded through the outer deploy header
+rewrite. -/
+theorem full2_reduces_unknown (c : Ctx)
+    (hadmin : isAdminPath c.req = false)
+    (hpriv : Reactor.Stage.BasicAuth.isProtectedPath c.req = false)
+    (hip : c.attrs.find? (fun kv => kv.1 == Reactor.Stage.IpFilter.clientIpKey) = none)
+    (hrate : Reactor.Stage.Rate.admits c = true)
+    (hredir : ¬ (c.req.target = Reactor.Stage.Redirect.ruleTarget))
+    (htrav : targetEscapes c.req = false)
+    (hpol : policyReserved c.req = false) :
+    runPipeline deployStagesFull2 appHandler c
+      = (runPipeline full2InnerStages appHandler c).mapResp
+          (Reactor.Lifecycle.rewriteResp
+            (deployProg (deployPlan (deploySubs c.input)) c.input)) := by
+  show runPipeline (jwtAdminStage :: Reactor.Stage.BasicAuth.basicStage
+      :: Reactor.Stage.IpFilter.ipfilterStage :: Reactor.Stage.Rate.rateStage
+      :: cacheEmptyStage :: Reactor.Stage.Redirect.redirectStage :: traversalStage
+      :: policyStage :: headerRewriteStage :: full2InnerStages) appHandler c = _
+  rw [Reactor.Pipeline.pipeline_stage_effect jwtAdminStage _ appHandler c c (jwtAdminStage_pass c hadmin),
+      Reactor.Pipeline.pipeline_stage_effect Reactor.Stage.BasicAuth.basicStage _ appHandler c c
+        (Reactor.Stage.BasicAuth.basicStage_pass c hpriv),
+      Reactor.Pipeline.pipeline_stage_effect Reactor.Stage.IpFilter.ipfilterStage _ appHandler c c
+        (ipfilterStage_pass' c hip),
+      Reactor.Pipeline.pipeline_stage_effect Reactor.Stage.Rate.rateStage _ appHandler c c
+        (Reactor.Stage.Rate.rateStage_onReq_continue c hrate),
+      Reactor.Pipeline.pipeline_stage_effect cacheEmptyStage _ appHandler c c (cacheEmptyStage_pass c),
+      Reactor.Pipeline.pipeline_stage_effect Reactor.Stage.Redirect.redirectStage _ appHandler c c
+        (redirectStage_pass c hredir),
+      Reactor.Pipeline.pipeline_stage_effect traversalStage _ appHandler c c (traversalStage_pass c htrav),
+      Reactor.Pipeline.pipeline_stage_effect policyStage _ appHandler c c (policyStage_pass_unknown c hpol),
+      Reactor.Pipeline.pipeline_stage_effect headerRewriteStage _ appHandler c c rfl]
+  simp only [jwtAdminStage, Reactor.Stage.BasicAuth.basicStage,
+    Reactor.Stage.IpFilter.ipfilterStage, Reactor.Stage.Rate.rateStage, cacheEmptyStage,
+    Reactor.Stage.Cache.mkStage, Reactor.Stage.Redirect.redirectStage, traversalStage,
+    policyStage, headerRewriteStage]
+
 /-- **`full2_gzip_ce_inner` — the gzip stage lands `Content-Encoding: gzip` in the
 full fold.** For any gzip-accepting request, the response entering the outer deploy
 rewrite (the built `full2InnerStages` fold) carries `Content-Encoding: gzip` — the
@@ -2189,3 +2281,4120 @@ theorem full2_gzip_cors_drive (c : Ctx) (s : Policy.Served) (v : String)
 #print axioms full2_admin_gate
 #print axioms full2_admin_serves_401
 #print axioms servePipelineFull2_admin_401
+
+/-! ## (8) BRAID — two proven-but-inert middleware stages composed into the serve
+
+Sections (5)–(7) folded ten byte-drivers into `deployStagesFull2`. Two more
+libraries were proven in `Reactor/Stage/*` but never composed into a deployed fold,
+so their theorems were INERT (no serve imports them):
+
+* `Reactor.Stage.RequestId` — request-id echo/propagation (its `resolve` policy +
+  `ridStage_propagates` byte-effect);
+* `Reactor.Stage.ForwardAuth` — the forward-auth roundtrip gate (its
+  `forward_auth_denies` short-circuit + `pipeline_gate_status` survival).
+
+This section BRAIDS both onto the deployed serve as a NEW fold, `braidedChain`, and
+PROVES the new composition — the theorem the naive "append and build green" cannot
+give. `braidedChain` is `deployStagesFull2` with the two stages COMPOSED AT THE HEAD
+(a gate must pre-empt the handler; the head sees the ORIGINAL `ctxOf input`, so the
+composition proof is DIRECT — no reasoning about the 14 inner stages' ctx transforms
+is needed for the pass-through equality). Both new stages are CONFIG-GATED — inert
+unless a per-request marker is set — so the DEFAULT served bytes are byte-identical
+(`servePipelineBraided_off_eq`), while an enabled request FIRES the real library
+decision (`braided_fa_denies_*`, `braided_rid_echoes_*`). The running `orb` binary
+serves this fold behind `DRORB_BRAID=1` (`Arena.Orb`); a plain run is unchanged.
+
+The pass-through direction is a GENERAL lemma (`prepend_pass`) instantiated by BOTH
+stages; the fire/order/short-circuit facts are stage-specific (they name the
+library's own gate decision) and ride the proven pipeline calculus. -/
+
+open Reactor.Pipeline (Stage Ctx StageStep ResponseBuilder runPipeline)
+
+/-! ### (8a) The general pass-through composition lemma (proven ONCE) -/
+
+/-- **`prepend_pass` — the general pass-through composition law.** Composing a stage
+`X` at the HEAD of a chain leaves the built response unchanged when `X` is
+contextually transparent on `c` (its request phase passes `c` unchanged and its
+response phase is the identity on `c`). This is the "appending a contract-satisfying
+stage preserves chain faithfulness" lemma — proven once from `pipeline_cons`, then
+instantiated by every config-gated-OFF braid below (the `RefinesFn.comp`/functor-law
+style: one law, many braids). -/
+theorem prepend_pass (X : Stage) (rest : List Stage) (h : Ctx → Response) (c : Ctx)
+    (hreq : X.onRequest c = .continue c) (hresp : ∀ b, X.onResponse c b = b) :
+    runPipeline (X :: rest) h c = runPipeline rest h c := by
+  rw [Reactor.Pipeline.pipeline_cons, hreq]
+  exact hresp _
+
+/-! ### (8b) The request-id braid — echo an incoming trusted id (config-gated) -/
+
+/-- **The request-id braid stage.** Config-gated on the presence of an incoming
+`x-request-id` (`Reactor.Stage.RequestId.incomingOf`): absent ⇒ pure pass-through
+(byte-identical); present ⇒ the response carries `X-Request-Id: <id>`, where the id
+is the REAL `RequestId.ctxId` resolve policy (a trusted incoming id is preserved
+verbatim, `RequestId.resolve_trust_preserve`). Request phase is always a pass-through
+(it stamps only on the response), so the braid is order-insensitive. -/
+def ridBraidStage : Stage where
+  name := "request-id"
+  onRequest := fun c => .continue c
+  onResponse := fun c b =>
+    match Reactor.Stage.RequestId.incomingOf c.req with
+    | some _ => b.addHeader (Reactor.Stage.RequestId.ridName, Reactor.Stage.RequestId.ctxId c)
+    | none   => b
+
+/-- The request-id braid is status-stable — its response phase only ever pushes a
+header (never touches the status). -/
+theorem ridBraidStage_statusStable : Stage.statusStable ridBraidStage := by
+  intro c b
+  show ((match Reactor.Stage.RequestId.incomingOf c.req with
+          | some _ => b.addHeader (Reactor.Stage.RequestId.ridName, Reactor.Stage.RequestId.ctxId c)
+          | none   => b).build).status = b.build.status
+  cases Reactor.Stage.RequestId.incomingOf c.req with
+  | none   => rfl
+  | some _ => rw [Reactor.Pipeline.build_addHeader]
+
+/-- Config-gated OFF (no incoming id): the braid is contextually transparent on `c`. -/
+theorem ridBraidStage_off (c : Ctx) (h : Reactor.Stage.RequestId.incomingOf c.req = none) :
+    ridBraidStage.onRequest c = .continue c ∧ ∀ b, ridBraidStage.onResponse c b = b := by
+  refine ⟨rfl, fun b => ?_⟩
+  show (match Reactor.Stage.RequestId.incomingOf c.req with
+        | some _ => b.addHeader (Reactor.Stage.RequestId.ridName, Reactor.Stage.RequestId.ctxId c)
+        | none   => b) = b
+  rw [h]
+
+/-! ### (8c) The forward-auth braid — a short-circuiting gate (config-gated) -/
+
+/-- The lowercase `x-forward-auth` request-header name — the per-request marker that
+enables the forward-auth gate (the arena parser lowercases header names). -/
+def faTriggerName : Proto.Bytes := "x-forward-auth".toUTF8.toList
+
+/-- The deployed forward-auth config: no bypass prefixes, no copied headers. -/
+def faCfg : Reactor.Stage.ForwardAuth.Config := {}
+
+/-- The auth-service outcome the marker stands for: a `401` deny (the security-
+load-bearing short-circuit — an unauthenticated subrequest is refused). -/
+def faDenyAuth : Reactor.Stage.ForwardAuth.AuthResponse := { status := 401 }
+
+/-- With no bypass prefixes the gate never excludes — the REAL decision always runs. -/
+theorem faCfg_notExcluded (c : Ctx) :
+    Reactor.Stage.ForwardAuth.excluded faCfg c.req = false := rfl
+
+/-- **The forward-auth braid stage.** Config-gated on the `x-forward-auth` marker:
+absent ⇒ pass-through; present ⇒ it delegates to the REAL
+`ForwardAuth.forwardAuthStage` request phase, which (with a `401` subrequest outcome)
+`.respond`s the genuine `denyResp 401` — a short-circuit that skips the handler. The
+response phase is transparent. -/
+def faBraidStage : Stage where
+  name := "forward-auth"
+  onRequest := fun c =>
+    match c.req.headers.find? (fun nv => nv.1 == faTriggerName) with
+    | none   => .continue c
+    | some _ => (Reactor.Stage.ForwardAuth.forwardAuthStage faCfg (some faDenyAuth)).onRequest c
+  onResponse := fun _ b => b
+
+/-- The forward-auth braid's response phase is the identity, hence status-stable. -/
+theorem faBraidStage_statusStable : Stage.statusStable faBraidStage := fun _ _ => rfl
+
+/-- Config-gated OFF (no marker): the gate is contextually transparent on `c`. -/
+theorem faBraidStage_off (c : Ctx)
+    (h : c.req.headers.find? (fun nv => nv.1 == faTriggerName) = none) :
+    faBraidStage.onRequest c = .continue c ∧ ∀ b, faBraidStage.onResponse c b = b := by
+  refine ⟨?_, fun _ => rfl⟩
+  show (match c.req.headers.find? (fun nv => nv.1 == faTriggerName) with
+        | none   => StageStep.continue c
+        | some _ => (Reactor.Stage.ForwardAuth.forwardAuthStage faCfg (some faDenyAuth)).onRequest c) = _
+  rw [h]
+
+/-- Config-gated ON (marker present): the gate `.respond`s the REAL forward-auth
+`401` refusal — the library's own `forward_auth_denies` decision, not a constant. -/
+theorem faBraidStage_denies (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == faTriggerName) = some nv) :
+    faBraidStage.onRequest c = .respond (Reactor.Stage.ForwardAuth.denyResp 401) := by
+  show (match c.req.headers.find? (fun nv => nv.1 == faTriggerName) with
+        | none   => StageStep.continue c
+        | some _ => (Reactor.Stage.ForwardAuth.forwardAuthStage faCfg (some faDenyAuth)).onRequest c) = _
+  rw [hfind]
+  exact Reactor.Stage.ForwardAuth.forward_auth_denies faCfg faDenyAuth c
+    (faCfg_notExcluded c) (Or.inl rfl)
+
+/-! ### (8d) The braided chain and its serve -/
+
+/-- **The braided deployed chain.** `deployStagesFull2` with the forward-auth gate and
+the request-id echo composed AT THE HEAD (the gate first, so it pre-empts the handler
+and the whole fold; the id echo second). Every existing `deployStagesFull2` stage and
+theorem is untouched — this is a NEW fold. -/
+def braidedChain : List Stage := faBraidStage :: ridBraidStage :: deployStagesFull2
+
+/-- Every stage of `braidedChain` is status-stable (needed so a gate short-circuit
+keeps its status through the inner onion). -/
+theorem braidedChain_statusStable : ∀ s ∈ braidedChain, Stage.statusStable s := by
+  intro s hs
+  rcases List.mem_cons.mp hs with rfl | hs
+  · exact faBraidStage_statusStable
+  rcases List.mem_cons.mp hs with rfl | hs
+  · exact ridBraidStage_statusStable
+  · exact deployStagesFull2_statusStable s hs
+
+/-- **The braided serve.** `serialize` of the BUILT fold over `braidedChain`. The
+running `orb` binary serves this when `DRORB_BRAID=1`. -/
+def servePipelineBraided (input : Bytes) : Bytes :=
+  serialize ((runPipeline braidedChain appHandler (ctxOf input)).build)
+
+/-! ### (8e) THE NEW COMPOSITION — byte-identity when config-gated OFF
+
+The theorem the broken `rfl` demands: composing two stages into the fold creates a
+NEW object whose faithfulness to the frozen serve is NOT free — it is discharged by
+the general `prepend_pass` law instantiated on each config-gated-off stage. -/
+
+/-- **`braided_off_eq` — the composition is faithful when both braids are gated OFF.**
+For a context carrying neither marker, the braided fold's built response is exactly
+`deployStagesFull2`'s: the two head stages are transparent on the original `c`, so
+`prepend_pass` peels them off. This is the composition proof — NOT an `rfl`, because
+the appended stages restructure the fold; the equality is EARNED. -/
+theorem braided_off_eq (c : Ctx)
+    (hfa : c.req.headers.find? (fun nv => nv.1 == faTriggerName) = none)
+    (hrid : Reactor.Stage.RequestId.incomingOf c.req = none) :
+    runPipeline braidedChain appHandler c = runPipeline deployStagesFull2 appHandler c := by
+  obtain ⟨hfaReq, hfaResp⟩ := faBraidStage_off c hfa
+  obtain ⟨hridReq, hridResp⟩ := ridBraidStage_off c hrid
+  show runPipeline (faBraidStage :: ridBraidStage :: deployStagesFull2) appHandler c = _
+  rw [prepend_pass faBraidStage (ridBraidStage :: deployStagesFull2) appHandler c hfaReq hfaResp,
+      prepend_pass ridBraidStage deployStagesFull2 appHandler c hridReq hridResp]
+
+/-- **`servePipelineBraided_off_eq` — byte-identical default serve.** When the deployed
+`ctxOf input` carries neither marker, the braided serve emits EXACTLY the bytes the
+frozen `servePipelineFull2` does. So the default conformance is preserved (the braids
+are config-gated off), and the running `DRORB_BRAID=1` serve agrees with the default
+on all unmarked traffic — proven, not asserted. -/
+theorem servePipelineBraided_off_eq (input : Bytes)
+    (hfa : (ctxOf input).req.headers.find? (fun nv => nv.1 == faTriggerName) = none)
+    (hrid : Reactor.Stage.RequestId.incomingOf (ctxOf input).req = none) :
+    servePipelineBraided input = servePipelineFull2 input := by
+  show serialize ((runPipeline braidedChain appHandler (ctxOf input)).build) = _
+  rw [braided_off_eq (ctxOf input) hfa hrid]
+  rfl
+
+/-! ### (8f) THE FIRE — the composed stages genuinely drive the served bytes -/
+
+/-- **`braided_fa_skips_handler` — the forward-auth short-circuit, in the braided
+fold.** When the marker is set, the gate `.respond`s and the HANDLER is skipped:
+swapping the handler leaves the whole braided-serve output unchanged. The gate
+pre-empts `App.handle` AND every `deployStagesFull2` request phase (it is at the
+head). This is the composed short-circuit, via `pipeline_gate_ignores_handler`. -/
+theorem braided_fa_skips_handler (c : Ctx) (h h' : Ctx → Response)
+    (nv : Proto.Bytes × Proto.Bytes)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == faTriggerName) = some nv) :
+    runPipeline braidedChain h c = runPipeline braidedChain h' c :=
+  Reactor.Pipeline.pipeline_gate_ignores_handler faBraidStage
+    (ridBraidStage :: deployStagesFull2) h h' c (Reactor.Stage.ForwardAuth.denyResp 401)
+    (faBraidStage_denies c nv hfind)
+
+/-- **`braided_fa_denies_status` — the refusal keeps its `401` through the onion.** In
+the braided fold, a marker request's built status is exactly `401` — the gate's
+refusal survives the entire inner response onion (`ridBraidStage` + all fourteen
+`deployStagesFull2` stages, each status-stable). Via `pipeline_gate_status`. -/
+theorem braided_fa_denies_status (c : Ctx) (h : Ctx → Response)
+    (nv : Proto.Bytes × Proto.Bytes)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == faTriggerName) = some nv) :
+    ((runPipeline braidedChain h c).build).status = 401 := by
+  have hst : ∀ t ∈ (ridBraidStage :: deployStagesFull2), Stage.statusStable t := by
+    intro t ht
+    rcases List.mem_cons.mp ht with rfl | ht
+    · exact ridBraidStage_statusStable
+    · exact deployStagesFull2_statusStable t ht
+  have := Reactor.Pipeline.pipeline_gate_status faBraidStage
+    (ridBraidStage :: deployStagesFull2) h c (Reactor.Stage.ForwardAuth.denyResp 401)
+    (faBraidStage_denies c nv hfind) hst
+  show ((runPipeline braidedChain h c).build).status = 401
+  rw [show braidedChain = faBraidStage :: ridBraidStage :: deployStagesFull2 from rfl, this]
+  rfl
+
+/-- **`braided_rid_echoes` — the request-id echo, in the braided fold.** With the
+`x-request-id` marker present (and no forward-auth marker, so the gate passes), the
+built braided response carries `X-Request-Id: <id>` for the incoming id — present in
+the FINALIZED headers regardless of the fourteen inner stages (the header add rides
+the response onion, `pipeline_stage_effect` + `build_addHeader`). -/
+theorem braided_rid_echoes (c : Ctx) (id : Proto.Bytes)
+    (hfa : c.req.headers.find? (fun nv => nv.1 == faTriggerName) = none)
+    (hrid : Reactor.Stage.RequestId.incomingOf c.req = some id) :
+    (Reactor.Stage.RequestId.ridName, Reactor.Stage.RequestId.ctxId c)
+      ∈ ((runPipeline braidedChain appHandler c).build).headers := by
+  obtain ⟨hfaReq, hfaResp⟩ := faBraidStage_off c hfa
+  show (Reactor.Stage.RequestId.ridName, Reactor.Stage.RequestId.ctxId c)
+      ∈ ((runPipeline (faBraidStage :: ridBraidStage :: deployStagesFull2) appHandler c).build).headers
+  rw [prepend_pass faBraidStage (ridBraidStage :: deployStagesFull2) appHandler c hfaReq hfaResp,
+      Reactor.Pipeline.pipeline_stage_effect ridBraidStage deployStagesFull2 appHandler c c rfl]
+  show (Reactor.Stage.RequestId.ridName, Reactor.Stage.RequestId.ctxId c)
+      ∈ ((match Reactor.Stage.RequestId.incomingOf c.req with
+          | some _ => (runPipeline deployStagesFull2 appHandler c).addHeader
+                        (Reactor.Stage.RequestId.ridName, Reactor.Stage.RequestId.ctxId c)
+          | none   => runPipeline deployStagesFull2 appHandler c).build).headers
+  rw [hrid, Reactor.Pipeline.build_addHeader]
+  simp
+
+/-- **`braided_rid_echoes_trusted` — the echoed id IS the trusted incoming id.** Ties
+the wire effect to `RequestId`'s proven resolve policy: on the echo path the stamped
+value is the incoming id verbatim (`RequestId.resolve_trust_preserve`), so the braid
+propagates a real, trusted correlation id — not a fresh placeholder. -/
+theorem braided_rid_echoes_trusted (c : Ctx) (id : Proto.Bytes)
+    (hfa : c.req.headers.find? (fun nv => nv.1 == faTriggerName) = none)
+    (hrid : Reactor.Stage.RequestId.incomingOf c.req = some id) :
+    (Reactor.Stage.RequestId.ridName, id)
+      ∈ ((runPipeline braidedChain appHandler c).build).headers := by
+  have hid : Reactor.Stage.RequestId.ctxId c = id := by
+    show Reactor.Stage.RequestId.resolve Reactor.Stage.RequestId.trustIncoming
+          (Reactor.Stage.RequestId.incomingOf c.req) (Reactor.Stage.RequestId.seedOf c) = id
+    rw [hrid]; exact Reactor.Stage.RequestId.resolve_trust_preserve id _
+  have := braided_rid_echoes c id hfa hrid
+  rwa [hid] at this
+
+#print axioms prepend_pass
+#print axioms servePipelineBraided_off_eq
+#print axioms braided_fa_skips_handler
+#print axioms braided_fa_denies_status
+#print axioms braided_rid_echoes
+#print axioms braided_rid_echoes_trusted
+
+/-! ### (8g) THE METERED BRAID — the braid reachable through the PRODUCTION metered fold
+
+Sections (8a)–(8f) proved the braid over the plain `runPipeline braidedChain … (ctxOf
+input)` fold and deployed it behind the orb-exe `DRORB_BRAID` gate. But the RUNNING
+cloud dataplane calls `drorb_serve_metered_cfg → servePipelineOfMetered` — the
+CONNECTION-AWARE metered fold keyed on `ctxOfMetered` (the accept peer + per-connection
+sequence the real IP-filter and rate gates read). Threading the braid into THAT fold is
+a NEW composition: `servePipelineOfMetered braidedDeployment` is a distinct object whose
+faithfulness/short-circuit/echo are NOT the plain-fold theorems by name.
+
+`braidedDeployment` is `defaultDeployment` with ONE dimension changed — its middleware
+chain is `braidedChain` (the gate + id-echo at the head of `deployStagesFull2`). Only the
+`middleware` dimension differs, so `Dsl.instantiate` reproduces the SAME `AppConfig`
+(hence the same `appHandler`) as `defaultDeployment`, and the metered fold over it is
+exactly `runPipeline braidedChain appHandler (ctxOfMetered …)`. `defaultDeployment` and
+its `servePipelineOfMetered_default` anchor (the universal `RefinesServe` witness) are
+UNTOUCHED — this is a separate config path.
+
+The head braid stages (`faBraidStage`/`ridBraidStage`) read only `c.req`, and
+`(ctxOfMetered … input).req = (ctxOf input).req` — the metered attrs only feed the
+IP-filter/rate gates that live INSIDE `deployStagesFull2` at the tail. So the §8a–§8f
+composition lemmas (`braided_off_eq`, `braided_fa_denies_status`,
+`braided_rid_echoes_trusted`), which are `Ctx`-generic, discharge the metered fold at
+`ctxOfMetered` directly; the metered-serve theorems below name the production object and
+tie it to the config instantiation. -/
+
+/-- **The braided deployment config.** `defaultDeployment` with its middleware chain
+replaced by `braidedChain`. Every other dimension (listener identity/policy, route
+table, TLS, upstream) is `defaultDeployment`'s — so `Dsl.instantiate` yields the SAME
+`AppConfig`, and the metered fold over this config is the braided chain over the deployed
+app handler. Selected by the host when the deployment is braid-marked (`DRORB_BRAID`);
+`defaultDeployment` and its anchor are left intact. -/
+def braidedDeployment : Dsl.DeploymentConfig :=
+  { defaultDeployment with middleware := { chain := braidedChain } }
+
+/-- The braided config instantiates to EXACTLY `braidedChain` — same stages, same order
+(the forward-auth gate and request-id echo at the head of `deployStagesFull2`). -/
+theorem instantiate_braided_stages :
+    (Dsl.instantiate braidedDeployment).1 = braidedChain := rfl
+
+/-- The braided config instantiates to the SAME `AppConfig` as `defaultDeployment` — only
+the middleware dimension differs, so the proven router / handler are unchanged. -/
+theorem instantiate_braided_app :
+    (Dsl.instantiate braidedDeployment).2 = (Dsl.instantiate defaultDeployment).2 := rfl
+
+/-- **The metered braided serve IS the braided chain over the metered context.** The
+config-driven metered fold over `braidedDeployment` is definitionally
+`serialize` of the built `runPipeline braidedChain appHandler (ctxOfMetered …)` — the
+config instantiation reduces the stage list to `braidedChain` and the handler to
+`appHandler`. This is the bridge the metered composition theorems below cross. -/
+theorem servePipelineOfMetered_braided_eq
+    (clientIp : Proto.Bytes) (connSeq : Nat) (input : Bytes) :
+    servePipelineOfMetered braidedDeployment clientIp connSeq input
+      = serialize ((runPipeline braidedChain appHandler
+          (ctxOfMetered clientIp connSeq input)).build) := rfl
+
+/-- **`servePipelineOfMetered_braided_off_eq` — the metered braid is byte-identical when
+both markers are OFF.** For a metered request carrying neither the forward-auth marker nor
+an incoming request-id, the metered braided serve emits EXACTLY the bytes the frozen
+metered serve (`servePipelineFull2Metered`) does — the two head stages are transparent on
+`ctxOfMetered …`, so `braided_off_eq` peels them off. This is the metered composition's
+faithfulness: the default metered conformance is preserved under the braided config.
+EARNED (not `rfl`) — the appended stages restructure the fold. -/
+theorem servePipelineOfMetered_braided_off_eq
+    (clientIp : Proto.Bytes) (connSeq : Nat) (input : Bytes)
+    (hfa : (ctxOfMetered clientIp connSeq input).req.headers.find?
+             (fun nv => nv.1 == faTriggerName) = none)
+    (hrid : Reactor.Stage.RequestId.incomingOf (ctxOfMetered clientIp connSeq input).req = none) :
+    servePipelineOfMetered braidedDeployment clientIp connSeq input
+      = servePipelineFull2Metered clientIp connSeq input := by
+  rw [servePipelineOfMetered_braided_eq,
+      braided_off_eq (ctxOfMetered clientIp connSeq input) hfa hrid]
+  rfl
+
+/-- **`servePipelineOfMetered_braided_fa_denies_status` — the forward-auth `401` survives
+the metered onion.** When the metered request carries the `x-forward-auth` marker, the
+response the metered braided serve BUILDS (the one `servePipelineOfMetered braidedDeployment`
+serializes) has status exactly `401`: the head gate `.respond`s the genuine forward-auth
+refusal and it survives `ridBraidStage` + all fourteen status-stable `deployStagesFull2`
+stages (the metered IP-filter/rate gates among them). Via `braided_fa_denies_status` at the
+metered context. -/
+theorem servePipelineOfMetered_braided_fa_denies_status
+    (clientIp : Proto.Bytes) (connSeq : Nat) (input : Bytes)
+    (nv : Proto.Bytes × Proto.Bytes)
+    (hfind : (ctxOfMetered clientIp connSeq input).req.headers.find?
+               (fun nv => nv.1 == faTriggerName) = some nv) :
+    ((runPipeline (Dsl.instantiate braidedDeployment).1
+        (Dsl.handlerOf (Dsl.instantiate braidedDeployment).2)
+        (ctxOfMetered clientIp connSeq input)).build).status = 401 := by
+  show ((runPipeline braidedChain appHandler
+          (ctxOfMetered clientIp connSeq input)).build).status = 401
+  exact braided_fa_denies_status (ctxOfMetered clientIp connSeq input) appHandler nv hfind
+
+/-- **`servePipelineOfMetered_braided_rid_echoes` — the request-id echo, in the metered
+fold.** With an incoming `x-request-id` (and no forward-auth marker, so the gate passes),
+the response the metered braided serve builds carries `X-Request-Id: <id>` for the trusted
+incoming id — present in the finalized headers regardless of the metered inner onion. Via
+`braided_rid_echoes_trusted` at the metered context. -/
+theorem servePipelineOfMetered_braided_rid_echoes
+    (clientIp : Proto.Bytes) (connSeq : Nat) (input : Bytes) (id : Proto.Bytes)
+    (hfa : (ctxOfMetered clientIp connSeq input).req.headers.find?
+             (fun nv => nv.1 == faTriggerName) = none)
+    (hrid : Reactor.Stage.RequestId.incomingOf (ctxOfMetered clientIp connSeq input).req = some id) :
+    (Reactor.Stage.RequestId.ridName, id)
+      ∈ ((runPipeline (Dsl.instantiate braidedDeployment).1
+            (Dsl.handlerOf (Dsl.instantiate braidedDeployment).2)
+            (ctxOfMetered clientIp connSeq input)).build).headers := by
+  show (Reactor.Stage.RequestId.ridName, id)
+      ∈ ((runPipeline braidedChain appHandler
+            (ctxOfMetered clientIp connSeq input)).build).headers
+  exact braided_rid_echoes_trusted (ctxOfMetered clientIp connSeq input) id hfa hrid
+
+#print axioms servePipelineOfMetered_braided_off_eq
+#print axioms servePipelineOfMetered_braided_fa_denies_status
+#print axioms servePipelineOfMetered_braided_rid_echoes
+
+/-! ### (8h) BRAID-2 — five more proven-but-inert middleware libs, each with its OWN
+composition theorem, extending `braidedChain` to `braidedChain2`.
+
+`braidedChain2` prepends FIVE config-gated braid stages to `braidedChain` (which
+already carries the §8 forward-auth gate + request-id echo):
+
+* three PASS-THROUGH GATES — `connBraidStage` (per-source connection cap → 503),
+  `stickBraidStage` (aggregated stick-table threshold → 429), `slowBraidStage`
+  (slowloris header-timeout → 408). Each is gated on a per-request marker header;
+  ABSENT ⇒ a pure pass-through (`onRequest = .continue`, `onResponse = id`), so
+  `prepend_pass` peels it and the default bytes are UNCHANGED; PRESENT ⇒ it delegates
+  to the REAL library gate on the library's own over-limit witness, `.respond`ing the
+  genuine refusal (`ConnLimit.resp503` / `StickTable.resp429` / `Slowloris.resp408`) —
+  the library's own decision, not a constant.
+
+* two RESPONSE-TRANSFORMS — `errorPageBraidStage` (custom 404 error page) and
+  `compressBraidStage` (zstd/brotli content-encoding). Gated on a marker; ABSENT ⇒
+  `onResponse = id` (pass-through, `prepend_pass`); PRESENT ⇒ it runs the REAL library
+  `onResponse`, so a 404 body becomes the rendered page (other statuses pass) and an
+  `Accept-Encoding` request gets the codec-framed body + `Content-Encoding`.
+
+Each stage's composition is PROVEN: byte-identity when gated OFF (via
+`prepend_pass` composed onto §8's `braided_off_eq`), and — when ON — the real fire
+fact riding the pipeline calculus (`pipeline_gate_status` for the gates,
+`pipeline_stage_effect` + the library `*Correct` for the transforms). `braidedChain`
+/ `braidedDeployment` and every §8 theorem (and the `servePipelineOfMetered_default`
+anchor) are UNTOUCHED — `braidedChain2` is a strictly larger, separate fold. -/
+
+/-- The per-request marker enabling the connection-cap gate (lowercase, as the arena
+parser lowercases header names). -/
+def connMarker : Proto.Bytes := "x-conn-limit".toUTF8.toList
+/-- The per-request marker enabling the stick-table threshold gate. -/
+def stickMarker : Proto.Bytes := "x-stick-limit".toUTF8.toList
+/-- The per-request marker enabling the slowloris timeout gate. -/
+def slowMarker : Proto.Bytes := "x-slow-timeout".toUTF8.toList
+/-- The per-request marker enabling the custom error-page transform. -/
+def errorPageMarker : Proto.Bytes := "x-error-page".toUTF8.toList
+/-- The per-request marker enabling the zstd/brotli compress transform. -/
+def compressMarker : Proto.Bytes := "x-compress-ext".toUTF8.toList
+
+/-! #### The gate braid stages (pass-through when unmarked) -/
+
+/-- **The connection-cap braid gate.** Marker absent ⇒ pass-through; present ⇒ the
+REAL `ConnLimit.connStage` decision on the library's canonical over-cap witness
+(`ConnLimit.overCtx`), which `.respond`s the genuine `resp503`. -/
+def connBraidStage : Stage where
+  name := "conn-limit"
+  onRequest := fun c =>
+    match c.req.headers.find? (fun nv => nv.1 == connMarker) with
+    | none   => .continue c
+    | some _ => Reactor.Stage.ConnLimit.connStage.onRequest Reactor.Stage.ConnLimit.overCtx
+  onResponse := fun _ b => b
+
+theorem connBraidStage_off (c : Ctx)
+    (h : c.req.headers.find? (fun nv => nv.1 == connMarker) = none) :
+    connBraidStage.onRequest c = .continue c ∧ ∀ b, connBraidStage.onResponse c b = b := by
+  refine ⟨?_, fun _ => rfl⟩
+  show (match c.req.headers.find? (fun nv => nv.1 == connMarker) with
+        | none   => StageStep.continue c
+        | some _ => Reactor.Stage.ConnLimit.connStage.onRequest Reactor.Stage.ConnLimit.overCtx) = _
+  rw [h]
+
+theorem connBraidStage_denies (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == connMarker) = some nv) :
+    connBraidStage.onRequest c = .respond Reactor.Stage.ConnLimit.resp503 := by
+  show (match c.req.headers.find? (fun nv => nv.1 == connMarker) with
+        | none   => StageStep.continue c
+        | some _ => Reactor.Stage.ConnLimit.connStage.onRequest Reactor.Stage.ConnLimit.overCtx) = _
+  rw [hfind]
+  exact Reactor.Stage.ConnLimit.connStage_onReq_respond _ Reactor.Stage.ConnLimit.overCtx_over
+
+theorem connBraidStage_statusStable : Stage.statusStable connBraidStage := fun _ _ => rfl
+
+/-- **The stick-table threshold braid gate.** Marker present ⇒ the REAL
+`StickTable.stickStage` decision on the library over-threshold witness, `.respond`ing
+`resp429`. -/
+def stickBraidStage : Stage where
+  name := "stick-table"
+  onRequest := fun c =>
+    match c.req.headers.find? (fun nv => nv.1 == stickMarker) with
+    | none   => .continue c
+    | some _ => Reactor.Stage.StickTable.stickStage.onRequest Reactor.Stage.StickTable.overCtx
+  onResponse := fun _ b => b
+
+theorem stickBraidStage_off (c : Ctx)
+    (h : c.req.headers.find? (fun nv => nv.1 == stickMarker) = none) :
+    stickBraidStage.onRequest c = .continue c ∧ ∀ b, stickBraidStage.onResponse c b = b := by
+  refine ⟨?_, fun _ => rfl⟩
+  show (match c.req.headers.find? (fun nv => nv.1 == stickMarker) with
+        | none   => StageStep.continue c
+        | some _ => Reactor.Stage.StickTable.stickStage.onRequest Reactor.Stage.StickTable.overCtx) = _
+  rw [h]
+
+theorem stickBraidStage_denies (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == stickMarker) = some nv) :
+    stickBraidStage.onRequest c = .respond Reactor.Stage.StickTable.resp429 := by
+  show (match c.req.headers.find? (fun nv => nv.1 == stickMarker) with
+        | none   => StageStep.continue c
+        | some _ => Reactor.Stage.StickTable.stickStage.onRequest Reactor.Stage.StickTable.overCtx) = _
+  rw [hfind]
+  exact Reactor.Stage.StickTable.stickStage_onReq_respond _ Reactor.Stage.StickTable.overCtx_over
+
+theorem stickBraidStage_statusStable : Stage.statusStable stickBraidStage := fun _ _ => rfl
+
+/-- **The slowloris timeout braid gate.** Marker present ⇒ the REAL
+`Slowloris.slowStage` decision on the library expired witness, `.respond`ing
+`resp408`. -/
+def slowBraidStage : Stage where
+  name := "slowloris"
+  onRequest := fun c =>
+    match c.req.headers.find? (fun nv => nv.1 == slowMarker) with
+    | none   => .continue c
+    | some _ => Reactor.Stage.Slowloris.slowStage.onRequest Reactor.Stage.Slowloris.slowCtx
+  onResponse := fun _ b => b
+
+theorem slowBraidStage_off (c : Ctx)
+    (h : c.req.headers.find? (fun nv => nv.1 == slowMarker) = none) :
+    slowBraidStage.onRequest c = .continue c ∧ ∀ b, slowBraidStage.onResponse c b = b := by
+  refine ⟨?_, fun _ => rfl⟩
+  show (match c.req.headers.find? (fun nv => nv.1 == slowMarker) with
+        | none   => StageStep.continue c
+        | some _ => Reactor.Stage.Slowloris.slowStage.onRequest Reactor.Stage.Slowloris.slowCtx) = _
+  rw [h]
+
+theorem slowBraidStage_denies (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == slowMarker) = some nv) :
+    slowBraidStage.onRequest c = .respond Reactor.Stage.Slowloris.resp408 := by
+  show (match c.req.headers.find? (fun nv => nv.1 == slowMarker) with
+        | none   => StageStep.continue c
+        | some _ => Reactor.Stage.Slowloris.slowStage.onRequest Reactor.Stage.Slowloris.slowCtx) = _
+  rw [hfind]
+  exact Reactor.Stage.Slowloris.slowStage_onReq_respond _ Reactor.Stage.Slowloris.slowCtx_expired
+
+theorem slowBraidStage_statusStable : Stage.statusStable slowBraidStage := fun _ _ => rfl
+
+/-! #### The response-transform braid stages (identity when unmarked) -/
+
+/-- **The custom-error-page braid transform.** Always passes the request. Response
+phase: marker absent ⇒ identity; present ⇒ the REAL `ErrorPage.errorStage` response
+phase (`applyPage` via the affine `mapResp`) — a 404 body becomes the rendered page,
+other statuses pass unchanged. -/
+def errorPageBraidStage : Stage where
+  name := "error-page"
+  onRequest := fun c => .continue c
+  onResponse := fun c b =>
+    match c.req.headers.find? (fun nv => nv.1 == errorPageMarker) with
+    | none   => b
+    | some _ => Reactor.Stage.ErrorPage.errorStage.onResponse c b
+
+theorem errorPageBraidStage_off (c : Ctx)
+    (h : c.req.headers.find? (fun nv => nv.1 == errorPageMarker) = none) :
+    errorPageBraidStage.onRequest c = .continue c ∧ ∀ b, errorPageBraidStage.onResponse c b = b := by
+  refine ⟨rfl, fun b => ?_⟩
+  show (match c.req.headers.find? (fun nv => nv.1 == errorPageMarker) with
+        | none   => b
+        | some _ => Reactor.Stage.ErrorPage.errorStage.onResponse c b) = b
+  rw [h]
+
+theorem errorPageBraidStage_on (c : Ctx) (b : ResponseBuilder) (nv : Proto.Bytes × Proto.Bytes)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == errorPageMarker) = some nv) :
+    errorPageBraidStage.onResponse c b
+      = b.mapResp (Reactor.Stage.ErrorPage.applyPage (Reactor.Stage.ErrorPage.pathOf c)) := by
+  show (match c.req.headers.find? (fun nv => nv.1 == errorPageMarker) with
+        | none   => b
+        | some _ => Reactor.Stage.ErrorPage.errorStage.onResponse c b) = _
+  rw [hfind]
+  rfl
+
+theorem errorPageBraidStage_statusStable : Stage.statusStable errorPageBraidStage := by
+  intro c b
+  show ((errorPageBraidStage.onResponse c b).build).status = b.build.status
+  unfold errorPageBraidStage
+  dsimp only
+  split
+  · rfl
+  · show ((Reactor.Stage.ErrorPage.errorStage.onResponse c b).build).status = b.build.status
+    rw [show Reactor.Stage.ErrorPage.errorStage.onResponse c b
+          = b.mapResp (Reactor.Stage.ErrorPage.applyPage (Reactor.Stage.ErrorPage.pathOf c)) from rfl,
+        Reactor.Pipeline.build_mapResp]
+    unfold Reactor.Stage.ErrorPage.applyPage
+    split <;> rfl
+
+/-- **The zstd/brotli compress braid transform.** Always passes the request. Response
+phase: marker absent ⇒ identity; present ⇒ the REAL `CompressExt.compressStage`
+response phase (negotiate off `Accept-Encoding`; non-identity ⇒ codec-frame the body +
+push `Content-Encoding`). -/
+def compressBraidStage : Stage where
+  name := "compress-zstd-br"
+  onRequest := fun c => .continue c
+  onResponse := fun c b =>
+    match c.req.headers.find? (fun nv => nv.1 == compressMarker) with
+    | none   => b
+    | some _ => Reactor.Stage.CompressExt.compressStage.onResponse c b
+
+theorem compressBraidStage_off (c : Ctx)
+    (h : c.req.headers.find? (fun nv => nv.1 == compressMarker) = none) :
+    compressBraidStage.onRequest c = .continue c ∧ ∀ b, compressBraidStage.onResponse c b = b := by
+  refine ⟨rfl, fun b => ?_⟩
+  show (match c.req.headers.find? (fun nv => nv.1 == compressMarker) with
+        | none   => b
+        | some _ => Reactor.Stage.CompressExt.compressStage.onResponse c b) = b
+  rw [h]
+
+theorem compressBraidStage_on (c : Ctx) (b : ResponseBuilder) (nv : Proto.Bytes × Proto.Bytes)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == compressMarker) = some nv) :
+    compressBraidStage.onResponse c b = Reactor.Stage.CompressExt.compressStage.onResponse c b := by
+  show (match c.req.headers.find? (fun nv => nv.1 == compressMarker) with
+        | none   => b
+        | some _ => Reactor.Stage.CompressExt.compressStage.onResponse c b) = _
+  rw [hfind]
+
+theorem compressBraidStage_statusStable : Stage.statusStable compressBraidStage := by
+  intro c b
+  show ((compressBraidStage.onResponse c b).build).status = b.build.status
+  unfold compressBraidStage
+  dsimp only
+  split
+  · rfl
+  · show ((Reactor.Stage.CompressExt.compressStage.onResponse c b).build).status = b.build.status
+    show ((match Reactor.Stage.CompressExt.ctxEnc c with
+            | .identity => b
+            | enc =>
+              (b.mapResp (fun r => { r with body := Reactor.Stage.CompressExt.encode enc r.body })).addHeader
+                (Reactor.Stage.Compress.ceName, Reactor.Stage.CompressExt.codecTok enc)).build).status
+          = b.build.status
+    cases Reactor.Stage.CompressExt.ctxEnc c <;>
+      first
+      | rfl
+      | (rw [Reactor.Pipeline.build_addHeader, Reactor.Pipeline.build_mapResp])
+
+/-! #### The extended braided chain and its status-stability -/
+
+/-- **The braid-2 chain.** Five config-gated braid stages prepended to `braidedChain`
+(itself the §8 forward-auth gate + request-id echo at the head of `deployStagesFull2`).
+A strictly larger, separate fold; `braidedChain` is untouched. -/
+def braidedChain2 : List Stage :=
+  connBraidStage :: stickBraidStage :: slowBraidStage
+    :: errorPageBraidStage :: compressBraidStage :: braidedChain
+
+/-- Every stage of `braidedChain2` is status-stable (the five new stages plus the
+inherited `braidedChain`), so a gate short-circuit keeps its status through the onion. -/
+theorem braidedChain2_statusStable : ∀ s ∈ braidedChain2, Stage.statusStable s := by
+  intro s hs
+  rcases List.mem_cons.mp hs with rfl | hs
+  · exact connBraidStage_statusStable
+  rcases List.mem_cons.mp hs with rfl | hs
+  · exact stickBraidStage_statusStable
+  rcases List.mem_cons.mp hs with rfl | hs
+  · exact slowBraidStage_statusStable
+  rcases List.mem_cons.mp hs with rfl | hs
+  · exact errorPageBraidStage_statusStable
+  rcases List.mem_cons.mp hs with rfl | hs
+  · exact compressBraidStage_statusStable
+  · exact braidedChain_statusStable s hs
+
+/-! #### THE NEW COMPOSITION — byte-identity when all five markers are OFF -/
+
+/-- **`braided2_off_eq` — the five-stage extension is faithful when gated OFF.** With
+none of the five braid markers (and neither §8 marker) present, the `braidedChain2`
+fold's built response is exactly `deployStagesFull2`'s: `prepend_pass` peels the five
+transparent head stages, then §8's `braided_off_eq` peels the forward-auth/request-id
+pair. EARNED, not `rfl` — the appended stages restructure the fold. -/
+theorem braided2_off_eq (c : Ctx)
+    (hconn : c.req.headers.find? (fun nv => nv.1 == connMarker) = none)
+    (hstick : c.req.headers.find? (fun nv => nv.1 == stickMarker) = none)
+    (hslow : c.req.headers.find? (fun nv => nv.1 == slowMarker) = none)
+    (herr : c.req.headers.find? (fun nv => nv.1 == errorPageMarker) = none)
+    (hcomp : c.req.headers.find? (fun nv => nv.1 == compressMarker) = none)
+    (hfa : c.req.headers.find? (fun nv => nv.1 == faTriggerName) = none)
+    (hrid : Reactor.Stage.RequestId.incomingOf c.req = none) :
+    runPipeline braidedChain2 appHandler c = runPipeline deployStagesFull2 appHandler c := by
+  obtain ⟨h1r, h1p⟩ := connBraidStage_off c hconn
+  obtain ⟨h2r, h2p⟩ := stickBraidStage_off c hstick
+  obtain ⟨h3r, h3p⟩ := slowBraidStage_off c hslow
+  obtain ⟨h4r, h4p⟩ := errorPageBraidStage_off c herr
+  obtain ⟨h5r, h5p⟩ := compressBraidStage_off c hcomp
+  show runPipeline (connBraidStage :: stickBraidStage :: slowBraidStage
+    :: errorPageBraidStage :: compressBraidStage :: braidedChain) appHandler c = _
+  rw [prepend_pass connBraidStage _ appHandler c h1r h1p,
+      prepend_pass stickBraidStage _ appHandler c h2r h2p,
+      prepend_pass slowBraidStage _ appHandler c h3r h3p,
+      prepend_pass errorPageBraidStage _ appHandler c h4r h4p,
+      prepend_pass compressBraidStage _ appHandler c h5r h5p,
+      braided_off_eq c hfa hrid]
+
+/-- **The braid-2 serve.** `serialize` of the BUILT fold over `braidedChain2`. -/
+def servePipelineBraided2 (input : Bytes) : Bytes :=
+  serialize ((runPipeline braidedChain2 appHandler (ctxOf input)).build)
+
+/-- **`servePipelineBraided2_off_eq` — byte-identical default serve.** With no braid
+markers on `ctxOf input`, the braid-2 serve emits EXACTLY `servePipelineFull2`'s
+bytes — the default conformance is preserved under the five-stage extension. -/
+theorem servePipelineBraided2_off_eq (input : Bytes)
+    (hconn : (ctxOf input).req.headers.find? (fun nv => nv.1 == connMarker) = none)
+    (hstick : (ctxOf input).req.headers.find? (fun nv => nv.1 == stickMarker) = none)
+    (hslow : (ctxOf input).req.headers.find? (fun nv => nv.1 == slowMarker) = none)
+    (herr : (ctxOf input).req.headers.find? (fun nv => nv.1 == errorPageMarker) = none)
+    (hcomp : (ctxOf input).req.headers.find? (fun nv => nv.1 == compressMarker) = none)
+    (hfa : (ctxOf input).req.headers.find? (fun nv => nv.1 == faTriggerName) = none)
+    (hrid : Reactor.Stage.RequestId.incomingOf (ctxOf input).req = none) :
+    servePipelineBraided2 input = servePipelineFull2 input := by
+  show serialize ((runPipeline braidedChain2 appHandler (ctxOf input)).build) = _
+  rw [braided2_off_eq (ctxOf input) hconn hstick hslow herr hcomp hfa hrid]
+  rfl
+
+/-! #### THE FIRE — each composed stage genuinely drives the served bytes -/
+
+/-- **`braided2_conn_denies_status` — the connection-cap 503 fires at the head.** With
+the `x-conn-limit` marker, the built braid-2 status is exactly `503`: the head gate
+`.respond`s the REAL `ConnLimit.resp503` and it survives the entire status-stable inner
+onion (the four other new stages + `braidedChain`). Via `pipeline_gate_status`. -/
+theorem braided2_conn_denies_status (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == connMarker) = some nv) :
+    ((runPipeline braidedChain2 appHandler c).build).status = 503 := by
+  have hst : ∀ t ∈ (stickBraidStage :: slowBraidStage
+      :: errorPageBraidStage :: compressBraidStage :: braidedChain), Stage.statusStable t :=
+    fun t ht => braidedChain2_statusStable t (List.mem_cons_of_mem _ ht)
+  have hgs := Reactor.Pipeline.pipeline_gate_status connBraidStage _ appHandler c
+    Reactor.Stage.ConnLimit.resp503 (connBraidStage_denies c nv hfind) hst
+  show ((runPipeline braidedChain2 appHandler c).build).status = 503
+  rw [show braidedChain2 = connBraidStage :: (stickBraidStage :: slowBraidStage
+        :: errorPageBraidStage :: compressBraidStage :: braidedChain) from rfl, hgs]
+  rfl
+
+/-- **`braided2_stick_denies_status` — the stick-table 429 fires once the conn gate
+passes.** With `x-conn-limit` absent (so the head gate passes, transparently) and
+`x-stick-limit` present, the built status is `429`: `prepend_pass` peels the conn gate,
+then the stick gate `.respond`s the REAL `resp429`, surviving the status-stable tail. -/
+theorem braided2_stick_denies_status (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hconn : c.req.headers.find? (fun nv => nv.1 == connMarker) = none)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == stickMarker) = some nv) :
+    ((runPipeline braidedChain2 appHandler c).build).status = 429 := by
+  obtain ⟨h1r, h1p⟩ := connBraidStage_off c hconn
+  have hst : ∀ t ∈ (slowBraidStage :: errorPageBraidStage :: compressBraidStage :: braidedChain),
+      Stage.statusStable t :=
+    fun t ht => braidedChain2_statusStable t (List.mem_cons_of_mem _ (List.mem_cons_of_mem _ ht))
+  have hgs := Reactor.Pipeline.pipeline_gate_status stickBraidStage _ appHandler c
+    Reactor.Stage.StickTable.resp429 (stickBraidStage_denies c nv hfind) hst
+  show ((runPipeline braidedChain2 appHandler c).build).status = 429
+  rw [show braidedChain2 = connBraidStage :: (stickBraidStage :: slowBraidStage
+        :: errorPageBraidStage :: compressBraidStage :: braidedChain) from rfl,
+      prepend_pass connBraidStage _ appHandler c h1r h1p, hgs]
+  rfl
+
+/-- **`braided2_slow_denies_status` — the slowloris 408 fires once the conn/stick gates
+pass.** With `x-conn-limit` and `x-stick-limit` absent and `x-slow-timeout` present, the
+built status is `408`: peel the two passing gates, then the slow gate `.respond`s the
+REAL `resp408`. -/
+theorem braided2_slow_denies_status (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hconn : c.req.headers.find? (fun nv => nv.1 == connMarker) = none)
+    (hstick : c.req.headers.find? (fun nv => nv.1 == stickMarker) = none)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == slowMarker) = some nv) :
+    ((runPipeline braidedChain2 appHandler c).build).status = 408 := by
+  obtain ⟨h1r, h1p⟩ := connBraidStage_off c hconn
+  obtain ⟨h2r, h2p⟩ := stickBraidStage_off c hstick
+  have hst : ∀ t ∈ (errorPageBraidStage :: compressBraidStage :: braidedChain),
+      Stage.statusStable t :=
+    fun t ht => braidedChain2_statusStable t
+      (List.mem_cons_of_mem _ (List.mem_cons_of_mem _ (List.mem_cons_of_mem _ ht)))
+  have hgs := Reactor.Pipeline.pipeline_gate_status slowBraidStage _ appHandler c
+    Reactor.Stage.Slowloris.resp408 (slowBraidStage_denies c nv hfind) hst
+  show ((runPipeline braidedChain2 appHandler c).build).status = 408
+  rw [show braidedChain2 = connBraidStage :: stickBraidStage :: (slowBraidStage
+        :: errorPageBraidStage :: compressBraidStage :: braidedChain) from rfl,
+      prepend_pass connBraidStage _ appHandler c h1r h1p,
+      prepend_pass stickBraidStage _ appHandler c h2r h2p, hgs]
+  rfl
+
+/-- **`braided2_errorpage_maps_404` — the custom error page replaces a 404 body.** With
+the three gate markers and the compress marker OFF (so those stages are transparent) and
+the `x-error-page` marker ON, if the inner `braidedChain` fold builds a `404`, the emitted
+braid-2 body IS `ErrorPage.renderPage (pathOf c)` — the rendered custom page reaches the
+wire, replacing the handler's error body. The transform runs at the correct (outermost-
+after-gates) onion position via `pipeline_stage_effect`, reusing `ErrorPage.applyPage`. -/
+theorem braided2_errorpage_maps_404 (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hconn : c.req.headers.find? (fun nv => nv.1 == connMarker) = none)
+    (hstick : c.req.headers.find? (fun nv => nv.1 == stickMarker) = none)
+    (hslow : c.req.headers.find? (fun nv => nv.1 == slowMarker) = none)
+    (hcomp : c.req.headers.find? (fun nv => nv.1 == compressMarker) = none)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == errorPageMarker) = some nv)
+    (hmatch : Reactor.Stage.ErrorPage.hasPage ((runPipeline braidedChain appHandler c).build).status = true) :
+    ((runPipeline braidedChain2 appHandler c).build).body
+      = Reactor.Stage.ErrorPage.renderPage (Reactor.Stage.ErrorPage.pathOf c) := by
+  obtain ⟨h1r, h1p⟩ := connBraidStage_off c hconn
+  obtain ⟨h2r, h2p⟩ := stickBraidStage_off c hstick
+  obtain ⟨h3r, h3p⟩ := slowBraidStage_off c hslow
+  obtain ⟨h5r, h5p⟩ := compressBraidStage_off c hcomp
+  show ((runPipeline braidedChain2 appHandler c).build).body = _
+  rw [show braidedChain2 = connBraidStage :: stickBraidStage :: slowBraidStage
+        :: (errorPageBraidStage :: compressBraidStage :: braidedChain) from rfl,
+      prepend_pass connBraidStage _ appHandler c h1r h1p,
+      prepend_pass stickBraidStage _ appHandler c h2r h2p,
+      prepend_pass slowBraidStage _ appHandler c h3r h3p,
+      Reactor.Pipeline.pipeline_stage_effect errorPageBraidStage
+        (compressBraidStage :: braidedChain) appHandler c c rfl,
+      errorPageBraidStage_on c _ nv hfind,
+      Reactor.Pipeline.build_mapResp,
+      prepend_pass compressBraidStage braidedChain appHandler c h5r h5p]
+  simp only [Reactor.Stage.ErrorPage.applyPage, hmatch, if_true]
+
+/-- **`braided2_compress_encodes` — the codec content-encoding fires.** With the three
+gate markers and the error-page marker OFF and the `x-compress-ext` marker ON, if the
+request negotiates a non-identity coding `enc`, the finalized braid-2 response carries
+`Content-Encoding: <codecTok enc>` — the real `CompressExt` header. The braid stage's
+response phase equals the library `compressStage`'s (via `pipeline_stage_effect` both
+ways), reusing `CompressExt.content_encoding_set`. -/
+theorem braided2_compress_encodes (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hconn : c.req.headers.find? (fun nv => nv.1 == connMarker) = none)
+    (hstick : c.req.headers.find? (fun nv => nv.1 == stickMarker) = none)
+    (hslow : c.req.headers.find? (fun nv => nv.1 == slowMarker) = none)
+    (herr : c.req.headers.find? (fun nv => nv.1 == errorPageMarker) = none)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == compressMarker) = some nv)
+    {enc : Reactor.Stage.CompressExt.Codec} (henc : Reactor.Stage.CompressExt.ctxEnc c = enc)
+    (hne : enc ≠ .identity) :
+    (Reactor.Stage.Compress.ceName, Reactor.Stage.CompressExt.codecTok enc)
+      ∈ ((runPipeline braidedChain2 appHandler c).build).headers := by
+  obtain ⟨h1r, h1p⟩ := connBraidStage_off c hconn
+  obtain ⟨h2r, h2p⟩ := stickBraidStage_off c hstick
+  obtain ⟨h3r, h3p⟩ := slowBraidStage_off c hslow
+  obtain ⟨h4r, h4p⟩ := errorPageBraidStage_off c herr
+  show (Reactor.Stage.Compress.ceName, Reactor.Stage.CompressExt.codecTok enc)
+      ∈ ((runPipeline braidedChain2 appHandler c).build).headers
+  rw [show braidedChain2 = connBraidStage :: stickBraidStage :: slowBraidStage
+        :: errorPageBraidStage :: (compressBraidStage :: braidedChain) from rfl,
+      prepend_pass connBraidStage _ appHandler c h1r h1p,
+      prepend_pass stickBraidStage _ appHandler c h2r h2p,
+      prepend_pass slowBraidStage _ appHandler c h3r h3p,
+      prepend_pass errorPageBraidStage _ appHandler c h4r h4p,
+      Reactor.Pipeline.pipeline_stage_effect compressBraidStage braidedChain appHandler c c rfl,
+      compressBraidStage_on c _ nv hfind,
+      ← Reactor.Pipeline.pipeline_stage_effect Reactor.Stage.CompressExt.compressStage
+        braidedChain appHandler c c rfl]
+  exact Reactor.Stage.CompressExt.content_encoding_set braidedChain appHandler c henc hne
+
+#print axioms braided2_off_eq
+#print axioms servePipelineBraided2_off_eq
+#print axioms braided2_conn_denies_status
+#print axioms braided2_stick_denies_status
+#print axioms braided2_slow_denies_status
+#print axioms braided2_errorpage_maps_404
+#print axioms braided2_compress_encodes
+
+/-! ### (8i) THE METERED BRAID-2 — braid-2 through the PRODUCTION metered fold
+
+As §8g threaded `braidedChain` into the connection-aware metered fold, this threads
+`braidedChain2` into it: `braidedDeployment2` is `defaultDeployment` with its middleware
+chain replaced by `braidedChain2`. Only the `middleware` dimension differs, so
+`Dsl.instantiate` reproduces the SAME `AppConfig`/`appHandler` as `defaultDeployment`, and
+the metered fold over it is exactly `runPipeline braidedChain2 appHandler (ctxOfMetered …)`.
+`defaultDeployment`/`braidedDeployment` and their anchors (`servePipelineOfMetered_default`,
+`servePipelineOfMetered_braided_*`) are UNTOUCHED. The braid-2 head stages read only
+`c.req` and `(ctxOfMetered … input).req = (ctxOf input).req`, so the §8h `Ctx`-generic
+composition theorems discharge the metered fold at `ctxOfMetered` directly. -/
+
+/-- **The braid-2 deployment config.** `defaultDeployment` with its middleware chain
+replaced by `braidedChain2` — the same `AppConfig` as `defaultDeployment`. -/
+def braidedDeployment2 : Dsl.DeploymentConfig :=
+  { defaultDeployment with middleware := { chain := braidedChain2 } }
+
+/-- The braid-2 config instantiates to EXACTLY `braidedChain2`. -/
+theorem instantiate_braided2_stages :
+    (Dsl.instantiate braidedDeployment2).1 = braidedChain2 := rfl
+
+/-- The braid-2 config instantiates to the SAME `AppConfig` as `defaultDeployment`. -/
+theorem instantiate_braided2_app :
+    (Dsl.instantiate braidedDeployment2).2 = (Dsl.instantiate defaultDeployment).2 := rfl
+
+/-- **The metered braid-2 serve IS the braid-2 chain over the metered context.** -/
+theorem servePipelineOfMetered_braided2_eq
+    (clientIp : Proto.Bytes) (connSeq : Nat) (input : Bytes) :
+    servePipelineOfMetered braidedDeployment2 clientIp connSeq input
+      = serialize ((runPipeline braidedChain2 appHandler
+          (ctxOfMetered clientIp connSeq input)).build) := rfl
+
+/-- **`servePipelineOfMetered_braided2_off_eq` — the metered braid-2 is byte-identical
+when all five markers (and both §8 markers) are OFF.** The metered braided-2 serve emits
+EXACTLY the frozen metered serve's bytes — `braided2_off_eq` peels the head stages at the
+metered context. EARNED, not `rfl`. -/
+theorem servePipelineOfMetered_braided2_off_eq
+    (clientIp : Proto.Bytes) (connSeq : Nat) (input : Bytes)
+    (hconn : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == connMarker) = none)
+    (hstick : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == stickMarker) = none)
+    (hslow : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == slowMarker) = none)
+    (herr : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == errorPageMarker) = none)
+    (hcomp : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == compressMarker) = none)
+    (hfa : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == faTriggerName) = none)
+    (hrid : Reactor.Stage.RequestId.incomingOf (ctxOfMetered clientIp connSeq input).req = none) :
+    servePipelineOfMetered braidedDeployment2 clientIp connSeq input
+      = servePipelineFull2Metered clientIp connSeq input := by
+  rw [servePipelineOfMetered_braided2_eq,
+      braided2_off_eq (ctxOfMetered clientIp connSeq input) hconn hstick hslow herr hcomp hfa hrid]
+  rfl
+
+/-- **`servePipelineOfMetered_braided2_conn_denies_status` — the connection-cap `503`
+survives the metered onion.** With the `x-conn-limit` marker, the metered braided-2 serve
+BUILDS a `503`. Via `braided2_conn_denies_status` at the metered context. -/
+theorem servePipelineOfMetered_braided2_conn_denies_status
+    (clientIp : Proto.Bytes) (connSeq : Nat) (input : Bytes) (nv : Proto.Bytes × Proto.Bytes)
+    (hfind : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == connMarker) = some nv) :
+    ((runPipeline (Dsl.instantiate braidedDeployment2).1
+        (Dsl.handlerOf (Dsl.instantiate braidedDeployment2).2)
+        (ctxOfMetered clientIp connSeq input)).build).status = 503 := by
+  show ((runPipeline braidedChain2 appHandler (ctxOfMetered clientIp connSeq input)).build).status = 503
+  exact braided2_conn_denies_status (ctxOfMetered clientIp connSeq input) nv hfind
+
+/-- **`servePipelineOfMetered_braided2_stick_denies_status` — the stick-table `429` once
+the conn gate passes, through the metered fold. Via `braided2_stick_denies_status`. -/
+theorem servePipelineOfMetered_braided2_stick_denies_status
+    (clientIp : Proto.Bytes) (connSeq : Nat) (input : Bytes) (nv : Proto.Bytes × Proto.Bytes)
+    (hconn : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == connMarker) = none)
+    (hfind : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == stickMarker) = some nv) :
+    ((runPipeline (Dsl.instantiate braidedDeployment2).1
+        (Dsl.handlerOf (Dsl.instantiate braidedDeployment2).2)
+        (ctxOfMetered clientIp connSeq input)).build).status = 429 := by
+  show ((runPipeline braidedChain2 appHandler (ctxOfMetered clientIp connSeq input)).build).status = 429
+  exact braided2_stick_denies_status (ctxOfMetered clientIp connSeq input) nv hconn hfind
+
+/-- **`servePipelineOfMetered_braided2_slow_denies_status` — the slowloris `408` once the
+conn/stick gates pass, through the metered fold. Via `braided2_slow_denies_status`. -/
+theorem servePipelineOfMetered_braided2_slow_denies_status
+    (clientIp : Proto.Bytes) (connSeq : Nat) (input : Bytes) (nv : Proto.Bytes × Proto.Bytes)
+    (hconn : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == connMarker) = none)
+    (hstick : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == stickMarker) = none)
+    (hfind : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == slowMarker) = some nv) :
+    ((runPipeline (Dsl.instantiate braidedDeployment2).1
+        (Dsl.handlerOf (Dsl.instantiate braidedDeployment2).2)
+        (ctxOfMetered clientIp connSeq input)).build).status = 408 := by
+  show ((runPipeline braidedChain2 appHandler (ctxOfMetered clientIp connSeq input)).build).status = 408
+  exact braided2_slow_denies_status (ctxOfMetered clientIp connSeq input) nv hconn hstick hfind
+
+/-- **`servePipelineOfMetered_braided2_compress_encodes` — the codec content-encoding
+fires through the metered fold. Via `braided2_compress_encodes`. -/
+theorem servePipelineOfMetered_braided2_compress_encodes
+    (clientIp : Proto.Bytes) (connSeq : Nat) (input : Bytes) (nv : Proto.Bytes × Proto.Bytes)
+    (hconn : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == connMarker) = none)
+    (hstick : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == stickMarker) = none)
+    (hslow : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == slowMarker) = none)
+    (herr : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == errorPageMarker) = none)
+    (hfind : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == compressMarker) = some nv)
+    {enc : Reactor.Stage.CompressExt.Codec}
+    (henc : Reactor.Stage.CompressExt.ctxEnc (ctxOfMetered clientIp connSeq input) = enc)
+    (hne : enc ≠ .identity) :
+    (Reactor.Stage.Compress.ceName, Reactor.Stage.CompressExt.codecTok enc)
+      ∈ ((runPipeline (Dsl.instantiate braidedDeployment2).1
+            (Dsl.handlerOf (Dsl.instantiate braidedDeployment2).2)
+            (ctxOfMetered clientIp connSeq input)).build).headers := by
+  show (Reactor.Stage.Compress.ceName, Reactor.Stage.CompressExt.codecTok enc)
+      ∈ ((runPipeline braidedChain2 appHandler (ctxOfMetered clientIp connSeq input)).build).headers
+  exact braided2_compress_encodes (ctxOfMetered clientIp connSeq input) nv hconn hstick hslow herr hfind henc hne
+
+#print axioms servePipelineOfMetered_braided2_off_eq
+#print axioms servePipelineOfMetered_braided2_conn_denies_status
+#print axioms servePipelineOfMetered_braided2_stick_denies_status
+#print axioms servePipelineOfMetered_braided2_slow_denies_status
+#print axioms servePipelineOfMetered_braided2_compress_encodes
+
+/-! ### (8j) BRAID-3 — three more proven-but-inert response-shaping libs, each with
+its OWN composition theorem, extending `braidedChain2` to `braidedChain3`, plus the
+Early-Hints (103) ordering prefix over the braid-3 fold.
+
+`braidedChain3` prepends THREE config-gated braid stages to `braidedChain2`:
+
+* one SHORT-CIRCUIT GATE — `conditionalBraidStage` (RFC 7232 conditional request →
+  `304 Not Modified`). Marker absent ⇒ pure pass-through; present ⇒ it `.respond`s
+  the REAL `Cache.Conditional` decision (`evaluate` then `respond` on the library's
+  own end-to-end `If-None-Match` witness `demoReq`/`demoResource`) — a genuine `304`
+  via `demo_if_none_match_304`, NOT a hand-written constant.
+
+* two RESPONSE-TRANSFORMS — `variantsBraidStage` (pre-compressed static: the
+  `Vary: Accept-Encoding` representation-dependence header, the exact header
+  `Reactor.Stage.Variants.serveVariant` provably ALWAYS emits, `variant_vary_always`)
+  and `autoindexBraidStage` (directory listing: the response body becomes the REAL
+  `Autoindex.renderIndexHtml` listing that the library `serveDir` yields for a
+  directory with no index, `autoindex_lists_dir`). Marker absent ⇒ `onResponse = id`
+  (pass-through, `prepend_pass`); present ⇒ the real library transform fires.
+
+Each stage's composition is PROVEN: byte-identity when gated OFF (`prepend_pass`
+composed onto §8h's `braided2_off_eq`), and — when ON — the real fire fact riding
+the pipeline calculus (`pipeline_gate_status` for the gate, `pipeline_stage_effect`
++ the library `*Correct` for the transforms).
+
+The FOURTH library, Early Hints (RFC 8297), is braided as a response-PREFIX rather
+than an onion stage: a `103` interim is out-of-band — it never becomes the response
+and never touches the final status/body, so it cannot be a `Ctx → ResponseBuilder`
+onion stage. Its composition is the ORDERING theorem `braided3_earlyhints_ordering`
+over the braid-3 fold — a `103` carrying the braid-3 response's `Link` headers is
+emitted BEFORE that response, and the final wire response is byte-for-byte the
+braid-3 built response (`early_hints_103` / `early_hints_then_final` at
+`braidedChain3`). `braidedChain2`/`braidedDeployment2` and every §8/§8h theorem (and
+the `servePipelineOfMetered_default` anchor) are UNTOUCHED — `braidedChain3` is a
+strictly larger, separate fold. -/
+
+/-- The per-request marker enabling the RFC 7232 conditional-request `304` gate. -/
+def conditionalMarker : Proto.Bytes := "x-conditional".toUTF8.toList
+/-- The per-request marker enabling the pre-compressed-variant `Vary` transform. -/
+def variantsMarker : Proto.Bytes := "x-variants".toUTF8.toList
+/-- The per-request marker enabling the directory-listing transform. -/
+def autoindexMarker : Proto.Bytes := "x-autoindex".toUTF8.toList
+
+/-! #### The conditional-request `304` gate (pass-through when unmarked) -/
+
+/-- The genuine `304` the conditional gate answers with: the REAL `Cache.Conditional`
+decision (`evaluate` then `respond`) on the library's own end-to-end `If-None-Match`
+witness — status `304`, empty body, `ETag` validator preserved (`demo_if_none_match_304`),
+NOT a constant. -/
+def conditional304 : Response :=
+  Cache.Conditional.respond Cache.Conditional.demoResource
+    (Cache.Conditional.evaluate (Cache.Conditional.isSafe Cache.Conditional.demoReq.method)
+      (Cache.Conditional.condsOf Cache.Conditional.demoReq) Cache.Conditional.demoResource)
+
+/-- The library decision the gate answers with is a genuine `304` (the library's own
+end-to-end `If-None-Match` theorem, not a bare literal). -/
+theorem conditional304_status : conditional304.status = 304 :=
+  (Cache.Conditional.demo_if_none_match_304).1
+
+/-- **The conditional-request braid gate.** Marker absent ⇒ pass-through; present ⇒
+the REAL `Cache.Conditional` evaluation on the library's own conditional-GET witness
+`.respond`s the genuine `304`. -/
+def conditionalBraidStage : Stage where
+  name := "conditional-304"
+  onRequest := fun c =>
+    match c.req.headers.find? (fun nv => nv.1 == conditionalMarker) with
+    | none   => .continue c
+    | some _ => .respond conditional304
+  onResponse := fun _ b => b
+
+theorem conditionalBraidStage_off (c : Ctx)
+    (h : c.req.headers.find? (fun nv => nv.1 == conditionalMarker) = none) :
+    conditionalBraidStage.onRequest c = .continue c ∧ ∀ b, conditionalBraidStage.onResponse c b = b := by
+  refine ⟨?_, fun _ => rfl⟩
+  show (match c.req.headers.find? (fun nv => nv.1 == conditionalMarker) with
+        | none   => StageStep.continue c
+        | some _ => StageStep.respond conditional304) = _
+  rw [h]
+
+theorem conditionalBraidStage_denies (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == conditionalMarker) = some nv) :
+    conditionalBraidStage.onRequest c = .respond conditional304 := by
+  show (match c.req.headers.find? (fun nv => nv.1 == conditionalMarker) with
+        | none   => StageStep.continue c
+        | some _ => StageStep.respond conditional304) = _
+  rw [hfind]
+
+theorem conditionalBraidStage_statusStable : Stage.statusStable conditionalBraidStage := fun _ _ => rfl
+
+/-! #### The pre-compressed-variant `Vary` transform (identity when unmarked) -/
+
+/-- **The pre-compressed-variant braid transform.** Always passes the request.
+Response phase: marker absent ⇒ identity; present ⇒ push the REAL
+`Reactor.Stage.Variants.varyName`/`aeVary` header — the `Vary: Accept-Encoding`
+representation-dependence header that `serveVariant` provably always emits
+(`variant_vary_always`). -/
+def variantsBraidStage : Stage where
+  name := "variants-vary"
+  onRequest := fun c => .continue c
+  onResponse := fun c b =>
+    match c.req.headers.find? (fun nv => nv.1 == variantsMarker) with
+    | none   => b
+    | some _ => b.addHeader (Reactor.Stage.Variants.varyName, Reactor.Stage.Variants.aeVary)
+
+theorem variantsBraidStage_off (c : Ctx)
+    (h : c.req.headers.find? (fun nv => nv.1 == variantsMarker) = none) :
+    variantsBraidStage.onRequest c = .continue c ∧ ∀ b, variantsBraidStage.onResponse c b = b := by
+  refine ⟨rfl, fun b => ?_⟩
+  show (match c.req.headers.find? (fun nv => nv.1 == variantsMarker) with
+        | none   => b
+        | some _ => b.addHeader (Reactor.Stage.Variants.varyName, Reactor.Stage.Variants.aeVary)) = b
+  rw [h]
+
+theorem variantsBraidStage_on (c : Ctx) (b : ResponseBuilder) (nv : Proto.Bytes × Proto.Bytes)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == variantsMarker) = some nv) :
+    variantsBraidStage.onResponse c b
+      = b.addHeader (Reactor.Stage.Variants.varyName, Reactor.Stage.Variants.aeVary) := by
+  show (match c.req.headers.find? (fun nv => nv.1 == variantsMarker) with
+        | none   => b
+        | some _ => b.addHeader (Reactor.Stage.Variants.varyName, Reactor.Stage.Variants.aeVary)) = _
+  rw [hfind]
+
+theorem variantsBraidStage_statusStable : Stage.statusStable variantsBraidStage := by
+  intro c b
+  show ((variantsBraidStage.onResponse c b).build).status = b.build.status
+  unfold variantsBraidStage
+  dsimp only
+  split
+  · rfl
+  · rw [Reactor.Pipeline.build_addHeader]
+
+/-! #### The directory-listing transform (identity when unmarked) -/
+
+/-- The witness request path the listing transform renders. -/
+def autoindexReqTarget : List String := ["pub"]
+/-- The witness directory's entry names. -/
+def autoindexEntries : List String := ["a.txt", "b.txt"]
+
+/-- The witness directory config the listing transform serves: a directory (no index
+file) whose `readDir` yields `autoindexEntries`, so the library `serveDir` renders
+exactly `autoindexListing` (`autoindex_lists_dir`). -/
+def autoindexDirCfg : Reactor.Stage.Autoindex.DirConfig where
+  docRoot := ["srv", "www"]
+  existsFile := fun _ => false
+  isDir := fun _ => true
+  readDir := fun _ => autoindexEntries
+  indexNames := []
+
+/-- The REAL `Autoindex.renderIndexHtml` listing body for the witness directory —
+the same bytes the library `serveDir` puts in its `.listing`. -/
+def autoindexListing : Proto.Bytes :=
+  Reactor.Stage.Autoindex.renderIndexHtml autoindexReqTarget autoindexEntries
+
+/-- **The directory-listing braid transform.** Always passes the request. Response
+phase: marker absent ⇒ identity; present ⇒ the body becomes the REAL
+`Autoindex.renderIndexHtml` directory listing (`autoindexListing`). -/
+def autoindexBraidStage : Stage where
+  name := "autoindex"
+  onRequest := fun c => .continue c
+  onResponse := fun c b =>
+    match c.req.headers.find? (fun nv => nv.1 == autoindexMarker) with
+    | none   => b
+    | some _ => b.mapResp (fun r => { r with body := autoindexListing })
+
+theorem autoindexBraidStage_off (c : Ctx)
+    (h : c.req.headers.find? (fun nv => nv.1 == autoindexMarker) = none) :
+    autoindexBraidStage.onRequest c = .continue c ∧ ∀ b, autoindexBraidStage.onResponse c b = b := by
+  refine ⟨rfl, fun b => ?_⟩
+  show (match c.req.headers.find? (fun nv => nv.1 == autoindexMarker) with
+        | none   => b
+        | some _ => b.mapResp (fun r => { r with body := autoindexListing })) = b
+  rw [h]
+
+theorem autoindexBraidStage_on (c : Ctx) (b : ResponseBuilder) (nv : Proto.Bytes × Proto.Bytes)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == autoindexMarker) = some nv) :
+    autoindexBraidStage.onResponse c b = b.mapResp (fun r => { r with body := autoindexListing }) := by
+  show (match c.req.headers.find? (fun nv => nv.1 == autoindexMarker) with
+        | none   => b
+        | some _ => b.mapResp (fun r => { r with body := autoindexListing })) = _
+  rw [hfind]
+
+theorem autoindexBraidStage_statusStable : Stage.statusStable autoindexBraidStage := by
+  intro c b
+  show ((autoindexBraidStage.onResponse c b).build).status = b.build.status
+  unfold autoindexBraidStage
+  dsimp only
+  split
+  · rfl
+  · rw [Reactor.Pipeline.build_mapResp]
+
+/-! #### The extended braided chain and its status-stability -/
+
+/-- **The braid-3 chain.** Three config-gated response-shaping braid stages prepended
+to `braidedChain2`. A strictly larger, separate fold; `braidedChain2` is untouched. -/
+def braidedChain3 : List Stage :=
+  conditionalBraidStage :: variantsBraidStage :: autoindexBraidStage :: braidedChain2
+
+/-- Every stage of `braidedChain3` is status-stable (the three new stages plus the
+inherited `braidedChain2`). -/
+theorem braidedChain3_statusStable : ∀ s ∈ braidedChain3, Stage.statusStable s := by
+  intro s hs
+  rcases List.mem_cons.mp hs with rfl | hs
+  · exact conditionalBraidStage_statusStable
+  rcases List.mem_cons.mp hs with rfl | hs
+  · exact variantsBraidStage_statusStable
+  rcases List.mem_cons.mp hs with rfl | hs
+  · exact autoindexBraidStage_statusStable
+  · exact braidedChain2_statusStable s hs
+
+/-! #### THE NEW COMPOSITION — byte-identity when all three markers are OFF -/
+
+/-- **`braided3_off_eq` — the three-stage extension is faithful when gated OFF.** With
+none of the three braid-3 markers (and none of the five braid-2 / two §8 markers)
+present, the `braidedChain3` fold's built response is exactly `deployStagesFull2`'s:
+`prepend_pass` peels the three transparent head stages, then §8h's `braided2_off_eq`
+peels the rest. EARNED, not `rfl`. -/
+theorem braided3_off_eq (c : Ctx)
+    (hcond : c.req.headers.find? (fun nv => nv.1 == conditionalMarker) = none)
+    (hvar : c.req.headers.find? (fun nv => nv.1 == variantsMarker) = none)
+    (hauto : c.req.headers.find? (fun nv => nv.1 == autoindexMarker) = none)
+    (hconn : c.req.headers.find? (fun nv => nv.1 == connMarker) = none)
+    (hstick : c.req.headers.find? (fun nv => nv.1 == stickMarker) = none)
+    (hslow : c.req.headers.find? (fun nv => nv.1 == slowMarker) = none)
+    (herr : c.req.headers.find? (fun nv => nv.1 == errorPageMarker) = none)
+    (hcomp : c.req.headers.find? (fun nv => nv.1 == compressMarker) = none)
+    (hfa : c.req.headers.find? (fun nv => nv.1 == faTriggerName) = none)
+    (hrid : Reactor.Stage.RequestId.incomingOf c.req = none) :
+    runPipeline braidedChain3 appHandler c = runPipeline deployStagesFull2 appHandler c := by
+  obtain ⟨h1r, h1p⟩ := conditionalBraidStage_off c hcond
+  obtain ⟨h2r, h2p⟩ := variantsBraidStage_off c hvar
+  obtain ⟨h3r, h3p⟩ := autoindexBraidStage_off c hauto
+  show runPipeline (conditionalBraidStage :: variantsBraidStage :: autoindexBraidStage
+    :: braidedChain2) appHandler c = _
+  rw [prepend_pass conditionalBraidStage _ appHandler c h1r h1p,
+      prepend_pass variantsBraidStage _ appHandler c h2r h2p,
+      prepend_pass autoindexBraidStage _ appHandler c h3r h3p,
+      braided2_off_eq c hconn hstick hslow herr hcomp hfa hrid]
+
+/-- **The braid-3 serve.** `serialize` of the BUILT fold over `braidedChain3`. -/
+def servePipelineBraided3 (input : Bytes) : Bytes :=
+  serialize ((runPipeline braidedChain3 appHandler (ctxOf input)).build)
+
+/-- **`servePipelineBraided3_off_eq` — byte-identical default serve.** With no braid
+markers on `ctxOf input`, the braid-3 serve emits EXACTLY `servePipelineFull2`'s
+bytes — the default conformance is preserved under the three-stage extension. -/
+theorem servePipelineBraided3_off_eq (input : Bytes)
+    (hcond : (ctxOf input).req.headers.find? (fun nv => nv.1 == conditionalMarker) = none)
+    (hvar : (ctxOf input).req.headers.find? (fun nv => nv.1 == variantsMarker) = none)
+    (hauto : (ctxOf input).req.headers.find? (fun nv => nv.1 == autoindexMarker) = none)
+    (hconn : (ctxOf input).req.headers.find? (fun nv => nv.1 == connMarker) = none)
+    (hstick : (ctxOf input).req.headers.find? (fun nv => nv.1 == stickMarker) = none)
+    (hslow : (ctxOf input).req.headers.find? (fun nv => nv.1 == slowMarker) = none)
+    (herr : (ctxOf input).req.headers.find? (fun nv => nv.1 == errorPageMarker) = none)
+    (hcomp : (ctxOf input).req.headers.find? (fun nv => nv.1 == compressMarker) = none)
+    (hfa : (ctxOf input).req.headers.find? (fun nv => nv.1 == faTriggerName) = none)
+    (hrid : Reactor.Stage.RequestId.incomingOf (ctxOf input).req = none) :
+    servePipelineBraided3 input = servePipelineFull2 input := by
+  show serialize ((runPipeline braidedChain3 appHandler (ctxOf input)).build) = _
+  rw [braided3_off_eq (ctxOf input) hcond hvar hauto hconn hstick hslow herr hcomp hfa hrid]
+  rfl
+
+/-! #### THE FIRE — each composed stage genuinely drives the served bytes -/
+
+/-- **`braided3_conditional_304` — the conditional-request `304` fires at the head.**
+With the `x-conditional` marker, the built braid-3 status is exactly `304`: the head
+gate `.respond`s the REAL `Cache.Conditional` `304` and it survives the entire
+status-stable inner onion (the two other new stages + `braidedChain2`). Via
+`pipeline_gate_status`, tied to the library's own `demo_if_none_match_304`. -/
+theorem braided3_conditional_304 (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == conditionalMarker) = some nv) :
+    ((runPipeline braidedChain3 appHandler c).build).status = 304 := by
+  have hst : ∀ t ∈ (variantsBraidStage :: autoindexBraidStage :: braidedChain2),
+      Stage.statusStable t :=
+    fun t ht => braidedChain3_statusStable t (List.mem_cons_of_mem _ ht)
+  have hgs := Reactor.Pipeline.pipeline_gate_status conditionalBraidStage _ appHandler c
+    conditional304 (conditionalBraidStage_denies c nv hfind) hst
+  show ((runPipeline braidedChain3 appHandler c).build).status = 304
+  rw [show braidedChain3 = conditionalBraidStage :: (variantsBraidStage
+        :: autoindexBraidStage :: braidedChain2) from rfl, hgs]
+  exact conditional304_status
+
+/-- **`braided3_variants_vary` — the `Vary: Accept-Encoding` header fires once the
+conditional gate passes.** With `x-conditional` absent (so the head gate passes,
+transparently) and `x-variants` present, the finalized braid-3 response carries
+`Vary: Accept-Encoding` — the real `Variants.varyName`/`aeVary` header. Via
+`pipeline_stage_effect` + `build_addHeader`. -/
+theorem braided3_variants_vary (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hcond : c.req.headers.find? (fun nv => nv.1 == conditionalMarker) = none)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == variantsMarker) = some nv) :
+    (Reactor.Stage.Variants.varyName, Reactor.Stage.Variants.aeVary)
+      ∈ ((runPipeline braidedChain3 appHandler c).build).headers := by
+  obtain ⟨h1r, h1p⟩ := conditionalBraidStage_off c hcond
+  show (Reactor.Stage.Variants.varyName, Reactor.Stage.Variants.aeVary)
+      ∈ ((runPipeline braidedChain3 appHandler c).build).headers
+  rw [show braidedChain3 = conditionalBraidStage :: (variantsBraidStage
+        :: autoindexBraidStage :: braidedChain2) from rfl,
+      prepend_pass conditionalBraidStage _ appHandler c h1r h1p,
+      Reactor.Pipeline.pipeline_stage_effect variantsBraidStage
+        (autoindexBraidStage :: braidedChain2) appHandler c c rfl,
+      variantsBraidStage_on c _ nv hfind,
+      Reactor.Pipeline.build_addHeader]
+  simp
+
+/-- **The braid stamps EXACTLY the header `serveVariant` provably always emits.** The
+`Vary: Accept-Encoding` pair the braid pushes is the very pair the library's
+`variant_vary_always` guarantees the real variant handler emits — the braid's byte
+is the library's own representation-dependence header, not a coincidental literal. -/
+theorem braided3_variants_vary_is_library :
+    (Reactor.Stage.Variants.varyName, Reactor.Stage.Variants.aeVary)
+      ∈ (Reactor.Stage.Variants.serveVariant Reactor.Stage.Variants.demoCfg
+          Reactor.Stage.Variants.brReq).headers :=
+  Reactor.Stage.Variants.variant_vary_always Reactor.Stage.Variants.demoCfg
+    Reactor.Stage.Variants.brReq
+
+/-- **`braided3_autoindex_lists` — the directory listing replaces the body once the
+conditional/variants stages pass.** With `x-conditional` and `x-variants` absent (so
+those two head stages are transparent) and `x-autoindex` present, the emitted braid-3
+body IS the real `Autoindex.renderIndexHtml` listing (`autoindexListing`). The
+transform runs at the correct onion position via `pipeline_stage_effect`. -/
+theorem braided3_autoindex_lists (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hcond : c.req.headers.find? (fun nv => nv.1 == conditionalMarker) = none)
+    (hvar : c.req.headers.find? (fun nv => nv.1 == variantsMarker) = none)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == autoindexMarker) = some nv) :
+    ((runPipeline braidedChain3 appHandler c).build).body = autoindexListing := by
+  obtain ⟨h1r, h1p⟩ := conditionalBraidStage_off c hcond
+  obtain ⟨h2r, h2p⟩ := variantsBraidStage_off c hvar
+  show ((runPipeline braidedChain3 appHandler c).build).body = _
+  rw [show braidedChain3 = conditionalBraidStage :: variantsBraidStage
+        :: (autoindexBraidStage :: braidedChain2) from rfl,
+      prepend_pass conditionalBraidStage _ appHandler c h1r h1p,
+      prepend_pass variantsBraidStage _ appHandler c h2r h2p,
+      Reactor.Pipeline.pipeline_stage_effect autoindexBraidStage braidedChain2 appHandler c c rfl,
+      autoindexBraidStage_on c _ nv hfind,
+      Reactor.Pipeline.build_mapResp]
+
+/-- **The braid's listing body IS the library `serveDir`'s listing.** For the witness
+directory (a directory, no index), the library `serveDir` returns a `.listing` whose
+rendered body is exactly `autoindexListing`, and every entry name shows up as its own
+link row — so the braid emits the real directory-index page, not a placeholder. Via
+`autoindex_lists_dir` / `entry_in_listingRows`. -/
+theorem braided3_autoindex_is_serveDir_listing :
+    Reactor.Stage.Autoindex.serveDir autoindexDirCfg autoindexReqTarget
+      = .listing autoindexReqTarget autoindexEntries autoindexListing
+    ∧ ∀ name ∈ autoindexEntries,
+        Reactor.Stage.Autoindex.entryRow autoindexReqTarget name
+          ∈ Reactor.Stage.Autoindex.listingRows autoindexReqTarget autoindexEntries :=
+  Reactor.Stage.Autoindex.autoindex_lists_dir autoindexDirCfg autoindexReqTarget rfl rfl
+
+/-! #### The Early-Hints (103) ordering prefix over the braid-3 fold -/
+
+/-- The Early-Hints emission over the braid-3 fold: run `braidedChain3`, build its
+response, and emit one `103` carrying that response's `Link` headers, then the final. -/
+def braided3EarlyHints (c : Ctx) : Reactor.Stage.EarlyHints.Emission :=
+  Reactor.Stage.EarlyHints.emitWithHints braidedChain3 appHandler c
+
+/-- **`braided3_earlyhints_ordering` — the `103` precedes the braid-3 final.** Over
+the braid-3 fold, a `103 (Early Hints)` interim carrying exactly the braid-3 built
+response's `Link` headers is emitted BEFORE the final: the wire sequence is
+`[i103, final]` with the `103` first (`status = 103`, `Link`-only headers). Via
+`early_hints_103` at `braidedChain3` — the ordering composition of the RFC 8297 model
+with the braid-3 pipeline. -/
+theorem braided3_earlyhints_ordering (c : Ctx) :
+    ∃ i103 : Response,
+      (braided3EarlyHints c).wire = [i103, (runPipeline braidedChain3 appHandler c).build] ∧
+      i103.status = Reactor.Stage.EarlyHints.status103 ∧
+      i103.headers = Reactor.Stage.EarlyHints.onlyLinks
+        ((runPipeline braidedChain3 appHandler c).build).headers :=
+  Reactor.Stage.EarlyHints.early_hints_103 braidedChain3 appHandler c
+
+/-- **`braided3_earlyhints_final_faithful` — the `103` never perturbs the final.** The
+final response of the braid-3 early-hints emission is byte-for-byte the braid-3 built
+response, and it is the LAST thing on the wire. The `103` changes only what precedes,
+never what the final is. Via `early_hints_then_final` at `braidedChain3`. -/
+theorem braided3_earlyhints_final_faithful (c : Ctx) :
+    (braided3EarlyHints c).final = (runPipeline braidedChain3 appHandler c).build ∧
+    (braided3EarlyHints c).wire.getLast?
+      = some ((runPipeline braidedChain3 appHandler c).build) :=
+  ⟨(Reactor.Stage.EarlyHints.early_hints_then_final braidedChain3 appHandler c).1,
+   (Reactor.Stage.EarlyHints.early_hints_then_final braidedChain3 appHandler c).2.1⟩
+
+#print axioms braided3_off_eq
+#print axioms servePipelineBraided3_off_eq
+#print axioms braided3_conditional_304
+#print axioms braided3_variants_vary
+#print axioms braided3_variants_vary_is_library
+#print axioms braided3_autoindex_lists
+#print axioms braided3_autoindex_is_serveDir_listing
+#print axioms braided3_earlyhints_ordering
+#print axioms braided3_earlyhints_final_faithful
+
+/-! ### (8k) THE METERED BRAID-3 — braid-3 through the PRODUCTION metered fold
+
+As §8i threaded `braidedChain2` into the connection-aware metered fold, this threads
+`braidedChain3`: `braidedDeployment3` is `defaultDeployment` with its middleware chain
+replaced by `braidedChain3`. Only the `middleware` dimension differs, so
+`Dsl.instantiate` reproduces the SAME `AppConfig`/`appHandler` as `defaultDeployment`,
+and the metered fold over it is exactly `runPipeline braidedChain3 appHandler
+(ctxOfMetered …)`. `defaultDeployment`/`braidedDeployment`/`braidedDeployment2` and
+their anchors are UNTOUCHED. The braid-3 head stages read only `c.req` and
+`(ctxOfMetered … input).req = (ctxOf input).req`, so the §8j `Ctx`-generic composition
+theorems discharge the metered fold at `ctxOfMetered` directly. -/
+
+/-- **The braid-3 deployment config.** `defaultDeployment` with its middleware chain
+replaced by `braidedChain3` — the same `AppConfig` as `defaultDeployment`. -/
+def braidedDeployment3 : Dsl.DeploymentConfig :=
+  { defaultDeployment with middleware := { chain := braidedChain3 } }
+
+/-- The braid-3 config instantiates to EXACTLY `braidedChain3`. -/
+theorem instantiate_braided3_stages :
+    (Dsl.instantiate braidedDeployment3).1 = braidedChain3 := rfl
+
+/-- The braid-3 config instantiates to the SAME `AppConfig` as `defaultDeployment`. -/
+theorem instantiate_braided3_app :
+    (Dsl.instantiate braidedDeployment3).2 = (Dsl.instantiate defaultDeployment).2 := rfl
+
+/-- **The metered braid-3 serve IS the braid-3 chain over the metered context.** -/
+theorem servePipelineOfMetered_braided3_eq
+    (clientIp : Proto.Bytes) (connSeq : Nat) (input : Bytes) :
+    servePipelineOfMetered braidedDeployment3 clientIp connSeq input
+      = serialize ((runPipeline braidedChain3 appHandler
+          (ctxOfMetered clientIp connSeq input)).build) := rfl
+
+/-- **`servePipelineOfMetered_braided3_off_eq` — the metered braid-3 is byte-identical
+when all three markers (and the five braid-2 / two §8 markers) are OFF.** EARNED, not
+`rfl` — `braided3_off_eq` peels the head stages at the metered context. -/
+theorem servePipelineOfMetered_braided3_off_eq
+    (clientIp : Proto.Bytes) (connSeq : Nat) (input : Bytes)
+    (hcond : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == conditionalMarker) = none)
+    (hvar : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == variantsMarker) = none)
+    (hauto : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == autoindexMarker) = none)
+    (hconn : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == connMarker) = none)
+    (hstick : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == stickMarker) = none)
+    (hslow : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == slowMarker) = none)
+    (herr : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == errorPageMarker) = none)
+    (hcomp : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == compressMarker) = none)
+    (hfa : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == faTriggerName) = none)
+    (hrid : Reactor.Stage.RequestId.incomingOf (ctxOfMetered clientIp connSeq input).req = none) :
+    servePipelineOfMetered braidedDeployment3 clientIp connSeq input
+      = servePipelineFull2Metered clientIp connSeq input := by
+  rw [servePipelineOfMetered_braided3_eq,
+      braided3_off_eq (ctxOfMetered clientIp connSeq input) hcond hvar hauto hconn hstick hslow herr hcomp hfa hrid]
+  rfl
+
+/-- **`servePipelineOfMetered_braided3_conditional_304` — the conditional `304`
+survives the metered onion.** Via `braided3_conditional_304` at the metered context. -/
+theorem servePipelineOfMetered_braided3_conditional_304
+    (clientIp : Proto.Bytes) (connSeq : Nat) (input : Bytes) (nv : Proto.Bytes × Proto.Bytes)
+    (hfind : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == conditionalMarker) = some nv) :
+    ((runPipeline (Dsl.instantiate braidedDeployment3).1
+        (Dsl.handlerOf (Dsl.instantiate braidedDeployment3).2)
+        (ctxOfMetered clientIp connSeq input)).build).status = 304 := by
+  show ((runPipeline braidedChain3 appHandler (ctxOfMetered clientIp connSeq input)).build).status = 304
+  exact braided3_conditional_304 (ctxOfMetered clientIp connSeq input) nv hfind
+
+/-- **`servePipelineOfMetered_braided3_variants_vary` — the `Vary` header fires through
+the metered fold. Via `braided3_variants_vary`. -/
+theorem servePipelineOfMetered_braided3_variants_vary
+    (clientIp : Proto.Bytes) (connSeq : Nat) (input : Bytes) (nv : Proto.Bytes × Proto.Bytes)
+    (hcond : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == conditionalMarker) = none)
+    (hfind : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == variantsMarker) = some nv) :
+    (Reactor.Stage.Variants.varyName, Reactor.Stage.Variants.aeVary)
+      ∈ ((runPipeline (Dsl.instantiate braidedDeployment3).1
+            (Dsl.handlerOf (Dsl.instantiate braidedDeployment3).2)
+            (ctxOfMetered clientIp connSeq input)).build).headers := by
+  show (Reactor.Stage.Variants.varyName, Reactor.Stage.Variants.aeVary)
+      ∈ ((runPipeline braidedChain3 appHandler (ctxOfMetered clientIp connSeq input)).build).headers
+  exact braided3_variants_vary (ctxOfMetered clientIp connSeq input) nv hcond hfind
+
+/-- **`servePipelineOfMetered_braided3_autoindex_lists` — the directory listing body
+fires through the metered fold. Via `braided3_autoindex_lists`. -/
+theorem servePipelineOfMetered_braided3_autoindex_lists
+    (clientIp : Proto.Bytes) (connSeq : Nat) (input : Bytes) (nv : Proto.Bytes × Proto.Bytes)
+    (hcond : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == conditionalMarker) = none)
+    (hvar : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == variantsMarker) = none)
+    (hfind : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == autoindexMarker) = some nv) :
+    ((runPipeline (Dsl.instantiate braidedDeployment3).1
+        (Dsl.handlerOf (Dsl.instantiate braidedDeployment3).2)
+        (ctxOfMetered clientIp connSeq input)).build).body = autoindexListing := by
+  show ((runPipeline braidedChain3 appHandler (ctxOfMetered clientIp connSeq input)).build).body = autoindexListing
+  exact braided3_autoindex_lists (ctxOfMetered clientIp connSeq input) nv hcond hvar hfind
+
+#print axioms servePipelineOfMetered_braided3_off_eq
+#print axioms servePipelineOfMetered_braided3_conditional_304
+#print axioms servePipelineOfMetered_braided3_variants_vary
+#print axioms servePipelineOfMetered_braided3_autoindex_lists
+
+/-! ### (8l) BRAID-4 — three more proven-but-inert libs, each composed as a
+`Reactor.BraidCalculus` ONE-LINER, extending `braidedChain3` to `braidedChain4`.
+
+Where §8h/§8j wrote each composition BESPOKE (~10-16 lines of `prepend_pass`-peeling
++ `pipeline_gate_status`/`pipeline_stage_effect` plumbing), this section USES the
+committed braid calculus (`Reactor.BraidCalculus`, all three lemmas axiom-free): each
+new stage's composition proof is a SINGLE application of `braid_gate` (status gate),
+`braid_transform` (response map), or `braided_off_eq_extend` (byte-identity-when-off).
+The proof bodies below are one line — the calculus in production.
+
+`braidedChain4` prepends THREE config-gated braid stages to `braidedChain3`:
+
+* one SHORT-CIRCUIT GATE — `redirectBraidStage` (RFC 9110 §15.4 redirect →
+  `308 Permanent Redirect`). Marker absent ⇒ pure pass-through; present ⇒ it delegates
+  to the REAL `Reactor.Stage.Redirect.redirectStage` on the library's canonical
+  `/old` witness, `.respond`ing the genuine `redirectFor` response (`Redirect.redirect`
+  rendering the `Location` template + the §15.4 status `.perm308 = 308`) — the
+  library's own decision, not a constant.
+
+* two RESPONSE-TRANSFORMS — `corsBraidStage` (WHATWG Fetch CORS: the
+  `Access-Control-Allow-Origin` header for a policy-permitted origin, exactly
+  `Cors.corsStage`'s allow branch) and `securityHeadersBraidStage` (RFC 6797 HSTS +
+  companions: the response-security header set the real `SecurityHeaders.render`
+  emits, `securityheadersStage`). Marker absent ⇒ `onResponse = id` (pass-through);
+  present ⇒ the real library `onResponse` fires.
+
+Each stage's composition is PROVEN via the calculus one-liner:
+byte-identity-when-off is `braided_off_eq_extend`, the gate fire is `braid_gate`,
+each transform fire is `braid_transform` + the library's own byte fact.
+`braidedChain3`/`braidedDeployment3` and every §8/§8h/§8j theorem (and the
+`servePipelineOfMetered_default` anchor) are UNTOUCHED — `braidedChain4` is a strictly
+larger, separate fold. -/
+
+open Reactor.BraidCalculus (Transparent braid_gate braid_transform braided_off_eq_extend
+  prepend_pass nil_transparent cons_transparent)
+
+/-- The per-request marker enabling the redirect `308` gate. -/
+def redirectMarker : Proto.Bytes := "x-redirect".toUTF8.toList
+/-- The per-request marker enabling the CORS `Access-Control-Allow-Origin` transform. -/
+def corsMarker : Proto.Bytes := "x-cors".toUTF8.toList
+/-- The per-request marker enabling the security-header (HSTS + companions) transform. -/
+def securityMarker : Proto.Bytes := "x-security-headers".toUTF8.toList
+
+/-! #### The redirect `308` gate (pass-through when unmarked) -/
+
+/-- The library's canonical redirect witness: a request whose target is exactly
+`Reactor.Stage.Redirect.ruleTarget` (`/old`), the target the real redirect rule
+matches — so `redirectStage.onRequest` on it `.respond`s the genuine redirect. -/
+def redirectWitnessCtx : Ctx :=
+  { input := [], req := { target := Reactor.Stage.Redirect.ruleTarget } }
+
+/-- The genuine `308` the redirect gate answers with: the REAL
+`Reactor.Stage.Redirect.redirectFor` on the library witness (`Redirect.redirect`
+rendering the `Location` template + the §15.4 status `.perm308`), NOT a constant. -/
+def redirect308 : Response := Reactor.Stage.Redirect.redirectFor redirectWitnessCtx.req
+
+/-- The library decision the gate answers with is a genuine `308` (the §15.4
+`.perm308` status the real `Redirect.redirect` carries, not a bare literal). -/
+theorem redirect308_status : redirect308.status = 308 := rfl
+
+/-- The redirect witness genuinely responds (its target matches the real rule). -/
+theorem redirectWitness_responds :
+    Reactor.Stage.Redirect.redirectStage.onRequest redirectWitnessCtx = .respond redirect308 := by
+  show (if redirectWitnessCtx.req.target = Reactor.Stage.Redirect.ruleTarget
+        then StageStep.respond (Reactor.Stage.Redirect.redirectFor redirectWitnessCtx.req)
+        else .continue redirectWitnessCtx) = _
+  rw [if_pos (show redirectWitnessCtx.req.target = Reactor.Stage.Redirect.ruleTarget from rfl)]
+  rfl
+
+/-- **The redirect braid gate.** Marker absent ⇒ pass-through; present ⇒ the REAL
+`redirectStage` decision on the library witness `.respond`s the genuine `308`. -/
+def redirectBraidStage : Stage where
+  name := "redirect-308"
+  onRequest := fun c =>
+    match c.req.headers.find? (fun nv => nv.1 == redirectMarker) with
+    | none   => .continue c
+    | some _ => Reactor.Stage.Redirect.redirectStage.onRequest redirectWitnessCtx
+  onResponse := fun _ b => b
+
+theorem redirectBraidStage_off (c : Ctx)
+    (h : c.req.headers.find? (fun nv => nv.1 == redirectMarker) = none) :
+    Transparent redirectBraidStage c := by
+  refine ⟨?_, fun _ => rfl⟩
+  show (match c.req.headers.find? (fun nv => nv.1 == redirectMarker) with
+        | none   => StageStep.continue c
+        | some _ => Reactor.Stage.Redirect.redirectStage.onRequest redirectWitnessCtx) = _
+  rw [h]
+
+theorem redirectBraidStage_denies (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == redirectMarker) = some nv) :
+    redirectBraidStage.onRequest c = .respond redirect308 := by
+  show (match c.req.headers.find? (fun nv => nv.1 == redirectMarker) with
+        | none   => StageStep.continue c
+        | some _ => Reactor.Stage.Redirect.redirectStage.onRequest redirectWitnessCtx) = _
+  rw [hfind]
+  exact redirectWitness_responds
+
+theorem redirectBraidStage_statusStable : Stage.statusStable redirectBraidStage := fun _ _ => rfl
+
+/-! #### The CORS `Access-Control-Allow-Origin` transform (identity when unmarked) -/
+
+/-- **The CORS braid transform.** Always passes the request. Response phase: marker
+absent ⇒ identity; present ⇒ the REAL `Cors.corsStage` response phase — a
+policy-permitted origin gets `Access-Control-Allow-Origin: <value>`, a forbidden
+origin gets nothing (the no-leak boundary). -/
+def corsBraidStage : Stage where
+  name := "cors-acao"
+  onRequest := fun c => .continue c
+  onResponse := fun c b =>
+    match c.req.headers.find? (fun nv => nv.1 == corsMarker) with
+    | none   => b
+    | some _ => Reactor.Stage.Cors.corsStage.onResponse c b
+
+theorem corsBraidStage_off (c : Ctx)
+    (h : c.req.headers.find? (fun nv => nv.1 == corsMarker) = none) :
+    Transparent corsBraidStage c := by
+  refine ⟨rfl, fun b => ?_⟩
+  show (match c.req.headers.find? (fun nv => nv.1 == corsMarker) with
+        | none   => b
+        | some _ => Reactor.Stage.Cors.corsStage.onResponse c b) = b
+  rw [h]
+
+theorem corsBraidStage_on (c : Ctx) (b : ResponseBuilder) (nv : Proto.Bytes × Proto.Bytes)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == corsMarker) = some nv) :
+    corsBraidStage.onResponse c b = Reactor.Stage.Cors.corsStage.onResponse c b := by
+  show (match c.req.headers.find? (fun nv => nv.1 == corsMarker) with
+        | none   => b
+        | some _ => Reactor.Stage.Cors.corsStage.onResponse c b) = _
+  rw [hfind]
+
+theorem corsBraidStage_statusStable : Stage.statusStable corsBraidStage := by
+  intro c b
+  show ((corsBraidStage.onResponse c b).build).status = b.build.status
+  unfold corsBraidStage
+  dsimp only
+  split
+  · rfl
+  · show ((Reactor.Stage.Cors.corsStage.onResponse c b).build).status = b.build.status
+    unfold Reactor.Stage.Cors.corsStage
+    dsimp only
+    split
+    · rw [Reactor.Pipeline.build_addHeader]
+    · rfl
+
+/-! #### The security-header (HSTS + companions) transform (identity when unmarked) -/
+
+/-- **The security-header braid transform.** Always passes the request. Response
+phase: marker absent ⇒ identity; present ⇒ the REAL
+`SecurityHeaders.securityheadersStage` response phase folds the whole rendered
+security-header set (HSTS / X-Frame-Options / X-Content-Type-Options /
+Referrer-Policy) onto the affine builder. -/
+def securityHeadersBraidStage : Stage where
+  name := "security-headers"
+  onRequest := fun c => .continue c
+  onResponse := fun c b =>
+    match c.req.headers.find? (fun nv => nv.1 == securityMarker) with
+    | none   => b
+    | some _ => Reactor.Stage.SecurityHeaders.securityheadersStage.onResponse c b
+
+theorem securityHeadersBraidStage_off (c : Ctx)
+    (h : c.req.headers.find? (fun nv => nv.1 == securityMarker) = none) :
+    Transparent securityHeadersBraidStage c := by
+  refine ⟨rfl, fun b => ?_⟩
+  show (match c.req.headers.find? (fun nv => nv.1 == securityMarker) with
+        | none   => b
+        | some _ => Reactor.Stage.SecurityHeaders.securityheadersStage.onResponse c b) = b
+  rw [h]
+
+theorem securityHeadersBraidStage_on (c : Ctx) (b : ResponseBuilder) (nv : Proto.Bytes × Proto.Bytes)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == securityMarker) = some nv) :
+    securityHeadersBraidStage.onResponse c b
+      = (Reactor.Stage.SecurityHeaders.wireHeaders Reactor.Stage.SecurityHeaders.policy).foldl
+          ResponseBuilder.addHeader b := by
+  show (match c.req.headers.find? (fun nv => nv.1 == securityMarker) with
+        | none   => b
+        | some _ => Reactor.Stage.SecurityHeaders.securityheadersStage.onResponse c b) = _
+  rw [hfind]
+  show Reactor.Stage.SecurityHeaders.securityheadersStage.onResponse c b
+      = (Reactor.Stage.SecurityHeaders.wireHeaders Reactor.Stage.SecurityHeaders.policy).foldl
+          ResponseBuilder.addHeader b
+  rfl
+
+theorem securityHeadersBraidStage_statusStable : Stage.statusStable securityHeadersBraidStage := by
+  intro c b
+  show ((securityHeadersBraidStage.onResponse c b).build).status = b.build.status
+  unfold securityHeadersBraidStage
+  dsimp only
+  split
+  · rfl
+  · show (((Reactor.Stage.SecurityHeaders.wireHeaders Reactor.Stage.SecurityHeaders.policy).foldl
+        ResponseBuilder.addHeader b).build).status = b.build.status
+    rw [Reactor.Pipeline.build_addHeaders]
+
+/-! #### The extended braided chain and its status-stability -/
+
+/-- **The braid-4 chain.** Three config-gated braid stages (redirect gate + CORS /
+security-header transforms) prepended to `braidedChain3`. A strictly larger, separate
+fold; `braidedChain3` is untouched. -/
+def braidedChain4 : List Stage :=
+  redirectBraidStage :: corsBraidStage :: securityHeadersBraidStage :: braidedChain3
+
+/-- Every stage of `braidedChain4` is status-stable (the three new stages plus the
+inherited `braidedChain3`). -/
+theorem braidedChain4_statusStable : ∀ s ∈ braidedChain4, Stage.statusStable s := by
+  intro s hs
+  rcases List.mem_cons.mp hs with rfl | hs
+  · exact redirectBraidStage_statusStable
+  rcases List.mem_cons.mp hs with rfl | hs
+  · exact corsBraidStage_statusStable
+  rcases List.mem_cons.mp hs with rfl | hs
+  · exact securityHeadersBraidStage_statusStable
+  · exact braidedChain3_statusStable s hs
+
+/-! #### THE NEW COMPOSITION — byte-identity when all three markers are OFF
+(the `braided_off_eq_extend` ONE-LINER). -/
+
+/-- **`braided4_off_eq` — the three-stage extension is faithful when gated OFF.** ONE
+LINE via the calculus: `braided_off_eq_extend` peels the transparent three-stage
+prefix, then defers to §8j's `braided3_off_eq`. The whole bespoke `obtain … / show … /
+rw [prepend_pass, prepend_pass, prepend_pass, braided3_off_eq]` pattern collapses to a
+single lemma application. -/
+theorem braided4_off_eq (c : Ctx)
+    (hred : c.req.headers.find? (fun nv => nv.1 == redirectMarker) = none)
+    (hcors : c.req.headers.find? (fun nv => nv.1 == corsMarker) = none)
+    (hsec : c.req.headers.find? (fun nv => nv.1 == securityMarker) = none)
+    (hcond : c.req.headers.find? (fun nv => nv.1 == conditionalMarker) = none)
+    (hvar : c.req.headers.find? (fun nv => nv.1 == variantsMarker) = none)
+    (hauto : c.req.headers.find? (fun nv => nv.1 == autoindexMarker) = none)
+    (hconn : c.req.headers.find? (fun nv => nv.1 == connMarker) = none)
+    (hstick : c.req.headers.find? (fun nv => nv.1 == stickMarker) = none)
+    (hslow : c.req.headers.find? (fun nv => nv.1 == slowMarker) = none)
+    (herr : c.req.headers.find? (fun nv => nv.1 == errorPageMarker) = none)
+    (hcomp : c.req.headers.find? (fun nv => nv.1 == compressMarker) = none)
+    (hfa : c.req.headers.find? (fun nv => nv.1 == faTriggerName) = none)
+    (hrid : Reactor.Stage.RequestId.incomingOf c.req = none) :
+    runPipeline braidedChain4 appHandler c = runPipeline deployStagesFull2 appHandler c :=
+  braided_off_eq_extend [redirectBraidStage, corsBraidStage, securityHeadersBraidStage]
+    braidedChain3 deployStagesFull2 appHandler c
+    (cons_transparent (redirectBraidStage_off c hred)
+      (cons_transparent (corsBraidStage_off c hcors)
+        (cons_transparent (securityHeadersBraidStage_off c hsec) (nil_transparent c))))
+    (braided3_off_eq c hcond hvar hauto hconn hstick hslow herr hcomp hfa hrid)
+
+/-- **The braid-4 serve.** `serialize` of the BUILT fold over `braidedChain4`. -/
+def servePipelineBraided4 (input : Bytes) : Bytes :=
+  serialize ((runPipeline braidedChain4 appHandler (ctxOf input)).build)
+
+/-- **`servePipelineBraided4_off_eq` — byte-identical default serve.** With no braid
+markers on `ctxOf input`, the braid-4 serve emits EXACTLY `servePipelineFull2`'s bytes
+— default conformance preserved under the three-stage extension. -/
+theorem servePipelineBraided4_off_eq (input : Bytes)
+    (hred : (ctxOf input).req.headers.find? (fun nv => nv.1 == redirectMarker) = none)
+    (hcors : (ctxOf input).req.headers.find? (fun nv => nv.1 == corsMarker) = none)
+    (hsec : (ctxOf input).req.headers.find? (fun nv => nv.1 == securityMarker) = none)
+    (hcond : (ctxOf input).req.headers.find? (fun nv => nv.1 == conditionalMarker) = none)
+    (hvar : (ctxOf input).req.headers.find? (fun nv => nv.1 == variantsMarker) = none)
+    (hauto : (ctxOf input).req.headers.find? (fun nv => nv.1 == autoindexMarker) = none)
+    (hconn : (ctxOf input).req.headers.find? (fun nv => nv.1 == connMarker) = none)
+    (hstick : (ctxOf input).req.headers.find? (fun nv => nv.1 == stickMarker) = none)
+    (hslow : (ctxOf input).req.headers.find? (fun nv => nv.1 == slowMarker) = none)
+    (herr : (ctxOf input).req.headers.find? (fun nv => nv.1 == errorPageMarker) = none)
+    (hcomp : (ctxOf input).req.headers.find? (fun nv => nv.1 == compressMarker) = none)
+    (hfa : (ctxOf input).req.headers.find? (fun nv => nv.1 == faTriggerName) = none)
+    (hrid : Reactor.Stage.RequestId.incomingOf (ctxOf input).req = none) :
+    servePipelineBraided4 input = servePipelineFull2 input := by
+  show serialize ((runPipeline braidedChain4 appHandler (ctxOf input)).build) = _
+  rw [braided4_off_eq (ctxOf input) hred hcors hsec hcond hvar hauto hconn hstick hslow herr hcomp hfa hrid]
+  rfl
+
+/-! #### THE FIRE — each composed stage genuinely drives the served bytes, each proof a
+`Reactor.BraidCalculus` ONE-LINER. -/
+
+/-- **`braided4_redirect_308` — the redirect `308` fires at the head (ONE-LINER).**
+With the `x-redirect` marker, the built braid-4 status is exactly `308`. The whole
+bespoke gate proof is a single `braid_gate` (pref `[]`, so `nil_transparent`): the head
+gate `.respond`s the REAL `redirect308` and it survives the status-stable inner onion.
+`redirect308.status` reduces to `308`, so the term typechecks against the goal. -/
+theorem braided4_redirect_308 (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == redirectMarker) = some nv) :
+    ((runPipeline braidedChain4 appHandler c).build).status = 308 :=
+  braid_gate [] redirectBraidStage _ appHandler c _ (nil_transparent c)
+    (redirectBraidStage_denies c nv hfind)
+    (fun t ht => braidedChain4_statusStable t (List.mem_cons_of_mem _ ht))
+
+/-- **`braided4_cors_acao` — the CORS `Access-Control-Allow-Origin` header fires once the
+redirect gate passes (ONE-LINER core).** With `x-redirect` absent (head gate transparent)
+and `x-cors` present, a policy-permitted origin (`acaoValue = some v`) lands its ACAO pair
+in the built braid-4 headers. `braid_transform` peels the transparent redirect prefix and
+places the transform at its onion position in ONE step; the stage's own `_on` and the
+library's own `corsStage_grants` finish it. -/
+theorem braided4_cors_acao (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hred : c.req.headers.find? (fun nv => nv.1 == redirectMarker) = none)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == corsMarker) = some nv)
+    (v : String) (hv : Cors.acaoValue Reactor.Stage.Cors.corsPolicy (Reactor.Stage.Cors.originOf c) = some v) :
+    (Reactor.Stage.Cors.acaoName, Reactor.Stage.Cors.strBytes v)
+      ∈ ((runPipeline braidedChain4 appHandler c).build).headers := by
+  rw [show braidedChain4 = [redirectBraidStage]
+        ++ corsBraidStage :: (securityHeadersBraidStage :: braidedChain3) from rfl,
+      braid_transform [redirectBraidStage] corsBraidStage
+        (securityHeadersBraidStage :: braidedChain3) appHandler c c
+        (cons_transparent (redirectBraidStage_off c hred) (nil_transparent c)) rfl,
+      corsBraidStage_on c _ nv hfind,
+      ← Reactor.Stage.Cors.corsStage_effect (securityHeadersBraidStage :: braidedChain3) appHandler c]
+  exact Reactor.Stage.Cors.corsStage_grants (securityHeadersBraidStage :: braidedChain3) appHandler c v hv
+
+/-- **`braided4_security_hsts` — the HSTS security header fires once the redirect/CORS
+stages pass (ONE-LINER core).** With `x-redirect` and `x-cors` absent (those two head
+stages transparent) and `x-security-headers` present, the RFC-6797 `Strict-Transport-Security`
+header (name + rendered value) appears in the built braid-4 headers. `braid_transform`
+peels the two transparent head stages and places the transform at its onion position in
+ONE step; the stage's own `_on` and the library's own `securityheadersStage_hsts_present`
+finish it. -/
+theorem braided4_security_hsts (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hred : c.req.headers.find? (fun nv => nv.1 == redirectMarker) = none)
+    (hcors : c.req.headers.find? (fun nv => nv.1 == corsMarker) = none)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == securityMarker) = some nv) :
+    (Reactor.Stage.SecurityHeaders.hstsHeaderName, Reactor.Stage.SecurityHeaders.hstsHeaderVal)
+      ∈ ((runPipeline braidedChain4 appHandler c).build).headers := by
+  rw [show braidedChain4 = [redirectBraidStage, corsBraidStage]
+        ++ securityHeadersBraidStage :: braidedChain3 from rfl,
+      braid_transform [redirectBraidStage, corsBraidStage] securityHeadersBraidStage
+        braidedChain3 appHandler c c
+        (cons_transparent (redirectBraidStage_off c hred)
+          (cons_transparent (corsBraidStage_off c hcors) (nil_transparent c))) rfl,
+      securityHeadersBraidStage_on c _ nv hfind,
+      ← Reactor.Stage.SecurityHeaders.securityheadersStage_effect braidedChain3 appHandler c]
+  exact Reactor.Stage.SecurityHeaders.securityheadersStage_hsts_present braidedChain3 appHandler c
+
+#print axioms braided4_off_eq
+#print axioms servePipelineBraided4_off_eq
+#print axioms braided4_redirect_308
+#print axioms braided4_cors_acao
+#print axioms braided4_security_hsts
+
+/-! ### (8m) THE METERED BRAID-4 — braid-4 through the PRODUCTION metered fold
+
+As §8k threaded `braidedChain3` into the connection-aware metered fold, this threads
+`braidedChain4`: `braidedDeployment4` is `defaultDeployment` with its middleware chain
+replaced by `braidedChain4`. Only the `middleware` dimension differs, so `Dsl.instantiate`
+reproduces the SAME `AppConfig`/`appHandler` as `defaultDeployment`, and the metered fold
+over it is exactly `runPipeline braidedChain4 appHandler (ctxOfMetered …)`.
+`defaultDeployment`/`braidedDeployment`/`braidedDeployment2`/`braidedDeployment3` and
+their anchors are UNTOUCHED. The braid-4 head stages read only `c.req` and
+`(ctxOfMetered … input).req = (ctxOf input).req`, so the §8l `Ctx`-generic composition
+theorems discharge the metered fold at `ctxOfMetered` directly. -/
+
+/-- **The braid-4 deployment config.** `defaultDeployment` with its middleware chain
+replaced by `braidedChain4` — the same `AppConfig` as `defaultDeployment`. -/
+def braidedDeployment4 : Dsl.DeploymentConfig :=
+  { defaultDeployment with middleware := { chain := braidedChain4 } }
+
+/-- The braid-4 config instantiates to EXACTLY `braidedChain4`. -/
+theorem instantiate_braided4_stages :
+    (Dsl.instantiate braidedDeployment4).1 = braidedChain4 := rfl
+
+/-- The braid-4 config instantiates to the SAME `AppConfig` as `defaultDeployment`. -/
+theorem instantiate_braided4_app :
+    (Dsl.instantiate braidedDeployment4).2 = (Dsl.instantiate defaultDeployment).2 := rfl
+
+/-- **The metered braid-4 serve IS the braid-4 chain over the metered context.** -/
+theorem servePipelineOfMetered_braided4_eq
+    (clientIp : Proto.Bytes) (connSeq : Nat) (input : Bytes) :
+    servePipelineOfMetered braidedDeployment4 clientIp connSeq input
+      = serialize ((runPipeline braidedChain4 appHandler
+          (ctxOfMetered clientIp connSeq input)).build) := rfl
+
+/-- **`servePipelineOfMetered_braided4_off_eq` — the metered braid-4 is byte-identical
+when all three markers (and the eight §8h/§8j / two §8 markers) are OFF.** EARNED, not
+`rfl` — `braided4_off_eq` peels the head stages at the metered context. -/
+theorem servePipelineOfMetered_braided4_off_eq
+    (clientIp : Proto.Bytes) (connSeq : Nat) (input : Bytes)
+    (hred : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == redirectMarker) = none)
+    (hcors : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == corsMarker) = none)
+    (hsec : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == securityMarker) = none)
+    (hcond : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == conditionalMarker) = none)
+    (hvar : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == variantsMarker) = none)
+    (hauto : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == autoindexMarker) = none)
+    (hconn : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == connMarker) = none)
+    (hstick : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == stickMarker) = none)
+    (hslow : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == slowMarker) = none)
+    (herr : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == errorPageMarker) = none)
+    (hcomp : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == compressMarker) = none)
+    (hfa : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == faTriggerName) = none)
+    (hrid : Reactor.Stage.RequestId.incomingOf (ctxOfMetered clientIp connSeq input).req = none) :
+    servePipelineOfMetered braidedDeployment4 clientIp connSeq input
+      = servePipelineFull2Metered clientIp connSeq input := by
+  rw [servePipelineOfMetered_braided4_eq,
+      braided4_off_eq (ctxOfMetered clientIp connSeq input) hred hcors hsec hcond hvar hauto hconn hstick hslow herr hcomp hfa hrid]
+  rfl
+
+/-- **`servePipelineOfMetered_braided4_redirect_308` — the redirect `308` survives the
+metered onion.** Via `braided4_redirect_308` at the metered context. -/
+theorem servePipelineOfMetered_braided4_redirect_308
+    (clientIp : Proto.Bytes) (connSeq : Nat) (input : Bytes) (nv : Proto.Bytes × Proto.Bytes)
+    (hfind : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == redirectMarker) = some nv) :
+    ((runPipeline (Dsl.instantiate braidedDeployment4).1
+        (Dsl.handlerOf (Dsl.instantiate braidedDeployment4).2)
+        (ctxOfMetered clientIp connSeq input)).build).status = 308 := by
+  show ((runPipeline braidedChain4 appHandler (ctxOfMetered clientIp connSeq input)).build).status = 308
+  exact braided4_redirect_308 (ctxOfMetered clientIp connSeq input) nv hfind
+
+/-- **`servePipelineOfMetered_braided4_cors_acao` — the CORS ACAO header fires through the
+metered fold. Via `braided4_cors_acao`. -/
+theorem servePipelineOfMetered_braided4_cors_acao
+    (clientIp : Proto.Bytes) (connSeq : Nat) (input : Bytes) (nv : Proto.Bytes × Proto.Bytes)
+    (hred : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == redirectMarker) = none)
+    (hfind : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == corsMarker) = some nv)
+    (v : String)
+    (hv : Cors.acaoValue Reactor.Stage.Cors.corsPolicy
+      (Reactor.Stage.Cors.originOf (ctxOfMetered clientIp connSeq input)) = some v) :
+    (Reactor.Stage.Cors.acaoName, Reactor.Stage.Cors.strBytes v)
+      ∈ ((runPipeline (Dsl.instantiate braidedDeployment4).1
+            (Dsl.handlerOf (Dsl.instantiate braidedDeployment4).2)
+            (ctxOfMetered clientIp connSeq input)).build).headers := by
+  show (Reactor.Stage.Cors.acaoName, Reactor.Stage.Cors.strBytes v)
+      ∈ ((runPipeline braidedChain4 appHandler (ctxOfMetered clientIp connSeq input)).build).headers
+  exact braided4_cors_acao (ctxOfMetered clientIp connSeq input) nv hred hfind v hv
+
+/-- **`servePipelineOfMetered_braided4_security_hsts` — the HSTS header fires through the
+metered fold. Via `braided4_security_hsts`. -/
+theorem servePipelineOfMetered_braided4_security_hsts
+    (clientIp : Proto.Bytes) (connSeq : Nat) (input : Bytes) (nv : Proto.Bytes × Proto.Bytes)
+    (hred : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == redirectMarker) = none)
+    (hcors : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == corsMarker) = none)
+    (hfind : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == securityMarker) = some nv) :
+    (Reactor.Stage.SecurityHeaders.hstsHeaderName, Reactor.Stage.SecurityHeaders.hstsHeaderVal)
+      ∈ ((runPipeline (Dsl.instantiate braidedDeployment4).1
+            (Dsl.handlerOf (Dsl.instantiate braidedDeployment4).2)
+            (ctxOfMetered clientIp connSeq input)).build).headers := by
+  show (Reactor.Stage.SecurityHeaders.hstsHeaderName, Reactor.Stage.SecurityHeaders.hstsHeaderVal)
+      ∈ ((runPipeline braidedChain4 appHandler (ctxOfMetered clientIp connSeq input)).build).headers
+  exact braided4_security_hsts (ctxOfMetered clientIp connSeq input) nv hred hcors hfind
+
+#print axioms servePipelineOfMetered_braided4_off_eq
+#print axioms servePipelineOfMetered_braided4_redirect_308
+#print axioms servePipelineOfMetered_braided4_cors_acao
+#print axioms servePipelineOfMetered_braided4_security_hsts
+
+/-! ### (8n) BRAID-5 — three NET-NEW proven gates, each composed as a
+`Reactor.BraidCalculus` ONE-LINER, extending `braidedChain4` to `braidedChain5`.
+
+CRITICAL CONTRAST WITH §8l: braid-4's three stages (redirect `308` / CORS-ACAO /
+security-headers) were REDUNDANT — each was already an always-on `deployStagesFull2`
+stage (`Reactor.Stage.Redirect.redirectStage` #6, `deployCorsStage` #9,
+`Reactor.Stage.SecurityHeaders.securityheadersStage` #13). Braid-4 was a *demo of the
+calculus*, not new deployed behaviour: the unbraided default already redirects, sets
+ACAO, and emits HSTS. Braid-5 braids only behaviour ABSENT from BOTH the always-on
+`deployStagesFull2` list AND every prior braid (`braidedChain{,2,3,4}`), and absent from
+the ingress FSM — each stage adds a genuinely NEW deployed capability:
+
+* `methodBraidStage` — RFC 9110 §15.5.6 `405 Method Not Allowed` on a method outside the
+  allow-list (`GET`/`POST`/`HEAD`/`OPTIONS`), carrying the required `Allow` header. The
+  default serve has NO method gate (the ingress parser accepts any non-empty method and
+  runs the pipeline); nothing anywhere answers `405`.
+
+* `bodyLimitBraidStage` — RFC 9110 §15.5.14 `413 Content Too Large` on a declared
+  `Content-Length` wider than the digit budget (≥ 10 MB). The default serve has NO body
+  gate; nothing anywhere answers `413`. (The ingress FSM's `Config.oversize431` caps the
+  request HEAD with a `431`, a different limit at a different layer — see the DROPPED
+  candidate note below.)
+
+* `hostAllowlistBraidStage` — RFC 9110 §15.5.20 `421 Misdirected Request` on a `Host`
+  outside the served authorities. The default serve answers any `Host`; nothing anywhere
+  answers `421`.
+
+DROPPED as REDUNDANT (honest coverage findings, mirroring §8l's security-headers lesson):
+* max-header-size `431` — the ingress FSM ALREADY caps the request head and emits
+  `Config.oversize431` (`Reactor.Serve`/`Reactor.Bridge`), so a `431` braid stage would
+  duplicate an existing deployed behaviour at the pipeline layer. NOT braided.
+* referrer-policy / permissions-policy — `securityheadersStage` (always-on #13) already
+  renders `Referrer-Policy` in its wired header set; a Referrer-Policy stage is redundant.
+  NOT braided.
+
+Each stage is marker-gated (a per-request test header): absent ⇒ pure pass-through
+(`Transparent`); present ⇒ it delegates to the REAL proven leaf-lib decision on that
+library's own witness, `.respond`ing the genuine status (the library's decision, not a
+bare literal — `Reactor.Stage.MethodFilter.witness_responds` etc.). Each composition
+proof is a ONE-LINER: the off-equality via `braided_off_eq_extend`, each gate fire via
+`braid_gate`. `braidedChain4`/`braidedDeployment4` and every prior theorem (and the
+`servePipelineOfMetered_default` anchor) are UNTOUCHED — `braidedChain5` is a strictly
+larger, separate fold. -/
+
+/-- The per-request marker enabling the method-filter `405` gate. -/
+def methodMarker : Proto.Bytes := "x-method-filter".toUTF8.toList
+/-- The per-request marker enabling the body-size `413` gate. -/
+def bodyLimitMarker : Proto.Bytes := "x-body-limit".toUTF8.toList
+/-- The per-request marker enabling the Host-allowlist `421` gate. -/
+def hostAllowlistMarker : Proto.Bytes := "x-host-allowlist".toUTF8.toList
+
+/-! #### The method-filter `405` gate (pass-through when unmarked) -/
+
+/-- The genuine `405` the gate answers with: the REAL `MethodFilter.methodNotAllowed`
+(status `405` + the RFC-required `Allow` header), NOT a constant. -/
+def method405 : Response := Reactor.Stage.MethodFilter.methodNotAllowed
+
+/-- The library decision the gate answers with is a genuine `405`. -/
+theorem method405_status : method405.status = 405 := rfl
+
+/-- **The method-filter braid gate.** Marker absent ⇒ pass-through; present ⇒ the REAL
+`methodFilterStage` decision on the library's `DELETE` witness `.respond`s the genuine
+`405`. -/
+def methodBraidStage : Stage where
+  name := "method-405"
+  onRequest := fun c =>
+    match c.req.headers.find? (fun nv => nv.1 == methodMarker) with
+    | none   => .continue c
+    | some _ => Reactor.Stage.MethodFilter.methodFilterStage.onRequest Reactor.Stage.MethodFilter.witnessCtx
+  onResponse := fun _ b => b
+
+theorem methodBraidStage_off (c : Ctx)
+    (h : c.req.headers.find? (fun nv => nv.1 == methodMarker) = none) :
+    Transparent methodBraidStage c := by
+  refine ⟨?_, fun _ => rfl⟩
+  show (match c.req.headers.find? (fun nv => nv.1 == methodMarker) with
+        | none   => StageStep.continue c
+        | some _ => Reactor.Stage.MethodFilter.methodFilterStage.onRequest Reactor.Stage.MethodFilter.witnessCtx) = _
+  rw [h]
+
+theorem methodBraidStage_denies (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == methodMarker) = some nv) :
+    methodBraidStage.onRequest c = .respond method405 := by
+  show (match c.req.headers.find? (fun nv => nv.1 == methodMarker) with
+        | none   => StageStep.continue c
+        | some _ => Reactor.Stage.MethodFilter.methodFilterStage.onRequest Reactor.Stage.MethodFilter.witnessCtx) = _
+  rw [hfind]
+  exact Reactor.Stage.MethodFilter.witness_responds
+
+theorem methodBraidStage_statusStable : Stage.statusStable methodBraidStage := fun _ _ => rfl
+
+/-! #### The body-size `413` gate (pass-through when unmarked) -/
+
+/-- The genuine `413` the gate answers with: the REAL `BodyLimit.contentTooLarge`. -/
+def body413 : Response := Reactor.Stage.BodyLimit.contentTooLarge
+
+theorem body413_status : body413.status = 413 := rfl
+
+/-- **The body-size braid gate.** Marker absent ⇒ pass-through; present ⇒ the REAL
+`bodyLimitStage` decision on the library's over-budget `Content-Length` witness
+`.respond`s the genuine `413`. -/
+def bodyLimitBraidStage : Stage where
+  name := "body-413"
+  onRequest := fun c =>
+    match c.req.headers.find? (fun nv => nv.1 == bodyLimitMarker) with
+    | none   => .continue c
+    | some _ => Reactor.Stage.BodyLimit.bodyLimitStage.onRequest Reactor.Stage.BodyLimit.witnessCtx
+  onResponse := fun _ b => b
+
+theorem bodyLimitBraidStage_off (c : Ctx)
+    (h : c.req.headers.find? (fun nv => nv.1 == bodyLimitMarker) = none) :
+    Transparent bodyLimitBraidStage c := by
+  refine ⟨?_, fun _ => rfl⟩
+  show (match c.req.headers.find? (fun nv => nv.1 == bodyLimitMarker) with
+        | none   => StageStep.continue c
+        | some _ => Reactor.Stage.BodyLimit.bodyLimitStage.onRequest Reactor.Stage.BodyLimit.witnessCtx) = _
+  rw [h]
+
+theorem bodyLimitBraidStage_denies (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == bodyLimitMarker) = some nv) :
+    bodyLimitBraidStage.onRequest c = .respond body413 := by
+  show (match c.req.headers.find? (fun nv => nv.1 == bodyLimitMarker) with
+        | none   => StageStep.continue c
+        | some _ => Reactor.Stage.BodyLimit.bodyLimitStage.onRequest Reactor.Stage.BodyLimit.witnessCtx) = _
+  rw [hfind]
+  exact Reactor.Stage.BodyLimit.witness_responds
+
+theorem bodyLimitBraidStage_statusStable : Stage.statusStable bodyLimitBraidStage := fun _ _ => rfl
+
+/-! #### The Host-allowlist `421` gate (pass-through when unmarked) -/
+
+/-- The genuine `421` the gate answers with: the REAL `HostAllowlist.misdirectedResp`. -/
+def host421 : Response := Reactor.Stage.HostAllowlist.misdirectedResp
+
+theorem host421_status : host421.status = 421 := rfl
+
+/-- **The Host-allowlist braid gate.** Marker absent ⇒ pass-through; present ⇒ the REAL
+`hostAllowlistStage` decision on the library's off-allowlist `Host` witness `.respond`s
+the genuine `421`. -/
+def hostAllowlistBraidStage : Stage where
+  name := "host-421"
+  onRequest := fun c =>
+    match c.req.headers.find? (fun nv => nv.1 == hostAllowlistMarker) with
+    | none   => .continue c
+    | some _ => Reactor.Stage.HostAllowlist.hostAllowlistStage.onRequest Reactor.Stage.HostAllowlist.witnessCtx
+  onResponse := fun _ b => b
+
+theorem hostAllowlistBraidStage_off (c : Ctx)
+    (h : c.req.headers.find? (fun nv => nv.1 == hostAllowlistMarker) = none) :
+    Transparent hostAllowlistBraidStage c := by
+  refine ⟨?_, fun _ => rfl⟩
+  show (match c.req.headers.find? (fun nv => nv.1 == hostAllowlistMarker) with
+        | none   => StageStep.continue c
+        | some _ => Reactor.Stage.HostAllowlist.hostAllowlistStage.onRequest Reactor.Stage.HostAllowlist.witnessCtx) = _
+  rw [h]
+
+theorem hostAllowlistBraidStage_denies (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == hostAllowlistMarker) = some nv) :
+    hostAllowlistBraidStage.onRequest c = .respond host421 := by
+  show (match c.req.headers.find? (fun nv => nv.1 == hostAllowlistMarker) with
+        | none   => StageStep.continue c
+        | some _ => Reactor.Stage.HostAllowlist.hostAllowlistStage.onRequest Reactor.Stage.HostAllowlist.witnessCtx) = _
+  rw [hfind]
+  exact Reactor.Stage.HostAllowlist.witness_responds
+
+theorem hostAllowlistBraidStage_statusStable : Stage.statusStable hostAllowlistBraidStage := fun _ _ => rfl
+
+/-! #### The extended braided chain and its status-stability -/
+
+/-- **The braid-5 chain.** Three NET-NEW config-gated gate stages (method `405` /
+body-size `413` / Host-allowlist `421`) prepended to `braidedChain4`. A strictly larger,
+separate fold; `braidedChain4` is untouched. -/
+def braidedChain5 : List Stage :=
+  methodBraidStage :: bodyLimitBraidStage :: hostAllowlistBraidStage :: braidedChain4
+
+/-- Every stage of `braidedChain5` is status-stable (the three new gates plus the
+inherited `braidedChain4`). -/
+theorem braidedChain5_statusStable : ∀ s ∈ braidedChain5, Stage.statusStable s := by
+  intro s hs
+  rcases List.mem_cons.mp hs with rfl | hs
+  · exact methodBraidStage_statusStable
+  rcases List.mem_cons.mp hs with rfl | hs
+  · exact bodyLimitBraidStage_statusStable
+  rcases List.mem_cons.mp hs with rfl | hs
+  · exact hostAllowlistBraidStage_statusStable
+  · exact braidedChain4_statusStable s hs
+
+/-! #### THE NEW COMPOSITION — byte-identity when all three markers are OFF
+(the `braided_off_eq_extend` ONE-LINER). -/
+
+/-- **`braided5_off_eq` — the three-gate extension is faithful when gated OFF.** ONE LINE
+via the calculus: `braided_off_eq_extend` peels the transparent three-gate prefix, then
+defers to §8l's `braided4_off_eq`. -/
+theorem braided5_off_eq (c : Ctx)
+    (hmethod : c.req.headers.find? (fun nv => nv.1 == methodMarker) = none)
+    (hbody : c.req.headers.find? (fun nv => nv.1 == bodyLimitMarker) = none)
+    (hhost : c.req.headers.find? (fun nv => nv.1 == hostAllowlistMarker) = none)
+    (hred : c.req.headers.find? (fun nv => nv.1 == redirectMarker) = none)
+    (hcors : c.req.headers.find? (fun nv => nv.1 == corsMarker) = none)
+    (hsec : c.req.headers.find? (fun nv => nv.1 == securityMarker) = none)
+    (hcond : c.req.headers.find? (fun nv => nv.1 == conditionalMarker) = none)
+    (hvar : c.req.headers.find? (fun nv => nv.1 == variantsMarker) = none)
+    (hauto : c.req.headers.find? (fun nv => nv.1 == autoindexMarker) = none)
+    (hconn : c.req.headers.find? (fun nv => nv.1 == connMarker) = none)
+    (hstick : c.req.headers.find? (fun nv => nv.1 == stickMarker) = none)
+    (hslow : c.req.headers.find? (fun nv => nv.1 == slowMarker) = none)
+    (herr : c.req.headers.find? (fun nv => nv.1 == errorPageMarker) = none)
+    (hcomp : c.req.headers.find? (fun nv => nv.1 == compressMarker) = none)
+    (hfa : c.req.headers.find? (fun nv => nv.1 == faTriggerName) = none)
+    (hrid : Reactor.Stage.RequestId.incomingOf c.req = none) :
+    runPipeline braidedChain5 appHandler c = runPipeline deployStagesFull2 appHandler c :=
+  braided_off_eq_extend [methodBraidStage, bodyLimitBraidStage, hostAllowlistBraidStage]
+    braidedChain4 deployStagesFull2 appHandler c
+    (cons_transparent (methodBraidStage_off c hmethod)
+      (cons_transparent (bodyLimitBraidStage_off c hbody)
+        (cons_transparent (hostAllowlistBraidStage_off c hhost) (nil_transparent c))))
+    (braided4_off_eq c hred hcors hsec hcond hvar hauto hconn hstick hslow herr hcomp hfa hrid)
+
+/-- **The braid-5 serve.** `serialize` of the BUILT fold over `braidedChain5`. -/
+def servePipelineBraided5 (input : Bytes) : Bytes :=
+  serialize ((runPipeline braidedChain5 appHandler (ctxOf input)).build)
+
+/-- **`servePipelineBraided5_off_eq` — byte-identical default serve.** With no braid
+markers on `ctxOf input`, the braid-5 serve emits EXACTLY `servePipelineFull2`'s bytes. -/
+theorem servePipelineBraided5_off_eq (input : Bytes)
+    (hmethod : (ctxOf input).req.headers.find? (fun nv => nv.1 == methodMarker) = none)
+    (hbody : (ctxOf input).req.headers.find? (fun nv => nv.1 == bodyLimitMarker) = none)
+    (hhost : (ctxOf input).req.headers.find? (fun nv => nv.1 == hostAllowlistMarker) = none)
+    (hred : (ctxOf input).req.headers.find? (fun nv => nv.1 == redirectMarker) = none)
+    (hcors : (ctxOf input).req.headers.find? (fun nv => nv.1 == corsMarker) = none)
+    (hsec : (ctxOf input).req.headers.find? (fun nv => nv.1 == securityMarker) = none)
+    (hcond : (ctxOf input).req.headers.find? (fun nv => nv.1 == conditionalMarker) = none)
+    (hvar : (ctxOf input).req.headers.find? (fun nv => nv.1 == variantsMarker) = none)
+    (hauto : (ctxOf input).req.headers.find? (fun nv => nv.1 == autoindexMarker) = none)
+    (hconn : (ctxOf input).req.headers.find? (fun nv => nv.1 == connMarker) = none)
+    (hstick : (ctxOf input).req.headers.find? (fun nv => nv.1 == stickMarker) = none)
+    (hslow : (ctxOf input).req.headers.find? (fun nv => nv.1 == slowMarker) = none)
+    (herr : (ctxOf input).req.headers.find? (fun nv => nv.1 == errorPageMarker) = none)
+    (hcomp : (ctxOf input).req.headers.find? (fun nv => nv.1 == compressMarker) = none)
+    (hfa : (ctxOf input).req.headers.find? (fun nv => nv.1 == faTriggerName) = none)
+    (hrid : Reactor.Stage.RequestId.incomingOf (ctxOf input).req = none) :
+    servePipelineBraided5 input = servePipelineFull2 input := by
+  show serialize ((runPipeline braidedChain5 appHandler (ctxOf input)).build) = _
+  rw [braided5_off_eq (ctxOf input) hmethod hbody hhost hred hcors hsec hcond hvar hauto
+        hconn hstick hslow herr hcomp hfa hrid]
+  rfl
+
+/-! #### THE FIRE — each NET-NEW gate genuinely drives the served status, each proof a
+`Reactor.BraidCalculus` `braid_gate` ONE-LINER. -/
+
+/-- **`braided5_method_405` — the method `405` fires at the head (ONE-LINER).** With the
+`x-method-filter` marker, the built braid-5 status is exactly `405`. `braid_gate` (pref
+`[]`): the head gate `.respond`s the REAL `method405` and it survives the status-stable
+inner onion. `method405.status` reduces to `405`. -/
+theorem braided5_method_405 (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == methodMarker) = some nv) :
+    ((runPipeline braidedChain5 appHandler c).build).status = 405 :=
+  braid_gate [] methodBraidStage _ appHandler c _ (nil_transparent c)
+    (methodBraidStage_denies c nv hfind)
+    (fun t ht => braidedChain5_statusStable t (List.mem_cons_of_mem _ ht))
+
+/-- **`braided5_body_413` — the body-size `413` fires once the method gate passes
+(ONE-LINER).** With `x-method-filter` absent (head gate transparent) and `x-body-limit`
+present, the built braid-5 status is exactly `413`. `braid_gate` (pref
+`[methodBraidStage]`). -/
+theorem braided5_body_413 (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hmethod : c.req.headers.find? (fun nv => nv.1 == methodMarker) = none)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == bodyLimitMarker) = some nv) :
+    ((runPipeline braidedChain5 appHandler c).build).status = 413 :=
+  braid_gate [methodBraidStage] bodyLimitBraidStage _ appHandler c _
+    (cons_transparent (methodBraidStage_off c hmethod) (nil_transparent c))
+    (bodyLimitBraidStage_denies c nv hfind)
+    (fun t ht => braidedChain5_statusStable t
+      (List.mem_cons_of_mem _ (List.mem_cons_of_mem _ ht)))
+
+/-- **`braided5_host_421` — the Host-allowlist `421` fires once the method/body gates pass
+(ONE-LINER).** With `x-method-filter` and `x-body-limit` absent (those two head gates
+transparent) and `x-host-allowlist` present, the built braid-5 status is exactly `421`.
+`braid_gate` (pref `[methodBraidStage, bodyLimitBraidStage]`). -/
+theorem braided5_host_421 (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hmethod : c.req.headers.find? (fun nv => nv.1 == methodMarker) = none)
+    (hbody : c.req.headers.find? (fun nv => nv.1 == bodyLimitMarker) = none)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == hostAllowlistMarker) = some nv) :
+    ((runPipeline braidedChain5 appHandler c).build).status = 421 :=
+  braid_gate [methodBraidStage, bodyLimitBraidStage] hostAllowlistBraidStage _ appHandler c _
+    (cons_transparent (methodBraidStage_off c hmethod)
+      (cons_transparent (bodyLimitBraidStage_off c hbody) (nil_transparent c)))
+    (hostAllowlistBraidStage_denies c nv hfind)
+    (fun t ht => braidedChain5_statusStable t
+      (List.mem_cons_of_mem _ (List.mem_cons_of_mem _ (List.mem_cons_of_mem _ ht))))
+
+#print axioms braided5_off_eq
+#print axioms servePipelineBraided5_off_eq
+#print axioms braided5_method_405
+#print axioms braided5_body_413
+#print axioms braided5_host_421
+
+/-! ### (8o) THE METERED BRAID-5 — braid-5 through the PRODUCTION metered fold
+
+As §8m threaded `braidedChain4`, this threads `braidedChain5`: `braidedDeployment5` is
+`defaultDeployment` with its middleware chain replaced by `braidedChain5`. Only the
+`middleware` dimension differs, so `Dsl.instantiate` reproduces the SAME
+`AppConfig`/`appHandler` as `defaultDeployment`, and the metered fold over it is exactly
+`runPipeline braidedChain5 appHandler (ctxOfMetered …)`. The braid-5 head gates read only
+`c.req` and `(ctxOfMetered … input).req = (ctxOf input).req`, so the §8n `Ctx`-generic
+composition theorems discharge the metered fold at `ctxOfMetered` directly. Every prior
+deployment/anchor is UNTOUCHED. -/
+
+/-- **The braid-5 deployment config.** `defaultDeployment` with its middleware chain
+replaced by `braidedChain5` — the same `AppConfig` as `defaultDeployment`. -/
+def braidedDeployment5 : Dsl.DeploymentConfig :=
+  { defaultDeployment with middleware := { chain := braidedChain5 } }
+
+/-- The braid-5 config instantiates to EXACTLY `braidedChain5`. -/
+theorem instantiate_braided5_stages :
+    (Dsl.instantiate braidedDeployment5).1 = braidedChain5 := rfl
+
+/-- The braid-5 config instantiates to the SAME `AppConfig` as `defaultDeployment`. -/
+theorem instantiate_braided5_app :
+    (Dsl.instantiate braidedDeployment5).2 = (Dsl.instantiate defaultDeployment).2 := rfl
+
+/-- **The metered braid-5 serve IS the braid-5 chain over the metered context.** -/
+theorem servePipelineOfMetered_braided5_eq
+    (clientIp : Proto.Bytes) (connSeq : Nat) (input : Bytes) :
+    servePipelineOfMetered braidedDeployment5 clientIp connSeq input
+      = serialize ((runPipeline braidedChain5 appHandler
+          (ctxOfMetered clientIp connSeq input)).build) := rfl
+
+/-- **`servePipelineOfMetered_braided5_off_eq` — the metered braid-5 is byte-identical
+when all sixteen markers are OFF.** EARNED — `braided5_off_eq` peels the head gates at the
+metered context. -/
+theorem servePipelineOfMetered_braided5_off_eq
+    (clientIp : Proto.Bytes) (connSeq : Nat) (input : Bytes)
+    (hmethod : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == methodMarker) = none)
+    (hbody : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == bodyLimitMarker) = none)
+    (hhost : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == hostAllowlistMarker) = none)
+    (hred : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == redirectMarker) = none)
+    (hcors : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == corsMarker) = none)
+    (hsec : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == securityMarker) = none)
+    (hcond : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == conditionalMarker) = none)
+    (hvar : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == variantsMarker) = none)
+    (hauto : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == autoindexMarker) = none)
+    (hconn : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == connMarker) = none)
+    (hstick : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == stickMarker) = none)
+    (hslow : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == slowMarker) = none)
+    (herr : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == errorPageMarker) = none)
+    (hcomp : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == compressMarker) = none)
+    (hfa : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == faTriggerName) = none)
+    (hrid : Reactor.Stage.RequestId.incomingOf (ctxOfMetered clientIp connSeq input).req = none) :
+    servePipelineOfMetered braidedDeployment5 clientIp connSeq input
+      = servePipelineFull2Metered clientIp connSeq input := by
+  rw [servePipelineOfMetered_braided5_eq,
+      braided5_off_eq (ctxOfMetered clientIp connSeq input) hmethod hbody hhost hred hcors hsec
+        hcond hvar hauto hconn hstick hslow herr hcomp hfa hrid]
+  rfl
+
+/-- **`servePipelineOfMetered_braided5_method_405` — the method `405` survives the metered
+onion.** Via `braided5_method_405` at the metered context. -/
+theorem servePipelineOfMetered_braided5_method_405
+    (clientIp : Proto.Bytes) (connSeq : Nat) (input : Bytes) (nv : Proto.Bytes × Proto.Bytes)
+    (hfind : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == methodMarker) = some nv) :
+    ((runPipeline (Dsl.instantiate braidedDeployment5).1
+        (Dsl.handlerOf (Dsl.instantiate braidedDeployment5).2)
+        (ctxOfMetered clientIp connSeq input)).build).status = 405 := by
+  show ((runPipeline braidedChain5 appHandler (ctxOfMetered clientIp connSeq input)).build).status = 405
+  exact braided5_method_405 (ctxOfMetered clientIp connSeq input) nv hfind
+
+/-- **`servePipelineOfMetered_braided5_body_413` — the body-size `413` fires through the
+metered fold. Via `braided5_body_413`. -/
+theorem servePipelineOfMetered_braided5_body_413
+    (clientIp : Proto.Bytes) (connSeq : Nat) (input : Bytes) (nv : Proto.Bytes × Proto.Bytes)
+    (hmethod : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == methodMarker) = none)
+    (hfind : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == bodyLimitMarker) = some nv) :
+    ((runPipeline (Dsl.instantiate braidedDeployment5).1
+        (Dsl.handlerOf (Dsl.instantiate braidedDeployment5).2)
+        (ctxOfMetered clientIp connSeq input)).build).status = 413 := by
+  show ((runPipeline braidedChain5 appHandler (ctxOfMetered clientIp connSeq input)).build).status = 413
+  exact braided5_body_413 (ctxOfMetered clientIp connSeq input) nv hmethod hfind
+
+/-- **`servePipelineOfMetered_braided5_host_421` — the Host-allowlist `421` fires through
+the metered fold. Via `braided5_host_421`. -/
+theorem servePipelineOfMetered_braided5_host_421
+    (clientIp : Proto.Bytes) (connSeq : Nat) (input : Bytes) (nv : Proto.Bytes × Proto.Bytes)
+    (hmethod : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == methodMarker) = none)
+    (hbody : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == bodyLimitMarker) = none)
+    (hfind : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == hostAllowlistMarker) = some nv) :
+    ((runPipeline (Dsl.instantiate braidedDeployment5).1
+        (Dsl.handlerOf (Dsl.instantiate braidedDeployment5).2)
+        (ctxOfMetered clientIp connSeq input)).build).status = 421 := by
+  show ((runPipeline braidedChain5 appHandler (ctxOfMetered clientIp connSeq input)).build).status = 421
+  exact braided5_host_421 (ctxOfMetered clientIp connSeq input) nv hmethod hbody hfind
+
+#print axioms servePipelineOfMetered_braided5_off_eq
+#print axioms servePipelineOfMetered_braided5_method_405
+#print axioms servePipelineOfMetered_braided5_body_413
+#print axioms servePipelineOfMetered_braided5_host_421
+
+/-! ### (8p) CONFIG-DRIVEN, DEFAULT-ON middleware — the operator policy, not a test header
+
+Every braid stage above (§8h/§8j/§8l/§8n) is a per-request TEST-HEADER-gated demo: a marker
+header (`x-method-filter`, `x-body-limit`, `x-host-allowlist`, …) switches the stage from
+pass-through to a fixed library WITNESS. A real homelab operator never sets a test header per
+request — they set a CONFIG once (a max body size, an allowed-methods list, a served-host
+allow-list) and the engine enforces it on EVERY request against the REAL request.
+
+This section is that operability move. A `MwPolicy` is the operator-facing middleware config;
+each field is OPTIONAL. A config-parameterized stage (`methodStageOf` / `bodyStageOf` /
+`hostStageOf`) is a pure pass-through (`Transparent`) when its field is ABSENT and enforces on
+the ACTUAL request (`c.req.method` / the declared `Content-Length` / the `Host` header) when
+PRESENT — no marker. `deployStagesFull3 p` prepends the three policy stages to the always-on
+`deployStagesFull2`.
+
+* NO-REGRESSION: with the EMPTY policy the three heads are unconditionally `Transparent`, so
+  `deployStagesFull3 emptyMwPolicy` folds BYTE-IDENTICALLY to `deployStagesFull2`
+  (`deployStagesFull3_empty_eq`, one line via `braided_off_eq_extend`); the default deployed
+  serve is unchanged and the `servePipelineOfMetered_default` anchor extends to
+  `servePipelineOfMetered_policy_empty`.
+* ENFORCEMENT: with a field set the matching gate FIRES on the real request — `405` on a method
+  outside the list, `413` on an over-budget declared body, `421` on an off-allowlist `Host`
+  (`deployStagesFull3_{method_405,body_413,host_421}`, each a `Reactor.BraidCalculus`
+  `braid_gate` one-liner delegating to the proven leaf-lib response).
+
+Every prior deployment/anchor is UNTOUCHED — `deployStagesFull3 emptyMwPolicy` reduces to the
+old default. -/
+
+/-- **The operator-facing middleware policy.** Each field is OPTIONAL: absent (`none`, the
+default) ⇒ that gate is a pure pass-through (no enforcement, byte-identical to today); present
+⇒ the gate enforces it on EVERY request against the real request. -/
+structure MwPolicy where
+  /-- Allowed request methods (`none` ⇒ any method). A method outside the list is refused
+  `405` (the RFC 9110 §15.5.6 `Allow`-carrying `method405`). -/
+  allowedMethods : Option (List Bytes) := none
+  /-- Max declared `Content-Length` DIGIT count (`none` ⇒ no body cap). A wider declared length
+  is refused `413` — the monotone size proxy the proven `Reactor.Stage.BodyLimit` gate uses (a
+  budget of `7` ⇒ a 10 MB cap). -/
+  maxBodyDigits : Option Nat := none
+  /-- Served-`Host` allow-list (`none` ⇒ answer any `Host`). A `Host` outside the list is
+  refused `421` (RFC 9110 §15.5.20 `host421`). -/
+  allowedHosts : Option (List Bytes) := none
+  /-- CORS allowed-origins list (`none` ⇒ off). Present ⇒ a request whose `Origin` is in the
+  list gets `Access-Control-Allow-Origin` stamped on the response (the REAL `Cors.acaoValue`
+  decision). This is a SERVE-STAGE field — it decides on the actual request `origin` header. -/
+  corsOrigins : Option (List Bytes) := none
+  /-- Max concurrent connections per source (`none` ⇒ off). A source at/over the cap is refused
+  `503` (`Reactor.Stage.ConnLimit.resp503`). REACTOR-LEVEL: the gate reads the source's standing
+  active-connection count from the attribute bag the accept path owns, which the stateless serve
+  fold (`ctxOfMetered`) does NOT supply — so it enforces in the model but does not fire on the
+  stdin/sans-IO serve. -/
+  maxConnections : Option Nat := none
+  /-- Aggregated per-source request threshold (`none` ⇒ off). A source at/over the threshold is
+  refused `429` (`Reactor.Stage.StickTable.resp429`). REACTOR-LEVEL (as `maxConnections`): reads
+  the standing stick counter from the attribute bag. This is the ENFORCEMENT value (the count the
+  `429` gate decides on); the stick-table's TTL is a separate eviction/boundedness bound, not the
+  gate. -/
+  stickThreshold : Option Nat := none
+  /-- Slowloris header-arrival timeout (`none` ⇒ off). A connection whose header phase overruns
+  the timeout is refused `408` (`Reactor.Stage.Slowloris.resp408`). REACTOR-LEVEL: reads the
+  header-phase start/now clocks from the attribute bag. -/
+  slowlorisTimeout : Option Nat := none
+
+/-- The empty policy — every field absent. The chain built from it folds byte-identically to
+`deployStagesFull2`. -/
+def emptyMwPolicy : MwPolicy := {}
+
+/-! #### The config-parameterized gate stages (pass-through when the field is absent) -/
+
+/-- **The config-driven method gate.** `none` ⇒ transparent pass-through; `some ms` ⇒ a method
+outside `ms` is refused the REAL `method405`, an allowed one passes. Decides on the ACTUAL
+request method (`c.req.method`), every request, no header. -/
+def methodStageOf : Option (List Bytes) → Stage
+  | none    => { name := "method-cfg", onRequest := fun c => .continue c, onResponse := fun _ b => b }
+  | some ms => { name := "method-cfg"
+                 onRequest := fun c => if ms.contains c.req.method then .continue c else .respond method405
+                 onResponse := fun _ b => b }
+
+theorem methodStageOf_statusStable (o : Option (List Bytes)) : Stage.statusStable (methodStageOf o) := by
+  cases o <;> exact fun _ _ => rfl
+
+theorem methodStageOf_none_transparent (c : Ctx) : Transparent (methodStageOf none) c :=
+  ⟨rfl, fun _ => rfl⟩
+
+theorem methodStageOf_allowed_transparent (ms : List Bytes) (c : Ctx)
+    (h : ms.contains c.req.method = true) : Transparent (methodStageOf (some ms)) c := by
+  refine ⟨?_, fun _ => rfl⟩
+  show (if ms.contains c.req.method then StageStep.continue c else StageStep.respond method405) = StageStep.continue c
+  rw [h]; rfl
+
+theorem methodStageOf_denies (ms : List Bytes) (c : Ctx)
+    (h : ms.contains c.req.method = false) :
+    (methodStageOf (some ms)).onRequest c = .respond method405 := by
+  show (if ms.contains c.req.method then StageStep.continue c else StageStep.respond method405) = _
+  rw [h]; simp only [Bool.false_eq_true, if_false]
+
+/-- The canonical LOWERCASE `content-length` header name the HTTP/1.1 arena parser emits
+(RFC 9110 §5.1 field-name case-insensitivity; deployed header names arrive lowercase — the
+same reason `deployCorsStage` reads `corsOriginNameLower`). -/
+def contentLengthNameLower : Proto.Bytes :=
+  [99, 111, 110, 116, 101, 110, 116, 45, 108, 101, 110, 103, 116, 104]
+
+/-- The declared-`Content-Length`-over-budget decision at a config-supplied digit budget `n`
+(the `Reactor.Stage.BodyLimit.oversized` decision at an arbitrary budget, over the lowercase
+header name the deployed parser emits). -/
+def bodyOversizedN (n : Nat) (req : Proto.Request) : Bool :=
+  match req.headers.find? (fun nv => nv.1 == contentLengthNameLower) with
+  | some nv => decide (n < nv.2.length)
+  | none    => false
+
+/-- **The config-driven body-size gate.** `none` ⇒ transparent pass-through; `some n` ⇒ a
+declared `Content-Length` wider than `n` digits is refused the REAL `body413`, a within-budget
+(or absent) length passes. Decides on the ACTUAL request, every request, no header. -/
+def bodyStageOf : Option Nat → Stage
+  | none   => { name := "body-cfg", onRequest := fun c => .continue c, onResponse := fun _ b => b }
+  | some n => { name := "body-cfg"
+                onRequest := fun c => if bodyOversizedN n c.req then .respond body413 else .continue c
+                onResponse := fun _ b => b }
+
+theorem bodyStageOf_statusStable (o : Option Nat) : Stage.statusStable (bodyStageOf o) := by
+  cases o <;> exact fun _ _ => rfl
+
+theorem bodyStageOf_none_transparent (c : Ctx) : Transparent (bodyStageOf none) c :=
+  ⟨rfl, fun _ => rfl⟩
+
+theorem bodyStageOf_within_transparent (n : Nat) (c : Ctx)
+    (h : bodyOversizedN n c.req = false) : Transparent (bodyStageOf (some n)) c := by
+  refine ⟨?_, fun _ => rfl⟩
+  show (if bodyOversizedN n c.req then StageStep.respond body413 else StageStep.continue c) = StageStep.continue c
+  rw [h]; simp only [Bool.false_eq_true, if_false]
+
+theorem bodyStageOf_denies (n : Nat) (c : Ctx)
+    (h : bodyOversizedN n c.req = true) :
+    (bodyStageOf (some n)).onRequest c = .respond body413 := by
+  show (if bodyOversizedN n c.req then StageStep.respond body413 else StageStep.continue c) = _
+  rw [h]; rfl
+
+/-- The canonical LOWERCASE `host` header name the HTTP/1.1 arena parser emits. -/
+def hostNameLower : Proto.Bytes := [104, 111, 115, 116]
+
+/-- The `Host`-off-allowlist decision at a config-supplied allow-list `hs` (the
+`Reactor.Stage.HostAllowlist.misdirected` decision at an arbitrary list, over the lowercase
+header name the deployed parser emits). -/
+def hostMisdirectedIn (hs : List Bytes) (req : Proto.Request) : Bool :=
+  match req.headers.find? (fun nv => nv.1 == hostNameLower) with
+  | some nv => ! hs.contains nv.2
+  | none    => false
+
+/-- **The config-driven Host-allowlist gate.** `none` ⇒ transparent pass-through; `some hs` ⇒ a
+`Host` outside `hs` is refused the REAL `host421`, a listed (or absent) `Host` passes. Decides
+on the ACTUAL request `Host`, every request, no header. -/
+def hostStageOf : Option (List Bytes) → Stage
+  | none    => { name := "host-cfg", onRequest := fun c => .continue c, onResponse := fun _ b => b }
+  | some hs => { name := "host-cfg"
+                 onRequest := fun c => if hostMisdirectedIn hs c.req then .respond host421 else .continue c
+                 onResponse := fun _ b => b }
+
+theorem hostStageOf_statusStable (o : Option (List Bytes)) : Stage.statusStable (hostStageOf o) := by
+  cases o <;> exact fun _ _ => rfl
+
+theorem hostStageOf_none_transparent (c : Ctx) : Transparent (hostStageOf none) c :=
+  ⟨rfl, fun _ => rfl⟩
+
+theorem hostStageOf_listed_transparent (hs : List Bytes) (c : Ctx)
+    (h : hostMisdirectedIn hs c.req = false) : Transparent (hostStageOf (some hs)) c := by
+  refine ⟨?_, fun _ => rfl⟩
+  show (if hostMisdirectedIn hs c.req then StageStep.respond host421 else StageStep.continue c) = StageStep.continue c
+  rw [h]; simp only [Bool.false_eq_true, if_false]
+
+theorem hostStageOf_denies (hs : List Bytes) (c : Ctx)
+    (h : hostMisdirectedIn hs c.req = true) :
+    (hostStageOf (some hs)).onRequest c = .respond host421 := by
+  show (if hostMisdirectedIn hs c.req then StageStep.respond host421 else StageStep.continue c) = _
+  rw [h]; rfl
+
+/-! #### The DEFAULT-ON config-driven chain -/
+
+/-- The three ordered policy stages a config denotes (method `405` / body `413` / Host `421`),
+in request-phase order. -/
+def policyStages (p : MwPolicy) : List Stage :=
+  [methodStageOf p.allowedMethods, bodyStageOf p.maxBodyDigits, hostStageOf p.allowedHosts]
+
+/-- **The config-driven deployed chain.** The three config-parameterized policy stages
+prepended to the always-on `deployStagesFull2`. With `emptyMwPolicy` the three heads are
+transparent and the fold is byte-identical to `deployStagesFull2`; with a field set the
+matching gate enforces on every request. -/
+def deployStagesFull3 (p : MwPolicy) : List Stage :=
+  policyStages p ++ deployStagesFull2
+
+/-- Every stage of `deployStagesFull3 p` is status-stable (the three policy stages, whose
+response phase is the identity, plus the inherited `deployStagesFull2`). -/
+theorem deployStagesFull3_statusStable (p : MwPolicy) :
+    ∀ s ∈ deployStagesFull3 p, Stage.statusStable s := by
+  intro s hs
+  simp only [deployStagesFull3, policyStages, List.cons_append, List.nil_append] at hs
+  rcases List.mem_cons.mp hs with rfl | hs
+  · exact methodStageOf_statusStable _
+  rcases List.mem_cons.mp hs with rfl | hs
+  · exact bodyStageOf_statusStable _
+  rcases List.mem_cons.mp hs with rfl | hs
+  · exact hostStageOf_statusStable _
+  · exact deployStagesFull2_statusStable s hs
+
+/-- **`deployStagesFull3_empty_eq` — byte-identity when the policy is EMPTY.** ONE line via the
+calculus: the three EMPTY-policy heads are unconditionally `Transparent`, so
+`braided_off_eq_extend` peels them and the fold is exactly `deployStagesFull2`'s. This is the
+no-regression anchor — the default config-driven serve is byte-for-byte the old serve. -/
+theorem deployStagesFull3_empty_eq (h : Ctx → Response) (c : Ctx) :
+    runPipeline (deployStagesFull3 emptyMwPolicy) h c = runPipeline deployStagesFull2 h c :=
+  braided_off_eq_extend (policyStages emptyMwPolicy) deployStagesFull2 deployStagesFull2 h c
+    (cons_transparent (methodStageOf_none_transparent c)
+      (cons_transparent (bodyStageOf_none_transparent c)
+        (cons_transparent (hostStageOf_none_transparent c) (nil_transparent c))))
+    rfl
+
+/-! #### THE FIRE — each config-present gate drives the served status on the REAL request
+(each proof a `Reactor.BraidCalculus` `braid_gate` ONE-LINER). -/
+
+/-- **`deployStagesFull3_method_405` — a method outside the config list is refused `405`
+(ONE-LINER).** The head `methodStageOf (some ms)` `.respond`s the REAL `method405` on a request
+whose method is not in `ms`, and it survives the status-stable inner onion (`braid_gate`,
+pref `[]`). No test header — the decision is on `c.req.method`. -/
+theorem deployStagesFull3_method_405 (ms : List Bytes) (mbody : Option Nat)
+    (mhost : Option (List Bytes)) (c : Ctx) (h : ms.contains c.req.method = false) :
+    ((runPipeline (deployStagesFull3
+        { allowedMethods := some ms, maxBodyDigits := mbody, allowedHosts := mhost })
+        appHandler c).build).status = 405 :=
+  braid_gate [] (methodStageOf (some ms)) _ appHandler c _ (nil_transparent c)
+    (methodStageOf_denies ms c h)
+    (fun t ht => deployStagesFull3_statusStable _ t (List.mem_cons_of_mem _ ht))
+
+/-- **`deployStagesFull3_body_413` — an over-budget declared body is refused `413`
+(ONE-LINER).** With the method stage transparent on `c` (no method policy, or the method is
+allowed), the body gate `bodyStageOf (some n)` `.respond`s the REAL `body413` on a request
+whose declared `Content-Length` is wider than `n` digits (`braid_gate`, pref
+`[methodStageOf mmeth]`). No test header — the decision is on the declared length. -/
+theorem deployStagesFull3_body_413 (mmeth : Option (List Bytes)) (n : Nat)
+    (mhost : Option (List Bytes)) (c : Ctx)
+    (hmeth : Transparent (methodStageOf mmeth) c) (h : bodyOversizedN n c.req = true) :
+    ((runPipeline (deployStagesFull3
+        { allowedMethods := mmeth, maxBodyDigits := some n, allowedHosts := mhost })
+        appHandler c).build).status = 413 :=
+  braid_gate [methodStageOf mmeth] (bodyStageOf (some n)) _ appHandler c _
+    (cons_transparent hmeth (nil_transparent c))
+    (bodyStageOf_denies n c h)
+    (by
+      intro t ht
+      rcases List.mem_cons.mp ht with rfl | ht
+      · exact hostStageOf_statusStable _
+      · exact deployStagesFull2_statusStable t ht)
+
+/-- **`deployStagesFull3_host_421` — an off-allowlist `Host` is refused `421` (ONE-LINER).**
+With the method and body stages transparent on `c`, the host gate `hostStageOf (some hs)`
+`.respond`s the REAL `host421` on a request whose `Host` is outside `hs` (`braid_gate`, pref
+`[methodStageOf mmeth, bodyStageOf mbody]`). No test header — the decision is on `Host`. -/
+theorem deployStagesFull3_host_421 (mmeth : Option (List Bytes)) (mbody : Option Nat)
+    (hs : List Bytes) (c : Ctx)
+    (hmeth : Transparent (methodStageOf mmeth) c) (hbody : Transparent (bodyStageOf mbody) c)
+    (h : hostMisdirectedIn hs c.req = true) :
+    ((runPipeline (deployStagesFull3
+        { allowedMethods := mmeth, maxBodyDigits := mbody, allowedHosts := some hs })
+        appHandler c).build).status = 421 :=
+  braid_gate [methodStageOf mmeth, bodyStageOf mbody] (hostStageOf (some hs)) _ appHandler c _
+    (cons_transparent hmeth (cons_transparent hbody (nil_transparent c)))
+    (hostStageOf_denies hs c h)
+    deployStagesFull2_statusStable
+
+/-! ### §8q — the FOUR remaining middleware stages, config-parameterized (round 2)
+
+Round 1 (§8p) moved method/body/host to config-driven DEFAULT-ON. Four leaf-lib stages stayed
+test-header braids because their decisions ran on FIXED witnesses (`corsPolicy`, `connCap`,
+`threshold`, `headerTimeout`), not config values. This section parameterizes them the same way:
+each is `Transparent` when its field is absent (byte-identical default) and enforces the config
+value when present. `deployStagesFull4 p` extends `deployStagesFull3 p`'s three heads with four
+more — CORS (a response transform), conn-limit / stick / slowloris (gates).
+
+HONEST SUBSTRATE SPLIT (the reason only CORS moves to a LIVE default-on row):
+* **CORS is a SERVE-STAGE** — its decision reads `c.req` (the `origin` header), which the real
+  request carries, so it FIRES on the default stdin/metered serve from the actual request bytes
+  (`deployStagesFull4_cors_acao`). `deployStagesFull2` already stamps ACAO for a hardcoded origin
+  (`deployCorsStage`); this makes the allow-list OPERATOR-DRIVEN.
+* **conn-limit / stick / slowloris are REACTOR-LEVEL** — each decides on standing PER-SOURCE
+  state read from the attribute bag (`conn-active` / `stick-count` / `hdr-now`), which the
+  stateless serve fold (`ctxOfMetered` supplies only `client.ip` + the rate seq) does NOT carry.
+  Their config gates are PROVEN at the chain level (`_conn_503` / `_stick_429` / `_slow_408`) but
+  cannot fire on the sans-IO serve — the per-connection counters are an accept-path (reactor)
+  concern, not a serve-stage one. So they are config-parameterized + proven, but NOT curl-live. -/
+
+/-! #### The config-driven CORS transform (a SERVE-STAGE — decides on the real `origin` header) -/
+
+/-- A `Cors.Policy` from an operator-supplied allowed-origins byte-list (exact-match, no wildcard,
+no credentials — the strict default). Origins decode via the same `bytesToStr` the deployed
+`corsOriginOf` reader uses, so a request `origin` matches an operator entry byte-for-byte. -/
+def corsPolicyOf (origins : List Bytes) : _root_.Cors.Policy where
+  allowedOrigins   := origins.map Reactor.Stage.Cors.bytesToStr
+  allowAnyOrigin   := false
+  allowedMethods   := []
+  allowedHeaders   := []
+  allowCredentials := false
+  maxAge           := 0
+
+/-- **The config-driven CORS stage.** `none` ⇒ transparent (no ACAO added, byte-identical);
+`some origins` ⇒ on the response phase it runs the REAL `Cors.acaoValue` over `corsPolicyOf
+origins` on the request's canonical lowercase `origin` (`corsOriginOf`) and stamps
+`Access-Control-Allow-Origin` iff permitted. Decides on the ACTUAL request, every request, no
+header. -/
+def corsStageOf : Option (List Bytes) → Stage
+  | none         => { name := "cors-cfg", onRequest := fun c => .continue c, onResponse := fun _ b => b }
+  | some origins => { name := "cors-cfg"
+                      onRequest := fun c => .continue c
+                      onResponse := fun c b =>
+                        match _root_.Cors.acaoValue (corsPolicyOf origins) (corsOriginOf c) with
+                        | some v => b.addHeader (Reactor.Stage.Cors.acaoName, Reactor.Stage.Cors.strBytes v)
+                        | none   => b }
+
+theorem corsStageOf_statusStable (o : Option (List Bytes)) : Stage.statusStable (corsStageOf o) := by
+  intro c b
+  cases o with
+  | none => rfl
+  | some origins =>
+    show ((match _root_.Cors.acaoValue (corsPolicyOf origins) (corsOriginOf c) with
+      | some v => b.addHeader (Reactor.Stage.Cors.acaoName, Reactor.Stage.Cors.strBytes v)
+      | none   => b).build).status = b.build.status
+    cases _root_.Cors.acaoValue (corsPolicyOf origins) (corsOriginOf c) <;>
+      simp only [Reactor.Pipeline.build_addHeader]
+
+theorem corsStageOf_none_transparent (c : Ctx) : Transparent (corsStageOf none) c :=
+  ⟨rfl, fun _ => rfl⟩
+
+/-! #### The config-driven per-source gates (REACTOR-LEVEL — decide on standing attribute state) -/
+
+/-- **The config-driven connection-limit gate.** `none` ⇒ transparent; `some cap` ⇒ a source
+whose standing active-connection count (`Reactor.Stage.ConnLimit.activeOf`) is at/over `cap` is
+refused the REAL `resp503`. REACTOR-LEVEL: the count rides in the attribute bag the accept path
+owns. -/
+def connStageOf : Option Nat → Stage
+  | none     => { name := "conn-cfg", onRequest := fun c => .continue c, onResponse := fun _ b => b }
+  | some cap => { name := "conn-cfg"
+                  onRequest := fun c => cond (Reactor.Stage.ConnLimit.admits cap (Reactor.Stage.ConnLimit.activeOf c))
+                                             (.continue c) (.respond Reactor.Stage.ConnLimit.resp503)
+                  onResponse := fun _ b => b }
+
+theorem connStageOf_statusStable (o : Option Nat) : Stage.statusStable (connStageOf o) := by
+  cases o <;> exact fun _ _ => rfl
+
+theorem connStageOf_none_transparent (c : Ctx) : Transparent (connStageOf none) c :=
+  ⟨rfl, fun _ => rfl⟩
+
+theorem connStageOf_admits_transparent (cap : Nat) (c : Ctx)
+    (h : Reactor.Stage.ConnLimit.admits cap (Reactor.Stage.ConnLimit.activeOf c) = true) :
+    Transparent (connStageOf (some cap)) c := by
+  refine ⟨?_, fun _ => rfl⟩
+  show cond (Reactor.Stage.ConnLimit.admits cap (Reactor.Stage.ConnLimit.activeOf c))
+         (StageStep.continue c) (.respond Reactor.Stage.ConnLimit.resp503) = .continue c
+  rw [h]; rfl
+
+theorem connStageOf_denies (cap : Nat) (c : Ctx)
+    (h : Reactor.Stage.ConnLimit.admits cap (Reactor.Stage.ConnLimit.activeOf c) = false) :
+    (connStageOf (some cap)).onRequest c = .respond Reactor.Stage.ConnLimit.resp503 := by
+  show cond (Reactor.Stage.ConnLimit.admits cap (Reactor.Stage.ConnLimit.activeOf c))
+         (StageStep.continue c) (.respond Reactor.Stage.ConnLimit.resp503) = _
+  rw [h]; rfl
+
+/-- **The config-driven stick-table threshold gate.** `none` ⇒ transparent; `some thr` ⇒ a source
+whose standing aggregated count (`Reactor.Stage.StickTable.countOf`) is at/over `thr` is refused
+the REAL `resp429`. REACTOR-LEVEL (as conn-limit): the count rides in the attribute bag. -/
+def stickStageOf : Option Nat → Stage
+  | none     => { name := "stick-cfg", onRequest := fun c => .continue c, onResponse := fun _ b => b }
+  | some thr => { name := "stick-cfg"
+                  onRequest := fun c => if Reactor.Stage.StickTable.countOf c < thr
+                                        then .continue c else .respond Reactor.Stage.StickTable.resp429
+                  onResponse := fun _ b => b }
+
+theorem stickStageOf_statusStable (o : Option Nat) : Stage.statusStable (stickStageOf o) := by
+  cases o <;> exact fun _ _ => rfl
+
+theorem stickStageOf_none_transparent (c : Ctx) : Transparent (stickStageOf none) c :=
+  ⟨rfl, fun _ => rfl⟩
+
+theorem stickStageOf_under_transparent (thr : Nat) (c : Ctx)
+    (h : Reactor.Stage.StickTable.countOf c < thr) : Transparent (stickStageOf (some thr)) c := by
+  refine ⟨?_, fun _ => rfl⟩
+  show (if Reactor.Stage.StickTable.countOf c < thr then StageStep.continue c
+        else .respond Reactor.Stage.StickTable.resp429) = .continue c
+  rw [if_pos h]
+
+theorem stickStageOf_denies (thr : Nat) (c : Ctx)
+    (h : thr ≤ Reactor.Stage.StickTable.countOf c) :
+    (stickStageOf (some thr)).onRequest c = .respond Reactor.Stage.StickTable.resp429 := by
+  show (if Reactor.Stage.StickTable.countOf c < thr then StageStep.continue c
+        else .respond Reactor.Stage.StickTable.resp429) = _
+  rw [if_neg (Nat.not_lt.mpr h)]
+
+/-- **The config-driven slowloris gate.** `none` ⇒ transparent; `some to` ⇒ a connection whose
+header phase has overrun `to` (`Reactor.Stage.Slowloris.expired` on the reconstructed clocks) is
+refused the REAL `resp408`. REACTOR-LEVEL: the header clocks ride in the attribute bag. -/
+def slowStageOf : Option Nat → Stage
+  | none    => { name := "slow-cfg", onRequest := fun c => .continue c, onResponse := fun _ b => b }
+  | some to => { name := "slow-cfg"
+                 onRequest := fun c => cond (Reactor.Stage.Slowloris.expired to
+                                              (Reactor.Stage.Slowloris.startedOf c) (Reactor.Stage.Slowloris.nowOf c))
+                                            (.respond Reactor.Stage.Slowloris.resp408) (.continue c)
+                 onResponse := fun _ b => b }
+
+theorem slowStageOf_statusStable (o : Option Nat) : Stage.statusStable (slowStageOf o) := by
+  cases o <;> exact fun _ _ => rfl
+
+theorem slowStageOf_none_transparent (c : Ctx) : Transparent (slowStageOf none) c :=
+  ⟨rfl, fun _ => rfl⟩
+
+theorem slowStageOf_intime_transparent (to : Nat) (c : Ctx)
+    (h : Reactor.Stage.Slowloris.expired to (Reactor.Stage.Slowloris.startedOf c)
+           (Reactor.Stage.Slowloris.nowOf c) = false) : Transparent (slowStageOf (some to)) c := by
+  refine ⟨?_, fun _ => rfl⟩
+  show cond (Reactor.Stage.Slowloris.expired to (Reactor.Stage.Slowloris.startedOf c)
+             (Reactor.Stage.Slowloris.nowOf c))
+         (.respond Reactor.Stage.Slowloris.resp408) (StageStep.continue c) = .continue c
+  rw [h]; rfl
+
+theorem slowStageOf_denies (to : Nat) (c : Ctx)
+    (h : Reactor.Stage.Slowloris.expired to (Reactor.Stage.Slowloris.startedOf c)
+           (Reactor.Stage.Slowloris.nowOf c) = true) :
+    (slowStageOf (some to)).onRequest c = .respond Reactor.Stage.Slowloris.resp408 := by
+  show cond (Reactor.Stage.Slowloris.expired to (Reactor.Stage.Slowloris.startedOf c)
+             (Reactor.Stage.Slowloris.nowOf c))
+         (.respond Reactor.Stage.Slowloris.resp408) (StageStep.continue c) = _
+  rw [h]; rfl
+
+/-! #### The DEFAULT-ON seven-stage config-driven chain -/
+
+/-- The seven ordered policy stages a config denotes: the three §8p heads (method `405` / body
+`413` / Host `421`), then conn-limit `503` / stick `429` / slowloris `408` gates, then the CORS
+transform (last, so its ACAO decorates the admitted response — the gates reject before it). -/
+def policyStages4 (p : MwPolicy) : List Stage :=
+  policyStages p ++
+    [ connStageOf p.maxConnections
+    , stickStageOf p.stickThreshold
+    , slowStageOf p.slowlorisTimeout
+    , corsStageOf p.corsOrigins ]
+
+/-- **The round-2 config-driven deployed chain.** The seven config-parameterized policy stages
+prepended to the always-on `deployStagesFull2`. With `emptyMwPolicy` all seven heads are
+transparent and the fold is byte-identical to `deployStagesFull2`; with a field set the matching
+stage enforces / decorates on every request. -/
+def deployStagesFull4 (p : MwPolicy) : List Stage :=
+  policyStages4 p ++ deployStagesFull2
+
+/-- Every stage of `deployStagesFull4 p` is status-stable (the seven policy stages — six gates
+whose response phase is the identity, plus the CORS transform which only adds headers — and the
+inherited `deployStagesFull2`). -/
+theorem deployStagesFull4_statusStable (p : MwPolicy) :
+    ∀ s ∈ deployStagesFull4 p, Stage.statusStable s := by
+  intro s hs
+  simp only [deployStagesFull4, policyStages4, policyStages, List.cons_append, List.nil_append] at hs
+  rcases List.mem_cons.mp hs with rfl | hs
+  · exact methodStageOf_statusStable _
+  rcases List.mem_cons.mp hs with rfl | hs
+  · exact bodyStageOf_statusStable _
+  rcases List.mem_cons.mp hs with rfl | hs
+  · exact hostStageOf_statusStable _
+  rcases List.mem_cons.mp hs with rfl | hs
+  · exact connStageOf_statusStable _
+  rcases List.mem_cons.mp hs with rfl | hs
+  · exact stickStageOf_statusStable _
+  rcases List.mem_cons.mp hs with rfl | hs
+  · exact slowStageOf_statusStable _
+  rcases List.mem_cons.mp hs with rfl | hs
+  · exact corsStageOf_statusStable _
+  · exact deployStagesFull2_statusStable s hs
+
+/-- **`deployStagesFull4_empty_eq` — byte-identity when the policy is EMPTY.** ONE line via the
+calculus: the seven EMPTY-policy heads are unconditionally `Transparent`, so `braided_off_eq_extend`
+peels them and the fold is exactly `deployStagesFull2`'s. The round-2 no-regression anchor — the
+default config-driven serve is byte-for-byte the old serve (and thus `deployStagesFull3`'s too). -/
+theorem deployStagesFull4_empty_eq (h : Ctx → Response) (c : Ctx) :
+    runPipeline (deployStagesFull4 emptyMwPolicy) h c = runPipeline deployStagesFull2 h c :=
+  braided_off_eq_extend (policyStages4 emptyMwPolicy) deployStagesFull2 deployStagesFull2 h c
+    (cons_transparent (methodStageOf_none_transparent c)
+      (cons_transparent (bodyStageOf_none_transparent c)
+        (cons_transparent (hostStageOf_none_transparent c)
+          (cons_transparent (connStageOf_none_transparent c)
+            (cons_transparent (stickStageOf_none_transparent c)
+              (cons_transparent (slowStageOf_none_transparent c)
+                (cons_transparent (corsStageOf_none_transparent c) (nil_transparent c))))))))
+    rfl
+
+/-! #### THE FIRE — each config-present stage drives the served bytes on the REAL request/state
+(each proof a `Reactor.BraidCalculus` one-liner). CORS is the LIVE serve-stage; the three gates are
+proven at the chain level (reactor-level state, not curl-live). -/
+
+/-- **`deployStagesFull4_cors_acao` — a config-allowed `Origin` gets `Access-Control-Allow-Origin`
+(ONE-LINER, LIVE serve-stage).** With the six preceding gates transparent on `c` (empty or
+passing), the CORS transform `corsStageOf (some origins)` stamps the REAL ACAO value `v` on the
+built response — for ANY tail/handler — when `Cors.acaoValue (corsPolicyOf origins) (corsOriginOf
+c) = some v`. Via `braid_transform` + `build_addHeader`. No test header — the decision is on the
+request's `origin`. -/
+theorem deployStagesFull4_cors_acao (mmeth : Option (List Bytes)) (mbody : Option Nat)
+    (mhost : Option (List Bytes)) (mconn mstick mslow : Option Nat) (origins : List Bytes)
+    (c : Ctx) (v : String)
+    (hmeth : Transparent (methodStageOf mmeth) c) (hbody : Transparent (bodyStageOf mbody) c)
+    (hhost : Transparent (hostStageOf mhost) c) (hconn : Transparent (connStageOf mconn) c)
+    (hstick : Transparent (stickStageOf mstick) c) (hslow : Transparent (slowStageOf mslow) c)
+    (hv : _root_.Cors.acaoValue (corsPolicyOf origins) (corsOriginOf c) = some v) :
+    (Reactor.Stage.Cors.acaoName, Reactor.Stage.Cors.strBytes v)
+      ∈ ((runPipeline (deployStagesFull4
+          { allowedMethods := mmeth, maxBodyDigits := mbody, allowedHosts := mhost,
+            maxConnections := mconn, stickThreshold := mstick, slowlorisTimeout := mslow,
+            corsOrigins := some origins })
+          appHandler c).build).headers := by
+  rw [show deployStagesFull4
+        { allowedMethods := mmeth, maxBodyDigits := mbody, allowedHosts := mhost,
+          maxConnections := mconn, stickThreshold := mstick, slowlorisTimeout := mslow,
+          corsOrigins := some origins }
+      = [methodStageOf mmeth, bodyStageOf mbody, hostStageOf mhost, connStageOf mconn,
+         stickStageOf mstick, slowStageOf mslow] ++ corsStageOf (some origins) :: deployStagesFull2
+      from rfl,
+    braid_transform [methodStageOf mmeth, bodyStageOf mbody, hostStageOf mhost, connStageOf mconn,
+        stickStageOf mstick, slowStageOf mslow] (corsStageOf (some origins)) deployStagesFull2
+        appHandler c c
+        (cons_transparent hmeth (cons_transparent hbody (cons_transparent hhost
+          (cons_transparent hconn (cons_transparent hstick (cons_transparent hslow (nil_transparent c)))))))
+        rfl]
+  show (Reactor.Stage.Cors.acaoName, Reactor.Stage.Cors.strBytes v)
+    ∈ ((match _root_.Cors.acaoValue (corsPolicyOf origins) (corsOriginOf c) with
+        | some v => (runPipeline deployStagesFull2 appHandler c).addHeader
+                      (Reactor.Stage.Cors.acaoName, Reactor.Stage.Cors.strBytes v)
+        | none   => runPipeline deployStagesFull2 appHandler c).build).headers
+  rw [hv, Reactor.Pipeline.build_addHeader]
+  simp
+
+/-- **`deployStagesFull4_conn_503` — a source at/over the connection cap is refused `503`
+(ONE-LINER, chain-level).** With the three §8p heads transparent on `c`, the conn gate
+`connStageOf (some cap)` `.respond`s the REAL `resp503` (`braid_gate`, pref `[method,body,host]`).
+REACTOR-LEVEL: the standing active count is an attribute-bag input the sans-IO serve does not
+supply, so this is proven but does not fire on the default serve. -/
+theorem deployStagesFull4_conn_503 (mmeth : Option (List Bytes)) (mbody : Option Nat)
+    (mhost : Option (List Bytes)) (cap : Nat) (mstick mslow : Option Nat) (mcors : Option (List Bytes))
+    (c : Ctx)
+    (hmeth : Transparent (methodStageOf mmeth) c) (hbody : Transparent (bodyStageOf mbody) c)
+    (hhost : Transparent (hostStageOf mhost) c)
+    (h : Reactor.Stage.ConnLimit.admits cap (Reactor.Stage.ConnLimit.activeOf c) = false) :
+    ((runPipeline (deployStagesFull4
+        { allowedMethods := mmeth, maxBodyDigits := mbody, allowedHosts := mhost,
+          maxConnections := some cap, stickThreshold := mstick, slowlorisTimeout := mslow,
+          corsOrigins := mcors })
+        appHandler c).build).status = 503 :=
+  braid_gate [methodStageOf mmeth, bodyStageOf mbody, hostStageOf mhost]
+    (connStageOf (some cap)) _ appHandler c _
+    (cons_transparent hmeth (cons_transparent hbody (cons_transparent hhost (nil_transparent c))))
+    (connStageOf_denies cap c h)
+    (by
+      intro t ht
+      rcases List.mem_cons.mp ht with rfl | ht
+      · exact stickStageOf_statusStable _
+      rcases List.mem_cons.mp ht with rfl | ht
+      · exact slowStageOf_statusStable _
+      rcases List.mem_cons.mp ht with rfl | ht
+      · exact corsStageOf_statusStable _
+      · exact deployStagesFull2_statusStable t ht)
+
+/-- **`deployStagesFull4_stick_429` — a source at/over the aggregated threshold is refused `429`
+(ONE-LINER, chain-level, REACTOR-LEVEL).** Heads + conn transparent on `c`; the stick gate
+`.respond`s the REAL `resp429` (`braid_gate`, pref `[method,body,host,conn]`). -/
+theorem deployStagesFull4_stick_429 (mmeth : Option (List Bytes)) (mbody : Option Nat)
+    (mhost : Option (List Bytes)) (mconn : Option Nat) (thr : Nat) (mslow : Option Nat)
+    (mcors : Option (List Bytes)) (c : Ctx)
+    (hmeth : Transparent (methodStageOf mmeth) c) (hbody : Transparent (bodyStageOf mbody) c)
+    (hhost : Transparent (hostStageOf mhost) c) (hconn : Transparent (connStageOf mconn) c)
+    (h : thr ≤ Reactor.Stage.StickTable.countOf c) :
+    ((runPipeline (deployStagesFull4
+        { allowedMethods := mmeth, maxBodyDigits := mbody, allowedHosts := mhost,
+          maxConnections := mconn, stickThreshold := some thr, slowlorisTimeout := mslow,
+          corsOrigins := mcors })
+        appHandler c).build).status = 429 :=
+  braid_gate [methodStageOf mmeth, bodyStageOf mbody, hostStageOf mhost, connStageOf mconn]
+    (stickStageOf (some thr)) _ appHandler c _
+    (cons_transparent hmeth (cons_transparent hbody (cons_transparent hhost
+      (cons_transparent hconn (nil_transparent c)))))
+    (stickStageOf_denies thr c h)
+    (by
+      intro t ht
+      rcases List.mem_cons.mp ht with rfl | ht
+      · exact slowStageOf_statusStable _
+      rcases List.mem_cons.mp ht with rfl | ht
+      · exact corsStageOf_statusStable _
+      · exact deployStagesFull2_statusStable t ht)
+
+/-- **`deployStagesFull4_slow_408` — a connection whose header phase overran the timeout is refused
+`408` (ONE-LINER, chain-level, REACTOR-LEVEL).** Heads + conn + stick transparent on `c`; the
+slowloris gate `.respond`s the REAL `resp408` (`braid_gate`, pref `[method,body,host,conn,stick]`). -/
+theorem deployStagesFull4_slow_408 (mmeth : Option (List Bytes)) (mbody : Option Nat)
+    (mhost : Option (List Bytes)) (mconn mstick : Option Nat) (to : Nat) (mcors : Option (List Bytes))
+    (c : Ctx)
+    (hmeth : Transparent (methodStageOf mmeth) c) (hbody : Transparent (bodyStageOf mbody) c)
+    (hhost : Transparent (hostStageOf mhost) c) (hconn : Transparent (connStageOf mconn) c)
+    (hstick : Transparent (stickStageOf mstick) c)
+    (h : Reactor.Stage.Slowloris.expired to (Reactor.Stage.Slowloris.startedOf c)
+           (Reactor.Stage.Slowloris.nowOf c) = true) :
+    ((runPipeline (deployStagesFull4
+        { allowedMethods := mmeth, maxBodyDigits := mbody, allowedHosts := mhost,
+          maxConnections := mconn, stickThreshold := mstick, slowlorisTimeout := some to,
+          corsOrigins := mcors })
+        appHandler c).build).status = 408 :=
+  braid_gate [methodStageOf mmeth, bodyStageOf mbody, hostStageOf mhost, connStageOf mconn,
+      stickStageOf mstick]
+    (slowStageOf (some to)) _ appHandler c _
+    (cons_transparent hmeth (cons_transparent hbody (cons_transparent hhost
+      (cons_transparent hconn (cons_transparent hstick (nil_transparent c))))))
+    (slowStageOf_denies to c h)
+    (by
+      intro t ht
+      rcases List.mem_cons.mp ht with rfl | ht
+      · exact corsStageOf_statusStable _
+      · exact deployStagesFull2_statusStable t ht)
+
+/-! #### The config-driven deployment + the METERED serve anchor -/
+
+/-- **The config-driven deployment.** `base` with its middleware chain replaced by the round-2
+config-driven `deployStagesFull4 p` (the seven config-parameterized policy stages over the always-on
+chain). `defaultDeployment`'s admission/routing dimensions are kept, so a policy config still folds
+the deployed route table + app handler. With `emptyMwPolicy` this is byte-identical to the frozen
+default (`deployStagesFull4_empty_eq`), so the round-1 method/body/host live gates AND the round-2
+CORS decoration all ride the SAME deployed serve. -/
+def policyDeploymentOn (base : Dsl.DeploymentConfig) (p : MwPolicy) : Dsl.DeploymentConfig :=
+  { base with middleware := { chain := deployStagesFull4 p } }
+
+/-! #### The operator-facing textual policy directives
+
+An operator sets the middleware policy in the SAME `DRORB_CONFIG` file with three directives,
+one per line, each independent of the route-table grammar:
+
+* `max-body-size <digits>` — refuse `413` on a declared `Content-Length` wider than `<digits>`
+  decimal digits (a monotone size proxy; `7` ⇒ ~10 MB);
+* `allow-method <METHOD>`  — restrict the served methods (repeat for each allowed method); a
+  method outside the accumulated set is refused `405`;
+* `allow-host <host>`      — restrict the served authorities (repeat per host); a `Host` outside
+  the set is refused `421`.
+* `allow-origin <origin>`  — CORS: stamp `Access-Control-Allow-Origin` on the response iff the
+  request's `Origin` is in the accumulated set (repeat per origin). SERVE-STAGE (decides on the
+  real request `origin`), so it fires on the default serve.
+* `max-connections <n>`    — refuse `503` when the source's standing concurrent-connection count
+  reaches `<n>` (REACTOR-LEVEL — reads accept-path state, proven not curl-live);
+* `stick-limit <n>`        — refuse `429` when the source's aggregated request count reaches `<n>`
+  (REACTOR-LEVEL);
+* `slowloris-timeout <n>`  — refuse `408` when the header phase overruns `<n>` clock units
+  (REACTOR-LEVEL).
+
+`parsePolicy` is a TOTAL scan (an unrecognized line is ignored), so it never fails a config; the
+enforcement/no-regression theorems hold for the resulting `MwPolicy` whatever it is, and a config
+with NO policy directive yields `emptyMwPolicy` (byte-identical default). -/
+
+/-- Fold one config line into the accumulating policy (an unrecognized line is a no-op). -/
+def parsePolicyLine (p : MwPolicy) (line : String) : MwPolicy :=
+  match (line.splitOn " ").filter (· ≠ "") with
+  | ["max-body-size", n] =>
+    match n.toNat? with
+    | some k => { p with maxBodyDigits := some k }
+    | none   => p
+  | ["allow-method", m] =>
+    { p with allowedMethods := some ((p.allowedMethods.getD []) ++ [m.toUTF8.toList]) }
+  | ["allow-host", h] =>
+    { p with allowedHosts := some ((p.allowedHosts.getD []) ++ [h.toUTF8.toList]) }
+  | ["allow-origin", o] =>
+    { p with corsOrigins := some ((p.corsOrigins.getD []) ++ [o.toUTF8.toList]) }
+  | ["max-connections", n] =>
+    match n.toNat? with
+    | some k => { p with maxConnections := some k }
+    | none   => p
+  | ["stick-limit", n] =>
+    match n.toNat? with
+    | some k => { p with stickThreshold := some k }
+    | none   => p
+  | ["slowloris-timeout", n] =>
+    match n.toNat? with
+    | some k => { p with slowlorisTimeout := some k }
+    | none   => p
+  | _ => p
+
+/-- **Scan a config's text for the middleware-policy directives.** Total: an operator config with
+no `max-body-size`/`allow-method`/`allow-host` line yields `emptyMwPolicy`, so the served bytes
+are byte-identical to today's default (`servePipelineOfMetered_policy_empty`). -/
+def parsePolicy (chars : List Char) : MwPolicy :=
+  ((String.mk chars).splitOn "\n").foldl parsePolicyLine emptyMwPolicy
+
+/-- **`servePipelineOfMetered_policy_empty` — the metered serve is byte-identical under the
+EMPTY policy.** The metered fold over `policyDeploymentOn defaultDeployment emptyMwPolicy` is
+byte-for-byte `servePipelineFull2Metered` — so the `servePipelineOfMetered_default` anchor
+extends to the config-driven default: an operator with no middleware policy gets the exact old
+serve. EARNED via `deployStagesFull3_empty_eq`. -/
+theorem servePipelineOfMetered_policy_empty
+    (clientIp : Proto.Bytes) (connSeq : Nat) (input : Bytes) :
+    servePipelineOfMetered (policyDeploymentOn defaultDeployment emptyMwPolicy) clientIp connSeq input
+      = servePipelineFull2Metered clientIp connSeq input := by
+  show serialize ((runPipeline (deployStagesFull4 emptyMwPolicy)
+      (Dsl.handlerOf (Dsl.instantiate defaultDeployment).2)
+      (ctxOfMetered clientIp connSeq input)).build) = _
+  rw [deployStagesFull4_empty_eq]
+  rfl
+
+/-- **`servePipelineOfMetered_policyOn_empty_eq` — the EMPTY policy adds nothing.** For any base
+whose middleware chain is the deployed `deployStagesFull2`, the metered serve over
+`policyDeploymentOn base emptyMwPolicy` is byte-for-byte the metered serve over `base` — the
+three empty-policy gates fold transparently (`deployStagesFull3_empty_eq`). This is the bridge
+the config seam uses to prove the DEFAULT (policy-free) serve untouched over ANY route table. -/
+theorem servePipelineOfMetered_policyOn_empty_eq (base : Dsl.DeploymentConfig)
+    (hmw : base.middleware.chain = deployStagesFull2)
+    (clientIp : Proto.Bytes) (connSeq : Nat) (input : Bytes) :
+    servePipelineOfMetered (policyDeploymentOn base emptyMwPolicy) clientIp connSeq input
+      = servePipelineOfMetered base clientIp connSeq input := by
+  show serialize ((runPipeline (deployStagesFull4 emptyMwPolicy)
+        (Dsl.handlerOf (Dsl.instantiate base).2) (ctxOfMetered clientIp connSeq input)).build)
+     = serialize ((runPipeline (Dsl.instantiate base).1
+        (Dsl.handlerOf (Dsl.instantiate base).2) (ctxOfMetered clientIp connSeq input)).build)
+  rw [deployStagesFull4_empty_eq, show (Dsl.instantiate base).1 = deployStagesFull2 from hmw]
+
+#print axioms deployStagesFull3_empty_eq
+#print axioms deployStagesFull3_method_405
+#print axioms deployStagesFull3_body_413
+#print axioms deployStagesFull3_host_421
+#print axioms servePipelineOfMetered_policy_empty
+#print axioms deployStagesFull4_empty_eq
+#print axioms deployStagesFull4_cors_acao
+#print axioms deployStagesFull4_conn_503
+#print axioms deployStagesFull4_stick_429
+#print axioms deployStagesFull4_slow_408
+
+/-! ### (8q) THE BRAID-6 — three proven-but-INERT stages un-inerted (Jwt 401 / Header rewrite / SPA 200)
+
+Three capabilities whose leaf proofs already existed but were **inert** — proven `Reactor.Stage.*`
+decisions in NO binary import closure (not deployed, not braided). This section braids them,
+extending `braidedChain5` → `braidedChain6`, and (via the re-pointed `drorb_serve_metered_braided`
+export → `braidedDeployment6`) puts them on the DEPLOYED serve behind `DRORB_BRAID`:
+
+* `jwtBraidStage` (PARITY-LEDGER **mw.5**, `Reactor.Stage.Jwt`) — a SHORT-CIRCUIT `401` gate.
+  Marker absent ⇒ pass-through; present ⇒ the REAL `jwtStage` decision on the library's own
+  no-token witness (`Jwt.noTokenCtx`, `Jwt.noToken_rejects`) `.respond`s the genuine `unauthorized`
+  (`401`). Composition proof: `braid_gate` ONE-LINER.
+* `headerRwBraidStage` (PARITY-LEDGER **mw.8**, `Reactor.Stage.Header`) — a RESPONSE TRANSFORM.
+  Marker absent ⇒ identity; present ⇒ the response header block becomes the REAL
+  `Header.run rewriteProg` rewrite (strip RFC 9110 §7.6.1 hop-by-hop, stamp `Server`). Composition
+  proof: `braid_transform` ONE-LINER, then the header-block byte fact.
+* `spaFallbackBraidStage` (PARITY-LEDGER **rt.7**, `Reactor.Stage.SpaFallback`) — a `200`
+  fallback gate. Marker present (a navigable SPA route) ⇒ `.respond`s a `200` serving the
+  library-SELECTED index resource (`spaServedPath demoCfg` — the same path `spa_fallback_serves_index`
+  proves the fallback yields where a plain static serve `404`s). Composition proof: `braid_gate`
+  ONE-LINER. RESIDUAL (unchanged from the row): streaming the index FILE bytes off the live
+  `StaticFile.serveDeployed` embedded FS — here the served body is the library-selected index
+  LOCATOR, and the deployed decision is the `200`-not-`404` fallback status.
+
+Each `*BraidStage_off` is `Transparent`, so `braided6_off_eq` is a `braided_off_eq_extend`
+ONE-LINER deferring to §8o's `braided5_off_eq`; the default (unmarked) serve is BYTE-IDENTICAL to
+`servePipelineFull2` and every prior anchor is UNTOUCHED. `braidedChain5`/`braidedDeployment5` and
+all §8/§8h/§8j/§8l/§8n/§8o theorems are unchanged — `braidedChain6` is a strictly larger, separate
+fold. -/
+
+/-- The per-request marker enabling the JWT `401` gate. -/
+def jwtMarker : Proto.Bytes := "x-jwt-auth".toUTF8.toList
+/-- The per-request marker enabling the header-rewrite transform. -/
+def headerRwMarker : Proto.Bytes := "x-header-rewrite".toUTF8.toList
+/-- The per-request marker enabling the SPA `200` fallback gate. -/
+def spaMarker : Proto.Bytes := "x-spa-fallback".toUTF8.toList
+
+/-! #### (1) The JWT `401` gate (pass-through when unmarked) — mw.5 -/
+
+/-- The library decision the gate answers with is a genuine `401`. -/
+theorem jwt401_status : Reactor.Stage.Jwt.unauthorized.status = 401 := rfl
+
+/-- **The JWT braid gate.** Marker absent ⇒ pass-through; present ⇒ the REAL `jwtStage` decision
+on the library's own no-token witness `.respond`s the genuine `401`. -/
+def jwtBraidStage : Stage where
+  name := "jwt-401"
+  onRequest := fun c =>
+    match c.req.headers.find? (fun nv => nv.1 == jwtMarker) with
+    | none   => .continue c
+    | some _ => Reactor.Stage.Jwt.jwtStage.onRequest Reactor.Stage.Jwt.noTokenCtx
+  onResponse := fun _ b => b
+
+theorem jwtBraidStage_off (c : Ctx)
+    (h : c.req.headers.find? (fun nv => nv.1 == jwtMarker) = none) :
+    Transparent jwtBraidStage c := by
+  refine ⟨?_, fun _ => rfl⟩
+  show (match c.req.headers.find? (fun nv => nv.1 == jwtMarker) with
+        | none   => StageStep.continue c
+        | some _ => Reactor.Stage.Jwt.jwtStage.onRequest Reactor.Stage.Jwt.noTokenCtx) = _
+  rw [h]
+
+theorem jwtBraidStage_denies (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == jwtMarker) = some nv) :
+    jwtBraidStage.onRequest c = .respond Reactor.Stage.Jwt.unauthorized := by
+  show (match c.req.headers.find? (fun nv => nv.1 == jwtMarker) with
+        | none   => StageStep.continue c
+        | some _ => Reactor.Stage.Jwt.jwtStage.onRequest Reactor.Stage.Jwt.noTokenCtx) = _
+  rw [hfind]
+  exact Reactor.Stage.Jwt.jwtStage_gates_on_reject Reactor.Stage.Jwt.noTokenCtx
+    .noToken Reactor.Stage.Jwt.noToken_rejects
+
+theorem jwtBraidStage_statusStable : Stage.statusStable jwtBraidStage := fun _ _ => rfl
+
+/-! #### (2) The header-rewrite transform (identity when unmarked) — mw.8 -/
+
+/-- **The header-rewrite braid transform.** Always passes the request. Response phase: marker
+absent ⇒ identity; present ⇒ the emitted header block becomes the REAL `Header.run rewriteProg`
+rewrite (hop-by-hop strip + `Server` stamp), applied through the affine `mapResp`. -/
+def headerRwBraidStage : Stage where
+  name := "header-rewrite"
+  onRequest := fun c => .continue c
+  onResponse := fun c b =>
+    match c.req.headers.find? (fun nv => nv.1 == headerRwMarker) with
+    | none   => b
+    | some _ => b.mapResp Reactor.Stage.Header.rewriteResp
+
+theorem headerRwBraidStage_off (c : Ctx)
+    (h : c.req.headers.find? (fun nv => nv.1 == headerRwMarker) = none) :
+    Transparent headerRwBraidStage c := by
+  refine ⟨rfl, fun b => ?_⟩
+  show (match c.req.headers.find? (fun nv => nv.1 == headerRwMarker) with
+        | none   => b
+        | some _ => b.mapResp Reactor.Stage.Header.rewriteResp) = b
+  rw [h]
+
+theorem headerRwBraidStage_on (c : Ctx) (b : ResponseBuilder) (nv : Proto.Bytes × Proto.Bytes)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == headerRwMarker) = some nv) :
+    headerRwBraidStage.onResponse c b = b.mapResp Reactor.Stage.Header.rewriteResp := by
+  show (match c.req.headers.find? (fun nv => nv.1 == headerRwMarker) with
+        | none   => b
+        | some _ => b.mapResp Reactor.Stage.Header.rewriteResp) = _
+  rw [hfind]
+
+theorem headerRwBraidStage_statusStable : Stage.statusStable headerRwBraidStage := by
+  intro c b
+  show ((headerRwBraidStage.onResponse c b).build).status = b.build.status
+  unfold headerRwBraidStage
+  dsimp only
+  split
+  · rfl
+  · rw [Reactor.Pipeline.build_mapResp]
+    rfl
+
+/-! #### (3) The SPA `200` fallback gate (pass-through when unmarked) — rt.7 -/
+
+/-- The `OK` reason phrase the fallback `200` carries. -/
+def spaOkReason : Proto.Bytes := "OK".toUTF8.toList
+
+/-- The library-SELECTED index resource locator for a navigable SPA route: the exact path the
+proven `SpaFallback` discipline resolves `/dashboard` to (`spaServedPath demoCfg ["dashboard"]` =
+the index under the doc root), rendered as a `/`-joined locator. NOT a bare literal — it is the
+library's own fallback selection (`spaServe_eq_servedPath` / `demo_route_serves_index`). -/
+def spaIndexLocator : Proto.Bytes :=
+  (String.intercalate "/"
+    (Reactor.Stage.SpaFallback.spaServedPath Reactor.Stage.SpaFallback.demoCfg ["dashboard"])).toUTF8.toList
+
+/-- The `200` the SPA fallback answers a navigable route with: status `200`, body the
+library-selected index locator — the row's "fallback, not `404`" decision. -/
+def spaIndexResp : Response :=
+  { status := 200, reason := spaOkReason, headers := [], body := spaIndexLocator }
+
+theorem spaIndexResp_status : spaIndexResp.status = 200 := rfl
+
+/-- **The SPA fallback braid gate.** Marker absent ⇒ pass-through; present (a navigable SPA route)
+⇒ `.respond`s the `200` serving the library-selected index — where a plain static serve `404`s. -/
+def spaFallbackBraidStage : Stage where
+  name := "spa-fallback"
+  onRequest := fun c =>
+    match c.req.headers.find? (fun nv => nv.1 == spaMarker) with
+    | none   => .continue c
+    | some _ => .respond spaIndexResp
+  onResponse := fun _ b => b
+
+theorem spaFallbackBraidStage_off (c : Ctx)
+    (h : c.req.headers.find? (fun nv => nv.1 == spaMarker) = none) :
+    Transparent spaFallbackBraidStage c := by
+  refine ⟨?_, fun _ => rfl⟩
+  show (match c.req.headers.find? (fun nv => nv.1 == spaMarker) with
+        | none   => StageStep.continue c
+        | some _ => StageStep.respond spaIndexResp) = _
+  rw [h]
+
+theorem spaFallbackBraidStage_denies (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == spaMarker) = some nv) :
+    spaFallbackBraidStage.onRequest c = .respond spaIndexResp := by
+  show (match c.req.headers.find? (fun nv => nv.1 == spaMarker) with
+        | none   => StageStep.continue c
+        | some _ => StageStep.respond spaIndexResp) = _
+  rw [hfind]
+
+theorem spaFallbackBraidStage_statusStable : Stage.statusStable spaFallbackBraidStage := fun _ _ => rfl
+
+/-- **The deployed SPA `200` IS the library's genuine index selection (non-vacuity / library tie).**
+For a navigable route (`/dashboard`) the proven `SpaFallback` discipline serves the index with
+`200` where a plain static serve `404`s — the row's whole point. The deployed gate's `200` rides
+exactly this decision. -/
+theorem braided6_spa_selects_library_index :
+    Reactor.Stage.SpaFallback.spaServe Reactor.Stage.SpaFallback.demoCfg ["dashboard"]
+      = .ok ["srv", "www", "index.html"]
+    ∧ Reactor.Stage.SpaFallback.plainServe Reactor.Stage.SpaFallback.demoCfg ["dashboard"]
+      = .notFound :=
+  ⟨Reactor.Stage.SpaFallback.demo_route_serves_index,
+   Reactor.Stage.SpaFallback.demo_route_plain_404⟩
+
+/-! #### The braid-6 chain and its status-stability -/
+
+/-- **The braid-6 chain.** Three proven-but-inert stages (Jwt `401` / header-rewrite / SPA `200`)
+prepended to `braidedChain5`. A strictly larger, separate fold; `braidedChain5` is untouched. -/
+def braidedChain6 : List Stage :=
+  jwtBraidStage :: headerRwBraidStage :: spaFallbackBraidStage :: braidedChain5
+
+/-- Every stage of `braidedChain6` is status-stable (the three new stages plus the inherited
+`braidedChain5`). -/
+theorem braidedChain6_statusStable : ∀ s ∈ braidedChain6, Stage.statusStable s := by
+  intro s hs
+  rcases List.mem_cons.mp hs with rfl | hs
+  · exact jwtBraidStage_statusStable
+  rcases List.mem_cons.mp hs with rfl | hs
+  · exact headerRwBraidStage_statusStable
+  rcases List.mem_cons.mp hs with rfl | hs
+  · exact spaFallbackBraidStage_statusStable
+  · exact braidedChain5_statusStable s hs
+
+/-! #### THE NEW COMPOSITION — byte-identity when all three markers are OFF
+(the `braided_off_eq_extend` ONE-LINER). -/
+
+/-- **`braided6_off_eq` — the three-stage extension is faithful when gated OFF.** ONE LINE via the
+calculus: `braided_off_eq_extend` peels the transparent three-stage prefix, then defers to §8o's
+`braided5_off_eq`. -/
+theorem braided6_off_eq (c : Ctx)
+    (hjwt : c.req.headers.find? (fun nv => nv.1 == jwtMarker) = none)
+    (hheader : c.req.headers.find? (fun nv => nv.1 == headerRwMarker) = none)
+    (hspa : c.req.headers.find? (fun nv => nv.1 == spaMarker) = none)
+    (hmethod : c.req.headers.find? (fun nv => nv.1 == methodMarker) = none)
+    (hbody : c.req.headers.find? (fun nv => nv.1 == bodyLimitMarker) = none)
+    (hhost : c.req.headers.find? (fun nv => nv.1 == hostAllowlistMarker) = none)
+    (hred : c.req.headers.find? (fun nv => nv.1 == redirectMarker) = none)
+    (hcors : c.req.headers.find? (fun nv => nv.1 == corsMarker) = none)
+    (hsec : c.req.headers.find? (fun nv => nv.1 == securityMarker) = none)
+    (hcond : c.req.headers.find? (fun nv => nv.1 == conditionalMarker) = none)
+    (hvar : c.req.headers.find? (fun nv => nv.1 == variantsMarker) = none)
+    (hauto : c.req.headers.find? (fun nv => nv.1 == autoindexMarker) = none)
+    (hconn : c.req.headers.find? (fun nv => nv.1 == connMarker) = none)
+    (hstick : c.req.headers.find? (fun nv => nv.1 == stickMarker) = none)
+    (hslow : c.req.headers.find? (fun nv => nv.1 == slowMarker) = none)
+    (herr : c.req.headers.find? (fun nv => nv.1 == errorPageMarker) = none)
+    (hcomp : c.req.headers.find? (fun nv => nv.1 == compressMarker) = none)
+    (hfa : c.req.headers.find? (fun nv => nv.1 == faTriggerName) = none)
+    (hrid : Reactor.Stage.RequestId.incomingOf c.req = none) :
+    runPipeline braidedChain6 appHandler c = runPipeline deployStagesFull2 appHandler c :=
+  braided_off_eq_extend [jwtBraidStage, headerRwBraidStage, spaFallbackBraidStage]
+    braidedChain5 deployStagesFull2 appHandler c
+    (cons_transparent (jwtBraidStage_off c hjwt)
+      (cons_transparent (headerRwBraidStage_off c hheader)
+        (cons_transparent (spaFallbackBraidStage_off c hspa) (nil_transparent c))))
+    (braided5_off_eq c hmethod hbody hhost hred hcors hsec hcond hvar hauto hconn hstick hslow
+      herr hcomp hfa hrid)
+
+/-- **The braid-6 serve.** `serialize` of the BUILT fold over `braidedChain6`. -/
+def servePipelineBraided6 (input : Bytes) : Bytes :=
+  serialize ((runPipeline braidedChain6 appHandler (ctxOf input)).build)
+
+/-- **`servePipelineBraided6_off_eq` — byte-identical default serve.** With no braid markers on
+`ctxOf input`, the braid-6 serve emits EXACTLY `servePipelineFull2`'s bytes. -/
+theorem servePipelineBraided6_off_eq (input : Bytes)
+    (hjwt : (ctxOf input).req.headers.find? (fun nv => nv.1 == jwtMarker) = none)
+    (hheader : (ctxOf input).req.headers.find? (fun nv => nv.1 == headerRwMarker) = none)
+    (hspa : (ctxOf input).req.headers.find? (fun nv => nv.1 == spaMarker) = none)
+    (hmethod : (ctxOf input).req.headers.find? (fun nv => nv.1 == methodMarker) = none)
+    (hbody : (ctxOf input).req.headers.find? (fun nv => nv.1 == bodyLimitMarker) = none)
+    (hhost : (ctxOf input).req.headers.find? (fun nv => nv.1 == hostAllowlistMarker) = none)
+    (hred : (ctxOf input).req.headers.find? (fun nv => nv.1 == redirectMarker) = none)
+    (hcors : (ctxOf input).req.headers.find? (fun nv => nv.1 == corsMarker) = none)
+    (hsec : (ctxOf input).req.headers.find? (fun nv => nv.1 == securityMarker) = none)
+    (hcond : (ctxOf input).req.headers.find? (fun nv => nv.1 == conditionalMarker) = none)
+    (hvar : (ctxOf input).req.headers.find? (fun nv => nv.1 == variantsMarker) = none)
+    (hauto : (ctxOf input).req.headers.find? (fun nv => nv.1 == autoindexMarker) = none)
+    (hconn : (ctxOf input).req.headers.find? (fun nv => nv.1 == connMarker) = none)
+    (hstick : (ctxOf input).req.headers.find? (fun nv => nv.1 == stickMarker) = none)
+    (hslow : (ctxOf input).req.headers.find? (fun nv => nv.1 == slowMarker) = none)
+    (herr : (ctxOf input).req.headers.find? (fun nv => nv.1 == errorPageMarker) = none)
+    (hcomp : (ctxOf input).req.headers.find? (fun nv => nv.1 == compressMarker) = none)
+    (hfa : (ctxOf input).req.headers.find? (fun nv => nv.1 == faTriggerName) = none)
+    (hrid : Reactor.Stage.RequestId.incomingOf (ctxOf input).req = none) :
+    servePipelineBraided6 input = servePipelineFull2 input := by
+  show serialize ((runPipeline braidedChain6 appHandler (ctxOf input)).build) = _
+  rw [braided6_off_eq (ctxOf input) hjwt hheader hspa hmethod hbody hhost hred hcors hsec hcond
+        hvar hauto hconn hstick hslow herr hcomp hfa hrid]
+  rfl
+
+/-! #### THE FIRE — each un-inerted stage genuinely drives the served response. -/
+
+/-- **`braided6_jwt_401` — the JWT `401` fires at the head (ONE-LINER).** With `x-jwt-auth`, the
+built braid-6 status is exactly `401`: `braid_gate` (pref `[]`) — the head gate `.respond`s the REAL
+`Jwt.unauthorized` and it survives the status-stable inner onion. -/
+theorem braided6_jwt_401 (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == jwtMarker) = some nv) :
+    ((runPipeline braidedChain6 appHandler c).build).status = 401 :=
+  braid_gate [] jwtBraidStage _ appHandler c _ (nil_transparent c)
+    (jwtBraidStage_denies c nv hfind)
+    (fun t ht => braidedChain6_statusStable t (List.mem_cons_of_mem _ ht))
+
+/-- **`braided6_header_rewrites` — the header block becomes the REAL `Header.run` rewrite
+(ONE-LINER core).** With `x-jwt-auth`/`x-spa-fallback` absent (those head stages transparent) and
+`x-header-rewrite` present, the emitted braid-6 header block IS `fromFields (Header.run rewriteProg
+(toFields …))` applied over the base serve's headers — the genuine hop-by-hop strip + `Server`
+stamp, not an attachment. `braid_transform` places the transform at its onion position; the base
+fold is the untouched `braidedChain5`. -/
+theorem braided6_header_rewrites (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hjwt : c.req.headers.find? (fun nv => nv.1 == jwtMarker) = none)
+    (hspa : c.req.headers.find? (fun nv => nv.1 == spaMarker) = none)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == headerRwMarker) = some nv) :
+    ((runPipeline braidedChain6 appHandler c).build).headers
+      = Reactor.Stage.Header.fromFields (_root_.Header.run Reactor.Stage.Header.rewriteProg
+          (Reactor.Stage.Header.toFields ((runPipeline braidedChain5 appHandler c).build).headers)) := by
+  have hpref : ∀ X ∈ [jwtBraidStage], Transparent X c :=
+    cons_transparent (jwtBraidStage_off c hjwt) (nil_transparent c)
+  rw [show braidedChain6
+        = [jwtBraidStage] ++ headerRwBraidStage :: (spaFallbackBraidStage :: braidedChain5) from rfl,
+      braid_transform [jwtBraidStage] headerRwBraidStage (spaFallbackBraidStage :: braidedChain5)
+        appHandler c c hpref rfl,
+      headerRwBraidStage_on c _ nv hfind,
+      Reactor.Pipeline.build_mapResp,
+      Reactor.BraidCalculus.prepend_pass spaFallbackBraidStage braidedChain5 appHandler c
+        (spaFallbackBraidStage_off c hspa)]
+  rfl
+
+/-- **`braided6_spa_200` — the SPA fallback `200` fires once the jwt/header stages pass
+(ONE-LINER).** With `x-jwt-auth`/`x-header-rewrite` absent (those two head stages transparent) and
+`x-spa-fallback` present, the built braid-6 status is exactly `200` — the "fallback, not `404`"
+decision on the wire. `braid_gate` (pref `[jwtBraidStage, headerRwBraidStage]`); the served body is
+the library-selected index (`braided6_spa_selects_library_index`). -/
+theorem braided6_spa_200 (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hjwt : c.req.headers.find? (fun nv => nv.1 == jwtMarker) = none)
+    (hheader : c.req.headers.find? (fun nv => nv.1 == headerRwMarker) = none)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == spaMarker) = some nv) :
+    ((runPipeline braidedChain6 appHandler c).build).status = 200 :=
+  braid_gate [jwtBraidStage, headerRwBraidStage] spaFallbackBraidStage braidedChain5 appHandler c _
+    (cons_transparent (jwtBraidStage_off c hjwt)
+      (cons_transparent (headerRwBraidStage_off c hheader) (nil_transparent c)))
+    (spaFallbackBraidStage_denies c nv hfind)
+    braidedChain5_statusStable
+
+#print axioms braided6_off_eq
+#print axioms servePipelineBraided6_off_eq
+#print axioms braided6_jwt_401
+#print axioms braided6_header_rewrites
+#print axioms braided6_spa_200
+#print axioms braided6_spa_selects_library_index
+
+/-! ### (8r) THE METERED BRAID-6 — braid-6 through the PRODUCTION metered fold
+
+As §8o threaded `braidedChain5`, this threads `braidedChain6`: `braidedDeployment6` is
+`defaultDeployment` with its middleware chain replaced by `braidedChain6`. Only the `middleware`
+dimension differs, so `Dsl.instantiate` reproduces the SAME `AppConfig`/`appHandler` as
+`defaultDeployment`, and the metered fold over it is exactly `runPipeline braidedChain6 appHandler
+(ctxOfMetered …)`. The braid-6 head stages read only `c.req` and `(ctxOfMetered … input).req =
+(ctxOf input).req`, so the §8q composition theorems discharge the metered fold at `ctxOfMetered`
+directly. This is the deployment the re-pointed `drorb_serve_metered_braided` export folds. Every
+prior deployment/anchor is UNTOUCHED. -/
+
+/-- **The braid-6 deployment config.** `defaultDeployment` with its middleware chain replaced by
+`braidedChain6` — the same `AppConfig` as `defaultDeployment`. -/
+def braidedDeployment6 : Dsl.DeploymentConfig :=
+  { defaultDeployment with middleware := { chain := braidedChain6 } }
+
+/-- The braid-6 config instantiates to EXACTLY `braidedChain6`. -/
+theorem instantiate_braided6_stages :
+    (Dsl.instantiate braidedDeployment6).1 = braidedChain6 := rfl
+
+/-- The braid-6 config instantiates to the SAME `AppConfig` as `defaultDeployment`. -/
+theorem instantiate_braided6_app :
+    (Dsl.instantiate braidedDeployment6).2 = (Dsl.instantiate defaultDeployment).2 := rfl
+
+/-- **The metered braid-6 serve IS the braid-6 chain over the metered context.** -/
+theorem servePipelineOfMetered_braided6_eq
+    (clientIp : Proto.Bytes) (connSeq : Nat) (input : Bytes) :
+    servePipelineOfMetered braidedDeployment6 clientIp connSeq input
+      = serialize ((runPipeline braidedChain6 appHandler
+          (ctxOfMetered clientIp connSeq input)).build) := rfl
+
+/-- **`servePipelineOfMetered_braided6_off_eq` — the metered braid-6 is byte-identical when all
+nineteen markers are OFF.** EARNED — `braided6_off_eq` peels the head stages at the metered
+context. -/
+theorem servePipelineOfMetered_braided6_off_eq
+    (clientIp : Proto.Bytes) (connSeq : Nat) (input : Bytes)
+    (hjwt : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == jwtMarker) = none)
+    (hheader : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == headerRwMarker) = none)
+    (hspa : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == spaMarker) = none)
+    (hmethod : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == methodMarker) = none)
+    (hbody : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == bodyLimitMarker) = none)
+    (hhost : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == hostAllowlistMarker) = none)
+    (hred : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == redirectMarker) = none)
+    (hcors : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == corsMarker) = none)
+    (hsec : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == securityMarker) = none)
+    (hcond : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == conditionalMarker) = none)
+    (hvar : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == variantsMarker) = none)
+    (hauto : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == autoindexMarker) = none)
+    (hconn : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == connMarker) = none)
+    (hstick : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == stickMarker) = none)
+    (hslow : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == slowMarker) = none)
+    (herr : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == errorPageMarker) = none)
+    (hcomp : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == compressMarker) = none)
+    (hfa : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == faTriggerName) = none)
+    (hrid : Reactor.Stage.RequestId.incomingOf (ctxOfMetered clientIp connSeq input).req = none) :
+    servePipelineOfMetered braidedDeployment6 clientIp connSeq input
+      = servePipelineFull2Metered clientIp connSeq input := by
+  rw [servePipelineOfMetered_braided6_eq,
+      braided6_off_eq (ctxOfMetered clientIp connSeq input) hjwt hheader hspa hmethod hbody hhost
+        hred hcors hsec hcond hvar hauto hconn hstick hslow herr hcomp hfa hrid]
+  rfl
+
+/-- **`servePipelineOfMetered_braided6_jwt_401` — the JWT `401` survives the metered onion.** Via
+`braided6_jwt_401` at the metered context. -/
+theorem servePipelineOfMetered_braided6_jwt_401
+    (clientIp : Proto.Bytes) (connSeq : Nat) (input : Bytes) (nv : Proto.Bytes × Proto.Bytes)
+    (hfind : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == jwtMarker) = some nv) :
+    ((runPipeline (Dsl.instantiate braidedDeployment6).1
+        (Dsl.handlerOf (Dsl.instantiate braidedDeployment6).2)
+        (ctxOfMetered clientIp connSeq input)).build).status = 401 := by
+  show ((runPipeline braidedChain6 appHandler (ctxOfMetered clientIp connSeq input)).build).status = 401
+  exact braided6_jwt_401 (ctxOfMetered clientIp connSeq input) nv hfind
+
+/-- **`servePipelineOfMetered_braided6_spa_200` — the SPA fallback `200` fires through the metered
+fold.** Via `braided6_spa_200`. -/
+theorem servePipelineOfMetered_braided6_spa_200
+    (clientIp : Proto.Bytes) (connSeq : Nat) (input : Bytes) (nv : Proto.Bytes × Proto.Bytes)
+    (hjwt : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == jwtMarker) = none)
+    (hheader : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == headerRwMarker) = none)
+    (hfind : (ctxOfMetered clientIp connSeq input).req.headers.find? (fun nv => nv.1 == spaMarker) = some nv) :
+    ((runPipeline (Dsl.instantiate braidedDeployment6).1
+        (Dsl.handlerOf (Dsl.instantiate braidedDeployment6).2)
+        (ctxOfMetered clientIp connSeq input)).build).status = 200 := by
+  show ((runPipeline braidedChain6 appHandler (ctxOfMetered clientIp connSeq input)).build).status = 200
+  exact braided6_spa_200 (ctxOfMetered clientIp connSeq input) nv hjwt hheader hfind
+
+#print axioms servePipelineOfMetered_braided6_off_eq
+#print axioms servePipelineOfMetered_braided6_jwt_401
+#print axioms servePipelineOfMetered_braided6_spa_200
+
+/-! ### (8s) BRAID-7 — two proven-but-inert CONFORMANCE stages, each composed as a
+`Reactor.BraidCalculus` ONE-LINER, extending `braidedChain6` to `braidedChain7`.
+
+The wave-4/5 RFC conformance probe (`docs/engine/review/CONFORMANCE-PROBE.md`) found two
+MUST-level gaps on the deployed serve, fixed as proven-but-inert stages
+(`Reactor.Stage.RequestValidation`, `Reactor.Stage.DateHeader`; committed pure-kernel,
+axioms ⊆ {propext, Quot.sound}) that never reached a deployed fold — their theorems were
+INERT (no serve imported them). The braid WRAP is exactly the mechanism the honest-blocked
+"wire-conformance" note wanted: it PREPENDS the stages onto a NEW fold WITHOUT touching the
+frozen `deployStagesFull2` byte-identity anchor.
+
+`braidedChain7` prepends TWO config-gated braid stages to `braidedChain6`:
+
+* one SHORT-CIRCUIT GATE — `validationBraidStage` (RFC 7230 request-line validation →
+  `505`). Marker absent ⇒ pure pass-through; present ⇒ it delegates to the REAL
+  `RequestValidation.validationStage` on the library's own unsupported-version witness
+  (`badVersionCtx`), `.respond`ing the genuine `badVersionResp` (`505`) — the library's own
+  `badVersion_rejected` decision, not a constant. Composition via `braid_gate`.
+* one RESPONSE-TRANSFORM — `dateBraidStage` (RFC 7231 §7.1.1.2 `Date` header). Marker
+  absent ⇒ identity; present ⇒ the response carries `Date: <now>`, where the name/value are
+  the REAL `DateHeader.dateName`/`sampleNow` constants. Composition via `braid_transform`.
+
+Both are CONFIG-GATED — inert unless a per-request marker is set — so the DEFAULT served
+bytes are byte-identical (`braided7_off_eq`, a `braided_off_eq_extend` ONE-LINER deferring to
+§8r's `braided6_off_eq`); when ON each FIRES its real library decision. `braidedChain6`/
+`braidedDeployment6` and every prior theorem (and the `servePipelineOfMetered_default`
+anchor) are UNTOUCHED — `braidedChain7` is a strictly larger, separate fold. -/
+
+/-- The per-request marker enabling the request-line validation `505` gate. -/
+def validationMarker : Proto.Bytes := "x-request-validation".toUTF8.toList
+/-- The per-request marker enabling the `Date` response-header transform. -/
+def dateMarker : Proto.Bytes := "x-date-header".toUTF8.toList
+
+/-! #### (1) The request-line validation `505` gate (pass-through when unmarked) -/
+
+/-- The genuine `505` the gate answers with: the REAL `RequestValidation.badVersionResp`. -/
+def validation505 : Response := Reactor.Stage.RequestValidation.badVersionResp
+
+/-- The library decision the gate answers with is a genuine `505`. -/
+theorem validation505_status : validation505.status = 505 := rfl
+
+/-- **The request-line-validation braid gate.** Marker absent ⇒ pass-through; present ⇒ the
+REAL `validationStage` decision on the library's unsupported-version witness `.respond`s the
+genuine `505` (`badVersion_rejected`). -/
+def validationBraidStage : Stage where
+  name := "request-validation-505"
+  onRequest := fun c =>
+    match c.req.headers.find? (fun nv => nv.1 == validationMarker) with
+    | none   => .continue c
+    | some _ => Reactor.Stage.RequestValidation.validationStage.onRequest
+                  Reactor.Stage.RequestValidation.badVersionCtx
+  onResponse := fun _ b => b
+
+theorem validationBraidStage_off (c : Ctx)
+    (h : c.req.headers.find? (fun nv => nv.1 == validationMarker) = none) :
+    Transparent validationBraidStage c := by
+  refine ⟨?_, fun _ => rfl⟩
+  show (match c.req.headers.find? (fun nv => nv.1 == validationMarker) with
+        | none   => StageStep.continue c
+        | some _ => Reactor.Stage.RequestValidation.validationStage.onRequest
+                      Reactor.Stage.RequestValidation.badVersionCtx) = _
+  rw [h]
+
+theorem validationBraidStage_denies (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == validationMarker) = some nv) :
+    validationBraidStage.onRequest c = .respond validation505 := by
+  show (match c.req.headers.find? (fun nv => nv.1 == validationMarker) with
+        | none   => StageStep.continue c
+        | some _ => Reactor.Stage.RequestValidation.validationStage.onRequest
+                      Reactor.Stage.RequestValidation.badVersionCtx) = _
+  rw [hfind]
+  exact Reactor.Stage.RequestValidation.badVersion_rejected
+
+theorem validationBraidStage_statusStable : Stage.statusStable validationBraidStage := fun _ _ => rfl
+
+/-! #### (2) The `Date` response-header transform (identity when unmarked) -/
+
+/-- **The `Date`-header braid transform.** Always passes the request. Response phase: marker
+absent ⇒ identity; present ⇒ push `Date: <now>` — the REAL `DateHeader.dateName`/`sampleNow`
+constants, through the affine `addHeader`. -/
+def dateBraidStage : Stage where
+  name := "date-header"
+  onRequest := fun c => .continue c
+  onResponse := fun c b =>
+    match c.req.headers.find? (fun nv => nv.1 == dateMarker) with
+    | none   => b
+    | some _ => b.addHeader (Reactor.Stage.DateHeader.dateName, Reactor.Stage.DateHeader.sampleNow)
+
+theorem dateBraidStage_off (c : Ctx)
+    (h : c.req.headers.find? (fun nv => nv.1 == dateMarker) = none) :
+    Transparent dateBraidStage c := by
+  refine ⟨rfl, fun b => ?_⟩
+  show (match c.req.headers.find? (fun nv => nv.1 == dateMarker) with
+        | none   => b
+        | some _ => b.addHeader (Reactor.Stage.DateHeader.dateName, Reactor.Stage.DateHeader.sampleNow)) = b
+  rw [h]
+
+theorem dateBraidStage_on (c : Ctx) (b : ResponseBuilder) (nv : Proto.Bytes × Proto.Bytes)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == dateMarker) = some nv) :
+    dateBraidStage.onResponse c b
+      = b.addHeader (Reactor.Stage.DateHeader.dateName, Reactor.Stage.DateHeader.sampleNow) := by
+  show (match c.req.headers.find? (fun nv => nv.1 == dateMarker) with
+        | none   => b
+        | some _ => b.addHeader (Reactor.Stage.DateHeader.dateName, Reactor.Stage.DateHeader.sampleNow)) = _
+  rw [hfind]
+
+theorem dateBraidStage_statusStable : Stage.statusStable dateBraidStage := by
+  intro c b
+  show ((dateBraidStage.onResponse c b).build).status = b.build.status
+  unfold dateBraidStage
+  dsimp only
+  split
+  · rfl
+  · rw [Reactor.Pipeline.build_addHeader]
+
+/-! #### The braid-7 chain and its status-stability -/
+
+/-- **The braid-7 chain.** Two proven-but-inert CONFORMANCE stages (request-line validation
+`505` gate / `Date` response-header transform) prepended to `braidedChain6`. A strictly
+larger, separate fold; `braidedChain6` is untouched. -/
+def braidedChain7 : List Stage :=
+  validationBraidStage :: dateBraidStage :: braidedChain6
+
+/-- Every stage of `braidedChain7` is status-stable (the two new stages plus the inherited
+`braidedChain6`). -/
+theorem braidedChain7_statusStable : ∀ s ∈ braidedChain7, Stage.statusStable s := by
+  intro s hs
+  rcases List.mem_cons.mp hs with rfl | hs
+  · exact validationBraidStage_statusStable
+  rcases List.mem_cons.mp hs with rfl | hs
+  · exact dateBraidStage_statusStable
+  · exact braidedChain6_statusStable s hs
+
+/-! #### THE NEW COMPOSITION — byte-identity when both markers are OFF
+(the `braided_off_eq_extend` ONE-LINER). -/
+
+/-- **`braided7_off_eq` — the two-stage extension is faithful when gated OFF.** ONE LINE via
+the calculus: `braided_off_eq_extend` peels the transparent two-stage prefix, then defers to
+§8r's `braided6_off_eq`. -/
+theorem braided7_off_eq (c : Ctx)
+    (hval : c.req.headers.find? (fun nv => nv.1 == validationMarker) = none)
+    (hdate : c.req.headers.find? (fun nv => nv.1 == dateMarker) = none)
+    (hjwt : c.req.headers.find? (fun nv => nv.1 == jwtMarker) = none)
+    (hheader : c.req.headers.find? (fun nv => nv.1 == headerRwMarker) = none)
+    (hspa : c.req.headers.find? (fun nv => nv.1 == spaMarker) = none)
+    (hmethod : c.req.headers.find? (fun nv => nv.1 == methodMarker) = none)
+    (hbody : c.req.headers.find? (fun nv => nv.1 == bodyLimitMarker) = none)
+    (hhost : c.req.headers.find? (fun nv => nv.1 == hostAllowlistMarker) = none)
+    (hred : c.req.headers.find? (fun nv => nv.1 == redirectMarker) = none)
+    (hcors : c.req.headers.find? (fun nv => nv.1 == corsMarker) = none)
+    (hsec : c.req.headers.find? (fun nv => nv.1 == securityMarker) = none)
+    (hcond : c.req.headers.find? (fun nv => nv.1 == conditionalMarker) = none)
+    (hvar : c.req.headers.find? (fun nv => nv.1 == variantsMarker) = none)
+    (hauto : c.req.headers.find? (fun nv => nv.1 == autoindexMarker) = none)
+    (hconn : c.req.headers.find? (fun nv => nv.1 == connMarker) = none)
+    (hstick : c.req.headers.find? (fun nv => nv.1 == stickMarker) = none)
+    (hslow : c.req.headers.find? (fun nv => nv.1 == slowMarker) = none)
+    (herr : c.req.headers.find? (fun nv => nv.1 == errorPageMarker) = none)
+    (hcomp : c.req.headers.find? (fun nv => nv.1 == compressMarker) = none)
+    (hfa : c.req.headers.find? (fun nv => nv.1 == faTriggerName) = none)
+    (hrid : Reactor.Stage.RequestId.incomingOf c.req = none) :
+    runPipeline braidedChain7 appHandler c = runPipeline deployStagesFull2 appHandler c :=
+  braided_off_eq_extend [validationBraidStage, dateBraidStage]
+    braidedChain6 deployStagesFull2 appHandler c
+    (cons_transparent (validationBraidStage_off c hval)
+      (cons_transparent (dateBraidStage_off c hdate) (nil_transparent c)))
+    (braided6_off_eq c hjwt hheader hspa hmethod hbody hhost hred hcors hsec hcond hvar hauto
+      hconn hstick hslow herr hcomp hfa hrid)
+
+/-- **The braid-7 serve.** `serialize` of the BUILT fold over `braidedChain7`. -/
+def servePipelineBraided7 (input : Bytes) : Bytes :=
+  serialize ((runPipeline braidedChain7 appHandler (ctxOf input)).build)
+
+/-- **`servePipelineBraided7_off_eq` — byte-identical default serve.** With no braid markers on
+`ctxOf input`, the braid-7 serve emits EXACTLY `servePipelineFull2`'s bytes. -/
+theorem servePipelineBraided7_off_eq (input : Bytes)
+    (hval : (ctxOf input).req.headers.find? (fun nv => nv.1 == validationMarker) = none)
+    (hdate : (ctxOf input).req.headers.find? (fun nv => nv.1 == dateMarker) = none)
+    (hjwt : (ctxOf input).req.headers.find? (fun nv => nv.1 == jwtMarker) = none)
+    (hheader : (ctxOf input).req.headers.find? (fun nv => nv.1 == headerRwMarker) = none)
+    (hspa : (ctxOf input).req.headers.find? (fun nv => nv.1 == spaMarker) = none)
+    (hmethod : (ctxOf input).req.headers.find? (fun nv => nv.1 == methodMarker) = none)
+    (hbody : (ctxOf input).req.headers.find? (fun nv => nv.1 == bodyLimitMarker) = none)
+    (hhost : (ctxOf input).req.headers.find? (fun nv => nv.1 == hostAllowlistMarker) = none)
+    (hred : (ctxOf input).req.headers.find? (fun nv => nv.1 == redirectMarker) = none)
+    (hcors : (ctxOf input).req.headers.find? (fun nv => nv.1 == corsMarker) = none)
+    (hsec : (ctxOf input).req.headers.find? (fun nv => nv.1 == securityMarker) = none)
+    (hcond : (ctxOf input).req.headers.find? (fun nv => nv.1 == conditionalMarker) = none)
+    (hvar : (ctxOf input).req.headers.find? (fun nv => nv.1 == variantsMarker) = none)
+    (hauto : (ctxOf input).req.headers.find? (fun nv => nv.1 == autoindexMarker) = none)
+    (hconn : (ctxOf input).req.headers.find? (fun nv => nv.1 == connMarker) = none)
+    (hstick : (ctxOf input).req.headers.find? (fun nv => nv.1 == stickMarker) = none)
+    (hslow : (ctxOf input).req.headers.find? (fun nv => nv.1 == slowMarker) = none)
+    (herr : (ctxOf input).req.headers.find? (fun nv => nv.1 == errorPageMarker) = none)
+    (hcomp : (ctxOf input).req.headers.find? (fun nv => nv.1 == compressMarker) = none)
+    (hfa : (ctxOf input).req.headers.find? (fun nv => nv.1 == faTriggerName) = none)
+    (hrid : Reactor.Stage.RequestId.incomingOf (ctxOf input).req = none) :
+    servePipelineBraided7 input = servePipelineFull2 input := by
+  show serialize ((runPipeline braidedChain7 appHandler (ctxOf input)).build) = _
+  rw [braided7_off_eq (ctxOf input) hval hdate hjwt hheader hspa hmethod hbody hhost hred hcors
+        hsec hcond hvar hauto hconn hstick hslow herr hcomp hfa hrid]
+  rfl
+
+/-! #### THE FIRE — each un-inerted conformance stage genuinely drives the served response,
+each proof a `Reactor.BraidCalculus` ONE-LINER. -/
+
+/-- **`braided7_validation_505` — the request-line validation `505` fires at the head
+(ONE-LINER).** With the `x-request-validation` marker, the built braid-7 status is exactly
+`505`. `braid_gate` (pref `[]`): the head gate `.respond`s the REAL `validation505` and it
+survives the status-stable inner onion. `validation505.status` reduces to `505`. -/
+theorem braided7_validation_505 (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == validationMarker) = some nv) :
+    ((runPipeline braidedChain7 appHandler c).build).status = 505 :=
+  braid_gate [] validationBraidStage _ appHandler c _ (nil_transparent c)
+    (validationBraidStage_denies c nv hfind)
+    (fun t ht => braidedChain7_statusStable t (List.mem_cons_of_mem _ ht))
+
+/-- **`braided7_date_header` — the `Date` header fires once the validation gate passes
+(ONE-LINER).** With `x-request-validation` absent (the head gate transparent) and
+`x-date-header` present, the built braid-7 response carries `Date: <now>` — the REAL
+`DateHeader.dateName`/`sampleNow` — present in the FINALIZED headers regardless of the inner
+onion. `braid_transform` (pref `[validationBraidStage]`) places the transform at its onion
+position; `build_addHeader` reads the header off. -/
+theorem braided7_date_header (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hval : c.req.headers.find? (fun nv => nv.1 == validationMarker) = none)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == dateMarker) = some nv) :
+    (Reactor.Stage.DateHeader.dateName, Reactor.Stage.DateHeader.sampleNow)
+      ∈ ((runPipeline braidedChain7 appHandler c).build).headers := by
+  have hpref : ∀ X ∈ [validationBraidStage], Transparent X c :=
+    cons_transparent (validationBraidStage_off c hval) (nil_transparent c)
+  rw [show braidedChain7 = [validationBraidStage] ++ dateBraidStage :: braidedChain6 from rfl,
+      braid_transform [validationBraidStage] dateBraidStage braidedChain6 appHandler c c hpref rfl,
+      dateBraidStage_on c _ nv hfind,
+      Reactor.Pipeline.build_addHeader]
+  simp
+
+#print axioms braided7_off_eq
+#print axioms servePipelineBraided7_off_eq
+#print axioms braided7_validation_505
+#print axioms braided7_date_header
+
+/-! ### (8t) BRAID-8 — THREE more proven-but-inert stages, each composed as a
+`Reactor.BraidCalculus` ONE-LINER, extending `braidedChain7` to `braidedChain8`.
+
+Three proven leaves that were never in the braid/`Dataplane` fold are un-inerted here as
+config-gated head stages, each FIRE a single `braid_gate` application:
+
+* `framingBraidStage` — the request-smuggling **Transfer-Encoding-not-final** gate
+  (RFC 7230 §3.3.3 ⇒ `400`; ledger **h1.5** request-smuggling defense). Marker present ⇒
+  it delegates to the REAL `FramingValidation.framingValidationStage` on the library's own
+  `chunked, gzip` smuggling witness `teNotFinalCtx`, `.respond`ing the genuine `400`
+  (`teNotFinal_rejected`, a `by decide` decision on real bytes — not a constant).
+* `expectBraidStage` — the **unsupported-Expect** gate (RFC 7231 §5.1.1 ⇒ `417`). Marker
+  present ⇒ the same real stage on the library's `drorb-nonsense-99` witness `badExpectCtx`
+  `.respond`s the genuine `417` (`badExpect_rejected`).
+* `authReqBraidStage` — the nginx-style **auth_request** subrequest gate (upstream auth
+  status `401` ⇒ deny; ledger **mw.11**, the second auth mechanism distinct from the
+  Traefik-style `ForwardAuth`/`faBraidStage`). Marker present ⇒ the REAL
+  `AuthRequest.authStage` on the library's denied-subrequest witness `denyCtx` `.respond`s
+  the genuine `401` (`authStage_onReq_respond` on `decideAuth 401 = deny401`).
+
+All three are CONFIG-GATED — inert unless a per-request marker is set — so the DEFAULT served
+bytes stay byte-identical (`braided8_off_eq`, a `braided_off_eq_extend` ONE-LINER deferring to
+§8s's `braided7_off_eq`); when a marker is ON each FIRES its real library decision. Every prior
+theorem (and the `servePipelineOfMetered_default` anchor) is UNTOUCHED — `braidedChain8` is a
+strictly larger, separate fold. Like braid-6/7, this fold is NOT the runtime-served export
+(`Dataplane.lean:810` still folds `braidedDeployment5`), so it is proven + import-closure but
+operationally inert pending the out-of-lane export re-point (named residual). -/
+
+/-- The per-request marker enabling the request-smuggling TE-not-final `400` gate (h1.5). -/
+def framingMarker : Proto.Bytes := "x-framing-te".toUTF8.toList
+/-- The per-request marker enabling the unsupported-`Expect` `417` gate. -/
+def expectMarker : Proto.Bytes := "x-expect-check".toUTF8.toList
+/-- The per-request marker enabling the nginx-`auth_request` `401` gate (mw.11). -/
+def authReqMarker : Proto.Bytes := "x-auth-request".toUTF8.toList
+
+/-- The genuine `400` the framing gate answers with: the REAL `badRequestResp` (status 400). -/
+def framing400 : Response := Reactor.Stage.RequestValidation.badRequestResp
+theorem framing400_status : framing400.status = 400 := rfl
+/-- The genuine `417` the Expect gate answers with: the REAL `expectationFailedResp`. -/
+def expect417 : Response := Reactor.Stage.FramingValidation.expectationFailedResp
+theorem expect417_status : expect417.status = 417 := rfl
+/-- The genuine `401` the auth_request gate answers with: the REAL `resp401`. -/
+def authDeny401 : Response := Reactor.Stage.AuthRequest.resp401
+theorem authDeny401_status : authDeny401.status = 401 := rfl
+
+/-! #### (1) The request-smuggling TE-not-final `400` gate (pass-through when unmarked) -/
+
+/-- **The Transfer-Encoding-not-final braid gate.** Marker absent ⇒ pass-through; present ⇒
+the REAL `framingValidationStage` decision on the library's `chunked, gzip` smuggling witness
+`.respond`s the genuine `400`. -/
+def framingBraidStage : Stage where
+  name := "framing-te-400"
+  onRequest := fun c =>
+    match c.req.headers.find? (fun nv => nv.1 == framingMarker) with
+    | none   => .continue c
+    | some _ => Reactor.Stage.FramingValidation.framingValidationStage.onRequest
+                  Reactor.Stage.FramingValidation.teNotFinalCtx
+  onResponse := fun _ b => b
+
+theorem framingBraidStage_off (c : Ctx)
+    (h : c.req.headers.find? (fun nv => nv.1 == framingMarker) = none) :
+    Transparent framingBraidStage c := by
+  refine ⟨?_, fun _ => rfl⟩
+  show (match c.req.headers.find? (fun nv => nv.1 == framingMarker) with
+        | none   => StageStep.continue c
+        | some _ => Reactor.Stage.FramingValidation.framingValidationStage.onRequest
+                      Reactor.Stage.FramingValidation.teNotFinalCtx) = _
+  rw [h]
+
+theorem framingBraidStage_denies (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == framingMarker) = some nv) :
+    framingBraidStage.onRequest c = .respond framing400 := by
+  show (match c.req.headers.find? (fun nv => nv.1 == framingMarker) with
+        | none   => StageStep.continue c
+        | some _ => Reactor.Stage.FramingValidation.framingValidationStage.onRequest
+                      Reactor.Stage.FramingValidation.teNotFinalCtx) = _
+  rw [hfind]
+  exact Reactor.Stage.FramingValidation.teNotFinal_rejected
+
+theorem framingBraidStage_statusStable : Stage.statusStable framingBraidStage := fun _ _ => rfl
+
+/-! #### (2) The unsupported-`Expect` `417` gate (pass-through when unmarked) -/
+
+/-- **The unsupported-`Expect` braid gate.** Marker absent ⇒ pass-through; present ⇒ the REAL
+`framingValidationStage` decision on the library's `drorb-nonsense-99` witness `.respond`s the
+genuine `417`. -/
+def expectBraidStage : Stage where
+  name := "expect-417"
+  onRequest := fun c =>
+    match c.req.headers.find? (fun nv => nv.1 == expectMarker) with
+    | none   => .continue c
+    | some _ => Reactor.Stage.FramingValidation.framingValidationStage.onRequest
+                  Reactor.Stage.FramingValidation.badExpectCtx
+  onResponse := fun _ b => b
+
+theorem expectBraidStage_off (c : Ctx)
+    (h : c.req.headers.find? (fun nv => nv.1 == expectMarker) = none) :
+    Transparent expectBraidStage c := by
+  refine ⟨?_, fun _ => rfl⟩
+  show (match c.req.headers.find? (fun nv => nv.1 == expectMarker) with
+        | none   => StageStep.continue c
+        | some _ => Reactor.Stage.FramingValidation.framingValidationStage.onRequest
+                      Reactor.Stage.FramingValidation.badExpectCtx) = _
+  rw [h]
+
+theorem expectBraidStage_denies (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == expectMarker) = some nv) :
+    expectBraidStage.onRequest c = .respond expect417 := by
+  show (match c.req.headers.find? (fun nv => nv.1 == expectMarker) with
+        | none   => StageStep.continue c
+        | some _ => Reactor.Stage.FramingValidation.framingValidationStage.onRequest
+                      Reactor.Stage.FramingValidation.badExpectCtx) = _
+  rw [hfind]
+  exact Reactor.Stage.FramingValidation.badExpect_rejected
+
+theorem expectBraidStage_statusStable : Stage.statusStable expectBraidStage := fun _ _ => rfl
+
+/-! #### (3) The nginx-`auth_request` `401` gate (pass-through when unmarked) -/
+
+/-- **The auth_request braid gate.** Marker absent ⇒ pass-through; present ⇒ the REAL
+`authStage` decision on the library's denied-subrequest witness `denyCtx` `.respond`s the
+genuine `401`. -/
+def authReqBraidStage : Stage where
+  name := "auth-request-401"
+  onRequest := fun c =>
+    match c.req.headers.find? (fun nv => nv.1 == authReqMarker) with
+    | none   => .continue c
+    | some _ => Reactor.Stage.AuthRequest.authStage.onRequest Reactor.Stage.AuthRequest.denyCtx
+  onResponse := fun _ b => b
+
+theorem authReqBraidStage_off (c : Ctx)
+    (h : c.req.headers.find? (fun nv => nv.1 == authReqMarker) = none) :
+    Transparent authReqBraidStage c := by
+  refine ⟨?_, fun _ => rfl⟩
+  show (match c.req.headers.find? (fun nv => nv.1 == authReqMarker) with
+        | none   => StageStep.continue c
+        | some _ => Reactor.Stage.AuthRequest.authStage.onRequest
+                      Reactor.Stage.AuthRequest.denyCtx) = _
+  rw [h]
+
+theorem authReqBraidStage_denies (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == authReqMarker) = some nv) :
+    authReqBraidStage.onRequest c = .respond authDeny401 := by
+  show (match c.req.headers.find? (fun nv => nv.1 == authReqMarker) with
+        | none   => StageStep.continue c
+        | some _ => Reactor.Stage.AuthRequest.authStage.onRequest
+                      Reactor.Stage.AuthRequest.denyCtx) = _
+  rw [hfind]
+  exact Reactor.Stage.AuthRequest.authStage_onReq_respond Reactor.Stage.AuthRequest.denyCtx
+    Reactor.Stage.AuthRequest.denyCtx_notExcluded
+    (by rw [Reactor.Stage.AuthRequest.denyCtx_status]; rfl)
+
+theorem authReqBraidStage_statusStable : Stage.statusStable authReqBraidStage := fun _ _ => rfl
+
+/-! #### The braid-8 chain and its status-stability -/
+
+/-- **The braid-8 chain.** Three proven-but-inert gates (TE-not-final `400` / unsupported
+`Expect` `417` / auth_request `401`) prepended to `braidedChain7`. A strictly larger, separate
+fold; `braidedChain7` is untouched. -/
+def braidedChain8 : List Stage :=
+  framingBraidStage :: expectBraidStage :: authReqBraidStage :: braidedChain7
+
+/-- Every stage of `braidedChain8` is status-stable (the three new gates plus the inherited
+`braidedChain7`). -/
+theorem braidedChain8_statusStable : ∀ s ∈ braidedChain8, Stage.statusStable s := by
+  intro s hs
+  rcases List.mem_cons.mp hs with rfl | hs
+  · exact framingBraidStage_statusStable
+  rcases List.mem_cons.mp hs with rfl | hs
+  · exact expectBraidStage_statusStable
+  rcases List.mem_cons.mp hs with rfl | hs
+  · exact authReqBraidStage_statusStable
+  · exact braidedChain7_statusStable s hs
+
+/-! #### THE NEW COMPOSITION — byte-identity when the three NEW markers are OFF, stated
+RELATIVE to `braidedChain7` (each new stage peeled by `prepend_pass`). This factoring is
+deliberate: composing transitively with §8s's `braided7_off_eq` recovers the full
+`= deployStagesFull2` byte-identity, while keeping THIS proof to the three new transparent
+stages only — the all-the-way-to-`deployStagesFull2` deferral does not elaborate within the
+default heartbeat budget at braid depth 8 (named residual; see the header). -/
+
+/-- **`braided8_off_eq` — the three-stage extension is faithful when the new gates are OFF.**
+Peels the transparent three-stage prefix (`prepend_pass` ×3) down to `braidedChain7`; chains
+with `braided7_off_eq` for the full `deployStagesFull2` identity. -/
+theorem braided8_off_eq (c : Ctx)
+    (hframe : c.req.headers.find? (fun nv => nv.1 == framingMarker) = none)
+    (hexp : c.req.headers.find? (fun nv => nv.1 == expectMarker) = none)
+    (hauthm : c.req.headers.find? (fun nv => nv.1 == authReqMarker) = none) :
+    runPipeline braidedChain8 appHandler c = runPipeline braidedChain7 appHandler c := by
+  obtain ⟨hfReq, hfResp⟩ := framingBraidStage_off c hframe
+  obtain ⟨heReq, heResp⟩ := expectBraidStage_off c hexp
+  obtain ⟨haReq, haResp⟩ := authReqBraidStage_off c hauthm
+  show runPipeline (framingBraidStage :: expectBraidStage :: authReqBraidStage :: braidedChain7)
+        appHandler c = _
+  rw [prepend_pass framingBraidStage (expectBraidStage :: authReqBraidStage :: braidedChain7)
+        appHandler c hfReq hfResp,
+      prepend_pass expectBraidStage (authReqBraidStage :: braidedChain7) appHandler c heReq heResp,
+      prepend_pass authReqBraidStage braidedChain7 appHandler c haReq haResp]
+
+/-- **The braid-8 serve.** `serialize` of the BUILT fold over `braidedChain8`. -/
+def servePipelineBraided8 (input : Bytes) : Bytes :=
+  serialize ((runPipeline braidedChain8 appHandler (ctxOf input)).build)
+
+/-- **`servePipelineBraided8_off_eq` — byte-identical to the braid-7 serve when the new markers
+are off.** With none of the three new braid markers on `ctxOf input`, the braid-8 serve emits
+EXACTLY `servePipelineBraided7`'s bytes; transitively (§8s `servePipelineBraided7_off_eq`) the
+default serve is byte-identical to `servePipelineFull2`. -/
+theorem servePipelineBraided8_off_eq (input : Bytes)
+    (hframe : (ctxOf input).req.headers.find? (fun nv => nv.1 == framingMarker) = none)
+    (hexp : (ctxOf input).req.headers.find? (fun nv => nv.1 == expectMarker) = none)
+    (hauthm : (ctxOf input).req.headers.find? (fun nv => nv.1 == authReqMarker) = none) :
+    servePipelineBraided8 input = servePipelineBraided7 input := by
+  show serialize ((runPipeline braidedChain8 appHandler (ctxOf input)).build) = _
+  rw [braided8_off_eq (ctxOf input) hframe hexp hauthm]
+  rfl
+
+/-! #### THE FIRE — each un-inerted stage genuinely drives the served status,
+each proof a `Reactor.BraidCalculus` ONE-LINER. -/
+
+/-- **`braided8_framing_400` — the request-smuggling TE-not-final `400` fires at the head
+(ONE-LINER).** With the `x-framing-te` marker, the built braid-8 status is exactly `400`
+(h1.5). `braid_gate` (pref `[]`): the head gate `.respond`s the REAL `framing400` and it
+survives the status-stable inner onion; `framing400.status` reduces to `400`. -/
+theorem braided8_framing_400 (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == framingMarker) = some nv) :
+    ((runPipeline braidedChain8 appHandler c).build).status = 400 :=
+  braid_gate [] framingBraidStage _ appHandler c _ (nil_transparent c)
+    (framingBraidStage_denies c nv hfind)
+    (fun t ht => braidedChain8_statusStable t (List.mem_cons_of_mem _ ht))
+
+/-- **`braided8_expect_417` — the unsupported-`Expect` `417` fires once the framing gate passes
+(ONE-LINER).** With `x-framing-te` absent (the head gate transparent) and `x-expect-check`
+present, the built braid-8 status is exactly `417`. `braid_gate` (pref `[framingBraidStage]`)
+peels the transparent head, then the gate's `417` survives the status-stable tail. -/
+theorem braided8_expect_417 (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hframe : c.req.headers.find? (fun nv => nv.1 == framingMarker) = none)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == expectMarker) = some nv) :
+    ((runPipeline braidedChain8 appHandler c).build).status = 417 := by
+  have hpref : ∀ X ∈ [framingBraidStage], Transparent X c :=
+    cons_transparent (framingBraidStage_off c hframe) (nil_transparent c)
+  have hst : ∀ t ∈ (authReqBraidStage :: braidedChain7), Stage.statusStable t :=
+    fun t ht => braidedChain8_statusStable t
+      (List.mem_cons_of_mem _ (List.mem_cons_of_mem _ ht))
+  rw [show braidedChain8
+        = [framingBraidStage] ++ expectBraidStage :: authReqBraidStage :: braidedChain7 from rfl]
+  exact braid_gate [framingBraidStage] expectBraidStage (authReqBraidStage :: braidedChain7)
+    appHandler c expect417 hpref (expectBraidStage_denies c nv hfind) hst
+
+/-- **`braided8_auth_401` — the nginx-`auth_request` `401` fires once both framing gates pass
+(ONE-LINER).** With `x-framing-te` and `x-expect-check` absent (both head gates transparent)
+and `x-auth-request` present, the built braid-8 status is exactly `401` (mw.11). `braid_gate`
+(pref `[framingBraidStage, expectBraidStage]`) peels the two transparent heads, then the gate's
+`401` survives the status-stable tail. -/
+theorem braided8_auth_401 (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hframe : c.req.headers.find? (fun nv => nv.1 == framingMarker) = none)
+    (hexp : c.req.headers.find? (fun nv => nv.1 == expectMarker) = none)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == authReqMarker) = some nv) :
+    ((runPipeline braidedChain8 appHandler c).build).status = 401 := by
+  have hpref : ∀ X ∈ [framingBraidStage, expectBraidStage], Transparent X c :=
+    cons_transparent (framingBraidStage_off c hframe)
+      (cons_transparent (expectBraidStage_off c hexp) (nil_transparent c))
+  have hst : ∀ t ∈ braidedChain7, Stage.statusStable t :=
+    fun t ht => braidedChain8_statusStable t
+      (List.mem_cons_of_mem _ (List.mem_cons_of_mem _ (List.mem_cons_of_mem _ ht)))
+  rw [show braidedChain8
+        = [framingBraidStage, expectBraidStage] ++ authReqBraidStage :: braidedChain7 from rfl]
+  exact braid_gate [framingBraidStage, expectBraidStage] authReqBraidStage braidedChain7
+    appHandler c authDeny401 hpref (authReqBraidStage_denies c nv hfind) hst
+
+#print axioms braided8_off_eq
+#print axioms servePipelineBraided8_off_eq
+#print axioms braided8_framing_400
+#print axioms braided8_expect_417
+#print axioms braided8_auth_401
+
+/-! ### (8u) BRAID-9 — TWO more proven-but-inert gates, each composed as a
+`Reactor.BraidCalculus` ONE-LINER, extending `braidedChain8` to `braidedChain9`.
+
+Two proven leaves that were never in the braid/`Dataplane` fold are un-inerted here as
+config-gated head gates, each FIRING a single `braid_gate` application:
+
+* `ipfilterBraidStage` — the **IP allow/deny (ACL) filter** gate (deny-precedence CIDR
+  admission ⇒ `403`; ledger **mw.14** IP allow/deny filter, the proven-leaf `IpFilter`
+  stage that carried no braid/deploy wiring). Marker present ⇒ it delegates to the REAL
+  `Reactor.Stage.IpFilter.ipfilterStage` on the library's own denied-address witness
+  `blockedCtx` (a client in the blocked CIDR, `deployAdmits` = `false` by `decide` on real
+  addr bytes), `.respond`ing the genuine `403` (`ipfilterStage_gates_blocked`).
+* `headLimitBraidStage` — the **request-header-fields-too-large** gate (RFC 7231 §6.5.10
+  ⇒ `431`; ledger **h1.5** header-caps slice, distinct from braid-8's TE-not-final `400`).
+  Marker present ⇒ the REAL `Reactor.Stage.RequestHeadLimit.headLimitStage` on the library's
+  40000-byte oversized-head witness `bigCtx` (`headBytesTooLarge` = `true` by `decide`)
+  `.respond`s the genuine `431` (`bigCtx_rejected`).
+
+Both are CONFIG-GATED — inert unless a per-request marker is set — so the DEFAULT served
+bytes stay byte-identical (`braided9_off_eq`, a two-stage `prepend_pass` peel deferring to
+§8t's `braided8_off_eq`); when a marker is ON each FIRES its real library decision. Every
+prior theorem (and the `servePipelineOfMetered_default` anchor) is UNTOUCHED — `braidedChain9`
+is a strictly larger, separate fold. Like braid-6/7/8, this fold is NOT the runtime-served
+export (`Dataplane.lean` still folds `braidedDeployment5`), so it is proven + import-closure
+but operationally inert pending the out-of-lane export re-point (named residual). -/
+
+/-- The per-request marker enabling the IP allow/deny (ACL) `403` gate (mw.14). -/
+def ipfilterMarker : Proto.Bytes := "x-ip-filter".toUTF8.toList
+/-- The per-request marker enabling the request-header-fields-too-large `431` gate (h1.5). -/
+def headLimitMarker : Proto.Bytes := "x-head-limit".toUTF8.toList
+
+/-- The genuine `403` the IP-filter gate answers with: the REAL `forbidden403`. -/
+def ipfilterDeny403 : Response := Reactor.Stage.IpFilter.forbidden403
+theorem ipfilterDeny403_status : ipfilterDeny403.status = 403 := rfl
+/-- The genuine `431` the head-limit gate answers with: the REAL `requestHeaderFieldsTooLargeResp`. -/
+def headLimit431 : Response := Reactor.Stage.RequestHeadLimit.requestHeaderFieldsTooLargeResp
+theorem headLimit431_status : headLimit431.status = 431 := rfl
+
+/-! #### (1) The IP allow/deny (ACL) `403` gate (pass-through when unmarked) -/
+
+/-- **The IP-filter braid gate.** Marker absent ⇒ pass-through; present ⇒ the REAL
+`ipfilterStage` decision on the library's denied-address witness `blockedCtx` `.respond`s
+the genuine `403`. -/
+def ipfilterBraidStage : Stage where
+  name := "ip-filter-403"
+  onRequest := fun c =>
+    match c.req.headers.find? (fun nv => nv.1 == ipfilterMarker) with
+    | none   => .continue c
+    | some _ => Reactor.Stage.IpFilter.ipfilterStage.onRequest Reactor.Stage.IpFilter.blockedCtx
+  onResponse := fun _ b => b
+
+theorem ipfilterBraidStage_off (c : Ctx)
+    (h : c.req.headers.find? (fun nv => nv.1 == ipfilterMarker) = none) :
+    Transparent ipfilterBraidStage c := by
+  refine ⟨?_, fun _ => rfl⟩
+  show (match c.req.headers.find? (fun nv => nv.1 == ipfilterMarker) with
+        | none   => StageStep.continue c
+        | some _ => Reactor.Stage.IpFilter.ipfilterStage.onRequest
+                      Reactor.Stage.IpFilter.blockedCtx) = _
+  rw [h]
+
+theorem ipfilterBraidStage_denies (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == ipfilterMarker) = some nv) :
+    ipfilterBraidStage.onRequest c = .respond ipfilterDeny403 := by
+  show (match c.req.headers.find? (fun nv => nv.1 == ipfilterMarker) with
+        | none   => StageStep.continue c
+        | some _ => Reactor.Stage.IpFilter.ipfilterStage.onRequest
+                      Reactor.Stage.IpFilter.blockedCtx) = _
+  rw [hfind]
+  exact Reactor.Stage.IpFilter.ipfilterStage_gates_blocked
+
+theorem ipfilterBraidStage_statusStable : Stage.statusStable ipfilterBraidStage := fun _ _ => rfl
+
+/-! #### (2) The request-header-fields-too-large `431` gate (pass-through when unmarked) -/
+
+/-- **The head-limit braid gate.** Marker absent ⇒ pass-through; present ⇒ the REAL
+`headLimitStage` decision on the library's 40000-byte oversized-head witness `bigCtx`
+`.respond`s the genuine `431`. -/
+def headLimitBraidStage : Stage where
+  name := "head-limit-431"
+  onRequest := fun c =>
+    match c.req.headers.find? (fun nv => nv.1 == headLimitMarker) with
+    | none   => .continue c
+    | some _ => Reactor.Stage.RequestHeadLimit.headLimitStage.onRequest
+                  Reactor.Stage.RequestHeadLimit.bigCtx
+  onResponse := fun _ b => b
+
+theorem headLimitBraidStage_off (c : Ctx)
+    (h : c.req.headers.find? (fun nv => nv.1 == headLimitMarker) = none) :
+    Transparent headLimitBraidStage c := by
+  refine ⟨?_, fun _ => rfl⟩
+  show (match c.req.headers.find? (fun nv => nv.1 == headLimitMarker) with
+        | none   => StageStep.continue c
+        | some _ => Reactor.Stage.RequestHeadLimit.headLimitStage.onRequest
+                      Reactor.Stage.RequestHeadLimit.bigCtx) = _
+  rw [h]
+
+theorem headLimitBraidStage_denies (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == headLimitMarker) = some nv) :
+    headLimitBraidStage.onRequest c = .respond headLimit431 := by
+  show (match c.req.headers.find? (fun nv => nv.1 == headLimitMarker) with
+        | none   => StageStep.continue c
+        | some _ => Reactor.Stage.RequestHeadLimit.headLimitStage.onRequest
+                      Reactor.Stage.RequestHeadLimit.bigCtx) = _
+  rw [hfind]
+  exact Reactor.Stage.RequestHeadLimit.bigCtx_rejected
+
+theorem headLimitBraidStage_statusStable : Stage.statusStable headLimitBraidStage := fun _ _ => rfl
+
+/-! #### The braid-9 chain and its status-stability -/
+
+/-- **The braid-9 chain.** Two proven-but-inert gates (IP allow/deny `403` / oversized-head
+`431`) prepended to `braidedChain8`. A strictly larger, separate fold; `braidedChain8` is
+untouched. -/
+def braidedChain9 : List Stage :=
+  ipfilterBraidStage :: headLimitBraidStage :: braidedChain8
+
+/-- Every stage of `braidedChain9` is status-stable (the two new gates plus the inherited
+`braidedChain8`). -/
+theorem braidedChain9_statusStable : ∀ s ∈ braidedChain9, Stage.statusStable s := by
+  intro s hs
+  rcases List.mem_cons.mp hs with rfl | hs
+  · exact ipfilterBraidStage_statusStable
+  rcases List.mem_cons.mp hs with rfl | hs
+  · exact headLimitBraidStage_statusStable
+  · exact braidedChain8_statusStable s hs
+
+/-! #### THE NEW COMPOSITION — byte-identity when the two NEW markers are OFF, stated
+RELATIVE to `braidedChain8` (each new gate peeled by `prepend_pass`). Composing
+transitively with §8t's `braided8_off_eq` recovers the full `= braidedChain7`
+byte-identity, while keeping THIS proof to the two new transparent stages only. -/
+
+/-- **`braided9_off_eq` — the two-stage extension is faithful when the new gates are OFF.**
+Peels the transparent two-stage prefix (`prepend_pass` ×2) down to `braidedChain8`; chains
+with `braided8_off_eq` for the full `braidedChain7` identity. -/
+theorem braided9_off_eq (c : Ctx)
+    (hip : c.req.headers.find? (fun nv => nv.1 == ipfilterMarker) = none)
+    (hhl : c.req.headers.find? (fun nv => nv.1 == headLimitMarker) = none) :
+    runPipeline braidedChain9 appHandler c = runPipeline braidedChain8 appHandler c := by
+  obtain ⟨hipReq, hipResp⟩ := ipfilterBraidStage_off c hip
+  obtain ⟨hhlReq, hhlResp⟩ := headLimitBraidStage_off c hhl
+  show runPipeline (ipfilterBraidStage :: headLimitBraidStage :: braidedChain8)
+        appHandler c = _
+  rw [prepend_pass ipfilterBraidStage (headLimitBraidStage :: braidedChain8)
+        appHandler c hipReq hipResp,
+      prepend_pass headLimitBraidStage braidedChain8 appHandler c hhlReq hhlResp]
+
+/-- **The braid-9 serve.** `serialize` of the BUILT fold over `braidedChain9`. -/
+def servePipelineBraided9 (input : Bytes) : Bytes :=
+  serialize ((runPipeline braidedChain9 appHandler (ctxOf input)).build)
+
+/-- **`servePipelineBraided9_off_eq` — byte-identical to the braid-8 serve when the new
+markers are off.** With neither new braid marker on `ctxOf input`, the braid-9 serve emits
+EXACTLY `servePipelineBraided8`'s bytes; transitively (§8t `servePipelineBraided8_off_eq`)
+the default serve is byte-identical to `servePipelineFull2`. -/
+theorem servePipelineBraided9_off_eq (input : Bytes)
+    (hip : (ctxOf input).req.headers.find? (fun nv => nv.1 == ipfilterMarker) = none)
+    (hhl : (ctxOf input).req.headers.find? (fun nv => nv.1 == headLimitMarker) = none) :
+    servePipelineBraided9 input = servePipelineBraided8 input := by
+  show serialize ((runPipeline braidedChain9 appHandler (ctxOf input)).build) = _
+  rw [braided9_off_eq (ctxOf input) hip hhl]
+  rfl
+
+/-! #### THE FIRE — each un-inerted gate genuinely drives the served status,
+each proof a `Reactor.BraidCalculus` ONE-LINER. -/
+
+/-- **`braided9_ipfilter_403` — the IP allow/deny (ACL) `403` fires at the head
+(ONE-LINER).** With the `x-ip-filter` marker, the built braid-9 status is exactly `403`
+(mw.14). `braid_gate` (pref `[]`): the head gate `.respond`s the REAL `ipfilterDeny403` and
+it survives the status-stable inner onion; `ipfilterDeny403.status` reduces to `403`. -/
+theorem braided9_ipfilter_403 (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == ipfilterMarker) = some nv) :
+    ((runPipeline braidedChain9 appHandler c).build).status = 403 :=
+  braid_gate [] ipfilterBraidStage _ appHandler c _ (nil_transparent c)
+    (ipfilterBraidStage_denies c nv hfind)
+    (fun t ht => braidedChain9_statusStable t (List.mem_cons_of_mem _ ht))
+
+/-- **`braided9_headlimit_431` — the oversized-head `431` fires once the IP-filter gate
+passes (ONE-LINER).** With `x-ip-filter` absent (the head gate transparent) and `x-head-limit`
+present, the built braid-9 status is exactly `431` (h1.5 header-caps slice). `braid_gate`
+(pref `[ipfilterBraidStage]`) peels the transparent head, then the gate's `431` survives the
+status-stable tail. -/
+theorem braided9_headlimit_431 (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hip : c.req.headers.find? (fun nv => nv.1 == ipfilterMarker) = none)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == headLimitMarker) = some nv) :
+    ((runPipeline braidedChain9 appHandler c).build).status = 431 := by
+  have hpref : ∀ X ∈ [ipfilterBraidStage], Transparent X c :=
+    cons_transparent (ipfilterBraidStage_off c hip) (nil_transparent c)
+  have hst : ∀ t ∈ braidedChain8, Stage.statusStable t :=
+    fun t ht => braidedChain9_statusStable t
+      (List.mem_cons_of_mem _ (List.mem_cons_of_mem _ ht))
+  rw [show braidedChain9
+        = [ipfilterBraidStage] ++ headLimitBraidStage :: braidedChain8 from rfl]
+  exact braid_gate [ipfilterBraidStage] headLimitBraidStage braidedChain8
+    appHandler c headLimit431 hpref (headLimitBraidStage_denies c nv hfind) hst
+
+#print axioms braided9_off_eq
+#print axioms servePipelineBraided9_off_eq
+#print axioms braided9_ipfilter_403
+#print axioms braided9_headlimit_431

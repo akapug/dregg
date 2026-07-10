@@ -21,6 +21,15 @@ extras=()
 [ -f ffi/crypto_shim.o ] && extras+=(ffi/crypto_shim.o)
 [ -f ffi/cgi_exec.o ] && extras+=(ffi/cgi_exec.o)
 [ -f ffi/mac_udp.o ] && extras+=(ffi/mac_udp.o)
+# The archive now pulls in the whole Dataplane module (incl. the TLS 1.3 server
+# and its socket seam), so the C host must also resolve the socket FFI shims
+# (drorb_tcp_send/recv, from derp_net) and the cert-signing shims
+# (drorb_p256_ecdsa_sign / drorb_rsapss_sha256_sign, from tls_p256_shim) even
+# though the h2c feed loop itself never calls them — the linker resolves the
+# whole archive. Compile them if the prebuilt objects are absent.
+[ -f ffi/derp_net.o ] || cc -O2 -I"$LEAN_PREFIX/include" -c ffi/derp_net.c -o ffi/derp_net.o
+[ -f ffi/tls_p256_shim.o ] || cc -O2 -I"$LEAN_PREFIX/include" -c ffi/tls_p256_shim.c -o ffi/tls_p256_shim.o
+extras+=(ffi/derp_net.o ffi/tls_p256_shim.o)
 [ -f target/release/libaes_fallback.a ] && extras+=(target/release/libaes_fallback.a)
 [ -f "$HACL/libevercrypt.a" ] && extras+=("-L$HACL" -levercrypt)
 

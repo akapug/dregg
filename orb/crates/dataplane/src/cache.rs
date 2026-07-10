@@ -76,6 +76,18 @@ struct InFlight {
     cv: Condvar,
 }
 
+/// The outcome of a non-blocking effect-seam cache probe
+/// ([`ResponseCache::lookup_effect_nb`]) — the io_uring shard reads it as data and
+/// never blocks on the coalescing condvar.
+pub enum CacheProbe {
+    /// A fresh stored entry, already stamped `X-Cache: HIT` + `Age`.
+    Hit(Vec<u8>),
+    /// This caller was elected the cold-key leader (in-flight marker registered).
+    Leader,
+    /// A leader is already in flight for this key; the shard defers this request.
+    Waiter,
+}
+
 /// The dataplane response cache: the store, plus the set of in-flight keys used
 /// for coalescing. Both maps are keyed on the proven `(method, target)` decision.
 pub struct ResponseCache {
@@ -227,7 +239,10 @@ impl ResponseCache {
         // Waiter: block on the leader's single fetch, then serve it stamped HIT.
         let mut done = inflight.done.lock().unwrap();
         while done.is_none() {
-            let (guard, timeout) = inflight.cv.wait_timeout(done, Duration::from_secs(5)).unwrap();
+            let (guard, timeout) = inflight
+                .cv
+                .wait_timeout(done, Duration::from_secs(5))
+                .unwrap();
             done = guard;
             if timeout.timed_out() {
                 break;
@@ -238,6 +253,47 @@ impl ResponseCache {
             // The leader never published within the deadline (e.g. serve thread
             // gone): fall back to a fresh store hit, else lead the fold ourselves.
             None => self.try_hit(key),
+        }
+    }
+
+    /// **Non-blocking effect-seam LOOKUP** — the io_uring shard variant of
+    /// [`lookup_coalescing`](Self::lookup_coalescing). The shard MUST NOT block, so
+    /// this never waits on the leader's condvar: it resolves the fresh-hit and the
+    /// leader election atomically (identical to `lookup_coalescing` up to the wait)
+    /// and reports the outcome as data, leaving the WAIT to the caller.
+    ///
+    ///   * [`CacheProbe::Hit`] — a fresh stored entry (stamped HIT + Age): the
+    ///     shard `.done`s these bytes on the async resume, no blocking.
+    ///   * [`CacheProbe::Leader`] — this caller is the elected cold-key leader (the
+    ///     in-flight marker is now registered, exactly as `lookup_coalescing`
+    ///     registers it): the shard resumes the core with an empty result, the fold
+    ///     runs once, and the subsequent [`store`](Self::store) publishes to every
+    ///     waiter (async or blocking) coalesced behind this marker.
+    ///   * [`CacheProbe::Waiter`] — a leader is already in flight for this key.
+    ///     There is nothing non-blocking to serve yet, so the shard DEFERS this one
+    ///     request to a blocking fallback thread (which calls `lookup_coalescing`
+    ///     and blocks on the SAME shared in-flight marker off the shard) — the
+    ///     shard itself never blocks.
+    ///
+    /// Election shares `self.inflight` with `lookup_coalescing`, so an async leader
+    /// and blocking waiters (or vice versa) coalesce onto ONE fetch: exactly one
+    /// leader is ever elected per cold key across both paths.
+    pub fn lookup_effect_nb(&self, key: &[u8]) -> CacheProbe {
+        if let Some(hit) = self.try_hit(key) {
+            return CacheProbe::Hit(hit);
+        }
+        let mut map = self.inflight.lock().unwrap();
+        if map.contains_key(key) {
+            CacheProbe::Waiter
+        } else {
+            map.insert(
+                key.to_vec(),
+                Arc::new(InFlight {
+                    done: Mutex::new(None),
+                    cv: Condvar::new(),
+                }),
+            );
+            CacheProbe::Leader
         }
     }
 
@@ -291,6 +347,25 @@ impl ResponseCache {
     #[cfg(test)]
     fn len(&self) -> usize {
         self.store.lock().unwrap().len()
+    }
+
+    /// The number of live stored entries (the `/admin/cache/stats` projection).
+    pub fn entry_count(&self) -> usize {
+        self.store.lock().unwrap().len()
+    }
+
+    /// Purge every stored entry (`POST /admin/cache/purge`). Returns the number
+    /// of entries dropped. This is the executing shell for the proven purge
+    /// decision `Admin.Cache.cache_purge_invalidates`: after it, `try_hit` for
+    /// any key finds nothing, so the next request for that key misses and
+    /// re-fetches (never served a stale body). In-flight coalescing markers are
+    /// left untouched — a fetch already leading waiters completes normally; the
+    /// purge only clears the fresh-store the next request would have hit.
+    pub fn purge_all(&self) -> usize {
+        let mut store = self.store.lock().unwrap();
+        let n = store.len();
+        store.clear();
+        n
     }
 }
 
@@ -406,7 +481,10 @@ fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
 
 /// Trim ASCII whitespace from both ends.
 fn trim(b: &[u8]) -> &[u8] {
-    let s = b.iter().position(|c| !c.is_ascii_whitespace()).unwrap_or(b.len());
+    let s = b
+        .iter()
+        .position(|c| !c.is_ascii_whitespace())
+        .unwrap_or(b.len());
     let e = b
         .iter()
         .rposition(|c| !c.is_ascii_whitespace())
@@ -454,7 +532,11 @@ mod tests {
             runs.fetch_add(1, Ordering::SeqCst);
             cacheable_resp("cached-body")
         });
-        assert_eq!(runs.load(Ordering::SeqCst), 1, "first request runs the handler");
+        assert_eq!(
+            runs.load(Ordering::SeqCst),
+            1,
+            "first request runs the handler"
+        );
         assert!(header_present(&first, "x-cache: miss"), "first is a MISS");
 
         // Let real time pass so the Age arithmetic (now − stored_at) is visibly
@@ -466,9 +548,16 @@ mod tests {
             runs.fetch_add(1, Ordering::SeqCst);
             panic!("handler re-run on a cache HIT");
         });
-        assert_eq!(runs.load(Ordering::SeqCst), 1, "handler not re-run on a HIT");
+        assert_eq!(
+            runs.load(Ordering::SeqCst),
+            1,
+            "handler not re-run on a HIT"
+        );
         assert!(header_present(&second, "x-cache: hit"), "second is a HIT");
-        assert!(header_present(&second, "age: 1"), "HIT carries a computed Age");
+        assert!(
+            header_present(&second, "age: 1"),
+            "HIT carries a computed Age"
+        );
         // The replayed body is byte-identical to the stored serve output.
         assert!(
             String::from_utf8_lossy(&second).ends_with("cached-body"),
@@ -491,7 +580,11 @@ mod tests {
                 cacheable_resp("x")
             });
         }
-        assert_eq!(runs.load(Ordering::SeqCst), 2, "POST always runs the handler");
+        assert_eq!(
+            runs.load(Ordering::SeqCst),
+            2,
+            "POST always runs the handler"
+        );
         assert_eq!(cache.len(), 0, "non-GET never stored");
     }
 
@@ -552,7 +645,10 @@ mod tests {
             );
         }
         let total = runs.load(Ordering::SeqCst);
-        assert_eq!(total, 1, "K={K} concurrent same-key misses ⇒ exactly ONE fetch");
+        assert_eq!(
+            total, 1,
+            "K={K} concurrent same-key misses ⇒ exactly ONE fetch"
+        );
         assert_eq!(hit_or_miss, K, "all K served");
         println!("\n--- cache-coalesce: {K} concurrent same-key misses ---");
         println!("handler fetches: {total} (expected 1)");
@@ -586,7 +682,11 @@ mod tests {
             runs.fetch_add(1, Ordering::SeqCst);
             panic!("handler re-run on a cached gzip HIT");
         });
-        assert_eq!(runs.load(Ordering::SeqCst), 1, "gzip body served from cache");
+        assert_eq!(
+            runs.load(Ordering::SeqCst),
+            1,
+            "gzip body served from cache"
+        );
         assert!(header_present(&second, "x-cache: hit"));
         assert!(header_present(&second, "content-encoding: gzip"));
         // The compressed body bytes survive the replay byte-for-byte.
@@ -615,7 +715,8 @@ mod tests {
         let runs = AtomicUsize::new(0);
         let req = get("/cached");
         // max-age=0 is not cacheable at all; use a tiny lifetime by hand.
-        let resp = b"HTTP/1.1 200 OK\r\nCache-Control: max-age=1\r\nContent-Length: 1\r\n\r\nx".to_vec();
+        let resp =
+            b"HTTP/1.1 200 OK\r\nCache-Control: max-age=1\r\nContent-Length: 1\r\n\r\nx".to_vec();
         let _ = cache.serve(&req, || {
             runs.fetch_add(1, Ordering::SeqCst);
             resp.clone()

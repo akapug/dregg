@@ -16,6 +16,15 @@ import Reactor.Deploy
 import Reactor.Ingress
 import Reactor.H2Ingress
 import Reactor.Observe
+-- The flat, linear-time runtime for the `x-corr` correlation-id render
+-- (`Reactor.Deploy.corrBytes`). This module carries the `@[csimp]`
+-- (`Reactor.ObserveFast.corrBytes_eq_fast`) that installs the `O(N)`
+-- `corrBytesFast` as the COMPILED body of `corrBytes` — the render runs on every
+-- served request (stage 8 `deployProg`), so importing it here makes the deployed
+-- `drorb_serve` use the linear render instead of the spec's `O(N²)`
+-- `String.intercalate`. The logical spec is unchanged; the emitted bytes are
+-- byte-identical (proven).
+import Reactor.ObserveFast
 -- The reverse-proxy backend-selection seam (`drorb_proxy_pick`) lives in
 -- `Reactor.ProxyDial`. Importing it here places `initialize_Reactor_ProxyDial`
 -- in the closure of `initialize_Dataplane`, so the single host-side runtime-init
@@ -24,6 +33,8 @@ import Reactor.Observe
 -- `Reactor/ProxyDial.c.o.export` — without this the `drorb_proxy_pick` symbol is
 -- never built into `libdrorb.a` and the host link fails undefined.
 import Reactor.ProxyDial
+import Reactor.Proxy.Connect
+import Reactor.Proxy.Grpc
 -- The multi-protocol seams (`drorb_serve_ws_frame`, `drorb_serve_datagram`) live
 -- in `Dataplane.Multi`. Importing it here places its module initializer in the
 -- closure of `initialize_Dataplane`, so the single host-side init call brings up
@@ -37,6 +48,130 @@ import Dataplane.Multi
 -- `Reactor/ServeStep.c.o.export` object into `libdrorb.a` so the two new exports
 -- link.
 import Reactor.ServeStep
+-- The CL-trust head-independence seam (`Reactor.ProxyStreamHead.proxyStreamHead`, whose
+-- `proxyRespHead_factors` proves the non-gzip transformed head is a function of
+-- (input, upstream-head, body-LENGTH) — never the body bytes). Importing it here places
+-- its module initializer in the closure of `initialize_Dataplane` and
+-- `ffi/build-dataplane-lib.sh` compiles its `Reactor/ProxyStreamHead.c.o.export` object
+-- into `libdrorb.a` so the new `drorb_serve_proxy_stream_head` export links.
+import Reactor.ProxyStreamHead
+-- The sans-IO STREAMING serve (`Reactor.ServeStream.serveChunkList`, the proven
+-- head-chunk + bounded-body-chunk emit whose concatenation is `serialize` —
+-- `serveChunkList_flatten`). Importing it here places its module initializer in the
+-- closure of `initialize_Dataplane` (so the boot brings up the streaming serve's
+-- constants) and `ffi/build-dataplane-lib.sh` compiles its
+-- `Reactor/ServeStream.c.o.export` object into `libdrorb.a` so the new
+-- `drorb_serve_stream` export links.
+import Reactor.ServeStream
+-- The bridged flat `ByteArray → ByteArray` serve (`Reactor.ServeArr.serveArr`,
+-- proven byte-identical to the deployed List serve via
+-- `Reactor.ServeArr.serveArr_correct`). Importing it here places its module
+-- initializer in the closure of `initialize_Dataplane` and lets
+-- `ffi/build-dataplane-lib.sh` archive its `Reactor/ServeArr.c.o.export` object
+-- so the `drorb_serve_flat` A/B seam below links.
+import Reactor.ServeArr
+-- The ASSEMBLED flat serve (`Datapath.ServeFlat.serveFlatEcho`, exported
+-- `drorb_serve_span`) and its byte-identical List twin (`serveListEcho`, exported
+-- `drorb_serve_span_list`) — index-native parse ⟶ flat security-header stage ⟶ flat
+-- ByteArray body ⟶ flat egress, proven byte-identical (`serveFlatEcho_refines`).
+-- Importing it here places `initialize_Datapath_ServeFlat` in the closure of
+-- `initialize_Dataplane` (so the boot brings up the flat serve's constants) and
+-- `ffi/build-dataplane-lib.sh`'s import-closure walker compiles its
+-- `Datapath/ServeFlat.c.o.export` object into `libdrorb.a` so the `DRORB_SPAN` A/B
+-- seam links.
+import Datapath.ServeFlat
+import Datapath.ServeFlatFull
+-- The BODY-DENSE poly serve (`Datapath.ServeFlatBodyPoly.serveBodyPolyArr`, exported
+-- `drorb_serve_bodypoly`) and its byte-identical List twin (`serveBodyPolyList`, exported
+-- `drorb_serve_bodypoly_list`) — parse ⟶ the compress codec-tag body stage ⟶ serialize, the
+-- BODY carried DENSE (`ByteSeq`-poly, `ByteArray` instance) through the fold, proven
+-- byte-identical (`serveBodyPoly_refines`). Importing it here places
+-- `initialize_Datapath_ServeFlatBodyPoly` in the closure of `initialize_Dataplane` and
+-- `ffi/build-dataplane-lib.sh`'s import-closure walker compiles its
+-- `Datapath/ServeFlatBodyPoly.c.o.export` object into `libdrorb.a` so the `DRORB_SPAN=5/6`
+-- body A/B seam links.
+import Datapath.ServeFlatBodyPoly
+-- The FULL POLY serve (`Datapath.ServePolyFull.servePolyFull`, exported
+-- `drorb_serve_poly`) — the deployed 14-stage routed response rendered through the
+-- POLYMORPHIC egress fold (`HdrSeq.foldPush` header block over `HdrBlock` + `ByteArray`
+-- body), proven byte-identical to `drorbServe` (`servePolyFull_eq_drorbServe`). Importing
+-- it here places `initialize_Datapath_ServePolyFull` in the closure of
+-- `initialize_Dataplane` so the build's import-closure walker compiles its
+-- `Datapath/ServePolyFull.c.o.export` object into `libdrorb.a` for the `DRORB_SPAN=7` seam.
+import Datapath.ServePolyFull
+-- The GENUINELY-DENSE multi-stage serve FOLD (`Datapath.ServeDense.serveDenseArr`,
+-- exported `drorb_serve_dense`) and its byte-identical `List` twin
+-- (`serveDenseList`, exported `drorb_serve_dense_list`) — parse index-native ⟶ a
+-- 3-stage response-transform header fold over the flat `HdrBlock` ⟶ `ByteArray`-body
+-- flat egress, proven byte-identical (`serveDense_refines`). Importing it here places
+-- `initialize_Datapath_ServeDense` in the closure of `initialize_Dataplane` so the
+-- import-closure walker compiles its `Datapath/ServeDense.c.o.export` object into
+-- `libdrorb.a` for the `DRORB_SPAN=8` (dense) / `=9` (`List` twin) seams.
+import Datapath.ServeDense
+-- The DENSE serve that RUNS THE DEPLOYED BODY TRANSFORM DENSE
+-- (`Datapath.ServeDenseFull.serveDenseFull`, exported `drorb_serve_densefull`) and
+-- its byte-identical `List` twin (`serveDenseFullList`, exported
+-- `drorb_serve_densefull_list`) — parse index-native ⟶ 3-stage header fold ⟶ the
+-- deployed html-rewrite body transform run DENSE (`rewriteBytesDense`, `ByteArray`
+-- index-native, byte-identical to `rewriteBytes` by `rewriteBytesDense_refines`) ⟶
+-- flat egress, proven byte-identical (`serveDenseFull_refines`). Importing it here
+-- places `initialize_Datapath_ServeDenseFull` in the closure of
+-- `initialize_Dataplane` so the import-closure walker compiles its
+-- `Datapath/ServeDenseFull.c.o.export` object into `libdrorb.a` for the
+-- `DRORB_SPAN=10` (dense-full) / `=11` (`List` twin) large-body seams.
+import Datapath.ServeDenseFull
+-- The FULLY-DENSE-TOKENIZER serve (`drorb_serve_densefull2`): same import rationale
+-- as `ServeDenseFull` above — places `initialize_Datapath_ServeDenseFull2` in the
+-- `initialize_Dataplane` closure so `ffi/build-dataplane-lib.sh` archives its
+-- `Datapath/ServeDenseFull2.c.o.export` into `libdrorb.a` for the `DRORB_SPAN=12`
+-- (fully-dense-tokenizer) large-body seam.
+import Datapath.ServeDenseFull2
+-- The CONTENT-TYPE-GATED serve (`Datapath.ServeGated.serveGated`, exported
+-- `drorb_serve_gated`) and its byte-identical `List` twin (`serveGatedList`, exported
+-- `drorb_serve_gated_list`) — parse index-native ⟶ 3-stage header fold ⟶ the body
+-- GATED on the response `Content-Type`: on `text/html` the dense deployed rewrite, on
+-- anything else (the common case) the body handed STRAIGHT to `serializeFlatB` as the
+-- borrowed `ByteArray` (never tokenized, never consed = zero-copy passthrough). Proven
+-- byte-identical to its `List` twin (`serveGated_refines`) and grounded in the proven
+-- content-type gate (`serveGated_body_is_gate`). Importing it here places
+-- `initialize_Datapath_ServeGated` in the closure of `initialize_Dataplane` so
+-- `ffi/build-dataplane-lib.sh`'s import-closure walker compiles its
+-- `Datapath/ServeGated.c.o.export` object into `libdrorb.a` for the `DRORB_SPAN=13`
+-- (gated) / `=14` (`List` twin) common-case zero-copy body seam.
+import Datapath.ServeGated
+-- The COMBINED fast serve exemplar (`Datapath.ServeUltra.serveUltra`, exported
+-- `drorb_serve_ultra`) and its byte-identical `List` twin (`serveUltraList`, exported
+-- `drorb_serve_ultra_list`) — ALL of the datapath wins in ONE serve: parse index-native
+-- ⟶ dense header fold ⟶ content-type-GATED body (non-HTML = zero-copy passthrough,
+-- text/html = the FULLY-DENSE tokenizer `rewriteBytesDense2`, no token `List`) ⟶ flat
+-- egress. Proven byte-identical to its `List` twin (`serveUltra_refines`) and to the
+-- deployed gated serve `=13` (`serveUltra_eq_serveGated`). Importing it here places
+-- `initialize_Datapath_ServeUltra` in the closure of `initialize_Dataplane` so
+-- `ffi/build-dataplane-lib.sh`'s import-closure walker compiles its
+-- `Datapath/ServeUltra.c.o.export` object into `libdrorb.a` for the `DRORB_SPAN=16`
+-- (combined) and `=17` (its `List` twin) seams.
+import Datapath.ServeUltra
+-- The ZERO-COPY BODY split serve (`Datapath.ServeSplit.serveSplitHead`, exported
+-- `drorb_serve_split_head`): Lean computes ONLY the response HEAD (status line + headers +
+-- Content-Length + separator) densely; the reactor writes that head THEN the borrowed body
+-- (the request buffer) to the socket via `writev`/two writes — the body is NEVER appended
+-- into an output `ByteArray` (the append `DRORB_SPAN=13` still does). Proven head ++ body =
+-- the appended serve (`serveSplit_reassemble`) and byte-identical to the deployed serialize
+-- (`serveSplitHead_append_eq_serialize`). Importing it here places
+-- `initialize_Datapath_ServeSplit` in the closure of `initialize_Dataplane` so
+-- `ffi/build-dataplane-lib.sh`'s import-closure walker compiles its
+-- `Datapath/ServeSplit.c.o.export` object into `libdrorb.a` for the `DRORB_SPAN=15`
+-- zero-copy-body writev seam.
+import Datapath.ServeSplit
+-- The RUNTIME-DENSE full serve (`Datapath.ServeDenseReal.serveDenseReal`, exported
+-- `drorb_serve_dense_real`): the deployed serve whose `/bulk` arm emits the DENSE head +
+-- DENSE 1 MiB `Array` body (no per-byte `List` cons — the body-cliff fix), proven
+-- byte-identical to the deployed `drorbServe` (`serveDenseReal_refines` +
+-- `deployedServeRef_eq_drorbServe`, closed below in `serveDenseReal_eq_drorbServe`).
+-- Importing it here places `initialize_Datapath_ServeDenseReal` in the closure of
+-- `initialize_Dataplane` so the export-closure walker compiles its `.c.o.export` object
+-- into `libdrorb.a` for the `DRORB_SPAN=18` seam.
+import Datapath.ServeDenseReal
 -- The textual-config parser + denotation (`Dsl.Config.parseChars` /
 -- `denoteOn` / `dialChainOfByte`) live in `Dsl.Config.Parse`. Importing it here
 -- places `initialize_Dsl_Config_Parse` in the closure of `initialize_Dataplane`
@@ -66,6 +201,13 @@ import TlsHandshake.Post
 -- `ffi/tls_p256_shim.o` — the SAME verified backend the `tls-wire-oracle` exe
 -- links; `ffi/build-dataplane-lib.sh` archives its `:c.o.export` object.
 import TlsCrypto.Sig
+-- The RFC-conformance WRAPPER (`drorb_serve_conformant`, DRORB_SPAN=19). It lives in
+-- the `Reactor` lib (no import of Dataplane — it wraps an ARBITRARY inner serve), so
+-- importing it here places `initialize_Reactor_ServeConformant` in the closure of
+-- `initialize_Dataplane` AND the archive step (which globs every module in Dataplane's
+-- transitive import closure) compiles its `.c.o.export` object into `libdrorb.a`. The
+-- `@[export drorb_serve_conformant]` symbol below instantiates it on `drorbServe`.
+import Reactor.ServeConformant
 
 /-- The proven pipeline as a pure byte function, exported under the C symbol
 `drorb_serve`. One request's bytes in, the deployed response bytes out — the
@@ -89,6 +231,104 @@ def drorbServe (input : ByteArray) : ByteArray :=
     else
       Reactor.Deploy.deployStepFull2 Reactor.Observe.ObsState.init bytes
   ByteArray.mk out.toArray
+
+/-- **The RFC-conformance serve** (`drorb_serve_conformant`, DRORB_SPAN=19) — the
+deployed `drorbServe` WRAPPED by the proven conformance stages
+(`Reactor.ServeConformant.conformantServe`): the `validationStage` request gate
+(C1/C2/B2/G1/C3) short-circuits malformed requests to their `4xx/5xx` (+Date) and
+otherwise routes through the UNCHANGED `drorbServe`, then post-processes the response
+bytes with a `Date` header (F1) and a `HEAD` body strip (B1). The inner `drorbServe`
+is byte-for-byte the deployed serve — the dense/poly `=drorbServe` family is untouched;
+only the request-edge gate and response-edge finisher are added. Proven properties:
+`conformant_rejects_missingHost` (a real missing-Host input ⟶ `400`),
+`conformant_date_present_accept` (Date present on the accepted path),
+`conformant_head_no_body` (HEAD body stripped). Residual: `deployNow` is a fixed
+RFC-1123 placeholder, not a live clock (the probe F1 needs Date PRESENT). Selected on
+every HTTP serve job when `DRORB_SPAN=19`. -/
+@[export drorb_serve_conformant]
+def drorbServeConformant (input : ByteArray) : ByteArray :=
+  Reactor.ServeConformant.conformantServe drorbServe input
+
+/-- **The bridged FLAT serve seam** (`drorb_serve_flat`) — the A/B twin of
+`drorb_serve`. Byte-identical to `drorb_serve` for every input
+(`drorbServeFlat_eq`): the h2c prior-knowledge branch is the same `serveH2c`, and
+the HTTP/1.1 branch runs the SAME deployed `servePipelineFull2` fold but renders
+the response straight into a flat `ByteArray` (`Reactor.ServeArr.serveArr`,
+proven `= ByteArray.mk (servePipelineFull2 input.toList).toArray`), skipping the
+deployed path's response-head `List` round-trips. The host default stays
+`drorb_serve`; this symbol is gated behind `DRORB_FLAT=1` (and the serve-bench
+lever) so the flat vs. List materialization can be measured A/B in the same
+binary with no behavioural difference. -/
+@[export drorb_serve_flat]
+def drorbServeFlat (input : ByteArray) : ByteArray :=
+  let bytes := input.toList
+  if Reactor.Ingress.hasH2Preface bytes then
+    ByteArray.mk (Reactor.H2Ingress.serveH2c bytes).toArray
+  else
+    Reactor.ServeArr.serveArr input
+
+/-- **The flat serve is byte-identical to the deployed serve — for every input.**
+Both fork on the h2c preface to the same `serveH2c`; on the HTTP/1.1 path
+`serveArr` emits exactly `ByteArray.mk (servePipelineFull2 input.toList).toArray`
+(`serveArr_correct`), which is what `drorbServe` writes there
+(`deployStepFull2_serves`). So swapping the export changes no served byte — the
+A/B measures only the materialization cost. -/
+theorem drorbServeFlat_eq (input : ByteArray) : drorbServeFlat input = drorbServe input := by
+  unfold drorbServeFlat drorbServe
+  by_cases h : Reactor.Ingress.hasH2Preface input.toList
+  · simp only [h, if_true]
+  · simp only [h, if_false, Bool.false_eq_true]
+    rw [Reactor.ServeArr.serveArr_correct, Reactor.Deploy.deployStepFull2_serves]
+
+/-- **The deployed serve reference of the assembled full flat serve IS `drorbServe`.**
+`Datapath.ServeFlatFull.deployedServeRef` is written (below `Dataplane`, to avoid an
+import cycle) as `drorbServe`'s exact body — the h2c prior-knowledge fork to the real
+H2 engine, else the full 14-stage HTTP/1.1 fold. This closes that identity where
+`drorbServe` is in scope, so `serveFlatFull_refines` (byte-identity to `deployedServeRef`)
+transfers to `drorbServe`. -/
+theorem deployedServeRef_eq_drorbServe (input : ByteArray) :
+    Datapath.ServeFlatFull.deployedServeRef input = drorbServe input := by
+  unfold Datapath.ServeFlatFull.deployedServeRef drorbServe
+  by_cases h : Reactor.Ingress.hasH2Preface input.toList
+  · simp only [h, if_true]
+  · simp only [h, if_false, Bool.false_eq_true]
+    rw [Reactor.Deploy.deployStepFull2_serves]
+
+/-- **THE ASSEMBLED FULL FLAT SERVE IS BYTE-IDENTICAL TO THE DEPLOYED `drorbServe`.**
+For EVERY input, the `DRORB_SPAN=3` serve (`Datapath.ServeFlatFull.serveFlatFull` — the
+REAL deployed 14-stage pipeline rendered through the flat egress serializer) produces the
+IDENTICAL bytes to the deployed default `drorbServe`. So `DRORB_SPAN=3` serves the same
+bytes as the deployed serve on every real request (h2c fork AND the full HTTP/1.1 fold) —
+a deployed-representative flat serve, not the echo exemplar. Chains
+`Datapath.ServeFlatFull.serveFlatFull_refines` (flat egress = deployed serialize) with
+`deployedServeRef_eq_drorbServe`. -/
+theorem serveFlatFull_eq_drorbServe (input : ByteArray) :
+    Datapath.ServeFlatFull.serveFlatFull input = drorbServe input := by
+  rw [Datapath.ServeFlatFull.serveFlatFull_refines, deployedServeRef_eq_drorbServe]
+
+/-- **THE FULL POLY SERVE IS BYTE-IDENTICAL TO THE DEPLOYED `drorbServe`.** For EVERY
+input, the `DRORB_SPAN=7` serve (`Datapath.ServePolyFull.servePolyFull` — the REAL
+deployed 14-stage routed response rendered through the POLYMORPHIC egress fold:
+`HdrSeq.foldPush` header block over the flat `HdrBlock` + `ByteArray` body) produces the
+IDENTICAL bytes to the deployed default `drorbServe` (h2c fork AND the full HTTP/1.1 fold).
+Chains `Datapath.ServePolyFull.servePolyFull_refines` (poly egress = deployed serialize)
+with `deployedServeRef_eq_drorbServe`. -/
+theorem servePolyFull_eq_drorbServe (input : ByteArray) :
+    Datapath.ServePolyFull.servePolyFull input = drorbServe input := by
+  rw [Datapath.ServePolyFull.servePolyFull_refines, deployedServeRef_eq_drorbServe]
+
+/-- **THE RUNTIME-DENSE FULL SERVE IS BYTE-IDENTICAL TO THE DEPLOYED `drorbServe`.**
+For EVERY input, the `DRORB_SPAN=18` serve (`Datapath.ServeDenseReal.serveDenseReal` —
+the deployed serve whose `/bulk` arm emits the DENSE head + DENSE 1 MiB `Array` body,
+no per-byte `List` cons: the body-cliff fix) produces the IDENTICAL bytes to the
+deployed default `drorbServe` (h2c fork, the `/bulk` dense arm, AND the off-arm List
+serve). Chains `Datapath.ServeDenseReal.serveDenseReal_refines` (dense = deployedServeRef)
+with `deployedServeRef_eq_drorbServe`. -/
+theorem serveDenseReal_eq_drorbServe (input : ByteArray) :
+    Datapath.ServeDenseReal.serveDenseReal input = drorbServe input := by
+  rw [Datapath.ServeDenseReal.serveDenseReal_refines, deployedServeRef_eq_drorbServe]
+
+#print axioms serveDenseReal_eq_drorbServe
 
 /-- **The metered serve seam** (`drorb_serve_metered`). The same deployed serve as
 `drorb_serve`, but the native host also supplies the accepted peer address (`peer`,
@@ -343,6 +583,51 @@ def drorbServeCfg (input : ByteArray) : ByteArray :=
     ByteArray.mk served.toArray
   | _ => ByteArray.empty
 
+/-- **`drorb_serve_proxy_stream_head` — the CL-trust streaming head seam.** The native
+io_uring proxy, on the recv that completes the upstream response HEAD for a NON-GZIP
+passthrough reply with a fixed `Content-Length`, computes the transformed response head
+WITHOUT the body and emits it before any body byte arrives; the body then streams straight
+through, RSS-bounded.
+
+Input framing: `reqLen(4 BE) :: request :: headLen(4 BE) :: upstreamHead :: bodyLen(4 BE)`,
+where `request` is the ORIGINAL client request bytes (`ctxOf` reads its `Origin` /
+`Accept-Encoding`), `upstreamHead` is the raw upstream reply bytes THROUGH the terminal
+`\r\n\r\n`, and `bodyLen` is the upstream-declared `Content-Length`. Output is the
+transformed head bytes (`Reactor.ServeStep.proxyStreamHead`) — OR **EMPTY** when the request
+accepts gzip.
+
+The gzip gate is decided HERE by the PROVEN `Reactor.Stage.Gzip.acceptsGzip` over the exact
+`ctxOf` context the transform keys on — so the host cannot mis-gate. An empty reply means
+"this reply re-encodes (gzip); do NOT stream — fall back to the buffered
+`drorb_serve_resume` path" (that head depends on the body bytes; it needs chunked TE, a
+different residual, and stays open honestly).
+
+Correctness for the non-empty (non-gzip) case (`Reactor.ServeStep.proxyRespHead_factors` /
+`proxyStream_bytes_faithful`): with a clean head, `proxyStreamHead req upHead bodyLen ++ body`
+is byte-identical to the buffered `proxyRespTransform req (upHead ++ body)` — the SAME bytes
+`drorb_serve_resume` produces, computed without ever holding the body whole. The host still
+gates to the fixed-`Content-Length` framing (a chunked upstream stays buffered). -/
+@[export drorb_serve_proxy_stream_head]
+def drorbServeProxyStreamHead (input : ByteArray) : ByteArray :=
+  match input.toList with
+  | r0 :: r1 :: r2 :: r3 :: rest =>
+    let reqLen := be32 r0 r1 r2 r3
+    let req := rest.take reqLen
+    match rest.drop reqLen with
+    | h0 :: h1 :: h2 :: h3 :: rest3 =>
+      let headLen := be32 h0 h1 h2 h3
+      let upHead := rest3.take headLen
+      match rest3.drop headLen with
+      | l0 :: l1 :: l2 :: l3 :: _ =>
+        -- The PROVEN gzip gate: only the non-gzip head factors through body length.
+        if Reactor.Stage.Gzip.acceptsGzip (Reactor.Deploy.ctxOf req).req then
+          ByteArray.empty
+        else
+          ByteArray.mk (Reactor.ServeStep.proxyStreamHead req upHead (be32 l0 l1 l2 l3)).toArray
+      | _ => ByteArray.empty
+    | _ => ByteArray.empty
+  | _ => ByteArray.empty
+
 /-- **The config-route serve honours the parsed route table.** For a config that
 declares routes, `serveUnderConfig` serves through `servePipelineOf` of the denoted
 deployment — whose route table is exactly the config's routes
@@ -385,6 +670,502 @@ theorem serveUnderConfig_default (pc : Dsl.Config.ParsedConfig) (req : Proto.Byt
     serveUnderConfig pc req = Reactor.Deploy.servePipelineFull2 req := by
   simp only [serveUnderConfig, hr, hv]
 
+/-! ## Braid 0 — the METERED config-route serve (`drorb_serve_metered_cfg`)
+
+The default RUNNING serve is the metered fold (`drorb_serve_metered`), so to make the
+running serve config-path-driven — the enabler for config-gated middleware braids —
+the metered serve must ALSO flow through a deployment config. `serveUnderConfigMetered`
+is the metered mirror of `serveUnderConfig`: it folds `servePipelineOfMetered` (the
+connection-aware IP-filter + rate gates in scope) over the config's deployment. With
+neither routes nor vhosts (the DEFAULT — no `DRORB_CONFIG`) it serves
+`servePipelineOfMetered defaultDeployment`, which is byte-for-byte
+`servePipelineFull2Metered` (`Reactor.Deploy.servePipelineOfMetered_default`, `rfl`) —
+so the default metered conformance is untouched, and the running default serve is now
+a fold over `defaultDeployment.middleware.chain`. A future middleware braid is a
+config-gated append to that chain, not shared-file surgery. -/
+
+/-- Serve one request through the METERED gate chain under a parsed config's route /
+virtual-host dimension (or the byte-identical default when the config declares
+neither). The metered mirror of `serveUnderConfig`. -/
+def serveUnderConfigMetered (pc : Dsl.Config.ParsedConfig)
+    (clientIp : Proto.Bytes) (connSeq : Nat) (req : Proto.Bytes) : Proto.Bytes :=
+  match pc.routes, pc.vitems with
+  | [], [] =>
+    Reactor.Deploy.servePipelineOfMetered Reactor.Deploy.defaultDeployment clientIp connSeq req
+  | _,  _  =>
+    Reactor.Deploy.servePipelineOfMetered
+      (Dsl.Config.denoteOn Reactor.Deploy.defaultDeployment pc) clientIp connSeq req
+
+/-- **No regression (metered).** A config declaring neither flat routes nor virtual
+hosts serves the metered fold byte-identically to the deployed default
+(`servePipelineFull2Metered` = `servePipelineOfMetered defaultDeployment`, `rfl`). -/
+theorem serveUnderConfigMetered_default (pc : Dsl.Config.ParsedConfig)
+    (clientIp : Proto.Bytes) (connSeq : Nat) (req : Proto.Bytes)
+    (hr : pc.routes = []) (hv : pc.vitems = []) :
+    serveUnderConfigMetered pc clientIp connSeq req
+      = Reactor.Deploy.servePipelineFull2Metered clientIp connSeq req := by
+  simp only [serveUnderConfigMetered, hr, hv, Reactor.Deploy.servePipelineOfMetered_default]
+
+/-! ## The CONFIG-DRIVEN, DEFAULT-ON middleware serve (`serveUnderPolicyMetered`)
+
+`serveUnderConfigMetered` folds the CONFIG's route table but always over the frozen
+`deployStagesFull2` middleware chain — a text config can never enforce a middleware policy.
+`serveUnderPolicyMetered` is the operability upgrade: it folds `Reactor.Deploy.deployStagesFull4
+policy` (the config-driven method-`405`/body-`413`/Host-`421` gates from round 1 PLUS the round-2
+conn-`503`/stick-`429`/slowloris-`408` gates and the CORS `Access-Control-Allow-Origin` transform,
+prepended to `deployStagesFull2`) over the config's route table. With `Reactor.Deploy.emptyMwPolicy`
+the seven policy stages are transparent and the fold is byte-identical to `serveUnderConfigMetered`
+(`serveUnderPolicyMetered_empty_eq`); so the DEFAULT serve (no policy directive) is byte-for-byte
+today's, and an operator that sets a policy (a real max-body-size / allowed-methods /
+allowed-hosts) enforces it on EVERY request with NO per-request test header. -/
+
+/-- Serve one request through the METERED gate chain under a parsed config's route dimension AND
+a middleware `policy` (the config-driven `deployStagesFull3 policy` chain). The policy mirror of
+`serveUnderConfigMetered`. -/
+def serveUnderPolicyMetered (pc : Dsl.Config.ParsedConfig) (policy : Reactor.Deploy.MwPolicy)
+    (clientIp : Proto.Bytes) (connSeq : Nat) (req : Proto.Bytes) : Proto.Bytes :=
+  match pc.routes, pc.vitems with
+  | [], [] =>
+    Reactor.Deploy.servePipelineOfMetered
+      (Reactor.Deploy.policyDeploymentOn Reactor.Deploy.defaultDeployment policy) clientIp connSeq req
+  | _,  _  =>
+    Reactor.Deploy.servePipelineOfMetered
+      (Reactor.Deploy.policyDeploymentOn
+        (Dsl.Config.denoteOn Reactor.Deploy.defaultDeployment pc) policy) clientIp connSeq req
+
+/-- **No-regression — the EMPTY policy is byte-identical to the frozen-middleware serve.** For
+ANY parsed config, serving under `emptyMwPolicy` emits the exact same bytes as
+`serveUnderConfigMetered` (the three policy gates fold transparently, `deployStagesFull3_empty_eq`).
+So a config declaring no middleware policy is byte-for-byte the pre-existing metered config serve —
+the deployed conformance (73/0) is preserved, and the default serve is untouched. -/
+theorem serveUnderPolicyMetered_empty_eq (pc : Dsl.Config.ParsedConfig)
+    (clientIp : Proto.Bytes) (connSeq : Nat) (req : Proto.Bytes) :
+    serveUnderPolicyMetered pc Reactor.Deploy.emptyMwPolicy clientIp connSeq req
+      = serveUnderConfigMetered pc clientIp connSeq req := by
+  rcases hr : pc.routes with _ | _ <;> rcases hv : pc.vitems with _ | _ <;>
+    simp only [serveUnderPolicyMetered, serveUnderConfigMetered, hr, hv] <;>
+    exact Reactor.Deploy.servePipelineOfMetered_policyOn_empty_eq _ rfl _ _ _
+
+/-- **No-regression at the default (metered) — empty policy + routeless config.** A config with no
+routes, no vhosts, and no middleware policy serves byte-for-byte `servePipelineFull2Metered`. -/
+theorem serveUnderPolicyMetered_default (pc : Dsl.Config.ParsedConfig)
+    (clientIp : Proto.Bytes) (connSeq : Nat) (req : Proto.Bytes)
+    (hr : pc.routes = []) (hv : pc.vitems = []) :
+    serveUnderPolicyMetered pc Reactor.Deploy.emptyMwPolicy clientIp connSeq req
+      = Reactor.Deploy.servePipelineFull2Metered clientIp connSeq req := by
+  rw [serveUnderPolicyMetered_empty_eq, serveUnderConfigMetered_default pc clientIp connSeq req hr hv]
+
+/-- **`drorb_serve_metered_cfg` — the CONFIG-DRIVEN, DEFAULT-ON metered serve.** The seam the
+running default serve crosses. Args mirror `drorb_serve_metered` (`peer` family-tagged
+bit-encoded address, `seq` per-connection index) but `input` is cfg-FRAMED:
+`cfgLen(4 BE) :: configBytes :: requestBytes`.
+
+The config text drives BOTH dimensions: `Dsl.Config.parseChars` yields the route table, and
+`Reactor.Deploy.parsePolicy` (a total, independent scan) yields the MIDDLEWARE POLICY
+(`max-body-size`/`allow-method`/`allow-host`). The request is served through
+`serveUnderPolicyMetered pc policy` — the connection-aware gate chain over the CONFIG's route
+table WITH the config-driven method-`405`/body-`413`/Host-`421` gates enforced on EVERY request
+(no per-request test header). When the config declares NO policy directive the policy is
+`emptyMwPolicy`, so the three gates fold transparently and the serve is byte-for-byte the old
+`serveUnderConfigMetered` (`serveUnderPolicyMetered_empty_eq`); a routeless, policy-free config
+(the DEFAULT, `cfgLen = 0`) is byte-for-byte `servePipelineFull2Metered`
+(`serveUnderPolicyMetered_default`). On a non-UTF-8 config there is no policy — the default serve.
+Total. -/
+@[export drorb_serve_metered_cfg]
+def drorbServeMeteredCfg (peer : ByteArray) (seq : UInt64) (input : ByteArray) : ByteArray :=
+  match input.toList with
+  | b0 :: b1 :: b2 :: b3 :: rest =>
+    let cfgLen := be32 b0 b1 b2 b3
+    let cfgBytes := rest.take cfgLen
+    let reqBytes := rest.drop cfgLen
+    let served :=
+      match String.fromUTF8? (ByteArray.mk cfgBytes.toArray) with
+      | none   =>
+        Reactor.Deploy.servePipelineOfMetered Reactor.Deploy.defaultDeployment
+          peer.toList seq.toNat reqBytes
+      | some s =>
+        let policy := Reactor.Deploy.parsePolicy s.data
+        match Dsl.Config.parseChars s.data with
+        | none    =>
+          Reactor.Deploy.servePipelineOfMetered
+            (Reactor.Deploy.policyDeploymentOn Reactor.Deploy.defaultDeployment policy)
+            peer.toList seq.toNat reqBytes
+        | some pc => serveUnderPolicyMetered pc policy peer.toList seq.toNat reqBytes
+    ByteArray.mk served.toArray
+  | _ => ByteArray.empty
+
+/-! ## Braid — the METERED BRAIDED serve (`drorb_serve_metered_braided`)
+
+The metered serve above (`drorb_serve_metered_cfg`) folds over the CONFIG's route table
+but always over the frozen `deployStagesFull2` middleware chain (`denoteOn` leaves
+`base.middleware` untouched), so a TEXT config can never select a different middleware
+fold — the proven-but-inert braid stages (`Reactor.Deploy.braidedChain`) are unreachable
+through it. This seam is the production path for the braid: it serves the METERED fold
+over `Reactor.Deploy.braidedDeployment` — `defaultDeployment` with its middleware chain
+replaced by `braidedChain` (the forward-auth gate + request-id echo at the head). The host
+crosses this seam INSTEAD of `drorb_serve_metered_cfg` when the deployment is braid-marked
+(`DRORB_BRAID`); the default (unmarked) path is untouched, and `defaultDeployment`'s
+`servePipelineOfMetered_default` anchor is intact.
+
+The composition is PROVEN (`Reactor.Deploy`): when neither the `x-forward-auth` marker nor
+an incoming `x-request-id` is present the metered braided serve is byte-identical to
+`servePipelineFull2Metered` (`servePipelineOfMetered_braided_off_eq`); a marked request
+short-circuits to the genuine forward-auth `401` (`servePipelineOfMetered_braided_fa_denies_status`),
+and an incoming id is echoed verbatim (`servePipelineOfMetered_braided_rid_echoes`). -/
+
+/-- **`drorb_serve_metered_braided` — the METERED serve over the braid-5 deployment.**
+Same ABI as `drorb_serve_metered` (`peer` family-tagged bit-encoded address, `seq`
+per-connection index, `input` the raw HTTP/1.1 request), but the fold is
+`Reactor.Deploy.servePipelineOfMetered Reactor.Deploy.braidedDeployment5` — the
+connection-aware IP-filter/rate gate chain WITH SIXTEEN proven-but-inert stages composed
+at the head: the §8 forward-auth gate + request-id echo, the §8h connection-cap (503) /
+stick-table (429) / slowloris (408) gates + custom-error-page + compress transforms,
+the §8j conditional-request (304) gate + pre-compressed-variant `Vary` +
+directory-listing transforms, the §8l redirect (308) gate + CORS-ACAO + security-header
+transforms, and the §8n NET-NEW method-filter (405) / body-size (413) / Host-allowlist
+(421) gates — behaviour absent from BOTH the always-on `deployStagesFull2` list AND the
+ingress FSM (each §8n composition proof a `Reactor.BraidCalculus` `braid_gate` one-liner).
+A request with no braid markers is byte-for-byte `drorb_serve_metered`
+(`servePipelineOfMetered_braided5_off_eq`); each marker FIRES its real library decision
+(`servePipelineOfMetered_braided5_*`). Total. -/
+@[export drorb_serve_metered_braided]
+def drorbServeMeteredBraided (peer : ByteArray) (seq : UInt64) (input : ByteArray) : ByteArray :=
+  ByteArray.mk
+    (Reactor.Deploy.servePipelineOfMetered Reactor.Deploy.braidedDeployment5
+      peer.toList seq.toNat input.toList).toArray
+
+/-- **`drorb_serve_braided` — the NON-metered braided serve (the `entry`-table twin).**
+The h2c-forking `drorb_serve` shape, but the HTTP/1.1 branch runs
+`Reactor.Deploy.servePipelineBraided` (the braided chain over `ctxOf`). Byte-identical to
+`drorb_serve` on unmarked traffic (`Reactor.Deploy.servePipelineBraided_off_eq`); the
+metered production path uses `drorb_serve_metered_braided`. -/
+@[export drorb_serve_braided]
+def drorbServeBraided (input : ByteArray) : ByteArray :=
+  let bytes := input.toList
+  if Reactor.Ingress.hasH2Preface bytes then
+    ByteArray.mk (Reactor.H2Ingress.serveH2c bytes).toArray
+  else
+    ByteArray.mk (Reactor.Deploy.servePipelineBraided5 bytes).toArray
+
+/-! ## The RFC-conformant metered serves — the DEPLOYED DEFAULT
+
+The metered serves above (`drorb_serve_metered`, `drorb_serve_metered_cfg`,
+`drorb_serve_metered_braided`) fire the connection-aware IP-filter / rate gates but
+serve the RAW deployed response — they do NOT carry the RFC 7230/7231 request-edge
+validation (C1/C2/B2/G1/C3) or the response-edge `Date` (F1) / `HEAD`-strip (B1) the
+conformance probe requires. The non-metered `drorb_serve_conformant` (DRORB_SPAN=19)
+adds exactly those stages but wraps the NON-metered `drorbServe`, so it BYPASSES the
+gates. These three exports close both edges at once: each wraps its metered fold with
+the SAME proven `Reactor.ServeConformant.conformantServe` stages, so the deployed
+default serves EVERY request through validation → the metered fold (the IP-filter /
+rate gates in scope) → `Date` / `HEAD`-strip. The inner metered fold is UNCHANGED
+(`drorbServeMetered` &c.); only the RFC edges are added. Every conformance property
+(`conformant_rejects_missingHost`, `conformant_date_present_accept`,
+`conformant_head_no_body`) is parametric over the inner serve, so it holds verbatim
+for these metered inners — instantiated non-vacuously below. -/
+
+/-- **`drorb_serve_metered_conformant`** — the RFC-conformant DEFAULT metered serve.
+`conformantServe` wrapped around the plain metered fold `drorbServeMetered peer seq`:
+validation (C1/C2/B2/G1/C3) → the metered IP-filter/rate gates → `Date` (F1) /
+`HEAD`-strip (B1). Same `(peer, seq, input)` ABI as `drorb_serve_metered`; `input` is
+the raw HTTP/1.1 request. -/
+@[export drorb_serve_metered_conformant]
+def drorbServeMeteredConformant (peer : ByteArray) (seq : UInt64) (input : ByteArray) : ByteArray :=
+  Reactor.ServeConformant.conformantServe (fun i => drorbServeMetered peer seq i) input
+
+/-- **`drorb_serve_metered_cfg_conformant`** — the RFC-conformant DEFAULT config-driven
+metered serve (the seam the running Linux/io_uring default crosses). `input` is
+cfg-FRAMED `cfgLen(4 BE) :: config :: request`; the wrapper runs the conformance stages
+over the UNFRAMED request (so the validation gate and `HEAD` detection key on the real
+request, not the frame header) and RE-FRAMES the (possibly absolute-form-normalized)
+request with the SAME 4-byte cfgLen prefix + config for the inner `drorbServeMeteredCfg
+peer seq` — so the config route table AND the metered gates are untouched, only the RFC
+edges are added. With an empty config (`cfgLen = 0`, the default) the inner fold is
+byte-identical to `drorbServeMetered` (`servePipelineOfMetered_default`). -/
+@[export drorb_serve_metered_cfg_conformant]
+def drorbServeMeteredCfgConformant (peer : ByteArray) (seq : UInt64) (input : ByteArray) : ByteArray :=
+  match input.toList with
+  | b0 :: b1 :: b2 :: b3 :: rest =>
+    let cfgLen  := be32 b0 b1 b2 b3
+    let cfgHead := b0 :: b1 :: b2 :: b3 :: rest.take cfgLen
+    let reqBs   := rest.drop cfgLen
+    Reactor.ServeConformant.conformantServe
+      (fun req => drorbServeMeteredCfg peer seq (ByteArray.mk (cfgHead ++ req.toList).toArray))
+      (ByteArray.mk reqBs.toArray)
+  | _ => ByteArray.empty
+
+/-- **`drorb_serve_metered_braided_conformant`** — the RFC-conformant metered BRAIDED
+serve (opt-in, `DRORB_BRAID`). `conformantServe` wrapped around `drorbServeMeteredBraided
+peer seq` (raw request `input`), so a braided deployment is ALSO RFC-conformant:
+validation → the braided metered fold (forward-auth / request-id echo + the gates) →
+`Date` / `HEAD`-strip. -/
+@[export drorb_serve_metered_braided_conformant]
+def drorbServeMeteredBraidedConformant (peer : ByteArray) (seq : UInt64) (input : ByteArray) : ByteArray :=
+  Reactor.ServeConformant.conformantServe (fun i => drorbServeMeteredBraided peer seq i) input
+
+/-- **B1, on the DEPLOYED metered-conformant serve.** Instantiating the parametric,
+non-vacuous `conformant_head_no_body` at the plain metered inner: after the wrapper's
+`HEAD`-strip the response carries NO body octets, for ANY request bytes. -/
+theorem meteredConformant_head_no_body (peer : ByteArray) (seq : UInt64) (input : ByteArray) :
+    Reactor.ServeConformant.afterBlank
+      (Reactor.ServeConformant.stripBody
+        (Reactor.ServeConformant.respBytesRaw (fun i => drorbServeMetered peer seq i) input)) = [] :=
+  Reactor.ServeConformant.conformant_head_no_body _ input
+
+/-- **C1, on the DEPLOYED metered-conformant serve.** Instantiating the parametric,
+non-vacuous `conformant_rejects_missingHost` (a REAL missing-Host request, pinned by the
+request serializer round-trip) at the plain metered inner: the wrapper rejects it as
+`serialize (addDate badRequestResp)` — a `400` — WITHOUT consulting the metered fold. -/
+theorem meteredConformant_rejects_missingHost (peer : ByteArray) (seq : UInt64) :
+    Reactor.ServeConformant.respBytesRaw (fun i => drorbServeMetered peer seq i)
+        Reactor.ServeConformant.missingHostInput
+      = Reactor.serialize (Reactor.ServeConformant.addDate
+          Reactor.Stage.RequestValidation.badRequestResp) :=
+  Reactor.ServeConformant.conformant_rejects_missingHost _
+
+#print axioms meteredConformant_head_no_body
+#print axioms meteredConformant_rejects_missingHost
+
+/-! ## The DENSE metered-conformant DEFAULT — fold the `/bulk` body-cliff fix INTO the
+deployed metered-conformant default.
+
+The metered-conformant default above (`drorbServeMeteredConformant`) wraps the plain
+metered fold `drorbServeMetered peer seq`, whose `/bulk` (1 MiB) arm materialises the body
+as a `List UInt8` cons-spine (the body-cliff). `Datapath.ServeDenseReal.serveDenseReal`
+fixed that cliff for the NON-metered serve (`= drorbServe`, `DRORB_SPAN=18`), but it does
+not carry the connection-aware IP-filter/rate gates the metered default runs. This section
+folds the dense `/bulk` arm INTO the metered fold and wraps it conformant, so the deployed
+DEFAULT serve is RFC-conformant AND dense on the large-body arm WITHOUT dropping the gates.
+
+The load-bearing bridge (`Reactor.Deploy.servePipelineFull2Metered_bulk_eq`): on a plain
+`GET /bulk` where the IP-filter ADMITS the peer and the rate bucket ADMITS the sequence,
+the metered fold emits the SAME bytes as the non-metered `servePipelineFull2` — the metered
+attrs (peer/seq) only feed the two gates, which are transparent when they pass. So the dense
+head+body (already proven `= servePipelineFull2` on this arm by
+`Datapath.ServeDenseReal.denseArm_eq`) is byte-identical to the metered fold there too. -/
+
+namespace Reactor.Deploy
+
+open Proto (Bytes)
+open Reactor.Pipeline (Ctx StageStep Stage runPipeline ResponseBuilder)
+
+/-- **The IP-filter gate passes on an admitted address.** When the deployed admission
+decision admits the context's client address (`deployAdmits (ctxAddr c) = true`), the real
+`ipfilterStage` request phase `.continue`s unchanged — the admitted-arm analogue of the
+metered default's no-attr `ipfilterStage_pass'`, for a ctx that DOES carry an accept peer. -/
+theorem ipfilterStage_pass_admit (c : Ctx)
+    (h : Reactor.Stage.IpFilter.deployAdmits (Reactor.Stage.IpFilter.ctxAddr c) = true) :
+    Reactor.Stage.IpFilter.ipfilterStage.onRequest c = .continue c := by
+  simp only [Reactor.Stage.IpFilter.ipfilterStage, h]
+
+/-- **`full2_reduces_unknown_pass` — the admitted-arm reduction, parametric over the
+IP-filter pass witness.** Identical to `full2_reduces_unknown`, but the IP-filter step is
+supplied as a hypothesis (`hippass : ipfilterStage.onRequest c = .continue c`) rather than
+derived from a missing `client.ip` attr — so it fires for a metered ctx (accept peer present
+and ADMITTED) as well as the bare non-metered ctx. Same conclusion: the fold collapses to the
+five inner response transforms threaded through the outer deploy header rewrite. -/
+theorem full2_reduces_unknown_pass (c : Ctx)
+    (hadmin : isAdminPath c.req = false)
+    (hpriv : Reactor.Stage.BasicAuth.isProtectedPath c.req = false)
+    (hippass : Reactor.Stage.IpFilter.ipfilterStage.onRequest c = .continue c)
+    (hrate : Reactor.Stage.Rate.admits c = true)
+    (hredir : ¬ (c.req.target = Reactor.Stage.Redirect.ruleTarget))
+    (htrav : targetEscapes c.req = false)
+    (hpol : policyReserved c.req = false) :
+    runPipeline deployStagesFull2 appHandler c
+      = (runPipeline full2InnerStages appHandler c).mapResp
+          (Reactor.Lifecycle.rewriteResp
+            (deployProg (deployPlan (deploySubs c.input)) c.input)) := by
+  show runPipeline (jwtAdminStage :: Reactor.Stage.BasicAuth.basicStage
+      :: Reactor.Stage.IpFilter.ipfilterStage :: Reactor.Stage.Rate.rateStage
+      :: cacheEmptyStage :: Reactor.Stage.Redirect.redirectStage :: traversalStage
+      :: policyStage :: headerRewriteStage :: full2InnerStages) appHandler c = _
+  rw [Reactor.Pipeline.pipeline_stage_effect jwtAdminStage _ appHandler c c (jwtAdminStage_pass c hadmin),
+      Reactor.Pipeline.pipeline_stage_effect Reactor.Stage.BasicAuth.basicStage _ appHandler c c
+        (Reactor.Stage.BasicAuth.basicStage_pass c hpriv),
+      Reactor.Pipeline.pipeline_stage_effect Reactor.Stage.IpFilter.ipfilterStage _ appHandler c c
+        hippass,
+      Reactor.Pipeline.pipeline_stage_effect Reactor.Stage.Rate.rateStage _ appHandler c c
+        (Reactor.Stage.Rate.rateStage_onReq_continue c hrate),
+      Reactor.Pipeline.pipeline_stage_effect cacheEmptyStage _ appHandler c c (cacheEmptyStage_pass c),
+      Reactor.Pipeline.pipeline_stage_effect Reactor.Stage.Redirect.redirectStage _ appHandler c c
+        (redirectStage_pass c hredir),
+      Reactor.Pipeline.pipeline_stage_effect traversalStage _ appHandler c c (traversalStage_pass c htrav),
+      Reactor.Pipeline.pipeline_stage_effect policyStage _ appHandler c c (policyStage_pass_unknown c hpol),
+      Reactor.Pipeline.pipeline_stage_effect headerRewriteStage _ appHandler c c rfl]
+  simp only [jwtAdminStage, Reactor.Stage.BasicAuth.basicStage,
+    Reactor.Stage.IpFilter.ipfilterStage, Reactor.Stage.Rate.rateStage, cacheEmptyStage,
+    Reactor.Stage.Cache.mkStage, Reactor.Stage.Redirect.redirectStage, traversalStage,
+    policyStage, headerRewriteStage]
+
+/-- **The inner response-transform fold is insensitive to the metered attrs.** The five
+`full2InnerStages` (cors/gzip/htmlrewrite/security/header) all pass the request phase
+(`onRequest c = .continue c`) and their response phase reads only `c.req`/`c.input` — never
+`c.attrs`. Since `ctxOfMetered peer seq input` differs from `ctxOf input` ONLY in `.attrs`,
+the inner fold is identical over the two. -/
+theorem innerFold_ctxOfMetered (peer : Bytes) (seq : Nat) (input : Bytes) :
+    runPipeline full2InnerStages appHandler (ctxOfMetered peer seq input)
+      = runPipeline full2InnerStages appHandler (ctxOf input) := rfl
+
+/-- **The metered bridge on the `/bulk` arm.** On a plain `GET /bulk` request whose gates
+all pass — the `BulkArm` decidable guard on the bare ctx PLUS the IP-filter ADMITTING the
+metered peer and the rate bucket ADMITTING the metered sequence — the metered fold
+`servePipelineFull2Metered peer seq input` emits the SAME bytes as the non-metered
+`servePipelineFull2 input`. Both reduce (via `full2_reduces_unknown_pass` / the bare
+`full2_reduces_unknown`) to the inner transform fold under the outer deploy rewrite; the
+metered attrs feed only the two now-transparent gates (`innerFold_ctxOfMetered`). -/
+theorem servePipelineFull2Metered_bulk_eq (peer : Bytes) (seq : Nat) (input : Bytes)
+    (harm : Datapath.ServeDenseReal.BulkArm (ctxOf input))
+    (hip_m : Reactor.Stage.IpFilter.deployAdmits
+        (Reactor.Stage.IpFilter.ctxAddr (ctxOfMetered peer seq input)) = true)
+    (hrate_m : Reactor.Stage.Rate.admits (ctxOfMetered peer seq input) = true) :
+    servePipelineFull2Metered peer seq input = servePipelineFull2 input := by
+  obtain ⟨hadmin, hpriv, hrate0, hredir, htrav, hpol, _hgz, _hcors, _hseg, _hna, _hnb⟩ := harm
+  -- `ctxOfMetered` only sets `.attrs`, so its `.input` is defeq the bare ctx's `.input`; the
+  -- outer deploy-rewrite arg (`deploySubs c.input`) is thus the same for both.
+  have hin : (ctxOfMetered peer seq input).input = (ctxOf input).input := rfl
+  have key : runPipeline deployStagesFull2 appHandler (ctxOfMetered peer seq input)
+           = runPipeline deployStagesFull2 appHandler (ctxOf input) := by
+    rw [full2_reduces_unknown_pass (ctxOfMetered peer seq input) hadmin hpriv
+          (ipfilterStage_pass_admit _ hip_m) hrate_m hredir htrav hpol,
+        full2_reduces_unknown (ctxOf input) hadmin hpriv rfl hrate0 hredir htrav hpol,
+        innerFold_ctxOfMetered peer seq input, hin]
+  unfold servePipelineFull2Metered servePipelineFull2
+  rw [key]
+
+/-- **The dense-arm guard for the METERED serve.** The bare `/bulk`-arm guard PLUS the two
+metered gate-pass conditions the bridge needs: the IP-filter admits the peer and the rate
+bucket admits the sequence. Decidable (each conjunct is a decidable computation on the small
+request / the encoded peer / the sequence count — never the body). -/
+def BulkArmMetered (peer : Bytes) (seq : Nat) (input : Bytes) : Prop :=
+  Datapath.ServeDenseReal.BulkArm (ctxOf input)
+  ∧ Reactor.Stage.IpFilter.deployAdmits
+      (Reactor.Stage.IpFilter.ctxAddr (ctxOfMetered peer seq input)) = true
+  ∧ Reactor.Stage.Rate.admits (ctxOfMetered peer seq input) = true
+
+instance (peer : Bytes) (seq : Nat) (input : Bytes) : Decidable (BulkArmMetered peer seq input) := by
+  unfold BulkArmMetered; infer_instance
+
+end Reactor.Deploy
+
+/-- **The DENSE metered serve.** The metered fold `drorbServeMetered peer seq`, but on the
+admitted `/bulk` arm (`Reactor.Deploy.BulkArmMetered`) it emits the DENSE head + DENSE 1 MiB
+`Array` body (no per-byte `List` cons — the body-cliff fix), else the deployed metered List
+fold. NOT exported as a default itself; wrapped conformant below. -/
+@[export drorb_serve_metered_dense]
+def drorbServeMeteredDense (peer : ByteArray) (seq : UInt64) (input : ByteArray) : ByteArray :=
+  if Reactor.Deploy.BulkArmMetered peer.toList seq.toNat input.toList then
+    ByteArray.mk (Datapath.ServeDenseReal.denseHeadBytes input.toList).toArray
+      ++ Datapath.ServeDenseFullReal.bulkBodyDense
+  else
+    ByteArray.mk (Reactor.Deploy.servePipelineFull2Metered peer.toList seq.toNat input.toList).toArray
+
+/-- **The dense metered serve is byte-identical to the plain metered serve — for EVERY
+peer/seq/input.** On the off-arm it is `drorbServeMetered` verbatim; on the admitted `/bulk`
+arm the dense head+body is `= servePipelineFull2 input` (`denseArm_eq`) `= servePipelineFull2Metered
+peer seq input` (`servePipelineFull2Metered_bulk_eq`, the gates transparent). So swapping it
+in changes NO served byte AND keeps the metered IP-filter/rate gates. -/
+theorem drorbServeMeteredDense_eq (peer : ByteArray) (seq : UInt64) (input : ByteArray) :
+    drorbServeMeteredDense peer seq input = drorbServeMetered peer seq input := by
+  unfold drorbServeMeteredDense drorbServeMetered
+  by_cases harm : Reactor.Deploy.BulkArmMetered peer.toList seq.toNat input.toList
+  · rw [if_pos harm]
+    obtain ⟨hbulk, hip_m, hrate_m⟩ := harm
+    rw [Datapath.ServeDenseReal.denseArm_eq input hbulk,
+        Reactor.Deploy.servePipelineFull2Metered_bulk_eq peer.toList seq.toNat input.toList
+          hbulk hip_m hrate_m]
+  · rw [if_neg harm]
+
+/-- **`drorb_serve_metered_dense_conformant`** — the RFC-conformant DENSE metered DEFAULT
+serve. `Reactor.ServeConformant.conformantServe` wrapped around `drorbServeMeteredDense peer
+seq`: validation (C1/C2/B2/G1/C3) → the metered IP-filter/rate gates → the `/bulk` dense arm
+(no 1 MiB `List` cons) → `Date` (F1) / `HEAD`-strip (B1). Byte-identical to the deployed
+metered-conformant default (`meteredDenseConformant_eq_meteredConformant`), so it inherits
+every conformance property AND every metered gate — it only removes the body-cliff cons on
+the large-body arm. Same `(peer, seq, input)` ABI as `drorb_serve_metered_conformant`. -/
+@[export drorb_serve_metered_dense_conformant]
+def drorbServeMeteredDenseConformant (peer : ByteArray) (seq : UInt64) (input : ByteArray) : ByteArray :=
+  Reactor.ServeConformant.conformantServe (fun i => drorbServeMeteredDense peer seq i) input
+
+/-- **The dense metered-conformant default IS the deployed metered-conformant default.** The
+inner serves are equal as FUNCTIONS (`drorbServeMeteredDense_eq`, funext), and `conformantServe`
+is a function OF its inner, so wrapping either yields the identical bytes — the conformance
+edges and the metered gates are untouched; only the body-cliff cons is removed on `/bulk`. -/
+theorem meteredDenseConformant_eq_meteredConformant
+    (peer : ByteArray) (seq : UInt64) (input : ByteArray) :
+    drorbServeMeteredDenseConformant peer seq input
+      = drorbServeMeteredConformant peer seq input := by
+  unfold drorbServeMeteredDenseConformant drorbServeMeteredConformant
+  have hf : (fun i => drorbServeMeteredDense peer seq i)
+          = (fun i => drorbServeMetered peer seq i) := by
+    funext i; exact drorbServeMeteredDense_eq peer seq i
+  rw [hf]
+
+/-- **B1, on the DEPLOYED dense metered-conformant serve.** Instantiating the parametric,
+non-vacuous `conformant_head_no_body` at the dense metered inner: after the wrapper's
+`HEAD`-strip the response carries NO body octets, for ANY request bytes. -/
+theorem meteredDenseConformant_head_no_body (peer : ByteArray) (seq : UInt64) (input : ByteArray) :
+    Reactor.ServeConformant.afterBlank
+      (Reactor.ServeConformant.stripBody
+        (Reactor.ServeConformant.respBytesRaw (fun i => drorbServeMeteredDense peer seq i) input)) = [] :=
+  Reactor.ServeConformant.conformant_head_no_body _ input
+
+/-- **C1, on the DEPLOYED dense metered-conformant serve.** Instantiating the parametric,
+non-vacuous `conformant_rejects_missingHost` (a REAL missing-Host request) at the dense
+metered inner: the wrapper rejects it as `serialize (addDate badRequestResp)` — a `400` —
+WITHOUT consulting the dense metered fold. -/
+theorem meteredDenseConformant_rejects_missingHost (peer : ByteArray) (seq : UInt64) :
+    Reactor.ServeConformant.respBytesRaw (fun i => drorbServeMeteredDense peer seq i)
+        Reactor.ServeConformant.missingHostInput
+      = Reactor.serialize (Reactor.ServeConformant.addDate
+          Reactor.Stage.RequestValidation.badRequestResp) :=
+  Reactor.ServeConformant.conformant_rejects_missingHost _
+
+#print axioms drorbServeMeteredDense_eq
+#print axioms meteredDenseConformant_eq_meteredConformant
+#print axioms meteredDenseConformant_head_no_body
+#print axioms meteredDenseConformant_rejects_missingHost
+
+/-! ## The STREAMING response-emit seam — `drorb_serve_stream`
+
+The seams above return the WHOLE response in one `ByteArray`, so the host holds the
+entire response in memory before it writes a byte. This seam is the streaming EMIT
+(roadmap Stage 2): the proven `Reactor.ServeStream.serveChunkList` cuts the deployed
+response into a HEAD chunk followed by bounded body chunks (each `≤` the host-chosen
+chunk size), and the host pulls them ONE AT A TIME by index, writing each to the
+socket and dropping it — so the host never materializes the whole response.
+
+It is a RE-ENTRANT by-index step (the same replay-is-pure discipline as
+`drorb_serve_step`/`resume`): input `idx(4 BE) :: chunkSize(4 BE) :: request`; output
+`flags(1) :: chunkBytes`, where `flags` bit 0 = "more chunks follow" and bit 1 = the
+keep-alive decision. When `idx` is past the last chunk the output is EMPTY (the host's
+loop terminator). The chunk stream reassembles to exactly the batch `drorb_serve`
+response byte-for-byte (`serveChunkList_flatten`), so the streamed delivery is a
+drop-in for the batch serve on the wire — only the host's memory profile changes. -/
+@[export drorb_serve_stream]
+def drorbServeStream (input : ByteArray) : ByteArray :=
+  match input.toList with
+  | i0 :: i1 :: i2 :: i3 :: s0 :: s1 :: s2 :: s3 :: req =>
+    let idx := be32 i0 i1 i2 i3
+    let cfg : Reactor.ServeStream.ServeConfig := { chunk := be32 s0 s1 s2 s3 }
+    let chunks := Reactor.ServeStream.serveChunkList cfg req
+    match chunks[idx]? with
+    | some c =>
+      let more : UInt8 := if idx + 1 < chunks.length then 1 else 0
+      let ka   : UInt8 := if Reactor.ServeStream.keepAliveOf req then 2 else 0
+      ByteArray.mk (((more ||| ka) :: c).toArray)
+    | none => ByteArray.empty
+  | _ => ByteArray.empty
+
+/-- **The streamed chunks are the batch response.** For any request, concatenating the
+body chunks the host pulls out of `drorb_serve_stream` (the head chunk at index 0 then
+the paced body chunks) reproduces the deployed batch serve byte-for-byte — the
+streamed delivery is byte-identical to `drorb_serve`. -/
+theorem drorbServeStream_faithful (cfg : Reactor.ServeStream.ServeConfig) (req : Proto.Bytes) :
+    (Reactor.ServeStream.serveChunkList cfg req).flatten
+      = Reactor.Deploy.servePipelineFull2 req :=
+  Reactor.ServeStream.serveChunkList_flatten cfg req
+
 /-! ## The in-process TLS 1.3 HTTPS front door — `drorb_tls_serve`
 
 The seams above serve PLAINTEXT bytes: the native host reads an HTTP/1.1 request
@@ -424,8 +1205,11 @@ Now wired on this deployed path, over the same proven pieces:
     no SNI fall to the name-agnostic entries.
   * **ALPN** (RFC 7301, `negotiateAlpn_sound`): `serverStep` negotiates the
     application protocol in EncryptedExtensions — the deployment advertises
-    `http/1.1` (`serverAlpn`). (h2-over-TLS is a follow-on: the deployed record
-    layer serves the HTTP/1.1 pipeline; advertising `h2` there is future work.)
+    `h2` then `http/1.1` (`serverAlpn`). When the client negotiates `h2`, the
+    decrypted record stream drives the SAME proven HTTP/2 connection engine the
+    h2c path runs (`H2.Conn.feed`, over `h2Loop`); otherwise the HTTP/1.1
+    pipeline runs over `appLoop`. The negotiated bytes are the proven serve;
+    only the transport binding (ALPN select + record-layer framing) is new.
   * **Session resumption** (RFC 8446 §4.6.1, §4.2.11): `enterApp` issues a
     NewSessionTicket — a stateless sealed ticket carrying the resumption PSK,
     suite, and ALPN — and a later connection presenting it resumes through the
@@ -542,15 +1326,56 @@ partial def appLoop (fd : UInt32) (app : AppConn) (reqBuf : List UInt8) : IO Uni
       else do tcpSend fd reply; appLoop fd app' reqBuf
     | (_, .fatal _, alert) => do tcpSend fd alert; tcpClose fd
 
+/-- The established application phase for an **h2-over-TLS** connection (ALPN
+selected `h2`, RFC 7301 + RFC 9113 §3.3). The decrypted TLS application stream
+carries the HTTP/2 connection preface (RFC 9113 §3.4) followed by frames; each
+opened record's plaintext is fed to the SAME proven HTTP/2 connection engine the
+h2c path drives (`H2.Conn.feed` over `Reactor.H2.h2Huffman` and the deployed
+stage-fold application `Reactor.H2Ingress.h2cHandler`), threading the engine's
+`H2.Conn.ConnState` across records — its `prefaceLeft`/`buf` reassemble a preface
+or frame split across TLS record boundaries. The engine's output frames (server
+SETTINGS preface + SETTINGS ACK + HPACK HEADERS + DATA) are sealed as §5
+application_data records under the send keys and written back encrypted; when the
+engine signals close, the final frames are flushed and the socket closed. Only
+the transport binding is new: the h2 response BYTES are exactly the proven
+`H2.Conn.feed` bytes, the same the h2c serve emits. `fuel`-free structural
+totality comes from `readRecord` returning `none` on EOF/timeout. -/
+partial def h2Loop (fd : UInt32) (app : AppConn) (h2 : H2.Conn.ConnState) : IO Unit := do
+  match ← readRecord fd with
+  | none => tcpClose fd
+  | some (0x14, _) => h2Loop fd app h2   -- a stray CCS (§5): drop
+  | some (_, rec) =>
+    match appStep app rec.toList with
+    | (app', .deliver content, _) =>
+      let (h2', out, close) :=
+        H2.Conn.feed Reactor.H2.h2Huffman Reactor.H2Ingress.h2cHandler h2 content
+      if out.isEmpty then
+        if close then tcpClose fd else h2Loop fd app' h2'
+      else
+        match sealRecordAt app'.txKeys app'.txSeq 0x17 (ByteArray.mk out.toArray) with
+        | some wire => do
+          tcpSend fd wire
+          if close then tcpClose fd
+          else h2Loop fd { app' with txSeq := app'.txSeq + 1 } h2'
+        | none => tcpClose fd
+    | (_, .close, reply) => do tcpSend fd reply; tcpClose fd
+    | (app', .keyUpdated, reply) =>
+      if reply.isEmpty then h2Loop fd app' h2
+      else do tcpSend fd reply; h2Loop fd app' h2
+    | (_, .fatal _, alert) => do tcpSend fd alert; tcpClose fd
+
 /-- Enter the established application phase (RFC 8446 §4.6). Issue a
 NewSessionTicket as the FIRST application-phase record — a stateless, sealed
 ticket for this session's resumption PSK, carrying the connection's suite and
 ALPN (§4.2.10) and, when the deployment opted into 0-RTT (`maxEarly > 0`), the
 `early_data` advertisement — under the server application keys (`ticketKey` is
 derived from the same `seed`, so any later connection to this server opens it).
-When an ACCEPTED 0-RTT phase already delivered a complete HTTP request head
-(`earlyBuf`), answer it in the same flight through the SAME proven `drorbServe`.
-Then run the record layer over `appLoop`. -/
+Then run the record layer for the negotiated ALPN: when `h2` was selected, the
+decrypted stream (any accepted 0-RTT early data first) drives the proven HTTP/2
+engine over `h2Loop`; otherwise, once an ACCEPTED 0-RTT phase already delivered a
+complete HTTP request head (`earlyBuf`) it is answered in the same flight through
+the SAME proven `drorbServe`, then the HTTP/1.1 record layer runs over
+`appLoop`. -/
 partial def enterApp (fd : UInt32) (seed : ByteArray) (maxEarly : Nat)
     (est : Established) (earlyBuf : List UInt8) : IO Unit := do
   let app := mkAppConn est
@@ -565,14 +1390,28 @@ partial def enterApp (fd : UInt32) (seed : ByteArray) (maxEarly : Nat)
       | some w => ({ app with txSeq := app.txSeq + 1 }, w)
       | none => (app, ByteArray.empty)
     | none => (app, ByteArray.empty)
-  let (app, outWire, reqBuf) :=
-    if hasCrlfCrlf earlyBuf then
-      match sealRecordAt app.txKeys app.txSeq 0x17 (drorbServe (ofBytes earlyBuf)) with
-      | some w => ({ app with txSeq := app.txSeq + 1 }, tkWire ++ w, [])
-      | none => (app, tkWire, earlyBuf)
-    else (app, tkWire, earlyBuf)
-  if !outWire.isEmpty then tcpSend fd outWire
-  appLoop fd app reqBuf
+  if est.alpnProto == some alpnH2 then
+    -- h2-over-TLS: feed any accepted 0-RTT early data to the proven H2 engine
+    -- as the first burst, seal its output alongside the ticket, then run the
+    -- record layer over `h2Loop`.
+    let (h2, out, close) :=
+      H2.Conn.feed Reactor.H2.h2Huffman Reactor.H2Ingress.h2cHandler {} earlyBuf
+    let (app, outWire) :=
+      if out.isEmpty then (app, tkWire)
+      else match sealRecordAt app.txKeys app.txSeq 0x17 (ByteArray.mk out.toArray) with
+           | some w => ({ app with txSeq := app.txSeq + 1 }, tkWire ++ w)
+           | none => (app, tkWire)
+    if !outWire.isEmpty then tcpSend fd outWire
+    if close then tcpClose fd else h2Loop fd app h2
+  else
+    let (app, outWire, reqBuf) :=
+      if hasCrlfCrlf earlyBuf then
+        match sealRecordAt app.txKeys app.txSeq 0x17 (drorbServe (ofBytes earlyBuf)) with
+        | some w => ({ app with txSeq := app.txSeq + 1 }, tkWire ++ w, [])
+        | none => (app, tkWire, earlyBuf)
+      else (app, tkWire, earlyBuf)
+    if !outWire.isEmpty then tcpSend fd outWire
+    appLoop fd app reqBuf
 
 /-- The handshake phase: drive `serverStep` over each incoming record until the
 connection is `established`, sending the server flight / HelloRetryRequest /
@@ -652,7 +1491,8 @@ DER) with its 32-byte raw scalar (`ecdsaPriv`) and an RSA-PSS-2048 leaf
 (`rsaN`/`rsaE`/`rsaD`). Run the whole verified TLS 1.3 server on this connection
 in-process — the handshake presents the certificate the proven `chooseCert`
 selects from this pool per the client's `signature_algorithms`, then the record
-layer serves real HTTP through `drorbServe` — and close. The X25519 ephemeral and
+layer serves real HTTP — HTTP/2 through the proven `H2.Conn.feed` engine when
+ALPN negotiated `h2`, else HTTP/1.1 through `drorbServe` — and close. The X25519 ephemeral and
 the ServerHello random are drawn fresh per connection from the OS entropy source,
 so each connection gets its own DHE. Total; any I/O error closes the socket. -/
 @[export drorb_tls_serve]

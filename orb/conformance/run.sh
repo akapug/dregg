@@ -39,6 +39,9 @@ if [ "${SKIP_BUILD:-0}" != "1" ]; then
   # The live reverse-proxy upstream backends the proxy/fabric scenarios forward to.
   # Without these there is no real backend socket and those scenarios stay UNWIRED.
   ( cd crates/dataplane && cargo build --release --example proxy_backend )
+  # The keep-alive HTTP/2 conformance host over the verified engine (the parity
+  # harness's h2spec target). Links libdrorb.a; SKIPs the h2 group if absent.
+  bash conformance/h2c-host/build.sh || echo "note: h2c-host build failed — parity h2 group will SKIP"
 fi
 
 # aioquic client for the QUIC/H3 scenarios (optional; scenarios SKIP without it).
@@ -60,5 +63,15 @@ if command -v python3 >/dev/null 2>&1; then
 fi
 
 echo
-echo "-- driving scenarios --"
-exec python3 "$HERE/driver.py"
+echo "-- driving scenarios (base suite: what is wired into the running serve) --"
+python3 "$HERE/driver.py"
+
+echo
+echo "-- driving scenarios (parity harness: the reference test suites' catalogue) --"
+# The parity harness ports the reference suites' scenario catalogue (PARITY-LEDGER
+# §4) and drives drorb's real binaries so, scenario for scenario, drorb passes iff
+# the reference asserts the same behaviour. It manages its own servers on its own
+# ports, so it runs after the base suite without colliding. h2spec (Homebrew/go)
+# is used for the HTTP/2 conformance group; the group SKIPs cleanly without it.
+export DYLD_LIBRARY_PATH="${DYLD_LIBRARY_PATH:-$HACL_DIST}"
+python3 "$HERE/parity.py"

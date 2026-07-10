@@ -772,4 +772,109 @@ theorem resumeStepWith_proxy (policies : List Proxy.Policy) (mask : Nat)
 #print axioms serveStepWith_proxy_yields
 #print axioms resumeStepWith_proxy
 
+/-! ## The HEAD/BODY-SPLIT proxy resume (the native STREAMING prerequisite)
+
+The proxy resume above (`serveStep_proxy_resume`) feeds the WHOLE upstream reply into
+one continuation (`fun up => .done (proxyRespTransform input up)`): the shell must hand
+the core the entire reply, so a native path buffers the whole body. The streaming spec
+(`Reactor.ServeStream.proxy_emit_refines`) forbids that — it delivers the response as a
+HEAD chunk followed by paced body chunks, the body never buffered whole.
+
+This section adds — ADDITIVELY, alongside the whole-reply resume, which is untouched —
+a head/body-split resume. The transformed proxy reply `proxyRespTransform input upstream`
+is `serialize` of a built `Response` (`proxyBuiltResp`); by the serializer's own framing
+(`Reactor.serialize_framing`) it splits EXACTLY as a core-decided HEAD (`proxyRespHead` —
+status line, header block including the derived `Content-Length`, blank-line separator)
+followed by the transformed BODY (`(proxyBuiltResp …).body`). `proxyStreamResume` takes
+that head and the body streamed as a SEQUENCE of chunks and assembles `head ++ chunks`;
+`proxyStreamResume_faithful` / `proxy_stream_resume_faithful` prove it produces EXACTLY
+the whole-reply resume's bytes on the concatenated reply — the split is faithful, not a
+new behavior.
+
+**Residual (honest).** `proxyRespHead` carries the derived `Content-Length`, which is a
+function of the transformed body length (and the gzip stage genuinely re-encodes the
+body). So the head is byte-computable only once the transformed body length is known —
+this split proves head-FIRST delivery is faithful to the buffered bytes, but not yet
+head-BEFORE-body emission (respond before the body arrives). Narrowing the head to be
+independent of the body (upstream `Content-Length` trust + a body-length-preserving
+transform, or chunked transfer-encoding) is the minimal additional lemma that would
+unlock true zero-buffer early-head streaming — the same deferred obligation
+`Reactor.ServeStream` names as scan-gated early head-emission. -/
+
+/-- **The parsed → transformed proxy `Response`** for an upstream reply — the value
+`proxyRespTransform` re-serializes. Naming it lets the head/body split cut it via the
+serializer's own framing. -/
+def proxyBuiltResp (input upstream : Bytes) : Response :=
+  (runPipeline proxyRespStages (fun _ => parseUpstream upstream)
+    (Reactor.Deploy.ctxOf input)).build
+
+/-- `proxyRespTransform` is exactly `serialize` of the built proxy response. -/
+theorem proxyRespTransform_built (input upstream : Bytes) :
+    proxyRespTransform input upstream = serialize (proxyBuiltResp input upstream) := rfl
+
+/-- **The core-decided response HEAD of a transformed proxy reply** — status line,
+header block (including the derived `Content-Length`), and the blank-line separator:
+everything the serializer emits before the body. This is the head the native streaming
+proxy delivers as one chunk. -/
+def proxyRespHead (input upstream : Bytes) : Bytes :=
+  Reactor.statusLineOf (proxyBuiltResp input upstream) ++ Reactor.crlf
+    ++ Reactor.headerBlockOf (proxyBuiltResp input upstream) ++ Reactor.crlf ++ Reactor.crlf
+
+/-- **The transformed proxy reply splits as head ++ body.** `proxyRespTransform` is
+exactly its core-decided head (`proxyRespHead`) followed by the transformed body — the
+split point the streaming emit cuts at. Definitional (`Reactor.serialize_framing`). -/
+theorem proxyRespTransform_split (input upstream : Bytes) :
+    proxyRespTransform input upstream
+      = proxyRespHead input upstream ++ (proxyBuiltResp input upstream).body := by
+  rw [proxyRespTransform_built]
+  exact Reactor.serialize_framing (proxyBuiltResp input upstream)
+
+/-- **The head/body-split proxy resume.** The native streaming proxy delivers the
+core-decided response HEAD first, then the transformed body as a SEQUENCE of `chunks`
+streamed host-side (never buffered whole in the core). This resume assembles
+`head ++ (the chunks concatenated)` — the streamed proxy response. Total. -/
+def proxyStreamResume (head : Bytes) (chunks : List Bytes) : Step :=
+  .done (head ++ chunks.flatten)
+
+/-- **The split/streamed proxy resume is FAITHFUL to the buffered transform.** When the
+head is the core-decided transformed response head and the streamed body chunks
+concatenate to the transformed body, the head/body-split resume produces EXACTLY
+`proxyRespTransform input upstream` — the whole-reply resume's bytes — byte-for-byte. It
+is proven EQUAL to the buffered path on the concatenated reply (via
+`proxyRespTransform_split`), not a new behavior. Non-vacuous: the head carries the real
+transformed status/headers (HSTS rides `proxyRespStages`), and the chunks are the actual
+transformed body. -/
+theorem proxyStreamResume_faithful (input upstream : Bytes) (chunks : List Bytes)
+    (hchunks : chunks.flatten = (proxyBuiltResp input upstream).body) :
+    proxyStreamResume (proxyRespHead input upstream) chunks
+      = .done (proxyRespTransform input upstream) := by
+  unfold proxyStreamResume
+  rw [hchunks, ← proxyRespTransform_split]
+
+/-- **The streamed resume equals the proven whole-reply proxy resume.** For a proxy
+request whose proven pick finds an eligible backend, feeding the core-decided response
+head + the transformed body streamed as chunks produces the SAME `Step` as the existing
+whole-reply proxy resume (`serveStep_proxy_resume` ⇒ `resumeStep mask input [upstream]`)
+on the concatenated reply. So the head/body split is faithful to the buffered proxy
+program, not a new behavior — the prerequisite a native streaming io_uring proxy needs.
+Non-vacuous: `hpick` forces `id` genuinely up (`serveStep_backend_up`), and `chunks` are
+the real transformed body split. -/
+theorem proxy_stream_resume_faithful (mask : Nat) (input upstream : Bytes) (id : BackendId)
+    (chunks : List Bytes) (h : isApiPath input = true)
+    (hpick : Reactor.ProxyDial.pick mask (stickyKey input) = some id)
+    (hchunks : chunks.flatten = (proxyBuiltResp input upstream).body) :
+    proxyStreamResume (proxyRespHead input upstream) chunks = resumeStep mask input [upstream] := by
+  rw [serveStep_proxy_resume mask input upstream id h hpick]
+  exact proxyStreamResume_faithful input upstream chunks hchunks
+
+-- The split resume with the head and a one-chunk body reassembles the buffered transform.
+example (input upstream : Bytes) :
+    proxyStreamResume (proxyRespHead input upstream) [(proxyBuiltResp input upstream).body]
+      = .done (proxyRespTransform input upstream) :=
+  proxyStreamResume_faithful input upstream [(proxyBuiltResp input upstream).body] (by simp)
+
+#print axioms proxyRespTransform_split
+#print axioms proxyStreamResume_faithful
+#print axioms proxy_stream_resume_faithful
+
 end Reactor.ServeStep

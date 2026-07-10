@@ -7,6 +7,9 @@ import Reactor.Serialize
 import Reactor.Serve
 import Reactor.App
 import Reactor.ProxyServe
+import Reactor.Proxy.Connect
+import Reactor.Proxy.Grpc
+import Reactor.Proxy.Health
 import Reactor.Body
 import Reactor.KeepAlive
 import Reactor.Rate
@@ -58,3 +61,6 @@ import Reactor.Stage.Jwt
 import Reactor.Stage.Gzip
 import Reactor.Stage.HtmlRewrite
 import Reactor.Stage.Header
+import Reactor.ParseFaithful
+import Reactor.SerializeFaithful
+import Reactor.ParseHeadersFaithful
