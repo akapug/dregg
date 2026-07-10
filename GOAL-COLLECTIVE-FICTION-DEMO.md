@@ -77,3 +77,24 @@ attest_narration attests a GIVEN narration (no live model needed to demo the too
 ## NEXT THRUST: the un-jailbreakable AI dungeon-master, playable
 Build the demo where **you play a living world narrated by an AI, and when you try to jailbreak it, it provably
 refuses.** DM runs native (unblocked); browser is the play surface; the killer moment lands in a tab.
+
+### The DM is a REAL AI (not scripted)
+Found a live local model: **ollama @ 127.0.0.1:11434, `gemma2:2b`** — verified it narrates ("The cool metal of
+the key felt heavy and worn against her palm..."). So the dungeon-master is a genuine LLM, and the demo is a real
+un-jailbreakable AI DM, not a scripted stand-in. narratorKind is reported honestly ("model:gemma2:2b" vs
+"scripted:RecordedDm" on fallback).
+
+⚠ SUBTLE DANGER (flagged to the lane, would have made it a FAKE demo): the injection tooth fires because the
+narration reflects the player's raw text VERBATIM (RecordedDm: "NOT brace-sanitized: a `{{` injection survives so
+the injection-free leg fires — the whole point"). A real LLM that PARAPHRASES or sanitizes the player's text away
+means the `{{` never reaches attest_narration and the tooth SILENTLY STOPS FIRING — it would look like it works.
+So the model narrator must compose `{who} declares: {RAW_player_text} -- {model_continuation}`, and the lane MUST
+re-prove the injection case still yields refused:"injection" WITH the model in the loop (report loudly if not).
+
+## LANES LIVE
+- attested-DM service (a18375169811f20e3): native, real gemma2 narrator, /narrate /world /verify; four driven
+  cases (benign→attested turn · injection→REFUSED world-unchanged · overcap→REFUSED · benign-mentions-rules→NOT
+  refused).
+- browser dungeon (a7f8d89a6d5a736e0): demo/dungeon.html — play by typing; "🔓 Try to jailbreak the DM" shows
+  REFUSED + the receipt rail visibly UNCHANGED + chain still verifies.
+Main loop drives the integrated demo (page + REAL service) itself and captures the killer moment.
