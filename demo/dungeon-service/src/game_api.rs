@@ -42,7 +42,7 @@ use attested_dm::{
 use http_serve::WebResponse;
 use serde_json::{json, Value};
 
-use crate::ollama;
+use crate::hosted::Hosted;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The game registry — the worlds the service can open. Additive: a new dungeon is one row.
@@ -113,28 +113,34 @@ pub fn find_game(id: &str) -> Option<GameDef> {
 // only job is atmospheric prose, which has no authority over the outcome.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// The vault's dungeon-master narrator.
+/// The vault's dungeon-master narrator — the shared HOSTED model tier (Bedrock Claude/Nova →
+/// Ollama), metered against the hard USD ceiling, with a deterministic scripted fallback when
+/// the budget is exhausted or no hosted model is available.
 #[derive(Clone)]
-pub enum VaultNarrator {
-    /// A live ollama model at `endpoint` named `model` (e.g. `gemma2:2b`).
-    Model { endpoint: String, model: String },
-    /// A deterministic offline narrator (only when ollama is unreachable).
-    Scripted,
+pub struct VaultNarrator {
+    hosted: Hosted,
+    /// The boot label (`model:<id>` or `scripted:VaultGm`).
+    base_kind: String,
 }
 
 impl VaultNarrator {
+    /// Wire a narrator around the shared hosted narrator.
+    pub fn new(hosted: Hosted) -> VaultNarrator {
+        let base_kind = hosted
+            .base_model_kind()
+            .unwrap_or_else(|| "scripted:VaultGm".to_string());
+        VaultNarrator { hosted, base_kind }
+    }
+
     /// The narrator kind at the mode level (before any per-turn fallback).
     pub fn base_kind(&self) -> String {
-        match self {
-            VaultNarrator::Model { model, .. } => format!("model:{model}"),
-            VaultNarrator::Scripted => "scripted:VaultGm".to_string(),
-        }
+        self.base_kind.clone()
     }
 
     /// Narrate an already-resolved-into-typed [`GameAction`] for `command` in `room`, in the
-    /// theme of `theme` (the current game's flavor). gemma2 (or the scripted fallback) narrates
-    /// around it; the prose carries NO authority — the world resolves the move. Returns the
-    /// narration prose and the narrator kind that actually produced it this turn.
+    /// theme of `theme` (the current game's flavor). The hosted model (or the scripted fallback)
+    /// narrates around it; the prose carries NO authority — the world resolves the move. Returns
+    /// the narration prose and the narrator kind that actually produced it this turn.
     pub fn narrate(
         &self,
         theme: &str,
@@ -143,41 +149,32 @@ impl VaultNarrator {
         command: &str,
         action: &GameAction,
     ) -> (String, String) {
-        match self {
-            VaultNarrator::Model { endpoint, model } => {
-                match narrate_action(endpoint, model, theme, room, world, command, action) {
-                    Ok(p) => (p, format!("model:{model}")),
-                    Err(e) => {
-                        eprintln!(
-                            "dungeon-service /game: gemma2 narration failed ({e}); scripted this turn"
-                        );
-                        (
-                            scripted_narration(room, action),
-                            "scripted:VaultGm(fallback)".to_string(),
-                        )
-                    }
-                }
+        match narrate_action(&self.hosted, theme, room, world, command, action) {
+            Ok((prose, kind)) => (prose, kind),
+            Err(e) => {
+                eprintln!(
+                    "dungeon-service /game: hosted narration unavailable ({e}); scripted this turn"
+                );
+                (
+                    scripted_narration(room, action),
+                    "scripted:VaultGm(fallback)".to_string(),
+                )
             }
-            VaultNarrator::Scripted => (
-                scripted_narration(room, action),
-                "scripted:VaultGm".to_string(),
-            ),
         }
     }
 }
 
-/// Ask gemma2 to narrate the moment (1-2 vivid sentences) in `theme`'s genre. The model is TOLD
-/// it does not decide outcomes — it only describes. Returns just the narration prose
-/// (brace-stripped).
+/// Ask the hosted model to narrate the moment (1-2 vivid sentences) in `theme`'s genre. The model
+/// is TOLD it does not decide outcomes — it only describes. Returns the narration prose
+/// (brace-stripped) + the honest kind that produced it.
 fn narrate_action(
-    endpoint: &str,
-    model: &str,
+    hosted: &Hosted,
     theme: &str,
     room: &Room,
     world: &WorldCell,
     command: &str,
     action: &GameAction,
-) -> Result<String, String> {
+) -> Result<(String, String), String> {
     let inv: Vec<String> = world.inventory.iter().cloned().collect();
     let carrying = if inv.is_empty() {
         "nothing".to_string()
@@ -198,7 +195,7 @@ fn narrate_action(
         desc = room.description,
         label = action.label(),
     );
-    let inner = ollama::generate_json(endpoint, model, &prompt)?;
+    let (inner, kind) = hosted.narrate_json("", &prompt)?;
     let narration = inner
         .get("narration")
         .and_then(Value::as_str)
@@ -210,11 +207,12 @@ fn narrate_action(
         .filter(|c| *c != '{' && *c != '}')
         .collect();
     let t = stripped.trim();
-    if t.is_empty() {
-        Ok("The dark holds its breath.".to_string())
+    let prose = if t.is_empty() {
+        "The dark holds its breath.".to_string()
     } else {
-        Ok(t.to_string())
-    }
+        t.to_string()
+    };
+    Ok((prose, kind))
 }
 
 /// The deterministic offline narrator (only when ollama is unreachable, or a turn's model
@@ -612,16 +610,15 @@ impl VoteRound {
     }
 }
 
-/// Build the `/game` state: probe ollama once, open the default world (the sunken vault).
-pub fn build_game_state() -> GameState {
-    let brain = probe_vault_narrator();
-    match &brain {
-        VaultNarrator::Model { model, .. } => {
-            eprintln!("dungeon-service /game: narrator = REAL model `{model}` (ollama)")
-        }
-        VaultNarrator::Scripted => {
-            eprintln!("dungeon-service /game: narrator = scripted (ollama unreachable)")
-        }
+/// Build the `/game` state around the shared HOSTED narrator, opening the default world (the
+/// sunken vault).
+pub fn build_game_state(hosted: Hosted) -> GameState {
+    let brain = VaultNarrator::new(hosted);
+    match brain.hosted.base_model_kind() {
+        Some(m) => eprintln!(
+            "dungeon-service /game: narrator = HOSTED {m} (dregg-narrator; metered, scripted fallback on budget/error)"
+        ),
+        None => eprintln!("dungeon-service /game: narrator = scripted — no hosted model available"),
     }
     let def = find_game(DEFAULT_GAME).expect("the default game is registered");
     open_game(brain, &def)
@@ -640,24 +637,6 @@ fn open_game(brain: VaultNarrator, def: &GameDef) -> GameState {
         last_narrator_kind,
         party: None,
         next_round_id: 1,
-    }
-}
-
-/// Probe ollama once; a successful generation → the model, else the scripted fallback.
-fn probe_vault_narrator() -> VaultNarrator {
-    let endpoint =
-        std::env::var("OLLAMA_ENDPOINT").unwrap_or_else(|_| "http://127.0.0.1:11434".to_string());
-    let model = std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "gemma2:2b".to_string());
-    match ollama::generate_json(
-        &endpoint,
-        &model,
-        "Respond ONLY with the JSON object {\"narration\": \"a torch gutters against wet stone\"}.",
-    ) {
-        Ok(_) => VaultNarrator::Model { endpoint, model },
-        Err(e) => {
-            eprintln!("dungeon-service /game: model probe failed ({e}); scripted fallback");
-            VaultNarrator::Scripted
-        }
     }
 }
 

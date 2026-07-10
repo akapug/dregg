@@ -37,7 +37,11 @@ path = "src/main.rs"
 attested-dm = { path = "../../attested-dm" }
 # The tiny server-independent HTTP/1.1 serve loop the handler binds to.
 http-serve = { path = "../../http-serve" }
-# JSON for the request/response bodies + the ollama client.
+# THE HOSTED NARRATOR — a hosted model (AWS Bedrock: Claude Haiku / Amazon Nova) behind a HARD,
+# self-enforced USD spend ceiling, with honest Ollama + Scripted fallbacks. The demo narrates
+# through this; the ledger cannot be spent past its cap.
+dregg-narrator = { path = "../../narrator" }
+# JSON for the request/response bodies + parsing the model's structured reply.
 serde_json = { workspace = true }
 # The running commitment over the receipt chain (the on-ledger fingerprint).
 blake3 = "1"

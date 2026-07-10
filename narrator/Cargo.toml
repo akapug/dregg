@@ -1,0 +1,48 @@
+# dregg-narrator — a HOSTED narrator for the fiction engine, behind a HARD USD ceiling.
+#
+# A small crate that gives the attested dungeon-master a hosted model (AWS Bedrock,
+# Amazon Nova) as its narrator, with a self-enforced spend ceiling that is checked at
+# OUR invocation layer — a pre-flight RESERVATION refuses a call BEFORE it reaches the
+# network, and a post-flight TRUE-UP replaces the reservation with the real usage-priced
+# cost, persisted atomically under an advisory file lock. AWS Budgets are notification-
+# only and lag hours; they are useless as a ceiling, so the ceiling lives here.
+#
+# A workspace MEMBER of the breadstuffs root (registered in `members`), so the root
+# [patch]/[workspace] tables apply. It does NOT re-declare them.
+
+[package]
+name = "dregg-narrator"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+publish = false
+description = "A hosted narrator (AWS Bedrock, Amazon Nova) for the fiction engine, behind a HARD, self-enforced USD spend ceiling ($20 default): a pre-flight reservation refuses a call before it reaches the network, a post-flight true-up prices the real token usage, the ledger persists atomically under a file lock and fails closed on corruption, and honest Ollama/Scripted fallbacks keep narration alive without spend."
+
+[dependencies]
+# The Converse API (Amazon Nova / Claude) + the standard AWS credential/region chain.
+aws-config = "1.8"
+aws-sdk-bedrockruntime = "1"
+aws-smithy-types = "1"
+# Pin aws-smithy-eventstream to 0.60.20 (a transitive dep of the SDK's forced `event-stream`
+# feature). 0.60.21 moved `DeferredSignerSender::send` to a GENERIC method, which breaks the
+# `Box::new(..) as _` inference (E0282) in aws-runtime 1.7.2's event-stream signer on this
+# nightly. The obvious alternative — bumping aws-runtime to 1.8.1 (which types that cast
+# concretely) — is BLOCKED: 1.8.1 pulls aws-sigv4 1.5.1 → hmac ^0.13 (stable, no `reset`),
+# conflicting with `lockstitch`'s hmac pre-release. Holding eventstream at 0.60.20 keeps the
+# non-generic `send` (inference works) AND keeps aws-sigv4 1.4.x / hmac 0.12 (no conflict).
+aws-smithy-eventstream = "=0.60.20"
+# The SDK is async; the crate exposes a BLOCKING surface (the fiction engine is sync),
+# so a small multi-thread runtime drives each Converse to completion.
+tokio = { version = "1", features = ["rt-multi-thread"] }
+# The ledger + request/response bodies. `std` is needed on top of the workspace's derive-only
+# serde for the internally-tagged `PriceSource` enum (its derive uses serde's std/alloc Content
+# deserializer).
+serde = { workspace = true, features = ["std", "derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+# Advisory (flock) file lock so concurrent invocations — cross-thread AND cross-process —
+# serialize on the ledger and cannot race past the cap.
+fs2 = "0.4"
+
+[dev-dependencies]
+tempfile = { workspace = true }
