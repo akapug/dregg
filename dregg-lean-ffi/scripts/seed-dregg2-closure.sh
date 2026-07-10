@@ -89,12 +89,33 @@ for ir in "${IR_ROOTS[@]}"; do
 done
 wait
 
-total="$(ls "$OBJDIR"/*.o | wc -l | tr -d ' ')"
-dregg="$(ls "$OBJDIR"/Dregg2_*.o 2>/dev/null | wc -l | tr -d ' ')"
+# find/xargs, NOT ls/globs: the closure is ~10k objects and a glob of full
+# paths blows ARG_MAX (bit for real on Darwin at 9906 objects, 2026-07-10).
+total="$(find "$OBJDIR" -name '*.o' | wc -l | tr -d ' ')"
+dregg="$(find "$OBJDIR" -name 'Dregg2_*.o' | wc -l | tr -d ' ')"
 echo "==> Compiled $total objects ($dregg Dregg2 + $((total - dregg)) dependency closure)"
 [ "$dregg" -gt 0 ] || { echo "FATAL: no Dregg2 objects produced — did the lake build emit :c facets?"; exit 1; }
 
 echo "==> Archiving → $ARCH"
-( cd "$OBJDIR" && ar rcs "$ARCH" *.o && ranlib "$ARCH" )
+# CLOSURE-ONLY by default: archive the import closure of the three splice roots
+# (scripts/lean-ffi-closure.py — FFI / DistributedExports / FFIDirect), not
+# every warm IR object. A cache-warmed mathlib tree carries ~5000 modules the
+# FFI never imports; archiving them all ships a 295 MB seed where the closure
+# is ~96 MB (measured 2026-07-10, docs/LEAN-SEED-SIZE.md). DREGG_SEED_ALL=1
+# restores the archive-everything behavior.
+#
+# Build into a temp sibling and rename: the seed is the shared READ-ONLY base
+# every cargo build copies at build start — an in-place rewrite could hand a
+# concurrent build a torn copy. xargs batches the members under ARG_MAX
+# (`ar q` appends per batch; the final ranlib builds the one symbol index).
+rm -f "$ARCH.new"
+if [ "${DREGG_SEED_ALL:-0}" = "1" ]; then
+  ( cd "$OBJDIR" && find . -name '*.o' -print0 | sort -z | xargs -0 ar q "$ARCH.new" )
+else
+  python3 "$ROOT/scripts/lean-ffi-closure.py" "$META" \
+    | sed 's/\./_/g; s/$/.o/' \
+    | ( cd "$OBJDIR" && tr '\n' '\0' | xargs -0 ar q "$ARCH.new" )
+fi
+ranlib "$ARCH.new" && mv -f "$ARCH.new" "$ARCH"
 ls -la "$ARCH"
 echo "==> SEEDED. \`cargo build -p dregg-lean-ffi\` now copies this seed into OUT_DIR and keeps that per-build copy's Dregg2 slice fresh (+ GCs it to the reachable set); the seed itself stays as written here."

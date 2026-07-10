@@ -24,7 +24,13 @@ This file (Part 1) builds and proves that range-gadget core: `bitsToInt`, `range
 (booleanity ⇒ in range), `range_complete` (in range ⇒ bits exist). The constraint compiler and
 the bridge theorem ride on top of it.
 -/
-import Mathlib.Tactic
+-- Specific tactic imports, NOT the `import Mathlib.Tactic` umbrella: this file's
+-- proofs use only `ring` + `norm_num` beyond core (omega/simp/rfl/exact). The
+-- umbrella drags the whole tactic universe (aesop/Qq/ProofWidgets/Plausible/
+-- LeanSearchClient/ImportGraph) into the compiled FFI closure — megabytes of
+-- elaboration-time-only objects in libdregg_lean.a the executor never runs.
+import Mathlib.Tactic.Ring
+import Mathlib.Tactic.NormNum
 
 namespace Dregg2.Exec.RecordCircuit
 

@@ -82,12 +82,14 @@ does on verified reports. The Byzantine bound is over the modelled allowance ari
 No executor import.
 -/
 import Mathlib.Data.List.Basic
-import Mathlib.Tactic
+-- (`import Mathlib.Tactic` umbrella trimmed 2026-07-10: proofs here use core omega/decide + ring —
+--  this module is INSIDE the compiled Dregg2.Exec.DistributedExports closure,
+--  so its imports are paid in libdregg_lean.a; see docs/LEAN-SEED-SIZE.md.)
+import Mathlib.Tactic.Ring
 import Dregg2.Tactics
 
 namespace Dregg2.Coord.SharedBudgetDynamics
 
-open scoped BigOperators
 
 /-! ## 1. The Stingray Byzantine ceiling (`compute_allowance_ceiling`). -/
 

@@ -78,7 +78,9 @@ Classical.choice, Quot.sound}). No import of the executor — this is pure coord
 -/
 import Mathlib.Data.List.Basic
 import Mathlib.Data.List.Indexes
-import Mathlib.Tactic
+-- (`import Mathlib.Tactic` umbrella trimmed 2026-07-10: proofs here use only core omega —
+--  this module is INSIDE the compiled Dregg2.Exec.DistributedExports closure,
+--  so its imports are paid in libdregg_lean.a; see docs/LEAN-SEED-SIZE.md.)
 import Dregg2.Tactics
 
 namespace Dregg2.Coord.CausalOrder

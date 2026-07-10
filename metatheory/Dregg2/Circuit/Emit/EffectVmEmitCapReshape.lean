@@ -78,6 +78,9 @@ authority-binding (`full_turn_proof.rs`, the Phase-D payoff), cited not claimed 
 named `Poseidon2SpongeCR` hypothesis (via `Heap`), never as an axiom.
 NEW file; imports are read-only.
 -/
+-- Declared directly (2026-07-10): previously transitive via an upstream
+-- `Mathlib.Tactic` umbrella, since trimmed.
+import Mathlib.Tactic.IntervalCases
 import Dregg2.Substrate.Heap
 import Dregg2.Exec.Caps
 import Dregg2.Circuit.Emit.EffectVmEmitCapRoot

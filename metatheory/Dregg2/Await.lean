@@ -40,7 +40,9 @@ The **distributed/multi-vat liveness** of pipelining (cross-vat GC of exported
 promises) is OPEN — see `Exec.CapTP` §4 (`-- OPEN: distributed_gc_liveness`), a
 documented residue, not an unproven hole.
 -/
-import Dregg2.Core
+-- (`import Dregg2.Core` removed 2026-07-10: Await referenced NOTHING from it,
+-- and the dead edge dragged Core's CategoryTheory.Monoidal wing into the
+-- compiled Dregg2.Exec.FFI closure via Exec.CapTP — see docs/LEAN-SEED-SIZE.md.)
 import Dregg2.Laws
 
 namespace Dregg2.Await
