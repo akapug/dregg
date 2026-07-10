@@ -161,9 +161,11 @@ the sibling lane settles — not mine to touch/stash.
   realized. Instantiable `_canon` form uses a SATISFIABLE sparse-map invariant; non-vacuity proved at finInit.
   ⚠ FINDING (`78d933d92`): `AccountsWF (denote f)` is UNSATISFIABLE because FinKernelState.cell defaults to
   `.record []` while the kernel default is `Value.int 0` — so the target-shape theorem is proved-but-vacuous.
-- ▶ IN FLIGHT: the default-alignment fix (cell default `.record []` → `Value.int 0`), re-checking R1/R2/steps in
-  ONE motion incl. flipping finAllocCell's `insertNZ`→`erase`; then AccountsWF becomes satisfiable and `_canon`
-  retires.
+- ✅ DEFAULT-ALIGN FIX `8cd504be3` — FinKernelState.cell default `.record []`→`Value.int 0` (kernel default),
+  one motion across 7 committed files, whole tree GREEN 4536. `AccountsWF (denote finInit)` is now a POSITIVE
+  proof (`finInit_accountsWF := fun _ _ => rfl`); `recStateCommit_binds_kernel_fin` is INSTANTIABLE (fires at
+  finInit) — R4's vacuity CLOSED, `_canon` now redundant. finAllocCell's cell write flipped `insertNZ`→`erase`
+  (born value = aligned default). No new vacuity. **DEBT-B core is proved AND non-vacuous.**
 - ▶ THEN: drop RestFrameDecodes2*/DeployedFaithful*/Satisfied2Faithful where the squares discharge them; route
   the ~1200-use injectivity cluster through the poseidon2CommitSurface reductions. (`recStateCommit_binds_kernel_fin`: collapse the 5 carried hypotheses — 4 injectivity + 
   RestHashIffFrame — to `Poseidon2SpongeCR` ALONE, scoped to denote-images/reachable states, realizing
