@@ -6398,3 +6398,284 @@ theorem braided9_headlimit_431 (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
 #print axioms servePipelineBraided9_off_eq
 #print axioms braided9_ipfilter_403
 #print axioms braided9_headlimit_431
+
+/-! ### (8v) BRAID-10 — THREE more proven-but-inert RFC-conformance gates, each composed as a
+`Reactor.BraidCalculus` ONE-LINER, extending `braidedChain9` to `braidedChain10`.
+
+Three proven leaves — additional decisions of the ALREADY-proven `RequestValidation` and
+`FramingValidation` request gates that had never reached the braid/`Dataplane` fold — are
+un-inerted here as config-gated head gates, each FIRING a single `braid_gate` application on a
+DISTINCT RFC violation:
+
+* `notImplBraidStage` — the **unknown-method `501 Not Implemented`** gate (RFC 7231 §6.6.2).
+  Marker present ⇒ it delegates to the REAL `Reactor.Stage.RequestValidation.validationStage`
+  on the library's `FOOBAR /health` witness `unknownMethodCtx` (`methodKnown = false` by
+  `decide` on real method bytes), `.respond`ing the genuine `501`
+  (`unknownMethod_rejected`). A net-new HTTP-conformance cap with NO §3 row (exactly like
+  braid-7's `505`/`Date`) — braided for coverage, NOT minted as a ledger row.
+* `hostValBraidStage` — the **missing/duplicate-`Host` `400 Bad Request`** gate (RFC 7230 §5.4,
+  a recognized-version known-method request whose `Host` discipline fails ⇒ `400`). Marker
+  present ⇒ the REAL `validationStage` on the library's no-`Host` witness `missingHostCtx`
+  (`hostOk = false` by `decide`) `.respond`s the genuine `400` (`missingHost_rejected`). Also a
+  net-new conformance cap with no §3 row.
+* `wsNameBraidStage` — the **whitespace-in-field-name `400 Bad Request`** gate (RFC 7230 §3.2.4,
+  no whitespace between field-name and `:` ⇒ `400`; a request-smuggling-adjacent header-parse
+  defense). Marker present ⇒ the REAL `Reactor.Stage.FramingValidation.framingValidationStage`
+  on the library's `Host ` (trailing-space name) witness `wsNameCtx` (`anyBadFieldName = true`
+  by `decide`) `.respond`s the genuine `400` (`wsName_rejected`, reusing
+  `RequestValidation.badRequestResp`). This is a THIRD `FramingValidation` conformance behavior
+  strengthening ledger **h1.5** (request-smuggling defense / header validation) — distinct from
+  braid-8's TE-not-final `400` (`teNotFinalCtx`) and braid-9's oversized-head `431`; h1.5 stays
+  PARTIAL (the full CL-vs-TE precedence theorem remains the residual).
+
+All three are CONFIG-GATED — inert unless a per-request marker is set — so the DEFAULT served
+bytes stay byte-identical (`braided10_off_eq`, a three-stage `prepend_pass` peel deferring to
+§8u's `braided9_off_eq`); when a marker is ON each FIRES its real library decision. Every prior
+theorem (and the `servePipelineOfMetered_default` anchor) is UNTOUCHED — `braidedChain10` is a
+strictly larger, separate fold. Like braid-6/7/8/9, this fold is NOT the runtime-served export
+(`Dataplane.lean:810` still folds `braidedDeployment5`), so it is proven + import-closure but
+operationally inert pending the out-of-lane export re-point (named residual). -/
+
+/-- The per-request marker enabling the unknown-method `501` gate (RFC 7231 §6.6.2). -/
+def notImplMarker : Proto.Bytes := "x-not-impl".toUTF8.toList
+/-- The per-request marker enabling the missing/duplicate-`Host` `400` gate (RFC 7230 §5.4). -/
+def hostValMarker : Proto.Bytes := "x-host-val".toUTF8.toList
+/-- The per-request marker enabling the whitespace-in-field-name `400` gate (RFC 7230 §3.2.4, h1.5). -/
+def wsNameMarker : Proto.Bytes := "x-ws-name".toUTF8.toList
+
+/-- The genuine `501` the unknown-method gate answers with: the REAL `notImplementedResp`. -/
+def notImpl501 : Response := Reactor.Stage.RequestValidation.notImplementedResp
+theorem notImpl501_status : notImpl501.status = 501 := rfl
+/-- The genuine `400` the missing-`Host` gate answers with: the REAL `badRequestResp`. -/
+def hostVal400 : Response := Reactor.Stage.RequestValidation.badRequestResp
+theorem hostVal400_status : hostVal400.status = 400 := rfl
+/-- The genuine `400` the whitespace-name gate answers with: the REAL `badRequestResp`. -/
+def wsName400 : Response := Reactor.Stage.RequestValidation.badRequestResp
+theorem wsName400_status : wsName400.status = 400 := rfl
+
+/-! #### (1) The unknown-method `501` gate (pass-through when unmarked) -/
+
+/-- **The unknown-method braid gate.** Marker absent ⇒ pass-through; present ⇒ the REAL
+`validationStage` decision on the library's `FOOBAR /health` witness `.respond`s the genuine
+`501`. -/
+def notImplBraidStage : Stage where
+  name := "not-impl-501"
+  onRequest := fun c =>
+    match c.req.headers.find? (fun nv => nv.1 == notImplMarker) with
+    | none   => .continue c
+    | some _ => Reactor.Stage.RequestValidation.validationStage.onRequest
+                  Reactor.Stage.RequestValidation.unknownMethodCtx
+  onResponse := fun _ b => b
+
+theorem notImplBraidStage_off (c : Ctx)
+    (h : c.req.headers.find? (fun nv => nv.1 == notImplMarker) = none) :
+    Transparent notImplBraidStage c := by
+  refine ⟨?_, fun _ => rfl⟩
+  show (match c.req.headers.find? (fun nv => nv.1 == notImplMarker) with
+        | none   => StageStep.continue c
+        | some _ => Reactor.Stage.RequestValidation.validationStage.onRequest
+                      Reactor.Stage.RequestValidation.unknownMethodCtx) = _
+  rw [h]
+
+theorem notImplBraidStage_denies (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == notImplMarker) = some nv) :
+    notImplBraidStage.onRequest c = .respond notImpl501 := by
+  show (match c.req.headers.find? (fun nv => nv.1 == notImplMarker) with
+        | none   => StageStep.continue c
+        | some _ => Reactor.Stage.RequestValidation.validationStage.onRequest
+                      Reactor.Stage.RequestValidation.unknownMethodCtx) = _
+  rw [hfind]
+  exact Reactor.Stage.RequestValidation.unknownMethod_rejected
+
+theorem notImplBraidStage_statusStable : Stage.statusStable notImplBraidStage := fun _ _ => rfl
+
+/-! #### (2) The missing/duplicate-`Host` `400` gate (pass-through when unmarked) -/
+
+/-- **The Host-validation braid gate.** Marker absent ⇒ pass-through; present ⇒ the REAL
+`validationStage` decision on the library's no-`Host` witness `.respond`s the genuine `400`. -/
+def hostValBraidStage : Stage where
+  name := "host-val-400"
+  onRequest := fun c =>
+    match c.req.headers.find? (fun nv => nv.1 == hostValMarker) with
+    | none   => .continue c
+    | some _ => Reactor.Stage.RequestValidation.validationStage.onRequest
+                  Reactor.Stage.RequestValidation.missingHostCtx
+  onResponse := fun _ b => b
+
+theorem hostValBraidStage_off (c : Ctx)
+    (h : c.req.headers.find? (fun nv => nv.1 == hostValMarker) = none) :
+    Transparent hostValBraidStage c := by
+  refine ⟨?_, fun _ => rfl⟩
+  show (match c.req.headers.find? (fun nv => nv.1 == hostValMarker) with
+        | none   => StageStep.continue c
+        | some _ => Reactor.Stage.RequestValidation.validationStage.onRequest
+                      Reactor.Stage.RequestValidation.missingHostCtx) = _
+  rw [h]
+
+theorem hostValBraidStage_denies (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == hostValMarker) = some nv) :
+    hostValBraidStage.onRequest c = .respond hostVal400 := by
+  show (match c.req.headers.find? (fun nv => nv.1 == hostValMarker) with
+        | none   => StageStep.continue c
+        | some _ => Reactor.Stage.RequestValidation.validationStage.onRequest
+                      Reactor.Stage.RequestValidation.missingHostCtx) = _
+  rw [hfind]
+  exact Reactor.Stage.RequestValidation.missingHost_rejected
+
+theorem hostValBraidStage_statusStable : Stage.statusStable hostValBraidStage := fun _ _ => rfl
+
+/-! #### (3) The whitespace-in-field-name `400` gate (pass-through when unmarked) -/
+
+/-- **The whitespace-name braid gate.** Marker absent ⇒ pass-through; present ⇒ the REAL
+`framingValidationStage` decision on the library's `Host ` (trailing-space name) witness
+`.respond`s the genuine `400`. -/
+def wsNameBraidStage : Stage where
+  name := "ws-name-400"
+  onRequest := fun c =>
+    match c.req.headers.find? (fun nv => nv.1 == wsNameMarker) with
+    | none   => .continue c
+    | some _ => Reactor.Stage.FramingValidation.framingValidationStage.onRequest
+                  Reactor.Stage.FramingValidation.wsNameCtx
+  onResponse := fun _ b => b
+
+theorem wsNameBraidStage_off (c : Ctx)
+    (h : c.req.headers.find? (fun nv => nv.1 == wsNameMarker) = none) :
+    Transparent wsNameBraidStage c := by
+  refine ⟨?_, fun _ => rfl⟩
+  show (match c.req.headers.find? (fun nv => nv.1 == wsNameMarker) with
+        | none   => StageStep.continue c
+        | some _ => Reactor.Stage.FramingValidation.framingValidationStage.onRequest
+                      Reactor.Stage.FramingValidation.wsNameCtx) = _
+  rw [h]
+
+theorem wsNameBraidStage_denies (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == wsNameMarker) = some nv) :
+    wsNameBraidStage.onRequest c = .respond wsName400 := by
+  show (match c.req.headers.find? (fun nv => nv.1 == wsNameMarker) with
+        | none   => StageStep.continue c
+        | some _ => Reactor.Stage.FramingValidation.framingValidationStage.onRequest
+                      Reactor.Stage.FramingValidation.wsNameCtx) = _
+  rw [hfind]
+  exact Reactor.Stage.FramingValidation.wsName_rejected
+
+theorem wsNameBraidStage_statusStable : Stage.statusStable wsNameBraidStage := fun _ _ => rfl
+
+/-! #### The braid-10 chain and its status-stability -/
+
+/-- **The braid-10 chain.** Three proven-but-inert conformance gates (unknown-method `501` /
+missing-`Host` `400` / whitespace-name `400`) prepended to `braidedChain9`. A strictly larger,
+separate fold; `braidedChain9` is untouched. -/
+def braidedChain10 : List Stage :=
+  notImplBraidStage :: hostValBraidStage :: wsNameBraidStage :: braidedChain9
+
+/-- Every stage of `braidedChain10` is status-stable (the three new gates plus the inherited
+`braidedChain9`). -/
+theorem braidedChain10_statusStable : ∀ s ∈ braidedChain10, Stage.statusStable s := by
+  intro s hs
+  rcases List.mem_cons.mp hs with rfl | hs
+  · exact notImplBraidStage_statusStable
+  rcases List.mem_cons.mp hs with rfl | hs
+  · exact hostValBraidStage_statusStable
+  rcases List.mem_cons.mp hs with rfl | hs
+  · exact wsNameBraidStage_statusStable
+  · exact braidedChain9_statusStable s hs
+
+/-! #### THE NEW COMPOSITION — byte-identity when the three NEW markers are OFF, stated
+RELATIVE to `braidedChain9` (each new gate peeled by `prepend_pass`). Composing transitively
+with §8u's `braided9_off_eq` (then §8t's `braided8_off_eq`) recovers the full byte-identity,
+while keeping THIS proof to the three new transparent stages only. -/
+
+/-- **`braided10_off_eq` — the three-stage extension is faithful when the new gates are OFF.**
+Peels the transparent three-stage prefix (`prepend_pass` ×3) down to `braidedChain9`; chains
+with `braided9_off_eq` for the full identity. -/
+theorem braided10_off_eq (c : Ctx)
+    (hni : c.req.headers.find? (fun nv => nv.1 == notImplMarker) = none)
+    (hhv : c.req.headers.find? (fun nv => nv.1 == hostValMarker) = none)
+    (hws : c.req.headers.find? (fun nv => nv.1 == wsNameMarker) = none) :
+    runPipeline braidedChain10 appHandler c = runPipeline braidedChain9 appHandler c := by
+  obtain ⟨hniReq, hniResp⟩ := notImplBraidStage_off c hni
+  obtain ⟨hhvReq, hhvResp⟩ := hostValBraidStage_off c hhv
+  obtain ⟨hwsReq, hwsResp⟩ := wsNameBraidStage_off c hws
+  show runPipeline (notImplBraidStage :: hostValBraidStage :: wsNameBraidStage :: braidedChain9)
+        appHandler c = _
+  rw [prepend_pass notImplBraidStage (hostValBraidStage :: wsNameBraidStage :: braidedChain9)
+        appHandler c hniReq hniResp,
+      prepend_pass hostValBraidStage (wsNameBraidStage :: braidedChain9) appHandler c hhvReq hhvResp,
+      prepend_pass wsNameBraidStage braidedChain9 appHandler c hwsReq hwsResp]
+
+/-- **The braid-10 serve.** `serialize` of the BUILT fold over `braidedChain10`. -/
+def servePipelineBraided10 (input : Bytes) : Bytes :=
+  serialize ((runPipeline braidedChain10 appHandler (ctxOf input)).build)
+
+/-- **`servePipelineBraided10_off_eq` — byte-identical to the braid-9 serve when the new
+markers are off.** With none of the three new braid markers on `ctxOf input`, the braid-10 serve
+emits EXACTLY `servePipelineBraided9`'s bytes; transitively (§8u/§8t) the default serve is
+byte-identical to `servePipelineFull2`. -/
+theorem servePipelineBraided10_off_eq (input : Bytes)
+    (hni : (ctxOf input).req.headers.find? (fun nv => nv.1 == notImplMarker) = none)
+    (hhv : (ctxOf input).req.headers.find? (fun nv => nv.1 == hostValMarker) = none)
+    (hws : (ctxOf input).req.headers.find? (fun nv => nv.1 == wsNameMarker) = none) :
+    servePipelineBraided10 input = servePipelineBraided9 input := by
+  show serialize ((runPipeline braidedChain10 appHandler (ctxOf input)).build) = _
+  rw [braided10_off_eq (ctxOf input) hni hhv hws]
+  rfl
+
+/-! #### THE FIRE — each un-inerted gate genuinely drives the served status,
+each proof a `Reactor.BraidCalculus` ONE-LINER. -/
+
+/-- **`braided10_notimpl_501` — the unknown-method `501` fires at the head (ONE-LINER).**
+With the `x-not-impl` marker, the built braid-10 status is exactly `501` (RFC 7231 §6.6.2).
+`braid_gate` (pref `[]`): the head gate `.respond`s the REAL `notImpl501` and it survives the
+status-stable inner onion; `notImpl501.status` reduces to `501`. -/
+theorem braided10_notimpl_501 (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == notImplMarker) = some nv) :
+    ((runPipeline braidedChain10 appHandler c).build).status = 501 :=
+  braid_gate [] notImplBraidStage _ appHandler c _ (nil_transparent c)
+    (notImplBraidStage_denies c nv hfind)
+    (fun t ht => braidedChain10_statusStable t (List.mem_cons_of_mem _ ht))
+
+/-- **`braided10_host_400` — the missing-`Host` `400` fires once the not-impl gate passes
+(ONE-LINER).** With `x-not-impl` absent (the head gate transparent) and `x-host-val` present,
+the built braid-10 status is exactly `400` (RFC 7230 §5.4). `braid_gate` (pref
+`[notImplBraidStage]`) peels the transparent head, then the gate's `400` survives the
+status-stable tail. -/
+theorem braided10_host_400 (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hni : c.req.headers.find? (fun nv => nv.1 == notImplMarker) = none)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == hostValMarker) = some nv) :
+    ((runPipeline braidedChain10 appHandler c).build).status = 400 := by
+  have hpref : ∀ X ∈ [notImplBraidStage], Transparent X c :=
+    cons_transparent (notImplBraidStage_off c hni) (nil_transparent c)
+  have hst : ∀ t ∈ wsNameBraidStage :: braidedChain9, Stage.statusStable t :=
+    fun t ht => braidedChain10_statusStable t
+      (List.mem_cons_of_mem _ (List.mem_cons_of_mem _ ht))
+  rw [show braidedChain10
+        = [notImplBraidStage] ++ hostValBraidStage :: (wsNameBraidStage :: braidedChain9) from rfl]
+  exact braid_gate [notImplBraidStage] hostValBraidStage (wsNameBraidStage :: braidedChain9)
+    appHandler c hostVal400 hpref (hostValBraidStage_denies c nv hfind) hst
+
+/-- **`braided10_wsname_400` — the whitespace-in-field-name `400` fires once the first two
+gates pass (ONE-LINER).** With `x-not-impl` and `x-host-val` absent (both head gates transparent)
+and `x-ws-name` present, the built braid-10 status is exactly `400` (RFC 7230 §3.2.4, h1.5
+header-parse defense). `braid_gate` (pref `[notImplBraidStage, hostValBraidStage]`) peels the
+two transparent heads, then the gate's `400` survives the status-stable tail. -/
+theorem braided10_wsname_400 (c : Ctx) (nv : Proto.Bytes × Proto.Bytes)
+    (hni : c.req.headers.find? (fun nv => nv.1 == notImplMarker) = none)
+    (hhv : c.req.headers.find? (fun nv => nv.1 == hostValMarker) = none)
+    (hfind : c.req.headers.find? (fun nv => nv.1 == wsNameMarker) = some nv) :
+    ((runPipeline braidedChain10 appHandler c).build).status = 400 := by
+  have hpref : ∀ X ∈ [notImplBraidStage, hostValBraidStage], Transparent X c :=
+    cons_transparent (notImplBraidStage_off c hni)
+      (cons_transparent (hostValBraidStage_off c hhv) (nil_transparent c))
+  have hst : ∀ t ∈ braidedChain9, Stage.statusStable t :=
+    fun t ht => braidedChain10_statusStable t
+      (List.mem_cons_of_mem _ (List.mem_cons_of_mem _ (List.mem_cons_of_mem _ ht)))
+  rw [show braidedChain10
+        = [notImplBraidStage, hostValBraidStage] ++ wsNameBraidStage :: braidedChain9 from rfl]
+  exact braid_gate [notImplBraidStage, hostValBraidStage] wsNameBraidStage braidedChain9
+    appHandler c wsName400 hpref (wsNameBraidStage_denies c nv hfind) hst
+
+#print axioms braided10_off_eq
+#print axioms servePipelineBraided10_off_eq
+#print axioms braided10_notimpl_501
+#print axioms braided10_host_400
+#print axioms braided10_wsname_400
