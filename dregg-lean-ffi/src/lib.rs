@@ -195,6 +195,34 @@ pub fn shadow_fips204_verify(wire: &str) -> Result<String, String> {
     ffi::lean_fips204_verify(wire)
 }
 
+/// Whether the linked archive exports the extracted, Lean-verified REAL, FULL-BYTE ML-DSA verify core
+/// (`dregg_fips204_verify_real`, BRICK 8 — the C-ABI entry over `Dregg2.Crypto.Fips204Verify.verifyRealFFI`
+/// = the FULL-DIMENSION `MlDsaVerifyReal.verifyCore` over the real 1952/3309-byte key/signature). When
+/// false, a caller must fall back to the `fips204` crate verify. Distinct from [`lean_available`]: a stale
+/// archive can lack this export.
+pub fn fips204_verify_real_core_available() -> bool {
+    ffi::fips204_verify_real_present() && lean_init_once().is_ok()
+}
+
+/// Run the VERIFIED, extracted REAL, FULL-BYTE ML-DSA verify core `@[export] dregg_fips204_verify_real`
+/// (the executable `Dregg2.Crypto.Fips204Verify.verifyRealFFI` over `MlDsaVerifyReal.verifyCore`). This
+/// runs the SECURITY-CRITICAL verify of a REAL ML-DSA-65 key + signature as a Lean-verified object
+/// (leanc-native) — a forged/tampered signature REJECTS, PROVED by `verify_accepts_real` /
+/// `verify_rejects_tampered`.
+///
+/// Wire grammar the export reads:
+///   * in:  `"hex(pk) hex(msg) hex(ctx) hex(sig)"` (four space-separated lowercase-hex fields; an empty
+///     field, e.g. `ctx = ε`, is the empty token between two spaces).
+///   * out: `"1"` (accept) · `"0"` (reject; also the fail-closed answer for a malformed wire).
+///
+/// `dregg-pq::ml_dsa_verify` routes its verify through this entry (installed via
+/// `dregg_pq::install_lean_verify_core_real`), so the deployed verify runs the verified Lean core over the
+/// real bytes rather than the trusted `fips204` primitive. Returns `Err` if the archive lacks the export.
+pub fn shadow_fips204_verify_real(wire: &str) -> Result<String, String> {
+    ensure_lean_init()?;
+    ffi::lean_fips204_verify_real(wire)
+}
+
 /// Whether the linked archive exports the extracted, Lean-verified ML-DSA sign core
 /// (`dregg_fips204_sign`, the C-ABI entry over `Dregg2.Crypto.Fips204Verify.signFFI` = the extracted
 /// `signCore`, the Fiat–Shamir-with-aborts signer at the deployed ML-DSA-65 parameters). When false, a
@@ -394,6 +422,12 @@ mod ffi {
             out: *mut c_char,
             out_cap: usize,
         ) -> usize;
+        #[cfg(dregg_fips204_verify_real_present)]
+        fn dregg_fips204_verify_real_str(
+            in_utf8: *const c_char,
+            out: *mut c_char,
+            out_cap: usize,
+        ) -> usize;
         #[cfg(dregg_fips204_sign_present)]
         fn dregg_fips204_sign_str(
             in_utf8: *const c_char,
@@ -584,6 +618,41 @@ mod ffi {
         false
     }
 
+    /// FIPS-204-VERIFY-REAL extraction (BRICK 8) — run the VERIFIED Lean ML-DSA verify core over the REAL,
+    /// FULL-BYTE key/signature (leanc-native). Input: `"hex(pk) hex(msg) hex(ctx) hex(sig)"` (four
+    /// space-separated lowercase-hex fields); output: `"1"` (accept) / `"0"` (reject, and the fail-closed
+    /// answer for a malformed wire). This is the FULL-DIMENSION `MlDsaVerifyReal.verifyCore` (n=256 ring /
+    /// NTT / SampleInBall / ExpandA / real 1952/3309-byte codec, proved to accept a genuine crate
+    /// signature and reject tampers) — the object `dregg-pq::ml_dsa_verify` routes through to take the
+    /// `fips204` crate OUT of the verify TCB.
+    #[cfg(dregg_fips204_verify_real_present)]
+    pub fn lean_fips204_verify_real(wire: &str) -> Result<String, String> {
+        lean_string_bridge(
+            wire,
+            dregg_fips204_verify_real_str,
+            "dregg_fips204_verify_real_str",
+        )
+    }
+
+    #[cfg(not(dregg_fips204_verify_real_present))]
+    pub fn lean_fips204_verify_real(_wire: &str) -> Result<String, String> {
+        Err(
+            "dregg_fips204_verify_real not exported by the linked archive (rebuild to enable)"
+                .into(),
+        )
+    }
+
+    /// `true` iff the linked archive carries the extracted REAL, full-byte ML-DSA verify core.
+    #[cfg(dregg_fips204_verify_real_present)]
+    pub fn fips204_verify_real_present() -> bool {
+        true
+    }
+
+    #[cfg(not(dregg_fips204_verify_real_present))]
+    pub fn fips204_verify_real_present() -> bool {
+        false
+    }
+
     /// FIPS-204-SIGN EXTRACTION — run the VERIFIED Lean ML-DSA sign core (leanc-native).
     /// Input: `"s1 s2 t0 μ y"` (secret + message + the sampled randomness/mask); output: the signature
     /// wire `"c̃ z h"` (an accepted iteration) or `"REJECT"` (a rejected sample / malformed wire, retry).
@@ -704,6 +773,25 @@ mod ffi {
             assert_eq!(lean_fips204_sign("5 1 3 7 1000000").unwrap(), "REJECT");
             // Malformed wire fails CLOSED.
             assert_eq!(lean_fips204_sign("garbage").unwrap(), "REJECT");
+        }
+    }
+
+    #[cfg(all(test, dregg_fips204_verify_real_present))]
+    mod fips204_verify_real_extraction {
+        use super::*;
+        /// BRICK 8 smoke test: the REAL, full-byte ML-DSA verify export links and runs (leanc-native), and
+        /// a malformed byte wire fails CLOSED ("0"). The real-vector accept/reject is exercised end-to-end
+        /// with genuine `fips204` crate keys/signatures in `dregg-pq`'s `mldsa_lean_verify` gate (which has
+        /// the crate as a dev-dep); here we only confirm the bridge is wired and fail-closed on garbage.
+        #[test]
+        fn verified_real_ml_dsa_verify_bridge_links_and_fails_closed() {
+            lean_init_once().expect("init the Lean runtime");
+            // Non-hex fields fail closed (parser rejects before verifyCore).
+            assert_eq!(lean_fips204_verify_real("zz zz zz zz").unwrap(), "0");
+            // Wrong field count fails closed (not exactly four space-separated fields).
+            assert_eq!(lean_fips204_verify_real("00 00").unwrap(), "0");
+            // Odd-length hex fails closed (decodeHexChars rejects an unpaired nibble).
+            assert_eq!(lean_fips204_verify_real("0 0 0 0").unwrap(), "0");
         }
     }
 

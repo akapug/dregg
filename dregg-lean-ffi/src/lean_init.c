@@ -165,6 +165,18 @@ extern lean_object *initialize_Dregg2_Dregg2_Crypto_Fips204Verify(uint8_t builti
 extern lean_object *dregg_fips204_verify(lean_object *input);
 #endif
 
+/* BRICK 8 — the REAL, FULL-BYTE ML-DSA-65 verify export
+ * (`Dregg2.Crypto.Fips204Verify.verifyRealFFI`): decodes the wire `"hex(pk) hex(msg) hex(ctx) hex(sig)"`,
+ * runs the FULL-DIMENSION Lean-verified `MlDsaVerifyReal.verifyCore` (n=256 ring / NTT / SampleInBall /
+ * ExpandA / real 1952/3309-byte codec) over the actual bytes, and returns `"1"` (accept) / `"0"` (reject).
+ * This is the object that takes the `fips204` crate OUT of the deployed verify TCB. It lives in the SAME
+ * module as `dregg_fips204_verify` (`Dregg2.Crypto.Fips204Verify`), so its initializer is the SAME
+ * `initialize_Dregg2_Dregg2_Crypto_Fips204Verify` (run below) — no separate init is required. GATED on
+ * DREGG_FIPS204_VERIFY_REAL (build.rs probes + defines it when the symbol is present). */
+#ifdef DREGG_FIPS204_VERIFY_REAL
+extern lean_object *dregg_fips204_verify_real(lean_object *input);
+#endif
+
 /* The @[export]ed Lean `String -> String` VERIFIED ML-DSA SIGN CORE
  * (`Dregg2.Crypto.Fips204Verify.signFFI`): decodes the wire `"s1 s2 t0 μ y"` (secret + message + the
  * sampled randomness/mask), runs the extracted, spec-agreeing `signCore` (the deterministic
@@ -301,10 +313,12 @@ int dregg_ffi_init(void) {
     }
     lean_dec_ref(sres);
 #endif
-#ifdef DREGG_FIPS204_VERIFY
+#if defined(DREGG_FIPS204_VERIFY) || defined(DREGG_FIPS204_VERIFY_REAL)
     /* The verified ML-DSA verify-core module is OUTSIDE the FFI closure; initialize it explicitly so
-     * `dregg_fips204_verify` is callable. Its dependency closure (Crypto.Fips204Spec /
-     * Crypto.DreggPqRefinement / Crypto.HybridCombiner) is re-entrant-safe under Lean's init guards. */
+     * `dregg_fips204_verify` AND the full-byte `dregg_fips204_verify_real` (BRICK 8, same module) are
+     * callable. Its dependency closure (Crypto.Fips204Spec / Crypto.DreggPqRefinement /
+     * Crypto.HybridCombiner / — for the real verify — Crypto.MlDsaVerifyReal and its Keccak/Ring/Codec
+     * bricks) is re-entrant-safe under Lean's init guards. */
     lean_object *fvres = initialize_Dregg2_Dregg2_Crypto_Fips204Verify(1);
     if (!lean_io_result_is_ok(fvres)) {
         lean_io_result_show_error(fvres);
@@ -430,6 +444,31 @@ size_t dregg_fips204_verify_str(const char *in_utf8, char *out, size_t out_cap) 
     }
     lean_object *in_obj = lean_mk_string(in_utf8);
     lean_object *res = dregg_fips204_verify(in_obj);
+    const char *cstr = lean_string_cstr(res);
+    size_t full = strlen(cstr);
+    size_t copy = (full < out_cap - 1) ? full : (out_cap - 1);
+    memcpy(out, cstr, copy);
+    out[copy] = '\0';
+    lean_dec_ref(res);
+    return full;
+}
+#endif
+
+#ifdef DREGG_FIPS204_VERIFY_REAL
+/* dregg_fips204_verify_real_str — the C string bridge over the VERIFIED Lean `String -> String` REAL,
+ * FULL-BYTE ML-DSA-65 verify export (`Dregg2.Crypto.Fips204Verify.verifyRealFFI`, BRICK 8). Input:
+ * `"hex(pk) hex(msg) hex(ctx) hex(sig)"` (four space-separated lowercase-hex fields over the real
+ * 1952-byte key / 3309-byte signature). Output: `"1"` (accept) / `"0"` (reject; also the fail-closed
+ * answer for any malformed wire). Runs the FULL-DIMENSION `MlDsaVerifyReal.verifyCore` (proved to accept a
+ * genuine crate signature and reject tampers by `verify_accepts_real` / `verify_rejects_tampered`) — the
+ * object that takes the `fips204` crate OUT of the deployed verify TCB. Same return contract as the
+ * bridges above. */
+size_t dregg_fips204_verify_real_str(const char *in_utf8, char *out, size_t out_cap) {
+    if (out == 0 || out_cap == 0) {
+        return (size_t)-1;
+    }
+    lean_object *in_obj = lean_mk_string(in_utf8);
+    lean_object *res = dregg_fips204_verify_real(in_obj);
     const char *cstr = lean_string_cstr(res);
     size_t full = strlen(cstr);
     size_t copy = (full < out_cap - 1) ? full : (out_cap - 1);

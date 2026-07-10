@@ -54,6 +54,7 @@ load-bearing object is the executables' non-vacuity (a tampered `z`/`c̃`/out-of
 rejected mask is `none`, proved by `#guard` teeth) and their agreement with the spec.
 -/
 import Dregg2.Crypto.Fips204Spec
+import Dregg2.Crypto.MlDsaVerifyReal
 
 namespace Dregg2.Crypto.Fips204Verify
 
@@ -334,5 +335,96 @@ rejection-sampling loop, not a fake accept. -/
 #assert_axioms signCore_verifies
 #assert_axioms signExtractedApi_fips204
 #assert_axioms signExtractedApi_correct
+
+/-! ## PART 6 — the REAL, FULL-BYTE ML-DSA-65 verify over the wire (BRICK 8: the crate leaves the TCB).
+
+PARTS 1–5 extract the verify/sign at the `n=1`, `A=id` SCALAR reduction of the FIPS 204 equations — the
+object `Fips204Correct` reasons about, but over a 5-integer toy wire. `Dregg2.Crypto.MlDsaVerifyReal`
+(BRICK 6) is the FULL-DIMENSION verify — the `n=256` negacyclic ring, `NTT`, `SampleInBall`/`ExpandA` over
+`SHAKE`, and the real 1952/3309-byte `pkDecode`/`sigDecode` — PROVED (`native_decide`) to ACCEPT a genuine
+`fips204` v0.4.6 crate signature and REJECT a one-byte tamper / wrong message (`verify_accepts_real`,
+`verify_rejects_tampered`, `verify_rejects_wrong_msg`). This part `@[export]`s THAT verify over a byte wire,
+so the DEPLOYED `dregg-pq::ml_dsa_verify` — over the actual `pk ‖ msg ‖ ctx ‖ sig` bytes — runs the
+Lean-verified `MlDsaVerifyReal.verifyCore` as leanc-native code, and the `fips204` crate genuinely leaves
+the verify TCB.
+
+The wire reuses the SAME `String → String` ABI as `verifyFFI`/`signFFI` (so the existing C string bridge +
+`leanc` link carry it unchanged): four SPACE-separated lowercase-hex fields `hex(pk) hex(msg) hex(ctx)
+hex(sig)`. An empty field (e.g. `ctx = ε`) is the empty token between two spaces. Fail-CLOSED (`"0"`) on any
+malformed wire: not exactly four fields, an odd-length field, or a non-hex character. -/
+
+/-- One lowercase/uppercase hex nibble → its `[0,16)` value; `none` on a non-hex char. -/
+def hexNibble? (c : Char) : Option UInt8 :=
+  let n := c.toNat
+  if '0'.toNat ≤ n ∧ n ≤ '9'.toNat then some (UInt8.ofNat (n - '0'.toNat))
+  else if 'a'.toNat ≤ n ∧ n ≤ 'f'.toNat then some (UInt8.ofNat (n - 'a'.toNat + 10))
+  else if 'A'.toNat ≤ n ∧ n ≤ 'F'.toNat then some (UInt8.ofNat (n - 'A'.toNat + 10))
+  else none
+
+/-- Decode a hex char list to bytes; `none` on an odd length or any non-hex char (fail-closed). -/
+def decodeHexChars : List Char → Option (List UInt8)
+  | [] => some []
+  | [_] => none
+  | hi :: lo :: rest => do
+    let h ← hexNibble? hi
+    let l ← hexNibble? lo
+    let rest' ← decodeHexChars rest
+    pure (UInt8.ofNat (h.toNat * 16 + l.toNat) :: rest')
+
+/-- One byte → two lowercase-hex chars. -/
+def toHexDigit (n : UInt8) : Char :=
+  let n := n.toNat
+  if n < 10 then Char.ofNat ('0'.toNat + n) else Char.ofNat ('a'.toNat + n - 10)
+
+/-- Encode bytes as a lowercase-hex string (`decodeHexChars` is its left inverse). -/
+def hexEncode (bs : List UInt8) : String :=
+  String.ofList (bs.foldr (fun b acc => toHexDigit (b / 16) :: toHexDigit (b % 16) :: acc) [])
+
+/-- The real byte wire `hex(pk) hex(msg) hex(ctx) hex(sig)` the FFI reads. -/
+def realWire (pk M ctx sig : List UInt8) : String :=
+  hexEncode pk ++ " " ++ hexEncode M ++ " " ++ hexEncode ctx ++ " " ++ hexEncode sig
+
+/-- **FFI entry** (Rust→Lean) for the REAL, FULL-BYTE ML-DSA-65 verify (BRICK 8): parse the four hex fields
+`hex(pk) hex(msg) hex(ctx) hex(sig)`, run the Lean-verified `MlDsaVerifyReal.verifyCore` over the decoded
+bytes, and return `"1"` (accept) / `"0"` (reject). This runs the FULL-DIMENSION verify (not the `A=id` toy)
+as native code — the security-critical accept/reject of a REAL 1952-byte key + 3309-byte signature. Any
+malformed wire fails CLOSED (`"0"`). -/
+@[export dregg_fips204_verify_real]
+def verifyRealFFI (input : String) : String :=
+  match input.splitOn " " with
+  | [pkH, msgH, ctxH, sigH] =>
+    match decodeHexChars pkH.toList, decodeHexChars msgH.toList,
+          decodeHexChars ctxH.toList, decodeHexChars sigH.toList with
+    | some pk, some m, some ctx, some sig =>
+      if MlDsaVerifyReal.verifyCore pk m ctx sig then "1" else "0"
+    | _, _, _, _ => "0"
+  | _ => "0"
+
+/-! ### Teeth — the byte-wire verify is NON-VACUOUS: the REAL crate signature ACCEPTS, tampers REJECT.
+
+`MlDsaVerifyReal.gen{Pk,Sig,SigTampered}` are a genuine `fips204` v0.4.6 keypair+signature over
+`genMsg = "dregg real verify KAT"`, `ctx = ε`. These drive the WHOLE wire path (hex encode → split → hex
+decode → `verifyCore`) at build time with `native_decide` on the compiled `def`s: the honest signature
+ACCEPTS, a one-byte tamper and a wrong message REJECT. -/
+
+theorem verifyRealFFI_accepts_real :
+    verifyRealFFI (realWire MlDsaVerifyReal.genPk.toList MlDsaVerifyReal.genMsg []
+      MlDsaVerifyReal.genSig.toList) = "1" := by
+  native_decide
+
+theorem verifyRealFFI_rejects_tampered :
+    verifyRealFFI (realWire MlDsaVerifyReal.genPk.toList MlDsaVerifyReal.genMsg []
+      MlDsaVerifyReal.genSigTampered.toList) = "0" := by
+  native_decide
+
+theorem verifyRealFFI_rejects_wrong_msg :
+    verifyRealFFI (realWire MlDsaVerifyReal.genPk.toList (MlDsaVerifyReal.genMsg ++ [0]) []
+      MlDsaVerifyReal.genSig.toList) = "0" := by
+  native_decide
+
+-- A malformed wire fails CLOSED (interpreted `#guard`, fast): non-hex, wrong field count, odd-length hex.
+#guard verifyRealFFI "zz zz zz zz" = "0"
+#guard verifyRealFFI "00 00" = "0"
+#guard verifyRealFFI "0 0 0 0" = "0"
 
 end Dregg2.Crypto.Fips204Verify
