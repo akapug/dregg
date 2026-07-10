@@ -116,6 +116,7 @@ structure TransferReadoutResidual (hash : List ℤ → ℤ) (t : VmTrace)
   frHeaps : post.kernel.heaps = pre.kernel.heaps
   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
+  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
   logAdv : post.log = tr :: pre.log
 
 /-! ## §2 — `transferTraceReadout_of_residual`: REBUILD the full readout, columns discharged.
@@ -183,6 +184,7 @@ def transferTraceReadout_of_residual (hash : List ℤ → ℤ)
   frHeaps := r.frHeaps
   frNullifierRoot := r.frNullifierRoot
   frRevokedRoot := r.frRevokedRoot
+  frCommitmentsRoot := r.frCommitmentsRoot
   logAdv := r.logAdv
 
 /-! ## §3 — axiom hygiene. -/

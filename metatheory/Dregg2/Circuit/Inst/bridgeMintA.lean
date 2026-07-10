@@ -111,7 +111,7 @@ def bridgeMintE (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Inject
       ∧ k'.delegationEpoch = k.delegationEpoch
       ∧ k'.delegationEpochAt = k.delegationEpochAt
       ∧ k'.heaps = k.heaps
-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
+      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
   guardGates   := bridgeMintGuardGates
   guardProp    := bridgeMintGuardProp
   guardWidth   := 1

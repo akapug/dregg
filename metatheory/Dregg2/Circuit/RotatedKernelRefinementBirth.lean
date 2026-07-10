@@ -220,6 +220,7 @@ structure createCellGenuineEncodes (compressN : List FieldElem → FieldElem)
   frHeaps : post.kernel.heaps = pre.kernel.heaps
   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
+  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
 
 /-- **`createCell_accounts_forced` — the committed accounts growth is FIX-CIRCUIT-FORCED.** On the
 decoded row the FIX accounts gate forces the post accounts to `insert newCell pre.accounts`. -/
@@ -243,7 +244,7 @@ theorem createCell_descriptorRefines (compressN : List FieldElem → FieldElem)
     CreateCellSpec pre actor newCell post := by
   refine ⟨henc.guard, ?_, henc.born, henc.logAdv, henc.frNullifiers, henc.frRevoked,
     henc.frCommitments, henc.frFactories, henc.frDelegationEpoch, henc.frDelegationEpochAt,
-    henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot⟩
+    henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot, henc.frCommitmentsRoot⟩
   exact createCell_accounts_forced compressN hN pre post actor newCell henc
 
 /-- **The refinement, stated against `execFullA` directly.** `CreateCellSpec` IS the `.createCellA` arm
@@ -310,6 +311,7 @@ structure createFromFactoryGenuineEncodes (compressN : List FieldElem → FieldE
   frHeaps : post.kernel.heaps = pre.kernel.heaps
   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
+  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
 
 /-- **`createFromFactory_accounts_forced` — the committed accounts growth is FIX-CIRCUIT-FORCED.** -/
 theorem createFromFactory_accounts_forced (compressN : List FieldElem → FieldElem)
@@ -332,7 +334,7 @@ theorem createCellFromFactory_descriptorRefines (compressN : List FieldElem → 
   refine ⟨henc.e, henc.guard, ?_, henc.frBal, henc.frCell, henc.frSlotCaveats, henc.logAdv,
     henc.frCaps, henc.frLifecycle, henc.frDeathCert, henc.frDelegate, henc.frDelegations,
     henc.frNullifiers, henc.frRevoked, henc.frCommitments, henc.frFactories,
-    henc.frDelegationEpoch, henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot⟩
+    henc.frDelegationEpoch, henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot, henc.frCommitmentsRoot⟩
   exact createFromFactory_accounts_forced compressN hN pre post actor newCell vk henc
 
 /-- **The refinement, stated against `execFullA` directly** (via `createCellFromFactoryChainA_iff_spec`
@@ -405,6 +407,7 @@ structure spawnGenuineEncodes (compressN : List FieldElem → FieldElem)
   frHeaps : post.kernel.heaps = pre.kernel.heaps
   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
+  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
 
 /-- **`spawn_accounts_forced` — the committed accounts growth is FIX-CIRCUIT-FORCED.** The child IS
 inserted; a drop/reorder is rejected (the `accountsRoot` gate bites). This is the part of `SpawnSpec`
@@ -430,7 +433,7 @@ theorem spawn_descriptorRefines (compressN : List FieldElem → FieldElem)
   refine ⟨henc.guard, ?_, henc.frCell, henc.frSlotCaveats, henc.frLifecycle, henc.frDeathCert,
     henc.frBal, henc.capHandoff, henc.delegateHandoff, henc.delegationsHandoff, henc.logAdv,
     henc.frNullifiers, henc.frRevoked, henc.frCommitments, henc.frFactories,
-    henc.frDelegationEpoch, henc.epochStampResidual, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot⟩
+    henc.frDelegationEpoch, henc.epochStampResidual, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot, henc.frCommitmentsRoot⟩
   exact spawn_accounts_forced compressN hN pre post actor child target henc
 
 /-- **The refinement, stated against `execFullA` directly** (via `spawnChainA_iff_spec` + the
@@ -555,6 +558,7 @@ structure CreateCellTraceReadout (hash : List ℤ → ℤ)
   frHeaps : post.kernel.heaps = pre.kernel.heaps
   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
+  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
 
 /-- **`createCell_forced_sat` — the accounts growth is FORCED by the DEPLOYED `createCellV3` (Class A).**
 A `Satisfied2 hash createCellV3` witness plus the realizable `CreateCellTraceReadout` forces
@@ -585,7 +589,7 @@ theorem createCell_descriptorRefines_sat (hash : List ℤ → ℤ)
     CreateCellSpec pre actor newCell post := by
   refine ⟨rd.guard, ?_, rd.born, rd.logAdv, rd.frNullifiers, rd.frRevoked,
     rd.frCommitments, rd.frFactories, rd.frDelegationEpoch, rd.frDelegationEpochAt,
-    rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot⟩
+    rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot, rd.frCommitmentsRoot⟩
   exact createCell_forced_sat hash hsat pre post actor newCell rd
 
 /-- **CLASS-A TOOTH — a forged wrong-accounts createCell witness is UNSAT.** A `CreateCellTraceReadout`
@@ -634,6 +638,7 @@ structure CreateFromFactoryTraceReadout (hash : List ℤ → ℤ)
   frHeaps : post.kernel.heaps = pre.kernel.heaps
   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
+  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
 
 /-- **`createFromFactory_forced_sat`** — the accounts growth FORCED by the DEPLOYED `factoryV3` (Class A). -/
 theorem createFromFactory_forced_sat (hash : List ℤ → ℤ)
@@ -655,7 +660,7 @@ theorem createCellFromFactory_descriptorRefines_sat (hash : List ℤ → ℤ)
   refine ⟨rd.e, rd.guard, ?_, rd.frBal, rd.frCell, rd.frSlotCaveats, rd.logAdv,
     rd.frCaps, rd.frLifecycle, rd.frDeathCert, rd.frDelegate, rd.frDelegations,
     rd.frNullifiers, rd.frRevoked, rd.frCommitments, rd.frFactories,
-    rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot⟩
+    rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot, rd.frCommitmentsRoot⟩
   exact createFromFactory_forced_sat hash hsat pre post actor newCell vk rd
 
 /-- **CLASS-A TOOTH** — a forged wrong-accounts factory witness is UNSAT. -/
@@ -720,6 +725,7 @@ structure SpawnTraceReadout (S8 : Cap8Scheme) (hash : List ℤ → ℤ)
   frHeaps : post.kernel.heaps = pre.kernel.heaps
   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
+  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
 
 /-- **`SpawnWriteAnchor` — the realizable INSERT carriers for the spawn cap handoff** (what the deployed
 `CanonicalCapTree::insert_witness` computes — the readout-linked twin of
@@ -766,7 +772,7 @@ theorem spawn_descriptorRefines_sat (S8 : Cap8Scheme) (hash : List ℤ → ℤ)
   refine ⟨rd.guard, ?_, rd.frCell, rd.frSlotCaveats, rd.frLifecycle, rd.frDeathCert,
     rd.frBal, rd.capHandoff, rd.delegateHandoff, rd.delegationsHandoff, rd.logAdv,
     rd.frNullifiers, rd.frRevoked, rd.frCommitments, rd.frFactories,
-    rd.frDelegationEpoch, rd.epochStampResidual, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot⟩
+    rd.frDelegationEpoch, rd.epochStampResidual, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot, rd.frCommitmentsRoot⟩
   exact spawn_forced_sat S8 hash hsat pre post actor child target rd
 
 /-- **CLASS-A TOOTH** — a spawn whose post accounts drop the child is UNSAT (the grow-gate bites). -/
@@ -828,7 +834,7 @@ theorem spawnWrite_descriptorRefines_sat (S8 : Cap8Scheme) (hash : List ℤ → 
   refine ⟨rd.guard, ?_, rd.frCell, rd.frSlotCaveats, rd.frLifecycle, rd.frDeathCert,
     rd.frBal, ?_, rd.delegateHandoff, rd.delegationsHandoff, rd.logAdv,
     rd.frNullifiers, rd.frRevoked, rd.frCommitments, rd.frFactories,
-    rd.frDelegationEpoch, rd.epochStampResidual, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot⟩
+    rd.frDelegationEpoch, rd.epochStampResidual, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot, rd.frCommitmentsRoot⟩
   · -- accounts insert: forced by the cells grow-gate (still present on the stripped base).
     have hbase : Satisfied2 hash spawnWriteV3 minit mfin maddrs t :=
       Dregg2.Circuit.Emit.CapOpenEmit.effCapOpenV3_satisfied2_strips_to_base hash spawnWriteV3 name n

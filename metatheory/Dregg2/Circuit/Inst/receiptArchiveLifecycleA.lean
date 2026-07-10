@@ -47,7 +47,7 @@ def RestIffNoLifecycle (RH : RecordKernelState → ℤ) : Prop :=
       ∧ k'.delegationEpoch = k.delegationEpoch
       ∧ k'.delegationEpochAt = k.delegationEpochAt
       ∧ k'.heaps = k.heaps
-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
+      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
 
 structure ReceiptArchiveArgs where
   actor : CellId
@@ -103,7 +103,7 @@ def receiptArchiveLifecycleE (D : (CellId → Nat) → ℤ) (hD : Function.Injec
       ∧ k'.delegationEpoch = k.delegationEpoch
       ∧ k'.delegationEpochAt = k.delegationEpochAt
       ∧ k'.heaps = k.heaps
-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
+      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
   guardGates   := archiveGuardGates
   guardProp    := archiveGuardProp
   guardWidth   := 1

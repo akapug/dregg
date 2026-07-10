@@ -205,6 +205,7 @@ structure noteSpendGenuineEncodes (compressN : List FieldElem → FieldElem)
   frHeaps : post.kernel.heaps = pre.kernel.heaps
   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
+  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
 
 /-- **`noteSpend_nullifiers_forced` — the committed nullifier set-insert is FIX-CIRCUIT-FORCED.** On the
 decoded row the FIX nullifiers gate forces the post nullifiers to `nf :: pre.nullifiers`. -/
@@ -230,7 +231,7 @@ theorem noteSpend_descriptorRefines (compressN : List FieldElem → FieldElem)
   refine ⟨⟨henc.proof, henc.freshness⟩, ?_, henc.logAdv, henc.frAccounts, henc.frCell, henc.frCaps,
     henc.frRevoked, henc.frCommitments, henc.frBal, henc.frSlotCaveats, henc.frFactories,
     henc.frLifecycle, henc.frDeathCert, henc.frDelegate, henc.frDelegations, henc.frDelegationEpoch,
-    henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot⟩
+    henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot, henc.frCommitmentsRoot⟩
   exact noteSpend_nullifiers_forced compressN hN pre post nf actor spendProof henc
 
 /-- **The refinement, stated against `execFullA` directly.** `NoteSpendSpec` IS the `.noteSpendA` arm
@@ -307,6 +308,7 @@ structure noteCreateGenuineEncodes (compressN : List FieldElem → FieldElem)
   frHeaps : post.kernel.heaps = pre.kernel.heaps
   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
+  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
 
 /-- **`noteCreate_commitments_forced` — the committed commitment set-insert is FIX-CIRCUIT-FORCED.** On
 the decoded row the FIX commitments gate forces the post commitments to `cm :: pre.commitments`. -/
@@ -331,7 +333,7 @@ theorem noteCreate_descriptorRefines (compressN : List FieldElem → FieldElem)
   refine ⟨trivial, ?_, henc.logAdv, henc.frAccounts, henc.frCell, henc.frCaps, henc.frNullifiers,
     henc.frRevoked, henc.frBal, henc.frSlotCaveats, henc.frFactories, henc.frLifecycle,
     henc.frDeathCert, henc.frDelegate, henc.frDelegations, henc.frDelegationEpoch,
-    henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot⟩
+    henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot, henc.frCommitmentsRoot⟩
   exact noteCreate_commitments_forced compressN hN pre post cm actor henc
 
 /-- **The refinement, stated against `execFullA` directly.** `NoteCreateASpec` IS the `.noteCreateA`
@@ -453,6 +455,7 @@ structure NoteSpendTraceReadout (hash : List ℤ → ℤ)
   frHeaps : post.kernel.heaps = pre.kernel.heaps
   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
+  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
 
 /-- **`noteSpend_forced_sat`** — the nullifier set-insert FORCED by the DEPLOYED `noteSpendV3` (Class A). -/
 theorem noteSpend_forced_sat (hash : List ℤ → ℤ)
@@ -476,7 +479,7 @@ theorem noteSpend_descriptorRefines_sat (hash : List ℤ → ℤ)
   refine ⟨⟨rd.proof, rd.freshness⟩, ?_, rd.logAdv, rd.frAccounts, rd.frCell, rd.frCaps,
     rd.frRevoked, rd.frCommitments, rd.frBal, rd.frSlotCaveats, rd.frFactories,
     rd.frLifecycle, rd.frDeathCert, rd.frDelegate, rd.frDelegations, rd.frDelegationEpoch,
-    rd.frDelegationEpochAt, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot⟩
+    rd.frDelegationEpochAt, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot, rd.frCommitmentsRoot⟩
   exact noteSpend_forced_sat hash hsat pre post nf actor spendProof rd
 
 /-- **CLASS-A TOOTH** — a forged wrong-nullifiers noteSpend witness is UNSAT (the grow-gate bites). -/
@@ -521,6 +524,7 @@ structure NoteCreateTraceReadout (hash : List ℤ → ℤ)
   frHeaps : post.kernel.heaps = pre.kernel.heaps
   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
+  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
 
 /-- **`noteCreate_forced_sat`** — the commitment set-insert FORCED by the DEPLOYED `noteCreateV3` (Class A;
 the whole load-bearing content, no guard). -/
@@ -543,7 +547,7 @@ theorem noteCreate_descriptorRefines_sat (hash : List ℤ → ℤ)
   refine ⟨trivial, ?_, rd.logAdv, rd.frAccounts, rd.frCell, rd.frCaps, rd.frNullifiers,
     rd.frRevoked, rd.frBal, rd.frSlotCaveats, rd.frFactories, rd.frLifecycle,
     rd.frDeathCert, rd.frDelegate, rd.frDelegations, rd.frDelegationEpoch,
-    rd.frDelegationEpochAt, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot⟩
+    rd.frDelegationEpochAt, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot, rd.frCommitmentsRoot⟩
   exact noteCreate_forced_sat hash hsat pre post cm actor rd
 
 /-- **CLASS-A TOOTH** — a forged wrong-commitments noteCreate witness is UNSAT (the grow-gate bites). -/

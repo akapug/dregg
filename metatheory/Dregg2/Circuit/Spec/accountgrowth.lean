@@ -80,7 +80,8 @@ private theorem recordKernel_eq_of_fields {k k' : RecordKernelState}
     (hdelegationEpochAt : k.delegationEpochAt = k'.delegationEpochAt)
     (hheaps : k.heaps = k'.heaps)
     (hnullifierRoot : k.nullifierRoot = k'.nullifierRoot)
-    (hrevokedRoot : k.revokedRoot = k'.revokedRoot) : k = k' := by
+    (hrevokedRoot : k.revokedRoot = k'.revokedRoot)
+    (hcommitmentsRoot : k.commitmentsRoot = k'.commitmentsRoot) : k = k' := by
   cases k; cases k'; simp_all
 
 /-! ## §1 — the admissibility guards, lifted from the CODE. -/
@@ -191,6 +192,7 @@ def CreateCellSpec (st : RecChainedState) (actor newCell : CellId) (st' : RecCha
   ∧ st'.kernel.heaps = st.kernel.heaps
   ∧ st'.kernel.nullifierRoot = st.kernel.nullifierRoot
   ∧ st'.kernel.revokedRoot = st.kernel.revokedRoot
+  ∧ st'.kernel.commitmentsRoot = st.kernel.commitmentsRoot
 
 /-- **`createCellChainA_iff_spec` — CHAINED EXECUTOR ⟺ SPEC (FULL state, both directions).** The
 chained record kernel commits a `createCellA` into `st'` IFF `st'` is EXACTLY the spec'd full
@@ -209,17 +211,17 @@ theorem createCellChainA_iff_spec (st : RecChainedState) (actor newCell : CellId
     · intro h
       simp only [Option.some.injEq] at h
       subst h
-      refine ⟨hg, rfl, ?_, ?_, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+      refine ⟨hg, rfl, ?_, ?_, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
       · dsimp only [bornEmptyAt]
         refine ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
       · simp only [createReceipt]
-    · rintro ⟨_, hacc, hborn, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9⟩
+    · rintro ⟨_, hacc, hborn, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10⟩
       obtain ⟨k', lg'⟩ := st'
-      obtain ⟨acc, cl, cp, nl, rv, cm, bl, sc, fc, lc, dc, dl, dn, dge, dgea, hp, nr, rr⟩ := k'
+      obtain ⟨acc, cl, cp, nl, rv, cm, bl, sc, fc, lc, dc, dl, dn, dge, dgea, hp, nr, rr, cr⟩ := k'
       dsimp only [bornEmptyAt] at hborn
       obtain ⟨hcl, hcp, hdel, hdgs, hsc, hlif, hdc, hbal⟩ := hborn
-      simp only at hacc hcl hcp hdel hdgs hsc hlif hdc hbal hlog h1 h2 h3 h4 h5 h6 h7 h8 h9
-      subst hacc hcl hcp hdel hdgs hsc hlif hdc hbal hlog h1 h2 h3 h4 h5 h6 h7 h8 h9
+      simp only at hacc hcl hcp hdel hdgs hsc hlif hdc hbal hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10
+      subst hacc hcl hcp hdel hdgs hsc hlif hdc hbal hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10
       rfl
   · rw [if_neg hg]
     constructor
@@ -395,6 +397,7 @@ def SpawnSpec (st : RecChainedState) (actor child target : CellId) (st' : RecCha
   ∧ st'.kernel.heaps = st.kernel.heaps
   ∧ st'.kernel.nullifierRoot = st.kernel.nullifierRoot
   ∧ st'.kernel.revokedRoot = st.kernel.revokedRoot
+  ∧ st'.kernel.commitmentsRoot = st.kernel.commitmentsRoot
 
 /-- The post `delegationEpochAt` stamp map a committed `spawnA` produces: the child is stamped with the
 spawner-parent's CURRENT `delegationEpoch` (so the freshly-born child is NOT stale even under a nonzero
@@ -429,6 +432,7 @@ def SpawnFullSpec (st : RecChainedState) (actor child target : CellId) (st' : Re
   ∧ st'.kernel.heaps = st.kernel.heaps
   ∧ st'.kernel.nullifierRoot = st.kernel.nullifierRoot
   ∧ st'.kernel.revokedRoot = st.kernel.revokedRoot
+  ∧ st'.kernel.commitmentsRoot = st.kernel.commitmentsRoot
 
 /-- **`SpawnFullSpec_implies_SpawnSpec` — the strengthened spec REFINES the frozen face.** Every clause of
 `SpawnSpec` (the deployed descriptor's spec) holds of a `SpawnFullSpec` post EXCEPT the `delegationEpochAt`
@@ -455,7 +459,7 @@ theorem SpawnFullSpec_dropEpochAt (st : RecChainedState) (actor child target : C
     ∧ st'.kernel.delegationEpoch = st.kernel.delegationEpoch
     ∧ st'.kernel.heaps = st.kernel.heaps
     ∧ st'.kernel.nullifierRoot = st.kernel.nullifierRoot
-    ∧ st'.kernel.revokedRoot = st.kernel.revokedRoot := by
+    ∧ st'.kernel.revokedRoot = st.kernel.revokedRoot ∧ st'.kernel.commitmentsRoot = st.kernel.commitmentsRoot := by
   obtain ⟨hg, hacc, hcl, hsc, hlif, hdc, hbal, hcaps, hdel, hdgs, hlog, h2, h3, h4, h5,
          hde, _hdea, hhp, hnr, hrr⟩ := h
   exact ⟨hg, hacc, hcl, hsc, hlif, hdc, hbal, hcaps, hdel, hdgs, hlog, h2, h3, h4, h5, hde, hhp,
@@ -482,7 +486,7 @@ theorem spawnChainA_iff_spec (st : RecChainedState) (actor child target : CellId
         simp only [Option.some.injEq] at h
         subst h
         refine ⟨⟨hg.1, hg.2, hc⟩, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, rfl, rfl, rfl, rfl,
-               rfl, ?_, rfl, rfl, rfl⟩
+               rfl, ?_, rfl, rfl, rfl, rfl⟩
         · funext c; by_cases hc' : c = child <;> simp [hc']
         · funext c; by_cases hc' : c = child <;> simp [hc']
         · funext c; by_cases hc' : c = child <;> simp [hc']
@@ -494,12 +498,12 @@ theorem spawnChainA_iff_spec (st : RecChainedState) (actor child target : CellId
         · simp only [createReceipt]
         · funext c; by_cases hc' : c = child <;> simp [hc']
       · rintro ⟨⟨he, ht, hca⟩, hacc, hcl, hsc, hlif, hdc, hbal, hcaps, hdel, hdgs, hlog, h2,
-                h3, h4, h5, hde, hdea, hhp, hnr, hrr⟩
+                h3, h4, h5, hde, hdea, hhp, hnr, hrr, hcr⟩
         simp only [Option.some.injEq]
         obtain ⟨k', lg'⟩ := st'
-        obtain ⟨acc, cl, cp, nl, rv, cm, bl, sc, fc, lc, dc, dl, dn, dge, dgea, hp, nr, rr⟩ := k'
-        simp only at hacc hcl hsc hlif hdc hbal hcaps hdel hdgs hlog h2 h3 h4 h5 hde hdea hhp hnr hrr
-        subst hacc hcl hsc hlif hdc hbal hcaps hdel hdgs hlog h2 h3 h4 h5 hde hdea hhp hnr hrr
+        obtain ⟨acc, cl, cp, nl, rv, cm, bl, sc, fc, lc, dc, dl, dn, dge, dgea, hp, nr, rr, cr⟩ := k'
+        simp only at hacc hcl hsc hlif hdc hbal hcaps hdel hdgs hlog h2 h3 h4 h5 hde hdea hhp hnr hrr hcr
+        subst hacc hcl hsc hlif hdc hbal hcaps hdel hdgs hlog h2 h3 h4 h5 hde hdea hhp hnr hrr hcr
         rfl
     · rw [if_neg hc]
       constructor

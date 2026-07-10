@@ -140,6 +140,7 @@ def BalanceMovementSpec (st : RecChainedState) (t : Turn) (a : AssetId) (st' : R
   ∧ st'.kernel.heaps = st.kernel.heaps
   ∧ st'.kernel.nullifierRoot = st.kernel.nullifierRoot
   ∧ st'.kernel.revokedRoot = st.kernel.revokedRoot
+  ∧ st'.kernel.commitmentsRoot = st.kernel.commitmentsRoot
 
 /-- **`recCexecAsset_iff_spec` — EXECUTOR ⟺ SPEC (FULL state, both directions)** on the chained
 per-asset executor. `recCexecAsset` commits a movement into `st'` IFF `st'` is EXACTLY the spec'd full
@@ -161,14 +162,14 @@ theorem recCexecAsset_iff_spec (st : RecChainedState) (t : Turn) (a : AssetId) (
         subst h
         rcases hg with ⟨ha, hnn, havail, hne, hsrc, hdst, hsrclive⟩
         exact ⟨⟨ha, hnn, havail, hne, hsrc, hdst, hsrclive, hadm⟩, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
-               rfl, rfl, rfl, rfl, rfl⟩
+               rfl, rfl, rfl, rfl, rfl, rfl⟩
       · rintro ⟨hguard, hbal, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15,
-                h16, h17⟩
+                h16, h17, h18⟩
         obtain ⟨k', l'⟩ := st'
-        obtain ⟨acc, cell, caps, nul, rev, com, bal, sc, fac, lc, dc, dg, dgs, dge, dgea, hp, nr, rr⟩
+        obtain ⟨acc, cell, caps, nul, rev, com, bal, sc, fac, lc, dc, dg, dgs, dge, dgea, hp, nr, rr, cr⟩
           := k'
-        simp only at hbal hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
-        subst hbal hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
+        simp only at hbal hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+        subst hbal hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
         rfl
     · rw [if_pos hadm, if_neg hg]
       constructor

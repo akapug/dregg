@@ -124,6 +124,7 @@ def setPerms_readout :
   frHeaps := rfl
   frNullifierRoot := rfl
   frRevokedRoot := rfl
+  frCommitmentsRoot := rfl
 
 theorem setPerms_readout_inhabited :
     Nonempty (SetPermsTraceReadout (fun ins => (permOutZ ins).headD 0) (fun _ => 0) (fun _ => (0, 0)) []
@@ -191,6 +192,7 @@ def setVK_readout :
   frHeaps := rfl
   frNullifierRoot := rfl
   frRevokedRoot := rfl
+  frCommitmentsRoot := rfl
 
 theorem setVK_readout_inhabited :
     Nonempty (SetVKTraceReadout (fun ins => (permOutZ ins).headD 0) (fun _ => 0) (fun _ => (0, 0)) []
@@ -252,6 +254,7 @@ def setProgram_readout :
   frHeaps := rfl
   frNullifierRoot := rfl
   frRevokedRoot := rfl
+  frCommitmentsRoot := rfl
 
 theorem setProgram_readout_inhabited :
     Nonempty (SetProgramTraceReadout cZero (fun ins => (permOutZ ins).headD 0)
@@ -290,7 +293,7 @@ def revFrame : KernelFrameExceptCaps revPre revPost :=
     frCommitments := rfl, frBal := rfl, frSlotCaveats := rfl, frFactories := rfl,
     frLifecycle := rfl, frDeathCert := rfl, frDelegate := rfl, frDelegations := rfl,
     frDelegationEpoch := rfl, frDelegationEpochAt := rfl, frHeaps := rfl,
-    frNullifierRoot := rfl, frRevokedRoot := rfl }
+    frNullifierRoot := rfl, frRevokedRoot := rfl, frCommitmentsRoot := rfl }
 
 /-- **`RevokeCapabilityTraceReadout` is INHABITED** (for EVERY `Cap8Scheme` — the decode seam
 `capsMoveDecodes` is an implication discharged `fun _ => rfl`, scheme-independent).

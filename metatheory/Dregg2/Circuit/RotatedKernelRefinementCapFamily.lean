@@ -144,6 +144,7 @@ structure KernelFrameExceptCaps (pre post : RecChainedState) : Prop where
   frHeaps : post.kernel.heaps = pre.kernel.heaps
   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
+  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
 
 /-! ## §1 — INSERT effects: delegate / introduce / grantCap.
 
@@ -198,7 +199,7 @@ theorem delegate_descriptorRefines (S8 : Cap8Scheme)
    henc.frame.frCommitments, henc.frame.frBal, henc.frame.frSlotCaveats, henc.frame.frFactories,
    henc.frame.frLifecycle, henc.frame.frDeathCert, henc.frame.frDelegate, henc.frame.frDelegations,
    henc.frame.frDelegationEpoch, henc.frame.frDelegationEpochAt, henc.frame.frHeaps,
-   henc.frame.frNullifierRoot, henc.frame.frRevokedRoot⟩
+   henc.frame.frNullifierRoot, henc.frame.frRevokedRoot, henc.frame.frCommitmentsRoot⟩
 
 /-- **`delegate_execFullA` — the refinement against the executor arm.** `DelegateSpec` IS the
 `.delegate` / `.introduceA` arm of `execFullA`, so the decode forces a genuine committed delegate
@@ -286,7 +287,7 @@ theorem attenuate_descriptorRefines_exact (S8 : Cap8Scheme)
    henc.frame.frCommitments, henc.frame.frBal, henc.frame.frSlotCaveats, henc.frame.frFactories,
    henc.frame.frLifecycle, henc.frame.frDeathCert, henc.frame.frDelegate, henc.frame.frDelegations,
    henc.frame.frDelegationEpoch, henc.frame.frDelegationEpochAt, henc.frame.frHeaps,
-   henc.frame.frNullifierRoot, henc.frame.frRevokedRoot⟩
+   henc.frame.frNullifierRoot, henc.frame.frRevokedRoot, henc.frame.frCommitmentsRoot⟩
 
 /-- **`attenuate_execFullA` — the refinement against the executor arm.** `AttenuateSpec` IS the
 `.attenuateA` arm (TOTAL — always commits), so the decode forces `execFullA pre (.attenuateA actor idx
@@ -435,7 +436,7 @@ theorem delegateAtten_descriptorRefines (S8 : Cap8Scheme)
    henc.frame.frCommitments, henc.frame.frBal, henc.frame.frSlotCaveats, henc.frame.frFactories,
    henc.frame.frLifecycle, henc.frame.frDeathCert, henc.frame.frDelegate, henc.frame.frDelegations,
    henc.frame.frDelegationEpoch, henc.frame.frDelegationEpochAt, henc.frame.frHeaps,
-   henc.frame.frNullifierRoot, henc.frame.frRevokedRoot⟩
+   henc.frame.frNullifierRoot, henc.frame.frRevokedRoot, henc.frame.frCommitmentsRoot⟩
 
 /-- **`delegateAtten_non_amplifying` — the headline non-amp, read off the FORCED spec.** The granted
 attenuated cap's REAL conferred rights are `⊆` the delegator's held cap (`is_attenuation`), holding of
@@ -503,6 +504,7 @@ structure RefreshDelegationCapsTreeEncodes (S8 : Cap8Scheme)
   frHeaps : post.kernel.heaps = pre.kernel.heaps
   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
+  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
 
 /-- **`refreshDelegation_forces_keyset_preserved` — the UPDATE-AT-KEY is FORCED (key set preserved).** -/
 theorem refreshDelegation_forces_keyset_preserved (S8 : Cap8Scheme)
@@ -522,7 +524,7 @@ theorem refreshDelegation_descriptorRefines (S8 : Cap8Scheme)
    henc.frAccounts, henc.frCell, henc.frCaps, henc.frNullifiers, henc.frRevoked,
    henc.frCommitments, henc.frBal, henc.frSlotCaveats, henc.frFactories, henc.frLifecycle,
    henc.frDeathCert, henc.frDelegate, henc.frDelegationEpoch, henc.epochStampResidual, henc.frHeaps,
-   henc.frNullifierRoot, henc.frRevokedRoot⟩
+   henc.frNullifierRoot, henc.frRevokedRoot, henc.frCommitmentsRoot⟩
 
 /-- **`refreshDelegation_execFullA` — the refinement against the executor arm.** -/
 theorem refreshDelegation_execFullA (S8 : Cap8Scheme)
@@ -583,7 +585,7 @@ theorem revoke_descriptorRefines (S8 : Cap8Scheme)
    henc.frame.frCommitments, henc.frame.frBal, henc.frame.frSlotCaveats, henc.frame.frFactories,
    henc.frame.frLifecycle, henc.frame.frDeathCert, henc.frame.frDelegate, henc.frame.frDelegations,
    henc.frame.frDelegationEpoch, henc.frame.frDelegationEpochAt, henc.frame.frHeaps,
-   henc.frame.frNullifierRoot, henc.frame.frRevokedRoot⟩
+   henc.frame.frNullifierRoot, henc.frame.frRevokedRoot, henc.frame.frCommitmentsRoot⟩
 
 /-- **`revoke_execFullA` — the refinement against the executor arm (`revoke`).** -/
 theorem revoke_execFullA (S8 : Cap8Scheme)
@@ -654,7 +656,7 @@ theorem revokeDelegation_descriptorRefines (S8 : Cap8Scheme)
    henc.capRemove.frame.frRevoked, henc.capRemove.frame.frCommitments, henc.capRemove.frame.frBal,
    henc.capRemove.frame.frSlotCaveats, henc.capRemove.frame.frFactories, henc.capRemove.frame.frLifecycle,
    henc.capRemove.frame.frDeathCert, henc.capRemove.frame.frDelegate, henc.capRemove.frame.frHeaps,
-   henc.capRemove.frame.frNullifierRoot, henc.capRemove.frame.frRevokedRoot,
+   henc.capRemove.frame.frNullifierRoot, henc.capRemove.frame.frRevokedRoot, henc.capRemove.frame.frCommitmentsRoot,
    henc.epochStepParent, henc.epochStepChildSnapshot, henc.epochStepChildStamp⟩
 
 /-- **`revokeDelegation_execFullA` — the refinement against the executor arm (`revokeDelegationA`).** The
@@ -1465,7 +1467,7 @@ theorem revokeCapability_descriptorRefines_sat (S8 : Cap8Scheme) (hash : List �
    rd.frame.frCommitments, rd.frame.frBal, rd.frame.frSlotCaveats, rd.frame.frFactories,
    rd.frame.frLifecycle, rd.frame.frDeathCert, rd.frame.frDelegate, rd.frame.frDelegations,
    rd.frame.frDelegationEpoch, rd.frame.frDelegationEpochAt, rd.frame.frHeaps,
-   rd.frame.frNullifierRoot, rd.frame.frRevokedRoot⟩
+   rd.frame.frNullifierRoot, rd.frame.frRevokedRoot, rd.frame.frCommitmentsRoot⟩
 
 /-- **`revokeCapability_execFullA_sat` — the Class-A refinement against the executor arm.** -/
 theorem revokeCapability_execFullA_sat (S8 : Cap8Scheme) (hash : List ℤ → ℤ)

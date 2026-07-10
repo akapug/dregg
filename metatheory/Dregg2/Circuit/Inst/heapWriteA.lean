@@ -54,7 +54,7 @@ def RestIffNoCellHeaps (RH : RecordKernelState → ℤ) : Prop :=
       ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
       ∧ k'.delegationEpoch = k.delegationEpoch
       ∧ k'.delegationEpochAt = k.delegationEpochAt
-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
+      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
 
 /-- The heap-write arguments: actor, target, and the wire-carried digests
 (`addr = H[coll,key]`, value, post-root). -/
@@ -126,7 +126,7 @@ def heapWriteE (DCell : (CellId → Value) → ℤ) (hDCell : Function.Injective
       ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
       ∧ k'.delegationEpoch = k.delegationEpoch
       ∧ k'.delegationEpochAt = k.delegationEpochAt
-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
+      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
   guardGates   := heapWriteGuardGates
   guardProp    := heapWriteGuardProp
   guardWidth   := 1

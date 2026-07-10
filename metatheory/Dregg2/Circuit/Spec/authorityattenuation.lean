@@ -107,6 +107,7 @@ def DelegateAttenSpec (s : RecChainedState) (del rec t : CellId) (keep : List Au
   ∧ s'.kernel.heaps = s.kernel.heaps
   ∧ s'.kernel.nullifierRoot = s.kernel.nullifierRoot
   ∧ s'.kernel.revokedRoot = s.kernel.revokedRoot
+  ∧ s'.kernel.commitmentsRoot = s.kernel.commitmentsRoot
 
 /-- **`delegateAtten_iff_spec` — EXECUTOR ⟺ SPEC (FULL state, both directions).** The full executor
 `execFullA` commits a `delegateAttenA del rec t keep` into `s'` IFF `s'` is EXACTLY the spec'd full
@@ -126,15 +127,15 @@ theorem delegateAtten_iff_spec (s : RecChainedState) (del rec t : CellId) (keep 
       simp only [Option.some.injEq] at h
       subst h
       exact ⟨hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
-        rfl, rfl⟩
+        rfl, rfl, rfl⟩
     · rintro ⟨_, hcaps, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16,
-              h17⟩
+              h17, h18⟩
       -- reconstruct `s'` from its (kernel field-by-field) + log spec.
       obtain ⟨k', log'⟩ := s'
-      obtain ⟨acc, cell, caps, nul, rev, com, bal, sc, fac, lc, dc, dg, dgs, dge, dgea, hp, nr, rr⟩
+      obtain ⟨acc, cell, caps, nul, rev, com, bal, sc, fac, lc, dc, dg, dgs, dge, dgea, hp, nr, rr, cr⟩
         := k'
-      simp only at hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
-      subst hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
+      simp only at hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+      subst hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
       rfl
   · rw [if_neg hg]
     constructor
@@ -194,6 +195,7 @@ def AttenuateSpec (s : RecChainedState) (actor : CellId) (idx : Nat) (keep : Lis
   ∧ s'.kernel.heaps = s.kernel.heaps
   ∧ s'.kernel.nullifierRoot = s.kernel.nullifierRoot
   ∧ s'.kernel.revokedRoot = s.kernel.revokedRoot
+  ∧ s'.kernel.commitmentsRoot = s.kernel.commitmentsRoot
 
 /-- **`attenuate_iff_spec` — EXECUTOR ⟺ SPEC (FULL state, both directions).** `execFullA` commits an
 `attenuateA actor idx keep` (always — it is a TOTAL `some …` arm) into `s'` IFF `s'` is EXACTLY the
@@ -213,14 +215,14 @@ theorem attenuate_iff_spec (s : RecChainedState) (actor : CellId) (idx : Nat) (k
     · intro h
       subst h
       exact ⟨hb, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
-        rfl, rfl⟩
+        rfl, rfl, rfl⟩
     · rintro ⟨_, hcaps, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16,
-              h17⟩
+              h17, h18⟩
       obtain ⟨k', log'⟩ := s'
-      obtain ⟨acc, cell, caps, nul, rev, com, bal, sc, fac, lc, dc, dg, dgs, dge, dgea, hp, nr, rr⟩
+      obtain ⟨acc, cell, caps, nul, rev, com, bal, sc, fac, lc, dc, dg, dgs, dge, dgea, hp, nr, rr, cr⟩
         := k'
-      simp only at hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
-      subst hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
+      simp only at hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+      subst hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
       rfl
   · rw [if_neg hb]
     constructor

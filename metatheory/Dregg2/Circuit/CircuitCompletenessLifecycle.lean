@@ -143,7 +143,8 @@ def cellSeal_cellSealGenuineEncodes_construct (compressN : List FieldElem → Fi
   frDelegationEpochAt := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
   frHeaps             := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
   frNullifierRoot     := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
-  frRevokedRoot       := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
+  frRevokedRoot       := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
+  frCommitmentsRoot := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
 
 /-- **`cellSeal_descriptorComplete_genuine` — the constructed decode realizes the GENUINE seal.** From
 `CellSealSpec`, the whole post lifecycle map IS `sealLifecycleMap pre.kernel cell` (the spec's lifecycle
@@ -237,7 +238,8 @@ def cellUnseal_cellUnsealEncodes_construct (compressN : List FieldElem → Field
   frDelegationEpochAt := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
   frHeaps             := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
   frNullifierRoot     := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
-  frRevokedRoot       := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
+  frRevokedRoot       := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
+  frCommitmentsRoot := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
 
 /-- **`cellUnseal_descriptorComplete_genuine` — the constructed decode realizes the GENUINE unseal.** From
 `CellUnsealSpec`, the whole post lifecycle map IS `unsealLifecycleMap pre.kernel cell`, so the `cell`
@@ -339,7 +341,8 @@ def cellDestroy_cellDestroyEncodes_construct (compressN : List FieldElem → Fie
   frDelegationEpochAt := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
   frHeaps             := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
   frNullifierRoot     := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
-  frRevokedRoot       := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
+  frRevokedRoot       := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
+  frCommitmentsRoot := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
 
 /-- **`cellDestroy_descriptorComplete_genuine` — the constructed decode realizes the GENUINE destroy.**
 From `CellDestroySpec`, the post lifecycle of `cell` reads back exactly `lcDestroyed` (the →Destroyed
@@ -444,7 +447,8 @@ def audit_auditEncodes_construct (compressN : List FieldElem → FieldElem)
     (frDelegationEpochAt : post.kernel.delegationEpochAt = pre.kernel.delegationEpochAt)
     (frHeaps : post.kernel.heaps = pre.kernel.heaps)
     (frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot)
-    (frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot) :
+    (frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot)
+    (frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot) :
     auditEncodes compressN pre post actor cell f where
   postRoot := prover.postRoot
   hpost := prover.hpost
@@ -469,6 +473,7 @@ def audit_auditEncodes_construct (compressN : List FieldElem → FieldElem)
   frHeaps := frHeaps
   frNullifierRoot := frNullifierRoot
   frRevokedRoot := frRevokedRoot
+  frCommitmentsRoot := frCommitmentsRoot
 
 /-- **`refusal_auditEncodes_construct` — CONSTRUCT the refusal decode from `RefusalSpec`.** From
 `RefusalSpec pre actor cell post` and the realizable `AuditRootProver` over `refusalField`, ASSEMBLE
@@ -487,7 +492,7 @@ def refusal_auditEncodes_construct (compressN : List FieldElem → FieldElem)
     hspec.2.2.2.2.2.2.2.2.2.2.2.2.1 hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.1
     hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1 hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
     hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1 hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
-    hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1 hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
+    hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1 hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1 hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
 
 /-- **`refusal_descriptorComplete_genuine` — the constructed decode realizes the GENUINE refusal record
 write.** From `RefusalSpec`, the `"refusal"` audit slot of `cell` reads back exactly `1`
@@ -550,7 +555,7 @@ def receiptArchive_auditEncodes_construct (compressN : List FieldElem → FieldE
     hspec.2.2.2.2.2.2.2.2.2.2.2.2.1 hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.1
     hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1 hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
     hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1 hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
-    hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1 hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
+    hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1 hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1 hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
 
 /-- **`receiptArchive_descriptorComplete_genuine` — the constructed decode realizes the GENUINE archive
 record write.** From `ReceiptArchiveSpec`, the `"lifecycle"` RECORD slot of `cell` reads back exactly `1`

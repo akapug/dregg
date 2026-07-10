@@ -156,7 +156,8 @@ def burn_rotatedEncodesBurn_construct (hash : List ℤ → ℤ)
   frDelegationEpochAt := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
   frHeaps             := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
   frNullifierRoot     := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
-  frRevokedRoot       := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
+  frRevokedRoot       := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
+  frCommitmentsRoot       := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
 
 /-- **`burn_descriptorComplete_genuine` — the constructed decode realizes the GENUINE debit.** From
 `BurnSpec`, the holder ledger entry `(cell, a)` drops by exactly `amt` (`recBurn_ledger_correct`). So the
@@ -282,7 +283,8 @@ def mint_rotatedEncodesMint_construct (hash : List ℤ → ℤ)
   frDelegationEpochAt := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
   frHeaps             := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
   frNullifierRoot     := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
-  frRevokedRoot       := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
+  frRevokedRoot       := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
+  frCommitmentsRoot       := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
 
 /-- **`mint_descriptorComplete_genuine` — the constructed decode realizes the GENUINE credit.** From
 `MintASpec`, the recipient `(cell, a)` entry rises by exactly `amt` (`recTransferBal_mint_correct`). The
@@ -432,7 +434,8 @@ def setField_rotatedEncodesSF_construct (slot : Fin 8) (hash : List ℤ → ℤ)
   frDelegationEpochAt := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
   frHeaps             := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
   frNullifierRoot     := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
-  frRevokedRoot       := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
+  frRevokedRoot       := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
+  frCommitmentsRoot       := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
 
 /-- **`setField_descriptorComplete_genuine` — the constructed decode realizes the GENUINE write.** From
 `SetFieldSpec`, the written slot `slotName slot` of `cell` reads back exactly `v`

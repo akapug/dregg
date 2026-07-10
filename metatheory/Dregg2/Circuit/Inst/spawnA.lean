@@ -52,7 +52,7 @@ def RestIffNoSpawnTouched (RH : RecordKernelState → ℤ) : Prop :=
       ∧ k'.factories = k.factories
       ∧ k'.delegationEpoch = k.delegationEpoch
       ∧ k'.heaps = k.heaps
-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
+      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
 
 /-! ## §2 — the `spawnE` quint instance. -/
 
@@ -146,7 +146,7 @@ def spawnE (LE : CellId → ℤ) (cN : List ℤ → ℤ)
       ∧ k'.factories = k.factories
       ∧ k'.delegationEpoch = k.delegationEpoch
       ∧ k'.heaps = k.heaps
-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
+      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
   guardGates   := spawnGuardGates
   guardProp    := spawnGuardProp
   guardWidth   := 1
@@ -227,6 +227,7 @@ def SpawnCircuitSpec (st : RecChainedState) (actor child target : CellId) (st' :
   ∧ st'.kernel.delegationEpoch = st.kernel.delegationEpoch
   ∧ st'.kernel.heaps = st.kernel.heaps
   ∧ st'.kernel.nullifierRoot = st.kernel.nullifierRoot ∧ st'.kernel.revokedRoot = st.kernel.revokedRoot
+  ∧ st'.kernel.commitmentsRoot = st.kernel.commitmentsRoot
 
 theorem SpawnSpec_implies_circuitSpec (st : RecChainedState) (actor child target : CellId)
     (st' : RecChainedState) (h : SpawnFullSpec st actor child target st') :
