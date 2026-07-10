@@ -79,11 +79,13 @@ fn record_kernel_boundary_agrees_over_all_planes() {
     // Spell out the per-map-table representation it agrees with (no tautology:
     // the derivation never read these stored roots).
     assert_eq!(
-        boundary.fields_root, cell.state.fields_root,
+        boundary.fields_root,
+        cell.state.fields_root.to_bytes32(),
         "derived fields_root == committed fields_root"
     );
     assert_eq!(
-        boundary.heap_root, cell.state.heap_root,
+        boundary.heap_root,
+        cell.state.heap_root.to_bytes32(),
         "derived heap_root == committed heap_root"
     );
     assert_eq!(
@@ -101,8 +103,8 @@ fn record_kernel_boundary_agrees_over_all_planes() {
 fn record_kernel_boundary_agrees_for_empty_cell() {
     let cell = make_open_cell(4, 0);
     let boundary = record_kernel_boundary_agrees(&cell).expect("empty cell agrees");
-    assert_eq!(boundary.fields_root, cell.state.fields_root);
-    assert_eq!(boundary.heap_root, cell.state.heap_root);
+    assert_eq!(boundary.fields_root, cell.state.fields_root.to_bytes32());
+    assert_eq!(boundary.heap_root, cell.state.heap_root.to_bytes32());
     assert_eq!(
         boundary.cap_root,
         dregg_cell::compute_canonical_capability_root_8(&cell.capabilities)
@@ -122,8 +124,11 @@ fn tampered_projection_moves_the_derived_boundary() {
 
     let honest = project_record_kernel_state(&cell);
     let honest_boundary = derive_record_kernel_boundary(&honest, cell.id());
-    assert_eq!(honest_boundary.heap_root, cell.state.heap_root);
-    assert_eq!(honest_boundary.fields_root, cell.state.fields_root);
+    assert_eq!(honest_boundary.heap_root, cell.state.heap_root.to_bytes32());
+    assert_eq!(
+        honest_boundary.fields_root,
+        cell.state.fields_root.to_bytes32()
+    );
 
     // Tamper the projected HEAP cell value: the derived heap_root must move and
     // no longer match the cell's committed heap_root.
@@ -136,7 +141,8 @@ fn tampered_projection_moves_the_derived_boundary() {
     tampered.insert(hk, UVal::Bytes32([9u8; 32]));
     let tampered_boundary = derive_record_kernel_boundary(&tampered, cell.id());
     assert_ne!(
-        tampered_boundary.heap_root, cell.state.heap_root,
+        tampered_boundary.heap_root,
+        cell.state.heap_root.to_bytes32(),
         "a tampered Heap cell must move the derived heap_root off the committed root"
     );
     assert_ne!(
@@ -153,7 +159,8 @@ fn tampered_projection_moves_the_derived_boundary() {
     tampered_f.insert(fk, UVal::Bytes32([0xAAu8; 32]));
     let tampered_f_boundary = derive_record_kernel_boundary(&tampered_f, cell.id());
     assert_ne!(
-        tampered_f_boundary.fields_root, cell.state.fields_root,
+        tampered_f_boundary.fields_root,
+        cell.state.fields_root.to_bytes32(),
         "a tampered Field(slot>=16) cell must move the derived fields_root"
     );
 }
@@ -170,8 +177,11 @@ fn fixed_slots_are_not_in_fields_root() {
     cell.state.set_field(15, [43u8; 32]);
     // no overflow entries → fields_root is the empty constant, and the bridge agrees.
     let boundary = record_kernel_boundary_agrees(&cell).expect("fixed-slot writes agree");
-    assert_eq!(boundary.fields_root, dregg_cell::state::empty_fields_root());
-    assert_eq!(boundary.fields_root, cell.state.fields_root);
+    assert_eq!(
+        boundary.fields_root,
+        dregg_cell::state::empty_fields_root().to_bytes32()
+    );
+    assert_eq!(boundary.fields_root, cell.state.fields_root.to_bytes32());
 }
 
 // ---------------------------------------------------------------------------
@@ -355,5 +365,8 @@ fn live_executor_after_state_agrees_three_verbs() {
         "overflow field landed in fields_map"
     );
     let boundary = record_kernel_boundary_agrees(target_after).expect("target agrees");
-    assert_eq!(boundary.fields_root, target_after.state.fields_root);
+    assert_eq!(
+        boundary.fields_root,
+        target_after.state.fields_root.to_bytes32()
+    );
 }

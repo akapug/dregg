@@ -1478,7 +1478,9 @@ mod tests {
         assert_eq!(read_subscriber_count(&state), Some(1234));
 
         // Tamper the stored root so it no longer matches the map's digest.
-        state.fields_root = [0xAAu8; 32];
+        // (`fields_root` is now the wide `Faithful8` type-wall — a bare `[u8; 32]`
+        // is untypeable; a tampered root is built through the named constructor.)
+        state.fields_root = dregg_cell::Faithful8::from_bytes32(&[0xAAu8; 32]);
         assert_eq!(
             read_subscriber_count(&state),
             None,

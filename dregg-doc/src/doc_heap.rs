@@ -561,7 +561,7 @@ impl DocHeapCell {
     /// `heap_root`.** This is the sorted-Poseidon2 root the light client trusts
     /// — the document as a sovereign, content-addressed umem (UMEM-PRIMITIVE §8).
     pub fn commitment(&self) -> [u8; 32] {
-        self.cell.state.heap_root
+        self.cell.state.heap_root.to_bytes32()
     }
 
     /// Apply a patch — an edit. The patch is applied to the witness graph and —
@@ -607,7 +607,7 @@ impl DocHeapCell {
     /// holds, the document the algebra sees and the boundary the light client
     /// trusts are the same umem.
     pub fn boundary_matches_projection(&self) -> bool {
-        self.cell.state.heap_root == compute_heap_root(&self.expected_heap())
+        self.cell.state.heap_root.to_bytes32() == compute_heap_root(&self.expected_heap())
             && self.cell.state.heap_map == self.expected_heap()
     }
 
@@ -682,7 +682,7 @@ mod tests {
 
         assert_eq!(
             doc.commitment(),
-            doc.cell().state.heap_root,
+            doc.cell().state.heap_root.to_bytes32(),
             "the commitment IS the cell's committed umem boundary"
         );
         assert_eq!(
@@ -695,7 +695,7 @@ mod tests {
         // Non-vacuity: a populated document is not the empty-heap root.
         assert_ne!(
             doc.commitment(),
-            empty_heap_root(),
+            empty_heap_root().to_bytes32(),
             "a populated document is not the empty-heap boundary"
         );
         assert_ne!(
@@ -804,7 +804,7 @@ mod tests {
         assert_ne!(with_text, no_text, "binding prose moved the umem boundary");
         assert_eq!(
             doc.commitment(),
-            doc.cell().state.heap_root,
+            doc.cell().state.heap_root.to_bytes32(),
             "the commitment IS the cell's resealed umem boundary"
         );
         assert_eq!(

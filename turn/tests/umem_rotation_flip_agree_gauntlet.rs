@@ -140,8 +140,16 @@ fn assert_ledger_agrees(ledger: &Ledger) -> usize {
 fn assert_cell_planes_agree(cell: &Cell) {
     let b = record_kernel_boundary_agrees(cell)
         .expect("cohort after-cell must agree with its per-map-table roots");
-    assert_eq!(b.fields_root, cell.state.fields_root, "derived fields_root");
-    assert_eq!(b.heap_root, cell.state.heap_root, "derived heap_root");
+    assert_eq!(
+        b.fields_root,
+        cell.state.fields_root.to_bytes32(),
+        "derived fields_root"
+    );
+    assert_eq!(
+        b.heap_root,
+        cell.state.heap_root.to_bytes32(),
+        "derived heap_root"
+    );
     assert_eq!(
         b.cap_root,
         dregg_cell::compute_canonical_capability_root_8(&cell.capabilities),

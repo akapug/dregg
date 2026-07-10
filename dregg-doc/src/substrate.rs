@@ -417,7 +417,7 @@ mod tests {
         );
         assert_ne!(
             substrate_commit(&clash),
-            dregg_cell::empty_heap_root(),
+            dregg_cell::empty_heap_root().to_bytes32(),
             "a populated doc is not the empty-heap root"
         );
     }
@@ -624,7 +624,7 @@ mod tests {
         );
         assert_ne!(
             layout_substrate_commit(&a),
-            dregg_cell::empty_heap_root(),
+            dregg_cell::empty_heap_root().to_bytes32(),
             "a populated layout is not the empty-heap root"
         );
         assert_ne!(

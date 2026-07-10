@@ -106,6 +106,11 @@ pub use derived::{
     Aggregate, DerivationError, DerivationSpec, bind_derivation, bound_claimed_value,
     bound_spec_digest, is_derived, verify_derivation,
 };
+/// The wide 8-felt commitment newtype the cell-state roots carry
+/// ([`CellState::heap_root`] / [`CellState::fields_root`]). Re-exported so
+/// consumers that only depend on `dregg-cell` can name the type and its
+/// byte boundary ([`Faithful8::to_bytes32`] / [`Faithful8::from_bytes32`]).
+pub use dregg_circuit::Faithful8;
 pub use escrow_sealed::{
     Claim, EscrowError, EscrowState, EscrowTerms as SealedEscrowTerms, Leg, LegRequirement,
     LegStatus, Side as EscrowSide, deposit_leg, is_escrow, open_escrow, reclaim_leg, settle,

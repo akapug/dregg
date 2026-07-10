@@ -51,7 +51,7 @@ fn two_level_open_binds_both_roots() {
     child.state.set_heap(3, 7, bytes(42));
     child.state.set_heap(3, 9, bytes(13));
     let child_id = child.id();
-    let child_root = child.state.heap_root;
+    let child_root = child.state.heap_root.to_bytes32();
 
     // project the child cell — this carries its `Heap` plane (the preimage the
     // level-2 bind re-folds), but NOT a separate `HeapRoot` cell.

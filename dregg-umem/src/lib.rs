@@ -250,12 +250,12 @@ pub fn open_record<R: DeserializeOwned>(state: &CellState, coll: u32) -> Result<
 /// sealed by [`lay`] / [`restore`] / [`fork`]. This 32-byte commitment is what a
 /// dregg light client binds; [`boundary_root_hex`] is its 64-hex form.
 pub fn boundary_root(state: &CellState) -> [u8; 32] {
-    state.heap_root
+    state.heap_root.to_bytes32()
 }
 
 /// [`boundary_root`] as a 64-hex string.
 pub fn boundary_root_hex(state: &CellState) -> String {
-    hex32(&state.heap_root)
+    hex32(&state.heap_root.to_bytes32())
 }
 
 /// Recompute the boundary root FROM the current heap leaves (not the sealed field)

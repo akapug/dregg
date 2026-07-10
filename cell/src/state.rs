@@ -1,3 +1,4 @@
+use dregg_circuit::Faithful8;
 use dregg_circuit::cap_root::fold_bytes32;
 use dregg_circuit::field::BabyBear;
 use dregg_circuit::heap_root::{
@@ -6,6 +7,27 @@ use dregg_circuit::heap_root::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+
+/// Serde adapter keeping a [`Faithful8`] cell-state root serialized as its
+/// canonical 32 wide bytes ([`Faithful8::to_bytes32`]) — BYTE-IDENTICAL to the
+/// former `[u8; 32]` field, so retyping the root to the wide newtype does NOT
+/// change the on-disk / on-wire serialized shape (the values were already the
+/// wide 8-felt packing; this pass only changes the TYPE). Deserialize recovers
+/// the octet from those bytes ([`Faithful8::from_bytes32`], the exact inverse on
+/// canonical lanes).
+mod faithful8_serde {
+    use dregg_circuit::Faithful8;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(root: &Faithful8, s: S) -> Result<S::Ok, S::Error> {
+        root.to_bytes32().serialize(s)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Faithful8, D::Error> {
+        let bytes = <[u8; 32]>::deserialize(d)?;
+        Ok(Faithful8::from_bytes32(&bytes))
+    }
+}
 
 /// A generic 32-byte field element.
 /// Could represent a BabyBear element, a BLAKE3 hash, a scalar, etc.
@@ -221,8 +243,14 @@ pub struct CellState {
     /// `compute_canonical_state_commitment` (that is Stage 1, with a `v2->v3`
     /// bump). It is present, load-bearing for the map read/write path, and
     /// recomputed on every map write.
-    #[serde(default = "empty_fields_root")]
-    pub fields_root: [u8; 32],
+    ///
+    /// **Type-wall invariant:** the field is [`Faithful8`] — 8 felts, the
+    /// ~124-bit wide binding. A lane-0 (~31-bit) scalar root is UNTYPEABLE here:
+    /// `state.fields_root = <some [u8; 32]>` is a compile error, ending the
+    /// hand-widening whack-a-mole at the type level. Serialized as its 32 wide
+    /// bytes (`faithful8_serde`) so the on-disk shape is unchanged.
+    #[serde(default = "empty_fields_root", with = "faithful8_serde")]
+    pub fields_root: Faithful8,
     /// `_RECORD-LAYER-UPGRADE.md` §B.3: the **prover-side witness** store for
     /// the user-field map — the actual `key (>= 16) -> value` entries whose
     /// digest is [`fields_root`]. Not itself committed (its digest is).
@@ -256,8 +284,14 @@ pub struct CellState {
     /// the cell's state commitment binds heap state. A legacy (no-heap-activity)
     /// cell carries the FIXED [`empty_heap_root`] constant so the absorption is
     /// a uniform no-op across legacy cells.
-    #[serde(default = "empty_heap_root")]
-    pub heap_root: [u8; 32],
+    ///
+    /// **Type-wall invariant:** the field is [`Faithful8`] — 8 felts, the
+    /// ~124-bit wide binding. A lane-0 (~31-bit) scalar root is UNTYPEABLE here:
+    /// `state.heap_root = <some [u8; 32]>` is a compile error, ending the
+    /// hand-widening whack-a-mole at the type level. Serialized as its 32 wide
+    /// bytes (`faithful8_serde`) so the on-disk shape is unchanged.
+    #[serde(default = "empty_heap_root", with = "faithful8_serde")]
+    pub heap_root: Faithful8,
     /// `docs/UNIVERSAL-MAP-ROTATION.md` §2.4: the **prover-side witness** store
     /// for the heap — the actual `(collection, key) → value` entries whose
     /// digest is [`heap_root`]. Not itself committed (its digest is).
@@ -411,8 +445,8 @@ pub fn field_key_hash(key: u64) -> BabyBear {
 /// `FieldsMap.fieldsRoot_empty_legacy` — every legacy cell shares ONE constant,
 /// so absorbing it into the canonical commitment is a uniform no-op across
 /// legacy cells).
-pub fn empty_fields_root() -> [u8; 32] {
-    compute_fields_root(&BTreeMap::new())
+pub fn empty_fields_root() -> Faithful8 {
+    compute_canonical_fields_root_8(&BTreeMap::new())
 }
 
 /// Compute the OPENABLE root committing a user-field map — the FAITHFUL 8-felt
@@ -467,8 +501,8 @@ pub fn compute_canonical_fields_root_8(
 /// canonical commitment is a no-op for legacy cells (`UNIVERSAL-MAP-ROTATION.md`
 /// §2.4). The FAITHFUL 8-felt encoding (via [`compute_heap_root`]), matching the
 /// wide stored `heap_root`.
-pub fn empty_heap_root() -> [u8; 32] {
-    compute_heap_root(&BTreeMap::new())
+pub fn empty_heap_root() -> Faithful8 {
+    compute_canonical_heap_root_8(&BTreeMap::new())
 }
 
 /// Compute the canonical heap root over a `(collection_id, key) → value` map —
@@ -886,7 +920,7 @@ impl CellState {
             self.set_field(key as usize, value)
         } else {
             self.fields_map.insert(key, value);
-            self.fields_root = compute_fields_root(&self.fields_map);
+            self.fields_root = compute_canonical_fields_root_8(&self.fields_map);
             true
         }
     }
@@ -896,7 +930,7 @@ impl CellState {
     /// root (the normal [`set_field_ext`](Self::set_field_ext) path does it
     /// automatically).
     pub fn reseal_fields_root(&mut self) {
-        self.fields_root = compute_fields_root(&self.fields_map);
+        self.fields_root = compute_canonical_fields_root_8(&self.fields_map);
     }
 
     /// **Membership witness** for a committed user-map key: returns the value
@@ -908,7 +942,7 @@ impl CellState {
     /// The Rust shadow of the Lean `FieldsMap.fieldsRoot_membership` read law.
     pub fn fields_root_membership(&self, key: u64) -> Option<FieldElement> {
         let v = self.fields_map.get(&key).copied()?;
-        if compute_fields_root(&self.fields_map) == self.fields_root {
+        if compute_canonical_fields_root_8(&self.fields_map) == self.fields_root {
             Some(v)
         } else {
             None
@@ -951,7 +985,7 @@ impl CellState {
             .map(|((coll, key), value)| Self::heap_leaf(*coll, *key, value))
             .collect();
         let tree = CanonicalHeapTree8::new(leaves, HEAP_TREE_DEPTH);
-        self.heap_root = crate::commitment::digest8_to_bytes32(tree.root8().limbs());
+        self.heap_root = tree.root8();
         self.heap_tree_cache.0 = Some(tree);
     }
 
@@ -977,7 +1011,7 @@ impl CellState {
             let vfelt = fold_bytes32(&value);
             if let Some(tree) = self.heap_tree_cache.0.as_mut() {
                 if let Some(root) = tree.apply_value_update(addr, vfelt) {
-                    self.heap_root = crate::commitment::digest8_to_bytes32(root);
+                    self.heap_root = root;
                     return true;
                 }
             }
@@ -1013,7 +1047,7 @@ impl CellState {
     /// current map equals the stored `heap_root`.
     pub fn heap_root_membership(&self, coll: u32, key: u32) -> Option<FieldElement> {
         let v = self.heap_map.get(&(coll, key)).copied()?;
-        if compute_heap_root(&self.heap_map) == self.heap_root {
+        if compute_canonical_heap_root_8(&self.heap_map) == self.heap_root {
             Some(v)
         } else {
             None
@@ -1500,7 +1534,7 @@ mod heap_root_tests {
             }
             assert_eq!(
                 s.heap_root,
-                compute_heap_root(&s.heap_map),
+                compute_canonical_heap_root_8(&s.heap_map),
                 "incremental heap_root diverged from full recompute at step {step}"
             );
         }
@@ -1523,10 +1557,10 @@ mod heap_root_tests {
         // Mutate the map directly (out-of-band), then reseal per contract.
         s.heap_map.insert((1, 3), fe(30));
         s.reseal_heap_root();
-        assert_eq!(s.heap_root, compute_heap_root(&s.heap_map));
+        assert_eq!(s.heap_root, compute_canonical_heap_root_8(&s.heap_map));
         // A value update at an existing addr now uses the resynced cache.
         assert!(s.set_heap(1, 2, fe(99)));
-        assert_eq!(s.heap_root, compute_heap_root(&s.heap_map));
+        assert_eq!(s.heap_root, compute_canonical_heap_root_8(&s.heap_map));
         assert_eq!(s.get_heap(1, 3), Some(fe(30)));
     }
 

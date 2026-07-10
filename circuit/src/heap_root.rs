@@ -846,11 +846,7 @@ impl CanonicalHeapTree8 {
     /// cache (`dregg_cell::CellState`'s 8-felt heap-tree cache) drives on the
     /// common heap write, turning the O(n) full recompute into an O(log n) path
     /// update at 8-felt width.
-    pub fn apply_value_update(
-        &mut self,
-        addr: BabyBear,
-        value: BabyBear,
-    ) -> Option<[BabyBear; HEAP_DIGEST_W]> {
+    pub fn apply_value_update(&mut self, addr: BabyBear, value: BabyBear) -> Option<Faithful8> {
         let pos = self.position_of(addr)?;
         // Refresh the retained sorted leaf (addr unchanged ⇒ sort order preserved).
         self.sorted_leaves[pos].value = value;
@@ -870,7 +866,7 @@ impl CanonicalHeapTree8 {
             idx >>= 1;
             self.levels[level + 1][idx] = cur;
         }
-        Some(cur)
+        Some(Faithful8::from_root8(cur))
     }
 }
 
