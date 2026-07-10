@@ -1,6 +1,6 @@
 // THE DRIVEN RUN — THE SUNKEN VAULT: the AI narrates, the WORLD resolves.
 //
-// Spawns the native attested-dm dungeon-service (real gemma2:2b via ollama), serves the
+// Spawns the native attested-dm dungeon-service (hosted Claude Haiku 4.5 via Bedrock, or a local model), serves the
 // vault page against it (serve.mjs proxying /game/*), loads it in headless Chromium, and
 // plays THE VAULT through the page's own affordances (button/command -> fetch -> /game/act
 // -> render), ASSERTING the INVARIANTS against the service's own responses (never fabricated):
@@ -15,7 +15,7 @@
 //
 // The narration is a REAL local model, so the prose VARIES run to run — we assert the world
 // state transitions / status / refusals (the INVARIANTS), never the model's exact words, and
-// capture some of gemma2's real narration into the transcript.
+// capture some of the model's real narration into the transcript.
 //
 // Captures demo/run/vault.png + vault.txt.
 
@@ -26,6 +26,21 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import net from "node:net";
 import path from "node:path";
+
+// A short, HONEST speaker label from the response's narratorKind (never a hardcoded model name).
+function speaker(narratorKind) {
+  const k = String(narratorKind || "");
+  if (k.startsWith("model:")) {
+    const id = k.slice(6);
+    if (/haiku/i.test(id)) return "haiku";
+    if (/nova/i.test(id)) return "nova";
+    if (/gemma/i.test(id)) return "gemma2";
+    return id.split(/[.\/]/).pop() || "model";
+  }
+  if (k.startsWith("scripted")) return "scripted";
+  return k || "narrator";
+}
+
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(__dirname, "..");
@@ -74,7 +89,7 @@ function waitPortOpen(port, host = "127.0.0.1", timeoutMs = 60000) {
 async function main() {
   await mkdir(OUT, { recursive: true });
 
-  // ── 1. spawn the native attested-dm dungeon-service (real gemma2:2b) ──
+  // ── 1. spawn the native attested-dm dungeon-service (the hosted/metered narrator) ──
   const SERVICE_PORT = 8790;
   const svc = spawn(SERVICE_BIN, [], {
     env: { ...process.env, DUNGEON_BIND: `127.0.0.1:${SERVICE_PORT}` },
@@ -119,7 +134,7 @@ async function main() {
     assert.equal(initial.room.id, "shore", "a fresh vault starts at the shore");
     assert.equal(initial.status, "playing", "a fresh vault is playing");
 
-    const narrations = []; // captured gemma2 prose (varies run to run)
+    const narrations = []; // captured model prose (varies run to run)
 
     // ── A. THE WINNING PLAYTHROUGH ──
     let prevReceipts = 0;
@@ -182,7 +197,7 @@ async function main() {
     console.log(transcript);
     console.log(`\n  screenshot → ${path.join(OUT, "vault.png")}`);
     console.log(`  transcript → ${path.join(OUT, "vault.txt")}\n`);
-    console.log("  ✓ THE SUNKEN VAULT RAN: a full WIN against real gemma2, and the locked stair refused the cheat — the AI narrates, the world resolves.\n");
+    console.log("  ✓ THE SUNKEN VAULT RAN: a full WIN against the real model, and the locked stair refused the cheat — the AI narrates, the world resolves.\n");
   } finally {
     if (browser) await browser.close();
     if (server) server.close();
@@ -208,7 +223,7 @@ function renderTranscript({ base, narratorKind, realModel, winLog, won, cheat, c
   for (const t of winLog) {
     L.push("");
     L.push(`  » ${t.cmd}   (${t.why})`);
-    L.push(`    gemma2: ${oneline(t.narration)}`);
+    L.push(`    ${speaker(narratorKind)}: ${oneline(t.narration)}`);
     L.push(`    world : LANDED → room ${t.room} · receipt rail #${t.receipts} · status ${t.status}`);
   }
   L.push("");
@@ -220,7 +235,7 @@ function renderTranscript({ base, narratorKind, realModel, winLog, won, cheat, c
   L.push("-".repeat(74));
   L.push("");
   L.push("  » go down   (the dark stair, before taking the lantern)");
-  L.push(`    gemma2 may narrate the darkness parting: ${oneline(cheatNarration) || "(no narration this run)"}`);
+  L.push(`    the narrator may narrate the darkness parting: ${oneline(cheatNarration) || "(no narration this run)"}`);
   L.push(`    world : REFUSED — ${cheat.reason}`);
   L.push(`            the room is UNCHANGED (still ${cheat.state.room.id}) and the receipt rail did NOT grow`);
   L.push(`            (#${cheat.state.receiptCount}, no receipt — the anti-ghost tooth). The world disposes.`);

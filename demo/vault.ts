@@ -1,7 +1,7 @@
 /**
  * THE SUNKEN VAULT — a playable dungeon where the AI narrates and the WORLD resolves.
  *
- * A local model (gemma2:2b) narrates each room and each action, but its prose has NO
+ * A model (hosted Claude Haiku 4.5, or local gemma2) narrates each room and each action, but its prose has NO
  * authority: every move is resolved deterministically by the engine (`resolve_action`).
  * You cannot narrate through a locked door, take an absent item, or win without carrying
  * the amulet to the gate. A legal move lands as one verified chain turn; a refused move
@@ -69,7 +69,7 @@ function renderNarratorKind(kind: string) {
     el.innerHTML = `🧠 narrated by a real local model <code>${escapeHtml(kind.slice("model:".length))}</code> — it may narrate anything; the <b>world</b> resolves every move.`;
   } else {
     el.className = "narrator";
-    el.innerHTML = "🎭 <b>narration is a deterministic scripted narrator</b> (ollama unreachable) — the world resolution, the capability gate, and the receipt rail are <b>real</b>. Bring up <code>gemma2:2b</code> for live narration.";
+    el.innerHTML = "🎭 <b>narration is a deterministic scripted narrator</b> (ollama unreachable) — the world resolution, the capability gate, and the receipt rail are <b>real</b>. Start the game service (hosted Claude Haiku 4.5, or a local ollama) for live narration.";
   }
 }
 

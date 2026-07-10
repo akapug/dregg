@@ -1,6 +1,6 @@
-// THE DRIVEN RUN — THE FORGE: write a .dungeon world, hit ▶ Play, PLAY it vs real gemma2.
+// THE DRIVEN RUN — THE FORGE: write a .dungeon world, hit ▶ Play, PLAY it vs the real model.
 //
-// Spawns the native attested-dm dungeon-service (real gemma2:2b via ollama), serves the forge
+// Spawns the native attested-dm dungeon-service (hosted Claude Haiku 4.5 via Bedrock, or a local model), serves the forge
 // page against it (serve.mjs proxying /game/*), loads it in headless Chromium, and drives the
 // author → play → verify loop through the page's own affordances (editor text → /game/author,
 // then command/exit buttons → /game/act → render), ASSERTING the INVARIANTS against the
@@ -28,6 +28,21 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import net from "node:net";
 import path from "node:path";
+
+// A short, HONEST speaker label from the response's narratorKind (never a hardcoded model name).
+function speaker(narratorKind) {
+  const k = String(narratorKind || "");
+  if (k.startsWith("model:")) {
+    const id = k.slice(6);
+    if (/haiku/i.test(id)) return "haiku";
+    if (/nova/i.test(id)) return "nova";
+    if (/gemma/i.test(id)) return "gemma2";
+    return id.split(/[.\/]/).pop() || "model";
+  }
+  if (k.startsWith("scripted")) return "scripted";
+  return k || "narrator";
+}
+
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(__dirname, "..");
@@ -78,7 +93,7 @@ function waitPortOpen(port, host = "127.0.0.1", timeoutMs = 60000) {
 async function main() {
   await mkdir(OUT, { recursive: true });
 
-  // ── 1. spawn the native attested-dm dungeon-service (real gemma2:2b) ──
+  // ── 1. spawn the native attested-dm dungeon-service (the hosted/metered narrator) ──
   const SERVICE_PORT = 8792;
   const svc = spawn(SERVICE_BIN, [], {
     env: { ...process.env, DUNGEON_BIND: `127.0.0.1:${SERVICE_PORT}` },
@@ -205,7 +220,7 @@ async function main() {
     console.log(transcript);
     console.log(`\n  screenshot → ${path.join(OUT, "forge.png")}`);
     console.log(`  transcript → ${path.join(OUT, "forge.txt")}\n`);
-    console.log("  ✓ THE FORGE RAN: an authored .dungeon played to a WIN vs real gemma2; a syntax-broken world failed closed line-pinned; broken.dungeon listed all validation issues; the fix played again.\n");
+    console.log("  ✓ THE FORGE RAN: an authored .dungeon played to a WIN vs the real model; a syntax-broken world failed closed line-pinned; broken.dungeon listed all validation issues; the fix played again.\n");
   } finally {
     if (browser) await browser.close();
     if (server) server.close();
@@ -235,7 +250,7 @@ function renderTranscript({ base, narratorKind, realModel, T, winLog, won }) {
   for (const t of winLog) {
     L.push("");
     L.push(`  » ${t.cmd}   (${t.why})`);
-    L.push(`    gemma2: ${oneline(t.narration)}`);
+    L.push(`    ${speaker(narratorKind)}: ${oneline(t.narration)}`);
     L.push(`    world : LANDED → room ${t.room} · receipt rail #${t.receipts} · status ${t.status}`);
   }
   L.push("");

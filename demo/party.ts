@@ -4,7 +4,7 @@
  * This unites the two halves of the project: collective fiction (the crowd co-authors the next
  * move) + the AI dungeon (a local model narrates, the WORLD resolves). Each turn: OPEN a vote
  * round over the candidate actions, the seated party CASTS ballots (one write-once ballot each),
- * CLOSE it — and the winning action is resolved through the SAME /game/act path (gemma2 narrates,
+ * CLOSE it — and the winning action is resolved through the SAME /game/act path (the model narrates,
  * resolve_action decides, a verified turn lands). The crowd DECIDES; the world still RESOLVES:
  * a voted-for locked exit is still refused (no receipt), and the party must vote again.
  *
@@ -64,7 +64,7 @@ function renderNarratorKind(kind: string) {
     el.innerHTML = `🧠 narrated by a real local model <code>${escapeHtml(kind.slice("model:".length))}</code> — the crowd decides the move; the <b>world</b> resolves it.`;
   } else {
     el.className = "narrator";
-    el.innerHTML = "🎭 <b>deterministic scripted narrator</b> (ollama unreachable) — the vote, the world resolution, and the receipt rail are <b>real</b>. Bring up <code>gemma2:2b</code> for live narration.";
+    el.innerHTML = "🎭 <b>deterministic scripted narrator</b> (ollama unreachable) — the vote, the world resolution, and the receipt rail are <b>real</b>. Start the game service (hosted Claude Haiku 4.5, or a local ollama) for live narration.";
   }
 }
 

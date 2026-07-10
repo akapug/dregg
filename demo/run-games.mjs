@@ -1,6 +1,6 @@
 // THE DRIVEN RUN — THE ATTESTED DUNGEONS: game selection over HTTP, BOTH games played.
 //
-// Spawns the native attested-dm dungeon-service (real gemma2:2b via ollama), serves the game
+// Spawns the native attested-dm dungeon-service (hosted Claude Haiku 4.5 via Bedrock, or a local model), serves the game
 // page against it (serve.mjs proxying /game/*), loads it in headless Chromium, and drives the
 // game-selection surface + BOTH dungeons through the page's own affordances (the picker + the
 // command bar → fetch → /game/{list,reset,act} → render), ASSERTING the INVARIANTS against the
@@ -27,6 +27,21 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import net from "node:net";
 import path from "node:path";
+
+// A short, HONEST speaker label from the response's narratorKind (never a hardcoded model name).
+function speaker(narratorKind) {
+  const k = String(narratorKind || "");
+  if (k.startsWith("model:")) {
+    const id = k.slice(6);
+    if (/haiku/i.test(id)) return "haiku";
+    if (/nova/i.test(id)) return "nova";
+    if (/gemma/i.test(id)) return "gemma2";
+    return id.split(/[.\/]/).pop() || "model";
+  }
+  if (k.startsWith("scripted")) return "scripted";
+  return k || "narrator";
+}
+
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(__dirname, "..");
@@ -73,7 +88,7 @@ function waitPortOpen(port, host = "127.0.0.1", timeoutMs = 60000) {
 async function main() {
   await mkdir(OUT, { recursive: true });
 
-  // ── 1. spawn the native attested-dm dungeon-service (real gemma2:2b) ──
+  // ── 1. spawn the native attested-dm dungeon-service (the hosted/metered narrator) ──
   const SERVICE_PORT = 8791;
   const svc = spawn(SERVICE_BIN, [], {
     env: { ...process.env, DUNGEON_BIND: `127.0.0.1:${SERVICE_PORT}` },
@@ -218,7 +233,7 @@ function renderTranscript({ base, narratorKind, realModel, list, vaultLog, vault
   for (const t of vaultLog) {
     L.push("");
     L.push(`  » ${t.cmd}   (${t.why})`);
-    L.push(`    gemma2: ${oneline(t.narration)}`);
+    L.push(`    ${speaker(narratorKind)}: ${oneline(t.narration)}`);
     L.push(`    world : LANDED → room ${t.room} · receipt rail #${t.receipts} · world sunken-vault`);
   }
   L.push("");
@@ -228,7 +243,7 @@ function renderTranscript({ base, narratorKind, realModel, list, vaultLog, vault
   for (const t of brambleLog) {
     L.push("");
     L.push(`  » ${t.cmd}   (${t.why})`);
-    L.push(`    gemma2: ${oneline(t.narration)}`);
+    L.push(`    ${speaker(narratorKind)}: ${oneline(t.narration)}`);
     L.push(`    world : LANDED → room ${t.room} · receipt rail #${t.receipts} · carrying [${t.inventory.join(", ")}]`);
   }
   L.push("");
