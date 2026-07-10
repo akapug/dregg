@@ -14,8 +14,20 @@
 This module adds lookups ADDITIVELY: it introduces `LookupConstraint` and a `CircuitL`
 (arithmetic gates **plus** lookups) WITHOUT changing `Constraint`/`ConstraintSystem`/`satisfied`, so
 every existing module (Transfer, StateCommit, the 31 Spec files, …) is untouched. The DENOTATION of a
-lookup is membership-in-the-table (the meaning); LogUp is merely how the prover ENFORCES it
-efficiently — that lives in the Rust AIR, not in this semantics.
+lookup is membership-in-the-table (the meaning); LogUp is how the prover ENFORCES it efficiently.
+
+⚠ THIS COMMENT USED TO SAY the enforcement "lives in the Rust AIR, not in this semantics." That was a
+SIN, twice over, and is retracted (2026-07-10):
+1. **Category error.** A SOUNDNESS obligation (`bus-zero ⟹ multiset membership`) is a THEOREM. You cannot
+   discharge it by pointing at an IMPLEMENTATION. Code enforces; it does not prove.
+2. **Dangling deferral.** dregg's own AIR (`circuit/src/effect_vm/air.rs`) contains NO LogUp/`cumulative_sum`
+   at all; the interaction bus is UPSTREAM `p3-air` machinery. Meanwhile the AIR is now generated FROM a Lean
+   descriptor (`circuit/src/lean_descriptor_air.rs`, used by 23 files) — so the deferral points partly at our
+   own semantics (circular) and partly at a third-party library.
+**Measured (`4d59367e0`, `e35a79a2f`): the LogUp soundness argument exists in NEITHER Rust NOR Lean.** Only the
+denotation (here) and the enforcement (p3). It is an OPEN obligation, provable (Haböck's log-derivative identity
++ Schwartz–Zippel), and it is what `AirChecksSatisfied`'s remaining `hbus` premise reduces to. Tracked as DEBT-A
+obligation #7; see `docs/reference/CARRIER-CENSUS.md`.
 
 `rangeCheck e k` is the range-check lookup; `rangeCheck_holds_iff` proves its meaning
 (`(rangeCheck e k).holds a ↔ ∃ n < 2^k, e.eval a = n`).
