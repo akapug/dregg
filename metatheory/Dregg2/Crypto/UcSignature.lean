@@ -72,10 +72,16 @@ single-session realization (§2–§3), multi-session realization of `F̂_SIG` v
 §7.5 closes the two pieces that used to be carried as abstract `Prop` residues, using
 `Dregg2.Crypto.ConcreteSecurity`:
 
-  * **NEGLIGIBLE-ENSEMBLE DISTANCE.** The distinguishing advantage is now a genuine ENSEMBLE
-    `ucAdv : λ ↦ ℝ`, and `UcRealizes ↔ Negl (ucAdv …)` (`ucRealizes_iff_ucAdv_negl`) — realization IS a
-    negligible-advantage bound. The multi-session advantage stays negligible through the session-count factor
-    (`multi_session_advantage_negl`, via the `negl_finset_sum` / `negl_const_mul` closures).
+  * **NEGLIGIBLE-ENSEMBLE DISTANCE.** The distinguishing advantage is an ENSEMBLE `ucAdv : λ ↦ ℝ`, and
+    `UcRealizes ↔ Negl (ucAdv …)` (`ucRealizes_iff_ucAdv_negl`). ⚠ This `ucAdv` is DEGENERATE (`0/1`,
+    λ-independent) — the distance-0 corner, `¬ Distinguishes` in ensemble clothing. The GENUINE real-valued
+    computational restatement (advantage ranging over the full `[0,1]` spectrum, bounded by the forgery
+    advantage, negligible under the floor) is §7.6 (`ComputationalUC` / `uc_advantage_transfer`), PROVED
+    modulo two NAMED gaps — G1 the reduction bound (needs probabilistic execution semantics), G2 `Negl εₛ`
+    (needs a quantitative floor; the tree's `SchnorrDLHard`/`MSISHard` are BOOLEAN). Full computational UC is
+    thus TRUE-MODULO-(G1,G2), not fully closed. The multi-session advantage stays negligible through the
+    session-count factor (`multi_session_advantage_negl`, via the `negl_finset_sum` / `negl_const_mul`
+    closures).
   * **SIMULATOR PPT-EFFICIENCY.** The simulator carries an explicit polynomial `StepBound` and its PPT-ness is
     PROVED (`sim_ppt`) — no longer a complexity statement outside Lean's logic.
 
@@ -614,9 +620,16 @@ Everything above is `Prop`-level (real ⟹ ideal, at distance 0). This section R
 ensemble in the security parameter, using `Dregg2.Crypto.ConcreteSecurity`: the environment's distinguishing
 advantage is a function `λ ↦ |Pr_real − Pr_ideal|`, and UC realization IS the statement that this ensemble is
 NEGLIGIBLE. In this deterministic model the advantage is exactly `0` (realizes) or `1` (forgeable), so the
-negligible/not-negligible poles coincide with the realize/distinguish poles — but they are now stated at the
-FULL asymptotic abstraction, and every downstream concrete term (`ε²/q_H`, the FO game-hops, `2√(q·Pfind)`)
-lands in the same `Negl` algebra. This is the substrate for the parameter-level theorem (phase P1). -/
+negligible/not-negligible poles coincide with the realize/distinguish poles.
+
+⚠ **This §7.5 advantage is DEGENERATE — it is not yet genuine computational UC.** Because `ucAdv` is `0/1`
+and does not depend on the security parameter, `Negl (ucAdv …)` is exactly `¬ Distinguishes` in ensemble
+clothing: it CANNOT express a nonzero-but-negligible distance. It is the distance-0 corner of the real
+spectrum, useful only to land the structural realization in the `Negl` algebra. The GENUINE computational
+statement — a real-valued advantage `advₑ ≤ εₛ` bounded by the forgery advantage, negligible under the
+floor, ranging over the full `[0,1]` spectrum — is §7.6, where the two irreducible cryptographic inputs
+(G1 the reduction bound, G2 the quantitative floor) are NAMED, not laundered. Read §7.6 for what is genuinely
+proved and what remains a named gap. -/
 
 open Classical in
 /-- **THE UC ADVANTAGE ENSEMBLE.** `ucAdv S pk Recorded : λ ↦ ℝ` — the environment's distinguishing
@@ -797,6 +810,135 @@ theorem brokenToy_multiUcAdv_not_negl :
     ¬ Negl (multiUcAdv brokenToy (fun _ : Bool => ()) (fun _ : Bool => noQueries)) := fun h =>
   brokenToy_multi_not_realizes ((multiUcRealizes_iff_multiUcAdv_negl _ _ _).2 h)
 
+/-! ## §7.6 — GENUINE COMPUTATIONAL UC: the distinguishing advantage as a REDUCTION-BOUNDED ensemble.
+
+**Why §7.5 is not yet genuine computational UC.** `ucAdv := if Distinguishes then 1 else 0` is the
+DEGENERATE deterministic advantage: it takes only the two values `0` and `1` and does not depend on the
+security parameter, so `Negl (ucAdv …)` is exactly `¬ Distinguishes` in ensemble clothing — the `Prop`
+`=`-at-distance-0 dressed as `≈`. It CANNOT express a genuine nonzero-but-negligible distance, which is the
+whole content of computational security. Real UC is quantitative: an environment running in the security
+parameter `λ` has a distinguishing advantage `advₑ : λ ↦ [0,1]` that is a genuine real quantity, bounded by
+the scheme's EUF-CMA forgery advantage `εₛ : λ ↦ [0,1]` via the distinguisher-to-forger reduction, and `εₛ`
+is negligible ONLY under the hardness floor. This section states THAT over the genuine `Negl` algebra of
+`ConcreteSecurity`, with the advantage ranging over the FULL SPECTRUM `[0,1]`, not two points.
+
+**WHAT IS PROVED vs. WHAT ARE NAMED GAPS.** The TRANSFER — `advₑ ≤ εₛ` eventually AND `Negl εₛ` gives
+`Negl advₑ` — is PROVED (`uc_advantage_transfer`, by domination in the `Negl` algebra). The two INPUTS are
+the genuine cryptographic content and are NAMED GAPS this deterministic model does not internalise:
+
+  * **(G1) the REDUCTION BOUND `advₑ ≤ εₛ`** — that a distinguishing environment's success PROBABILITY is at
+    most the forger's. `distinguishes_iff_forgery` proves the two EVENTS coincide; the PROBABILITIES
+    coinciding requires a probabilistic execution semantics (a distribution over `Z`'s coins and the honest
+    key) this deterministic `Env := Unit → Msg × Sig` model lacks. So the bound is carried as the
+    `reduction_bound` FIELD of `ComputationalUC`, named, not laundered into an equality.
+  * **(G2) `Negl εₛ` from the floor** — the tree's `SchnorrDLHard`/`MSISHard` are BOOLEAN (`¬ ∃ solver`), not
+    quantitative advantage bounds, so there is no ε(λ) the floor hands to `Negl`. A quantitative floor
+    (`dlAdvantage ≤ negl(λ)`) is required and is NOT present in the tree; `Negl εₛ` is the `forge_negl` FIELD.
+
+So genuine end-to-end computational UC here is TRUE-MODULO-(G1,G2): the advantage-transfer layer is honest
+and PROVED, and the two irreducible cryptographic inputs are NAMED FIELDS, not relabelled `=`. The teeth
+below exercise the FULL spectrum — `2⁻ᵏ` (negligible, yet strictly positive at every κ), `1/κ` (vanishing
+but only polynomially — NOT negligible), and the constant `1` (broken) — proving `≈` is a genuine distance,
+not the 0/1 collapse of §7.5. -/
+
+section GenuineComputationalUC
+open Filter
+
+/-- **THE ADVANTAGE-TRANSFER THEOREM (PROVED).** If the environment's distinguishing advantage `advE` is
+non-negative and eventually bounded by the scheme's forgery advantage `εS` (the reduction, G1), and `εS` is
+negligible (the floor, G2), then `advE` is negligible: real ≈ ideal within negligible advantage for that
+bounded environment. Proved purely in the `Negl` algebra by domination (`negl_of_eventually_le`) — no new
+carrier, no probabilistic machinery. This is the load-bearing computational statement; its two inputs are
+the named gaps G1/G2. -/
+theorem uc_advantage_transfer {advE εS : Ensemble}
+    (hnonneg : ∀ n, 0 ≤ advE n)
+    (hbound : ∀ᶠ n : ℕ in atTop, advE n ≤ εS n)
+    (hεnegl : Negl εS) : Negl advE := by
+  refine negl_of_eventually_le ?_ hεnegl
+  filter_upwards [hbound] with n hb
+  rw [abs_of_nonneg (hnonneg n)]
+  exact hb.trans (le_abs_self _)
+
+/-- **(TOOTH — an INTERMEDIATE, non-negligible advantage.)** `1/κ` VANISHES (`→ 0`) yet is NOT negligible:
+at exponent `c = 2` it would need `1/κ < 1/κ²` eventually, i.e. `κ² < κ`, false for `κ ≥ 2`. So a scheme
+whose distinguishing advantage decays only polynomially is STILL distinguishable — `≈` genuinely measures a
+distance strictly between the `0` and `1` poles of §7.5. THIS is the tooth §7.5's 0/1 advantage cannot
+bite. -/
+theorem not_negl_inv_linear : ¬ Negl (fun n : ℕ => 1 / (n : ℝ)) := by
+  intro h
+  obtain ⟨n, hlt, hn2⟩ := ((h 2).and (eventually_ge_atTop 2)).exists
+  have hn : (0 : ℝ) < (n : ℝ) := by exact_mod_cast (show 0 < n by omega)
+  have h1n : (1 : ℝ) ≤ (n : ℝ) := by exact_mod_cast (show 1 ≤ n by omega)
+  rw [abs_of_pos (by positivity : (0 : ℝ) < 1 / (n : ℝ))] at hlt
+  have hle : 1 / (n : ℝ) ^ 2 ≤ 1 / (n : ℝ) :=
+    one_div_le_one_div_of_le hn (by nlinarith)
+  linarith
+
+/-- **`ComputationalUC advE εS` — the genuine computational-UC obligation, with the two cryptographic gaps
+NAMED as fields.** Inhabiting it for a scheme means: the environment's advantage is non-negative
+(`adv_nonneg`), it is reduction-bounded by the forgery advantage (`reduction_bound` = G1), and the forgery
+advantage is negligible under the floor (`forge_negl` = G2). Its consequence `realizes` (real ≈ ideal at
+negligible advantage) is then PROVED, not assumed. No `Prop` is asserted `True`; the two irreducible inputs
+are explicit, real-valued, and can be nonzero. -/
+structure ComputationalUC (advE εS : Ensemble) : Prop where
+  /-- The distinguishing advantage is a genuine probability: non-negative. -/
+  adv_nonneg : ∀ n, 0 ≤ advE n
+  /-- **GAP G1** — the reduction bound: the environment's advantage is at most the forgery advantage. -/
+  reduction_bound : ∀ᶠ n : ℕ in atTop, advE n ≤ εS n
+  /-- **GAP G2** — the forgery advantage is negligible (would come from a QUANTITATIVE hardness floor). -/
+  forge_negl : Negl εS
+
+/-- **COMPUTATIONAL REALIZATION (PROVED from the witness).** Given a `ComputationalUC` witness, the
+environment's distinguishing advantage is negligible — real ≈ ideal at the computational level. This is the
+genuine restatement of `hybrid_sig_uc_realizes` over a real-valued advantage, discharged by
+`uc_advantage_transfer`. -/
+theorem ComputationalUC.realizes {advE εS : Ensemble} (h : ComputationalUC advE εS) : Negl advE :=
+  uc_advantage_transfer h.adv_nonneg h.reduction_bound h.forge_negl
+
+/-- **(FIRES — a genuine NONZERO negligible advantage is realized.)** A secure environment whose advantage
+is the forgery advantage `2⁻ᵏ` — strictly POSITIVE at every `κ`, unlike the 0/1 collapse — is a
+`ComputationalUC` witness, and its advantage is negligible. The positive pole at a genuine intermediate
+value. -/
+def secureComputationalUC : ComputationalUC (fun n => 1 / (2 : ℝ) ^ n) (fun n => 1 / (2 : ℝ) ^ n) where
+  adv_nonneg := fun n => by positivity
+  reduction_bound := Filter.Eventually.of_forall (fun _ => le_refl _)
+  forge_negl := negl_two_pow
+
+/-- The secure witness's realization: the strictly-positive `2⁻ᵏ` advantage IS negligible — a genuine
+nonzero distance, provably `≈`. -/
+theorem secureComputationalUC_realizes : Negl (fun n : ℕ => 1 / (2 : ℝ) ^ n) :=
+  secureComputationalUC.realizes
+
+/-- **(BITES — a broken scheme admits NO computational-UC witness.)** If the forgery advantage is the
+constant `1` (a scheme that is forged with certainty), NO `ComputationalUC` witness exists for ANY
+environment advantage, because `forge_negl` would be `Negl (fun _ => 1)`, refuted by `not_negl_one`.
+Realization genuinely fails when unforgeability fails. -/
+theorem broken_no_computationalUC (advE : Ensemble) :
+    ¬ ComputationalUC advE (fun _ => 1) := fun h => not_negl_one h.forge_negl
+
+/-- **(BITES — the SPECTRUM tooth, unreachable by §7.5.)** A scheme whose forgery advantage decays only
+polynomially (`1/κ`) ALSO admits no computational-UC witness — the advantage vanishes but is not negligible
+(`not_negl_inv_linear`). This is exactly the case the 0/1 advantage of §7.5 cannot express: `≈` discriminates
+`2⁻ᵏ` (realized) from `1/κ` (NOT realized) from `1` (broken), so it is a genuine distance over the full
+spectrum, not a two-point relabelling of the `Prop`. -/
+theorem inv_linear_no_computationalUC (advE : Ensemble) :
+    ¬ ComputationalUC advE (fun n => 1 / (n : ℝ)) := fun h => not_negl_inv_linear h.forge_negl
+
+/-- **THE DEGENERATE §7.5 ADVANTAGE IS A `ComputationalUC` INSTANCE** — the 0/1 `ucAdv` sits inside the
+genuine layer as the special case `εS = advE = ucAdv` UNDER `UcRealizes` (whence `ucAdv = 0`). So §7.6
+subsumes §7.5: the structural realization is the distance-0 point of the real-valued spectrum, and G1 holds
+trivially (`advE ≤ advE`). This exhibits the launder-free relationship — §7.5 is a corner of §7.6, not a
+substitute for it. -/
+def degenerate_computationalUC {SK PK Msg Sig : Type*}
+    (S : SigScheme SK PK Msg Sig) (pk : PK) (Recorded : Msg → Prop)
+    (h : UcRealizes S pk Recorded) :
+    ComputationalUC (ucAdv S pk Recorded) (ucAdv S pk Recorded) where
+  adv_nonneg := fun _ => by simp only [ucAdv]; split <;> norm_num
+  reduction_bound := Filter.Eventually.of_forall (fun _ => le_refl _)
+  forge_negl := (ucRealizes_iff_ucAdv_negl S pk Recorded).1 h
+
+end GenuineComputationalUC
+
 /-! ## §8 — THE UC RESIDUAL — every field now DISCHARGED (the two modelling notes RETIRED).
 
 The Canetti UC theorem has THREE structural parts, all DISCHARGED as real Lean theorems at this model level:
@@ -809,9 +951,15 @@ reduced to `EufCma`, hence to `SchnorrDLHard ∨ MSISHard`.
 not carried as abstract `Prop`s:**
 
   * **(i) NEGLIGIBLE-ENSEMBLE DISTANCE (was: `≈` is exact `Prop`-equality).** The distinguishing advantage is
-    now a genuine ENSEMBLE `ucAdv : λ ↦ ℝ`, and `UcRealizes ↔ Negl (ucAdv …)` (`ucRealizes_iff_ucAdv_negl`).
-    Realization IS a negligible-advantage bound. The residual carries a proof `EufCma ⟹ Negl (ucAdv …)`, a
-    real theorem — no longer an abstract `negligible_advantage : Prop` asserted `True`.
+    an ENSEMBLE `ucAdv : λ ↦ ℝ`, and `UcRealizes ↔ Negl (ucAdv …)` (`ucRealizes_iff_ucAdv_negl`). Note this
+    lands realization in the `Negl` algebra but the `ucAdv` here is DEGENERATE (`0/1`, λ-independent) — it is
+    `¬ Distinguishes` in ensemble clothing, NOT a genuine nonzero-negligible distance. The GENUINE
+    real-valued computational restatement is §7.6 (`ComputationalUC` / `uc_advantage_transfer`), which is
+    PROVED modulo two NAMED cryptographic gaps: G1 the reduction bound `advₑ ≤ εₛ` (needs probabilistic
+    execution semantics), G2 `Negl εₛ` (needs a QUANTITATIVE hardness floor — the tree's floors are Boolean
+    `¬∃solver`). So note (i) is genuinely addressed at the transfer level, TRUE-MODULO-(G1,G2), not fully
+    closed. The residual field carries the degenerate `EufCma ⟹ Negl (ucAdv …)` (a real theorem, no
+    `True`-carrier), with the genuine spectrum-valued layer in §7.6.
   * **(ii) SIMULATOR PPT-EFFICIENCY (was: a complexity statement outside Lean's logic).** The simulator now
     carries an explicit polynomial `StepBound` (`simStepBound`, constant work) and its PPT-ness is PROVED
     (`sim_ppt`) — no longer an abstract `simulator_ppt : Prop`.
@@ -944,6 +1092,13 @@ lets the `F_SIG` accept/reject behaviour be `decide`-checked. -/
   hybrid_multi_session_advantage_negl,
   secureToy_multiUcAdv_negl,
   brokenToy_multiUcAdv_not_negl,
+  uc_advantage_transfer,
+  not_negl_inv_linear,
+  ComputationalUC.realizes,
+  secureComputationalUC_realizes,
+  broken_no_computationalUC,
+  inv_linear_no_computationalUC,
+  degenerate_computationalUC,
   refResidual_realizes,
   refResidual_composes,
   refResidual_advantage_negl,
