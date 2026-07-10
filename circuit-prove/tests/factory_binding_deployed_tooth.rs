@@ -194,6 +194,7 @@ fn mint_factory_leg(
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         before_material,
     );
@@ -202,6 +203,7 @@ fn mint_factory_leg(
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         after_material,
     );

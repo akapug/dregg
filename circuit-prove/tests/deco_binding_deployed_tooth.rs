@@ -146,6 +146,7 @@ fn mint_stripe_leg(
         &ledger,
         &dregg_circuit::heap_root::empty_heap_root_8(),
         &dregg_circuit::heap_root::empty_heap_root_8(),
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -154,6 +155,7 @@ fn mint_stripe_leg(
         &ledger,
         &dregg_circuit::heap_root::empty_heap_root_8(),
         &dregg_circuit::heap_root::empty_heap_root_8(),
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -217,6 +219,7 @@ fn mint_plain_transfer_leg(before_balance: i64, amount: u64, nonce: u64) -> Rota
         &ledger,
         &dregg_circuit::heap_root::empty_heap_root_8(),
         &dregg_circuit::heap_root::empty_heap_root_8(),
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -225,6 +228,7 @@ fn mint_plain_transfer_leg(before_balance: i64, amount: u64, nonce: u64) -> Rota
         &ledger,
         &dregg_circuit::heap_root::empty_heap_root_8(),
         &dregg_circuit::heap_root::empty_heap_root_8(),
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );

@@ -178,6 +178,7 @@ fn notespend_forced_on_wire_rejects_forged_nullifier_root_anchor_disabled() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -186,6 +187,7 @@ fn notespend_forced_on_wire_rejects_forged_nullifier_root_anchor_disabled() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -344,6 +346,7 @@ fn notecreate_forced_on_wire_rejects_forged_commitments_root_anchor_disabled() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -352,6 +355,7 @@ fn notecreate_forced_on_wire_rejects_forged_commitments_root_anchor_disabled() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -531,6 +535,7 @@ fn notecreate_forced_on_wire_through_live_wide_producer() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -539,6 +544,7 @@ fn notecreate_forced_on_wire_through_live_wide_producer() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );

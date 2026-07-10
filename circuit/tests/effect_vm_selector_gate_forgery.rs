@@ -164,6 +164,7 @@ fn setfield_lead_with_foreign_transfer_tail_is_unsat() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -172,6 +173,7 @@ fn setfield_lead_with_foreign_transfer_tail_is_unsat() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -263,6 +265,7 @@ fn mint_lead_with_foreign_transfer_tail_is_unsat() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -271,6 +274,7 @@ fn mint_lead_with_foreign_transfer_tail_is_unsat() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -347,6 +351,7 @@ fn honest_homogeneous_setfield_still_proves_and_verifies() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -355,6 +360,7 @@ fn honest_homogeneous_setfield_still_proves_and_verifies() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );

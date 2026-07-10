@@ -96,6 +96,7 @@ fn create_cell_proves_on_deployed_wide_path() {
         &ctx_ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_hashes,
         &Default::default(),
     );
@@ -104,6 +105,7 @@ fn create_cell_proves_on_deployed_wide_path() {
         &ctx_ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_hashes,
         &Default::default(),
     );
@@ -194,6 +196,7 @@ fn prove_through_deployed(
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_hashes,
         &Default::default(),
     );
@@ -202,6 +205,7 @@ fn prove_through_deployed(
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_hashes,
         &Default::default(),
     );
@@ -596,6 +600,7 @@ fn probe_wide(
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &[],
         &Default::default(),
     );
@@ -604,6 +609,7 @@ fn probe_wide(
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &[],
         &Default::default(),
     );

@@ -205,6 +205,7 @@ fn no_cell_write_audit(effect: Effect, name: &str) -> (bool, bool, bool) {
         &ledger,
         &NULL_ROOT,
         &COMMIT_ROOT,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log(),
         &Default::default(),
     );
@@ -213,6 +214,7 @@ fn no_cell_write_audit(effect: Effect, name: &str) -> (bool, bool, bool) {
         &ledger,
         &NULL_ROOT,
         &COMMIT_ROOT,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log(),
         &Default::default(),
     );
@@ -256,6 +258,7 @@ fn no_cell_write_audit(effect: Effect, name: &str) -> (bool, bool, bool) {
         &forged_ledger,
         &NULL_ROOT,
         &COMMIT_ROOT,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log(),
         &Default::default(),
     );
@@ -410,6 +413,7 @@ fn makesovereign_forced_on_wire_rejects_forged_authority_digest_anchor_disabled(
         &ledger,
         &NULL_ROOT,
         &COMMIT_ROOT,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log(),
         &Default::default(),
     );
@@ -418,6 +422,7 @@ fn makesovereign_forced_on_wire_rejects_forged_authority_digest_anchor_disabled(
         &ledger,
         &NULL_ROOT,
         &COMMIT_ROOT,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log(),
         &Default::default(),
     );
@@ -498,6 +503,7 @@ fn makesovereign_forced_on_wire_rejects_forged_authority_digest_anchor_disabled(
         &forged_ledger,
         &NULL_ROOT,
         &COMMIT_ROOT,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log(),
         &Default::default(),
     );
@@ -627,6 +633,7 @@ fn setfielddyn_dynamic_overflow_proves_against_deployed_descriptor() {
         &ledger,
         &NULL_ROOT,
         &COMMIT_ROOT,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log(),
         &Default::default(),
     );
@@ -635,6 +642,7 @@ fn setfielddyn_dynamic_overflow_proves_against_deployed_descriptor() {
         &ledger,
         &NULL_ROOT,
         &COMMIT_ROOT,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log(),
         &Default::default(),
     );

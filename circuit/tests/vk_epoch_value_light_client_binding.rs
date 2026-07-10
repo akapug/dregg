@@ -308,6 +308,7 @@ fn build_honest(before_bal: i64, effect: Effect, after_cell: Cell, expect_name: 
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -316,6 +317,7 @@ fn build_honest(before_bal: i64, effect: Effect, after_cell: Cell, expect_name: 
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );

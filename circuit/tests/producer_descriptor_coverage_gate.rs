@@ -646,6 +646,7 @@ fn prove_verify_v3(name: &str, before: Cell, kernel: dregg_turn::Effect, vm_effe
         &Ledger::new(),
         &null_root,
         &commit_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -654,6 +655,7 @@ fn prove_verify_v3(name: &str, before: Cell, kernel: dregg_turn::Effect, vm_effe
         &ledger,
         &null_root,
         &commit_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );

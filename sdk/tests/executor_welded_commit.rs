@@ -79,6 +79,7 @@ fn setup(balance: u64) -> (Cell, CellId, V9RotationContext, [u8; 32]) {
         cells_root: rw::cells_root(&ctx_ledger),
         nullifier_root: dregg_circuit::heap_root::empty_heap_root_8(),
         commitments_root: dregg_circuit::heap_root::empty_heap_root_8(),
+        revoked_root: dregg_circuit::heap_root::empty_heap_root_8(),
         iroot: rw::iroot(&[]),
         material: Default::default(),
     };
@@ -162,6 +163,7 @@ fn welded_transfer_commits_through_executor() {
         &ctx_ledger,
         &ctx.nullifier_root,
         &ctx.commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &[],
         &Default::default(),
     );
@@ -170,6 +172,7 @@ fn welded_transfer_commits_through_executor() {
         &ctx_ledger,
         &ctx.nullifier_root,
         &ctx.commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &[],
         &Default::default(),
     );
@@ -319,6 +322,7 @@ fn setup_bare(balance: u64) -> (AgentCipherclerk, CellId, Ledger) {
         cells_root: rw::cells_root(&ctx_ledger),
         nullifier_root: dregg_circuit::heap_root::empty_heap_root_8(),
         commitments_root: dregg_circuit::heap_root::empty_heap_root_8(),
+        revoked_root: dregg_circuit::heap_root::empty_heap_root_8(),
         iroot: rw::iroot(&[]),
         material: Default::default(),
     };

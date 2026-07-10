@@ -256,6 +256,7 @@ fn mint_wire_commit(
         &ctx_ledger,
         &dregg_circuit::heap_root::empty_heap_root_8(),
         &dregg_circuit::heap_root::empty_heap_root_8(),
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -264,6 +265,7 @@ fn mint_wire_commit(
         &ctx_ledger,
         &dregg_circuit::heap_root::empty_heap_root_8(),
         &dregg_circuit::heap_root::empty_heap_root_8(),
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -426,6 +428,7 @@ fn domain2_grant_capability_welded_end_to_end() {
             expires_at: None,
             allowed_effects: None,
             stored_epoch: None,
+            provenance: [0u8; 32],
         },
     }];
     // With a non-empty c-list the EFFECTIVE descriptor is the WRITE wrapper: a plain (non-attenuating)

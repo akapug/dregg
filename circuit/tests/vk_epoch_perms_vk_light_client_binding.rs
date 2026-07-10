@@ -193,6 +193,7 @@ fn setpermissions_forced_on_wire_rejects_forged_perms_anchor_disabled() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -201,6 +202,7 @@ fn setpermissions_forced_on_wire_rejects_forged_perms_anchor_disabled() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -274,6 +276,7 @@ fn setpermissions_forced_on_wire_rejects_forged_perms_anchor_disabled() {
         &forged_ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -376,6 +379,7 @@ fn setvk_forced_on_wire_rejects_forged_vk_anchor_disabled() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -384,6 +388,7 @@ fn setvk_forced_on_wire_rejects_forged_vk_anchor_disabled() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -437,6 +442,7 @@ fn setvk_forced_on_wire_rejects_forged_vk_anchor_disabled() {
         &forged_ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );

@@ -6371,6 +6371,7 @@ mod tests {
             &ledger,
             &nullifier_root,
             &commitments_root,
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_log,
             &Default::default(),
         );
@@ -6379,6 +6380,7 @@ mod tests {
             &ledger,
             &nullifier_root,
             &commitments_root,
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_log,
             &Default::default(),
         );
@@ -6517,6 +6519,7 @@ mod tests {
             &ledger,
             &dregg_circuit::heap_root::empty_heap_root_8(),
             &dregg_circuit::heap_root::empty_heap_root_8(),
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &[[3u8; 32], [4u8; 32]],
             &Default::default(),
         );
@@ -6525,6 +6528,7 @@ mod tests {
             &ledger,
             &dregg_circuit::heap_root::empty_heap_root_8(),
             &dregg_circuit::heap_root::empty_heap_root_8(),
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &[[3u8; 32], [4u8; 32]],
             &Default::default(),
         );
@@ -6844,6 +6848,7 @@ mod tests {
             &ledger,
             &nullifier_root,
             &commitments_root,
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_log,
             &Default::default(),
         );
@@ -6852,6 +6857,7 @@ mod tests {
             &ledger,
             &nullifier_root,
             &commitments_root,
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_log,
             &Default::default(),
         );
@@ -7110,6 +7116,7 @@ mod tests {
             &ledger,
             &dregg_circuit::heap_root::empty_heap_root_8(),
             &dregg_circuit::heap_root::empty_heap_root_8(),
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_log,
             &Default::default(),
         );
@@ -7118,6 +7125,7 @@ mod tests {
             &ledger,
             &dregg_circuit::heap_root::empty_heap_root_8(),
             &dregg_circuit::heap_root::empty_heap_root_8(),
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_log,
             &Default::default(),
         );
@@ -7340,6 +7348,7 @@ mod tests {
             &ledger,
             &dregg_circuit::heap_root::empty_heap_root_8(),
             &dregg_circuit::heap_root::empty_heap_root_8(),
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_log,
             &Default::default(),
         );
@@ -7348,6 +7357,7 @@ mod tests {
             &ledger,
             &dregg_circuit::heap_root::empty_heap_root_8(),
             &dregg_circuit::heap_root::empty_heap_root_8(),
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_log,
             &Default::default(),
         );
@@ -7572,6 +7582,7 @@ mod tests {
             &ledger,
             &dregg_circuit::heap_root::empty_heap_root_8(),
             &dregg_circuit::heap_root::empty_heap_root_8(),
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_log,
             &Default::default(),
         );
@@ -7580,6 +7591,7 @@ mod tests {
             &ledger,
             &dregg_circuit::heap_root::empty_heap_root_8(),
             &dregg_circuit::heap_root::empty_heap_root_8(),
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_log,
             &Default::default(),
         );
@@ -7764,6 +7776,7 @@ mod tests {
             &ledger,
             &dregg_circuit::heap_root::empty_heap_root_8(),
             &dregg_circuit::heap_root::empty_heap_root_8(),
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_log,
             &Default::default(),
         );
@@ -7772,6 +7785,7 @@ mod tests {
             &ledger,
             &dregg_circuit::heap_root::empty_heap_root_8(),
             &dregg_circuit::heap_root::empty_heap_root_8(),
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_log,
             &Default::default(),
         );
@@ -7902,6 +7916,7 @@ mod tests {
             &ledger,
             &dregg_circuit::heap_root::empty_heap_root_8(),
             &dregg_circuit::heap_root::empty_heap_root_8(),
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_log,
             &Default::default(),
         );
@@ -7910,6 +7925,7 @@ mod tests {
             &ledger,
             &dregg_circuit::heap_root::empty_heap_root_8(),
             &dregg_circuit::heap_root::empty_heap_root_8(),
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_log,
             &Default::default(),
         );
@@ -8101,6 +8117,7 @@ mod tests {
             &ledger,
             &dregg_circuit::heap_root::empty_heap_root_8(),
             &dregg_circuit::heap_root::empty_heap_root_8(),
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_log,
             &Default::default(),
         );
@@ -8109,6 +8126,7 @@ mod tests {
             &ledger,
             &dregg_circuit::heap_root::empty_heap_root_8(),
             &dregg_circuit::heap_root::empty_heap_root_8(),
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_log,
             &Default::default(),
         );
@@ -8350,6 +8368,7 @@ mod tests {
             &ledger,
             &dregg_circuit::heap_root::empty_heap_root_8(),
             &dregg_circuit::heap_root::empty_heap_root_8(),
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_log,
             &Default::default(),
         );
@@ -8358,6 +8377,7 @@ mod tests {
             &ledger,
             &dregg_circuit::heap_root::empty_heap_root_8(),
             &dregg_circuit::heap_root::empty_heap_root_8(),
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_log,
             &Default::default(),
         );
@@ -8649,6 +8669,7 @@ mod tests {
             &ledger,
             &dregg_circuit::heap_root::empty_heap_root_8(),
             &dregg_circuit::heap_root::empty_heap_root_8(),
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_log,
             &Default::default(),
         );
@@ -8657,6 +8678,7 @@ mod tests {
             &ledger,
             &dregg_circuit::heap_root::empty_heap_root_8(),
             &dregg_circuit::heap_root::empty_heap_root_8(),
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_log,
             &Default::default(),
         );
@@ -8857,6 +8879,7 @@ mod tests {
             &ledger,
             &dregg_circuit::heap_root::empty_heap_root_8(),
             &dregg_circuit::heap_root::empty_heap_root_8(),
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_log,
             &Default::default(),
         );
@@ -8865,6 +8888,7 @@ mod tests {
             &ledger,
             &dregg_circuit::heap_root::empty_heap_root_8(),
             &dregg_circuit::heap_root::empty_heap_root_8(),
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_log,
             &Default::default(),
         );
@@ -9160,6 +9184,7 @@ mod tests {
             &ledger,
             &dregg_circuit::heap_root::empty_heap_root_8(),
             &dregg_circuit::heap_root::empty_heap_root_8(),
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_log,
             &Default::default(),
         );
@@ -9168,6 +9193,7 @@ mod tests {
             &ledger,
             &dregg_circuit::heap_root::empty_heap_root_8(),
             &dregg_circuit::heap_root::empty_heap_root_8(),
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_log,
             &Default::default(),
         );
@@ -9806,6 +9832,7 @@ mod tests {
             &ledger,
             &dregg_circuit::heap_root::empty_heap_root_8(),
             &dregg_circuit::heap_root::empty_heap_root_8(),
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_log,
             &Default::default(),
         );
@@ -9814,6 +9841,7 @@ mod tests {
             &ledger,
             &dregg_circuit::heap_root::empty_heap_root_8(),
             &dregg_circuit::heap_root::empty_heap_root_8(),
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_log,
             &Default::default(),
         );
@@ -9917,6 +9945,7 @@ mod tests {
             &ledger,
             &nullifier_root,
             &commitments_root,
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_log,
             &Default::default(),
         );
@@ -9925,6 +9954,7 @@ mod tests {
             &ledger,
             &nullifier_root,
             &commitments_root,
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_log,
             &Default::default(),
         );
@@ -10763,6 +10793,7 @@ mod tests {
                     &dregg_cell::Ledger::new(),
                     &dregg_circuit::heap_root::empty_heap_root_8(),
                     &dregg_circuit::heap_root::empty_heap_root_8(),
+                    &dregg_turn::rotation_witness::empty_revoked_root_8(),
                     &[[0x11u8; 32]],
                     &Default::default(),
                 ),
@@ -10771,6 +10802,7 @@ mod tests {
                     &dregg_cell::Ledger::new(),
                     &dregg_circuit::heap_root::empty_heap_root_8(),
                     &dregg_circuit::heap_root::empty_heap_root_8(),
+                    &dregg_turn::rotation_witness::empty_revoked_root_8(),
                     &[[0x11u8; 32]],
                     &Default::default(),
                 ),
@@ -10811,6 +10843,7 @@ mod tests {
             &ctx_ledger,
             &nullifier_root,
             &commitments_root,
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             receipt_hashes,
             &Default::default(),
         );
@@ -10819,6 +10852,7 @@ mod tests {
             &ctx_ledger,
             &nullifier_root,
             &commitments_root,
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             receipt_hashes,
             &Default::default(),
         );

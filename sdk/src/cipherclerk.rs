@@ -5430,6 +5430,7 @@ impl AgentCipherclerk {
             &ctx_ledger,
             &nullifier_root,
             &commitments_root,
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_hashes,
             &Default::default(),
         );
@@ -5438,6 +5439,7 @@ impl AgentCipherclerk {
             &ctx_ledger,
             &nullifier_root,
             &commitments_root,
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_hashes,
             &after_material,
         );
@@ -5795,6 +5797,7 @@ impl AgentCipherclerk {
                     cells_root: before_w.pre_limbs[0],
                     nullifier_root,
                     commitments_root,
+                    revoked_root: dregg_circuit::heap_root::empty_heap_root_8(),
                     iroot: before_w.iroot,
                     material: Default::default(),
                 },
@@ -6084,6 +6087,7 @@ impl AgentCipherclerk {
             &ctx_ledger,
             &nullifier_root,
             &commitments_root,
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_hashes,
             &Default::default(),
         );
@@ -6092,6 +6096,7 @@ impl AgentCipherclerk {
             &ctx_ledger,
             &nullifier_root,
             &commitments_root,
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_hashes,
             &Default::default(),
         );

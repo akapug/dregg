@@ -197,6 +197,7 @@ fn assert_executor_anchor(
         cells_root: before_w.pre_limbs[0],
         nullifier_root,
         commitments_root,
+        revoked_root: dregg_circuit::heap_root::empty_heap_root_8(),
         iroot: before_w.iroot,
         material: Default::default(),
     };
@@ -300,6 +301,7 @@ fn wide_burn_transfer_shape_proves_verifies_and_executor_anchors() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -308,6 +310,7 @@ fn wide_burn_transfer_shape_proves_verifies_and_executor_anchors() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -377,6 +380,7 @@ fn wide_set_field_dyn_dynamic_overflow_proves_and_verifies() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -385,6 +389,7 @@ fn wide_set_field_dyn_dynamic_overflow_proves_and_verifies() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -464,6 +469,7 @@ fn wide_note_spend_grow_gate_proves_verifies_and_executor_anchors() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -472,6 +478,7 @@ fn wide_note_spend_grow_gate_proves_verifies_and_executor_anchors() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -539,6 +546,7 @@ fn wide_note_create_grow_gate_proves_verifies_and_executor_anchors() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -547,6 +555,7 @@ fn wide_note_create_grow_gate_proves_verifies_and_executor_anchors() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -611,6 +620,7 @@ fn wide_create_cell_grow_gate_proves_verifies_and_executor_anchors() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -619,6 +629,7 @@ fn wide_create_cell_grow_gate_proves_verifies_and_executor_anchors() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -681,6 +692,7 @@ fn birth_witnesses() -> (
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -689,6 +701,7 @@ fn birth_witnesses() -> (
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
