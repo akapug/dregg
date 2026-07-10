@@ -933,6 +933,37 @@ async fn run_node(
         ),
     }
 
+    // ── ML-DSA SIGN: install the extracted Lean-verified SCALAR sign core behind `ml_dsa_sign_core` ──
+    // ⚠ HONEST SCOPE — this is NOT the sign-side twin of the verify install above. The verify install wires
+    // BRICK 8's FULL-BYTE `MlDsaVerifyReal.verifyCore` as the authority behind the DEPLOYED byte-level
+    // `dregg_pq::ml_dsa_verify`, taking the `fips204` crate out of the verify TCB. The sign core available
+    // today is only the SCALAR (n=1) `Fips204Verify.signCore` — a 5-int→3-int Fiat–Shamir-with-aborts
+    // object. Installing it makes that verified scalar object the backend of `dregg_pq::ml_dsa_sign_core`
+    // (the scalar-model seam); it does NOT route the deployed `MlDsaKey::sign` byte-level signer, which
+    // STILL calls the `fips204` crate. So this install does NOT remove the crate from the node's SIGN TCB.
+    // The real full-byte sign core — the same 8-brick build the verify side got (SHAKE/ring/samplers reused,
+    // adding MakeHint + the rejection loop) — is the named follow-up. We wire the scalar core here so the
+    // verified sign object runs LIVE in the deployed binary and its sign→verify round-trip is exercised
+    // (see `tests/mldsa_live_sign.rs`).
+    match install_mldsa_verified_sign_core() {
+        MlDsaSignCoreInstall::Installed => info!(
+            "ML-DSA sign: verified Lean SCALAR sign core installed behind `ml_dsa_sign_core` — the \
+             extracted `Fips204Verify.signCore` (n=1 model, proved to agree with the spec) now runs live. \
+             NOTE: the deployed byte-level `MlDsaKey::sign` STILL uses the `fips204` crate — the crate has \
+             NOT left the node's SIGN TCB. The real full-byte sign core is the named follow-up."
+        ),
+        MlDsaSignCoreInstall::AlreadyInstalled => info!(
+            "ML-DSA sign: a Lean scalar sign core was already installed this process (install is \
+             once-per-process)"
+        ),
+        MlDsaSignCoreInstall::ExportAbsent => warn!(
+            "ML-DSA sign: the linked Lean archive does NOT export `dregg_fips204_sign` \
+             (`fips204_sign_core_available()` is false) — no verified sign core installed; \
+             `ml_dsa_sign_core` returns None and callers use the `fips204` crate. Rebuild against a \
+             HEAD-matching archive to run the verified sign object live."
+        ),
+    }
+
     // Initialize node state with configurable key file.
     let has_peers = !peers.is_empty();
     let node_state = match state::NodeState::new_with_key_file(&data_path, peers, key_file) {
@@ -2222,31 +2253,63 @@ fn marshal_only_must_refuse(lean_available: bool, allow_unverified: bool) -> boo
 }
 
 /// Outcome of installing the Lean-verified ML-DSA verify core as `dregg_pq::ml_dsa_verify`'s authority.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MlDsaVerifyCoreInstall {
-    /// The real core was installed by THIS call — the `fips204` crate is now out of the verify TCB.
-    Installed,
-    /// A core was already installed this process (install is once-per-process) — crate still out of TCB.
-    AlreadyInstalled,
-    /// The linked Lean archive does not export `dregg_fips204_verify_real`; the crate fallback stays in
-    /// place (a valid FIPS-204 verify, but NOT Lean-authoritative).
-    ExportAbsent,
-}
+/// Re-exported from `dregg-pq` (the single, shared install object every deployed process routes through);
+/// node keeps the name for back-compat with `tests/mldsa_live_verify.rs` and `tests/mldsa_live_sign.rs`.
+pub use dregg_pq::MlDsaVerifyCoreInstall;
 
 /// Install the extracted, Lean-verified REAL, full-byte ML-DSA verify core (`MlDsaVerifyReal.verifyCore`,
 /// BRICK 8) as the accept/reject AUTHORITY behind `dregg_pq::ml_dsa_verify` — taking the `fips204` crate
-/// OUT of the node's verify TCB. Gated on `fips204_verify_real_core_available()` so a stale archive that
-/// lacks the export does not brick verification (an absent core would make `ml_dsa_verify` fail closed on
-/// every call). Idempotent and once-per-process. Called from the node startup path AND exercised directly
-/// by `tests/mldsa_live_verify.rs`, so the running-binary gate drives the EXACT production install.
+/// OUT of the node's verify TCB. Thin node-side wrapper over the SHARED
+/// `dregg_pq::install_verified_mldsa_verify_core` (the one tested install that node + the SDK-hosted wire
+/// silo + starbridge-v2 all route through): it injects the two `dregg-lean-ffi` archive symbols. Gated on
+/// `fips204_verify_real_core_available()` so a stale archive that lacks the export does not brick
+/// verification (an absent core would make `ml_dsa_verify` fail closed on every call). Idempotent and
+/// once-per-process. Exercised directly by `tests/mldsa_live_verify.rs`, so the running-binary gate drives
+/// the EXACT production install.
 pub fn install_mldsa_verified_verify_core() -> MlDsaVerifyCoreInstall {
-    if !dregg_lean_ffi::fips204_verify_real_core_available() {
-        return MlDsaVerifyCoreInstall::ExportAbsent;
+    dregg_pq::install_verified_mldsa_verify_core(
+        dregg_lean_ffi::fips204_verify_real_core_available,
+        |w| dregg_lean_ffi::shadow_fips204_verify_real(w).ok(),
+    )
+}
+
+/// Outcome of installing the extracted Lean-verified ML-DSA SIGN core behind `dregg_pq::ml_dsa_sign_core`.
+///
+/// ⚠ HONEST SCOPE — this is deliberately NOT the sign-side twin of [`MlDsaVerifyCoreInstall`]. The verify
+/// install wires BRICK 8's FULL-BYTE `MlDsaVerifyReal.verifyCore` as the authority behind the DEPLOYED
+/// byte-level `dregg_pq::ml_dsa_verify`. The sign core available today is only the SCALAR (n=1)
+/// `Fips204Verify.signCore` (a 5-int→3-int Fiat–Shamir-with-aborts object). Installing it makes that
+/// verified scalar object the backend of `dregg_pq::ml_dsa_sign_core` (the scalar-model seam) — it does NOT
+/// route the deployed `MlDsaKey::sign` byte-level signer, which STILL calls the `fips204` crate. So a
+/// successful install here does NOT take the crate out of the node's SIGN TCB; the real full-byte sign core
+/// (the same 8-brick build the verify side got, adding MakeHint + the rejection loop) is the named
+/// follow-up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MlDsaSignCoreInstall {
+    /// The scalar sign core was installed by THIS call (now the backend of `ml_dsa_sign_core`).
+    Installed,
+    /// A sign core was already installed this process (install is once-per-process).
+    AlreadyInstalled,
+    /// The linked Lean archive does not export `dregg_fips204_sign`; no sign core installed, and
+    /// `ml_dsa_sign_core` returns `None` (callers use the `fips204` crate).
+    ExportAbsent,
+}
+
+/// Install the extracted, Lean-verified SCALAR ML-DSA sign core (`Fips204Verify.signCore`) as the backend
+/// of `dregg_pq::ml_dsa_sign_core`. See [`MlDsaSignCoreInstall`] for the honest scope: this wires the n=1
+/// scalar model, NOT the deployed byte-level `MlDsaKey::sign`, so the `fips204` crate is NOT removed from
+/// the node's SIGN TCB by this call. Gated on `fips204_sign_core_available()` so a stale archive without the
+/// export is reported (rather than leaving `ml_dsa_sign_core` silently returning `None`). Idempotent,
+/// once-per-process. Called from the node startup path AND exercised directly by `tests/mldsa_live_sign.rs`,
+/// so the running-binary gate drives the EXACT production install.
+pub fn install_mldsa_verified_sign_core() -> MlDsaSignCoreInstall {
+    if !dregg_lean_ffi::fips204_sign_core_available() {
+        return MlDsaSignCoreInstall::ExportAbsent;
     }
-    if dregg_pq::install_lean_verify_core_real(|w| dregg_lean_ffi::shadow_fips204_verify_real(w).ok()) {
-        MlDsaVerifyCoreInstall::Installed
+    if dregg_pq::install_lean_sign_core(|w| dregg_lean_ffi::shadow_fips204_sign(w).ok()) {
+        MlDsaSignCoreInstall::Installed
     } else {
-        MlDsaVerifyCoreInstall::AlreadyInstalled
+        MlDsaSignCoreInstall::AlreadyInstalled
     }
 }
 
