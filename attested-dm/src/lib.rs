@@ -65,9 +65,10 @@ pub use prompt_template::{
 
 pub mod game;
 pub use game::{
-    sunken_vault, Exit, GameAction, GameBinding, GameBrain, GameRefusal, GameSession, GameStatus,
-    GameWorld, Gate, GateReason, Hostile, LoseCondition, Objective, Outcome, PlayResult, Proposal,
-    Resolution, Room, ScriptedGm, UseRule,
+    bramble_keep, sunken_vault, CombatEnemy, DialogueGrant, DialogueRule, Exit, GameAction,
+    GameBinding, GameBrain, GameRefusal, GameSession, GameStatus, GameWorld, Gate, GateReason,
+    Hostile, LoseCondition, Npc, Objective, Outcome, PlayResult, Proposal, Resolution, Room,
+    ScriptedGm, UseRule, PLAYER_WOUNDS_FLAG,
 };
 // `PromptBinding` is defined below (it is tightly coupled to the chain-link hashing); re-exported
 // here in the same neighbourhood as the other prompt-template surface for discoverability.
@@ -349,6 +350,13 @@ fn encode_effect(h: &mut blake3::Hasher, effect: &Option<WorldEffect>) {
             h.update(&(item.len() as u64).to_le_bytes());
             h.update(item.as_bytes());
         }
+        Some(WorldEffect::Batch(v)) => {
+            h.update(&[4u8]);
+            h.update(&(v.len() as u64).to_le_bytes());
+            for e in v {
+                encode_effect(h, &Some(e.clone()));
+            }
+        }
     }
 }
 
@@ -400,6 +408,14 @@ pub enum WorldEffect {
     /// Grant a player an item. The DM may only grant items its caps whitelist — it
     /// cannot hand out an unearned item.
     GrantItem(String),
+    /// **Apply several effects atomically as ONE turn.** The single-effect-per-turn shape
+    /// cannot express a move that touches two counters at once — a combat exchange, say, where
+    /// the same blow both wounds the foe and lets it wound you back. A `Batch` lands all of its
+    /// sub-effects in order as one receipted turn. It is NOT a cap escape: [`DmCaps::authorize`]
+    /// checks EVERY sub-effect (an ungrantable item nested in a batch is still refused
+    /// fail-closed), and [`WorldCell::apply`] applies each in sequence. The whole batch is
+    /// encoded into the chain link, so a rewritten sub-effect breaks the receipt.
+    Batch(Vec<WorldEffect>),
 }
 
 /// **The world-cell** — world-state-as-cell. The current scene, the world flags, the
@@ -512,6 +528,11 @@ impl WorldCell {
             }
             WorldEffect::GrantItem(item) => {
                 self.inventory.insert(item.clone());
+            }
+            WorldEffect::Batch(v) => {
+                for e in v {
+                    self.apply(e);
+                }
             }
         }
     }
@@ -778,6 +799,9 @@ impl DmCaps {
             WorldEffect::GrantItem(item) if !self.grantable_items.contains(item) => {
                 Err(OverCap::UngrantableItem(item.clone()))
             }
+            // A batch is authorized iff EVERY sub-effect is — the cap tooth is not escapable by
+            // nesting (an ungrantable item inside a batch is still refused fail-closed).
+            WorldEffect::Batch(v) => v.iter().try_for_each(|e| self.authorize(e)),
             _ => Ok(()),
         }
     }
