@@ -42,3 +42,11 @@ replays. VERIFY BY DRIVING, not fixtures-pass. Bar: the artifact RUNS end-to-end
   wasm build. Verify + commit the moment their refactor lands. The DEMO is unaffected (its adapter works around it).
 - SEAM (named): the extension-less REAL-passkey voter in the demo page (the demo already runs extension-less with a
   demo voter; a real PasskeyCustody voter is the next enhancement, non-blocked — page-side TS).
+- ✅ EXTENSION-LESS PASSKEY VOTER done + verified by DRIVING (committed): a WebAuthn passkey enrolls page-side,
+  its biometric-gated ballot counts on the real CollectiveChoiceEngine under a stable id (900be4c3…), signed by a
+  real hybrid ed25519+ML-DSA-65 key; second ballot refused (nullifier). Base auto-play unbroken. node demo/
+  run-passkey.mjs. Note: enroll needs http://localhost:8787 (WebAuthn rejects a bare IP) — in OPEN-ME.
+- GOAL SUBSTANTIALLY ACHIEVED: the demo RUNS + a stranger votes extension-less with a passkey, both verified by
+  driving, both committed, discoverable (▶▶ banner). The dreggic collectivity web is real in a browser tab.
+- ONLY PENDING: the wasm idempotency fix (on disk), blocked on another terminal's dregg-sdk refactor. Wakeup armed
+  to re-check + verify+commit when unblocked. Does NOT affect the demo.
