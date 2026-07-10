@@ -44,39 +44,64 @@
 //! Commonly needed types from sub-crates are re-exported so apps can import from
 //! a single dependency instead of reaching into `dregg-intent`, `dregg-turn`, etc.
 
+// The HTTP app-server surface — the modules that ride `axum`/`tokio`(full)/`reqwest`/
+// `tower-http` (non-wasm32). Gated behind the `server` feature (ON by default) so a
+// `default-features = false` build is the wasm-clean core: the `EmbeddedExecutor` (the
+// in-process turn admitter `spween-dregg`/`DocCollabWorld` ride) + the cell/turn
+// primitives, with none of the server transport stack.
 pub mod affordance;
+#[cfg(feature = "server")]
 pub mod affordance_endpoint;
 pub mod agent_coordination;
+#[cfg(feature = "server")]
 pub mod auth;
 pub mod authorizer;
 pub mod batch_executor;
+#[cfg(feature = "server")]
 pub mod blinded_endpoint;
+#[cfg(feature = "server")]
 pub mod captp_server;
 pub mod cipherclerk;
+// The deos-app COMPOSITION CORE (`DeosApp`/`DeosCell`/`DeosAppBuilder`/`PersistenceSeam`)
+// is WASM-CLEAN — cells + affordances + the `EmbeddedExecutor` dispatch seam + the
+// core rehydration/starbridge composition. The genuine axum/captp/discovery HTTP
+// surface (`mount`/`publish_all`/`announce` + the `captp`/`resolver` fields) is gated
+// `#[cfg(feature = "server")]` INSIDE `deos_app.rs`, so the collective-fiction path
+// (`starbridge-privacy-voting` → `collective-choice` → `spween-dregg`) compiles to
+// wasm32 with `default-features = false`.
 pub mod deos_app;
+#[cfg(feature = "server")]
 pub mod discovery;
 pub mod dispute;
 pub mod dreggverse_map;
+#[cfg(feature = "server")]
 pub mod fee_policy;
 pub mod fields;
 pub mod hex;
+#[cfg(feature = "server")]
 pub mod inbox_endpoint;
 pub mod invoke;
+#[cfg(feature = "server")]
 pub mod middleware;
 pub mod multi_group;
 pub mod optimistic_fire;
 pub mod payable;
 pub mod persistence;
+#[cfg(feature = "server")]
 pub mod queue_endpoint;
 pub mod reactor;
 pub mod rehydration;
 pub mod ring_trade;
+#[cfg(feature = "server")]
 pub mod scaffold;
+#[cfg(feature = "server")]
 pub mod server;
 pub mod service_promise;
 pub mod starbridge;
 pub mod stark_rehydrate;
+#[cfg(feature = "server")]
 pub mod store;
+#[cfg(feature = "server")]
 pub mod transclude_affordance;
 pub mod vk;
 pub mod webgen;
@@ -115,6 +140,7 @@ pub use dregg_sdk::embed::{DreggEngine, EngineConfig};
 pub use dregg_types::CellId;
 
 // Re-export server and auth types at crate root for ergonomics.
+#[cfg(feature = "server")]
 pub use auth::{AdminAuth, AdminMode, AdminToken, HasAdminToken};
 pub use authorizer::{
     AuthContext, AuthError, Authorizer, BearerAuthorizer, CapabilityAuthorizer,
@@ -122,6 +148,7 @@ pub use authorizer::{
 };
 pub use cipherclerk::AppCipherclerk;
 pub use persistence::JsonPersistence;
+#[cfg(feature = "server")]
 pub use server::{AppConfig, AppServer, ErrorResponse, api_error};
 
 /// Short alias for [`AppCipherclerk`].
@@ -194,12 +221,15 @@ pub use dispute::{DisputeId, SettlementId as DisputeSettlementId};
 
 // New-world module re-exports.
 pub use batch_executor::{BatchExecution, BatchExecutor, ClientTurnRequest};
+#[cfg(feature = "server")]
 pub use captp_server::CapTpServer;
 // `FederationId` (the web-of-cells group identity) — re-exported so a deos app can
 // construct a `CapTpServer` / set its `DeosApp` federation without adding
 // `dregg-types` to its own Cargo.toml.
+#[cfg(feature = "server")]
 pub use discovery::{DiscoveryError, NameRegistration, NameserviceClient};
 pub use dregg_types::FederationId;
+#[cfg(feature = "server")]
 pub use fee_policy::{AcceptedAsset, FeePolicy};
 pub use multi_group::MultiGroupConfig;
 pub use ring_trade::{LegId, RingTradeParticipant};
@@ -236,6 +266,7 @@ pub use affordance::{
 // state-aware per-viewer frustum (the htmx reactivity). The state-tooth refusal is
 // `FireError::StateConditionUnmet`, in-band, before any dispatch.
 pub use affordance::{GatedAffordance, GatedSurface};
+#[cfg(feature = "server")]
 pub use affordance_endpoint::{
     AffordanceEndpoint, HELD_RIGHTS_HEADER, HeaderHeldRights, HeldRightsResolver,
 };
@@ -246,6 +277,9 @@ pub use affordance_endpoint::{
 // the composed `register(ctx)`; `app.register(ctx)` folds every cell's surface into
 // the host context; `app.mount()` yields the whole axum surface (manifest +
 // `/surface.js` web component + per-cell cap-gated fires).
+// The composition types are wasm-clean core; only the axum `mount`/`publish_all`/
+// `announce` methods (and the `captp`/`resolver` fields + their builders) are gated
+// `server` inside `deos_app.rs`.
 pub use deos_app::{DeosApp, DeosAppBuilder, DeosCell, PersistenceSeam};
 
 // The deos-app TRANSCLUSION AFFORDANCE (the named consumer of the transclusion
@@ -259,6 +293,7 @@ pub use deos_app::{DeosApp, DeosAppBuilder, DeosCell, PersistenceSeam};
 // never amplified); `record_into` populates the backlinks (the witness-graph the
 // other way). The transclusion primitives themselves are re-exported from
 // `starbridge_web_surface::transclusion`.
+#[cfg(feature = "server")]
 pub use transclude_affordance::{
     DeosCellTranscludeExt, ProjectedTransclusion, RenderedTransclusion, TranscludeAffordance,
     TranscludeProjectError, surface_declares,
@@ -292,6 +327,7 @@ pub use optimistic_fire::{OptimisticFire, Settlement};
 // (cells + affordances + rights + effects), turned into a live `DeosApp`
 // (`AppSpec::into_app`) OR a full buildable crate + web surface (`Scaffold::render` /
 // `write_to`) — the "useful deos app in an afternoon" one-command path.
+#[cfg(feature = "server")]
 pub use scaffold::{
     AffordanceEffect, AffordanceSpec, AppSpec, CellSpec, Scaffold, ScaffoldError, ScaffoldFiles,
 };
@@ -299,6 +335,7 @@ pub use scaffold::{
 // The web-component surface generator (DEOS.md §"htmx on crack") — render a DeosApp's
 // `<dregg-affordance-surface>` custom element (the per-viewer, cap-gated affordance
 // DOM the embedded servo web-surface mounts).
+#[cfg(feature = "server")]
 pub use webgen::render_surface_component;
 
 // Re-export the embedded executor at the framework root for the

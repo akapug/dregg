@@ -57,8 +57,12 @@
 //!   pg-dregg layer (reads are free SQL, writes are verified turns) plugs in here.
 //!   Marked honestly, NOT faked — the embedded executor is the in-process state today.
 
+// `Arc` is used only by the server-only shared held-rights `resolver` (field + builder
+// + `mount`), so it rides the same gate — the wasm-clean core needs no `Arc`.
+#[cfg(feature = "server")]
 use std::sync::Arc;
 
+#[cfg(feature = "server")]
 use axum::{Json, Router, routing::get};
 use dregg_cell::{AuthRequired, CellProgram, StateConstraint};
 use dregg_types::{CellId, FederationId};
@@ -67,9 +71,18 @@ use serde_json::json;
 use crate::affordance::{
     AffordanceSurface, CellAffordance, FireError, FireExecuteError, GatedAffordance, GatedSurface,
 };
+// The axum HTTP surface (`AffordanceEndpoint`), the shared held-rights resolver, the
+// web-of-cells captp minter, and the nameservice client all ride the server transport
+// stack (axum/tokio/reqwest, non-wasm32). They are used ONLY by the server methods
+// (`mount`/`publish_all`/`announce`) and the two server-only fields, so they are gated
+// alongside them — the composition core (cells/affordances/executor/rehydration/
+// starbridge) stays wasm-clean.
+#[cfg(feature = "server")]
 use crate::affordance_endpoint::{AffordanceEndpoint, HeldRightsResolver};
+#[cfg(feature = "server")]
 use crate::captp_server::CapTpServer;
 use crate::cipherclerk::{AppCipherclerk, EmbeddedExecutor};
+#[cfg(feature = "server")]
 use crate::discovery::{NameRegistration, NameserviceClient};
 use crate::rehydration::{InteractionLog, Membrane, RehydrateError, RehydratedSurface, Sturdyref};
 use crate::starbridge::StarbridgeAppContext;
@@ -420,16 +433,23 @@ pub struct DeosApp {
     cells: Vec<DeosCell>,
     /// Optional captp server the published cells are exported through (the
     /// web-of-cells sturdyref minter). When absent, [`DeosApp::publish_all`] returns
-    /// no URIs (publication is a no-op without a server).
+    /// no URIs (publication is a no-op without a server). SERVER-ONLY: `CapTpServer`
+    /// rides the axum/tokio transport, so the field (and its `web_of_cells` builder,
+    /// `publish_all`, and manifest/Debug readers) is gated.
+    #[cfg(feature = "server")]
     captp: Option<CapTpServer>,
     /// If `Some(tags)`, the app auto-registers in the nameservice on
-    /// [`DeosApp::announce`] under `name` with these tags.
+    /// [`DeosApp::announce`] under `name` with these tags. The tags are a plain
+    /// `Vec<String>` (wasm-clean); only [`DeosApp::announce`] (which drives the
+    /// server-only nameservice client) is gated.
     discovery_tags: Option<Vec<String>>,
     /// The durable-state seam this app runs on (honest marker; pg-dregg plugs in).
     persistence: PersistenceSeam,
     /// Optional shared held-rights resolver for every cell's affordance endpoint
     /// (e.g. one backed by the verified presentation in production). Defaults to the
-    /// header resolver.
+    /// header resolver. SERVER-ONLY: `HeldRightsResolver` lives in the axum affordance
+    /// endpoint, so the field (and its builder + `mount` reader) is gated.
+    #[cfg(feature = "server")]
     resolver: Option<Arc<dyn HeldRightsResolver>>,
 }
 
@@ -449,9 +469,11 @@ impl DeosApp {
                 executor,
                 federation,
                 cells: Vec::new(),
+                #[cfg(feature = "server")]
                 captp: None,
                 discovery_tags: None,
                 persistence: PersistenceSeam::default(),
+                #[cfg(feature = "server")]
                 resolver: None,
             },
         }
@@ -487,6 +509,21 @@ impl DeosApp {
         self.persistence
     }
 
+    /// Whether this app is attached to a web-of-cells captp server (so published cells
+    /// are exported as `dregg://` sturdyrefs). Always `false` in the wasm-clean core
+    /// (no captp transport); reads the server-only `captp` field when present. Backs
+    /// the manifest's `webOfCells` flag + the `Debug` readout so those stay wasm-clean.
+    #[cfg(feature = "server")]
+    fn web_of_cells_active(&self) -> bool {
+        self.captp.is_some()
+    }
+
+    /// See the server variant — no captp transport exists in the wasm-clean core.
+    #[cfg(not(feature = "server"))]
+    fn web_of_cells_active(&self) -> bool {
+        false
+    }
+
     /// **Register** this app onto a shared [`StarbridgeAppContext`] — the deos app
     /// model's composed `register(ctx)`. Every cell's affordance surface is folded
     /// into the context's [`crate::starbridge::AffordanceRegistry`], so a host
@@ -515,6 +552,11 @@ impl DeosApp {
     ///
     /// Every fire routes through the app's shared cipherclerk + executor (the closed
     /// dispatch seam). The held-rights resolver is the app's (default header).
+    ///
+    /// SERVER-ONLY: the axum [`Router`] + [`AffordanceEndpoint`] ride the HTTP
+    /// transport stack. The wasm-clean core composes the same cells/affordances and
+    /// fires them through the executor directly (no HTTP surface).
+    #[cfg(feature = "server")]
     pub fn mount(&self) -> Router {
         let mut router = Router::new();
         // The app manifest — the whole surface, from the Rust source of truth.
@@ -623,7 +665,7 @@ impl DeosApp {
             "federation": hex_full_arr(&self.federation.0),
             "persistence": self.persistence.describe(),
             "discoverable": self.discovery_tags.clone(),
-            "webOfCells": self.captp.is_some(),
+            "webOfCells": self.web_of_cells_active(),
             "cells": cells,
         })
     }
@@ -636,6 +678,10 @@ impl DeosApp {
     /// A no-op (empty result) if no captp server was attached or no cell is
     /// published. This is the distribution layer: a published cell becomes a
     /// sturdyref agents reacquire across the membrane.
+    ///
+    /// SERVER-ONLY: exporting through the [`CapTpServer`] rides the captp/tokio
+    /// transport (non-wasm32).
+    #[cfg(feature = "server")]
     pub async fn publish_all(&self, current_height: u64) -> Vec<String> {
         let Some(captp) = &self.captp else {
             return Vec::new();
@@ -656,6 +702,9 @@ impl DeosApp {
     /// **Announce** the app in the nameservice (if [`DeosAppBuilder::discoverable`]
     /// was set) — register under the app name with its tags at `target_uri`.
     /// Best-effort; a failure is returned for the caller to log non-fatally.
+    ///
+    /// SERVER-ONLY: the [`NameserviceClient`] rides the reqwest transport (non-wasm32).
+    #[cfg(feature = "server")]
     pub async fn announce(
         &self,
         target_uri: impl Into<String>,
@@ -741,7 +790,7 @@ impl std::fmt::Debug for DeosApp {
             .field("name", &self.name)
             .field("cells", &self.cells.len())
             .field("federation", &hex8_arr(&self.federation.0))
-            .field("web_of_cells", &self.captp.is_some())
+            .field("web_of_cells", &self.web_of_cells_active())
             .field("discoverable", &self.discovery_tags.is_some())
             .field("persistence", &self.persistence)
             .finish()
@@ -770,7 +819,8 @@ impl DeosAppBuilder {
 
     /// Attach the [`CapTpServer`] published cells are exported through (the
     /// web-of-cells sturdyref minter). If a federation was not set explicitly, the
-    /// server's federation is used.
+    /// server's federation is used. SERVER-ONLY (captp/tokio transport).
+    #[cfg(feature = "server")]
     pub fn web_of_cells(mut self, captp: CapTpServer) -> Self {
         self.app.federation = captp.federation_id();
         self.app.captp = Some(captp);
@@ -795,7 +845,9 @@ impl DeosAppBuilder {
 
     /// Set a shared held-rights resolver for every cell's affordance endpoint (e.g.
     /// one backed by the verified presentation). The gate applied to the resolved
-    /// value is unchanged (the REAL `is_attenuation`).
+    /// value is unchanged (the REAL `is_attenuation`). SERVER-ONLY: the resolver is
+    /// consumed by the axum affordance endpoint (`mount`).
+    #[cfg(feature = "server")]
     pub fn held_rights_resolver(mut self, resolver: Arc<dyn HeldRightsResolver>) -> Self {
         self.app.resolver = Some(resolver);
         self
@@ -997,6 +1049,7 @@ mod tests {
         assert!(matches!(blocked, Err(RehydrateError::Amplification { .. })));
     }
 
+    #[cfg(feature = "server")]
     #[tokio::test]
     async fn publish_all_is_a_noop_without_a_captp_server() {
         // Honest: publication needs a web-of-cells server. Without one, publish_all
@@ -1008,6 +1061,7 @@ mod tests {
         assert_eq!(app.manifest()["webOfCells"], false);
     }
 
+    #[cfg(feature = "server")]
     #[tokio::test]
     async fn publish_all_exports_published_cells_through_captp() {
         // With a captp server attached, every PUBLISHED cell is exported as a real
@@ -1039,6 +1093,7 @@ mod tests {
         assert_eq!(app.manifest()["webOfCells"], true);
     }
 
+    #[cfg(feature = "server")]
     #[tokio::test]
     async fn the_mounted_router_serves_the_manifest_and_per_cell_fires() {
         use axum::body::Body;

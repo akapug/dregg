@@ -30,7 +30,10 @@ dregg-payable = { path = "../dregg-payable" }
 # gates behind its `kzg` feature. Without this app-framework fails to compile in any
 # subgraph that does not otherwise unify `kzg` on (`cargo build -p dregg-app-framework`
 # and every narrow `-p` consumer). Declaring the feature app-framework actually uses.
-dregg-storage = { path = "../storage", features = ["kzg"] }
+# `optional`/`server`-gated: the ONLY consumers are the endpoint modules
+# (`inbox_endpoint`/`queue_endpoint`/`blinded_endpoint`), all of which sit behind the
+# `server` feature. A `no-server` (e.g. wasm32) build does not pull `dregg-storage`.
+dregg-storage = { path = "../storage", features = ["kzg"], optional = true }
 dregg-captp = { path = "../captp" }
 
 # The REAL transclusion primitive (`starbridge_web_surface::transclusion`): the
@@ -41,24 +44,44 @@ dregg-captp = { path = "../captp" }
 # reinventing neither the attested-read nor the cap model.
 starbridge-web-surface = { path = "../starbridge-web-surface" }
 
-axum = "0.8"
-http = "1"
-tower-http = { version = "0.6", features = ["cors"] }
+# The HTTP app-SERVER surface (`server`/`auth`/`middleware`/the `*_endpoint`
+# modules + `deos_app`/`scaffold`/`discovery`/`captp_server`) rides these, and NONE
+# of them compile to wasm32 (`mio`/tokio-net, `reqwest`'s transport). They are
+# `optional` and gated behind the `server` feature so the framework's CORE — the
+# `EmbeddedExecutor` (the in-process turn admitter) + the cell/turn primitives —
+# builds wasm-clean without them (`default-features = false`). `server` is in the
+# default set, so every existing HTTP-service consumer is unchanged.
+axum = { version = "0.8", optional = true }
+http = { version = "1", optional = true }
+tower-http = { version = "0.6", features = ["cors"], optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["full"], optional = true }
 thiserror = { workspace = true }
 base64 = { workspace = true }
 blake3 = "1"
 ed25519-dalek = { version = "2", features = ["std"] }
-reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false, optional = true }
 
 [dev-dependencies]
 tower = "0.5"
 
 [features]
-default = []
+default = ["server"]
 dev = ["dregg-sdk/dev"]
+# The HTTP app-server surface. Bundles the non-wasm32 transport stack
+# (`axum`/`tokio`(full)/`reqwest`/`tower-http`/`http`) + `dregg-storage` (only the
+# gated endpoint modules use it), and compiles the server/endpoint modules. ON by
+# default so existing consumers are unchanged; a wasm-clean build takes
+# `default-features = false` and gets the `EmbeddedExecutor` + primitives only.
+server = [
+    "dep:axum",
+    "dep:http",
+    "dep:tower-http",
+    "dep:tokio",
+    "dep:reqwest",
+    "dep:dregg-storage",
+]
 # PLATFORM gate passthrough (polarity-inverted, docs/FEATURE-HYGIENE.md §Lean): the verified
 # Lean producer is UNCONDITIONAL on native (the sdk compiles it in by default; runtime-gated
 # by `DREGG_LEAN_PRODUCER` / `EmbeddedExecutor::set_lean_producer`). Only wasm32/zkvm builds

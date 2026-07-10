@@ -23,7 +23,11 @@ description = "The general voting engine for dregg — poll → cap-bounded ball
 # standalone `[workspace]`/`[patch]` here.
 
 [dependencies]
-dregg-app-framework = { path = "../app-framework" }
+# `default-features = false`: the wasm-clean CORE (`EmbeddedExecutor` + primitives)
+# only — no `server` feature (axum/tokio-full/reqwest/tower-http, non-wasm32). This
+# crate is in `spween-dregg`'s (browser) dep tree, and feature unification would
+# otherwise re-enable `server` on the shared instance. Native builds are unaffected.
+dregg-app-framework = { path = "../app-framework", default-features = false }
 dregg-cell = { path = "../cell", default-features = false }
 dregg-intent = { path = "../intent" }
 dregg-types = { path = "../types" }
