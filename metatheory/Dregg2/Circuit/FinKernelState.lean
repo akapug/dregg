@@ -152,7 +152,7 @@ theorem mem_keys_insertList (k : K) (v : V) (y : K) :
   | (k', v') :: rest => by
       unfold insertList
       by_cases hlt : k < k'
-      · simp only [hlt, if_true, List.map_cons, List.mem_cons]; tauto
+      · simp only [hlt, if_true, List.map_cons, List.mem_cons]
       · rw [if_neg hlt]
         by_cases hkx : k = k'
         · rw [if_pos hkx, hkx]; simp only [List.map_cons, List.mem_cons]; tauto
@@ -165,7 +165,7 @@ theorem insertList_sorted (k : K) (v : V) :
       ((insertList k v l).map Prod.fst).Pairwise (· < ·)
   | [], _ => by simp [insertList]
   | (k', v') :: rest, hs => by
-      have hstail : (rest.map Prod.fst).Sorted (· < ·) := (List.pairwise_cons.mp hs).2
+      have hstail : (rest.map Prod.fst).Pairwise (· < ·) := (List.pairwise_cons.mp hs).2
       have hhead : ∀ y ∈ rest.map Prod.fst, k' < y := (List.pairwise_cons.mp hs).1
       unfold insertList
       by_cases hlt : k < k'
@@ -212,25 +212,25 @@ theorem get_ext {default : V} {m m' : SortedMap K V}
   apply ext
   intro k
   have hk := h k
-  simp only [get] at hk
-  cases hml : m.lookup k with
+  simp only [get, lookup] at hk ⊢
+  cases hml : lookupList k m.entries with
   | none =>
-      cases hml' : m'.lookup k with
+      cases hml' : lookupList k m'.entries with
       | none => rfl
       | some v' =>
           rw [hml, hml'] at hk
           simp only [Option.getD_none, Option.getD_some] at hk
-          exact absurd hk (Ne.symm (hc' (k, v') (mem_of_lookupList_eq_some hml'))).symm
+          exact absurd hk.symm (hc' (k, v') (mem_of_lookupList_eq_some hml'))
   | some v =>
-      cases hml' : m'.lookup k with
+      cases hml' : lookupList k m'.entries with
       | none =>
           rw [hml, hml'] at hk
           simp only [Option.getD_none, Option.getD_some] at hk
-          exact absurd hk (hc (k, v) (mem_of_lookupList_eq_some hml'.symm ▸ mem_of_lookupList_eq_some hml))
+          exact absurd hk (hc (k, v) (mem_of_lookupList_eq_some hml))
       | some v' =>
           rw [hml, hml'] at hk
           simp only [Option.getD_some] at hk
-          rw [hml, hml', hk]
+          rw [hk]
 
 end SortedMap
 
@@ -483,42 +483,42 @@ end Reachability
 
 section Teeth
 
-/-- A concrete cell map: cell `1 ↦ record[("balance", 7)]`, cell `2 ↦ record[("balance", 9)]`. -/
-private def demoCellEntries : List (CellId × Value) :=
-  [(1, Value.record [("balance", Value.int 7)]), (2, Value.record [("balance", Value.int 9)])]
+/-- A concrete lifecycle map (`Nat`-valued, default `0`): cell `1 ↦ 7`, cell `2 ↦ 9`. -/
+private def demoEntries : List (CellId × Nat) := [(1, 7), (2, 9)]
 
-private def demoCell : CanonMap CellId Value (Value.record []) :=
-  ⟨⟨demoCellEntries, by decide⟩, by decide⟩
+private def demoLife : CanonMap CellId Nat 0 :=
+  ⟨⟨demoEntries, by decide⟩, by
+    intro p hp
+    simp only [demoEntries, List.mem_cons, List.not_mem_nil, or_false] at hp
+    rcases hp with rfl | rfl <;> decide⟩
 
--- `get default` returns the inserted value on PRESENT keys, the default on ABSENT keys:
-#guard demoCell.get 1 == Value.record [("balance", Value.int 7)]   -- present
-#guard demoCell.get 2 == Value.record [("balance", Value.int 9)]   -- present
-#guard demoCell.get 3 == Value.record []                            -- absent ⇒ default
+-- `get default` returns the stored value on PRESENT keys, the default on ABSENT keys (both polarities):
+#guard demoLife.get 1 == 7   -- present
+#guard demoLife.get 2 == 9   -- present
+#guard demoLife.get 3 == 0   -- absent ⇒ default
 
--- SortedMap.ext CANONICALITY: a PERMUTED-key list is NOT a valid `SortedMap` (the sorted invariant fails),
--- so the representation is canonical — there is exactly ONE valid entries list per key set.
-#guard decide (([(2, (0:ℤ)), (1, 0)].map Prod.fst).Sorted (· < ·)) == false   -- permuted: INVALID
-#guard decide (([(1, (0:ℤ)), (2, 0)].map Prod.fst).Sorted (· < ·)) == true     -- sorted: valid
+-- SortedMap.ext CANONICALITY: a PERMUTED-key list is NOT a valid `SortedMap` (the sorted-key invariant
+-- FAILS), so there is exactly ONE valid entries list per key set — the representation is canonical.
+#guard decide (([(2, (0:ℤ)), (1, 0)].map Prod.fst).Pairwise (· < ·)) == false   -- permuted: INVALID
+#guard decide (([(1, (0:ℤ)), (2, 0)].map Prod.fst).Pairwise (· < ·)) == true     -- sorted: valid
 
 -- A fresh `insert` adds the key; overwriting an existing key replaces the value (set grows by ≤ 1):
-#guard (SortedMap.insert ⟨demoCellEntries, by decide⟩ 3 (Value.dig 5)).lookup 3 == some (Value.dig 5)
-#guard (SortedMap.insert ⟨demoCellEntries, by decide⟩ 1 (Value.dig 5)).lookup 1 == some (Value.dig 5)
+#guard (SortedMap.insert ⟨demoEntries, by decide⟩ 3 5).lookup 3 == some 5
+#guard (SortedMap.insert ⟨demoEntries, by decide⟩ 1 5).lookup 1 == some 5
+#guard (SortedMap.insert ⟨demoEntries, by decide⟩ 3 5).entries == [(1, 7), (2, 9), (3, 5)]
 
-/-- Two concrete distinct `FinKernelState`s (differ only in `cell`). -/
-private def fA : FinKernelState := { finInit with cell := demoCell }
+/-- Two concrete distinct `FinKernelState`s (differ only in `lifecycle`). -/
+private def fA : FinKernelState := { finInit with lifecycle := demoLife }
 private def fB : FinKernelState := finInit
 
-/-- `denote_injective` bites: distinct finite states have distinct denotations (contrapositive witness —
+/-- `denote_injective` bites: two DISTINCT finite states have DISTINCT denotations (contrapositive —
 `denote` does not collapse `fA` and `fB`). -/
 private theorem demo_denote_distinct : denote fA ≠ denote fB := by
   intro h
-  have := denote_injective h
-  simp only [fA, fB] at this
-  -- the `cell` fields differ (present key 1 vs default)
-  have hc : demoCell.get 1 = (CanonMap.empty : CanonMap CellId Value (Value.record [])).get 1 := by
-    have := congrArg (fun s => s.cell.get 1) this
-    simpa using this
-  simp [demoCell, CanonMap.get, SortedMap.get, SortedMap.lookup, lookupList, demoCellEntries,
+  have heq : fA = fB := denote_injective h
+  have hc : demoLife.get 1 = (CanonMap.empty : CanonMap CellId Nat 0).get 1 :=
+    congrArg (fun s => s.lifecycle.get 1) heq
+  simp [demoLife, demoEntries, CanonMap.get, SortedMap.get, SortedMap.lookup, lookupList,
     CanonMap.empty, SortedMap.empty] at hc
 
 end Teeth
