@@ -445,3 +445,28 @@ exhausted)` when the ceiling bites). Then swap demo/dungeon-service onto it. Liv
 immediately offers it as a ballot (`go north` / `take oilcan` / `look`), votes tally. /party and /game/author share
 the SAME GameSession, so the collective mode plays authored worlds for free. (Only my close-response parser was
 wrong; endpoint fine.) Verify + surface it in the UI + a driven test.
+
+## ⚑ MODEL CHOICE: Claude Haiku 4.5, pinned as a CONSERVATIVE UPPER BOUND (ember: "a slightly better model?")
+Compared them LIVE on the same dungeon prompt:
+- `us.amazon.nova-2-lite-v1:0` — competent, atmospheric. $0.000012/turn → 1,646,090 turns per $20.
+- `amazon.nova-pro-v1:0` — TIGHTER but NOT better prose. 15× the cost for a lateral move. Rejected as default.
+- `us.anthropic.claude-haiku-4-5-20251001-v1:0` — a real jump ("crystallized salt formations that jut from the
+  water like broken teeth while your heart hammers in your chest"). CHOSEN.
+⚠ TRAP (both Haiku + nova-2-lite): the BARE model id ValidationExceptions — the `us.` INFERENCE-PROFILE prefix is
+REQUIRED. (nova-pro works bare. Inconsistent; pin the working ids.)
+
+### THE PRICE PROBLEM, and the ledger principle it forced
+Claude Haiku 4.5 has **NO machine-readable AWS price**: not in the Pricing API, not in the AUTHORITATIVE bulk
+Bedrock price list (I downloaded + parsed all 1.4 MB, us-east-1), not on the public pricing page. It bills under a
+different offer. So it cannot be "verified-priced". That surfaced the subtle bug in naive price-pinning:
+> **A pinned price that is too LOW makes the ceiling LEAK.** You undercharge yourself and sail past $20 while the
+> ledger reports it is fine. Therefore an UNVERIFIED price must be pinned as a deliberate UPPER BOUND: when in
+> doubt, OVER-CHARGE ourselves. The ceiling can then only ever trip EARLY, never late.
+So Haiku 4.5 is pinned at the PUBLISHED Claude Sonnet 5 rate ($2/M in, $10/M out) — Sonnet strictly dominates
+Haiku, making it a guaranteed upper bound. At that pessimistic rate a 65-in/108-out turn ≈ $0.00121 → ~16,500
+turns per $20. Ample. Tighten once a real rate is read off the Bedrock console.
+Each Pricing entry carries `source: Verified{api,date} | ConservativeUpperBound{rationale}`, surfaced in the
+persisted ledger. And: **the ledger REFUSES any model it has no pinned price for** (`UnpricedModel`, fail-closed,
+before any network call) — you cannot enforce a budget on a model whose cost you do not know.
+Verified prices retained as fallbacks: nova-2-lite $0.00006/$0.00024 per 1K; nova-pro $0.0008/$0.0032 per 1K
+(AWS Pricing API + bulk price list, us-east-1, 2026-07-10).
