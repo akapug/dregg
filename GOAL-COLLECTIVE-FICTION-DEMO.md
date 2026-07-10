@@ -286,3 +286,26 @@ PLAN:
 3. Collective mode (a crowd plays the party) + a real browser GAME UI.
 4. Elaborate further as time allows: NPCs, combat, more rooms, a richer spween adventure, MUD multiplayer.
 - done-log: (below)
+
+## ⚑ GAMES SHIPPED (the complete-game deliverable) + how to play
+THREE complete games across TWO engines, all committed:
+1. **THE SUNKEN VAULT** (attested-dm dungeon-crawler, NEW engine) — an AI-DM dungeon RPG where you cannot cheat.
+   10 rooms, forced critical path (lantern→descend, key→armory, sword→survive the Warden, amulet→win). The AI
+   proposes (a closed typed GameAction), the WORLD disposes (resolve_action). `cargo run -p attested-dm --example
+   play` (native, VERIFIED 41 tests). Browser version FIRING (aba6394964502f174: /game API + demo/vault.html).
+2. **The Commons** (spween-dregg collective CYOA) — the crowd founds a commons; the ending turns on whether the
+   record can be rewritten. `node demo/serve.mjs` → http://127.0.0.1:8787 (RUNS, verified by driving).
+3. **The Drowned Library** (spween-dregg collective CYOA, NEW) — race the tide to carry the witnessed record out;
+   the lantern gates the routes. Scene valid + gate verified; full-playthrough re-run blocked by dregg-lean-ffi.
+Plus the ATTESTED DUNGEON prose-is-not-power demo (real gemma2, /dungeon).
+
+## NEXT-WAVE ELABORATIONS (fire after the vault browser game lands + attested-dm consumption settles)
+- Richer attested-dm RPG: NPCs + dialogue (attested sub-narration), combat depth (HP/turns), more rooms, a bigger
+  world, multiple objectives/endings. A SECOND dungeon game.
+- The COLLECTIVE DUNGEON: a crowd votes the party's action each turn (dungeon engine + collective voting) —
+  needs the collective path (dregg-lean-ffi-blocked; do when it clears).
+- MUD multiplayer (first-room): persistent multi-room world w/ inhabitants (app-framework-blocked; when it clears).
+- BLOCKED-ON-dregg-lean-ffi (another terminal): the wasm idempotency fix, spween-dregg re-verify, the drowned-
+  library playthrough re-run, anything through app-framework. Re-check + land when their refactor clears.
+- done-log: SUNKEN VAULT dungeon-crawler engine + game COMMITTED (41 tests, driven win); The Drowned Library
+  collective game COMMITTED; vault browser game FIRING.
