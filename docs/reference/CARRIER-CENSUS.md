@@ -316,3 +316,26 @@ AIR soundness (`d569bf31e`, partial) · Merkle binding (REAL, `merkleVerify := d
 on the accept path). Then `StarkSound = AlgoStarkSound + DeployedRefines`, and `DeployedRefines` reduces to
 `DeployedMatchesModel` — a KAT-dischargeable Rust↔Lean correspondence with the harness already built.
 `FriExtract` is a SEPARATE campaign: the recursive/aggregated apex (proof composition).
+
+## ⚠⚠ NEW DEBT-A OBLIGATION (2026-07-10, `7cbbee624`): LogUp interaction-bus soundness is UNMODELED in Lean
+`Dregg2/Circuit/Lookup.lean`, the tree's own words: "The DENOTATION of a lookup is membership-in-the-table (the
+meaning); LogUp is merely how the prover ENFORCES it efficiently — **that lives in the Rust AIR, not in this
+semantics**." There is NO `logupCumSum` soundness theorem in `Dregg2/Circuit/` — only NAMED dependencies. So the
+bus-balance ⟹ multiset-membership bridge, a core STARK component, has no Lean model. It is honest work
+(Haböck's log-derivative identity + Schwartz–Zippel), not a hidden hole, and it is the next blocker after FRI.
+
+## ⚠ CORRECTION (2026-07-10): `Satisfied2` ≠ `Satisfied2Faithful` — brick 4 does NOT serve AlgoStarkSound
+I briefed a lane that `hHashes`/`hRanges` were closable from brick 4's `deployedChipTbl_sound` /
+`RangeTableSound`. **Category error.** Those are about the chip and range TABLES (which feed `hbus`).
+`Satisfied2`'s `rowHashes`/`rowRanges` concern the DESCRIPTOR'S IN-ROW `hashSites`/`ranges`, and
+`structure Satisfied2` contains ZERO chip-table fields — chip-table faithfulness lives in the strictly stronger
+`Satisfied2Faithful`. The real discharge is structural: `transferV3.hashSites = []` (rfl).
+⇒ **Brick 4 (`37b121f55`) serves the `Satisfied2Faithful` family (the 26 hypothesis sites), NOT `AlgoStarkSound`,
+which needs only `Satisfied2`.** Both are worth having; they are not the same obligation.
+
+## DEBT-A live tally (2026-07-10, after `7cbbee624`)
+#1 ChipTableSoundN @ real perm ✅ (serves Satisfied2Faithful) · #2 FRI proximity @ deployed rate ◐ (domain
+per-proof) · #3 FriProximity bridge ✅ (3 explicit hyps) · #4 FriExtract = RECURSION, separate campaign ·
+#5 DeployedRefines ⟶ DeployedMatchesModel (KAT, harness exists) · #6 arity-2^k ✅ (deployed 8-to-1) ·
+**#7 NEW: LogUp bus soundness (unmodeled)** · #8 table-assembly emptiness (`t.tf .memory = [] ∧ .mapOps = []`,
+irreducible, never AIR-forced). AIR half: 6/8 premises discharged at deployed transferV3.
