@@ -68,8 +68,8 @@ use attested_dm::{
 use http_serve::{serve_http, HttpMethod, ServeRequest, WebResponse};
 use serde_json::{json, Value};
 
-mod ollama;
-use ollama::ProposedEffect;
+mod hosted;
+use hosted::{parse_effect, Hosted, ProposedEffect};
 
 mod game_api;
 
@@ -82,16 +82,10 @@ const OPENING_SCENE: &str = "the Ashen Antechamber";
 const GRANTABLE: &[&str] = &["lantern", "rope", "torch", "map"];
 
 // ─────────────────────────────────────────────────────────────────────────────
-// The narrator — a real model when reachable, else a deterministic scripted proposer.
+// The narrator — a HOSTED model (dregg-narrator: Bedrock Claude/Nova → Ollama) behind a hard
+// USD ceiling, else a deterministic scripted proposer. Every hosted call is metered; on an
+// exhausted budget or a hosted error the turn falls to scripted, labeled honestly.
 // ─────────────────────────────────────────────────────────────────────────────
-
-#[derive(Clone)]
-enum NarratorMode {
-    /// A live ollama model at `endpoint` named `model` (e.g. `gemma2:2b`).
-    Model { endpoint: String, model: String },
-    /// A deterministic offline stand-in (used only when ollama is unreachable).
-    Scripted,
-}
 
 /// What the narrator produced on the most recent turn — read by the handler AFTER
 /// `narrate_turn` so the reported `narratorKind` / `narration` / `proposedEffect` reflect
@@ -112,7 +106,7 @@ struct LastTurn {
 /// [`WorldEffect`] — the control/data boundary. It stashes what it produced so the
 /// handler can report it faithfully.
 struct ServiceNarrator {
-    mode: NarratorMode,
+    hosted: Hosted,
     /// The committed prompt template — the model's actual prompt each turn is
     /// `template.render_dm(world_binding(scene), player)`, the player pinned in its slot. The
     /// SAME `PromptTemplate::dungeon_master()` the `DungeonMaster` hashes into the receipt.
@@ -129,21 +123,25 @@ impl DmBrain for ServiceNarrator {
         let world_json = world_binding(scene);
         let prompt = self.template.render_dm(&world_json, &player.text);
 
-        // (1) NARRATION + the model's TYPED effect proposal. The model's prose is the DM's
-        //     framing; brace-stripped so its own output never trips the (de-emphasized)
-        //     output-side lexical guard. The model is prompted with the committed RENDERED prompt.
-        let (prose, raw_effect, kind) = match &self.mode {
-            NarratorMode::Model { endpoint, model } => {
-                match ollama::narrate_prompt(endpoint, model, &prompt) {
-                    Ok((p, eff)) => (strip_braces(&p), eff, format!("model:{model}")),
-                    Err(e) => {
-                        eprintln!("dungeon-service: model call failed ({e}); scripted this turn");
-                        let (p, eff) = scripted_move(scene, player);
-                        (p, eff, "scripted:RecordedDm".to_string())
-                    }
-                }
+        // (1) NARRATION + the model's TYPED effect proposal, from the HOSTED narrator's JSON reply
+        //     (metered against the hard USD ceiling). The prose is brace-stripped so its own
+        //     output never trips the (de-emphasized) output-side lexical guard. On any hosted
+        //     failure OR an exhausted budget, the deterministic scripted proposer stands in —
+        //     `narratorKind` then honestly says `scripted:RecordedDm`, never a model that did not
+        //     run. Either path routes through the SAME typed channel + cap gate below.
+        let (prose, raw_effect, kind) = match self.hosted.narrate_json("", &prompt) {
+            Ok((obj, kind)) => {
+                let prose = obj
+                    .get("narration")
+                    .and_then(Value::as_str)
+                    .map(strip_braces)
+                    .unwrap_or_else(|| "the scene holds its breath".to_string());
+                (prose, parse_effect(obj.get("effect")), kind)
             }
-            NarratorMode::Scripted => {
+            Err(e) => {
+                eprintln!(
+                    "dungeon-service: hosted narration unavailable ({e}); scripted this turn"
+                );
                 let (p, eff) = scripted_move(scene, player);
                 (p, eff, "scripted:RecordedDm".to_string())
             }
@@ -280,28 +278,29 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Build the service state: probe the model, wire the narrator, open the world with a
-/// realistic cap mandate (may narrate / advance / set flags / grant a small whitelist —
-/// NOT the crown).
-fn build_state() -> AppState {
-    let mode = probe_narrator();
-    match &mode {
-        NarratorMode::Model { model, .. } => {
-            eprintln!("dungeon-service: narrator = REAL model `{model}` (ollama)")
+/// Build the service state: wire the shared HOSTED narrator, open the world with a realistic cap
+/// mandate (may narrate / advance / set flags / grant a small whitelist — NOT the crown).
+fn build_state(hosted: Hosted) -> AppState {
+    let base_kind = match hosted.base_model_kind() {
+        Some(m) => {
+            eprintln!(
+                "dungeon-service: narrator = HOSTED {m} (dregg-narrator; metered, falls back to scripted on budget/error)"
+            );
+            m
         }
-        NarratorMode::Scripted => {
-            eprintln!("dungeon-service: narrator = scripted (RecordedDm) — ollama unreachable")
+        None => {
+            eprintln!(
+                "dungeon-service: narrator = scripted (RecordedDm) — no hosted model available"
+            );
+            "scripted:RecordedDm".to_string()
         }
-    }
+    };
     let last = Arc::new(Mutex::new(LastTurn {
-        kind: match &mode {
-            NarratorMode::Model { model, .. } => format!("model:{model}"),
-            NarratorMode::Scripted => "scripted:RecordedDm".to_string(),
-        },
+        kind: base_kind,
         ..Default::default()
     }));
     let narrator = ServiceNarrator {
-        mode,
+        hosted,
         template: PromptTemplate::dungeon_master(),
         last: last.clone(),
     };
@@ -314,20 +313,6 @@ fn build_state() -> AppState {
         world: WorldCell::new(OPENING_SCENE),
         log: Vec::new(),
         last,
-    }
-}
-
-/// Probe ollama once; a successful narration → the model, else scripted fallback.
-fn probe_narrator() -> NarratorMode {
-    let endpoint =
-        std::env::var("OLLAMA_ENDPOINT").unwrap_or_else(|_| "http://127.0.0.1:11434".to_string());
-    let model = std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "gemma2:2b".to_string());
-    match ollama::narrate(&endpoint, &model, OPENING_SCENE, "I test the torch's light") {
-        Ok(_) => NarratorMode::Model { endpoint, model },
-        Err(e) => {
-            eprintln!("dungeon-service: model probe failed ({e}); scripted fallback");
-            NarratorMode::Scripted
-        }
     }
 }
 
@@ -545,8 +530,11 @@ fn main() -> std::io::Result<()> {
         return self_check();
     }
     let bind = std::env::var("DUNGEON_BIND").unwrap_or_else(|_| DEFAULT_BIND.to_string());
-    let state = Arc::new(Mutex::new(build_state()));
-    let game = Arc::new(Mutex::new(game_api::build_game_state()));
+    // ONE shared hosted narrator (metered against the hard USD ceiling) drives both the /narrate
+    // and the /game lanes.
+    let hosted = Hosted::new();
+    let state = Arc::new(Mutex::new(build_state(hosted.clone())));
+    let game = Arc::new(Mutex::new(game_api::build_game_state(hosted)));
     eprintln!(
         "dungeon-service: listening on http://{bind}  (POST /narrate, GET /world, GET /verify; \
          THE SUNKEN VAULT: GET /game/state, POST /game/act, GET /game/verify, POST /game/reset)"
@@ -565,7 +553,7 @@ fn main() -> std::io::Result<()> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 fn self_check() -> std::io::Result<()> {
-    let state = Mutex::new(build_state());
+    let state = Mutex::new(build_state(Hosted::new()));
     let kind = state.lock().unwrap().last.lock().unwrap().kind.clone();
     println!("== attested dungeon-master :: self-check ==");
     println!("thesis: the model PROPOSES, the capabilities DISPOSE — prose is not power.");
