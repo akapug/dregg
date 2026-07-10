@@ -62,6 +62,11 @@ export async function buildDungeon() {
   return bundle("dungeon.ts");
 }
 
+/** Bundle THE SUNKEN VAULT play surface (self-contained — only speaks the /game service). */
+export async function buildVault() {
+  return bundle("vault.ts");
+}
+
 // ── The DM service ────────────────────────────────────────────────────────────
 // By default the dungeon page is served against an in-memory STAND-IN (narratorKind
 // "scripted") so `node demo/serve.mjs` is instantly playable. Set `DM_URL` (the parallel
@@ -108,8 +113,10 @@ async function handleDm(url, method, body, dm, res) {
 export async function makeServer(port = 0, opts = {}) {
   const appJs = await buildApp();
   const dungeonJs = await buildDungeon();
+  const vaultJs = await buildVault();
   const index = await readFile(path.join(__dirname, "index.html"), "utf8");
   const dungeon = await readFile(path.join(__dirname, "dungeon.html"), "utf8");
+  const vault = await readFile(path.join(__dirname, "vault.html"), "utf8");
   const scene = await readFile(path.join(__dirname, "stories", "the-commons.scene"), "utf8");
 
   // The DM world: an in-memory stand-in (default) unless proxying to the real service.
@@ -124,6 +131,25 @@ export async function makeServer(port = 0, opts = {}) {
       if (url === "/narrate" || url === "/world" || url === "/verify") {
         const body = method === "POST" ? await readBody(req) : null;
         return await handleDm(url, method, body, dm, res);
+      }
+
+      // ── THE SUNKEN VAULT /game endpoints — proxied to the native attested-dm service.
+      //    There is no JS stand-in for the game (it is a real GameSession over the engine);
+      //    the page needs the native service (set DM_URL / DM_PORT). ──
+      if (url.startsWith("/game/")) {
+        if (!DM_URL) {
+          res.writeHead(503, { "content-type": "application/json; charset=utf-8" });
+          return res.end(JSON.stringify({ error: "the /game API needs the native attested-dm dungeon-service; start it and set DM_URL or DM_PORT (default 8790)" }));
+        }
+        const body = method === "POST" ? await readBody(req) : undefined;
+        const r = await fetch(`${DM_URL}${url}`, {
+          method,
+          headers: { "content-type": "application/json", accept: "application/json" },
+          body,
+        });
+        const text = await r.text();
+        res.writeHead(r.status, { "content-type": "application/json; charset=utf-8" });
+        return res.end(text);
       }
 
       // ── The Commons (existing, unchanged) ──
@@ -142,6 +168,10 @@ export async function makeServer(port = 0, opts = {}) {
       // ── The Attested Dungeon (the play surface) ──
       if (url === "/dungeon" || url === "/dungeon.html") return send(res, dungeon, MIME[".html"]);
       if (url === "/dungeon.js") return send(res, dungeonJs, MIME[".js"]);
+
+      // ── The Sunken Vault (the playable dungeon-crawler) ──
+      if (url === "/vault" || url === "/vault.html") return send(res, vault, MIME[".html"]);
+      if (url === "/vault.js") return send(res, vaultJs, MIME[".js"]);
 
       res.writeHead(404, { "content-type": "text/plain" });
       res.end("not found");
@@ -170,5 +200,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   console.log(`  open:  ${base}/dungeon`);
   console.log(`  DM service: ${DM_URL ? "proxied → " + DM_URL : "in-memory stand-in (narratorKind scripted)"}`);
   console.log(`  (set DM_URL or DM_PORT to proxy to the native attested-dm service, e.g. DM_PORT=8790)\n`);
+  console.log(`  THE SUNKEN VAULT — the AI narrates, the world resolves (playable dungeon-crawler)`);
+  console.log(`  open:  ${base}/vault`);
+  console.log(`  /game service: ${DM_URL ? "proxied → " + DM_URL : "NOT wired — set DM_URL or DM_PORT to the native attested-dm service (default 8790)"}\n`);
   console.log(`  (Ctrl-C to stop)\n`);
 }

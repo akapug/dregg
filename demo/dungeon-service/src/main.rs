@@ -71,6 +71,8 @@ use serde_json::{json, Value};
 mod ollama;
 use ollama::ProposedEffect;
 
+mod game_api;
+
 /// The bind address (override with `DUNGEON_BIND`).
 const DEFAULT_BIND: &str = "127.0.0.1:7878";
 /// The opening scene.
@@ -486,12 +488,22 @@ fn handle_verify(state: &Mutex<AppState>) -> WebResponse {
     )
 }
 
-fn route(state: &Mutex<AppState>, req: &ServeRequest) -> WebResponse {
+fn route(
+    state: &Mutex<AppState>,
+    game: &Mutex<game_api::GameState>,
+    req: &ServeRequest,
+) -> WebResponse {
     let path = req.target.split('?').next().unwrap_or(&req.target);
     match (req.method, path) {
         (HttpMethod::Post, "/narrate") => handle_narrate(state, &req.body),
         (HttpMethod::Get, "/world") => handle_world(state),
         (HttpMethod::Get, "/verify") => handle_verify(state),
+        // ── THE SUNKEN VAULT — a playable dungeon over one GameSession (the AI narrates,
+        //    the world resolves). Additive to the /narrate demo above.
+        (HttpMethod::Get, "/game/state") => game_api::handle_state(game),
+        (HttpMethod::Post, "/game/act") => game_api::handle_act(game, &req.body),
+        (HttpMethod::Get, "/game/verify") => game_api::handle_verify(game),
+        (HttpMethod::Post, "/game/reset") => game_api::handle_reset(game),
         (HttpMethod::Get, "/") => WebResponse::text(INDEX_HELP),
         _ => WebResponse::error(404, "not found"),
     }
@@ -500,7 +512,12 @@ fn route(state: &Mutex<AppState>, req: &ServeRequest) -> WebResponse {
 const INDEX_HELP: &str = "attested dungeon-master — the model proposes, the capabilities dispose\n\
     POST /narrate {\"player\":\"<message>\"}\n\
     GET  /world\n\
-    GET  /verify\n";
+    GET  /verify\n\
+    -- THE SUNKEN VAULT (playable dungeon) --\n\
+    GET  /game/state\n\
+    POST /game/act {\"command\":\"<free text>\"}\n\
+    GET  /game/verify\n\
+    POST /game/reset\n";
 
 fn main() -> std::io::Result<()> {
     if std::env::args().any(|a| a == "--self-check") {
@@ -508,10 +525,12 @@ fn main() -> std::io::Result<()> {
     }
     let bind = std::env::var("DUNGEON_BIND").unwrap_or_else(|_| DEFAULT_BIND.to_string());
     let state = Arc::new(Mutex::new(build_state()));
+    let game = Arc::new(Mutex::new(game_api::build_game_state()));
     eprintln!(
-        "dungeon-service: listening on http://{bind}  (POST /narrate, GET /world, GET /verify)"
+        "dungeon-service: listening on http://{bind}  (POST /narrate, GET /world, GET /verify; \
+         THE SUNKEN VAULT: GET /game/state, POST /game/act, GET /game/verify, POST /game/reset)"
     );
-    let handler = move |req: &ServeRequest| route(&state, req);
+    let handler = move |req: &ServeRequest| route(&state, &game, req);
     serve_http(&bind, handler)
 }
 
