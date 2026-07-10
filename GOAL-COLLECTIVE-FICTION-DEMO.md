@@ -377,3 +377,19 @@ which unblocked wasm/spween and let the parked idempotency fix land.)
 
 ## The one idea
 **the AI narrates · the world resolves · the crowd decides · the chain remembers**
+
+## ⚑⚑ NEXT EPOCH (ember, ~09:15): THE AUTHORING ENVIRONMENT
+Grounded gap: the CYOA side HAS a real authoring DSL (`.scene` — I authored The Drowned Library in it, no Rust).
+The DUNGEON side has NONE: all four dungeons are hand-written Rust fns (0 serde, 0 loader) — authoring one means
+editing game.rs + recompiling. Absurd for a fiction engine. So:
+- LANE A (a8e693e8, attested-dm): a readable **.dungeon TEXT DSL** covering every world type (rooms/exits/gates/
+  items/use-rules/npcs/dialogue/combat/spells/light/objective/lose) + `parse_dungeon(src) -> Result<GameWorld,_>`
+  (fail-closed, LINE-NUMBERED errors) + a **validator** an author actually wants (dangling exits, unplaced win
+  item, unreachable objective, npc/combat/spell in unknown rooms, spell with no learn source) + sample .dungeon
+  files + `examples/play_authored.rs` — a dungeon that exists ONLY as text, played to a WIN through the real engine.
+- LANE B (a0706c81, demo/): a **LIVE STORY AUTHORING page** at `/author` — write a `.scene` in a textarea, hit
+  Play, and `StoryWorld::new(source)` compiles it IN-TAB and plays it verifiably (receipt chain + replay-verify);
+  a broken scene surfaces a legible compile error and mounts nothing (fail-closed). Works TODAY because the wasm
+  story world takes a scene SOURCE STRING. A DSL cheat-sheet + sample picker teach the format.
+- NEXT after A: the live **DUNGEON** authoring page (write a .dungeon, Play, the AI narrates it immediately).
+  The full loop: author → play → verify, no recompile, no Rust.
