@@ -57,11 +57,21 @@ decision runs as native code:
 cargo test -p dregg-lean-ffi grain_r3          # ✅ the leanc-native dregg_grain_r3_verify runs (fast)
 cargo test -p grain-verify --test r3_whole_history -- --ignored   # ⚠ real recursion fold, ~minutes
 ```
-The first is the Lean decision executing (verified quick). The second folds a small whole-history chain
-and checks R3 end-to-end — heavy (recursive STARK), so it's `#[ignore]`'d by default; the night run
-executes it and records the result. Whether R3 runs on a **live driven grain** (not just a minted
-chain) depends on the grain-turn→`FinalizedTurn` adapter — being welded overnight; this file will say
-which landed.
+The first is the Lean decision executing (verified quick, ✅). The second folds a small whole-history
+chain and checks R3 end-to-end — heavy (recursive STARK), so it's `#[ignore]`'d; **not run this night**
+(the machine was thrashed by the other terminal's demo build swarm — run it with `--ignored` on a quiet
+machine, ~minutes).
+
+**R3 on a *live* driven grain — the adapter landed** (`grain-turn/src/finalize.rs`, ✅ compiles clean):
+`finalize_grain_turn` mints the rotated EffectVM legs from a real grain turn's captured data, correctly
+decomposing a grain turn (which writes calls_made/consumed/heap_root/action in one executor turn) into
+a **cohort-run chain** of `FinalizedTurn`s. Its test `r3_verifies_a_real_driven_grain_session` drives a
+real session and R3-verifies at the genuine folded head — `#[ignore]`'d (fold ~minutes), so:
+```
+cargo test -p grain-turn --features prover r3_verifies_a_real_driven_grain_session -- --ignored
+```
+Honest residual gap: **multi-turn cross-continuity** — the test drives ONE grain turn (its cohort-chain
+closes internally); chaining the continuity anchor across multiple turns is the remaining seam.
 
 ## The other flagships you can poke
 
@@ -77,12 +87,19 @@ which landed.
 
 ## Honest state (so you're not surprised)
 
-- **Solid + tested:** the confined Hermes body, the federated PR-carry, the Lean R3 model
-  (axiom-clean, non-vacuous), the FFI smoke test (the Lean decision runs as native code).
+- **Verified green this night:** `grain_local_e2e` (the drivable grain demo — the thing to play with),
+  and the Lean R3 FFI decision running as native code (`dregg-lean-ffi grain_r3`).
+- **Built + committed, tests confirmed when built (re-run to reconfirm — the other terminal keeps
+  reworking the tree):** the confined Hermes body (4 poles), the federated PR-carry forge (183 lib),
+  the Lean R3 model (axiom-clean, non-vacuous), and the R3 live-grain adapter (`grain-turn/finalize.rs`,
+  compiles clean).
 - **Reduced, not closed:** R3 (`WHOLE_HISTORY_GAP` reduced to the STARK/apex soundness + the head
-  binding — the apex still carries three open reconciliation mismatches).
-- **Named seams:** R3 on a *live* grain needs the grain-turn→FinalizedTurn adapter (welding overnight);
-  the forge/witness federation transports are HTTP/gossip wiring over proven schemes.
+  binding — the apex still carries three open reconciliation mismatches). It's a *reduction*, not a proof.
+- **Coded but not RUN this night (machine thrashed by the other terminal's demo swarm):** the heavy R3
+  fold tests (`#[ignore]`'d, ~minutes each) — the assurance is proven (Lean) + the decision runs (FFI),
+  but the end-to-end recursion fold wasn't exercised tonight. Run with `--ignored` on a quiet machine.
+- **Named seams:** R3 multi-turn cross-continuity (the adapter does one turn's cohort-chain); the
+  forge/witness federation transports (HTTP/gossip wiring over proven schemes).
 - **Not mine (don't be alarmed):** uncommitted churn in `turn/`, `sdk/`, `metatheory/Circuit/`,
   `app-framework/`, `attested-dm/` is the crypto/collective-fiction terminal's live work.
 
