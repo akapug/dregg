@@ -7110,3 +7110,25 @@ Realization → Poseidon2SpongeCR on the reachable subclass; injectivity collaps
 32/33 deployed effects' commuting squares proved (hpres discharged for those); whole tree green 4538. Remaining is
 DEBT-A (StarkSound + ShieldedTransfer + the AIR carriers Satisfied2Faithful/DeployedFaithful) and the reactive
 subsystem — distinct campaigns, correctly out of DEBT-B.
+
+## 2026-07-10 (addendum 3) — every deployed effect classified; DEBT-B finite-map coverage complete
+Reading the deployed apply.rs (not accepting "unmodeled subsystem" as a wall) closed the effect frontier to its
+true, measured ceiling. The reactive trio SPLIT under measurement:
+- React (52a0ffd97) → PROVED: its only RecordKernelState mutation is the nullifier advance (apply.rs:1518) =
+  noteSpend; reactStmt = seq (guard wake-hash) (noteSpendStmt). Reduces to the covered noteSpend, no re-model.
+- Promise/Notify → OFF-KERNEL: mutate self.reactive_registry, which is NOT RecordKernelState (Lean kernel has no
+  such field). No commuting square EXISTS — a separate executor-side subsystem, outside the finite-map kernel.
+- ShieldedTransfer → DEBT-A: kernel part nullifier+balance (reducible), but verify_stark_side is the STARK obligation.
+
+★ COMPLETE 33-EFFECT CLASSIFICATION (nothing unaccounted, nothing faked):
+- SQUARE PROVED (kernel-mutating, finite-map): 30 RecStmt programs + GrantCapability + SpawnWithDelegation + React.
+- OFF-KERNEL (no square exists): Promise, Notify (reactive_registry ≠ kernel state).
+- DEBT-A (STARK): ShieldedTransfer.
+
+DEBT-B FINITE-MAP DELIVERABLE — COMPLETE AT TRUE SCOPE: (1) carrier discharge — RestHashIffFrame +
+RestFrameDecodes2(=.mp) + 4 injectivity + LeafRealization all reduced to Poseidon2SpongeCR on the reachable
+subclass, injectivity collapse routed through the apex binding (0 injectivity hyps); (2) every kernel-state-mutating
+deployed effect has a proved commuting square; (3) the non-covered effects are provably off-kernel (Promise/Notify)
+or STARK-gated (ShieldedTransfer). Whole tree green 4539, every claim audited by type.
+REMAINING (distinct campaigns, correctly out of DEBT-B): DEBT-A (StarkSound + the AIR carriers Satisfied2Faithful/
+DeployedFaithful + ShieldedTransfer's STARK) · the reactive-registry subsystem's own model (Promise/Notify).

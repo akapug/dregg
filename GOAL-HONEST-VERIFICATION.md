@@ -206,3 +206,4 @@ GrantCapability (apply_grant_capability), SpawnWithDelegation (apply_spawn_with_
 to covered machinery (React/Promise ↔ noteSpend/noteCreate nullifier set; GrantCapability ↔ grant), but that is
 UNVERIFIED. hpres is discharged for RecStmt-expressible effects ONLY. This is a real remaining DEBT-B gap, not a
 count quibble — the DEBT-B carrier result (RestHashIffFrame→Poseidon2SpongeCR) is unaffected.
+- ✅✅ REACT PROVED `52a0ffd97` → COMPLETE 33-EFFECT CLASSIFICATION: {square-proved: 30 RecStmt + Grant + Spawn + React · off-kernel: Promise/Notify (reactive_registry≠kernel) · DEBT-A STARK: ShieldedTransfer}. DEBT-B finite-map coverage COMPLETE at true scope; tree green 4539.
