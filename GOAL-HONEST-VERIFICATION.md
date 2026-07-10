@@ -197,3 +197,12 @@ the sibling lane settles — not mine to touch/stash.
   (`extends Satisfied2`) → DEBT-A, proven not-DEBT-B. NEXT CAMPAIGN = DEBT-A `StarkSound` (owns those AIR carriers
   + the tree-wide AIR-path injectivity routing). Forcing those under "FINISH DEBT-B" would be forcing a plan the
   measurements showed wrong — the discipline forbids it.
+
+## ⚠ EFFECT-COVERAGE CORRECTION (2026-07-10, stop-hook-forced)
+"hpres discharged for EVERY deployed effect" was an OVERCLAIM. The 30 proved `*Stmt` squares cover the
+RecStmt-expressible effects. SIX deployed Effect variants have distinct apply methods and NO proved square:
+GrantCapability (apply_grant_capability), SpawnWithDelegation (apply_spawn_with_delegation), ShieldedTransfer
+(apply_shielded_transfer), and Notify/React/Promise (Reactive "Track 2", turn/src/reactive.rs). Some MAY reduce
+to covered machinery (React/Promise ↔ noteSpend/noteCreate nullifier set; GrantCapability ↔ grant), but that is
+UNVERIFIED. hpres is discharged for RecStmt-expressible effects ONLY. This is a real remaining DEBT-B gap, not a
+count quibble — the DEBT-B carrier result (RestHashIffFrame→Poseidon2SpongeCR) is unaffected.

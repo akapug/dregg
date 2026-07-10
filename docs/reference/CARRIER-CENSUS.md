@@ -136,3 +136,12 @@ All 30 deployed `*Stmt` program commuting squares proved (R1 `hpres` gate discha
 REMAINING (mechanical, NOT a carrier debt): re-thread the ~10 `recStateCommit_binds_kernel` consumers + the
 `RestFrameDecodes2` sites through `finCommitSurface`/`RH_fin` on the reachable subclass. Tree-wide injectivity
 uses on the DEBT-A/AIR paths are DEBT-A's.
+
+## ⚠ EFFECT-COVERAGE CORRECTION (2026-07-10, stop-hook-forced)
+"hpres discharged for EVERY deployed effect" was an OVERCLAIM. The 30 proved `*Stmt` squares cover the
+RecStmt-expressible effects. SIX deployed Effect variants have distinct apply methods and NO proved square:
+GrantCapability (apply_grant_capability), SpawnWithDelegation (apply_spawn_with_delegation), ShieldedTransfer
+(apply_shielded_transfer), and Notify/React/Promise (Reactive "Track 2", turn/src/reactive.rs). Some MAY reduce
+to covered machinery (React/Promise ↔ noteSpend/noteCreate nullifier set; GrantCapability ↔ grant), but that is
+UNVERIFIED. hpres is discharged for RecStmt-expressible effects ONLY. This is a real remaining DEBT-B gap, not a
+count quibble — the DEBT-B carrier result (RestHashIffFrame→Poseidon2SpongeCR) is unaffected.
