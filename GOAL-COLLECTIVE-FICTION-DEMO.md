@@ -211,3 +211,21 @@ Remaining to make the {{ guard load-bearing END-TO-END: wire the Rust prompt-tem
 (bind hash(template)‖world‖player) so a running DM actually renders through this — the KILLED Rust lane, re-fire
 AFTER chain+service settle attested-dm/lib.rs + dungeon-service.
 - WAITING: ledger chain (a8f18ed) + DM service (a18375). Harvest each, then re-fire Rust template, then integrate.
+
+## ✅ CHAINED LEDGER COMMITTED + verified by driving (attested-dm/src/)
+LedgerEntry.prev + chain_receipt_id (BLAKE3 domain ‖ seq ‖ prev ‖ narration ‖ effect ‖ attestation_commitment);
+verify_ledger walks the chain; verify_ledger_against_head detects truncation. 19/19 incl 5 adversarial that
+GENUINELY catch (each asserts the OLD per-entry path accepts, then the chain rejects): truncate/reorder/splice
+outright-or-vs-head, mutate regression, untampered non-vacuous. Honest scope in the doc-comments (truncation needs
+the head; fixture authentic leg → forgery stopped by chain-link+head, not authenticity). attested-dm now matches
+spween-dregg's chain rigor.
+
+## TALLY — 3 security claims, all now EARNED (name matches proof), 2 freshly committed tonight
+- INPUT: slot_confinement (Lean, propext-only) — player {{-free ⟹ can't rewrite the DM rules. ✅ committed+verified.
+- OUTPUT: prose-is-not-power (DmCaps::authorize) — model can't exceed its powers. REAL+tested (the-dm-cannot-grant-
+  an-unearned-item); wired into a running demo by the service lane.
+- LEDGER: real hash-chain — rewriting caught (truncation vs head). ✅ committed+verified.
+
+## WAITING: DM service (a18375169811f20e3) — real gemma2. Then: re-fire Rust template-render (attested-dm/lib.rs
+## + dungeon-service now SETTLED post-chain) to make the {{ guard load-bearing end-to-end → integrate the dungeon
+## page vs the REAL service + gemma2 → drive the full attested-AI-MUD demo (input-integrity + cap-gate + real chain).
