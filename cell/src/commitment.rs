@@ -235,9 +235,12 @@ pub fn compute_canonical_state_commitment(cell: &Cell) -> [u8; 32] {
 
     // ---- Capabilities (full canonical root) ----
     // The openable sorted-Poseidon2 capability root (cap Phase A), absorbed as
-    // its canonical 32-byte felt encoding so the cell's full-state commitment
-    // binds the SAME `cap_root` value the EffectVM circuit carries.
-    let cap_root = compute_canonical_capability_root(&cell.capabilities);
+    // its FAITHFUL 8-felt (~124-bit) encoding so the cell's full-state commitment
+    // binds the SAME wide `cap_root` value the EffectVM circuit carries at the
+    // rotated cap_root column group (limb 25 ‖ 51..57). The lane-0 encoding is
+    // forgeable off-chain (two c-lists colliding on lane 0 → same commitment);
+    // the wide encoding closes it, exactly as heap_root / fields_root do.
+    let cap_root = compute_canonical_capability_root_wide(&cell.capabilities);
     hasher.update(&cap_root);
 
     // ---- Delegate ----
@@ -600,17 +603,43 @@ pub fn compute_canonical_capability_root_8(caps: &CapabilitySet) -> dregg_circui
     cap_root::compute_capability_root_with_tombstones(leaves, &tombstone_keys)
 }
 
-/// Compute the canonical 32-byte capability root of a `CapabilitySet`.
+/// Compute the LANE-0 32-byte capability root of a `CapabilitySet`.
 ///
 /// This is the 32-byte ENCODING of [`compute_canonical_capability_root_felt`]
-/// (the openable sorted-Poseidon2 Merkle root) — see [`felt_to_bytes32`]. It
-/// is what `compute_canonical_state_commitment` absorbs and what the executor's
-/// CapabilityUniqueness program binds in a 32-byte cap-set-root state slot
-/// (`turn::executor::execute_tree`). The empty c-list root is NON-zero (the
-/// sentinels hash into a real value), so the executor's "root slot must be
-/// non-zero" check is preserved.
+/// (the openable sorted-Poseidon2 Merkle root, LANE 0 only) — see
+/// [`felt_to_bytes32`]. It is what the executor's CapabilityUniqueness program
+/// binds in a 32-byte cap-set-root state slot (`turn::executor::execute_tree`,
+/// an executor-side recompute-and-compare, NOT a ledgerless-verifier surface)
+/// and what the exec-lean parity gauntlet folds. The empty c-list root is
+/// NON-zero (the sentinels hash into a real value), so the executor's "root slot
+/// must be non-zero" check is preserved.
+///
+/// **Off-chain soundness:** the BLAKE3 per-cell state commitment
+/// ([`compute_canonical_state_commitment`]) absorbs the FAITHFUL 8-felt encoding
+/// ([`compute_canonical_capability_root_wide`]) instead — the ~31-bit lane-0
+/// encoding here is forgeable (two c-lists colliding on lane 0), so it must not
+/// be the value a ledgerless verifier compares.
 pub fn compute_canonical_capability_root(caps: &CapabilitySet) -> [u8; 32] {
     felt_to_bytes32(compute_canonical_capability_root_felt(caps))
+}
+
+/// Compute the FAITHFUL 8-felt (~124-bit) 32-byte capability root of a
+/// `CapabilitySet`: the [`digest8_to_bytes32`] packing of
+/// [`compute_canonical_capability_root_8`] (lane `i` in bytes `[4i..4i+4]`).
+///
+/// This is the value the off-chain BLAKE3 state commitment
+/// ([`compute_canonical_state_commitment`]) absorbs, so it carries the SAME
+/// ~124-bit collision floor the circuit binds at the rotated `cap_root` column
+/// group (limb 25 ‖ 51..57, GENTIAN-welded). It closes the ~31-bit lane-0
+/// cap-root forge off-chain, exactly as the wide `heap_root` / `fields_root`
+/// (`state::compute_heap_root` / `state::compute_fields_root`) do for their
+/// planes. Bytes `[0..4]` still equal the historical lane-0
+/// [`compute_canonical_capability_root`] projection. Because tombstoned
+/// (revoked) slots fold into this SAME sorted tree
+/// ([`compute_canonical_capability_root_8`]'s `compute_capability_root_with_tombstones`),
+/// widening `cap_root` widens the revoked-slot commitment with no separate work.
+pub fn compute_canonical_capability_root_wide(caps: &CapabilitySet) -> [u8; 32] {
+    digest8_to_bytes32(compute_canonical_capability_root_8(caps).limbs())
 }
 
 /// The canonical 32-byte encoding of a capability-root felt: the felt's 4
@@ -1931,7 +1960,7 @@ mod tests {
                 hasher.update(&[0u8]);
             }
         }
-        let cap_root = compute_canonical_capability_root(&cell.capabilities);
+        let cap_root = compute_canonical_capability_root_wide(&cell.capabilities);
         hasher.update(&cap_root);
         match &cell.delegate {
             Some(d) => {
