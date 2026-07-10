@@ -22,6 +22,7 @@ DM_PORT=7878 node demo/serve.mjs          # → http://127.0.0.1:8787/hub
 | **The Sunken Vault** | `/vault` | AI dungeon crawler — narrate yourself through a locked door, watch it refuse |
 | **Bramble Keep** | `/vault` (picker) | world-bounded NPCs + multi-turn combat — the AI can't make the Witch hand you the key |
 | **The Starfall Spire** | `/vault` (picker) | bounded spellcasting — an unlearned or unlisted spell does nothing |
+| **The Deepdark Mine** | `/vault` (picker) | race the dark — your lamp burns one oil per step; the world listens to the counter, not the prose |
 | **The Collective Dungeon** | `/party` | a crowd votes the party's move; the world still resolves it |
 | **The Attested Dungeon** | `/dungeon` | jailbreak the AI; it crowns you king; the ledger says you hold no crown |
 | **The Commons** | `/` | a crowd co-authors a story; the founding record cannot be rewritten |

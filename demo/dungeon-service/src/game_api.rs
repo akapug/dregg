@@ -36,8 +36,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 
 use attested_dm::{
-    bramble_keep, starfall_spire, sunken_vault, GameAction, GameSession, GameStatus, GameWorld,
-    Gate, PlayResult, Proposal, Room, WorldCell,
+    bramble_keep, deepdark_mine, starfall_spire, sunken_vault, GameAction, GameSession, GameStatus,
+    GameWorld, Gate, PlayResult, Proposal, Room, WorldCell,
 };
 use http_serve::WebResponse;
 use serde_json::{json, Value};
@@ -91,6 +91,13 @@ pub fn games() -> Vec<GameDef> {
             blurb: "A collapsing wizard's tower: read the grimoires, cast Light across the dark gallery and Mend the broken span, conjure the flare-blade to fell the Voidling, and set the fallen star back in its cradle.",
             theme: "THE STARFALL SPIRE, a collapsing wizard's tower of dark galleries, a broken star-span, a great orrery, and a Voidling of unlight — a place where words of power are read from grimoires and spoken aloud",
             ctor: starfall_spire,
+        },
+        GameDef {
+            id: "deepdark-mine",
+            name: "The Deepdark Mine",
+            blurb: "A race against the dark: your lamp burns one oil per step, eleven pitch-black levels stand between you and the Deepheart, and you must gather the oil caches to climb back to daylight before the flame dies.",
+            theme: "THE DEEPDARK MINE, a sunless abandoned mine of pitch-black drifts and flooded sumps, where a lamp burns down oil by oil and the dark keeps whatever it catches",
+            ctor: deepdark_mine,
         },
     ]
 }
