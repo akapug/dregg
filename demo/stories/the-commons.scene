@@ -13,15 +13,15 @@ the assembly must decide where to lay the first stone.
 The vote is yours — all of you, together.
 
 * [Build on the high bluff, safe from floods]
-  ~ site = bluff
+  ~ site = "bluff"
   -> bluff
 
 * [Build by the water, close to the mill and the fish]
-  ~ site = river
+  ~ site = "river"
   -> river
 
 * [Split the difference — homes on the slope between]
-  ~ site = slope
+  ~ site = "slope"
   -> slope
 
 === bluff
@@ -34,11 +34,11 @@ Winter comes hard. A wagon of grain arrives at the gate, and
 its driver asks the price of shelter.
 
 * [Open the gates — a commons turns no one away]
-  ~ creed = open
+  ~ creed = "open"
   -> reckoning
 
 * [Charge for the night — the stores are thin]
-  ~ creed = toll
+  ~ creed = "toll"
   -> reckoning
 
 === river
@@ -50,11 +50,11 @@ drifts downstream stays a while.
 Then the thaw. The river rises brown over the doorsills.
 
 * [Rebuild together, higher, and share the loss]
-  ~ creed = open
+  ~ creed = "open"
   -> reckoning
 
 * [Let each house fend for its own]
-  ~ creed = toll
+  ~ creed = "toll"
   -> reckoning
 
 === slope
@@ -66,11 +66,11 @@ twice as often just to settle who owes what to whom.
 Strangely, it works — the arguing IS the government.
 
 * [Write the arguments down, so the record outlives you]
-  ~ creed = open
+  ~ creed = "open"
   -> reckoning
 
 * [Trust the elders to remember]
-  ~ creed = toll
+  ~ creed = "toll"
   -> reckoning
 
 === reckoning

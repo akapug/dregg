@@ -1,0 +1,35 @@
+THE COMMONS — a crowd authors a verifiable story
+driven run · real wasm StoryWorld · the-commons.scene
+served at http://127.0.0.1:50522
+================================================================
+
+ROUND 1 — passage "intro"
+  the assembly votes:
+    █······   1  Build on the high bluff, safe from floods
+    █████··   5  Build by the water, close to the mill and the fish
+    █······   1  Split the difference homes on the slope between
+  → the crowd chose: "Build by the water, close to the mill and the fish"
+  → advanced to "river"  ·  receipts 1 → 2
+  → commitment a00f115c4fe33e9a…
+
+ROUND 2 — passage "river"
+  the assembly votes:
+    █████··   5  Rebuild together, higher, and share the loss
+    ██·····   2  Let each house fend for its own
+  → the crowd chose: "Rebuild together, higher, and share the loss"
+  → advanced to "reckoning"  ·  receipts 2 → 3
+  → commitment a66cb0e50e20dac2…
+
+ROUND 3 — passage "reckoning"
+  the assembly votes:
+    █████··   5  Tell them the truth, and let them vote on what comes next
+    ██·····   2  Tell them the founders knew best
+  → the crowd chose: "Tell them the truth, and let them vote on what comes next"
+  → advanced to "ending_open"  ·  receipts 3 → 4
+  → commitment ea6de56a66ccb32c…
+
+----------------------------------------------------------------
+ending passage : ending_open
+receipt tape   : 4 verified turns (genesis + one per branch)
+stranger replay: VERIFIED — nothing was rewritten
+badge          : ✓ receipt chain verified — nothing was rewritten.
