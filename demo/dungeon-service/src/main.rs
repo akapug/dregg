@@ -488,12 +488,18 @@ fn route(
         //    at /game/reset. Additive to the /narrate demo above.
         (HttpMethod::Get, "/game/list") => game_api::handle_list(),
         (HttpMethod::Get, "/game/state") => game_api::handle_state(game),
+        // ── THE ROOM MAP — the current world as a room graph `[{id,name,exits:[{to,locked}]}]`
+        //    (read-only; for the play + forge map visualizers). ──
+        (HttpMethod::Get, "/game/map") => game_api::handle_map(game),
         (HttpMethod::Post, "/game/act") => game_api::handle_act(game, &req.body),
         (HttpMethod::Get, "/game/verify") => game_api::handle_verify(game),
         (HttpMethod::Post, "/game/reset") => game_api::handle_reset(game, &req.body),
         // ── THE FORGE — author a world in the dungeon DSL and PLAY it. Parse + validate fail-closed
         //    (stage "parse" / "validate"); on success a fresh GameSession over the authored world.
         (HttpMethod::Post, "/game/author") => game_api::handle_author(game, &req.body),
+        // ── LIVE LINT — pure parse+validate of DSL source (no session opened), for the forge's
+        //    as-you-type gutter. {ok, stage:"parse"|"validate"|"clean", line?, message?, issues?}.
+        (HttpMethod::Post, "/game/validate") => game_api::handle_validate(&req.body),
         // ── THE COLLECTIVE DUNGEON — a crowd steers ONE shared party through the SAME dungeon by
         //    vote. Additive over the same GameSession: /party/{options,open,vote,tally,close}. The
         //    crowd DECIDES the next command; the WORLD still RESOLVES it via the /game/act path.
@@ -514,10 +520,12 @@ const INDEX_HELP: &str = "attested dungeon-master — the model proposes, the ca
     -- THE ATTESTED DUNGEONS (playable: The Sunken Vault, Bramble Keep) --\n\
     GET  /game/list\n\
     GET  /game/state\n\
+    GET  /game/map     (the current world as a room graph [{id,name,exits:[{to,locked}]}])\n\
     POST /game/act {\"command\":\"<free text>\"}\n\
     GET  /game/verify\n\
     POST /game/reset {\"world\":\"<game id>\"}\n\
     POST /game/author {\"source\":\"<.dungeon text>\"}   (author + play a DSL world)\n\
+    POST /game/validate {\"source\":\"<.dungeon text>\"} (pure lint, no session opened)\n\
     -- THE COLLECTIVE DUNGEON (a crowd votes the shared party's next move) --\n\
     GET  /party/options\n\
     POST /party/open\n\

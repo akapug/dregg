@@ -13,6 +13,8 @@
  * come from the service. The page renders the ledger, not the story.
  */
 
+import { renderRoomMap, type MapRoom } from "./roommap";
+
 declare const window: any;
 
 interface Exit { name: string; to: string; toName: string; locked: boolean; gateReason: string | null }
@@ -60,6 +62,26 @@ function titleize(s: string): string { return s.replace(/_/g, " "); }
 // ledger is the receipt rail; this is the human-readable transcript.
 interface LogRow { command: string; narration: string; outcome: string; reason?: string; worldNote?: string; label?: string }
 const tale: LogRow[] = [];
+
+// ── the room map ─────────────────────────────────────────────────────────────
+// The rooms the player has stood in this session (client-side visited-tracking, from the current
+// /game/state room id as they move). The full room graph comes from GET /game/map; the map is
+// re-fetched after each move so its BARRED edges open as gates are satisfied.
+const VISITED = new Set<string>();
+let CURRENT_ROOM = "";
+
+/** Fetch the current world's room graph and (re-)draw the map, highlighting the current room and
+ *  the visited set. Failures are swallowed — the map is an aid, never the authority. */
+async function refreshMap(): Promise<void> {
+  const el = document.getElementById("roomMap");
+  if (!el) return;
+  try {
+    const rooms = await jget<MapRoom[]>("/game/map");
+    renderRoomMap(el, rooms, { currentRoomId: CURRENT_ROOM || null, visited: VISITED });
+  } catch (e) {
+    el.innerHTML = '<div class="rm-empty">the map is unavailable right now.</div>';
+  }
+}
 
 // ── narratorKind, displayed HONESTLY ─────────────────────────────────────────
 function renderNarratorKind(kind: string) {
@@ -235,6 +257,9 @@ async function act(command: string): Promise<ActResp> {
     renderLog();
     renderChain(resp.state.receiptCount, resp.state.commitmentHex);
     renderBanner(resp.state.status);
+    CURRENT_ROOM = resp.state.room.id;
+    VISITED.add(CURRENT_ROOM);
+    await refreshMap();
     const verified = await renderVerifyBadge();
 
     window.__VAULT_STATE = {
@@ -269,6 +294,9 @@ async function loadState(): Promise<GameState> {
   renderRoom(s);
   renderChain(s.receiptCount, s.commitmentHex);
   renderBanner(s.status);
+  CURRENT_ROOM = s.room.id;
+  VISITED.add(CURRENT_ROOM);
+  await refreshMap();
   await renderVerifyBadge();
   window.__VAULT_STATE = {
     world: s.world, worldName: s.worldName,
@@ -286,6 +314,7 @@ async function reset(world?: string): Promise<GameState> {
   const body = world ? { world } : (currentWorld ? { world: currentWorld } : {});
   const { state } = await jpost<{ ok: boolean; state: GameState }>("/game/reset", body);
   tale.length = 0;
+  VISITED.clear();
   applyWorld(state);
   $("narrationText").textContent = `You stand at the threshold of ${state.worldName || "the dungeon"}. What do you do?`;
   renderNarratorKind(state.narratorKind || "scripted");
@@ -293,6 +322,9 @@ async function reset(world?: string): Promise<GameState> {
   renderLog();
   renderChain(state.receiptCount, state.commitmentHex);
   renderBanner(state.status);
+  CURRENT_ROOM = state.room.id;
+  VISITED.add(CURRENT_ROOM);
+  await refreshMap();
   await renderVerifyBadge();
   window.__VAULT_STATE = {
     world: state.world, worldName: state.worldName,
@@ -332,5 +364,7 @@ window.__vaultAct = (c: string) => act(c);
 window.__vaultReset = (world?: string) => reset(world);
 window.__vaultLoad = () => loadState();
 window.__vaultGames = () => GAMES;
+window.__vaultMap = () => jget<MapRoom[]>("/game/map");
+window.__vaultVisited = () => Array.from(VISITED);
 
 boot();
