@@ -443,7 +443,7 @@ fn synth_initial_fields(constraints: &[dregg_cell::FieldConstraint]) -> Vec<(u32
 /// `set_state` permission so the operator may author cross-cell `SetField`
 /// turns against it. The cell's `CellProgram` slot caveats still gate whether
 /// each write is *legal*.
-fn grant_operator_reach(
+pub(crate) fn grant_operator_reach(
     ledger: &mut Ledger,
     operator: CellId,
     operator_pubkey: [u8; 32],

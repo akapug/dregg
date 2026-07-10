@@ -318,6 +318,25 @@ pub enum TurnEffectSpec {
         #[serde(default)]
         cell: Option<String>,
     },
+    /// Grant a capability on `target` (a cell the operator owns) into `to`'s
+    /// c-list. The thin path covers the OPERATOR-authored grant an external
+    /// provider needs witnessed in the receipt log (e.g. the execution-lease
+    /// grant — the `Granted` fact whose label the verified lease read
+    /// decodes); richer grants (breadstuff tokens, facet masks, expiries) go
+    /// through the signed-envelope path.
+    GrantCapability {
+        /// Hex cell id of the grantor. Defaults to the action's target (the
+        /// operator cell on the thin path).
+        #[serde(default)]
+        from: Option<String>,
+        /// Hex cell id whose c-list receives the capability.
+        to: String,
+        /// Hex cell id the capability points at.
+        target: String,
+        /// C-list slot. Defaults to 0.
+        #[serde(default)]
+        slot: u32,
+    },
 }
 
 /// Parse a value string into a 32-byte field element.
@@ -381,6 +400,24 @@ fn build_effect(spec: TurnEffectSpec, default_cell: CellId) -> Result<dregg_turn
         }
         TurnEffectSpec::IncrementNonce { cell } => Effect::IncrementNonce {
             cell: resolve(cell)?,
+        },
+        TurnEffectSpec::GrantCapability {
+            from,
+            to,
+            target,
+            slot,
+        } => Effect::GrantCapability {
+            from: resolve(from)?,
+            to: parse_cell_id(&to)?,
+            cap: dregg_cell::CapabilityRef {
+                target: parse_cell_id(&target)?,
+                slot,
+                permissions: dregg_cell::AuthRequired::None,
+                breadstuff: None,
+                expires_at: None,
+                allowed_effects: None,
+                stored_epoch: None,
+            },
         },
     })
 }
@@ -7942,6 +7979,41 @@ fn classify_starbridge_app(memo: Option<&str>, effect_summaries: &[String]) -> O
     }
 }
 
+/// The exec-lease grant label, when `cap` targets a live execution-lease cell
+/// in the post-state: `exec-lease/<grade>/<asset>/<budget>/<per-period>` —
+/// grade `sandboxed` (the wired tier), asset = the lease cell's token domain,
+/// budget = its funded balance, per-period = the RENT slot. This is the
+/// PRODUCER of the grammar an external provider's light-client-verified lease
+/// read parses off certified receipt slices (the operated DreggNet plane's
+/// `dregg_verify::parse_lease_grant_cap`); without it a verified reader has
+/// only trusted cell reads. Slots are `app_framework::field_from_u64` =
+/// big-endian in bytes [24..32] (the encoding `open_lease` writes).
+fn lease_grant_label(cap: &dregg_cell::CapabilityRef, post: &dregg_cell::Ledger) -> Option<String> {
+    const RENT_SLOT: usize = 4;
+    const PERIOD_SLOT: usize = 5;
+    let cell = post.get(&cap.target)?;
+    if matches!(cell.program, dregg_cell::CellProgram::None) {
+        return None;
+    }
+    let slot_i64 = |idx: usize| -> Option<i64> {
+        let f = cell.state.fields.get(idx)?;
+        let mut b = [0u8; 8];
+        b.copy_from_slice(&f[24..32]);
+        Some(i64::from_be_bytes(b))
+    };
+    let rent = slot_i64(RENT_SLOT)?;
+    let period = slot_i64(PERIOD_SLOT)?;
+    if rent <= 0 || period <= 0 {
+        return None;
+    }
+    Some(format!(
+        "exec-lease/sandboxed/{}/{}/{}",
+        hex_encode(cell.token_id()),
+        cell.state.balance(),
+        rent
+    ))
+}
+
 /// A stable label for a granted/revoked capability (the `cap` term of the
 /// `granted`/`revoked` facts): the token hash when present, else `target#slot`.
 fn cap_ref_label(cap: &dregg_cell::CapabilityRef) -> String {
@@ -8002,7 +8074,11 @@ fn summarize_turn_effects(
                     out.push(ES::Granted {
                         from: hex_encode(&from.0),
                         to: hex_encode(&to.0),
-                        cap: cap_ref_label(cap),
+                        // A grant whose target is a live execution-lease cell
+                        // is labeled with the exec-lease grammar an external
+                        // provider's verified read decodes; every other grant
+                        // keeps the generic token/`target#slot` label.
+                        cap: lease_grant_label(cap, post).unwrap_or_else(|| cap_ref_label(cap)),
                     });
                 }
                 Effect::RevokeCapability { cell, slot } => {

@@ -1228,12 +1228,24 @@ async fn run_node(
             );
             match lease_app::open_lease(&mut cell, &terms, lease_app::field_from_u64(0)) {
                 Ok(()) => match s.ledger.insert_cell(cell) {
-                    Ok(id) => info!(
-                        lease = %dregg_types::hex_encode(&id.0),
-                        provider = %dregg_types::hex_encode(&operator_cell.0),
-                        budget = 10_000,
-                        "seeded demo execution-lease (funded, operator-owned)"
-                    ),
+                    Ok(id) => {
+                        // Give the operator c-list reach + set_state on the lease
+                        // so it can author the exec-lease GRANT turn an external
+                        // provider's verified read decodes (same as the starbridge
+                        // seeder does for its factory cells).
+                        starbridge_seed::grant_operator_reach(
+                            &mut s.ledger,
+                            operator_cell,
+                            operator_pubkey,
+                            id,
+                        );
+                        info!(
+                            lease = %dregg_types::hex_encode(&id.0),
+                            provider = %dregg_types::hex_encode(&operator_cell.0),
+                            budget = 10_000,
+                            "seeded demo execution-lease (funded, operator-owned, operator-reachable)"
+                        );
+                    }
                     Err(e) => warn!(error = %e, "demo execution-lease insert failed"),
                 },
                 Err(e) => warn!(error = ?e, "demo execution-lease open refused"),
