@@ -111,6 +111,21 @@
     .verify.bad { background: #fbeaea; border-color: #f0c9c9; color: #b02a37; }
 
     /* ── controls + legend ── */
+    /* ── the extension-less passkey banner (sovereignty without lock-in) ── */
+    .passkey {
+      margin: 1.4rem 0 0; padding: .8rem 1.1rem; border-radius: 11px; font-size: .9rem;
+      background: rgba(255,255,255,.55); border: 1px dashed var(--rule); color: var(--ink-soft);
+    }
+    .passkey.on { background: #e7f4ea; border: 1px solid #bfe2c7; border-style: solid; color: var(--green); }
+    .passkey.warn { background: #fbf3e6; border: 1px solid #ecd9b6; border-style: solid; color: var(--amber); }
+    .passkey .key { margin-right: .35rem; }
+    .passkey code { font-family: var(--mono); font-size: .82rem; color: inherit; }
+    .passkey b { color: inherit; font-weight: 700; }
+    button.ctrl.enroll { border-color: var(--teal); color: var(--teal); }
+    button.ctrl.enroll:hover { background: var(--teal); color: #fff; }
+    button.ctrl:disabled { opacity: .55; cursor: default; }
+    button.ctrl:disabled:hover { background: #fff; color: var(--teal); }
+
     .controls { margin: 1.6rem 0 0; display: flex; gap: .6rem; flex-wrap: wrap; align-items: center; }
     button.ctrl {
       font: inherit; font-size: .84rem; padding: .5rem .9rem; border-radius: 9px;
@@ -159,9 +174,12 @@
     <div id="chain" class="chain"></div>
     <div id="verifyBadge" class="verify" role="status"></div>
 
+    <div id="passkeyBanner" class="passkey" role="status"></div>
+
     <div class="controls">
+      <button id="enrollBtn" class="ctrl enroll" type="button" onclick="window.__demoEnrollPasskey && window.__demoEnrollPasskey()">🔑 Enroll a passkey to vote</button>
       <button id="pauseBtn" class="ctrl" type="button" onclick="window.__demoTogglePause && window.__demoTogglePause()">⏸ pause (vote yourself)</button>
-      <span class="hint">Pause, then click an option inside the story to cast your own ballot as <b>you</b>.</span>
+      <span class="hint">Enroll a passkey (no extension), then pause and click an option to cast your own <b>biometric-gated</b> ballot.</span>
     </div>
 
     <aside class="legend">
@@ -171,6 +189,7 @@
         <li>Each ballot is a real <b>custody-signed turn</b> on the same federation-grade <span class="tag">CollectiveChoiceEngine</span> (write-once ballots, monotone tallies, an <span class="tag">AffineLe</span> quorum gate) that governs a federation — one voter, one vote, ineligible voters refused.</li>
         <li>Closing a branch <b>advances the winner</b> as one cap-gated verified turn; the receipt chain grows and the commitment moves.</li>
         <li><b>The stranger's check:</b> <span class="tag">verify()</span> re-drives a fresh world through the recorded choices — if any receipt were altered, the replay would fail.</li>
+        <li><b>Sovereignty without lock-in:</b> with NO extension, you enroll a <span class="tag">WebAuthn passkey</span> — it PRF-wraps a dregg key, so a biometric unwraps it to sign. Your <b>you</b> ballot then casts under that key's <b>stable public id</b> and counts on the same engine; decline, and you simply watch + verify.</li>
       </ul>
     </aside>
 
