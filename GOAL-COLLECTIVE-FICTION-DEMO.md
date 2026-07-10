@@ -229,3 +229,15 @@ spween-dregg's chain rigor.
 ## WAITING: DM service (a18375169811f20e3) — real gemma2. Then: re-fire Rust template-render (attested-dm/lib.rs
 ## + dungeon-service now SETTLED post-chain) to make the {{ guard load-bearing end-to-end → integrate the dungeon
 ## page vs the REAL service + gemma2 → drive the full attested-AI-MUD demo (input-integrity + cap-gate + real chain).
+
+## ✅✅ THE ATTESTED DUNGEON RUNS vs REAL gemma2 — verified by DRIVING (committed)
+demo/dungeon-service/ (dep-free std::net over the real chained attested-dm) + demo/dungeon.html. I drove BOTH
+the service (curl → demo/run/dungeon-service.txt) and the page (headless → demo/run/dungeon.png) against live
+ollama gemma2:2b: jailbreak it → it COMPLIES in prose + proposes grant(crown of eternity) through the typed
+channel → cap gate REFUSES (overcap), receipt UNCHANGED, crown NOT HELD. The model proposes; the caps dispose.
+PROSE IS NOT POWER — earned, against a real LLM. Driver made INVARIANT-based for the real model (asserts the
+guarantee, tolerates the LLM non-determinism — a real model does not always comply; the crown is never held via
+prose regardless). Fixed a MutexGuard split-borrow. Honest: /verify per-entry-labelled; authentic leg a fixture.
+Open: DUNGEON_BIND=127.0.0.1:7878 service + DM_PORT=7878 node demo/serve.mjs → /dungeon (else honest stand-in).
+The OUTPUT half of the thesis is running. The INPUT half (slot_confinement) is PROVEN in Lean but not yet wired
+into the running DM — step 4 (re-fired now, collision-free post chain+service).
