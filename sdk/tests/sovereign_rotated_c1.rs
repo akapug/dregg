@@ -44,6 +44,7 @@ fn setup_sovereign_cell(balance: u64) -> (AgentCipherclerk, CellId, Ledger) {
         cells_root,
         nullifier_root,
         commitments_root,
+        revoked_root: dregg_circuit::heap_root::empty_heap_root_8(),
         iroot,
         material: Default::default(),
     };
@@ -198,6 +199,7 @@ mod record_pin_anchor {
             cells_root,
             nullifier_root,
             commitments_root,
+            revoked_root: dregg_circuit::heap_root::empty_heap_root_8(),
             iroot,
             material: Default::default(),
         };
@@ -319,6 +321,7 @@ mod record_pin_anchor {
             &ctx_ledger,
             &nullifier_root,
             &commitments_root,
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_hashes,
             &Default::default(),
         );
@@ -328,6 +331,7 @@ mod record_pin_anchor {
             &ctx_ledger,
             &nullifier_root,
             &commitments_root,
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_hashes,
             &Default::default(),
         );
@@ -387,6 +391,7 @@ mod record_pin_anchor {
                 cells_root: after_w.pre_limbs[0],
                 nullifier_root,
                 commitments_root,
+                revoked_root: dregg_circuit::heap_root::empty_heap_root_8(),
                 iroot: after_w.iroot,
                 material: Default::default(),
             },
@@ -523,6 +528,7 @@ mod record_pin_anchor {
             &ctx_ledger,
             &nullifier_root,
             &commitments_root,
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_hashes,
             &Default::default(),
         );
@@ -531,6 +537,7 @@ mod record_pin_anchor {
             &ctx_ledger,
             &nullifier_root,
             &commitments_root,
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_hashes,
             &Default::default(),
         );
@@ -585,6 +592,7 @@ mod record_pin_anchor {
                 cells_root: after_w.pre_limbs[0],
                 nullifier_root,
                 commitments_root,
+                revoked_root: dregg_circuit::heap_root::empty_heap_root_8(),
                 iroot: after_w.iroot,
                 material: Default::default(),
             },
@@ -674,6 +682,7 @@ mod record_pin_anchor {
             cells_root,
             nullifier_root,
             commitments_root,
+            revoked_root: dregg_circuit::heap_root::empty_heap_root_8(),
             iroot,
             material: Default::default(),
         };
@@ -769,6 +778,7 @@ mod record_pin_anchor {
             &ctx_ledger,
             &nullifier_root,
             &commitments_root,
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_hashes,
             &Default::default(),
         );
@@ -777,6 +787,7 @@ mod record_pin_anchor {
             &ctx_ledger,
             &nullifier_root,
             &commitments_root,
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_hashes,
             &Default::default(),
         );
@@ -835,6 +846,7 @@ mod record_pin_anchor {
                 cells_root: after_w.pre_limbs[0],
                 nullifier_root,
                 commitments_root,
+                revoked_root: dregg_circuit::heap_root::empty_heap_root_8(),
                 iroot: after_w.iroot,
                 material: Default::default(),
             },
@@ -1146,6 +1158,7 @@ mod record_pin_anchor {
             cells_root,
             nullifier_root,
             commitments_root,
+            revoked_root: dregg_circuit::heap_root::empty_heap_root_8(),
             iroot,
             material: Default::default(),
         };
@@ -1259,6 +1272,7 @@ mod whole_turn_forest {
             cells_root,
             nullifier_root,
             commitments_root,
+            revoked_root: dregg_circuit::heap_root::empty_heap_root_8(),
             iroot,
             material: Default::default(),
         };
@@ -1461,6 +1475,7 @@ mod wall_a {
             &ctx_ledger,
             &nullifier_root,
             &commitments_root,
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_hashes,
             &Default::default(),
         );
@@ -1469,6 +1484,7 @@ mod wall_a {
             &ctx_ledger,
             &nullifier_root,
             &commitments_root,
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_hashes,
             &Default::default(),
         );
@@ -1649,6 +1665,7 @@ mod multi_residue_record_pin {
             cells_root,
             nullifier_root,
             commitments_root,
+            revoked_root: dregg_circuit::heap_root::empty_heap_root_8(),
             iroot,
             material: Default::default(),
         };

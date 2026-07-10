@@ -175,6 +175,7 @@ fn declared_capacity_dodge_verifies_through_deployed_lightclient() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -183,6 +184,7 @@ fn declared_capacity_dodge_verifies_through_deployed_lightclient() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -363,6 +365,7 @@ fn gate_b_discriminator_alone_rejects_declared_bare_route() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -371,6 +374,7 @@ fn gate_b_discriminator_alone_rejects_declared_bare_route() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );

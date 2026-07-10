@@ -44,7 +44,9 @@ fn setup_sovereign_cell(balance: u64) -> (AgentCipherclerk, CellId, Ledger) {
         cells_root,
         nullifier_root,
         commitments_root,
+        revoked_root: dregg_circuit::heap_root::empty_heap_root_8(),
         iroot,
+        material: Default::default(),
     };
     // THE FLIP (faithful 8-felt): register the 8-felt commit (`_v9_8`, `felt8_to_bytes32` of the
     // chip-faithful chain) so the executor reads it back via `bytes32_to_felt8` as the 8 wide BEFORE

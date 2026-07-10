@@ -192,6 +192,7 @@ fn rotated_transfer_proves_verifies_differential_and_refuses_ghost() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -200,6 +201,7 @@ fn rotated_transfer_proves_verifies_differential_and_refuses_ghost() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -300,6 +302,7 @@ fn rotated_transfer_proves_verifies_differential_and_refuses_ghost() {
         cells_root: before_w.pre_limbs[0],
         nullifier_root,
         commitments_root,
+        revoked_root: dregg_circuit::heap_root::empty_heap_root_8(),
         iroot: before_w.iroot,
         material: Default::default(),
     };
@@ -463,6 +466,7 @@ fn rotated_burn_cohort_member_proves_verifies_with_authority_commitment() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -471,6 +475,7 @@ fn rotated_burn_cohort_member_proves_verifies_with_authority_commitment() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -492,6 +497,7 @@ fn rotated_burn_cohort_member_proves_verifies_with_authority_commitment() {
         cells_root: before_w.pre_limbs[0],
         nullifier_root,
         commitments_root,
+        revoked_root: dregg_circuit::heap_root::empty_heap_root_8(),
         iroot: before_w.iroot,
         material: Default::default(),
     };
@@ -588,6 +594,7 @@ fn rotated_note_spend_pins_nullifier_and_refuses_tamper() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -596,6 +603,7 @@ fn rotated_note_spend_pins_nullifier_and_refuses_tamper() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -828,6 +836,7 @@ fn rotated_create_cell_pins_accounts_and_refuses_tamper() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -836,6 +845,7 @@ fn rotated_create_cell_pins_accounts_and_refuses_tamper() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -1008,6 +1018,7 @@ fn rotated_carrier_octets_carry_real_child_vk_and_contract_hash_three_way() {
             &ledger,
             &nullifier_root,
             &commitments_root,
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_log,
             &Default::default(),
         );
@@ -1016,6 +1027,7 @@ fn rotated_carrier_octets_carry_real_child_vk_and_contract_hash_three_way() {
             &ledger,
             &nullifier_root,
             &commitments_root,
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_log,
             &material,
         );
@@ -1038,6 +1050,7 @@ fn rotated_carrier_octets_carry_real_child_vk_and_contract_hash_three_way() {
                 cells_root: after_w.pre_limbs[0],
                 nullifier_root,
                 commitments_root,
+                revoked_root: dregg_circuit::heap_root::empty_heap_root_8(),
                 iroot: after_w.iroot,
                 material,
             },
@@ -1164,6 +1177,7 @@ fn rotated_set_field_and_bridge_mint_tick_nonce_and_refuse_forged_delta() {
             &ledger,
             &nullifier_root,
             &commitments_root,
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_log,
             &Default::default(),
         );
@@ -1172,6 +1186,7 @@ fn rotated_set_field_and_bridge_mint_tick_nonce_and_refuse_forged_delta() {
             &ledger,
             &nullifier_root,
             &commitments_root,
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_log,
             &Default::default(),
         );
@@ -1284,6 +1299,7 @@ fn rotated_set_field_and_bridge_mint_tick_nonce_and_refuse_forged_delta() {
             &ledger,
             &nullifier_root,
             &commitments_root,
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_log,
             &Default::default(),
         );
@@ -1292,6 +1308,7 @@ fn rotated_set_field_and_bridge_mint_tick_nonce_and_refuse_forged_delta() {
             &ledger,
             &nullifier_root,
             &commitments_root,
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_log,
             &Default::default(),
         );
@@ -1433,6 +1450,7 @@ fn rotated_supply_mint_self_verifies_under_dedicated_selector() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -1441,6 +1459,7 @@ fn rotated_supply_mint_self_verifies_under_dedicated_selector() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -1584,6 +1603,7 @@ fn rotated_published_commit_lean_differential_and_permission_flip_moves_it() {
         cells_root,
         nullifier_root,
         commitments_root,
+        revoked_root: dregg_circuit::heap_root::empty_heap_root_8(),
         iroot,
         material: Default::default(),
     };
@@ -1948,6 +1968,7 @@ fn rotated_non_synthetic_field_bearing_cell_old_new_commit_agree() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -1956,6 +1977,7 @@ fn rotated_non_synthetic_field_bearing_cell_old_new_commit_agree() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -1997,6 +2019,7 @@ fn rotated_non_synthetic_field_bearing_cell_old_new_commit_agree() {
         cells_root: before_w.pre_limbs[0],
         nullifier_root,
         commitments_root,
+        revoked_root: dregg_circuit::heap_root::empty_heap_root_8(),
         iroot: before_w.iroot,
         material: Default::default(),
     };
@@ -2023,6 +2046,7 @@ fn rotated_non_synthetic_field_bearing_cell_old_new_commit_agree() {
         cells_root: after_w.pre_limbs[0],
         nullifier_root,
         commitments_root,
+        revoked_root: dregg_circuit::heap_root::empty_heap_root_8(),
         iroot: after_w.iroot,
         material: Default::default(),
     };
@@ -2111,6 +2135,7 @@ fn rotated_cellseal_record_pin_forces_lifecycle_and_rejects_frozen_forgery() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -2119,6 +2144,7 @@ fn rotated_cellseal_record_pin_forces_lifecycle_and_rejects_frozen_forgery() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -2272,6 +2298,7 @@ fn rotated_transfer_frozen_authority_forces_r23_and_rejects_drift() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -2280,6 +2307,7 @@ fn rotated_transfer_frozen_authority_forces_r23_and_rejects_drift() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -2486,6 +2514,7 @@ fn rotated_audit_record_pin_forces_record_digest_and_rejects_frozen_forgery() {
             &ledger,
             &nullifier_root,
             &commitments_root,
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_log,
             &Default::default(),
         );
@@ -2494,6 +2523,7 @@ fn rotated_audit_record_pin_forces_record_digest_and_rejects_frozen_forgery() {
             &ledger,
             &nullifier_root,
             &commitments_root,
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
             &receipt_log,
             &Default::default(),
         );
@@ -2717,6 +2747,7 @@ fn note_create_pins_commitments_and_refuses_tamper() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -2725,6 +2756,7 @@ fn note_create_pins_commitments_and_refuses_tamper() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -2855,6 +2887,7 @@ fn fee_debit_is_proven_and_underclaimed_fee_is_unsat_for_a_ledgerless_client() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -2863,6 +2896,7 @@ fn fee_debit_is_proven_and_underclaimed_fee_is_unsat_for_a_ledgerless_client() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -3051,6 +3085,7 @@ fn wide_transfer_proves_verifies_and_the_high_position_collision_tooth_bites() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -3059,6 +3094,7 @@ fn wide_transfer_proves_verifies_and_the_high_position_collision_tooth_bites() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -3126,6 +3162,7 @@ fn wide_transfer_proves_verifies_and_the_high_position_collision_tooth_bites() {
         &ledger_b,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -3134,6 +3171,7 @@ fn wide_transfer_proves_verifies_and_the_high_position_collision_tooth_bites() {
         &ledger_b,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );

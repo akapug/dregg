@@ -79,6 +79,7 @@ fn wide_sovereign_pipeline_proves_and_anchored_verify_accepts() {
         &ctx_ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_hashes,
         &Default::default(),
     );
@@ -87,6 +88,7 @@ fn wide_sovereign_pipeline_proves_and_anchored_verify_accepts() {
         &ctx_ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_hashes,
         &Default::default(),
     );
@@ -141,6 +143,7 @@ fn wide_sovereign_pipeline_proves_and_anchored_verify_accepts() {
         cells_root: before_w.pre_limbs[0],
         nullifier_root,
         commitments_root,
+        revoked_root: dregg_circuit::heap_root::empty_heap_root_8(),
         iroot: before_w.iroot,
         material: Default::default(),
     };
@@ -148,6 +151,7 @@ fn wide_sovereign_pipeline_proves_and_anchored_verify_accepts() {
         cells_root: after_w.pre_limbs[0],
         nullifier_root,
         commitments_root,
+        revoked_root: dregg_circuit::heap_root::empty_heap_root_8(),
         iroot: after_w.iroot,
         material: Default::default(),
     };
@@ -193,6 +197,7 @@ fn wide_sovereign_forged_anchor_is_rejected() {
         &ctx_ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &[],
         &Default::default(),
     );
@@ -201,6 +206,7 @@ fn wide_sovereign_forged_anchor_is_rejected() {
         &ctx_ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &[],
         &Default::default(),
     );
@@ -328,6 +334,7 @@ fn wide_sovereign_refusal_proves_and_anchored_verify_accepts() {
         &ctx_ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_hashes,
         &Default::default(),
     );
@@ -336,6 +343,7 @@ fn wide_sovereign_refusal_proves_and_anchored_verify_accepts() {
         &ctx_ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_hashes,
         &Default::default(),
     );
@@ -413,6 +421,7 @@ fn wide_sovereign_refusal_proves_and_anchored_verify_accepts() {
         cells_root: before_w.pre_limbs[0],
         nullifier_root,
         commitments_root,
+        revoked_root: dregg_circuit::heap_root::empty_heap_root_8(),
         iroot: before_w.iroot,
         material: Default::default(),
     };
@@ -420,6 +429,7 @@ fn wide_sovereign_refusal_proves_and_anchored_verify_accepts() {
         cells_root: after_w.pre_limbs[0],
         nullifier_root,
         commitments_root,
+        revoked_root: dregg_circuit::heap_root::empty_heap_root_8(),
         iroot: after_w.iroot,
         material: Default::default(),
     };
@@ -537,6 +547,7 @@ fn flagday_transfer_witness(
         &ctx_ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_hashes,
         &Default::default(),
     );
@@ -545,6 +556,7 @@ fn flagday_transfer_witness(
         &ctx_ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_hashes,
         &Default::default(),
     );

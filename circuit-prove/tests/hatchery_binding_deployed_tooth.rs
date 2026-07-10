@@ -183,6 +183,7 @@ fn mint_hatchery_leg(
         &ledger,
         &dregg_circuit::heap_root::empty_heap_root_8(),
         &dregg_circuit::heap_root::empty_heap_root_8(),
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         before_material,
     );
@@ -191,6 +192,7 @@ fn mint_hatchery_leg(
         &ledger,
         &dregg_circuit::heap_root::empty_heap_root_8(),
         &dregg_circuit::heap_root::empty_heap_root_8(),
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         after_material,
     );

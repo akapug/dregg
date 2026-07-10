@@ -173,6 +173,7 @@ pub fn rotated_transfer_turn(balance: u64, amount: u64) -> RotatedTurn {
         &ctx_ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_hashes,
         &Default::default(),
     );
@@ -181,6 +182,7 @@ pub fn rotated_transfer_turn(balance: u64, amount: u64) -> RotatedTurn {
         &ctx_ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_hashes,
         &Default::default(),
     );
@@ -459,6 +461,7 @@ pub fn v9_context() -> dregg_cell::commitment::V9RotationContext {
         cells_root: BabyBear::new(0),
         nullifier_root: dregg_circuit::heap_root::empty_heap_root_8(),
         commitments_root: dregg_circuit::heap_root::empty_heap_root_8(),
+        revoked_root: dregg_circuit::heap_root::empty_heap_root_8(),
         iroot: BabyBear::new(0),
         // Generic turn: no factory child-vk / hatchery contract-hash material
         // (the Default zero-fills the v12 carrier octets, limbs 88..103).

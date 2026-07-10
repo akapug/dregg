@@ -55,6 +55,7 @@ fn nullifier_root_fills_all_8_lanes_and_twins_agree() {
         cells_root: cells_root(&ledger),
         nullifier_root: nf_root,
         commitments_root: dregg_circuit::heap_root::empty_heap_root_8(),
+        revoked_root: dregg_circuit::heap_root::empty_heap_root_8(),
         iroot: iroot(&receipts),
         material: Default::default(),
     };

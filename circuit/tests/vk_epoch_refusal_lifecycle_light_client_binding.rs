@@ -231,6 +231,7 @@ fn refusal_light_client_forge_rejected_by_fields_write_gate() {
         &Ledger::new(),
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -239,6 +240,7 @@ fn refusal_light_client_forge_rejected_by_fields_write_gate() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -397,6 +399,7 @@ fn lifecycle_payload_forge_rejected_by_hash_gate_anchor_disabled() {
         &Ledger::new(),
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -405,6 +408,7 @@ fn lifecycle_payload_forge_rejected_by_hash_gate_anchor_disabled() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -564,6 +568,7 @@ fn wide_fields_write_proves_and_verifies() {
         &Ledger::new(),
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -572,6 +577,7 @@ fn wide_fields_write_proves_and_verifies() {
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );

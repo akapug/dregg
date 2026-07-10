@@ -501,6 +501,7 @@ fn rotation_witness_for_self_sovereign_impl(
         &ctx_ledger,
         nullifier_root,
         commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         receipt_hashes,
         &dregg_cell::commitment::RotationCarrierMaterial::default(),
     );
@@ -509,6 +510,7 @@ fn rotation_witness_for_self_sovereign_impl(
         &ctx_ledger,
         nullifier_root,
         commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         receipt_hashes,
         &after_material,
     );
@@ -644,6 +646,7 @@ fn rotation_witness_for_capability_turn(
         &ctx_ledger,
         nullifier_root,
         commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         receipt_hashes,
         &dregg_cell::commitment::RotationCarrierMaterial::default(),
     );
@@ -652,6 +655,7 @@ fn rotation_witness_for_capability_turn(
         &ctx_ledger,
         nullifier_root,
         commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         receipt_hashes,
         &after_material,
     );

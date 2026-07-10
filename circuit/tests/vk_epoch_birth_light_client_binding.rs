@@ -174,6 +174,7 @@ fn assert_birth_forced_on_wire(effect: Effect, name: &str, key_col: usize, label
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -182,6 +183,7 @@ fn assert_birth_forced_on_wire(effect: Effect, name: &str, key_col: usize, label
         &ledger,
         &nullifier_root,
         &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );

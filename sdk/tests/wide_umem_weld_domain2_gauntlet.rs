@@ -200,6 +200,7 @@ fn attenuate_fixture() -> (
         &ledger,
         &dregg_circuit::heap_root::empty_heap_root_8(),
         &dregg_circuit::heap_root::empty_heap_root_8(),
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -208,6 +209,7 @@ fn attenuate_fixture() -> (
         &ledger,
         &dregg_circuit::heap_root::empty_heap_root_8(),
         &dregg_circuit::heap_root::empty_heap_root_8(),
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log,
         &Default::default(),
     );
@@ -384,6 +386,7 @@ fn domain2_plain_cap_weld_is_wire_forbidden() {
         &ledger,
         &dregg_circuit::heap_root::empty_heap_root_8(),
         &dregg_circuit::heap_root::empty_heap_root_8(),
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &[],
         &Default::default(),
     );
@@ -392,6 +395,7 @@ fn domain2_plain_cap_weld_is_wire_forbidden() {
         &ledger,
         &dregg_circuit::heap_root::empty_heap_root_8(),
         &dregg_circuit::heap_root::empty_heap_root_8(),
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &[],
         &Default::default(),
     );
