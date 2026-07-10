@@ -277,3 +277,25 @@ real `Bool` function of exactly that shape; the gap is that opaque `verifyBatch`
 (`DeployedRefines`, never proved). The honest fix: DEFINE `verifyBatch` as the model and carry
 `DeployedMatchesModel` as an explicit, KAT-dischargeable correspondence obligation.
 Then and only then do bricks 1–5 + the arity fix + the bridge compose into a real `instance : StarkSound`.
+
+## ⚖ METHOD (2026-07-10): "read the argument, not the name" — the rule cuts BOTH ways
+A lane reported: "Merkle is STUBBED `true` (FriVerifier.lean:511); merkleRecompute_binds is off the accept path
+— dangerous." I read `merklePaths := fun _ _ => true` and was one commit from publishing it. **It is FALSE.**
+`friQueryCheck` (:321) calls `merkleVerify core.compress q.index l0.leaf l0.siblings traceCom`, and
+`merkleVerify := decide (merkleRecompute compress idx leaf siblings = root)` (:226) — a REAL recompute-and-compare,
+ON the accept path inside `foldConsistent`. The `merklePaths` field is REDUNDANT, precisely as its doc-comment
+states. I read a SHAPE (`:= true`) instead of the ARGUMENT — the same error as trusting `genuineChipTbl_sound`
+by its name, mirrored. **A stub-shaped field may be subsumed elsewhere; a genuine-sounding name may be a
+constant-zero function. Only reading what the code CHECKS distinguishes them.**
+VERIFIED GOOD: `fullChecks` (:673) implements every `verifyAlgo` sub-check for real (`batchTablesCheck`,
+`queryPowCheck`); its claim "every verifyAlgo sub-check is now a real algorithm" CHECKS OUT.
+
+## ★ THE TRUE DEBT-A BLOCKER (2026-07-10, `77d4b27cc`)
+Modeling `verifyBatch` (the keystone from `35ee89ec9`) discharges only `DeployedRefines`/`DeployedMatchesModel`
+— the CODE half, KAT-dischargeable via the existing `dregg-lean-ffi` differential harness + goldens, exactly as
+`Poseidon2BabyBearW16` was. But `AlgoStarkSound.extract` contains `FriExtract`, which is a **PROOF-OF-KNOWLEDGE**
+obligation (`3ee8b5ee8`): FRI proximity takes a TRANSCRIPT and yields a PROPERTY; extraction takes a PROPERTY and
+must yield a WITNESS. Wrong direction. **So modeling verifyBatch does NOT finish DEBT-A**, and neither does any
+amount of FRI-at-BabyBear work. The true blocker is knowledge extraction — a different mathematical object from
+FRI soundness (needs an in-circuit⟹native extractor + `oracle_binding`/HashCR pinning). Worth knowing BEFORE
+spending weeks on the FRI side expecting it to close.
