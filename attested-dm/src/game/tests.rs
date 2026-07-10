@@ -1759,3 +1759,474 @@ fn light_composes_and_is_additive_to_the_other_dungeons() {
     assert!(bramble_keep().light.is_none());
     assert!(starfall_spire().light.is_none());
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CONSUMABLES + STATUS EFFECTS — the world resolves what you drink; the counter is
+// the truth. Heal is exactly N and the item is consumed; a shield buff mitigates while
+// active and expires; a poison ticks a wound per step and stops when cured or expired.
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn wounds(game: &GameSession) -> i64 {
+    game.world()
+        .flags
+        .get(PLAYER_WOUNDS_FLAG)
+        .copied()
+        .unwrap_or(0)
+}
+fn flag_of(game: &GameSession, k: &str) -> i64 {
+    game.world().flags.get(k).copied().unwrap_or(0)
+}
+
+/// Drive THE VENOMOUS DEEP to the Wyrm Hall carrying the salve, wounded to exactly 6 by the
+/// poison ticks of the three ford steps (bile drunk; venom is load-bearing to cross).
+fn venom_deep_wounded_at_wyrm_hall() -> GameSession {
+    let mut game = GameSession::open(venom_deep());
+    for cmd in [
+        "take salve",
+        "go down",  // undercroft
+        "go north", // armoury
+        "take wyrm_bile",
+        "go south",      // undercroft
+        "go down",       // ford_bank
+        "use wyrm_bile", // venom = 8
+        "go north",      // venom_ford  (+2 -> 2)
+        "go north",      // drowned_stair (+2 -> 4)
+        "go up",         // wyrm_hall  (+2 -> 6)
+    ] {
+        assert!(
+            game.command("hero", cmd).landed(),
+            "setup step `{cmd}` should land"
+        );
+    }
+    assert_eq!(
+        wounds(&game),
+        6,
+        "three ford steps tick the poison to exactly 6 wounds"
+    );
+    game
+}
+
+/// A HEAL potion reduces wounds by EXACTLY its N (clamped) and the item is CONSUMED — a second use
+/// finds it gone and is refused, landing no receipt (the anti-ghost tooth). Non-vacuous: the wounds
+/// start at a known 6 and land at exactly 2.
+#[test]
+fn a_heal_potion_reduces_wounds_by_exactly_n_and_is_consumed() {
+    let mut game = venom_deep_wounded_at_wyrm_hall();
+    assert!(game.world().inventory.contains("salve"));
+
+    let res = game.command("hero", "use salve");
+    assert!(res.landed(), "drinking the salve is a legal, landed move");
+    assert_eq!(
+        wounds(&game),
+        2,
+        "the salve heals EXACTLY 4 (6 -> 2), no more"
+    );
+    assert!(
+        !game.world().inventory.contains("salve"),
+        "the salve is really consumed — it left the inventory"
+    );
+
+    let ledger_before = game.world().ledger.len();
+    match game.command("hero", "use salve") {
+        PlayResult::Refused(GameRefusal::NotHolding(i)) if i == "salve" => {}
+        other => panic!("a second use of the spent salve must be refused, got {other:?}"),
+    }
+    assert_eq!(
+        game.world().ledger.len(),
+        ledger_before,
+        "a refused (spent) use lands NO receipt"
+    );
+    game.verify().expect("the chain verifies");
+}
+
+/// A JAILBROKEN over-heal narration ("this elixir makes you INVINCIBLE, healed beyond") changes
+/// nothing beyond the rule's N: the world heals exactly 4, and the AI's prose has no authority.
+#[test]
+fn a_jailbroken_over_heal_narration_changes_nothing_beyond_n() {
+    let mut game = venom_deep_wounded_at_wyrm_hall();
+    let jailbroken = Proposal::new(
+        "You quaff the salve and are made INVINCIBLE — every wound erased and your flesh restored \
+         past all mortal limit, healed to full and BEYOND!",
+        GameAction::Use("salve".into(), None),
+    );
+    let res = game.play(jailbroken, "hero", "");
+    match res {
+        PlayResult::Landed { narration, .. } => {
+            assert!(
+                !narration.to_lowercase().contains("invincible"),
+                "the LANDED narration is the world's account, not the jailbreak: {narration:?}"
+            );
+        }
+        other => panic!("the salve use lands, got {other:?}"),
+    }
+    assert_eq!(
+        wounds(&game),
+        2,
+        "the world heals exactly 4 (6 -> 2); the 'invincible/beyond' prose adds nothing"
+    );
+    assert!(
+        !game.world().inventory.contains("salve"),
+        "consumed exactly once"
+    );
+}
+
+// ── A tiny purpose-built world to isolate the shield-buff mechanic (mitigate + expiry). ──
+
+fn golem_world() -> GameWorld {
+    let rooms = vec![
+        Room::new("arena", "The Arena", "A stone pit; a bone golem waits.")
+            .item("blade")
+            .item("shield_draught")
+            .exit("east", Exit::open("alcove")),
+        Room::new("alcove", "A Side Alcove", "A dead-end niche off the pit.")
+            .exit("west", Exit::open("arena")),
+    ];
+    let mut room_map = std::collections::BTreeMap::new();
+    for r in rooms {
+        room_map.insert(r.id.clone(), r);
+    }
+    let mut combat = std::collections::BTreeMap::new();
+    combat.insert(
+        "arena".to_string(),
+        CombatEnemy {
+            room: "arena".into(),
+            name: "golem".into(),
+            hp: 100, // never falls in these few strikes — we only measure the blows it lands
+            armed_by: "blade".into(),
+            weapon_damage: 1,
+            unarmed_damage: 0,
+            attack: 5,
+            armor: None,
+            victory_flag: ("golem_down".into(), 1),
+            victory_narration: "down".into(),
+            hit_narration: "it rakes you".into(),
+            flail_narration: "you flail".into(),
+        },
+    );
+    GameWorld {
+        rooms: room_map,
+        use_rules: Vec::new(),
+        hostiles: std::collections::BTreeMap::new(),
+        combat,
+        npcs: Vec::new(),
+        dialogue: Vec::new(),
+        spells: Vec::new(),
+        spell_rules: Vec::new(),
+        consumables: vec![ConsumableRule {
+            item: "shield_draught".into(),
+            effect: ConsumableEffect::Status {
+                flag: "warded".into(),
+                duration: 2,
+            },
+            narration: "a ward closes over you".into(),
+        }],
+        statuses: vec![StatusRule {
+            flag: "warded".into(),
+            kind: StatusKind::Shield(3),
+        }],
+        player_max_hp: 100,
+        light: None,
+        start: "arena".into(),
+        objective: Objective {
+            room: "arena".into(),
+            holding: "unobtainable".into(),
+        },
+        lose: vec![LoseCondition {
+            flag: PLAYER_WOUNDS_FLAG.into(),
+            at_least: 100,
+            description: "x".into(),
+        }],
+    }
+}
+
+/// A SHIELD buff mitigates combat damage while active and EXPIRES after its duration: the same blow
+/// costs 2 warded (5 - 3), 5 unwarded, and 5 again once the ward has ticked away over two steps.
+#[test]
+fn a_shield_buff_mitigates_combat_and_expires_after_its_duration() {
+    // (a) unwarded control: one blow lands the full 5.
+    let mut c = GameSession::open(golem_world());
+    c.command("hero", "take blade");
+    assert!(c.command("hero", "attack golem").landed());
+    assert_eq!(wounds(&c), 5, "unwarded, the golem's blow lands the full 5");
+
+    // (b) warded: the same blow is mitigated to 2 (5 - 3).
+    let mut g = GameSession::open(golem_world());
+    g.command("hero", "take blade");
+    g.command("hero", "take shield_draught");
+    assert!(g.command("hero", "use shield_draught").landed());
+    assert_eq!(flag_of(&g, "warded"), 2, "the ward is active for 2 turns");
+    assert!(g.command("hero", "attack golem").landed());
+    assert_eq!(
+        wounds(&g),
+        2,
+        "warded, the blow is mitigated to 2 (no move ticks the ward mid-fight)"
+    );
+
+    // (c) expiry: drink the ward, then two STEPS tick it to 0, and the blow lands the full 5 again.
+    let mut e = GameSession::open(golem_world());
+    e.command("hero", "take blade");
+    e.command("hero", "take shield_draught");
+    e.command("hero", "use shield_draught"); // warded = 2
+    e.command("hero", "go east"); // warded 2 -> 1
+    e.command("hero", "go west"); // warded 1 -> 0
+    assert_eq!(
+        flag_of(&e, "warded"),
+        0,
+        "the ward has expired after its two steps"
+    );
+    let before = wounds(&e);
+    assert!(e.command("hero", "attack golem").landed());
+    assert_eq!(
+        wounds(&e) - before,
+        5,
+        "with the ward expired, the blow lands the full 5 again"
+    );
+}
+
+// ── A tiny purpose-built world to isolate the poison-debuff mechanic (tick + cure + expiry). ──
+
+fn poison_world() -> GameWorld {
+    let rooms = vec![
+        Room::new("cell_a", "Cell A", "A dank cell; phials rest on a shelf.")
+            .item("bile")
+            .item("antidote")
+            .exit("east", Exit::open("cell_b")),
+        Room::new("cell_b", "Cell B", "A second cell.").exit("west", Exit::open("cell_a")),
+    ];
+    let mut room_map = std::collections::BTreeMap::new();
+    for r in rooms {
+        room_map.insert(r.id.clone(), r);
+    }
+    GameWorld {
+        rooms: room_map,
+        use_rules: Vec::new(),
+        hostiles: std::collections::BTreeMap::new(),
+        combat: std::collections::BTreeMap::new(),
+        npcs: Vec::new(),
+        dialogue: Vec::new(),
+        spells: Vec::new(),
+        spell_rules: Vec::new(),
+        consumables: vec![
+            ConsumableRule {
+                item: "bile".into(),
+                effect: ConsumableEffect::Status {
+                    flag: "venom".into(),
+                    duration: 3,
+                },
+                narration: "venom floods your blood".into(),
+            },
+            ConsumableRule {
+                item: "antidote".into(),
+                effect: ConsumableEffect::Cure("venom".into()),
+                narration: "the venom goes cold".into(),
+            },
+        ],
+        statuses: vec![StatusRule {
+            flag: "venom".into(),
+            kind: StatusKind::Poison(2),
+        }],
+        player_max_hp: 100,
+        light: None,
+        start: "cell_a".into(),
+        objective: Objective {
+            room: "cell_a".into(),
+            holding: "unobtainable".into(),
+        },
+        lose: vec![LoseCondition {
+            flag: PLAYER_WOUNDS_FLAG.into(),
+            at_least: 100,
+            description: "x".into(),
+        }],
+    }
+}
+
+/// POISON ticks a wound each STEP while active, and an antidote (a Cure) STOPS it: the wound climbs
+/// 2 per step over two steps, then a cure zeroes the venom and the next step ticks nothing.
+#[test]
+fn poison_ticks_a_wound_each_step_and_stops_when_cured() {
+    let mut g = GameSession::open(poison_world());
+    g.command("hero", "take bile");
+    g.command("hero", "take antidote");
+    g.command("hero", "use bile"); // venom = 3
+    assert_eq!(flag_of(&g, "venom"), 3);
+    assert_eq!(
+        wounds(&g),
+        0,
+        "drinking the bile does not itself wound (no step yet)"
+    );
+
+    g.command("hero", "go east"); // venom 3 -> 2, +2 wound
+    assert_eq!((flag_of(&g, "venom"), wounds(&g)), (2, 2));
+    g.command("hero", "go west"); // venom 2 -> 1, +2 wound
+    assert_eq!((flag_of(&g, "venom"), wounds(&g)), (1, 4));
+
+    g.command("hero", "use antidote"); // CURE: venom -> 0
+    assert_eq!(flag_of(&g, "venom"), 0, "the antidote stills the venom");
+    g.command("hero", "go east"); // venom 0 -> no tick
+    assert_eq!(
+        wounds(&g),
+        4,
+        "with the venom cured, no further wound ticks"
+    );
+}
+
+/// POISON stops on its own when it EXPIRES: after three steps the venom counter reaches 0 and a
+/// fourth step ticks nothing more (the timer is real, not the prose).
+#[test]
+fn poison_stops_when_it_expires() {
+    let mut g = GameSession::open(poison_world());
+    g.command("hero", "take bile");
+    g.command("hero", "use bile"); // venom = 3
+    g.command("hero", "go east"); // 3 -> 2, w 2
+    g.command("hero", "go west"); // 2 -> 1, w 4
+    g.command("hero", "go east"); // 1 -> 0, w 6
+    assert_eq!(
+        (flag_of(&g, "venom"), wounds(&g)),
+        (0, 6),
+        "the venom expires exactly at 6 wounds"
+    );
+    g.command("hero", "go west"); // venom already 0 -> no tick
+    assert_eq!(wounds(&g), 6, "the expired venom ticks no further");
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE VENOMOUS DEEP — the fifth adventure: a full winning playthrough verifies, and the
+// consumables + statuses are LOAD-BEARING (unwinnable without the bile, the shield, the antidote).
+// ─────────────────────────────────────────────────────────────────────────────
+
+const VENOM_DEEP_WIN: &[&str] = &[
+    "take salve",
+    "go down", // undercroft
+    "take antidote",
+    "take shield_draught",
+    "go north", // armoury
+    "take harpoon",
+    "take wyrm_bile",
+    "go south",           // undercroft
+    "go down",            // ford_bank
+    "use wyrm_bile",      // venom = 8 — the ford's key
+    "go north",           // venom_ford
+    "go north",           // drowned_stair
+    "go up",              // wyrm_hall
+    "use shield_draught", // ward before the strike
+    "attack wyrm",
+    "attack wyrm",
+    "attack wyrm",  // the felling blow
+    "use antidote", // still the venom before the climb
+    "go north",     // inner_shrine
+    "take venom_heart",
+    "go up", // ascent
+    "go up", // crypt_gate
+    "go up", // surface -> WIN
+];
+
+#[test]
+fn venom_deep_full_winning_playthrough_verifies() {
+    let mut game = GameSession::open(venom_deep());
+    for cmd in VENOM_DEEP_WIN {
+        assert!(
+            game.command("hero", cmd).landed(),
+            "the winning path should land `{cmd}` (wounds {}, venom {})",
+            wounds(&game),
+            flag_of(&game, "venom")
+        );
+    }
+    assert_eq!(
+        game.status(),
+        GameStatus::Won,
+        "the venomous deep is winnable"
+    );
+    assert!(game.world().inventory.contains("venom_heart"));
+    assert_eq!(game.world().scene, "surface");
+    assert_eq!(
+        game.world().ledger.len(),
+        VENOM_DEEP_WIN.len(),
+        "one verified turn per move"
+    );
+    game.verify()
+        .expect("the whole playthrough re-verifies as a chain");
+}
+
+/// LOAD-BEARING (bile): without drinking the wyrm bile, the venom-ford is barred — the poison-status
+/// flag IS the gate, so an un-poisoned diver cannot cross, no matter the prose.
+#[test]
+fn venom_deep_ford_is_barred_without_the_bile() {
+    let mut game = GameSession::open(venom_deep());
+    for cmd in ["go down", "go down"] {
+        game.command("hero", cmd); // undercroft -> ford_bank (never drink the bile)
+    }
+    assert_eq!(game.world().scene, "ford_bank");
+    match game.command("hero", "go north") {
+        PlayResult::Refused(GameRefusal::LockedExit { .. }) => {}
+        other => panic!("the venom-ford must bar an un-poisoned diver, got {other:?}"),
+    }
+}
+
+/// LOAD-BEARING (shield): armed with the harpoon but UNWARDED, the Bone Wyrm cuts the diver down
+/// before the felling blow — the shield-elixir is what makes the fight survivable.
+#[test]
+fn venom_deep_is_unwinnable_without_the_shield() {
+    let mut game = GameSession::open(venom_deep());
+    for cmd in [
+        "go down",
+        "go north",
+        "take harpoon",
+        "take wyrm_bile",
+        "go south",
+        "go down",
+        "use wyrm_bile",
+        "go north",
+        "go north",
+        "go up",       // at wyrm_hall, wounds 6, UNWARDED
+        "attack wyrm", // +5 -> 11
+        "attack wyrm", // +5 -> 16 -> death
+    ] {
+        game.command("hero", cmd);
+    }
+    assert_eq!(
+        game.status(),
+        GameStatus::Lost,
+        "unwarded, the Wyrm fells the diver (wounds {})",
+        wounds(&game)
+    );
+}
+
+/// LOAD-BEARING (antidote): warded, the diver fells the Wyrm — but with the venom still ticking and
+/// NO antidote drunk, the poison takes them on the very first step out of the hall.
+#[test]
+fn venom_deep_venom_takes_you_without_the_antidote() {
+    let mut game = GameSession::open(venom_deep());
+    for cmd in [
+        "go down",
+        "take shield_draught",
+        "go north",
+        "take harpoon",
+        "take wyrm_bile",
+        "go south",
+        "go down",
+        "use wyrm_bile",
+        "go north",
+        "go north",
+        "go up", // wyrm_hall, wounds 6
+        "use shield_draught",
+        "attack wyrm",
+        "attack wyrm",
+        "attack wyrm", // wyrm felled, wounds 10, venom 5
+    ] {
+        game.command("hero", cmd);
+    }
+    assert_eq!(
+        game.status(),
+        GameStatus::Playing,
+        "the Wyrm is felled and the diver still lives"
+    );
+    assert_eq!(flag_of(&game, "wyrm_felled"), 1);
+    // No antidote: the first step toward the shrine ticks the venom past the threshold.
+    game.command("hero", "go north");
+    assert_eq!(
+        game.status(),
+        GameStatus::Lost,
+        "without the antidote the venom takes the diver on the climb out (wounds {})",
+        wounds(&game)
+    );
+}

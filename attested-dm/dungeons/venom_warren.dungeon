@@ -1,0 +1,44 @@
+# THE VENOM WARREN
+#
+# Authored BY HAND in the .dungeon DSL — no Rust, no recompile. A small, fully-solvable
+# adventure that dogfoods the CONSUMABLE + STATUS constructs: a poison you must drink to
+# cross a venom-ford (the venom in your blood parts the venom-water), a timer of ticking
+# wounds, and an antidote you must drink before it takes you. The status flag is BOTH the
+# ford's key (requires flag venom >= 1) and the debuff, so the poison is load-bearing.
+
+name: The Venom Warren
+start: mouth
+objective: reach surface holding relic
+lose: player_wounds >= 10 -> "the venom in your blood takes you"
+player_hp: 10
+
+# Two timed statuses: a poison debuff (a wound per step) and a shield buff (mitigates combat).
+status venom poison 1
+status warded shield 2
+
+# Four world-bounded consumables — each is consumed on use (a second use finds it gone).
+consumable bile use -> status venom 6 "You swallow the warren-bile; venom floods your blood, and the ford will bear you now."
+consumable antidote use -> cure venom "You drink the antidote; the green fire in your veins goes cold."
+consumable salve use -> heal 4 "You break the salve over your wounds; the ache dulls."
+consumable ward use -> status warded 5 "You down the ward-brew; a cold shell closes over your skin."
+
+room mouth "The Warren Mouth"
+  A low crawl into the venom-warren; phials and flasks litter an old smuggler's cache.
+  items: bile, antidote, salve, ward
+  # The venom-ford is impassable unless the venom already runs in your blood.
+  exit down -> ford requires flag venom >= 1
+
+room ford "The Venom Ford"
+  A channel of luminous venom; only a thing already venom-blooded may wade it. The poison bites deeper with every step.
+  exit up -> mouth
+  exit north -> shrine
+
+room shrine "The Inner Shrine"
+  Past the ford, a still shrine; the Warren Relic burns green upon a black altar.
+  items: relic
+  exit south -> ford
+  exit up -> surface
+
+room surface "The Surface"
+  Clean air and open sky over the warren — the way home, if you carry the Relic.
+  exit down -> shrine

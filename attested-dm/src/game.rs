@@ -611,6 +611,106 @@ pub struct RefuelRule {
     pub spent_narration: String,
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// CONSUMABLES + STATUS EFFECTS — a bounded ITEM-USE + TIMED-EFFECT dimension. A
+// consumable is `use`d (riding the closed `Use` channel, exactly as a spell or an NPC
+// trade does — NO new GameAction), applies a WORLD-BOUNDED effect, and is CONSUMED
+// (removed from inventory, so a second use finds nothing). A status is a timed world
+// flag: a `shield` buff that mitigates combat while it lasts, or a `poison` debuff that
+// ticks a wound each STEP — decremented one per step the way light-oil burns. The AI
+// narrates the draught however it likes ("this elixir makes you INVINCIBLE"); the world
+// heals exactly the rule's N and not one point more. Prose is not power, at the level of
+// what you drink.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// **What a status FLAG does while it is active** (its counter `> 0`). A status is a plain world
+/// flag holding its remaining turns; every step decrements it by one (see [`GameWorld::statuses`]
+/// and the move bookkeeping), and while it is above zero the world reads its [`StatusKind`] into
+/// the mechanics — combat mitigation for a [`Self::Shield`], a per-step wound for a
+/// [`Self::Poison`]. The AI never writes a status value; only a world-bounded effect (a consumable,
+/// the step-decrement, a cure) does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StatusKind {
+    /// A BUFF: while active, mitigates `mitigate` damage off every blow a [`CombatEnemy`] lands
+    /// (stacking with worn [`CombatEnemy::armor`]) — a shield-elixir you drink before a boss.
+    Shield(i64),
+    /// A DEBUFF: while active, adds `damage` to [`PLAYER_WOUNDS_FLAG`] on every STEP taken (the
+    /// same on-chain move that decrements the counter) — a venom that races you to a cure.
+    Poison(i64),
+}
+
+/// **A timed status the world declares** — a buff/debuff carried as a world flag [`Self::flag`]
+/// holding its remaining turns. It is set to a duration by a consumable ([`ConsumableEffect::Status`]),
+/// decremented one per step (like light-oil), and cleared by a cure ([`ConsumableEffect::Cure`]) — all
+/// world-bounded flag writes; the count is the truth, never the prose. What it DOES while active is its
+/// [`Self::kind`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StatusRule {
+    /// The world flag holding this status's remaining turns (`> 0` = active).
+    pub flag: String,
+    /// What the status does while active — a [`StatusKind::Shield`] buff or [`StatusKind::Poison`] debuff.
+    pub kind: StatusKind,
+}
+
+impl StatusRule {
+    /// The status's remaining turns in the current world (`0` if never applied).
+    pub fn remaining(&self, world: &WorldCell) -> i64 {
+        world.flags.get(&self.flag).copied().unwrap_or(0)
+    }
+
+    /// Whether the status is active right now (its counter `> 0`).
+    pub fn active(&self, world: &WorldCell) -> bool {
+        self.remaining(world) > 0
+    }
+}
+
+/// **The bounded effect a consumable has when it is `use`d.** This is the whole affordance of a
+/// consumable: it can HEAL (reduce [`PLAYER_WOUNDS_FLAG`] by a fixed N, clamped at zero — a
+/// jailbroken over-heal narration cannot exceed N), grant a timed [`StatusRule`] (set its flag to a
+/// duration), CURE a status (zero its flag), set a plain world flag a downstream [`Gate`] reads, or
+/// REVEAL (pure lore, no world change beyond the consumption). Every case is a plain, cap-gated
+/// [`WorldEffect`] batched with the [`WorldEffect::ConsumeItem`] that removes the item — a consumable
+/// can never grant an off-whitelist item or open a non-declared gate; it composes with the caps and
+/// the gates, it does not bypass them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ConsumableEffect {
+    /// Reduce [`PLAYER_WOUNDS_FLAG`] by `n`, clamped at zero (a healing draught). The world heals
+    /// EXACTLY `n`; no narration heals more.
+    Heal(i64),
+    /// Grant a timed status: set the named status flag to `duration` turns (a buff/debuff draught).
+    /// The flag must be a declared [`StatusRule`].
+    Status {
+        /// The status flag to set (a declared [`StatusRule::flag`]).
+        flag: String,
+        /// The number of turns to grant.
+        duration: i64,
+    },
+    /// Cure a status: set the named status flag to zero (an antidote). The flag should be a declared
+    /// [`StatusRule`].
+    Cure(String),
+    /// Set a plain world flag (name, value) — a consumable whose bounded effect is a flag a
+    /// downstream [`Gate`] reads.
+    SetFlag(String, i64),
+    /// No world change beyond the consumption — a consumable that only reveals lore as it is used.
+    Reveal,
+}
+
+/// **A consumable the world declares** — an item that, when `use`d (riding [`GameAction::Use`]), does
+/// a bounded [`ConsumableEffect`] and is CONSUMED (a [`WorldEffect::ConsumeItem`] removes it from the
+/// inventory, so it cannot be used twice). Using a consumable you do not hold is refused
+/// ([`GameRefusal::NotHolding`]) — and once spent, the item is gone, so a second use is refused the
+/// same way (world unchanged, no receipt: the anti-ghost tooth). A consumable is usable wherever you
+/// hold it (it is not room-scoped), matching how a potion travels in your pack.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConsumableRule {
+    /// The item that is consumed. It must be a world-registered ([`GameWorld::all_items`]) item.
+    pub item: String,
+    /// The bounded effect the consumable has when used.
+    pub effect: ConsumableEffect,
+    /// The world's account of using it (distinct from the AI's flavour narration).
+    pub narration: String,
+}
+
 /// **The win condition** — reach `room` while HOLDING `item`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Objective {
@@ -655,6 +755,13 @@ pub struct GameWorld {
     /// The bounded spell CONTEXTS — what a learned spell does, where. Off these rules, a learned
     /// cast fizzles (a legal narration turn with no effect).
     pub spell_rules: Vec<SpellRule>,
+    /// The consumables this world declares — items that, when `use`d, apply a bounded effect and are
+    /// consumed. Empty for a dungeon with no consumable dimension (the original four), so the
+    /// mechanic is purely additive. See [`ConsumableRule`].
+    pub consumables: Vec<ConsumableRule>,
+    /// The timed statuses this world declares — buffs/debuffs carried as flags, decremented per step.
+    /// Empty for a dungeon with no status dimension (the original four). See [`StatusRule`].
+    pub statuses: Vec<StatusRule>,
     /// The player's maximum hit points — accumulated [`PLAYER_WOUNDS_FLAG`] `>=` this is death
     /// (wire it as a [`LoseCondition`] for a combat dungeon). Non-combat dungeons ignore it.
     pub player_max_hp: i64,
@@ -718,6 +825,12 @@ impl GameWorld {
     /// declared is an unknown incantation — the resolver never routes it to magic.
     pub fn is_spell_word(&self, word: &str) -> bool {
         self.spells.iter().any(|s| s.word == word)
+    }
+
+    /// The consumable rule for `item`, if the world declares one. A `use` of a declared consumable
+    /// (that the player holds) routes to [`resolve_consumable`]; a non-consumable falls through.
+    pub fn consumable(&self, item: &str) -> Option<&ConsumableRule> {
+        self.consumables.iter().find(|c| c.item == item)
     }
 
     /// The declared [`Spell`] for `word`, if any.
@@ -1042,6 +1155,13 @@ pub fn resolve_action(map: &GameWorld, world: &WorldCell, action: &GameAction) -
                     }
                 }
             }
+            // CONSUMABLE PATH: a held, world-declared consumable applies its bounded effect and is
+            // consumed (removed from inventory) — one Batch turn. Reached only past the holding check
+            // above, so a spent consumable (already gone from inventory) never gets here: it refused
+            // with NotHolding, no receipt. The prose has no power over what the draught does.
+            if let Some(consumable) = map.consumable(item) {
+                return resolve_consumable(map, world, consumable);
+            }
             let rule = map
                 .use_rules
                 .iter()
@@ -1237,6 +1357,46 @@ fn resolve_refuel(
     })
 }
 
+/// **Resolve a consumable** — drink the potion; the world decides what it does, not the prose. The
+/// bounded [`ConsumableEffect`] is applied AND the item is removed ([`WorldEffect::ConsumeItem`]) in
+/// ONE [`WorldEffect::Batch`] (so a rewritten consume breaks the receipt), leaving the world in a
+/// single verified turn. A HEAL reduces [`PLAYER_WOUNDS_FLAG`] by EXACTLY its N clamped at zero — a
+/// jailbroken *"this elixir makes you invincible"* heals not one point past N. A status grant/cure
+/// is a plain flag write; a plain-flag consumable rides [`WorldEffect::SetFlag`]; a reveal changes
+/// nothing but the consumption. The consumption is REAL: the item leaves the inventory, so a second
+/// use finds it gone and is refused ([`GameRefusal::NotHolding`]) — no receipt, the anti-ghost tooth.
+fn resolve_consumable(map: &GameWorld, world: &WorldCell, c: &ConsumableRule) -> Outcome {
+    let consume = WorldEffect::ConsumeItem(c.item.clone());
+    let effect = match &c.effect {
+        ConsumableEffect::Heal(n) => {
+            let wounds = world.flags.get(PLAYER_WOUNDS_FLAG).copied().unwrap_or(0);
+            // Heal EXACTLY n, clamped at zero — the world's arithmetic, not the narrator's claim.
+            let healed = (wounds - n).max(0);
+            WorldEffect::Batch(vec![
+                WorldEffect::SetFlag(PLAYER_WOUNDS_FLAG.to_string(), healed),
+                consume,
+            ])
+        }
+        ConsumableEffect::Status { flag, duration } => {
+            WorldEffect::Batch(vec![WorldEffect::SetFlag(flag.clone(), *duration), consume])
+        }
+        ConsumableEffect::Cure(flag) => {
+            WorldEffect::Batch(vec![WorldEffect::SetFlag(flag.clone(), 0), consume])
+        }
+        ConsumableEffect::SetFlag(k, v) => {
+            WorldEffect::Batch(vec![WorldEffect::SetFlag(k.clone(), *v), consume])
+        }
+        // A pure reveal still consumes the item (you drink it), but changes nothing else.
+        ConsumableEffect::Reveal => consume,
+    };
+    let effect = Some(effect);
+    Outcome::Legal(Resolution {
+        narration: c.narration.clone(),
+        status: status_after(map, world, effect.as_ref()),
+        effect,
+    })
+}
+
 /// **Resolve one combat exchange** — the world computes the HP; the AI narrates the blow. Your
 /// armed strike takes `weapon_damage` off the foe (unarmed only `unarmed_damage`); if the foe
 /// survives it strikes back for `attack` (mitigated by held `armor`). Both totals persist as
@@ -1267,12 +1427,22 @@ fn resolve_combat(map: &GameWorld, world: &WorldCell, enemy: &CombatEnemy) -> Ou
         });
     }
 
-    // The foe survives and strikes back. Armor mitigates the incoming blow (never below 0).
-    let mitigation = match &enemy.armor {
+    // The foe survives and strikes back. Armor mitigates the incoming blow (never below 0), and so
+    // does any ACTIVE shield status (a drunk shield-elixir) — both are world-read, never the prose.
+    let armor_mit = match &enemy.armor {
         Some((item, m)) if world.inventory.contains(item) => *m,
         _ => 0,
     };
-    let incoming = (enemy.attack - mitigation).max(0);
+    let shield_mit: i64 = map
+        .statuses
+        .iter()
+        .filter(|s| matches!(s.kind, StatusKind::Shield(_)) && s.active(world))
+        .map(|s| match s.kind {
+            StatusKind::Shield(m) => m,
+            _ => 0,
+        })
+        .sum();
+    let incoming = (enemy.attack - armor_mit - shield_mit).max(0);
     let player_wounds = world.flags.get(PLAYER_WOUNDS_FLAG).copied().unwrap_or(0);
     let new_player_wounds = player_wounds + incoming;
     // One exchange, two counters advanced atomically — the world's HP bookkeeping in a Batch.
@@ -1301,27 +1471,52 @@ fn resolve_combat(map: &GameWorld, world: &WorldCell, enemy: &CombatEnemy) -> Ou
 /// before (the original three dungeons are byte-for-byte unchanged).
 fn move_effect(map: &GameWorld, world: &WorldCell, to_room: &str) -> WorldEffect {
     let advance = WorldEffect::AdvanceScene(to_room.to_string());
-    let light = match &map.light {
-        Some(l) => l,
-        None => return advance,
-    };
-    // Oil burns only while a lamp is carried WITH oil left. A dead/absent lamp burns nothing (and a
-    // dark room was already refused above, so a legal step into the dark always has oil to spend).
-    if !light.burning(world) {
-        return advance;
-    }
-    let remaining = light.oil(world) - 1;
-    let mut effects = vec![
-        advance,
-        WorldEffect::SetFlag(light.counter.clone(), remaining),
-    ];
-    // STRANDED: the last oil spent stepping into the dark — the dark takes the player.
-    if remaining == 0 && light.is_dark(to_room) {
-        if let Some((flag, v)) = &light.stranded {
-            effects.push(WorldEffect::SetFlag(flag.clone(), *v));
+    let mut effects = vec![advance];
+
+    // LIGHT: a carried, burning lamp spends one oil this step; the last oil into the dark strands.
+    if let Some(light) = &map.light {
+        // Oil burns only while a lamp is carried WITH oil left. A dead/absent lamp burns nothing (and
+        // a dark room was already refused above, so a legal step into the dark always has oil to spend).
+        if light.burning(world) {
+            let remaining = light.oil(world) - 1;
+            effects.push(WorldEffect::SetFlag(light.counter.clone(), remaining));
+            // STRANDED: the last oil spent stepping into the dark — the dark takes the player.
+            if remaining == 0 && light.is_dark(to_room) {
+                if let Some((flag, v)) = &light.stranded {
+                    effects.push(WorldEffect::SetFlag(flag.clone(), *v));
+                }
+            }
         }
     }
-    WorldEffect::Batch(effects)
+
+    // STATUS: every ACTIVE timed status decrements by one this step (like the light-oil burn), and a
+    // POISON that is active this step ticks its wound into the SAME on-chain move. All world-computed
+    // — the counter is the truth; a jailbroken "the venom cannot touch me" ticks exactly the same.
+    let mut poison_this_step: i64 = 0;
+    for status in &map.statuses {
+        let remaining = status.remaining(world);
+        if remaining > 0 {
+            effects.push(WorldEffect::SetFlag(status.flag.clone(), remaining - 1));
+            if let StatusKind::Poison(damage) = status.kind {
+                poison_this_step += damage;
+            }
+        }
+    }
+    if poison_this_step > 0 {
+        let wounds = world.flags.get(PLAYER_WOUNDS_FLAG).copied().unwrap_or(0);
+        effects.push(WorldEffect::SetFlag(
+            PLAYER_WOUNDS_FLAG.to_string(),
+            wounds + poison_this_step,
+        ));
+    }
+
+    // With no light and no active status, a step is the bare scene-advance exactly as before (the
+    // original four dungeons are byte-for-byte unchanged); otherwise everything rides one Batch turn.
+    if effects.len() == 1 {
+        effects.pop().unwrap()
+    } else {
+        WorldEffect::Batch(effects)
+    }
 }
 
 /// Compute the game status after `effect` would land: the post-state's room + inventory +
@@ -1331,31 +1526,44 @@ fn move_effect(map: &GameWorld, world: &WorldCell, to_room: &str) -> WorldEffect
 fn status_after(map: &GameWorld, world: &WorldCell, effect: Option<&WorldEffect>) -> GameStatus {
     let mut room = world.scene.clone();
     let mut extra_items: BTreeSet<String> = BTreeSet::new();
+    let mut removed_items: BTreeSet<String> = BTreeSet::new();
     let mut flag_over: BTreeMap<String, i64> = BTreeMap::new();
 
     fn collect(
         e: &WorldEffect,
         room: &mut String,
         extra_items: &mut BTreeSet<String>,
+        removed_items: &mut BTreeSet<String>,
         flag_over: &mut BTreeMap<String, i64>,
     ) {
         match e {
             WorldEffect::AdvanceScene(s) => *room = s.clone(),
             WorldEffect::GrantItem(i) => {
+                removed_items.remove(i);
                 extra_items.insert(i.clone());
+            }
+            WorldEffect::ConsumeItem(i) => {
+                extra_items.remove(i);
+                removed_items.insert(i.clone());
             }
             WorldEffect::SetFlag(k, v) => {
                 flag_over.insert(k.clone(), *v);
             }
             WorldEffect::Batch(v) => {
                 for sub in v {
-                    collect(sub, room, extra_items, flag_over);
+                    collect(sub, room, extra_items, removed_items, flag_over);
                 }
             }
         }
     }
     if let Some(e) = effect {
-        collect(e, &mut room, &mut extra_items, &mut flag_over);
+        collect(
+            e,
+            &mut room,
+            &mut extra_items,
+            &mut removed_items,
+            &mut flag_over,
+        );
     }
 
     let flag_val = |k: &str| -> i64 {
@@ -1364,8 +1572,10 @@ fn status_after(map: &GameWorld, world: &WorldCell, effect: Option<&WorldEffect>
             .copied()
             .unwrap_or_else(|| world.flags.get(k).copied().unwrap_or(0))
     };
-    let holds =
-        |item: &str| -> bool { world.inventory.contains(item) || extra_items.contains(item) };
+    let holds = |item: &str| -> bool {
+        !removed_items.contains(item)
+            && (world.inventory.contains(item) || extra_items.contains(item))
+    };
     // Lose FIRST — death precedes any objective.
     for l in &map.lose {
         if flag_val(&l.flag) >= l.at_least {
@@ -1888,6 +2098,8 @@ pub fn sunken_vault() -> GameWorld {
         dialogue: Vec::new(),
         spells: Vec::new(),
         spell_rules: Vec::new(),
+        consumables: Vec::new(),
+        statuses: Vec::new(),
         player_max_hp: 0,
         light: None,
         start: "shore".into(),
@@ -2160,6 +2372,8 @@ pub fn bramble_keep() -> GameWorld {
         dialogue,
         spells: Vec::new(),
         spell_rules: Vec::new(),
+        consumables: Vec::new(),
+        statuses: Vec::new(),
         player_max_hp: 10,
         light: None,
         start: "gatehouse".into(),
@@ -2534,6 +2748,8 @@ pub fn starfall_spire() -> GameWorld {
         dialogue,
         spells,
         spell_rules,
+        consumables: Vec::new(),
+        statuses: Vec::new(),
         player_max_hp: 10,
         light: None,
         start: "threshold".into(),
@@ -2803,6 +3019,8 @@ pub fn deepdark_mine() -> GameWorld {
         dialogue,
         spells: Vec::new(),
         spell_rules: Vec::new(),
+        consumables: Vec::new(),
+        statuses: Vec::new(),
         player_max_hp: 0,
         light: Some(light),
         start: "pithead".into(),
@@ -2814,6 +3032,308 @@ pub fn deepdark_mine() -> GameWorld {
             flag: "stranded".into(),
             at_least: 1,
             description: "stranded in the dark when the lamp burned out".into(),
+        }],
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE VENOMOUS DEEP — the fifth complete adventure, and the showcase for the bounded
+// CONSUMABLE + STATUS-EFFECT dimension: drink the wyrm's bile to walk its venom-ford (the
+// venom in your blood parts the venom-water) — but now the poison ticks a wound each step,
+// racing you to a cure; ward yourself with a shield-elixir before you wake the wyrm, or its
+// blows fell you; and time the antidote so the venom does not take you on the way out. The AI
+// narrates every draught however grandly it likes; the world heals exactly N and ticks exactly
+// the counter, no more. Prose is not power, at the level of what you drink.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// **THE VENOMOUS DEEP** — a complete, solvable fourteen-room descent into a drowned wyrm-crypt, and
+/// the showcase for the bounded CONSUMABLE + STATUS system. Distinct in theme from the drowned SUNKEN
+/// VAULT, the overgrown BRAMBLE KEEP, the collapsing STARFALL SPIRE, and the sunless DEEPDARK MINE: a
+/// flooded ossuary whose heart is a venom-ford no un-poisoned thing can cross. The whole critical path
+/// turns on three consumables + two timed statuses, and every one is LOAD-BEARING — the deep cannot be
+/// won without them, and no jailbroken narration can substitute for them.
+///
+/// The model, kept honest at every step (see [`ConsumableRule`] / [`StatusRule`]): a consumable is
+/// `use`d (riding the closed [`GameAction::Use`] channel, no new action), applies a world-bounded
+/// effect, and is CONSUMED — the item leaves the pack, so a second use finds nothing (refused, no
+/// receipt). A status is a world flag holding its remaining turns, decremented one per STEP (like the
+/// lamp-oil burn): a `venom` [`StatusKind::Poison`] ticks a wound each step, a `warded`
+/// [`StatusKind::Shield`] mitigates the wyrm's blows while it lasts. The counter is the truth; a
+/// jailbroken *"the venom cannot touch me"* ticks exactly the same, and *"this elixir makes me
+/// invincible"* heals exactly the salve's N and not one point more.
+///
+/// The critical path, in forced order (player HP 12; poison ticks 2/step, shield mitigates 3):
+///
+/// 1. in the **gatehouse** take the **salve** (a [`ConsumableEffect::Heal`]); descend to the
+///    **undercroft** and take the **antidote** (a [`ConsumableEffect::Cure`]) and the **shield draught**
+///    (a `warded` [`StatusKind::Shield`] buff); off it, the **armoury** holds the **harpoon** (the
+///    wyrm's bane) and the **wyrm bile** (a `venom` [`StatusKind::Poison`] draught);
+/// 2. at the **ford bank**, **drink the wyrm bile** — the venom floods your blood (`venom = 8`), and
+///    ONLY while venom-blooded may you cross the **venom ford** (a [`Gate::NeedsFlag`] `venom >= 1`).
+///    Now the poison ticks a wound every step: you are on a timer;
+/// 3. cross the ford and climb to the **wyrm hall**. **Drink the shield draught** BEFORE you strike —
+///    the Wyrm hits for 5 a round; warded you take 2, unwarded you are torn apart over the fight (the
+///    shield is load-bearing, and a lone salve cannot outheal it). **Fight the Wyrm** with the harpoon
+///    (bare-handed it takes no wound and kills you) — felling it sets `wyrm_felled`, opening the shrine;
+/// 4. **drink the antidote** to still the venom (`venom = 0`) — without it the poison ticks you to death
+///    on the climb out (the antidote is load-bearing); take the **venom heart** in the **inner shrine**;
+/// 5. climb the **ascent** and the **crypt gate** to the **surface** — reach it HOLDING the venom heart
+///    to WIN.
+///
+/// Side content off the path: the **stillroom** (a silver censer — atmosphere), the **flooded nave** (a
+/// pearl), and the **ossuary**, where a **Drowned Oracle** tells you the wyrm's undoing
+/// ([`DialogueGrant::Reveals`] — a hint with no mechanical power).
+pub fn venom_deep() -> GameWorld {
+    let rooms = vec![
+        Room::new(
+            "gatehouse",
+            "Drowned Gatehouse",
+            "A silt-choked gate half-open to the crypt; a flask of green salve rests in a wall-niche.",
+        )
+        .item("salve")
+        .exit("east", Exit::open("stillroom"))
+        .exit("down", Exit::open("undercroft")),
+        Room::new(
+            "stillroom",
+            "Ruined Stillroom",
+            "A collapsed apothecary of shattered alembics; a tarnished silver censer lies in the muck.",
+        )
+        .item("silver_censer")
+        .exit("west", Exit::open("gatehouse")),
+        Room::new(
+            "undercroft",
+            "Bone Undercroft",
+            "A low vault of stacked bone. On a slab wait a phial of antidote and a draught of shield-brew.",
+        )
+        .item("antidote")
+        .item("shield_draught")
+        .exit("up", Exit::open("gatehouse"))
+        .exit("north", Exit::open("armoury"))
+        .exit("east", Exit::open("ossuary"))
+        .exit("down", Exit::open("ford_bank")),
+        Room::new(
+            "armoury",
+            "Flooded Armoury",
+            "Rotted weapon-racks under black water — but one barbed harpoon still holds, and beside it a \
+             stoppered flask of the wyrm's own bile.",
+        )
+        .item("harpoon")
+        .item("wyrm_bile")
+        .exit("south", Exit::open("undercroft")),
+        Room::new(
+            "ossuary",
+            "The Ossuary",
+            "Walls of mortared skulls under weeping stone; a bloated shade drifts among them — the \
+             Drowned Oracle.",
+        )
+        .exit("west", Exit::open("undercroft")),
+        Room::new(
+            "ford_bank",
+            "The Ford Bank",
+            "A shelf of wet stone above a channel of luminous venom; the far bank is lost in green murk. \
+             Only a thing already venom-blooded could wade it.",
+        )
+        .exit("up", Exit::open("undercroft"))
+        // The venom-ford is impassable unless the venom runs in your blood (drink the bile).
+        .exit(
+            "north",
+            Exit::gated("venom_ford", Gate::NeedsFlag("venom".into(), 1)),
+        ),
+        Room::new(
+            "venom_ford",
+            "The Venom Ford",
+            "You wade the burning channel; the venom in your veins answers the venom in the water and \
+             lets you pass. Every moment here, the poison works deeper.",
+        )
+        .exit("south", Exit::open("ford_bank"))
+        .exit("north", Exit::open("drowned_stair")),
+        Room::new(
+            "drowned_stair",
+            "The Drowned Stair",
+            "A spiral stair rising from the ford; a side-arch opens west onto a flooded nave.",
+        )
+        .exit("south", Exit::open("venom_ford"))
+        .exit("west", Exit::open("flooded_nave"))
+        .exit("up", Exit::open("wyrm_hall")),
+        Room::new(
+            "flooded_nave",
+            "The Flooded Nave",
+            "A submerged chapel of drowned pews; a single pale pearl glimmers on the altar-stone.",
+        )
+        .item("pearl")
+        .exit("east", Exit::open("drowned_stair")),
+        Room::new(
+            "wyrm_hall",
+            "The Wyrm Hall",
+            "A vast drowned nave where the Bone Wyrm coils — a serpent of fused skeletons, its skull \
+             swinging toward you. The shrine lies barred beyond it.",
+        )
+        .exit("south", Exit::open("drowned_stair"))
+        // Sealed until the Wyrm is felled.
+        .exit(
+            "north",
+            Exit::gated("inner_shrine", Gate::NeedsFlag("wyrm_felled".into(), 1)),
+        ),
+        Room::new(
+            "inner_shrine",
+            "The Inner Shrine",
+            "Past the fallen Wyrm, a still shrine; upon a coral altar burns the Venom Heart, a fist of \
+             green fire.",
+        )
+        .item("venom_heart")
+        .exit("south", Exit::open("wyrm_hall"))
+        .exit("up", Exit::open("ascent")),
+        Room::new(
+            "ascent",
+            "The Ascent",
+            "A steep flooded stair climbing back toward the light, rung with drowned chains.",
+        )
+        .exit("down", Exit::open("inner_shrine"))
+        .exit("up", Exit::open("crypt_gate")),
+        Room::new(
+            "crypt_gate",
+            "The Crypt Gate",
+            "A shattered portcullis; grey daylight leaks through from the world above.",
+        )
+        .exit("down", Exit::open("ascent"))
+        .exit("up", Exit::open("surface")),
+        Room::new(
+            "surface",
+            "The Surface",
+            "Cold clean air and open sky over the drowned crypt — the way home, if you carry the Heart.",
+        )
+        .exit("down", Exit::open("crypt_gate")),
+    ];
+
+    let mut room_map = BTreeMap::new();
+    for r in rooms {
+        room_map.insert(r.id.clone(), r);
+    }
+
+    // The three world-bounded consumables (usable wherever held; each is consumed on use):
+    let consumables = vec![
+        // The salve HEALS exactly 4 wounds, clamped at zero — no narration heals a point more.
+        ConsumableRule {
+            item: "salve".into(),
+            effect: ConsumableEffect::Heal(4),
+            narration:
+                "You break the salve over your wounds; torn flesh knits, and the ache dulls.".into(),
+        },
+        // The wyrm bile grants the `venom` POISON status for 8 turns — the ford's key AND the timer.
+        ConsumableRule {
+            item: "wyrm_bile".into(),
+            effect: ConsumableEffect::Status {
+                flag: "venom".into(),
+                duration: 8,
+            },
+            narration:
+                "You swallow the wyrm's bile; venom floods your veins, green and burning — now \
+                        the ford will bear you, but the poison is already working."
+                    .into(),
+        },
+        // The shield draught grants the `warded` SHIELD status for 8 turns — mitigates the Wyrm.
+        ConsumableRule {
+            item: "shield_draught".into(),
+            effect: ConsumableEffect::Status {
+                flag: "warded".into(),
+                duration: 8,
+            },
+            narration: "You down the shield-brew; a cold ward closes over your skin like plate."
+                .into(),
+        },
+        // The antidote CURES the `venom` (sets it to zero) — the only thing that stops the ticking.
+        ConsumableRule {
+            item: "antidote".into(),
+            effect: ConsumableEffect::Cure("venom".into()),
+            narration:
+                "You drink the antidote; the green fire in your blood gutters out and goes cold."
+                    .into(),
+        },
+    ];
+
+    let statuses = vec![
+        // The venom debuff: while active, a wound each step (see move bookkeeping).
+        StatusRule {
+            flag: "venom".into(),
+            kind: StatusKind::Poison(2),
+        },
+        // The shield buff: while active, mitigates 3 off every blow the Wyrm lands.
+        StatusRule {
+            flag: "warded".into(),
+            kind: StatusKind::Shield(3),
+        },
+    ];
+
+    let npcs = vec![Npc::new(
+        "ossuary",
+        "oracle",
+        "Drowned Oracle",
+        "a bloated shade who remembers the wyrm's undoing",
+    )];
+    let dialogue = vec![DialogueRule {
+        room: "ossuary".into(),
+        npc: "oracle".into(),
+        topic: "wyrm".into(),
+        requires: None,
+        grant: DialogueGrant::Reveals,
+        granted_narration:
+            "The Oracle's jaw unhinges: 'Drink the wyrm's bile to walk its ford — the venom will \
+             know its own and let you pass. But then it works in you: carry the antidote, and do not \
+             tarry. Ward yourself before you wake the Bone Wyrm; the harpoon is its bane, and nothing \
+             else will bite.'"
+                .into(),
+        withheld_narration: String::new(),
+    }];
+
+    let mut combat = BTreeMap::new();
+    combat.insert(
+        "wyrm_hall".to_string(),
+        CombatEnemy {
+            room: "wyrm_hall".into(),
+            name: "wyrm".into(),
+            hp: 9,
+            armed_by: "harpoon".into(),
+            weapon_damage: 3,  // three harpoon strikes fell it
+            unarmed_damage: 0, // bare hands never scratch fused bone
+            attack: 5,         // each surviving round it rends you for 5 (warded: 2)
+            armor: None,
+            victory_flag: ("wyrm_felled".into(), 1),
+            victory_narration:
+                "The harpoon punches through the Bone Wyrm's skull; the whole coil of \
+                                skeletons clatters apart into the black water."
+                    .into(),
+            hit_narration: "The harpoon splinters bone — the Wyrm recoils, then rakes you with a \
+                            wing of ribs."
+                .into(),
+            flail_narration:
+                "Your bare blows glance off the fused bone; the Wyrm's ribs open a long \
+                              cold wound across you."
+                    .into(),
+        },
+    );
+
+    GameWorld {
+        rooms: room_map,
+        use_rules: Vec::new(),
+        hostiles: BTreeMap::new(),
+        combat,
+        npcs,
+        dialogue,
+        spells: Vec::new(),
+        spell_rules: Vec::new(),
+        consumables,
+        statuses,
+        player_max_hp: 12,
+        light: None,
+        start: "gatehouse".into(),
+        objective: Objective {
+            room: "surface".into(),
+            holding: "venom_heart".into(),
+        },
+        lose: vec![LoseCondition {
+            flag: PLAYER_WOUNDS_FLAG.into(),
+            at_least: 12,
+            description: "torn apart by the Bone Wyrm, or taken by the venom in your blood".into(),
         }],
     }
 }

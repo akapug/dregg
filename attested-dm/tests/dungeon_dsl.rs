@@ -7,12 +7,13 @@
 //!   * each validator error fires on a crafted-bad source — NON-VACUOUSLY (a good source has none);
 //!   * a malformed source fails closed with a line number.
 
-use attested_dm::game::{DialogueGrant, Gate, SpellEffect};
+use attested_dm::game::{ConsumableEffect, DialogueGrant, Gate, SpellEffect, StatusKind};
 use attested_dm::{parse_dungeon, parse_world, validate, GameSession, GameStatus, PlayResult};
 
 const LANTERN_FEN: &str = include_str!("../dungeons/lantern_fen.dungeon");
 const EMBER_OBSERVATORY: &str = include_str!("../dungeons/ember_observatory.dungeon");
 const BROKEN: &str = include_str!("../dungeons/broken.dungeon");
+const VENOM_WARREN: &str = include_str!("../dungeons/venom_warren.dungeon");
 
 // ── 1. An authored dungeon plays to a WIN through the real engine, and re-verifies. ──
 
@@ -407,4 +408,126 @@ room b \"B\"
         parse_dungeon(src).is_ok(),
         "a mere warning must not fail-closed a winnable world"
     );
+}
+
+// ── 4. CONSUMABLES + STATUS EFFECTS in the DSL — round-trip, a winning playthrough, and the
+//       fail-closed validator on a broken consumable. ──
+
+/// Every consumable + status construct round-trips into the expected `GameWorld` shape: a `heal`,
+/// a status GRANT, a `cure`, both a poison + a shield `status` declaration.
+#[test]
+fn consumable_and_status_constructs_round_trip() {
+    let w = parse_dungeon(VENOM_WARREN).expect("the venom warren parses + validates clean");
+
+    // Two declared statuses: a poison debuff and a shield buff, each with its magnitude.
+    assert!(w
+        .statuses
+        .iter()
+        .any(|s| s.flag == "venom" && matches!(s.kind, StatusKind::Poison(1))));
+    assert!(w
+        .statuses
+        .iter()
+        .any(|s| s.flag == "warded" && matches!(s.kind, StatusKind::Shield(2))));
+
+    // The four consumables: a heal (exactly N), a timed status grant, a cure, a shield grant.
+    assert!(w
+        .consumables
+        .iter()
+        .any(|c| c.item == "salve" && matches!(c.effect, ConsumableEffect::Heal(4))));
+    assert!(w.consumables.iter().any(|c| c.item == "bile"
+        && matches!(&c.effect, ConsumableEffect::Status { flag, duration: 6 } if flag == "venom")));
+    assert!(w
+        .consumables
+        .iter()
+        .any(|c| c.item == "antidote"
+            && matches!(&c.effect, ConsumableEffect::Cure(f) if f == "venom")));
+    assert!(w.consumables.iter().any(|c| c.item == "ward"
+        && matches!(&c.effect, ConsumableEffect::Status { flag, duration: 5 } if flag == "warded")));
+
+    // The poison-status flag doubles as the ford's gate — a status flag read by a Gate.
+    let ford_gate = w
+        .room("mouth")
+        .unwrap()
+        .exits
+        .get("down")
+        .unwrap()
+        .gate
+        .clone();
+    assert!(matches!(ford_gate, Some(Gate::NeedsFlag(f, 1)) if f == "venom"));
+}
+
+/// The hand-authored venom warren PLAYS to a WIN through the real engine — the poison is
+/// load-bearing (drink the bile to cross the ford), the antidote stills it, and the chain verifies.
+#[test]
+fn an_authored_consumable_dungeon_plays_to_a_win() {
+    let world = parse_dungeon(VENOM_WARREN).expect("parses");
+    let mut game = GameSession::open(world);
+
+    // Without drinking the bile, the venom-ford is barred (the status flag IS the gate).
+    match game.command("hero", "go down") {
+        PlayResult::Refused(_) => {}
+        other => panic!("the ford must be barred to an un-poisoned diver, got {other:?}"),
+    }
+
+    for cmd in [
+        "take bile",
+        "take antidote",
+        "take salve",
+        "use bile", // venom floods the blood — now the ford will bear you
+        "go down",  // venom_ford: poison ticks
+        "go north", // shrine
+        "take relic",
+        "use antidote", // still the venom before it takes you
+        "go up",        // surface → WIN
+    ] {
+        match game.command("hero", cmd) {
+            PlayResult::Landed { .. } => {}
+            other => panic!("the authored critical path should land `{cmd}`, got {other:?}"),
+        }
+    }
+    assert_eq!(
+        game.status(),
+        GameStatus::Won,
+        "the venom warren is winnable"
+    );
+    assert!(game.world().inventory.contains("relic"));
+    // The bile was consumed (a second use finds it gone).
+    assert!(!game.world().inventory.contains("bile"));
+    game.verify()
+        .expect("the authored playthrough verifies on-chain");
+}
+
+/// FAIL-CLOSED: a consumable that names an item placed in NO room is caught (it could never be
+/// drunk), named, and refused at parse — non-vacuously (the good warren has zero such errors).
+#[test]
+fn validator_consumable_on_unplaced_item() {
+    // Baseline: the good warren has no consumable errors.
+    assert!(
+        errors(VENOM_WARREN).is_empty(),
+        "the good warren validates clean: {:?}",
+        errors(VENOM_WARREN)
+    );
+    // A consumable whose item is never placed anywhere.
+    let src = "\
+start: a
+objective: reach a holding prize
+consumable phantom_tonic use -> heal 2 \"you sip a tonic that does not exist\"
+room a \"A\"
+  items: prize
+";
+    assert_fires(src, "consumable `phantom_tonic` is never placed");
+}
+
+/// FAIL-CLOSED: a consumable that grants/cures a status no `status` line declares is caught — the
+/// buff it promises would do nothing.
+#[test]
+fn validator_consumable_grants_undeclared_status() {
+    let src = "\
+start: a
+objective: reach a holding prize
+consumable draught use -> status phantom_buff 3 \"a buff that no status declares\"
+room a \"A\"
+  items: prize, draught
+";
+    assert_fires(src, "status `phantom_buff`");
 }
