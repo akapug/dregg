@@ -32,7 +32,7 @@
 //!   `/narrate` lane. The receipt does not prove a real model produced the bytes; the resolver,
 //!   the cap gate, and the chain are the real teeth.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 
 use attested_dm::{
@@ -534,6 +534,75 @@ pub struct GameState {
     world_name: String,
     theme: String,
     last_narrator_kind: String,
+    /// The COLLECTIVE lane's state: the currently-open vote round over the shared party's next
+    /// move, if any. `None` between rounds. A `/party/close` resolves the winner through the SAME
+    /// `/game/act` path and clears it; a `/game/reset` rebuilds the whole `GameState` and so drops
+    /// any open round (a fresh dungeon starts with no vote in progress).
+    party: Option<VoteRound>,
+    /// The monotonic round-id counter (so each opened round has a stable id across its life).
+    next_round_id: u64,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The COLLECTIVE lane — a crowd steers ONE shared party through the same dungeon by vote.
+//
+// HONEST SCOPE: this is a simple, in-service MAJORITY VOTE among the seated party — one
+// write-once ballot per voter per round, a plain per-option tally, the plurality winner
+// (ties broken deterministically by lowest optionId). It is NOT the federation-grade
+// `CollectiveChoiceEngine` / quorum certificate — it is labeled plainly as a majority vote
+// everywhere it surfaces. What stays load-bearing is UNCHANGED: the crowd only DECIDES the
+// command; the WORLD still RESOLVES it through `/game/act` (a voted-for locked exit is still
+// refused deterministically, lands no receipt, and the party must vote again).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// One candidate action on the ballot — derived from the current `/game/state` (an open or
+/// locked exit, an item here, or a contextual action). `id` is a stable index within the round.
+#[derive(Clone)]
+struct BallotOption {
+    id: usize,
+    command: String,
+    label: String,
+}
+
+/// An open vote round over one frozen slate of [`BallotOption`]s. `votes` is write-once per
+/// voter (`voter -> optionId`); a second ballot from the same voter is refused.
+struct VoteRound {
+    id: u64,
+    options: Vec<BallotOption>,
+    votes: BTreeMap<String, usize>,
+}
+
+impl VoteRound {
+    /// Per-option counts over the cast ballots (index-aligned with `options`).
+    fn counts(&self) -> Vec<usize> {
+        let mut counts = vec![0usize; self.options.len()];
+        for &oid in self.votes.values() {
+            if let Some(c) = counts.get_mut(oid) {
+                *c += 1;
+            }
+        }
+        counts
+    }
+
+    /// The plurality winner's index, ties broken by lowest optionId (options are already in id
+    /// order, so the first option holding the max count wins). `None` iff there are no options.
+    fn winner_index(&self) -> Option<usize> {
+        let counts = self.counts();
+        counts
+            .iter()
+            .enumerate()
+            .max_by_key(|(i, c)| (**c, std::cmp::Reverse(*i)))
+            .map(|(i, _)| i)
+    }
+
+    /// True iff more than one option shares the maximum count (a tie the lowest-id rule breaks).
+    fn is_tie(&self) -> bool {
+        let counts = self.counts();
+        match counts.iter().max() {
+            Some(&m) => m > 0 && counts.iter().filter(|&&c| c == m).count() > 1,
+            None => false,
+        }
+    }
 }
 
 /// Build the `/game` state: probe ollama once, open the default world (the sunken vault).
@@ -562,6 +631,8 @@ fn open_game(brain: VaultNarrator, def: &GameDef) -> GameState {
         world_name: def.name.to_string(),
         theme: def.theme.to_string(),
         last_narrator_kind,
+        party: None,
+        next_round_id: 1,
     }
 }
 
@@ -747,12 +818,21 @@ pub fn handle_act(gs: &Mutex<GameState>, body: &[u8]) -> WebResponse {
     };
 
     let mut g = gs.lock().unwrap();
+    let resp = act_command(&mut g, &command);
+    WebResponse::json(resp.to_string().into_bytes())
+}
 
+/// Resolve one free-text `command` against the CURRENT session — the AI narrates, the world
+/// disposes — and return the `/game/act`-shaped response as a JSON [`Value`]. Shared verbatim by
+/// `/game/act` (single-player) and `/party/close` (the collective lane resolves the WINNING
+/// command through this exact path), so a voted move is subject to the identical world resolution,
+/// cap gate, and receipt chain — collective choice does not bypass the gates.
+fn act_command(g: &mut GameState, command: &str) -> Value {
     // The game is already decided — no further moves resolve.
     if g.session.status() != GameStatus::Playing {
         let reason = format!("the game is over ({})", status_str(g.session.status()));
-        let state = state_json(&g);
-        let resp = json!({
+        let state = state_json(g);
+        return json!({
             "ok": false,
             "narration": "",
             "action": Value::Null,
@@ -760,22 +840,31 @@ pub fn handle_act(gs: &Mutex<GameState>, body: &[u8]) -> WebResponse {
             "reason": reason,
             "state": state,
         });
-        return WebResponse::json(resp.to_string().into_bytes());
     }
 
     let room = match g.session.current_room().cloned() {
         Some(r) => r,
-        None => return WebResponse::error(500, "no current room"),
+        None => {
+            let state = state_json(g);
+            return json!({
+                "ok": false,
+                "narration": "",
+                "action": Value::Null,
+                "outcome": "refused",
+                "reason": "no current room",
+                "state": state,
+            });
+        }
     };
 
     // The command is parsed deterministically into a closed typed action against THIS world's
     // vocabulary (item / target / NPC ids); an unreadable command lands nothing.
-    let action = match parse_command(g.session.map(), &command) {
+    let action = match parse_command(g.session.map(), command) {
         Some(a) => a,
         None => {
             g.last_narrator_kind = g.brain.base_kind();
-            let state = state_json(&g);
-            let resp = json!({
+            let state = state_json(g);
+            return json!({
                 "ok": false,
                 "narration": format!("The dungeon master tilts their head: \u{201c}{command}?\u{201d}"),
                 "action": Value::Null,
@@ -783,7 +872,6 @@ pub fn handle_act(gs: &Mutex<GameState>, body: &[u8]) -> WebResponse {
                 "reason": "the dungeon master could not read that as a move \u{2014} try 'go north', 'take <item>', 'use <item> on <target>', 'ask <npc> about <topic>', 'attack <foe>', or 'look'",
                 "state": state,
             });
-            return WebResponse::json(resp.to_string().into_bytes());
         }
     };
 
@@ -791,14 +879,14 @@ pub fn handle_act(gs: &Mutex<GameState>, body: &[u8]) -> WebResponse {
     // NO authority over the outcome).
     let (ai_narration, kind) =
         g.brain
-            .narrate(&g.theme, &room, g.session.world(), &command, &action);
+            .narrate(&g.theme, &room, g.session.world(), command, &action);
     g.last_narrator_kind = kind;
     let action_j = action_json(&action);
     let action_label = action.label();
     let proposal = Proposal::new(ai_narration.clone(), action);
 
     // THE WORLD DISPOSES — resolve the proposed action; a legal move lands one verified turn.
-    let result = g.session.play(proposal, "player", &command);
+    let result = g.session.play(proposal, "player", command);
     let (ok, outcome, reason, world_note) = match &result {
         PlayResult::Landed { narration, .. } => (true, "landed", Value::Null, json!(narration)),
         PlayResult::Refused(r) => (false, "refused", json!(r.to_string()), Value::Null),
@@ -806,7 +894,7 @@ pub fn handle_act(gs: &Mutex<GameState>, body: &[u8]) -> WebResponse {
         PlayResult::Unparsed(m) => (false, "refused", json!(m), Value::Null),
     };
 
-    let state = state_json(&g);
+    let state = state_json(g);
     let mut resp = json!({
         "ok": ok,
         "narration": ai_narration,
@@ -821,7 +909,7 @@ pub fn handle_act(gs: &Mutex<GameState>, body: &[u8]) -> WebResponse {
     if !world_note.is_null() {
         resp["worldNote"] = world_note;
     }
-    WebResponse::json(resp.to_string().into_bytes())
+    resp
 }
 
 /// `GET /game/verify` — re-verify the whole game ledger as a hash chain.
@@ -893,4 +981,264 @@ fn world_from_body(body: &[u8]) -> Option<String> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE COLLECTIVE LANE — /party/{options,open,vote,tally,close} over the SAME GameSession.
+// A crowd votes the shared party's next move; the WINNER resolves through `act_command` (the
+// same path as /game/act). Additive: single-player /game/act is untouched.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The candidate actions at the CURRENT state, as a small legible ballot — derived exactly from
+/// what `/game/state` shows: every exit (INCLUDING locked ones, so the party MAY vote a barred
+/// way and watch the world refuse it), every item here, plus one contextual "look around". Ids
+/// are a stable index within the slate.
+fn party_options(gs: &GameState) -> Vec<BallotOption> {
+    let session = &gs.session;
+    let world = session.world();
+    let map = session.map();
+    let mut raw: Vec<(String, String)> = Vec::new();
+
+    if let Some(r) = session.current_room() {
+        for (dir, exit) in r.exits.iter() {
+            let to_name = map
+                .room(&exit.to_room)
+                .map(|rr| rr.name.clone())
+                .unwrap_or_else(|| exit.to_room.clone());
+            let locked = match &exit.gate {
+                None => false,
+                Some(g) => !gate_satisfied(g, world),
+            };
+            let label = if locked {
+                let reason = exit
+                    .gate
+                    .as_ref()
+                    .map(gate_reason_str)
+                    .unwrap_or_else(|| "barred".to_string());
+                format!("Go {dir} \u{2192} {to_name}  (\u{1f512} barred: {reason})")
+            } else {
+                format!("Go {dir} \u{2192} {to_name}")
+            };
+            raw.push((format!("go {dir}"), label));
+        }
+        for item in map.items_here(&r.id, world) {
+            raw.push((
+                format!("take {item}"),
+                format!("Take the {}", titleize(&item)),
+            ));
+        }
+    }
+    // A contextual action always on the slate (harmless, always legal — a legible "do nothing bold").
+    raw.push(("look".to_string(), "Look around the room".to_string()));
+
+    raw.into_iter()
+        .enumerate()
+        .map(|(id, (command, label))| BallotOption { id, command, label })
+        .collect()
+}
+
+fn ballot_json(o: &BallotOption) -> Value {
+    json!({ "id": o.id, "command": o.command, "label": o.label })
+}
+
+/// The per-option tally over an open round.
+fn tally_json(round: &VoteRound) -> Value {
+    let counts = round.counts();
+    let rows: Vec<Value> = round
+        .options
+        .iter()
+        .map(|o| {
+            json!({
+                "id": o.id,
+                "command": o.command,
+                "label": o.label,
+                "count": counts.get(o.id).copied().unwrap_or(0),
+            })
+        })
+        .collect();
+    json!({
+        "roundId": round.id,
+        "open": true,
+        "totalVotes": round.votes.len(),
+        "tally": rows,
+    })
+}
+
+/// `GET /party/options` — the candidate actions at the current state as a ballot slate, plus a
+/// one-line summary of any open round. This is the live preview; `/party/open` freezes a slate.
+pub fn handle_party_options(gs: &Mutex<GameState>) -> WebResponse {
+    let g = gs.lock().unwrap();
+    let options: Vec<Value> = party_options(&g).iter().map(ballot_json).collect();
+    let round = g
+        .party
+        .as_ref()
+        .map(|r| json!({ "roundId": r.id, "open": true, "totalVotes": r.votes.len() }))
+        .unwrap_or(Value::Null);
+    let resp = json!({
+        "options": options,
+        "round": round,
+        "voteModel": "a majority vote among the seated party (write-once per voter; plurality winner; ties broken by lowest optionId)",
+        "state": state_json(&g),
+    });
+    WebResponse::json(resp.to_string().into_bytes())
+}
+
+/// `POST /party/open` — open a fresh vote round over the current options (returns the round id +
+/// the frozen slate). Opening while a round is already open REPLACES it with a fresh one.
+pub fn handle_party_open(gs: &Mutex<GameState>) -> WebResponse {
+    let mut g = gs.lock().unwrap();
+    if g.session.status() != GameStatus::Playing {
+        let resp = json!({
+            "ok": false,
+            "reason": format!("the game is over ({}) \u{2014} no round to open", status_str(g.session.status())),
+            "state": state_json(&g),
+        });
+        return WebResponse::json(resp.to_string().into_bytes());
+    }
+    let options = party_options(&g);
+    let id = g.next_round_id;
+    g.next_round_id += 1;
+    let options_json: Vec<Value> = options.iter().map(ballot_json).collect();
+    g.party = Some(VoteRound {
+        id,
+        options,
+        votes: BTreeMap::new(),
+    });
+    let resp = json!({
+        "ok": true,
+        "roundId": id,
+        "options": options_json,
+        "voteModel": "a majority vote among the seated party",
+        "state": state_json(&g),
+    });
+    WebResponse::json(resp.to_string().into_bytes())
+}
+
+/// `POST /party/vote {"voter":"<name>","optionId":<n>}` — one write-once ballot per voter. A
+/// second ballot from the same voter this round is refused (`refused:"already-voted"`); an
+/// unknown optionId is a 400; no open round is `refused:"no-round"`.
+pub fn handle_party_vote(gs: &Mutex<GameState>, body: &[u8]) -> WebResponse {
+    let parsed: Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return WebResponse::error(400, format!("bad JSON: {e}")),
+    };
+    let voter = match parsed.get("voter").and_then(Value::as_str) {
+        Some(s) if !s.trim().is_empty() => s.trim().to_string(),
+        _ => return WebResponse::error(400, "missing non-empty string field `voter`"),
+    };
+    let option_id = match parsed.get("optionId").and_then(Value::as_u64) {
+        Some(n) => n as usize,
+        None => return WebResponse::error(400, "missing integer field `optionId`"),
+    };
+
+    let mut g = gs.lock().unwrap();
+    let round = match g.party.as_mut() {
+        Some(r) => r,
+        None => {
+            let resp = json!({
+                "ok": false,
+                "refused": "no-round",
+                "reason": "no vote round is open \u{2014} POST /party/open first",
+            });
+            return WebResponse::json(resp.to_string().into_bytes());
+        }
+    };
+    if option_id >= round.options.len() {
+        return WebResponse::error(
+            400,
+            format!(
+                "unknown optionId {option_id} \u{2014} this round has {} options (0..{})",
+                round.options.len(),
+                round.options.len().saturating_sub(1)
+            ),
+        );
+    }
+    // WRITE-ONCE: a voter who has already cast a ballot this round is refused (their first
+    // choice stands). This is the majority vote's one-ballot-per-voter rule.
+    if let Some(prev) = round.votes.get(&voter).copied() {
+        let resp = json!({
+            "ok": false,
+            "refused": "already-voted",
+            "reason": format!("{voter} has already cast a ballot this round (for option {prev}) \u{2014} one ballot per voter"),
+            "voter": voter,
+            "previousOptionId": prev,
+            "tally": tally_json(round),
+        });
+        return WebResponse::json(resp.to_string().into_bytes());
+    }
+    round.votes.insert(voter.clone(), option_id);
+    let resp = json!({
+        "ok": true,
+        "voter": voter,
+        "optionId": option_id,
+        "tally": tally_json(round),
+    });
+    WebResponse::json(resp.to_string().into_bytes())
+}
+
+/// `GET /party/tally` — per-option counts for the open round (or `open:false` when none is open).
+pub fn handle_party_tally(gs: &Mutex<GameState>) -> WebResponse {
+    let g = gs.lock().unwrap();
+    let resp = match g.party.as_ref() {
+        Some(r) => tally_json(r),
+        None => json!({ "open": false, "totalVotes": 0, "tally": [] }),
+    };
+    WebResponse::json(resp.to_string().into_bytes())
+}
+
+/// `POST /party/close` — close the open round: the plurality winner (ties broken by lowest
+/// optionId) is resolved through the SAME `/game/act` path (`act_command`), so a voted-for locked
+/// exit is still refused by the world (no receipt) and the party must vote again. Returns the
+/// winner, the final tally, and the full resolution outcome + new state. A round with no ballots
+/// cannot be closed (400) — cast at least one vote first.
+pub fn handle_party_close(gs: &Mutex<GameState>) -> WebResponse {
+    let mut g = gs.lock().unwrap();
+    let round = match g.party.take() {
+        Some(r) => r,
+        None => {
+            let resp = json!({
+                "ok": false,
+                "refused": "no-round",
+                "reason": "no vote round is open \u{2014} POST /party/open first",
+            });
+            return WebResponse::json(resp.to_string().into_bytes());
+        }
+    };
+    if round.votes.is_empty() {
+        // Nothing to resolve — restore the round so the party can still cast ballots.
+        g.party = Some(round);
+        return WebResponse::error(
+            400,
+            "cannot close a round with no ballots \u{2014} cast at least one vote first",
+        );
+    }
+
+    let counts = round.counts();
+    let winner_idx = round
+        .winner_index()
+        .expect("a non-empty round has a winner");
+    let winner = round.options[winner_idx].clone();
+    let tie = round.is_tie();
+    let winner_json = json!({
+        "id": winner.id,
+        "command": winner.command,
+        "label": winner.label,
+        "count": counts.get(winner.id).copied().unwrap_or(0),
+    });
+    let tally = tally_json(&round);
+
+    // THE WORLD DISPOSES — resolve the winning command through the identical /game/act path.
+    let resolved = act_command(&mut g, &winner.command);
+
+    let resp = json!({
+        "ok": true,
+        "roundId": round.id,
+        "winner": winner_json,
+        "tie": tie,
+        "tieBreak": if tie { "lowest optionId" } else { "" },
+        "voteModel": "a majority vote among the seated party (NOT a quorum certificate)",
+        "tally": tally,
+        "resolved": resolved,
+    });
+    WebResponse::json(resp.to_string().into_bytes())
 }

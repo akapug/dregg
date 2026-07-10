@@ -67,6 +67,11 @@ export async function buildVault() {
   return bundle("vault.ts");
 }
 
+/** Bundle THE COLLECTIVE DUNGEON play surface (self-contained — only speaks the /party + /game service). */
+export async function buildParty() {
+  return bundle("party.ts");
+}
+
 // ── The DM service ────────────────────────────────────────────────────────────
 // By default the dungeon page is served against an in-memory STAND-IN (narratorKind
 // "scripted") so `node demo/serve.mjs` is instantly playable. Set `DM_URL` (the parallel
@@ -114,9 +119,11 @@ export async function makeServer(port = 0, opts = {}) {
   const appJs = await buildApp();
   const dungeonJs = await buildDungeon();
   const vaultJs = await buildVault();
+  const partyJs = await buildParty();
   const index = await readFile(path.join(__dirname, "index.html"), "utf8");
   const dungeon = await readFile(path.join(__dirname, "dungeon.html"), "utf8");
   const vault = await readFile(path.join(__dirname, "vault.html"), "utf8");
+  const party = await readFile(path.join(__dirname, "party.html"), "utf8");
   const hub = await readFile(path.join(__dirname, "hub.html"), "utf8");
   const scene = await readFile(path.join(__dirname, "stories", "the-commons.scene"), "utf8");
 
@@ -134,13 +141,14 @@ export async function makeServer(port = 0, opts = {}) {
         return await handleDm(url, method, body, dm, res);
       }
 
-      // ── THE SUNKEN VAULT /game endpoints — proxied to the native attested-dm service.
-      //    There is no JS stand-in for the game (it is a real GameSession over the engine);
-      //    the page needs the native service (set DM_URL / DM_PORT). ──
-      if (url.startsWith("/game/")) {
+      // ── THE SUNKEN VAULT /game endpoints AND THE COLLECTIVE DUNGEON /party endpoints —
+      //    proxied to the native attested-dm service. There is no JS stand-in for either (both
+      //    are a real GameSession over the engine); the page needs the native service
+      //    (set DM_URL / DM_PORT). ──
+      if (url.startsWith("/game/") || url.startsWith("/party/")) {
         if (!DM_URL) {
           res.writeHead(503, { "content-type": "application/json; charset=utf-8" });
-          return res.end(JSON.stringify({ error: "the /game API needs the native attested-dm dungeon-service; start it and set DM_URL or DM_PORT (default 8790)" }));
+          return res.end(JSON.stringify({ error: "the /game + /party API needs the native attested-dm dungeon-service; start it and set DM_URL or DM_PORT (default 8790)" }));
         }
         const body = method === "POST" ? await readBody(req) : undefined;
         const r = await fetch(`${DM_URL}${url}`, {
@@ -175,6 +183,10 @@ export async function makeServer(port = 0, opts = {}) {
       if (url === "/hub" || url === "/games") return send(res, hub, MIME[".html"]);
       if (url === "/vault.js") return send(res, vaultJs, MIME[".js"]);
 
+      // ── The Collective Dungeon (the crowd steers one party by vote) ──
+      if (url === "/party" || url === "/party.html") return send(res, party, MIME[".html"]);
+      if (url === "/party.js") return send(res, partyJs, MIME[".js"]);
+
       res.writeHead(404, { "content-type": "text/plain" });
       res.end("not found");
     } catch (e) {
@@ -205,5 +217,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   console.log(`  THE SUNKEN VAULT — the AI narrates, the world resolves (playable dungeon-crawler)`);
   console.log(`  open:  ${base}/vault`);
   console.log(`  /game service: ${DM_URL ? "proxied → " + DM_URL : "NOT wired — set DM_URL or DM_PORT to the native attested-dm service (default 8790)"}\n`);
+  console.log(`  THE COLLECTIVE DUNGEON — a crowd steers one party by vote (the crowd decides, the world resolves)`);
+  console.log(`  open:  ${base}/party`);
+  console.log(`  /party service: ${DM_URL ? "proxied → " + DM_URL : "NOT wired — set DM_URL or DM_PORT to the native attested-dm service (default 8790)"}\n`);
   console.log(`  (Ctrl-C to stop)\n`);
 }

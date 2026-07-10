@@ -109,17 +109,18 @@ async function main() {
     const bootErr = await page.evaluate(() => window.__VAULT_ERROR || null);
     if (bootErr) throw new Error(`the game page failed to boot (could not reach /game):\n    ${bootErr}`);
 
-    // ── A. THE GAME REGISTRY — /game/list serves BOTH games ──
+    // ── A. THE GAME REGISTRY — /game/list serves the registered games ──
+    const EXPECTED_GAMES = ["bramble-keep", "starfall-spire", "sunken-vault"];
     const list = await page.evaluate(async () => await (await fetch("/game/list")).json());
     assert.ok(Array.isArray(list), "/game/list returns an array");
     const ids = list.map((g) => g.id).sort();
-    assert.deepEqual(ids, ["bramble-keep", "sunken-vault"], `/game/list lists both games (got ${ids.join(", ")})`);
+    assert.deepEqual(ids, EXPECTED_GAMES, `/game/list lists the registered games (got ${ids.join(", ")})`);
     for (const g of list) {
       assert.ok(g.name && g.blurb && g.objective, `game ${g.id} has name/blurb/objective`);
     }
-    // The picker rendered both cards on the page.
+    // The picker rendered a card per game on the page.
     const cards = await page.evaluate(() => Array.from(document.querySelectorAll("button.game-card")).map((b) => b.dataset.world));
-    assert.deepEqual(cards.slice().sort(), ["bramble-keep", "sunken-vault"], `the page picker shows both games (got ${cards.join(", ")})`);
+    assert.deepEqual(cards.slice().sort(), EXPECTED_GAMES, `the page picker shows the registered games (got ${cards.join(", ")})`);
 
     // ── B. THE SUNKEN VAULT — reset via the page, play a couple LANDING moves ──
     const vaultReset = await page.evaluate(() => window.__vaultReset("sunken-vault"));
