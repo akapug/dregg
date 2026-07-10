@@ -83,7 +83,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 /// The `dregg-node` command-line interface.
 #[derive(Parser)]
