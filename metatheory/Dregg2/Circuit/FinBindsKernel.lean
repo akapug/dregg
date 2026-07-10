@@ -25,17 +25,17 @@ HONEST SCOPE: the result is over `(f f' : FinKernelState)` (reachable states —
 `RecordKernelState`. The SOLE crypto residual is `Poseidon2SpongeCR sponge`; the four hash carriers are
 discharged. `RestHashIffFrame` is no longer carried (it is realized on the image).
 
-⚠ `AccountsWF` STATUS (a real finding, reported honestly): `AccountsWF` (the non-crypto structural
-side-condition "cells outside `accounts` hold the kernel `default = Value.int 0`") is STILL needed by the
-dead-cell case of the cell-map recovery. But `AccountsWF (denote f)` is UNSATISFIABLE for every `f`:
-`FinKernelState.cell` is a `CanonMap … (Value.record [])`, so `denote` reads an absent cell as
-`Value.record []`, which is NOT the kernel `default (Value.int 0)`. So the exact-target-shape theorem
-`recStateCommit_binds_kernel_fin` (below) — faithful, and PROVED with the hypotheses genuinely consumed —
-cannot be instantiated on a concrete state. The INSTANTIABLE companion `recStateCommit_binds_kernel_fin_canon`
-replaces `AccountsWF` with the SATISFIABLE, faithful fin-level canonicality condition ("`cell` stores no
-key outside `accounts`" — the exact sparse invariant the deployed `BTreeMap` maintains). Aligning the
-`FinKernelState.cell` default to `Value.int 0` (a committed-file change, NOT done here) would make the
-two coincide; flagged as a sibling issue.
+`AccountsWF` STATUS (now SATISFIABLE — the alignment landed): `AccountsWF` (the non-crypto structural
+side-condition "cells outside `accounts` hold the kernel `default = Value.int 0`") is needed by the dead-cell
+case of the cell-map recovery, and it is now INSTANTIABLE. `FinKernelState.cell` is a `CanonMap …
+(Value.int 0)` — the default ALIGNED to the kernel default — so `denote` reads an absent cell as `Value.int 0 =
+default`, and `AccountsWF (denote f)` holds exactly when `f` stores no cell outside `accounts` (`finInit`
+witnesses it: `finInit_accountsWF`). So the exact-target-shape theorem `recStateCommit_binds_kernel_fin`
+(below) — faithful, PROVED with the hypotheses genuinely consumed — FIRES on concrete states (§5 positive
+tooth). Under the aligned default `AccountsWF (denote f)` and the fin-level canonicality condition ("`cell`
+stores no key outside `accounts`" — the exact sparse invariant the deployed `BTreeMap` maintains) COINCIDE, so
+the companion `recStateCommit_binds_kernel_fin_canon` is now REDUNDANT (retained as a convenience stating the
+side-condition in `lookup`-form; the headline no longer depends on it to be instantiable).
 
 NO carrier laundering: every `def` here is a concrete realization or a step function; the only `Prop`
 hypotheses are `Poseidon2SpongeCR sponge` (crypto) and the structural side-condition. No `def …Sound`,
@@ -149,9 +149,9 @@ theorem cellDigest_binds_cells_fin
 full-state Poseidon2 roots (same turn) on two `denote`-image states force `denote f = denote f'`. The
 FIVE carriers of `StateCommit.recStateCommit_binds_kernel` are all DERIVED from the SOLE crypto residual
 `Poseidon2SpongeCR sponge`; `RestHashIffFrame` is realized on the image by `restHashIffFrame_of_fin`.
-`AccountsWF` remains as the non-crypto structural side-condition — see the module header: it is genuinely
-consumed by the proof, though `AccountsWF (denote f)` is unsatisfiable under the committed
-`FinKernelState.cell` default (use `recStateCommit_binds_kernel_fin_canon` to instantiate). -/
+`AccountsWF` remains as the non-crypto structural side-condition — genuinely consumed by the proof, and now
+SATISFIABLE under the aligned `FinKernelState.cell` default `Value.int 0` (`finInit_accountsWF` witnesses it;
+§5 fires the theorem on `finInit`). -/
 theorem recStateCommit_binds_kernel_fin
     (sponge : List ℤ → ℤ) (hCR : Poseidon2SpongeCR sponge)
     (f f' : FinKernelState) (t : Turn)
@@ -180,11 +180,12 @@ theorem recStateCommit_binds_kernel_fin
       | exact hLif.symm | exact hDC.symm | exact hDel.symm | exact hDgs.symm
       | exact hDE.symm | exact hDEA.symm | exact hHeaps.symm | exact hNR.symm | exact hRR.symm
 
-/-- **`recStateCommit_binds_kernel_fin_canon` — THE INSTANTIABLE companion.** Same conclusion and same
-SOLE crypto residual `Poseidon2SpongeCR sponge`, but the dead-cell frame is closed by the SATISFIABLE
-fin-level canonicality condition (`cell` stores no key outside `accounts`) rather than the
-kernel-default `AccountsWF` (which is unsatisfiable on the image). THIS is the form that fires on
-concrete states. -/
+/-- **`recStateCommit_binds_kernel_fin_canon` — a now-REDUNDANT convenience companion.** Same conclusion and
+same SOLE crypto residual `Poseidon2SpongeCR sponge`, but the dead-cell frame is closed by the fin-level
+canonicality condition (`cell` stores no key outside `accounts`, stated in `lookup`-form). Under the aligned
+`FinKernelState.cell` default `Value.int 0` this condition COINCIDES with `AccountsWF (denote f)`, so the
+headline `recStateCommit_binds_kernel_fin` is itself instantiable (`finInit_accountsWF`); this companion is kept
+only as a convenience. -/
 theorem recStateCommit_binds_kernel_fin_canon
     (sponge : List ℤ → ℤ) (hCR : Poseidon2SpongeCR sponge)
     (f f' : FinKernelState) (t : Turn)
@@ -214,10 +215,21 @@ theorem recStateCommit_binds_kernel_fin_canon
 theorem finInit_cell_canon : ∀ c, c ∉ finInit.accounts → finInit.cell.toMap.lookup c = none :=
   fun _ _ => rfl
 
-/-- **POSITIVE TOOTH — the binding FIRES on two concrete states that agree.** At `f = f' = finInit`
-(canonicality discharged by `finInit_cell_canon`, equal roots by `rfl`) the instantiable companion
-yields `denote finInit = denote finInit`. So the hypotheses are simultaneously satisfiable and the
-conclusion follows — the theorem is non-vacuously applicable. -/
+/-- **`finInit_accountsWF` — `AccountsWF (denote finInit)` is a REAL proof.** With the `cell` default aligned to
+the kernel default `Value.int 0`, an absent cell of `denote finInit` reads `Value.int 0 = default`, and
+`(denote finInit).accounts = ∅`, so every `c` is out-of-accounts and reads the default. This is the object that
+retires the vacuity: the kernel-default `AccountsWF` side-condition of the headline theorem is now inhabited. -/
+theorem finInit_accountsWF : AccountsWF (denote finInit) := fun _ _ => rfl
+
+/-- **POSITIVE TOOTH — the HEADLINE (`AccountsWF`-carried) binding FIRES on two concrete states that agree.**
+At `f = f' = finInit` (`AccountsWF (denote finInit)` discharged by `finInit_accountsWF`, equal roots by `rfl`)
+the exact-target-shape theorem — the one whose `AccountsWF` hypothesis was formerly unsatisfiable — yields
+`denote finInit = denote finInit`. The vacuity is CLOSED: the real theorem is now non-vacuously applicable. -/
+example (t : Turn) : denote finInit = denote finInit :=
+  recStateCommit_binds_kernel_fin Reference.refSponge Reference.refSponge_CR
+    finInit finInit t finInit_accountsWF finInit_accountsWF rfl
+
+/-- **POSITIVE TOOTH (companion form)** — the redundant `lookup`-form companion still fires (`finInit_cell_canon`). -/
 example (t : Turn) : denote finInit = denote finInit :=
   recStateCommit_binds_kernel_fin_canon Reference.refSponge Reference.refSponge_CR
     finInit finInit t finInit_cell_canon finInit_cell_canon rfl
@@ -267,6 +279,7 @@ theorem collapse_breaks_binding_fin (t : Turn) :
 
 #assert_axioms CH_fin_injective
 #assert_axioms cellDigest_binds_cells_fin
+#assert_axioms finInit_accountsWF
 #assert_axioms recStateCommit_binds_kernel_fin
 #assert_axioms recStateCommit_binds_kernel_fin_canon
 #assert_axioms collapse_breaks_binding_fin

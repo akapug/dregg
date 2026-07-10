@@ -20,10 +20,11 @@ unconditional).
      (seq (setCell {newCell} <factory cell leaf>) (setSlotCaveats <factory caveats>)))`.
 Four leaves. `guard` is `Pure` (`denote_finInterp`), `allocCell` is `denote_finAllocCell`, `setSlotCaveats`
 is `denote_finSetSlotCaveats` under a finite-diff we prove (`factoryCaveatsWrite_finiteDiff`). The `setCell`
-leaf is the subtle one: its non-default side condition `factoryCellWrite vk newCell k newCell ≠ .record []`
-is TRUE only when the factory lookup succeeds (the `some e` arm is a `setField`, non-default) — and GENUINELY
-FALSE when it fails (the `none` arm is `k.cell newCell`, which can be the default `.record []`, proved by
-`factoryCellWrite_can_be_default`). So the finite `setCell` leaf is a `dite` on the lookup: `finSetCell` in
+leaf is the subtle one: its non-default side condition `factoryCellWrite vk newCell k newCell ≠ .int 0`
+is TRUE only when the factory lookup succeeds (the `some e` arm is a `setField`, a `.record`, non-default) — and
+GENUINELY FALSE when it fails (the `none` arm is `k.cell newCell`, which can be the kernel default `.int 0` —
+exactly what a freshly-`allocCell`-born cell holds, proved by `factoryCellWrite_can_be_default`). So the finite
+`setCell` leaf is a `dite` on the lookup: `finSetCell` in
 the `some` case, IDENTITY (`some f`) in the `none` case — the identity is faithful because in the `none` arm
 `factoryCellWrite` writes the CURRENT cell value back, a no-op that `interp`'s `setCell` also performs. Its
 square `finFactoryCell_square` is proved for ALL states (both arms), so the four leaves compose via
@@ -75,7 +76,7 @@ arm is a `setField` write, non-default by `setField_ne_nil`. This discharges the
 condition in the gate-passing (factory-present) case. -/
 theorem factoryCellWrite_nd_isSome {vk : Int} {newCell : CellId} {k : RecordKernelState}
     (h : (findFactory k.factories vk.toNat).isSome = true) :
-    factoryCellWrite vk newCell k newCell ≠ Value.record [] := by
+    factoryCellWrite vk newCell k newCell ≠ Value.int 0 := by
   obtain ⟨e, he⟩ := Option.isSome_iff_exists.mp h
   simp only [factoryCellWrite, if_true, he]
   exact setField_ne_nil _ _ _
@@ -193,16 +194,17 @@ section Teeth
 #guard (interp (createCellStmt 0 2) Dregg2.Circuit.Argus.Effects.CreateCell.kCC).isSome
 #guard (interp (createCellStmt 1 2) Dregg2.Circuit.Argus.Effects.CreateCell.kCC).isNone
 
-/-- A minimal kernel with an EMPTY factory registry and every cell defaulting to `.record []` — the witness
-that the factory `setCell` leaf's non-default obligation genuinely FAILS in the `none` arm. -/
+/-- A minimal kernel with an EMPTY factory registry and every cell at the kernel default `.int 0` (what a
+freshly-`allocCell`-born cell holds) — the witness that the factory `setCell` leaf's non-default obligation
+genuinely FAILS in the `none` arm (the write equals the aligned `cell` default). -/
 def kNoFac : RecordKernelState :=
-  { accounts := ∅, cell := fun _ => Value.record [], caps := fun _ => [], factories := [] }
+  { accounts := ∅, cell := fun _ => Value.int 0, caps := fun _ => [], factories := [] }
 
 /-- **POSITIVE tooth — `createCellStmt` BIRTHS a cell (both value polarities on the fresh slot).** The
 committed create of fresh cell `2` COMMITS to `createCellIntoAsset kCC 2`, whose fresh slot has its ledger
-column zeroed (`bal 2 0 = 0`) and its `cell` value reset to the born-empty default `Value.int 0` — which is
-PROVABLY `≠ Value.record []` (the measured `default = Value.int 0` correction, NOT the cell map's default).
-Both polarities on the same value: `= Value.int 0` AND `≠ Value.record []`. -/
+column zeroed (`bal 2 0 = 0`) and its `cell` value reset to the kernel default `Value.int 0` — which is now
+ALSO the aligned `cell` `CanonMap` default, so the finite mirror erases it (`FinAllocCell.finAllocCell`). Both
+polarities on the same value: `= Value.int 0` AND `≠ Value.record []` (a `.int` is not an empty record). -/
 theorem createCellStmt_births_int0 :
     interp (createCellStmt 0 2) CreateCell.kCC
       = some (createCellIntoAsset CreateCell.kCC 2)
@@ -219,13 +221,13 @@ theorem createCellStmt_births_int0 :
     exact valInt0_ne_record
 
 /-- **NEGATIVE tooth — the factory `setCell` non-default obligation is GENUINELY FALSE (`none` arm).** On a
-kernel with an empty factory registry and `cell newCell = .record []`, the factory `cell` leaf equals the
-default `.record []`, so the sparse `insertNZ`-based `finSetCell` CANNOT represent it — exactly why
-`finFactoryCell` must fall back to identity in the `none` arm. An under-approximating uniform `finSetCell`
-would be unsound here. -/
+kernel with an empty factory registry and `cell newCell = .int 0` (the aligned `cell` default, as after
+`allocCell`), the factory `cell` leaf equals the default `.int 0`, so the sparse `insertNZ`-based `finSetCell`
+CANNOT represent it — exactly why `finFactoryCell` must fall back to identity in the `none` arm. An
+under-approximating uniform `finSetCell` would be unsound here. -/
 theorem factoryCellWrite_can_be_default :
     findFactory kNoFac.factories (0 : Int).toNat = none
-    ∧ factoryCellWrite 0 5 kNoFac 5 = Value.record [] := by
+    ∧ factoryCellWrite 0 5 kNoFac 5 = Value.int 0 := by
   have hnone : findFactory kNoFac.factories (0 : Int).toNat = none := by decide
   refine ⟨hnone, ?_⟩
   rw [factoryCellWrite_none hnone]

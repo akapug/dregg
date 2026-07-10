@@ -132,45 +132,24 @@ theorem pureThenWriter_square {p wStmt : RecStmt}
 
 /-! ## §1 — the `setCell` NON-DEFAULT obligation: the two field-writers land a non-empty record.
 
-`finSetCell` needs each written leaf to be `≠ .record []` (the sparse `insertNZ` sparsity condition). The
-two field-write primitives the deployed programs use — `setBalance` (RecordKernel) and `setField`
-(EffectsState) — ALWAYS produce a `.record (nonempty)`, so the obligation holds for every leaf. -/
+`finSetCell` needs each written leaf to be `≠ .int 0` (the sparse `insertNZ` sparsity condition, at the kernel
+default). The two field-write primitives the deployed programs use — `setBalance` (RecordKernel) and `setField`
+(EffectsState) — ALWAYS produce a `.record` (a different constructor from the kernel default `.int 0`), so the
+obligation holds for every leaf. -/
 
-/-- `setBalance`'s field-list is never empty. -/
-theorem setBalanceList_ne_nil : ∀ (fs : List (FieldName × Value)) (v : Int),
-    setBalance.setBalanceList fs v ≠ [] := by
-  intro fs v
-  cases fs with
-  | nil => simp [setBalance.setBalanceList]
-  | cons hd tl =>
-      obtain ⟨k, x⟩ := hd
-      simp only [setBalance.setBalanceList]
-      split <;> simp
-
-/-- `setBalance cell v` is a non-empty record (the transfer/mint/burn cell leaf is non-default). -/
-theorem setBalance_ne_nil (cell : Value) (v : Int) : setBalance cell v ≠ Value.record [] := by
+/-- `setBalance cell v` is always a `.record` ⇒ `≠ .int 0` (the transfer/mint/burn cell leaf is non-default). -/
+theorem setBalance_ne_nil (cell : Value) (v : Int) : setBalance cell v ≠ Value.int 0 := by
   cases cell with
-  | record fs => simp only [setBalance, ne_eq, Value.record.injEq]; exact setBalanceList_ne_nil fs v
+  | record fs => simp [setBalance]
   | int n => simp [setBalance]
   | dig n => simp [setBalance]
   | sym n => simp [setBalance]
 
-/-- `setField`'s field-list is never empty. -/
-theorem setFieldList_ne_nil : ∀ (fld : FieldName) (fs : List (FieldName × Value)) (v : Value),
-    setField.setFieldList fld fs v ≠ [] := by
-  intro fld fs v
-  cases fs with
-  | nil => simp [setField.setFieldList]
-  | cons hd tl =>
-      obtain ⟨k, x⟩ := hd
-      simp only [setField.setFieldList]
-      split <;> simp
-
-/-- `setField fld cell v` is a non-empty record (the metadata-write cell leaf is non-default). -/
+/-- `setField fld cell v` is always a `.record` ⇒ `≠ .int 0` (the metadata-write cell leaf is non-default). -/
 theorem setField_ne_nil (fld : FieldName) (cell : Value) (v : Value) :
-    setField fld cell v ≠ Value.record [] := by
+    setField fld cell v ≠ Value.int 0 := by
   cases cell with
-  | record fs => simp only [setField, ne_eq, Value.record.injEq]; exact setFieldList_ne_nil fld fs v
+  | record fs => simp [setField]
   | int n => simp [setField]
   | dig n => simp [setField]
   | sym n => simp [setField]
@@ -179,7 +158,7 @@ theorem setField_ne_nil (fld : FieldName) (cell : Value) (v : Value) :
 `setBalance`). -/
 theorem transfer_leaf_nd (turn : Turn) (g : FinKernelState) :
     ∀ c ∈ ({turn.src, turn.dst} : Finset CellId).toList,
-      recTransfer (denote g).cell turn.src turn.dst turn.amt c ≠ Value.record [] := by
+      recTransfer (denote g).cell turn.src turn.dst turn.amt c ≠ Value.int 0 := by
   intro c hc
   rw [Finset.mem_toList, Finset.mem_insert, Finset.mem_singleton] at hc
   simp only [recTransfer]
@@ -191,7 +170,7 @@ theorem transfer_leaf_nd (turn : Turn) (g : FinKernelState) :
 
 /-- The incrementNonce leaf is non-default on the touched cell (a `setField` write on the `if`-true arm). -/
 theorem incNonce_leaf_nd (cell : CellId) (n : Int) (g : FinKernelState) :
-    ∀ c ∈ ({cell} : Finset CellId).toList, incNonceCellMap (denote g) cell n c ≠ Value.record [] := by
+    ∀ c ∈ ({cell} : Finset CellId).toList, incNonceCellMap (denote g) cell n c ≠ Value.int 0 := by
   intro c hc
   rw [Finset.mem_toList, Finset.mem_singleton] at hc
   subst hc
@@ -557,14 +536,14 @@ theorem makeSovereignStmt_square (actor cell : CellId) (f : FinKernelState) :
       (fun f' => some (finSetCell {cell}
         (fun k _c => Value.record [(commitmentField, Value.dig (stateCommitment (k.cell cell))),
                        (TurnExecutorFull.nonceField, Value.int (TurnExecutorFull.sovereignNonce (k.cell cell)))])
-        f' (fun c _ => by simp only [ne_eq, Value.record.injEq]; exact List.cons_ne_nil _ _)))).map denote
+        f' (fun c _ => by simp)))).map denote
       = interp (makeSovereignStmt actor cell) (denote f) := by
   unfold makeSovereignStmt
   exact pureThenWriter_square
     (fun g => denote_finSetCell {cell}
       (fun k _c => Value.record [(commitmentField, Value.dig (stateCommitment (k.cell cell))),
                      (TurnExecutorFull.nonceField, Value.int (TurnExecutorFull.sovereignNonce (k.cell cell)))])
-      g (fun c _ => by simp only [ne_eq, Value.record.injEq]; exact List.cons_ne_nil _ _)) f
+      g (fun c _ => by simp)) f
 
 /-! ### §3g — cellDestroy: a guard then TWO writers (`setLifecycle` ⨾ `setDeathCert`). -/
 
