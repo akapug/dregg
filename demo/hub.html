@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>dregg · verifiable fiction</title>
+<style>
+  :root {
+    --ink: #1a1712; --paper: #efe7d6; --edge: #cdbfa3; --accent: #6b3fa0;
+    --muted: #6b6152; --card: #f6f0e2; --gold: #9a7a2e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --ink: #e8e0cf; --paper: #14110d; --edge: #3a3226; --accent: #b493e6;
+            --muted: #9a8f7a; --card: #1c1813; --gold: #d8b45a; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font: 17px/1.6 "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+    padding: 3rem 1.25rem 5rem;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; }
+  header { text-align: center; margin-bottom: 2.5rem; }
+  h1 { font-size: clamp(2rem, 6vw, 3.2rem); margin: 0 0 .3rem; letter-spacing: .01em; }
+  .sub { color: var(--muted); font-style: italic; font-size: 1.15rem; }
+  .thesis {
+    border-left: 3px solid var(--accent); padding: .4rem 0 .4rem 1.1rem; margin: 2rem auto;
+    max-width: 640px; color: var(--ink);
+  }
+  .thesis b { color: var(--accent); }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.1rem; margin-top: 2rem; }
+  @media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
+  .card {
+    background: var(--card); border: 1px solid var(--edge); border-radius: 10px;
+    padding: 1.25rem 1.3rem; display: flex; flex-direction: column; text-decoration: none; color: inherit;
+    transition: transform .12s ease, border-color .12s ease;
+  }
+  a.card:hover { transform: translateY(-2px); border-color: var(--accent); }
+  .card h2 { margin: 0 0 .2rem; font-size: 1.35rem; }
+  .card .kind { color: var(--gold); font-size: .8rem; text-transform: uppercase; letter-spacing: .08em; margin-bottom: .5rem; }
+  .card p { margin: 0 0 .9rem; color: var(--muted); flex: 1; }
+  .tags { display: flex; flex-wrap: wrap; gap: .35rem; margin-bottom: .8rem; }
+  .tag { font-size: .72rem; border: 1px solid var(--edge); border-radius: 999px; padding: .08rem .55rem; color: var(--ink); }
+  .tag.verify { border-color: var(--accent); color: var(--accent); }
+  .play { align-self: flex-start; font-weight: 700; color: var(--accent); }
+  .note { color: var(--muted); font-size: .82rem; margin-top: .3rem; }
+  footer { text-align: center; color: var(--muted); margin-top: 3rem; font-size: .9rem; font-style: italic; }
+  code { background: color-mix(in srgb, var(--muted) 18%, transparent); padding: .1rem .35rem; border-radius: 4px; font-size: .85em; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>verifiable fiction</h1>
+    <div class="sub">the AI narrates · the world resolves · the crowd decides · the chain remembers</div>
+  </header>
+
+  <div class="thesis">
+    Four small games over one idea: a story you can trust. An AI may narrate anything, but it can only
+    <b>do</b> what the rules allow — <b>prose is not power</b>. A crowd can co-author a branch, and no one can
+    quietly rewrite what was witnessed. A player can jailbreak the model and buy nothing. Every turn is a signed,
+    replayable entry in a hash-chain a stranger can check.
+  </div>
+
+  <div class="grid">
+    <a class="card" href="/vault">
+      <div class="kind">AI dungeon crawler</div>
+      <h2>The Sunken Vault ⚔</h2>
+      <p>A drowned dungeon narrated by a real local LLM. Find the lantern, the key, the sword, the amulet —
+        and escape. The AI tells the tale; the <em>world</em> decides what happens. Try to narrate yourself
+        through a locked door and watch it refuse.</p>
+      <div class="tags"><span class="tag">AI-narrated</span><span class="tag">you can't cheat</span><span class="tag verify">hash-chained</span></div>
+      <span class="play">Play →</span>
+      <div class="note">needs the game service (see below)</div>
+    </a>
+
+    <a class="card" href="/dungeon">
+      <div class="kind">the thesis, distilled</div>
+      <h2>The Attested Dungeon 👑</h2>
+      <p>Jailbreak the dungeon-master for real. It will gleefully crown you king of eternity — then look at the
+        ledger. You hold no crown. The model proposes; the capabilities dispose.</p>
+      <div class="tags"><span class="tag">real gemma2</span><span class="tag">prose is not power</span><span class="tag verify">cap-gated</span></div>
+      <span class="play">Play →</span>
+    </a>
+
+    <a class="card" href="/">
+      <div class="kind">collective fiction</div>
+      <h2>The Commons 🏛</h2>
+      <p>A hundred of you found a settlement together, voting each branch. The ending turns on one question:
+        can the founding record be quietly rewritten? Here, it cannot.</p>
+      <div class="tags"><span class="tag">crowd-authored</span><span class="tag">custody-signed votes</span><span class="tag verify">un-retconnable</span></div>
+      <span class="play">Play →</span>
+    </a>
+
+    <a class="card" href="/">
+      <div class="kind">collective adventure</div>
+      <h2>The Drowned Library 📖</h2>
+      <p>Race the rising tide to carry the only witnessed record of the coast out of the dark. The lantern
+        gates your routes. Save the record, and no tide and no lord can rewrite what is written and witnessed.</p>
+      <div class="tags"><span class="tag">crowd-authored</span><span class="tag">gated routes</span><span class="tag verify">witnessed record</span></div>
+      <span class="play">Play →</span>
+      <div class="note">a spween-dregg scene; plays through the collective story surface</div>
+    </a>
+  </div>
+
+  <footer>
+    <p>Play the AI games live: run the game service <code>cargo run -p dungeon-service</code> (with ollama +
+      gemma2:2b), then <code>DM_PORT=7878 node demo/serve.mjs</code> and open <code>/vault</code> or
+      <code>/dungeon</code>. The collective stories play out of the box.</p>
+    <p>the walls stay where the story-master set them.</p>
+  </footer>
+</div>
+</body>
+</html>

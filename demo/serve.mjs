@@ -117,6 +117,7 @@ export async function makeServer(port = 0, opts = {}) {
   const index = await readFile(path.join(__dirname, "index.html"), "utf8");
   const dungeon = await readFile(path.join(__dirname, "dungeon.html"), "utf8");
   const vault = await readFile(path.join(__dirname, "vault.html"), "utf8");
+  const hub = await readFile(path.join(__dirname, "hub.html"), "utf8");
   const scene = await readFile(path.join(__dirname, "stories", "the-commons.scene"), "utf8");
 
   // The DM world: an in-memory stand-in (default) unless proxying to the real service.
@@ -171,6 +172,7 @@ export async function makeServer(port = 0, opts = {}) {
 
       // ── The Sunken Vault (the playable dungeon-crawler) ──
       if (url === "/vault" || url === "/vault.html") return send(res, vault, MIME[".html"]);
+      if (url === "/hub" || url === "/games") return send(res, hub, MIME[".html"]);
       if (url === "/vault.js") return send(res, vaultJs, MIME[".js"]);
 
       res.writeHead(404, { "content-type": "text/plain" });
