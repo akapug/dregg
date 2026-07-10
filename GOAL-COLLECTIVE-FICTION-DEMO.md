@@ -393,3 +393,5 @@ editing game.rs + recompiling. Absurd for a fiction engine. So:
   story world takes a scene SOURCE STRING. A DSL cheat-sheet + sample picker teach the format.
 - NEXT after A: the live **DUNGEON** authoring page (write a .dungeon, Play, the AI narrates it immediately).
   The full loop: author → play → verify, no recompile, no Rust.
+- done: /author LIVE STORY AUTHORING committed + verified by driving — write a .scene in a textarea, StoryWorld::new(source) compiles it IN-TAB and plays it verifiably (receipt rail + verify badge); a broken scene shows a line-pinned error ("line 11: choice navigates to unknown passage `nowhere`") and mounts NOTHING (fail-closed, previous world torn down); a freshly typed scene compiles+plays. Starter story teaches the DSL incl the same-line gate. All 6 routes 200.
+- WAITING: the .dungeon DSL lane (a8e693e8) — then the capstone: a live DUNGEON authoring page.
