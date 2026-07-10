@@ -70,6 +70,28 @@ transcripts, and the three-way headline. The forking PROBABILITY that the rewoun
 (`ForkingProbabilityBound`) is now PROVED (`forking_probability_bound`, `frk ≥ ε·(ε/q_H − 1/|C|)`) in the
 tree's finite ℚ-probability model, from the power-mean/Cauchy–Schwarz core — no `sorry`, assumed nowhere.
 The reduction that CONSUMES the two transcripts is complete.
+
+CLOSED (`section ProbForking`, 2026-07-10 — THE PROBABILISTIC BRIDGE): `forking_probability_bound` alone
+ranged over an ABSTRACT `x : Fin q_H → ℚ` — the forger never appeared in a probabilistic statement, and the
+two-transcript `outcome`/`ha'` was still an assumed hypothesis. `section ProbForking` closes that gap. It
+models the forger as a GENUINE finite counting-probability algorithm (prefix world `Ω` uniform × fork
+challenge uniform over `[Fintype Rq]`), in which `advantage` and `forkProb` are REAL probabilities (favorable
+outcomes / total). `forkProb_ge_advantage` PROVES `forkProb ≥ advantage·(advantage − 1/|C|)` ABOUT THE
+FORGER (the fixed fork index + prefix-determined commitment make the two reruns genuinely independent, so the
+bound is tight — no Bellare–Neven `1/q_H` slack; `forger_meets_forking_probability_bound` still lands the
+`ForkingProbabilityBound` predicate for every `q_H ≥ 1`, and `forker_forking_probability_bound_via_abstract`
+routes through `forking_probability_bound` with `x := forgerX` — the abstract `x` INSTANTIATED by the
+forger). `exists_forked_pair_of_forkProb_pos` PRODUCES the two distinct-challenge accepting transcripts from
+`forkProb > 0` (never assumed), and `prob_forger_advantage_yields_msis` threads it STRAIGHT-LINE:
+`advantage > 1/|C| ⟹ forkProb > 0 ⟹ two accepting transcripts sharing the commitment ⟹` an `IsMSISSolution`
+on `[A | t]`. So the `ha'`/`outcome` disjunct is no longer assumed — it is discharged by the forger's
+advantage, a genuine probability. `#print axioms ⊆ {propext, Classical.choice, Quot.sound}`.
+
+HONEST SCOPE of the bridge: the finite model is the fixed-fork-index shadow of `Forger` (`Ω ↔` RO answers
+below `challengeIdx` + coins, `c ↔ ρ challengeIdx`), carrying exactly what the MSIS extractor consumes; it is
+NOT a materialization of the literal infinite-RO `Forger : (ℕ → Rq) → …` object into `Ω` (that embedding is a
+modeling choice, not proved here). What IS proved and axiom-clean: a forger with advantage over the `1/|C|`
+floor genuinely forces an MSIS solution, with the two-transcript event produced from a real probability.
 -/
 import Dregg2.Crypto.HermineHintMLWE
 import Dregg2.Crypto.ShamirPrivacy
@@ -568,5 +590,401 @@ end Teeth
 #assert_axioms exForkingBound
 #assert_axioms exForkTight
 #assert_axioms exForkPositive
+
+/-! ## `section ProbForking` — THE PROBABILISTIC BRIDGE: the forger genuinely APPEARS in the bound.
+
+`forking_probability_bound` above proves `frk ≥ eps·(eps/qH − 1/|C|)` over an ABSTRACT weight vector
+`x : Fin qH → ℚ` — the forger `F` never appears in a probabilistic statement, and
+`concurrent_ts_uf_0_reduces`/`fork_produces_msis` take the second-run acceptance `ha'` (equivalently the
+two-transcript `outcome` disjunct) as a bare HYPOTHESIS. This section closes that: it builds a GENUINE finite
+counting-probability model of the forger, in which `advantage` and `forkProb` are REAL probabilities (ratios
+of favorable outcomes to the total), and PROVES the forking bound as a statement ABOUT the forger.
+
+**The model.** The forger is a randomized algorithm summarized by a finite *prefix world* `Ω` (its coins +
+the random-oracle answers STRICTLY BELOW its fixed forgery-challenge index — exactly the data
+`Forger.commitment_preChallenge` says fixes the commitment) drawn uniformly, together with the *fork
+challenge* `c` drawn uniformly from the finite challenge set (`Rq`, `[Fintype Rq]`). Its commitment
+`comm ω` is fixed by the prefix (BEFORE the challenge, so the two reruns share it — genuinely, not by
+assumption); it ACCEPTS iff its output is a `IsSelfTargetMSISSolution`. Because the fork index is fixed and
+the commitment is prefix-determined, the two reruns (`c`, `c'`) are GENUINELY independent given `ω` — so the
+rewind-independence step that Bellare–Neven pays a `1/q_H` for is here an EQUALITY, and the bound is the
+tighter `forkProb ≥ advantage·(advantage − 1/|C|)`.
+
+**What is PRODUCED, not assumed.** `exists_forked_pair_of_forkProb_pos`: a positive `forkProb` PRODUCES an
+explicit `(ω, c, c')` with `c ≠ c'` and BOTH accepting — the two-transcript event, derived from the
+probability being positive, never hypothesized. `prob_forger_advantage_yields_msis`: a forger of advantage
+`> 1/|C|` therefore yields an `IsMSISSolution` on `[A | t]`, STRAIGHT-LINE — advantage `⟹` `forkProb > 0`
+`⟹` two accepting transcripts sharing the commitment `⟹` `forked_forgery_yields_msis_solution_selftarget`.
+No `ha'`, no `outcome` disjunct assumed.
+
+**The forger IN the abstract bound.** `forger_meets_forking_probability_bound`: the forger's REAL
+`forkProb`/`advantage` satisfy the `ForkingProbabilityBound` predicate for every `q_H ≥ 1`; and
+`forker_forking_probability_bound_via_abstract` routes through `forking_probability_bound` itself with
+`x := forgerX` (the forger's advantage placed at its fixed fork index) — so the abstract `x` is INSTANTIATED
+by the forger, and the genuine `forkProb` dominates that lemma's RHS. -/
+
+section ProbForking
+
+open scoped BigOperators
+open Dregg2.Crypto.Lattice
+open Dregg2.Crypto.HermineSelfTargetMSIS
+
+variable {Rq : Type*} [CommRing Rq] [ShortNorm Rq] [Fintype Rq] [DecidableEq Rq]
+variable {M : Type*} [AddCommGroup M] [Module Rq M] [ShortNorm M]
+variable {N : Type*} [AddCommGroup N] [Module Rq N] [ShortNorm N]
+variable {Ω : Type*} [Fintype Ω]
+
+/-! ### The counting-probability primitives — genuine ratios over the finite outcome space. -/
+
+/-- The **accepting fork challenges** for prefix world `ω`: the finite set of challenge values `c` on which
+the forger accepts. Its size is the numerator of the per-prefix acceptance probability. -/
+def acceptSet (acc : Ω → Rq → Bool) (ω : Ω) : Finset Rq :=
+  Finset.univ.filter (fun c => acc ω c = true)
+
+/-- The number of accepting challenges for prefix `ω` (`= |C|·Pr_c[accept | ω]`). -/
+def hits (acc : Ω → Rq → Bool) (ω : Ω) : ℕ := (acceptSet acc ω).card
+
+/-- The **forking-favorable ordered challenge pairs** for prefix `ω`: pairs `(c, c')` with `c ≠ c'` and BOTH
+accepting — the outcomes on which the rewind produces two distinct-challenge accepting transcripts sharing
+`comm ω`. Its size is the numerator of the per-prefix fork probability; the fork event is this, genuinely,
+counted — not the assumed `ha'`. -/
+def forkPairs (acc : Ω → Rq → Bool) (ω : Ω) : Finset (Rq × Rq) :=
+  (acceptSet acc ω ×ˢ acceptSet acc ω).filter (fun p => p.1 ≠ p.2)
+
+/-- **The exact per-prefix fork count: `hits² − hits`.** The favorable ordered pairs are the off-diagonal of
+`acceptSet ×ˢ acceptSet` — total `hits²` minus the `hits` diagonal collisions `c = c'`. This is the genuine
+combinatorial identity underneath the `∑ xᵢ² − eps/|C|` shape: the `hits²` both-accept mass minus the
+diagonal (challenge-collision) loss, PROVED, not posited. -/
+theorem forkPairs_card (acc : Ω → Rq → Bool) (ω : Ω) :
+    (forkPairs acc ω).card = hits acc ω * hits acc ω - hits acc ω := by
+  unfold forkPairs hits
+  set s := acceptSet acc ω with hs
+  have hdiag : ((s ×ˢ s).filter (fun p => p.1 = p.2)).card = s.card := by
+    rw [show ((s ×ˢ s).filter (fun p => p.1 = p.2))
+          = s.map ⟨fun c => (c, c), fun a b h => (Prod.ext_iff.mp h).1⟩ from ?_, Finset.card_map]
+    ext p
+    simp only [Finset.mem_filter, Finset.mem_product, Finset.mem_map, Function.Embedding.coeFn_mk]
+    constructor
+    · rintro ⟨⟨h1, _h2⟩, h3⟩; exact ⟨p.1, h1, by rw [Prod.ext_iff]; exact ⟨rfl, h3⟩⟩
+    · rintro ⟨c, hc, rfl⟩; exact ⟨⟨hc, hc⟩, rfl⟩
+  have hsplit := Finset.card_filter_add_card_filter_not
+    (s := s ×ˢ s) (p := fun p : Rq × Rq => p.1 = p.2)
+  rw [hdiag, Finset.card_product] at hsplit
+  have hfp : ((s ×ˢ s).filter (fun p => ¬ p.1 = p.2)).card
+      = ((s ×ˢ s).filter (fun p => p.1 ≠ p.2)).card := rfl
+  omega
+
+/-- The forger's **advantage** `ε = Pr_{ω,c}[accept]`: favorable `(ω, c)` outcomes over the total
+`|Ω|·|C|`. A genuine probability, and the object every forking-lemma bound is stated against. -/
+def advantage (acc : Ω → Rq → Bool) : ℚ :=
+  (∑ ω : Ω, (hits acc ω : ℚ)) / ((Fintype.card Ω : ℚ) * (Fintype.card Rq : ℚ))
+
+/-- The forger's **fork probability** `frk = Pr_{ω,c,c'}[c ≠ c' ∧ accept c ∧ accept c']`: favorable
+`(ω, c, c')` outcomes over the total `|Ω|·|C|²`. A genuine probability — the ACTUAL chance the rewind yields
+two distinct-challenge accepting transcripts on the shared commitment. -/
+def forkProb (acc : Ω → Rq → Bool) : ℚ :=
+  (∑ ω : Ω, ((forkPairs acc ω).card : ℚ)) / ((Fintype.card Ω : ℚ) * (Fintype.card Rq : ℚ) ^ 2)
+
+/-- `forkProb` in closed form: `(∑_ω (hits_ω² − hits_ω)) / (|Ω|·|C|²)` — the both-accept mass minus the
+challenge-collision diagonal, over the outcome count. From `forkPairs_card`, cast to ℚ. -/
+theorem forkProb_eq (acc : Ω → Rq → Bool) :
+    forkProb acc =
+      (∑ ω : Ω, ((hits acc ω : ℚ) ^ 2 - (hits acc ω : ℚ))) /
+        ((Fintype.card Ω : ℚ) * (Fintype.card Rq : ℚ) ^ 2) := by
+  unfold forkProb
+  congr 1
+  apply Finset.sum_congr rfl
+  intro ω _
+  rw [forkPairs_card]
+  have hle : hits acc ω ≤ hits acc ω * hits acc ω := by
+    rcases Nat.eq_zero_or_pos (hits acc ω) with h | h
+    · simp [h]
+    · exact Nat.le_mul_of_pos_left _ h
+  rw [Nat.cast_sub hle, Nat.cast_mul]; ring
+
+/-! ### The core inequality — the forger's genuine `forkProb` bounded below by `advantage·(advantage − 1/|C|)`. -/
+
+/-- **Cauchy–Schwarz / power-mean over the prefix world** (`(∑_ω hits_ω)² ≤ |Ω|·∑_ω hits_ω²`), the SAME
+Chebyshev core as `forking_probability_bound`, now applied to the forger's REAL per-prefix hit counts. -/
+theorem sq_sum_hits_le (acc : Ω → Rq → Bool) :
+    (∑ ω : Ω, (hits acc ω : ℚ)) ^ 2 ≤ (Fintype.card Ω : ℚ) * ∑ ω : Ω, (hits acc ω : ℚ) ^ 2 := by
+  have h := sq_sum_le_card_mul_sum_sq (s := (Finset.univ : Finset Ω))
+    (f := fun ω => (hits acc ω : ℚ))
+  simpa using h
+
+/-- `advantage` is a genuine probability: nonnegative. -/
+theorem advantage_nonneg (acc : Ω → Rq → Bool) : 0 ≤ advantage acc := by
+  unfold advantage
+  apply div_nonneg
+  · exact Finset.sum_nonneg (fun ω _ => by positivity)
+  · positivity
+
+/-- **THE FORKING BOUND, ABOUT THE FORGER (not abstract `x`).** The forger's GENUINE fork probability is at
+least `advantage·(advantage − 1/|C|)`. The difference collapses (via `forkProb_eq` + field algebra) to
+`(|Ω|·∑hits² − (∑hits)²) / (|Ω|²·|C|²) ≥ 0`, whose numerator is exactly the Cauchy–Schwarz slack
+`sq_sum_hits_le`. Because the fork index is fixed and the commitment prefix-determined, the two reruns are
+GENUINELY independent given `ω`, so this is the tight `advantage − 1/|C|` form (no Bellare–Neven `1/q_H`
+slack). This is the statement `forking_probability_bound` could only make about an abstract `x`. -/
+theorem forkProb_ge_advantage (acc : Ω → Rq → Bool)
+    (hΩ : 0 < Fintype.card Ω) (hC : 0 < Fintype.card Rq) :
+    forkProb acc ≥ advantage acc * (advantage acc - 1 / (Fintype.card Rq : ℚ)) := by
+  have hΩ' : (0 : ℚ) < (Fintype.card Ω : ℚ) := by exact_mod_cast hΩ
+  have hC' : (0 : ℚ) < (Fintype.card Rq : ℚ) := by exact_mod_cast hC
+  have hΩ0 : (Fintype.card Ω : ℚ) ≠ 0 := ne_of_gt hΩ'
+  have hC0 : (Fintype.card Rq : ℚ) ≠ 0 := ne_of_gt hC'
+  have hcs := sq_sum_hits_le acc
+  have expand : forkProb acc - advantage acc * (advantage acc - 1 / (Fintype.card Rq : ℚ))
+      = ((Fintype.card Ω : ℚ) * (∑ ω : Ω, (hits acc ω : ℚ) ^ 2) - (∑ ω : Ω, (hits acc ω : ℚ)) ^ 2)
+          / ((Fintype.card Ω : ℚ) ^ 2 * (Fintype.card Rq : ℚ) ^ 2) := by
+    rw [forkProb_eq acc, Finset.sum_sub_distrib]
+    unfold advantage
+    field_simp
+    ring
+  have hnum : 0 ≤ (Fintype.card Ω : ℚ) * (∑ ω : Ω, (hits acc ω : ℚ) ^ 2)
+      - (∑ ω : Ω, (hits acc ω : ℚ)) ^ 2 := by linarith [hcs]
+  have : 0 ≤ forkProb acc - advantage acc * (advantage acc - 1 / (Fintype.card Rq : ℚ)) := by
+    rw [expand]; exact div_nonneg hnum (by positivity)
+  linarith
+
+/-- **A large-enough advantage forces a POSITIVE fork probability.** If `advantage > 1/|C|`, then
+`forkProb > 0`: both factors of `advantage·(advantage − 1/|C|)` are positive, and `forkProb` dominates it. -/
+theorem forkProb_pos_of_advantage (acc : Ω → Rq → Bool)
+    (hΩ : 0 < Fintype.card Ω) (hC : 0 < Fintype.card Rq)
+    (hadv : 1 / (Fintype.card Rq : ℚ) < advantage acc) : 0 < forkProb acc := by
+  have hC' : (0 : ℚ) < (Fintype.card Rq : ℚ) := by exact_mod_cast hC
+  have hpos : 0 < advantage acc * (advantage acc - 1 / (Fintype.card Rq : ℚ)) := by
+    apply mul_pos
+    · exact lt_trans (by positivity) hadv
+    · linarith
+  linarith [forkProb_ge_advantage acc hΩ hC]
+
+/-- **PRODUCTION, not assumption — a positive `forkProb` PRODUCES the two-transcript event.** From
+`forkProb > 0` we extract an explicit prefix world `ω` and DISTINCT challenges `c ≠ c'` on which the forger
+BOTH accepts. This is exactly the `∃ ρ c', … Accepts ρ ∧ Accepts (rewind ρ c')` disjunct that
+`concurrent_ts_uf_0_reduces` previously took as a bare hypothesis — here it is DERIVED from the probability
+being positive, and the shared prefix `ω` is what makes both runs carry the same commitment. -/
+theorem exists_forked_pair_of_forkProb_pos (acc : Ω → Rq → Bool) (h : 0 < forkProb acc) :
+    ∃ (ω : Ω) (c c' : Rq), c ≠ c' ∧ acc ω c = true ∧ acc ω c' = true := by
+  have hden : (0 : ℚ) < (Fintype.card Ω : ℚ) * (Fintype.card Rq : ℚ) ^ 2 := by
+    rcases Nat.eq_zero_or_pos (Fintype.card Ω) with h0 | h0
+    · rw [forkProb] at h; simp [h0] at h
+    · rcases Nat.eq_zero_or_pos (Fintype.card Rq) with h1 | h1
+      · rw [forkProb] at h; simp [h1] at h
+      · have : (0:ℚ) < (Fintype.card Ω:ℚ) := by exact_mod_cast h0
+        have : (0:ℚ) < (Fintype.card Rq:ℚ) := by exact_mod_cast h1
+        positivity
+  -- the numerator sum is positive
+  have hsum : 0 < ∑ ω : Ω, ((forkPairs acc ω).card : ℚ) := by
+    unfold forkProb at h
+    have := mul_pos h hden
+    rwa [div_mul_cancel₀ _ (ne_of_gt hden)] at this
+  -- some prefix has a positive fork-pair count
+  have hex : ∃ ω : Ω, 0 < ((forkPairs acc ω).card : ℚ) := by
+    by_contra hc
+    push_neg at hc
+    have : ∀ ω : Ω, ((forkPairs acc ω).card : ℚ) = 0 :=
+      fun ω => le_antisymm (hc ω) (by positivity)
+    simp only [this, Finset.sum_const_zero] at hsum
+    exact lt_irrefl 0 hsum
+  obtain ⟨ω, hω⟩ := hex
+  have hcardpos : 0 < (forkPairs acc ω).card := by exact_mod_cast hω
+  obtain ⟨p, hp⟩ := Finset.card_pos.mp hcardpos
+  simp only [forkPairs, Finset.mem_filter, Finset.mem_product, acceptSet] at hp
+  obtain ⟨⟨h1, h2⟩, h3⟩ := hp
+  simp only [Finset.mem_univ, true_and] at h1 h2
+  exact ⟨ω, p.1, p.2, h3, h1, h2⟩
+
+/-! ### The forger object and the STRAIGHT-LINE bridge to MSIS. -/
+
+/-- **A probabilistic forger.** The genuine finite model of the TS-UF-0 forger: a prefix world `Ω`, a
+commitment `comm ω` fixed by the prefix (BEFORE the challenge — the two reruns share it), a response
+`resp ω c`, and an acceptance predicate that, when it fires, is a genuine `IsSelfTargetMSISSolution` sharing
+that commitment. This is the finite-probability shadow of `Forger` (`Ω ↔` the RO answers below
+`challengeIdx` plus coins, `c ↔ ρ challengeIdx`), carrying exactly what the MSIS extractor consumes. -/
+structure ProbForger (A : M →ₗ[Rq] N) (t : N) (β : ℕ) (Ω : Type*) [Fintype Ω] where
+  /-- The commitment, fixed by the prefix world (produced before the fork challenge). -/
+  comm : Ω → N
+  /-- The response, as a function of prefix world and fork challenge. -/
+  resp : Ω → Rq → M
+  /-- The acceptance predicate. -/
+  acc : Ω → Rq → Bool
+  /-- **Acceptance is soundness.** Whenever the forger accepts on `(ω, c)`, its output is a genuine
+  SelfTargetMSIS solution on the SHARED commitment `comm ω` with challenge `c`. -/
+  acc_sound : ∀ ω c, acc ω c = true → IsSelfTargetMSISSolution A t β (resp ω c) c (comm ω)
+
+/-- **`forkProb > 0 ⟹ an MSIS solution`, straight-line.** A positive fork probability PRODUCES two
+distinct-challenge accepting transcripts on the SAME commitment `comm ω` (`exists_forked_pair_of_forkProb_pos`
++ `acc_sound`), which `forked_forgery_yields_msis_solution_selftarget` turns into a nonzero short MSIS
+solution on `[A | t]`. The two transcripts are DERIVED from the probability, never assumed. -/
+theorem prob_forger_forkProb_yields_msis {A : M →ₗ[Rq] N} {t : N} {β : ℕ}
+    (pf : ProbForger A t β Ω) (hfork : 0 < forkProb pf.acc) :
+    ∃ v, IsMSISSolution (augmented A t) ((β + β) + (β + β)) v := by
+  obtain ⟨ω, c, c', hne, ha, ha'⟩ := exists_forked_pair_of_forkProb_pos pf.acc hfork
+  exact forked_forgery_yields_msis_solution_selftarget A t (pf.comm ω) c c'
+    (pf.resp ω c) (pf.resp ω c') β hne (pf.acc_sound ω c ha) (pf.acc_sound ω c' ha')
+
+/-- **THE PROBABILISTIC BRIDGE — forger advantage `⟹` MSIS, STRAIGHT-LINE.** A probabilistic forger whose
+advantage exceeds `1/|C|` yields a genuine `IsMSISSolution` on `[A | t]`. The chain is entirely produced,
+never assumed: `advantage > 1/|C|` `⟹` `forkProb > 0` (`forkProb_pos_of_advantage`, from the proved forking
+bound) `⟹` two distinct-challenge accepting transcripts sharing the commitment (`forkProb`'s positivity)
+`⟹` the MSIS witness. This is the bridge `concurrent_ts_uf_0_reduces` was missing: the forger's advantage,
+a genuine probability, is what discharges the `outcome`/`ha'` hypothesis. -/
+theorem prob_forger_advantage_yields_msis {A : M →ₗ[Rq] N} {t : N} {β : ℕ}
+    (pf : ProbForger A t β Ω) (hΩ : 0 < Fintype.card Ω) (hC : 0 < Fintype.card Rq)
+    (hadv : 1 / (Fintype.card Rq : ℚ) < advantage pf.acc) :
+    ∃ v, IsMSISSolution (augmented A t) ((β + β) + (β + β)) v :=
+  prob_forger_forkProb_yields_msis pf (forkProb_pos_of_advantage pf.acc hΩ hC hadv)
+
+/-! ### The forger IN the abstract `ForkingProbabilityBound` — instantiating `x`. -/
+
+/-- **The forger's genuine `forkProb`/`advantage` satisfy `ForkingProbabilityBound` for every `q_H ≥ 1`.**
+This is the abstract predicate `forking_probability_bound` proved for an anonymous `x`, now stated of the
+REAL forger's probabilities — with the tighter (fixed-index) `advantage − 1/|C|` dominating the general
+`advantage/q_H − 1/|C|`. The forger genuinely appears in the bound. -/
+theorem forger_meets_forking_probability_bound (acc : Ω → Rq → Bool)
+    (hΩ : 0 < Fintype.card Ω) (hC : 0 < Fintype.card Rq) (qH : ℕ) (hqH : 0 < qH) :
+    ForkingProbabilityBound (forkProb acc) (advantage acc) qH (Fintype.card Rq) := by
+  unfold ForkingProbabilityBound
+  have hb := forkProb_ge_advantage acc hΩ hC
+  have hadv0 : 0 ≤ advantage acc := advantage_nonneg acc
+  have hq1 : (1 : ℚ) ≤ (qH : ℚ) := by exact_mod_cast hqH
+  have hdiv : advantage acc / (qH : ℚ) ≤ advantage acc := by
+    rw [div_le_iff₀ (by linarith)]; nlinarith [hadv0, hq1]
+  have : advantage acc * (advantage acc / (qH : ℚ) - 1 / (Fintype.card Rq : ℚ))
+      ≤ advantage acc * (advantage acc - 1 / (Fintype.card Rq : ℚ)) :=
+    mul_le_mul_of_nonneg_left (by linarith) hadv0
+  linarith
+
+/-- The forger's advantage placed at its (fixed) fork index `0` — the concrete `x : Fin (q_H+1) → ℚ` that
+`forking_probability_bound` ranges over, INSTANTIATED by the forger. -/
+def forgerX (adv : ℚ) (qH : ℕ) : Fin (qH + 1) → ℚ := fun i => if i = 0 then adv else 0
+
+/-- `forgerAdvantage (forgerX adv qH) = adv` — the abstract advantage of the forger's weight vector IS its
+genuine advantage. -/
+theorem forgerAdvantage_forgerX (adv : ℚ) (qH : ℕ) : forgerAdvantage (forgerX adv qH) = adv := by
+  unfold forgerAdvantage forgerX
+  rw [Finset.sum_ite_eq' Finset.univ (0 : Fin (qH + 1)) (fun _ => adv)]
+  simp
+
+/-- `forkSuccess (forgerX adv qH) |C| = adv² − adv/|C|` — the abstract fork-success at the forger's weight
+vector is the fixed-index both-accept-minus-collision quantity. -/
+theorem forkSuccess_forgerX (adv : ℚ) (qH : ℕ) (cardC : ℚ) :
+    forkSuccess (forgerX adv qH) cardC = adv ^ 2 - adv / cardC := by
+  unfold forkSuccess
+  have h1 : (∑ i : Fin (qH + 1), (forgerX adv qH i) ^ 2) = adv ^ 2 := by
+    have hsq : ∀ i : Fin (qH + 1), (forgerX adv qH i) ^ 2 = if i = 0 then adv ^ 2 else 0 := by
+      intro i; unfold forgerX; split <;> simp
+    rw [Finset.sum_congr rfl (fun i _ => hsq i),
+      Finset.sum_ite_eq' Finset.univ (0 : Fin (qH + 1)) (fun _ => adv ^ 2)]
+    simp
+  have h2 : (∑ i : Fin (qH + 1), forgerX adv qH i) = adv := by
+    unfold forgerX
+    rw [Finset.sum_ite_eq' Finset.univ (0 : Fin (qH + 1)) (fun _ => adv)]
+    simp
+  rw [h1, h2]
+
+/-- **The abstract `forking_probability_bound` INSTANTIATED at the forger, dominated by the genuine
+`forkProb`.** Feeding `x := forgerX (advantage acc)` to `forking_probability_bound` gives
+`forkSuccess (forgerX …) = advantage² − advantage/|C|`, and the forger's REAL `forkProb` dominates it (both
+`forkProb_ge_advantage` and the abstract lemma land on `advantage·(advantage − 1/|C|)`). So the abstract
+`x` really is the forger's per-fork-index success vector, and the genuine probability sits above the lemma's
+value. -/
+theorem forker_forking_probability_bound_via_abstract (acc : Ω → Rq → Bool)
+    (hΩ : 0 < Fintype.card Ω) (hC : 0 < Fintype.card Rq) (qH : ℕ) :
+    forkProb acc ≥ forkSuccess (forgerX (advantage acc) qH) (Fintype.card Rq) := by
+  rw [forkSuccess_forgerX]
+  have hb := forkProb_ge_advantage acc hΩ hC
+  have : advantage acc * (advantage acc - 1 / (Fintype.card Rq : ℚ))
+      = advantage acc ^ 2 - advantage acc / (Fintype.card Rq : ℚ) := by ring
+  linarith [hb, this.ge, this.le]
+
+end ProbForking
+
+#assert_axioms forkPairs_card
+#assert_axioms forkProb_eq
+#assert_axioms sq_sum_hits_le
+#assert_axioms forkProb_ge_advantage
+#assert_axioms forkProb_pos_of_advantage
+#assert_axioms exists_forked_pair_of_forkProb_pos
+#assert_axioms prob_forger_forkProb_yields_msis
+#assert_axioms prob_forger_advantage_yields_msis
+#assert_axioms forger_meets_forking_probability_bound
+#assert_axioms forgerAdvantage_forgerX
+#assert_axioms forkSuccess_forgerX
+#assert_axioms forker_forking_probability_bound_via_abstract
+
+/-! ## Teeth — the probabilistic bridge FIRES on a concrete forger over `ZMod 5`.
+
+`A = id`, key `t = 1`, over `ZMod 5` (zero seminorm, `β = 0`). One prefix world (`Ω = Unit`, so the
+Cauchy–Schwarz core is an EQUALITY), commitment `w = 0`, response `resp _ c = c` (so `id·c = 0 + c·1`
+accepts). The forger accepts on the two challenges `{1, 2}` — advantage `2/5 > 1/5 = 1/|C|`, fork
+probability `2/25 > 0` (genuine, tight against the bound). The bridge hands back an `IsMSISSolution`. -/
+
+section ProbTeeth
+
+open Dregg2.Crypto.Lattice
+open Dregg2.Crypto.HermineSelfTargetMSIS
+
+/-- The concrete probabilistic forger over `ZMod 5`: one prefix world, commitment `0`, response `resp _ c = c`,
+accepting exactly on `c ∈ {1, 2}`. Every accepting `(ω, c)` is a genuine SelfTargetMSIS solution (verify:
+`id·c = 0 + c·1`; all `ZMod 5` seminorms are `0 ≤ 0`). -/
+def exProbForger : ProbForger (LinearMap.id : ZMod 5 →ₗ[ZMod 5] ZMod 5) 1 0 Unit where
+  comm := fun _ => 0
+  resp := fun _ c => c
+  acc := fun _ c => decide (c = 1 ∨ c = 2)
+  acc_sound := by
+    intro _ c hc
+    refine ⟨Nat.le_zero.mpr rfl, Nat.le_zero.mpr rfl, Nat.le_zero.mpr rfl, ?_⟩
+    simp [HermineThreshold.verify]
+
+/-- The forger accepts on exactly two challenges: `hits = 2`. -/
+theorem exProb_hits : hits exProbForger.acc () = 2 := by decide
+
+/-- **The advantage is a genuine `2/5`** — above the `1/5 = 1/|C|` threshold, non-vacuously. -/
+theorem exProb_advantage : advantage exProbForger.acc = 2 / 5 := by
+  unfold advantage
+  rw [show (∑ ω : Unit, (hits exProbForger.acc ω : ℚ)) = 2 by rw [Fintype.sum_unique]; rw [exProb_hits]; norm_num]
+  norm_num [Fintype.card_unique, show Fintype.card (ZMod 5) = 5 from rfl]
+
+/-- **The fork probability is a genuine, positive `2/25`** — the real chance the rewind yields two
+distinct-challenge accepting transcripts. Tight against `advantage·(advantage − 1/|C|) = (2/5)(1/5) = 2/25`
+(`Ω = Unit`, so the power-mean core is saturated). -/
+theorem exProb_forkProb : forkProb exProbForger.acc = 2 / 25 := by
+  rw [forkProb_eq]
+  rw [show (∑ ω : Unit, ((hits exProbForger.acc ω : ℚ) ^ 2 - (hits exProbForger.acc ω : ℚ))) = 2 by
+    rw [Fintype.sum_unique, exProb_hits]; norm_num]
+  norm_num [Fintype.card_unique, show Fintype.card (ZMod 5) = 5 from rfl]
+
+/-- **The advantage clears the threshold** `1/|C| = 1/5 < 2/5`, so `forkProb > 0` is forced. -/
+theorem exProb_advantage_gt_threshold : 1 / (Fintype.card (ZMod 5) : ℚ) < advantage exProbForger.acc := by
+  rw [exProb_advantage, show Fintype.card (ZMod 5) = 5 from rfl]; norm_num
+
+/-- **THE PROBABILISTIC BRIDGE FIRES END-TO-END.** A forger of advantage `2/5 > 1/5` yields a genuine
+`IsMSISSolution` on `[id | 1]` — advantage `⟹` `forkProb > 0` `⟹` two accepting transcripts `⟹` MSIS,
+straight-line, nothing assumed. -/
+example : ∃ v, IsMSISSolution (augmented (LinearMap.id : ZMod 5 →ₗ[ZMod 5] ZMod 5) 1)
+    ((0 + 0) + (0 + 0)) v :=
+  prob_forger_advantage_yields_msis exProbForger (by decide) (by decide) exProb_advantage_gt_threshold
+
+/-- **The forger genuinely inhabits `ForkingProbabilityBound`.** With `q_H = 4`, `|C| = 5`, the forger's REAL
+`forkProb = 2/25` and `advantage = 2/5` satisfy `forkProb ≥ advantage·(advantage/q_H − 1/|C|)` — the abstract
+bound, now a statement about the forger, not an anonymous `x`. -/
+theorem exProb_meets_forking_bound :
+    ForkingProbabilityBound (forkProb exProbForger.acc) (advantage exProbForger.acc) 4
+      (Fintype.card (ZMod 5)) :=
+  forger_meets_forking_probability_bound exProbForger.acc (by decide) (by decide) 4 (by norm_num)
+
+-- Numeric witnesses: advantage `2/5`, forkProb `2/25`, both positive, and the bound is tight-ish.
+#guard decide ((2 : ℚ) / 25 = (2 / 5) * ((2 / 5) - 1 / 5))
+#guard decide ((0 : ℚ) < (2 : ℚ) / 25)
+#guard decide ((2 : ℚ) / 25 ≥ (2 / 5) * ((2 / 5) / 4 - 1 / 5))
+
+end ProbTeeth
+
+#assert_axioms exProb_hits
+#assert_axioms exProb_advantage
+#assert_axioms exProb_forkProb
+#assert_axioms exProb_advantage_gt_threshold
+#assert_axioms exProb_meets_forking_bound
 
 end Dregg2.Crypto.HermineTSUF
