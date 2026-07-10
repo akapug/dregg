@@ -251,6 +251,36 @@ pub fn shadow_fips204_sign(wire: &str) -> Result<String, String> {
     ffi::lean_fips204_sign(wire)
 }
 
+/// Whether the linked archive exports the extracted, Lean-verified REAL, FULL-BYTE ML-DSA sign core
+/// (`dregg_fips204_sign_real`, the brick-8 SIGN analog — the C-ABI entry over
+/// `Dregg2.Crypto.MlDsaSignReal.signRealFFI` = the FULL-DIMENSION `signCore` over the real 4032/3309-byte
+/// key/signature). When false, a caller must fall back to the `fips204` crate sign. Distinct from
+/// [`lean_available`]: a stale archive can lack this export.
+pub fn fips204_sign_real_core_available() -> bool {
+    ffi::fips204_sign_real_present() && lean_init_once().is_ok()
+}
+
+/// Run the VERIFIED, extracted REAL, FULL-BYTE ML-DSA sign core `@[export] dregg_fips204_sign_real`
+/// (the executable `Dregg2.Crypto.MlDsaSignReal.signRealFFI` over `signCore`). This PRODUCES the signature
+/// of a REAL ML-DSA-65 key over the real `sk ‖ msg ‖ ctx` bytes as a Lean-verified object (leanc-native) —
+/// PROVED to reproduce a genuine crate DETERMINISTIC signature byte-for-byte by
+/// `signRealFFI_matches_crate_deterministic`.
+///
+/// Wire grammar the export reads:
+///   * in:  `"hex(sk) hex(msg) hex(ctx)"` (three space-separated lowercase-hex fields; an empty field,
+///     e.g. `ctx = ε`, is the empty token between two spaces).
+///   * out: `hex(sig)` (the 3309-byte signature as lowercase hex) · `"ERR"` (the fail-closed answer for a
+///     malformed wire).
+///
+/// `dregg-pq::MlDsaKey::sign` routes its signing through this entry (installed via
+/// `dregg_pq::install_lean_sign_core_real`), so the deployed signer PRODUCES the signature from the verified
+/// Lean core over the real bytes rather than the `fips204` primitive. Returns `Err` if the archive lacks the
+/// export.
+pub fn shadow_fips204_sign_real(wire: &str) -> Result<String, String> {
+    ensure_lean_init()?;
+    ffi::lean_fips204_sign_real(wire)
+}
+
 /// Whether the linked archive exports the extracted, Lean-verified ML-KEM (FIPS 203) encaps core
 /// (`dregg_fips203_encaps`, the C-ABI entry over `Dregg2.Crypto.Fips203Kem.encapsFFI`). When false, a
 /// caller must fall back to the `ml-kem` crate encaps. Distinct from [`lean_available`]: a stale archive
@@ -488,6 +518,12 @@ mod ffi {
         ) -> usize;
         #[cfg(dregg_fips204_sign_present)]
         fn dregg_fips204_sign_str(
+            in_utf8: *const c_char,
+            out: *mut c_char,
+            out_cap: usize,
+        ) -> usize;
+        #[cfg(dregg_fips204_sign_real_present)]
+        fn dregg_fips204_sign_real_str(
             in_utf8: *const c_char,
             out: *mut c_char,
             out_cap: usize,
@@ -750,6 +786,38 @@ mod ffi {
         false
     }
 
+    /// FIPS-204-SIGN-REAL extraction (the brick-8 SIGN analog) — run the VERIFIED Lean ML-DSA sign core over
+    /// the REAL, FULL-BYTE key (leanc-native). Input: `"hex(sk) hex(msg) hex(ctx)"` (three space-separated
+    /// lowercase-hex fields over the real 4032-byte secret key); output: `hex(sig)` (the 3309-byte signature
+    /// as lowercase hex) / `"ERR"` (the fail-closed answer for a malformed wire). This is the FULL-DIMENSION
+    /// `MlDsaSignReal.signCore` (n=256 ring / NTT / SampleInBall / ExpandA / MakeHint / rejection loop / real
+    /// 4032/3309-byte codec, proved to reproduce a genuine crate deterministic signature byte-for-byte) — the
+    /// object `dregg-pq::MlDsaKey::sign` routes through to take the `fips204` crate OUT of the sign TCB.
+    #[cfg(dregg_fips204_sign_real_present)]
+    pub fn lean_fips204_sign_real(wire: &str) -> Result<String, String> {
+        lean_string_bridge(
+            wire,
+            dregg_fips204_sign_real_str,
+            "dregg_fips204_sign_real_str",
+        )
+    }
+
+    #[cfg(not(dregg_fips204_sign_real_present))]
+    pub fn lean_fips204_sign_real(_wire: &str) -> Result<String, String> {
+        Err("dregg_fips204_sign_real not exported by the linked archive (rebuild to enable)".into())
+    }
+
+    /// `true` iff the linked archive carries the extracted REAL, full-byte ML-DSA sign core.
+    #[cfg(dregg_fips204_sign_real_present)]
+    pub fn fips204_sign_real_present() -> bool {
+        true
+    }
+
+    #[cfg(not(dregg_fips204_sign_real_present))]
+    pub fn fips204_sign_real_present() -> bool {
+        false
+    }
+
     /// FIPS-203-ENCAPS EXTRACTION — run the VERIFIED Lean ML-KEM encaps core (leanc-native).
     /// Input: `"A t m"` (three decimal ints); output: `"u v K"` (ciphertext + encapsulated secret).
     #[cfg(dregg_fips203_encaps_present)]
@@ -948,6 +1016,25 @@ mod ffi {
         }
     }
 
+    #[cfg(all(test, dregg_fips204_sign_real_present))]
+    mod fips204_sign_real_extraction {
+        use super::*;
+        /// The brick-8 SIGN analog smoke test: the REAL, full-byte ML-DSA sign export links and runs
+        /// (leanc-native), and a malformed byte wire fails CLOSED ("ERR"). The real-vector byte-exact sign is
+        /// exercised end-to-end with genuine `fips204` crate keys in `dregg-pq`/`node`'s live-sign gate; here
+        /// we only confirm the bridge is wired and fail-closed on garbage.
+        #[test]
+        fn verified_real_ml_dsa_sign_bridge_links_and_fails_closed() {
+            lean_init_once().expect("init the Lean runtime");
+            // Non-hex fields fail closed (parser rejects before signCore).
+            assert_eq!(lean_fips204_sign_real("zz zz zz").unwrap(), "ERR");
+            // Wrong field count fails closed (not exactly three space-separated fields).
+            assert_eq!(lean_fips204_sign_real("00 00").unwrap(), "ERR");
+            // Odd-length hex fails closed (decodeHexChars rejects an unpaired nibble).
+            assert_eq!(lean_fips204_sign_real("0 0 0").unwrap(), "ERR");
+        }
+    }
+
     #[cfg(all(test, dregg_fips203_encaps_present, dregg_fips203_decaps_present))]
     mod fips203_kem_extraction {
         use super::*;
@@ -1106,6 +1193,16 @@ mod ffi {
     }
 
     pub fn lean_fips204_sign(_wire: &str) -> Result<String, String> {
+        Err("Lean static lib not linked".into())
+    }
+
+    /// `true` iff the linked archive carries the extracted REAL, full-byte ML-DSA sign
+    /// core. Unlinked stub: the archive is absent, so the real core is never present.
+    pub fn fips204_sign_real_present() -> bool {
+        false
+    }
+
+    pub fn lean_fips204_sign_real(_wire: &str) -> Result<String, String> {
         Err("Lean static lib not linked".into())
     }
 

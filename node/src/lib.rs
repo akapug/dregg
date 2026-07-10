@@ -964,6 +964,35 @@ async fn run_node(
         ),
     }
 
+    // ── ML-DSA SIGN (REAL): install the Lean-verified REAL, FULL-BYTE sign core as `MlDsaKey::sign`'s
+    // PRODUCER — the sign-side twin of the verify install above (BRICK 8 SIGN analog). ──
+    // With a REAL core installed, the DEPLOYED byte-level signer `dregg_pq::MlDsaKey::sign` (and
+    // `ml_dsa_sign_from_seed`) PRODUCES the 3309-byte signature from the extracted, full-dimension
+    // `MlDsaSignReal.signCore` (proved byte-exact vs the `fips204` crate's deterministic signature) over the
+    // real `sk ‖ msg ‖ ctx` bytes — and NEVER consults the `fips204` crate, taking that crate OUT of the
+    // node's SIGN TCB. On this path the signer is DETERMINISTIC (`rnd = 0`, the FIPS 204 deterministic
+    // variant — spec-valid). Gated on `fips204_sign_real_core_available()`: install ONLY when the linked
+    // archive actually EXPORTS `dregg_fips204_sign_real`; a stale archive lacking it keeps the hedged
+    // `fips204`-crate fallback (a valid FIPS-204 sign) rather than bricking sign.
+    match install_mldsa_verified_sign_core_real() {
+        MlDsaSignCoreRealInstall::Installed => info!(
+            "ML-DSA sign: verified Lean REAL sign core installed — the extracted full-byte \
+             `MlDsaSignReal.signCore` is now the PRODUCER behind the deployed `MlDsaKey::sign`; the \
+             `fips204` crate is no longer the signing authority (out of the node's SIGN TCB). Signing is \
+             now DETERMINISTIC (rnd=0, the FIPS 204 deterministic variant)."
+        ),
+        MlDsaSignCoreRealInstall::AlreadyInstalled => info!(
+            "ML-DSA sign: a verified Lean REAL sign core was already installed this process (install is \
+             once-per-process) — the `fips204` crate remains out of the SIGN TCB"
+        ),
+        MlDsaSignCoreRealInstall::ExportAbsent => warn!(
+            "ML-DSA sign: the linked Lean archive does NOT export `dregg_fips204_sign_real` \
+             (`fips204_sign_real_core_available()` is false) — the deployed `MlDsaKey::sign` falls back to \
+             the hedged `fips204` crate primitive (a valid FIPS-204 sign, but NOT the Lean-verified \
+             producer). Rebuild against a HEAD-matching archive to route sign through Lean."
+        ),
+    }
+
     // ── ML-KEM DECAPS: install the Lean-verified REAL core as `HybridResponder::finish`'s AUTHORITY ──
     // The hybrid session KEM (`dregg_pq::hybrid_kem`) recovers the ML-KEM-768 shared secret on the responder
     // side by calling the `ml-kem` crate's `.decapsulate`. With a REAL core installed it instead recovers the
@@ -2373,6 +2402,29 @@ pub fn install_mldsa_verified_sign_core() -> MlDsaSignCoreInstall {
     } else {
         MlDsaSignCoreInstall::AlreadyInstalled
     }
+}
+
+/// Outcome of installing the Lean-verified REAL, full-byte ML-DSA sign core as the PRODUCER behind the
+/// deployed `dregg_pq::MlDsaKey::sign` / `ml_dsa_sign_from_seed`. Re-exported from `dregg-pq` (the single
+/// shared install object); node keeps the name for the running-binary gate `tests/mldsa_live_sign.rs`.
+pub use dregg_pq::MlDsaSignCoreRealInstall;
+
+/// Install the extracted, Lean-verified REAL, full-byte ML-DSA-65 sign core
+/// (`Dregg2.Crypto.MlDsaSignReal.signCore`, the brick-8 SIGN analog) as the PRODUCER behind the DEPLOYED
+/// byte-level signer `dregg_pq::MlDsaKey::sign` — taking the `fips204` crate OUT of the node's SIGN TCB.
+/// Thin node-side wrapper over the SHARED `dregg_pq::install_verified_mldsa_sign_core_real`: it injects the
+/// two `dregg-lean-ffi` archive symbols. Gated on `fips204_sign_real_core_available()` so a stale archive
+/// that lacks the export does not brick signing (an absent core would make `try_sign` fail closed on every
+/// call). Idempotent and once-per-process. Exercised directly by `tests/mldsa_live_sign.rs`, so the
+/// running-binary gate drives the EXACT production install.
+///
+/// ⚠ On the installed path the deployed signer is DETERMINISTIC (`rnd = 0`, the FIPS 204 deterministic
+/// signing variant — spec-valid); the crate fallback path is hedged/randomized.
+pub fn install_mldsa_verified_sign_core_real() -> MlDsaSignCoreRealInstall {
+    dregg_pq::install_verified_mldsa_sign_core_real(
+        dregg_lean_ffi::fips204_sign_real_core_available,
+        |w| dregg_lean_ffi::shadow_fips204_sign_real(w).ok(),
+    )
 }
 
 /// Outcome of installing the Lean-verified REAL ML-KEM decaps core as `dregg_pq::HybridResponder::finish`'s
