@@ -70,6 +70,13 @@ pub enum GameAction {
 }
 
 impl GameAction {
+    /// **Address an NPC** — talk to `npc` about `topic`. Talking is narration: this rides the
+    /// closed [`GameAction::Use`] channel (its target is the NPC), and the resolver grants only
+    /// what a world [`DialogueRule`] permits. Pass an empty `topic` for a bare greeting.
+    pub fn talk(npc: impl Into<String>, topic: impl Into<String>) -> GameAction {
+        GameAction::Use(topic.into(), Some(npc.into()))
+    }
+
     /// A short human-legible label for the action (for playthrough logs).
     pub fn label(&self) -> String {
         match self {
@@ -308,6 +315,133 @@ pub struct Hostile {
     pub death_narration: String,
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// NPCs + BOUNDED dialogue — the AI narrates the reply; the WORLD resolves what the
+// NPC's words can DO. Prose is not power, at the social level.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// **A non-player character standing in a room.** The AI narrates its voice vividly, but what
+/// the NPC actually *does* — hand over an item, open a gate, reveal a fact — is decided by the
+/// world's [`DialogueRule`]s, never by the prose. A jailbroken narrator that makes the NPC
+/// "press the master key into your hand" changes nothing: talking is a [`GameAction::Use`]
+/// addressed to the NPC, and the resolver grants only what a rule (whose world-condition holds)
+/// permits.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Npc {
+    /// The room the NPC is in.
+    pub room: String,
+    /// The NPC's stable id (the `Use` *target* that addresses it — e.g. `Use("passage", Some("ferryman"))`).
+    pub id: String,
+    /// The NPC's display name.
+    pub name: String,
+    /// A short line of who they are (the world's own account; the AI narrates around it).
+    pub description: String,
+}
+
+impl Npc {
+    /// An NPC builder.
+    pub fn new(
+        room: impl Into<String>,
+        id: impl Into<String>,
+        name: impl Into<String>,
+        description: impl Into<String>,
+    ) -> Npc {
+        Npc {
+            room: room.into(),
+            id: id.into(),
+            name: name.into(),
+            description: description.into(),
+        }
+    }
+}
+
+/// **What an NPC's words are permitted to DO** when its [`DialogueRule`]'s condition holds.
+/// This is the whole social affordance: an NPC can give a (world-registered) item, open a gate
+/// by setting a flag, or reveal a fact (pure lore, no world change). It can never conjure an
+/// item the world never registered — a `GivesItem` grant is cap-gated exactly like a `Take`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DialogueGrant {
+    /// The NPC hands over an item. It must be a world-registered ([`GameWorld::all_items`])
+    /// item, so the grant is cap-permitted — an NPC cannot mint an unplaced item.
+    GivesItem(String),
+    /// The NPC opens the way / changes the world by setting a flag a downstream [`Gate`] reads.
+    OpensFlag(String, i64),
+    /// The NPC only speaks — reveals a fact, gives a hint. No world change (a pure narration turn).
+    Reveals,
+}
+
+/// **A bounded thing an NPC can be made to do by talking to it.** When the player addresses
+/// `npc` about `topic` in `room` (a [`GameAction::Use`] whose target is the NPC), the resolver
+/// finds the matching rule. If `requires` is `None` or satisfied by the current world, the
+/// NPC's `grant` fires and `granted_narration` is the world's account; otherwise the NPC still
+/// speaks (`withheld_narration`) but grants NOTHING — the conversation lands as a pure-narration
+/// turn. This is the social-level anti-forgery tooth: the Ferryman gives passage only while you
+/// hold the coin, no matter how sweetly the AI narrates him handing you the keys to the kingdom.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DialogueRule {
+    /// The room the conversation happens in.
+    pub room: String,
+    /// The NPC addressed (its [`Npc::id`]).
+    pub npc: String,
+    /// The topic asked about. An empty player topic matches the NPC's first rule in the room.
+    pub topic: String,
+    /// The world-condition under which the NPC's words have POWER (its `grant` fires). `None`
+    /// means the NPC always obliges (e.g. a scholar who simply tells you a fact).
+    pub requires: Option<Gate>,
+    /// What the NPC does when `requires` holds.
+    pub grant: DialogueGrant,
+    /// The world's account when the grant fires.
+    pub granted_narration: String,
+    /// The world's account when `requires` is not met — the NPC speaks, but grants nothing.
+    pub withheld_narration: String,
+}
+
+/// **A combat foe with HIT POINTS and a multi-turn fight** — the deeper combat model beside the
+/// one-shot [`Hostile`]. Each [`GameAction::Attack`] is one exchange the WORLD resolves: your
+/// armed strike takes `weapon_damage` off the foe (an unarmed strike only `unarmed_damage`); if
+/// the foe survives it strikes back for `attack` (mitigated by held `armor`). Both totals are
+/// tracked as world flags across turns (the foe's accumulated wounds and your `player_wounds`),
+/// so you defeat it over several turns with the right weapon — or die over several turns without
+/// it. The AI narrates each blow; the world computes the HP and the outcome.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CombatEnemy {
+    /// The room the foe holds.
+    pub room: String,
+    /// The foe's name (the `Attack` target).
+    pub name: String,
+    /// The foe's hit points — accumulated wounds `>= hp` fells it.
+    pub hp: i64,
+    /// The item that lets you wound it meaningfully (e.g. the silver sickle).
+    pub armed_by: String,
+    /// Damage one strike deals WHILE you hold `armed_by`.
+    pub weapon_damage: i64,
+    /// Damage one strike deals WITHOUT the weapon (often 0 — a fist off thorn-plate).
+    pub unarmed_damage: i64,
+    /// Damage the foe deals to you on each round it SURVIVES (it does not strike as it dies).
+    pub attack: i64,
+    /// An optional armor item and the damage it mitigates per hit (e.g. `("bark_shield", 1)`).
+    pub armor: Option<(String, i64)>,
+    /// The flag set once the foe is felled (a downstream [`Gate`] reads it, like the Warden's).
+    pub victory_flag: (String, i64),
+    /// The world's account of the felling blow.
+    pub victory_narration: String,
+    /// The world's account of a strike that wounds the foe but does not fell it (it hits back).
+    pub hit_narration: String,
+    /// The world's account of a strike that fails to wound the foe (it hits back the harder).
+    pub flail_narration: String,
+}
+
+impl CombatEnemy {
+    /// The flag under which this foe's accumulated wounds are tracked across turns.
+    pub fn wounds_flag(&self) -> String {
+        format!("wounds_{}", self.name)
+    }
+}
+
+/// The world flag the player's accumulated wounds are tracked under. The [`GameWorld::lose`]
+/// condition for a combat dungeon reads this flag against [`GameWorld::player_max_hp`].
+pub const PLAYER_WOUNDS_FLAG: &str = "player_wounds";
+
 /// **The win condition** — reach `room` while HOLDING `item`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Objective {
@@ -338,8 +472,17 @@ pub struct GameWorld {
     pub rooms: BTreeMap<String, Room>,
     /// The `Use` interactions the world defines.
     pub use_rules: Vec<UseRule>,
-    /// The hostiles, keyed by the room they guard.
+    /// The one-shot hostiles, keyed by the room they guard (the original [`Hostile`] model).
     pub hostiles: BTreeMap<String, Hostile>,
+    /// The HP-bearing combat foes, keyed by the room they guard (the multi-turn [`CombatEnemy`]).
+    pub combat: BTreeMap<String, CombatEnemy>,
+    /// The NPCs standing in the world.
+    pub npcs: Vec<Npc>,
+    /// The bounded dialogue rules — what talking to an NPC can actually DO.
+    pub dialogue: Vec<DialogueRule>,
+    /// The player's maximum hit points — accumulated [`PLAYER_WOUNDS_FLAG`] `>=` this is death
+    /// (wire it as a [`LoseCondition`] for a combat dungeon). Non-combat dungeons ignore it.
+    pub player_max_hp: i64,
     /// The starting room id.
     pub start: String,
     /// The win objective.
@@ -359,13 +502,51 @@ impl GameWorld {
         self.rooms.get(id)
     }
 
-    /// The set of takeable items across the whole dungeon — exactly the DM's grantable
-    /// whitelist ([`crate::DmCaps::narrator`]), so a `Take` is a cap-permitted grant.
+    /// The set of grantable items across the whole dungeon — exactly the DM's grantable
+    /// whitelist ([`crate::DmCaps::narrator`]), so a `Take` (or an NPC's [`DialogueGrant::GivesItem`])
+    /// is a cap-permitted grant. This is the union of every item placed in a room AND every item
+    /// an NPC can hand over: an NPC-given item is therefore world-registered and cap-permitted,
+    /// while an item the world never registered stays ungrantable (an NPC cannot mint one).
     pub fn all_items(&self) -> BTreeSet<String> {
-        self.rooms
+        let mut items: BTreeSet<String> = self
+            .rooms
             .values()
             .flat_map(|r| r.items.iter().cloned())
-            .collect()
+            .collect();
+        for rule in &self.dialogue {
+            if let DialogueGrant::GivesItem(i) = &rule.grant {
+                items.insert(i.clone());
+            }
+        }
+        items
+    }
+
+    /// The NPCs standing in `room` right now.
+    pub fn npcs_here(&self, room: &str) -> Vec<&Npc> {
+        self.npcs.iter().filter(|n| n.room == room).collect()
+    }
+
+    /// Whether an NPC with id `npc` stands in `room`.
+    pub fn npc_here(&self, room: &str, npc: &str) -> bool {
+        self.npcs.iter().any(|n| n.room == room && n.id == npc)
+    }
+
+    /// The dialogue rule that governs addressing `npc` about `topic` in `room`. An exact topic
+    /// match wins; an empty player topic falls back to the NPC's first rule in the room (so a
+    /// bare "talk to the witch" reaches her one line).
+    pub fn dialogue_rule(&self, room: &str, npc: &str, topic: &str) -> Option<&DialogueRule> {
+        self.dialogue
+            .iter()
+            .find(|r| r.room == room && r.npc == npc && r.topic == topic)
+            .or_else(|| {
+                if topic.is_empty() {
+                    self.dialogue
+                        .iter()
+                        .find(|r| r.room == room && r.npc == npc)
+                } else {
+                    None
+                }
+            })
     }
 
     /// The items visible in `room` right now — its initial items minus anything already taken
@@ -430,6 +611,13 @@ pub enum GameRefusal {
     },
     /// There is nothing by that name to attack in this room.
     NoSuchTarget(String),
+    /// The named NPC is here but has nothing to say on that topic (no dialogue rule).
+    NpcSilent {
+        /// The NPC addressed.
+        npc: String,
+        /// The topic they have no line for.
+        topic: String,
+    },
     /// The game is already over — no further moves resolve.
     GameOver(GameStatus),
 }
@@ -450,6 +638,16 @@ impl std::fmt::Display for GameRefusal {
                 None => write!(f, "using the {item} does nothing here"),
             },
             GameRefusal::NoSuchTarget(t) => write!(f, "there is no {t} here to attack"),
+            GameRefusal::NpcSilent { npc, topic } => {
+                if topic.is_empty() {
+                    write!(f, "the {npc} has nothing to say to you")
+                } else {
+                    write!(
+                        f,
+                        "the {npc} only shakes their head at the mention of {topic}"
+                    )
+                }
+            }
             GameRefusal::GameOver(s) => write!(f, "the game is over ({s:?})"),
         }
     }
@@ -551,6 +749,21 @@ pub fn resolve_action(map: &GameWorld, world: &WorldCell, action: &GameAction) -
         }
 
         GameAction::Use(item, target) => {
+            // SOCIAL PATH: if the target is an NPC standing here, this is *talking* — the AI
+            // narrates the reply, but the world decides what the NPC's words can DO. Talking
+            // holds no item, so this branches BEFORE the item-holding check.
+            if let Some(npc) = target {
+                if map.npc_here(&here, npc) {
+                    return match map.dialogue_rule(&here, npc, item) {
+                        Some(rule) => resolve_dialogue(map, world, rule),
+                        // The NPC is here but has no line on this topic.
+                        None => Outcome::Refused(GameRefusal::NpcSilent {
+                            npc: npc.clone(),
+                            topic: item.clone(),
+                        }),
+                    };
+                }
+            }
             if !world.inventory.contains(item) {
                 return Outcome::Refused(GameRefusal::NotHolding(item.clone()));
             }
@@ -579,6 +792,13 @@ pub fn resolve_action(map: &GameWorld, world: &WorldCell, action: &GameAction) -
         }
 
         GameAction::Attack(target) => {
+            // DEEP COMBAT: an HP-bearing foe resolves as one multi-turn exchange (the world
+            // computes the HP; the AI narrates the blow). Checked before the one-shot Hostile.
+            if let Some(enemy) = map.combat.get(&here) {
+                if &enemy.name == target {
+                    return resolve_combat(map, world, enemy);
+                }
+            }
             let hostile = match map.hostiles.get(&here) {
                 Some(h) if &h.name == target => h,
                 _ => return Outcome::Refused(GameRefusal::NoSuchTarget(target.clone())),
@@ -610,29 +830,129 @@ pub fn resolve_action(map: &GameWorld, world: &WorldCell, action: &GameAction) -
     }
 }
 
+/// **Resolve a conversation** — the social-level anti-forgery tooth. If the rule's `requires`
+/// condition holds (or is `None`), the NPC's `grant` fires as this turn's effect; otherwise the
+/// NPC simply speaks and grants NOTHING (a pure-narration turn). Either way the AI's flowery
+/// account of what the NPC "did" has no power: the world grants only what the rule permits.
+fn resolve_dialogue(map: &GameWorld, world: &WorldCell, rule: &DialogueRule) -> Outcome {
+    let condition_met = rule.requires.as_ref().map_or(true, |g| g.satisfied(world));
+    if !condition_met {
+        // The NPC speaks, but the world withholds the grant — talking is narration.
+        return Outcome::Legal(Resolution {
+            narration: rule.withheld_narration.clone(),
+            status: status_after(map, world, None),
+            effect: None,
+        });
+    }
+    let effect = match &rule.grant {
+        DialogueGrant::GivesItem(item) => Some(WorldEffect::GrantItem(item.clone())),
+        DialogueGrant::OpensFlag(k, v) => Some(WorldEffect::SetFlag(k.clone(), *v)),
+        DialogueGrant::Reveals => None,
+    };
+    Outcome::Legal(Resolution {
+        narration: rule.granted_narration.clone(),
+        status: status_after(map, world, effect.as_ref()),
+        effect,
+    })
+}
+
+/// **Resolve one combat exchange** — the world computes the HP; the AI narrates the blow. Your
+/// armed strike takes `weapon_damage` off the foe (unarmed only `unarmed_damage`); if the foe
+/// survives it strikes back for `attack` (mitigated by held `armor`). Both totals persist as
+/// world flags across turns, so a fight plays out over several turns: felling the foe with the
+/// right weapon, or dying to it without one. Every exchange lands ONE receipted turn.
+fn resolve_combat(map: &GameWorld, world: &WorldCell, enemy: &CombatEnemy) -> Outcome {
+    let wounds_flag = enemy.wounds_flag();
+    let foe_wounds = world.flags.get(&wounds_flag).copied().unwrap_or(0);
+    let armed = world.inventory.contains(&enemy.armed_by);
+    let strike = if armed {
+        enemy.weapon_damage
+    } else {
+        enemy.unarmed_damage
+    };
+    let new_foe_wounds = foe_wounds + strike;
+
+    if new_foe_wounds >= enemy.hp {
+        // The felling blow — the foe drops without a counter. Record its final wounds AND the
+        // victory flag (a downstream gate reads it), atomically, as one turn.
+        let effect = Some(WorldEffect::Batch(vec![
+            WorldEffect::SetFlag(wounds_flag, new_foe_wounds),
+            WorldEffect::SetFlag(enemy.victory_flag.0.clone(), enemy.victory_flag.1),
+        ]));
+        return Outcome::Legal(Resolution {
+            narration: enemy.victory_narration.clone(),
+            status: status_after(map, world, effect.as_ref()),
+            effect,
+        });
+    }
+
+    // The foe survives and strikes back. Armor mitigates the incoming blow (never below 0).
+    let mitigation = match &enemy.armor {
+        Some((item, m)) if world.inventory.contains(item) => *m,
+        _ => 0,
+    };
+    let incoming = (enemy.attack - mitigation).max(0);
+    let player_wounds = world.flags.get(PLAYER_WOUNDS_FLAG).copied().unwrap_or(0);
+    let new_player_wounds = player_wounds + incoming;
+    // One exchange, two counters advanced atomically — the world's HP bookkeeping in a Batch.
+    let effect = Some(WorldEffect::Batch(vec![
+        WorldEffect::SetFlag(wounds_flag, new_foe_wounds),
+        WorldEffect::SetFlag(PLAYER_WOUNDS_FLAG.to_string(), new_player_wounds),
+    ]));
+    let narration = if strike > 0 {
+        enemy.hit_narration.clone()
+    } else {
+        enemy.flail_narration.clone()
+    };
+    Outcome::Legal(Resolution {
+        narration,
+        status: status_after(map, world, effect.as_ref()),
+        effect,
+    })
+}
+
 /// Compute the game status after `effect` would land: the post-state's room + inventory +
-/// flags, checked against the lose conditions (first) and then the win objective.
+/// flags, checked against the lose conditions (first) and then the win objective. A
+/// [`WorldEffect::Batch`] is folded so a multi-flag combat exchange (foe wounds + player wounds)
+/// is judged against the SAME post-state it lands.
 fn status_after(map: &GameWorld, world: &WorldCell, effect: Option<&WorldEffect>) -> GameStatus {
     let mut room = world.scene.clone();
-    let mut holds_extra: Option<String> = None;
-    let mut flag_over: Option<(String, i64)> = None;
-    match effect {
-        Some(WorldEffect::AdvanceScene(s)) => room = s.clone(),
-        Some(WorldEffect::GrantItem(i)) => holds_extra = Some(i.clone()),
-        Some(WorldEffect::SetFlag(k, v)) => flag_over = Some((k.clone(), *v)),
-        None => {}
-    }
-    let flag_val = |k: &str| -> i64 {
-        if let Some((fk, fv)) = &flag_over {
-            if fk == k {
-                return *fv;
+    let mut extra_items: BTreeSet<String> = BTreeSet::new();
+    let mut flag_over: BTreeMap<String, i64> = BTreeMap::new();
+
+    fn collect(
+        e: &WorldEffect,
+        room: &mut String,
+        extra_items: &mut BTreeSet<String>,
+        flag_over: &mut BTreeMap<String, i64>,
+    ) {
+        match e {
+            WorldEffect::AdvanceScene(s) => *room = s.clone(),
+            WorldEffect::GrantItem(i) => {
+                extra_items.insert(i.clone());
+            }
+            WorldEffect::SetFlag(k, v) => {
+                flag_over.insert(k.clone(), *v);
+            }
+            WorldEffect::Batch(v) => {
+                for sub in v {
+                    collect(sub, room, extra_items, flag_over);
+                }
             }
         }
-        world.flags.get(k).copied().unwrap_or(0)
+    }
+    if let Some(e) = effect {
+        collect(e, &mut room, &mut extra_items, &mut flag_over);
+    }
+
+    let flag_val = |k: &str| -> i64 {
+        flag_over
+            .get(k)
+            .copied()
+            .unwrap_or_else(|| world.flags.get(k).copied().unwrap_or(0))
     };
-    let holds = |item: &str| -> bool {
-        world.inventory.contains(item) || holds_extra.as_deref() == Some(item)
-    };
+    let holds =
+        |item: &str| -> bool { world.inventory.contains(item) || extra_items.contains(item) };
     // Lose FIRST — death precedes any objective.
     for l in &map.lose {
         if flag_val(&l.flag) >= l.at_least {
@@ -656,6 +976,11 @@ pub fn describe_room(map: &GameWorld, room_id: &str, world: &WorldCell) -> Strin
     if !items.is_empty() {
         let list: Vec<&str> = items.iter().map(String::as_str).collect();
         out.push_str(&format!(" You see: {}.", list.join(", ")));
+    }
+    let npcs = map.npcs_here(room_id);
+    if !npcs.is_empty() {
+        let list: Vec<&str> = npcs.iter().map(|n| n.name.as_str()).collect();
+        out.push_str(&format!(" Here stands: {}.", list.join(", ")));
     }
     if !room.exits.is_empty() {
         let dirs: Vec<&str> = room.exits.keys().map(String::as_str).collect();
@@ -759,6 +1084,26 @@ fn parse_command(words: &[&str]) -> Option<GameAction> {
         "look" | "examine" | "inspect" | "survey" => Some(GameAction::Examine),
         "attack" | "fight" | "strike" | "kill" => {
             words.get(1).map(|t| GameAction::Attack(t.to_string()))
+        }
+        // Talking is addressed to an NPC and rides the `Use` channel: "ask NPC about TOPIC" /
+        // "talk to NPC about TOPIC" / "talk to NPC". The world's DialogueRule decides what the
+        // NPC's words may DO — the parse only names the closed action.
+        "talk" | "ask" | "speak" | "greet" | "say" => {
+            let mut rest = words.iter().skip(1).copied();
+            let mut first = rest.next()?;
+            if first == "to" || first == "with" {
+                first = rest.next()?;
+            }
+            let npc = first.to_string();
+            // A topic after "about" / "for" / "of" / "regarding"; else a bare greeting (empty topic).
+            let remaining: Vec<&str> = rest.collect();
+            let topic = remaining
+                .iter()
+                .position(|w| matches!(*w, "about" | "for" | "of" | "regarding" | "on"))
+                .and_then(|i| remaining.get(i + 1))
+                .map(|t| t.to_string())
+                .unwrap_or_default();
+            Some(GameAction::talk(npc, topic))
         }
         _ => None,
     }
@@ -1105,6 +1450,10 @@ pub fn sunken_vault() -> GameWorld {
         rooms: room_map,
         use_rules,
         hostiles,
+        combat: BTreeMap::new(),
+        npcs: Vec::new(),
+        dialogue: Vec::new(),
+        player_max_hp: 0,
         start: "shore".into(),
         objective: Objective {
             room: "sunken_gate".into(),
@@ -1114,6 +1463,275 @@ pub fn sunken_vault() -> GameWorld {
             flag: "slain".into(),
             at_least: 1,
             description: "slain by the Warden".into(),
+        }],
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE BRAMBLE KEEP — the second complete adventure, exercising NPCs, bounded
+// dialogue, and multi-turn HP combat over a fourteen-room critical path.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// **THE BRAMBLE KEEP** — a complete, solvable fifteen-room adventure in a castle swallowed by a
+/// cursed thornwood. Distinct in theme from THE SUNKEN VAULT (a verdant, overgrown ruin, not a
+/// drowned one) and built to exercise every new mechanic: an NPC with **world-bounded dialogue**,
+/// a **multi-turn HP fight**, light/dark and locked-door gating, and optional side rooms.
+///
+/// The Sunheart gem sleeps on the Thorn Throne; carry it out to the Broken Rampart to lift the
+/// curse and escape. The critical path, in forced order:
+///
+/// 1. take the **candle** in the gatehouse — the crypt below the courtyard is pitch dark
+///    (a [`Gate::NeedsItem`] `candle`);
+/// 2. descend to the **crypt** and take the **key** (and, optionally, the **bark_shield** from
+///    the orchard, which blunts the Knight's blows);
+/// 3. in the courtyard, **use the key on the iron gate** — sets `gate_open`, opening the hall;
+/// 4. pick the **nightshade** in the garden;
+/// 5. in her hut, **ask the Hedge-Witch about the sickle** — she gives the **silver sickle**
+///    ONLY while you hold the nightshade ([`DialogueRule`] `requires` = `NeedsItem("nightshade")`).
+///    No flattery moves her: talking is narration; the world grants only what the rule permits;
+/// 6. through the hall and up the thorn walk to the approach, **fight the Bramble Knight** — an
+///    HP foe felled over several armed strikes with the sickle. Bare-handed it cannot be dented
+///    and cuts you down over the turns (a real LOSS: the Knight, not a gate, is what forces the
+///    weapon). Felling it sets `knight_felled`, opening the throne;
+/// 7. take the **sunheart** on the throne, and carry it up to the **rampart** to WIN.
+///
+/// Side content off the path: the **well yard**, the **orchard** (the bark_shield), the **chapel**
+/// (holy water — lore), the **reliquary** (a thorn-sealed alcove whose living wall is opened by
+/// **using the sickle on the thornwall**, `sets thorns_cut` — the [`UseRule`] mechanic, optional),
+/// and the **library**, where a **Ghost Scholar** always tells you the keep's history
+/// ([`DialogueGrant::Reveals`] — words that reveal a fact but change nothing in the world).
+pub fn bramble_keep() -> GameWorld {
+    let rooms = vec![
+        Room::new(
+            "gatehouse",
+            "Ruined Gatehouse",
+            "A collapsed barbican strangled in ivy; a stub of candle sits in a dead sconce.",
+        )
+        .item("candle")
+        .exit("north", Exit::open("courtyard"))
+        .exit("east", Exit::open("well_yard")),
+        Room::new(
+            "well_yard",
+            "Well Yard",
+            "A dry well and a coil of rotted rope; brambles have swallowed the far arch.",
+        )
+        .item("rope")
+        .exit("west", Exit::open("gatehouse")),
+        Room::new(
+            "courtyard",
+            "Overgrown Courtyard",
+            "A cracked fountain under a canopy of thorns. An iron gate bars the keep's north hall.",
+        )
+        .exit("south", Exit::open("gatehouse"))
+        .exit("east", Exit::open("garden"))
+        .exit("west", Exit::open("witch_hut"))
+        // The crypt stair is pitch dark — impassable without a light.
+        .exit(
+            "down",
+            Exit::gated("crypt", Gate::NeedsItem("candle".into())),
+        )
+        // The iron gate opens only once the key has turned it.
+        .exit(
+            "north",
+            Exit::gated("hall", Gate::NeedsFlag("gate_open".into(), 1)),
+        ),
+        Room::new(
+            "garden",
+            "Poisoned Garden",
+            "Black-petalled nightshade chokes the old herb beds, sweet and deadly.",
+        )
+        .item("nightshade")
+        .exit("west", Exit::open("courtyard"))
+        .exit("east", Exit::open("orchard")),
+        Room::new(
+            "orchard",
+            "Withered Orchard",
+            "Dead fruit trees; a slab of shaped bark leans against one — a crude shield.",
+        )
+        .item("bark_shield")
+        .exit("west", Exit::open("garden")),
+        Room::new(
+            "witch_hut",
+            "Hedge-Witch's Hut",
+            "A leaning hut hung with drying roots; the Hedge-Witch watches from her stool.",
+        )
+        .exit("east", Exit::open("courtyard")),
+        Room::new(
+            "crypt",
+            "Candlelit Crypt",
+            "Stone biers under low arches; a heavy iron key rests on a knight's cold effigy.",
+        )
+        .item("key")
+        .exit("up", Exit::open("courtyard")),
+        Room::new(
+            "hall",
+            "Great Hall",
+            "A roofless hall, its banners rotted to threads; passages branch off the dais.",
+        )
+        .exit("south", Exit::open("courtyard"))
+        .exit("west", Exit::open("chapel"))
+        .exit("east", Exit::open("library"))
+        .exit("north", Exit::open("thorn_walk")),
+        Room::new(
+            "chapel",
+            "Fallen Chapel",
+            "A toppled altar; a cracked font still holds a finger of holy water.",
+        )
+        .item("holy_water")
+        .exit("east", Exit::open("hall")),
+        Room::new(
+            "library",
+            "Mouldered Library",
+            "Shelves of pulped books; a translucent Ghost Scholar drifts among them, muttering.",
+        )
+        .exit("west", Exit::open("hall")),
+        Room::new(
+            "thorn_walk",
+            "Thornchoked Walk",
+            "A colonnade to the throne approach; a side wall of living thorns seals an alcove west.",
+        )
+        .exit("south", Exit::open("hall"))
+        .exit("north", Exit::open("approach"))
+        // The thornwall parts only once it is cut with the sickle — a side alcove, off the path.
+        .exit(
+            "west",
+            Exit::gated("reliquary", Gate::NeedsFlag("thorns_cut".into(), 1)),
+        ),
+        Room::new(
+            "reliquary",
+            "Thorn-Sealed Reliquary",
+            "A cramped shrine the thorns kept; a tarnished sun-medallion hangs above dead candles.",
+        )
+        .item("sun_medallion")
+        .exit("east", Exit::open("thorn_walk")),
+        Room::new(
+            "approach",
+            "Throne Approach",
+            "A short flight to the throne room — and across it, a Bramble Knight grinds awake.",
+        )
+        .exit("south", Exit::open("thorn_walk"))
+        // Sealed until the Bramble Knight is felled.
+        .exit(
+            "north",
+            Exit::gated("throne", Gate::NeedsFlag("knight_felled".into(), 1)),
+        ),
+        Room::new(
+            "throne",
+            "The Thorn Throne",
+            "Thorns cage a throne of black wood; upon its seat glows the Sunheart.",
+        )
+        .item("sunheart")
+        .exit("south", Exit::open("approach"))
+        .exit("up", Exit::open("rampart")),
+        Room::new(
+            "rampart",
+            "Broken Rampart",
+            "A shattered wall open to clean sky — beyond the thorns, the road home.",
+        )
+        .exit("down", Exit::open("throne")),
+    ];
+
+    let mut room_map = BTreeMap::new();
+    for r in rooms {
+        room_map.insert(r.id.clone(), r);
+    }
+
+    let use_rules = vec![
+        // The iron key turns the gate to the hall.
+        UseRule {
+            room: "courtyard".into(),
+            item: "key".into(),
+            target: Some("gate".into()),
+            sets_flag: ("gate_open".into(), 1),
+            narration: "The iron key bites, and the gate screams open on the north hall.".into(),
+        },
+        // The silver sickle cuts the living thornwall.
+        UseRule {
+            room: "thorn_walk".into(),
+            item: "sickle".into(),
+            target: Some("thornwall".into()),
+            sets_flag: ("thorns_cut".into(), 1),
+            narration: "The silver sickle shears through the thorns; they wither and fall away."
+                .into(),
+        },
+    ];
+
+    let npcs = vec![
+        Npc::new(
+            "witch_hut",
+            "witch",
+            "Hedge-Witch",
+            "a green-toothed crone who trades in favours, not flattery",
+        ),
+        Npc::new(
+            "library",
+            "scholar",
+            "Ghost Scholar",
+            "a pale revenant still keeping the keep's records",
+        ),
+    ];
+
+    let dialogue = vec![
+        // WORLD-BOUNDED: the Witch gives the sickle ONLY while you hold the nightshade she wants.
+        // No prose can talk it out of her early — talking is narration; the rule decides.
+        DialogueRule {
+            room: "witch_hut".into(),
+            npc: "witch".into(),
+            topic: "sickle".into(),
+            requires: Some(Gate::NeedsItem("nightshade".into())),
+            grant: DialogueGrant::GivesItem("sickle".into()),
+            granted_narration: "The Hedge-Witch takes your nightshade, sniffs it, and presses the silver sickle into your palm. 'A fair trade,' she rasps.".into(),
+            withheld_narration: "The Hedge-Witch folds her arms. 'Bring me nightshade from the garden, child, and the silver sickle is yours. Not one word sooner.'".into(),
+        },
+        // A pure-lore grant: the Ghost Scholar always tells you the keep's history, but his words
+        // change nothing in the world (Reveals) — the hint has no mechanical power.
+        DialogueRule {
+            room: "library".into(),
+            npc: "scholar".into(),
+            topic: "curse".into(),
+            requires: None,
+            grant: DialogueGrant::Reveals,
+            granted_narration: "The Ghost Scholar sighs: 'The Sunheart bound the thornwitch's curse. Cut the thorns, fell her Knight, and carry the gem to open sky — only then does the wood release the keep.'".into(),
+            withheld_narration: String::new(),
+        },
+    ];
+
+    let mut combat = BTreeMap::new();
+    combat.insert(
+        "approach".to_string(),
+        CombatEnemy {
+            room: "approach".into(),
+            name: "knight".into(),
+            hp: 6,
+            armed_by: "sickle".into(),
+            weapon_damage: 3, // two armed strikes fell it
+            unarmed_damage: 0, // bare hands cannot dent thorn-plate
+            attack: 3,         // each surviving round it strikes for 3
+            armor: Some(("bark_shield".into(), 1)),
+            victory_flag: ("knight_felled".into(), 1),
+            victory_narration: "The silver sickle hews the Bramble Knight's neck-vine; it comes apart in a rain of dead thorns.".into(),
+            hit_narration: "The sickle bites deep — the Knight staggers, then rakes you with a thorned gauntlet.".into(),
+            flail_narration: "Your bare blows glance off the thorn-plate; the Knight's gauntlet opens a long red line across you.".into(),
+        },
+    );
+
+    GameWorld {
+        rooms: room_map,
+        use_rules,
+        hostiles: BTreeMap::new(),
+        combat,
+        npcs,
+        dialogue,
+        player_max_hp: 10,
+        start: "gatehouse".into(),
+        objective: Objective {
+            room: "rampart".into(),
+            holding: "sunheart".into(),
+        },
+        lose: vec![LoseCondition {
+            flag: PLAYER_WOUNDS_FLAG.into(),
+            at_least: 10,
+            description: "cut down by the Bramble Knight".into(),
         }],
     }
 }
