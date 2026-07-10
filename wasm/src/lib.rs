@@ -53,6 +53,22 @@ pub mod bindings_card;
 // a resolve publishes the merged document to the doc-cell's umem-heap as a REAL verified turn, and
 // the conflict view re-renders wholesale through `deos-view`'s gpui-free web renderer.
 pub mod bindings_doc;
+// The story surface in the tab: `spween-dregg`'s verifiable CYOA (a spween `.scene` runs on a
+// dregg world-cell; each choice a cap-gated verified turn; the playthrough an un-retconnable
+// receipt chain that replays for a stranger). `StoryWorld` is the narrative sibling of
+// `DocCollabWorld`.
+//
+// ⚠ NATIVE-ONLY (gated with the `spween-dregg` dep, `[target.'cfg(not(target_arch =
+// "wasm32"))'.dependencies]`). `StoryWorld` rides `spween-dregg`'s `Driver`/`WorldCell`, whose
+// turns are admitted by `dregg_app_framework::EmbeddedExecutor`; `dregg-app-framework`
+// unconditionally pulls `axum`/`tokio(full)`/`reqwest` (non-wasm32) AND the native `dregg-lean-ffi`
+// (whose `no-lean-link` marshal-only path is currently a stale stub) — so the story path builds
+// for neither the wasm32 ship nor the wasm crate's native `cargo test` while wired in. It compiles
+// + its test passes ONLY in a full-Lean native workspace (verified via `spween-dregg`'s own suite).
+// This is one flip from live once `spween-dregg` grows a wasm-clean executor route (the same in-tab
+// embedded executor `DocCollabWorld` already rides) instead of `dregg-app-framework`.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod bindings_story;
 
 // ============================================================================
 // Token operations (Macaroon backend)
