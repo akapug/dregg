@@ -361,3 +361,10 @@ QUOTIENT-CONSISTENCY step: verifyAlgo checks `C(ζ) = Z_H(ζ)·q(ζ)` at a rando
 MainAirAccept. The FRI low-degree half is banked (#2); the OOD-ζ consistency over the deployed descriptor is the
 unwritten keystone. Same SHAPE as DEBT-B's finite-map refinement (make the proof faithful to the deployed object).
 The `MainAirAccept ⟹ Satisfied2` half is already proved (6/8 legs @ transferV3, `AirLegsDischarged`).
+- ★ DEBT-A KEYSTONE FORK ANSWERED `6f1ac8baa` — `verifyAlgo accepts ⟹ MainAirAccept` does NOT compose as one
+  term. Both flanking halves PROVED (accept⟹OOD-identity via the committed reject theorem's contrapositive;
+  ood_consistency = Schwartz–Zippel over Polynomial F). FORK VERDICT (by type): `arithResidual` is RAW ℤ, not a
+  Polynomial ⟹ the keystone is K′ (the toy→deployed VM refinement, DEBT-B-shaped). Gap reduced to a clean
+  three-axis bridge `OodInterpZ`, decomposed in DEBT-A-OBLIGATIONS.md: (a) field-vs-ℤ canonical lift, (b) trace-
+  column interpolation as Polynomial BabyBear (the core), (c) constraint-batching RLC (a 2nd SZ step). Each a
+  separable codex-grindable goal. Carrier-free; teeth both-truth; non-vacuous landing.
