@@ -45,6 +45,19 @@ H3_CLIENT = os.path.join(REPO, "conformance", "h3_client.py")
 QUIC_PYTHON = os.environ.get("QUIC_PYTHON", "")
 
 HTTP_PORT = int(os.environ.get("CONF_HTTP_PORT", "8391"))   # dataplane (full)
+BRAID_PORT = int(os.environ.get("CONF_BRAID_PORT", "8393"))  # dataplane (DRORB_BRAID=1)
+
+# Which dataplane TCP IO path the base suite drives (the `--io` mode). Default
+# `blocking` — the portable path that historically carried the conformance gate.
+# Set `DRORB_CONF_IO=uring` to drive the Linux io_uring fast path instead, so the
+# io_uring serve is actually gated by the suite rather than hidden behind a
+# hardcoded `blocking`. `auto` lets the binary pick (io_uring on Linux). The
+# braided-dataplane scenario inherits the same mode so both instances match.
+CONF_IO = os.environ.get("DRORB_CONF_IO", "blocking")
+
+# The deployment env the primary dataplane runs with; the braided-dataplane scenario
+# reuses it (+ DRORB_BRAID=1) so its byte-identity check isolates the braid. Set in main().
+DP_ENV = {}
 LEAN_PORT = int(os.environ.get("CONF_LEAN_PORT", "8380"))   # orb-mac-multi (guarded)
 QUIC_PORT = int(os.environ.get("CONF_QUIC_PORT", "8456"))   # orb-quic UDP
 
@@ -135,10 +148,35 @@ def http(port, method, path, headers=None, body=b"", close=True, timeout=3.0):
     return parse(data)
 
 
+def http_raw(port, raw, timeout=3.0):
+    """One request over a fresh TCP connection; return the RAW response bytes
+    (for a byte-identity check across two running dataplanes)."""
+    s = socket.create_connection(("127.0.0.1", port), timeout=timeout)
+    s.sendall(raw)
+    data = read_full(s, timeout)
+    s.close()
+    return data
+
+
 def orb_pipe(raw):
     """Drive the orb stdin binary: raw request bytes -> parse()d response."""
     p = subprocess.run([ORB], input=raw, capture_output=True, timeout=15)
     return parse(p.stdout)
+
+
+def orb_pipe_raw(raw, extra_env=None):
+    """Drive the orb stdin binary, returning the RAW response bytes (for a
+    byte-identity check), with optional environment overrides."""
+    env = dict(os.environ)
+    if extra_env:
+        env.update(extra_env)
+    p = subprocess.run([ORB], input=raw, capture_output=True, timeout=15, env=env)
+    return p.stdout
+
+
+def orb_pipe_env(raw, extra_env=None):
+    """Drive the orb stdin binary with env overrides -> parse()d response."""
+    return parse(orb_pipe_raw(raw, extra_env))
 
 
 # ---------------------------------------------------------------------------
@@ -964,6 +1002,360 @@ def scen_native_socket_parity():
            "security-headers stage absent from the native-socket guarded serve")
 
 
+def scen_braid():
+    """The BRAIDED middleware fold (Reactor.Deploy §8): two proven-but-inert stages
+    (forward-auth gate + request-id echo) composed at the head of the deployed serve,
+    served by `orb` under DRORB_BRAID=1. Each stage is config-gated per request, so
+    the DEFAULT (unmarked) bytes are byte-identical to the un-braided serve
+    (servePipelineBraided_off_eq), and a marked request FIRES the real library
+    decision (braided_fa_denies_status / braided_rid_echoes)."""
+    ON = {"DRORB_BRAID": "1"}
+
+    # (1) COMPOSITION byte-identity: braid ON but unmarked == the un-braided serve,
+    # byte-for-byte, across dispatch arms (200 / 404 / redirect). This is
+    # `servePipelineBraided_off_eq` exercised on the wire.
+    identical = True
+    detail = []
+    for path in (b"/health", b"/no-such-route", b"/old", b"/static/app.js"):
+        raw = b"GET " + path + b" HTTP/1.1\r\nHost: x\r\n\r\n"
+        off = orb_pipe_raw(raw)
+        on = orb_pipe_raw(raw, ON)
+        ok = (off == on)
+        identical = identical and ok
+        detail.append(f"{path.decode()}:{'=' if ok else 'DIFF'}")
+    record("braid-default-byte-identical", "braid",
+           "braid ON (DRORB_BRAID=1) vs OFF on unmarked traffic",
+           "byte-identical response for every unmarked request (config-gated off)",
+           "  ".join(detail),
+           "PASS" if identical else "FAIL",
+           "servePipelineBraided_off_eq: the composed stages are contextually "
+           "transparent, so the fold is faithful to servePipelineFull2")
+
+    # (2) FORWARD-AUTH gate FIRES: a marked request short-circuits to 401, the real
+    # ForwardAuth.denyResp — the handler (which would 200 /health) is skipped
+    # (braided_fa_skips_handler / braided_fa_denies_status).
+    st, _h, _b = orb_pipe_env(
+        b"GET /health HTTP/1.1\r\nHost: x\r\nX-Forward-Auth: deny\r\n\r\n", ON)
+    record("braid-forward-auth-denies", "braid",
+           "braid ON, GET /health with X-Forward-Auth marker",
+           "401 Unauthorized — the forward-auth gate short-circuits before the handler",
+           f"status={st} (handler would have returned 200)",
+           "PASS" if st == 401 else "FAIL",
+           "braided_fa_denies_status: pipeline_gate_status keeps the 401 through "
+           "the whole inner onion")
+
+    # (3) The SAME gate is CONFIG-GATED OFF without the marker: the request is served
+    # normally (200) — the gate decides, it is not a constant refusal.
+    st_ok, _h, b_ok = orb_pipe_env(b"GET /health HTTP/1.1\r\nHost: x\r\n\r\n", ON)
+    record("braid-forward-auth-passes-unmarked", "braid",
+           "braid ON, GET /health with NO forward-auth marker",
+           "200 'ok' — the gate passes through an unmarked request",
+           f"status={st_ok}, body={b_ok!r}",
+           "PASS" if (st_ok == 200 and b_ok == b"ok") else "FAIL")
+
+    # (4) REQUEST-ID echo FIRES: a trusted incoming id is echoed on the response
+    # (braided_rid_echoes_trusted — the id is preserved verbatim).
+    rid = "trace-abc-123"
+    _st, h, _b = orb_pipe_env(
+        f"GET /health HTTP/1.1\r\nHost: x\r\nX-Request-Id: {rid}\r\n\r\n".encode(), ON)
+    got = h.get("x-request-id", "")
+    record("braid-request-id-echo", "braid",
+           "braid ON, GET /health with X-Request-Id: " + rid,
+           f"the response echoes X-Request-Id: {rid} (trusted id preserved)",
+           f"X-Request-Id={got!r}",
+           "PASS" if got == rid else "FAIL",
+           "braided_rid_echoes_trusted: RequestId.resolve_trust_preserve, present "
+           "in the finalized headers via the response onion")
+
+    # (5) request-id is CONFIG-GATED OFF without the marker: no X-Request-Id header.
+    _st, h2, _b = orb_pipe_env(b"GET /health HTTP/1.1\r\nHost: x\r\n\r\n", ON)
+    record("braid-request-id-absent-unmarked", "braid",
+           "braid ON, GET /health with no incoming id",
+           "no X-Request-Id header (the echo stage is a pass-through when unmarked)",
+           f"X-Request-Id present={'yes' if 'x-request-id' in h2 else 'no'}",
+           "PASS" if "x-request-id" not in h2 else "FAIL")
+
+    # ----- BRAID-2 (§8h): five more proven-but-inert libs, each config-gated + fired -----
+
+    # (6) CONNECTION-CAP gate FIRES: X-Conn-Limit marker -> the real ConnLimit gate
+    # (admits_at_cap) short-circuits with 503, skipping the handler
+    # (braided2_conn_denies_status: pipeline_gate_status keeps 503 through the onion).
+    st_c, _h, _b = orb_pipe_env(
+        b"GET /health HTTP/1.1\r\nHost: x\r\nX-Conn-Limit: 1\r\n\r\n", ON)
+    record("braid2-conn-limit-503", "braid",
+           "braid ON, GET /health with X-Conn-Limit marker",
+           "503 Service Unavailable — the per-source connection-cap gate short-circuits",
+           f"status={st_c} (handler would have returned 200)",
+           "PASS" if st_c == 503 else "FAIL",
+           "braided2_conn_denies_status (axioms {propext,Classical.choice,Quot.sound})")
+
+    # (7) STICK-TABLE threshold gate FIRES: X-Stick-Limit marker -> real StickTable gate 429.
+    st_s, _h, _b = orb_pipe_env(
+        b"GET /health HTTP/1.1\r\nHost: x\r\nX-Stick-Limit: 1\r\n\r\n", ON)
+    record("braid2-stick-table-429", "braid",
+           "braid ON, GET /health with X-Stick-Limit marker",
+           "429 Too Many Requests — the aggregated stick-table threshold gate short-circuits",
+           f"status={st_s} (handler would have returned 200)",
+           "PASS" if st_s == 429 else "FAIL",
+           "braided2_stick_denies_status (conn gate passes, then stick fires)")
+
+    # (8) SLOWLORIS timeout gate FIRES: X-Slow-Timeout marker -> real Slowloris gate 408.
+    st_t, _h, _b = orb_pipe_env(
+        b"GET /health HTTP/1.1\r\nHost: x\r\nX-Slow-Timeout: 1\r\n\r\n", ON)
+    record("braid2-slowloris-408", "braid",
+           "braid ON, GET /health with X-Slow-Timeout marker",
+           "408 Request Timeout — the slowloris header-timeout gate short-circuits",
+           f"status={st_t} (handler would have returned 200)",
+           "PASS" if st_t == 408 else "FAIL",
+           "braided2_slow_denies_status (conn+stick gates pass, then slow fires)")
+
+    # (9) ERROR-PAGE transform FIRES: X-Error-Page marker on a 404 path -> the body is
+    # REPLACED by the rendered custom page (contains "Error 404"), status stays 404
+    # (braided2_errorpage_maps_404: the transform runs at the correct onion position).
+    st_e, _h, b_e = orb_pipe_env(
+        b"GET /no-such-route HTTP/1.1\r\nHost: x\r\nX-Error-Page: 1\r\n\r\n", ON)
+    err_ok = (st_e == 404 and b"Error 404" in b_e and b"Path:" in b_e)
+    record("braid2-error-page-404", "braid",
+           "braid ON, GET /no-such-route with X-Error-Page marker",
+           "404 with the rendered custom error page as body (not the handler's default)",
+           f"status={st_e}, body[:40]={b_e[:40]!r}",
+           "PASS" if err_ok else "FAIL",
+           "braided2_errorpage_maps_404: ErrorPage.applyPage replaces the 404 body")
+
+    # (10) ERROR-PAGE is CONFIG-GATED OFF: same 404 path unmarked keeps the default body.
+    st_e0, _h, b_e0 = orb_pipe_env(b"GET /no-such-route HTTP/1.1\r\nHost: x\r\n\r\n", ON)
+    record("braid2-error-page-off-unmarked", "braid",
+           "braid ON, GET /no-such-route with NO X-Error-Page marker",
+           "404 with the handler's default body (the transform is a pass-through when unmarked)",
+           f"status={st_e0}, custom-page-present={'yes' if b'Error 404' in b_e0 else 'no'}",
+           "PASS" if (st_e0 == 404 and b"Error 404" not in b_e0) else "FAIL")
+
+    # (11) COMPRESS transform FIRES: X-Compress-Ext marker + Accept-Encoding: zstd -> the
+    # response carries Content-Encoding: zstd (braided2_compress_encodes).
+    _st, h_z, _b = orb_pipe_env(
+        b"GET /health HTTP/1.1\r\nHost: x\r\nX-Compress-Ext: 1\r\nAccept-Encoding: zstd\r\n\r\n", ON)
+    ce = h_z.get("content-encoding", "")
+    record("braid2-compress-content-encoding", "braid",
+           "braid ON, GET /health with X-Compress-Ext + Accept-Encoding: zstd",
+           "Content-Encoding: zstd — the negotiated codec frames the body",
+           f"Content-Encoding={ce!r}",
+           "PASS" if ce == "zstd" else "FAIL",
+           "braided2_compress_encodes: CompressExt.content_encoding_set")
+
+    # (12) COMPRESS is CONFIG-GATED OFF: Accept-Encoding: zstd WITHOUT the marker leaves
+    # the response uncompressed (no Content-Encoding from the braid) — default byte-safe.
+    _st, h_z0, _b = orb_pipe_env(
+        b"GET /health HTTP/1.1\r\nHost: x\r\nAccept-Encoding: zstd\r\n\r\n", ON)
+    record("braid2-compress-off-unmarked", "braid",
+           "braid ON, GET /health with Accept-Encoding: zstd but NO X-Compress-Ext marker",
+           "no zstd Content-Encoding (the compress transform is a pass-through when unmarked)",
+           f"Content-Encoding={h_z0.get('content-encoding','')!r}",
+           "PASS" if h_z0.get("content-encoding", "") != "zstd" else "FAIL")
+
+    # (13) BRAID-3 conditional-request GATE FIRES: X-Conditional marker -> 304 Not Modified,
+    # the real Cache.Conditional decision on the library's own If-None-Match witness
+    # (braided3_conditional_304 via pipeline_gate_status + demo_if_none_match_304).
+    st_ct, _h, _b = orb_pipe_env(
+        b"GET /health HTTP/1.1\r\nHost: x\r\nX-Conditional: 1\r\n\r\n", ON)
+    record("braid3-conditional-304", "braid",
+           "braid ON, GET /health with X-Conditional marker",
+           "304 Not Modified — the RFC 7232 conditional gate short-circuits the handler",
+           f"status={st_ct} (handler would have returned 200)",
+           "PASS" if st_ct == 304 else "FAIL",
+           "braided3_conditional_304: the 304 survives the whole inner onion")
+
+    # (14) conditional gate is CONFIG-GATED OFF without the marker: 200 served normally.
+    st_c0, _h, b_c0 = orb_pipe_env(b"GET /health HTTP/1.1\r\nHost: x\r\n\r\n", ON)
+    record("braid3-conditional-off-unmarked", "braid",
+           "braid ON, GET /health with NO X-Conditional marker",
+           "200 'ok' — the conditional gate passes an unmarked request",
+           f"status={st_c0}, body={b_c0!r}",
+           "PASS" if (st_c0 == 200 and b_c0 == b"ok") else "FAIL")
+
+    # (15) VARIANTS transform FIRES: X-Variants marker -> the response carries
+    # Vary: Accept-Encoding, the header serveVariant provably always emits
+    # (braided3_variants_vary via pipeline_stage_effect + variant_vary_always).
+    _st, h_v, _b = orb_pipe_env(
+        b"GET /health HTTP/1.1\r\nHost: x\r\nX-Variants: 1\r\n\r\n", ON)
+    vary = h_v.get("vary", "")
+    record("braid3-variants-vary", "braid",
+           "braid ON, GET /health with X-Variants marker",
+           "Vary: Accept-Encoding — the pre-compressed-variant representation-dependence header",
+           f"Vary={vary!r}",
+           "PASS" if vary == "Accept-Encoding" else "FAIL",
+           "braided3_variants_vary: Variants.varyName/aeVary, variant_vary_always")
+
+    # (16) AUTOINDEX transform FIRES: X-Autoindex marker -> the response body becomes the
+    # real Autoindex.renderIndexHtml directory listing (braided3_autoindex_lists).
+    _st, _h, b_ai = orb_pipe_env(
+        b"GET /health HTTP/1.1\r\nHost: x\r\nX-Autoindex: 1\r\n\r\n", ON)
+    ai_ok = b"Index of /pub" in b_ai and b"/pub/a.txt" in b_ai and b"/pub/b.txt" in b_ai
+    record("braid3-autoindex-listing", "braid",
+           "braid ON, GET /health with X-Autoindex marker",
+           "the response body is the real Autoindex directory listing (Index of /pub, "
+           "one link row per entry)",
+           f"body[:40]={b_ai[:40]!r}",
+           "PASS" if ai_ok else "FAIL",
+           "braided3_autoindex_lists: renderIndexHtml, autoindex_lists_dir/entry_in_listingRows")
+
+    # (17) AUTOINDEX is CONFIG-GATED OFF without the marker: the default body is served.
+    _st, _h, b_ai0 = orb_pipe_env(b"GET /health HTTP/1.1\r\nHost: x\r\n\r\n", ON)
+    record("braid3-autoindex-off-unmarked", "braid",
+           "braid ON, GET /health with NO X-Autoindex marker",
+           "the handler's default body (the listing transform is a pass-through when unmarked)",
+           f"listing-present={'yes' if b'Index of /pub' in b_ai0 else 'no'}, body={b_ai0!r}",
+           "PASS" if b"Index of /pub" not in b_ai0 else "FAIL")
+
+
+def scen_braid_dataplane():
+    """The braid served THROUGH THE RUST DATAPLANE over a real TCP socket (not the
+    orb stdin exe): a second `dataplane` instance is started with DRORB_BRAID=1, so a
+    request crosses `drorb_serve_metered_braided` -> `servePipelineOfMetered
+    braidedDeployment` — the connection-aware metered gate chain WITH the forward-auth
+    gate + request-id echo composed at the head. Exercises the PRODUCTION-path
+    composition theorems on the wire: `servePipelineOfMetered_braided_off_eq` (default
+    byte-identical to the un-braided dataplane), `_fa_denies_status` (401), and
+    `_rid_echoes` (X-Request-Id echoed)."""
+    braid_env = dict(DP_ENV)
+    braid_env["DRORB_BRAID"] = "1"
+    dp = Server(
+        [DATAPLANE, "--bind", f"127.0.0.1:{BRAID_PORT}", "--no-udp", "--io", CONF_IO],
+        tcp_port=BRAID_PORT, env=braid_env, cwd=REPO)
+    try:
+        dp.start()
+    except Exception as e:
+        record("braid-dp-forward-auth-denies", "braid",
+               "braided dataplane, GET /health with X-Forward-Auth marker",
+               "401 from the Rust dataplane", f"could not start braided dataplane: {e}",
+               "UNWIRED")
+        return
+
+    try:
+        # (1) FORWARD-AUTH gate FIRES through the dataplane socket: 401.
+        st, _h, _b = http(BRAID_PORT, "GET", "/health", {"X-Forward-Auth": "deny"})
+        record("braid-dp-forward-auth-denies", "braid",
+               "braided dataplane (DRORB_BRAID=1), GET /health with X-Forward-Auth marker",
+               "401 Unauthorized FROM THE RUST DATAPLANE — the forward-auth gate "
+               "short-circuits before the handler",
+               f"status={st} (dataplane socket 127.0.0.1:{BRAID_PORT})",
+               "PASS" if st == 401 else "FAIL",
+               "servePipelineOfMetered_braided_fa_denies_status: the 401 survives the "
+               "metered inner onion")
+
+        # (2) REQUEST-ID echo FIRES through the dataplane socket.
+        rid = "dp-trace-777"
+        _st, h, _b = http(BRAID_PORT, "GET", "/health", {"X-Request-Id": rid})
+        got = h.get("x-request-id", "")
+        record("braid-dp-request-id-echo", "braid",
+               "braided dataplane, GET /health with X-Request-Id: " + rid,
+               f"the dataplane response echoes X-Request-Id: {rid}",
+               f"X-Request-Id={got!r} (dataplane socket)",
+               "PASS" if got == rid else "FAIL",
+               "servePipelineOfMetered_braided_rid_echoes: the trusted id is present in "
+               "the finalized headers")
+
+        # (3) unmarked request PASSES normally (200 'ok') through the braided dataplane.
+        st_ok, _h, b_ok = http(BRAID_PORT, "GET", "/health")
+        record("braid-dp-passes-unmarked", "braid",
+               "braided dataplane, GET /health with NO braid markers",
+               "200 'ok' — the gate passes an unmarked request",
+               f"status={st_ok}, body={b_ok!r}",
+               "PASS" if (st_ok == 200 and b_ok == b"ok") else "FAIL")
+
+        # (3a-3e) BRAID-2 stages FIRE through the PRODUCTION metered dataplane socket
+        # (servePipelineOfMetered braidedDeployment2 -> drorb_serve_metered_braided).
+        st_c, _h, _b = http(BRAID_PORT, "GET", "/health", {"X-Conn-Limit": "1"})
+        record("braid2-dp-conn-limit-503", "braid",
+               "braided dataplane, GET /health with X-Conn-Limit marker",
+               "503 FROM THE RUST DATAPLANE — the connection-cap gate short-circuits",
+               f"status={st_c}", "PASS" if st_c == 503 else "FAIL",
+               "servePipelineOfMetered_braided2_conn_denies_status")
+        st_s, _h, _b = http(BRAID_PORT, "GET", "/health", {"X-Stick-Limit": "1"})
+        record("braid2-dp-stick-table-429", "braid",
+               "braided dataplane, GET /health with X-Stick-Limit marker",
+               "429 FROM THE RUST DATAPLANE — the stick-table threshold gate short-circuits",
+               f"status={st_s}", "PASS" if st_s == 429 else "FAIL",
+               "servePipelineOfMetered_braided2_stick_denies_status")
+        st_t, _h, _b = http(BRAID_PORT, "GET", "/health", {"X-Slow-Timeout": "1"})
+        record("braid2-dp-slowloris-408", "braid",
+               "braided dataplane, GET /health with X-Slow-Timeout marker",
+               "408 FROM THE RUST DATAPLANE — the slowloris timeout gate short-circuits",
+               f"status={st_t}", "PASS" if st_t == 408 else "FAIL",
+               "servePipelineOfMetered_braided2_slow_denies_status")
+        st_e, _h, b_e = http(BRAID_PORT, "GET", "/no-such-route", {"X-Error-Page": "1"})
+        err_ok = (st_e == 404 and b"Error 404" in b_e)
+        record("braid2-dp-error-page-404", "braid",
+               "braided dataplane, GET /no-such-route with X-Error-Page marker",
+               "404 with the rendered custom error page body FROM THE RUST DATAPLANE",
+               f"status={st_e}, body[:32]={b_e[:32]!r}", "PASS" if err_ok else "FAIL",
+               "braided2_errorpage_maps_404 through the metered fold")
+        _st, h_z, _b = http(BRAID_PORT, "GET", "/health",
+                            {"X-Compress-Ext": "1", "Accept-Encoding": "zstd"})
+        ce = h_z.get("content-encoding", "")
+        record("braid2-dp-compress-content-encoding", "braid",
+               "braided dataplane, GET /health with X-Compress-Ext + Accept-Encoding: zstd",
+               "Content-Encoding: zstd FROM THE RUST DATAPLANE",
+               f"Content-Encoding={ce!r}", "PASS" if ce == "zstd" else "FAIL",
+               "servePipelineOfMetered_braided2_compress_encodes")
+
+        # (3f-3h) BRAID-3 stages FIRE through the PRODUCTION metered dataplane socket
+        # (servePipelineOfMetered braidedDeployment3 -> drorb_serve_metered_braided):
+        # the conditional-request (304) gate + the pre-compressed-variant (Vary) and
+        # directory-listing response-transforms.
+        st_ct, _h, _b = http(BRAID_PORT, "GET", "/health", {"X-Conditional": "1"})
+        record("braid3-dp-conditional-304", "braid",
+               "braided dataplane, GET /health with X-Conditional marker",
+               "304 Not Modified FROM THE RUST DATAPLANE — the RFC 7232 conditional "
+               "gate short-circuits with the real Cache.Conditional decision",
+               f"status={st_ct}", "PASS" if st_ct == 304 else "FAIL",
+               "servePipelineOfMetered_braided3_conditional_304: the 304 survives the "
+               "metered inner onion")
+        _st, h_v, _b = http(BRAID_PORT, "GET", "/health", {"X-Variants": "1"})
+        vary = h_v.get("vary", "")
+        record("braid3-dp-variants-vary", "braid",
+               "braided dataplane, GET /health with X-Variants marker",
+               "Vary: Accept-Encoding FROM THE RUST DATAPLANE — the pre-compressed-variant "
+               "representation-dependence header",
+               f"Vary={vary!r}", "PASS" if vary == "Accept-Encoding" else "FAIL",
+               "servePipelineOfMetered_braided3_variants_vary: Variants.variant_vary_always")
+        _st, _h, b_ai = http(BRAID_PORT, "GET", "/health", {"X-Autoindex": "1"})
+        ai_ok = b"Index of /pub" in b_ai and b"/pub/a.txt" in b_ai
+        record("braid3-dp-autoindex-listing", "braid",
+               "braided dataplane, GET /health with X-Autoindex marker",
+               "the response body is the real Autoindex.renderIndexHtml directory "
+               "listing (Index of /pub, one link row per entry) FROM THE RUST DATAPLANE",
+               f"body[:40]={b_ai[:40]!r}", "PASS" if ai_ok else "FAIL",
+               "servePipelineOfMetered_braided3_autoindex_lists: autoindex_lists_dir")
+
+        # (4) DEFAULT byte-identity ON THE WIRE: the braided dataplane's unmarked
+        # response is byte-for-byte the un-braided dataplane's (HTTP_PORT), across the
+        # serve-path dispatch arms — 200 (/health), 404 (/no-such-route), 308 redirect
+        # (/old). This is `servePipelineOfMetered_braided_off_eq` exercised on two live
+        # sockets: the braid config perturbs no unmarked byte. (A cacheable resource
+        # like /static is deliberately excluded: it is answered by the effect-seam
+        # cache lane BEFORE the metered braid serve, and its Age header is relative to
+        # each instance's cache-fill time, so two independent dataplanes diverge on it
+        # for reasons unrelated to the braid.)
+        identical = True
+        detail = []
+        for path in (b"/health", b"/no-such-route", b"/old"):
+            raw = b"GET " + path + b" HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"
+            default_resp = http_raw(HTTP_PORT, raw)
+            braided_resp = http_raw(BRAID_PORT, raw)
+            ok = (default_resp == braided_resp)
+            identical = identical and ok
+            detail.append(f"{path.decode()}:{'=' if ok else 'DIFF'}")
+        record("braid-dp-default-byte-identical", "braid",
+               "braided dataplane vs default dataplane on unmarked traffic (live sockets)",
+               "byte-identical response for every unmarked request (config-gated off)",
+               "  ".join(detail),
+               "PASS" if identical else "FAIL",
+               "servePipelineOfMetered_braided_off_eq: the composed head stages are "
+               "transparent, so the metered fold is faithful to servePipelineFull2Metered")
+    finally:
+        dp.stop()
+
+
 def scen_core_parity():
     """Cross-check that the orb stdin core and the dataplane socket agree byte-for-byte."""
     raw = b"GET /health HTTP/1.1\r\nHost: x\r\n\r\n"
@@ -1070,8 +1462,13 @@ def main():
         # is configured.
         dp_env = {"HACL_DIST": os.environ.get("HACL_DIST", ""), "DRORB_EFFECT_SEAM": "1"}
         dp_env.update(proxy_env)
+        # Publish the deployment env so the braided-dataplane scenario can start a
+        # SECOND dataplane with the IDENTICAL config + DRORB_BRAID=1 (so the
+        # byte-identity check isolates the braid, not an env difference).
+        global DP_ENV
+        DP_ENV = dict(dp_env)
         servers.append(Server(
-            [DATAPLANE, "--bind", f"127.0.0.1:{HTTP_PORT}", "--no-udp", "--io", "blocking"],
+            [DATAPLANE, "--bind", f"127.0.0.1:{HTTP_PORT}", "--no-udp", "--io", CONF_IO],
             tcp_port=HTTP_PORT, env=dp_env, cwd=REPO).start())
     else:
         print(f"WARNING: dataplane binary missing at {DATAPLANE}", file=sys.stderr)
@@ -1096,6 +1493,8 @@ def main():
         if native_up:
             scen_native_socket_parity()
         scen_core_parity()
+        scen_braid()
+        scen_braid_dataplane()
     finally:
         for s in servers:
             s.stop()

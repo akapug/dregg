@@ -18,6 +18,11 @@
 //!                           and declared reverse-proxy vhosts (JSON);
 //! * `GET  /admin/backends` — the proxy fleet's per-backend health: address,
 //!                           up/down, in-flight, breaker state (JSON);
+//! * `GET  /admin/connections` — active connection + served-request counters and
+//!                           the draining flag (JSON);
+//! * `POST /admin/cache/purge` — drop every response-cache entry so the next
+//!                           request for each key misses (the executing shell for
+//!                           the proven `Admin.Cache.cache_purge_invalidates`);
 //! * `POST /admin/drain`   — begin a standing graceful drain
 //!                           (`crate::reconfig::begin_drain`); `/healthz` flips to
 //!                           503, in-flight requests finish. Idempotent;
@@ -108,6 +113,8 @@ fn handle_admin(mut stream: TcpStream, gw: &ServeGateway) -> std::io::Result<()>
         }
         (b"GET", b"/admin/config") => json_response(200, &config_json()),
         (b"GET", b"/admin/backends") => json_response(200, &backends_json()),
+        (b"GET", b"/admin/connections") => json_response(200, &connections_json()),
+        (b"POST", b"/admin/cache/purge") => json_response(200, &cache_purge_json()),
         (b"POST", b"/admin/drain") => {
             let started = crate::reconfig::begin_drain();
             // Idempotent: 200 either way — `started` reports whether THIS call began it.
@@ -142,8 +149,37 @@ fn is_known_path(path: &[u8]) -> bool {
             | b"/healthz"
             | b"/admin/config"
             | b"/admin/backends"
+            | b"/admin/connections"
+            | b"/admin/cache/purge"
             | b"/admin/drain"
             | b"/admin/reload"
+    )
+}
+
+/// `GET /admin/connections`: active connection and served-request counters — the
+/// operational read the balancer/operator watches while draining. Read straight
+/// off the host's atomics (`crate::ACTIVE_CONNS`, `crate::metrics`); nothing here
+/// mutates state.
+fn connections_json() -> String {
+    let active = crate::ACTIVE_CONNS.load(Ordering::SeqCst);
+    let requests = crate::metrics::requests_total();
+    let bytes_out = crate::metrics::bytes_out_total();
+    let draining = crate::reconfig::draining();
+    format!(
+        "{{\"active_connections\":{},\"requests_total\":{},\"bytes_out_total\":{},\"draining\":{}}}\n",
+        active, requests, bytes_out, draining
+    )
+}
+
+/// `POST /admin/cache/purge`: drop every entry in the response cache so the next
+/// request for each key misses and re-fetches (never served a stale body). The
+/// executing shell for the proven `Admin.Cache.cache_purge_invalidates` decision;
+/// returns the number of entries dropped.
+fn cache_purge_json() -> String {
+    let purged = crate::cache::global().purge_all();
+    format!(
+        "{{\"status\":\"purged\",\"entries_purged\":{},\"note\":\"next request for each key misses\"}}\n",
+        purged
     )
 }
 
@@ -205,10 +241,7 @@ fn reload_json(gw: &ServeGateway) -> (u16, String) {
     match crate::reconfig::reload_now(gw, "admin") {
         ReloadOutcome::Applied { generation } => (
             200,
-            format!(
-                "{{\"status\":\"applied\",\"generation\":{}}}\n",
-                generation
-            ),
+            format!("{{\"status\":\"applied\",\"generation\":{}}}\n", generation),
         ),
         ReloadOutcome::KeptOld { reason } => (
             // The running config is kept (fail-safe); the request itself is

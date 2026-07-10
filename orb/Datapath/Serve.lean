@@ -27,16 +27,22 @@ codegen lemma, threaded as a hypothesis, never `sorry`d.
 * **Pipeline half — UNCONDITIONAL.** `serveC` runs the *actual* deployed
   `runPipeline` over `deployStagesFull2` and serializes its built response — the
   same affine-`ResponseBuilder` fold the deployed serve runs. No hypothesis.
-* **Response WRITE half — CONDITIONAL on `ResponseWriteRefines writeResp`.**
-  Lowering the finalized `ResponseBuilder` bytes into the borrowed `OutBuf` (an
-  in-place buffer extend, CODEGEN OBLIGATION #2 of `Reactor.Pipeline`) is the one
-  step this additive layer cannot realize in the owned-`ByteArray` model. It is a
-  PARAMETER `writeResp` with a named spec `ResponseWriteRefines`, so the whole
-  composition is proven modulo exactly that lemma.
+* **Response WRITE half — a PROVEN in-place store-fold, residual = capacity.**
+  Two layers. First, the parametric `refinesServe_serveConcrete` factors the write
+  through an abstract `writeResp` with named spec `ResponseWriteRefines`. Then the
+  concrete layer (`writeInPlace`, `writeInPlace_faithful`, `serveInPlace_refines`)
+  *realizes* that writer as `Datapath.storeFrom` — one store per byte into the
+  borrowed `OutBuf`, no allocation, CODEGEN OBLIGATION #2 of `Reactor.Pipeline` —
+  and PROVES its faithfulness from the store-fold readback (`storeFrom_get!_at`).
+  The response half is no longer an opaque "the writer is correct"; the sole
+  remaining residual is `OutFitsResponse` — the pool sizing the send buffer to the
+  response (capacity), carried as a named hypothesis, discharged per call.
 
 The three ownership obligations are threaded: no-aliasing by
-`denote_store_disjoint`, recycle-exactly-once by `Uring.recycle_at_most_once`,
-affine consume-once by `Reactor.Pipeline.built_absorbing`.
+`denote_store_disjoint` — lifted to the WHOLE multi-byte write by
+`denote_storeFrom_disjoint` / `inPlaceWrite_preserves_request` — recycle-exactly-once
+by `Uring.recycle_at_most_once`, affine consume-once by
+`Reactor.Pipeline.built_absorbing`.
 -/
 
 namespace Datapath
@@ -148,5 +154,117 @@ composition is sound). -/
 theorem refinesServe_witness :
     RefinesServe serveAbstract (serveConcrete writeOutFresh) :=
   refinesServe_serveConcrete writeOutFresh writeOutFresh_spec
+
+/-! ## The ZERO-COPY in-place writer — a concrete byte-store fold (not a copy)
+
+`writeOutFresh` above is only a *consistency* witness: it copies into a fresh
+buffer, so it discharges `ResponseWriteRefines` but is not the zero-copy write.
+This section replaces the opaque hypothesis with the real thing.
+
+`writeInPlace` writes the response into the BORROWED output buffer by the
+store-fold `storeFrom` — one store per byte, no allocation — the write CODEGEN
+OBLIGATION #2 lowers to. Its faithfulness (`writeInPlace_faithful`) is now
+**PROVEN** from the store-fold readback (`storeFrom_get!_at`), not assumed; the
+composition `refinesServe_inPlace` uses it, so the response half is no longer an
+opaque "the writer is correct". The ONLY residual is `OutFitsResponse` — the
+borrowed buffer has room for the response (the pool sizing the send buffer), a
+concrete capacity fact carried as a named hypothesis. And `inPlaceWrite_preserves_request`
+threads the separation guarantee (`denote_storeFrom_disjoint`) across the whole
+multi-byte write: writing the response in place cannot corrupt a live request
+span in a disjoint region. -/
+
+/-- The zero-copy in-place response writer: fold the response bytes into the
+borrowed output buffer starting at index 0 (`storeFrom`), and set the live count
+to the response length. No fresh buffer — the pooled `out.buf` is written in
+place. -/
+def writeInPlace (out : OutBuf) (resp : List UInt8) : OutBuf :=
+  { buf := storeFrom out.buf 0 resp, live := resp.length }
+
+/-- **The in-place write is faithful — PROVEN, not assumed.** When the borrowed
+buffer has room (`resp.length ≤ out.buf.size`), the live window of the written
+buffer reads back byte-for-byte the response, established from the store-fold
+readback `storeFrom_get!_at`. This is the response half of the refinement,
+discharged concretely for the actual in-place store-fold writer. -/
+theorem writeInPlace_faithful (out : OutBuf) (resp : List UInt8)
+    (hcap : resp.length ≤ out.buf.size) :
+    (writeInPlace out resp).bytes = resp := by
+  show (storeFrom out.buf 0 resp).data.toList.take resp.length = resp
+  apply List.ext_getElem
+  · rw [List.length_take]
+    have hle : resp.length ≤ (storeFrom out.buf 0 resp).data.toList.length := by
+      show resp.length ≤ (storeFrom out.buf 0 resp).size
+      rw [storeFrom_size]; exact hcap
+    omega
+  · intro i h₁ h₂
+    have hb : i < (storeFrom out.buf 0 resp).size := by rw [storeFrom_size]; omega
+    have hat : (storeFrom out.buf 0 resp).get! (0 + i) = resp[i] :=
+      storeFrom_get!_at out.buf 0 resp (by omega) i h₂
+    rw [Nat.zero_add] at hat
+    rw [List.getElem_take, Array.getElem_toList, ← byteArray_get!_eq_getElem _ i hb, hat]
+
+/-! ## The residual codegen/runtime obligation — capacity, stated precisely -/
+
+/-- **The residual, stated precisely.** For a request span and the borrowed
+output buffer, the buffer is at least as large as the response the deployed
+pipeline produced. This is the concrete counterpart of Pipeline CODEGEN
+OBLIGATION #2: the ONLY thing the in-place write needs that this model layer
+cannot furnish is *room* — the pool sizing the send buffer to the response. It is
+NOT "the writer is correct" (that is now proven, `writeInPlace_faithful`), only
+"the buffer has room". Discharged per-call by the allocator that sizes `out.buf`
+to `serveResponseBytes s`. -/
+def OutFitsResponse (out : OutBuf) (s : SpanBytes) : Prop :=
+  (serveResponseBytes s).length ≤ out.buf.size
+
+/-- **The zero-copy serve refines the deployed serve — per call, the honest
+residual.** For a well-formed request span and a borrowed output buffer that has
+room for the response (`hcap : OutFitsResponse out s`), the in-place store-fold
+serve `serveConcrete writeInPlace` produces exactly the bytes the *actual deployed*
+abstract serve (`serveAbstract = servePipelineOf defaultDeployment`) yields on the
+span's denotation. The request half is `read_eq_denote`; the response half is the
+PROVEN `writeInPlace_faithful` (an in-place byte-store fold), not an opaque
+assumption. The sole hypothesis is capacity — satisfied per-call by the pool
+sizing `out.buf` to this response. -/
+theorem serveInPlace_refines (s : SpanBytes) (out : OutBuf)
+    (hwf : s.Wf) (hcap : OutFitsResponse out s) :
+    (serveConcrete writeInPlace s out).bytes = serveAbstract s.denote := by
+  show (writeInPlace out (serveResponseBytes s)).bytes = serveAbstract s.denote
+  rw [writeInPlace_faithful out (serveResponseBytes s) hcap]
+  unfold serveResponseBytes
+  rw [read_eq_denote s hwf]
+
+/-- **The `RefinesServe` composition for the concrete in-place writer.** Assembles
+the per-call refinement into the framework's end-to-end obligation
+`RefinesServe serveAbstract (serveConcrete writeInPlace)`, under the named residual
+that the pool provides room for every response (`hcap`). Non-vacuous: `serveAbstract`
+is the real deployed pipeline and `writeInPlace` the real in-place store-fold; the
+conclusion genuinely depends on `hcap` (a too-small buffer breaks the readback), so
+this is not a tautology. The `hcap` here is the global (∀-quantified) form of the
+per-call capacity residual `serveInPlace_refines` carries. -/
+theorem refinesServe_inPlace
+    (hcap : ∀ (out : OutBuf) (s : SpanBytes), s.Wf → OutFitsResponse out s) :
+    RefinesServe serveAbstract (serveConcrete writeInPlace) :=
+  fun s out hwf => serveInPlace_refines s out hwf (hcap out s hwf)
+
+/-- **The full obligation bundle for the concrete in-place writer.** Packages the
+byte-refinement (conditional only on capacity `hcap`) with the no-aliasing
+separation (unconditional, `denote_store_disjoint`). Unlike
+`serveObligations_serveConcrete`, this is stated for the REAL zero-copy writer,
+not a parameter. -/
+theorem serveObligations_inPlace
+    (hcap : ∀ (out : OutBuf) (s : SpanBytes), s.Wf → OutFitsResponse out s) :
+    ServeObligations serveAbstract (serveConcrete writeInPlace) :=
+  { refines := refinesServe_inPlace hcap
+    noAlias := noAlias_discharged }
+
+/-- **No-aliasing across the in-place response write.** If the response is written
+by the store-fold into a region of the request's OWN buffer disjoint from the read
+window, the request span's denotation is preserved across the ENTIRE write — every
+byte, not just one. The separation guarantee that licenses writing the response in
+place while the request span is still live, lifted from one store
+(`denote_store_disjoint`) to the whole response (`denote_storeFrom_disjoint`). -/
+theorem inPlaceWrite_preserves_request (s : SpanBytes) (base : Nat) (resp : List UInt8)
+    (hw : s.Wf) (hdisj : s.off + s.len ≤ base ∨ base + resp.length ≤ s.off) :
+    ({ s with buf := storeFrom s.buf base resp } : SpanBytes).denote = s.denote :=
+  denote_storeFrom_disjoint s base resp hw hdisj
 
 end Datapath

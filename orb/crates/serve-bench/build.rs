@@ -21,7 +21,10 @@ fn main() {
             .arg("--print-prefix")
             .output()
             .expect("`lean --print-prefix` failed — is the Lean toolchain on PATH?");
-        assert!(out.status.success(), "`lean --print-prefix` returned non-zero");
+        assert!(
+            out.status.success(),
+            "`lean --print-prefix` returned non-zero"
+        );
         PathBuf::from(String::from_utf8(out.stdout).unwrap().trim())
     };
     let lean_include = prefix.join("include");
@@ -84,6 +87,16 @@ fn main() {
         println!("cargo:rerun-if-changed={}", crypto_shim.display());
         println!("cargo:rustc-link-arg={}", crypto_shim.display());
     }
+
+    // The CGI process-spawn shim (`ffi/cgi_exec.o`). The deployed serve's
+    // application layer reaches the `.cgi` route handler (`Cgi.serveCgi` ->
+    // `drorb_cgi_exec`), so `initialize_Dataplane`'s closure pulls the Cgi object
+    // and libdrorb.a references this symbol; link it (as crates/dataplane does).
+    let cgi_exec = repo_root.join("ffi").join("cgi_exec.o");
+    if cgi_exec.exists() {
+        println!("cargo:rerun-if-changed={}", cgi_exec.display());
+        println!("cargo:rustc-link-arg={}", cgi_exec.display());
+    }
     let aes_dir = repo_root.join("target").join("release");
     if aes_dir.join("libaes_fallback.a").exists() {
         println!("cargo:rustc-link-search=native={}", aes_dir.display());
@@ -93,7 +106,10 @@ fn main() {
         let home = std::env::var("HOME").unwrap();
         format!("{home}/src/hacl-star/dist/gcc-compatible")
     });
-    if std::path::Path::new(&hacl_dist).join("libevercrypt.a").exists() {
+    if std::path::Path::new(&hacl_dist)
+        .join("libevercrypt.a")
+        .exists()
+    {
         println!("cargo:rustc-link-search=native={hacl_dist}");
         println!("cargo:rustc-link-lib=static=evercrypt");
     }

@@ -675,4 +675,324 @@ theorem disco_reflexive_needs_pong (cfg : Config) (s : St) (msg : Stun.Message)
   · injection heq with _ h2; exact absurd h2 (by simp)
   · exact lookup_none_not_mem hnew (EpState.verified lat) htl
 
+/-! ## The real DISCO wire format
+
+Everything above authenticates a Pong body *once it is opened*. This section makes
+the whole DISCO frame spec-faithful to the public Tailscale `disco` package, so a
+real Tailscale peer would accept and produce these exact bytes. A DISCO UDP frame
+on the wire is
+
+    Magic(6) ‖ senderDiscoPub(32) ‖ nonce(24) ‖ box
+
+where `Magic = "TS💬"` (`0x54 53 f0 9f 92 ac`) and `box` is a NaCl `crypto_box`
+(X25519 + XSalsa20-Poly1305) sealing the disco message
+
+    type(1) ‖ version(1) ‖ body .
+
+The three message types are Ping (`0x01`), Pong (`0x02`), CallMeMaybe (`0x03`):
+
+  * **Ping**        — `txid(12) ‖ senderNodeKey(32)`
+  * **Pong**        — `txid(12) ‖ srcIP(16) ‖ srcPort(2, big-endian)`
+  * **CallMeMaybe** — `(ip(16) ‖ port(2))*` — the candidate endpoints to try.
+
+The message version byte is `v0 = 0`. Parsing is deliberately lax on trailing
+bytes (padding / future fields), exactly as the reference parser is. -/
+
+/-- The 6-byte DISCO magic that prefixes every frame: "TS💬"
+(`0x54 0x53 0xf0 0x9f 0x92 0xac`). -/
+def discoMagic : Bytes := [0x54, 0x53, 0xf0, 0x9f, 0x92, 0xac]
+
+/-- The DISCO message version byte (`v0`). -/
+def discoVersion : UInt8 := 0x00
+
+/-- The DISCO Ping message-type byte (`TypePing`). -/
+def discoTypePing : UInt8 := 0x01
+
+/-- The DISCO CallMeMaybe message-type byte (`TypeCallMeMaybe`). -/
+def discoTypeCallMeMaybe : UInt8 := 0x03
+
+/-- Transaction-id length (bytes). -/
+def txIdLen : Nat := 12
+/-- Curve25519 disco / node public-key length (bytes). -/
+def discoKeyLen : Nat := 32
+/-- IPv6-or-mapped source-address length in a Pong / CallMeMaybe endpoint. -/
+def ipLen : Nat := 16
+/-- Big-endian port length. -/
+def portLen : Nat := 2
+/-- NaCl-box nonce length carried on the wire beside each frame. -/
+def discoNonceLen : Nat := 24
+/-- One CallMeMaybe endpoint on the wire: `ip(16) ‖ port(2)`. -/
+def epLen : Nat := 18
+
+/-- Encode a `Nat < 65536` as its two big-endian bytes. -/
+def be16 (n : Nat) : Bytes := [UInt8.ofNat (n / 256), UInt8.ofNat n]
+
+/-- Decode a big-endian `uint16` from the first two bytes of a buffer. -/
+def be16decL : Bytes → Nat
+  | a :: b :: _ => a.toNat * 256 + b.toNat
+  | _ => 0
+
+/-- `be16decL` inverts `be16` for ports addressable by 16 bits. -/
+theorem be16decL_be16 (n : Nat) (h : n < 65536) : be16decL (be16 n) = n := by
+  simp only [be16, be16decL, UInt8.toNat_ofNat]
+  omega
+
+/-- A decoded DISCO message. -/
+inductive DiscoMsg where
+  /-- Ping: transaction id and the sender's node public key. -/
+  | ping (txid nodeKey : Bytes)
+  /-- Pong: echoed transaction id, and the observed source `ip ‖ port`. -/
+  | pong (txid srcIP : Bytes) (port : Nat)
+  /-- CallMeMaybe: the candidate endpoints (`ip`, `port`) to probe. -/
+  | callMeMaybe (eps : List (Bytes × Nat))
+deriving Repr, DecidableEq
+
+/-! ### Message-body encode / decode -/
+
+/-- A disco message body: `type ‖ version ‖ payload`. -/
+def encodeBody (ty : UInt8) (payload : Bytes) : Bytes := ty :: discoVersion :: payload
+
+/-- Encode a Ping body. -/
+def encodePing (txid nodeKey : Bytes) : Bytes :=
+  encodeBody discoTypePing (txid ++ nodeKey)
+
+/-- Encode a Pong body (grouped so decode's split is the exact inverse). -/
+def encodePong (txid srcIP : Bytes) (port : Nat) : Bytes :=
+  encodeBody discoTypePong (txid ++ (srcIP ++ be16 port))
+
+/-- Encode a list of CallMeMaybe endpoints: each is `ip(16) ‖ port(2)`. -/
+def encodeEps : List (Bytes × Nat) → Bytes
+  | [] => []
+  | (ip, port) :: t => ip ++ be16 port ++ encodeEps t
+
+/-- Encode a CallMeMaybe body. -/
+def encodeCallMeMaybe (eps : List (Bytes × Nat)) : Bytes :=
+  encodeBody discoTypeCallMeMaybe (encodeEps eps)
+
+/-- Decode a run of CallMeMaybe endpoints, lax on a short trailing remainder. -/
+def decodeEps (bs : Bytes) : List (Bytes × Nat) :=
+  if _h : epLen ≤ bs.length then
+    (bs.take ipLen, be16decL ((bs.drop ipLen).take portLen)) :: decodeEps (bs.drop epLen)
+  else []
+termination_by bs.length
+decreasing_by
+  simp only [List.length_drop]
+  have : (0 : Nat) < epLen := by decide
+  omega
+
+/-- Decode a disco message body `type ‖ version ‖ payload`. Lax on trailing bytes
+(padding / future fields), exactly as the reference parser. -/
+def decodeDiscoMessage : Bytes → Option DiscoMsg
+  | ty :: _ver :: rest =>
+    if ty = discoTypePing then
+      if txIdLen + discoKeyLen ≤ rest.length then
+        some (.ping (rest.take txIdLen) ((rest.drop txIdLen).take discoKeyLen))
+      else none
+    else if ty = discoTypePong then
+      if txIdLen + (ipLen + portLen) ≤ rest.length then
+        some (.pong (rest.take txIdLen)
+                    ((rest.drop txIdLen).take ipLen)
+                    (be16decL ((rest.drop txIdLen).drop ipLen)))
+      else none
+    else if ty = discoTypeCallMeMaybe then
+      some (.callMeMaybe (decodeEps rest))
+    else none
+  | _ => none
+
+/-- **Ping body round-trips.** -/
+theorem disco_ping_roundtrip (txid nodeKey : Bytes)
+    (ht : txid.length = txIdLen) (hk : nodeKey.length = discoKeyLen) :
+    decodeDiscoMessage (encodePing txid nodeKey) = some (.ping txid nodeKey) := by
+  have hlen : txIdLen + discoKeyLen ≤ (txid ++ nodeKey).length :=
+    Nat.le_of_eq (by rw [List.length_append, ht, hk])
+  simp only [encodePing, encodeBody, decodeDiscoMessage, ↓reduceIte, hlen,
+             List.take_left' ht, List.drop_left' ht, List.take_of_length_le (Nat.le_of_eq hk)]
+
+/-- **Pong body round-trips.** -/
+theorem disco_pong_roundtrip (txid srcIP : Bytes) (port : Nat)
+    (ht : txid.length = txIdLen) (hs : srcIP.length = ipLen) (hp : port < 65536) :
+    decodeDiscoMessage (encodePong txid srcIP port) = some (.pong txid srcIP port) := by
+  have hbe : (be16 port).length = portLen := rfl
+  have hlen : txIdLen + (ipLen + portLen) ≤ (txid ++ (srcIP ++ be16 port)).length :=
+    Nat.le_of_eq (by rw [List.length_append, List.length_append, ht, hs, hbe])
+  simp only [encodePong, encodeBody, decodeDiscoMessage, ↓reduceIte, hlen,
+             List.take_left' ht, List.drop_left' ht, List.take_left' hs, List.drop_left' hs,
+             be16decL_be16 port hp]
+  rw [if_neg (by decide : ¬ discoTypePong = discoTypePing)]
+
+/-- **CallMeMaybe endpoints round-trip.** For endpoints with 16-byte IPs and
+16-bit ports, decoding the encoded list recovers it exactly. -/
+theorem disco_eps_roundtrip (eps : List (Bytes × Nat))
+    (hip : ∀ p ∈ eps, p.1.length = ipLen) (hport : ∀ p ∈ eps, p.2 < 65536) :
+    decodeEps (encodeEps eps) = eps := by
+  induction eps with
+  | nil =>
+    have hnle : ¬ epLen ≤ ([] : Bytes).length := by decide
+    rw [encodeEps, decodeEps, dif_neg hnle]
+  | cons hd t ih =>
+    obtain ⟨ip, port⟩ := hd
+    have hlen : ip.length = ipLen := hip _ (List.mem_cons_self _ _)
+    have hpt : port < 65536 := hport _ (List.mem_cons_self _ _)
+    have hip' : ∀ p ∈ t, p.1.length = ipLen := fun p hp => hip p (List.mem_cons_of_mem _ hp)
+    have hport' : ∀ p ∈ t, p.2 < 65536 := fun p hp => hport p (List.mem_cons_of_mem _ hp)
+    have hbe : (be16 port).length = portLen := rfl
+    have hpre : (ip ++ be16 port).length = epLen := by
+      simp only [List.length_append, hlen, hbe, ipLen, portLen, epLen]
+    have henc : encodeEps ((ip, port) :: t) = (ip ++ be16 port) ++ encodeEps t := rfl
+    have hcond : epLen ≤ ((ip ++ be16 port) ++ encodeEps t).length := by
+      rw [List.length_append, hpre]; exact Nat.le_add_right _ _
+    have e_ip : ((ip ++ be16 port) ++ encodeEps t).take ipLen = ip := by
+      rw [List.append_assoc]; exact List.take_left' hlen
+    have e_drop_ip : ((ip ++ be16 port) ++ encodeEps t).drop ipLen
+                       = be16 port ++ encodeEps t := by
+      rw [List.append_assoc]; exact List.drop_left' hlen
+    have e_port : (be16 port ++ encodeEps t).take portLen = be16 port :=
+      List.take_left' hbe
+    have e_ep : ((ip ++ be16 port) ++ encodeEps t).drop epLen = encodeEps t :=
+      List.drop_left' hpre
+    rw [henc, decodeEps, dif_pos hcond, e_ip, e_drop_ip, e_port,
+        be16decL_be16 port hpt, e_ep, ih hip' hport']
+
+/-- **CallMeMaybe body round-trips.** -/
+theorem disco_callmemaybe_roundtrip (eps : List (Bytes × Nat))
+    (hip : ∀ p ∈ eps, p.1.length = ipLen) (hport : ∀ p ∈ eps, p.2 < 65536) :
+    decodeDiscoMessage (encodeCallMeMaybe eps) = some (.callMeMaybe eps) := by
+  simp only [encodeCallMeMaybe, encodeBody, decodeDiscoMessage, ↓reduceIte,
+             disco_eps_roundtrip eps hip hport]
+  rw [if_neg (by decide : ¬ discoTypeCallMeMaybe = discoTypePing),
+      if_neg (by decide : ¬ discoTypeCallMeMaybe = discoTypePong)]
+
+/-! ### Full-frame parse / encode -/
+
+/-- `l.isPrefixOf (l ++ r)` — a list is a prefix of itself extended. -/
+theorem isPrefixOf_self_append (l r : Bytes) : l.isPrefixOf (l ++ r) = true := by
+  induction l with
+  | nil => simp [List.isPrefixOf]
+  | cons a t ih => simp [List.isPrefixOf, ih]
+
+/-- The `List.toList ∘ toArray` round-trip: repacking a byte list as a `ByteArray`
+and reading it back is the identity. -/
+@[simp] theorem bytesOf_baOf (l : Bytes) : bytesOf (baOf l) = l := by
+  show (ByteArray.mk l.toArray).data.toList = l
+  simp
+
+/-- The `List UInt8` view of a `ByteArray` has the buffer's size. -/
+theorem bytesOf_len (b : ByteArray) : (bytesOf b).length = b.size := Array.length_toList
+
+/-- Encode a full DISCO frame: `Magic ‖ senderDiscoPub ‖ nonce ‖ box`. -/
+def encodeDiscoFrame (senderPub nonce box : Bytes) : Bytes :=
+  discoMagic ++ (senderPub ++ (nonce ++ box))
+
+/-- Parse a full DISCO frame: require the 6-byte magic, then split off the
+32-byte sender disco pubkey, the 24-byte nonce, and the trailing box. -/
+def parseDiscoFrame (bs : Bytes) : Option (Bytes × Bytes × Bytes) :=
+  if discoMagic.isPrefixOf bs then
+    let body := bs.drop discoMagic.length
+    if discoKeyLen + discoNonceLen ≤ body.length then
+      some (body.take discoKeyLen,
+            (body.drop discoKeyLen).take discoNonceLen,
+            (body.drop discoKeyLen).drop discoNonceLen)
+    else none
+  else none
+
+/-- **Frame round-trip.** Parsing an encoded DISCO frame recovers the sender
+pubkey, nonce, and box exactly, for a 32-byte key and 24-byte nonce. -/
+theorem disco_frame_roundtrip (senderPub nonce box : Bytes)
+    (hp : senderPub.length = discoKeyLen) (hn : nonce.length = discoNonceLen) :
+    parseDiscoFrame (encodeDiscoFrame senderPub nonce box) = some (senderPub, nonce, box) := by
+  unfold parseDiscoFrame encodeDiscoFrame
+  rw [if_pos (isPrefixOf_self_append _ _)]
+  simp only [List.drop_left]
+  have hbodylen : discoKeyLen + discoNonceLen
+                    ≤ (senderPub ++ (nonce ++ box)).length := by
+    rw [List.length_append, List.length_append, hp, hn]; omega
+  rw [if_pos hbodylen, List.take_left' hp, List.drop_left' hp,
+      List.take_left' hn, List.drop_left' hn]
+
+/-! ### The realized wire crypto — seal one side, open the other
+
+`sealDiscoMessage` and `openDiscoFrame` are the two ends of the wire: a node seals
+a disco message to a peer over the verified `crypto_box`, frames it with the magic
+and its own disco pubkey, and the peer parses + opens + decodes. The refinement
+`disco_seal_open` proves the bytes one side puts on the wire are *exactly* the
+message the other decodes — the DISCO analogue of `Derp.derp_clientinfo_server_opens`,
+so a real Tailscale peer's frame and ours agree. -/
+
+/-- Seal a disco message body to `recipientPub` under `selfSec`/`nonce` and frame
+it (advertising `selfPub` as the sender disco key). `none` on a bad key/nonce. -/
+def sealDiscoMessage (recipientPub selfSec nonce : ByteArray) (selfPub plain : Bytes) :
+    Option Bytes :=
+  match Crypto.cryptoBoxSeal recipientPub selfSec nonce (baOf plain) with
+  | some box => some (encodeDiscoFrame selfPub (bytesOf nonce) (bytesOf box))
+  | none => none
+
+/-- Parse a DISCO frame, open its box with `selfSec` against the wire sender key,
+and decode the message. Returns `(senderPub, message)`. -/
+def openDiscoFrame (selfSec : ByteArray) (bs : Bytes) : Option (Bytes × DiscoMsg) :=
+  match parseDiscoFrame bs with
+  | some (sPub, nonce, box) =>
+    match Crypto.cryptoBoxOpen (baOf sPub) selfSec (baOf nonce) (baOf box) with
+    | some plain => (decodeDiscoMessage (bytesOf plain)).map (fun m => (sPub, m))
+    | none => none
+  | none => none
+
+/-- **The wire refines to the peer's open (the whole DISCO frame, discharged).**
+Whatever frame node A seals to B — sealing a decodable message body under the
+shared X25519 secret and advertising its real disco pubkey — B, parsing + opening
++ decoding, recovers *exactly* `(A_pub, message)`. The framed box on the wire is
+precisely what a real peer decrypts. -/
+theorem disco_seal_open
+    (aPub aSec bPub bSec nonce : ByteArray) (plain : Bytes) (msg : DiscoMsg)
+    (hap : Crypto.x25519Base aSec = some aPub)
+    (hbp : Crypto.x25519Base bSec = some bPub)
+    (hapk : aPub.size = discoKeyLen) (hn : nonce.size = discoNonceLen)
+    (hdec : decodeDiscoMessage plain = some msg)
+    {frame : Bytes}
+    (hs : sealDiscoMessage bPub aSec nonce (bytesOf aPub) plain = some frame) :
+    openDiscoFrame bSec frame = some (bytesOf aPub, msg) := by
+  unfold sealDiscoMessage at hs
+  cases hseal : Crypto.cryptoBoxSeal bPub aSec nonce (baOf plain) with
+  | none => rw [hseal] at hs; simp at hs
+  | some box =>
+    rw [hseal] at hs
+    simp only [Option.some.injEq] at hs
+    subst hs
+    have hapk' : (bytesOf aPub).length = discoKeyLen := by rw [bytesOf_len]; exact hapk
+    have hn' : (bytesOf nonce).length = discoNonceLen := by rw [bytesOf_len]; exact hn
+    unfold openDiscoFrame
+    rw [disco_frame_roundtrip (bytesOf aPub) (bytesOf nonce) (bytesOf box) hapk' hn']
+    have hopen : Crypto.cryptoBoxOpen aPub bSec nonce box = some (baOf plain) :=
+      Crypto.Assumptions.crypto_box_agree aSec aPub bSec bPub nonce (baOf plain) box hap hbp hseal
+    simp only [baOf_bytesOf, hopen, bytesOf_baOf, hdec, Option.map_some']
+
+/-! ### Wire-level anti-spoof — a Pong frame that promotes was genuinely sealed -/
+
+/-- Authenticate a full Pong *frame* (magic ‖ senderPub ‖ nonce ‖ box) against the
+expected peer disco key and outstanding transaction id: parse the frame, then run
+the realized `discoAuthPong` on its nonce/box. -/
+def discoAuthPongFrame (peerPub selfSec : ByteArray) (frame expectTx : Bytes) : Bool :=
+  match parseDiscoFrame frame with
+  | some (_sPub, nonce, box) => discoAuthPong peerPub selfSec (baOf nonce) (baOf box) expectTx
+  | none => false
+
+/-- **A frame-authenticated Pong was genuinely sealed (the wire anti-spoof).** If
+`discoAuthPongFrame` accepts, the frame parsed and its box opened under the shared
+disco key AND was genuinely sealed under it — no party lacking a disco secret can
+forge a Pong frame that this accepts. Composes `parseDiscoFrame` with the box's
+authenticity (`disco_authpong_genuine`). -/
+theorem disco_authpongframe_genuine (peerPub selfSec : ByteArray) (frame expectTx : Bytes)
+    (h : discoAuthPongFrame peerPub selfSec frame expectTx = true) :
+    ∃ sPub nonce box m,
+      parseDiscoFrame frame = some (sPub, nonce, box) ∧
+      Crypto.cryptoBoxOpen peerPub selfSec (baOf nonce) (baOf box) = some m ∧
+      Crypto.cryptoBoxSeal peerPub selfSec (baOf nonce) m = some (baOf box) := by
+  unfold discoAuthPongFrame at h
+  cases hp : parseDiscoFrame frame with
+  | none => rw [hp] at h; simp at h
+  | some t =>
+    obtain ⟨sPub, nonce, box⟩ := t
+    rw [hp] at h
+    obtain ⟨m, ho, hsl⟩ := disco_authpong_genuine peerPub selfSec (baOf nonce) (baOf box) expectTx h
+    exact ⟨sPub, nonce, box, m, rfl, ho, hsl⟩
+
 end Disco

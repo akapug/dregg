@@ -104,6 +104,7 @@ theorem reactorStep_recycleCount_le_one (m l : Component) (w : Wiring m l)
   | timerFired slot   => have h := reactor_prim_no_recycle m l w st (.timerFired slot) rfl; omega
   | peerClosed        => have h := reactor_prim_no_recycle m l w st .peerClosed rfl; omega
   | closeRequested    => have h := reactor_prim_no_recycle m l w st .closeRequested rfl; omega
+  | effectComplete r  => have h := reactor_prim_no_recycle m l w st (.effectComplete r) rfl; omega
 
 /-- **Rate** seam — the deployed path recycles at most one buffer per event: a
     rate bound on buffer churn. Transported from `reactor_prim_recycleCount`. -/

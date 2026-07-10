@@ -61,7 +61,7 @@ namespace HtmlRewriteCorrect
 open HtmlRewrite
   (Byte lt gt Token Mode TState init feed feedBytes tokenize flush feedBytes_append)
 open Reactor.Stage.HtmlRewrite
-  (renderTok rewriteState rewriteBytes htmlrewriteStage htmlrewriteStage_body)
+  (renderTok rewriteState rewriteBytes htmlrewriteStage htmlrewriteStage_body isHtmlCT)
 open Reactor.Pipeline (Stage Ctx runPipeline)
 open Reactor (Response)
 open Proto (Bytes)
@@ -197,13 +197,20 @@ theorem stream_chunk_independent (c1 c2 : List Bytes) (h : c1.flatten = c2.flatt
 
 /-! ## Binding to the real deployed stage (not a wrapper) -/
 
-/-- **Deployed stage body = spec.** The BUILT pipeline response body the serializer
-renders, for the html-rewrite stage on ANY tail/handler/context, is exactly
-`stripData` of the tail body. Rides the deployed `htmlrewriteStage_body`. -/
+/-- **Deployed stage body = gated spec.** The BUILT pipeline response body the
+serializer renders, for the html-rewrite stage on ANY tail/handler/context, is exactly
+`stripData` of the tail body WHEN the tail declares `text/html`, and the untouched tail
+body otherwise — the content-type gate the deployed stage now applies. Rides the
+deployed `htmlrewriteStage_body`. (Before the gate this asserted the UNCONDITIONAL
+`stripData` on every body; that was the latent-corruption behaviour, now the `then`
+arm only.) -/
 theorem htmlrewriteStage_body_spec (rest : List Stage) (h : Ctx → Response) (c : Ctx) :
     ((runPipeline (htmlrewriteStage :: rest) h c).build).body
-      = stripData ((runPipeline rest h c).build).body := by
-  rw [htmlrewriteStage_body, rewriteBytes_eq_spec]
+      = if isHtmlCT ((runPipeline rest h c).build).headers
+        then stripData ((runPipeline rest h c).build).body
+        else ((runPipeline rest h c).build).body := by
+  rw [htmlrewriteStage_body]
+  simp only [rewriteBytes_eq_spec]
 
 /-! ## Non-vacuity -/
 

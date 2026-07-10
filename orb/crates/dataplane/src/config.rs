@@ -131,6 +131,145 @@ pub fn generation() -> u64 {
     GENERATION.load(Ordering::SeqCst)
 }
 
+/// The raw `DRORB_CONFIG` file bytes, cached at boot (and on reload) INDEPENDENT of
+/// whether the proven ROUTE parser accepted them. The metered serve seam scans these
+/// for the middleware POLICY directives (`max-body-size` / `allow-method` /
+/// `allow-host`) via the proven `Reactor.Deploy.parsePolicy`, so an operator policy is
+/// enforced on the default serve even by a config the route grammar does not model.
+/// Empty when `DRORB_CONFIG` is unset / unreadable — the byte-identical default.
+static RAW: OnceLock<RwLock<Vec<u8>>> = OnceLock::new();
+
+fn raw_cell() -> &'static RwLock<Vec<u8>> {
+    RAW.get_or_init(|| RwLock::new(Vec::new()))
+}
+
+/// The per-source concurrent-connection cap parsed from the `max-connections <n>`
+/// directive in `DRORB_CONFIG` (the SAME operator config grammar as the proven
+/// `Reactor.Deploy.parsePolicyLine`, space-separated, one directive per line).
+/// `0` means NO limit (directive absent or unparsable) — mirroring the proven
+/// `Reactor.Stage.ConnLimit.admits`, whose cap `0` always admits. A lock-free
+/// atomic: written on load/reload (`set_raw`), read on the accept hot path
+/// (`max_connections`) with no lock.
+static MAX_CONNECTIONS: AtomicU64 = AtomicU64::new(0);
+
+/// The active per-source connection cap (`0` = unlimited). Read on every accept by
+/// the reactors (`uring`/`kqueue`/`blocking`); a plain relaxed atomic load.
+pub fn max_connections() -> u32 {
+    MAX_CONNECTIONS.load(Ordering::Relaxed) as u32
+}
+
+/// The per-source REQUEST-RATE cap parsed from the `rate-limit <n>` directive: at
+/// most `n` request arrivals from one source within each `rate-window` before the
+/// reactor answers `429 Too Many Requests` at accept (the wire form of the proven
+/// `Reactor.Stage.StickTable.resp429` / `Reactor.Stage.Rate.resp429`). `0` = NO
+/// limit (directive absent) — mirroring the proven admission rule, whose `0`
+/// threshold always admits. A lock-free atomic, read on the accept hot path.
+static RATE_LIMIT: AtomicU64 = AtomicU64::new(0);
+
+/// The rate-limit sliding-window length in MILLISECONDS (`rate-window <ms>`), the
+/// span over which `rate-limit` arrivals are counted before the window ages
+/// (resets). Defaults to 1000 ms; the window slides so a source that pauses for a
+/// full window recovers (the counter ages — no leak).
+static RATE_WINDOW_MS: AtomicU64 = AtomicU64::new(1000);
+
+/// The slowloris header-arrival timeout in MILLISECONDS (`slowloris-timeout <ms>`):
+/// a connection whose request headers do NOT complete within this span after accept
+/// is dropped with `408 Request Timeout` (the wire form of the proven
+/// `Reactor.Stage.Slowloris.resp408`). `0` = disabled (directive absent), mirroring
+/// the proven `expired`, whose `0` timeout never expires.
+static SLOWLORIS_MS: AtomicU64 = AtomicU64::new(0);
+
+/// The active per-source request-rate cap (`0` = unlimited). Read on every accept.
+pub fn rate_limit() -> u32 {
+    RATE_LIMIT.load(Ordering::Relaxed) as u32
+}
+
+/// The active rate-limit window (defaults to 1000 ms; never zero, so the window
+/// always has positive width and the counter deterministically ages).
+pub fn rate_window() -> std::time::Duration {
+    std::time::Duration::from_millis(RATE_WINDOW_MS.load(Ordering::Relaxed).max(1))
+}
+
+/// The active slowloris header timeout (`Duration::ZERO` = disabled). Read on every
+/// accept and on the header-read sweep by the reactors.
+pub fn slowloris_timeout() -> std::time::Duration {
+    std::time::Duration::from_millis(SLOWLORIS_MS.load(Ordering::Relaxed))
+}
+
+/// Scan the raw config bytes for the LAST `max-connections <n>` directive (a total
+/// scan: an unrecognized/absent line yields `0` = unlimited, exactly as the proven
+/// `parsePolicy` yields `emptyMwPolicy`). Mirrors `parsePolicyLine`'s
+/// whitespace-tokenized match so the Rust reactor reads the same directive the
+/// proven serve-level `MwPolicy` does.
+fn scan_max_connections(bytes: &[u8]) -> u32 {
+    let text = String::from_utf8_lossy(bytes);
+    let mut cap: u32 = 0;
+    for line in text.lines() {
+        let toks: Vec<&str> = line.split_whitespace().collect();
+        if let ["max-connections", n] = toks.as_slice() {
+            if let Ok(v) = n.parse::<u32>() {
+                cap = v;
+            }
+        }
+    }
+    cap
+}
+
+/// Scan the raw config bytes for the LAST occurrence of each accept-path DoS
+/// directive (same whitespace-tokenized grammar as `max-connections`), returning
+/// `(rate_limit, rate_window_ms, slowloris_ms)`. An absent/unparsable directive
+/// keeps its default (`0` = disabled for the limits; `1000` ms for the window),
+/// exactly as `parsePolicy` yields the empty policy for an unmodeled line.
+fn scan_dos_directives(bytes: &[u8]) -> (u32, u64, u64) {
+    let text = String::from_utf8_lossy(bytes);
+    let mut rate: u32 = 0;
+    let mut window_ms: u64 = 1000;
+    let mut slow_ms: u64 = 0;
+    for line in text.lines() {
+        let toks: Vec<&str> = line.split_whitespace().collect();
+        match toks.as_slice() {
+            ["rate-limit", n] => {
+                if let Ok(v) = n.parse::<u32>() {
+                    rate = v;
+                }
+            }
+            ["rate-window", n] => {
+                if let Ok(v) = n.parse::<u64>() {
+                    window_ms = v.max(1);
+                }
+            }
+            ["slowloris-timeout", n] => {
+                if let Ok(v) = n.parse::<u64>() {
+                    slow_ms = v;
+                }
+            }
+            _ => {}
+        }
+    }
+    (rate, window_ms, slow_ms)
+}
+
+/// A clone of the raw `DRORB_CONFIG` bytes (empty when none is in force). The seam
+/// scans this for the middleware-policy directives; a directive-free config yields the
+/// empty policy and the byte-identical default serve (`serveUnderPolicyMetered_default`).
+pub fn raw_text() -> Vec<u8> {
+    raw_cell().read().unwrap().clone()
+}
+
+/// Cache the raw config bytes for the policy scan (called by `load`/`reload`).
+fn set_raw(bytes: &[u8]) {
+    *raw_cell().write().unwrap() = bytes.to_vec();
+    // Re-derive the reactor-level connection cap from the same bytes, so a SIGHUP
+    // reload retunes the accept-path gate atomically alongside the serve config.
+    MAX_CONNECTIONS.store(scan_max_connections(bytes) as u64, Ordering::Relaxed);
+    // Likewise re-derive the request-rate + slowloris accept-path gates from the
+    // same directive grammar, retuned atomically on every (re)load.
+    let (rate, window_ms, slow_ms) = scan_dos_directives(bytes);
+    RATE_LIMIT.store(rate as u64, Ordering::Relaxed);
+    RATE_WINDOW_MS.store(window_ms, Ordering::Relaxed);
+    SLOWLORIS_MS.store(slow_ms, Ordering::Relaxed);
+}
+
 /// The outcome of a runtime reload (SIGHUP).
 pub enum ReloadOutcome {
     /// The new config parsed and was swapped in; carries the new generation.
@@ -150,6 +289,12 @@ pub fn load(gw: &ServeGateway) {
         Ok(p) => p,
         Err(_) => return, // no config: default deployment
     };
+    // Cache the raw bytes for the middleware-policy scan REGARDLESS of whether the
+    // route parser accepts them — the policy directives are enforced on the default
+    // serve even if the route grammar does not model the file.
+    if let Ok(bytes) = std::fs::read(&path) {
+        set_raw(&bytes);
+    }
     match parse_from_path(gw, &path) {
         Ok(dep) => {
             eprintln!(
@@ -176,6 +321,9 @@ pub fn reload(gw: &ServeGateway) -> ReloadOutcome {
         Ok(p) => p,
         Err(_) => return ReloadOutcome::NoConfig,
     };
+    if let Ok(bytes) = std::fs::read(&path) {
+        set_raw(&bytes);
+    }
     match parse_from_path(gw, &path) {
         Ok(dep) => {
             // The atomic swap: the write lock publishes the new Arc. A request
@@ -189,6 +337,21 @@ pub fn reload(gw: &ServeGateway) -> ReloadOutcome {
         }
         Err(reason) => ReloadOutcome::KeptOld { reason },
     }
+}
+
+/// Whether the deployment is BRAID-marked (`DRORB_BRAID=1`): the running metered serve
+/// then folds over `Reactor.Deploy.braidedDeployment` (the proven forward-auth gate +
+/// request-id echo composed at the head of the deployed chain) instead of
+/// `defaultDeployment`. Read once (env is fixed for the process lifetime);
+/// `1`/`true`/`yes`/`on` enable. Unset ⇒ the default metered serve is byte-identical to
+/// today (`servePipelineOfMetered_default` anchor intact).
+pub fn braid_enabled() -> bool {
+    static BRAID: OnceLock<bool> = OnceLock::new();
+    *BRAID.get_or_init(|| {
+        std::env::var("DRORB_BRAID")
+            .map(|v| matches!(v.as_str(), "1" | "true" | "yes" | "on"))
+            .unwrap_or(false)
+    })
 }
 
 /// A snapshot of the active deployment, if a valid config is in force. Returns an

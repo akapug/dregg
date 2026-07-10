@@ -23,6 +23,7 @@
 //! to the normal serve. When it is set, a background active-health loop probes
 //! each backend so a dead one is ejected from the proven pick's eligible pool.
 
+use std::io::Write;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -55,24 +56,32 @@ pub(crate) fn fleet() -> Option<&'static Arc<Fleet>> {
         .as_ref()
 }
 
-/// The reverse-proxy hop for one request, when a fleet is configured. Returns
-/// `Some(response bytes)` if the host handled the request as a proxy forward
-/// (dialled the proven-chosen backend and returned its bytes, or produced a
-/// 502/503), or `None` when no fleet is configured so the caller falls through to
-/// the normal serve.
+/// The STREAMING reverse-proxy hop for one request, when a fleet is configured:
+/// the proven-chosen backend is dialled and its response is written to `client` as
+/// it arrives (bounded buffer + back-pressure) instead of buffered whole. Returns
+/// `None` when no fleet is
+/// configured (the caller falls through to the normal serve), `Some(Ok(outcome))`
+/// with what the host records after streaming, or `Some(Err(_))` when a client
+/// write failed and the connection must be dropped.
 ///
 /// The WHICH-backend decision is always the proven `drorb_proxy_pick`, crossed on
 /// the serve thread via `gw`; this function never selects a backend.
-pub fn handle_proxy(
+pub fn handle_proxy_streaming<W: Write>(
     req: &[u8],
+    keepalive_req: bool,
+    client: &mut W,
     gw: &ServeGateway,
     reply_tx: &Sender<PooledBuf>,
     reply_rx: &Receiver<PooledBuf>,
-) -> Option<(Vec<u8>, Option<String>)> {
+) -> Option<std::io::Result<proxy_dial::StreamOutcome>> {
     let fleet = fleet()?;
-    Some(proxy_dial::handle(req, fleet, |mask, key| {
-        pick_via_seam(mask, key, gw, reply_tx, reply_rx)
-    }))
+    Some(proxy_dial::handle_streaming(
+        req,
+        keepalive_req,
+        fleet,
+        client,
+        |mask, key| pick_via_seam(mask, key, gw, reply_tx, reply_rx),
+    ))
 }
 
 /// Cross the proven `drorb_proxy_pick` seam on the runtime-owner serve thread:

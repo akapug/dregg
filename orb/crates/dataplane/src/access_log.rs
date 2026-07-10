@@ -117,6 +117,20 @@ fn sanitize(s: &str) -> String {
 /// Emit one access-log line for a served request. No-op when logging is disabled.
 /// `backend` is the dialled upstream address for a proxied request, else `None`.
 pub fn log(client: IpAddr, req: &ReqLine, resp: &[u8], backend: Option<&str>, start: Instant) {
+    log_streamed(client, req, resp, resp.len() as u64, backend, start);
+}
+
+/// Emit one access-log line for a request whose body was STREAMED to the client:
+/// the status is read from the response `head` and `bytes` is the exact streamed
+/// total (the whole response was never buffered). Otherwise identical to [`log`].
+pub fn log_streamed(
+    client: IpAddr,
+    req: &ReqLine,
+    head: &[u8],
+    bytes: u64,
+    backend: Option<&str>,
+    start: Instant,
+) {
     let Some(sink) = sink() else {
         return;
     };
@@ -126,9 +140,9 @@ pub fn log(client: IpAddr, req: &ReqLine, resp: &[u8], backend: Option<&str>, st
         client,
         req.method,
         req.path,
-        status_of(resp),
+        status_of(head),
         backend.unwrap_or("-"),
-        resp.len(),
+        bytes,
         start.elapsed().as_micros(),
     );
     match sink {

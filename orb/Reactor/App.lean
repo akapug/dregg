@@ -474,13 +474,45 @@ theorem app_chosen_route_matches (ac : AppConfig) (req : Request) :
 `Policy.Running` snapshot; the policy lane supplies the real declared surface. -/
 def demoPolicyConfig : Policy.Config := { listeners := [], routes := [] }
 
+/-! ### The `/bulk` large-body download route — a real homelab throughput endpoint
+
+A verified server fronting real services needs a way for an operator to measure its
+own throughput on a large 2xx body (a bandwidth/download probe — the LibreSpeed
+`garbage.php` / Cloudflare `/__down` pattern). `bulkBody` is a genuinely large
+(1 MiB) generated response, and `bulkRoute` serves it from the `anyHost` block so a
+plain `GET /bulk` to the deployed listener flows a large 2xx response through the
+whole `deployStagesFull2` fold. -/
+
+/-- The size in bytes of the `/bulk` download payload: 1 MiB. A fixed, sizeable
+constant so the deployed serve is measurable on a large 2xx body. -/
+def bulkSize : Nat := 1048576
+
+/-- The generated large download body: `bulkSize` copies of `'a'` (`0x61`), built by
+`List.replicate` — NOT a source literal, so the module stays small while the served
+body is genuinely 1 MiB. This is the `VHandler.respond 200` payload the `/bulk` route
+answers with: a real, sizeable 2xx body flowing the full deployed pipeline. -/
+def bulkBody : Bytes := List.replicate bulkSize (0x61 : UInt8)
+
+/-- The served `/bulk` body is genuinely large (1 MiB) — not a placeholder. -/
+theorem bulkBody_length : bulkBody.length = bulkSize := by
+  simp [bulkBody]
+
+/-- The `/bulk` route: any method, exact single-segment path `["bulk"]`, no guards,
+answering `200` with the 1 MiB `bulkBody`. Lives in the `anyHost` block, so it is
+served for any authority that is not one of the exact virtual hosts. -/
+def bulkRoute : RouteAdvanced.Route VHandler :=
+  { method := .anyMethod,
+    path := { segs := [RouteAdvanced.SegPat.lit "bulk"], globstar := false },
+    guards := [], handler := VHandler.respond 200 bulkBody }
+
 /-- The deployed virtual-host / glob table the default route dispatches over
 (`Route.Match.dispatchHandler`'s engine, `RouteAdvanced.dispatch`). Two exact-host
 blocks discriminate authority — `a.example` and `b.example` answer with DIFFERENT bodies
 for the same path — and the fallback `anyHost` block carries a `**`-glob route
-(`/…/assets/**`) plus a catch-all `404`. This is what makes host-based and glob routing
-observable on the wire: the request's `Host` selects the block, then the block's first
-matching route (glob included) supplies the answer. -/
+(`/…/assets/**`), the large-body `/bulk` download route, and a catch-all `404`. This is
+what makes host-based and glob routing observable on the wire: the request's `Host`
+selects the block, then the block's first matching route (glob/bulk included) supplies
+the answer. -/
 def demoVhBlocks : List (RouteAdvanced.ServerBlock VHandler) :=
   [ { host := .exact ["a", "example"],
       routes := [ RouteAdvanced.catchAllRoute (VHandler.respond 200 "vhost-a".toUTF8.toList) ] },
@@ -492,6 +524,7 @@ def demoVhBlocks : List (RouteAdvanced.ServerBlock VHandler) :=
             path := { segs := [RouteAdvanced.SegPat.lit "health", RouteAdvanced.SegPat.lit "assets"],
                       globstar := true },
             guards := [], handler := VHandler.respond 200 "glob-hit".toUTF8.toList },
+          bulkRoute,
           RouteAdvanced.catchAllRoute (VHandler.respond 404 "not found".toUTF8.toList) ] } ]
 
 /-- A concrete `AppConfig`: an exact route for `/health`, a prefix route under
@@ -516,6 +549,109 @@ theorem demoApp_routes_total (req : Request) :
     ∃ r, Route.Match.bestMatch demoApp.table (targetSegments req.target) = some r
        ∧ handle demoApp req = responseOfReq req r.handler :=
   app_routes_total demoApp req
+
+/-! ## The `/bulk` large-body route on the deployed app -/
+
+/-- A `RouteAdvanced.Req` for `GET /bulk` under a non-vhost authority (`localhost`) —
+the shape `hostReqOf` builds for a curl to the plaintext listener, whose `Host` is
+neither `a.example` nor `b.example`, so the `anyHost` block is selected. -/
+def bulkReq : RouteAdvanced.Req :=
+  { host := ["localhost"], method := "GET", segs := ["bulk"], headers := [], query := [] }
+
+/-- **The `/bulk` route dispatches to the large-body handler.** The REAL
+`RouteAdvanced.dispatch` over the deployed `demoVhBlocks` — the exact matcher the
+deployed default handler runs — selects `bulkRoute` for a `GET /bulk` under a
+non-vhost authority, and its handler is exactly `respond 200 bulkBody` (the 1 MiB
+body). Non-vacuous: it computes host-block selection then first-match routing. -/
+theorem bulk_dispatches :
+    RouteAdvanced.dispatch demoVhBlocks bulkReq = some bulkRoute := rfl
+
+/-- **The non-vhost-authority `selectBlock` non-match: any host that is neither
+`a.example` nor `b.example` selects the `anyHost` block.** The deployed `demoVhBlocks`
+discriminates authority with two EXACT-host blocks (`a.example`, `b.example`) ahead of
+the fallback `anyHost` block. `RouteAdvanced.selectBlock` is a first-match `find?` over
+`hostMatch`; an exact block never matches a different host (`hostMatch_exact_ne`), so a
+request whose authority is neither exact vhost falls through both and selects the
+`anyHost` block (which `hostMatch`es every authority). This is the authority half of the
+`/bulk`-any-host result: the `/bulk` route lives in `anyHost`, so it is reachable from
+EVERY non-vhost host, not only `localhost`. -/
+theorem demoVhBlocks_selectBlock_anyHost (req : Request)
+    (hna : hostLabelsOf req ≠ ["a", "example"])
+    (hnb : hostLabelsOf req ≠ ["b", "example"]) :
+    RouteAdvanced.selectBlock demoVhBlocks (hostReqOf req)
+      = some { host := RouteAdvanced.HostPat.anyHost,
+               routes :=
+                 [ { method := RouteAdvanced.MethodPat.anyMethod,
+                     path := { segs := [RouteAdvanced.SegPat.lit "health",
+                                        RouteAdvanced.SegPat.lit "assets"],
+                               globstar := true },
+                     guards := [], handler := VHandler.respond 200 "glob-hit".toUTF8.toList },
+                   bulkRoute,
+                   RouteAdvanced.catchAllRoute (VHandler.respond 404 "not found".toUTF8.toList) ] } := by
+  unfold RouteAdvanced.selectBlock
+  have e0 : RouteAdvanced.hostMatch (RouteAdvanced.HostPat.exact ["a", "example"])
+      (hostReqOf req).host = false := by
+    show RouteAdvanced.hostMatch (RouteAdvanced.HostPat.exact ["a", "example"])
+        (hostLabelsOf req) = false
+    exact RouteAdvanced.hostMatch_exact_ne hna
+  have e1 : RouteAdvanced.hostMatch (RouteAdvanced.HostPat.exact ["b", "example"])
+      (hostReqOf req).host = false := by
+    show RouteAdvanced.hostMatch (RouteAdvanced.HostPat.exact ["b", "example"])
+        (hostLabelsOf req) = false
+    exact RouteAdvanced.hostMatch_exact_ne hnb
+  simp only [demoVhBlocks, List.find?, e0, e1, RouteAdvanced.anyHost_matches]
+
+/-- **The deployed app answers `/bulk` with the 1 MiB body, request-aware — for ANY
+non-vhost authority.** For a request whose target normalizes to `["bulk"]` under an
+authority that is neither of the exact virtual hosts `a.example`/`b.example` (any
+method, any headers/query — the `/bulk` route is `anyMethod` and unguarded),
+`App.handle demoApp` returns a `200` whose body is exactly `bulkBody`. The whole
+deployed decision: `bestMatch` falls through the author routes to the host/glob default,
+`RouteAdvanced.selectBlock` picks the `anyHost` block (`demoVhBlocks_selectBlock_anyHost`
+— NOT pinned to `localhost`), its first matching route is `bulkRoute`, and
+`vhandlerResponse` builds the `200` + large body. -/
+theorem bulk_serves_large_body_any (req : Request)
+    (htarget : targetSegments req.target = ["bulk"])
+    (hna : hostLabelsOf req ≠ ["a", "example"])
+    (hnb : hostLabelsOf req ≠ ["b", "example"]) :
+    handle demoApp req
+      = { status := 200, reason := reasonFor 200, headers := [], body := bulkBody } := by
+  have hseg : (hostReqOf req).segs = ["bulk"] := by unfold hostReqOf; exact htarget
+  have hb : RouteAdvanced.dispatch demoVhBlocks (hostReqOf req) = some bulkRoute := by
+    unfold RouteAdvanced.dispatch RouteAdvanced.routeMatches
+    rw [demoVhBlocks_selectBlock_anyHost req hna hnb, hseg]
+    rfl
+  unfold handle
+  rw [htarget]
+  show (match RouteAdvanced.dispatch demoVhBlocks (hostReqOf req) with
+        | some rt => vhandlerResponse req rt.handler
+        | none => vhandlerResponse req (VHandler.respond 404 "not found".toUTF8.toList)) = _
+  rw [hb]
+  show vhandlerResponse req (VHandler.respond 200 bulkBody) = _
+  rfl
+
+/-- **The deployed app answers `/bulk` with the 1 MiB body under a `localhost`
+authority.** The `localhost` specialization of `bulk_serves_large_body_any` (`localhost`
+is neither exact vhost), kept for the downstream consumers that pin the plaintext
+listener's authority. -/
+theorem bulk_serves_large_body (req : Request)
+    (htarget : targetSegments req.target = ["bulk"])
+    (hhost : hostLabelsOf req = ["localhost"]) :
+    handle demoApp req
+      = { status := 200, reason := reasonFor 200, headers := [], body := bulkBody } :=
+  bulk_serves_large_body_any req htarget (by rw [hhost]; decide) (by rw [hhost]; decide)
+
+/-- **The demo `/health` route is UNCHANGED by the `/bulk` addition.** `App.handle`
+still answers a `/health` request with exactly `200 "ok"` — the `/bulk` route lives in
+the host/glob default (`demoVhBlocks`), which `/health` never reaches (it matches the
+exact author route first). Adding the download route did not perturb the existing
+route surface. -/
+theorem health_unchanged (req : Request) (h : targetSegments req.target = ["health"]) :
+    handle demoApp req
+      = { status := 200, reason := reasonFor 200, headers := [], body := "ok".toUTF8.toList } := by
+  unfold handle
+  rw [h]
+  rfl
 
 /-! ## The widened per-host answer is real (isolation intact over `VHandler`)
 
@@ -563,5 +699,11 @@ theorem demoVhWiden_host_isolation {req : RouteAdvanced.Req}
       ≠ some { host := .exact ["jelly", "home"],
                routes := [ RouteAdvanced.catchAllRoute (VHandler.proxy Reactor.Proxy.demoPool) ] } :=
   RouteAdvanced.route_host_isolation rfl hne
+
+/-! ## Axiom audit for the generalized `/bulk`-any-host result -/
+
+#print axioms demoVhBlocks_selectBlock_anyHost
+#print axioms bulk_serves_large_body_any
+#print axioms bulk_serves_large_body
 
 end Reactor.App

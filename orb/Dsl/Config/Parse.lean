@@ -358,6 +358,49 @@ def isStopKw (t : List Char) : Bool :=
   (t == kwMiddleware) || (t == kwHeader) || (t == kwQuery) || (t == kwStatic) || (t == kwProxy)
     || (t == kwRedirect) || (t == kwRespond)
 
+/-! ## Middleware clauses (a name plus an optional argument token)
+
+A per-route middleware clause is `middleware <name> [<arg>]`. `bearer-auth` takes no
+argument; the ARGUMENT-taking names carry one token of data — `ip-allow <cidr-list>` a
+comma-separated CIDR allow-list, `rate <n>` a numeric budget. `mwTakesArg` is the arity
+oracle both the renderer and the peel scanner consult, so a clause renders and parses back
+to exactly the same `middleware <name> [<arg>]` token run. -/
+
+/-- The argument-taking middleware name tokens. -/
+def kwIpAllow : List Char := ['i','p','-','a','l','l','o','w']
+def kwRate    : List Char := ['r','a','t','e']
+
+/-- Does a middleware NAME take one argument token? `ip-allow` and `rate` do; every other
+name (`bearer-auth`, an unknown residual) does not. The renderer emits an argument iff
+this holds, and the peel scanner consumes one iff this holds — so the two agree. -/
+def mwTakesArg (name : List Char) : Bool := (name == kwIpAllow) || (name == kwRate)
+
+/-- One per-route middleware clause: a name token and an OPTIONAL argument token
+(`bearer-auth` ⇒ `none`; `ip-allow`/`rate` ⇒ `some <cidr-list>`/`some <n>`). -/
+structure MwClause where
+  /-- The middleware name token (`bearer-auth`, `ip-allow`, `rate`, or an unknown residual). -/
+  name : List Char
+  /-- The argument token, present exactly for the argument-taking names (`mwTakesArg`). -/
+  arg  : Option (List Char)
+deriving DecidableEq, Repr
+
+/-- A middleware clause is well-formed when its tokens carry no separator AND its argument
+presence matches the name's arity (`mwTakesArg`) — so it renders and parses back
+unambiguously. -/
+def MwClauseWF (c : MwClause) : Prop :=
+  (' ' ∉ c.name ∧ '\n' ∉ c.name)
+  ∧ (match c.arg with
+     | none   => mwTakesArg c.name = false
+     | some a => mwTakesArg c.name = true ∧ ' ' ∉ a ∧ '\n' ∉ a)
+
+/-- The argument presence of a well-formed clause is exactly its name's arity. -/
+theorem MwClauseWF_arg_arity {c : MwClause} (h : MwClauseWF c) :
+    mwTakesArg c.name = c.arg.isSome := by
+  obtain ⟨_, harg⟩ := h
+  cases hc : c.arg with
+  | none   => simp only [hc] at harg; simp [harg]
+  | some a => simp only [hc] at harg; simp [harg.1]
+
 /-! ## The route dimension (the config-representable handler subset)
 
 The deployed `Reactor.App.Handler` inductive carries four **data-parameterized**
@@ -430,11 +473,13 @@ structure VRouteSpec where
   method : Option (List Char)
   /-- The path pattern token (`/` ⇒ host catch-all, trailing `*` ⇒ prefix, else exact). -/
   pathTok : List Char
-  /-- The ordered per-route MIDDLEWARE chain: each `middleware <name>` clause's name
-  token, run BEFORE the handler. `bearer-auth` denotes the proven `Jwt.authenticate`
-  bearer gate (a rejected token ⇒ 401); an unrecognized name is a fail-closed residual
-  (`Reactor.RouteMw.mwOfName`). Empty ⇒ no middleware (byte-identical to a bare route). -/
-  middleware : List (List Char)
+  /-- The ordered per-route MIDDLEWARE chain: each `middleware <name> [<arg>]` clause, run
+  BEFORE the handler. `bearer-auth` denotes the proven `Jwt.authenticate` bearer gate (a
+  rejected token ⇒ 401); `ip-allow <cidr-list>` the proven `IpFilter.permits` allow-list
+  (a refused client ⇒ 403); `rate <n>` the proven `Rate.tryAdmit` bucket (over budget ⇒
+  429); an unrecognized name is a fail-closed residual (`Reactor.RouteMw.mwOfClause`).
+  Empty ⇒ no middleware (byte-identical to a bare route). -/
+  middleware : List MwClause
   /-- `some name` ⇒ require request header `name` to be present (a `header <name>` clause). -/
   headerGuard : Option (List Char)
   /-- `some key` ⇒ require request query key `key` to be present (a `query <key>` clause). -/
@@ -468,7 +513,7 @@ def VRouteWF (r : VRouteSpec) : Prop :=
     ∧ (match r.method with | none => True | some m => (' ' ∉ m ∧ '\n' ∉ m) ∧ NotStopKw m)
     ∧ (match r.headerGuard with | none => True | some h => ' ' ∉ h ∧ '\n' ∉ h)
     ∧ (match r.queryGuard with | none => True | some q => ' ' ∉ q ∧ '\n' ∉ q)
-    ∧ (∀ n ∈ r.middleware, ' ' ∉ n ∧ '\n' ∉ n)
+    ∧ (∀ c ∈ r.middleware, MwClauseWF c)
     ∧ HandlerWF r.handler
 
 /-- A vhost item is well-formed when its tokens carry no separator. -/
@@ -570,10 +615,17 @@ def handlerToks : HandlerSpec → List (List Char)
   | .redirect st loc => [kwRedirect, renderNat st, loc]
   | .respond st body => [kwRespond, renderNat st, body]
 
-/-- The middleware-chain tokens: `middleware <name>` per declared middleware, in order. -/
-def middlewareToks : List (List Char) → List (List Char)
+/-- The tokens of one middleware clause: `middleware <name>` (no-arg) or `middleware
+<name> <arg>` (argument-taking). Always led by the `middleware` keyword. -/
+def mwClauseToks (c : MwClause) : List (List Char) :=
+  match c.arg with
+  | none   => [kwMiddleware, c.name]
+  | some a => [kwMiddleware, c.name, a]
+
+/-- The middleware-chain tokens: each clause's `middleware <name> [<arg>]` run, in order. -/
+def middlewareToks : List MwClause → List (List Char)
   | []      => []
-  | n :: ns => kwMiddleware :: n :: middlewareToks ns
+  | c :: cs => mwClauseToks c ++ middlewareToks cs
 
 /-- The optional guard-clause tokens: `header <name>` then `query <key>`, each present
 only when its guard is. -/
@@ -727,14 +779,22 @@ def parseHandlerToks : List (List Char) → Option HandlerSpec
     else none
   | _ => none
 
-/-- Peel the leading `middleware <name>` clauses off `suf` (a chain, in order): each
-`middleware <name>` pair contributes `name`; the scan stops at the first token that is
-not `middleware`. -/
-def peelMiddleware : List (List Char) → List (List Char) × List (List Char)
+/-- Peel the leading `middleware <name> [<arg>]` clauses off `suf` (a chain, in order):
+each `middleware` keyword opens a clause whose name follows; an argument-taking name
+(`mwTakesArg`) consumes one more token as its argument. The scan stops at the first token
+that is not `middleware`. -/
+def peelMiddleware : List (List Char) → List MwClause × List (List Char)
   | k :: name :: rest =>
     if k = kwMiddleware then
-      let p := peelMiddleware rest
-      (name :: p.1, p.2)
+      if mwTakesArg name then
+        match rest with
+        | arg :: rest' =>
+          let p := peelMiddleware rest'
+          (⟨name, some arg⟩ :: p.1, p.2)
+        | [] => ([], k :: name :: rest)
+      else
+        let p := peelMiddleware rest
+        (⟨name, none⟩ :: p.1, p.2)
     else ([], k :: name :: rest)
   | suf => ([], suf)
 
@@ -1151,18 +1211,33 @@ theorem guardToks_no_sep (sep : Char) (r : VRouteSpec)
       · exact hq
 
 /-- The middleware-chain tokens carry no `sep` (the `middleware` keyword and each name). -/
-theorem middlewareToks_no_sep (sep : Char) (names : List (List Char))
+theorem middlewareToks_no_sep (sep : Char) (clauses : List MwClause)
     (hkM : sep ∉ kwMiddleware) :
-    (∀ n ∈ names, sep ∉ n) → ∀ t ∈ middlewareToks names, sep ∉ t := by
-  induction names with
+    (∀ c ∈ clauses, sep ∉ c.name ∧ (match c.arg with | none => True | some a => sep ∉ a)) →
+    ∀ t ∈ middlewareToks clauses, sep ∉ t := by
+  induction clauses with
   | nil => intro _ t ht; simp [middlewareToks] at ht
-  | cons a as ih =>
+  | cons c cs ih =>
     intro hn t ht
-    simp only [middlewareToks, List.mem_cons] at ht
-    rcases ht with he | he | ht
-    · rw [he]; exact hkM
-    · rw [he]; exact hn a (List.mem_cons_self _ _)
-    · exact ih (fun n' hn' => hn n' (List.mem_cons_of_mem _ hn')) t ht
+    have hc := hn c (List.mem_cons_self _ _)
+    have hrest : ∀ c' ∈ cs, sep ∉ c'.name ∧ (match c'.arg with | none => True | some a => sep ∉ a) :=
+      fun c' hc' => hn c' (List.mem_cons_of_mem _ hc')
+    simp only [middlewareToks, mwClauseToks] at ht
+    cases hca : c.arg with
+    | none =>
+      simp only [hca, List.cons_append, List.singleton_append, List.mem_cons] at ht
+      rcases ht with he | he | ht
+      · rw [he]; exact hkM
+      · rw [he]; exact hc.1
+      · exact ih hrest t ht
+    | some a =>
+      have ha : sep ∉ a := by have := hc.2; simp only [hca] at this; exact this
+      simp only [hca, List.cons_append, List.singleton_append, List.mem_cons] at ht
+      rcases ht with he | he | he | ht
+      · rw [he]; exact hkM
+      · rw [he]; exact hc.1
+      · rw [he]; exact ha
+      · exact ih hrest t ht
 
 /-- Every token of a vhost route line carries no `sep`, given the per-source facts. -/
 theorem tokensOfVRoute_no_sep (sep : Char) (r : VRouteSpec)
@@ -1172,7 +1247,7 @@ theorem tokensOfVRoute_no_sep (sep : Char) (r : VRouteSpec)
     (hm : match r.method with | none => True | some m => sep ∉ m)
     (hh : match r.headerGuard with | none => True | some h => sep ∉ h)
     (hq : match r.queryGuard with | none => True | some q => sep ∉ q)
-    (hmw : ∀ n ∈ r.middleware, sep ∉ n)
+    (hmw : ∀ c ∈ r.middleware, sep ∉ c.name ∧ (match c.arg with | none => True | some a => sep ∉ a))
     (hhand : ∀ t ∈ handlerToks r.handler, sep ∉ t) :
     ∀ t ∈ tokensOfVRoute r, sep ∉ t := by
   intro t ht
@@ -1199,7 +1274,12 @@ theorem tokensOfVRoute_no_sp (r : VRouteSpec) (h : VRouteWF r) :
   · cases hqg : r.queryGuard with
     | none => simp [hqg]
     | some qn => simp only [hqg] at hqry ⊢; exact hqry.1
-  · intro n hn; exact (hmwWF n hn).1
+  · intro c hc
+    refine ⟨(hmwWF c hc).1.1, ?_⟩
+    have harg := (hmwWF c hc).2
+    cases hca : c.arg with
+    | none => simp [hca]
+    | some a => simp only [hca] at harg ⊢; exact harg.2.1
 
 /-- Every token of a well-formed vhost route line is newline-free. -/
 theorem tokensOfVRoute_no_nl (r : VRouteSpec) (h : VRouteWF r) :
@@ -1216,7 +1296,12 @@ theorem tokensOfVRoute_no_nl (r : VRouteSpec) (h : VRouteWF r) :
   · cases hqg : r.queryGuard with
     | none => simp [hqg]
     | some qn => simp only [hqg] at hqry ⊢; exact hqry.2
-  · intro n hn; exact (hmwWF n hn).2
+  · intro c hc
+    refine ⟨(hmwWF c hc).1.2, ?_⟩
+    have harg := (hmwWF c hc).2
+    cases hca : c.arg with
+    | none => simp [hca]
+    | some a => simp only [hca] at harg ⊢; exact harg.2.2
 
 theorem vrouteLine_ne (r : VRouteSpec) : vrouteLine r ≠ [] := by
   show joinSp (tokensOfVRoute r) ≠ []
@@ -1268,7 +1353,10 @@ theorem stopSuf_head_stop (r : VRouteSpec) :
     (match (middlewareToks r.middleware ++ (guardToks r ++ handlerToks r.handler)) with
      | [] => True | y :: _ => isStopKw y = true) := by
   cases hmw : r.middleware with
-  | cons n ns => simp only [middlewareToks, List.cons_append]; decide
+  | cons c cs =>
+    cases hca : c.arg <;>
+      simp only [middlewareToks, mwClauseToks, hca, List.cons_append, List.singleton_append,
+        List.nil_append] <;> decide
   | nil => simp only [middlewareToks, List.nil_append]; exact guardHandlerSuf_head_stop r
 
 /-- The head of the guard+handler suffix is never the `middleware` keyword — so the
@@ -1294,20 +1382,39 @@ theorem peelMiddleware_stop (rest : List (List Char))
     | nil => rfl
     | cons name rest' =>
       have hk : k ≠ kwMiddleware := h k _ rfl
-      simp only [peelMiddleware, if_neg hk]
+      unfold peelMiddleware; rw [if_neg hk]
 
-/-- **Middleware peel round-trip.** Peeling the rendered `middleware <name>` chain off
-`middlewareToks names ++ rest` recovers exactly `names`, leaving `rest` — provided
-`rest`'s head is not the `middleware` keyword (the guard/handler suffix). -/
-theorem peelMiddleware_render (names rest : List (List Char))
+/-- **Middleware peel round-trip.** Peeling the rendered `middleware <name> [<arg>]` chain
+off `middlewareToks clauses ++ rest` recovers exactly `clauses`, leaving `rest` — provided
+each clause's argument presence matches its name's arity (`mwTakesArg`, so the peel
+consumes an argument for exactly the clauses that rendered one) and `rest`'s head is not
+the `middleware` keyword (the guard/handler suffix). -/
+theorem peelMiddleware_render (clauses : List MwClause) (rest : List (List Char))
+    (hwf : ∀ c ∈ clauses, mwTakesArg c.name = c.arg.isSome)
     (h : ∀ k t, rest = k :: t → k ≠ kwMiddleware) :
-    peelMiddleware (middlewareToks names ++ rest) = (names, rest) := by
-  induction names with
-  | nil => simpa [middlewareToks] using peelMiddleware_stop rest h
-  | cons n ns ih =>
-    show peelMiddleware (kwMiddleware :: n :: (middlewareToks ns ++ rest)) = (n :: ns, rest)
-    unfold peelMiddleware
-    rw [if_pos rfl, ih]
+    peelMiddleware (middlewareToks clauses ++ rest) = (clauses, rest) := by
+  induction clauses with
+  | nil =>
+    show peelMiddleware ([] ++ rest) = ([], rest)
+    rw [List.nil_append]; exact peelMiddleware_stop rest h
+  | cons c cs ih =>
+    have hc := hwf c (List.mem_cons_self _ _)
+    have hih : peelMiddleware (middlewareToks cs ++ rest) = (cs, rest) :=
+      ih (fun c' hc' => hwf c' (List.mem_cons_of_mem _ hc'))
+    obtain ⟨cn, ca⟩ := c
+    cases ca with
+    | none =>
+      have hta : mwTakesArg cn = false := by simpa using hc
+      show peelMiddleware (kwMiddleware :: cn :: (middlewareToks cs ++ rest))
+             = (⟨cn, none⟩ :: cs, rest)
+      unfold peelMiddleware
+      simp [hta, hih]
+    | some a =>
+      have hta : mwTakesArg cn = true := by simpa using hc
+      show peelMiddleware (kwMiddleware :: cn :: a :: (middlewareToks cs ++ rest))
+             = (⟨cn, some a⟩ :: cs, rest)
+      unfold peelMiddleware
+      simp [hta, hih]
 
 /-- **Prefix span.** With every prefix token a non-keyword and the suffix led by a stop
 keyword, `spanBeforeStop` peels exactly the prefix. -/
@@ -1338,13 +1445,14 @@ theorem parseHandlerToks_render (hd : HandlerSpec) :
 
 /-- The middleware chain + optional guard clauses + handler tail round-trip to the
 middleware chain, the guards, and the handler. -/
-theorem parseClauses_render (r : VRouteSpec) :
+theorem parseClauses_render (r : VRouteSpec)
+    (hmw : ∀ c ∈ r.middleware, mwTakesArg c.name = c.arg.isSome) :
     parseClauses r.method r.pathTok
       (middlewareToks r.middleware ++ (guardToks r ++ handlerToks r.handler)) = some r := by
   have hpeel : peelMiddleware
       (middlewareToks r.middleware ++ (guardToks r ++ handlerToks r.handler))
       = (r.middleware, guardToks r ++ handlerToks r.handler) :=
-    peelMiddleware_render r.middleware _ (guardHandlerSuf_head_notMw r)
+    peelMiddleware_render r.middleware _ hmw (guardHandlerSuf_head_notMw r)
   obtain ⟨method, path, mws, hg, qg, hd⟩ := r
   simp only [parseClauses, hpeel]
   -- reduced to the guard/handler peel over the guard+handler suffix, filling `mws`
@@ -1365,13 +1473,15 @@ theorem parseVRouteToks_render (r : VRouteSpec) (h : VRouteWF r) :
   show parseVRouteToks
       (kwRoute :: (prefixToks r ++ (middlewareToks r.middleware ++ (guardToks r ++ handlerToks r.handler)))) = some r
   simp only [parseVRouteToks, hspan]
+  have hmwArity : ∀ c ∈ r.middleware, mwTakesArg c.name = c.arg.isSome :=
+    fun c hc => MwClauseWF_arg_arity (hmwWF c hc)
   cases hm : r.method with
   | none =>
     simp only [prefixToks, hm, List.nil_append]
-    rw [← hm]; exact parseClauses_render r
+    rw [← hm]; exact parseClauses_render r hmwArity
   | some m =>
     simp only [prefixToks, hm, List.cons_append, List.nil_append]
-    rw [← hm]; exact parseClauses_render r
+    rw [← hm]; exact parseClauses_render r hmwArity
 
 /-- One rendered vhost item line parses back to its `VItem`: a `host` header via the
 two-token host branch, a route line via the `route`-token scanner (`parseVRouteToks`). -/
@@ -1690,12 +1800,14 @@ def guardsOfV (r : VRouteSpec) : List RouteAdvanced.Guard :=
    | none   => []
    | some q => [RouteAdvanced.queryPresent (String.mk q)])
 
-/-- Compile the `middleware <name>` chain to proven per-route middlewares: `bearer-auth`
-⇒ the proven `Jwt.authenticate` bearer gate (a rejected token ⇒ 401); any other name ⇒
-the fail-closed `501` residual (`Reactor.RouteMw.mwOfName`, the name is carried, not
-faked). -/
+/-- Compile the `middleware <name> [<arg>]` chain to proven per-route middlewares:
+`bearer-auth` ⇒ the proven `Jwt.authenticate` bearer gate (a rejected token ⇒ 401);
+`ip-allow <cidr-list>` ⇒ the proven `IpFilter.permits` allow-list decision (a refused
+client ⇒ 403); `rate <n>` ⇒ the proven `Rate.tryAdmit` bucket (over budget ⇒ 429); any
+other name ⇒ the fail-closed `501` residual (`Reactor.RouteMw.mwOfClause`, the name is
+carried, not faked). -/
 def mwsOfV (r : VRouteSpec) : List Reactor.RouteMw.RouteMw :=
-  r.middleware.map (fun n => Reactor.RouteMw.mwOfName (String.mk n))
+  r.middleware.map (fun c => Reactor.RouteMw.mwOfClause (String.mk c.name) (c.arg.map String.mk))
 
 /-- Compile a vhost route to the deployed `RouteAdvanced.Route Reactor.App.VHandler` a
 `hostGlob` block carries: the method guard, the path pattern, the header/query guards
@@ -1739,10 +1851,30 @@ theorem vrouteOf_no_middleware (r : VRouteSpec) (h : r.middleware = []) :
 chain `[bearer-auth]` denotes to `[Reactor.RouteMw.RouteMw.bearerAuth]` — the deployed
 `Jwt.authenticate` gate, not a fresh unverified auth. -/
 theorem mwsOfV_bearer (r : VRouteSpec)
-    (h : r.middleware = [['b','e','a','r','e','r','-','a','u','t','h']]) :
+    (h : r.middleware = [{ name := ['b','e','a','r','e','r','-','a','u','t','h'], arg := none }]) :
     mwsOfV r = [Reactor.RouteMw.RouteMw.bearerAuth] := by
   unfold mwsOfV
   rw [h]; decide
+
+/-- **`ip-allow <cidr>` compiles to the PROVEN CIDR gate.** The clause `middleware ip-allow
+127.0.0.1` denotes to a `Reactor.RouteMw.RouteMw.ipAllow` whose allow-list is the parsed
+`127.0.0.1/32` CIDR — the REAL `IpFilter.permits` decision, not a fresh unverified filter.
+(The `getD []` fail-closed default is never taken here: the CIDR parses.) -/
+theorem mwsOfV_ipAllow (r : VRouteSpec)
+    (h : r.middleware = [{ name := kwIpAllow, arg := some ['1','2','7','.','0','.','0','.','1'] }]) :
+    mwsOfV r = [Reactor.RouteMw.RouteMw.ipAllow
+      ((Reactor.RouteMw.parseAllowList "127.0.0.1").getD [])] := by
+  unfold mwsOfV
+  rw [h]; rfl
+
+/-- **`rate <n>` compiles to the PROVEN token-bucket gate.** The clause `middleware rate 2`
+denotes to a `Reactor.RouteMw.RouteMw.rate 2` — the REAL `Rate.tryAdmit` decision over a
+budget-2 bucket, not a fresh unverified limiter. -/
+theorem mwsOfV_rate (r : VRouteSpec)
+    (h : r.middleware = [{ name := kwRate, arg := some ['2'] }]) :
+    mwsOfV r = [Reactor.RouteMw.RouteMw.rate 2] := by
+  unfold mwsOfV
+  rw [h]; rfl
 
 /-- Fold one vhost item into the block list: a `host` header opens a new (empty)
 block; a `route` appends to the current (most recently opened) block, or opens an

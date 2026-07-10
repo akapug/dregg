@@ -80,6 +80,91 @@ def feedBytes (s : TState) (bs : List Byte) : TState := bs.foldl feed s
 /-- Tokenize a whole input from the initial state. -/
 def tokenize (bs : List Byte) : TState := feedBytes init bs
 
+/-! ## Linear-time tokenizer (`tokenizeFast`) — proven byte-for-byte equal to `tokenize`
+
+`feed` extends the in-progress buffer with `s.cur ++ [b]` — an O(|cur|) end-append
+per byte, so folding it over an N-byte body is **O(N²)** (the response-body build
+wall the perf audit measured). The fix keeps the in-progress buffer *reversed*
+(newest byte first), so extending it is an O(1) cons instead of an O(|cur|) append;
+the reversed buffer is flipped back only when a token is closed (total O(N) across
+all runs) and once at the end. Everything else — the mode, the completed-token
+list, the exact token bytes — is identical.
+
+`tokenizeFast` produces the SAME `TState` as `tokenize` (`tokenizeFast_eq`), so the
+whole existing theorem stack (byte conservation, chunk-boundary safety, the
+correctness refinement) transfers unchanged: this is a faithful implementation
+refinement, not a new spec. The deployed HTML-rewrite stage (`rewriteBytes`) runs
+`tokenizeFast`; the abstract `feed`/`tokenize` remain the specification. -/
+
+/-- Fast tokenizer state: identical to `TState`, but the in-progress buffer
+`curRev` is held REVERSED (newest byte first) so extending it is an O(1) `cons`
+rather than the O(|cur|) end-append `cur ++ [b]`. -/
+structure FState where
+  mode : Mode
+  curRev : List Byte
+  toks : List Token
+
+/-- Recover the abstract `TState` from a fast state: flip the reversed buffer. -/
+def FState.decode (s : FState) : TState :=
+  { mode := s.mode, cur := s.curRev.reverse, toks := s.toks }
+
+/-- One fast step. Extending the current run is `b :: s.curRev` (O(1)); a run is
+flipped to forward order only when the run closes (`<` opens a tag, `>` closes
+one). Mirrors `feed` exactly under `FState.decode`. -/
+def feedF (s : FState) (b : Byte) : FState :=
+  match s.mode with
+  | .text =>
+    if b = lt then
+      { mode := .tag, curRev := [lt], toks := flush Token.text s.curRev.reverse s.toks }
+    else
+      { s with curRev := b :: s.curRev }
+  | .tag =>
+    if b = gt then
+      { mode := .text, curRev := [], toks := Token.tag (gt :: s.curRev).reverse :: s.toks }
+    else
+      { s with curRev := b :: s.curRev }
+
+/-- The initial fast state (`decode`s to `init`). -/
+def initF : FState := { mode := .text, curRev := [], toks := [] }
+
+/-- **Linear tokenizer.** Fold the O(1)-per-byte `feedF`, then `decode` once. Total
+work is O(N): one cons per byte, plus O(run length) per closed run and one final
+flip — no per-byte O(|cur|) append. -/
+def tokenizeFast (bs : List Byte) : TState := (bs.foldl feedF initF).decode
+
+/-- One fast step `decode`s to one abstract step — the per-byte simulation. -/
+theorem feedF_decode (s : FState) (b : Byte) : (feedF s b).decode = feed s.decode b := by
+  unfold feedF feed FState.decode
+  cases hm : s.mode with
+  | text =>
+    by_cases hb : b = lt
+    · simp [hm, hb]
+    · simp [hm, hb, List.reverse_cons]
+  | tag =>
+    by_cases hb : b = gt
+    · simp [hm, hb, List.reverse_cons]
+    · simp [hm, hb, List.reverse_cons]
+
+/-- Folding `feedF` then `decode`ing equals `decode`ing then folding `feed`. -/
+theorem foldl_feedF_decode (bs : List Byte) (s : FState) :
+    (bs.foldl feedF s).decode = bs.foldl feed s.decode := by
+  induction bs generalizing s with
+  | nil => rfl
+  | cons b bs ih =>
+    simp only [List.foldl_cons]
+    rw [ih, feedF_decode]
+
+/-- **`tokenizeFast` is byte-for-byte `tokenize`.** The fast, linear tokenizer
+produces exactly the same `TState` (same mode, same in-progress buffer, same
+completed tokens) as the abstract quadratic `tokenize`, so every theorem proved
+about `tokenize` holds of `tokenizeFast`. This carries byte-equality across the
+representation change: the deployed rewrite is unchanged in WHAT it computes, only
+in that it is O(N) not O(N²). -/
+@[simp] theorem tokenizeFast_eq (bs : List Byte) : tokenizeFast bs = tokenize bs := by
+  unfold tokenizeFast tokenize feedBytes
+  rw [foldl_feedF_decode]
+  rfl
+
 /-- **Chunk-boundary safety (fold form).** Feeding `a` then `b` from a state is
 the same as feeding `a ++ b` — the boundary is invisible. -/
 theorem feedBytes_append (s : TState) (a b : List Byte) :

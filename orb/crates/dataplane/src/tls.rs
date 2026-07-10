@@ -24,7 +24,10 @@
 //! boot from the `DRORB_TLS_*` environment (see [`load_cert`]), defaulting to the
 //! self-signed material under `conformance/tls/`.
 //!
-//! The verified handshake additionally negotiates **ALPN** (`http/1.1`), issues
+//! The verified handshake additionally negotiates **ALPN** (`h2` then
+//! `http/1.1`): when the client selects `h2` the decrypted record stream drives
+//! the proven HTTP/2 connection engine, otherwise the HTTP/1.1 serve — both
+//! Lean-side, this file is protocol-agnostic. It also issues
 //! **session-resumption** tickets, and does **SNI**-based cert selection and
 //! **0-RTT** — all over the same proven `serverStep`. Two of those read the
 //! environment Lean-side (not through this cert ABI): `DRORB_TLS_ECDSA_SNI` /
@@ -34,8 +37,8 @@
 
 use std::net::TcpListener;
 use std::os::fd::IntoRawFd;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use crate::serve::ServeGateway;

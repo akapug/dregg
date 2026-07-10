@@ -428,10 +428,22 @@ theorem negotiateSuite_sound {offered : List Nat} {s : Nat}
   simpa using hp
 
 /-- The application protocols this server can actually speak, in preference
-order (HTTP/1.1 only — what the byte-level responder implements). -/
+order. Both are backed by a proven byte-level serve: `h2` runs the HTTP/2
+connection engine (`H2.Conn.feed`, the same stage-fold the h2c path drives),
+`http/1.1` runs the HTTP/1.1 fold. -/
 def alpnHttp11 : Tls.Bytes := "http/1.1".toUTF8.toList
 
-def serverAlpn : List Tls.Bytes := [alpnHttp11]
+/-- The ALPN name for HTTP/2 over TLS (RFC 7301 registry / RFC 9113 §3.3). Over
+TLS the client still opens with the RFC 9113 §3.4 connection preface, so the
+decrypted application stream is exactly what the proven `H2.Conn.feed` engine
+consumes on the h2c path. -/
+def alpnH2 : Tls.Bytes := "h2".toUTF8.toList
+
+/-- The server's ALPN preference order: `h2` first (modern clients that offer
+both negotiate HTTP/2), then `http/1.1`. A client that offers only `http/1.1`
+still selects it; a client that offers no ALPN gets no selection and the
+record layer serves the HTTP/1.1 fold. -/
+def serverAlpn : List Tls.Bytes := [alpnH2, alpnHttp11]
 
 /-- Select the ALPN protocol: the first server-supported name the client
 offered. -/

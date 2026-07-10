@@ -3,3 +3,5 @@ import Arena.Basic
 import Arena.Theorems
 import Arena.Parse
 import Arena.ParseTheorems
+import Arena.ParseFaithful
+import Arena.ParseHeadersFaithful

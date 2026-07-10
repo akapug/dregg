@@ -6,12 +6,24 @@ license = "AGPL-3.0-or-later"
 description = "Native host that drives the leanc-compiled proven serve over a real TCP socket: it owns the socket and accept loop and calls the exported drorb_serve for every request."
 publish = false
 
+[dependencies]
+# Real, battle-tested DEFLATE (miniz_oxide pure-Rust backend) for the reactor gzip
+# seam (`src/gzip.rs`). TRUSTED, not verified — principled TCB, like the crypto FFI:
+# it replaces the proven-but-uncompressing stored-block gzip stage with genuine
+# compression. Additive; gated behind DRORB_RUST_GZIP=1.
+flate2 = "1"
+
 [[bin]]
 name = "dataplane"
 path = "src/main.rs"
 
-# The io_uring IO path is Linux-only. On other platforms the host uses the
-# portable blocking thread-per-connection path and pulls in neither dependency.
+# The io_uring IO path is Linux-only.
 [target.'cfg(target_os = "linux")'.dependencies]
 io-uring = "0.7"
+libc = "0.2"
+
+# The kqueue completion-queue reactor is the preferred IO path on macOS/BSD; it
+# needs libc for kqueue/kevent, SO_REUSEPORT, and the raw socket syscalls. The
+# portable blocking thread-per-connection fallback still needs no dependency.
+[target.'cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd", target_os = "dragonfly"))'.dependencies]
 libc = "0.2"

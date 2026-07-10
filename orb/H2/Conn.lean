@@ -1,6 +1,7 @@
 import H2.Frame
 import H2.Hpack
 import H2.Stream
+import H2.Ext
 
 /-!
 # H2.Conn — the HTTP/2 connection engine (RFC 9113 + RFC 7541)
@@ -405,6 +406,14 @@ structure StreamRec where
   req : Option Req := none
   clen : Option Nat := none
   recvd : Nat := 0
+  /-- The initial HEADERS block on this stream has completed (RFC 9113 §8.1
+  trailer detection). -/
+  initialHeaders : Bool := false
+  /-- At least one DATA frame has arrived on this stream (RFC 9113 §8.1). -/
+  dataSeen : Bool := false
+  /-- The Extensible Priority (RFC 9218 §4) parsed from this stream's `priority`
+  request header; the RFC 9218 §4 default when absent. -/
+  priority : Ext.Priority := {}
 deriving Repr
 
 /-- An in-progress header block (§4.3): HEADERS arrived without `END_HEADERS`;
@@ -433,6 +442,11 @@ structure ConnState where
   peerMaxFrame : Nat := 16384
   connWindow : Int := 65535
   closed : Bool := false
+  /-- Extension-surface events (ORIGIN §RFC 8336, ALT-SVC §RFC 7838, trailers
+  §RFC 9113 §8.1) recognized on this connection, oldest first. The engine's
+  transition shape (`ConnState × Bytes × Bool`) is unchanged; a host reads these
+  off the successor state. -/
+  events : List Ext.Event := []
 deriving Repr
 
 def getStream (st : ConnState) (sid : Nat) : Option StreamRec :=
@@ -561,7 +575,13 @@ def finishRequest (hd : Hpack.HuffmanDecoder) (handler : Handler)
         else respond handler st sid req
       else
         let rec0 := (getStream st sid).getD {}
-        (setStream st sid { rec0 with req := some req, clen := clen }, [], false)
+        -- RFC 9218 §4: parse the `priority` request header onto the stream.
+        let prio := match head.fields.find? (fun f => f.1 == strBytes "priority") with
+          | some f => Ext.parsePriority f.2
+          | none => {}
+        (setStream st sid
+          { rec0 with req := some req, clen := clen, initialHeaders := true, priority := prio },
+         [], false)
 
 /-- Finish a trailer block on `sid` (§8.1): must end the stream, must carry no
 pseudo-header; then the parked request is answered, checking the §8.1.1
@@ -665,7 +685,7 @@ def handleFrame (hd : Hpack.HuffmanDecoder) (handler : Handler)
             | .protocolError => connError st errProtocol
             | .streamClosed => connError st errStreamClosed
             | .next s' =>
-              let sr := { sr with state := s', recvd := sr.recvd + data.length }
+              let sr := { sr with state := s', recvd := sr.recvd + data.length, dataSeen := true }
               let st := setStream st hdr.streamId sr
               if es then
                 match sr.req with
@@ -697,10 +717,17 @@ def handleFrame (hd : Hpack.HuffmanDecoder) (handler : Handler)
             | some sr =>
               match sr.state with
               | .open | .halfClosedLocal =>
-                -- a second HEADERS on an open stream: a trailer block (§8.1)
-                if eh then finishTrailers hd handler st hdr.streamId es frag
-                else ({ st with
-                  cont := some ⟨hdr.streamId, es, true, frag⟩ }, [], false)
+                -- A second HEADERS on an open stream is a **trailer** block iff
+                -- the initial HEADERS completed *and* ≥ 1 DATA frame arrived
+                -- (RFC 9113 §8.1, `Ext.detectTrailers`); we surface it as an
+                -- `Ext.Event.trailers`. A second header block without any body
+                -- is not a valid trailer section — a connection error.
+                if Ext.detectTrailers sr.initialHeaders sr.dataSeen then
+                  let st := { st with events := st.events ++ [Ext.Event.trailers hdr.streamId] }
+                  if eh then finishTrailers hd handler st hdr.streamId es frag
+                  else ({ st with
+                    cont := some ⟨hdr.streamId, es, true, frag⟩ }, [], false)
+                else connError st errProtocol
               | .halfClosedRemote => connError st errStreamClosed
               | .closed => connError st errStreamClosed
               | _ => connError st errProtocol
@@ -785,6 +812,27 @@ def handleFrame (hd : Hpack.HuffmanDecoder) (handler : Handler)
     else if hdr.frameType = 0x9 then
       -- CONTINUATION outside an open header block (§6.10)
       connError st errProtocol
+    else if hdr.frameType = 0x0a then
+      -- ALTSVC (RFC 7838 §4): advisory. Surface `(origin, alt-svc-value)` as an
+      -- event. Per §4 an ALTSVC with an empty origin on stream 0, or a non-empty
+      -- origin on a non-zero stream, is invalid and ignored; a malformed payload
+      -- is ignored. Never a connection error.
+      match Ext.decodeAltSvc payload with
+      | some (origin, value) =>
+        if (hdr.streamId == 0) == origin.isEmpty then (st, [], false)
+        else ({ st with
+          events := st.events ++ [Ext.Event.altSvc hdr.streamId origin value] }, [], false)
+      | none => (st, [], false)
+    else if hdr.frameType = 0x0c then
+      -- ORIGIN (RFC 8336 §2): sent on stream 0 only; on any other stream it is
+      -- invalid and MUST be ignored. Surface the declared origins as an event;
+      -- a malformed payload is ignored. Never a connection error.
+      if hdr.streamId ≠ 0 then (st, [], false)
+      else
+        match Ext.decodeOrigins (payload.length + 1) payload with
+        | some origins => ({ st with
+            events := st.events ++ [Ext.Event.origin origins] }, [], false)
+        | none => (st, [], false)
     else
       -- Unknown/extension frame type: ignored (§4.1, §5.5)
       (st, [], false)
@@ -960,7 +1008,8 @@ theorem feed_unknown_ignored (hd : Hpack.HuffmanDecoder) (handler : Handler)
     (hclosed : st.closed = false) (hpre : st.prefaceLeft = 0) (hbuf : st.buf = [])
     (hcont : st.cont = none)
     (hlen : payload.length = len) (hsz : len ≤ ourMaxFrameSize) (hlen24 : len < 2 ^ 24)
-    (hty9 : 9 < ty) (hty : ty < 256) (hfl : fl < 256) (hsid : sid < 2 ^ 31) :
+    (hty9 : 9 < ty) (hna : ty ≠ 0x0a) (hnc : ty ≠ 0x0c)
+    (hty : ty < 256) (hfl : fl < 256) (hsid : sid < 2 ^ 31) :
     feed hd handler st (frameHdr len ty fl sid ++ payload) = (st, [], false) := by
   refine feed_single_frame hd handler st st [] false len ty fl sid payload
     hclosed hpre hbuf hlen hsz hlen24 hty hfl hsid ?_ hbuf
@@ -969,7 +1018,68 @@ theorem feed_unknown_ignored (hd : Hpack.HuffmanDecoder) (handler : Handler)
   simp only [show (⟨len, ty, fl, sid⟩ : FrameHeader).frameType = ty from rfl]
   rw [if_neg (by omega), if_neg (by omega), if_neg (by omega), if_neg (by omega),
     if_neg (by omega), if_neg (by omega), if_neg (by omega), if_neg (by omega),
-    if_neg (by omega), if_neg (by omega)]
+    if_neg (by omega), if_neg (by omega), if_neg (by omega), if_neg (by omega)]
+
+/-! ### Extension-surface integration (ORIGIN / ALT-SVC / trailers)
+
+Each theorem states that `handleFrame` — the per-frame core of `feed` — routes
+the extension frame to its `Ext` codec and surfaces the corresponding
+`Ext.Event` on the successor state, with the RFC-mandated validation. The
+codecs' own faithfulness lives in `H2.Ext`; these tie them into the engine. -/
+
+/-- **RFC 8336 ORIGIN integration**: an ORIGIN frame (type `0x0c`) on stream 0
+whose payload decodes as origin entries surfaces exactly an `Ext.Event.origin`
+carrying those origins — no output, no close. -/
+theorem handleFrame_origin_event (hd : Hpack.HuffmanDecoder) (handler : Handler)
+    (st : ConnState) (payload : Bytes) (origins : List Bytes)
+    (hcont : st.cont = none)
+    (hok : Ext.decodeOrigins (payload.length + 1) payload = some origins) :
+    handleFrame hd handler st ⟨payload.length, 0x0c, 0, 0⟩ payload
+      = ({ st with events := st.events ++ [Ext.Event.origin origins] }, [], false) := by
+  unfold handleFrame
+  rw [hcont]
+  simp only [hok, Nat.reduceEqDiff, reduceIte, ne_eq, not_true, Bool.not_eq_true]
+
+/-- **RFC 7838 ALT-SVC integration**: an ALTSVC frame (type `0x0a`) whose payload
+decodes as `(origin, value)`, with the §4 stream/origin combination valid (empty
+origin iff non-zero stream), surfaces exactly an `Ext.Event.altSvc`. -/
+theorem handleFrame_altsvc_event (hd : Hpack.HuffmanDecoder) (handler : Handler)
+    (st : ConnState) (payload : Bytes) (origin value : Bytes) (sid : Nat)
+    (hcont : st.cont = none)
+    (hok : Ext.decodeAltSvc payload = some (origin, value))
+    (hvalid : ((sid == 0) == origin.isEmpty) = false) :
+    handleFrame hd handler st ⟨payload.length, 0x0a, 0, sid⟩ payload
+      = ({ st with events := st.events ++ [Ext.Event.altSvc sid origin value] }, [], false) := by
+  unfold handleFrame
+  rw [hcont]
+  simp only [hok, hvalid, Nat.reduceEqDiff, reduceIte, ne_eq, not_true, Bool.not_eq_true,
+    Bool.false_eq_true]
+
+/-- **RFC 9113 §8.1 trailer integration**: a second HEADERS block on an open
+stream that has both received its initial headers and seen data
+(`Ext.detectTrailers` is true) is routed as a trailer section and surfaces an
+`Ext.Event.trailers` — never mistaken for a second header block. Shown for a
+CONTINUATION-pending block (`END_HEADERS` clear), so the routing is exhibited
+without re-deriving HPACK. -/
+theorem handleFrame_trailers_event (hd : Hpack.HuffmanDecoder) (handler : Handler)
+    (st : ConnState) (sid : Nat) (payload : Bytes) (sr : StreamRec)
+    (hcont : st.cont = none) (hsid : ¬ (sid = 0))
+    (hget : getStream st sid = some sr)
+    (hstate : sr.state = Stream.StreamState.open)
+    (hinit : sr.initialHeaders = true) (hdata : sr.dataSeen = true) :
+    handleFrame hd handler st ⟨payload.length, 0x1, 0, sid⟩ payload
+      = ({ { st with events := st.events ++ [Ext.Event.trailers sid] } with
+            cont := some ⟨sid, false, true, payload⟩ }, [], false) := by
+  unfold handleFrame
+  rw [hcont]
+  simp only [show (⟨payload.length, 0x1, 0, sid⟩ : FrameHeader).frameType = 0x1 from rfl,
+    show (⟨payload.length, 0x1, 0, sid⟩ : FrameHeader).streamId = sid from rfl,
+    show (⟨payload.length, 0x1, 0, sid⟩ : FrameHeader).flags = 0 from rfl,
+    show flagSet 0 0 = false from rfl, show flagSet 0 2 = false from rfl,
+    show flagSet 0 3 = false from rfl, show flagSet 0 5 = false from rfl,
+    stripPadding, Bool.false_and, hget, hstate, hinit, hdata, hsid,
+    Ext.detectTrailers, Bool.and_self,
+    Nat.reduceEqDiff, reduceIte, ne_eq, not_true, Bool.not_eq_true, Bool.false_eq_true]
 
 /-- **§3.4 preface validation**: a connection whose opening octets differ from
 the client connection preface is refused with `GOAWAY(PROTOCOL_ERROR)` and
@@ -1205,6 +1315,43 @@ private def guardReady : ConnState := { prefaceLeft := 0 }
 /-! An oversize frame (§4.2) is refused with `GOAWAY(FRAME_SIZE_ERROR)`. -/
 #guard (feed guardHd guardHandler guardReady (frameHdr 16385 0x0 0 1)).2
   = (goawayFrame 0 errFrameSize, true)
+
+/-! ### Extension-surface wire vectors (end-to-end through `feed`) -/
+
+/-! An ORIGIN frame (RFC 8336, type 0x0c) on stream 0 carrying origin `"a.io"`
+surfaces exactly one `Ext.Event.origin` event on the successor state. -/
+#guard (feed guardHd guardHandler guardReady
+    (frameHdr 6 0x0c 0 0 ++ [0x00, 0x04, 0x61, 0x2e, 0x69, 0x6f])).1.events
+  = [Ext.Event.origin [[0x61, 0x2e, 0x69, 0x6f]]]
+
+/-! An ALTSVC frame (RFC 7838, type 0x0a) on stream 0 with origin `"x.io"` and
+value `"h3"` surfaces exactly one `Ext.Event.altSvc` event. -/
+#guard (feed guardHd guardHandler guardReady
+    (frameHdr 8 0x0a 0 0 ++ [0x00, 0x04, 0x78, 0x2e, 0x69, 0x6f, 0x68, 0x33])).1.events
+  = [Ext.Event.altSvc 0 [0x78, 0x2e, 0x69, 0x6f] [0x68, 0x33]]
+
+/-! **RFC 9218 Extensible Priority end to end**: an initial HEADERS block on
+stream 1 carrying `:method GET :scheme http :path /` (HPACK static 0x82/0x86/0x84)
+and a literal `priority: u=1, i` header parks a request whose stream record
+carries the parsed `Priority { urgency := 1, incremental := true }`. -/
+#guard (getStream (feed guardHd guardHandler guardReady
+    (frameHdr 20 0x1 0x04 1 ++
+      [0x82, 0x86, 0x84,
+       0x00, 0x08, 0x70, 0x72, 0x69, 0x6f, 0x72, 0x69, 0x74, 0x79,
+       0x06, 0x75, 0x3d, 0x31, 0x2c, 0x20, 0x69])).1 1).map
+    (fun sr => sr.priority) = some { urgency := 1, incremental := true }
+
+/-! **Trailer detection end to end** (RFC 9113 §8.1): a real HEADERS(END_HEADERS,
+no END_STREAM) → DATA → HEADERS(END_HEADERS+END_STREAM) sequence on stream 1.
+The first HEADERS is the initial request (`:method GET :scheme http :path /`
+via HPACK static indices 0x82/0x86/0x84), the DATA marks the stream body-bearing,
+and the second HEADERS (a `x: y` literal block) is recognized as trailers — the
+successor state carries exactly one `Ext.Event.trailers 1`. -/
+#guard (feed guardHd guardHandler guardReady
+    ((frameHdr 3 0x1 0x04 1 ++ [0x82, 0x86, 0x84]) ++
+     (frameHdr 1 0x0 0 1 ++ [0xaa]) ++
+     (frameHdr 5 0x1 0x05 1 ++ [0x00, 0x01, 0x78, 0x01, 0x79]))).1.events
+  = [Ext.Event.trailers 1]
 
 end Conn
 end H2

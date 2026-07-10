@@ -15,14 +15,14 @@
 
 use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, TcpListener, TcpStream};
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::channel;
-use std::sync::Arc;
 use std::time::Duration;
 
 use crate::http::{
-    annotate_connection, next_request, request_wants_keepalive, response_is_self_delimited, Frame,
-    H2_PREFACE,
+    Frame, H2_PREFACE, annotate_connection, next_request, request_wants_keepalive,
+    response_is_self_delimited,
 };
 use crate::pool::PooledBuf;
 use crate::serve::{Meter, Seam, ServeGateway};
@@ -35,6 +35,32 @@ const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 /// Ceiling on concurrent connection threads. Beyond it, new connections are
 /// closed immediately (refused) rather than spawning unbounded threads.
 const MAX_CONNS: usize = 1024;
+
+/// The process-global per-source connection counter for this reactor. Shared
+/// (striped, not a single global mutex) because the blocking host is
+/// thread-per-connection: the accept loop increments, each worker thread
+/// decrements when it returns. Enforces the config's `max-connections` cap
+/// per source (the proven `Reactor.Stage.ConnLimit` decision).
+fn source_table() -> &'static crate::standing::SharedStanding {
+    static TABLE: std::sync::OnceLock<crate::standing::SharedStanding> = std::sync::OnceLock::new();
+    TABLE.get_or_init(crate::standing::SharedStanding::new)
+}
+
+/// The canned `503 Service Unavailable` a source at/over its `max-connections` cap
+/// receives — the wire form of the proven `Reactor.Stage.ConnLimit.resp503`.
+const CONN_LIMIT_503: &[u8] =
+    b"HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain\r\nContent-Length: 36\r\nConnection: close\r\n\r\nper-source connection limit reached\n";
+
+/// The canned `429 Too Many Requests` a source over its `rate-limit` window receives
+/// — the wire form of the proven `Reactor.Stage.StickTable.resp429`.
+const RATE_LIMIT_429: &[u8] =
+    b"HTTP/1.1 429 Too Many Requests\r\nContent-Type: text/plain\r\nContent-Length: 20\r\nConnection: close\r\n\r\nrate limit exceeded\n";
+
+/// The canned `408 Request Timeout` a connection whose header phase overran
+/// `slowloris-timeout` receives — the wire form of the proven
+/// `Reactor.Stage.Slowloris.resp408`.
+const SLOWLORIS_408: &[u8] =
+    b"HTTP/1.1 408 Request Timeout\r\nContent-Type: text/plain\r\nContent-Length: 23\r\nConnection: close\r\n\r\nrequest header timeout\n";
 
 /// One socket read into a pooled accumulation buffer. Returns bytes read
 /// (0 = clean EOF).
@@ -52,7 +78,7 @@ fn fill(data: &mut Vec<u8>, stream: &mut TcpStream) -> std::io::Result<usize> {
 /// the standard edge-attribution pattern (the proven core still decides admit or
 /// deny). Only the FIRST address of the forwarded chain (the closest client) is
 /// honored, and only when it parses as an IP; anything else falls back to `peer`.
-fn client_addr(req: &[u8], peer: IpAddr) -> IpAddr {
+pub(crate) fn client_addr(req: &[u8], peer: IpAddr) -> IpAddr {
     if !peer.is_loopback() {
         return peer; // never trust a forwarded header from an untrusted peer
     }
@@ -134,10 +160,8 @@ fn handle_conn(mut stream: TcpStream, gw: &ServeGateway) {
             match fill(&mut acc, &mut stream) {
                 Ok(0) => return,
                 Ok(_) => {}
-                Err(e)
-                    if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut =>
-                {
-                    return
+                Err(e) if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut => {
+                    return;
                 }
                 Err(_) => return,
             }
@@ -161,7 +185,7 @@ fn handle_conn(mut stream: TcpStream, gw: &ServeGateway) {
                             if e.kind() == ErrorKind::WouldBlock
                                 || e.kind() == ErrorKind::TimedOut =>
                         {
-                            break // grace elapsed: serve whatever we have
+                            break; // grace elapsed: serve whatever we have
                         }
                         Err(_) => return,
                     }
@@ -175,8 +199,29 @@ fn handle_conn(mut stream: TcpStream, gw: &ServeGateway) {
             }
         }
 
+        // SLOWLORIS: the header-phase deadline for the FIRST request on this
+        // connection. Captured at the start of reading it; a drip that has not
+        // completed a request head within `slowloris-timeout` is dropped with the REAL
+        // proven 408 (`slowloris_fires`). Only the first request (`conn_seq == 0`) is
+        // guarded — the classic slowloris defense. A fully-silent partial is reaped by
+        // the socket read timeout (`IDLE_TIMEOUT`) instead.
+        let slow_timeout = crate::config::slowloris_timeout();
+        let hdr_start = std::time::Instant::now();
         // Read exactly one complete request into `acc`.
         let total = loop {
+            // Consult the deadline BEFORE framing, so a slow drip that finally completes
+            // its head past the deadline is still refused (mirrors the io_uring shard).
+            if conn_seq == 0
+                && crate::standing::header_expired(
+                    slow_timeout,
+                    hdr_start,
+                    std::time::Instant::now(),
+                )
+            {
+                let _ = stream.write_all(SLOWLORIS_408);
+                let _ = stream.flush();
+                return;
+            }
             match next_request(&acc) {
                 Frame::Complete(n) => break n,
                 Frame::Oversize => return,
@@ -220,6 +265,15 @@ fn handle_conn(mut stream: TcpStream, gw: &ServeGateway) {
                 crate::access_log::log(*client, rl, resp, backend, req_start);
             }
         };
+        // The same observability for a STREAMED response, whose body was written
+        // straight to the socket and so was never in hand as one buffer: the host
+        // records the status off the response head and the exact streamed byte total.
+        let emit_streamed = |head: &[u8], bytes: u64, backend: Option<&str>| {
+            crate::metrics::record_streamed(head, bytes, backend);
+            if let Some((rl, client)) = &logrec {
+                crate::access_log::log_streamed(*client, rl, head, bytes, backend, req_start);
+            }
+        };
 
         // WebSocket lane (RFC 6455): if this request is an Upgrade, complete the
         // handshake here (the host owns the accept token — see `ws`) and keep the
@@ -239,7 +293,7 @@ fn handle_conn(mut stream: TcpStream, gw: &ServeGateway) {
                     let _ = stream.write_all(&refusal);
                     return;
                 }
-                Some(_) => {} // authorized: no refusal bytes — complete the handshake
+                Some(_) => {}   // authorized: no refusal bytes — complete the handshake
                 None => return, // serve thread gone (shutdown)
             }
             if let Some(resp) = ws::upgrade_response(&req) {
@@ -254,6 +308,45 @@ fn handle_conn(mut stream: TcpStream, gw: &ServeGateway) {
 
         let keepalive_req = request_wants_keepalive(&req);
 
+        // GEARS-ENMESH: the exact `GET /health` request, when `DRORB_HEALTH_NATIVE=1`,
+        // is answered by cake--pancake-compiled x64 machine code linked into this
+        // process (ffi/health/health.S, driven by the re-entrant health_ffi.c) rather
+        // than the leanc-compiled proven serve. The response bytes are produced by the
+        // CakeML machine code and are byte-identical to the leanc path's wire output.
+        // Returns false for every other request and every non-demo build (the native
+        // library is not linked), so everything else runs the proven pipeline below.
+        if crate::serve::wants_native_health(&req) {
+            let mut native = gw.pool().take();
+            if crate::serve::serve_native_into(&req, &mut native) {
+                let keepalive = keepalive_req && response_is_self_delimited(&native);
+                // The cake bytes are the final wire form (they already carry the
+                // Connection header the leanc path's host annotation adds), so write
+                // them as-is — no re-annotation.
+                emit(&native, None);
+                if stream.write_all(&native).is_err() {
+                    return;
+                }
+                if !keepalive {
+                    return;
+                }
+                continue 'conn;
+            }
+        }
+
+        // CONNECT tunnel lane: the proven default-deny admission gate
+        // (`drorb_connect_gate`) decides whether the named `host:port` may be
+        // tunnelled; on admit the host dials it and runs the blind bidirectional
+        // pump (reusing the streaming discipline), otherwise it writes the 403.
+        // The connection is consumed by the tunnel either way.
+        if crate::proxy_connect::is_connect(&req) {
+            let tunnel_stream = match stream.try_clone() {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+            crate::proxy_connect::handle_connect(&req, tunnel_stream, gw, &reply_tx, &reply_rx);
+            return;
+        }
+
         // Effect/continuation seam (`DRORB_EFFECT_SEAM=1`): the PROVEN core drives
         // the whole fabric decision — whether to proxy (which backend), whether to
         // cache (which key, what lifetime, gate-admitted HIT), and what to do with
@@ -264,7 +357,8 @@ fn handle_conn(mut stream: TcpStream, gw: &ServeGateway) {
         // one the seam acts on, so it falls through to the metered serve below
         // (which carries the real IP-filter / rate gates).
         if crate::interp::enabled() && crate::interp::should_handle(&req) {
-            if let Some(mut resp) = crate::interp::run_effect_serve(&req, gw, &reply_tx, &reply_rx) {
+            if let Some(mut resp) = crate::interp::run_effect_serve(&req, gw, &reply_tx, &reply_rx)
+            {
                 let keepalive = keepalive_req && response_is_self_delimited(&resp);
                 annotate_connection(&mut resp, keepalive);
                 emit(&resp, None);
@@ -283,19 +377,25 @@ fn handle_conn(mut stream: TcpStream, gw: &ServeGateway) {
         // upstream via `drorb_proxy_pick`. Returns None when no fleet is configured,
         // so /api falls through to the normal serve unchanged.
         if !crate::interp::enabled() && crate::proxy_hook::is_proxy_path(&req) {
-            if let Some((mut resp, backend)) =
-                crate::proxy_hook::handle_proxy(&req, gw, &reply_tx, &reply_rx)
-            {
-                let keepalive = keepalive_req && response_is_self_delimited(&resp);
-                annotate_connection(&mut resp, keepalive);
-                emit(&resp, backend.as_deref());
-                if stream.write_all(&resp).is_err() {
-                    return;
+            match crate::proxy_hook::handle_proxy_streaming(
+                &req,
+                keepalive_req,
+                &mut stream,
+                gw,
+                &reply_tx,
+                &reply_rx,
+            ) {
+                Some(Ok(out)) => {
+                    // The upstream reply was already streamed to the client; the
+                    // host only records it and decides the connection disposition.
+                    emit_streamed(&out.head, out.bytes, out.backend.as_deref());
+                    if !out.keepalive {
+                        return;
+                    }
+                    continue 'conn;
                 }
-                if !keepalive {
-                    return;
-                }
-                continue 'conn;
+                Some(Err(_)) => return, // client write failed mid-stream
+                None => {}              // no fleet configured: fall through
             }
         }
 
@@ -308,19 +408,23 @@ fn handle_conn(mut stream: TcpStream, gw: &ServeGateway) {
         // independent of the effect seam (a config vhost may proxy any path under a host).
         if let Some(dep) = crate::config::get() {
             if dep.is_vhost_proxy(&req) {
-                if let Some((mut resp, backend)) =
-                    crate::proxy_hook::handle_proxy(&req, gw, &reply_tx, &reply_rx)
-                {
-                    let keepalive = keepalive_req && response_is_self_delimited(&resp);
-                    annotate_connection(&mut resp, keepalive);
-                    emit(&resp, backend.as_deref());
-                    if stream.write_all(&resp).is_err() {
-                        return;
+                match crate::proxy_hook::handle_proxy_streaming(
+                    &req,
+                    keepalive_req,
+                    &mut stream,
+                    gw,
+                    &reply_tx,
+                    &reply_rx,
+                ) {
+                    Some(Ok(out)) => {
+                        emit_streamed(&out.head, out.bytes, out.backend.as_deref());
+                        if !out.keepalive {
+                            return;
+                        }
+                        continue 'conn;
                     }
-                    if !keepalive {
-                        return;
-                    }
-                    continue 'conn;
+                    Some(Err(_)) => return,
+                    None => {}
                 }
             }
         }
@@ -349,6 +453,59 @@ fn handle_conn(mut stream: TcpStream, gw: &ServeGateway) {
             }
         }
 
+        // Host-side static-file streaming lane (roadmap Stage 3, gated on
+        // `DRORB_STATIC_ROOT`): a GET/HEAD under the serving prefix streams the
+        // resolved file to the client with a BOUNDED buffer — the head decided
+        // batch-small (Content-Length + type), the body copied block-by-block, never
+        // materialized whole. The emitted stream reassembles to `serialize` of the
+        // static-file response the core would produce (proven core-side:
+        // `Reactor.ServeStream.staticFile_emit_refines`). Unset ⇒ inert ⇒ the default
+        // serve path is byte-identical.
+        if let Some(sr) = crate::static_serve::get() {
+            if sr.is_static_path(&req) {
+                match sr.handle_streaming(&req, keepalive_req, &mut stream) {
+                    Ok(out) => {
+                        emit_streamed(&out.head, out.bytes, None);
+                        if !out.keepalive {
+                            return;
+                        }
+                        conn_seq = conn_seq.saturating_add(1);
+                        continue 'conn;
+                    }
+                    Err(_) => return, // client write failed mid-stream
+                }
+            }
+        }
+
+        // Streaming response-emit path (`DRORB_STREAM_SERVE=1`): pull the proven
+        // response out of `drorb_serve_stream` one bounded chunk at a time and write
+        // each straight to the socket, so the host never holds the whole response.
+        // The chunks reassemble to the exact `drorb_serve` bytes
+        // (`serveChunkList_flatten`), so the wire output is byte-identical; only the
+        // host's memory profile changes. Gated OFF by default (this path mirrors the
+        // NON-metered serve), so the default metered conformance path is untouched.
+        if crate::stream_serve::enabled() {
+            match crate::stream_serve::serve_streamed(
+                &req,
+                keepalive_req,
+                &mut stream,
+                gw,
+                &reply_tx,
+                &reply_rx,
+            ) {
+                Some(Ok(out)) => {
+                    emit_streamed(&out.head, out.bytes, None);
+                    if !out.keepalive {
+                        return;
+                    }
+                    conn_seq = conn_seq.saturating_add(1);
+                    continue 'conn;
+                }
+                Some(Err(_)) => return, // client write failed mid-stream
+                None => return,         // serve thread gone (shutdown)
+            }
+        }
+
         // Cross the METERED seam: the proven IP-filter gate decides on this
         // connection's client address (accept peer, or the forwarded client when
         // the peer is a trusted proxy) and the rate gate on the per-connection
@@ -359,11 +516,58 @@ fn handle_conn(mut stream: TcpStream, gw: &ServeGateway) {
             seq: conn_seq,
         };
         conn_seq = conn_seq.saturating_add(1);
-        let mut resp = match gw.call_metered(req, meter, &reply_tx, &reply_rx) {
-            Some(r) => r,
-            None => return, // serve thread gone (shutdown)
+        // Braid 0: the default serve is now the CONFIG-DRIVEN metered fold. The
+        // request crosses `drorb_serve_metered_cfg` carrying the active deployment
+        // config (`config::get()`), so the running default serve is a fold over
+        // `deployment.middleware.chain`. With no `DRORB_CONFIG` the config is EMPTY
+        // and the proven core serves `servePipelineOfMetered defaultDeployment` —
+        // byte-for-byte the old `call_metered` (`servePipelineOfMetered_default`,
+        // `rfl`), so the default conformance is untouched. A config declaring routes
+        // was already served through `call_cfg` above and never reaches here; this
+        // arm handles the routeless / no-config default. A future middleware braid is
+        // a config-gated append to the chain, not shared-file surgery here.
+        // Braid: when the deployment is braid-marked (`DRORB_BRAID=1`), the request
+        // crosses the metered BRAIDED seam (`drorb_serve_metered_braided`) — the same
+        // connection-aware IP-filter/rate gate chain, but folding over
+        // `braidedDeployment` (the proven forward-auth gate + request-id echo at the
+        // head). The composition is proven (`servePipelineOfMetered_braided_off_eq`
+        // byte-identical when unmarked, `_fa_denies_status` = 401,
+        // `_rid_echoes`). Unset ⇒ the config-driven default metered fold runs
+        // unchanged (`servePipelineOfMetered_default` anchor intact).
+        let mut resp = if crate::config::braid_enabled() {
+            match gw.call_metered_braided(&req, meter, &reply_tx, &reply_rx) {
+                Some(r) => r,
+                None => return, // serve thread gone (shutdown)
+            }
+        } else {
+            let active_cfg = crate::config::get();
+            // The seam scans the config text for the middleware POLICY (max-body-size /
+            // allow-method / allow-host) AND the route table. Use the parsed config's
+            // text when a valid route config is in force, else the boot-cached RAW bytes
+            // (so a policy-only config the route grammar does not model still enforces
+            // its policy). No config ⇒ empty ⇒ byte-identical default.
+            let raw;
+            let cfg_bytes: &[u8] = match active_cfg.as_ref() {
+                Some(d) => d.config_text.as_slice(),
+                None => {
+                    raw = crate::config::raw_text();
+                    &raw
+                }
+            };
+            match gw.call_metered_cfg(cfg_bytes, &req, meter, &reply_tx, &reply_rx) {
+                Some(r) => r,
+                None => return, // serve thread gone (shutdown)
+            }
         };
 
+        // REAL GZIP SEAM (`DRORB_RUST_GZIP=1`): replace the proven stored-block gzip
+        // stage's (uncompressed) body with real flate2 DEFLATE before framing. Keyed on
+        // the response's own `Content-Encoding: gzip`; inert when the flag is unset or
+        // the response was not gzipped. Runs BEFORE keepalive detection so the rewritten
+        // Content-Length is what decides self-delimitation. (Trusted, not verified.)
+        if crate::gzip::enabled() {
+            crate::gzip::recompress(&mut resp);
+        }
         let keepalive = keepalive_req && response_is_self_delimited(&resp);
         annotate_connection(&mut resp, keepalive);
         emit(&resp, None);
@@ -432,7 +636,7 @@ fn ws_frame_loop(
                     return;
                 }
             }
-            Some(_) => {} // control/incomplete frame produced no echo bytes
+            Some(_) => {}   // control/incomplete frame produced no echo bytes
             None => return, // serve thread gone
         }
     }
@@ -453,9 +657,38 @@ pub fn run(listener: TcpListener, gw: ServeGateway) {
             break;
         }
         match listener.accept() {
-            Ok((stream, _peer)) => {
+            Ok((mut stream, peer)) => {
                 if crate::ACTIVE_CONNS.load(Ordering::SeqCst) >= MAX_CONNS {
                     drop(stream); // at the soft cap: refuse by closing immediately
+                    continue;
+                }
+                // REACTOR-LEVEL per-source connection-limit gate. The check-and-count
+                // is atomic per source (`admit`), so a source at/over its cap is
+                // refused the REAL 503 and closed WITHOUT spawning a serve — the
+                // proven `Reactor.Stage.ConnLimit` decision on accept-path standing
+                // state. `cap == 0` (directive absent) admits every source (unchanged).
+                let ip = peer.ip();
+                let cap = crate::config::max_connections();
+                if !source_table().admit(ip, cap) {
+                    let _ = stream.write_all(CONN_LIMIT_503); // best-effort 503
+                    let _ = stream.flush();
+                    drop(stream); // decrement not needed: admit did not increment
+                    continue;
+                }
+                // REACTOR-LEVEL per-source REQUEST-RATE gate — note this arrival; over
+                // the `rate-limit` window ⇒ the REAL 429, closed WITHOUT spawning a
+                // serve (`rate_limit_fires`). The `admit` above already incremented the
+                // connection counter, so decrement here (`on_close`) to keep it exact.
+                if source_table().rate_note(
+                    ip,
+                    crate::config::rate_limit(),
+                    crate::config::rate_window(),
+                    std::time::Instant::now(),
+                ) {
+                    let _ = stream.write_all(RATE_LIMIT_429); // best-effort 429
+                    let _ = stream.flush();
+                    drop(stream);
+                    source_table().on_close(ip);
                     continue;
                 }
                 crate::ACTIVE_CONNS.fetch_add(1, Ordering::SeqCst);
@@ -464,6 +697,9 @@ pub fn run(listener: TcpListener, gw: ServeGateway) {
                     .name("drorb-conn".into())
                     .spawn(move || {
                         handle_conn(stream, &gw);
+                        // Decrement the per-source counter EXACTLY ONCE when this
+                        // connection's worker returns (matches the `admit` increment).
+                        source_table().on_close(ip);
                         crate::ACTIVE_CONNS.fetch_sub(1, Ordering::SeqCst);
                     });
             }
