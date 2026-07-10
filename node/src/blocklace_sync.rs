@@ -4711,313 +4711,326 @@ async fn execute_finalized_turn(
             // enabled it should get the same `spawn_blocking` + off-lock treatment
             // as the execution FFI above (the named follow-up); a proving validator
             // otherwise re-introduces a per-turn lock hold for the prover's duration.
-            let full_turn_proof_attached: Option<Vec<u8>> =
-                if let Some((pre_balance, pre_nonce)) = full_turn_pre_state {
-                    let effects: Vec<dregg_turn::Effect> = signed_turn
-                        .turn
-                        .call_forest
-                        .total_effects()
-                        .into_iter()
-                        .cloned()
-                        .collect();
-                    let spent_nullifiers = crate::turn_proving::spent_nullifiers(&effects);
-                    let actor_cap_witness = crate::turn_proving::actor_consumed_cap(
+            let full_turn_proof_attached: Option<Vec<u8>> = if let Some((pre_balance, pre_nonce)) =
+                full_turn_pre_state
+            {
+                let effects: Vec<dregg_turn::Effect> = signed_turn
+                    .turn
+                    .call_forest
+                    .total_effects()
+                    .into_iter()
+                    .cloned()
+                    .collect();
+                let spent_nullifiers = crate::turn_proving::spent_nullifiers(&effects);
+                let actor_cap_witness = crate::turn_proving::actor_consumed_cap(
+                    &receipt.consumed_capabilities,
+                    &signed_turn.turn.agent,
+                );
+                // The bearer witness (holder != actor) + the node-derived
+                // pre-state cap root of its delegator. The actor path takes
+                // precedence (a turn holding its own cap proves over its own
+                // root); only when there is NO actor-held witness do we route
+                // a bearer witness through the delegator-bound authority leg.
+                let bearer_cap = if actor_cap_witness.is_none() {
+                    crate::turn_proving::bearer_consumed_cap(
                         &receipt.consumed_capabilities,
                         &signed_turn.turn.agent,
-                    );
-                    // The bearer witness (holder != actor) + the node-derived
-                    // pre-state cap root of its delegator. The actor path takes
-                    // precedence (a turn holding its own cap proves over its own
-                    // root); only when there is NO actor-held witness do we route
-                    // a bearer witness through the delegator-bound authority leg.
-                    let bearer_cap = if actor_cap_witness.is_none() {
-                        crate::turn_proving::bearer_consumed_cap(
-                            &receipt.consumed_capabilities,
-                            &signed_turn.turn.agent,
-                        )
-                    } else {
-                        None
-                    };
-                    let bearer_cap_witness: Option<(
-                        &dregg_turn::ConsumedCapWitness,
-                        [dregg_circuit::field::BabyBear; 8],
-                    )> = bearer_cap.and_then(|w| {
-                        match full_turn_delegator_cap_roots.get(&w.holder) {
-                            Some(root) => Some((w, *root)),
-                            None => {
-                                // The delegator was not resolvable in the node's
-                                // pre-state ledger (e.g. an anonymous STARK
-                                // delegation, which records no concrete holder, or
-                                // a delegator absent at pre-state). We cannot bind
-                                // a real authority leg, so we keep the v1 fallback
-                                // and surface it loudly rather than mint a proof
-                                // missing the authority binding.
-                                warn!(
-                                    turn_hash = %turn_hash_hex,
-                                    holder = %w.holder,
-                                    "bearer-delegated turn: delegator pre-state cap root \
-                                     unavailable (no resolvable delegator cell) — proving \
-                                     WITHOUT the AUTHORITY leg (v1 fallback)"
-                                );
-                                None
-                            }
-                        }
-                    });
-                    let proving_result = match (
-                        actor_cap_witness,
-                        bearer_cap_witness,
-                        spent_nullifiers.first(),
-                    ) {
-                        (Some(consumed), _, spent_nullifier) => {
-                            // CAPABILITY-GATED turn → AUTHORITY path (cap Phase D),
-                            // freshness leg included when it also spends. FLOW-B (C7 close): build
-                            // the per-turn ROTATION producer witnesses from the REAL before/after
-                            // cells + the canonical pre-state cap root, so the live capability turn
-                            // proves ROTATED and the rotated commit pins fold the REAL authority
-                            // digest r23 (NOT a zero-pk stub). The builder's self-validating gate
-                            // returns None — graceful v1 fallback — for any turn it cannot faithfully
-                            // rotate (e.g. a cap-gated turn that also spends, or a cell whose welded
-                            // scalars diverge from the v1 cap pre-state).
-                            let rotation = match (
-                                full_turn_pre_cell.as_ref(),
-                                s.ledger.get(&signed_turn.turn.agent),
-                            ) {
-                                (Some(before_cell), Some(after_cell)) => {
-                                    let receipt_hashes = [receipt.receipt_hash()];
-                                    crate::turn_proving::rotation_witness_for_capability(
-                                        pre_balance,
-                                        pre_nonce,
-                                        full_turn_pre_cap_root,
-                                        before_cell,
-                                        after_cell,
-                                        &receipt_hashes,
-                                        &effects,
-                                    )
-                                }
-                                _ => None,
-                            };
-                            // cap-WRITE light-client axis: thread the actor's FULL pre-state cap-tree
-                            // write witness bundle (the arity-2 leaf-set + the 7-field c-list +
-                            // tombstones) so a write-bearing cap effect (RevokeDelegation REMOVE /
-                            // delegate-family INSERT) proves the post-cap-root on the wire. Empty when
-                            // the before-cell is unavailable (the authority-only route still proves).
-                            let cap_trees = full_turn_pre_cell
-                                .as_ref()
-                                .map(crate::turn_proving::cap_write_tree_witness)
-                                .unwrap_or_default();
-                            crate::turn_proving::prove_and_verify_finalized_turn_capability(
-                                &signed_turn.turn.agent,
-                                pre_balance,
-                                pre_nonce,
-                                full_turn_pre_cap_root,
-                                full_turn_pre_cap_root_8,
-                                &effects,
-                                computed_hash,
-                                consumed,
-                                spent_nullifier,
-                                &full_turn_previously_spent,
-                                rotation,
-                                cap_trees,
-                                // VK EPOCH (umem flip): the DOMAIN-2 welded producer is ARMED. When the
-                                // actor's GENUINE before→after record-kernel projection diff is a
-                                // NON-EMPTY single-domain CAPS change, mint the WIDE+UMEM welded cap-open
-                                // form (the universal-memory leg BESIDE the 8-felt commit, accepted
-                                // ADDITIVELY). An empty / heap-domain / multi-domain diff (incl. the 12
-                                // live-only members) yields `None` ⇒ the byte-identical BARE wide leg.
-                                match (
-                                    full_turn_pre_cell.as_ref(),
-                                    s.ledger.get(&signed_turn.turn.agent),
-                                ) {
-                                    (Some(before_cell), Some(after_cell)) => {
-                                        crate::turn_proving::caps_umem_weld_witness(
-                                            before_cell,
-                                            after_cell,
-                                        )
-                                    }
-                                    _ => None,
-                                },
-                            )
-                        }
-                        (None, Some((consumed, holder_cap_root)), spent_nullifier) => {
-                            // BEARER-DELEGATION turn → AUTHORITY path bound to the DELEGATOR's
-                            // pre-state cap root (the soundness fix). The actor's EffectVm
-                            // state-transition leg is seeded from the ACTOR's pre-state cap root
-                            // (`full_turn_pre_cap_root`), while the cap-membership leg opens against
-                            // the DELEGATOR's pre-state cap root (`holder_cap_root`, node-derived).
-                            // So the proof attests "the actor's state evolved correctly AND the
-                            // delegated authority it exercised was a real member of the delegator's
-                            // c-list." The actor's rotation witness is built from its REAL
-                            // before/after cells (same as the self-sovereign / actor-cap arms); when
-                            // the gate refuses it, the byte-identical v1 actor leg runs ALONGSIDE the
-                            // delegator-bound cap leg. A bearer turn that ALSO spends keeps its
-                            // freshness leg (the nullifier is threaded through).
-                            let rotation = match (
-                                full_turn_pre_cell.as_ref(),
-                                s.ledger.get(&signed_turn.turn.agent),
-                            ) {
-                                (Some(before_cell), Some(after_cell)) => {
-                                    let receipt_hashes = [receipt.receipt_hash()];
-                                    crate::turn_proving::rotation_witness_for_self_sovereign(
-                                        pre_balance,
-                                        pre_nonce,
-                                        before_cell,
-                                        after_cell,
-                                        &receipt_hashes,
-                                        &effects,
-                                    )
-                                }
-                                _ => None,
-                            };
-                            crate::turn_proving::prove_and_verify_finalized_turn_capability_holder(
-                                &signed_turn.turn.agent,
-                                pre_balance,
-                                pre_nonce,
-                                full_turn_pre_cap_root,
-                                holder_cap_root,
-                                &effects,
-                                computed_hash,
-                                consumed,
-                                spent_nullifier,
-                                &full_turn_previously_spent,
-                                rotation,
-                                // BEARER path: the cap-tree write witness is the DELEGATOR's c-list
-                                // (not the actor's) — the bearer write wrapper is the named fan-out
-                                // residual; the authority-only route proves until it lands.
-                                Default::default(),
-                                // VK EPOCH (umem flip): DOMAIN-2 welded producer ARMED on the bearer arm
-                                // too — built from the ACTOR's genuine before→after projection diff (the
-                                // producer fails closed to `None` ⇒ bare for any non-single-caps diff).
-                                match (
-                                    full_turn_pre_cell.as_ref(),
-                                    s.ledger.get(&signed_turn.turn.agent),
-                                ) {
-                                    (Some(before_cell), Some(after_cell)) => {
-                                        crate::turn_proving::caps_umem_weld_witness(
-                                            before_cell,
-                                            after_cell,
-                                        )
-                                    }
-                                    _ => None,
-                                },
-                            )
-                        }
-                        (None, None, Some(spent_nullifier)) => {
-                            // SPEND turn → freshness path (bound verify). FLOW-B (C4 close): unlike
-                            // the sibling arms, this path builds the per-turn ROTATION producer
-                            // witnesses INTERNALLY (from the cap-less synthetic actor cell — the
-                            // SAME pre-state the v1 leg proves over), so a single-spend NoteSpend
-                            // turn proves ROTATED through `noteSpendVmDescriptor2R24`, which pins the
-                            // spent nullifier at PI[38] (`EffectVmEmitRotationV3.noteSpendV3`). The
-                            // no-double-spend binding survives the rotation (`verify_full_turn` step
-                            // 8 reads PI[38]); a multi-spend turn keeps the v1 leg (the rotated
-                            // generator's single-spend gate refuses it, where a 2nd distinct
-                            // nullifier is UNSAT). Under `not(recursion)` the byte-identical v1 leg
-                            // runs (the present rotation witness is ignored).
-                            crate::turn_proving::prove_and_verify_finalized_turn_freshness(
-                                &signed_turn.turn.agent,
-                                pre_balance,
-                                pre_nonce,
-                                &effects,
-                                computed_hash,
-                                spent_nullifier,
-                                &full_turn_previously_spent,
-                            )
-                        }
-                        (None, None, None) => {
-                            // Non-spend turn → self-sovereign Effect-VM path. FLOW-B: build the
-                            // per-turn ROTATION producer witnesses from the REAL before/after
-                            // cells so the live node turn proves ROTATED (the builder's
-                            // self-validating gate returns None for cells the synthetic
-                            // cap-less pre-state cannot represent, falling back to v1).
-                            let rotation = match (
-                                full_turn_pre_cell.as_ref(),
-                                s.ledger.get(&signed_turn.turn.agent),
-                            ) {
-                                (Some(before_cell), Some(after_cell)) => {
-                                    let receipt_hashes = [receipt.receipt_hash()];
-                                    crate::turn_proving::rotation_witness_for_self_sovereign(
-                                        pre_balance,
-                                        pre_nonce,
-                                        before_cell,
-                                        after_cell,
-                                        &receipt_hashes,
-                                        &effects,
-                                    )
-                                }
-                                _ => None,
-                            };
-                            crate::turn_proving::prove_and_verify_finalized_turn(
-                                &signed_turn.turn.agent,
-                                pre_balance,
-                                pre_nonce,
-                                &effects,
-                                computed_hash,
-                                rotation,
-                            )
-                        }
-                    };
-                    let is_spend = !spent_nullifiers.is_empty();
-                    match proving_result {
-                        Ok(proven) => {
-                            let proof_bytes = proven.proof_bytes().to_vec();
-                            let key = crate::turn_proving::turn_proof_config_key(&turn_hash_hex);
-                            if let Err(e) = s.store.set_config(&key, &proof_bytes) {
-                                warn!(error = %e, turn_hash = %turn_hash_hex,
-                                    "failed to persist full-turn proof");
-                            }
-                            info!(
-                                turn_hash = %turn_hash_hex,
-                                block_id = %block_id,
-                                proof_bytes = proof_bytes.len(),
-                                old_commit = ?proven.old_commit,
-                                new_commit = ?proven.new_commit,
-                                spend = is_spend,
-                                freshness_bound = is_spend,
-                                "full-turn proof generated and verified (commit path); \
-                                 spend turns are FRESHNESS-bound to the canonical revocation root"
-                            );
-                            Some(proof_bytes)
-                        }
-                        Err(
-                            crate::turn_proving::FullTurnProvingError::RevocationCapacityExceeded {
-                                have,
-                                max,
-                            },
-                        ) => {
-                            // KNOWN LIMITATION (not a soundness failure): the canonical
-                            // nullifier set outgrew the fixed-depth non-revocation circuit.
-                            // We do not silently truncate the set (that could hide a
-                            // double-spend), so the spend turn carries no freshness-bound
-                            // proof until a depth-parameterized non-revocation AIR lands.
+                    )
+                } else {
+                    None
+                };
+                let bearer_cap_witness: Option<(
+                    &dregg_turn::ConsumedCapWitness,
+                    [dregg_circuit::field::BabyBear; 8],
+                )> = bearer_cap.and_then(|w| {
+                    match full_turn_delegator_cap_roots.get(&w.holder) {
+                        Some(root) => Some((w, *root)),
+                        None => {
+                            // The delegator was not resolvable in the node's
+                            // pre-state ledger (e.g. an anonymous STARK
+                            // delegation, which records no concrete holder, or
+                            // a delegator absent at pre-state). We cannot bind
+                            // a real authority leg, so we keep the v1 fallback
+                            // and surface it loudly rather than mint a proof
+                            // missing the authority binding.
                             warn!(
                                 turn_hash = %turn_hash_hex,
-                                block_id = %block_id,
-                                have,
-                                max,
-                                "spend turn NOT freshness-proven: canonical nullifier set exceeds \
-                                 the non-revocation circuit capacity (needs a deeper AIR); turn \
-                                 committed without a freshness-bound proof"
-                            );
-                            None
-                        }
-                        Err(e) => {
-                            // SOUNDNESS: a committed turn whose full-turn proof
-                            // does not verify is a serious event. We surface it
-                            // loudly and refuse to attach an unverified proof.
-                            error!(
-                                turn_hash = %turn_hash_hex,
-                                block_id = %block_id,
-                                error = %e,
-                                spend = is_spend,
-                                "full-turn proof generation/verification FAILED; \
-                                 turn committed but carries NO verified proof"
+                                holder = %w.holder,
+                                "bearer-delegated turn: delegator pre-state cap root \
+                                 unavailable (no resolvable delegator cell) — proving \
+                                 WITHOUT the AUTHORITY leg (v1 fallback)"
                             );
                             None
                         }
                     }
-                } else {
-                    None
+                });
+                // NULLIFIER-ROOT (VK-epoch ghost mirror): the LIVE nullifier-accumulator frontier
+                // the executor carries — the native `CanonicalHeapTree8` root over its (nf, value)
+                // `note_nullifiers` map. Threaded into the rotated producer so the committed
+                // `nullifier_root` (limbs [26,67..73]) binds the node's REAL spent-note frontier
+                // instead of a hardcoded default. (The per-turn executor is not yet seeded from the
+                // durable store, so on a non-spend turn this is the native empty root; the durable
+                // (nf, value) seeding is the remaining node-level wiring for cross-node anti-replay
+                // via committed state — see turn_proving::rotation_witness_for_*_with_root.)
+                let live_nullifier_root = executor.note_nullifiers.lock().unwrap().root8();
+                let proving_result = match (
+                    actor_cap_witness,
+                    bearer_cap_witness,
+                    spent_nullifiers.first(),
+                ) {
+                    (Some(consumed), _, spent_nullifier) => {
+                        // CAPABILITY-GATED turn → AUTHORITY path (cap Phase D),
+                        // freshness leg included when it also spends. FLOW-B (C7 close): build
+                        // the per-turn ROTATION producer witnesses from the REAL before/after
+                        // cells + the canonical pre-state cap root, so the live capability turn
+                        // proves ROTATED and the rotated commit pins fold the REAL authority
+                        // digest r23 (NOT a zero-pk stub). The builder's self-validating gate
+                        // returns None — graceful v1 fallback — for any turn it cannot faithfully
+                        // rotate (e.g. a cap-gated turn that also spends, or a cell whose welded
+                        // scalars diverge from the v1 cap pre-state).
+                        let rotation = match (
+                            full_turn_pre_cell.as_ref(),
+                            s.ledger.get(&signed_turn.turn.agent),
+                        ) {
+                            (Some(before_cell), Some(after_cell)) => {
+                                let receipt_hashes = [receipt.receipt_hash()];
+                                crate::turn_proving::rotation_witness_for_capability_with_root(
+                                    pre_balance,
+                                    pre_nonce,
+                                    full_turn_pre_cap_root,
+                                    before_cell,
+                                    after_cell,
+                                    &receipt_hashes,
+                                    &effects,
+                                    &live_nullifier_root,
+                                )
+                            }
+                            _ => None,
+                        };
+                        // cap-WRITE light-client axis: thread the actor's FULL pre-state cap-tree
+                        // write witness bundle (the arity-2 leaf-set + the 7-field c-list +
+                        // tombstones) so a write-bearing cap effect (RevokeDelegation REMOVE /
+                        // delegate-family INSERT) proves the post-cap-root on the wire. Empty when
+                        // the before-cell is unavailable (the authority-only route still proves).
+                        let cap_trees = full_turn_pre_cell
+                            .as_ref()
+                            .map(crate::turn_proving::cap_write_tree_witness)
+                            .unwrap_or_default();
+                        crate::turn_proving::prove_and_verify_finalized_turn_capability(
+                            &signed_turn.turn.agent,
+                            pre_balance,
+                            pre_nonce,
+                            full_turn_pre_cap_root,
+                            full_turn_pre_cap_root_8,
+                            &effects,
+                            computed_hash,
+                            consumed,
+                            spent_nullifier,
+                            &full_turn_previously_spent,
+                            rotation,
+                            cap_trees,
+                            // VK EPOCH (umem flip): the DOMAIN-2 welded producer is ARMED. When the
+                            // actor's GENUINE before→after record-kernel projection diff is a
+                            // NON-EMPTY single-domain CAPS change, mint the WIDE+UMEM welded cap-open
+                            // form (the universal-memory leg BESIDE the 8-felt commit, accepted
+                            // ADDITIVELY). An empty / heap-domain / multi-domain diff (incl. the 12
+                            // live-only members) yields `None` ⇒ the byte-identical BARE wide leg.
+                            match (
+                                full_turn_pre_cell.as_ref(),
+                                s.ledger.get(&signed_turn.turn.agent),
+                            ) {
+                                (Some(before_cell), Some(after_cell)) => {
+                                    crate::turn_proving::caps_umem_weld_witness(
+                                        before_cell,
+                                        after_cell,
+                                    )
+                                }
+                                _ => None,
+                            },
+                        )
+                    }
+                    (None, Some((consumed, holder_cap_root)), spent_nullifier) => {
+                        // BEARER-DELEGATION turn → AUTHORITY path bound to the DELEGATOR's
+                        // pre-state cap root (the soundness fix). The actor's EffectVm
+                        // state-transition leg is seeded from the ACTOR's pre-state cap root
+                        // (`full_turn_pre_cap_root`), while the cap-membership leg opens against
+                        // the DELEGATOR's pre-state cap root (`holder_cap_root`, node-derived).
+                        // So the proof attests "the actor's state evolved correctly AND the
+                        // delegated authority it exercised was a real member of the delegator's
+                        // c-list." The actor's rotation witness is built from its REAL
+                        // before/after cells (same as the self-sovereign / actor-cap arms); when
+                        // the gate refuses it, the byte-identical v1 actor leg runs ALONGSIDE the
+                        // delegator-bound cap leg. A bearer turn that ALSO spends keeps its
+                        // freshness leg (the nullifier is threaded through).
+                        let rotation = match (
+                            full_turn_pre_cell.as_ref(),
+                            s.ledger.get(&signed_turn.turn.agent),
+                        ) {
+                            (Some(before_cell), Some(after_cell)) => {
+                                let receipt_hashes = [receipt.receipt_hash()];
+                                crate::turn_proving::rotation_witness_for_self_sovereign_with_root(
+                                    pre_balance,
+                                    pre_nonce,
+                                    before_cell,
+                                    after_cell,
+                                    &receipt_hashes,
+                                    &effects,
+                                    &live_nullifier_root,
+                                )
+                            }
+                            _ => None,
+                        };
+                        crate::turn_proving::prove_and_verify_finalized_turn_capability_holder(
+                            &signed_turn.turn.agent,
+                            pre_balance,
+                            pre_nonce,
+                            full_turn_pre_cap_root,
+                            holder_cap_root,
+                            &effects,
+                            computed_hash,
+                            consumed,
+                            spent_nullifier,
+                            &full_turn_previously_spent,
+                            rotation,
+                            // BEARER path: the cap-tree write witness is the DELEGATOR's c-list
+                            // (not the actor's) — the bearer write wrapper is the named fan-out
+                            // residual; the authority-only route proves until it lands.
+                            Default::default(),
+                            // VK EPOCH (umem flip): DOMAIN-2 welded producer ARMED on the bearer arm
+                            // too — built from the ACTOR's genuine before→after projection diff (the
+                            // producer fails closed to `None` ⇒ bare for any non-single-caps diff).
+                            match (
+                                full_turn_pre_cell.as_ref(),
+                                s.ledger.get(&signed_turn.turn.agent),
+                            ) {
+                                (Some(before_cell), Some(after_cell)) => {
+                                    crate::turn_proving::caps_umem_weld_witness(
+                                        before_cell,
+                                        after_cell,
+                                    )
+                                }
+                                _ => None,
+                            },
+                        )
+                    }
+                    (None, None, Some(spent_nullifier)) => {
+                        // SPEND turn → freshness path (bound verify). FLOW-B (C4 close): unlike
+                        // the sibling arms, this path builds the per-turn ROTATION producer
+                        // witnesses INTERNALLY (from the cap-less synthetic actor cell — the
+                        // SAME pre-state the v1 leg proves over), so a single-spend NoteSpend
+                        // turn proves ROTATED through `noteSpendVmDescriptor2R24`, which pins the
+                        // spent nullifier at PI[38] (`EffectVmEmitRotationV3.noteSpendV3`). The
+                        // no-double-spend binding survives the rotation (`verify_full_turn` step
+                        // 8 reads PI[38]); a multi-spend turn keeps the v1 leg (the rotated
+                        // generator's single-spend gate refuses it, where a 2nd distinct
+                        // nullifier is UNSAT). Under `not(recursion)` the byte-identical v1 leg
+                        // runs (the present rotation witness is ignored).
+                        crate::turn_proving::prove_and_verify_finalized_turn_freshness(
+                            &signed_turn.turn.agent,
+                            pre_balance,
+                            pre_nonce,
+                            &effects,
+                            computed_hash,
+                            spent_nullifier,
+                            &full_turn_previously_spent,
+                        )
+                    }
+                    (None, None, None) => {
+                        // Non-spend turn → self-sovereign Effect-VM path. FLOW-B: build the
+                        // per-turn ROTATION producer witnesses from the REAL before/after
+                        // cells so the live node turn proves ROTATED (the builder's
+                        // self-validating gate returns None for cells the synthetic
+                        // cap-less pre-state cannot represent, falling back to v1).
+                        let rotation = match (
+                            full_turn_pre_cell.as_ref(),
+                            s.ledger.get(&signed_turn.turn.agent),
+                        ) {
+                            (Some(before_cell), Some(after_cell)) => {
+                                let receipt_hashes = [receipt.receipt_hash()];
+                                crate::turn_proving::rotation_witness_for_self_sovereign_with_root(
+                                    pre_balance,
+                                    pre_nonce,
+                                    before_cell,
+                                    after_cell,
+                                    &receipt_hashes,
+                                    &effects,
+                                    &live_nullifier_root,
+                                )
+                            }
+                            _ => None,
+                        };
+                        crate::turn_proving::prove_and_verify_finalized_turn(
+                            &signed_turn.turn.agent,
+                            pre_balance,
+                            pre_nonce,
+                            &effects,
+                            computed_hash,
+                            rotation,
+                        )
+                    }
                 };
+                let is_spend = !spent_nullifiers.is_empty();
+                match proving_result {
+                    Ok(proven) => {
+                        let proof_bytes = proven.proof_bytes().to_vec();
+                        let key = crate::turn_proving::turn_proof_config_key(&turn_hash_hex);
+                        if let Err(e) = s.store.set_config(&key, &proof_bytes) {
+                            warn!(error = %e, turn_hash = %turn_hash_hex,
+                                    "failed to persist full-turn proof");
+                        }
+                        info!(
+                            turn_hash = %turn_hash_hex,
+                            block_id = %block_id,
+                            proof_bytes = proof_bytes.len(),
+                            old_commit = ?proven.old_commit,
+                            new_commit = ?proven.new_commit,
+                            spend = is_spend,
+                            freshness_bound = is_spend,
+                            "full-turn proof generated and verified (commit path); \
+                             spend turns are FRESHNESS-bound to the canonical revocation root"
+                        );
+                        Some(proof_bytes)
+                    }
+                    Err(
+                        crate::turn_proving::FullTurnProvingError::RevocationCapacityExceeded {
+                            have,
+                            max,
+                        },
+                    ) => {
+                        // KNOWN LIMITATION (not a soundness failure): the canonical
+                        // nullifier set outgrew the fixed-depth non-revocation circuit.
+                        // We do not silently truncate the set (that could hide a
+                        // double-spend), so the spend turn carries no freshness-bound
+                        // proof until a depth-parameterized non-revocation AIR lands.
+                        warn!(
+                            turn_hash = %turn_hash_hex,
+                            block_id = %block_id,
+                            have,
+                            max,
+                            "spend turn NOT freshness-proven: canonical nullifier set exceeds \
+                             the non-revocation circuit capacity (needs a deeper AIR); turn \
+                             committed without a freshness-bound proof"
+                        );
+                        None
+                    }
+                    Err(e) => {
+                        // SOUNDNESS: a committed turn whose full-turn proof
+                        // does not verify is a serious event. We surface it
+                        // loudly and refuse to attach an unverified proof.
+                        error!(
+                            turn_hash = %turn_hash_hex,
+                            block_id = %block_id,
+                            error = %e,
+                            spend = is_spend,
+                            "full-turn proof generation/verification FAILED; \
+                             turn committed but carries NO verified proof"
+                        );
+                        None
+                    }
+                }
+            } else {
+                None
+            };
 
             // ── Lift TurnReceipt → FederationReceipt (audit F7) ──────────
             // We carry the committed turn into a federation-shaped receipt

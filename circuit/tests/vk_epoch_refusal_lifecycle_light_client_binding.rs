@@ -222,7 +222,7 @@ fn refusal_light_client_forge_rejected_by_fields_write_gate() {
 
     let mut ledger = Ledger::new();
     ledger.insert_cell(honest_after.clone()).unwrap();
-    let nullifier_root = [0u8; 32];
+    let nullifier_root = dregg_circuit::heap_root::empty_heap_root_8();
     let commitments_root = [0u8; 32];
     let receipt_log: Vec<[u8; 32]> = vec![[3u8; 32]];
 
@@ -388,7 +388,7 @@ fn lifecycle_payload_forge_rejected_by_hash_gate_anchor_disabled() {
 
     let mut ledger = Ledger::new();
     ledger.insert_cell(honest_after.clone()).unwrap();
-    let nullifier_root = [0u8; 32];
+    let nullifier_root = dregg_circuit::heap_root::empty_heap_root_8();
     let commitments_root = [0u8; 32];
     let receipt_log: Vec<[u8; 32]> = vec![[3u8; 32]];
 
@@ -556,7 +556,7 @@ fn wide_fields_write_proves_and_verifies() {
 
     let mut ledger = Ledger::new();
     ledger.insert_cell(honest_after.clone()).unwrap();
-    let nullifier_root = [0u8; 32];
+    let nullifier_root = dregg_circuit::heap_root::empty_heap_root_8();
     let commitments_root = [0u8; 32];
     let receipt_log: Vec<[u8; 32]> = vec![[3u8; 32]];
     let before_w = rw::produce(
