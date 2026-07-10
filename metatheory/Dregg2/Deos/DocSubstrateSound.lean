@@ -1,74 +1,88 @@
 /-
-# `Dregg2.Deos.DocSubstrateSound` — the two genuine document-soundness properties, RE-HOMED onto
-the DEPLOYED commit (`dregg-doc/src/substrate.rs::substrate_commit`, the sorted-Poseidon2 heap root).
+# `Dregg2.Deos.DocSubstrateSound` — the two genuine document-soundness properties, RE-HOMED onto the
+WIDE 8-felt sorted-Poseidon2 MERKLE root the code actually commits (`compute_canonical_heap_root_8`).
 
-## Why this file exists (the over-deletion, corrected)
+## Why this file was re-homed (the SUPERSEDED-model correction)
 
-An earlier campaign proved these two properties against a PARALLEL, NON-DEPLOYED linear-sponge
-commitment (`Dregg2.Deos.DocCommit`, `docCommit hash d = hash (encode d)`), which was then deleted.
-The deployed commitment is DIFFERENT: `substrate_commit(g) = compute_heap_root(to_heap_map(g))` — the
-document projected into a sorted-Poseidon2 heap map `(collection_id, key) → leafDigest`, whose root's
-INJECTIVITY IS ALREADY PROVEN in `Dregg2.Substrate.Heap`:
+The prior revision proved these two properties by composing over `Dregg2.Substrate.Heap.root_binds_get`
+— but `Substrate.Heap.root hash h = hash (h.map leafOf)` is a FLAT SPONGE over the sorted leaf list,
+folding each node to a SINGLE ~2^31 felt. The codebase itself flags that sponge as SUPERSEDED
+(`Circuit/DeployedHeapTree` = "THE HONEST replacement for the flat-sponge Substrate.Heap opensTo"):
+the deployed heap root is a depth-`d` binary Merkle map over `(addr, value)` leaves whose nodes ride the
+arity-16 `node8` chip (`heap_root.rs::heap_node8`, ~124-bit), and the heap GENTIAN tooth
+(`circuit/tests/heap_root_gentian_weld.rs`) exhibits two genuinely-different heaps that COLLIDE on the
+1-felt lane-0 projection while topping DIFFERENT 8-felt roots. So the old composition proved properties
+of a model that is NOT the code's commitment.
 
-  * `root_injective` (Heap.lean:420) — equal heap root ⟹ equal leaf list, under the ONE named crypto
-    carrier `Poseidon2SpongeCR` (a HYPOTHESIS, never an axiom);
-  * `root_binds_get` (Heap.lean:435) — equal heap root ⟹ the value at EVERY `(collection_id, key)`
-    address agrees. "The root binds every stored (key,value)."
+This file re-homes both theorems onto the FAITHFUL wide root, riding `Dregg2.Circuit.MapMerkleRoot`
+(the depth-`d` `node8` binary fold) — NOT the sponge:
 
-So the heavy lifting (the root binds each leaf VALUE) is DONE. This file supplies the two document-
-level properties the over-deletion removed, but now as THIN compositions on top of `root_binds_get`:
+  * `MapMerkleRoot.mapRoot8_injective` — equal 8-felt root ⟹ equal heap, under the named arity-16 chip
+    CR (`Heap8Scheme.chip8CR`, a HYPOTHESIS carried in `S8`, never an axiom), which is itself
+    `perfectRoot8_injective` ∘ `DeployedHeapTree.heapNodeOf8_injective` composed up the perfect tree;
+  * `MapMerkleRoot.opensToMerkle8_functional` — the consumable form: two heaps behind the SAME 8-felt
+    root `r` reading at the same key `k` agree on the opened value. "The wide root binds every opened
+    (key, value)." This is the whole-map "equal root ⟹ equal opened value" the doc composition needs.
 
-  1. **`substrate_root_binds_element_structure`** — the deployed root binds the Element STRUCTURE, not
-     just opaque leaf bytes. `substrate.rs::leaf_for_atom` hashes `id ‖ content.canonical_bytes() ‖
-     status ‖ provenance`; for an Element the `canonical_bytes` are the length-prefixed
-     `tag ‖ attrs ‖ children` grammar (`atom.rs::canonical_bytes`, the Element arm). We model that
-     grammar (`encodeElement`), prove it injective by a TOTAL left-inverse decoder
-     (`encodeElement_injective`), then compose: `root_binds_get` (leaf digest bound) ∘ CR (digest ⟹
-     preimage) ∘ `atomLeafPreimage_injective` (preimage ⟹ atom) ∘ `encodeElement_injective` (Element
-     bytes ⟹ Element structure). Equal substrate heap-root ⟹ equal tag ∧ attrs ∧ children.
+The heavy lifting (the wide root binds each opened leaf VALUE) is thus DONE in `MapMerkleRoot`. This
+file supplies the two document-level properties as THIN compositions on top of `opensToMerkle8_functional`:
 
-  2. **`substrate_root_binds_conflict_alternatives`** — conflict-as-state soundness ON THE DEPLOYED
-     COMMIT. A conflict's alternatives are two `COLL_FIELDS` leaves (`substrate.rs::leaf_for_field`,
-     `name ‖ value ‖ provenance`, one per field assignment). From `root_binds_get` at the two field
-     keys, equal substrate heap-root ⟹ both alternatives agree — value AND provenance. This is the
-     recovered `docCommit_conflict_binds_both`, but ABOUT `substrate_commit`. A forged alternative
-     (same rendered value, different author) cannot hide under an equal deployed root.
+  1. **`substrate_root_binds_element_structure`** — the wide root binds the Element STRUCTURE, not just
+     opaque leaf bytes. `substrate.rs::leaf_for_atom` hashes `id ‖ canonical_bytes(Element) ‖ status ‖
+     provenance`; we model that grammar (`encodeElement`), prove it injective by a TOTAL left-inverse
+     decoder (`encodeElement_injective`, scheme-INDEPENDENT — canonical_bytes injectivity, unchanged by
+     the re-home), then compose: `opensToMerkle8_functional` (wide root binds the opened leaf digest) ∘
+     CR (digest ⟹ preimage) ∘ `atomLeafPreimage_injective` ∘ `encodeElement_injective`. Equal 8-felt
+     heap-root ⟹ equal tag ∧ attrs ∧ children.
 
-## The modeling contract (faithful to `substrate.rs`, honestly stated)
+  2. **`substrate_root_binds_conflict_alternatives`** — conflict-as-state soundness on the WIDE commit.
+     A conflict's alternatives are two `COLL_FIELDS` leaves (`substrate.rs::leaf_for_field`,
+     `name ‖ value ‖ provenance`). From `opensToMerkle8_functional` at the two field keys, equal 8-felt
+     root ⟹ both alternatives agree — value AND provenance. A forged alternative (same rendered value,
+     different author) cannot hide under an equal WIDE root.
 
-`to_heap_map` stores, at each `(collection_id, key)`, a leaf DIGEST of a length-prefixed preimage.
-We model that digest as `hash preimage` with `hash` the SAME `Poseidon2SpongeCR` carrier the heap
-root is folded with — the Heap.lean idiom, where a leaf `hash[addr,value]` and the root `hash(leaves)`
-already share ONE carrier (`Heap.leafOf` / `Heap.root`). In deployment the digest is BLAKE3 and the
-fold is Poseidon2; both are collision-resistant, and the model collapses them to the one named CR
-sponge — no NEW commitment scheme is introduced. The keys are the canonical sequential indices of
-`to_heap_map` (an atom at `(COLL_ATOMS, idx)`, each conflict alternative at `(COLL_FIELDS, idx)`).
+## The two crypto carriers (both HYPOTHESES, faithful to the code, honestly stated)
+
+The wide commitment folds TWO named collision-resistant primitives, and both enter ONLY as hypotheses:
+
+  * the TREE carrier `S8 : Heap8Scheme` — the arity-16 `node8`/leaf chip (`heap_root.rs`), carrying its
+    CR as the `chip8CR` FIELD. The wide root `mapRoot8 S8 d h` and every leaf `heapLeafDigest8` ride it;
+  * the LEAF-DIGEST carrier `hash : List ℤ → ℤ` with `hCR : Poseidon2SpongeCR hash` — the
+    `leaf_for_atom` / `leaf_for_field` hash that maps a length-prefixed field preimage to the felt
+    STORED at its heap key (`to_heap_map`'s value). In deployment this is a BLAKE3/Poseidon2 digest; the
+    model collapses it to the ONE named CR sponge.
+
+`to_heap_map` stores, at each key, `hash preimage`. So an opening `opensToMerkle8 S8 d r k
+(some (hash preimage))` says exactly "the wide root `r` opens, at key `k`, the leaf digest of `preimage`".
 
 ## Axiom hygiene
 
-`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every theorem. Crypto enters ONLY as
-the named `Poseidon2SpongeCR` hypothesis — exactly as in `Heap.lean`, never as a new axiom. Read-only
-imports; the deleted `DocCommit` is NOT re-imported.
+`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} on every theorem. Crypto enters ONLY as the
+named `S8.chip8CR` field (via `MapMerkleRoot`) and the named `Poseidon2SpongeCR hash` hypothesis, never
+as an axiom. Read-only imports; `Substrate.Heap.root`/`root_binds_get` (the SUPERSEDED sponge) is NOT
+used for the root binding.
 -/
-import Dregg2.Substrate.Heap
+import Dregg2.Circuit.MapMerkleRoot
+import Dregg2.Circuit.DeployedHeapTree
 import Dregg2.Circuit.Poseidon2Binding
 import Dregg2.Tactics
 import Mathlib.Logic.Function.Basic
 
 namespace Dregg2.Deos.DocSubstrateSound
 
-open Dregg2.Substrate.Heap
-  (FeltHeap hget hset get root root_binds_get addrOf refSponge)
 open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
+open Dregg2.Circuit.DeployedCapTree (Digest8)
+open Dregg2.Circuit.DeployedHeapTree (Heap8Scheme)
+open Dregg2.Circuit.MapMerkleRoot (opensToMerkle8 opensToMerkle8_functional)
 
 /-! ## 1. The `canonical_bytes` Element grammar (`atom.rs::canonical_bytes`, the Element arm).
 
 `canonical_bytes` for `AtomContent::Element { tag, attrs, children }` emits (`atom.rs:245-262`):
 `push(1)` ‖ `run(tag)` ‖ `attrs.len()` ‖ (for each `(k,v)`: `run(k) ‖ run(v)`) ‖ `children.len()` ‖
 (for each child: its fixed-width id). We model bytes as `ℤ` cells and each length/count as ONE `ℤ`
-cell (the Heap/DocCommit idiom). Strings enter as their `.as_bytes()` view — a `List ℤ` — which is
-exactly what `canonical_bytes` hashes (it never sees the `String`, only its bytes); children are
-their fixed-width integer ids. -/
+cell. This grammar + its decoder are SCHEME-INDEPENDENT: they decode the leaf PREIMAGE and are
+unchanged by the re-home from the sponge to the wide Merkle root (only the ROOT the preimage rides
+changes). -/
 
 /-- The commitment's view of `atom.rs::AtomContent::Element`: the tag bytes, the ordered
 `(key-bytes, value-bytes)` attrs, and the child atom ids. -/
@@ -212,8 +226,7 @@ theorem decElement_enc (e : ElementModel) (rest : List ℤ) :
 
 /-- **`encodeElement_injective`** — the `canonical_bytes` Element grammar has a TOTAL left inverse
 (`decElement`), so equal Element preimages force equal Element structure (tag, attrs, children).
-Purely combinatorial: no crypto. This is the recovered injective-decoder technique, re-homed onto
-`atom.rs::canonical_bytes`. -/
+Purely combinatorial: no crypto, scheme-INDEPENDENT (the re-home does not touch it). -/
 theorem encodeElement_injective : Function.Injective encodeElement := by
   intro e e' h
   have he : decElement (encodeElement e) = some (e, ([] : List ℤ)) := by
@@ -278,44 +291,42 @@ def COLL_ATOMS : ℤ := 0
 /-- Heap collection holding the document's field assignments (`substrate.rs::COLL_FIELDS`). -/
 def COLL_FIELDS : ℤ := 2
 
-/-- **`substrate_root_binds_element_structure` — the deployed root binds Element STRUCTURE.**
+/-- **`substrate_root_binds_element_structure` — the WIDE 8-felt root binds Element STRUCTURE.**
 
-Two documents committed to the SAME `substrate_commit` (`root hash h₁ = root hash h₂`), each storing
-at `(COLL_ATOMS, key)` the `leaf_for_atom` digest of an Element atom (`hash (atomLeafPreimage aᵢ)`),
-agree on that atom's Element STRUCTURE: equal tag, equal attrs, equal children — not merely equal
-opaque leaf bytes. Without this, the deployed commit binds bytes; WITH it, it binds the DOM structure
-the author authored.
+Two documents committed to the SAME wide `substrate_commit` (the 8-felt Merkle root `r`), each opening
+at key `key` the `leaf_for_atom` digest of an Element atom (`opensToMerkle8 … (some (hash
+(atomLeafPreimage aᵢ)))`), agree on that atom's Element STRUCTURE: equal tag, equal attrs, equal
+children — not merely equal opaque leaf bytes. Without this, the wide commit binds bytes; WITH it, it
+binds the DOM structure the author authored.
 
-The composition, each step reused not re-invented:
-  * `root_binds_get` (Heap.lean, PROVEN) — equal substrate root ⟹ the leaf VALUE at `(COLL_ATOMS,
-    key)` agrees: `hash (atomLeafPreimage a₁) = hash (atomLeafPreimage a₂)`;
-  * `hCR` (the SAME `Poseidon2SpongeCR` carrier) — equal digest ⟹ equal preimage;
+The composition, each step reused not re-invented, RIDING THE WIDE MERKLE (never the sponge):
+  * `opensToMerkle8_functional` (`MapMerkleRoot`, PROVEN — itself `mapRoot8_injective` ∘
+    `perfectRoot8_injective` ∘ `DeployedHeapTree.heapNodeOf8_injective`) — equal 8-felt root ⟹ the
+    opened leaf VALUE at `key` agrees: `hash (atomLeafPreimage a₁) = hash (atomLeafPreimage a₂)`;
+  * `hCR` (the named `Poseidon2SpongeCR hash` leaf-digest carrier) — equal digest ⟹ equal preimage;
   * `atomLeafPreimage_injective` — equal preimage ⟹ equal atom;
-  * `encodeElement_injective` — folded into the atom equality (the Element field), giving the
-    structural conclusion.
-No new commitment scheme: the SOLE crypto step is `root_binds_get`'s carrier, cited. -/
+  * `encodeElement_injective` — folded into the atom equality (the Element field), giving structure.
+The two crypto steps are exactly the two named carriers: the arity-16 chip CR (in `S8`, via
+`opensToMerkle8_functional`) and the leaf-digest `hCR`. -/
 theorem substrate_root_binds_element_structure
-    (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
-    {h₁ h₂ : FeltHeap} (key : ℤ) (a₁ a₂ : AtomModel)
-    (hv₁ : hget hash h₁ COLL_ATOMS key = some (hash (atomLeafPreimage a₁)))
-    (hv₂ : hget hash h₂ COLL_ATOMS key = some (hash (atomLeafPreimage a₂)))
-    (hroot : root hash h₁ = root hash h₂) :
+    (S8 : Heap8Scheme) (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash) (d : Nat)
+    {r : Digest8} (key : ℤ) (a₁ a₂ : AtomModel)
+    (hv₁ : opensToMerkle8 S8 d r key (some (hash (atomLeafPreimage a₁))))
+    (hv₂ : opensToMerkle8 S8 d r key (some (hash (atomLeafPreimage a₂)))) :
     a₁.elem.tag = a₂.elem.tag ∧ a₁.elem.attrs = a₂.elem.attrs
       ∧ a₁.elem.children = a₂.elem.children := by
-  have hbind := root_binds_get hash hCR hroot COLL_ATOMS key
-  rw [hv₁, hv₂] at hbind
+  have hbind := opensToMerkle8_functional S8 d hv₁ hv₂
   have hpre : atomLeafPreimage a₁ = atomLeafPreimage a₂ := hCR _ _ (Option.some.inj hbind)
   have ha : a₁ = a₂ := atomLeafPreimage_injective hpre
   exact ⟨by rw [ha], by rw [ha], by rw [ha]⟩
 
 #assert_axioms substrate_root_binds_element_structure
 
-/-! ## 3. Conflict-as-state soundness on the deployed commit (`substrate.rs::leaf_for_field`).
+/-! ## 3. Conflict-as-state soundness on the WIDE commit (`substrate.rs::leaf_for_field`).
 
 A conflict is two field assignments at the same name — two `COLL_FIELDS` leaves. Each leaf binds
-`name ‖ value ‖ provenance` (`leaf_for_field`). We model that preimage and prove: equal substrate
-root ⟹ both alternatives agree (value AND provenance). This is the recovered
-`docCommit_conflict_binds_both`, but ABOUT `substrate_commit`. -/
+`name ‖ value ‖ provenance` (`leaf_for_field`). We model that preimage and prove: equal WIDE 8-felt
+root ⟹ both alternatives agree (value AND provenance). -/
 
 /-- The commitment's view of one field assignment / conflict alternative
 (`graph.rs::FieldAssign` + name): the field name bytes, the value bytes, and its `(author, patch)`
@@ -362,50 +373,98 @@ theorem fieldLeafPreimage_injective : Function.Injective fieldLeafPreimage := by
   rw [h, hf', Option.some.injEq, Prod.mk.injEq] at hf
   exact hf.1.symm
 
-/-- **`substrate_root_binds_conflict_alternatives` — conflict-as-state soundness on the DEPLOYED
-commit.**
+/-- **`substrate_root_binds_conflict_alternatives` — conflict-as-state soundness on the WIDE commit.**
 
-Two documents committed to the SAME `substrate_commit`, each storing a two-alternative conflict as
-the `COLL_FIELDS` leaves at keys `keyA`, `keyB` (`hash (fieldLeafPreimage …)`), agree on BOTH
-alternatives — name, value AND provenance. So a substituted/forged alternative (even one that renders
-identically but is authored by someone else) CANNOT hide under an equal deployed root: it would move
-some `COLL_FIELDS` leaf, refused by collision-resistance.
+Two documents committed to the SAME wide `substrate_commit` (8-felt root `r`), each opening a
+two-alternative conflict as the `COLL_FIELDS` leaves at keys `keyA`, `keyB` (`hash (fieldLeafPreimage
+…)`), agree on BOTH alternatives — name, value AND provenance. So a substituted/forged alternative
+(even one that renders identically but is authored by someone else) CANNOT hide under an equal WIDE
+root: it would move some `COLL_FIELDS` leaf, refused by the arity-16 chip's collision-resistance —
+a forge that survived a lossy lane-0 commit does NOT survive the 8-felt welded commit.
 
-A THIN composition on the already-proven heavy lifting: `root_binds_get` pins each field leaf VALUE;
-the SAME `Poseidon2SpongeCR` carrier peels the digest; `fieldLeafPreimage_injective` reads off the
-alternative. No new commitment scheme. -/
+A THIN composition on the already-proven wide heavy lifting: `opensToMerkle8_functional` pins each
+opened field leaf VALUE; the named `Poseidon2SpongeCR hash` carrier peels the digest;
+`fieldLeafPreimage_injective` reads off the alternative. Never the sponge `root_binds_get`. -/
 theorem substrate_root_binds_conflict_alternatives
-    (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
-    {h₁ h₂ : FeltHeap} (keyA keyB : ℤ) (altA altB altA' altB' : FieldAssignModel)
-    (hA₁ : hget hash h₁ COLL_FIELDS keyA = some (hash (fieldLeafPreimage altA)))
-    (hB₁ : hget hash h₁ COLL_FIELDS keyB = some (hash (fieldLeafPreimage altB)))
-    (hA₂ : hget hash h₂ COLL_FIELDS keyA = some (hash (fieldLeafPreimage altA')))
-    (hB₂ : hget hash h₂ COLL_FIELDS keyB = some (hash (fieldLeafPreimage altB')))
-    (hroot : root hash h₁ = root hash h₂) :
+    (S8 : Heap8Scheme) (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash) (d : Nat)
+    {r : Digest8} (keyA keyB : ℤ) (altA altB altA' altB' : FieldAssignModel)
+    (hA₁ : opensToMerkle8 S8 d r keyA (some (hash (fieldLeafPreimage altA))))
+    (hB₁ : opensToMerkle8 S8 d r keyB (some (hash (fieldLeafPreimage altB))))
+    (hA₂ : opensToMerkle8 S8 d r keyA (some (hash (fieldLeafPreimage altA'))))
+    (hB₂ : opensToMerkle8 S8 d r keyB (some (hash (fieldLeafPreimage altB')))) :
     altA = altA' ∧ altB = altB' := by
-  have hbindA := root_binds_get hash hCR hroot COLL_FIELDS keyA
-  have hbindB := root_binds_get hash hCR hroot COLL_FIELDS keyB
-  rw [hA₁, hA₂] at hbindA
-  rw [hB₁, hB₂] at hbindB
+  have hbindA := opensToMerkle8_functional S8 d hA₁ hA₂
+  have hbindB := opensToMerkle8_functional S8 d hB₁ hB₂
   exact ⟨fieldLeafPreimage_injective (hCR _ _ (Option.some.inj hbindA)),
          fieldLeafPreimage_injective (hCR _ _ (Option.some.inj hbindB))⟩
 
 #assert_axioms fieldLeafPreimage_injective
 #assert_axioms substrate_root_binds_conflict_alternatives
 
-/-! ## 4. NON-VACUITY — a forged Element and a forged conflict alternative each MOVE the deployed root.
+/-! ## 4. NON-VACUITY over the WIDE root — the GENTIAN pair (`heap_root_gentian_weld.rs`): two
+GENUINELY-DIFFERENT heaps that COLLIDE on lane 0 but SEPARATE at the full 8-felt root.
 
-Witnesses over the computable reference sponge `Dregg2.Substrate.Heap.refSponge` (the same Horner-tag
-toy the Heap non-vacuity guards use). Each leaf VALUE is `refSponge preimage` — the model's digest —
-stored at its canonical `(collection_id, key)`; the root is `Heap.root refSponge`. A tampered Element
-or a forged conflict author provably MOVES that root: the binding theorems above are non-vacuous. -/
+The whole point of the re-home: the sponge / lane-0 projection could NOT distinguish two heaps whose
+lone entry is keyed differently but whose ~2^31 lane-0 root coincides (the GENTIAN birthday pair
+`COLLIDE_SALT_A/B`). The WIDE 8-felt leaf digest DOES. We reconstruct that shape over a computable
+reference 8-output chip whose lane 0 is a lossy projection (`% 5`, standing in for the deployed
+~2^31 limb) and whose completion lanes carry the full sponge — so lane 0 can collide while the full
+`Digest8` separates. -/
 
-/-- Store one atom at `(COLL_ATOMS, 0)`, its leaf value the digest of its preimage. -/
-def demoAtomHeap (a : AtomModel) : FeltHeap :=
-  hset refSponge [] COLL_ATOMS 0 (refSponge (atomLeafPreimage a))
-/-- Store one field alternative at `(COLL_FIELDS, 0)`. -/
-def demoFieldHeap (f : FieldAssignModel) : FeltHeap :=
-  hset refSponge [] COLL_FIELDS 0 (refSponge (fieldLeafPreimage f))
+/-- The reference Horner sponge (computable; NOT real crypto — the deployment carrier is the arity-16
+Poseidon2 chip behind `Heap8Scheme.chip8CR`). Local to the demo; the theorems above never touch it. -/
+def demoSponge (xs : List ℤ) : ℤ := xs.foldl (fun acc x => acc * 1000003 + x) (xs.length : ℤ)
+
+/-- A reference 8-output chip: lane 0 is the LOSSY projection (`% 5`, the toy stand-in for the
+deployed lane-0 ~2^31 limb), lanes 1..7 carry the FULL sponge. So two inputs congruent on lane 0 can
+still separate on the completion lanes — the exact GENTIAN shape. -/
+def refChip8 (xs : List ℤ) : Digest8 := fun i => if i.val = 0 then demoSponge xs % 5 else demoSponge xs
+
+/-- The wide 8-felt leaf digest of a heap entry `(addr, value)` over the reference chip (the demo twin
+of `DeployedHeapTree.heapLeafDigest8`; at depth 0 the perfect-tree root IS this single leaf digest). -/
+def demoLeaf8 (e : ℤ × ℤ) : Digest8 := refChip8 [e.1, e.2]
+
+/-- The pinned lane-0-colliding pair (models `heap_root_gentian_weld.rs`'s `COLLIDE_SALT_A/B`): the
+lone heap entry maps the SAME value `42` at GENUINELY-DIFFERENT addresses `1` vs `6`. -/
+def entryA : ℤ × ℤ := (1, 42)
+def entryB : ℤ × ℤ := (6, 42)
+
+-- The two heaps are GENUINELY different states (the entry sits at a different address):
+#guard decide (entryA ≠ entryB)
+-- LANE 0 COLLIDES — a verifier pinning only the lane-0 (~2^31) projection cannot tell them apart
+-- (the 31-bit hole the sponge / lane-0 commit leaves open):
+#guard demoLeaf8 entryA 0 == demoLeaf8 entryB 0
+-- The FULL 8-felt root SEPARATES them — the completion lanes carry what lane 0 misses (the GENTIAN
+-- close: the wide root binds the opened (addr, value) at full width):
+#guard demoLeaf8 entryA 1 != demoLeaf8 entryB 1
+
+/-- **`wideRoot_separates_lane0_collision`** — the wide-root non-vacuity, as a THEOREM (not merely a
+`#guard`): the GENTIAN pair is two genuinely-different heaps (`entryA ≠ entryB`) whose lane-0
+projections COLLIDE yet whose full 8-felt leaf digests are UNEQUAL. So the 8-felt root DISTINGUISHES
+what the lossy lane-0 / sponge projection could not — the `substrate_root_binds_*` hypotheses
+("equal 8-felt root") genuinely constrain the heap, and a lane-0-only commit would not have. -/
+theorem wideRoot_separates_lane0_collision :
+    entryA ≠ entryB
+      ∧ demoLeaf8 entryA 0 = demoLeaf8 entryB 0
+      ∧ demoLeaf8 entryA ≠ demoLeaf8 entryB := by
+  refine ⟨by decide, by decide, ?_⟩
+  intro h
+  have h1 := congrFun h 1
+  revert h1
+  decide
+
+/-! ### The forged Element / forged conflict alternative each MOVE the WIDE leaf digest.
+
+The stored heap VALUE at a key is the `leaf_for_atom` / `leaf_for_field` DIGEST (`demoSponge` of the
+canonical preimage); the wide heap entry is `(addr, storedValue)`, whose wide leaf digest is
+`demoLeaf8`. A tampered Element or a forged conflict author changes the preimage
+(`*_injective` above), hence the stored digest, hence the WIDE leaf digest — so by
+`substrate_root_binds_*` it cannot keep the published 8-felt root. -/
+
+/-- The stored heap value for an atom leaf: its `leaf_for_atom` digest. -/
+def atomStored (a : AtomModel) : ℤ := demoSponge (atomLeafPreimage a)
+/-- The stored heap value for a field leaf: its `leaf_for_field` digest. -/
+def fieldStored (f : FieldAssignModel) : ℤ := demoSponge (fieldLeafPreimage f)
 
 -- An honest Element `<p>` and three FORGERIES of it (retagged / attr-injected / child-injected).
 def elemHonest : ElementModel := ⟨[112], [], []⟩                 -- tag "p"
@@ -426,11 +485,12 @@ def atomForgedChild : AtomModel := ⟨1, elemForgedChild, 0, 7, 100⟩
 #guard encodeElement elemHonest != encodeElement elemForgedAttr
 #guard encodeElement elemHonest != encodeElement elemForgedChild
 
--- **Witness FALSE (anti-forge):** each Element forgery MOVES the deployed (substrate) root — the
--- published `heap_root` cannot be kept while retagging, adding an attr, or adding a child:
-#guard root refSponge (demoAtomHeap atomForgedTag) != root refSponge (demoAtomHeap atomHonest)
-#guard root refSponge (demoAtomHeap atomForgedAttr) != root refSponge (demoAtomHeap atomHonest)
-#guard root refSponge (demoAtomHeap atomForgedChild) != root refSponge (demoAtomHeap atomHonest)
+-- **Witness FALSE (anti-forge):** each Element forgery MOVES the WIDE leaf digest (completion lane 1
+-- of `refChip8 [addr, leaf_for_atom digest]`) — the published 8-felt `heap_root` cannot be kept while
+-- retagging, adding an attr, or adding a child:
+#guard demoLeaf8 (0, atomStored atomForgedTag) 1 != demoLeaf8 (0, atomStored atomHonest) 1
+#guard demoLeaf8 (0, atomStored atomForgedAttr) 1 != demoLeaf8 (0, atomStored atomHonest) 1
+#guard demoLeaf8 (0, atomStored atomForgedChild) 1 != demoLeaf8 (0, atomStored atomHonest) 1
 
 -- A genuine conflict alternative and a FORGED one: SAME name+value, FORGED author (13 ≠ 9).
 def altHonest : FieldAssignModel := ⟨[116], [66], 9, 200⟩        -- name "t", value "B", author 9
@@ -440,8 +500,10 @@ def altForged : FieldAssignModel := ⟨[116], [66], 13, 200⟩       -- same val
 #guard altHonest.value == altForged.value
 #guard decide (altHonest ≠ altForged)
 #guard fieldLeafPreimage altHonest != fieldLeafPreimage altForged
--- **Witness FALSE (anti-forge):** the forged author MOVES the deployed root — a conflict cannot hide
--- a forged alternative under an equal `substrate_commit`:
-#guard root refSponge (demoFieldHeap altForged) != root refSponge (demoFieldHeap altHonest)
+-- **Witness FALSE (anti-forge):** the forged author MOVES the WIDE leaf digest — a conflict cannot
+-- hide a forged alternative under an equal 8-felt `substrate_commit`:
+#guard demoLeaf8 (0, fieldStored altForged) 1 != demoLeaf8 (0, fieldStored altHonest) 1
+
+#assert_axioms wideRoot_separates_lane0_collision
 
 end Dregg2.Deos.DocSubstrateSound
