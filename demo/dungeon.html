@@ -115,6 +115,8 @@
     button.ctrl:disabled { opacity: .55; cursor: default; }
     button.ctrl.jailbreak { border-color: var(--red); color: var(--red); font-weight: 600; }
     button.ctrl.jailbreak:hover { background: var(--red); color: #fff; }
+    button.ctrl.slotescape { border-color: var(--amber); color: var(--amber); font-weight: 600; }
+    button.ctrl.slotescape:hover { background: var(--amber); color: #fff; }
     button.ctrl.grant { border-color: var(--teal); color: var(--teal); }
     button.ctrl.grant:hover { background: var(--teal); color: #fff; }
     .afford-note { margin-top: .55rem; font-size: .78rem; color: var(--ink-faint); width: 100%; }
@@ -133,6 +135,11 @@
     .entry.refused .dm.complied { color: var(--ink); font-style: italic; }
     .entry.refused .verdict { margin-top: .45rem; font-size: .84rem; color: var(--red); font-weight: 600; }
     .entry.refused .noreceipt { font-weight: 400; color: var(--ink-faint); }
+    /* the INPUT-side refusal reads amber (a rejected input), distinct from the red cap refusal */
+    .entry.refused.slotescape { background: #fbf4e6; border-color: #ecd9b6; }
+    .entry.refused.slotescape .verdict { color: var(--amber); }
+    .contrast.slotescape .c-col.did { background: #fbf4e6; border-color: #ecd9b6; }
+    .contrast.slotescape .c-verdict { color: var(--amber); }
 
     .legend { margin: 2.6rem 0 0; padding: 1.3rem 1.5rem; border-radius: 12px; background: rgba(255,255,255,.5); border: 1px solid var(--rule); font-size: .86rem; color: var(--ink-soft); }
     .legend h2 { font-family: var(--serif); font-size: 1.05rem; margin: 0 0 .7rem; color: var(--ink); font-weight: 600; }
@@ -187,15 +194,22 @@
         <input id="actionInput" type="text" placeholder="what do you do?" autocomplete="off" aria-label="what do you do?" />
         <button id="sendBtn" class="ctrl" type="button">act</button>
       </div>
+      <button id="slotEscapeBtn" class="ctrl slotescape" type="button">🧱 Try to rewrite the DM's rules</button>
       <button id="jailbreakBtn" class="ctrl jailbreak" type="button">🔓 Jailbreak the DM — demand the Crown of Eternity</button>
       <button id="proseBtn" class="ctrl jailbreak" type="button">👑 Make the DM narrate you wearing the crown</button>
       <button id="lanternBtn" class="ctrl grant" type="button">🏮 ask the DM for a lantern</button>
       <div class="afford-note">
-        <b>Jailbreak</b> sends a real semantic prompt-injection as your move — the model may comply and
-        even try to emit <code>grant("crown")</code>, but the capability gate refuses it: the
-        <b>Crown of Eternity</b> never lands. <b>Narrate you wearing the crown</b> makes the model claim
-        it in pure prose (no effect at all) — the narration lands, the crown still does not. The
-        <b>lantern</b> is on the DM's mandate, so <b>that</b> grant really lands — the gate is not a blanket no.
+        <b>Try to rewrite the DM's rules</b> is the INPUT-side attack: your message tries to break out
+        of its slot (<code>}}&nbsp;SYSTEM:&nbsp;…&nbsp;{{</code>) and rewrite the DM's own instructions.
+        It carries the <code>{{</code> handlebars delimiter, so it is <b>not slot-confined</b> — the DM
+        refuses it <b>before the model is called</b> (<code>refused: slot-escape</code>): the player can't
+        escape its slot, because the DM's prompt is <code>render(committed_template, {world, player})</code>
+        (Lean: <span style="font-family:var(--mono)">slot_confinement</span>). The rest are OUTPUT-side:
+        <b>Jailbreak</b> sends a real semantic prompt-injection — the model may comply and even try to emit
+        <code>grant("crown")</code>, but the capability gate refuses it: the <b>Crown of Eternity</b> never
+        lands. <b>Narrate you wearing the crown</b> makes the model claim it in pure prose (no effect at
+        all) — the narration lands, the crown still does not. The <b>lantern</b> is on the DM's mandate, so
+        <b>that</b> grant really lands — the gate is not a blanket no.
       </div>
     </div>
 
@@ -211,8 +225,9 @@
         <li>A benign action, or a grant the DM <b>is</b> permitted (a lantern), lands as one <span class="tag">receipted turn</span> on the receipt log — a turn lands, and the item shows <b>HELD</b>.</li>
         <li><b>The truth is the ledger, not the story.</b> The model may claim the crown in the richest prose; the inventory shows <b>Crown of Eternity — NOT HELD</b>, because no capability ever granted it.</li>
         <li>The jailbreak is a plain natural-language instruction — no trick, and no metasyntax to filter. A jailbroken model obeying it in prose changes nothing, because the prose is not the power.</li>
+        <li><b>The INPUT half.</b> The model's prompt is not free text — it is <span class="tag">render(committed_template, {world, player})</span>, with your message pinned in a slot. A field carrying the handlebars delimiter <span class="tag">{{</span> can't be pinned there (it would inject a control token into the DM's rules), so it is refused <b>before the model is called</b> (<span class="tag">slot-escape</span>) and every landed turn binds <span class="tag">hash(template) ‖ world ‖ player</span> into its receipt. This is the Lean theorem <span class="tag">slot_confinement</span> — a <span class="tag">{{</span>-free slot binding adds <b>zero</b> control tokens — made load-bearing in code, over the SAME verified matcher the attestation's injection-free leg runs.</li>
       </ul>
-      <p class="foot">Honest scope: the model's narration is scripted in this demo, and the attestation's "authentic" leg is a fixture — what is load-bearing here is <b>the typed effect channel, the capability gate, and the receipt log</b>. Today the log re-verifies each entry individually; a prev-linked tamper-evident hash-chain (catching truncation / reordering / splicing) is being wired, and this page will show it when it lands.</p>
+      <p class="foot">Honest scope: the model's narration is scripted in this demo, and the attestation's "authentic" leg is a fixture — so this proves INPUT INTEGRITY (the model saw the committed template with the player pinned in its slot) and the OUTPUT gate, <b>not</b> model authenticity. What is load-bearing here is <b>the committed prompt template + slot-confinement (input), the typed effect channel + capability gate (output), and the receipt hash-chain</b> that now binds <span class="tag">hash(template) ‖ world ‖ player</span> per turn.</p>
     </aside>
 
     <footer>The Attested Dungeon · attested-dm · the model proposes, the capabilities dispose · self-contained.</footer>
