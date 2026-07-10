@@ -1200,25 +1200,46 @@ async fn run_node(
     // program-bearing with the lease slots sealed (RENT/PERIOD/PROVIDER) and a
     // funded balance — and program install is not a wire effect, so no HTTP
     // client can create one. Dev-gated twice (`--enable-faucet` AND
-    // `DREGG_SEED_DEMO_LEASE=1`); idempotent (the lease cell id derives from the
-    // operator key + the native token domain, insert-if-absent on every boot).
-    // The balance IS the prepaid budget the provider meters against; rent 1 per
-    // 60-block period, open-ended, provider = the node's own operator cell.
+    // `DREGG_SEED_DEMO_LEASE=1`); insert-if-absent on every boot.
+    //
+    // FEDERATION-WIDE by construction: both the lease cell and its provider
+    // (rent beneficiary) derive from the FEDERATION_ID, not from this node's
+    // operator key. Every validator in the federation therefore seeds the
+    // IDENTICAL pair — same ids, same program, same sealed slots — so a
+    // settlement turn ordered by consensus applies on every replica. (Keying
+    // them off the per-node operator instead gave each validator its own private
+    // lease: consensus ran, but the workload was node-local state that the other
+    // replicas had never heard of.) The balance IS the prepaid budget the
+    // provider meters against; rent 1 per 60-block period, open-ended.
     if enable_faucet && std::env::var("DREGG_SEED_DEMO_LEASE").as_deref() == Ok("1") {
         use starbridge_execution_lease as lease_app;
         let mut s = node_state.write().await;
         let operator_pubkey = s.cclerk.public_key().0;
         let native = [0u8; 32];
-        let lease_id = dregg_cell::CellId::derive_raw(&operator_pubkey, &native);
+        let federation_id = s.federation_id;
+        // Federation-wide pseudo-owners: nobody signs as these, they are demo
+        // cells whose identity must agree across replicas.
+        let lease_pubkey = blake3::derive_key("dregg-demo-lease-v1", &federation_id);
+        let provider_pubkey = blake3::derive_key("dregg-demo-lease-provider-v1", &federation_id);
+        let lease_id = dregg_cell::CellId::derive_raw(&lease_pubkey, &native);
+        let provider_cell = dregg_cell::CellId::derive_raw(&provider_pubkey, &native);
         if s.ledger.get(&lease_id).is_none() {
             let operator_cell = dregg_cell::CellId::derive_raw(
                 &operator_pubkey,
                 blake3::hash(b"default").as_bytes(),
             );
-            let mut cell = dregg_cell::Cell::with_balance(operator_pubkey, native, 10_000);
+            // The rent beneficiary — seeded empty, identical on every replica, so
+            // the metered settlement Transfer credits a cell all replicas hold.
+            if s.ledger.get(&provider_cell).is_none() {
+                let pcell = dregg_cell::Cell::with_balance(provider_pubkey, native, 0);
+                if let Err(e) = s.ledger.insert_cell(pcell) {
+                    warn!(error = %e, "demo lease provider cell insert failed");
+                }
+            }
+            let mut cell = dregg_cell::Cell::with_balance(lease_pubkey, native, 10_000);
             cell.program = lease_app::lease_cell_program();
             let terms = lease_app::LeaseTerms::new(
-                operator_cell,
+                provider_cell,
                 lease_id,
                 dregg_cell::CellId(native),
                 1,
@@ -1241,9 +1262,9 @@ async fn run_node(
                         );
                         info!(
                             lease = %dregg_types::hex_encode(&id.0),
-                            provider = %dregg_types::hex_encode(&operator_cell.0),
+                            provider = %dregg_types::hex_encode(&provider_cell.0),
                             budget = 10_000,
-                            "seeded demo execution-lease (funded, operator-owned, operator-reachable)"
+                            "seeded demo execution-lease (funded, federation-wide, operator-reachable)"
                         );
                     }
                     Err(e) => warn!(error = %e, "demo execution-lease insert failed"),
