@@ -152,3 +152,24 @@ printing "✓ nothing was rewritten" over a truncatable log.
 - THE THESIS worth the whole evening (ember's): natural language has no metasyntax, so injection is not a lexical
   problem; give the model ONE typed, capability-gated channel to the world. Prose is not power. The ledger is the
   truth — SO MAKE THE LEDGER ACTUALLY TRUE (the chain lane).
+
+
+## ✓ APPLIED THE LESSON TO MY OWN SHIPPED CLAIM: The Commons "nothing was rewritten" IS EARNED
+Checked (not assumed) what spween-dregg's verify actually decides — it's the real thing, unlike attested-dm's:
+- verify_chain_linkage: `r.pre_state_hash == receipts[i-1].post_state_hash` (a REAL prev-link) + distinct/non-zero
+  turn_hash (no replay). Catches SPLICE / REORDER / drop-linkage.
+- verify_by_replay: RE-EXECUTES the playthrough from a fresh genesis Driver — catches an ALTERED step (divergence).
+- StoryWorld::verify() runs both against a fresh identically-seeded world. So "nothing was rewritten" = earned
+  (rewriting/altering IS caught). Only caveat: bare TRUNCATION needs a known head — universal, and not "rewriting".
+The contrast is the point: the humble spween CYOA has a REAL chain; the "on-chain attested DM" had a Vec. The
+chain lane brings attested-dm up to spween-dregg's bar.
+
+## DUNGEON PAGE (a7f8d89a6d5a736e0) — verified by driving, honest, HELD for real-service integration
+node demo/run-dungeon.mjs (stand-in): 4 cases pass — benign lands · jailbreak → grant(crown) → REFUSED overcap,
+receipts UNCHANGED, crown NOT HELD · prose-claims-crown (null effect) → narration lands, crown STILL NOT HELD ·
+lantern → HELD. dungeon.html ships ZERO retracted claims (grep clean); rail labeled "receipt log"; a #chainHook
+awaits the honest chain badge. Serves at /dungeon; proxies the native service via DM_PORT=8790. narratorKind
+honest ("scripted" on stand-in, "model:gemma2:2b" on the real service). The Commons (run.mjs) STILL passes.
+HOLDING the commit: the earned demo is the page against the REAL service + gemma2 (the stand-in shows a scripted
+DM). Harvest the service lane (a18375169811f20e3) + chain lane (a8f18ed8023452127), integrate, DRIVE against real
+gemma2 (capture the model's real jailbroken prose vs the ledger), commit the coherent whole.
