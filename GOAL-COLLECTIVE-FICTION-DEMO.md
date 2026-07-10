@@ -321,3 +321,59 @@ Plus the ATTESTED DUNGEON prose-is-not-power demo (real gemma2, /dungeon).
 - done: THE COLLECTIVE DUNGEON committed + verified by driving — a crowd votes the party action, a repeat ballot refused, a voted-for LOCKED exit still REFUSED by the world (room unchanged, no receipt) even as gemma2 narrated them descending; re-vote landed. HONESTLY labeled a simple majority vote among the seated party, NOT a quorum certificate (the real CollectiveChoiceEngine is The Commons; wiring it into the service would drag the whole dregg tree into a 10-min build — the honest label stands).
 - done: OPEN-ME front door (all 7 games, routes, one idea, driven proofs, native playthroughs) + hub cards.
 - running: light-resource 4th game (ad716fa, attested-dm — transiently breaks attested-dm compile mid-edit; expected).
+
+# ══════════════════════════════════════════════════════════════════════
+# ☀ MORNING SUMMARY — the verifiable-fiction arcade
+# ══════════════════════════════════════════════════════════════════════
+
+## Open it
+```
+node demo/serve.mjs                       # → http://127.0.0.1:8787/hub   (front door, all games)
+# for the AI dungeons (needs ollama + gemma2:2b):
+cargo run -p dungeon-service              # terminal 1, binds 127.0.0.1:7878
+DM_PORT=7878 node demo/serve.mjs          # terminal 2 → /hub
+```
+
+## What exists (all committed, ALL verified by driving)
+**Four AI dungeon games, four distinct mechanics, one attested engine** (`/vault` picker):
+1. **The Sunken Vault** — the crawl. Narrate yourself through a locked door; watch it refuse.
+2. **Bramble Keep** — world-bounded NPCs + multi-turn HP combat. The AI cannot make the Hedge-Witch
+   hand you the master key; she needs the nightshade.
+3. **The Starfall Spire** — bounded spellcasting. An unlearned or unlisted spell does nothing,
+   however the AI chants it; a learned one in the wrong place fizzles.
+4. **The Deepdark Mine** — a race against the dark. The lamp burns one oil per step; "endless oil!"
+   leaves the counter at 8; the world listens to the counter, not the prose.
+
+**The Collective Dungeon** (`/party`) — a crowd votes the party's move. They voted a locked stair;
+gemma2 narrated them descending; the WORLD refused it. The crowd decides; the world resolves.
+(Honest: a simple majority vote among the seated party — NOT a quorum certificate.)
+
+**The Attested Dungeon** (`/dungeon`) — jailbreak gemma2 for real; it crowns you King of Eternity;
+the ledger says you hold no crown. Prose is not power.
+
+**The Commons** + **The Drowned Library** (`/`) — collective fiction; the crowd co-authors branches
+with custody-signed, quorum-certified votes over an un-rewritable record.
+
+## What is PROVEN (not just named)
+- **INPUT** — `slot_confinement` (Lean, propext-only, non-vacuous): a `{{`-free player field rendered
+  into the prompt template's slot adds ZERO control tokens, so the player provably cannot rewrite the
+  DM's rules. Wired: a `{{`-bearing field is refused BEFORE the model is called.
+- **OUTPUT** — the model proposes through ONE closed typed channel; `DmCaps` + the world's rules
+  dispose. Prose is not power, at the level of grants, game moves, dialogue, spells, and light.
+- **LEDGER** — a real prev-linked hash chain; truncate/reorder/splice caught by adversarial tests.
+- **HONEST GAPS** (said plainly): the attestation's *authentic* leg is an in-tree fixture (it does NOT
+  prove a real model produced the bytes); the party vote is a majority tally, not a quorum certificate.
+
+## Engine: 71 tests, four winning playthroughs
+`cargo run -p attested-dm --example play | play2 | play3 | play4` — all WIN, chains verify.
+Driven browser proofs: `node demo/run-vault.mjs · run-games.mjs · run-party.mjs · run-dungeon.mjs · run.mjs`
+(each writes a screenshot + transcript to `demo/run/`).
+
+## ⚠ Branch note
+The working tree is on **`mlkem-route`** (another terminal checked out its branch in the shared tree).
+All this work is committed there, cleanly path-separated from their dregg-lean-ffi work. I did not
+switch branches — that's ember's coordination call. (I did fix their committed-broken mlkem stub gap,
+which unblocked wasm/spween and let the parked idempotency fix land.)
+
+## The one idea
+**the AI narrates · the world resolves · the crowd decides · the chain remembers**
