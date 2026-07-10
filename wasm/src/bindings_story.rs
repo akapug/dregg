@@ -88,6 +88,13 @@ pub struct StoryWorld {
 /// (`Driver::advance`'s argument) — the option position is the ballot slot; the
 /// `choice_index` is the story edge.
 struct BranchPoll {
+    /// The passage this poll was opened over — makes [`StoryWorld::open_branch_poll`]
+    /// IDEMPOTENT: a re-open at the SAME passage returns the LIVE poll (preserving the
+    /// ballots already cast) instead of re-minting the engine (which would silently drop
+    /// the round's votes). The `<dregg-story collective>` element re-reads `openBranch` on
+    /// every refresh, so a non-idempotent open would reset the tally to zero on each vote.
+    /// A NEW passage (after a close+advance) falls through to a fresh poll.
+    passage: String,
     /// The live federation-grade engine (privacy-voting ballots + monotone tallies +
     /// quorum `AffineLe`). Each [`StoryWorld::cast_vote`] is a real ballot turn on it; the
     /// winner is certified by its quorum gate at [`StoryWorld::close_branch_poll`].
@@ -294,6 +301,20 @@ impl StoryWorld {
         let Some(passage) = self.driver.current_passage() else {
             return json!({ "error": "no current passage to poll" }).to_string();
         };
+        // IDEMPOTENT re-open: if a poll is already live for THIS passage, return it
+        // (options + round) with its ballots intact — re-minting the engine would drop the
+        // round's votes, and the element re-reads `openBranch` on every refresh.
+        if let Some(existing) = self.poll.as_ref() {
+            if existing.passage == passage {
+                let rows: Vec<serde_json::Value> = existing
+                    .options
+                    .iter()
+                    .map(|o| json!({ "choiceIndex": o.choice_index, "label": o.label }))
+                    .collect();
+                return json!({ "passage": passage, "round": self.round, "options": rows })
+                    .to_string();
+            }
+        }
         // Only AVAILABLE choices go on the ballot (the runtime's gate is authoritative);
         // an unavailable/gated choice is never a votable option (fail-closed at the ballot).
         let options: Vec<VoteOption> = self
@@ -324,7 +345,11 @@ impl StoryWorld {
             .iter()
             .map(|o| json!({ "choiceIndex": o.choice_index, "label": o.label }))
             .collect();
-        self.poll = Some(BranchPoll { engine, options });
+        self.poll = Some(BranchPoll {
+            passage: passage.clone(),
+            engine,
+            options,
+        });
         json!({ "passage": passage, "round": round, "options": rows }).to_string()
     }
 
@@ -773,6 +798,52 @@ A dark forest looms ahead.
         assert!(
             story.has_open_poll(),
             "an unresolved (no-vote) poll stays open"
+        );
+    }
+
+    /// IDEMPOTENT re-open — the `<dregg-story collective>` element re-reads `openBranch` on
+    /// every refresh, so opening a poll ALREADY live for the current passage must return the
+    /// live poll with its ballots intact, NOT re-mint the engine (which would drop the round's
+    /// votes and reset the tally to zero). This is the seam the demo adapter used to work
+    /// around; now the shipped wasm is idempotent, so any real consumer is correct.
+    #[test]
+    fn reopening_a_branch_poll_preserves_ballots() {
+        let mut story = StoryWorld::new(CROSSROADS.to_string()).expect("compile");
+        story.set_electorate("alice, bob, carol".to_string());
+
+        let _ = story.open_branch_poll();
+        let cast: serde_json::Value =
+            serde_json::from_str(&story.cast_vote("alice".to_string(), 0)).expect("JSON");
+        assert_eq!(cast["ok"], serde_json::json!(true), "alice votes option 0");
+
+        // RE-OPEN at the same passage (what the element does on refresh).
+        let reopened: serde_json::Value =
+            serde_json::from_str(&story.open_branch_poll()).expect("JSON");
+        assert!(
+            reopened.get("error").is_none(),
+            "re-open at the same passage succeeds"
+        );
+        assert_eq!(
+            reopened["round"],
+            serde_json::json!(1),
+            "still round 1 — NOT re-minted"
+        );
+
+        let tally: serde_json::Value = serde_json::from_str(&story.branch_tally()).expect("JSON");
+        assert_eq!(
+            tally.as_array().unwrap()[0]["count"].as_u64().unwrap(),
+            1,
+            "alice's ballot SURVIVED the re-open (idempotent) — not reset to zero"
+        );
+
+        // bob votes the SAME live poll; close certifies both preserved ballots.
+        let _ = story.cast_vote("bob".to_string(), 0);
+        let closed: serde_json::Value =
+            serde_json::from_str(&story.close_branch_poll()).expect("JSON");
+        assert_eq!(
+            closed["ok"],
+            serde_json::json!(true),
+            "closes with 2 preserved ballots"
         );
     }
 
