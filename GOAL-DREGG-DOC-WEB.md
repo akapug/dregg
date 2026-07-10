@@ -277,3 +277,18 @@ Per-root verdict (verified, file:line in the audit):
 BOTTOM LINE: off-chain widening = heap_root + fields_root + cap_root (systematic "we widened in-circuit but the
 Rust off-chain ghost never got flipped"). Exactly ember's "we widened so much, how did this slip" — the [u8;32]
 scalar type let all three keep the lane-0 default silently.
+
+## THE ABSTRACTION (ember: "is there a newtype") — YES: Faithful8, retype the roots to it
+Root cause of the whack-a-mole: cell.state.{heap,fields,cap}_root are raw `[u8;32]` — accepts the lane-0 packing
+(babybear_to_bytes32, 4 bytes+28 zero) OR the wide (digest8_to_bytes32, 8 felts) SILENTLY. The preexisting newtype
+EXISTS: `circuit/src/faithful8.rs:83 pub struct Faithful8([BabyBear;8])` — a real tuple-struct over 8 felts, used
+everywhere for wide roots, and compute_canonical_{heap,fields,capability}_root_8 ALREADY RETURN Faithful8. No
+preexisting ROOT newtype (no Digest8/WideRoot in the tree) — that's the gap.
+ARCHITECTURAL FIX: retype cell.state.{heap,fields,cap}_root : [u8;32] → Faithful8. Then lane-0 is UNTYPEABLE
+(the field IS 8 felts); assignment is `= compute_canonical_*_root_8(...)` (already Faithful8); serialize via
+digest8_to_bytes32 ONLY at the commitment-hash boundary. Future roots typed Faithful8 can't regress — "did we
+widen it?" becomes "does it compile."
+SEQUENCING (decisive): value fix FIRST (running agent, closes the soundness hole now — same files), THEN the
+Faithful8 retype as the architectural pass (compiler-driven, on already-wide values → pure hardening, no soundness
+risk). Not parallel (same files). value-then-type. This ends the hand-widening.
+- done-log: identified the abstraction (Faithful8 preexists); newtype-retype queued as the hardening pass after the value fix.
