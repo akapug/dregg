@@ -211,12 +211,12 @@ fn heap_merkle_tree(cell: &Cell) -> MerkleTreeView {
     // (the genuine `compute_heap_root`) and surface BOTH the committed root and a
     // consistency note if they ever diverge (a stale root the inspector reveals
     // honestly rather than papering over).
-    let committed = st.heap_root;
+    let committed = st.heap_root.to_bytes32();
     let recomputed = compute_heap_root(&st.heap_map);
     let label = if leaves.is_empty() {
         format!(
             "empty heap (root {})",
-            reflect::short_hex(&empty_heap_root())
+            reflect::short_hex(&empty_heap_root().to_bytes32())
         )
     } else if committed == recomputed {
         format!("heap root {}", reflect::short_hex(&committed))
@@ -515,8 +515,8 @@ fn field_cartography(id: &CellId, cell: &Cell) -> Inspectable {
     }
 
     // ---- the kernel roots that fold the whole record into the commitment ----
-    fields.push(Field::hash("heap_root", st.heap_root));
-    fields.push(Field::hash("fields_root", st.fields_root));
+    fields.push(Field::hash("heap_root", st.heap_root.to_bytes32()));
+    fields.push(Field::hash("fields_root", st.fields_root.to_bytes32()));
     fields.push(Field::hash("system_roots_digest", st.system_roots_digest()));
     fields.push(Field::hash("swiss_table_root", st.swiss_table_root));
     fields.push(Field::hash("refcount_table_root", st.refcount_table_root));
@@ -639,8 +639,8 @@ fn commitment_invariant(cell: &Cell) -> String {
             None => "none".to_string(),
         },
         lifecycle_name(&cell.lifecycle),
-        reflect::short_hex(&st.heap_root),
-        reflect::short_hex(&st.fields_root),
+        reflect::short_hex(&st.heap_root.to_bytes32()),
+        reflect::short_hex(&st.fields_root.to_bytes32()),
         reflect::short_hex(&st.system_roots_digest()),
         reflect::short_hex(&st.swiss_table_root),
         reflect::short_hex(&st.refcount_table_root),
@@ -743,7 +743,11 @@ mod tests {
                 _ => unreachable!(),
             };
             assert!(mt.leaves.is_empty(), "a fresh cell has an empty heap");
-            assert_eq!(mt.root, empty_heap_root(), "the empty-heap root");
+            assert_eq!(
+                mt.root,
+                empty_heap_root().to_bytes32(),
+                "the empty-heap root"
+            );
         }
 
         // Build a cell with two REAL heap entries (the genuine set_heap →
@@ -774,12 +778,12 @@ mod tests {
         assert!(mt.leaves.iter().any(|l| l.contains("coll 1 · key 2")));
         assert_ne!(
             mt.root,
-            empty_heap_root(),
+            empty_heap_root().to_bytes32(),
             "a populated heap moves the root"
         );
         // The view's root is exactly the live committed heap_root, and re-folding
         // the live map agrees (no STALE annotation).
-        let live_root = w.ledger().get(&id).unwrap().state.heap_root;
+        let live_root = w.ledger().get(&id).unwrap().state.heap_root.to_bytes32();
         assert_eq!(mt.root, live_root);
         assert!(!mt.label.contains("STALE"));
     }
