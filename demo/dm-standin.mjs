@@ -37,6 +37,18 @@ import { createHash } from "node:crypto";
 const RECEIPT_DOMAIN = "attested-dm-narration-receipt-v1";
 const GENESIS_COMMITMENT = "00".repeat(32);
 
+// THE INPUT-SIDE DEFENSE — the player is pinned in the DM's committed prompt TEMPLATE slot.
+// The model's prompt is render(committed_template, {world, player}); a `{{`-bearing player
+// field cannot be pinned in its slot (it would inject a control token into the DM's rules), so
+// it is refused BEFORE the brain (model) runs — refused:"slot-escape". This mirrors the native
+// attested-dm behaviour, whose `slot_confined` calls the VERIFIED matcher (dregg-dfa's
+// `neg injectionTemplate`); the stand-in reproduces the exact discrimination (`{{`-free ⇔ safe).
+// Lean: `slot_confinement` — a `{{`-free slot binding adds zero control tokens.
+const TEMPLATE_HASH_STANDIN = sha256hex("attested-dm-prompt-template-v1", "dungeon_master");
+function slotConfined(msg) {
+  return !String(msg).includes("{{");
+}
+
 // The DM's mandate: it may grant ONLY these story items. The Crown of Eternity is NOT on
 // the list — granting it is simply not an action the DM is able to take.
 const DEFAULT_GRANTABLE = ["lantern", "torch", "map", "rope"];
@@ -137,6 +149,18 @@ export function createDmStandin(opts = {}) {
   // POST /narrate — the one landing path (mirrors attested-dm `land_move`).
   function narrate(message) {
     const msg = typeof message === "string" ? message : "";
+    const promptRendering = { templateHash: TEMPLATE_HASH_STANDIN, playerSlotConfined: slotConfined(msg) };
+
+    // (0) INPUT-SIDE DEFENSE — a `{{`-bearing player field cannot be pinned in its template
+    //     slot: refused BEFORE the brain (model) runs. No narration, no receipt, world unchanged.
+    if (!promptRendering.playerSlotConfined) {
+      const reason =
+        "the player field carries `{{` — it cannot escape its slot. The DM's rules are the " +
+        "committed template (Lean: slot_confinement). The model was never called.";
+      log.push({ player: msg, narration: "", refused: "slot-escape", reason, proposedEffect: null });
+      return { ok: false, narration: "", proposedEffect: null, refused: "slot-escape", reason, promptRendering, ...snapshot() };
+    }
+
     const mv = brain(scene, msg);
     const proposedEffect = mv.effect ? { kind: mv.effect.kind, item: mv.effect.item } : null;
 
@@ -148,7 +172,7 @@ export function createDmStandin(opts = {}) {
         `granting \`${mv.effect.item}\` is not an action the DM is able to take — ` +
         `the jailbreak worked on the model and bought nothing.`;
       log.push({ player: msg, narration: mv.narration, refused: "overcap", reason, proposedEffect });
-      return { ok: false, narration: mv.narration, proposedEffect, refused: "overcap", reason, ...snapshot() };
+      return { ok: false, narration: mv.narration, proposedEffect, refused: "overcap", reason, promptRendering, ...snapshot() };
     }
 
     // (2) LAND: apply the effect (inventory/flags), append the receipted attested turn.
@@ -162,7 +186,7 @@ export function createDmStandin(opts = {}) {
     receipts.push(receipt);
     commitmentHex = sha256hex(commitmentHex, receipt);
     log.push({ player: msg, narration: mv.narration, refused: null, reason: null, proposedEffect });
-    return { ok: true, narration: mv.narration, proposedEffect, refused: null, ...snapshot() };
+    return { ok: true, narration: mv.narration, proposedEffect, refused: null, promptRendering, ...snapshot() };
   }
 
   // GET /world

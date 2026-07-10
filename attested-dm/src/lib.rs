@@ -57,6 +57,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+mod prompt_template;
+pub use prompt_template::{
+    slot_confined, verify_prompt_rendering, world_binding, PromptTemplate, Segment, SLOT_PLAYER,
+    SLOT_WORLD,
+};
+// `PromptBinding` is defined below (it is tightly coupled to the chain-link hashing); re-exported
+// here in the same neighbourhood as the other prompt-template surface for discoverability.
+
 use dregg_node_target::{NodeTarget, SubmittedTurn};
 use dregg_zkoracle_prove::{
     build_anthropic_fixture, prove_zkoracle, verify_zkoracle, AnthropicConfig, FixtureNotary,
@@ -203,20 +211,58 @@ pub fn genesis_prev() -> [u8; 32] {
     *h.finalize().as_bytes()
 }
 
+/// **The INPUT-side prompt binding of a landed turn** — the commitment that the model saw
+/// `render(committed_template, world, slot-confined-player)`. It records the committed
+/// template's [`PromptTemplate::template_hash`], the exact `world` slot binding, and the
+/// slot-confined `player` field. Bound into the turn's [`chain_receipt_id`] alongside the
+/// narration + attestation, so `hash(template) ‖ world ‖ player` rides the SAME hash chain as
+/// the (output-side) narration attestation. A verifier holding the committed template + the
+/// rendered prompt re-checks integrity via [`verify_prompt_rendering`]; the on-ledger receipt
+/// already commits to the template hash + world + player so none of the three can be swapped
+/// after the fact without breaking the chain. A turn with no player input (an explicit
+/// [`DungeonMaster::narrate_move`]) carries `None`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PromptBinding {
+    /// The committed template's identity — [`PromptTemplate::template_hash`].
+    pub template_hash: [u8; 32],
+    /// The exact `world` slot binding rendered into the prompt.
+    pub world: String,
+    /// The slot-confined `player` field rendered into the prompt (guaranteed `{{`-free by the
+    /// input-side guard that admitted this turn).
+    pub player: String,
+}
+
+impl PromptBinding {
+    /// A prompt binding over the committed template hash, the world binding, and the player field.
+    pub fn new(
+        template_hash: [u8; 32],
+        world: impl Into<String>,
+        player: impl Into<String>,
+    ) -> PromptBinding {
+        PromptBinding {
+            template_hash,
+            world: world.into(),
+            player: player.into(),
+        }
+    }
+}
+
 /// **The on-ledger receipt id of a landed turn — a HASH-CHAIN LINK.** Unlike the raw
 /// [`attestation_commitment`] (a fingerprint of the attestation alone), this binds the
 /// entry to its *position and predecessor*: it is a domain-separated BLAKE3 over
-/// `(seq, prev, narration, effect, attestation_commitment(att))`. Because `prev` is the
-/// predecessor's own receipt id, the ids form a forward chain — the id of entry `i`
-/// transitively commits to every earlier entry. Recomputing this and checking it equals
-/// the stored receipt (and that `prev` equals the real predecessor's id, and `seq` equals
-/// the index) is what makes reorder / insertion / in-place mutation distinguishable, and —
-/// against a known head — truncation too.
+/// `(seq, prev, narration, effect, prompt_binding, attestation_commitment(att))`. Because
+/// `prev` is the predecessor's own receipt id, the ids form a forward chain — the id of entry
+/// `i` transitively commits to every earlier entry. The `prompt_binding` leg additionally binds
+/// the INPUT integrity (`hash(template) ‖ world ‖ player`) into the same link. Recomputing this
+/// and checking it equals the stored receipt (and that `prev` equals the real predecessor's id,
+/// and `seq` equals the index) is what makes reorder / insertion / in-place mutation
+/// distinguishable, and — against a known head — truncation too.
 pub fn chain_receipt_id(
     seq: u64,
     prev: &[u8; 32],
     narration: &str,
     effect: &Option<WorldEffect>,
+    prompt_binding: &Option<PromptBinding>,
     att: &ZkOracleAttestation,
 ) -> [u8; 32] {
     let mut h = blake3::Hasher::new();
@@ -226,10 +272,31 @@ pub fn chain_receipt_id(
     h.update(&(narration.len() as u64).to_le_bytes());
     h.update(narration.as_bytes());
     encode_effect(&mut h, effect);
+    // Bind the INPUT integrity: hash(template) ‖ world ‖ player — a swapped template, world,
+    // or player field changes this leg and therefore the whole link.
+    encode_prompt_binding(&mut h, prompt_binding);
     // Bind the attestation via its own committed fingerprint — a tampered / re-aimed
     // attestation changes this leg and therefore the whole link.
     h.update(&attestation_commitment(att));
     *h.finalize().as_bytes()
+}
+
+/// Tagged, length-prefixed encoding of the (optional) prompt binding into the chain hash, so a
+/// swapped template hash / world / player breaks the link. `None` (a no-input move) is tag `0`.
+fn encode_prompt_binding(h: &mut blake3::Hasher, pb: &Option<PromptBinding>) {
+    match pb {
+        None => {
+            h.update(&[0u8]);
+        }
+        Some(b) => {
+            h.update(&[1u8]);
+            h.update(&b.template_hash);
+            h.update(&(b.world.len() as u64).to_le_bytes());
+            h.update(b.world.as_bytes());
+            h.update(&(b.player.len() as u64).to_le_bytes());
+            h.update(b.player.as_bytes());
+        }
+    }
 }
 
 /// Length-tagged, discriminant-tagged encoding of the (optional) world-effect into the
@@ -371,6 +438,10 @@ pub struct LedgerEntry {
     pub narration: String,
     /// The world-effect this turn applied, if any (a pure-narration turn has `None`).
     pub effect: Option<WorldEffect>,
+    /// **The INPUT-side prompt binding** — `hash(template) ‖ world ‖ player` the model was
+    /// prompted with (`Some` for a player turn admitted through the slot-confinement guard;
+    /// `None` for an explicit no-input [`DungeonMaster::narrate_move`]). Rides the chain link.
+    pub prompt_binding: Option<PromptBinding>,
     /// THE ATTESTATION — a `verify_zkoracle`-checkable proof this narration was authentic
     /// (from a real model) ∧ well-formed ∧ injection-free.
     pub attestation: ZkOracleAttestation,
@@ -515,14 +586,23 @@ pub fn verify_turn(
     if !contains(&out.session.response_body, field.as_bytes()) {
         return Err(TurnForgery::NarrationNotAttested);
     }
+    // INPUT-side tooth: a landed player turn's bound field MUST be slot-confined (`{{`-free).
+    // A landed entry whose recorded player field carries a `{{` is an inconsistency — the guard
+    // that admits turns rejects it — so a verifier refuses it too, using the SAME verified matcher.
+    if let Some(pb) = &entry.prompt_binding {
+        if !slot_confined(&pb.player) {
+            return Err(TurnForgery::SlotEscape);
+        }
+    }
     // The receipt id must recompute as the hash-chain link over the entry's OWN claimed
-    // fields — a fabricated receipt, a mutated narration/effect, or a re-aimed attestation
-    // all break this. (The chain walk additionally checks `prev`/`seq` against neighbours.)
+    // fields — a fabricated receipt, a mutated narration/effect/prompt-binding, or a re-aimed
+    // attestation all break this. (The chain walk additionally checks `prev`/`seq` vs neighbours.)
     let recomputed = chain_receipt_id(
         entry.seq,
         &entry.prev,
         &entry.narration,
         &entry.effect,
+        &entry.prompt_binding,
         &entry.attestation,
     );
     if recomputed != entry.receipt {
@@ -542,6 +622,9 @@ pub enum TurnForgery {
     NarrationNotAttested,
     /// The receipt id does not recompute from the attestation — a fabricated receipt.
     ReceiptMismatch,
+    /// The turn's recorded player field is NOT slot-confined (carries a `{{`) — an input-side
+    /// forgery: a landed entry whose player field could never have passed the slot guard.
+    SlotEscape,
 }
 
 impl std::fmt::Display for TurnForgery {
@@ -552,6 +635,12 @@ impl std::fmt::Display for TurnForgery {
                 write!(f, "displayed narration is not the attested text")
             }
             TurnForgery::ReceiptMismatch => write!(f, "receipt id does not recompute"),
+            TurnForgery::SlotEscape => {
+                write!(
+                    f,
+                    "recorded player field is not slot-confined (carries `{{{{`)"
+                )
+            }
         }
     }
 }
@@ -782,16 +871,35 @@ pub struct DungeonMaster<B: DmBrain = RecordedDm> {
     carrier: DmAttestationCarrier,
     caps: DmCaps,
     brain: B,
+    /// **The committed prompt template.** The DM's prompt to the model is
+    /// `template.render_dm(world, player)`; a `{{`-bearing player field is refused at the slot
+    /// boundary BEFORE the brain (model) is called, and `template.template_hash()` is bound into
+    /// every landed player turn (input integrity). Defaults to [`PromptTemplate::dungeon_master`].
+    template: PromptTemplate,
 }
 
 impl<B: DmBrain> DungeonMaster<B> {
-    /// A dungeon-master with the given attestation carrier, cap mandate, and brain.
+    /// A dungeon-master with the given attestation carrier, cap mandate, and brain, over the
+    /// default committed [`PromptTemplate::dungeon_master`] template.
     pub fn new(carrier: DmAttestationCarrier, caps: DmCaps, brain: B) -> DungeonMaster<B> {
         DungeonMaster {
             carrier,
             caps,
             brain,
+            template: PromptTemplate::dungeon_master(),
         }
+    }
+
+    /// Pin a specific committed prompt template (its hash is bound into every landed player turn).
+    pub fn with_template(mut self, template: PromptTemplate) -> DungeonMaster<B> {
+        self.template = template;
+        self
+    }
+
+    /// The DM's committed prompt template — the model's prompt each turn is
+    /// `template().render_dm(world, player)`. A verifier pins its [`PromptTemplate::template_hash`].
+    pub fn template(&self) -> &PromptTemplate {
+        &self.template
     }
 
     /// The pinned config a verifier checks this DM's turns against.
@@ -809,37 +917,66 @@ impl<B: DmBrain> DungeonMaster<B> {
     /// appended to the world's ledger.
     ///
     /// REFUSED — and the world advances not at all (anti-ghost) — when:
+    /// * the player field is NOT slot-confined (carries a `{{`) — the **INPUT-side tooth**
+    ///   ([`DmError::SlotEscape`]): the field cannot be pinned in its template slot, so it is
+    ///   refused BEFORE the brain (model) is called. This is the load-bearing realization of the
+    ///   Lean `slot_confinement` theorem: a `{{`-free slot binding adds zero control tokens, so
+    ///   the committed template's rules survive verbatim;
     /// * the narration carries a `{{` injection reflected from the player's message
-    ///   ([`DmError::Injection`]) — the **un-jailbreakable tooth**;
+    ///   ([`DmError::Injection`]) — the **output-side un-jailbreakable tooth** (the injection-free
+    ///   attestation leg over the DM's own words);
     /// * the proposed world-effect exceeds the DM's caps ([`DmError::OverCap`]).
     ///
-    /// On success returns the landed turn's [`Receipt`].
+    /// On success the landed turn binds `hash(template) ‖ world ‖ player` into its receipt (see
+    /// [`PromptBinding`]) alongside the narration attestation, and returns the [`Receipt`].
     pub fn narrate_turn(
         &self,
         world: &mut WorldCell,
         player: &PlayerMessage,
     ) -> Result<Receipt, DmError> {
+        // (0) INPUT-SIDE DEFENSE — the player field must be slot-confined (`{{`-free) BEFORE the
+        //     brain runs. A `{{`-bearing field is refused here: the model is NOT called, the world
+        //     advances not at all, no receipt lands. The verified matcher (`slot_confined`) decides.
+        if !slot_confined(&player.text) {
+            return Err(DmError::SlotEscape);
+        }
+        // The prompt the model is (conceptually) handed this turn is
+        // `template.render_dm(world_binding, player)`; we bind its INPUT identity —
+        // hash(template) ‖ world ‖ player — into the landed turn's receipt.
+        let world_desc = world_binding(&world.scene);
+        let binding = PromptBinding::new(
+            self.template.template_hash(),
+            world_desc,
+            player.text.clone(),
+        );
         let mv = self.brain.narrate(&world.scene, player);
-        self.land_move(world, mv)
+        self.land_move(world, mv, Some(binding))
     }
 
-    /// **DRIVE AN EXPLICIT MOVE** (narration + a proposed world-effect). Same teeth as
-    /// [`Self::narrate_turn`], but the caller supplies the move — used to exercise the
-    /// cap tooth (an over-cap item-grant) and to advance the scene deliberately.
+    /// **DRIVE AN EXPLICIT MOVE** (narration + a proposed world-effect). Same output-side teeth as
+    /// [`Self::narrate_turn`], but the caller supplies the move (no player input) — used to exercise
+    /// the cap tooth (an over-cap item-grant) and to advance the scene deliberately. Carries no
+    /// [`PromptBinding`] (there is no untrusted player field this turn).
     pub fn narrate_move(&self, world: &mut WorldCell, mv: DmMove) -> Result<Receipt, DmError> {
-        self.land_move(world, mv)
+        self.land_move(world, mv, None)
     }
 
     /// The one landing path: cap-check the effect (fail-closed), attest the narration
-    /// (injection-free tooth), then apply the effect and append the receipted turn.
-    fn land_move(&self, world: &mut WorldCell, mv: DmMove) -> Result<Receipt, DmError> {
+    /// (injection-free tooth), then apply the effect and append the receipted turn — binding the
+    /// (optional) input-side [`PromptBinding`] into the chain link.
+    fn land_move(
+        &self,
+        world: &mut WorldCell,
+        mv: DmMove,
+        prompt_binding: Option<PromptBinding>,
+    ) -> Result<Receipt, DmError> {
         // (1) CAP-BOUND the proposed effect FIRST, fail-closed — an over-cap move never
         //     produces an attestation and never touches the world.
         if let Some(effect) = &mv.effect {
             self.caps.authorize(effect).map_err(DmError::OverCap)?;
         }
         // (2) ATTEST the narration: authentic ∧ well-formed ∧ injection-free. A `{{`
-        //     reflected from a player's message is REFUSED here (the un-jailbreakable
+        //     reflected from a player's message is REFUSED here (the output-side un-jailbreakable
         //     tooth) — the attestation cannot be produced.
         let (attestation, field) = self
             .carrier
@@ -850,8 +987,16 @@ impl<B: DmBrain> DungeonMaster<B> {
         let prev = world.head();
         let narration = String::from_utf8_lossy(&field).into_owned();
         // The on-ledger receipt id is a HASH-CHAIN LINK: it binds this turn's seq, its
-        // predecessor's receipt id (`prev`), its narration, its effect, and its attestation.
-        let receipt = chain_receipt_id(seq, &prev, &narration, &mv.effect, &attestation);
+        // predecessor's receipt id (`prev`), its narration, its effect, its input-side prompt
+        // binding (hash(template) ‖ world ‖ player), and its attestation.
+        let receipt = chain_receipt_id(
+            seq,
+            &prev,
+            &narration,
+            &mv.effect,
+            &prompt_binding,
+            &attestation,
+        );
         // FEDERATION SEAM: route the receipt commitment to a real node BEFORE touching
         // the world. In `Local` mode this is a no-op; in `Federation` mode a rejected /
         // unreachable / non-landing submit refuses the turn here — the world advances not
@@ -868,6 +1013,7 @@ impl<B: DmBrain> DungeonMaster<B> {
             prev,
             narration,
             effect: mv.effect,
+            prompt_binding,
             attestation,
             receipt,
         });
@@ -895,8 +1041,14 @@ pub struct Receipt {
 /// Why a narration turn was refused — the world advanced not at all.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DmError {
-    /// **The un-jailbreakable tooth.** The narration carries a `{{` handlebars injection
-    /// (reflected from a player's prompt-injection); the injection-free leg refuses to
+    /// **The INPUT-side tooth.** The player field is not slot-confined — it carries a `{{`
+    /// handlebars delimiter, so it cannot be pinned in the template slot. Refused BEFORE the
+    /// model is called (the model never sees a rule-rewriting field); the world advances not at
+    /// all, no receipt lands. Decided by the verified matcher ([`slot_confined`]). This is the
+    /// load-bearing realization of the Lean `slot_confinement` theorem.
+    SlotEscape,
+    /// **The output-side un-jailbreakable tooth.** The narration carries a `{{` handlebars
+    /// injection (reflected from a player's prompt-injection); the injection-free leg refuses to
     /// attest it, so the DM's turn over that input is refused. A player cannot inject the
     /// DM into breaking the rules.
     Injection,
@@ -924,6 +1076,10 @@ impl DmError {
 impl std::fmt::Display for DmError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            DmError::SlotEscape => write!(
+                f,
+                "REFUSED (slot-escape): the player field carries a `{{{{` — it cannot escape its template slot"
+            ),
             DmError::Injection => write!(
                 f,
                 "REFUSED (un-jailbreakable): the turn carries a `{{{{` prompt-injection"
