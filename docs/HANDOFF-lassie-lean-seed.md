@@ -9,8 +9,9 @@ target commit.
 archive of the compiled verified executor + its entire mathlib/batteries/aesop/Qq
 closure (~6000 objects). It is gitignored (a per-arch Mach-O/ELF blob — never a
 repo blob). A fresh clone that builds without it silently degrades to
-**marshal-only** (the un-verified Rust executor). Rebuilding it from source is an
-hours-long cold `lake` bootstrap that compiles mathlib. Publishing a HEAD-matching
+**marshal-only** (the un-verified Rust executor). Rebuilding it from source is a
+long cold `lake` bootstrap that compiles the Dregg2 closure (mathlib itself arrives
+as prebuilt oleans in minutes via `lake exe cache get`). Publishing a HEAD-matching
 seed as a GitHub release asset turns that into a **minutes-long download** for
 everyone else (`scripts/fetch-lean-seed.sh`). Background:
 `docs/LEAN-SEED-ARTIFACT.md`.

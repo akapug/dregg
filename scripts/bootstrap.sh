@@ -75,7 +75,7 @@ else
 fi
 
 # ── 3. build the verified executor (Lean → C facets) ────────────────────────
-step "lake build Dregg2.Exec.FFI (incremental; FIRST run compiles mathlib — long)"
+step "lake build Dregg2.Exec.FFI (incremental; FIRST run compiles the Dregg2 corpus — long; mathlib comes prebuilt from the cache step above)"
 ( cd "$META" && lake build Dregg2.Exec.FFI ) \
   || die "lake build failed. Common causes:
   * mathlib checkout at the wrong revision (see the pin check above);
