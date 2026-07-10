@@ -314,3 +314,15 @@ on the accept path). Then `StarkSound = AlgoStarkSound + DeployedRefines`, and `
   (bound `g` unused ⇒ holds-by-unfolding) and fixed it. Teeth: honest decoder fires; a lying decoder BITES.
   ⚠ Bridge is at the ARITY-2 setup; #6's arity-8 lemma is proved but not yet threaded through it.
   ⇒ #1 ✅ · #2 ◐ · #3 ✅ · #4 = RECURSION (separate campaign) · #5 = DeployedMatchesModel (KAT) · #6 ✅
+- ◐ DEBT-A deployed-ARITY through-line PROVED (`FriBridgeDeployedArity.lean`) — real TYPE obstruction found
+  (`FriSetupK n` ≠ `FriSetup`; `FriGeom` hard-wires arity-2) and honestly generalized (`friProximity_bridgeK`,
+  a line-for-line mirror), NOT coerced. `friProximityK8_discharge` is the keystone APPLIED.
+  ⚠ It runs at `d = 0` (oracle IS a codeword), where the arity constant `64d` vs `4d` is INVISIBLE — so #6 is
+  proved but NOT exercised. Real FRI gives δ-closeness (`d>0`); the quantitative soundness bound at
+  num_queries=38 / log_blowup=3 is NOT derived. Named.
+- ◐ AIR half `7cbbee624` — 6 of 8 premises DISCHARGED at deployed transferV3 (structurally: hashSites=[],
+  ranges=[], memLog=[]). ⚠ I made a CATEGORY ERROR (Satisfied2 has no chip-table field; that's Satisfied2Faithful
+  — so brick 4 serves the 26 faithfulness sites, NOT AlgoStarkSound). Remaining: `hbus` + table-emptiness.
+- ⚠⚠ #7 NEW: **LogUp bus soundness is UNMODELED** (`Lookup.lean`: "that lives in the Rust AIR, not in this
+  semantics"); no `logupCumSum` soundness theorem exists. Next real blocker; PROVABLE (Haböck + Schwartz–Zippel).
+  In flight: a077860d494fcca5b.
