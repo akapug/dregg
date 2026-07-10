@@ -60,6 +60,10 @@ PROVED (everything else — crucially THE FRAME): `recKExec_preserves_AccountsWF
 the emission faithfulness. NO `postRoot = recStateCommit (applyTransfer …)` hypothesis appears —
 that forbidden "ghost-in-disguise" would carry the whole answer; here the answer is RECONSTRUCTED.
 -/
+-- Declared directly (2026-07-10): `Finset.sort` + the linear-order machinery
+-- used below previously arrived TRANSITIVELY via the Crypto.Primitives
+-- `Mathlib.Tactic` umbrella, which is now a specific-tactic import.
+import Mathlib.Data.Finset.Sort
 import Dregg2.Circuit.Transfer
 
 namespace Dregg2.Circuit.StateCommit

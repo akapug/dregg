@@ -11,7 +11,11 @@ Separates algebraic laws (proved, used by the metatheory) from computational har
 equational idealization.
 -/
 import Mathlib.Algebra.Group.Defs
-import Mathlib.Tactic
+-- Not the `Mathlib.Tactic` umbrella: this file's proofs use only `ring` + core
+-- `simp`. This module sits INSIDE the compiled Dregg2.Exec.FFI closure (via
+-- Merkle <- CircuitEmit <- ... <- TurnExecutorFull), so its imports are paid in
+-- libdregg_lean.a — see docs/LEAN-SEED-SIZE.md.
+import Mathlib.Tactic.Ring
 
 namespace Dregg2.Crypto
 

@@ -41,6 +41,9 @@ encoders + `True`-discharged CR) witness non-vacuity: every derivation fires on 
 import Dregg2.Circuit.StateCommit
 import Mathlib.Logic.Encodable.Basic
 import Mathlib.Logic.Equiv.List
+-- The `deriving Encodable` handler (previously transitive via an upstream
+-- `Mathlib.Tactic` umbrella, trimmed 2026-07-10).
+import Mathlib.Tactic.DeriveEncodable
 
 namespace Dregg2.Circuit.Poseidon2Binding
 

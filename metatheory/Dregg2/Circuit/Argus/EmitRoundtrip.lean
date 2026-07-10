@@ -57,6 +57,9 @@ machine-emitted), and the fingerprint already pins the bytes verbatim. The resid
 "the Rust function realizes `parseVmJson`" theorem would require a Rust-semantics model
 (see the module-tail note).
 -/
+-- Declared directly (2026-07-10): `interval_cases` previously arrived
+-- transitively via an upstream `Mathlib.Tactic` umbrella, since trimmed.
+import Mathlib.Tactic.IntervalCases
 import Dregg2.Circuit.Emit.EffectVmEmit
 
 namespace Dregg2.Circuit.Argus.EmitRoundtrip

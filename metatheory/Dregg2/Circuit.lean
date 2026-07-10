@@ -27,7 +27,12 @@ length-framed chain trace, `chain_digest_binds` proves it determines the trace u
 `chain_digest_binds_chainOk` proves it therefore determines the `chainOk` value — a hash
 collision is the ONLY way two chains with different `chainOk` share a digest. Residual: `HashCR`.
 -/
-import Mathlib.Tactic
+-- Not the `Mathlib.Tactic` umbrella: this file's proofs use core simp/decide
+-- plus `ring` + `push_cast` only. This module sits INSIDE the compiled
+-- Dregg2.Exec.FFI closure (via Circuit.Transfer <- ... <- Substrate.Heap <-
+-- TurnExecutorFull), so its imports are paid in libdregg_lean.a — see
+-- docs/LEAN-SEED-SIZE.md.
+import Mathlib.Tactic.Ring
 import Dregg2.Exec.StepComplete
 import Dregg2.CryptoKernel
 import Dregg2.Crypto.HermineHintMLWE

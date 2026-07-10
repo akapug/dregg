@@ -32,6 +32,9 @@ hot core; lifts `noteCreateCommitment` + the Pedersen portal.
 
 Style: `#guard` witnesses.
 -/
+-- Declared directly (2026-07-10): previously transitive via the RecordCircuit
+-- `Mathlib.Tactic` umbrella, since trimmed (docs/LEAN-SEED-SIZE.md).
+import Mathlib.Tactic.Linarith
 import Dregg2.Exec.RecordKernel
 import Dregg2.Exec.RecordCircuit
 import Mathlib.Algebra.BigOperators.Group.List.Basic

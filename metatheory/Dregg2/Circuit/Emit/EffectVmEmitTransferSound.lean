@@ -71,6 +71,9 @@ of the block, so the witness binds the whole post-state.
 as the NAMED hypothesis `Poseidon2Binding.Poseidon2SpongeCR hash` (task #13's discharged carrier),
 never as a fresh axiom. Imports are read-only.
 -/
+-- Declared directly (2026-07-10): previously transitive via an upstream
+-- `Mathlib.Tactic` umbrella, since trimmed.
+import Mathlib.Tactic.LinearCombination
 import Dregg2.Circuit.Emit.EffectVmEmitTransfer
 import Dregg2.Circuit.Poseidon2Binding
 import Dregg2.Circuit.Transfer
