@@ -113,7 +113,15 @@ theorem starkSound_of_verifyAlgo
     StarkSound hash R where
   extract := fun pi π hacc => carrier.extract pi π (href pi π hacc)
 
-/-- **`lightclient_unfoolable_via_algo` — the apex on the PROVEN verifier algorithm.**
+/-- **`lightclient_unfoolable_via_algo` — the apex on the verifier ALGORITHM.**
+⚠ HONESTY (2026-07-10 audit): the algorithm's soundness is `AlgoStarkSound`, a `class` with **ZERO instances**,
+taken as a hypothesis here; and `DeployedRefines` is likewise **never proved**, taken as `href`. So this is NOT
+"the PROVEN verifier algorithm" (the previous wording): `starkSound_of_verifyAlgo`'s body is
+`carrier.extract ∘ href` — modus ponens over TWO assumptions. The decomposition SHAPE is good
+(algorithm-soundness ⟂ deployment-refinement, the same shape as DEBT-B's `denote`), but it currently REPLACES
+ONE assumed carrier (`StarkSound`) WITH TWO. Discharging it means: FRI-proximity @ BabyBear + AIR soundness +
+ChipTableSoundN @ the real perm + a real `FriExtract` ⟹ `AlgoStarkSound`; and proving `DeployedRefines`
+(`verifyBatch` refines `verifyAlgo`). See `docs/reference/DEBT-A-STARKSOUND-TARGET.md`.
 
 The single-transition soundness apex (`CircuitSoundness.lightclient_unfoolable`),
 re-stated to rest on the bridge instead of an assumed `[StarkSound]`: from the FRI

@@ -220,3 +220,20 @@ balance move — the amount is a hidden Pedersen commitment checked by `verify_f
 transparent move is the separate `Unshield` effect. The kernel part is iterated noteSpend-nullifier (the exact
 primitive DEBT-B covered). Proved: `shieldedTransferK_accepts` + `shieldedTransferK_balNeutral` (bal/commitments/
 cells/caps/revoked all unchanged). Corrected by reading the deployed code, not by trusting my own earlier note.
+
+## ⚠⚠ DEBT-A STARKSOUND TARGET (2026-07-10) — the bridge grew the trusted surface from ONE to TWO
+Spec: `docs/reference/DEBT-A-STARKSOUND-TARGET.md`. Verified by hand at `FriVerifierBridge.lean`:
+- `class AlgoStarkSound (hash : List Int → Int) …` (:75) — `F = Int`, **NOT BabyBear**; `perm`/`params`/`vk`/
+  `checks`/`view` are ABSTRACT binders, never pinned to the deployed config. **ZERO instances.**
+- `DeployedRefines` (:92) — a `def` (`verifyBatch accept → verifyAlgo = true`), **never proved**; taken as the
+  hypothesis `href` at :112/:131/:167. ASSUMED.
+- `starkSound_of_verifyAlgo` (:114) — PROVED, but its body is `carrier.extract ∘ href`: modus ponens over the
+  two assumptions above. So the apparent `StarkSound` instance rests on TWO assumed, abstract carriers.
+- The doc-comment "the apex on the PROVEN verifier algorithm" was FALSE and is corrected in-file.
+VERDICT: the decomposition SHAPE is good — algorithm-soundness ⟂ deployment-refinement, the same shape as
+DEBT-B's `denote` refinement, and the reject-teeth (`verifyAlgo_full_rejects_tampered_quotient`) are real work.
+But it is currently **under-discharged and laundering-by-indirection**: the positive extraction direction is
+untouched, both carriers are assumed AND abstract, and the trusted surface grew from one to two.
+TO DISCHARGE: FRI-proximity @ BabyBear + AIR soundness (positive dir) + ChipTableSoundN @ real perm + a real
+FriExtract ⟹ `instance : AlgoStarkSound`; PLUS prove `DeployedRefines` (the deployed verifyBatch refines
+verifyAlgo — the deployment-refinement half, which nobody has attempted).
