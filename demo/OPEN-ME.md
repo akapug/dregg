@@ -149,3 +149,81 @@ a pure-prose crown claim (effect `null`) **lands** yet the crown is **still NOT 
 grantable lantern is **allowed + HELD + receipted**; `/verify` re-verifies each entry
 throughout. Writes `demo/run/dungeon.png` + `demo/run/dungeon.txt` (including the model's
 jailbroken prose verbatim).
+
+---
+
+# The Sunken Vault — the AI narrates, the world resolves
+
+A **playable dungeon-crawler** in your browser. A local model (`gemma2:2b`) narrates every
+room and every action; the **world resolves every move** by its own deterministic rules. You
+**cannot narrate yourself through a locked door**. No lantern, no descent. No key, no armory.
+No sword, no passing the Warden. No amulet, no escape. The prose is atmosphere; the ledger is
+the truth.
+
+The tide has broken open a drowned ten-room vault. Take the **lantern** (the dark stair is
+impassable without a light), descend to the **cistern** for the **rusted key**, carry it to
+the **vestry** and turn it in the **iron door**, take the **sword** in the armory, cut down
+the **Warden** in his hall, take the **Drowned Amulet** in the treasury beyond, and carry it
+up to the **sunken gate** — reach it holding the amulet to **WIN**.
+
+### Open it — the vault needs the native service (a real GameSession over the engine)
+
+The game runs over one `attested_dm::sunken_vault()` `GameWorld` + a verified `GameSession`,
+so — unlike the in-tab stand-in demos — the vault page needs the native `attested-dm` service.
+Bring up **ollama** (`gemma2:2b`) for live narration, then, in two terminals:
+
+```
+# 1) the native /game service (real gemma2 narration; scripted fallback if ollama is down)
+cargo run -p dungeon-service            # binds 127.0.0.1:7878
+
+# 2) the page, proxying /game/* to it
+DM_PORT=7878 node demo/serve.mjs
+```
+
+Then open **http://127.0.0.1:8787/vault** and play: type `take lantern`, `go down`, `use key
+on iron door`, `attack warden`, `look` — or click the exit buttons and the **take** buttons.
+The current room is AI-narrated; an inventory panel shows what you actually hold; the exits
+show a locked one **with its gate reason**; a scrolling log holds the DM's prose per turn; and
+the receipt rail grows one verified turn per **landed** move.
+
+### The "you can't cheat" moment, on screen
+
+Click **⛔ force the dark stair (no lantern)** (it sends `go down` from the antechamber before
+you hold the lantern). The AI may narrate the darkness parting and you descending — and the
+page shows **outcome: REFUSED**, *"the way to Dark Stair is barred: it needs the lantern"*, the
+room **unchanged**, and the receipt rail **unchanged** (no receipt — the anti-ghost tooth). The
+AI narrates; the world disposes.
+
+### Honest scope
+
+The narration is a **real local model** (`gemma2:2b`) when reachable, else a deterministic
+scripted narrator (the page shows `narratorKind` honestly). The attestation's *authentic* leg
+is an in-tree fixture (as in the `/narrate` lane). What is **load-bearing** is the **world
+resolution** (a locked exit / absent item / unbeaten Warden is refused deterministically,
+whatever the prose), the **capability gate** (a `Take` is a cap-permitted grant on the
+dungeon's own item whitelist), and the **receipt hash-chain** (every landed move is a
+prev-linked, injection-free, on-chain turn binding its typed `GameAction ‖ room`).
+
+The `/game` API (native `dungeon-service`, additive to `/narrate`):
+`GET /game/state` · `POST /game/act {"command":"<free text>"}` · `GET /game/verify` ·
+`POST /game/reset`.
+
+## The driven vault run (a full WIN against real gemma2, shown)
+
+```
+node demo/run-vault.mjs
+```
+
+Spawns the native `dungeon-service` (real `gemma2:2b`), serves the vault page against it, loads
+it in headless Chromium, and plays the **winning path** through the page's own affordances —
+**asserting the INVARIANTS** against the service's own responses (never the model's exact
+prose): every winning move **lands**, the room transitions as the world dictates, the receipt
+rail **grows by one** per landed move, and status → **won** (14 verified turns, carrying the
+amulet). Then the **can't-cheat** case: from a fresh vault, force the dark stair without the
+lantern → **refused** (*"…it needs the lantern"*), the room **unchanged**, the receipt rail
+**unchanged**. Finally `/game/verify` re-verifies the whole ledger as a hash chain. Writes
+`demo/run/vault.png` + `demo/run/vault.txt` (including some of gemma2's real narration).
+
+A most-recent run: **14/14 winning moves landed → status WON**, receipt rail `0 → 14`,
+`/game/verify == true`; the forced dark stair **refused** with the room unchanged and no
+receipt.

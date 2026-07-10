@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>The Sunken Vault — the AI narrates, the world resolves</title>
+  <style>
+    :root {
+      --parchment: #ece6d6;
+      --parchment-2: #e0d8c2;
+      --card: #f7f2e7;
+      --stone: #efe9da;
+      --ink: #1b1728;
+      --ink-soft: #453f57;
+      --ink-faint: #766f86;
+      --rule: #cfc5ac;
+      --violet: #6b5ce0;
+      --violet-deep: #43349c;
+      --teal: #2b7f7a;
+      --green: #3f8f57;
+      --amber: #b06e1f;
+      --red: #a8262f;
+      --red-soft: #f7e6e6;
+      --red-line: #e7c4c4;
+      --gold: #a9812f;
+      --shadow: 24px 34px 66px -34px rgba(20, 16, 34, .5);
+      --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+      --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; }
+    body {
+      font-family: var(--sans); color: var(--ink);
+      background:
+        radial-gradient(130% 90% at 50% -20%, #1c2a33 0%, #26313a 22%, transparent 55%),
+        radial-gradient(120% 80% at 50% 0%, #f3eee1 0%, var(--parchment) 42%, var(--parchment-2) 100%);
+      min-height: 100vh; line-height: 1.5; -webkit-font-smoothing: antialiased;
+    }
+    .page { max-width: 52rem; margin: 0 auto; padding: 3.4rem 1.5rem 6rem; }
+
+    .eyebrow { font-size: .72rem; letter-spacing: .22em; text-transform: uppercase; color: #c9c0ee; font-weight: 600; margin: 0 0 .9rem; }
+    h1.title { font-family: var(--serif); font-weight: 600; font-size: clamp(2.3rem, 6vw, 3.6rem); line-height: 1.02; letter-spacing: -.01em; margin: 0; text-wrap: balance; color: #f4efe2; text-shadow: 0 2px 24px rgba(0,0,0,.35); }
+    h1.title em { color: #b9abf2; font-style: italic; }
+    .lede { font-family: var(--serif); font-size: 1.14rem; color: #d8d2c2; margin: 1rem 0 0; max-width: 40rem; text-wrap: pretty; }
+    .lede b { color: #fff; font-weight: 600; }
+
+    .narrator { margin: 1.4rem 0 0; font-size: .84rem; color: var(--ink-soft); padding: .55rem .9rem; border-radius: 9px; background: rgba(255,255,255,.6); border: 1px dashed var(--rule); }
+    .narrator.model { border-style: solid; border-color: #cfc6ee; background: #f2efff; color: var(--violet-deep); }
+    .narrator code { font-family: var(--mono); font-size: .8rem; }
+
+    .objective { margin: 1rem 0 0; padding: .7rem 1rem; border-radius: 11px; background: linear-gradient(90deg, #f6efdc, #f3ecd8); border: 1px solid #e2d3a8; color: #6a5320; font-size: .95rem; display: flex; gap: .55rem; align-items: baseline; }
+    .objective .star { color: var(--gold); }
+    .objective b { color: #4d3c12; }
+
+    /* ── the scene ── */
+    .scene-frame { margin: 1.3rem 0 0; padding: 1.5rem 1.5rem 1.3rem; border-radius: 15px; background: var(--card); border: 1px solid var(--rule); box-shadow: var(--shadow); position: relative; }
+    .scene-frame::before { content: "the room"; position: absolute; top: -.62rem; left: 1.2rem; font-size: .62rem; letter-spacing: .18em; text-transform: uppercase; font-weight: 700; color: var(--ink-faint); background: var(--card); padding: 0 .5rem; }
+    #roomName { font-family: var(--serif); font-size: 1.55rem; color: var(--ink); margin: 0; letter-spacing: -.01em; }
+    #roomDesc { font-family: var(--serif); font-size: 1.05rem; color: var(--ink-soft); margin: .35rem 0 0; font-style: italic; }
+    #narration { font-family: var(--serif); font-size: 1.14rem; color: var(--ink); margin: 1rem 0 0; padding: .85rem 1rem; border-left: 3px solid var(--violet); background: rgba(107,92,224,.06); border-radius: 0 10px 10px 0; min-height: 1.2rem; }
+    #narration .who { display: block; font-family: var(--sans); font-size: .64rem; letter-spacing: .14em; text-transform: uppercase; color: var(--violet-deep); font-weight: 700; margin-bottom: .3rem; }
+
+    /* ── the two columns: exits + inventory ── */
+    .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 1.2rem 0 0; }
+    @media (max-width: 38rem) { .cols { grid-template-columns: 1fr; } }
+    .panel { padding: 1rem 1.05rem; border-radius: 12px; background: rgba(255,255,255,.62); border: 1px solid var(--rule); }
+    .panel h3 { margin: 0 0 .6rem; font-size: .64rem; letter-spacing: .16em; text-transform: uppercase; color: var(--ink-faint); font-weight: 700; }
+
+    .exits { display: grid; gap: .45rem; }
+    button.exit { text-align: left; font: inherit; font-size: .92rem; padding: .5rem .75rem; border-radius: 9px; border: 1px solid var(--violet); background: #fff; color: var(--violet-deep); cursor: pointer; transition: background .14s, color .14s; display: flex; justify-content: space-between; gap: .5rem; align-items: baseline; }
+    button.exit:hover { background: var(--violet); color: #fff; }
+    button.exit .dir { font-weight: 600; text-transform: capitalize; }
+    button.exit .dest { font-size: .82rem; opacity: .8; }
+    button.exit.locked { border-color: #d9c9a0; color: var(--amber); background: #fbf5e7; cursor: pointer; }
+    button.exit.locked:hover { background: var(--amber); color: #fff; }
+    button.exit.locked .reason { display: block; font-size: .74rem; font-style: italic; opacity: .95; margin-top: .12rem; }
+    .exits .none { color: var(--ink-faint); font-family: var(--serif); font-style: italic; font-size: .9rem; }
+
+    #inventory, #itemsHere { list-style: none; margin: 0; padding: 0; display: grid; gap: .28rem; }
+    #inventory li { display: flex; justify-content: space-between; align-items: baseline; font-size: .9rem; padding: .15rem .1rem; border-bottom: 1px dotted var(--rule); }
+    #inventory li:last-child { border-bottom: 0; }
+    #inventory .state { font-family: var(--mono); font-size: .7rem; color: var(--green); letter-spacing: .04em; }
+    #inventory .empty, #itemsHere .empty { color: var(--ink-faint); font-family: var(--serif); font-style: italic; font-size: .9rem; }
+    .here-row { display: flex; justify-content: space-between; align-items: center; gap: .5rem; }
+    button.take { font: inherit; font-size: .76rem; padding: .22rem .6rem; border-radius: 7px; border: 1px solid var(--teal); background: #fff; color: var(--teal); cursor: pointer; }
+    button.take:hover { background: var(--teal); color: #fff; }
+    .items-sub { margin-top: .8rem; }
+
+    /* ── the command bar + quick actions ── */
+    .controls { margin: 1.3rem 0 0; }
+    .action-row { display: flex; gap: .5rem; }
+    #cmdInput { flex: 1; font: inherit; font-size: .98rem; padding: .62rem .9rem; border-radius: 10px; border: 1px solid var(--rule); background: #fff; color: var(--ink); }
+    #cmdInput:focus-visible { outline: 2px solid var(--violet); outline-offset: 1px; }
+    button.ctrl { font: inherit; font-size: .86rem; padding: .55rem 1rem; border-radius: 10px; border: 1px solid var(--violet); background: #fff; color: var(--violet-deep); cursor: pointer; transition: background .14s, color .14s; white-space: nowrap; }
+    button.ctrl:hover { background: var(--violet); color: #fff; }
+    button.ctrl:disabled { opacity: .5; cursor: default; }
+    .quick { margin: .6rem 0 0; display: flex; gap: .5rem; flex-wrap: wrap; }
+    button.ctrl.cheat { border-color: var(--red); color: var(--red); font-weight: 600; }
+    button.ctrl.cheat:hover { background: var(--red); color: #fff; }
+    button.ctrl.reset { border-color: var(--ink-faint); color: var(--ink-faint); }
+    button.ctrl.reset:hover { background: var(--ink-faint); color: #fff; }
+    .quick-note { margin-top: .55rem; font-size: .78rem; color: var(--ink-faint); }
+    .quick-note code { font-family: var(--mono); }
+
+    /* ── the narration log ── */
+    .log-frame { margin: 1.6rem 0 0; }
+    .log-frame h3 { font-size: .64rem; letter-spacing: .16em; text-transform: uppercase; color: var(--ink-faint); font-weight: 700; margin: 0 0 .6rem; }
+    #log { max-height: 22rem; overflow-y: auto; display: grid; gap: .7rem; padding-right: .2rem; }
+    #log .empty { color: var(--ink-faint); font-family: var(--serif); font-style: italic; }
+    .entry { padding: .75rem .95rem; border-radius: 11px; background: var(--card); border: 1px solid var(--rule); }
+    .entry .cmd { font-size: .78rem; color: var(--ink-faint); }
+    .entry .cmd b { color: var(--ink-soft); font-weight: 600; }
+    .entry .prose { font-family: var(--serif); font-size: 1.02rem; color: var(--ink); margin-top: .32rem; }
+    .entry .verdict { margin-top: .42rem; font-size: .8rem; font-weight: 600; }
+    .entry.landed .verdict { color: var(--green); }
+    .entry.refused { background: var(--red-soft); border-color: var(--red-line); }
+    .entry.refused .verdict { color: var(--red); }
+    .entry .worldnote { margin-top: .28rem; font-size: .82rem; color: var(--ink-faint); font-style: italic; }
+
+    /* ── receipt rail + verify ── */
+    .rail { margin: 1.3rem 0 0; padding: .9rem 1.05rem; border-radius: 12px; background: rgba(255,255,255,.62); border: 1px solid var(--rule); }
+    .rail h3 { margin: 0 0 .5rem; font-size: .64rem; letter-spacing: .16em; text-transform: uppercase; color: var(--ink-faint); font-weight: 700; }
+    .chain-links { display: flex; flex-wrap: wrap; align-items: center; gap: .1rem; font-size: 1rem; color: var(--green); line-height: 1; min-height: 1.1rem; }
+    .chain-links .rope { color: var(--rule); }
+    .chain-links .empty { color: var(--ink-faint); font-size: .82rem; }
+    .chain-meta { margin-top: .5rem; font-size: .8rem; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+    .chain-meta code { font-family: var(--mono); color: var(--ink-soft); font-size: .72rem; }
+    .chain-meta b { color: var(--ink); }
+    .verify { margin: .7rem 0 0; padding: .6rem .9rem; border-radius: 10px; font-size: .84rem; font-weight: 600; border: 1px solid transparent; }
+    .verify.ok { background: #e7f4ea; border-color: #bfe2c7; color: var(--green); }
+    .verify.bad { background: var(--red-soft); border-color: var(--red-line); color: var(--red); }
+
+    /* ── win / lose banner ── */
+    .banner { margin: 1.3rem 0 0; max-height: 0; overflow: hidden; opacity: 0; transition: max-height .4s ease, opacity .3s ease, margin .3s ease; }
+    .banner.show { max-height: 22rem; opacity: 1; }
+    .banner .inner { padding: 1.3rem 1.4rem; border-radius: 14px; }
+    .banner.won .inner { background: linear-gradient(120deg, #f6efd6, #efe6c6); border: 1px solid #dcc588; }
+    .banner.lost .inner { background: #2a2330; border: 1px solid #4a3f52; }
+    .banner .b-title { font-family: var(--serif); font-size: 1.7rem; margin: 0; }
+    .banner.won .b-title { color: #6a5016; }
+    .banner.lost .b-title { color: #e9d9ef; }
+    .banner .b-body { margin: .4rem 0 0; font-size: .95rem; }
+    .banner.won .b-body { color: #6a5320; }
+    .banner.lost .b-body { color: #b7abc2; }
+
+    .legend { margin: 2.4rem 0 0; padding: 1.2rem 1.4rem; border-radius: 12px; background: rgba(255,255,255,.5); border: 1px solid var(--rule); font-size: .86rem; color: var(--ink-soft); }
+    .legend h2 { font-family: var(--serif); font-size: 1.05rem; margin: 0 0 .6rem; color: var(--ink); font-weight: 600; }
+    .legend ul { margin: 0; padding-left: 1.1rem; display: grid; gap: .4rem; }
+    .legend b { color: var(--ink); font-weight: 600; }
+    .legend .tag { font-family: var(--mono); font-size: .78rem; color: var(--violet-deep); }
+    .legend .foot { margin-top: .7rem; font-size: .8rem; color: var(--ink-faint); }
+    footer { margin-top: 2rem; font-size: .76rem; color: var(--ink-faint); }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <p class="eyebrow">An attested dungeon · the AI narrates, the world resolves</p>
+    <h1 class="title">The Sunken Vault</h1>
+    <p class="lede">
+      The tide has broken open a drowned vault. A local AI dungeon-master narrates every
+      room and every move — but <b>you cannot narrate yourself through a locked door</b>.
+      The prose is atmosphere; the <em>world</em> resolves the move by its own rules. No
+      lantern, no descent. No sword, no passing the Warden. The truth is the ledger.
+    </p>
+
+    <div id="narratorKind" class="narrator">…</div>
+    <div id="objective" class="objective"><span class="star">★</span><span id="objectiveText">…</span></div>
+
+    <section class="scene-frame" aria-label="the room">
+      <p id="roomName">…</p>
+      <p id="roomDesc"></p>
+      <div id="narration"><span class="who">the dungeon master</span><span id="narrationText">The vault waits in the dark. What do you do?</span></div>
+    </section>
+
+    <div class="cols">
+      <div class="panel">
+        <h3>ways out</h3>
+        <div id="exits" class="exits"></div>
+      </div>
+      <div class="panel">
+        <h3>what you carry</h3>
+        <ul id="inventory"></ul>
+        <div class="items-sub">
+          <h3>in this room</h3>
+          <ul id="itemsHere"></ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="controls">
+      <div class="action-row">
+        <input id="cmdInput" type="text" placeholder="what do you do?  (e.g. take lantern · go down · use key on iron door · attack warden · look)" autocomplete="off" aria-label="what do you do?" />
+        <button id="cmdSend" class="ctrl" type="button">act</button>
+      </div>
+      <div class="quick">
+        <button id="lookBtn" class="ctrl" type="button">👁 look</button>
+        <button id="cheatBtn" class="ctrl cheat" type="button">⛔ force the dark stair (no lantern)</button>
+        <button id="resetBtn" class="ctrl reset" type="button">↺ restart the vault</button>
+      </div>
+      <div class="quick-note">
+        <b>Force the dark stair</b> sends <code>go down</code> before you hold the lantern. The AI may
+        narrate the darkness parting — the world answers <code>refused</code>: <i>the way is barred, it
+        needs the lantern</i>, and the room does not move. The world disposes.
+      </div>
+    </div>
+
+    <div id="banner" class="banner" role="status" aria-live="polite"><div class="inner"><p id="bannerTitle" class="b-title"></p><p id="bannerBody" class="b-body"></p></div></div>
+
+    <section class="log-frame">
+      <h3>the tale so far</h3>
+      <div id="log"></div>
+    </section>
+
+    <div class="rail">
+      <h3>receipt rail — every landed move is a verified turn</h3>
+      <div id="chainLinks" class="chain-links"></div>
+      <div id="chainMeta" class="chain-meta"></div>
+      <div id="verifyBadge" class="verify" role="status"></div>
+    </div>
+
+    <aside class="legend">
+      <h2>What is actually real here</h2>
+      <ul>
+        <li>The AI narrates freely, but every move is resolved by <span class="tag">resolve_action</span> against the world's own rules. A <b>locked exit</b>, an <b>absent item</b>, or an <b>unbeaten Warden</b> is refused deterministically — no prose talks past it.</li>
+        <li>A legal move lands as <b>one verified turn</b> on the receipt rail (<span class="tag">narrate_game_move</span>): authentic (fixture leg), well-formed, injection-free, and prev-linked on-chain, binding its typed <span class="tag">GameAction ‖ room</span>. A refused move lands <b>no receipt</b> (the anti-ghost tooth).</li>
+        <li>A <b>Take</b> is a cap-permitted grant on the dungeon's own item whitelist (<span class="tag">DmCaps::narrator</span>) — the AI cannot mint an item the world never placed.</li>
+        <li><b>The truth is the ledger, not the story.</b> Restart, and the same gates bite from the shore.</li>
+      </ul>
+      <p class="foot">Honest scope: the narration is a real local model (<span class="tag">gemma2:2b</span>) when reachable, else a deterministic scripted narrator (shown honestly above). The attestation's "authentic" leg is an in-tree fixture. What is load-bearing is the <b>world resolution</b>, the <b>capability gate</b>, and the <b>receipt hash-chain</b>.</p>
+    </aside>
+
+    <footer>The Sunken Vault · attested-dm · the AI narrates, the world resolves · self-contained.</footer>
+  </main>
+
+  <script src="vault.js"></script>
+</body>
+</html>
