@@ -55,12 +55,18 @@ map "evaluate at the negacyclic roots `ζ^{2·brv(m)+1}`" — stated as the prop
   not reach — is characterized entrywise from the actual imperative def, and `cast_bfSweep` proves the sweep
   IS the 2×2 ℤ_q-linear map over the honest field. The disjointness of the write pairs `{j, j+len}` (so each
   read sees the ORIGINAL array) is the crux and is proven. `bfSweep` is a verbatim copy of `ntt`'s inner loop.
-* **The exact remaining step** (named precisely after `cast_bfSweep`): a separate, larger induction that peels
-  the two OUTER loops (`for s`, `for blk`, mutable state `(a, k)`) — expressing `ntt` as the ordered
-  composition of `bfSweep`s with `k = 1 … 255` — and carries the CT stage invariant "after stage `s`, position
-  `g·len_s+i` holds `eval256` of the `g`-th decimated subpolynomial at its root", each step preserved by
-  `cast_bfSweep` (`ring`), collapsing at `len = 1` to `NttEvalsAtRoots`. That outer-peel + stage invariant is
-  the single sub-step still open; the butterfly engine under it is closed.
+* **The outer-loop PEEL is now BUILT** (`ntt_eq_fold : ntt w = nttFold w`): the two OUTER loops (`for s`,
+  `for blk`, mutable state `(a, k)`) are peeled into the explicit ordered `bfSweep` fold `nttFold`, with `k`
+  running `1 … 255`. Axiom-clean (via an rfl-clean intermediate `nttCleanDo` + `foldl_ext_mem`).
+* **The twiddle-in-field cast is now BUILT** (`cast_zetaTwiddle : zetaTwiddle k = (ζ:ℤ_q)^{brv8 k}`): both the
+  `powModQ` square-and-multiply ladder (`cast_powModQ`, a loop invariant `result = base^{e mod 2ᵗ}`) and the
+  `brv8` 8-bit reversal (`brv8_lt < 256`) are characterized from their actual imperative defs. No `native_decide`.
+* **The exact remaining step**: the CT stage-invariant induction over `nttFold`. The invariant "after stage `s`,
+  slot `g·len_s+i` holds `Σ_{u<2ˢ} w_{i+u·len_s}·ρ(s,g)^u` (= the `ℤ_q`-eval of the `g`-th decimated
+  subpolynomial at its root `ρ(s,g) = ζ^{2·brv8(2ˢ+g)}`)", each stage preserved by `cast_bfSweep` +
+  `cast_zetaTwiddle` + an even/odd `Finset` reindex (`ring`) + the `brv8` exponent identities mod 512,
+  collapsing at `len = 1` (`s=8`) to `NttEvalsAtRoots`. That nested block-disjoint stage invariant is the single
+  sub-step still open; the peel, the butterfly engine, the twiddle-field cast, and orthogonality under it are closed.
 
 Given `NttEvalsAtRoots`/`InttInterpolates`, `NttLeftInverse` = eval∘interp collapsed by `omega_orthogonality`
 (brv bijective), and `NttMulHom` = eval-is-a-ring-hom + `evalRoot²⁵⁶ = −1`.
@@ -485,22 +491,194 @@ theorem cast_bfSweep (z start len : Nat) (hlen : 1 ≤ len) (a0 : Poly)
   · intro p h1 h2
     rw [hhi p h1 h2, cast_subQ _ _ (by have := mulModQ_lt z a0[p]!; omega), cast_mulModQ]
 
-/-! ### The EXACT remaining step (the top of RUNG 2).
+/-! ### RUNG 2, step 1 — THE OUTER-LOOP PEEL (`ntt = nttFold`), BUILT.
 
-`bfSweep` above is a verbatim copy of `ntt`'s innermost `for j` loop, and `cast_bfSweep` proves that sweep
-IS the 2×2 ℤ_q-linear butterfly. What remains to discharge `NttEvalsAtRoots` (and dually `InttInterpolates`)
-is a genuinely separate, larger induction over the two OUTER loops of `ntt`:
+The two OUTER loops of `ntt` (`for s in [0:8]`, `for blk in [0:nblk]`, threading the mutable pair `(a, k)`)
+are peeled into an explicit ordered composition of `bfSweep`s: `ntt w = nttFold w`, where `nttFold` is the
+nested `List.foldl` over stages/blocks with the innermost `for j` replaced by a `bfSweep` call. This is the
+"peel" the module header named as still-open. It is discharged in two rfl-clean hops through an intermediate
+`nttCleanDo` (the SAME `Id.run do` schedule with the inner butterfly abbreviated to `bfSweep`, definitionally
+equal to `ntt` because `bfSweep` is a verbatim copy of that inner loop), then a `foldl`-congruence
+(`foldl_ext_mem`) reducing the `forIn`/pair-state monadic form to the plain fold. Axiom-clean; no
+`native_decide`. The twiddle counter `k` is threaded as `st.2`, so global block `blk` in stage `s` consumes
+`zetaTwiddle (st.2 + 1)` with `k` running `1 … 255` across all `Σ_s 2^s = 255` blocks. -/
 
-* **peel** the `for s in [0:8]` / `for blk in [0:nblk]` loops (state = the mutable pair `(a, k)`), expressing
-  `ntt w` as the ordered composition of `bfSweep (zetaTwiddle kᵢ) startᵢ (128 >>> s)` — the twiddle counter
-  `k` runs `1 … 255` across all blocks (`Σ_s nblk = 1+2+…+128 = 255`), so global block `g` uses `zetaTwiddle g`;
-* carry the **CT stage invariant**: after stage `s`, array position `g·len_s + i` (`len_s = 2^{7−s}`) holds
-  `eval256` of the `g`-th length-`2^{s+1}` decimated subpolynomial at the appropriate `ζ^{odd}` root, each
-  butterfly step preserving it by `cast_bfSweep` (`ring`);
-* collapse the final stage (`len = 1`) to `(ntt a)[m]! = eval256 a (evalRoot m)`.
+/-- Pointwise-equal-on-`l` step functions fold to the same result (mem-restricted `foldl_ext`). -/
+theorem foldl_ext_mem {A B : Type} (f g : B → A → B) (l : List A)
+    (h : ∀ b, ∀ a ∈ l, f b a = g b a) (init : B) : l.foldl f init = l.foldl g init := by
+  induction l generalizing init with
+  | nil => rfl
+  | cons hd tl ih =>
+    simp only [List.foldl_cons]; rw [h init hd (List.mem_cons_self ..)]
+    exact ih (fun b a ha => h b a (List.mem_cons_of_mem _ ha)) _
 
-That outer-loop-peel + stage-invariant induction is the single named sub-step still open; the butterfly
-engine it rests on is closed above. -/
+/-- `ntt`'s schedule with the innermost `for j` butterfly written as a `bfSweep` call — definitionally equal
+to `ntt` (`bfSweep` IS that inner loop). The intermediate that keeps the inner term opaque during the peel. -/
+def nttCleanDo (w : Poly) : Poly := Id.run do
+  let mut a := w
+  let mut k := 0
+  for s in [0:8] do
+    let len := 128 >>> s
+    let nblk := 128 / len
+    for blk in [0:nblk] do
+      let start := blk * 2 * len
+      k := k + 1
+      a := bfSweep (zetaTwiddle k) start len a
+  return a
+
+/-- **The forward NTT as an explicit ordered `bfSweep` fold** — the peeled form of `ntt`. Outer fold over the
+8 stages, inner fold over the `2^s` blocks; state `(a, k)` threads the array and the twiddle counter. -/
+def nttFold (w : Poly) : Poly :=
+  (List.foldl (fun (st : Poly × Nat) (s : Nat) =>
+      List.foldl (fun (st2 : Poly × Nat) (blk : Nat) =>
+          (bfSweep (zetaTwiddle (st2.2 + 1)) (blk * 2 * (128 >>> s)) (128 >>> s) st2.1, st2.2 + 1))
+        st (List.range' 0 (128 / (128 >>> s)) 1))
+    (w, 0) (List.range' 0 8 1)).1
+
+set_option maxHeartbeats 800000 in
+set_option maxRecDepth 8000 in
+/-- The `Id.run do` schedule reduces to the plain nested `foldl` (`forIn`→`foldl`, pair-state threaded). -/
+theorem do_eq_fold (w : Poly) : nttCleanDo w = nttFold w := by
+  unfold nttCleanDo nttFold
+  simp only [Id.run, Std.Legacy.Range.forIn_eq_forIn_range', bind_pure_comp, map_pure,
+    List.forIn_pure_yield_eq_foldl, Std.Legacy.Range.size, Nat.sub_zero, Nat.add_sub_cancel,
+    Nat.div_one]
+  refine Eq.trans ?_ (congrArg Prod.fst (foldl_ext_mem _ _ _ (fun st s _ => rfl) (w, 0)))
+  rfl
+
+/-- **THE OUTER-LOOP PEEL.** `ntt w = nttFold w`: the imperative 8-stage butterfly schedule equals the
+explicit ordered `bfSweep` fold. This closes step 1 of the RUNG-2 residual. Axiom-clean. -/
+theorem ntt_eq_fold (w : Poly) : ntt w = nttFold w := by
+  rw [show ntt w = nttCleanDo w by unfold ntt nttCleanDo bfSweep; rfl, do_eq_fold]
+
+/-! ### RUNG 2, step 1b — THE TWIDDLE IS `ζ^{brv(k)}` IN THE FIELD (`cast_zetaTwiddle`), BUILT.
+
+The collapse of the stage invariant needs the executable twiddle `zetaTwiddle k = powModQ ζ (brv8 k)` to be
+the honest field power `(ζ : ℤ_q)^{brv8 k}`. Both `powModQ` (square-and-multiply, a 32-step ladder) and
+`brv8` (8-bit reversal) are imperative `Id.run do` loops; each is characterized from its actual def:
+`cast_powModQ` proves the ladder computes `base^e` in `ℤ_q` (loop invariant `result = base^{e mod 2^t}`,
+`b = base^{2^t}`, `ex = e / 2^t` after `t` steps), and `brv8_lt` bounds `brv8 k < 256 < 2^32` (so the ladder
+covers the exponent). No `native_decide`. -/
+
+/-- The desugared square-and-multiply step of `powModQ`; state `(b, ex, result)`. -/
+def pstep (st : Nat × Nat × Nat) (_ : Nat) : Nat × Nat × Nat :=
+  (mulModQ st.1 st.1, st.2.1 / 2, if st.2.1 % 2 == 1 then mulModQ st.2.2 st.1 else st.2.2)
+
+/-- `powModQ` as the explicit 32-step ladder fold (`result` is the third component). -/
+theorem powModQ_eq_fold (base e : Nat) :
+    powModQ base e = (List.foldl pstep (base % q, e, 1) (List.range' 0 32 1)).2.2 := by
+  unfold powModQ
+  simp only [Id.run, Std.Legacy.Range.forIn_eq_forIn_range', bind_pure_comp, map_pure,
+    ← apply_ite, List.forIn_pure_yield_eq_foldl, Std.Legacy.Range.size, Nat.sub_zero,
+    Nat.add_sub_cancel, Nat.div_one]
+  rfl
+
+/-- **Ladder loop invariant** in `ℤ_q`: after `n` steps `result = res·b0^{ex0 mod 2ⁿ}`, `b = b0^{2ⁿ}`,
+`ex = ex0 / 2ⁿ`. The square-and-multiply correctness, proved entrywise from the fold (not asserted). -/
+theorem pow_fold_inv (b0 ex0 : Nat) : ∀ (n res : Nat),
+    (((List.range' 0 n 1).foldl pstep (b0, ex0, res)).2.2 : ZMod q)
+        = (res : ZMod q) * (b0 : ZMod q) ^ (ex0 % 2 ^ n)
+      ∧ (((List.range' 0 n 1).foldl pstep (b0, ex0, res)).1 : ZMod q) = (b0 : ZMod q) ^ (2 ^ n)
+      ∧ (((List.range' 0 n 1).foldl pstep (b0, ex0, res)).2.1 = ex0 / 2 ^ n) := by
+  intro n
+  induction n with
+  | zero => intro res; simp [Nat.mod_one]
+  | succ n ih =>
+    intro res
+    rw [List.range'_1_concat, List.foldl_concat]
+    obtain ⟨ih1, ih2, ih3⟩ := ih res
+    set S := (List.range' 0 n 1).foldl pstep (b0, ex0, res) with hS
+    have hpow : (2 : Nat) ^ (n + 1) = 2 ^ n * 2 := by rw [pow_succ]
+    have hmul : ex0 % 2 ^ (n + 1) = ex0 % 2 ^ n + 2 ^ n * (ex0 / 2 ^ n % 2) := by
+      rw [hpow, Nat.mod_mul]
+    unfold pstep
+    refine ⟨?_, ?_, ?_⟩
+    · by_cases hpar : (S.2.1 % 2 == 1) = true
+      · rw [if_pos hpar]
+        have hpar2 : S.2.1 % 2 = 1 := by simpa using hpar
+        rw [cast_mulModQ, ih1, ih2]
+        have hodd : ex0 / 2 ^ n % 2 = 1 := by rw [← ih3]; exact hpar2
+        rw [hmul, hodd, mul_one, pow_add]; ring
+      · rw [if_neg hpar, ih1]
+        have hpar2 : S.2.1 % 2 = 0 := by
+          have : ¬ S.2.1 % 2 = 1 := by simpa using hpar
+          omega
+        have heven : ex0 / 2 ^ n % 2 = 0 := by rw [← ih3]; exact hpar2
+        rw [hmul, heven, mul_zero, add_zero]
+    · rw [cast_mulModQ, ih2, ← pow_add, ← two_mul, ← pow_succ']
+    · rw [ih3, Nat.div_div_eq_div_mul, ← pow_succ]
+
+/-- **`powModQ` reduces to the honest field power** `(base : ℤ_q)^e` for `e < 2³²` (covers all `brv8` outputs).
+The imperative modular exponentiation IS `ℤ_q` exponentiation. -/
+theorem cast_powModQ (base e : Nat) (he : e < 2 ^ 32) :
+    ((powModQ base e : Nat) : ZMod q) = (base : ZMod q) ^ e := by
+  rw [powModQ_eq_fold, (pow_fold_inv (base % q) e 32 1).1, Nat.mod_eq_of_lt he, Nat.cast_one,
+      one_mul, ZMod.natCast_mod]
+
+/-- The desugared bit-shift step of `brv8`; state `(r, x)`. -/
+def brvStep (b : Nat × Nat) (_ : Nat) : Nat × Nat := (b.1 * 2 + b.2 % 2, b.2 / 2)
+
+theorem brv8_eq_fold (k : Nat) : brv8 k = ((List.range' 0 8 1).foldl brvStep (0, k)).1 := by
+  unfold brv8
+  simp only [Id.run, Std.Legacy.Range.forIn_eq_forIn_range', bind_pure_comp, map_pure,
+    List.forIn_pure_yield_eq_foldl, Std.Legacy.Range.size, Nat.sub_zero, Nat.add_sub_cancel,
+    Nat.div_one]
+  rfl
+
+/-- After `n` shift-in steps the accumulated reversal `r < 2ⁿ` (loop invariant on the `brv8` fold). -/
+theorem brv_fold_lt : ∀ (n x : Nat), ((List.range' 0 n 1).foldl brvStep (0, x)).1 < 2 ^ n := by
+  intro n
+  induction n with
+  | zero => intro x; simp
+  | succ n ih =>
+    intro x
+    rw [List.range'_1_concat, List.foldl_concat]
+    have hih := ih x
+    have hmod : ((List.range' 0 n 1).foldl brvStep (0, x)).2 % 2 < 2 := Nat.mod_lt _ (by norm_num)
+    have hpow : (2 : Nat) ^ (n + 1) = 2 ^ n * 2 := by rw [pow_succ]
+    set S := (List.range' 0 n 1).foldl brvStep (0, x) with hS
+    unfold brvStep
+    omega
+
+/-- The 8-bit reversal is `< 256` (so `< 2³²`, discharging `cast_powModQ`'s bound). -/
+theorem brv8_lt (k : Nat) : brv8 k < 256 := by
+  rw [brv8_eq_fold]; have := brv_fold_lt 8 k; norm_num at this ⊢; omega
+
+/-- **THE TWIDDLE IN THE FIELD.** `zetaTwiddle k = (ζ : ℤ_q)^{brv8 k}` — the FIPS 204 twiddle is the honest
+field power at the bit-reversed exponent. This is the identification the stage-invariant collapse consumes
+to reach the `ζ^{2·brv(m)+1}` roots. Axiom-clean. -/
+theorem cast_zetaTwiddle (k : Nat) :
+    ((zetaTwiddle k : Nat) : ZMod q) = (zeta : ZMod q) ^ (brv8 k) := by
+  unfold zetaTwiddle
+  exact cast_powModQ zeta (brv8 k) (lt_of_lt_of_le (brv8_lt k) (by norm_num))
+
+/-! ### The EXACT remaining step (the top of RUNG 2) — the CT stage-invariant induction.
+
+Steps 1 (`ntt_eq_fold`, the peel) and 1b (`cast_zetaTwiddle`, the twiddle-in-field) are now BUILT above.
+What remains to discharge `NttEvalsAtRoots` is the stage-invariant induction over `nttFold`:
+
+* **The invariant** (`0 ≤ s ≤ 7`, root closed form `ρ(s,g) = (ζ:ℤ_q)^{2·brv8(2ˢ+g)}`): after `s` stages, for
+  every segment `g < 2ˢ` and offset `i < 256 >>> s`,
+  `(nttStage_s w)[g·(256>>>s) + i]! = Σ_{u < 2ˢ} (w[i + u·(256>>>s)]! : ℤ_q) · ρ(s,g)^u`
+  — i.e. array slot `g·len+i` holds the `ℤ_q`-eval of the decimated coefficient sequence
+  `(w_i, w_{i+len}, w_{i+2len}, …)` at `ρ(s,g)`, equivalently the `i`-th coefficient of `w mod (X^{len} − ρ(s,g))`.
+* **Base** `s = 0`: `2⁰ = 1`, sum is the single `u = 0` term `= w[i]!`, so the array is the input — trivial.
+* **Step** (one full stage = the inner block fold): block `blk` rewrites segment `blk` (positions
+  `[blk·len_s, blk·len_s + len_s)`, `len_s = 256>>>s`) into new segments `2·blk` (low) and `2·blk+1` (high)
+  via `cast_bfSweep` with twiddle `z = (ζ:ℤ_q)^{brv8(2ˢ+blk)}` (`cast_zetaTwiddle`). Splitting the target
+  sum `Σ_{u < 2^{s+1}}` into even/odd `u` gives exactly `low = g_lo + z·g_hi`, `high = g_lo − z·g_hi`
+  (one `Finset` even/odd reindex + a `ring` step over `ℤ_q`), advancing `ρ(s,blk) = z²` to
+  `ρ(s+1,2blk) = z`, `ρ(s+1,2blk+1) = −z`. The block-disjointness (each block touches its own segment) is
+  the inner `foldl` invariant. This is where the `brv8` exponent identities
+  `2·brv8(2^{s+1}+2blk) ≡ brv8(2ˢ+blk)  (mod 512)` (and the `+1`/`+256` variants) enter — provable from
+  `brv8_eq_fold` bit-arithmetic — pinning `ρ` consistent under the recurrence.
+* **Collapse** `s = 8` (`len = 1`): the recurrence's last step sends `ρ(8,m)` to `ζ^{2·brv8(m)+1} = evalRoot m`
+  (the closed form `2·brv8(2ˢ+g)` holds only for `s ≤ 7`; the `7 → 8` step supplies the `+1`), and the sum
+  over `u < 256` is `eval256 w (evalRoot m)`, i.e. `NttEvalsAtRoots`.
+
+That nested block-disjoint stage-invariant induction (with the `brv8` exponent identities and the even/odd
+`Finset` reindex) is the single named sub-step still open; the peel, the butterfly engine, the twiddle-field
+cast, and the orthogonality all rest under it, BUILT. -/
 
 /-- The 256 negacyclic evaluation points `ζ^{2·brv(m)+1}` (the roots of `X²⁵⁶+1` over `ℤ_q`). -/
 def evalRoot (m : Nat) : ZMod q := (zeta : ZMod q)^(2 * brv8 m + 1)
@@ -567,5 +745,8 @@ deliberately NOT gated here — it is the accepted computational residual, isola
 #assert_axioms bfFold_spec
 #assert_axioms bfSweep_getElem
 #assert_axioms cast_bfSweep
+#assert_axioms ntt_eq_fold
+#assert_axioms cast_powModQ
+#assert_axioms cast_zetaTwiddle
 
 end Dregg2.Crypto.MlDsaRing
