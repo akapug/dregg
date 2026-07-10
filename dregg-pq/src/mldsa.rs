@@ -45,6 +45,59 @@ pub fn ml_dsa_verify_core(wire: &str) -> Option<bool> {
     }
 }
 
+/// A pluggable, Lean-VERIFIED **REAL, FULL-BYTE** ML-DSA verify backend (BRICK 8), installed by an
+/// integration layer. Where [`LeanVerifyCore`] carries the `A=id` SCALAR reduction over a 5-integer toy
+/// wire, THIS core carries the FULL-DIMENSION ML-DSA-65 verify over the actual `pk ‖ msg ‖ ctx ‖ sig`
+/// bytes.
+///
+/// The extracted core is `Dregg2.Crypto.Fips204Verify.verifyRealFFI` over `MlDsaVerifyReal.verifyCore`
+/// (the `n=256` negacyclic ring / NTT / SampleInBall / ExpandA / real 1952/3309-byte codec), `@[export]`ed
+/// as `dregg_fips204_verify_real` and compiled to leanc-native code. It is PROVED (`native_decide`) to
+/// ACCEPT a genuine `fips204` v0.4.6 crate signature (`verify_accepts_real`) and REJECT a one-byte tamper /
+/// wrong message (`verify_rejects_tampered`, `verify_rejects_wrong_msg`). `dregg-lean-ffi::
+/// shadow_fips204_verify_real` runs it natively.
+///
+/// dregg-pq stays a LIGHT leaf (it never depends on the 195 MB Lean archive): it takes a function pointer.
+/// An integration layer that CAN link the archive installs the native core via
+/// [`install_lean_verify_core_real`]; once installed, [`ml_dsa_verify`] takes its accept/reject verdict
+/// from the Lean-verified object over the real bytes — the `fips204` crate is NO LONGER the verify
+/// authority. The wire is `"hex(pk) hex(msg) hex(ctx) hex(sig)"`; the reply is `"1"` (accept) / `"0"`
+/// (reject / malformed).
+type LeanVerifyCoreReal = fn(wire: &str) -> Option<String>;
+static LEAN_VERIFY_CORE_REAL: OnceLock<LeanVerifyCoreReal> = OnceLock::new();
+
+/// Install the extracted, Lean-verified REAL, full-byte ML-DSA verify core (e.g.
+/// `|w| dregg_lean_ffi::shadow_fips204_verify_real(w).ok()`). Once installed, [`ml_dsa_verify`] routes the
+/// SECURITY-CRITICAL accept/reject through it — taking the `fips204` crate OUT of the verify TCB. Returns
+/// `false` if one is already installed (once-per-process; the verified core is not hot-swappable).
+pub fn install_lean_verify_core_real(core: LeanVerifyCoreReal) -> bool {
+    LEAN_VERIFY_CORE_REAL.set(core).is_ok()
+}
+
+/// Whether a Lean-verified REAL verify core has been installed (so [`ml_dsa_verify`] is Lean-backed rather
+/// than routed to the `fips204` crate). A deployed, verified node installs one at startup.
+pub fn lean_verify_core_real_installed() -> bool {
+    LEAN_VERIFY_CORE_REAL.get().is_some()
+}
+
+/// Marshal `(pk, msg, ctx, sig)` into the byte wire the Lean real verify core reads:
+/// `"hex(pk) hex(msg) hex(ctx) hex(sig)"` (four space-separated lowercase-hex fields; an empty field is the
+/// empty token between two spaces).
+fn real_verify_wire(pk: &[u8], msg: &[u8], ctx: &[u8], sig: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut s = String::with_capacity((pk.len() + msg.len() + ctx.len() + sig.len()) * 2 + 3);
+    for (i, field) in [pk, msg, ctx, sig].into_iter().enumerate() {
+        if i != 0 {
+            s.push(' ');
+        }
+        for &b in field {
+            s.push(HEX[(b >> 4) as usize] as char);
+            s.push(HEX[(b & 0x0f) as usize] as char);
+        }
+    }
+    s
+}
+
 /// A pluggable, Lean-VERIFIED ML-DSA SIGN backend, installed by an integration layer (the mirror of
 /// [`LeanVerifyCore`] for the signing direction).
 ///
@@ -168,7 +221,34 @@ pub fn ml_dsa_sign_from_seed(seed: &[u8; 32], ctx: &[u8], message: &[u8]) -> Opt
 /// wrong-length signature, an undecodable key, or a failed cryptographic check.
 /// This is the fail-CLOSED primitive: a present-but-invalid (or malformed) PQ
 /// half must make the whole hybrid verification reject.
+///
+/// # The security-critical bool comes from the Lean-verified core, not the crate
+///
+/// When a Lean-verified REAL verify core is installed ([`install_lean_verify_core_real`], done by any
+/// process that can link `dregg-lean-ffi`), the ACCEPT/REJECT verdict is computed by the extracted,
+/// full-dimension `MlDsaVerifyReal.verifyCore` (BRICK 8) over the actual `pk ‖ msg ‖ ctx ‖ sig` bytes —
+/// running as leanc-native code, PROVED to accept a genuine crate signature and reject tampers. On that
+/// path the `fips204` crate is NO LONGER trusted for verify: it is not consulted at all.
+///
+/// When NO verified core is installed (a caller that has not wired the Lean archive), this falls back to
+/// the `fips204` crate primitive. `dregg-pq` is a light leaf shared by 9 crates and cannot itself link the
+/// 195 MB Lean archive, so the routing is an install-time seam rather than a direct call; a deployed,
+/// verified node installs the real core at startup and thereby leaves the crate out of the verify TCB.
 pub fn ml_dsa_verify(public_bytes: &[u8], ctx: &[u8], message: &[u8], sig_bytes: &[u8]) -> bool {
+    // Fail CLOSED on a wrong-length key/signature regardless of which backend answers.
+    if public_bytes.len() != ml_dsa_65::PK_LEN || sig_bytes.len() != ml_dsa_65::SIG_LEN {
+        return false;
+    }
+
+    // AUTHORITY: the Lean-verified real verify core over the real bytes, when installed. The `fips204`
+    // crate is not consulted on this path — it has left the verify TCB.
+    if let Some(core) = LEAN_VERIFY_CORE_REAL.get() {
+        let wire = real_verify_wire(public_bytes, message, ctx, sig_bytes);
+        // A `None` (FFI/archive fault) or any non-`"1"` reply fails CLOSED.
+        return matches!(core(&wire).as_deref(), Some("1"));
+    }
+
+    // FALLBACK (no verified core installed): the `fips204` crate primitive.
     let Ok(pk_arr) = <[u8; ml_dsa_65::PK_LEN]>::try_from(public_bytes) else {
         return false;
     };

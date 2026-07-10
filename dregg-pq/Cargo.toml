@@ -30,6 +30,10 @@ getrandom = { workspace = true }
 rand_core = "0.6"
 
 [dev-dependencies]
+# BRICK 8 gate (`tests/mldsa_lean_verify.rs`): install the leanc-native, Lean-verified REAL ML-DSA verify
+# core so `ml_dsa_verify` is routed through it and the `fips204` crate leaves the verify TCB. A dev-dep
+# ONLY — the shipping `dregg-pq` leaf never links the Lean archive; a deployed node installs the core.
+dregg-lean-ffi = { path = "../dregg-lean-ffi" }
 
 [lints]
 workspace = true

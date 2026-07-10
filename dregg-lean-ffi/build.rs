@@ -1336,6 +1336,7 @@ fn main() {
     println!("cargo::rustc-check-cfg=cfg(dregg_direct_present)");
     println!("cargo::rustc-check-cfg=cfg(dregg_storage_content_root_present)");
     println!("cargo::rustc-check-cfg=cfg(dregg_fips204_verify_present)");
+    println!("cargo::rustc-check-cfg=cfg(dregg_fips204_verify_real_present)");
     println!("cargo::rustc-check-cfg=cfg(dregg_fips204_sign_present)");
     println!("cargo::rustc-check-cfg=cfg(dregg_fips203_encaps_present)");
     println!("cargo::rustc-check-cfg=cfg(dregg_fips203_decaps_present)");
@@ -1698,6 +1699,18 @@ fn main() {
         println!("cargo:rustc-cfg=dregg_fips204_verify_present");
     }
 
+    // FIPS-204-VERIFY-REAL extraction (BRICK 8): probe the spliced archive for the
+    // `@[export] dregg_fips204_verify_real` symbol — the FULL-BYTE, full-dimension ML-DSA-65 verify
+    // (`MlDsaVerifyReal.verifyCore` over the real 1952/3309-byte key/signature, not the `A=id` scalar
+    // toy). Co-located in `Dregg2.Crypto.Fips204Verify`, so its initializer is the SAME
+    // `initialize_Dregg2_Dregg2_Crypto_Fips204Verify` already run under DREGG_FIPS204_VERIFY. Present ⇒
+    // gate the Rust `extern "C"` block, the C shim string bridge, and the module define. This is the
+    // export `dregg-pq::ml_dsa_verify` routes through to take the `fips204` crate OUT of the verify TCB.
+    let fips204_verify_real_present = archive_exports(&build_archive, "dregg_fips204_verify_real");
+    if fips204_verify_real_present {
+        println!("cargo:rustc-cfg=dregg_fips204_verify_real_present");
+    }
+
     // FIPS-204-SIGN extraction: probe the spliced archive for the `@[export] dregg_fips204_sign`
     // symbol (the extracted, Lean-verified ML-DSA sign core — the Fiat–Shamir-with-aborts signer,
     // co-located in `Dregg2.Crypto.Fips204Verify` with the verify core). Present ⇒ gate the Rust
@@ -1772,6 +1785,9 @@ fn main() {
     }
     if fips204_verify_present {
         shim.define("DREGG_FIPS204_VERIFY", None);
+    }
+    if fips204_verify_real_present {
+        shim.define("DREGG_FIPS204_VERIFY_REAL", None);
     }
     if fips204_sign_present {
         shim.define("DREGG_FIPS204_SIGN", None);
