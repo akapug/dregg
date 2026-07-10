@@ -64,6 +64,35 @@ uses.** Against a delta-based Lean kernel (`apply_cell_delta`-shaped), both side
 3. LOC / ripple cost of the core refactor vs. the bridge+tactic ceiling against the current model.
 4. Does matching the Rust `CellStateDelta` structure exactly avoid a NEW mirror, or introduce one?
 
+## ⚖ MEASURED VERDICT (2026-07-10, DeltaProto.lean — audited by type, green 1432 jobs)
+The de-risk ran. `EffectsAsDataProto`'s earlier **NO** conflated two costs; separated, the answer is **YES**:
+- **RECURRING per-effect square: ZERO per-cell `by_cases`.** `denote_applyDelta : denote (applyDeltaFin ds f) =
+  applyDeltaRec ds (denote f)` is EFFECT-FREE (names no effect), proved once by induction on the delta-list.
+  Every effect's square is then `cases recKX (guard) → rw [denote_applyDelta] → exact (migration).symm`. Verified:
+  `finTransferDelta_denote` has zero `by_cases`; its only split is the none/some **guard** match, which every
+  executable op has.
+- **ONE-TIME migration lemma: 2 per-cell `by_cases`** (`c=src`, `c=dst`) in `applyDeltaRec_transfer` — disclosed,
+  isolated, NOT hidden in a helper. Proportional to the cells an effect writes.
+- **Under REDEFINITION** (the deployed op DEFINED as the fold, §6): the per-cell `by_cases` **vanishes** —
+  `recKExecDelta_eq_applyDelta` retains only the structural `hg` authorization-guard split.
+- **Blast radius of redefinition (re-derived independently): 150 files, 112 proof sites** that `unfold`/`simp`
+  `recTransfer`/`recKExec`/`recCreditCell`.
+- Faithfulness win: the Lean `CellDelta.balanceChange : ℤ` is a RELATIVE delta mirroring Rust's `i64`, so
+  `transferDelta turn = [(src,⟨-amt⟩),(dst,⟨amt⟩)]` is state-INDEPENDENT DATA (the earlier absolute-overwrite
+  proto had to read `k`).
+
+## ✅ DECISION (2026-07-10)
+**Adopt the delta model for R3-continuation (Option A) — do NOT redefine the deployed ops inside DEBT-B.**
+Option A captures the recurring win (shared effect-free naturality; per-effect cost drops from a full
+commuting-square proof to a small reconciliation lemma sized by cells-touched) at LOW risk.
+**Option B (redefine `recKExec`/`recTransfer` as folds) is DEFERRED as its own scoped campaign**: it makes the
+migration lemmas guard-only and is structurally faithful to `apply_cell_delta`, but ripples 112 proof sites across
+150 files *including the apex*. That is not a thing to do inside DEBT-B. Its cost is now MEASURED, not guessed —
+which is the whole point of having run the de-risk.
+⚠ Scope note for R3-continuation: `denote_applyDelta` leverage is per-FIELD. `CellDelta` currently models only
+`balanceChange` (the one field transfer touches). Effects mutating `caps`/`lifecycle`/`heaps`/`slotCaveats` need
+their field's delta + its own naturality instance. Rust's `CellStateDelta` has six fields — mirror them as needed.
+
 ## The trigger
 When R3-continuation / the faithfulness cluster is taken on for real, evaluate the delta-refactor FIRST — a
 one-effect prototype (transfer as `validateDelta`+`applyDelta` mirroring `ledger.rs`, measure whether
