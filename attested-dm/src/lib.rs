@@ -65,11 +65,12 @@ pub use prompt_template::{
 
 pub mod game;
 pub use game::{
-    bramble_keep, deepdark_mine, starfall_spire, sunken_vault, CombatEnemy, DialogueGrant,
-    DialogueRule, Exit, GameAction, GameBinding, GameBrain, GameRefusal, GameSession, GameStatus,
-    GameWorld, Gate, GateReason, Hostile, LightRule, LoseCondition, Npc, Objective, Outcome,
-    PlayResult, Proposal, RefuelRule, Resolution, Room, ScriptedGm, Spell, SpellEffect, SpellRule,
-    UseRule, PLAYER_WOUNDS_FLAG,
+    bramble_keep, deepdark_mine, starfall_spire, sunken_vault, venom_deep, CombatEnemy,
+    ConsumableEffect, ConsumableRule, DialogueGrant, DialogueRule, Exit, GameAction, GameBinding,
+    GameBrain, GameRefusal, GameSession, GameStatus, GameWorld, Gate, GateReason, Hostile,
+    LightRule, LoseCondition, Npc, Objective, Outcome, PlayResult, Proposal, RefuelRule,
+    Resolution, Room, ScriptedGm, Spell, SpellEffect, SpellRule, StatusKind, StatusRule, UseRule,
+    PLAYER_WOUNDS_FLAG,
 };
 // `PromptBinding` is defined below (it is tightly coupled to the chain-link hashing); re-exported
 // here in the same neighbourhood as the other prompt-template surface for discoverability.
@@ -357,6 +358,11 @@ fn encode_effect(h: &mut blake3::Hasher, effect: &Option<WorldEffect>) {
             h.update(&(item.len() as u64).to_le_bytes());
             h.update(item.as_bytes());
         }
+        Some(WorldEffect::ConsumeItem(item)) => {
+            h.update(&[5u8]);
+            h.update(&(item.len() as u64).to_le_bytes());
+            h.update(item.as_bytes());
+        }
         Some(WorldEffect::Batch(v)) => {
             h.update(&[4u8]);
             h.update(&(v.len() as u64).to_le_bytes());
@@ -415,6 +421,15 @@ pub enum WorldEffect {
     /// Grant a player an item. The DM may only grant items its caps whitelist — it
     /// cannot hand out an unearned item.
     GrantItem(String),
+    /// **Consume (remove) an item from a player's inventory.** The counterpart of
+    /// [`Self::GrantItem`]: it takes an item OUT of the inventory rather than putting one in.
+    /// This is how a single-use consumable (a drained potion) really leaves the pack — so a
+    /// second `use` of a spent item finds nothing to use (the resolver refuses it, no receipt).
+    /// It is not a cap escape and needs no grant: removing an item the player already holds can
+    /// never mint an item the world never named, so it is always authorized (a `Consume` of an
+    /// item you do not hold simply removes nothing). Encoded into the chain link like the others,
+    /// so a rewritten consume breaks the receipt.
+    ConsumeItem(String),
     /// **Apply several effects atomically as ONE turn.** The single-effect-per-turn shape
     /// cannot express a move that touches two counters at once — a combat exchange, say, where
     /// the same blow both wounds the foe and lets it wound you back. A `Batch` lands all of its
@@ -535,6 +550,9 @@ impl WorldCell {
             }
             WorldEffect::GrantItem(item) => {
                 self.inventory.insert(item.clone());
+            }
+            WorldEffect::ConsumeItem(item) => {
+                self.inventory.remove(item);
             }
             WorldEffect::Batch(v) => {
                 for e in v {

@@ -30,6 +30,13 @@
 //!
 //! use rusted_key on iron_door in vestry -> flag door_unlocked "The lock turns."
 //!
+//! status venom poison 2                  # a debuff: 2 wounds per STEP while active
+//! status warded shield 3                 # a buff: mitigates 3 combat damage while active
+//! consumable salve use -> heal 4 "You break the salve; the ache dulls."   # heal N (clamped)
+//! consumable bile use -> status venom 8 "Venom floods your veins."        # grant a timed status
+//! consumable antidote use -> cure venom "The green fire goes cold."       # zero a status
+//! consumable sigil use -> flag ward_lifted "The sigil crumbles; the ward lifts."  # set a flag
+//!
 //! npc witch "The Hedge-Witch" in witch_hut
 //!   about "a swamp-crone who trades only in fair exchange"
 //!   topic sickle requires item nightshade -> gives sickle "A fair trade." else "Bring nightshade."
@@ -78,8 +85,9 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use crate::game::{
-    CombatEnemy, DialogueGrant, DialogueRule, Exit, GameWorld, Gate, Hostile, LightRule,
-    LoseCondition, Npc, Objective, RefuelRule, Room, Spell, SpellEffect, SpellRule, UseRule,
+    CombatEnemy, ConsumableEffect, ConsumableRule, DialogueGrant, DialogueRule, Exit, GameWorld,
+    Gate, Hostile, LightRule, LoseCondition, Npc, Objective, RefuelRule, Room, Spell, SpellEffect,
+    SpellRule, StatusKind, StatusRule, UseRule,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -424,6 +432,8 @@ struct Prov {
     dialogue_line: Vec<usize>,
     spell_line: BTreeMap<String, usize>,
     spellrule_line: Vec<usize>,
+    consumable_line: Vec<usize>,
+    status_line: BTreeMap<String, usize>,
     objective_line: usize,
     start_line: usize,
 }
@@ -441,6 +451,8 @@ struct Builder {
     dialogue: Vec<DialogueRule>,
     spells: Vec<Spell>,
     spell_rules: Vec<SpellRule>,
+    consumables: Vec<ConsumableRule>,
+    statuses: Vec<StatusRule>,
     player_max_hp: i64,
     light: Option<LightRule>,
     start: Option<String>,
@@ -460,6 +472,8 @@ fn build(src: &str) -> Result<(GameWorld, Prov), DungeonError> {
         dialogue: Vec::new(),
         spells: Vec::new(),
         spell_rules: Vec::new(),
+        consumables: Vec::new(),
+        statuses: Vec::new(),
         player_max_hp: 0,
         light: None,
         start: None,
@@ -540,6 +554,14 @@ fn build(src: &str) -> Result<(GameWorld, Prov), DungeonError> {
                 parse_use(&mut b, line)?;
                 i += 1;
             }
+            "status" => {
+                parse_status(&mut b, line)?;
+                i += 1;
+            }
+            "consumable" => {
+                parse_consumable(&mut b, line)?;
+                i += 1;
+            }
             "room" => {
                 i = parse_room(&mut b, &lines, i)?;
             }
@@ -586,6 +608,8 @@ fn build(src: &str) -> Result<(GameWorld, Prov), DungeonError> {
         dialogue: b.dialogue,
         spells: b.spells,
         spell_rules: b.spell_rules,
+        consumables: b.consumables,
+        statuses: b.statuses,
         player_max_hp: b.player_max_hp,
         light: b.light,
         start,
@@ -696,6 +720,99 @@ fn parse_use(b: &mut Builder, line: &Line) -> Result<(), DungeonError> {
         item,
         target,
         sets_flag: (flag, v),
+        narration,
+    });
+    Ok(())
+}
+
+/// Parse a top-level `status <flag> shield|poison <n>` directive into a [`StatusRule`].
+fn parse_status(b: &mut Builder, line: &Line) -> Result<(), DungeonError> {
+    let toks = lex(&line.text, line.no)?;
+    // status <flag> shield <n>   |   status <flag> poison <n>
+    let flag = word_at(&toks, 1, line.no, "a status flag after `status`")?.to_string();
+    let kindw = word_at(
+        &toks,
+        2,
+        line.no,
+        "`shield` or `poison` after the status flag",
+    )?;
+    let n = parse_num(
+        word_at(&toks, 3, line.no, "the status magnitude")?,
+        line.no,
+        "status magnitude",
+    )?;
+    let kind = match kindw {
+        "shield" => StatusKind::Shield(n),
+        "poison" => StatusKind::Poison(n),
+        other => {
+            return Err(DungeonError::at(
+                line.no,
+                format!("expected `shield` or `poison` after the status flag, found `{other}`"),
+            ))
+        }
+    };
+    b.prov.status_line.insert(flag.clone(), line.no);
+    b.statuses.push(StatusRule { flag, kind });
+    Ok(())
+}
+
+/// Parse a top-level `consumable <item> [use] -> <effect> "<narr>"` directive into a
+/// [`ConsumableRule`]. The `use` word is optional flavour; the effect is one of
+/// `heal <n>` / `status <flag> <dur>` / `cure <flag>` / `flag <name> [= v]` / `reveal`.
+fn parse_consumable(b: &mut Builder, line: &Line) -> Result<(), DungeonError> {
+    let toks = lex(&line.text, line.no)?;
+    // consumable <item> [use] -> <effect> ... "<narr>"
+    let item = word_at(&toks, 1, line.no, "an item after `consumable`")?.to_string();
+    let arrow = arrow_pos(&toks).ok_or_else(|| {
+        DungeonError::at(
+            line.no,
+            "a consumable needs `-> heal/status/cure/flag/reveal ... \"...\"`",
+        )
+    })?;
+    let rhs = &toks[arrow + 1..];
+    let narration = first_str(rhs)
+        .ok_or_else(|| DungeonError::at(line.no, "a consumable needs a \"narration\" string"))?;
+    let effect = match rhs.first().and_then(Tok::word) {
+        Some("heal") => {
+            let n = parse_num(
+                word_at(rhs, 1, line.no, "the heal amount after `heal`")?,
+                line.no,
+                "heal amount",
+            )?;
+            ConsumableEffect::Heal(n)
+        }
+        Some("status") => {
+            let flag = word_at(rhs, 1, line.no, "the status flag after `status`")?.to_string();
+            let duration = parse_num(
+                word_at(rhs, 2, line.no, "the status duration")?,
+                line.no,
+                "status duration",
+            )?;
+            ConsumableEffect::Status { flag, duration }
+        }
+        Some("cure") => ConsumableEffect::Cure(
+            word_at(rhs, 1, line.no, "the status flag after `cure`")?.to_string(),
+        ),
+        Some("flag") => {
+            let name = word_at(rhs, 1, line.no, "the flag after `flag`")?.to_string();
+            let (v, _) = parse_flag_val(&rhs[2.min(rhs.len())..]);
+            ConsumableEffect::SetFlag(name, v)
+        }
+        Some("reveal") | Some("reveals") => ConsumableEffect::Reveal,
+        other => {
+            return Err(DungeonError::at(
+                line.no,
+                format!(
+                    "expected `heal`/`status`/`cure`/`flag`/`reveal`, found {}",
+                    show(other)
+                ),
+            ))
+        }
+    };
+    b.prov.consumable_line.push(line.no);
+    b.consumables.push(ConsumableRule {
+        item,
+        effect,
         narration,
     });
     Ok(())
@@ -1324,6 +1441,49 @@ fn check(world: &GameWorld, prov: Option<&Prov>) -> Vec<(Option<usize>, Issue)> 
         }
     }
 
+    // Consumables: the consumed item must be obtainable somewhere (never placed = an item the
+    // player can never drink), and a status grant/cure must name a DECLARED status flag (else the
+    // buff/debuff it promises does nothing). Both are blocking errors — a broken consumable is not
+    // a playable dungeon.
+    let status_flags: BTreeSet<&str> = world.statuses.iter().map(|s| s.flag.as_str()).collect();
+    for (idx, c) in world.consumables.iter().enumerate() {
+        let line = prov.and_then(|p| p.consumable_line.get(idx).copied());
+        if !obtainable.contains(&c.item) {
+            err!(
+                line,
+                format!(
+                    "consumable `{}` is never placed in any room (it can never be used)",
+                    c.item
+                ),
+            );
+        }
+        match &c.effect {
+            crate::game::ConsumableEffect::Status { flag, .. } => {
+                if !status_flags.contains(flag.as_str()) {
+                    err!(
+                        line,
+                        format!(
+                            "consumable `{}` grants status `{flag}`, which no `status` line declares",
+                            c.item
+                        ),
+                    );
+                }
+            }
+            crate::game::ConsumableEffect::Cure(flag) => {
+                if !status_flags.contains(flag.as_str()) {
+                    err!(
+                        line,
+                        format!(
+                            "consumable `{}` cures status `{flag}`, which no `status` line declares",
+                            c.item
+                        ),
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+
     // Every flag that some rule can SET — a spell's learn-by-flag needs a source in here.
     let mut settable: BTreeSet<String> = BTreeSet::new();
     for u in &world.use_rules {
@@ -1347,6 +1507,22 @@ fn check(world: &GameWorld, prov: Option<&Prov>) -> Vec<(Option<usize>, Issue)> 
             }
             SpellEffect::Conjure(_) => {}
         }
+    }
+    // A consumable that sets a flag / grants or cures a status is a source for that flag; a status
+    // flag is also written by the engine (per-step decrement) — so an author may legitimately gate on
+    // one without the "permanently sealed" warning firing.
+    for c in &world.consumables {
+        match &c.effect {
+            crate::game::ConsumableEffect::SetFlag(k, _)
+            | crate::game::ConsumableEffect::Status { flag: k, .. }
+            | crate::game::ConsumableEffect::Cure(k) => {
+                settable.insert(k.clone());
+            }
+            crate::game::ConsumableEffect::Heal(_) | crate::game::ConsumableEffect::Reveal => {}
+        }
+    }
+    for s in &world.statuses {
+        settable.insert(s.flag.clone());
     }
 
     // Spells: a learn source must exist.
