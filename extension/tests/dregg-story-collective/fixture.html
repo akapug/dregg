@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>dregg-story collective fixture</title></head>
+<body>
+  <h1>dregg-story (collective) — the crowd votes each branch; the winner advances</h1>
+
+  <!-- A COLLECTIVE verifiable story: READ + watching the tally are free; CASTING a
+       vote is a real custody-gated verified turn; CLOSE advances the winner. -->
+  <p id="prose">A story the crowd decides:
+    <dregg-story id="story" src="dregg://story/b3_c011ec" collective></dregg-story></p>
+
+  <!-- A READ-ONLY collective story: no custody wired. READ + tally still work (the
+       free tier); voting degrades to an honest "connect your cipherclerk" note. -->
+  <p id="roprose">A story you can only watch:
+    <dregg-story id="roStory" src="dregg://story/b3_b0b0b0" collective></dregg-story></p>
+
+  <!-- Malformed addr: the engine fails closed — no render, original link + warning. -->
+  <p id="badprose">A broken one:
+    <dregg-story id="badStory" src="dregg://story/notahash" collective>
+      <a href="https://dregg.net/d/story/notahash">the story</a>
+    </dregg-story></p>
+
+  <script src="/harness.js"></script>
+</body>
+</html>

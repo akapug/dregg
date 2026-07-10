@@ -1334,12 +1334,59 @@ export interface StoryWorldCtor {
   new (): StoryWorldLike;
 }
 
+// ── the COLLECTIVE surface (the killer mode) ─────────────────────────────────
+// The crowd votes each branch; the winner advances. A parallel wasm lane adds
+// these four methods to the real `StoryWorld`; the collective fixture drives an
+// in-memory stand-in implementing EXACTLY this, as the story/poll fixtures do. A
+// world that does not carry these methods is not collective (the engine's
+// collective ops fail closed on it — see `asCollective`).
+export interface CollectiveStoryWorldLike extends StoryWorldLike {
+  /** The branch poll at the current passage: JSON `{passage, round, options: [{choiceIndex, label}]}`. */
+  openBranchPoll(): string;
+  /** Record one vote (ONE per voter, fail-closed): JSON `{ok, tally: [{label, count}], error?}`.
+   *  `voter` is the caster's stable id — the custody provider's public key. */
+  castVote(voter: string, optionIndex: number): string;
+  /** The live tally for the open branch: JSON `[{label, count}]`. */
+  branchTally(): string;
+  /** Resolve the branch → advance(winner) → new passage: JSON `{ok, winningChoice,
+   *  winningLabel, tally, passage, receiptCount, commitmentHex, tie?, error?}`. */
+  closeBranchPoll(): string;
+}
+
+/** Feature-probe a world for the collective surface (never break single-player). */
+function asCollective(w: StoryWorldLike): CollectiveStoryWorldLike | null {
+  const c = w as Partial<CollectiveStoryWorldLike>;
+  return typeof c.openBranchPoll === "function" &&
+    typeof c.castVote === "function" &&
+    typeof c.branchTally === "function" &&
+    typeof c.closeBranchPoll === "function"
+    ? (w as CollectiveStoryWorldLike)
+    : null;
+}
+
+/** One branch option with its live tally — what a vote button renders. */
+export interface BranchOption {
+  choiceIndex: number;
+  label: string;
+  count: number;
+}
+/** One tally row (label → running count). */
+export interface BranchTallyRow {
+  label: string;
+  count: number;
+}
+
 // ── the story request/response protocol ─────────────────────────────────────
 export type StoryPortRequest =
   | { op: "resolveStory"; uri: string }
   | { op: "renderStory"; uri: string }
   | { op: "chooseChoice"; uri: string; index: number }
-  | { op: "verifyStory"; uri: string };
+  | { op: "verifyStory"; uri: string }
+  // ── collective mode ──
+  | { op: "openBranch"; uri: string }
+  | { op: "castBranchVote"; uri: string; optionIndex: number }
+  | { op: "branchTally"; uri: string }
+  | { op: "closeBranch"; uri: string };
 
 export interface StoryResolveResponse {
   ok: boolean;
@@ -1391,11 +1438,77 @@ export interface StoryVerifyResponse {
   error?: string;
 }
 
+// ── the collective response shapes ──────────────────────────────────────────
+
+export interface StoryOpenBranchResponse {
+  ok: boolean;
+  tier: TrustTier;
+  passage?: string;
+  /** Which voting round this branch is (increments each close). */
+  round?: number;
+  /** The passage prose to render above the vote UI (the free READ tier). */
+  prose?: string;
+  /** Each branch option with its live tally — a vote button per option. */
+  options?: BranchOption[];
+  tally?: BranchTallyRow[];
+  total?: number;
+  /** Whether the viewer can CAST a vote / CLOSE (custody). READ + tally never need it. */
+  custody?: boolean;
+  verified?: boolean;
+  /** True when the passage is an ending (no branch → the story is over). */
+  ended?: boolean;
+  error?: string;
+}
+
+export interface StoryBranchVoteResponse {
+  ok: boolean;
+  tier: TrustTier;
+  /** True when the vote-turn was refused (no custody / consent denied / double-vote). */
+  refused?: boolean;
+  reason?: string;
+  tally?: BranchTallyRow[];
+  total?: number;
+  /** The stable voter id the vote was recorded under (the custody public key, hex). */
+  voter?: string;
+  error?: string;
+}
+
+export interface StoryBranchTallyResponse {
+  ok: boolean;
+  tier: TrustTier;
+  tally?: BranchTallyRow[];
+  total?: number;
+  error?: string;
+}
+
+export interface StoryCloseBranchResponse {
+  ok: boolean;
+  tier: TrustTier;
+  /** True when the close-turn was refused (no custody / consent denied / no votes). */
+  refused?: boolean;
+  reason?: string;
+  winningChoice?: number;
+  winningLabel?: string;
+  /** Shown HONESTLY when the top count was shared (resolved by lowest index). */
+  tie?: boolean;
+  tally?: BranchTallyRow[];
+  passage?: string;
+  receiptCount?: number;
+  /** The NEW story commitment (hex) after the winner advanced. */
+  commitment?: string;
+  verified?: boolean;
+  error?: string;
+}
+
 export type StoryPortResponse =
   | StoryResolveResponse
   | StoryRenderResponse
   | StoryChooseResponse
-  | StoryVerifyResponse;
+  | StoryVerifyResponse
+  | StoryOpenBranchResponse
+  | StoryBranchVoteResponse
+  | StoryBranchTallyResponse
+  | StoryCloseBranchResponse;
 
 /** The transport the `<dregg-story>` element holds — a channel to the StoryEngine. */
 export interface StoryPort {
@@ -1430,6 +1543,11 @@ export interface StoryEngineDeps {
    *  (`null`/omitted) ⇒ READ-ONLY: the story renders + verifies, but choosing is
    *  refused (the honest "connect your cipherclerk to play" degrade). */
   consent?: ConsentFn | null;
+  /** The collective voter identity — the custody provider's ed25519 public key (hex),
+   *  so a vote is recorded under a STABLE id (an extension-less passkey voter yields a
+   *  stable id from its PRF-wrapped key too). Returns `null` when there is no custody:
+   *  a collective vote then FAILS CLOSED (READ + tally stay free). */
+  voterIdentity?: (() => Promise<string | null> | string | null) | null;
 }
 
 /**
@@ -1461,6 +1579,14 @@ export class StoryEngine {
           return await this.choose(req.uri, req.index, origin);
         case "verifyStory":
           return this.verify(req.uri);
+        case "openBranch":
+          return await this.openBranch(req.uri);
+        case "castBranchVote":
+          return await this.castBranchVote(req.uri, req.optionIndex, origin);
+        case "branchTally":
+          return this.branchTallyOp(req.uri);
+        case "closeBranch":
+          return await this.closeBranch(req.uri, origin);
         default:
           return { ok: false, tier: "none", verified: false, error: "unknown op" } as StoryResolveResponse;
       }
@@ -1607,6 +1733,221 @@ export class StoryEngine {
       passage: w.currentPassage(),
       commitment: w.commitmentHex(),
       receiptCount: w.receiptCount(),
+    };
+  }
+
+  // ── COLLECTIVE MODE — the crowd votes each branch; the winner advances ──────
+
+  /** The collective world for an already-resolved uri (or `null` — not resolved /
+   *  not a collective world). Fail-closed, exactly like `render`/`verify`. */
+  private collectiveWorld(uri: string): CollectiveStoryWorldLike | null {
+    const key = canonicalUri(uri);
+    const w = key ? this.worlds.get(key) : undefined;
+    return w ? asCollective(w) : null;
+  }
+
+  /** Parse the world's `[{label, count}]` tally. */
+  private parseTally(json: string): BranchTallyRow[] {
+    try {
+      const rows = JSON.parse(json);
+      if (!Array.isArray(rows)) return [];
+      return rows.map((r) => ({ label: String(r.label ?? ""), count: Number(r.count ?? 0) }));
+    } catch {
+      return [];
+    }
+  }
+
+  /** Parse the world's `openBranchPoll()` `{passage, round, options}`. */
+  private branchPoll(w: CollectiveStoryWorldLike): { passage: string; round: number; options: { choiceIndex: number; label: string }[] } {
+    try {
+      const p = JSON.parse(w.openBranchPoll());
+      const options = Array.isArray(p?.options)
+        ? p.options.map((o: { choiceIndex?: number; label?: string }, i: number) => ({ choiceIndex: Number(o.choiceIndex ?? i), label: String(o.label ?? "") }))
+        : [];
+      return { passage: String(p?.passage ?? w.currentPassage()), round: Number(p?.round ?? 0), options };
+    } catch {
+      return { passage: w.currentPassage(), round: 0, options: [] };
+    }
+  }
+
+  /** The stable collective voter id (the custody public key), or `null` (no custody). */
+  private async resolveVoter(): Promise<string | null> {
+    const vi = this.deps.voterIdentity;
+    if (!vi) return null;
+    try {
+      const id = await vi();
+      return id && String(id).length > 0 ? String(id) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** OPEN-BRANCH — the FREE READ tier: the branch poll (options + live tally + prose).
+   *  Needs NO custody; a bare browser SEES the passage and the running vote. */
+  private async openBranch(uri: string): Promise<StoryOpenBranchResponse> {
+    const key = canonicalUri(uri);
+    if (!key) return { ok: false, tier: "none", error: "not a dregg-thing" };
+    const base = await this.world(key);
+    if (!base) return { ok: false, tier: "none", error: "could not resolve story" };
+    const w = asCollective(base);
+    if (!w) return { ok: false, tier: "none", error: "story is not collective" };
+    // Never render a story whose receipt chain does not replay (fail-closed).
+    if (!w.verify()) return { ok: false, tier: "none", error: "unverified" };
+    const poll = this.branchPoll(w);
+    const tally = this.parseTally(w.branchTally());
+    const options: BranchOption[] = poll.options.map((o, i) => ({
+      choiceIndex: o.choiceIndex,
+      label: o.label,
+      count: Number(tally[i]?.count ?? 0),
+    }));
+    const total = options.reduce((a, o) => a + o.count, 0);
+    return {
+      ok: true,
+      tier: "extension",
+      passage: poll.passage,
+      round: poll.round,
+      prose: w.passageProse(),
+      options,
+      tally,
+      total,
+      custody: this.hasCustody,
+      verified: w.verify(),
+      ended: options.length === 0,
+    };
+  }
+
+  /** BRANCH-TALLY — the FREE READ tier: just the running counts. No custody. */
+  private branchTallyOp(uri: string): StoryBranchTallyResponse {
+    const w = this.collectiveWorld(uri);
+    if (!w) return { ok: false, tier: "none", error: "not resolved" };
+    if (!w.verify()) return { ok: false, tier: "none", error: "unverified" };
+    const tally = this.parseTally(w.branchTally());
+    return { ok: true, tier: "extension", tally, total: tally.reduce((a, r) => a + r.count, 0) };
+  }
+
+  /** CAST-BRANCH-VOTE — THE CUSTODY WRITE. A vote is a real verified turn, so it
+   *  routes through the injected consent (the faithful reading of the vote-turn)
+   *  BEFORE `castVote`, and is recorded under the custody provider's public key.
+   *  FAILS CLOSED without prompting on: no custody, no voter id, an invalid option.
+   *  A double-vote (one vote per voter) is refused by the world, surfaced honestly. */
+  private async castBranchVote(uri: string, optionIndex: number, origin?: string): Promise<StoryBranchVoteResponse> {
+    const key = canonicalUri(uri);
+    const w = this.collectiveWorld(uri);
+    if (!key || !w) return { ok: false, tier: "none", error: "not resolved" };
+
+    const tallyNow = () => this.parseTally(w.branchTally());
+    const refuse = (reason: string): StoryBranchVoteResponse => ({
+      ok: true,
+      tier: w.verify() ? "extension" : "none",
+      refused: true,
+      reason,
+      tally: tallyNow(),
+      total: tallyNow().reduce((a, r) => a + r.count, 0),
+    });
+
+    // CUSTODY: casting is a write. No consent provider ⇒ read-only.
+    if (!this.hasCustody) return refuse("no custody — connect your cipherclerk to vote");
+    // The stable voter id (the custody public key). No id ⇒ fail closed.
+    const voter = await this.resolveVoter();
+    if (!voter) return refuse("no custody — connect your cipherclerk to vote");
+
+    // FAIL-CLOSED on an option that is not on the open branch — BEFORE any prompt.
+    const poll = this.branchPoll(w);
+    const option = poll.options.find((o) => o.choiceIndex === optionIndex);
+    if (!option) return refuse("no such option");
+
+    // Custody consent (the load-bearing property): the faithful reading the page
+    // cannot overlay or clickjack. Every vote is a real turn, so every vote asks.
+    const spec = this.specs.get(key)!;
+    const approved = await this.deps.consent!({
+      explanation:
+        `Cast your collective vote for "${option.label}" in the branch poll of story ${spec.addr} ` +
+        `(round ${poll.round}, passage "${poll.passage}"). This commits ONE verified vote (one voter, one vote) to the tally.`,
+      turnId: `${key}#vote:${poll.round}:${optionIndex}:${voter}`,
+      origin,
+    });
+    if (!approved) return refuse("consent denied");
+
+    // The real cap-gated vote-turn. The world refuses a double-vote (fail-closed).
+    let res: { ok?: boolean; tally?: BranchTallyRow[]; error?: string };
+    try {
+      res = JSON.parse(w.castVote(voter, optionIndex));
+    } catch (e) {
+      return refuse(String((e as Error)?.message ?? e));
+    }
+    const tally = Array.isArray(res.tally)
+      ? res.tally.map((r) => ({ label: String(r.label ?? ""), count: Number(r.count ?? 0) }))
+      : tallyNow();
+    if (!res.ok) return { ok: true, tier: "extension", refused: true, reason: res.error || "vote refused", tally, total: tally.reduce((a, r) => a + r.count, 0) };
+    return { ok: true, tier: "extension", refused: false, tally, total: tally.reduce((a, r) => a + r.count, 0), voter };
+  }
+
+  /** CLOSE-BRANCH — resolve the poll → advance the winner as ONE real verified turn.
+   *  Advancing moves the boundary, so it is custody-gated (consent BEFORE any commit),
+   *  fail-closed on no custody. A tie is resolved by lowest index and reported HONESTLY. */
+  private async closeBranch(uri: string, origin?: string): Promise<StoryCloseBranchResponse> {
+    const key = canonicalUri(uri);
+    const w = this.collectiveWorld(uri);
+    if (!key || !w) return { ok: false, tier: "none", error: "not resolved" };
+
+    const refuse = (reason: string): StoryCloseBranchResponse => ({
+      ok: true,
+      tier: w.verify() ? "extension" : "none",
+      refused: true,
+      reason,
+      tally: this.parseTally(w.branchTally()),
+      passage: w.currentPassage(),
+      receiptCount: w.receiptCount(),
+      commitment: w.commitmentHex(),
+      verified: w.verify(),
+    });
+
+    if (!this.hasCustody) return refuse("no custody — connect your cipherclerk to close the branch");
+
+    const spec = this.specs.get(key)!;
+    const poll = this.branchPoll(w);
+    const approved = await this.deps.consent!({
+      explanation:
+        `Close the branch poll of story ${spec.addr} (round ${poll.round}, passage "${poll.passage}") ` +
+        `and ADVANCE the winning choice as ONE verified turn that binds the new story commitment into the receipt a stranger can replay.`,
+      turnId: `${key}#close:${poll.round}`,
+      origin,
+    });
+    if (!approved) return refuse("consent denied");
+
+    let res: {
+      ok?: boolean;
+      winningChoice?: number;
+      winningLabel?: string;
+      tie?: boolean;
+      tally?: BranchTallyRow[];
+      passage?: string;
+      receiptCount?: number;
+      commitmentHex?: string;
+      error?: string;
+    };
+    try {
+      res = JSON.parse(w.closeBranchPoll());
+    } catch (e) {
+      return refuse(String((e as Error)?.message ?? e));
+    }
+    if (!res.ok) return refuse(res.error || "close rejected");
+
+    const tally = Array.isArray(res.tally)
+      ? res.tally.map((r) => ({ label: String(r.label ?? ""), count: Number(r.count ?? 0) }))
+      : this.parseTally(w.branchTally());
+    return {
+      ok: true,
+      tier: "extension",
+      refused: false,
+      winningChoice: Number(res.winningChoice ?? -1),
+      winningLabel: String(res.winningLabel ?? ""),
+      tie: !!res.tie,
+      tally,
+      passage: String(res.passage ?? w.currentPassage()),
+      receiptCount: Number(res.receiptCount ?? w.receiptCount()),
+      commitment: String(res.commitmentHex ?? w.commitmentHex()),
+      verified: w.verify(),
     };
   }
 }
