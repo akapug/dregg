@@ -83,4 +83,22 @@ theorem collapse_needs_CR : ¬ Poseidon2SpongeCR (fun _ => (0 : ℤ)) :=
 #assert_axioms injectivity_collapses_to_poseidon2CR
 #assert_axioms finCommitSurface
 
+/-- **THE COLLAPSE, ROUTED THROUGH THE APEX BINDING.** `CommitSurface.commit_binds` — the apex's
+kernel-commitment binding — instantiated at `finCommitSurface`. Its FOUR injectivity carriers are internal to
+the surface (derived from `hCR`), so this theorem takes NO `compressInjective`/`compressNInjective`/
+`cellLeafInjective` hypothesis: equal Poseidon2 commitments force equal kernels, with crypto residual
+`Poseidon2SpongeCR` + `RestHashIffFrame` (the latter R4-discharged on the reachable image) + the SATISFIABLE
+`AccountsWF` (aligned-default; `finInit_accountsWF`). This is the injectivity cluster COLLAPSED to one floor on
+the deployed state-commitment apex path. -/
+theorem finCommitSurface_binds (sponge : List ℤ → ℤ) (hCR : Poseidon2SpongeCR sponge)
+    (RH : Dregg2.Exec.RecordKernelState → ℤ) (hRest : RestHashIffFrame RH)
+    (k k' : Dregg2.Exec.RecordKernelState) (t : Dregg2.Exec.Turn)
+    (hwf : AccountsWF k) (hwf' : AccountsWF k')
+    (h : (finCommitSurface sponge hCR RH hRest).commit k t
+          = (finCommitSurface sponge hCR RH hRest).commit k' t) :
+    k = k' :=
+  (finCommitSurface sponge hCR RH hRest).commit_binds k k' t hwf hwf' h
+
+#assert_axioms finCommitSurface_binds
+
 end Dregg2.Circuit.FinInjectivityCollapse
