@@ -536,6 +536,12 @@ impl TurnBuilder {
             expires_at,
             allowed_effects: None,
             stored_epoch: None,
+            provenance: dregg_cell::derivation::cap_provenance(
+                &(target),
+                (slot),
+                &dregg_cell::derivation::mint_provenance(),
+                &[0u8; 32],
+            ),
         };
         slf.effects.push(Effect::GrantCapability { from, to, cap });
         Ok(slf)

@@ -492,6 +492,7 @@ fn census_grant_capability() {
         expires_at: None,
         allowed_effects: None,
         stored_epoch: None,
+        provenance: [0u8; 32],
     };
     let turn = single_effect_turn(
         a_id,

@@ -1965,6 +1965,12 @@ unsafe extern "C" fn native_server_grant(
             expires_at: None,
             allowed_effects: None,
             stored_epoch: None,
+            provenance: dregg_cell::derivation::cap_provenance(
+                &(on),
+                (0),
+                &dregg_cell::derivation::mint_provenance(),
+                &[0u8; 32],
+            ),
         };
         let effect = dregg_turn::action::Effect::GrantCapability { from: on, to, cap };
         CURRENT_APPLET.with(|c| {

@@ -498,6 +498,12 @@ pub fn grant_with(
             expires_at,
             allowed_effects,
             stored_epoch: None,
+            provenance: dregg_cell::derivation::cap_provenance(
+                &(target),
+                (slot),
+                &dregg_cell::derivation::mint_provenance(),
+                &[0u8; 32],
+            ),
         },
     }
 }

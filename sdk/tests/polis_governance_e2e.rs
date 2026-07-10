@@ -632,6 +632,7 @@ fn approval_slots_are_actor_bound() {
             expires_at: None,
             allowed_effects: None,
             stored_epoch: None,
+            provenance: [0u8; 32],
         },
     };
     runtime.deploy_factory(plan.descriptor.clone());

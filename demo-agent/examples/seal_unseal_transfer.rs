@@ -47,6 +47,7 @@ fn main() {
         expires_at: None,
         allowed_effects: None,
         stored_epoch: None,
+        provenance: [0u8; 32],
     };
     println!("  Capability to transfer: access to Carol (slot 7, requires Signature)");
     println!();
@@ -230,6 +231,7 @@ fn main() {
         expires_at: None,
         allowed_effects: None,
         stored_epoch: None,
+        provenance: [0u8; 32],
     };
 
     let sealed2 = pair.seal(&cap2);

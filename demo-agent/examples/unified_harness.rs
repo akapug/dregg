@@ -1040,6 +1040,7 @@ fn run_seal_unseal_transfer() -> Result<(), Box<dyn Error>> {
         expires_at: None,
         allowed_effects: None,
         stored_epoch: None,
+        provenance: [0u8; 32],
     };
 
     let pair = test_seal_pair(0xA0);

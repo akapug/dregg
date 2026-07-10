@@ -130,6 +130,12 @@ async fn headless_node_hosts_deos_server_client_discovers_and_fires() {
             expires_at: None,
             allowed_effects: None,
             stored_epoch: None,
+            provenance: dregg_cell::derivation::cap_provenance(
+                &(door_id),
+                (0),
+                &dregg_cell::derivation::mint_provenance(),
+                &[0u8; 32],
+            ),
         };
         let grant = Effect::GrantCapability {
             from: door_id,

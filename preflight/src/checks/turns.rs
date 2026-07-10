@@ -172,6 +172,12 @@ fn check_grant_capability() -> Result<(), String> {
                 expires_at: None,
                 allowed_effects: None,
                 stored_epoch: None,
+                provenance: dregg_cell::derivation::cap_provenance(
+                    &(target_id),
+                    (0),
+                    &dregg_cell::derivation::mint_provenance(),
+                    &[0u8; 32],
+                ),
             },
         })
         .build();

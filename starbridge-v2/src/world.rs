@@ -1835,6 +1835,12 @@ pub fn grant_capability(from: CellId, to: CellId, cap_target: CellId, slot: u32)
             expires_at: None,
             allowed_effects: None,
             stored_epoch: None,
+            provenance: dregg_cell::derivation::cap_provenance(
+                &(cap_target),
+                (slot),
+                &dregg_cell::derivation::mint_provenance(),
+                &[0u8; 32],
+            ),
         },
     }
 }

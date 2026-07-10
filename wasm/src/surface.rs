@@ -321,6 +321,12 @@ impl DreggRuntime {
             expires_at: None,
             allowed_effects: None,
             stored_epoch: None,
+            provenance: dregg_cell::derivation::cap_provenance(
+                &(surface_cell),
+                (0),
+                &dregg_cell::derivation::mint_provenance(),
+                &[0u8; 32],
+            ),
         };
         let action = ActionBuilder::new_unchecked_for_tests(from_cell, "share-surface", from_cell)
             .effect(Effect::GrantCapability {

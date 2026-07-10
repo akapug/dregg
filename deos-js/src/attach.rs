@@ -737,6 +737,12 @@ impl AttachedComposer {
                     expires_at: None,
                     allowed_effects: None,
                     stored_epoch: None,
+                    provenance: dregg_cell::derivation::cap_provenance(
+                        &(from),
+                        (0),
+                        &dregg_cell::derivation::mint_provenance(),
+                        &[0u8; 32],
+                    ),
                 };
                 // Commit the grant AS the `from` cell (a self-grant: from == actor == target),
                 // whose `delegate` permission the executor checks. For an open held cell this

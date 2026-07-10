@@ -348,6 +348,7 @@ fn main() {
         expires_at: None,
         allowed_effects: None,
         stored_epoch: None,
+        provenance: [0u8; 32],
     });
     let sealed_bytes = postcard::to_stdvec(&sealed_art).unwrap();
 
