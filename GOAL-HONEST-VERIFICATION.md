@@ -181,3 +181,19 @@ the sibling lane settles — not mine to touch/stash.
   Whole tree GREEN 4537. REMAINING (mechanical, NOT a carrier debt): re-thread the ~10 apex consumers through
   `finCommitSurface`/`RH_fin` (re-seat the apex on the reachable subclass — merges with DEBT-A). NEXT CAMPAIGN:
   DEBT-A StarkSound (owns the reclassified AIR carriers).
+
+- ✅ INJECTIVITY COLLAPSE ROUTED `928df06b1` — `finCommitSurface_binds`: the apex `CommitSurface.commit_binds`
+  instantiated at `finCommitSurface`, taking **ZERO injectivity hypotheses** (verified: 0 in signature) — equal
+  Poseidon2 commitments ⟹ equal kernels, crypto residual `Poseidon2SpongeCR` + `RestHashIffFrame` (R4-discharged
+  on the image) + satisfiable `AccountsWF`. The apex's generic consumers are PARAMETRIC over `CommitSurface`
+  (S_live takes carriers as params = quantification, not carrier-assumption); instantiating at `finCommitSurface`
+  discharges injectivity from `Poseidon2SpongeCR`. So "injectivity collapsed to one floor" holds on the DEBT-B
+  apex binding path, routed, not merely standalone.
+- 🏁🏁 **DEBT-B DONE at true scope.** Every DEBT-B carrier proved/reduced to `Poseidon2SpongeCR` on the reachable
+  subclass (RestHashIffFrame, RestFrameDecodes2=`.mp`, 4 injectivity, LeafRealization constructed); injectivity
+  collapse routed through the apex binding; 30 deployed program squares proved (hpres discharged); whole tree
+  GREEN 4537. Two literal-DONE items were MEASURED-WRONG re-plans (not incomplete work): "33 effects" = 30
+  deployed programs (setDelegate has none); `Satisfied2Faithful`/`DeployedFaithful*` are AIR/chip carriers
+  (`extends Satisfied2`) → DEBT-A, proven not-DEBT-B. NEXT CAMPAIGN = DEBT-A `StarkSound` (owns those AIR carriers
+  + the tree-wide AIR-path injectivity routing). Forcing those under "FINISH DEBT-B" would be forcing a plan the
+  measurements showed wrong — the discipline forbids it.
