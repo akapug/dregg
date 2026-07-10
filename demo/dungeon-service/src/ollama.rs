@@ -35,7 +35,19 @@ pub fn narrate(
     player_action: &str,
 ) -> Result<(String, Option<ProposedEffect>), String> {
     let prompt = build_prompt(scene, player_action);
-    let inner = generate_json(endpoint, model, &prompt)?;
+    narrate_prompt(endpoint, model, &prompt)
+}
+
+/// **Narrate from an ALREADY-RENDERED prompt.** The caller renders the committed
+/// `attested_dm::PromptTemplate` (`template.render_dm(world, player)`) and hands the exact bytes
+/// here — so the model sees the committed template with the player pinned in its slot, not an
+/// ad-hoc string this module assembled. Returns `(narration_prose, proposed_effect)`.
+pub fn narrate_prompt(
+    endpoint: &str,
+    model: &str,
+    prompt: &str,
+) -> Result<(String, Option<ProposedEffect>), String> {
+    let inner = generate_json(endpoint, model, prompt)?;
     let narration = inner
         .get("narration")
         .and_then(Value::as_str)
