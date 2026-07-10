@@ -37,7 +37,7 @@
 //! demonstrated; the test then FAILS LOUDLY with the exact blocker rather than passing vacuously.
 
 use dregg_node::{MlKemDecapsCoreInstall, install_mlkem_verified_decaps_core};
-use ml_kem::kem::{Decapsulate as _, Encapsulate as _};
+use ml_kem::kem::Encapsulate as _;
 use ml_kem::{EncodedSizeUser as _, KemCore, MlKem768};
 use rand_core::OsRng;
 
