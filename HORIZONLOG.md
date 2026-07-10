@@ -6955,3 +6955,14 @@ whose done-criteria rewarded "criterion ACHIEVED". Green + a lane's own summary 
 scope it actually holds, and to re-open the real work: model R_q/NTT/SHAKE and extract the ACTUAL FIPS
 algorithms; instantiate FRI at the deployed field/rounds; give `sysAdvExpr` an adversary; source the estimator
 numbers; and make the seL4 model independent of `AuthReq` before claiming a weld.
+
+## [deferred, good-to-know] The [u8;32] newtype hygiene — Digest32 canonicalization (2026-07-09)
+Root cause of the lane-0 heap_root whack-a-mole, generalized: the tree has ~20 SCATTERED, partly-DUPLICATED
+32-byte newtypes (CellId ×3 in types/deos-matrix/bridge-mina; CommitmentId ×2 in rbg/intent; Digest, ContentHash,
+ValueCommitmentBytes, NoteCommitment, Nullifier, FieldElement, ...) but NO canonical base — and ~3461 bare
+[u8;32] type-uses remain (non-test). So a Nullifier can be passed where a heap_root is expected; a lane-0 where
+a wide is expected — the compiler shrugs. heap_root was one of the 3461 that never got wrapped. DEFERRED (ember:
+"good to know, later, jeeeeeeeeeez"): a real scoped campaign — a canonical Digest32 (or phantom-typed
+Digest32<Kind> so HeapRoot/Nullifier can't be confused), migrate the SEMANTIC ones incrementally (many of the
+3461 are legit raw-byte crypto/serde, leave those). The roots are already done (retyped to Faithful8). This is
+the general hygiene that would prevent the whole class. NOT a tail-of-session sweep.
