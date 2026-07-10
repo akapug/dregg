@@ -121,9 +121,9 @@ impl ModelRegistry {
                 Pricing {
                     input_per_1k: in_o.unwrap_or(base.input_per_1k),
                     output_per_1k: out_o.unwrap_or(base.output_per_1k),
-                    source: PriceSource::ConservativeUpperBound {
-                        rationale: "operator-set rate via DREGG_NARRATOR_PRICE_* env".to_string(),
-                    },
+                    // Honest provenance: an operator-set rate is trusted at their discretion and is
+                    // NOT necessarily an upper bound — do not launder it as `ConservativeUpperBound`.
+                    source: PriceSource::OperatorOverride,
                 },
             );
         }
