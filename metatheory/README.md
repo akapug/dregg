@@ -158,8 +158,9 @@ commented allow-list entry. The floor never widens to silence a failure.
 
 ## How to build
 
-The toolchain is pinned (`leanprover/lean4`, mathlib via a local `path` require in
-`lakefile.toml`).
+The toolchain is pinned (`leanprover/lean4`, mathlib via a portable `git`+`rev` require in
+`lakefile.toml`; `lake exe cache get` pulls its prebuilt oleans in minutes — mathlib is
+never compiled from source here).
 
 ```sh
 lake build Dregg2                 # the whole verified corpus (executor + circuits + distributed + apps)

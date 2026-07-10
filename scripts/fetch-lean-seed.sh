@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # fetch-lean-seed.sh — link a VERIFIED dregg-node in MINUTES by downloading a HEAD-matching,
-# platform-native Lean seed archive from a GitHub release, instead of the hours-long cold
-# `lake`/mathlib bootstrap that ./scripts/bootstrap.sh runs.
+# platform-native Lean seed archive from a GitHub release, instead of the long cold `lake`
+# bootstrap that ./scripts/bootstrap.sh runs (the ~6000-object Dregg2+deps leanc compile —
+# mathlib itself is NOT the cost: its prebuilt oleans arrive in minutes via `lake exe cache get`).
 #
 # WHAT THE SEED IS (and why fetching it is the highest-value self-host lever):
 #   dregg-lean-ffi/libdregg_lean.a is a ~180 MB NATIVE static archive of the compiled Lean
@@ -15,8 +16,8 @@
 #   * elan + the pinned Lean toolchain (metatheory/lean-toolchain) — the seed archive links
 #     against the toolchain's Lean runtime/stdlib static libs. elan installs in minutes and does
 #     NOT require compiling mathlib. Install it: curl https://elan.lean-lang.org/elan-init.sh -sSf | sh
-#   You do NOT need a mathlib checkout or the hours-long mathlib compile — that is exactly the
-#   work the seed replaces.
+#   You do NOT need a mathlib checkout or compile (prebuilt oleans cover mathlib in minutes
+#   anyway); the work the seed replaces is the long Dregg2-closure leanc compile.
 #
 # Usage:
 #   scripts/fetch-lean-seed.sh                 # fetch + place the seed for this platform

@@ -209,7 +209,8 @@ not a scramble. Nothing below is run until ember says go AND David is standing b
    on lassie" — either the `Publish Lean seed` workflow (`Actions → Run workflow`, tag
    `lean-seed-<date>`, runner `lassie`) or the copy-paste hand recipe (`bootstrap.sh` →
    `scripts/lean-seed-key.sh --asset` → `zstd` → `gh release upload` + `.sha256`). This is
-   the hours-saving step: a verified build without it is an hours-long cold mathlib boot.
+   the time-saving step: a verified build without it is a long cold Dregg2-closure compile
+   (mathlib itself comes prebuilt from the olean cache in minutes).
 2. **Bump + verify the pin.** The workflow rewrites `dregg-lean-ffi/lean-seed.pin` (TAG +
    provenance); on the hand path, bump it per the doc. Confirm `scripts/lean-seed-key.sh`'s
    live `DREGG_TREE_HASH` MATCHES the pin (no drift warning) — proves the published seed is

@@ -67,8 +67,8 @@ build panics with the exact cause instead. (Confirmed wired: `dregg-lean-ffi/bui
 
 Seeding compiles thousands of leanc objects. `metatheory/lakefile.toml` pins mathlib as a
 **portable `git`+`rev` dependency**, so `lake` fetches it on any host with no clone-location
-assumption — but a stock GitHub-hosted runner still lacks the **hours** (and a prebuilt mathlib
-cache). Cut seeds on a **self-hosted beefy host** (David's *lassie*, Linux, 128t/1TB).
+assumption — but a stock GitHub-hosted runner is too weak for the corpus compile (and starts
+with a cold `.lake`). Cut seeds on a **self-hosted beefy host** (David's *lassie*, Linux, 128t/1TB).
 
 ### Via the workflow (preferred)
 
