@@ -80,6 +80,57 @@ pub fn lean_verify_core_real_installed() -> bool {
     LEAN_VERIFY_CORE_REAL.get().is_some()
 }
 
+/// Outcome of installing the Lean-verified REAL ML-DSA verify core as [`ml_dsa_verify`]'s authority
+/// (via [`install_verified_mldsa_verify_core`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MlDsaVerifyCoreInstall {
+    /// The real core was installed by THIS call — the `fips204` crate is now out of the verify TCB.
+    Installed,
+    /// A core was already installed this process (install is once-per-process) — crate still out of TCB.
+    AlreadyInstalled,
+    /// The linked Lean archive does not export the real verify core; the `fips204`-crate fallback stays
+    /// in place (a valid FIPS-204 verify, but NOT the Lean-verified authority).
+    ExportAbsent,
+}
+
+/// THE ONE install every deployed, archive-linked process calls to make the Lean-verified REAL, full-byte
+/// ML-DSA verify core ([`install_lean_verify_core_real`]) the accept/reject AUTHORITY behind
+/// [`ml_dsa_verify`] — taking the `fips204` crate OUT of that process's verify TCB.
+///
+/// dregg-pq stays a LIGHT leaf: the two archive-dependent symbols are INJECTED as `fn` pointers rather than
+/// depended on. Every host (node, the SDK-hosted wire silo, starbridge-v2, …) passes the SAME two
+/// `dregg-lean-ffi` symbols:
+///
+/// ```ignore
+/// dregg_pq::install_verified_mldsa_verify_core(
+///     dregg_lean_ffi::fips204_verify_real_core_available,
+///     |w| dregg_lean_ffi::shadow_fips204_verify_real(w).ok(),
+/// )
+/// ```
+///
+/// so the gating + install + once-per-process semantics live in ONE tested function (and the CI guard has a
+/// single grep target) instead of copy-pasted per process.
+///
+/// Gated on `export_available()` (the `fips204_verify_real_core_available()` check): install ONLY when the
+/// linked archive actually EXPORTS the real core. A stale archive lacking it would make the installed core
+/// return `None` on every call and — because [`ml_dsa_verify`] fails CLOSED on a core fault — reject every
+/// signature; so when the export is absent we return [`MlDsaVerifyCoreInstall::ExportAbsent`] and keep the
+/// `fips204`-crate fallback (a valid FIPS-204 verify) rather than bricking verify. Idempotent and
+/// once-per-process.
+pub fn install_verified_mldsa_verify_core(
+    export_available: fn() -> bool,
+    shadow: fn(wire: &str) -> Option<String>,
+) -> MlDsaVerifyCoreInstall {
+    if !export_available() {
+        return MlDsaVerifyCoreInstall::ExportAbsent;
+    }
+    if install_lean_verify_core_real(shadow) {
+        MlDsaVerifyCoreInstall::Installed
+    } else {
+        MlDsaVerifyCoreInstall::AlreadyInstalled
+    }
+}
+
 /// Marshal `(pk, msg, ctx, sig)` into the byte wire the Lean real verify core reads:
 /// `"hex(pk) hex(msg) hex(ctx) hex(sig)"` (four space-separated lowercase-hex fields; an empty field is the
 /// empty token between two spaces).
@@ -119,6 +170,15 @@ static LEAN_SIGN_CORE: OnceLock<LeanSignCore> = OnceLock::new();
 /// (once-per-process; the verified core is not hot-swappable).
 pub fn install_lean_sign_core(core: LeanSignCore) -> bool {
     LEAN_SIGN_CORE.set(core).is_ok()
+}
+
+/// Whether a Lean-verified sign core has been installed behind [`ml_dsa_sign_core`]. NOTE: the installed
+/// object is the SCALAR (n=1) `signCore`, so this being `true` does NOT mean the deployed byte-level signer
+/// ([`MlDsaKey::sign`]) is Lean-backed — that path still uses the `fips204` crate (the real full-byte sign
+/// core is a named follow-up; see [`install_lean_verify_core_real`] for the verify-side equivalent that IS
+/// deployed).
+pub fn lean_sign_core_installed() -> bool {
+    LEAN_SIGN_CORE.get().is_some()
 }
 
 /// Route a deployed-parameter ML-DSA sign request `"s₁ s₂ t₀ μ y"` (the wire the extracted Lean
