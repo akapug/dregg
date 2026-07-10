@@ -35,8 +35,18 @@ HTTP origin and the `application/wasm` MIME — a bare `file://` open won't do i
    tally. You watch the tally grow, the quorum resolve, and the winner advance.
 3. It plays through to an ending, then runs `verify()` and shows
    **"✓ receipt chain verified — nothing was rewritten."**
-4. **Vote yourself:** click **⏸ pause (vote yourself)**, then click an option inside
-   the story to cast your own ballot as `you` (an eligible voter in the roster).
+4. **Vote yourself — with a passkey, no extension:** click **🔑 Enroll a passkey to
+   vote**. The page registers a **WebAuthn passkey** (a platform biometric) that
+   PRF-wraps a dregg key — no browser extension anywhere. Your `you` ballot now casts
+   under that key's **stable public id**, and each cast is gated by a real biometric
+   assertion (unwrap the sovereign key → assemble a genuine hybrid `SignedTurn`). Then
+   click **⏸ pause (vote yourself)** and click an option to cast it; the banner reads
+   *"voting as passkey `900b…4bdd` — no extension, sovereign key."* Decline the enroll
+   and you simply **watch + verify** (the `you` ballot fails closed — sovereignty
+   without lock-in, not a weaker fallback). The auto-play crowd is unchanged.
+
+`PasskeyCustody` here is the exact shipping custody floor (`extension/src/passkey.ts`),
+bundled straight into the page — the demo touches no extension runtime.
 
 ## The driven run (it worked, shown)
 
@@ -53,3 +63,22 @@ tape grew each round) and that `verify()` replayed true, then writes:
 
 A most-recent run reached `intro → river → reckoning → ending_open` across **3** branches,
 receipt tape `1 → 4`, `verify() == true`.
+
+## The driven passkey run (an extension-less passkey voter really participated)
+
+```
+node demo/run-passkey.mjs
+```
+
+Loads the demo in headless Chromium with a **CDP WebAuthn virtual authenticator (PRF)**,
+enrolls a passkey on the page (no extension), casts the `you` ballot through the real
+`StoryEngine`/`CollectiveChoiceEngine` under the passkey's stable id — the ballot's
+consent routed through a genuine biometric (PRF) assertion — and **asserts** it counted:
+the tally grew by exactly one, the engine recorded the passkey's public key as the voter,
+the id is an eligible ballot identity, a second ballot from the same id is refused (one
+voter, one vote), and the biometric gate produced a hybrid `SignedTurn` signed by that
+key. Writes `demo/run/passkey-vote.txt` (+ `passkey-vote.png`). If this Chromium can't
+virtualize the WebAuthn PRF extension, the run reports that exact coupling instead of
+faking a pass.
+
+> **To vote with a passkey (not just watch):** open **http://localhost:8787** (not `127.0.0.1`) — WebAuthn rejects a bare IP as a relying-party id. The auto-play crowd + verify work on either.

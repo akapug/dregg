@@ -1,0 +1,22 @@
+THE COMMONS — the extension-less passkey voter
+driven run · CDP WebAuthn virtual authenticator (PRF) · real wasm StoryWorld
+served at http://127.0.0.1:51445
+==================================================================
+
+ENROLL (no extension)
+  WebAuthn passkey enrolled : yes
+  stable ballot identity    : 900be4c39477e441a3f28635bb668224df12c7a242040dfe312ef7c08fa94bdd  (900b…4bdd)
+  declared eligible up front: 900be4c39477e441a3f28635bb668224df12c7a242040dfe312ef7c08fa94bdd
+
+CAST the "you" ballot (biometric-gated, extension-less)
+  option                    : #0 "Build on the high bluff, safe from floods"
+  recorded voter            : 900be4c39477e441a3f28635bb668224df12c7a242040dfe312ef7c08fa94bdd
+  hybrid SignedTurn signer  : 900be4c39477e441a3f28635bb668224df12c7a242040dfe312ef7c08fa94bdd  (ed25519 + ML-DSA-65)
+  tally                     : 1 → 2   (counted 1)
+  eligible on the engine    : yes (in the electorate)
+  second ballot, same id    : REFUSED (one voter, one vote): vote engine: ballot nullifier already consumed
+
+------------------------------------------------------------------
+An extension-less person enrolled a WebAuthn passkey, and its ballot counted
+on the real CollectiveChoiceEngine under a stable, biometric-gated identity.
+Sovereignty without lock-in.
