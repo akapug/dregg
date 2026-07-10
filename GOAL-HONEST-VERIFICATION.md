@@ -112,5 +112,17 @@ the sibling lane settles — not mine to touch/stash.
   of redefining the deployed ops: 150 files / 112 proof sites (re-derived independently).
   DECISION: adopt the delta model for R3-continuation (Option A, low risk); DEFER redefinition (Option B) as its
   own scoped campaign — 112 sites incl. the apex is not a DEBT-B move. Recorded in DELTA-FUTURE.md.
-- ▶ NEXT: STEP 3 R3-CONTINUATION — the remaining effects' squares via the delta model (note: `denote_applyDelta`
-  leverage is per-FIELD; CellDelta models balanceChange only — caps/lifecycle/heaps need their own field deltas).
+- ⚑ STEP 3 RE-PLAN (2026-07-10, per 'if a step reveals the plan is wrong, SAY SO'): the goal said '~28 effects'.
+  GROUND TRUTH: `Dregg2/Circuit/Argus/Stmt.lean` defines `RecStmt`, a **19-constructor statement language**, with
+  `interp : RecStmt → RecordKernelState → Option RecordKernelState` covering all 19 — and Argus contains **32
+  `*Stmt` programs** (createCellStmt, cellSealStmt, bridgeMintStmt, exerciseStmt, attenuateStmt, …). The deployed
+  effects are ALREADY compiled into RecStmt. So R3-continuation = prove `denote (finInterp s f) = interp s
+  (denote f)` by induction on RecStmt (19 ctors, `seq` composes). Every effect inherits its square. Strictly
+  stronger and cheaper than 28 bespoke proofs, and it fully discharges R1's `hpres` gate.
+  ⚠ NAMED OBSTACLE (do not paper over): `setCell (T : Finset CellId) (leaf)` is already FINITE (touched-set T),
+  but `setBal`/`setCaps`/`setLifecycle`/`setDeathCert`/`setDelegate`/`setSlotCaveats`/`setDelegations` each write
+  a WHOLE total function of the state. An arbitrary infinite-support function cannot be stored in a finite map —
+  DEBT-B's mismatch one level up, inside the statement language. Either the 32 real programs only ever pass
+  finite-diff functions (then a `FiniteDiff` side condition discharges it) or those ctors need finite deltas.
+  MEASURE which, per constructor. Do not assume.
+- ▶ IN FLIGHT: STEP 3 R3-CONTINUATION over RecStmt (delta model, per-field naturality).
