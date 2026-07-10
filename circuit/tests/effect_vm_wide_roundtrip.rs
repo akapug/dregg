@@ -189,8 +189,8 @@ fn assert_executor_anchor(
     name: &str,
     cell: &Cell,
     before_w: &rw::RotationWitness,
-    nullifier_root: [u8; 32],
-    commitments_root: [u8; 32],
+    nullifier_root: dregg_circuit::Faithful8,
+    commitments_root: dregg_circuit::Faithful8,
     trace: &[Vec<BabyBear>],
 ) {
     let ctx = V9RotationContext {
