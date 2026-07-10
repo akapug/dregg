@@ -49,14 +49,19 @@ pub enum PriceSource {
     /// A deliberate over-estimate pinned because no verified rate exists. It can only trip the
     /// ceiling early. `rationale` records WHY the bound is safe (which dominating rate it uses).
     ConservativeUpperBound { rationale: String },
+    /// An operator-supplied rate (via `DREGG_NARRATOR_PRICE_*`). It is trusted at the operator's
+    /// discretion and is NOT guaranteed to be an upper bound — an operator who sets it BELOW true
+    /// cost leaks the ceiling, so we label it honestly rather than laundering it as conservative.
+    OperatorOverride,
 }
 
 impl PriceSource {
-    /// A short tag for logs (`verified` / `conservative-upper-bound`).
+    /// A short tag for logs (`verified` / `conservative-upper-bound` / `operator-override`).
     pub fn tag(&self) -> &'static str {
         match self {
             PriceSource::Verified { .. } => "verified",
             PriceSource::ConservativeUpperBound { .. } => "conservative-upper-bound",
+            PriceSource::OperatorOverride => "operator-override",
         }
     }
 }
@@ -77,10 +82,13 @@ pub struct Pricing {
 
 impl Pricing {
     /// The conservative UPPER-BOUND cost of a call whose prompt is `prompt_bytes` long and that
-    /// may emit up to `max_tokens`: a `ceil(bytes/3)` input-token estimate at the input rate,
-    /// plus the FULL `max_tokens` at the output rate. This is what the reservation charges.
+    /// may emit up to `max_tokens`: input tokens bounded by `prompt_bytes` (a token is ≥ 1 byte,
+    /// so `input_tokens ≤ bytes` is a true ceiling even for adversarial byte-fallback tokenization)
+    /// at the input rate, plus the FULL `max_tokens` at the output rate. This is what the
+    /// reservation charges; `true_up` then replaces it with the exact cost, so over-estimating the
+    /// input costs nothing but keeps the ceiling from ever leaking on a single call.
     pub fn reservation_cost(&self, prompt_bytes: usize, max_tokens: u32) -> f64 {
-        let est_input = (prompt_bytes as f64 / 3.0).ceil();
+        let est_input = prompt_bytes as f64;
         est_input / 1000.0 * self.input_per_1k + max_tokens as f64 / 1000.0 * self.output_per_1k
     }
 
@@ -128,8 +136,10 @@ pub struct ModelSpend {
 }
 
 /// A taken reservation — hold it across the network call, then either [`BudgetLedger::true_up`]
-/// it with the real usage or [`BudgetLedger::refund`] it on failure.
-#[derive(Clone, Debug)]
+/// it with the real usage or [`BudgetLedger::refund`] it on failure. NOT `Clone`: this is a linear
+/// token that must be consumed EXACTLY once — cloning it would let a double true-up/refund subtract
+/// `amount` from `total_spent_usd` twice and silently un-cap the budget.
+#[derive(Debug)]
 #[must_use = "a reservation must be trued-up or refunded, else it permanently counts as spend"]
 pub struct Reservation {
     amount: f64,
@@ -315,8 +325,11 @@ impl BudgetLedger {
             .map_err(io_err)
     }
 
-    /// Read + parse the ledger. Missing (or empty) → a fresh $0.00 state. Present but
-    /// unparseable → [`NarratorError::LedgerCorrupt`] (fail-closed: refuse every call).
+    /// Read + parse the ledger. MISSING → a fresh $0.00 state (first run). PRESENT but empty,
+    /// whitespace, or unparseable → [`NarratorError::LedgerCorrupt`] (fail-closed: refuse every
+    /// call). `write_state` only ever writes non-empty JSON, so an existing-but-empty file is
+    /// anomalous (truncation / damage / a stray `touch`) — treating it as $0 would silently
+    /// un-cap the budget, so we refuse it too. Delete the file to deliberately reset.
     fn read_state(&self) -> Result<LedgerState, NarratorError> {
         let mut file = match std::fs::File::open(&self.path) {
             Ok(f) => f,
@@ -327,7 +340,12 @@ impl BudgetLedger {
         let mut buf = String::new();
         file.read_to_string(&mut buf).map_err(io_err)?;
         if buf.trim().is_empty() {
-            return Ok(LedgerState::default());
+            return Err(NarratorError::LedgerCorrupt {
+                path: self.path.display().to_string(),
+                reason: "ledger file is present but empty/whitespace — refusing (fail-closed); \
+                         delete it to reset to $0"
+                    .to_string(),
+            });
         }
         serde_json::from_str(&buf).map_err(|e| NarratorError::LedgerCorrupt {
             path: self.path.display().to_string(),
