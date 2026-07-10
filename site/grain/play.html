@@ -176,7 +176,7 @@
     <div class="safety">
       <span>✨</span>
       <span><b>No key needed.</b> The agent is powered by the host's own model
-        (<b>AWS Bedrock · Nova-Micro</b>) — you just give it a job.</span>
+        (<b>AWS Bedrock · Claude Haiku 4.5</b>) — you just give it a job.</span>
     </div>
     <div class="taskrow">
       <textarea id="task" placeholder="e.g. Write me a haiku about grains, then read it back to me.">Write me a haiku about grains, then read it back to me.</textarea>
@@ -219,7 +219,7 @@
     ? location.origin.replace(/\/+$/, '') : 'http://127.0.0.1:8903';
   const CONTROL = 'control.localhost';
   const BUDGET = 100000;
-  const MODEL = 'AWS Bedrock · Nova-Micro';   // the host's server-side brain (keyless)
+  const MODEL = 'AWS Bedrock · Claude Haiku 4.5';   // the host's server-side brain (keyless)
 
   // A fresh, private identity + sandbox for this session. The person never sees any
   // of this — renting is auto-provisioned behind the scenes on their first run.
