@@ -55,8 +55,13 @@ decision runs as native code:
 
 ```
 cargo test -p dregg-lean-ffi grain_r3          # ✅ the leanc-native dregg_grain_r3_verify runs (fast)
-cargo test -p grain-verify --test r3_whole_history -- --ignored   # ⚠ real recursion fold, ~minutes
+touch dregg-lean-ffi/build.rs                  # force the R3Verify Lean splice into the archive...
+cargo test -p grain-verify --test r3_whole_history -- --ignored   # ...then the real recursion fold, ~minutes
 ```
+Note: the fold test **refuses to fake a pass** — if the Lean core `dregg_grain_r3_verify` isn't spliced
+into grain-verify's linked archive it report-and-stops (no Rust fallback for the decision, by design),
+so the `touch` above is required to force the splice before a genuine run. (This is the honest opposite
+of a vacuous green — a first attempt this night report-and-stopped exactly this way.)
 The first is the Lean decision executing (verified quick, ✅). The second folds a small whole-history
 chain and checks R3 end-to-end — heavy (recursive STARK), so it's `#[ignore]`'d; **not run this night**
 (the machine was thrashed by the other terminal's demo build swarm — run it with `--ignored` on a quiet
