@@ -36,8 +36,8 @@ use std::collections::BTreeSet;
 use std::sync::Mutex;
 
 use attested_dm::{
-    bramble_keep, sunken_vault, GameAction, GameSession, GameStatus, GameWorld, Gate, PlayResult,
-    Proposal, Room, WorldCell,
+    bramble_keep, starfall_spire, sunken_vault, GameAction, GameSession, GameStatus, GameWorld,
+    Gate, PlayResult, Proposal, Room, WorldCell,
 };
 use http_serve::WebResponse;
 use serde_json::{json, Value};
@@ -84,6 +84,13 @@ pub fn games() -> Vec<GameDef> {
             blurb: "A thorn-cursed ruin: trade the Hedge-Witch for her silver sickle, cut the living thornwall, fell the Bramble Knight, and bear the Sunheart to open sky.",
             theme: "BRAMBLE KEEP, a thorn-cursed ruined keep strangled in living brambles, its curse bound to the Sunheart, walked by a Hedge-Witch and a Bramble Knight",
             ctor: bramble_keep,
+        },
+        GameDef {
+            id: "starfall-spire",
+            name: "The Starfall Spire",
+            blurb: "A collapsing wizard's tower: read the grimoires, cast Light across the dark gallery and Mend the broken span, conjure the flare-blade to fell the Voidling, and set the fallen star back in its cradle.",
+            theme: "THE STARFALL SPIRE, a collapsing wizard's tower of dark galleries, a broken star-span, a great orrery, and a Voidling of unlight — a place where words of power are read from grimoires and spoken aloud",
+            ctor: starfall_spire,
         },
     ]
 }

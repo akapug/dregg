@@ -114,6 +114,36 @@ impl AgentPlatform {
         operator: Option<&str>,
         req: &ServeRequest,
     ) -> HttpResponse {
+        // The browser driver page, served same-origin so its `fetch`/`EventSource`
+        // calls reach this very server with no CORS. Host-independent + public (a
+        // page, like the marketing site); the API routes below still gate on the
+        // verified subject. Placed before the shim + auth so `/` is never a grain
+        // route (grains expose no `/`).
+        if req.method == HttpMethod::Get {
+            let p = req.target.split('?').next().unwrap_or(&req.target);
+            if matches!(p, "/" | "/grain" | "/grain/" | "/index.html") {
+                return HttpResponse {
+                    status: 200,
+                    content_type: "text/html; charset=utf-8".to_string(),
+                    body: GRAIN_PAGE.as_bytes().to_vec(),
+                };
+            }
+        }
+
+        // Apply the browser-friendly routing shim: a browser cannot set the `Host`
+        // header from `fetch`/`EventSource`, so the effective grain-host (and, for
+        // header-less `EventSource`, the subject) may arrive from a browser-settable
+        // source. Falls back to the real `Host` header, so existing programmatic
+        // callers are byte-for-byte untouched (the shim returns `None`).
+        let shimmed;
+        let req = match resolve_browser_shim(req) {
+            Some(r) => {
+                shimmed = r;
+                &shimmed
+            }
+            None => req,
+        };
+
         let path = req.target.split('?').next().unwrap_or(&req.target);
         let query = req.target.split('?').nth(1).unwrap_or("");
 
@@ -496,6 +526,67 @@ fn parse_hex32(s: &str) -> Result<[u8; 32], String> {
     Ok(out)
 }
 
+/// The self-contained browser driver page, served same-origin at `GET /`. Editing
+/// `site/grain/index.html` reshapes it; it is compiled in so a deployed bin needs no
+/// sidecar files.
+const GRAIN_PAGE: &str = include_str!("../../site/grain/index.html");
+
+/// **The browser-friendly routing shim.** A browser cannot set the HTTP `Host`
+/// header from `fetch`/`EventSource`, and `EventSource` cannot set request headers at
+/// all — so the effective grain-host (and, for SSE, the subject) may arrive from a
+/// browser-settable source, with the programmatic `Host`-header form left as the
+/// fallback:
+///
+/// - **the grain-host** — the `X-Dregg-Grain-Host` header, else the `host` query
+///   param, else the real `Host` header (existing programmatic callers untouched);
+/// - **the subject** — SSE convenience *only*, since `EventSource` sets no headers:
+///   the `X-Dregg-Subject` header stays primary and duplicate-safe; a `subject` query
+///   param is injected ONLY when NO `x-dregg-subject` header is present at all (a
+///   duplicated/ambiguous header still fails closed to `None`, never to the query).
+///
+/// This widens only the grain-HOST *source*; it never weakens auth — the subject is
+/// still whatever the caller supplies, role gating is unchanged, and a browser naming
+/// a grain it is not a member of still `404`s (no existence oracle). Returns `None`
+/// when no browser shim is in play, so the programmatic path is byte-identical.
+fn resolve_browser_shim(req: &ServeRequest) -> Option<ServeRequest> {
+    let hdr_host = req.header("x-dregg-grain-host").map(str::to_string);
+
+    let query = req.target.split('?').nth(1).unwrap_or("");
+    let mut q_host: Option<String> = None;
+    let mut q_subject: Option<String> = None;
+    for pair in query.split('&').filter(|s| !s.is_empty()) {
+        let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
+        match k {
+            "host" if q_host.is_none() => q_host = Some(v.to_string()),
+            "subject" if q_subject.is_none() => q_subject = Some(v.to_string()),
+            _ => {}
+        }
+    }
+
+    let eff_host = hdr_host.or(q_host);
+    // Inject the query subject ONLY when no x-dregg-subject header appears at all —
+    // a present-but-duplicated header keeps its fail-closed `None` (the query never
+    // becomes an escape hatch around the duplicate-smuggling guard).
+    let has_subject_header = req.headers.iter().any(|(n, _)| n == "x-dregg-subject");
+    let inject_subject = if has_subject_header { None } else { q_subject };
+
+    if eff_host.is_none() && inject_subject.is_none() {
+        return None; // no browser shim — the programmatic Host-header path, untouched
+    }
+
+    let mut headers = req.headers.clone();
+    if let Some(s) = inject_subject {
+        headers.push(("x-dregg-subject".to_string(), s));
+    }
+    Some(ServeRequest {
+        method: req.method,
+        host: eff_host.unwrap_or_else(|| req.host.clone()),
+        target: req.target.clone(),
+        body: req.body.clone(),
+        headers,
+    })
+}
+
 /// A filesystem-safe grain workdir segment from a host.
 fn sanitize(host: &str) -> String {
     host.chars()
@@ -576,6 +667,202 @@ mod tests {
             body: body.as_bytes().to_vec(),
             headers,
         }
+    }
+
+    /// Build a request with an arbitrary set of extra headers (for the browser-shim
+    /// smoke test: `X-Dregg-Grain-Host` + a real `Host` that is NOT the target).
+    fn req_hdrs(
+        method: HttpMethod,
+        host: &str,
+        target: &str,
+        extra: &[(&str, &str)],
+        body: &str,
+    ) -> ServeRequest {
+        let headers = extra
+            .iter()
+            .map(|(n, v)| (n.to_ascii_lowercase(), v.to_string()))
+            .collect();
+        ServeRequest {
+            method,
+            host: host.to_string(),
+            target: target.to_string(),
+            body: body.as_bytes().to_vec(),
+            headers,
+        }
+    }
+
+    /// **The browser-friendly routing shim, end-to-end WITHOUT a model.** A browser
+    /// cannot set the `Host` header, so it names the grain-host via
+    /// `X-Dregg-Grain-Host` (with a real `Host` that is a dead-end) — and the
+    /// header-less `EventSource` transcript names it via `?host=&subject=` query
+    /// params. Proven here: rent via the header shim (Host ≠ control) → 200; verify
+    /// R0/R2 + attest via the header shim → the honest verdicts; watch the transcript
+    /// via the query-param shim → the SSE meta/step/done; a non-member via the SAME
+    /// shim still 404s (the widened HOST source never weakened auth); and `GET /`
+    /// serves the driver page. None of this needs a live brain.
+    #[test]
+    fn the_browser_shim_routes_rent_verify_and_watch_without_a_model() {
+        let wd = workdir();
+        let platform = AgentPlatform::new();
+        // The browser's real Host is a dead-end (e.g. the page origin); the target is
+        // carried entirely by X-Dregg-Grain-Host.
+        const BROWSER_HOST: &str = "127.0.0.1:8903";
+        let grain = "shimmed.grain";
+        let rent_body = format!(
+            "{{\"host\":\"{grain}\",\"caps\":\"fs\",\"budget\":100000,\"rent_per_period\":100,\"period\":50}}"
+        );
+
+        // ── rent via the X-Dregg-Grain-Host shim (points at the CONTROL host) ─────
+        let r = call(
+            &platform,
+            &wd,
+            req_hdrs(
+                HttpMethod::Post,
+                BROWSER_HOST,
+                "/rent",
+                &[("x-dregg-subject", OWNER), ("x-dregg-grain-host", CONTROL)],
+                &rent_body,
+            ),
+        );
+        assert_eq!(r.status, 200, "rent via header shim: {}", r.body_str());
+        assert_eq!(platform.owner_of(grain).as_deref(), Some(OWNER));
+
+        // Drive it directly (no live brain) so the transcript + verify have real work.
+        let plan = vec![AgentAction::Op(ToolCall::new(
+            "fs_write",
+            [
+                ("path".to_string(), "s.txt".to_string()),
+                ("content".to_string(), "hi".to_string()),
+            ],
+        ))];
+        let mut brain = PlannedBrain::new(plan);
+        platform.drive(grain, "write", &mut brain).expect("drive");
+
+        // ── verify R0 / R2 / attest via the header shim ──────────────────────────
+        let v0 = call(
+            &platform,
+            &wd,
+            req_hdrs(
+                HttpMethod::Get,
+                BROWSER_HOST,
+                "/verify",
+                &[("x-dregg-subject", OWNER), ("x-dregg-grain-host", grain)],
+                "",
+            ),
+        );
+        assert_eq!(v0.status, 200, "R0 verify via shim");
+        let v2 = call(
+            &platform,
+            &wd,
+            req_hdrs(
+                HttpMethod::Get,
+                BROWSER_HOST,
+                "/verify?r2",
+                &[("x-dregg-subject", OWNER), ("x-dregg-grain-host", grain)],
+                "",
+            ),
+        );
+        assert_eq!(
+            v2.status, 422,
+            "an unminted grain honestly fails R2 via shim"
+        );
+        let att = call(
+            &platform,
+            &wd,
+            req_hdrs(
+                HttpMethod::Get,
+                BROWSER_HOST,
+                "/attest",
+                &[("x-dregg-subject", OWNER), ("x-dregg-grain-host", grain)],
+                "",
+            ),
+        );
+        assert_eq!(att.status, 200, "attest via shim");
+        assert!(!att.body.is_empty(), "attestation has bytes to keep");
+
+        // ── watch the transcript via the QUERY-PARAM shim (EventSource form) ─────
+        let t = call(
+            &platform,
+            &wd,
+            req_hdrs(
+                HttpMethod::Get,
+                BROWSER_HOST,
+                &format!("/transcript?host={grain}&subject={OWNER}"),
+                &[], // no headers at all — exactly what EventSource can send
+                "",
+            ),
+        );
+        assert_eq!(t.status, 200, "transcript via query-param shim");
+        assert_eq!(t.content_type, "text/event-stream");
+        assert!(t.body_str().contains("event: meta"), "SSE meta frame");
+        assert!(
+            t.body_str().contains("event: step"),
+            "SSE step frame (real work)"
+        );
+        assert!(t.body_str().contains("event: done"), "SSE done frame");
+
+        // ── the widened HOST source did NOT weaken auth: a non-member still 404s ──
+        let mal = call(
+            &platform,
+            &wd,
+            req_hdrs(
+                HttpMethod::Get,
+                BROWSER_HOST,
+                "/verify",
+                &[("x-dregg-subject", MALLORY), ("x-dregg-grain-host", grain)],
+                "",
+            ),
+        );
+        assert_eq!(
+            mal.status, 404,
+            "a non-member 404s through the shim (no oracle)"
+        );
+        // …and via the query-param form too.
+        let mal_q = call(
+            &platform,
+            &wd,
+            req_hdrs(
+                HttpMethod::Get,
+                BROWSER_HOST,
+                &format!("/transcript?host={grain}&subject={MALLORY}"),
+                &[],
+                "",
+            ),
+        );
+        assert_eq!(
+            mal_q.status, 404,
+            "a non-member 404s through the query shim"
+        );
+        // A query subject is NOT injected when a header subject is present (the
+        // header stays primary): a header MALLORY is not silently overridden.
+        let both = call(
+            &platform,
+            &wd,
+            req_hdrs(
+                HttpMethod::Get,
+                BROWSER_HOST,
+                &format!("/verify?host={grain}&subject={OWNER}"),
+                &[("x-dregg-subject", MALLORY), ("x-dregg-grain-host", grain)],
+                "",
+            ),
+        );
+        assert_eq!(
+            both.status, 404,
+            "the header subject wins over the query subject"
+        );
+
+        // ── GET / serves the driver page (host-independent, public) ──────────────
+        let page = call(
+            &platform,
+            &wd,
+            req_hdrs(HttpMethod::Get, BROWSER_HOST, "/", &[], ""),
+        );
+        assert_eq!(page.status, 200, "the driver page is served at /");
+        assert!(page.content_type.starts_with("text/html"), "html page");
+        assert!(
+            page.body_str().contains("Drive a grain"),
+            "the driver page body"
+        );
     }
 
     /// A platform with one grain rented (owner = OWNER) that has done real work, so

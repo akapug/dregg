@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Drive a grain — the dreggnet cloud</title>
+  <meta name="description" content="Rent a confined agent grain, drive it, watch its transcript stream, and verify it — trust no host — from your browser, over the agent-platform HTTP API.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230a0f0d'/%3E%3Ctext x='16' y='22' font-size='16' text-anchor='middle' fill='%235b8a5a' font-family='monospace'%3E%CF%80%3C/text%3E%3C/svg%3E">
+  <!-- The shared site stylesheet, when this page is served from the site tree. When
+       served same-origin by the agent-platform bin (GET /), the link 404s and the
+       inline tokens+styles below carry the whole look — the page is self-contained. -->
+  <link rel="stylesheet" href="../assets/style.css">
+  <style>
+    /* ── the green tokens (mirrors site/assets/style.css :root) so the page stands
+          alone when served same-origin from the agent-platform bin ────────────── */
+    :root {
+      --chalk: #f5f0e8;
+      --canopy: #0d1310; --loam: #141b17; --void: #0a0f0d;
+      --bg: var(--canopy); --bg-raised: var(--loam); --bg-inset: var(--void);
+      --fg-dim: #a89e8e; --fg-muted: #7a7265;
+      --moss: #5b8a5a; --fern: #7aab6f; --lantern: #c49245;
+      --accent: var(--moss); --accent-bright: var(--fern);
+      --accent-soft: rgba(91,138,90,0.12);
+      --warm: var(--lantern); --warm-soft: rgba(196,146,69,0.10);
+      --danger: #c86b5a; --danger-soft: rgba(200,107,90,0.10);
+      --line: rgba(228,221,208,0.08); --line-strong: rgba(228,221,208,0.15);
+      --font-display: 'Iowan Old Style','Palatino Linotype',Palatino,Georgia,serif;
+      --font-mono: 'SF Mono','Cascadia Code','JetBrains Mono',ui-monospace,Menlo,monospace;
+      --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px; --s6:32px; --s7:48px;
+      --r1:3px; --r2:6px; --r3:10px; --r4:16px;
+      --ease: cubic-bezier(0.25,0.46,0.45,0.94); --dur: 180ms;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--fg-dim);
+      font-family: var(--font-mono); line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+    .wrap { max-width: 1080px; margin: 0 auto; padding: var(--s6) var(--s5) var(--s7); }
+    h1 { font-family: var(--font-display); color: var(--chalk); font-size: clamp(1.6rem,4vw,2.4rem);
+      margin: 0 0 var(--s2); font-weight: 600; }
+    .lede { color: var(--fg-muted); font-size: 0.92rem; max-width: 68ch; margin: 0 0 var(--s6); }
+    .lede em { color: var(--accent-bright); font-style: italic; }
+    a { color: var(--accent-bright); text-decoration: none; }
+    a:hover { color: var(--warm); }
+
+    .card { border: 1px solid var(--line); background: var(--bg-raised);
+      border-radius: var(--r3); padding: var(--s5); margin-bottom: var(--s5); }
+    .card > h2 { font-family: var(--font-display); color: var(--chalk); font-size: 1.15rem;
+      margin: 0 0 var(--s2); font-weight: 600; }
+    .card > h2 .num { font-family: var(--font-mono); color: var(--accent); font-size: 0.8rem;
+      margin-right: var(--s3); vertical-align: middle; }
+    .card__hint { color: var(--fg-muted); font-size: 0.8rem; margin: 0 0 var(--s4); }
+
+    .grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(200px,1fr)); gap: var(--s3); }
+    label { display: block; font-size: 0.72rem; letter-spacing: 0.05em; text-transform: uppercase;
+      color: var(--accent); margin-bottom: var(--s1); }
+    input, textarea {
+      width: 100%; background: var(--bg-inset); color: var(--chalk);
+      border: 1px solid var(--line-strong); border-radius: var(--r2);
+      padding: var(--s2) var(--s3); font-family: var(--font-mono); font-size: 0.85rem;
+    }
+    input:focus, textarea:focus { outline: none; border-color: var(--accent); }
+    textarea { resize: vertical; min-height: 56px; }
+    .field { margin-bottom: var(--s3); }
+
+    .btns { display: flex; flex-wrap: wrap; gap: var(--s3); margin-top: var(--s4); }
+    button {
+      font-family: var(--font-mono); font-size: 0.82rem; cursor: pointer;
+      background: var(--accent-soft); color: var(--accent-bright);
+      border: 1px solid var(--accent); border-radius: var(--r2);
+      padding: var(--s2) var(--s5); transition: background var(--dur) var(--ease), transform var(--dur) var(--ease);
+    }
+    button:hover { background: var(--accent); color: var(--void); transform: translateY(-1px); }
+    button.ghost { background: transparent; color: var(--fg-dim); border-color: var(--line-strong); }
+    button.ghost:hover { color: var(--chalk); border-color: var(--accent); background: transparent; transform: translateY(-1px); }
+
+    .out { margin-top: var(--s4); font-size: 0.82rem; }
+    .pill { display: inline-block; font-size: 0.72rem; padding: 2px 8px; border-radius: 999px;
+      border: 1px solid var(--line-strong); margin-right: var(--s2); }
+    .pill.ok { color: var(--accent-bright); border-color: var(--accent); background: var(--accent-soft); }
+    .pill.bad { color: var(--danger); border-color: var(--danger); background: var(--danger-soft); }
+    .pill.warn { color: var(--warm); border-color: var(--warm); background: var(--warm-soft); }
+    .mono { font-family: var(--font-mono); color: var(--fg-dim); }
+    pre { background: var(--bg-inset); border: 1px solid var(--line); border-radius: var(--r2);
+      padding: var(--s3); overflow-x: auto; font-size: 0.78rem; color: var(--fg-dim); margin: var(--s3) 0 0; }
+    code { color: var(--accent-bright); background: var(--accent-soft); padding: 1px 5px; border-radius: var(--r1); }
+
+    /* the live transcript stream */
+    .stream { margin-top: var(--s4); display: flex; flex-direction: column; gap: var(--s2); }
+    .frame { border: 1px solid var(--line); border-left: 3px solid var(--line-strong);
+      border-radius: var(--r2); background: var(--bg-inset); padding: var(--s3); font-size: 0.8rem; }
+    .frame--meta { border-left-color: var(--accent-bright); }
+    .frame--step { border-left-color: var(--accent); }
+    .frame--step.refused { border-left-color: var(--danger); }
+    .frame--done { border-left-color: var(--warm); }
+    .frame__tag { font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase;
+      color: var(--accent); margin-bottom: var(--s1); }
+    .frame--done .frame__tag { color: var(--warm); }
+    .frame__line { color: var(--chalk); }
+    .frame__sub { color: var(--fg-muted); font-size: 0.75rem; margin-top: 2px; }
+    .kv { display: inline-block; margin-right: var(--s4); }
+    .kv b { color: var(--accent-bright); font-weight: 400; }
+    .status { font-size: 0.78rem; color: var(--fg-muted); margin-top: var(--s3); }
+    .footer { margin-top: var(--s7); color: var(--fg-muted); font-size: 0.76rem; border-top: 1px solid var(--line);
+      padding-top: var(--s4); }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Drive a grain</h1>
+  <p class="lede">Rent a confined agent grain, drive it, watch its transcript stream, and verify it — <em>trust no host</em>. This page talks to the <span class="mono">agent-platform</span> HTTP API over the browser-friendly routing shim (a browser cannot set the <code>Host</code> header, so the grain-host rides an <code>X-Dregg-Grain-Host</code> header, or query params for the header-less <code>EventSource</code> transcript). <strong>Rent / verify / watch work with no model; live drive needs the server built <code>--features live-brain</code> with an LLM key.</strong></p>
+
+  <!-- ── config ─────────────────────────────────────────────────────────── -->
+  <section class="card">
+    <h2><span class="num">config</span>Where + who</h2>
+    <p class="card__hint">The server base URL (defaults to this page's origin), the control host the platform routes <code>/rent</code> on, and your verified subject (the <code>X-Dregg-Subject</code> the forward-auth proxy sets in a real deploy; supplied directly here).</p>
+    <div class="grid">
+      <div class="field"><label>server base url</label><input id="base" value=""></div>
+      <div class="field"><label>control host</label><input id="control" value="control.localhost"></div>
+      <div class="field"><label>x-dregg-subject</label><input id="subject" value="dga1_alice"></div>
+    </div>
+  </section>
+
+  <!-- ── rent ───────────────────────────────────────────────────────────── -->
+  <section class="card">
+    <h2><span class="num">1 · rent</span>Provision a confined grain</h2>
+    <p class="card__hint">POSTs <code>/rent</code> to the control host (via the <code>X-Dregg-Grain-Host</code> shim) as your subject. The grain is owned by the verified subject, never a body field.</p>
+    <div class="grid">
+      <div class="field"><label>grain host</label><input id="r-host" value="alice.grain"></div>
+      <div class="field"><label>caps</label><input id="r-caps" value="fs"></div>
+      <div class="field"><label>budget</label><input id="r-budget" type="number" value="100000"></div>
+      <div class="field"><label>rent / period</label><input id="r-rent" type="number" value="100"></div>
+      <div class="field"><label>period (blocks)</label><input id="r-period" type="number" value="50"></div>
+    </div>
+    <div class="btns"><button onclick="rent()">Rent grain</button></div>
+    <div class="out" id="rent-out"></div>
+  </section>
+
+  <!-- ── drive + watch ──────────────────────────────────────────────────── -->
+  <section class="card">
+    <h2><span class="num">2 · drive</span>Give it a goal &amp; watch it work</h2>
+    <p class="card__hint"><b>Drive</b> POSTs <code>/drive</code> (spends the grain's budget + key — needs the driver role and a live brain; without a model the server honestly answers <code>503 no live brain</code>). <b>Watch transcript</b> opens the <code>/transcript</code> SSE (query-param form, since <code>EventSource</code> sets no headers) and replays the committed meta/step/done frames of every drive so far — this works with no model.</p>
+    <div class="field"><label>goal</label><textarea id="d-goal">clone the repo and summarize the readme</textarea></div>
+    <div class="field"><label>tools (comma-separated, optional)</label><input id="d-tools" value="fs_write"></div>
+    <div class="btns">
+      <button onclick="drive()">Drive (POST)</button>
+      <button class="ghost" onclick="watch()">Watch transcript (SSE)</button>
+      <button class="ghost" onclick="stopWatch()">Stop</button>
+    </div>
+    <div class="out" id="drive-out"></div>
+    <div class="stream" id="stream"></div>
+    <div class="status" id="stream-status"></div>
+  </section>
+
+  <!-- ── verify ─────────────────────────────────────────────────────────── -->
+  <section class="card">
+    <h2><span class="num">3 · verify</span>Trust no host</h2>
+    <p class="card__hint">The renter's check. <code>/verify</code> is <b>R0</b> tamper-evidence (the receipt chain re-witnesses); <code>/verify?r2</code> is <b>R2</b> (every receipt is a view over a kernel turn the platform's minter committed — an unminted grain honestly fails this); <code>/attest</code> hands you the signed attestation to keep. All read-only — <b>no model required.</b></p>
+    <div class="btns"><button onclick="verify()">Verify (R0 · R2 · attest)</button></div>
+    <div class="out" id="verify-out"></div>
+  </section>
+
+  <div class="footer">
+    Served by <span class="mono">agent-platform</span>. Start it with
+    <code>cargo run -p agent-platform -- 127.0.0.1:8903</code> and open
+    <code>http://127.0.0.1:8903/</code>. Live drive: rebuild
+    <code>--features live-brain</code> and set an LLM key.
+  </div>
+</div>
+
+<script>
+  // Same-origin by default (served by the bin at GET /); editable for a cross-origin
+  // dev server. When opened from file://, fall back to the bin's default bind.
+  const el = (id) => document.getElementById(id);
+  el('base').value = location.origin && location.origin.startsWith('http')
+    ? location.origin : 'http://127.0.0.1:8903';
+
+  const cfg = () => ({
+    base: el('base').value.replace(/\/+$/, ''),
+    control: el('control').value.trim(),
+    subject: el('subject').value.trim(),
+  });
+  // The grain host most recently rented / typed — the drive + verify target.
+  let currentGrain = el('r-host').value;
+
+  const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+
+  async function apiJson(path, { method = 'GET', grainHost, body } = {}) {
+    const { base, subject } = cfg();
+    const headers = { 'X-Dregg-Subject': subject };
+    if (grainHost) headers['X-Dregg-Grain-Host'] = grainHost;
+    if (body !== undefined) headers['Content-Type'] = 'application/json';
+    const res = await fetch(base + path, {
+      method, headers,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+    let data; const text = await res.text();
+    try { data = JSON.parse(text); } catch { data = { raw: text }; }
+    return { status: res.status, data, bytes: text.length };
+  }
+
+  function pill(status) {
+    const cls = status >= 200 && status < 300 ? 'ok' : (status === 503 || status === 422 ? 'warn' : 'bad');
+    return `<span class="pill ${cls}">${status}</span>`;
+  }
+
+  // ── 1 · rent ──────────────────────────────────────────────────────────
+  async function rent() {
+    const out = el('rent-out');
+    out.innerHTML = '<span class="mono">renting…</span>';
+    const { control } = cfg();
+    const host = el('r-host').value.trim();
+    const body = {
+      host,
+      caps: el('r-caps').value.trim(),
+      budget: Number(el('r-budget').value),
+      rent_per_period: Number(el('r-rent').value),
+      period: Number(el('r-period').value),
+    };
+    try {
+      // The grain-host shim points the request at the CONTROL host (the /rent route),
+      // since a browser cannot set the real Host header.
+      const r = await apiJson('/rent', { method: 'POST', grainHost: control, body });
+      if (r.status === 200) {
+        currentGrain = r.data.endpoint || host;
+        out.innerHTML = `${pill(r.status)} provisioned <code>${esc(r.data.endpoint)}</code> owned by <code>${esc(r.data.owner)}</code>`;
+      } else {
+        out.innerHTML = `${pill(r.status)} ${esc(r.data.error || JSON.stringify(r.data))}`;
+      }
+    } catch (e) {
+      out.innerHTML = `<span class="pill bad">net</span> ${esc(e.message)} — is the server up at ${esc(cfg().base)}?`;
+    }
+  }
+
+  // ── 2 · drive ─────────────────────────────────────────────────────────
+  async function drive() {
+    const out = el('drive-out');
+    const host = el('r-host').value.trim() || currentGrain;
+    currentGrain = host;
+    out.innerHTML = '<span class="mono">driving…</span>';
+    const tools = el('d-tools').value.split(',').map(s => s.trim()).filter(Boolean);
+    try {
+      const r = await apiJson('/drive', { method: 'POST', grainHost: host, body: { goal: el('d-goal').value, tools } });
+      if (r.status === 503) {
+        out.innerHTML = `${pill(r.status)} <b>no live brain</b> — the driver role cleared the gate, but this server has no model. Rebuild <code>--features live-brain</code> + set an LLM key. (You can still Watch a completed transcript + Verify below.)`;
+      } else if (r.status === 200) {
+        const d = r.data;
+        out.innerHTML = `${pill(r.status)} admitted <b>${d.admitted}</b> · cap-refused <b>${d.cap_refused}</b> · budget-refused <b>${d.budget_refused}</b> · consumed <b>${d.consumed}</b> — now Watch the transcript.`;
+        watch();
+      } else {
+        out.innerHTML = `${pill(r.status)} ${esc(r.data.error || JSON.stringify(r.data))}`;
+      }
+    } catch (e) {
+      out.innerHTML = `<span class="pill bad">net</span> ${esc(e.message)}`;
+    }
+  }
+
+  // ── 2 · watch (SSE) ───────────────────────────────────────────────────
+  let es = null;
+  function stopWatch() {
+    if (es) { es.close(); es = null; el('stream-status').textContent = 'stream closed.'; }
+  }
+  function watch() {
+    stopWatch();
+    const { base, subject } = cfg();
+    const host = el('r-host').value.trim() || currentGrain;
+    currentGrain = host;
+    const stream = el('stream');
+    stream.innerHTML = '';
+    el('stream-status').textContent = 'opening transcript…';
+    // EventSource cannot set headers → the grain-host + subject ride query params
+    // (the browser-convenience form of the shim).
+    const url = `${base}/transcript?host=${encodeURIComponent(host)}&subject=${encodeURIComponent(subject)}`;
+    es = new EventSource(url);
+
+    es.addEventListener('meta', (ev) => {
+      const m = JSON.parse(ev.data);
+      const div = document.createElement('div');
+      div.className = 'frame frame--meta';
+      div.innerHTML = `<div class="frame__tag">meta</div>
+        <div class="frame__line"><code>${esc(m.host)}</code> — goal: ${esc(m.goal || '(none yet)')}</div>
+        <div class="frame__sub">
+          <span class="kv">budget <b>${m.budget}</b></span>
+          <span class="kv">asset <b>${esc(m.asset)}</b></span>
+          <span class="kv">caps <b>${esc((m.caps||[]).join(', ') || '—')}</b></span>
+          <span class="kv">goals <b>${m.goals}</b></span>
+        </div>`;
+      stream.appendChild(div);
+    });
+
+    es.addEventListener('step', (ev) => {
+      const s = JSON.parse(ev.data);
+      const refused = /refused/.test(s.outcome);
+      const div = document.createElement('div');
+      div.className = 'frame frame--step' + (refused ? ' refused' : '');
+      div.innerHTML = `<div class="frame__tag">step ${s.n}</div>
+        <div class="frame__line">${esc(s.action)} — <span class="mono">${esc(s.outcome)}</span></div>
+        <div class="frame__sub">
+          <span class="kv">cost <b>${s.cost}</b></span>
+          ${s.tool_summary ? `<span class="kv">${esc(s.tool_summary)}</span>` : ''}
+        </div>`;
+      stream.appendChild(div);
+    });
+
+    es.addEventListener('done', (ev) => {
+      const d = JSON.parse(ev.data);
+      const div = document.createElement('div');
+      div.className = 'frame frame--done';
+      div.innerHTML = `<div class="frame__tag">done</div>
+        <div class="frame__sub">
+          <span class="kv">consumed <b>${d.consumed}</b>/<b>${d.budget}</b></span>
+          <span class="kv">headroom <b>${d.headroom}</b></span>
+          <span class="kv">admitted <b>${d.admitted}</b></span>
+          <span class="kv">cap-refused <b>${d.cap_refused}</b></span>
+          <span class="kv">budget-refused <b>${d.budget_refused}</b></span>
+          <span class="kv">receipts <b>${d.receipts}</b></span>
+        </div>`;
+      stream.appendChild(div);
+      // The server writes the whole stream then closes; close here so EventSource
+      // does NOT auto-reconnect and re-replay in a loop.
+      el('stream-status').textContent = 'transcript complete.';
+      stopWatch();
+    });
+
+    es.onerror = () => {
+      // A closed connection with frames already rendered is the normal end-of-stream;
+      // a 404 (non-member / no grain) or a down server surfaces here with none.
+      if (!stream.children.length) {
+        el('stream-status').textContent = 'no transcript — non-member (404), no such grain, or server down.';
+      }
+      stopWatch();
+    };
+  }
+
+  // ── 3 · verify ────────────────────────────────────────────────────────
+  async function verify() {
+    const out = el('verify-out');
+    const host = el('r-host').value.trim() || currentGrain;
+    currentGrain = host;
+    out.innerHTML = '<span class="mono">verifying…</span>';
+    try {
+      const [r0, r2, att] = await Promise.all([
+        apiJson('/verify', { grainHost: host }),
+        apiJson('/verify?r2', { grainHost: host }),
+        apiJson('/attest', { grainHost: host }),
+      ]);
+      const r0line = r0.status === 200
+        ? `${pill(200)} <b>R0</b> tamper-evidence PASS · actions <b>${r0.data.actions}</b>`
+        : `${pill(r0.status)} <b>R0</b> ${esc(r0.data.error || '')}`;
+      const r2line = r2.status === 200
+        ? `${pill(200)} <b>R2</b> minted-view PASS · actions <b>${r2.data.actions}</b> · linked <b>${r2.data.linked}</b>`
+        : `${pill(r2.status)} <b>R2</b> ${esc(r2.data.error || 'not a minted-view chain')}`;
+      const attline = att.status === 200
+        ? `${pill(200)} <b>attestation</b> ${att.bytes} bytes — the signed record to keep`
+        : `${pill(att.status)} <b>attest</b> ${esc(att.data.error || '')}`;
+      out.innerHTML = `<div>${r0line}</div><div style="margin-top:8px">${r2line}</div><div style="margin-top:8px">${attline}</div>`
+        + (att.status === 200 ? `<pre>${esc(JSON.stringify(att.data, null, 2).slice(0, 1200))}${att.bytes > 1200 ? '\n…' : ''}</pre>` : '');
+    } catch (e) {
+      out.innerHTML = `<span class="pill bad">net</span> ${esc(e.message)}`;
+    }
+  }
+</script>
+</body>
+</html>
