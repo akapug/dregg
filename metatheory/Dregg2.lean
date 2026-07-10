@@ -726,6 +726,7 @@ import Dregg2.Circuit.FinProgramSquares
 import Dregg2.Circuit.FinCreateCellSquares
 import Dregg2.Circuit.FinGrantSpawnSquares
 import Dregg2.Circuit.FinReactSquare
+import Dregg2.Exec.ReactiveRegistry
 import Dregg2.Circuit.BabyBearFriField
 import Dregg2.Circuit.BabyBearFriSetup
 import Dregg2.Circuit.ShieldedTransferStark
