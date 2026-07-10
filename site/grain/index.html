@@ -506,11 +506,15 @@
   function actToToolResult(r) {
     const d = r.data || {};
     if (r.status === 200 && d.admitted > 0) {
-      return `admitted. receipt: action=${d.receipt?.action}, cost=${d.receipt?.cost}, consumed_after=${d.receipt?.consumed_after}, cell_root=${String(d.receipt?.cell_root||'').slice(0,16)}. (The host executed the action and returns this receipt, not the file body.)`;
+      // The OBSERVE half of the loop: `/act` returns the tool's real verdict, so the
+      // model can read back what it wrote instead of flying blind on a bare receipt.
+      const obs = d.output ? `\nresult: ${d.output}` : '\n(no output for this tool)';
+      return `admitted. receipt: action=${d.receipt?.action}, cost=${d.receipt?.cost}, consumed_after=${d.receipt?.consumed_after}, cell_root=${String(d.receipt?.cell_root||'').slice(0,16)}.${obs}`;
     }
     if (r.status === 200) {
       const why = d.cap_refused ? 'cap-refused (outside the grain’s capabilities)' : (d.budget_refused ? 'budget-refused (the grain’s spend ceiling was reached)' : 'refused');
-      return `REFUSED by the host capability gate: ${why}. This action did NOT run. Choose a different action within the grain’s caps, or stop.`;
+      const gate = d.outcome ? ` [gate: ${d.outcome}]` : '';
+      return `REFUSED by the host capability gate: ${why}${gate}. This action did NOT run. Choose a different action within the grain’s caps, or stop.`;
     }
     return `error ${r.status}: ${d.error || JSON.stringify(d)}`;
   }
