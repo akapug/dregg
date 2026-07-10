@@ -292,3 +292,17 @@ SEQUENCING (decisive): value fix FIRST (running agent, closes the soundness hole
 Faithful8 retype as the architectural pass (compiler-driven, on already-wide values → pure hardening, no soundness
 risk). Not parallel (same files). value-then-type. This ends the hand-widening.
 - done-log: identified the abstraction (Faithful8 preexists); newtype-retype queued as the hardening pass after the value fix.
+
+## ✅ OFF-CHAIN FORGE CLOSED (verified, committed bfbe3139c) — the foundation weakness is FIXED
+heap/fields/cap off-chain roots now carry the wide 8-felt (digest8_to_bytes32(compute_canonical_*_root_8)).
+ACID TEST (cell/tests/offchain_root_forge_closed.rs, verified MY tree 3/3): lane-0-colliding states now produce
+DIFFERENT wide roots AND different compute_canonical_state_commitment. heap/fields FOLDED (consumers stay
+consistent, zero edits); cap _wide parallel (lane-0 kept for the executor slot + exec-lean parity). cell 652,
+dregg-doc substrate 192, turn/dregg-umem green, GENTIAN intact. DocSubstrateSound (158b54d04) proves the wide
+root binds the doc — the Lean-canonical + the Rust now MATCH. The doc's stranger-check is no longer the lane-0
+forgeable path.
+NEXT: Faithful8 retype (running a1867ad4c838c6964) — make lane-0 UNTYPEABLE (pure hardening, values already wide).
+RESIDUALS: (1) sandstorm grain /var root still 1-felt lane-0 (same class, stale scheme — separate lane). (2) MY
+FALLOUT: starbridge-v2 refs dregg_doc::commit/Commitment (the toy I deleted this session) — a real build regression
+I must fix. (3) pre-existing (not mine): dregg-circuit ivc.rs test refs removed IvcProof.stark_proof.
+- done-log: OFF-CHAIN FORGE CLOSED + verified + committed (bfbe3139c). The ~31-bit finding is now a FIXED bug, not an open one.
