@@ -285,8 +285,10 @@ abbrev BalKey : Type := CellId ×ₗ AssetId
 @[ext] structure FinKernelState where
   /-- Live cells (verbatim). -/
   accounts : Finset CellId
-  /-- Per-cell record state; default `.record []`. -/
-  cell : CanonMap CellId Value (Value.record [])
+  /-- Per-cell record state; default `.int 0` (the KERNEL default `(default : Value) = .int 0`,
+  `Exec/Value.lean:69`). Aligning to the kernel default is what makes `AccountsWF (denote f)`
+  ("cells outside `accounts` hold the kernel default") SATISFIABLE — an absent cell now reads `.int 0`. -/
+  cell : CanonMap CellId Value (Value.int 0)
   /-- Capability table (`Label → List Cap`); default `[]`. -/
   caps : CanonMap Label (List Cap) []
   /-- Spent-note nullifiers (verbatim). -/
@@ -417,7 +419,7 @@ its canonical default). Matches the field-default idiom used throughout `Exec/` 
 theorem denote_finInit :
     denote finInit =
       ({ accounts := ∅
-         cell := fun _ => Value.record []
+         cell := fun _ => Value.int 0
          caps := fun _ => []
          nullifiers := []
          revoked := []

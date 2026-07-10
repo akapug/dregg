@@ -22,8 +22,9 @@ the PROVED square makes `reachable_states_are_finite` UNCONDITIONAL — every re
 finite representative.
 
 NOTE (why two writers): `cell`'s value type `Value` has no `DecidableEq` in-tree, so the default-deciding `set`
-is unavailable there — but the record cell writers (`setBalance …`) provably NEVER produce the default
-`Value.record []` (`setBalance_ne_default`), so `cell` uses the insert-only `insertNZ` carrying that proof.
+is unavailable there — but the record cell writers (`setBalance …`) provably NEVER produce the kernel default
+`Value.int 0` (a `.record` is a different constructor; `setBalance_ne_default`), so `cell` uses the insert-only
+`insertNZ` carrying that proof.
 `caps` (`List Cap`, `DecidableEq` present) uses `set`, and REVOKE genuinely writes the default `[]` ⇒ ERASE.
 -/
 import Dregg2.Circuit.FinKernelState
@@ -229,7 +230,7 @@ end CanonMap
 @[simp] theorem denote_caps (f : FinKernelState) : (denote f).caps = fun l => f.caps.get l := rfl
 
 /-- A `cell`-field update denotes field-wise: only the `cell` total-function changes, to the map's `get`. -/
-theorem denote_with_cell (f : FinKernelState) (M : CanonMap CellId Value (Value.record [])) :
+theorem denote_with_cell (f : FinKernelState) (M : CanonMap CellId Value (Value.int 0)) :
     denote { f with cell := M } = { denote f with cell := fun c => M.get c } := rfl
 
 /-- A `caps`-field update denotes field-wise. -/
@@ -245,21 +246,13 @@ theorem cell_update_ext (f : FinKernelState) {A B : CellId → Value} (h : A = B
 theorem caps_update_ext (f : FinKernelState) {A B : Caps} (h : A = B) :
     ({ denote f with caps := A } : RecordKernelState) = { denote f with caps := B } := by rw [h]
 
-/-- **`setBalance_ne_default`** — a record-cell balance write NEVER produces the default `Value.record []`
-(it always yields a `.record` with at least the `balance` field). This is why `cell` can use the insert-only
-`insertNZ` without a `DecidableEq Value`: the sparse invariant is never threatened by a cell write. -/
-theorem setBalance_ne_default (cell : Value) (v : Int) : setBalance cell v ≠ Value.record [] := by
+/-- **`setBalance_ne_default`** — a record-cell balance write NEVER produces the kernel default `Value.int 0`
+(it always yields a `.record`, a different constructor). This is why `cell` can use the insert-only `insertNZ`
+without a `DecidableEq Value`: the sparse invariant is never threatened by a cell write. -/
+theorem setBalance_ne_default (cell : Value) (v : Int) : setBalance cell v ≠ Value.int 0 := by
   unfold setBalance
   cases cell with
-  | record fs =>
-      cases fs with
-      | nil => simp [setBalance.setBalanceList]
-      | cons hd tl =>
-          obtain ⟨k, x⟩ := hd
-          simp only [setBalance.setBalanceList]
-          by_cases hk : (k == balanceField) = true
-          · rw [if_pos hk]; simp
-          · rw [if_neg hk]; simp
+  | record fs => simp
   | int a => simp
   | dig a => simp
   | sym a => simp
@@ -364,7 +357,7 @@ def finStep : FullAction → FinKernelState → FinKernelState
 /-! ## §6 — `finStep_canonical`: every field of a finite step stays Canonical (sparse) by construction. -/
 
 theorem finStep_canonical (e : FullAction) (f : FinKernelState) :
-    SortedMap.Canonical (Value.record []) (finStep e f).cell.toMap
+    SortedMap.Canonical (Value.int 0) (finStep e f).cell.toMap
     ∧ SortedMap.Canonical ([] : List Cap) (finStep e f).caps.toMap :=
   ⟨(finStep e f).cell.canon, (finStep e f).caps.canon⟩
 

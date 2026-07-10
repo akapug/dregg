@@ -292,13 +292,14 @@ theorem denote_finSetDelegate (g : RecordKernelState → CellId → Option CellI
 /-! ## §3″ — `setCell`: the touched-set is ALREADY in the constructor (`T : Finset CellId`), but the value
 type `Value` has NO `DecidableEq`, so the sparse write uses the insert-only `insertNZ` (as committed
 `FinKernelStep` does for balance writes) — which needs each written value non-default. Hence `setCell` carries
-a NON-DEFAULT side condition (`leaf (denote f) c ≠ .record []` on `T`), true for every real program (all leaves
-are records carrying `balance`/named fields). NOT a FiniteDiff condition — `T` is given — a sparsity one. -/
+a NON-DEFAULT side condition (`leaf (denote f) c ≠ .int 0` on `T`), true for every real program (all leaves
+are records carrying `balance`/named fields, a different constructor from the kernel default `.int 0`). NOT a
+FiniteDiff condition — `T` is given — a sparsity one. -/
 
 /-- Fold `insertNZ` (carrying the per-key non-default proof) over the touched list. -/
 def setCellOverList (leaf : CellId → Value) :
-    (l : List CellId) → (∀ c ∈ l, leaf c ≠ Value.record []) →
-      CanonMap CellId Value (Value.record []) → CanonMap CellId Value (Value.record [])
+    (l : List CellId) → (∀ c ∈ l, leaf c ≠ Value.int 0) →
+      CanonMap CellId Value (Value.int 0) → CanonMap CellId Value (Value.int 0)
   | [],      _, cm => cm
   | k :: ks, h, cm =>
       (setCellOverList leaf ks (fun c hc => h c (List.mem_cons_of_mem _ hc)) cm).insertNZ
@@ -306,8 +307,8 @@ def setCellOverList (leaf : CellId → Value) :
 
 /-- Read-back law: `leaf x` on a touched key, `cm.get x` otherwise (independent of the non-default proof). -/
 theorem get_setCellOverList (leaf : CellId → Value) :
-    ∀ (l : List CellId) (h : ∀ c ∈ l, leaf c ≠ Value.record [])
-      (cm : CanonMap CellId Value (Value.record [])) (x : CellId),
+    ∀ (l : List CellId) (h : ∀ c ∈ l, leaf c ≠ Value.int 0)
+      (cm : CanonMap CellId Value (Value.int 0)) (x : CellId),
       (setCellOverList leaf l h cm).get x = if x ∈ l then leaf x else cm.get x
   | [],      _, cm, x => by simp [setCellOverList]
   | k :: ks, h, cm, x => by
@@ -319,13 +320,13 @@ theorem get_setCellOverList (leaf : CellId → Value) :
 
 /-- `setCell T leaf` as a bounded finite step (touched `T`, values proven non-default). -/
 noncomputable def finSetCell (T : Finset CellId) (leaf : RecordKernelState → CellId → Value)
-    (f : FinKernelState) (h : ∀ c ∈ T.toList, leaf (denote f) c ≠ Value.record []) : FinKernelState :=
+    (f : FinKernelState) (h : ∀ c ∈ T.toList, leaf (denote f) c ≠ Value.int 0) : FinKernelState :=
   { f with cell := setCellOverList (leaf (denote f)) T.toList h f.cell }
 
 /-- **Square (setCell).** Under the non-default side condition, the sparse cell write denotes to
 `interp (.setCell T leaf)` — the general form of the committed `finTransfer`/`finMint` cell squares. -/
 theorem denote_finSetCell (T : Finset CellId) (leaf : RecordKernelState → CellId → Value)
-    (f : FinKernelState) (h : ∀ c ∈ T.toList, leaf (denote f) c ≠ Value.record []) :
+    (f : FinKernelState) (h : ∀ c ∈ T.toList, leaf (denote f) c ≠ Value.int 0) :
     some (denote (finSetCell T leaf f h))
       = interp (.setCell T leaf) (denote f) := by
   have hEq : (fun c => (setCellOverList (leaf (denote f)) T.toList h f.cell).get c)

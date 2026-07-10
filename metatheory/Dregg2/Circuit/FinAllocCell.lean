@@ -16,15 +16,15 @@ its `lookup`/`get` laws, the per-field DENOTATION BRIDGE, the finite step `finAl
 arm EXACTLY, and the headline square `denote_finAllocCell`. It builds ON committed R1/R3 (`FinKernelState`,
 `FinKernelStep`, `FinInterp`, Argus `Stmt`) and edits NOTHING committed. Sorry-free; no carrier.
 
-## ONE MEASURED CORRECTION (verified against HEAD, not modelled)
-`FinInterp`'s allocCell comment said "cell reset to `.record []` — i.e. `erase` since that IS the CanonMap
-default". That is WRONG at HEAD: `bornEmptyCellSlots` resets `cell := fun c => if c = newCell then default …`,
-and `(default : Value) = Value.int 0` (`Exec/Value.lean:69`, `instance : Inhabited Value := ⟨.int 0⟩`), which
-is NOT the `cell` `CanonMap`'s default `Value.record []`. So the fresh cell's `cell` reset is an INSERT of the
-non-default `Value.int 0` (via `insertNZ`, since `Value.int 0 ≠ Value.record []`), not an erase. Every other
-reset (caps/delegate/delegations/slotCaveats/lifecycle/deathCert = their field default; `bal` column = `0`)
-IS a default-write, so `erase`/`filterErase`. `denote_finAllocCell` is therefore UNCONDITIONAL — no side
-condition — mirroring `createCellIntoAsset`'s unconditionality.
+## THE FRESH-CELL RESET IS AN ERASE (the `cell` default is aligned to the kernel default)
+`bornEmptyCellSlots` resets `cell := fun c => if c = newCell then default …`, and `(default : Value) =
+Value.int 0` (`Exec/Value.lean:69`, `instance : Inhabited Value := ⟨.int 0⟩`). Since `FinKernelState.cell` is
+now a `CanonMap CellId Value (Value.int 0)` (the default ALIGNED to the kernel default), the born value
+`Value.int 0` IS the map's default — so the sparse-faithful `cell` reset is an ERASE (storing a default would
+break the Canonical invariant). Every other reset (caps/delegate/delegations/slotCaveats/lifecycle/deathCert =
+their field default; `bal` column = `0`) is likewise a default-write, so `erase`/`filterErase`.
+`denote_finAllocCell` is therefore UNCONDITIONAL — no side condition — mirroring `createCellIntoAsset`'s
+unconditionality.
 -/
 import Dregg2.Circuit.FinInterp
 import Dregg2.Exec.ConcreteKernel
@@ -111,9 +111,9 @@ end Dregg2.Circuit.FinKernelState.SortedMap
 
 `filterErase` lifts to `CanonMap` because filtering only removes entries (Canonical preserved). `CanonMap.erase`
 is the single-key default-write (`get x = if x = k then d else …`) with NO `DecidableEq V` — needed for the
-`cell` slot whose `Value` has no `DecidableEq` (the committed `set` needs one; `insertNZ` writes a non-default).
-The seven point-resets in `bornEmptyCellSlots` write the field DEFAULT, so they are erases (or, for `cell`, an
-`insertNZ` of the non-default `Value.int 0`). -/
+`cell` slot whose `Value` has no `DecidableEq` (the committed `set` needs one). The seven point-resets in
+`bornEmptyCellSlots` write the field DEFAULT, so they are all erases (including `cell`, whose born value
+`Value.int 0` is now the map's aligned default). -/
 
 namespace Dregg2.Circuit.FinKernelState.CanonMap
 
@@ -168,8 +168,9 @@ set_option linter.unusedVariables false
 
 /-! ## §3 — the small facts the resets need. -/
 
-/-- The fresh-cell `cell` reset value `Value.int 0` (= `(default : Value)`) is NOT the `cell` `CanonMap`'s
-default `Value.record []`, so it is stored by `insertNZ` (not an erase). -/
+/-- `Value.int 0 ≠ Value.record []` — retained for downstream teeth (`FinCreateCellSquares`) that contrast the
+kernel born value with an empty-record value. The `cell` reset itself no longer uses this (it is an ERASE now
+that the `cell` default is aligned to `Value.int 0`). -/
 theorem valInt0_ne_record : (Value.int 0) ≠ Value.record [] := by simp
 
 /-- `(default : Value) = Value.int 0` — pinned so the `cell` reset in `bornEmptyCellSlots` matches the stored
@@ -203,7 +204,8 @@ theorem denote_filterErase_bal (f : FinKernelState) (newCell : CellId) :
 `accounts := insert (n k) k.accounts)`. The mirror, over the finite maps, at `newCell = n (denote f)`:
 
   * `accounts` — `insert newCell f.accounts` (verbatim, `accounts` is carried as a `Finset`);
-  * `cell`     — INSERT `Value.int 0` (= `default`) at `newCell` via `insertNZ` (non-default, §Correction);
+  * `cell`     — `erase newCell`: the fresh cell is born at the kernel default `Value.int 0`, which is now the
+    `cell` `CanonMap`'s OWN default (aligned), so the sparse-faithful write is an ERASE (§Correction);
   * `caps`/`delegations`/`slotCaveats`/`lifecycle`/`deathCert` — `erase newCell` (each writes its field default);
   * `delegate` — `SortedMap.erase newCell` (absence = `none`, the field default);
   * `bal`      — `filterErase` the `(newCell, ·)` column (writes the ledger default `0`);
@@ -215,7 +217,7 @@ noncomputable def finAllocCell (n : RecordKernelState → CellId) (f : FinKernel
   let newCell := n (denote f)
   { f with
     accounts := insert newCell f.accounts
-    cell := f.cell.insertNZ newCell (Value.int 0) valInt0_ne_record
+    cell := f.cell.erase newCell
     caps := f.caps.erase newCell
     delegate := f.delegate.erase newCell
     delegations := f.delegations.erase newCell
@@ -237,10 +239,10 @@ theorem denote_finAllocCell (n : RecordKernelState → CellId) (f : FinKernelSta
   apply RecordKernelState.ext
   case cell =>
     funext c
-    rw [show (denote (finAllocCell n f)).cell c
-          = (f.cell.insertNZ (n (denote f)) (Value.int 0) valInt0_ne_record).get c from rfl,
-       CanonMap.get_insertNZ]
-    rfl
+    rw [show (denote (finAllocCell n f)).cell c = (f.cell.erase (n (denote f))).get c from rfl,
+       CanonMap.get_erase]
+    by_cases hc : c = n (denote f) <;>
+      simp [hc, createCellIntoAsset, bornEmptyCellSlots, denote, default_value]
   case caps =>
     funext l
     rw [show (denote (finAllocCell n f)).caps l = (f.caps.erase (n (denote f))).get l from rfl,
