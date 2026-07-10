@@ -62,6 +62,13 @@ pub use prompt_template::{
     slot_confined, verify_prompt_rendering, world_binding, PromptTemplate, Segment, SLOT_PLAYER,
     SLOT_WORLD,
 };
+
+pub mod game;
+pub use game::{
+    sunken_vault, Exit, GameAction, GameBinding, GameBrain, GameRefusal, GameSession, GameStatus,
+    GameWorld, Gate, GateReason, Hostile, LoseCondition, Objective, Outcome, PlayResult, Proposal,
+    Resolution, Room, ScriptedGm, UseRule,
+};
 // `PromptBinding` is defined below (it is tightly coupled to the chain-link hashing); re-exported
 // here in the same neighbourhood as the other prompt-template surface for discoverability.
 
@@ -263,6 +270,7 @@ pub fn chain_receipt_id(
     narration: &str,
     effect: &Option<WorldEffect>,
     prompt_binding: &Option<PromptBinding>,
+    game_binding: &Option<GameBinding>,
     att: &ZkOracleAttestation,
 ) -> [u8; 32] {
     let mut h = blake3::Hasher::new();
@@ -275,10 +283,29 @@ pub fn chain_receipt_id(
     // Bind the INPUT integrity: hash(template) ‖ world ‖ player — a swapped template, world,
     // or player field changes this leg and therefore the whole link.
     encode_prompt_binding(&mut h, prompt_binding);
+    // Bind the GAME MOVE: the closed typed action the DM proposed and the room it acted in.
+    // A rewritten action (claiming a different move produced this turn) or a swapped room
+    // changes this leg and therefore the whole link — the resolved move rides the chain.
+    encode_game_binding(&mut h, game_binding);
     // Bind the attestation via its own committed fingerprint — a tampered / re-aimed
     // attestation changes this leg and therefore the whole link.
     h.update(&attestation_commitment(att));
     *h.finalize().as_bytes()
+}
+
+/// Tagged, length-prefixed encoding of the (optional) game binding into the chain hash, so a
+/// rewritten game action or swapped room breaks the link. `None` (a non-game narration turn) is
+/// tag `0`. The `GameAction` / room encoding lives on [`GameBinding::encode_into`] (game.rs).
+fn encode_game_binding(h: &mut blake3::Hasher, gb: &Option<GameBinding>) {
+    match gb {
+        None => {
+            h.update(&[0u8]);
+        }
+        Some(b) => {
+            h.update(&[1u8]);
+            b.encode_into(h);
+        }
+    }
 }
 
 /// Tagged, length-prefixed encoding of the (optional) prompt binding into the chain hash, so a
@@ -442,6 +469,11 @@ pub struct LedgerEntry {
     /// prompted with (`Some` for a player turn admitted through the slot-confinement guard;
     /// `None` for an explicit no-input [`DungeonMaster::narrate_move`]). Rides the chain link.
     pub prompt_binding: Option<PromptBinding>,
+    /// **The GAME MOVE this turn resolved** — the closed typed [`GameAction`] the DM proposed
+    /// and the room it acted in ([`GameBinding`]). `Some` for a turn landed by a
+    /// [`GameSession`] (the resolver admitted the move); `None` for a free narration turn. Rides
+    /// the chain link, so the on-ledger receipt commits to WHICH typed move produced this turn.
+    pub game_binding: Option<GameBinding>,
     /// THE ATTESTATION — a `verify_zkoracle`-checkable proof this narration was authentic
     /// (from a real model) ∧ well-formed ∧ injection-free.
     pub attestation: ZkOracleAttestation,
@@ -603,6 +635,7 @@ pub fn verify_turn(
         &entry.narration,
         &entry.effect,
         &entry.prompt_binding,
+        &entry.game_binding,
         &entry.attestation,
     );
     if recomputed != entry.receipt {
@@ -950,7 +983,7 @@ impl<B: DmBrain> DungeonMaster<B> {
             player.text.clone(),
         );
         let mv = self.brain.narrate(&world.scene, player);
-        self.land_move(world, mv, Some(binding))
+        self.land_move(world, mv, Some(binding), None)
     }
 
     /// **DRIVE AN EXPLICIT MOVE** (narration + a proposed world-effect). Same output-side teeth as
@@ -958,17 +991,36 @@ impl<B: DmBrain> DungeonMaster<B> {
     /// the cap tooth (an over-cap item-grant) and to advance the scene deliberately. Carries no
     /// [`PromptBinding`] (there is no untrusted player field this turn).
     pub fn narrate_move(&self, world: &mut WorldCell, mv: DmMove) -> Result<Receipt, DmError> {
-        self.land_move(world, mv, None)
+        self.land_move(world, mv, None, None)
+    }
+
+    /// **LAND A RESOLVED GAME MOVE.** Same landing path + teeth as [`Self::narrate_move`], but the
+    /// turn additionally carries the closed typed [`GameBinding`] (the resolver-admitted action +
+    /// room) and, if the move came from a player command, its input-side [`PromptBinding`]. Used by
+    /// [`GameSession`]: the AI proposes the action + narrates, the resolver decides legality, and
+    /// only a legal move reaches here to be cap-checked, attested, and appended to the chain — one
+    /// verified turn carrying the move. The narration is still injection-free-attested (a jailbroken
+    /// model's prose is bound honestly), and the effect is still cap-gated (a grant must be
+    /// whitelisted). Refused exactly as the other paths (over-cap / injection / federation).
+    pub fn narrate_game_move(
+        &self,
+        world: &mut WorldCell,
+        mv: DmMove,
+        prompt_binding: Option<PromptBinding>,
+        game_binding: GameBinding,
+    ) -> Result<Receipt, DmError> {
+        self.land_move(world, mv, prompt_binding, Some(game_binding))
     }
 
     /// The one landing path: cap-check the effect (fail-closed), attest the narration
     /// (injection-free tooth), then apply the effect and append the receipted turn — binding the
-    /// (optional) input-side [`PromptBinding`] into the chain link.
+    /// (optional) input-side [`PromptBinding`] and (optional) [`GameBinding`] into the chain link.
     fn land_move(
         &self,
         world: &mut WorldCell,
         mv: DmMove,
         prompt_binding: Option<PromptBinding>,
+        game_binding: Option<GameBinding>,
     ) -> Result<Receipt, DmError> {
         // (1) CAP-BOUND the proposed effect FIRST, fail-closed — an over-cap move never
         //     produces an attestation and never touches the world.
@@ -995,6 +1047,7 @@ impl<B: DmBrain> DungeonMaster<B> {
             &narration,
             &mv.effect,
             &prompt_binding,
+            &game_binding,
             &attestation,
         );
         // FEDERATION SEAM: route the receipt commitment to a real node BEFORE touching
@@ -1014,6 +1067,7 @@ impl<B: DmBrain> DungeonMaster<B> {
             narration,
             effect: mv.effect,
             prompt_binding,
+            game_binding,
             attestation,
             receipt,
         });
