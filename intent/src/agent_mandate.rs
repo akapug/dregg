@@ -217,6 +217,10 @@ impl Mandate {
                 // The attenuated facet mask — only the kept rights' effect bits are exposed.
                 allowed_effects: Some(facet_mask(&self.keep)),
                 stored_epoch: None,
+                // The executor recomputes the cap's provenance at grant time (chaining the
+                // parent cap's provenance + the creating turn; see `finalize.rs`), so the
+                // unprovenanced `[0u8; 32]` sentinel here is rewritten on install — same as `slot`.
+                provenance: [0u8; 32],
             },
         }
     }
