@@ -16,3 +16,4 @@ replays. VERIFY BY DRIVING, not fixtures-pass. Bar: the artifact RUNS end-to-end
 - firing: DEMO PAGE lane (a491b1c26180a99cf) — self-contained page-SDK: real wasm StoryWorld over the-commons.scene, <dregg-story collective> in-page (no extension), auto-play the crowd + interactive, DRIVEN run + screenshot/transcript capture.
 - firing: STORY NETLAYER lane (a9aecdbc92c80c7a1) — content-addressed dregg://story/<addr> → verified StoryWorld (mirror the doc/poll netlayer), hostile-story fail-closed.
 - note: the deos_app wasm-clean refactor is COMMITTED (788b1b930); its stale build-monitor keeps echoing stage-greens (privacy-voting/collective-choice) — already verified + committed, ignore.
+- done: STORY NETLAYER committed — dregg://story/<addr> content-addressed + verified before it plays (hostile story refused); also fixed a latent bug (StoryWorld ctor now threads the verified scene). test:netlayer 8/8.
