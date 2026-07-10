@@ -283,3 +283,11 @@ AirSoundness.lean:234). `fold_close_of_two_alpha`/`friProximity_discharge` are f
   — `friQueryCheck` calls `merkleVerify := decide (merkleRecompute … = root)`, ON the accept path. `merklePaths`
   is a REDUNDANT field, as its doc-comment says. I read a SHAPE instead of the ARGUMENT. The rule cuts both ways.
   VERIFIED GOOD: `fullChecks` implements every verifyAlgo sub-check for real — that claim checks out.
+- ✅✅ DEBT-A #6 CLOSED `3ab1c78ed` — `fold_close_of_arity_challenges` PROVED for GENERAL arity `n`
+  (derived constant `n²·d`; at n=2 it recovers the committed `4d` exactly — a real consistency check), via the
+  size-`n` Vandermonde (`det_vandermonde_ne_zero_iff`). INSTANTIATED at the deployed `n = 8`
+  (`PROD_FRI_MAX_LOG_ARITY = 3`) over BabyBear; the new fiber-distinctness axiom is PROVED for BabyBear from
+  `omega16`'s order, not assumed. Teeth: honest word reconstructs (fires); the frequency-8 far word admits NO 8
+  distinct good challenges (bites). Soundness distance degrades `n²·d` — priced, not hidden.
+  ⇒ Obligations: #1 ✅ · #2 ◐ · #3 in flight · #4 REFRAMED (PoK, above FRI) · #5 reduces to DeployedMatchesModel
+  (KAT) · #6 ✅. **The FRI side is nearly done; the blocker remains knowledge extraction.**
