@@ -125,4 +125,15 @@ the sibling lane settles — not mine to touch/stash.
   DEBT-B's mismatch one level up, inside the statement language. Either the 32 real programs only ever pass
   finite-diff functions (then a `FiniteDiff` side condition discharges it) or those ctors need finite deltas.
   MEASURE which, per constructor. Do not assume.
-- ▶ IN FLIGHT: STEP 3 R3-CONTINUATION over RecStmt (delta model, per-field naturality).
+- ◐ STEP 3 PARTIAL `e6344b504` — `denote_finInterp` PROVED over RecStmt's **10-ctor `Pure` fragment** + `seq`.
+  7 whole-function writers have square lemmas gated on an explicit FiniteDiff hypothesis (NOT a carrier);
+  `grant_finiteDiff` proves that obligation for one real program. **2 of 32** deployed `*Stmt` programs have
+  proved squares. (The lane claimed '30 of 32 discharged' — an EXTRAPOLATION from machinery; corrected in the
+  commit. R1's `hpres` gate is NOT yet discharged.)
+  ✔ KEY MEASUREMENT (step 0, the point): every whole-function writer in the 32 real programs is used with a
+    POINT diff off the current field — FINITE-DIFF ALWAYS. The infinite-support hazard is a RAW-CONSTRUCTOR
+    artifact, not a property of the deployed effects. `setDelegate` has no real program at all.
+  ⛔ `allocCell` BLOCKED precisely: its `bal` reset zeroes the whole `(newCell,·)` column across all assets — a
+    predicate-erase, not a bounded Finset write. Fix = `filterErase`/`get_filterErase` on CanonMap. Blocks
+    createCellStmt + createCellFromFactoryStmt.
+- ▶ IN FLIGHT: step 3 completion — (A) `filterErase` → unblock allocCell; (B) the remaining 30 programs' squares.
