@@ -252,3 +252,16 @@ while acknowledging that full retirement is a 185-220-file proof migration domin
 descriptor family.  The key acceptance condition is grep-zero for old `Satisfied2` on the
 `StarkSound`/apex path, plus a differential case whose residual is `p` in `ℤ` and zero in BabyBear
 (`CircuitSoundness.lean:375-387`; `circuit/tests/ir2_denotational_differential.rs:83-104`).
+
+## ⊕ INDEPENDENT RE-AUDIT (claude gate, 2026-07-10): benign-gap verdict CONFIRMED under adversarial pressure
+I tried to REFUTE "refactor needed" (find a saving invariant that makes the ℤ residual truly 0). Failed — the
+verdict holds:
+- `VmTrace` (`DescriptorIR2.lean:432`) = `rows : List Assignment`, `pub : Assignment` — NO well-formedness
+  predicate, NO column-value bound. `Assignment = Nat → ℤ` (unbounded ℤ).
+- NO `%p`/`ZMod`/reduction in any `holdsAt`/`holdsVm`/`arithResidual` application (empty grep). `envAt` reads rows
+  verbatim.
+- The only bounds are `BAL_LIMB_BITS = 30` LOOKUP-table range checks (`rangeTableDef`) on specific LIMB columns —
+  they do NOT save the gap: (i) copy-constraint columns (the counterexample's) are NOT range-checked; (ii) even
+  three range-checked 30-bit values sum to `3·2^30 ≈ 1.5p > p`, so a 3-term affine gate over them can still hit p.
+CONCLUSION: no invariant rescues the ℤ denotation; the refactor is REQUIRED, confirmed by an independent
+adversarial pass, not just codex's report.
