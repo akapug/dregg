@@ -53,7 +53,7 @@ def RestIffNoFactoryTouched (RH : RecordKernelState → ℤ) : Prop :=
       ∧ k'.delegationEpoch = k.delegationEpoch
       ∧ k'.delegationEpochAt = k.delegationEpochAt
       ∧ k'.heaps = k.heaps
-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
+      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
 
 /-! ## §2 — the `createFromFactoryE` quint instance. -/
 
@@ -176,7 +176,7 @@ def createFromFactoryE (LE : CellId → ℤ) (cN : List ℤ → ℤ)
       ∧ k'.delegationEpoch = k.delegationEpoch
       ∧ k'.delegationEpochAt = k.delegationEpochAt
       ∧ k'.heaps = k.heaps
-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
+      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
   guardGates   := createFromFactoryGuardGates
   guardProp    := createFromFactoryGuardProp
   guardWidth   := 1
@@ -261,6 +261,7 @@ def CreateFromFactoryCircuitSpec (st : RecChainedState) (actor newCell : CellId)
     ∧ st'.kernel.delegationEpochAt = st.kernel.delegationEpochAt
     ∧ st'.kernel.heaps = st.kernel.heaps
     ∧ st'.kernel.nullifierRoot = st.kernel.nullifierRoot ∧ st'.kernel.revokedRoot = st.kernel.revokedRoot
+    ∧ st'.kernel.commitmentsRoot = st.kernel.commitmentsRoot
 
 theorem CreateFromFactorySpec_implies_circuitSpec (st : RecChainedState) (actor newCell : CellId)
     (vk : Int) (st' : RecChainedState) (h : CreateFromFactorySpec st actor newCell vk st') :

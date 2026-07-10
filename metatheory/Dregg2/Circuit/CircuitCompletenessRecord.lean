@@ -171,7 +171,8 @@ def incrementNonce_rotatedEncodesIncNonce_construct (hash : List ℤ → ℤ)
   frDelegationEpochAt := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
   frHeaps             := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
   frNullifierRoot     := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
-  frRevokedRoot       := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
+  frRevokedRoot       := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
+  frCommitmentsRoot       := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
 
 /-- **`incrementNonce_descriptorComplete_genuine` — the constructed decode realizes the GENUINE nonce
 write.** From `IncrementNonceSpec`, the written `nonce` slot of `cell` reads back exactly `n`
@@ -246,7 +247,8 @@ def emitEvent_emitEventEncodes_construct
   frDelegationEpochAt := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
   frHeaps             := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
   frNullifierRoot     := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
-  frRevokedRoot       := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
+  frRevokedRoot       := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
+  frCommitmentsRoot       := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
 
 /-- **`emitEvent_descriptorComplete_genuine` — the constructed decode realizes the GENUINE receipt
 advance.** From `EmitEventSpec`, the log grows by exactly the `emitReceipt actor cell` row — the
@@ -317,7 +319,8 @@ def pipelinedSend_pipelinedSendEncodes_construct
   frDelegationEpochAt := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
   frHeaps             := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
   frNullifierRoot     := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
-  frRevokedRoot       := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
+  frRevokedRoot       := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
+  frCommitmentsRoot       := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
 
 /-- **`pipelinedSend_descriptorComplete_genuine` — the constructed decode realizes the GENUINE receipt
 advance.** From `PipelinedSendSpec`, the log grows by exactly the `pipelinedSendReceipt actor` row — the
@@ -410,7 +413,8 @@ def makeSovereign_makeSovereignEncodes_construct (compressN : List ℤ → ℤ)
   frDelegationEpochAt := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
   frHeaps             := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
   frNullifierRoot     := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
-  frRevokedRoot       := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
+  frRevokedRoot       := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
+  frCommitmentsRoot       := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
 
 /-- **`makeSovereign_descriptorComplete_genuine` — the constructed decode realizes the GENUINE
 commitment rebind.** From `MakeSovereignSpec`, the `cell` record is rebound to EXACTLY the commitment-form
@@ -506,7 +510,8 @@ def setFieldDyn_setFieldDynEncodes_construct (compressN : List ℤ → ℤ)
   frDelegationEpochAt := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
   frHeaps             := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
   frNullifierRoot     := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
-  frRevokedRoot       := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
+  frRevokedRoot       := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
+  frCommitmentsRoot       := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
 
 /-- **`setFieldDyn_descriptorComplete_genuine` — the constructed decode realizes the GENUINE dynamic
 write.** From `SetFieldSpec`, the written slot `f` of `cell` reads back exactly `v`
@@ -595,7 +600,8 @@ def setPermissions_setPermissionsEncodes_construct (compressN : List ℤ → ℤ
   frDelegationEpochAt := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
   frHeaps             := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
   frNullifierRoot     := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
-  frRevokedRoot       := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
+  frRevokedRoot       := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
+  frCommitmentsRoot       := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
 
 /-- **`setPermissions_descriptorComplete_genuine` — the constructed decode realizes the GENUINE
 permissions write.** From `SetPermissionsSpec`, the `"permissions"` slot of `cell` reads back exactly `p`
@@ -681,7 +687,8 @@ def setVK_setVKEncodes_construct (compressN : List ℤ → ℤ)
   frDelegationEpochAt := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
   frHeaps             := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
   frNullifierRoot     := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
-  frRevokedRoot       := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
+  frRevokedRoot       := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
+  frCommitmentsRoot       := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
 
 /-- **`setVK_descriptorComplete_genuine` — the constructed decode realizes the GENUINE vk write.** From
 `SetVKSpec`, the `"verification_key"` slot of `cell` reads back exactly `vk`

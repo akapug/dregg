@@ -124,7 +124,7 @@ def balanceAE (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injectiv
       ∧ k'.delegationEpoch = k.delegationEpoch
       ∧ k'.delegationEpochAt = k.delegationEpochAt
       ∧ k'.heaps = k.heaps
-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
+      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
   guardGates   := balanceGuardGates
   guardProp    := balanceGuardProp
   guardWidth   := 1

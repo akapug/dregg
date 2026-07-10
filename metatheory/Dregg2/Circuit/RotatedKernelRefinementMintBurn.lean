@@ -193,6 +193,7 @@ structure rotatedEncodesBurn (hash : List ℤ → ℤ)
   frHeaps : post.kernel.heaps = pre.kernel.heaps
   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
+  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
   logAdv : post.log = Spec.SupplyDestruction.burnReceipt actor cell a amt :: pre.log
 
 /-! ## §3 — BURN: the circuit FORCES the holder debit + availability. -/
@@ -261,7 +262,7 @@ theorem burn_descriptorRefines (hash : List ℤ → ℤ)
     (pre post : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : ℤ)
     (henc : rotatedEncodesBurn hash minit mfin maddrs t pre post actor cell a amt) :
     Spec.SupplyDestruction.BurnSpec pre actor cell a amt post := by
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · -- BurnGuard: authority / non-neg / AVAILABILITY / live-cell / live-well / distinct / lifecycle-live.
     exact ⟨henc.guardAuth, henc.guardNonNeg,
       burn_availability_forced hash hside hsat pre post actor cell a amt henc,
@@ -285,6 +286,7 @@ theorem burn_descriptorRefines (hash : List ℤ → ℤ)
   · exact henc.frHeaps
   · exact henc.frNullifierRoot
   · exact henc.frRevokedRoot
+  · exact henc.frCommitmentsRoot
 
 /-- **`burn_descriptorRefines_rejects_wrong_debit` — the conservation tooth (burn).** A decode claiming
 a holder post-balance NOT the genuine debit `pre.bal cell a − amt` rides NO satisfying witness: the
@@ -407,6 +409,7 @@ structure rotatedEncodesMint (hash : List ℤ → ℤ)
   frHeaps : post.kernel.heaps = pre.kernel.heaps
   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
+  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
   logAdv : post.log = Spec.SupplyCreation.mintReceipt actor cell a amt :: pre.log
 
 /-! ## §6 — MINT: the circuit FORCES the recipient credit. -/
@@ -440,7 +443,7 @@ theorem mint_descriptorRefines (hash : List ℤ → ℤ)
     (pre post : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : ℤ)
     (henc : rotatedEncodesMint hash minit mfin maddrs t pre post actor cell a amt) :
     Spec.SupplyCreation.MintASpec pre actor cell a amt post := by
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · -- mintAdmit: authority / non-neg / well-membership / recipient-membership / distinctness / lifecycle-live.
     exact ⟨henc.guardAuth, henc.guardNonNeg, henc.guardLiveWell, henc.guardLiveCell,
       henc.guardDistinct, henc.guardLifecycleLive⟩
@@ -463,6 +466,7 @@ theorem mint_descriptorRefines (hash : List ℤ → ℤ)
   · exact henc.frHeaps
   · exact henc.frNullifierRoot
   · exact henc.frRevokedRoot
+  · exact henc.frCommitmentsRoot
 
 /-- **`mint_descriptorRefines_rejects_wrong_credit` — the conservation tooth (mint).** A decode claiming
 a recipient post-balance NOT the genuine credit `pre.bal cell a + amt` rides NO satisfying witness: the

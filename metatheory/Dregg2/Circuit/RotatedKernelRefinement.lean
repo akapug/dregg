@@ -273,6 +273,7 @@ structure rotatedEncodes (hash : List ℤ → ℤ)
   frHeaps : post.kernel.heaps = pre.kernel.heaps
   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
+  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
   logAdv : post.log = tr :: pre.log
 
 /-! ## §3 — THE REFINEMENT: satisfying the live transfer descriptor FORCES the kernel step.
@@ -387,7 +388,7 @@ theorem transfer_descriptorRefines (hash : List ℤ → ℤ)
     (pre post : RecChainedState) (tr : Turn) (a : AssetId)
     (henc : rotatedEncodes hash minit mfin maddrs t pre post tr a) :
     BalanceMovementSpec pre tr a post := by
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · -- admitGuardA: authority/non-neg/AVAILABILITY/distinct/live-src/live-dst/src-lifecycle/accepts.
     exact ⟨henc.guardAuth, henc.guardNonNeg,
       availability_forced hash hside hsat pre post tr a henc,
@@ -413,6 +414,7 @@ theorem transfer_descriptorRefines (hash : List ℤ → ℤ)
   · exact henc.frHeaps
   · exact henc.frNullifierRoot
   · exact henc.frRevokedRoot
+  · exact henc.frCommitmentsRoot
 
 /-- **The refinement, stated against `fullActionStep` directly.** `BalanceMovementSpec` IS the
 `.balanceA` arm of the kernel dispatcher, so a satisfying rotated transfer witness forces

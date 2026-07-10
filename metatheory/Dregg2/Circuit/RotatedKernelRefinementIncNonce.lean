@@ -191,6 +191,7 @@ structure rotatedEncodesIncNonce (hash : List ℤ → ℤ)
   frHeaps : post.kernel.heaps = pre.kernel.heaps
   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
+  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
 
 /-! ## §3 — the apex obligation: the circuit FORCES the nonce tick.
 
@@ -240,7 +241,7 @@ theorem incrementNonce_descriptorRefines (hash : List ℤ → ℤ)
     henc.frAccounts, henc.frCaps, henc.frNullifiers, henc.frRevoked, henc.frCommitments,
     henc.frBal, henc.frSlotCaveats, henc.frFactories, henc.frLifecycle, henc.frDeathCert,
     henc.frDelegate, henc.frDelegations, henc.frDelegationEpoch, henc.frDelegationEpochAt,
-    henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot⟩
+    henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot, henc.frCommitmentsRoot⟩
 
 /-- **The refinement at the FORCED increment `n = old_nonce + 1`, made explicit.** The leaf spec's `n`
 is free; the increment SEMANTICS instantiate it at the circuit-forced tick of the decoded pre-cell

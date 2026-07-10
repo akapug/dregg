@@ -162,6 +162,7 @@ structure cellUnsealEncodes (compressN : List FieldElem → FieldElem)
   frHeaps : post.kernel.heaps = pre.kernel.heaps
   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
+  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
 
 /-- **`cellUnseal_lifecycle_forced` — the committed lifecycle write is FIX-CIRCUIT-FORCED.** -/
 theorem cellUnseal_lifecycle_forced (compressN : List FieldElem → FieldElem)
@@ -181,7 +182,7 @@ theorem cellUnseal_descriptorRefines (compressN : List FieldElem → FieldElem)
   refine ⟨henc.guard, ?_, henc.logAdv, henc.frAccounts, henc.frCell, henc.frCaps,
     henc.frNullifiers, henc.frRevoked, henc.frCommitments, henc.frBal, henc.frSlotCaveats,
     henc.frFactories, henc.frDeathCert, henc.frDelegate, henc.frDelegations,
-    henc.frDelegationEpoch, henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot⟩
+    henc.frDelegationEpoch, henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot, henc.frCommitmentsRoot⟩
   exact cellUnseal_lifecycle_forced compressN hN pre post actor cell henc
 
 /-- The refinement against `execFullA` directly (via `cellUnseal_iff_spec`). -/
@@ -293,6 +294,7 @@ structure cellDestroyEncodes (compressN : List FieldElem → FieldElem)
   frHeaps : post.kernel.heaps = pre.kernel.heaps
   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
+  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
 
 /-- **`cellDestroy_lifecycle_forced` — the destroyed lifecycle MAP is FIX-CIRCUIT-FORCED.** -/
 theorem cellDestroy_lifecycle_forced (compressN : List FieldElem → FieldElem)
@@ -337,7 +339,7 @@ theorem cellDestroy_descriptorRefines (compressN : List FieldElem → FieldElem)
   refine ⟨henc.guard, ?_, ?_, henc.logAdv, henc.frAccounts, henc.frCell, henc.frCaps,
     henc.frNullifiers, henc.frRevoked, henc.frCommitments, henc.frBal, henc.frSlotCaveats,
     henc.frFactories, henc.frDelegate, henc.frDelegations,
-    henc.frDelegationEpoch, henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot⟩
+    henc.frDelegationEpoch, henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot, henc.frCommitmentsRoot⟩
   · exact cellDestroy_lifecycle_forced compressN hN pre post actor cell certHash henc
   · exact cellDestroy_deathCert_forced compressN hN pre post actor cell certHash henc
 
@@ -457,6 +459,7 @@ structure auditEncodes (compressN : List FieldElem → FieldElem)
   frHeaps : post.kernel.heaps = pre.kernel.heaps
   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
+  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
 
 /-- **`audit_slot_forced` — the committed audit slot is FIX-CIRCUIT-FORCED to `1`.** The WITNESS gate
 pins the slot value to the one-shot flag; this is the rung the deployed circuit is missing. -/
@@ -478,7 +481,7 @@ theorem refusal_descriptorRefines (compressN : List FieldElem → FieldElem)
   ⟨henc.guard, henc.cellMapMove, henc.logAdv, henc.frAccounts, henc.frCaps,
     henc.frNullifiers, henc.frRevoked, henc.frCommitments, henc.frBal, henc.frSlotCaveats,
     henc.frFactories, henc.frLifecycle, henc.frDeathCert, henc.frDelegate, henc.frDelegations,
-    henc.frDelegationEpoch, henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot⟩
+    henc.frDelegationEpoch, henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot, henc.frCommitmentsRoot⟩
 
 /-- The refinement against `execFullA` directly (via `execFullA_refusalA_iff_spec`). -/
 theorem refusal_descriptorRefines_execFullA (compressN : List FieldElem → FieldElem)
@@ -501,7 +504,7 @@ theorem receiptArchive_descriptorRefines (compressN : List FieldElem → FieldEl
   ⟨henc.guard, henc.cellMapMove, henc.logAdv, henc.frAccounts, henc.frCaps,
     henc.frNullifiers, henc.frRevoked, henc.frCommitments, henc.frBal, henc.frSlotCaveats,
     henc.frFactories, henc.frLifecycle, henc.frDeathCert, henc.frDelegate, henc.frDelegations,
-    henc.frDelegationEpoch, henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot⟩
+    henc.frDelegationEpoch, henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot, henc.frCommitmentsRoot⟩
 
 /-- The MODELLED record-slot refinement against the record-write `receiptArchiveRecordStep` (via
 `receiptArchiveRecordStep_iff_spec`). Keyed off the record write, NOT the deployed `execFullA` arm
@@ -592,6 +595,7 @@ structure CellUnsealTraceReadout (hash : List ℤ → ℤ)
   frHeaps : post.kernel.heaps = pre.kernel.heaps
   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
+  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
 
 /-- `cellUnsealV3`'s underlying disc-gated descriptor is graduable (the cellSeal `_disc_graduable`
 analog). -/
@@ -659,7 +663,7 @@ theorem cellUnseal_descriptorRefines_sat (hash : List ℤ → ℤ)
   refine ⟨rd.guard, ?_, rd.logAdv, rd.frAccounts, rd.frCell, rd.frCaps,
     rd.frNullifiers, rd.frRevoked, rd.frCommitments, rd.frBal, rd.frSlotCaveats,
     rd.frFactories, rd.frDeathCert, rd.frDelegate, rd.frDelegations,
-    rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot⟩
+    rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot, rd.frCommitmentsRoot⟩
   exact cellUnseal_forced_map hash hside hsat pre post actor cell rd
 
 /-- **CLASS-A TOOTH — a forged un-revived cellUnseal witness is UNSAT.** A readout whose post `cell`
@@ -731,6 +735,7 @@ structure CellDestroyTraceReadout (compressN : List FieldElem → FieldElem) (ha
   frHeaps : post.kernel.heaps = pre.kernel.heaps
   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
+  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
 
 theorem cellDestroy_disc_graduable :
     graduable (rotateV3WithLifecyclePayloadGate Dregg2.Circuit.Emit.EffectVmEmitCellDestroy.SEL_CELLDESTROY
@@ -841,7 +846,7 @@ theorem cellDestroy_descriptorRefines_sat (compressN : List FieldElem → FieldE
   refine ⟨rd.guard, ?_, ?_, rd.logAdv, rd.frAccounts, rd.frCell, rd.frCaps,
     rd.frNullifiers, rd.frRevoked, rd.frCommitments, rd.frBal, rd.frSlotCaveats,
     rd.frFactories, rd.frDelegate, rd.frDelegations,
-    rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot⟩
+    rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot, rd.frCommitmentsRoot⟩
   · -- the lifecycle MAP is `(destroyKernelMap …).lifecycle`.
     have hcell : post.kernel.lifecycle cell = lcDestroyed :=
       cellDestroy_lc_forced compressN hash hside hsat pre post actor cell certHash rd
@@ -945,6 +950,7 @@ structure RefusalTraceReadout (compressN : List FieldElem → FieldElem) (hash :
   frHeaps : post.kernel.heaps = pre.kernel.heaps
   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
+  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
 
 theorem refusal_rcp_graduable :
     graduable (rotateV3WithRecordPin B_RECORD_DIGEST
@@ -1001,7 +1007,7 @@ theorem refusal_descriptorRefines_sat (compressN : List FieldElem → FieldElem)
   ⟨rd.guard, rd.cellMapMoveDecodes hwrite, rd.logAdv, rd.frAccounts, rd.frCaps,
     rd.frNullifiers, rd.frRevoked, rd.frCommitments, rd.frBal, rd.frSlotCaveats,
     rd.frFactories, rd.frLifecycle, rd.frDeathCert, rd.frDelegate, rd.frDelegations,
-    rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot⟩
+    rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot, rd.frCommitmentsRoot⟩
 
 /-- **CLASS-A TOOTH — a frozen-audit-slot refusal forgery is UNSAT.** A readout whose post `cell` refusal
 slot is NOT `1` cannot ride a satisfying `refusalV3` witness — the deployed record pin bites. -/
@@ -1085,6 +1091,7 @@ structure ReceiptArchiveTraceReadout (hash : List ℤ → ℤ)
   frHeaps : post.kernel.heaps = pre.kernel.heaps
   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
+  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
 
 /-- `receiptArchiveV3`'s underlying payload-gated descriptor is graduable. -/
 theorem receiptArchive_disc_graduable :
@@ -1156,7 +1163,7 @@ theorem receiptArchive_descriptorRefines_sat (hash : List ℤ → ℤ)
   refine ⟨rd.guard, ?_, rd.logAdv, rd.frAccounts, rd.frCell, rd.frCaps,
     rd.frNullifiers, rd.frRevoked, rd.frCommitments, rd.frBal, rd.frSlotCaveats,
     rd.frFactories, rd.frDeathCert, rd.frDelegate, rd.frDelegations,
-    rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot⟩
+    rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot, rd.frCommitmentsRoot⟩
   exact receiptArchive_forced_map hash hside hsat pre post actor cell rd
 
 /-- **CLASS-A TOOTH — a wrong-after-disc receiptArchive forgery is UNSAT.** A readout whose post `cell`

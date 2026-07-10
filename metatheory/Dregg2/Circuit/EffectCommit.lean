@@ -153,6 +153,7 @@ def kernelFrame (k k' : RecordKernelState) : Prop :=
     ∧ k'.delegationEpochAt = k.delegationEpochAt
     ∧ k'.heaps = k.heaps
     ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot
+    ∧ k'.commitmentsRoot = k.commitmentsRoot
 
 /-- **`touchedCellMap base T newLeaf`** — the generic post-`cell` map: cells in `T` take their
 `newLeaf`, every other cell keeps the `base`. (For Transfer `T = {src,dst}` and `newLeaf = recTransfer

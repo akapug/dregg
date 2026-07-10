@@ -202,6 +202,7 @@ def BalanceMovementSpecFacet (fcaps : FacetCaps) (provided : AuthProvided)
   ∧ st'.kernel.heaps = st.kernel.heaps
   ∧ st'.kernel.nullifierRoot = st.kernel.nullifierRoot
   ∧ st'.kernel.revokedRoot = st.kernel.revokedRoot
+  ∧ st'.kernel.commitmentsRoot = st.kernel.commitmentsRoot
 
 /-- **`BalanceMovementSpecFacet` ⟹ `BalanceMovementSpec` once authority is shown the toy way too.**
 The faithful spec and the toy spec share EVERY conjunct except authority; so a faithful spec PLUS the

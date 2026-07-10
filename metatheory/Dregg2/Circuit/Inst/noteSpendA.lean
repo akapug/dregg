@@ -141,7 +141,7 @@ def noteSpendE (LE : Nat → ℤ) (cN : List ℤ → ℤ)
       ∧ k'.delegationEpoch = k.delegationEpoch
       ∧ k'.delegationEpochAt = k.delegationEpochAt
       ∧ k'.heaps = k.heaps
-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
+      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
   guardGates   := noteSpendGuardGates
   guardProp    := noteSpendGuardProp
   guardWidth   := 1

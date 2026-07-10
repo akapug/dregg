@@ -96,6 +96,7 @@ def createCell_readout :
   frHeaps := rfl
   frNullifierRoot := rfl
   frRevokedRoot := rfl
+  frCommitmentsRoot := rfl
 
 theorem createCell_readout_inhabited :
     Nonempty (CreateCellTraceReadout (fun ins => (permOutZ ins).headD 0) (fun _ => 0) (fun _ => (0, 0))
@@ -168,6 +169,7 @@ def createFromFactory_readout :
   frHeaps := rfl
   frNullifierRoot := rfl
   frRevokedRoot := rfl
+  frCommitmentsRoot := rfl
 
 theorem createFromFactory_readout_inhabited :
     Nonempty (CreateFromFactoryTraceReadout (fun ins => (permOutZ ins).headD 0) (fun _ => 0)
@@ -238,6 +240,7 @@ def spawn_readout (S8 : Dregg2.Circuit.DeployedCapTree.Cap8Scheme) :
   frHeaps := rfl
   frNullifierRoot := rfl
   frRevokedRoot := rfl
+  frCommitmentsRoot := rfl
 
 theorem spawn_readout_inhabited (S8 : Dregg2.Circuit.DeployedCapTree.Cap8Scheme) :
     Nonempty (SpawnTraceReadout S8 (fun ins => (permOutZ ins).headD 0) (fun _ => 0) (fun _ => (0, 0)) []

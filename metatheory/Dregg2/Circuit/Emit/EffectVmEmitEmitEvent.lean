@@ -404,9 +404,9 @@ theorem unify_emitEvent (s s' : RecChainedState) (actor cell c : CellId) (topic 
     (hspec : EmitEventSpec s actor cell topic data s') :
     CellFreezeSpec (cellProjE s.kernel c) (cellProjE s'.kernel c) := by
   obtain ⟨_, _, h1, h2, h3, h4, h5, h6, h7, h10, h11, h12, h13, h14, h15, h17, h18, h19,
-    h20, h21⟩ := hspec
+    h20, h21, h22⟩ := hspec
   have hk : s'.kernel = s.kernel :=
-    recKernel_ext h1 h2 h3 h4 h5 h6 h7 h10 h11 h12 h13 h14 h15 h17 h18 h19 h20 h21
+    recKernel_ext h1 h2 h3 h4 h5 h6 h7 h10 h11 h12 h13 h14 h15 h17 h18 h19 h20 h21 h22
   rw [hk]
   exact ⟨rfl, rfl, rfl, fun _ => rfl, rfl, rfl⟩
 

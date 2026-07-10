@@ -322,7 +322,8 @@ def transfer_rotatedEncodes_construct (hash : List ℤ → ℤ)
   frDelegationEpochAt := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
   frHeaps             := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
   frNullifierRoot     := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
-  frRevokedRoot       := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
+  frRevokedRoot       := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
+  frCommitmentsRoot   := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
   logAdv := hspec.2.2.1
 
 /-! ## §6 — the NON-VACUITY tooth: the constructed decode is the GENUINE move.

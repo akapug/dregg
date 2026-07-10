@@ -40,7 +40,7 @@ def RestIffNoDelegations (RH : RecordKernelState → ℤ) : Prop :=
       ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate
       ∧ k'.delegationEpoch = k.delegationEpoch
       ∧ k'.heaps = k.heaps
-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
+      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
 
 structure RefreshDelegationArgs where
   actor : CellId
@@ -104,7 +104,7 @@ def refreshDelegationE
       ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate
       ∧ k'.delegationEpoch = k.delegationEpoch
       ∧ k'.heaps = k.heaps
-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
+      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
   guardGates   := refreshDelegationGuardGates
   guardProp    := refreshDelegationGuardProp
   guardWidth   := 1

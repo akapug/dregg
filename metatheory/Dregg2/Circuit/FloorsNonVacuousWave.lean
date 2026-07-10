@@ -137,6 +137,7 @@ def cellSeal_readout :
   frHeaps := rfl
   frNullifierRoot := rfl
   frRevokedRoot := rfl
+  frCommitmentsRoot := rfl
 
 theorem cellSeal_readout_inhabited :
     Nonempty (CellSealTraceReadout (fun ins => (permOutZ ins).headD 0) (fun _ => 0) (fun _ => (0, 0)) []

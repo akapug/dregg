@@ -168,6 +168,7 @@ structure attenuateEncodes (env : VmRowEnv)
   frHeaps : post.kernel.heaps = pre.kernel.heaps
   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
+  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
 
 /-! ## §2 — the IN-CIRCUIT NON-AMPLIFICATION tooth (the security crux, FORCED).
 
@@ -253,7 +254,7 @@ theorem attenuate_descriptorRefines (env : VmRowEnv)
    henc.frAccounts, henc.frCell, henc.frNullifiers, henc.frRevoked, henc.frCommitments,
    henc.frBal, henc.frSlotCaveats, henc.frFactories, henc.frLifecycle, henc.frDeathCert,
    henc.frDelegate, henc.frDelegations, henc.frDelegationEpoch, henc.frDelegationEpochAt,
-   henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot⟩
+   henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot, henc.frCommitmentsRoot⟩
 
 /-- **The refinement, stated against `fullActionStep` directly.** `AttenuateSpec` IS the `.attenuateA`
 arm of the kernel dispatcher, so a genuine-non-amp attenuate witness forces `fullActionStep pre

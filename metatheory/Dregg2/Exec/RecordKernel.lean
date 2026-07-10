@@ -440,6 +440,16 @@ structure RecordKernelState where
   `nullifierRoot`. Balance-NEUTRAL. DEFAULTS the empty-tree root (`fun _ => 0`), the additive
   extension. Absorbed by the frame apex (`RestHashIffFrame`) alongside `nullifierRoot`. -/
   revokedRoot   : Fin 8 → ℤ := fun _ => 0
+  /-- **THE COMMITMENT ACCUMULATOR ROOT** (VK-epoch flip; the GROW-ONLY dual of `nullifierRoot` — the
+  note-commitment frontier). The Poseidon2 sorted-tree root of the note-commitment SET: the `Digest8`
+  (`= Fin 8 → ℤ`) twin that binds every note commitment ever created. UNLIKE the nullifier root there
+  is NO double-spend gate — commitments are grow-only, always fresh, always admitted; the ONLY
+  obligation is that a committed create INSERTS the commitment so it is provably PRESENT
+  (`noteCreateCommitmentAcc_present`, the `create_inserts_root` analog of `spend_inserts_root`). Carries
+  ONLY the commitment; the whole commitment set never crosses the wire. Same `Fin 8 → ℤ` literal typing
+  as `nullifierRoot`. Balance-NEUTRAL. DEFAULTS the empty-tree root (`fun _ => 0`), the additive
+  extension. Absorbed by the frame apex (`RestHashIffFrame`) alongside `nullifierRoot`/`revokedRoot`. -/
+  commitmentsRoot : Fin 8 → ℤ := fun _ => 0
 
 /-- **The `balance`-domain measure** over the record cell-state: the total `balance` field across
 the live accounts. This is the conserved quantity — a domain measure over the named `balance`

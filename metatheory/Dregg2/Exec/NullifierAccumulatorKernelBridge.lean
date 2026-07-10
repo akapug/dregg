@@ -88,4 +88,52 @@ theorem kernel_revoked_gate_fails {S8 : Heap8Scheme} (k : RecordKernelState) (cr
 #assert_axioms noteSpendNullifierAcc_no_double_spend
 #assert_axioms kernel_revoked_gate_fails
 
+/-! ## The COMMITMENT accumulator dual — GROW-ONLY (no double-spend gate).
+
+The commitment set is the grow-only dual of the nullifier set: a note-create INSERTS a fresh
+commitment, and — unlike a spend — there is NO rejection (a fresh commitment always admits a witness,
+there is no double-spend polarity). The sole obligation is the `create_inserts_root` tooth: after a
+committed create, the commitment is provably PRESENT in the advanced `commitmentsRoot`. It reduces to
+the SAME banked `spend_inserts_root` (the `y = nf` disjunct of `update_sound8`) through a projection
+that reads `commitmentsRoot` as the accumulator's active root. No `present_no_witness` obligation:
+grow-only carries no fail-closed leg. -/
+
+/-- Project the kernel's `commitmentsRoot` into the standalone `NfAccState`'s active root, so the
+proven insert-is-faithful gate operates over it. Definitional. -/
+def RecordKernelState.toCmAccState (k : RecordKernelState) : NfAccState :=
+  { nullifierRoot := k.commitmentsRoot }
+
+@[simp] theorem toCmAccState_nullifierRoot (k : RecordKernelState) :
+    k.toCmAccState.nullifierRoot = k.commitmentsRoot := rfl
+
+/-- **`noteCreateCommitmentAcc` — the accumulator-backed note-create over the kernel.** Given a valid
+client-supplied `NfAccWitness` against the committed `commitmentsRoot`, advance the root to the
+witness after-root and keep the migration `List` in sync. GROW-ONLY: a fresh commitment always has a
+witness, there is no rejection — the dual of `noteSpendNullifierAcc` WITHOUT the double-spend gate. -/
+def noteCreateCommitmentAcc {S8 : Heap8Scheme} (k : RecordKernelState) (cm : Nat)
+    (w : NfAccWitness S8 k.commitmentsRoot (cm : ℤ)) : RecordKernelState :=
+  { k with commitmentsRoot := w.newRoot, commitments := cm :: k.commitments }
+
+@[simp] theorem noteCreateCommitmentAcc_commitmentsRoot {S8 : Heap8Scheme} (k : RecordKernelState)
+    (cm : Nat) (w : NfAccWitness S8 k.commitmentsRoot (cm : ℤ)) :
+    (noteCreateCommitmentAcc k cm w).commitmentsRoot = w.newRoot := rfl
+
+theorem noteCreateCommitmentAcc_commitments {S8 : Heap8Scheme} (k : RecordKernelState)
+    (cm : Nat) (w : NfAccWitness S8 k.commitmentsRoot (cm : ℤ)) :
+    (noteCreateCommitmentAcc k cm w).commitments = cm :: k.commitments := rfl
+
+/-- **THE INSERT IS FAITHFUL (kernel terms, GROW-ONLY tooth).** After a committed acc-create, `cm` is
+PRESENT in the new committed `commitmentsRoot` — the `create_inserts_root` analog of the nullifier
+`spend_inserts_root`, reducing to it through the `toCmAccState` projection. Non-vacuous: the witness
+type is genuinely inhabitable (`witness_inhabited_of_bindings`), so this is a real membership over an
+occupied domain, not a claim over an empty hypothesis. -/
+theorem noteCreateCommitmentAcc_present {S8 : Heap8Scheme} (k : RecordKernelState) (cm : Nat)
+    (w : NfAccWitness S8 k.commitmentsRoot (cm : ℤ)) :
+    (cm : ℤ) ∈ keysOf8 S8 (noteCreateCommitmentAcc k cm w).commitmentsRoot := by
+  simpa [noteCreateCommitmentAcc, spendNullifierRoot] using
+    spend_inserts_root k.toCmAccState (cm : ℤ) w
+
+#assert_axioms noteCreateCommitmentAcc_present
+#assert_axioms noteCreateCommitmentAcc_commitments
+
 end Dregg2.Exec

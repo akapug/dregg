@@ -136,6 +136,7 @@ structure setPermissionsEncodes (compressN : List FieldElem → FieldElem)
   frHeaps : post.kernel.heaps = pre.kernel.heaps
   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
+  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
 
 /-- **`setPermissions_slot_forced` — the committed permissions slot is FIX-CIRCUIT-FORCED to `p`.** -/
 theorem setPermissions_slot_forced (compressN : List FieldElem → FieldElem)
@@ -157,7 +158,7 @@ theorem setPermissions_descriptorRefines (compressN : List FieldElem → FieldEl
   ⟨henc.guard, henc.cellMapMove, henc.logAdv, henc.frAccounts, henc.frCaps,
     henc.frNullifiers, henc.frRevoked, henc.frCommitments, henc.frBal, henc.frSlotCaveats,
     henc.frFactories, henc.frLifecycle, henc.frDeathCert, henc.frDelegate, henc.frDelegations,
-    henc.frDelegationEpoch, henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot⟩
+    henc.frDelegationEpoch, henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot, henc.frCommitmentsRoot⟩
 
 /-- The refinement against `execFullA` directly (via `execFullA_setPermissions_iff_spec`). -/
 theorem setPermissions_descriptorRefines_execFullA (compressN : List FieldElem → FieldElem)
@@ -217,6 +218,7 @@ structure setVKEncodes (compressN : List FieldElem → FieldElem)
   frHeaps : post.kernel.heaps = pre.kernel.heaps
   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
+  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
 
 /-- **`setVK_slot_forced` — the committed verification_key slot is FIX-CIRCUIT-FORCED to `vk`.** -/
 theorem setVK_slot_forced (compressN : List FieldElem → FieldElem)
@@ -237,7 +239,7 @@ theorem setVK_descriptorRefines (compressN : List FieldElem → FieldElem)
   ⟨henc.guard, henc.cellMapMove, henc.logAdv, henc.frAccounts, henc.frCaps,
     henc.frNullifiers, henc.frRevoked, henc.frCommitments, henc.frBal, henc.frSlotCaveats,
     henc.frFactories, henc.frLifecycle, henc.frDeathCert, henc.frDelegate, henc.frDelegations,
-    henc.frDelegationEpoch, henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot⟩
+    henc.frDelegationEpoch, henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot, henc.frCommitmentsRoot⟩
 
 /-- The refinement against `execFullA` directly (via `execFullA_setVK_iff_spec`). -/
 theorem setVK_descriptorRefines_execFullA (compressN : List FieldElem → FieldElem)
@@ -327,6 +329,7 @@ structure SetPermsTraceReadout (hash : List ℤ → ℤ)
   frHeaps : post.kernel.heaps = pre.kernel.heaps
   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
+  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
 
 /-- **`setPermissions_forced_sat` — the perms slot is FORCED by the DEPLOYED `setPermsV3` (Class A).** -/
 theorem setPermissions_forced_sat (hash : List ℤ → ℤ)
@@ -372,7 +375,7 @@ theorem setPermissions_descriptorRefines_sat (hash : List ℤ → ℤ)
   exact ⟨rd.guard, hcellMap, rd.logAdv, rd.frAccounts, rd.frCaps,
     rd.frNullifiers, rd.frRevoked, rd.frCommitments, rd.frBal, rd.frSlotCaveats,
     rd.frFactories, rd.frLifecycle, rd.frDeathCert, rd.frDelegate, rd.frDelegations,
-    rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot⟩
+    rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot, rd.frCommitmentsRoot⟩
 
 /-- **CLASS-A TOOTH — a forged setPermissions witness is UNSAT.** -/
 theorem setPermissions_sat_rejects_wrong_value (hash : List ℤ → ℤ)
@@ -423,6 +426,7 @@ structure SetVKTraceReadout (hash : List ℤ → ℤ)
   frHeaps : post.kernel.heaps = pre.kernel.heaps
   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
+  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
 
 /-- **`setVK_forced_sat` — the vk slot is FORCED by the DEPLOYED `setVKV3` (Class A).** -/
 theorem setVK_forced_sat (hash : List ℤ → ℤ)
@@ -465,7 +469,7 @@ theorem setVK_descriptorRefines_sat (hash : List ℤ → ℤ)
   exact ⟨rd.guard, hcellMap, rd.logAdv, rd.frAccounts, rd.frCaps,
     rd.frNullifiers, rd.frRevoked, rd.frCommitments, rd.frBal, rd.frSlotCaveats,
     rd.frFactories, rd.frLifecycle, rd.frDeathCert, rd.frDelegate, rd.frDelegations,
-    rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot⟩
+    rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot, rd.frCommitmentsRoot⟩
 
 /-- **CLASS-A TOOTH — a forged setVK witness is UNSAT.** -/
 theorem setVK_sat_rejects_wrong_value (hash : List ℤ → ℤ)
@@ -516,6 +520,7 @@ structure emitEventEncodes (pre post : RecChainedState) (actor cell : CellId) : 
   frHeaps : post.kernel.heaps = pre.kernel.heaps
   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
+  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
 
 /-- **`emitEvent_descriptorRefines` — THE CIRCUIT→KERNEL REFINEMENT for emitEvent, against the LIVE
 descriptor.** A satisfying LIVE emitEvent witness (its kernel frame forced by the deployed
@@ -529,7 +534,7 @@ theorem emitEvent_descriptorRefines
   ⟨henc.guard, henc.logAdv, henc.frAccounts, henc.frCell, henc.frCaps,
     henc.frNullifiers, henc.frRevoked, henc.frCommitments, henc.frBal, henc.frSlotCaveats,
     henc.frFactories, henc.frLifecycle, henc.frDeathCert, henc.frDelegate, henc.frDelegations,
-    henc.frDelegationEpoch, henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot⟩
+    henc.frDelegationEpoch, henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot, henc.frCommitmentsRoot⟩
 
 /-- The refinement against `execFullA` directly (via `execFullA_emitEvent_iff_spec`). -/
 theorem emitEvent_descriptorRefines_execFullA

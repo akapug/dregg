@@ -204,6 +204,7 @@ def transfer_readout :
   frHeaps := rfl
   frNullifierRoot := rfl
   frRevokedRoot := rfl
+  frCommitmentsRoot := rfl
   logAdv := rfl
 
 theorem transfer_readout_inhabited :
