@@ -207,10 +207,11 @@ theorem stripBody_no_body (bs : Bytes) : afterBlank (stripBody bs) = [] := by
 
 `injectDate`/`stripBody` above are the LIST SPEC (they carry all the conformance
 proofs). Feeding the WHOLE inner response (body included) through them re-cons the
-1 MiB body as a `List UInt8` on every request — the ~43 MB/s cliff. The dense pair
-below computes the SAME bytes over `ByteArray` (index-scan the head for the first
-`CRLF` / blank line, then `Array.extract`/`++` — one memcpy of the body, never a
-cons spine), and is proven byte-identical to the spec via `.toList`. -/
+1 MiB body as a `List UInt8` on every request — the ~43 MB/s cliff. The native pair
+below computes the SAME bytes over `ByteArray` (index-scan the head with `ByteArray.get!`
+for the first `CRLF` / blank line, then NATIVE `ByteArray.extract`/`ByteArray.append` —
+`lean_byte_array_copy_slice` memcpy of the body, never a boxed `Array UInt8` / cons
+spine), and is proven byte-identical to the spec via `.toList`. -/
 
 /-! ### ByteArray ↔ List bridges -/
 
@@ -341,170 +342,221 @@ theorem blankLen_of_short (L : Bytes) (h : L.length ≤ 3) : blankLen L = L.leng
     rw [blankLen, startsBlank_short _ h, if_neg (by simp), List.length_cons,
         ih (by simp only [List.length_cons] at h; omega)]
 
-/-! ### The dense index scanners (over `Array UInt8`, no list materialization) -/
+/-! ### The dense index scanners (over `ByteArray`, native byte loads — no list, no `.data`)
 
-/-- CR-index of the first `CRLF` at or after `i`, else `a.size`. Scans only the head
-(the first `CRLF` ends the status line), by direct byte loads. -/
-def crIdxFrom (a : Array UInt8) (i : Nat) : Nat :=
-  if h : i + 1 < a.size then
-    if a[i]'(by omega) == 13 && a[i+1]'(by omega) == 10 then i
-    else crIdxFrom a (i + 1)
-  else a.size
-termination_by a.size - i
+The scanners read the head directly with `ByteArray.get!` (`@[extern
+"lean_byte_array_get"]`, a native single-byte load) — NEVER `bs.data` (a projection to
+`Array UInt8` that boxes the whole buffer). Only the head is scanned (the first `CRLF` /
+blank line ends it), so this is O(head), not O(body). -/
+
+/-- CR-index of the first `CRLF` at or after `i`, else `bs.size`. Native byte loads. -/
+def crIdxFrom (bs : ByteArray) (i : Nat) : Nat :=
+  if h : i + 1 < bs.size then
+    if bs.get! i == 13 && bs.get! (i + 1) == 10 then i
+    else crIdxFrom bs (i + 1)
+  else bs.size
+termination_by bs.size - i
 decreasing_by omega
 
 /-- Take-length of the first blank line (`CRLF CRLF`) at or after `i` (its start + 4),
-else `a.size`. Direct byte loads; used to truncate a HEAD response. -/
-def blankTakeFrom (a : Array UInt8) (i : Nat) : Nat :=
-  if h : i + 3 < a.size then
-    if a[i]'(by omega) == 13 && a[i+1]'(by omega) == 10
-        && a[i+2]'(by omega) == 13 && a[i+3]'(by omega) == 10 then i + 4
-    else blankTakeFrom a (i + 1)
-  else a.size
-termination_by a.size - i
+else `bs.size`. Native byte loads; used to truncate a HEAD response. -/
+def blankTakeFrom (bs : ByteArray) (i : Nat) : Nat :=
+  if h : i + 3 < bs.size then
+    if bs.get! i == 13 && bs.get! (i + 1) == 10 && bs.get! (i + 2) == 13 && bs.get! (i + 3) == 10 then i + 4
+    else blankTakeFrom bs (i + 1)
+  else bs.size
+termination_by bs.size - i
 decreasing_by omega
 
-/-- List-drop of an array is the cons of its `i`-th byte onto the next drop. -/
-theorem drop_toList_cons (a : Array UInt8) (i : Nat) (h : i < a.size) :
-    a.toList.drop i = a[i]'h :: a.toList.drop (i + 1) := by
-  have hidx : i < a.toList.length := by rw [Array.length_toList]; exact h
-  rw [List.drop_eq_getElem_cons hidx, Array.getElem_toList]
+/-! ### ByteArray access bridges (native loads = list indices) -/
 
-/-- **The `CRLF`-scan bridge.** The dense CR-index from `i` equals `i` plus the list
-split point of the remaining bytes — so at `i = 0` it is `(beforeCRLF a.toList).length`. -/
-theorem crIdxFrom_eq (a : Array UInt8) :
-    ∀ (n i : Nat), a.size - i = n → i ≤ a.size →
-      crIdxFrom a i = i + (beforeCRLF (a.toList.drop i)).length := by
+/-- `bs.data.size = bs.size` (the underlying array's size IS the buffer size). -/
+theorem ba_data_size (bs : ByteArray) : bs.data.size = bs.size := rfl
+
+/-- `bs.toList.length = bs.size`. -/
+theorem ba_toList_length (bs : ByteArray) : bs.toList.length = bs.size := by
+  rw [ba_toList_eq, Array.length_toList, ba_data_size]
+
+/-- The native load `bs.get! i` reads the `i`-th list byte (in bounds). -/
+theorem get!_eq_getElem (bs : ByteArray) (i : Nat) (h : i < bs.size) :
+    bs.get! i = bs.data[i]'h := by
+  rw [show bs.get! i = bs.data.get! i from rfl, Array.get!_eq_getElem!, getElem!_pos bs.data i h]
+
+/-- List-drop of a `ByteArray` is the cons of its `i`-th byte onto the next drop. -/
+theorem drop_toList_cons (bs : ByteArray) (i : Nat) (h : i < bs.size) :
+    bs.toList.drop i = bs.get! i :: bs.toList.drop (i + 1) := by
+  rw [ba_toList_eq bs]
+  have hidx : i < bs.data.toList.length := by rw [Array.length_toList]; exact h
+  rw [List.drop_eq_getElem_cons hidx]
+  congr 1
+  rw [Array.getElem_toList, get!_eq_getElem bs i h]
+
+/-- **The `CRLF`-scan bridge.** The native CR-index from `i` equals `i` plus the list
+split point of the remaining bytes — so at `i = 0` it is `(beforeCRLF bs.toList).length`. -/
+theorem crIdxFrom_eq (bs : ByteArray) :
+    ∀ (n i : Nat), bs.size - i = n → i ≤ bs.size →
+      crIdxFrom bs i = i + (beforeCRLF (bs.toList.drop i)).length := by
   intro n
   induction n with
   | zero =>
     intro i hn hle
-    have hi : i = a.size := by omega
+    have hi : i = bs.size := by omega
     subst hi
-    rw [crIdxFrom, dif_neg (by omega : ¬ a.size + 1 < a.size),
-        List.drop_eq_nil_of_le (by simp)]
+    rw [crIdxFrom, dif_neg (by omega : ¬ bs.size + 1 < bs.size),
+        List.drop_eq_nil_of_le (Nat.le_of_eq (ba_toList_length bs))]
     simp [beforeCRLF]
   | succ n ih =>
     intro i hn hle
-    have hi : i < a.size := by omega
+    have hi : i < bs.size := by omega
     rw [crIdxFrom]
-    by_cases hlt : i + 1 < a.size
+    by_cases hlt : i + 1 < bs.size
     · rw [dif_pos hlt]
-      have hd0 : a.toList.drop i = a[i]'hi :: a.toList.drop (i + 1) := drop_toList_cons a i hi
-      have hd1 : a.toList.drop (i + 1) = a[i+1]'hlt :: a.toList.drop (i + 2) :=
-        drop_toList_cons a (i + 1) hlt
-      by_cases hb : (a[i]'hi == 13 && a[i+1]'hlt == 10) = true
+      have hd0 : bs.toList.drop i = bs.get! i :: bs.toList.drop (i + 1) := drop_toList_cons bs i hi
+      have hd1 : bs.toList.drop (i + 1) = bs.get! (i + 1) :: bs.toList.drop (i + 2) :=
+        drop_toList_cons bs (i + 1) hlt
+      by_cases hb : (bs.get! i == 13 && bs.get! (i + 1) == 10) = true
       · rw [if_pos hb]
         simp only [Bool.and_eq_true, beq_iff_eq] at hb
         obtain ⟨h13, h10⟩ := hb
         rw [hd0, hd1, beforeCRLF_cons2, if_pos ⟨h13, h10⟩]; simp
       · rw [if_neg hb, ih (i + 1) (by omega) (by omega), hd0, hd1, beforeCRLF_cons2]
-        have hcr : ¬ (a[i]'hi = 13 ∧ a[i+1]'hlt = 10) := by
+        have hcr : ¬ (bs.get! i = 13 ∧ bs.get! (i + 1) = 10) := by
           intro ⟨e1, e2⟩
           simp only [Bool.and_eq_true, beq_iff_eq] at hb
           exact hb ⟨e1, e2⟩
         rw [if_neg hcr, ← hd1, List.length_cons]; omega
     · rw [dif_neg hlt]
-      have hd0 : a.toList.drop i = a[i]'hi :: a.toList.drop (i + 1) := drop_toList_cons a i hi
-      rw [hd0, List.drop_eq_nil_of_le (by rw [Array.length_toList]; omega)]
-      have h1 : (beforeCRLF (a[i]'hi :: ([] : Bytes))).length = 1 := by simp [beforeCRLF]
+      have hd0 : bs.toList.drop i = bs.get! i :: bs.toList.drop (i + 1) := drop_toList_cons bs i hi
+      rw [hd0, List.drop_eq_nil_of_le (by rw [ba_toList_length]; omega)]
+      have h1 : (beforeCRLF (bs.get! i :: ([] : Bytes))).length = 1 := by simp [beforeCRLF]
       rw [h1]; omega
 
-/-- **The blank-line-scan bridge.** The dense take-length from `i` equals `i` plus
-`blankLen` of the remaining bytes — so at `i = 0` it is `blankLen a.toList`. -/
-theorem blankTakeFrom_eq (a : Array UInt8) :
-    ∀ (n i : Nat), a.size - i = n → i ≤ a.size →
-      blankTakeFrom a i = i + blankLen (a.toList.drop i) := by
+/-- **The blank-line-scan bridge.** The native take-length from `i` equals `i` plus
+`blankLen` of the remaining bytes — so at `i = 0` it is `blankLen bs.toList`. -/
+theorem blankTakeFrom_eq (bs : ByteArray) :
+    ∀ (n i : Nat), bs.size - i = n → i ≤ bs.size →
+      blankTakeFrom bs i = i + blankLen (bs.toList.drop i) := by
   intro n
   induction n with
   | zero =>
     intro i hn hle
-    have hi : i = a.size := by omega
+    have hi : i = bs.size := by omega
     subst hi
-    rw [blankTakeFrom, dif_neg (by omega : ¬ a.size + 3 < a.size),
-        List.drop_eq_nil_of_le (by simp)]
+    rw [blankTakeFrom, dif_neg (by omega : ¬ bs.size + 3 < bs.size),
+        List.drop_eq_nil_of_le (Nat.le_of_eq (ba_toList_length bs))]
     simp [blankLen]
   | succ n ih =>
     intro i hn hle
-    have hi : i < a.size := by omega
+    have hi : i < bs.size := by omega
     rw [blankTakeFrom]
-    by_cases hlt : i + 3 < a.size
+    by_cases hlt : i + 3 < bs.size
     · rw [dif_pos hlt]
-      have hlt1 : i + 1 < a.size := by omega
-      have hlt2 : i + 2 < a.size := by omega
-      have hlt3 : i + 3 < a.size := by omega
-      have hd0 : a.toList.drop i = a[i]'hi :: a.toList.drop (i + 1) := drop_toList_cons a i hi
-      have hd1 : a.toList.drop (i+1) = a[i+1]'hlt1 :: a.toList.drop (i + 2) := drop_toList_cons a (i + 1) hlt1
-      have hd2 : a.toList.drop (i+2) = a[i+2]'hlt2 :: a.toList.drop (i + 3) := drop_toList_cons a (i + 2) hlt2
-      have hd3 : a.toList.drop (i+3) = a[i+3]'hlt3 :: a.toList.drop (i + 4) := drop_toList_cons a (i + 3) hlt3
-      have hsb : startsBlank (a[i]'hi :: a.toList.drop (i + 1))
-          = (a[i]'hi == 13 && a[i+1]'hlt1 == 10 && a[i+2]'hlt2 == 13 && a[i+3]'hlt3 == 10) := by
+      have hlt1 : i + 1 < bs.size := by omega
+      have hlt2 : i + 2 < bs.size := by omega
+      have hlt3 : i + 3 < bs.size := by omega
+      have hd0 : bs.toList.drop i = bs.get! i :: bs.toList.drop (i + 1) := drop_toList_cons bs i hi
+      have hd1 : bs.toList.drop (i+1) = bs.get! (i+1) :: bs.toList.drop (i + 2) := drop_toList_cons bs (i + 1) hlt1
+      have hd2 : bs.toList.drop (i+2) = bs.get! (i+2) :: bs.toList.drop (i + 3) := drop_toList_cons bs (i + 2) hlt2
+      have hd3 : bs.toList.drop (i+3) = bs.get! (i+3) :: bs.toList.drop (i + 4) := drop_toList_cons bs (i + 3) hlt3
+      have hsb : startsBlank (bs.get! i :: bs.toList.drop (i + 1))
+          = (bs.get! i == 13 && bs.get! (i+1) == 10 && bs.get! (i+2) == 13 && bs.get! (i+3) == 10) := by
         rw [hd1, hd2, hd3]; rfl
-      have hbl : blankLen (a.toList.drop i)
-          = if (a[i]'hi == 13 && a[i+1]'hlt1 == 10 && a[i+2]'hlt2 == 13 && a[i+3]'hlt3 == 10) = true
-            then 4 else blankLen (a.toList.drop (i + 1)) + 1 := by
+      have hbl : blankLen (bs.toList.drop i)
+          = if (bs.get! i == 13 && bs.get! (i+1) == 10 && bs.get! (i+2) == 13 && bs.get! (i+3) == 10) = true
+            then 4 else blankLen (bs.toList.drop (i + 1)) + 1 := by
         rw [hd0]; simp only [blankLen]; rw [hsb]
-      by_cases hb : (a[i]'hi == 13 && a[i+1]'hlt1 == 10 && a[i+2]'hlt2 == 13 && a[i+3]'hlt3 == 10) = true
+      by_cases hb : (bs.get! i == 13 && bs.get! (i+1) == 10 && bs.get! (i+2) == 13 && bs.get! (i+3) == 10) = true
       · rw [if_pos hb, hbl, if_pos hb]
       · rw [if_neg hb, ih (i + 1) (by omega) (by omega), hbl, if_neg hb]; omega
     · rw [dif_neg hlt]
-      have hshort : (a.toList.drop i).length ≤ 3 := by
-        rw [List.length_drop, Array.length_toList]; omega
-      rw [blankLen_of_short _ hshort, List.length_drop, Array.length_toList]; omega
+      have hshort : (bs.toList.drop i).length ≤ 3 := by
+        rw [List.length_drop, ba_toList_length]; omega
+      rw [blankLen_of_short _ hshort, List.length_drop, ba_toList_length]; omega
 
-/-! ### The dense post-processors and their `.toList` bridges -/
+/-! ### The native post-processors and their `.toList` bridges -/
 
-/-- `Date: <now>` head fragment as a flat array (fixed, tiny). -/
-def dateHdrArr : Array UInt8 := dateHdr.toArray
-/-- `CRLF` as a flat array. -/
-def crlfArr : Array UInt8 := crlf.toArray
+/-- `Date: <now> ` header fragment as a `ByteArray` (fixed, tiny — built once). -/
+def dateHdrBytes : ByteArray := ByteArray.mk dateHdr.toArray
+/-- `CRLF` as a `ByteArray` (fixed, tiny — built once). -/
+def crlfBytes : ByteArray := ByteArray.mk crlf.toArray
 
-/-- **Dense F1.** Splice `Date: <now> CRLF` right after the first `CRLF`, over
-`ByteArray`: `extract` the head + the tail once (one memcpy of the body), no cons. -/
+theorem dateHdrBytes_toList : dateHdrBytes.toList = dateHdr := mk_toArray_toList dateHdr
+theorem crlfBytes_toList : crlfBytes.toList = crlf := mk_toArray_toList crlf
+
+/-- `ByteArray.append` reads back as list append — the native `copySlice` (`@[extern
+"lean_byte_array_copy_slice"]`) concatenation, no per-byte boxing. -/
+theorem BA_append_toList (a b : ByteArray) : (a ++ b).toList = a.toList ++ b.toList := by
+  rw [ba_toList_eq (a ++ b), ba_toList_eq a, ba_toList_eq b]
+  show (a.data.extract 0 a.size ++ b.data.extract 0 (0 + b.size)
+        ++ a.data.extract (a.size + min b.size (b.data.size - 0)) a.data.size).toList
+      = a.data.toList ++ b.data.toList
+  have h3 : a.data.size - (a.size + min b.size b.data.size) = 0 :=
+    Nat.sub_eq_zero_of_le (by rw [show a.data.size = a.size from rfl]; exact Nat.le_add_right _ _)
+  simp only [Array.toList_append, Array.toList_extract, List.extract_eq_drop_take,
+    Nat.zero_add, Nat.sub_zero, List.drop_zero, h3, List.take_zero, List.append_nil]
+  rw [show a.size = a.data.toList.length by rw [Array.length_toList, ba_data_size],
+      show b.size = b.data.toList.length by rw [Array.length_toList, ba_data_size],
+      List.take_length, List.take_length]
+
+/-- `ByteArray.extract` reads back as list `drop`-then-`take` — the native `copySlice`
+(`@[extern "lean_byte_array_copy_slice"]`) slice, no per-byte boxing. -/
+theorem BA_extract_toList (bs : ByteArray) (s e : Nat) :
+    (bs.extract s e).toList = (bs.toList.drop s).take (e - s) := by
+  rw [ba_toList_eq (bs.extract s e), ba_toList_eq bs]
+  show (ByteArray.empty.data.extract 0 0 ++ bs.data.extract s (s + (e - s))
+        ++ ByteArray.empty.data.extract (0 + min (e - s) (bs.data.size - s)) ByteArray.empty.data.size).toList
+      = (bs.data.toList.drop s).take (e - s)
+  have he : ByteArray.empty.data = (#[] : Array UInt8) := rfl
+  rw [he]
+  simp only [Array.toList_append, Array.toList_extract, List.extract_eq_drop_take,
+    Array.size_empty, Array.toList_empty, List.drop_nil, List.take_nil,
+    List.nil_append, List.append_nil, Nat.add_sub_cancel_left, Nat.sub_zero, Nat.zero_add,
+    List.drop_zero]
+
+/-- **Dense F1 (native).** Splice `Date: <now> CRLF` right after the first `CRLF`, over
+`ByteArray`: native `ByteArray.extract` head + tail (one `memcpy` of the body via
+`lean_byte_array_copy_slice`), `ByteArray.append`ed — no `bs.data`, no boxed `Array`. -/
 def injectDateBA (bs : ByteArray) : ByteArray :=
-  let a := bs.data
-  let k := crIdxFrom a 0
-  ByteArray.mk
-    (a.extract 0 k ++ crlfArr ++ dateHdrArr ++ crlfArr ++ a.extract (k + 2) a.size)
+  bs.extract 0 (crIdxFrom bs 0) ++ crlfBytes ++ dateHdrBytes ++ crlfBytes
+    ++ bs.extract (crIdxFrom bs 0 + 2) bs.size
 
-/-- **Dense B1.** Truncate at the first blank line over `ByteArray` — one `extract`
-of the head (the body is never copied). -/
+/-- **Dense B1 (native).** Truncate at the first blank line — one native
+`ByteArray.extract` of the head (the body is never copied). -/
 def stripBodyBA (bs : ByteArray) : ByteArray :=
-  ByteArray.mk (bs.data.extract 0 (blankTakeFrom bs.data 0))
+  bs.extract 0 (blankTakeFrom bs 0)
 
-/-- **Dense = spec (F1).** The dense splice is byte-identical to the list `injectDate`. -/
+/-- **Dense = spec (F1).** The native splice is byte-identical to the list `injectDate`. -/
 theorem injectDateBA_toList (bs : ByteArray) :
     (injectDateBA bs).toList = injectDate bs.toList := by
-  rw [ba_toList_eq bs]
-  have hsz : bs.data.size = bs.data.toList.length := Array.length_toList.symm
-  have hk : crIdxFrom bs.data 0 = (beforeCRLF bs.data.toList).length := by
-    have h := crIdxFrom_eq bs.data bs.data.size 0 (by omega) (by omega)
+  have hk : crIdxFrom bs 0 = (beforeCRLF bs.toList).length := by
+    have h := crIdxFrom_eq bs bs.size 0 (by omega) (by omega)
     simpa using h
-  have htail : ∀ (l : Bytes) (m : Nat), (l.drop m).take (l.length - m) = l.drop m := by
-    intro l m
-    have hlen : l.length - m = (l.drop m).length := by rw [List.length_drop]
+  have h1 : bs.toList.take (beforeCRLF bs.toList).length = beforeCRLF bs.toList :=
+    (beforeCRLF_eq_take bs.toList).symm
+  have h2 : (bs.toList.drop ((beforeCRLF bs.toList).length + 2)).take
+              (bs.size - ((beforeCRLF bs.toList).length + 2)) = afterCRLF bs.toList := by
+    rw [afterCRLF_eq_drop]
+    have hlen : bs.size - ((beforeCRLF bs.toList).length + 2)
+         = (bs.toList.drop ((beforeCRLF bs.toList).length + 2)).length := by
+      rw [List.length_drop, ba_toList_length]
     rw [hlen, List.take_length]
-  rw [injectDateBA, ba_toList_eq]
-  show (bs.data.extract 0 (crIdxFrom bs.data 0) ++ crlfArr ++ dateHdrArr ++ crlfArr
-        ++ bs.data.extract (crIdxFrom bs.data 0 + 2) bs.data.size).toList
-      = injectDate bs.data.toList
+  unfold injectDateBA
+  simp only [BA_append_toList, BA_extract_toList, crlfBytes_toList, dateHdrBytes_toList,
+    Nat.sub_zero, List.drop_zero]
   rw [hk]
-  simp only [Array.toList_append, Array.toList_extract, List.extract_eq_drop_take,
-    dateHdrArr, crlfArr, Array.toList_toArray]
-  rw [injectDate, Nat.sub_zero, List.drop_zero, hsz, htail,
-    ← beforeCRLF_eq_take bs.data.toList, ← afterCRLF_eq_drop bs.data.toList]
+  unfold injectDate
+  rw [h1, h2]
 
-/-- **Dense = spec (B1).** The dense truncate is byte-identical to the list `stripBody`. -/
+/-- **Dense = spec (B1).** The native truncate is byte-identical to the list `stripBody`. -/
 theorem stripBodyBA_toList (bs : ByteArray) :
     (stripBodyBA bs).toList = stripBody bs.toList := by
-  rw [ba_toList_eq bs]
-  have hj : blankTakeFrom bs.data 0 = blankLen bs.data.toList := by
-    have h := blankTakeFrom_eq bs.data bs.data.size 0 (by omega) (by omega)
+  have hj : blankTakeFrom bs 0 = blankLen bs.toList := by
+    have h := blankTakeFrom_eq bs bs.size 0 (by omega) (by omega)
     simpa using h
-  rw [stripBodyBA, ba_toList_eq]
-  show (bs.data.extract 0 (blankTakeFrom bs.data 0)).toList = stripBody bs.data.toList
+  unfold stripBodyBA
+  rw [BA_extract_toList]
+  simp only [Nat.sub_zero, List.drop_zero]
   rw [hj, stripBody_eq_take]
-  simp only [Array.toList_extract, List.extract_eq_drop_take, Nat.sub_zero, List.drop_zero]
 
 /-! ## The request context -/
 
@@ -579,9 +631,18 @@ so every `respBytesRaw` conformance theorem (reject statuses, `Date` present) go
 the actual served bytes. -/
 theorem respBytesRawBA_toList (inner : ByteArray → ByteArray) (input : ByteArray) :
     (respBytesRawBA inner input).toList = respBytesRaw inner input := by
+  -- Explicit case structure (NOT `repeat' split` + a blind `first | exact …`): the
+  -- accepted leaf's head is now `ByteArray.append …` (native splice), so trying
+  -- `mk_toArray_toList` there would `whnf` `injectDateBA`'s well-founded `crIdxFrom`
+  -- recursion and spin. Applying the RIGHT lemma per leaf keeps unification head-matched.
   unfold respBytesRawBA respBytesRaw
-  repeat' split
-  all_goals first | exact mk_toArray_toList _ | exact injectDateBA_toList _
+  split
+  · exact mk_toArray_toList _
+  · split
+    · exact mk_toArray_toList _
+    · split
+      · exact mk_toArray_toList _
+      · exact injectDateBA_toList _
 
 /-- Whether the request is a `HEAD` (drives the B1 body strip). -/
 def isHeadReq (input : ByteArray) : Bool :=
