@@ -540,7 +540,79 @@ impl Database {
         .execute(&pool)
         .await?;
 
+        // The community DUNGEON LIBRARY — authored `.dungeon` worlds, stored as SOURCE (never a
+        // cached binary shape; every load re-parses fail-closed). Provenance is an AUTHOR LABEL:
+        // the author's Discord id + their derived cipherclerk Ed25519 public key hex. This is NOT
+        // a signed attestation — it records who published, it does not cryptographically prove the
+        // source was signed by that key (see `commands::fiction`). See migrations/003_dungeon_worlds.sql.
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS dungeon_worlds (
+                name TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL,
+                source TEXT NOT NULL,
+                author_discord_id TEXT NOT NULL,
+                author_pubkey TEXT NOT NULL,
+                validates_clean INTEGER NOT NULL,
+                room_count INTEGER NOT NULL,
+                created_at INTEGER NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await?;
+
         Ok(Self { pool })
+    }
+
+    // ─── Dungeon world library ──────────────────────────────────────────────
+
+    /// Publish (insert or replace) an authored dungeon world into the community library. The
+    /// SOURCE is stored verbatim; callers re-parse it on load (never a cached binary shape).
+    /// `author_pubkey` is the publisher's derived cipherclerk public key hex — an author LABEL,
+    /// not a signature over the source.
+    pub async fn publish_dungeon_world(&self, rec: &DungeonWorldRecord) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT OR REPLACE INTO dungeon_worlds
+                (name, display_name, source, author_discord_id, author_pubkey, validates_clean, room_count, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&rec.name)
+        .bind(&rec.display_name)
+        .bind(&rec.source)
+        .bind(&rec.author_discord_id)
+        .bind(&rec.author_pubkey)
+        .bind(rec.validates_clean as i64)
+        .bind(rec.room_count)
+        .bind(rec.created_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// List every published world (newest first), for `/dungeon library`.
+    pub async fn list_dungeon_worlds(&self) -> Result<Vec<DungeonWorldRecord>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT name, display_name, source, author_discord_id, author_pubkey, validates_clean, room_count, created_at
+             FROM dungeon_worlds ORDER BY created_at DESC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.iter().map(row_to_world).collect())
+    }
+
+    /// Fetch one published world by its library name (for `/dungeon start <name>`). The caller
+    /// re-parses `.source` fail-closed.
+    pub async fn get_dungeon_world(
+        &self,
+        name: &str,
+    ) -> Result<Option<DungeonWorldRecord>, sqlx::Error> {
+        let row = sqlx::query(
+            "SELECT name, display_name, source, author_discord_id, author_pubkey, validates_clean, room_count, created_at
+             FROM dungeon_worlds WHERE name = ?",
+        )
+        .bind(name)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.as_ref().map(row_to_world))
     }
 
     // ─── User / cclerk methods ──────────────────────────────────────────────
@@ -1777,6 +1849,43 @@ fn chrono_now() -> i64 {
 fn short_local_hash(input: &str) -> String {
     let hash = blake3::hash(input.as_bytes()).to_hex().to_string();
     hash[..12.min(hash.len())].to_string()
+}
+
+/// One published dungeon world in the community library. The `source` is authoritative (loaders
+/// re-parse it); `author_pubkey` is the publisher's derived cipherclerk public-key hex — an author
+/// LABEL recording who published, NOT a signature over the source.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DungeonWorldRecord {
+    /// The library name (unique key), e.g. `"clockwork-orchard"`.
+    pub name: String,
+    /// The world's display name (from its `name:` header).
+    pub display_name: String,
+    /// The verbatim `.dungeon` source — re-parsed on load, never a cached binary.
+    pub source: String,
+    /// The publisher's Discord id.
+    pub author_discord_id: String,
+    /// The publisher's derived cipherclerk Ed25519 public key (hex) — an author label.
+    pub author_pubkey: String,
+    /// Whether the world passed `validate` with no blocking errors at publish time.
+    pub validates_clean: bool,
+    /// The number of rooms in the world.
+    pub room_count: i64,
+    /// Unix seconds when it was published.
+    pub created_at: i64,
+}
+
+/// Decode a `dungeon_worlds` row into a [`DungeonWorldRecord`].
+fn row_to_world(row: &sqlx::sqlite::SqliteRow) -> DungeonWorldRecord {
+    DungeonWorldRecord {
+        name: row.get("name"),
+        display_name: row.get("display_name"),
+        source: row.get("source"),
+        author_discord_id: row.get("author_discord_id"),
+        author_pubkey: row.get("author_pubkey"),
+        validates_clean: row.get::<i64, _>("validates_clean") != 0,
+        room_count: row.get("room_count"),
+        created_at: row.get("created_at"),
+    }
 }
 
 async fn ensure_column(

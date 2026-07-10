@@ -157,6 +157,8 @@ const REGISTERED_COMMAND_NAMES: &[&str] = &[
     "channel",
     // ─── BYO-LLM-keys: port in / rotate / revoke your own provider key ───────────
     "key",
+    // ─── shared AI-narrated on-chain dungeon (buttons are write-once ballots) ─────
+    "dungeon",
 ];
 
 #[cfg(test)]
@@ -268,6 +270,8 @@ impl EventHandler for Handler {
             commands::channel::register(),
             // ─── BYO-LLM-keys ───────────────────────────────────────────────
             commands::key::register(),
+            // ─── shared AI-narrated on-chain dungeon ─────────────────────────
+            commands::fiction::register(),
         ];
         debug_assert_eq!(commands.len(), REGISTERED_COMMAND_NAMES.len());
 
@@ -361,6 +365,7 @@ impl EventHandler for Handler {
                 "coordinate" => commands::coordinate::handle(&ctx, &command, &self.state).await,
                 "channel" => commands::channel::handle(&ctx, &command, &self.state).await,
                 "key" => commands::key::handle(&ctx, &command, &self.state).await,
+                "dungeon" => commands::fiction::handle(&ctx, &command, &self.state).await,
                 _ => {
                     tracing::warn!("Unknown command: {name}");
                 }
@@ -381,6 +386,10 @@ impl EventHandler for Handler {
                 viewnode_applet::handle_deosturn_component(&ctx, &component, &self.state).await;
             } else if custom_id.starts_with("deos:") {
                 commands::deos::handle_component(&ctx, &component, &self.state).await;
+            } else if custom_id.starts_with("fiction:") {
+                // A `/dungeon` ballot button — a write-once vote attributed to the presser's
+                // derived dregg identity (`commands::fiction`).
+                commands::fiction::handle_component(&ctx, &component, &self.state).await;
             } else {
                 commands::dashboard::handle_component(&ctx, &component, &self.state).await;
             }

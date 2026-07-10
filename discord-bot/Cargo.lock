@@ -347,6 +347,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
+name = "attested-dm"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-node-target",
+ "dregg-zkoracle-prove",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -577,7 +586,7 @@ version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "96eb4cdd6cf1b31d671e9efe75c5d1ec614776856cefbe109ca373554a6d514f"
 dependencies = [
- "hybrid-array",
+ "hybrid-array 0.4.12",
 ]
 
 [[package]]
@@ -901,7 +910,7 @@ version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ce6e4c961d6cd6c9a86db418387425e8bdeaf05b3c8bc1411e6dca4c252f1453"
 dependencies = [
- "hybrid-array",
+ "hybrid-array 0.4.12",
 ]
 
 [[package]]
@@ -911,6 +920,8 @@ dependencies = [
  "blake3",
  "rand_chacha 0.3.1",
  "rand_core 0.6.4",
+ "serde",
+ "serde_json",
  "subtle",
 ]
 
@@ -1130,6 +1141,7 @@ name = "dregg-blocklace"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "dregg-pq",
  "dregg-types",
  "ed25519-dalek",
  "postcard",
@@ -1178,6 +1190,7 @@ dependencies = [
  "bs58",
  "chacha20poly1305",
  "dregg-cell",
+ "dregg-pq",
  "dregg-types",
  "getrandom 0.3.4",
  "hkdf",
@@ -1211,6 +1224,7 @@ dependencies = [
  "curve25519-dalek",
  "dregg-cell",
  "dregg-circuit",
+ "dregg-pq",
  "dregg-types",
  "ed25519-dalek",
  "getrandom 0.3.4",
@@ -1340,6 +1354,7 @@ dependencies = [
 name = "dregg-discord-bot"
 version = "0.1.0"
 dependencies = [
+ "attested-dm",
  "axum",
  "base64 0.22.1",
  "blake3",
@@ -1455,10 +1470,10 @@ dependencies = [
  "dregg-cell-crypto",
  "dregg-commit",
  "dregg-hints",
+ "dregg-pq",
  "dregg-turn",
  "dregg-types",
  "ed25519-dalek",
- "fips204",
  "getrandom 0.3.4",
  "hex",
  "postcard",
@@ -1505,6 +1520,7 @@ dependencies = [
  "blake3",
  "chacha20poly1305",
  "curve25519-dalek",
+ "dregg-bridge",
  "dregg-cell",
  "dregg-cell-crypto",
  "dregg-circuit",
@@ -1539,9 +1555,9 @@ dependencies = [
  "dregg-cell",
  "dregg-circuit",
  "dregg-circuit-prove",
+ "dregg-pq",
  "dregg-turn",
  "ed25519-dalek",
- "fips204",
 ]
 
 [[package]]
@@ -1561,12 +1577,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "dregg-node-target"
+version = "0.1.0"
+
+[[package]]
 name = "dregg-payable"
 version = "0.1.0"
 dependencies = [
  "dregg-cell",
  "dregg-turn",
  "dregg-types",
+]
+
+[[package]]
+name = "dregg-pq"
+version = "0.1.0"
+dependencies = [
+ "fips204",
+ "getrandom 0.3.4",
+ "hkdf",
+ "ml-kem",
+ "rand_core 0.6.4",
+ "sha2 0.10.9",
+ "x25519-dalek",
+ "zeroize",
 ]
 
 [[package]]
@@ -1608,6 +1642,7 @@ dependencies = [
  "dregg-lightclient",
  "dregg-macaroon",
  "dregg-payable",
+ "dregg-pq",
  "dregg-token",
  "dregg-trace",
  "dregg-turn",
@@ -1657,6 +1692,7 @@ dependencies = [
  "blake3",
  "dregg-commit",
  "dregg-macaroon",
+ "dregg-pq",
  "dregg-trace",
  "ed25519-dalek",
  "getrandom 0.3.4",
@@ -1694,10 +1730,10 @@ dependencies = [
  "dregg-commit",
  "dregg-dsl-runtime",
  "dregg-hints",
+ "dregg-pq",
  "dregg-token",
  "dregg-types",
  "ed25519-dalek",
- "fips204",
  "getrandom 0.3.4",
  "hex",
  "postcard",
@@ -1717,6 +1753,18 @@ dependencies = [
  "getrandom 0.3.4",
  "serde",
  "zeroize",
+]
+
+[[package]]
+name = "dregg-zkoracle-prove"
+version = "0.1.0"
+dependencies = [
+ "dregg-circuit",
+ "dregg-dfa",
+ "ed25519-dalek",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
 ]
 
 [[package]]
@@ -2346,6 +2394,15 @@ checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
 name = "hybrid-array"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f2d35805454dc9f8662a98d6d61886ffe26bd465f5960e0e55345c70d5c0d2a9"
+dependencies = [
+ "typenum",
+]
+
+[[package]]
+name = "hybrid-array"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9155a582abd142abc056962c29e3ce5ff2ad5469f4246b537ed42c5deba857da"
@@ -2656,6 +2713,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "kem"
+version = "0.3.0-pre.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b8645470337db67b01a7f966decf7d0bafedbae74147d33e641c67a91df239f"
+dependencies = [
+ "rand_core 0.6.4",
+ "zeroize",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2860,6 +2927,18 @@ dependencies = [
  "libc",
  "wasi",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "ml-kem"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8de49b3df74c35498c0232031bb7e85f9389f913e2796169c8ab47a53993a18f"
+dependencies = [
+ "hybrid-array 0.2.3",
+ "kem",
+ "rand_core 0.6.4",
+ "sha3",
 ]
 
 [[package]]
