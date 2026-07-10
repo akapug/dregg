@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>The Collective Dungeon — a crowd steers one party by vote</title>
+  <style>
+    :root {
+      --parchment: #ece6d6; --parchment-2: #e0d8c2; --card: #f7f2e7; --stone: #efe9da;
+      --ink: #1b1728; --ink-soft: #453f57; --ink-faint: #766f86; --rule: #cfc5ac;
+      --violet: #6b5ce0; --violet-deep: #43349c; --teal: #2b7f7a; --green: #3f8f57;
+      --amber: #b06e1f; --red: #a8262f; --red-soft: #f7e6e6; --red-line: #e7c4c4; --gold: #a9812f;
+      --shadow: 24px 34px 66px -34px rgba(20, 16, 34, .5);
+      --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+      --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; }
+    body {
+      font-family: var(--sans); color: var(--ink);
+      background:
+        radial-gradient(130% 90% at 50% -20%, #241c33 0%, #2c2440 22%, transparent 55%),
+        radial-gradient(120% 80% at 50% 0%, #f3eee1 0%, var(--parchment) 42%, var(--parchment-2) 100%);
+      min-height: 100vh; line-height: 1.5; -webkit-font-smoothing: antialiased;
+    }
+    .page { max-width: 52rem; margin: 0 auto; padding: 3.4rem 1.5rem 6rem; }
+    .eyebrow { font-size: .72rem; letter-spacing: .22em; text-transform: uppercase; color: #c9c0ee; font-weight: 600; margin: 0 0 .9rem; }
+    h1.title { font-family: var(--serif); font-weight: 600; font-size: clamp(2.3rem, 6vw, 3.6rem); line-height: 1.02; letter-spacing: -.01em; margin: 0; text-wrap: balance; color: #f4efe2; text-shadow: 0 2px 24px rgba(0,0,0,.35); }
+    h1.title em { color: #b9abf2; font-style: italic; }
+    .lede { font-family: var(--serif); font-size: 1.14rem; color: #d8d2c2; margin: 1rem 0 0; max-width: 42rem; text-wrap: pretty; }
+    .lede b { color: #fff; font-weight: 600; }
+
+    .now-playing { margin: 1.3rem 0 0; font-family: var(--serif); font-size: 1.05rem; color: #f4efe2; display: flex; align-items: baseline; gap: .6rem; flex-wrap: wrap; }
+    .now-playing .np-label { font-family: var(--sans); font-size: .62rem; letter-spacing: .16em; text-transform: uppercase; color: #c9c0ee; font-weight: 700; }
+    .now-playing .np-name { font-weight: 600; color: #fff; }
+
+    .narrator { margin: 1.2rem 0 0; font-size: .84rem; color: var(--ink-soft); padding: .55rem .9rem; border-radius: 9px; background: rgba(255,255,255,.6); border: 1px dashed var(--rule); }
+    .narrator.model { border-style: solid; border-color: #cfc6ee; background: #f2efff; color: var(--violet-deep); }
+    .narrator code { font-family: var(--mono); font-size: .8rem; }
+    .objective { margin: 1rem 0 0; padding: .7rem 1rem; border-radius: 11px; background: linear-gradient(90deg, #f6efdc, #f3ecd8); border: 1px solid #e2d3a8; color: #6a5320; font-size: .95rem; display: flex; gap: .55rem; align-items: baseline; }
+    .objective .star { color: var(--gold); }
+
+    .scene-frame { margin: 1.3rem 0 0; padding: 1.5rem 1.5rem 1.3rem; border-radius: 15px; background: var(--card); border: 1px solid var(--rule); box-shadow: var(--shadow); position: relative; }
+    .scene-frame::before { content: "the shared party stands in"; position: absolute; top: -.62rem; left: 1.2rem; font-size: .62rem; letter-spacing: .18em; text-transform: uppercase; font-weight: 700; color: var(--ink-faint); background: var(--card); padding: 0 .5rem; }
+    #roomName { font-family: var(--serif); font-size: 1.55rem; color: var(--ink); margin: 0; letter-spacing: -.01em; }
+    #roomDesc { font-family: var(--serif); font-size: 1.05rem; color: var(--ink-soft); margin: .35rem 0 0; font-style: italic; }
+    #narration { font-family: var(--serif); font-size: 1.14rem; color: var(--ink); margin: 1rem 0 0; padding: .85rem 1rem; border-left: 3px solid var(--violet); background: rgba(107,92,224,.06); border-radius: 0 10px 10px 0; min-height: 1.2rem; }
+    #narration .who { display: block; font-family: var(--sans); font-size: .64rem; letter-spacing: .14em; text-transform: uppercase; color: var(--violet-deep); font-weight: 700; margin-bottom: .3rem; }
+    .inv-line { margin: .85rem 0 0; font-size: .86rem; color: var(--ink-soft); display: flex; gap: .4rem; align-items: baseline; flex-wrap: wrap; }
+    .inv-line .lbl { font-size: .62rem; letter-spacing: .14em; text-transform: uppercase; color: var(--ink-faint); font-weight: 700; }
+    #inventory .held { font-family: var(--mono); font-size: .78rem; color: var(--teal); border: 1px solid #bfe0dd; background: #eef7f6; border-radius: 6px; padding: .06rem .4rem; margin-right: .3rem; }
+    #inventory .empty { color: var(--ink-faint); font-style: italic; font-family: var(--serif); }
+
+    /* ── the seated party ── */
+    .party-frame { margin: 1.3rem 0 0; padding: 1.1rem 1.2rem; border-radius: 14px; background: rgba(255,255,255,.66); border: 1px solid var(--rule); box-shadow: var(--shadow); }
+    .party-frame h3 { margin: 0 0 .1rem; font-size: .64rem; letter-spacing: .16em; text-transform: uppercase; color: var(--ink-faint); font-weight: 700; }
+    .party-frame .sub { margin: 0 0 .8rem; font-size: .82rem; color: var(--ink-soft); }
+    #seats { display: flex; flex-wrap: wrap; gap: .5rem; }
+    .seat { border: 1px solid var(--rule); background: var(--card); border-radius: 10px; padding: .5rem .7rem; min-width: 8.5rem; }
+    .seat.voted { border-color: var(--violet); background: #f2efff; }
+    .seat-name { display: block; font-family: var(--serif); font-weight: 600; font-size: 1rem; }
+    .seat-choice { display: block; font-size: .74rem; color: var(--violet-deep); font-family: var(--mono); margin-top: .12rem; }
+    .seat-choice.waiting { color: var(--ink-faint); font-style: italic; font-family: var(--serif); }
+    #seatSummary { margin: .7rem 0 0; font-size: .8rem; color: var(--ink-faint); }
+
+    /* ── the ballot ── */
+    .vote-frame { margin: 1.1rem 0 0; padding: 1.1rem 1.2rem; border-radius: 14px; background: var(--card); border: 1px solid var(--rule); box-shadow: var(--shadow); }
+    .vote-frame h3 { margin: 0 0 .1rem; font-size: .64rem; letter-spacing: .16em; text-transform: uppercase; color: var(--ink-faint); font-weight: 700; }
+    .vote-frame .sub { margin: 0 0 .8rem; font-size: .82rem; color: var(--ink-soft); }
+    #ballot { display: grid; gap: .55rem; }
+    #ballot .empty { color: var(--ink-faint); font-family: var(--serif); font-style: italic; }
+    button.opt { text-align: left; font: inherit; cursor: pointer; border: 1px solid var(--violet); background: #fff; color: var(--ink); border-radius: 11px; padding: .6rem .8rem; display: grid; gap: .35rem; transition: border-color .12s, box-shadow .12s; }
+    button.opt:hover { box-shadow: 0 6px 18px -10px rgba(107,92,224,.5); }
+    button.opt.locked { border-color: #d9c9a0; background: #fbf5e7; }
+    .opt-top { display: flex; justify-content: space-between; align-items: baseline; gap: .6rem; }
+    .opt-label { font-family: var(--serif); font-weight: 600; font-size: 1rem; }
+    button.opt.locked .opt-label { color: var(--amber); }
+    .opt-count { font-family: var(--mono); font-size: .78rem; color: var(--violet-deep); white-space: nowrap; }
+    .opt-cmd code { font-family: var(--mono); font-size: .74rem; color: var(--ink-faint); }
+    .opt-bar { display: block; height: 6px; border-radius: 999px; background: #e7e1d0; overflow: hidden; }
+    .opt-fill { display: block; height: 100%; background: var(--violet); transition: width .25s ease; }
+    button.opt.locked .opt-fill { background: var(--amber); }
+
+    .controls { margin: 1rem 0 0; display: flex; gap: .5rem; flex-wrap: wrap; }
+    button.ctrl { font: inherit; font-size: .86rem; padding: .55rem 1rem; border-radius: 10px; border: 1px solid var(--violet); background: #fff; color: var(--violet-deep); cursor: pointer; transition: background .14s, color .14s; white-space: nowrap; }
+    button.ctrl:hover { background: var(--violet); color: #fff; }
+    button.ctrl:disabled { opacity: .45; cursor: default; }
+    button.ctrl.primary { background: var(--violet); color: #fff; font-weight: 600; }
+    button.ctrl.primary:hover { background: var(--violet-deep); }
+    button.ctrl.reset { border-color: var(--ink-faint); color: var(--ink-faint); }
+    button.ctrl.reset:hover { background: var(--ink-faint); color: #fff; }
+    #phaseHint { margin: .7rem 0 0; font-size: .82rem; color: var(--ink-faint); font-style: italic; min-height: 1rem; }
+
+    /* ── banner ── */
+    .banner { margin: 1.3rem 0 0; max-height: 0; overflow: hidden; opacity: 0; transition: max-height .4s ease, opacity .3s ease, margin .3s ease; }
+    .banner.show { max-height: 22rem; opacity: 1; }
+    .banner .inner { padding: 1.3rem 1.4rem; border-radius: 14px; }
+    .banner.won .inner { background: linear-gradient(120deg, #f6efd6, #efe6c6); border: 1px solid #dcc588; }
+    .banner.lost .inner { background: #2a2330; border: 1px solid #4a3f52; }
+    .banner .b-title { font-family: var(--serif); font-size: 1.7rem; margin: 0; }
+    .banner.won .b-title { color: #6a5016; }
+    .banner.lost .b-title { color: #e9d9ef; }
+    .banner .b-body { margin: .4rem 0 0; font-size: .95rem; }
+    .banner.won .b-body { color: #6a5320; }
+    .banner.lost .b-body { color: #b7abc2; }
+
+    /* ── the chronicle ── */
+    .log-frame { margin: 1.6rem 0 0; }
+    .log-frame h3 { font-size: .64rem; letter-spacing: .16em; text-transform: uppercase; color: var(--ink-faint); font-weight: 700; margin: 0 0 .6rem; }
+    #chronicle { max-height: 22rem; overflow-y: auto; display: grid; gap: .7rem; padding-right: .2rem; }
+    #chronicle .empty { color: var(--ink-faint); font-family: var(--serif); font-style: italic; }
+    .entry { padding: .75rem .95rem; border-radius: 11px; background: var(--card); border: 1px solid var(--rule); }
+    .entry .cmd { font-size: .8rem; color: var(--ink-faint); }
+    .entry .cmd b { color: var(--ink-soft); font-weight: 600; }
+    .entry .cmd .tie { color: var(--amber); font-size: .74rem; }
+    .entry .prose { font-family: var(--serif); font-size: 1.02rem; color: var(--ink); margin-top: .32rem; }
+    .entry .verdict { margin-top: .42rem; font-size: .8rem; font-weight: 600; }
+    .entry .verdict .sub { font-weight: 400; color: var(--ink-faint); }
+    .entry.landed .verdict { color: var(--green); }
+    .entry.refused { background: var(--red-soft); border-color: var(--red-line); }
+    .entry.refused .verdict { color: var(--red); }
+
+    /* ── receipt rail + verify ── */
+    .rail { margin: 1.3rem 0 0; padding: .9rem 1.05rem; border-radius: 12px; background: rgba(255,255,255,.62); border: 1px solid var(--rule); }
+    .rail h3 { margin: 0 0 .5rem; font-size: .64rem; letter-spacing: .16em; text-transform: uppercase; color: var(--ink-faint); font-weight: 700; }
+    .chain-links { display: flex; flex-wrap: wrap; align-items: center; gap: .1rem; font-size: 1rem; color: var(--green); line-height: 1; min-height: 1.1rem; }
+    .chain-links .rope { color: var(--rule); }
+    .chain-links .empty { color: var(--ink-faint); font-size: .82rem; }
+    .chain-meta { margin-top: .5rem; font-size: .8rem; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+    .chain-meta code { font-family: var(--mono); color: var(--ink-soft); font-size: .72rem; }
+    .chain-meta b { color: var(--ink); }
+    .verify { margin: .7rem 0 0; padding: .6rem .9rem; border-radius: 10px; font-size: .84rem; font-weight: 600; border: 1px solid transparent; }
+    .verify.ok { background: #e7f4ea; border-color: #bfe2c7; color: var(--green); }
+    .verify.bad { background: var(--red-soft); border-color: var(--red-line); color: var(--red); }
+
+    .legend { margin: 2.4rem 0 0; padding: 1.2rem 1.4rem; border-radius: 12px; background: rgba(255,255,255,.5); border: 1px solid var(--rule); font-size: .86rem; color: var(--ink-soft); }
+    .legend h2 { font-family: var(--serif); font-size: 1.05rem; margin: 0 0 .6rem; color: var(--ink); font-weight: 600; }
+    .legend ul { margin: 0; padding-left: 1.1rem; display: grid; gap: .4rem; }
+    .legend b { color: var(--ink); font-weight: 600; }
+    .legend .tag { font-family: var(--mono); font-size: .78rem; color: var(--violet-deep); }
+    .legend .foot { margin-top: .7rem; font-size: .8rem; color: var(--ink-faint); }
+    footer { margin-top: 2rem; font-size: .76rem; color: var(--ink-faint); }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <p class="eyebrow">The collective dungeon · the crowd decides, the world resolves</p>
+    <h1 class="title">The Collective Dungeon</h1>
+    <p class="lede">
+      A crowd steers <b>one shared party</b> through the attested dungeon — <b>by vote</b>. Each turn:
+      open a vote over the party's candidate moves, the seated adventurers cast their ballots, close it,
+      and the winning move is resolved by the <em>same</em> engine as single-player. The crowd
+      <b>decides</b>; the world still <b>resolves</b> — a party that votes to force a locked door is
+      still refused, and must vote again.
+    </p>
+
+    <p class="now-playing"><span class="np-label">now playing</span><span id="nowPlaying" class="np-name">…</span></p>
+    <div id="narratorKind" class="narrator">…</div>
+    <div class="objective"><span class="star">★</span><span id="objectiveText">…</span></div>
+
+    <section class="scene-frame" aria-label="the room">
+      <p id="roomName">…</p>
+      <p id="roomDesc"></p>
+      <div id="narration"><span class="who">the dungeon master</span><span id="narrationText">The party gathers at the threshold. Open the first vote.</span></div>
+      <div class="inv-line"><span class="lbl">the party carries</span><span id="inventory"></span></div>
+    </section>
+
+    <section class="party-frame" aria-label="the seated party">
+      <h3>the seated party</h3>
+      <p class="sub">Five adventurers share one body in the dungeon. Each casts one write-once ballot per round.</p>
+      <div id="seats"></div>
+      <p id="seatSummary"></p>
+    </section>
+
+    <section class="vote-frame" aria-label="the ballot">
+      <h3>the party's next move — put it to a vote</h3>
+      <p class="sub">The candidate actions at this room (each open <em>or locked</em> exit, each item here, plus a look). Click a move to cast the next undecided adventurer's ballot. Tallies are live.</p>
+      <div id="ballot"></div>
+      <div class="controls">
+        <button id="openBtn" class="ctrl primary" type="button">🗳 open a vote</button>
+        <button id="autoBtn" class="ctrl" type="button">🎲 let the rest of the party vote</button>
+        <button id="closeBtn" class="ctrl" type="button">✔ close vote → the world resolves</button>
+        <button id="resetBtn" class="ctrl reset" type="button">↺ restart the dungeon</button>
+      </div>
+      <p id="phaseHint"></p>
+    </section>
+
+    <div id="banner" class="banner" role="status" aria-live="polite"><div class="inner"><p id="bannerTitle" class="b-title"></p><p id="bannerBody" class="b-body"></p></div></div>
+
+    <section class="log-frame">
+      <h3>the chronicle — every voted turn</h3>
+      <div id="chronicle"></div>
+    </section>
+
+    <div class="rail">
+      <h3>receipt rail — every landed voted move is a verified turn</h3>
+      <div id="chainLinks" class="chain-links"></div>
+      <div id="chainMeta" class="chain-meta"></div>
+      <div id="verifyBadge" class="verify" role="status"></div>
+    </div>
+
+    <aside class="legend">
+      <h2>What is actually real here</h2>
+      <ul>
+        <li>The crowd <b>decides</b> the party's next command by a plain <b>majority vote</b> — one write-once ballot per seated voter per round, a plurality winner, ties broken deterministically by lowest optionId. This is an <b>honest in-service tally</b>, <em>not</em> a quorum certificate.</li>
+        <li>The world <b>resolves</b> the winner through the <span class="tag">same /game/act path</span> as single-player: gemma2 narrates, <span class="tag">resolve_action</span> decides, a legal move lands as <b>one verified turn</b> on the receipt rail. Collective choice does <b>not</b> bypass the gates.</li>
+        <li>A party that votes a <b>locked exit</b> gets it resolved and <b>refused</b> by the world — <b>no receipt</b> (the anti-ghost tooth), the room unchanged — and must open another vote. Choosing the wrong move is a crowd's right; walking through a barred door is not a crowd's power.</li>
+        <li><b>The truth is the ledger, not the vote.</b> Every landed turn is authentic (fixture leg), well-formed, injection-free, and prev-linked on-chain — a stranger can replay the whole run.</li>
+      </ul>
+      <p class="foot">Honest scope: the narration is a real local model (<span class="tag">gemma2:2b</span>) when reachable, else a deterministic scripted narrator (shown above). The vote is a simple majority tally in the service; the load-bearing teeth are the <b>world resolution</b>, the <b>capability gate</b>, and the <b>receipt hash-chain</b>.</p>
+    </aside>
+
+    <footer>The Collective Dungeon · attested-dm /party contract · the crowd decides, the world resolves · self-contained.</footer>
+  </main>
+
+  <script src="party.js"></script>
+</body>
+</html>

@@ -506,6 +506,14 @@ fn route(
         (HttpMethod::Post, "/game/act") => game_api::handle_act(game, &req.body),
         (HttpMethod::Get, "/game/verify") => game_api::handle_verify(game),
         (HttpMethod::Post, "/game/reset") => game_api::handle_reset(game, &req.body),
+        // ── THE COLLECTIVE DUNGEON — a crowd steers ONE shared party through the SAME dungeon by
+        //    vote. Additive over the same GameSession: /party/{options,open,vote,tally,close}. The
+        //    crowd DECIDES the next command; the WORLD still RESOLVES it via the /game/act path.
+        (HttpMethod::Get, "/party/options") => game_api::handle_party_options(game),
+        (HttpMethod::Post, "/party/open") => game_api::handle_party_open(game),
+        (HttpMethod::Post, "/party/vote") => game_api::handle_party_vote(game, &req.body),
+        (HttpMethod::Get, "/party/tally") => game_api::handle_party_tally(game),
+        (HttpMethod::Post, "/party/close") => game_api::handle_party_close(game),
         (HttpMethod::Get, "/") => WebResponse::text(INDEX_HELP),
         _ => WebResponse::error(404, "not found"),
     }
@@ -520,7 +528,13 @@ const INDEX_HELP: &str = "attested dungeon-master — the model proposes, the ca
     GET  /game/state\n\
     POST /game/act {\"command\":\"<free text>\"}\n\
     GET  /game/verify\n\
-    POST /game/reset {\"world\":\"<game id>\"}\n";
+    POST /game/reset {\"world\":\"<game id>\"}\n\
+    -- THE COLLECTIVE DUNGEON (a crowd votes the shared party's next move) --\n\
+    GET  /party/options\n\
+    POST /party/open\n\
+    POST /party/vote {\"voter\":\"<name>\",\"optionId\":<n>}\n\
+    GET  /party/tally\n\
+    POST /party/close\n";
 
 fn main() -> std::io::Result<()> {
     if std::env::args().any(|a| a == "--self-check") {

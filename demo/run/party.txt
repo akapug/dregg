@@ -1,0 +1,39 @@
+THE COLLECTIVE DUNGEON — a crowd steers one shared party by VOTE
+driven run · attested-dm /party contract · narratorKind: model:gemma2:2b (a REAL local model)
+served at http://127.0.0.1:63166/party
+==============================================================================
+
+Each turn: OPEN a vote over the party's candidate moves, the seated adventurers cast
+write-once ballots, CLOSE it — and the winning move resolves through the SAME engine as
+single-player. The vote is a plain MAJORITY tally (NOT a quorum certificate). The crowd
+DECIDES; the world still RESOLVES — a party that votes a locked door is still refused.
+
+------------------------------------------------------------------------------
+ROUND #1 — ballots: go north = 3 · look = 1
+------------------------------------------------------------------------------
+  · a SECOND ballot from a voter who already voted → REFUSED (already-voted, one ballot per voter)
+  » the party voted: go north
+    gemma2: The archway groans under your weight as you step through, a chill wind whipping salt spray into your face. The sound of waves crashing against the cliff is almost drowned out by the rhythmic drip of water from unseen cracks in the stone.
+    world : LANDED → room antechamber · receipt rail #1 (a verified turn)
+
+------------------------------------------------------------------------------
+ROUND #2 — ballots: go down = 4
+------------------------------------------------------------------------------
+  » the party voted: go down
+    gemma2: The lantern's light flickers, casting dancing shadows on the salt-encrusted walls. A damp chill settles over you as you descend into the darkness of the antechamber.
+    world : REFUSED — the way to Dark Stair is barred: it needs the lantern
+            the room is UNCHANGED (still antechamber) and the receipt rail did NOT grow
+            (#1, no receipt — the anti-ghost tooth). The crowd decided; the world disposed.
+
+------------------------------------------------------------------------------
+ROUND #3 — ballots: take lantern = 5
+------------------------------------------------------------------------------
+  » the party voted: take lantern
+    gemma2: The lantern's glow, weak and flickering, illuminates only a small portion of the salt-encrusted walls. The air hangs heavy with the scent of brine and decay.
+    world : LANDED → room antechamber · receipt rail #2 (a verified turn)
+            the once-barred stair is now open — the world moved because the party EARNED it, not because it voted.
+
+==============================================================================
+RESULT: the shared party is at Salt Antechamber · 2 verified voted turns · carrying [lantern]
+The crowd decided every move. The world resolved every move. A voted-for locked door
+stayed shut until the party earned it. The ledger is the truth, not the vote.
