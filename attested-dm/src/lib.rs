@@ -37,10 +37,15 @@
 //!   wraps; composed here DIRECTLY so the DM stays light (the modeled ed25519 carrier +
 //!   the JSON CFG parse-cert + the injection matcher — no HTTP/TLS). The real local
 //!   MPC-TLS 2PC roundtrip is behind the `tlsn-live` feature.
-//! * **REAL — the receipt ledger.** Every landed turn is appended to [`WorldCell::ledger`]
-//!   with a 32-byte receipt commitment ([`attestation_commitment`]) over its attestation;
-//!   [`WorldCell::verify_ledger`] re-verifies the whole chain and a tampered / forged
-//!   entry is distinguishable.
+//! * **REAL — the receipt HASH-CHAIN.** Every landed turn is appended to
+//!   [`WorldCell::ledger`] with a 32-byte receipt id ([`chain_receipt_id`]) that binds its
+//!   `seq`, its predecessor's receipt id, its narration, its effect, and its attestation —
+//!   so the entries form a forward hash chain, not a bag of independently-signed rows.
+//!   [`WorldCell::verify_ledger`] walks that chain: reordering, in-place mutation, and
+//!   mid-history insertion are caught outright; truncation (and a wholesale re-link) is
+//!   caught against a known [`WorldCell::head`] via [`WorldCell::verify_ledger_against_head`].
+//!   Because the default `authentic` leg is a fixture, entry forgery is prevented by the
+//!   chain-link + receipt-id binding + head anchor, not by attestation authenticity.
 //! * **REAL — the cap bound.** [`DmCaps::authorize`] gates every world-effect the DM
 //!   proposes; an ungranted item-grant is refused.
 //! * **MODELED — the brain.** A [`DmBrain`] turns the scene + the player's action into a
@@ -64,6 +69,14 @@ use dregg_zkoracle_prove::{
 
 /// Domain separator for [`attestation_commitment`] — the DM receipt-id domain.
 const RECEIPT_COMMIT_DOMAIN: &[u8] = b"attested-dm-narration-receipt-v1";
+
+/// Domain separator for the ledger genesis seed — the `prev` of the first entry.
+const LEDGER_GENESIS_DOMAIN: &[u8] = b"attested-dm-ledger-genesis-v1";
+
+/// Domain separator for [`chain_receipt_id`] — the hash-chain link domain, distinct from
+/// [`RECEIPT_COMMIT_DOMAIN`] so a raw attestation commitment can never be mistaken for a
+/// chain link id.
+const LEDGER_CHAIN_DOMAIN: &[u8] = b"attested-dm-ledger-chain-link-v1";
 
 /// The modeled session time stamped on the carrier's presentation (unix seconds). The
 /// attestation is about the narration BODY; the exact timestamp is not load-bearing.
@@ -181,6 +194,70 @@ pub fn attestation_commitment(att: &ZkOracleAttestation) -> [u8; 32] {
     *h.finalize().as_bytes()
 }
 
+/// **The ledger genesis seed** — the domain-separated `prev` of the first entry (and the
+/// head of an empty ledger). Not all-zeros: a length-prefixed BLAKE3 of a genesis domain
+/// separator, so `prev == [0u8;32]` is never a valid genuine link.
+pub fn genesis_prev() -> [u8; 32] {
+    let mut h = blake3::Hasher::new();
+    h.update(LEDGER_GENESIS_DOMAIN);
+    *h.finalize().as_bytes()
+}
+
+/// **The on-ledger receipt id of a landed turn — a HASH-CHAIN LINK.** Unlike the raw
+/// [`attestation_commitment`] (a fingerprint of the attestation alone), this binds the
+/// entry to its *position and predecessor*: it is a domain-separated BLAKE3 over
+/// `(seq, prev, narration, effect, attestation_commitment(att))`. Because `prev` is the
+/// predecessor's own receipt id, the ids form a forward chain — the id of entry `i`
+/// transitively commits to every earlier entry. Recomputing this and checking it equals
+/// the stored receipt (and that `prev` equals the real predecessor's id, and `seq` equals
+/// the index) is what makes reorder / insertion / in-place mutation distinguishable, and —
+/// against a known head — truncation too.
+pub fn chain_receipt_id(
+    seq: u64,
+    prev: &[u8; 32],
+    narration: &str,
+    effect: &Option<WorldEffect>,
+    att: &ZkOracleAttestation,
+) -> [u8; 32] {
+    let mut h = blake3::Hasher::new();
+    h.update(LEDGER_CHAIN_DOMAIN);
+    h.update(&seq.to_le_bytes());
+    h.update(prev);
+    h.update(&(narration.len() as u64).to_le_bytes());
+    h.update(narration.as_bytes());
+    encode_effect(&mut h, effect);
+    // Bind the attestation via its own committed fingerprint — a tampered / re-aimed
+    // attestation changes this leg and therefore the whole link.
+    h.update(&attestation_commitment(att));
+    *h.finalize().as_bytes()
+}
+
+/// Length-tagged, discriminant-tagged encoding of the (optional) world-effect into the
+/// chain hash, so two distinct effects never collide and a mutated effect breaks the link.
+fn encode_effect(h: &mut blake3::Hasher, effect: &Option<WorldEffect>) {
+    match effect {
+        None => {
+            h.update(&[0u8]);
+        }
+        Some(WorldEffect::AdvanceScene(s)) => {
+            h.update(&[1u8]);
+            h.update(&(s.len() as u64).to_le_bytes());
+            h.update(s.as_bytes());
+        }
+        Some(WorldEffect::SetFlag(k, v)) => {
+            h.update(&[2u8]);
+            h.update(&(k.len() as u64).to_le_bytes());
+            h.update(k.as_bytes());
+            h.update(&v.to_le_bytes());
+        }
+        Some(WorldEffect::GrantItem(item)) => {
+            h.update(&[3u8]);
+            h.update(&(item.len() as u64).to_le_bytes());
+            h.update(item.as_bytes());
+        }
+    }
+}
+
 /// Shape a bound field into a well-formed Anthropic messages RESPONSE BODY (the shape
 /// `/v1/messages` returns): the assistant `content[0].text` IS the field, so the field is
 /// a verbatim, committed substring of the body.
@@ -245,8 +322,13 @@ pub struct WorldCell {
     pub flags: BTreeMap<String, i64>,
     /// The items players have been granted (only earned / cap-permitted items land here).
     pub inventory: BTreeSet<String>,
-    /// The receipt ledger — every landed narration turn, in order. Un-rewritable: a past
-    /// turn cannot be secretly changed ([`WorldCell::verify_ledger`] catches it).
+    /// The receipt ledger — every landed narration turn, in order, as a **hash chain**.
+    /// Each entry's receipt id ([`chain_receipt_id`]) binds its `seq`, its predecessor's
+    /// receipt id (`prev`), its narration, its effect, and its attestation, so the ids
+    /// form a forward chain. [`WorldCell::verify_ledger`] walks that chain; what it does
+    /// and does not catch is stated there. This is NOT a bag of independently-verified
+    /// entries: reordering, in-place mutation, and mid-history insertion are caught by the
+    /// chain walk, and truncation is caught against a known [`WorldCell::head`].
     pub ledger: Vec<LedgerEntry>,
     /// Where landed narration turns route. [`NodeTarget::Local`] (default) keeps them on
     /// this in-process ledger; [`NodeTarget::Federation`] additionally submits each
@@ -277,8 +359,13 @@ impl std::fmt::Debug for WorldCell {
 /// One landed, attested, receipted DM turn on the ledger.
 #[derive(Clone, Debug)]
 pub struct LedgerEntry {
-    /// The sequence number (the turn's index in the ledger).
+    /// The sequence number (the turn's index in the ledger). The chain walk checks this
+    /// equals the entry's actual index — a reordered or spliced entry is caught here.
     pub seq: u64,
+    /// **The predecessor's receipt id — the back-link of the hash chain.** For the first
+    /// entry this is [`genesis_prev`]. The chain walk checks it equals the real
+    /// predecessor's receipt id, so an inserted / dropped / reordered entry breaks the link.
+    pub prev: [u8; 32],
     /// The narration the DM produced this turn (the exact bound field — a committed
     /// substring of the authenticated response body).
     pub narration: String,
@@ -287,8 +374,9 @@ pub struct LedgerEntry {
     /// THE ATTESTATION — a `verify_zkoracle`-checkable proof this narration was authentic
     /// (from a real model) ∧ well-formed ∧ injection-free.
     pub attestation: ZkOracleAttestation,
-    /// The 32-byte receipt id ([`attestation_commitment`]) — the on-ledger fingerprint a
-    /// light client recomputes.
+    /// The 32-byte receipt id ([`chain_receipt_id`]) — the hash-chain link over
+    /// `(seq, prev, narration, effect, attestation)`, the on-ledger fingerprint a light
+    /// client recomputes.
     pub receipt: [u8; 32],
 }
 
@@ -325,22 +413,87 @@ impl WorldCell {
         }
     }
 
-    /// The receipt id of every landed turn (the tamper-proof chain).
+    /// The receipt id of every landed turn, in order — the hash-chain links.
     pub fn receipts(&self) -> Vec<[u8; 32]> {
         self.ledger.iter().map(|e| e.receipt).collect()
     }
 
-    /// **Re-verify the whole receipt ledger** against `config`: every entry's attestation
-    /// `verify_zkoracle`-accepts (authentic ∧ well-formed ∧ injection-free), its displayed
-    /// narration is the committed attested text (a swapped narration is caught), and its
-    /// receipt commitment recomputes. A tampered / forged entry is distinguishable —
-    /// [`LedgerError`] names which turn and why.
-    pub fn verify_ledger(&self, config: &AnthropicConfig) -> Result<(), LedgerError> {
+    /// **The chain head — the 32-byte tip commitment.** The last entry's receipt id (or
+    /// [`genesis_prev`] for an empty ledger). Because each receipt id transitively commits
+    /// to every earlier entry, the head is a fingerprint of the ENTIRE history: a stranger
+    /// who knows the honest head can hand it to [`WorldCell::verify_ledger_against_head`]
+    /// to detect truncation — dropping entries from the tip yields a different head. Anchor
+    /// this out of band (publish it, submit it to a federation node) to make the whole
+    /// chain un-rewritable to anyone holding only the ledger.
+    pub fn head(&self) -> [u8; 32] {
+        self.ledger
+            .last()
+            .map(|e| e.receipt)
+            .unwrap_or_else(genesis_prev)
+    }
+
+    /// **Re-verify the whole receipt ledger as a HASH CHAIN** against `config`. For every
+    /// entry `i` it checks, in order:
+    /// 1. `entry.seq == i` — else [`LedgerBreak::SeqMismatch`] (a reordered / spliced entry);
+    /// 2. `entry.prev ==` the real predecessor's receipt id (or [`genesis_prev`] for `i = 0`)
+    ///    — else [`LedgerBreak::LinkBroken`] (a broken back-link);
+    /// 3. the entry itself is authentic via [`verify_turn`] — its attestation
+    ///    `verify_zkoracle`-accepts, its displayed narration is the committed attested text,
+    ///    and its receipt id **recomputes** from `(seq, prev, narration, effect, attestation)`
+    ///    — else [`LedgerBreak::EntryInvalid`].
+    ///
+    /// **Caught (no external anchor needed):** in-place mutation of any entry (the receipt
+    /// no longer recomputes, or the narration is no longer the attested text); reordering
+    /// (a `seq`/index mismatch or a broken link); insertion / splice into the history (the
+    /// displaced successor's `seq`/`prev` no longer line up).
+    ///
+    /// **NOT caught here:** truncation to a prefix, and a wholesale re-linked rewrite — both
+    /// are *internally consistent* chains. Detecting those needs a known head:
+    /// [`WorldCell::verify_ledger_against_head`]. Also: because the default `authentic`
+    /// attestation leg is an in-tree FIXTURE (unless the `tlsn-live` feature is on), an
+    /// adversary holding the fixture notary seed can mint fresh valid attestations — so what
+    /// stops entry FORGERY here is the chain-link + receipt-id binding + head anchor, NOT
+    /// attestation authenticity.
+    pub fn verify_ledger(&self, config: &AnthropicConfig) -> Result<(), LedgerBreak> {
+        let mut expected_prev = genesis_prev();
         for (i, entry) in self.ledger.iter().enumerate() {
-            verify_turn(entry, config).map_err(|reason| LedgerError {
-                seq: i as u64,
+            let index = i as u64;
+            if entry.seq != index {
+                return Err(LedgerBreak::SeqMismatch {
+                    index,
+                    found_seq: entry.seq,
+                });
+            }
+            if entry.prev != expected_prev {
+                return Err(LedgerBreak::LinkBroken { index });
+            }
+            verify_turn(entry, config).map_err(|reason| LedgerBreak::EntryInvalid {
+                seq: entry.seq,
                 reason,
             })?;
+            expected_prev = entry.receipt;
+        }
+        Ok(())
+    }
+
+    /// **Re-verify the chain AND pin it to a known head.** Runs [`WorldCell::verify_ledger`]
+    /// (all the internal-consistency teeth) and then checks `self.head() == expected_head`,
+    /// returning [`LedgerBreak::Truncated`] on a mismatch. This is the complete anti-rewrite
+    /// tooth: given the honest head anchored out of band, *any* history that differs from the
+    /// one that produced it — a truncation, or a fully re-linked forgery — is caught, since
+    /// it either fails the internal walk or lands on a different head.
+    pub fn verify_ledger_against_head(
+        &self,
+        config: &AnthropicConfig,
+        expected_head: [u8; 32],
+    ) -> Result<(), LedgerBreak> {
+        self.verify_ledger(config)?;
+        let found_head = self.head();
+        if found_head != expected_head {
+            return Err(LedgerBreak::Truncated {
+                expected_head,
+                found_head,
+            });
         }
         Ok(())
     }
@@ -362,7 +515,17 @@ pub fn verify_turn(
     if !contains(&out.session.response_body, field.as_bytes()) {
         return Err(TurnForgery::NarrationNotAttested);
     }
-    if attestation_commitment(&entry.attestation) != entry.receipt {
+    // The receipt id must recompute as the hash-chain link over the entry's OWN claimed
+    // fields — a fabricated receipt, a mutated narration/effect, or a re-aimed attestation
+    // all break this. (The chain walk additionally checks `prev`/`seq` against neighbours.)
+    let recomputed = chain_receipt_id(
+        entry.seq,
+        &entry.prev,
+        &entry.narration,
+        &entry.effect,
+        &entry.attestation,
+    );
+    if recomputed != entry.receipt {
         return Err(TurnForgery::ReceiptMismatch);
     }
     Ok(out)
@@ -395,26 +558,52 @@ impl std::fmt::Display for TurnForgery {
 
 impl std::error::Error for TurnForgery {}
 
-/// A ledger re-verification failure, naming the offending turn.
+/// **How a ledger hash-chain re-verification failed** — the precise break, mirroring
+/// `spween_dregg::verify::VerifyBreak`. A `Vec` of independently-valid entries could only
+/// ever report [`Self::EntryInvalid`]; the chain reports the *structural* breaks too.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct LedgerError {
-    /// The sequence number of the turn that failed.
-    pub seq: u64,
-    /// Why it failed.
-    pub reason: TurnForgery,
+pub enum LedgerBreak {
+    /// The entry at `index` carries `found_seq != index` — a reordered or spliced entry
+    /// (its sequence number no longer matches its position).
+    SeqMismatch { index: u64, found_seq: u64 },
+    /// The entry at `index` has a `prev` that is not its real predecessor's receipt id —
+    /// the hash-chain back-link is broken (an inserted / dropped / reordered entry).
+    LinkBroken { index: u64 },
+    /// The chain is internally consistent but its head does not match the known anchor —
+    /// entries were TRUNCATED from the tip, or the whole chain was re-linked into a
+    /// different history. Only detectable against a known [`WorldCell::head`].
+    Truncated {
+        expected_head: [u8; 32],
+        found_head: [u8; 32],
+    },
+    /// The entry at sequence `seq` is itself not authentic — its attestation does not
+    /// verify, its narration is not the attested text, or its receipt id does not recompute.
+    EntryInvalid { seq: u64, reason: TurnForgery },
 }
 
-impl std::fmt::Display for LedgerError {
+impl std::fmt::Display for LedgerBreak {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "ledger turn #{} is not authentic: {}",
-            self.seq, self.reason
-        )
+        match self {
+            LedgerBreak::SeqMismatch { index, found_seq } => write!(
+                f,
+                "ledger entry at index {index} carries seq {found_seq} (reordered / spliced)"
+            ),
+            LedgerBreak::LinkBroken { index } => write!(
+                f,
+                "ledger chain link broken at index {index} (prev != predecessor's receipt id)"
+            ),
+            LedgerBreak::Truncated { .. } => write!(
+                f,
+                "ledger head does not match the known anchor (truncated or re-linked)"
+            ),
+            LedgerBreak::EntryInvalid { seq, reason } => {
+                write!(f, "ledger turn #{seq} is not authentic: {reason}")
+            }
+        }
     }
 }
 
-impl std::error::Error for LedgerError {}
+impl std::error::Error for LedgerBreak {}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The DM caps — cap-bounded authority.
@@ -658,7 +847,11 @@ impl<B: DmBrain> DungeonMaster<B> {
             .map_err(DmError::from_prove)?;
         // (3) LAND the turn: apply the effect, append the receipted attested turn.
         let seq = world.ledger.len() as u64;
-        let receipt = attestation_commitment(&attestation);
+        let prev = world.head();
+        let narration = String::from_utf8_lossy(&field).into_owned();
+        // The on-ledger receipt id is a HASH-CHAIN LINK: it binds this turn's seq, its
+        // predecessor's receipt id (`prev`), its narration, its effect, and its attestation.
+        let receipt = chain_receipt_id(seq, &prev, &narration, &mv.effect, &attestation);
         // FEDERATION SEAM: route the receipt commitment to a real node BEFORE touching
         // the world. In `Local` mode this is a no-op; in `Federation` mode a rejected /
         // unreachable / non-landing submit refuses the turn here — the world advances not
@@ -672,7 +865,8 @@ impl<B: DmBrain> DungeonMaster<B> {
         }
         world.ledger.push(LedgerEntry {
             seq,
-            narration: String::from_utf8_lossy(&field).into_owned(),
+            prev,
+            narration,
             effect: mv.effect,
             attestation,
             receipt,
