@@ -1,6 +1,6 @@
 // THE DRIVEN RUN — THE COLLECTIVE DUNGEON: a crowd steers one shared party by VOTE.
 //
-// Spawns the native attested-dm dungeon-service (real gemma2:2b via ollama), serves the party
+// Spawns the native attested-dm dungeon-service (hosted Claude Haiku 4.5 via Bedrock, or a local model), serves the party
 // page against it (serve.mjs proxying /party/* + /game/*), loads it in headless Chromium, and
 // plays THE SHARED DUNGEON by VOTE through the page's own affordances (open → cast → close →
 // the winning move resolves through the SAME /game/act path), ASSERTING the INVARIANTS against
@@ -33,6 +33,21 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import net from "node:net";
 import path from "node:path";
+
+// A short, HONEST speaker label from the response's narratorKind (never a hardcoded model name).
+function speaker(narratorKind) {
+  const k = String(narratorKind || "");
+  if (k.startsWith("model:")) {
+    const id = k.slice(6);
+    if (/haiku/i.test(id)) return "haiku";
+    if (/nova/i.test(id)) return "nova";
+    if (/gemma/i.test(id)) return "gemma2";
+    return id.split(/[.\/]/).pop() || "model";
+  }
+  if (k.startsWith("scripted")) return "scripted";
+  return k || "narrator";
+}
+
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(__dirname, "..");
@@ -73,7 +88,7 @@ const countFor = (tally, cmd) => {
 async function main() {
   await mkdir(OUT, { recursive: true });
 
-  // ── 1. spawn the native attested-dm dungeon-service (real gemma2:2b) ──
+  // ── 1. spawn the native attested-dm dungeon-service (the hosted/metered narrator) ──
   const SERVICE_PORT = 8792;
   const svc = spawn(SERVICE_BIN, [], {
     env: { ...process.env, DUNGEON_BIND: `127.0.0.1:${SERVICE_PORT}` },
@@ -239,7 +254,7 @@ function renderTranscript({ base, narratorKind, realModel, rounds, finalState })
     L.push("-".repeat(78));
     if (r.dupRefused) L.push(`  · a SECOND ballot from a voter who already voted → REFUSED (already-voted, one ballot per voter)`);
     L.push(`  » the party voted: ${r.winner}`);
-    L.push(`    gemma2: ${oneline(r.narration) || "(no narration this run)"}`);
+    L.push(`    ${speaker(narratorKind)}: ${oneline(r.narration) || "(no narration this run)"}`);
     if (r.outcome === "landed") {
       L.push(`    world : LANDED → room ${r.room} · receipt rail #${r.receipts} (a verified turn)`);
       if (r.note) L.push(`            ${r.note}`);

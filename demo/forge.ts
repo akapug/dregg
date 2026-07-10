@@ -1,6 +1,6 @@
 /**
  * THE FORGE — write a `.dungeon` world in text, hit ▶ Play, and it becomes a real
- * attested AI dungeon in the tab: a local model (gemma2:2b) narrates, the WORLD resolves
+ * attested AI dungeon in the tab: a model (hosted Claude Haiku 4.5, or local gemma2) narrates, the WORLD resolves
  * every move, and a hash-chain remembers it. Author → play → verify. No Rust, no recompile.
  *
  * The LEFT pane is a line-numbered `.dungeon` editor (a small commented starter + a sample
@@ -286,7 +286,7 @@ function renderNarratorKind(kind: string) {
     el.innerHTML = `🧠 narrated by a real local model <code>${escapeHtml(kind.slice("model:".length))}</code> — it may narrate anything; the <b>world</b> resolves every move.`;
   } else {
     el.className = "narrator";
-    el.innerHTML = "🎭 <b>deterministic scripted narrator</b> (ollama unreachable) — the world resolution and the receipt rail are <b>real</b>. Bring up <code>gemma2:2b</code> for live narration.";
+    el.innerHTML = "🎭 <b>deterministic scripted narrator</b> (ollama unreachable) — the world resolution and the receipt rail are <b>real</b>. Start the game service (hosted Claude Haiku 4.5, or a local ollama) for live narration.";
   }
 }
 
