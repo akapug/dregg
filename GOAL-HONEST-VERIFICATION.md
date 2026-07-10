@@ -248,3 +248,17 @@ AirSoundness.lean:234). `fold_close_of_two_alpha`/`friProximity_discharge` are f
 - ✅ reactive subsystem `515f635d9` — OFF-KERNEL is now a THEOREM (promise/notify_kernel_unchanged : k' = k), and
   `no_double_react` PROVED by RIDING the committed nullifier gate (note_no_double_spend), not re-modeling it.
   Unmodeled deployed behaviour named: resolve_condition temporal gate, expire block-height, cascading resolution.
+- ✅✅ DEBT-A brick 4 `37b121f55` — **the permOutZ finding is CLOSED**: permWidth / chipHashIsLane0 /
+  chipTableFaithful ALL PROVED at the REAL `Poseidon2BabyBearW16.perm` (KAT bit-exact); `satisfied2Faithful_
+  deployed` constructs the full object for transferV3 at the deployed pair. chipHashIsLane0 is TRUE for the
+  deployed pair (Ir2Air::Chip returns state[0]; KAT lane 0 = 1906786279 ≠ 0). Teeth include the vacuity contrast
+  vs permOutZ. Closes DEBT-A obligation #1 of 5.
+- ◐ DEBT-A brick 5 `d569bf31e` — AIR quotient acceptance PROVES rowConstraints' ARITHMETIC arms (+ the whole
+  thing for embedV1-shape descriptors); 8 legs remain as EXPLICIT VISIBLE PREMISES (not carriers): LogUp bus,
+  map-ops AIR, RangeTableSound, chip table (now discharged by brick 4), LogUp balance, table-assembly
+  faithfulness, memory-table AIR. Half-(ii) companion to circuit_sound_via_fri.
+- ⚠ DEBT-A StarkSound target `585c71894` — the bridge grew the trusted surface from ONE to TWO: AlgoStarkSound
+  (F=Int not BabyBear, abstract params, 0 instances) + DeployedRefines (never proved, taken as `href`);
+  `starkSound_of_verifyAlgo` = `carrier.extract ∘ href`. Doc-comment "PROVEN verifier algorithm" corrected in-file.
+  DEBT-A obligations: #1 ✅ · #2 FRI@deployed-params (in flight) · #3 FriProximity bridge (in flight) · #4 real
+  FriExtract (in flight) · #5 DeployedRefines (NOBODY has attempted — firing now).
