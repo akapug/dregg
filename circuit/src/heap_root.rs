@@ -831,6 +831,47 @@ impl CanonicalHeapTree8 {
             new_root: new_tree.root8().limbs(),
         })
     }
+
+    /// Apply an in-place VALUE update at an EXISTING address, returning the new
+    /// 8-felt root in **O(depth)** `node8` hashes — the 8-felt twin of
+    /// [`CanonicalHeapTree::apply_value_update`]. Only the single leaf→root path
+    /// is recomposed (every off-path node is unchanged), and the retained sorted
+    /// leaf's value is refreshed so `position_of` / `update_witness` stay honest.
+    /// Returns `None` if `addr` is not present — a fresh address is a sorted
+    /// INSERT that shifts positions (rebuild via [`CanonicalHeapTree8::new`]).
+    ///
+    /// Byte-identical to rebuilding the tree over the updated leaf set: the same
+    /// sorted positions, the same off-path `node8` digests, only the one path's
+    /// eight-lane digests differ. This is the incremental producer a persistent
+    /// cache (`dregg_cell::CellState`'s 8-felt heap-tree cache) drives on the
+    /// common heap write, turning the O(n) full recompute into an O(log n) path
+    /// update at 8-felt width.
+    pub fn apply_value_update(
+        &mut self,
+        addr: BabyBear,
+        value: BabyBear,
+    ) -> Option<[BabyBear; HEAP_DIGEST_W]> {
+        let pos = self.position_of(addr)?;
+        // Refresh the retained sorted leaf (addr unchanged ⇒ sort order preserved).
+        self.sorted_leaves[pos].value = value;
+        // Recompute only the leaf→root path. A sibling beyond the stored prefix is
+        // the all-padding empty-subtree root for its level (unchanged by this
+        // write); `node8()` supplies it.
+        let mut idx = pos;
+        let mut cur = HeapLeaf { addr, value }.digest8();
+        self.levels[0][idx] = cur;
+        for level in 0..self.depth {
+            let (l, r) = if idx & 1 == 0 {
+                (cur, self.node8(level, idx + 1))
+            } else {
+                (self.node8(level, idx - 1), cur)
+            };
+            cur = heap_node8(l, r);
+            idx >>= 1;
+            self.levels[level + 1][idx] = cur;
+        }
+        Some(cur)
+    }
 }
 
 /// The 8-felt twin of [`HeapUpdateWitness`]: 8-felt siblings and roots. The
@@ -1078,6 +1119,47 @@ mod tests {
             assert_eq!(got, rebuilt, "incremental root diverged from rebuild");
             assert_eq!(tree.root(), rebuilt);
         }
+    }
+
+    /// The 8-FELT incremental value update stays byte-identical to a fresh 8-felt
+    /// rebuild across a randomized chain — the twin of
+    /// `apply_value_update_random_chain_matches_rebuild`, at `node8` width. Guards
+    /// the O(log n) path `dregg_cell::CellState` drives for the WIDE stored
+    /// `heap_root`.
+    #[test]
+    fn apply_value_update8_random_chain_matches_rebuild() {
+        const DEPTH: usize = 10;
+        let mut rng = Rng(0x1CE_BEEF_1234_0008u64);
+        let keys: Vec<(u32, u32)> = (0..25).map(|i| (i % 5, i / 5)).collect();
+        let mut values: std::collections::BTreeMap<(u32, u32), u32> =
+            keys.iter().map(|&k| (k, 1)).collect();
+        let leaves = |vals: &std::collections::BTreeMap<(u32, u32), u32>| -> Vec<HeapLeaf> {
+            vals.iter().map(|(&(c, k), &v)| entry(c, k, v)).collect()
+        };
+        let mut tree = CanonicalHeapTree8::new(leaves(&values), DEPTH);
+        for _ in 0..500 {
+            let (c, k) = keys[(rng.below(keys.len() as u32)) as usize];
+            let v = rng.next_u64() as u32;
+            *values.get_mut(&(c, k)).unwrap() = v;
+            let addr = heap_addr(BabyBear::new(c), BabyBear::new(k));
+            let got = tree.apply_value_update(addr, BabyBear::new(v)).unwrap();
+            let rebuilt = CanonicalHeapTree8::new(leaves(&values), DEPTH)
+                .root8()
+                .limbs();
+            assert_eq!(
+                got, rebuilt,
+                "incremental 8-felt root diverged from rebuild"
+            );
+            assert_eq!(tree.root8().limbs(), rebuilt);
+        }
+        // An absent address has no in-place update.
+        assert!(
+            tree.apply_value_update(
+                heap_addr(BabyBear::new(9), BabyBear::new(9)),
+                BabyBear::new(1)
+            )
+            .is_none()
+        );
     }
 
     // ---- SPARSE-FOLD BYTE-IDENTITY DIFFERENTIAL (temp; pins step 1 of INCREMENTAL-COMMITMENT.md) ----

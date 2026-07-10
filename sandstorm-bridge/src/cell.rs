@@ -223,15 +223,19 @@ impl Umem {
         DataRoot(root_string(&self.commit_root_bytes()))
     }
 
-    /// The **raw 32-byte heap root** of the current `/var` — the real cell heap-root:
-    /// [`dregg_circuit::heap_root::compute_heap_root`] over the grain's leaves, encoded
-    /// exactly as `dregg_cell` encodes a heap-root felt. This is the value a real
-    /// deployment's ledger carries for the cell's heap (the `heap_root` register the
-    /// canonical `state_commitment` absorbs). [`commit`](Self::commit) is this wrapped
-    /// in the `heap1…` wire form, so the two are the same commitment
-    /// ([`DataRoot::from_root_bytes`]). This is the value [`crate::grain::grain_cell_commitment`]
-    /// publishes, so "the cell's committed heap-root" == "the root the served card is a
-    /// leaf under".
+    /// The **raw 32-byte `/var` heap root** — the 1-felt sorted-Poseidon2 root
+    /// [`dregg_circuit::heap_root::compute_heap_root`] over the grain's leaves,
+    /// encoded lane-0 via [`felt_to_bytes32`]. This is the grain's OWN `/var`
+    /// commitment (the root its inclusion proofs open against), the value
+    /// [`crate::grain::grain_cell_commitment`] publishes, so "the grain's committed
+    /// `/var` root" == "the root the served card is a leaf under".
+    ///
+    /// NOTE: this is the 1-felt LANE-0 root; the cell's off-chain `heap_root`
+    /// register has since widened to the faithful 8-felt `node8` root
+    /// (`dregg_cell::state::compute_heap_root`), so the two schemes no longer
+    /// coincide — see `commit_is_the_real_dregg_heap_root_scheme` for the residual.
+    /// [`commit`](Self::commit) wraps this in the `heap1…` wire form, so the two are
+    /// the same commitment ([`DataRoot::from_root_bytes`]).
     pub fn commit_root_bytes(&self) -> [u8; 32] {
         felt_to_bytes32(heap_compute_root(self.heap_leaves()))
     }
@@ -287,19 +291,27 @@ mod tests {
         assert!(Umem::new().commit().0.starts_with("heap1"));
     }
 
-    /// **THE SCHEME IS THE REAL ONE.** The empty-`/var` root is byte-identical to
-    /// `dregg_cell::empty_heap_root()` (the fixed `heap_root` a legacy no-heap-activity
-    /// cell carries), and a non-empty `/var` commits through the SAME
-    /// `dregg_circuit::heap_root::compute_heap_root` the kernel commits a cell's heap
-    /// with — NOT a bespoke sha256 tree. This is the value a real deployment's ledger
-    /// carries for the cell's heap.
+    /// **THE SCHEME IS THE REAL POSEIDON2 ONE (not a bespoke sha256 tree).** The
+    /// `/var` root commits through `dregg_circuit::heap_root::compute_heap_root`
+    /// (the 1-felt sorted-Poseidon2 tree), encoded lane-0 via [`felt_to_bytes32`].
+    ///
+    /// NOTE (off-chain lane-0 residual): this grain `/var` root is the 1-felt
+    /// LANE-0 projection — the SAME ~31-bit off-chain forge class the cell's
+    /// `heap_root` / `fields_root` / `cap_root` closed by widening to the faithful
+    /// 8-felt `node8` root (`dregg_cell::state::compute_heap_root` et al., now
+    /// `digest8_to_bytes32(compute_canonical_heap_root_8(..))`). The grain's `/var`
+    /// commitment + its inclusion proofs (`prove` / `verify_inclusion`) still ride
+    /// the 1-felt scheme, so it no longer equals `dregg_cell::empty_heap_root()`
+    /// (which is now the node8 wide root). Widening the grain `/var` root to the
+    /// node8 8-felt scheme (with 8-felt inclusion paths) is a SEPARATE lane.
     #[test]
     fn commit_is_the_real_dregg_heap_root_scheme() {
-        // Empty heap → exactly the dregg-cell empty heap-root constant.
+        // Empty heap → exactly the 1-felt circuit empty heap-root, lane-0 encoded
+        // (the grain's own scheme — NOT the cell's now-wide `empty_heap_root`).
         assert_eq!(
             Umem::new().commit_root_bytes(),
-            dregg_cell::empty_heap_root(),
-            "empty /var root == dregg_cell::empty_heap_root()"
+            felt_to_bytes32(dregg_circuit::heap_root::empty_heap_root()),
+            "empty /var root == the 1-felt circuit empty heap-root (grain lane-0 scheme)"
         );
 
         // Non-empty heap → the dregg_circuit heap-root primitive (the exact function

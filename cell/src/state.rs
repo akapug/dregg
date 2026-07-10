@@ -1,10 +1,8 @@
 use dregg_circuit::cap_root::fold_bytes32;
 use dregg_circuit::field::BabyBear;
 use dregg_circuit::heap_root::{
-    CanonicalHeapTree, HEAP_TREE_DEPTH, HeapLeaf,
-    compute_canonical_heap_root_8 as compute_canonical_heap_root_8_circuit,
-    compute_heap_root as compute_heap_root_felt, empty_heap_root as empty_heap_root_felt,
-    heap_addr,
+    CanonicalHeapTree8, HEAP_TREE_DEPTH, HeapLeaf,
+    compute_canonical_heap_root_8 as compute_canonical_heap_root_8_circuit, heap_addr,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -90,11 +88,11 @@ impl Default for FieldVisibility {
 }
 
 /// A **non-committed, reconstructable-from-`heap_map`** incremental cache of the
-/// sorted-Poseidon2 heap tree ([`CanonicalHeapTree`]) that produces
-/// [`CellState::heap_root`]. Kept in [`CellState`] so a heap write that only
-/// changes an EXISTING address's value ([`CanonicalHeapTree::apply_value_update`])
-/// is an O(log n) path recompute instead of an O(n) full
-/// [`compute_heap_root`] rebuild.
+/// faithful 8-felt sorted-Poseidon2 heap tree ([`CanonicalHeapTree8`]) that
+/// produces the WIDE [`CellState::heap_root`]. Kept in [`CellState`] so a heap
+/// write that only changes an EXISTING address's value
+/// ([`CanonicalHeapTree8::apply_value_update`]) is an O(log n) path recompute
+/// instead of an O(n) full [`compute_heap_root`] rebuild.
 ///
 /// It is deliberately EXCLUDED from the cell's identity and its serialized bytes:
 /// - `PartialEq`/`Eq` ignore it — two cells are equal iff their COMMITTED state
@@ -108,7 +106,7 @@ impl Default for FieldVisibility {
 ///
 /// `Clone` copies the built tree (cheaper than a rebuild). `Debug` is opaque.
 #[derive(Clone, Default)]
-struct HeapTreeCache(Option<CanonicalHeapTree>);
+struct HeapTreeCache(Option<CanonicalHeapTree8>);
 
 impl PartialEq for HeapTreeCache {
     /// The cache is not part of a cell's committed identity.
@@ -417,7 +415,8 @@ pub fn empty_fields_root() -> [u8; 32] {
     compute_fields_root(&BTreeMap::new())
 }
 
-/// Compute the OPENABLE root committing a user-field map.
+/// Compute the OPENABLE root committing a user-field map — the FAITHFUL 8-felt
+/// (~124-bit) encoding a ledgerless off-chain verifier compares.
 ///
 /// The Rust realization of the Lean `FieldsMap.fieldsRoot` openable digest: the
 /// sorted Poseidon2 binary Merkle root (the SAME `dregg_circuit::heap_root`
@@ -427,14 +426,21 @@ pub fn empty_fields_root() -> [u8; 32] {
 /// cannot share a root — the anti-vacuity guarantee, a `:= 0` stub is
 /// forbidden). An empty map yields the fixed [`empty_fields_root`].
 ///
+/// The returned 32 bytes are the [`crate::commitment::digest8_to_bytes32`]
+/// packing of the FULL native-`node8` 8-felt root ([`compute_canonical_fields_root_8`]):
+/// lane `i` in bytes `[4i..4i+4]`. This is the SAME 8-felt value the circuit
+/// binds at the rotated `fields_root` column group (limb 36 ‖ 65,66,19..23), so
+/// the off-chain commitment now carries the circuit's ~124-bit collision floor —
+/// closing the ~31-bit lane-0 forge a `felt_to_bytes32` (lane-0-only) encoding
+/// left open. Bytes `[0..4]` still equal the historical lane-0 projection.
+///
 /// Because the root is an OPENABLE sorted-Poseidon2 tree (not a BLAKE3 sponge),
-/// the deployed committed `fields_root` limb (36) is the root a ledgerless
-/// light client can constrain via the refusal map-op WRITE gate: a forged
-/// post-`fields_root` is UNSAT vs the genuine `insert(pre_root, AUDIT_KEY,
-/// audit_felt)` (`circuit/tests/vk_epoch_refusal_lifecycle_light_client_binding.rs`).
+/// the committed `fields_root` limb (36) is the root a ledgerless light client
+/// can constrain via the refusal map-op WRITE gate: a forged post-`fields_root`
+/// is UNSAT vs the genuine `insert(pre_root, AUDIT_KEY, audit_felt)`
+/// (`circuit/tests/vk_epoch_refusal_lifecycle_light_client_binding.rs`).
 pub fn compute_fields_root(map: &BTreeMap<u64, FieldElement>) -> [u8; 32] {
-    let root = compute_heap_root_felt(fields_root_leaves(map));
-    babybear_to_bytes32(root)
+    crate::commitment::digest8_to_bytes32(compute_canonical_fields_root_8(map).limbs())
 }
 
 /// Compute the FAITHFUL 8-felt canonical fields root over a user-field map: the
@@ -456,39 +462,34 @@ pub fn compute_canonical_fields_root_8(
     compute_canonical_heap_root_8_circuit(fields_root_leaves(map))
 }
 
-/// The canonical 32-byte encoding of a BabyBear felt: the felt's 4
-/// little-endian bytes in the low 4 positions, the rest zero. Deterministic
-/// and injective on canonical BabyBear values (< p), so distinct roots encode
-/// to distinct byte strings.
-fn babybear_to_bytes32(felt: BabyBear) -> [u8; 32] {
-    let mut out = [0u8; 32];
-    out[0..4].copy_from_slice(&felt.as_u32().to_le_bytes());
-    out
-}
-
 /// The digest of the **empty** heap — the fixed `heap_root` constant a legacy
 /// (no-heap-activity) cell carries. Cell-independent: folding it into the
 /// canonical commitment is a no-op for legacy cells (`UNIVERSAL-MAP-ROTATION.md`
-/// §2.4).
+/// §2.4). The FAITHFUL 8-felt encoding (via [`compute_heap_root`]), matching the
+/// wide stored `heap_root`.
 pub fn empty_heap_root() -> [u8; 32] {
-    babybear_to_bytes32(empty_heap_root_felt())
+    compute_heap_root(&BTreeMap::new())
 }
 
-/// Compute the canonical heap root over a `(collection_id, key) → value` map.
+/// Compute the canonical heap root over a `(collection_id, key) → value` map —
+/// the FAITHFUL 8-felt (~124-bit) encoding a ledgerless off-chain verifier
+/// compares (the value stored in [`CellState::heap_root`]).
 ///
 /// The Rust shadow of the Lean `Substrate.Heap.root`: a sorted Poseidon2 binary
 /// Merkle tree over `hash[hash[coll, key], value]` leaves. Values are folded
 /// from 32-byte `FieldElement`s to a single BabyBear felt so the leaf shape
 /// matches `circuit::heap_root::HeapLeaf`.
+///
+/// The returned 32 bytes are the [`crate::commitment::digest8_to_bytes32`]
+/// packing of the FULL native-`heap_node8` 8-felt root
+/// ([`compute_canonical_heap_root_8`]): lane `i` in bytes `[4i..4i+4]`. This is
+/// the SAME 8-felt value the circuit binds at the rotated `heap_root` column
+/// group (limb 28 ‖ 58..64), so the off-chain BLAKE3 state commitment
+/// (`hash_cell_state_into`) now carries the circuit's ~124-bit collision floor —
+/// closing the ~31-bit lane-0 forge a lane-0-only (`babybear_to_bytes32`)
+/// encoding left open. Bytes `[0..4]` still equal the historical lane-0 felt.
 pub fn compute_heap_root(map: &BTreeMap<(u32, u32), FieldElement>) -> [u8; 32] {
-    let leaves: Vec<HeapLeaf> = map
-        .iter()
-        .map(|((coll, key), value)| HeapLeaf {
-            addr: heap_addr(BabyBear::new(*coll), BabyBear::new(*key)),
-            value: fold_bytes32(value),
-        })
-        .collect();
-    babybear_to_bytes32(compute_heap_root_felt(leaves))
+    crate::commitment::digest8_to_bytes32(compute_canonical_heap_root_8(map).limbs())
 }
 
 /// Compute the FAITHFUL 8-felt canonical heap root over a `(collection_id, key) → value` map:
@@ -942,15 +943,15 @@ impl CellState {
     /// used for the reshaping heap writes (fresh insert / remove) and by
     /// [`reseal_heap_root`](Self::reseal_heap_root). The resulting `heap_root` is
     /// byte-identical to [`compute_heap_root`]`(&self.heap_map)` (both fold the
-    /// same leaves through the same [`CanonicalHeapTree`]).
+    /// same leaves through the same [`CanonicalHeapTree8`]).
     fn rebuild_heap_cache(&mut self) {
         let leaves: Vec<HeapLeaf> = self
             .heap_map
             .iter()
             .map(|((coll, key), value)| Self::heap_leaf(*coll, *key, value))
             .collect();
-        let tree = CanonicalHeapTree::new(leaves, HEAP_TREE_DEPTH);
-        self.heap_root = babybear_to_bytes32(tree.root());
+        let tree = CanonicalHeapTree8::new(leaves, HEAP_TREE_DEPTH);
+        self.heap_root = crate::commitment::digest8_to_bytes32(tree.root8().limbs());
         self.heap_tree_cache.0 = Some(tree);
     }
 
@@ -959,7 +960,7 @@ impl CellState {
     ///
     /// **Perf:** the common case — a value update at an ALREADY-PRESENT address —
     /// is an O(log n) incremental path recompute via
-    /// [`CanonicalHeapTree::apply_value_update`] over the persistent cache. A
+    /// [`CanonicalHeapTree8::apply_value_update`] over the persistent cache. A
     /// FRESH address is a sorted insert that shifts leaf positions, so it rebuilds
     /// the cache (O(n)); that reshaping cost is unavoidable and matches the prior
     /// behaviour. Either way the stored `heap_root` equals
@@ -976,7 +977,7 @@ impl CellState {
             let vfelt = fold_bytes32(&value);
             if let Some(tree) = self.heap_tree_cache.0.as_mut() {
                 if let Some(root) = tree.apply_value_update(addr, vfelt) {
-                    self.heap_root = babybear_to_bytes32(root);
+                    self.heap_root = crate::commitment::digest8_to_bytes32(root);
                     return true;
                 }
             }
