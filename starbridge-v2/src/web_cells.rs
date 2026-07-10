@@ -836,6 +836,7 @@ fn grant_cap(from: CellId, to: CellId) -> Effect {
             expires_at: None,
             allowed_effects: None,
             stored_epoch: None,
+            provenance: [0u8; 32],
         },
     }
 }

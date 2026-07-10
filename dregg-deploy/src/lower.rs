@@ -453,6 +453,10 @@ impl Lowered {
                 expires_at,
                 allowed_effects,
                 stored_epoch: None,
+                // Unprovenanced sentinel: this deploy-lowered grant does not yet
+                // compute a derivation-node provenance (a follow-up for the
+                // derivation lane once provenance joins the canonical cap leaf).
+                provenance: [0u8; 32],
             };
             let effect = Effect::GrantCapability { from, to, cap };
             grant_nodes.push(GrantNode {
