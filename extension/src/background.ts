@@ -15,10 +15,12 @@ import {
   CellEngine,
   DocEngine,
   DocTextEngine,
+  StoryEngine,
   MapWebOfCells,
   defaultResolveObject,
   defaultResolveDoc,
   defaultResolveDocText,
+  defaultResolveStory,
   type PollPortRequest,
   type PollWorldCtor,
   type CellPortRequest,
@@ -26,6 +28,8 @@ import {
   type DocWorldCtor,
   type DocTextPortRequest,
   type DocTextWorldCtor,
+  type StoryPortRequest,
+  type StoryWorldCtor,
 } from "./port";
 import {
   Netlayer,
@@ -3199,6 +3203,7 @@ const PAGE_ALLOWED_METHODS = new Set<MessageType>([
   "dregg:cell",  // composition port: <dregg-embed> / <dregg-transclude>
   "dregg:doc",   // verifiable-document authoring port: <dregg-doc>
   "dregg:doctext", // free-text authoring port: <dregg-doc editable>
+  "dregg:story", // verifiable choose-your-own-adventure port: <dregg-story>
 ]);
 
 const POPUP_ONLY_METHODS = new Set<MessageType>([
@@ -3395,6 +3400,47 @@ function getDocTextEngine(): DocTextEngine {
   return docTextEngine;
 }
 
+// ---------------------------------------------------------------------------
+// Verifiable choose-your-own-adventure engine — <dregg-story>.
+// docs/MEGASPEC-worlds-ide-and-the-verified-web.md §4.
+//
+// The SAME split again: this ENGINE (background, wasm-side) owns the real wasm
+// `StoryWorld`, resolves the story over the netlayer, renders the current passage
+// (prose + choices), and ADVANCES the story (a real cap-gated verified turn) ONLY
+// after the un-overlayable confirm-intent consent approves the faithful reading of
+// the choice — a gated/invalid choice fails closed WITHOUT prompting. READ + VERIFY
+// need NO custody (the free, trustless tier). The element reaches it ONLY through
+// the "dregg:story" message — no wasm, no keys, no story graph ever leave this
+// context. `defaultResolveStory` is the stand-in until a story netlayer fetch lands.
+// ---------------------------------------------------------------------------
+
+let storyEngine: StoryEngine | null = null;
+
+function getStoryEngine(): StoryEngine {
+  requireWasm("story");
+  if (!storyEngine) {
+    const StoryWorld = (wasm as unknown as { StoryWorld?: StoryWorldCtor }).StoryWorld;
+    if (!StoryWorld) throw new Error("StoryWorld unavailable in wasm module");
+    storyEngine = new StoryEngine({
+      StoryWorld,
+      // TODO: a story netlayer fetch (content-addressed story → world); until then
+      // the stand-in resolver (a malformed addr fails closed).
+      resolveStory: defaultResolveStory,
+      // Custody consent for a CHOICE: the faithful reading shown in extension chrome
+      // the page cannot overlay or clickjack (the load-bearing property). Every choice
+      // is a real verified turn, so every choice asks — BEFORE the story advances.
+      consent: (req) =>
+        showTurnConfirmation({
+          explanation: req.explanation,
+          turnId: req.turnId,
+          origin: req.origin,
+          hasUnknown: false,
+        }),
+    });
+  }
+  return storyEngine;
+}
+
 async function handleMessage(message: Record<string, unknown>, sender: chrome.runtime.MessageSender): Promise<Record<string, unknown>> {
   // Security: strip _skipDisclosure from page-originated requests.
   if (sender?.tab && message?.request) {
@@ -3484,6 +3530,24 @@ async function handleMessage(message: Record<string, unknown>, sender: chrome.ru
         text: message.text as string,
       } as DocTextPortRequest;
       const result = await getDocTextEngine().handle(req, origin);
+      return { id: message.id, result };
+    }
+
+    case "dregg:story": {
+      // <dregg-story>: resolveStory / renderStory (passage prose + choices) /
+      // chooseChoice (a real verified turn — consent BEFORE the advance, fail-closed
+      // on a gated/invalid choice) / verifyStory (the stranger's receipt-chain replay).
+      // READ + VERIFY need no custody; choosing is a custody write.
+      const origin =
+        (message._origin as string) ||
+        (sender?.tab?.url ? new URL(sender.tab.url).origin : undefined) ||
+        "unknown";
+      const req: StoryPortRequest = {
+        op: message.op as StoryPortRequest["op"],
+        uri: message.uri as string,
+        index: Number(message.index ?? 0),
+      } as StoryPortRequest;
+      const result = await getStoryEngine().handle(req, origin);
       return { id: message.id, result };
     }
 
@@ -4346,7 +4410,7 @@ chrome.runtime.onMessage.addListener((message: Record<string, unknown>, sender: 
     // transient cold start rather than a real verification failure.
     if ((message.type === "dregg:authorize" || message.type === "dregg:poll" ||
          message.type === "dregg:cell" || message.type === "dregg:doc" ||
-         message.type === "dregg:doctext") && !ready) {
+         message.type === "dregg:doctext" || message.type === "dregg:story") && !ready) {
       return new Promise((resolve) => {
         pendingQueue.push({ msg: message, sender, resolve });
       });

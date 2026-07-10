@@ -7,6 +7,7 @@ import type { MessageType } from "./types";
 import { startDetector } from "./detect";
 import { registerCompositionElements } from "./elements/dregg-embed";
 import { registerDocElement } from "./elements/dregg-doc";
+import { registerStoryElement } from "./elements/dregg-story";
 
 // Generate a random nonce for this injection session to prevent event spoofing.
 const SESSION_NONCE = crypto.randomUUID();
@@ -30,6 +31,12 @@ registerCompositionElements();
 // document, holds a first-class conflict as BOTH alternatives side by side, and
 // PUBLISHES a resolution as a real verified turn through the background DocEngine.
 registerDocElement();
+
+// The verifiable choose-your-own-adventure (MEGASPEC §4): register `<dregg-story>`.
+// READ + VERIFY are the free, trustless tier (a bare browser SEES the story + a
+// replay-verified badge); CHOOSING a passage is a real custody-gated verified turn
+// routed through the background StoryEngine, and a stranger can replay the receipt chain.
+registerStoryElement();
 
 // Methods that any page origin can call without prior approval.
 const UNRESTRICTED_METHODS = new Set<MessageType>([

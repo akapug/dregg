@@ -178,6 +178,8 @@ export type MessageType =
   | "dregg:doc"
   // Free-text authoring port — <dregg-doc editable> (resolveText/renderText/applyEdit/publishText/verifyText)
   | "dregg:doctext"
+  // Verifiable choose-your-own-adventure port — <dregg-story> (resolveStory/renderStory/chooseChoice/verifyStory)
+  | "dregg:story"
   // Node configuration
   | "dregg:getNodeConfig"
   | "dregg:setNodeConfig"

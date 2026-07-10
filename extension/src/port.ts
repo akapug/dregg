@@ -1284,3 +1284,329 @@ export class DocTextEngine {
     };
   }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// THE VERIFIABLE STORY ENGINE — `<dregg-story>` (a choose-your-own-adventure a
+// stranger can replay). docs/MEGASPEC-worlds-ide-and-the-verified-web.md §4.
+//
+// The SAME split as `<dregg-doc>`: this ENGINE (background, wasm-side) owns the
+// real wasm `StoryWorld`, resolves the story over the netlayer, renders the
+// current passage's prose + its choices, and ADVANCES the story (a real cap-gated
+// verified turn) ONLY after the injected custody consent approves the faithful
+// reading of the choice-turn. A gated/unavailable/invalid choice FAILS CLOSED
+// WITHOUT ever prompting; a denied consent commits nothing. READ (`renderStory`)
+// and VERIFY (`verifyStory`) need NO custody — the free, trustless tier a bare
+// browser gets. The element reaches this ONLY through the "dregg:story" message —
+// no wasm, no keys, no story graph ever leave this context. Absent a node,
+// `defaultResolveStory` is the stand-in; a malformed addr fails closed — mirrors
+// the poll/doc engines' `default*` resolvers exactly.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** One choice at the current passage — its index, text, and whether it is
+ *  currently available (a gated choice is SHOWN, attributed, but not takeable). */
+export interface StoryChoice {
+  index: number;
+  text: string;
+  available: boolean;
+}
+
+/** The `StoryWorld` wasm surface this engine needs (the storyworld contract the
+ *  parallel wasm lane implements; the fixture drives an in-memory stand-in). Every
+ *  choice is a real verified turn; `verify()` replays the whole receipt chain. */
+export interface StoryWorldLike {
+  /** The current passage's name. */
+  currentPassage(): string;
+  /** The narrative prose to render for the current passage. */
+  passageProse(): string;
+  /** The choices at the current passage: JSON `[{index, text, available}]`. */
+  choicesJson(): string;
+  /** Take a choice as a verified turn: JSON `{ok, passage, receiptCount, commitmentHex, error?}`.
+   *  Fails closed (`ok:false`) on a gated/invalid choice — the boundary does not move. */
+  advance(index: number): string;
+  /** Replay the receipt chain from genesis (the stranger's check). */
+  verify(): boolean;
+  /** The committed story commitment (hex). */
+  commitmentHex(): string;
+  /** How many verified turns (choices) are in the receipt tape. */
+  receiptCount(): number;
+}
+export interface StoryWorldCtor {
+  new (): StoryWorldLike;
+}
+
+// ── the story request/response protocol ─────────────────────────────────────
+export type StoryPortRequest =
+  | { op: "resolveStory"; uri: string }
+  | { op: "renderStory"; uri: string }
+  | { op: "chooseChoice"; uri: string; index: number }
+  | { op: "verifyStory"; uri: string };
+
+export interface StoryResolveResponse {
+  ok: boolean;
+  verified: boolean;
+  tier: TrustTier;
+  object?: { kind: string; addr: string };
+  /** Whether this provider can authorize a choice (CUSTODY). READ + VERIFY never
+   *  need it; `false` ⇒ the story renders + verifies but is read-only. */
+  custody?: boolean;
+  passage?: string;
+  commitment?: string;
+  receiptCount?: number;
+  error?: string;
+}
+
+export interface StoryRenderResponse {
+  ok: boolean;
+  tier: TrustTier;
+  passage?: string;
+  /** The narrative prose for the current passage. */
+  prose?: string;
+  /** The choices (each attributed with its availability) — a gated one is shown. */
+  choices?: StoryChoice[];
+  custody?: boolean;
+  error?: string;
+}
+
+export interface StoryChooseResponse {
+  ok: boolean;
+  tier: TrustTier;
+  /** True when the choice-turn was refused (consent denied / gated / no custody). */
+  refused?: boolean;
+  reason?: string;
+  verified?: boolean;
+  passage?: string;
+  receiptCount?: number;
+  /** The NEW story commitment (hex) after the advance turn. */
+  commitment?: string;
+  error?: string;
+}
+
+export interface StoryVerifyResponse {
+  ok: boolean;
+  tier: TrustTier;
+  verified: boolean;
+  passage?: string;
+  commitment?: string;
+  receiptCount?: number;
+  error?: string;
+}
+
+export type StoryPortResponse =
+  | StoryResolveResponse
+  | StoryRenderResponse
+  | StoryChooseResponse
+  | StoryVerifyResponse;
+
+/** The transport the `<dregg-story>` element holds — a channel to the StoryEngine. */
+export interface StoryPort {
+  request(req: StoryPortRequest): Promise<StoryPortResponse>;
+}
+
+/** The public, content-addressed story spec a resolve yields (netlayer stand-in). */
+export interface StorySpec {
+  kind: string;
+  addr: string;
+}
+/** Resolve a canonical story uri to a spec, or `null` (fail-closed). May be async. */
+export type ResolveStoryFn = (uri: string) => StorySpec | null | Promise<StorySpec | null>;
+
+/** The default (test/stand-in) story resolver: validate the `dregg://story/<addr>`
+ *  content-address and yield the story. The REAL netlayer fetches the
+ *  content-addressed story and checks `addr == blake3(story)`; this is the
+ *  standalone analogue. A malformed addr fails closed. */
+export function defaultResolveStory(uri: string): StorySpec | null {
+  const parsed = parseDreggUri(uri);
+  if (!parsed) return null;
+  if (parsed.kind !== "story") return null;
+  if (!VALID_ADDR_RE.test(parsed.addr)) return null; // fail-closed on a bad addr
+  return { kind: "story", addr: parsed.addr };
+}
+
+export interface StoryEngineDeps {
+  StoryWorld: StoryWorldCtor;
+  /** The netlayer resolve (content-addr → story spec). */
+  resolveStory: ResolveStoryFn;
+  /** Custody consent — opens `confirm-intent` chrome for a choice-turn. Absent
+   *  (`null`/omitted) ⇒ READ-ONLY: the story renders + verifies, but choosing is
+   *  refused (the honest "connect your cipherclerk to play" degrade). */
+  consent?: ConsentFn | null;
+}
+
+/**
+ * THE STORY ENGINE. Owns one `StoryWorld` per resolved uri; every response is
+ * tiered. Runs only in the extension (background) context. It renders the current
+ * passage (prose + choices), and ADVANCES (a real cap-gated verified turn) ONLY
+ * after the injected consent approves the faithful reading of the choice — a
+ * gated/invalid choice fails closed WITHOUT prompting. Never returns the story graph.
+ */
+export class StoryEngine {
+  private worlds = new Map<string, StoryWorldLike>();
+  private specs = new Map<string, StorySpec>();
+
+  constructor(private deps: StoryEngineDeps) {}
+
+  /** CUSTODY is present iff a consent provider is wired (extension/passkey). */
+  private get hasCustody(): boolean {
+    return typeof this.deps.consent === "function";
+  }
+
+  async handle(req: StoryPortRequest, origin?: string): Promise<StoryPortResponse> {
+    try {
+      switch (req.op) {
+        case "resolveStory":
+          return await this.resolve(req.uri);
+        case "renderStory":
+          return this.render(req.uri);
+        case "chooseChoice":
+          return await this.choose(req.uri, req.index, origin);
+        case "verifyStory":
+          return this.verify(req.uri);
+        default:
+          return { ok: false, tier: "none", verified: false, error: "unknown op" } as StoryResolveResponse;
+      }
+    } catch (e) {
+      return { ok: false, tier: "none", verified: false, error: String((e as Error)?.message ?? e) } as StoryResolveResponse;
+    }
+  }
+
+  private async world(uri: string): Promise<StoryWorldLike | null> {
+    const key = canonicalUri(uri);
+    if (!key) return null;
+    const existing = this.worlds.get(key);
+    if (existing) return existing;
+    const spec = await this.deps.resolveStory(key);
+    if (!spec) return null;
+    const w = new this.deps.StoryWorld();
+    this.worlds.set(key, w);
+    this.specs.set(key, spec);
+    return w;
+  }
+
+  /** Parse the world's `[{index, text, available}]` choices. */
+  private choices(w: StoryWorldLike): StoryChoice[] {
+    try {
+      const rows = JSON.parse(w.choicesJson());
+      if (!Array.isArray(rows)) return [];
+      return rows.map((r, i) => ({
+        index: Number(r.index ?? i),
+        text: String(r.text ?? ""),
+        available: r.available !== false,
+      }));
+    } catch {
+      return [];
+    }
+  }
+
+  private async resolve(uri: string): Promise<StoryResolveResponse> {
+    const key = canonicalUri(uri);
+    if (!key) return { ok: false, verified: false, tier: "none", error: "not a dregg-thing" };
+    const w = await this.world(key);
+    if (!w) return { ok: false, verified: false, tier: "none", error: "could not resolve story" };
+    const spec = this.specs.get(key)!;
+    // The stranger's invariant: the story's receipt chain replays from genesis.
+    const verified = w.verify();
+    return {
+      ok: true,
+      verified,
+      tier: verified ? "extension" : "none",
+      object: { kind: spec.kind, addr: spec.addr },
+      custody: this.hasCustody,
+      passage: w.currentPassage(),
+      commitment: w.commitmentHex(),
+      receiptCount: w.receiptCount(),
+    };
+  }
+
+  private render(uri: string): StoryRenderResponse {
+    const key = canonicalUri(uri);
+    const w = key ? this.worlds.get(key) : undefined;
+    if (!w) return { ok: false, tier: "none", error: "not resolved" };
+    // Never render a story whose receipt chain does not replay (fail-closed).
+    if (!w.verify()) return { ok: false, tier: "none", error: "unverified" };
+    return {
+      ok: true,
+      tier: "extension",
+      passage: w.currentPassage(),
+      prose: w.passageProse(),
+      choices: this.choices(w),
+      custody: this.hasCustody,
+    };
+  }
+
+  /** CHOOSE — the real cap-gated verified turn. Consent BEFORE any commit (the
+   *  faithful reading of the choice-turn, in un-overlayable chrome). A gated/invalid
+   *  choice, and a provider with no custody, both FAIL CLOSED without advancing. */
+  private async choose(uri: string, index: number, origin?: string): Promise<StoryChooseResponse> {
+    const key = canonicalUri(uri);
+    const w = key ? this.worlds.get(key) : undefined;
+    if (!key || !w) return { ok: false, tier: "none", error: "not resolved" };
+
+    const refuse = (reason: string): StoryChooseResponse => ({
+      ok: true,
+      tier: w.verify() ? "extension" : "none",
+      refused: true,
+      reason,
+      verified: w.verify(),
+      passage: w.currentPassage(),
+      commitment: w.commitmentHex(),
+      receiptCount: w.receiptCount(),
+    });
+
+    // CUSTODY: a choice is a real verified turn; no custody ⇒ read-only.
+    if (!this.hasCustody) return refuse("no custody — connect your cipherclerk to play");
+
+    // FAIL-CLOSED on a gated/unavailable/invalid choice — BEFORE any consent prompt.
+    const choice = this.choices(w).find((c) => c.index === index);
+    if (!choice) return refuse("no such choice");
+    if (!choice.available) return refuse("choice is gated/unavailable");
+
+    // Custody consent (the load-bearing property): the faithful reading the page
+    // cannot overlay or clickjack. Every choice is a real turn, so every choice asks.
+    const spec = this.specs.get(key)!;
+    const approved = await this.deps.consent!({
+      explanation:
+        `Advance the story ${spec.addr}: choose "${choice.text}" at passage "${w.currentPassage()}". ` +
+        `This commits ONE verified turn that binds the new story commitment into the receipt a stranger can replay.`,
+      turnId: `${key}#choose:${index}`,
+      origin,
+    });
+    if (!approved) return refuse("consent denied");
+
+    // The real verified turn: advance. The world fails closed on an illegal move.
+    let res: { ok?: boolean; passage?: string; receiptCount?: number; commitmentHex?: string; error?: string };
+    try {
+      res = JSON.parse(w.advance(index));
+    } catch (e) {
+      return refuse(String((e as Error)?.message ?? e));
+    }
+    if (!res.ok) return refuse(res.error || "advance rejected");
+
+    const verified = w.verify();
+    return {
+      ok: true,
+      tier: "extension",
+      refused: false,
+      verified,
+      passage: String(res.passage ?? w.currentPassage()),
+      receiptCount: Number(res.receiptCount ?? w.receiptCount()),
+      commitment: String(res.commitmentHex ?? w.commitmentHex()),
+    };
+  }
+
+  /** VERIFY — the LIGHT-CLIENT check a stranger runs: replay the whole receipt
+   *  chain from genesis. This is the "a stranger checks the receipt chain" property. */
+  private verify(uri: string): StoryVerifyResponse {
+    const key = canonicalUri(uri);
+    const w = key ? this.worlds.get(key) : undefined;
+    if (!w) return { ok: false, tier: "none", verified: false, error: "not resolved" };
+    const verified = w.verify();
+    return {
+      ok: true,
+      tier: verified ? "extension" : "none",
+      verified,
+      passage: w.currentPassage(),
+      commitment: w.commitmentHex(),
+      receiptCount: w.receiptCount(),
+    };
+  }
+}

@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>dregg-story fixture</title></head>
+<body>
+  <h1>dregg-story fixture — a verifiable choose-your-own-adventure a stranger can replay</h1>
+
+  <!-- A PLAYABLE verifiable story: READ + VERIFY are free (prose + replay-verified
+       badge); CHOOSING a passage is a real custody-gated verified turn. -->
+  <p id="prose">Your adventure: <dregg-story id="story" src="dregg://story/b3_a11ce0"></dregg-story></p>
+
+  <!-- A READ-ONLY story: no custody wired. READ + VERIFY still work (the free tier);
+       choosing degrades to an honest "connect your cipherclerk to play" note. -->
+  <p id="roprose">A story you can only read: <dregg-story id="roStory" src="dregg://story/b3_b0b0b0"></dregg-story></p>
+
+  <!-- Malformed addr: the engine fails closed — no render, original link + warning. -->
+  <p id="badprose">A broken one: <dregg-story id="badStory" src="dregg://story/notahash">
+    <a href="https://dregg.net/d/story/notahash">the story</a>
+  </dregg-story></p>
+
+  <script src="/harness.js"></script>
+</body>
+</html>
