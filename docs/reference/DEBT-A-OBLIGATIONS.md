@@ -41,19 +41,34 @@ assumption at the deployed params IF one is genuinely irreducible. NOTHING else.
 
 ## REMAINING OBLIGATIONS
 
-### K — THE KEYSTONE (in flight, `OodQuotientConsistency.lean`): `verifyAlgo accepts ⟹ MainAirAccept`
-Target: `verifyAlgo @ fullChecks (view pi π) = true → MainAirAccept hash transferV3 t` over the DEPLOYED trace.
-Argument: OOD quotient-consistency — verifyAlgo checks `C(ζ) = Z_H(ζ)·q(ζ)` at a Fiat-Shamir OOD ζ; FRI proves
-`q` low-degree; Schwartz–Zippel on ζ ⟹ `C = Z_H·q` as polynomials ⟹ `C` vanishes on the rows ⟹ `MainAirAccept`.
-Anti-toy: constraints 2 (deployed `VmTrace`), 4/5 (the FRI low-degree input is #2/#6, not `Q=univ`), 7.
-**FORK the in-flight lane reports:** if `MainAirAccept`/`arithResidual` is a `Polynomial` ⟹ this is a bounded SZ
-proof (closable). If it is a raw per-row `ℤ` evaluation ⟹ obligation **K′** below is the real (DEBT-B-sized) work.
+### K — THE KEYSTONE (FORK ANSWERED `6f1ac8baa`): the two flanking halves PROVED, gap = K′ (3 axes)
+`verifyAlgo accepts ⟹ MainAirAccept` does NOT compose as one term. `OodQuotientConsistency.lean` PROVED both
+halves and reduced the gap to an explicit three-axis bridge `OodInterpZ`:
+- PROVED: `verifyAlgo_accept_forces_table_identity` (accept ⟹ the OOD identity `constraintEval = vanishingAtZeta ·
+  quotientAtZeta` at ζ — contrapositive of the committed reject theorem) + `ood_consistency` (Schwartz–Zippel over
+  `Polynomial F`, exceptional set ≤ natDegree) + `ood_forces_mainAirAccept : OodInterpZ d t → MainAirAccept`.
+- **FORK VERDICT: `arithResidual : VmConstraint2 → ℤ` is RAW ℤ, not a `Polynomial`** — so the keystone is K′.
 
-### K′ (conditional) — the toy→deployed VM refinement
-If `MainAirAccept` has no polynomial structure: interpolate the deployed `VmTrace` columns as polynomials over the
-BabyBear evaluation domain, define the constraint composition `C` as a `Polynomial`, and connect it to the
-FRI-committed quotient — so the FRI proximity (#2/#6) lands on the deployed trace, not `Step State Effect`. This is
-a data-refinement campaign, the same SHAPE as DEBT-B's finite-map work. Scope it as its own multi-brick effort.
+### K′ — the toy→deployed VM refinement (THE real remaining crypto work; DEBT-B-shaped; codex-grindable in 3 axes)
+Discharge `OodInterpZ` — the bridge between verifyAlgo's mod-p OOD identity and MainAirAccept's per-row ℤ
+constraints. Three SEPARABLE sub-obligations, each an exact goal:
+- **K′(a) FIELD-vs-INTEGER lift.** `verifyAlgo`/`TableOpening` deliver a mod-`2013265921` identity; `arithResidual`/
+  `MainAirAccept` are raw `ℤ` with existential ℤ `zerofier`/`quot`. Goal: the canonical-lift + range obligation
+  connecting `(· : ZMod 2013265921)` of the ℤ residual to the field identity. Anti-toy: the range bound must be the
+  real column bit-width, not an unbounded lift.
+- **K′(b) TRACE-COLUMN INTERPOLATION.** Neither `arithResidual` (raw ℤ/row) nor `TableOpening.constraintEval` (raw
+  field elt at ζ) exposes columns-as-polynomials. Goal: interpolate the deployed `VmTrace` columns as
+  `Polynomial BabyBear` over the eval domain (reuse `BabyBearFriSetup`/`BabyBearFriDeployed`'s domain), define the
+  constraint composition `C` as a `Polynomial`, and prove `C.eval (rowPt i) = arithResidual (envAt t i) …` (the
+  interpolation IS the deployed residual). This is the core of K′. Anti-toy: constraint 2 — over `VmTrace`, not
+  `Step State Effect`; the eval domain is the deployed one, not `Fin 4`.
+- **K′(c) CONSTRAINT-BATCHING RLC.** `verifyAlgo` folds ALL constraints into ONE `constraintEval : F` via a random
+  linear combination; `MainAirAccept` wants per-constraint `quot i c`. Goal: a second Schwartz–Zippel step over the
+  RLC challenge (reuse `ood_consistency` / `LogUpSoundness`'s SZ machinery) proving batched-identity-at-random-α ⟹
+  per-constraint identity. Anti-toy: the α must be a real Fiat-Shamir challenge with the deg/|F| error, not a fixed
+  point.
+Once K′(a,b,c) land, `ood_forces_mainAirAccept` fires with a real `OodInterpZ`, closing K, and the endgame below
+composes.
 
 ### #5 — DeployedRefines / the verifyBatch ARCHITECTURE decision (EMBER-GATED, not a proof)
 `verifyBatch` is `opaque` (`CircuitSoundness.lean:353`). To make `StarkSound` a theorem, pick:
