@@ -926,25 +926,41 @@ impl AgentPlatform {
         goal: impl Into<String>,
         tools: &[String],
     ) -> Result<GoalReport, AgentPlatformError> {
-        use dregg_agent::brain::{LiveOpenAICompatCaller, OpenAICompatBrain};
+        use dregg_agent::agent::op;
+        use dregg_agent::brain::{DEFAULT_OPENAI_BASE, LiveOpenAICompatCaller, OpenAICompatBrain};
 
         let goal = goal.into();
         // The live brain needs only env + goal + tools (no tenant state), so build
         // it before locking — a missing key fails fast without touching the grain.
         let key = live_key()
             .ok_or_else(|| AgentPlatformError::Session("no LLM key in env (DREGG_LLM_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY / NVIDIA_API_KEY)".into()))?;
-        let base = std::env::var("DREGG_LLM_BASE")
-            .unwrap_or_else(|_| "https://api.openai.com".to_string());
+        // `chat_completions_url` appends `/chat/completions` to the BASE, so the base
+        // must already carry the provider's version segment (`…/v1`). The bare
+        // `https://api.openai.com` default built `…/chat/completions` (no `/v1`) — a 404.
+        let base =
+            std::env::var("DREGG_LLM_BASE").unwrap_or_else(|_| DEFAULT_OPENAI_BASE.to_string());
         let model = std::env::var("DREGG_LLM_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
+        // A grain's granted tools split across TWO advertisement rails, and mis-slotting
+        // them silently breaks the drive: operator-rail tools (`fs_write`, `shell`, …)
+        // carry real `path`/`content` schemas and MUST ride `with_op_tools`, while flat
+        // toolkit services (`run_tests`, `verify_deploy`, …) ride the parameterless
+        // `invoke(service=…)` enum. Advertising an operator tool as a service hands the
+        // model a call it cannot express, so its correct `fs_write` reads as an unknown
+        // tool, the retry loop exhausts, and the drive admits nothing.
+        let (op_tools, services): (Vec<String>, Vec<String>) = tools
+            .iter()
+            .cloned()
+            .partition(|t| op::ALL.contains(&t.as_str()));
         let mut brain = OpenAICompatBrain::with_base(
             &goal,
-            tools.to_vec(),
+            services,
             vec![],
             key,
             &base,
             &model,
             LiveOpenAICompatCaller::new(),
-        );
+        )
+        .with_op_tools(op_tools);
         // The served default MINTS: route through the real kernel minter (R2), not
         // the unminted `run_goal`. `drive_serving` handles the per-tenant lock, the
         // lapse-on-use audit, the minted drive, and the checkpoint.
