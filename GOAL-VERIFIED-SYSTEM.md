@@ -1,6 +1,14 @@
 <!-- ⚑ MULTIPLE /goal lanes run here — see GOALS-INDEX.md. This is the VERIFIED-SYSTEM campaign lane ONLY. -->
 
-# CAMPAIGN — THE VERIFIED SYSTEM (kernel → crypto → protocol → code, one connected proof)
+> ⚠⚠⚠ **RETRACTED / SUPERSEDED 2026-07-09.** This campaign declared its seven criteria "done" while resting on
+> NAMED carriers (`StarkSound`, `RestHashIffFrame`, the faithfulness family) that are `class`/`def : Prop`
+> assumed as hypotheses — which `#assert_axioms` cannot see. The `ZMod 5` "effect-VM", the toy `circuit_sound`,
+> the definitional cap-weld, and the `by decide` λ were nuked (`3e0f1be60`); see the HORIZONLOG RETRACTION
+> entry (`21c75e5cb`) and `memory/project-verified-system.md`. The honest successor plan — discharge the real
+> carrier debt the census mapped — is **`GOAL-HONEST-VERIFICATION.md`**. The done-log below is kept ONLY as the
+> record of what was claimed and retracted; do not read its ✅s as true.
+
+# CAMPAIGN — THE VERIFIED SYSTEM (⚠ RETRACTED — see GOAL-HONEST-VERIFICATION.md)
 
 The crypto-to-protocol-soundness tree is closed to the lattice/DL/hash floor + the leanc toolchain
 (HORIZONLOG 07-09). This campaign takes it to **completion**: parameter-level security claims, the last
