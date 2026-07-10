@@ -130,3 +130,20 @@ be assumed that this refinement was supposed to discharge). Whole-tree `lake bui
 theorem is just a new, smaller vacuity. `restHashIffFrame_fin` must reduce to `Poseidon2SpongeCR` with NO new
 carrier. If any field's usage does not fit `Key → V`-with-default (spot: `bal` is two-level; `caps` is over
 `Label`), flag it precisely — do not force it.
+
+
+## ⚠ OPEN FINDING (2026-07-10): the cell-default misalignment (AccountsWF vacuity)
+R4 (`3b6ed68af`) discharged all 5 carriers to `Poseidon2SpongeCR` on the reachable subclass, but surfaced a real
+mismatch: `FinKernelState.cell : CanonMap CellId Value (Value.record [])` defaults absent cells to `.record []`,
+while the KERNEL default is `Value.int 0` (`Exec/Value.lean:69`, `instance : Inhabited Value := ⟨.int 0⟩`). So:
+- `denote f`'s absent cells read `.record []`, never `.int 0`;
+- `AccountsWF (denote f)` (which requires absent cells to be the kernel default) is UNSATISFIABLE for every `f`;
+- the target-shape `recStateCommit_binds_kernel_fin` (carrying AccountsWF verbatim) is proved-but-vacuous;
+- the instantiable form is `recStateCommit_binds_kernel_fin_canon`, using the SATISFIABLE sparse-map invariant
+  (`∀ c ∉ accounts, cell.lookup c = none`), non-vacuity proved via `finInit_cell_canon`.
+FIX: change `FinKernelState.cell`'s CanonMap default from `.record []` to `Value.int 0` so it matches the kernel,
+making `AccountsWF` satisfiable and letting the `_canon` companion retire. This is a committed-file (R1) change —
+it must re-check `denote`, `denote_injective`, `serializeFin_injective`, and the root/writer proofs against the new
+default in ONE motion (they hinge on the default via `insertNZ`/`CanonMap.get`). Bounded, mechanical, but not a
+drive-by. Note: `Value.int 0` must then be shown `≠` the map default's role appropriately, or the born-cell
+`insertNZ (Value.int 0)` in FinAllocCell flips to an `erase` — re-audit `finAllocCell` + `finFactoryCell` too.
