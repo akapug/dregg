@@ -248,3 +248,13 @@ FIX (ember-gated, substrate-wide, DIVERGES toward the proof): make the off-chain
 (compute_canonical_heap_root_8), so ledgerless clients get the 8-felt security the STARK already has on-chain.
 Nothing running depends on the old bytes (weeks-old snapshot, new testnet from genesis).
 - done-log: TRACE CLOSED — verified on-chain binds the 8-felt (GENTIAN weld, secure); the ~31-bit lane-0 is the OFF-CHAIN ledgerless boundary the doc trusts (weak). Widening it = ember's substrate call. This is where the doc-web goal honestly rests.
+
+## VERIFIED (2nd pass, correcting my zigzag) — off-chain lane-0 is the vk-epoch flip not-yet-reaching heap_root
+compute_canonical_state_commitment (commitment.rs:204) BLAKE3-hashes cell.state → inherits the lane-0 heap_root;
+it does NOT use the wide compute_canonical_heap_root_8 or the rotated [58..64]. So BOTH off-chain surfaces bind
+lane-0; the wide 8-felt is ONLY in-circuit (STARK, GENTIAN-welded). On-chain SOUND, off-chain lane-0. (I briefly
+said "just a doc bug, the binding commitment has the wide" — WRONG; reading the fn corrected it.) ROOT CAUSE: the
+vk-epoch canonical-flip (1dce9523c) hasn't reached heap_root/fields_root — it's doing nullifier/revoked/commitments.
+The [u8;32] type on cell.state.heap_root let the narrow value persist silently (a typed Digest8 wouldn't compile).
+FIX = the flip reaching heap_root: retype cell.state.heap_root → Digest8, set from compute_canonical_heap_root_8.
+Ember's on-disk-format call; diverges toward the proof. NOT a doc-lane fix (the off-chain commitment is structurally lane-0).
