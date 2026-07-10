@@ -2665,7 +2665,7 @@ fn push_committed_event(
 /// enrichment — from/to/asset/amount, grants, and post-state balances — so the
 /// LIVE receipt log yields `transfer`/`balance`/`granted` facts (not just
 /// effect-kind strings) when dregg-query reads `/api/receipts/index/range`.
-fn push_committed_event_enriched(
+pub(crate) fn push_committed_event_enriched(
     s: &mut crate::state::NodeStateInner,
     turn_hash: String,
     cell_id: String,
@@ -8031,7 +8031,7 @@ fn cap_ref_label(cap: &dregg_cell::CapabilityRef) -> String {
 /// ALREADY-committed before/after ledger — additive, never gates the commit. The
 /// `asset` of a transfer/balance is the token domain of the cell (pre-state for
 /// the source/burn target, post-state for the destination).
-fn summarize_turn_effects(
+pub(crate) fn summarize_turn_effects(
     turn: &Turn,
     pre: &dregg_cell::Ledger,
     post: &dregg_cell::Ledger,
@@ -8167,7 +8167,7 @@ fn summarize_turn_effects(
     out
 }
 
-fn effect_kind(effect: &dregg_turn::Effect) -> String {
+pub(crate) fn effect_kind(effect: &dregg_turn::Effect) -> String {
     let debug = format!("{effect:?}");
     debug
         .split([' ', '{', '('])

@@ -4537,20 +4537,37 @@ async fn execute_finalized_turn(
             &mut exec_ledger,
             lean_producer_enabled,
         );
-        (result, exec_ledger)
+        // NULLIFIER-ROOT (VK-epoch ghost mirror): capture the executor's LIVE nullifier-accumulator
+        // frontier AFTER execution — the native `CanonicalHeapTree8` root over its (nf, value)
+        // `note_nullifiers` map. Captured HERE (the executor is consumed by this blocking task) and
+        // returned so the rotated producer can bind the committed `nullifier_root` (limbs [26,67..73])
+        // to the node's REAL spent-note frontier instead of a hardcoded default.
+        let live_nullifier_root = executor.note_nullifiers.lock().unwrap().root8();
+        // COMMITMENTS-ROOT (VK-epoch ghost mirror, CREATE dual): capture the executor's LIVE
+        // commitments-accumulator frontier — the native `CanonicalHeapTree8` root over its
+        // (commitment, value) `note_commitments` map — so the rotated producer binds the committed
+        // `commitments_root` (limbs [27,74..80]) to the node's REAL created-note frontier.
+        let live_commitments_root = executor.note_commitments.lock().unwrap().root8();
+        (
+            result,
+            exec_ledger,
+            live_nullifier_root,
+            live_commitments_root,
+        )
     });
-    let (exec_result, exec_ledger) = match exec_join.await {
-        Ok(v) => v,
-        Err(e) => {
-            error!(
-                block_id = %block_id,
-                turn_hash = %turn_hash_hex,
-                error = %e,
-                "finalized-turn EXECUTION task panicked/cancelled; turn NOT applied"
-            );
-            return;
-        }
-    };
+    let (exec_result, exec_ledger, live_nullifier_root, live_commitments_root) =
+        match exec_join.await {
+            Ok(v) => v,
+            Err(e) => {
+                error!(
+                    block_id = %block_id,
+                    turn_hash = %turn_hash_hex,
+                    error = %e,
+                    "finalized-turn EXECUTION task panicked/cancelled; turn NOT applied"
+                );
+                return;
+            }
+        };
 
     // The COMPLETE set of cells this turn changed — the full pre→post cell diff.
     // Unlike the executor's `LedgerDelta` (which omits the heap_root / lifecycle /
@@ -4668,6 +4685,40 @@ async fn execute_finalized_turn(
                 .append_receipt(receipt.clone())
                 .expect("local executor and cclerk chains must agree; divergence is a serious bug");
 
+            // TYPED EFFECT ENRICHMENT on the CONSENSUS commit path — the same
+            // `transfer`/`balance`/`granted` facts the direct-submit path records
+            // (`api.rs`, `push_committed_event_enriched`). Without this a turn
+            // finalized through blocklace consensus lands in the receipt index with
+            // NO typed effects, so every reader of `/api/receipts/index/range` — the
+            // light-client verified reads that parse `Granted` facts (e.g. an
+            // execution-lease grant) — sees an empty log on a FEDERATED node while
+            // working on a solo one. Additive; never gates the commit.
+            {
+                let summaries =
+                    crate::api::summarize_turn_effects(&signed_turn.turn, &pre_ledger, &s.ledger);
+                let kinds: Vec<String> = signed_turn
+                    .turn
+                    .call_forest
+                    .iter_dfs()
+                    .flat_map(|t| t.action.effects.iter().map(crate::api::effect_kind))
+                    .collect();
+                let kinds = if kinds.is_empty() {
+                    vec!["turn_committed".to_string()]
+                } else {
+                    kinds
+                };
+                let agent_hex = dregg_types::hex_encode(signed_turn.turn.agent.as_bytes());
+                crate::api::push_committed_event_enriched(
+                    &mut s,
+                    receipt_hash_hex.clone(),
+                    agent_hex,
+                    kinds,
+                    summaries,
+                    // proving runs just below on this same commit path
+                    crate::state::ActivityProofStatus::ProofPending,
+                );
+            }
+
             // ── Full-turn proving (commit path) ──────────────────────────
             // When enabled (devnet), prove EVERY committed turn and gate
             // acceptance on the proof verifying. This is what makes the public
@@ -4764,15 +4815,9 @@ async fn execute_finalized_turn(
                         }
                     }
                 });
-                // NULLIFIER-ROOT (VK-epoch ghost mirror): the LIVE nullifier-accumulator frontier
-                // the executor carries — the native `CanonicalHeapTree8` root over its (nf, value)
-                // `note_nullifiers` map. Threaded into the rotated producer so the committed
-                // `nullifier_root` (limbs [26,67..73]) binds the node's REAL spent-note frontier
-                // instead of a hardcoded default. (The per-turn executor is not yet seeded from the
-                // durable store, so on a non-spend turn this is the native empty root; the durable
-                // (nf, value) seeding is the remaining node-level wiring for cross-node anti-replay
-                // via committed state — see turn_proving::rotation_witness_for_*_with_root.)
-                let live_nullifier_root = executor.note_nullifiers.lock().unwrap().root8();
+                // `live_nullifier_root` (captured from the executor's post-execution `note_nullifiers`
+                // frontier, returned by the blocking exec task above) threads the node's REAL
+                // spent-note frontier into the rotated commit-path arms below.
                 let proving_result = match (
                     actor_cap_witness,
                     bearer_cap_witness,
@@ -4803,6 +4848,7 @@ async fn execute_finalized_turn(
                                     &receipt_hashes,
                                     &effects,
                                     &live_nullifier_root,
+                                    &live_commitments_root,
                                 )
                             }
                             _ => None,
@@ -4876,6 +4922,7 @@ async fn execute_finalized_turn(
                                     &receipt_hashes,
                                     &effects,
                                     &live_nullifier_root,
+                                    &live_commitments_root,
                                 )
                             }
                             _ => None,
@@ -4955,6 +5002,7 @@ async fn execute_finalized_turn(
                                     &receipt_hashes,
                                     &effects,
                                     &live_nullifier_root,
+                                    &live_commitments_root,
                                 )
                             }
                             _ => None,
