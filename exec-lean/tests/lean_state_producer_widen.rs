@@ -654,6 +654,7 @@ fn grant_capability_round_trips_cap_fidelity_closed() {
         expires_at: None,
         allowed_effects: None,
         stored_epoch: None,
+        provenance: [0u8; 32],
     };
     let turn = single_effect_turn(
         a_id,
@@ -714,6 +715,7 @@ fn grant_capability_amplification_does_not_install_divergent_state() {
         expires_at: None,
         allowed_effects: None,
         stored_epoch: None,
+        provenance: [0u8; 32],
     };
     let turn = single_effect_turn(
         a_id,

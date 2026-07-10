@@ -232,6 +232,7 @@ fn multi_inhabitant_council_governs_by_running() {
             expires_at: None,
             allowed_effects: None,
             stored_epoch: None,
+            provenance: [0u8; 32],
         },
     };
     let mut adopt = plan.adopt_effects.clone();

@@ -167,6 +167,7 @@ fn an_amplifying_grant_is_caught_by_userspace_verify() {
         expires_at: None,
         allowed_effects: Some(dregg_cell::facet::EFFECT_SET_FIELD),
         stored_epoch: None,
+        provenance: [0u8; 32],
     };
     // The worker then tries to re-grant a WIDER cap over the SAME resource:
     // adding Transfer — an amplification of what it was handed.
@@ -180,6 +181,7 @@ fn an_amplifying_grant_is_caught_by_userspace_verify() {
             dregg_cell::facet::EFFECT_SET_FIELD | dregg_cell::facet::EFFECT_TRANSFER,
         ),
         stored_epoch: None,
+        provenance: [0u8; 32],
     };
 
     // Build the delegation chain as a real parent->child forest: the board's

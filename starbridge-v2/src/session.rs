@@ -436,6 +436,12 @@ impl LoginManager {
                     expires_at: None,
                     allowed_effects: None,
                     stored_epoch: None,
+                    provenance: dregg_cell::derivation::cap_provenance(
+                        &(entry.target),
+                        (slot),
+                        &dregg_cell::derivation::mint_provenance(),
+                        &[0u8; 32],
+                    ),
                 },
             };
             let turn = world.turn(self.system_principal, vec![effect]);
@@ -1563,6 +1569,7 @@ mod tests {
                     expires_at: None,
                     allowed_effects: None,
                     stored_epoch: None,
+                    provenance: [0u8; 32],
                 },
             };
             let turn = w.turn(root, vec![effect]);

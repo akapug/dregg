@@ -185,6 +185,12 @@ pub fn plan_trustline_collateral(
             expires_at: None,
             allowed_effects: None,
             stored_epoch: None,
+            provenance: dregg_cell::derivation::cap_provenance(
+                &(cell_id),
+                (0),
+                &dregg_cell::derivation::mint_provenance(),
+                &[0u8; 32],
+            ),
         },
     };
     let adopt_effects = vec![self_cap(operator), self_cap(holder)];

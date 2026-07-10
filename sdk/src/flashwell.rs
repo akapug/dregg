@@ -140,6 +140,12 @@ pub fn plan_flash_well(
             expires_at: None,
             allowed_effects: None,
             stored_epoch: None,
+            provenance: dregg_cell::derivation::cap_provenance(
+                &(cell_id),
+                (0),
+                &dregg_cell::derivation::mint_provenance(),
+                &[0u8; 32],
+            ),
         },
     }];
     let set = |index: u8, value: FieldElement| Effect::SetField {

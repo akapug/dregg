@@ -1016,6 +1016,12 @@ pub(super) async fn tool_bilateral_action(params: &Value, state: &NodeState) -> 
                 expires_at: None,
                 allowed_effects: None,
                 stored_epoch: None,
+                provenance: dregg_cell::derivation::cap_provenance(
+                    &(from_cell),
+                    (0),
+                    &dregg_cell::derivation::mint_provenance(),
+                    &[0u8; 32],
+                ),
             };
             dregg_turn::Effect::GrantCapability {
                 from: from_cell,

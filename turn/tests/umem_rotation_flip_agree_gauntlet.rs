@@ -405,6 +405,7 @@ fn agree_gauntlet_grant_corpus() {
             expires_at: None,
             allowed_effects: None,
             stored_epoch: None,
+            provenance: [0u8; 32],
         };
         let turn = turn_with(
             agent_id,

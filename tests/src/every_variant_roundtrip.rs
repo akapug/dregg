@@ -90,6 +90,7 @@ fn all_effect_variants() -> Vec<Variant> {
         expires_at: None,
         allowed_effects: None,
         stored_epoch: None,
+        provenance: [0u8; 32],
     };
 
     vec![

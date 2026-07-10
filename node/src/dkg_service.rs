@@ -616,6 +616,12 @@ async fn post_start(
                 expires_at: None,
                 allowed_effects: None,
                 stored_epoch: None,
+                provenance: dregg_cell::derivation::cap_provenance(
+                    &(ceremony),
+                    (0),
+                    &dregg_cell::derivation::mint_provenance(),
+                    &[0u8; 32],
+                ),
             },
         }],
         Some(ADOPT_TURN_FEE),

@@ -550,6 +550,12 @@ pub fn bearer_cap(target: CellId, permissions: AuthRequired) -> CapabilityRef {
         expires_at: None,
         allowed_effects: None,
         stored_epoch: None,
+        provenance: dregg_cell::derivation::cap_provenance(
+            &(target),
+            (0),
+            &dregg_cell::derivation::mint_provenance(),
+            &[0u8; 32],
+        ),
     }
 }
 

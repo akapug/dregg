@@ -145,6 +145,12 @@ fn birth_inbox(runtime: &mut AgentRuntime, owner_pk: [u8; 32]) -> CellId {
                 expires_at: None,
                 allowed_effects: None,
                 stored_epoch: None,
+                provenance: dregg_cell::derivation::cap_provenance(
+                    &(inbox),
+                    (0),
+                    &dregg_cell::derivation::mint_provenance(),
+                    &[0u8; 32],
+                ),
             },
         )
         .sign()

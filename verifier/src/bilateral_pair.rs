@@ -593,6 +593,7 @@ mod tests {
                     breadstuff: None,
                     allowed_effects: None,
                     stored_epoch: None,
+                    provenance: [0u8; 32],
                 },
             )
             .build();

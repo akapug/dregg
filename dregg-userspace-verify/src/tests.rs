@@ -42,6 +42,7 @@ fn cap(target: CellId, slot: u32, facet: Option<u32>, expiry: Option<u64>) -> Ca
         expires_at: expiry,
         allowed_effects: facet,
         stored_epoch: None,
+        provenance: [0u8; 32],
     }
 }
 

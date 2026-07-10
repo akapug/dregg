@@ -310,6 +310,7 @@ fn build_corpus() -> Vec<CorpusCase> {
             expires_at: None,
             allowed_effects: None,
             stored_epoch: None,
+            provenance: [0u8; 32],
         };
         let turn = corpus_turn(
             ida,
@@ -340,6 +341,7 @@ fn build_corpus() -> Vec<CorpusCase> {
             expires_at: None,
             allowed_effects: None,
             stored_epoch: None,
+            provenance: [0u8; 32],
         };
         vec![Effect::GrantCapability {
             from: a,

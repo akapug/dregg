@@ -861,6 +861,12 @@ pub(crate) async fn open_trustline(
             expires_at: None,
             allowed_effects: None,
             stored_epoch: None,
+            provenance: dregg_cell::derivation::cap_provenance(
+                &(trustline),
+                (0),
+                &dregg_cell::derivation::mint_provenance(),
+                &[0u8; 32],
+            ),
         },
     };
     turn_hashes.push(run_signed_turn(

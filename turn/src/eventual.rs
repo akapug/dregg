@@ -737,6 +737,7 @@ mod tests {
                 expires_at: None,
                 allowed_effects: None,
                 stored_epoch: None,
+                provenance: [0u8; 32],
             },
         };
         let turn0 = make_test_turn(id_a, 0, vec![grant_effect]);
@@ -1287,6 +1288,7 @@ mod tests {
                 expires_at: None,
                 allowed_effects: None,
                 stored_epoch: None,
+                provenance: [0u8; 32],
             },
         };
         let turn_a = make_test_turn(id_alice, 0, vec![grant_effect]);

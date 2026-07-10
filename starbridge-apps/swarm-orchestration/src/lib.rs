@@ -522,6 +522,12 @@ pub fn grant_worker_effect(board: CellId, worker_cell: CellId) -> Effect {
             expires_at: None,
             allowed_effects: None,
             stored_epoch: None,
+            provenance: dregg_cell::derivation::cap_provenance(
+                &(board),
+                (SPENT_A_SLOT as u32),
+                &dregg_cell::derivation::mint_provenance(),
+                &[0u8; 32],
+            ),
         },
     }
 }

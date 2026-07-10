@@ -59,6 +59,12 @@ pub(super) async fn tool_grant_capability(params: &Value, state: &NodeState) -> 
         expires_at: None,
         allowed_effects: None,
         stored_epoch: None,
+        provenance: dregg_cell::derivation::cap_provenance(
+            &(target_cell_id),
+            (0),
+            &dregg_cell::derivation::mint_provenance(),
+            &[0u8; 32],
+        ),
     };
     let cap_slot = cap.slot;
 
@@ -349,6 +355,12 @@ pub(super) async fn tool_delegate(params: &Value, state: &NodeState) -> McpToolR
         expires_at: restrictions.not_after.map(|t| t as u64),
         allowed_effects: None,
         stored_epoch: None,
+        provenance: dregg_cell::derivation::cap_provenance(
+            &(agent_cell_id),
+            (capability as u32),
+            &dregg_cell::derivation::mint_provenance(),
+            &[0u8; 32],
+        ),
     };
 
     let effect = dregg_turn::Effect::GrantCapability {

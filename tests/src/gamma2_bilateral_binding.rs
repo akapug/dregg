@@ -147,6 +147,7 @@ fn make_grant_turn(alice: CellId, bob: CellId, target: CellId, nonce: u64) -> Tu
                 breadstuff: None,
                 allowed_effects: None,
                 stored_epoch: None,
+                provenance: [0u8; 32],
             },
         )
         .build();

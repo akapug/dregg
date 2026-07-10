@@ -3239,6 +3239,12 @@ fn parse_effects(raw_actions: &[RawAction], agent_cell_id: &CellId) -> Result<Ve
                     expires_at: None,
                     allowed_effects: None,
                     stored_epoch: None,
+                    provenance: dregg_cell::derivation::cap_provenance(
+                        &(cap_target),
+                        (action.slot.unwrap_or(0)),
+                        &dregg_cell::derivation::mint_provenance(),
+                        &[0u8; 32],
+                    ),
                 };
                 effects.push(Effect::GrantCapability { from, to, cap });
             }

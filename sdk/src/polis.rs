@@ -123,6 +123,12 @@ pub(crate) fn bootstrap_plan(
                 expires_at: None,
                 allowed_effects: None,
                 stored_epoch: None,
+                provenance: dregg_cell::derivation::cap_provenance(
+                    &(cell_id),
+                    (0),
+                    &dregg_cell::derivation::mint_provenance(),
+                    &[0u8; 32],
+                ),
             },
         }],
         descriptor,
