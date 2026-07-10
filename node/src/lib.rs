@@ -1276,10 +1276,24 @@ async fn run_node(
         let operator_pubkey = s.cclerk.public_key().0;
         let native = [0u8; 32];
         let federation_id = s.federation_id;
-        // Federation-wide pseudo-owners: nobody signs as these, they are demo
-        // cells whose identity must agree across replicas.
-        let lease_pubkey = blake3::derive_key("dregg-demo-lease-v1", &federation_id);
-        let provider_pubkey = blake3::derive_key("dregg-demo-lease-provider-v1", &federation_id);
+        // The LEASE is OPERATOR-OWNED (per-node). The metered settlement is a plain
+        // operator-signed Transfer FROM the lease, so the operator must OWN it — a
+        // lease owned by some other key refuses the transfer ("Ed25519 signature
+        // half failed"). This makes the lease node-local; a genuinely
+        // federation-wide lease whose rent settles on every replica needs the
+        // lease PROGRAM's metered discharge (pay/advance) instead of a plain
+        // operator Transfer, which is a real integration step — see
+        // docs/FINDING-federation-wide-settlement.md.
+        let lease_pubkey = operator_pubkey;
+        // The PROVIDER (rent beneficiary) IS federation-wide: a real Ed25519 key
+        // derived deterministically from the federation id, so every replica seeds
+        // the identical cell and a settlement Transfer credits a cell they all hold.
+        let provider_pubkey = ed25519_dalek::SigningKey::from_bytes(&blake3::derive_key(
+            "dregg-demo-lease-provider-v1",
+            &federation_id,
+        ))
+        .verifying_key()
+        .to_bytes();
         let lease_id = dregg_cell::CellId::derive_raw(&lease_pubkey, &native);
         let provider_cell = dregg_cell::CellId::derive_raw(&provider_pubkey, &native);
         if s.ledger.get(&lease_id).is_none() {
