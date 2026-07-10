@@ -539,3 +539,21 @@ rev-converge refactor lands revoked_root at cipherclerk.rs:5428; do NOT guess it
   build-verified: would-it-compile + ballot/forge/db correctness).
 NEXT: harvest each review, verify findings by tracing the code (a finding is not a bug until traced), fix the real
 ones path-specific, re-run the tests. Then optionally: durable arcade, bot Bedrock-narrator swap, branch hygiene.
+
+## ✅ HARDENING PASS (4-lane correctness review → verified fixes)
+Engine review's headline: the AI-proposes-world-disposes invariant HOLDS on every axis (no exploitable bypass).
+Real bugs found + fixed (each traced before touching, tests added, committed path-specific):
+- NARRATOR ($20 ledger): present-but-empty ledger now fails closed (was silent $0 reset); Reservation no longer
+  Clone (linear token — cloning let a double true-up un-cap); input estimate = bytes (true upper bound, was
+  bytes/3); operator price override labeled OperatorOverride not ConservativeUpperBound. 11/11.
+- DSL: `lose: -> "x"` PANIC → line-numbered error (fail-closed restored); win-item-in-disconnected-room now caught
+  (reachability, was existence-anywhere); dead-flag-gate → warning. +3 regression tests, 15/15; samples still clean.
+- fiction.rs: is_tie was ALWAYS false (scanned only below the winner) → fixed + repairs a failing unit test;
+  4 poisoned-mutex .unwrap() → into_inner recovery (was brick-all-/dungeon). NOT build-verified (turn crate still
+  mid rev-converge) — type-correct + minimal; re-test when it builds.
+- ENGINE: corrected the DmCaps "second independent tooth" over-claim (in a GameSession the cap is derived from
+  all_items, so it's a backstop not independent) — claim-precision, no behavior change.
+- DOCS: demo/README.md — clean present-tense overview (supersedes the organic OPEN-ME log).
+OPTIONAL follow-ups (lower priority, from the reviews): DSL duplicate-room-id silent overwrite → fail-closed;
+`items:lantern` no-space → diagnostic; combat hp<=0 / negative-damage → validator reject; fiction.rs no-vote-close
+auto-plays option 0 (behavioral). Bot deploy still auto-parked on the turn rev-converge.
