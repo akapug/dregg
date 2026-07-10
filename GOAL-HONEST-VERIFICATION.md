@@ -148,7 +148,13 @@ the sibling lane settles — not mine to touch/stash.
   `setDelegate` has no deployed program. COUNT CORRECTION: 30 distinct `*Stmt` terms, not 32 (`legStmt` aliases
   reduce to `balanceAStmt`). Teeth: `cellSealStmt_fires` + `cellSeal_notFiniteDiff_over_empty` (BITES).
   R1's `hpres` gate discharged for these 28.
-- ▶ IN FLIGHT: step 3C (the last 2 squares — createCellStmt/createCellFromFactoryStmt, unblocked by 3A) ·
-  step 4 R4 (`recStateCommit_binds_kernel_fin`: collapse the 5 carried hypotheses — 4 injectivity + 
+- ✅✅ **STEP 3 COMPLETE** `63c904d56` — `createCellStmt_square` + `createCellFromFactoryStmt_square` proved, so
+  ALL 30 deployed `*Stmt` programs have commuting squares and **R1's `hpres` gate is FULLY DISCHARGED for every
+  deployed effect**. (`setDelegate` has no deployed program — a non-issue, not a gap.)
+  ⚠ MEASURED SUBTLETY: `setCell`'s non-default obligation is GENUINELY FALSE when the factory lookup misses
+  (the `none` arm writes back `k.cell newCell`, possibly `.record []`). So `finFactoryCell` is a `dite` —
+  identity when absent. A uniform `finSetCell` would have been UNSOUND. Negative tooth
+  `factoryCellWrite_can_be_default` proves it. Whole tree GREEN 4534.
+- ▶ IN FLIGHT: step 4 R4 (`recStateCommit_binds_kernel_fin`: collapse the 5 carried hypotheses — 4 injectivity + 
   RestHashIffFrame — to `Poseidon2SpongeCR` ALONE, scoped to denote-images/reachable states, realizing
   `LeafRealization` rather than assuming it).
