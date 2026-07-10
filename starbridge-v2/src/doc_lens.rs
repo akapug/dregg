@@ -24,8 +24,8 @@
 //! gpui-free + fully tested; renders through the existing generic body widget.
 
 use dregg_doc::{
-    blame, commit, content, Author, ConflictRegion, DocGraph, ExecutorDrivenDoc, History, PatchId,
-    Regime, Rendered, Segment,
+    blame, content, substrate_commit, Author, ConflictRegion, DocGraph, ExecutorDrivenDoc, History,
+    PatchId, Regime, Rendered, Segment,
 };
 
 use crate::presentable::{
@@ -105,7 +105,7 @@ impl Presentable for DocumentInspection {
         let graph = &self.graph;
         let rendered: Rendered = content(graph);
         let lines = blame(graph);
-        let commitment = commit(graph);
+        let commitment = substrate_commit(graph);
         let conflict_count = rendered.conflicts().count();
         let patch_count = self.history.as_ref().map(History::len).unwrap_or(0);
 
@@ -127,7 +127,13 @@ impl Presentable for DocumentInspection {
                 Field::text("patches", patch_count.to_string()),
                 Field::text("live_atoms", lines.len().to_string()),
                 Field::boolean("has_conflict", rendered.has_conflict()),
-                Field::text("commitment", format!("{:032x}", commitment.0)),
+                Field::text(
+                    "commitment",
+                    commitment
+                        .iter()
+                        .map(|b| format!("{b:02x}"))
+                        .collect::<String>(),
+                ),
                 Field::text(
                     "tip",
                     match &self.history {
@@ -301,12 +307,12 @@ fn conflict_fields(rendered: &Rendered) -> Inspectable {
 }
 
 /// The commitment binding + the two-regime "what-is" explanation.
-fn commitment_prose(commitment: dregg_doc::Commitment, rendered: &Rendered) -> String {
+fn commitment_prose(commitment: [u8; 32], rendered: &Rendered) -> String {
     let mut s = String::new();
-    s.push_str(&format!(
-        "COMMITMENT — the document binds to {:032x}.\n\n",
-        commitment.0
-    ));
+    // The REAL commitment: the wide sorted-Poseidon2 heap root (`substrate_commit`),
+    // shown as its short hex. This replaced the retired non-cryptographic scalar.
+    let hex: String = commitment.iter().map(|b| format!("{b:02x}")).collect();
+    s.push_str(&format!("COMMITMENT — the document binds to {hex}.\n\n"));
     s.push_str(
         "A document is a Pijul-shaped patch object: a keyed atom map + order-edges + \
          a single-valued field store. Two REGIMES:\n",
@@ -437,7 +443,7 @@ mod tests {
     fn the_commitment_prose_binds_and_names_the_regimes() {
         let doc = DocumentInspection::new("notes", conflicted_history());
         let rendered = content(&doc.graph);
-        let prose = commitment_prose(commit(&doc.graph), &rendered);
+        let prose = commitment_prose(substrate_commit(&doc.graph), &rendered);
         assert!(prose.contains("COMMITMENT"));
         assert!(
             prose.contains("PROSE") && prose.contains("FIELDS"),
