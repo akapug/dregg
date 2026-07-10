@@ -37,10 +37,10 @@ argument):
     no-amplification (`execFullForestG_no_amplify`) are ONE-LINE COROLLARIES of the EXISTING
     `FullForest` theorems applied to `eraseG f` — NOT re-proofs. The launder teeth SURVIVE (a per-asset
     nonzero delta in each asset is still CAUGHT).
-  * Per-node attestation GROWS: `gatedActionInvG` ANDs three auth conjuncts (credential-valid ∧
-    cap-authority ∧ caveats-discharged) onto the UNCHANGED `fullActionInvA`. `execFullAGated_attests`
-    and `execFullForestG_each_attests` prove every committed node carries them — credential-blindness
-    is GONE.
+  * Per-node attestation GROWS: `gatedActionInvG` ANDs four auth conjuncts (credential-valid ∧
+    cap-authority ∧ caveats-discharged ∧ NOT-REVOKED) onto the UNCHANGED `fullActionInvA`.
+    `execFullAGated_attests` and `execFullForestG_each_attests` prove every committed node carries them
+    — credential-blindness is GONE and a committed node ATTESTS it was not revoked.
 
 The within-cell no-TOCTOU is AUTOMATIC: `execFullAGated` reads `gateOK na s` on the SAME `s` it then
 runs `execFullA s a` against — one indivisible node step (`gatedNode_check_eq_use`), the executed
@@ -1021,28 +1021,32 @@ theorem execFullForestG_no_amplify
 
 /-! ## §8 — Per-node ATTESTATION: `gatedActionInvG` (credential-blindness ELIMINATED) + fail-closed.
 
-`gatedActionInvG` ANDs THREE auth conjuncts (credential-valid ∧ cap-authority ∧ caveats-discharged)
-onto the UNCHANGED `fullActionInvA`. `execFullAGated_attests` proves a committed gated node carries all
-four (the gate Bools forced true by `gatedNode_check_eq_use`, the fourth by `execFullA_attests_per_asset`
-UNCHANGED). `execFullForestG_each_attests` lifts it forest-wide; `execFullForestG_unauthorized_fails`
-is the fail-closed root. -/
+`gatedActionInvG` ANDs FOUR auth conjuncts (credential-valid ∧ cap-authority ∧ caveats-discharged ∧
+NOT-REVOKED) onto the UNCHANGED `fullActionInvA`. `execFullAGated_attests` proves a committed gated node
+carries all five (the four gate Bools forced true by `gatedNode_check_eq_use`, the fifth by
+`execFullA_attests_per_asset` UNCHANGED). `execFullForestG_each_attests` lifts it forest-wide;
+`execFullForestG_unauthorized_fails` is the fail-closed root. -/
 
-/-- **`gatedActionInvG`** — the per-node GATED invariant: the THREE auth conjuncts ANDed onto the
+/-- **`gatedActionInvG`** — the per-node GATED invariant: the FOUR auth conjuncts ANDed onto the
 UNCHANGED `fullActionInvA` (the per-asset ledger VECTOR ∧ ChainLink ∧ ObsAdvance ∧ kind obligation).
 Credential-blindness is GONE: a committed node proves the WHO passed the §8 oracle ∧ the WHAT
-(`granted ≤ held` / `authorizedB`) ∧ every caveat discharged on the pre-state. -/
+(`granted ≤ held` / `authorizedB`) ∧ every caveat discharged on the pre-state ∧ NOT-REVOKED
+(`revocationGate` — `na.credNul ∉ s.kernel.revoked`, the COMMITTED registry, hole #3/#139). The
+fourth leg is what makes a committed node ATTEST it was not revoked — the same order as `gateOK`. -/
 def gatedActionInvG (s : RecChainedState)
     (na : NodeAuthC (Digest := Digest) (Proof := Proof) (Request := Request) (Stmt := Stmt)
       (Wit := Wit) (CellId := CellId) (Rights := Rights) (Ctx := Ctx) (Gateway := Gateway) (Bytes := Bytes) (Tag := Tag))
     (a : FullActionA) (s' : RecChainedState) : Prop :=
   credentialValidG na = true ∧ capAuthorityG na = true ∧ caveatsDischarged na s = true
+    ∧ revocationGate na s = true
     ∧ fullActionInvA s a s'
 
-/-- **`execFullAGated_attests` (the committed⇒all-four headline, per node).** Every committed
-gated node attests `gatedActionInvG`: credential-valid ∧ cap-authority ∧ caveats-discharged ∧ the full
-per-asset/chain/kind obligation. NON-VACUOUS: a forged credential ⇒ no commit ⇒ no false attestation;
-a valid commit ⇒ all four conjuncts with teeth. The gate Bools come from `gatedNode_check_eq_use`
-(which forces `gateOK = true`, i.e. ALL THREE legs); the fourth conjunct from
+/-- **`execFullAGated_attests` (the committed⇒all-five headline, per node).** Every committed
+gated node attests `gatedActionInvG`: credential-valid ∧ cap-authority ∧ caveats-discharged ∧
+NOT-REVOKED ∧ the full per-asset/chain/kind obligation. NON-VACUOUS: a forged credential ⇒ no commit ⇒
+no false attestation; a REVOKED credential ⇒ `gateOK_revoked_fails` ⇒ no commit ⇒ no false attestation;
+a valid commit ⇒ all five conjuncts with teeth. The four gate Bools come from `gatedNode_check_eq_use`
+(which forces `gateOK = true`, i.e. ALL FOUR legs including `revocationGate`); the fifth conjunct from
 `execFullA_attests_per_asset` UNCHANGED. -/
 theorem execFullAGated_attests (s s' : RecChainedState)
     (na : NodeAuthC (Digest := Digest) (Proof := Proof) (Request := Request) (Stmt := Stmt)
@@ -1050,12 +1054,10 @@ theorem execFullAGated_attests (s s' : RecChainedState)
     (a : FullActionA) (h : execFullAGated s na a = some s') :
     gatedActionInvG s na a s' := by
   obtain ⟨hgate, hfa⟩ := gatedNode_check_eq_use s s' na a h
-  -- `gateOK = true` forces all three legs (the conjunction).
-  have h3 : credentialValidG na = true ∧ capAuthorityG na = true ∧ caveatsDischarged na s = true := by
-    unfold gateOK at hgate
-    simp only [Bool.and_eq_true] at hgate
-    exact ⟨hgate.1.1.1, hgate.1.1.2, hgate.1.2⟩
-  exact ⟨h3.1, h3.2.1, h3.2.2, execFullA_attests_per_asset hfa⟩
+  -- `gateOK = true` forces ALL FOUR legs (credential ∧ cap-authority ∧ caveats ∧ revocation).
+  unfold gateOK at hgate
+  simp only [Bool.and_eq_true] at hgate
+  exact ⟨hgate.1.1.1, hgate.1.1.2, hgate.1.2, hgate.2, execFullA_attests_per_asset hfa⟩
 
 /-- **`execFullForestG_unauthorized_fails` (fail-closed at the root, ANY leg).** If the root
 node's gate fails on ANY leg (`gateOK na s = false` — a forged credential, an unauthorized cap, OR a
