@@ -79,7 +79,7 @@ use crate::field::BabyBear;
 /// See the module docs for the constructor discipline. The inner array is
 /// private on purpose: possession of a `Faithful8` is evidence the value came
 /// from a faithful encoder (or a NAMED, greppable `_DANGER` residual site).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Faithful8([BabyBear; 8]);
 
 impl Faithful8 {
@@ -169,6 +169,22 @@ impl Faithful8 {
     #[inline]
     pub fn limbs(&self) -> [BabyBear; 8] {
         self.0
+    }
+
+    /// The canonical 32-byte packing of the octet: lane `i` in bytes
+    /// `[4i..4i+4]` little-endian (each BabyBear lane `< p < 2^31`, so its 4
+    /// bytes recover it exactly). The exact inverse of [`Faithful8::from_bytes32`]
+    /// on canonical lanes, and byte-identical to `cell::commitment::digest8_to_bytes32`.
+    /// THE byte boundary: a `Faithful8` root becomes the wide 32 bytes a blake3
+    /// commitment / wire slot binds — the SAME bytes the old `[u8; 32]` field
+    /// held (values unchanged; only the type is now wide).
+    #[inline]
+    pub fn to_bytes32(&self) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        for (i, lane) in self.0.iter().enumerate() {
+            out[i * 4..i * 4 + 4].copy_from_slice(&lane.as_u32().to_le_bytes());
+        }
+        out
     }
 
     /// Write the octet CONTIGUOUSLY into a pre-limbs / row slice at `base`

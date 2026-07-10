@@ -107,8 +107,8 @@ fn heap_root_lane0_forge_closed_offchain() {
     assert!(cell_a.state.set_heap(1, HEAP_KEY_A, FORGE_VALUE));
     assert!(cell_b.state.set_heap(1, HEAP_KEY_B, FORGE_VALUE));
     assert_eq!(
-        cell_a.state.heap_root[0..4],
-        cell_b.state.heap_root[0..4],
+        cell_a.state.heap_root.to_bytes32()[0..4],
+        cell_b.state.heap_root.to_bytes32()[0..4],
         "the stored heap_root still collides on lane 0"
     );
     assert_ne!(
@@ -144,8 +144,8 @@ fn fields_root_lane0_forge_closed_offchain() {
     assert!(cell_a.state.set_field_ext(FIELDS_KEY_A, FORGE_VALUE));
     assert!(cell_b.state.set_field_ext(FIELDS_KEY_B, FORGE_VALUE));
     assert_eq!(
-        cell_a.state.fields_root[0..4],
-        cell_b.state.fields_root[0..4],
+        cell_a.state.fields_root.to_bytes32()[0..4],
+        cell_b.state.fields_root.to_bytes32()[0..4],
         "the stored fields_root still collides on lane 0"
     );
     assert_ne!(

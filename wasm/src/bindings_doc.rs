@@ -141,7 +141,7 @@ impl DocCollabWorld {
             .rt
             .ledger
             .get(&cell_id)
-            .map(|c| c.state.heap_root)
+            .map(|c| c.state.heap_root.to_bytes32())
             .unwrap_or([0u8; 32]);
         crate::bindings::hex_encode(&root)
     }
@@ -171,7 +171,7 @@ impl DocCollabWorld {
         let Some(cell) = self.rt.ledger.get(&cell_id) else {
             return false;
         };
-        cell.state.heap_root == substrate_commit(&self.published)
+        cell.state.heap_root.to_bytes32() == substrate_commit(&self.published)
     }
 
     /// The pending conflict's alternatives as JSON (`[{author, text}]`) — what the ConflictView
@@ -423,7 +423,7 @@ fn publish_doc_graph(
         cell.state.heap_map = heap;
         cell.state.reseal_heap_root();
         // The boundary the executor will now commit equals the canonical projection.
-        debug_assert_eq!(cell.state.heap_root, boundary);
+        debug_assert_eq!(cell.state.heap_root.to_bytes32(), boundary);
     }
 
     // (2) The real verified turn: bind the new umem boundary root as the receipted publish.
@@ -596,7 +596,7 @@ impl DocTextWorld {
             .rt
             .ledger
             .get(&cell_id)
-            .map(|c| c.state.heap_root)
+            .map(|c| c.state.heap_root.to_bytes32())
             .unwrap_or([0u8; 32]);
         crate::bindings::hex_encode(&root)
     }
@@ -616,7 +616,7 @@ impl DocTextWorld {
         let Some(cell) = self.rt.ledger.get(&cell_id) else {
             return false;
         };
-        cell.state.heap_root == substrate_commit(&self.published)
+        cell.state.heap_root.to_bytes32() == substrate_commit(&self.published)
     }
 
     // ── internals ───────────────────────────────────────────────────────────────────────
@@ -703,7 +703,14 @@ mod tests {
         // Before publishing, the committed boundary still binds the last PUBLISHED (seed)
         // document — the edited WORKING doc is not yet bound (the edit isn't a verified turn yet).
         let cell_id = world.rt.agents[0].cell_id;
-        let committed_before_pub = world.rt.ledger.get(&cell_id).unwrap().state.heap_root;
+        let committed_before_pub = world
+            .rt
+            .ledger
+            .get(&cell_id)
+            .unwrap()
+            .state
+            .heap_root
+            .to_bytes32();
         assert_ne!(
             committed_before_pub,
             substrate_commit(&world.doc.history().replay()),
@@ -723,7 +730,14 @@ mod tests {
         );
 
         // The receipt's heap_root EQUALS substrate_commit of the edited document.
-        let committed = world.rt.ledger.get(&cell_id).unwrap().state.heap_root;
+        let committed = world
+            .rt
+            .ledger
+            .get(&cell_id)
+            .unwrap()
+            .state
+            .heap_root
+            .to_bytes32();
         let edited_projection = substrate_commit(&world.doc.history().replay());
         assert_eq!(
             committed, edited_projection,

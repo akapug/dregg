@@ -376,7 +376,9 @@ fn hash_cell_state_into(hasher: &mut blake3::Hasher, state: &CellState) {
     // `legacy_cells_share_fields_root_contribution` test). The `v2->v3` context
     // bump (above) cleanly invalidates any stale v2 commitment rather than
     // risking a silent cross-version collision.
-    hasher.update(&state.fields_root);
+    // `fields_root` is a `Faithful8`; the commitment binds its canonical 32 wide
+    // bytes (`to_bytes32`) — BYTE-IDENTICAL to the former `[u8; 32]` field.
+    hasher.update(&state.fields_root.to_bytes32());
     // Record-layer STAGE 3 (`_RECORD-LAYER-UPGRADE.md` §C): absorb the dedicated
     // `system_roots` sub-block digest. This folds the 8 kernel-owned side-table
     // roots (escrow/queue/refcount/sturdyref/deleg/nullifier/commit/sealedBoxes)
@@ -398,8 +400,10 @@ fn hash_cell_state_into(hasher: &mut blake3::Hasher, state: &CellState) {
     // no-heap-activity cell carries `empty_heap_root()` — a cell-independent
     // constant — so the absorption is a uniform no-op for legacy cells.
     // Anti-ghost tooth: a tampered heap entry flips this root, flipping the
-    // commitment.
-    hasher.update(&state.heap_root);
+    // commitment. `heap_root` is a `Faithful8`; the commitment binds its
+    // canonical 32 wide bytes (`to_bytes32`) — BYTE-IDENTICAL to the former
+    // `[u8; 32]` field.
+    hasher.update(&state.heap_root.to_bytes32());
 }
 
 fn hash_permissions_into(hasher: &mut blake3::Hasher, perms: &Permissions) {
@@ -1002,7 +1006,7 @@ pub fn authority_residue_bytes(cell: &Cell) -> Vec<u8> {
     // handoff and fold the unbounded record + the 8 kernel side-tables).
     bytes.extend_from_slice(&st.swiss_table_root);
     bytes.extend_from_slice(&st.refcount_table_root);
-    bytes.extend_from_slice(&st.fields_root);
+    bytes.extend_from_slice(&st.fields_root.to_bytes32());
     bytes.extend_from_slice(&st.system_roots_digest());
 
     bytes
@@ -1943,13 +1947,13 @@ mod tests {
         hasher.update(&state.swiss_table_root);
         hasher.update(&state.refcount_table_root);
         // The no-op fold: the empty-map constant, independent of the cell.
-        hasher.update(&empty_fields_root());
+        hasher.update(&empty_fields_root().to_bytes32());
         // STAGE 3 no-op fold: the empty system-roots digest, independent of the
         // cell (a legacy cell carries the all-zero sub-block).
         hasher.update(&crate::state::empty_system_roots_digest());
         // Universal-map rotation §2.4 no-op fold: the empty-heap constant,
         // independent of the cell.
-        hasher.update(&crate::state::empty_heap_root());
+        hasher.update(&crate::state::empty_heap_root().to_bytes32());
         hash_permissions_into(&mut hasher, &cell.permissions);
         match &cell.verification_key {
             Some(vk) => {

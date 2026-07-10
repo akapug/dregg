@@ -226,7 +226,7 @@ fn the_whole_stack_coheres_into_one_world() {
     let conflict_boundary = doc.commitment();
     assert_eq!(
         conflict_boundary,
-        doc.cell().state.heap_root,
+        doc.cell().state.heap_root.to_bytes32(),
         "commitment IS the umem boundary"
     );
     assert!(
@@ -239,7 +239,7 @@ fn the_whole_stack_coheres_into_one_world() {
         .ensure_cell(doc.cell().clone())
         .expect("the sovereign document cell joins the live World");
     assert_eq!(
-        executor.cell_state(doc_id).unwrap().heap_root,
+        executor.cell_state(doc_id).unwrap().heap_root.to_bytes32(),
         conflict_boundary,
         "the published conflict's umem boundary is committed in the live ledger"
     );
@@ -266,7 +266,7 @@ fn the_whole_stack_coheres_into_one_world() {
         l.get_mut(&doc_id).unwrap().state = doc.cell().state.clone();
     });
     assert_eq!(
-        executor.cell_state(doc_id).unwrap().heap_root,
+        executor.cell_state(doc_id).unwrap().heap_root.to_bytes32(),
         resolved_boundary,
         "the resolved umem boundary is re-published in the live ledger"
     );
@@ -325,7 +325,7 @@ fn the_whole_stack_coheres_into_one_world() {
     );
     // The restored document still binds the resolved boundary it had at H.
     assert_eq!(
-        restored.get(&doc_id).unwrap().state.heap_root,
+        restored.get(&doc_id).unwrap().state.heap_root.to_bytes32(),
         resolved_boundary,
         "the restored document's umem boundary is exactly its height-H boundary"
     );

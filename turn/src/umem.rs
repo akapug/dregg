@@ -729,15 +729,15 @@ pub fn record_kernel_boundary_agrees(
 ) -> Result<RecordKernelBoundary, BoundaryDisagreement> {
     let proj = project_record_kernel_state(cell);
     let derived = derive_record_kernel_boundary(&proj, cell.id());
-    if derived.fields_root != cell.state.fields_root {
+    if derived.fields_root != cell.state.fields_root.to_bytes32() {
         return Err(BoundaryDisagreement::FieldsRoot {
-            committed: cell.state.fields_root,
+            committed: cell.state.fields_root.to_bytes32(),
             derived: derived.fields_root,
         });
     }
-    if derived.heap_root != cell.state.heap_root {
+    if derived.heap_root != cell.state.heap_root.to_bytes32() {
         return Err(BoundaryDisagreement::HeapRoot {
-            committed: cell.state.heap_root,
+            committed: cell.state.heap_root.to_bytes32(),
             derived: derived.heap_root,
         });
     }
@@ -2127,7 +2127,7 @@ pub fn reify_cell(cell: CellId, proj: &UProjection) -> Result<Cell, ReifyError> 
     // round-trip a heap whose preimage does not reproduce the committed root.
     if let Some(v) = proj.get(&UKey::HeapRoot(cell)) {
         let committed = expect_bytes32(&UKey::HeapRoot(cell), v)?;
-        if committed != c.state.heap_root {
+        if committed != c.state.heap_root.to_bytes32() {
             return Err(ReifyError::HeapNotProjected(cell));
         }
     }
@@ -2308,7 +2308,7 @@ mod heap_stage_a_tests {
         cell.state.set_heap(7, 9, bytes(7));
         cell.state.set_heap(2, 1, bytes(99));
         let id = cell.id();
-        let committed = cell.state.heap_root;
+        let committed = cell.state.heap_root.to_bytes32();
 
         let mut proj = UProjection::new();
         project_cell(&cell, &mut proj);
@@ -2448,7 +2448,7 @@ mod heap_stage_a_tests {
         b.state.set_heap(1, 2, bytes(42));
         b.state.set_heap(1, 5, bytes(13));
         let b_id = b.id();
-        let committed = b.state.heap_root;
+        let committed = b.state.heap_root.to_bytes32();
 
         let mut proj = UProjection::new();
         project_cell(&b, &mut proj);
