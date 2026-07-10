@@ -88,7 +88,31 @@ refinement changes the LEAN MODEL to match the impl; the impl pays nothing.
 - `Dregg2/Circuit/Freshness.lean` — its `no_replay` is parametric over a `CommitSurface`; a
   `FinKernelState`-grounded surface is the concrete instance that drops `RestHashIffFrame`.
 
-## Swarm plan (fire ONLY after ember signs off on this design)
+## STATUS (2026-07-09)
+- **R1 DONE** `6458e10d2` — `SortedMap`/`CanonMap` + `SortedMap.ext` (canonical form) + `FinKernelState` +
+  `denote` + `denote_injective` (UNCONDITIONAL) + the surjectivity honesty-gate (`hpres` explicit, `finStep`
+  abstract). Audited by type.
+- **R2 DONE** `e365d1c2d` — `serializeFin` + `serializeFin_injective` + `frameHashFin` + `restHashIffFrame_fin`
+  (residual `Poseidon2SpongeCR` ALONE) + `restHashIffFrame_of_fin` (the `StateCommit.RestHashIffFrame`
+  biconditional, PROVED on the denote-image / reachable subclass — honestly scoped, vacuous-on-image for the
+  accumulator roots because R1 doesn't yet carry them; see convergence item below).
+- **R3-core DONE** `e365d1c2d` — `finStep`/`recStep` (REAL `recK*` semantics) + `finStep_canonical` +
+  `finStep_denote` (the commuting square) + `reachable_states_are_finite` — for the **5 `FullAction` primitives**
+  (balance/delegate/revoke/mint/burn) ONLY. The other ~28 deployed effects are NOT covered (honest scope).
+
+## REMAINING PLAN (in order)
+1. **VK-epoch root convergence** — `FinKernelState` must carry `nullifierRoot`/`revokedRoot` (`Fin 8 → ℤ`,
+   finite — verbatim) + the pending `commitmentsRoot` dual (`1dce9523c`). Currently DROPPED (denote defaults
+   them ⇒ R2's root-clauses vacuous). Fold into R4/R3.
+2. **The delta de-risk FIRST** (`DELTA-FUTURE.md`) — the deployed Rust is already delta-based (`ledger.rs`); the
+   EffectsAsDataProto NO was against the nested-`if` model. Prototype the delta-refactor on ONE effect before
+   committing R3-continuation. If it composes → delta-refactor (dissolves the cluster + more faithful); else →
+   the `denote_applyUpdates` bridge + a `refine_commutes` tactic is the ceiling for the current model.
+3. **R3-continuation** — the remaining ~28 effects, via the winning model.
+4. **R4** — re-seat the apex commitment binding on `FinKernelState`; drop `RestHashIffFrame`/`RestFrameDecodes2*`/
+   `DeployedFaithful*`/`Satisfied2Faithful` from the carried set; collapse the injectivity cluster to the floor.
+
+## Original swarm plan (fire ONLY after ember signs off on this design)
 - **Lane R1 — representation + denotation:** `FinKernelState`, `FinMap`/canonical-sort, `denote`, `denote`
   surjectivity on reachable states. Foundation; others depend on it.
 - **Lane R2 — frame hash + `RestHashIffFrame` theorem:** `frameHashFin`, `restHashIffFrame_fin` ← Poseidon2CR;

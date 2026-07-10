@@ -15,7 +15,8 @@ file; never clobber another lane's.
 | **stark-kill** | `GOAL-STARK-KILL.md` | kill `circuit/src/stark.rs` + ~45 hand AIRs by re-deriving every circuit from Lean; climb the refinement ladder (Rung 1 functional → Rung 2 semantic → Rung 3 fold → apex) |
 | **no-prequantum** | `GOAL-PQ.md` | leave no classical-only load-bearing crypto standing: hybridize every signature (ed25519∧ML-DSA, enrolled+pinned) + key-exchange (X25519+ML-KEM); per the 07-09 audit |
 | **pq-frontiers** | `GOAL-PQ-FRONTIERS.md` | retire every honestly-open frontier of the crypto-to-protocol-soundness proof by FORMALIZING the literature (Unmasking-TRaccoon adaptive · Canetti UC composition · FIPS-204 @[export] extraction · surface-3 executor seam) — no smuggling, no giving up. **DONE 07-09** |
-| **verified-system** | `GOAL-VERIFIED-SYSTEM.md` | THE CAMPAIGN: kernel→crypto→protocol→code as one connected proof. P0 foundations · P1 parameter-level security claim · P2 discharge CircuitSound (FRI) · P3 extract every primitive to leanc-native · P4 protocol climbs · P5 impl widens · P6 the seL4↔capability-chain CAP WELD |
+| **verified-system** | `GOAL-VERIFIED-SYSTEM.md` | ⚠ **RETRACTED 07-09** — declared "done" on NAMED carriers (`StarkSound`/`RestHashIffFrame`/toy models); superseded by **honest-verification** |
+| **honest-verification** | `GOAL-HONEST-VERIFICATION.md` | RETIRE THE CARRIER DEBT: discharge every DEBT-A (`StarkSound`) + DEBT-B (finite-map / `RestHashIffFrame`) carrier to a PROVED theorem or a genuine floor item, so the apex rests only on `{Poseidon2SpongeCR, lattice/DL, leanc}` — no `seL4-cited`, nothing named. Hub for `CARRIER-CENSUS` + `DEBT-B` + `DELTA-FUTURE` |
 
 **Shared-tree discipline (all lanes):** additive-only in swarms; commit surgically — NEVER
 stage another lane's files (e.g. `dregg-lean-ffi/src/lib.rs`, another `GOAL-*.md`); no git
