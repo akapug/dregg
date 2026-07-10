@@ -16,7 +16,12 @@ description = "Starbridge userspace privacy-voting app — FactoryDescriptors an
 # See `src/lib.rs` for the per-cell field-slot schema.
 
 [dependencies]
-dregg-app-framework = { path = "../../app-framework" }
+# `default-features = false`: this crate uses only the wasm-clean CORE of the
+# framework (`AgentCipherclerk`/`EmbeddedExecutor`/`Effect`/`AuthRequired`/`invoke`),
+# and it sits in `spween-dregg`'s (browser) dep tree via `collective-choice`, so it
+# must not drag the `server` feature (axum/tokio-full/reqwest) onto the shared
+# instance. Native builds are unaffected (the core API is identical).
+dregg-app-framework = { path = "../../app-framework", default-features = false }
 dregg-cell = { path = "../../cell", default-features = false }
 dregg-turn = { path = "../../turn" }
 dregg-types = { path = "../../types" }

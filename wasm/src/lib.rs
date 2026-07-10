@@ -58,16 +58,11 @@ pub mod bindings_doc;
 // receipt chain that replays for a stranger). `StoryWorld` is the narrative sibling of
 // `DocCollabWorld`.
 //
-// ⚠ NATIVE-ONLY (gated with the `spween-dregg` dep, `[target.'cfg(not(target_arch =
-// "wasm32"))'.dependencies]`). `StoryWorld` rides `spween-dregg`'s `Driver`/`WorldCell`, whose
-// turns are admitted by `dregg_app_framework::EmbeddedExecutor`; `dregg-app-framework`
-// unconditionally pulls `axum`/`tokio(full)`/`reqwest` (non-wasm32) AND the native `dregg-lean-ffi`
-// (whose `no-lean-link` marshal-only path is currently a stale stub) — so the story path builds
-// for neither the wasm32 ship nor the wasm crate's native `cargo test` while wired in. It compiles
-// + its test passes ONLY in a full-Lean native workspace (verified via `spween-dregg`'s own suite).
-// This is one flip from live once `spween-dregg` grows a wasm-clean executor route (the same in-tab
-// embedded executor `DocCollabWorld` already rides) instead of `dregg-app-framework`.
-#[cfg(not(target_arch = "wasm32"))]
+// Browser-playable: `spween-dregg` runs its turns through `dregg-app-framework`'s
+// wasm-clean CORE (`EmbeddedExecutor` + the cell/turn primitives, `default-features =
+// false` — the `server` feature that pulls `axum`/`tokio(full)`/`reqwest`/`tower-http`
+// is OFF), so `StoryWorld` crosses to the tab exactly like `DocCollabWorld`. No target
+// gate: the module is in the shipped wasm32 bundle AND the native `cargo test`.
 pub mod bindings_story;
 
 // ============================================================================

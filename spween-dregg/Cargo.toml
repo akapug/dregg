@@ -22,7 +22,12 @@ spween = { git = "https://github.com/emberian/spween", rev = "afb5b1fce8c9dd3b78
 # ledger), `AppCipherclerk`/`make_action`, `Effect`/`Turn`/`TurnReceipt`, and the
 # re-exported `CellProgram`/`StateConstraint`/`TransitionCase`/`TransitionGuard`
 # the gate-lowering compiles conditions into.
-dregg-app-framework = { path = "../app-framework" }
+# `default-features = false` drops the `server` feature (axum/tokio-full/reqwest/
+# tower-http, non-wasm32): spween-dregg needs ONLY the wasm-clean core — the
+# `EmbeddedExecutor` + the cell/turn/CellProgram primitives — so the story surface
+# (`wasm/src/bindings_story.rs`) crosses to the browser tab. Native builds are
+# unaffected (the executor path is identical with or without `server`).
+dregg-app-framework = { path = "../app-framework", default-features = false }
 # The cell model itself (`Cell`, `Permissions`) for birthing the world-cell.
 dregg-cell = { path = "../cell" }
 # THE REAL voting engine — the canonical cap-bounded cell-backed `VoteEngine`

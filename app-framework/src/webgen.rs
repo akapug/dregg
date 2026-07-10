@@ -290,6 +290,7 @@ fn js_string(value: &str) -> String {
 /// `AFFORDANCES` map varies), so it can be committed + drift-checked. The element
 /// uses the same `x-dregg-held-rights` header the endpoint's default resolver reads,
 /// so it drives the genuine gate end-to-end.
+#[cfg(feature = "server")]
 pub fn render_surface_component(app: &crate::deos_app::DeosApp) -> String {
     let module = surface_constants_module(app);
     let mut s = String::new();
@@ -316,6 +317,7 @@ pub fn render_surface_component(app: &crate::deos_app::DeosApp) -> String {
 
 /// Build the [`ConstantsModule`] backing an app's web surface — one
 /// affordance-surface descriptor per cell, keyed by the cell's route prefix.
+#[cfg(feature = "server")]
 fn surface_constants_module(app: &crate::deos_app::DeosApp) -> ConstantsModule {
     // A leaked &'static str for the module banner (the app name). The app name lives
     // for the process; this generator is a build/dev-time tool, so the small leak is
@@ -332,6 +334,7 @@ fn surface_constants_module(app: &crate::deos_app::DeosApp) -> ConstantsModule {
 /// web component. Pure DOM + `fetch`; no framework. Reads `AFFORDANCES` (emitted
 /// above it) for the cell list + endpoints; drives the genuine cap gate via the
 /// `x-dregg-held-rights` header the endpoint resolves.
+#[cfg(feature = "server")]
 const SURFACE_COMPONENT_RUNTIME: &str = r#"
 // The held-rights header the affordance endpoint's default resolver reads. The
 // element carries the viewer's tier here so the SERVER gate (real is_attenuation)
