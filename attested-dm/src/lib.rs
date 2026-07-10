@@ -65,10 +65,11 @@ pub use prompt_template::{
 
 pub mod game;
 pub use game::{
-    bramble_keep, starfall_spire, sunken_vault, CombatEnemy, DialogueGrant, DialogueRule, Exit,
-    GameAction, GameBinding, GameBrain, GameRefusal, GameSession, GameStatus, GameWorld, Gate,
-    GateReason, Hostile, LoseCondition, Npc, Objective, Outcome, PlayResult, Proposal, Resolution,
-    Room, ScriptedGm, Spell, SpellEffect, SpellRule, UseRule, PLAYER_WOUNDS_FLAG,
+    bramble_keep, deepdark_mine, starfall_spire, sunken_vault, CombatEnemy, DialogueGrant,
+    DialogueRule, Exit, GameAction, GameBinding, GameBrain, GameRefusal, GameSession, GameStatus,
+    GameWorld, Gate, GateReason, Hostile, LightRule, LoseCondition, Npc, Objective, Outcome,
+    PlayResult, Proposal, RefuelRule, Resolution, Room, ScriptedGm, Spell, SpellEffect, SpellRule,
+    UseRule, PLAYER_WOUNDS_FLAG,
 };
 // `PromptBinding` is defined below (it is tightly coupled to the chain-link hashing); re-exported
 // here in the same neighbourhood as the other prompt-template surface for discoverability.

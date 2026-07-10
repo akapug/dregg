@@ -522,6 +522,91 @@ pub struct SpellRule {
     pub fizzle_narration: String,
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// LIGHT — a bounded RESOURCE dimension. A lit lamp burns down one turn per STEP; the
+// dark rooms are impassable without it; refuel with oil, or the dark takes you. The AI
+// narrates the flame however it likes ("your lamp blazes eternal"); the WORLD keeps the
+// oil counter, and the counter is the truth. Prose is not power, at the level of light.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// **A world-declared LIGHT budget — the resource dimension.** A lit lamp burns down one
+/// turn per STEP: every legal [`GameAction::Move`] taken while the player HOLDS the
+/// [`Self::lamp`] decrements the [`Self::counter`] flag by one — a [`WorldEffect::SetFlag`]
+/// batched onto the same on-chain move (the resolver reads the counter and writes `counter - 1`;
+/// the count is a world flag, never the AI's prose). A room in [`Self::dark_rooms`] is
+/// IMPASSABLE without a burning lamp: entering it requires the player to hold the lamp AND
+/// `counter > 0`, else the move is REFUSED ([`GameRefusal::TooDark`]) — the dark is absolute,
+/// and a jailbroken *"your lamp blazes eternal"* lights nothing; only real oil in the counter does.
+///
+/// The lamp is refueled by an ordinary [`RefuelRule`] (use oil on the lamp → `+add` turns), each
+/// oil flask single-use (it sets a `spent_*` flag, so a second pour of the empty flask does
+/// nothing). Run the counter to zero while stepping INTO the dark and the dark takes you: the step
+/// whose last oil is spent entering a dark room strands the player ([`Self::stranded`] flag → a
+/// [`LoseCondition`]). Light never grants an item and never opens a non-light [`Gate`]; it composes
+/// with the caps and the gates, it does not bypass them.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct LightRule {
+    /// The world flag holding the remaining lamp-turns (the light budget). Seeded to
+    /// [`Self::start`] when the world opens ([`GameWorld::new_world`]); decremented on-chain per step.
+    pub counter: String,
+    /// The lamp item. The light burns only while it is HELD (a step without it costs no oil), and a
+    /// dark room is impassable without it — no lamp, no descent.
+    pub lamp: String,
+    /// The lamp's initial oil — the counter's value when the world opens.
+    pub start: i64,
+    /// The pitch-dark rooms — impassable unless the player holds the lamp AND `counter > 0`.
+    pub dark_rooms: BTreeSet<String>,
+    /// The single-use refuel interactions (use oil on the lamp → more turns).
+    pub refuels: Vec<RefuelRule>,
+    /// The flag set when the lamp gutters out in the dark (the last oil spent STEPPING INTO a dark
+    /// room) — a stranded LOSE. Wire it as a [`LoseCondition`]. `None` = no stranded lose.
+    pub stranded: Option<(String, i64)>,
+}
+
+impl LightRule {
+    /// Whether `room` is pitch dark (needs a burning lamp to enter).
+    pub fn is_dark(&self, room: &str) -> bool {
+        self.dark_rooms.contains(room)
+    }
+
+    /// The remaining lamp-oil in the current world.
+    pub fn oil(&self, world: &WorldCell) -> i64 {
+        world.flags.get(&self.counter).copied().unwrap_or(0)
+    }
+
+    /// Whether the lamp is BURNING right now — held, with oil left. Only a burning lamp lets a
+    /// player enter the dark, and only a burning lamp burns oil on a step.
+    pub fn burning(&self, world: &WorldCell) -> bool {
+        world.inventory.contains(&self.lamp) && self.oil(world) > 0
+    }
+
+    /// The refuel rule for pouring `fuel_item` into the lamp, if the world declares one.
+    pub fn refuel_for(&self, fuel_item: &str) -> Option<&RefuelRule> {
+        self.refuels.iter().find(|r| r.fuel_item == fuel_item)
+    }
+}
+
+/// **A single-use REFUEL interaction** — pour oil into the lamp to buy more turns. When the player
+/// uses [`Self::fuel_item`] on the lamp (a [`GameAction::Use`] whose target is the lamp, or a bare
+/// pour) and this flask is not yet spent, the light counter GAINS [`Self::add`] turns (the resolver
+/// reads the current counter and writes `counter + add`) AND [`Self::spent_flag`] is set — the flask
+/// empties, so a second pour does nothing. Both flag writes land as ONE [`WorldEffect::Batch`] turn,
+/// bound on-chain. The oil is single-use because the world tracks the spent flag, not the prose: a
+/// jailbroken *"the flask refills itself endlessly"* pours nothing once the flag is set.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RefuelRule {
+    /// The oil the player must HOLD to refuel (e.g. `oil_flask_b`).
+    pub fuel_item: String,
+    /// The turns added to the light counter on a successful pour.
+    pub add: i64,
+    /// The per-flask guard flag: once set, this flask is spent (a second pour does nothing).
+    pub spent_flag: String,
+    /// The world's account of a successful refuel.
+    pub narration: String,
+    /// The world's account of pouring an already-spent flask (no effect).
+    pub spent_narration: String,
+}
+
 /// **The win condition** — reach `room` while HOLDING `item`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Objective {
@@ -569,6 +654,10 @@ pub struct GameWorld {
     /// The player's maximum hit points — accumulated [`PLAYER_WOUNDS_FLAG`] `>=` this is death
     /// (wire it as a [`LoseCondition`] for a combat dungeon). Non-combat dungeons ignore it.
     pub player_max_hp: i64,
+    /// The optional LIGHT budget — a lit lamp that burns down per step, dark rooms impassable
+    /// without it, and single-use oil to refuel. `None` for a dungeon with no light dimension (the
+    /// original three), so the resource mechanic is purely additive. See [`LightRule`].
+    pub light: Option<LightRule>,
     /// The starting room id.
     pub start: String,
     /// The win objective.
@@ -578,9 +667,15 @@ pub struct GameWorld {
 }
 
 impl GameWorld {
-    /// A fresh [`WorldCell`] opened at this world's starting room.
+    /// A fresh [`WorldCell`] opened at this world's starting room. If the world declares a
+    /// [`LightRule`], the lamp's initial oil is seeded into its counter flag (genesis world
+    /// config, like the starting room) — every later change to the counter is an on-chain turn.
     pub fn new_world(&self) -> WorldCell {
-        WorldCell::new(self.start.clone())
+        let mut world = WorldCell::new(self.start.clone());
+        if let Some(light) = &self.light {
+            world.flags.insert(light.counter.clone(), light.start);
+        }
+        world
     }
 
     /// The room with `id`, if any.
@@ -735,6 +830,14 @@ pub enum GameRefusal {
         /// The topic they have no line for.
         topic: String,
     },
+    /// The destination room is pitch dark and cannot be entered: the player holds no burning lamp,
+    /// or the lamp's oil is spent (`counter == 0`). The dark is ABSOLUTE — no prose ("your lamp
+    /// blazes eternal") lights it; only real oil in the counter does. World unchanged, no receipt
+    /// (anti-ghost). See [`LightRule`].
+    TooDark {
+        /// The dark room the player could not enter.
+        room: String,
+    },
     /// The caster spoke a DECLARED spell word they have not yet LEARNED — the word will not come
     /// ("you do not know that word"). World unchanged, no receipt (anti-ghost). An UNDECLARED word
     /// (the jailbreak "I cast WISH") is not a spell at all and refuses through the ordinary
@@ -774,6 +877,13 @@ impl std::fmt::Display for GameRefusal {
                 write!(
                     f,
                     "you do not know the word '{w}' — no prose puts it on your tongue"
+                )
+            }
+            GameRefusal::TooDark { room } => {
+                write!(
+                    f,
+                    "the way into the {room} is pitch dark — without a burning lamp you cannot \
+                     enter (your light is spent)"
                 )
             }
             GameRefusal::GameOver(s) => write!(f, "the game is over ({s:?})"),
@@ -851,12 +961,26 @@ pub fn resolve_action(map: &GameWorld, world: &WorldCell, action: &GameAction) -
                     });
                 }
             }
-            let effect = Some(WorldEffect::AdvanceScene(exit.to_room.clone()));
             let dest_name = map
                 .rooms
                 .get(&exit.to_room)
                 .map(|r| r.name.clone())
                 .unwrap_or_else(|| exit.to_room.clone());
+            // LIGHT: a pitch-dark room is impassable without a BURNING lamp (held AND oil > 0). The
+            // dark is absolute — the resolver refuses the step no matter how the AI narrates the
+            // flame. World unchanged, no receipt (anti-ghost). Composed with, not replacing, gates.
+            if let Some(light) = &map.light {
+                if light.is_dark(&exit.to_room) && !light.burning(world) {
+                    return Outcome::Refused(GameRefusal::TooDark {
+                        room: dest_name.clone(),
+                    });
+                }
+            }
+            // The move advances the scene, and — if a lit lamp is carried — BURNS one oil this step
+            // (a SetFlag batched onto the same on-chain move; the world writes the counter, not the
+            // prose). If that last oil is spent STEPPING INTO the dark, the lamp gutters out and the
+            // dark takes the player (the stranded flag → a LoseCondition). All in one receipted turn.
+            let effect = Some(move_effect(map, world, &exit.to_room));
             Outcome::Legal(Resolution {
                 narration: format!("You pass into the {dest_name}."),
                 status: status_after(map, world, effect.as_ref()),
@@ -902,6 +1026,17 @@ pub fn resolve_action(map: &GameWorld, world: &WorldCell, action: &GameAction) -
             }
             if !world.inventory.contains(item) {
                 return Outcome::Refused(GameRefusal::NotHolding(item.clone()));
+            }
+            // REFUEL PATH: pouring a held oil flask into the lamp (a bare pour, or `use oil on lamp`).
+            // The world's RefuelRule — not the prose — decides: an unspent flask adds its oil to the
+            // counter and marks itself spent (one Batch turn); an already-spent flask pours nothing.
+            if let Some(light) = &map.light {
+                let aimed_at_lamp = target.is_none() || target.as_deref() == Some(&light.lamp);
+                if aimed_at_lamp {
+                    if let Some(refuel) = light.refuel_for(item) {
+                        return resolve_refuel(map, world, light, refuel);
+                    }
+                }
             }
             let rule = map
                 .use_rules
@@ -1067,6 +1202,37 @@ fn resolve_spell(
     })
 }
 
+/// **Resolve a refuel** — pour a held oil flask into the lamp. The world decides, not the prose:
+/// an UNSPENT flask adds its oil to the light counter and marks itself spent (both writes in one
+/// [`WorldEffect::Batch`], so a rewritten refuel breaks the receipt); an ALREADY-SPENT flask is
+/// empty and pours nothing (a legal narration turn, no effect — the flask does not refill itself
+/// however the AI narrates it). The oil counter is a world flag; the count is the truth.
+fn resolve_refuel(
+    _map: &GameWorld,
+    world: &WorldCell,
+    light: &LightRule,
+    refuel: &RefuelRule,
+) -> Outcome {
+    // An already-spent flask is dry — a legal turn that changes nothing (like a fizzled spell).
+    if world.flags.get(&refuel.spent_flag).copied().unwrap_or(0) >= 1 {
+        return Outcome::Legal(Resolution {
+            narration: refuel.spent_narration.clone(),
+            status: status_after(_map, world, None),
+            effect: None,
+        });
+    }
+    let topped = light.oil(world) + refuel.add;
+    let effect = Some(WorldEffect::Batch(vec![
+        WorldEffect::SetFlag(light.counter.clone(), topped),
+        WorldEffect::SetFlag(refuel.spent_flag.clone(), 1),
+    ]));
+    Outcome::Legal(Resolution {
+        narration: refuel.narration.clone(),
+        status: status_after(_map, world, effect.as_ref()),
+        effect,
+    })
+}
+
 /// **Resolve one combat exchange** — the world computes the HP; the AI narrates the blow. Your
 /// armed strike takes `weapon_damage` off the foe (unarmed only `unarmed_damage`); if the foe
 /// survives it strikes back for `attack` (mitigated by held `armor`). Both totals persist as
@@ -1120,6 +1286,38 @@ fn resolve_combat(map: &GameWorld, world: &WorldCell, enemy: &CombatEnemy) -> Ou
         status: status_after(map, world, effect.as_ref()),
         effect,
     })
+}
+
+/// **Build the world-effect a legal [`GameAction::Move`] into `to_room` lands** — the scene
+/// advance, plus the LIGHT bookkeeping when the world declares a [`LightRule`]. A carried, burning
+/// lamp spends one oil this step (the resolver reads the counter and writes `counter - 1`); if that
+/// last oil is spent stepping INTO a dark room, the lamp gutters out and the stranded LOSE flag is
+/// set too. Everything rides ONE [`WorldEffect::Batch`] (so it lands as one on-chain turn); with no
+/// light rule — or no lit lamp carried — the move is a bare [`WorldEffect::AdvanceScene`] exactly as
+/// before (the original three dungeons are byte-for-byte unchanged).
+fn move_effect(map: &GameWorld, world: &WorldCell, to_room: &str) -> WorldEffect {
+    let advance = WorldEffect::AdvanceScene(to_room.to_string());
+    let light = match &map.light {
+        Some(l) => l,
+        None => return advance,
+    };
+    // Oil burns only while a lamp is carried WITH oil left. A dead/absent lamp burns nothing (and a
+    // dark room was already refused above, so a legal step into the dark always has oil to spend).
+    if !light.burning(world) {
+        return advance;
+    }
+    let remaining = light.oil(world) - 1;
+    let mut effects = vec![
+        advance,
+        WorldEffect::SetFlag(light.counter.clone(), remaining),
+    ];
+    // STRANDED: the last oil spent stepping into the dark — the dark takes the player.
+    if remaining == 0 && light.is_dark(to_room) {
+        if let Some((flag, v)) = &light.stranded {
+            effects.push(WorldEffect::SetFlag(flag.clone(), *v));
+        }
+    }
+    WorldEffect::Batch(effects)
 }
 
 /// Compute the game status after `effect` would land: the post-state's room + inventory +
@@ -1687,6 +1885,7 @@ pub fn sunken_vault() -> GameWorld {
         spells: Vec::new(),
         spell_rules: Vec::new(),
         player_max_hp: 0,
+        light: None,
         start: "shore".into(),
         objective: Objective {
             room: "sunken_gate".into(),
@@ -1958,6 +2157,7 @@ pub fn bramble_keep() -> GameWorld {
         spells: Vec::new(),
         spell_rules: Vec::new(),
         player_max_hp: 10,
+        light: None,
         start: "gatehouse".into(),
         objective: Objective {
             room: "rampart".into(),
@@ -2331,6 +2531,7 @@ pub fn starfall_spire() -> GameWorld {
         spells,
         spell_rules,
         player_max_hp: 10,
+        light: None,
         start: "threshold".into(),
         objective: Objective {
             room: "crown".into(),
@@ -2340,6 +2541,275 @@ pub fn starfall_spire() -> GameWorld {
             flag: PLAYER_WOUNDS_FLAG.into(),
             at_least: 10,
             description: "cut down by the Voidling".into(),
+        }],
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE DEEPDARK MINE — the fourth complete adventure, and the showcase for the bounded
+// LIGHT / RESOURCE dimension: descend a sunless mine on a lamp with limited oil, gather
+// single-use oil caches to survive deeper, reach the Deepheart and carry it back to the
+// surface before the light dies — a RACE AGAINST THE DARK. The AI narrates the flame; the
+// WORLD keeps the oil counter, and the counter is the truth.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// **THE DEEPDARK MINE** — a complete, solvable fourteen-room descent into an abandoned mine, and
+/// the showcase for the bounded LIGHT system. Distinct in theme from the drowned SUNKEN VAULT, the
+/// overgrown BRAMBLE KEEP, and the collapsing STARFALL SPIRE: a black, sunless pit whose deepest
+/// gallery holds a burning vein of starstone — the Deepheart. The whole critical path is a RACE
+/// AGAINST THE DARK, and the light is load-bearing: the descent is impossible if the oil is wasted
+/// or the caches skipped.
+///
+/// The light model, kept honest at every step (see [`LightRule`]): the lamp burns one oil per STEP
+/// while carried; the deep rooms are PITCH DARK and impassable without a burning lamp (a
+/// [`GameRefusal::TooDark`], not a [`Gate`] — the dark is a resource wall, not a lock); oil is
+/// refueled by single-use flasks (`use oil on lamp` → more turns, the [`RefuelRule`]); and the last
+/// oil spent stepping into the dark STRANDS you (the `stranded` lose). The counter is a world flag
+/// the resolver reads and writes — a jailbroken *"your lamp blazes eternal"* changes NOTHING; only
+/// real oil in the counter lets you go on.
+///
+/// The critical path, in forced order (a lamp of 8 oil, +5 per flask):
+///
+/// 1. at the **pithead** (daylight), take the **lamp** and **oil_flask_a**, and pour the flask into
+///    the lamp (`use oil_flask_a on lamp`) — the Ghost of a lost miner here will, if asked, warn you
+///    the deep is dark and the oil is life ([`DialogueGrant::Reveals`] — a hint, no power);
+/// 2. descend the cage to the **main drift** — the first DARK room; from here down, every room is
+///    pitch black and every step burns oil;
+/// 3. detour into the **sump** and the **pump house** for **oil_flask_b** and **oil_flask_c** and
+///    pour them — WITHOUT this fuel the round trip is unwinnable (you strand in the dark on the way
+///    back). An optional **oil_flask_d** waits in the **deadfall** for a wider margin;
+/// 4. press down through the **old workings**, the **lower drift**, the **cavern**, the
+///    **deep shaft**, and the **gallery** to the **Deepheart** chamber, and take the **deepheart**;
+/// 5. climb all the way back to the **pithead** — reach the surface HOLDING the deepheart to WIN,
+///    before the lamp gutters out in the dark.
+///
+/// Side content off the path: the **assay office** (a lit surface room with a brass token — lore),
+/// the **deadfall** (the fourth oil cache), and the ghost's warning at the pithead.
+pub fn deepdark_mine() -> GameWorld {
+    // The DARK rooms — everything below the cage. Impassable without a burning lamp; each step here
+    // burns oil, and the last oil spent entering one strands you.
+    let dark: &[&str] = &[
+        "main_drift",
+        "sump",
+        "crosscut",
+        "pump_house",
+        "old_workings",
+        "lower_drift",
+        "deadfall",
+        "cavern",
+        "deep_shaft",
+        "gallery",
+        "deepheart",
+    ];
+
+    let rooms = vec![
+        // ── The surface: lit, safe, and the way home. ──
+        Room::new(
+            "pithead",
+            "Pithead",
+            "Grey daylight over a broken headframe; a miner's lamp and a flask of oil hang by the \
+             cage. The shaft drops into black below.",
+        )
+        .item("lamp")
+        .item("oil_flask_a")
+        .exit("east", Exit::open("assay_office"))
+        .exit("down", Exit::open("cage")),
+        Room::new(
+            "assay_office",
+            "Assay Office",
+            "A caved-in clapboard office; a brass assay token lies among the spilled ledgers.",
+        )
+        .item("brass_token")
+        .exit("west", Exit::open("pithead")),
+        Room::new(
+            "cage",
+            "The Cage",
+            "The iron lift-cage, still on its rails between daylight above and the dark below.",
+        )
+        .exit("up", Exit::open("pithead"))
+        .exit("down", Exit::open("main_drift")),
+        // ── The deep: pitch dark, every room, from here down. ──
+        Room::new(
+            "main_drift",
+            "Main Drift",
+            "A low haulage tunnel; rusted rails run north into the dark and a side-way drops east.",
+        )
+        .exit("up", Exit::open("cage"))
+        .exit("north", Exit::open("crosscut"))
+        .exit("east", Exit::open("sump")),
+        Room::new(
+            "sump",
+            "Flooded Sump",
+            "A dead-end pump-sump, ankle-deep in black water; a sealed flask of lamp-oil floats here.",
+        )
+        .item("oil_flask_b")
+        .exit("west", Exit::open("main_drift")),
+        Room::new(
+            "crosscut",
+            "The Crosscut",
+            "A four-way crosscut; timbers groan overhead. Ways run north, back south, and west.",
+        )
+        .exit("south", Exit::open("main_drift"))
+        .exit("north", Exit::open("old_workings"))
+        .exit("west", Exit::open("pump_house")),
+        Room::new(
+            "pump_house",
+            "Pump House",
+            "A ruined pump chamber of seized machinery; a full oil-flask sits forgotten on a bracket.",
+        )
+        .item("oil_flask_c")
+        .exit("east", Exit::open("crosscut")),
+        Room::new(
+            "old_workings",
+            "Old Workings",
+            "Worked-out stopes riddle the rock; a winze drops away steeply downward.",
+        )
+        .exit("south", Exit::open("crosscut"))
+        .exit("down", Exit::open("lower_drift")),
+        Room::new(
+            "lower_drift",
+            "Lower Drift",
+            "A deeper haulage-way; the air is close. A gallery opens north, a fall of rock lies east.",
+        )
+        .exit("up", Exit::open("old_workings"))
+        .exit("north", Exit::open("cavern"))
+        .exit("east", Exit::open("deadfall")),
+        Room::new(
+            "deadfall",
+            "The Deadfall",
+            "A dead-end where the roof came down and buried a mule-team; a spare oil-flask lies among \
+             the scattered tack.",
+        )
+        .item("oil_flask_d")
+        .exit("west", Exit::open("lower_drift")),
+        Room::new(
+            "cavern",
+            "The Black Cavern",
+            "A natural cavern the miners broke into; a lightless underground lake laps unseen. A shaft \
+             drops down.",
+        )
+        .exit("south", Exit::open("lower_drift"))
+        .exit("down", Exit::open("deep_shaft")),
+        Room::new(
+            "deep_shaft",
+            "The Deep Shaft",
+            "The lowest shaft, cut for the starstone vein; a narrow gallery bends north toward a red \
+             glow you cannot yet see.",
+        )
+        .exit("up", Exit::open("cavern"))
+        .exit("north", Exit::open("gallery")),
+        Room::new(
+            "gallery",
+            "The Heartward Gallery",
+            "The last gallery; the rock ahead is warm, and a dull ember-light bleeds through a seam \
+             to the east.",
+        )
+        .exit("south", Exit::open("deep_shaft"))
+        .exit("east", Exit::open("deepheart")),
+        Room::new(
+            "deepheart",
+            "The Deepheart",
+            "A cathedral of black stone around a single burning vein — the Deepheart, a fist of \
+             starstone that never cooled.",
+        )
+        .item("deepheart")
+        .exit("west", Exit::open("gallery")),
+    ];
+
+    let mut room_map = BTreeMap::new();
+    for r in rooms {
+        room_map.insert(r.id.clone(), r);
+    }
+
+    // The four oil caches, each a single-use pour (`use oil_flask_X on lamp` → +5 turns, then spent).
+    let refuels = vec![
+        RefuelRule {
+            fuel_item: "oil_flask_a".into(),
+            add: 5,
+            spent_flag: "spent_oil_a".into(),
+            narration:
+                "You unstopper the flask and fill the lamp; the flame steadies and burns bright."
+                    .into(),
+            spent_narration: "The flask is empty — you drained it into the lamp already.".into(),
+        },
+        RefuelRule {
+            fuel_item: "oil_flask_b".into(),
+            add: 5,
+            spent_flag: "spent_oil_b".into(),
+            narration:
+                "You pour the sump-flask into the lamp; the guttering flame swells and holds."
+                    .into(),
+            spent_narration: "The sump-flask is dry — nothing left to give the lamp.".into(),
+        },
+        RefuelRule {
+            fuel_item: "oil_flask_c".into(),
+            add: 5,
+            spent_flag: "spent_oil_c".into(),
+            narration: "The pump-house oil feeds the lamp; the dark retreats a little further."
+                .into(),
+            spent_narration: "The pump-house flask is spent already.".into(),
+        },
+        RefuelRule {
+            fuel_item: "oil_flask_d".into(),
+            add: 5,
+            spent_flag: "spent_oil_d".into(),
+            narration:
+                "You empty the deadfall flask into the lamp; the flame drinks it gratefully.".into(),
+            spent_narration: "The deadfall flask is empty.".into(),
+        },
+    ];
+
+    let light = LightRule {
+        counter: "lamp_oil".into(),
+        lamp: "lamp".into(),
+        start: 8,
+        dark_rooms: dark.iter().map(|s| s.to_string()).collect(),
+        refuels,
+        stranded: Some(("stranded".into(), 1)),
+    };
+
+    // The Ghost of a lost miner haunts the pithead — asked about the dark, he only warns you (a
+    // pure-lore Reveals: a hint the world grants, with no mechanical power).
+    let npcs = vec![Npc::new(
+        "pithead",
+        "ghost",
+        "Ghost of a Lost Miner",
+        "a grey shade who never found his way back up",
+    )];
+    let dialogue = vec![DialogueRule {
+        room: "pithead".into(),
+        npc: "ghost".into(),
+        topic: "dark".into(),
+        requires: None,
+        grant: DialogueGrant::Reveals,
+        granted_narration:
+            "The ghost's jaw works soundlessly, then: 'The deep is black as the pit's \
+             own heart, and your lamp is hungry. Gather every flask of oil you find, and do not \
+             waste a step — run dry down there, and the dark keeps you, as it kept me.'"
+                .into(),
+        withheld_narration: String::new(),
+    }];
+
+    GameWorld {
+        rooms: room_map,
+        use_rules: Vec::new(),
+        hostiles: BTreeMap::new(),
+        combat: BTreeMap::new(),
+        npcs,
+        dialogue,
+        spells: Vec::new(),
+        spell_rules: Vec::new(),
+        player_max_hp: 0,
+        light: Some(light),
+        start: "pithead".into(),
+        objective: Objective {
+            room: "pithead".into(),
+            holding: "deepheart".into(),
+        },
+        lose: vec![LoseCondition {
+            flag: "stranded".into(),
+            at_least: 1,
+            description: "stranded in the dark when the lamp burned out".into(),
         }],
     }
 }
