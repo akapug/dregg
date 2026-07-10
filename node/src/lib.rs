@@ -1022,6 +1022,36 @@ async fn run_node(
         ),
     }
 
+    // ── ML-KEM ENCAPS: install the Lean-verified REAL core as `hybrid_kem::initiate`'s AUTHORITY ──
+    // The hybrid session KEM initiator (`dregg_pq::hybrid_kem::initiate`) produces the ML-KEM-768 ciphertext +
+    // shared secret by calling the `ml-kem` crate's `.encapsulate`. With a REAL core installed it instead
+    // produces them from the extracted, full-byte `Dregg2.Crypto.MlKemEncaps.mlkemEncaps` (BRICK K5 — the
+    // deterministic FO encaps proved BYTE-EXACT vs the crate's `EncapsulateDeterministic`) and NEVER consults
+    // the `ml-kem` crate, taking that crate OUT of the node's KEM-encaps TCB. The initiator supplies its own
+    // 32-byte `m` (fresh OS entropy, as the crate does internally); the X25519 + transcript + HKDF combiner is
+    // unchanged. This closes the LAST deployed crypto direction: after it, no deployed process trusts
+    // `fips204`/`ml-kem` for any security-critical direction.
+    //
+    // Gated on `mlkem_encaps_real_core_available()`: install ONLY when the linked archive actually EXPORTS
+    // `dregg_mlkem_encaps_real`. When the export is absent we keep the `ml-kem`-crate fallback (a valid encaps).
+    match install_mlkem_verified_encaps_core() {
+        MlKemEncapsCoreInstall::Installed => info!(
+            "ML-KEM encaps: verified Lean core installed — the extracted full-byte \
+             `MlKemEncaps.mlkemEncaps` is now the ciphertext+secret authority behind `hybrid_kem::initiate`; \
+             the `ml-kem` crate is no longer the encaps authority (out of the node's KEM-encaps TCB)"
+        ),
+        MlKemEncapsCoreInstall::AlreadyInstalled => info!(
+            "ML-KEM encaps: a verified Lean core was already installed this process (install is \
+             once-per-process) — the `ml-kem` crate remains out of the KEM-encaps TCB"
+        ),
+        MlKemEncapsCoreInstall::ExportAbsent => warn!(
+            "ML-KEM encaps: the linked Lean archive does NOT export `dregg_mlkem_encaps_real` \
+             (`mlkem_encaps_real_core_available()` is false) — the node's ML-KEM encaps falls back to the \
+             `ml-kem` crate primitive (a valid FIPS-203 encaps, but NOT the Lean-verified authority). \
+             Rebuild against a HEAD-matching archive to route encaps through Lean."
+        ),
+    }
+
     // Initialize node state with configurable key file.
     let has_peers = !peers.is_empty();
     let node_state = match state::NodeState::new_with_key_file(&data_path, peers, key_file) {
@@ -2259,6 +2289,17 @@ fn run_register_federation(data_dir: &str, descriptor: &std::path::Path) {
         }
     };
     let mut pubkeys: Vec<dregg_types::PublicKey> = Vec::with_capacity(validators.len());
+    // Collect the published ML-DSA-65 keys alongside the ed25519 keys: the
+    // federation_id commits to the HYBRID roster (genesis.rs derives it with
+    // `derive_federation_id_hybrid_with_epoch`, and boot re-derives the same way via
+    // `set_federation_keys_hybrid`). Re-deriving here over ed25519 keys ALONE
+    // computed a different id, so a well-formed current-binary descriptor failed its
+    // own tamper check and cross-federation registration could never succeed. A
+    // legacy descriptor missing any ML-DSA key falls back to the ed25519-only
+    // projection (mirrors the boot-time `ml_dsa_complete` handling).
+    let mut ml_dsa_keys: Vec<dregg_federation::frost::MlDsaPublicKey> =
+        Vec::with_capacity(validators.len());
+    let mut ml_dsa_complete = true;
     for v in validators {
         let pk_hex = match v["public_key"].as_str() {
             Some(s) => s,
@@ -2275,14 +2316,32 @@ fn run_register_federation(data_dir: &str, descriptor: &std::path::Path) {
             }
         };
         pubkeys.push(dregg_types::PublicKey(bytes));
+        match v["ml_dsa_public_key"]
+            .as_str()
+            .and_then(parse_ml_dsa_public_key)
+        {
+            Some(k) => ml_dsa_keys.push(k),
+            None => ml_dsa_complete = false,
+        }
     }
     if pubkeys.is_empty() {
         eprintln!("error: descriptor has zero validators");
         std::process::exit(1);
     }
+    let ml_dsa_keys = if ml_dsa_complete {
+        ml_dsa_keys
+    } else {
+        Vec::new()
+    };
 
-    // Recompute the federation_id and reject a tampered descriptor.
-    let derived = dregg_federation::derive_federation_id_with_epoch(&pubkeys, committee_epoch);
+    // Recompute the federation_id and reject a tampered descriptor. This MUST use the
+    // same projection genesis committed to, or the fail-closed check fires on honest
+    // descriptors (which is what it did).
+    let derived = dregg_federation::derive_federation_id_hybrid_with_epoch(
+        &pubkeys,
+        &ml_dsa_keys,
+        committee_epoch,
+    );
     let derived_hex: String = derived.iter().map(|b| format!("{b:02x}")).collect();
     if derived_hex != declared_fed_id {
         eprintln!(
@@ -2444,6 +2503,26 @@ pub fn install_mlkem_verified_decaps_core() -> MlKemDecapsCoreInstall {
     dregg_pq::install_verified_mlkem_decaps_core(
         dregg_lean_ffi::mlkem_decaps_real_core_available,
         |w| dregg_lean_ffi::shadow_mlkem_decaps_real(w).ok(),
+    )
+}
+
+/// Outcome of installing the Lean-verified REAL ML-KEM encaps core as `dregg_pq::hybrid_kem::initiate`'s
+/// authority. Re-exported from `dregg-pq` (the single shared install object); node keeps the name for the
+/// running-binary gate `tests/mlkem_live_encaps.rs`.
+pub use dregg_pq::MlKemEncapsCoreInstall;
+
+/// Install the extracted, Lean-verified REAL, full-byte ML-KEM-768 encaps core
+/// (`Dregg2.Crypto.MlKemEncaps.mlkemEncaps`, BRICK K5) as the ciphertext+secret AUTHORITY behind
+/// `dregg_pq::hybrid_kem::initiate` — taking the `ml-kem` crate OUT of the node's KEM-encaps TCB. Thin
+/// node-side wrapper over the SHARED `dregg_pq::install_verified_mlkem_encaps_core`: it injects the two
+/// `dregg-lean-ffi` archive symbols. Gated on `mlkem_encaps_real_core_available()` so a stale archive that
+/// lacks the export does not brick encaps (an absent core would make `initiate` fail on every offer).
+/// Idempotent and once-per-process. Exercised directly by `tests/mlkem_live_encaps.rs`, so the running-binary
+/// gate drives the EXACT production install.
+pub fn install_mlkem_verified_encaps_core() -> MlKemEncapsCoreInstall {
+    dregg_pq::install_verified_mlkem_encaps_core(
+        dregg_lean_ffi::mlkem_encaps_real_core_available,
+        |w| dregg_lean_ffi::shadow_mlkem_encaps_real(w).ok(),
     )
 }
 
