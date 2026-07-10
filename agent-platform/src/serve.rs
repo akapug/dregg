@@ -612,9 +612,30 @@ fn act_response_json(
         ),
         None => "null".to_string(),
     };
+    // The OBSERVE half of the agentic loop. A renter-side brain must see what its
+    // action actually PRODUCED — otherwise it can write but never read back, and an
+    // `fs_read` returns a receipt for content the model never sees. `tool_summary` is
+    // the session's real tool verdict (truncated); `outcome` is the gate's own word
+    // (`admitted` / `cap-refused: <cap>` / `budget-refused (headroom N)`), so a refusal
+    // is legible to the model that proposed it. This opens no trust surface: the caller
+    // is already Driver+ on this grain, and the workdir it reads is its own.
+    let step = report.steps.last();
+    let output_json = step
+        .and_then(|s| s.tool_summary.as_ref())
+        .map(|t| serde_json::to_string(t).unwrap_or_else(|_| "\"\"".to_string()))
+        .unwrap_or_else(|| "null".to_string());
+    let outcome_json = step
+        .map(|s| serde_json::to_string(&s.outcome).unwrap_or_else(|_| "\"\"".to_string()))
+        .unwrap_or_else(|| "null".to_string());
     format!(
-        "{{\"admitted\":{},\"cap_refused\":{},\"budget_refused\":{},\"consumed\":{},\"receipt\":{}}}",
-        report.admitted, report.cap_refused, report.budget_refused, report.consumed, receipt_json
+        "{{\"admitted\":{},\"cap_refused\":{},\"budget_refused\":{},\"consumed\":{},\"receipt\":{},\"outcome\":{},\"output\":{}}}",
+        report.admitted,
+        report.cap_refused,
+        report.budget_refused,
+        report.consumed,
+        receipt_json,
+        outcome_json,
+        output_json
     )
     .into_bytes()
 }
