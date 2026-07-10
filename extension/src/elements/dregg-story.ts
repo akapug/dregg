@@ -31,6 +31,9 @@ import type {
   StoryChooseResponse,
   StoryVerifyResponse,
   StoryChoice,
+  StoryOpenBranchResponse,
+  StoryBranchVoteResponse,
+  StoryCloseBranchResponse,
   TrustTier,
 } from "../port";
 
@@ -91,6 +94,22 @@ const STYLE = `
 .ending { font-size: 12px; color: #4030a0; margin-top: 12px; font-style: italic; }
 .ending:empty { display: none; }
 :host([readonly]) .wrap { border-style: dashed; }
+/* ── collective mode: the crowd votes each branch ── */
+.branch { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.branch button.opt { font: inherit; font-size: 14px; padding: 7px 12px; border: 1px solid #7c6cf0; border-radius: 8px; background: #fff; color: #4030a0; cursor: pointer; text-align: left; display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.branch button.opt:hover:not(:disabled) { background: #7c6cf0; color: #fff; }
+.branch button.opt:disabled { opacity: .55; cursor: default; }
+.branch button.opt.yours { border-color: #2f7d32; box-shadow: inset 0 0 0 1px #2f7d32; }
+.opt-count { font-variant-numeric: tabular-nums; font-weight: 600; min-width: 1.5em; text-align: right; }
+.tally { font-size: 12px; color: #4030a0; margin-top: 10px; }
+.tally:empty { display: none; }
+.yourvote { font-size: 12px; color: #2f7d32; margin-top: 6px; }
+.yourvote:empty { display: none; }
+.close-row { margin-top: 12px; }
+.close-row button { font: inherit; font-size: 13px; padding: 5px 11px; border: 1px solid #7c6cf0; border-radius: 8px; background: #efeaff; color: #4030a0; cursor: pointer; }
+.close-row button:hover:not(:disabled) { background: #7c6cf0; color: #fff; }
+.close-row button:disabled { opacity: .5; cursor: default; }
+:host([voting]) .title::after { content: " · voting"; color: #2f7d32; font-weight: 400; }
 `;
 
 // The closed shadow roots — off-instance so nothing on the element (reachable by
@@ -103,13 +122,19 @@ export class DreggStory extends DreggElement {
   private uri = "";
   private wired = false;
   private custody = false;
+  /** Collective mode (`<dregg-story collective>`): the crowd votes each branch. */
+  private collectiveMode = false;
+  /** This viewer's own recorded vote in the open branch (highlighted), or null. */
+  private yourVote: number | null = null;
 
-  /** Override the poll boot: resolve the story → render the passage + choices. */
+  /** Override the poll boot: resolve the story → render the passage + choices
+   *  (single-player) OR the branch VOTE UI (collective). */
   protected async boot(): Promise<void> {
     this.booted = true;
     const uri = this.src;
     if (!uri) return this.failClosed("no source");
     this.uri = uri;
+    this.collectiveMode = this.hasAttribute("collective");
 
     let resolved: StoryResolveResponse;
     try {
@@ -120,6 +145,7 @@ export class DreggStory extends DreggElement {
     if (!resolved || !resolved.ok || !resolved.verified) {
       return this.failClosed(resolved?.error || "could not verify");
     }
+    if (this.collectiveMode) return this.paintInitialCollective(resolved);
     await this.paintInitial(resolved);
   }
 
@@ -272,6 +298,212 @@ export class DreggStory extends DreggElement {
     const shown: TrustTier = verified ? tier : "none";
     badge.textContent = BADGE[shown];
     badge.classList.toggle("none", shown === "none");
+  }
+
+  // ── COLLECTIVE MODE — the crowd votes each branch; the winner advances ──────
+
+  /** Build the collective shell (passage prose + the branch VOTE UI), wire the
+   *  (single, delegated) click handler on the closed root, and paint the first
+   *  branch poll. READ + watching the tally are the FREE tier; a vote is a custody
+   *  write; a close advances the winner as a real verified turn. */
+  private async paintInitialCollective(resolved: StoryResolveResponse): Promise<void> {
+    const open = (await this.story.request({ op: "openBranch", uri: this.uri })) as StoryOpenBranchResponse;
+    if (!open.ok) return this.failClosed(open.error || "branch failed");
+
+    const root = this.attachClosed();
+    const style = document.createElement("style");
+    style.textContent = STYLE;
+    const wrap = document.createElement("div");
+    wrap.className = "wrap";
+    wrap.innerHTML =
+      `<div class="title">Story (collective) — ${escapeHtml(resolved.object?.addr || "")}</div>` +
+      `<div class="passage"></div>` +
+      `<div class="branch" role="group" aria-label="branch vote"></div>` +
+      `<div class="tally" aria-live="polite"></div>` +
+      `<div class="yourvote" aria-live="polite"></div>` +
+      `<div class="close-row"><button type="button" data-close>Close branch → advance the winner</button></div>` +
+      `<div class="ending" aria-live="polite"></div>` +
+      `<div class="readonly-note" aria-live="polite"></div>` +
+      `<div class="note" aria-live="polite"></div>` +
+      `<div class="badge"></div>`;
+    root.replaceChildren(style, wrap);
+
+    this.injectBranch(root, open);
+
+    if (!this.wired) {
+      root.addEventListener("click", (ev) => void this.onCollectiveClick(ev));
+      this.wired = true;
+    }
+
+    this.reflectTrust(resolved.tier, true);
+    this.setAttribute("receipts", String(resolved.receiptCount ?? 0));
+    if (resolved.commitment) this.setAttribute("commitment", resolved.commitment);
+    this.paintBadge(root, resolved.tier, true);
+
+    exposeRootForTest(this, root);
+  }
+
+  /** Inject the open branch: the passage prose (free READ), each option as a vote
+   *  button carrying its LIVE tally, the running total, the "your vote" state, and
+   *  the close affordance. Reflects `[passage]`, `[voting]`, `[readonly]`. Without
+   *  custody the vote/close buttons are disabled and the honest read-only note shows
+   *  (reading + watching the tally stay free). */
+  private injectBranch(root: ShadowRoot, open: StoryOpenBranchResponse): void {
+    this.custody = !!open.custody;
+    const options = open.options ?? [];
+
+    (root.querySelector(".passage") as HTMLElement).textContent = open.prose ?? "";
+    if (open.passage) this.setAttribute("passage", open.passage);
+
+    const branchEl = root.querySelector(".branch") as HTMLElement;
+    branchEl.replaceChildren();
+    for (const o of options) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "opt";
+      b.dataset.vote = "";
+      b.dataset.choice = String(o.choiceIndex);
+      const lab = document.createElement("span");
+      lab.className = "opt-label";
+      lab.textContent = o.label;
+      const cnt = document.createElement("span");
+      cnt.className = "opt-count";
+      cnt.textContent = String(o.count);
+      cnt.setAttribute("aria-label", `${o.count} votes`);
+      b.append(lab, cnt);
+      // READ shows every option with its tally; VOTING needs custody (a double-vote
+      // by the same voter is refused by the engine, surfaced honestly).
+      b.disabled = !this.custody;
+      if (this.yourVote === o.choiceIndex) b.classList.add("yours");
+      branchEl.appendChild(b);
+    }
+
+    const total = open.total ?? options.reduce((a, o) => a + o.count, 0);
+    (root.querySelector(".tally") as HTMLElement).textContent = options.length
+      ? `${total} vote${total === 1 ? "" : "s"} cast — the crowd decides the branch`
+      : "";
+
+    const mine = this.yourVote != null ? options.find((o) => o.choiceIndex === this.yourVote) : undefined;
+    (root.querySelector(".yourvote") as HTMLElement).textContent = mine ? `✓ your vote: ${mine.label}` : "";
+
+    (root.querySelector(".ending") as HTMLElement).textContent = options.length === 0 ? "— the end —" : "";
+
+    const closeBtn = root.querySelector("button[data-close]") as HTMLButtonElement;
+    closeBtn.style.display = options.length > 0 ? "" : "none";
+    closeBtn.disabled = !(this.custody && options.length > 0 && total > 0);
+
+    if (options.length > 0) this.setAttribute("voting", "");
+    else this.removeAttribute("voting");
+
+    const roNote = root.querySelector(".readonly-note") as HTMLElement;
+    if (!this.custody && options.length > 0) {
+      this.setAttribute("readonly", "");
+      roNote.textContent = "connect your cipherclerk to vote (reading + watching the tally is free)";
+    } else {
+      this.removeAttribute("readonly");
+      roNote.textContent = "";
+    }
+  }
+
+  /** The single delegated click wire on the CLOSED root — a vote or a close. Only
+   *  the buttons this element rendered carry a turn (the page cannot inject them). */
+  private async onCollectiveClick(ev: Event): Promise<void> {
+    const target = ev.target as HTMLElement | null;
+    const root = this.closed();
+    if (!root) return;
+    const voteBtn = target?.closest?.("button[data-vote]") as HTMLButtonElement | null;
+    if (voteBtn && !voteBtn.disabled) return void this.castVote(root, Number(voteBtn.dataset.choice || "0"));
+    const closeBtn = target?.closest?.("button[data-close]") as HTMLButtonElement | null;
+    if (closeBtn && !closeBtn.disabled) return void this.doClose(root);
+  }
+
+  /** Freeze/thaw every affordance while a turn (and its consent) is in flight. */
+  private freezeBranch(root: ShadowRoot, frozen: boolean): void {
+    (root.querySelectorAll("button") as NodeListOf<HTMLButtonElement>).forEach((b) => {
+      b.disabled = frozen || !this.custody;
+    });
+  }
+
+  /** CAST A VOTE — the custody write. Routes through `castBranchVote` (consent-gated
+   *  in the engine); a refusal (no custody / consent denied / double-vote) is surfaced
+   *  honestly; a success highlights "your vote" and refreshes the live tally. */
+  private async castVote(root: ShadowRoot, choiceIndex: number): Promise<void> {
+    const note = root.querySelector(".note") as HTMLElement;
+    note.textContent = "";
+    this.freezeBranch(root, true);
+
+    let resp: StoryBranchVoteResponse;
+    try {
+      resp = (await this.story.request({ op: "castBranchVote", uri: this.uri, optionIndex: choiceIndex })) as StoryBranchVoteResponse;
+    } catch (e) {
+      note.textContent = `⚠ ${String((e as Error)?.message ?? e)}`;
+      await this.refreshBranch(root);
+      return;
+    }
+
+    if (resp.refused) {
+      note.textContent = `⚠ vote refused: ${resp.reason || "refused"}`;
+      this.setAttribute("choice-refused", "");
+    } else {
+      this.removeAttribute("choice-refused");
+      this.yourVote = choiceIndex;
+    }
+    await this.refreshBranch(root);
+  }
+
+  /** CLOSE THE BRANCH — resolve + advance the winner as ONE real verified turn. On
+   *  success the story advances; the element re-renders the NEW passage's branch poll
+   *  (or the ending) and re-verifies. A tie is shown HONESTLY. */
+  private async doClose(root: ShadowRoot): Promise<void> {
+    const note = root.querySelector(".note") as HTMLElement;
+    note.textContent = "";
+    this.freezeBranch(root, true);
+
+    let resp: StoryCloseBranchResponse;
+    try {
+      resp = (await this.story.request({ op: "closeBranch", uri: this.uri })) as StoryCloseBranchResponse;
+    } catch (e) {
+      note.textContent = `⚠ ${String((e as Error)?.message ?? e)}`;
+      await this.refreshBranch(root);
+      return;
+    }
+
+    if (resp.refused) {
+      note.textContent = `⚠ close refused: ${resp.reason || "refused"}`;
+      this.setAttribute("choice-refused", "");
+      await this.refreshBranch(root);
+      return;
+    }
+    this.removeAttribute("choice-refused");
+    // The branch resolved: a fresh round, so this viewer's prior vote is spent.
+    this.yourVote = null;
+    const tie = resp.tie ? " (tie — resolved by lowest index)" : "";
+    note.textContent = `✓ the crowd chose "${resp.winningLabel ?? ""}"${tie} — the story advances`;
+    if (typeof resp.receiptCount === "number") this.setAttribute("receipts", String(resp.receiptCount));
+    if (resp.commitment) this.setAttribute("commitment", resp.commitment);
+    await this.refreshBranch(root);
+  }
+
+  /** Re-render the open branch from the engine (never from the page) + re-verify the
+   *  badge (the stranger's replay check). Rebuilds the vote buttons with their correct
+   *  votable state; on the ending renders "— the end —". */
+  private async refreshBranch(root: ShadowRoot): Promise<void> {
+    const open = (await this.story.request({ op: "openBranch", uri: this.uri })) as StoryOpenBranchResponse;
+    if (open.ok) {
+      this.injectBranch(root, open);
+    } else {
+      (root.querySelector(".note") as HTMLElement).textContent = `⚠ ${open.error || "branch unavailable"}`;
+    }
+
+    const verify = (await this.story.request({ op: "verifyStory", uri: this.uri })) as StoryVerifyResponse;
+    this.reflectTrust(verify.tier, verify.verified);
+    if (!verify.verified) {
+      this.removeAttribute("verified");
+      this.setAttribute("error", "");
+    }
+    if (verify.commitment) this.setAttribute("commitment", verify.commitment);
+    if (typeof verify.receiptCount === "number") this.setAttribute("receipts", String(verify.receiptCount));
+    this.paintBadge(root, verify.tier, verify.verified);
   }
 
   /** Attach (once) a closed shadow root, kept off-instance (the page can't reach it). */
