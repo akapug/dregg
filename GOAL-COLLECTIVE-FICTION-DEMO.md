@@ -200,3 +200,14 @@ LANES (disjoint after a collision fix):
 
 SEQUENCE: chain → service → Lean-theorem (harvest+commit each) → THEN Rust template-render (re-fire) → integrate
 page vs real gemma2 → the full demo (input-integrity + output-cap-gate + real chain, all earned).
+
+## ✅ ZKHANDLEBARS slot_confinement COMMITTED + verified myself (metatheory/, propext-only)
+The input-integrity half PROVEN: a {{-free player field (the real ZkOracle InjectionFree leg) rendered into a
+template slot contributes ZERO {{ control tokens ⟹ the DM system-prompt/world-rules are preserved verbatim; the
+player provably cannot rewrite the rules. Non-vacuous both ways (benign preserves / malicious injects one, by
+decide). Honest scope: {{-open control token only (matches the existing zkOracle leg), token model. This is the
+FIRST security claim tonight where the name matches the proof — because I made the lane prove it + read it myself.
+Remaining to make the {{ guard load-bearing END-TO-END: wire the Rust prompt-template + render + attestation
+(bind hash(template)‖world‖player) so a running DM actually renders through this — the KILLED Rust lane, re-fire
+AFTER chain+service settle attested-dm/lib.rs + dungeon-service.
+- WAITING: ledger chain (a8f18ed) + DM service (a18375). Harvest each, then re-fire Rust template, then integrate.
