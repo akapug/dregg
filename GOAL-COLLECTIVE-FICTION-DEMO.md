@@ -482,3 +482,24 @@ it composes fine regardless — no new `links` conflict (narrator pulls aws-sdk,
 - done: dregg-narrator COMMITTED + verified by DRIVING — HARD $20 ledger (reservation refuses BEFORE the network, proven by an injected PanicBackend; concurrency test races a real Barrier(2)+sleep; corrupt fails closed; unpriced refused; kind() honest). Default Claude Haiku 4.5 (us. prefix REQUIRED), pinned as a CONSERVATIVE UPPER BOUND (Sonnet-5 rate, dominates Haiku). LIVE smoke I ran myself: ledger delta $0.00128400 == computed cost EXACTLY. dungeon-service swapped onto it (ollama.rs gone), --self-check all 6 vs real Haiku. 11/11 tests.
 - CAVEAT (cosmetic, honest): the demo run-*.mjs drivers still print a hardcoded "gemma2:" prefix in their transcript render fns; the structured narratorKind field in every RESPONSE is honest (Haiku/Nova). A one-line driver label fix is a nice-to-have, outside the swap scope.
 - WAITING (do NOT touch — lane still live, no completion notification): the Discord lane a816c5e310b271ecc owns discord-bot/.
+
+## ☀ PRESENTATION DEPLOY (2026-07-10 ~12:45 EDT)
+- ✅ **PUBLIC ARCADE**: cloudflared tunnel → https://grade-mill-suspended-paid.trycloudflare.com/hub — the live
+  local arcade (dungeon-service on Bedrock Claude Haiku 4.5 + the $20 ledger + node serve.mjs), public, all routes
+  200. Ephemeral (dies with the laptop/tunnel) — fine for a live demo. The dungeon-service DODGES the broken kernel
+  crate (dregg-turn not in its dep graph), which is why it builds + runs while the bot doesn't.
+- ⛔ **BOT ON HBOX — BLOCKED (not risk aversion, a real wall)**: the shared tree's HEAD is committed-BROKEN by a
+  half-landed rust-identity/kernel refactor: `DerivationEdge.parent_provenance` ([u8;32], SECURITY-relevant — folds
+  into cap_provenance) added to the struct but the `turn/executor/finalize.rs` consumers (3 sites) never updated,
+  plus a new `JournalEntry::RevocationInserted` variant with a non-exhaustive match. NO working tree has the fix
+  (not mine, not another's on disk). Guessing [0u8;32] there would silently WEAKEN the provenance chain — a
+  quick-fix-debt-hole in the KERNEL, forbidden. seal.rs was the same shape (1-liner, I synced it); this is deeper
+  and semantic — it needs the terminal doing that refactor to finish, or a real understanding of the intended
+  parent-provenance value. The bot code itself (discord-bot/fiction.rs, committed 9ccd968b9) is fine; it is BLOCKED
+  ONLY by its dep on the broken `turn` crate.
+- GRAVITON = the devnet Caddy gateway (docker: dreggnet-caddy-1 + dreggnet-gateway-1 + dreggnet-discord-bot),
+  reached via EC2 Instance Connect (i-03365e2bcf4ea08b2, 34.224.208.52; NO pem needed). `*.dregg.fg-goose.online`
+  is a WILDCARD → graviton, but Caddy only has blocks for `*.dregg.works` + `portal.dregg.studio` — a branded
+  `arcade.dregg.fg-goose.online` would need a Caddy site block added + the arcade running where Caddy reaches it.
+  The OLD discord bot is the `dreggnet-discord-bot` CONTAINER (docker stop at cutover, not kill).
+- token placed on hbox at ~/.config/dregg/discord-bot.env; hbox worktree ~/dev/bot-deploy (branch bot-deploy).
