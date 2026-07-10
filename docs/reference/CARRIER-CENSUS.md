@@ -206,3 +206,17 @@ the AIR SUPPORT layer, genuinely good) · FLOOR 2 (Poseidon2RealizedSponge, QROM
 **WHAT DEBT-A MUST ACTUALLY PROVE:** ChipTableSoundN at the REAL Poseidon2BabyBearW16 perm · FRI proximity at the
 deployed BabyBear params · the FriProximity bridge · a real per-node FriExtract · then an ACTUAL
 `instance : StarkSound` that does not route through an assumed AlgoStarkSound.
+
+## ⚠⚠⚠ DEPLOYED SOUNDNESS GAP (2026-07-10) — ShieldedTransfer's value-link trusts the prover
+Found while scoping ShieldedTransfer (`d2b7b2dea`). **`turn/src/executor/apply.rs:1178`, the shipped code's own
+comment:** "secret opening; **M2-a relies on the honest prover** for it (the `verify_value_link` …)". The
+leaf↔leg value-link is NOT verified — deployed soundness rests on prover honesty at that step. This is NOT a
+proof-modeling artifact and NOT a floor item: it is a gap in the SHIPPED system, orthogonal to StarkSound.
+Distinct from the Lean carriers; needs a product decision (verify the link, or document the trust assumption).
+
+## correction (2026-07-10): ShieldedTransfer's kernel mutation is NULLIFIER-ONLY
+I previously recorded it as "nullifier + balance". WRONG. `apply_shielded_transfer` performs NO transparent
+balance move — the amount is a hidden Pedersen commitment checked by `verify_full_conservation_bytes`; the
+transparent move is the separate `Unshield` effect. The kernel part is iterated noteSpend-nullifier (the exact
+primitive DEBT-B covered). Proved: `shieldedTransferK_accepts` + `shieldedTransferK_balNeutral` (bal/commitments/
+cells/caps/revoked all unchanged). Corrected by reading the deployed code, not by trusting my own earlier note.
