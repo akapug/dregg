@@ -241,3 +241,15 @@ prose regardless). Fixed a MutexGuard split-borrow. Honest: /verify per-entry-la
 Open: DUNGEON_BIND=127.0.0.1:7878 service + DM_PORT=7878 node demo/serve.mjs → /dungeon (else honest stand-in).
 The OUTPUT half of the thesis is running. The INPUT half (slot_confinement) is PROVEN in Lean but not yet wired
 into the running DM — step 4 (re-fired now, collision-free post chain+service).
+
+## ✅✅✅ THE FULL ATTESTED AI MUD IS COMPLETE — all 3 claims earned + driven (committed)
+INPUT (proven+wired+driven): slot_confinement (Lean) → attested-dm prompt_template (render_dm, template_hash on
+the chain, slot_confined via the VERIFIED matcher, verify_prompt_rendering); narrate_turn refuses SlotEscape
+BEFORE the model; curl vs the REAL service:  player → refused:slot-escape, receiptCount 0 (model never
+called). 30/30 attested-dm tests incl the non-vacuity (a {{-field WOULD inject; benign adds zero).
+OUTPUT (running vs real gemma2): prose is not power — jailbreak gemma2, it proposes grant(crown), cap gate
+refuses overcap, crown NOT HELD.
+LEDGER: real prev-linked hash-chain (adversarial truncate/reorder/splice caught).
+Honest throughout: authentic leg a fixture (input-integrity ≠ model-authenticity); /verify per-entry-labelled.
+The player can't rewrite the rules; the model can't exceed its powers; the ledger can't be rewritten. A true
+attested AI MUD, running against a real local LLM.
