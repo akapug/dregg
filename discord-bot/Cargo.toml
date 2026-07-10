@@ -79,6 +79,11 @@ futures-util = { version = "0.3" }
 # SDK's AgentCipherclerk and gives us federation-bound action signing.
 dregg-app-framework = { path = "../app-framework" }
 dregg-sdk = { path = "../sdk" }
+# The attested fiction engine — the provably-honest, un-jailbreakable AI dungeon-master
+# (`GameSession`, the `.dungeon` DSL loader, the receipt hash-chain). A root workspace member,
+# consumed (not modified) to power `/dungeon`: a channel plays a shared on-chain crawl, buttons
+# are write-once ballots, the plurality winner resolves through the engine, `/verify` re-checks.
+attested-dm = { path = "../attested-dm" }
 dregg-turn = { path = "../turn" }
 # The predicate-proof primitives for REAL selective disclosure: `PredicateType`
 # (the comparator) + `BabyBear` (the threshold field element), the inputs to the

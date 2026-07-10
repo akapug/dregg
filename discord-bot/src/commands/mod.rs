@@ -45,6 +45,11 @@ pub mod deos;
 // through the verified executor.
 pub mod coordinate;
 pub mod federation;
+// `/dungeon` — a whole channel plays a shared, AI-narrated, on-chain dungeon: buttons are
+// write-once ballots (attributed to each voter's derived dregg identity), the plurality winner
+// resolves through the attested `GameSession`, and `/dungeon verify` re-checks the hash chain.
+// See `crate::commands::fiction` (consumes the committed `attested-dm` engine).
+pub mod fiction;
 // The gov-* / name-* / queue-* slash families are retired (→ `/dregg` dashboard
 // Governance / Names / Subscription panels, which build the same actions). The
 // handlers are kept so the capability can be re-exposed without re-implementing.
