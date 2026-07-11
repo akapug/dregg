@@ -68,6 +68,15 @@ entry (proved by `recTransferBal_src`/`_dst`). -/
 `dir = 1` ⟹ `-amt` (debit); `dir = 0` ⟹ `+amt` (credit). -/
 def actorDelta (amt dir : ℤ) : ℤ := amt * (1 - 2 * dir)
 
+/-- Field-denotation glue for the bridge: under the DEPLOYED canonicality envelope (`0 ≤ · < p`,
+the range-check invariant), a mod-`p` congruence between two canonical integers COLLAPSES to ℤ
+equality — the residual lies in `(−p, p)`, so `p ∣ residual` forces it to 0. This is how the
+mod-`p` `TransferRowIntent` clauses reach the ℤ-level kernel ledger statement. -/
+theorem canon_modEq_eq {a b : ℤ} (ha : 0 ≤ a ∧ a < 2013265921) (hb : 0 ≤ b ∧ b < 2013265921)
+    (h : a ≡ b [ZMOD 2013265921]) : a = b := by
+  by_contra hne
+  exact not_modEq_zero_of_canon (x := a - b) rfl ha hb hne ((gate_modEq_iff rfl).mpr h)
+
 /-- **`AbstractTransferActorMove pre post a actor amt dir`** — the abstract kernel statement the
 row claims to encode: cell `actor`'s asset-`a` ledger column in `post` is its `pre` value moved by
 the signed amount, and `dir` is a bit. This is the actor-column projection of the abstract transfer
@@ -142,28 +151,60 @@ translate, through the encoding's column pins, EXACTLY into the abstract ledger 
 hi/nonce/frame clauses are CARRIED by the encoding (they are the honest transfer shape), so the
 biconditional is clean in BOTH directions. -/
 
+/-- **`bridge_abstract_to_rowIntent` — the UNCONDITIONAL direction.** An honest encoding of a
+genuine abstract actor-column move satisfies the FIELD-level `TransferRowIntent`: every ℤ equality
+the encoding + abstract move pin lifts to a mod-`p` congruence (`eqToModEq`) — no canonicality
+needed to go FROM kernel truth INTO the field. -/
+theorem bridge_abstract_to_rowIntent
+    (env : VmRowEnv) (pre post : RecordKernelState) (a : AssetId) (actor : CellId) (amt dir : ℤ)
+    (henc : RowEncodes env pre post a actor amt dir)
+    (habs : AbstractTransferActorMove pre post a actor amt dir) :
+    TransferRowIntent env := by
+  obtain ⟨_isRow, hpre, hpost, hamt, hdir, hhi, hnon, hcap, hres, hfld⟩ := henc
+  obtain ⟨hbit, hmove⟩ := habs
+  simp only [actorDelta] at hmove
+  unfold TransferRowIntent
+  refine ⟨?_, ?_, eqToModEq hhi, eqToModEq hnon, eqToModEq hcap, eqToModEq hres,
+    fun i hi => eqToModEq (hfld i hi)⟩
+  · rw [hdir]
+    rcases hbit with h | h
+    · exact Or.inl (eqToModEq h)
+    · exact Or.inr (eqToModEq h)
+  · rw [hpost, hpre, hamt, hdir]
+    exact eqToModEq (by linarith [hmove])
+
 /-- **`bridge_rowIntent_iff_abstract` — THE BRIDGE.** On a row that faithfully encodes the
 actor-column transfer transition, the EMITTED row-intent `TransferRowIntent env` holds iff the
 ABSTRACT actor-column move `AbstractTransferActorMove pre post a actor amt dir` holds. The two
 proof layers MEET at the encoding: the row's `bal_lo`/`direction`/`amount` columns ARE the actor's
-ledger value / direction / amount, so the row's balance-move clause IS the abstract ledger move. -/
+ledger value / direction / amount, so the row's balance-move clause IS the abstract ledger move.
+
+FIELD-FAITHFUL: `TransferRowIntent` is now mod-`p` congruences, so the FORWARD direction (field
+gates → ℤ kernel move) needs the DEPLOYED canonicality envelope — the direction bit, the post
+ledger value, and the intended moved value each lie in `[0, p)` (the range-check invariant + the
+no-overflow move). Under it a field congruence between canonical values collapses to ℤ equality
+(`canon_modEq_eq`), so NO wrap-around forgery survives. The backward direction stays unconditional
+(`bridge_abstract_to_rowIntent`). -/
 theorem bridge_rowIntent_iff_abstract
     (env : VmRowEnv) (pre post : RecordKernelState) (a : AssetId) (actor : CellId) (amt dir : ℤ)
-    (henc : RowEncodes env pre post a actor amt dir) :
+    (henc : RowEncodes env pre post a actor amt dir)
+    (hcanonDir : 0 ≤ dir ∧ dir < 2013265921)
+    (hcanonPost : 0 ≤ post.bal actor a ∧ post.bal actor a < 2013265921)
+    (hcanonMove : 0 ≤ pre.bal actor a + actorDelta amt dir
+      ∧ pre.bal actor a + actorDelta amt dir < 2013265921) :
     TransferRowIntent env ↔ AbstractTransferActorMove pre post a actor amt dir := by
-  obtain ⟨_isRow, hpre, hpost, hamt, hdir, hhi, hnon, hcap, hres, hfld⟩ := henc
-  unfold TransferRowIntent AbstractTransferActorMove actorDelta
+  simp only [actorDelta] at hcanonMove
   constructor
-  · rintro ⟨hbit, hmove, _, _, _, _, _⟩
-    refine ⟨?_, ?_⟩
-    · rw [hdir] at hbit; exact hbit
-    · rw [hpost, hpre, hamt, hdir] at hmove
-      linarith [hmove]
-  · rintro ⟨hbit, hmove⟩
-    refine ⟨?_, ?_, hhi, hnon, hcap, hres, hfld⟩
-    · rw [hdir]; exact hbit
-    · rw [hpost, hpre, hamt, hdir]
-      linarith [hmove]
+  · obtain ⟨_isRow, hpre, hpost, hamt, hdir, hhi, hnon, hcap, hres, hfld⟩ := henc
+    unfold TransferRowIntent AbstractTransferActorMove actorDelta
+    rintro ⟨hbit, hmove, _, _, _, _, _⟩
+    rw [hdir] at hbit
+    rw [hpost, hpre, hamt, hdir] at hmove
+    refine ⟨?_, canon_modEq_eq hcanonPost hcanonMove hmove⟩
+    rcases hbit with h0 | h1
+    · exact Or.inl (canon_modEq_eq hcanonDir (by norm_num) h0)
+    · exact Or.inr (canon_modEq_eq hcanonDir (by norm_num) h1)
+  · exact bridge_abstract_to_rowIntent env pre post a actor amt dir henc
 
 /-! ## §4 — END-TO-END: the EMITTED GATES accept the row ⟺ the correct protocol transfer.
 
@@ -178,14 +219,21 @@ encodes the actor-column transfer transition (`RowEncodes`), the EMITTED descrip
 (`transferRowGates`, the term-for-term mirror of the running prover's transfer polynomials) ALL
 hold IFF the abstract kernel statement `AbstractTransferActorMove pre post a actor amt dir` holds —
 i.e. the actor's `bal actor a` column moves by exactly `recTransferBal`'s signed delta. The two
-proof layers (row-faithfulness + abstract-encoding) are now BRIDGED for transfer. -/
+proof layers (row-faithfulness + abstract-encoding) are now BRIDGED for transfer. FIELD-FAITHFUL:
+the gates→kernel direction carries the deployed canonicality envelope (see
+`bridge_rowIntent_iff_abstract`); kernel→gates stays unconditional. -/
 theorem emittedGates_iff_protocolTransfer
     (env : VmRowEnv) (pre post : RecordKernelState) (a : AssetId) (actor : CellId) (amt dir : ℤ)
-    (henc : RowEncodes env pre post a actor amt dir) :
+    (henc : RowEncodes env pre post a actor amt dir)
+    (hcanonDir : 0 ≤ dir ∧ dir < 2013265921)
+    (hcanonPost : 0 ≤ post.bal actor a ∧ post.bal actor a < 2013265921)
+    (hcanonMove : 0 ≤ pre.bal actor a + actorDelta amt dir
+      ∧ pre.bal actor a + actorDelta amt dir < 2013265921) :
     (∀ c ∈ transferRowGates, c.holdsVm env false false)
       ↔ AbstractTransferActorMove pre post a actor amt dir := by
   rw [transferVm_faithful env henc.isRow]
   exact bridge_rowIntent_iff_abstract env pre post a actor amt dir henc
+    hcanonDir hcanonPost hcanonMove
 
 /-- **`emittedGates_realize_recTransferBal_src` — the SOURCE specialization.** When the actor is the
 DEBITED `src` of an abstract transfer `recKExecAsset`-style move (so `dir = 1`, `src ≠ dst`, and
@@ -198,8 +246,8 @@ theorem emittedGates_realize_recTransferBal_src
     (hmoved : post.bal src a = recTransferBal pre.bal src dst a amt src a)
     (henc : RowEncodes env pre post a src amt 1) :
     (∀ c ∈ transferRowGates, c.holdsVm env false false) := by
-  rw [emittedGates_iff_protocolTransfer env pre post a src amt 1 henc]
-  refine ⟨Or.inr rfl, ?_⟩
+  refine (transferVm_faithful env henc.isRow).mpr
+    (bridge_abstract_to_rowIntent env pre post a src amt 1 henc ⟨Or.inr rfl, ?_⟩)
   rw [hmoved, recTransferBal_src pre.bal src dst a amt hne]
 
 /-! ## §5 — ANTI-GHOST: tampering the actor's post-ledger entry breaks acceptance.
@@ -213,15 +261,25 @@ it claims; you cannot credit/debit a different amount than the move and still sa
 
 /-- **Anti-ghost (general).** On a faithful encoding, if the actor's post-ledger entry is NOT the
 signed move (`post.bal actor a ≠ pre.bal actor a + actorDelta amt dir`), the emitted per-row gates
-have NO satisfying assignment for the row — the encoded forgery is UNSAT. -/
+have NO satisfying assignment for the row — the encoded forgery is UNSAT. FIELD-FAITHFUL: the tooth
+rejects a field-`≢` output, so it needs the DEPLOYED canonicality envelope on the post ledger value
+and the intended moved value (both in `[0, p)`): a canonical forgery differs from the intended
+value by less than `p`, so it cannot pass the field gate by wrap-around. No direction envelope is
+needed — the forgery is stated against the raw signed delta. -/
 theorem antiGhost_wrong_postLedger
     (env : VmRowEnv) (pre post : RecordKernelState) (a : AssetId) (actor : CellId) (amt dir : ℤ)
     (henc : RowEncodes env pre post a actor amt dir)
+    (hcanonPost : 0 ≤ post.bal actor a ∧ post.bal actor a < 2013265921)
+    (hcanonMove : 0 ≤ pre.bal actor a + actorDelta amt dir
+      ∧ pre.bal actor a + actorDelta amt dir < 2013265921)
     (hforge : post.bal actor a ≠ pre.bal actor a + actorDelta amt dir) :
     ¬ (∀ c ∈ transferRowGates, c.holdsVm env false false) := by
   intro hgates
-  obtain ⟨hbit, hmove⟩ := (emittedGates_iff_protocolTransfer env pre post a actor amt dir henc).mp hgates
-  exact hforge hmove
+  simp only [actorDelta] at hcanonMove hforge
+  have hintent := (transferVm_faithful env henc.isRow).mp hgates
+  obtain ⟨-, hmove, -, -, -, -, -⟩ := hintent
+  rw [henc.postBal, henc.preBal, henc.amount, henc.dirBit] at hmove
+  exact hforge (canon_modEq_eq hcanonPost hcanonMove hmove)
 
 /-- A concrete FORGED-LEDGER witness: `pre`/`post` record states whose ledgers put the actor cell
 (`actor = 0`, asset `0`) at `100 → 70`, encoded by `goodRow` (debit 30, `dir = 1`); then a tampered
@@ -325,6 +383,8 @@ theorem goodRow_refuses_forged_ledger :
 #assert_axioms actorDelta
 #assert_axioms recTransferBal_src
 #assert_axioms recTransferBal_dst
+#assert_axioms canon_modEq_eq
+#assert_axioms bridge_abstract_to_rowIntent
 #assert_axioms bridge_rowIntent_iff_abstract
 #assert_axioms emittedGates_iff_protocolTransfer
 #assert_axioms emittedGates_realize_recTransferBal_src
