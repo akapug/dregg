@@ -294,7 +294,7 @@ fn build_dregg2_archive(meta: &Path, sysroot: &Path, archive: &Path, out_dir: &P
         // is emitted for the splice. The Rust `dregg-governance::holding_weight::grant_weight` routes its
         // weight verdict through it. (Its IR lands under `.lake/build/ir/Metatheory/`; see the
         // splice-scope seam note at the `holding_grant_weight_present` probe below.)
-        "Metatheory.Bridge.ProofOfHoldings",
+        "Dregg2.Bridge.ProofOfHoldings",
     ];
     let lake_status = Command::new("lake")
         .arg("build")
@@ -1828,15 +1828,11 @@ fn main() {
     // string bridge, and the module initializer. `dregg-governance::holding_weight::grant_weight` marshals
     // the fast-Rust pre-checks' facts + the amount through this to run the LEAN-PROVEN weight verdict.
     //
-    // NOTE (splice-scope seam): `grantWeightFFI` lives in `Metatheory.Bridge.ProofOfHoldings`, whose IR is
-    // emitted under `.lake/build/ir/Metatheory/` — the `build_dregg2_archive` splice currently walks only
-    // `.lake/build/ir/Dregg2/`, so this symbol is not yet spliced into the seed archive and this probe is
-    // presently false (⇒ the Rust falls back to the fail-closed marshal-only path, matching grain-verify's
-    // staging). Lighting up the linked path needs either relocating the module under `Dregg2/` or
-    // extending the splice to allowlist this Metatheory IR object; deferred so an untested archive change
-    // does not risk the swarm-shared seed. The probe + gated wiring below are inert-until-present, exactly
-    // mirroring the R3 shape, so the day the splice covers it the linked decision path lights up with no
-    // further Rust change.
+    // `grantWeightFFI` lives in `Dregg2.Bridge.ProofOfHoldings` (relocated under `Dregg2/` from the
+    // original `Metatheory/` home precisely so its IR emits under `.lake/build/ir/Dregg2/` and the
+    // `build_dregg2_archive` splice — which walks `Dregg2/**/*.c` — picks up `dregg_holding_grant_weight`
+    // like every other exported decision (R3Verify, DistributedExports, FlowRefine, Fips204Verify). Once
+    // the archive builds (hbox/local), this probe reads true and the linked decision path lights up.
     let holding_grant_weight_present =
         archive_exports(&build_archive, "dregg_holding_grant_weight");
     if holding_grant_weight_present {

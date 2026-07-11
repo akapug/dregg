@@ -32,7 +32,7 @@ Kernel-clean: `#assert_axioms` hard-gates every theorem.
 -/
 import Dregg2.Tactics
 
-namespace Metatheory.Bridge.ProofOfHoldings
+namespace Dregg2.Bridge.ProofOfHoldings
 
 /-! ## §1 — The trust dial, identities, and the proven holding.
 
@@ -378,4 +378,4 @@ amount grants `"0"`; a negative amount and a malformed wire fail CLOSED (`"0"`).
 #print axioms weight_backed_and_noncustodial
 #print axioms gate_discriminates_both_axes
 
-end Metatheory.Bridge.ProofOfHoldings
+end Dregg2.Bridge.ProofOfHoldings
