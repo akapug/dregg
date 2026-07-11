@@ -485,3 +485,36 @@ WRAP-CLASS AUDIT (from the investigation): 2 live verdict-A instances — vault 
 (32-bit). CapReshape gMaskRecon (MASK_BITS=8, <256<p) SAFE by width. RotationWide limbs = Poseidon2 chip absorbs
 (equality-bound) SAFE. CapOpenRowCanon is the ONLY migrated RowCanon laundering a wrap. No 3rd live instance found —
 but the CLASS is now a known audit axis for the rest of Phase 0 + the deployed circuit.
+
+## ⚠⚠⚠⚠ GAP #4 — CORE-TRANSFER OVER-DEBIT (verdict A, HIGH, the DEEPEST wrap-class instance) — 2026-07-11
+Found by the systematic WRAP-CLASS-AUDIT (`docs/reference/WRAP-CLASS-AUDIT.md`), hand-verified. The ROOT value gap,
+deeper than vault/cap-open/cross-cell. DEPLOYED transfer debit gate `after.bal_lo = before.bal_lo + amount·(1−2dir)
+− fee` (`trace_rotated.rs:694`) range-checks ONLY the AFTER balance (`EffectVmEmitTransfer.lean:224`, 2 ranges);
+`amount` is NOT range-checked in-circuit. The design's "underflow lands ≥2^30 so the range-check rejects" is FALSE
+for `amount − before ∈ (939M, 1074M)`: then `after = p − (amount−before)` lands back in `[0,2^30)`.
+- ★ WITNESS (hand-verified): `before=1, amount=1006632961, after=1006632961` — `after − before + amount = p ≡ 0 mod p`
+  ✓ AND `after = 1006632961 < 2^30 = 1073741824` ✓ (passes the after-range). Real debit would be `1 − 1006632961 < 0`
+  (invalid), but the circuit ACCEPTS a cell going from balance 1 to balance ~10^9 ⟹ ~10^9 minted from nothing.
+- Covers Transfer debit, Burn, fee-debit. Even a fixed cross-cell #3 won't catch it (published NET_DELTA off by p).
+- ⚠ MY LAUNDERING (2nd occurrence, corrected): the Lean `transferVm_enforces_availability` / anti-ghost teeth carry
+  `hcanonMove` (= `0 ≤ before − amount`, i.e. availability itself), declared "the interpreter-edge's job," enforced
+  by NO deployed gate — same structure as cap-open reconExact. I gated the Transfer file EARLY accepting hcanonMove
+  as "the deployed range-check invariant" — WRONG, amount is unranged. Marked in-file at `EffectVmEmitTransfer.lean:
+  224` as an explicit ⚠ DEPLOYED-GAP.
+- FIX (ember-gated, deployed circuit): range-check `param.AMOUNT < 2^30` (or the debited difference) — the
+  committed-threshold/presentation/non-revocation comparators do this CORRECTLY (range-wire pins diff < p/2), so the
+  fix pattern exists in-tree. Then availability is DERIVED, not assumed.
+
+## WRAP-CLASS TALLY (2026-07-11): 4 verdict-A gaps + 1 suspect + safe-classified rest
+1. VAULT carry-wrap — FIXED + PROVEN (CARRY_BITS 16→15, VaultSatDescriptor RED→GREEN, staged fixture regen owed).
+2. CAP-OPEN mask-recon — verdict A, capability-auth forgery, fix pending (per-16-bit-limb recon + range mask_lo/hi).
+3. CROSS-CELL conservation — verdict A, ≥2-cell balance sum wraps; ADDITIVE (not wired live); fix = multi-limb accum.
+4. ★ CORE-TRANSFER over-debit — verdict A, HIGH, the deepest; fix = range-check amount < 2^30.
+SUSPECT R1: bilateral-agg prefix sum over hash fingerprints — likely SAFE-BY-STRUCTURE (needs fingerprint-freedom check).
+SAFE (audited): balance-limb decomp (<2^30), the threshold/presentation/non-revocation comparators (same class DONE
+RIGHT — range-wire pins diff<p/2), cap-reshape 8-bit, Poseidon2/Merkle/schnorr (structure/carry-chained).
+Blind spot: value/authority gates all have Lean twins (good); effect_action_air::Burn's doc-commented 2×32-bit
+borrow is NOT emitted deployed (doc↔deploy mismatch, not a wrap); dregg-transfer-v1 unranged amt is TEST-ONLY.
+COMMON ROOT: the deployed circuit reconstructs/moves values that can exceed p; a mod-p constraint alone doesn't pin
+the ℤ value; where no range-check bounds the reconstruction < p, an adversary picks a p-shifted witness. THE ℤ
+MODEL HID ALL FOUR. Field-faithfulness + the audit surfaced them.

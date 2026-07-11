@@ -221,6 +221,16 @@ def transferVmDescriptor : EffectVmDescriptor :=
   , constraints := transferRowGates ++ transitionAll ++ boundaryFirstPins ++ boundaryLastPins
                      ++ selectorGates sel.TRANSFER
   , hashSites := transferHashSites
+  -- ⚠⚠⚠ DEPLOYED SOUNDNESS GAP #4 (wrap-class, verdict A, HIGH — see `docs/reference/WRAP-CLASS-AUDIT.md`):
+  -- ONLY the AFTER balance limbs are range-checked; `param.AMOUNT` is NOT range-checked in-circuit. The debit gate
+  -- `after.bal_lo ≡ before.bal_lo − amount [ZMOD p]` therefore admits an UNDERFLOW WRAP: for `amount − before ∈
+  -- (939M, 1074M)`, `after = p − (amount − before)` lands back in `[0, 2^30)` and passes the after-range while
+  -- OVER-DEBITING ~10^9 (witness `before=1, amount=1006632961, after=1006632961`: `after − before + amount = p ≡ 0`,
+  -- `after < 2^30`). ⟹ core-transfer VALUE FORGERY (create value from nothing); covers Transfer debit / Burn /
+  -- fee-debit. The Lean availability/anti-ghost teeth carry an `hcanonMove` (= `0 ≤ before − amount`, i.e.
+  -- availability ITSELF) that NO deployed gate enforces — a LAUNDERED assumption (same structure as cap-open's
+  -- reconExact). FIX (ember-gated, deployed circuit): range-check `param.AMOUNT < 2^30` (or the debited difference),
+  -- as the committed-threshold/presentation comparators already do correctly — then availability becomes DERIVED.
   , ranges := [ ⟨saCol state.BALANCE_LO, 30⟩, ⟨saCol state.BALANCE_HI, 30⟩ ] }
 
 /-! ## §5 — The TRANSFER ROW INTENT (the independent faithfulness target).
