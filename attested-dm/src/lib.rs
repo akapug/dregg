@@ -403,7 +403,7 @@ fn encode_evidence(h: &mut blake3::Hasher, ev: &RandomnessEvidence) {
             h.update(&round.to_le_bytes());
             h.update(output);
         }
-        EvidenceKind::Vrf {
+        EvidenceKind::LbVrf {
             public_key,
             output,
             proof,
@@ -411,6 +411,7 @@ fn encode_evidence(h: &mut blake3::Hasher, ev: &RandomnessEvidence) {
             h.update(&[3u8]);
             h.update(&(public_key.len() as u64).to_le_bytes());
             h.update(public_key);
+            h.update(&(output.len() as u64).to_le_bytes());
             h.update(output);
             h.update(&(proof.len() as u64).to_le_bytes());
             h.update(proof);

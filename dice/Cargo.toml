@@ -21,6 +21,10 @@ blake3 = "1"
 # default is default-features=false + derive only, which omits the alloc impls).
 serde = { workspace = true, features = ["std"] }
 thiserror = { workspace = true }
+# The one-time post-quantum LB-VRF (Esgin et al. FC 2021, Set I) backing the
+# `ServerVrf` source: verifiable randomness whose one-output-per-input uniqueness
+# reduces to Module-SIS. CONSUMED read-only — keygen/eval/verify over the EventId.
+pqvrf = { path = "../pqvrf" }
 
 [dev-dependencies]
 serde_json = { workspace = true }

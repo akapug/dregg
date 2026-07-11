@@ -10,6 +10,7 @@
 use dregg_dice::{
     CommitReveal, Deterministic, DrawError, DrawStream, EventId, EvidenceKind, Hybrid, MockBeacon,
     RandomnessEvidence, RandomnessRequest, RandomnessSource, Seed, ServerVrf, VerifyError,
+    VrfEvalError,
 };
 
 fn sample_request(draw_count: u32) -> RandomnessRequest {
@@ -348,25 +349,195 @@ fn mock_beacon_round_trip() {
 }
 
 #[test]
-fn vrf_and_hybrid_stubs_fail_closed() {
+fn hybrid_stub_fails_closed() {
+    // The Hybrid (delayed beacon + genesis key-chain) remains a documented follow-up.
     let req = sample_request(1);
     let dummy = RandomnessEvidence {
         derivation_version: dregg_dice::DERIVATION_VERSION,
-        source: EvidenceKind::Vrf {
+        source: EvidenceKind::LbVrf {
             public_key: vec![1, 2, 3],
-            output: [0; 32],
-            proof: vec![],
+            output: vec![0; 128],
+            proof: vec![0; 16],
         },
         draw_transcript_commitment: [0; 32],
     };
     assert!(matches!(
-        ServerVrf::seed(&req, &dummy),
-        Err(VerifyError::BackendUnavailable(_))
-    ));
-    assert!(matches!(
         Hybrid::seed(&req, &dummy),
         Err(VerifyError::BackendUnavailable(_))
     ));
+}
+
+// ── ServerVrf: the REAL post-quantum LB-VRF source (pqvrf, Set I). ──
+
+#[test]
+fn server_vrf_lb_round_trip() {
+    // Produce → verify → seed with the real LB-VRF. The seed is DETERMINED by the
+    // verified VRF output, and the transcript reconstructs from it.
+    let req = sample_request(3);
+    let source = ServerVrf::from_key_seed(&[0x11; 32]);
+    let ev = source.try_evidence(&req).expect("honest LB-VRF eval");
+
+    // The recorded evidence is the LB-VRF variant carrying pk + output + proof.
+    match &ev.source {
+        EvidenceKind::LbVrf {
+            public_key,
+            output,
+            proof,
+        } => {
+            assert!(!public_key.is_empty() && !output.is_empty() && !proof.is_empty());
+        }
+        other => panic!("expected LbVrf evidence, got {other:?}"),
+    }
+
+    // The pure verifier re-runs pqvrf::verify and recovers the seed.
+    let seed = ServerVrf::seed(&req, &ev).expect("LB-VRF evidence verifies");
+    let stream = DrawStream::new(seed, req.draw_count);
+    assert_eq!(
+        stream.transcript_commitment(),
+        ev.draw_transcript_commitment
+    );
+
+    // The seed is a function of the VERIFIED output: a different key/input yields a
+    // different verified output, hence a different seed.
+    let other = ServerVrf::from_key_seed(&[0x12; 32]);
+    let ev2 = other.try_evidence(&req).expect("second key evals once");
+    let seed2 = ServerVrf::seed(&req, &ev2).expect("verifies");
+    assert_ne!(
+        seed.as_bytes(),
+        seed2.as_bytes(),
+        "a different key epoch yields a different verified output → different seed"
+    );
+}
+
+#[test]
+fn server_vrf_forged_proof_is_rejected() {
+    // NON-VACUOUS: flip a byte of the real LB-VRF proof. pqvrf::verify (the
+    // one-output tooth, uniqueness reducing to Module-SIS) rejects it.
+    let req = sample_request(2);
+    let source = ServerVrf::from_key_seed(&[0x21; 32]);
+    let mut ev = source.try_evidence(&req).expect("honest eval");
+    assert!(
+        ServerVrf::seed(&req, &ev).is_ok(),
+        "honest proof verifies first"
+    );
+
+    if let EvidenceKind::LbVrf { proof, .. } = &mut ev.source {
+        proof[0] ^= 0xFF;
+    }
+    assert_eq!(
+        ServerVrf::seed(&req, &ev),
+        Err(VerifyError::VrfProofInvalid),
+        "a forged LB-VRF proof must be rejected by pqvrf::verify"
+    );
+}
+
+#[test]
+fn server_vrf_forged_output_is_rejected() {
+    // A tampered OUTPUT is not the LB-VRF value bound by the proof's challenge, so
+    // pqvrf::verify rejects it — the server cannot present a second output.
+    let req = sample_request(2);
+    let source = ServerVrf::from_key_seed(&[0x22; 32]);
+    let mut ev = source.try_evidence(&req).expect("honest eval");
+
+    if let EvidenceKind::LbVrf { output, .. } = &mut ev.source {
+        output[0] ^= 0x01; // stays < p (low bit), still canonical-length → reaches verify
+    }
+    assert_eq!(
+        ServerVrf::seed(&req, &ev),
+        Err(VerifyError::VrfProofInvalid),
+        "a forged LB-VRF output must be rejected — one output per input"
+    );
+}
+
+#[test]
+fn server_vrf_swapped_key_is_rejected() {
+    // The server cannot swap in a fresh key on ALREADY-RECORDED evidence: the proof
+    // was made under the original key, so it fails pqvrf::verify under the new pk.
+    let req = sample_request(1);
+    let honest = ServerVrf::from_key_seed(&[0x31; 32]);
+    let mut ev = honest.try_evidence(&req).expect("honest eval");
+
+    // A different key epoch's public key bytes.
+    let attacker = ServerVrf::from_key_seed(&[0x32; 32]);
+    if let EvidenceKind::LbVrf { public_key, .. } = &mut ev.source {
+        *public_key = attacker.public_key_bytes();
+    }
+    assert_eq!(
+        ServerVrf::seed(&req, &ev),
+        Err(VerifyError::VrfProofInvalid),
+        "a proof does not verify under a swapped public key"
+    );
+}
+
+#[test]
+fn server_vrf_key_commitment_binds_the_request() {
+    // The request-binding model: a request commits the per-event key via
+    // key_commitment(pk). A verifier that recomputes it from the evidence's pk and
+    // compares detects a swapped key epoch BEFORE the draw.
+    let honest = ServerVrf::from_key_seed(&[0x41; 32]);
+    let honest_pk = honest.public_key_bytes();
+    let committed = ServerVrf::key_commitment(&honest_pk);
+
+    // The honest key's pk opens the commitment.
+    assert_eq!(committed, ServerVrf::key_commitment(&honest_pk));
+    // A different key epoch does not.
+    let other = ServerVrf::from_key_seed(&[0x42; 32]);
+    assert_ne!(
+        committed,
+        ServerVrf::key_commitment(&other.public_key_bytes()),
+        "a swapped key epoch fails the request's key commitment"
+    );
+}
+
+#[test]
+fn server_vrf_key_is_one_time() {
+    // Set I is one-time: the SAME ServerVrf refuses a second evaluation (its key is
+    // burned on first use). Each event must mint its own key epoch.
+    let req = sample_request(1);
+    let source = ServerVrf::from_key_seed(&[0x51; 32]);
+    assert!(!source.key_consumed());
+    let _ev = source
+        .try_evidence(&req)
+        .expect("first eval consumes the key");
+    assert!(source.key_consumed());
+    assert_eq!(
+        source.try_evidence(&req),
+        Err(VrfEvalError::KeyConsumed),
+        "a one-time key must refuse a second evaluation"
+    );
+}
+
+#[test]
+fn server_vrf_malformed_evidence_is_rejected() {
+    // A wrong-length byte field is rejected as malformed before the proof check.
+    let req = sample_request(1);
+    let source = ServerVrf::from_key_seed(&[0x61; 32]);
+    let mut ev = source.try_evidence(&req).expect("honest eval");
+    if let EvidenceKind::LbVrf { proof, .. } = &mut ev.source {
+        proof.truncate(proof.len() - 1); // no longer the canonical length
+    }
+    assert!(
+        matches!(
+            ServerVrf::seed(&req, &ev),
+            Err(VerifyError::MalformedVrfEvidence(_))
+        ),
+        "a wrong-length proof is rejected as malformed"
+    );
+}
+
+#[test]
+fn server_vrf_wrong_evidence_kind_is_rejected() {
+    // Cross-source: ServerVrf::seed on foreign (CommitReveal) evidence is a mismatch.
+    let req = sample_request(1);
+    let foreign = CommitReveal {
+        server_reveal: [1; 32],
+        player_contribution: [2; 32],
+    }
+    .evidence(&req);
+    assert_eq!(
+        ServerVrf::seed(&req, &foreign),
+        Err(VerifyError::SourceMismatch)
+    );
 }
 
 // ── EventId domain separation + serde. ──

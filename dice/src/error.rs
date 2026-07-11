@@ -34,10 +34,23 @@ pub enum VerifyError {
     UnsupportedVersion { expected: u32, found: u32 },
 
     /// The source requires an external backend that is not wired in this slice
-    /// (the `ServerVrf` / `Hybrid` stubs). The trait shape is fixed; the backend
-    /// is a documented follow-up.
+    /// (the `Hybrid` delayed-beacon + VRF stub). The trait shape is fixed; the
+    /// backend is a documented follow-up.
     #[error("source backend unavailable: {0}")]
     BackendUnavailable(&'static str),
+
+    /// An LB-VRF evidence field (public key / output / proof) was not the canonical
+    /// byte length its `pqvrf` structure requires, so it could not be decoded. A
+    /// verifier rejects it before running the proof check.
+    #[error("malformed LB-VRF evidence: {0}")]
+    MalformedVrfEvidence(&'static str),
+
+    /// `pqvrf::verify` rejected the LB-VRF `(output, proof)` under the evidence's
+    /// public key and the request's event id. This is the one-output-per-input
+    /// tooth: a forged output or proof (one the LB-VRF secret never produced for
+    /// this input) fails here, its uniqueness reducing to Module-SIS.
+    #[error("LB-VRF proof failed verification (forged output/proof under the committed key)")]
+    VrfProofInvalid,
 }
 
 /// A draw was requested outside the bounds fixed by the request.

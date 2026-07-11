@@ -2741,6 +2741,148 @@ fn a_forged_loot_evidence_relinked_is_caught_by_replay_randomness() {
     );
 }
 
+// ═════════════════════════════════════════════════════════════════════════════
+// VERIFIABLE RANDOMNESS — the POST-QUANTUM LB-VRF source. The SAME loot chest, its
+// draw now backed by the one-time `pqvrf` LB-VRF (Esgin et al. Set I): the drop is
+// the LB-VRF's UNIQUE output for the event, and replay re-runs `pqvrf::verify`. A
+// forged LB-VRF draw is caught on replay (uniqueness reducing to Module-SIS) —
+// escape hatch #4 (one-output-per-input) closed with a lattice primitive. Additive:
+// the CommitReveal default and the five bundled games are untouched.
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// Play THE GLIMMERING HOARD to a WIN under an LB-VRF-backed session seed.
+fn play_hoard_lb_vrf(seed: [u8; 32]) -> GameSession {
+    let mut game = GameSession::open(loot_chest_demo()).with_lb_vrf_randomness(seed);
+    game.command("hero", "open hoard_chest").assert_landed();
+    game.command("hero", "take crown").assert_landed();
+    game.command("hero", "go up").assert_landed();
+    assert_eq!(
+        game.status(),
+        GameStatus::Won,
+        "the hoard is always winnable"
+    );
+    game
+}
+
+#[test]
+fn a_loot_draw_backed_by_lb_vrf_replays_and_verifies() {
+    let game = play_hoard_lb_vrf([0x33; 32]);
+    let world = game.world();
+
+    // The loot turn records LB-VRF evidence (pk + output + proof), not CommitReveal.
+    let record = world.ledger[0].randomness.as_ref().unwrap();
+    match &record.evidence.source {
+        dregg_dice::EvidenceKind::LbVrf {
+            public_key,
+            output,
+            proof,
+        } => {
+            assert!(!public_key.is_empty() && !output.is_empty() && !proof.is_empty());
+        }
+        other => panic!("expected LbVrf evidence, got {other:?}"),
+    }
+
+    // WORLD-RESOLVED + BOUNDED: the drop is a committed-table gem, and it is the receipted grant.
+    let gem = drawn_gem(world);
+    assert!(
+        HOARD_TABLE.contains(&gem.as_str()),
+        "drop {gem} is in the table"
+    );
+    assert_eq!(
+        gem,
+        loot_entry_drop(world),
+        "the held gem is the receipted drop"
+    );
+
+    // BOTH TIERS PASS — replay re-runs pqvrf::verify over the recorded LB-VRF draw and reconstructs
+    // the resolution. Non-vacuous: a real playthrough backed by a real LB-VRF evaluation.
+    let report = game.verify_report();
+    assert!(report.chain.is_ok(), "chain: {:?}", report.chain);
+    assert!(report.replay.is_ok(), "replay: {:?}", report.replay);
+    assert!(report.both_ok());
+}
+
+#[test]
+fn the_lb_vrf_loot_drop_varies_by_seed_and_every_variant_verifies() {
+    // Seed-determined: different LB-VRF session seeds select different verifiable gems.
+    let mut seen = std::collections::BTreeSet::new();
+    for b in 0u8..6 {
+        let game = play_hoard_lb_vrf([b; 32]);
+        let gem = drawn_gem(game.world());
+        assert!(HOARD_TABLE.contains(&gem.as_str()));
+        assert!(
+            game.verify_report().both_ok(),
+            "seed {b} must verify both tiers"
+        );
+        seen.insert(gem);
+    }
+    assert!(
+        seen.len() > 1,
+        "the LB-VRF drop must VARY by seed (saw only {seen:?})"
+    );
+}
+
+#[test]
+fn a_forged_lb_vrf_proof_relinked_is_caught_by_replay() {
+    // Tamper the recorded LB-VRF proof AND re-link so integrity passes. Replay's randomness leg
+    // re-runs pqvrf::verify and rejects the forged draw — the one-output-per-input tooth.
+    let game = play_hoard_lb_vrf([0x33; 32]);
+    let map = game.map().clone();
+    let config = game.dm().config().clone();
+    let mut world = game.into_world();
+
+    match &mut world.ledger[0].randomness.as_mut().unwrap().evidence.source {
+        dregg_dice::EvidenceKind::LbVrf { proof, .. } => proof[0] ^= 0xFF,
+        other => panic!("expected LbVrf evidence, got {other:?}"),
+    }
+    relink(&mut world.ledger);
+
+    // Integrity now passes (the receipt recomputes over the tampered evidence)...
+    world
+        .verify_ledger(&config)
+        .expect("the re-linked chain passes integrity");
+    // ...but replay re-verifies the LB-VRF proof and rejects it (pqvrf::verify → VrfProofInvalid).
+    let err = crate::verify_ledger_replay(&map, &world.ledger)
+        .expect_err("replay rejects the forged LB-VRF proof");
+    match err {
+        ReplayMismatch::Randomness { seq, ref reason } => {
+            assert_eq!(seq, 0);
+            assert!(
+                reason.contains("VrfProofInvalid"),
+                "expected a pqvrf::verify rejection, got: {reason}"
+            );
+        }
+        other => panic!("expected ReplayMismatch::Randomness at seq 0, got {other}"),
+    }
+}
+
+#[test]
+fn a_forged_lb_vrf_output_relinked_is_caught_by_replay() {
+    // A tampered OUTPUT is not the LB-VRF value bound by the proof, so pqvrf::verify rejects it —
+    // the server cannot present a second output for the committed key + event id.
+    let game = play_hoard_lb_vrf([0x44; 32]);
+    let map = game.map().clone();
+    let config = game.dm().config().clone();
+    let mut world = game.into_world();
+
+    match &mut world.ledger[0].randomness.as_mut().unwrap().evidence.source {
+        // Flip a low bit so the output stays canonical-length and < p, reaching pqvrf::verify.
+        dregg_dice::EvidenceKind::LbVrf { output, .. } => output[0] ^= 0x01,
+        other => panic!("expected LbVrf evidence, got {other:?}"),
+    }
+    relink(&mut world.ledger);
+
+    world
+        .verify_ledger(&config)
+        .expect("the re-linked chain passes integrity");
+    let err = crate::verify_ledger_replay(&map, &world.ledger)
+        .expect_err("replay rejects the forged LB-VRF output");
+    assert!(
+        matches!(err, ReplayMismatch::Randomness { seq: 0, .. }),
+        "expected ReplayMismatch::Randomness at seq 0, got {err}"
+    );
+}
+
 #[test]
 fn a_reopened_chest_draws_nothing_and_the_five_games_carry_no_randomness() {
     // Single-use: a second `Use` of an opened chest is a legal no-op that draws nothing — no
