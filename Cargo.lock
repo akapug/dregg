@@ -6431,6 +6431,7 @@ name = "dungeon-on-dregg"
 version = "0.1.0"
 dependencies = [
  "dregg-app-framework",
+ "dregg-cell",
  "spween",
  "spween-dregg",
 ]

@@ -37,6 +37,12 @@ spween = { git = "https://github.com/emberian/spween", rev = "afb5b1fce8c9dd3b78
 # demo can INTROSPECT the installed program and print the actual `FieldGte` gate
 # tooth: proof the rule is an executor-enforced kernel predicate, not app code.
 dregg-app-framework = { path = "../app-framework", default-features = false }
+# The cell crate, for the heap-atom vocabulary (`HeapAtom`) the richer KEEP world
+# uses to constrain a heap-keyed inventory (a `StateConstraint::HeapField` tooth) —
+# the piece of the constraint language app-framework does not re-export. Same
+# `dregg-cell` spween-dregg already builds on; the `StateConstraint` type is the very
+# same re-exported type, so an augmented case is byte-identical to a compiled one.
+dregg-cell = { path = "../cell" }
 
 # A workspace MEMBER of the breadstuffs root (registered in `members`). The root
 # `[workspace]` + `[patch]` tables apply; no standalone `[workspace]`/`[patch]`.
