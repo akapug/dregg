@@ -52,6 +52,8 @@
 
 use base64::Engine as _;
 
+use crate::action_binding::PortableActionBinding;
+use crate::interchain_adapter::{AdapterError, ChainAttestation, DialAdapter, InterchainAdapter};
 use crate::solana_consensus::{BankHashComponents, EpochStakeTable, ValidatorVote};
 use crate::solana_mirror::{MirrorConfig, lock_nullifier};
 use crate::solana_trustless::{
@@ -1011,6 +1013,129 @@ impl ObservedLock {
             escrowed: self.amount,
             consensus_verified: self.trust == LockProofTrust::ConsensusVerified,
         }
+    }
+}
+
+// ===========================================================================
+// The unified InterchainAdapter path (the trust-dial abstraction, wired live)
+// ===========================================================================
+
+/// Why building a committed mint request THROUGH the [`InterchainAdapter`] path
+/// was refused, over and above the adapter's own [`AdapterError`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AdapterWiringError {
+    /// The action binding is addressed to a DIFFERENT federation than this node
+    /// serves (`binding.destination_federation != this_federation`). The
+    /// chain-agnostic [`InterchainAdapter`] does NOT check the destination — that
+    /// is the named CALLER RESPONSIBILITY (see
+    /// [`InterchainAdapter::into_mint_request`]'s doc) — so the relayer enforces it
+    /// HERE, before any mint, so a lock destined for another federation is never
+    /// credited on this one.
+    WrongDestinationFederation {
+        /// The federation this relayer serves.
+        expected: [u8; 32],
+        /// The federation the binding is addressed to.
+        found: [u8; 32],
+    },
+    /// The supplied binding does not describe the SAME lock the relayer observed
+    /// (its nullifier or amount disagree with this [`ObservedLock`]). Refused so a
+    /// caller cannot pair an observed lock's trust dial with an unrelated binding's
+    /// amount/nullifier.
+    BindingMismatch,
+    /// The [`InterchainAdapter`] itself refused the attestation — e.g. an all-zero
+    /// (uninitialized/default) binding, the Nomad-law reject
+    /// ([`AdapterError::EmptyAttestation`]).
+    Adapter(AdapterError),
+}
+
+impl std::fmt::Display for AdapterWiringError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::WrongDestinationFederation { expected, found } => write!(
+                f,
+                "action binding is addressed to federation {} but this relayer serves {} — refused before minting",
+                hex_short(found),
+                hex_short(expected),
+            ),
+            Self::BindingMismatch => write!(
+                f,
+                "action binding does not describe the observed lock (nullifier/amount mismatch)"
+            ),
+            Self::Adapter(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for AdapterWiringError {}
+
+/// A short hex prefix of a 32-byte identity, for error messages.
+fn hex_short(b: &[u8; 32]) -> String {
+    let mut s = String::with_capacity(10);
+    for byte in &b[..4] {
+        s.push_str(&format!("{byte:02x}"));
+    }
+    s.push('…');
+    s
+}
+
+impl ObservedLock {
+    /// Build the committed-mint input by driving the observed lock THROUGH the
+    /// unified [`InterchainAdapter`] trust-dial path — the single fail-closed
+    /// bridge from a chain's raw evidence to the mint bool.
+    ///
+    /// Unlike [`Self::to_bridge_mint_request`] (which hand-sets
+    /// `consensus_verified` from a `== ConsensusVerified` comparison), this routes
+    /// through [`DialAdapter<LockProofTrust>`]: `consensus_verified` is
+    /// [`TrustRung::reached_consensus`](crate::interchain_adapter::TrustRung::reached_consensus)
+    /// of this lock's [`LockProofTrust`] dial — never a caller-supplied bool. A
+    /// [`LockProofTrust::StructureOnly`] lock maps to the fail-closed `Rpc` rung, so
+    /// its request carries `consensus_verified = false` and
+    /// `bridge_mint_against_lock` refuses it with `TrustTooLow`.
+    ///
+    /// Two teeth run BEFORE the adapter:
+    /// 1. **The destination-federation check** (the named caller responsibility the
+    ///    chain-agnostic adapter does not perform): a `binding` whose
+    ///    `destination_federation` is not `this_federation` is refused with
+    ///    [`AdapterWiringError::WrongDestinationFederation`] — a lock destined for
+    ///    another federation is never credited here.
+    /// 2. **The observed-lock consistency check**: the `binding` must describe the
+    ///    SAME lock (its `nullifier` and `amount` match this observation), else
+    ///    [`AdapterWiringError::BindingMismatch`] — a caller cannot pair one lock's
+    ///    trust dial with an unrelated binding's amount/nullifier.
+    ///
+    /// The adapter's own Nomad-law reject (an all-zero binding) surfaces as
+    /// [`AdapterWiringError::Adapter`]. `actor` holds the mirror mint-cap and
+    /// `ledger_cell` is the committed mirror-ledger cell; the credited cell is this
+    /// observation's [`ObservedLock::recipient`].
+    pub fn to_bridge_mint_request_via_adapter(
+        &self,
+        binding: PortableActionBinding,
+        this_federation: [u8; 32],
+        actor: CellId,
+        ledger_cell: CellId,
+    ) -> Result<dregg_turn::BridgeMintRequest, AdapterWiringError> {
+        // (1) THE DESTINATION-FEDERATION CHECK (the named caller responsibility).
+        if binding.destination_federation != this_federation {
+            return Err(AdapterWiringError::WrongDestinationFederation {
+                expected: this_federation,
+                found: binding.destination_federation,
+            });
+        }
+        // (2) the binding must describe the SAME lock this relayer observed.
+        if binding.nullifier != self.nullifier.0 || binding.amount != self.amount {
+            return Err(AdapterWiringError::BindingMismatch);
+        }
+        // (3) drive the UNIFIED InterchainAdapter path. `consensus_verified` comes
+        //     solely from TrustRung::reached_consensus() of this lock's dial — the
+        //     rung mapping is the adapter's, not re-implemented here — so a
+        //     StructureOnly observation CANNOT set it true.
+        let att = ChainAttestation {
+            binding,
+            dial: self.trust,
+        };
+        DialAdapter::<LockProofTrust>::new()
+            .into_mint_request(&att, actor, ledger_cell, self.recipient)
+            .map_err(AdapterWiringError::Adapter)
     }
 }
 
