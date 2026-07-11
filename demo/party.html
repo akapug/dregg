@@ -204,6 +204,41 @@
       radial-gradient(130% 90% at 50% -20%, #241c33 0%, #2c2440 22%, transparent 55%),
       radial-gradient(120% 80% at 50% 0%, #f3eee1 0%, var(--parchment) 42%, var(--parchment-2) 100%); }
 
+    /* ── the quorum meter ── */
+    .quorum-line { margin: 0 0 .7rem; display: flex; align-items: center; gap: .55rem; flex-wrap: wrap;
+      font-size: .82rem; color: var(--ink-soft); padding: .45rem .7rem; border-radius: 9px;
+      border: 1px dashed color-mix(in srgb, var(--violet) 45%, var(--rule)); background: color-mix(in srgb, var(--violet) 6%, transparent); }
+    .quorum-line.met { border-style: solid; border-color: color-mix(in srgb, var(--green) 55%, var(--rule)); background: color-mix(in srgb, var(--green) 10%, transparent); color: var(--green); }
+    .quorum-line .q-label { font-family: var(--sans); font-size: .58rem; letter-spacing: .14em; text-transform: uppercase; font-weight: 700; color: var(--ink-faint); }
+    .quorum-line.met .q-label { color: var(--green); }
+    .quorum-line .q-text b { color: var(--ink); font-variant-numeric: tabular-nums; }
+    .quorum-line.met .q-text b { color: var(--green); }
+    .quorum-line .q-bar { flex: 1 1 6rem; min-width: 5rem; height: 6px; border-radius: 999px; background: color-mix(in srgb, var(--ink-faint) 16%, transparent); overflow: hidden; }
+    .quorum-line .q-fill { display: block; height: 100%; background: var(--violet); transition: width .3s ease; }
+    .quorum-line.met .q-fill { background: var(--green); }
+
+    /* ── the quorum certificate ── */
+    .cert-panel { margin: 1.3rem 0 0; max-height: 0; overflow: hidden; opacity: 0; transition: max-height .4s ease, opacity .3s ease, margin .3s ease; }
+    .cert-panel.show { max-height: 60rem; opacity: 1; padding: 1.2rem 1.3rem; border-radius: 14px; background: var(--card); border: 1px solid color-mix(in srgb, var(--green) 40%, var(--rule)); box-shadow: var(--shadow); }
+    .cert-head { display: flex; align-items: baseline; justify-content: space-between; gap: .6rem; flex-wrap: wrap; }
+    .cert-badge { font-family: var(--sans); font-size: .66rem; letter-spacing: .1em; text-transform: uppercase; font-weight: 700; color: var(--green); }
+    .cert-q { font-family: var(--mono); font-size: .74rem; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+    .cert-question { font-family: var(--serif); font-size: 1.02rem; color: var(--ink); margin: .5rem 0 .6rem; font-style: italic; }
+    .cert-rows { display: grid; gap: .25rem; margin: 0 0 .7rem; }
+    .cert-row { display: flex; justify-content: space-between; align-items: baseline; gap: .6rem; padding: .25rem .5rem; border-radius: 7px; background: color-mix(in srgb, var(--ink-faint) 6%, transparent); }
+    .cert-row.win { background: color-mix(in srgb, var(--green) 14%, transparent); }
+    .cert-row code { font-family: var(--mono); font-size: .78rem; color: var(--ink-soft); }
+    .cert-row.win code { color: var(--green); font-weight: 700; }
+    .cert-count { font-family: var(--mono); font-size: .78rem; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+    .cert-facts { display: grid; gap: .3rem; margin: 0 0 .7rem; }
+    .cert-facts > div { display: flex; gap: .6rem; font-size: .82rem; }
+    .cert-facts .cf-k { font-family: var(--sans); font-size: .58rem; letter-spacing: .12em; text-transform: uppercase; font-weight: 700; color: var(--ink-faint); min-width: 6.5rem; padding-top: .1rem; }
+    .cert-facts .cf-v { color: var(--ink-soft); }
+    .cert-facts code { font-family: var(--mono); font-size: .74rem; color: var(--violet-deep); }
+    .cert-mech { font-size: .8rem; color: var(--ink-faint); margin: 0 0 .5rem; line-height: 1.45; }
+    .cert-honest { font-size: .8rem; color: var(--ink-soft); margin: 0; padding: .55rem .7rem; border-radius: 8px; background: color-mix(in srgb, var(--amber) 8%, transparent); border: 1px dashed color-mix(in srgb, var(--amber) 45%, var(--rule)); line-height: 1.5; }
+    .cert-honest b { color: var(--ink); }
+
     /* ── vote-UX polish: round-state pill, leading option, progress ── */
     .round-state { display: inline-flex; align-items: center; gap: .4rem; font-family: var(--sans);
       font-size: .64rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
@@ -276,6 +311,7 @@
       </div>
       <p class="sub">The candidate actions at this room (each open <em>or locked</em> exit, each item here, plus a look). Click a move to cast the next undecided adventurer's ballot. Tallies are live, and the current front-runner is marked.</p>
       <div id="turnProgress" aria-hidden="true"><span class="tp-fill"></span></div>
+      <div id="quorumLine" class="quorum-line" role="status" aria-live="polite"><span class="q-label">quorum</span><span class="q-text">no vote in progress</span></div>
       <div id="ballot" role="group" aria-label="ballot options"></div>
       <div class="controls">
         <button id="openBtn" class="ctrl primary" type="button">🗳 open a vote</button>
@@ -287,6 +323,8 @@
     </section>
 
     <div id="banner" class="banner" role="status" aria-live="polite"><div class="inner"><p id="bannerTitle" class="b-title"></p><p id="bannerBody" class="b-body"></p></div></div>
+
+    <section id="certPanel" class="cert-panel" aria-label="the quorum certificate"></section>
 
     <section class="log-frame">
       <h3>the chronicle — every voted turn</h3>
@@ -303,12 +341,12 @@
     <aside class="legend">
       <h2>What is actually real here</h2>
       <ul>
-        <li>The crowd <b>decides</b> the party's next command by a plain <b>majority vote</b> — one write-once ballot per seated voter per round, a plurality winner, ties broken deterministically by lowest optionId. This is an <b>honest in-service tally</b>, <em>not</em> a quorum certificate.</li>
-        <li>The world <b>resolves</b> the winner through the <span class="tag">same /game/act path</span> as single-player: gemma2 narrates, <span class="tag">resolve_action</span> decides, a legal move lands as <b>one verified turn</b> on the receipt rail. Collective choice does <b>not</b> bypass the gates.</li>
+        <li>The crowd <b>decides</b> the party's next command on the real <span class="tag">collective-choice</span> engine — the <b>quorum-certified</b> voting substrate The Commons governs on: each ballot is a <b>WriteOnce</b> cap-bounded turn on a factory-born ballot cell, the tally is <b>Monotonic</b>, and a round <b>certifies only once the polis <span class="tag">AffineLe</span> quorum gate</b> (M = 3 of the 5-seat roster) admits the decision-turn. A quorum-met close emits a <b>verifiable quorum certificate</b>, not a bare count — and an independent light-client replay of the cast log recomputes the same board.</li>
+        <li>The world <b>resolves</b> the certified winner through the <span class="tag">same /game/act path</span> as single-player: the narrator narrates, <span class="tag">resolve_action</span> decides, a legal move lands as <b>one verified turn</b> on the receipt rail. Collective choice does <b>not</b> bypass the gates.</li>
         <li>A party that votes a <b>locked exit</b> gets it resolved and <b>refused</b> by the world — <b>no receipt</b> (the anti-ghost tooth), the room unchanged — and must open another vote. Choosing the wrong move is a crowd's right; walking through a barred door is not a crowd's power.</li>
         <li><b>The truth is the ledger, not the vote.</b> Every landed turn is authentic (fixture leg), well-formed, injection-free, and prev-linked on-chain — a stranger can replay the whole run.</li>
       </ul>
-      <p class="foot">Honest scope: the narration is a real local model (<span class="tag">gemma2:2b</span>) when reachable, else a deterministic scripted narrator (shown above). The vote is a simple majority tally in the service; the load-bearing teeth are the <b>world resolution</b>, the <b>capability gate</b>, and the <b>receipt hash-chain</b>.</p>
+      <p class="foot">Honest scope: the quorum-certified tally is over <b>demo identities</b> — each seat's electorate key is <span class="tag">blake3(name)</span>. A production deployment binds each seat to a <b>real custody key</b> and a signed ballot; that custody binding is the one labeled gap. The quorum mechanism, the WriteOnce ballots, the Monotonic tally, and the light-client recomputation are all <b>real verified turns</b>. The narration is a real local model (<span class="tag">gemma2:2b</span>) when reachable, else a deterministic scripted narrator (shown above).</p>
     </aside>
 
     <footer>The Collective Dungeon · attested-dm /party contract · the crowd decides, the world resolves · self-contained.</footer>

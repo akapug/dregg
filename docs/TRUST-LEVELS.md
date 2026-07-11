@@ -67,8 +67,15 @@ dregg's ultimate STARK soundness is an *assumption*, not a discharged proof — 
 ## Standing honest caveats (not swept under "verifiable")
 - The attestation's **authentic** leg is an in-tree fixture — it does *not* prove a real model
   produced the narration bytes. The *well-formed* leg (a JSON-parse certificate) is genuine.
-- The `/party` collective vote is a **majority tally**, not the quorum-certified
-  `CollectiveChoiceEngine` (that's what The Commons uses); upgrading it is queued.
+- The `/party` collective vote is now **quorum-certified** on the real `collective-choice` engine
+  (the same substrate The Commons uses): each ballot is a `WriteOnce` cap-bounded turn on a
+  factory-born ballot cell, the tally is `Monotonic`, and a round certifies only once the polis
+  `AffineLe` quorum gate (M = 3 of the 5-seat roster) admits the decision-turn — a quorum-met close
+  emits a verifiable quorum certificate (with a light-client recomputation of the cast log), not a
+  bare count. **Honest gap:** the quorum-certified tally is over **demo identities** (each seat's
+  electorate key is `blake3(name)`); a production deployment binds each seat to a real **custody
+  key** and a signed ballot. The quorum mechanism is real; the custody-key binding is the remaining
+  production step.
 - None of this is audited production cryptography. It's a high-assurance reference stack where each
   guarantee names its own floor.
 

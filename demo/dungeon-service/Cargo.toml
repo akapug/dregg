@@ -35,6 +35,11 @@ path = "src/main.rs"
 [dependencies]
 # THE DM — the provably-honest, un-jailbreakable narrator + world-cell + caps.
 attested-dm = { path = "../../attested-dm" }
+# THE COLLECTIVE-CHOICE ENGINE — the quorum-certified voting substrate The Commons runs on
+# (privacy-voting `WriteOnce` ballots, `Monotonic` tallies, the polis `AffineLe` quorum gate).
+# The /party lane's crowd-vote resolves through THIS engine: a decision certifies only once the
+# quorum gate admits the RESOLVED turn, and the close produces a verifiable quorum certificate.
+collective-choice = { path = "../../collective-choice" }
 # The tiny server-independent HTTP/1.1 serve loop the handler binds to.
 http-serve = { path = "../../http-serve" }
 # THE HOSTED NARRATOR — a hosted model (AWS Bedrock: Claude Haiku / Amazon Nova) behind a HARD,

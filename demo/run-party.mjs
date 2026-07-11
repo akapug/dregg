@@ -6,23 +6,28 @@
 // the winning move resolves through the SAME /game/act path), ASSERTING the INVARIANTS against
 // the service's own responses (never fabricated):
 //
-//   A. /party/options lists the candidate actions at the current room as a ballot slate.
-//   B. A LANDING ROUND — from the shore, the seated party votes "go north". A repeat ballot
-//      from the SAME voter is REFUSED (already-voted). Close → the plurality winner resolves
-//      as a VERIFIED turn: the receipt rail grows by one, the room advances, the tally reflects
-//      the ballots.
+//   A. /party/options lists the candidate actions at the current room as a ballot slate, and
+//      advertises the QUORUM threshold.
+//   A'. THE QUORUM GATE — a round with only ONE ballot (below the M=3 quorum) is REFUSED at close
+//      (below-quorum): the decision-turn is refused by the polis AffineLe gate, the world does not
+//      move, no receipt. A sub-quorum round does not prematurely resolve.
+//   B. A LANDING ROUND — from the shore, the seated party votes "go north" (4 ballots ≥ quorum). A
+//      repeat ballot from the SAME voter is REFUSED (already-voted). Close → the QUORUM-CERTIFIED
+//      winner resolves as a VERIFIED turn: the receipt rail grows by one, the room advances, and
+//      the close carries a QUORUM CERTIFICATE (quorum met, light-client agrees, full electorate).
 //   C. THE HONEST-FRAMING ROUND — at the antechamber WITHOUT the lantern, the party votes the
-//      LOCKED dark stair ("go down"). Close → the world RESOLVES it and REFUSES it: the room is
-//      UNCHANGED, the receipt rail did NOT grow (no receipt — anti-ghost). The crowd decided; the
-//      world disposed. The party must vote again.
+//      LOCKED dark stair ("go down"). Close → the round is CERTIFIED (quorum met), but the world
+//      RESOLVES and REFUSES the winner: the room is UNCHANGED, the receipt rail did NOT grow (no
+//      receipt — anti-ghost). The crowd certified a choice; the world disposed. Vote again.
 //   D. THE RE-VOTE — the party then votes "take lantern": it LANDS, the receipt rail grows, and
 //      now the once-barred stair is open (the world moved because the party earned it, not voted it).
 //   /game/verify re-verifies the whole ledger as a hash chain throughout.
 //
-// The vote is a SIMPLE MAJORITY tally in the service (write-once per voter, plurality winner,
-// ties by lowest optionId) — NOT a quorum certificate. The narration is a REAL local model, so
-// prose VARIES run to run; we assert the world transitions / refusals / receipt counts (the
-// INVARIANTS), never the model's exact words.
+// The vote runs on the REAL collective-choice engine (WriteOnce ballots + Monotonic tally + the
+// polis AffineLe quorum gate) — quorum-certified over DEMO identities (each seat's key is
+// blake3(name); a production deployment adds real custody keys). The narration is a REAL local
+// model, so prose VARIES run to run; we assert the world transitions / refusals / receipt counts /
+// the quorum cert (the INVARIANTS), never the model's exact words.
 //
 // Captures demo/run/party.png + party.txt.
 
@@ -132,11 +137,29 @@ async function main() {
 
     const rounds = [];
 
-    // ── A. /party/options — the ballot slate at the shore ──
+    // ── A. /party/options — the ballot slate at the shore + the quorum threshold ──
     const optionsView = await page.evaluate(() => window.__partyOptions());
     assert.ok(Array.isArray(optionsView.options) && optionsView.options.length > 0, "/party/options returns a non-empty ballot slate");
-    assert.match(optionsView.voteModel || "", /majority vote/i, "/party/options labels the vote model as a majority vote (honest)");
+    assert.match(optionsView.voteModel || "", /quorum-certified/i, "/party/options labels the vote model as quorum-certified (honest)");
+    assert.ok(optionsView.quorum && optionsView.quorum.threshold >= 2, "/party/options advertises a quorum threshold");
+    const QUORUM = optionsView.quorum.threshold;
     optIdFor(optionsView.options, "go north"); // the shore's exit is on the slate
+
+    // ── A'. THE QUORUM GATE — a single ballot is BELOW quorum; a close does NOT resolve ──
+    let subOpen = await page.evaluate(() => window.__partyOpen());
+    assert.equal(subOpen.ok, true, "a round opened for the sub-quorum probe");
+    assert.equal(subOpen.quorum.threshold, QUORUM, "the opened round carries the quorum threshold");
+    const subLook = optIdFor(subOpen.options, "look");
+    await page.evaluate(([voter, id]) => window.__partyVote(voter, id), [SEATS[0], subLook]);
+    const subTally = await page.evaluate(() => window.__partyTally());
+    assert.equal(subTally.quorum.met, false, `one ballot is below the M=${QUORUM} quorum`);
+    const subClose = await page.evaluate(() => window.__partyCloseRaw());
+    assert.equal(subClose.ok, false, "a sub-quorum close is refused (not prematurely resolved)");
+    assert.equal(subClose.refused, "below-quorum", `the refusal is tagged below-quorum (got ${subClose.refused})`);
+    assert.equal(subClose.quorum.met, false, "the quorum gate reports not met");
+    const afterSub = await page.evaluate(() => window.__partyState());
+    assert.equal(afterSub.room.id, "shore", "a sub-quorum round did not move the world");
+    assert.equal(afterSub.receiptCount, 0, "a sub-quorum round left no receipt (the decision-turn was refused by the AffineLe gate)");
 
     // ── B. A LANDING ROUND — the party votes "go north"; a repeat ballot is refused ──
     let open = await page.evaluate(() => window.__partyOpen());
@@ -167,6 +190,13 @@ async function main() {
     let close = await page.evaluate(() => window.__partyClose());
     assert.equal(close.ok, true, "the round closed");
     assert.equal(close.winner.command, "go north", `the winner is "go north" (got ${close.winner.command})`);
+    // THE QUORUM CERTIFICATE — a resolved round produces a verifiable cert, not a bare count.
+    assert.equal(close.quorumCertified, true, "the resolved round is quorum-certified");
+    assert.ok(close.cert && close.cert.kind === "quorum-certificate", "the close carries a quorum certificate");
+    assert.equal(close.cert.quorumMet, true, "the certificate records quorum met");
+    assert.equal(close.cert.lightClientAgrees, true, "an independent light-client replay recomputes the same board");
+    assert.equal(close.cert.electorate.size, SEATS.length, `the cert names the full ${SEATS.length}-seat electorate`);
+    assert.equal(close.cert.winner.command, "go north", "the certificate names the certified winner");
     assert.equal(close.resolved.outcome, "landed", "the world LANDED the party's choice");
     assert.equal(close.resolved.state.room.id, "antechamber", "the dungeon advanced to the antechamber");
     assert.equal(close.resolved.state.receiptCount, 1, "the receipt rail grew by one (a verified turn)");
@@ -188,6 +218,10 @@ async function main() {
     close = await page.evaluate(() => window.__partyClose());
     assert.equal(close.ok, true, "the round closed");
     assert.equal(close.winner.command, "go down", "the party voted to force the dark stair");
+    // The round is CERTIFIED (quorum met) — but the certificate governs the CHOICE, not the world.
+    assert.equal(close.quorumCertified, true, "the round is quorum-certified even though the world will refuse it");
+    assert.equal(close.cert.quorumMet, true, "the certificate records quorum met");
+    assert.equal(close.cert.winner.command, "go down", "the certificate names the certified (but world-refused) winner");
     // THE WORLD DISPOSES — the voted-for locked exit is REFUSED (collective choice ≠ bypass).
     assert.equal(close.resolved.outcome, "refused", `the world REFUSED the voted locked exit (got ${close.resolved.outcome})`);
     assert.match(close.resolved.reason || "", /lantern/i, `the refusal names the lantern (got "${close.resolved.reason}")`);
@@ -206,6 +240,8 @@ async function main() {
     }
     close = await page.evaluate(() => window.__partyClose());
     assert.equal(close.winner.command, "take lantern", "the party re-voted to take the lantern");
+    assert.equal(close.quorumCertified, true, "the re-vote is quorum-certified");
+    assert.equal(close.cert.lightClientAgrees, true, "the re-vote's cert light-client tally agrees");
     assert.equal(close.resolved.outcome, "landed", "taking the lantern LANDS");
     assert.equal(close.resolved.state.receiptCount, 2, "the receipt rail grew to two verified turns");
     assert.ok(close.resolved.state.inventory.includes("lantern"), "the party now carries the lantern");
@@ -227,7 +263,7 @@ async function main() {
     console.log(transcript);
     console.log(`\n  screenshot → ${path.join(OUT, "party.png")}`);
     console.log(`  transcript → ${path.join(OUT, "party.txt")}\n`);
-    console.log("  ✓ THE COLLECTIVE DUNGEON RAN: a crowd steered one party by vote — a repeat ballot refused, a voted locked exit refused by the WORLD, and a re-vote landed. The crowd decides; the world resolves.\n");
+    console.log("  ✓ THE COLLECTIVE DUNGEON RAN: a crowd steered one party by a QUORUM-CERTIFIED vote — a sub-quorum round refused by the quorum gate, a repeat ballot refused, a certified locked exit refused by the WORLD, and a re-vote landed with its quorum certificate. The crowd certifies; the world resolves.\n");
   } finally {
     if (browser) await browser.close();
     if (server) server.close();
@@ -243,9 +279,11 @@ function renderTranscript({ base, narratorKind, realModel, rounds, finalState })
   L.push("=".repeat(78));
   L.push("");
   L.push("Each turn: OPEN a vote over the party's candidate moves, the seated adventurers cast");
-  L.push("write-once ballots, CLOSE it — and the winning move resolves through the SAME engine as");
-  L.push("single-player. The vote is a plain MAJORITY tally (NOT a quorum certificate). The crowd");
-  L.push("DECIDES; the world still RESOLVES — a party that votes a locked door is still refused.");
+  L.push("write-once ballots, CLOSE it — and the QUORUM-CERTIFIED winner resolves through the SAME");
+  L.push("engine as single-player. The vote runs on the real collective-choice engine (WriteOnce");
+  L.push("ballots + Monotonic tally + the polis AffineLe quorum gate); a quorum-met close emits a");
+  L.push("verifiable QUORUM CERTIFICATE over demo identities. The crowd CERTIFIES; the world still");
+  L.push("RESOLVES — a party that certifies a locked door is still refused by the world.");
   L.push("");
   for (const r of rounds) {
     L.push("-".repeat(78));
