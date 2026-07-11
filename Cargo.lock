@@ -6414,6 +6414,7 @@ version = "0.1.0"
 dependencies = [
  "attested-dm",
  "blake3",
+ "collective-choice",
  "dregg-narrator",
  "http-serve",
  "serde_json",

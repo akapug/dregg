@@ -29,8 +29,13 @@ narrator saying otherwise changes nothing — the rules decide, not the prose.
 
 ### The Collective Dungeon — `/party`
 A crowd votes the party's next move with buttons; the world still resolves the winner. Vote to force a
-locked exit and watch it refuse — collective choice does not bypass the gates.
-*Honest scope: a simple majority tally among the seated party, **not** a quorum certificate.*
+locked exit and watch it refuse — collective choice does not bypass the gates. The vote runs on the
+real `collective-choice` engine: each ballot is a `WriteOnce` cap-bounded turn, the tally is
+`Monotonic`, and a round certifies only once the polis `AffineLe` **quorum gate** (M = 3 of the
+5-seat roster) admits the decision-turn — a quorum-met close emits a **verifiable quorum certificate**
+(with a light-client recomputation), not a bare count.
+*Honest scope: quorum-certified over **demo identities** (each seat's key is `blake3(name)`); a
+production deployment adds real **custody keys** per seat.*
 
 ### The Attested Dungeon — `/dungeon`
 Jailbreak the dungeon-master for real. It will crown you King of Eternity; the ledger says you hold no
@@ -85,7 +90,7 @@ Prices are pinned from the AWS Pricing API where verifiable, else as a documente
 
 - The attestation's *authentic* leg is an in-tree fixture — it does **not** prove a real model produced
   the bytes. Its *well-formed* leg (a JSON-parse certificate) is genuine.
-- The `/party` vote is a simple majority tally, **not** the quorum-certified engine (that is The Commons).
+- The `/party` vote is **quorum-certified** on the real `collective-choice` engine (the same substrate The Commons uses) — over demo identities; the remaining production step is real custody keys per seat.
 
 ---
 

@@ -39,6 +39,9 @@ use attested_dm::{
     bramble_keep, deepdark_mine, starfall_spire, sunken_vault, GameAction, GameSession, GameStatus,
     GameWorld, Gate, PlayResult, Proposal, Room, WorldCell,
 };
+use collective_choice::{
+    CollectiveChoice, Decision, PollId, PollSpec, Tally, VoteEngine, VoteError, MAX_OPTIONS,
+};
 use http_serve::WebResponse;
 use serde_json::{json, Value};
 
@@ -551,17 +554,60 @@ pub struct GameState {
 // ─────────────────────────────────────────────────────────────────────────────
 // The COLLECTIVE lane — a crowd steers ONE shared party through the same dungeon by vote.
 //
-// HONEST SCOPE: this is a simple, in-service MAJORITY VOTE among the seated party — one
-// write-once ballot per voter per round, a plain per-option tally, the plurality winner
-// (ties broken deterministically by lowest optionId). It is NOT the federation-grade
-// `CollectiveChoiceEngine` / quorum certificate — it is labeled plainly as a majority vote
-// everywhere it surfaces. What stays load-bearing is UNCHANGED: the crowd only DECIDES the
-// command; the WORLD still RESOLVES it through `/game/act` (a voted-for locked exit is still
-// refused deterministically, lands no receipt, and the party must vote again).
+// THE ENGINE: this lane runs on the REAL `collective_choice::CollectiveChoice` engine — the
+// quorum-certified voting substrate The Commons governs on, assembled from privacy-voting
+// `WriteOnce` ballots, `Monotonic` tallies, and the polis `AffineLe` quorum gate. Each cast is a
+// real cap-bounded turn on a factory-born ballot cell; the tally is a monotone verified board; and
+// a round RESOLVES only once the quorum gate admits the decision-turn (`Σ ballots ≥ M`). Closing a
+// quorum-met round produces a verifiable QUORUM CERTIFICATE, not a bare count.
+//
+// WHAT IS REAL vs the production gap (honest): the quorum mechanism, the WriteOnce ballots, the
+// Monotonic tally, and the light-client recomputation are all REAL verified turns — over DEMO
+// identities (each seat's electorate key is `blake3(name)`, a deterministic demo public key). A
+// production deployment binds each seat to a real CUSTODY KEY and a signed ballot; here the
+// identities are demo keys, not custody-held signing keys. The quorum-certified TALLY is genuine;
+// the custody binding is the labeled gap.
+//
+// WHAT STAYS LOAD-BEARING is UNCHANGED: the crowd only DECIDES the command; the WORLD still
+// RESOLVES it through `/game/act` (a voted-for locked exit is still refused deterministically,
+// lands no receipt, and the party must vote again).
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// The federation the backing collective-choice engine's ballot/tally turns commit under.
+const PARTY_FEDERATION: [u8; 32] = [0xC0; 32];
+
+/// The seated party — the fixed electorate that holds ballots. Matches the five seats the
+/// party page shows and the `run-party.mjs` driver casts as. A voter outside this roster holds
+/// no ballot cap and is refused as ineligible (a real eligibility tooth).
+const PARTY_ROSTER: &[&str] = &["Bramwen", "Corvin", "Della", "Ferro", "Wisp"];
+
+/// The quorum threshold `M`: a round certifies (and its winner resolves) only once at least this
+/// many ballots are cast — the polis `AffineLe` gate `M·RESOLVED − Σ TALLY ≤ 0`. A participation
+/// quorum: a majority of the five-seat roster. Below it, `resolve` is refused by the executor and
+/// the round does NOT resolve (the party must gather more ballots).
+const PARTY_QUORUM: u64 = 3;
+
+/// A voter's deterministic electorate public key (a stable demo identity per seat name).
+fn party_voter_pk(voter: &str) -> [u8; 32] {
+    *blake3::hash(voter.as_bytes()).as_bytes()
+}
+
+/// A commitment over the electorate — `blake3` of the sorted seat keys. The `WriteOnce`
+/// electorate root the poll cell pins is a field lift of this; the cert surfaces this raw hash so
+/// a reader can recompute it from the public roster.
+fn electorate_commitment_hex() -> String {
+    let mut keys: Vec<[u8; 32]> = PARTY_ROSTER.iter().map(|n| party_voter_pk(n)).collect();
+    keys.sort();
+    let mut h = blake3::Hasher::new();
+    for k in &keys {
+        h.update(k);
+    }
+    hex(h.finalize().as_bytes())
+}
+
 /// One candidate action on the ballot — derived from the current `/game/state` (an open or
-/// locked exit, an item here, or a contextual action). `id` is a stable index within the round.
+/// locked exit, an item here, or a contextual action). `id` is a stable index within the round,
+/// and is exactly the option index the backing poll cell tallies.
 #[derive(Clone)]
 struct BallotOption {
     id: usize,
@@ -569,38 +615,49 @@ struct BallotOption {
     label: String,
 }
 
-/// An open vote round over one frozen slate of [`BallotOption`]s. `votes` is write-once per
-/// voter (`voter -> optionId`); a second ballot from the same voter is refused.
+/// An open vote round backed by a live [`CollectiveChoice`] engine + its open [`PollId`]. Each
+/// seat's ballot is a real cap-bounded turn on that engine; `votes` mirrors who cast for what (so
+/// the seat chips + the write-once refusal read cleanly without re-hitting the engine nullifier).
 struct VoteRound {
     id: u64,
+    question: String,
     options: Vec<BallotOption>,
+    /// The backing quorum-certified engine — one embedded executor hosting this round's poll,
+    /// ballots, and monotone tally as verified turns.
+    engine: CollectiveChoice,
+    /// The open poll on `engine` (the tally-board cell + its `WriteOnce`/`Monotonic`/`AffineLe`
+    /// caveats).
+    poll: PollId,
+    /// voter name → the option index they cast (mirror of the engine's per-voter ballot).
     votes: BTreeMap<String, usize>,
 }
 
 impl VoteRound {
-    /// Per-option counts over the cast ballots (index-aligned with `options`).
-    fn counts(&self) -> Vec<usize> {
-        let mut counts = vec![0usize; self.options.len()];
-        for &oid in self.votes.values() {
-            if let Some(c) = counts.get_mut(oid) {
-                *c += 1;
+    /// The authoritative per-option tally, read from the engine's monotone poll-cell slots (a
+    /// light client recomputes the same board from the append-only cast log). Index-aligned with
+    /// `options`; falls back to the local mirror only if the engine has no live state.
+    fn tally(&self) -> Tally {
+        self.engine.tally(self.poll).unwrap_or_else(|_| {
+            let mut per_option = vec![0u64; self.options.len()];
+            for &oid in self.votes.values() {
+                if let Some(c) = per_option.get_mut(oid) {
+                    *c += 1;
+                }
             }
-        }
-        counts
+            let total = per_option.iter().sum();
+            Tally { per_option, total }
+        })
     }
 
-    /// The plurality winner's index, ties broken by lowest optionId (options are already in id
-    /// order, so the first option holding the max count wins). `None` iff there are no options.
-    fn winner_index(&self) -> Option<usize> {
-        let counts = self.counts();
-        counts
-            .iter()
-            .enumerate()
-            .max_by_key(|(i, c)| (**c, std::cmp::Reverse(*i)))
-            .map(|(i, _)| i)
+    /// Per-option counts (from the engine tally).
+    fn counts(&self) -> Vec<u64> {
+        let mut c = self.tally().per_option;
+        c.resize(self.options.len(), 0);
+        c
     }
 
-    /// True iff more than one option shares the maximum count (a tie the lowest-id rule breaks).
+    /// True iff more than one option shares the maximum count (a tie the engine's lowest-index
+    /// argmax rule breaks).
     fn is_tie(&self) -> bool {
         let counts = self.counts();
         match counts.iter().max() {
@@ -1293,7 +1350,10 @@ fn party_options(gs: &GameState) -> Vec<BallotOption> {
     // A contextual action always on the slate (harmless, always legal — a legible "do nothing bold").
     raw.push(("look".to_string(), "Look around the room".to_string()));
 
+    // The backing poll cell tallies at most `MAX_OPTIONS` (the 16-slot cell's structural ceiling);
+    // cap the slate so the frozen options and the poll's option indices always line up.
     raw.into_iter()
+        .take(MAX_OPTIONS)
         .enumerate()
         .map(|(id, (command, label))| BallotOption { id, command, label })
         .collect()
@@ -1303,7 +1363,21 @@ fn ballot_json(o: &BallotOption) -> Value {
     json!({ "id": o.id, "command": o.command, "label": o.label })
 }
 
-/// The per-option tally over an open round.
+/// The quorum state over an open round — the threshold `M`, the ballots cast toward it, and
+/// whether the quorum `AffineLe` gate is now satisfied (so a close would resolve).
+fn quorum_json(round: &VoteRound) -> Value {
+    let total = round.tally().total;
+    json!({
+        "threshold": PARTY_QUORUM,
+        "ballotsCast": total,
+        "met": total >= PARTY_QUORUM,
+        "electorateSize": PARTY_ROSTER.len(),
+        "gate": "polis AffineLe M\u{00b7}RESOLVED \u{2212} \u{03a3} TALLY \u{2264} 0 \u{2014} the decision-turn commits only at \u{03a3} ballots \u{2265} M",
+    })
+}
+
+/// The per-option tally over an open round — read from the engine's monotone poll-cell slots
+/// (the authoritative board), plus the live quorum state.
 fn tally_json(round: &VoteRound) -> Value {
     let counts = round.counts();
     let rows: Vec<Value> = round
@@ -1323,6 +1397,67 @@ fn tally_json(round: &VoteRound) -> Value {
         "open": true,
         "totalVotes": round.votes.len(),
         "tally": rows,
+        "quorum": quorum_json(round),
+    })
+}
+
+/// The one-line honest description of the collective-choice model, surfaced everywhere the lane
+/// speaks. Quorum-certified over demo identities; the labeled production gap is real custody keys.
+const VOTE_MODEL: &str = "quorum-certified collective choice on the real collective-choice engine \
+    (WriteOnce ballots + Monotonic tally + the polis AffineLe quorum gate, M=3 of a 5-seat roster) \
+    over demo identities \u{2014} a decision certifies only once the quorum gate admits it; a \
+    production deployment adds real custody keys per seat";
+
+/// The verifiable QUORUM CERTIFICATE for a resolved round — what the close produces instead of a
+/// bare count. Reads the engine's monotone tally + an independent light-client replay, and labels
+/// exactly what is real (the quorum-certified tally over demo identities) vs the production gap
+/// (real custody keys). `decision` is the engine's certified [`Decision`] (argmax; lowest-index
+/// tie-break) — produced only because the `AffineLe` gate admitted the RESOLVED turn.
+fn cert_json(round: &VoteRound, decision: &Decision) -> Value {
+    let t = round.tally();
+    // The light-client cross-check: replay the append-only cast log and confirm it recomputes the
+    // same board the executor's stored monotone slots hold. Agreement ⇒ the tally is unforged.
+    let light_agrees = round
+        .engine
+        .light_client_tally(round.poll)
+        .map(|l| l.per_option == t.per_option && l.total == t.total)
+        .unwrap_or(false);
+    let per_option: Vec<Value> = round
+        .options
+        .iter()
+        .map(|o| {
+            json!({
+                "id": o.id,
+                "command": o.command,
+                "label": o.label,
+                "count": t.per_option.get(o.id).copied().unwrap_or(0),
+            })
+        })
+        .collect();
+    let winner = round
+        .options
+        .get(decision.winner)
+        .map(|w| json!({ "id": w.id, "command": w.command, "label": w.label }));
+    json!({
+        "kind": "quorum-certificate",
+        "question": round.question,
+        "quorumThreshold": PARTY_QUORUM,
+        "ballotsCast": t.total,
+        "quorumMet": t.total >= PARTY_QUORUM,
+        "resolved": true,
+        "winner": winner.unwrap_or(Value::Null),
+        "winnerTally": decision.winner_tally,
+        "perOption": per_option,
+        "electorate": {
+            "size": PARTY_ROSTER.len(),
+            "seats": PARTY_ROSTER,
+            "commitmentHex": electorate_commitment_hex(),
+        },
+        "lightClientAgrees": light_agrees,
+        "mechanism": "each ballot is a WriteOnce cap-bounded turn on a factory-born ballot cell; the tally is Monotonic (a stale value cannot shrink it); the decision-turn (RESOLVED:=1) is admitted only by the polis AffineLe quorum gate M\u{00b7}RESOLVED \u{2212} \u{03a3} TALLY \u{2264} 0, re-enforced by the verified executor; a double vote is refused by the ballot nullifier.",
+        "proves": "the winner was chosen by a quorum-certified monotone tally of one-vote-per-seat ballots, and an independent light-client replay of the cast log recomputes the same board.",
+        "real": "quorum-certified tally over DEMO identities \u{2014} each seat's electorate key is blake3(name); the quorum gate, the WriteOnce ballots, the Monotonic tally, and the light-client recomputation are all REAL verified turns.",
+        "productionGap": "a production deployment binds each seat to a real CUSTODY KEY and a signed ballot (the cap minted to that key); here the identities are deterministic demo public keys, not custody-held signing keys.",
     })
 }
 
@@ -1334,19 +1469,28 @@ pub fn handle_party_options(gs: &Mutex<GameState>) -> WebResponse {
     let round = g
         .party
         .as_ref()
-        .map(|r| json!({ "roundId": r.id, "open": true, "totalVotes": r.votes.len() }))
+        .map(|r| {
+            json!({
+                "roundId": r.id,
+                "open": true,
+                "totalVotes": r.votes.len(),
+                "quorum": quorum_json(r),
+            })
+        })
         .unwrap_or(Value::Null);
     let resp = json!({
         "options": options,
         "round": round,
-        "voteModel": "a majority vote among the seated party (write-once per voter; plurality winner; ties broken by lowest optionId)",
+        "voteModel": VOTE_MODEL,
+        "quorum": { "threshold": PARTY_QUORUM, "electorateSize": PARTY_ROSTER.len(), "seats": PARTY_ROSTER },
         "state": state_json(&g),
     });
     WebResponse::json(resp.to_string().into_bytes())
 }
 
-/// `POST /party/open` — open a fresh vote round over the current options (returns the round id +
-/// the frozen slate). Opening while a round is already open REPLACES it with a fresh one.
+/// `POST /party/open` — open a fresh vote round over the current options, standing up a fresh
+/// [`CollectiveChoice`] engine and opening a quorum-gated poll on it (returns the round id + the
+/// frozen slate + the quorum state). Opening while a round is already open REPLACES it.
 pub fn handle_party_open(gs: &Mutex<GameState>) -> WebResponse {
     let mut g = gs.lock().unwrap();
     if g.session.status() != GameStatus::Playing {
@@ -1359,26 +1503,64 @@ pub fn handle_party_open(gs: &Mutex<GameState>) -> WebResponse {
     }
     let options = party_options(&g);
     let id = g.next_round_id;
+    let room_name = g
+        .session
+        .current_room()
+        .map(|r| r.name.clone())
+        .unwrap_or_else(|| "the dungeon".to_string());
+    let question = format!("The shared party's next move in {room_name} (round {id})");
+
+    // Stand up the real quorum-certified engine for this round: a fresh embedded executor hosts
+    // the poll (tally-board) cell + its WriteOnce/Monotonic/AffineLe caveats, over the seated
+    // roster as the electorate. Each seat's cap is minted (idempotently) on its first vote.
+    let mut engine = CollectiveChoice::new(PARTY_FEDERATION);
+    let electorate: Vec<[u8; 32]> = PARTY_ROSTER.iter().map(|n| party_voter_pk(n)).collect();
+    let spec = PollSpec {
+        question: question.clone(),
+        options: options.iter().map(|o| o.label.clone()).collect(),
+        electorate,
+        quorum_m: PARTY_QUORUM,
+    };
+    let poll = match engine.open_poll(spec) {
+        Ok(p) => p,
+        Err(e) => {
+            let resp = json!({
+                "ok": false,
+                "reason": format!("could not open a quorum poll: {e}"),
+                "state": state_json(&g),
+            });
+            return WebResponse::json(resp.to_string().into_bytes());
+        }
+    };
+
     g.next_round_id += 1;
     let options_json: Vec<Value> = options.iter().map(ballot_json).collect();
-    g.party = Some(VoteRound {
+    let round = VoteRound {
         id,
+        question,
         options,
+        engine,
+        poll,
         votes: BTreeMap::new(),
-    });
+    };
+    let quorum = quorum_json(&round);
+    g.party = Some(round);
     let resp = json!({
         "ok": true,
         "roundId": id,
         "options": options_json,
-        "voteModel": "a majority vote among the seated party",
+        "voteModel": VOTE_MODEL,
+        "quorum": quorum,
         "state": state_json(&g),
     });
     WebResponse::json(resp.to_string().into_bytes())
 }
 
-/// `POST /party/vote {"voter":"<name>","optionId":<n>}` — one write-once ballot per voter. A
-/// second ballot from the same voter this round is refused (`refused:"already-voted"`); an
-/// unknown optionId is a 400; no open round is `refused:"no-round"`.
+/// `POST /party/vote {"voter":"<name>","optionId":<n>}` — cast one seat's ballot as a REAL turn on
+/// the round's [`CollectiveChoice`] engine. A voter outside the seated roster is refused
+/// (`refused:"not-seated"` — they hold no ballot cap); a second ballot from the same voter is
+/// refused (`refused:"already-voted"` — the ballot's WriteOnce + the engine nullifier); an unknown
+/// optionId is a 400; no open round is `refused:"no-round"`.
 pub fn handle_party_vote(gs: &Mutex<GameState>, body: &[u8]) -> WebResponse {
     let parsed: Value = match serde_json::from_slice(body) {
         Ok(v) => v,
@@ -1415,8 +1597,21 @@ pub fn handle_party_vote(gs: &Mutex<GameState>, body: &[u8]) -> WebResponse {
             ),
         );
     }
-    // WRITE-ONCE: a voter who has already cast a ballot this round is refused (their first
-    // choice stands). This is the majority vote's one-ballot-per-voter rule.
+    // ELIGIBILITY: only a seated adventurer holds a ballot cap. A voter outside the roster is
+    // refused with no cap to exercise (the engine's `Ineligible`, surfaced early for a clean UX).
+    if !PARTY_ROSTER.iter().any(|s| *s == voter) {
+        let resp = json!({
+            "ok": false,
+            "refused": "not-seated",
+            "reason": format!("{voter} is not a seated adventurer \u{2014} only the roster [{}] holds ballots", PARTY_ROSTER.join(", ")),
+            "voter": voter,
+            "tally": tally_json(round),
+        });
+        return WebResponse::json(resp.to_string().into_bytes());
+    }
+    // WRITE-ONCE: a voter who already cast this round is refused (their first choice stands). The
+    // engine would also refuse the second cast (ballot WriteOnce + consumed nullifier); we short-
+    // circuit here so the refusal reads cleanly without touching the nullifier set.
     if let Some(prev) = round.votes.get(&voter).copied() {
         let resp = json!({
             "ok": false,
@@ -1428,6 +1623,44 @@ pub fn handle_party_vote(gs: &Mutex<GameState>, body: &[u8]) -> WebResponse {
         });
         return WebResponse::json(resp.to_string().into_bytes());
     }
+
+    // THE REAL CAST — mint (idempotently) this seat's single-use ballot cap and exercise it: a
+    // WriteOnce turn on the ballot cell + a Monotonic bump of the poll's tally slot, both
+    // re-enforced by the verified executor.
+    let pk = party_voter_pk(&voter);
+    let cap = match round.engine.issue_ballot(round.poll, pk) {
+        Ok(c) => c,
+        Err(e) => {
+            let refused = match e {
+                VoteError::Ineligible => "not-seated",
+                _ => "engine-refused",
+            };
+            let resp = json!({
+                "ok": false,
+                "refused": refused,
+                "reason": format!("the ballot could not be issued: {e}"),
+                "voter": voter,
+                "tally": tally_json(round),
+            });
+            return WebResponse::json(resp.to_string().into_bytes());
+        }
+    };
+    if let Err(e) = round.engine.cast(round.poll, &cap, option_id) {
+        let refused = match e {
+            VoteError::DoubleVote => "already-voted",
+            VoteError::BadOption => "bad-option",
+            _ => "engine-refused",
+        };
+        let resp = json!({
+            "ok": false,
+            "refused": refused,
+            "reason": format!("the executor refused the ballot turn: {e}"),
+            "voter": voter,
+            "tally": tally_json(round),
+        });
+        return WebResponse::json(resp.to_string().into_bytes());
+    }
+
     round.votes.insert(voter.clone(), option_id);
     let resp = json!({
         "ok": true,
@@ -1438,7 +1671,8 @@ pub fn handle_party_vote(gs: &Mutex<GameState>, body: &[u8]) -> WebResponse {
     WebResponse::json(resp.to_string().into_bytes())
 }
 
-/// `GET /party/tally` — per-option counts for the open round (or `open:false` when none is open).
+/// `GET /party/tally` — the engine's monotone per-option tally + quorum state for the open round
+/// (or `open:false` when none is open).
 pub fn handle_party_tally(gs: &Mutex<GameState>) -> WebResponse {
     let g = gs.lock().unwrap();
     let resp = match g.party.as_ref() {
@@ -1448,14 +1682,16 @@ pub fn handle_party_tally(gs: &Mutex<GameState>) -> WebResponse {
     WebResponse::json(resp.to_string().into_bytes())
 }
 
-/// `POST /party/close` — close the open round: the plurality winner (ties broken by lowest
-/// optionId) is resolved through the SAME `/game/act` path (`act_command`), so a voted-for locked
-/// exit is still refused by the world (no receipt) and the party must vote again. Returns the
-/// winner, the final tally, and the full resolution outcome + new state. A round with no ballots
-/// cannot be closed (400) — cast at least one vote first.
+/// `POST /party/close` — close the open round through the REAL quorum gate. `engine.resolve`
+/// attempts the decision-turn (RESOLVED:=1); the polis `AffineLe` gate admits it ONLY at
+/// `Σ ballots ≥ M`, so a sub-quorum round does NOT resolve (`refused:"below-quorum"`, the round is
+/// kept open for more ballots). Once quorum is met, the certified winner (engine argmax; lowest-
+/// index tie-break) resolves through the SAME `/game/act` path — a voted-for locked exit is still
+/// refused by the world (no receipt) and the party must vote again — and the response carries the
+/// verifiable QUORUM CERTIFICATE. A round with no ballots cannot be closed (400).
 pub fn handle_party_close(gs: &Mutex<GameState>) -> WebResponse {
     let mut g = gs.lock().unwrap();
-    let round = match g.party.take() {
+    let mut round = match g.party.take() {
         Some(r) => r,
         None => {
             let resp = json!({
@@ -1475,21 +1711,63 @@ pub fn handle_party_close(gs: &Mutex<GameState>) -> WebResponse {
         );
     }
 
-    let counts = round.counts();
-    let winner_idx = round
-        .winner_index()
-        .expect("a non-empty round has a winner");
-    let winner = round.options[winner_idx].clone();
+    // THE QUORUM GATE DECIDES — attempt the certified decision-turn on the engine.
+    let decision = match round.engine.resolve(round.poll) {
+        Ok(Some(d)) => d,
+        Ok(None) => {
+            // BELOW QUORUM: the executor refused the RESOLVED turn (the AffineLe gate bit). The
+            // round does NOT resolve; keep it open so the party can gather more ballots.
+            let quorum = quorum_json(&round);
+            let tally = tally_json(&round);
+            let id = round.id;
+            g.party = Some(round);
+            let resp = json!({
+                "ok": false,
+                "refused": "below-quorum",
+                "roundId": id,
+                "reason": format!(
+                    "the quorum gate refused the decision-turn \u{2014} {} of {} ballots cast, {} needed. Gather more votes.",
+                    quorum["ballotsCast"], PARTY_ROSTER.len(), PARTY_QUORUM
+                ),
+                "quorum": quorum,
+                "tally": tally,
+            });
+            return WebResponse::json(resp.to_string().into_bytes());
+        }
+        Err(e) => {
+            let id = round.id;
+            g.party = Some(round);
+            return WebResponse::error(
+                500,
+                format!("round #{id}: the engine errored on resolve: {e}"),
+            );
+        }
+    };
+
+    let winner = match round.options.get(decision.winner).cloned() {
+        Some(w) => w,
+        None => {
+            return WebResponse::error(
+                500,
+                format!(
+                    "the certified winner index {} is out of range",
+                    decision.winner
+                ),
+            )
+        }
+    };
     let tie = round.is_tie();
     let winner_json = json!({
         "id": winner.id,
         "command": winner.command,
         "label": winner.label,
-        "count": counts.get(winner.id).copied().unwrap_or(0),
+        "count": decision.winner_tally,
     });
+    let cert = cert_json(&round, &decision);
     let tally = tally_json(&round);
 
-    // THE WORLD DISPOSES — resolve the winning command through the identical /game/act path.
+    // THE WORLD DISPOSES — resolve the certified winning command through the identical /game/act
+    // path. A voted-for locked exit is still refused by the world, lands no receipt, unchanged.
     let resolved = act_command(&mut g, &winner.command);
 
     let resp = json!({
@@ -1497,8 +1775,10 @@ pub fn handle_party_close(gs: &Mutex<GameState>) -> WebResponse {
         "roundId": round.id,
         "winner": winner_json,
         "tie": tie,
-        "tieBreak": if tie { "lowest optionId" } else { "" },
-        "voteModel": "a majority vote among the seated party (NOT a quorum certificate)",
+        "tieBreak": if tie { "lowest optionId (engine argmax)" } else { "" },
+        "voteModel": VOTE_MODEL,
+        "quorumCertified": true,
+        "cert": cert,
         "tally": tally,
         "resolved": resolved,
     });

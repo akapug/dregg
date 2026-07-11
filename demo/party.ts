@@ -8,9 +8,14 @@
  * resolve_action decides, a verified turn lands). The crowd DECIDES; the world still RESOLVES:
  * a voted-for locked exit is still refused (no receipt), and the party must vote again.
  *
- * HONEST SCOPE: the vote is a simple MAJORITY vote among the seated party (one write-once ballot
- * per voter per round, plurality winner, ties broken by lowest optionId) — NOT a quorum
- * certificate. What is load-bearing is unchanged: the world resolution, the cap gate, the chain.
+ * THE ENGINE: the vote runs on the REAL `collective_choice::CollectiveChoice` engine — the
+ * quorum-certified voting substrate The Commons governs on (WriteOnce ballots + a Monotonic tally
+ * + the polis AffineLe quorum gate, M=3 of the 5-seat roster). Each cast is a real cap-bounded
+ * turn; a round RESOLVES only once the quorum gate admits the decision-turn; and a quorum-met close
+ * emits a verifiable QUORUM CERTIFICATE, not a bare count. HONEST SCOPE: the quorum-certified tally
+ * is over DEMO identities (each seat's key is blake3(name)); a production deployment adds real
+ * custody keys per seat. What stays load-bearing is unchanged: the world resolution, the cap gate,
+ * the chain — a voted-for locked exit is still refused.
  *
  * The page speaks ONLY the service contract over fetch:
  *   GET /game/state · GET /party/options · POST /party/open · POST /party/vote {voter,optionId}
@@ -27,11 +32,20 @@ interface GameState {
 }
 interface Ballot { id: number; command: string; label: string }
 interface TallyRow extends Ballot { count: number }
-interface OpenResp { ok: boolean; roundId: number; options: Ballot[]; state: GameState; reason?: string }
-interface VoteResp { ok: boolean; voter?: string; optionId?: number; refused?: string; reason?: string; tally?: { tally: TallyRow[]; totalVotes: number } }
+interface Quorum { threshold: number; ballotsCast: number; met: boolean; electorateSize: number; gate?: string }
+interface TallyResp { roundId?: number; open?: boolean; tally: TallyRow[]; totalVotes: number; quorum?: Quorum }
+interface Cert {
+  kind: string; question: string; quorumThreshold: number; ballotsCast: number; quorumMet: boolean;
+  resolved: boolean; winner?: TallyRow; winnerTally: number; perOption: TallyRow[];
+  electorate: { size: number; seats: string[]; commitmentHex: string };
+  lightClientAgrees: boolean; mechanism: string; proves: string; real: string; productionGap: string;
+}
+interface OpenResp { ok: boolean; roundId: number; options: Ballot[]; state: GameState; reason?: string; quorum?: Quorum }
+interface VoteResp { ok: boolean; voter?: string; optionId?: number; refused?: string; reason?: string; tally?: TallyResp }
 interface CloseResp {
   ok: boolean; roundId?: number; winner?: TallyRow; tie?: boolean; tieBreak?: string;
-  tally?: { tally: TallyRow[]; totalVotes: number };
+  quorumCertified?: boolean; cert?: Cert; quorum?: Quorum;
+  tally?: TallyResp;
   resolved?: { ok: boolean; narration: string; outcome: "landed" | "refused"; reason?: string; actionLabel?: string; state: GameState };
   refused?: string; reason?: string;
 }
@@ -52,6 +66,7 @@ function escapeHtml(s: string): string { return String(s).replace(/[&<>"]/g, (c)
 const SEATS = ["Bramwen", "Corvin", "Della", "Ferro", "Wisp"];
 
 let currentRound: { id: number; options: Ballot[] } | null = null;
+let currentQuorum: Quorum | null = null;
 // A local mirror of who has voted for what this round (the authoritative tally comes from the
 // service; this only drives the seat chips + the "next unvoted seat" the click-to-cast uses).
 let seatVote: Record<string, number> = {};
@@ -140,6 +155,51 @@ function updateProgress() {
   const voted = Object.keys(seatVote).length;
   fill.style.width = (currentRound ? Math.round((voted / SEATS.length) * 100) : 0) + "%";
 }
+// ── the quorum meter — the threshold M, ballots toward it, and whether the gate is met ──
+function renderQuorum(q: Quorum | null) {
+  const el = document.getElementById("quorumLine");
+  if (!el) return;
+  currentQuorum = q;
+  if (!q) {
+    el.className = "quorum-line";
+    el.innerHTML = '<span class="q-label">quorum</span><span class="q-text">no vote in progress</span>';
+    return;
+  }
+  const met = q.ballotsCast >= q.threshold;
+  const pct = q.threshold > 0 ? Math.min(100, Math.round((q.ballotsCast / q.threshold) * 100)) : 0;
+  el.className = "quorum-line" + (met ? " met" : "");
+  el.innerHTML =
+    `<span class="q-label">quorum gate</span>` +
+    `<span class="q-text"><b>${q.ballotsCast}</b> of <b>${q.threshold}</b> ballots toward quorum${met ? " — <b>reached</b>: a close now certifies" : ` (of ${q.electorateSize} seats) — a close below quorum is refused`}</span>` +
+    `<span class="q-bar"><span class="q-fill" style="width:${pct}%"></span></span>`;
+}
+
+// ── the quorum certificate — what a resolved round produces instead of a bare count ──
+function renderCert(cert: Cert | null) {
+  const panel = document.getElementById("certPanel");
+  if (!panel) return;
+  if (!cert) { panel.className = "cert-panel"; panel.innerHTML = ""; return; }
+  panel.className = "cert-panel show";
+  const rows = cert.perOption
+    .map((o) => {
+      const win = cert.winner && o.id === cert.winner.id;
+      return `<div class="cert-row${win ? " win" : ""}"><code>${escapeHtml(o.command)}</code><span class="cert-count">${o.count}</span></div>`;
+    })
+    .join("");
+  panel.innerHTML =
+    `<div class="cert-head"><span class="cert-badge">✓ quorum certificate</span>` +
+    `<span class="cert-q">M = ${cert.quorumThreshold} · ${cert.ballotsCast} ballots cast · quorum ${cert.quorumMet ? "MET" : "not met"}</span></div>` +
+    `<p class="cert-question">${escapeHtml(cert.question)}</p>` +
+    `<div class="cert-rows">${rows}</div>` +
+    `<div class="cert-facts">` +
+    `<div><span class="cf-k">winner</span><span class="cf-v">${cert.winner ? escapeHtml(cert.winner.command) : "—"} (${cert.winnerTally} of ${cert.ballotsCast})</span></div>` +
+    `<div><span class="cf-k">electorate</span><span class="cf-v">${cert.electorate.size} seats · commitment <code>${short(cert.electorate.commitmentHex)}</code></span></div>` +
+    `<div><span class="cf-k">light-client</span><span class="cf-v">${cert.lightClientAgrees ? "✓ an independent replay of the cast log recomputes the same board" : "✗ light-client tally disagreed"}</span></div>` +
+    `</div>` +
+    `<p class="cert-mech">${escapeHtml(cert.mechanism)}</p>` +
+    `<p class="cert-honest"><b>Real:</b> ${escapeHtml(cert.real)} <b>Production gap:</b> ${escapeHtml(cert.productionGap)}</p>`;
+}
+
 type RoundStateKind = "idle" | "open" | "resolving" | "landed" | "refused";
 function setRoundState(kind: RoundStateKind, text: string) {
   const el = document.getElementById("roundState");
@@ -245,6 +305,8 @@ async function openVote(): Promise<OpenResp> {
     renderRoom(resp.state);
     renderSeats();
     renderBallot(null);
+    renderQuorum(resp.quorum || null);
+    renderCert(null);
     setRoundState("open", `round #${resp.roundId} open — awaiting ballots`);
     $("phaseHint").textContent = `Round #${resp.roundId} is open. Each adventurer casts one ballot; then close the vote and the world resolves the winner.`;
     return resp;
@@ -258,6 +320,7 @@ async function castVote(voter: string, optionId: number): Promise<VoteResp> {
   }
   renderSeats();
   renderBallot(resp.tally ? resp.tally.tally : null);
+  if (resp.tally && resp.tally.quorum) renderQuorum(resp.tally.quorum);
   if (currentRound) {
     const voted = Object.keys(seatVote).length;
     setRoundState("open", voted >= SEATS.length
@@ -303,7 +366,16 @@ async function closeVote(): Promise<CloseResp> {
   setRoundState("resolving", `round #${roundId} — the world resolves the winner…`);
   try {
     const resp = await jpost<CloseResp>("/party/close");
+    // BELOW QUORUM — the quorum gate refused the decision-turn. The round stays open; the party
+    // must gather more ballots. Not an error: surface it and keep voting.
+    if (!resp.ok && resp.refused === "below-quorum") {
+      if (resp.quorum) renderQuorum(resp.quorum);
+      setRoundState("open", `round #${roundId} · below quorum — gather more ballots`);
+      $("phaseHint").textContent = resp.reason || "Below quorum — cast more ballots, then close again.";
+      return resp;
+    }
     if (!resp.ok) { throw new Error(resp.reason || "could not close the round"); }
+    renderCert(resp.cert || null);
     const r = resp.resolved!;
     chronicle.push({
       round: roundId,
@@ -343,6 +415,8 @@ async function reset(world?: string): Promise<GameState> {
   renderRoom(state);
   renderSeats();
   renderBallot(null);
+  renderQuorum(null);
+  renderCert(null);
   renderChronicle();
   renderChain(state.receiptCount, state.commitmentHex);
   renderBanner(state.status);
@@ -358,6 +432,8 @@ async function boot() {
     await refreshState();
     renderSeats();
     renderBallot(null);
+    renderQuorum(null);
+    renderCert(null);
     renderChronicle();
     setRoundState("idle", "no vote in progress");
     $("openBtn").addEventListener("click", () => openVote().catch((e) => console.error(e)));
@@ -383,5 +459,7 @@ window.__partyVote = (voter: string, optionId: number) => castVote(voter, option
 window.__partyVoteRaw = (voter: string, optionId: number) => jpost("/party/vote", { voter, optionId });
 window.__partyTally = () => jget("/party/tally");
 window.__partyClose = () => closeVote();
+// The raw close (does not throw on a below-quorum refusal) — for drivers asserting the quorum gate.
+window.__partyCloseRaw = () => jpost("/party/close");
 
 boot();

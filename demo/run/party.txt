@@ -1,15 +1,17 @@
 THE COLLECTIVE DUNGEON — a crowd steers one shared party by VOTE
 driven run · attested-dm /party contract · narratorKind: model:us.anthropic.claude-haiku-4-5-20251001-v1:0 (a REAL local model)
-served at http://127.0.0.1:51678/party
+served at http://127.0.0.1:54202/party
 ==============================================================================
 
 Each turn: OPEN a vote over the party's candidate moves, the seated adventurers cast
-write-once ballots, CLOSE it — and the winning move resolves through the SAME engine as
-single-player. The vote is a plain MAJORITY tally (NOT a quorum certificate). The crowd
-DECIDES; the world still RESOLVES — a party that votes a locked door is still refused.
+write-once ballots, CLOSE it — and the QUORUM-CERTIFIED winner resolves through the SAME
+engine as single-player. The vote runs on the real collective-choice engine (WriteOnce
+ballots + Monotonic tally + the polis AffineLe quorum gate); a quorum-met close emits a
+verifiable QUORUM CERTIFICATE over demo identities. The crowd CERTIFIES; the world still
+RESOLVES — a party that certifies a locked door is still refused by the world.
 
 ------------------------------------------------------------------------------
-ROUND #1 — ballots: go north = 3 · look = 1
+ROUND #2 — ballots: go north = 3 · look = 1
 ------------------------------------------------------------------------------
   · a SECOND ballot from a voter who already voted → REFUSED (already-voted, one ballot per voter)
   » the party voted: go north
@@ -17,7 +19,7 @@ ROUND #1 — ballots: go north = 3 · look = 1
     world : LANDED → room antechamber · receipt rail #1 (a verified turn)
 
 ------------------------------------------------------------------------------
-ROUND #2 — ballots: go down = 4
+ROUND #3 — ballots: go down = 4
 ------------------------------------------------------------------------------
   » the party voted: go down
     haiku: The lantern's light flickers, casting dancing shadows on the salt-encrusted walls. A damp chill settles over you as you descend into the darkness of the antechamber.
@@ -26,7 +28,7 @@ ROUND #2 — ballots: go down = 4
             (#1, no receipt — the anti-ghost tooth). The crowd decided; the world disposed.
 
 ------------------------------------------------------------------------------
-ROUND #3 — ballots: take lantern = 5
+ROUND #4 — ballots: take lantern = 5
 ------------------------------------------------------------------------------
   » the party voted: take lantern
     haiku: The lantern's glow, weak and flickering, illuminates a single salt crystal embedded in the wall. It hums faintly as you reach for it, its surface rippling with an unseen energy.
