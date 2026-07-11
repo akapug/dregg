@@ -23,8 +23,9 @@
 
 use std::io::Read as _;
 use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context as _, Result, anyhow};
 use futures::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::TcpListener;
 use tokio_util::compat::TokioAsyncReadCompatExt;
@@ -116,6 +117,107 @@ pub fn generate_notary_key() -> Result<k256::ecdsa::SigningKey> {
 /// The public verifying key for a signing key, in the tlsn `VerifyingKey` shape (SEC1).
 pub fn verifying_key_of(signing_key: &k256::ecdsa::SigningKey) -> Result<VerifyingKey> {
     Ok(Secp256k1Signer::new(&signing_key.to_bytes())?.verifying_key())
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Durable trust root: PERSIST the notary signing key so re-runs reuse the SAME
+// verifying key — a stable pin an independent verifier holds out-of-band.
+//
+// The in-process spike generated a FRESH key per run (`generate_notary_key`), so the
+// pin changed every run and there was no durable anchor to pin. These functions save the
+// key ONCE to an operator-controlled path and load it thereafter, so `verifying_key_of`
+// returns the same value across process lifetimes.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The environment variable naming the durable notary key file. When set, the notary
+/// operator's key is loaded from (or provisioned once into) this path instead of being
+/// freshly generated per run.
+pub const NOTARY_KEY_PATH_ENV: &str = "ZKORACLE_NOTARY_KEY_PATH";
+
+/// Encode a signing key as the 64-char lowercase hex of its 32-byte secp256k1 scalar.
+pub fn encode_notary_key(signing_key: &k256::ecdsa::SigningKey) -> String {
+    signing_key
+        .to_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// Decode a signing key from the 64-char hex produced by [`encode_notary_key`].
+pub fn decode_notary_key(hex: &str) -> Result<k256::ecdsa::SigningKey> {
+    let hex = hex.trim();
+    if hex.len() != 64 {
+        return Err(anyhow!(
+            "notary key must be 64 hex chars (a 32-byte secp256k1 scalar); got {} chars",
+            hex.len()
+        ));
+    }
+    let mut bytes = [0u8; 32];
+    for (i, chunk) in hex.as_bytes().chunks(2).enumerate() {
+        let s = std::str::from_utf8(chunk).context("notary key hex is not UTF-8")?;
+        bytes[i] = u8::from_str_radix(s, 16).map_err(|e| anyhow!("bad notary key hex: {e}"))?;
+    }
+    k256::ecdsa::SigningKey::from_slice(&bytes)
+        .map_err(|e| anyhow!("notary key hex is not a canonical secp256k1 scalar: {e}"))
+}
+
+/// Persist a notary signing key to `path` as a hex file (mode 0600 on unix — it is the
+/// operator's secret). Creates parent directories as needed.
+pub fn save_notary_key(signing_key: &k256::ecdsa::SigningKey, path: &Path) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("create notary key dir {}", parent.display()))?;
+        }
+    }
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        opts.mode(0o600);
+    }
+    let mut f = opts
+        .open(path)
+        .with_context(|| format!("open notary key {} for write", path.display()))?;
+    use std::io::Write as _;
+    f.write_all(encode_notary_key(signing_key).as_bytes())?;
+    f.write_all(b"\n")?;
+    Ok(())
+}
+
+/// Load a notary signing key previously written by [`save_notary_key`].
+pub fn load_notary_key(path: &Path) -> Result<k256::ecdsa::SigningKey> {
+    let contents = std::fs::read_to_string(path)
+        .with_context(|| format!("read notary key from {}", path.display()))?;
+    decode_notary_key(&contents)
+}
+
+/// **Durable notary key.** Load the key persisted at `path` if it exists; otherwise generate a
+/// fresh one from OS entropy and persist it there. The FIRST call provisions the operator's
+/// key; every subsequent call with the same `path` returns the SAME key — hence the same
+/// [`verifying_key_of`] pin — across process lifetimes. This is the durable trust root a
+/// verifier pins out-of-band.
+pub fn load_or_generate_notary_key(path: &Path) -> Result<k256::ecdsa::SigningKey> {
+    if path.exists() {
+        load_notary_key(path)
+    } else {
+        let key = generate_notary_key()?;
+        save_notary_key(&key, path)?;
+        Ok(key)
+    }
+}
+
+/// Resolve the durable notary key from the [`NOTARY_KEY_PATH_ENV`] environment variable
+/// (loading it, or provisioning it once at that path). Returns the key and the resolved path.
+/// Errors if the env var is unset — the caller must decide whether to fall back to an
+/// ephemeral [`generate_notary_key`].
+pub fn durable_notary_key_from_env() -> Result<(k256::ecdsa::SigningKey, PathBuf)> {
+    let path = std::env::var(NOTARY_KEY_PATH_ENV)
+        .map(PathBuf::from)
+        .map_err(|_| anyhow!("{NOTARY_KEY_PATH_ENV} is not set; no durable notary key path"))?;
+    let key = load_or_generate_notary_key(&path)?;
+    Ok((key, path))
 }
 
 /// **Spawn a separate hosted notary** on `127.0.0.1:<ephemeral>`. It owns `signing_key`
