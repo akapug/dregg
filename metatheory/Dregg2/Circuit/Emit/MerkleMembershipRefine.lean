@@ -36,7 +36,7 @@ the root-pin (`PARENT1 = root PI`, first row). Not a single-gate restatement.
 `concrete_sat` builds a CONCRETE two-row trace + a concrete sound chip table (`concrete_chipSound`)
 for which `Satisfied2` holds AND `ChipTableSound cHash` holds — the hypothesis chain is genuinely
 INHABITED (not an empty/unsatisfiable antecedent); `witness_spec` fires the bridge end-to-end on it,
-deriving `1020304050607 = cHash [cHash [1,2,3,4], 5,6,7]` (a true, nontrivial identity —
+deriving `1234567 = cHash [cHash [1,2,3,4], 5,6,7]` (a true, nontrivial identity —
 `witness_spec_closed`). `concrete_fail_chain` and `concrete_fail_root` exhibit CONCRETE traces that
 FAIL `Satisfied2` because a constraint BITES: a broken path (`CUR1 ≠ PARENT0`) trips the continuity
 gate, and a wrong top digest trips the root-pin. `witness_spec_false` shows the SPEC itself
@@ -55,12 +55,14 @@ faithfulness — the same carrier `AdjacencyMembershipRefine`/`HeapOpenEmit` rid
 NEW file; all imports read-only.
 -/
 import Dregg2.Circuit.Emit.MerkleMembershipEmit
+import Dregg2.Circuit.Emit.EffectVmEmitTransfer
 
 namespace Dregg2.Circuit.Emit.MerkleMembershipRefine
 
 open Dregg2.Circuit (Assignment)
 open Dregg2.Exec.CircuitEmit (EmittedExpr)
 open Dregg2.Circuit.Emit.EffectVmEmit (VmConstraint VmRow VmRowEnv)
+open Dregg2.Circuit.Emit.EffectVmEmitTransfer (gate_modEq_iff)
 open Dregg2.Circuit.DescriptorIR2
   (EffectVmDescriptor2 VmConstraint2 Satisfied2 VmTrace envAt Lookup TableId
    ChipTableSound chip_lookup_sound chipLookupTuple chipRow CHIP_RATE CHIP_OUT_LANES
@@ -72,6 +74,28 @@ open Dregg2.Circuit.Emit.MerkleMembershipEmit
    LEVEL0_LANES LEVEL1_LANES ROOT_PI)
 
 set_option autoImplicit false
+
+/-! ## §0 — Field-denotation glue (mod-`p`, `p` the BabyBear prime).
+
+`VmConstraint.holdsVm` now asserts its bodies vanish `≡ 0 [ZMOD p]` (the DEPLOYED field constraint),
+not `= 0` over ℤ. For a Merkle FOLD the intermediate spine digest is HASHED again, so the field
+reduction is load-bearing: a mod-`p` congruence on `CUR1`/`PARENT0` cannot thread through the
+abstract `hash`. We recover the genuine ℤ equalities the fold needs from the DEPLOYED range-check
+canonicality (`0 ≤ cell < p`) of the stored spine columns — a canonical field cell is determined by
+its residue. -/
+
+/-- The deployed range-check invariant on a stored field cell: it is the canonical residue. -/
+def Canon (x : ℤ) : Prop := 0 ≤ x ∧ x < 2013265921
+
+/-- Two canonical field cells congruent mod `p` are EQUAL over ℤ (the residue determines the
+canonical cell — the field-faithful recovery of a genuine equality). -/
+theorem eq_of_modEq_canon {a b : ℤ} (ha : Canon a) (hb : Canon b) (h : a ≡ b [ZMOD 2013265921]) :
+    a = b := by
+  rw [Int.modEq_iff_dvd] at h
+  obtain ⟨k, hk⟩ := h
+  obtain ⟨ha0, ha1⟩ := ha
+  obtain ⟨hb0, hb1⟩ := hb
+  omega
 
 /-! ## §1 — the functional spec (trace-independent; the twin of the hand AIR's `child → parent`
 step). `spec_status = NO_LEAN` — no proven model existed, so the missing functional spec is
@@ -141,7 +165,7 @@ theorem activeGateZero {hash : List ℤ → ℤ} {t : VmTrace} {minit : ℤ → 
     (j : Nat) (hj : j < t.rows.length) (hlast : (j + 1 == t.rows.length) = false)
     (body : EmittedExpr)
     (hmem : VmConstraint2.base (.gate body) ∈ merkleMembershipDesc.constraints) :
-    body.eval (envAt t j).loc = 0 := by
+    body.eval (envAt t j).loc ≡ 0 [ZMOD 2013265921] := by
   have h := hsat.rowConstraints j hj _ hmem
   simp only [VmConstraint2.holdsAt, VmConstraint.holdsVm, hlast] at h
   exact h
@@ -151,12 +175,24 @@ theorem firstPi {hash : List ℤ → ℤ} {t : VmTrace} {minit : ℤ → ℤ} {m
     {maddrs : List ℤ} (hsat : Satisfied2 hash merkleMembershipDesc minit mfin maddrs t)
     (hlen : 0 < t.rows.length) (col k : Nat)
     (hmem : VmConstraint2.base (.piBinding VmRow.first col k) ∈ merkleMembershipDesc.constraints) :
-    (envAt t 0).loc col = t.pub k := by
+    (envAt t 0).loc col ≡ t.pub k [ZMOD 2013265921] := by
   have h := hsat.rowConstraints 0 hlen _ hmem
   simp only [VmConstraint2.holdsAt, VmConstraint.holdsVm] at h
   exact h (by decide)
 
 /-! ## §3 — the whole-descriptor refinement (SAT_IMPLIES_SEM). -/
+
+/-- **The deployed range-check envelope for the Merkle descriptor.** The stored spine cells the fold
+threads through `hash` (`CUR1`/`PARENT0` — the level-tie fed back into the level-1 lookup — and the
+root cell `PARENT1` pinned to the public root) are each a DEPLOYED range-check invariant
+(`0 ≤ · < p`). This is what lifts the mod-`p` continuity / root-pin constraints to the genuine ℤ
+equalities the Merkle re-hash needs (the intermediate digest is re-hashed, so a mod-`p` congruence
+cannot thread through `hash`). `concrete_canon` discharges it, so the envelope is non-vacuous. -/
+structure MerkleCanon (t : VmTrace) : Prop where
+  cur1    : Canon ((envAt t 0).loc CUR1)
+  parent0 : Canon ((envAt t 0).loc PARENT0)
+  parent1 : Canon ((envAt t 0).loc PARENT1)
+  root    : Canon (t.pub ROOT_PI)
 
 /-- **`merkleMembership_sat_refines` — THE WHOLE-DESCRIPTOR BRIDGE (SAT_IMPLIES_SEM).**
 A `Satisfied2` of `merkleMembershipDesc`, against the NAMED Poseidon2 chip carrier, binds the
@@ -169,7 +205,8 @@ theorem merkleMembership_sat_refines {hash : List ℤ → ℤ} {t : VmTrace} {mi
     {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ}
     (hlen : 1 < t.rows.length)
     (hsat : Satisfied2 hash merkleMembershipDesc minit mfin maddrs t)
-    (hChip : ChipTableSound hash (t.tf .poseidon2)) :
+    (hChip : ChipTableSound hash (t.tf .poseidon2))
+    (hc : MerkleCanon t) :
     MerkleMembers2 hash
       ((envAt t 0).loc LEAF) ((envAt t 0).loc SIB0A) ((envAt t 0).loc SIB0B) ((envAt t 0).loc SIB0C)
       ((envAt t 0).loc SIB1A) ((envAt t 0).loc SIB1B) ((envAt t 0).loc SIB1C)
@@ -187,27 +224,31 @@ theorem merkleMembership_sat_refines {hash : List ℤ → ℤ} {t : VmTrace} {mi
       = hash [(envAt t 0).loc CUR1, (envAt t 0).loc SIB1A, (envAt t 0).loc SIB1B,
               (envAt t 0).loc SIB1C] :=
     lookupChip4 hsat hChip 0 hlen0 CUR1 SIB1A SIB1B SIB1C PARENT1 LEVEL1_LANES (by mm_mem)
-  -- chain continuity: CUR1 = PARENT0 (the levels chain).
+  -- chain continuity: CUR1 = PARENT0 (the levels chain). The `when_transition` gate binds
+  -- `CUR1 − PARENT0 ≡ 0 [ZMOD p]`; both cells are canonical, so this lifts to a genuine ℤ equality
+  -- (load-bearing: `CUR1` is re-hashed into the level-1 digest, where mod-`p` cannot thread).
   have hcont : (envAt t 0).loc CUR1 = (envAt t 0).loc PARENT0 :=
-    (continuity_body_zero_iff (envAt t 0).loc).mp
-      (activeGateZero hsat 0 hlen0 hlast contBody (by mm_mem))
-  -- root pin: PARENT1 = the public root PI (first row).
+    eq_of_modEq_canon hc.cur1 hc.parent0
+      ((gate_modEq_iff (by simp only [contBody, EmittedExpr.eval]; ring)).mp
+        (activeGateZero hsat 0 hlen0 hlast contBody (by mm_mem)))
+  -- root pin: PARENT1 = the public root PI (first row); mod-`p` lifted by canonicality of both.
   have hroot : (envAt t 0).loc PARENT1 = t.pub ROOT_PI :=
-    firstPi hsat hlen0 PARENT1 ROOT_PI (by mm_mem)
+    eq_of_modEq_canon hc.parent1 hc.root (firstPi hsat hlen0 PARENT1 ROOT_PI (by mm_mem))
   -- assemble the whole fold: root = hash [hash [leaf, s0*], s1*].
   unfold MerkleMembers2 merkleFold2
   rw [← hroot, hp1, hcont, hp0]
 
 /-! ## §4 — non-vacuity of the SPEC (the target is TRUE and FALSE, never a stub). -/
 
-/-- A concrete little-endian digit hash — `[a,b,c,d] ↦ 100·(100·(100·a+b)+c)+d`, injective enough to
-distinguish levels. -/
-private def cHash : List ℤ → ℤ := fun xs => xs.foldl (fun acc x => acc * 100 + x) 0
+/-- A concrete little-endian digit hash — `[a,b,c,d] ↦ 10·(10·(10·a+b)+c)+d`, injective enough on
+single digits to distinguish levels. Base 10 (not 100) keeps every digest CANONICAL (`< p`), so the
+`MerkleCanon` envelope is inhabited — a genuine field-valued hash, as the deployed Poseidon2 is. -/
+private def cHash : List ℤ → ℤ := fun xs => xs.foldl (fun acc x => acc * 10 + x) 0
 
 /-- **Witness TRUE — the spec is INHABITED (closed form).** Leaf `1` with level-0 siblings `2,3,4`
-folds to parent `cHash [1,2,3,4] = 1020304`, which with level-1 siblings `5,6,7` folds to root
-`cHash [1020304,5,6,7] = 1020304050607`. A concrete, nontrivial arithmetic identity — not a stub. -/
-theorem witness_spec_closed : MerkleMembers2 cHash 1 2 3 4 5 6 7 1020304050607 := by
+folds to parent `cHash [1,2,3,4] = 1234`, which with level-1 siblings `5,6,7` folds to root
+`cHash [1234,5,6,7] = 1234567`. A concrete, nontrivial arithmetic identity — not a stub. -/
+theorem witness_spec_closed : MerkleMembers2 cHash 1 2 3 4 5 6 7 1234567 := by
   unfold MerkleMembers2 merkleFold2 cHash; decide
 
 /-- **Witness FALSE — the spec CONSTRAINS.** The very same leaf/siblings with the WRONG root are NOT
@@ -219,21 +260,21 @@ theorem witness_spec_false : ¬ MerkleMembers2 cHash 1 2 3 4 5 6 7 999 := by
 /-! ## §5 — THE ANTI-SCAR: a CONCRETE trace that genuinely SATISFIES the descriptor (the
 `Satisfied2` hypothesis is INHABITED), plus two that FAIL it (constraints BITE). -/
 
-/-- The single logical row: leaf `1`, level-0 siblings `2,3,4`, level-0 parent `1020304`; the
-chained level-1 input `CUR1 = 1020304`, level-1 siblings `5,6,7`, top parent (root)
-`1020304050607`. All lane / unused columns are `0`. -/
+/-- The single logical row: leaf `1`, level-0 siblings `2,3,4`, level-0 parent `1234`; the
+chained level-1 input `CUR1 = 1234`, level-1 siblings `5,6,7`, top parent (root)
+`1234567`. All lane / unused columns are `0`. -/
 private def cRow : Assignment := fun c =>
   if c = LEAF then 1 else if c = SIB0A then 2 else if c = SIB0B then 3 else if c = SIB0C then 4
-  else if c = PARENT0 then 1020304
-  else if c = CUR1 then 1020304 else if c = SIB1A then 5 else if c = SIB1B then 6
-  else if c = SIB1C then 7 else if c = PARENT1 then 1020304050607 else 0
+  else if c = PARENT0 then 1234
+  else if c = CUR1 then 1234 else if c = SIB1A then 5 else if c = SIB1B then 6
+  else if c = SIB1C then 7 else if c = PARENT1 then 1234567 else 0
 
-private def cPub : Assignment := fun k => if k = ROOT_PI then 1020304050607 else 0
+private def cPub : Assignment := fun k => if k = ROOT_PI then 1234567 else 0
 
 /-- The chip table: the two genuine `child → parent` `chipRow`s the two lookups absorb. -/
 private def cTbl : List (List ℤ) :=
   [chipRow cHash [1, 2, 3, 4] (List.replicate 7 0),
-   chipRow cHash [1020304, 5, 6, 7] (List.replicate 7 0)]
+   chipRow cHash [1234, 5, 6, 7] (List.replicate 7 0)]
 
 /-- The concrete two-row satisfying trace (both rows carry `cRow`; the padded height ≥ 2 makes
 row 0 a genuine transition row, so the continuity gate fires). -/
@@ -248,11 +289,11 @@ theorem concrete_chipSound : ChipTableSound cHash (cTrace.tf .poseidon2) := by
   simp only [cTrace, cTbl, List.mem_cons, List.not_mem_nil, or_false] at hr
   rcases hr with h | h
   · exact ⟨[1, 2, 3, 4], List.replicate 7 0, by decide, by decide, h⟩
-  · exact ⟨[1020304, 5, 6, 7], List.replicate 7 0, by decide, by decide, h⟩
+  · exact ⟨[1234, 5, 6, 7], List.replicate 7 0, by decide, by decide, h⟩
 
 /-- **The `Satisfied2` HYPOTHESIS IS INHABITED.** The concrete trace genuinely satisfies the whole
 deployed denotation — every constraint holds on both rows (the two chip lookups land in the table,
-the continuity gate closes `1020304 = 1020304`, the root pin closes `1020304050607`), and the empty
+the continuity gate closes `1234 = 1234`, the root pin closes `1234567`), and the empty
 memory / table legs close. Refutes the vacuity scar: `merkleMembership_sat_refines` is NOT a theorem
 over an empty antecedent. -/
 theorem concrete_sat :
@@ -278,31 +319,38 @@ theorem concrete_sat :
   · rw [hmemlog]; rfl
   · rw [hmaplog]; rfl
 
+/-- **The canonicality envelope is genuinely INHABITED** for the concrete trace — the level-tie
+cells (`CUR1`/`PARENT0 = 1234`) and the root cell / PI (`PARENT1`/`ROOT_PI = 1234567`) are all small
+canonical field values (`< p`). So `merkleMembership_sat_refines` does NOT rest on a vacuous
+range-check hypothesis. -/
+theorem concrete_canon : MerkleCanon cTrace :=
+  ⟨⟨by decide, by decide⟩, ⟨by decide, by decide⟩, ⟨by decide, by decide⟩, ⟨by decide, by decide⟩⟩
+
 /-- **The bridge fires end-to-end on the concrete inhabited witness** (SAT ⟹ SEM, non-vacuously):
-all three hypotheses (`Satisfied2`, `ChipTableSound`, `1 < length`) hold, and the whole membership
-relation is DERIVED, not assumed. -/
+all four hypotheses (`Satisfied2`, `ChipTableSound`, `1 < length`, the canonicality envelope) hold,
+and the whole membership relation is DERIVED, not assumed. -/
 theorem witness_spec : MerkleMembers2 cHash
     ((envAt cTrace 0).loc LEAF) ((envAt cTrace 0).loc SIB0A) ((envAt cTrace 0).loc SIB0B)
     ((envAt cTrace 0).loc SIB0C) ((envAt cTrace 0).loc SIB1A) ((envAt cTrace 0).loc SIB1B)
     ((envAt cTrace 0).loc SIB1C) (cTrace.pub ROOT_PI) :=
-  merkleMembership_sat_refines (by decide) concrete_sat concrete_chipSound
+  merkleMembership_sat_refines (by decide) concrete_sat concrete_chipSound concrete_canon
 
-/-- The fired witness spec IS the closed-form true instance (`1020304050607 = cHash […]`). -/
+/-- The fired witness spec IS the closed-form true instance (`1234567 = cHash […]`). -/
 theorem witness_spec_is_closed :
     MerkleMembers2 cHash
       ((envAt cTrace 0).loc LEAF) ((envAt cTrace 0).loc SIB0A) ((envAt cTrace 0).loc SIB0B)
       ((envAt cTrace 0).loc SIB0C) ((envAt cTrace 0).loc SIB1A) ((envAt cTrace 0).loc SIB1B)
       ((envAt cTrace 0).loc SIB1C) (cTrace.pub ROOT_PI)
-    ↔ MerkleMembers2 cHash 1 2 3 4 5 6 7 1020304050607 := by
+    ↔ MerkleMembers2 cHash 1 2 3 4 5 6 7 1234567 := by
   rfl
 
-/-- A trace with a BROKEN path: `CUR1 = 0 ≠ 1020304 = PARENT0`. -/
+/-- A trace with a BROKEN path: `CUR1 = 0 ≠ 1234 = PARENT0`. -/
 private def cRowBadChain : Assignment := fun c => if c = CUR1 then 0 else cRow c
 private def cTraceBadChain : VmTrace := { cTrace with rows := [cRowBadChain, cRowBadChain] }
 
 /-- **The descriptor genuinely REJECTS a broken path (continuity tooth BITES).** No `Satisfied2`
 exists for the non-chaining trace: the chain-continuity gate on the transition row 0 forces
-`CUR1 = PARENT0`, i.e. `0 = 1020304`. -/
+`CUR1 = PARENT0`, i.e. `0 = 1234`. -/
 theorem concrete_fail_chain :
     ¬ Satisfied2 cHash merkleMembershipDesc (fun _ => 0) (fun _ => (0, 0)) [] cTraceBadChain := by
   intro h
@@ -311,13 +359,13 @@ theorem concrete_fail_chain :
   have h0 := activeGateZero h 0 (by decide) hlast contBody hmem
   revert h0; decide
 
-/-- A trace with a WRONG top digest: `PARENT1 = 0 ≠ 1020304050607 = root PI`. -/
+/-- A trace with a WRONG top digest: `PARENT1 = 0 ≠ 1234567 = root PI`. -/
 private def cRowBadRoot : Assignment := fun c => if c = PARENT1 then 0 else cRow c
 private def cTraceBadRoot : VmTrace := { cTrace with rows := [cRowBadRoot, cRowBadRoot] }
 
 /-- **The descriptor genuinely REJECTS a wrong root (root-pin tooth BITES).** No `Satisfied2` exists:
 the first-row root pin forces the top parent `PARENT1` to equal the committed root PI, i.e.
-`0 = 1020304050607`. -/
+`0 = 1234567`. -/
 theorem concrete_fail_root :
     ¬ Satisfied2 cHash merkleMembershipDesc (fun _ => 0) (fun _ => (0, 0)) [] cTraceBadRoot := by
   intro h
@@ -332,13 +380,14 @@ theorem concrete_fail_root :
 #guard decide (cTraceBadChain.rows.length = 2)
 #guard decide (cTraceBadRoot.rows.length = 2)
 -- the fold genuinely recomposes the two-level path (order-sensitive digit hash):
-#guard foldNode4 cHash 1 [(2, 3, 4), (5, 6, 7)] == 1020304050607
+#guard foldNode4 cHash 1 [(2, 3, 4), (5, 6, 7)] == 1234567
 
 #assert_axioms merkleMembers2_as_fold
 #assert_axioms lookupChip4
 #assert_axioms merkleMembership_sat_refines
 #assert_axioms concrete_chipSound
 #assert_axioms concrete_sat
+#assert_axioms concrete_canon
 #assert_axioms witness_spec
 #assert_axioms concrete_fail_chain
 #assert_axioms concrete_fail_root

@@ -66,8 +66,8 @@ theorem decideLookup_iff (tf : TraceFamily) (env : VmRowEnv) (l : Lookup) :
 /-- **`decideWindow env isLast w`** — the `.windowGate` arm: on `onTransition` the body need only
 vanish off the last row, else on every row. Mirrors `WindowConstraint.holdsAt` exactly. -/
 def decideWindow (env : VmRowEnv) (isLast : Bool) (w : WindowConstraint) : Bool :=
-  if w.onTransition then isLast || decide (w.body.eval env = 0)
-  else decide (w.body.eval env = 0)
+  if w.onTransition then isLast || decide (w.body.eval env ≡ 0 [ZMOD 2013265921])
+  else decide (w.body.eval env ≡ 0 [ZMOD 2013265921])
 
 theorem decideWindow_iff (env : VmRowEnv) (isLast : Bool) (w : WindowConstraint) :
     decideWindow env isLast w = true ↔ w.holdsAt env isLast := by
