@@ -22,7 +22,7 @@ INDEPENDENT — the shared-challenge assumption is gone. Teeth: one secure compo
 BOTH broken (each `2/5`) ⇒ `hybridForgerAdv ≡ 4/25 = (2/5)·(2/5)` (the independent PRODUCT, not `2/5`) — NOT
 Negl, so the "either" is load-bearing AND the factorisation is exhibited numerically.
 
-## §B — FINITE SHADOW ↔ ABSTRACT FORGER.  (partial — the commitment leg CLOSED, one measure step NAMED)
+## §B — FINITE SHADOW ↔ ABSTRACT FORGER.  (structure + the tail-canonical shadow; measure MATERIALIZED in §C)
 
 `HermineTSUF.ProbForger` is the "fixed-fork-index finite shadow" of the abstract `Forger : (ℕ → Rq) → …`
 (infinite RO). The quantitative reductions IDENTIFY the two. This module makes the identification a
@@ -39,29 +39,54 @@ CONSTRUCTION, and isolates precisely what remains:
     real `IsSelfTargetMSISSolution` on the SHARED prefix-commitment with challenge `c`). The finite shadow
     faithfully carries the abstract forger's soundness + shared-commitment structure.
 
-  * **`TailIndependent` (the NAMED residual) + faithfulness under it (CLOSED given the name).** The ONE thing
-    not provable from the `Forger` structure is that acceptance is independent of the RO answers STRICTLY ABOVE
-    `challengeIdx` (the abstract `response` may read them). This is exactly the marginalisation of the uniform
-    RO tail. We name it `TailIndependent` and prove that GIVEN it, the finite shadow's `advantage`/`forkProb`
+  * **`TailIndependent` (the tail-independence hypothesis — its measure content MATERIALIZED in §C).** The ONE
+    thing not provable from the `Forger` structure is that acceptance is independent of the RO answers STRICTLY
+    ABOVE `challengeIdx` (the abstract `response` may read them; `exTailForger` genuinely does). This is exactly
+    the marginalisation of the uniform RO tail — carried out for real in §C over the infinite-product RO
+    measure. Here we prove that GIVEN it, the finite shadow's `advantage`/`forkProb`
     are INDEPENDENT of the frozen tail (`abstractShadow_advantage_tailIndep`/`_forkProb_`) — i.e. the shadow is
     canonical and genuinely captures the abstract forger's fork behaviour with NO residual dependence on the
     unmodelled coordinates. Teeth: `exAbstractForger` (reads only the challenge) IS `TailIndependent`;
     `exTailForger` (reads an above-challenge coordinate) is NOT — so `TailIndependent` is load-bearing.
 
-  EXACT REMAINING STEP: the coordinate-restriction of the RO measure to the fork prefix is established (the
-  commitment factors through the prefix, unconditionally). The remaining measure-theoretic lemma is the
-  independence of the ACCEPTANCE event from the answers above `challengeIdx` (`TailIndependent`) — equivalently
-  that marginalising the uniform tail commutes with the accept indicator. Given it, the finite shadow's
-  advantage/forkProb are tail-canonical (proved here); establishing it in general needs an infinite-product RO
-  measure this finite counting-probability model does not carry (`ℕ → Rq` is not a `Fintype`). Named, not
-  `sorry`-ed, not silently assumed.
+## §C — THE GENUINE INFINITE-RO PRODUCT MEASURE.  (CLOSED — the model↔reality identification is a THEOREM)
 
-`#assert_all_clean` (⊆ {propext, Classical.choice, Quot.sound}). No `native_decide` in any `∀`; teeth exhibit
-`0` / `4/25` / tail-dependence so nothing is vacuous.
+The prior lane STOPPED at "`ℕ → Rq` is not a `Fintype`, so the abstract Forger's advantage isn't a finite
+counting probability — establishing `TailIndependent`'s measure content needs an infinite-product RO measure
+this model does not carry." §C BUILDS that measure and proves the identification.
+
+  * **`roMeasure` (the RO measure, CLOSED).** The random oracle `ℕ → Rq` carries the infinite PRODUCT of the
+    uniform measure on the finite `Rq` — `MeasureTheory.Measure.infinitePi (fun _ => uniformOfFintype Rq)` — a
+    genuine `IsProbabilityMeasure` on `ℕ → Rq` (`instIsProbabilityMeasure_roMeasure`). The abstract Forger's
+    advantage is now a real probability over `ℕ → Rq`, not a finite counting stand-in.
+
+  * **`accepts_congr_of_le` (the marginalisation content, CLOSED).** `TailIndependent` says exactly that the
+    accept indicator is a function of the coordinates `≤ challengeIdx` (two oracles agreeing there accept
+    together — both are `extend`-reconstructions with the same prefix+challenge and differing tails). So the
+    acceptance event is a measurable CYLINDER over `Finset.Iic challengeIdx` (`acceptEvent_eq_cylinder`).
+
+  * **`roMeasure_accept` (the marginalisation, CLOSED).** `infinitePi_cylinder` collapses the infinite-product
+    measure of the acceptance cylinder to the finite product measure of the accepting prefix set, which
+    `pi_uniform_finset` computes as `|accBase| · (|Rq|⁻¹)^(challengeIdx+1)` — the finite counting probability,
+    with the tail genuinely MARGINALISED (integrated out), not frozen.
+
+  * **`abstractShadow_advantage_eq_roMeasure` (THE BRIDGE, CLOSED).** Under `TailIndependent`, the finite
+    shadow's `advantage` (a `ℚ` count) EQUALS `(roMeasure {ρ | Accepts F ρ}).toReal` — the real probability of
+    the acceptance event under the genuine infinite-RO measure. Both collapse to `|accBase|/|Rq|^(challengeIdx
+    +1)` (the `iicEquiv` prefix×challenge ≃ `Iic n` bijection carries `accBase` onto the accepting `(ω,c)`
+    pairs, `accBase_card`). Tail-invariance of the shadow advantage then falls out with the tail absent
+    (`abstractShadow_advantage_tailInvariant_via_roMeasure`). The identification is a THEOREM — no residual, no
+    assumption, no `sorry`.
+
+`#assert_all_clean` (⊆ {propext, Classical.choice, Quot.sound}; measure theory pulls `Classical.choice`). No
+`native_decide` in any `∀`; §A teeth exhibit `0` / `4/25`, §B teeth tail-dependence, §C teeth the bridge
+firing on `exAbstractForger` with the real RO probability `1` — so nothing is vacuous.
 -/
 import Dregg2.Crypto.HybridThresholdQuant
 import Dregg2.Tactics
 import Mathlib.Tactic
+import Mathlib.Probability.ProductMeasure
+import Mathlib.Probability.Distributions.Uniform
 
 namespace Dregg2.Crypto.ModelBridge
 
@@ -494,6 +519,321 @@ theorem exTail_not_tailIndep :
 
 end TeethB
 
+/-! ## §C — the genuine infinite-product RANDOM-ORACLE measure: `TailIndependent` MATERIALIZED.
+
+`§B` names `TailIndependent` and proves the finite shadow is tail-canonical GIVEN it, but the abstract
+Forger's advantage was never itself a probability: `ℕ → Rq` is not a `Fintype`, so there was no measure to
+take (the residual the prior lane stopped at). This section BUILDS that measure — the infinite product of the
+uniform measure on the finite `Rq` (`MeasureTheory.Measure.infinitePi`, a genuine `IsProbabilityMeasure` on
+`ℕ → Rq`) — and PROVES that the finite shadow's `advantage` EQUALS the real probability of the acceptance
+event under it. The bridge: `TailIndependent` says acceptance depends only on the coordinates `≤ challengeIdx`
+(`accepts_congr_of_le`), so the acceptance event is a measurable CYLINDER over `Finset.Iic challengeIdx`
+(`acceptEvent_eq_cylinder`); its infinite-product measure MARGINALISES the tail — `infinitePi_cylinder`
+collapses it to the finite product measure of the accepting prefix set (`roMeasure_accept`), which is exactly
+the finite counting probability the shadow computes (`abstractShadow_advantage_eq_roMeasure`). Tail-invariance
+of the shadow advantage then falls out with the tail no longer present at all
+(`abstractShadow_advantage_tailInvariant_via_roMeasure`). No residual, no assumption: the model↔reality
+identification is a THEOREM over the real infinite-RO measure. -/
+section ROMeasureBridge
+
+open MeasureTheory
+open scoped ENNReal
+open Dregg2.Crypto.HermineThreshold
+open Dregg2.Crypto.HermineSelfTargetMSIS
+
+set_option linter.unusedSectionVars false
+
+variable {Rq : Type*} [CommRing Rq] [ShortNorm Rq] [Fintype Rq] [DecidableEq Rq]
+  [MeasurableSpace Rq] [DiscreteMeasurableSpace Rq] [Nonempty Rq]
+variable {M : Type*} [AddCommGroup M] [Module Rq M] [ShortNorm M]
+variable {N : Type*} [AddCommGroup N] [Module Rq N] [ShortNorm N]
+variable {Msg : Type*}
+
+/-! ### The RO measure and finite uniform-product primitives. -/
+
+/-- **THE RANDOM-ORACLE MEASURE.** The random oracle `ℕ → Rq` carries the infinite PRODUCT of the uniform
+measure on the finite `Rq` (`PMF.uniformOfFintype Rq |>.toMeasure`, a genuine probability measure). This is
+`MeasureTheory.Measure.infinitePi`, whose `IsProbabilityMeasure` instance makes the abstract Forger's advantage
+a genuine probability over `ℕ → Rq` — the object the prior lane could not construct. -/
+noncomputable def roMeasure (Rq : Type*) [Fintype Rq] [Nonempty Rq] [MeasurableSpace Rq] :
+    Measure (ℕ → Rq) :=
+  Measure.infinitePi (fun _ : ℕ => (PMF.uniformOfFintype Rq).toMeasure)
+
+instance instIsProbabilityMeasure_roMeasure : IsProbabilityMeasure (roMeasure Rq) := by
+  unfold roMeasure; infer_instance
+
+/-- The finite product of uniform measures assigns to a SINGLETON the reciprocal of the product's cardinality
+(`(|Rq|⁻¹)^|κ|`). Each factor is `PMF.uniformOfFintype`, whose singleton mass is `|Rq|⁻¹`
+(`toMeasure_apply_singleton` + `uniformOfFintype_apply`); the product over `κ` multiplies them. -/
+theorem pi_uniform_singleton (Rq : Type*) [Fintype Rq] [Nonempty Rq] [MeasurableSpace Rq]
+    [MeasurableSingletonClass Rq] {κ : Type*} [Fintype κ] (x : κ → Rq) :
+    Measure.pi (fun _ : κ => (PMF.uniformOfFintype Rq).toMeasure) {x}
+      = (Fintype.card Rq : ℝ≥0∞)⁻¹ ^ (Fintype.card κ) := by
+  rw [← Set.univ_pi_singleton x, Measure.pi_pi]
+  have hfac : ∀ i : κ, (PMF.uniformOfFintype Rq).toMeasure {x i} = (Fintype.card Rq : ℝ≥0∞)⁻¹ := by
+    intro i
+    rw [(PMF.uniformOfFintype Rq).toMeasure_apply_singleton (x i) (measurableSet_singleton _),
+        PMF.uniformOfFintype_apply]
+  simp only [hfac]
+  rw [Finset.prod_const, Finset.card_univ]
+
+/-- The finite product of uniform measures of a FINSET is `|S| · (|Rq|⁻¹)^|κ|` — the finite counting
+probability. `↑S` is the disjoint union of its singletons; `measure_biUnion_finset` sums the per-singleton mass
+(`pi_uniform_singleton`). -/
+theorem pi_uniform_finset (Rq : Type*) [Fintype Rq] [Nonempty Rq] [MeasurableSpace Rq]
+    [MeasurableSingletonClass Rq] {κ : Type*} [Fintype κ] (S : Finset (κ → Rq)) :
+    Measure.pi (fun _ : κ => (PMF.uniformOfFintype Rq).toMeasure) (↑S : Set (κ → Rq))
+      = (S.card : ℝ≥0∞) * (Fintype.card Rq : ℝ≥0∞)⁻¹ ^ (Fintype.card κ) := by
+  classical
+  have hcov : (↑S : Set (κ → Rq)) = ⋃ x ∈ S, ({x} : Set (κ → Rq)) := by
+    ext y; simp
+  rw [hcov, measure_biUnion_finset
+      (fun a _ b _ hab => Set.disjoint_singleton.mpr hab)
+      (fun b _ => measurableSet_singleton b)]
+  simp only [pi_uniform_singleton Rq]
+  rw [Finset.sum_const, nsmul_eq_mul]
+
+/-! ### Reconstruction of the fork-relevant coordinates and the prefix↔`Iic` bijection. -/
+
+/-- Rebuild a full random oracle from just the coordinates `≤ n`: use `x` on `Iic n`, `0` above. The above-`n`
+answers are irrelevant under `TailIndependent`, so this canonical `0`-tail extension carries the acceptance. -/
+def iicExtend (n : ℕ) (x : ↥(Finset.Iic n) → Rq) : ℕ → Rq :=
+  fun j => if h : j ≤ n then x ⟨j, Finset.mem_Iic.mpr h⟩ else 0
+
+/-- **The prefix × challenge ≃ `Iic n` coordinates bijection.** A fork prefix `ω : Fin n → Rq` and a fork
+challenge `c : Rq` together ARE exactly the coordinates `0 ≤ · ≤ n` of a random oracle: `ω` below `n`, `c` at
+`n`. This `Equiv` is what identifies the finite shadow's outcome space `(Fin n → Rq) × Rq` with the cylinder
+base `↥(Finset.Iic n) → Rq`. -/
+def iicEquiv (Rq : Type*) (n : ℕ) : ((Fin n → Rq) × Rq) ≃ (↥(Finset.Iic n) → Rq) where
+  toFun p := fun i => if h : (↑i : ℕ) < n then p.1 ⟨↑i, h⟩ else p.2
+  invFun x := (fun j => x ⟨↑j, Finset.mem_Iic.mpr (le_of_lt j.2)⟩,
+               x ⟨n, Finset.mem_Iic.mpr (le_refl n)⟩)
+  left_inv := by
+    rintro ⟨ω, c⟩
+    refine Prod.ext ?_ ?_
+    · funext j
+      simp only [dif_pos j.2]
+    · simp only [Nat.lt_irrefl, dif_neg, not_false_eq_true]
+  right_inv := by
+    intro x
+    funext i
+    by_cases h : (↑i : ℕ) < n
+    · simp only [dif_pos h]
+    · simp only [dif_neg h]
+      have hle : (↑i : ℕ) ≤ n := Finset.mem_Iic.mp i.2
+      congr 1
+      exact Subtype.ext (le_antisymm (not_lt.mp h) hle)
+
+/-! ### `TailIndependent` ⟹ acceptance depends only on the coordinates `≤ challengeIdx`. -/
+
+/-- The random oracle `ρ` is its own `extend` reconstruction (prefix `ρ|_{<n}`, challenge `ρ n`, tail `ρ`). -/
+theorem extend_self (F : Forger Rq M N Msg) (ρ : ℕ → Rq) :
+    extend F (fun i : Fin F.challengeIdx => ρ ↑i) (ρ F.challengeIdx) ρ = ρ := by
+  funext j
+  unfold extend
+  split_ifs with h1 h2
+  · rfl
+  · rw [h2]
+  · rfl
+
+/-- **`TailIndependent` ⟹ acceptance is a function of the coordinates `≤ challengeIdx`.** If two oracles agree
+on all coordinates `≤ challengeIdx`, they accept together. Both `ρ`, `ρ'` are `extend`-reconstructions with the
+SAME prefix and challenge (they agree there) and differing tails, so `TailIndependent` equates them. This is
+the marginalisation content: the accept indicator ignores the tail. -/
+theorem accepts_congr_of_le (A : M →ₗ[Rq] N) (t : N) (β : ℕ) (F : Forger Rq M N Msg)
+    (h : TailIndependent A t β F) {ρ ρ' : ℕ → Rq}
+    (hle : ∀ j, j ≤ F.challengeIdx → ρ j = ρ' j) :
+    Accepts A t β F ρ ↔ Accepts A t β F ρ' := by
+  have hp : (fun i : Fin F.challengeIdx => ρ ↑i) = (fun i : Fin F.challengeIdx => ρ' ↑i) := by
+    funext i; exact hle ↑i (le_of_lt i.2)
+  have hc : ρ F.challengeIdx = ρ' F.challengeIdx := hle _ (le_refl _)
+  calc Accepts A t β F ρ
+      ↔ Accepts A t β F (extend F (fun i => ρ ↑i) (ρ F.challengeIdx) ρ) := by rw [extend_self F ρ]
+    _ ↔ Accepts A t β F (extend F (fun i => ρ ↑i) (ρ F.challengeIdx) ρ') :=
+        h (fun i => ρ ↑i) (ρ F.challengeIdx) ρ ρ'
+    _ ↔ Accepts A t β F ρ' := by rw [hp, hc, extend_self F ρ']
+
+/-- The `extend` reconstruction (prefix `ω`, challenge `c`, any tail) and the canonical `iicExtend` of the
+corresponding `Iic n` coordinates agree on `≤ challengeIdx` — hence accept together under `TailIndependent`.
+This is the acceptance-correspondence across the `iicEquiv` bijection. -/
+theorem accepts_iicEquiv (A : M →ₗ[Rq] N) (t : N) (β : ℕ) (F : Forger Rq M N Msg)
+    (h : TailIndependent A t β F) (tail : ℕ → Rq) (p : (Fin F.challengeIdx → Rq) × Rq) :
+    Accepts A t β F (extend F p.1 p.2 tail)
+      ↔ Accepts A t β F (iicExtend F.challengeIdx (iicEquiv Rq F.challengeIdx p)) := by
+  apply accepts_congr_of_le A t β F h
+  intro j hj
+  rcases lt_or_eq_of_le hj with hlt | heq
+  · rw [extend_below F p.1 p.2 tail hlt]
+    simp only [iicExtend, dif_pos hj, iicEquiv, Equiv.coe_fn_mk, dif_pos hlt]
+  · subst heq
+    rw [extend_at F p.1 p.2 tail]
+    simp only [iicExtend, dif_pos (le_refl _), iicEquiv, Equiv.coe_fn_mk, Nat.lt_irrefl,
+      dif_neg, not_false_eq_true]
+
+/-! ### The acceptance event is a measurable cylinder; its RO measure is the finite counting probability. -/
+
+open Classical in
+/-- The finite base of the acceptance cylinder: the `Iic challengeIdx` coordinate-tuples whose canonical
+reconstruction accepts. Its cardinality is the numerator of the finite counting probability. -/
+noncomputable def accBase (A : M →ₗ[Rq] N) (t : N) (β : ℕ) (F : Forger Rq M N Msg) :
+    Finset (↥(Finset.Iic F.challengeIdx) → Rq) :=
+  Finset.univ.filter (fun x => Accepts A t β F (iicExtend F.challengeIdx x))
+
+theorem mem_accBase (A : M →ₗ[Rq] N) (t : N) (β : ℕ) (F : Forger Rq M N Msg)
+    (x : ↥(Finset.Iic F.challengeIdx) → Rq) :
+    x ∈ accBase A t β F ↔ Accepts A t β F (iicExtend F.challengeIdx x) := by
+  classical
+  simp only [accBase, Finset.mem_filter, Finset.mem_univ, true_and]
+
+/-- **THE ACCEPTANCE EVENT IS A CYLINDER (given `TailIndependent`).** Because acceptance depends only on the
+coordinates `≤ challengeIdx` (`accepts_congr_of_le`), the acceptance event `{ρ | Accepts ρ}` is exactly the
+cylinder over `Finset.Iic challengeIdx` with base `accBase` — measurable, and its RO measure is computed by
+marginalising the tail. -/
+theorem acceptEvent_eq_cylinder (A : M →ₗ[Rq] N) (t : N) (β : ℕ) (F : Forger Rq M N Msg)
+    (h : TailIndependent A t β F) :
+    {ρ : ℕ → Rq | Accepts A t β F ρ}
+      = cylinder (Finset.Iic F.challengeIdx) (↑(accBase A t β F)) := by
+  ext ρ
+  rw [Set.mem_setOf_eq, mem_cylinder, Finset.mem_coe, mem_accBase]
+  apply accepts_congr_of_le A t β F h
+  intro j hj
+  simp only [iicExtend, dif_pos hj]
+  rfl
+
+/-- **THE RO MEASURE OF THE ACCEPTANCE EVENT = the finite counting probability.** `infinitePi_cylinder`
+marginalises the tail: the infinite-product measure of the acceptance cylinder is the finite product measure of
+`accBase`, which is `|accBase| · (|Rq|⁻¹)^(challengeIdx+1)`. The abstract Forger's advantage is now a genuine
+probability over `ℕ → Rq`, computed by a finite count. -/
+theorem roMeasure_accept (A : M →ₗ[Rq] N) (t : N) (β : ℕ) (F : Forger Rq M N Msg)
+    (h : TailIndependent A t β F) :
+    roMeasure Rq {ρ : ℕ → Rq | Accepts A t β F ρ}
+      = (accBase A t β F).card * (Fintype.card Rq : ℝ≥0∞)⁻¹ ^ (F.challengeIdx + 1) := by
+  rw [acceptEvent_eq_cylinder A t β F h]
+  have hcyl : roMeasure Rq (cylinder (Finset.Iic F.challengeIdx) (↑(accBase A t β F)))
+      = Measure.pi (fun _ : ↥(Finset.Iic F.challengeIdx) => (PMF.uniformOfFintype Rq).toMeasure)
+          (↑(accBase A t β F)) := by
+    rw [roMeasure]
+    exact Measure.infinitePi_cylinder (μ := fun _ : ℕ => (PMF.uniformOfFintype Rq).toMeasure)
+      (mS := Finset.measurableSet _)
+  rw [hcyl, pi_uniform_finset, Fintype.card_coe, Nat.card_Iic]
+
+/-! ### The finite-shadow advantage EQUALS the RO probability of acceptance — the bridge MATERIALIZED. -/
+
+/-- **THE COUNTING IDENTITY.** The cylinder base's cardinality is the shadow's total accepting mass
+`∑_ω hits_ω`: the `iicEquiv` bijection carries `accBase` onto the accepting `(ω, c)` pairs, and summing the
+off-fibers gives the per-prefix hit counts. Pure combinatorics — no measure, no assumption beyond
+`TailIndependent` (used only to move acceptance across the bijection). -/
+theorem accBase_card (A : M →ₗ[Rq] N) (t : N) (β : ℕ) (F : Forger Rq M N Msg)
+    (h : TailIndependent A t β F) (tail : ℕ → Rq) :
+    (accBase A t β F).card
+      = ∑ ω : (Fin F.challengeIdx → Rq), hits (abstractShadow A t β F tail).acc ω := by
+  classical
+  have step1 : (accBase A t β F).card
+      = (Finset.univ.filter (fun p : (Fin F.challengeIdx → Rq) × Rq =>
+            Accepts A t β F (extend F p.1 p.2 tail))).card := by
+    apply Finset.card_equiv (iicEquiv Rq F.challengeIdx).symm
+    intro x
+    rw [mem_accBase]
+    simp only [Finset.mem_filter, Finset.mem_univ, true_and]
+    rw [accepts_iicEquiv A t β F h tail ((iicEquiv Rq F.challengeIdx).symm x),
+        Equiv.apply_symm_apply]
+  rw [step1, Finset.card_filter, Fintype.sum_prod_type]
+  apply Finset.sum_congr rfl
+  intro ω _
+  rw [← Finset.card_filter]
+  unfold hits acceptSet
+  congr 1
+  ext c
+  simp only [Finset.mem_filter, Finset.mem_univ, true_and, abstractShadow, decide_eq_true_eq]
+
+/-- **THE BRIDGE — the finite shadow's advantage IS the RO probability of acceptance.** Under
+`TailIndependent`, the finite shadow's `advantage` (a `ℚ` counting probability over `(Fin challengeIdx → Rq) ×
+Rq`) equals the genuine probability of the acceptance event under the real infinite-product RO measure
+`roMeasure`. Both collapse to `|accBase| / |Rq|^(challengeIdx+1)`. The model↔reality identification of §B is now
+a THEOREM: the shadow's advantage no longer merely stands in for the abstract Forger's — it EQUALS its accept
+probability over `ℕ → Rq`. -/
+theorem abstractShadow_advantage_eq_roMeasure (A : M →ₗ[Rq] N) (t : N) (β : ℕ) (F : Forger Rq M N Msg)
+    (h : TailIndependent A t β F) (tail : ℕ → Rq) :
+    ((advantage (abstractShadow A t β F tail).acc : ℚ) : ℝ)
+      = (roMeasure Rq {ρ : ℕ → Rq | Accepts A t β F ρ}).toReal := by
+  have hpos : 0 < Fintype.card Rq := Fintype.card_pos
+  have hcard0 : (Fintype.card Rq : ℝ) ≠ 0 := by positivity
+  have hRHS : (roMeasure Rq {ρ : ℕ → Rq | Accepts A t β F ρ}).toReal
+            = (accBase A t β F).card / (Fintype.card Rq : ℝ) ^ (F.challengeIdx + 1) := by
+    rw [roMeasure_accept A t β F h, ENNReal.toReal_mul, ENNReal.toReal_pow, ENNReal.toReal_inv,
+        ENNReal.toReal_natCast, ENNReal.toReal_natCast, inv_pow, ← div_eq_mul_inv]
+  have hnum : (∑ ω : (Fin F.challengeIdx → Rq), (hits (abstractShadow A t β F tail).acc ω : ℚ))
+            = ((accBase A t β F).card : ℚ) := by
+    rw [← Nat.cast_sum, ← accBase_card A t β F h tail]
+  have hΩcard : (Fintype.card (Fin F.challengeIdx → Rq) : ℚ) = (Fintype.card Rq : ℚ) ^ F.challengeIdx := by
+    rw [Fintype.card_fun, Fintype.card_fin, Nat.cast_pow]
+  have hLHS : ((advantage (abstractShadow A t β F tail).acc : ℚ) : ℝ)
+            = (accBase A t β F).card / (Fintype.card Rq : ℝ) ^ (F.challengeIdx + 1) := by
+    rw [advantage, hnum, hΩcard, pow_succ]
+    push_cast
+    ring
+  rw [hLHS, hRHS]
+
+/-- **TAIL-INVARIANCE, re-derived over the real measure.** Since the shadow's advantage equals the tail-free
+`roMeasure`-probability of acceptance, it is the SAME for every frozen tail — the §B result
+`abstractShadow_advantage_tailIndep`, now with the tail genuinely absent (it was marginalised). -/
+theorem abstractShadow_advantage_tailInvariant_via_roMeasure (A : M →ₗ[Rq] N) (t : N) (β : ℕ)
+    (F : Forger Rq M N Msg) (h : TailIndependent A t β F) (tail tail' : ℕ → Rq) :
+    advantage (abstractShadow A t β F tail).acc = advantage (abstractShadow A t β F tail').acc := by
+  have e1 := abstractShadow_advantage_eq_roMeasure A t β F h tail
+  have e2 := abstractShadow_advantage_eq_roMeasure A t β F h tail'
+  have : ((advantage (abstractShadow A t β F tail).acc : ℚ) : ℝ)
+       = ((advantage (abstractShadow A t β F tail').acc : ℚ) : ℝ) := by rw [e1, e2]
+  exact_mod_cast this
+
+end ROMeasureBridge
+
+/-! ### Teeth — the materialized RO bridge FIRES on a concrete forger, non-vacuously. -/
+
+section ROTeeth
+
+open MeasureTheory
+open Dregg2.Crypto.HermineThreshold
+open Dregg2.Crypto.HermineSelfTargetMSIS
+
+/-- `⊤` (discrete) measurable structure on the finite `ZMod 5`: every set measurable, the uniform PMF is a
+genuine probability measure — the substrate for the infinite-RO product measure on `ℕ → ZMod 5`. -/
+noncomputable local instance : MeasurableSpace (ZMod 5) := ⊤
+
+/-- **THE MATERIALIZED BRIDGE FIRES.** `exAbstractForger` is `TailIndependent` (it reads only the challenge),
+so `abstractShadow_advantage_eq_roMeasure` applies: its finite-shadow advantage EQUALS the genuine probability
+of its acceptance event under the real infinite-product RO measure on `ℕ → ZMod 5`. The model↔reality
+identification is exhibited on concrete data. -/
+theorem exAbstract_advantage_eq_roMeasure :
+    ((advantage (abstractShadow (LinearMap.id : ZMod 5 →ₗ[ZMod 5] ZMod 5) 1 0 exAbstractForger
+        (fun _ => 0)).acc : ℚ) : ℝ)
+      = (roMeasure (ZMod 5) {ρ : ℕ → ZMod 5 |
+          Accepts (LinearMap.id : ZMod 5 →ₗ[ZMod 5] ZMod 5) 1 0 exAbstractForger ρ}).toReal :=
+  abstractShadow_advantage_eq_roMeasure (LinearMap.id : ZMod 5 →ₗ[ZMod 5] ZMod 5) 1 0
+    exAbstractForger exAbstract_tailIndep (fun _ => 0)
+
+/-- `exAbstractForger` accepts on EVERY oracle (it reads only the challenge; `id·(ρ 0) = 0 + (ρ 0)·1`). -/
+theorem exAbstract_accepts_all (ρ : ℕ → ZMod 5) :
+    Accepts (LinearMap.id : ZMod 5 →ₗ[ZMod 5] ZMod 5) 1 0 exAbstractForger ρ := by
+  refine ⟨Nat.le_zero.mpr rfl, Nat.le_zero.mpr rfl, Nat.le_zero.mpr rfl, ?_⟩
+  simp [exAbstractForger, HermineThreshold.verify]
+
+/-- **NON-VACUITY — the acceptance probability is a positive `1`, not a vacuous `0`.** `exAbstractForger`
+accepts on every oracle, so its acceptance event is the WHOLE space `ℕ → ZMod 5`, and the genuine infinite-RO
+product measure — being a real `IsProbabilityMeasure` — gives it mass `1`. The RO measure is a genuine
+probability, and the bridge above equates the finite advantage with this real `1`. -/
+theorem exAbstract_roMeasure_eq_one :
+    roMeasure (ZMod 5) {ρ : ℕ → ZMod 5 |
+        Accepts (LinearMap.id : ZMod 5 →ₗ[ZMod 5] ZMod 5) 1 0 exAbstractForger ρ} = 1 := by
+  have hset : {ρ : ℕ → ZMod 5 |
+        Accepts (LinearMap.id : ZMod 5 →ₗ[ZMod 5] ZMod 5) 1 0 exAbstractForger ρ} = Set.univ := by
+    ext ρ
+    simp only [Set.mem_setOf_eq, Set.mem_univ, iff_true]
+    exact exAbstract_accepts_all ρ
+  rw [hset, measure_univ]
+
+end ROTeeth
+
 #assert_all_clean [
   winProb_prod_factor,
   IndepHybridForkingFamily.hybridForgerAdv_nonneg,
@@ -513,7 +853,20 @@ end TeethB
   exAbstract_tailIndep,
   exTail_accepts_true,
   exTail_accepts_false,
-  exTail_not_tailIndep
+  exTail_not_tailIndep,
+  pi_uniform_singleton,
+  pi_uniform_finset,
+  extend_self,
+  accepts_congr_of_le,
+  accepts_iicEquiv,
+  acceptEvent_eq_cylinder,
+  roMeasure_accept,
+  accBase_card,
+  abstractShadow_advantage_eq_roMeasure,
+  abstractShadow_advantage_tailInvariant_via_roMeasure,
+  exAbstract_advantage_eq_roMeasure,
+  exAbstract_accepts_all,
+  exAbstract_roMeasure_eq_one
 ]
 
 end Dregg2.Crypto.ModelBridge
