@@ -1,0 +1,28 @@
+THE COMMONS FORGE — a crowd co-authors one shared dungeon draft by VOTE
+driven run · attested-dm /coauthor contract · quorum-certified collective co-authoring
+served at http://127.0.0.1:60348/coauthor
+==============================================================================
+
+The crowd PROPOSES a bounded, typed edit; the seated co-authors QUORUM-VOTE on the real
+collective-choice engine (WriteOnce ballots + Monotonic tally + the polis AffineLe quorum
+gate, M=3 of 5); and the VALIDATOR (parse_dungeon) DISPOSES the certified edit — a sound
+edit grows the draft, a breaking one is refused and rolled back DESPITE the passing vote.
+
+------------------------------------------------------------------------------
+[A] SEED DRAFT — 1 room · plays: true · map nodes: 1
+------------------------------------------------------------------------------
+[B] SUB-QUORUM — 1 ballot < M=3 → close REFUSED (below-quorum); the draft did not grow (still 1 room). A duplicate ballot + a non-seated voter were refused too.
+------------------------------------------------------------------------------
+[C] QUORUM → APPLIED — quorum met, certified winner: AddRoom hall “The Long Hall”
+    the validator ACCEPTED it → the draft grew to 2 rooms; the map re-rendered (2 nodes). A quorum certificate was emitted.
+------------------------------------------------------------------------------
+[D] THE VALIDATOR DISPOSES — certified winner: AddExit threshold —west→ nowhere · quorum met: true
+    yet the validator REFUSED it: line 8: exit `west` in room `threshold` leads to unknown room `nowhere`
+    the draft is UNCHANGED (still 2 rooms) — the crowd certified a choice; the world disposed. (non-vacuous)
+------------------------------------------------------------------------------
+[E] THE GROWN DRAFT PLAYS — voted in threshold -north-> hall; loaded into a real GameSession → a move landed into hall; /game/verify = true
+==============================================================================
+RESULT: the co-authored draft has 2 rooms · 2 certified edits applied · plays: true
+append-only history: 3 disposed rounds (applied + validator-refused), each with its quorum certificate.
+The crowd proposed every edit. The quorum certified the winner. The validator disposed —
+a voted-for broken world was refused and rolled back. The draft grew, and stays playable.

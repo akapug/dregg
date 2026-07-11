@@ -1,0 +1,26 @@
+# shared-draft — the SHARED DUNGEON DRAFT + the bounded structured EDIT model.
+#
+# The data heart of COLLECTIVE CO-AUTHORING: a crowd-owned dungeon draft that grows over time and
+# stays playable. A `Draft` is a structured value (rooms / exits / items / objective) that RENDERS
+# to a `.dungeon` source string; an `Edit` is one of a small CLOSED set of typed proposals
+# (AddRoom / AddExit / PlaceItem / SetObjective) — NOT free-form text. Applying an edit mutates a
+# fresh draft; `dispose` then RE-VALIDATES the rendered source through `attested_dm::parse_dungeon`
+# (the fail-closed validator). A well-typed edit that would break the world (a dangling exit, an
+# unreachable objective, an unplaced win item) is REFUSED by the validator and rolled back — the
+# crowd proposes, the validator disposes.
+#
+# It path-deps ONLY on `attested-dm` (a workspace member); the collective-choice quorum wiring and
+# the HTTP surface live in the dungeon-service. This crate is pure + unit-tested — no I/O, no HTTP.
+
+[package]
+name = "shared-draft"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+publish = false
+description = "The shared dungeon draft + the bounded structured edit model for collective co-authoring: a Draft renders to .dungeon source, an Edit is a typed proposal (AddRoom/AddExit/PlaceItem/SetObjective), and dispose re-validates via attested_dm::parse_dungeon — a voted-for breaking edit is refused by the validator and rolled back."
+
+[dependencies]
+# THE FAIL-CLOSED VALIDATOR — parse_dungeon / validate / DungeonError. The disposer re-parses the
+# rendered draft through this: a broken edit never becomes a playable world.
+attested-dm = { path = "../attested-dm" }

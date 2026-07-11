@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>The Commons Forge — a crowd co-authors one shared dungeon by vote</title>
+  <script src="/theme.js"></script>
+  <style>
+    :root {
+      --parchment: #ece6d6; --parchment-2: #e0d8c2; --card: #f7f2e7; --stone: #efe9da;
+      --ink: #1b1728; --ink-soft: #453f57; --ink-faint: #766f86; --rule: #cfc5ac;
+      --violet: #6b5ce0; --violet-deep: #43349c; --teal: #2b7f7a; --green: #3f8f57;
+      --amber: #b06e1f; --red: #a8262f; --red-soft: #f7e6e6; --red-line: #e7c4c4; --gold: #a9812f;
+      --shadow: 24px 34px 66px -34px rgba(20, 16, 34, .5);
+      --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+      --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --parchment: #14110d; --parchment-2: #100d0a; --card: #1c1813; --stone: #201b14;
+        --ink: #e8e0cf; --ink-soft: #b8ae97; --ink-faint: #8f836b; --rule: #37301f;
+        --violet: #b493e6; --violet-deep: #c9b3f0; --teal: #4fb3ac; --green: #6fc98a;
+        --amber: #d8b45a; --red: #e8837f; --red-soft: #2a1a1a; --red-line: #4a2f2f; --gold: #d8b45a;
+        --shadow: 24px 30px 60px -30px rgba(0,0,0,.6);
+      }
+    }
+    :root[data-theme="dark"] {
+      --parchment: #14110d; --parchment-2: #100d0a; --card: #1c1813; --stone: #201b14;
+      --ink: #e8e0cf; --ink-soft: #b8ae97; --ink-faint: #8f836b; --rule: #37301f;
+      --violet: #b493e6; --violet-deep: #c9b3f0; --teal: #4fb3ac; --green: #6fc98a;
+      --amber: #d8b45a; --red: #e8837f; --red-soft: #2a1a1a; --red-line: #4a2f2f; --gold: #d8b45a;
+      --shadow: 24px 30px 60px -30px rgba(0,0,0,.6);
+    }
+    :root[data-theme="light"] {
+      --parchment: #ece6d6; --parchment-2: #e0d8c2; --card: #f7f2e7; --stone: #efe9da;
+      --ink: #1b1728; --ink-soft: #453f57; --ink-faint: #766f86; --rule: #cfc5ac;
+      --violet: #6b5ce0; --violet-deep: #43349c; --teal: #2b7f7a; --green: #3f8f57;
+      --amber: #b06e1f; --red: #a8262f; --red-soft: #f7e6e6; --red-line: #e7c4c4; --gold: #a9812f;
+      --shadow: 24px 34px 66px -34px rgba(20, 16, 34, .5);
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; }
+    body {
+      font-family: var(--sans); color: var(--ink);
+      background:
+        radial-gradient(130% 90% at 50% -20%, #241c33 0%, #2c2440 22%, transparent 55%),
+        radial-gradient(120% 80% at 50% 0%, #f3eee1 0%, var(--parchment) 42%, var(--parchment-2) 100%);
+      min-height: 100vh; line-height: 1.5; -webkit-font-smoothing: antialiased;
+    }
+    @media (prefers-color-scheme: dark) { body { background:
+      radial-gradient(130% 90% at 50% -20%, #241c33 0%, #2c2440 22%, transparent 55%),
+      radial-gradient(120% 80% at 50% 0%, #1b1710 0%, var(--parchment) 42%, var(--parchment-2) 100%); } }
+    :root[data-theme="dark"] body { background:
+      radial-gradient(130% 90% at 50% -20%, #241c33 0%, #2c2440 22%, transparent 55%),
+      radial-gradient(120% 80% at 50% 0%, #1b1710 0%, var(--parchment) 42%, var(--parchment-2) 100%); }
+    :root[data-theme="light"] body { background:
+      radial-gradient(130% 90% at 50% -20%, #241c33 0%, #2c2440 22%, transparent 55%),
+      radial-gradient(120% 80% at 50% 0%, #f3eee1 0%, var(--parchment) 42%, var(--parchment-2) 100%); }
+    .page { max-width: 52rem; margin: 0 auto; padding: 3.4rem 1.5rem 6rem; }
+    .eyebrow { font-size: .72rem; letter-spacing: .22em; text-transform: uppercase; color: #c9c0ee; font-weight: 600; margin: 0 0 .9rem; }
+    h1.title { font-family: var(--serif); font-weight: 600; font-size: clamp(2.3rem, 6vw, 3.6rem); line-height: 1.02; letter-spacing: -.01em; margin: 0; text-wrap: balance; color: #f4efe2; text-shadow: 0 2px 24px rgba(0,0,0,.35); }
+    h1.title em { color: #b9abf2; font-style: italic; }
+    .lede { font-family: var(--serif); font-size: 1.14rem; color: #d8d2c2; margin: 1rem 0 0; max-width: 42rem; text-wrap: pretty; }
+    .lede b { color: #fff; font-weight: 600; }
+    .model-note { margin: 1.2rem 0 0; font-size: .84rem; color: var(--ink-soft); padding: .55rem .9rem; border-radius: 9px; background: rgba(255,255,255,.6); border: 1px dashed var(--rule); }
+    .model-note code { font-family: var(--mono); font-size: .8rem; color: var(--violet-deep); }
+
+    .frame { margin: 1.3rem 0 0; padding: 1.3rem 1.4rem; border-radius: 15px; background: var(--card); border: 1px solid var(--rule); box-shadow: var(--shadow); }
+    .frame h3 { margin: 0 0 .1rem; font-size: .64rem; letter-spacing: .16em; text-transform: uppercase; color: var(--ink-faint); font-weight: 700; }
+    .frame .sub { margin: 0 0 .8rem; font-size: .82rem; color: var(--ink-soft); }
+
+    .objective { margin: 0 0 1rem; padding: .7rem 1rem; border-radius: 11px; background: linear-gradient(90deg, #f6efdc, #f3ecd8); border: 1px solid #e2d3a8; color: #6a5320; font-size: .95rem; display: flex; gap: .55rem; align-items: baseline; }
+    .objective .star { color: var(--gold); }
+    .draft-meta { margin: .8rem 0 0; font-size: .8rem; color: var(--ink-faint); display: flex; gap: .8rem; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
+    .draft-meta code { font-family: var(--mono); color: var(--ink-soft); font-size: .72rem; }
+    .draft-meta .plays { font-weight: 700; }
+    .draft-meta .plays.ok { color: var(--green); }
+    .draft-meta .plays.bad { color: var(--red); }
+
+    /* room map (shared with the vault/forge) */
+    .rm-legend { display: flex; flex-wrap: wrap; gap: .4rem .9rem; margin: 0 0 .7rem; font-size: .72rem; color: var(--ink-faint); align-items: center; }
+    .rm-key { display: inline-flex; align-items: center; gap: .32rem; }
+    .rm-swatch { width: 11px; height: 11px; border-radius: 3px; display: inline-block; border: 1px solid var(--rule); box-sizing: border-box; }
+    .rm-key-current .rm-swatch { background: var(--violet); border-color: var(--violet); }
+    .rm-key-visited .rm-swatch { background: var(--card); border-color: var(--ink-faint); }
+    .rm-key-unknown .rm-swatch { background: transparent; border-color: var(--ink-faint); border-style: dashed; }
+    .rm-key-locked .rm-swatch { background: transparent; border-color: var(--red); border-style: dashed; }
+    .rm-key-orphan .rm-swatch { background: transparent; border-color: var(--amber); border-style: dashed; }
+    .rm-scroll { overflow-x: auto; overflow-y: hidden; }
+    .roommap-svg { max-width: 100%; height: auto; display: block; }
+    .rm-empty { color: var(--ink-faint); font-family: var(--serif); font-style: italic; font-size: .9rem; padding: .6rem .2rem; }
+    .rm-edge { stroke: var(--ink-faint); stroke-width: 1.6; opacity: .55; fill: none; }
+    .rm-edge.locked { stroke: var(--red); stroke-width: 1.7; stroke-dasharray: 4 3; opacity: .9; }
+    .rm-ahead { fill: var(--ink-faint); opacity: .7; }
+    .rm-ahead.locked { fill: var(--red); opacity: 1; }
+    .rm-node rect { fill: var(--card); stroke: var(--rule); stroke-width: 1.4; transition: fill .15s, stroke .15s; }
+    .rm-node .rm-label { font-family: var(--sans); font-size: 12px; font-weight: 600; fill: var(--ink-soft); pointer-events: none; }
+    .rm-node.visited rect { fill: var(--card); stroke: var(--ink-faint); }
+    .rm-node.visited .rm-label { fill: var(--ink); }
+    .rm-node.current rect { fill: color-mix(in srgb, var(--violet) 22%, var(--card)); stroke: var(--violet); stroke-width: 2.4; }
+    .rm-node.current .rm-label { fill: var(--violet-deep); font-weight: 700; }
+    .rm-node.orphan rect { stroke: var(--amber); stroke-dasharray: 5 3; stroke-width: 2; }
+    .rm-you { font-family: var(--sans); font-size: 9px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; fill: var(--violet-deep); }
+    .rm-you-dot { fill: var(--violet); }
+
+    /* the source panel */
+    details.source { margin: 1rem 0 0; }
+    details.source summary { cursor: pointer; font-size: .72rem; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-faint); font-weight: 700; }
+    pre.source-text { margin: .6rem 0 0; padding: .8rem 1rem; border-radius: 10px; background: var(--stone); border: 1px solid var(--rule); font-family: var(--mono); font-size: .74rem; color: var(--ink-soft); overflow-x: auto; white-space: pre; line-height: 1.5; }
+
+    /* the propose form */
+    .form-row { display: grid; gap: .5rem; margin: 0 0 .6rem; }
+    .form-row label { font-size: .62rem; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-faint); font-weight: 700; }
+    select, input[type="text"] { font: inherit; font-size: .9rem; padding: .5rem .7rem; border-radius: 9px; border: 1px solid var(--rule); background: var(--card); color: var(--ink); }
+    select:focus-visible, input:focus-visible { outline: 2px solid var(--violet-deep); outline-offset: 1px; }
+    .field-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: .55rem; }
+    .field { display: grid; gap: .25rem; }
+    #proposeHint { margin: .5rem 0 0; font-size: .8rem; color: var(--ink-faint); font-style: italic; min-height: 1rem; }
+
+    /* the proposal pool / ballot */
+    #pool { display: grid; gap: .55rem; }
+    #pool .empty { color: var(--ink-faint); font-family: var(--serif); font-style: italic; }
+    .prop { border: 1px solid var(--rule); background: var(--card); border-radius: 11px; padding: .6rem .8rem; display: grid; gap: .3rem; transition: border-color .12s, box-shadow .12s; }
+    .prop.leading { border-color: var(--violet); box-shadow: 0 0 0 1px var(--violet), 0 6px 18px -10px rgba(107,92,224,.5); }
+    .prop-top { display: flex; justify-content: space-between; align-items: baseline; gap: .6rem; }
+    .prop-summary { font-family: var(--serif); font-weight: 600; font-size: 1rem; }
+    .prop-kind { font-family: var(--mono); font-size: .66rem; color: var(--violet-deep); background: color-mix(in srgb, var(--violet) 12%, transparent); border-radius: 5px; padding: .08rem .4rem; }
+    .prop-count { font-family: var(--mono); font-size: .78rem; color: var(--violet-deep); white-space: nowrap; }
+    .prop-by { font-size: .72rem; color: var(--ink-faint); }
+    .prop-bar { display: block; height: 6px; border-radius: 999px; background: #e7e1d0; overflow: hidden; }
+    .prop-fill { display: block; height: 100%; background: var(--violet); transition: width .25s ease; }
+    .prop-lead-tag { display: none; font-family: var(--sans); font-size: .56rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--violet-deep); }
+    .prop.leading .prop-lead-tag { display: inline-block; }
+
+    .controls { margin: 1rem 0 0; display: flex; gap: .5rem; flex-wrap: wrap; }
+    button.ctrl { font: inherit; font-size: .86rem; padding: .55rem 1rem; border-radius: 10px; border: 1px solid var(--violet); background: var(--card); color: var(--violet-deep); cursor: pointer; transition: background .14s, color .14s; white-space: nowrap; }
+    button.ctrl:hover { background: var(--violet); color: #fff; }
+    button.ctrl:disabled { opacity: .45; cursor: default; }
+    button.ctrl.primary { background: var(--violet); color: #fff; font-weight: 600; }
+    button.ctrl.primary:hover { background: var(--violet-deep); }
+    button.ctrl.reset { border-color: var(--ink-faint); color: var(--ink-faint); }
+    button.ctrl.reset:hover { background: var(--ink-faint); color: #fff; }
+
+    /* seats */
+    #seats { display: flex; flex-wrap: wrap; gap: .5rem; }
+    .seat { border: 1px solid var(--rule); background: var(--card); border-radius: 10px; padding: .45rem .7rem; min-width: 7.5rem; }
+    .seat.voted { border-color: var(--violet); background: color-mix(in srgb, var(--violet) 8%, var(--card)); }
+    .seat-name { display: block; font-family: var(--serif); font-weight: 600; font-size: .96rem; }
+    .seat-choice { display: block; font-size: .72rem; color: var(--violet-deep); font-family: var(--mono); margin-top: .1rem; }
+    .seat-choice.waiting { color: var(--ink-faint); font-style: italic; font-family: var(--serif); }
+
+    /* quorum meter */
+    .quorum-line { margin: .8rem 0 0; display: flex; align-items: center; gap: .55rem; flex-wrap: wrap; font-size: .82rem; color: var(--ink-soft); padding: .45rem .7rem; border-radius: 9px; border: 1px dashed color-mix(in srgb, var(--violet) 45%, var(--rule)); background: color-mix(in srgb, var(--violet) 6%, transparent); }
+    .quorum-line.met { border-style: solid; border-color: color-mix(in srgb, var(--green) 55%, var(--rule)); background: color-mix(in srgb, var(--green) 10%, transparent); color: var(--green); }
+    .quorum-line .q-label { font-family: var(--sans); font-size: .58rem; letter-spacing: .14em; text-transform: uppercase; font-weight: 700; color: var(--ink-faint); }
+    .quorum-line.met .q-label { color: var(--green); }
+    .quorum-line .q-text b { color: var(--ink); font-variant-numeric: tabular-nums; }
+    .quorum-line.met .q-text b { color: var(--green); }
+    .quorum-line .q-bar { flex: 1 1 6rem; min-width: 5rem; height: 6px; border-radius: 999px; background: color-mix(in srgb, var(--ink-faint) 16%, transparent); overflow: hidden; }
+    .quorum-line .q-fill { display: block; height: 100%; background: var(--violet); transition: width .3s ease; }
+    .quorum-line.met .q-fill { background: var(--green); }
+
+    /* disposition banner */
+    .banner { margin: 1.2rem 0 0; max-height: 0; overflow: hidden; opacity: 0; transition: max-height .4s ease, opacity .3s ease, margin .3s ease; }
+    .banner.show { max-height: 26rem; opacity: 1; }
+    .banner .inner { padding: 1.1rem 1.3rem; border-radius: 14px; }
+    .banner.applied .inner { background: linear-gradient(120deg, #e7f4ea, #dcefe1); border: 1px solid #bfe2c7; }
+    .banner.refused .inner { background: var(--red-soft); border: 1px solid var(--red-line); }
+    .banner .b-title { font-family: var(--serif); font-size: 1.3rem; margin: 0; }
+    .banner.applied .b-title { color: var(--green); }
+    .banner.refused .b-title { color: var(--red); }
+    .banner .b-body { margin: .4rem 0 0; font-size: .9rem; }
+    .banner.applied .b-body { color: #2f6b41; }
+    .banner.refused .b-body { color: #7a2a2f; }
+    .banner .b-body code { font-family: var(--mono); font-size: .8rem; }
+
+    /* the certificate */
+    .cert-panel { margin: 1.2rem 0 0; max-height: 0; overflow: hidden; opacity: 0; transition: max-height .4s ease, opacity .3s ease, margin .3s ease; }
+    .cert-panel.show { max-height: 60rem; opacity: 1; padding: 1.1rem 1.3rem; border-radius: 14px; background: var(--card); border: 1px solid color-mix(in srgb, var(--green) 40%, var(--rule)); box-shadow: var(--shadow); }
+    .cert-badge { font-family: var(--sans); font-size: .66rem; letter-spacing: .1em; text-transform: uppercase; font-weight: 700; color: var(--green); }
+    .cert-facts { display: grid; gap: .3rem; margin: .5rem 0 .5rem; }
+    .cert-facts > div { display: flex; gap: .6rem; font-size: .82rem; }
+    .cert-facts .cf-k { font-family: var(--sans); font-size: .58rem; letter-spacing: .12em; text-transform: uppercase; font-weight: 700; color: var(--ink-faint); min-width: 7rem; padding-top: .1rem; }
+    .cert-facts .cf-v { color: var(--ink-soft); }
+    .cert-facts code { font-family: var(--mono); font-size: .74rem; color: var(--violet-deep); }
+    .cert-honest { font-size: .8rem; color: var(--ink-soft); margin: .3rem 0 0; padding: .55rem .7rem; border-radius: 8px; background: color-mix(in srgb, var(--amber) 8%, transparent); border: 1px dashed color-mix(in srgb, var(--amber) 45%, var(--rule)); line-height: 1.5; }
+    .cert-honest b { color: var(--ink); }
+
+    /* history */
+    #history { display: grid; gap: .6rem; }
+    #history .empty { color: var(--ink-faint); font-family: var(--serif); font-style: italic; }
+    .hist { padding: .65rem .9rem; border-radius: 11px; background: var(--card); border: 1px solid var(--rule); }
+    .hist.applied { border-left: 3px solid var(--green); }
+    .hist.refused { border-left: 3px solid var(--red); background: var(--red-soft); border-color: var(--red-line); }
+    .hist-top { display: flex; justify-content: space-between; align-items: baseline; gap: .6rem; }
+    .hist-summary { font-family: var(--serif); font-weight: 600; font-size: 1rem; }
+    .hist-seq { font-family: var(--mono); font-size: .72rem; color: var(--ink-faint); }
+    .hist-verdict { margin-top: .3rem; font-size: .82rem; font-weight: 600; }
+    .hist.applied .hist-verdict { color: var(--green); }
+    .hist.refused .hist-verdict { color: var(--red); }
+    .hist-verdict .sub { font-weight: 400; color: var(--ink-faint); }
+    .hist-cert { margin-top: .3rem; font-size: .72rem; color: var(--ink-faint); font-family: var(--mono); }
+
+    .legend { margin: 2.2rem 0 0; padding: 1.2rem 1.4rem; border-radius: 12px; background: rgba(255,255,255,.5); border: 1px solid var(--rule); font-size: .86rem; color: var(--ink-soft); }
+    .legend h2 { font-family: var(--serif); font-size: 1.05rem; margin: 0 0 .6rem; color: var(--ink); font-weight: 600; }
+    .legend ul { margin: 0; padding-left: 1.1rem; display: grid; gap: .4rem; }
+    .legend b { color: var(--ink); font-weight: 600; }
+    .legend .tag { font-family: var(--mono); font-size: .78rem; color: var(--violet-deep); }
+    .legend .foot { margin-top: .7rem; font-size: .8rem; color: var(--ink-faint); }
+    footer { margin-top: 2rem; font-size: .76rem; color: var(--ink-faint); }
+
+    /* shared site chrome */
+    .site-nav { position: sticky; top: 0; z-index: 100; display: flex; align-items: center; gap: .55rem;
+      padding: .4rem clamp(.8rem, 3vw, 1.5rem); font-family: var(--sans);
+      background: color-mix(in srgb, var(--card) 86%, transparent);
+      -webkit-backdrop-filter: saturate(1.4) blur(9px); backdrop-filter: saturate(1.4) blur(9px);
+      border-bottom: 1px solid var(--rule); }
+    .site-nav .brand { display: inline-flex; align-items: center; gap: .4rem; white-space: nowrap;
+      font-weight: 700; font-size: .92rem; color: var(--ink); text-decoration: none;
+      padding: .4rem .4rem; border-radius: 9px; min-height: 44px; }
+    .site-nav .brand .diamond { color: var(--violet); font-size: 1.05rem; line-height: 1; }
+    .site-nav .brand:hover { color: var(--violet-deep); }
+    .site-nav .nav-here { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      font-size: .75rem; letter-spacing: .03em; color: var(--ink-faint); }
+    .site-nav .nav-here .sep { opacity: .5; margin: 0 .45rem; }
+    .site-nav .nav-actions { margin-left: auto; display: flex; align-items: center; gap: .4rem; }
+    .site-nav .nav-btn { font: inherit; font-family: var(--sans); font-size: .8rem; line-height: 1; cursor: pointer;
+      display: inline-flex; align-items: center; justify-content: center; gap: .35rem;
+      min-height: 44px; min-width: 44px; padding: .4rem .7rem; border-radius: 10px;
+      border: 1px solid var(--rule); background: color-mix(in srgb, var(--card) 60%, transparent);
+      color: var(--ink-soft); transition: background .14s, color .14s, border-color .14s; }
+    .site-nav .nav-btn:hover { border-color: var(--violet); color: var(--violet-deep); }
+    .site-nav .nav-btn:focus-visible, .site-nav .brand:focus-visible { outline: 2px solid var(--violet-deep); outline-offset: 2px; }
+    .site-nav .nav-btn.copied { border-color: var(--green); color: var(--green); }
+    @media (max-width: 26rem) { .site-nav .nav-here { display: none; } .site-nav .nav-btn .lbl { display: none; } .site-nav .nav-btn { padding: .4rem .55rem; } }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; scroll-behavior: auto !important; } }
+    @media (max-width: 30rem) { .page { padding-left: 1rem; padding-right: 1rem; } }
+    img, svg { max-width: 100%; }
+  </style>
+</head>
+<body>
+  <nav class="site-nav" aria-label="Site navigation">
+    <a class="brand" href="/hub"><span class="diamond" aria-hidden="true">◈</span><span>verifiable fiction</span></a>
+    <span class="nav-here" aria-hidden="true"><span class="sep">/</span>The Commons Forge</span>
+    <div class="nav-actions">
+      <button class="nav-btn" type="button" data-share aria-label="Copy a shareable link to this page"><span aria-hidden="true">🔗</span><span class="lbl">Share</span></button>
+      <button class="nav-btn theme-toggle" type="button" data-theme-toggle aria-label="Switch color theme">🌓</button>
+    </div>
+  </nav>
+  <main class="page">
+    <p class="eyebrow">Collective co-authoring · the crowd proposes, the validator disposes</p>
+    <h1 class="title">The Commons <em>Forge</em></h1>
+    <p class="lede">
+      A crowd co-authors <b>one shared dungeon draft</b> — <b>by vote</b>. Anyone proposes a bounded,
+      typed edit (add a room, an exit, an item, retarget the objective); the seated co-authors
+      quorum-vote; and a certified edit is handed to the <b>validator</b>. A voted-for edit that would
+      break the world — a dangling exit, an unreachable goal — is <b>refused and rolled back even
+      though it won the vote</b>. The crowd proposes; the world resolves. The draft grows, and stays
+      playable at every step.
+    </p>
+
+    <div class="model-note" id="voteModel">…</div>
+
+    <section class="frame" aria-label="the shared draft">
+      <h3>the shared draft — the co-authored dungeon, so far</h3>
+      <div class="objective"><span class="star">★</span><span id="objectiveText">…</span></div>
+      <div id="draftMap"><div class="rm-empty">loading the draft…</div></div>
+      <div class="draft-meta">
+        <span><span id="roomCount">0</span> rooms</span>
+        <span class="plays" id="playsBadge">…</span>
+        <span>source <code id="sourceHash">…</code></span>
+        <span><span id="appliedCount">0</span> edits applied</span>
+      </div>
+      <details class="source">
+        <summary>view the <code>.dungeon</code> source (it parses + plays)</summary>
+        <pre class="source-text" id="sourceText"></pre>
+      </details>
+    </section>
+
+    <section class="frame" aria-label="propose an edit">
+      <h3>propose an edit — a bounded, typed change</h3>
+      <p class="sub">Not free-form text. A closed set of structured edits. Pick a kind, fill the fields, add it to the pool.</p>
+      <div class="form-row">
+        <label for="editType">edit kind</label>
+        <select id="editType">
+          <option value="AddRoom">AddRoom — add a new room</option>
+          <option value="AddExit">AddExit — connect two rooms</option>
+          <option value="PlaceItem">PlaceItem — put an item in a room</option>
+          <option value="SetObjective">SetObjective — retarget the win goal</option>
+        </select>
+      </div>
+      <div class="field-grid" id="editFields"></div>
+      <div class="controls">
+        <button id="proposeBtn" class="ctrl primary" type="button">＋ add to the proposal pool</button>
+      </div>
+      <p id="proposeHint"></p>
+    </section>
+
+    <section class="frame" aria-label="the seated co-authors">
+      <h3>the seated co-authors</h3>
+      <p class="sub">Five co-authors hold the electorate. Each casts one write-once ballot per round.</p>
+      <div id="seats"></div>
+    </section>
+
+    <section class="frame" aria-label="the proposal pool">
+      <h3>the proposal pool — put an edit to a vote</h3>
+      <p class="sub">Open a round over the pending proposals; click a proposal to cast the next co-author's ballot; close it when quorum is met and the validator disposes.</p>
+      <div id="quorumLine" class="quorum-line" role="status" aria-live="polite"><span class="q-label">quorum</span><span class="q-text">no vote in progress</span></div>
+      <div id="pool"></div>
+      <div class="controls">
+        <button id="openBtn" class="ctrl primary" type="button">🗳 open a vote</button>
+        <button id="autoBtn" class="ctrl" type="button">🎲 let the rest of the crowd vote</button>
+        <button id="closeBtn" class="ctrl" type="button">✔ close → the validator disposes</button>
+        <button id="resetBtn" class="ctrl reset" type="button">↺ reset the draft</button>
+      </div>
+    </section>
+
+    <div id="banner" class="banner" role="status" aria-live="polite"><div class="inner"><p id="bannerTitle" class="b-title"></p><p id="bannerBody" class="b-body"></p></div></div>
+
+    <section id="certPanel" class="cert-panel" aria-label="the quorum certificate"></section>
+
+    <section class="frame" aria-label="the edit history">
+      <h3>the edit history — append-only, quorum-certified provenance</h3>
+      <p class="sub">Every disposed round, in order — applied edits and validator-refused ones alike, each carrying its quorum certificate. The source hash after each shows what changed (and what a refusal left unchanged).</p>
+      <div id="history"><div class="empty">no edits yet — propose one and put it to a vote.</div></div>
+    </section>
+
+    <aside class="legend">
+      <h2>What is actually real here</h2>
+      <ul>
+        <li>The crowd <b>proposes</b> a bounded, typed edit — a closed set (<span class="tag">AddRoom / AddExit / PlaceItem / SetObjective</span>), not free-form DSL. An edit is a typed value, not prose.</li>
+        <li>The quorum <b>certifies</b> the winning edit on the real <span class="tag">collective-choice</span> engine — each ballot a <b>WriteOnce</b> cap-bounded turn, the tally <b>Monotonic</b>, a round certifying only once the polis <span class="tag">AffineLe</span> quorum gate (M = 3 of 5) admits the decision-turn. A quorum-met close emits a <b>verifiable quorum certificate</b>, and an independent light-client replay recomputes the same board.</li>
+        <li>The validator <b>disposes</b>. The certified edit is re-validated through <span class="tag">parse_dungeon</span> (the same fail-closed gate the forge runs): a sound edit is <b>applied</b> (the draft grows + still plays), a breaking one is <b>refused and rolled back — despite the passing vote</b>. The crowd cannot vote a broken world into being.</li>
+        <li>The draft is <b>playable at every step</b> — the rendered <code>.dungeon</code> source parses into a real <span class="tag">GameSession</span> over the same <code>/game</code> path. The edit history is append-only, certified provenance.</li>
+      </ul>
+      <p class="foot">Honest scope: bounded structured edits (not free-form DSL editing); the quorum-certified tally is over <b>demo identities</b> (each seat's key is <span class="tag">blake3(name)</span>); the draft is <b>server memory</b>. A production deployment binds each seat to a <b>real custody key</b> + a signed ballot and persists the draft. The quorum mechanism, the WriteOnce ballots, the Monotonic tally, the light-client recomputation, and the fail-closed validator are all <b>real</b>.</p>
+    </aside>
+
+    <footer>The Commons Forge · collective co-authoring · the crowd proposes, the validator disposes · self-contained.</footer>
+  </main>
+
+  <script src="coauthor.js"></script>
+</body>
+</html>

@@ -73,6 +73,8 @@ use hosted::{parse_effect, Hosted, ProposedEffect};
 
 mod game_api;
 
+mod coauthor_api;
+
 /// The bind address (override with `DUNGEON_BIND`).
 const DEFAULT_BIND: &str = "127.0.0.1:7878";
 /// The opening scene.
@@ -476,6 +478,7 @@ fn handle_verify(state: &Mutex<AppState>) -> WebResponse {
 fn route(
     state: &Mutex<AppState>,
     game: &Mutex<game_api::GameState>,
+    coauthor: &Mutex<coauthor_api::CoAuthorState>,
     req: &ServeRequest,
 ) -> WebResponse {
     let path = req.target.split('?').next().unwrap_or(&req.target);
@@ -511,6 +514,21 @@ fn route(
         (HttpMethod::Post, "/party/vote") => game_api::handle_party_vote(game, &req.body),
         (HttpMethod::Get, "/party/tally") => game_api::handle_party_tally(game),
         (HttpMethod::Post, "/party/close") => game_api::handle_party_close(game),
+        // ── COLLECTIVE CO-AUTHORING — a crowd quorum-votes bounded structured edits to ONE shared
+        //    dungeon draft that grows over time and stays playable. Additive over a server-held
+        //    shared_draft::Draft: /coauthor/{draft,proposals,propose,open,vote,tally,close,reset}.
+        //    The crowd PROPOSES typed edits; the quorum CERTIFIES the winner; the VALIDATOR
+        //    (parse_dungeon) DISPOSES — a voted-for breaking edit is refused + rolled back. ──
+        (HttpMethod::Get, "/coauthor/draft") => coauthor_api::handle_draft(coauthor),
+        (HttpMethod::Get, "/coauthor/proposals") => coauthor_api::handle_proposals(coauthor),
+        (HttpMethod::Post, "/coauthor/propose") => {
+            coauthor_api::handle_propose(coauthor, &req.body)
+        }
+        (HttpMethod::Post, "/coauthor/open") => coauthor_api::handle_open(coauthor),
+        (HttpMethod::Post, "/coauthor/vote") => coauthor_api::handle_vote(coauthor, &req.body),
+        (HttpMethod::Get, "/coauthor/tally") => coauthor_api::handle_tally(coauthor),
+        (HttpMethod::Post, "/coauthor/close") => coauthor_api::handle_close(coauthor),
+        (HttpMethod::Post, "/coauthor/reset") => coauthor_api::handle_reset(coauthor),
         (HttpMethod::Get, "/") => WebResponse::text(INDEX_HELP),
         _ => WebResponse::error(404, "not found"),
     }
@@ -534,7 +552,16 @@ const INDEX_HELP: &str = "attested dungeon-master — the model proposes, the ca
     POST /party/open\n\
     POST /party/vote {\"voter\":\"<name>\",\"optionId\":<n>}\n\
     GET  /party/tally\n\
-    POST /party/close\n";
+    POST /party/close\n\
+    -- COLLECTIVE CO-AUTHORING (a crowd quorum-votes structured edits to one shared draft) --\n\
+    GET  /coauthor/draft\n\
+    GET  /coauthor/proposals\n\
+    POST /coauthor/propose {\"editType\":\"AddRoom|AddExit|PlaceItem|SetObjective\", ...}\n\
+    POST /coauthor/open\n\
+    POST /coauthor/vote {\"voter\":\"<name>\",\"optionId\":<n>}\n\
+    GET  /coauthor/tally\n\
+    POST /coauthor/close   (the quorum certifies; the validator disposes)\n\
+    POST /coauthor/reset\n";
 
 fn main() -> std::io::Result<()> {
     if std::env::args().any(|a| a == "--self-check") {
@@ -546,11 +573,14 @@ fn main() -> std::io::Result<()> {
     let hosted = Hosted::new();
     let state = Arc::new(Mutex::new(build_state(hosted.clone())));
     let game = Arc::new(Mutex::new(game_api::build_game_state(hosted)));
+    // THE COLLECTIVE CO-AUTHORING LANE — one server-held shared dungeon draft the crowd grows by
+    // quorum-certified structured edits (the validator disposes each certified edit).
+    let coauthor = Arc::new(Mutex::new(coauthor_api::build_coauthor_state()));
     eprintln!(
         "dungeon-service: listening on http://{bind}  (POST /narrate, GET /world, GET /verify; \
          THE SUNKEN VAULT: GET /game/state, POST /game/act, GET /game/verify, POST /game/reset)"
     );
-    let handler = move |req: &ServeRequest| route(&state, &game, req);
+    let handler = move |req: &ServeRequest| route(&state, &game, &coauthor, req);
     serve_http(&bind, handler)
 }
 
