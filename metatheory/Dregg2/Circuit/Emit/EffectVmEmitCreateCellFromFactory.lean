@@ -46,7 +46,7 @@ namespace Dregg2.Circuit.Emit.EffectVmEmitCreateCellFromFactory
 
 open Dregg2.Circuit
 open Dregg2.Circuit.Emit.EffectVmEmit
-open Dregg2.Circuit.Emit.EffectVmEmitTransfer (eSA)
+open Dregg2.Circuit.Emit.EffectVmEmitTransfer (eSA eqToModEq not_modEq_zero_of_canon)
 open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (CellState RowEncodes)
 open Dregg2.Exec.CircuitEmit (EmittedExpr)
 open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
@@ -100,12 +100,12 @@ def factoryVmDescriptor : EffectVmDescriptor :=
 
 /-- **`BornEmptyRowIntent env`** — the row's post-block is the all-zero economic block. -/
 def BornEmptyRowIntent (env : VmRowEnv) : Prop :=
-  env.loc (saCol state.BALANCE_LO) = 0
-  ∧ env.loc (saCol state.BALANCE_HI) = 0
-  ∧ env.loc (saCol state.NONCE) = 0
-  ∧ env.loc (saCol state.CAP_ROOT) = 0
-  ∧ env.loc (saCol state.RESERVED) = 0
-  ∧ (∀ i < 8, env.loc (saCol (state.FIELD_BASE + i)) = 0)
+  env.loc (saCol state.BALANCE_LO) ≡ 0 [ZMOD 2013265921]
+  ∧ env.loc (saCol state.BALANCE_HI) ≡ 0 [ZMOD 2013265921]
+  ∧ env.loc (saCol state.NONCE) ≡ 0 [ZMOD 2013265921]
+  ∧ env.loc (saCol state.CAP_ROOT) ≡ 0 [ZMOD 2013265921]
+  ∧ env.loc (saCol state.RESERVED) ≡ 0 [ZMOD 2013265921]
+  ∧ (∀ i < 8, env.loc (saCol (state.FIELD_BASE + i)) ≡ 0 [ZMOD 2013265921])
 
 /-! ## §5 — FAITHFULNESS: the emitted per-row gates ⟺ the born-empty intent. -/
 
@@ -149,10 +149,12 @@ theorem factoryVm_rejects_nonzero (env : VmRowEnv) (hwrong : ¬ BornEmptyRowInte
   fun h => hwrong ((factoryVm_faithful env).mp h)
 
 theorem factoryVm_rejects_nonzero_balance (env : VmRowEnv)
+    (hcanon : 0 ≤ env.loc (saCol state.BALANCE_LO)
+      ∧ env.loc (saCol state.BALANCE_LO) < 2013265921)
     (hwrong : env.loc (saCol state.BALANCE_LO) ≠ 0) :
     ¬ (gZero state.BALANCE_LO).holdsVm env false false := by
   simp only [gZero, VmConstraint.holdsVm, eSA, EmittedExpr.eval]
-  exact hwrong
+  exact not_modEq_zero_of_canon (b := 0) (by ring) hcanon (by norm_num) hwrong
 
 /-! ## §7 — the commitment binding (inherited from the keystone). -/
 
@@ -248,11 +250,11 @@ theorem factory_row_matches_executor (env : VmRowEnv) (pre post : CellState)
     (hgates : ∀ c ∈ factoryRowGates, c.holdsVm env false false)
     (st st' : RecChainedState) (actor newCell : CellId) (vk : Int)
     (hspec : CreateFromFactorySpec st actor newCell vk st') :
-    post.balLo = (cellProj st'.kernel newCell).balLo
-    ∧ post.balHi = (cellProj st'.kernel newCell).balHi
-    ∧ post.capRoot = (cellProj st'.kernel newCell).capRoot
-    ∧ post.reserved = (cellProj st'.kernel newCell).reserved
-    ∧ (∀ i, post.fields i = (cellProj st'.kernel newCell).fields i) := by
+    post.balLo ≡ (cellProj st'.kernel newCell).balLo [ZMOD 2013265921]
+    ∧ post.balHi ≡ (cellProj st'.kernel newCell).balHi [ZMOD 2013265921]
+    ∧ post.capRoot ≡ (cellProj st'.kernel newCell).capRoot [ZMOD 2013265921]
+    ∧ post.reserved ≡ (cellProj st'.kernel newCell).reserved [ZMOD 2013265921]
+    ∧ (∀ i, post.fields i ≡ (cellProj st'.kernel newCell).fields i [ZMOD 2013265921]) := by
   obtain ⟨hLo, hHi, hN, hCap, hRes, hFld⟩ := (factoryVm_faithful env).mp hgates
   obtain ⟨eLo, eHi, eN, eCap, eRes, eFld⟩ := factory_newcell_is_zero st st' actor newCell vk hspec
   obtain ⟨_, _, _, _, _, _, _, _, _, hsaLo, hsaHi, _, hsaF, hsaCap, hsaRes, _, _, _⟩ := henc
@@ -302,17 +304,23 @@ def zeroRow : VmRowEnv where
 theorem zeroRow_realizes_intent : BornEmptyRowIntent zeroRow := by
   unfold BornEmptyRowIntent zeroRow
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
-  · show (if saCol state.BALANCE_LO = SEL_CREATECELLFROMFACTORY then (1:ℤ) else 0) = 0
+  · refine eqToModEq ?_
+    show (if saCol state.BALANCE_LO = SEL_CREATECELLFROMFACTORY then (1:ℤ) else 0) = 0
     rw [if_neg]; · decide
-  · show (if saCol state.BALANCE_HI = SEL_CREATECELLFROMFACTORY then (1:ℤ) else 0) = 0
+  · refine eqToModEq ?_
+    show (if saCol state.BALANCE_HI = SEL_CREATECELLFROMFACTORY then (1:ℤ) else 0) = 0
     rw [if_neg]; · decide
-  · show (if saCol state.NONCE = SEL_CREATECELLFROMFACTORY then (1:ℤ) else 0) = 0
+  · refine eqToModEq ?_
+    show (if saCol state.NONCE = SEL_CREATECELLFROMFACTORY then (1:ℤ) else 0) = 0
     rw [if_neg]; · decide
-  · show (if saCol state.CAP_ROOT = SEL_CREATECELLFROMFACTORY then (1:ℤ) else 0) = 0
+  · refine eqToModEq ?_
+    show (if saCol state.CAP_ROOT = SEL_CREATECELLFROMFACTORY then (1:ℤ) else 0) = 0
     rw [if_neg]; · decide
-  · show (if saCol state.RESERVED = SEL_CREATECELLFROMFACTORY then (1:ℤ) else 0) = 0
+  · refine eqToModEq ?_
+    show (if saCol state.RESERVED = SEL_CREATECELLFROMFACTORY then (1:ℤ) else 0) = 0
     rw [if_neg]; · decide
   · intro i hi
+    refine eqToModEq ?_
     show (if saCol (state.FIELD_BASE + i) = SEL_CREATECELLFROMFACTORY then (1:ℤ) else 0) = 0
     rw [if_neg]
     simp only [saCol, STATE_AFTER_BASE, PARAM_BASE, STATE_BEFORE_BASE, NUM_EFFECTS, STATE_SIZE,
@@ -328,9 +336,14 @@ def forgedRow : VmRowEnv where
 /-- **NON-VACUITY (witness FALSE / concrete anti-ghost).** `forgedRow`'s post-`bal_lo` is non-zero. -/
 theorem forgedRow_rejected : ¬ (gZero state.BALANCE_LO).holdsVm forgedRow false false := by
   apply factoryVm_rejects_nonzero_balance
-  show (if saCol state.BALANCE_LO = saCol state.BALANCE_LO then (5:ℤ)
-    else zeroRow.loc (saCol state.BALANCE_LO)) ≠ 0
-  rw [if_pos rfl]; norm_num
+  · show (0:ℤ) ≤ (if saCol state.BALANCE_LO = saCol state.BALANCE_LO then (5:ℤ)
+        else zeroRow.loc (saCol state.BALANCE_LO))
+      ∧ (if saCol state.BALANCE_LO = saCol state.BALANCE_LO then (5:ℤ)
+        else zeroRow.loc (saCol state.BALANCE_LO)) < 2013265921
+    rw [if_pos rfl]; norm_num
+  · show (if saCol state.BALANCE_LO = saCol state.BALANCE_LO then (5:ℤ)
+      else zeroRow.loc (saCol state.BALANCE_LO)) ≠ 0
+    rw [if_pos rfl]; norm_num
 
 /-! ## §12 — axiom-hygiene tripwires. -/
 
@@ -407,7 +420,7 @@ theorem factoryActor_full_sound (hash : List ℤ → ℤ) (env : VmRowEnv)
     (henc : RowEncodesRevoke env pre post)
     (hgatesat : satisfiedVm hash factoryActorVmDescriptor env true false)
     (hsat : satisfiedVm hash factoryActorVmDescriptor env true true) :
-    RevokeCellSpec pre post ∧ post.commit = env.pub pi.NEW_COMMIT := by
+    RevokeCellSpec pre post ∧ post.commit ≡ env.pub pi.NEW_COMMIT [ZMOD 2013265921] := by
   obtain ⟨hcs, _⟩ := hsat
   obtain ⟨hcsT, _⟩ := hgatesat
   have hgates' : ∀ c ∈ revokeRowGates, c.holdsVm env false false := by
