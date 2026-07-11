@@ -72,12 +72,12 @@ open Dregg2.Exec
 -- `mint`/`burn` cornerstones (`interp_mintStmt_eq_recKMint` / `…_recKBurn`) refine the IR terms to.
 open Dregg2.Exec.TurnExecutorFull (recKMint recKBurn recCreditCell)
 open Dregg2.Circuit.Emit.EffectVmEmit
-open Dregg2.Circuit.Emit.EffectVmEmitTransfer (transferVmDescriptor IsTransferRow)
+open Dregg2.Circuit.Emit.EffectVmEmitTransfer (transferVmDescriptor IsTransferRow eqToModEq)
 open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (CellState RowEncodes)
 open Dregg2.Circuit.Emit.EffectVmEmitTransferUnify
   (cellProj nonceOf setBalance_nonceOf debitParams descriptor_agrees_with_executor_debit)
 -- The turn PROLOGUE (where the nonce ticks ONCE), for the per-effect nonce reconciliation (§3a/§M.2).
-open Dregg2.Exec.Admission (commitPrologue)
+open Dregg2.Exec.Admission (commitPrologue commitPrologue_nonce)
 -- The class-A mint/burn runnable descriptors + their per-cell full-state soundness (§M targets). Opened
 -- WITHOUT their `RowEncodes`/`CellState`/`cellProjA` (those collide with the transfer-keystone names
 -- already open above); those are named with their full path at use sites.
@@ -159,15 +159,18 @@ theorem transfer_compile_sound
     (hgatesat : satisfiedVm hash (compile (transferStmt turn)) env true false)
     (hsat : satisfiedVm hash (compile (transferStmt turn)) env true true)
     (hexec : interp (transferStmt turn) k = some k') :
-    -- the conserved balance + the whole frame agree with the executor's SRC post-cell …
-    ( post.balLo = (cellProj k' turn.src).balLo
-      ∧ post.balHi = (cellProj k' turn.src).balHi
-      ∧ (∀ i, post.fields i = (cellProj k' turn.src).fields i)
-      ∧ post.capRoot = (cellProj k' turn.src).capRoot
-      ∧ post.reserved = (cellProj k' turn.src).reserved )
-    -- … and the per-effect nonce is RECONCILED (NOT a divergence): the row ticks, the body freezes, and
-    --   `Argus.Nonce.perEffect_nonce_reconciles_to_turn` proves this IS the turn's single prologue tick.
-    ∧ NonceReconciled (cellProj k turn.src).nonce post.nonce (cellProj k' turn.src).nonce := by
+    -- the conserved balance + the whole frame agree (mod p — the field-faithful denotation) with the
+    -- executor's SRC post-cell …
+    ( post.balLo ≡ (cellProj k' turn.src).balLo [ZMOD 2013265921]
+      ∧ post.balHi ≡ (cellProj k' turn.src).balHi [ZMOD 2013265921]
+      ∧ (∀ i, post.fields i ≡ (cellProj k' turn.src).fields i [ZMOD 2013265921])
+      ∧ post.capRoot ≡ (cellProj k' turn.src).capRoot [ZMOD 2013265921]
+      ∧ post.reserved ≡ (cellProj k' turn.src).reserved [ZMOD 2013265921] )
+    -- … and the per-effect nonce is RECONCILED (NOT a divergence): the row TICKS the cell nonce (mod p),
+    --   the body FREEZES it (mod p) — the two facts `transfer_compile_sound_nonce_is_turn_tick` composes
+    --   with the turn prologue's single tick.
+    ∧ ( post.nonce ≡ (cellProj k turn.src).nonce + 1 [ZMOD 2013265921]
+        ∧ (cellProj k' turn.src).nonce ≡ (cellProj k turn.src).nonce [ZMOD 2013265921] ) := by
   -- circuit side: `compile (transferStmt turn)` IS `transferVmDescriptor`, so the satisfaction
   -- hypothesis is over the audited runnable descriptor.
   rw [compile_transferStmt] at hgatesat hsat
@@ -199,16 +202,17 @@ theorem transfer_compile_sound_nonce_is_turn_tick
     -- the SRC cell, read as the turn's agent, carries the projected pre-nonce / executor freeze (the
     -- weld's facts lifted onto the turn's agent cell — `cellProj`'s nonce read IS `nonceOf`):
     (hpre  : (cellProj k turn.src).nonce  = nonceOf (s.kernel.cell turn.src))
-    (hexecAgent : (cellProj k' turn.src).nonce = nonceOf (s.kernel.cell turn.src)) :
+    (_hexecAgent : (cellProj k' turn.src).nonce = nonceOf (s.kernel.cell turn.src)) :
     nonceOf ((commitPrologue s turn.src fee).kernel.cell turn.src)
         = nonceOf (s.kernel.cell turn.src) + 1
-    ∧ post.nonce = nonceOf ((commitPrologue s turn.src fee).kernel.cell turn.src)
-    ∧ post.nonce = (cellProj k' turn.src).nonce + 1 := by
-  have hr : NonceReconciled (cellProj k turn.src).nonce post.nonce (cellProj k' turn.src).nonce :=
+    ∧ post.nonce ≡ nonceOf ((commitPrologue s turn.src fee).kernel.cell turn.src) [ZMOD 2013265921]
+    ∧ post.nonce ≡ (cellProj k' turn.src).nonce + 1 [ZMOD 2013265921] := by
+  obtain ⟨htickN, hfreezeN⟩ :=
     (transfer_compile_sound hash env k k' turn post henc hrow hgatesat hsat hexec).2
-  obtain ⟨_hzero, htick, hmatch, hresid⟩ :=
-    perEffect_nonce_reconciles_to_turn hr s turn.src fee hexecAgent hpre
-  exact ⟨htick, hmatch, hresid⟩
+  -- prologue ticks the agent nonce once (ℤ); the descriptor's per-effect `+1` reconciles to it (mod p).
+  refine ⟨commitPrologue_nonce s turn.src fee, ?_, ?_⟩
+  · exact htickN.trans (eqToModEq (by rw [hpre]; exact (commitPrologue_nonce s turn.src fee).symm))
+  · exact htickN.trans (Int.ModEq.add_right 1 hfreezeN.symm)
 
 #assert_axioms transfer_compile_sound_nonce_is_turn_tick
 
@@ -411,14 +415,16 @@ theorem mint_compile_sound
     (hgatesat : satisfiedVm hash (compileE .mint) env true false)
     (hsat : satisfiedVm hash (compileE .mint) env true true)
     (hexec : interp (mintStmt actor cell amt) k = some k') :
-    ( post.balLo = (cellProj k' cell).balLo
-      ∧ post.balHi = (cellProj k' cell).balHi
-      ∧ (∀ i, post.fields i = (cellProj k' cell).fields i)
-      ∧ post.capRoot = (cellProj k' cell).capRoot
-      ∧ post.reserved = (cellProj k' cell).reserved )
-    -- … and the per-effect nonce is RECONCILED (NOT a divergence): descriptor ticks, executor freezes,
-    --   net = the turn's single prologue tick (`Argus.Nonce.perEffect_nonce_reconciles_to_turn`).
-    ∧ NonceReconciled (cellProj k cell).nonce post.nonce (cellProj k' cell).nonce := by
+    ( post.balLo ≡ (cellProj k' cell).balLo [ZMOD 2013265921]
+      ∧ post.balHi ≡ (cellProj k' cell).balHi [ZMOD 2013265921]
+      ∧ (∀ i, post.fields i ≡ (cellProj k' cell).fields i [ZMOD 2013265921])
+      ∧ post.capRoot ≡ (cellProj k' cell).capRoot [ZMOD 2013265921]
+      ∧ post.reserved ≡ (cellProj k' cell).reserved [ZMOD 2013265921] )
+    -- … and the per-effect nonce is RECONCILED (NOT a divergence): descriptor TICKS the row nonce (mod p),
+    --   executor FREEZES it (mod p); net = the turn's single prologue tick
+    --   (`mint_compile_sound_nonce_is_turn_tick`).
+    ∧ ( post.nonce ≡ (cellProj k cell).nonce + 1 [ZMOD 2013265921]
+        ∧ (cellProj k' cell).nonce ≡ (cellProj k cell).nonce [ZMOD 2013265921] ) := by
   -- circuit side: `compileE .mint` IS `mintVmDescriptor`, so the audited soundness forces `CellMintSpec`.
   rw [compile_mintStmt] at hgatesat hsat
   obtain ⟨hcLo, hcHi, hcN, hcF, hcCap, hcRes⟩ :=
@@ -427,10 +433,10 @@ theorem mint_compile_sound
   rw [interp_mintStmt_eq_recKMint] at hexec
   have heLo := recKMint_proj_balLo hexec
   have heN := recKMint_proj_nonce hexec
-  -- frozen frame: both projections send the non-balance limbs to `0`, so each `hc_` chains by `rfl`. The
-  -- descriptor tick `hcN` + executor freeze `heN` ARE `NonceReconciled`'s two clauses.
-  refine ⟨⟨?_, hcHi.trans rfl, fun i => (hcF i).trans rfl, hcCap.trans rfl, hcRes.trans rfl⟩, hcN, heN⟩
-  · rw [hcLo, heLo]                       -- balLo: pre + amt (circuit) = pre + amt (executor)
+  -- frozen frame: both projections send the non-balance limbs to `0`, so each `hc_` matches by defeq. The
+  -- descriptor tick `hcN` + executor freeze `eqToModEq heN` are the two reconciliation clauses (mod p).
+  exact ⟨⟨hcLo.trans (eqToModEq heLo.symm), hcHi, hcF, hcCap, hcRes⟩, hcN, eqToModEq heN⟩
+  -- balLo: post ≡ pre + amt (circuit) ≡ (cellProj k' cell).balLo (executor, `= pre + amt`).
 
 /-- **`burn_compile_sound` — the welded soundness (burn slice).**
 
@@ -452,14 +458,16 @@ theorem burn_compile_sound
     (hgatesat : satisfiedVm hash (compileE .burn) env true false)
     (hsat : satisfiedVm hash (compileE .burn) env true true)
     (hexec : interp (burnStmt actor cell amt) k = some k') :
-    ( post.balLo = (cellProj k' cell).balLo
-      ∧ post.balHi = (cellProj k' cell).balHi
-      ∧ (∀ i, post.fields i = (cellProj k' cell).fields i)
-      ∧ post.capRoot = (cellProj k' cell).capRoot
-      ∧ post.reserved = (cellProj k' cell).reserved )
-    -- … and the per-effect nonce is RECONCILED (NOT a divergence): descriptor ticks, executor freezes,
-    --   net = the turn's single prologue tick (`Argus.Nonce.perEffect_nonce_reconciles_to_turn`).
-    ∧ NonceReconciled (cellProj k cell).nonce post.nonce (cellProj k' cell).nonce := by
+    ( post.balLo ≡ (cellProj k' cell).balLo [ZMOD 2013265921]
+      ∧ post.balHi ≡ (cellProj k' cell).balHi [ZMOD 2013265921]
+      ∧ (∀ i, post.fields i ≡ (cellProj k' cell).fields i [ZMOD 2013265921])
+      ∧ post.capRoot ≡ (cellProj k' cell).capRoot [ZMOD 2013265921]
+      ∧ post.reserved ≡ (cellProj k' cell).reserved [ZMOD 2013265921] )
+    -- … and the per-effect nonce is RECONCILED (NOT a divergence): descriptor TICKS the row nonce (mod p),
+    --   executor FREEZES it (mod p); net = the turn's single prologue tick
+    --   (`burn_compile_sound_nonce_is_turn_tick`).
+    ∧ ( post.nonce ≡ (cellProj k cell).nonce + 1 [ZMOD 2013265921]
+        ∧ (cellProj k' cell).nonce ≡ (cellProj k cell).nonce [ZMOD 2013265921] ) := by
   -- circuit side: `compileE .burn` IS `burnVmDescriptor`; the audited soundness forces `CellBurnSpec`.
   rw [compile_burnStmt] at hgatesat hsat
   obtain ⟨hcLo, hcHi, hcN, hcF, hcCap, hcRes⟩ :=
@@ -468,10 +476,10 @@ theorem burn_compile_sound
   rw [interp_burnStmt_eq_recKBurn] at hexec
   have heLo := recKBurn_proj_balLo hexec
   have heN := recKBurn_proj_nonce hexec
-  -- frozen frame: both projections send the non-balance limbs to `0`, so each `hc_` chains by `rfl`. The
-  -- descriptor tick `hcN` + executor freeze `heN` ARE `NonceReconciled`'s two clauses.
-  refine ⟨⟨?_, hcHi.trans rfl, fun i => (hcF i).trans rfl, hcCap.trans rfl, hcRes.trans rfl⟩, hcN, heN⟩
-  · rw [hcLo, heLo]                       -- balLo: pre − amt (circuit) = pre − amt (executor)
+  -- frozen frame: both projections send the non-balance limbs to `0`, so each `hc_` matches by defeq. The
+  -- descriptor tick `hcN` + executor freeze `eqToModEq heN` are the two reconciliation clauses (mod p).
+  exact ⟨⟨hcLo.trans (eqToModEq heLo.symm), hcHi, hcF, hcCap, hcRes⟩, hcN, eqToModEq heN⟩
+  -- balLo: post ≡ pre − amt (circuit) ≡ (cellProj k' cell).balLo (executor, `= pre − amt`).
 
 #assert_axioms mint_compile_sound
 #assert_axioms burn_compile_sound
@@ -490,15 +498,15 @@ theorem mint_compile_sound_nonce_is_turn_tick
     (hexec : interp (mintStmt actor cell amt) k = some k')
     (s : Dregg2.Exec.RecChainedState) (fee : Int)
     (hpre  : (cellProj k cell).nonce  = nonceOf (s.kernel.cell cell))
-    (hexecAgent : (cellProj k' cell).nonce = nonceOf (s.kernel.cell cell)) :
+    (_hexecAgent : (cellProj k' cell).nonce = nonceOf (s.kernel.cell cell)) :
     nonceOf ((commitPrologue s cell fee).kernel.cell cell) = nonceOf (s.kernel.cell cell) + 1
-    ∧ post.nonce = nonceOf ((commitPrologue s cell fee).kernel.cell cell)
-    ∧ post.nonce = (cellProj k' cell).nonce + 1 := by
-  have hr : NonceReconciled (cellProj k cell).nonce post.nonce (cellProj k' cell).nonce :=
+    ∧ post.nonce ≡ nonceOf ((commitPrologue s cell fee).kernel.cell cell) [ZMOD 2013265921]
+    ∧ post.nonce ≡ (cellProj k' cell).nonce + 1 [ZMOD 2013265921] := by
+  obtain ⟨htickN, hfreezeN⟩ :=
     (mint_compile_sound hash env hrow k k' actor cell amt post henc hgatesat hsat hexec).2
-  obtain ⟨_hzero, htick, hmatch, hresid⟩ :=
-    perEffect_nonce_reconciles_to_turn hr s cell fee hexecAgent hpre
-  exact ⟨htick, hmatch, hresid⟩
+  refine ⟨commitPrologue_nonce s cell fee, ?_, ?_⟩
+  · exact htickN.trans (eqToModEq (by rw [hpre]; exact (commitPrologue_nonce s cell fee).symm))
+  · exact htickN.trans (Int.ModEq.add_right 1 hfreezeN.symm)
 
 #assert_axioms mint_compile_sound_nonce_is_turn_tick
 
@@ -516,15 +524,15 @@ theorem burn_compile_sound_nonce_is_turn_tick
     (hexec : interp (burnStmt actor cell amt) k = some k')
     (s : Dregg2.Exec.RecChainedState) (fee : Int)
     (hpre  : (cellProj k cell).nonce  = nonceOf (s.kernel.cell cell))
-    (hexecAgent : (cellProj k' cell).nonce = nonceOf (s.kernel.cell cell)) :
+    (_hexecAgent : (cellProj k' cell).nonce = nonceOf (s.kernel.cell cell)) :
     nonceOf ((commitPrologue s cell fee).kernel.cell cell) = nonceOf (s.kernel.cell cell) + 1
-    ∧ post.nonce = nonceOf ((commitPrologue s cell fee).kernel.cell cell)
-    ∧ post.nonce = (cellProj k' cell).nonce + 1 := by
-  have hr : NonceReconciled (cellProj k cell).nonce post.nonce (cellProj k' cell).nonce :=
+    ∧ post.nonce ≡ nonceOf ((commitPrologue s cell fee).kernel.cell cell) [ZMOD 2013265921]
+    ∧ post.nonce ≡ (cellProj k' cell).nonce + 1 [ZMOD 2013265921] := by
+  obtain ⟨htickN, hfreezeN⟩ :=
     (burn_compile_sound hash env hrow k k' actor cell amt post henc hgatesat hsat hexec).2
-  obtain ⟨_hzero, htick, hmatch, hresid⟩ :=
-    perEffect_nonce_reconciles_to_turn hr s cell fee hexecAgent hpre
-  exact ⟨htick, hmatch, hresid⟩
+  refine ⟨commitPrologue_nonce s cell fee, ?_, ?_⟩
+  · exact htickN.trans (eqToModEq (by rw [hpre]; exact (commitPrologue_nonce s cell fee).symm))
+  · exact htickN.trans (Int.ModEq.add_right 1 hfreezeN.symm)
 
 #assert_axioms burn_compile_sound_nonce_is_turn_tick
 
