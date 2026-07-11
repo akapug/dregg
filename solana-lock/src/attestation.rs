@@ -25,12 +25,13 @@
 //! oracle signature         = ed25519_sign(unlock_message_hash)
 //! ```
 //!
-//! CROSS-CRATE SEAM: `bridge/src/solana_mirror.rs::SolanaUnlockRequest` does not yet
-//! expose a `canonical_payload` / `message_hash` (only the lock side does). The
-//! oracle relayer that produces the on-chain unlock MUST sign exactly the bytes this
-//! module defines. The intended landing is a matching `impl SolanaUnlockRequest`
-//! mirroring `SolanaLockAttestation::{canonical_payload, message_hash}` with the
-//! `dregg-solana-unlock-v1` domain — see the follow-up note.
+//! CROSS-CRATE SEAM (CLOSED): `bridge/src/solana_mirror.rs::SolanaUnlockRequest` now
+//! exposes matching `canonical_payload` / `message_hash` (same field order, same
+//! `dregg-solana-unlock-v1` domain), so the oracle relayer signs exactly the bytes
+//! this module verifies. A GOLDEN 32-byte hash for a fixed input is pinned in BOTH
+//! crates' tests (`hash_is_domain_separated_and_binds_every_field` here,
+//! `solana_unlock_message_hash_golden` on the bridge), so any drift on either side
+//! turns one suite red.
 
 /// BLAKE3 `derive_key` context for the unlock direction. Distinct from the lock
 /// direction's `"dregg-solana-mirror-v1"` (`solana_mirror.rs:51`) so the two signing
