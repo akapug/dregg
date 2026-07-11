@@ -53,6 +53,8 @@ import Mathlib
 namespace Dregg2.Crypto.DecapsCoreSpec
 
 open Dregg2.Crypto.MlKemRing
+open Dregg2.Crypto.MlKemCodec (ctDecode byteDecodeAt byteEncode compressPoly dCoeff polyBytes paramK)
+open Dregg2.Crypto.MlKemDecaps (kpkeDecrypt)
 open Polynomial Finset
 
 set_option maxRecDepth 8000
@@ -411,6 +413,162 @@ theorem decrypt_ring_faithful_witness (v : Poly) :
     (by intro t ht; simp only [List.mem_singleton] at ht; subst ht
         exact ⟨by decide, by decide⟩)
   simpa using h
+
+/-! ## BYTE-LEVEL LIFT — the literal `MlKemDecaps.kpkeDecrypt` do-block IS `Compress₁` of the `R_q` spec `w`.
+
+`decrypt_ring_faithful` proved the ring identity on the abstract `List.foldl` accumulator shape. This section
+lifts it to the LITERAL executable `MlKemDecaps.kpkeDecrypt` do-block:
+
+* **`decWFold` / `kpkeDecrypt_unfold`** — the do-block unfold. `kpkeDecrypt`'s `Id.run do` decrypt loop
+  (`for i in [0:paramK] do acc := addPoly acc (ŝᵢ ∘ NTT(uᵢ))`) reduces — via the
+  `Std.Legacy.Range.forIn_eq_forIn_range'` / `List.forIn_pure_yield_eq_foldl` opaque-`f` fold pattern (same as
+  `NttFaithful.do_eq_fold`) — to `decWFold`, the `List.foldl` over `List.range' 0 paramK 1` that carries the
+  index-indexed `ŝᵢ = byteDecodeAt₁₂(dk, i·384)`. So `kpkeDecrypt dk c = ByteEncode₁(Compress₁(subPoly v
+  (NTT⁻¹ (decWFold dk u))))`.
+* **`decWFold_eq_terms`** — the reindexing: on the honest key (`ŝᵢ = NTT(sᵢ)`), `decWFold` equals
+  `decrypt_ring_faithful`'s pair-fold over `terms = [(s₀,u₀),…]` (`List.foldl_map` + the honest-key
+  `foldl_ext_mem`).
+* **`decryptW_eq_spec`** — composing: the `R_q` element `w` that `kpkeDecrypt` compresses maps under `toRqKem`
+  to the FIPS 203 K-PKE.Decrypt expression `v − Σᵢ sᵢ·uᵢ` — the DECRYPT byte-level `=spec` (the ring→message
+  core), for the honest-key hypothesis.
+
+## HONEST RESIDUAL (named, not laundered)
+
+The step from `w` to the recovered message `m = ByteEncode₁(Compress₁(w))` — the `Compress₁` rounding — is
+`MlKemCorrect.compress1_recover` (the per-coefficient interval lemma, closed) composed with the noise bound
+`MlKemCorrect.decryptCorrect_conditional` (whose `noiseBoundHolds` precondition is the named Track-B
+probabilistic residual, `MlKemCorrect.MlKem768DecapsFailureBound`). The FO wrapper (re-encrypt + `c'==c` +
+`G`/`J`-KDF, `MlKemDecaps.mlkemDecaps`) is a SEPARATE residual — the Keccak/compress hashes are
+generic-instantiation slots. And the byte-level `byteDecode∘byteEncode = id` structured-value recovery (the
+KEM codec round-trip, exercised on real bytes by `MlKemCodec.{ek,ct}_roundtrip`) is mechanical
+offset/`bytesToNatLE` bookkeeping, not part of the ring algebra: `decryptW_eq_spec` relates the ALREADY-decoded
+ring elements (`ctDecode`'s `u,v`, `byteDecodeAt`'s `ŝ`), which is where the ring-faithfulness lives. -/
+
+/-- The K-PKE.Decrypt `Σᵢ ŝᵢ ∘ NTT(uᵢ)` accumulator as the EXPLICIT `List.foldl` the do-block unfolds to:
+the index-fold over `[0, paramK)` reading `ŝᵢ = byteDecodeAt₁₂(dkArr, i·polyBytes 12)` directly from the
+decapsulation-key bytes (the NTT-domain secret, no re-`NTT`). -/
+def decWFold (dkArr : Array UInt8) (u : Array Poly) : Poly :=
+  List.foldl
+    (fun acc i => addPoly acc (pointwiseNtt (byteDecodeAt dCoeff dkArr (i * polyBytes dCoeff)) (ntt u[i]!)))
+    zeroPoly (List.range' 0 paramK 1)
+
+/-- **THE DO-BLOCK UNFOLD.** `MlKemDecaps.kpkeDecrypt`'s literal `Id.run do` decrypt loop reduces to
+`ByteEncode₁(Compress₁(v − NTT⁻¹(decWFold dkArr u)))` — the `List.foldl` accumulator shape
+`decrypt_ring_faithful` consumes. Pure monadic-loop plumbing (`forIn_eq_forIn_range'` / opaque-`f` fold), no
+`native_decide`. -/
+theorem kpkeDecrypt_unfold (dkPke c : List UInt8) :
+    kpkeDecrypt dkPke c
+      = byteEncode 1 (compressPoly 1 (subPoly (ctDecode c).2 (intt (decWFold dkPke.toArray (ctDecode c).1)))) := by
+  unfold kpkeDecrypt decWFold
+  simp only [Id.run, Std.Legacy.Range.forIn_eq_forIn_range', bind_pure_comp, map_pure,
+    List.forIn_pure_yield_eq_foldl, Std.Legacy.Range.size, Nat.sub_zero, Nat.add_sub_cancel, Nat.div_one]
+  rfl
+
+/-- **The reindexing** — on the honest key (`byteDecodeAt₁₂(dk, i·384) = NTT(sᵢ)` for `i < paramK`), the
+index-fold `decWFold` equals `decrypt_ring_faithful`'s pair-fold over `terms = (List.range' 0 paramK 1).map
+(i ↦ (sᵢ, uᵢ))`. `List.foldl_map` collapses the pair-fold to an index-fold, then `foldl_ext_mem` rewrites each
+`ŝᵢ` to `NTT(sᵢ)` under the honest key. -/
+theorem decWFold_eq_terms (dkPke c : List UInt8) (s : Nat → Poly)
+    (hkey : ∀ i, i < paramK →
+      byteDecodeAt dCoeff dkPke.toArray (i * polyBytes dCoeff) = ntt (s i)) :
+    decWFold dkPke.toArray (ctDecode c).1
+      = List.foldl (fun az t => addPoly az (pointwiseNtt (ntt t.1) (ntt t.2))) zeroPoly
+          ((List.range' 0 paramK 1).map (fun i => (s i, (ctDecode c).1[i]!))) := by
+  unfold decWFold
+  rw [List.foldl_map]
+  refine foldl_ext_mem _ _ _ (fun acc i hi => ?_) zeroPoly
+  have hi' : i < paramK := by
+    have := List.mem_range'.mp hi; omega
+  rw [hkey i hi']
+
+/-- **`decryptW_eq_spec` — the byte-level DECRYPT `=spec` (ring→message core).** Under the honest-key
+hypothesis (`byteDecodeAt₁₂(dk, i·384) = NTT(sᵢ)`, the FIPS 203 NTT-domain-stored secret) and size
+well-formedness, the `R_q` element `w = v − NTT⁻¹(Σᵢ ŝᵢ ∘ NTT(uᵢ))` that `kpkeDecrypt` feeds to `Compress₁`
+maps under `toRqKem` to the FIPS 203 K-PKE.Decrypt expression `v − Σᵢ sᵢ·uᵢ` over `R_q = ℤ_q[X]/(X²⁵⁶+1)`.
+Composes `decWFold_eq_terms` (the do-block reindex) with `decrypt_ring_faithful` (the closed ring identity off
+`mlkem_ntt_ring_faithful`). -/
+theorem decryptW_eq_spec (dkPke c : List UInt8) (s : Nat → Poly)
+    (hs_sz : ∀ i, i < paramK → (s i).size = 256)
+    (hu_sz : ∀ i, i < paramK → ((ctDecode c).1[i]!).size = 256)
+    (hkey : ∀ i, i < paramK →
+      byteDecodeAt dCoeff dkPke.toArray (i * polyBytes dCoeff) = ntt (s i)) :
+    toRqKem (subPoly (ctDecode c).2 (intt (decWFold dkPke.toArray (ctDecode c).1)))
+      = toRqKem (ctDecode c).2
+        - ((List.range' 0 paramK 1).map (fun i => toRqKem (s i) * toRqKem (ctDecode c).1[i]!)).sum := by
+  have hterm : ∀ t ∈ (List.range' 0 paramK 1).map (fun i => (s i, (ctDecode c).1[i]!)),
+      t.1.size = 256 ∧ t.2.size = 256 := by
+    intro t ht
+    rw [List.mem_map] at ht
+    obtain ⟨i, hi, rfl⟩ := ht
+    have hi' : i < paramK := by have := List.mem_range'.mp hi; omega
+    exact ⟨hs_sz i hi', hu_sz i hi'⟩
+  rw [decWFold_eq_terms dkPke c s hkey,
+      decrypt_ring_faithful (ctDecode c).2 _ hterm, List.map_map]
+  rfl
+
+/-- **`kpkeDecrypt_eq_spec` — the byte-level lift, packaged.** On an honest decapsulation key, `kpkeDecrypt`'s
+output is exactly `ByteEncode₁(Compress₁(w))` of an `R_q` element `w` that IS the FIPS 203 K-PKE.Decrypt
+expression `v − Σᵢ sᵢ·uᵢ`. The only remaining step to the recovered message `m` is `Compress₁` (the
+`MlKemCorrect.compress1_recover` rounding under the noise bound); the ring→message ALGEBRA is closed here. -/
+theorem kpkeDecrypt_eq_spec (dkPke c : List UInt8) (s : Nat → Poly)
+    (hs_sz : ∀ i, i < paramK → (s i).size = 256)
+    (hu_sz : ∀ i, i < paramK → ((ctDecode c).1[i]!).size = 256)
+    (hkey : ∀ i, i < paramK →
+      byteDecodeAt dCoeff dkPke.toArray (i * polyBytes dCoeff) = ntt (s i)) :
+    kpkeDecrypt dkPke c
+        = byteEncode 1 (compressPoly 1 (subPoly (ctDecode c).2 (intt (decWFold dkPke.toArray (ctDecode c).1))))
+      ∧ toRqKem (subPoly (ctDecode c).2 (intt (decWFold dkPke.toArray (ctDecode c).1)))
+          = toRqKem (ctDecode c).2
+            - ((List.range' 0 paramK 1).map (fun i => toRqKem (s i) * toRqKem (ctDecode c).1[i]!)).sum :=
+  ⟨kpkeDecrypt_unfold dkPke c, decryptW_eq_spec dkPke c s hs_sz hu_sz hkey⟩
+
+#assert_axioms kpkeDecrypt_unfold
+#assert_axioms decWFold_eq_terms
+#assert_axioms decryptW_eq_spec
+#assert_axioms kpkeDecrypt_eq_spec
+
+/-! ### NON-VACUITY — the byte-level lift fires on a GENUINE honest key (`ŝᵢ = NTT(sampleA)`).
+
+The honest-key hypothesis `byteDecodeAt₁₂(dk, i·384) = NTT(sᵢ)` is SATISFIABLE, not vacuous: encode `NTT(sampleA)`
+(coeffs `< q`) with `ByteEncode₁₂`, three times, into a 1152-byte `dk_pke`; then `ByteDecode₁₂` recovers it
+exactly. So `decryptW_eq_spec` fires with `sᵢ = sampleA` and its `R_q` spec is the genuine product term
+`v − 3·(toRqKem sampleA · toRqKem uᵢ)`, not `v − 0`. -/
+
+/-- A witness honest `dk_pke`: `ByteEncode₁₂(NTT(sampleA))` repeated `paramK` times (the NTT-domain-stored
+secret layout). -/
+def witDkPke : List UInt8 :=
+  byteEncode dCoeff (ntt sampleA) ++ byteEncode dCoeff (ntt sampleA) ++ byteEncode dCoeff (ntt sampleA)
+
+/-- **Non-vacuity**: the witness honest key genuinely satisfies `byteDecodeAt₁₂(witDkPke, i·384) = NTT(sampleA)`
+for every `i < paramK` — the codec round-trips `ByteEncode₁₂/ByteDecode₁₂` on the real NTT-domain value, so the
+`decryptW_eq_spec` honest-key hypothesis is not vacuously false. -/
+theorem witDkPke_hkey :
+    ∀ i, i < paramK → byteDecodeAt dCoeff witDkPke.toArray (i * polyBytes dCoeff) = ntt sampleA := by
+  intro i hi
+  have hi3 : i = 0 ∨ i = 1 ∨ i = 2 := by simp only [paramK] at hi; omega
+  rcases hi3 with h | h | h <;> subst h <;> native_decide
+
+/-- **Non-vacuity (end-to-end firing)** — `decryptW_eq_spec` FIRES on the witness honest key `witDkPke`
+(`ŝᵢ = NTT(sampleA)`) and the REAL `ml-kem` crate ciphertext `realCt`: the decrypted `R_q` element IS
+`v − Σ_{i<3} toRqKem sampleA · toRqKem uᵢ`, a genuine non-degenerate `R_q` product (`toRqKem sampleA ≠ 0`), not
+`v − 0`. The honest-key and size hypotheses discharge by concrete codec computation (`witDkPke_hkey`; the
+`ctDecode realCt` polys are size 256). -/
+theorem sampleA_size : sampleA.size = 256 := by native_decide
+
+theorem realCt_u_size :
+    ∀ i, i < paramK → ((ctDecode (Dregg2.Crypto.MlKemCodec.realCt).toList).1[i]!).size = 256 := by
+  intro i hi
+  have hi3 : i = 0 ∨ i = 1 ∨ i = 2 := by simp only [paramK] at hi; omega
+  rcases hi3 with h | h | h <;> subst h <;> native_decide
+
+theorem decryptW_eq_spec_witness :
+    toRqKem (subPoly (ctDecode (Dregg2.Crypto.MlKemCodec.realCt).toList).2
+        (intt (decWFold witDkPke.toArray (ctDecode (Dregg2.Crypto.MlKemCodec.realCt).toList).1)))
+      = toRqKem (ctDecode (Dregg2.Crypto.MlKemCodec.realCt).toList).2
+        - ((List.range' 0 paramK 1).map
+            (fun i => toRqKem sampleA * toRqKem (ctDecode (Dregg2.Crypto.MlKemCodec.realCt).toList).1[i]!)).sum :=
+  decryptW_eq_spec witDkPke (Dregg2.Crypto.MlKemCodec.realCt).toList (fun _ => sampleA)
+    (fun _ _ => sampleA_size) realCt_u_size witDkPke_hkey
 
 /-! ## `decaps_recovers_spec` — the security-meaningful direction (KEM analog of `sign_produces_spec_valid`).
 
