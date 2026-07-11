@@ -472,3 +472,24 @@ real invariant; hypothesis = assumed gap) — an explicit hypothesis is only hon
 as a canonicality. This is the anti-toy discipline applied to my own integration.
 THE POINT PROVEN: a "verified" circuit modeled over ℤ silently believes conservation/authorization the real field
 circuit does NOT enforce. Field-faithfulness makes those gaps unignorable. Two are now found + verified.
+
+### ★★★★ FINAL (this session, 2026-07-11): FOUR verdict-A deployed soundness gaps found — the campaign's payoff
+The mod-p field-faithfulness migration + a systematic wrap-class audit surfaced FOUR hand-verified verdict-A
+soundness gaps in the DEPLOYED dregg circuit, all one CLASS (reconstruct/move a value ≥ p; a mod-p constraint alone
+doesn't pin the ℤ value; no bounding range-check ⟹ adversary picks a p-shifted witness). The ℤ "verified" model
+hid ALL FOUR. Full detail: CARRIER-CENSUS.md + {VAULT-CARRY-WRAP, MASK-RECON-WRAP, WRAP-CLASS-AUDIT}.md.
+1. VAULT settlement carry-wrap — ✅ FIXED + PROVEN (CARRY_BITS 16→15; VaultSatDescriptor RED→GREEN, bounded-lift
+   DERIVED from 15-bit range checks; staged-fixture re-emission owed with the tag-19 VK epoch).
+2. CAP-OPEN mask-recon — capability-auth forgery (a cap granting nothing authorizes a transfer). Fix: range-check
+   mask_lo/hi < 2^16 + per-16-bit-limb reconstruction. PENDING.
+3. CROSS-CELL conservation — ≥2-cell balance sum wraps p. ADDITIVE (not wired live). Fix: multi-limb accumulator.
+4. ★ CORE-TRANSFER over-debit — a cell with balance 1 debits ~10^9 and ends with ~10^9 (amount unranged; the
+   underflow wraps back into [0,2^30)). THE DEEPEST — core value transfer. Fix: range-check amount < 2^30 (the
+   threshold/presentation comparators already do this correctly in-tree).
+All fixes are ember-gated deployed circuit changes (vault done). ~120 files migrated green, every security keystone
+verbatim, 2 pre-existing sorries closed, several geometry bugs fixed. TWICE I caught + corrected my OWN gate
+laundering (cap-open reconExact, transfer hcanonMove) — accepting an assumed availability/exactness as a "deployed
+invariant." GATE LESSON banked: check WHERE an envelope's exactness comes from (wire = real; hypothesis = gap).
+STATUS: Phase 0 migration ~2/3 through the Emit family + AIR chain remaining; Phases 1A/1B/2/3 ahead. But the
+headline is the four gaps — a system that CLAIMED verification was silently believing settlement/authorization/
+conservation/transfer-debit invariants the real field circuit does NOT enforce. Found, with proofs and witnesses.
