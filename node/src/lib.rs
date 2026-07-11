@@ -62,6 +62,7 @@ mod node_integrator_e2e;
 pub mod operator_join;
 pub mod pg_mirror;
 pub mod prove_pool;
+pub mod relay_dispute;
 pub mod relay_service;
 pub mod routing_table;
 pub mod self_cell;

@@ -646,6 +646,7 @@ pub fn relay_router(state: SharedRelayState) -> Router {
         .route("/relay/drain", get(handle_drain))
         .route("/relay/inbox/{id}/status", get(handle_inbox_status))
         .route("/relay/proof/{msg_id}", get(handle_proof))
+        .route("/relay/dispute", post(crate::relay_dispute::handle_dispute))
         .with_state(state)
 }
 
