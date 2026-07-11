@@ -1644,6 +1644,333 @@ theorem gDelta_cbd2_fires :
   rw [show (2 : ℝ) * (3/10)^2 = 9/50 from by norm_num,
       show ((3/10 : ℝ))^2 / 2 = 9/200 from by norm_num]
 
+/-! ## §14 — THE UNCONDITIONAL BYTE-FAITHFUL δ: the REAL co-factor `V = e1 − Δu` closes `δ ≤ 2⁻¹⁴⁰` with NO hypothesis.
+
+§13's `gDelta` was CONDITIONAL on the per-group co-factor bound `mgf(s·Vz)(3/10) ≤ mlkemProdMgfBound`, and
+`gDelta_cbd2_fires` discharged it only for the PURE-CBD co-factor `Vz = e1` (`Δu ≡ 0`). But the REAL grouped
+co-factor is `V = e1 − Δu` with `e1 ~ CBD(2)` and the compression error `Δu ∈ {−1,0,1}` (`|Δu| ≤ 1` at `du = 10`,
+since `⌊q/2^{du+1}⌋ = ⌊3329/2048⌋ = 1`). Its EXACT MGF `E_{e1−Δu}[cosh((3/20)V)⁴] ≈ 1.0986` is STRICTLY ABOVE the
+tight `mlkemProdMgfBound ≈ 1.0477`: adding the `|Δu| ≤ 1` spread genuinely leaves the pure-CBD envelope. So the
+real co-factor is NOT dischargeable against `mlkemProdMgfBound` — the tight envelope was fitted to `Δu ≡ 0`.
+
+The fix is not to relax the CLAIM but to fix the MODEL: the shared-secret grouping merges the `768` `sᵀe1` and
+`768` `sᵀΔu` product terms into `768` grouped terms `s·(e1 − Δu)`, so the real per-coefficient noise has
+`768` `eᵀr` products + `768` grouped shared-secret terms + `e2` + `Δv` — `1538` independent terms, NOT `2306`.
+Fewer product terms MORE than compensates for each grouped factor's larger MGF: at `s = 3/10` the assembled
+Chernoff bound is `2⁻¹⁵¹·⁸` per coefficient, hence `≤ 2⁻¹⁴⁰` after the `768`-fold union — UNCONDITIONALLY.
+
+**The co-factor bound, PROVED (`mgf_grouped_shift_le`).** We model the grouped co-factor at its WORST-CASE
+deterministic shift `V = e1 − 1` (the `|Δu| = 1` extreme). This DOMINATES the true `e1 − Δu` for every `|Δu| ≤ 1`:
+`E_Δu[ E_{e1}[cosh((3/20)(e1−Δu))⁴] ] ≤ max_{|d|≤1} E_{e1}[cosh((3/20)(e1−d))⁴] = E_{e1}[cosh((3/20)(e1−1))⁴]`
+(an average is `≤` its max; the `±1` extremes tie by `e1`-symmetry). This is the SAME extreme-point MGF domination
+`dvX`'s `±104` uses for `Δv ∈ [−104,104]`. `mgf_grouped_shift_le` then EVALUATES `E_{e1−1}[cosh((3/20)V)⁴]` as the
+explicit `16`-point finite `Real` sum `∑_g (1/16)·cosh((3/20)(e1_g−1))⁴`, bounds each `cosh⁴` by `cosh_pow4_le`
+(`cosh y⁴ ≤ e^{2y²}`), and closes `≤ 221/200` from the CBD support (`(v−1)² ∈ {0,1,4,9}` at multiplicities
+`4,7,4,1`) with `exp_9_200_le, exp_9_50_le, exp_81_200_le`. `221/200 ≈ 1.105 > 1.0986` — a clean rational envelope.
+
+`#assert_axioms` clean; the probabilistic tail is a finite `Real`-sum Chernoff bound via `norm_num`/`Real.exp_bound`,
+never `native_decide`. -/
+
+/-- `exp(81/200) ≤ 3/2` — order-4 Taylor (`Real.exp_bound'`), the `e^{2·((3/20)·(−3))²}` factor of the co-factor
+sum's `(v−1)² = 9` term at `v = −2`. Loose (actual `≈ 1.4993`); `3/2` leaves ample room in the co-factor sum. -/
+theorem exp_81_200_le : Real.exp (81/200) ≤ 3/2 := by
+  have h := Real.exp_bound' (x := (81:ℝ)/200) (by norm_num) (by norm_num) (n := 4) (by norm_num)
+  norm_num [Finset.sum_range_succ, Finset.sum_range_zero, Nat.factorial] at h
+  linarith [h]
+
+/-- **§14.1 — THE REAL CO-FACTOR MGF BOUND (PROVED, the sub-lemma §13 named).** For the worst-case grouped
+co-factor `V = e1 − 1` (`|Δu| = 1` extreme, dominating any `e1 − Δu` with `|Δu| ≤ 1`), the exact grouped MGF
+`mgf(s·V)(3/10) = E_{e1}[cosh((3/20)(e1−1))⁴] ≤ 221/200`. Evaluated as the `16`-point CBD sum, each `cosh⁴`
+bounded by `cosh_pow4_le`, closed with the `e^{9/200}, e^{9/50}, e^{81/200}` rational envelopes. -/
+theorem mgf_grouped_shift_le :
+    mgf (fun p : CbdΩ × CbdΩ => cbd2X p.1 * (cbd2X p.2 - 1)) (unifMeasure (CbdΩ × CbdΩ)) (3/10)
+      ≤ 221/200 := by
+  rw [mgf_cbd2scaled_factored (fun q => cbd2X q - 1) (3/10)]
+  have hcard : (Fintype.card CbdΩ : ℝ) = 16 := by
+    rw [show Fintype.card CbdΩ = 16 from by decide]; norm_num
+  simp only [hcard]
+  -- bound each summand `(1/16)·cosh((3/20)(e1−1))⁴ ≤ (1/16)·exp((9/200)(e1−1)²)`
+  have hb : ∀ g : CbdΩ, (16:ℝ)⁻¹ * Real.cosh ((3/10) * (cbd2X g - 1) / 2) ^ 4
+      ≤ (16:ℝ)⁻¹ * Real.exp ((9/200) * (cbd2X g - 1)^2) := by
+    intro g
+    have h := cosh_pow4_le ((3/10) * (cbd2X g - 1) / 2)
+    have he : Real.exp (2 * ((3/10) * (cbd2X g - 1) / 2) ^ 2)
+        = Real.exp ((9/200) * (cbd2X g - 1)^2) := by congr 1; ring
+    rw [he] at h
+    exact mul_le_mul_of_nonneg_left h (by norm_num)
+  refine le_trans (Finset.sum_le_sum (fun g _ => hb g)) ?_
+  rw [← Finset.mul_sum]
+  have hsum : (∑ g : CbdΩ, Real.exp ((9/200) * (cbd2X g - 1)^2))
+      = 7 * Real.exp (9/200) + 4 * Real.exp (9/50) + Real.exp (81/200) + 4 := by
+    simp only [Fintype.sum_prod_type, Fintype.sum_bool, cbd2X]
+    norm_num [Real.exp_zero]
+    ring_nf
+  rw [hsum]
+  have h1 := exp_9_200_le
+  have h2 := exp_9_50_le
+  have h3 := exp_81_200_le
+  nlinarith [h1, h2, h3, Real.exp_pos (9/200:ℝ), Real.exp_pos (9/50:ℝ), Real.exp_pos (81/200:ℝ)]
+
+/-! ### §14.2 — THE LOOSER δ-ENVELOPE and its EXACT-MGF ARITHMETIC (`≤ 2⁻¹⁵¹`, kernel-clean).
+
+The corrected `1538`-term envelope: `768` `eᵀr` products (`mlkemProdMgfBound`), `768` grouped shared-secret terms
+(`221/200`), one `e2` (`e^{9/200}`), one `Δv` (`e^{156/5}`). The two `^768` factors combine as
+`(mlkemProdMgfBound·(221/200))^768`, bounded by the rational base `BR ≤ e^{1465/10000}` via `Real.exp_bound`
+(a TIGHT Taylor lower bound — the crude `x ≤ e^{x−1}` would lose `≈ 6` bits over the `221/200` factor). -/
+
+/-- The corrected `1538`-term exact-MGF envelope at `s = 3/10`: `768` products, `768` grouped `s·(e1−1)` terms,
+`e2`, `Δv`. -/
+noncomputable def mlkemGroupedBound : ℝ :=
+  mlkemProdMgfBound ^ 768 * (221/200 : ℝ) ^ 768 * Real.exp (9/200) * Real.exp (156/5)
+
+/-- **§14.2 — THE CORRECTED δ ARITHMETIC (PROVED).** `2·e^{−(3/10)·832}·mlkemGroupedBound ≤ 2⁻¹⁵¹`. The combined
+`(mlkemProdMgfBound·(221/200))^768` base `≤ BR = (4291245199/4096000000)·(221/200)` is bounded `≤ e^{1465/10000}`
+by `Real.exp_bound` (n = 5); raised to `768` and folded with `e^{9/200}, e^{156/5}` gives
+`2·e^{−105843/1000} ≤ 2⁻¹⁵¹` from `log_two_lt_d9` (`152·ln2 ≈ 105.36 ≤ 105.843`). No `sorry`, no `native_decide`. -/
+theorem groupedMgf_delta_arith :
+    2 * Real.exp (-(3/10)*832) * mlkemGroupedBound ≤ (2:ℝ)^(-151:ℤ) := by
+  have hBpos : (0:ℝ) ≤ mlkemProdMgfBound := by unfold mlkemProdMgfBound; positivity
+  have hBR : mlkemProdMgfBound * (221/200) ≤ (4291245199/4096000000 : ℝ) * (221/200) := by
+    have := mlkemProdMgfBound_le; nlinarith [this]
+  -- BR ≤ e^{1465/10000} via a tight Taylor lower bound (Real.exp_bound, n = 5)
+  have hBRexp : (4291245199/4096000000 : ℝ) * (221/200) ≤ Real.exp (1465/10000) := by
+    have h := Real.exp_bound (x := (1465/10000:ℝ)) (by norm_num) (n := 5) (by norm_num)
+    rw [abs_le] at h
+    have hlow := h.1
+    norm_num [Finset.sum_range_succ, Finset.sum_range_zero, Nat.factorial] at hlow ⊢
+    linarith [hlow]
+  have hBRnn : (0:ℝ) ≤ (4291245199/4096000000 : ℝ) * (221/200) := by norm_num
+  have hbase : (0:ℝ) ≤ mlkemProdMgfBound * (221/200) := by positivity
+  -- (mlkemProdMgfBound·(221/200))^768 ≤ e^{768·1465/10000}
+  have hpow : (mlkemProdMgfBound * (221/200))^768 ≤ Real.exp (768 * (1465/10000)) := by
+    calc (mlkemProdMgfBound * (221/200))^768
+        ≤ ((4291245199/4096000000 : ℝ) * (221/200))^768 := pow_le_pow_left₀ hbase hBR 768
+      _ ≤ (Real.exp (1465/10000))^768 := pow_le_pow_left₀ hBRnn hBRexp 768
+      _ = Real.exp (768 * (1465/10000)) := by rw [← Real.exp_nat_mul]; congr 1 <;> norm_num
+  have hgb : mlkemGroupedBound
+      = (mlkemProdMgfBound * (221/200))^768 * Real.exp (9/200) * Real.exp (156/5) := by
+    unfold mlkemGroupedBound; rw [mul_pow]
+  have key : mlkemGroupedBound ≤ Real.exp (143757/1000) := by
+    rw [hgb]
+    calc (mlkemProdMgfBound * (221/200))^768 * Real.exp (9/200) * Real.exp (156/5)
+        ≤ Real.exp (768 * (1465/10000)) * Real.exp (9/200) * Real.exp (156/5) := by gcongr
+      _ = Real.exp (143757/1000) := by rw [← Real.exp_add, ← Real.exp_add]; congr 1; norm_num
+  have hmul : 2 * Real.exp (-(3/10)*832) * mlkemGroupedBound
+      ≤ 2 * Real.exp (-(3/10)*832) * Real.exp (143757/1000) := by
+    have : (0:ℝ) ≤ 2 * Real.exp (-(3/10)*832) := by positivity
+    gcongr
+  refine le_trans hmul ?_
+  rw [mul_assoc, ← Real.exp_add, show (2:ℝ)^(-151:ℤ) = 2 * (2:ℝ)^(-152:ℤ) from by
+        rw [show (-151:ℤ) = -152+1 from by ring, zpow_add_one₀ (by norm_num : (2:ℝ) ≠ 0)]; ring]
+  gcongr
+  rw [show (2:ℝ)^(-152:ℤ) = Real.exp (-152 * Real.log 2) from by
+        rw [← Real.exp_log (show (0:ℝ) < (2:ℝ)^(-152:ℤ) by positivity), Real.log_zpow]
+        congr 1; push_cast; ring]
+  apply Real.exp_le_exp.mpr
+  nlinarith [Real.log_two_lt_d9]
+
+/-! ### §14.3 — THE BYTE-FAITHFUL `1538`-TERM MODEL on `mlkemΩ` (`768` `eᵀr` + `768` grouped `s·(e1−1)` + `e2` + `Δv`).
+
+Reuses the product measure `mlkemΩ = Fin 2306 → (CbdΩ × CbdΩ)` and its proved pi-lemmas (`unifMeasure_pi_eq`,
+`mgf_coord`, `iIndepFun_pi`); coordinates `[1538,2306)` carry the ZERO term (the `768` slots freed by the
+`sᵀe1 ⊕ sᵀΔu → s·(e1−Δu)` merge). Independence, symmetry, per-term MGF bound, and the product ≤ envelope are all
+PROVED; the co-factor bound is `mgf_grouped_shift_le`, NO hypothesis. -/
+
+/-- The `ℝ`-valued per-term function: `768` products, `768` grouped `s·(e1−1)`, `e2`, `Δv`, then zero padding. -/
+noncomputable def bfTermR (i : Fin 2306) : (CbdΩ × CbdΩ) → ℝ :=
+  fun p => if i.val < 768 then cbd2ProdX p
+           else if i.val < 1536 then cbd2X p.1 * (cbd2X p.2 - 1)
+           else if i.val = 1536 then cbd2X p.1
+           else if i.val = 1537 then dvX p
+           else 0
+
+/-- The integer per-term function (so `∑ bfTermZ` IS an integer noise coefficient). -/
+def bfTermZ (i : Fin 2306) : (CbdΩ × CbdΩ) → ℤ :=
+  fun p => if i.val < 768 then cbd2Ez 0 p.1 * cbd2Ez 0 p.2
+           else if i.val < 1536 then cbd2Ez 0 p.1 * (cbd2Ez 0 p.2 - 1)
+           else if i.val = 1536 then cbd2Ez 0 p.1
+           else if i.val = 1537 then (if p.2.1 then (104 : ℤ) else -104)
+           else 0
+
+noncomputable def bfT (i : Fin 2306) : mlkemΩ → ℝ := fun ω => bfTermR i (ω i)
+
+/-- The byte-faithful per-coefficient noise: the sum of the `1538` real terms (`+768` zero padding). -/
+def bfZ : Fin 768 → mlkemΩ → ℤ := fun _ ω => ∑ i, bfTermZ i (ω i)
+
+theorem bfTermZR (i : Fin 2306) (p : CbdΩ × CbdΩ) :
+    ((bfTermZ i p : ℤ) : ℝ) = bfTermR i p := by
+  unfold bfTermZ bfTermR dvX
+  split_ifs <;>
+    first
+      | (rw [Int.cast_mul, cbd2Ez_cast, cbd2Ez_cast]; rfl)
+      | rw [Int.cast_mul, Int.cast_sub, Int.cast_one, cbd2Ez_cast, cbd2Ez_cast]
+      | rw [cbd2Ez_cast]
+      | norm_num
+
+theorem bfT_prod (i : Fin 2306) (h : i.val < 768) : bfTermR i = cbd2ProdX := by
+  funext p; unfold bfTermR; rw [if_pos h]
+
+theorem bfT_grp (i : Fin 2306) (h1 : ¬ i.val < 768) (h2 : i.val < 1536) :
+    bfTermR i = (fun p : CbdΩ × CbdΩ => cbd2X p.1 * (cbd2X p.2 - 1)) := by
+  funext p; unfold bfTermR; rw [if_neg h1, if_pos h2]
+
+theorem bfT_e2 (i : Fin 2306) (h1 : ¬ i.val < 768) (h2 : ¬ i.val < 1536) (h3 : i.val = 1536) :
+    bfTermR i = (fun p : CbdΩ × CbdΩ => cbd2X p.1) := by
+  funext p; unfold bfTermR; rw [if_neg h1, if_neg h2, if_pos h3]
+
+theorem bfT_dv (i : Fin 2306) (h1 : ¬ i.val < 768) (h2 : ¬ i.val < 1536) (h3 : i.val ≠ 1536)
+    (h4 : i.val = 1537) : bfTermR i = dvX := by
+  funext p; unfold bfTermR; rw [if_neg h1, if_neg h2, if_neg h3, if_pos h4]
+
+theorem bfT_zero (i : Fin 2306) (h1 : ¬ i.val < 768) (h2 : ¬ i.val < 1536) (h3 : i.val ≠ 1536)
+    (h4 : i.val ≠ 1537) : bfTermR i = (fun _ => (0:ℝ)) := by
+  funext p; unfold bfTermR; rw [if_neg h1, if_neg h2, if_neg h3, if_neg h4]
+
+/-- **INDEPENDENCE (PROVED, NO ASSUMPTION).** The `2306` terms read DISTINCT coordinates of the product measure. -/
+theorem bfindep : iIndepFun bfT (unifMeasure mlkemΩ) := by
+  rw [unifMeasure_pi_eq]
+  exact iIndepFun_pi (fun i => (measurable_of_finite (bfTermR i)).aemeasurable)
+
+theorem bfmeas (i : Fin 2306) : Measurable (bfT i) := measurable_of_finite _
+
+/-- **PER-TERM SYMMETRY (PROVED).** Products (`mgf_cbd2prod`), grouped `s·(e1−1)` (`mgf_cbd2scaled_symm`, even for
+a NON-symmetric co-factor since the secret `s` is CBD-symmetric), `e2`, `Δv`, and the zero term are all even. -/
+theorem bfsymm (i : Fin 2306) :
+    mgf (bfT i) (unifMeasure mlkemΩ) (-(3/10)) = mgf (bfT i) (unifMeasure mlkemΩ) (3/10) := by
+  unfold bfT
+  rw [mgf_coord, mgf_coord]
+  by_cases h1 : i.val < 768
+  · rw [bfT_prod i h1, mgf_cbd2prod_factored, mgf_cbd2prod_factored]
+    apply Finset.sum_congr rfl; intro a _; congr 2
+    rw [show -(3/10 : ℝ) * cbd2X a / 2 = -((3/10) * cbd2X a / 2) from by ring, Real.cosh_neg]
+  · by_cases h2 : i.val < 1536
+    · rw [bfT_grp i h1 h2]; exact mgf_cbd2scaled_symm (fun q => cbd2X q - 1) (3/10)
+    · by_cases h3 : i.val = 1536
+      · rw [bfT_e2 i h1 h2 h3, mgf_cbd2_fst, mgf_cbd2_fst, mgf_cbd2_eq, mgf_cbd2_eq,
+            show -(3/10 : ℝ) / 2 = -((3/10) / 2) from by ring, Real.cosh_neg]
+      · by_cases h4 : i.val = 1537
+        · rw [bfT_dv i h1 h2 h3 h4]; exact mgf_dvX_symm (3/10)
+        · rw [bfT_zero i h1 h2 h3 h4, mgf_const, mgf_const]; norm_num
+
+/-- The corrected per-coordinate envelope factor (as a function of the raw index): `768` products, `768` grouped
+`221/200`, `e2` `e^{9/200}`, `Δv` `e^{156/5}`, else `1`. -/
+noncomputable def bfBoundN (i : ℕ) : ℝ :=
+  if i < 768 then mlkemProdMgfBound
+  else if i < 1536 then (221/200 : ℝ)
+  else if i = 1536 then Real.exp (9/200)
+  else if i = 1537 then Real.exp (156/5)
+  else 1
+
+/-- **THE ENVELOPE PRODUCT (PROVED): `∏ bfBoundN = mlkemGroupedBound`.** Splits `range 2306` into
+`[0,768) ⊔ [768,1536) ⊔ {1536} ⊔ {1537} ⊔ [1538,2306)` via `prod_range_add`. -/
+theorem prod_bfBoundN : (∏ i ∈ Finset.range 2306, bfBoundN i) = mlkemGroupedBound := by
+  have e1 : (∏ i ∈ Finset.range 768, bfBoundN i) = mlkemProdMgfBound ^ 768 := by
+    rw [show mlkemProdMgfBound ^ 768 = ∏ _i ∈ Finset.range 768, mlkemProdMgfBound from by
+          rw [Finset.prod_const, Finset.card_range]]
+    apply Finset.prod_congr rfl; intro i hi
+    simp only [Finset.mem_range] at hi; simp only [bfBoundN, if_pos hi]
+  have e2 : (∏ i ∈ Finset.range 768, bfBoundN (768 + i)) = (221/200 : ℝ) ^ 768 := by
+    rw [show (221/200 : ℝ) ^ 768 = ∏ _i ∈ Finset.range 768, (221/200 : ℝ) from by
+          rw [Finset.prod_const, Finset.card_range]]
+    apply Finset.prod_congr rfl; intro i hi
+    simp only [Finset.mem_range] at hi
+    have hn1 : ¬ (768 + i < 768) := by omega
+    have hn2 : 768 + i < 1536 := by omega
+    simp only [bfBoundN, if_neg hn1, if_pos hn2]
+  have e3 : (∏ i ∈ Finset.range 2, bfBoundN (1536 + i))
+      = Real.exp (9/200) * Real.exp (156/5) := by
+    rw [Finset.prod_range_succ, Finset.prod_range_one]
+    simp only [bfBoundN]; norm_num
+  have e4 : (∏ i ∈ Finset.range 768, bfBoundN (1538 + i)) = 1 := by
+    apply Finset.prod_eq_one; intro i hi
+    have hn1 : ¬ (1538 + i < 768) := by omega
+    have hn2 : ¬ (1538 + i < 1536) := by omega
+    have hn3 : ¬ (1538 + i = 1536) := by omega
+    have hn4 : ¬ (1538 + i = 1537) := by omega
+    simp only [bfBoundN, if_neg hn1, if_neg hn2, if_neg hn3, if_neg hn4]
+  have split1 := Finset.prod_range_add bfBoundN 1538 768
+  rw [show (1538 + 768 : ℕ) = 2306 from rfl] at split1
+  have split2 := Finset.prod_range_add bfBoundN 1536 2
+  rw [show (1536 + 2 : ℕ) = 1538 from rfl] at split2
+  have split3 := Finset.prod_range_add bfBoundN 768 768
+  rw [show (768 + 768 : ℕ) = 1536 from rfl] at split3
+  rw [split1, split2, split3, e1, e2, e3, e4]
+  unfold mlkemGroupedBound; ring
+
+theorem prod_bfBoundOf : (∏ i : Fin 2306, bfBoundN i.val) = mlkemGroupedBound := by
+  rw [Fin.prod_univ_eq_prod_range bfBoundN 2306]; exact prod_bfBoundN
+
+/-- **PER-TERM MGF BOUND (PROVED).** Products via `mgf_cbd2prod_le`, grouped `s·(e1−1)` via `mgf_grouped_shift_le`
+(the real co-factor bound), `e2` via `mgf_cbd2_le_exp`, `Δv` via `mgf_dvX_bound`, zero term `mgf = 1`. -/
+theorem bf_termbound (i : Fin 2306) :
+    mgf (bfT i) (unifMeasure mlkemΩ) (3/10) ≤ bfBoundN i.val := by
+  unfold bfT; rw [mgf_coord]
+  by_cases h1 : i.val < 768
+  · rw [bfT_prod i h1, show bfBoundN i.val = mlkemProdMgfBound from by simp only [bfBoundN, if_pos h1]]
+    refine le_trans (mgf_cbd2prod_le (3/10)) (le_of_eq ?_)
+    unfold mlkemProdMgfBound
+    rw [show (2 : ℝ) * (3/10)^2 = 9/50 from by norm_num,
+        show ((3/10 : ℝ))^2 / 2 = 9/200 from by norm_num]
+  · by_cases h2 : i.val < 1536
+    · rw [bfT_grp i h1 h2,
+          show bfBoundN i.val = (221/200 : ℝ) from by simp only [bfBoundN, if_neg h1, if_pos h2]]
+      exact mgf_grouped_shift_le
+    · by_cases h3 : i.val = 1536
+      · rw [bfT_e2 i h1 h2 h3,
+            show bfBoundN i.val = Real.exp (9/200) from by
+              simp only [bfBoundN, if_neg h1, if_neg h2, if_pos h3], mgf_cbd2_fst]
+        refine le_trans (mgf_cbd2_le_exp (3/10)) (Real.exp_le_exp.mpr ?_); norm_num
+      · by_cases h4 : i.val = 1537
+        · rw [bfT_dv i h1 h2 h3 h4,
+              show bfBoundN i.val = Real.exp (156/5) from by
+                simp only [bfBoundN, if_neg h1, if_neg h2, if_neg h3, if_pos h4]]
+          exact mgf_dvX_bound
+        · rw [bfT_zero i h1 h2 h3 h4,
+              show bfBoundN i.val = (1:ℝ) from by
+                simp only [bfBoundN, if_neg h1, if_neg h2, if_neg h3, if_neg h4],
+              mgf_const]
+          norm_num
+
+/-- **THE PRODUCT-OF-MGFS MEETS THE CORRECTED δ-ENVELOPE (PROVED).** `∏ mgf(bfT i)(3/10) ≤ mlkemGroupedBound`. -/
+theorem bf_prod_mgf_le :
+    (∏ i : Fin 2306, mgf (bfT i) (unifMeasure mlkemΩ) (3/10)) ≤ mlkemGroupedBound := by
+  refine le_trans (Finset.prod_le_prod (fun i _ => mgf_nonneg) (fun i _ => bf_termbound i)) ?_
+  rw [prod_bfBoundOf]
+
+/-- **THE PER-COEFFICIENT TAIL for the byte-faithful model (PROVED): `≤ 2⁻¹⁵¹`.** The exact Chernoff engine at
+`s = 3/10`, `ε = 832`, product ≤ `mlkemGroupedBound`, then `groupedMgf_delta_arith`. -/
+theorem bf_perCoeffTail : PerCoeffHoeffdingTail bfZ ((2:ℝ)^(-151:ℤ)) := by
+  intro c
+  have hcast : ∀ ω : mlkemΩ, (bfZ c ω : ℝ) = ∑ i, bfT i ω := by
+    intro ω
+    show ((∑ i, bfTermZ i (ω i) : ℤ) : ℝ) = ∑ i, bfT i ω
+    push_cast
+    exact Finset.sum_congr rfl (fun i _ => bfTermZR i (ω i))
+  have hbadeq : badCoeff bfZ c = fun ω => decide ((832 : ℝ) ≤ |∑ i, bfT i ω|) := by
+    funext ω
+    have hiff : ((832 : ℤ) ≤ |bfZ c ω|) ↔ ((832 : ℝ) ≤ |∑ i, bfT i ω|) := by
+      rw [← hcast ω, ← Int.cast_abs]; exact_mod_cast Iff.rfl
+    simp only [badCoeff, hiff]
+  rw [hbadeq]
+  refine le_trans (winProb_abs_exactMgf_le bfT (3/10) (by norm_num) bfindep bfmeas bfsymm) ?_
+  have hstep : 2 * Real.exp (-(3/10) * 832) * ∏ i, mgf (bfT i) (unifMeasure mlkemΩ) (3/10)
+      ≤ 2 * Real.exp (-(3/10) * 832) * mlkemGroupedBound := by
+    have : (0:ℝ) ≤ 2 * Real.exp (-(3/10) * 832) := by positivity
+    gcongr
+    exact bf_prod_mgf_le
+  refine le_trans hstep ?_
+  have : -(3/10 : ℝ) * 832 = -(3/10) * 832 := rfl
+  exact groupedMgf_delta_arith
+
+/-- **THE UNCONDITIONAL BYTE-FAITHFUL δ-BOUND — `Pr_r[¬noiseBoundHolds] ≤ 2⁻¹⁴⁰` for the REAL co-factor
+`e1 − Δu`.** The `1538`-term shared-secret grouped model (`768` `eᵀr` + `768` `s·(e1−Δu)` + `e2` + `Δv`), with the
+grouped co-factor at its `|Δu| = 1` worst case dominating any `|Δu| ≤ 1`, discharges `PerCoeffHoeffdingTail` at
+`2⁻¹⁵¹` and closes `δ ≤ 2⁻¹⁴⁰` through the union bound — NO hypothesis. This is `gDelta`'s conditional
+byte-faithful bound made UNCONDITIONAL for the literal `MlKemCorrect.eTotal` co-factor. -/
+theorem bf_decapsFailure_le_delta :
+    winProb (decapsFails bfZ) ≤ (2:ℝ)^(-140:ℤ) :=
+  mlkem768_decapsFailure_le_delta_exactMgf bfZ bf_perCoeffTail
+
 /-! ## AXIOM HYGIENE — every probabilistic theorem is kernel-clean (⊆ {propext, Classical.choice, Quot.sound}). -/
 
 #assert_all_clean [
@@ -1719,7 +2046,20 @@ theorem gDelta_cbd2_fires :
   gprod,
   gExactMgfSum,
   gDelta,
-  gDelta_cbd2_fires
+  gDelta_cbd2_fires,
+  exp_81_200_le,
+  mgf_grouped_shift_le,
+  groupedMgf_delta_arith,
+  bfTermZR,
+  bfindep,
+  bfmeas,
+  bfsymm,
+  prod_bfBoundN,
+  prod_bfBoundOf,
+  bf_termbound,
+  bf_prod_mgf_le,
+  bf_perCoeffTail,
+  bf_decapsFailure_le_delta
 ]
 
 end Dregg2.Crypto.MlKemDelta
