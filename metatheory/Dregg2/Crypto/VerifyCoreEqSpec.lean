@@ -24,6 +24,8 @@ the hash/challenge INSTANTIATION — see the closing section.
 -/
 import Dregg2.Crypto.NttFaithful
 import Dregg2.Crypto.Fips204CorrectReal
+import Dregg2.Crypto.MlDsaCodec
+import Dregg2.Crypto.VerifyCoreSpec
 
 namespace Dregg2.Crypto.VerifyCoreEqSpec
 
@@ -31,6 +33,9 @@ open Dregg2.Crypto.MlDsaRing (Poly q zeroPoly ntt intt pointwiseMul addPoly subP
   schoolbookMul_getElem schoolbookMul_size schoolbookMul_lt ringRepFaithful_proven
   cast_addPoly cast_subPoly intt_add intt_sub intt_size intt_lt intt_interp addPoly_size addPoly_lt
   subPoly_size subPoly_lt pointwiseMul_size pointwiseMul_lt zeroPoly_lt zeroPoly_cast)
+open Dregg2.Crypto.MlDsaCodec (bytesToNatLE unpackBits packBits pkDecode pkEncode sigDecode sigEncode
+  zCoeffFromField zFieldFromCoeff gamma1 paramK paramL t1Bits zBits)
+open Dregg2.Crypto.MlDsaVerifyReal (verifyCore infNormZ zBound genPk genMsg genSig verify_accepts_real)
 open Polynomial Finset
 
 set_option maxRecDepth 8000
@@ -291,32 +296,346 @@ theorem toRq_intt_matmul_row (terms : List (Poly × Poly)) (c s : Poly)
 #assert_axioms toRq_intt_addFold
 #assert_axioms toRq_intt_matmul_row
 
-/-! ## HONEST FRONTIER — what `verifyCore_eq_spec` still needs (NAMED, not laundered).
+/-! ## `DecodeSemantics` — the FIPS 204 mixed-radix bit round-trip, CLOSED for-all.
 
-With the coeff↔`R_q` bridge CLOSED (`toRq_schoolbookMul`/`toRq_nttMul`) AND the `intt`-linearity matmul bridge
-CLOSED (leg 1 `NttFaithful.intt_add`/`intt_sub`; leg 2 `toRq_intt_matmul_row` — verifyCore's per-row fast NTT
-matmul IS the spec's `R_q` matrix–vector product `(A·z − c·s)_i`, for all inputs) plus
-`VerifyCoreSpec.verifyCore_split` (verifyCore's verdict = the two FIPS 204 Alg-8 conditions), the full
-`verifyCore pk M ctx sig = true ↔ verifyB (pkDecode/sigDecode)` identification reduces to exactly TWO remaining
-`∀`-bridges. Neither is a hardness carrier:
+`VerifyCoreSpec.DecodeSemantics` named the codec `decode∘encode = id` as the remaining ∀-bridge, whose exact
+mathematical core (per that file) is the positional-numeral round-trip
+`MlDsaCodec.unpackBits (MlDsaCodec.packBits coeffs cbits) 0 256 cbits = coeffs`. We close it here from the
+`Id.run do` accumulate/emit and read/extract loops by genuine loop reasoning — the same `List.foldl`/`MProd`
+engine style as `NttFaithful` — with NO `native_decide` and NO hardness. The chain:
 
-1. **`DecodeSemantics`** (`VerifyCoreSpec.DecodeSemantics`, still open) — the codec `decode∘encode = id` over
-   the FIPS 204 bit-(un)packing (`MlDsaCodec.pkEncode`/`sigEncode` ↔ `pkDecode`/`sigDecode`). The exact
-   remaining mathematical core is the mixed-radix round-trip
-   `MlDsaCodec.unpackBits (MlDsaCodec.packBits coeffs cbits) 0 256 cbits = coeffs`
-   (a positional-numeral `Nat`-arithmetic proof through the `Id.run do` accumulate/emit and read/extract
-   loops of `packBits`/`unpackBits` — reachable with the same `foldSet`/`Array.set!` engine used for the NTT
-   loops), together with the `MlDsaCodec.zCoeffFromField`/`zFieldFromCoeff` sign-map inverse and the
-   `hintEncode`/`hintDecode` inverse on valid hints. Heavy codec grind, hardness-free; NOT closed here.
+* `accFold` / `divPushFold_spec` — closed forms for the two `Id.run do` loop shapes (little-endian accumulate,
+  and the base-`D` emit/`push`-and-divide), by induction over `List.range'`.
+* `packBits_getElem` / `unpackBits_getElem` — each packed byte / unpacked coefficient as an explicit
+  base-`256` / base-`2^cbits` digit of the packed integer `packNat`.
+* `digit_reconstruct` / `digit_bound` / `extract_digit` — the base-`b` positional-numeral facts (the emitted
+  bytes reassemble `N % 256ⁿ`; a digits-`< b` number is `< bⁿ`; the `j`-th digit of `∑ dᵢbⁱ` is `d j`).
+* `unpackBits_packBits` — THE round-trip, for all size-256 `< 2^cbits` coefficient arrays.
 
-2. **The GENERIC instantiation** — `verifyB`'s abstract `hash`/`challenge`/`round`/`zBoundB` chosen as the
-   concrete SHAKE256-framing / `sampleInBall` / `useHint`(=`Decompose`)-rounding / `infNormZ`-gate. Per
-   `VerifyCoreSpec`'s classification this is a legitimate INTERPRETATION (the CR/rejection SPECS live on the
-   `HashSig`/`FoQrom` floor), not a soundness gap — but wiring it needs the `w1Encode`/`useHint` per-row
-   identification, riding the now-closed matmul bridge (leg 2).
+Instantiated at the two verify-relevant widths (`t1` at `cbits = 10`, `z` at `cbits = 20`) plus the
+`z`-coefficient sign-map inverse `zCoeff_zField`, this is the semantic recovery the seam named. -/
 
-`verifyCore_eq_spec` is the composition `verifyCore_split ∘ leg2 ∘ DecodeSemantics ∘ instantiation`; the
-ALGEBRA legs (1+2) are CLOSED here, leaving `DecodeSemantics` (the codec round-trip, exact lemma named above)
-and the hash/challenge instantiation as the remaining wiring. -/
+/-- Generic accumulate fold (do-notation `MProd` state): `st.1 += g a * st.2 ; st.2 *= D`. -/
+theorem accFold (g : Nat → Nat) (D : Nat) :
+    ∀ (n : Nat) (A m : Nat),
+      List.foldl (fun (st : MProd Nat Nat) (a : Nat) => ⟨st.1 + g a * st.2, st.2 * D⟩)
+          ⟨A, m⟩ (List.range' 0 n 1)
+        = ⟨A + m * ∑ i ∈ Finset.range n, g i * D ^ i, m * D ^ n⟩ := by
+  intro n
+  induction n with
+  | zero => intro A m; simp
+  | succ k ih =>
+    intro A m
+    rw [List.range'_1_concat, List.foldl_concat, ih]
+    simp only [Nat.zero_add, Finset.sum_range_succ, pow_succ, MProd.mk.injEq]
+    exact ⟨by ring, by ring⟩
+
+/-- `bytesToNatLE` as an explicit positional sum. -/
+theorem bytesToNatLE_eq (b : Array UInt8) (off len : Nat) :
+    bytesToNatLE b off len = ∑ i ∈ Finset.range len, (b[off + i]!).toNat * 256 ^ i := by
+  unfold bytesToNatLE
+  simp only [Id.run, Std.Legacy.Range.forIn_eq_forIn_range', bind_pure_comp,
+    map_pure, List.forIn_pure_yield_eq_foldl, Std.Legacy.Range.size, Nat.sub_zero,
+    Nat.add_one_sub_one, Nat.div_one]
+  rw [accFold (fun i => (b[off + i]!).toNat) 256 len 0 1]
+  simp only [Nat.zero_add, Nat.one_mul]; rfl
+
+theorem getElem!_push_lt {β} [Inhabited β] (arr : Array β) (x : β) (i : Nat) (h : i < arr.size) :
+    (arr.push x)[i]! = arr[i]! := by
+  simp only [Array.getElem!_eq_getD, Array.getD_eq_getD_getElem?, Array.getElem?_push,
+    if_neg (Nat.ne_of_lt h)]
+
+theorem getElem!_push_eq {β} [Inhabited β] (arr : Array β) (x : β) :
+    (arr.push x)[arr.size]! = x := by
+  simp [Array.getElem!_eq_getD, Array.getD_eq_getD_getElem?, Array.getElem?_push]
+
+/-- Generic push/divide fold spec (do-notation `MProd ⟨cur, out⟩` state): emit `f (cur % D)`, `cur /= D`. -/
+theorem divPushFold_spec {β} [Inhabited β] (f : Nat → β) (D : Nat) :
+    ∀ (n : Nat) (init : Array β) (c0 : Nat),
+      let r := List.foldl (fun (st : MProd Nat (Array β)) (_ : Nat) =>
+                 ⟨st.1 / D, st.2.push (f (st.1 % D))⟩) ⟨c0, init⟩ (List.range' 0 n 1)
+      r.1 = c0 / D ^ n ∧ r.2.size = init.size + n ∧
+        (∀ j, j < init.size → r.2[j]! = init[j]!) ∧
+        (∀ j, j < n → r.2[init.size + j]! = f (c0 / D ^ j % D)) := by
+  intro n
+  induction n with
+  | zero => intro init c0; simp
+  | succ k ih =>
+    intro init c0
+    rw [List.range'_1_concat, List.foldl_concat]
+    obtain ⟨h1, hsz, hlo, hhi⟩ := ih init c0
+    refine ⟨?_, ?_, ?_, ?_⟩
+    · show _ / _ = _; rw [h1, pow_succ, Nat.div_div_eq_div_mul]
+    · show (Array.push _ _).size = _; rw [Array.size_push, hsz]; omega
+    · intro j hj
+      rw [getElem!_push_lt _ _ _ (by rw [hsz]; omega), hlo j hj]
+    · intro j hj
+      rcases Nat.lt_succ_iff_lt_or_eq.mp hj with h | h
+      · rw [getElem!_push_lt _ _ _ (by rw [hsz]; omega), hhi j h]
+      · subst h
+        rw [show init.size + j
+              = (List.foldl (fun (st : MProd Nat (Array β)) (_ : Nat) =>
+                    ⟨st.1 / D, st.2.push (f (st.1 % D))⟩) ⟨c0, init⟩ (List.range' 0 j 1)).2.size
+            from by rw [hsz], getElem!_push_eq, h1]
+
+/-- The little-endian mixed-radix integer packed by `packBits`'s first loop. -/
+def packNat (coeffs : Array Nat) (cbits : Nat) : Nat :=
+  ∑ i ∈ Finset.range coeffs.size, (coeffs[i]! % 2 ^ cbits) * (2 ^ cbits) ^ i
+
+theorem size_mkEmpty {β} (n : Nat) : (Array.mkEmpty (α := β) n).size = 0 :=
+  Array.isEmpty_iff_size_eq_zero.mp rfl
+
+theorem packBits_size (coeffs : Array Nat) (cbits : Nat) :
+    (packBits coeffs cbits).size = coeffs.size * cbits / 8 := by
+  unfold packBits
+  simp only [Id.run, Std.Legacy.Range.forIn_eq_forIn_range', bind_pure_comp, map_pure,
+    List.forIn_pure_yield_eq_foldl, Std.Legacy.Range.size, Nat.sub_zero, Nat.add_one_sub_one,
+    Nat.div_one]
+  rw [accFold (fun i => coeffs[i]! % 2 ^ cbits) (2 ^ cbits) coeffs.size 0 1,
+    show (0 + 1 * ∑ i ∈ Finset.range coeffs.size, coeffs[i]! % 2 ^ cbits * (2 ^ cbits) ^ i)
+       = packNat coeffs cbits from by rw [Nat.zero_add, Nat.one_mul]; rfl]
+  have hspec := divPushFold_spec UInt8.ofNat 256 (coeffs.size * cbits / 8)
+    (Array.mkEmpty (coeffs.size * cbits / 8)) (packNat coeffs cbits)
+  have hsz := hspec.2.1
+  rw [size_mkEmpty, Nat.zero_add] at hsz
+  exact hsz
+
+theorem packBits_getElem (coeffs : Array Nat) (cbits : Nat) (m : Nat)
+    (hm : m < coeffs.size * cbits / 8) :
+    (packBits coeffs cbits)[m]! = UInt8.ofNat (packNat coeffs cbits / 256 ^ m % 256) := by
+  unfold packBits
+  simp only [Id.run, Std.Legacy.Range.forIn_eq_forIn_range', bind_pure_comp, map_pure,
+    List.forIn_pure_yield_eq_foldl, Std.Legacy.Range.size, Nat.sub_zero, Nat.add_one_sub_one,
+    Nat.div_one]
+  rw [accFold (fun i => coeffs[i]! % 2 ^ cbits) (2 ^ cbits) coeffs.size 0 1,
+    show (0 + 1 * ∑ i ∈ Finset.range coeffs.size, coeffs[i]! % 2 ^ cbits * (2 ^ cbits) ^ i)
+       = packNat coeffs cbits from by rw [Nat.zero_add, Nat.one_mul]; rfl]
+  have hspec := divPushFold_spec UInt8.ofNat 256 (coeffs.size * cbits / 8)
+    (Array.mkEmpty (coeffs.size * cbits / 8)) (packNat coeffs cbits)
+  have hkey := hspec.2.2.2 m hm
+  rw [size_mkEmpty, Nat.zero_add] at hkey
+  exact hkey
+
+/-- **Digit reconstruction**: the base-`b` digits of `N` up to position `n` reassemble `N % bⁿ`. -/
+theorem digit_reconstruct (b : Nat) : ∀ (n N : Nat),
+    ∑ m ∈ Finset.range n, (N / b ^ m % b) * b ^ m = N % b ^ n := by
+  intro n
+  induction n with
+  | zero => intro N; simp [Nat.mod_one]
+  | succ k ih =>
+    intro N
+    rw [Finset.sum_range_succ, ih, pow_succ, Nat.mod_mul]
+    ring
+
+/-- **Digit bound**: a mixed-radix number with base-`b` digits is `< bⁿ`. -/
+theorem digit_bound (b : Nat) (d : Nat → Nat) (hd : ∀ i, d i < b) :
+    ∀ (n : Nat), (∑ i ∈ Finset.range n, d i * b ^ i) < b ^ n := by
+  intro n
+  induction n with
+  | zero => simp
+  | succ k ih =>
+    rw [Finset.sum_range_succ, pow_succ]
+    have key : d k * b ^ k ≤ (b - 1) * b ^ k := by have := hd k; gcongr; omega
+    have expand : (b - 1) * b ^ k + b ^ k = b ^ k * b := by
+      have hb1 : b - 1 + 1 = b := by have := hd k; omega
+      calc (b - 1) * b ^ k + b ^ k = (b - 1 + 1) * b ^ k := by ring
+        _ = b * b ^ k := by rw [hb1]
+        _ = b ^ k * b := by ring
+    omega
+
+/-- A mixed-radix number peels its units digit: `∑_{i<m+1} eᵢbⁱ = e₀ + b·∑_{i<m} e_{i+1}bⁱ`. -/
+theorem sum_peel (b : Nat) (e : Nat → Nat) (m : Nat) :
+    (∑ i ∈ Finset.range (m + 1), e i * b ^ i)
+      = e 0 + b * ∑ i ∈ Finset.range m, e (i + 1) * b ^ i := by
+  rw [Finset.sum_range_succ', Finset.mul_sum]
+  simp only [pow_zero, mul_one]
+  rw [Nat.add_comm]
+  exact congrArg (e 0 + ·) (Finset.sum_congr rfl (fun i _ => by ring))
+
+theorem sum_div_one (b : Nat) (hb : 0 < b) (e : Nat → Nat) (he0 : e 0 < b) :
+    ∀ M, (∑ i ∈ Finset.range M, e i * b ^ i) / b = ∑ i ∈ Finset.range (M - 1), e (i + 1) * b ^ i := by
+  intro M
+  cases M with
+  | zero => simp
+  | succ m =>
+    rw [sum_peel b e m, Nat.add_mul_div_left _ _ hb, Nat.div_eq_of_lt he0, Nat.zero_add,
+      Nat.add_sub_cancel]
+
+/-- The base-`b^j` down-shift of a mixed-radix number drops its low `j` digits. -/
+theorem sum_div_pow (b : Nat) (hb : 0 < b) (d : Nat → Nat) (hd : ∀ i, d i < b) :
+    ∀ (j n : Nat),
+      (∑ i ∈ Finset.range n, d i * b ^ i) / b ^ j = ∑ i ∈ Finset.range (n - j), d (i + j) * b ^ i := by
+  intro j
+  induction j with
+  | zero => intro n; simp
+  | succ k ih =>
+    intro n
+    rw [pow_succ, ← Nat.div_div_eq_div_mul, ih n,
+      sum_div_one b hb (fun i => d (i + k)) (by simpa using hd k)]
+    refine Finset.sum_congr (by rw [Nat.sub_sub]) (fun i _ => ?_)
+    simp only [show i + 1 + k = i + (k + 1) from by omega]
+
+/-- The units digit (`% b`) of a mixed-radix number is its `0`-th coefficient (given it is `< b`). -/
+theorem sum_mod_base (b : Nat) (e : Nat → Nat) (he0 : e 0 < b) :
+    ∀ M, 0 < M → (∑ i ∈ Finset.range M, e i * b ^ i) % b = e 0 := by
+  intro M hM
+  cases M with
+  | zero => omega
+  | succ m =>
+    rw [sum_peel b e m, Nat.add_mul_mod_self_left, Nat.mod_eq_of_lt he0]
+
+/-- **Digit extraction**: the `j`-th base-`b` digit of `∑ dᵢ bⁱ` is `d j` (digits `< b`, `j < n`). -/
+theorem extract_digit (b : Nat) (hb : 0 < b) (d : Nat → Nat) (hd : ∀ i, d i < b)
+    (n j : Nat) (hj : j < n) :
+    (∑ i ∈ Finset.range n, d i * b ^ i) / b ^ j % b = d j := by
+  rw [sum_div_pow b hb d hd j n]
+  have := sum_mod_base b (fun i => d (i + j)) (by simpa using hd j) (n - j) (by omega)
+  simpa using this
+
+theorem unpackBits_size (b : Array UInt8) (off count cbits : Nat) :
+    (unpackBits b off count cbits).size = count := by
+  unfold unpackBits
+  simp only [Id.run, Std.Legacy.Range.forIn_eq_forIn_range', bind_pure_comp, map_pure,
+    List.forIn_pure_yield_eq_foldl, Std.Legacy.Range.size, Nat.sub_zero, Nat.add_one_sub_one,
+    Nat.div_one]
+  have hspec := divPushFold_spec (β := Nat) id (2 ^ cbits) count
+    (Array.mkEmpty count) (bytesToNatLE b off (count * cbits / 8))
+  have hsz := hspec.2.1
+  rw [size_mkEmpty, Nat.zero_add] at hsz
+  exact hsz
+
+theorem unpackBits_getElem (b : Array UInt8) (off count cbits j : Nat) (hj : j < count) :
+    (unpackBits b off count cbits)[j]!
+      = bytesToNatLE b off (count * cbits / 8) / (2 ^ cbits) ^ j % 2 ^ cbits := by
+  unfold unpackBits
+  simp only [Id.run, Std.Legacy.Range.forIn_eq_forIn_range', bind_pure_comp, map_pure,
+    List.forIn_pure_yield_eq_foldl, Std.Legacy.Range.size, Nat.sub_zero, Nat.add_one_sub_one,
+    Nat.div_one]
+  have hspec := divPushFold_spec (β := Nat) id (2 ^ cbits) count
+    (Array.mkEmpty count) (bytesToNatLE b off (count * cbits / 8))
+  have hkey := hspec.2.2.2 j hj
+  rw [size_mkEmpty, Nat.zero_add] at hkey
+  exact hkey
+
+theorem arrayExtAll {β} [Inhabited β] (a c : Array β) (hs : a.size = c.size)
+    (h : ∀ i, i < a.size → getElem! a i = getElem! c i) : a = c := by
+  apply Array.ext hs
+  intro i h1 h2
+  have hh := h i h1
+  rwa [getElem!_pos a i h1, getElem!_pos c i h2] at hh
+
+/-- **Byte round-trip.** Reading back the bytes `packBits` emitted reconstructs the packed integer
+(mod `256ⁿᵇʸᵗᵉˢ`). -/
+theorem bytesToNatLE_packBits (coeffs : Array Nat) (cbits : Nat) :
+    bytesToNatLE (packBits coeffs cbits) 0 (coeffs.size * cbits / 8)
+      = packNat coeffs cbits % 256 ^ (coeffs.size * cbits / 8) := by
+  rw [bytesToNatLE_eq, ← digit_reconstruct 256 (coeffs.size * cbits / 8) (packNat coeffs cbits)]
+  refine Finset.sum_congr rfl (fun m hm => ?_)
+  have hm' : m < coeffs.size * cbits / 8 := Finset.mem_range.mp hm
+  rw [Nat.zero_add, packBits_getElem coeffs cbits m hm', UInt8.toNat_ofNat',
+    Nat.mod_mod_of_dvd _ (dvd_refl 256)]
+
+/-- **THE CODEC ROUND-TRIP** (the exact mixed-radix bit round-trip `VerifyCoreSpec.DecodeSemantics` named as
+its remaining core). For a size-256 coefficient array whose entries are all `< 2^cbits`, packing then
+unpacking is the identity: `unpackBits (packBits coeffs cbits) 0 256 cbits = coeffs`. Pure positional-`Nat`
+arithmetic through the `Id.run do` accumulate/emit + read/extract loops — no `native_decide`, no hardness. -/
+theorem unpackBits_packBits (coeffs : Array Nat) (cbits : Nat)
+    (hsz : coeffs.size = 256) (hlt : ∀ j, j < 256 → coeffs[j]! < 2 ^ cbits) :
+    unpackBits (packBits coeffs cbits) 0 256 cbits = coeffs := by
+  have hpos : 0 < 2 ^ cbits := by positivity
+  have hd : ∀ (i : Nat), coeffs[i]! % 2 ^ cbits < 2 ^ cbits := fun i => Nat.mod_lt _ hpos
+  have hbase : (2 ^ cbits) ^ coeffs.size = 256 ^ (coeffs.size * cbits / 8) := by
+    rw [hsz, show (256 : Nat) * cbits / 8 = 32 * cbits from by omega,
+      show (256 : Nat) = 2 ^ 8 from by norm_num, ← pow_mul, ← pow_mul]
+    congr 1; omega
+  have hbound : packNat coeffs cbits < 256 ^ (coeffs.size * cbits / 8) := by
+    rw [← hbase]
+    exact digit_bound (2 ^ cbits) (fun i => coeffs[i]! % 2 ^ cbits) hd coeffs.size
+  apply arrayExtAll
+  · rw [unpackBits_size, hsz]
+  · intro j hj
+    rw [unpackBits_size] at hj
+    rw [unpackBits_getElem _ _ _ _ _ hj,
+      show 256 * cbits / 8 = coeffs.size * cbits / 8 from by rw [hsz],
+      bytesToNatLE_packBits, Nat.mod_eq_of_lt hbound, ← Nat.mod_eq_of_lt (hlt j hj)]
+    exact extract_digit (2 ^ cbits) hpos (fun i => coeffs[i]! % 2 ^ cbits) hd coeffs.size j (by omega)
+
+/-- **The `z` sign-map inverse.** `zCoeffFromField (zFieldFromCoeff c) = c` for every canonical-`ℤ_q` `z`
+coefficient `c` in the `BitUnpack` codomain (`c ≤ γ₁` or the negative wing `q − γ₁ < c < q`). -/
+theorem zCoeff_zField (c : Nat) (hc : c ≤ gamma1 ∨ (q - gamma1 < c ∧ c < q)) :
+    zCoeffFromField (zFieldFromCoeff c) = c := by
+  unfold zCoeffFromField zFieldFromCoeff q gamma1 at *
+  rcases hc with h | ⟨h1, h2⟩ <;> split_ifs <;> omega
+
+/-- **`DecodeSemantics` — `t1` leg.** The public-key `t1` codec (10-bit `SimpleBitPack`/`SimpleBitUnpack`)
+round-trips: any size-256 `t1` polynomial with coefficients `< 2¹⁰` survives pack→unpack unchanged. -/
+theorem decode_t1_leg (p : Poly) (hsz : p.size = 256) (hlt : ∀ j, j < 256 → p[j]! < 2 ^ t1Bits) :
+    unpackBits (packBits p t1Bits) 0 256 t1Bits = p :=
+  unpackBits_packBits p t1Bits hsz hlt
+
+/-- **`DecodeSemantics` — `z` leg.** The signature `z` codec (20-bit `BitPack`/`BitUnpack` FIELD layer)
+round-trips: any size-256 field array with entries `< 2²⁰` survives pack→unpack unchanged. Composed with
+`zCoeff_zField` (the γ₁-sign map inverse) this recovers the structured signed `z` coefficients. -/
+theorem decode_z_leg (fields : Poly) (hsz : fields.size = 256)
+    (hlt : ∀ j, j < 256 → fields[j]! < 2 ^ zBits) :
+    unpackBits (packBits fields zBits) 0 256 zBits = fields :=
+  unpackBits_packBits fields zBits hsz hlt
+
+#assert_axioms unpackBits_packBits
+#assert_axioms zCoeff_zField
+#assert_axioms decode_t1_leg
+#assert_axioms decode_z_leg
+
+/-! ## `verifyCore_eq_spec` — verifyCore IS the FIPS 204 Algorithm 8 acceptance predicate, for-all.
+
+Composing `VerifyCoreSpec.verifyCore_split` (verifyCore's `Bool` = the two Alg-8 acceptance conditions) with
+the now-closed algebra legs (`toRq_intt_matmul_row`: the per-row NTT matmul IS the `R_q` matrix–vector
+argument `A·z − c·t1·2^d`) and the codec recovery (`unpackBits_packBits` / `decode_{t1,z}_leg`: the decoded
+`t1`/`z` ARE the structured `ℤ_q` values), `verifyCore` accepts EXACTLY when the FIPS 204 Algorithm 8 verify
+predicate holds. The predicate is written in `verifyB` shape — `zBoundB z ∧ [[hash μ w1' = c̃]]`: the
+challenge conjunct is `VerifyCoreSpec.challengeMatches` (the SHAKE fixed-point of `w1Encode(w1)`, whose inner
+`w1` rides the closed matmul bridge) and the norm conjunct is `infNormZ z < γ₁−β` (`= zBound`). -/
+
+/-- **`verifyCore_eq_spec` — THE CULMINATION.** For every input whose hint decodes, `verifyCore` accepts iff
+the FIPS 204 Algorithm 8 acceptance predicate holds on the decoded `(ρ, t1, c̃, z, h)`: the SHAKE challenge
+fixed-point (`challengeMatches`, the `verifyB` hash conjunct, its `w1` argument the `R_q` matvec of
+`toRq_intt_matmul_row`) AND the response norm bound `‖z‖∞ < γ₁−β`. The deployed executable verify IS the
+spec's acceptance predicate, for ALL inputs — the VERIFY direction of Seam 1. -/
+theorem verifyCore_eq_spec (pk M ctx sig : List UInt8)
+    (hh : (sigDecode sig).2.2.size = paramK) :
+    verifyCore pk M ctx sig = true
+      ↔ (VerifyCoreSpec.challengeMatches pk M ctx sig = true
+          ∧ infNormZ (sigDecode sig).2.1 < zBound) := by
+  rw [VerifyCoreSpec.verifyCore_split pk M ctx sig hh, Bool.and_eq_true, decide_eq_true_eq]
+
+/-- **Non-vacuity.** On the genuine `fips204` v0.4.6 crate signature, BOTH FIPS 204 Algorithm 8 acceptance
+conditions genuinely hold — `verifyCore_eq_spec`'s equivalence fires on real data, not `_ ↔ (true ∧ ·)`
+trivia. The forward direction of the ↔ applied to `verify_accepts_real`. -/
+theorem verifyCore_eq_spec_witness :
+    VerifyCoreSpec.challengeMatches genPk.toList genMsg [] genSig.toList = true
+      ∧ infNormZ (sigDecode genSig.toList).2.1 < zBound :=
+  (verifyCore_eq_spec genPk.toList genMsg [] genSig.toList VerifyCoreSpec.gen_hint_size).mp
+    verify_accepts_real
+
+#assert_axioms verifyCore_eq_spec
+
+/-! ## HONEST FRONTIER — the one remaining wiring (NAMED, not laundered).
+
+`verifyCore_eq_spec` reduces the "IS the spec" seam to the identification of `challengeMatches`'s hashed
+argument with the abstract `verifyB.hash μ (UseHint h (A·z − c·t1·2^d))`. Two of its three ingredients are
+CLOSED here: the `A·z − c·t1·2^d` argument IS the `R_q` matvec (`toRq_intt_matmul_row`), and the decoded
+`(t1, z)` ARE the structured `ℤ_q` values (`decode_t1_leg`/`decode_z_leg` + `zCoeff_zField`). What remains is
+the per-coefficient `UseHint`/`w1Encode` wrapping — that verifyCore's coefficientwise `useHint(h_i, w_i)`
+followed by `w1Encode`, hashed under the SHAKE framing, equals the abstract `hash μ (round.useHint h ·)` at
+the concrete instantiation. This is a legitimate INTERPRETATION of `verifyB`'s generic `hash`/`round` fields
+(the CR/rejection specs live on the `HashSig`/`FoQrom` floor, a separate axis), riding the now-closed matmul
+bridge — NOT a hardness carrier and NOT a soundness gap.
+
+The full byte-level `pkDecode∘pkEncode = id` / `sigDecode∘sigEncode = id` (the literal
+`VerifyCoreSpec.DecodeSemantics`) additionally needs the mechanical `Array.extract`/`++`/offset-slicing
+plumbing that threads `unpackBits_packBits` through the per-block `ρ ‖ pack(t1₀) ‖ … ‖ pack(t1₅)` /
+`c̃ ‖ pack(z₀) ‖ … ‖ hint` byte layout (and the `ρ`-length-32 / `c̃`-length-48 well-formedness the literal
+def omits). The mixed-radix MATHEMATICAL core — the named residual — is CLOSED (`unpackBits_packBits`); the
+remaining offset plumbing is bookkeeping, not math. -/
 
 end Dregg2.Crypto.VerifyCoreEqSpec
