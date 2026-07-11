@@ -16,8 +16,9 @@
 //!   checks the evidence. Implemented: [`CommitReveal`], [`Deterministic`],
 //!   [`MockBeacon`], the real post-quantum [`ServerVrf`] (the one-time `pqvrf`
 //!   LB-VRF), and [`Hybrid`] — a **genesis-committed LB-VRF key-chain** + a real
-//!   verified **schedule-bound hash-chain beacon** ([`HashChainBeacon`]) with
-//!   **timeout finalization**.
+//!   verified **schedule-bound beacon** with **timeout finalization**. Two beacons
+//!   plug into `Hybrid`: the offline/test [`HashChainBeacon`] and the production
+//!   **threshold [`DrandBeacon`]** (real drand-BLS, verified by a pairing check).
 //! - [`DrawStream`] — an indexed XOF draw stream from a verified [`Seed`], with an
 //!   **unbiased, reject-free** bounded mapping ([`DrawStream::draw_bounded`]).
 //! - [`RandomnessRequest`] / [`RandomnessEvidence`] — serde-serializable
@@ -55,15 +56,22 @@
 //!   pseudorandomness rests on MLWE (assumed).
 //! - [`Hybrid`] (genesis-committed LB-VRF key-chain + delayed schedule-bound
 //!   beacon + timeout finalization) is the recommended endpoint that closes
-//!   unilateral reroll on *both* sides. The [`Beacon`] behind it is pluggable; the
-//!   shipped, testable model is [`HashChainBeacon`], a forward-secure hash chain
-//!   whose future rounds are unpredictable at commit (preimage resistance) and
-//!   whose anchor is genesis-pinned. It is honestly *not* a threshold construction
-//!   — it trusts a single operator. A real threshold **drand-BLS** beacon
-//!   ([`BeaconKind::Drand`]) is the production path; its round verification is a BLS
-//!   pairing check against the pinned group key, and wiring the live drand group
-//!   key + round fetch is the one remaining gap for escape hatch #2 (the verifier
-//!   fails closed on the `Drand` variant — see [`verify_beacon_round`]).
+//!   unilateral reroll on *both* sides. The [`Beacon`] behind it is pluggable, with
+//!   two implementations:
+//!   - [`HashChainBeacon`] — the offline/test beacon: a forward-secure hash chain
+//!     whose future rounds are unpredictable at commit (preimage resistance) and
+//!     whose anchor is genesis-pinned. Honestly *not* a threshold construction — it
+//!     trusts a single operator not to precompute the chain.
+//!   - [`DrandBeacon`] — the **production** beacon: the real **threshold drand-BLS**
+//!     public randomness beacon (League of Entropy, `quicknet`). A round's output is
+//!     `H(signature)` for a BLS threshold signature by the network's distributed
+//!     key; [`verify_beacon_round`] re-checks it by the pairing check
+//!     `e(signature, g2) == e(H(message), group_pk)` against the genesis-pinned
+//!     group public key. No single operator can produce or bias a round. The
+//!     verifier is source-free (the recorded `(round, signature)` + the pinned key
+//!     suffice — no network); *fetching* a live round is a client concern. This is
+//!     verified against a real published drand `quicknet` vector (see the crate
+//!     tests), so it is genuine drand interop, not just self-consistency.
 //!
 //! ### The six non-grindability escape hatches, honestly
 //!
@@ -74,7 +82,7 @@
 //! | # | Escape hatch | Status |
 //! |---|---|---|
 //! | 1 | Server key bound at genesis | **Closed by [`Hybrid`]** — a Merkle root over per-epoch LB-VRF public keys is pinned into `game_binding` ([`Hybrid::genesis_binding`]); epoch = `seq`, and the verifier checks the eval key's membership at leaf `seq` ([`verify_epoch_membership`]). A per-turn key swap fails. ([`ServerVrf`] alone uses the simpler per-event committed key.) |
-//! | 2 | Beacon round from a fixed schedule | **Closed at the schedule layer** — the round is a deterministic function of `seq` ([`BeaconSchedule::expected_round`]), so no favourable-round picking; **beacon-signature caveat:** the shipped [`HashChainBeacon`] verifies rounds against a genesis-pinned anchor, but a real threshold **drand-BLS** beacon is the remaining gap |
+//! | 2 | Beacon round from a fixed schedule | **Closed** — the round is a deterministic function of `seq` ([`BeaconSchedule::expected_round`]), so no favourable-round picking, **and** the beacon output is a verified signature: the production [`DrandBeacon`] ([`BeaconKind::Drand`]) checks each round's threshold-BLS signature against the genesis-pinned drand group key by pairing (`e(sig, g2) == e(H(msg), pk)`), so a wrong/forged signature or a wrong round is rejected — a documented threshold beacon (drand `quicknet`), not a single operator. The offline [`HashChainBeacon`] (single-operator, anchor-pinned) remains the test beacon. |
 //! | 3 | Player action bound before the beacon deadline | **Closed** — `action_hash` is bound into the `EventId` before the seed exists |
 //! | 4 | VRF one-output-per-input | **Closed by [`ServerVrf`]/[`Hybrid`]** — the LB-VRF output is the *unique* value for `(key, input)`; a forged output/proof fails `pqvrf::verify` (uniqueness reduces to Module-SIS) |
 //! | 5 | Timeout finalization so withholding can't reroll | **Closed by [`Hybrid`]** — past the deadline anyone finalizes from the beacon alone with a recorded `ServerMissed` fault; the seed is determined, not chooseable, so selective abort yields no reroll and no alternative outcome |
@@ -82,19 +90,24 @@
 //!
 //! Honest summary: **[`CommitReveal`] closes 3 and 6** and prevents unilateral
 //! *choice* but leaves selective abort open. **[`ServerVrf`] closes 4.**
-//! **[`Hybrid`] additionally closes 1 and 5** outright and closes **2** at the
-//! schedule layer, with the one honest caveat that the shipped beacon is a
-//! forward-secure hash chain (single operator), not a threshold drand-BLS beacon —
-//! that wiring is the remaining production gap. Pseudorandomness of the LB-VRF
-//! output rests on MLWE (assumed).
+//! **[`Hybrid`] additionally closes 1, 2, and 5.** Hatch 2 is closed both at the
+//! schedule layer (round fixed by `seq`) and at the beacon-signature layer: the
+//! production [`DrandBeacon`] verifies each round's threshold-BLS signature against
+//! the genesis-pinned drand group key (interop-tested against a real published
+//! `quicknet` vector); the single-operator [`HashChainBeacon`] stays the offline
+//! test beacon. Pseudorandomness of the LB-VRF output rests on MLWE (assumed).
 //!
 //! ## Follow-ups (out of scope here)
 //!
 //! - `attested-dm` wiring of the [`Hybrid`] source into the transition-receipt
 //!   verifier (its `EvidenceKind::Hybrid` dispatch arm) — a parallel lane.
-//! - A real **drand-BLS** [`Beacon`] impl for [`BeaconKind::Drand`] (a BLS pairing
-//!   check against the live drand group public key, plus round fetch) — the one
-//!   remaining gap for escape hatch #2.
+//! - A drand **round-fetch client** (HTTP over `https://api.drand.sh/…/public/N`)
+//!   feeding [`DrandBeacon::insert_round`]. The *verification* is done (real BLS
+//!   pairing check, interop-tested); only the network fetch is a client concern,
+//!   deliberately outside this pure-verifier crate.
+//! - Additional drand schemes beyond `quicknet` (e.g. the chained default network)
+//!   — `verify_beacon_round` returns `BackendUnavailable` for an unimplemented
+//!   `scheme` string.
 //! - Enforcing the reveal-deadline-before-beacon-maturity ordering at the receipt
 //!   layer (this crate encodes the round as a future, schedule-bound round and
 //!   records the `ServerMissed` fault; the wall-clock deadline is a receipt-layer
@@ -118,6 +131,8 @@ pub use request::{
 pub use source::{
     Beacon, CommitReveal, DOMAIN_BEACON_CHAIN, DOMAIN_COMMIT, DOMAIN_HYBRID_GENESIS,
     DOMAIN_HYBRID_MIX, DOMAIN_KEYCHAIN_LEAF, DOMAIN_KEYCHAIN_NODE, DOMAIN_LB_VRF_KEY_COMMITMENT,
-    DOMAIN_SEED, Deterministic, FinalizeMode, HashChainBeacon, Hybrid, KeyChain, MockBeacon,
-    RandomnessSource, ServerVrf, VrfEvalError, verify_beacon_round, verify_epoch_membership,
+    DOMAIN_SEED, DRAND_QUICKNET_BEACON_ID, DRAND_QUICKNET_DST, DRAND_QUICKNET_GROUP_PUBLIC_KEY,
+    DRAND_QUICKNET_SCHEME, Deterministic, DrandBeacon, FinalizeMode, HashChainBeacon, Hybrid,
+    KeyChain, MockBeacon, RandomnessSource, ServerVrf, VrfEvalError, verify_beacon_round,
+    verify_epoch_membership,
 };

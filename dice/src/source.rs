@@ -579,6 +579,16 @@ pub trait Beacon {
 
     /// The beacon's output for a matured `round` (operator side).
     fn round_output(&self, round: u64) -> [u8; 32];
+
+    /// The round's signature, recorded in evidence so the **source-free**
+    /// [`verify_beacon_round`] can re-check it without the network.
+    ///
+    /// A threshold [`DrandBeacon`] returns the round's BLS signature (the pairing
+    /// check runs against the pinned group key). The default is empty, for beacons
+    /// like [`HashChainBeacon`] whose round verification needs no signature.
+    fn round_signature(&self, _round: u64) -> Vec<u8> {
+        Vec::new()
+    }
 }
 
 /// One forward step of a hash-chain beacon: `H(DOMAIN_BEACON_CHAIN || v)`.
@@ -611,9 +621,10 @@ fn beacon_hash_n(root: &[u8; 32], steps: u64) -> [u8; 32] {
 /// a threshold construction. It trusts the operator not to have chosen a `root`
 /// whose chain lands a favourable value at the target round (it cannot do so
 /// *after* seeing the event, since the anchor is committed first, but a
-/// precomputing operator colluding on `root` is not excluded — that is what a
-/// threshold [`BeaconKind::Drand`] beacon buys, and wiring live drand is the
-/// remaining gap for escape hatch #2).
+/// precomputing operator colluding on `root` is not excluded). It stays the offline
+/// / test beacon; the **threshold** [`DrandBeacon`] ([`BeaconKind::Drand`]) is the
+/// production path that removes that single-operator trust — its round output is a
+/// distributed BLS signature no one party can precompute.
 #[derive(Clone, Debug)]
 pub struct HashChainBeacon {
     root: [u8; 32],
@@ -669,16 +680,23 @@ impl Beacon for HashChainBeacon {
 }
 
 /// Pure, source-free verification of a beacon round output against genesis-pinned
-/// parameters. A light client calls this with only public data.
+/// parameters. A light client calls this with only public data — the `round`, the
+/// claimed `output`, and (for a threshold beacon) the recorded `signature`.
 ///
 /// - [`BeaconKind::HashChain`]: accepts iff `1 <= round <= length` and
-///   `H^round(output) == anchor`.
-/// - [`BeaconKind::Drand`]: fails closed — real drand round verification is a BLS
-///   pairing check against the pinned group key, the remaining gap for hatch #2.
+///   `H^round(output) == anchor`. `signature` is ignored (a hash-chain round has
+///   none).
+/// - [`BeaconKind::Drand`]: the real threshold-BLS check. It (1) verifies the round
+///   signature against the pinned group public key via the pairing check
+///   `e(signature, g2) == e(H(message), group_pk)` under drand's ciphersuite, and
+///   (2) checks `output == H(signature)`. A forged/mutated signature (pairing
+///   fails), a wrong round (its message differs), a wrong group key, or an
+///   `output != H(signature)` are each rejected. See [`DrandBeacon`].
 pub fn verify_beacon_round(
     params: &BeaconParams,
     round: u64,
     output: &[u8; 32],
+    signature: &[u8],
 ) -> Result<(), VerifyError> {
     match &params.kind {
         BeaconKind::HashChain { anchor, length } => {
@@ -690,10 +708,251 @@ pub fn verify_beacon_round(
             }
             Ok(())
         }
-        BeaconKind::Drand { .. } => Err(VerifyError::BackendUnavailable(
-            "real drand-BLS round verification (pairing check vs the pinned group key) \
-             is the remaining gap for escape hatch #2",
-        )),
+        BeaconKind::Drand {
+            group_public_key,
+            scheme,
+        } => verify_drand_round(group_public_key, scheme, round, output, signature),
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DrandBeacon — the REAL threshold-BLS public randomness beacon (drand / League of
+// Entropy). Closes the beacon-signature caveat of escape hatch #2. (`quicknet`.)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// drand's `quicknet` scheme identifier (its `schemeID`). Keys live on **G2**
+/// (96-byte compressed), signatures on **G1** (48-byte compressed), the message is
+/// **unchained** (`H(round_be)` — no previous signature), and hash-to-curve is
+/// RFC 9380 `BLS12381G1_XMD:SHA-256_SSWU_RO` with the basic (`NUL`) suffix.
+pub const DRAND_QUICKNET_SCHEME: &str = "bls-unchained-g1-rfc9380";
+
+/// The RFC 9380 hash-to-curve domain separation tag for drand `quicknet`
+/// (signatures on G1, basic — un-augmented — BLS). This is the ciphersuite string
+/// the drand network signs under; it is fixed by the scheme, not caller-chosen.
+pub const DRAND_QUICKNET_DST: &[u8] = b"BLS_SIG_BLS12381G1_XMD:SHA-256_SSWU_RO_NUL_";
+
+/// The genesis-pinned group public key of the live drand `quicknet` network
+/// (chain hash `52db9ba7…c84e971`), 96-byte compressed G2. Pinning it here means a
+/// verifier commits to *which* threshold network produced a round; a signature from
+/// any other group fails the pairing check.
+///
+/// Source (drand public API, chain `info` endpoint):
+/// `https://api.drand.sh/52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971/info`
+/// → `public_key = 83cf0f28…5ece45a`, `schemeID = bls-unchained-g1-rfc9380`,
+/// `period = 3`, `genesis_time = 1692803367`.
+pub const DRAND_QUICKNET_GROUP_PUBLIC_KEY: [u8; 96] = [
+    0x83, 0xcf, 0x0f, 0x28, 0x96, 0xad, 0xee, 0x7e, 0xb8, 0xb5, 0xf0, 0x1f, 0xca, 0xd3, 0x91, 0x22,
+    0x12, 0xc4, 0x37, 0xe0, 0x07, 0x3e, 0x91, 0x1f, 0xb9, 0x00, 0x22, 0xd3, 0xe7, 0x60, 0x18, 0x3c,
+    0x8c, 0x4b, 0x45, 0x0b, 0x6a, 0x0a, 0x6c, 0x3a, 0xc6, 0xa5, 0x77, 0x6a, 0x2d, 0x10, 0x64, 0x51,
+    0x0d, 0x1f, 0xec, 0x75, 0x8c, 0x92, 0x1c, 0xc2, 0x2b, 0x0e, 0x17, 0xe6, 0x3a, 0xaf, 0x4b, 0xcb,
+    0x5e, 0xd6, 0x63, 0x04, 0xde, 0x9c, 0xf8, 0x09, 0xbd, 0x27, 0x4c, 0xa7, 0x3b, 0xab, 0x4a, 0xf5,
+    0xa6, 0xe9, 0xc7, 0x6a, 0x4b, 0xc0, 0x9e, 0x76, 0xea, 0xe8, 0x99, 0x1e, 0xf5, 0xec, 0xe4, 0x5a,
+];
+
+/// The drand `quicknet` beacon identity recorded in [`BeaconParams::beacon_id`].
+pub const DRAND_QUICKNET_BEACON_ID: &[u8] = b"drand/quicknet";
+
+/// The unchained round message for a drand round: `SHA-256(round_be_u64)`.
+///
+/// `quicknet` is *unchained*, so the message is a pure function of the round number
+/// (no previous-signature chaining) — this is what makes a light-client verifier
+/// need only `(round, signature)` and the pinned key.
+fn drand_round_message(round: u64) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(round.to_be_bytes());
+    h.finalize().into()
+}
+
+/// drand randomness from a signature: `SHA-256(signature)`.
+fn drand_randomness(signature: &[u8]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(signature);
+    h.finalize().into()
+}
+
+/// Verify a drand `quicknet` round: the BLS pairing check of the round signature
+/// against the pinned group public key, then `output == H(signature)`.
+///
+/// For `quicknet` (keys on G2, sigs on G1): decode `pk ∈ G2` and `sig ∈ G1` from
+/// their compressed forms (a subgroup/encoding failure is rejected), hash the round
+/// message to `H(m) ∈ G1` via RFC 9380, and check
+/// `e(sig, g2_generator) == e(H(m), pk)`. This is exactly drand's verification: it
+/// passes iff `sig = sk · H(m)` for the group secret `sk` behind `pk = sk · g2`, so
+/// a forged/mutated signature, a wrong round (different `H(m)`), or a wrong group
+/// key all fail. Finally the recorded `output` must equal `H(signature)`.
+fn verify_drand_round(
+    group_public_key: &[u8],
+    scheme: &str,
+    round: u64,
+    output: &[u8; 32],
+    signature: &[u8],
+) -> Result<(), VerifyError> {
+    use bls12_381::hash_to_curve::{ExpandMsgXmd, HashToCurve};
+    use bls12_381::{G1Affine, G1Projective, G2Affine, pairing};
+    use sha2::Sha256;
+
+    if scheme != DRAND_QUICKNET_SCHEME {
+        return Err(VerifyError::BackendUnavailable(
+            "unsupported drand scheme (this build implements quicknet, \
+             bls-unchained-g1-rfc9380)",
+        ));
+    }
+
+    // Decode the pinned group public key (G2, 96-byte compressed). A wrong length or
+    // a point off the curve / outside the prime-order subgroup is rejected.
+    let pk_bytes: [u8; 96] = group_public_key
+        .try_into()
+        .map_err(|_| VerifyError::BeaconVerifyFailed)?;
+    let pk = G2Affine::from_compressed(&pk_bytes);
+    if bool::from(pk.is_none()) {
+        return Err(VerifyError::BeaconVerifyFailed);
+    }
+    let pk = pk.unwrap();
+
+    // Decode the round signature (G1, 48-byte compressed). A malformed signature is
+    // rejected here before the pairing.
+    let sig_bytes: [u8; 48] = signature
+        .try_into()
+        .map_err(|_| VerifyError::BeaconVerifyFailed)?;
+    let sig = G1Affine::from_compressed(&sig_bytes);
+    if bool::from(sig.is_none()) {
+        return Err(VerifyError::BeaconVerifyFailed);
+    }
+    let sig = sig.unwrap();
+
+    // Hash the round message to G1 (RFC 9380, quicknet DST). The round number *is*
+    // the message (unchained), so a swapped round yields a different H(m) and fails.
+    let msg = drand_round_message(round);
+    let hm =
+        <G1Projective as HashToCurve<ExpandMsgXmd<Sha256>>>::hash_to_curve(msg, DRAND_QUICKNET_DST);
+    let hm = G1Affine::from(hm);
+
+    // The pairing check: e(sig, g2) == e(H(m), pk).
+    let g2 = G2Affine::generator();
+    if pairing(&sig, &g2) != pairing(&hm, &pk) {
+        return Err(VerifyError::BeaconVerifyFailed);
+    }
+
+    // The beacon output must be the drand randomness for this signature.
+    if drand_randomness(signature) != *output {
+        return Err(VerifyError::BeaconVerifyFailed);
+    }
+    Ok(())
+}
+
+/// A **real drand threshold-BLS beacon** (the League of Entropy public randomness
+/// beacon) — the production beacon behind [`Hybrid`], closing the beacon-signature
+/// caveat of escape hatch #2 that [`HashChainBeacon`] leaves open.
+///
+/// Unlike the single-operator [`HashChainBeacon`], each drand round output is a
+/// **threshold** BLS signature by the network's distributed key: no single operator
+/// (indeed no fewer than the threshold of nodes) can produce or bias it. A round's
+/// randomness is `H(signature)`, and a verifier re-runs the pairing check against
+/// the genesis-pinned group public key — so trust rests on the drand network's
+/// threshold, not on one party's promise not to precompute a chain.
+///
+/// **The producer half is a client concern.** Producing a round means *fetching* it
+/// from a drand node (e.g. `https://api.drand.sh/<chain-hash>/public/<round>`);
+/// this struct does not embed an HTTP client. A client fetches `(round, signature)`
+/// and calls [`DrandBeacon::insert_round`]; the recorded evidence then carries the
+/// signature, and the **source-free** [`verify_beacon_round`] re-verifies it with no
+/// network. This keeps the verifier a pure function of public data.
+///
+/// **Scheme.** This implements drand `quicknet` ([`DRAND_QUICKNET_SCHEME`]): keys on
+/// G2, signatures on G1, unchained message `H(round_be)`, RFC 9380 hash-to-curve.
+#[derive(Clone, Debug)]
+pub struct DrandBeacon {
+    beacon_id: Vec<u8>,
+    group_public_key: Vec<u8>,
+    scheme: String,
+    schedule: crate::request::BeaconSchedule,
+    /// Client-fetched rounds: `round -> (signature, output = H(signature))`. Populated
+    /// by [`DrandBeacon::insert_round`]; consulted by the producer-side
+    /// [`Beacon::round_output`] / [`Beacon::round_signature`].
+    rounds: std::collections::HashMap<u64, DrandRound>,
+}
+
+/// A fetched drand round: its signature and the derived randomness output.
+#[derive(Clone, Debug)]
+struct DrandRound {
+    signature: Vec<u8>,
+    output: [u8; 32],
+}
+
+impl DrandBeacon {
+    /// Build a drand beacon over an explicit group public key, scheme, and schedule.
+    ///
+    /// The group public key + scheme are genesis-pinned (folded into `game_binding`
+    /// via [`Hybrid::genesis_binding`]), so they select *which* drand network a game
+    /// commits to; a round from any other network fails verification.
+    pub fn new(
+        beacon_id: impl Into<Vec<u8>>,
+        group_public_key: impl Into<Vec<u8>>,
+        scheme: impl Into<String>,
+        schedule: crate::request::BeaconSchedule,
+    ) -> DrandBeacon {
+        DrandBeacon {
+            beacon_id: beacon_id.into(),
+            group_public_key: group_public_key.into(),
+            scheme: scheme.into(),
+            schedule,
+            rounds: std::collections::HashMap::new(),
+        }
+    }
+
+    /// The live drand `quicknet` network, pinned to its published group public key
+    /// ([`DRAND_QUICKNET_GROUP_PUBLIC_KEY`]) and scheme. Only `schedule` is a game
+    /// choice.
+    pub fn quicknet(schedule: crate::request::BeaconSchedule) -> DrandBeacon {
+        DrandBeacon::new(
+            DRAND_QUICKNET_BEACON_ID.to_vec(),
+            DRAND_QUICKNET_GROUP_PUBLIC_KEY.to_vec(),
+            DRAND_QUICKNET_SCHEME.to_string(),
+            schedule,
+        )
+    }
+
+    /// Register a fetched round's signature so the producer side can build evidence
+    /// for it. The output is derived as `H(signature)` (drand randomness); the
+    /// signature is **not** trusted here — the verifier re-checks it by pairing.
+    pub fn insert_round(&mut self, round: u64, signature: impl Into<Vec<u8>>) {
+        let signature = signature.into();
+        let output = drand_randomness(&signature);
+        self.rounds.insert(round, DrandRound { signature, output });
+    }
+}
+
+impl Beacon for DrandBeacon {
+    fn params(&self) -> BeaconParams {
+        BeaconParams {
+            beacon_id: self.beacon_id.clone(),
+            kind: BeaconKind::Drand {
+                group_public_key: self.group_public_key.clone(),
+                scheme: self.scheme.clone(),
+            },
+            schedule: self.schedule.clone(),
+        }
+    }
+
+    fn round_output(&self, round: u64) -> [u8; 32] {
+        self.rounds
+            .get(&round)
+            .map(|r| r.output)
+            .unwrap_or_else(|| {
+                panic!(
+                    "DrandBeacon::round_output: round {round} not fetched — call \
+                     DrandBeacon::insert_round after fetching it from a drand node"
+                )
+            })
+    }
+
+    fn round_signature(&self, round: u64) -> Vec<u8> {
+        self.rounds
+            .get(&round)
+            .map(|r| r.signature.clone())
+            .unwrap_or_default()
     }
 }
 
@@ -1022,6 +1281,7 @@ impl RandomnessSource for Hybrid {
         let params = self.beacon.params();
         let round = params.schedule.expected_round(req.seq);
         let beacon_output = self.beacon.round_output(round);
+        let beacon_signature = self.beacon.round_signature(round);
         let epoch = req.seq as usize;
         let key_chain_root = self.key_chain.root();
 
@@ -1063,6 +1323,7 @@ impl RandomnessSource for Hybrid {
                     params,
                     round,
                     output: beacon_output,
+                    signature: beacon_signature,
                 },
             },
             draw_transcript_commitment: commitment,
@@ -1098,7 +1359,14 @@ impl RandomnessSource for Hybrid {
         // The beacon output verifies against the pinned params (a wrong or
         // rescheduled output is rejected). Checked independently of the round
         // binding above, so a rescheduled-but-chain-valid output still fails there.
-        verify_beacon_round(&beacon.params, beacon.round, &beacon.output)?;
+        // For a drand beacon this is the BLS pairing check of `beacon.signature`
+        // against the pinned group key; for a hash chain the signature is unused.
+        verify_beacon_round(
+            &beacon.params,
+            beacon.round,
+            &beacon.output,
+            &beacon.signature,
+        )?;
 
         let event_id = req.event_id();
         let seed = match finalization {
