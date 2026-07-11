@@ -231,7 +231,7 @@ def MS_WIDE_BB : Nat :=
 replacement): teeth PIs 58..61 strictly AHEAD of the 16 wide anchors (62..77), the KEY_COMMIT
 gate OUTERMOST (its 32-column digest appendix at the wide trace end, `dgBase = 2493`). -/
 def makeSovereignV3DeployedWide : EffectVmDescriptor2 :=
-  withSovereignKeyCommit (wideAppend makeSovereignV3Pinned MS_WIDE_BB (MS_WIDE_BB + 227))
+  withSovereignKeyCommit (wideAppend makeSovereignV3Pinned MS_WIDE_BB (MS_WIDE_BB + 239))
     SOVEREIGN_KEY_COMMIT_COL
 
 -- Geometry: narrow 62 PIs / width +32; wide 78 PIs / 1581+912+32 = 2525 wide, teeth ahead of anchors.
@@ -325,7 +325,7 @@ theorem makeSovereignV3DeployedWide_publishes_key_commit (A : List ℤ → Diges
   have h0 : 0 < t.rows.length := Nat.lt_trans Nat.zero_lt_one hlen
   have hnotlast : 0 + 1 ≠ t.rows.length := by omega
   have hgate := withSovereignKeyCommit_forces A hash
-    (wideAppend makeSovereignV3Pinned MS_WIDE_BB (MS_WIDE_BB + 227))
+    (wideAppend makeSovereignV3Pinned MS_WIDE_BB (MS_WIDE_BB + 239))
     SOVEREIGN_KEY_COMMIT_COL minit mfin maddrs t hChip hsat 0 h0 hnotlast q
   -- the pin: member of the pinned host, surviving the wide legacy-pin filter (its column is a
   -- teeth column 113..=116, never `bb + B_STATE_COMMIT`).
@@ -335,7 +335,7 @@ theorem makeSovereignV3DeployedWide_publishes_key_commit (A : List ℤ → Diges
       ∈ makeSovereignV3Pinned.constraints := by
     rw [makeSovereignV3Pinned_constraints]
     exact List.mem_append_right _ (List.mem_map.mpr ⟨q.val, List.mem_range.mpr q.isLt, rfl⟩)
-  have hnp : isLegacyCommitPin1 MS_WIDE_BB (MS_WIDE_BB + 227)
+  have hnp : isLegacyCommitPin1 MS_WIDE_BB (MS_WIDE_BB + 239)
       (VmConstraint2.base (.piBinding .first (SOVEREIGN_KEY_COMMIT_COL + q.val)
         ((withDfaRcPins makeSovereignV3).piCount + q.val))) = false := by
     have hq : q.val < 4 := q.isLt
@@ -348,7 +348,7 @@ theorem makeSovereignV3DeployedWide_publishes_key_commit (A : List ℤ → Diges
         ((withDfaRcPins makeSovereignV3).piCount + q.val))
       ∈ makeSovereignV3DeployedWide.constraints :=
     List.mem_append_left _
-      (wideAppend_mem_of_host makeSovereignV3Pinned MS_WIDE_BB (MS_WIDE_BB + 227) _ hinHost hnp)
+      (wideAppend_mem_of_host makeSovereignV3Pinned MS_WIDE_BB (MS_WIDE_BB + 239) _ hinHost hnp)
   have hfirstt : ((0 : Nat) == 0) = true := rfl
   have hpin := hsat.rowConstraints 0 h0 _ hin
   simp only [VmConstraint2.holdsAt, hfirstt, holdsVm_piFirst_true] at hpin
@@ -489,7 +489,7 @@ producer's `append_wide_carriers` base — UNSHIFTED); the teeth COLUMNS past th
 `traceWidth` bumped +2 to cover them. -/
 def transferV3MembershipWide : EffectVmDescriptor2 :=
   let w := wideAppend (withMembershipTeethPinsAt MEMBERSHIP_TEETH_COL_WIDE (withDfaRcPins transferV3))
-    TR_WIDE_BB (TR_WIDE_BB + 227)
+    TR_WIDE_BB (TR_WIDE_BB + 239)
   { w with traceWidth := w.traceWidth + 2 }
 
 -- Geometry: narrow 52 PIs / width 1583; wide 68 PIs / 2495 wide (carriers 1581.., teeth 2493..2494).
@@ -520,7 +520,7 @@ theorem transferV3MembershipWide_publishes_teeth (hash : List ℤ → ℤ)
       ∈ (withMembershipTeethPinsAt MEMBERSHIP_TEETH_COL_WIDE (withDfaRcPins transferV3)).constraints := by
     rw [withMembershipTeethPinsAt_constraints]
     exact List.mem_append_right _ (List.mem_map.mpr ⟨j.val, List.mem_range.mpr j.isLt, rfl⟩)
-  have hnp : isLegacyCommitPin1 TR_WIDE_BB (TR_WIDE_BB + 227)
+  have hnp : isLegacyCommitPin1 TR_WIDE_BB (TR_WIDE_BB + 239)
       (VmConstraint2.base (.piBinding .first (MEMBERSHIP_TEETH_COL_WIDE + j.val)
         ((withDfaRcPins transferV3).piCount + j.val))) = false := by
     have hj : j.val < 2 := j.isLt
@@ -532,7 +532,7 @@ theorem transferV3MembershipWide_publishes_teeth (hash : List ℤ → ℤ)
       (.piBinding .first (MEMBERSHIP_TEETH_COL_WIDE + j.val)
         ((withDfaRcPins transferV3).piCount + j.val))
       ∈ transferV3MembershipWide.constraints :=
-    wideAppend_mem_of_host _ TR_WIDE_BB (TR_WIDE_BB + 227) _ hinHost hnp
+    wideAppend_mem_of_host _ TR_WIDE_BB (TR_WIDE_BB + 239) _ hinHost hnp
   have h := hsat.rowConstraints 0 h0 _ hin
   simp only [VmConstraint2.holdsAt, hfirstt, holdsVm_piFirst_true] at h
   exact h

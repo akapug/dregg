@@ -274,16 +274,16 @@ theorem effCapRemoveV3_forces_write8 (S8 : Cap8Scheme)
     (i : Nat) (hi : i < t.rows.length) (hnotlast : i + 1 ≠ t.rows.length)
     (spine : List ℤ)
     (hbefore : SpineCommits S8 (fun k => (envAt t i).loc (capRootGroupCol EFFECT_VM_WIDTH k)) spine)
-    (g : GapOpen S8 (fun k => (envAt t i).loc (capRootGroupCol (EFFECT_VM_WIDTH + 227) k))
+    (g : GapOpen S8 (fun k => (envAt t i).loc (capRootGroupCol (EFFECT_VM_WIDTH + 239) k))
           (keyOf (leafOf (capOpenCols base.traceWidth) (envAt t i))))
     (hcov : g.coversSpine
               (sortedRemove (keyOf (leafOf (capOpenCols base.traceWidth) (envAt t i))) spine))
-    (hafter : SpineCommits S8 (fun k => (envAt t i).loc (capRootGroupCol (EFFECT_VM_WIDTH + 227) k))
+    (hafter : SpineCommits S8 (fun k => (envAt t i).loc (capRootGroupCol (EFFECT_VM_WIDTH + 239) k))
                 (sortedRemove (keyOf (leafOf (capOpenCols base.traceWidth) (envAt t i))) spine)) :
     capRemoves8 S8
         (fun k => (envAt t i).loc (capRootGroupCol EFFECT_VM_WIDTH k))
         (leafOf (capOpenCols base.traceWidth) (envAt t i))
-        (fun k => (envAt t i).loc (capRootGroupCol (EFFECT_VM_WIDTH + 227) k)) := by
+        (fun k => (envAt t i).loc (capRootGroupCol (EFFECT_VM_WIDTH + 239) k)) := by
   have hbeforeMem := effCapRemoveV3_forces_beforeMembership S8 base name n hash minit mfin maddrs t
     hChip hsat i hi hnotlast
   exact capRemove_writesTo8 S8 _ _ (leafOf (capOpenCols base.traceWidth) (envAt t i)) spine

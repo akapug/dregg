@@ -2145,9 +2145,9 @@ mod tests {
                 // exact committed widths (a drift tooth on the satisfaction-gadget span, read from the
                 // committed registry TSV) and strip back to the graduated base for the lane check.
                 let expected = if key == "dischargeSatVmDescriptor2R24" {
-                    1654 // GRAD_ROT_WIDTH + the cursor/total/due + G5 free-param bind columns
+                    1720 // GRAD_ROT_WIDTH(1647) + the cursor/total/due + G5 free-param bind columns
                 } else {
-                    2055 // GRAD_ROT_WIDTH + the no-dilution (Ta·m ≤ Sa·d) satisfaction columns
+                    2121 // GRAD_ROT_WIDTH(1647) + the no-dilution (Ta·m ≤ Sa·d) satisfaction columns
                 };
                 assert_eq!(
                     d.trace_width, expected,
