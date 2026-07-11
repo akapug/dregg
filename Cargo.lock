@@ -6436,6 +6436,7 @@ dependencies = [
  "collective-choice",
  "dregg-app-framework",
  "dregg-cell",
+ "dregg-dice",
  "dregg-turn",
  "dregg-types",
  "dregg-zkoracle-prove",
