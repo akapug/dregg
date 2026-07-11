@@ -785,3 +785,16 @@ ordering teeth (D-lowering) -> [full fold, Lane-D gated] -> verify_history. FIRI
 [a955905]; Phase-B narration-into-real-TurnReceipt [a8402cb]. Next: harvest E+B; Phase C (collective rebind onto real
 turns); multi-cell + cross-cell wiring (Witnessed); track Lane D for the full fold; then the stakeholder surfaces
 (discord-bot players, author universe-compile).
+
+## Rebuild — Phase E provenance CLOSED (real MPC-TLS Bedrock attestation), 2026-07-11
+- ✅ E-PROVENANCE committed (zkoracle-prove): a REAL MPC-TLS 2PC to live bedrock-runtime.us-east-1.amazonaws.com,
+  disclosing a GENUINE in-session Claude Haiku completion, SigV4 credential hidden. Verified BY ME (caught the
+  AWS_PROFILE-vs-env-var setup, resolved commonquant-ember, ran it): a fresh real call ("amber glow fractures through
+  obsidian water"), presentation 12857B, presentation.verify() real, 3.66s. SigV4 signer matches AWS's official
+  get-vanilla vector byte-for-byte. THE FEARED TLS-1.3 WALL DOES NOT EXIST (Bedrock speaks 1.2 w/ tlsn's exact suite).
+  This closes the model-provenance hole AND the memory's named "real MPC-TLS carrier" frontier — reusable dregg-wide.
+  HONEST residual: in-process notary → production needs a HOSTED pinned notary (a deploy step, not a crypto gap).
+THE WHOLE TRUST STORY IS NOW REAL (driven): move=real turn (A) · rule=real circuit leaf (D-lowering) · fair randomness
+(dregg-dice/pqvrf, salvaged) · model provenance=real Bedrock MPC-TLS attestation (E). Remaining: full fold (Lane-D
+gated) · hosted notary (deploy) · Phase B (narration→real receipt, running a8402cb) · Phase C (collective rebind) ·
+multi-cell/cross-cell Witnessed wiring · then the stakeholder surfaces (discord players, author universe-compile).
