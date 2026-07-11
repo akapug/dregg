@@ -323,8 +323,8 @@ fn teeth_lowering_table() {
 use dregg_cell::Ledger;
 use dregg_circuit::descriptor_ir2::{UMemBoundaryWitness, prove_vm_descriptor2_for_config};
 use dregg_circuit::effect_vm::trace_rotated::{
-    RotatedBlockWitness, empty_caveat_manifest,
-    generate_rotated_effect_vm_descriptor_and_trace_wide,
+    NUM_PRE_LIMBS, RotatedBlockWitness, WIDE_COMMIT_CARRIER, WIDE_NUM_CARRIERS,
+    empty_caveat_manifest, generate_rotated_effect_vm_descriptor_and_trace_wide,
 };
 use dregg_circuit::effect_vm::{CellState, Effect};
 use dregg_circuit_prove::custom_proof_bind::custom_proof_pi_commitment;
@@ -563,6 +563,104 @@ fn build_chain(commit: [BabyBear; 4]) -> Vec<FinalizedTurn> {
     vec![t0, t1]
 }
 
+// ============================================================================
+// THE WIDE-CARRIER GEOMETRY GATE (the exact Lane D block, DRIVEN)
+//
+// The full multi-turn fold (`game_turn_folds_and_lightclient_accepts`) routes each
+// game turn's `Custom` leg through `generate_rotated_effect_vm_descriptor_and_trace_wide`,
+// which lays a wide 8-felt commitment chain over the rotated block's `NUM_PRE_LIMBS`
+// pre-iroot limbs. That chain's length is a FIXED FUNCTION of `NUM_PRE_LIMBS`:
+//
+//   carriers(L) = 1 (arity-4 head)                         // limbs 0..3
+//               + full3 + rem  (arity-11 body groups)      // limbs 4..L, 3 at a time,
+//                                                           //   leftovers 1 at a time
+//               + 1 (arity-11 iroot-final carrier)
+//     where  full3 = (L - 4) / 3 ,  rem = (L - 4) % 3
+//
+// `fill_wide_block` asserts the final carrier index == `WIDE_COMMIT_CARRIER`
+// (= `WIDE_NUM_CARRIERS - 1`). So the invariant the fold REQUIRES is:
+//
+//     WIDE_NUM_CARRIERS == carriers(NUM_PRE_LIMBS)
+//
+// This is entirely a `circuit/` (Lane D) constant relationship — game-turn-slice only
+// CALLS the wide generator; it cannot change the carrier count. When Lane D's
+// revoked-root base widen bumped NUM_PRE_LIMBS 169 -> 178 it did NOT re-derive the wide
+// carrier constants, so the invariant is currently BROKEN and the fold panics deep inside
+// `fill_wide_block` ("wide chain must end on carrier 56"). This section makes that block
+// EXPLICIT + self-updating: the guard characterizes it at the top of the fold tests, and
+// the tripwire census fires GREEN while blocked and RED the moment Lane D lands the fix.
+
+/// The wide-commitment-chain carrier count for `L` pre-iroot limbs — the exact shape
+/// `fill_wide_block` lays (head + 3-at-a-time body with 1-at-a-time leftovers + iroot-final).
+fn required_wide_carriers(l: usize) -> usize {
+    let body = (l - 4) / 3 + (l - 4) % 3;
+    1 + body + 1
+}
+
+/// Is the deployed wide-carrier geometry internally consistent with `NUM_PRE_LIMBS`? When
+/// this is `true`, the game-turn-slice fold wiring below runs UNCHANGED; when `false`, the
+/// fold is upstream-blocked on Lane D's carrier migration and the guarded tests characterize
+/// exactly the violation instead of panicking deep in `fill_wide_block`.
+fn wide_geometry_consistent() -> bool {
+    let required = required_wide_carriers(NUM_PRE_LIMBS);
+    WIDE_NUM_CARRIERS == required && WIDE_COMMIT_CARRIER == required - 1
+}
+
+/// The precise, evidenced characterization of the current Lane D block (numbers computed
+/// from the live constants, not narrated). Panics from inside the guarded fold tests so a
+/// `--ignored` run shows the exact violation at the TOP of the stack, not the raw
+/// `fill_wide_block` debug-assert; auto-clears (guard returns, fold proceeds) once Lane D
+/// re-derives the wide carrier constants.
+fn gate_full_fold_on_geometry() {
+    if wide_geometry_consistent() {
+        return;
+    }
+    let required = required_wide_carriers(NUM_PRE_LIMBS);
+    panic!(
+        "FULL-FOLD BLOCKED on Lane D wide-carrier geometry (game-turn-slice side is correct \
+         and needs NO change):\n\
+         \x20 NUM_PRE_LIMBS            = {NUM_PRE_LIMBS}\n\
+         \x20 required carriers        = {required}  (1 head + {} body + 1 iroot-final)\n\
+         \x20 WIDE_NUM_CARRIERS (decl) = {WIDE_NUM_CARRIERS}\n\
+         \x20 WIDE_COMMIT_CARRIER      = {WIDE_COMMIT_CARRIER}  (fill_wide_block ends on carrier {})\n\
+         The wide commitment chain over {NUM_PRE_LIMBS} limbs ends on carrier {}, but the frozen \
+         constants declare {WIDE_NUM_CARRIERS}/{WIDE_COMMIT_CARRIER} (the 169-limb geometry). \
+         Lane D must re-derive WIDE_NUM_CARRIERS -> {required} and WIDE_COMMIT_CARRIER -> {}; \
+         then this gate clears and the fold below runs unchanged.",
+        required - 2,
+        required - 1,
+        required - 1,
+        required - 1,
+    );
+}
+
+/// TRIPWIRE (cheap, always runs): asserts the wide-carrier geometry is CURRENTLY
+/// inconsistent with `NUM_PRE_LIMBS`. This is the honest, driven record of the Lane D block
+/// — it reads the live constants, computes the required carrier count, and prints the
+/// census. It is GREEN while the fold is blocked and flips RED the instant Lane D re-derives
+/// the constants, which is the signal to un-`#[ignore]` the full-fold headline.
+#[test]
+fn wide_carrier_geometry_tripwire() {
+    let required = required_wide_carriers(NUM_PRE_LIMBS);
+    eprintln!(
+        "\n=============== WIDE-CARRIER GEOMETRY CENSUS (driven from live constants) ===============\n\
+         \x20 NUM_PRE_LIMBS            = {NUM_PRE_LIMBS}\n\
+         \x20 required carriers        = {required}\n\
+         \x20 WIDE_NUM_CARRIERS (decl) = {WIDE_NUM_CARRIERS}\n\
+         \x20 WIDE_COMMIT_CARRIER      = {WIDE_COMMIT_CARRIER}\n\
+         \x20 consistent               = {}\n\
+         ========================================================================================\n",
+        wide_geometry_consistent(),
+    );
+    assert!(
+        !wide_geometry_consistent(),
+        "Lane D wide-carrier migration LANDED (WIDE_NUM_CARRIERS now == {required}). \
+         The full-fold block is CLEARED: un-#[ignore] `game_turn_folds_and_lightclient_accepts` \
+         + `forged_game_commitment_rejected` (they now run the real game playthrough through \
+         verify_history) and delete this tripwire."
+    );
+}
+
 /// THE REAL-PROVING BOUNDARY (runnable in THIS tree — no rotated-witness path): the
 /// combat `CellProgram` lowers via `cellprogram_to_descriptor2` and PROVES as a real
 /// foldable recursion leaf through `prove_custom_leaf_with_commitment`, and the leaf's
@@ -638,6 +736,11 @@ fn forged_combat_witness_does_not_prove() {
 #[test]
 #[ignore = "SLOW: real deployed custom-binding recursion fold (~minutes); run with --ignored"]
 fn game_turn_folds_and_lightclient_accepts() {
+    // GEOMETRY GATE: if Lane D's wide-carrier constants are stale vs NUM_PRE_LIMBS, characterize
+    // the exact block at the top of the stack (instead of the raw fill_wide_block debug-assert);
+    // clears automatically once Lane D re-derives the constants, and the fold below runs unchanged.
+    gate_full_fold_on_geometry();
+
     // The honest claimed commitment IS the genuine sub-proof PI commitment.
     let real = custom_proof_pi_commitment(&combat_pis());
     let turns = build_chain(real);
@@ -685,6 +788,8 @@ fn game_turn_folds_and_lightclient_accepts() {
 #[test]
 #[ignore = "SLOW: real deployed custom-binding recursion fold (~minutes); run with --ignored"]
 fn forged_game_commitment_rejected() {
+    gate_full_fold_on_geometry();
+
     let real = custom_proof_pi_commitment(&combat_pis());
     let mut forged = real;
     forged[0] = BabyBear::new((real[0].0 + 1) % BABYBEAR_P);
