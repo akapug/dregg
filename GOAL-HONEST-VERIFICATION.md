@@ -432,3 +432,23 @@ end-to-end, memory-index-exact, anti-ghost rotation binding) verified conclusion
 RotationV3 (keystone, in flight) + RotationV3Refused/Wide + the OpenEmit family + any other EffectVm* stragglers,
 then the refinement-layer ripple + AirChecksSatisfied/arithResidual, then whole-tree green. This is a multi-hour
 grind — expected for making a fake-verified system real.
+
+### ★ MILESTONE (mid-migration, 2026-07-11 ~16:00): ~95 Emit/decider/Deos files green + a REAL security finding
+Phase-0 mod-p field-denotation migration, ~95 files committed green (dependency-ordered, every file type-gated):
+all EffectVmEmit* effects + FullState/Wide/Runnable variants; the Rotation chain incl. the 381KB transferV3
+KEYSTONE (RotationV3) + RotationWide; both decision procedures (InterpCore, DecideSatisfied2) with bidirectional
+decide↔denotation equivalence preserved; 8 Deos settle/escrow/authority-floor files; the membership/derivation/
+threshold/fold/garbled/bilateral-agg refine+rung2 ladders. EVERY security keystone verified conclusion-VERBATIM-
+intact: double-spend (nf∉nullifiers), capability non-amplification (grantedBit=0∨heldBit=1) across the whole
+Attenuate→Delegate→Revoke→Refresh chain, memory-index-EXACT (∃j<8, slot=j not residue), anti-ghost rotation/
+authority bindings, UniqueAgent, membership-under-root. Zero permOutZ toy reintroduced. Real bugs FOUND+FIXED:
+over-p Merkle/Blinded witness hashes (base-100→10), stale geometry offsets (56→59, 169→178), a genuinely-false-
+over-ℤ comparator (gteHonestDiff).
+★★★ THE PAYOFF: the migration surfaced a REAL, VERIFIED, high-severity soundness gap in the DEPLOYED (STAGED) vault
+settlement circuit — VaultSatDescriptor's 16-bit product carries can wrap p (2^15·61440+1 = p exactly), letting a
+malicious prover forge a share-inflating settlement past the no-dilution gate. The ℤ model SILENTLY FAKED this
+conservation; the field-faithful model refused to prove it. VaultSatDescriptor.lean STAYS RED (the honest state).
+STAGED (not live VK), fix = CARRY_BITS 16→15 in both twins + VK/fixture regen — EMBER-GATED (deployed circuit +
+staged VK epoch). Doc: docs/reference/VAULT-CARRY-WRAP-INVESTIGATION.md (verdict A, verified by hand).
+REMAINING to close Phase 0: the OpenEmit/Argus families (in flight) + a whole-tree green pass to catch stragglers +
+the AIR chain (AirChecksSatisfied/arithResidual — the Phase-0→Phase-1 boundary). Then Phases 1A/1B/2/3.
