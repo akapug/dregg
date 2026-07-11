@@ -30,8 +30,8 @@ open Dregg2.Circuit
 open Dregg2.Circuit.Emit.EffectVmEmit
 open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (CellState)
 open Dregg2.Circuit.Emit.EffectVmEmitSetField
-  (SEL_SET_FIELD VALUE IsSetFieldRow setFieldRowGates setFieldVmDescriptor RowEncodesSF CellSetFieldSpec
-   setFieldVm_faithful intent_to_cellSpec)
+  (SEL_SET_FIELD VALUE IsSetFieldRow SetFieldRowCanon setFieldRowGates setFieldVmDescriptor
+   RowEncodesSF CellSetFieldSpec setFieldVm_faithful intent_to_cellSpec)
 open Dregg2.Circuit.Emit.EffectVmFullStateRunnable
   (baseAbsorbedCols RunnableFullStateSpec runnable_full_sound runnable_full_commit_binds wide_rejects_root_tamper
    wideHashSites)
@@ -62,7 +62,7 @@ constraint list (membership is direct). All gates are `.gate`, flag-free. The wr
 `post.fields slot` via the `RowEncodesSF` value-carrier clause. -/
 
 theorem setFieldGates_give_cellSpec (slot : Fin 8) (env : VmRowEnv) (pre post : CellState)
-    (hrow : IsSetFieldRow env)
+    (hrow : IsSetFieldRow env) (hcanon : SetFieldRowCanon env)
     (henc : RowEncodesSF slot env pre post)
     (hgates : ∀ c ∈ (setFieldVmDescriptor slot).constraints, c.holdsVm env true false) :
     CellSetFieldSpec slot pre (post.fields slot) post := by
@@ -87,7 +87,8 @@ theorem setFieldGates_give_cellSpec (slot : Fin 8) (env : VmRowEnv) (pre post : 
   have hval : env.loc (prmCol VALUE) = post.fields slot := by
     obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, _, hVal, _, _⟩ := henc
     exact hVal
-  have := intent_to_cellSpec slot env pre post henc ((setFieldVm_faithful slot env hrow).mp hrowgates)
+  have := intent_to_cellSpec slot env pre post henc
+    ((setFieldVm_faithful slot env hrow hcanon).mp hrowgates)
   rw [hval] at this
   exact this
 
@@ -101,18 +102,20 @@ def SetFieldFullClause (slot : Fin 8) (preRoots : SysRoots)
   CellSetFieldSpec slot pre (post.fields slot) post ∧ postRoots = preRoots
 
 /-- **`setFieldRunnableSpec slot`** — the FULL-state RUNNABLE instance for slot-`slot` setField. THIN;
-NON-VACUOUS. -/
+NON-VACUOUS. `isRow` carries the row's explicit canonicality envelope (`SetFieldRowCanon`, the deployed
+range-check invariant) alongside the selector shape — the mod-p gate denotation needs it to read the ℤ
+intent back off the field-checked gates. -/
 def setFieldRunnableSpec (slot : Fin 8) (preRoots : SysRoots) : RunnableFullStateSpec CellState where
   descriptor    := setFieldVmDescriptorWide slot
   usesWideSites := rfl
-  isRow         := IsSetFieldRow
+  isRow         := fun env => IsSetFieldRow env ∧ SetFieldRowCanon env
   decodeAfter   := fun env pre post postRoots =>
     RowEncodesSF slot env pre post ∧ postRoots = preRoots
   fullClause    := SetFieldFullClause slot preRoots
   decodeFull    := by
     intro env pre post postRoots hrow hdec hgates
     obtain ⟨henc, hroots⟩ := hdec
-    exact ⟨setFieldGates_give_cellSpec slot env pre post hrow henc
+    exact ⟨setFieldGates_give_cellSpec slot env pre post hrow.1 hrow.2 henc
             (setFieldWide_constraints_eq slot ▸ hgates), hroots⟩
 
 /-! ## §4 — THE DELIVERABLE: `setField_runnable_full_sound`. -/
@@ -123,11 +126,11 @@ the FULL 17-field post-state: the per-cell field-write block (`CellSetFieldSpec`
 roots FROZEN. -/
 theorem setField_runnable_full_sound (slot : Fin 8) (hash : List ℤ → ℤ) (preRoots : SysRoots)
     (env : VmRowEnv) (pre post : CellState) (postRoots : SysRoots)
-    (hrow : IsSetFieldRow env)
+    (hrow : IsSetFieldRow env) (hcanon : SetFieldRowCanon env)
     (henc : RowEncodesSF slot env pre post) (hroots : postRoots = preRoots)
     (hsat : satisfiedVm hash (setFieldVmDescriptorWide slot) env true false) :
     CellSetFieldSpec slot pre (post.fields slot) post ∧ postRoots = preRoots :=
-  runnable_full_sound (setFieldRunnableSpec slot preRoots) hash env pre post postRoots hrow
+  runnable_full_sound (setFieldRunnableSpec slot preRoots) hash env pre post postRoots ⟨hrow, hcanon⟩
     ⟨henc, hroots⟩ hsat
 
 /-! ## §5 — THE ANTI-GHOST. -/

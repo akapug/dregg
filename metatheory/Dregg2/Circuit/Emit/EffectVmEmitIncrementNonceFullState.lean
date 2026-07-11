@@ -40,8 +40,8 @@ open Dregg2.Circuit.Emit.EffectVmEmit
 open Dregg2.Circuit.Emit.EffectVmEmitTransfer (gFieldPassAll)
 open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (CellState)
 open Dregg2.Circuit.Emit.EffectVmEmitIncrementNonce
-  (SEL_INCREMENT_NONCE IsIncNonceRow incNonceRowGates incrementNonceVmDescriptor incNonceHashSites
-   RowEncodesIncNonce CellIncNonceSpec incNonceVm_faithful intent_to_cellSpec
+  (SEL_INCREMENT_NONCE IsIncNonceRow IncNonceRowCanon incNonceRowGates incrementNonceVmDescriptor
+   incNonceHashSites RowEncodesIncNonce CellIncNonceSpec incNonceVm_faithful intent_to_cellSpec
    goodIncNonceRow goodIncNonceRow_noop goodIncNonceRow_realizes_intent)
 open Dregg2.Circuit.Emit.EffectVmFullStateRunnable
   (baseAbsorbedCols RunnableFullStateSpec runnable_full_sound runnable_full_commit_binds wide_rejects_root_tamper
@@ -78,10 +78,13 @@ NEITHER of which reads the sites. So the runnable per-cell soundness depends ONL
 sites bind the COMMITMENT — discharged once in the generic theorem — not the per-cell spec). -/
 
 /-- **`incNonceGates_give_cellSpec`** — the per-row gates of the incrementNonce descriptor, on a row
-decoded by `RowEncodesIncNonce` with `s_noop = 0`, force `CellIncNonceSpec`. Flag-free: the gates are
-all `.gate`, whose `holdsVm` ignores the first/last flags. -/
+decoded by `RowEncodesIncNonce` with `s_noop = 0`, under the row's explicit canonicality envelope
+(`IncNonceRowCanon` — the deployed range-check invariant that lets the ℤ intent be read back off the
+mod-p checked gates), force `CellIncNonceSpec`. Flag-free: the gates are all `.gate`, whose `holdsVm`
+ignores the first/last flags. -/
 theorem incNonceGates_give_cellSpec (env : VmRowEnv) (pre post : CellState)
-    (hnoop : env.loc sel.NOOP = 0) (henc : RowEncodesIncNonce env pre post)
+    (hnoop : env.loc sel.NOOP = 0) (hcanon : IncNonceRowCanon env)
+    (henc : RowEncodesIncNonce env pre post)
     (hgates : ∀ c ∈ incrementNonceVmDescriptor.constraints, c.holdsVm env true false) :
     CellIncNonceSpec pre post := by
   have hrowgates : ∀ c ∈ incNonceRowGates, c.holdsVm env false false := by
@@ -97,7 +100,7 @@ theorem incNonceGates_give_cellSpec (env : VmRowEnv) (pre post : CellState)
       List.mem_range] at hc
     rcases hc with (rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩ <;>
       simpa only [VmConstraint.holdsVm] using hh
-  exact intent_to_cellSpec env pre post hnoop henc ((incNonceVm_faithful env).mp hrowgates)
+  exact intent_to_cellSpec env pre post hnoop henc ((incNonceVm_faithful env hcanon).mp hrowgates)
 
 /-! ## §3 — the FULL declarative clause + the `RunnableFullStateSpec` instance. -/
 
@@ -114,18 +117,19 @@ def IncNonceFullClause (preRoots : SysRoots) (pre post : CellState) (postRoots :
 gates (= the narrow descriptor's, `incNonceWide_constraints_eq`) to the GATE-ONLY
 `incNonceGates_give_cellSpec`, then carries the frozen-roots fact. THIN; NON-VACUOUS (`fullClause` is the
 genuine per-cell tick + the frozen sub-block, not `True`). The `s_noop = 0` leg of `IsIncNonceRow` feeds
-the gate-only soundness. -/
+the gate-only soundness; `isRow` also carries the row's explicit canonicality envelope
+(`IncNonceRowCanon`, the deployed range-check invariant) that the mod-p gate denotation needs. -/
 def incNonceRunnableSpec (preRoots : SysRoots) : RunnableFullStateSpec CellState where
   descriptor    := incrementNonceVmDescriptorWide
   usesWideSites := rfl
-  isRow         := IsIncNonceRow
+  isRow         := fun env => IsIncNonceRow env ∧ IncNonceRowCanon env
   decodeAfter   := fun env pre post postRoots =>
     RowEncodesIncNonce env pre post ∧ postRoots = preRoots
   fullClause    := IncNonceFullClause preRoots
   decodeFull    := by
     intro env pre post postRoots hrow hdec hgates
     obtain ⟨henc, hroots⟩ := hdec
-    exact ⟨incNonceGates_give_cellSpec env pre post hrow.2 henc
+    exact ⟨incNonceGates_give_cellSpec env pre post hrow.1.2 hrow.2 henc
             (incNonceWide_constraints_eq ▸ hgates), hroots⟩
 
 /-! ## §4 — THE DELIVERABLE: `incrementNonce_runnable_full_sound` (full 17-field on the RUNNABLE descriptor). -/
@@ -138,11 +142,11 @@ TICKS) AND all 8 side-table roots FROZEN. The circuit the prover ACTUALLY RUNS b
 post-state, not the 13-column projection. -/
 theorem incrementNonce_runnable_full_sound (hash : List ℤ → ℤ) (preRoots : SysRoots)
     (env : VmRowEnv) (pre post : CellState) (postRoots : SysRoots)
-    (hrow : IsIncNonceRow env)
+    (hrow : IsIncNonceRow env) (hcanon : IncNonceRowCanon env)
     (henc : RowEncodesIncNonce env pre post) (hroots : postRoots = preRoots)
     (hsat : satisfiedVm hash incrementNonceVmDescriptorWide env true false) :
     CellIncNonceSpec pre post ∧ postRoots = preRoots :=
-  runnable_full_sound (incNonceRunnableSpec preRoots) hash env pre post postRoots hrow
+  runnable_full_sound (incNonceRunnableSpec preRoots) hash env pre post postRoots ⟨hrow, hcanon⟩
     ⟨henc, hroots⟩ hsat
 
 /-! ## §5 — THE ANTI-GHOST: tamper ANY of the 17 fields ⇒ UNSAT (incl. any side-table root). -/
