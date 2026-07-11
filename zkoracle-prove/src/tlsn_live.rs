@@ -584,8 +584,9 @@ pub struct CoinbaseRoundtrip {
 /// **Run the REAL MPC-TLS 2PC prover against live `api.coinbase.com`**, connecting to a
 /// SEPARATE hosted notary at `notary_addr` over a real TCP socket, and produce a signed `tlsn`
 /// presentation of the `GET /v2/prices/{asset}/spot` session.
-async fn prove_coinbase_presentation(
-    asset: &str,
+async fn prove_live_presentation(
+    server_name: &str,
+    path: &str,
     notary_addr: std::net::SocketAddr,
 ) -> Result<Vec<u8>> {
     // Prover ↔ SEPARATE notary over a real socket (not an in-process duplex).
@@ -608,12 +609,12 @@ async fn prove_coinbase_presentation(
 
     // The ONLY networking change vs the fixture path: a REAL TCP socket to Coinbase, with the
     // Mozilla roots + the pinned Coinbase SNI.
-    let server_socket = tokio::net::TcpStream::connect((COINBASE_SERVER_NAME, 443u16))
+    let server_socket = tokio::net::TcpStream::connect((server_name, 443u16))
         .await
-        .with_context(|| format!("TCP connect to {COINBASE_SERVER_NAME}:443"))?;
+        .with_context(|| format!("TCP connect to {server_name}:443"))?;
     let (tls_connection, prover) = prover.connect(
         TlsClientConfig::builder()
-            .server_name(ServerName::Dns(COINBASE_SERVER_NAME.try_into()?))
+            .server_name(ServerName::Dns(server_name.try_into()?))
             .root_store(RootCertStore::mozilla())
             .build()?,
         server_socket.compat(),
@@ -627,11 +628,10 @@ async fn prove_coinbase_presentation(
 
     // GET /v2/prices/{asset}/spot — a public read-only quote (no auth, empty body). A
     // `User-Agent` is sent because Coinbase's edge rejects UA-less requests.
-    let path = format!("/v2/prices/{asset}/spot");
     let request = Request::builder()
-        .uri(path.as_str())
+        .uri(path)
         .method("GET")
-        .header("Host", COINBASE_SERVER_NAME)
+        .header("Host", server_name)
         .header("User-Agent", "dregg-oracle/0.1")
         .header("Accept", "application/json")
         .header("Accept-Encoding", "identity")
@@ -674,7 +674,7 @@ async fn prove_coinbase_presentation(
 
     let mut att_req_builder = AttestationRequest::builder(&request_config);
     att_req_builder
-        .server_name(ServerName::Dns(COINBASE_SERVER_NAME.try_into()?))
+        .server_name(ServerName::Dns(server_name.try_into()?))
         .handshake_data(HandshakeData {
             certs: tls_transcript
                 .server_cert_chain()
@@ -720,6 +720,18 @@ async fn prove_coinbase_presentation(
         .transcript_proof(transcript_proof);
     let presentation: Presentation = pres_builder.build()?;
     Ok(bincode::serialize(&presentation)?)
+}
+
+async fn prove_coinbase_presentation(
+    asset: &str,
+    notary_addr: std::net::SocketAddr,
+) -> Result<Vec<u8>> {
+    prove_live_presentation(
+        COINBASE_SERVER_NAME,
+        &format!("/v2/prices/{asset}/spot"),
+        notary_addr,
+    )
+    .await
 }
 
 /// **Verify a real Coinbase presentation** against the Mozilla roots, PIN the separate
@@ -825,6 +837,46 @@ pub fn run_coinbase_roundtrip_blocking(asset: &str) -> Result<CoinbaseRoundtrip>
         .enable_all()
         .build()?;
     rt.block_on(run_coinbase_roundtrip_inner(asset, notary_key))
+}
+
+/// Generic real-host MPC-TLS roundtrip: spawn a local notary, prove a live
+/// `GET {path}` against `server_name:443`, verify the presentation, return the
+/// `CoinbaseRoundtrip` container (reused across endpoints).
+async fn run_live_roundtrip_inner(
+    server_name: &str,
+    path: &str,
+    notary_key: k256::ecdsa::SigningKey,
+) -> Result<CoinbaseRoundtrip> {
+    let notary = crate::notary_server::spawn_hosted_notary(notary_key, 1).await?;
+    let pin = notary.pin().clone();
+    let presentation_bytes = prove_live_presentation(server_name, path, pin.addr).await?;
+    notary.join().await?;
+    let verified =
+        verify_coinbase_presentation(&presentation_bytes, server_name, &pin.verifying_key)?;
+    Ok(CoinbaseRoundtrip {
+        verified,
+        presentation_bytes,
+        pinned_server: server_name.to_string(),
+        notary_pin: pin,
+    })
+}
+
+/// Real-host MPC-TLS roundtrip against `GET api.github.com/repos/{owner}/{repo}/commits/{sha}`.
+pub fn run_github_roundtrip_blocking(
+    owner: &str,
+    repo: &str,
+    sha: &str,
+) -> Result<CoinbaseRoundtrip> {
+    let path = crate::endpoints::github::github_commit_path(owner, repo, sha);
+    let notary_key = crate::notary_server::generate_notary_key()?;
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    rt.block_on(run_live_roundtrip_inner(
+        crate::endpoints::github::GITHUB_SERVER_NAME,
+        &path,
+        notary_key,
+    ))
 }
 
 /// **Run the roundtrip against a DURABLE hosted notary** whose signing key is persisted at

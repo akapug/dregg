@@ -111,7 +111,7 @@ impl ProofEnvelope {
 
 const SCHEME: &str = "dregg-oracle/1";
 const TOOL: &str = concat!("dregg-oracle ", env!("CARGO_PKG_VERSION"));
-const TRUST_NOTE: &str = "trustless: a self-hosted tlsn notary co-witnessed the MPC-TLS 2PC session (it saw no plaintext); verification re-derives the well-formed + injection-free legs over the authenticated body. You trust only api.coinbase.com's genuine TLS cert chain + the pinned notary key.";
+const TRUST_NOTE: &str = "trustless: a self-hosted tlsn notary co-witnessed the MPC-TLS 2PC session (it saw no plaintext); verification re-derives the well-formed + injection-free legs over the authenticated body. You trust only the pinned server's genuine TLS cert chain + the pinned notary key.";
 
 /// The verified fact a proof attests.
 pub struct Attested {
@@ -142,8 +142,19 @@ pub fn prove(ep: &Endpoint) -> Result<ProofEnvelope> {
                 notary_key_hex: hex::encode(&key),
             })
         }
-        Endpoint::Github { .. } => {
-            bail!("github live proof is not wired yet — coinbase spot prices work today")
+        Endpoint::Github { owner, repo, sha } => {
+            let (pres, key) =
+                dregg_zkoracle_prove::endpoints::github::prove_github_portable(owner, repo, sha)
+                    .map_err(|e| anyhow!("live github proof failed: {e:?}"))?;
+            Ok(ProofEnvelope {
+                scheme: SCHEME.to_string(),
+                server: "api.github.com".to_string(),
+                carrier: "live-mpc-tls (tlsn 2PC, self-hosted notary)".to_string(),
+                endpoint: ep.tag(),
+                tool: TOOL.to_string(),
+                presentation_hex: hex::encode(&pres),
+                notary_key_hex: hex::encode(&key),
+            })
         }
     }
 }
@@ -158,7 +169,7 @@ pub fn prove(_ep: &Endpoint) -> Result<ProofEnvelope> {
 pub fn verify_envelope(env: &ProofEnvelope) -> Result<Attested> {
     match &env.endpoint {
         EndpointTag::Coinbase { .. } => verify_coinbase(env),
-        EndpointTag::Github { .. } => bail!("github verification is not wired yet"),
+        EndpointTag::Github { .. } => verify_github(env),
     }
 }
 
@@ -180,5 +191,28 @@ fn verify_coinbase(env: &ProofEnvelope) -> Result<Attested> {
 
 #[cfg(not(feature = "live"))]
 fn verify_coinbase(_env: &ProofEnvelope) -> Result<Attested> {
+    bail!("built without `live` — rebuild with `--features live` to verify a live-carrier proof")
+}
+
+#[cfg(feature = "live")]
+fn verify_github(env: &ProofEnvelope) -> Result<Attested> {
+    let pres = hex::decode(&env.presentation_hex).context("decode presentation hex")?;
+    let key = hex::decode(&env.notary_key_hex).context("decode notary key hex")?;
+    let fact = dregg_zkoracle_prove::endpoints::github::verify_github_portable_bytes(&pres, &key)
+        .map_err(|e| anyhow!("VERIFY FAILED (fail-closed): {e:?}"))?;
+    let short = &fact.sha[..fact.sha.len().min(12)];
+    let subject = fact.message.lines().next().unwrap_or("").trim();
+    Ok(Attested {
+        value: format!("{}/{}@{short} \u{2014} {subject}", fact.owner, fact.repo),
+        endpoint: format!("github commit (by {}, {})", fact.author, fact.date),
+        server_pinned: env.server.clone(),
+        carrier: env.carrier.clone(),
+        time: 0,
+        trust_note: TRUST_NOTE.to_string(),
+    })
+}
+
+#[cfg(not(feature = "live"))]
+fn verify_github(_env: &ProofEnvelope) -> Result<Attested> {
     bail!("built without `live` — rebuild with `--features live` to verify a live-carrier proof")
 }
