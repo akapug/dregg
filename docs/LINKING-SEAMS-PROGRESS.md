@@ -48,11 +48,15 @@ Materialize the fixed-fork-index finite-shadow ↔ real-infinite-RO-adversary br
 ## Seam 4 — trust-shrink + gaps: PARTIAL (with a key honest finding)
 `MlKemDelta.lean` — δ decryption-failure: union bound PROVED (`Pr[fail]≤768·τ`), the counting-measure↔`winProb`
 bridge (`winProb_eq_measureReal`) + Hoeffding's inequality (`winProb_abs_subgaussian_le`) WIRED, genuine CBD(η=2)
-instantiation. **KEY FINDING (proven in Lean, `hoeffding_budget_exceeds_2800`): δ does NOT close via Hoeffding** —
-the sub-Gaussian proxy dominates the variance (measured `47684 ≫ 2800`, 16× over; `Δv` alone `104²=10816`). The
-correct closure needs a **variance-based Bernstein/sub-gamma** concentration (uncertain if Mathlib ships it) OR the
-exact Kyber convolution δ — NOT Hoeffding. That is the precise named residual. `native_decide`-shrink (toward
-kernel) + `[StarkSound]` discharge: not started.
+instantiation. **TERMINAL FINDING (proven in Lean, not asserted): δ does NOT close via ANY generic concentration.**
+(1) Hoeffding: proxy `47684 ≫ 2800` (16× over) — `hoeffding_budget_exceeds_2800`.
+(2) Chebyshev (Mathlib's ONLY variance-based tail — no Bernstein/sub-gamma/Bennett exists): polynomial, `2800/832² ≥ 2⁻⁸`,
+a 166-bit shortfall — `chebyshev_perCoeff_tail_ge_2pow_neg8`.
+(3) Even GRANTING Bernstein: the Kyber params miss 164 bits — honest `b=104` → ~15.8 bits (`b·t/3` swamps V),
+optimistic `b=4` → ~117.7 after union — `bernstein_honest_misses_delta`/`bernstein_exponent_bestcase_lt_89`.
+**Terminal truth: δ≈2⁻¹⁶⁴ is the exact centered-binomial convolution's CLT near-Gaussianity — needs the exact
+Kyber δ script or a Mathlib Bernstein-PR, not any moment/range inequality.** Genuinely open, obstruction PROVEN.
+`native_decide`-shrink (toward kernel) + `[StarkSound]` discharge: not started.
 
 ## Seam 5 — deployment integrity: the GAUNTLET CLAUSE MET; deployment plumbing remains
 **WHOLE-TREE gauntlet PASSED on hbox (`lake build Dregg2` + the full linking chain = 9560 jobs, exit 0)** — the
