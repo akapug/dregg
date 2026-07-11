@@ -23,6 +23,12 @@ pub enum Endpoint {
         repo: String,
         sha: String,
     },
+    /// Any public HTTPS JSON GET — prove a field of the response.
+    Url {
+        host: String,
+        path: String,
+        field: String,
+    },
 }
 
 impl Endpoint {
@@ -30,6 +36,7 @@ impl Endpoint {
         match self {
             Endpoint::Coinbase { .. } => "api.coinbase.com",
             Endpoint::Github { .. } => "api.github.com",
+            Endpoint::Url { .. } => "the pinned host",
         }
     }
 
@@ -37,6 +44,7 @@ impl Endpoint {
         match self {
             Endpoint::Coinbase { asset } => format!("coinbase spot {asset}"),
             Endpoint::Github { owner, repo, sha } => format!("github {owner}/{repo}@{sha}"),
+            Endpoint::Url { host, path, field } => format!("{host}{path} · {field}"),
         }
     }
 
@@ -49,6 +57,11 @@ impl Endpoint {
                 owner: owner.clone(),
                 repo: repo.clone(),
                 sha: sha.clone(),
+            },
+            Endpoint::Url { host, path, field } => EndpointTag::Url {
+                host: host.clone(),
+                path: path.clone(),
+                field: field.clone(),
             },
         }
     }
@@ -66,6 +79,12 @@ pub enum EndpointTag {
         repo: String,
         sha: String,
     },
+    /// Any public HTTPS JSON GET — prove a field of the response.
+    Url {
+        host: String,
+        path: String,
+        field: String,
+    },
 }
 
 impl EndpointTag {
@@ -73,6 +92,7 @@ impl EndpointTag {
         match self {
             EndpointTag::Coinbase { asset } => format!("coinbase spot {asset}"),
             EndpointTag::Github { owner, repo, sha } => format!("github {owner}/{repo}@{sha}"),
+            EndpointTag::Url { host, path, field } => format!("{host}{path} · {field}"),
         }
     }
 }
@@ -156,6 +176,20 @@ pub fn prove(ep: &Endpoint) -> Result<ProofEnvelope> {
                 notary_key_hex: hex::encode(&key),
             })
         }
+        Endpoint::Url { host, path, .. } => {
+            let (pres, key) =
+                dregg_zkoracle_prove::endpoints::generic::prove_url_portable(host, path)
+                    .map_err(|e| anyhow!("live url proof failed: {e:?}"))?;
+            Ok(ProofEnvelope {
+                scheme: SCHEME.to_string(),
+                server: host.clone(),
+                carrier: "live-mpc-tls (tlsn 2PC, self-hosted notary)".to_string(),
+                endpoint: ep.tag(),
+                tool: TOOL.to_string(),
+                presentation_hex: hex::encode(&pres),
+                notary_key_hex: hex::encode(&key),
+            })
+        }
     }
 }
 
@@ -170,6 +204,7 @@ pub fn verify_envelope(env: &ProofEnvelope) -> Result<Attested> {
     match &env.endpoint {
         EndpointTag::Coinbase { .. } => verify_coinbase(env),
         EndpointTag::Github { .. } => verify_github(env),
+        EndpointTag::Url { .. } => verify_url(env),
     }
 }
 
@@ -215,4 +250,52 @@ fn verify_github(env: &ProofEnvelope) -> Result<Attested> {
 #[cfg(not(feature = "live"))]
 fn verify_github(_env: &ProofEnvelope) -> Result<Attested> {
     bail!("built without `live` — rebuild with `--features live` to verify a live-carrier proof")
+}
+
+#[cfg(feature = "live")]
+fn verify_url(env: &ProofEnvelope) -> Result<Attested> {
+    let field = match &env.endpoint {
+        EndpointTag::Url { field, .. } => field.clone(),
+        _ => bail!("not a url proof"),
+    };
+    let pres = hex::decode(&env.presentation_hex).context("decode presentation hex")?;
+    let key = hex::decode(&env.notary_key_hex).context("decode notary key hex")?;
+    let body = dregg_zkoracle_prove::endpoints::generic::verify_url_body_portable_bytes(
+        &pres,
+        &key,
+        &env.server,
+    )
+    .map_err(|e| anyhow!("VERIFY FAILED (fail-closed): {e:?}"))?;
+    let value = extract_field(&body, &field)?;
+    Ok(Attested {
+        value: format!("{field} = {value}"),
+        endpoint: format!("{} (json field)", env.server),
+        server_pinned: env.server.clone(),
+        carrier: env.carrier.clone(),
+        time: 0,
+        trust_note: TRUST_NOTE.to_string(),
+    })
+}
+
+#[cfg(not(feature = "live"))]
+fn verify_url(_env: &ProofEnvelope) -> Result<Attested> {
+    bail!("built without `live` — rebuild with `--features live` to verify a live-carrier proof")
+}
+
+/// Walk a dotted path (keys + numeric array indices) into a JSON body.
+fn extract_field(body: &str, field: &str) -> Result<String> {
+    let v: serde_json::Value = serde_json::from_str(body).context("response body is not JSON")?;
+    let mut cur = &v;
+    for seg in field.split('.') {
+        cur = if let Ok(i) = seg.parse::<usize>() {
+            cur.get(i)
+        } else {
+            cur.get(seg)
+        }
+        .ok_or_else(|| anyhow!("field path '{field}' not found (at '{seg}')"))?;
+    }
+    Ok(match cur {
+        serde_json::Value::String(s) => s.clone(),
+        other => other.to_string(),
+    })
 }

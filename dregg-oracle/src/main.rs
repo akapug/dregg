@@ -44,6 +44,12 @@ enum Cmd {
         /// GitHub: the commit sha.
         #[arg(long)]
         sha: Option<String>,
+        /// url: the full https URL, e.g. https://api.coincap.io/v2/assets/bitcoin
+        #[arg(long)]
+        url: Option<String>,
+        /// url: dotted path to the field to report, e.g. data.priceUsd
+        #[arg(long)]
+        field: Option<String>,
         /// Where to write the portable proof.
         #[arg(long, default_value = "proof.json")]
         out: PathBuf,
@@ -59,6 +65,7 @@ enum Cmd {
 enum EndpointArg {
     Coinbase,
     Github,
+    Url,
 }
 
 fn main() -> Result<()> {
@@ -69,8 +76,10 @@ fn main() -> Result<()> {
             asset,
             repo,
             sha,
+            url,
+            field,
             out,
-        } => run_prove(endpoint, asset, repo, sha, out),
+        } => run_prove(endpoint, asset, repo, sha, url, field, out),
         Cmd::Verify { proof } => run_verify(proof),
     }
 }
@@ -80,6 +89,8 @@ fn run_prove(
     asset: Option<String>,
     repo: Option<String>,
     sha: Option<String>,
+    url: Option<String>,
+    field: Option<String>,
     out: PathBuf,
 ) -> Result<()> {
     let endpoint = match endpoint {
@@ -104,6 +115,20 @@ fn run_prove(
                 repo: name.to_string(),
                 sha,
             }
+        }
+        EndpointArg::Url => {
+            let url = url.context("--url is required for --endpoint url")?;
+            let field = field.context(
+                "--field (dotted path, e.g. data.priceUsd) is required for --endpoint url",
+            )?;
+            let rest = url
+                .strip_prefix("https://")
+                .context("--url must start with https://")?;
+            let (host, path) = match rest.split_once('/') {
+                Some((h, p)) => (h.to_string(), format!("/{p}")),
+                None => (rest.to_string(), "/".to_string()),
+            };
+            Endpoint::Url { host, path, field }
         }
     };
 

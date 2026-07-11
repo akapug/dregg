@@ -642,7 +642,7 @@ async fn prove_live_presentation(
     // Drain the body so the transcript is complete before proving.
     let _ = response.into_body().collect().await?;
     if status != StatusCode::OK {
-        return Err(anyhow!("coinbase returned {status}"));
+        return Err(anyhow!("{server_name} returned {status}"));
     }
 
     let mut prover = prover_task.await??;
@@ -859,6 +859,16 @@ async fn run_live_roundtrip_inner(
         pinned_server: server_name.to_string(),
         notary_pin: pin,
     })
+}
+
+/// Generic real-host MPC-TLS roundtrip: `GET https://{host}{path}`. The caller owns
+/// the host pin + the path; the response body is disclosed whole.
+pub fn run_url_roundtrip_blocking(host: &str, path: &str) -> Result<CoinbaseRoundtrip> {
+    let notary_key = crate::notary_server::generate_notary_key()?;
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    rt.block_on(run_live_roundtrip_inner(host, path, notary_key))
 }
 
 /// Real-host MPC-TLS roundtrip against `GET api.github.com/repos/{owner}/{repo}/commits/{sha}`.

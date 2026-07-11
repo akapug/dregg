@@ -24,6 +24,7 @@
 //! deployed/pinned notary) is the NAMED operational remainder — see
 //! `docs/deos/ZKORACLE-ENDPOINTS.md`.
 
+pub mod generic;
 pub mod github;
 pub mod price;
 
