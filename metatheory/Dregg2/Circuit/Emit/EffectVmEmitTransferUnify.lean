@@ -200,13 +200,13 @@ The six OTHER clauses are character-for-character `CellTransferSpec`'s. -/
 nonce-FREEZE. Every other clause (direction bit, balance signed-move, balHi/fields/capRoot/reserved
 freeze) is identical to `CellTransferSpec`. -/
 def CellTransferSpecFrozenNonce (pre : CellState) (p : TransferParams) (post : CellState) : Prop :=
-  (p.direction = 0 ∨ p.direction = 1)
-  ∧ post.balLo = pre.balLo + signedMove p
-  ∧ post.balHi = pre.balHi
-  ∧ post.nonce = pre.nonce          -- FROZEN (executor image) — keystone instead demands `pre.nonce + 1`
-  ∧ (∀ i : Fin 8, post.fields i = pre.fields i)
-  ∧ post.capRoot = pre.capRoot
-  ∧ post.reserved = pre.reserved
+  (p.direction ≡ 0 [ZMOD 2013265921] ∨ p.direction ≡ 1 [ZMOD 2013265921])
+  ∧ post.balLo ≡ pre.balLo + signedMove p [ZMOD 2013265921]
+  ∧ post.balHi ≡ pre.balHi [ZMOD 2013265921]
+  ∧ post.nonce ≡ pre.nonce [ZMOD 2013265921]  -- FROZEN (executor image) — keystone demands `pre.nonce + 1`
+  ∧ (∀ i : Fin 8, post.fields i ≡ pre.fields i [ZMOD 2013265921])
+  ∧ post.capRoot ≡ pre.capRoot [ZMOD 2013265921]
+  ∧ post.reserved ≡ pre.reserved [ZMOD 2013265921]
 
 /-- **The precise gap, as a theorem.** `CellTransferSpecFrozenNonce` and `CellTransferSpec` agree on
 ALL clauses except the nonce: the former FREEZES (`post.nonce = pre.nonce`), the latter TICKS
@@ -215,8 +215,8 @@ ALL clauses except the nonce: the former FREEZES (`post.nonce = pre.nonce`), the
 the same `(pre,p,post)` unless `post.nonce` could be both. This pins the mismatch to exactly the nonce
 column. -/
 theorem frozenNonce_vs_keystone (pre post : CellState) (p : TransferParams) :
-    (CellTransferSpecFrozenNonce pre p post ∧ post.nonce = pre.nonce + 1)
-      ↔ (CellTransferSpec pre p post ∧ post.nonce = pre.nonce) := by
+    (CellTransferSpecFrozenNonce pre p post ∧ post.nonce ≡ pre.nonce + 1 [ZMOD 2013265921])
+      ↔ (CellTransferSpec pre p post ∧ post.nonce ≡ pre.nonce [ZMOD 2013265921]) := by
   constructor
   · rintro ⟨⟨hd, hlo, hhi, hn, hf, hcap, hres⟩, htick⟩
     exact ⟨⟨hd, hlo, hhi, htick, hf, hcap, hres⟩, hn⟩
@@ -271,9 +271,10 @@ satisfies the keystone's per-cell spec (freeze-nonce variant) EXACTLY. The src c
 nonce is frozen (the §2 gap). So `CellTransferSpec`'s SRC leg IS `recKExec`'s SRC effect. -/
 theorem unify_debit (k k' : RecordKernelState) (t : Turn) (hspec : TransferSpec k t k') :
     CellTransferSpecFrozenNonce (cellProj k t.src) (debitParams t) (cellProj k' t.src) := by
-  refine ⟨Or.inr rfl, ?_, rfl, ?_, fun _ => rfl, rfl, rfl⟩
-  · rw [signedMove_debit]; rw [proj_src_balLo k k' t hspec]; ring
-  · exact proj_nonce_frozen k k' t t.src hspec
+  refine ⟨Or.inr (Int.ModEq.refl 1), ?_, Int.ModEq.refl _, ?_, fun _ => Int.ModEq.refl _,
+    Int.ModEq.refl _, Int.ModEq.refl _⟩
+  · exact eqToModEq (by rw [signedMove_debit, proj_src_balLo k k' t hspec]; ring)
+  · exact eqToModEq (proj_nonce_frozen k k' t t.src hspec)
 
 /-- **`unify_credit` — THE CREDIT-SIDE UNIFICATION.** A committed universe-A transfer, restricted to
 the DST cell under `cellProj` with the credit param block, satisfies the keystone's per-cell spec
@@ -281,9 +282,10 @@ the DST cell under `cellProj` with the credit param block, satisfies the keyston
 frame frozen; nonce frozen. So `CellTransferSpec`'s DST leg IS `recKExec`'s DST effect. -/
 theorem unify_credit (k k' : RecordKernelState) (t : Turn) (hspec : TransferSpec k t k') :
     CellTransferSpecFrozenNonce (cellProj k t.dst) (creditParams t) (cellProj k' t.dst) := by
-  refine ⟨Or.inl rfl, ?_, rfl, ?_, fun _ => rfl, rfl, rfl⟩
-  · rw [signedMove_credit]; rw [proj_dst_balLo k k' t hspec]
-  · exact proj_nonce_frozen k k' t t.dst hspec
+  refine ⟨Or.inl (Int.ModEq.refl 0), ?_, Int.ModEq.refl _, ?_, fun _ => Int.ModEq.refl _,
+    Int.ModEq.refl _, Int.ModEq.refl _⟩
+  · exact eqToModEq (by rw [signedMove_credit, proj_dst_balLo k k' t hspec])
+  · exact eqToModEq (proj_nonce_frozen k k' t t.dst hspec)
 
 /-- **`unify_debit_exec` / `unify_credit_exec` — same, stated against the executor directly.** Reading
 through `recKExec_iff_spec`, a committed `recKExec k t = some k'` (the REAL record-kernel transition)
@@ -323,31 +325,30 @@ theorem descriptor_agrees_with_executor_debit
     (hgatesat : satisfiedVm hash transferVmDescriptor env true false)
     (hsat : satisfiedVm hash transferVmDescriptor env true true)
     (hexec : recKExec k t = some k') :
-    -- the conserved balance + the whole frame agree with the executor's SRC post-cell …
-    ( post.balLo = (cellProj k' t.src).balLo
-      ∧ post.balHi = (cellProj k' t.src).balHi
-      ∧ (∀ i, post.fields i = (cellProj k' t.src).fields i)
-      ∧ post.capRoot = (cellProj k' t.src).capRoot
-      ∧ post.reserved = (cellProj k' t.src).reserved )
+    -- the conserved balance + the whole frame agree (mod p) with the executor's SRC post-cell …
+    ( post.balLo ≡ (cellProj k' t.src).balLo [ZMOD 2013265921]
+      ∧ post.balHi ≡ (cellProj k' t.src).balHi [ZMOD 2013265921]
+      ∧ (∀ i, post.fields i ≡ (cellProj k' t.src).fields i [ZMOD 2013265921])
+      ∧ post.capRoot ≡ (cellProj k' t.src).capRoot [ZMOD 2013265921]
+      ∧ post.reserved ≡ (cellProj k' t.src).reserved [ZMOD 2013265921] )
     -- … and the ONE disagreement: descriptor TICKS the nonce, executor FREEZES it (§2 gap).
-    ∧ ( post.nonce = (cellProj k t.src).nonce + 1
-        ∧ (cellProj k' t.src).nonce = (cellProj k t.src).nonce ) := by
-  -- descriptor side: the keystone forces `CellTransferSpec pre (debitParams t) post`
+    ∧ ( post.nonce ≡ (cellProj k t.src).nonce + 1 [ZMOD 2013265921]
+        ∧ (cellProj k' t.src).nonce ≡ (cellProj k t.src).nonce [ZMOD 2013265921] ) := by
+  -- descriptor side: the keystone forces `CellTransferSpec pre (debitParams t) post` (mod p)
   obtain ⟨hcirc, _⟩ := transferDescriptor_full_sound hash env (cellProj k t.src) post (debitParams t)
     henc hrow hgatesat hsat
   obtain ⟨_, hcLo, hcHi, hcN, hcF, hcCap, hcRes⟩ := hcirc
-  -- executor side: the freeze-nonce unification on the SRC cell
+  -- executor side: the freeze-nonce unification on the SRC cell (mod p)
   obtain ⟨_, heLo, heHi, heN, heF, heCap, heRes⟩ := unify_debit_exec k k' t hexec
   refine ⟨⟨?_, ?_, ?_, ?_, ?_⟩, ?_, ?_⟩
-  · -- post.balLo = pre.balLo + signedMove (debit) = pre.balLo − amt = (cellProj k' src).balLo
-    rw [hcLo, heLo]
-  · -- balHi: post = pre.balHi (circuit) ; cellProj k' src .balHi = 0 = pre.balHi (both 0)
-    rw [hcHi, heHi]
-  · intro i; rw [hcF i, heF i]
-  · rw [hcCap, heCap]
-  · rw [hcRes, heRes]
+  · -- post.balLo ≡ pre.balLo + signedMove (debit) ≡ (cellProj k' src).balLo
+    exact hcLo.trans heLo.symm
+  · exact hcHi.trans heHi.symm
+  · intro i; exact (hcF i).trans (heF i).symm
+  · exact hcCap.trans heCap.symm
+  · exact hcRes.trans heRes.symm
   · -- the descriptor ticks the nonce
-    rw [hcN]
+    exact hcN
   · -- the executor freezes the nonce
     exact heN
 
@@ -391,7 +392,7 @@ theorem good_unify_debit :
     ∧ (cellProj goodPost goodTurn.src).balLo
         = (cellProj kT0 goodTurn.src).balLo + signedMove (debitParams goodTurn) := by
   refine ⟨unify_debit kT0 goodPost goodTurn good_spec, ?_⟩
-  exact (unify_debit kT0 goodPost goodTurn good_spec).2.1
+  rw [signedMove_debit, proj_src_balLo kT0 goodPost goodTurn good_spec]; ring
 
 /-- **`good_unify_credit` — the credit leg FIRES too.** The dst cell's projected balance moves
 `5 → 35` (= `5 + 30`), the credit-side unification holding with a true, non-degenerate conclusion. -/

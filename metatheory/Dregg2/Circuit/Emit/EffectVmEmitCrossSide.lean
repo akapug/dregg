@@ -57,6 +57,7 @@ last row whose `commit ≠ pi[edge_commit]` is UNSAT — the edge-sequence bindi
 Poseidon2 of the edge id — the in-circuit strengthening the hand-AIR lacked), axiom-clean.
 -/
 import Dregg2.Circuit.DescriptorIR2
+import Dregg2.Circuit.Emit.EffectVmEmitTransfer
 import Dregg2.Tactics
 
 namespace Dregg2.Circuit.Emit.EffectVmEmitCrossSide
@@ -234,10 +235,14 @@ def cseWindowHolds (hash : List ℤ → ℤ) (tf : TraceFamily) (env : VmRowEnv)
     (isFirst isLast : Bool) : Prop :=
   ∀ c ∈ crossSideDescriptor.constraints, c.holdsAt hash tf env isFirst isLast
 
-/-- **The missing-peer tooth.** A LAST row whose running `balance` is not 0 cannot satisfy the
-descriptor — exactly the boundary that detects an uncancelled (missing-peer) half-edge. -/
+/-- **The missing-peer tooth.** A LAST row whose running `balance` is CANONICAL (`0 ≤ · < p`, the
+deployed range-check envelope) and not 0 cannot satisfy the descriptor — exactly the boundary that
+detects an uncancelled (missing-peer) half-edge. Under the field-faithful denotation the boundary
+asserts `balance ≡ 0 [ZMOD p]`; canonicality pins the residual into `(−p, p)`, so the only
+congruent-to-zero canonical value is 0 itself. -/
 theorem cse_rejects_unbalanced
     (hash : List ℤ → ℤ) (tf : TraceFamily) (env : VmRowEnv)
+    (hcanon : 0 ≤ env.loc Cse.BALANCE_COL ∧ env.loc Cse.BALANCE_COL < 2013265921)
     (hbad : env.loc Cse.BALANCE_COL ≠ 0) :
     ¬ cseWindowHolds hash tf env false true := by
   intro h
@@ -246,14 +251,20 @@ theorem cse_rejects_unbalanced
     simp [cseConstraints]
   have hc := h _ hmem
   simp only [lastBalanceZero, VmConstraint2.holdsAt, VmConstraint.holdsVm, EmittedExpr.eval] at hc
-  exact hbad (hc trivial)
+  exact EffectVmEmitTransfer.not_modEq_zero_of_canon
+    (x := env.loc Cse.BALANCE_COL) (a := env.loc Cse.BALANCE_COL) (b := 0)
+    (by ring) hcanon (by norm_num) hbad (hc trivial)
 
-/-- **The edge-binding tooth.** A LAST row whose rolling `commit` disagrees with the published
-`pi[edge_commit]` cannot satisfy the descriptor — this is the binding that ties the proven trace
-to the verifier-derived canonical edge sequence (replacing the hand-AIR's
-`recompute_trace_commitment` binding). -/
+/-- **The edge-binding tooth.** A LAST row whose rolling `commit` — with both the column and the
+published `pi[edge_commit]` CANONICAL (`0 ≤ · < p`, the deployed range-check/PI envelope) —
+disagrees with `pi[edge_commit]` cannot satisfy the descriptor — this is the binding that ties the
+proven trace to the verifier-derived canonical edge sequence (replacing the hand-AIR's
+`recompute_trace_commitment` binding). Under the field-faithful denotation the piBinding asserts
+`commit ≡ pi [ZMOD p]`; canonicality collapses congruence to equality. -/
 theorem cse_rejects_wrong_commit
     (hash : List ℤ → ℤ) (tf : TraceFamily) (env : VmRowEnv)
+    (hcanonC : 0 ≤ env.loc Cse.COMMIT_COL ∧ env.loc Cse.COMMIT_COL < 2013265921)
+    (hcanonPi : 0 ≤ env.pub Cse.PI_EDGE_COMMIT ∧ env.pub Cse.PI_EDGE_COMMIT < 2013265921)
     (hbad : env.loc Cse.COMMIT_COL ≠ env.pub Cse.PI_EDGE_COMMIT) :
     ¬ cseWindowHolds hash tf env false true := by
   intro h
@@ -262,7 +273,9 @@ theorem cse_rejects_wrong_commit
     simp [cseConstraints]
   have hc := h _ hmem
   simp only [lastCommitEqPi, VmConstraint2.holdsAt, VmConstraint.holdsVm] at hc
-  exact hbad (hc trivial)
+  exact EffectVmEmitTransfer.not_modEq_zero_of_canon
+    (x := env.loc Cse.COMMIT_COL - env.pub Cse.PI_EDGE_COMMIT) rfl hcanonC hcanonPi hbad
+    ((EffectVmEmitTransfer.gate_modEq_iff rfl).mpr (hc trivial))
 
 /-- **The real-fingerprint tooth (in-circuit strengthening over the hand-AIR).** Against a SOUND
 chip table, the descriptor's fingerprint lookup ENFORCES `edge_fp = Poseidon2(edge_id)`: the
