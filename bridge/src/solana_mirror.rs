@@ -50,6 +50,14 @@ use crate::midnight::{EpochKey, FederationAttestation};
 /// replayed against the other.
 pub const SOLANA_MIRROR_DOMAIN: &str = "dregg-solana-mirror-v1";
 
+/// Domain separation for the UNLOCK (redeem) attestation the oracle set signs,
+/// distinct from [`SOLANA_MIRROR_DOMAIN`] (the lock direction) so a lock
+/// attestation can never be replayed as an unlock. Byte-for-byte identical to
+/// the on-Solana lock program's `SOLANA_UNLOCK_DOMAIN`
+/// (`solana-lock/src/attestation.rs:38`), so a signature the oracle produces
+/// here verifies in the program's `Unlock`.
+pub const SOLANA_UNLOCK_DOMAIN: &str = "dregg-solana-unlock-v1";
+
 /// Domain separation for the COMMITTED consume-once lock nullifier (the
 /// concurrency-safe double-mint gate, `docs/deos/BRIDGE-ARCHITECTURE-SOUNDNESS.md`
 /// §3). Distinct from [`SOLANA_MIRROR_DOMAIN`] (the attestation-signature domain)
@@ -194,6 +202,35 @@ pub struct SolanaUnlockRequest {
     pub solana_recipient: [u8; 32],
     /// Unique id of the redeem, for the oracle's own replay protection.
     pub redeem_id: [u8; 32],
+}
+
+impl SolanaUnlockRequest {
+    /// Canonical bytes the oracle set signs for an unlock — the dual of
+    /// [`SolanaLockAttestation::canonical_payload`]:
+    /// `spl_mint(32) ‖ amount_le(8) ‖ solana_recipient(32) ‖ redeem_id(32)`.
+    ///
+    /// BYTE-FOR-BYTE identical to the on-Solana lock program's
+    /// `unlock_canonical_payload` (`solana-lock/src/attestation.rs:46`) so a
+    /// signature the oracle produces over [`Self::message_hash`] verifies in the
+    /// program's `Unlock` M-of-N threshold check. The golden vector
+    /// (`solana_unlock_message_hash_golden`) pins the exact hash both sides must
+    /// reproduce — keep it in sync with the program's `attestation` tests.
+    pub fn canonical_payload(&self) -> Vec<u8> {
+        let mut p = Vec::with_capacity(32 + 8 + 32 + 32);
+        p.extend_from_slice(&self.spl_mint);
+        p.extend_from_slice(&self.amount.to_le_bytes());
+        p.extend_from_slice(&self.solana_recipient);
+        p.extend_from_slice(&self.redeem_id);
+        p
+    }
+
+    /// The domain-separated 32-byte message hash the oracle signs, using the
+    /// same BLAKE3 `derive_key` construction as the lock side and the program.
+    pub fn message_hash(&self) -> [u8; 32] {
+        let mut h = blake3::Hasher::new_derive_key(SOLANA_UNLOCK_DOMAIN);
+        h.update(&self.canonical_payload());
+        *h.finalize().as_bytes()
+    }
 }
 
 /// Configuration for one mirrored SPL token.
@@ -627,6 +664,42 @@ mod tests {
     fn cid(b: u8) -> CellId {
         CellId::from_bytes([b; 32])
     }
+
+    /// Cross-crate GOLDEN: the unlock attestation the oracle signs must be
+    /// byte-identical to what the on-Solana lock program verifies. This pins the
+    /// canonical-payload layout AND the message hash for a fixed input; the
+    /// program's `attestation` tests (`solana-lock/src/attestation.rs`) pin the
+    /// SAME vector, so a drift on either side turns one of the two suites red.
+    #[test]
+    fn solana_unlock_message_hash_golden() {
+        let req = SolanaUnlockRequest {
+            spl_mint: [1u8; 32],
+            amount: 100,
+            solana_recipient: [2u8; 32],
+            redeem_id: [3u8; 32],
+        };
+        // Layout: spl_mint(32) ‖ amount_le(8) ‖ solana_recipient(32) ‖ redeem_id(32).
+        let p = req.canonical_payload();
+        assert_eq!(p.len(), 104);
+        assert_eq!(&p[0..32], &[1u8; 32]);
+        assert_eq!(&p[32..40], &100u64.to_le_bytes());
+        assert_eq!(&p[40..72], &[2u8; 32]);
+        assert_eq!(&p[72..104], &[3u8; 32]);
+        // Domain separation from the LOCK direction: the same-shaped bytes under
+        // the mirror domain must NOT collide with the unlock hash.
+        let mut lock_dom = blake3::Hasher::new_derive_key(SOLANA_MIRROR_DOMAIN);
+        lock_dom.update(&p);
+        assert_ne!(*lock_dom.finalize().as_bytes(), req.message_hash());
+        // The pinned golden hash (BLAKE3 derive_key("dregg-solana-unlock-v1")).
+        assert_eq!(req.message_hash(), GOLDEN_UNLOCK_HASH);
+    }
+
+    // BLAKE3 derive_key("dregg-solana-unlock-v1", [1;32]‖100le‖[2;32]‖[3;32]).
+    // The on-Solana program pins this SAME array (solana-lock/src/attestation.rs).
+    const GOLDEN_UNLOCK_HASH: [u8; 32] = [
+        28, 62, 5, 62, 129, 119, 208, 102, 202, 202, 65, 37, 134, 24, 125, 71, 85, 212, 9, 127, 76,
+        5, 242, 153, 252, 118, 141, 38, 77, 191, 65, 189,
+    ];
 
     fn oracle() -> SigningKey {
         // Deterministic test oracle key.

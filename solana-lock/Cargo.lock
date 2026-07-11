@@ -1236,6 +1236,9 @@ checksum = "1435fa1053d8b2fbbe9be7e97eca7f33d37b28409959813daefc1446a14247f1"
 name = "dregg-solana-lock"
 version = "0.1.0"
 dependencies = [
+ "blake3",
+ "solana-ed25519-program",
+ "solana-instructions-sysvar",
  "solana-program",
  "solana-program-test",
  "solana-sdk",

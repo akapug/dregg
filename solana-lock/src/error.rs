@@ -26,6 +26,12 @@ pub enum LockError {
     AccountState = 8,
     /// An account was not the expected one (wrong key passed in a fixed slot).
     AccountMismatch = 9,
+    /// The oracle key-set / threshold is malformed (empty set, zero threshold,
+    /// M > N, a zero key, or a duplicate key). NOMAD-LAW: fail closed.
+    InvalidOracleSet = 10,
+    /// The unlock did not carry a threshold of valid signatures from DISTINCT
+    /// configured oracle keys over the canonical unlock message hash.
+    ThresholdNotMet = 11,
 }
 
 impl From<LockError> for ProgramError {
