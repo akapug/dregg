@@ -40,7 +40,7 @@ use dregg_circuit_prove::ivc_turn_chain::FinalizedTurn;
 use dregg_circuit_prove::joint_turn_aggregation::DescriptorParticipant;
 use dregg_sdk::full_turn_proof::split_into_cohort_runs;
 use dregg_sdk::{AgentCipherclerk, RotationTurnWitness};
-use dregg_turn::rotation_witness::{mint_rotated_participant_leg, produce};
+use dregg_turn::rotation_witness::{empty_revoked_root_8, mint_rotated_participant_leg, produce};
 
 use crate::GrainTurnRecord;
 
@@ -102,6 +102,10 @@ pub fn finalize_grain_turn(record: &GrainTurnRecord) -> Result<Vec<FinalizedTurn
         &ledger,
         &nullifier_root,
         &commitments_root,
+        // revoked_root (arg #5, added when cell-state roots retyped to Faithful8):
+        // the EMPTY revocation accumulator — no live revoked root flows through a mint
+        // recipe today (mirrors rotation_witness.rs's own produce() recipe wrappers).
+        &empty_revoked_root_8(),
         &receipt_log,
         &material,
     );
@@ -110,6 +114,10 @@ pub fn finalize_grain_turn(record: &GrainTurnRecord) -> Result<Vec<FinalizedTurn
         &ledger,
         &nullifier_root,
         &commitments_root,
+        // revoked_root (arg #5, added when cell-state roots retyped to Faithful8):
+        // the EMPTY revocation accumulator — no live revoked root flows through a mint
+        // recipe today (mirrors rotation_witness.rs's own produce() recipe wrappers).
+        &empty_revoked_root_8(),
         &receipt_log,
         &material,
     );
