@@ -255,6 +255,7 @@ fn a_smuggled_slot_escape_in_a_recorded_binding_is_caught_at_verify() {
         &entry.effect,
         &entry.prompt_binding,
         &entry.game_binding,
+        &entry.randomness,
         &entry.attestation,
     );
 
@@ -631,7 +632,7 @@ fn splicing_a_fabricated_entry_is_caught() {
     let narration = String::from_utf8_lossy(&field).into_owned();
     let seq = 1u64;
     let prev = world.ledger[0].receipt;
-    let receipt = chain_receipt_id(seq, &prev, &narration, &None, &None, &None, &att);
+    let receipt = chain_receipt_id(seq, &prev, &narration, &None, &None, &None, &None, &att);
     let fabricated = LedgerEntry {
         seq,
         prev,
@@ -639,6 +640,7 @@ fn splicing_a_fabricated_entry_is_caught() {
         effect: None,
         prompt_binding: None,
         game_binding: None,
+        randomness: None,
         attestation: att,
         receipt,
     };
