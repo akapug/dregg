@@ -72,7 +72,8 @@ namespace Dregg2.Circuit.Emit.EffectVmEmitReceiptArchive
 open Dregg2.Circuit
 open Dregg2.Circuit.Emit.EffectVmEmit
 open Dregg2.Circuit.Emit.EffectVmEmitTransfer
-  (eSB eSA eSub transitionAll boundaryFirstPins transferHashSites)
+  (eSB eSA eSub transitionAll boundaryFirstPins transferHashSites
+   gate_modEq_iff not_modEq_zero_of_canon eqToModEq)
 open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (CellState)
 open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
 open Dregg2.Exec.CircuitEmit (EmittedExpr)
@@ -160,17 +161,19 @@ balance limbs / nonce / cap_root / reserved / field[0] / field[2..7] are FIXED. 
 projection of universe-A's `ReceiptArchiveSpec` (`lifecycle`-slot set-to-one ⟹ the lifecycle
 field-column set; the 16-field/balance freeze ⟹ the row's frozen columns). -/
 
-/-- **`ArchiveRowIntent env`** — the intended audit move on the row `env.loc`: post `field[1] = 1`,
-frame frozen. -/
+/-- **`ArchiveRowIntent env`** — the intended audit move on the row `env.loc`: post `field[1] ≡ 1`,
+frame frozen. FIELD-FAITHFUL: each clause is a congruence mod `p = 2013265921` (the BabyBear prime),
+because the deployed circuit enforces the move IN THE FIELD (the gate set holds IFF this field move
+holds — no canonicality needed for the biconditional). -/
 def ArchiveRowIntent (env : VmRowEnv) : Prop :=
-  env.loc (saCol (state.FIELD_BASE + LIFE_FIELD)) = 1
-  ∧ env.loc (saCol state.BALANCE_LO) = env.loc (sbCol state.BALANCE_LO)
-  ∧ env.loc (saCol state.BALANCE_HI) = env.loc (sbCol state.BALANCE_HI)
-  ∧ env.loc (saCol state.NONCE) = env.loc (sbCol state.NONCE)
-  ∧ env.loc (saCol state.CAP_ROOT) = env.loc (sbCol state.CAP_ROOT)
-  ∧ env.loc (saCol state.RESERVED) = env.loc (sbCol state.RESERVED)
+  env.loc (saCol (state.FIELD_BASE + LIFE_FIELD)) ≡ 1 [ZMOD 2013265921]
+  ∧ env.loc (saCol state.BALANCE_LO) ≡ env.loc (sbCol state.BALANCE_LO) [ZMOD 2013265921]
+  ∧ env.loc (saCol state.BALANCE_HI) ≡ env.loc (sbCol state.BALANCE_HI) [ZMOD 2013265921]
+  ∧ env.loc (saCol state.NONCE) ≡ env.loc (sbCol state.NONCE) [ZMOD 2013265921]
+  ∧ env.loc (saCol state.CAP_ROOT) ≡ env.loc (sbCol state.CAP_ROOT) [ZMOD 2013265921]
+  ∧ env.loc (saCol state.RESERVED) ≡ env.loc (sbCol state.RESERVED) [ZMOD 2013265921]
   ∧ (∀ i, i ≠ 1 → i < 8 →
-      env.loc (saCol (state.FIELD_BASE + i)) = env.loc (sbCol (state.FIELD_BASE + i)))
+      env.loc (saCol (state.FIELD_BASE + i)) ≡ env.loc (sbCol (state.FIELD_BASE + i)) [ZMOD 2013265921])
 
 /-- The row is a `receiptArchiveA` row: `s_receiptArchive = 1`, `s_noop = 0`. -/
 def IsArchiveRow (env : VmRowEnv) : Prop :=
@@ -200,40 +203,40 @@ theorem archiveRowGates_holds_iff (env : VmRowEnv) :
       exact Or.inr ⟨i, hi, rfl⟩
     simp only [VmConstraint.holdsVm, gLifeSet, gBalLoFix, gBalHiFix, gNonceFix, gCapFix, gResFix,
       eSA, eSB, eSub, EmittedExpr.eval] at hLife hLo hHi hNon hCap hRes
-    refine ⟨by linarith [hLife], by linarith [hLo], by linarith [hHi], by linarith [hNon],
-      by linarith [hCap], by linarith [hRes], ?_⟩
+    refine ⟨(gate_modEq_iff (by ring)).mp hLife, (gate_modEq_iff (by ring)).mp hLo,
+      (gate_modEq_iff (by ring)).mp hHi, (gate_modEq_iff (by ring)).mp hNon,
+      (gate_modEq_iff (by ring)).mp hCap, (gate_modEq_iff (by ring)).mp hRes, ?_⟩
     intro i hi1 hi8
     -- i ≠ 1, i < 8 ⟹ i ∈ {0,2,3,4,5,6,7}
     have hmem : i ∈ ([0, 2, 3, 4, 5, 6, 7] : List Nat) := by
       simp only [List.mem_cons, List.not_mem_nil, or_false]; omega
-    have := hFld i hmem
-    simp only [VmConstraint.holdsVm, gFieldFix, eSA, eSB, eSub, EmittedExpr.eval] at this
-    linarith
+    have hfi := hFld i hmem
+    simp only [VmConstraint.holdsVm, gFieldFix, eSA, eSB, eSub, EmittedExpr.eval] at hfi
+    exact (gate_modEq_iff (by ring)).mp hfi
   · rintro ⟨hLife, hLo, hHi, hNon, hCap, hRes, hFld⟩ c hc
     simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map] at hc
     rcases hc with (rfl | rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩
     · simp only [VmConstraint.holdsVm, gLifeSet, eSA, eSub, EmittedExpr.eval]
-      rw [hLife]; ring
+      exact (gate_modEq_iff (by ring)).mpr hLife
     · simp only [VmConstraint.holdsVm, gBalLoFix, eSA, eSB, eSub, EmittedExpr.eval]
-      rw [hLo]; ring
+      exact (gate_modEq_iff (by ring)).mpr hLo
     · simp only [VmConstraint.holdsVm, gBalHiFix, eSA, eSB, eSub, EmittedExpr.eval]
-      rw [hHi]; ring
+      exact (gate_modEq_iff (by ring)).mpr hHi
     · simp only [VmConstraint.holdsVm, gNonceFix, eSA, eSB, eSub, EmittedExpr.eval]
-      rw [hNon]; ring
+      exact (gate_modEq_iff (by ring)).mpr hNon
     · simp only [VmConstraint.holdsVm, gCapFix, eSA, eSB, eSub, EmittedExpr.eval]
-      rw [hCap]; ring
+      exact (gate_modEq_iff (by ring)).mpr hCap
     · simp only [VmConstraint.holdsVm, gResFix, eSA, eSB, eSub, EmittedExpr.eval]
-      rw [hRes]; ring
+      exact (gate_modEq_iff (by ring)).mpr hRes
     · simp only [VmConstraint.holdsVm, gFieldFix, eSA, eSB, eSub, EmittedExpr.eval]
-      rcases hi with rfl | rfl | rfl | rfl | rfl | rfl | rfl <;>
-        · first
-          | (rw [hFld 0 (by decide) (by decide)]; ring)
-          | (rw [hFld 2 (by decide) (by decide)]; ring)
-          | (rw [hFld 3 (by decide) (by decide)]; ring)
-          | (rw [hFld 4 (by decide) (by decide)]; ring)
-          | (rw [hFld 5 (by decide) (by decide)]; ring)
-          | (rw [hFld 6 (by decide) (by decide)]; ring)
-          | (rw [hFld 7 (by decide) (by decide)]; ring)
+      rcases hi with rfl | rfl | rfl | rfl | rfl | rfl | rfl
+      · exact (gate_modEq_iff (by ring)).mpr (hFld 0 (by decide) (by decide))
+      · exact (gate_modEq_iff (by ring)).mpr (hFld 2 (by decide) (by decide))
+      · exact (gate_modEq_iff (by ring)).mpr (hFld 3 (by decide) (by decide))
+      · exact (gate_modEq_iff (by ring)).mpr (hFld 4 (by decide) (by decide))
+      · exact (gate_modEq_iff (by ring)).mpr (hFld 5 (by decide) (by decide))
+      · exact (gate_modEq_iff (by ring)).mpr (hFld 6 (by decide) (by decide))
+      · exact (gate_modEq_iff (by ring)).mpr (hFld 7 (by decide) (by decide))
 
 /-- **`archiveVm_faithful` — THE deliverable.** On a `receiptArchiveA` row, the emitted descriptor's
 per-row gates hold IFF the audit move intent holds. -/
@@ -244,14 +247,16 @@ theorem archiveVm_faithful (env : VmRowEnv) :
 /-! ## §5 — ANTI-GHOST (per-row): a wrong field set fails the emitted descriptor. -/
 
 /-- **Anti-ghost (lifecycle tamper).** A row whose post-`field[1]` is NOT the constant `1` fails the
-`gLifeSet` gate (UNSAT). -/
+`gLifeSet` gate (UNSAT). FIELD-FAITHFUL: the tooth rejects a field-`≢` output, so it carries the
+DEPLOYED range-check canonicality (`0 ≤ · < p`) on the post-`field[1]` wire; under it a tampered
+lifecycle value differs from `1` by less than `p`, so the field gate cannot pass by wrap-around. -/
 theorem archiveVm_rejects_wrong_life (env : VmRowEnv)
+    (hcanon : 0 ≤ env.loc (saCol (state.FIELD_BASE + LIFE_FIELD))
+      ∧ env.loc (saCol (state.FIELD_BASE + LIFE_FIELD)) < 2013265921)
     (hwrong : env.loc (saCol (state.FIELD_BASE + LIFE_FIELD)) ≠ 1) :
     ¬ (VmConstraint.gate gLifeSet).holdsVm env false false := by
   simp only [VmConstraint.holdsVm, gLifeSet, eSA, eSub, EmittedExpr.eval]
-  intro h
-  apply hwrong
-  linarith
+  exact not_modEq_zero_of_canon (by ring) hcanon ⟨by norm_num, by norm_num⟩ hwrong
 
 /-- **Anti-ghost (general).** A row whose post-state is NOT the intent move does NOT satisfy the per-row
 gates. -/
@@ -284,13 +289,13 @@ def ArchiveRowEncodes (env : VmRowEnv) (pre post : CellState) : Prop :=
 /-- The per-cell audit-write spec: the moved cell's WHOLE post-state is `pre` with `fields 1` set to
 `1`, every other field frozen. The per-cell projection of universe-A's `ReceiptArchiveSpec`. -/
 def ArchiveCellSpec (pre post : CellState) : Prop :=
-  post.fields 1 = 1
-  ∧ post.balLo = pre.balLo
-  ∧ post.balHi = pre.balHi
-  ∧ post.nonce = pre.nonce
-  ∧ (∀ i : Fin 8, i ≠ 1 → post.fields i = pre.fields i)
-  ∧ post.capRoot = pre.capRoot
-  ∧ post.reserved = pre.reserved
+  post.fields 1 ≡ 1 [ZMOD 2013265921]
+  ∧ post.balLo ≡ pre.balLo [ZMOD 2013265921]
+  ∧ post.balHi ≡ pre.balHi [ZMOD 2013265921]
+  ∧ post.nonce ≡ pre.nonce [ZMOD 2013265921]
+  ∧ (∀ i : Fin 8, i ≠ 1 → post.fields i ≡ pre.fields i [ZMOD 2013265921])
+  ∧ post.capRoot ≡ pre.capRoot [ZMOD 2013265921]
+  ∧ post.reserved ≡ pre.reserved [ZMOD 2013265921]
 
 /-- Under `ArchiveRowEncodes`, `ArchiveRowIntent` IS the structured per-cell `ArchiveCellSpec`. -/
 theorem intent_to_archiveCellSpec (env : VmRowEnv) (pre post : CellState)
@@ -300,10 +305,10 @@ theorem intent_to_archiveCellSpec (env : VmRowEnv) (pre post : CellState)
           hsaLo, hsaHi, hsaN, hsaF, hsaCap, hsaRes⟩ := henc
   obtain ⟨hlife, hlo, hhi, hnon, hcap, hres, hfld⟩ := hint
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
-  · -- post.fields 1 = 1 : field[1] after = 1
+  · -- post.fields 1 ≡ 1 : field[1] after ≡ 1
     have h1 : env.loc (saCol (state.FIELD_BASE + (1 : Fin 8).val)) = post.fields 1 := hsaF 1
     rw [← h1]
-    show env.loc (saCol (state.FIELD_BASE + LIFE_FIELD)) = 1
+    show env.loc (saCol (state.FIELD_BASE + LIFE_FIELD)) ≡ 1 [ZMOD 2013265921]
     exact hlife
   · rw [← hsaLo, ← hsbLo]; exact hlo
   · rw [← hsaHi, ← hsbHi]; exact hhi
@@ -421,25 +426,32 @@ theorem archiveGoodRow_realizes_intent : ArchiveRowIntent archiveGoodRow := by
     unfold saCol STATE_AFTER_BASE PARAM_BASE STATE_BEFORE_BASE NUM_EFFECTS STATE_SIZE NUM_PARAMS
       state.FIELD_BASE LIFE_FIELD; rfl
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
-  · -- post field[1] = 1
+  · -- post field[1] ≡ 1
+    refine eqToModEq ?_
     show archiveGoodRow.loc (saCol (state.FIELD_BASE + LIFE_FIELD)) = 1
     rw [hsa1]; rfl
-  · show archiveGoodRow.loc (saCol state.BALANCE_LO) = archiveGoodRow.loc (sbCol state.BALANCE_LO)
+  · refine eqToModEq ?_
+    show archiveGoodRow.loc (saCol state.BALANCE_LO) = archiveGoodRow.loc (sbCol state.BALANCE_LO)
     rw [archiveGoodRow_loc_default (saCol state.BALANCE_LO) (by decide) (by decide),
         archiveGoodRow_loc_default (sbCol state.BALANCE_LO) (by decide) (by decide)]
-  · show archiveGoodRow.loc (saCol state.BALANCE_HI) = archiveGoodRow.loc (sbCol state.BALANCE_HI)
+  · refine eqToModEq ?_
+    show archiveGoodRow.loc (saCol state.BALANCE_HI) = archiveGoodRow.loc (sbCol state.BALANCE_HI)
     rw [archiveGoodRow_loc_default (saCol state.BALANCE_HI) (by decide) (by decide),
         archiveGoodRow_loc_default (sbCol state.BALANCE_HI) (by decide) (by decide)]
-  · show archiveGoodRow.loc (saCol state.NONCE) = archiveGoodRow.loc (sbCol state.NONCE)
+  · refine eqToModEq ?_
+    show archiveGoodRow.loc (saCol state.NONCE) = archiveGoodRow.loc (sbCol state.NONCE)
     rw [archiveGoodRow_loc_default (saCol state.NONCE) (by decide) (by decide),
         archiveGoodRow_loc_default (sbCol state.NONCE) (by decide) (by decide)]
-  · show archiveGoodRow.loc (saCol state.CAP_ROOT) = archiveGoodRow.loc (sbCol state.CAP_ROOT)
+  · refine eqToModEq ?_
+    show archiveGoodRow.loc (saCol state.CAP_ROOT) = archiveGoodRow.loc (sbCol state.CAP_ROOT)
     rw [archiveGoodRow_loc_default (saCol state.CAP_ROOT) (by decide) (by decide),
         archiveGoodRow_loc_default (sbCol state.CAP_ROOT) (by decide) (by decide)]
-  · show archiveGoodRow.loc (saCol state.RESERVED) = archiveGoodRow.loc (sbCol state.RESERVED)
+  · refine eqToModEq ?_
+    show archiveGoodRow.loc (saCol state.RESERVED) = archiveGoodRow.loc (sbCol state.RESERVED)
     rw [archiveGoodRow_loc_default (saCol state.RESERVED) (by decide) (by decide),
         archiveGoodRow_loc_default (sbCol state.RESERVED) (by decide) (by decide)]
   · intro i hi1 hi8
+    refine eqToModEq ?_
     show archiveGoodRow.loc (saCol (state.FIELD_BASE + i)) = archiveGoodRow.loc (sbCol (state.FIELD_BASE + i))
     have hsaI : saCol (state.FIELD_BASE + i) = 79 + i := by
       unfold saCol STATE_AFTER_BASE PARAM_BASE STATE_BEFORE_BASE NUM_EFFECTS STATE_SIZE NUM_PARAMS
@@ -459,12 +471,13 @@ def archiveBadRow : VmRowEnv where
 /-- **NON-VACUITY (witness FALSE / concrete anti-ghost).** `archiveBadRow`'s post-`field[1]` is NOT the
 constant `1`, so the `gLifeSet` gate REJECTS it — a concrete UNSAT. -/
 theorem archiveBadRow_rejected : ¬ (VmConstraint.gate gLifeSet).holdsVm archiveBadRow false false := by
-  apply archiveVm_rejects_wrong_life
   have hbad : archiveBadRow.loc (saCol (state.FIELD_BASE + LIFE_FIELD)) = 999 := by
     show (if saCol (state.FIELD_BASE + LIFE_FIELD) = saCol (state.FIELD_BASE + LIFE_FIELD)
       then (999:ℤ) else archiveGoodRow.loc (saCol (state.FIELD_BASE + LIFE_FIELD))) = 999
     rw [if_pos rfl]
-  rw [hbad]; decide
+  apply archiveVm_rejects_wrong_life
+  · rw [hbad]; exact ⟨by norm_num, by norm_num⟩
+  · rw [hbad]; norm_num
 
 /-! ## §10 — Axiom-hygiene tripwires (the honesty tripwire). -/
 
@@ -544,7 +557,7 @@ theorem receiptArchiveActor_full_sound (hash : List ℤ → ℤ) (env : VmRowEnv
     (henc : RowEncodesRevoke env pre post)
     (hgatesat : satisfiedVm hash receiptArchiveActorVmDescriptor env true false)
     (hsat : satisfiedVm hash receiptArchiveActorVmDescriptor env true true) :
-    RevokeCellSpec pre post ∧ post.commit = env.pub pi.NEW_COMMIT := by
+    RevokeCellSpec pre post ∧ post.commit ≡ env.pub pi.NEW_COMMIT [ZMOD 2013265921] := by
   obtain ⟨hcs, _⟩ := hsat
   obtain ⟨hcsT, _⟩ := hgatesat
   have hgates' : ∀ c ∈ revokeRowGates, c.holdsVm env false false := by

@@ -62,7 +62,8 @@ namespace Dregg2.Circuit.Emit.EffectVmEmitSpawn
 open Dregg2.Circuit
 open Dregg2.Circuit.Emit.EffectVmEmit
 open Dregg2.Circuit.Emit.EffectVmEmitTransfer
-  (eSB eSA eSub transitionAll boundaryFirstPins transferHashSites)
+  (eSB eSA eSub transitionAll boundaryFirstPins transferHashSites
+   gate_modEq_iff not_modEq_zero_of_canon eqToModEq)
 open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (CellState)
 open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
 open Dregg2.Exec.CircuitEmit (EmittedExpr)
@@ -149,14 +150,17 @@ digest, and the balance limbs / nonce / reserved / 8 fields are SET TO `0`. The 
 of `SpawnSpec`'s CHILD clauses (`bal child = 0` born-empty ⟹ child balance columns `0`; `caps child =
 spawnCapsMap` ⟹ cap-DIGEST column). -/
 
-/-- **`SpawnRowIntent env`** — post `cap_root` is the param digest, born-empty columns `0`. -/
+/-- **`SpawnRowIntent env`** — post `cap_root` is the param digest, born-empty columns `0`.
+FIELD-FAITHFUL: each clause is a congruence mod `p = 2013265921` (the BabyBear prime), because the
+deployed circuit enforces the move IN THE FIELD (the gate set holds IFF this field move holds — no
+canonicality needed for the biconditional). -/
 def SpawnRowIntent (env : VmRowEnv) : Prop :=
-  env.loc (saCol state.CAP_ROOT) = env.loc (prmCol paramSP.CAP_DIGEST_NEW)
-  ∧ env.loc (saCol state.BALANCE_LO) = 0
-  ∧ env.loc (saCol state.BALANCE_HI) = 0
-  ∧ env.loc (saCol state.NONCE) = 0
-  ∧ env.loc (saCol state.RESERVED) = 0
-  ∧ (∀ i < 8, env.loc (saCol (state.FIELD_BASE + i)) = 0)
+  env.loc (saCol state.CAP_ROOT) ≡ env.loc (prmCol paramSP.CAP_DIGEST_NEW) [ZMOD 2013265921]
+  ∧ env.loc (saCol state.BALANCE_LO) ≡ 0 [ZMOD 2013265921]
+  ∧ env.loc (saCol state.BALANCE_HI) ≡ 0 [ZMOD 2013265921]
+  ∧ env.loc (saCol state.NONCE) ≡ 0 [ZMOD 2013265921]
+  ∧ env.loc (saCol state.RESERVED) ≡ 0 [ZMOD 2013265921]
+  ∧ (∀ i < 8, env.loc (saCol (state.FIELD_BASE + i)) ≡ 0 [ZMOD 2013265921])
 
 /-- The row is a `spawnA` row: `s_spawn = 1`, `s_noop = 0`. -/
 def IsSpawnRow (env : VmRowEnv) : Prop :=
@@ -183,7 +187,7 @@ theorem spawnRowGates_holds_iff (env : VmRowEnv) :
       exact Or.inr ⟨i, hi, rfl⟩
     simp only [VmConstraint.holdsVm, gCapMove, gBalLoZero, gBalHiZero, gNonceZero, gResZero,
       eSA, eCapDigestNew, eSub, EmittedExpr.eval] at hCap hLo hHi hNon hRes
-    refine ⟨by linarith [hCap], hLo, hHi, hNon, hRes, ?_⟩
+    refine ⟨(gate_modEq_iff (by ring)).mp hCap, hLo, hHi, hNon, hRes, ?_⟩
     intro i hi
     have := hFld i hi
     simp only [VmConstraint.holdsVm, gFieldZero, eSA, EmittedExpr.eval] at this
@@ -193,7 +197,7 @@ theorem spawnRowGates_holds_iff (env : VmRowEnv) :
       List.mem_range] at hc
     rcases hc with (rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩
     · simp only [VmConstraint.holdsVm, gCapMove, eSA, eCapDigestNew, eSub, EmittedExpr.eval]
-      rw [hCap]; ring
+      exact (gate_modEq_iff (by ring)).mpr hCap
     · simp only [VmConstraint.holdsVm, gBalLoZero, eSA, EmittedExpr.eval]; exact hLo
     · simp only [VmConstraint.holdsVm, gBalHiZero, eSA, EmittedExpr.eval]; exact hHi
     · simp only [VmConstraint.holdsVm, gNonceZero, eSA, EmittedExpr.eval]; exact hNon
@@ -209,22 +213,29 @@ theorem spawnVm_faithful (env : VmRowEnv) :
 /-! ## §5 — ANTI-GHOST (per-row). -/
 
 /-- **Anti-ghost (cap-root tamper).** A row whose post-`cap_root` is NOT the supplied digest fails the
-`gCapMove` gate (UNSAT). -/
+`gCapMove` gate (UNSAT). FIELD-FAITHFUL: the tooth rejects a field-`≢` output, so it carries the
+DEPLOYED range-check canonicality (`0 ≤ · < p`) on the two wires; under it a tampered cap-root differs
+from the digest by less than `p`, so the field gate cannot pass by wrap-around. -/
 theorem spawnVm_rejects_wrong_capRoot (env : VmRowEnv)
+    (hcanonNew : 0 ≤ env.loc (saCol state.CAP_ROOT)
+      ∧ env.loc (saCol state.CAP_ROOT) < 2013265921)
+    (hcanonDig : 0 ≤ env.loc (prmCol paramSP.CAP_DIGEST_NEW)
+      ∧ env.loc (prmCol paramSP.CAP_DIGEST_NEW) < 2013265921)
     (hwrong : env.loc (saCol state.CAP_ROOT) ≠ env.loc (prmCol paramSP.CAP_DIGEST_NEW)) :
     ¬ (VmConstraint.gate gCapMove).holdsVm env false false := by
   simp only [VmConstraint.holdsVm, gCapMove, eSA, eCapDigestNew, eSub, EmittedExpr.eval]
-  intro h
-  apply hwrong
-  linarith
+  exact not_modEq_zero_of_canon (by ring) hcanonNew hcanonDig hwrong
 
 /-- **Anti-ghost (non-zero born balance).** A row whose child post-`bal_lo` is NOT `0` (a forged
-non-empty born child) fails the `gBalLoZero` gate (UNSAT). -/
+non-empty born child) fails the `gBalLoZero` gate (UNSAT). FIELD-FAITHFUL: carries the deployed
+balance-limb canonicality so a non-zero balance cannot pass by field wrap-around. -/
 theorem spawnVm_rejects_nonzero_balance (env : VmRowEnv)
+    (hcanon : 0 ≤ env.loc (saCol state.BALANCE_LO)
+      ∧ env.loc (saCol state.BALANCE_LO) < 2013265921)
     (hwrong : env.loc (saCol state.BALANCE_LO) ≠ 0) :
     ¬ (VmConstraint.gate gBalLoZero).holdsVm env false false := by
   simp only [VmConstraint.holdsVm, gBalLoZero, eSA, EmittedExpr.eval]
-  exact hwrong
+  exact not_modEq_zero_of_canon (by ring) hcanon ⟨by norm_num, by norm_num⟩ hwrong
 
 /-- **Anti-ghost (general).** A row whose post-state is NOT the intent move does NOT satisfy the per-row
 gates. -/
@@ -250,12 +261,12 @@ def SpawnRowEncodes (env : VmRowEnv) (post : CellState) (capDigestNew : ℤ) : P
 reserved `0`) with `cap_root` set to the new cap-digest. The per-cell projection of universe-A's
 `SpawnSpec` child clauses. -/
 def SpawnChildSpec (post : CellState) (capDigestNew : ℤ) : Prop :=
-  post.capRoot = capDigestNew
-  ∧ post.balLo = 0
-  ∧ post.balHi = 0
-  ∧ post.nonce = 0
-  ∧ (∀ i : Fin 8, post.fields i = 0)
-  ∧ post.reserved = 0
+  post.capRoot ≡ capDigestNew [ZMOD 2013265921]
+  ∧ post.balLo ≡ 0 [ZMOD 2013265921]
+  ∧ post.balHi ≡ 0 [ZMOD 2013265921]
+  ∧ post.nonce ≡ 0 [ZMOD 2013265921]
+  ∧ (∀ i : Fin 8, post.fields i ≡ 0 [ZMOD 2013265921])
+  ∧ post.reserved ≡ 0 [ZMOD 2013265921]
 
 /-- Under `SpawnRowEncodes`, `SpawnRowIntent` IS the structured per-cell `SpawnChildSpec`. -/
 theorem intent_to_spawnChildSpec (env : VmRowEnv) (post : CellState) (capDigestNew : ℤ)
@@ -402,17 +413,23 @@ theorem spawnGoodRow_realizes_intent : SpawnRowIntent spawnGoodRow := by
     unfold prmCol PARAM_BASE STATE_BEFORE_BASE NUM_EFFECTS STATE_SIZE paramSP.CAP_DIGEST_NEW; rfl
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
   · -- post cap_root (87 → 77) = cap-digest param (73 → 77)
+    refine eqToModEq ?_
     show spawnGoodRow.loc (saCol state.CAP_ROOT) = spawnGoodRow.loc (prmCol paramSP.CAP_DIGEST_NEW)
     rw [hsacap, hprm]; rfl
-  · show spawnGoodRow.loc (saCol state.BALANCE_LO) = 0
+  · refine eqToModEq ?_
+    show spawnGoodRow.loc (saCol state.BALANCE_LO) = 0
     exact spawnGoodRow_loc_default (saCol state.BALANCE_LO) (by decide) (by decide) (by decide)
-  · show spawnGoodRow.loc (saCol state.BALANCE_HI) = 0
+  · refine eqToModEq ?_
+    show spawnGoodRow.loc (saCol state.BALANCE_HI) = 0
     exact spawnGoodRow_loc_default (saCol state.BALANCE_HI) (by decide) (by decide) (by decide)
-  · show spawnGoodRow.loc (saCol state.NONCE) = 0
+  · refine eqToModEq ?_
+    show spawnGoodRow.loc (saCol state.NONCE) = 0
     exact spawnGoodRow_loc_default (saCol state.NONCE) (by decide) (by decide) (by decide)
-  · show spawnGoodRow.loc (saCol state.RESERVED) = 0
+  · refine eqToModEq ?_
+    show spawnGoodRow.loc (saCol state.RESERVED) = 0
     exact spawnGoodRow_loc_default (saCol state.RESERVED) (by decide) (by decide) (by decide)
   · intro i hi8
+    refine eqToModEq ?_
     show spawnGoodRow.loc (saCol (state.FIELD_BASE + i)) = 0
     have hsaI : saCol (state.FIELD_BASE + i) = 79 + i := by
       unfold saCol STATE_AFTER_BASE PARAM_BASE STATE_BEFORE_BASE NUM_EFFECTS STATE_SIZE NUM_PARAMS
@@ -430,10 +447,13 @@ def spawnBadBalRow : VmRowEnv where
 /-- **NON-VACUITY (witness FALSE / concrete anti-ghost).** `spawnBadBalRow`'s child post-`bal_lo` is NOT
 `0`, so the `gBalLoZero` gate REJECTS it — a concrete UNSAT (no forged non-empty born child). -/
 theorem spawnBadBalRow_rejected : ¬ (VmConstraint.gate gBalLoZero).holdsVm spawnBadBalRow false false := by
+  have hbad : spawnBadBalRow.loc (saCol state.BALANCE_LO) = 999 := by
+    show (if saCol state.BALANCE_LO = saCol state.BALANCE_LO then (999:ℤ)
+      else spawnGoodRow.loc (saCol state.BALANCE_LO)) = 999
+    rw [if_pos rfl]
   apply spawnVm_rejects_nonzero_balance
-  show (if saCol state.BALANCE_LO = saCol state.BALANCE_LO then (999:ℤ)
-    else spawnGoodRow.loc (saCol state.BALANCE_LO)) ≠ 0
-  rw [if_pos rfl]; decide
+  · rw [hbad]; exact ⟨by norm_num, by norm_num⟩
+  · rw [hbad]; norm_num
 
 /-! ## §10 — Axiom-hygiene tripwires (the honesty tripwire). -/
 
@@ -513,7 +533,7 @@ theorem spawnActor_full_sound (hash : List ℤ → ℤ) (env : VmRowEnv)
     (henc : RowEncodesRevoke env pre post)
     (hgatesat : satisfiedVm hash spawnActorVmDescriptor env true false)
     (hsat : satisfiedVm hash spawnActorVmDescriptor env true true) :
-    RevokeCellSpec pre post ∧ post.commit = env.pub pi.NEW_COMMIT := by
+    RevokeCellSpec pre post ∧ post.commit ≡ env.pub pi.NEW_COMMIT [ZMOD 2013265921] := by
   obtain ⟨hcs, _⟩ := hsat
   obtain ⟨hcsT, _⟩ := hgatesat
   have hgates' : ∀ c ∈ revokeRowGates, c.holdsVm env false false := by
