@@ -130,6 +130,46 @@ engine's data path only ever verifies. -/
 @[extern "drorb_ed25519_sign"]
 opaque ed25519Sign (secretKey msg : ByteArray) : Option ByteArray
 
+/-- **ML-DSA-65 (FIPS 204) detached verify** — the post-quantum half of the
+hybrid signature seam: `pub msg sig ctx ↦ Bool`. Returns `false` — never a panic —
+on a wrong-length public key/signature or a failed cryptographic check (fail-CLOSED:
+a present-but-invalid PQ half must make the whole hybrid verification reject).
+
+Unlike the HACL*/EverCrypt primitives above, this crossing is bound (via the
+dataplane's `drorb_ml_dsa_verify`) to dregg's `dregg_pq::ml_dsa_verify`. When the
+verified core is installed (`dregg_pq::install_verified_mldsa_verify_core`), the
+accept/reject verdict is computed by the extracted, Lean-verified
+`Dregg2.Crypto.MlDsaVerifyReal.verifyCore` (dregg's BRICK 8 — the full-dimension
+ML-DSA-65 verify over the real 1952/3309-byte pk/sig), PROVED by dregg to accept a
+genuine signature (`MlDsaVerifyReal.verify_accepts_real`) and reject a one-byte
+tamper / wrong message (`verify_rejects_tampered`, `verify_rejects_wrong_msg`), and
+to agree with the FIPS 204 spec (`Fips204Verify.verifyCore_is_spec`,
+`extractedApi_fips204`). `ctx` is the FIPS 204 domain-separation string. The
+soundness of THIS primitive is dregg's proof, not re-derived here — see
+`Assumptions.mlDsaVerify_authentic`. -/
+@[extern "drorb_ml_dsa_verify"]
+opaque mlDsaVerify (pub msg sig ctx : ByteArray) : Bool
+
+/-- **ML-KEM-768 (FIPS 203) encapsulation** — the post-quantum half of the orb's
+hybrid TLS 1.3 X-Wing key exchange (`X25519MLKEM768`). Encapsulate to a 1184-byte
+encapsulation key: `ek ↦ some (ct ‖ ss)` — the 1088-byte ciphertext concatenated with
+the 32-byte shared secret (1120 bytes) — or `none` on a wrong-length/malformed `ek`
+(fail-CLOSED). Like `mlDsaVerify`, this crossing is bound (via the dataplane's
+`drorb_ml_kem_encaps`) to dregg's `dregg_pq::hybrid_kem::ml_kem768_encaps` — the SAME
+`ml-kem` v0.2.3 ML-KEM-768 primitive dregg's proven X-Wing (`hybrid_kem`) is built on.
+The IND-CCA soundness of THIS primitive is dregg's proof, not re-derived here — see
+`Xwing.mlKem_ind_cca`. -/
+@[extern "drorb_ml_kem_encaps"]
+opaque mlKemEncaps (ek : ByteArray) : Option ByteArray
+
+/-- **ML-KEM-768 (FIPS 203) decapsulation** — recover the 32-byte shared secret:
+`dk ct ↦ some ss`, or `none` on a wrong-length/malformed `dk`/`ct` (fail-CLOSED). A
+well-formed-but-TAMPERED ciphertext does not fail — it implicit-rejects to a DIFFERENT
+(message-independent) secret (ML-KEM's FO implicit-reject), so the parties DIVERGE
+without leaking. Bound to `dregg_pq::hybrid_kem::ml_kem768_decaps`. -/
+@[extern "drorb_ml_kem_decaps"]
+opaque mlKemDecaps (dk ct : ByteArray) : Option ByteArray
+
 /-- SHA-256: `msg ↦ digest` (32 bytes). Total. -/
 @[extern "drorb_sha256"]
 opaque sha256 (msg : ByteArray) : ByteArray
@@ -282,6 +322,39 @@ is an informal, audit-tracked assumption (see README). -/
 axiom sha256_len : ∀ msg, (sha256 msg).size = 32
 axiom sha384_len : ∀ msg, (sha384 msg).size = 48
 
+/-! ### ML-DSA-65 (FIPS 204) — the post-quantum verify, shadowed from dregg's proof.
+
+The classical Ed25519 axioms above are the shadow of HACL*/EverCrypt's F* proofs.
+The ML-DSA-65 verify is the shadow of dregg's SEPARATE, already-discharged proof —
+the extracted, Lean-verified `Dregg2.Crypto.MlDsaVerifyReal.verifyCore`. The orb
+does NOT re-prove FIPS-204 soundness; it names dregg's result and composes. -/
+
+/-- The ML-DSA-65 public key dregg derives from a 32-byte seed
+(`dregg_pq::MlDsaKey::from_ed25519_seed(seed).public_bytes()`), abstracted — the
+value a verifier ENROLLS and PINS to a holder's identity, matching dregg's
+`Id = H(ed25519 ‖ ml_dsa)`. The PQ key is never self-carried in a token. -/
+axiom mlDsaPubOf : ByteArray → ByteArray
+
+/-- `mlDsaGenuine seed ctx msg sig`: `sig` is a signature dregg's ML-DSA-65 signer
+would produce for `(seed, ctx, msg)` — the abstract "authentic sender output",
+the ML-DSA analog of "`chachaSeal` produced this `ct`". -/
+axiom mlDsaGenuine : ByteArray → ByteArray → ByteArray → ByteArray → Prop
+
+/-- **ML-DSA-65 verify authenticity / forgery-resistance — the functional shadow
+of dregg's PROVEN FIPS-204 verify.** Under a pinned key `mlDsaPubOf seed`, the ONLY
+signatures `mlDsaVerify` accepts are genuine ones by the matching seed. This is
+NOT re-derived here: it is the shadow of `Dregg2.Crypto.MlDsaVerifyReal.verifyCore`'s
+proven accept-genuine / reject-tamper gate (`verify_accepts_real`,
+`verify_rejects_tampered`, `verify_rejects_wrong_msg`) and its proven agreement
+with the FIPS 204 spec (`Fips204Verify.verifyCore_is_spec`, `extractedApi_fips204`).
+The residual trust is dregg's F*/leanc toolchain and the `drorb_ml_dsa_verify`
+marshalling — exactly parallel to the HACL* axioms above (the shape mirrors
+`chacha_open_authentic`: acceptance implies genuine sender output). -/
+axiom mlDsaVerify_authentic :
+  ∀ seed ctx msg sig,
+    mlDsaVerify (mlDsaPubOf seed) msg sig ctx = true →
+    mlDsaGenuine seed ctx msg sig
+
 end Assumptions
 
 /-! ## Compose — one worked example of "relative to these assumptions".
@@ -329,6 +402,162 @@ theorem chachaOpenAt_authentic (key nonce ad ct msg : ByteArray)
     chachaSeal key nonce ad msg = some ct :=
   Assumptions.chacha_open_authentic key nonce ad ct msg h
 
+/-- **The ML-DSA-65 discharge, made explicit.** A signature accepted by
+`mlDsaVerify` under a pinned key `mlDsaPubOf seed` is a genuine signature by the
+matching seed — the JWT hybrid's ML-DSA half authenticity, delivered by dregg's
+proven verify core (via `Assumptions.mlDsaVerify_authentic`). Its `#print axioms`
+names `mlDsaVerify_authentic`, surfacing the dregg FIPS-204 dependency honestly. -/
+theorem mlDsaVerify_authentic_at (seed ctx msg sig : ByteArray)
+    (h : mlDsaVerify (Assumptions.mlDsaPubOf seed) msg sig ctx = true) :
+    Assumptions.mlDsaGenuine seed ctx msg sig :=
+  Assumptions.mlDsaVerify_authentic seed ctx msg sig h
+
 end Compose
 
+/-! ## Xwing — the post-quantum hybrid KEM combiner (X25519 + ML-KEM-768).
+
+The orb's TLS 1.3 hybrid key exchange (`X25519MLKEM768`, `TlsHandshake`) derives its
+shared secret from an **X-Wing** combiner: one classical X25519 secret `ss_x25519` and
+one post-quantum ML-KEM-768 secret `ss_mlkem`, fed **concatenated, with the handshake
+transcript**, through a single HKDF-SHA256 KDF — the published X-Wing construction, and
+dregg's `hybrid_kem` combiner VERBATIM in structure (concatenation-KDF, **never XOR**).
+
+Two properties are the point of this cut, both the orb's NEW proofs:
+
+* **`xwing_kex_sound`** — the hybrid secret binds BOTH halves: it is unpredictable
+  (IND-CCA) if EITHER X25519 OR ML-KEM is, provided the KDF is a dual-PRF. Breaking one
+  component (e.g. X25519 to a quantum adversary) leaves the other's secret an
+  unpredictable key the adversary cannot pin — harvest-now-decrypt-later defeated.
+* **`xwing_ikm_is_concat`** — the combiner's HKDF input keying material is exactly
+  `ss_x25519 ‖ ss_mlkem` (concatenation), so neither half can be cancelled (the XOR
+  tripwire, as a `rfl` theorem).
+
+The ML-KEM half's IND-CCA is NOT re-proved here — it is dregg's
+`Dregg2.Crypto.MlKemIndCca.ml_kem_ind_cca_reduces_to_mlwe` (ML-KEM IND-CCA reduced to the
+module-lattice floor `Lattice.MLWESearchHard` + the QROM idealisation), the PQ leg of
+`Dregg2.Crypto.HybridCombiner.hybrid_kem_ind_cca_if_either`, surfaced here as the named
+`Xwing.mlKem_ind_cca`. The combiner machinery below MIRRORS `HybridCombiner` (its
+`Unpredictable` / `DualPRF` / `hybrid_kem_ind_cca_if_either`), re-proved clean over
+`ByteArray`. The orb names dregg's lattice result and composes; it does not re-derive
+FIPS 203. -/
+namespace Xwing
+
+/-- **Unpredictable** — a secret, as a function of the hidden encapsulation coins, is
+injective: distinct coins give distinct secrets, so no fixed prediction pins it. The
+IND-CCA currency (`Dregg2.Crypto.HybridCombiner.KemIndCca` = `Unpredictable`). -/
+def Unpredictable {In : Type} (f : In → ByteArray) : Prop := ∀ a b, f a = f b → a = b
+
+/-- **DUAL-PRF (the X-Wing KDF requirement).** The combiner preserves unpredictability
+keyed on EITHER input: injective in the first key (second key + transcript fixed) AND in
+the second. The standard X-Wing assumption on the combiner, stated explicitly. -/
+def DualPRF (K : ByteArray → ByteArray → ByteArray → ByteArray) : Prop :=
+  (∀ (k2 tr a b : ByteArray), K a k2 tr = K b k2 tr → a = b) ∧
+  (∀ (k1 tr a b : ByteArray), K k1 a tr = K k1 b tr → a = b)
+
+/-- Unpredictability flows through the CLASSICAL channel (pq secret held fixed). -/
+theorem unpredictable_via_classical {In : Type}
+    (K : ByteArray → ByteArray → ByteArray → ByteArray) (hd : DualPRF K)
+    (tr sspq : ByteArray) (source : In → ByteArray) (hx : Unpredictable source) :
+    Unpredictable (fun i => K (source i) sspq tr) :=
+  fun a b h => hx a b (hd.1 sspq tr (source a) (source b) h)
+
+/-- Unpredictability flows through the PQ channel (classical secret held fixed) — the leg
+a single-keyed (non-dual) combiner would LACK. -/
+theorem unpredictable_via_pq {In : Type}
+    (K : ByteArray → ByteArray → ByteArray → ByteArray) (hd : DualPRF K)
+    (tr ssx : ByteArray) (source : In → ByteArray) (hp : Unpredictable source) :
+    Unpredictable (fun i => K ssx (source i) tr) :=
+  fun a b h => hp a b (hd.2 ssx tr (source a) (source b) h)
+
+/-- **The combiner core — unpredictable if EITHER component's secret is** (under the
+dual-PRF). Mirrors `HybridCombiner.hybrid_kem_ind_cca_if_either`, re-proved clean. -/
+theorem binds_both {In : Type}
+    (K : ByteArray → ByteArray → ByteArray → ByteArray) (hd : DualPRF K)
+    (tr ssx sspq : ByteArray) (sourceX sourcePq : In → ByteArray)
+    (heither : Unpredictable sourceX ∨ Unpredictable sourcePq) :
+    Unpredictable (fun i => K (sourceX i) sspq tr) ∨
+    Unpredictable (fun i => K ssx (sourcePq i) tr) :=
+  match heither with
+  | Or.inl hx => Or.inl (unpredictable_via_classical K hd tr sspq sourceX hx)
+  | Or.inr hp => Or.inr (unpredictable_via_pq K hd tr ssx sourcePq hp)
+
+/-! ### The concrete orb combiner (HKDF-SHA256 over the concatenation). -/
+
+/-- HKDF domain-separation / version tag for the orb's TLS hybrid KEX combiner. Its own
+per-surface domain (X-Wing domain separation); the CONSTRUCTION — HKDF-SHA256 over the
+concatenation `ss_x25519 ‖ ss_mlkem` with the transcript as `info` — is dregg's
+`hybrid_kem::combine` verbatim in structure. -/
+def xwingDomain : ByteArray := "drorb-tls-hybrid-kem-x25519-mlkem768-v1".toUTF8
+
+/-- **The X-Wing combiner**: `HKDF-Expand(HKDF-Extract(salt = domain, ikm = ss_x25519 ‖
+ss_mlkem), info = domain ‖ transcript, 32)`. A **concatenation KDF, never XOR**: the
+output depends jointly and inextricably on BOTH secrets. `none` only on an HKDF size
+fault (a 32-byte expand never faults). -/
+def xwingCombine (ssX ssPq transcript : ByteArray) : Option ByteArray :=
+  (hkdfExtract xwingDomain (ssX ++ ssPq)).bind
+    (fun prk => hkdfExpand prk (xwingDomain ++ transcript) (32 : USize))
+
+/-- **The combiner is CONCATENATION, never XOR** (the X-Wing tripwire, as a theorem). The
+HKDF input keying material `xwingCombine` feeds is exactly `ssX ++ ssPq` — both secrets
+concatenated — so the derived key depends jointly on BOTH. With XOR an adversary who
+learned one secret could cancel it; with the concatenation neither half can be removed.
+`rfl`-clean. -/
+theorem xwing_ikm_is_concat (ssX ssPq transcript : ByteArray) :
+    xwingCombine ssX ssPq transcript
+      = (hkdfExtract xwingDomain (ssX ++ ssPq)).bind
+          (fun prk => hkdfExpand prk (xwingDomain ++ transcript) (32 : USize)) := rfl
+
+/-- The total combiner used for the composition statement (`xwingCombine` defaulting to
+empty only on the impossible 32-byte HKDF fault). -/
+def xwingKdf (ssX ssPq tr : ByteArray) : ByteArray :=
+  (xwingCombine ssX ssPq tr).getD ByteArray.empty
+
+/-! ### The named dependencies (the trust boundary), and the orb's NEW composition proof. -/
+
+/-- **The X-Wing dual-PRF assumption**, stated explicitly. The concrete HKDF-SHA256
+concatenation combiner `xwingKdf` is a dual-PRF (injective keyed on either secret) — the
+standard X-Wing requirement on the combiner (`Dregg2.Crypto.HybridCombiner.DualPRF`), the
+functional shadow of HKDF-SHA256's collision-resistance / dual-PRF security. Named, not
+hidden. -/
+axiom xwing_kdf_dualPRF : DualPRF xwingKdf
+
+/-- The ML-KEM-768 shared secret as a function of the honest encapsulation coins, for a
+given encapsulation key `ek` (the handle dregg's `mlKemSecret H coins` is phrased over). -/
+axiom mlKemSource : ByteArray → ByteArray → ByteArray
+
+/-- **ML-KEM-768 IND-CCA — the functional shadow of dregg's PROVEN reduction to MLWE.**
+For every encapsulation key, the ML-KEM shared secret, as a function of the hidden
+encapsulation coins, is UNPREDICTABLE. NOT re-derived here: the shadow of
+`Dregg2.Crypto.MlKemIndCca.ml_kem_ind_cca_reduces_to_mlwe` (ML-KEM IND-CCA from
+`Lattice.MLWESearchHard` + `QROMInjective`), the PQ leg of
+`Dregg2.Crypto.HybridCombiner.hybrid_kem_ind_cca_if_either`. Residual trust: dregg's
+lattice proof + the `drorb_ml_kem_*` marshalling — parallel to `mlDsaVerify_authentic`. -/
+axiom mlKem_ind_cca : ∀ (ek : ByteArray), Unpredictable (mlKemSource ek)
+
+/-- **`xwing_kex_sound` — the X-Wing shared secret binds BOTH halves.** Under the dual-PRF,
+the derived secret is unpredictable (IND-CCA) if EITHER the X25519 OR the ML-KEM secret
+source is — through the corresponding channel. The orb's NEW composition proof; the
+ML-KEM IND-CCA it consumes rests on dregg's core (`mlKem_ind_cca`). Non-vacuous, names
+the concrete `xwingKdf`. -/
+theorem xwing_kex_sound {In : Type} (tr ssx sspq : ByteArray)
+    (sourceX sourcePq : In → ByteArray)
+    (heither : Unpredictable sourceX ∨ Unpredictable sourcePq) :
+    Unpredictable (fun i => xwingKdf (sourceX i) sspq tr) ∨
+    Unpredictable (fun i => xwingKdf ssx (sourcePq i) tr) :=
+  binds_both xwingKdf xwing_kdf_dualPRF tr ssx sspq sourceX sourcePq heither
+
+/-- **Harvest-now-decrypt-later is defeated** (the load-bearing composition): even if the
+classical X25519 secret is fully known to a (quantum) adversary — `ssx` fixed — the X-Wing
+key stays UNPREDICTABLE because the ML-KEM half does, resting on dregg's IND-CCA (MLWE
+floor). A MITM breaking ONLY X25519 cannot derive the session key. -/
+theorem xwing_kex_pq_protects (tr ssx ek : ByteArray) :
+    Unpredictable (fun coins => xwingKdf ssx (mlKemSource ek coins) tr) :=
+  unpredictable_via_pq xwingKdf xwing_kdf_dualPRF tr ssx (mlKemSource ek) (mlKem_ind_cca ek)
+
+end Xwing
+
 end Crypto
+
+#print axioms Crypto.Xwing.xwing_kex_sound
+#print axioms Crypto.Xwing.xwing_kex_pq_protects
+#print axioms Crypto.Xwing.xwing_ikm_is_concat

@@ -351,6 +351,73 @@ LEAN_EXPORT lean_obj_res drorb_ed25519_sign(
     return drorb_some(sig);
 }
 
+/* ---- ML-DSA-65 (FIPS 204) - the post-quantum hybrid half ---------------
+ *
+ * NOT HACL/EverCrypt. This crossing marshals the four ByteArrays to raw
+ * (ptr,len) and calls dregg via dregg-pq: drorb_pq_ml_dsa_verify is defined in
+ * the dataplane Rust crate over dregg_pq::ml_dsa_verify. dregg-pq fails CLOSED
+ * on a wrong-length key/signature and, when the Lean-verified core is installed,
+ * routes accept/reject through the extracted, PROVED
+ * Dregg2.Crypto.MlDsaVerifyReal.verifyCore. ctx is the FIPS 204
+ * domain-separation string. Returns 0/1. See Crypto.lean mlDsaVerify. */
+extern uint8_t drorb_pq_ml_dsa_verify(
+    const uint8_t *pk, size_t pk_len,
+    const uint8_t *msg, size_t msg_len,
+    const uint8_t *sig, size_t sig_len,
+    const uint8_t *ctx, size_t ctx_len);
+
+LEAN_EXPORT uint8_t drorb_ml_dsa_verify(
+        b_lean_obj_arg pub, b_lean_obj_arg msg,
+        b_lean_obj_arg sig, b_lean_obj_arg ctx) {
+    return drorb_pq_ml_dsa_verify(
+        lean_sarray_cptr(pub), lean_sarray_size(pub),
+        lean_sarray_cptr(msg), lean_sarray_size(msg),
+        lean_sarray_cptr(sig), lean_sarray_size(sig),
+        lean_sarray_cptr(ctx), lean_sarray_size(ctx));
+}
+
+/* ---- ML-KEM-768 (FIPS 203) - the post-quantum hybrid KEX half -----------
+ *
+ * NOT HACL/EverCrypt. Like the ML-DSA-65 crossing above, these marshal the
+ * ByteArrays to raw (ptr,len) and call dregg via dregg-pq: drorb_pq_ml_kem_* are
+ * defined in the dataplane Rust crate over dregg_pq::hybrid_kem::ml_kem768_* (the
+ * SAME ml-kem v0.2.3 primitive dregg's proven X-Wing uses). Fail-CLOSED on a
+ * wrong-length key/ciphertext. See Crypto.lean mlKemEncaps / mlKemDecaps and the
+ * Xwing composition. The standalone Lean serve exes link ffi/pq_stub.o for these
+ * symbols (fail-closed); the deployed dataplane binary links the real dregg wire. */
+extern uint8_t drorb_pq_ml_kem_encaps(
+    const uint8_t *ek, size_t ek_len, uint8_t *out);
+extern uint8_t drorb_pq_ml_kem_decaps(
+    const uint8_t *dk, size_t dk_len,
+    const uint8_t *ct, size_t ct_len, uint8_t *out);
+
+/* encaps: ek(1184) -> Option (ct(1088) then ss(32)) = Option ba(1120). */
+LEAN_EXPORT lean_obj_res drorb_ml_kem_encaps(b_lean_obj_arg ek) {
+    lean_object *out = drorb_new_ba(1120u);
+    if (drorb_pq_ml_kem_encaps(
+            lean_sarray_cptr(ek), lean_sarray_size(ek),
+            lean_sarray_cptr(out))) {
+        return drorb_some(out);
+    }
+    lean_dec_ref(out);
+    return drorb_none();
+}
+
+/* decaps: dk(2400) ct(1088) -> Option ss(32). A tampered-but-well-formed ct
+ * returns some(DIFFERENT implicit-reject secret); a malformed key/ct -> none. */
+LEAN_EXPORT lean_obj_res drorb_ml_kem_decaps(
+        b_lean_obj_arg dk, b_lean_obj_arg ct) {
+    lean_object *out = drorb_new_ba(32u);
+    if (drorb_pq_ml_kem_decaps(
+            lean_sarray_cptr(dk), lean_sarray_size(dk),
+            lean_sarray_cptr(ct), lean_sarray_size(ct),
+            lean_sarray_cptr(out))) {
+        return drorb_some(out);
+    }
+    lean_dec_ref(out);
+    return drorb_none();
+}
+
 /* ---- NaCl crypto_box (X25519 + XSalsa20-Poly1305) --------------------
  *
  * crypto_box is the DERP / DISCO authenticated-public-key box: an ephemeral or

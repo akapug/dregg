@@ -189,6 +189,7 @@ ok "libaes_fallback.a"
 # crypto seam, TCP byte-mover for the TLS front door, RSA/ECDSA cert signer).
 bash ffi/build-cgi-shim.sh
 bash ffi/build-crypto-shim.sh
+bash ffi/build-pq-stub.sh
 bash ffi/build-derp-net.sh
 bash ffi/build-tls-p256-shim.sh
 # mac_io.o + mac_udp.o (the native multi-protocol/QUIC servers; mac_udp.o also

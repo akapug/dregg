@@ -190,6 +190,6 @@ resting on the named FFI-oracle contract — a proof obligation of known shape,
 - `boundScanCoreLinkAScript.sml` — Part 2: `innerCore` verbatim, `coreRel`,
   `eval_core_guard`, `evaluate_innerCore` (the whole decision+digest core → `«result»`).
 - `Holmakefile` — `INCLUDES` the cakeml pancake/proofs dirs + `~/c6work` (the C3/C5/C6
-  loop machinery) + `~/hol-c11` (`boundScanProg`); build with `CAKEMLDIR=~/src/cakeml`.
+  loop machinery) + `~/hol-c11` (`boundScanProg`); build with `CAKEMLDIR=/home/hbox/src/cakeml`.
 - `verify_out.txt` — printed statements + `[oracles: DISK_THM] [axioms: ]` +
   `axioms "…" = 0` for both theories.

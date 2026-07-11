@@ -7,7 +7,7 @@
    panAutoScript + the `panLinkA_branch_le` tactic in panAutoLib, added ONCE.
 
    THE FRAGMENT: `Rate.tryAdmit` from the drorb serve
-   (orb/Rate/Bucket.lean) — the token-bucket admit decision
+   (/Users/ember/dev/drorb/Rate/Bucket.lean) — the token-bucket admit decision
    `if 1 <= b.tokens then (admit,true) else (reject,false)`.  It is consulted by
    `Reactor.Stage.Rate.admits` -> `rateStage`/`rateHighStage`, position 3 of
    `Reactor.Deploy.deployStagesFull2`.  Genuinely LOOP-FREE: a single `<=` on the

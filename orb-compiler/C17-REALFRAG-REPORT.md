@@ -20,7 +20,7 @@ fragment.
 
 ## 1. THE fragment — real, deployed, genuinely loop-free
 
-**`Redirect.Code.status`** in `orb/Redirect.lean`:
+**`Redirect.Code.status`** in `/Users/ember/dev/drorb/Redirect.lean`:
 
 ```lean
 def Code.status : Code → Nat
@@ -225,7 +225,7 @@ two-parameter wrapper template edit (read-count N, result offset) — here
   transferred verbatim from C15.
 - `verifyRedirectScript.sml` — the machine-checked oracle/axiom audit.
 - `Holmakefile` — INCLUDES the CakeML pancake/backend/proofs dirs; build with
-  `CAKEMLDIR=~/src/cakeml`.
+  `CAKEMLDIR=/home/hbox/src/cakeml`.
 
 ## 8. Verdict
 

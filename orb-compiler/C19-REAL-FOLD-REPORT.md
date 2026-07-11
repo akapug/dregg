@@ -174,7 +174,7 @@ end-to-end that pins it to the *parsed* `hashBytesProg` is the §5 residual).
 - `verifyHash.sml` — the machine-checked oracle/axiom/hyp audit (prints all three
   headline theorems with `show_tags`).
 - `Holmakefile` — includes the CakeML pancake/semantics dirs; build with
-  `CAKEMLDIR=~/src/cakeml`.
+  `CAKEMLDIR=/home/hbox/src/cakeml`.
 
 ## 8. Verdict
 

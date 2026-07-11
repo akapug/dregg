@@ -6,7 +6,7 @@
    `b <= 90`).
 
    THE FRAGMENT: the uppercase test at the heart of `Gzip.lowerByte` (drorb
-   orb/Reactor/Stage/Gzip.lean):
+   /Users/ember/dev/drorb/Reactor/Stage/Gzip.lean):
      `lowerByte b = if 65 <= b && b <= 90 then b+32 else b`
    is the per-byte ASCII case-fold used by `Gzip.lower`, the header-name/value
    canonicalization the DEPLOYED serve runs in `Gzip.acceptsGzip` (gzipStage,

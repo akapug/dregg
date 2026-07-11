@@ -181,4 +181,4 @@ install package + the single FFI-oracle contract — not leanc, not the backend.
   `boundScan_machine_code`.
 - `Holmakefile` — `INCLUDES` the CakeML pancake/backend/proofs dirs + `~/c6work`
   (C3/C5/C6 loop machinery) + `~/hol-c11` (`boundScanProg`, `boundScanProg_linkB`)
-  + `~/hol-c12` (`innerCore`, `digLoop`); build with `CAKEMLDIR=~/src/cakeml`.
+  + `~/hol-c12` (`innerCore`, `digLoop`); build with `CAKEMLDIR=/home/hbox/src/cakeml`.
