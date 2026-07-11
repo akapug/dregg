@@ -104,6 +104,20 @@ impl WorldCell {
         Self::from_compiled(Arc::new(story), seed)
     }
 
+    /// **Deploy an already-compiled (and possibly post-processed) [`CompiledStory`].**
+    /// The public form of [`Self::from_compiled`]: a caller compiles a scene, AUGMENTS
+    /// the resulting [`CompiledStory::program`] with extra executor teeth the v0
+    /// compiler does not emit (a [`dregg_app_framework::StateConstraint::WriteOnce`] on a
+    /// loot-owner slot, a `Monotonic` ratchet, a `FieldLteField` budget bound, a
+    /// `HeapField` on a heap-keyed collection), and deploys that. The augmented
+    /// constraints are REAL `CellProgram` cases the [`EmbeddedExecutor`] re-checks on
+    /// every touching turn — identical enforcement to a compiler-emitted tooth, since
+    /// the executor never distinguishes who authored a case. Additive: existing callers
+    /// go through [`Self::deploy`] unchanged.
+    pub fn deploy_compiled(story: Arc<CompiledStory>, seed: u8) -> Result<Self, WorldError> {
+        Self::from_compiled(story, seed)
+    }
+
     fn from_compiled(story: Arc<CompiledStory>, seed: u8) -> Result<Self, WorldError> {
         // Deterministic identity: same scene id + seed ⇒ same owner key ⇒ same
         // world-cell id ⇒ reproducible state hashes on re-deploy (verify path).
@@ -305,6 +319,30 @@ impl WorldCell {
                 .ok_or_else(|| WorldError::UnknownTarget(nav.target.to_string())),
             None => Ok(PASSAGE_ENDED),
         }
+    }
+
+    /// **Drive ONE raw cap-bounded turn** — an escape hatch below the choice/passage
+    /// layer, for a move whose effects are not the shape [`compile_scene`] emits (the
+    /// canonical example: writing a HEAP-keyed collection, `Effect::SetField` with
+    /// `index >= dregg_cell::state::STATE_SLOTS`, which the executor routes into the
+    /// cell's committed `fields_map`). The turn is signed with the world's cap and
+    /// admitted by the SAME real [`EmbeddedExecutor`] IFF the installed program's case
+    /// for `method` passes on the post-state — so an executor-enforced `HeapField`
+    /// tooth on a heap key bites here exactly as a slot tooth bites on `apply_choice`.
+    /// A refused turn commits nothing (anti-ghost). Additive to the choice API.
+    pub fn apply_raw(&self, method: &str, effects: Vec<Effect>) -> Result<TurnReceipt, WorldError> {
+        self.commit(method, effects)
+    }
+
+    /// Read a HEAP field off the committed cell state (`index >= STATE_SLOTS`, resolved
+    /// through [`dregg_cell::state::CellState::get_field_ext`]'s committed `fields_map`).
+    /// `None` if the key was never written — on the heap, absent ≠ present-zero. The
+    /// heap read the multi-item collection ceiling (a >16-slot inventory) leans on.
+    pub fn read_heap(&self, key: u64) -> Option<u64> {
+        self.exec
+            .cell_state(self.cell)
+            .and_then(|s| s.get_field_ext(key))
+            .map(|f| field_to_u64(&f))
     }
 
     /// Build, sign, and submit a turn on the world-cell under `method`.
