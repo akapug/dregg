@@ -8,7 +8,8 @@
 //! below.
 
 use dregg_dice::{
-    Beacon, BeaconKind, BeaconParams, BeaconSchedule, CommitReveal, Deterministic, DrawError,
+    Beacon, BeaconKind, BeaconParams, BeaconSchedule, CommitReveal,
+    DRAND_QUICKNET_GROUP_PUBLIC_KEY, DRAND_QUICKNET_SCHEME, Deterministic, DrandBeacon, DrawError,
     DrawStream, EventId, EvidenceKind, Finalization, FinalizeMode, HashChainBeacon, Hybrid,
     KeyChain, MockBeacon, RandomnessEvidence, RandomnessRequest, RandomnessSource, Seed, ServerVrf,
     VerifyError, VrfEvalError, verify_beacon_round, verify_epoch_membership,
@@ -702,55 +703,248 @@ fn hash_chain_beacon_round_verifies_and_rejects_wrong_output() {
 
     let round = schedule.expected_round(5); // 15
     let output = beacon.round_output(round);
-    verify_beacon_round(&params, round, &output).expect("an honest round verifies");
+    // A hash-chain round has no signature; the signature argument is unused.
+    verify_beacon_round(&params, round, &output, &[]).expect("an honest round verifies");
 
     // A wrong output (does not chain to the anchor) is rejected.
     let mut bad = output;
     bad[0] ^= 0x01;
     assert_eq!(
-        verify_beacon_round(&params, round, &bad),
+        verify_beacon_round(&params, round, &bad, &[]),
         Err(VerifyError::BeaconVerifyFailed),
         "a wrong beacon output must be rejected"
     );
     // The right output at the WRONG round is rejected (H^round no longer hits anchor).
     assert_eq!(
-        verify_beacon_round(&params, round + 1, &output),
+        verify_beacon_round(&params, round + 1, &output, &[]),
         Err(VerifyError::BeaconVerifyFailed)
     );
     // Round 0 and past the chain length are rejected.
     assert_eq!(
-        verify_beacon_round(&params, 0, &output),
+        verify_beacon_round(&params, 0, &output, &[]),
         Err(VerifyError::BeaconVerifyFailed)
     );
     assert_eq!(
-        verify_beacon_round(&params, 101, &output),
+        verify_beacon_round(&params, 101, &output, &[]),
         Err(VerifyError::BeaconVerifyFailed)
     );
 }
 
-#[test]
-fn drand_beacon_verification_is_the_remaining_gap() {
-    // HONEST GAP: the shipped beacon is a hash chain (single operator). A real
-    // threshold drand-BLS beacon's round verification (a BLS pairing check vs the
-    // pinned group key) is not wired — the `Drand` variant fails closed. This
-    // documents hatch #2's remaining production work.
-    let params = BeaconParams {
+// ── DrandBeacon: the REAL threshold-BLS beacon, verified against a published
+//    drand quicknet vector (genuine interop, not self-consistency). ──
+
+// A REAL, PUBLISHED drand `quicknet` round. Source (drand public API):
+//   info:   https://api.drand.sh/52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971/info
+//     -> public_key = 83cf0f28…5ece45a (G2, 96 bytes), schemeID = bls-unchained-g1-rfc9380
+//   round:  https://api.drand.sh/52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971/public/1000000
+//     -> signature  = 83ad29e4…88abe72 (G1, 48 bytes)
+//     -> randomness = b22aad47…1440af3  (== SHA-256(signature))
+const DRAND_QUICKNET_PK_HEX: &str = "83cf0f2896adee7eb8b5f01fcad3912212c437e0073e911fb90022d3e760183c8c4b450b6a0a6c3ac6a5776a2d1064510d1fec758c921cc22b0e17e63aaf4bcb5ed66304de9cf809bd274ca73bab4af5a6e9c76a4bc09e76eae8991ef5ece45a";
+const DRAND_QUICKNET_ROUND: u64 = 1_000_000;
+const DRAND_QUICKNET_SIG_HEX: &str = "83ad29e4c409f9470fc2ef02f90214df49e02b441a1a241a82d622d9f608ef98fd8b11a029f1bee9d9e83b45088abe72";
+const DRAND_QUICKNET_RANDOMNESS_HEX: &str =
+    "b22aad4794f7451896f7a371aa46106fd84d919f3f569acd5b2fddf1d1440af3";
+
+fn drand_quicknet_params() -> BeaconParams {
+    BeaconParams {
         beacon_id: b"drand/quicknet".to_vec(),
         kind: BeaconKind::Drand {
-            group_public_key: vec![0u8; 48],
-            scheme: "bls-unchained-g1-rfc9380".to_string(),
+            group_public_key: hex::decode(DRAND_QUICKNET_PK_HEX).unwrap(),
+            scheme: DRAND_QUICKNET_SCHEME.to_string(),
         },
         schedule: BeaconSchedule {
             base_round: 1,
             stride: 1,
         },
-    };
+    }
+}
+
+#[test]
+fn drand_pinned_group_key_matches_published_vector() {
+    // The library-pinned quicknet group key equals the published one this vector
+    // was verified against — the constant and the interop test agree.
+    assert_eq!(
+        DRAND_QUICKNET_GROUP_PUBLIC_KEY.to_vec(),
+        hex::decode(DRAND_QUICKNET_PK_HEX).unwrap(),
+    );
+}
+
+#[test]
+fn drand_real_quicknet_round_verifies() {
+    // THE INTEROP TOOTH: a real published drand quicknet round verifies by the BLS
+    // pairing check e(sig, g2) == e(H(round), pk) against the pinned group key, and
+    // output == SHA-256(signature). This proves genuine drand interop.
+    let params = drand_quicknet_params();
+    let sig = hex::decode(DRAND_QUICKNET_SIG_HEX).unwrap();
+    let output: [u8; 32] = hex::decode(DRAND_QUICKNET_RANDOMNESS_HEX)
+        .unwrap()
+        .try_into()
+        .unwrap();
+    verify_beacon_round(&params, DRAND_QUICKNET_ROUND, &output, &sig)
+        .expect("a real published drand quicknet round must verify");
+}
+
+#[test]
+fn drand_forged_signature_is_rejected() {
+    // A mutated signature (one bit flipped) fails the pairing check: the threshold
+    // group never signed it. Non-vacuous rejection — the real security tooth.
+    let params = drand_quicknet_params();
+    let mut sig = hex::decode(DRAND_QUICKNET_SIG_HEX).unwrap();
+    sig[0] ^= 0x01; // flip a bit of the G1 signature
+    let output: [u8; 32] = hex::decode(DRAND_QUICKNET_RANDOMNESS_HEX)
+        .unwrap()
+        .try_into()
+        .unwrap();
+    // Note: `output` here is H(honest sig); a real forger controlling `output` too is
+    // caught by the pairing check regardless. Either way the round is rejected.
+    assert_eq!(
+        verify_beacon_round(&params, DRAND_QUICKNET_ROUND, &output, &sig),
+        Err(VerifyError::BeaconVerifyFailed),
+        "a forged/mutated drand signature must fail the pairing check"
+    );
+}
+
+#[test]
+fn drand_wrong_round_is_rejected() {
+    // The honest signature at the WRONG round fails: quicknet is unchained, so the
+    // signed message is H(round); a different round hashes to a different H(m) and the
+    // pairing no longer holds. A favourable-round swap fails independent of the sig.
+    let params = drand_quicknet_params();
+    let sig = hex::decode(DRAND_QUICKNET_SIG_HEX).unwrap();
+    let output: [u8; 32] = hex::decode(DRAND_QUICKNET_RANDOMNESS_HEX)
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_eq!(
+        verify_beacon_round(&params, DRAND_QUICKNET_ROUND + 1, &output, &sig),
+        Err(VerifyError::BeaconVerifyFailed),
+        "the honest signature verified against the wrong round must be rejected"
+    );
+}
+
+#[test]
+fn drand_wrong_group_key_is_rejected() {
+    // The honest round/signature under a DIFFERENT (mutated) group public key fails —
+    // pinning the group key commits which threshold network produced the round.
+    let mut params = drand_quicknet_params();
+    if let BeaconKind::Drand {
+        group_public_key, ..
+    } = &mut params.kind
+    {
+        // Flip a bit of the compressed G2 key (still a valid-length field; if it no
+        // longer decodes to a curve point, that too is a rejection — either way fail).
+        group_public_key[95] ^= 0x01;
+    }
+    let sig = hex::decode(DRAND_QUICKNET_SIG_HEX).unwrap();
+    let output: [u8; 32] = hex::decode(DRAND_QUICKNET_RANDOMNESS_HEX)
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_eq!(
+        verify_beacon_round(&params, DRAND_QUICKNET_ROUND, &output, &sig),
+        Err(VerifyError::BeaconVerifyFailed),
+        "verification under a wrong group key must be rejected"
+    );
+}
+
+#[test]
+fn drand_output_not_hash_of_sig_is_rejected() {
+    // Even with a signature that passes the pairing check, a recorded output that is
+    // not SHA-256(signature) is rejected — the output==H(sig) tooth.
+    let params = drand_quicknet_params();
+    let sig = hex::decode(DRAND_QUICKNET_SIG_HEX).unwrap();
+    let mut output: [u8; 32] = hex::decode(DRAND_QUICKNET_RANDOMNESS_HEX)
+        .unwrap()
+        .try_into()
+        .unwrap();
+    output[0] ^= 0x01; // no longer H(sig)
+    assert_eq!(
+        verify_beacon_round(&params, DRAND_QUICKNET_ROUND, &output, &sig),
+        Err(VerifyError::BeaconVerifyFailed),
+        "output that is not H(signature) must be rejected"
+    );
+}
+
+#[test]
+fn drand_unsupported_scheme_fails_closed() {
+    // A scheme string this build does not implement fails closed (not silently
+    // accepted) — the honest boundary for other drand networks.
+    let mut params = drand_quicknet_params();
+    if let BeaconKind::Drand { scheme, .. } = &mut params.kind {
+        *scheme = "bls-on-g2-some-other-network".to_string();
+    }
+    let sig = hex::decode(DRAND_QUICKNET_SIG_HEX).unwrap();
+    let output: [u8; 32] = hex::decode(DRAND_QUICKNET_RANDOMNESS_HEX)
+        .unwrap()
+        .try_into()
+        .unwrap();
     assert!(
         matches!(
-            verify_beacon_round(&params, 1, &[0u8; 32]),
+            verify_beacon_round(&params, DRAND_QUICKNET_ROUND, &output, &sig),
             Err(VerifyError::BackendUnavailable(_))
         ),
-        "real drand-BLS verification is the remaining gap for hatch #2"
+        "an unimplemented drand scheme must fail closed"
+    );
+}
+
+#[test]
+fn drand_beacon_hybrid_end_to_end() {
+    // The DrandBeacon plugged into a Hybrid: a real quicknet round drives the beacon
+    // half of the seed mix, and the pure Hybrid::seed verifier re-checks the BLS
+    // signature (via verify_beacon_round) end-to-end. Schedule binds round to seq.
+    let sig = hex::decode(DRAND_QUICKNET_SIG_HEX).unwrap();
+    // Choose a schedule whose expected_round(seq) lands on the real vector's round.
+    // base_round + seq*stride = 1_000_000 for seq = 2 with base=999_998, stride=1.
+    let schedule = BeaconSchedule {
+        base_round: DRAND_QUICKNET_ROUND - 2,
+        stride: 1,
+    };
+    let mut beacon = DrandBeacon::quicknet(schedule.clone());
+    beacon.insert_round(DRAND_QUICKNET_ROUND, sig.clone());
+
+    let kc = KeyChain::from_master_seed(&[0x42; 32], NUM_EPOCHS);
+    let beacon_params = beacon.params();
+    let genesis = Hybrid::genesis_binding(&kc.root(), &beacon_params);
+
+    let hybrid = Hybrid::new(kc, Box::new(beacon));
+    let req = RandomnessRequest {
+        game_binding: genesis,
+        seq: 2, // expected_round(2) == 1_000_000
+        pre_state_root: [0x07; 32],
+        action_hash: [0x08; 32],
+        event_kind: "loot".to_string(),
+        draw_count: 4,
+    };
+    assert_eq!(
+        beacon_params.schedule.expected_round(req.seq),
+        DRAND_QUICKNET_ROUND
+    );
+
+    let ev = hybrid.evidence(&req);
+    // The recorded beacon evidence carries the real signature.
+    if let EvidenceKind::Hybrid { beacon, .. } = &ev.source {
+        assert_eq!(beacon.round, DRAND_QUICKNET_ROUND);
+        assert_eq!(beacon.signature, sig);
+    } else {
+        panic!("expected Hybrid evidence");
+    }
+    // The pure verifier re-checks the BLS pairing + everything else and derives a seed.
+    let seed = Hybrid::seed(&req, &ev).expect("hybrid over a real drand round verifies");
+    let stream = DrawStream::new(seed, req.draw_count);
+    assert_eq!(
+        stream.transcript_commitment(),
+        ev.draw_transcript_commitment
+    );
+
+    // Swapping in a forged beacon signature makes Hybrid::seed reject the turn.
+    let mut ev_bad = ev.clone();
+    if let EvidenceKind::Hybrid { beacon, .. } = &mut ev_bad.source {
+        beacon.signature[0] ^= 0x01;
+    }
+    assert_eq!(
+        Hybrid::seed(&req, &ev_bad),
+        Err(VerifyError::BeaconVerifyFailed),
+        "a forged drand signature in hybrid evidence must be rejected"
     );
 }
 

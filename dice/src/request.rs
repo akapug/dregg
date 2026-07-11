@@ -98,14 +98,27 @@ pub enum BeaconKind {
         /// Chain length; legal rounds are `1..=length`.
         length: u64,
     },
-    /// A drand-style threshold-BLS beacon. Shape only: verifying a round is a BLS
-    /// pairing check of the round signature against the pinned group public key
-    /// under drand's ciphersuite. Wiring the live drand group key + round fetch is
-    /// the remaining gap for escape hatch #2; the verifier fails closed here.
+    /// A **drand threshold-BLS** beacon (the League of Entropy public randomness
+    /// beacon). A round's randomness is `H(signature)`, where `signature` is the
+    /// network's BLS threshold signature over the round message; verifying a round
+    /// is the pairing check `e(signature, g2) == e(H(message), group_public_key)`
+    /// under drand's RFC 9380 ciphersuite (see [`verify_beacon_round`] /
+    /// [`DrandBeacon`]). The group public key + scheme are genesis-pinned here (and
+    /// folded into `game_binding`), so a wrong group key, a forged/mutated
+    /// signature, or a wrong round are all rejected — a threshold beacon, not a
+    /// single operator. This crate implements the `quicknet`
+    /// scheme ([`DRAND_QUICKNET_SCHEME`]: keys on G2, signatures on G1, unchained
+    /// message `H(round_be)`).
+    ///
+    /// [`verify_beacon_round`]: crate::verify_beacon_round
+    /// [`DrandBeacon`]: crate::DrandBeacon
+    /// [`DRAND_QUICKNET_SCHEME`]: crate::DRAND_QUICKNET_SCHEME
     Drand {
-        /// The drand chain's group public key (BLS12-381).
+        /// The drand chain's group public key (BLS12-381; G2 compressed, 96 bytes for
+        /// `quicknet`).
         group_public_key: Vec<u8>,
-        /// The drand ciphersuite / scheme identifier.
+        /// The drand ciphersuite / scheme identifier (drand's `schemeID`, e.g.
+        /// `"bls-unchained-g1-rfc9380"` for `quicknet`).
         scheme: String,
     },
 }
@@ -131,8 +144,9 @@ impl BeaconSchedule {
     }
 }
 
-/// The beacon opening recorded in hybrid evidence: which params, which round, and
-/// the claimed round output.
+/// The beacon opening recorded in hybrid evidence: which params, which round, the
+/// claimed round output, and (for a threshold [`BeaconKind::Drand`] beacon) the
+/// round's BLS signature the source-free verifier re-checks by pairing.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BeaconEvidence {
     /// The genesis-pinned beacon parameters (re-checked against `game_binding`).
@@ -141,6 +155,17 @@ pub struct BeaconEvidence {
     pub round: u64,
     /// The beacon's output for `round`.
     pub output: [u8; 32],
+    /// The round's threshold-BLS signature (drand path): the group signs the round
+    /// message, and `output == H(signature)`. A light client re-runs the pairing
+    /// check `e(signature, g2) == e(H(message), group_pk)` from this recorded value
+    /// plus the pinned group key — no network. **Empty** for a
+    /// [`BeaconKind::HashChain`] beacon, whose round verification needs no signature.
+    ///
+    /// `#[serde(default)]` keeps this an additive field: evidence serialized before
+    /// the drand path existed (no `signature` key) still deserializes to an empty
+    /// signature, and a hash-chain opening simply carries the empty default.
+    #[serde(default)]
+    pub signature: Vec<u8>,
 }
 
 /// Which side of the hybrid finalization produced this evidence.
