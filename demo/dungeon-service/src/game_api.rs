@@ -36,8 +36,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 
 use attested_dm::{
-    bramble_keep, deepdark_mine, starfall_spire, sunken_vault, GameAction, GameSession, GameStatus,
-    GameWorld, Gate, PlayResult, Proposal, Room, WorldCell,
+    bramble_keep, deepdark_mine, starfall_spire, sunken_vault, venom_deep, GameAction, GameSession,
+    GameStatus, GameWorld, Gate, PlayResult, Proposal, Room, WorldCell,
 };
 use collective_choice::{
     CollectiveChoice, Decision, PollId, PollSpec, Tally, VoteEngine, VoteError, MAX_OPTIONS,
@@ -101,6 +101,13 @@ pub fn games() -> Vec<GameDef> {
             blurb: "A race against the dark: your lamp burns one oil per step, eleven pitch-black levels stand between you and the Deepheart, and you must gather the oil caches to climb back to daylight before the flame dies.",
             theme: "THE DEEPDARK MINE, a sunless abandoned mine of pitch-black drifts and flooded sumps, where a lamp burns down oil by oil and the dark keeps whatever it catches",
             ctor: deepdark_mine,
+        },
+        GameDef {
+            id: "venom-deep",
+            name: "The Venomous Deep",
+            blurb: "A drowned wyrm-crypt of consumables and creeping venom: drink the bile to ford the poison-marsh, ward yourself with the shield-draught to endure the Bone Wyrm, and time the antidote to bear the Venom Heart back to the surface before the poison takes you.",
+            theme: "THE VENOMOUS DEEP, a flooded wyrm-crypt of poison fords and bone-strewn deeps where survival turns on what you drink — bile to pass, a shield-draught to endure, an antidote to climb out — and a Bone Wyrm coiled around the Venom Heart",
+            ctor: venom_deep,
         },
     ]
 }
