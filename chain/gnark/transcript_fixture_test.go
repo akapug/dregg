@@ -91,56 +91,19 @@ func parseCanonicalSlice(t *testing.T, ss []string) []uint32 {
 	return out
 }
 
-// --- plain-Go duplex challenger replay (mirrors duplex_challenger.rs) ---
+// --- plain-Go duplex challenger replay (challengerRef, challenger_ref.go) ---
 
-type duplexChallengerRef struct {
-	state  [16]uint32
-	inBuf  []uint32
-	outBuf []uint32
-}
-
-const duplexRate = 8
-
-func (d *duplexChallengerRef) duplexing() {
-	if len(d.inBuf) > duplexRate {
-		panic("duplexing: input buffer overflow")
-	}
-	// Inputs OVERWRITE state[0..len(inBuf)]; capacity lanes untouched.
-	copy(d.state[:], d.inBuf)
-	d.inBuf = d.inBuf[:0]
-	poseidon2W16Ref(&d.state)
-	d.outBuf = append(d.outBuf[:0], d.state[:duplexRate]...)
-}
-
-func (d *duplexChallengerRef) observe(v uint32) {
-	d.outBuf = d.outBuf[:0] // any buffered output is now invalid
-	d.inBuf = append(d.inBuf, v)
-	if len(d.inBuf) == duplexRate {
-		d.duplexing()
-	}
-}
-
-func (d *duplexChallengerRef) sample() uint32 {
-	if len(d.inBuf) > 0 || len(d.outBuf) == 0 {
-		d.duplexing()
-	}
-	v := d.outBuf[len(d.outBuf)-1]
-	d.outBuf = d.outBuf[:len(d.outBuf)-1]
-	return v
-}
-
-// replayTranscriptRef runs the fixture protocol: observe every absorbed value,
-// then sample n challenges. Returns the challenges and the final sponge state.
+// replayTranscriptRef runs the fixture protocol through the canonical native
+// reference challenger (challenger_ref.go): observe every absorbed value, then
+// sample n challenges. Returns the challenges and the final sponge state.
 func replayTranscriptRef(absorbed []uint32, n int) ([]uint32, [16]uint32) {
-	d := &duplexChallengerRef{}
-	for _, v := range absorbed {
-		d.observe(v)
-	}
+	c := newChallengerRef()
+	c.observeSlice(absorbed)
 	out := make([]uint32, n)
 	for i := range out {
-		out[i] = d.sample()
+		out[i] = c.sample()
 	}
-	return out, d.state
+	return out, c.state
 }
 
 // The reference replay must reproduce the Rust-emitted challenges AND the full
@@ -172,9 +135,9 @@ func TestTranscriptFixtureChallengesAreReversedRate(t *testing.T) {
 	chal := parseCanonicalSlice(t, fx.Challenges)
 	state := parseCanonicalSlice(t, fx.FinalSpongeState)
 	for i := range chal {
-		if chal[i] != state[duplexRate-1-i] {
+		if chal[i] != state[spongeRate-1-i] {
 			t.Errorf("challenges[%d]=%d != final_sponge_state[%d]=%d",
-				i, chal[i], duplexRate-1-i, state[duplexRate-1-i])
+				i, chal[i], spongeRate-1-i, state[spongeRate-1-i])
 		}
 	}
 }
@@ -222,14 +185,14 @@ func (c *transcriptW16Circuit) Define(api frontend.API) error {
 		// Duplexing: the 8 buffered observes OVERWRITE state[0..8]; capacity
 		// state[8..16] carries over. Poseidon2W16 asserts every lane canonical
 		// (fail-closed on non-canonical absorbed witnesses).
-		for i := 0; i < duplexRate; i++ {
-			state[i] = c.Absorbed[block*duplexRate+i]
+		for i := 0; i < spongeRate; i++ {
+			state[i] = c.Absorbed[block*spongeRate+i]
 		}
 		bb.Poseidon2W16(&state)
 	}
 	// sample() pops from the end of the output buffer = state[0..8].
-	for i := 0; i < duplexRate; i++ {
-		api.AssertIsEqual(state[duplexRate-1-i], c.Challenges[i])
+	for i := 0; i < spongeRate; i++ {
+		api.AssertIsEqual(state[spongeRate-1-i], c.Challenges[i])
 	}
 	for i := range state {
 		api.AssertIsEqual(state[i], c.FinalState[i])
