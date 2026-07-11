@@ -113,12 +113,33 @@ def CellSealRowIntent (env : VmRowEnv) : Prop :=
   ∧ env.loc (saCol state.RESERVED) = env.loc (sbCol state.RESERVED)
   ∧ (∀ i < 8, env.loc (saCol (state.FIELD_BASE + i)) = env.loc (sbCol (state.FIELD_BASE + i)))
 
-/-! ## §5 — FAITHFULNESS: the emitted per-row gates ⟺ the runtime-reconciled intent. -/
+/-- **`CellSealRowCanon env`** — the row's EXPLICIT canonicality envelope (the deployed range-check /
+field-representative invariant, carried as named hypotheses): every state-block cell of both windows
+is a canonical BabyBear representative in `[0, p)`; the NOOP selector is boolean (GROUP-1 selector
+validity); and the pre-nonce tick stays in-field (`nonce_before + 1 < p` — the per-cell sequence
+counter is far below `p`). Under the mod-p `holdsVm` denotation these are exactly the hypotheses that
+let the ℤ-stated row intent be read back off the field-checked gates (a `≡ 0 [ZMOD p]` residual
+strictly inside `(-p, p)` is `0`). -/
+def CellSealRowCanon (env : VmRowEnv) : Prop :=
+  (∀ off, off < STATE_SIZE →
+      (0 ≤ env.loc (sbCol off) ∧ env.loc (sbCol off) < 2013265921)
+      ∧ (0 ≤ env.loc (saCol off) ∧ env.loc (saCol off) < 2013265921))
+  ∧ (env.loc sel.NOOP = 0 ∨ env.loc sel.NOOP = 1)
+  ∧ env.loc (sbCol state.NONCE) + 1 < 2013265921
 
-/-- **`cellSealVm_faithful`.** On a cellSeal row, the emitted per-row gates all hold IFF
-`CellSealRowIntent` holds — the gates pin EXACTLY the passthrough + nonce-tick. -/
-theorem cellSealVm_faithful (env : VmRowEnv) :
+/-! ## §5 — FAITHFULNESS (mod-p, under the explicit canonicality envelope). -/
+
+/-- **`cellSealVm_faithful`.** On a cellSeal row, under the explicit canonicality envelope, the emitted
+per-row gates all hold IFF `CellSealRowIntent` holds — the gates pin EXACTLY the passthrough +
+nonce-tick, read back off the field-checked (`≡ 0 [ZMOD p]`) bodies via canonicality. -/
+theorem cellSealVm_faithful (env : VmRowEnv) (hcanon : CellSealRowCanon env) :
     (∀ c ∈ cellSealRowGates, c.holdsVm env false false) ↔ CellSealRowIntent env := by
+  obtain ⟨hcells, hnoopB, hovf⟩ := hcanon
+  have hbLo := hcells state.BALANCE_LO (by norm_num [state.BALANCE_LO, STATE_SIZE])
+  have hbHi := hcells state.BALANCE_HI (by norm_num [state.BALANCE_HI, STATE_SIZE])
+  have hbN := hcells state.NONCE (by norm_num [state.NONCE, STATE_SIZE])
+  have hbCap := hcells state.CAP_ROOT (by norm_num [state.CAP_ROOT, STATE_SIZE])
+  have hbRes := hcells state.RESERVED (by norm_num [state.RESERVED, STATE_SIZE])
   unfold cellSealRowGates gFieldPassAll CellSealRowIntent
   constructor
   · intro h
@@ -134,57 +155,72 @@ theorem cellSealVm_faithful (env : VmRowEnv) :
       exact Or.inr ⟨i, hi, rfl⟩
     simp only [VmConstraint.holdsVm, gBalLoFreeze, gBalHi, gNonce, gCapPass, gResPass,
       eSA, eSB, eSub, eSelNoop, EmittedExpr.eval] at hLo hHi hNon hCap hRes
-    refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
-    · linarith [hLo]
-    · linarith [hHi]
-    · linarith [hNon]
-    · linarith [hCap]
-    · linarith [hRes]
-    · intro i hi
-      have := hFld i hi
-      simp only [VmConstraint.holdsVm, gFieldPass, eSA, eSB, eSub, EmittedExpr.eval] at this
-      linarith
+    rw [Int.modEq_zero_iff_dvd] at hLo hHi hNon hCap hRes
+    refine ⟨by omega, by omega, by omega, by omega, by omega, ?_⟩
+    intro i hi
+    have hFi := hFld i hi
+    have hbF := hcells (state.FIELD_BASE + i) (by simp only [state.FIELD_BASE, STATE_SIZE]; omega)
+    simp only [VmConstraint.holdsVm, gFieldPass, eSA, eSB, eSub, EmittedExpr.eval] at hFi
+    rw [Int.modEq_zero_iff_dvd] at hFi
+    omega
   · rintro ⟨hLo, hHi, hNon, hCap, hRes, hFld⟩ c hc
     simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
       List.mem_range] at hc
     rcases hc with (rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩
     · simp only [VmConstraint.holdsVm, gBalLoFreeze, eSA, eSB, eSub, EmittedExpr.eval]
-      rw [hLo]; ring
+      rw [Int.modEq_zero_iff_dvd]; omega
     · simp only [VmConstraint.holdsVm, gBalHi, eSA, eSB, eSub, EmittedExpr.eval]
-      rw [hHi]; ring
+      rw [Int.modEq_zero_iff_dvd]; omega
     · simp only [VmConstraint.holdsVm, gNonce, eSA, eSB, eSub, eSelNoop, EmittedExpr.eval]
-      rw [hNon]; ring
+      rw [Int.modEq_zero_iff_dvd]; omega
     · simp only [VmConstraint.holdsVm, gCapPass, eSA, eSB, eSub, EmittedExpr.eval]
-      rw [hCap]; ring
+      rw [Int.modEq_zero_iff_dvd]; omega
     · simp only [VmConstraint.holdsVm, gResPass, eSA, eSB, eSub, EmittedExpr.eval]
-      rw [hRes]; ring
+      rw [Int.modEq_zero_iff_dvd]; omega
     · simp only [VmConstraint.holdsVm, gFieldPass, eSA, eSB, eSub, EmittedExpr.eval]
-      rw [hFld i hi]; ring
+      rw [Int.modEq_zero_iff_dvd]
+      have := hFld i hi
+      omega
 
-/-! ## §6 — ANTI-GHOST. -/
+/-! ## §6 — ANTI-GHOST (the teeth carry the explicit canonicality; none dropped). -/
 
 /-- **Anti-ghost (general).** A cellSeal row violating the runtime intent does NOT satisfy the per-row
 gates — the conservation tooth. -/
-theorem cellSealVm_rejects_wrong_output (env : VmRowEnv)
+theorem cellSealVm_rejects_wrong_output (env : VmRowEnv) (hcanon : CellSealRowCanon env)
     (hwrong : ¬ CellSealRowIntent env) :
     ¬ (∀ c ∈ cellSealRowGates, c.holdsVm env false false) :=
-  fun h => hwrong ((cellSealVm_faithful env).mp h)
+  fun h => hwrong ((cellSealVm_faithful env hcanon).mp h)
 
 /-- **Anti-ghost (balance moved).** A row whose post-`bal_lo` ≠ pre-`bal_lo` fails the freeze gate — a
-lifecycle flag flip cannot silently move value. -/
+lifecycle flag flip cannot silently move value. Both cells canonical in `[0, p)` (the deployed
+range-check invariant), so the moved-balance residual is nonzero strictly inside `(-p, p)`:
+`¬ (p ∣ residual)`. -/
 theorem cellSealVm_rejects_moved_balance (env : VmRowEnv)
+    (hsa : 0 ≤ env.loc (saCol state.BALANCE_LO) ∧ env.loc (saCol state.BALANCE_LO) < 2013265921)
+    (hsb : 0 ≤ env.loc (sbCol state.BALANCE_LO) ∧ env.loc (sbCol state.BALANCE_LO) < 2013265921)
     (hwrong : env.loc (saCol state.BALANCE_LO) ≠ env.loc (sbCol state.BALANCE_LO)) :
     ¬ (VmConstraint.gate gBalLoFreeze).holdsVm env false false := by
   simp only [VmConstraint.holdsVm, gBalLoFreeze, eSA, eSB, eSub, EmittedExpr.eval]
-  intro h; apply hwrong; linarith
+  rw [Int.modEq_zero_iff_dvd]
+  intro h
+  exact hwrong (by omega)
 
 /-- **Anti-ghost (nonce tamper).** A row whose nonce does NOT tick by 1 (on `s_noop = 0`) fails the
-reconciled `gNonce` tick gate — a frozen-nonce trace (the pre-v2 convention) is now correctly UNSAT. -/
+reconciled `gNonce` tick gate — a frozen-nonce trace (the pre-v2 convention) is now correctly UNSAT.
+Canonicality: both nonce cells canonical, the tick in-field (`nonce_before + 1 < p`), the NOOP
+selector boolean — the tampered residual lies strictly inside `(-p, p)` and is nonzero. -/
 theorem cellSealVm_rejects_nonce_freeze (env : VmRowEnv)
+    (hsa : 0 ≤ env.loc (saCol state.NONCE) ∧ env.loc (saCol state.NONCE) < 2013265921)
+    (hsb : 0 ≤ env.loc (sbCol state.NONCE) ∧ env.loc (sbCol state.NONCE) + 1 < 2013265921)
+    (hnoopB : env.loc sel.NOOP = 0 ∨ env.loc sel.NOOP = 1)
     (hwrong : env.loc (saCol state.NONCE) ≠ env.loc (sbCol state.NONCE) + (1 - env.loc sel.NOOP)) :
     ¬ (VmConstraint.gate gNonce).holdsVm env false false := by
   simp only [VmConstraint.holdsVm, gNonce, eSA, eSB, eSub, eSelNoop, EmittedExpr.eval]
-  intro h; apply hwrong; linarith
+  rw [Int.modEq_zero_iff_dvd]
+  intro h
+  have hnoop01 : 0 ≤ env.loc sel.NOOP ∧ env.loc sel.NOOP ≤ 1 := by
+    rcases hnoopB with h' | h' <;> rw [h'] <;> norm_num
+  exact hwrong (by omega)
 
 /-! ## §7 — the commitment binding (REUSED; hash sites identical to transfer's). -/
 
@@ -255,6 +291,8 @@ theorem intent_to_cellSpec (env : VmRowEnv) (pre post : CellState)
 nonce tick) AND publishes the post-commit as `PI[NEW_COMMIT]`. -/
 theorem cellSealDescriptor_full_sound (hash : List ℤ → ℤ) (env : VmRowEnv)
     (pre post : CellState) (hnoop : env.loc sel.NOOP = 0)
+    (hcanon : CellSealRowCanon env)
+    (hpubc : 0 ≤ env.pub pi.NEW_COMMIT ∧ env.pub pi.NEW_COMMIT < 2013265921)
     (henc : RowEncodesSeal env pre post)
     (hgatesat : satisfiedVm hash cellSealVmDescriptor env true false)
     (hsat : satisfiedVm hash cellSealVmDescriptor env true true) :
@@ -273,7 +311,7 @@ theorem cellSealDescriptor_full_sound (hash : List ℤ → ℤ) (env : VmRowEnv)
       List.mem_range] at hc
     rcases hc with (rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩ <;>
       simpa only [VmConstraint.holdsVm] using this
-  have hint := (cellSealVm_faithful env).mp hgates'
+  have hint := (cellSealVm_faithful env hcanon).mp hgates'
   refine ⟨intent_to_cellSpec env pre post hnoop henc hint, ?_⟩
   have hlast : ∀ c ∈ boundaryLastPins, c.holdsVm env false true := by
     intro c hc
@@ -287,9 +325,13 @@ theorem cellSealDescriptor_full_sound (hash : List ℤ → ℤ) (env : VmRowEnv)
     rcases hc with rfl | rfl | rfl <;>
       · simp only [VmConstraint.holdsVm] at hh ⊢
         exact hh
-  have hpin := (boundaryLast_pins env hlast).1
+  -- The NEW_COMMIT pin (mod-p) lifted to ℤ equality by canonicality of the commit cell + the PI.
+  have hmod := (boundaryLast_pins env hlast).1
+  have hdvd := Int.ModEq.dvd hmod
+  have hcell := (hcanon.1 state.STATE_COMMIT (by norm_num [state.STATE_COMMIT, STATE_SIZE])).2
   obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, hsaC, _, _⟩ := henc
-  rw [← hsaC]; exact hpin
+  rw [← hsaC]
+  omega
 
 /-- **`cellSealDescriptor_commit_binds_state`** — two descriptor-satisfying cellSeal rows publishing
 the SAME `NEW_COMMIT` have identical absorbed state-block columns. So a prover cannot keep `NEW_COMMIT`
@@ -297,14 +339,18 @@ while tampering any absorbed cell of the post-state. -/
 theorem cellSealDescriptor_commit_binds_state (hash : List ℤ → ℤ)
     (hCR : Poseidon2SpongeCR hash)
     (e₁ e₂ : VmRowEnv)
+    (hc₁ : 0 ≤ e₁.loc (saCol state.STATE_COMMIT) ∧ e₁.loc (saCol state.STATE_COMMIT) < 2013265921)
+    (hc₂ : 0 ≤ e₂.loc (saCol state.STATE_COMMIT) ∧ e₂.loc (saCol state.STATE_COMMIT) < 2013265921)
     (hsat₁ : satisfiedVm hash cellSealVmDescriptor e₁ true true)
     (hsat₂ : satisfiedVm hash cellSealVmDescriptor e₂ true true)
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT) :
     absorbedCols e₁ = absorbedCols e₂ := by
   have hs₁ : siteHoldsAll hash e₁ cellSealHashSites := hsat₁.2.1
   have hs₂ : siteHoldsAll hash e₂ cellSealHashSites := hsat₂.2.1
-  have hc : ∀ (e : VmRowEnv), satisfiedVm hash cellSealVmDescriptor e true true →
-      e.loc (saCol state.STATE_COMMIT) = e.pub pi.NEW_COMMIT := by
+  -- Each satisfying env pins its commit cell to PI[NEW_COMMIT] mod p; the shared PI value then
+  -- chains the two commit cells (both canonical) into ℤ equality — no PI canonicality needed.
+  have hcm : ∀ (e : VmRowEnv), satisfiedVm hash cellSealVmDescriptor e true true →
+      e.loc (saCol state.STATE_COMMIT) ≡ e.pub pi.NEW_COMMIT [ZMOD 2013265921] := by
     intro e hsat
     obtain ⟨hcs, _⟩ := hsat
     have hlast : ∀ c ∈ boundaryLastPins, c.holdsVm e false true := by
@@ -320,8 +366,11 @@ theorem cellSealDescriptor_commit_binds_state (hash : List ℤ → ℤ)
         · simp only [VmConstraint.holdsVm] at hh ⊢
           exact hh
     exact (boundaryLast_pins e hlast).1
-  have hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT) := by
-    rw [hc e₁ hsat₁, hc e₂ hsat₂, hpub]
+  have h₁ := hcm e₁ hsat₁
+  have h₂ := hcm e₂ hsat₂
+  rw [hpub] at h₁
+  have hdvd := Int.ModEq.dvd (h₁.trans h₂.symm)
+  have hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT) := by omega
   exact absorbed_determined_by_commit hash hCR e₁ e₂ hs₁ hs₂ hcommit
 
 /-! ## §10 — CONNECTOR to universe-A `CellSealSpec` via `cellProj`.
@@ -356,6 +405,8 @@ the sealed cell agrees with the executor's post-state on the FROZEN balance dime
 nonce-tick is the runtime cell-bookkeeping leg (off universe-A state). -/
 theorem descriptor_agrees_with_executor_seal
     (hash : List ℤ → ℤ) (env : VmRowEnv) (hnoop : env.loc sel.NOOP = 0)
+    (hcanon : CellSealRowCanon env)
+    (hpubc : 0 ≤ env.pub pi.NEW_COMMIT ∧ env.pub pi.NEW_COMMIT < 2013265921)
     (s s' : RecChainedState) (actor cell : CellId) (pre post : CellState)
     (hpre : pre = cellProj s.kernel cell)
     (henc : RowEncodesSeal env pre post)
@@ -363,7 +414,8 @@ theorem descriptor_agrees_with_executor_seal
     (hsat : satisfiedVm hash cellSealVmDescriptor env true true)
     (hspec : CellSealSpec s actor cell s') :
     post.balLo = (cellProj s'.kernel cell).balLo := by
-  obtain ⟨hcirc, _⟩ := cellSealDescriptor_full_sound hash env pre post hnoop henc hgatesat hsat
+  obtain ⟨hcirc, _⟩ :=
+    cellSealDescriptor_full_sound hash env pre post hnoop hcanon hpubc henc hgatesat hsat
   obtain ⟨hcLo, _, _, _, _, _⟩ := hcirc
   have heLo := cellSeal_balance_frozen s s' actor cell hspec
   subst hpre
@@ -447,6 +499,22 @@ theorem goodSealRow_realizes_intent : CellSealRowIntent goodSealRow := by
     have f5 : (54 + (3 + i) = 76 + 2) = False := eq_false (by omega)
     simp only [e1, e2, e3, e4, e5, f1, f2, f3, f4, f5, if_false]
 
+/-- **NON-VACUITY (canonicality witness).** The honest row satisfies the explicit canonicality
+envelope — the mod-p hypotheses are jointly satisfiable, not a vacuous guard. -/
+theorem goodSealRow_canonical : CellSealRowCanon goodSealRow := by
+  refine ⟨?_, Or.inl goodSealRow_noop, ?_⟩
+  · intro off hoff
+    have hall : ∀ v, 0 ≤ goodSealRow.loc v ∧ goodSealRow.loc v < 2013265921 := by
+      intro v
+      simp only [goodSealRow]
+      split_ifs <;> norm_num
+    exact ⟨hall _, hall _⟩
+  · show goodSealRow.loc (sbCol state.NONCE) + 1 < 2013265921
+    simp only [goodSealRow, SEL_CELLSEAL, sbCol, saCol, STATE_BEFORE_BASE,
+      STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.BALANCE_LO,
+      state.NONCE]
+    norm_num
+
 /-- A FORGED cellSeal row: `goodSealRow` with the post-`bal_lo` minted to `999`. -/
 def badSealRow : VmRowEnv where
   loc := fun v => if v = saCol state.BALANCE_LO then 999 else goodSealRow.loc v
@@ -456,11 +524,11 @@ def badSealRow : VmRowEnv where
 /-- **NON-VACUITY (witness FALSE / concrete anti-ghost).** `badSealRow`'s post-`bal_lo` is NOT frozen
 (forged mint), so `gBalLoFreeze` REJECTS it — a concrete UNSAT (conservation has teeth). -/
 theorem badSealRow_rejected : ¬ (VmConstraint.gate gBalLoFreeze).holdsVm badSealRow false false := by
-  apply cellSealVm_rejects_moved_balance
-  simp only [badSealRow, goodSealRow, sbCol, saCol, SEL_CELLSEAL, STATE_BEFORE_BASE,
-    STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.BALANCE_LO,
-    state.NONCE]
-  norm_num
+  apply cellSealVm_rejects_moved_balance <;>
+    · simp only [badSealRow, goodSealRow, sbCol, saCol, SEL_CELLSEAL, STATE_BEFORE_BASE,
+        STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.BALANCE_LO,
+        state.NONCE]
+      norm_num
 
 /-- A FROZEN-NONCE cellSeal row: `goodSealRow` with the post-nonce held at `5` (the pre-v2 convention). -/
 def staleNonceSealRow : VmRowEnv where
@@ -473,10 +541,23 @@ reconciled `gNonce` tick gate — the descriptor agrees with the hand-AIR (which
 theorem staleNonceSealRow_rejected :
     ¬ (VmConstraint.gate gNonce).holdsVm staleNonceSealRow false false := by
   apply cellSealVm_rejects_nonce_freeze
-  simp only [staleNonceSealRow, goodSealRow, sel.NOOP, sbCol, saCol, SEL_CELLSEAL,
-    STATE_BEFORE_BASE, STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS,
-    state.BALANCE_LO, state.NONCE]
-  norm_num
+  · simp only [staleNonceSealRow, goodSealRow, sbCol, saCol, SEL_CELLSEAL,
+      STATE_BEFORE_BASE, STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS,
+      state.BALANCE_LO, state.NONCE]
+    norm_num
+  · simp only [staleNonceSealRow, goodSealRow, sbCol, saCol, SEL_CELLSEAL,
+      STATE_BEFORE_BASE, STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS,
+      state.BALANCE_LO, state.NONCE]
+    norm_num
+  · left
+    simp only [staleNonceSealRow, goodSealRow, sel.NOOP, sbCol, saCol, SEL_CELLSEAL,
+      STATE_BEFORE_BASE, STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS,
+      state.BALANCE_LO, state.NONCE]
+    norm_num
+  · simp only [staleNonceSealRow, goodSealRow, sel.NOOP, sbCol, saCol, SEL_CELLSEAL,
+      STATE_BEFORE_BASE, STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS,
+      state.BALANCE_LO, state.NONCE]
+    norm_num
 
 /-! ## §13 — axiom-hygiene tripwires. -/
 
@@ -495,6 +576,7 @@ theorem staleNonceSealRow_rejected :
 #assert_axioms descriptor_agrees_with_executor_seal
 #assert_axioms cellSeal_offrow_unenforced
 #assert_axioms goodSealRow_realizes_intent
+#assert_axioms goodSealRow_canonical
 #assert_axioms badSealRow_rejected
 #assert_axioms staleNonceSealRow_rejected
 
