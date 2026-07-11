@@ -44,7 +44,8 @@ open Dregg2.Circuit.Emit.EffectVmEmit
 open Dregg2.Circuit.Emit.EffectVmEmitTransfer
   (eSB eSA eSub eSelNoop gBalHi gNonce gCapPass gResPass gFieldPass gFieldPassAll
    transitionAll boundaryFirstPins boundaryLastPins
-   transferHashSites boundaryLast_pins)
+   transferHashSites boundaryLast_pins
+   eqToModEq gate_modEq_iff not_modEq_zero_of_canon)
 open Dregg2.Circuit.Emit.EffectVmEmitTransferSound
   (CellState RowEncodes absorbedCols absorbed_determined_by_commit)
 open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
@@ -100,12 +101,14 @@ def setVKVmDescriptor : EffectVmDescriptor :=
 /-- **`SetVKRowIntent env`** — every economic state-block column UNCHANGED EXCEPT the nonce, which TICKS
 by 1 (on a non-NoOp row `s_noop = 0`). The VK-slot write is OFF-row (the §connector). -/
 def SetVKRowIntent (env : VmRowEnv) : Prop :=
-  env.loc (saCol state.BALANCE_LO) = env.loc (sbCol state.BALANCE_LO)
-  ∧ env.loc (saCol state.BALANCE_HI) = env.loc (sbCol state.BALANCE_HI)
-  ∧ env.loc (saCol state.NONCE) = env.loc (sbCol state.NONCE) + (1 - env.loc sel.NOOP)
-  ∧ env.loc (saCol state.CAP_ROOT) = env.loc (sbCol state.CAP_ROOT)
-  ∧ env.loc (saCol state.RESERVED) = env.loc (sbCol state.RESERVED)
-  ∧ (∀ i < 8, env.loc (saCol (state.FIELD_BASE + i)) = env.loc (sbCol (state.FIELD_BASE + i)))
+  env.loc (saCol state.BALANCE_LO) ≡ env.loc (sbCol state.BALANCE_LO) [ZMOD 2013265921]
+  ∧ env.loc (saCol state.BALANCE_HI) ≡ env.loc (sbCol state.BALANCE_HI) [ZMOD 2013265921]
+  ∧ env.loc (saCol state.NONCE)
+      ≡ env.loc (sbCol state.NONCE) + (1 - env.loc sel.NOOP) [ZMOD 2013265921]
+  ∧ env.loc (saCol state.CAP_ROOT) ≡ env.loc (sbCol state.CAP_ROOT) [ZMOD 2013265921]
+  ∧ env.loc (saCol state.RESERVED) ≡ env.loc (sbCol state.RESERVED) [ZMOD 2013265921]
+  ∧ (∀ i < 8, env.loc (saCol (state.FIELD_BASE + i))
+      ≡ env.loc (sbCol (state.FIELD_BASE + i)) [ZMOD 2013265921])
 
 /-! ## §4 — FAITHFULNESS: the emitted per-row gates ⟺ the runtime-reconciled intent. -/
 
@@ -126,24 +129,29 @@ theorem setVKVm_faithful (env : VmRowEnv) :
       exact Or.inr ⟨i, hi, rfl⟩
     simp only [VmConstraint.holdsVm, gBalLoFreeze, gBalHi, gNonce, gCapPass, gResPass,
       eSA, eSB, eSub, eSelNoop, EmittedExpr.eval] at hLo hHi hNon hCap hRes
-    refine ⟨by linarith [hLo], by linarith [hHi], by linarith [hNon], by linarith [hCap],
-      by linarith [hRes], ?_⟩
+    refine ⟨(gate_modEq_iff (by ring)).mp hLo, (gate_modEq_iff (by ring)).mp hHi,
+      (gate_modEq_iff (by ring)).mp hNon, (gate_modEq_iff (by ring)).mp hCap,
+      (gate_modEq_iff (by ring)).mp hRes, ?_⟩
     intro i hi
     have := hFld i hi
     simp only [VmConstraint.holdsVm, gFieldPass, eSA, eSB, eSub, EmittedExpr.eval] at this
-    linarith
+    exact (gate_modEq_iff (by ring)).mp this
   · rintro ⟨hLo, hHi, hNon, hCap, hRes, hFld⟩ c hc
     simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
       List.mem_range] at hc
     rcases hc with (rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩
-    · simp only [VmConstraint.holdsVm, gBalLoFreeze, eSA, eSB, eSub, EmittedExpr.eval]; rw [hLo]; ring
-    · simp only [VmConstraint.holdsVm, gBalHi, eSA, eSB, eSub, EmittedExpr.eval]; rw [hHi]; ring
+    · simp only [VmConstraint.holdsVm, gBalLoFreeze, eSA, eSB, eSub, EmittedExpr.eval]
+      exact (gate_modEq_iff (by ring)).mpr hLo
+    · simp only [VmConstraint.holdsVm, gBalHi, eSA, eSB, eSub, EmittedExpr.eval]
+      exact (gate_modEq_iff (by ring)).mpr hHi
     · simp only [VmConstraint.holdsVm, gNonce, eSA, eSB, eSub, eSelNoop, EmittedExpr.eval]
-      rw [hNon]; ring
-    · simp only [VmConstraint.holdsVm, gCapPass, eSA, eSB, eSub, EmittedExpr.eval]; rw [hCap]; ring
-    · simp only [VmConstraint.holdsVm, gResPass, eSA, eSB, eSub, EmittedExpr.eval]; rw [hRes]; ring
+      exact (gate_modEq_iff (by ring)).mpr hNon
+    · simp only [VmConstraint.holdsVm, gCapPass, eSA, eSB, eSub, EmittedExpr.eval]
+      exact (gate_modEq_iff (by ring)).mpr hCap
+    · simp only [VmConstraint.holdsVm, gResPass, eSA, eSB, eSub, EmittedExpr.eval]
+      exact (gate_modEq_iff (by ring)).mpr hRes
     · simp only [VmConstraint.holdsVm, gFieldPass, eSA, eSB, eSub, EmittedExpr.eval]
-      rw [hFld i hi]; ring
+      exact (gate_modEq_iff (by ring)).mpr (hFld i hi)
 
 /-! ## §5 — ANTI-GHOST. -/
 
@@ -154,18 +162,25 @@ theorem setVKVm_rejects_wrong_output (env : VmRowEnv) (hwrong : ¬ SetVKRowInten
 /-- **Anti-ghost (balance moved).** A row whose post-`bal_lo` ≠ pre-`bal_lo` fails the freeze gate — a VK
 write cannot silently move value. -/
 theorem setVKVm_rejects_moved_balance (env : VmRowEnv)
+    (hcanonNew : 0 ≤ env.loc (saCol state.BALANCE_LO)
+      ∧ env.loc (saCol state.BALANCE_LO) < 2013265921)
+    (hcanonOld : 0 ≤ env.loc (sbCol state.BALANCE_LO)
+      ∧ env.loc (sbCol state.BALANCE_LO) < 2013265921)
     (hwrong : env.loc (saCol state.BALANCE_LO) ≠ env.loc (sbCol state.BALANCE_LO)) :
     ¬ (VmConstraint.gate gBalLoFreeze).holdsVm env false false := by
   simp only [VmConstraint.holdsVm, gBalLoFreeze, eSA, eSB, eSub, EmittedExpr.eval]
-  intro h; apply hwrong; linarith
+  exact not_modEq_zero_of_canon (by ring) hcanonNew hcanonOld hwrong
 
 /-- **Anti-ghost (nonce tamper).** A row whose nonce does NOT tick by 1 fails the reconciled `gNonce`
 tick gate — a frozen-nonce trace (the pre-v2 convention) is now correctly UNSAT. -/
 theorem setVKVm_rejects_nonce_freeze (env : VmRowEnv)
+    (hcanonNew : 0 ≤ env.loc (saCol state.NONCE) ∧ env.loc (saCol state.NONCE) < 2013265921)
+    (hcanonTick : 0 ≤ env.loc (sbCol state.NONCE) + (1 - env.loc sel.NOOP)
+      ∧ env.loc (sbCol state.NONCE) + (1 - env.loc sel.NOOP) < 2013265921)
     (hwrong : env.loc (saCol state.NONCE) ≠ env.loc (sbCol state.NONCE) + (1 - env.loc sel.NOOP)) :
     ¬ (VmConstraint.gate gNonce).holdsVm env false false := by
   simp only [VmConstraint.holdsVm, gNonce, eSA, eSB, eSub, eSelNoop, EmittedExpr.eval]
-  intro h; apply hwrong; linarith
+  exact not_modEq_zero_of_canon (by ring) hcanonNew hcanonTick hwrong
 
 /-! ## §6 — the commitment binding (REUSED; hash sites identical to transfer's). -/
 
@@ -203,12 +218,12 @@ def RowEncodesVK (env : VmRowEnv) (pre post : CellState) : Prop :=
 /-- **`CellSetVKSpec pre post`** — the per-cell FULL-state setVK row spec: economic block FROZEN; the
 nonce TICKS by 1. (The VK-slot write is OFF-row — the §connector.) -/
 def CellSetVKSpec (pre post : CellState) : Prop :=
-  post.balLo = pre.balLo
-  ∧ post.balHi = pre.balHi
-  ∧ post.nonce = pre.nonce + 1
-  ∧ (∀ i : Fin 8, post.fields i = pre.fields i)
-  ∧ post.capRoot = pre.capRoot
-  ∧ post.reserved = pre.reserved
+  post.balLo ≡ pre.balLo [ZMOD 2013265921]
+  ∧ post.balHi ≡ pre.balHi [ZMOD 2013265921]
+  ∧ post.nonce ≡ pre.nonce + 1 [ZMOD 2013265921]
+  ∧ (∀ i : Fin 8, post.fields i ≡ pre.fields i [ZMOD 2013265921])
+  ∧ post.capRoot ≡ pre.capRoot [ZMOD 2013265921]
+  ∧ post.reserved ≡ pre.reserved [ZMOD 2013265921]
 
 theorem intent_to_cellSpec (env : VmRowEnv) (pre post : CellState)
     (hnoop : env.loc sel.NOOP = 0)
@@ -220,7 +235,7 @@ theorem intent_to_cellSpec (env : VmRowEnv) (pre post : CellState)
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
   · rw [← hsaLo, ← hsbLo]; exact hbal
   · rw [← hsaHi, ← hsbHi]; exact hbhi
-  · rw [← hsaN, ← hsbN, hnon, hnoop]; ring
+  · rw [← hsaN, ← hsbN]; rw [hnoop, sub_zero] at hnon; exact hnon
   · intro i
     have := hfld i.val i.isLt
     rw [← hsaF i, ← hsbF i]; exact this
@@ -234,7 +249,7 @@ theorem setVKDescriptor_full_sound (hash : List ℤ → ℤ) (env : VmRowEnv)
     (henc : RowEncodesVK env pre post)
     (hgatesat : satisfiedVm hash setVKVmDescriptor env true false)
     (hsat : satisfiedVm hash setVKVmDescriptor env true true) :
-    CellSetVKSpec pre post ∧ post.commit = env.pub pi.NEW_COMMIT := by
+    CellSetVKSpec pre post ∧ post.commit ≡ env.pub pi.NEW_COMMIT [ZMOD 2013265921] := by
   obtain ⟨hcs, _⟩ := hsat
   obtain ⟨hcsT, _⟩ := hgatesat
   -- the per-row gates run under `when_transition()`, so their content is at the ACTIVE row
@@ -274,12 +289,20 @@ theorem setVKDescriptor_commit_binds_state (hash : List ℤ → ℤ)
     (e₁ e₂ : VmRowEnv)
     (hsat₁ : satisfiedVm hash setVKVmDescriptor e₁ true true)
     (hsat₂ : satisfiedVm hash setVKVmDescriptor e₂ true true)
+    -- FIELD-FAITHFUL bridge: the published commitment is a CANONICAL field element (Poseidon2's
+    -- output lives in `[0, p)`). The circuit pins `state_commit ≡ NEW_COMMIT [ZMOD p]`; canonicality
+    -- of the two digest columns lifts that field congruence to the ℤ equality collision-resistance
+    -- needs. An honest side condition (the deployed digest IS reduced), NOT a weakening.
+    (hcanon₁ : 0 ≤ e₁.loc (saCol state.STATE_COMMIT)
+      ∧ e₁.loc (saCol state.STATE_COMMIT) < 2013265921)
+    (hcanon₂ : 0 ≤ e₂.loc (saCol state.STATE_COMMIT)
+      ∧ e₂.loc (saCol state.STATE_COMMIT) < 2013265921)
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT) :
     absorbedCols e₁ = absorbedCols e₂ := by
   have hs₁ : siteHoldsAll hash e₁ setVKHashSites := hsat₁.2.1
   have hs₂ : siteHoldsAll hash e₂ setVKHashSites := hsat₂.2.1
   have hc : ∀ (e : VmRowEnv), satisfiedVm hash setVKVmDescriptor e true true →
-      e.loc (saCol state.STATE_COMMIT) = e.pub pi.NEW_COMMIT := by
+      e.loc (saCol state.STATE_COMMIT) ≡ e.pub pi.NEW_COMMIT [ZMOD 2013265921] := by
     intro e hsat
     obtain ⟨hcs, _⟩ := hsat
     have hlast : ∀ c ∈ boundaryLastPins, c.holdsVm e false true := by
@@ -295,8 +318,16 @@ theorem setVKDescriptor_commit_binds_state (hash : List ℤ → ℤ)
         · simp only [VmConstraint.holdsVm] at hh ⊢
           exact hh
     exact (boundaryLast_pins e hlast).1
+  have hmod : e₁.loc (saCol state.STATE_COMMIT) ≡ e₂.loc (saCol state.STATE_COMMIT)
+      [ZMOD 2013265921] := by
+    have h2 : e₁.pub pi.NEW_COMMIT ≡ e₂.loc (saCol state.STATE_COMMIT) [ZMOD 2013265921] := by
+      rw [hpub]; exact (hc e₂ hsat₂).symm
+    exact (hc e₁ hsat₁).trans h2
   have hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT) := by
-    rw [hc e₁ hsat₁, hc e₂ hsat₂, hpub]
+    have hdvd := Int.modEq_iff_dvd.mp hmod
+    obtain ⟨l₁, u₁⟩ := hcanon₁
+    obtain ⟨l₂, u₂⟩ := hcanon₂
+    omega
   exact absorbed_determined_by_commit hash hCR e₁ e₂ hs₁ hs₂ hcommit
 
 /-! ## §9 — THE CONNECTOR — `cellProjV` to universe-A's `SetVKSpec` (conserved-balance freeze). -/
@@ -342,12 +373,12 @@ theorem descriptor_agrees_with_executor_setVK
     (hgatesat : satisfiedVm hash setVKVmDescriptor env true false)
     (hsat : satisfiedVm hash setVKVmDescriptor env true true)
     (hspec : SetVKSpec s actor cell vk s') :
-    post.balLo = (cellProjV s'.kernel cell).balLo := by
+    post.balLo ≡ (cellProjV s'.kernel cell).balLo [ZMOD 2013265921] := by
   obtain ⟨hcirc, _⟩ := setVKDescriptor_full_sound hash env pre post hnoop henc hgatesat hsat
   obtain ⟨hcLo, _, _, _, _, _⟩ := hcirc
   have heLo := setVK_balance_frozen s s' actor cell vk hspec
   subst hpre
-  rw [hcLo, heLo]
+  rw [heLo]; exact hcLo
 
 /-! ## §10 — NON-VACUITY. -/
 
@@ -373,14 +404,27 @@ theorem goodSetVKRow_noop : goodSetVKRow.loc sel.NOOP = 0 := by
 theorem goodSetVKRow_realizes_intent : SetVKRowIntent goodSetVKRow := by
   unfold SetVKRowIntent
   have hnoop : goodSetVKRow.loc sel.NOOP = 0 := goodSetVKRow_noop
-  refine ⟨rfl, rfl, ?_, rfl, rfl, ?_⟩
+  refine ⟨eqToModEq ?_, eqToModEq ?_, eqToModEq ?_, eqToModEq ?_, eqToModEq ?_, ?_⟩
+  · simp only [goodSetVKRow, SEL_SET_VK, sbCol, saCol, STATE_BEFORE_BASE,
+      STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.BALANCE_LO,
+      state.NONCE]; norm_num
+  · simp only [goodSetVKRow, SEL_SET_VK, sbCol, saCol, STATE_BEFORE_BASE,
+      STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.BALANCE_HI,
+      state.BALANCE_LO, state.NONCE]; norm_num
   · rw [hnoop]
     show goodSetVKRow.loc (saCol state.NONCE) = goodSetVKRow.loc (sbCol state.NONCE) + (1 - 0)
     simp only [goodSetVKRow, SEL_SET_VK, sbCol, saCol, STATE_BEFORE_BASE,
       STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.BALANCE_LO,
       state.NONCE]
     norm_num
+  · simp only [goodSetVKRow, SEL_SET_VK, sbCol, saCol, STATE_BEFORE_BASE,
+      STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.CAP_ROOT,
+      state.BALANCE_LO, state.NONCE]; norm_num
+  · simp only [goodSetVKRow, SEL_SET_VK, sbCol, saCol, STATE_BEFORE_BASE,
+      STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.RESERVED,
+      state.BALANCE_LO, state.NONCE]; norm_num
   · intro i hi
+    apply eqToModEq
     show goodSetVKRow.loc (saCol (state.FIELD_BASE + i)) = goodSetVKRow.loc (sbCol (state.FIELD_BASE + i))
     simp only [goodSetVKRow, SEL_SET_VK, sbCol, saCol, STATE_BEFORE_BASE,
       STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.BALANCE_LO,
@@ -406,11 +450,10 @@ def badSetVKRow : VmRowEnv where
 /-- **NON-VACUITY (witness FALSE / concrete anti-ghost).** `badSetVKRow`'s post-`bal_lo` is forged, so
 `gBalLoFreeze` REJECTS it. -/
 theorem badSetVKRow_rejected : ¬ (VmConstraint.gate gBalLoFreeze).holdsVm badSetVKRow false false := by
-  apply setVKVm_rejects_moved_balance
-  simp only [badSetVKRow, goodSetVKRow, sbCol, saCol, SEL_SET_VK, STATE_BEFORE_BASE,
-    STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.BALANCE_LO,
-    state.NONCE]
-  norm_num
+  apply setVKVm_rejects_moved_balance <;>
+    simp only [badSetVKRow, goodSetVKRow, sbCol, saCol, SEL_SET_VK, STATE_BEFORE_BASE,
+      STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.BALANCE_LO,
+      state.NONCE] <;> norm_num
 
 /-- A FROZEN-NONCE setVK row: `goodSetVKRow` with the post-nonce held at `5`. -/
 def staleNonceSetVKRow : VmRowEnv where
@@ -422,11 +465,10 @@ def staleNonceSetVKRow : VmRowEnv where
 reconciled `gNonce` tick gate. -/
 theorem staleNonceSetVKRow_rejected :
     ¬ (VmConstraint.gate gNonce).holdsVm staleNonceSetVKRow false false := by
-  apply setVKVm_rejects_nonce_freeze
-  simp only [staleNonceSetVKRow, goodSetVKRow, sel.NOOP, sbCol, saCol, SEL_SET_VK,
-    STATE_BEFORE_BASE, STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS,
-    state.BALANCE_LO, state.NONCE]
-  norm_num
+  apply setVKVm_rejects_nonce_freeze <;>
+    simp only [staleNonceSetVKRow, goodSetVKRow, sel.NOOP, sbCol, saCol, SEL_SET_VK,
+      STATE_BEFORE_BASE, STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS,
+      state.BALANCE_LO, state.NONCE] <;> norm_num
 
 /-! ## §11 — Axiom-hygiene tripwires. -/
 
