@@ -82,6 +82,10 @@ cohort member against the rotated 25+…-limb state block — as ONE parametric 
 `Poseidon2SpongeCR` hypothesis.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitRotationCaveat
+-- The mod-p gate-denotation toolkit (field-faithful `holdsVm ≡ 0 [ZMOD p]`): positive
+-- glue `eqToModEq`/`gate_modEq_iff`, negative-tooth glue `not_modEq_zero_of_canon`. Transfer
+-- imports only `EffectVmEmit`, already in this closure; no cycle.
+import Dregg2.Circuit.Emit.EffectVmEmitTransfer
 -- The LIVE-PATH (non-v2-cohort) effects whose wire descriptors the flag-day must keep
 -- reachable once v1 dies (ROTATION-CUTOVER §2c cohort boundary). Each is the GRADUATED
 -- RUNTIME row (frozen-frame / passthrough + nonce-tick), lifted through the SAME `rotateV3`.
@@ -115,6 +119,9 @@ open Dregg2.Circuit.Emit.EffectVmEmitV2
 open Dregg2.Circuit.Emit.EffectVmEmitRotationR
 open Dregg2.Circuit.Emit.EffectVmEmitRotationCaveat
   (RotCaveatManifest caveatCommit caveatCommit_binds)
+open Dregg2.Circuit.Emit.EffectVmEmitTransfer
+  (eqToModEq gate_modEq_iff not_modEq_zero_of_canon)
+open Dregg2.Circuit.Emit.EffectVmEmitRotation (canon_eq_of_modEq)
 open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
 open Dregg2.Crypto
 open Dregg2.Substrate.Heap (refSponge)
@@ -486,10 +493,10 @@ last. On a TRANSITION row (`isLast = false`) it holds iff the welded columns are
 row it is vacuous — the faithful denotation; weld content is read at the active row.) -/
 theorem colEq_holds_iff (env : VmRowEnv) (isFirst isLast : Bool) (a b : Nat)
     (hlast : isLast = false) :
-    (colEq a b).holdsVm env isFirst isLast ↔ env.loc a = env.loc b := by
+    (colEq a b).holdsVm env isFirst isLast ↔ env.loc a ≡ env.loc b [ZMOD 2013265921] := by
   subst hlast
   simp only [colEq, VmConstraint.holdsVm, EmittedExpr.eval]
-  constructor <;> intro h <;> linarith
+  exact gate_modEq_iff (by ring)
 
 /-- The per-side welds: rotated block at `base` ↔ v1 state block at `stateBase`
 (`STATE_BEFORE_BASE` or `STATE_AFTER_BASE`). r0 ↔ BALANCE_LO · r1 ↔ NONCE (the CONFIRMED
@@ -636,8 +643,7 @@ theorem go_append_left (hash : List ℤ → ℤ) (env : VmRowEnv) :
 /-- Every rotated-block site is col-only (13 literal cases). -/
 theorem rotV3SitesAt_colOnly (base : Nat) : ∀ s ∈ rotV3SitesAt base, colOnly s = true := by
   intro s hs
-  simp only [rotV3SitesAt, List.mem_cons, List.not_mem_nil, or_false] at hs
-  rcases hs with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;> rfl
+  fin_cases hs <;> rfl
 
 /-- Every caveat site is col-only (10 literal cases). -/
 theorem caveatV3SitesAt_colOnly (base : Nat) :
@@ -1005,7 +1011,7 @@ theorem rotateV3_weld (hash : List ℤ → ℤ) (d : EffectVmDescriptor)
     {a b : Nat}
     (hw : colEq a b ∈ weldsAt d.traceWidth STATE_BEFORE_BASE
         ∨ colEq a b ∈ weldsAt (d.traceWidth + 239) STATE_AFTER_BASE) :
-    env.loc a = env.loc b := by
+    env.loc a ≡ env.loc b [ZMOD 2013265921] := by
   have hc := h.1 (colEq a b) (List.mem_append_right _ (by
     rcases hw with hw | hw
     · exact List.mem_append_left _ (List.mem_append_left _ hw)
@@ -1018,12 +1024,12 @@ carries the v1 balance (low limb) and `r1` the v1 nonce, before AND after; the r
 theorem rotateV3_welds_named (hash : List ℤ → ℤ) (d : EffectVmDescriptor)
     (env : VmRowEnv) (isFirst isLast : Bool) (hlast : isLast = false)
     (h : satisfiedVm hash (rotateV3 d) env isFirst isLast) :
-    env.loc (d.traceWidth + 1) = env.loc (sbCol state.BALANCE_LO)
-    ∧ env.loc (d.traceWidth + 2) = env.loc (sbCol state.NONCE)
-    ∧ env.loc (d.traceWidth + B_CAP_ROOT) = env.loc (sbCol state.CAP_ROOT)
-    ∧ env.loc (d.traceWidth + 239 + 1) = env.loc (saCol state.BALANCE_LO)
-    ∧ env.loc (d.traceWidth + 239 + 2) = env.loc (saCol state.NONCE)
-    ∧ env.loc (d.traceWidth + 239 + B_CAP_ROOT) = env.loc (saCol state.CAP_ROOT) := by
+    env.loc (d.traceWidth + 1) ≡ env.loc (sbCol state.BALANCE_LO) [ZMOD 2013265921]
+    ∧ env.loc (d.traceWidth + 2) ≡ env.loc (sbCol state.NONCE) [ZMOD 2013265921]
+    ∧ env.loc (d.traceWidth + B_CAP_ROOT) ≡ env.loc (sbCol state.CAP_ROOT) [ZMOD 2013265921]
+    ∧ env.loc (d.traceWidth + 239 + 1) ≡ env.loc (saCol state.BALANCE_LO) [ZMOD 2013265921]
+    ∧ env.loc (d.traceWidth + 239 + 2) ≡ env.loc (saCol state.NONCE) [ZMOD 2013265921]
+    ∧ env.loc (d.traceWidth + 239 + B_CAP_ROOT) ≡ env.loc (saCol state.CAP_ROOT) [ZMOD 2013265921] := by
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
   · exact rotateV3_weld hash d env isFirst isLast hlast h (Or.inl (by simp [weldsAt, sbCol]))
   · exact rotateV3_weld hash d env isFirst isLast hlast h (Or.inl (by simp [weldsAt, sbCol]))
@@ -1100,11 +1106,8 @@ theorem graduable_rotateV3 {d : EffectVmDescriptor} (h : graduable d = true) :
     intro s hs
     unfold rotV3Appendix at hs
     rcases List.mem_append.mp hs with hs' | hs'
-    · rcases List.mem_append.mp hs' with hs'' | hs'' <;>
-      · simp only [rotV3SitesAt, List.mem_cons, List.not_mem_nil, or_false] at hs''
-        rcases hs'' with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;> rfl
-    · simp only [caveatV3SitesAt, List.mem_cons, List.not_mem_nil, or_false] at hs'
-      rcases hs' with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;> rfl
+    · rcases List.mem_append.mp hs' with hs'' | hs'' <;> fin_cases hs'' <;> rfl
+    · fin_cases hs' <;> rfl
 
 #assert_axioms rotateV3_satisfiedVm_v1
 #assert_axioms rotateV3_pins_commits
@@ -1156,12 +1159,14 @@ theorem rotV3_publishes (permOut : List ℤ → List ℤ) (hash : List ℤ → �
     (hf : Satisfied2Faithful permOut hash (v3Of d) minit mfin maddrs t)
     (i : Nat) (hi : i < t.rows.length) :
     ((i == 0) = true →
-      (envAt t i).loc (d.traceWidth + B_STATE_COMMIT) = (envAt t i).pub d.piCount)
+      (envAt t i).loc (d.traceWidth + B_STATE_COMMIT) ≡ (envAt t i).pub d.piCount [ZMOD 2013265921])
     ∧ ((i + 1 == t.rows.length) = true →
-      (envAt t i).loc (d.traceWidth + 239 + B_STATE_COMMIT) = (envAt t i).pub (d.piCount + 1)
+      (envAt t i).loc (d.traceWidth + 239 + B_STATE_COMMIT)
+          ≡ (envAt t i).pub (d.piCount + 1) [ZMOD 2013265921]
       ∧ (envAt t i).loc (d.traceWidth + 239 + B_COMMITTED_HEIGHT)
-          = (envAt t i).pub (d.piCount + 2)
-      ∧ (envAt t i).loc (d.traceWidth + 478 + C_COMMIT) = (envAt t i).pub (d.piCount + 3)) := by
+          ≡ (envAt t i).pub (d.piCount + 2) [ZMOD 2013265921]
+      ∧ (envAt t i).loc (d.traceWidth + 478 + C_COMMIT)
+          ≡ (envAt t i).pub (d.piCount + 3) [ZMOD 2013265921]) := by
   have h := satisfied2Faithful_satisfiedVm permOut hash (rotateV3 d) minit mfin maddrs t
     (graduable_rotateV3 hgrad) hf i hi
   have hmem : ∀ c ∈ rotPins d.traceWidth d.piCount, c ∈ (rotateV3 d).constraints :=
@@ -1199,7 +1204,25 @@ theorem rotV3_binds_published (permOut : List ℤ → List ℤ) (hash : List ℤ
     (hlast : (k + 1 == t.rows.length) = true) (hlast' : (l + 1 == t'.rows.length) = true)
     (hpubOld : (envAt t i).pub d.piCount = (envAt t' j).pub d.piCount)
     (hpubNew : (envAt t k).pub (d.piCount + 1) = (envAt t' l).pub (d.piCount + 1))
-    (hpubCav : (envAt t k).pub (d.piCount + 3) = (envAt t' l).pub (d.piCount + 3)) :
+    (hpubCav : (envAt t k).pub (d.piCount + 3) = (envAt t' l).pub (d.piCount + 3))
+    -- The digest/PI carriers are field-canonical (`0 ≤ · < p`, the deployed range-check invariant):
+    -- lifts each mod-`p` commit/height pin to the genuine ℤ hash-output equality the CR floor needs.
+    (hcCanonOld : 0 ≤ (envAt t i).loc (d.traceWidth + B_STATE_COMMIT)
+        ∧ (envAt t i).loc (d.traceWidth + B_STATE_COMMIT) < 2013265921)
+    (hcCanonOld' : 0 ≤ (envAt t' j).loc (d.traceWidth + B_STATE_COMMIT)
+        ∧ (envAt t' j).loc (d.traceWidth + B_STATE_COMMIT) < 2013265921)
+    (hcCanonNew : 0 ≤ (envAt t k).loc (d.traceWidth + 239 + B_STATE_COMMIT)
+        ∧ (envAt t k).loc (d.traceWidth + 239 + B_STATE_COMMIT) < 2013265921)
+    (hcCanonNew' : 0 ≤ (envAt t' l).loc (d.traceWidth + 239 + B_STATE_COMMIT)
+        ∧ (envAt t' l).loc (d.traceWidth + 239 + B_STATE_COMMIT) < 2013265921)
+    (hhCanon : 0 ≤ (envAt t k).pub (d.piCount + 2)
+        ∧ (envAt t k).pub (d.piCount + 2) < 2013265921)
+    (hhCanon' : 0 ≤ (envAt t' l).pub (d.piCount + 2)
+        ∧ (envAt t' l).pub (d.piCount + 2) < 2013265921)
+    (hcCanonCav : 0 ≤ (envAt t k).loc (d.traceWidth + 478 + C_COMMIT)
+        ∧ (envAt t k).loc (d.traceWidth + 478 + C_COMMIT) < 2013265921)
+    (hcCanonCav' : 0 ≤ (envAt t' l).loc (d.traceWidth + 478 + C_COMMIT)
+        ∧ (envAt t' l).loc (d.traceWidth + 478 + C_COMMIT) < 2013265921) :
     (preLimbsAt d.traceWidth (envAt t i).loc = preLimbsAt d.traceWidth (envAt t' j).loc
       ∧ (envAt t i).loc (d.traceWidth + 178) = (envAt t' j).loc (d.traceWidth + 178))
     ∧ (preLimbsAt (d.traceWidth + 239) (envAt t k).loc
@@ -1216,6 +1239,15 @@ theorem rotV3_binds_published (permOut : List ℤ → List ℤ) (hash : List ℤ
   · -- the before block, via the first-row pins
     have hc := (hq i hi).1 hfirst
     have hc' := (hq' j hj).1 hfirst'
+    -- Lift the two OLD-commit pins to a genuine ℤ equality of the digest carriers via canonicality:
+    --   loc(SC)(i) ≡ pub(pc)(i) = pub(pc)(j) ≡ loc(SC)(j).
+    have hcEq : (envAt t i).loc (d.traceWidth + B_STATE_COMMIT)
+        = (envAt t' j).loc (d.traceWidth + B_STATE_COMMIT) :=
+      canon_eq_of_modEq hcCanonOld hcCanonOld'
+        (calc (envAt t i).loc (d.traceWidth + B_STATE_COMMIT)
+              ≡ (envAt t i).pub d.piCount [ZMOD 2013265921] := hc
+          _ = (envAt t' j).pub d.piCount := hpubOld
+          _ ≡ (envAt t' j).loc (d.traceWidth + B_STATE_COMMIT) [ZMOD 2013265921] := hc'.symm)
     have hwire : wireCommitR hash (preLimbsAt d.traceWidth (envAt t i).loc)
         ((envAt t i).loc (d.traceWidth + 178))
         = wireCommitR hash (preLimbsAt d.traceWidth (envAt t' j).loc)
@@ -1223,12 +1255,19 @@ theorem rotV3_binds_published (permOut : List ℤ → List ℤ) (hash : List ℤ
       rw [← (hp i hi).1, ← (hp' j hj).1]
       show (envAt t i).loc (d.traceWidth + B_STATE_COMMIT)
         = (envAt t' j).loc (d.traceWidth + B_STATE_COMMIT)
-      rw [hc, hc', hpubOld]
+      exact hcEq
     exact wireCommitR_binds hash hCR
       (by rw [preLimbsAt_length, preLimbsAt_length]) hwire
   · -- the after block, via the last-row pins
     obtain ⟨hc, hh, -⟩ := (hq k hk).2 hlast
     obtain ⟨hc', hh', -⟩ := (hq' l hl).2 hlast'
+    have hcEq : (envAt t k).loc (d.traceWidth + 239 + B_STATE_COMMIT)
+        = (envAt t' l).loc (d.traceWidth + 239 + B_STATE_COMMIT) :=
+      canon_eq_of_modEq hcCanonNew hcCanonNew'
+        (calc (envAt t k).loc (d.traceWidth + 239 + B_STATE_COMMIT)
+              ≡ (envAt t k).pub (d.piCount + 1) [ZMOD 2013265921] := hc
+          _ = (envAt t' l).pub (d.piCount + 1) := hpubNew
+          _ ≡ (envAt t' l).loc (d.traceWidth + 239 + B_STATE_COMMIT) [ZMOD 2013265921] := hc'.symm)
     have hwire : wireCommitR hash (preLimbsAt (d.traceWidth + 239) (envAt t k).loc)
         ((envAt t k).loc (d.traceWidth + 239 + 178))
         = wireCommitR hash (preLimbsAt (d.traceWidth + 239) (envAt t' l).loc)
@@ -1236,21 +1275,36 @@ theorem rotV3_binds_published (permOut : List ℤ → List ℤ) (hash : List ℤ
       rw [← (hp k hk).2.1, ← (hp' l hl).2.1]
       show (envAt t k).loc (d.traceWidth + 239 + B_STATE_COMMIT)
         = (envAt t' l).loc (d.traceWidth + 239 + B_STATE_COMMIT)
-      rw [hc, hc', hpubNew]
+      exact hcEq
     obtain ⟨hpre, hir⟩ := wireCommitR_binds hash hCR
       (by rw [preLimbsAt_length, preLimbsAt_length]) hwire
     refine ⟨hpre, hir, ?_⟩
-    rw [← hh, ← hh']
-    exact congrArg (fun L => L.getD 31 0) hpre
+    -- the published heights agree: pub(pc+2)(k) ≡ loc(CH)(k) = loc(CH)(l) ≡ pub(pc+2)(l), lifted
+    -- to ℤ by the PI-slot canonicality; the loc(CH) equality is the height limb of the bound block.
+    have hHtEq : (envAt t k).loc (d.traceWidth + 239 + B_COMMITTED_HEIGHT)
+        = (envAt t' l).loc (d.traceWidth + 239 + B_COMMITTED_HEIGHT) :=
+      congrArg (fun L => L.getD 31 0) hpre
+    exact canon_eq_of_modEq hhCanon hhCanon'
+      (calc (envAt t k).pub (d.piCount + 2)
+            ≡ (envAt t k).loc (d.traceWidth + 239 + B_COMMITTED_HEIGHT) [ZMOD 2013265921] := hh.symm
+        _ = (envAt t' l).loc (d.traceWidth + 239 + B_COMMITTED_HEIGHT) := hHtEq
+        _ ≡ (envAt t' l).pub (d.piCount + 2) [ZMOD 2013265921] := hh')
   · -- the caveat manifest, via the last-row pin
     obtain ⟨-, -, hk1⟩ := (hq k hk).2 hlast
     obtain ⟨-, -, hk2⟩ := (hq' l hl).2 hlast'
+    have hccEq : (envAt t k).loc (d.traceWidth + 478 + C_COMMIT)
+        = (envAt t' l).loc (d.traceWidth + 478 + C_COMMIT) :=
+      canon_eq_of_modEq hcCanonCav hcCanonCav'
+        (calc (envAt t k).loc (d.traceWidth + 478 + C_COMMIT)
+              ≡ (envAt t k).pub (d.piCount + 3) [ZMOD 2013265921] := hk1
+          _ = (envAt t' l).pub (d.piCount + 3) := hpubCav
+          _ ≡ (envAt t' l).loc (d.traceWidth + 478 + C_COMMIT) [ZMOD 2013265921] := hk2.symm)
     have hcc : caveatCommit hash (manifestAt (d.traceWidth + 478) (envAt t k).loc)
         = caveatCommit hash (manifestAt (d.traceWidth + 478) (envAt t' l).loc) := by
       rw [← (hp k hk).2.2, ← (hp' l hl).2.2]
       show (envAt t k).loc (d.traceWidth + 478 + C_COMMIT)
         = (envAt t' l).loc (d.traceWidth + 478 + C_COMMIT)
-      rw [hk1, hk2, hpubCav]
+      exact hccEq
     exact caveatCommit_binds hash hCR hcc
 
 #assert_axioms rotV3_sound_v1
@@ -1930,11 +1984,11 @@ theorem epochBumpGate_forces (env : VmRowEnv) (isFirst isLast : Bool) (hlast : i
     (sel beforeC afterC : Nat)
     (hsel : env.loc sel = 1)
     (h : (epochBumpGate sel beforeC afterC).holdsVm env isFirst isLast) :
-    env.loc afterC = env.loc beforeC + 1 := by
+    env.loc afterC ≡ env.loc beforeC + 1 [ZMOD 2013265921] := by
   subst hlast
   simp only [epochBumpGate, VmConstraint.holdsVm, EmittedExpr.eval] at h
   rw [hsel] at h
-  linarith
+  exact (gate_modEq_iff (by ring)).mp h
 
 /-- The rotated BEFORE-block `delegation_epoch` limb column (limb 30 of the before block at `base = w`). -/
 def beforeEpochCol (w : Nat) : Nat := w + B_EPOCH
@@ -2274,7 +2328,7 @@ theorem noteSpendV3_pins_nullifier (hash : List ℤ → ℤ)
     (env : VmRowEnv) (isLast : Bool)
     (h : satisfiedVm hash (rotateV3WithNullifierPin
       EffectVmEmitNoteSpend.noteSpendVmDescriptor) env true isLast) :
-    env.loc NULLIFIER_PARAM_COL = env.pub ROT_NULLIFIER_PI := by
+    env.loc NULLIFIER_PARAM_COL ≡ env.pub ROT_NULLIFIER_PI [ZMOD 2013265921] := by
   have hpin := h.1 (.piBinding .first NULLIFIER_PARAM_COL ROT_NULLIFIER_PI)
     (by rw [rotateV3WithNullifierPin_constraints]; exact List.mem_append_right _ List.mem_cons_self)
   simpa only [VmConstraint.holdsVm] using hpin rfl
@@ -2287,10 +2341,13 @@ the rotated leg can no longer publish a nullifier different from the one the spe
 so the off-row freshness cross-check (`verify_full_turn` step 8) binds THIS turn's nullifier. -/
 theorem noteSpendV3_rejects_nullifier_tamper (hash : List ℤ → ℤ)
     (env : VmRowEnv) (isLast : Bool)
+    (hcanonParam : 0 ≤ env.loc NULLIFIER_PARAM_COL ∧ env.loc NULLIFIER_PARAM_COL < 2013265921)
+    (hcanonPI : 0 ≤ env.pub ROT_NULLIFIER_PI ∧ env.pub ROT_NULLIFIER_PI < 2013265921)
     (htamper : env.loc NULLIFIER_PARAM_COL ≠ env.pub ROT_NULLIFIER_PI) :
     ¬ satisfiedVm hash (rotateV3WithNullifierPin
       EffectVmEmitNoteSpend.noteSpendVmDescriptor) env true isLast :=
-  fun h => htamper (noteSpendV3_pins_nullifier hash env isLast h)
+  fun h => htamper (canon_eq_of_modEq hcanonParam hcanonPI
+    (noteSpendV3_pins_nullifier hash env isLast h))
 
 /-- The v1 denotation still survives the added pin (the per-effect noteSpend faithfulness /
 anti-ghost theorems compose through, exactly as for bare `rotateV3`). -/
@@ -2971,9 +3028,9 @@ theorem rotateV3FrozenAuthority_freezes (hash : List ℤ → ℤ) (d : EffectVmD
     (env : VmRowEnv) (isFirst isLast : Bool) (hlast : isLast = false)
     (h : satisfiedVm hash (rotateV3FrozenAuthority d) env isFirst isLast) :
     env.loc (d.traceWidth + B_RECORD_DIGEST)
-        = env.loc (d.traceWidth + AFTER_BLOCK_OFF + B_RECORD_DIGEST)
+        ≡ env.loc (d.traceWidth + AFTER_BLOCK_OFF + B_RECORD_DIGEST) [ZMOD 2013265921]
     ∧ env.loc (d.traceWidth + B_LIFECYCLE)
-        = env.loc (d.traceWidth + AFTER_BLOCK_OFF + B_LIFECYCLE) := by
+        ≡ env.loc (d.traceWidth + AFTER_BLOCK_OFF + B_LIFECYCLE) [ZMOD 2013265921] := by
   obtain ⟨hc, _, _⟩ := h
   refine ⟨?_, ?_⟩
   · have hmem : colEq (d.traceWidth + B_RECORD_DIGEST)
@@ -2993,10 +3050,15 @@ theorem rotateV3FrozenAuthority_freezes (hash : List ℤ → ℤ) (d : EffectVmD
 no trusted post-cell needed. -/
 theorem rotateV3FrozenAuthority_rejects_drift (hash : List ℤ → ℤ) (d : EffectVmDescriptor)
     (env : VmRowEnv) (isFirst isLast : Bool) (hlast : isLast = false)
+    (hcanonBefore : 0 ≤ env.loc (d.traceWidth + B_RECORD_DIGEST)
+        ∧ env.loc (d.traceWidth + B_RECORD_DIGEST) < 2013265921)
+    (hcanonAfter : 0 ≤ env.loc (d.traceWidth + AFTER_BLOCK_OFF + B_RECORD_DIGEST)
+        ∧ env.loc (d.traceWidth + AFTER_BLOCK_OFF + B_RECORD_DIGEST) < 2013265921)
     (hdrift : env.loc (d.traceWidth + B_RECORD_DIGEST)
         ≠ env.loc (d.traceWidth + AFTER_BLOCK_OFF + B_RECORD_DIGEST)) :
     ¬ satisfiedVm hash (rotateV3FrozenAuthority d) env isFirst isLast :=
-  fun h => hdrift (rotateV3FrozenAuthority_freezes hash d env isFirst isLast hlast h).1
+  fun h => hdrift (canon_eq_of_modEq hcanonBefore hcanonAfter
+    (rotateV3FrozenAuthority_freezes hash d env isFirst isLast hlast h).1)
 
 /-- **The fields[0..7] completion lanes are FROZEN on a satisfying TRANSITION row of the shared value
 wrap.** For any of the 56 fields completion offsets, a row satisfying `rotateV3FrozenAuthority d` (a
@@ -3006,7 +3068,7 @@ theorem rotateV3FrozenAuthority_freezes_fields (hash : List ℤ → ℤ) (d : Ef
     (env : VmRowEnv) (isFirst isLast : Bool) (hlast : isLast = false)
     (h : satisfiedVm hash (rotateV3FrozenAuthority d) env isFirst isLast)
     (off : Nat) (hoff : off ∈ fieldsCompletionOffs) :
-    env.loc (d.traceWidth + off) = env.loc (d.traceWidth + AFTER_BLOCK_OFF + off) := by
+    env.loc (d.traceWidth + off) ≡ env.loc (d.traceWidth + AFTER_BLOCK_OFF + off) [ZMOD 2013265921] := by
   obtain ⟨hc, _, _⟩ := h
   have hmem : colEq (d.traceWidth + off) (d.traceWidth + AFTER_BLOCK_OFF + off)
       ∈ (rotateV3FrozenAuthority d).constraints := by
@@ -3022,9 +3084,14 @@ move) does NOT satisfy the shared value wrap. The light-client bite for the fiel
 theorem rotateV3FrozenAuthority_rejects_fields_forge (hash : List ℤ → ℤ) (d : EffectVmDescriptor)
     (env : VmRowEnv) (isFirst isLast : Bool) (hlast : isLast = false)
     (off : Nat) (hoff : off ∈ fieldsCompletionOffs)
+    (hcanonBefore : 0 ≤ env.loc (d.traceWidth + off)
+        ∧ env.loc (d.traceWidth + off) < 2013265921)
+    (hcanonAfter : 0 ≤ env.loc (d.traceWidth + AFTER_BLOCK_OFF + off)
+        ∧ env.loc (d.traceWidth + AFTER_BLOCK_OFF + off) < 2013265921)
     (hforge : env.loc (d.traceWidth + off) ≠ env.loc (d.traceWidth + AFTER_BLOCK_OFF + off)) :
     ¬ satisfiedVm hash (rotateV3FrozenAuthority d) env isFirst isLast :=
-  fun h => hforge (rotateV3FrozenAuthority_freezes_fields hash d env isFirst isLast hlast h off hoff)
+  fun h => hforge (canon_eq_of_modEq hcanonBefore hcanonAfter
+    (rotateV3FrozenAuthority_freezes_fields hash d env isFirst isLast hlast h off hoff))
 
 #assert_axioms rotateV3FrozenAuthority_freezes_fields
 #assert_axioms rotateV3FrozenAuthority_rejects_fields_forge
@@ -3159,7 +3226,7 @@ tick) — the rotated re-statement of the transfer/noteSpend nonce gate, now on 
 theorem setFieldV3_pins_nonce_tick (slot : Fin 8) (hash : List ℤ → ℤ) (env : VmRowEnv)
     (isFirst isLast : Bool) (hlast : isLast = false) (hnoop : env.loc sel.NOOP = 0)
     (h : satisfiedVm hash (rotateV3 (setFieldTickFace slot)) env isFirst isLast) :
-    env.loc (saCol state.NONCE) = env.loc (sbCol state.NONCE) + 1 := by
+    env.loc (saCol state.NONCE) ≡ env.loc (sbCol state.NONCE) + 1 [ZMOD 2013265921] := by
   subst hlast
   have hmem : VmConstraint.gate EffectVmEmitTransfer.gNonce ∈ (rotateV3 (setFieldTickFace slot)).constraints := by
     apply List.mem_append_left
@@ -3170,7 +3237,7 @@ theorem setFieldV3_pins_nonce_tick (slot : Fin 8) (hash : List ℤ → ℤ) (env
     EffectVmEmitTransfer.eSA, EffectVmEmitTransfer.eSB, EffectVmEmitTransfer.eSelNoop,
     EmittedExpr.eval] at hg
   rw [hnoop] at hg
-  linarith [hg]
+  exact (gate_modEq_iff (by ring)).mp hg
 
 /-- **ANTI-GHOST (wrong nonce delta ⇒ UNSAT)** — the C7 soundness tooth for setField. A non-NoOp
 row whose nonce delta is NOT the tick (`after_nonce ≠ before_nonce + 1`) does NOT satisfy the
@@ -3178,9 +3245,13 @@ rotated tick-faced setField: the swapped tick gate REJECTS it. A forged passthro
 (`after = before`) is the special case the FREEZE descriptor wrongly accepted; it is now UNSAT. -/
 theorem setFieldTick_rejects_wrong_nonce_delta (slot : Fin 8) (hash : List ℤ → ℤ) (env : VmRowEnv)
     (isFirst isLast : Bool) (hlast : isLast = false) (hnoop : env.loc sel.NOOP = 0)
+    (hcanonAfter : 0 ≤ env.loc (saCol state.NONCE) ∧ env.loc (saCol state.NONCE) < 2013265921)
+    (hcanonBeforeTick : 0 ≤ env.loc (sbCol state.NONCE) + 1
+      ∧ env.loc (sbCol state.NONCE) + 1 < 2013265921)
     (hwrong : env.loc (saCol state.NONCE) ≠ env.loc (sbCol state.NONCE) + 1) :
     ¬ satisfiedVm hash (rotateV3 (setFieldTickFace slot)) env isFirst isLast :=
-  fun h => hwrong (setFieldV3_pins_nonce_tick slot hash env isFirst isLast hlast hnoop h)
+  fun h => hwrong (canon_eq_of_modEq hcanonAfter hcanonBeforeTick
+    (setFieldV3_pins_nonce_tick slot hash env isFirst isLast hlast hnoop h))
 
 /-- **The corrected WRITE binds the runtime value column on the ACTIVE row.** A row satisfying the
 rotated param1-corrected setField with `s_set_field = 1` (the active setField row) carries
@@ -3190,7 +3261,8 @@ active row, reads the column the trace generator wrote the value to. (On NoOp ro
 theorem setFieldV3_pins_value (slot : Fin 8) (hash : List ℤ → ℤ) (env : VmRowEnv)
     (isFirst isLast : Bool) (hlast : isLast = false) (hactive : env.loc SEL_SET_FIELD_COL = 1)
     (h : satisfiedVm hash (rotateV3 (setFieldTickFace slot)) env isFirst isLast) :
-    env.loc (saCol (state.FIELD_BASE + slot.val)) = env.loc (prmCol RUNTIME_VALUE_PARAM) := by
+    env.loc (saCol (state.FIELD_BASE + slot.val)) ≡ env.loc (prmCol RUNTIME_VALUE_PARAM)
+      [ZMOD 2013265921] := by
   subst hlast
   have hmem : VmConstraint.gate (gFieldWriteP1 slot) ∈ (rotateV3 (setFieldTickFace slot)).constraints := by
     apply List.mem_append_left
@@ -3200,7 +3272,7 @@ theorem setFieldV3_pins_value (slot : Fin 8) (hash : List ℤ → ℤ) (env : Vm
   simp only [VmConstraint.holdsVm, gFieldWriteP1, EffectVmEmitTransfer.eSub,
     EffectVmEmitTransfer.eSA, EffectVmEmitTransfer.ePrm, EmittedExpr.eval] at hg
   rw [hactive] at hg
-  linarith [hg]
+  exact (gate_modEq_iff (by ring)).mp hg
 
 /-- **ANTI-GHOST (wrong written value ⇒ UNSAT)** — the C7 param-column soundness tooth for
 setField. An ACTIVE setField row (`s_set_field = 1`) whose written field does NOT equal `param1`
@@ -3208,9 +3280,14 @@ setField. An ACTIVE setField row (`s_set_field = 1`) whose written field does NO
 active row, REJECTS it. -/
 theorem setFieldP1_rejects_wrong_value (slot : Fin 8) (hash : List ℤ → ℤ) (env : VmRowEnv)
     (isFirst isLast : Bool) (hlast : isLast = false) (hactive : env.loc SEL_SET_FIELD_COL = 1)
+    (hcanonAfter : 0 ≤ env.loc (saCol (state.FIELD_BASE + slot.val))
+      ∧ env.loc (saCol (state.FIELD_BASE + slot.val)) < 2013265921)
+    (hcanonParam : 0 ≤ env.loc (prmCol RUNTIME_VALUE_PARAM)
+      ∧ env.loc (prmCol RUNTIME_VALUE_PARAM) < 2013265921)
     (hwrong : env.loc (saCol (state.FIELD_BASE + slot.val)) ≠ env.loc (prmCol RUNTIME_VALUE_PARAM)) :
     ¬ satisfiedVm hash (rotateV3 (setFieldTickFace slot)) env isFirst isLast :=
-  fun h => hwrong (setFieldV3_pins_value slot hash env isFirst isLast hlast hactive h)
+  fun h => hwrong (canon_eq_of_modEq hcanonAfter hcanonParam
+    (setFieldV3_pins_value slot hash env isFirst isLast hlast hactive h))
 
 /-! #### The TICK-faced + param1-corrected BridgeMint (= the `mintVmDescriptor2R24` member). -/
 
@@ -3270,7 +3347,7 @@ def supplyMintV3 : EffectVmDescriptor2 := withSelectorGate sel.MINT (v3OfFrozen 
 theorem mintV3_pins_nonce_tick (hash : List ℤ → ℤ) (env : VmRowEnv) (isFirst isLast : Bool)
     (hlast : isLast = false) (hnoop : env.loc sel.NOOP = 0)
     (h : satisfiedVm hash (rotateV3 mintTickFace) env isFirst isLast) :
-    env.loc (saCol state.NONCE) = env.loc (sbCol state.NONCE) + 1 := by
+    env.loc (saCol state.NONCE) ≡ env.loc (sbCol state.NONCE) + 1 [ZMOD 2013265921] := by
   subst hlast
   have hmem : VmConstraint.gate EffectVmEmitTransfer.gNonce ∈ (rotateV3 mintTickFace).constraints := by
     apply List.mem_append_left
@@ -3281,14 +3358,18 @@ theorem mintV3_pins_nonce_tick (hash : List ℤ → ℤ) (env : VmRowEnv) (isFir
     EffectVmEmitTransfer.eSA, EffectVmEmitTransfer.eSB, EffectVmEmitTransfer.eSelNoop,
     EmittedExpr.eval] at hg
   rw [hnoop] at hg
-  linarith [hg]
+  exact (gate_modEq_iff (by ring)).mp hg
 
 /-- **ANTI-GHOST (wrong nonce delta ⇒ UNSAT)** — the C7 soundness tooth for BridgeMint. -/
 theorem mintTick_rejects_wrong_nonce_delta (hash : List ℤ → ℤ) (env : VmRowEnv)
     (isFirst isLast : Bool) (hlast : isLast = false) (hnoop : env.loc sel.NOOP = 0)
+    (hcanonAfter : 0 ≤ env.loc (saCol state.NONCE) ∧ env.loc (saCol state.NONCE) < 2013265921)
+    (hcanonBeforeTick : 0 ≤ env.loc (sbCol state.NONCE) + 1
+      ∧ env.loc (sbCol state.NONCE) + 1 < 2013265921)
     (hwrong : env.loc (saCol state.NONCE) ≠ env.loc (sbCol state.NONCE) + 1) :
     ¬ satisfiedVm hash (rotateV3 mintTickFace) env isFirst isLast :=
-  fun h => hwrong (mintV3_pins_nonce_tick hash env isFirst isLast hlast hnoop h)
+  fun h => hwrong (canon_eq_of_modEq hcanonAfter hcanonBeforeTick
+    (mintV3_pins_nonce_tick hash env isFirst isLast hlast hnoop h))
 
 /-- **The corrected CREDIT binds the runtime value column.** A row satisfying the rotated
 param1-corrected BridgeMint carries `bal_lo_after = bal_lo_before + param1` (the runtime
@@ -3297,7 +3378,8 @@ theorem mintV3_pins_credit (hash : List ℤ → ℤ) (env : VmRowEnv) (isFirst i
     (hlast : isLast = false)
     (h : satisfiedVm hash (rotateV3 mintTickFace) env isFirst isLast) :
     env.loc (saCol state.BALANCE_LO)
-      = env.loc (sbCol state.BALANCE_LO) + env.loc (prmCol RUNTIME_VALUE_PARAM) := by
+      ≡ env.loc (sbCol state.BALANCE_LO) + env.loc (prmCol RUNTIME_VALUE_PARAM)
+        [ZMOD 2013265921] := by
   subst hlast
   have hmem : VmConstraint.gate gBalLoCreditP1 ∈ (rotateV3 mintTickFace).constraints := by
     apply List.mem_append_left
@@ -3307,16 +3389,21 @@ theorem mintV3_pins_credit (hash : List ℤ → ℤ) (env : VmRowEnv) (isFirst i
   simp only [VmConstraint.holdsVm, gBalLoCreditP1, EffectVmEmitTransfer.eSub,
     EffectVmEmitTransfer.eSA, EffectVmEmitTransfer.eSB, EffectVmEmitTransfer.ePrm,
     EmittedExpr.eval] at hg
-  linarith [hg]
+  exact (gate_modEq_iff (by ring)).mp hg
 
 /-- **ANTI-GHOST (wrong credit ⇒ UNSAT)** — the C7 param-column soundness tooth for BridgeMint.
 A row whose post-balance is NOT `before + param1` (the runtime value_lo) is UNSAT. -/
 theorem mintP1_rejects_wrong_credit (hash : List ℤ → ℤ) (env : VmRowEnv) (isFirst isLast : Bool)
     (hlast : isLast = false)
+    (hcanonAfter : 0 ≤ env.loc (saCol state.BALANCE_LO)
+      ∧ env.loc (saCol state.BALANCE_LO) < 2013265921)
+    (hcanonCredit : 0 ≤ env.loc (sbCol state.BALANCE_LO) + env.loc (prmCol RUNTIME_VALUE_PARAM)
+      ∧ env.loc (sbCol state.BALANCE_LO) + env.loc (prmCol RUNTIME_VALUE_PARAM) < 2013265921)
     (hwrong : env.loc (saCol state.BALANCE_LO)
       ≠ env.loc (sbCol state.BALANCE_LO) + env.loc (prmCol RUNTIME_VALUE_PARAM)) :
     ¬ satisfiedVm hash (rotateV3 mintTickFace) env isFirst isLast :=
-  fun h => hwrong (mintV3_pins_credit hash env isFirst isLast hlast h)
+  fun h => hwrong (canon_eq_of_modEq hcanonAfter hcanonCredit
+    (mintV3_pins_credit hash env isFirst isLast hlast h))
 
 #assert_axioms graduable_setFieldTickFace
 #assert_axioms setFieldTickFace_eq_source
@@ -3439,7 +3526,7 @@ carries the AFTER block's forced limb EQUAL to the published rotated PI `(rotate
 theorem rotateV3WithRecordPin_pins (off : Nat) (hash : List ℤ → ℤ) (d : EffectVmDescriptor)
     (env : VmRowEnv) (isFirst : Bool)
     (h : satisfiedVm hash (rotateV3WithRecordPin off d) env isFirst true) :
-    env.loc (d.traceWidth + AFTER_BLOCK_OFF + off) = env.pub (rotateV3 d).piCount := by
+    env.loc (d.traceWidth + AFTER_BLOCK_OFF + off) ≡ env.pub (rotateV3 d).piCount [ZMOD 2013265921] := by
   have hpin := h.1 (.piBinding .last (d.traceWidth + AFTER_BLOCK_OFF + off) (rotateV3 d).piCount)
     (by rw [rotateV3WithRecordPin_constraints]; exact List.mem_append_right _ List.mem_cons_self)
   simpa only [VmConstraint.holdsVm] using hpin rfl
@@ -3493,9 +3580,13 @@ for the lifecycle class) — so a forged after-residue disagrees with the anchor
 is now a genuine forcing gate across the family, not a published-value binding. -/
 theorem rotateV3WithRecordPin_rejects_wrong_post (off : Nat) (hash : List ℤ → ℤ)
     (d : EffectVmDescriptor) (env : VmRowEnv) (isFirst : Bool)
+    (hcanonLimb : 0 ≤ env.loc (d.traceWidth + AFTER_BLOCK_OFF + off)
+      ∧ env.loc (d.traceWidth + AFTER_BLOCK_OFF + off) < 2013265921)
+    (hcanonPI : 0 ≤ env.pub (rotateV3 d).piCount ∧ env.pub (rotateV3 d).piCount < 2013265921)
     (hwrong : env.loc (d.traceWidth + AFTER_BLOCK_OFF + off) ≠ env.pub (rotateV3 d).piCount) :
     ¬ satisfiedVm hash (rotateV3WithRecordPin off d) env isFirst true :=
-  fun h => hwrong (rotateV3WithRecordPin_pins off hash d env isFirst h)
+  fun h => hwrong (canon_eq_of_modEq hcanonLimb hcanonPI
+    (rotateV3WithRecordPin_pins off hash d env isFirst h))
 
 /-- The v1 denotation survives the added record pin (the per-effect faithfulness / anti-ghost
 theorems compose through, exactly as for the nullifier pin). -/
@@ -3540,11 +3631,11 @@ theorem discForceGate_forces (env : VmRowEnv) (isFirst isLast : Bool) (hlast : i
     (sel col : Nat) (const : ℤ)
     (hsel : env.loc sel = 1)
     (h : (discForceGate sel col const).holdsVm env isFirst isLast) :
-    env.loc col = const := by
+    env.loc col ≡ const [ZMOD 2013265921] := by
   subst hlast
   simp only [discForceGate, VmConstraint.holdsVm, EmittedExpr.eval] at h
   rw [hsel] at h
-  linarith
+  exact (gate_modEq_iff (by ring)).mp h
 
 /-- The AFTER-disc force column for a mover of width `d.traceWidth` (limb `B_DISC` of the AFTER
 block, `traceWidth + AFTER_BLOCK_OFF + B_DISC`). -/
@@ -3595,7 +3686,7 @@ theorem rotateV3WithDiscGate_forces_after (sel : Nat) (beforeC? : Option ℤ) (a
     (hlast : isLast = false)
     (hsel : env.loc sel = 1)
     (h : satisfiedVm hash (rotateV3WithDiscGate sel beforeC? afterC d) env isFirst isLast) :
-    env.loc (afterDiscCol d.traceWidth) = afterC :=
+    env.loc (afterDiscCol d.traceWidth) ≡ afterC [ZMOD 2013265921] :=
   discForceGate_forces env isFirst isLast hlast sel (afterDiscCol d.traceWidth) afterC hsel
     (h.1 _ (rotateV3WithDiscGate_afterMem sel beforeC? afterC d))
 
@@ -3606,9 +3697,13 @@ theorem rotateV3WithDiscGate_rejects_wrong_after (sel : Nat) (beforeC? : Option 
     (hash : List ℤ → ℤ) (d : EffectVmDescriptor) (env : VmRowEnv) (isFirst isLast : Bool)
     (hlast : isLast = false)
     (hsel : env.loc sel = 1)
+    (hcanonAfter : 0 ≤ env.loc (afterDiscCol d.traceWidth)
+      ∧ env.loc (afterDiscCol d.traceWidth) < 2013265921)
+    (hcanonConst : 0 ≤ afterC ∧ afterC < 2013265921)
     (hwrong : env.loc (afterDiscCol d.traceWidth) ≠ afterC) :
     ¬ satisfiedVm hash (rotateV3WithDiscGate sel beforeC? afterC d) env isFirst isLast :=
-  fun h => hwrong (rotateV3WithDiscGate_forces_after sel beforeC? afterC hash d env isFirst isLast hlast hsel h)
+  fun h => hwrong (canon_eq_of_modEq hcanonAfter hcanonConst
+    (rotateV3WithDiscGate_forces_after sel beforeC? afterC hash d env isFirst isLast hlast hsel h))
 
 #assert_axioms discForceGate_forces
 #assert_axioms graduable_rotateV3WithDiscGate
@@ -3646,11 +3741,11 @@ theorem permsVKWeldGate_forces (env : VmRowEnv) (isFirst isLast : Bool) (hlast :
     (sel afterCol paramCol : Nat)
     (hsel : env.loc sel = 1)
     (h : (permsVKWeldGate sel afterCol paramCol).holdsVm env isFirst isLast) :
-    env.loc afterCol = env.loc paramCol := by
+    env.loc afterCol ≡ env.loc paramCol [ZMOD 2013265921] := by
   subst hlast
   simp only [permsVKWeldGate, VmConstraint.holdsVm, EmittedExpr.eval] at h
   rw [hsel] at h
-  linarith
+  exact (gate_modEq_iff (by ring)).mp h
 
 /-- The AFTER perms-digest force column for a mover of width `w` (limb `B_PERMS` of the AFTER block). -/
 def afterPermsCol (w : Nat) : Nat := w + AFTER_BLOCK_OFF + B_PERMS
@@ -3703,7 +3798,7 @@ theorem rotateV3WithPermsVKGate_forces (sel afterCol : Nat)
     (hlast : isLast = false)
     (hsel : env.loc sel = 1)
     (h : satisfiedVm hash (rotateV3WithPermsVKGate sel afterCol d) env isFirst isLast) :
-    env.loc afterCol = env.loc declaredParamCol :=
+    env.loc afterCol ≡ env.loc declaredParamCol [ZMOD 2013265921] :=
   permsVKWeldGate_forces env isFirst isLast hlast sel afterCol declaredParamCol hsel
     (h.1 _ (rotateV3WithPermsVKGate_mem sel afterCol d))
 
@@ -3715,9 +3810,12 @@ theorem rotateV3WithPermsVKGate_rejects_forged (sel afterCol : Nat)
     (hash : List ℤ → ℤ) (d : EffectVmDescriptor) (env : VmRowEnv) (isFirst isLast : Bool)
     (hlast : isLast = false)
     (hsel : env.loc sel = 1)
+    (hcanonAfter : 0 ≤ env.loc afterCol ∧ env.loc afterCol < 2013265921)
+    (hcanonParam : 0 ≤ env.loc declaredParamCol ∧ env.loc declaredParamCol < 2013265921)
     (hforged : env.loc afterCol ≠ env.loc declaredParamCol) :
     ¬ satisfiedVm hash (rotateV3WithPermsVKGate sel afterCol d) env isFirst isLast :=
-  fun h => hforged (rotateV3WithPermsVKGate_forces sel afterCol hash d env isFirst isLast hlast hsel h)
+  fun h => hforged (canon_eq_of_modEq hcanonAfter hcanonParam
+    (rotateV3WithPermsVKGate_forces sel afterCol hash d env isFirst isLast hlast hsel h))
 
 #assert_axioms permsVKWeldGate_forces
 #assert_axioms graduable_rotateV3WithPermsVKGate
@@ -3764,11 +3862,11 @@ theorem lifecyclePayloadHashGate_forces (env : VmRowEnv) (isFirst isLast : Bool)
     (sel afterCol payloadCol : Nat)
     (hsel : env.loc sel = 1)
     (h : (lifecyclePayloadHashGate sel afterCol payloadCol).holdsVm env isFirst isLast) :
-    env.loc afterCol = env.loc payloadCol := by
+    env.loc afterCol ≡ env.loc payloadCol [ZMOD 2013265921] := by
   subst hlast
   simp only [lifecyclePayloadHashGate, VmConstraint.holdsVm, EmittedExpr.eval] at h
   rw [hsel] at h
-  linarith
+  exact (gate_modEq_iff (by ring)).mp h
 
 /-- The AFTER lifecycle-payload force column for a mover of width `w` (limb `B_LIFECYCLE` of the AFTER
 block) — the SAME committed sub-limb the record pin welds, now forced to the in-circuit hash. -/
@@ -3821,7 +3919,7 @@ theorem rotateV3WithLifecyclePayloadGate_forces (sel : Nat) (beforeC? : Option �
     (hlast : isLast = false)
     (hsel : env.loc sel = 1)
     (h : satisfiedVm hash (rotateV3WithLifecyclePayloadGate sel beforeC? afterC d) env isFirst isLast) :
-    env.loc (afterLifecycleCol d.traceWidth) = env.loc declaredLifecyclePayloadCol :=
+    env.loc (afterLifecycleCol d.traceWidth) ≡ env.loc declaredLifecyclePayloadCol [ZMOD 2013265921] :=
   lifecyclePayloadHashGate_forces env isFirst isLast hlast sel
     (afterLifecycleCol d.traceWidth) declaredLifecyclePayloadCol hsel
     (h.1 _ (rotateV3WithLifecyclePayloadGate_mem sel beforeC? afterC d))
@@ -3836,10 +3934,14 @@ theorem rotateV3WithLifecyclePayloadGate_rejects_forged (sel : Nat) (beforeC? : 
     (hash : List ℤ → ℤ) (d : EffectVmDescriptor) (env : VmRowEnv) (isFirst isLast : Bool)
     (hlast : isLast = false)
     (hsel : env.loc sel = 1)
+    (hcanonAfter : 0 ≤ env.loc (afterLifecycleCol d.traceWidth)
+      ∧ env.loc (afterLifecycleCol d.traceWidth) < 2013265921)
+    (hcanonPayload : 0 ≤ env.loc declaredLifecyclePayloadCol
+      ∧ env.loc declaredLifecyclePayloadCol < 2013265921)
     (hforged : env.loc (afterLifecycleCol d.traceWidth) ≠ env.loc declaredLifecyclePayloadCol) :
     ¬ satisfiedVm hash (rotateV3WithLifecyclePayloadGate sel beforeC? afterC d) env isFirst isLast :=
-  fun h => hforged
-    (rotateV3WithLifecyclePayloadGate_forces sel beforeC? afterC hash d env isFirst isLast hlast hsel h)
+  fun h => hforged (canon_eq_of_modEq hcanonAfter hcanonPayload
+    (rotateV3WithLifecyclePayloadGate_forces sel beforeC? afterC hash d env isFirst isLast hlast hsel h))
 
 /-- The AFTER-disc gate is STILL forced under the payload-gate layer (the payload weld is appended past
 the disc gates, so the disc-gate membership survives) — the composed mover forces BOTH the disc (state)
@@ -3849,7 +3951,7 @@ theorem rotateV3WithLifecyclePayloadGate_forces_disc (sel : Nat) (beforeC? : Opt
     (hlast : isLast = false)
     (hsel : env.loc sel = 1)
     (h : satisfiedVm hash (rotateV3WithLifecyclePayloadGate sel beforeC? afterC d) env isFirst isLast) :
-    env.loc (afterDiscCol d.traceWidth) = afterC := by
+    env.loc (afterDiscCol d.traceWidth) ≡ afterC [ZMOD 2013265921] := by
   have hmem : discForceGate sel (afterDiscCol d.traceWidth) afterC
       ∈ (rotateV3WithLifecyclePayloadGate sel beforeC? afterC d).constraints := by
     unfold rotateV3WithLifecyclePayloadGate
@@ -3929,7 +4031,7 @@ theorem rotateV3WithModeGate_forces_after (sel : Nat) (afterC : ℤ)
     (hlast : isLast = false)
     (hsel : env.loc sel = 1)
     (h : satisfiedVm hash (rotateV3WithModeGate sel afterC d) env isFirst isLast) :
-    env.loc (afterModeCol d.traceWidth) = afterC :=
+    env.loc (afterModeCol d.traceWidth) ≡ afterC [ZMOD 2013265921] :=
   discForceGate_forces env isFirst isLast hlast sel (afterModeCol d.traceWidth) afterC hsel
     (h.1 _ (rotateV3WithModeGate_mem sel afterC d))
 
@@ -3940,9 +4042,13 @@ theorem rotateV3WithModeGate_rejects_unpromoted (sel : Nat) (afterC : ℤ)
     (hash : List ℤ → ℤ) (d : EffectVmDescriptor) (env : VmRowEnv) (isFirst isLast : Bool)
     (hlast : isLast = false)
     (hsel : env.loc sel = 1)
+    (hcanonAfter : 0 ≤ env.loc (afterModeCol d.traceWidth)
+      ∧ env.loc (afterModeCol d.traceWidth) < 2013265921)
+    (hcanonConst : 0 ≤ afterC ∧ afterC < 2013265921)
     (hwrong : env.loc (afterModeCol d.traceWidth) ≠ afterC) :
     ¬ satisfiedVm hash (rotateV3WithModeGate sel afterC d) env isFirst isLast :=
-  fun h => hwrong (rotateV3WithModeGate_forces_after sel afterC hash d env isFirst isLast hlast hsel h)
+  fun h => hwrong (canon_eq_of_modEq hcanonAfter hcanonConst
+    (rotateV3WithModeGate_forces_after sel afterC hash d env isFirst isLast hlast hsel h))
 
 #assert_axioms graduable_rotateV3WithModeGate
 #assert_axioms rotateV3WithModeGate_forces_after
@@ -3989,7 +4095,7 @@ theorem rotateV3WithFieldsRootGate_forces (sel afterCol : Nat)
     (hlast : isLast = false)
     (hsel : env.loc sel = 1)
     (h : satisfiedVm hash (rotateV3WithFieldsRootGate sel afterCol d) env isFirst isLast) :
-    env.loc afterCol = env.loc declaredFieldsRootCol :=
+    env.loc afterCol ≡ env.loc declaredFieldsRootCol [ZMOD 2013265921] :=
   permsVKWeldGate_forces env isFirst isLast hlast sel afterCol declaredFieldsRootCol hsel
     (h.1 _ (rotateV3WithFieldsRootGate_mem sel afterCol d))
 
@@ -4001,9 +4107,12 @@ theorem rotateV3WithFieldsRootGate_rejects_forged (sel afterCol : Nat)
     (hash : List ℤ → ℤ) (d : EffectVmDescriptor) (env : VmRowEnv) (isFirst isLast : Bool)
     (hlast : isLast = false)
     (hsel : env.loc sel = 1)
+    (hcanonAfter : 0 ≤ env.loc afterCol ∧ env.loc afterCol < 2013265921)
+    (hcanonParam : 0 ≤ env.loc declaredFieldsRootCol ∧ env.loc declaredFieldsRootCol < 2013265921)
     (hforged : env.loc afterCol ≠ env.loc declaredFieldsRootCol) :
     ¬ satisfiedVm hash (rotateV3WithFieldsRootGate sel afterCol d) env isFirst isLast :=
-  fun h => hforged (rotateV3WithFieldsRootGate_forces sel afterCol hash d env isFirst isLast hlast hsel h)
+  fun h => hforged (canon_eq_of_modEq hcanonAfter hcanonParam
+    (rotateV3WithFieldsRootGate_forces sel afterCol hash d env isFirst isLast hlast hsel h))
 
 #assert_axioms graduable_rotateV3WithFieldsRootGate
 #assert_axioms rotateV3WithFieldsRootGate_forces
@@ -4091,10 +4200,12 @@ theorem rotateV3WithPayloadColumn_forces_anchor (off : Nat) (hash : List ℤ →
     (d : EffectVmDescriptor) (env : VmRowEnv) (isFirst : Bool) (anchor : ℤ)
     (hanchor : PayloadAnchored env d anchor)
     (h : satisfiedVm hash (rotateV3WithPayloadColumn off d) env isFirst true) :
-    env.loc (d.traceWidth + AFTER_BLOCK_OFF + off) = anchor := by
+    env.loc (d.traceWidth + AFTER_BLOCK_OFF + off) ≡ anchor [ZMOD 2013265921] := by
   have hpin := rotateV3WithRecordPin_pins off hash d env isFirst h
-  rw [hpin]
-  exact hanchor
+  unfold PayloadAnchored at hanchor
+  calc env.loc (d.traceWidth + AFTER_BLOCK_OFF + off)
+      ≡ env.pub (rotateV3 d).piCount [ZMOD 2013265921] := hpin
+    _ = anchor := hanchor
 
 /-- **TOOTH — `rotateV3WithPayloadColumn_rejects_forged` (LIGHT-CLIENT).** A LAST row whose committed
 AFTER payload sub-limb is NOT the verifier-recomputed `anchor` (a refusal forged to a different
@@ -4105,9 +4216,13 @@ payload that the bare record pin accepted (producer-free PI) is now REJECTED (ve
 theorem rotateV3WithPayloadColumn_rejects_forged (off : Nat) (hash : List ℤ → ℤ)
     (d : EffectVmDescriptor) (env : VmRowEnv) (isFirst : Bool) (anchor : ℤ)
     (hanchor : PayloadAnchored env d anchor)
+    (hcanonLimb : 0 ≤ env.loc (d.traceWidth + AFTER_BLOCK_OFF + off)
+      ∧ env.loc (d.traceWidth + AFTER_BLOCK_OFF + off) < 2013265921)
+    (hcanonAnchor : 0 ≤ anchor ∧ anchor < 2013265921)
     (hforged : env.loc (d.traceWidth + AFTER_BLOCK_OFF + off) ≠ anchor) :
     ¬ satisfiedVm hash (rotateV3WithPayloadColumn off d) env isFirst true :=
-  fun h => hforged (rotateV3WithPayloadColumn_forces_anchor off hash d env isFirst anchor hanchor h)
+  fun h => hforged (canon_eq_of_modEq hcanonLimb hcanonAnchor
+    (rotateV3WithPayloadColumn_forces_anchor off hash d env isFirst anchor hanchor h))
 
 /-- The v1 denotation survives the payload column (it IS the record pin). -/
 theorem rotateV3WithPayloadColumn_satisfiedVm_v1 (off : Nat) (hash : List ℤ → ℤ)
@@ -4143,11 +4258,15 @@ lifecycle felt) is UNSAT once the verifier anchors the slot. -/
 theorem cellSealV3_payload_rejects_forged (hash : List ℤ → ℤ) (env : VmRowEnv) (isFirst : Bool)
     (anchor : ℤ)
     (hanchor : PayloadAnchored env EffectVmEmitCellSeal.cellSealVmDescriptor anchor)
+    (hcanonLimb : 0 ≤ env.loc (EffectVmEmitCellSeal.cellSealVmDescriptor.traceWidth + AFTER_BLOCK_OFF + B_LIFECYCLE)
+      ∧ env.loc (EffectVmEmitCellSeal.cellSealVmDescriptor.traceWidth + AFTER_BLOCK_OFF + B_LIFECYCLE) < 2013265921)
+    (hcanonAnchor : 0 ≤ anchor ∧ anchor < 2013265921)
     (hforged : env.loc (EffectVmEmitCellSeal.cellSealVmDescriptor.traceWidth + AFTER_BLOCK_OFF + B_LIFECYCLE)
       ≠ anchor) :
     ¬ satisfiedVm hash (rotateV3WithPayloadColumn B_LIFECYCLE EffectVmEmitCellSeal.cellSealVmDescriptor)
       env isFirst true :=
-  rotateV3WithPayloadColumn_rejects_forged B_LIFECYCLE hash _ env isFirst anchor hanchor hforged
+  rotateV3WithPayloadColumn_rejects_forged B_LIFECYCLE hash _ env isFirst anchor hanchor
+    hcanonLimb hcanonAnchor hforged
 
 #assert_axioms cellSealV3_payload_rejects_forged
 
@@ -4341,7 +4460,7 @@ theorem withPermsVK8Weld_forces (hash : List ℤ → ℤ) (sel extra0 : Nat) (g 
     (row : Nat) (hrow : row < t.rows.length) (hnotlast : row + 1 ≠ t.rows.length)
     (hsel : (envAt t row).loc sel = 1)
     (i : Nat) (hi : i < 7) :
-    (envAt t row).loc (extra0 + i) = (envAt t row).loc (prmCol (i + 1)) := by
+    (envAt t row).loc (extra0 + i) ≡ (envAt t row).loc (prmCol (i + 1)) [ZMOD 2013265921] := by
   have hmemc : VmConstraint2.base (permsVKWeldGate sel (extra0 + i) (prmCol (i + 1)))
       ∈ (withPermsVK8Weld sel extra0 g).constraints := by
     rw [withPermsVK8Weld_constraints]
@@ -4363,9 +4482,14 @@ theorem withPermsVK8Weld_rejects_forged (hash : List ℤ → ℤ) (sel extra0 : 
     (row : Nat) (hrow : row < t.rows.length) (hnotlast : row + 1 ≠ t.rows.length)
     (hsel : (envAt t row).loc sel = 1)
     (i : Nat) (hi : i < 7)
+    (hcanonAfter : 0 ≤ (envAt t row).loc (extra0 + i)
+      ∧ (envAt t row).loc (extra0 + i) < 2013265921)
+    (hcanonParam : 0 ≤ (envAt t row).loc (prmCol (i + 1))
+      ∧ (envAt t row).loc (prmCol (i + 1)) < 2013265921)
     (hforged : (envAt t row).loc (extra0 + i) ≠ (envAt t row).loc (prmCol (i + 1))) :
     ¬ Satisfied2 hash (withPermsVK8Weld sel extra0 g) minit mfin maddrs t :=
-  fun h => hforged (withPermsVK8Weld_forces hash sel extra0 g h row hrow hnotlast hsel i hi)
+  fun h => hforged (canon_eq_of_modEq hcanonAfter hcanonParam
+    (withPermsVK8Weld_forces hash sel extra0 g h row hrow hnotlast hsel i hi))
 
 #assert_axioms withPermsVK8Weld_forces
 #assert_axioms satisfied2_of_withPermsVK8Weld
@@ -4412,7 +4536,7 @@ theorem setPermsV3_forces8_extras (hash : List ℤ → ℤ)
     (i : Nat) (hi : i < 7) :
     (envAt t row).loc
         (afterPermsExtraCol EffectVmEmitSetPermissions.setPermsVmDescriptor.traceWidth + i)
-      = (envAt t row).loc (prmCol (i + 1)) :=
+      ≡ (envAt t row).loc (prmCol (i + 1)) [ZMOD 2013265921] :=
   withPermsVK8Weld_forces hash _ _ _ h row hrow hnotlast hsel i hi
 
 /-- **FORCE-LEMMA #2 (vk) — `setVKV3_forces8_extras`.** On an ACTIVE TRANSITION setVK row of a
@@ -4426,7 +4550,7 @@ theorem setVKV3_forces8_extras (hash : List ℤ → ℤ)
     (hsel : (envAt t row).loc EffectVmEmitSetVK.SEL_SET_VK = 1)
     (i : Nat) (hi : i < 7) :
     (envAt t row).loc (afterVKExtraCol EffectVmEmitSetVK.setVKVmDescriptor.traceWidth + i)
-      = (envAt t row).loc (prmCol (i + 1)) :=
+      ≡ (envAt t row).loc (prmCol (i + 1)) [ZMOD 2013265921] :=
   withPermsVK8Weld_forces hash _ _ _ h row hrow hnotlast hsel i hi
 
 #assert_axioms setPermsV3_forces8_extras
@@ -4658,7 +4782,8 @@ theorem cellSealV3_disc_forces_sealed (hash : List ℤ → ℤ) (env : VmRowEnv)
     (hsel : env.loc EffectVmEmitCellSeal.SEL_CELLSEAL = 1)
     (h : satisfiedVm hash (rotateV3WithDiscGate EffectVmEmitCellSeal.SEL_CELLSEAL (some discLive)
       discSealed EffectVmEmitCellSeal.cellSealVmDescriptor) env isFirst isLast) :
-    env.loc (afterDiscCol EffectVmEmitCellSeal.cellSealVmDescriptor.traceWidth) = discSealed :=
+    env.loc (afterDiscCol EffectVmEmitCellSeal.cellSealVmDescriptor.traceWidth) ≡ discSealed
+      [ZMOD 2013265921] :=
   rotateV3WithDiscGate_forces_after _ _ _ hash _ env isFirst isLast hlast hsel h
 
 /-- **TOOTH — `cellSealV3_rejects_frozen` (LIVE).** A cellSeal whose AFTER disc stays `Live(0)` (the
@@ -4669,8 +4794,10 @@ theorem cellSealV3_rejects_frozen (hash : List ℤ → ℤ) (env : VmRowEnv) (is
     (hfrozen : env.loc (afterDiscCol EffectVmEmitCellSeal.cellSealVmDescriptor.traceWidth) = discLive) :
     ¬ satisfiedVm hash (rotateV3WithDiscGate EffectVmEmitCellSeal.SEL_CELLSEAL (some discLive)
       discSealed EffectVmEmitCellSeal.cellSealVmDescriptor) env isFirst isLast := by
-  apply rotateV3WithDiscGate_rejects_wrong_after _ _ _ hash _ env isFirst isLast hlast hsel
-  rw [hfrozen]; decide
+  refine rotateV3WithDiscGate_rejects_wrong_after _ _ _ hash _ env isFirst isLast hlast hsel ?_ ?_ ?_
+  · rw [hfrozen]; decide
+  · decide
+  · rw [hfrozen]; decide
 
 /-- **TOOTH — `cellDestroyV3_rejects_resurrection` (LIVE).** A cellDestroy whose AFTER disc is published
 as `Live(0)` (a Destroyed cell republished as alive) is UNSAT for a ledgerless client — the disc gate
@@ -4682,8 +4809,10 @@ theorem cellDestroyV3_rejects_resurrection (hash : List ℤ → ℤ) (env : VmRo
     (hres : env.loc (afterDiscCol EffectVmEmitCellDestroy.cellDestroyVmDescriptor.traceWidth) = discLive) :
     ¬ satisfiedVm hash (rotateV3WithDiscGate EffectVmEmitCellDestroy.SEL_CELLDESTROY none discDestroyed
       EffectVmEmitCellDestroy.cellDestroyVmDescriptor) env isFirst isLast := by
-  apply rotateV3WithDiscGate_rejects_wrong_after _ _ _ hash _ env isFirst isLast hlast hsel
-  rw [hres]; decide
+  refine rotateV3WithDiscGate_rejects_wrong_after _ _ _ hash _ env isFirst isLast hlast hsel ?_ ?_ ?_
+  · rw [hres]; decide
+  · decide
+  · rw [hres]; decide
 
 #assert_axioms cellSealV3_disc_forces_sealed
 #assert_axioms cellSealV3_rejects_frozen
@@ -4703,7 +4832,7 @@ theorem cellSealV3_payload_forced (hash : List ℤ → ℤ) (env : VmRowEnv) (is
     (h : satisfiedVm hash (rotateV3WithLifecyclePayloadGate EffectVmEmitCellSeal.SEL_CELLSEAL
       (some discLive) discSealed EffectVmEmitCellSeal.cellSealVmDescriptor) env isFirst isLast) :
     env.loc (afterLifecycleCol EffectVmEmitCellSeal.cellSealVmDescriptor.traceWidth)
-      = env.loc declaredLifecyclePayloadCol :=
+      ≡ env.loc declaredLifecyclePayloadCol [ZMOD 2013265921] :=
   rotateV3WithLifecyclePayloadGate_forces _ _ _ hash _ env isFirst isLast hlast hsel h
 
 /-- **TOOTH — `cellSealV3_payload_rejects_forged_lightclient` (LIVE, LIGHT-CLIENT).** A cellSeal forged to
@@ -4714,11 +4843,16 @@ payload the record pin accepted (producer-free PI) is now REJECTED in-circuit. -
 theorem cellSealV3_payload_rejects_forged_lightclient (hash : List ℤ → ℤ) (env : VmRowEnv)
     (isFirst isLast : Bool) (hlast : isLast = false)
     (hsel : env.loc EffectVmEmitCellSeal.SEL_CELLSEAL = 1)
+    (hcanonAfter : 0 ≤ env.loc (afterLifecycleCol EffectVmEmitCellSeal.cellSealVmDescriptor.traceWidth)
+      ∧ env.loc (afterLifecycleCol EffectVmEmitCellSeal.cellSealVmDescriptor.traceWidth) < 2013265921)
+    (hcanonPayload : 0 ≤ env.loc declaredLifecyclePayloadCol
+      ∧ env.loc declaredLifecyclePayloadCol < 2013265921)
     (hforged : env.loc (afterLifecycleCol EffectVmEmitCellSeal.cellSealVmDescriptor.traceWidth)
       ≠ env.loc declaredLifecyclePayloadCol) :
     ¬ satisfiedVm hash (rotateV3WithLifecyclePayloadGate EffectVmEmitCellSeal.SEL_CELLSEAL
       (some discLive) discSealed EffectVmEmitCellSeal.cellSealVmDescriptor) env isFirst isLast :=
-  rotateV3WithLifecyclePayloadGate_rejects_forged _ _ _ hash _ env isFirst isLast hlast hsel hforged
+  rotateV3WithLifecyclePayloadGate_rejects_forged _ _ _ hash _ env isFirst isLast hlast hsel
+    hcanonAfter hcanonPayload hforged
 
 /-- **TOOTH — `cellDestroyV3_payload_rejects_forged_lightclient` (LIVE).** A cellDestroy forged to differ in
 the death-certificate payload (`death_certificate_hash` / `destroyed_at`) folded into `lifecycle_felt` is
@@ -4726,11 +4860,16 @@ UNSAT ledgerless — the in-circuit payload weld bites. -/
 theorem cellDestroyV3_payload_rejects_forged_lightclient (hash : List ℤ → ℤ) (env : VmRowEnv)
     (isFirst isLast : Bool) (hlast : isLast = false)
     (hsel : env.loc EffectVmEmitCellDestroy.SEL_CELLDESTROY = 1)
+    (hcanonAfter : 0 ≤ env.loc (afterLifecycleCol EffectVmEmitCellDestroy.cellDestroyVmDescriptor.traceWidth)
+      ∧ env.loc (afterLifecycleCol EffectVmEmitCellDestroy.cellDestroyVmDescriptor.traceWidth) < 2013265921)
+    (hcanonPayload : 0 ≤ env.loc declaredLifecyclePayloadCol
+      ∧ env.loc declaredLifecyclePayloadCol < 2013265921)
     (hforged : env.loc (afterLifecycleCol EffectVmEmitCellDestroy.cellDestroyVmDescriptor.traceWidth)
       ≠ env.loc declaredLifecyclePayloadCol) :
     ¬ satisfiedVm hash (rotateV3WithLifecyclePayloadGate EffectVmEmitCellDestroy.SEL_CELLDESTROY
       none discDestroyed EffectVmEmitCellDestroy.cellDestroyVmDescriptor) env isFirst isLast :=
-  rotateV3WithLifecyclePayloadGate_rejects_forged _ _ _ hash _ env isFirst isLast hlast hsel hforged
+  rotateV3WithLifecyclePayloadGate_rejects_forged _ _ _ hash _ env isFirst isLast hlast hsel
+    hcanonAfter hcanonPayload hforged
 
 /-- **TOOTH — `receiptArchiveV3_payload_rejects_forged_lightclient` (LIVE).** A receiptArchive forged to
 differ in the archival checkpoint (`checkpoint_hash` / `archived_through`) folded into `lifecycle_felt` is
@@ -4738,12 +4877,20 @@ UNSAT ledgerless. -/
 theorem receiptArchiveV3_payload_rejects_forged_lightclient (hash : List ℤ → ℤ) (env : VmRowEnv)
     (isFirst isLast : Bool) (hlast : isLast = false)
     (hsel : env.loc EffectVmEmitReceiptArchive.SEL_RECEIPT_ARCHIVE_RT = 1)
+    (hcanonAfter : 0 ≤ env.loc
+        (afterLifecycleCol EffectVmEmitReceiptArchive.receiptArchiveActorVmDescriptor.traceWidth)
+      ∧ env.loc
+        (afterLifecycleCol EffectVmEmitReceiptArchive.receiptArchiveActorVmDescriptor.traceWidth)
+        < 2013265921)
+    (hcanonPayload : 0 ≤ env.loc declaredLifecyclePayloadCol
+      ∧ env.loc declaredLifecyclePayloadCol < 2013265921)
     (hforged : env.loc
       (afterLifecycleCol EffectVmEmitReceiptArchive.receiptArchiveActorVmDescriptor.traceWidth)
       ≠ env.loc declaredLifecyclePayloadCol) :
     ¬ satisfiedVm hash (rotateV3WithLifecyclePayloadGate EffectVmEmitReceiptArchive.SEL_RECEIPT_ARCHIVE_RT
       none discArchived EffectVmEmitReceiptArchive.receiptArchiveActorVmDescriptor) env isFirst isLast :=
-  rotateV3WithLifecyclePayloadGate_rejects_forged _ _ _ hash _ env isFirst isLast hlast hsel hforged
+  rotateV3WithLifecyclePayloadGate_rejects_forged _ _ _ hash _ env isFirst isLast hlast hsel
+    hcanonAfter hcanonPayload hforged
 
 #assert_axioms cellSealV3_payload_forced
 #assert_axioms cellSealV3_payload_rejects_forged_lightclient
@@ -4763,7 +4910,7 @@ theorem setPermsV3_forces_declared (hash : List ℤ → ℤ) (env : VmRowEnv) (i
       (afterPermsCol EffectVmEmitSetPermissions.setPermsVmDescriptor.traceWidth)
       EffectVmEmitSetPermissions.setPermsVmDescriptor) env isFirst isLast) :
     env.loc (afterPermsCol EffectVmEmitSetPermissions.setPermsVmDescriptor.traceWidth)
-      = env.loc declaredParamCol :=
+      ≡ env.loc declaredParamCol [ZMOD 2013265921] :=
   rotateV3WithPermsVKGate_forces _ _ hash _ env isFirst isLast hlast hsel h
 
 /-- **TOOTH — `setPermsV3_rejects_forged` (LIVE).** A setPermissions whose committed AFTER perms-digest
@@ -4773,12 +4920,16 @@ in-circuit with no trusted post-cell. -/
 theorem setPermsV3_rejects_forged (hash : List ℤ → ℤ) (env : VmRowEnv) (isFirst isLast : Bool)
     (hlast : isLast = false)
     (hsel : env.loc EffectVmEmitSetPermissions.SEL_SET_PERMS = 1)
+    (hcanonAfter : 0 ≤ env.loc (afterPermsCol EffectVmEmitSetPermissions.setPermsVmDescriptor.traceWidth)
+      ∧ env.loc (afterPermsCol EffectVmEmitSetPermissions.setPermsVmDescriptor.traceWidth) < 2013265921)
+    (hcanonParam : 0 ≤ env.loc declaredParamCol ∧ env.loc declaredParamCol < 2013265921)
     (hforged : env.loc (afterPermsCol EffectVmEmitSetPermissions.setPermsVmDescriptor.traceWidth)
       ≠ env.loc declaredParamCol) :
     ¬ satisfiedVm hash (rotateV3WithPermsVKGate EffectVmEmitSetPermissions.SEL_SET_PERMS
       (afterPermsCol EffectVmEmitSetPermissions.setPermsVmDescriptor.traceWidth)
       EffectVmEmitSetPermissions.setPermsVmDescriptor) env isFirst isLast :=
-  rotateV3WithPermsVKGate_rejects_forged _ _ hash _ env isFirst isLast hlast hsel hforged
+  rotateV3WithPermsVKGate_rejects_forged _ _ hash _ env isFirst isLast hlast hsel
+    hcanonAfter hcanonParam hforged
 
 /-- **TOOTH — `setVKV3_rejects_forged` (LIVE).** A setVK whose committed AFTER vk-digest ≠ the declared
 (PI-anchored) param — a forged post-VK (the upgrade-safety forgery: binding an ARBITRARY verification
@@ -4786,12 +4937,16 @@ key into NEW_COMMIT) — is UNSAT for a ledgerless client, no trusted post-cell.
 theorem setVKV3_rejects_forged (hash : List ℤ → ℤ) (env : VmRowEnv) (isFirst isLast : Bool)
     (hlast : isLast = false)
     (hsel : env.loc EffectVmEmitSetVK.SEL_SET_VK = 1)
+    (hcanonAfter : 0 ≤ env.loc (afterVKCol EffectVmEmitSetVK.setVKVmDescriptor.traceWidth)
+      ∧ env.loc (afterVKCol EffectVmEmitSetVK.setVKVmDescriptor.traceWidth) < 2013265921)
+    (hcanonParam : 0 ≤ env.loc declaredParamCol ∧ env.loc declaredParamCol < 2013265921)
     (hforged : env.loc (afterVKCol EffectVmEmitSetVK.setVKVmDescriptor.traceWidth)
       ≠ env.loc declaredParamCol) :
     ¬ satisfiedVm hash (rotateV3WithPermsVKGate EffectVmEmitSetVK.SEL_SET_VK
       (afterVKCol EffectVmEmitSetVK.setVKVmDescriptor.traceWidth)
       EffectVmEmitSetVK.setVKVmDescriptor) env isFirst isLast :=
-  rotateV3WithPermsVKGate_rejects_forged _ _ hash _ env isFirst isLast hlast hsel hforged
+  rotateV3WithPermsVKGate_rejects_forged _ _ hash _ env isFirst isLast hlast hsel
+    hcanonAfter hcanonParam hforged
 
 #assert_axioms setPermsV3_forces_declared
 #assert_axioms setPermsV3_rejects_forged
@@ -4809,7 +4964,7 @@ theorem makeSovereignV3_forces_sovereign (hash : List ℤ → ℤ) (env : VmRowE
     (h : satisfiedVm hash (rotateV3WithModeGate EffectVmEmitMakeSovereign.SEL_MAKE_SOVEREIGN_RT
       modeSovereign EffectVmEmitMakeSovereign.makeSovereignRuntimeVmDescriptor) env isFirst isLast) :
     env.loc (afterModeCol EffectVmEmitMakeSovereign.makeSovereignRuntimeVmDescriptor.traceWidth)
-      = modeSovereign :=
+      ≡ modeSovereign [ZMOD 2013265921] :=
   rotateV3WithModeGate_forces_after _ _ hash _ env isFirst isLast hlast hsel h
 
 /-- **TOOTH — `makeSovereignV3_rejects_unpromoted` (LIVE).** A makeSovereign whose committed AFTER mode
@@ -4823,8 +4978,10 @@ theorem makeSovereignV3_rejects_unpromoted (hash : List ℤ → ℤ) (env : VmRo
       = modeHosted) :
     ¬ satisfiedVm hash (rotateV3WithModeGate EffectVmEmitMakeSovereign.SEL_MAKE_SOVEREIGN_RT
       modeSovereign EffectVmEmitMakeSovereign.makeSovereignRuntimeVmDescriptor) env isFirst isLast := by
-  apply rotateV3WithModeGate_rejects_unpromoted _ _ hash _ env isFirst isLast hlast hsel
-  rw [hunpromoted]; decide
+  refine rotateV3WithModeGate_rejects_unpromoted _ _ hash _ env isFirst isLast hlast hsel ?_ ?_ ?_
+  · rw [hunpromoted]; decide
+  · decide
+  · rw [hunpromoted]; decide
 
 /-- **TOOTH — `setFieldDynV3_rejects_forged` (LIVE).** A dynamic setField whose committed AFTER
 `fields_root` sub-limb ≠ the declared post-`fields_root` param — a forged post-`fields_root` (the
@@ -4832,11 +4989,15 @@ dynamic write committed to an arbitrary overflow map) — is UNSAT for a ledgerl
 theorem setFieldDynV3_rejects_forged (hash : List ℤ → ℤ) (env : VmRowEnv) (isFirst isLast : Bool)
     (hlast : isLast = false)
     (hsel : env.loc EffectVmEmitSetField.SEL_SET_FIELD = 1)
+    (hcanonAfter : 0 ≤ env.loc (afterFieldsRootCol setFieldDynV1Face.traceWidth)
+      ∧ env.loc (afterFieldsRootCol setFieldDynV1Face.traceWidth) < 2013265921)
+    (hcanonParam : 0 ≤ env.loc declaredFieldsRootCol ∧ env.loc declaredFieldsRootCol < 2013265921)
     (hforged : env.loc (afterFieldsRootCol setFieldDynV1Face.traceWidth)
       ≠ env.loc declaredFieldsRootCol) :
     ¬ satisfiedVm hash (rotateV3WithFieldsRootGate EffectVmEmitSetField.SEL_SET_FIELD
       (afterFieldsRootCol setFieldDynV1Face.traceWidth) setFieldDynV1Face) env isFirst isLast :=
-  rotateV3WithFieldsRootGate_rejects_forged _ _ hash _ env isFirst isLast hlast hsel hforged
+  rotateV3WithFieldsRootGate_rejects_forged _ _ hash _ env isFirst isLast hlast hsel
+    hcanonAfter hcanonParam hforged
 
 #assert_axioms makeSovereignV3_forces_sovereign
 #assert_axioms makeSovereignV3_rejects_unpromoted
@@ -5038,7 +5199,7 @@ theorem withAfterOctetPins_publishes (hash : List ℤ → ℤ) (g : EffectVmDesc
     (hsat : Satisfied2 hash (withAfterOctetPins g octetBase) minit mfin maddrs t)
     (i : Nat) (hi : i < t.rows.length) (hlast : i + 1 = t.rows.length) :
     ∀ k : Fin 8, (envAt t i).loc (EFFECT_VM_WIDTH + AFTER_BLOCK_OFF + (octetBase + k.val))
-      = (envAt t i).pub (g.piCount + k.val) := by
+      ≡ (envAt t i).pub (g.piCount + k.val) [ZMOD 2013265921] := by
   intro k
   have hlastt : (i + 1 == t.rows.length) = true := by simp [hlast]
   have hin : VmConstraint2.base
@@ -5145,7 +5306,7 @@ theorem withDfaRcPins_publishes (hash : List ℤ → ℤ) (g : EffectVmDescripto
     (hsat : Satisfied2 hash (withDfaRcPins g) minit mfin maddrs t)
     (i : Nat) (hi : i < t.rows.length) (hlast : i + 1 = t.rows.length) :
     ∀ k : Fin 4, (envAt t i).loc (EFFECT_VM_WIDTH + CAVEAT_REGION_OFF + (C_RC_OFF + k.val))
-      = (envAt t i).pub (g.piCount + k.val) := by
+      ≡ (envAt t i).pub (g.piCount + k.val) [ZMOD 2013265921] := by
   intro k
   have hlastt : (i + 1 == t.rows.length) = true := by simp [hlast]
   have hin : VmConstraint2.base
@@ -5265,7 +5426,7 @@ theorem withMintHashPin_publishes (hash : List ℤ → ℤ) (g : EffectVmDescrip
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
     (hsat : Satisfied2 hash (withMintHashPin g) minit mfin maddrs t)
     (h0 : 0 < t.rows.length) :
-    (envAt t 0).loc MINT_HASH_PARAM_COL = (envAt t 0).pub g.piCount := by
+    (envAt t 0).loc MINT_HASH_PARAM_COL ≡ (envAt t 0).pub g.piCount [ZMOD 2013265921] := by
   have hin : VmConstraint2.base (.piBinding .first MINT_HASH_PARAM_COL g.piCount)
       ∈ (withMintHashPin g).constraints := by
     rw [withMintHashPin_constraints]
@@ -5279,9 +5440,13 @@ theorem withMintHashPin_publishes (hash : List ℤ → ℤ) (g : EffectVmDescrip
 theorem withMintHashPin_rejects_forged_pi (hash : List ℤ → ℤ) (g : EffectVmDescriptor2)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
     (h0 : 0 < t.rows.length)
+    (hcanonParam : 0 ≤ (envAt t 0).loc MINT_HASH_PARAM_COL
+      ∧ (envAt t 0).loc MINT_HASH_PARAM_COL < 2013265921)
+    (hcanonPI : 0 ≤ (envAt t 0).pub g.piCount ∧ (envAt t 0).pub g.piCount < 2013265921)
     (hforged : (envAt t 0).loc MINT_HASH_PARAM_COL ≠ (envAt t 0).pub g.piCount) :
     ¬ Satisfied2 hash (withMintHashPin g) minit mfin maddrs t :=
-  fun hsat => hforged (withMintHashPin_publishes hash g minit mfin maddrs t hsat h0)
+  fun hsat => hforged (canon_eq_of_modEq hcanonParam hcanonPI
+    (withMintHashPin_publishes hash g minit mfin maddrs t hsat h0))
 
 #assert_axioms satisfied2_of_withMintHashPin
 #assert_axioms withMintHashPin_publishes
@@ -5389,9 +5554,9 @@ def v3Registry : List (String × EffectVmDescriptor2) :=
     && (d.traceWidth - (EFFECT_VM_WIDTH + APPENDIX_SPAN)) % (CHIP_OUT_LANES - 1) == 0
 #guard v3Registry.all fun (_, d) => d.tables.length == 5
 #guard v3Registry.all fun (_, d) => d.hashSites.length == 0 && d.ranges.length == 0
--- The rotated transfer: the v1 graduation's constraints + 24 welds + 4 pins + 124 chip sites (v13).
+-- The rotated transfer: the v1 graduation's constraints + 24 welds + 4 pins + 130 chip sites (v13).
 #guard (v3Of EffectVmEmitTransfer.transferVmDescriptor).constraints.length
-        == transferVmDescriptor2.constraints.length + 24 + 4 + 124
+        == transferVmDescriptor2.constraints.length + 24 + 4 + 130
 #guard (v3Of EffectVmEmitTransfer.transferVmDescriptor).piCount == 42 + 4
 -- The graduation side conditions hold on every v1-faced member (per-instance witnesses of
 -- the parametric `graduable_rotateV3`; attenuate/setFieldDyn ride `v3OfWith` over faces
@@ -5572,7 +5737,7 @@ theorem revokeDelegationWriteV3_forces_epoch_bump (hash : List ℤ → ℤ)
     (i : Nat) (hi : i < t.rows.length) (hnl : (i + 1 == t.rows.length) = false)
     (hactive : (envAt t i).loc sel.REVOKE_DELEGATION = 1) :
     (envAt t i).loc (afterEpochCol EFFECT_VM_WIDTH)
-      = (envAt t i).loc (beforeEpochCol EFFECT_VM_WIDTH) + 1 := by
+      ≡ (envAt t i).loc (beforeEpochCol EFFECT_VM_WIDTH) + 1 [ZMOD 2013265921] := by
   have hrowc := hsat.rowConstraints i hi
   have hmem : (VmConstraint2.base (epochBumpGate sel.REVOKE_DELEGATION
       (beforeEpochCol EFFECT_VM_WIDTH) (afterEpochCol EFFECT_VM_WIDTH)))
@@ -5592,10 +5757,15 @@ theorem revokeDelegationWriteV3_rejects_wrong_epoch (hash : List ℤ → ℤ)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
     (i : Nat) (hi : i < t.rows.length) (hnl : (i + 1 == t.rows.length) = false)
     (hactive : (envAt t i).loc sel.REVOKE_DELEGATION = 1)
+    (hcanonAfter : 0 ≤ (envAt t i).loc (afterEpochCol EFFECT_VM_WIDTH)
+      ∧ (envAt t i).loc (afterEpochCol EFFECT_VM_WIDTH) < 2013265921)
+    (hcanonBeforeBump : 0 ≤ (envAt t i).loc (beforeEpochCol EFFECT_VM_WIDTH) + 1
+      ∧ (envAt t i).loc (beforeEpochCol EFFECT_VM_WIDTH) + 1 < 2013265921)
     (hwrong : (envAt t i).loc (afterEpochCol EFFECT_VM_WIDTH)
       ≠ (envAt t i).loc (beforeEpochCol EFFECT_VM_WIDTH) + 1) :
     ¬ Satisfied2 hash revokeDelegationWriteV3 minit mfin maddrs t :=
-  fun hsat => hwrong (revokeDelegationWriteV3_forces_epoch_bump hash minit mfin maddrs t hsat i hi hnl hactive)
+  fun hsat => hwrong (canon_eq_of_modEq hcanonAfter hcanonBeforeBump
+    (revokeDelegationWriteV3_forces_epoch_bump hash minit mfin maddrs t hsat i hi hnl hactive))
 
 -- (`refreshDelegationWriteV3_forces_write` — the arity-2 map-op DELEG-write theorem — is DELETED: the
 -- scalar `delegReadOpRot`/`delegUpdateWriteOpRot` pair was shape-UNSAT against the deployed
