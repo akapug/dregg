@@ -66,8 +66,8 @@ open Dregg2.Circuit.Emit.EffectVmEmitTransfer (boundaryLastPins boundaryLast_pin
 open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (CellState)
 open Dregg2.Circuit.Emit.EffectVmEmitPipelinedSend
   (SEL_PIPELINED_SEND IsPipelinedSendRow pipelinedSendRowGates pipelinedSendVmDescriptor
-   PipelinedSendRowIntent pipelinedSendVm_faithful RowEncodesSend CellSendSpec intent_to_cellSpec
-   goodSendRow goodSendRow_noop goodSendRow_realizes_intent)
+   PipelinedSendRowIntent PipelinedSendRowCanon pipelinedSendVm_faithful RowEncodesSend
+   CellSendSpec intent_to_cellSpec goodSendRow goodSendRow_noop goodSendRow_realizes_intent)
 open Dregg2.Circuit.Emit.EffectVmFullStateRunnable
   (baseAbsorbedCols wideHashSites RunnableFullStateSpec runnable_full_sound)
 open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
@@ -85,9 +85,13 @@ boundary layers dropped — the analog of `EffectVmFullStateRunnable.transferGat
 
 /-- **`pipelinedSendGates_give_cellSpec` — the GATE-ONLY per-cell soundness.** The narrow descriptor's
 per-row gates (a constraint-list segment), on a pipelined-send row decoded by `RowEncodesSend`, force
-`CellSendSpec`. No hash-site hypothesis. -/
+`CellSendSpec`. No hash-site hypothesis. Under the mod-p `holdsVm` denotation the ℤ-stated row intent
+is read back off the field-checked gates via the explicit canonicality envelope
+(`PipelinedSendRowCanon` — the deployed range-check invariant), exactly as in the narrow
+`pipelinedSendDescriptor_full_sound`. -/
 theorem pipelinedSendGates_give_cellSpec (env : VmRowEnv) (pre post : CellState)
-    (hnoop : env.loc sel.NOOP = 0) (henc : RowEncodesSend env pre post)
+    (hnoop : env.loc sel.NOOP = 0) (hcanon : PipelinedSendRowCanon env)
+    (henc : RowEncodesSend env pre post)
     (hgates : ∀ c ∈ pipelinedSendVmDescriptor.constraints, c.holdsVm env true false) :
     CellSendSpec pre post := by
   -- the per-row gates are a sub-list of the descriptor's constraints; restrict to them (flag-free).
@@ -105,7 +109,8 @@ theorem pipelinedSendGates_give_cellSpec (env : VmRowEnv) (pre post : CellState)
       List.mem_range] at hc
     rcases hc with (rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩ <;>
       simpa only [VmConstraint.holdsVm] using hh
-  exact intent_to_cellSpec env pre post hnoop henc ((pipelinedSendVm_faithful env).mp hrowgates)
+  exact intent_to_cellSpec env pre post hnoop henc
+    ((pipelinedSendVm_faithful env hcanon).mp hrowgates)
 
 #assert_axioms pipelinedSendGates_give_cellSpec
 
@@ -142,37 +147,39 @@ def PipelinedSendFullClause (preRoots : SysRoots)
   CellSendSpec pre post ∧ postRoots = preRoots
 
 /-- **`pipelinedSendRunnableSpec` — the FULL-state RUNNABLE instance.** `decodeAfter` is `RowEncodesSend`
-PLUS the frozen-roots witness + the carrier-is-digest link; `decodeFull` projects the wide descriptor's
-per-row gates (= the narrow's) to the GATE-ONLY `pipelinedSendGates_give_cellSpec`, then carries the
-frozen-roots fact. THIN. NON-VACUOUS: `fullClause` is the genuine per-cell freeze+tick + the frozen
-sub-block, NOT `True`. -/
+PLUS the explicit canonicality envelope (`PipelinedSendRowCanon` — the deployed range-check invariant,
+needed to read the ℤ-stated intent off the mod-p gates) PLUS the frozen-roots witness + the
+carrier-is-digest link; `decodeFull` projects the wide descriptor's per-row gates (= the narrow's) to the
+GATE-ONLY `pipelinedSendGates_give_cellSpec`, then carries the frozen-roots fact. THIN. NON-VACUOUS:
+`fullClause` is the genuine per-cell freeze+tick + the frozen sub-block, NOT `True`. -/
 def pipelinedSendRunnableSpec (preRoots : SysRoots) : RunnableFullStateSpec CellState where
   descriptor    := pipelinedSendVmDescriptorWide
   usesWideSites := rfl
   isRow         := IsPipelinedSendRow
   decodeAfter   := fun env pre post postRoots =>
-    RowEncodesSend env pre post ∧ postRoots = preRoots
+    RowEncodesSend env pre post ∧ PipelinedSendRowCanon env ∧ postRoots = preRoots
   fullClause    := PipelinedSendFullClause preRoots
   decodeFull    := by
     intro env pre post postRoots hrow hdec hgates
-    obtain ⟨henc, hroots⟩ := hdec
+    obtain ⟨henc, hcanon, hroots⟩ := hdec
     obtain ⟨_, hnoop⟩ := hrow
-    exact ⟨pipelinedSendGates_give_cellSpec env pre post hnoop henc
+    exact ⟨pipelinedSendGates_give_cellSpec env pre post hnoop hcanon henc
             (pipelinedSendWide_constraints_eq ▸ hgates), hroots⟩
 
 /-- **`pipelinedSend_runnable_full_sound` — THE CROWN (pipelinedSend slice).** A row satisfying the
 RUNNABLE wide descriptor (`satisfiedVm pipelinedSendVmDescriptorWide`, first/last active), under the
-structured decode (`RowEncodesSend` + frozen roots), pins the FULL 17-field declarative post-state: the
+structured decode (`RowEncodesSend` + the `PipelinedSendRowCanon` range-check envelope + frozen roots),
+pins the FULL 17-field declarative post-state: the
 per-cell `CellSendSpec` (economic block FROZEN, nonce TICKED) AND all 8 side-table roots FROZEN. This is
 the analog of the abstract `pipelinedSendA_full_sound`, but for the circuit the prover ACTUALLY RUNS. -/
 theorem pipelinedSend_runnable_full_sound (hash : List ℤ → ℤ)
     (env : VmRowEnv) (pre post : CellState) (sr preRoots : SysRoots)
-    (hrow : IsPipelinedSendRow env)
+    (hrow : IsPipelinedSendRow env) (hcanon : PipelinedSendRowCanon env)
     (henc : RowEncodesSend env pre post) (hroots : sr = preRoots)
     (hsat : satisfiedVm hash pipelinedSendVmDescriptorWide env true false) :
     CellSendSpec pre post ∧ sr = preRoots :=
   runnable_full_sound (pipelinedSendRunnableSpec preRoots) hash env pre post sr
-    hrow ⟨henc, hroots⟩ hsat
+    hrow ⟨henc, hcanon, hroots⟩ hsat
 
 #assert_axioms pipelinedSend_runnable_full_sound
 
