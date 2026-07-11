@@ -75,7 +75,7 @@ async function main() {
 
   const SERVICE_PORT = 8793;
   const svc = spawn(SERVICE_BIN, [], {
-    env: { ...process.env, DUNGEON_BIND: `127.0.0.1:${SERVICE_PORT}` },
+    env: { ...process.env, DREGG_NARRATOR: process.env.DREGG_NARRATOR || "scripted", DUNGEON_BIND: `127.0.0.1:${SERVICE_PORT}` },
     stdio: ["ignore", "pipe", "pipe"],
   });
   const svcLog = [];
