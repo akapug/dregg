@@ -2491,8 +2491,9 @@ pub const CAP_OPEN_DIGEST_W: usize = crate::cap_root::CAP_DIGEST_W; // 8
 /// columns = `7 + 8 + 16·17 + 8 + 2 + 32 = 329`. The 7 spare permutation lanes per absorb are PROMOTED
 /// into the bound 8-felt fold (the whole `node8` group is committed), so there is NO separate
 /// chip-lane tail — the membership span IS the full appendix. The trailing 32 mask-bit columns carry
-/// the boolean decomposition of the FULL effect mask the genuine SUBMASK facet gate
-/// (`maskBitBoolGate`/`maskReconGate`/`selectedBitGate`) reads. Mirrors the Lean
+/// the PER-16-BIT-LIMB decomposition of the FULL effect mask the genuine SUBMASK facet gate reads
+/// (`maskBitBoolGate` + the two per-limb recon gates `maskReconLoGate`/`maskReconHiGate` (MASK-RECON-WRAP
+/// FIX) + `selectedBitGate`). Mirrors the Lean
 /// `CapOpenEmit.CAP_OPEN_SPAN = 7 + 8 + DEPTH·17 + 8 + 2 + MASK_BITS = 329`.
 pub const CAP_OPEN_MEMBERSHIP_COLS: usize = 7
     + CAP_OPEN_DIGEST_W
@@ -2872,13 +2873,19 @@ pub fn fill_cap_open(row: &mut [BabyBear], base: usize, w: &CapOpenWitness) {
     // effect-kind bit (`w.eff_bit` — EFFECT_TRANSFER for transfer/attenuate, each fan-out leg its own
     // `1<<n`); the `effBitGateFor` pins it.
     row[root_base + 9] = BabyBear::new(w.eff_bit);
-    // residual (a) — GENUINE MEMBERSHIP: the 32-bit decomposition of the FULL effect mask
+    // residual (a) — GENUINE MEMBERSHIP: the PER-16-BIT-LIMB decomposition of the FULL effect mask
     // `maskOfLimbs(mask_lo, mask_hi) = mask_lo + mask_hi·65536` (leaf fields 3 + 4) at `base + 297 + i`.
-    // The `maskBitBoolGate` booleans each bit, `maskReconGate` binds `full_mask = Σ bitᵢ·2ⁱ`, and
-    // `selectedBitGate n` gates bit `n` (where `eff_bit = 1<<n`) set — the genuine `(eff_bit &
-    // full_mask) == eff_bit` SUBMASK, NOT the over-strict equality `mask_lo == eff_bit`. A BROAD honest
-    // cap (`EFFECT_ALL`, mask_lo = 0xFFFF, mask_hi = 0xFFFF) decomposes with bit `n` set, so it PERMITS
-    // the effect — and no `mask_hi == 0` pin rejects it.
+    // MASK-RECON-WRAP FIX (verdict A, deployed soundness gap #2): the `maskBitBoolGate` booleans each
+    // bit; the two per-limb recon gates `maskReconLoGate` (`mask_lo == Σ_{i<16} bitᵢ·2ⁱ`, bits 0..15) and
+    // `maskReconHiGate` (`mask_hi == Σ_{i<16} bit_{16+i}·2ⁱ`, bits 16..31) bind EACH limb from its OWN 16
+    // bits — each sum `< 2^16 < p`, so the mod-`p` gate + cell canonicality (mask_lo/mask_hi `< p`) pins
+    // the limb EXACTLY (a genuine `< 2^16` range check), with NO `p`-shifted decomposition possible (the
+    // old single 32-bit `maskReconGate` admitted `M+2p` bits because `2p < 2^32`). `selectedBitGate n`
+    // then gates bit `n` (`eff_bit = 1<<n`) set — the genuine `(eff_bit & full_mask) == eff_bit` SUBMASK.
+    // A BROAD honest cap (`EFFECT_ALL`, mask_lo = mask_hi = 0xFFFF) still decomposes (each limb 0xFFFF <
+    // 2^16). The FILL is unchanged: `full_mask >> i & 1` for i<16 IS mask_lo's bit i, for 16≤i<32 IS
+    // mask_hi's bit (i-16), since honest limbs are each < 2^16 — so the honest witness satisfies both
+    // per-limb gates. Twin: Lean `DeployedCapOpen.maskReconLoGate`/`maskReconHiGate`, `CapOpenEmit`.
     let full_mask: u64 = w.leaf[3].as_u32() as u64 + (w.leaf[4].as_u32() as u64) * 65536;
     for i in 0..CAP_OPEN_MASK_BITS {
         row[root_base + 10 + i] = BabyBear::new(((full_mask >> i) & 1) as u32);

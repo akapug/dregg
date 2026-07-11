@@ -336,6 +336,161 @@ def maskReconGate (c : CapOpenCols) : EmittedExpr :=
   .add (.add (.var (c.leaf 3)) (.mul (.const 65536) (.var (c.leaf 4))))
        (.mul (.const (-1)) (reconMaskExpr c MASK_BITS))
 
+/-! ### PER-16-BIT-LIMB reconstruction — the MASK-RECON-WRAP FIX (verdict A, deployed soundness gap #2).
+
+`maskReconGate` binds `mask_lo + mask_hi·65536 = Σ_{i<32} bitᵢ·2ⁱ` only mod `p`, and `2p = 0xF0000002 <
+2^32`, so a `p`-shifted 32-bit boolean decomposition of the committed mask (`M+p`, `M+2p`) ALSO vanishes
+mod `p` with DIFFERENT bits — a capability-authorization forgery (a cap granting nothing can flip a
+`selectedBit`). Narrowing is unavailable (`EFFECT_ALL = 0xFFFFFFFF ≥ p` is a legitimate mask). The FIX
+reconstructs EACH 16-bit limb from its OWN 16 bits: `mask_lo = Σ_{i<16} bitᵢ·2ⁱ` and `mask_hi = Σ_{i<16}
+bit_{16+i}·2ⁱ`. Each limb sum is `< 2^16 < p`, so the mod-`p` limb gate + cell canonicality (`0 ≤ mask_lo,
+mask_hi < p`) pins the limb EXACTLY (residual in `(−p, p)`) — a GENUINE `mask_lo, mask_hi < 2^16` range
+check with NO `p`-shift possible (`mask_lo + p > 2^16` fails it). The full 32-bit `maskReconGate` is then a
+DERIVED consequence (`maskReconGate_of_limbs`), not an assumed carrier: `reconExact` is discharged. -/
+
+/-- The per-limb bit width (`MASK_BITS = 2·MASK_LIMB_BITS`). -/
+def MASK_LIMB_BITS : Nat := 16
+
+/-- The bit-weighted reconstruction of the LIMB whose bits start at column offset `off`:
+`Σ_{i<n} bit_{off+i}·2ⁱ` (an `EmittedExpr`). The low limb is `reconLimbExpr c 0 16`, the high limb
+`reconLimbExpr c 16 16`. -/
+def reconLimbExpr (c : CapOpenCols) (off : Nat) : Nat → EmittedExpr
+  | 0     => .const 0
+  | n + 1 => .add (reconLimbExpr c off n) (.mul (.var (c.bit (off + n))) (.const ((2 ^ n : Nat) : ℤ)))
+
+/-- The Nat limb reconstruction `Σ_{i<n} b_{off+i}·2ⁱ`. -/
+def reconLimbN (b : Nat → Nat) (off : Nat) : Nat → Nat
+  | 0     => 0
+  | n + 1 => reconLimbN b off n + b (off + n) * 2 ^ n
+
+/-- A boolean limb reconstruction over `[off, off+W)` is `< 2^W` — the RANGE that makes the mod-`p`
+limb gate exact (`2^16 < p`, so no `p`-shift). -/
+theorem reconLimbN_lt (b : Nat → Nat) (off W : Nat)
+    (hb : ∀ i, i < W → b (off + i) = 0 ∨ b (off + i) = 1) : reconLimbN b off W < 2 ^ W := by
+  induction W with
+  | zero => simp [reconLimbN]
+  | succ w ih =>
+    have ihw := ih (fun i hi => hb i (Nat.lt_succ_of_lt hi))
+    unfold reconLimbN
+    have hbw : b (off + w) ≤ 1 := by rcases hb w (Nat.lt_succ_self w) with h | h <;> omega
+    have hle : b (off + w) * 2 ^ w ≤ 2 ^ w := by
+      calc b (off + w) * 2 ^ w ≤ 1 * 2 ^ w := Nat.mul_le_mul_right _ hbw
+        _ = 2 ^ w := by ring
+    have hpow : 2 ^ (w + 1) = 2 ^ w + 2 ^ w := by rw [pow_succ]; ring
+    omega
+
+/-- The `EmittedExpr` limb reconstruction evaluates to the Nat limb reconstruction (cast to `ℤ`),
+when the limb's bit columns are boolean. -/
+theorem reconLimbExpr_eval (c : CapOpenCols) (env : VmRowEnv) (off W : Nat)
+    (hbit : ∀ i, i < W → env.loc (c.bit (off + i)) = 0 ∨ env.loc (c.bit (off + i)) = 1) :
+    (reconLimbExpr c off W).eval env.loc
+      = ((reconLimbN (fun i => (env.loc (c.bit i)).toNat) off W : Nat) : ℤ) := by
+  induction W with
+  | zero => simp [reconLimbExpr, reconLimbN, EmittedExpr.eval]
+  | succ w ih =>
+    have ihw := ih (fun i hi => hbit i (Nat.lt_succ_of_lt hi))
+    simp only [reconLimbExpr, reconLimbN, EmittedExpr.eval, ihw]
+    push_cast
+    rcases hbit w (Nat.lt_succ_self w) with h0 | h1
+    · rw [h0]; simp
+    · rw [h1]; simp
+
+/-- **`maskReconLoGate c`** (the FIX) — the LOW-limb recomposition: `mask_lo − Σ_{i<16} bitᵢ·2ⁱ = 0`.
+The sum is `< 2^16 < p`, so with `mask_lo` canonical (`< p`) the mod-`p` gate pins `mask_lo = Σ`
+EXACTLY — a genuine `mask_lo < 2^16` range check; no `p`-shift. -/
+def maskReconLoGate (c : CapOpenCols) : EmittedExpr :=
+  .add (.var (c.leaf 3)) (.mul (.const (-1)) (reconLimbExpr c 0 MASK_LIMB_BITS))
+
+/-- **`maskReconHiGate c`** (the FIX) — the HIGH-limb recomposition: `mask_hi − Σ_{i<16} bit_{16+i}·2ⁱ =
+0`. Same per-limb range argument on the high 16 bit columns (`< 2^16 < p`). -/
+def maskReconHiGate (c : CapOpenCols) : EmittedExpr :=
+  .add (.var (c.leaf 4)) (.mul (.const (-1)) (reconLimbExpr c MASK_LIMB_BITS MASK_LIMB_BITS))
+
+/-- `reconMaskExpr` splits at any offset `a`: the top `k` bits are a `reconLimbExpr` at offset `a`,
+weighted by `2^a`. The structural fact behind `maskReconGate_of_limbs`. -/
+theorem reconMaskExpr_add (c : CapOpenCols) (env : VmRowEnv) (a k : Nat) :
+    (reconMaskExpr c (a + k)).eval env.loc
+      = (reconMaskExpr c a).eval env.loc
+        + (2 ^ a : ℤ) * (reconLimbExpr c a k).eval env.loc := by
+  induction k with
+  | zero => simp [reconLimbExpr, EmittedExpr.eval]
+  | succ m ih =>
+    have e1 : (reconMaskExpr c (a + (m + 1))).eval env.loc
+        = (reconMaskExpr c (a + m)).eval env.loc
+          + env.loc (c.bit (a + m)) * ((2 ^ (a + m) : Nat) : ℤ) := by
+      show (reconMaskExpr c ((a + m) + 1)).eval env.loc = _
+      simp only [reconMaskExpr, EmittedExpr.eval]
+    have e2 : (reconLimbExpr c a (m + 1)).eval env.loc
+        = (reconLimbExpr c a m).eval env.loc + env.loc (c.bit (a + m)) * ((2 ^ m : Nat) : ℤ) := by
+      simp only [reconLimbExpr, EmittedExpr.eval]
+    rw [e1, e2, ih]
+    push_cast [pow_add]
+    ring
+
+/-- **`reconMask32_split`** — the full 32-bit reconstruction IS the low limb plus `2^16·` the high limb.
+Both limbs read their own 16 bit columns, so pinning each limb pins the whole mask. -/
+theorem reconMask32_split (c : CapOpenCols) (env : VmRowEnv) :
+    (reconMaskExpr c MASK_BITS).eval env.loc
+      = (reconLimbExpr c 0 MASK_LIMB_BITS).eval env.loc
+        + (65536 : ℤ) * (reconLimbExpr c MASK_LIMB_BITS MASK_LIMB_BITS).eval env.loc := by
+  have h1 : (reconMaskExpr c (MASK_LIMB_BITS + MASK_LIMB_BITS)).eval env.loc
+      = (reconMaskExpr c MASK_LIMB_BITS).eval env.loc
+        + (2 ^ MASK_LIMB_BITS : ℤ) * (reconLimbExpr c MASK_LIMB_BITS MASK_LIMB_BITS).eval env.loc :=
+    reconMaskExpr_add c env MASK_LIMB_BITS MASK_LIMB_BITS
+  have h0 : (reconMaskExpr c MASK_LIMB_BITS).eval env.loc
+      = (reconLimbExpr c 0 MASK_LIMB_BITS).eval env.loc := by
+    have h := reconMaskExpr_add c env 0 MASK_LIMB_BITS
+    simpa [reconMaskExpr, EmittedExpr.eval, Nat.zero_add] using h
+  have hbits : MASK_BITS = MASK_LIMB_BITS + MASK_LIMB_BITS := rfl
+  rw [hbits, h1, h0]
+  norm_num [MASK_LIMB_BITS]
+
+/-- **`maskReconGate_of_limbs` — THE DISCHARGE.** The full 32-bit `maskReconGate` is DERIVED from the two
+16-bit limb gates: if `mask_lo = Σ_{i<16} bitᵢ·2ⁱ` and `mask_hi = Σ_{i<16} bit_{16+i}·2ⁱ` (both exact over
+ℤ), then `(mask_lo + mask_hi·65536) − Σ_{i<32} bitᵢ·2ⁱ = 0`. `reconExact` is no longer assumed — it FOLLOWS
+from the two in-circuit per-limb range checks. -/
+theorem maskReconGate_of_limbs (c : CapOpenCols) (env : VmRowEnv)
+    (hlo : (maskReconLoGate c).eval env.loc = 0)
+    (hhi : (maskReconHiGate c).eval env.loc = 0) :
+    (maskReconGate c).eval env.loc = 0 := by
+  have hsplit := reconMask32_split c env
+  simp only [maskReconLoGate, EmittedExpr.eval] at hlo
+  simp only [maskReconHiGate, EmittedExpr.eval] at hhi
+  simp only [maskReconGate, EmittedExpr.eval, hsplit]
+  linarith [hlo, hhi]
+
+/-- **`maskReconLoGate_rejects_wrap` — THE FORGERY WITNESS (soundness, witness FALSE).** The MASK-RECON-WRAP
+attack committed a `p`-shifted 32-bit decomposition (bits summing to `M + k·p`, `k ∈ {1,2}`, `2p < 2^32`)
+whose low bits carry a value DIFFERENT from the honest `mask_lo` — flipping a `selectedBit` for an effect
+the cap does NOT grant. The per-limb FIX kills it in the FIELD: if the committed `mask_lo` is canonical
+(`< p`) and the low 16 bit-columns are boolean but their reconstruction `v` DIFFERS from `mask_lo` (which
+any `p`-shifted decomposition forces, since `v < 2^16 ≤ mask_lo + p`), then the low-limb gate does NOT
+vanish mod `p` — `mask_lo − v ∈ (−2^16, p)` is a nonzero non-multiple of `p`. The forged row is UNSAT. (The
+high limb is symmetric.) -/
+theorem maskReconLoGate_rejects_wrap (c : CapOpenCols) (env : VmRowEnv)
+    (hlo : 0 ≤ env.loc (c.leaf 3) ∧ env.loc (c.leaf 3) < 2013265921)
+    (hbits : ∀ i, i < MASK_LIMB_BITS → env.loc (c.bit (0 + i)) = 0 ∨ env.loc (c.bit (0 + i)) = 1)
+    (hne : env.loc (c.leaf 3)
+        ≠ ((reconLimbN (fun j => (env.loc (c.bit j)).toNat) 0 MASK_LIMB_BITS : Nat) : ℤ)) :
+    ¬ ((maskReconLoGate c).eval env.loc ≡ 0 [ZMOD 2013265921]) := by
+  intro h
+  have hval := reconLimbExpr_eval c env 0 MASK_LIMB_BITS hbits
+  have hlt := reconLimbN_lt (fun j => (env.loc (c.bit j)).toNat) 0 MASK_LIMB_BITS
+    (fun k hk => by rcases hbits k hk with hh | hh <;> simp only [Nat.zero_add] at hh <;> simp [hh])
+  have h16 : (2 : Nat) ^ MASK_LIMB_BITS = 65536 := by norm_num [MASK_LIMB_BITS]
+  rw [h16] at hlt
+  unfold maskReconLoGate at h
+  simp only [EmittedExpr.eval] at h
+  rw [hval] at h
+  rw [Int.modEq_zero_iff_dvd] at h
+  obtain ⟨q, hq⟩ := h
+  have hvlt : ((reconLimbN (fun j => (env.loc (c.bit j)).toNat) 0 MASK_LIMB_BITS : Nat) : ℤ) < 65536 := by
+    exact_mod_cast hlt
+  have hvnn : (0 : ℤ) ≤ ((reconLimbN (fun j => (env.loc (c.bit j)).toNat) 0 MASK_LIMB_BITS : Nat) : ℤ) :=
+    Int.natCast_nonneg _
+  apply hne
+  omega
+
 /-- **`facetEffGate`** (residual (a) — the GENUINE membership SELECTED-bit gate, parametric in the
 effect index). For a single effect bit `effBit = 1 <<< n`, the kernel predicate `(effBit &&& m) ≠ 0`
 (over the full mask `m = maskOfLimbs mask_lo mask_hi`) is exactly "bit `n` of `m` is set".
@@ -397,8 +552,11 @@ structure Satisfied (sponge : List ℤ → ℤ) (tf : TraceFamily) (c : CapOpenC
   effBitTransfer : (effBitGate c).eval env.loc = 0
   /-- **(residual (a) — GENUINE MEMBERSHIP)** Each `mask_lo` bit column is boolean. -/
   maskBitsBool : ∀ i < MASK_BITS, (maskBitBoolGate c i).eval env.loc = 0
-  /-- **(residual (a) — GENUINE MEMBERSHIP)** The 16-bit decomposition reconstructs `mask_lo`. -/
-  maskRecon : (maskReconGate c).eval env.loc = 0
+  /-- **(residual (a) — GENUINE MEMBERSHIP, FIXED)** The low 16-bit decomposition reconstructs `mask_lo`
+  (a per-limb range check: the sum is `< 2^16 < p`, so this pins `mask_lo` exactly). -/
+  maskReconLo : (maskReconLoGate c).eval env.loc = 0
+  /-- **(residual (a) — GENUINE MEMBERSHIP, FIXED)** The high 16-bit decomposition reconstructs `mask_hi`. -/
+  maskReconHi : (maskReconHiGate c).eval env.loc = 0
   /-- **(residual (a) — GENUINE MEMBERSHIP)** The SELECTED bit (`EFFECT_TRANSFER`'s bit 1) is set —
   the genuine `(EFFECT_TRANSFER &&& mask_lo) ≠ 0` submask, NOT the over-strict equality. -/
   facetEffBound : (facetEffGate c).eval env.loc = 0
@@ -781,7 +939,8 @@ theorem capOpen_confers_via_effGate (sponge : List ℤ → ℤ) (tf : TraceFamil
     simp only [EmittedExpr.eval] at h
     linarith
   have hperm : isEffectPermitted (facetOfLeaf (leafOf c env)) (1 <<< 1) = true :=
-    facetEffGate_permits c env 1 (by decide) hsat.maskBitsBool hsat.maskRecon hsel
+    facetEffGate_permits c env 1 (by decide) hsat.maskBitsBool
+      (maskReconGate_of_limbs c env hsat.maskReconLo hsat.maskReconHi) hsel
   have hbit : (1 <<< 1 : Nat) = EFFECT_TRANSFER := by unfold EFFECT_TRANSFER; norm_num
   rw [hbit] at hperm
   exact ⟨hperm, htier⟩
@@ -944,9 +1103,12 @@ structure SatisfiedEff (sponge : List ℤ → ℤ) (tf : TraceFamily) (c : CapOp
   effBitPinned : (effBitGateFor c ((1 <<< n : Nat) : ℤ)).eval env.loc = 0
   /-- **(residual (a) — GENUINE MEMBERSHIP)** Each full-mask bit column is boolean. -/
   maskBitsBool : ∀ i < MASK_BITS, (maskBitBoolGate c i).eval env.loc = 0
-  /-- **(residual (a) — GENUINE MEMBERSHIP)** The 32-bit decomposition reconstructs the FULL mask
-  `maskOfLimbs mask_lo mask_hi` (NO `mask_hi = 0` pin — a broad `EFFECT_ALL` cap decomposes fully). -/
-  maskRecon : (maskReconGate c).eval env.loc = 0
+  /-- **(residual (a) — GENUINE MEMBERSHIP, FIXED)** The low 16-bit decomposition reconstructs `mask_lo`
+  (per-limb range check, sum `< 2^16 < p`). NO `mask_hi = 0` pin — a broad `EFFECT_ALL` cap decomposes
+  fully. Together with `maskReconHi` these DERIVE the full `maskReconGate` (`maskReconGate_of_limbs`). -/
+  maskReconLo : (maskReconLoGate c).eval env.loc = 0
+  /-- **(residual (a) — GENUINE MEMBERSHIP, FIXED)** The high 16-bit decomposition reconstructs `mask_hi`. -/
+  maskReconHi : (maskReconHiGate c).eval env.loc = 0
   /-- **(residual (a) — GENUINE MEMBERSHIP)** The SELECTED bit `n` (THIS effect's bit) is set — the
   genuine `(1<<<n &&& mask_lo) ≠ 0` submask, NOT the over-strict equality `mask_lo == 1<<<n`. -/
   facetEffBound : (selectedBitGate c n).eval env.loc = 0
@@ -984,7 +1146,8 @@ theorem capOpenEff_confers (sponge : List ℤ → ℤ) (tf : TraceFamily) (c : C
     simp only [EmittedExpr.eval] at h
     linarith
   have hperm : isEffectPermitted (facetOfLeaf (leafOf c env)) (1 <<< n) = true :=
-    facetEffGate_permits c env n hn hsat.maskBitsBool hsat.maskRecon hsel
+    facetEffGate_permits c env n hn hsat.maskBitsBool
+      (maskReconGate_of_limbs c env hsat.maskReconLo hsat.maskReconHi) hsel
   exact ⟨hperm, htier⟩
 
 /-- **`capOpenEff_authorizes` — THE EFFECT-GENERAL AUTHORITY LEG (fan-out keystone).** A `SatisfiedEff … n`
@@ -1059,6 +1222,8 @@ theorem targetBindGate_discriminates (c : CapOpenCols) (env : VmRowEnv)
 #assert_axioms capOpen_membership8
 #assert_axioms capOpen_confers
 #assert_axioms capOpen_confers_decoded
+#assert_axioms maskReconGate_of_limbs
+#assert_axioms maskReconLoGate_rejects_wrap
 #assert_axioms facetEffGate_permits
 #assert_axioms facetEffGate_rejects_wrong_facet
 #assert_axioms capOpen_confers_via_effGate

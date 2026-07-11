@@ -137,51 +137,41 @@ theorem cap_open_span : CAP_OPEN_SPAN = 329 := by decide
 prime) — the DEPLOYED field constraint — while `DeployedCapOpen.SatisfiedEff`'s gate fields are ℤ
 equalities. Recovering them takes the deployed CANONICALITY envelope (each trace cell is the
 canonical field representative, `0 ≤ · < p`) + `p`'s primality for the boolean gates; the
-difference/pin gates collapse by range alone (residual in `(−p, p)`). The ONE gate whose mod-`p`
-vanishing genuinely does NOT pin its ℤ value is the 32-bit mask recomposition (`maskReconGate`): the
-full `EffectMask` range `[0, 2^32)` EXCEEDS `p` (indeed `2p < 2^32`), so a boolean decomposition of
-`mask ∓ p` (or `∓ 2p`) also vanishes mod `p` — e.g. a committed mask `p + 3` with bits carrying `3`.
-That ℤ-exactness is therefore an EXPLICIT carrier of the envelope (`reconExact` — the honest prover
-decomposes the committed mask exactly; the wrap dodge is a NAMED residual of the deployed 32-bit
-recomposition gate, priced here rather than laundered). -/
+difference/pin gates collapse by range alone (residual in `(−p, p)`).
+
+§ MASK-RECON-WRAP FIX (verdict A, deployed soundness gap #2 — FIXED): the mask recomposition is now
+PER-16-BIT-LIMB. Each limb gate `mask_lo = Σ_{i<16} bitᵢ·2ⁱ` / `mask_hi = Σ_{i<16} bit_{16+i}·2ⁱ`
+reconstructs from its OWN 16 boolean bits, whose sum is `< 2^16 < p`. So the mod-`p` limb gate + cell
+canonicality (`mask_lo, mask_hi < p`) pins each limb EXACTLY — a GENUINE `< 2^16` range check, with NO
+`p`-shift (`mask_lo + p > 2^16` violates it). The old single 32-bit `maskReconGate` (honest range `[0,
+2^32) ≥ p`, `2p < 2^32`) admitted a `mask ∓ p`-shifted decomposition and had to CARRY `reconExact` as an
+assumption; that assumption is now DERIVED (`maskReconGate_of_limbs`) from the two in-circuit limb gates,
+so the `_authorizes` keystones hold UNCONDITIONALLY. -/
 
 open Dregg2.Circuit.Emit.EffectVmEmitTransfer (pPrimeInt)
 open Dregg2.Circuit.Emit.EffectVmEmitRotation (canon_eq_of_modEq)
 
 /-- **`CapOpenRowCanon c env n`** — the cap-open row's canonicality envelope: every trace cell is the
-canonical BabyBear representative (the deployed range invariant), the descriptor's effect-bit constant
-`1 <<< n` is a canonical field element (every deployed effect index — max `n = 23` — satisfies it),
-and the 32-bit mask decomposition is EXACT over ℤ (see §1.5 header: mod `p` alone admits a `±p`-shifted
-decomposition of a mask `≥ p`). Satisfiable (`capOpenRowCanon_satisfiable`); required by the ℤ-level
-`SatisfiedEff` rebuild. -/
+canonical BabyBear representative (the deployed range invariant), and the descriptor's effect-bit constant
+`1 <<< n` is a canonical field element (every deployed effect index — max `n = 23` — satisfies it).
+
+MASK-RECON-WRAP FIX (verdict A — FIXED): the former `reconExact` field (an ASSUMED ℤ-exact 32-bit mask
+recomposition, unenforced by the wire because `2p < 2^32` admits a `p`-shifted decomposition) is GONE. The
+mask recomposition is now DERIVED from the two deployed per-16-bit-limb gates (`maskReconLoGate`/
+`maskReconHiGate`) plus cell canonicality — each limb sum `< 2^16 < p` pins its limb exactly (a genuine
+range check), so `maskReconGate` follows via `maskReconGate_of_limbs`. The envelope carries only the
+GENUINE deployed canonicality (cell range + effect-bit range). Satisfiable
+(`capOpenRowCanon_satisfiable`); required by the ℤ-level `SatisfiedEff` rebuild. -/
 structure CapOpenRowCanon (c : CapOpenCols) (env : VmRowEnv) (n : Nat) : Prop where
   /-- every trace cell is the canonical BabyBear representative `0 ≤ · < p`. -/
   cells : ∀ col : Nat, 0 ≤ env.loc col ∧ env.loc col < 2013265921
   /-- the effect-bit constant `1 <<< n` is a canonical field element (`n = 31` would alias). -/
   effLt : ((1 <<< n : Nat) : ℤ) < 2013265921
-  /-- ⚠⚠ DEPLOYED SOUNDNESS GAP — ASSUMED, NOT ENFORCED (see `docs/reference/MASK-RECON-WRAP-INVESTIGATION.md`,
-  verdict A). The 32-bit mask recomposition is required to hold EXACTLY over ℤ, not merely mod `p`. An HONEST prover
-  satisfies it, but a MALICIOUS prover can VIOLATE it: since `2p = 0xF0000002 < 2^32`, an adversary can commit the
-  boolean decomposition of `M + 2p` (valid bits, `≡ 0 mod p`) instead of `M` — and the deployed cap-open circuit
-  (`trace_rotated.rs:2882`) fills the mask bits as FREE witness columns with NO range-check on `mask_lo/mask_hi`.
-  So this is a live capability-authorization FORGERY residual (a cap granting nothing can authorize a transfer),
-  NOT a genuine deployed canonicality. The `_authorizes` keystones that consume it are therefore conditional on an
-  UNFIXED deployed gap — they do NOT prove capability authorization until the fix lands (range-check `mask_lo/mask_hi
-  < 2^16`, reconstruct per 16-bit limb so each sum `< 2^16 < p` ⟹ `reconExact` becomes DERIVED, not assumed).
-  EMBER-GATED (deployed circuit change). -/
-  reconExact : (maskReconGate c).eval env.loc = 0
 
 /-- The envelope is NON-VACUOUS: the all-zero row satisfies it at the transfer bit (`n = 1`). -/
 theorem capOpenRowCanon_satisfiable (c : CapOpenCols) :
-    CapOpenRowCanon c ⟨fun _ => 0, fun _ => 0, fun _ => 0⟩ 1 := by
-  refine ⟨fun col => by norm_num, by norm_num [Nat.shiftLeft_eq], ?_⟩
-  have hz : ∀ W, (reconMaskExpr c W).eval (fun _ => 0) = 0 := by
-    intro W
-    induction W with
-    | zero => simp [reconMaskExpr, Dregg2.Exec.CircuitEmit.EmittedExpr.eval]
-    | succ w ih => simp [reconMaskExpr, Dregg2.Exec.CircuitEmit.EmittedExpr.eval, ih]
-  show (maskReconGate c).eval (fun _ => 0) = 0
-  simp [maskReconGate, Dregg2.Exec.CircuitEmit.EmittedExpr.eval, hz]
+    CapOpenRowCanon c ⟨fun _ => 0, fun _ => 0, fun _ => 0⟩ 1 :=
+  ⟨fun col => by norm_num, by norm_num [Nat.shiftLeft_eq]⟩
 
 /-- Boolean-gate exactness: `d·(d−1) ≡ 0 [ZMOD p]` + `d` canonical ⟹ the ℤ gate value IS `0`
 (primality splits the product; the in-range multiple of `p` in each factor pins `d ∈ {0, 1}`). -/
@@ -271,10 +261,12 @@ open Dregg2.Exec.FacetAuthority (authorizedFacetEffB)
 open Dregg2.Circuit.DeployedCapTree.CapHashScheme (DeployedFaithfulEff tierOfTag)
 
 /-- **`capOpenConstraintsEff n`** — the effect-GENERAL cap-open constraint list for effect-kind bit
-`1 <<< n`: the leaf lookup, the 16 node lookups, the 16 dir gates, the root pin, the target binding, the
-high-limb pin, the committed effect-bit pin `effBitGateFor … (1 <<< n)`, and the general facet gate. The
-transfer constant pins (`transferFacetGate`/`authTagGate`) are GONE — the facet is bound to the committed
-effect-bit column, the tier to the decoded `auth_tag`. Count: 1 + 16 + 16 + 5 = 38. -/
+`1 <<< n`: the leaf lookup, the 16 node lookups, the 16 dir gates, the 32 mask-bit gates, the root pin,
+the target binding, the committed effect-bit pin `effBitGateFor … (1 <<< n)`, the PER-LIMB recon gates
+`maskReconLoGate`/`maskReconHiGate` (the MASK-RECON-WRAP FIX — each limb reconstructed from its own 16
+bits, sum `< 2^16 < p`, so no `p`-shift forgery), and the selected-bit gate. The transfer constant pins
+(`transferFacetGate`/`authTagGate`) are GONE — the facet is bound to the committed effect-bit column, the
+tier to the decoded `auth_tag`. -/
 def capOpenConstraintsEff (w : Nat) (n : Nat) : List VmConstraint2 :=
   .lookup (leafLookup (capOpenCols w))
   :: nodeLookups w
@@ -283,13 +275,15 @@ def capOpenConstraintsEff (w : Nat) (n : Nat) : List VmConstraint2 :=
   ++ rootPinGates w
   ++ [ .base (.gate (targetBindGate (capOpenCols w)))
      , .base (.gate (effBitGateFor (capOpenCols w) ((1 <<< n : Nat) : ℤ)))
-     , .base (.gate (maskReconGate (capOpenCols w)))
+     , .base (.gate (maskReconLoGate (capOpenCols w)))
+     , .base (.gate (maskReconHiGate (capOpenCols w)))
      , .base (.gate (selectedBitGate (capOpenCols w) n)) ]
 
 /-- The effect-general constraint count is 1 leaf + 16 node + 16 dir + 32 mask-bit + 8 root-pin
-(Phase H-CAP-8: per-lane) + 4 binding gates (targetBind, effBitGateFor, maskRecon, selectedBit) = 77.
-(NO `facetHiGate` — the FULL mask is decomposed, so a broad `EFFECT_ALL` cap with `mask_hi ≠ 0` is admitted.) -/
-theorem capOpenConstraintsEff_length (w : Nat) (n : Nat) : (capOpenConstraintsEff w n).length = 77 := by
+(Phase H-CAP-8: per-lane) + 5 binding gates (targetBind, effBitGateFor, maskReconLo, maskReconHi,
+selectedBit) = 78. (NO `facetHiGate` — the FULL mask is decomposed per-limb, so a broad `EFFECT_ALL` cap
+with `mask_hi ≠ 0` is admitted while every bit is pinned.) -/
+theorem capOpenConstraintsEff_length (w : Nat) (n : Nat) : (capOpenConstraintsEff w n).length = 78 := by
   simp [capOpenConstraintsEff, nodeLookups, dirBoolGates, maskBitGates, rootPinGates, DEPTH, MASK_BITS]
 
 /-- **`effCapOpenV3 base name n`** — the GENERIC per-effect cap-open descriptor: an effect's rotated base
@@ -441,8 +435,10 @@ theorem effCapOpenV3_membershipCore (base : EffectVmDescriptor2) (name : String)
 /-- **`effCapOpenV3_satisfiedEff`** — a `Satisfied2` witness of `effCapOpenV3 base name n` rebuilds
 `DeployedCapOpen.SatisfiedEff … n` on every row (the appendix constraints are satisfied regardless of the
 base — they read no base column). The fan-out analog of `transferCapOpenV3_satisfied`. Field-faithful: the
-gates arrive `≡ 0 [ZMOD p]` (`holdsVm`); the ℤ-level fields are recovered through the EXPLICIT
-`CapOpenRowCanon` envelope (cell canonicality + effect-bit range + the ℤ-exact mask recomposition). -/
+gates arrive `≡ 0 [ZMOD p]` (`holdsVm`); the ℤ-level fields are recovered through the `CapOpenRowCanon`
+envelope (cell canonicality + effect-bit range). MASK-RECON-WRAP FIX: the two per-16-bit-limb recon gates
+(`maskReconLoGate`/`maskReconHiGate`) are pinned EXACTLY from their mod-`p` form because each limb sum is
+`< 2^16 < p` — a GENUINE range check derived in-proof (no assumed `reconExact`). -/
 theorem effCapOpenV3_satisfiedEff (base : EffectVmDescriptor2) (name : String) (n : Nat)
     (hash : List ℤ → ℤ) (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ)
     (t : Dregg2.Circuit.DescriptorIR2.VmTrace)
@@ -456,10 +452,62 @@ theorem effCapOpenV3_satisfiedEff (base : EffectVmDescriptor2) (name : String) (
   -- body vanishes mod `p`; `hlastf` reduces the row's `isLast` flag to `false`.
   have hlastf : (i + 1 == t.rows.length) = false := by
     simp only [beq_eq_false_iff_ne]; exact hnotlast
+  -- Each wire mask-bit gate holds mod `p` on this active row; with cell canonicality + primality it is
+  -- ℤ-exact (`hmaskbit`), hence each bit column is boolean (`hbool`) — the RANGE input the per-limb
+  -- recon gates need to pin each limb `< 2^16 < p` (the MASK-RECON-WRAP FIX).
+  have hmaskbit : ∀ j, j < MASK_BITS →
+      (maskBitBoolGate (capOpenCols base.traceWidth) j).eval (Dregg2.Circuit.DescriptorIR2.envAt t i).loc = 0 := by
+    intro j hj
+    have hin : VmConstraint2.base (.gate (maskBitBoolGate (capOpenCols base.traceWidth) j)) ∈ capOpenConstraintsEff base.traceWidth n := by
+      refine List.mem_cons_of_mem _ ?_
+      refine List.mem_append_left _ (List.mem_append_left _ (List.mem_append_right _ ?_))
+      exact List.mem_map.mpr ⟨j, List.mem_range.mpr hj, rfl⟩
+    have h := hrow _ (hmem _ hin)
+    simp only [VmConstraint2.holdsAt, VmConstraint.holdsVm, hlastf] at h
+    have h' : (maskBitBoolGate (capOpenCols base.traceWidth) j).eval
+        (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ≡ 0 [ZMOD 2013265921] := by simpa using h
+    unfold maskBitBoolGate at h' ⊢
+    simp only [EmittedExpr.eval] at h' ⊢
+    exact boolGate_exact (hcanon.cells _) h'
+  have hbool : ∀ j, j < MASK_BITS →
+      (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ((capOpenCols base.traceWidth).bit j) = 0
+      ∨ (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ((capOpenCols base.traceWidth).bit j) = 1 := by
+    intro j hj
+    have h := hmaskbit j hj
+    unfold maskBitBoolGate at h
+    simp only [EmittedExpr.eval] at h
+    rcases mul_eq_zero.mp h with h0 | h1
+    · exact Or.inl h0
+    · exact Or.inr (by linarith)
+  -- The per-limb range check: the reconstruction of a 16-bit limb at offset `off` evaluates to a Nat
+  -- `< 2^16`, hence a canonical (`< p`) ℤ value — so `diffGate_exact` pins `mask_limb = Σ` EXACTLY.
+  have limbExact : ∀ (off leafCol : Nat),
+      (Dregg2.Circuit.DescriptorIR2.envAt t i).loc leafCol
+          + -1 * (reconLimbExpr (capOpenCols base.traceWidth) off MASK_LIMB_BITS).eval
+              (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ≡ 0 [ZMOD 2013265921] →
+      (∀ k, k < MASK_LIMB_BITS → off + k < MASK_BITS) →
+      (Dregg2.Circuit.DescriptorIR2.envAt t i).loc leafCol
+          + -1 * (reconLimbExpr (capOpenCols base.traceWidth) off MASK_LIMB_BITS).eval
+              (Dregg2.Circuit.DescriptorIR2.envAt t i).loc = 0 := by
+    intro off leafCol hmodp hrange
+    have hbitOff : ∀ k, k < MASK_LIMB_BITS →
+        (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ((capOpenCols base.traceWidth).bit (off + k)) = 0
+        ∨ (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ((capOpenCols base.traceWidth).bit (off + k)) = 1 :=
+      fun k hk => hbool (off + k) (hrange k hk)
+    have hval := reconLimbExpr_eval (capOpenCols base.traceWidth) (Dregg2.Circuit.DescriptorIR2.envAt t i)
+      off MASK_LIMB_BITS hbitOff
+    have hlt := reconLimbN_lt (fun j => ((Dregg2.Circuit.DescriptorIR2.envAt t i).loc ((capOpenCols base.traceWidth).bit j)).toNat)
+      off MASK_LIMB_BITS (fun k hk => by rcases hbitOff k hk with h | h <;> simp [h])
+    have hltI : ((reconLimbN (fun j => ((Dregg2.Circuit.DescriptorIR2.envAt t i).loc ((capOpenCols base.traceWidth).bit j)).toNat) off MASK_LIMB_BITS : Nat) : ℤ) < 2013265921 := by
+      have h16 : (2 : Nat) ^ MASK_LIMB_BITS = 65536 := by norm_num [MASK_LIMB_BITS]
+      rw [h16] at hlt
+      exact_mod_cast Nat.lt_trans hlt (by norm_num)
+    rw [hval] at hmodp ⊢
+    exact diffGate_exact (hcanon.cells _) ⟨Int.natCast_nonneg _, hltI⟩ hmodp
   refine
     { core := effCapOpenV3_membershipCore base name n hash minit mfin maddrs t hsat i hi hnotlast hcanon.cells
     , targetBound := ?_, effBitPinned := ?_
-    , maskBitsBool := ?_, maskRecon := hcanon.reconExact, facetEffBound := ?_ }
+    , maskBitsBool := hmaskbit, maskReconLo := ?_, maskReconHi := ?_, facetEffBound := ?_ }
   · have hin : VmConstraint2.base (.gate (targetBindGate (capOpenCols base.traceWidth))) ∈ capOpenConstraintsEff base.traceWidth n := by
       simp [capOpenConstraintsEff]
     have h := hrow _ (hmem _ hin)
@@ -478,18 +526,28 @@ theorem effCapOpenV3_satisfiedEff (base : EffectVmDescriptor2) (name : String) (
     unfold effBitGateFor at h' ⊢
     simp only [EmittedExpr.eval] at h' ⊢
     exact constPin_exact (hcanon.cells _) ⟨Int.natCast_nonneg _, hcanon.effLt⟩ h'
-  · intro j hj
-    have hin : VmConstraint2.base (.gate (maskBitBoolGate (capOpenCols base.traceWidth) j)) ∈ capOpenConstraintsEff base.traceWidth n := by
-      refine List.mem_cons_of_mem _ ?_
-      refine List.mem_append_left _ (List.mem_append_left _ (List.mem_append_right _ ?_))
-      exact List.mem_map.mpr ⟨j, List.mem_range.mpr hj, rfl⟩
+  · -- maskReconLo (FIX): the low 16 bits reconstruct `mask_lo` (leaf 3); sum `< 2^16 < p` pins it.
+    have hin : VmConstraint2.base (.gate (maskReconLoGate (capOpenCols base.traceWidth)))
+        ∈ capOpenConstraintsEff base.traceWidth n := by simp [capOpenConstraintsEff]
     have h := hrow _ (hmem _ hin)
     simp only [VmConstraint2.holdsAt, VmConstraint.holdsVm, hlastf] at h
-    have h' : (maskBitBoolGate (capOpenCols base.traceWidth) j).eval
+    have h' : (maskReconLoGate (capOpenCols base.traceWidth)).eval
         (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ≡ 0 [ZMOD 2013265921] := by simpa using h
-    unfold maskBitBoolGate at h' ⊢
+    unfold maskReconLoGate at h' ⊢
     simp only [EmittedExpr.eval] at h' ⊢
-    exact boolGate_exact (hcanon.cells _) h'
+    exact limbExact 0 ((capOpenCols base.traceWidth).leaf 3) h'
+      (fun k hk => by simp only [MASK_LIMB_BITS] at hk; simp only [MASK_BITS]; omega)
+  · -- maskReconHi (FIX): the high 16 bits (columns 16..31) reconstruct `mask_hi` (leaf 4).
+    have hin : VmConstraint2.base (.gate (maskReconHiGate (capOpenCols base.traceWidth)))
+        ∈ capOpenConstraintsEff base.traceWidth n := by simp [capOpenConstraintsEff]
+    have h := hrow _ (hmem _ hin)
+    simp only [VmConstraint2.holdsAt, VmConstraint.holdsVm, hlastf] at h
+    have h' : (maskReconHiGate (capOpenCols base.traceWidth)).eval
+        (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ≡ 0 [ZMOD 2013265921] := by simpa using h
+    unfold maskReconHiGate at h' ⊢
+    simp only [EmittedExpr.eval] at h' ⊢
+    exact limbExact MASK_LIMB_BITS ((capOpenCols base.traceWidth).leaf 4) h'
+      (fun k hk => by simp only [MASK_LIMB_BITS] at hk ⊢; simp only [MASK_BITS]; omega)
   · have hin : VmConstraint2.base (.gate (selectedBitGate (capOpenCols base.traceWidth) n)) ∈ capOpenConstraintsEff base.traceWidth n := by
       simp [capOpenConstraintsEff]
     have h := hrow _ (hmem _ hin)
@@ -657,7 +715,7 @@ def exerciseCapOpenV3 : EffectVmDescriptor2 :=
   withSelectorGate Dregg2.Circuit.Emit.EffectVmEmit.sel.EXERCISE
     (effCapOpenV3 exerciseV3 "dregg-effectvm-exercise-v1-rot24-v3-capopen" EFF_EXERCISE)
 
-#guard exerciseCapOpenV3.constraints.length == exerciseV3.constraints.length + 78
+#guard exerciseCapOpenV3.constraints.length == exerciseV3.constraints.length + 79
 #guard exerciseCapOpenV3.traceWidth == exerciseV3.traceWidth + CAP_OPEN_SPAN
 
 /-! ### The WRITE-FORCING fan-out cap-open wrappers (the frozen-face close — guarantee A circuit-forced).
@@ -956,13 +1014,13 @@ def delegateAttenWriteCapOpenV3 : EffectVmDescriptor2 :=
 #guard delegateWriteCapOpenV3.traceWidth == EffectVmEmitRotationV3.grantCapWriteV3.traceWidth + CAP_OPEN_SPAN
 #guard delegateAttenWriteCapOpenV3.traceWidth == EffectVmEmitRotationV3.delegateAttenV3.traceWidth + CAP_OPEN_SPAN
 #guard revokeCapabilityWriteCapOpenV3.traceWidth == EffectVmEmitRotationV3.revokeCapabilityV3.traceWidth + CAP_OPEN_SPAN
-#guard introduceWriteCapOpenV3.constraints.length == EffectVmEmitRotationV3.introduceWriteV3.constraints.length + 78 + 8
-#guard revokeDelegationWriteCapOpenV3.constraints.length == EffectVmEmitRotationV3.revokeDelegationWriteV3.constraints.length + 78 + 8
-#guard delegateWriteCapOpenV3.constraints.length == EffectVmEmitRotationV3.grantCapWriteV3.constraints.length + 78 + 8
-#guard delegateAttenWriteCapOpenV3.constraints.length == EffectVmEmitRotationV3.delegateAttenV3.constraints.length + 78 + 8
-#guard revokeCapabilityWriteCapOpenV3.constraints.length == EffectVmEmitRotationV3.revokeCapabilityV3.constraints.length + 78 + 8
+#guard introduceWriteCapOpenV3.constraints.length == EffectVmEmitRotationV3.introduceWriteV3.constraints.length + 79 + 8
+#guard revokeDelegationWriteCapOpenV3.constraints.length == EffectVmEmitRotationV3.revokeDelegationWriteV3.constraints.length + 79 + 8
+#guard delegateWriteCapOpenV3.constraints.length == EffectVmEmitRotationV3.grantCapWriteV3.constraints.length + 79 + 8
+#guard delegateAttenWriteCapOpenV3.constraints.length == EffectVmEmitRotationV3.delegateAttenV3.constraints.length + 79 + 8
+#guard revokeCapabilityWriteCapOpenV3.constraints.length == EffectVmEmitRotationV3.revokeCapabilityV3.constraints.length + 79 + 8
 #guard spawnWriteCapOpenV3.traceWidth == EffectVmEmitRotationV3.spawnWriteV3.traceWidth + CAP_OPEN_SPAN
-#guard spawnWriteCapOpenV3.constraints.length == EffectVmEmitRotationV3.spawnWriteV3.constraints.length + 78 + 8
+#guard spawnWriteCapOpenV3.constraints.length == EffectVmEmitRotationV3.spawnWriteV3.constraints.length + 79 + 8
 
 /-- **`transferCapOpenEffV3`** (residual (a) — THE LIVE transfer cap-open) — the transfer base + the
 effect-GENERAL appendix at `EFF_TRANSFER` (bit 1). Carries `capOpenConstraintsEff 1`: the genuine SUBMASK facet gate
@@ -984,19 +1042,19 @@ def attenuateCapOpenEffV3 : EffectVmDescriptor2 :=
 -- The live transfer/attenuate effect-general descriptors share the appendix + the appended
 -- `selectorGate` tooth: +70 appendix constraints +1 selector gate = +71; +91 cols (the gate is
 -- a `.base`, no new column).
-#guard transferCapOpenEffV3.constraints.length == transferV3.constraints.length + 78
-#guard attenuateCapOpenEffV3.constraints.length == attenuateV3.constraints.length + 78 + 41
+#guard transferCapOpenEffV3.constraints.length == transferV3.constraints.length + 79
+#guard attenuateCapOpenEffV3.constraints.length == attenuateV3.constraints.length + 79 + 41
 #guard transferCapOpenEffV3.traceWidth == transferV3.traceWidth + CAP_OPEN_SPAN
 #guard attenuateCapOpenEffV3.traceWidth == attenuateV3.traceWidth + CAP_OPEN_SPAN + AFTER_SPINE_SPAN
 
 -- Each fan-out descriptor adds the 70-constraint effect-general appendix + the selector-gate tooth
 -- (+71 constraints total) + 239 cols past its base.
-#guard delegateCapOpenV3.constraints.length == grantCapV3.constraints.length + 78
-#guard introduceCapOpenV3.constraints.length == introduceV3.constraints.length + 78
-#guard grantCapCapOpenV3.constraints.length == grantCapV3.constraints.length + 78
-#guard revokeCapOpenV3.constraints.length == revokeDelegationV3.constraints.length + 78
-#guard refreshDelegationCapOpenV3.constraints.length == refreshDelegationV3.constraints.length + 78
-#guard revokeCapabilityCapOpenV3.constraints.length == revokeCapabilityBaseV3.constraints.length + 78
+#guard delegateCapOpenV3.constraints.length == grantCapV3.constraints.length + 79
+#guard introduceCapOpenV3.constraints.length == introduceV3.constraints.length + 79
+#guard grantCapCapOpenV3.constraints.length == grantCapV3.constraints.length + 79
+#guard revokeCapOpenV3.constraints.length == revokeDelegationV3.constraints.length + 79
+#guard refreshDelegationCapOpenV3.constraints.length == refreshDelegationV3.constraints.length + 79
+#guard revokeCapabilityCapOpenV3.constraints.length == revokeCapabilityBaseV3.constraints.length + 79
 #guard delegateCapOpenV3.traceWidth == grantCapV3.traceWidth + CAP_OPEN_SPAN
 #guard introduceCapOpenV3.traceWidth == introduceV3.traceWidth + CAP_OPEN_SPAN
 #guard grantCapCapOpenV3.traceWidth == grantCapV3.traceWidth + CAP_OPEN_SPAN
