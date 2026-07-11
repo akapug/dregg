@@ -371,9 +371,9 @@ structure WindowConstraint where
 when this is NOT the last row (`isLast = false`); otherwise it vanishes on every row. -/
 def WindowConstraint.holdsAt (env : VmRowEnv) (isLast : Bool) (w : WindowConstraint) : Prop :=
   if w.onTransition then
-    isLast = false → w.body.eval env = 0
+    isLast = false → w.body.eval env ≡ 0 [ZMOD 2013265921]
   else
-    w.body.eval env = 0
+    w.body.eval env ≡ 0 [ZMOD 2013265921]
 
 /-- Wire-render a `WindowConstraint`. -/
 def WindowConstraint.toJson (w : WindowConstraint) : String :=
