@@ -23,13 +23,22 @@
 //! `bits < 31` (BabyBear is ~2³¹). Emission is pure `ConstraintExpr` — no new DSL
 //! variant, no prover; the caller wires witness generation for the aux columns.
 //!
-//! ## Honest scope
-//! Same-row comparisons (`FieldGte`/`FieldLte` against a column or a constant) are
-//! covered here. **`Monotonic`/`StrictMonotonic` are cross-row** (`next ≥ local`);
-//! they need the difference taken across the transition, which is a documented
-//! follow-on ([`emit_ge`] over a diff the compiler supplies from a `Transition`).
-//! If a native `RangeLookup`/`Lte` `ConstraintExpr` variant is later added for
-//! succinctness, this API is unchanged — only the internal lowering swaps.
+//! ## Honest scope — what this covers, precisely
+//! The `dregg-cell` ordering teeth are all **same-post-state** comparisons —
+//! `FieldGte{index,value}`, `FieldLte{index,value}`, `FieldLteField{left,right}`,
+//! `FieldLteOther{index,other,delta}` (the capacity / no-underflow cross-slot bounds)
+//! — so this crate's same-row gadget is the right shape for every one of them (a
+//! `FieldLteOther` capacity bound `head − tail ≤ cap` is `emit_nonneg([cap] + [tail] −
+//! [head] ≥ 0)`, `FieldLteField` is [`emit_le`], `FieldGte`-const is [`emit_ge_const`]).
+//!
+//! **One caveat the wire-in must honor (not laundered):** those slots are `u64`
+//! (big-endian, lifted to `i128`), while a comparison here is over values
+//! `< 2^bits < 2^31` — a **single BabyBear limb**. Small domains (HP, scene index,
+//! budget, queue depth) fit one limb and lower directly. A **full-`u64` slot spans
+//! multiple limbs** and needs a multi-limb comparison (this gadget per limb + a borrow
+//! chain — a documented follow-on). The compiler supplies the trace's slot→limb
+//! layout; this crate supplies the per-limb primitive. If a native `RangeLookup`/`Lte`
+//! `ConstraintExpr` variant is later added, this API is unchanged — the lowering swaps.
 
 use dregg_circuit::dsl::{ConstraintExpr, PolyTerm};
 use dregg_circuit::field::BabyBear;
