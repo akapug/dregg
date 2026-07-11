@@ -155,6 +155,80 @@ theorem wOne_recovers (terms : List (Poly × Poly)) (c s : Poly)
 #assert_axioms wOne_coord
 #assert_axioms wOne_recovers
 
+/-! ## PART 3b — `ExpandAIsMatrix` DISCHARGED: the executable's stored NTT-domain `Â` IS `ntt A`.
+
+The `wRow`/`wOne_*` theorems above write the per-row matrix entry as `ntt A_ij` for a ring preimage `A_ij`.
+The executable stores `Â := expandA ρ` DIRECTLY in the NTT domain. Its normal-domain preimage is `A_ij :=
+intt Â_ij`, and recovering the stored entry is `ntt A_ij = ntt (intt Â_ij) = Â_ij` — the NTT RIGHT-inverse,
+now CLOSED for-all at the operational guards (`MlDsaRing.nttRightInverse_proven`, size-256 + reduced, no
+`native_decide` in the `∀`). Every `expandA` entry meets those guards: `expandA_shape` (each poly is exactly
+256 coeffs) and `rejNTTPoly_coeffs_in_range` (every coeff `< q`). So the identification is exact, not a gap.
+Below, `wRowHat` is verifyCore's ACTUAL per-row value — it multiplies the STORED `Â_ij` in directly — and
+`wOne_recovers_hat` transfers `wOne_recovers` to it unconditionally, closing the last Seam-1 verify non-gap. -/
+
+/-- **`ExpandAIsMatrix`.** For a stored NTT-domain matrix entry `aHat` meeting the operational guards
+(canonical size-256, coeffs `< q` — exactly what `expandA`/`rejNTTPoly` produce), its normal-domain preimage
+`intt aHat` transforms back to it: `ntt (intt aHat) = aHat`. Direct instance of the NTT right-inverse. -/
+theorem expandA_is_matrix (aHat : Poly) (hsz : aHat.size = 256) (hlt : ∀ (p : Nat), aHat[p]! < q) :
+    ntt (intt aHat) = aHat :=
+  MlDsaRing.nttRightInverse_proven aHat hsz hlt
+
+/-- Fold-congruence over the row terms: replacing each stored entry `t.1 = Â_ij` by `ntt (intt t.1)` leaves the
+per-row accumulator unchanged, since `ntt (intt Â_ij) = Â_ij` on the canonical guards. The bridge between the
+executable's stored-`Â` fold (`wRowHat`) and `wRow`'s `ntt (preimage)` fold. -/
+theorem foldl_pointwise_expandA :
+    ∀ (terms : List (Poly × Poly)) (z : Poly),
+      (∀ t ∈ terms, t.1.size = 256 ∧ (∀ (p : Nat), t.1[p]! < q)) →
+      List.foldl (fun az t => addPoly az (pointwiseMul t.1 (ntt t.2))) z terms
+        = List.foldl (fun az t => addPoly az (pointwiseMul (ntt (intt t.1)) (ntt t.2))) z terms := by
+  intro terms
+  induction terms with
+  | nil => intro z _; rfl
+  | cons hd tl ih =>
+    intro z hmem
+    simp only [List.foldl_cons]
+    rw [expandA_is_matrix hd.1 (hmem hd (by simp)).1 (hmem hd (by simp)).2]
+    exact ih _ (fun t ht => hmem t (by simp [ht]))
+
+/-- verifyCore's ACTUAL per-row value: the STORED NTT-domain matrix entries `Â_ij = t.1` are multiplied in
+directly (no `ntt` applied), against `ẑ_j = ntt t.2` and `ĉ⊙ŝ`. This is the deployed executable's `w_i`. -/
+noncomputable def wRowHat (terms : List (Poly × Poly)) (c s : Poly) : Poly :=
+  intt (subPoly
+    (List.foldl (fun az t => addPoly az (pointwiseMul t.1 (ntt t.2))) zeroPoly terms)
+    (pointwiseMul (ntt c) (ntt s)))
+
+/-- The executable's stored-`Â` per-row value IS `wRow` with the normal-domain preimages `A_ij := intt Â_ij` —
+by `ExpandAIsMatrix` (`ntt (intt Â_ij) = Â_ij`) under the fold. -/
+theorem wRowHat_eq_wRow (terms : List (Poly × Poly)) (c s : Poly)
+    (hAhat : ∀ t ∈ terms, t.1.size = 256 ∧ (∀ (p : Nat), t.1[p]! < q)) :
+    wRowHat terms c s = wRow (terms.map (fun t => (intt t.1, t.2))) c s := by
+  unfold wRowHat wRow
+  rw [List.foldl_map]
+  congr 2
+  exact foldl_pointwise_expandA terms zeroPoly hAhat
+
+/-- **`WOneRecoversSpec` for the HONEST KEY — unconditional.** verifyCore's per-row coefficient array `w_i`
+built from the STORED NTT-domain matrix `Â` (`wRowHat`), read at coordinate `jj`, IS the canonical `ℤ_q` rep
+of the `jj`-th power-basis coordinate of the abstract `R_q` matvec `(A·z − c·s)_i` with `A_ij := intt Â_ij`.
+No `ntt A_ij = Â_ij` residual remains — it is discharged by `ExpandAIsMatrix`. The last Seam-1 verify non-gap
+is closed: the executable applies the FIPS rounding to exactly the coordinates of the spec's recovery argument. -/
+theorem wOne_recovers_hat (terms : List (Poly × Poly)) (c s : Poly)
+    (hAhat : ∀ t ∈ terms, t.1.size = 256 ∧ (∀ (p : Nat), t.1[p]! < q))
+    (hz : ∀ t ∈ terms, t.2.size = 256) (hc : c.size = 256) (hs : s.size = 256)
+    (jj : Fin pbW.dim) :
+    (wRowHat terms c s)[(jj : ℕ)]!
+      = (pbW.basis.repr (rqMatvec (terms.map (fun t => (intt t.1, t.2))) c s) jj).val := by
+  rw [wRowHat_eq_wRow terms c s hAhat]
+  refine wOne_recovers (terms.map (fun t => (intt t.1, t.2))) c s ?_ hc hs jj
+  intro t ht
+  rw [List.mem_map] at ht
+  obtain ⟨t0, ht0, rfl⟩ := ht
+  exact ⟨MlDsaRing.intt_size t0.1 (hAhat t0 ht0).1 (hAhat t0 ht0).2, hz t0 ht0⟩
+
+#assert_axioms expandA_is_matrix
+#assert_axioms wRowHat_eq_wRow
+#assert_axioms wOne_recovers_hat
+
 /-! ## PART 4 — NON-VACUITY: the coordinate reader is a GENUINE degree-256 iso, not a scalar collapse.
 
 `toRq_coeff`/`wOne_*` are statements over the coordinate space `Fin pbW.dim → ℤ_q` with `pbW.dim = 256`; if

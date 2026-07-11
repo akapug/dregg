@@ -2408,6 +2408,92 @@ theorem intt_lt (v : Poly) (hv : v.size = 256) (hvlt : ∀ (p : Nat), v[p]! < q)
     rw [intt_eq_scale_stages, inttStages_eq, inttScale_getElem _ h8sz p hp]; exact mulModQ_lt _ _
   · rw [getElem!_ge _ p (by rw [intt_size v hv hvlt]; omega)]; unfold q; omega
 
+/-! ### PART 1g' — the NTT RIGHT-INVERSE `ntt ∘ intt = id` (the `ExpandAIsMatrix` non-gap).
+
+`nttLeftInverse_proven` gives `intt ∘ ntt = id` on canonical reduced polys. The mirror `ntt ∘ intt = id` is
+what the ExpandA-as-matrix identification rests on: the executable stores `Â := expandA ρ` DIRECTLY in the
+NTT domain, so a ring preimage is `A_ij := intt Â_ij` and recovering the stored entry needs `ntt A_ij = Â_ij`,
+i.e. `ntt (intt Â_ij) = Â_ij`. Both transforms are endomaps of the finite set of canonical reduced size-256
+polys, so a left inverse is a right inverse — but here it is read off DIRECTLY from the same closed-form
+interpolation machinery, no finiteness argument: `intt` interpolates (`intt_interp`), `ntt` evaluates at the
+roots (`nttEvalsAtRoots_canonical`), and the two collapse under the DUAL orthogonality (the `Σ_k` sum, the
+mirror of `interp_orth`'s `Σ_u`). No `native_decide` in the `∀`. -/
+
+set_option maxRecDepth 8000 in
+/-- **THE DUAL INTERPOLATION ORTHOGONALITY** — summing over the EXPONENT `k` (not the root index `u`):
+`Σ_{k<256} (irt u)^k · (evalRoot m)^k = 256·[u = m]` in `ℤ_q`. The geometric sum in `k` of
+`(evalRoot m · irt u)^k` collapses via `omega_orthogonality`: `irt u · evalRoot m = (ζ²)^d` with
+`d = 511·brv8 u + brv8 m + 256`, and `256 ∣ d ↔ brv8 u = brv8 m ↔ u = m` (`brv8` injective on `[0,256)`,
+by `brv8_invol`). This is the `Σ_k`-mirror of `interp_orth`, used to collapse `ntt ∘ intt` (rather than
+`intt ∘ ntt`). Axiom-clean (`{propext, Classical.choice, Quot.sound}`). -/
+theorem root_orth (u m : Nat) (hu : u < 256) (hm : m < 256) :
+    ∑ k ∈ range 256, (irt u)^k * (evalRoot m)^k = if u = m then (256 : ZMod q) else 0 := by
+  have hbase : irt u * evalRoot m = ((zeta:ZMod q)^2)^(511 * brv8 u + brv8 m + 256) := by
+    rw [irt_eq_pow]
+    unfold evalRoot
+    rw [← pow_mul, ← pow_mul, ← pow_add]
+    congr 1
+    ring
+  have hterm : ∀ k, (irt u)^k * (evalRoot m)^k
+      = (((zeta:ZMod q)^2)^(511 * brv8 u + brv8 m + 256))^k := by
+    intro k
+    rw [← mul_pow, hbase]
+  rw [Finset.sum_congr rfl (fun k _ => hterm k),
+      omega_orthogonality zeta_pow_neg_one (511 * brv8 u + brv8 m + 256)]
+  by_cases huv : u = m
+  · subst huv
+    rw [if_pos rfl, if_pos (by omega : (256:Nat) ∣ (511 * brv8 u + brv8 u + 256))]
+  · rw [if_neg huv, if_neg]
+    intro hdvd
+    have hbb : brv8 u = brv8 m := by
+      have h1 := brv8_lt u; have h2 := brv8_lt m; omega
+    exact huv (by rw [← brv8_invol u hu, ← brv8_invol m hm, hbb])
+
+set_option maxRecDepth 8000 in
+/-- **NttRightInverse — CLOSED (size-256 + reduced).** `ntt (intt v) = v` for every canonical reduced poly —
+the RIGHT inverse `ntt ∘ intt = id`, the mirror of `nttLeftInverse_proven`. Entrywise via the closed-form
+interpolation `intt_interp` fed into eval-at-the-roots `nttEvalsAtRoots_canonical`, collapsed by the dual
+orthogonality `root_orth`:
+`(ntt (intt v))[m] = Σ_k (intt v)[k]·(evalRoot m)^k = nInv·Σ_u v[u]·(Σ_k (irt u)^k (evalRoot m)^k)
+= nInv·Σ_u v[u]·256·[u=m] = nInv·256·v[m] = v[m]` in `ℤ_q`, lifted to the `Array` by reduced-range
+injectivity. Same guards as `nttLeftInverse_proven` (a non-256 input keeps the wrong length; a non-reduced
+input round-trips to its reduction). No `native_decide` in the `∀`. -/
+theorem nttRightInverse_proven :
+    ∀ v : Poly, v.size = 256 → (∀ (p : Nat), v[p]! < q) → ntt (intt v) = v := by
+  intro v hv hvlt
+  have hisz : (intt v).size = 256 := intt_size v hv hvlt
+  have hilt : ∀ (p:Nat), (intt v)[p]! < q := intt_lt v hv hvlt
+  have hnsz : (ntt (intt v)).size = 256 := ntt_size (intt v) hisz
+  have hentry : ∀ m, m < 256 → (ntt (intt v))[m]! = v[m]! := by
+    intro m hm
+    have hX : (ntt (intt v))[m]! < q := ntt_lt (intt v) hilt m
+    apply natCast_inj_of_lt _ _ hX (hvlt m)
+    rw [nttEvalsAtRoots_canonical (intt v) hisz m hm]
+    unfold eval256
+    have step1 : ∀ k ∈ range 256, ((intt v)[k]! : ZMod q) * (evalRoot m)^k
+        = ∑ u ∈ range 256,
+            (nInv : ZMod q) * ((v[u]! : ZMod q) * ((irt u)^k * (evalRoot m)^k)) := by
+      intro k hk
+      rw [intt_interp v hv hvlt k (mem_range.mp hk), Finset.mul_sum, Finset.sum_mul]
+      apply Finset.sum_congr rfl; intro u _; ring
+    rw [Finset.sum_congr rfl step1, Finset.sum_comm,
+        Finset.sum_congr rfl (fun u hu => by
+          rw [← Finset.mul_sum, ← Finset.mul_sum, root_orth u m (mem_range.mp hu) hm]),
+        Finset.sum_eq_single m
+          (fun u _ hum => by rw [if_neg hum, mul_zero, mul_zero])
+          (fun h => absurd (mem_range.mpr hm) h),
+        if_pos rfl,
+        show (nInv : ZMod q) * ((v[m]! : ZMod q) * 256)
+            = ((nInv : ZMod q) * 256) * (v[m]! : ZMod q) from by ring,
+        nInv_mul_256, one_mul]
+  apply Array.ext
+  · rw [hnsz, hv]
+  · intro i h1 _
+    have hi : i < 256 := by rw [hnsz] at h1; exact h1
+    rw [(getElem!_pos (ntt (intt v)) i (by rw [hnsz]; exact hi)).symm,
+        (getElem!_pos v i (by rw [hv]; exact hi)).symm]
+    exact hentry i hi
+
 /-- **`intt` is ADDITIVE** — `intt (addPoly u v) = addPoly (intt u) (intt v)`, for reduced size-256 `u, v`.
 Read off the closed-form `intt_interp` (linear in the coefficient vector) + `cast_addPoly`, lifted to the
 `Array` by reduced-range injectivity. Leg 1 of the `verifyCore`-matmul-IS-the-`R_q`-matvec bridge. -/
@@ -2507,5 +2593,7 @@ deliberately NOT gated here — it is the accepted computational residual, isola
 #assert_axioms intt_interp
 #assert_axioms nttLeftInverse_proven
 #assert_axioms ringRepFaithful_proven
+#assert_axioms root_orth
+#assert_axioms nttRightInverse_proven
 
 end Dregg2.Crypto.MlDsaRing
