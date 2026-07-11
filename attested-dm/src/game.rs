@@ -2077,6 +2077,16 @@ impl<B: GameBrain> GameSession<B> {
         self
     }
 
+    /// Pin the session's verifiable-randomness to the post-quantum one-time **LB-VRF** source,
+    /// seeded from `seed`. Each random turn (a loot draw) mints its own one-time LB-VRF key epoch,
+    /// evaluates it over the draw's event id, and records `(pk, output, proof)`; replay re-runs
+    /// `pqvrf::verify` (a forged draw is caught, uniqueness reducing to Module-SIS). The default
+    /// [`GameSession::with_randomness`] CommitReveal source is unchanged.
+    pub fn with_lb_vrf_randomness(mut self, seed: [u8; 32]) -> GameSession<B> {
+        self.rng = SessionRandomness::from_lb_vrf_seed(&seed);
+        self
+    }
+
     /// The live world-cell (current room in `scene`, held items in `inventory`, flags, ledger).
     pub fn world(&self) -> &WorldCell {
         &self.world
@@ -2614,7 +2624,7 @@ pub fn verify_seed(
         EvidenceKind::Deterministic { .. } => Deterministic::seed(request, evidence),
         EvidenceKind::CommitReveal { .. } => CommitReveal::seed(request, evidence),
         EvidenceKind::Beacon { .. } => MockBeacon::seed(request, evidence),
-        EvidenceKind::Vrf { .. } => ServerVrf::seed(request, evidence),
+        EvidenceKind::LbVrf { .. } => ServerVrf::seed(request, evidence),
     }
 }
 
@@ -2627,26 +2637,57 @@ const SESSION_PLAYER_TAG: &[u8] = b"attested-dm-session-player-contribution-v1";
 /// deployment seeds this per session from the CommitReveal handshake (or a VRF/beacon).
 pub const DEFAULT_GAME_RNG_SEED: [u8; 32] = [0x5E; 32];
 
-/// **A session's randomness provider — the CommitReveal slice.** Given a bound
-/// [`RandomnessRequest`], it produces the [`RandomnessEvidence`] the turn records. The server's
-/// contribution is a PRF of a fixed session secret and the event id (so the server is committed to
-/// ONE value per event and cannot re-choose per outcome); the player's contribution is mixed in
-/// the same way. Honest trust level: this prevents either party from unilaterally CHOOSING the
-/// draw, and the draw is a pure reconstructible function of the verified seed — but commit-reveal
-/// does NOT close selective abort (the last revealer can withhold on an unfavorable draw). The
-/// registered-VRF + delayed-beacon `Hybrid` source (a follow-up) closes that.
+/// Domain tag for deriving a session's per-event one-time LB-VRF key seed.
+const SESSION_LB_VRF_KEY_TAG: &[u8] = b"attested-dm-session-lb-vrf-key-seed-v1";
+
+/// **A session's verifiable-randomness provider.** Given a bound [`RandomnessRequest`], it produces
+/// the [`RandomnessEvidence`] a random turn records. Two modes:
+///
+/// - [`SessionRandomness::CommitReveal`] (the DEFAULT — keeps the existing loot chest working): the
+///   server's contribution is a PRF of a fixed session secret and the event id (so the server is
+///   committed to ONE value per event and cannot re-choose per outcome); the player's contribution
+///   is mixed in the same way. It prevents either party from unilaterally CHOOSING the draw, but
+///   does NOT close selective abort (the last revealer can withhold on an unfavorable draw).
+/// - [`SessionRandomness::LbVrf`] (the post-quantum source): each event derives its OWN one-time
+///   LB-VRF key epoch (keyed on the event id, so distinct events get distinct keys — Set I is
+///   one-time), evaluates the `pqvrf` LB-VRF over the event id, and records `(pk, output, proof)`.
+///   The draw is the LB-VRF's UNIQUE output for `(key, input)`: a forged output/proof fails
+///   `pqvrf::verify` on replay (uniqueness reducing to Module-SIS) — escape hatch #4 closed. A
+///   genesis-committed key-chain + real beacon + timeout-no-reroll (hatches #1/#2/#5) remain the
+///   `Hybrid` follow-up.
+///
+/// Both modes serialize (the LB-VRF mode carries only a 32-byte key seed, never a live secret key —
+/// per-event keys are re-derived deterministically), so a session round-trips through a savegame.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub struct SessionRandomness {
-    server_secret: [u8; 32],
-    player_secret: [u8; 32],
+pub enum SessionRandomness {
+    /// Two-party commit-reveal keyed on a session seed (the default).
+    CommitReveal {
+        /// The server's session secret (per-event reveal = PRF of this and the event id).
+        server_secret: [u8; 32],
+        /// The player's session secret (per-event contribution = PRF of this and the event id).
+        player_secret: [u8; 32],
+    },
+    /// Post-quantum one-time LB-VRF, per-event key epoch derived from this session material.
+    LbVrf {
+        /// The session material a per-event LB-VRF key seed is derived from (with the event id).
+        key_material: [u8; 32],
+    },
 }
 
 impl SessionRandomness {
-    /// Derive a provider from a 32-byte session seed (two domain-separated sub-secrets).
+    /// Derive a CommitReveal provider from a 32-byte session seed (two domain-separated sub-secrets).
     pub fn from_seed(seed: &[u8; 32]) -> SessionRandomness {
-        SessionRandomness {
+        SessionRandomness::CommitReveal {
             server_secret: Self::derive(SESSION_SERVER_TAG, seed),
             player_secret: Self::derive(SESSION_PLAYER_TAG, seed),
+        }
+    }
+
+    /// Derive an LB-VRF provider from a 32-byte session seed. Each event mints its own one-time key
+    /// epoch (keyed on the event id), so the one-time Set I constraint holds per random turn.
+    pub fn from_lb_vrf_seed(seed: &[u8; 32]) -> SessionRandomness {
+        SessionRandomness::LbVrf {
+            key_material: Self::derive(SESSION_LB_VRF_KEY_TAG, seed),
         }
     }
 
@@ -2665,18 +2706,34 @@ impl SessionRandomness {
         *h.finalize().as_bytes()
     }
 
-    /// Produce the [`RandomnessEvidence`] for `request` via a per-event [`CommitReveal`] source.
+    /// Produce the [`RandomnessEvidence`] for `request` under this provider's mode.
     pub fn evidence(&self, request: &RandomnessRequest) -> RandomnessEvidence {
         let event_id = *request.event_id().as_bytes();
-        let source = CommitReveal {
-            server_reveal: Self::contribution(SESSION_SERVER_TAG, &self.server_secret, &event_id),
-            player_contribution: Self::contribution(
-                SESSION_PLAYER_TAG,
-                &self.player_secret,
-                &event_id,
-            ),
-        };
-        source.evidence(request)
+        match self {
+            SessionRandomness::CommitReveal {
+                server_secret,
+                player_secret,
+            } => {
+                let source = CommitReveal {
+                    server_reveal: Self::contribution(SESSION_SERVER_TAG, server_secret, &event_id),
+                    player_contribution: Self::contribution(
+                        SESSION_PLAYER_TAG,
+                        player_secret,
+                        &event_id,
+                    ),
+                };
+                source.evidence(request)
+            }
+            SessionRandomness::LbVrf { key_material } => {
+                // A fresh one-time LB-VRF key epoch for THIS event (distinct event ids → distinct
+                // keys → each key evaluated exactly once, honoring Set I's one-time budget).
+                let key_seed = Self::contribution(SESSION_LB_VRF_KEY_TAG, key_material, &event_id);
+                let source = ServerVrf::from_key_seed(&key_seed);
+                source
+                    .try_evidence(request)
+                    .expect("a fresh per-event LB-VRF key is evaluated exactly once")
+            }
+        }
     }
 }
 

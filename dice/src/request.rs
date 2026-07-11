@@ -67,9 +67,9 @@ impl RandomnessRequest {
 ///
 /// Each variant carries exactly what its verifier needs. This slice fully
 /// implements [`Deterministic`](EvidenceKind::Deterministic),
-/// [`CommitReveal`](EvidenceKind::CommitReveal), and a mock
-/// [`Beacon`](EvidenceKind::Beacon); the [`Vrf`](EvidenceKind::Vrf) variant is
-/// present so the shape is fixed for the VRF/hybrid backends (a follow-up).
+/// [`CommitReveal`](EvidenceKind::CommitReveal), a mock
+/// [`Beacon`](EvidenceKind::Beacon), and the real post-quantum
+/// [`LbVrf`](EvidenceKind::LbVrf) (backed by the `pqvrf` LB-VRF).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EvidenceKind {
     /// A test/offline deterministic source keyed on a caller-supplied context.
@@ -97,14 +97,20 @@ pub enum EvidenceKind {
         /// The beacon's output for that round.
         output: [u8; 32],
     },
-    /// A server VRF output + proof. Shape only in this slice — verifying the
-    /// proof requires a VRF backend (a follow-up).
-    Vrf {
-        /// Registered VRF public key.
+    /// A post-quantum **LB-VRF** output + proof (Esgin et al. FC 2021, Set I; the
+    /// `pqvrf` crate). The VRF input is the draw's [`EventId`] bytes; the verifier
+    /// re-runs `pqvrf::verify(&pk, event_id, &output, &proof)` and, on success,
+    /// derives the seed over the *verified* output. Uniqueness of the accepted
+    /// output for a given `(pk, input)` reduces to Module-SIS, so a forged output
+    /// or proof is rejected — the one-output-per-input guarantee. All three fields
+    /// are the `pqvrf` structures in their canonical little-endian byte encoding
+    /// (see `ServerVrf`'s codec); a wrong length is rejected as malformed.
+    LbVrf {
+        /// The LB-VRF public key `t = A*s` (canonical LE bytes).
         public_key: Vec<u8>,
-        /// VRF output.
-        output: [u8; 32],
-        /// VRF proof (verified by the backend, not in this slice).
+        /// The LB-VRF output `v` (canonical LE bytes).
+        output: Vec<u8>,
+        /// The LB-VRF proof `(z, c)` (canonical LE bytes), re-checked by `pqvrf::verify`.
         proof: Vec<u8>,
     },
 }

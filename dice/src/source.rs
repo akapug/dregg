@@ -10,6 +10,8 @@
 //! The verifier is the trust surface: it is a pure function of public data and is
 //! the same regardless of who produced the evidence.
 
+use std::cell::RefCell;
+
 use crate::draw::{DrawStream, Seed};
 use crate::error::VerifyError;
 use crate::event::EventId;
@@ -257,45 +259,303 @@ impl RandomnessSource for MockBeacon {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ServerVrf / Hybrid — DESIGNED, not implemented. Shape is fixed; the backend
-// (a registered-key VRF; the delayed-beacon hybrid seed) is a follow-up.
+// ServerVrf — the real post-quantum LB-VRF source (`pqvrf`, Esgin et al. Set I).
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// A server VRF source with a registered key.
+/// Domain tag for the per-event LB-VRF key commitment (the request-binding model).
+pub const DOMAIN_LB_VRF_KEY_COMMITMENT: &[u8] = b"dregg-dice/lb-vrf/key-commitment/v1";
+
+/// A producer-side error from [`ServerVrf::try_evidence`].
 ///
-/// TODO(vrf-backend): verifying a VRF proof requires a VRF backend (e.g. an
-/// ECVRF / RFC 9381 implementation over the registered key). The trait shape and
-/// the [`EvidenceKind::Vrf`] evidence variant are fixed here so the backend drops
-/// in without a redesign. `evidence` is unimplemented; `seed` returns
-/// [`VerifyError::BackendUnavailable`] so downstream code fails closed.
-#[derive(Clone, Debug, Default)]
+/// The trait's infallible [`RandomnessSource::evidence`] panics on these; real
+/// producers call [`ServerVrf::try_evidence`] to handle them. Both are load-bearing
+/// for the **one-time** discipline: Set I permits exactly one evaluation per key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VrfEvalError {
+    /// This `ServerVrf`'s one-time key was already consumed by a prior evaluation.
+    /// Set I is one-time; mint a fresh [`ServerVrf`] (a new key epoch) per event.
+    KeyConsumed,
+    /// The underlying `pqvrf::eval` failed (its one-time budget, or a sampling abort).
+    Backend(pqvrf::EvalError),
+}
+
+impl core::fmt::Display for VrfEvalError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::KeyConsumed => f.write_str(
+                "LB-VRF key already consumed — Set I is one-time; mint a fresh ServerVrf per event",
+            ),
+            Self::Backend(e) => write!(f, "LB-VRF eval failed: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for VrfEvalError {}
+
+/// A server randomness source backed by the one-time post-quantum **LB-VRF**
+/// (`pqvrf`, Esgin et al. FC 2021, Set I).
+///
+/// # What it wraps
+///
+/// The VRF input is the draw's [`EventId`] bytes (which already bind
+/// game/seq/pre-state/action/purpose/draw-count). Producing evidence runs one
+/// `pqvrf::eval` over that input, yielding `(output, proof)`; the recorded
+/// [`EvidenceKind::LbVrf`] carries the public key, output, and proof. The pure
+/// [`RandomnessSource::seed`] verifier re-runs `pqvrf::verify(&pk, event_id,
+/// &output, &proof)` and, only on success, derives the [`Seed`] over the
+/// **verified** output via the same domain-separated [`derive_seed`] every source
+/// ends with. A forged output or proof — one the LB-VRF secret never produced for
+/// this input — fails `pqvrf::verify`; its uniqueness reduces to Module-SIS. That
+/// is escape-hatch #4 (one-output-per-input) closed with a lattice primitive, in
+/// place of the rejected classical ECVRF.
+///
+/// # The one-time key model (per-event key committed in the request)
+///
+/// Set I permits **one** evaluation per key ([`pqvrf::MAX_EVALUATIONS`] = 1), so
+/// each random event needs its own key epoch. This crate uses the simpler of the
+/// two correct models: a **per-event key committed in the request**. The event's
+/// public key (or its [`ServerVrf::key_commitment`]) is bound into the request
+/// *before the draw* — the request commitment is stored first — so a verifier
+/// checks the proof under the key the request committed to and the server cannot
+/// swap in a fresh, favourable key after seeing the outcome. It is simpler than a
+/// genesis-committed key-chain (which needs a Merkle root + per-epoch membership
+/// proof, indexed by `seq`) and needs no extra committed state: the existing
+/// request/[`EventId`] binding carries the key. `ServerVrf` enforces the one-eval
+/// rule two ways — `pqvrf::SecretKey`'s own budget counter, and by *burning* its
+/// key on first use ([`ServerVrf::try_evidence`] returns [`VrfEvalError::KeyConsumed`]
+/// on a second call).
+///
+/// **Assurance.** Output pseudorandomness rests on MLWE (assumed; `pqvrf`'s
+/// undischarged `Pseudorandom` obligation). Uniqueness (the one-output tooth this
+/// source uses) reduces to Module-SIS. Genesis key binding, a real delayed beacon,
+/// and timeout-no-reroll (hatches #1/#2/#5) remain the [`Hybrid`] follow-up.
 pub struct ServerVrf {
-    /// The registered VRF public key (verification anchor).
-    pub public_key: Vec<u8>,
+    /// The one-time LB-VRF secret key for this event epoch — consumed on first eval.
+    key: RefCell<Option<pqvrf::SecretKey>>,
+    /// The corresponding public key (the verification anchor recorded in evidence).
+    public_key: pqvrf::PublicKey,
+}
+
+impl core::fmt::Debug for ServerVrf {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ServerVrf")
+            .field("public_key", &self.public_key)
+            .field("key_consumed", &self.key.borrow().is_none())
+            .finish()
+    }
+}
+
+impl ServerVrf {
+    /// The seed-derivation source tag for this source.
+    const TAG: &'static [u8] = b"lb-vrf";
+
+    /// Mint a fresh one-time key epoch from a 32-byte key seed (via `pqvrf::keygen`).
+    ///
+    /// Each event MUST use a distinct `ServerVrf` (a distinct key seed): Set I is
+    /// one-time, and evaluating a key on a second input would break the scheme.
+    pub fn from_key_seed(seed: &[u8; 32]) -> ServerVrf {
+        let (public_key, secret_key) = pqvrf::keygen(seed);
+        ServerVrf {
+            key: RefCell::new(Some(secret_key)),
+            public_key,
+        }
+    }
+
+    /// This epoch's LB-VRF public key.
+    pub fn public_key(&self) -> &pqvrf::PublicKey {
+        &self.public_key
+    }
+
+    /// This epoch's LB-VRF public key in canonical bytes (as recorded in evidence).
+    pub fn public_key_bytes(&self) -> Vec<u8> {
+        encode_public_key(&self.public_key)
+    }
+
+    /// Whether this source's one-time key has already been consumed.
+    pub fn key_consumed(&self) -> bool {
+        self.key.borrow().is_none()
+    }
+
+    /// The domain-separated commitment to a public key, `H(DOMAIN || pk_bytes)` — the
+    /// value a request binds (e.g. into `game_binding`) to pin THIS key epoch before
+    /// the draw. A verifier that recomputes it from the evidence's public key and
+    /// compares it to the request's committed value detects a swapped key.
+    pub fn key_commitment(public_key_bytes: &[u8]) -> [u8; 32] {
+        let mut h = blake3::Hasher::new();
+        absorb_len_prefixed(&mut h, DOMAIN_LB_VRF_KEY_COMMITMENT);
+        absorb_len_prefixed(&mut h, public_key_bytes);
+        *h.finalize().as_bytes()
+    }
+
+    /// Produce LB-VRF evidence for `req`, consuming this epoch's one-time key.
+    ///
+    /// Runs a single `pqvrf::eval` with VRF input = the request's [`EventId`] bytes,
+    /// then derives the seed over the verified output and records the draw transcript.
+    /// A second call returns [`VrfEvalError::KeyConsumed`] — the one-time guarantee.
+    pub fn try_evidence(
+        &self,
+        req: &RandomnessRequest,
+    ) -> Result<RandomnessEvidence, VrfEvalError> {
+        let mut slot = self.key.borrow_mut();
+        let secret_key = slot.as_mut().ok_or(VrfEvalError::KeyConsumed)?;
+        let event_id = req.event_id();
+        let (output, proof) =
+            pqvrf::eval(secret_key, event_id.as_bytes()).map_err(VrfEvalError::Backend)?;
+        // Burn the key: Set I is one-time. (pqvrf's own budget counter also refuses a
+        // second eval; this additionally drops the secret and yields a crisp error.)
+        *slot = None;
+
+        let output_bytes = encode_output(&output);
+        let seed = derive_seed(&event_id, Self::TAG, &output_bytes);
+        let commitment = DrawStream::new(seed, req.draw_count).transcript_commitment();
+        Ok(RandomnessEvidence {
+            derivation_version: DERIVATION_VERSION,
+            source: EvidenceKind::LbVrf {
+                public_key: encode_public_key(&self.public_key),
+                output: output_bytes,
+                proof: encode_proof(&proof),
+            },
+            draw_transcript_commitment: commitment,
+        })
+    }
 }
 
 impl RandomnessSource for ServerVrf {
-    fn evidence(&self, _req: &RandomnessRequest) -> RandomnessEvidence {
-        unimplemented!(
-            "ServerVrf::evidence requires a VRF backend (registered-key ECVRF); \
-             this slice fixes the trait/evidence shape only"
+    fn evidence(&self, req: &RandomnessRequest) -> RandomnessEvidence {
+        self.try_evidence(req).expect(
+            "ServerVrf::evidence: the one-time LB-VRF key is exhausted or eval aborted — \
+             use ServerVrf::try_evidence to handle one-time exhaustion",
         )
     }
 
-    fn seed(_req: &RandomnessRequest, _ev: &RandomnessEvidence) -> Result<Seed, VerifyError> {
-        Err(VerifyError::BackendUnavailable(
-            "ServerVrf: requires a registered-key VRF backend (ECVRF/RFC 9381) — a follow-up",
-        ))
+    fn seed(req: &RandomnessRequest, ev: &RandomnessEvidence) -> Result<Seed, VerifyError> {
+        check_version(ev)?;
+        let EvidenceKind::LbVrf {
+            public_key,
+            output,
+            proof,
+        } = &ev.source
+        else {
+            return Err(VerifyError::SourceMismatch);
+        };
+        // Decode the untrusted byte fields into pqvrf structures (canonical lengths).
+        let public_key = decode_public_key(public_key)?;
+        let output = decode_output(output)?;
+        let proof = decode_proof(proof)?;
+        // THE ONE-OUTPUT TOOTH: re-run pqvrf::verify under the recorded key and the
+        // request's event id. A forged output/proof (not the LB-VRF value for this
+        // input) is rejected here — uniqueness reduces to Module-SIS.
+        let event_id = req.event_id();
+        if !pqvrf::verify(&public_key, event_id.as_bytes(), &output, &proof) {
+            return Err(VerifyError::VrfProofInvalid);
+        }
+        // Only now — over the VERIFIED output — derive the seed and check the transcript.
+        let seed = derive_seed(&event_id, Self::TAG, &encode_output(&output));
+        check_transcript(seed, req, ev)
     }
+}
+
+// ── LB-VRF ⇄ bytes codec. pqvrf ships no wire format; these are canonical
+//    little-endian encodings of its public structs, with strict length checks on
+//    decode so a malformed evidence field is rejected before the proof check. ──
+
+fn encode_public_key(pk: &pqvrf::PublicKey) -> Vec<u8> {
+    let mut out = Vec::with_capacity(pqvrf::MSIS_RANK * pqvrf::DEGREE * 4);
+    for poly in &pk.t {
+        for &c in &poly.coefficients {
+            out.extend_from_slice(&c.to_le_bytes());
+        }
+    }
+    out
+}
+
+fn decode_public_key(bytes: &[u8]) -> Result<pqvrf::PublicKey, VerifyError> {
+    let expected = pqvrf::MSIS_RANK * pqvrf::DEGREE * 4;
+    if bytes.len() != expected {
+        return Err(VerifyError::MalformedVrfEvidence(
+            "LB-VRF public key has the wrong byte length",
+        ));
+    }
+    let mut it = bytes.chunks_exact(4);
+    let t = core::array::from_fn(|_| {
+        let coefficients = core::array::from_fn(|_| {
+            let c = it.next().expect("length checked above");
+            u32::from_le_bytes([c[0], c[1], c[2], c[3]])
+        });
+        pqvrf::PublicPolynomial { coefficients }
+    });
+    Ok(pqvrf::PublicKey { t })
+}
+
+fn encode_output(output: &pqvrf::Output) -> Vec<u8> {
+    let mut out = Vec::with_capacity(pqvrf::OUTPUT_DEGREE * 4);
+    for &c in &output.coefficients {
+        out.extend_from_slice(&c.to_le_bytes());
+    }
+    out
+}
+
+fn decode_output(bytes: &[u8]) -> Result<pqvrf::Output, VerifyError> {
+    if bytes.len() != pqvrf::OUTPUT_DEGREE * 4 {
+        return Err(VerifyError::MalformedVrfEvidence(
+            "LB-VRF output has the wrong byte length",
+        ));
+    }
+    let mut it = bytes.chunks_exact(4);
+    let coefficients = core::array::from_fn(|_| {
+        let c = it.next().expect("length checked above");
+        u32::from_le_bytes([c[0], c[1], c[2], c[3]])
+    });
+    Ok(pqvrf::Output { coefficients })
+}
+
+fn encode_proof(proof: &pqvrf::Proof) -> Vec<u8> {
+    let mut out = Vec::with_capacity(pqvrf::SECRET_WIDTH * pqvrf::DEGREE * 4 + pqvrf::DEGREE);
+    for poly in &proof.response {
+        for &c in &poly.coefficients {
+            out.extend_from_slice(&c.to_le_bytes());
+        }
+    }
+    for &c in &proof.challenge.coefficients {
+        out.extend_from_slice(&c.to_le_bytes());
+    }
+    out
+}
+
+fn decode_proof(bytes: &[u8]) -> Result<pqvrf::Proof, VerifyError> {
+    let response_len = pqvrf::SECRET_WIDTH * pqvrf::DEGREE * 4;
+    let expected = response_len + pqvrf::DEGREE;
+    if bytes.len() != expected {
+        return Err(VerifyError::MalformedVrfEvidence(
+            "LB-VRF proof has the wrong byte length",
+        ));
+    }
+    let (response_bytes, challenge_bytes) = bytes.split_at(response_len);
+    let mut it = response_bytes.chunks_exact(4);
+    let response = core::array::from_fn(|_| {
+        let coefficients = core::array::from_fn(|_| {
+            let c = it.next().expect("length checked above");
+            i32::from_le_bytes([c[0], c[1], c[2], c[3]])
+        });
+        pqvrf::ResponsePolynomial { coefficients }
+    });
+    let challenge = pqvrf::ChallengePolynomial {
+        coefficients: core::array::from_fn(|i| challenge_bytes[i] as i8),
+    };
+    Ok(pqvrf::Proof {
+        response,
+        challenge,
+    })
 }
 
 /// The recommended hybrid: a delayed public beacon plus a registered server VRF
 /// (with commit-reveal only as an offline fallback).
 ///
 /// TODO(hybrid-backend): the hybrid seed folds a finalized beacon round + output
-/// and a VRF output/proof over the transition context. It needs both the beacon
-/// verification and the VRF backend. The shape is fixed here; `seed` fails closed
-/// with [`VerifyError::BackendUnavailable`].
+/// and an LB-VRF output/proof (the [`ServerVrf`] leg is now real) over the
+/// transition context. It still needs beacon verification and a genesis-committed
+/// key-chain (hatches #1/#2/#5). The shape is fixed here; `seed` fails closed with
+/// [`VerifyError::BackendUnavailable`].
 #[derive(Clone, Debug, Default)]
 pub struct Hybrid {
     /// The registered VRF public key.
