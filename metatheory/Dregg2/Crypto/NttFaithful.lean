@@ -2053,6 +2053,131 @@ theorem inttBlock_char (s : Nat) (hs : s ≤ 7) (a_in : Poly) (hsz : a_in.size =
         have hAp : A[p]! = a_in[p]! := by rw [hAdef]; exact ihun p (by rw [hblkeq] at hp1; omega) (by omega)
         rw [hAplen, hAp]
 
+/-- Each GS stage preserves the reduced range (`addQ`/`mulModQ` writes). -/
+theorem foldl_inttBlockFn_lt (s : Nat) (hs : s ≤ 7) :
+    ∀ (L : List Nat) (st : Poly × Nat), (∀ (p:Nat), st.1[p]!<q) →
+      ∀ (p:Nat), (List.foldl (inttBlockFn s) st L).1[p]! < q := by
+  intro L; induction L with
+  | nil => intro st hst p; simpa using hst p
+  | cons hd tl ih =>
+    intro st hst
+    exact ih (inttBlockFn s st hd) (fun p => by
+      unfold inttBlockFn
+      exact gsSweep_lt _ _ _ (by rw [one_shl]; exact Nat.one_le_two_pow) st.1 hst p)
+
+set_option maxHeartbeats 4000000 in
+/-! ### INVERSE step 4 — THE GS STAGE INVARIANT (mirror of `stage_inv`).
+
+After `n` GS stages, array slot `g·2ⁿ+i` holds `Σ_{u<2ⁿ} v[g·2ⁿ+u]·irt(g·2ⁿ+u)^i` — the `ℤ_q` interpolation
+of the `g`-th contiguous block of `v` at the reciprocal roots. Base `n=0`: single term `v[g]`. Step: one CT
+stage merges level-`n` segments `2g` (low) and `2g+1` (high) into level-`(n+1)` segment `g` via the GS
+butterfly (`inttBlock_char` + `cast_gsSweep`); splitting the target sum low/high and pinning `irt(·)^{2ⁿ}` to
+the block twiddle (`irt_stage_lo`/`irt_stage_hi`) collapses it. -/
+theorem inttStage_inv (v : Poly) (hv : v.size = 256) (hvlt : ∀ (p:Nat), v[p]! < q) :
+    ∀ n, n ≤ 8 →
+      (inttUpto n v).1.size = 256 ∧
+      (inttUpto n v).2 = 2^(8-n) ∧
+      (∀ (p:Nat), (inttUpto n v).1[p]! < q) ∧
+      ∀ g i, g < 2^(8-n) → i < 2^n →
+        ((inttUpto n v).1[g * 2^n + i]! : ZMod q)
+          = ∑ u ∈ range (2^n), (v[g*2^n+u]! : ZMod q) * (irt (g*2^n+u))^i := by
+  intro n
+  induction n with
+  | zero =>
+    intro _
+    refine ⟨by simpa [inttUpto] using hv, by simp [inttUpto], by simpa [inttUpto] using hvlt, ?_⟩
+    intro g i hg hi
+    have hi0 : i = 0 := by omega
+    subst hi0
+    simp only [inttUpto, List.range'_zero, List.foldl_nil, pow_zero, Nat.mul_one, Nat.add_zero,
+      range_one, Finset.sum_singleton, Nat.zero_add, mul_one]
+  | succ n ih =>
+    intro hn1
+    have hn7 : n ≤ 7 := by omega
+    obtain ⟨ihsz, ihcnt, ihlt, ihform⟩ := ih (by omega)
+    have h2L : (2:Nat)^(n+1) = 2*2^n := by rw [pow_succ]; ring
+    have h8 : (2:Nat)^(8-n) = 2*2^(7-n) := by rw [← pow_succ']; congr 1; omega
+    have hstage : inttUpto (n+1) v
+        = List.foldl (inttBlockFn n) ((inttUpto n v).1, (inttUpto n v).2) (List.range' 0 (2^(7-n)) 1) := by
+      rw [inttUpto_succ]; unfold inttStageStep; rw [inb_nblk n hn7]
+    set a_in := (inttUpto n v).1 with haindef
+    obtain ⟨bsz, bun, blo, bhi⟩ :=
+      inttBlock_char n hn7 a_in ihsz (inttUpto n v).2 (2^(7-n)) (le_refl _)
+    simp only [one_shl] at blo bhi bun
+    refine ⟨?_, ?_, ?_, ?_⟩
+    · rw [hstage]; exact bsz
+    · rw [hstage, foldl_inttBlockFn_snd]
+      have hlen : (List.range' 0 (2^(7-n)) 1).length = 2^(7-n) := by simp
+      show (inttUpto n v).2 - _ = _
+      rw [hlen, ihcnt, show (8-(n+1)) = 7-n from by omega, h8]; omega
+    · intro p; rw [hstage]
+      exact foldl_inttBlockFn_lt n hn7 _ ((inttUpto n v).1, (inttUpto n v).2) (fun p => ihlt p) p
+    · intro g i hg hi
+      rw [show (8-(n+1)) = 7-n from by omega] at hg
+      rw [hstage]
+      -- IH for the two child segments (2g low, 2g+1 high)
+      have hg2 : 2*g < 2^(8-n) := by rw [h8]; omega
+      have hg2' : 2*g+1 < 2^(8-n) := by rw [h8]; omega
+      have e2g : ∀ i', i' < 2^n →
+          ((a_in[g*(2*2^n)+i']! : ZMod q)
+            = ∑ u ∈ range (2^n), (v[g*(2*2^n)+u]! : ZMod q) * (irt (g*(2*2^n)+u))^i') := by
+        intro i' hi'
+        have hh := ihform (2*g) i' hg2 hi'
+        rw [show (2*g)*2^n = g*(2*2^n) from by ring] at hh
+        exact hh
+      have e2g1 : ∀ i', i' < 2^n →
+          ((a_in[g*(2*2^n)+2^n+i']! : ZMod q)
+            = ∑ u ∈ range (2^n), (v[g*(2*2^n)+2^n+u]! : ZMod q) * (irt (g*(2*2^n)+2^n+u))^i') := by
+        intro i' hi'
+        have hh := ihform (2*g+1) i' hg2' hi'
+        rw [show (2*g+1)*2^n = g*(2*2^n)+2^n from by ring] at hh
+        exact hh
+      -- rewrite the sum on the RHS via the low/high split (normalizing the high sum's index association)
+      rw [h2L]
+      rw [sum_range_split_half (fun u => (v[g*(2*2^n)+u]! : ZMod q) * (irt (g*(2*2^n)+u))^i) (2^n)]
+      have hnorm : (∑ u ∈ range (2^n), (v[g*(2*2^n)+(2^n+u)]! : ZMod q) * (irt (g*(2*2^n)+(2^n+u)))^i)
+            = ∑ u ∈ range (2^n), (v[g*(2*2^n)+2^n+u]! : ZMod q) * (irt (g*(2*2^n)+2^n+u))^i := by
+        apply Finset.sum_congr rfl; intro u _
+        rw [show g*(2*2^n)+(2^n+u) = g*(2*2^n)+2^n+u from by ring]
+      rw [hnorm]
+      rcases Nat.lt_or_ge i (2^n) with hilo | hihi
+      · -- LOW half: i < 2^n
+        rw [blo g hg (g*(2*2^n)+i) (by omega) (by omega), cast_addQ,
+            e2g i hilo, show g*(2*2^n)+i+2^n = g*(2*2^n)+2^n+i from by ring, e2g1 i hilo]
+      · -- HIGH half: i = 2^n + i'
+        set i' := i - 2^n with hi'def
+        have hi' : i' < 2^n := by omega
+        have hieq : i = 2^n + i' := by omega
+        have hpos : g*(2*2^n)+i = g*(2*2^n)+2^n+i' := by rw [hieq]; ring
+        rw [hpos, bhi g hg (g*(2*2^n)+2^n+i') (by omega) (by omega),
+            show (inttUpto n v).2 - g - 1 = 2^(8-n)-1-g from by rw [ihcnt]; omega,
+            show g*(2*2^n)+2^n+i'-2^n = g*(2*2^n)+i' from by omega,
+            cast_mulModQ,
+            cast_subQ (a_in[g*(2*2^n)+i']!) (a_in[g*(2*2^n)+2^n+i']!)
+              (by have := ihlt (g*(2*2^n)+2^n+i'); omega),
+            e2g i' hi', e2g1 i' hi']
+        -- now both target sums carry exponent i = 2^n + i'; collapse via irt_stage_lo/hi
+        rw [hieq]
+        have hSlo : (∑ u ∈ range (2^n), (v[g*(2*2^n)+u]! : ZMod q) * (irt (g*(2*2^n)+u))^(2^n+i'))
+            = ((subQ 0 (zetaTwiddle (2^(8-n)-1-g)) : Nat) : ZMod q)
+              * ∑ u ∈ range (2^n), (v[g*(2*2^n)+u]! : ZMod q) * (irt (g*(2*2^n)+u))^i' := by
+          rw [Finset.mul_sum]; apply Finset.sum_congr rfl; intro u humem
+          have hult : u < 2^n := mem_range.mp humem
+          rw [pow_add, show (irt (g*(2*2^n)+u))^(2^n)
+                = ((subQ 0 (zetaTwiddle (2^(8-n)-1-g)) : Nat) : ZMod q) from by
+                rw [show g*(2*2^n) = g*2^(n+1) from by rw [h2L]]; exact irt_stage_lo n g u hn7 hg hult]
+          ring
+        have hShi : (∑ u ∈ range (2^n), (v[g*(2*2^n)+2^n+u]! : ZMod q) * (irt (g*(2*2^n)+2^n+u))^(2^n+i'))
+            = -((subQ 0 (zetaTwiddle (2^(8-n)-1-g)) : Nat) : ZMod q)
+              * ∑ u ∈ range (2^n), (v[g*(2*2^n)+2^n+u]! : ZMod q) * (irt (g*(2*2^n)+2^n+u))^i' := by
+          rw [Finset.mul_sum]; apply Finset.sum_congr rfl; intro u humem
+          have hult : u < 2^n := mem_range.mp humem
+          rw [pow_add, show (irt (g*(2*2^n)+2^n+u))^(2^n)
+                = -((subQ 0 (zetaTwiddle (2^(8-n)-1-g)) : Nat) : ZMod q) from by
+                rw [show g*(2*2^n) = g*2^(n+1) from by rw [h2L]]; exact irt_stage_hi n g u hn7 hg hult]
+          ring
+        rw [hSlo, hShi]; ring
+
 /-! ## Axiom gate on the new keystones (⊆ {propext, Classical.choice, Quot.sound}).
 Every rung climbed is checked clean; `zeta_root_witness`'s `ofReduceBool` (the concrete ζ=1753 pin) is
 deliberately NOT gated here — it is the accepted computational residual, isolated from the ∀-theorems. -/
