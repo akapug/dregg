@@ -171,6 +171,24 @@ contract DreggSettlementTest is Test {
         assertEq(settlement.provenHeight(), 0);
     }
 
+    function test_ProvenRootsRegistry_HistoricalAndNomadLaw() public {
+        // Genesis is recorded from construction; zero is never a proven root.
+        assertTrue(settlement.isProvenRoot(settlement.packLanes(mkLanes(1))));
+        assertFalse(settlement.isProvenRoot(bytes32(0))); // THE NOMAD LAW
+        assertFalse(settlement.isProvenRoot(settlement.packLanes(mkLanes(2))));
+
+        // After two chained settles, BOTH historical finalRoots stay queryable
+        // (a cross-chain verifier checks the root proven at dispatch time).
+        uint32[8] memory f1 = mkLanes(2);
+        uint32[8] memory f2 = mkLanes(4);
+        callSettle(mkLanes(1), f1, 10, mkLanes(3));
+        callSettle(f1, f2, 5, mkLanes(5));
+        assertTrue(settlement.isProvenRoot(settlement.packLanes(f1)));
+        assertTrue(settlement.isProvenRoot(settlement.packLanes(f2)));
+        assertTrue(settlement.isProvenRoot(settlement.packLanes(mkLanes(1))));
+        assertFalse(settlement.isProvenRoot(settlement.packLanes(mkLanes(9))));
+    }
+
     function test_Reject_NonCanonicalGenesisAtConstruction() public {
         // The genesis anchor is canonicality-checked at deployment, not just in settle().
         uint32[8] memory bad = mkLanes(1);
