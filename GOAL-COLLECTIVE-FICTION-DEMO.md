@@ -945,3 +945,29 @@ skills/spells). RUNNING: bot payment integration [aa75cdf]. PENDING (when it lan
 MIGRATION (bot /dungeon attested-dm -> real dungeon-on-dregg, now DEEP), then gallery->UGC + Midjourney orchestration
 (wire dormant discord_caps) + dead-code sweep. Honest floors still open: the crown (verify_history, Lane-D-gated),
 non-grindable-dice-as-default, cross-node finality.
+
+## Bot earning loop: READ-VERIFIED real, commit HELD for a driven build (hbox weather, 2026-07-11)
+discord-bot/src/pay.rs (+ commands/pay.rs, migrations/004_dregg_pay.sql, the fiction.rs /dungeon gate, dregg-pay +
+dregg-narrator in Cargo.toml) verify-by-reading as REAL + well-designed: SqliteCreditStore (persist across restart),
+PaidNarrator (real Bedrock under a FRESH per-run BudgetLedger = the per-user cap, not the global $20), the gate debits
+ONLY on a successful narration (a failed call never burns a credit; empty balance -> free tier, no free-ride),
+devnet/mock default + nothing mainnet hardcoded (PayConfig::from_env). Tests: full_paid_dungeon_loop_driven_on_the_
+mock_path + a_paid_failure_does_not_burn_a_credit — comprehensive, non-vacuous. HELD: not committed — verify-by-DRIVING
+requires a build; hbox (the bot's build host) is swept/overloaded (another swarm pegged load ~50; not ours). COMMIT
+when hbox recovers: scripts/hbuild bot-pay 'cd discord-bot && cargo test' -> drive -> commit on hbox.
+
+## DUAL-ASSET TREASURY DESIGN (ember's economics — to build when hbox is back)
+Model: USDC = the FUEL (pays real Bedrock USD; the inference budget IS the USDC balance); $DREGG = the community token
+that ACCUMULATES. A $DREGG-paid run consumes real inference (USD) but only adds illiquid $DREGG -> the USDC fuel drains,
+the $DREGG pile grows, the community must periodically refuel. Refuel paths: (a) collective-voted liquidity event (swap
+$DREGG->SOL->USDC via Jupiter), (b) ember tops up USDC, (c) friendly OTC (users bring USDC -> get $DREGG from the pile
+at a 10% discount; no DEX; converts the pile + rewards holders, no market dump). The COLLECTIVE (collective_choice, the
+same quorum as /party) GOVERNS liquidity events -> $DREGG utility = treasury governance + play.
+BUILD (mostly additive on dregg-pay, all devnet/mock-first, mainnet on ember's go, keys stay ember's):
+- dregg-pay: accept a SECOND SPL mint (USDC) alongside $DREGG (watcher/deposit-addrs already mint-agnostic); credit
+  records the asset. Two treasury balances (USDC-fuel, $DREGG-pile).
+- narrator budget: the inference cap becomes the USDC treasury balance (dynamic), not a static $20.
+- governance: a collective_choice liquidity-event proposal + quorum -> AUTHORIZES a swap (execution behind ember's signer).
+- swap: a Jupiter route ($DREGG->SOL->USDC) on a passed vote (the sharpest real-funds edge — vote authorizes, ember signs).
+- OTC: a direct USDC<->$DREGG-pile flow at the 10% discount (no DEX).
+OPEN CALLS for ember: run price ($X USDC-equiv; $DREGG-per-run fixed or price-fed?); confirm Jupiter as the router.
