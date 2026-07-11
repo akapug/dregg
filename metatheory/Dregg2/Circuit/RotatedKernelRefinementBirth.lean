@@ -64,7 +64,6 @@ legacy `spawnV3` rungs (`spawn_descriptorRefines_sat`) keep the frozen-root resi
 (`compressNInjective` + the injective `accountsLeaf`, the SAME carrier `AccountsCommit`/`ListCommit`
 use). NEW file; all imports read-only.
 -/
-import Dregg2.Circuit.RotatedKernelRefinementMisc
 import Dregg2.Circuit.AccountsCommit
 import Dregg2.Circuit.Spec.accountgrowth
 import Dregg2.Circuit.Spec.factorycreation
@@ -741,6 +740,8 @@ structure SpawnWriteAnchor (S8 : Cap8Scheme) (hash : List ℤ → ℤ)
   -- the active spawn row is not the trailing/padding row (the keystone welds bind under
   -- `when_transition`).
   hnotlast : rd.row + 1 ≠ t.rows.length
+  -- the active row's cells are field-canonical (the deployed range-check invariant).
+  hcells : ∀ col : Nat, 0 ≤ (envAt t rd.row).loc col ∧ (envAt t rd.row).loc col < 2013265921
   spine : List ℤ
   hold : SpineCommits S8 (beforeCapRootCols (envAt t rd.row)) spine
   gap : GapOpen S8 (beforeCapRootCols (envAt t rd.row))
@@ -814,7 +815,7 @@ theorem spawn_caps_forced_sat (S8 : Cap8Scheme) (hash : List ℤ → ℤ)
     post.kernel.caps = spawnCapsMap pre.kernel actor child target :=
   rd.capsMoveDecodes
     (effCapInsertV3_forces_write8 S8 spawnWriteV3 name n hash minit mfin maddrs t hChip hsat
-      rd.row rd.hrow anc.hnotlast anc.spine anc.hold anc.gap anc.gapCov anc.hnew)
+      rd.row rd.hrow anc.hnotlast anc.hcells anc.spine anc.hold anc.gap anc.gapCov anc.hnew)
 
 /-- **`spawnWrite_descriptorRefines_sat` — THE CLASS-A REFINEMENT for spawn with the cap handoff FORCED.**
 Over the keystone wrap `effCapInsertV3 spawnWriteV3`: BOTH the accounts insert (via
