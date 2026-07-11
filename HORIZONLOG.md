@@ -7330,3 +7330,16 @@ fork rev 82cfad7). NEXT (confirmed load-bearing, not optional): the PoW-grinding
 has 16 query-PoW bits contributing to the 130-bit soundness (6*19+16), so sample_uniform_bits + check_witness
 must be built before the FRI query teeth. Then: FRI low-degree-test + query-verify + per-table quotient/logup =
 the bulk of the wrap. Challenger residual cited in commit.
+
+## wrap+solana trustless wave landed (2026-07-11, Fable — 3 lanes, all audits pass)
+
+Commits: a3760fd5b (gnark grinding), b0bcc54a6 (solana trustless), + seam-close. All 3 lanes green,
+all 3 audits PASS, zero vacuity (auditors specifically hunted feature-gated/hidden tests — none).
+- gnark FRI grinding CheckWitness (16 of 130 soundness bits) — matches fork check_witness; sample_uniform_bits
+  confirmed off the ir2 verify path. Next wrap rung: FRI low-degree-test + query-verify + per-table quotient/logup.
+- Solana trustless mint: consensus-verified (80% stake) mints, StructureOnly/RPC can't (TrustTooLow), 40% refused.
+  Residual: live geyser feed + G1 in-circuit (bridge_action_air) light-client witness.
+- Solana M-of-N unlock attestation (ed25519 precompile), VaultConfig v2 oracle key-set, Nomad-law fail-closed.
+- Cross-crate seam CLOSED: SolanaUnlockRequest::{canonical_payload,message_hash} byte-identical to the program;
+  GOLDEN hash pinned in BOTH crates (drift → one suite red).
+Followups: consensus-mint live-feed + G1 fold; solana_recipient (token-acct vs owner-wallet) semantics to reconcile.
