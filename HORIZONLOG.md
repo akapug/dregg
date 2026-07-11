@@ -7343,3 +7343,19 @@ all 3 audits PASS, zero vacuity (auditors specifically hunted feature-gated/hidd
 - Cross-crate seam CLOSED: SolanaUnlockRequest::{canonical_payload,message_hash} byte-identical to the program;
   GOLDEN hash pinned in BOTH crates (drift → one suite red).
 Followups: consensus-mint live-feed + G1 fold; solana_recipient (token-acct vs owner-wallet) semantics to reconcile.
+
+## FRI query core landed + dreggic correction in flight (2026-07-11, Fable)
+
+gnark wrap: FRI query-phase low-degree-test gadget GREEN (chain/gnark/fri_query.go, 52 tests; fold formula +
+binary Merkle arity traced to fork rev 82cfad7). Wrap chain now: gadgets→witness→transcript→challenger→
+grinding→FRI-query-core. NEXT (the bulk): batch-STARK multi-height openings (alpha-batch + beta^arity),
+higher arity, logup bus, the 4 NPO tables, + challenger Observe→Sample wiring around the query gadget.
+
+DREGGIC CORRECTION (ember caught it): the Solana lock program is a CUSTODIAL lock-and-wrap — the exact
+pattern to AVOID for participation. Kept it (real value-import + bond machinery, rescoped to the exception),
+and building the flagship that was missing: NON-CUSTODIAL proof-of-holdings. ProvenHolding foundation
+committed (bridge/src/solana_holdings.rs). Swarm in flight: holdings-verifier (prove balance over the
+holder's OWN account, no lock) + holding-to-weight (the census "missing spine": proof→vote weight, custody
+intact, fail-closed on StructureOnly, no double-count) + Lean soundness model (weight backed by finalized
+holding AND custody preserved, non-vacuous). Auditors gated on CUSTODY-VIOLATION. Docs+article reframe to
+lead with proof-of-holdings (lock = the exception) follows the code.
