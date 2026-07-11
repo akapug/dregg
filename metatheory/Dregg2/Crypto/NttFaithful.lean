@@ -1748,6 +1748,115 @@ theorem gsSweep_size (z start len : Nat) (hlen : 1 ≤ len) (a0 : Poly) (h : a0.
   | nil => intro b hb; simpa using hb
   | cons hd tl ih => intro b hb; simp only [List.foldl_cons]; exact ih _ (by rw [gsStepC_size]; exact hb)
 
+/-! ### INVERSE step 1 — peel `intt` into the 8-stage GS fold + the `nInv` scaling loop.
+
+`intt` is one `Id.run do` block: eight Gentleman–Sande stages (`len = 1,2,…,128`, `k` counting down from
+256) followed by a final `for j` scaling loop `a[j] ← nInv·a[j]`. We peel it into `inttScale (inttUpto 8 w).1`
+(mirror of `ntt_eq_fold`), threading `k` as the second state component (an actual down-counter). -/
+
+/-- `intt`'s 8 GS stages with the inner `for j` written as `gsSweep` — defeq to `intt` sans the scaling loop. -/
+def inttStages (w : Poly) : Poly := Id.run do
+  let mut a := w
+  let mut k := 256
+  for s in [0:8] do
+    let len := 1 <<< s
+    let nblk := 128 / len
+    for blk in [0:nblk] do
+      let start := blk * 2 * len
+      k := k - 1
+      a := gsSweep (subQ 0 (zetaTwiddle k)) start len a
+  return a
+
+/-- The final `nInv` scaling loop of `intt`, on its own. -/
+def inttScale (a0 : Poly) : Poly := Id.run do
+  let mut a := a0
+  for j in [0:256] do
+    a := a.set! j (mulModQ nInv a[j]!)
+  return a
+
+/-- `intt = inttScale ∘ inttStages` (the two sequential loops of `intt`, split). -/
+theorem intt_eq_scale_stages (w : Poly) : intt w = inttScale (inttStages w) := by
+  unfold intt inttScale inttStages gsSweep; rfl
+
+/-- One GS stage-`s` block: `gsSweep (−ζ^{brv(k−1)})` over block `blk`, threading `k` down by one. -/
+def inttBlockFn (s : Nat) (st2 : Poly × Nat) (blk : Nat) : Poly × Nat :=
+  (gsSweep (subQ 0 (zetaTwiddle (st2.2 - 1))) (blk * 2 * (1 <<< s)) (1 <<< s) st2.1, st2.2 - 1)
+
+def inttStageStep (s : Nat) (st : Poly × Nat) : Poly × Nat :=
+  List.foldl (inttBlockFn s) st (List.range' 0 (128 / (1 <<< s)) 1)
+
+/-- The inverse NTT stages as an explicit ordered `gsSweep` fold; state `(a, k)` threads array + down-counter
+(initial `k = 256`). -/
+def inttUpto (n : Nat) (w : Poly) : Poly × Nat :=
+  List.foldl (fun st s => inttStageStep s st) (w, 256) (List.range' 0 n 1)
+
+set_option maxHeartbeats 800000 in
+set_option maxRecDepth 8000 in
+/-- The GS-stages `Id.run do` schedule reduces to the plain nested `foldl` (`forIn`→`foldl`, pair-state). -/
+theorem inttStages_eq (w : Poly) : inttStages w = (inttUpto 8 w).1 := by
+  unfold inttStages inttUpto inttStageStep inttBlockFn
+  simp only [Id.run, Std.Legacy.Range.forIn_eq_forIn_range', bind_pure_comp, map_pure,
+    List.forIn_pure_yield_eq_foldl, Std.Legacy.Range.size, Nat.sub_zero, Nat.add_sub_cancel,
+    Nat.div_one]
+  refine Eq.trans ?_ (congrArg Prod.fst (foldl_ext_mem _ _ _ (fun st s _ => rfl) (w, 256)))
+  rfl
+
+theorem inttUpto_succ (n : Nat) (w : Poly) : inttUpto (n+1) w = inttStageStep n (inttUpto n w) := by
+  unfold inttUpto
+  rw [List.range'_1_concat, List.foldl_concat, Nat.zero_add]
+
+theorem foldl_inttBlockFn_snd (s : Nat) (l : List Nat) (st : Poly × Nat) :
+    (List.foldl (inttBlockFn s) st l).2 = st.2 - l.length := by
+  induction l generalizing st with
+  | nil => simp
+  | cons hd tl ih => simp only [List.foldl_cons]; rw [ih]; simp [inttBlockFn]; omega
+
+/-! ### INVERSE step 1b — the scaling loop is entrywise `nInv·a0[p]`. -/
+
+/-- Entrywise + size + untouched characterization of the `inttScale` fold prefix. -/
+theorem inttScale_fold (a0 : Poly) (hsz0 : a0.size = 256) :
+    ∀ (n : Nat), n ≤ 256 →
+      (List.foldl (fun r i => r.set! i (mulModQ nInv r[i]!)) a0 (List.range' 0 n 1)).size = 256 ∧
+      (∀ p, p < n →
+        (List.foldl (fun r i => r.set! i (mulModQ nInv r[i]!)) a0 (List.range' 0 n 1))[p]!
+          = mulModQ nInv a0[p]!) ∧
+      (∀ p, n ≤ p →
+        (List.foldl (fun r i => r.set! i (mulModQ nInv r[i]!)) a0 (List.range' 0 n 1))[p]! = a0[p]!) := by
+  intro n
+  induction n with
+  | zero =>
+    intro _; refine ⟨by simpa using hsz0, ?_, ?_⟩
+    · intro p hp; omega
+    · intro p _; simp
+  | succ n ih =>
+    intro hn
+    obtain ⟨ihsz, ihlo, ihun⟩ := ih (by omega)
+    rw [List.range'_1_concat, List.foldl_concat, Nat.zero_add]
+    set A := List.foldl (fun r i => r.set! i (mulModQ nInv r[i]!)) a0 (List.range' 0 n 1) with hAdef
+    have hAn : A[n]! = a0[n]! := ihun n (le_refl _)
+    refine ⟨?_, ?_, ?_⟩
+    · rw [size_set!]; exact ihsz
+    · intro p hp
+      by_cases hpn : p = n
+      · subst hpn
+        rw [getElem!_set!_self A p _ (by rw [ihsz]; omega), hAn]
+      · rw [getElem!_set!_ne A n p _ (by omega)]; exact ihlo p (by omega)
+    · intro p hp
+      rw [getElem!_set!_ne A n p _ (by omega)]; exact ihun p (by omega)
+
+theorem inttScale_getElem (a0 : Poly) (hsz0 : a0.size = 256) (p : Nat) (hp : p < 256) :
+    (inttScale a0)[p]! = mulModQ nInv a0[p]! := by
+  unfold inttScale
+  simp only [Id.run, Std.Legacy.Range.forIn_eq_forIn_range', bind_pure_comp, map_pure,
+    List.forIn_pure_yield_eq_foldl, bind_pure, Std.Legacy.Range.size, Nat.sub_zero,
+    Nat.add_sub_cancel, Nat.div_one]
+  exact (inttScale_fold a0 hsz0 256 (le_refl _)).2.1 p hp
+
+/-- `inttScale` IS coordinatewise `nInv·(·)` in `ℤ_q`. -/
+theorem cast_inttScale (a0 : Poly) (hsz0 : a0.size = 256) (p : Nat) (hp : p < 256) :
+    ((inttScale a0)[p]! : ZMod q) = (nInv : ZMod q) * (a0[p]! : ZMod q) := by
+  rw [inttScale_getElem a0 hsz0 p hp, cast_mulModQ]
+
 /-! ## Axiom gate on the new keystones (⊆ {propext, Classical.choice, Quot.sound}).
 Every rung climbed is checked clean; `zeta_root_witness`'s `ofReduceBool` (the concrete ζ=1753 pin) is
 deliberately NOT gated here — it is the accepted computational residual, isolated from the ∀-theorems. -/
