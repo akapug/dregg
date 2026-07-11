@@ -16,6 +16,10 @@ What this transitively verifies:
   `HybridThresholdQuant`, `ProtocolSoundnessQuant`.
 - Seam 3 model bridge: `ModelBridge`.
 - Seam 4 δ analysis: `MlKemDelta`.
+- Seam 1 empirical floor (broadened): `AcvpKats` — a representative NIST-ACVP-style edge-case batch
+  (15 verify-accept, 15 verify-reject, 10 deterministic-sign, 15 KEM-encaps, 15 KEM-decaps-recover,
+  10 KEM-decaps-implicit-reject), each `native_decide`-pinned byte-exact against the `fips204`/`ml-kem`
+  reference — the empirical complement to the `=spec` for-all proofs above.
 
 See `docs/LINKING-SEAMS-PROGRESS.md` for the seam-by-seam status and the named residuals.
 -/
@@ -34,3 +38,4 @@ import Dregg2.Crypto.ModelBridge
 import Dregg2.Crypto.UcSignatureQuant
 import Dregg2.Crypto.HybridThresholdQuant
 import Dregg2.Crypto.ProtocolSoundnessQuant
+import Dregg2.Crypto.AcvpKats
