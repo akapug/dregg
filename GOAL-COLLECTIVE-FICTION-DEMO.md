@@ -621,3 +621,12 @@ Wave 1 firing (3 disjoint lanes): FRONTEND/UX polish [demo/, a709da8 — cohesiv
 tampered-save refused] · LB-VRF [pqvrf/, abdff09 — high-assurance lattice VRF bound to the proved Lean uniqueness->
 MSIS leg]. Serialization: engine lanes single-file on game.rs; demo/pqvrf/docs parallelize. Wave 2 queued:
 quorum-certified /party · combat engine · overworld · wire dice/ ServerVrf->pqvrf + rebuild Hybrid/timeout PQ.
+
+## ✅✅✅ LB-VRF COMMITTED — the PQ-VRF done right, bound to the PROVED Lean leg (pqvrf/)
+Esgin et al. FC2021 one-time LB-VRF Set I: pk=A*s (MLWE), v=<b,s> pinned by the secret, FS-with-aborts proof;
+verify checks A*z=w1+c*t + <b,z>=w2+c*v + challenge-weight + norm bound. Verified by DRIVING+READING: 11/11; the
+MSIS-reduction test is NON-VACUOUS (two accepting transcripts on one commitment -> a NONZERO+SHORT+KERNEL vector of
+[A|t] = a literal IsMSISSolution, exactly lattice_vrf_uniqueness_reduces_to_msis). Real lattice ops, not a masquerade.
+ASSURED uniqueness->MSIS (proved Lean leg, now exhibited in code); ASSUMED pseudorandomness from MLWE; ONE-TIME (Set
+I). Multimodel: codex authored (late ship), audit-lane completed (+MSIS test), I verified the math. NEXT: wire dice/
+ServerVrf -> pqvrf + rebuild Hybrid/timeout PQ scaffolding from the parked patch.
