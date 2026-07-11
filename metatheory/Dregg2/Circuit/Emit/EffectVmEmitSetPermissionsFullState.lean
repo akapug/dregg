@@ -30,8 +30,8 @@ open Dregg2.Circuit.Emit.EffectVmEmit
 open Dregg2.Circuit.Emit.EffectVmEmitTransfer (gFieldPassAll)
 open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (CellState)
 open Dregg2.Circuit.Emit.EffectVmEmitSetPermissions
-  (SEL_SET_PERMS IsSetPermsRow setPermsRowGates setPermsVmDescriptor RowEncodesPerms PermCellSpec
-   setPermsVm_faithful intent_to_permCellSpec)
+  (SEL_SET_PERMS IsSetPermsRow SetPermsRowCanon setPermsRowGates setPermsVmDescriptor
+   RowEncodesPerms PermCellSpec setPermsVm_faithful intent_to_permCellSpec)
 open Dregg2.Circuit.Emit.EffectVmFullStateRunnable
   (baseAbsorbedCols RunnableFullStateSpec runnable_full_sound runnable_full_commit_binds wide_rejects_root_tamper
    wideHashSites)
@@ -52,10 +52,15 @@ def setPermsVmDescriptorWide : EffectVmDescriptor :=
 theorem setPermsWide_constraints_eq :
     setPermsVmDescriptorWide.constraints = setPermsVmDescriptor.constraints := rfl
 
-/-! ## §2 — the GATE-ONLY per-cell soundness (no hash-site hypothesis). -/
+/-! ## §2 — the GATE-ONLY per-cell soundness (no hash-site hypothesis).
+
+Field-faithful: the base `setPermsVm_faithful` reads the ℤ row intent back off the mod-`p`
+(`≡ 0 [ZMOD 2013265921]`) gates under the deployed range-check envelope `SetPermsRowCanon`; the
+envelope is threaded here and through the spec's `isRow` — conclusions unchanged. -/
 
 theorem setPermsGates_give_cellSpec (env : VmRowEnv) (pre post : CellState)
-    (hnoop : env.loc sel.NOOP = 0) (henc : RowEncodesPerms env pre post)
+    (hnoop : env.loc sel.NOOP = 0) (hcanon : SetPermsRowCanon env)
+    (henc : RowEncodesPerms env pre post)
     (hgates : ∀ c ∈ setPermsVmDescriptor.constraints, c.holdsVm env true false) :
     PermCellSpec pre post := by
   have hrowgates : ∀ c ∈ setPermsRowGates, c.holdsVm env false false := by
@@ -70,7 +75,8 @@ theorem setPermsGates_give_cellSpec (env : VmRowEnv) (pre post : CellState)
       List.mem_range] at hc
     rcases hc with (rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩ <;>
       simpa only [VmConstraint.holdsVm] using hh
-  exact intent_to_permCellSpec env pre post hnoop henc ((setPermsVm_faithful env).mp hrowgates)
+  exact intent_to_permCellSpec env pre post hnoop henc
+    ((setPermsVm_faithful env hcanon).mp hrowgates)
 
 /-! ## §3 — the FULL declarative clause + the `RunnableFullStateSpec` instance. -/
 
@@ -80,14 +86,14 @@ def SetPermsFullClause (preRoots : SysRoots) (pre post : CellState) (postRoots :
 def setPermsRunnableSpec (preRoots : SysRoots) : RunnableFullStateSpec CellState where
   descriptor    := setPermsVmDescriptorWide
   usesWideSites := rfl
-  isRow         := IsSetPermsRow
+  isRow         := fun env => IsSetPermsRow env ∧ SetPermsRowCanon env
   decodeAfter   := fun env pre post postRoots =>
     RowEncodesPerms env pre post ∧ postRoots = preRoots
   fullClause    := SetPermsFullClause preRoots
   decodeFull    := by
     intro env pre post postRoots hrow hdec hgates
     obtain ⟨henc, hroots⟩ := hdec
-    exact ⟨setPermsGates_give_cellSpec env pre post hrow.2 henc
+    exact ⟨setPermsGates_give_cellSpec env pre post hrow.1.2 hrow.2 henc
             (setPermsWide_constraints_eq ▸ hgates), hroots⟩
 
 /-! ## §4 — THE DELIVERABLE: `setPermissions_runnable_full_sound`. -/
@@ -97,11 +103,11 @@ the WIDE RUNNABLE descriptor, decoded by `RowEncodesPerms` with the frozen-roots
 17-field post-state: the per-cell block (`PermCellSpec`) AND all 8 side-table roots FROZEN. -/
 theorem setPermissions_runnable_full_sound (hash : List ℤ → ℤ) (preRoots : SysRoots)
     (env : VmRowEnv) (pre post : CellState) (postRoots : SysRoots)
-    (hrow : IsSetPermsRow env)
+    (hrow : IsSetPermsRow env) (hcanon : SetPermsRowCanon env)
     (henc : RowEncodesPerms env pre post) (hroots : postRoots = preRoots)
     (hsat : satisfiedVm hash setPermsVmDescriptorWide env true false) :
     PermCellSpec pre post ∧ postRoots = preRoots :=
-  runnable_full_sound (setPermsRunnableSpec preRoots) hash env pre post postRoots hrow
+  runnable_full_sound (setPermsRunnableSpec preRoots) hash env pre post postRoots ⟨hrow, hcanon⟩
     ⟨henc, hroots⟩ hsat
 
 /-! ## §5 — THE ANTI-GHOST. -/

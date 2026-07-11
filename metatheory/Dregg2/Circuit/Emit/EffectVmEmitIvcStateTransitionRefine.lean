@@ -38,7 +38,10 @@ Against a SOUND Poseidon2 chip table, `Satisfied2` of the descriptor forces the 
 
 The genuineness lift (chip-lookup membership ⟹ real Poseidon2 hash) rides the named carrier
 `ChipTableSound hash (t.tf .poseidon2)`, the same chip-soundness floor the ~15 hash-carrying
-families ride. Sequential inter-row continuity is deliberately NOT enforced in-circuit (the hand
+families ride. Field-faithful: `holdsVm` pins boundaries only `≡ 0 [ZMOD p]` (BabyBear
+`p = 2013265921`), so the bridge threads the deployed range-check CANONICALITY envelope
+(`IvcTraceCanon` — every boundary-pinned cell and bound PI in `[0, p)`) to read the ℤ equalities
+back off the mod-`p` gates; the chip-lookup leg (table membership) is unaffected. Sequential inter-row continuity is deliberately NOT enforced in-circuit (the hand
 AIR omits the continuity gate for padding-safety, see the emit file); the bridge proves exactly the
 descriptor's genuine endpoint content, not more.
 
@@ -108,7 +111,32 @@ theorem lastStepBind_mem : lastStepBind ∈ ivcStateTransitionDescriptor.constra
 theorem lastNewHashBind_mem : lastNewHashBind ∈ ivcStateTransitionDescriptor.constraints := by
   show lastNewHashBind ∈ ivcConstraints; simp [ivcConstraints]
 
-/-! ## §3 — the per-constraint extraction lemmas from `Satisfied2` (whole-trace denotation). -/
+/-! ## §2.5 — the canonicality envelope (field-faithful denotation glue).
+
+`VmConstraint.holdsVm` pins boundaries only mod `p = 2013265921` (the deployed BabyBear field
+constraint), so reading an ℤ equality back off a boundary needs the deployed range-check invariant
+carried as an EXPLICIT hypothesis: every boundary-pinned chain column and every bound public input
+is a canonical representative in `[0, p)`. Two canonical representatives congruent mod `p` are
+equal (`p ∣ residual` with `residual ∈ (−p, p)` collapses to `0`). -/
+
+/-- **The IVC boundary canonicality envelope.** The three boundary-pinned chain columns (`step`,
+`old_hash`, `new_hash`) are canonical on every row, and the three bound public inputs
+(`pi[initial_hash]`, `pi[step_count]`, `pi[accumulated_hash]`) are canonical — the deployed
+range-check invariant, threaded through the whole-descriptor bridge. -/
+def IvcTraceCanon (t : VmTrace) : Prop :=
+  (∀ i, i < t.rows.length →
+      (0 ≤ (envAt t i).loc Ivc.STEP_COL ∧ (envAt t i).loc Ivc.STEP_COL < 2013265921)
+      ∧ (0 ≤ (envAt t i).loc Ivc.OLD_HASH_COL ∧ (envAt t i).loc Ivc.OLD_HASH_COL < 2013265921)
+      ∧ (0 ≤ (envAt t i).loc Ivc.NEW_HASH_COL ∧ (envAt t i).loc Ivc.NEW_HASH_COL < 2013265921))
+  ∧ (0 ≤ t.pub Ivc.PI_INITIAL_HASH ∧ t.pub Ivc.PI_INITIAL_HASH < 2013265921)
+  ∧ (0 ≤ t.pub Ivc.PI_STEP_COUNT ∧ t.pub Ivc.PI_STEP_COUNT < 2013265921)
+  ∧ (0 ≤ t.pub Ivc.PI_ACC_HASH ∧ t.pub Ivc.PI_ACC_HASH < 2013265921)
+
+/-! ## §3 — the per-constraint extraction lemmas from `Satisfied2` (whole-trace denotation).
+
+Each boundary lemma carries exactly the canonicality it needs (the envelope's relevant cells); the
+lookup lemma (`ivc_row_hashed`) is UNAFFECTED — chip-lookup membership is table membership, not a
+mod-`p` gate. -/
 
 /-- **Every row is a genuine hash step.** Against a sound chip table, `Satisfied2` forces each row's
 `new_hash` column to be the genuine `hash([IVC_DOMAIN_TAG, old_hash, new_root, step])` — the
@@ -129,54 +157,78 @@ theorem ivc_row_hashed (hash : List ℤ → ℤ) (t : VmTrace)
     (by unfold CHIP_RATE; decide) hc
   simpa [EmittedExpr.eval] using hkey
 
-/-- **First-row `step = 1`** — from `Satisfied2` (the row-0 boundary `step - 1 = 0`). -/
+/-- **First-row `step = 1`** — from `Satisfied2` (the row-0 boundary `step - 1 ≡ 0 [ZMOD p]`),
+under the canonicality of the row-0 `step` cell. -/
 theorem ivc_first_step_one (hash : List ℤ → ℤ) (t : VmTrace)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ)
     (hsat : Satisfied2 hash ivcStateTransitionDescriptor minit mfin maddrs t)
-    (hn : 0 < t.rows.length) :
+    (hn : 0 < t.rows.length)
+    (hcanonStep : 0 ≤ (envAt t 0).loc Ivc.STEP_COL ∧ (envAt t 0).loc Ivc.STEP_COL < 2013265921) :
     (envAt t 0).loc Ivc.STEP_COL = 1 := by
   have hc := hsat.rowConstraints 0 hn firstStepIsOne firstStepIsOne_mem
   simp only [firstStepIsOne, VmConstraint2.holdsAt, VmConstraint.holdsVm] at hc
   have hb := hc (by decide)
   simp only [EmittedExpr.eval] at hb
+  obtain ⟨k, hk⟩ := Int.modEq_zero_iff_dvd.mp hb
   omega
 
-/-- **First-row `old_hash = pi[seed]`** — from `Satisfied2` (the row-0 seed pin). -/
+/-- **First-row `old_hash = pi[seed]`** — from `Satisfied2` (the row-0 seed pin, mod-`p`), under
+canonicality of the row-0 `old_hash` cell and the published seed. -/
 theorem ivc_first_seed_bind (hash : List ℤ → ℤ) (t : VmTrace)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ)
     (hsat : Satisfied2 hash ivcStateTransitionDescriptor minit mfin maddrs t)
-    (hn : 0 < t.rows.length) :
+    (hn : 0 < t.rows.length)
+    (hcanonOld : 0 ≤ (envAt t 0).loc Ivc.OLD_HASH_COL
+        ∧ (envAt t 0).loc Ivc.OLD_HASH_COL < 2013265921)
+    (hcanonSeed : 0 ≤ t.pub Ivc.PI_INITIAL_HASH ∧ t.pub Ivc.PI_INITIAL_HASH < 2013265921) :
     (envAt t 0).loc Ivc.OLD_HASH_COL = t.pub Ivc.PI_INITIAL_HASH := by
   have hc := hsat.rowConstraints 0 hn firstSeedBind firstSeedBind_mem
   simp only [firstSeedBind, VmConstraint2.holdsAt, VmConstraint.holdsVm] at hc
-  exact hc (by decide)
+  have hm : (envAt t 0).loc Ivc.OLD_HASH_COL ≡ t.pub Ivc.PI_INITIAL_HASH [ZMOD 2013265921] :=
+    hc (by decide)
+  obtain ⟨k, hk⟩ := hm.dvd
+  omega
 
-/-- **Last-row `step = pi[step_count]`** — from `Satisfied2` (the last-row step pin). -/
+/-- **Last-row `step = pi[step_count]`** — from `Satisfied2` (the last-row step pin, mod-`p`),
+under canonicality of the last-row `step` cell and the published step count. -/
 theorem ivc_last_step_bind (hash : List ℤ → ℤ) (t : VmTrace)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ)
     (hsat : Satisfied2 hash ivcStateTransitionDescriptor minit mfin maddrs t)
-    (hn : 0 < t.rows.length) :
+    (hn : 0 < t.rows.length)
+    (hcanonStep : 0 ≤ (envAt t (t.rows.length - 1)).loc Ivc.STEP_COL
+        ∧ (envAt t (t.rows.length - 1)).loc Ivc.STEP_COL < 2013265921)
+    (hcanonSC : 0 ≤ t.pub Ivc.PI_STEP_COUNT ∧ t.pub Ivc.PI_STEP_COUNT < 2013265921) :
     (envAt t (t.rows.length - 1)).loc Ivc.STEP_COL = t.pub Ivc.PI_STEP_COUNT := by
   have hi : t.rows.length - 1 < t.rows.length := Nat.sub_lt hn Nat.one_pos
   have hc := hsat.rowConstraints (t.rows.length - 1) hi lastStepBind lastStepBind_mem
   simp only [lastStepBind, VmConstraint2.holdsAt, VmConstraint.holdsVm] at hc
   have hlast : (t.rows.length - 1 + 1 == t.rows.length) = true := by
     simp [Nat.sub_add_cancel hn]
-  exact hc hlast
+  have hm : (envAt t (t.rows.length - 1)).loc Ivc.STEP_COL
+      ≡ t.pub Ivc.PI_STEP_COUNT [ZMOD 2013265921] := hc hlast
+  obtain ⟨k, hk⟩ := hm.dvd
+  omega
 
-/-- **Last-row `new_hash = pi[accumulated_hash]`** — from `Satisfied2` (the published-hash pin, the
-soundness anchor). -/
+/-- **Last-row `new_hash = pi[accumulated_hash]`** — from `Satisfied2` (the published-hash pin,
+the soundness anchor, mod-`p`), under canonicality of the last-row `new_hash` cell and the
+published accumulated hash. -/
 theorem ivc_last_newhash_bind (hash : List ℤ → ℤ) (t : VmTrace)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ)
     (hsat : Satisfied2 hash ivcStateTransitionDescriptor minit mfin maddrs t)
-    (hn : 0 < t.rows.length) :
+    (hn : 0 < t.rows.length)
+    (hcanonNew : 0 ≤ (envAt t (t.rows.length - 1)).loc Ivc.NEW_HASH_COL
+        ∧ (envAt t (t.rows.length - 1)).loc Ivc.NEW_HASH_COL < 2013265921)
+    (hcanonAcc : 0 ≤ t.pub Ivc.PI_ACC_HASH ∧ t.pub Ivc.PI_ACC_HASH < 2013265921) :
     (envAt t (t.rows.length - 1)).loc Ivc.NEW_HASH_COL = t.pub Ivc.PI_ACC_HASH := by
   have hi : t.rows.length - 1 < t.rows.length := Nat.sub_lt hn Nat.one_pos
   have hc := hsat.rowConstraints (t.rows.length - 1) hi lastNewHashBind lastNewHashBind_mem
   simp only [lastNewHashBind, VmConstraint2.holdsAt, VmConstraint.holdsVm] at hc
   have hlast : (t.rows.length - 1 + 1 == t.rows.length) = true := by
     simp [Nat.sub_add_cancel hn]
-  exact hc hlast
+  have hm : (envAt t (t.rows.length - 1)).loc Ivc.NEW_HASH_COL
+      ≡ t.pub Ivc.PI_ACC_HASH [ZMOD 2013265921] := hc hlast
+  obtain ⟨k, hk⟩ := hm.dvd
+  omega
 
 /-! ## §4 — the WHOLE-DESCRIPTOR bridge (SAT_IMPLIES_SEM). -/
 
@@ -188,7 +240,8 @@ theorem ivc_sat_publishes_genuine_extension (hash : List ℤ → ℤ) (t : VmTra
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ)
     (hn : 0 < t.rows.length)
     (hSound : ChipTableSound hash (t.tf .poseidon2))
-    (hsat : Satisfied2 hash ivcStateTransitionDescriptor minit mfin maddrs t) :
+    (hsat : Satisfied2 hash ivcStateTransitionDescriptor minit mfin maddrs t)
+    (hcanon : IvcTraceCanon t) :
     t.pub Ivc.PI_ACC_HASH
       = extendAccumulatedHash hash
           ((envAt t (t.rows.length - 1)).loc Ivc.OLD_HASH_COL)
@@ -197,7 +250,9 @@ theorem ivc_sat_publishes_genuine_extension (hash : List ℤ → ℤ) (t : VmTra
   have hi : t.rows.length - 1 < t.rows.length := Nat.sub_lt hn Nat.one_pos
   have hhash := ivc_row_hashed hash t minit mfin maddrs hSound hsat (t.rows.length - 1) hi
   have hstep := ivc_last_step_bind hash t minit mfin maddrs hsat hn
+    (hcanon.1 _ hi).1 hcanon.2.2.1
   have hpub := ivc_last_newhash_bind hash t minit mfin maddrs hsat hn
+    (hcanon.1 _ hi).2.2 hcanon.2.2.2
   rw [← hpub, hhash, hstep]
   rfl
 
@@ -209,7 +264,8 @@ theorem ivc_sat_seeds_genuine_extension (hash : List ℤ → ℤ) (t : VmTrace)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ)
     (hn : 0 < t.rows.length)
     (hSound : ChipTableSound hash (t.tf .poseidon2))
-    (hsat : Satisfied2 hash ivcStateTransitionDescriptor minit mfin maddrs t) :
+    (hsat : Satisfied2 hash ivcStateTransitionDescriptor minit mfin maddrs t)
+    (hcanon : IvcTraceCanon t) :
     (envAt t 0).loc Ivc.NEW_HASH_COL
         = extendAccumulatedHash hash (t.pub Ivc.PI_INITIAL_HASH)
             ((envAt t 0).loc Ivc.NEW_ROOT_COL) 1
@@ -217,7 +273,8 @@ theorem ivc_sat_seeds_genuine_extension (hash : List ℤ → ℤ) (t : VmTrace)
       ∧ (envAt t 0).loc Ivc.STEP_COL = 1 := by
   have hhash := ivc_row_hashed hash t minit mfin maddrs hSound hsat 0 hn
   have hseed := ivc_first_seed_bind hash t minit mfin maddrs hsat hn
-  have hstep := ivc_first_step_one hash t minit mfin maddrs hsat hn
+    (hcanon.1 0 hn).2.1 hcanon.2.1
+  have hstep := ivc_first_step_one hash t minit mfin maddrs hsat hn (hcanon.1 0 hn).1
   refine ⟨?_, hseed, hstep⟩
   rw [hhash, hseed, hstep]
   rfl
@@ -230,18 +287,23 @@ theorem ivc_single_step_refines_chain (hash : List ℤ → ℤ) (t : VmTrace)
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ)
     (h1 : t.rows.length = 1)
     (hSound : ChipTableSound hash (t.tf .poseidon2))
-    (hsat : Satisfied2 hash ivcStateTransitionDescriptor minit mfin maddrs t) :
+    (hsat : Satisfied2 hash ivcStateTransitionDescriptor minit mfin maddrs t)
+    (hcanon : IvcTraceCanon t) :
     t.pub Ivc.PI_ACC_HASH
         = ivcChain hash (t.pub Ivc.PI_INITIAL_HASH) 1 [(envAt t 0).loc Ivc.NEW_ROOT_COL]
       ∧ t.pub Ivc.PI_STEP_COUNT = 1 := by
   have hn : 0 < t.rows.length := by rw [h1]; exact Nat.one_pos
+  have hi : t.rows.length - 1 < t.rows.length := Nat.sub_lt hn Nat.one_pos
   have hlast0 : t.rows.length - 1 = 0 := by rw [h1]
   have hpublish := ivc_sat_publishes_genuine_extension hash t minit mfin maddrs hn hSound hsat
+    hcanon
   rw [hlast0] at hpublish
   have hseed := ivc_first_seed_bind hash t minit mfin maddrs hsat hn
+    (hcanon.1 0 hn).2.1 hcanon.2.1
   have hstepbind := ivc_last_step_bind hash t minit mfin maddrs hsat hn
+    (hcanon.1 _ hi).1 hcanon.2.2.1
   rw [hlast0] at hstepbind
-  have hstep1 := ivc_first_step_one hash t minit mfin maddrs hsat hn
+  have hstep1 := ivc_first_step_one hash t minit mfin maddrs hsat hn (hcanon.1 0 hn).1
   have hsc : t.pub Ivc.PI_STEP_COUNT = 1 := by rw [← hstepbind, hstep1]
   refine ⟨?_, hsc⟩
   rw [hpublish, hseed, hsc, ivcChain_single]
@@ -341,6 +403,17 @@ theorem ivc_demo_tampered_rejects :
   simp only [lastNewHashBind, VmConstraint2.holdsAt, VmConstraint.holdsVm, demoTraceBad] at hc
   exact absurd (hc (by decide)) (by decide)
 
+/-- The honest witness is CANONICAL: every boundary-pinned cell (`step = 1`, `old_hash = 100`,
+`new_hash = 0`) and every bound PI (`100`, `1`, `0`) is a representative in `[0, p)` — the
+concrete inhabitant of the range-check envelope the bridge threads. -/
+theorem demoTrace_canon : IvcTraceCanon demoTrace := by
+  refine ⟨?_, by decide, by decide, by decide⟩
+  intro i hi
+  have hlen : demoTrace.rows.length = 1 := rfl
+  have h0 : i = 0 := by omega
+  subst h0
+  exact ⟨by decide, by decide, by decide⟩
+
 /-- **`ivc_witness_refines` — the bridge FIRES on the concrete honest witness.** Feeding `demoTrace`
 to `ivc_single_step_refines_chain` recovers the genuine fold value: the published accumulated hash
 equals `ivcChain hash0 100 1 [7]`. The hypothesis is inhabited and the conclusion is a genuine
@@ -350,7 +423,7 @@ theorem ivc_witness_refines :
       = ivcChain hash0 (demoTrace.pub Ivc.PI_INITIAL_HASH) 1
           [(envAt demoTrace 0).loc Ivc.NEW_ROOT_COL] :=
   (ivc_single_step_refines_chain hash0 demoTrace (fun _ => 0) (fun _ => (0, 0)) [] rfl
-    demo_chip_sound ivc_demo_accepts).1
+    demo_chip_sound ivc_demo_accepts demoTrace_canon).1
 
 /-- The recovered value is the concrete endpoint `0` over the read seed `100` and root `7`. -/
 theorem ivc_witness_value :
