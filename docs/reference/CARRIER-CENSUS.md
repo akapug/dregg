@@ -518,3 +518,24 @@ borrow is NOT emitted deployed (doc↔deploy mismatch, not a wrap); dregg-transf
 COMMON ROOT: the deployed circuit reconstructs/moves values that can exceed p; a mod-p constraint alone doesn't pin
 the ℤ value; where no range-check bounds the reconstruction < p, an adversary picks a p-shifted witness. THE ℤ
 MODEL HID ALL FOUR. Field-faithfulness + the audit surfaced them.
+
+## ✅✅✅✅ ALL FOUR WRAP-CLASS GAPS FIXED (2026-07-11) — staged for the tag-19 VK epoch flip
+Every gap the field-faithfulness migration + audit surfaced is now closed with a PROVEN-CORRECT in-circuit fix
+(both twins: deployed Rust + Lean), claude-gated hard on the identical bar: the safety property DERIVED from
+in-circuit range/borrow gates (NOT an assumed hypothesis), the exact forgery witness UNSAT, honest transactions
+still pass (liveness). Common fix pattern: the vault's 15-bit-limb decomposition — every polynomial < 2^16 ≪ p, so
+no residual reaches p and the wrap is STRUCTURALLY IMPOSSIBLE (a single 30-bit range check does NOT suffice, since
+p ≈ 2·2^30 makes the wrap window overlap the valid range).
+1. ✅ VAULT settlement carry-wrap — CARRY_BITS 16→15; VaultSatDescriptor RED→GREEN, bounded-lift DERIVED. `27feb…`/`17937c008`.
+2. ✅ CAP-OPEN mask-recon (capability-auth forgery) — per-16-bit-limb reconstruction; the LAUNDERED `reconExact`
+   DELETED, authorization now UNCONDITIONAL; maskReconLoGate_rejects_wrap UNSAT. `9cc377282`.
+3. ✅ CROSS-CELL conservation — dual 3×15-bit-limb accumulators; ccc_conserves DERIVED, ccc_psum_forgery_unsat UNSAT;
+   EMPIRICAL real-STARK liveness test (balanced total >p verifies). `7e2bc7a18`.
+4. ✅ CORE-TRANSFER over-debit (the deepest) — 15-bit-limb borrow chain; transferAvail_derives_availability (amount ≤
+   before DERIVED, NO hcanonMove), transferAvail_forgery_unsat UNSAT; honest 100→70 passes. `a1be7b5df`.
+TWICE the fix DELETED a laundered assumption I had earlier gated through (cap-open reconExact, transfer hcanonMove) —
+the property is now genuinely enforced by the circuit, not assumed. All four are STAGED replacement descriptors: the
+live registry still routes the bare gap-carrying descriptors until the ONE ember-gated big-bang tag-19 VK epoch flip
+(the widened descriptors + VK commits + drift-gate FP pins + fixture re-emissions all ride that single regen). No
+live routing changed; no liveness degraded. THE CAMPAIGN: found four exploitable deployed soundness gaps the ℤ
+"verified" model hid, and closed all four with field-faithful in-circuit enforcement + proofs + forgery-UNSAT witnesses.
