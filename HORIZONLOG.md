@@ -7419,3 +7419,16 @@ All committed, all verified locally, audits/self-checks clean:
 Interop posture now: dregg is the plug for EVM (settlement + Hyperlane ISM + LayerZero DVN), Solana
 (lock program + trustless mint + proof-of-holdings + M-of-N unlock), ETH (sync-committee light client core),
 with the trust decision + holdings-weight both verified-Lean-called-from-Rust, and a working deploy-gate.
+
+## x402 assessed: distribution surface, not a model — DEFERRED (2026-07-11, Fable)
+
+Someone in ember's X space flagged x402 (+ CoinVoyage) as "well aligned." Read the v2 spec (~/src/x402,
+coinbase/x402). VERDICT: x402 is technically BEHIND dregg on every axis — trusted facilitator + plain public
+EIP-3009 transfers, no proofs, no privacy; its `upto`/`batch-settlement` schemes are dregg's metered-ToolGateway
+/ ring-engine WITHOUT the proofs. Nothing to learn. The ONLY reason to engage = distribution (Linux Foundation
++ Coinbase + Cloudflare + MCP momentum). CORRECT POSTURE (if adoption ever warrants): a THIN x402-compat FACE
+— a proof-carrying+private facilitator (/verify,/settle,/supported → settle runs a dregg turn, returns a proof
+receipt) + a CAIP-2 dregg network exposing $DREGG/shielded assets — same speak-the-interface-keep-the-internals
+as the Hyperlane ISM / LayerZero DVN. DO NOT adopt its model or pull focus from the real frontier. CoinVoyage =
+closed trusted-aggregator (AMMs/CCTP/ChangeNow + webhooks), the model dregg replaces; at most a payment frontend,
+never an integration. Full memo: docs/deos/X402-ASSESSMENT.md.
