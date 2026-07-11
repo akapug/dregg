@@ -62,10 +62,12 @@ pub const NUM_REGISTERS: usize = 24;
 /// The number of pre-iroot absorption limbs (cells_root · r0..r23 · cap_root · nullifier_root ·
 /// commitments_root · heap_root · lifecycle · epoch · committed_height · lifecycle_disc ·
 /// perms_digest · vk_digest · mode · fields_root · revoked_root). Matches Lean
-/// `preLimbsAt_length = 38` at R = 24, after the REVOKED-ROOT flag-day widening of the base region
-/// (37→38): `revoked_root` is the new base limb 37 (right after `fields_root` at 36), so every limb
-/// index ≥ 37 shifts +1 (completion 38..=88, carrier 89..=112, fields 113..=168, pad 169).
-pub const NUM_PRE_LIMBS: usize = 1 + NUM_REGISTERS + 4 + 3 + 6 + 75 + 57; // 170 (base widened 37→38: revoked_root = limb 37; v13 fields octet completion 113..=168 + 1 pad limb 169)
+/// `preLimbsAt_length = 178`, after the REVOKED-ROOT flag-day widening of the base region (37→38):
+/// `revoked_root` is the new base limb 37, so every limb index ≥ 37 shifts +1 (completion 38..=88,
+/// carrier 89..=112, fields 113..=168). The tail 169..=177 is the clean-alignment region: circuit-only
+/// `cells_root` completion 169..=175 (ZERO here; filled by the createCell trace generator, kept off
+/// `revoked_root`'s 82..=88 group) + pads 176..=177, landing body `[4..177]` = 174 = 58×3 (clean).
+pub const NUM_PRE_LIMBS: usize = 1 + NUM_REGISTERS + 4 + 3 + 6 + 75 + 65; // 178 (base widened 37→38: revoked_root = limb 37; fields 113..=168; cells-completion reservation 169..=175; pads 176..=177 → body 174 = 58×3 clean)
 
 /// The collection id under which a present-cell existence leaf is keyed in the cells tree.
 const CELLS_COLLECTION: u32 = 0;
@@ -1362,8 +1364,10 @@ mod tests {
         // WAVE-2/3 + REVOKED-ROOT flag-days; revoked_root = base limb 37)
         // + 51 accumulator-8-felt completion limbs (38..88, lanes 1..7, incl. revoked 82..88)
         // + 24 v12 carrier-material octets (89..112: child_vk8·contract_hash8·pubkey8, ZERO until gate-welded)
-        // + 56 v13 fields[0..7] completion lanes (113..168) + 1 pad limb (169).
-        assert_eq!(NUM_PRE_LIMBS, 170);
+        // + 56 v13 fields[0..7] completion lanes (113..168)
+        // + 7 circuit-only cells_root completion lanes (169..175, ZERO in producer) + 2 pad limbs (176..177)
+        //   → body [4..177] = 174 = 58×3 (clean 3-grouping).
+        assert_eq!(NUM_PRE_LIMBS, 178);
     }
 
     /// THE iroot NON-OMISSION TOOTH (Lean `mroot_injective`): tamper / truncate / extend /

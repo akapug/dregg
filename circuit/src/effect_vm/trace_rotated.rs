@@ -85,20 +85,20 @@ pub const NUM_REGISTERS: usize = 24;
 
 /// The number of pre-iroot absorption limbs (cells_root · r0..r23 · cap_root · nullifier_root ·
 /// commitments_root · heap_root · lifecycle · epoch · committed_height · lifecycle_disc ·
-/// perms_digest · vk_digest · mode · fields_root · v12 carrier-material octets 88..=111 · the v13
-/// fields[0..7] COMPLETION lanes 112..=167 + one zero PAD limb at 168). Lean
-/// `EffectVmEmitRotationV3.preLimbsAt_length = 169`. The v13 fields-octet grow (`112→169`) appends
-/// the 56 fields[0..7] completion lanes so each field's 32 bytes ride a faithful `field_limbs8`
-/// 8-lane split (lane 0 at limb `4 + i`, lanes 1..7 at `112 + 7·i .. +6`), closing the LAST
-/// degraded-felt residual; the pad limb 168 keeps the body `[4..168]` = 165 = fifty-five 3-wide
-/// groups (no arity-2 leftover).
-pub const NUM_PRE_LIMBS: usize = 1 + NUM_REGISTERS + 4 + 3 + 5 + 75 + 57; // 169 (v13: +56 fields completion lanes 112..=167 + 1 pad limb 168)
+/// perms_digest · vk_digest · mode · fields_root · revoked_root · v12 carrier-material octets
+/// 89..=112 · the v13 fields[0..7] COMPLETION lanes 113..=168 · the circuit-only cells_root
+/// completion 169..=175 · two zero PAD limbs 176..=177). Lean
+/// `EffectVmEmitRotationV3.preLimbsAt_length = 178`. The REVOKED-ROOT base widen (37→38) shifted every
+/// limb ≥ 37 by +1; `cells_root`'s 8-felt completion group was relocated OFF `revoked_root`'s 82..=88
+/// group to fresh lanes 169..=175 (circuit-only — ZERO in the producer); the two pad limbs 176..=177
+/// land the body `[4..177]` = 174 = 58×3 (clean 3-grouping, NO arity-2 leftover — the wide 8-felt
+/// path's clean-grouping discipline).
+pub const NUM_PRE_LIMBS: usize = 1 + NUM_REGISTERS + 4 + 3 + 6 + 75 + 65; // 178 (base widened 37→38; fields octet 113..=168; cells-completion 169..=175; pads 176..=177 → body 174 = 58×3 clean)
 
-/// A rotated block: 169 pre-iroot limbs + iroot + state_commit + 56 chain carriers = 227 columns.
-/// The 169-limb body chains as a 4-wide head (limbs 0..3) + FIFTY-FIVE 3-wide groups (limbs
-/// 4..168, exactly 165 = 55×3, NO arity-2 leftover — the v13 pad limb 168 restores the clean
-/// grouping) + the iroot absorbed ALONE last, so the chain-carrier count is 56 (1 head + 55 groups).
-pub const B_SPAN: usize = 227;
+/// A rotated block: 178 pre-iroot limbs + iroot + state_commit + 59 chain carriers = 239 columns.
+/// The 178-limb body chains as a 4-wide head (limbs 0..3) + FIFTY-EIGHT 3-wide groups (limbs
+/// restore) + the iroot absorbed ALONE last, so the chain-carrier count is 59 (1 head + 58 groups).
+pub const B_SPAN: usize = 239;
 /// The widened-caveat region: 29 manifest + 9 chain + 1 commit + the 4-felt DFA route-commitment
 /// carrier = 43 columns. Lean `EffectVmEmitRotationV3.C_SPAN`.
 pub const C_SPAN: usize = 43;
@@ -114,27 +114,28 @@ pub const C_DFA_RC_OFF: usize = 39;
 /// Width of the DFA route-commitment carrier (4 felts — the same shape as the custom carrier's
 /// `custom_proof_commitment`).
 pub const DFA_RC_LEN: usize = 4;
-/// The appendix: two blocks + the caveat region (v13: 2·227 + 43 = 497).
-pub const APPENDIX: usize = 2 * B_SPAN + C_SPAN; // 497
+/// The appendix: two blocks + the caveat region (2·239 + 43 = 521).
+pub const APPENDIX: usize = 2 * B_SPAN + C_SPAN; // 521
 /// The UN-GRADUATED rotated trace width (the rotated main columns BEFORE Phase B-GATE appends the
-/// per-chip-lookup 7-lane blocks). `188 + 497 = 685`.
-pub const ROT_WIDTH: usize = V1_WIDTH + APPENDIX; // 685
+/// per-chip-lookup 7-lane blocks). `188 + 521 = 709`.
+pub const ROT_WIDTH: usize = V1_WIDTH + APPENDIX; // 709
 
 /// The number of poseidon2-chip lookup SITES the graduated rotated descriptor
 /// (`*VmDescriptor2R24`, e.g. `attenuateVmDescriptor2R24`) carries — the per-site lane blocks
 /// Phase B-GATE appends at the END of the rotated layout (each chip tuple is now 17-wide:
-/// `1 arity + 8 inputs + out0 + 7 output-lanes`, the 7 lanes witnessed in appended columns). v13: the
-/// fields-octet grow (NUM_PRE_LIMBS 112→169) lifts each block's carrier count 37→56, so the two blocks
-/// contribute 2·56 = 112 sites + the 16 caveat-region sites = 128. The committed graduated width is
-/// `ROT_WIDTH + 7 * N_ROT_SITES = 685 + 896 = 1581`, matching the regen'd `*VmDescriptor2R24`
-/// trace_width. Graduation APPENDS (positions < ROT_WIDTH unchanged).
-pub const N_ROT_SITES: usize = 128;
+/// `1 arity + 8 inputs + out0 + 7 output-lanes`, the 7 lanes witnessed in appended columns). The
+/// REVOKED-ROOT base widen + cells-relocation (NUM_PRE_LIMBS 169→178, clean 58×3 body) lifts each
+/// block's chain-carrier count 56→59, so the two blocks contribute 2·59 = 118 sites + the 16
+/// caveat-region sites = 134. The committed graduated width is `ROT_WIDTH + 7 * N_ROT_SITES = 709 +
+/// 938 = 1647`, matching the regen'd `*VmDescriptor2R24` trace_width. Graduation APPENDS (positions
+/// < ROT_WIDTH unchanged).
+pub const N_ROT_SITES: usize = 134;
 
 /// The GRADUATED rotated trace width: the un-graduated rotated columns PLUS the 7×`N_ROT_SITES`
-/// appended chip-lane columns (`685 + 896 = 1581` = the committed `transferVmDescriptor2R24`
+/// appended chip-lane columns (`709 + 938 = 1647` = the committed `transferVmDescriptor2R24`
 /// trace_width). The honest rotated lane columns (`ROT_WIDTH .. GRAD_ROT_WIDTH`) are filled
 /// automatically by the prove wrapper's `descriptor_ir2::fill_chip_lanes`.
-pub const GRAD_ROT_WIDTH: usize = ROT_WIDTH + 7 * N_ROT_SITES; // 1581 (v13: fields-octet grow)
+pub const GRAD_ROT_WIDTH: usize = ROT_WIDTH + 7 * N_ROT_SITES; // 1647 (REVOKED-ROOT + cells-relocation clean 58×3)
 
 /// In-block offset of the AUTHORITY-DIGEST limb (r23, limb 24) — the single felt
 /// folding ALL authority-bearing cell state no other rotated limb carries
@@ -181,26 +182,34 @@ pub const B_MODE: usize = 35;
 /// In-block offset of the committed `fields_root` digest limb (limb 36 — the WAVE-3 flag-day overflow
 /// map root, the setFieldDyn / refusal weld limb). Lean `EffectVmEmitRotationV3.B_FIELDS_ROOT`.
 pub const B_FIELDS_ROOT: usize = 36;
-/// In-block base of the v12 CHILD-VK carrier octet (limbs 88..=95). Carries
+/// In-block offset of the committed `revoked_root` lane-0 limb (limb 37 — the REVOKED-ROOT flag-day
+/// NEW base limb, right after `fields_root` at 36; the credential-revocation accumulator's openable
+/// sorted-Poseidon2 root, lane 0 of the 8-felt `revoked_root` group whose completion limbs ride at
+/// 82..=88). Lane 0 of [`revoked_root_group_col`]. Lean `EffectVmEmitRotationV3.B_REVOKED_ROOT`.
+pub const B_REVOKED_ROOT: usize = 37;
+/// In-block base of the v12 CHILD-VK carrier octet (limbs 89..=96 after the REVOKED-ROOT +1 shift;
+/// was 88). Carries
 /// `bytes32_to_8_limbs(child_vk)` on a `CreateCellFromFactory` block (the REAL installed child VK
 /// captured at the executor's `effective_vk` site), ZERO on every other block. The SAT-foundation
 /// fill; the STEP-3 `CarrierOctetGates` weld binds it to the factory's installed VK.
-pub const B_CHILD_VK_OCTET: usize = 88;
-/// In-block base of the v12 CONTRACT-HASH carrier octet (limbs 96..=103). Carries
+pub const B_CHILD_VK_OCTET: usize = 89;
+/// In-block base of the v12 CONTRACT-HASH carrier octet (limbs 97..=104 after the REVOKED-ROOT +1
+/// shift; was 96). Carries
 /// `bytes32_to_8_limbs(contract_hash)` on a hatchery-mint block (the `HpresProof::Attested`
 /// content hash), ZERO otherwise.
-pub const B_CONTRACT_HASH_OCTET: usize = 96;
-/// In-block base of the v12 PUBKEY carrier octet (limbs 104..=111). Carries
+pub const B_CONTRACT_HASH_OCTET: usize = 97;
+/// In-block base of the v12 PUBKEY carrier octet (limbs 105..=112 after the REVOKED-ROOT +1 shift;
+/// was 104). Carries
 /// `canonical_32_to_felts_8(cell.public_key())` UNCONDITIONALLY (every turn — the operated cell's
 /// owner key, the 30-bit canonical form that matches the executor's KEY_COMMIT teeth). This is the
 /// only octet non-zero on a generic turn, so it moves every turn's `state_commit`.
-pub const B_PUBKEY_OCTET: usize = 104;
-/// In-block offset of the iroot carrier (absorbed last, limb 169 in the v13 fields-octet geometry).
-pub const B_IROOT: usize = 169;
-/// In-block offset of the `state_commit` carrier (the chain's final digest, `= hash(carrier226, iroot)`).
-pub const B_STATE_COMMIT: usize = 170;
-/// In-block base of the chained-absorption intermediate carriers (v13: 56 sites at 171..=226).
-pub const B_CHAIN_BASE: usize = 171;
+pub const B_PUBKEY_OCTET: usize = 105;
+/// In-block offset of the iroot carrier (absorbed last, limb 178 in the REVOKED-ROOT+cells geometry).
+pub const B_IROOT: usize = 178;
+/// In-block offset of the `state_commit` carrier (the chain's final digest, `= hash(carrier238, iroot)`).
+pub const B_STATE_COMMIT: usize = 179;
+/// In-block base of the chained-absorption intermediate carriers (59 sites at 180..=238).
+pub const B_CHAIN_BASE: usize = 180;
 
 /// Absolute base column of the BEFORE rotated block.
 pub const BEFORE_BASE: usize = V1_WIDTH; // 186
@@ -1235,7 +1244,7 @@ pub fn generate_rotated_note_spend_trace_with_nullifier_tree(
         block_base
             + match lane {
                 0 => B_NULLIFIER_ROOT,
-                _ => 66 + lane, // lanes 1..7 → limbs 67..73
+                _ => 67 + lane, // lanes 1..7 → limbs 68..74 (REVOKED-ROOT +1 shift)
             }
     };
 
@@ -1327,12 +1336,15 @@ pub fn generate_rotated_create_cell_trace_with_accounts_tree(
     let after_root8 = CanonicalHeapTree8::new(after_leaves, HEAP_TREE_DEPTH).root8();
 
     // Mirror of `EffectVmEmitRotationV3.cellsRootGroupCol`: lane 0 = limb 0 (accounts root); the seven
-    // DEDICATED completion limbs 81..87 for lanes 1..7.
+    // DEDICATED completion limbs 169..175 for lanes 1..7. RELOCATED off `revoked_root`'s committed group
+    // (82..88) to the fresh clean-alignment lanes the 178-limb widen opened: `cells_root` is circuit-only
+    // (ZERO in the producer pre_limbs), so on a createCell/factory/spawn turn this fill no longer clobbers
+    // the producer-committed `revoked_root` group. Lanes 176..177 stay pure pad.
     let cells_group_col = |block_base: usize, lane: usize| -> usize {
         block_base
             + match lane {
                 0 => B_CELLS_ROOT,
-                _ => 80 + lane, // lanes 1..7 → limbs 81..87
+                _ => 168 + lane, // lanes 1..7 → limbs 169..175 (fresh, non-colliding with revoked 82..88)
             }
     };
 
@@ -1411,7 +1423,7 @@ pub fn generate_rotated_note_create_trace_with_commitments_tree(
         block_base
             + match lane {
                 0 => B_COMMITMENTS_ROOT,
-                _ => 73 + lane, // lanes 1..7 → limbs 74..80
+                _ => 74 + lane, // lanes 1..7 → limbs 75..81 (REVOKED-ROOT +1 shift)
             }
     };
 
@@ -1535,8 +1547,8 @@ pub fn generate_rotated_refusal_trace_with_fields_tree(
         block_base
             + match lane {
                 0 => B_FIELDS_ROOT,
-                1 => 65,
-                2 => 66,
+                1 => 66, // REVOKED-ROOT +1 shift (was 65)
+                2 => 67, // REVOKED-ROOT +1 shift (was 66)
                 3 => 19,
                 4 => 20,
                 5 => 21,
@@ -3236,7 +3248,7 @@ pub fn append_wide_carriers_cap_open(
 /// `AFTER_BASE = V1_WIDTH + B_SPAN = 307`), so this single mapping serves both descriptor and trace — no
 /// column offset. (The `beforeCapRootCols`/`afterCapRootCols` group readers pin these lanes.)
 fn cap_root_group_col(block_base: usize, lane: usize) -> usize {
-    block_base + if lane == 0 { B_CAP_ROOT } else { 50 + lane }
+    block_base + if lane == 0 { B_CAP_ROOT } else { 51 + lane } // lanes 1..7 → 52..58 (REVOKED-ROOT +1)
 }
 
 /// **THE ATTENUATE cap-WRITE AFTER-SPINE producer (`attenuateCapOpenEffVmDescriptor2R24` wide member).**
@@ -4137,12 +4149,13 @@ pub fn generate_rotated_heap_write_wide(
     // (65/87) and the cap rotated limbs (213/304) are LEFT UNTOUCHED (the base gen lays a consistent cap
     // block; the `213 == 65` weld holds).
     let heap_group_col = |block_base: usize, lane: usize| -> usize {
-        // Mirror of `EffectVmEmitRotationV3.heapRootGroupCol`: lane 0 = limb 28, lanes 1..7 = 57+lane.
+        // Mirror of `EffectVmEmitRotationV3.heapRootGroupCol`: lane 0 = limb 28, lanes 1..7 = 58+lane
+        // (limbs 59..65, REVOKED-ROOT +1 shift from 58..64).
         block_base
             + if lane == 0 {
                 B_HEAP_ROOT
             } else {
-                50 + lane + 7
+                51 + lane + 7
             }
     };
     let coll_col = PARAM_BASE + 2; // 70 (HEAP_ADDR recompute input: collection)

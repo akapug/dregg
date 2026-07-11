@@ -745,11 +745,16 @@ pub fn canonical_to_babybear_pi(canonical: &[u8; 32]) -> [u32; 8] {
 pub const V9_NUM_REGISTERS: usize = 24;
 /// The number of pre-iroot absorption limbs (cells_root · r0..r23 · cap_root · nullifier_root ·
 /// commitments_root · heap_root · lifecycle · epoch · committed_height · lifecycle_disc ·
-/// perms_digest · vk_digest · mode · fields_root · revoked_root). Lean `preLimbsAt_length = 38` at
-/// R = 24, after the REVOKED-ROOT flag-day widening of the base region (37→38): `revoked_root` is
-/// the new base limb 37 (right after `fields_root` at 36), so every limb index ≥ 37 shifts +1 —
-/// completion 38..=88, carrier 89..=112, fields[0..7] completion 113..=168, pad 169.
-pub const V9_NUM_PRE_LIMBS: usize = 1 + V9_NUM_REGISTERS + 4 + 3 + 6 + 75 + 57; // 170 (base widened 37→38: revoked_root = limb 37; v13 fields octet completion 113..=168 + 1 pad limb 169)
+/// perms_digest · vk_digest · mode · fields_root · revoked_root). After the REVOKED-ROOT flag-day
+/// widening of the base region (37→38): `revoked_root` is the new base limb 37 (right after
+/// `fields_root` at 36), so every limb index ≥ 37 shifts +1 — completion 38..=88, carrier 89..=112,
+/// fields[0..7] completion 113..=168. The tail 169..=177 is the CLEAN-ALIGNMENT region: limbs
+/// 169..=175 are the circuit-only `cells_root` 8-felt completion group (lanes 1..7 — ZERO in the
+/// producer, filled by the createCell trace generator; placed here so they never collide with
+/// `revoked_root`'s committed group at 82..=88), and 176..=177 are the two zero pad limbs that land
+/// the body `[4..177]` = 174 = 58×3 (clean 3-grouping, NO arity-2 leftover — the wide 8-felt path's
+/// clean-grouping discipline). Lean `preLimbsAt_length = 178`.
+pub const V9_NUM_PRE_LIMBS: usize = 1 + V9_NUM_REGISTERS + 4 + 3 + 6 + 75 + 65; // 178 (base widened 37→38: revoked_root = limb 37; fields octet 113..=168; cells-completion reservation 169..=175; pads 176..=177 → body 174 = 58×3 clean)
 
 /// The turn-level context the rotated commitment absorbs that is NOT cell-local: the
 /// boundary `cells_root` (the sorted-Poseidon2 root over present cells), the cell's committed

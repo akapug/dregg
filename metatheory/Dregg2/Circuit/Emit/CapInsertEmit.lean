@@ -232,7 +232,7 @@ theorem effCapInsertV3_gate_forces (base : EffectVmDescriptor2) (name : String) 
 
 /-- **`effCapInsertV3_forces_afterMembership`** — THE STEP-B DELIVERABLE: a `Satisfied2` of the insert
 descriptor TRACE-FORCES `MembersAt8 afterRoot (leafOf …)` over the FULL committed AFTER cap-root group
-(`capRootGroupCol (EFFECT_VM_WIDTH + 227)`, the whole ~124-bit cap-root) at the read leaf — the
+(`capRootGroupCol (EFFECT_VM_WIDTH + 239)`, the whole ~124-bit cap-root) at the read leaf — the
 spliced-leaf membership in the rebuilt after cap-tree. -/
 theorem effCapInsertV3_forces_afterMembership (S8 : Cap8Scheme)
     (base : EffectVmDescriptor2) (name : String) (n : Nat)
@@ -241,7 +241,7 @@ theorem effCapInsertV3_forces_afterMembership (S8 : Cap8Scheme)
     (hChip : ChipTableSoundN (capPermOut S8) (t.tf .poseidon2))
     (hsat : Satisfied2 hash (effCapInsertV3 base name n) minit mfin maddrs t)
     (i : Nat) (hi : i < t.rows.length) (hnotlast : i + 1 ≠ t.rows.length) :
-    MembersAt8 S8 (fun k => (envAt t i).loc (capRootGroupCol (EFFECT_VM_WIDTH + 227) k))
+    MembersAt8 S8 (fun k => (envAt t i).loc (capRootGroupCol (EFFECT_VM_WIDTH + 239) k))
       (leafOf (capOpenCols base.traceWidth) (envAt t i)) := by
   set e := envAt t i with he
   set w := base.traceWidth with hw
@@ -252,10 +252,10 @@ theorem effCapInsertV3_forces_afterMembership (S8 : Cap8Scheme)
     capOpenEff_membership S8 hash t.tf (capOpenCols w) e n hChip hSatEff
   -- weld: the read capRoot group IS the committed AFTER cap-root group.
   have hroot : groupVal e (capOpenCols w).capRoot
-      = (fun k => e.loc (capRootGroupCol (EFFECT_VM_WIDTH + 227) k)) := by
+      = (fun k => e.loc (capRootGroupCol (EFFECT_VM_WIDTH + 239) k)) := by
     funext k
     have hin : VmConstraint2.base (.gate (eqGate ((capOpenCols w).capRoot k)
-        (capRootGroupCol (EFFECT_VM_WIDTH + 227) k))) ∈ afterCapRootWelds w :=
+        (capRootGroupCol (EFFECT_VM_WIDTH + 239) k))) ∈ afterCapRootWelds w :=
       List.mem_map.mpr ⟨k, List.mem_finRange k, rfl⟩
     have := (eqGate_eval _ _ e).mp
       (effCapInsertV3_gate_forces base name n hash minit mfin maddrs t hsat i hi hnotlast _ hin)
@@ -283,12 +283,12 @@ theorem effCapInsertV3_forces_write8 (S8 : Cap8Scheme)
     (g : GapOpen S8 (fun k => (envAt t i).loc (capRootGroupCol EFFECT_VM_WIDTH k))
           (keyOf (leafOf (capOpenCols base.traceWidth) (envAt t i))))
     (hcov : g.coversSpine spine)
-    (hafter : SpineCommits S8 (fun k => (envAt t i).loc (capRootGroupCol (EFFECT_VM_WIDTH + 227) k))
+    (hafter : SpineCommits S8 (fun k => (envAt t i).loc (capRootGroupCol (EFFECT_VM_WIDTH + 239) k))
                 (sortedInsert (keyOf (leafOf (capOpenCols base.traceWidth) (envAt t i))) spine)) :
     capInserts8 S8
         (fun k => (envAt t i).loc (capRootGroupCol EFFECT_VM_WIDTH k))
         (leafOf (capOpenCols base.traceWidth) (envAt t i))
-        (fun k => (envAt t i).loc (capRootGroupCol (EFFECT_VM_WIDTH + 227) k)) := by
+        (fun k => (envAt t i).loc (capRootGroupCol (EFFECT_VM_WIDTH + 239) k)) := by
   have hafterMem := effCapInsertV3_forces_afterMembership S8 base name n hash minit mfin maddrs t
     hChip hsat i hi hnotlast
   exact capInsert_writesTo8 S8 _ _ (leafOf (capOpenCols base.traceWidth) (envAt t i)) spine
