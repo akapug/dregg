@@ -798,3 +798,20 @@ THE WHOLE TRUST STORY IS NOW REAL (driven): move=real turn (A) · rule=real circ
 (dregg-dice/pqvrf, salvaged) · model provenance=real Bedrock MPC-TLS attestation (E). Remaining: full fold (Lane-D
 gated) · hosted notary (deploy) · Phase B (narration→real receipt, running a8402cb) · Phase C (collective rebind) ·
 multi-cell/cross-cell Witnessed wiring · then the stakeholder surfaces (discord players, author universe-compile).
+
+## ═══ REBUILD MILESTONE: the whole trust spine is REAL + driven (2026-07-11) ═══
+Every phase committed + verified BY ME (drove each, not the lane's word). The LARP is fully unwound:
+- Phase A (dungeon-on-dregg): a move = a real executor turn; 5 mechanics (combat/loot/mana/ratchet/heap) = real teeth.
+- Phase B (narrator): un-jailbreakable brain, prose-is-not-power (jailbroken "1000 gold" -> gold stays 0), narration
+  binds into the real receipt EmitEvent, injection refused before binding.
+- Phase C (collective): a crowd's quorum-certified vote fires a REAL WorldCell turn; a quorum-certified ILLEGAL move
+  is a real executor refusal (the crowd can't vote past the CellProgram). 21/21.
+- D-crown (game-turn-slice): a game rule -> real circuit leaf; the StateConstraint->ConstraintExpr compiler + a real
+  bit-decomposition range gadget -> ordering teeth prove, forgeries rejected.
+- E-provenance (zkoracle-prove): a REAL MPC-TLS attestation of live AWS Bedrock — genuine in-session Claude output,
+  SigV4 credential hidden. The feared TLS-1.3 wall doesn't exist.
+REMAINING: multi-cell/cross-cell Witnessed [running a2748e7]; full fold->verify_history [Lane-D gated — the limb
+geometry is evolving 170->172->178, track + fire when stable]; hosted notary (E productionization, a deploy);
+stakeholder surfaces (discord-bot players, author universe-compile); E->B wire (Bedrock carrier into narrate_turn_
+attested for end-to-end real provenance). ENTWINGLE: the executor-verification path IS DreggCloud's rung-upgrade;
+the Bedrock MPC-TLS carrier is reusable dregg-wide.
