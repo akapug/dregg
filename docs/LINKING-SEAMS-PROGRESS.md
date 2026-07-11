@@ -20,11 +20,17 @@ predicate, for-all`, axiom-clean (no `native_decide` in the ∀). Built on:
 **SIGN: substantially linked.** `SignCoreSpec.lean` — 5 ring-faithfulness ∀ lemmas + `sign_produces_spec_valid`
 (honest signCore output satisfies the FIPS Alg-8 verify predicate, via verifyCore_eq_spec). Residual: full
 symbolic `signCore = Sign_internal` with the rejection loop (partial def, byte-exact-pinned), ExpandMask=spec.
-**KEM (decaps/encaps): IN FLIGHT.** Needs the ML-KEM NTT correctness first — its own mirror of the DSA-NTT
-proof but for the INCOMPLETE Kyber NTT (q=3329, ζ=17 primitive 256th root → 128 quadratic base-cases,
-`baseCaseMultiply`). Lane building `MlKemNttFaithful.lean`.
-**Residuals (named, non-core):** codec byte-level `pkDecode∘pkEncode=id` plumbing; the abstract
-`MlDsaParams` module-map instance; KATs → full NIST ACVP.
+**KEM: DONE (ring core).** `MlKemNttFaithful.mlkem_ntt_ring_faithful` — the INCOMPLETE Kyber NTT proven
+correct from scratch (q=3329, 128 quadratic pair-leaves, forward `nttMulHom_proven` + inverse
+`nttLeftInverse_proven`, axiom-clean). `DecapsCoreSpec.decrypt_ring_faithful` (`v−ŝᵀu` = the FIPS 203
+K-PKE.Decrypt over R_q) + `EncapsCoreSpec.encrypt_ring_faithful` (`u=Aᵀy+e1`, `v=tᵀy+e2+Δm`) — decaps/encaps
+ring computations = the spec, for-all, riding the Kyber NTT via the `toRqKem` bridge.
+
+**ALL FOUR PQ DIRECTIONS' RING CORES = SPEC** (verify+sign+decaps+encaps), each on its own from-scratch
+NTT-correctness proof. BOTH the complete (ML-DSA) and incomplete (ML-KEM) NTT are proven — Mathlib ships neither.
+**Residuals (named, non-core):** codec byte-level plumbing (the `Id.run do`→`foldl` unfolds + honest-key
+reparametrizations `Â=NTT(A)` etc. + compress/decompress rounding `μ=Δ·m`); the abstract `MlDsaParams`
+module-map instance; KATs → full NIST ACVP. These are bookkeeping on the closed ring identities, not gaps.
 
 ## Seam 2 — quantitative ↔ Boolean: DONE
 `FloorBridge.lean` — `MSISHardQuant→MSISHard` (+DL/HashCR) via the advantage-1 argument; migration template
