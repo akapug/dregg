@@ -47,7 +47,8 @@ open Dregg2.Circuit.Emit.EffectVmEmit
 open Dregg2.Circuit.Emit.EffectVmEmitTransfer
   (eSB eSA eSub eSelNoop gBalHi gNonce gCapPass gResPass gFieldPass gFieldPassAll
    transitionAll boundaryFirstPins boundaryLastPins
-   transferHashSites boundaryLast_pins)
+   transferHashSites boundaryLast_pins
+   eqToModEq gate_modEq_iff not_modEq_zero_of_canon)
 open Dregg2.Circuit.Emit.EffectVmEmitTransferSound
   (CellState RowEncodes absorbedCols absorbed_determined_by_commit)
 open Dregg2.Exec.CircuitEmit (EmittedExpr)
@@ -99,14 +100,18 @@ def refusalVmDescriptor : EffectVmDescriptor :=
 
 /-- **`RefusalRowIntent env`** — the intended runtime refusal move: every economic state-block column
 UNCHANGED EXCEPT the nonce, which TICKS by 1 (on a non-NoOp row `s_noop = 0`). The audit-slot write +
-authority guard are out-of-row (the §off-row finding). -/
+authority guard are out-of-row (the §off-row finding). FIELD-FAITHFUL: each clause is a congruence
+mod `p = 2013265921` (the BabyBear prime) — the deployed circuit enforces the freeze/tick IN THE
+FIELD, so the gate set holds IFF this field move holds. -/
 def RefusalRowIntent (env : VmRowEnv) : Prop :=
-  env.loc (saCol state.BALANCE_LO) = env.loc (sbCol state.BALANCE_LO)
-  ∧ env.loc (saCol state.BALANCE_HI) = env.loc (sbCol state.BALANCE_HI)
-  ∧ env.loc (saCol state.NONCE) = env.loc (sbCol state.NONCE) + (1 - env.loc sel.NOOP)
-  ∧ env.loc (saCol state.CAP_ROOT) = env.loc (sbCol state.CAP_ROOT)
-  ∧ env.loc (saCol state.RESERVED) = env.loc (sbCol state.RESERVED)
-  ∧ (∀ i < 8, env.loc (saCol (state.FIELD_BASE + i)) = env.loc (sbCol (state.FIELD_BASE + i)))
+  env.loc (saCol state.BALANCE_LO) ≡ env.loc (sbCol state.BALANCE_LO) [ZMOD 2013265921]
+  ∧ env.loc (saCol state.BALANCE_HI) ≡ env.loc (sbCol state.BALANCE_HI) [ZMOD 2013265921]
+  ∧ env.loc (saCol state.NONCE)
+      ≡ env.loc (sbCol state.NONCE) + (1 - env.loc sel.NOOP) [ZMOD 2013265921]
+  ∧ env.loc (saCol state.CAP_ROOT) ≡ env.loc (sbCol state.CAP_ROOT) [ZMOD 2013265921]
+  ∧ env.loc (saCol state.RESERVED) ≡ env.loc (sbCol state.RESERVED) [ZMOD 2013265921]
+  ∧ (∀ i < 8, env.loc (saCol (state.FIELD_BASE + i))
+      ≡ env.loc (sbCol (state.FIELD_BASE + i)) [ZMOD 2013265921])
 
 /-! ## §5 — FAITHFULNESS: the emitted per-row gates ⟺ the runtime-reconciled intent. -/
 
@@ -128,31 +133,31 @@ theorem refusalVm_faithful (env : VmRowEnv) :
     simp only [VmConstraint.holdsVm, gBalLoFreeze, gBalHi, gNonce, gCapPass, gResPass,
       eSA, eSB, eSub, eSelNoop, EmittedExpr.eval] at hLo hHi hNon hCap hRes
     refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
-    · linarith [hLo]
-    · linarith [hHi]
-    · linarith [hNon]
-    · linarith [hCap]
-    · linarith [hRes]
+    · exact (gate_modEq_iff (by ring)).mp hLo
+    · exact (gate_modEq_iff (by ring)).mp hHi
+    · exact (gate_modEq_iff (by ring)).mp hNon
+    · exact (gate_modEq_iff (by ring)).mp hCap
+    · exact (gate_modEq_iff (by ring)).mp hRes
     · intro i hi
-      have := hFld i hi
-      simp only [VmConstraint.holdsVm, gFieldPass, eSA, eSB, eSub, EmittedExpr.eval] at this
-      linarith
+      have hfi := hFld i hi
+      simp only [VmConstraint.holdsVm, gFieldPass, eSA, eSB, eSub, EmittedExpr.eval] at hfi
+      exact (gate_modEq_iff (by ring)).mp hfi
   · rintro ⟨hLo, hHi, hNon, hCap, hRes, hFld⟩ c hc
     simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
       List.mem_range] at hc
     rcases hc with (rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩
     · simp only [VmConstraint.holdsVm, gBalLoFreeze, eSA, eSB, eSub, EmittedExpr.eval]
-      rw [hLo]; ring
+      exact (gate_modEq_iff (by ring)).mpr hLo
     · simp only [VmConstraint.holdsVm, gBalHi, eSA, eSB, eSub, EmittedExpr.eval]
-      rw [hHi]; ring
+      exact (gate_modEq_iff (by ring)).mpr hHi
     · simp only [VmConstraint.holdsVm, gNonce, eSA, eSB, eSub, eSelNoop, EmittedExpr.eval]
-      rw [hNon]; ring
+      exact (gate_modEq_iff (by ring)).mpr hNon
     · simp only [VmConstraint.holdsVm, gCapPass, eSA, eSB, eSub, EmittedExpr.eval]
-      rw [hCap]; ring
+      exact (gate_modEq_iff (by ring)).mpr hCap
     · simp only [VmConstraint.holdsVm, gResPass, eSA, eSB, eSub, EmittedExpr.eval]
-      rw [hRes]; ring
+      exact (gate_modEq_iff (by ring)).mpr hRes
     · simp only [VmConstraint.holdsVm, gFieldPass, eSA, eSB, eSub, EmittedExpr.eval]
-      rw [hFld i hi]; ring
+      exact (gate_modEq_iff (by ring)).mpr (hFld i hi)
 
 /-! ## §6 — ANTI-GHOST. -/
 
@@ -162,20 +167,32 @@ theorem refusalVm_rejects_wrong_output (env : VmRowEnv)
   fun h => hwrong ((refusalVm_faithful env).mp h)
 
 /-- **Anti-ghost (balance moved).** A row whose post-`bal_lo` ≠ pre-`bal_lo` fails the freeze gate — a
-refusal write cannot silently move value. -/
+refusal write cannot silently move value. FIELD-FAITHFUL: the tooth rejects a field-`≢` output, so it
+needs the DEPLOYED range-check canonicality — both balance limbs lie in `[0, p)` (the after limb is a
+`ranges` wire), so a moved balance differs by less than `p` and the field gate cannot pass by
+wrap-around. -/
 theorem refusalVm_rejects_moved_balance (env : VmRowEnv)
+    (hcanonNew : 0 ≤ env.loc (saCol state.BALANCE_LO)
+      ∧ env.loc (saCol state.BALANCE_LO) < 2013265921)
+    (hcanonOld : 0 ≤ env.loc (sbCol state.BALANCE_LO)
+      ∧ env.loc (sbCol state.BALANCE_LO) < 2013265921)
     (hwrong : env.loc (saCol state.BALANCE_LO) ≠ env.loc (sbCol state.BALANCE_LO)) :
     ¬ (VmConstraint.gate gBalLoFreeze).holdsVm env false false := by
   simp only [VmConstraint.holdsVm, gBalLoFreeze, eSA, eSB, eSub, EmittedExpr.eval]
-  intro h; apply hwrong; linarith
+  exact not_modEq_zero_of_canon (by ring) hcanonNew hcanonOld hwrong
 
 /-- **Anti-ghost (nonce tamper).** A row whose nonce does NOT tick by 1 fails the reconciled `gNonce`
-tick gate — a frozen-nonce trace (the pre-v2 convention) is now correctly UNSAT. -/
+tick gate — a frozen-nonce trace (the pre-v2 convention) is now correctly UNSAT. FIELD-FAITHFUL: needs
+the deployed canonicality — the after-nonce and the ticked pre-nonce both lie in `[0, p)` (nonces are
+far below the modulus), so a wrong nonce cannot pass by wrap-around. -/
 theorem refusalVm_rejects_nonce_freeze (env : VmRowEnv)
+    (hcanonNew : 0 ≤ env.loc (saCol state.NONCE) ∧ env.loc (saCol state.NONCE) < 2013265921)
+    (hcanonTick : 0 ≤ env.loc (sbCol state.NONCE) + (1 - env.loc sel.NOOP)
+      ∧ env.loc (sbCol state.NONCE) + (1 - env.loc sel.NOOP) < 2013265921)
     (hwrong : env.loc (saCol state.NONCE) ≠ env.loc (sbCol state.NONCE) + (1 - env.loc sel.NOOP)) :
     ¬ (VmConstraint.gate gNonce).holdsVm env false false := by
   simp only [VmConstraint.holdsVm, gNonce, eSA, eSB, eSub, eSelNoop, EmittedExpr.eval]
-  intro h; apply hwrong; linarith
+  exact not_modEq_zero_of_canon (by ring) hcanonNew hcanonTick hwrong
 
 /-! ## §7 — the commitment binding (REUSED; hash sites identical to transfer's). -/
 
@@ -209,14 +226,15 @@ def RowEncodesRefusal (env : VmRowEnv) (pre post : CellState) : Prop :=
   ∧ env.pub pi.NEW_COMMIT = post.commit
 
 /-- **`RefusalCellSpec pre post`** — the per-cell FULL-state refusal spec: economic block FROZEN; the
-nonce TICKS by 1. -/
+nonce TICKS by 1. FIELD-FAITHFUL: each clause is a mod-`p` congruence (the circuit's denotation lives
+in the field; `RowEncodesRefusal`'s decode equalities stay over ℤ). -/
 def RefusalCellSpec (pre post : CellState) : Prop :=
-  post.balLo = pre.balLo
-  ∧ post.balHi = pre.balHi
-  ∧ post.nonce = pre.nonce + 1
-  ∧ (∀ i : Fin 8, post.fields i = pre.fields i)
-  ∧ post.capRoot = pre.capRoot
-  ∧ post.reserved = pre.reserved
+  post.balLo ≡ pre.balLo [ZMOD 2013265921]
+  ∧ post.balHi ≡ pre.balHi [ZMOD 2013265921]
+  ∧ post.nonce ≡ pre.nonce + 1 [ZMOD 2013265921]
+  ∧ (∀ i : Fin 8, post.fields i ≡ pre.fields i [ZMOD 2013265921])
+  ∧ post.capRoot ≡ pre.capRoot [ZMOD 2013265921]
+  ∧ post.reserved ≡ pre.reserved [ZMOD 2013265921]
 
 theorem intent_to_cellSpec (env : VmRowEnv) (pre post : CellState)
     (hnoop : env.loc sel.NOOP = 0)
@@ -228,7 +246,10 @@ theorem intent_to_cellSpec (env : VmRowEnv) (pre post : CellState)
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
   · rw [← hsaLo, ← hsbLo]; exact hbal
   · rw [← hsaHi, ← hsbHi]; exact hbhi
-  · rw [← hsaN, ← hsbN, hnon, hnoop]; ring
+  · rw [← hsaN, ← hsbN]
+    have hn := hnon
+    rw [hnoop] at hn
+    simpa using hn
   · intro i
     have := hfld i.val i.isLt
     rw [← hsaF i, ← hsbF i]; exact this
@@ -242,7 +263,7 @@ theorem refusalDescriptor_full_sound (hash : List ℤ → ℤ) (env : VmRowEnv)
     (henc : RowEncodesRefusal env pre post)
     (hgatesat : satisfiedVm hash refusalVmDescriptor env true false)
     (hsat : satisfiedVm hash refusalVmDescriptor env true true) :
-    RefusalCellSpec pre post ∧ post.commit = env.pub pi.NEW_COMMIT := by
+    RefusalCellSpec pre post ∧ post.commit ≡ env.pub pi.NEW_COMMIT [ZMOD 2013265921] := by
   obtain ⟨hcs, _⟩ := hsat
   obtain ⟨hcsT, _⟩ := hgatesat
   have hgates' : ∀ c ∈ refusalRowGates, c.holdsVm env false false := by
@@ -280,12 +301,20 @@ theorem refusalDescriptor_commit_binds_state (hash : List ℤ → ℤ)
     (e₁ e₂ : VmRowEnv)
     (hsat₁ : satisfiedVm hash refusalVmDescriptor e₁ true true)
     (hsat₂ : satisfiedVm hash refusalVmDescriptor e₂ true true)
+    -- FIELD-FAITHFUL bridge: the published commitment is a CANONICAL field element (Poseidon2's
+    -- output lives in `[0, p)`). The circuit pins `state_commit ≡ NEW_COMMIT [ZMOD p]`; canonicality
+    -- of the two digest columns lifts that field congruence to the ℤ equality collision-resistance
+    -- needs. An honest side condition (the deployed digest IS reduced), NOT a weakening.
+    (hcanon₁ : 0 ≤ e₁.loc (saCol state.STATE_COMMIT)
+      ∧ e₁.loc (saCol state.STATE_COMMIT) < 2013265921)
+    (hcanon₂ : 0 ≤ e₂.loc (saCol state.STATE_COMMIT)
+      ∧ e₂.loc (saCol state.STATE_COMMIT) < 2013265921)
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT) :
     absorbedCols e₁ = absorbedCols e₂ := by
   have hs₁ : siteHoldsAll hash e₁ refusalHashSites := hsat₁.2.1
   have hs₂ : siteHoldsAll hash e₂ refusalHashSites := hsat₂.2.1
   have hc : ∀ (e : VmRowEnv), satisfiedVm hash refusalVmDescriptor e true true →
-      e.loc (saCol state.STATE_COMMIT) = e.pub pi.NEW_COMMIT := by
+      e.loc (saCol state.STATE_COMMIT) ≡ e.pub pi.NEW_COMMIT [ZMOD 2013265921] := by
     intro e hsat
     obtain ⟨hcs, _⟩ := hsat
     have hlast : ∀ c ∈ boundaryLastPins, c.holdsVm e false true := by
@@ -301,8 +330,17 @@ theorem refusalDescriptor_commit_binds_state (hash : List ℤ → ℤ)
         · simp only [VmConstraint.holdsVm] at hh ⊢
           exact hh
     exact (boundaryLast_pins e hlast).1
+  have hmod : e₁.loc (saCol state.STATE_COMMIT) ≡ e₂.loc (saCol state.STATE_COMMIT)
+      [ZMOD 2013265921] := by
+    have h2 : e₁.pub pi.NEW_COMMIT ≡ e₂.loc (saCol state.STATE_COMMIT) [ZMOD 2013265921] := by
+      rw [hpub]; exact (hc e₂ hsat₂).symm
+    exact (hc e₁ hsat₁).trans h2
+  -- canonicality of the two digest columns lifts the mod-p congruence to an ℤ equality
   have hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT) := by
-    rw [hc e₁ hsat₁, hc e₂ hsat₂, hpub]
+    have hdvd := Int.modEq_iff_dvd.mp hmod
+    obtain ⟨l₁, u₁⟩ := hcanon₁
+    obtain ⟨l₂, u₂⟩ := hcanon₂
+    omega
   exact absorbed_determined_by_commit hash hCR e₁ e₂ hs₁ hs₂ hcommit
 
 /-! ## §10 — CONNECTOR to universe-A `RefusalSpec` via `cellProj`.
@@ -334,11 +372,15 @@ theorem refusal_balance_frozen (s s' : RecChainedState) (actor cell : CellId)
 
 /-- **`descriptor_agrees_with_executor_refusal`** — a satisfying run of the runnable descriptor encoding
 the refusing cell agrees with the executor's post-state on the FROZEN balance dimension (`balLo`); the
-nonce-tick is the runtime cell-bookkeeping leg (off universe-A state). -/
+nonce-tick is the runtime cell-bookkeeping leg (off universe-A state). FIELD-FAITHFUL: the circuit
+freezes the limb mod `p`; the executor lives over ℤ — canonicality of the two limbs (`[0, p)`, the
+deployed range-check + `balOf`'s reduced representation) lifts the field freeze to the ℤ agreement. -/
 theorem descriptor_agrees_with_executor_refusal
     (hash : List ℤ → ℤ) (env : VmRowEnv) (hnoop : env.loc sel.NOOP = 0)
     (s s' : RecChainedState) (actor cell : CellId) (pre post : CellState)
     (hpre : pre = cellProj s.kernel cell)
+    (hcanonPost : 0 ≤ post.balLo ∧ post.balLo < 2013265921)
+    (hcanonPre : 0 ≤ pre.balLo ∧ pre.balLo < 2013265921)
     (henc : RowEncodesRefusal env pre post)
     (hgatesat : satisfiedVm hash refusalVmDescriptor env true false)
     (hsat : satisfiedVm hash refusalVmDescriptor env true true)
@@ -347,8 +389,14 @@ theorem descriptor_agrees_with_executor_refusal
   obtain ⟨hcirc, _⟩ := refusalDescriptor_full_sound hash env pre post hnoop henc hgatesat hsat
   obtain ⟨hcLo, _, _, _, _, _⟩ := hcirc
   have heLo := refusal_balance_frozen s s' actor cell hspec
+  -- lift the field freeze `post ≡ pre [ZMOD p]` to ℤ via canonicality of both limbs
+  have hz : post.balLo = pre.balLo := by
+    have hdvd := Int.modEq_iff_dvd.mp hcLo
+    obtain ⟨l₁, u₁⟩ := hcanonPost
+    obtain ⟨l₂, u₂⟩ := hcanonPre
+    omega
   subst hpre
-  rw [hcLo, heLo]
+  rw [hz, heLo]
 
 /-! ## §11 — THE BOUNDARY: the refusal-slot write is OFF-ROW. -/
 
@@ -402,14 +450,16 @@ theorem goodRefusalRow_noop : goodRefusalRow.loc sel.NOOP = 0 := by
 theorem goodRefusalRow_realizes_intent : RefusalRowIntent goodRefusalRow := by
   unfold RefusalRowIntent
   have hnoop : goodRefusalRow.loc sel.NOOP = 0 := goodRefusalRow_noop
-  refine ⟨rfl, rfl, ?_, rfl, rfl, ?_⟩
+  refine ⟨eqToModEq rfl, eqToModEq rfl, ?_, eqToModEq rfl, eqToModEq rfl, ?_⟩
   · rw [hnoop]
+    apply eqToModEq
     show goodRefusalRow.loc (saCol state.NONCE) = goodRefusalRow.loc (sbCol state.NONCE) + (1 - 0)
     simp only [goodRefusalRow, SEL_REFUSAL, sbCol, saCol, STATE_BEFORE_BASE,
       STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.BALANCE_LO,
       state.NONCE]
     norm_num
   · intro i hi
+    apply eqToModEq
     show goodRefusalRow.loc (saCol (state.FIELD_BASE + i)) = goodRefusalRow.loc (sbCol (state.FIELD_BASE + i))
     simp only [goodRefusalRow, SEL_REFUSAL, sbCol, saCol, STATE_BEFORE_BASE,
       STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.BALANCE_LO,
@@ -433,13 +483,23 @@ def badRefusalRow : VmRowEnv where
   pub := goodRefusalRow.pub
 
 /-- **NON-VACUITY (witness FALSE / concrete anti-ghost).** `badRefusalRow`'s post-`bal_lo` is forged, so
-`gBalLoFreeze` REJECTS it. -/
+`gBalLoFreeze` REJECTS it (the concrete `999` and `100` are canonical field elements, so the field
+tooth bites with no wrap-around escape). -/
 theorem badRefusalRow_rejected : ¬ (VmConstraint.gate gBalLoFreeze).holdsVm badRefusalRow false false := by
+  have hsa : badRefusalRow.loc (saCol state.BALANCE_LO) = 999 := by
+    simp only [badRefusalRow, goodRefusalRow, sbCol, saCol, SEL_REFUSAL, STATE_BEFORE_BASE,
+      STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.BALANCE_LO,
+      state.NONCE]
+    norm_num
+  have hsb : badRefusalRow.loc (sbCol state.BALANCE_LO) = 100 := by
+    simp only [badRefusalRow, goodRefusalRow, sbCol, saCol, SEL_REFUSAL, STATE_BEFORE_BASE,
+      STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.BALANCE_LO,
+      state.NONCE]
+    norm_num
   apply refusalVm_rejects_moved_balance
-  simp only [badRefusalRow, goodRefusalRow, sbCol, saCol, SEL_REFUSAL, STATE_BEFORE_BASE,
-    STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.BALANCE_LO,
-    state.NONCE]
-  norm_num
+  · rw [hsa]; norm_num
+  · rw [hsb]; norm_num
+  · rw [hsa, hsb]; norm_num
 
 /-- A FROZEN-NONCE refusal row: `goodRefusalRow` with the post-nonce held at `5`. -/
 def staleNonceRefusalRow : VmRowEnv where
@@ -448,14 +508,29 @@ def staleNonceRefusalRow : VmRowEnv where
   pub := goodRefusalRow.pub
 
 /-- **NON-VACUITY (cutover witness FALSE).** A frozen-nonce row is now correctly UNSAT under the
-reconciled `gNonce` tick gate. -/
+reconciled `gNonce` tick gate (the concrete `5` and ticked `6` are canonical field elements, so the
+field tooth bites with no wrap-around escape). -/
 theorem staleNonceRefusalRow_rejected :
     ¬ (VmConstraint.gate gNonce).holdsVm staleNonceRefusalRow false false := by
+  have hsa : staleNonceRefusalRow.loc (saCol state.NONCE) = 5 := by
+    simp only [staleNonceRefusalRow, goodRefusalRow, sbCol, saCol, SEL_REFUSAL,
+      STATE_BEFORE_BASE, STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS,
+      state.BALANCE_LO, state.NONCE]
+    norm_num
+  have hsb : staleNonceRefusalRow.loc (sbCol state.NONCE) = 5 := by
+    simp only [staleNonceRefusalRow, goodRefusalRow, sbCol, saCol, SEL_REFUSAL,
+      STATE_BEFORE_BASE, STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS,
+      state.BALANCE_LO, state.NONCE]
+    norm_num
+  have hnoop : staleNonceRefusalRow.loc sel.NOOP = 0 := by
+    simp only [staleNonceRefusalRow, goodRefusalRow, sel.NOOP, sbCol, saCol, SEL_REFUSAL,
+      STATE_BEFORE_BASE, STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS,
+      state.BALANCE_LO, state.NONCE]
+    norm_num
   apply refusalVm_rejects_nonce_freeze
-  simp only [staleNonceRefusalRow, goodRefusalRow, sel.NOOP, sbCol, saCol, SEL_REFUSAL,
-    STATE_BEFORE_BASE, STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS,
-    state.BALANCE_LO, state.NONCE]
-  norm_num
+  · rw [hsa]; norm_num
+  · rw [hsb, hnoop]; norm_num
+  · rw [hsa, hsb, hnoop]; norm_num
 
 /-! ## §13 — axiom-hygiene tripwires. -/
 
