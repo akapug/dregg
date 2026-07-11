@@ -58,6 +58,7 @@ pub mod mina_observer;
 pub mod present;
 /// Mirror a Solana/pump.fun SPL token (`$DREGG`) into dregg's value layer as a
 /// conserved, `Payable` asset. See `docs/deos/TOKEN-MIRROR-BRIDGE.md`.
+pub mod solana_holdings;
 pub mod solana_mirror;
 
 /// Mirror a verified **Stripe payment** (a signed `payment_intent.succeeded` /
