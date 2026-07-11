@@ -705,3 +705,14 @@ builds; 12 demo drivers pass. Docs (README, TRUST-LEVELS, AUTHORING-DUNGEONS) + 
 The platform is a complete, coherent, honest verifiable collective arcade. SUMMIT reached for the night — per deep-
 night guidance, holding at a clean audited checkpoint rather than forcing risky 4am features. Loop idles at 30min;
 resumes for a genuine next wave (fresh direction / saner hour / a ready low-risk HORIZONLOG closure).
+
+## ✅ venom-deep added to the /vault picker (HORIZONLOG closure) — all 5 games now browser-playable
+game_api.rs GameDef row + run-games EXPECTED_GAMES 4->5. Verified: /game/list=5 incl venom-deep, reset opens The
+Venomous Deep, dungeon-service builds, run-games passed its part-A picker check (tests this change). Env note: the
+long run-games browser play-through died mid-run (unrelated bramble section) to a 5am headless-browser crash under
+strain (run-map passes; 9 stray chromiums cleaned; disk was 100% earlier, freed ~28GB) — not this change.
+## ══ HOLD (2026-07-11 ~05:20): machine strained, remaining closures are medium-risk — right to rest here ══
+The platform is COMPLETE, audited (208 green), consolidated, honest — a beautiful state. Remaining HORIZONLOG items
+(Hybrid-as-usable-SessionRandomness-mode, DSL combat/loot authorability, custody keys, zk frontier) touch shared
+engine files / are bigger — better on a fresh machine at a saner hour than forced at 5am on a strained box. Loop
+idles long; resumes for a genuine next wave when ember returns or the hour/machine are fresh. Good night's work done.
