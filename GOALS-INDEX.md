@@ -17,6 +17,7 @@ file; never clobber another lane's.
 | **pq-frontiers** | `GOAL-PQ-FRONTIERS.md` | retire every honestly-open frontier of the crypto-to-protocol-soundness proof by FORMALIZING the literature (Unmasking-TRaccoon adaptive · Canetti UC composition · FIPS-204 @[export] extraction · surface-3 executor seam) — no smuggling, no giving up. **DONE 07-09** |
 | **verified-system** | `GOAL-VERIFIED-SYSTEM.md` | ⚠ **RETRACTED 07-09** — declared "done" on NAMED carriers (`StarkSound`/`RestHashIffFrame`/toy models); superseded by **honest-verification** |
 | **honest-verification** | `GOAL-HONEST-VERIFICATION.md` | RETIRE THE CARRIER DEBT: discharge every DEBT-A (`StarkSound`) + DEBT-B (finite-map / `RestHashIffFrame`) carrier to a PROVED theorem or a genuine floor item, so the apex rests only on `{Poseidon2SpongeCR, lattice/DL, leanc}` — no `seL4-cited`, nothing named. Hub for `CARRIER-CENSUS` + `DEBT-B` + `DELTA-FUTURE` |
+| **dreggic-collectivity-web** | `GOAL-COLLECTIVE-FICTION-DEMO.md` | make the verifiable collective-fiction/game WEB platform as good as possible — attested-dm engine + demo/ arcade frontend/UX + collective voting/co-authoring + dregg-dice/pqvrf verifiable randomness + verify_replay trust + authoring + docs |
 
 **Shared-tree discipline (all lanes):** additive-only in swarms; commit surgically — NEVER
 stage another lane's files (e.g. `dregg-lean-ffi/src/lib.rs`, another `GOAL-*.md`); no git
