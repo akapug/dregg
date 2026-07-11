@@ -34,11 +34,13 @@
 //! **One caveat the wire-in must honor (not laundered):** those slots are `u64`
 //! (big-endian, lifted to `i128`), while a comparison here is over values
 //! `< 2^bits < 2^31` — a **single BabyBear limb**. Small domains (HP, scene index,
-//! budget, queue depth) fit one limb and lower directly. A **full-`u64` slot spans
-//! multiple limbs** and needs a multi-limb comparison (this gadget per limb + a borrow
-//! chain — a documented follow-on). The compiler supplies the trace's slot→limb
-//! layout; this crate supplies the per-limb primitive. If a native `RangeLookup`/`Lte`
-//! `ConstraintExpr` variant is later added, this API is unchanged — the lowering swaps.
+//! budget, queue depth) fit one limb and lower directly via [`emit_ge`] & friends.
+//! A **full-`u64` slot spans multiple limbs**: [`emit_ge_multilimb`] /
+//! [`emit_ge_const_multilimb`] handle it via per-limb comparison + a borrow chain
+//! (`A ≥ C` iff the final borrow is 0). The compiler supplies the trace's slot→limb
+//! layout; this crate supplies both the per-limb primitive and the multi-limb chain.
+//! If a native `RangeLookup`/`Lte` `ConstraintExpr` variant is later added, this API is
+//! unchanged — only the internal lowering swaps.
 
 use dregg_circuit::dsl::{ConstraintExpr, PolyTerm};
 use dregg_circuit::field::BabyBear;
@@ -225,12 +227,274 @@ pub fn emit_lt(
     emit_gt(b, a, bits, alloc)
 }
 
+/// Range-check `local[col] ∈ [0, 2^bits)` by bit-decomposition — the shared kernel of
+/// every comparison. Returns the constraints + the allocated bit columns; the caller
+/// sets `local[bits[i]] = i-th bit of local[col]`.
+pub fn emit_range(
+    col: usize,
+    bits: usize,
+    alloc: &mut ColAlloc,
+) -> (Vec<ConstraintExpr>, Vec<usize>) {
+    assert!(
+        (1..31).contains(&bits),
+        "range `bits` must be in 1..31 for BabyBear; got {bits}"
+    );
+    let bit_cols = alloc.alloc_n(bits);
+    let mut cs = Vec::with_capacity(bits + 1);
+    for &bc in &bit_cols {
+        cs.push(ConstraintExpr::Binary { col: bc });
+    }
+    let mut recon: Vec<PolyTerm> = bit_cols
+        .iter()
+        .enumerate()
+        .map(|(i, &bc)| PolyTerm {
+            coeff: BabyBear::new(1u32 << i),
+            col_indices: vec![bc],
+        })
+        .collect();
+    recon.push(PolyTerm {
+        coeff: -BabyBear::ONE,
+        col_indices: vec![col],
+    });
+    cs.push(ConstraintExpr::Polynomial { terms: recon });
+    (cs, bit_cols)
+}
+
+/// A right-hand operand limb for a multi-limb comparison: a witness column, or a
+/// compile-time constant (for `FieldGte`/`FieldLte` against a fixed bound).
+#[derive(Clone, Copy)]
+pub enum Operand {
+    Col(usize),
+    Const(u32),
+}
+
+/// The witness columns a multi-limb comparison introduces, per limb: the result limb,
+/// its range bits, and the outgoing borrow. `A ≥ C` iff `borrows.last()` is 0.
+pub struct MultiLimbAux {
+    pub results: Vec<usize>,
+    pub result_bits: Vec<Vec<usize>>,
+    pub borrows: Vec<usize>,
+}
+
+/// `A ≥ C` for `u64`-scale values held as **little-endian `limb_bits`-bit limbs**
+/// (`A = Σ a_limbs[i]·2^{i·limb_bits}`), with `C` per-limb as columns or constants.
+/// Borrow-chain subtraction: each limb `i` yields a range-checked result limb
+/// `r_i ∈ [0, 2^limb_bits)` and a boolean borrow, enforcing
+/// `a_i − c_i − borrow_in + 2^limb_bits·borrow_out − r_i = 0`; then **`A ≥ C` iff the
+/// final borrow is 0** (enforced by a `== 0` constraint on the MSB borrow). This is the
+/// full-`u64` completion of [`emit_ge`]: a `< 2^31` domain is just the one-limb case.
+pub fn emit_ge_multilimb_ops(
+    a_limbs: &[usize],
+    c: &[Operand],
+    limb_bits: usize,
+    alloc: &mut ColAlloc,
+) -> (Vec<ConstraintExpr>, MultiLimbAux) {
+    assert_eq!(a_limbs.len(), c.len(), "operand limb counts must match");
+    assert!(!a_limbs.is_empty(), "need at least one limb");
+    assert!((1..31).contains(&limb_bits), "limb_bits must be in 1..31");
+    let base = BabyBear::new(1u32 << limb_bits);
+    let mut cs = Vec::new();
+    let mut results = Vec::new();
+    let mut result_bits = Vec::new();
+    let mut borrows = Vec::new();
+    let mut prev_borrow: Option<usize> = None;
+    for (i, &a_i) in a_limbs.iter().enumerate() {
+        let r_i = alloc.alloc();
+        let b_out = alloc.alloc();
+        // a_i − c_i − borrow_in + base·b_out − r_i = 0
+        let mut terms = vec![PolyTerm {
+            coeff: BabyBear::ONE,
+            col_indices: vec![a_i],
+        }];
+        match c[i] {
+            Operand::Col(cc) => terms.push(PolyTerm {
+                coeff: -BabyBear::ONE,
+                col_indices: vec![cc],
+            }),
+            Operand::Const(k) => terms.push(PolyTerm {
+                coeff: -BabyBear::new(k),
+                col_indices: vec![],
+            }),
+        }
+        if let Some(pb) = prev_borrow {
+            terms.push(PolyTerm {
+                coeff: -BabyBear::ONE,
+                col_indices: vec![pb],
+            });
+        }
+        terms.push(PolyTerm {
+            coeff: base,
+            col_indices: vec![b_out],
+        });
+        terms.push(PolyTerm {
+            coeff: -BabyBear::ONE,
+            col_indices: vec![r_i],
+        });
+        cs.push(ConstraintExpr::Polynomial { terms });
+        // r_i ∈ [0, 2^limb_bits)
+        let (rcs, rbits) = emit_range(r_i, limb_bits, alloc);
+        cs.extend(rcs);
+        // b_out is a bit
+        cs.push(ConstraintExpr::Binary { col: b_out });
+        results.push(r_i);
+        result_bits.push(rbits);
+        borrows.push(b_out);
+        prev_borrow = Some(b_out);
+    }
+    // A ≥ C  ⟺  final borrow == 0
+    let last = *borrows.last().unwrap();
+    cs.push(ConstraintExpr::Polynomial {
+        terms: vec![PolyTerm {
+            coeff: BabyBear::ONE,
+            col_indices: vec![last],
+        }],
+    });
+    (
+        cs,
+        MultiLimbAux {
+            results,
+            result_bits,
+            borrows,
+        },
+    )
+}
+
+/// `A ≥ C` where both are column-limb values.
+pub fn emit_ge_multilimb(
+    a_limbs: &[usize],
+    c_limbs: &[usize],
+    limb_bits: usize,
+    alloc: &mut ColAlloc,
+) -> (Vec<ConstraintExpr>, MultiLimbAux) {
+    let c: Vec<Operand> = c_limbs.iter().map(|&c| Operand::Col(c)).collect();
+    emit_ge_multilimb_ops(a_limbs, &c, limb_bits, alloc)
+}
+
+/// `A ≥ const`, `const` given as little-endian `limb_bits`-bit limbs (`FieldGte`).
+pub fn emit_ge_const_multilimb(
+    a_limbs: &[usize],
+    c_const_limbs: &[u32],
+    limb_bits: usize,
+    alloc: &mut ColAlloc,
+) -> (Vec<ConstraintExpr>, MultiLimbAux) {
+    let c: Vec<Operand> = c_const_limbs.iter().map(|&k| Operand::Const(k)).collect();
+    emit_ge_multilimb_ops(a_limbs, &c, limb_bits, alloc)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn bb(x: u32) -> BabyBear {
         BabyBear::new(x)
+    }
+
+    /// Build + fill a witness row for a multi-limb `A ≥ C` over column limbs
+    /// (a at 0..n, c at n..2n), computing the honest borrow-chain subtraction.
+    fn build_ml_row(a: &[u32], c: &[u32], aux: &MultiLimbAux, limb_bits: usize) -> Vec<BabyBear> {
+        let n = a.len();
+        let base = 1i64 << limb_bits;
+        let maxcol = aux
+            .results
+            .iter()
+            .chain(aux.borrows.iter())
+            .chain(aux.result_bits.iter().flatten())
+            .copied()
+            .max()
+            .unwrap()
+            .max(2 * n - 1)
+            + 1;
+        let mut row = vec![BabyBear::ZERO; maxcol];
+        for i in 0..n {
+            row[i] = bb(a[i]);
+            row[n + i] = bb(c[i]);
+        }
+        let mut borrow = 0i64;
+        for i in 0..n {
+            let diff = a[i] as i64 - c[i] as i64 - borrow;
+            let (r, bo) = if diff < 0 {
+                (diff + base, 1i64)
+            } else {
+                (diff, 0)
+            };
+            row[aux.results[i]] = bb(r as u32);
+            for (j, &bc) in aux.result_bits[i].iter().enumerate() {
+                row[bc] = bb(((r as u32) >> j) & 1);
+            }
+            row[aux.borrows[i]] = bb(bo as u32);
+            borrow = bo;
+        }
+        row
+    }
+
+    #[test]
+    fn multilimb_ge_honest_accepts() {
+        // 2 limbs of 8 bits, little-endian. A = 300 (44,1), C = 100 (100,0).
+        let mut al = ColAlloc::new(4);
+        let (cs, aux) = emit_ge_multilimb(&[0, 1], &[2, 3], 8, &mut al);
+        let row = build_ml_row(&[44, 1], &[100, 0], &aux, 8);
+        assert!(accepts(&cs, &row), "300 ≥ 100 must accept");
+    }
+
+    #[test]
+    fn multilimb_ge_less_rejects_via_final_borrow() {
+        // A = 100 (100,0), C = 300 (44,1) — A < C, so the MSB borrow is 1 and the
+        // final `borrow == 0` constraint fails. No witness can avoid it.
+        let mut al = ColAlloc::new(4);
+        let (cs, aux) = emit_ge_multilimb(&[0, 1], &[2, 3], 8, &mut al);
+        let row = build_ml_row(&[100, 0], &[44, 1], &aux, 8);
+        assert!(
+            !accepts(&cs, &row),
+            "100 ≥ 300 must reject (final borrow = 1)"
+        );
+    }
+
+    #[test]
+    fn multilimb_ge_boundary_equal_accepts() {
+        let mut al = ColAlloc::new(4);
+        let (cs, aux) = emit_ge_multilimb(&[0, 1], &[2, 3], 8, &mut al);
+        let row = build_ml_row(&[44, 1], &[44, 1], &aux, 8);
+        assert!(accepts(&cs, &row), "300 ≥ 300 must accept");
+    }
+
+    #[test]
+    fn multilimb_ge_const_floor() {
+        // A = 500 (244,1) ≥ const 256 (0,1): the FieldGte{index, value} shape on a u64.
+        let mut al = ColAlloc::new(2); // only a limbs are columns (0,1); c is constant
+        let (cs, aux) = emit_ge_const_multilimb(&[0, 1], &[0, 1], 8, &mut al);
+        // build row: a at 0,1; fill aux from the honest chain vs the const.
+        let a = [244u32, 1];
+        let c = [0u32, 1];
+        let maxcol = aux
+            .results
+            .iter()
+            .chain(aux.borrows.iter())
+            .chain(aux.result_bits.iter().flatten())
+            .copied()
+            .max()
+            .unwrap()
+            .max(1)
+            + 1;
+        let mut row = vec![BabyBear::ZERO; maxcol];
+        row[0] = bb(a[0]);
+        row[1] = bb(a[1]);
+        let base = 1i64 << 8;
+        let mut borrow = 0i64;
+        for i in 0..2 {
+            let diff = a[i] as i64 - c[i] as i64 - borrow;
+            let (r, bo) = if diff < 0 {
+                (diff + base, 1i64)
+            } else {
+                (diff, 0)
+            };
+            row[aux.results[i]] = bb(r as u32);
+            for (j, &bc) in aux.result_bits[i].iter().enumerate() {
+                row[bc] = bb(((r as u32) >> j) & 1);
+            }
+            row[aux.borrows[i]] = bb(bo as u32);
+            borrow = bo;
+        }
+        assert!(accepts(&cs, &row), "500 ≥ 256 must accept");
     }
 
     /// Every emitted constraint evaluates to 0 (satisfied) against `row`.
