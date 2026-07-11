@@ -32,6 +32,16 @@ gate on the last row), and prove the whole bridge under it. Without `hterm` the 
 last row is already forced to be the genuine classification of the consumed prefix — that fragment
 needs no extra hypothesis (it is `htable`/`hcont`/`hhead`, established purely from `Satisfied2`).
 
+## The field-faithful denotation (mod-p) and the canonicality envelope
+
+`VmConstraint.holdsVm` / `WindowConstraint.holdsAt` pin gates only `≡ 0 [ZMOD p]`
+(`p = 2013265921`, BabyBear) — the DEPLOYED field constraint, not an ℤ equality. Reading the ℤ
+run back off the congruences needs the deployed range-check invariant carried as the EXPLICIT
+hypothesis `DfaTraceCanon` (§3.5): the three DFA columns (`current`, `symbol`, `next`) canonical
+in `[0, p)` on every row, and the two bound public inputs canonical. Under it the grid gates +
+`p`'s primality force `current, symbol ∈ {0,1}` EXACTLY (not just mod `p`), and every congruence
+collapses to the ℤ equality. Non-vacuous: `witTrace_canon` inhabits the envelope concretely.
+
 ## Non-vacuity
 
 `witTrace` (§6): a concrete 2-row toggle run `IDLE=0 →1 1 →1 0` that PROVABLY `Satisfied2 dfaRoutingDesc`
@@ -49,6 +59,7 @@ Poseidon2 CR carrier `CollisionFree` is needed only for the SEPARATE binding hal
 `route_commitment_binds_trace`, and is NOT consumed here). NEW file; imports read-only.
 -/
 import Dregg2.Circuit.Emit.DfaRoutingEmit
+import Dregg2.Circuit.Emit.EffectVmEmitTransfer
 import Dregg2.Crypto.DfaAcceptanceAir
 
 namespace Dregg2.Circuit.Emit.DfaRoutingRefine
@@ -59,6 +70,7 @@ open Dregg2.Circuit.Emit.EffectVmEmit
   (VmConstraint VmRowEnv holdsVm_gate_of_notLast holdsVm_piFirst_true holdsVm_piLast_true)
 open Dregg2.Circuit.DescriptorIR2
 open Dregg2.Circuit.Emit.DfaRoutingEmit
+open Dregg2.Circuit.Emit.EffectVmEmitTransfer (pPrimeInt)
 open Dregg2.Crypto.DfaAcceptanceAir
   (TableDfa Row classify classifyFrom symbols lastNext_eq_classifyFrom)
 
@@ -111,6 +123,20 @@ theorem mem_continuityWindow :
   simp only [dfaRoutingDesc]
   repeat' first | exact List.Mem.head _ | apply List.Mem.tail
 
+theorem mem_stateGridGate :
+    VmConstraint2.base (.gate (.mul (.var CURRENT) (.add (.var CURRENT) (.const (-1)))))
+      ∈ dfaRoutingDesc.constraints := by
+  show stateGridGate ∈ dfaRoutingDesc.constraints
+  simp only [dfaRoutingDesc]
+  repeat' first | exact List.Mem.head _ | apply List.Mem.tail
+
+theorem mem_symbolGridGate :
+    VmConstraint2.base (.gate (.mul (.var SYMBOL) (.add (.var SYMBOL) (.const (-1)))))
+      ∈ dfaRoutingDesc.constraints := by
+  show symbolGridGate ∈ dfaRoutingDesc.constraints
+  simp only [dfaRoutingDesc]
+  repeat' first | exact List.Mem.head _ | apply List.Mem.tail
+
 theorem mem_b1InitialPin :
     VmConstraint2.base (.piBinding .first CURRENT PI_INITIAL) ∈ dfaRoutingDesc.constraints := by
   show b1InitialPin ∈ dfaRoutingDesc.constraints
@@ -141,42 +167,43 @@ theorem envAt_loc {i : Nat} (hi : i < t.rows.length) : (envAt t i).loc = t.rows[
 theorem envAt_nxt {i : Nat} (hi : i + 1 < t.rows.length) : (envAt t i).nxt = t.rows[i + 1]'hi :=
   getD_row hi
 
-/-- **Any base-gate constraint of `dfaRoutingDesc` forces its body to vanish on a NON-LAST row.**
-(On the last row a `.gate` is vacuous — the transition-zerofier lowering.) -/
+/-- **Any base-gate constraint of `dfaRoutingDesc` forces its body to vanish mod `p` on a NON-LAST
+row.** (On the last row a `.gate` is vacuous — the transition-zerofier lowering. The field-faithful
+denotation pins only the congruence; the ℤ readings live in §3.5 under `DfaTraceCanon`.) -/
 theorem gate_forces (hsat : Satisfied2 hash dfaRoutingDesc minit mfin maddrs t) {i : Nat}
     (hi : i < t.rows.length) (hnl : i + 1 ≠ t.rows.length)
     {g : EmittedExpr} (hg : VmConstraint2.base (.gate g) ∈ dfaRoutingDesc.constraints) :
-    g.eval (t.rows[i]'hi) = 0 := by
+    g.eval (t.rows[i]'hi) ≡ 0 [ZMOD 2013265921] := by
   have hrc := hsat.rowConstraints i hi _ hg
   have hlf : (i + 1 == t.rows.length) = false := by simpa using hnl
   rw [← envAt_loc hi]
   simpa only [VmConstraint2.holdsAt, VmConstraint.holdsVm, hlf] using hrc
 
-/-- **Any `onTransition` window constraint forces its body to vanish on a NON-LAST row.** -/
+/-- **Any `onTransition` window constraint forces its body to vanish mod `p` on a NON-LAST row.** -/
 theorem window_forces (hsat : Satisfied2 hash dfaRoutingDesc minit mfin maddrs t) {i : Nat}
     (hi : i < t.rows.length) (hnl : i + 1 ≠ t.rows.length)
     {w : WindowConstraint} (hw : VmConstraint2.windowGate w ∈ dfaRoutingDesc.constraints)
     (honT : w.onTransition = true) :
-    w.body.eval (envAt t i) = 0 := by
+    w.body.eval (envAt t i) ≡ 0 [ZMOD 2013265921] := by
   have hrc := hsat.rowConstraints i hi _ hw
   have hlf : (i + 1 == t.rows.length) = false := by simpa using hnl
   simp only [VmConstraint2.holdsAt, WindowConstraint.holdsAt, honT, if_true] at hrc
   exact hrc hlf
 
-/-- **B1 fires on the first row.** -/
+/-- **B1 fires on the first row** (mod `p` — the field-faithful pin). -/
 theorem piFirst_forces (hsat : Satisfied2 hash dfaRoutingDesc minit mfin maddrs t)
     (hne : t.rows ≠ []) {col k : Nat}
     (hb : VmConstraint2.base (.piBinding .first col k) ∈ dfaRoutingDesc.constraints) :
-    (envAt t 0).loc col = t.pub k := by
+    (envAt t 0).loc col ≡ t.pub k [ZMOD 2013265921] := by
   have hpos : 0 < t.rows.length := List.length_pos_of_ne_nil hne
   have hrc := hsat.rowConstraints 0 hpos _ hb
   exact (holdsVm_piFirst_true (envAt t 0) (0 + 1 == t.rows.length) col k).mp hrc
 
-/-- **B2 fires on the last row.** -/
+/-- **B2 fires on the last row** (mod `p` — the field-faithful pin). -/
 theorem piLast_forces (hsat : Satisfied2 hash dfaRoutingDesc minit mfin maddrs t)
     (hne : t.rows ≠ []) {col k : Nat}
     (hb : VmConstraint2.base (.piBinding .last col k) ∈ dfaRoutingDesc.constraints) :
-    (envAt t (t.rows.length - 1)).loc col = t.pub k := by
+    (envAt t (t.rows.length - 1)).loc col ≡ t.pub k [ZMOD 2013265921] := by
   have hpos : 0 < t.rows.length := List.length_pos_of_ne_nil hne
   have hlt : t.rows.length - 1 < t.rows.length := Nat.sub_lt hpos Nat.one_pos
   have hrc := hsat.rowConstraints (t.rows.length - 1) hlt _ hb
@@ -186,6 +213,78 @@ theorem piLast_forces (hsat : Satisfied2 hash dfaRoutingDesc minit mfin maddrs t
   exact (holdsVm_piLast_true (envAt t (t.rows.length - 1)) (t.rows.length - 1 == 0) col k).mp hrc
 
 end Extract
+
+/-! ## §3.5 — the canonicality envelope: reading the ℤ run back off the mod-`p` congruences.
+
+The deployed AIR constrains cells only as BabyBear field elements; the range-check invariant
+(every trace cell and public input a canonical representative in `[0, p)`) is what makes the ℤ
+reading honest. It is carried as the EXPLICIT hypothesis `DfaTraceCanon` — inhabited concretely by
+`witTrace_canon` (§6), so the envelope is not vacuous. -/
+
+/-- Two canonical representatives congruent mod `p` are EQUAL (`p ∣ residual` with
+`residual ∈ (−p, p)` collapses to `0`). -/
+theorem eq_of_modEq_of_canon {a b : ℤ} (h : a ≡ b [ZMOD 2013265921])
+    (ha0 : 0 ≤ a) (ha1 : a < 2013265921) (hb0 : 0 ≤ b) (hb1 : b < 2013265921) : a = b := by
+  obtain ⟨k, hk⟩ := h.dvd
+  omega
+
+/-- A canonical cell whose booleanity gate vanishes mod `p` IS `0` or `1` over ℤ: primality splits
+`p ∣ x·(x−1)`, and canonicality collapses each factor. -/
+theorem grid_cases {x : ℤ} (h : x * (x + (-1)) ≡ 0 [ZMOD 2013265921])
+    (h0 : 0 ≤ x) (h1 : x < 2013265921) : x = 0 ∨ x = 1 := by
+  have hd : (2013265921 : ℤ) ∣ x * (x + (-1)) := Int.modEq_zero_iff_dvd.mp h
+  rcases pPrimeInt.dvd_mul.mp hd with hx | hx
+  · obtain ⟨k, hk⟩ := hx; left; omega
+  · obtain ⟨k, hk⟩ := hx; right; omega
+
+/-- **The DFA canonicality envelope.** The three DFA columns (`current`, `symbol`, `next`) are
+canonical on every row, and the two bound public inputs (`pi[initial_state]`, `pi[final_state]`)
+are canonical — the deployed range-check invariant, threaded through the whole-descriptor bridge. -/
+def DfaTraceCanon (t : VmTrace) : Prop :=
+  (∀ i, (hi : i < t.rows.length) →
+      (0 ≤ (t.rows[i]'hi) CURRENT ∧ (t.rows[i]'hi) CURRENT < 2013265921)
+      ∧ (0 ≤ (t.rows[i]'hi) SYMBOL ∧ (t.rows[i]'hi) SYMBOL < 2013265921)
+      ∧ (0 ≤ (t.rows[i]'hi) NEXT ∧ (t.rows[i]'hi) NEXT < 2013265921))
+  ∧ (0 ≤ t.pub PI_INITIAL ∧ t.pub PI_INITIAL < 2013265921)
+  ∧ (0 ≤ t.pub PI_FINAL ∧ t.pub PI_FINAL < 2013265921)
+
+/-- **The toggle transition over ℤ from its mod-`p` gate**: with `current, symbol ∈ {0,1}` (the
+grid gates + canonicality) and a canonical `next`, the congruence `next ≡ step(cur, sym) [ZMOD p]`
+IS the ℤ equality — the interpolant's value on the grid lies in `{0,1} ⊂ [0, p)`. -/
+theorem transition_modEq_toggle {a : Assignment}
+    (h : transitionBody.eval a ≡ 0 [ZMOD 2013265921])
+    (hcur : a CURRENT = 0 ∨ a CURRENT = 1) (hsym : a SYMBOL = 0 ∨ a SYMBOL = 1)
+    (hn0 : 0 ≤ a NEXT) (hn1 : a NEXT < 2013265921) :
+    a NEXT = a CURRENT + a SYMBOL - 2 * (a CURRENT * a SYMBOL) := by
+  simp only [transitionBody, toggleInterp, EmittedExpr.eval] at h
+  obtain ⟨k, hk⟩ := Int.modEq_zero_iff_dvd.mp h
+  rcases hcur with hc | hc <;> rcases hsym with hs | hs <;> rw [hc, hs] at hk ⊢ <;> omega
+
+/-- The grid facts of a non-last row, extracted from the two vanishing gates + canonicality. -/
+theorem row_on_grid {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat}
+    {maddrs : List ℤ} {t : VmTrace}
+    (hsat : Satisfied2 hash dfaRoutingDesc minit mfin maddrs t) {i : Nat}
+    (hi : i < t.rows.length) (hnl : i + 1 ≠ t.rows.length) (hcanon : DfaTraceCanon t) :
+    ((t.rows[i]'hi) CURRENT = 0 ∨ (t.rows[i]'hi) CURRENT = 1)
+    ∧ ((t.rows[i]'hi) SYMBOL = 0 ∨ (t.rows[i]'hi) SYMBOL = 1) := by
+  have hc := hcanon.1 i hi
+  constructor
+  · exact grid_cases
+      (by simpa only [EmittedExpr.eval] using gate_forces hsat hi hnl mem_stateGridGate)
+      hc.1.1 hc.1.2
+  · exact grid_cases
+      (by simpa only [EmittedExpr.eval] using gate_forces hsat hi hnl mem_symbolGridGate)
+      hc.2.1.1 hc.2.1.2
+
+/-- The C2 continuity equality over ℤ from its mod-`p` window: both cells are canonical. -/
+theorem continuity_modEq_eq {env : VmRowEnv}
+    (h : contWindowBody.eval env ≡ 0 [ZMOD 2013265921])
+    (ha0 : 0 ≤ env.nxt CURRENT) (ha1 : env.nxt CURRENT < 2013265921)
+    (hb0 : 0 ≤ env.loc NEXT) (hb1 : env.loc NEXT < 2013265921) :
+    env.nxt CURRENT = env.loc NEXT := by
+  simp only [contWindowBody, WindowExpr.eval] at h
+  obtain ⟨k, hk⟩ := Int.modEq_zero_iff_dvd.mp h
+  omega
 
 /-! ## §4 — `Continuous` of the read run from index-adjacency (the model's own predicate). -/
 
@@ -223,13 +322,14 @@ lemma `lastNext_eq_classifyFrom`. No crypto carrier is consumed. -/
 theorem dfaRouting_refines_classify {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat}
     {maddrs : List ℤ} {t : VmTrace}
     (hsat : Satisfied2 hash dfaRoutingDesc minit mfin maddrs t)
-    (hne : t.rows ≠ [])
+    (hne : t.rows ≠ []) (hcanon : DfaTraceCanon t)
     (hterm : transitionBody.eval (t.rows.getD (t.rows.length - 1) zeroAsg) = 0) :
     (∀ r ∈ traceRows t, r.next = (pinnedDfa (t.pub PI_INITIAL)).step r.state r.sym) ∧
     (∀ r₀, (traceRows t).head? = some r₀ → r₀.state = t.pub PI_INITIAL) ∧
     t.pub PI_FINAL = classify (pinnedDfa (t.pub PI_INITIAL)) (symbols (traceRows t)) := by
   have hpos : 0 < t.rows.length := List.length_pos_of_ne_nil hne
-  -- (i) every row a genuine transition (last row via hterm, others via the transition gate)
+  -- (i) every row a genuine transition (last row via hterm, others via the transition gate mod p
+  --     read back over ℤ through the grid gates + the canonicality envelope)
   have htable : ∀ r ∈ traceRows t,
       r.next = (pinnedDfa (t.pub PI_INITIAL)).step r.state r.sym := by
     intro r hr
@@ -242,19 +342,24 @@ theorem dfaRouting_refines_classify {hash : List ℤ → ℤ} {minit : ℤ → �
     · have hi_eq : t.rows.length - 1 = i := by omega
       rw [hi_eq, getD_row hi] at hterm
       exact (transition_body_zero_iff (t.rows[i]'hi)).mp hterm
-    · exact (transition_body_zero_iff (t.rows[i]'hi)).mp
-        (gate_forces hsat hi hnl mem_transitionGate)
-  -- (ii) continuity threads the run
+    · obtain ⟨hcur, hsym⟩ := row_on_grid hsat hi hnl hcanon
+      exact transition_modEq_toggle (gate_forces hsat hi hnl mem_transitionGate) hcur hsym
+        (hcanon.1 i hi).2.2.1 (hcanon.1 i hi).2.2.2
+  -- (ii) continuity threads the run (mod-p window + canonicality of both cells)
   have hcont : Dregg2.Crypto.DfaAcceptanceAir.Continuous (traceRows t) := by
     apply continuous_map
     intro i hi1
     have hi : i < t.rows.length := Nat.lt_of_succ_lt hi1
     have hnl : i + 1 ≠ t.rows.length := Nat.ne_of_lt hi1
     have hw := window_forces hsat hi hnl mem_continuityWindow rfl
-    have hc := (continuity_window_zero_iff (envAt t i)).mp hw
+    have hc := continuity_modEq_eq hw
+      (by rw [envAt_nxt hi1]; exact (hcanon.1 (i + 1) hi1).1.1)
+      (by rw [envAt_nxt hi1]; exact (hcanon.1 (i + 1) hi1).1.2)
+      (by rw [envAt_loc hi]; exact (hcanon.1 i hi).2.2.1)
+      (by rw [envAt_loc hi]; exact (hcanon.1 i hi).2.2.2)
     rw [envAt_nxt hi1, envAt_loc hi] at hc
     exact hc
-  -- (iii) the head starts at the public initial state
+  -- (iii) the head starts at the public initial state (mod-p pin + canonicality of both sides)
   have hhead : ∀ r₀, (traceRows t).head? = some r₀ → r₀.state = t.pub PI_INITIAL := by
     intro r₀ hr₀
     simp only [traceRows, List.head?_map, Option.map_eq_some_iff] at hr₀
@@ -266,15 +371,20 @@ theorem dfaRouting_refines_classify {hash : List ℤ → ℤ} {minit : ℤ → �
       rw [← this, List.head_eq_getElem hne]
     have hpf := piFirst_forces hsat hne mem_b1InitialPin
     rw [envAt_loc hpos, h0] at hpf
-    exact hpf
+    have hcr := (hcanon.1 0 hpos).1
+    rw [h0] at hcr
+    exact eq_of_modEq_of_canon hpf hcr.1 hcr.2 hcanon.2.1.1 hcanon.2.1.2
   -- (iv) the last row's next is classifyFrom of the whole input; B2 exposes it as pi[FINAL]
   have hlt : t.rows.length - 1 < t.rows.length := Nat.sub_lt hpos Nat.one_pos
   have hlasteq : (traceRows t).getLast? = some (mkRow (t.rows.getLast hne)) := by
     rw [traceRows, List.getLast?_map, List.getLast?_eq_some_getLast hne]; rfl
   have hclass := lastNext_eq_classifyFrom (pinnedDfa (t.pub PI_INITIAL)) (t.pub PI_INITIAL)
     (traceRows t) htable hcont hhead (mkRow (t.rows.getLast hne)) hlasteq
-  have hfinal := piLast_forces hsat hne mem_b2FinalPin
-  rw [envAt_loc hlt] at hfinal
+  have hfinalm := piLast_forces hsat hne mem_b2FinalPin
+  rw [envAt_loc hlt] at hfinalm
+  have hcl := (hcanon.1 (t.rows.length - 1) hlt).2.2
+  have hfinal : (t.rows[t.rows.length - 1]'hlt) NEXT = t.pub PI_FINAL :=
+    eq_of_modEq_of_canon hfinalm hcl.1 hcl.2 hcanon.2.2.1 hcanon.2.2.2
   rw [List.getLast_eq_getElem hne] at hclass
   refine ⟨htable, hhead, ?_⟩
   -- hclass : (t.rows[last]).next-column = classifyFrom d (pub INITIAL) (symbols …)
@@ -285,15 +395,16 @@ theorem dfaRouting_refines_classify {hash : List ℤ → ℤ} {minit : ℤ → �
   rw [hkey]
   rfl
 
-/-- **The genuine-run CORE, UNCONDITIONAL (no terminal hypothesis).** From `Satisfied2` ALONE the
-descriptor forces: the run starts at `pi[initial_state]` (B1), every NON-LAST row is a genuine toggle
+/-- **The genuine-run CORE, UNCONDITIONAL (no terminal hypothesis).** From `Satisfied2` + the
+range-check canonicality envelope (no `hterm`) the descriptor forces: the run starts at `pi[initial_state]` (B1), every NON-LAST row is a genuine toggle
 transition, and the state threads across each window (continuity). This is the largest fragment the
 descriptor's transition-zerofier lowering forces without a terminal obligation; the exposed final PI
 = `classify(FULL input)` additionally needs `hterm` (the last row's transition gate), because that
 gate is by design not re-asserted on the last row (`dfaRouting_refines_classify`). -/
 theorem dfaRouting_genuine_prefix {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat}
     {maddrs : List ℤ} {t : VmTrace}
-    (hsat : Satisfied2 hash dfaRoutingDesc minit mfin maddrs t) (hne : t.rows ≠ []) :
+    (hsat : Satisfied2 hash dfaRoutingDesc minit mfin maddrs t) (hne : t.rows ≠ [])
+    (hcanon : DfaTraceCanon t) :
     (∀ r₀, (traceRows t).head? = some r₀ → r₀.state = t.pub PI_INITIAL) ∧
     (∀ i (hi : i < t.rows.length), i + 1 ≠ t.rows.length →
         (t.rows[i]'hi) NEXT = toggleStep ((t.rows[i]'hi) CURRENT) ((t.rows[i]'hi) SYMBOL)) ∧
@@ -310,14 +421,22 @@ theorem dfaRouting_genuine_prefix {hash : List ℤ → ℤ} {minit : ℤ → ℤ
       have hha : t.rows.head hne = a := Option.some.inj hah
       rw [← hha, List.head_eq_getElem hne]
     have hpf := piFirst_forces hsat hne mem_b1InitialPin
-    rw [envAt_loc hpos, h0] at hpf; exact hpf
+    rw [envAt_loc hpos, h0] at hpf
+    have hcr := (hcanon.1 0 hpos).1
+    rw [h0] at hcr
+    exact eq_of_modEq_of_canon hpf hcr.1 hcr.2 hcanon.2.1.1 hcanon.2.1.2
   · intro i hi hnl
-    exact (transition_body_zero_iff (t.rows[i]'hi)).mp (gate_forces hsat hi hnl mem_transitionGate)
+    obtain ⟨hcur, hsym⟩ := row_on_grid hsat hi hnl hcanon
+    exact transition_modEq_toggle (gate_forces hsat hi hnl mem_transitionGate) hcur hsym
+      (hcanon.1 i hi).2.2.1 (hcanon.1 i hi).2.2.2
   · intro i hi1
     have hi : i < t.rows.length := Nat.lt_of_succ_lt hi1
     have hnl : i + 1 ≠ t.rows.length := Nat.ne_of_lt hi1
-    have hc := (continuity_window_zero_iff (envAt t i)).mp
-      (window_forces hsat hi hnl mem_continuityWindow rfl)
+    have hc := continuity_modEq_eq (window_forces hsat hi hnl mem_continuityWindow rfl)
+      (by rw [envAt_nxt hi1]; exact (hcanon.1 (i + 1) hi1).1.1)
+      (by rw [envAt_nxt hi1]; exact (hcanon.1 (i + 1) hi1).1.2)
+      (by rw [envAt_loc hi]; exact (hcanon.1 i hi).2.2.1)
+      (by rw [envAt_loc hi]; exact (hcanon.1 i hi).2.2.2)
     rw [envAt_nxt hi1, envAt_loc hi] at hc; exact hc
 
 /-! ## §6 — Non-vacuity: a concrete satisfying witness, a wrong run that fails, a discriminating
@@ -390,6 +509,27 @@ theorem witTrace_satisfies :
   memTableFaithful := by rw [memLog_dfa]; rfl
   mapTableFaithful := by rw [mapLog_dfa]; rfl
 
+/-- **The witness inhabits the canonicality envelope** — every DFA cell of both rows and both bound
+public inputs are canonical representatives (they are all `0` or `1`), so `DfaTraceCanon` is a real,
+concretely-satisfiable hypothesis, not a vacuous guard. -/
+theorem wr0_canon :
+    (0 ≤ wr0 CURRENT ∧ wr0 CURRENT < 2013265921)
+    ∧ (0 ≤ wr0 SYMBOL ∧ wr0 SYMBOL < 2013265921)
+    ∧ (0 ≤ wr0 NEXT ∧ wr0 NEXT < 2013265921) := by decide
+
+theorem wr1_canon :
+    (0 ≤ wr1 CURRENT ∧ wr1 CURRENT < 2013265921)
+    ∧ (0 ≤ wr1 SYMBOL ∧ wr1 SYMBOL < 2013265921)
+    ∧ (0 ≤ wr1 NEXT ∧ wr1 NEXT < 2013265921) := by decide
+
+theorem witTrace_canon : DfaTraceCanon witTrace := by
+  refine ⟨?_, ⟨by decide, by decide⟩, ⟨by decide, by decide⟩⟩
+  intro i hi
+  have hi2 : i < 2 := hi
+  interval_cases i
+  · exact wr0_canon
+  · exact wr1_canon
+
 /-- The witness satisfies the terminal-step obligation: row 1 (the last row) IS a genuine toggle
 transition `step(1,1) = 0`. -/
 theorem witTrace_hterm :
@@ -408,7 +548,7 @@ satisfying trace + its terminal step to `dfaRouting_refines_classify` recovers t
 classification: the exposed final state `pi[FINAL] = 0` equals `classify (pinnedDfa 0) [1,1]`. -/
 theorem witness_refines :
     witTrace.pub PI_FINAL = classify (pinnedDfa (witTrace.pub PI_INITIAL)) (symbols (traceRows witTrace)) :=
-  (dfaRouting_refines_classify witTrace_satisfies (by decide) witTrace_hterm).2.2
+  (dfaRouting_refines_classify witTrace_satisfies (by decide) witTrace_canon witTrace_hterm).2.2
 
 /-- The recovered value is the concrete REMOTE-of-toggle endpoint `0`, over the read input `[1,1]`. -/
 theorem witness_value : witTrace.pub PI_FINAL = 0 ∧ symbols (traceRows witTrace) = [1, 1] := by
@@ -425,14 +565,18 @@ def badTrace : VmTrace :=
       | _ => [] }
 
 /-- **A WRONG run PROVABLY fails the hypothesis (the false half of non-vacuity).** The row-0
-transition gate (a non-last row) forces `next = step(0,1) = 1`, but `badTrace` claims `next = 0`, so
-no `Satisfied2` witness exists — the descriptor's toggle tooth rejects the lie. -/
+transition gate (a non-last row) forces `next ≡ step(0,1) = 1 [ZMOD p]`, but `badTrace` claims
+`next = 0` — a residual of `−1`, which `p` does not divide — so no `Satisfied2` witness exists.
+The descriptor's toggle tooth rejects the lie AT THE FIELD LEVEL, with no canonicality needed. -/
 theorem badTrace_not_satisfied :
     ¬ Satisfied2 hash0 dfaRoutingDesc (fun _ => 0) (fun _ => (0, 0)) [] badTrace := by
   intro h
-  have h2 : transitionBody.eval badRow0 = 0 :=
+  have h2 : transitionBody.eval badRow0 ≡ 0 [ZMOD 2013265921] :=
     gate_forces (i := 0) h (by decide) (by decide) mem_transitionGate
-  exact absurd h2 (by decide)
+  have he : transitionBody.eval badRow0 = -1 := by decide
+  rw [he] at h2
+  obtain ⟨k, hk⟩ := Int.modEq_zero_iff_dvd.mp h2
+  omega
 
 /-! ## §7 — Axiom tripwires. -/
 

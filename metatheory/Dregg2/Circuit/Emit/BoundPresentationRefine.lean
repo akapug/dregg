@@ -29,6 +29,15 @@ between the row-0 witness columns and the committed public inputs. It composes A
 `chip_lookup_sound`). Every constraint the descriptor declares fires on the single deployed summary
 row (`0 < height`), so the bound-presentation relation holds even at the height-1 deployed trace.
 
+## The field-faithful denotation (mod-p) and the canonicality envelope
+
+`VmConstraint.holdsVm` pins the PI bindings only `≡ [ZMOD p]` (`p = 2013265921`, BabyBear) — the
+DEPLOYED field constraint. Reading the spec's ℤ equalities back off the congruences carries the
+deployed range-check invariant as the EXPLICIT hypothesis `BoundPresCanon` (§2.5): the 19 summary
+columns + the nonce column and their bound public inputs are canonical representatives in `[0, p)`.
+The tag-binding chip lookup is UNAFFECTED (table membership, not a mod-`p` gate). Non-vacuous:
+`hTrace_canon` inhabits the envelope concretely.
+
 ## Non-vacuity (the anti-scar)
 
 `concrete_sat` builds a CONCRETE height-1 trace + a sound chip table (`concrete_chipSound`) for which
@@ -87,15 +96,35 @@ theorem summaryPin_mem (i : Nat) (hi : i < SUMMARY_WIDTH) :
   simp only [summaryPins, List.mem_map, List.mem_range]
   exact ⟨i, hi, rfl⟩
 
-/-- A declared first-row PI binding pins `loc[col] = pub[k]` on row 0. -/
+/-- A declared first-row PI binding pins `loc[col] ≡ pub[k] [ZMOD p]` on row 0 — the field-faithful
+pin; the ℤ reading lives in the bridge under the `BoundPresCanon` envelope. -/
 theorem firstPiG {hash : List ℤ → ℤ} {t : VmTrace} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat}
     {maddrs : List ℤ} (hsat : Satisfied2 hash boundPresentationDesc minit mfin maddrs t)
     (hlen : 0 < t.rows.length) (col k : Nat)
     (hmem : VmConstraint2.base (.piBinding VmRow.first col k) ∈ boundPresentationDesc.constraints) :
-    (envAt t 0).loc col = t.pub k := by
+    (envAt t 0).loc col ≡ t.pub k [ZMOD 2013265921] := by
   have h := hsat.rowConstraints 0 hlen _ hmem
   simp only [VmConstraint2.holdsAt, VmConstraint.holdsVm] at h
   exact h (by decide)
+
+/-! ## §2.5 — the canonicality envelope (field-faithful denotation glue). -/
+
+/-- Two canonical representatives congruent mod `p` are EQUAL (`p ∣ residual` with
+`residual ∈ (−p, p)` collapses to `0`). -/
+theorem eq_of_modEq_of_canon {a b : ℤ} (h : a ≡ b [ZMOD 2013265921])
+    (ha : 0 ≤ a ∧ a < 2013265921) (hb : 0 ≤ b ∧ b < 2013265921) : a = b := by
+  obtain ⟨k, hk⟩ := h.dvd
+  omega
+
+/-- **The bound-presentation canonicality envelope.** Every row-0 summary column and its bound
+public input, and the nonce column + nonce PI, are canonical representatives in `[0, p)` — the
+deployed range-check invariant, threaded through the whole-descriptor bridge. -/
+def BoundPresCanon (t : VmTrace) : Prop :=
+  (∀ i, i < SUMMARY_WIDTH →
+      (0 ≤ (envAt t 0).loc i ∧ (envAt t 0).loc i < 2013265921)
+      ∧ (0 ≤ t.pub i ∧ t.pub i < 2013265921))
+  ∧ (0 ≤ (envAt t 0).loc VERIFIER_NONCE ∧ (envAt t 0).loc VERIFIER_NONCE < 2013265921)
+  ∧ (0 ≤ t.pub PI_NONCE ∧ t.pub PI_NONCE < 2013265921)
 
 /-- **The tag-binding tooth extracted.** Against the NAMED sound chip table, the tag lookup forces
 the tag column to be the genuine Poseidon2 image of `[final_root, randomness, verifier_nonce, DSK]`
@@ -125,18 +154,24 @@ theorem boundPresentation_sat_refines {hash : List ℤ → ℤ} {t : VmTrace} {m
     {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ}
     (hlen : 0 < t.rows.length)
     (hsat : Satisfied2 hash boundPresentationDesc minit mfin maddrs t)
-    (hChip : ChipTableSound hash (t.tf .poseidon2)) :
+    (hChip : ChipTableSound hash (t.tf .poseidon2))
+    (hcanon : BoundPresCanon t) :
     BoundPresentation hash (envAt t 0).loc t.pub := by
   refine ⟨?_, ?_, ?_⟩
-  · -- every summary felt equals its PI
+  · -- every summary felt equals its PI (mod-p pin + canonicality of both sides)
     intro i hi
-    exact firstPiG hsat hlen i i (summaryPin_mem i hi)
+    exact eq_of_modEq_of_canon (firstPiG hsat hlen i i (summaryPin_mem i hi))
+      (hcanon.1 i hi).1 (hcanon.1 i hi).2
   · -- the nonce column equals its PI
-    exact firstPiG hsat hlen VERIFIER_NONCE PI_NONCE (by bp_mem)
+    exact eq_of_modEq_of_canon (firstPiG hsat hlen VERIFIER_NONCE PI_NONCE (by bp_mem))
+      hcanon.2.1 hcanon.2.2
   · -- the tag PI is the genuine Poseidon2 image
     have htag := tagSound hsat hChip hlen
     have h10 : (envAt t 0).loc PRESENTATION_TAG = t.pub PRESENTATION_TAG :=
-      firstPiG hsat hlen PRESENTATION_TAG PRESENTATION_TAG (summaryPin_mem PRESENTATION_TAG (by decide))
+      eq_of_modEq_of_canon
+        (firstPiG hsat hlen PRESENTATION_TAG PRESENTATION_TAG
+          (summaryPin_mem PRESENTATION_TAG (by decide)))
+        (hcanon.1 PRESENTATION_TAG (by decide)).1 (hcanon.1 PRESENTATION_TAG (by decide)).2
     rw [← h10]; exact htag
 
 /-! ## §4 — non-vacuity of the SPEC + an inhabited satisfying witness (the anti-scar). -/
@@ -217,9 +252,18 @@ theorem concrete_sat :
   · rw [hmemlog]; rfl
   · rw [hmaplog]; rfl
 
+/-- **The witness inhabits the canonicality envelope** — every summary cell/PI (`0..18`, the tag
+`1067461553`) and the nonce pair (`3`) are canonical representatives, so `BoundPresCanon` is a real,
+concretely-satisfiable hypothesis, not a vacuous guard. -/
+theorem hTrace_canon : BoundPresCanon hTrace := by
+  refine ⟨?_, ⟨by decide, by decide⟩, ⟨by decide, by decide⟩⟩
+  intro i hi
+  have hi19 : i < 19 := hi
+  interval_cases i <;> exact ⟨⟨by decide, by decide⟩, ⟨by decide, by decide⟩⟩
+
 /-- **The bridge fires end-to-end on the concrete inhabited witness** (SAT ⟹ SEM, non-vacuously). -/
 theorem witness_spec : BoundPresentation cHash (envAt hTrace 0).loc hTrace.pub :=
-  boundPresentation_sat_refines (by decide) concrete_sat concrete_chipSound
+  boundPresentation_sat_refines (by decide) concrete_sat concrete_chipSound hTrace_canon
 
 /-- **Witness TRUE — the spec is INHABITED (closed form).** The tag clause is the concrete, nontrivial
 identity `cGenuineTag = cHash [1,2,3,DSK]`. -/
