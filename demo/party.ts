@@ -102,17 +102,27 @@ function renderSeats() {
 // ── the ballot + live tally ─────────────────────────────────────────────────────
 function renderBallot(rows: TallyRow[] | null) {
   const el = $("ballot");
-  if (!currentRound) { el.innerHTML = '<p class="empty">No vote in progress. Open a round to put the party\'s next move to the crowd.</p>'; return; }
+  if (!currentRound) {
+    el.innerHTML = '<p class="empty">No vote in progress. Open a round to put the party\'s next move to the crowd.</p>';
+    updateProgress();
+    return;
+  }
   const opts = currentRound.options;
   const counts: Record<number, number> = {};
   let total = 0;
   if (rows) for (const r of rows) { counts[r.id] = r.count; total += r.count; }
+  // The current front-runner (plurality; a tie resolves to the lowest optionId, as the service does).
+  let leadId = -1, leadCount = 0;
+  for (const o of opts) { const c = counts[o.id] || 0; if (c > leadCount) { leadCount = c; leadId = o.id; } }
   el.innerHTML = opts.map((o) => {
     const c = counts[o.id] || 0;
     const pct = total > 0 ? Math.round((c / total) * 100) : 0;
     const locked = /barred/i.test(o.label);
-    return `<button class="opt ${locked ? "locked" : ""}" data-opt="${o.id}" type="button">` +
-      `<span class="opt-top"><span class="opt-label">${escapeHtml(o.label)}</span><span class="opt-count">${c} vote${c === 1 ? "" : "s"}</span></span>` +
+    const leading = o.id === leadId && leadCount > 0;
+    const aria = `Vote to ${o.command}${locked ? " (a barred exit)" : ""} — ${c} vote${c === 1 ? "" : "s"}${leading ? ", currently the front-runner" : ""}`;
+    return `<button class="opt ${locked ? "locked" : ""} ${leading ? "leading" : ""}" data-opt="${o.id}" type="button" aria-label="${escapeHtml(aria)}">` +
+      `<span class="opt-top"><span class="opt-label">${escapeHtml(o.label)}${leading ? ' <span class="opt-lead-tag">front-runner</span>' : ""}</span>` +
+      `<span class="opt-count">${c} vote${c === 1 ? "" : "s"}${total > 0 ? `<span class="opt-pct">${pct}%</span>` : ""}</span></span>` +
       `<span class="opt-cmd"><code>${escapeHtml(o.command)}</code></span>` +
       `<span class="opt-bar"><span class="opt-fill" style="width:${pct}%"></span></span>` +
       `</button>`;
@@ -120,6 +130,23 @@ function renderBallot(rows: TallyRow[] | null) {
   el.querySelectorAll<HTMLButtonElement>("button.opt").forEach((b) => {
     b.addEventListener("click", () => castNextSeat(Number(b.dataset.opt)));
   });
+  updateProgress();
+}
+
+// ── round-state pill + the "how many have voted" progress bar ──
+function updateProgress() {
+  const fill = document.querySelector<HTMLElement>("#turnProgress .tp-fill");
+  if (!fill) return;
+  const voted = Object.keys(seatVote).length;
+  fill.style.width = (currentRound ? Math.round((voted / SEATS.length) * 100) : 0) + "%";
+}
+type RoundStateKind = "idle" | "open" | "resolving" | "landed" | "refused";
+function setRoundState(kind: RoundStateKind, text: string) {
+  const el = document.getElementById("roundState");
+  if (!el) return;
+  el.className = "round-state" + (kind === "idle" ? "" : " " + kind);
+  const t = el.querySelector(".rs-text");
+  if (t) t.textContent = text; else el.textContent = text;
 }
 
 // ── the receipt rail ─────────────────────────────────────────────────────────
@@ -162,6 +189,8 @@ function renderChronicle() {
         : `<div class="verdict">✓ landed — a verified turn; the dungeon advances</div>`) +
       `</div>`;
   }).join("");
+  const last = el.querySelector<HTMLElement>(".entry:last-child");
+  if (last && chronicle.length) last.classList.add("flash");
   el.scrollTop = el.scrollHeight;
 }
 
@@ -216,6 +245,7 @@ async function openVote(): Promise<OpenResp> {
     renderRoom(resp.state);
     renderSeats();
     renderBallot(null);
+    setRoundState("open", `round #${resp.roundId} open — awaiting ballots`);
     $("phaseHint").textContent = `Round #${resp.roundId} is open. Each adventurer casts one ballot; then close the vote and the world resolves the winner.`;
     return resp;
   } finally { busy = false; setBusy(false); setPhase(); }
@@ -228,6 +258,12 @@ async function castVote(voter: string, optionId: number): Promise<VoteResp> {
   }
   renderSeats();
   renderBallot(resp.tally ? resp.tally.tally : null);
+  if (currentRound) {
+    const voted = Object.keys(seatVote).length;
+    setRoundState("open", voted >= SEATS.length
+      ? `round #${currentRound.id} · all ${SEATS.length} voted — close to resolve`
+      : `round #${currentRound.id} · ${voted}/${SEATS.length} voted`);
+  }
   setPhase();
   return resp;
 }
@@ -264,6 +300,7 @@ async function closeVote(): Promise<CloseResp> {
   if (busy || !currentRound) throw new Error("no open round");
   busy = true; setBusy(true);
   const roundId = currentRound.id;
+  setRoundState("resolving", `round #${roundId} — the world resolves the winner…`);
   try {
     const resp = await jpost<CloseResp>("/party/close");
     if (!resp.ok) { throw new Error(resp.reason || "could not close the round"); }
@@ -286,9 +323,13 @@ async function closeVote(): Promise<CloseResp> {
     renderChain(r.state.receiptCount, r.state.commitmentHex);
     renderBanner(r.state.status);
     await renderVerifyBadge();
-    $("phaseHint").textContent = r.outcome === "refused"
-      ? `The world REFUSED the party's choice (${escapeHtml(r.reason || "barred")}). No receipt — open another vote and choose again.`
-      : "The world resolved the party's choice. Open the next vote to press on.";
+    if (r.outcome === "refused") {
+      setRoundState("refused", `round #${roundId} — the world REFUSED it (no receipt)`);
+      $("phaseHint").textContent = `The world REFUSED the party's choice (${escapeHtml(r.reason || "barred")}). No receipt — open another vote and choose again.`;
+    } else {
+      setRoundState("landed", `round #${roundId} — landed as verified turn #${r.state.receiptCount}`);
+      $("phaseHint").textContent = "The world resolved the party's choice. Open the next vote to press on.";
+    }
     return resp;
   } finally { busy = false; setBusy(false); setPhase(); }
 }
@@ -306,6 +347,7 @@ async function reset(world?: string): Promise<GameState> {
   renderChain(state.receiptCount, state.commitmentHex);
   renderBanner(state.status);
   await renderVerifyBadge();
+  setRoundState("idle", "no vote in progress");
   setPhase();
   return state;
 }
@@ -317,6 +359,7 @@ async function boot() {
     renderSeats();
     renderBallot(null);
     renderChronicle();
+    setRoundState("idle", "no vote in progress");
     $("openBtn").addEventListener("click", () => openVote().catch((e) => console.error(e)));
     $("closeBtn").addEventListener("click", () => closeVote().catch((e) => console.error(e)));
     $("autoBtn").addEventListener("click", () => autoFill().catch((e) => console.error(e)));

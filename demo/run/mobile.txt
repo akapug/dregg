@@ -1,0 +1,34 @@
+THE MOBILE PASS — every key page at 360px wide (a small phone)
+driven run · viewport 360×780 · served at http://127.0.0.1:51635
+assert: no horizontal overflow (scrollWidth ≤ innerWidth) · shared nav present · 44px tap targets
+==============================================================================
+✓ /hub      the hub (front door)
+      overflow: scrollWidth 360 vs innerWidth 360 → none OK
+      nav: present (home → /hub)  · theme toggle 44×44 ≥44px  · share 44×44 ≥44px
+
+✓ /         The Commons
+      overflow: scrollWidth 360 vs innerWidth 360 → none OK
+      nav: present (home → /hub)  · theme toggle 44×44 ≥44px  · share 44×44 ≥44px
+
+✓ /author   Author your own
+      overflow: scrollWidth 360 vs innerWidth 360 → none OK
+      nav: present (home → /hub)  · theme toggle 44×44 ≥44px  · share 44×44 ≥44px
+
+✓ /vault    The Sunken Vault
+      overflow: scrollWidth 360 vs innerWidth 360 → none OK
+      nav: present (home → /hub)  · theme toggle 44×44 ≥44px  · share 44×44 ≥44px
+
+✓ /party    The Collective Dungeon
+      overflow: scrollWidth 360 vs innerWidth 360 → none OK
+      nav: present (home → /hub)  · theme toggle 44×44 ≥44px  · share 44×44 ≥44px
+
+✓ /forge    The Forge
+      overflow: scrollWidth 360 vs innerWidth 360 → none OK
+      nav: present (home → /hub)  · theme toggle 44×44 ≥44px  · share 44×44 ≥44px
+
+✓ /dungeon  The Attested Dungeon
+      overflow: scrollWidth 360 vs innerWidth 360 → none OK
+      nav: present (home → /hub)  · theme toggle 44×44 ≥44px  · share 44×44 ≥44px
+
+==============================================================================
+RESULT: every key page fits a 360px phone — no horizontal overflow, shared nav present, tap targets ≥44px.

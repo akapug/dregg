@@ -1,6 +1,6 @@
 THE COLLECTIVE DUNGEON — a crowd steers one shared party by VOTE
-driven run · attested-dm /party contract · narratorKind: model:gemma2:2b (a REAL local model)
-served at http://127.0.0.1:56907/party
+driven run · attested-dm /party contract · narratorKind: model:us.anthropic.claude-haiku-4-5-20251001-v1:0 (a REAL local model)
+served at http://127.0.0.1:51678/party
 ==============================================================================
 
 Each turn: OPEN a vote over the party's candidate moves, the seated adventurers cast
@@ -13,14 +13,14 @@ ROUND #1 — ballots: go north = 3 · look = 1
 ------------------------------------------------------------------------------
   · a SECOND ballot from a voter who already voted → REFUSED (already-voted, one ballot per voter)
   » the party voted: go north
-    gemma2: The archway groans under your weight as you step through, a chill wind whipping salt spray into your face. The sound of waves crashing against the cliff is almost drowned out by the rhythmic drip of water from unseen cracks in the stone.
+    haiku: The archway groans under your weight as you step through, a chill wind whipping salt spray into your face. The sound of waves crashing against the cliff is almost deafening.
     world : LANDED → room antechamber · receipt rail #1 (a verified turn)
 
 ------------------------------------------------------------------------------
 ROUND #2 — ballots: go down = 4
 ------------------------------------------------------------------------------
   » the party voted: go down
-    gemma2: The lantern's light flickers, casting dancing shadows on the salt-encrusted walls. A damp chill settles over you as you descend into the darkness of the antechamber.
+    haiku: The lantern's light flickers, casting dancing shadows on the salt-encrusted walls. A damp chill settles over you as you descend into the darkness of the antechamber.
     world : REFUSED — the way to Dark Stair is barred: it needs the lantern
             the room is UNCHANGED (still antechamber) and the receipt rail did NOT grow
             (#1, no receipt — the anti-ghost tooth). The crowd decided; the world disposed.
@@ -29,7 +29,7 @@ ROUND #2 — ballots: go down = 4
 ROUND #3 — ballots: take lantern = 5
 ------------------------------------------------------------------------------
   » the party voted: take lantern
-    gemma2: The lantern's glow, weak and flickering, illuminates only a small portion of the salt-encrusted walls. The air hangs heavy with the scent of brine and decay.
+    haiku: The lantern's glow, weak and flickering, illuminates a single salt crystal embedded in the wall. It hums faintly as you reach for it, its surface rippling with an unseen energy.
     world : LANDED → room antechamber · receipt rail #2 (a verified turn)
             the once-barred stair is now open — the world moved because the party EARNED it, not because it voted.
 
