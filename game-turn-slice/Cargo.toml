@@ -1,0 +1,17 @@
+[package]
+name = "game-turn-slice"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "D-crown de-risk vertical slice: a game's rules-as-a-CellProgram become a real circuit-proven turn verified by the real recursive-fold light client (verify_history), re-witnessing nothing. Consumes circuit-prove + lightclient; adds no new lowering."
+
+[dependencies]
+dregg-circuit = { path = "../circuit" }
+dregg-circuit-prove = { path = "../circuit-prove" }
+dregg-cell = { path = "../cell" }
+dregg-turn = { path = "../turn" }
+dregg-lightclient = { path = "../lightclient" }
