@@ -87,6 +87,14 @@ open Dregg2.Circuit.DescriptorIR2
 open Dregg2.Crypto
 open Dregg2.Exec.CircuitEmit (EmittedExpr)
 
+/-- **DEBT-A bridge — an EXACT ℤ equality forces the mod-p congruence the deployed denotation demands.**
+Post-DEBT-A, `VmConstraint.holdsVm` / `WindowConstraint.holdsAt` denote over BabyBear `p`
+(`… ≡ 0 [ZMOD 2013265921]`), not `= 0` over ℤ. The `arithResidual` this file threads is still an EXACT
+integer equation (a zero residual is `body.eval = 0` over ℤ), which is STRICTLY STRONGER than the mod-p
+congruence — so lifting it is the easy direction, no range-check / canonicality envelope needed: any
+witness satisfying the residual over ℤ a fortiori satisfies it mod `p`. -/
+private theorem modEq_of_eq {a b : ℤ} (h : a = b) : a ≡ b [ZMOD 2013265921] := by rw [h]
+
 /-! ## §1 — `arithResidual`: the per-row field element the deployed `assert_zero` vanishes.
 
 For each ARITHMETIC constraint form this is the polynomial the p3 `AirBuilder` asserts is zero on the
@@ -142,21 +150,24 @@ theorem arithResidual_zero_forces_holdsAt (hash : List ℤ → ℤ) (tf : TraceF
     | gate body =>
         cases isLast with
         | true  => exact trivial
-        | false => simpa [VmConstraint2.holdsAt, VmConstraint.holdsVm, arithResidual] using h0
+        | false =>
+            have h : body.eval env.loc = 0 := by simpa [arithResidual] using h0
+            simpa [VmConstraint2.holdsAt, VmConstraint.holdsVm] using modEq_of_eq h
     | transition hi lo =>
         cases isLast with
         | true  => exact trivial
         | false =>
-            have : env.nxt (sbCol hi) - env.loc (saCol lo) = 0 := by
+            have hs : env.nxt (sbCol hi) - env.loc (saCol lo) = 0 := by
               simpa [arithResidual] using h0
-            simpa [VmConstraint2.holdsAt, VmConstraint.holdsVm] using sub_eq_zero.mp this
+            simpa [VmConstraint2.holdsAt, VmConstraint.holdsVm] using modEq_of_eq (sub_eq_zero.mp hs)
     | boundary row b =>
         cases row with
         | first =>
             cases isFirst with
             | true  =>
                 simp only [VmConstraint2.holdsAt, VmConstraint.holdsVm]
-                intro _; simpa [arithResidual] using h0
+                intro _
+                exact modEq_of_eq (show b.eval env.loc = 0 by simpa [arithResidual] using h0)
             | false =>
                 simp only [VmConstraint2.holdsAt, VmConstraint.holdsVm]
                 intro h; exact absurd h (by simp)
@@ -164,7 +175,8 @@ theorem arithResidual_zero_forces_holdsAt (hash : List ℤ → ℤ) (tf : TraceF
             cases isLast with
             | true  =>
                 simp only [VmConstraint2.holdsAt, VmConstraint.holdsVm]
-                intro _; simpa [arithResidual] using h0
+                intro _
+                exact modEq_of_eq (show b.eval env.loc = 0 by simpa [arithResidual] using h0)
             | false =>
                 simp only [VmConstraint2.holdsAt, VmConstraint.holdsVm]
                 intro h; exact absurd h (by simp)
@@ -175,8 +187,8 @@ theorem arithResidual_zero_forces_holdsAt (hash : List ℤ → ℤ) (tf : TraceF
             | true  =>
                 simp only [VmConstraint2.holdsAt, VmConstraint.holdsVm]
                 intro _
-                have : env.loc col - env.pub k = 0 := by simpa [arithResidual] using h0
-                exact sub_eq_zero.mp this
+                have hs : env.loc col - env.pub k = 0 := by simpa [arithResidual] using h0
+                exact modEq_of_eq (sub_eq_zero.mp hs)
             | false =>
                 simp only [VmConstraint2.holdsAt, VmConstraint.holdsVm]
                 intro h; exact absurd h (by simp)
@@ -185,8 +197,8 @@ theorem arithResidual_zero_forces_holdsAt (hash : List ℤ → ℤ) (tf : TraceF
             | true  =>
                 simp only [VmConstraint2.holdsAt, VmConstraint.holdsVm]
                 intro _
-                have : env.loc col - env.pub k = 0 := by simpa [arithResidual] using h0
-                exact sub_eq_zero.mp this
+                have hs : env.loc col - env.pub k = 0 := by simpa [arithResidual] using h0
+                exact modEq_of_eq (sub_eq_zero.mp hs)
             | false =>
                 simp only [VmConstraint2.holdsAt, VmConstraint.holdsVm]
                 intro h; exact absurd h (by simp)
@@ -197,9 +209,10 @@ theorem arithResidual_zero_forces_holdsAt (hash : List ℤ → ℤ) (tf : TraceF
           cases isLast with
           | true  => intro h; exact absurd h (by simp)
           | false =>
-              intro _; simpa [arithResidual, hw] using h0
+              intro _
+              exact modEq_of_eq (show WindowExpr.eval env w.body = 0 by simpa [arithResidual, hw] using h0)
       | false =>
-          simpa [arithResidual, hw] using h0
+          exact modEq_of_eq (show WindowExpr.eval env w.body = 0 by simpa [arithResidual, hw] using h0)
   | lookup l    => exact absurd harith (by simp [isArith])
   | memOp m     => exact absurd harith (by simp [isArith])
   | mapOp m     => exact absurd harith (by simp [isArith])
