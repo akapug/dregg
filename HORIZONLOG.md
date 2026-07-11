@@ -7201,3 +7201,25 @@ Named follow-ups from tonight's build arc (attested-dm game platform + dregg-dic
   STARK soundness, so "verifiable under the deployed prover assumptions," not "trustless from first principles."
 - **Attestation authentic-leg is a fixture** · standing honest gap · closure: a real model-produced-the-bytes
   attestation (the tlsn-live MPC-TLS carrier); the well-formed leg (JSON-parse cert) is genuine.
+
+## chain revival + the ETH wrap runway (2026-07-11, Fable)
+
+`chain/` is BACK (revived from the stark-kill delete, SP1 discarded per ETH-NATIVE-WRAP: `0a8a3c1eb`) —
+contracts + foundry + gnark seed + host flows, fail-closed until the wrap prover lands. Named follow-ups:
+- **gnark wrap milestone 1: witness export** · a `circuit-prove` exporter serializing a
+  `BatchStarkProof<DreggRecursionConfig>` root + `RecursionVk` + the 4 publics into the flat gnark witness ·
+  pure serialization, days-scale, unblocks the circuit lane (ETH-NATIVE-WRAP §3.1).
+- **gnark wrap milestones 2–3: the circuit** · BabyBear/ext/Poseidon2 gadgets + three teeth in
+  `chain/gnark/fri_verifier.go`; Fiat-Shamir fixture-first; accept-genuine/reject-tampered spike over a
+  `lightclient` fixture · the multi-week soundness-critical bulk; `GnarkRefines` obligation waiting in
+  `metatheory/Dregg2/Circuit/FriVerifier.lean`.
+- **gnark wrap milestones 4–5: verifier export + testnet** · `gnark-solidity-verifier` →
+  `DreggSettlementVerifier.sol` implementing `IDreggSettlement`; end-to-end `Settled` event on Base Sepolia;
+  then rename the `ISP1Verifier`/`sp1Proof` ABI shape it inherits.
+- **Vault/CredentialGate verifier swap** · the two deployed-shape contracts still expect the gateway-style
+  `verifyProof(bytes32,bytes,bytes)` · closure: decide their circuits (note-membership, credential
+  presentation) on the same gnark stack and swap constructors with milestone 4.
+- **Solana lock program is named-not-built** · the SPL mirror's inbound-value committee
+  (TOKEN-MIRROR-BRIDGE) · closure lanes: TRUSTLESS-SOLANA-BRIDGE / SOLANA-SUCCINCT-WRAPPER.
+- **LayerZero concept map published** · `docs/deos/LAYERZERO-CONCEPT-MAP.md` — community-facing "dregg
+  already does this by proof, here are the honest committee rows."

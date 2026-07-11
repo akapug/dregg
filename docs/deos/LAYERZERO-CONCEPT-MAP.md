@@ -1,0 +1,64 @@
+# LayerZero concept map: what dregg has, where, and what differs
+
+The LayerZero V2 protocol (docs.layerzero.network/v2/concepts/protocol/protocol-overview)
+decomposes cross-chain messaging into a small set of primitives. This maps each
+one onto the dregg mechanism that provides the same guarantee, with the honest
+deltas. Grounded at HEAD; companion to `docs/deos/NATIVE-PROOF-BRIDGES.md`.
+
+The one-line difference first: **LayerZero transports *attestations about*
+messages (a DVN committee votes that a payload hash is real); dregg transports
+*proofs of* state transitions** (a whole-history recursive STARK any verifier
+can check). Where LayerZero's trust knob is "X of Y of N verifiers," dregg's
+settlement path needs no committee at all — and where dregg *does* still use a
+committee (asset mirroring, optimistic bridges), that is called out below, not
+hidden.
+
+## The map
+
+| LayerZero primitive | What it does there | dregg mechanism | Where |
+|---|---|---|---|
+| **Endpoint** (immutable per-chain contract; `send()` / `lzReceive()`) | Entry/exit point for omnichain messages | Settlement contracts: `IDreggSettlement.settle(a,b,c, genesisRoot, finalRoot, numTurns, chainDigest)` for whole-history proofs; `DreggVault` / `DreggCredentialGate` for value + credentials | `chain/contracts/` |
+| **Message packet + Message Libraries** | Standardized packet a library encodes per sender config | The wire envelope `WholeChainProofBytes` (publics + VK anchor) and the EVM calldata encoding (`Groth16Calldata`, `EthPublicInputs::to_calldata`) | `circuit-prove/src/ivc_turn_chain.rs`, `bridge/src/ethereum.rs` |
+| **DVNs / Security Stack (X of Y of N)** | A configurable committee delivers payload hashes; threshold ⇒ "verified" | Replaced by the proof itself: `verify_turn_chain_recursive_from_parts` — VK pin + batch-STARK FRI verify + segment tooth. Any full or light client re-checks it; there is no threshold to configure because there is no attestor to trust | `circuit-prove/src/ivc_turn_chain.rs:2845`, `lightclient/src/lib.rs` (`verify_history`) |
+| **Executor** (permissioned-by-config caller of `lzReceive`) | Triggers delivery, pays dst gas | Untrusted submitter: anyone may relay settlement calldata; the contract verifies the proof, and `EthBridgeState` enforces continuity + monotone height regardless of who submits | `bridge/src/ethereum.rs:373` |
+| **Nonce / exactly-once channel ordering** | Per-channel lazy-nonce tracking prevents replay/loss | Nullifiers (on-chain `usedNullifiers` in the vault/gate; in-protocol nullifier accumulator) for exactly-once spends; chain continuity (`genesis_root → final_root`, monotone `num_turns`) for ordering | `chain/contracts/DreggVault.sol`, `bridge/src/ethereum.rs`, `docs/NULLIFIER-ACCUMULATOR-UNIFICATION.md` |
+| **VM agnosticity** | Endpoints implemented per VM | The proof's publics are BabyBear (31-bit) limbs — losslessly embeddable in any scalar field (BN254 today; BLS12-381 etc. possible); verification lands wherever a Groth16-class verifier runs | `docs/deos/NATIVE-PROOF-BRIDGES.md` §0 |
+| **Immutability / permissionlessness** | Immutable endpoint contracts, open send/receive | Same property, carried by the verifier contract + the VK pin: a settlement is valid iff the proof verifies against the pinned circuit shape, full stop | `chain/contracts/IDreggSettlement.sol` |
+
+## Where dregg still has a committee (the honest rows)
+
+- **Asset mirroring (pump.fun $DREGG → the shielded pool):** the Solana-side
+  lock is observed by an **oracle/validator-set threshold attestation** —
+  functionally an X-of-Y DVN, and the Solana lock program is *named, not
+  built*. `bridge/` (`TOKEN-MIRROR-BRIDGE.md`); trustless upgrade path in
+  `TRUSTLESS-SOLANA-BRIDGE.md` / `SOLANA-SUCCINCT-WRAPPER.md`.
+- **Midnight:** native proof-carrying is foreclosed by Midnight's architecture
+  (fixed-VK per entry point, no general verification primitive), so the bridge
+  there is optimistic + a **1-of-N watchtower fraud proof** — strictly stronger
+  than X-of-Y (one honest watcher suffices, because the objective evidence is a
+  circuit proof). `bridge/src/midnight_verified.rs`.
+- **Inbound (reading other chains):** "be a full client of the other chain" is
+  the design stance; today the inbound teeth are the deposit listener
+  (`chain/src/listener.rs`) trusting RPC confirmations, not a verified foreign
+  light client.
+
+## What LayerZero has that dregg does not
+
+- **Deployed ubiquity.** Endpoints on 100+ chains, live DVN/executor markets.
+  dregg's EVM settlement is a testnet-ready contract set with the wrap prover
+  pending (`docs/deos/ETH-NATIVE-WRAP.md`).
+- **Arbitrary app-to-app messaging (OApp).** LayerZero moves any payload
+  between contracts; dregg's cross-chain surface is purposive — settlement,
+  value, credentials. (Anything expressible as a dregg turn is provable, but
+  dregg does not aim to be a generic contract-to-contract message bus.)
+
+## Why "wrap/bridge your token" questions usually dissolve here
+
+A LayerZero-style token bridge exists because chain A cannot check what
+happened on chain B, so a committee escrows-and-attests. dregg's settlement
+object is a *proof of everything that happened* — any chain with a pairing
+precompile can verify dregg state transitions directly (one ~250–300k-gas
+Groth16 check), and dregg-side assets stay in the holder's custody under the
+shielded pool rather than moving into a bridge wallet. The remaining genuine
+committee (the SPL mirror's lock oracle) is scoped to *inbound value*, and has
+a designed trustless replacement.
