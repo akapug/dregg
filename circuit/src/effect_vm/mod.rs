@@ -179,6 +179,7 @@ mod helpers;
 pub mod satisfaction_weld;
 mod trace;
 pub mod trace_rotated;
+pub mod transfer_avail_weld;
 pub mod vault_weld;
 mod verify;
 

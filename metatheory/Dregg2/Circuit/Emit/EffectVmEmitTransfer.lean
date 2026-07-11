@@ -221,16 +221,17 @@ def transferVmDescriptor : EffectVmDescriptor :=
   , constraints := transferRowGates ++ transitionAll ++ boundaryFirstPins ++ boundaryLastPins
                      ++ selectorGates sel.TRANSFER
   , hashSites := transferHashSites
-  -- ⚠⚠⚠ DEPLOYED SOUNDNESS GAP #4 (wrap-class, verdict A, HIGH — see `docs/reference/WRAP-CLASS-AUDIT.md`):
-  -- ONLY the AFTER balance limbs are range-checked; `param.AMOUNT` is NOT range-checked in-circuit. The debit gate
-  -- `after.bal_lo ≡ before.bal_lo − amount [ZMOD p]` therefore admits an UNDERFLOW WRAP: for `amount − before ∈
-  -- (939M, 1074M)`, `after = p − (amount − before)` lands back in `[0, 2^30)` and passes the after-range while
-  -- OVER-DEBITING ~10^9 (witness `before=1, amount=1006632961, after=1006632961`: `after − before + amount = p ≡ 0`,
-  -- `after < 2^30`). ⟹ core-transfer VALUE FORGERY (create value from nothing); covers Transfer debit / Burn /
-  -- fee-debit. The Lean availability/anti-ghost teeth carry an `hcanonMove` (= `0 ≤ before − amount`, i.e.
-  -- availability ITSELF) that NO deployed gate enforces — a LAUNDERED assumption (same structure as cap-open's
-  -- reconExact). FIX (ember-gated, deployed circuit): range-check `param.AMOUNT < 2^30` (or the debited difference),
-  -- as the committed-threshold/presentation comparators already do correctly — then availability becomes DERIVED.
+  -- ⚠ DEPLOYED SOUNDNESS GAP #4 (wrap-class, verdict A, HIGH — `docs/reference/WRAP-CLASS-AUDIT.md`) — CLOSED by the
+  -- AVAILABILITY WELD in §11.7 (`transferVmDescriptorAvail`), STAGED for the big-bang VK/fixture regen (the vault
+  -- pattern: `Dregg2.Deos.VaultSatDescriptor` / `vault_weld.rs`). The bare descriptor below range-checks ONLY the
+  -- AFTER limbs; the debit gate `after.bal_lo ≡ before.bal_lo − amount [ZMOD p]` alone admits an UNDERFLOW WRAP
+  -- (witness `before=1, amount=1006632961, after=1006632961`: `after − before + amount = p ≡ 0`, `after < 2^30`),
+  -- and the availability tooth used to LAUNDER the gap through an `hcanonMove` (= `0 ≤ before − amount`, availability
+  -- ITSELF) that no gate enforced. The §11.7 hardened descriptor DECOMPOSES the debit into 15-bit limbs with a
+  -- borrow chain (`before = after + amount`, no residual reaches `p`), range-checks `amount` + the operand limbs, and
+  -- DERIVES availability in-circuit (`transferAvail_derives_availability`, NO `hcanonMove`; the forgery is UNSAT,
+  -- `transferAvail_forgery_unsat`). Covers Transfer debit / Burn / fee-debit. Until the flip the LIVE registry still
+  -- routes this bare descriptor; a pure light client does not yet witness availability in production.
   , ranges := [ ⟨saCol state.BALANCE_LO, 30⟩, ⟨saCol state.BALANCE_HI, 30⟩ ] }
 
 /-! ## §5 — The TRANSFER ROW INTENT (the independent faithfulness target).
@@ -779,6 +780,215 @@ theorem transferFeeVm_rejects_wrong_fee (env : VmRowEnv)
   simp only [VmConstraint.holdsVm, gBalLoFee, gBalLo, eSA, eSB, ePrm, eSub, EmittedExpr.eval]
   exact not_modEq_zero_of_canon (by ring) hcanonNew hcanonMove hwrong
 
+/-! ## §11.7 — THE AVAILABILITY WELD (DEPLOYED SOUNDNESS GAP #4 close, STAGED).
+
+The bare `transferVmDescriptor` range-checks only the AFTER balance limbs; the debit gate `gBalLo`
+admits the underflow-wrap forgery (`before=1, amount=1006632961, after=1006632961`: `after − before +
+amount = p ≡ 0`, `after < 2^30`) that OVER-DEBITS ~10^9 while passing the after-range. Range-checking a
+single 30-bit operand does NOT close it (`p ≈ 2·2^30`, so the wrap window `[p−2^30, p)` OVERLAPS
+`[0, 2^30)`). The FIX — mirroring the vault's proven `borrow_compare` (`Dregg2.Deos.VaultSatDescriptor` /
+`vault_weld.rs`, 15-bit limbs + borrow bits so no residual reaches `p`) — decomposes the debit into two
+15-bit limbs with a borrow chain: on a DEBIT row (`direction = 1`) the gates force `before = after +
+amount` over ℤ with a final NO-BORROW, so `before ≥ amount` (AVAILABILITY) is DERIVED, not assumed. The
+credit direction (`direction = 0`) cannot over-mint (an overflowing credit destroys value), so the
+borrow gates are `direction`-gated to bite only on the debit — the exact surface of the value forgery.
+
+Witness columns live PAST the base width (`≥ EFFECT_VM_WIDTH = 188`), so they are DISTINCT from every
+base-layout column; the widened descriptor + its registry row + VK ride the ONE big-bang regen (STAGED,
+the vault status). -/
+
+/-- The availability-weld witness-column base (past the base trace width — the vault/sysroots pattern). -/
+def AVAIL_BASE : Nat := EFFECT_VM_WIDTH
+/-- `before.bal_lo` low/high 15-bit limbs. -/
+def cBEF0 : Nat := AVAIL_BASE
+def cBEF1 : Nat := AVAIL_BASE + 1
+/-- `after.bal_lo` low/high 15-bit limbs. -/
+def cAFT0 : Nat := AVAIL_BASE + 2
+def cAFT1 : Nat := AVAIL_BASE + 3
+/-- `amount` low/high 15-bit limbs. -/
+def cAM0 : Nat := AVAIL_BASE + 4
+def cAM1 : Nat := AVAIL_BASE + 5
+/-- The two borrow bits (`cBRW1` = the final borrow; `= 0` ⟺ `before ≥ amount`). -/
+def cBRW0 : Nat := AVAIL_BASE + 6
+def cBRW1 : Nat := AVAIL_BASE + 7
+/-- The widened trace width. -/
+def AVAIL_WIDTH : Nat := AVAIL_BASE + 8
+
+/-- Operand assembly: `before.bal_lo = bef0 + 2^15·bef1` (pins the 30-bit operand to its 15-bit limbs). -/
+def gAsmBefore : EmittedExpr :=
+  eSub (eSB state.BALANCE_LO) (.add (.var cBEF0) (.mul (.const 32768) (.var cBEF1)))
+/-- Operand assembly: `after.bal_lo = aft0 + 2^15·aft1`. -/
+def gAsmAfter : EmittedExpr :=
+  eSub (eSA state.BALANCE_LO) (.add (.var cAFT0) (.mul (.const 32768) (.var cAFT1)))
+/-- Operand assembly: `amount = am0 + 2^15·am1` (the previously-UNRANGED amount, now decomposed). -/
+def gAsmAmount : EmittedExpr :=
+  eSub (ePrm param.AMOUNT) (.add (.var cAM0) (.mul (.const 32768) (.var cAM1)))
+/-- Borrow-bit booleanity: `bb0·(bb0 − 1)`. -/
+def gBrw0Bool : EmittedExpr := .mul (.var cBRW0) (.add (.var cBRW0) (.const (-1)))
+/-- Borrow-bit booleanity: `bb1·(bb1 − 1)`. -/
+def gBrw1Bool : EmittedExpr := .mul (.var cBRW1) (.add (.var cBRW1) (.const (-1)))
+/-- Debit borrow, limb 0 (`direction`-gated): `dir·(bef0 − am0 + bb0·2^15 − aft0)`. On a debit row this
+forces `bef0 − am0 = aft0 − bb0·2^15` — the low-limb borrow subtraction (mirror of `vault_weld`'s
+`borrow_compare_gates`, with `Q=before, P=amount, W=after`). -/
+def gBorrow0 : EmittedExpr :=
+  .mul (ePrm param.DIRECTION)
+    (eSub (.add (eSub (.var cBEF0) (.var cAM0)) (.mul (.const 32768) (.var cBRW0))) (.var cAFT0))
+/-- Debit borrow, limb 1 (`direction`-gated): `dir·(bef1 − am1 − bb0 + bb1·2^15 − aft1)`. -/
+def gBorrow1 : EmittedExpr :=
+  .mul (ePrm param.DIRECTION)
+    (eSub (.add (eSub (eSub (.var cBEF1) (.var cAM1)) (.var cBRW0)) (.mul (.const 32768) (.var cBRW1)))
+      (.var cAFT1))
+/-- The NO-FINAL-BORROW gate (`direction`-gated): `dir·bb1`. On a debit row `bb1 = 0`, i.e. `before ≥
+amount` — AVAILABILITY, enforced in-circuit. -/
+def gNoBorrow : EmittedExpr := .mul (ePrm param.DIRECTION) (.var cBRW1)
+
+/-- The availability-weld gates (assembly + borrow chain). Appended to the transfer descriptor. -/
+def transferAvailGates : List VmConstraint :=
+  [ .gate gAsmBefore, .gate gAsmAfter, .gate gAsmAmount
+  , .gate gBrw0Bool, .gate gBrw1Bool
+  , .gate gBorrow0, .gate gBorrow1, .gate gNoBorrow ]
+
+/-- The availability-weld range checks: the operand + amount 15-bit limbs (bounds every operand to
+`[0, 2^30) ⊂ [0, p)` and, crucially, RANGES `amount`, closing the unranged-amount hole). -/
+def transferAvailRanges : List VmRange :=
+  [ ⟨cBEF0, 15⟩, ⟨cBEF1, 15⟩, ⟨cAFT0, 15⟩, ⟨cAFT1, 15⟩, ⟨cAM0, 15⟩, ⟨cAM1, 15⟩ ]
+
+/-- **`transferVmDescriptorAvail`** — the HARDENED transfer descriptor: the bare `transferVmDescriptor`
+PLUS the availability-weld gates and the amount/operand limb range checks, trace widened to carry the
+witness columns. Closes DEPLOYED SOUNDNESS GAP #4 (in-circuit availability; no `hcanonMove`). STAGED. -/
+def transferVmDescriptorAvail : EffectVmDescriptor :=
+  { transferVmDescriptor with
+    name        := transferVmAirName ++ "-avail"
+    traceWidth  := AVAIL_WIDTH
+    constraints := transferVmDescriptor.constraints ++ transferAvailGates
+    ranges      := transferVmDescriptor.ranges ++ transferAvailRanges }
+
+/-- A weld gate is a member of the hardened descriptor's constraints. -/
+theorem availGate_mem (g : VmConstraint) (hg : g ∈ transferAvailGates) :
+    g ∈ transferVmDescriptorAvail.constraints :=
+  List.mem_append_right _ hg
+
+/-- A weld range is a member of the hardened descriptor's ranges. -/
+theorem availRange_mem (r : VmRange) (hr : r ∈ transferAvailRanges) :
+    r ∈ transferVmDescriptorAvail.ranges :=
+  List.mem_append_right _ hr
+
+/-- A residual congruent to `0 mod p` and confined to `(−p, p)` by the 15-bit limb/borrow range checks
+is EXACTLY `0` over ℤ (the vault's `modEqZeroBounded` — the soundness payoff of 15-bit limbs). -/
+private theorem availBounded {R : ℤ} (h : R ≡ 0 [ZMOD 2013265921])
+    (hlo : -2013265921 < R) (hhi : R < 2013265921) : R = 0 := by
+  rw [Int.modEq_zero_iff_dvd] at h; obtain ⟨k, hk⟩ := h; omega
+
+/-- Two CANONICAL (`[0, p)`) integers congruent mod `p` are EQUAL (the deployed range-check lift). -/
+private theorem availCanonEq {a b : ℤ} (h : a ≡ b [ZMOD 2013265921])
+    (ha0 : 0 ≤ a) (hap : a < 2013265921) (hb0 : 0 ≤ b) (hbp : b < 2013265921) : a = b := by
+  unfold Int.ModEq at h; rwa [Int.emod_eq_of_lt ha0 hap, Int.emod_eq_of_lt hb0 hbp] at h
+
+/-- **SOUNDNESS — AVAILABILITY DERIVED IN-CIRCUIT (GAP #4 CLOSED).** On a DEBIT row (`direction = 1`) a
+trace satisfying the hardened descriptor FORCES `amount ≤ before.bal_lo` AND the exact ℤ move `after =
+before − amount` — with NO `hcanonMove` assumption. The only hypothesis is the DEPLOYED canonicality
+invariant `0 ≤ loc c < p` (each column a canonical field element — the SAME fact
+`transferVm_rejects_wrong_balance` uses, NOT availability laundered in). The borrow chain + 15-bit limb
+range checks make the subtraction exact over ℤ, so the underflow wrap is STRUCTURALLY impossible. -/
+theorem transferAvail_derives_availability (hash : List ℤ → ℤ) (env : VmRowEnv)
+    (hcanon : ∀ c, 0 ≤ env.loc c ∧ env.loc c < 2013265921)
+    (hsat : satisfiedVm hash transferVmDescriptorAvail env true false)
+    (hdir : env.loc (prmCol param.DIRECTION) = 1) :
+    env.loc (prmCol param.AMOUNT) ≤ env.loc (sbCol state.BALANCE_LO)
+    ∧ env.loc (saCol state.BALANCE_LO)
+        = env.loc (sbCol state.BALANCE_LO) - env.loc (prmCol param.AMOUNT) := by
+  obtain ⟨hcs, _hsites, hrs⟩ := hsat
+  -- range facts (each limb in [0, 2^15))
+  have hb0 := hrs _ (availRange_mem ⟨cBEF0, 15⟩ (by simp [transferAvailRanges]))
+  have hb1 := hrs _ (availRange_mem ⟨cBEF1, 15⟩ (by simp [transferAvailRanges]))
+  have ha0 := hrs _ (availRange_mem ⟨cAFT0, 15⟩ (by simp [transferAvailRanges]))
+  have ha1 := hrs _ (availRange_mem ⟨cAFT1, 15⟩ (by simp [transferAvailRanges]))
+  have hm0 := hrs _ (availRange_mem ⟨cAM0, 15⟩ (by simp [transferAvailRanges]))
+  have hm1 := hrs _ (availRange_mem ⟨cAM1, 15⟩ (by simp [transferAvailRanges]))
+  simp only [VmRange.holds] at hb0 hb1 ha0 ha1 hm0 hm1
+  norm_num at hb0 hb1 ha0 ha1 hm0 hm1
+  -- gate facts (bodies vanish mod p on the active row)
+  have gAsmB := hcs _ (availGate_mem (.gate gAsmBefore) (by simp [transferAvailGates]))
+  have gAsmA := hcs _ (availGate_mem (.gate gAsmAfter) (by simp [transferAvailGates]))
+  have gAsmM := hcs _ (availGate_mem (.gate gAsmAmount) (by simp [transferAvailGates]))
+  have gB0 := hcs _ (availGate_mem (.gate gBrw0Bool) (by simp [transferAvailGates]))
+  have gB1 := hcs _ (availGate_mem (.gate gBrw1Bool) (by simp [transferAvailGates]))
+  have gBor0 := hcs _ (availGate_mem (.gate gBorrow0) (by simp [transferAvailGates]))
+  have gBor1 := hcs _ (availGate_mem (.gate gBorrow1) (by simp [transferAvailGates]))
+  have gNoB := hcs _ (availGate_mem (.gate gNoBorrow) (by simp [transferAvailGates]))
+  simp only [holdsVm_gate_false, gAsmBefore, gAsmAfter, gAsmAmount, gBrw0Bool, gBrw1Bool,
+    gBorrow0, gBorrow1, gNoBorrow, eSA, eSB, ePrm, eSub, EmittedExpr.eval] at gAsmB gAsmA gAsmM gB0 gB1 gBor0 gBor1 gNoB
+  rw [hdir, one_mul] at gBor0 gBor1 gNoB
+  -- borrow bits are boolean (mod-p booleanity + canonicality + p prime)
+  have brw0Bool : 0 ≤ env.loc cBRW0 ∧ env.loc cBRW0 ≤ 1 := by
+    rw [Int.modEq_zero_iff_dvd] at gB0
+    obtain ⟨z0, zp⟩ := hcanon cBRW0
+    rcases pPrimeInt.dvd_mul.mp gB0 with hd | hd
+    · obtain ⟨k, hk⟩ := hd; omega
+    · obtain ⟨k, hk⟩ := hd; omega
+  have brw1Bool : 0 ≤ env.loc cBRW1 ∧ env.loc cBRW1 ≤ 1 := by
+    rw [Int.modEq_zero_iff_dvd] at gB1
+    obtain ⟨z0, zp⟩ := hcanon cBRW1
+    rcases pPrimeInt.dvd_mul.mp gB1 with hd | hd
+    · obtain ⟨k, hk⟩ := hd; omega
+    · obtain ⟨k, hk⟩ := hd; omega
+  -- operand assemblies lift to exact ℤ (canonical operand, limb sum < 2^30 < p)
+  have eBef : env.loc (sbCol state.BALANCE_LO) = env.loc cBEF0 + 32768 * env.loc cBEF1 :=
+    availCanonEq ((gate_modEq_iff (by ring)).mp gAsmB) (hcanon _).1 (hcanon _).2 (by omega) (by omega)
+  have eAft : env.loc (saCol state.BALANCE_LO) = env.loc cAFT0 + 32768 * env.loc cAFT1 :=
+    availCanonEq ((gate_modEq_iff (by ring)).mp gAsmA) (hcanon _).1 (hcanon _).2 (by omega) (by omega)
+  have eAmt : env.loc (prmCol param.AMOUNT) = env.loc cAM0 + 32768 * env.loc cAM1 :=
+    availCanonEq ((gate_modEq_iff (by ring)).mp gAsmM) (hcanon _).1 (hcanon _).2 (by omega) (by omega)
+  -- the borrow subtraction is exact over ℤ (each residual confined to (−p, p) by the 15-bit ranges)
+  have e0 : env.loc cBEF0 + -1 * env.loc cAM0 + 32768 * env.loc cBRW0 + -1 * env.loc cAFT0 = 0 :=
+    availBounded gBor0 (by omega) (by omega)
+  have e1 : env.loc cBEF1 + -1 * env.loc cAM1 + -1 * env.loc cBRW0
+      + 32768 * env.loc cBRW1 + -1 * env.loc cAFT1 = 0 :=
+    availBounded gBor1 (by omega) (by omega)
+  have eBB : env.loc cBRW1 = 0 := availBounded gNoB (by omega) (by omega)
+  -- availability + exact move: purely linear now (no residual congruences left)
+  constructor
+  · omega
+  · omega
+
+/-- **THE FORGERY IS UNSAT (GAP #4 witness).** The audit's over-debit forgery witness (`before=1,
+amount=1006632961, after=1006632961, direction=1`) CANNOT satisfy the hardened descriptor: its debit
+availability `amount ≤ before` (`1006632961 ≤ 1`) is false, so the borrow chain has no witness. The
+underflow-wrap value forgery is closed in-circuit. -/
+theorem transferAvail_forgery_unsat (hash : List ℤ → ℤ) (env : VmRowEnv)
+    (hcanon : ∀ c, 0 ≤ env.loc c ∧ env.loc c < 2013265921)
+    (hsat : satisfiedVm hash transferVmDescriptorAvail env true false)
+    (hbefore : env.loc (sbCol state.BALANCE_LO) = 1)
+    (hamount : env.loc (prmCol param.AMOUNT) = 1006632961)
+    (hdir : env.loc (prmCol param.DIRECTION) = 1) : False := by
+  have h := (transferAvail_derives_availability hash env hcanon hsat hdir).1
+  rw [hbefore, hamount] at h; omega
+
+/-! ### LIVENESS: an honest debit (`goodRow` + its limb witnesses) satisfies the weld. -/
+
+/-- `goodRow` (debit of 30 from bal_lo 100 → 70) extended with the availability-weld witness columns:
+`before = 100` limbs `(100, 0)`, `after = 70` limbs `(70, 0)`, `amount = 30` limbs `(30, 0)`, no
+borrows. -/
+def goodAvailRow : VmRowEnv where
+  loc := fun v =>
+    if v = cBEF0 then 100 else if v = cAFT0 then 70 else if v = cAM0 then 30 else goodRow.loc v
+  nxt := goodRow.nxt
+  pub := goodRow.pub
+
+/-- **LIVENESS.** Every availability-weld gate holds on the honest `goodAvailRow` — no valid transfer is
+rejected by the new gates (the borrow chain closes with zero borrows: `100 − 30 = 70`). -/
+theorem goodAvailRow_gates_hold (c : VmConstraint) (hc : c ∈ transferAvailGates) :
+    c.holdsVm goodAvailRow false false := by
+  have hb : ∃ b, c = .gate b ∧ b.eval goodAvailRow.loc = 0 := by
+    fin_cases hc <;> exact ⟨_, rfl, by decide⟩
+  obtain ⟨b, rfl, hval⟩ := hb
+  rw [holdsVm_gate_false, hval]
+
+/-- **LIVENESS (ranges).** The honest limb witnesses satisfy the 15-bit range checks. -/
+theorem goodAvailRow_ranges_hold (r : VmRange) (hr : r ∈ transferAvailRanges) :
+    r.holds goodAvailRow := by
+  fin_cases hr <;> exact ⟨by decide, by decide⟩
+
 /-! ## §12 — Axiom-hygiene pins (the honesty tripwire). -/
 
 #guard transferVmDescriptor.constraints.length == 14 + 14 + 4 + 3 + 1  -- gates+transitions+4first+3last+selectorGate
@@ -792,6 +1002,17 @@ theorem transferFeeVm_rejects_wrong_fee (env : VmRowEnv)
 #guard transferFeeVmDescriptor.traceWidth == 188
 #assert_axioms transferFeeVm_faithful
 #assert_axioms transferFeeVm_rejects_wrong_fee
+
+-- The availability weld (GAP #4): the hardened descriptor adds 8 gates + 6 ranges and 8 witness cols.
+#guard transferVmDescriptorAvail.constraints.length == (14 + 14 + 4 + 3 + 1) + 8
+#guard transferVmDescriptorAvail.ranges.length == 2 + 6
+#guard transferVmDescriptorAvail.traceWidth == 196
+-- LIVENESS witness (kernel-evaluated): every weld gate body is 0 on the honest debit row.
+#guard transferAvailGates.all (fun c => match c with | .gate b => b.eval goodAvailRow.loc == 0 | _ => true)
+#assert_axioms transferAvail_derives_availability
+#assert_axioms transferAvail_forgery_unsat
+#assert_axioms goodAvailRow_gates_hold
+#assert_axioms goodAvailRow_ranges_hold
 
 #assert_axioms transferRowGates_holds_iff
 #assert_axioms transferVm_faithful
