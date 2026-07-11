@@ -33,9 +33,13 @@ hypothesis — never a Lean axiom.
 ## Axiom hygiene
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; the ONLY cryptographic residue is the
-NAMED `ChipTableSound` hypothesis (Poseidon2 CR). NEW file; imports read-only.
+NAMED `ChipTableSound` hypothesis (Poseidon2 CR). Under the field-faithful mod-`p` denotation the
+deployed range-check envelope rides as the NAMED hypothesis `CtCanon` (bit/diff/commitment cells
+canonical; value/threshold in the low half — the wrap-free window the high-bit-zero gate needs),
+inhabited concretely by `acceptTrace_canon`. NEW file; imports read-only.
 -/
 import Dregg2.Circuit.Emit.CommittedThresholdEmit
+import Dregg2.Circuit.Emit.EffectVmEmitTransfer
 import Dregg2.Exec.RecordCircuit
 
 namespace Dregg2.Circuit.Emit.CommittedThresholdRefine
@@ -47,6 +51,7 @@ open Dregg2.Circuit.DescriptorIR2
   (EffectVmDescriptor2 VmConstraint2 Satisfied2 VmTrace TraceFamily envAt Lookup
    ChipTableSound chip_lookup_sound chipLookupTuple chipRow CHIP_RATE CHIP_OUT_LANES)
 open Dregg2.Circuit.Emit.CommittedThresholdEmit
+open Dregg2.Circuit.Emit.EffectVmEmitTransfer (pPrimeInt)
 open Dregg2.Exec.RecordCircuit (bitsToInt Boolean range_sound range_proves_le)
 
 set_option autoImplicit false
@@ -191,7 +196,45 @@ theorem mem_bin_last (j : Nat) (hj : j < COMMITTED_DIFF_BITS) :
   apply List.mem_append_right; apply List.mem_append_left; apply List.mem_append_right
   exact List.mem_map.mpr ⟨j, List.mem_range.mpr hj, rfl⟩
 
+theorem mem_highbit :
+    VmConstraint2.base (.gate (.var (diffBit (COMMITTED_DIFF_BITS - 1))))
+      ∈ committedThresholdDesc.constraints := by
+  simp only [committedThresholdDesc]
+  apply List.mem_append_left; apply List.mem_append_right
+  apply List.mem_cons_of_mem; apply List.mem_cons_of_mem; apply List.mem_cons_self
+
+theorem mem_highbit_last :
+    VmConstraint2.base (.boundary VmRow.last (.var (diffBit (COMMITTED_DIFF_BITS - 1))))
+      ∈ committedThresholdDesc.constraints := by
+  simp only [committedThresholdDesc, ctLastGateFix]
+  apply List.mem_append_right; apply List.mem_append_right
+  apply List.mem_cons_self
+
 /-! ## §3 — The whole-descriptor soundness bridge. -/
+
+/-- **The deployed range-check canonicality envelope for the committed-threshold row (row 0).**
+Under the field-faithful mod-`p` denotation every constraint binds only a congruence; this envelope
+is what reads the ℤ semantics back off it:
+* the 30 bit cells, the `DIFF` cell, the three commitment/digest cells and both public inputs are
+  canonical field cells (`0 ≤ · < p`) — the deployed range-check invariant;
+* the `PRIVATE_VALUE` / `THRESHOLD` cells additionally sit in the LOW HALF of the field
+  (`2·x < p`) — the deployed discipline that, together with the high-bit-zero gate
+  (`diff < 2^29 < p/2`), makes the field subtraction `diff = value − threshold` WRAP-FREE over ℤ.
+  Without it the congruence `diff ≡ value − threshold [ZMOD p]` admits the classic underflow forgery
+  (`value < threshold`, `diff = value − threshold + p` still 30 bits).
+Inhabited concretely by `acceptTrace_canon`, so the envelope is non-vacuous. -/
+def CtCanon (t : VmTrace) : Prop :=
+  (∀ j, j < COMMITTED_DIFF_BITS →
+      0 ≤ (envAt t 0).loc (diffBit j) ∧ (envAt t 0).loc (diffBit j) < 2013265921)
+  ∧ (0 ≤ (envAt t 0).loc DIFF ∧ (envAt t 0).loc DIFF < 2013265921)
+  ∧ (0 ≤ (envAt t 0).loc PRIVATE_VALUE ∧ 2 * (envAt t 0).loc PRIVATE_VALUE < 2013265921)
+  ∧ (0 ≤ (envAt t 0).loc THRESHOLD ∧ 2 * (envAt t 0).loc THRESHOLD < 2013265921)
+  ∧ (0 ≤ (envAt t 0).loc THRESHOLD_COMMITMENT
+      ∧ (envAt t 0).loc THRESHOLD_COMMITMENT < 2013265921)
+  ∧ (0 ≤ (envAt t 0).loc FACT_COMMITMENT ∧ (envAt t 0).loc FACT_COMMITMENT < 2013265921)
+  ∧ (0 ≤ (envAt t 0).loc POSEIDON2_RESULT ∧ (envAt t 0).loc POSEIDON2_RESULT < 2013265921)
+  ∧ (0 ≤ (envAt t 0).pub 0 ∧ (envAt t 0).pub 0 < 2013265921)
+  ∧ (0 ≤ (envAt t 0).pub 1 ∧ (envAt t 0).pub 1 < 2013265921)
 
 /-- **`MeetsCommittedThreshold hash e`** — the genuine semantic relation the committed-threshold
 circuit computes at a row environment `e` (given the abstract Poseidon2 `hash`): the private value
@@ -233,16 +276,19 @@ theorem committedThreshold_satisfied2_sound
     (hash : List ℤ → ℤ) (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
     (hChip : ChipTableSound hash (t.tf .poseidon2))
     (hsat : Satisfied2 hash committedThresholdDesc minit mfin maddrs t)
-    (hlen : 0 < t.rows.length) :
+    (hlen : 0 < t.rows.length)
+    (hcanon : CtCanon t) :
     MeetsCommittedThreshold hash (envAt t 0) := by
   have hi0 : 0 < t.rows.length := hlen
-  -- every semantic gate forces its body to vanish on row 0 — via the transition `.gate` when row 0 is
-  -- NOT the last row, and via its `.boundary VmRow.last` counterpart (the `ctLastGateFix` fix) when it
-  -- IS. So the range/diff/binding chain binds on row 0 for EVERY trace height, including height-1.
+  obtain ⟨hcBit, hcDiff, hcPV, hcTH, hcTC, hcFC, hcPR, hcPub0, hcPub1⟩ := hcanon
+  -- every semantic gate forces its body to vanish MOD `p` on row 0 — via the transition `.gate`
+  -- when row 0 is NOT the last row, and via its `.boundary VmRow.last` counterpart (the
+  -- `ctLastGateFix` fix) when it IS. So the range/diff/binding chain binds on row 0 for EVERY trace
+  -- height, including height-1. The ℤ readings are recovered below through the envelope.
   have gate_forces : ∀ g : EmittedExpr,
       VmConstraint2.base (.gate g) ∈ committedThresholdDesc.constraints →
       VmConstraint2.base (.boundary VmRow.last g) ∈ committedThresholdDesc.constraints →
-      g.eval (envAt t 0).loc = 0 := by
+      g.eval (envAt t 0).loc ≡ 0 [ZMOD 2013265921] := by
     intro g hgate hbnd
     by_cases hlast : (0 + 1 == t.rows.length) = true
     · -- row 0 IS the last row (height-1 trace): the last-row boundary fires.
@@ -255,28 +301,81 @@ theorem committedThreshold_satisfied2_sound
       have h := hsat.rowConstraints 0 hi0 _ hgate
       simp only [VmConstraint2.holdsAt, VmConstraint.holdsVm, hfalse] at h
       exact h
-  -- the two PI pins bind on the first row.
+  -- the two PI pins bind (mod `p`) on the first row.
   have pi_forces : ∀ (col k : Nat),
       VmConstraint2.base (.piBinding VmRow.first col k) ∈ committedThresholdDesc.constraints →
-      (envAt t 0).loc col = (envAt t 0).pub k := by
+      (envAt t 0).loc col ≡ (envAt t 0).pub k [ZMOD 2013265921] := by
     intro col k hmem
     have h := hsat.rowConstraints 0 hi0 _ hmem
     simp only [VmConstraint2.holdsAt, VmConstraint.holdsVm] at h
     exact h rfl
   -- === ORDER: threshold ≤ value, welded to RecordCircuit.range_proves_le ===
-  have hdiff : (envAt t 0).loc DIFF
-      = (envAt t 0).loc PRIVATE_VALUE - (envAt t 0).loc THRESHOLD :=
-    (diff_body_zero_iff (envAt t 0).loc).mp (gate_forces c4Body mem_c4 mem_c4_last)
-  have hrec : bitsToInt (bitVals (envAt t 0).loc) = (envAt t 0).loc DIFF := by
-    have h := recomp_eval (envAt t 0).loc
-    rw [gate_forces recompBody mem_recomp mem_recomp_last] at h
-    omega
+  -- (a) each bit cell is genuinely boolean over ℤ: `p` prime splits `p ∣ b·(b−1)`, and the
+  --     canonical window collapses each factor.
+  have hbit : ∀ j, j < COMMITTED_DIFF_BITS →
+      (envAt t 0).loc (diffBit j) = 0 ∨ (envAt t 0).loc (diffBit j) = 1 := by
+    intro j hj
+    have hg := gate_forces (binBody j) (mem_bin j hj) (mem_bin_last j hj)
+    have hkey : (binBody j).eval (envAt t 0).loc
+        = (envAt t 0).loc (diffBit j) * ((envAt t 0).loc (diffBit j) - 1) := by
+      simp only [binBody, EmittedExpr.eval]; ring
+    rw [hkey, Int.modEq_zero_iff_dvd] at hg
+    have hc := hcBit j hj
+    rcases pPrimeInt.dvd_mul.mp hg with hx | hx
+    · obtain ⟨k, hk⟩ := hx; left; omega
+    · obtain ⟨k, hk⟩ := hx; right; omega
   have hbool : Boolean (bitVals (envAt t 0).loc) := by
     intro b hb
     simp only [bitVals, List.mem_map, List.mem_range] at hb
     obtain ⟨j, hj, rfl⟩ := hb
-    exact (binary_body_zero_iff j (envAt t 0).loc).mp
-      (gate_forces (binBody j) (mem_bin j hj) (mem_bin_last j hj))
+    exact hbit j hj
+  -- (b) the high bit is genuinely ZERO (its gate + canonicality), so the recomposed diff < 2^29.
+  have hb29 : (envAt t 0).loc (diffBit (COMMITTED_DIFF_BITS - 1)) = 0 := by
+    have hg := gate_forces _ mem_highbit mem_highbit_last
+    have hg' : (2013265921 : ℤ) ∣ (envAt t 0).loc (diffBit (COMMITTED_DIFF_BITS - 1)) :=
+      Int.modEq_zero_iff_dvd.mp (by simpa only [EmittedExpr.eval] using hg)
+    have hc := hcBit (COMMITTED_DIFF_BITS - 1) (by decide)
+    obtain ⟨k, hk⟩ := hg'
+    omega
+  have hsplit : bitVals (envAt t 0).loc
+      = ((List.range 29).map (fun i => (envAt t 0).loc (diffBit i)))
+        ++ [(envAt t 0).loc (diffBit 29)] := by
+    rw [bitVals, show COMMITTED_DIFF_BITS = 30 from rfl, List.range_succ, List.map_append,
+      List.map_cons, List.map_nil]
+  have hlowBool : Boolean ((List.range 29).map (fun i => (envAt t 0).loc (diffBit i))) := by
+    intro b hb
+    simp only [List.mem_map, List.mem_range] at hb
+    obtain ⟨j, hj, rfl⟩ := hb
+    exact hbit j (by rw [show COMMITTED_DIFF_BITS = 30 from rfl]; omega)
+  have hlow := range_sound _ hlowBool
+  rw [List.length_map, List.length_range, show ((2:ℤ) ^ 29) = 536870912 from by norm_num] at hlow
+  have hfull : bitsToInt (bitVals (envAt t 0).loc)
+      = bitsToInt ((List.range 29).map (fun i => (envAt t 0).loc (diffBit i))) := by
+    rw [hsplit, bitsToInt_append_singleton,
+      show (envAt t 0).loc (diffBit 29) = 0 from hb29]
+    ring
+  -- (c) the recomposition binds mod `p`; the fold value is in `[0, 2^29) ⊂ [0, p)` and `DIFF` is
+  --     canonical, so the congruence collapses to the genuine ℤ equality (and `DIFF < 2^29`).
+  have hrec : bitsToInt (bitVals (envAt t 0).loc) = (envAt t 0).loc DIFF := by
+    have hg := gate_forces recompBody mem_recomp mem_recomp_last
+    rw [show recompBody.eval (envAt t 0).loc
+          = bitsToInt (bitVals (envAt t 0).loc) - (envAt t 0).loc DIFF
+        from recomp_eval (envAt t 0).loc, Int.modEq_zero_iff_dvd] at hg
+    obtain ⟨k, hk⟩ := hg
+    rw [hfull] at hk ⊢
+    omega
+  have hDiffLt : (envAt t 0).loc DIFF < 536870912 := by rw [← hrec, hfull]; omega
+  -- (d) the diff gate binds mod `p`; `diff < 2^29 < p/2` + the low-half windows on value/threshold
+  --     make the subtraction wrap-free, so the congruence IS the ℤ identity.
+  have hdiff : (envAt t 0).loc DIFF
+      = (envAt t 0).loc PRIVATE_VALUE - (envAt t 0).loc THRESHOLD := by
+    have hg := gate_forces c4Body mem_c4 mem_c4_last
+    have hkey : c4Body.eval (envAt t 0).loc
+        = (envAt t 0).loc DIFF - (envAt t 0).loc PRIVATE_VALUE + (envAt t 0).loc THRESHOLD := by
+      simp only [c4Body, EmittedExpr.eval]; ring
+    rw [hkey, Int.modEq_zero_iff_dvd] at hg
+    obtain ⟨k, hk⟩ := hg
+    omega
   have horder : (envAt t 0).loc THRESHOLD ≤ (envAt t 0).loc PRIVATE_VALUE :=
     range_proves_le _ _ (bitVals (envAt t 0).loc) hbool (hrec.trans hdiff)
   -- === BINDING: threshold_commitment = hash(threshold, blinding), welded to chip_lookup_sound ===
@@ -286,8 +385,12 @@ theorem committedThreshold_satisfied2_sound
     [.var THRESHOLD, .var BLINDING] POSEIDON2_RESULT CHIP_LANES (by decide) hlook
   simp only [List.map_cons, List.map_nil, EmittedExpr.eval] at hdig
   have hpr : (envAt t 0).loc POSEIDON2_RESULT = (envAt t 0).loc THRESHOLD_COMMITMENT := by
-    have h := gate_forces c3Body mem_c3 mem_c3_last
-    simp only [c3Body, subE, EmittedExpr.eval] at h
+    have hg := gate_forces c3Body mem_c3 mem_c3_last
+    have hkey : c3Body.eval (envAt t 0).loc
+        = (envAt t 0).loc POSEIDON2_RESULT - (envAt t 0).loc THRESHOLD_COMMITMENT := by
+      simp only [c3Body, subE, EmittedExpr.eval]; ring
+    rw [hkey, Int.modEq_zero_iff_dvd] at hg
+    obtain ⟨k, hk⟩ := hg
     omega
   have hbind : (envAt t 0).loc THRESHOLD_COMMITMENT
       = hash [(envAt t 0).loc THRESHOLD, (envAt t 0).loc BLINDING] := hpr.symm.trans hdig
@@ -304,9 +407,14 @@ theorem committedThreshold_satisfied2_sound
   have hfc := chip_lookup_sound hash (t.tf .poseidon2) hChip (envAt t 0).loc
     [.var FACT_HASH, .var STATE_ROOT] FACT_COMMITMENT FACTCOMMIT_LANES (by decide) hlookC
   simp only [List.map_cons, List.map_nil, EmittedExpr.eval] at hfc
-  -- === PI: commitments are the public inputs ===
-  exact ⟨horder, hbind, pi_forces THRESHOLD_COMMITMENT 0 mem_pi0,
-    pi_forces FACT_COMMITMENT 1 mem_pi1, hfh, hfc⟩
+  -- === PI: commitments are the public inputs (mod-p pins lifted by canonicality of both sides) ===
+  have hpi0 : (envAt t 0).loc THRESHOLD_COMMITMENT = (envAt t 0).pub 0 := by
+    obtain ⟨k, hk⟩ := (pi_forces THRESHOLD_COMMITMENT 0 mem_pi0).dvd
+    omega
+  have hpi1 : (envAt t 0).loc FACT_COMMITMENT = (envAt t 0).pub 1 := by
+    obtain ⟨k, hk⟩ := (pi_forces FACT_COMMITMENT 1 mem_pi1).dvd
+    omega
+  exact ⟨horder, hbind, hpi0, hpi1, hfh, hfc⟩
 
 #assert_axioms committedThreshold_satisfied2_sound
 
@@ -320,13 +428,14 @@ theorem committedFact_opens_to_proven_value
     (hash : List ℤ → ℤ) (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
     (hChip : ChipTableSound hash (t.tf .poseidon2))
     (hsat : Satisfied2 hash committedThresholdDesc minit mfin maddrs t)
-    (hlen : 0 < t.rows.length) :
+    (hlen : 0 < t.rows.length)
+    (hcanon : CtCanon t) :
     (envAt t 0).pub 1
       = hash [hash [(envAt t 0).loc PREDICATE_SYM, (envAt t 0).loc PRIVATE_VALUE,
                     (envAt t 0).loc TERM1, (envAt t 0).loc TERM2, 0, FACT_MARK, 1],
               (envAt t 0).loc STATE_ROOT] := by
   obtain ⟨_, _, _, hpi1, hfh, hfc⟩ :=
-    committedThreshold_satisfied2_sound hash minit mfin maddrs t hChip hsat hlen
+    committedThreshold_satisfied2_sound hash minit mfin maddrs t hChip hsat hlen hcanon
   rw [← hpi1, hfc, hfh]
 
 /-- **THE WELD BITES (value ≠ committed value ⟹ REJECT).** Under Poseidon2 collision resistance —
@@ -338,7 +447,7 @@ forecloses it. `v0 ≠ private_value` is freely satisfiable, so this rejection i
 theorem committedValue_forge_rejected
     (hash : List ℤ → ℤ) (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
     (hChip : ChipTableSound hash (t.tf .poseidon2))
-    (hlen : 0 < t.rows.length) (v0 : ℤ)
+    (hlen : 0 < t.rows.length) (hcanon : CtCanon t) (v0 : ℤ)
     (hcred : (envAt t 0).pub 1
       = hash [hash [(envAt t 0).loc PREDICATE_SYM, v0, (envAt t 0).loc TERM1,
                     (envAt t 0).loc TERM2, 0, FACT_MARK, 1], (envAt t 0).loc STATE_ROOT])
@@ -350,7 +459,7 @@ theorem committedValue_forge_rejected
     (hforge : (envAt t 0).loc PRIVATE_VALUE ≠ v0) :
     ¬ Satisfied2 hash committedThresholdDesc minit mfin maddrs t := by
   intro hsat
-  have hopen := committedFact_opens_to_proven_value hash minit mfin maddrs t hChip hsat hlen
+  have hopen := committedFact_opens_to_proven_value hash minit mfin maddrs t hChip hsat hlen hcanon
   exact hforge (hinj _ _ (hopen.symm.trans hcred))
 
 #assert_axioms committedFact_opens_to_proven_value
@@ -427,6 +536,21 @@ theorem acceptEnv_meets : MeetsCommittedThreshold acceptHash acceptEnv := by
       DIFF, DIFF_BITS_START, diffBit, THRESHOLD_COMMITMENT, FACT_COMMITMENT,
       PREDICATE_SYM, TERM1, TERM2, STATE_ROOT, FACT_HASH, FACT_MARK, COMMITTED_DIFF_BITS] <;> decide
 
+/-- The accept witness as a (height-1) trace, for inhabiting the canonicality envelope. -/
+def acceptTrace : VmTrace := { rows := [acceptLoc], pub := acceptPub, tf := fun _ => [] }
+
+/-- **The canonicality envelope is genuinely INHABITED** — every enveloped cell of the accept
+witness (bits `0`/`1`, `diff = 2`, value `5` / threshold `3` deep in the low half, commitments
+`0`/`88`/`0`) is a small canonical field value. So the bridge does NOT rest on a vacuous range-check
+hypothesis. -/
+theorem acceptTrace_canon : CtCanon acceptTrace := by
+  refine ⟨?_, ⟨by decide, by decide⟩, ⟨by decide, by decide⟩, ⟨by decide, by decide⟩,
+    ⟨by decide, by decide⟩, ⟨by decide, by decide⟩, ⟨by decide, by decide⟩,
+    ⟨by decide, by decide⟩, ⟨by decide, by decide⟩⟩
+  intro j hj
+  have hj30 : j < 30 := hj
+  interval_cases j <;> exact ⟨by decide, by decide⟩
+
 /-- **The `ChipTableSound` carrier is genuinely inhabitable** — a singleton chip table carrying the
 accept row is sound, so the bridge's Poseidon2 hypothesis is usable, not vacuous. -/
 theorem chipTableSound_singleton_inhabited :
@@ -466,11 +590,11 @@ last-row-vacuity forge the transition-only `.gate` lowering used to admit is now
 theorem underThreshold_rejected
     (hash : List ℤ → ℤ) (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
     (hChip : ChipTableSound hash (t.tf .poseidon2))
-    (hlen : 0 < t.rows.length)
+    (hlen : 0 < t.rows.length) (hcanon : CtCanon t)
     (hunder : (envAt t 0).loc PRIVATE_VALUE < (envAt t 0).loc THRESHOLD) :
     ¬ Satisfied2 hash committedThresholdDesc minit mfin maddrs t := by
   intro hsat
-  have := (committedThreshold_satisfied2_sound hash minit mfin maddrs t hChip hsat hlen).1
+  have := (committedThreshold_satisfied2_sound hash minit mfin maddrs t hChip hsat hlen hcanon).1
   omega
 
 #assert_axioms acceptEnv_meets

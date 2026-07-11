@@ -45,8 +45,12 @@ unconditionally on `hterm`.
 
 ## Axiom hygiene / non-vacuity
 
-`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; the CR carrier `CollisionFree` and the
-chip-soundness carrier `ChipTableSound` ride as NAMED hypotheses, never as Lean axioms. §6 exhibits a
+`#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; the CR carrier `CollisionFree`, the
+chip-soundness carrier `ChipTableSound`, and — under the field-faithful mod-`p` denotation — the two
+range-check envelopes (`DfaTraceCanon` from Rung 1, `DfaChainCanon` for the running-hash spine,
+lifting the mod-`p` seed/copy-forward/route pins to the ℤ equalities the re-hashing fold needs) ride
+as NAMED hypotheses, never as Lean axioms, and are jointly inhabited (`refWitness_fires`, over a
+reference hash both injective and canonical at the witness digests). §6 exhibits a
 concrete satisfying witness (a genuine 2-row toggle run over a REAL injective `hash`, with the CR
 carrier discharged from injectivity — `dfaPrims`-`CollisionFree` is inhabited) whose Rung-2 conclusion
 FIRES with the true classification, and the cheating trace whose last edge is flipped, which
@@ -67,6 +71,7 @@ open Dregg2.Crypto (CryptoPrimitives)
 open Dregg2.Crypto.DfaAcceptanceAir
   (TableDfa Row classify classifyFrom symbols Satisfies Continuous Accumulates CollisionFree
    runningFold entryHashes entryHashOf lastRunning_eq_fold fold_inj route_commitment_binds_trace)
+open Dregg2.Circuit.Emit.EffectVmEmitTransfer (gate_modEq_iff)
 
 set_option autoImplicit false
 
@@ -199,6 +204,24 @@ theorem accumulates_map (hash : List ℤ → ℤ) : ∀ (l : List Assignment),
       · have hh := hcf (i + 1) (by simp only [List.length_cons] at hi ⊢; omega)
         simpa using hh
 
+/-! ## §4.5 — the chain canonicality envelope.
+
+Under the field-faithful mod-`p` denotation the seed pin / copy-forward window / B3 route pin bind
+only congruences; the running-hash spine RE-HASHES each digest, so a bare congruence cannot thread
+through the abstract `hash`. The deployed range-check invariant on the spine cells + the two bound
+public inputs is what lifts them to the genuine ℤ equalities the fold argument needs. Inhabited
+concretely in §7 (`wtTrace_chainCanon` over the reference hash), so the envelope is non-vacuous. -/
+
+/-- **The chain canonicality envelope** — the running-hash spine cells (`ACC`, `RUNNING_HASH`) are
+canonical field cells (`0 ≤ · < p`) on every row, and so are the two bound public inputs
+(`pi[table_commitment]`, `pi[route_commitment]`). -/
+def DfaChainCanon (t : VmTrace) : Prop :=
+  (∀ i, (hi : i < t.rows.length) →
+      (0 ≤ (t.rows[i]'hi) ACC ∧ (t.rows[i]'hi) ACC < 2013265921)
+      ∧ (0 ≤ (t.rows[i]'hi) RUNNING_HASH ∧ (t.rows[i]'hi) RUNNING_HASH < 2013265921))
+  ∧ (0 ≤ t.pub PI_TABLE ∧ t.pub PI_TABLE < 2013265921)
+  ∧ (0 ≤ t.pub PI_ROUTE ∧ t.pub PI_ROUTE < 2013265921)
+
 /-! ## §5 — THE RUNG-2 DISCHARGE. -/
 
 /-- **`dfaRouting_rung2` — the terminal-step obligation `hterm` is DISCHARGED by the route-commitment
@@ -221,6 +244,8 @@ theorem dfaRouting_rung2 {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin :
     {t : VmTrace}
     (hsat : Satisfied2 hash dfaRoutingDesc minit mfin maddrs t)
     (hne : t.rows ≠ [])
+    (hcanon : DfaTraceCanon t)
+    (hchain : DfaChainCanon t)
     (hchip : ChipTableSound hash (t.tf .poseidon2))
     (cf : @CollisionFree ℤ _ (dfaPrims hash))
     (gRows : List (Row ℤ ℤ ℤ))
@@ -247,25 +272,38 @@ theorem dfaRouting_rung2 {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin :
     have hr := running_eq hsat hchip hpos
     have hacc := piFirst_forces hsat hne mem_seedAccPin
     rw [envAt_loc hpos, h0] at hacc
-    rw [h0, hacc] at hr
+    -- the seed pin binds only mod p; the ACC cell + the table PI are canonical, so it lifts to ℤ.
+    have haccZ : a ACC = t.pub PI_TABLE := by
+      have hca := (hchain.1 0 hpos).1
+      rw [h0] at hca
+      exact eq_of_modEq_of_canon hacc hca.1 hca.2 hchain.2.1.1 hchain.2.1.2
+    rw [h0, haccZ] at hr
     simpa only [mkRow] using hr
   have haccum_t : @Accumulates ℤ ℤ ℤ _ (dfaPrims hash) (traceRows t) := by
     apply accumulates_map hash t.rows (fun i hi => running_eq hsat hchip hi)
     intro i hi
     have hi0 : i < t.rows.length := Nat.lt_of_succ_lt hi
     have hw := window_forces hsat hi0 (Nat.ne_of_lt hi) mem_copyForwardWindow rfl
-    have hc := (copyforward_window_zero_iff (envAt t i)).mp hw
-    rw [envAt_nxt hi, envAt_loc hi0] at hc; exact hc
+    -- the copy-forward window binds only mod p; both spine cells are canonical, so it lifts to ℤ.
+    have hcm : (envAt t i).nxt ACC ≡ (envAt t i).loc RUNNING_HASH [ZMOD 2013265921] :=
+      (gate_modEq_iff (by simp only [copyForwardBody, WindowExpr.eval]; ring)).mp hw
+    rw [envAt_nxt hi, envAt_loc hi0] at hcm
+    exact eq_of_modEq_of_canon hcm ((hchain.1 (i + 1) hi).1).1 ((hchain.1 (i + 1) hi).1).2
+      ((hchain.1 i hi0).2).1 ((hchain.1 i hi0).2).2
   have hlast_tr : (traceRows t).getLast? = some (mkRow (t.rows.getLast hne)) := by
     rw [traceRows, List.getLast?_map, List.getLast?_eq_some_getLast hne]; rfl
   have hrun_last := lastRunning_eq_fold (t.pub PI_TABLE) (traceRows t) hne_tr hseed_t haccum_t
     (mkRow (t.rows.getLast hne)) hlast_tr
   have hb3 := piLast_forces hsat hne mem_b3RoutePin
   rw [envAt_loc hlt] at hb3
+  -- the B3 route pin binds only mod p; the last RUNNING_HASH cell + the route PI are canonical.
+  have hb3Z : (t.rows[t.rows.length - 1]'hlt) RUNNING_HASH = t.pub PI_ROUTE :=
+    eq_of_modEq_of_canon hb3 ((hchain.1 _ hlt).2).1 ((hchain.1 _ hlt).2).2
+      hchain.2.2.1 hchain.2.2.2
   have hfold_t : t.pub PI_ROUTE = runningFold (t.pub PI_TABLE) (entryHashes (traceRows t)) := by
     have h1 : (mkRow (t.rows.getLast hne)).running = t.pub PI_ROUTE := by
       show (t.rows.getLast hne) RUNNING_HASH = t.pub PI_ROUTE
-      rw [List.getLast_eq_getElem hne]; exact hb3
+      rw [List.getLast_eq_getElem hne]; exact hb3Z
     rw [← h1]; exact hrun_last
   -- (b) g's running chain folds the SAME tableCommitment to the SAME routeCommitment
   have hfold_g : t.pub PI_ROUTE = runningFold (t.pub PI_TABLE) (entryHashes gRows) := by
@@ -313,7 +351,7 @@ theorem dfaRouting_rung2 {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin :
     refine (transition_body_zero_iff alast).mpr ?_
     show alast NEXT = alast CURRENT + alast SYMBOL - 2 * (alast CURRENT * alast SYMBOL)
     rw [hnext, hgtable, hcur, hsym]; rfl
-  exact (dfaRouting_refines_classify hsat hne hterm).2.2
+  exact (dfaRouting_refines_classify hsat hne hcanon hterm).2.2
 
 #assert_axioms dfaRouting_rung2
 #assert_axioms collisionFree_of_injective
@@ -477,14 +515,43 @@ theorem wtG_satisfies :
       intro rₙ hlast; simp only [wtG, List.getLast?_singleton, Option.some.injEq] at hlast
       subst hlast; rfl }
 
+/-- **The witness inhabits the DFA canonicality envelope** — its DFA cells are `0`/`1` and both
+bound public inputs are `0`/`1`, all canonical representatives. -/
+theorem wtTrace_dfaCanon : DfaTraceCanon (wtTrace hash) := by
+  refine ⟨fun i hi => ?_,
+    ⟨show (0:ℤ) ≤ 0 by decide, show (0:ℤ) < 2013265921 by decide⟩,
+    ⟨show (0:ℤ) ≤ 1 by decide, show (1:ℤ) < 2013265921 by decide⟩⟩
+  have hi1 : i < 1 := hi
+  interval_cases i
+  exact ⟨⟨show (0:ℤ) ≤ 0 by decide, show (0:ℤ) < 2013265921 by decide⟩,
+         ⟨show (0:ℤ) ≤ 1 by decide, show (1:ℤ) < 2013265921 by decide⟩,
+         ⟨show (0:ℤ) ≤ 1 by decide, show (1:ℤ) < 2013265921 by decide⟩⟩
+
+/-- **The witness inhabits the chain canonicality envelope**, given that the (single) route digest
+`hash [0, hash [0,1,1,0]]` is a canonical field value — the honest situation for a genuine
+field-valued Poseidon2. The seed cells (`ACC = 0`, `pi[table] = 0`) are canonical outright. -/
+theorem wtTrace_chainCanon
+    (hcanR : 0 ≤ hash [0, hash [0, 1, 1, 0]] ∧ hash [0, hash [0, 1, 1, 0]] < 2013265921) :
+    DfaChainCanon (wtTrace hash) := by
+  refine ⟨fun i hi => ?_,
+    ⟨show (0:ℤ) ≤ 0 by decide, show (0:ℤ) < 2013265921 by decide⟩,
+    ⟨hcanR.1, hcanR.2⟩⟩
+  have hi1 : i < 1 := hi
+  interval_cases i
+  exact ⟨⟨show (0:ℤ) ≤ 0 by decide, show (0:ℤ) < 2013265921 by decide⟩,
+         ⟨hcanR.1, hcanR.2⟩⟩
+
 /-- **THE RUNG-2 DISCHARGE FIRES on the genuine witness (the TRUE half).** Feeding the concrete
-satisfying trace, its sound chip table, the CR carrier (from `Function.Injective hash`), and the
-honest reference run `g` to `dfaRouting_rung2` recovers `final = classify(input)` — WITHOUT any
-`hterm` hypothesis. -/
-theorem wtTrace_rung2_fires (hinj : Function.Injective hash) :
+satisfying trace, its sound chip table, the two canonicality envelopes (the route digest canonical —
+`hcanR`), the CR carrier (from `Function.Injective hash`), and the honest reference run `g` to
+`dfaRouting_rung2` recovers `final = classify(input)` — WITHOUT any `hterm` hypothesis. The whole
+hypothesis set is exhibited jointly satisfiable by the reference hash below (`refWitness_fires`). -/
+theorem wtTrace_rung2_fires (hinj : Function.Injective hash)
+    (hcanR : 0 ≤ hash [0, hash [0, 1, 1, 0]] ∧ hash [0, hash [0, 1, 1, 0]] < 2013265921) :
     (wtTrace hash).pub PI_FINAL
       = classify (pinnedDfa ((wtTrace hash).pub PI_INITIAL)) (symbols (traceRows (wtTrace hash))) :=
-  dfaRouting_rung2 (wtTrace_satisfied2 hash) (by simp [wtTrace]) (wtTf_chipSound hash)
+  dfaRouting_rung2 (wtTrace_satisfied2 hash) (by simp [wtTrace]) (wtTrace_dfaCanon hash)
+    (wtTrace_chainCanon hash hcanR) (wtTf_chipSound hash)
     (collisionFree_of_injective hinj) (wtG hash) (wtG_satisfies hash) rfl
 
 /-- The recovered value is the genuine toggle endpoint `1` over the read input `[1]`
@@ -498,6 +565,49 @@ theorem wtTrace_value :
 
 end TrueWitness
 
+/-! ## §7b — the reference hash: the RUNG-2 hypothesis set is JOINTLY satisfiable.
+
+`Function.Injective hash` (the CR reference realization) and canonicality of the witness's route
+digest are exhibited TOGETHER on one concrete hash: the two witness digests are pinned to the
+reserved canonical values `1` / `2`, and every other list rides the injective `Encodable.encode`
+shifted past them — injective as a whole, canonical where the witness reads it. So neither envelope
+hypothesis of `wtTrace_rung2_fires` is vacuous, jointly or alone. -/
+
+/-- The reference hash: `[0,1,1,0] ↦ 1`, `[0,1] ↦ 2`, everything else `encode + 3`. -/
+def refHash : List ℤ → ℤ := fun l =>
+  if l = [0, 1, 1, 0] then 1
+  else if l = [0, 1] then 2
+  else (Encodable.encode l : ℤ) + 3
+
+/-- The reference hash is injective (the reserved values `1`/`2` sit below the shifted encodings,
+which are themselves injective). -/
+theorem refHash_injective : Function.Injective refHash := by
+  intro a b h
+  simp only [refHash] at h
+  split_ifs at h
+  all_goals subst_vars
+  all_goals try rfl
+  all_goals try omega
+  exact Encodable.encode_injective (by omega)
+
+/-- The witness's route digest is canonical over the reference hash (`refHash [0, refHash [0,1,1,0]]
+= refHash [0,1] = 2`). -/
+theorem refHash_route_canon :
+    0 ≤ refHash [0, refHash [0, 1, 1, 0]] ∧ refHash [0, refHash [0, 1, 1, 0]] < 2013265921 := by
+  have h1 : refHash [0, 1, 1, 0] = 1 := by simp [refHash]
+  rw [h1]
+  have h2 : refHash [0, 1] = 2 := by simp [refHash]
+  rw [h2]
+  norm_num
+
+/-- **The joint hypothesis set is INHABITED**: over the reference hash the RUNG-2 discharge fires
+end-to-end with concrete values. -/
+theorem refWitness_fires :
+    (wtTrace refHash).pub PI_FINAL
+      = classify (pinnedDfa ((wtTrace refHash).pub PI_INITIAL))
+          (symbols (traceRows (wtTrace refHash))) :=
+  wtTrace_rung2_fires refHash refHash_injective refHash_route_canon
+
 /-! ## §8 — Axiom tripwires. -/
 
 #assert_axioms cheatTrace_satisfied2
@@ -507,5 +617,7 @@ end TrueWitness
 #assert_axioms wtG_satisfies
 #assert_axioms wtTrace_rung2_fires
 #assert_axioms wtTrace_value
+#assert_axioms refHash_injective
+#assert_axioms refWitness_fires
 
 end Dregg2.Circuit.Emit.DfaRoutingRung2

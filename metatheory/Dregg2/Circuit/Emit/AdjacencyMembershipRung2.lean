@@ -67,7 +67,10 @@ is enforced on every row and the Rung-1 `TopLevelOrdered` residual is CLOSED.
 ## Axiom hygiene
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. The Poseidon2 chip carrier enters ONLY as
 the NAMED hypothesis `ChipTableSound hash (t.tf .poseidon2)`; the Poseidon2 CR carrier enters ONLY as
-`CollisionFree (dfaPrims hash)`. NEW file; all imports read-only.
+`CollisionFree (dfaPrims hash)`; under the field-faithful mod-`p` denotation the Rung-1 range-check
+envelope `AdjacencyCanon t` rides as a NAMED hypothesis too (inhabited concretely by `wtCanon`), and
+the last-row residual predicates (`LastRowOrdered`, `LastRowIdxReconstructed`) are field constraints
+(`≡ 0 [ZMOD p]`) — exactly what the emit-fix boundaries enforce. NEW file; all imports read-only.
 -/
 import Dregg2.Circuit.Emit.AdjacencyMembershipRefine
 import Dregg2.Circuit.Emit.DfaRoutingRung2
@@ -101,20 +104,27 @@ the fixed emit supplies). Exactly the three child-ordering bodies of each path, 
 LAST trace row — what the deployed DSL's every-row `Binary`/`Polynomial` gates enforce and the IR-v2
 `.gate` mapping drops. -/
 
-/-- The six ordering-gate bodies of both paths, vanishing on the last trace row. -/
+/-- The six ordering-gate bodies of both paths, vanishing (as field constraints — mod `p`, the
+field-faithful denotation the deployed AIR actually enforces) on the last trace row. The ℤ readings
+are recovered downstream through the Rung-1 `AdjacencyCanon` range-check envelope. -/
 def LastRowOrdered (t : VmTrace) : Prop :=
-  (dirBinaryBody L_DIR).eval (envAt t (t.rows.length - 1)).loc = 0 ∧
-  (leftOrderBody L_CUR L_SIB L_DIR L_LEFT).eval (envAt t (t.rows.length - 1)).loc = 0 ∧
-  (rightOrderBody L_CUR L_SIB L_DIR L_RIGHT).eval (envAt t (t.rows.length - 1)).loc = 0 ∧
-  (dirBinaryBody U_DIR).eval (envAt t (t.rows.length - 1)).loc = 0 ∧
-  (leftOrderBody U_CUR U_SIB U_DIR U_LEFT).eval (envAt t (t.rows.length - 1)).loc = 0 ∧
-  (rightOrderBody U_CUR U_SIB U_DIR U_RIGHT).eval (envAt t (t.rows.length - 1)).loc = 0
+  (dirBinaryBody L_DIR).eval (envAt t (t.rows.length - 1)).loc ≡ 0 [ZMOD 2013265921] ∧
+  (leftOrderBody L_CUR L_SIB L_DIR L_LEFT).eval (envAt t (t.rows.length - 1)).loc
+      ≡ 0 [ZMOD 2013265921] ∧
+  (rightOrderBody L_CUR L_SIB L_DIR L_RIGHT).eval (envAt t (t.rows.length - 1)).loc
+      ≡ 0 [ZMOD 2013265921] ∧
+  (dirBinaryBody U_DIR).eval (envAt t (t.rows.length - 1)).loc ≡ 0 [ZMOD 2013265921] ∧
+  (leftOrderBody U_CUR U_SIB U_DIR U_LEFT).eval (envAt t (t.rows.length - 1)).loc
+      ≡ 0 [ZMOD 2013265921] ∧
+  (rightOrderBody U_CUR U_SIB U_DIR U_RIGHT).eval (envAt t (t.rows.length - 1)).loc
+      ≡ 0 [ZMOD 2013265921]
 
 /-! ## §2 — THE DISCHARGE: `LastRowOrdered` + the chip carrier close `TopLevelOrdered`, hence the full
 functional no-forgery spec via the Rung-1 bridge. -/
 
 /-- **`LastRowOrdered` closes the residual `TopLevelOrdered`.** On the last row, the three ordering
-bodies (from `LastRowOrdered`) plus the last-row chip lookup `par = hash[left,right]` (from the NAMED
+bodies (from `LastRowOrdered`, mod `p`), lifted over ℤ through the Rung-1 `AdjacencyCanon`
+range-check envelope, plus the last-row chip lookup `par = hash[left,right]` (from the NAMED
 `ChipTableSound` carrier, escaping the transition zerofier) collapse to the authentic dir-ordered
 combine — exactly `combine_of_gates` at the top level, for both paths. -/
 theorem topLevelOrdered_of_lastRowOrdered {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat}
@@ -122,16 +132,21 @@ theorem topLevelOrdered_of_lastRowOrdered {hash : List ℤ → ℤ} {minit : ℤ
     (hsat : Satisfied2 hash adjacencyDesc minit mfin maddrs t)
     (hChip : ChipTableSound hash (t.tf .poseidon2))
     (hlen : 0 < t.rows.length)
+    (hc : AdjacencyCanon t)
     (hlro : LastRowOrdered t) :
     TopLevelOrdered hash t := by
   have hLlt : t.rows.length - 1 < t.rows.length := by omega
   obtain ⟨hdL, hlL, hrL, hdU, hlU, hrU⟩ := hlro
+  obtain ⟨hcCurL, hcSibL, hcDirL, hcLeftL, hcRightL, _⟩ := hc.pathL _ hLlt
+  obtain ⟨hcCurU, hcSibU, hcDirU, hcLeftU, hcRightU, _⟩ := hc.pathU _ hLlt
   refine ⟨?_, ?_⟩
   · exact combine_of_gates hash (envAt t (t.rows.length - 1)).loc
-      L_CUR L_SIB L_DIR L_LEFT L_RIGHT L_PAR hdL hlL hrL
+      L_CUR L_SIB L_DIR L_LEFT L_RIGHT L_PAR
+      hcDirL hcCurL hcSibL hcLeftL hcRightL hdL hlL hrL
       (lookupChip hsat hChip _ hLlt L_LEFT L_RIGHT L_PAR L_PAR_LANES (by adj_mem))
   · exact combine_of_gates hash (envAt t (t.rows.length - 1)).loc
-      U_CUR U_SIB U_DIR U_LEFT U_RIGHT U_PAR hdU hlU hrU
+      U_CUR U_SIB U_DIR U_LEFT U_RIGHT U_PAR
+      hcDirU hcCurU hcSibU hcLeftU hcRightU hdU hlU hrU
       (lookupChip hsat hChip _ hLlt U_LEFT U_RIGHT U_PAR U_PAR_LANES (by adj_mem))
 
 /-- **`adjacency_rung2_closes` — THE RUNG-2 DISCHARGE (semantic form).** A trace that `Satisfied2`s the
@@ -145,11 +160,12 @@ theorem adjacency_rung2_closes {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {
     (hlen : 0 < t.rows.length)
     (hsat : Satisfied2 hash adjacencyDesc minit mfin maddrs t)
     (hChip : ChipTableSound hash (t.tf .poseidon2))
+    (hc : AdjacencyCanon t)
     (hlro : LastRowOrdered t) :
     AdjacentLeavesUnderRoot hash (t.pub PI_LEAF_LOWER) (t.pub PI_LEAF_UPPER)
       (t.pub PI_ROOT) (t.pub PI_IDX_LOWER) (t.pub PI_IDX_UPPER) :=
-  adjacency_full_bridge hlen hsat hChip
-    (topLevelOrdered_of_lastRowOrdered hsat hChip hlen hlro)
+  adjacency_full_bridge hlen hsat hChip hc
+    (topLevelOrdered_of_lastRowOrdered hsat hChip hlen hc hlro)
 
 /-! ## §3 — THE EMIT-FIX (`adjLastOrderFix`, now LANDED in `AdjacencyMembershipEmit`), proven to
 ENFORCE `LastRowOrdered`.
@@ -160,14 +176,14 @@ re-lowered as a `.base (.boundary VmRow.last …)` so it fires on the last row (
 mapping makes it vacuous). It now lives in the emit file and `adjacencyDesc.constraints`
 (= `adjacencyConstraintsCore ++ adjLastOrderFix`) contains it. -/
 
-/-- A declared last-row boundary body vanishes on the last row — the generic form of the Rung-1
-`lastBoundaryZero`, over ANY descriptor `d` carrying the constraint. -/
+/-- A declared last-row boundary body vanishes mod `p` on the last row — the generic form of the
+Rung-1 `lastBoundaryZero`, over ANY descriptor `d` carrying the constraint. -/
 theorem genLastBoundaryZero {hash : List ℤ → ℤ} {d : EffectVmDescriptor2} {minit : ℤ → ℤ}
     {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
     (hsat : Satisfied2 hash d minit mfin maddrs t)
     (hlen : 0 < t.rows.length) (body : EmittedExpr)
     (hmem : VmConstraint2.base (.boundary VmRow.last body) ∈ d.constraints) :
-    body.eval (envAt t (t.rows.length - 1)).loc = 0 := by
+    body.eval (envAt t (t.rows.length - 1)).loc ≡ 0 [ZMOD 2013265921] := by
   have hLlt : t.rows.length - 1 < t.rows.length := by omega
   have hlast : (t.rows.length - 1 + 1 == t.rows.length) = true := by
     have : t.rows.length - 1 + 1 = t.rows.length := by omega
@@ -186,7 +202,7 @@ theorem lastRowOrdered_of_fix {hash : List ℤ → ℤ} {d : EffectVmDescriptor2
     (hmem : ∀ c ∈ adjLastOrderFix, c ∈ d.constraints) :
     LastRowOrdered t := by
   have g : ∀ b : EmittedExpr, VmConstraint2.base (.boundary VmRow.last b) ∈ adjLastOrderFix →
-      b.eval (envAt t (t.rows.length - 1)).loc = 0 :=
+      b.eval (envAt t (t.rows.length - 1)).loc ≡ 0 [ZMOD 2013265921] :=
     fun b hb => genLastBoundaryZero hsat hlen b (hmem _ hb)
   refine ⟨g _ ?_, g _ ?_, g _ ?_, g _ ?_, g _ ?_, g _ ?_⟩ <;>
     (show _ ∈ adjLastOrderFix) <;>
@@ -217,11 +233,12 @@ theorem adjacency_rung2_fixed_closes {hash : List ℤ → ℤ} {minit : ℤ → 
     {maddrs : List ℤ} {t : VmTrace}
     (hlen : 0 < t.rows.length)
     (hsat : Satisfied2 hash adjacencyDesc minit mfin maddrs t)
-    (hChip : ChipTableSound hash (t.tf .poseidon2)) :
+    (hChip : ChipTableSound hash (t.tf .poseidon2))
+    (hc : AdjacencyCanon t) :
     AdjacentLeavesUnderRoot hash (t.pub PI_LEAF_LOWER) (t.pub PI_LEAF_UPPER)
       (t.pub PI_ROOT) (t.pub PI_IDX_LOWER) (t.pub PI_IDX_UPPER) := by
   have hlro : LastRowOrdered t := lastRowOrdered_of_fix hsat hlen adjLastOrderFix_subset
-  exact adjacency_rung2_closes hlen hsat hChip hlro
+  exact adjacency_rung2_closes hlen hsat hChip hc hlro
 
 /-! ## §5 — What the CR carrier DOES buy (and honestly, what it does NOT). -/
 
@@ -242,13 +259,14 @@ theorem topPair_no_forgery {hash : List ℤ → ℤ} {minit : ℤ → ℤ} {mfin
     (hlen : 0 < t.rows.length)
     (hsat : Satisfied2 hash adjacencyDesc minit mfin maddrs t)
     (hChip : ChipTableSound hash (t.tf .poseidon2))
+    (hc : AdjacencyCanon t)
     (cf : @CollisionFree ℤ _ (dfaPrims hash))
     (gL gR : ℤ)
     (hanchor : t.pub PI_ROOT = hash [gL, gR]) :
     (envAt t (t.rows.length - 1)).loc L_LEFT = gL
     ∧ (envAt t (t.rows.length - 1)).loc L_RIGHT = gR := by
   letI := dfaPrims hash
-  have frag := adjacency_sat_refines hlen hsat hChip
+  have frag := adjacency_sat_refines hlen hsat hChip hc
   have heq : CryptoPrimitives.compress ((envAt t (t.rows.length - 1)).loc L_LEFT)
                 ((envAt t (t.rows.length - 1)).loc L_RIGHT)
            = CryptoPrimitives.compress gL gR := by
@@ -335,6 +353,31 @@ is jointly satisfiable with `Satisfied2`, not an empty antecedent. -/
 theorem wtLastRowOrdered : LastRowOrdered wTrace := by
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩ <;> decide
 
+/-- **The canonicality envelope is genuinely INHABITED for the genuine witness** — every spine
+column, published input, and index reconstruction is a small canonical field value. So the RUNG-2
+closure does not rest on a vacuous range-check hypothesis. -/
+theorem wtCanon : AdjacencyCanon wTrace := by
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · intro j hj
+    have hj0 : j = 0 := by have : wTrace.rows.length = 1 := rfl; omega
+    subst hj0
+    exact ⟨⟨by decide, by decide⟩, ⟨by decide, by decide⟩, ⟨by decide, by decide⟩,
+           ⟨by decide, by decide⟩, ⟨by decide, by decide⟩, ⟨by decide, by decide⟩⟩
+  · intro j hj
+    have hj0 : j = 0 := by have : wTrace.rows.length = 1 := rfl; omega
+    subst hj0
+    exact ⟨⟨by decide, by decide⟩, ⟨by decide, by decide⟩, ⟨by decide, by decide⟩,
+           ⟨by decide, by decide⟩, ⟨by decide, by decide⟩, ⟨by decide, by decide⟩⟩
+  · exact ⟨by decide, by decide⟩
+  · exact ⟨by decide, by decide⟩
+  · exact ⟨by decide, by decide⟩
+  · exact ⟨by decide, by decide⟩
+  · exact ⟨by decide, by decide⟩
+  · exact ⟨by decide, by decide⟩
+  · exact ⟨by decide, by decide⟩
+  · exact ⟨by decide, by decide⟩
+  · exact ⟨by decide, by decide⟩
+
 /-- **THE RUNG-2 CLOSURE FIRES on the genuine witness (TRUE half).** Feeding the concrete satisfying
 trace, its sound chip table, and its (achievable) `LastRowOrdered` to `adjacency_rung2_closes` recovers
 the genuine `AdjacentLeavesUnderRoot` — two authentic Merkle paths for the sibling leaves `10, 20`
@@ -342,7 +385,7 @@ reaching the shared root `1020` at consecutive indices `0, 1`. -/
 theorem wtTrace_rung2_fires :
     AdjacentLeavesUnderRoot mHash (wTrace.pub PI_LEAF_LOWER) (wTrace.pub PI_LEAF_UPPER)
       (wTrace.pub PI_ROOT) (wTrace.pub PI_IDX_LOWER) (wTrace.pub PI_IDX_UPPER) :=
-  adjacency_rung2_closes (by decide) wtSat wtChipSound wtLastRowOrdered
+  adjacency_rung2_closes (by decide) wtSat wtChipSound wtCanon wtLastRowOrdered
 
 /-- The recovered spec is over the genuine public values (leaves `10,20`; root `1020`; indices `0,1`) —
 a real adjacency, not a constant. -/
@@ -477,11 +520,15 @@ authors already closed with `adjLastOrderFix` — the same last-row `.gate`-vacu
 row too (the deployed every-row `assert_zero` semantics, `dsl_plonky3.rs`), so the published last-row
 index is bound to the in-circuit reconstruction on EVERY row. -/
 
-/-- The two index-accumulation bodies of both paths, vanishing on the last trace row: the published
-last-row `idx_out` equals the genuine in-circuit reconstruction `idx_in + dir*pow`. -/
+/-- The two index-accumulation bodies of both paths, vanishing (mod `p` — the field-faithful
+denotation) on the last trace row: the published last-row `idx_out` equals the genuine in-circuit
+reconstruction `idx_in + dir*pow` as a field constraint; the Rung-1 `AdjacencyCanon` envelope lifts
+it over ℤ where consumed. -/
 def LastRowIdxReconstructed (t : VmTrace) : Prop :=
-  (idxStepBody L_DIR L_IDX_IN L_IDX_OUT).eval (envAt t (t.rows.length - 1)).loc = 0 ∧
-  (idxStepBody U_DIR U_IDX_IN U_IDX_OUT).eval (envAt t (t.rows.length - 1)).loc = 0
+  (idxStepBody L_DIR L_IDX_IN L_IDX_OUT).eval (envAt t (t.rows.length - 1)).loc
+      ≡ 0 [ZMOD 2013265921] ∧
+  (idxStepBody U_DIR U_IDX_IN U_IDX_OUT).eval (envAt t (t.rows.length - 1)).loc
+      ≡ 0 [ZMOD 2013265921]
 
 /-- **`adjLastIdxFix ⊆ adjacencyDesc.constraints`** — the index fix is genuinely part of the emitted
 descriptor (the rightmost append component of `adjacencyConstraints`). -/
@@ -502,7 +549,7 @@ theorem lastRowIdxReconstructed_of_fix {hash : List ℤ → ℤ} {d : EffectVmDe
     (hmem : ∀ c ∈ adjLastIdxFix, c ∈ d.constraints) :
     LastRowIdxReconstructed t := by
   have g : ∀ b : EmittedExpr, VmConstraint2.base (.boundary VmRow.last b) ∈ adjLastIdxFix →
-      b.eval (envAt t (t.rows.length - 1)).loc = 0 :=
+      b.eval (envAt t (t.rows.length - 1)).loc ≡ 0 [ZMOD 2013265921] :=
     fun b hb => genLastBoundaryZero hsat hlen b (hmem _ hb)
   refine ⟨g _ ?_, g _ ?_⟩ <;>
     (show _ ∈ adjLastIdxFix) <;>

@@ -49,7 +49,7 @@ open Dregg2.Circuit.Emit.BoundPresentationEmit
    REQUEST_PREDICATE_BASE PRESENTATION_TAG REVEALED_FACTS_BASE SUMMARY_WIDTH
    FINAL_ROOT RANDOMNESS VERIFIER_NONCE TAG_LANES PI_NONCE PRESENTATION_TAG_DSK)
 open Dregg2.Circuit.Emit.BoundPresentationRefine
-  (BoundPresentation boundPresentation_sat_refines firstPiG summaryPin_mem tagSound)
+  (BoundPresentation BoundPresCanon boundPresentation_sat_refines firstPiG summaryPin_mem tagSound)
 
 set_option autoImplicit false
 
@@ -133,10 +133,19 @@ theorem honest_satisfied2 :
   · rw [hmemlog]; rfl
   · rw [hmaplog]; rfl
 
+/-- **The honest trace inhabits the canonicality envelope** — every summary cell/PI (`0..18`, the
+tag `1067461553 < p`) and the nonce pair (`3`) are canonical representatives, so the mod-`p`-to-ℤ
+lift of the bridge does not rest on a vacuous range-check hypothesis. -/
+theorem honest_canon : BoundPresCanon honestTrace := by
+  refine ⟨?_, ⟨by decide, by decide⟩, ⟨by decide, by decide⟩⟩
+  intro i hi
+  have hi19 : i < 19 := hi
+  interval_cases i <;> exact ⟨⟨by decide, by decide⟩, ⟨by decide, by decide⟩⟩
+
 /-- **The whole-descriptor bridge FIRES on the honest trace** — the genuine `BoundPresentation`
 relation is DERIVED (SAT ⟹ SEM, non-vacuously). -/
 theorem honest_fires : BoundPresentation fHash (envAt honestTrace 0).loc honestTrace.pub :=
-  boundPresentation_sat_refines (by decide) honest_satisfied2 honest_chipSound
+  boundPresentation_sat_refines (by decide) honest_satisfied2 honest_chipSound honest_canon
 
 /-! ## §1 — forge (a): a forged `action_binding` witness column is REJECTED. -/
 

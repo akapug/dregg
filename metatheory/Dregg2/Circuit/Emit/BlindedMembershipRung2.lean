@@ -18,7 +18,7 @@ BOTH bite, and that the intended unlinkability holds.
   rows, `CUR1` = the real intermediate ≠ `PARENT0`, `PARENT1` = the real root — that
     - `forge_satisfied_legacy`: WAS `Satisfied2` under the pre-fix `legacyBlindedDesc`, and
     - `forge_nonmember_rejected`: is now NOT `Satisfied2` under the fixed descriptor (the last-row
-      boundary forces `CUR1 = PARENT0`, i.e. `1020304 = 99010101`, false), and
+      boundary forces `CUR1 = PARENT0`, i.e. `1234 = 99111`, false), and
     - `forge_nonmember`: is a GENUINE non-member.
 
 * THE BLINDING FORGE (§3b): `forge_blinded_leaf_rejected` — a trace publishing a `blinded_leaf` that is
@@ -37,7 +37,10 @@ BOTH bite, and that the intended unlinkability holds.
 ## Axiom hygiene
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}. The sole cryptographic carrier is the NAMED
 chip-table faithfulness `ChipTableSound hash (t.tf .poseidon2)` (through `chip_lookup_sound`), never a
-Lean axiom. NEW file; all imports read-only.
+Lean axiom; under the field-faithful mod-`p` denotation the Rung-1 range-check envelopes
+(`BlindedCanon` / `G4Canon`) ride as NAMED hypotheses too, inhabited concretely (`hCanon`, `aCanon`,
+`bCanon` — the witnesses use the base-10 digit hash, genuinely field-valued at these depths).
+NEW file; all imports read-only.
 -/
 import Dregg2.Circuit.Emit.BlindedMembershipRefine
 
@@ -54,9 +57,10 @@ open Dregg2.Circuit.Emit.BlindedMembershipEmit
    rootPin blindedLeafPin contBody continuity_body_zero_iff
    LEAF SIB0A SIB0B SIB0C PARENT0 CUR1 SIB1A SIB1B SIB1C PARENT1 BLINDING BLINDED_LEAF
    LEVEL0_LANES LEVEL1_LANES BLIND_LANES ROOT_PI BLINDED_LEAF_PI)
-open Dregg2.Circuit.Emit.MerkleMembershipRefine (merkleFold2 MerkleMembers2)
+open Dregg2.Circuit.Emit.MerkleMembershipRefine (merkleFold2 MerkleMembers2 Canon eq_of_modEq_canon)
 open Dregg2.Circuit.Emit.BlindedMembershipRefine
-  (BlindedMembers lookupChip4 lookupChip2 firstPi activeGateZero)
+  (BlindedMembers BlindedCanon lookupChip4 lookupChip2 firstPi activeGateZero)
+open Dregg2.Circuit.Emit.EffectVmEmitTransfer (gate_modEq_iff)
 
 set_option autoImplicit false
 
@@ -69,31 +73,37 @@ local macro "bm_mem" : tactic =>
 
 /-! ## §1 — the last-row extractor + the every-row level-tie (the fix's teeth). -/
 
-/-- A declared `.boundary VmRow.last` body vanishes on the LAST row — the leg the fix adds. -/
+/-- A declared `.boundary VmRow.last` body vanishes mod `p` on the LAST row — the leg the fix adds
+(the field-faithful reading; the ℤ lift rides the canonicality envelope where consumed). -/
 theorem lastBoundaryZero {hash : List ℤ → ℤ} {t : VmTrace} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat}
     {maddrs : List ℤ} (hsat : Satisfied2 hash blindedMembershipDesc minit mfin maddrs t)
     (j : Nat) (hj : j < t.rows.length) (hlast : (j + 1 == t.rows.length) = true)
     (body : EmittedExpr)
     (hmem : VmConstraint2.base (.boundary VmRow.last body) ∈ blindedMembershipDesc.constraints) :
-    body.eval (envAt t j).loc = 0 := by
+    body.eval (envAt t j).loc ≡ 0 [ZMOD 2013265921] := by
   have h := hsat.rowConstraints j hj _ hmem
   rw [hlast] at h
   simp only [VmConstraint2.holdsAt, holdsVm_boundaryLast_true] at h
   exact h
 
 /-- **`contAtRow0` — the level-tie `CUR1 = PARENT0` on row 0 of ANY non-empty trace.** Transition gate
-when `1 < height`; the new last-row boundary fix when `height = 1` (the forgery's case). -/
+when `1 < height`; the new last-row boundary fix when `height = 1` (the forgery's case). Either way
+the constraint binds only mod `p`; the canonicality of the two tie cells (the deployed range check)
+lifts it to the genuine ℤ equality the level-1 re-hash needs. -/
 theorem contAtRow0 {hash : List ℤ → ℤ} {t : VmTrace} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat}
     {maddrs : List ℤ} (hpos : 0 < t.rows.length)
-    (hsat : Satisfied2 hash blindedMembershipDesc minit mfin maddrs t) :
+    (hsat : Satisfied2 hash blindedMembershipDesc minit mfin maddrs t)
+    (hcCur1 : Canon ((envAt t 0).loc CUR1)) (hcPar0 : Canon ((envAt t 0).loc PARENT0)) :
     (envAt t 0).loc CUR1 = (envAt t 0).loc PARENT0 := by
   by_cases hlast : (0 + 1 == t.rows.length) = true
-  · exact (continuity_body_zero_iff (envAt t 0).loc).mp
-      (lastBoundaryZero hsat 0 hpos hlast contBody (by bm_mem))
+  · exact eq_of_modEq_canon hcCur1 hcPar0
+      ((gate_modEq_iff (by simp only [contBody, EmittedExpr.eval]; ring)).mp
+        (lastBoundaryZero hsat 0 hpos hlast contBody (by bm_mem)))
   · have hf : (0 + 1 == t.rows.length) = false := by
       simp only [Bool.not_eq_true] at hlast; exact hlast
-    exact (continuity_body_zero_iff (envAt t 0).loc).mp
-      (activeGateZero hsat 0 hpos hf contBody (by bm_mem))
+    exact eq_of_modEq_canon hcCur1 hcPar0
+      ((gate_modEq_iff (by simp only [contBody, EmittedExpr.eval]; ring)).mp
+        (activeGateZero hsat 0 hpos hf contBody (by bm_mem)))
 
 /-! ## §2 — the strengthened whole-descriptor bridge (no-forgery, any non-empty height). -/
 
@@ -105,7 +115,8 @@ theorem blindedMembership_no_forgery {hash : List ℤ → ℤ} {t : VmTrace} {mi
     {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ}
     (hpos : 0 < t.rows.length)
     (hsat : Satisfied2 hash blindedMembershipDesc minit mfin maddrs t)
-    (hChip : ChipTableSound hash (t.tf .poseidon2)) :
+    (hChip : ChipTableSound hash (t.tf .poseidon2))
+    (hc : BlindedCanon t) :
     BlindedMembers hash
       (t.pub BLINDED_LEAF_PI)
       ((envAt t 0).loc LEAF) ((envAt t 0).loc BLINDING)
@@ -114,7 +125,8 @@ theorem blindedMembership_no_forgery {hash : List ℤ → ℤ} {t : VmTrace} {mi
       (t.pub ROOT_PI) := by
   refine ⟨?_, ?_⟩
   · have hbleaf : (envAt t 0).loc BLINDED_LEAF = t.pub BLINDED_LEAF_PI :=
-      firstPi hsat hpos BLINDED_LEAF BLINDED_LEAF_PI (by bm_mem)
+      eq_of_modEq_canon hc.blindedLeaf hc.blindedLeafPi
+        (firstPi hsat hpos BLINDED_LEAF BLINDED_LEAF_PI (by bm_mem))
     have hblind : (envAt t 0).loc BLINDED_LEAF
         = hash [(envAt t 0).loc LEAF, (envAt t 0).loc BLINDING] :=
       lookupChip2 hsat hChip 0 hpos LEAF BLINDING BLINDED_LEAF BLIND_LANES (by bm_mem)
@@ -127,34 +139,35 @@ theorem blindedMembership_no_forgery {hash : List ℤ → ℤ} {t : VmTrace} {mi
         = hash [(envAt t 0).loc CUR1, (envAt t 0).loc SIB1A, (envAt t 0).loc SIB1B,
                 (envAt t 0).loc SIB1C] :=
       lookupChip4 hsat hChip 0 hpos CUR1 SIB1A SIB1B SIB1C PARENT1 LEVEL1_LANES (by bm_mem)
-    have hcont : (envAt t 0).loc CUR1 = (envAt t 0).loc PARENT0 := contAtRow0 hpos hsat
+    have hcont : (envAt t 0).loc CUR1 = (envAt t 0).loc PARENT0 :=
+      contAtRow0 hpos hsat hc.cur1 hc.parent0
     have hroot : (envAt t 0).loc PARENT1 = t.pub ROOT_PI :=
-      firstPi hsat hpos PARENT1 ROOT_PI (by bm_mem)
+      eq_of_modEq_canon hc.parent1 hc.root (firstPi hsat hpos PARENT1 ROOT_PI (by bm_mem))
     unfold MerkleMembers2 merkleFold2
     rw [← hroot, hp1, hcont, hp0]
 
 /-! ## §3 — THE MEMBERSHIP FORGE: the height-1 non-member, accepted before / rejected now. -/
 
 /-- The order-sensitive little-endian digit hash. -/
-private def fHash : List ℤ → ℤ := fun xs => xs.foldl (fun acc x => acc * 100 + x) 0
+private def fHash : List ℤ → ℤ := fun xs => xs.foldl (fun acc x => acc * 10 + x) 0
 
 /-- **The forging row (height-1).** A forged NON-member leaf `99` (siblings `1,1,1`), so
-`PARENT0 = fHash[99,1,1,1] = 99010101`. `CUR1` is set to the REAL honest intermediate
-`fHash[1,2,3,4] = 1020304` (≠ `PARENT0` — the decoupling the vacuous continuity allowed), siblings
-`5,6,7`, top parent `PARENT1 = 1020304050607` = the REAL root; blinding `8`, blinded `fHash[99,8]=9908`. -/
+`PARENT0 = fHash[99,1,1,1] = 99111`. `CUR1` is set to the REAL honest intermediate
+`fHash[1,2,3,4] = 1234` (≠ `PARENT0` — the decoupling the vacuous continuity allowed), siblings
+`5,6,7`, top parent `PARENT1 = 1234567` = the REAL root; blinding `8`, blinded `fHash[99,8]=998`. -/
 private def fRow : Assignment := fun c =>
   if c = LEAF then 99 else if c = SIB0A then 1 else if c = SIB0B then 1 else if c = SIB0C then 1
-  else if c = PARENT0 then 99010101
-  else if c = CUR1 then 1020304 else if c = SIB1A then 5 else if c = SIB1B then 6
-  else if c = SIB1C then 7 else if c = PARENT1 then 1020304050607
-  else if c = BLINDING then 8 else if c = BLINDED_LEAF then 9908 else 0
+  else if c = PARENT0 then 99111
+  else if c = CUR1 then 1234 else if c = SIB1A then 5 else if c = SIB1B then 6
+  else if c = SIB1C then 7 else if c = PARENT1 then 1234567
+  else if c = BLINDING then 8 else if c = BLINDED_LEAF then 998 else 0
 
 private def fPub : Assignment := fun k =>
-  if k = BLINDED_LEAF_PI then 9908 else if k = ROOT_PI then 1020304050607 else 0
+  if k = BLINDED_LEAF_PI then 998 else if k = ROOT_PI then 1234567 else 0
 
 private def fTbl : List (List ℤ) :=
   [chipRow fHash [99, 1, 1, 1] (List.replicate 7 0),
-   chipRow fHash [1020304, 5, 6, 7] (List.replicate 7 0),
+   chipRow fHash [1234, 5, 6, 7] (List.replicate 7 0),
    chipRow fHash [99, 8] (List.replicate 7 0)]
 
 /-- The concrete HEIGHT-1 forging trace (`rows = [fRow]`, row 0 is BOTH first and last). -/
@@ -169,12 +182,12 @@ theorem fTf_chipSound : ChipTableSound fHash (fTrace.tf .poseidon2) := by
   simp only [fTrace, fTbl, List.mem_cons, List.not_mem_nil, or_false] at hr
   rcases hr with h | h | h
   · exact ⟨[99, 1, 1, 1], List.replicate 7 0, by decide, by decide, h⟩
-  · exact ⟨[1020304, 5, 6, 7], List.replicate 7 0, by decide, by decide, h⟩
+  · exact ⟨[1234, 5, 6, 7], List.replicate 7 0, by decide, by decide, h⟩
   · exact ⟨[99, 8], List.replicate 7 0, by decide, by decide, h⟩
 
-/-- **The forged leaf is a GENUINE non-member.** `99` authenticates to `99010101050607`, NOT the
-committed root `1020304050607`. -/
-theorem forge_nonmember : ¬ MerkleMembers2 fHash 99 1 1 1 5 6 7 1020304050607 := by
+/-- **The forged leaf is a GENUINE non-member.** `99` authenticates to `99111050607`, NOT the
+committed root `1234567`. -/
+theorem forge_nonmember : ¬ MerkleMembers2 fHash 99 1 1 1 5 6 7 1234567 := by
   unfold MerkleMembers2 merkleFold2 fHash; decide
 
 /-- **`legacyBlindedDesc`** — the descriptor as it stood before the last-row fix (no
@@ -186,7 +199,7 @@ def legacyBlindedDesc : EffectVmDescriptor2 :=
 
 /-- **THE FORGERY HOLE (pre-fix acceptance).** The height-1 forge `Satisfied2`s `legacyBlindedDesc`:
 the three chip lookups land, the continuity `.gate` is VACUOUS on the only/last row (so
-`CUR1 = 1020304 ≠ 99010101 = PARENT0` is never checked), and the two first-row PI pins hold. An
+`CUR1 = 1234 ≠ 99111 = PARENT0` is never checked), and the two first-row PI pins hold. An
 accepted proof of a FALSE membership. -/
 theorem forge_satisfied_legacy :
     Satisfied2 fHash legacyBlindedDesc (fun _ => 0) (fun _ => (0, 0)) [] fTrace := by
@@ -214,7 +227,7 @@ theorem forge_satisfied_legacy :
 
 /-- **`forge_nonmember_rejected` — THE FIX (post-fix rejection).** The SAME forge is NOT `Satisfied2`
 under the fixed `blindedMembershipDesc`: on the height-1 trace row 0 is the last row, so
-`continuityLastFix` fires and forces `CUR1 = PARENT0`, i.e. `1020304 = 99010101` — false. -/
+`continuityLastFix` fires and forces `CUR1 = PARENT0`, i.e. `1234 = 99111` — false. -/
 theorem forge_nonmember_rejected :
     ¬ Satisfied2 fHash blindedMembershipDesc (fun _ => 0) (fun _ => (0, 0)) [] fTrace := by
   intro h
@@ -227,30 +240,30 @@ theorem forge_nonmember_rejected :
 /-- **THE MEMBERSHIP REGRESSION, packaged.** Accepted pre-fix, genuine non-member, rejected post-fix. -/
 theorem forge_was_accepted_now_rejected :
     Satisfied2 fHash legacyBlindedDesc (fun _ => 0) (fun _ => (0, 0)) [] fTrace
-      ∧ ¬ MerkleMembers2 fHash 99 1 1 1 5 6 7 1020304050607
+      ∧ ¬ MerkleMembers2 fHash 99 1 1 1 5 6 7 1234567
       ∧ ¬ Satisfied2 fHash blindedMembershipDesc (fun _ => 0) (fun _ => (0, 0)) [] fTrace :=
   ⟨forge_satisfied_legacy, forge_nonmember, forge_nonmember_rejected⟩
 
 /-! ## §3b — THE BLINDING FORGE: a spoofed `blinded_leaf` is UNSAT (the arity-2 tooth bites). -/
 
 /-- The blinding-forge row: honest member `1` under the real root, but the published `BLINDED_LEAF` is
-the SPOOFED value `777` — NOT `fHash[1,8] = 108`. The chained input is honest (`CUR1 = PARENT0`), so
+the SPOOFED value `777` — NOT `fHash[1,8] = 18`. The chained input is honest (`CUR1 = PARENT0`), so
 only the blinding tooth can reject it. -/
 private def gRow : Assignment := fun c =>
   if c = LEAF then 1 else if c = SIB0A then 2 else if c = SIB0B then 3 else if c = SIB0C then 4
-  else if c = PARENT0 then 1020304
-  else if c = CUR1 then 1020304 else if c = SIB1A then 5 else if c = SIB1B then 6
-  else if c = SIB1C then 7 else if c = PARENT1 then 1020304050607
+  else if c = PARENT0 then 1234
+  else if c = CUR1 then 1234 else if c = SIB1A then 5 else if c = SIB1B then 6
+  else if c = SIB1C then 7 else if c = PARENT1 then 1234567
   else if c = BLINDING then 8 else if c = BLINDED_LEAF then 777 else 0
 
 private def gPub : Assignment := fun k =>
-  if k = BLINDED_LEAF_PI then 777 else if k = ROOT_PI then 1020304050607 else 0
+  if k = BLINDED_LEAF_PI then 777 else if k = ROOT_PI then 1234567 else 0
 
-/-- The chip table is the GENUINE one (containing the real `fHash[1,8]=108` blinding row) — so it is
+/-- The chip table is the GENUINE one (containing the real `fHash[1,8]=18` blinding row) — so it is
 SOUND. The spoof lies in the trace's `BLINDED_LEAF` column, not the table. -/
 private def gTbl : List (List ℤ) :=
   [chipRow fHash [1, 2, 3, 4] (List.replicate 7 0),
-   chipRow fHash [1020304, 5, 6, 7] (List.replicate 7 0),
+   chipRow fHash [1234, 5, 6, 7] (List.replicate 7 0),
    chipRow fHash [1, 8] (List.replicate 7 0)]
 
 private def gTrace : VmTrace :=
@@ -263,13 +276,13 @@ theorem gTf_chipSound : ChipTableSound fHash (gTrace.tf .poseidon2) := by
   simp only [gTrace, gTbl, List.mem_cons, List.not_mem_nil, or_false] at hr
   rcases hr with h | h | h
   · exact ⟨[1, 2, 3, 4], List.replicate 7 0, by decide, by decide, h⟩
-  · exact ⟨[1020304, 5, 6, 7], List.replicate 7 0, by decide, by decide, h⟩
+  · exact ⟨[1234, 5, 6, 7], List.replicate 7 0, by decide, by decide, h⟩
   · exact ⟨[1, 8], List.replicate 7 0, by decide, by decide, h⟩
 
 /-- **`forge_blinded_leaf_rejected` — the arity-2 blinding tooth BITES.** Against the SOUND chip table,
 a trace whose published `blinded_leaf` (`777`) is not `hash_2_to_1(leaf_hash, blinding) = fHash[1,8] =
-108` cannot be `Satisfied2`: the blinding chip lookup (`lookupChip2`) forces `BLINDED_LEAF` to the
-genuine Poseidon2 image, i.e. `777 = 108` — false. The unlinkable commitment cannot be spoofed. -/
+18` cannot be `Satisfied2`: the blinding chip lookup (`lookupChip2`) forces `BLINDED_LEAF` to the
+genuine Poseidon2 image, i.e. `777 = 18` — false. The unlinkable commitment cannot be spoofed. -/
 theorem forge_blinded_leaf_rejected :
     ¬ Satisfied2 fHash blindedMembershipDesc (fun _ => 0) (fun _ => (0, 0)) [] gTrace := by
   intro h
@@ -282,21 +295,21 @@ theorem forge_blinded_leaf_rejected :
 
 /-! ## §4 — non-vacuity TRUE half: the fix ACCEPTS a genuine height-1 honest show. -/
 
-/-- The honest height-1 show (blinding `8`): member `1` under root `1020304050607`, honest chaining
-`CUR1 = PARENT0 = 1020304`, blinded leaf `fHash[1,8] = 108`. -/
+/-- The honest height-1 show (blinding `8`): member `1` under root `1234567`, honest chaining
+`CUR1 = PARENT0 = 1234`, blinded leaf `fHash[1,8] = 18`. -/
 private def hRow : Assignment := fun c =>
   if c = LEAF then 1 else if c = SIB0A then 2 else if c = SIB0B then 3 else if c = SIB0C then 4
-  else if c = PARENT0 then 1020304
-  else if c = CUR1 then 1020304 else if c = SIB1A then 5 else if c = SIB1B then 6
-  else if c = SIB1C then 7 else if c = PARENT1 then 1020304050607
-  else if c = BLINDING then 8 else if c = BLINDED_LEAF then 108 else 0
+  else if c = PARENT0 then 1234
+  else if c = CUR1 then 1234 else if c = SIB1A then 5 else if c = SIB1B then 6
+  else if c = SIB1C then 7 else if c = PARENT1 then 1234567
+  else if c = BLINDING then 8 else if c = BLINDED_LEAF then 18 else 0
 
 private def hPub : Assignment := fun k =>
-  if k = BLINDED_LEAF_PI then 108 else if k = ROOT_PI then 1020304050607 else 0
+  if k = BLINDED_LEAF_PI then 18 else if k = ROOT_PI then 1234567 else 0
 
 private def hTbl : List (List ℤ) :=
   [chipRow fHash [1, 2, 3, 4] (List.replicate 7 0),
-   chipRow fHash [1020304, 5, 6, 7] (List.replicate 7 0),
+   chipRow fHash [1234, 5, 6, 7] (List.replicate 7 0),
    chipRow fHash [1, 8] (List.replicate 7 0)]
 
 private def hTrace : VmTrace :=
@@ -308,13 +321,13 @@ theorem hTf_chipSound : ChipTableSound fHash (hTrace.tf .poseidon2) := by
   simp only [hTrace, hTbl, List.mem_cons, List.not_mem_nil, or_false] at hr
   rcases hr with h | h | h
   · exact ⟨[1, 2, 3, 4], List.replicate 7 0, by decide, by decide, h⟩
-  · exact ⟨[1020304, 5, 6, 7], List.replicate 7 0, by decide, by decide, h⟩
+  · exact ⟨[1234, 5, 6, 7], List.replicate 7 0, by decide, by decide, h⟩
   · exact ⟨[1, 8], List.replicate 7 0, by decide, by decide, h⟩
 
 /-- **`honest_satisfied2` — the fix does NOT over-constrain.** The honest height-1 show `Satisfied2`s
 the FIXED descriptor: all seven constraints hold (the three chip lookups land, the transition gate is
 vacuous on the last row, the two PI pins close, and `continuityLastFix` closes because
-`CUR1 = PARENT0 = 1020304`). -/
+`CUR1 = PARENT0 = 1234`). -/
 theorem honest_satisfied2 :
     Satisfied2 fHash blindedMembershipDesc (fun _ => 0) (fun _ => (0, 0)) [] hTrace := by
   have hmemlog : memLog blindedMembershipDesc hTrace = [] := rfl
@@ -340,7 +353,14 @@ theorem honest_satisfied2 :
   · rw [hmemlog]; rfl
   · rw [hmaplog]; rfl
 
-/-- **The strengthened bridge FIRES on a genuine height-1 witness (the TRUE half).** All three
+/-- **The canonicality envelope is genuinely INHABITED for the honest show** — the tie cells
+(`CUR1`/`PARENT0 = 1234`), the root cell/PI (`1234567`), and the blinded-leaf cell/PI (`18`) are
+all small canonical field values (the base-10 digit hash is genuinely field-valued here). -/
+theorem hCanon : BlindedCanon hTrace :=
+  ⟨⟨by decide, by decide⟩, ⟨by decide, by decide⟩, ⟨by decide, by decide⟩,
+   ⟨by decide, by decide⟩, ⟨by decide, by decide⟩, ⟨by decide, by decide⟩⟩
+
+/-- **The strengthened bridge FIRES on a genuine height-1 witness (the TRUE half).** All
 hypotheses hold; blinded membership is DERIVED — the Rung-1 bridge could not even state this. -/
 theorem honest_height1_fires :
     BlindedMembers fHash
@@ -349,26 +369,26 @@ theorem honest_height1_fires :
       ((envAt hTrace 0).loc SIB0A) ((envAt hTrace 0).loc SIB0B) ((envAt hTrace 0).loc SIB0C)
       ((envAt hTrace 0).loc SIB1A) ((envAt hTrace 0).loc SIB1B) ((envAt hTrace 0).loc SIB1C)
       (hTrace.pub ROOT_PI) :=
-  blindedMembership_no_forgery (by decide) honest_satisfied2 hTf_chipSound
+  blindedMembership_no_forgery (by decide) honest_satisfied2 hTf_chipSound hCanon
 
 /-! ## §5 — THE UNLINKABILITY POLE: two shows of ONE credential publish DIFFERENT blinded leaves,
 both accepted (the in-circuit twin of `credentials/tests/anonymity_soundness.rs`). -/
 
 /-- Show #2 of the SAME credential — identical member `1`, identical root, but a fresh blinding factor
-`9` (≠ show #1's `8`), so the published blinded leaf is `fHash[1,9] = 109` (≠ `108`). -/
+`9` (≠ show #1's `8`), so the published blinded leaf is `fHash[1,9] = 19` (≠ `18`). -/
 private def hRow2 : Assignment := fun c =>
   if c = LEAF then 1 else if c = SIB0A then 2 else if c = SIB0B then 3 else if c = SIB0C then 4
-  else if c = PARENT0 then 1020304
-  else if c = CUR1 then 1020304 else if c = SIB1A then 5 else if c = SIB1B then 6
-  else if c = SIB1C then 7 else if c = PARENT1 then 1020304050607
-  else if c = BLINDING then 9 else if c = BLINDED_LEAF then 109 else 0
+  else if c = PARENT0 then 1234
+  else if c = CUR1 then 1234 else if c = SIB1A then 5 else if c = SIB1B then 6
+  else if c = SIB1C then 7 else if c = PARENT1 then 1234567
+  else if c = BLINDING then 9 else if c = BLINDED_LEAF then 19 else 0
 
 private def hPub2 : Assignment := fun k =>
-  if k = BLINDED_LEAF_PI then 109 else if k = ROOT_PI then 1020304050607 else 0
+  if k = BLINDED_LEAF_PI then 19 else if k = ROOT_PI then 1234567 else 0
 
 private def hTbl2 : List (List ℤ) :=
   [chipRow fHash [1, 2, 3, 4] (List.replicate 7 0),
-   chipRow fHash [1020304, 5, 6, 7] (List.replicate 7 0),
+   chipRow fHash [1234, 5, 6, 7] (List.replicate 7 0),
    chipRow fHash [1, 9] (List.replicate 7 0)]
 
 private def hTrace2 : VmTrace :=
@@ -403,7 +423,7 @@ theorem honest_satisfied2_show2 :
 
 /-- **`honest_two_shows_unlinkable` — THE UNLINKABILITY WITNESS (in-circuit).** ONE credential — the
 SAME hidden `leaf_hash` (`= 1` in both), the SAME public `root` — shown twice with two DIFFERENT
-hidden blinding factors publishes two DIFFERENT `blinded_leaf` (`108 ≠ 109`), and BOTH shows are
+hidden blinding factors publishes two DIFFERENT `blinded_leaf` (`18 ≠ 19`), and BOTH shows are
 `Satisfied2`. This mirrors `credentials/tests/anonymity_soundness.rs`: the fresh hidden factor makes
 the two presentations unlinkable while both remain valid proofs of the same membership. -/
 theorem honest_two_shows_unlinkable :
@@ -425,10 +445,10 @@ theorem honest_two_shows_unlinkable :
 #guard legacyBlindedDesc.constraints.length == 6
 #guard blindedMembershipDesc.constraints.length == 7
 -- the forged leaf's TRUE root differs from the committed root (the membership forge is real):
-#guard merkleFold2 fHash 99 1 1 1 5 6 7 != 1020304050607
+#guard merkleFold2 fHash 99 1 1 1 5 6 7 != 1234567
 -- the honest leaf's TRUE root IS the committed root:
-#guard merkleFold2 fHash 1 2 3 4 5 6 7 == 1020304050607
--- two shows genuinely differ (108 ≠ 109) though they blind the SAME leaf `1`:
+#guard merkleFold2 fHash 1 2 3 4 5 6 7 == 1234567
+-- two shows genuinely differ (18 ≠ 19) though they blind the SAME leaf `1`:
 #guard fHash [1, 8] != fHash [1, 9]
 
 #assert_axioms lastBoundaryZero
@@ -462,7 +482,7 @@ open Dregg2.Circuit.Emit.BlindedMembershipEmit
   (blindedMembership4aryDesc gConstraints gCUR gSIB0 gSIB1 gSIB2 gB0 gB1 gC0 gC1 gC2 gC3 gPAR
    gBLINDING gBLINDED_LEAF gPI_BLINDED_LEAF gPI_ROOT)
 open Dregg2.Circuit.Emit.BlindedMembershipRefine
-  (gFoldPos gStepsOf Blinded4aryMembers blinded4ary_sat_refines)
+  (gFoldPos gStepsOf Blinded4aryMembers blinded4ary_sat_refines G4Canon GRowCanon)
 
 /-! ### The no-forgery teeth (UNIVERSAL over depth — contrapositives of the bridge). -/
 
@@ -472,9 +492,10 @@ positionally fold up the trace's per-row steps to the CLAIMED root PI, the trace
 theorem gForge_root_rejected {hash : List ℤ → ℤ} {t : VmTrace} {minit : ℤ → ℤ}
     {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {depth : Nat}
     (hlen : 0 < t.rows.length) (hChip : ChipTableSound hash (t.tf .poseidon2))
+    (hcanon : G4Canon t)
     (hforge : gFoldPos hash ((envAt t 0).loc gCUR) (gStepsOf t t.rows.length) ≠ t.pub gPI_ROOT) :
     ¬ Satisfied2 hash (blindedMembership4aryDesc depth) minit mfin maddrs t :=
-  fun hsat => hforge (blinded4ary_sat_refines hlen hsat hChip).2
+  fun hsat => hforge (blinded4ary_sat_refines hlen hsat hChip hcanon).2
 
 /-- **`gForge_blinded_leaf_rejected` — THE BLINDING FORGE TOOTH (any depth).** If the published
 `blinded_leaf` PI is NOT `hash_2_to_1` of the hidden row-0 `(leaf, blinding)`, the trace cannot be
@@ -482,62 +503,63 @@ theorem gForge_root_rejected {hash : List ℤ → ℤ} {t : VmTrace} {minit : �
 theorem gForge_blinded_leaf_rejected {hash : List ℤ → ℤ} {t : VmTrace} {minit : ℤ → ℤ}
     {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {depth : Nat}
     (hlen : 0 < t.rows.length) (hChip : ChipTableSound hash (t.tf .poseidon2))
+    (hcanon : G4Canon t)
     (hforge : t.pub gPI_BLINDED_LEAF ≠ hash [(envAt t 0).loc gCUR, (envAt t 0).loc gBLINDING]) :
     ¬ Satisfied2 hash (blindedMembership4aryDesc depth) minit mfin maddrs t :=
-  fun hsat => hforge (blinded4ary_sat_refines hlen hsat hChip).1
+  fun hsat => hforge (blinded4ary_sat_refines hlen hsat hChip hcanon).1
 
 /-! ### Concrete depth-2 (2-row) leftmost shows — the accept + unlinkability + forge poles.
 
 `gHashR` is the order-sensitive digit hash. Leaf `1` folds (leftmost at both levels) via siblings
-`2,3,4` to `1020304`, then `5,6,7` to root `1020304050607`. -/
+`2,3,4` to `1234`, then `5,6,7` to root `1234567`. -/
 
-private def gHashR : List ℤ → ℤ := fun xs => xs.foldl (fun acc x => acc * 100 + x) 0
+private def gHashR : List ℤ → ℤ := fun xs => xs.foldl (fun acc x => acc * 10 + x) 0
 
-/-- Show A, row 0 (blinding `8`, blinded leaf `gHashR [1,8] = 108`). -/
+/-- Show A, row 0 (blinding `8`, blinded leaf `gHashR [1,8] = 18`). -/
 private def aRow0 : Assignment := fun c =>
   if c = gCUR then 1 else if c = gSIB0 then 2 else if c = gSIB1 then 3 else if c = gSIB2 then 4
   else if c = gB0 then 0 else if c = gB1 then 0
   else if c = gC0 then 1 else if c = gC1 then 2 else if c = gC2 then 3 else if c = gC3 then 4
-  else if c = gPAR then 1020304
-  else if c = gBLINDING then 8 else if c = gBLINDED_LEAF then 108 else 0
+  else if c = gPAR then 1234
+  else if c = gBLINDING then 8 else if c = gBLINDED_LEAF then 18 else 0
 private def aRow1 : Assignment := fun c =>
-  if c = gCUR then 1020304 else if c = gSIB0 then 5 else if c = gSIB1 then 6 else if c = gSIB2 then 7
+  if c = gCUR then 1234 else if c = gSIB0 then 5 else if c = gSIB1 then 6 else if c = gSIB2 then 7
   else if c = gB0 then 0 else if c = gB1 then 0
-  else if c = gC0 then 1020304 else if c = gC1 then 5 else if c = gC2 then 6 else if c = gC3 then 7
-  else if c = gPAR then 1020304050607
-  else if c = gBLINDING then 8 else if c = gBLINDED_LEAF then 102030408 else 0
+  else if c = gC0 then 1234 else if c = gC1 then 5 else if c = gC2 then 6 else if c = gC3 then 7
+  else if c = gPAR then 1234567
+  else if c = gBLINDING then 8 else if c = gBLINDED_LEAF then 12348 else 0
 private def aPub : Assignment := fun k =>
-  if k = gPI_BLINDED_LEAF then 108 else if k = gPI_ROOT then 1020304050607 else 0
+  if k = gPI_BLINDED_LEAF then 18 else if k = gPI_ROOT then 1234567 else 0
 private def aTbl : List (List ℤ) :=
   [chipRow gHashR [1, 2, 3, 4] (List.replicate 7 0),
-   chipRow gHashR [1020304, 5, 6, 7] (List.replicate 7 0),
+   chipRow gHashR [1234, 5, 6, 7] (List.replicate 7 0),
    chipRow gHashR [1, 8] (List.replicate 7 0),
-   chipRow gHashR [1020304, 8] (List.replicate 7 0)]
+   chipRow gHashR [1234, 8] (List.replicate 7 0)]
 private def aTrace : VmTrace :=
   { rows := [aRow0, aRow1], pub := aPub
     tf := fun tid => match tid with | .poseidon2 => aTbl | _ => [] }
 
 /-- Show B — the SAME member `1` under the SAME root, but a fresh blinding factor `9` (blinded leaf
-`gHashR [1,9] = 109 ≠ 108`). -/
+`gHashR [1,9] = 19 ≠ 18`). -/
 private def bRow0 : Assignment := fun c =>
   if c = gCUR then 1 else if c = gSIB0 then 2 else if c = gSIB1 then 3 else if c = gSIB2 then 4
   else if c = gB0 then 0 else if c = gB1 then 0
   else if c = gC0 then 1 else if c = gC1 then 2 else if c = gC2 then 3 else if c = gC3 then 4
-  else if c = gPAR then 1020304
-  else if c = gBLINDING then 9 else if c = gBLINDED_LEAF then 109 else 0
+  else if c = gPAR then 1234
+  else if c = gBLINDING then 9 else if c = gBLINDED_LEAF then 19 else 0
 private def bRow1 : Assignment := fun c =>
-  if c = gCUR then 1020304 else if c = gSIB0 then 5 else if c = gSIB1 then 6 else if c = gSIB2 then 7
+  if c = gCUR then 1234 else if c = gSIB0 then 5 else if c = gSIB1 then 6 else if c = gSIB2 then 7
   else if c = gB0 then 0 else if c = gB1 then 0
-  else if c = gC0 then 1020304 else if c = gC1 then 5 else if c = gC2 then 6 else if c = gC3 then 7
-  else if c = gPAR then 1020304050607
-  else if c = gBLINDING then 9 else if c = gBLINDED_LEAF then 102030409 else 0
+  else if c = gC0 then 1234 else if c = gC1 then 5 else if c = gC2 then 6 else if c = gC3 then 7
+  else if c = gPAR then 1234567
+  else if c = gBLINDING then 9 else if c = gBLINDED_LEAF then 12349 else 0
 private def bPub : Assignment := fun k =>
-  if k = gPI_BLINDED_LEAF then 109 else if k = gPI_ROOT then 1020304050607 else 0
+  if k = gPI_BLINDED_LEAF then 19 else if k = gPI_ROOT then 1234567 else 0
 private def bTbl : List (List ℤ) :=
   [chipRow gHashR [1, 2, 3, 4] (List.replicate 7 0),
-   chipRow gHashR [1020304, 5, 6, 7] (List.replicate 7 0),
+   chipRow gHashR [1234, 5, 6, 7] (List.replicate 7 0),
    chipRow gHashR [1, 9] (List.replicate 7 0),
-   chipRow gHashR [1020304, 9] (List.replicate 7 0)]
+   chipRow gHashR [1234, 9] (List.replicate 7 0)]
 private def bTrace : VmTrace :=
   { rows := [bRow0, bRow1], pub := bPub
     tf := fun tid => match tid with | .poseidon2 => bTbl | _ => [] }
@@ -547,18 +569,37 @@ theorem aChipSound : ChipTableSound gHashR (aTrace.tf .poseidon2) := by
   simp only [aTrace, aTbl, List.mem_cons, List.not_mem_nil, or_false] at hr
   rcases hr with h | h | h | h
   · exact ⟨[1, 2, 3, 4], List.replicate 7 0, by decide, by decide, h⟩
-  · exact ⟨[1020304, 5, 6, 7], List.replicate 7 0, by decide, by decide, h⟩
+  · exact ⟨[1234, 5, 6, 7], List.replicate 7 0, by decide, by decide, h⟩
   · exact ⟨[1, 8], List.replicate 7 0, by decide, by decide, h⟩
-  · exact ⟨[1020304, 8], List.replicate 7 0, by decide, by decide, h⟩
+  · exact ⟨[1234, 8], List.replicate 7 0, by decide, by decide, h⟩
 
 theorem bChipSound : ChipTableSound gHashR (bTrace.tf .poseidon2) := by
   intro r hr
   simp only [bTrace, bTbl, List.mem_cons, List.not_mem_nil, or_false] at hr
   rcases hr with h | h | h | h
   · exact ⟨[1, 2, 3, 4], List.replicate 7 0, by decide, by decide, h⟩
-  · exact ⟨[1020304, 5, 6, 7], List.replicate 7 0, by decide, by decide, h⟩
+  · exact ⟨[1234, 5, 6, 7], List.replicate 7 0, by decide, by decide, h⟩
   · exact ⟨[1, 9], List.replicate 7 0, by decide, by decide, h⟩
-  · exact ⟨[1020304, 9], List.replicate 7 0, by decide, by decide, h⟩
+  · exact ⟨[1234, 9], List.replicate 7 0, by decide, by decide, h⟩
+
+/-- Show A inhabits the depth-general canonicality envelope — every fold cell and PI is a small
+canonical field value (the base-10 digit hash is genuinely field-valued at this depth). -/
+theorem aCanon : G4Canon aTrace := by
+  refine ⟨?_, by decide, by decide, by decide⟩
+  intro j hj
+  have h2 : j < 2 := hj
+  interval_cases j <;>
+    exact ⟨by decide, by decide, by decide, by decide, by decide, by decide, by decide,
+           by decide, by decide, by decide, by decide⟩
+
+/-- Show B inhabits the depth-general canonicality envelope. -/
+theorem bCanon : G4Canon bTrace := by
+  refine ⟨?_, by decide, by decide, by decide⟩
+  intro j hj
+  have h2 : j < 2 := hj
+  interval_cases j <;>
+    exact ⟨by decide, by decide, by decide, by decide, by decide, by decide, by decide,
+           by decide, by decide, by decide, by decide⟩
 
 /-- A concrete `Satisfied2` finisher for the depth-2 traces (mirrors the Refine `gConcrete_sat`). -/
 private theorem sat_of_trace (tr : VmTrace) (h2 : tr.rows.length = 2)
@@ -609,11 +650,11 @@ depth-2 honest show, and the bridge FIRES on it, deriving the blinded-membership
 theorem gHonest_accepts :
     Blinded4aryMembers gHashR (aTrace.pub gPI_BLINDED_LEAF) ((envAt aTrace 0).loc gCUR)
       ((envAt aTrace 0).loc gBLINDING) (aTrace.pub gPI_ROOT) (gStepsOf aTrace aTrace.rows.length) :=
-  blinded4ary_sat_refines (by decide) aSat aChipSound
+  blinded4ary_sat_refines (by decide) aSat aChipSound aCanon
 
 /-- **`gHonest_two_shows_unlinkable` — THE UNLINKABILITY POLE (depth-general).** ONE credential (the
 SAME hidden leaf `1`, the SAME public root) shown twice with two DIFFERENT hidden blinding factors
-publishes two DIFFERENT `blinded_leaf` (`108 ≠ 109`), and BOTH shows are `Satisfied2`. The fresh
+publishes two DIFFERENT `blinded_leaf` (`18 ≠ 19`), and BOTH shows are `Satisfied2`. The fresh
 hidden factor makes the two presentations unlinkable while both prove the same membership. -/
 theorem gHonest_two_shows_unlinkable :
     Satisfied2 gHashR (blindedMembership4aryDesc 2) (fun _ => 0) (fun _ => (0, 0)) [] aTrace
@@ -630,42 +671,56 @@ theorem gHonest_two_shows_unlinkable :
 
 /-- A forged claimed root: the honest rows of show A, but the root PI is `999` (≠ the real root). -/
 private def forgeRootPub : Assignment := fun k =>
-  if k = gPI_BLINDED_LEAF then 108 else if k = gPI_ROOT then 999 else 0
+  if k = gPI_BLINDED_LEAF then 18 else if k = gPI_ROOT then 999 else 0
 private def aForgeRootTrace : VmTrace := { aTrace with pub := forgeRootPub }
 
 /-- **`gForge_root_concrete` (non-vacuous membership forge).** The honest rows with a forged root PI
-are NOT `Satisfied2`: the leaf `1` folds to `1020304050607 ≠ 999`. -/
+are NOT `Satisfied2`: the leaf `1` folds to `1234567 ≠ 999`. -/
 theorem gForge_root_concrete :
     ¬ Satisfied2 gHashR (blindedMembership4aryDesc 2) (fun _ => 0) (fun _ => (0, 0)) []
         aForgeRootTrace := by
-  refine gForge_root_rejected (by decide) ?_ (by decide)
+  refine gForge_root_rejected (by decide) ?_ ?_ (by decide)
   -- the chip table is unchanged (sound); only the pub differs.
-  intro r hr
-  simp only [aForgeRootTrace, aTrace, aTbl, List.mem_cons, List.not_mem_nil, or_false] at hr
-  rcases hr with h | h | h | h
-  · exact ⟨[1, 2, 3, 4], List.replicate 7 0, by decide, by decide, h⟩
-  · exact ⟨[1020304, 5, 6, 7], List.replicate 7 0, by decide, by decide, h⟩
-  · exact ⟨[1, 8], List.replicate 7 0, by decide, by decide, h⟩
-  · exact ⟨[1020304, 8], List.replicate 7 0, by decide, by decide, h⟩
+  · intro r hr
+    simp only [aForgeRootTrace, aTrace, aTbl, List.mem_cons, List.not_mem_nil, or_false] at hr
+    rcases hr with h | h | h | h
+    · exact ⟨[1, 2, 3, 4], List.replicate 7 0, by decide, by decide, h⟩
+    · exact ⟨[1234, 5, 6, 7], List.replicate 7 0, by decide, by decide, h⟩
+    · exact ⟨[1, 8], List.replicate 7 0, by decide, by decide, h⟩
+    · exact ⟨[1234, 8], List.replicate 7 0, by decide, by decide, h⟩
+  -- the rows are show A's (canonical); the forged root PI `999` is still a canonical field value.
+  · refine ⟨?_, by decide, by decide, by decide⟩
+    intro j hj
+    have h2 : j < 2 := hj
+    interval_cases j <;>
+      exact ⟨by decide, by decide, by decide, by decide, by decide, by decide, by decide,
+             by decide, by decide, by decide, by decide⟩
 
-/-- A forged blinded leaf: the honest rows of show A, but the blinded-leaf PI is `999` (≠ `108`). -/
+/-- A forged blinded leaf: the honest rows of show A, but the blinded-leaf PI is `999` (≠ `18`). -/
 private def forgeBlindPub : Assignment := fun k =>
-  if k = gPI_BLINDED_LEAF then 999 else if k = gPI_ROOT then 1020304050607 else 0
+  if k = gPI_BLINDED_LEAF then 999 else if k = gPI_ROOT then 1234567 else 0
 private def aForgeBlindTrace : VmTrace := { aTrace with pub := forgeBlindPub }
 
 /-- **`gForge_blinded_concrete` (non-vacuous blinding forge).** The honest rows with a spoofed
-`blinded_leaf` PI are NOT `Satisfied2`: `999 ≠ hash_2_to_1(1, 8) = 108`. -/
+`blinded_leaf` PI are NOT `Satisfied2`: `999 ≠ hash_2_to_1(1, 8) = 18`. -/
 theorem gForge_blinded_concrete :
     ¬ Satisfied2 gHashR (blindedMembership4aryDesc 2) (fun _ => 0) (fun _ => (0, 0)) []
         aForgeBlindTrace := by
-  refine gForge_blinded_leaf_rejected (by decide) ?_ (by decide)
-  intro r hr
-  simp only [aForgeBlindTrace, aTrace, aTbl, List.mem_cons, List.not_mem_nil, or_false] at hr
-  rcases hr with h | h | h | h
-  · exact ⟨[1, 2, 3, 4], List.replicate 7 0, by decide, by decide, h⟩
-  · exact ⟨[1020304, 5, 6, 7], List.replicate 7 0, by decide, by decide, h⟩
-  · exact ⟨[1, 8], List.replicate 7 0, by decide, by decide, h⟩
-  · exact ⟨[1020304, 8], List.replicate 7 0, by decide, by decide, h⟩
+  refine gForge_blinded_leaf_rejected (by decide) ?_ ?_ (by decide)
+  · intro r hr
+    simp only [aForgeBlindTrace, aTrace, aTbl, List.mem_cons, List.not_mem_nil, or_false] at hr
+    rcases hr with h | h | h | h
+    · exact ⟨[1, 2, 3, 4], List.replicate 7 0, by decide, by decide, h⟩
+    · exact ⟨[1234, 5, 6, 7], List.replicate 7 0, by decide, by decide, h⟩
+    · exact ⟨[1, 8], List.replicate 7 0, by decide, by decide, h⟩
+    · exact ⟨[1234, 8], List.replicate 7 0, by decide, by decide, h⟩
+  -- the rows are show A's (canonical); the spoofed blinded-leaf PI `999` is still canonical.
+  · refine ⟨?_, by decide, by decide, by decide⟩
+    intro j hj
+    have h2 : j < 2 := hj
+    interval_cases j <;>
+      exact ⟨by decide, by decide, by decide, by decide, by decide, by decide, by decide,
+             by decide, by decide, by decide, by decide⟩
 
 #assert_axioms gForge_root_rejected
 #assert_axioms gForge_blinded_leaf_rejected
