@@ -698,3 +698,10 @@ authoring reference · overworld (verified-completion-gated) · README consolida
 (interop-tested — RANDOMNESS MOAT FULLY CLOSED, MLWE-assumed pseudorandomness the only floor) · collective
 co-authoring. Suites green: attested-dm 145 + dregg-dice 41 + pqvrf 11 + collective-choice 6 + shared-draft 5;
 dungeon-service builds; 12 demo drivers pass. Honest gaps tracked in HORIZONLOG.
+
+## ✅ CLEAN-CHECKPOINT AUDIT (2026-07-11 ~04:50): ALL GREEN at HEAD
+208 tests green — attested-dm 145 + dregg-dice 41 + pqvrf 11 + collective-choice 6 + shared-draft 5; dungeon-service
+builds; 12 demo drivers pass. Docs (README, TRUST-LEVELS, AUTHORING-DUNGEONS) + HORIZONLOG follow-ups current.
+The platform is a complete, coherent, honest verifiable collective arcade. SUMMIT reached for the night — per deep-
+night guidance, holding at a clean audited checkpoint rather than forcing risky 4am features. Loop idles at 30min;
+resumes for a genuine next wave (fresh direction / saner hour / a ready low-risk HORIZONLOG closure).
