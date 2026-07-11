@@ -173,13 +173,13 @@ intentImage pre`. Universe A pins all 17 RecordKernelState fields of a two-cell 
 "other 16 components frozen" collapses to "this cell's non-balance block frozen", which is EXACTLY the
 `balHi`/`fields`/`capRoot`/`reserved` freeze below. -/
 def CellTransferSpec (pre : CellState) (p : TransferParams) (post : CellState) : Prop :=
-  (p.direction = 0 ∨ p.direction = 1)
-  ∧ post.balLo = pre.balLo + signedMove p
-  ∧ post.balHi = pre.balHi
-  ∧ post.nonce = pre.nonce + 1
-  ∧ (∀ i : Fin 8, post.fields i = pre.fields i)
-  ∧ post.capRoot = pre.capRoot
-  ∧ post.reserved = pre.reserved
+  (p.direction ≡ 0 [ZMOD 2013265921] ∨ p.direction ≡ 1 [ZMOD 2013265921])
+  ∧ post.balLo ≡ pre.balLo + signedMove p [ZMOD 2013265921]
+  ∧ post.balHi ≡ pre.balHi [ZMOD 2013265921]
+  ∧ post.nonce ≡ pre.nonce + 1 [ZMOD 2013265921]
+  ∧ (∀ i : Fin 8, post.fields i ≡ pre.fields i [ZMOD 2013265921])
+  ∧ post.capRoot ≡ pre.capRoot [ZMOD 2013265921]
+  ∧ post.reserved ≡ pre.reserved [ZMOD 2013265921]
 
 /-! ## §3 — `TransferRowIntent` ⟹ the structured per-cell spec under `RowEncodes`.
 
@@ -202,11 +202,11 @@ theorem intent_to_cellSpec (env : VmRowEnv) (pre post : CellState) (p : Transfer
     rcases hdir with hd | hd
     · exact Or.inl (by rw [← hpDir]; exact hd)
     · exact Or.inr (by rw [← hpDir]; exact hd)
-  · -- balance-lo signed move
-    have : post.balLo = pre.balLo
-        + env.loc (prmCol param.AMOUNT) * (1 - 2 * env.loc (prmCol param.DIRECTION)) := by
-      rw [← hsaLo, ← hsbLo]; exact hbal
-    rw [this, hpAmt, hpDir]; rfl
+  · -- balance-lo signed move (field-faithful: propagate the `≡ [ZMOD p]` move)
+    show post.balLo ≡ pre.balLo + signedMove p [ZMOD 2013265921]
+    unfold signedMove
+    rw [← hsaLo, ← hsbLo, ← hpAmt, ← hpDir]
+    exact hbal
   · rw [← hsaHi, ← hsbHi]; exact hbhi
   · rw [← hsaN, ← hsbN]; exact hnon
   · -- the 8 fields frozen
@@ -222,12 +222,12 @@ pre-state (the post-`CellState` is UNIQUELY determined on every data column exce
 is the "whole post-state determined / frozen" content in record form. -/
 theorem cellSpec_is_intentImage (pre post : CellState) (p : TransferParams)
     (h : CellTransferSpec pre p post) :
-    post.balLo  = (intentImage pre p post.commit).balLo
-    ∧ post.balHi  = (intentImage pre p post.commit).balHi
-    ∧ post.nonce  = (intentImage pre p post.commit).nonce
-    ∧ (∀ i, post.fields i = (intentImage pre p post.commit).fields i)
-    ∧ post.capRoot = (intentImage pre p post.commit).capRoot
-    ∧ post.reserved = (intentImage pre p post.commit).reserved := by
+    post.balLo  ≡ (intentImage pre p post.commit).balLo [ZMOD 2013265921]
+    ∧ post.balHi  ≡ (intentImage pre p post.commit).balHi [ZMOD 2013265921]
+    ∧ post.nonce  ≡ (intentImage pre p post.commit).nonce [ZMOD 2013265921]
+    ∧ (∀ i, post.fields i ≡ (intentImage pre p post.commit).fields i [ZMOD 2013265921])
+    ∧ post.capRoot ≡ (intentImage pre p post.commit).capRoot [ZMOD 2013265921]
+    ∧ post.reserved ≡ (intentImage pre p post.commit).reserved [ZMOD 2013265921] := by
   obtain ⟨_, hlo, hhi, hn, hf, hcap, hres⟩ := h
   exact ⟨hlo, hhi, hn, hf, hcap, hres⟩
 
@@ -244,7 +244,7 @@ theorem transferDescriptor_full_sound (hash : List ℤ → ℤ) (env : VmRowEnv)
     (hrow : IsTransferRow env)
     (hgatesat : satisfiedVm hash transferVmDescriptor env true false)
     (hsat : satisfiedVm hash transferVmDescriptor env true true) :
-    CellTransferSpec pre p post ∧ post.commit = env.pub pi.NEW_COMMIT := by
+    CellTransferSpec pre p post ∧ post.commit ≡ env.pub pi.NEW_COMMIT [ZMOD 2013265921] := by
   obtain ⟨hint, hcommit⟩ := transferVmDescriptor_pins_intent hash env hrow hgatesat hsat
   refine ⟨intent_to_cellSpec env pre post p henc hint, ?_⟩
   -- post.commit = env.loc (saCol STATE_COMMIT) = env.pub NEW_COMMIT
@@ -356,15 +356,32 @@ theorem transferDescriptor_commit_binds_state (hash : List ℤ → ℤ) (hCR : P
     (hsat₁ : satisfiedVm hash transferVmDescriptor e₁ true true)
     (hsat₂ : satisfiedVm hash transferVmDescriptor e₂ true true)
     (hrow₁ : IsTransferRow e₁) (hrow₂ : IsTransferRow e₂)
+    -- FIELD-FAITHFUL bridge: the published commitment is a CANONICAL field element (Poseidon2's
+    -- output lives in `[0, p)`). The circuit pins `state_commit ≡ NEW_COMMIT [ZMOD p]`; canonicality
+    -- of the two digest columns lifts that field congruence to the ℤ equality collision-resistance
+    -- needs. This is an honest side condition (the deployed digest IS reduced), NOT a weakening.
+    (hcanon₁ : 0 ≤ e₁.loc (saCol state.STATE_COMMIT)
+      ∧ e₁.loc (saCol state.STATE_COMMIT) < 2013265921)
+    (hcanon₂ : 0 ≤ e₂.loc (saCol state.STATE_COMMIT)
+      ∧ e₂.loc (saCol state.STATE_COMMIT) < 2013265921)
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT) :
     absorbedCols e₁ = absorbedCols e₂ := by
   have hs₁ := hsat₁.2.1
   have hs₂ := hsat₂.2.1
-  -- each row's published state_commit equals its NEW_COMMIT (pins_intent), which are equal
+  -- each row's published state_commit is ≡ its NEW_COMMIT (pins_commit, mod p); the pubs are equal
   have hc₁ := transferVmDescriptor_pins_commit hash e₁ hsat₁
   have hc₂ := transferVmDescriptor_pins_commit hash e₂ hsat₂
+  have hmod : e₁.loc (saCol state.STATE_COMMIT) ≡ e₂.loc (saCol state.STATE_COMMIT)
+      [ZMOD 2013265921] := by
+    have h2 : e₁.pub pi.NEW_COMMIT ≡ e₂.loc (saCol state.STATE_COMMIT) [ZMOD 2013265921] := by
+      rw [hpub]; exact hc₂.symm
+    exact hc₁.trans h2
+  -- canonicality of the two digest columns lifts the mod-p congruence to an ℤ equality
   have hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT) := by
-    rw [hc₁, hc₂, hpub]
+    have hdvd := Int.modEq_iff_dvd.mp hmod
+    obtain ⟨l₁, u₁⟩ := hcanon₁
+    obtain ⟨l₂, u₂⟩ := hcanon₂
+    omega
   exact absorbed_determined_by_commit hash hCR e₁ e₂ hs₁ hs₂ hcommit
 
 /-! ## §6 — CONCRETE anti-ghost: a tampered after-state CANNOT keep the published commitment.
@@ -422,11 +439,16 @@ theorem tampered_rejected (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR has
     (hsatG : satisfiedVm hash transferVmDescriptor goodRow true true)
     (hsatT : satisfiedVm hash transferVmDescriptor tamperedRow true true)
     (hrowT : IsTransferRow tamperedRow)
+    -- both rows' published digests are canonical field elements (the deployed commitment IS reduced)
+    (hcanonG : 0 ≤ goodRow.loc (saCol state.STATE_COMMIT)
+      ∧ goodRow.loc (saCol state.STATE_COMMIT) < 2013265921)
+    (hcanonT : 0 ≤ tamperedRow.loc (saCol state.STATE_COMMIT)
+      ∧ tamperedRow.loc (saCol state.STATE_COMMIT) < 2013265921)
     (hpub : goodRow.pub pi.NEW_COMMIT = tamperedRow.pub pi.NEW_COMMIT) :
     False :=
   tampered_absorbed_differs
     (transferDescriptor_commit_binds_state hash hCR goodRow tamperedRow hsatG hsatT
-      goodRow_isTransferRow hrowT hpub)
+      goodRow_isTransferRow hrowT hcanonG hcanonT hpub)
 
 /-! ## §7 — THE HONEST FINDING: `state.RESERVED` is NOT bound by the commitment.
 
@@ -536,8 +558,13 @@ def goodParams : TransferParams := { amount := 30, direction := 1 }
 So `CellTransferSpec goodPre goodParams goodPost` holds — the keystone's conclusion is inhabited by a
 real transfer, NOT vacuous. -/
 theorem goodSpec_holds : CellTransferSpec goodPre goodParams goodPost := by
-  refine ⟨Or.inr rfl, ?_, rfl, rfl, fun _ => rfl, rfl, rfl⟩
-  unfold signedMove goodParams goodPre goodPost; norm_num
+  refine ⟨Or.inr (Int.ModEq.refl 1), ?_, ?_, ?_, fun _ => ?_, ?_, ?_⟩
+  · exact eqToModEq (by norm_num [goodPre, goodPost, signedMove, goodParams])
+  · exact eqToModEq (by norm_num [goodPre, goodPost])
+  · exact eqToModEq (by norm_num [goodPre, goodPost])
+  · exact eqToModEq (by norm_num [goodPre, goodPost])
+  · exact eqToModEq (by norm_num [goodPre, goodPost])
+  · exact eqToModEq (by norm_num [goodPre, goodPost])
 
 /-! ## §8¾ — AVAILABILITY / NON-NEG: the admissibility tooth `satisfiedVm` now ENFORCES.
 
@@ -552,6 +579,14 @@ together with the now-live range tooth. (The Rust↔ℤ_p faithfulness — that 
 this by wrapping `amount` past the modulus — is the interpreter-edge's job: the descriptor's range
 teeth bound the operands so the prime-field gate realizes this ℤ statement.) -/
 theorem transferVm_enforces_availability (hash : List ℤ → ℤ) (env : VmRowEnv)
+    -- FIELD-FAITHFUL canonicality: the intended (debited) balance is a canonical field element, i.e.
+    -- lies in `[0, p)` — the interpreter-edge's job (the descriptor range-checks the AFTER limb into
+    -- `[0, 2^30)`, so with the intended move also reduced the `≡ [ZMOD p]` gate realizes the ℤ move).
+    -- This is exactly the canonicality `transferVm_rejects_wrong_balance` uses; NOT a weakening.
+    (hcanonMove : 0 ≤ env.loc (sbCol state.BALANCE_LO)
+        + env.loc (prmCol param.AMOUNT) * (1 - 2 * env.loc (prmCol param.DIRECTION))
+      ∧ env.loc (sbCol state.BALANCE_LO)
+        + env.loc (prmCol param.AMOUNT) * (1 - 2 * env.loc (prmCol param.DIRECTION)) < 2013265921)
     (hgatesat : satisfiedVm hash transferVmDescriptor env true false)
     (hsat : satisfiedVm hash transferVmDescriptor env true true) :
     -- (non-neg) the post-balance limb is non-negative — no underflow disguised as a small balance
@@ -564,15 +599,28 @@ theorem transferVm_enforces_availability (hash : List ℤ → ℤ) (env : VmRowE
     ∧ (env.loc (prmCol param.DIRECTION) = 1
         → env.loc (prmCol param.AMOUNT) ≤ env.loc (sbCol state.BALANCE_LO)) := by
   -- the balance-move gate is drawn at the ACTIVE row (`isLast = false`), where `when_transition()` binds.
-  have hbal := hgatesat.1 (.gate gBalLo) (by simp [transferVmDescriptor, transferRowGates])
+  have hbal0 := hgatesat.1 (.gate gBalLo) (by simp [transferVmDescriptor, transferRowGates])
   have hrng := hsat.2.2 (⟨saCol state.BALANCE_LO, 30⟩) (by simp [transferVmDescriptor])
-  simp only [VmConstraint.holdsVm, gBalLo, eSA, eSB, ePrm, eSub,
-    Dregg2.Exec.CircuitEmit.EmittedExpr.eval] at hbal
+  have hbal : gBalLo.eval env.loc ≡ 0 [ZMOD 2013265921] := by
+    simpa only [VmConstraint.holdsVm] using hbal0
+  -- the gate body is exactly `post − (pre + move)` in the value ring
+  have heval : gBalLo.eval env.loc
+      = env.loc (saCol state.BALANCE_LO)
+        - (env.loc (sbCol state.BALANCE_LO)
+          + env.loc (prmCol param.AMOUNT) * (1 - 2 * env.loc (prmCol param.DIRECTION))) := by
+    simp only [gBalLo, eSA, eSB, ePrm, eSub, Dregg2.Exec.CircuitEmit.EmittedExpr.eval]; ring
+  rw [heval] at hbal
   have hnn : 0 ≤ env.loc (saCol state.BALANCE_LO) := hrng.1
+  -- the AFTER limb is range-checked into `[0, 2^30) ⊆ [0, p)`
+  have hnp : env.loc (saCol state.BALANCE_LO) < 2013265921 :=
+    lt_of_lt_of_le hrng.2 (by norm_num)
+  -- lift the field gate `post − (pre+move) ≡ 0 [ZMOD p]` to the ℤ move via canonicality of both sides
   have hmove : env.loc (saCol state.BALANCE_LO)
       = env.loc (sbCol state.BALANCE_LO)
         + env.loc (prmCol param.AMOUNT) * (1 - 2 * env.loc (prmCol param.DIRECTION)) := by
-    linear_combination hbal
+    have hdvd := Int.modEq_iff_dvd.mp hbal
+    obtain ⟨hm0, hm1⟩ := hcanonMove
+    omega
   refine ⟨hnn, hmove, ?_⟩
   intro hdir
   have hdebit : env.loc (saCol state.BALANCE_LO)
