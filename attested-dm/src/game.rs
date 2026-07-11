@@ -43,10 +43,28 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::{
-    slot_confined, world_binding, DmError, DmMove, DungeonMaster, PromptBinding, Receipt,
-    RecordedDm, WorldCell, WorldEffect,
+use dregg_dice::{
+    CommitReveal, Deterministic, DrawStream, EvidenceKind, MockBeacon, RandomnessEvidence,
+    RandomnessRequest, RandomnessSource, Seed, ServerVrf, VerifyError,
 };
+
+use crate::{
+    slot_confined, world_binding, DmError, DmMove, DungeonMaster, PromptBinding, RandomnessRecord,
+    Receipt, RecordedDm, WorldCell, WorldEffect,
+};
+
+/// Domain separator for [`GameWorld::game_binding`] — the committed game identity a randomness
+/// draw binds. Distinct from every other hashed object so a game binding can never collide with
+/// a state root, an event id, or a receipt id.
+const GAME_BINDING_DOMAIN: &[u8] = b"attested-dm-game-binding-v1";
+
+/// Domain separator for [`action_commitment`] — the finalized typed-action hash a randomness
+/// draw binds into its event id, so a re-aimed action moves the seed and is caught on replay.
+const ACTION_COMMITMENT_DOMAIN: &[u8] = b"attested-dm-action-commitment-v1";
+
+/// The purpose tag ([`dregg_dice::EventId`] `event_kind`) for a loot-chest draw — domain-separating
+/// this subsystem's draws from any other (a combat roll, say) so they can never influence one another.
+pub const LOOT_EVENT_KIND: &str = "loot";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The closed typed action channel — the ONLY moves the AI can propose.
@@ -711,6 +729,72 @@ pub struct ConsumableRule {
     pub narration: String,
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// LOOT — a bounded, PROVABLY-FAIR randomness dimension. A loot chest, on `Use`, drops ONE item
+// from a committed loot table via a single unbiased d-N draw. The outcome is WORLD-RESOLVED from
+// a verified `dregg_dice` draw stream — never the AI's prose — and BOUNDED to the declared table.
+// The draw's `RandomnessRequest` (event id over game/seq/pre-state/action/purpose/draw-count) +
+// its `RandomnessEvidence` ride the receipt chain, and `verify_replay` reconstructs + re-verifies
+// the whole draw. Prose is not power, at the level of chance: a jailbroken "the chest brims with
+// crowns" drops exactly `table[draw]` and not one thing more.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// **A world-declared LOOT CHEST — the provably-fair randomness mechanic.** The chest is a room
+/// fixture addressed by name (a bare [`GameAction::Use`] of [`Self::chest`], like casting a spell or
+/// hailing an NPC — you do not hold it). On its first `Use` in [`Self::room`] the world takes ONE
+/// unbiased draw over `0..table.len()` from the turn's verified [`dregg_dice::DrawStream`] and grants
+/// exactly [`Self::table`]`[draw]` — a [`WorldEffect::Batch`] of the [`WorldEffect::GrantItem`] and the
+/// [`Self::opened_flag`] set to 1, landed as ONE receipted turn carrying the draw's
+/// [`crate::RandomnessRecord`]. The drop VARIES BY SEED but is fully reconstructible: a verifier
+/// re-derives the event id, re-verifies the evidence to recover the seed, rebuilds the stream, and
+/// re-runs this same resolution. A second `Use` of an already-opened chest is a legal no-op
+/// ([`Self::empty_narration`]) that draws nothing — so the randomness is consumed exactly once.
+///
+/// Every table entry MUST be a world-registered item ([`GameWorld::all_items`] unions the table), so
+/// the grant is cap-permitted: a chest can never drop an item the world never named.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LootRule {
+    /// The room the chest stands in.
+    pub room: String,
+    /// The chest's name — the `Use` target that opens it (e.g. `Use("reliquary_chest", None)`).
+    pub chest: String,
+    /// The committed loot table — the closed set of possible drops. The draw picks one index
+    /// `0..table.len()` unbiasedly. Must be non-empty (the DSL/authoring validates this).
+    pub table: Vec<String>,
+    /// The world flag set to 1 once the chest is opened — makes the draw single-use (a second
+    /// `Use` finds it open and draws nothing).
+    pub opened_flag: String,
+    /// The world's account when the chest opens (the drawn item is appended by the resolver).
+    pub narration: String,
+    /// The world's account of `Use`-ing an already-opened chest (a legal no-op, no draw).
+    pub empty_narration: String,
+}
+
+impl LootRule {
+    /// A loot chest builder over a committed table.
+    pub fn new(
+        room: impl Into<String>,
+        chest: impl Into<String>,
+        table: impl IntoIterator<Item = impl Into<String>>,
+    ) -> LootRule {
+        let chest = chest.into();
+        let opened_flag = format!("opened_{chest}");
+        LootRule {
+            room: room.into(),
+            chest,
+            table: table.into_iter().map(Into::into).collect(),
+            opened_flag,
+            narration: "The chest grinds open".into(),
+            empty_narration: "The chest lies open and empty — nothing more to draw.".into(),
+        }
+    }
+
+    /// Whether this chest has already been opened in `world` (its draw already consumed).
+    pub fn opened(&self, world: &WorldCell) -> bool {
+        world.flags.get(&self.opened_flag).copied().unwrap_or(0) >= 1
+    }
+}
+
 /// **The win condition** — reach `room` while HOLDING `item`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Objective {
@@ -762,6 +846,11 @@ pub struct GameWorld {
     /// The timed statuses this world declares — buffs/debuffs carried as flags, decremented per step.
     /// Empty for a dungeon with no status dimension (the original four). See [`StatusRule`].
     pub statuses: Vec<StatusRule>,
+    /// The provably-fair LOOT CHESTS this world declares — fixtures that, on `Use`, drop a
+    /// seed-determined item from a committed table via a verifiable draw. Empty for a dungeon with
+    /// no randomness dimension (the five bundled games), so the mechanic is purely additive. See
+    /// [`LootRule`].
+    pub loot: Vec<LootRule>,
     /// The player's maximum hit points — accumulated [`PLAYER_WOUNDS_FLAG`] `>=` this is death
     /// (wire it as a [`LoseCondition`] for a combat dungeon). Non-combat dungeons ignore it.
     pub player_max_hp: i64,
@@ -818,7 +907,49 @@ impl GameWorld {
                 items.insert(i.clone());
             }
         }
+        // Every loot-table entry a chest can drop is world-registered, so the drop is a
+        // cap-permitted grant — a chest can never mint an item the world never named.
+        for rule in &self.loot {
+            for item in &rule.table {
+                items.insert(item.clone());
+            }
+        }
         items
+    }
+
+    /// The loot chest named `chest` standing in `room`, if the world declares one. A bare `Use` of
+    /// a chest name in its room routes to [`resolve_loot`]; anything else falls through.
+    pub fn loot_rule(&self, room: &str, chest: &str) -> Option<&LootRule> {
+        self.loot
+            .iter()
+            .find(|r| r.room == room && r.chest == chest)
+    }
+
+    /// **The committed game identity** a randomness draw binds (the `game_binding` of a
+    /// [`RandomnessRequest`]). A domain-separated hash over the ruleset that matters for a draw —
+    /// the objective and the loot tables — so a draw's event id is bound to THIS world's rules; a
+    /// verifier recomputes it from the same static map. (Production would fold a VRF key epoch +
+    /// full ruleset hash here; this binds the loot-relevant surface.)
+    pub fn game_binding(&self) -> Vec<u8> {
+        let mut h = blake3::Hasher::new();
+        h.update(GAME_BINDING_DOMAIN);
+        h.update(self.objective.room.as_bytes());
+        h.update(&[0u8]);
+        h.update(self.objective.holding.as_bytes());
+        h.update(&[0u8]);
+        h.update(&(self.loot.len() as u64).to_le_bytes());
+        for rule in &self.loot {
+            h.update(&(rule.room.len() as u64).to_le_bytes());
+            h.update(rule.room.as_bytes());
+            h.update(&(rule.chest.len() as u64).to_le_bytes());
+            h.update(rule.chest.as_bytes());
+            h.update(&(rule.table.len() as u64).to_le_bytes());
+            for item in &rule.table {
+                h.update(&(item.len() as u64).to_le_bytes());
+                h.update(item.as_bytes());
+            }
+        }
+        h.finalize().as_bytes().to_vec()
     }
 
     /// Whether `word` is a spell this world declares (its casting vocabulary). A word that is NOT
@@ -1028,6 +1159,25 @@ pub enum Outcome {
 /// the returned effect lands), so a move that steps into the exit holding the amulet reports
 /// [`GameStatus::Won`], and a strike that gets you killed reports [`GameStatus::Lost`].
 pub fn resolve_action(map: &GameWorld, world: &WorldCell, action: &GameAction) -> Outcome {
+    resolve_action_rng(map, world, action, None)
+}
+
+/// **THE RESOLVER, with verifiable randomness threaded in.** The deterministic core of
+/// [`resolve_action`] plus one optional argument: `rng`, the turn's verified
+/// [`dregg_dice::DrawStream`] (rebuilt from a checked seed). Every deterministic action ignores it;
+/// the loot-chest mechanic consumes it to produce a WORLD-RESOLVED, seed-determined drop. The live
+/// session and the replay verifier both call this with the SAME reconstructed stream, so a random
+/// turn resolves identically when played and when re-executed — the property replay checks.
+///
+/// `rng` is `None` on the plain [`resolve_action`] path (deterministic callers). A random action
+/// reaching that path draws nothing (a fail-closed no-op); the live and replay flows always seed a
+/// loot turn, so that case never arises in a valid history.
+pub fn resolve_action_rng(
+    map: &GameWorld,
+    world: &WorldCell,
+    action: &GameAction,
+    rng: Option<&DrawStream>,
+) -> Outcome {
     let here = world.scene.clone();
     match action {
         GameAction::Examine => {
@@ -1140,6 +1290,15 @@ pub fn resolve_action(map: &GameWorld, world: &WorldCell, action: &GameAction) -
             // through to the ordinary Use path below and refuses, touching nothing.
             if map.is_spell_word(item) {
                 return resolve_spell(map, world, &here, item, target);
+            }
+            // LOOT PATH: a world-declared loot chest addressed by name in this room (a bare `Use`).
+            // The chest is a fixture, not a held item, so this branches BEFORE the holding check —
+            // exactly like the spell / NPC paths. Opening it draws ONE item from the committed table
+            // via the turn's verified `rng` stream; the WORLD picks the drop, never the AI's prose.
+            if target.is_none() {
+                if let Some(loot) = map.loot_rule(&here, item) {
+                    return resolve_loot(map, world, loot, rng);
+                }
             }
             if !world.inventory.contains(item) {
                 return Outcome::Refused(GameRefusal::NotHolding(item.clone()));
@@ -1462,6 +1621,68 @@ fn resolve_combat(map: &GameWorld, world: &WorldCell, enemy: &CombatEnemy) -> Ou
     })
 }
 
+/// **Resolve a loot-chest draw — the provably-fair randomness tooth.** The WORLD, not the prose,
+/// decides the drop. On the chest's first `Use` it takes ONE unbiased draw over `0..table.len()`
+/// from the turn's verified stream and grants exactly `table[draw]`, atomically with setting the
+/// opened flag (a [`WorldEffect::Batch`] — so a rewritten drop breaks the receipt). An already-opened
+/// chest draws nothing (a legal no-op, like a fizzled spell). Without a stream — the deterministic
+/// [`resolve_action`] path, never the live/replay seeded path — it is a fail-closed no-op.
+///
+/// The drop VARIES BY SEED (a different verified seed selects a different index) yet is fully
+/// reconstructible: [`verify_ledger_replay`] rebuilds the identical stream and re-runs this
+/// resolution, so the recorded drop is provably `table[draw]` and not the AI's invention.
+fn resolve_loot(
+    map: &GameWorld,
+    world: &WorldCell,
+    loot: &LootRule,
+    rng: Option<&DrawStream>,
+) -> Outcome {
+    // An already-opened chest is empty — a legal turn that draws nothing (the draw is single-use).
+    if loot.opened(world) {
+        return Outcome::Legal(Resolution {
+            narration: loot.empty_narration.clone(),
+            status: status_after(map, world, None),
+            effect: None,
+        });
+    }
+    let stream = match rng {
+        Some(s) => s,
+        // Defensive: a loot `Use` reached the deterministic resolver with no stream. The live and
+        // replay flows both seed a loot turn, so this never happens in a valid history — refuse
+        // fail-closed (world unchanged, no receipt) rather than fabricate a draw.
+        None => {
+            return Outcome::Refused(GameRefusal::NothingHappens {
+                item: loot.chest.clone(),
+                target: None,
+            })
+        }
+    };
+    let n = loot.table.len() as u64;
+    // The world-resolved outcome: an unbiased index `0..n` from ONE verified draw (index 0; the
+    // event's bound `draw_count` is 1). `n > 0` by authoring validation, so this never errors here.
+    let idx = match stream.draw_bounded(0, n) {
+        Ok(i) => i as usize,
+        Err(_) => {
+            return Outcome::Refused(GameRefusal::NothingHappens {
+                item: loot.chest.clone(),
+                target: None,
+            })
+        }
+    };
+    let dropped = loot.table[idx].clone();
+    // Grant the drawn item AND mark the chest opened, atomically — one receipted turn. The
+    // GrantItem is cap-permitted: every table entry is world-registered via `all_items`.
+    let effect = Some(WorldEffect::Batch(vec![
+        WorldEffect::GrantItem(dropped.clone()),
+        WorldEffect::SetFlag(loot.opened_flag.clone(), 1),
+    ]));
+    Outcome::Legal(Resolution {
+        narration: format!("{} — you draw the {dropped}.", loot.narration),
+        status: status_after(map, world, effect.as_ref()),
+        effect,
+    })
+}
+
 /// **Build the world-effect a legal [`GameAction::Move`] into `to_room` lands** — the scene
 /// advance, plus the LIGHT bookkeeping when the world declares a [`LightRule`]. A carried, burning
 /// lamp spends one oil this step (the resolver reads the counter and writes `counter - 1`); if that
@@ -1704,6 +1925,10 @@ fn parse_command(words: &[&str]) -> Option<GameAction> {
             let target = on.and_then(|i| words.get(i + 1)).map(|t| t.to_string());
             Some(GameAction::Use(item, target))
         }
+        // OPENING a loot chest rides the closed `Use` channel (a bare use of the chest fixture):
+        // "open hoard_chest" / "loot hoard_chest" → Use("hoard_chest", None). The world's LootRule
+        // (not the parse) decides what — if anything — the chest yields.
+        "open" | "loot" => words.get(1).map(|i| GameAction::Use(i.to_string(), None)),
         // CASTING rides the closed `Use` channel: "cast WORD" / "cast WORD on TARGET". The word
         // is the spell; the world's SpellRule (not the parse) decides what it DOES. "cast light" →
         // Use("light", None); "cast unlock on sky_door" → Use("unlock", Some("sky_door")).
@@ -1810,6 +2035,11 @@ pub struct GameSession<B: GameBrain = ScriptedGm> {
     brain: B,
     world: WorldCell,
     status: GameStatus,
+    /// The session's verifiable-randomness provider (the CommitReveal slice). Produces the
+    /// [`RandomnessEvidence`] a random turn (a loot-chest draw) records; replay re-verifies it with
+    /// only the public evidence, never this provider. Seeded from [`DEFAULT_GAME_RNG_SEED`] unless
+    /// set with [`GameSession::with_randomness`].
+    rng: SessionRandomness,
 }
 
 impl GameSession<ScriptedGm> {
@@ -1831,7 +2061,16 @@ impl<B: GameBrain> GameSession<B> {
             brain,
             world,
             status: GameStatus::Playing,
+            rng: SessionRandomness::default(),
         }
+    }
+
+    /// Pin the session's verifiable-randomness seed (drives the CommitReveal contributions). A
+    /// different seed yields different — but equally verifiable — loot draws, which is exactly how
+    /// the mechanic demonstrates a seed-determined-yet-reconstructible outcome.
+    pub fn with_randomness(mut self, seed: [u8; 32]) -> GameSession<B> {
+        self.rng = SessionRandomness::from_seed(&seed);
+        self
     }
 
     /// The live world-cell (current room in `scene`, held items in `inventory`, flags, ledger).
@@ -1898,10 +2137,43 @@ impl<B: GameBrain> GameSession<B> {
             return PlayResult::Refused(GameRefusal::GameOver(self.status));
         }
         // THE WORLD DISPOSES — resolve the proposed action against the rules, regardless of prose.
-        let resolution = match resolve_action(&self.map, &self.world, &proposal.action) {
-            Outcome::Legal(r) => r,
-            Outcome::Refused(reason) => return PlayResult::Refused(reason),
-        };
+        // If the action is a RANDOM move (opening a loot chest), bind its request BEFORE the draw
+        // exists, produce the source evidence, re-derive the seed via the SAME pure verifier a
+        // light client runs, and resolve against that verified stream — so the drop is world-chosen
+        // from a fair draw, never the AI's prose. A deterministic action carries no randomness.
+        let (resolution, randomness) =
+            match randomness_for(&self.map, &self.world, &proposal.action) {
+                Some(need) => {
+                    let seq = self.world.ledger.len() as u64;
+                    let request =
+                        randomness_request(&self.map, &self.world, seq, &proposal.action, &need);
+                    let evidence = self.rng.evidence(&request);
+                    // Re-derive the seed through the verifier (never trust the producer blindly):
+                    // the live turn resolves against exactly the stream a verifier reconstructs.
+                    let seed = match verify_seed(&request, &evidence) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            return PlayResult::DmRefused(DmError::NotAttestable(format!(
+                                "randomness evidence failed self-verification: {e:?}"
+                            )))
+                        }
+                    };
+                    let stream = DrawStream::new(seed, request.draw_count);
+                    match resolve_action_rng(
+                        &self.map,
+                        &self.world,
+                        &proposal.action,
+                        Some(&stream),
+                    ) {
+                        Outcome::Legal(r) => (r, Some(RandomnessRecord { request, evidence })),
+                        Outcome::Refused(reason) => return PlayResult::Refused(reason),
+                    }
+                }
+                None => match resolve_action(&self.map, &self.world, &proposal.action) {
+                    Outcome::Legal(r) => (r, None),
+                    Outcome::Refused(reason) => return PlayResult::Refused(reason),
+                },
+            };
         let room_id = self.world.scene.clone();
         // The player's command is bound input-side (the same slot-confinement tooth): a
         // `{{`-bearing command is refused before anything lands.
@@ -1926,7 +2198,7 @@ impl<B: GameBrain> GameSession<B> {
         };
         match self
             .dm
-            .narrate_game_move(&mut self.world, mv, prompt_binding, binding)
+            .narrate_game_move(&mut self.world, mv, prompt_binding, binding, randomness)
         {
             Ok(receipt) => {
                 let _ = player_name;
@@ -2056,6 +2328,18 @@ pub enum ReplayMismatch {
         /// The sequence number of the un-replayable entry.
         seq: u64,
     },
+    /// **The RANDOMNESS leg failed to reconstruct.** A random turn's recorded draw could not be
+    /// re-derived + re-verified against its bound context — a forged / tampered / mis-attached
+    /// draw evidence. Distinct from [`Self::Effect`]: this fires when the *seed* itself cannot be
+    /// recovered (bad evidence, or a recorded request that does not match the replay context, or a
+    /// random turn missing its evidence / a deterministic turn carrying spurious evidence), before
+    /// any effect comparison. A rule-incorrect drop given a VALID seed is caught by [`Self::Effect`].
+    Randomness {
+        /// The sequence number of the offending entry.
+        seq: u64,
+        /// The legible reason the recorded randomness did not reconstruct.
+        reason: String,
+    },
 }
 
 impl ReplayMismatch {
@@ -2065,7 +2349,8 @@ impl ReplayMismatch {
             ReplayMismatch::Effect { seq, .. }
             | ReplayMismatch::Refused { seq, .. }
             | ReplayMismatch::Room { seq, .. }
-            | ReplayMismatch::NonGameEntry { seq } => *seq,
+            | ReplayMismatch::NonGameEntry { seq }
+            | ReplayMismatch::Randomness { seq, .. } => *seq,
         }
     }
 }
@@ -2107,11 +2392,177 @@ impl std::fmt::Display for ReplayMismatch {
                 f,
                 "turn #{seq}: carries no game binding — not a replayable game move"
             ),
+            ReplayMismatch::Randomness { seq, reason } => write!(
+                f,
+                "turn #{seq}: the recorded randomness did not reconstruct ({reason})"
+            ),
         }
     }
 }
 
 impl std::error::Error for ReplayMismatch {}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// VERIFIABLE RANDOMNESS — the plumbing that binds a fair draw into a turn and reconstructs it.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// **The verifiable randomness a legal action would consume** against a given world state — the
+/// purpose tag ([`dregg_dice::EventId`] `event_kind`) and how many indexed draws (`draw_count`) the
+/// event takes. A deterministic action needs none.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RandomnessNeed {
+    /// The purpose tag domain-separating this draw's subsystem (`"loot"`).
+    pub event_kind: String,
+    /// The number of indexed draws the event consumes (bound into the event id before the seed).
+    pub draw_count: u32,
+}
+
+/// **Decide whether `action` against `world` is a RANDOM move**, and if so its [`RandomnessNeed`].
+/// Exactly one mechanic is random today: opening an unopened loot chest (a bare `Use` of a declared
+/// chest in the current room) consumes one `"loot"` draw. Everything else is deterministic (`None`).
+///
+/// This is a pure function of `(map, state, action)` — the SAME inputs the resolver sees — so the
+/// live session and the replay verifier agree on which turns carry randomness. In particular an
+/// already-opened chest needs NONE (a second `Use` draws nothing), and the replay reproduces the
+/// opened flag, so the need matches the live decision turn-for-turn.
+pub fn randomness_for(
+    map: &GameWorld,
+    world: &WorldCell,
+    action: &GameAction,
+) -> Option<RandomnessNeed> {
+    if let GameAction::Use(item, target) = action {
+        if target.is_none() {
+            if let Some(loot) = map.loot_rule(&world.scene, item) {
+                if !loot.opened(world) {
+                    return Some(RandomnessNeed {
+                        event_kind: LOOT_EVENT_KIND.to_string(),
+                        draw_count: 1,
+                    });
+                }
+            }
+        }
+    }
+    None
+}
+
+/// A 32-byte commitment to the finalized typed action — the `action_hash` a [`RandomnessRequest`]
+/// binds into its event id. Reuses the same tagged, length-prefixed [`GameAction`] encoding the
+/// chain link uses, so a re-aimed action moves the event id (hence the seed, hence the draw) and is
+/// caught on replay.
+pub fn action_commitment(action: &GameAction) -> [u8; 32] {
+    let mut h = blake3::Hasher::new();
+    h.update(ACTION_COMMITMENT_DOMAIN);
+    action.encode_into(&mut h);
+    *h.finalize().as_bytes()
+}
+
+/// **Build the [`RandomnessRequest`] a random turn binds — everything fixed BEFORE the draw.** It
+/// commits the game identity ([`GameWorld::game_binding`]), the sequence number, the pre-state root
+/// ([`WorldCell::state_root`]), the action commitment, the purpose tag, and the draw count. Its
+/// [`dregg_dice::EventId`] is the seed's binding context; a verifier reconstructs this request from
+/// the same static map + replay state and rejects a recorded request that does not match.
+pub fn randomness_request(
+    map: &GameWorld,
+    world: &WorldCell,
+    seq: u64,
+    action: &GameAction,
+    need: &RandomnessNeed,
+) -> RandomnessRequest {
+    RandomnessRequest {
+        game_binding: map.game_binding(),
+        seq,
+        pre_state_root: world.state_root(),
+        action_hash: action_commitment(action),
+        event_kind: need.event_kind.clone(),
+        draw_count: need.draw_count,
+    }
+}
+
+/// **The pure seed verifier — the trust surface a light client runs.** Dispatches to the source's
+/// `seed` verifier by the recorded evidence variant, re-deriving and checking the
+/// [`dregg_dice::Seed`] from the public `(request, evidence)`. It holds no secret and instantiates
+/// no source — verification is a pure function of public data. A tampered evidence (a reveal that no
+/// longer opens its commitment, or a draw transcript that no longer matches the re-derived seed) is
+/// rejected here with a [`dregg_dice::VerifyError`].
+pub fn verify_seed(
+    request: &RandomnessRequest,
+    evidence: &RandomnessEvidence,
+) -> Result<Seed, VerifyError> {
+    match &evidence.source {
+        EvidenceKind::Deterministic { .. } => Deterministic::seed(request, evidence),
+        EvidenceKind::CommitReveal { .. } => CommitReveal::seed(request, evidence),
+        EvidenceKind::Beacon { .. } => MockBeacon::seed(request, evidence),
+        EvidenceKind::Vrf { .. } => ServerVrf::seed(request, evidence),
+    }
+}
+
+/// Domain tag for deriving a session's per-event server contribution.
+const SESSION_SERVER_TAG: &[u8] = b"attested-dm-session-server-reveal-v1";
+/// Domain tag for deriving a session's per-event player contribution.
+const SESSION_PLAYER_TAG: &[u8] = b"attested-dm-session-player-contribution-v1";
+
+/// The default session randomness seed — reproducible loot for the bundled demo + tests. A real
+/// deployment seeds this per session from the CommitReveal handshake (or a VRF/beacon).
+pub const DEFAULT_GAME_RNG_SEED: [u8; 32] = [0x5E; 32];
+
+/// **A session's randomness provider — the CommitReveal slice.** Given a bound
+/// [`RandomnessRequest`], it produces the [`RandomnessEvidence`] the turn records. The server's
+/// contribution is a PRF of a fixed session secret and the event id (so the server is committed to
+/// ONE value per event and cannot re-choose per outcome); the player's contribution is mixed in
+/// the same way. Honest trust level: this prevents either party from unilaterally CHOOSING the
+/// draw, and the draw is a pure reconstructible function of the verified seed — but commit-reveal
+/// does NOT close selective abort (the last revealer can withhold on an unfavorable draw). The
+/// registered-VRF + delayed-beacon `Hybrid` source (a follow-up) closes that.
+#[derive(Clone, Debug)]
+pub struct SessionRandomness {
+    server_secret: [u8; 32],
+    player_secret: [u8; 32],
+}
+
+impl SessionRandomness {
+    /// Derive a provider from a 32-byte session seed (two domain-separated sub-secrets).
+    pub fn from_seed(seed: &[u8; 32]) -> SessionRandomness {
+        SessionRandomness {
+            server_secret: Self::derive(SESSION_SERVER_TAG, seed),
+            player_secret: Self::derive(SESSION_PLAYER_TAG, seed),
+        }
+    }
+
+    fn derive(tag: &[u8], seed: &[u8; 32]) -> [u8; 32] {
+        let mut h = blake3::Hasher::new();
+        h.update(tag);
+        h.update(seed);
+        *h.finalize().as_bytes()
+    }
+
+    fn contribution(tag: &[u8], secret: &[u8; 32], event_id: &[u8; 32]) -> [u8; 32] {
+        let mut h = blake3::Hasher::new();
+        h.update(tag);
+        h.update(secret);
+        h.update(event_id);
+        *h.finalize().as_bytes()
+    }
+
+    /// Produce the [`RandomnessEvidence`] for `request` via a per-event [`CommitReveal`] source.
+    pub fn evidence(&self, request: &RandomnessRequest) -> RandomnessEvidence {
+        let event_id = *request.event_id().as_bytes();
+        let source = CommitReveal {
+            server_reveal: Self::contribution(SESSION_SERVER_TAG, &self.server_secret, &event_id),
+            player_contribution: Self::contribution(
+                SESSION_PLAYER_TAG,
+                &self.player_secret,
+                &event_id,
+            ),
+        };
+        source.evidence(request)
+    }
+}
+
+impl Default for SessionRandomness {
+    fn default() -> Self {
+        SessionRandomness::from_seed(&DEFAULT_GAME_RNG_SEED)
+    }
+}
 
 /// **Re-execute a ledger from genesis and check every recorded effect against the resolver** — the
 /// re-execution light client (design Track A), as a free function over the static [`GameWorld`] map
@@ -2154,8 +2605,67 @@ pub fn verify_ledger_replay(
                 replay_room: replay.scene.clone(),
             });
         }
-        // THE WORLD RE-DISPOSES: run the SAME resolver over the from-genesis replay state.
-        let resolved = match resolve_action(map, &replay, &binding.action) {
+        // VERIFIABLE RANDOMNESS: does this action consume a draw against the replay state? The
+        // decision is a pure function of `(map, replay, action)` — the SAME one the live session
+        // made — so a random turn is recognised here exactly as it was when played.
+        let need = randomness_for(map, &replay, &binding.action);
+        let stream = match (&need, &entry.randomness) {
+            // A deterministic turn with no recorded randomness — the common case (every non-loot
+            // move, and every one of the five bundled games).
+            (None, None) => None,
+            // A RANDOM turn: reconstruct + re-verify the draw from the recorded record.
+            (Some(need), Some(record)) => {
+                // (a) Re-derive the request the turn MUST have bound, and reject a recorded request
+                //     that does not match the replay context. A re-aimed action, a tampered
+                //     pre-state / seq / draw-count, or a swapped game identity each move a field
+                //     here — so a draw cannot be lifted out of the context it was bound to.
+                let expected = randomness_request(map, &replay, seq, &binding.action, need);
+                if record.request != expected {
+                    return Err(ReplayMismatch::Randomness {
+                        seq,
+                        reason: "recorded request does not match the bound turn context \
+                                 (game/seq/pre-state/action/purpose/draw-count)"
+                            .to_string(),
+                    });
+                }
+                // (b) Re-verify the evidence via the pure source verifier → the verified seed. A
+                //     tampered evidence (a reveal that no longer opens its commitment, or a draw
+                //     transcript that no longer matches the re-derived seed) is rejected here.
+                let seed = match verify_seed(&record.request, &record.evidence) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        return Err(ReplayMismatch::Randomness {
+                            seq,
+                            reason: format!("evidence failed to verify: {e:?}"),
+                        })
+                    }
+                };
+                // (c) Rebuild the draw stream from the verified seed — the identical stream the
+                //     live turn resolved against.
+                Some(DrawStream::new(seed, record.request.draw_count))
+            }
+            // A random action recorded without its evidence — the draw is unaccounted for.
+            (Some(_), None) => {
+                return Err(ReplayMismatch::Randomness {
+                    seq,
+                    reason: "a random action landed with no recorded randomness evidence"
+                        .to_string(),
+                })
+            }
+            // A deterministic action carrying spurious randomness evidence.
+            (None, Some(_)) => {
+                return Err(ReplayMismatch::Randomness {
+                    seq,
+                    reason: "a deterministic action carries spurious randomness evidence"
+                        .to_string(),
+                })
+            }
+        };
+
+        // THE WORLD RE-DISPOSES: run the SAME resolver over the from-genesis replay state, with the
+        // reconstructed draw (if any). For a loot turn this re-draws `table[draw]` from the verified
+        // seed — so the recorded drop is proven to be the fair draw, not the AI's invention.
+        let resolved = match resolve_action_rng(map, &replay, &binding.action, stream.as_ref()) {
             Outcome::Legal(r) => r,
             Outcome::Refused(reason) => {
                 return Err(ReplayMismatch::Refused {
@@ -2335,6 +2845,7 @@ pub fn sunken_vault() -> GameWorld {
         spell_rules: Vec::new(),
         consumables: Vec::new(),
         statuses: Vec::new(),
+        loot: Vec::new(),
         player_max_hp: 0,
         light: None,
         start: "shore".into(),
@@ -2609,6 +3120,7 @@ pub fn bramble_keep() -> GameWorld {
         spell_rules: Vec::new(),
         consumables: Vec::new(),
         statuses: Vec::new(),
+        loot: Vec::new(),
         player_max_hp: 10,
         light: None,
         start: "gatehouse".into(),
@@ -2985,6 +3497,7 @@ pub fn starfall_spire() -> GameWorld {
         spell_rules,
         consumables: Vec::new(),
         statuses: Vec::new(),
+        loot: Vec::new(),
         player_max_hp: 10,
         light: None,
         start: "threshold".into(),
@@ -3256,6 +3769,7 @@ pub fn deepdark_mine() -> GameWorld {
         spell_rules: Vec::new(),
         consumables: Vec::new(),
         statuses: Vec::new(),
+        loot: Vec::new(),
         player_max_hp: 0,
         light: Some(light),
         start: "pithead".into(),
@@ -3558,6 +4072,7 @@ pub fn venom_deep() -> GameWorld {
         spell_rules: Vec::new(),
         consumables,
         statuses,
+        loot: Vec::new(),
         player_max_hp: 12,
         light: None,
         start: "gatehouse".into(),
@@ -3570,6 +4085,83 @@ pub fn venom_deep() -> GameWorld {
             at_least: 12,
             description: "torn apart by the Bone Wyrm, or taken by the venom in your blood".into(),
         }],
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE GLIMMERING HOARD — a tiny dungeon showcasing the PROVABLY-FAIR loot mechanic.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// **THE GLIMMERING HOARD** — a two-room dungeon showcasing the provably-fair loot mechanic.
+///
+/// The hoard hall holds a sealed reliquary chest and a jewelled crown. Opening the chest
+/// (`use hoard_chest` / `open hoard_chest`) draws ONE gem from a committed table —
+/// `{ruby, emerald, sapphire, moonstone}` — via a single unbiased, seed-determined draw, and lands
+/// it as ONE verified turn carrying the draw's [`crate::RandomnessRecord`]. Take the crown and climb
+/// to the surface to WIN. The gem you draw VARIES BY SEED (a different session seed selects a
+/// different gem), yet [`GameSession::verify_replay`] reconstructs the identical draw and proves the
+/// recorded drop is exactly `table[draw]`; a forged drop, or a tampered draw evidence, is caught.
+///
+/// The loot is a genuine, cap-permitted grant (every table entry is world-registered) and a real
+/// verifiable-random reward; the win itself rides the deterministic crown, so the dungeon is always
+/// winnable whatever the chest yields.
+pub fn loot_chest_demo() -> GameWorld {
+    let rooms = vec![
+        Room::new(
+            "hoard",
+            "Glimmering Hoard",
+            "A dragon-less hoard hall. A sealed reliquary chest squats in the gold-dust; a jewelled \
+             crown rests on a stone plinth.",
+        )
+        .item("crown")
+        .exit("up", Exit::open("surface")),
+        Room::new(
+            "surface",
+            "Cliff Surface",
+            "Grey daylight and open sky — the way out of the mountain.",
+        )
+        .exit("down", Exit::open("hoard")),
+    ];
+    let mut room_map = BTreeMap::new();
+    for r in rooms {
+        room_map.insert(r.id.clone(), r);
+    }
+
+    let loot = vec![LootRule {
+        room: "hoard".into(),
+        chest: "hoard_chest".into(),
+        table: vec![
+            "ruby".into(),
+            "emerald".into(),
+            "sapphire".into(),
+            "moonstone".into(),
+        ],
+        opened_flag: "opened_hoard_chest".into(),
+        narration: "The reliquary chest grinds open on a bed of rotted velvet".into(),
+        empty_narration: "The reliquary chest lies open and bare — its one treasure already drawn."
+            .into(),
+    }];
+
+    GameWorld {
+        rooms: room_map,
+        use_rules: Vec::new(),
+        hostiles: BTreeMap::new(),
+        combat: BTreeMap::new(),
+        npcs: Vec::new(),
+        dialogue: Vec::new(),
+        spells: Vec::new(),
+        spell_rules: Vec::new(),
+        consumables: Vec::new(),
+        statuses: Vec::new(),
+        loot,
+        player_max_hp: 0,
+        light: None,
+        start: "hoard".into(),
+        objective: Objective {
+            room: "surface".into(),
+            holding: "crown".into(),
+        },
+        lose: Vec::new(),
     }
 }
 

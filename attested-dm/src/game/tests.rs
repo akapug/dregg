@@ -1924,6 +1924,7 @@ fn golem_world() -> GameWorld {
             flag: "warded".into(),
             kind: StatusKind::Shield(3),
         }],
+        loot: Vec::new(),
         player_max_hp: 100,
         light: None,
         start: "arena".into(),
@@ -2025,6 +2026,7 @@ fn poison_world() -> GameWorld {
             flag: "venom".into(),
             kind: StatusKind::Poison(2),
         }],
+        loot: Vec::new(),
         player_max_hp: 100,
         light: None,
         start: "cell_a".into(),
@@ -2325,6 +2327,7 @@ fn relink(ledger: &mut [crate::LedgerEntry]) {
             &e.effect,
             &e.prompt_binding,
             &e.game_binding,
+            &e.randomness,
             &e.attestation,
         );
         prev = e.receipt;
@@ -2513,4 +2516,261 @@ fn verify_report_keeps_the_two_claims_legible() {
     let replay = crate::verify_ledger_replay(&map, &world.ledger);
     assert!(chain.is_ok(), "integrity accepts the re-linked chain");
     assert!(replay.is_err(), "re-execution rejects the forged effect");
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// VERIFIABLE RANDOMNESS — THE GLIMMERING HOARD's loot chest. The drop is world-resolved
+// from a verified draw (never the AI's prose), bound into the receipt chain, and
+// reconstructed + re-verified by replay. A forged drop, and a forged draw evidence, are
+// both caught (non-vacuously). Honest scope: the recorded evidence is the CommitReveal
+// slice — it prevents choosing the outcome, not selective abort (VRF/beacon is the follow-up).
+// ═════════════════════════════════════════════════════════════════════════════
+
+/// The committed loot table of THE GLIMMERING HOARD, mirrored here for the assertions.
+const HOARD_TABLE: &[&str] = &["ruby", "emerald", "sapphire", "moonstone"];
+
+/// The gem the player is holding after opening the chest (the drop = inventory ∩ the table).
+fn drawn_gem(world: &WorldCell) -> String {
+    world
+        .inventory
+        .iter()
+        .find(|i| HOARD_TABLE.contains(&i.as_str()))
+        .cloned()
+        .expect("opening the chest grants exactly one table gem")
+}
+
+/// Play THE GLIMMERING HOARD to a WIN under `seed`: open the chest (the random draw), take the
+/// crown, climb out. Returns the finished session.
+fn play_hoard(seed: [u8; 32]) -> GameSession {
+    let mut game = GameSession::open(loot_chest_demo()).with_randomness(seed);
+    game.command("hero", "open hoard_chest").assert_landed();
+    game.command("hero", "take crown").assert_landed();
+    game.command("hero", "go up").assert_landed();
+    assert_eq!(
+        game.status(),
+        GameStatus::Won,
+        "the hoard is always winnable"
+    );
+    game
+}
+
+/// The loot turn is seq 0; return its recorded drop item + the fact it carries a randomness record.
+fn loot_entry_drop(world: &WorldCell) -> String {
+    let entry = &world.ledger[0];
+    assert!(
+        entry.randomness.is_some(),
+        "the loot turn must carry a randomness record"
+    );
+    match &entry.effect {
+        Some(WorldEffect::Batch(v)) => match v.first() {
+            Some(WorldEffect::GrantItem(item)) => item.clone(),
+            other => panic!("expected a GrantItem loot effect, got {other:?}"),
+        },
+        other => panic!("expected a Batch loot effect, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_loot_draw_is_world_resolved_bound_and_replay_reproduces_it() {
+    let game = play_hoard(DEFAULT_GAME_RNG_SEED);
+    let world = game.world();
+
+    // WORLD-RESOLVED + BOUNDED: the drop is one of the committed table items, and it is the item
+    // the receipt commits to (the loot entry's GrantItem) — not the AI's prose.
+    let gem = drawn_gem(world);
+    assert!(
+        HOARD_TABLE.contains(&gem.as_str()),
+        "drop {gem} is in the table"
+    );
+    assert_eq!(
+        gem,
+        loot_entry_drop(world),
+        "the held gem is the receipted drop"
+    );
+
+    // BOUND INTO THE CHAIN: the loot turn carries the request (event id over the bound context) +
+    // the source evidence, and the whole chain re-verifies with them in the receipt.
+    let record = world.ledger[0].randomness.as_ref().unwrap();
+    assert_eq!(record.request.event_kind, LOOT_EVENT_KIND);
+    assert_eq!(record.request.draw_count, 1);
+    assert_eq!(record.request.seq, 0);
+
+    // BOTH TIERS PASS: integrity (untampered chain) AND replay (the resolver + the verified draw
+    // reproduce every recorded effect). Non-vacuous: this is a real playthrough with a real draw.
+    let report = game.verify_report();
+    assert!(report.chain.is_ok(), "chain: {:?}", report.chain);
+    assert!(report.replay.is_ok(), "replay: {:?}", report.replay);
+    assert!(report.both_ok());
+}
+
+#[test]
+fn the_loot_drop_varies_by_seed_and_every_variant_verifies() {
+    // Seed-determined: different session seeds select different — but equally verifiable — gems.
+    let mut seen = std::collections::BTreeSet::new();
+    for b in 0u8..16 {
+        let game = play_hoard([b; 32]);
+        let gem = drawn_gem(game.world());
+        assert!(HOARD_TABLE.contains(&gem.as_str()));
+        // Every seed's playthrough reconstructs on replay (the draw is always fair + fair-checked).
+        assert!(
+            game.verify_report().both_ok(),
+            "seed {b} must verify both tiers"
+        );
+        seen.insert(gem);
+    }
+    assert!(
+        seen.len() > 1,
+        "the drop must VARY by seed (saw only {seen:?}) — else the draw is not seed-determined"
+    );
+}
+
+#[test]
+fn a_forged_loot_drop_is_caught_by_replay_though_the_chain_passes() {
+    // The AI (or a forger) rewrites which gem the chest yielded, then RE-LINKS the chain so
+    // integrity still passes. Replay re-draws from the verified seed and catches the lie.
+    let game = play_hoard(DEFAULT_GAME_RNG_SEED);
+    let map = game.map().clone();
+    let config = game.dm().config().clone();
+    let mut world = game.into_world();
+
+    let honest_gem = loot_entry_drop(&world);
+    // Pick a DIFFERENT table gem to forge the drop to.
+    let forged_gem = HOARD_TABLE
+        .iter()
+        .find(|g| **g != honest_gem)
+        .unwrap()
+        .to_string();
+    // Rewrite the loot effect's granted item, keeping the (valid) randomness record intact, and
+    // re-link so the receipt recomputes over the forged effect.
+    world.ledger[0].effect = Some(WorldEffect::Batch(vec![
+        WorldEffect::GrantItem(forged_gem.clone()),
+        WorldEffect::SetFlag("opened_hoard_chest".into(), 1),
+    ]));
+    relink(&mut world.ledger);
+
+    // Integrity accepts the re-linked forgery — it recomputes the receipt over the recorded effect.
+    world
+        .verify_ledger(&config)
+        .expect("the re-linked chain passes integrity (the gap replay closes)");
+
+    // Re-execution CATCHES it: the resolver, over the SAME verified draw, yields the honest gem.
+    let err = crate::verify_ledger_replay(&map, &world.ledger)
+        .expect_err("replay rejects the forged drop");
+    match err {
+        ReplayMismatch::Effect {
+            seq,
+            expected,
+            recorded,
+            ..
+        } => {
+            assert_eq!(seq, 0);
+            assert_eq!(
+                expected,
+                Some(WorldEffect::Batch(vec![
+                    WorldEffect::GrantItem(honest_gem.clone()),
+                    WorldEffect::SetFlag("opened_hoard_chest".into(), 1),
+                ])),
+                "the resolver re-draws the honest gem from the verified seed"
+            );
+            assert_eq!(
+                recorded,
+                Some(WorldEffect::Batch(vec![
+                    WorldEffect::GrantItem(forged_gem),
+                    WorldEffect::SetFlag("opened_hoard_chest".into(), 1),
+                ]))
+            );
+        }
+        other => panic!("expected ReplayMismatch::Effect, got {other}"),
+    }
+}
+
+#[test]
+fn a_forged_loot_evidence_not_relinked_breaks_the_chain() {
+    // Tamper the recorded draw EVIDENCE (flip a byte of the server reveal) WITHOUT re-linking:
+    // the evidence rides the receipt, so the receipt no longer recomputes — the chain breaks.
+    let game = play_hoard(DEFAULT_GAME_RNG_SEED);
+    let config = game.dm().config().clone();
+    let mut world = game.into_world();
+
+    match &mut world.ledger[0].randomness.as_mut().unwrap().evidence.source {
+        dregg_dice::EvidenceKind::CommitReveal { server_reveal, .. } => server_reveal[0] ^= 0xFF,
+        other => panic!("expected CommitReveal evidence, got {other:?}"),
+    }
+
+    let err = world
+        .verify_ledger(&config)
+        .expect_err("a tampered draw evidence breaks the receipt");
+    assert!(
+        matches!(
+            err,
+            crate::LedgerBreak::EntryInvalid {
+                seq: 0,
+                reason: crate::TurnForgery::ReceiptMismatch
+            }
+        ),
+        "expected EntryInvalid(ReceiptMismatch) at seq 0, got {err:?}"
+    );
+}
+
+#[test]
+fn a_forged_loot_evidence_relinked_is_caught_by_replay_randomness() {
+    // Tamper the recorded draw evidence AND re-link so integrity passes. Replay's randomness leg
+    // catches it: the flipped reveal no longer opens its published commitment, so the seed cannot
+    // be re-derived (a CommitmentMismatch) — a ReplayMismatch::Randomness before any effect check.
+    let game = play_hoard(DEFAULT_GAME_RNG_SEED);
+    let map = game.map().clone();
+    let config = game.dm().config().clone();
+    let mut world = game.into_world();
+
+    match &mut world.ledger[0].randomness.as_mut().unwrap().evidence.source {
+        dregg_dice::EvidenceKind::CommitReveal { server_reveal, .. } => server_reveal[0] ^= 0xFF,
+        other => panic!("expected CommitReveal evidence, got {other:?}"),
+    }
+    relink(&mut world.ledger);
+
+    // Integrity now passes (the receipt recomputes over the tampered evidence)...
+    world
+        .verify_ledger(&config)
+        .expect("the re-linked chain passes integrity");
+    // ...but replay re-verifies the evidence and rejects it.
+    let err = crate::verify_ledger_replay(&map, &world.ledger)
+        .expect_err("replay rejects the tampered draw evidence");
+    assert!(
+        matches!(err, ReplayMismatch::Randomness { seq: 0, .. }),
+        "expected ReplayMismatch::Randomness at seq 0, got {err}"
+    );
+}
+
+#[test]
+fn a_reopened_chest_draws_nothing_and_the_five_games_carry_no_randomness() {
+    // Single-use: a second `Use` of an opened chest is a legal no-op that draws nothing — no
+    // randomness record on that turn.
+    let mut g2 = GameSession::open(loot_chest_demo());
+    g2.command("hero", "open hoard_chest").assert_landed();
+    let second = g2.command("hero", "open hoard_chest");
+    assert!(
+        second.landed(),
+        "re-opening an empty chest is a legal no-op"
+    );
+    let reopen = g2.world().ledger.last().unwrap();
+    assert!(
+        reopen.randomness.is_none(),
+        "a no-op re-open carries no draw"
+    );
+    assert!(reopen.effect.is_none(), "a no-op re-open changes nothing");
+    g2.verify_report().both_ok();
+
+    // ADDITIVE: a bundled non-loot game consumes no randomness — every entry is None, and both
+    // verification tiers pass exactly as before.
+    for world_fn in [sunken_vault as fn() -> GameWorld] {
+        let mut g = GameSession::open(world_fn());
+        for cmd in SUNKEN_SOLVE {
+            g.command("hero", cmd).assert_landed();
+        }
+        assert!(
+            g.world().ledger.iter().all(|e| e.randomness.is_none()),
+            "a non-loot game must carry no randomness records"
+        );
+        assert!(g.verify_report().both_ok());
+    }
 }

@@ -65,12 +65,14 @@ pub use prompt_template::{
 
 pub mod game;
 pub use game::{
-    bramble_keep, deepdark_mine, resolve_action, starfall_spire, sunken_vault, venom_deep,
-    verify_ledger_replay, CombatEnemy, ConsumableEffect, ConsumableRule, DialogueGrant,
-    DialogueRule, Exit, GameAction, GameBinding, GameBrain, GameRefusal, GameSession, GameStatus,
-    GameWorld, Gate, GateReason, Hostile, LightRule, LoseCondition, Npc, Objective, Outcome,
-    PlayResult, Proposal, RefuelRule, ReplayMismatch, Resolution, Room, ScriptedGm, Spell,
-    SpellEffect, SpellRule, StatusKind, StatusRule, UseRule, VerificationReport,
+    action_commitment, bramble_keep, deepdark_mine, loot_chest_demo, randomness_for,
+    randomness_request, resolve_action, resolve_action_rng, starfall_spire, sunken_vault,
+    venom_deep, verify_ledger_replay, verify_seed, CombatEnemy, ConsumableEffect, ConsumableRule,
+    DialogueGrant, DialogueRule, Exit, GameAction, GameBinding, GameBrain, GameRefusal,
+    GameSession, GameStatus, GameWorld, Gate, GateReason, Hostile, LightRule, LootRule,
+    LoseCondition, Npc, Objective, Outcome, PlayResult, Proposal, RandomnessNeed, RefuelRule,
+    ReplayMismatch, Resolution, Room, ScriptedGm, SessionRandomness, Spell, SpellEffect, SpellRule,
+    StatusKind, StatusRule, UseRule, VerificationReport, DEFAULT_GAME_RNG_SEED, LOOT_EVENT_KIND,
     PLAYER_WOUNDS_FLAG,
 };
 // `PromptBinding` is defined below (it is tightly coupled to the chain-link hashing); re-exported
@@ -82,6 +84,7 @@ pub use game::{
 pub mod dungeon_dsl;
 pub use dungeon_dsl::{parse_dungeon, parse_world, validate, DungeonError, Issue, Severity};
 
+use dregg_dice::{EvidenceKind, RandomnessEvidence, RandomnessRequest};
 use dregg_node_target::{NodeTarget, SubmittedTurn};
 use dregg_zkoracle_prove::{
     build_anthropic_fixture, prove_zkoracle, verify_zkoracle, AnthropicConfig, FixtureNotary,
@@ -102,6 +105,17 @@ const LEDGER_GENESIS_DOMAIN: &[u8] = b"attested-dm-ledger-genesis-v1";
 /// [`RECEIPT_COMMIT_DOMAIN`] so a raw attestation commitment can never be mistaken for a
 /// chain link id.
 const LEDGER_CHAIN_DOMAIN: &[u8] = b"attested-dm-ledger-chain-link-v1";
+
+/// Domain separator for [`WorldCell::state_root`] — the pre-state commitment a randomness draw
+/// binds, distinct from every other hashed object so a state root can never collide with a
+/// receipt id or an event id.
+const WORLD_STATE_ROOT_DOMAIN: &[u8] = b"attested-dm-world-state-root-v1";
+
+/// Domain separator for the randomness leg of [`chain_receipt_id`] — binds a random turn's
+/// [`RandomnessRecord`] (its request event-id + its source evidence) into the chain link, so a
+/// forged/tampered draw evidence changes the receipt and breaks the chain (or, on a re-linked
+/// chain, is caught by the replay verifier re-deriving the seed).
+const LEDGER_RANDOMNESS_DOMAIN: &[u8] = b"attested-dm-ledger-randomness-v1";
 
 /// The modeled session time stamped on the carrier's presentation (unix seconds). The
 /// attestation is about the narration BODY; the exact timestamp is not load-bearing.
@@ -264,6 +278,28 @@ impl PromptBinding {
     }
 }
 
+/// **The verifiable-randomness a random turn carries** — the [`RandomnessRequest`] bound
+/// *before* the result existed (its [`dregg_dice::EventId`] fixes the game/seq/pre-state/action/
+/// purpose/draw-count) and the [`RandomnessEvidence`] that opens the source (a `CommitReveal`
+/// slice here). Both ride the turn's [`chain_receipt_id`], so a tampered evidence changes the
+/// receipt (broken chain) and, on a re-linked chain, is caught by the replay verifier: it
+/// re-derives the event id, re-verifies the evidence via the pure [`dregg_dice::RandomnessSource::seed`]
+/// verifier, rebuilds the [`dregg_dice::DrawStream`], and re-runs the resolver over the verified draw.
+///
+/// **Trust level — the CommitReveal slice.** The recorded evidence uses two-party commit-reveal:
+/// it prevents either party from *unilaterally choosing* the outcome (the server is bound to a
+/// pre-published commitment), and the draw itself is a pure, reconstructible function of the
+/// verified seed — so grinding `draw_count`/action/pre-state is always detectable. It does **not**
+/// close selective-abort (the last revealer can withhold on an unfavorable draw); the registered-VRF
+/// + delayed-beacon `Hybrid` source is the follow-up that closes that. See `dregg_dice` crate docs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RandomnessRecord {
+    /// Everything bound before the result (the seed's binding context) — its event id rides the chain.
+    pub request: RandomnessRequest,
+    /// The source-specific opening a light client re-verifies to recover the seed.
+    pub evidence: RandomnessEvidence,
+}
+
 /// **The on-ledger receipt id of a landed turn — a HASH-CHAIN LINK.** Unlike the raw
 /// [`attestation_commitment`] (a fingerprint of the attestation alone), this binds the
 /// entry to its *position and predecessor*: it is a domain-separated BLAKE3 over
@@ -281,6 +317,7 @@ pub fn chain_receipt_id(
     effect: &Option<WorldEffect>,
     prompt_binding: &Option<PromptBinding>,
     game_binding: &Option<GameBinding>,
+    randomness: &Option<RandomnessRecord>,
     att: &ZkOracleAttestation,
 ) -> [u8; 32] {
     let mut h = blake3::Hasher::new();
@@ -297,10 +334,83 @@ pub fn chain_receipt_id(
     // A rewritten action (claiming a different move produced this turn) or a swapped room
     // changes this leg and therefore the whole link — the resolved move rides the chain.
     encode_game_binding(&mut h, game_binding);
+    // Bind the VERIFIABLE RANDOMNESS: the request's event id (game/seq/pre-state/action/purpose/
+    // draw-count) + the source evidence. A forged draw evidence changes this leg and therefore
+    // the whole link — so a tampered roll either breaks the chain here, or (on a re-linked chain)
+    // is caught by the replay verifier re-deriving the seed from these same recorded inputs.
+    encode_randomness(&mut h, randomness);
     // Bind the attestation via its own committed fingerprint — a tampered / re-aimed
     // attestation changes this leg and therefore the whole link.
     h.update(&attestation_commitment(att));
     *h.finalize().as_bytes()
+}
+
+/// Tagged encoding of the (optional) randomness record into the chain hash. `None` (a
+/// deterministic turn) is tag `0`. A random turn binds its request's [`dregg_dice::EventId`]
+/// (which itself commits to game_binding/seq/pre-state/action/event_kind/draw_count) and the
+/// full source evidence, so no field of either can be swapped after the fact without breaking
+/// the link.
+fn encode_randomness(h: &mut blake3::Hasher, randomness: &Option<RandomnessRecord>) {
+    match randomness {
+        None => {
+            h.update(&[0u8]);
+        }
+        Some(r) => {
+            h.update(&[1u8]);
+            h.update(LEDGER_RANDOMNESS_DOMAIN);
+            // The event id binds the full request (game_binding, seq, pre_state_root,
+            // action_hash, event_kind, draw_count) in one 32-byte value.
+            h.update(r.request.event_id().as_bytes());
+            encode_evidence(h, &r.evidence);
+        }
+    }
+}
+
+/// Tagged, length-prefixed encoding of the randomness evidence — the derivation version, the
+/// source-specific opening (each variant tagged distinctly), and the draw-transcript commitment.
+/// A single tampered byte of the recorded evidence changes this and therefore the receipt.
+fn encode_evidence(h: &mut blake3::Hasher, ev: &RandomnessEvidence) {
+    h.update(&ev.derivation_version.to_le_bytes());
+    match &ev.source {
+        EvidenceKind::Deterministic { context } => {
+            h.update(&[0u8]);
+            h.update(context);
+        }
+        EvidenceKind::CommitReveal {
+            server_commitment,
+            server_reveal,
+            player_contribution,
+        } => {
+            h.update(&[1u8]);
+            h.update(server_commitment);
+            h.update(server_reveal);
+            h.update(player_contribution);
+        }
+        EvidenceKind::Beacon {
+            beacon_id,
+            round,
+            output,
+        } => {
+            h.update(&[2u8]);
+            h.update(&(beacon_id.len() as u64).to_le_bytes());
+            h.update(beacon_id);
+            h.update(&round.to_le_bytes());
+            h.update(output);
+        }
+        EvidenceKind::Vrf {
+            public_key,
+            output,
+            proof,
+        } => {
+            h.update(&[3u8]);
+            h.update(&(public_key.len() as u64).to_le_bytes());
+            h.update(public_key);
+            h.update(output);
+            h.update(&(proof.len() as u64).to_le_bytes());
+            h.update(proof);
+        }
+    }
+    h.update(&ev.draw_transcript_commitment);
 }
 
 /// Tagged, length-prefixed encoding of the (optional) game binding into the chain hash, so a
@@ -513,6 +623,12 @@ pub struct LedgerEntry {
     /// [`GameSession`] (the resolver admitted the move); `None` for a free narration turn. Rides
     /// the chain link, so the on-ledger receipt commits to WHICH typed move produced this turn.
     pub game_binding: Option<GameBinding>,
+    /// **THE VERIFIABLE RANDOMNESS this turn drew** — the [`RandomnessRecord`] (bound request +
+    /// source evidence) for a random game move (a loot-chest draw), or `None` for a deterministic
+    /// turn. `Some` only for a turn a random mechanic resolved; the five bundled games and every
+    /// non-random move carry `None`, so the field is purely additive. Rides the chain link, and is
+    /// what [`game::verify_ledger_replay`] re-derives + re-verifies to prove the draw was fair.
+    pub randomness: Option<RandomnessRecord>,
     /// THE ATTESTATION — a `verify_zkoracle`-checkable proof this narration was authentic
     /// (from a real model) ∧ well-formed ∧ injection-free.
     pub attestation: ZkOracleAttestation,
@@ -583,6 +699,31 @@ impl WorldCell {
             .last()
             .map(|e| e.receipt)
             .unwrap_or_else(genesis_prev)
+    }
+
+    /// **A 32-byte commitment to the live world state** — the current scene, the sorted world
+    /// flags, and the sorted inventory. Deterministic (the `BTreeMap`/`BTreeSet` iterate in
+    /// sorted order), so an off-line verifier reconstructing the from-genesis replay recomputes
+    /// the identical root at each step. It is the `pre_state_root` a [`RandomnessRequest`] binds
+    /// before a random draw: the seed depends on it, so the same action drawn against a different
+    /// world state yields a different, detectable seed — a draw cannot be replayed out of context.
+    pub fn state_root(&self) -> [u8; 32] {
+        let mut h = blake3::Hasher::new();
+        h.update(WORLD_STATE_ROOT_DOMAIN);
+        h.update(&(self.scene.len() as u64).to_le_bytes());
+        h.update(self.scene.as_bytes());
+        h.update(&(self.flags.len() as u64).to_le_bytes());
+        for (k, v) in &self.flags {
+            h.update(&(k.len() as u64).to_le_bytes());
+            h.update(k.as_bytes());
+            h.update(&v.to_le_bytes());
+        }
+        h.update(&(self.inventory.len() as u64).to_le_bytes());
+        for item in &self.inventory {
+            h.update(&(item.len() as u64).to_le_bytes());
+            h.update(item.as_bytes());
+        }
+        *h.finalize().as_bytes()
     }
 
     /// **Re-verify the whole receipt ledger as a HASH CHAIN** against `config`. For every
@@ -686,6 +827,7 @@ pub fn verify_turn(
         &entry.effect,
         &entry.prompt_binding,
         &entry.game_binding,
+        &entry.randomness,
         &entry.attestation,
     );
     if recomputed != entry.receipt {
@@ -1036,7 +1178,7 @@ impl<B: DmBrain> DungeonMaster<B> {
             player.text.clone(),
         );
         let mv = self.brain.narrate(&world.scene, player);
-        self.land_move(world, mv, Some(binding), None)
+        self.land_move(world, mv, Some(binding), None, None)
     }
 
     /// **DRIVE AN EXPLICIT MOVE** (narration + a proposed world-effect). Same output-side teeth as
@@ -1044,7 +1186,7 @@ impl<B: DmBrain> DungeonMaster<B> {
     /// the cap tooth (an over-cap item-grant) and to advance the scene deliberately. Carries no
     /// [`PromptBinding`] (there is no untrusted player field this turn).
     pub fn narrate_move(&self, world: &mut WorldCell, mv: DmMove) -> Result<Receipt, DmError> {
-        self.land_move(world, mv, None, None)
+        self.land_move(world, mv, None, None, None)
     }
 
     /// **LAND A RESOLVED GAME MOVE.** Same landing path + teeth as [`Self::narrate_move`], but the
@@ -1061,8 +1203,9 @@ impl<B: DmBrain> DungeonMaster<B> {
         mv: DmMove,
         prompt_binding: Option<PromptBinding>,
         game_binding: GameBinding,
+        randomness: Option<RandomnessRecord>,
     ) -> Result<Receipt, DmError> {
-        self.land_move(world, mv, prompt_binding, Some(game_binding))
+        self.land_move(world, mv, prompt_binding, Some(game_binding), randomness)
     }
 
     /// The one landing path: cap-check the effect (fail-closed), attest the narration
@@ -1074,6 +1217,7 @@ impl<B: DmBrain> DungeonMaster<B> {
         mv: DmMove,
         prompt_binding: Option<PromptBinding>,
         game_binding: Option<GameBinding>,
+        randomness: Option<RandomnessRecord>,
     ) -> Result<Receipt, DmError> {
         // (1) CAP-BOUND the proposed effect FIRST, fail-closed — an over-cap move never
         //     produces an attestation and never touches the world.
@@ -1101,6 +1245,7 @@ impl<B: DmBrain> DungeonMaster<B> {
             &mv.effect,
             &prompt_binding,
             &game_binding,
+            &randomness,
             &attestation,
         );
         // FEDERATION SEAM: route the receipt commitment to a real node BEFORE touching
@@ -1121,6 +1266,7 @@ impl<B: DmBrain> DungeonMaster<B> {
             effect: mv.effect,
             prompt_binding,
             game_binding,
+            randomness,
             attestation,
             receipt,
         });

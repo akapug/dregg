@@ -50,6 +50,14 @@ path = "src/lib.rs"
 # the DM stays light (no HTTP/TLS on the default path).
 dregg-zkoracle-prove = { path = "../zkoracle-prove" }
 
+# VERIFIABLE RANDOMNESS — a provably-fair game mechanic (a loot chest that drops via a
+# seed-determined, unbiased d-N draw). `EventId::derive` binds the draw to the turn's
+# context (game/seq/pre-state/action/purpose/draw-count) BEFORE the result exists; the
+# recorded `RandomnessRequest` + `RandomnessEvidence` ride the receipt chain, and
+# `verify_replay` re-derives the event id, re-verifies the evidence via the pure
+# `RandomnessSource::seed` verifier, rebuilds the draw stream, and re-runs the resolver.
+dregg-dice = { path = "../dice" }
+
 # The receipt-id commitment over a landed attestation (the on-ledger fingerprint a
 # light client recomputes) — the SAME BLAKE3 shape `deos_hermes::attest` uses.
 blake3 = "1"

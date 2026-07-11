@@ -35,6 +35,7 @@ fn relink(ledger: &mut [LedgerEntry]) {
             &e.effect,
             &e.prompt_binding,
             &e.game_binding,
+            &e.randomness,
             &e.attestation,
         );
         prev = e.receipt;
