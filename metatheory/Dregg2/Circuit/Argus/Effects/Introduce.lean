@@ -280,11 +280,11 @@ theorem introduce_compile_sound
     (hrec : capRootHolds hash env)
     (hexec : interp (introduceStmt intro rec t) k = some k') :
     -- frame-freeze leg: the per-cell projection agrees on the WHOLE frame (introduce is balance-neutral) …
-    ( post.balLo = (cellProj k' c).balLo
-      ∧ post.balHi = (cellProj k' c).balHi
-      ∧ post.nonce = (cellProj k' c).nonce
-      ∧ (∀ i : Fin 8, post.fields i = (cellProj k' c).fields i)
-      ∧ post.reserved = (cellProj k' c).reserved )
+    ( post.balLo ≡ (cellProj k' c).balLo [ZMOD 2013265921]
+      ∧ post.balHi ≡ (cellProj k' c).balHi [ZMOD 2013265921]
+      ∧ post.nonce ≡ (cellProj k' c).nonce [ZMOD 2013265921]
+      ∧ (∀ i : Fin 8, post.fields i ≡ (cellProj k' c).fields i [ZMOD 2013265921])
+      ∧ post.reserved ≡ (cellProj k' c).reserved [ZMOD 2013265921] )
     -- … and the CAP-EDGE leg: the circuit FORCES the genuine in-row `cap_root` recompute (the bound
     -- cap-edge leaf over the old root) — the held-cap-copy grant, bound off the per-row state block.
     ∧ post.capRoot

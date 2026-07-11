@@ -240,11 +240,11 @@ theorem delegate_compile_sound
     (hsat : interp (delegateStmt del rec t) k = some k') :
     -- frame-freeze leg: the circuit pins every NON-capRoot limb frozen at `pre`, and the executor freezes
     -- the per-cell state (k'.cell = k.cell) — the cap-graph effect touches no per-cell ledger.
-    ( post.balLo = pre.balLo
-      ∧ post.balHi = pre.balHi
-      ∧ post.nonce = pre.nonce
-      ∧ (∀ i : Fin 8, post.fields i = pre.fields i)
-      ∧ post.reserved = pre.reserved
+    ( post.balLo ≡ pre.balLo [ZMOD 2013265921]
+      ∧ post.balHi ≡ pre.balHi [ZMOD 2013265921]
+      ∧ post.nonce ≡ pre.nonce [ZMOD 2013265921]
+      ∧ (∀ i : Fin 8, post.fields i ≡ pre.fields i [ZMOD 2013265921])
+      ∧ post.reserved ≡ pre.reserved [ZMOD 2013265921]
       ∧ k'.cell = k.cell )
     -- … and the cap-graph leg: the circuit FORCES the genuine cap-root recompute (bound delegate-edge +
     -- old root), and the executor installs exactly that edge as its post-`caps`.

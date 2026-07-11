@@ -263,11 +263,11 @@ theorem revokeDelegation_compile_sound
     (hrec : capRootHolds hash env)
     (hexec : interp (revokeDelegationStmt holder t) k = some k') :
     -- frozen-frame leg: revoke moves no value — the whole economic block is frozen (pre = post) …
-    ( post.balLo = pre.balLo
-      ∧ post.balHi = pre.balHi
-      ∧ post.nonce = pre.nonce
-      ∧ (∀ i : Fin 8, post.fields i = pre.fields i)
-      ∧ post.reserved = pre.reserved )
+    ( post.balLo ≡ pre.balLo [ZMOD 2013265921]
+      ∧ post.balHi ≡ pre.balHi [ZMOD 2013265921]
+      ∧ post.nonce ≡ pre.nonce [ZMOD 2013265921]
+      ∧ (∀ i : Fin 8, post.fields i ≡ pre.fields i [ZMOD 2013265921])
+      ∧ post.reserved ≡ pre.reserved [ZMOD 2013265921] )
     -- … and the GENUINE CAP-ROOT leg: the circuit FORCES the post `cap_root` to be the in-row recompute
     -- `hash[ hash[holder,target,rights,op], pre.capRoot ]` (bound edge mutation + old root) — NOT an
     -- opaque parameter (the actual edge-removed cap-table is bound off-row via `unify_revoke`).
