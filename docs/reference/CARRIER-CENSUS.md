@@ -440,3 +440,23 @@ INVESTIGATION NEEDED: the deployed vault circuit's actual carry range-check widt
 global bounded-reconstruction theorem (Σ limbs < p) holds. The Lean lane HONESTLY REFUSED to paper over it with a
 possibly-unsound lift (VaultSatDescriptor.lean:254 stays red pending resolution) — the right call. This is the
 migration doing its job: a field-faithful denotation makes carry-wrap UNIGNORABLE where the ℤ model hid it.
+
+## ✅ VAULT CARRY-WRAP — VERDICT (A) CONFIRMED (2026-07-11, claude-verified by hand): REAL gap, STAGED, ember-gated fix
+Full analysis: `docs/reference/VAULT-CARRY-WRAP-INVESTIGATION.md`. Every load-bearing claim verified independently:
+- ★ BOTH Lean (`VaultSatDescriptor.lean:76`) AND deployed Rust (`circuit/src/effect_vm/vault_weld.rs:76`) set
+  `CARRY_BITS = 16` and range-check the product carries (PCB/QCB/…) to 16 bits (`range_specs`, vault_weld.rs:142-166).
+  The Lean is a FAITHFUL mirror ⟹ the gap is REAL in the deployed circuit, NOT model-only.
+- ★ Arithmetic exact: `p = 2^15·61440 + 1` precisely; `61440 < 2^16` passes the loose check; max gate-B residual at
+  16-bit carry = `2^31−1 > p` (gap), at 15-bit = `2^30−1 < p` (safe).
+- ★ EXPLOIT concrete: a diluting deposit (`Ta·m > Sa·d`) is forgeable — a malicious prover picks the wrapping carry
+  (`QT1+=1, QCB+=61440, …`) so `Q_limbs = Sa·d + 2^15·p`, all limbs in range, gates A/C/D exact-ℤ, gate B `≡0 mod p`;
+  the borrow-compare then passes and the no-dilution gate ACCEPTS a share-inflating settlement. Nothing pins QCB.
+- ★ STAGED: `vault_weld.rs:2,40` — tag-19 vault is "PIECE 2 of the VK epoch, STAGED", rides the big-bang flip, NOT
+  in the live VK / not live-routed. So LATENT (close before flip), not a currently-exploitable production hole.
+DECISION (honest state): VaultSatDescriptor.lean STAYS RED. Tightening only the Lean to CARRY_BITS=15 would make the
+model claim a conservation the deployed circuit does NOT enforce — the anti-toy sin. The red file IS the faithful
+state. FIX = `CARRY_BITS 16→15` in BOTH twins (vault_weld.rs:76 + VaultSatDescriptor.lean:76) — provably faithful
+(honest carries fit 15 bits for operands in [0,2^30)), restoring R_B ∈ (−p,p) — PLUS regen the staged VK / fixture
+(`vault-sat-v3-staged.json`) / producer aux-fill / drift-gate FP pin. This touches deployed circuit logic + the
+staged VK epoch ⟹ EMBER-GATED. The mod-p migration EARNED this: the field-faithful denotation refused to prove a
+conservation the ℤ model had silently faked, exposing a real staged vulnerability. This is the campaign working.
