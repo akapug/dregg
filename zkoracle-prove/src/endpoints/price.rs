@@ -379,6 +379,102 @@ pub fn verify_coinbase_live(
     })
 }
 
+/// Verify a PORTABLE coinbase proof — the bincode `tlsn` `Presentation` bytes + the
+/// pinned notary key. Re-derives the full zkOracle attestation from the AUTHENTICATED
+/// response body and runs the genuine verifier, so a stranger verifies a proof file
+/// trusting only api.coinbase.com's genuine cert chain + the pinned notary key.
+#[cfg(feature = "tlsn-live")]
+pub fn verify_coinbase_portable(
+    presentation_bytes: &[u8],
+    notary_key: &tlsn::attestation::signing::VerifyingKey,
+) -> Result<AttestedPrice, PriceError> {
+    use crate::attestation::{FieldSpan, ZkOracleAttestation, content_commitment};
+    use crate::authentic::{EndpointPresentation, TlsnVerifyingKey};
+    use crate::cfg::prove_cfg_compact;
+
+    // 1. Authenticate the real tlsn presentation -> the verified response body.
+    let vr = crate::tlsn_live::verify_coinbase_presentation(
+        presentation_bytes,
+        COINBASE_SERVER_NAME,
+        notary_key,
+    )
+    .map_err(|e| {
+        PriceError::NotVerified(crate::attestation::ZkOracleError::NotAuthenticLive(
+            format!("presentation: {e}"),
+        ))
+    })?;
+    let body = vr.response_body.clone();
+
+    // 2. Re-derive the well-formed / content-commit legs over the authenticated body
+    //    (exactly as prove_coinbase_live does); the injection leg is vacuous here.
+    let cfg_cert = prove_cfg_compact(&body).map_err(|e| {
+        PriceError::NotVerified(crate::attestation::ZkOracleError::NotWellFormed(e))
+    })?;
+    let content_commit = content_commitment(&body);
+    let field_span = FieldSpan { offset: 0, len: 0 };
+    let recv = {
+        let mut v = b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n".to_vec();
+        v.extend_from_slice(&body);
+        v
+    };
+    let presentation = EndpointPresentation {
+        verifying_key: TlsnVerifyingKey {
+            alg: notary_key.alg.to_string(),
+            data: notary_key.data.clone(),
+        },
+        server_name: vr.server_name.clone(),
+        connection_time: vr.connection_time,
+        sent: vr.sent_redacted.clone(),
+        recv,
+        notary_sig: [0u8; 64],
+    };
+    let att = ZkOracleAttestation {
+        presentation,
+        cfg_cert,
+        field_span,
+        content_commit,
+        zk_injection: None,
+        tlsn_presentation: Some(presentation_bytes.to_vec()),
+    };
+
+    // 3. The genuine verifier (fail-closed).
+    verify_coinbase_live(&att, notary_key)
+}
+
+/// Produce a PORTABLE coinbase proof as raw bytes: `(tlsn_presentation_bytes,
+/// bincode(notary VerifyingKey))`. A caller serializes these into any container; a
+/// stranger re-verifies with [`verify_coinbase_portable_bytes`].
+#[cfg(feature = "tlsn-live")]
+pub fn prove_coinbase_portable(asset: &str) -> Result<(Vec<u8>, Vec<u8>), PriceError> {
+    let (att, key) = prove_coinbase_live(asset).map_err(PriceError::NotVerified)?;
+    let pres = att.tlsn_presentation.ok_or_else(|| {
+        PriceError::NotVerified(crate::attestation::ZkOracleError::NotAuthenticLive(
+            "prover produced no tlsn presentation".to_string(),
+        ))
+    })?;
+    let key_bytes = bincode::serialize(&key).map_err(|e| {
+        PriceError::NotVerified(crate::attestation::ZkOracleError::NotAuthenticLive(
+            format!("notary key serialize: {e}"),
+        ))
+    })?;
+    Ok((pres, key_bytes))
+}
+
+/// Verify a PORTABLE coinbase proof from raw bytes (no tlsn types in the caller).
+#[cfg(feature = "tlsn-live")]
+pub fn verify_coinbase_portable_bytes(
+    presentation_bytes: &[u8],
+    notary_key_bytes: &[u8],
+) -> Result<AttestedPrice, PriceError> {
+    let key: tlsn::attestation::signing::VerifyingKey = bincode::deserialize(notary_key_bytes)
+        .map_err(|e| {
+            PriceError::NotVerified(crate::attestation::ZkOracleError::NotAuthenticLive(
+                format!("notary key decode: {e}"),
+            ))
+        })?;
+    verify_coinbase_portable(presentation_bytes, &key)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

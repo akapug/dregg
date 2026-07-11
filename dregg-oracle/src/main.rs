@@ -1,0 +1,145 @@
+//! **dregg-oracle** — CLI for *trustless web facts you can reuse*.
+//!
+//! ```text
+//! dregg-oracle prove  --endpoint coinbase --asset BTC-USD           --out proof.json
+//! dregg-oracle prove  --endpoint github   --repo octocat/hello-world --sha 6dcb09b… --out proof.json
+//! dregg-oracle verify proof.json
+//! ```
+//!
+//! `prove` runs the real-host zkOracle proof and writes a PORTABLE `proof.json`.
+//! `verify` re-runs the genuine verifier fail-closed and prints the attested fact —
+//! anyone can run it, trusting no one but the pinned transport anchors.
+
+use std::path::PathBuf;
+
+use anyhow::{bail, Context, Result};
+use clap::{Parser, Subcommand, ValueEnum};
+
+use dregg_oracle::{prove, verify_envelope, Endpoint, ProofEnvelope};
+
+#[derive(Parser)]
+#[command(
+    name = "dregg-oracle",
+    version,
+    about = "Trustless web facts you can reuse — portable, independently-verifiable proofs that a real HTTPS endpoint returned a value (authentic ∧ well-formed ∧ injection-free, STARK-bound)."
+)]
+struct Cli {
+    #[command(subcommand)]
+    cmd: Cmd,
+}
+
+#[derive(Subcommand)]
+enum Cmd {
+    /// Produce a portable proof that a real HTTPS endpoint returned a value.
+    Prove {
+        /// Which public web fact to prove.
+        #[arg(long, value_enum)]
+        endpoint: EndpointArg,
+        /// Coinbase: the asset pair, e.g. `BTC-USD` (a bare `BTC` is read as `BTC-USD`).
+        #[arg(long)]
+        asset: Option<String>,
+        /// GitHub: the repository as `owner/name`.
+        #[arg(long)]
+        repo: Option<String>,
+        /// GitHub: the commit sha.
+        #[arg(long)]
+        sha: Option<String>,
+        /// Where to write the portable proof.
+        #[arg(long, default_value = "proof.json")]
+        out: PathBuf,
+    },
+    /// Verify a portable proof, fail-closed, and print the attested fact.
+    Verify {
+        /// The `proof.json` to verify.
+        proof: PathBuf,
+    },
+}
+
+#[derive(Clone, ValueEnum)]
+enum EndpointArg {
+    Coinbase,
+    Github,
+}
+
+fn main() -> Result<()> {
+    let cli = Cli::parse();
+    match cli.cmd {
+        Cmd::Prove {
+            endpoint,
+            asset,
+            repo,
+            sha,
+            out,
+        } => run_prove(endpoint, asset, repo, sha, out),
+        Cmd::Verify { proof } => run_verify(proof),
+    }
+}
+
+fn run_prove(
+    endpoint: EndpointArg,
+    asset: Option<String>,
+    repo: Option<String>,
+    sha: Option<String>,
+    out: PathBuf,
+) -> Result<()> {
+    let endpoint = match endpoint {
+        EndpointArg::Coinbase => {
+            let asset = asset.context("--asset is required for --endpoint coinbase")?;
+            // Convenience: a bare base (`BTC`) is quoted in USD.
+            let asset = if asset.contains('-') {
+                asset
+            } else {
+                format!("{asset}-USD")
+            };
+            Endpoint::Coinbase { asset }
+        }
+        EndpointArg::Github => {
+            let repo = repo.context("--repo owner/name is required for --endpoint github")?;
+            let (owner, name) = repo
+                .split_once('/')
+                .context("--repo must be owner/name (e.g. octocat/hello-world)")?;
+            let sha = sha.context("--sha is required for --endpoint github")?;
+            Endpoint::Github {
+                owner: owner.to_string(),
+                repo: name.to_string(),
+                sha,
+            }
+        }
+    };
+
+    eprintln!(
+        "proving {} against {} …",
+        endpoint.label(),
+        endpoint.server_name()
+    );
+    let env = prove(&endpoint)?;
+    let json = env.to_json()?;
+    std::fs::write(&out, json.as_bytes())
+        .with_context(|| format!("writing proof to {}", out.display()))?;
+    eprintln!("wrote portable proof → {}", out.display());
+    Ok(())
+}
+
+fn run_verify(proof: PathBuf) -> Result<()> {
+    let json = std::fs::read_to_string(&proof)
+        .with_context(|| format!("reading proof from {}", proof.display()))?;
+    let env = ProofEnvelope::from_json(&json)?;
+
+    match verify_envelope(&env) {
+        Ok(att) => {
+            println!("PASS  {}", att.value);
+            println!("  endpoint     {}", att.endpoint);
+            println!("  server pinned {}", att.server_pinned);
+            println!("  carrier      {}", att.carrier);
+            println!("  session time {} (unix)", att.time);
+            println!("  tool         {}", env.tool);
+            println!("  note         {}", att.trust_note);
+            Ok(())
+        }
+        Err(e) => {
+            // Fail-closed: a refused proof is a hard error, named leg and all.
+            println!("FAIL  {} — {e:#}", env.endpoint.label());
+            bail!("proof did not verify");
+        }
+    }
+}
