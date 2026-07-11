@@ -1925,6 +1925,7 @@ fn golem_world() -> GameWorld {
             kind: StatusKind::Shield(3),
         }],
         loot: Vec::new(),
+        encounters: Vec::new(),
         player_max_hp: 100,
         light: None,
         start: "arena".into(),
@@ -2027,6 +2028,7 @@ fn poison_world() -> GameWorld {
             kind: StatusKind::Poison(2),
         }],
         loot: Vec::new(),
+        encounters: Vec::new(),
         player_max_hp: 100,
         light: None,
         start: "cell_a".into(),
@@ -2915,4 +2917,514 @@ fn a_reopened_chest_draws_nothing_and_the_five_games_carry_no_randomness() {
         );
         assert!(g.verify_report().both_ok());
     }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// THE ARENA GAUNTLET — the turn-based tactical COMBAT ENGINE: initiative + abilities +
+// targeting with VERIFIABLE damage rolls (via dregg-dice), world-resolved and replay-checked.
+// ═════════════════════════════════════════════════════════════════════════════
+
+use dregg_dice::{DrawStream, Seed};
+
+/// Drive the arena party to victory ADAPTIVELY: ask the engine whose turn it is, then pick a
+/// sensible ability for that combatant. Deterministic under the default seed. Asserts each combat
+/// command lands. Returns nothing; leaves `game` at the felled-Sentinel state.
+fn solve_arena(game: &mut GameSession) {
+    let map = arena_gauntlet();
+    let enc = map.encounter_for("arena").unwrap();
+    let mut steps = 0;
+    while enc.active(game.world()) && steps < 80 {
+        steps += 1;
+        let actor = match enc.current_actor(game.world()) {
+            Some(c) => c.id.clone(),
+            None => break,
+        };
+        let cmd = match actor.as_str() {
+            "rhea" => {
+                let cd = game
+                    .world()
+                    .flags
+                    .get(&enc.cooldown_flag("rhea", "cleave"))
+                    .copied()
+                    .unwrap_or(0);
+                if cd == 0 {
+                    "use cleave on sentinel"
+                } else {
+                    "use strike on sentinel"
+                }
+            }
+            "sol" => "use bolt on sentinel",
+            _ => "use strike on sentinel",
+        };
+        assert!(
+            game.command("hero", cmd).landed(),
+            "combat command `{cmd}` (actor {actor}) should land"
+        );
+    }
+}
+
+/// **A real encounter resolves as a CLOSED deterministic machine and is WON by rolled damage.**
+/// The party walks into the arena (the reliquary is barred until the Sentinel falls), fights it out
+/// over several initiative-ordered rounds with verified damage rolls, and the felling of the last
+/// foe opens the gate — reaching the reliquary HOLDING the trophy is the win. Deterministic under
+/// the default seed: the first cleave rolls an 8 for 10 damage, every value reproducing exactly.
+#[test]
+fn an_encounter_is_a_closed_machine_won_by_verified_rolls() {
+    let mut game = GameSession::open(arena_gauntlet());
+    game.command("hero", "go north").assert_landed(); // into the arena
+    assert_eq!(game.world().scene, "arena");
+
+    // The reliquary exit is barred until the Sentinel is down — combat is load-bearing to the win.
+    match game.command("hero", "go north") {
+        PlayResult::Refused(GameRefusal::LockedExit { .. }) => {}
+        other => panic!("the reliquary must stay gated until victory, got {other:?}"),
+    }
+
+    // The FIRST combat turn: Rhea's cleave rolls an 8 → 10 damage (8 + 3 attack − 1 defense), and
+    // the Sentinel (faster than Sol) strikes Sol in the SAME turn. World-resolved, reproducible.
+    let first = game.command("hero", "use cleave on sentinel");
+    assert!(first.landed(), "the opening cleave lands, got {first:?}");
+    let enc = arena_gauntlet();
+    let enc = enc.encounter_for("arena").unwrap();
+    assert_eq!(
+        enc.hp(game.world(), "sentinel"),
+        16,
+        "the cleave dealt exactly 10 (rolled 8 + 3 − 1) — the WORLD's arithmetic, reproducible"
+    );
+
+    // Finish the fight, then claim the trophy to WIN.
+    solve_arena(&mut game);
+    assert!(!enc.active(game.world()), "the Sentinel is felled");
+    assert_eq!(game.world().flags.get("sentinel_down").copied(), Some(1));
+    assert_eq!(enc.hp(game.world(), "sentinel"), 0);
+
+    game.command("hero", "go north").assert_landed(); // the gate is open now
+    assert_eq!(game.world().scene, "reliquary");
+    let win = game.command("hero", "take trophy");
+    match win {
+        PlayResult::Landed { status, .. } => assert_eq!(status, GameStatus::Won),
+        other => panic!("taking the trophy in the reliquary wins, got {other:?}"),
+    }
+    assert_eq!(game.status(), GameStatus::Won);
+
+    // Both verification tiers pass the honest fight.
+    assert!(
+        game.verify_report().both_ok(),
+        "the honest fight verifies on both tiers"
+    );
+}
+
+/// **The verified damage rolls are REPRODUCED by from-genesis re-execution.** Every combat turn
+/// carries a `RandomnessRecord` under the `"combat"` purpose tag; `verify_replay` re-derives each
+/// seed, rebuilds the stream, and re-runs the resolver — reproducing every blow. Non-vacuous: the
+/// fight actually consumes combat draws (asserted), and both tiers accept.
+#[test]
+fn a_combat_roll_is_bound_and_reproduced_by_replay() {
+    let mut game = GameSession::open(arena_gauntlet());
+    game.command("hero", "go north").assert_landed();
+    solve_arena(&mut game);
+    assert!(game.world().flags.get("sentinel_down").copied() == Some(1));
+
+    // Every combat turn carries a combat-tagged draw; there is at least one.
+    let combat_turns: Vec<_> = game
+        .world()
+        .ledger
+        .iter()
+        .filter(|e| e.randomness.is_some())
+        .collect();
+    assert!(
+        !combat_turns.is_empty(),
+        "the fight consumed verified combat draws"
+    );
+    for e in &combat_turns {
+        let rec = e.randomness.as_ref().unwrap();
+        assert_eq!(
+            rec.request.event_kind, COMBAT_EVENT_KIND,
+            "a combat draw is domain-separated under the `combat` purpose tag"
+        );
+        assert_eq!(
+            rec.request.draw_count, 3,
+            "draw_count is the (constant) combatant count"
+        );
+    }
+
+    // Integrity AND re-execution both accept — replay reproduced every roll.
+    game.verify().expect("honest combat chain integrity");
+    game.verify_replay()
+        .expect("honest combat re-execution reproduces every roll");
+}
+
+/// Bump one flag-write inside a Batch effect (a forged damage). Returns whether it fired.
+fn forge_flag(effect: &mut Option<WorldEffect>, flag: &str, new_val: i64) -> bool {
+    if let Some(WorldEffect::Batch(subs)) = effect {
+        for s in subs.iter_mut() {
+            if let WorldEffect::SetFlag(k, v) = s {
+                if k == flag {
+                    *v = new_val;
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// **THE HEADLINE — a FORGED combat outcome passes chain integrity but replay CATCHES it.** Play a
+/// real fight, then hand-forge the felling turn to record a *harder* hit (the Sentinel driven to a
+/// lower HP than the verified roll produced), and re-link the chain so the hash chain stays
+/// internally consistent. `verify()` (integrity) STILL passes the forged chain — it recomputes the
+/// receipt over the *recorded* effect. `verify_replay()` re-derives the SEED, re-rolls the die, and
+/// finds the recorded damage does not match — a rule-incorrect combat transition, at the exact seq.
+#[test]
+fn a_forged_combat_effect_passes_integrity_but_replay_catches_it() {
+    let mut game = GameSession::open(arena_gauntlet());
+    game.command("hero", "go north").assert_landed();
+    solve_arena(&mut game);
+    assert_eq!(game.status(), GameStatus::Playing); // fight over, not yet at the objective
+    game.verify_replay()
+        .expect("honest re-execution before forging");
+
+    let config = game.dm().config().clone();
+    let map = game.map().clone();
+    let mut world = game.into_world();
+
+    // Find a combat turn whose Batch wrote the Sentinel's HP, and FORGE that HP lower (a bigger,
+    // unearned hit than the verified roll dealt).
+    let mut forged_seq = None;
+    for (i, entry) in world.ledger.iter_mut().enumerate() {
+        // The honest recorded HP for this turn (before we tamper it).
+        if let Some(WorldEffect::Batch(subs)) = &entry.effect {
+            let has_sentinel_hp = subs.iter().any(
+                |s| matches!(s, WorldEffect::SetFlag(k, v) if k == "arena__hp_sentinel" && *v > 0),
+            );
+            if has_sentinel_hp {
+                // Forge THIS turn's recorded Sentinel HP to 0 (claim the blow felled it outright).
+                assert!(
+                    forge_flag(&mut entry.effect, "arena__hp_sentinel", 0),
+                    "the forge must fire"
+                );
+                forged_seq = Some(i as u64);
+                break;
+            }
+        }
+    }
+    let forged_seq = forged_seq.expect("a combat turn writing a positive Sentinel HP exists");
+
+    // Re-link so the chain stays internally consistent (receipts recompute over the forged effect).
+    relink(&mut world.ledger);
+
+    // INTEGRITY STILL PASSES the re-linked forgery — the gap the re-execution tier closes.
+    world
+        .verify_ledger(&config)
+        .expect("the re-linked forged combat chain still passes integrity");
+
+    // RE-EXECUTION CATCHES IT — the resolver re-rolls the verified die and finds the recorded
+    // damage is a lie, at exactly the forged seq.
+    let err = crate::verify_ledger_replay(&map, &world.ledger)
+        .expect_err("replay must reject the forged combat damage");
+    match err {
+        crate::ReplayMismatch::Effect { seq, .. } => {
+            assert_eq!(seq, forged_seq, "caught at the forged combat turn");
+        }
+        other => panic!("expected an Effect mismatch on the forged blow, got {other:?}"),
+    }
+}
+
+/// **An OUT-OF-INITIATIVE action is refused — no receipt.** When it is Sol's turn, a command with
+/// one of Rhea's abilities (`cleave`) is refused ([`GameRefusal::NotYourTurn`]): the world advances
+/// not at all and the ledger does not grow (the anti-ghost tooth).
+#[test]
+fn an_out_of_initiative_action_is_refused_no_receipt() {
+    let mut game = GameSession::open(arena_gauntlet());
+    game.command("hero", "go north").assert_landed();
+    // Round 1: Rhea + Sentinel land on the first command; the cursor now rests on Sol.
+    game.command("hero", "use strike on sentinel")
+        .assert_landed();
+    let map = arena_gauntlet();
+    let enc = map.encounter_for("arena").unwrap();
+    assert_eq!(
+        enc.current_actor(game.world()).map(|c| c.id.as_str()),
+        Some("sol"),
+        "after the opening exchange it is Sol's turn"
+    );
+
+    let ledger_len = game.world().ledger.len();
+    // `cleave` is Rhea's, not Sol's — acting with it out of turn is refused.
+    match game.command("hero", "use cleave on sentinel") {
+        PlayResult::Refused(GameRefusal::NotYourTurn { whose, ability }) => {
+            assert_eq!(whose, "Sol");
+            assert_eq!(ability, "cleave");
+        }
+        other => panic!("an out-of-initiative ability must be refused, got {other:?}"),
+    }
+    assert_eq!(
+        game.world().ledger.len(),
+        ledger_len,
+        "a refused out-of-initiative move leaves NO receipt (anti-ghost)"
+    );
+}
+
+/// **An ILLEGAL-TARGET strike is refused — no receipt.** Aiming a strike at an ally (`rhea`), at a
+/// nonexistent id, or with no target is refused ([`GameRefusal::IllegalTarget`]); the world is
+/// unchanged and no receipt lands.
+#[test]
+fn an_illegal_target_is_refused_no_receipt() {
+    let mut game = GameSession::open(arena_gauntlet());
+    game.command("hero", "go north").assert_landed();
+    let before = game.world().ledger.len();
+
+    for cmd in ["use strike on rhea", "use strike on nobody", "use strike"] {
+        match game.command("hero", cmd) {
+            PlayResult::Refused(GameRefusal::IllegalTarget { .. }) => {}
+            other => panic!("`{cmd}` must be refused as an illegal target, got {other:?}"),
+        }
+    }
+    assert_eq!(
+        game.world().ledger.len(),
+        before,
+        "refused illegal-target moves leave NO receipt"
+    );
+}
+
+/// **A combat command against a FINISHED encounter is refused.** Once the Sentinel is down, another
+/// ability command is refused ([`GameRefusal::EncounterOver`]) — the fight does not re-open.
+#[test]
+fn a_finished_encounter_refuses_further_combat() {
+    let mut game = GameSession::open(arena_gauntlet());
+    game.command("hero", "go north").assert_landed();
+    solve_arena(&mut game);
+    let before = game.world().ledger.len();
+    match game.command("hero", "use strike on sentinel") {
+        PlayResult::Refused(GameRefusal::EncounterOver { .. }) => {}
+        other => panic!("a decided encounter refuses more combat, got {other:?}"),
+    }
+    assert_eq!(
+        game.world().ledger.len(),
+        before,
+        "no receipt for a refused post-fight strike"
+    );
+}
+
+/// **INITIATIVE is load-bearing.** The Sentinel (initiative 8) is faster than Sol (5), so on the
+/// very first command it strikes Sol BEFORE Sol has ever acted — Sol's HP drops in the opening
+/// exchange while Rhea (initiative 12) acts first and takes no hit. A slow character cannot react
+/// in time; the order of the blows is decided by initiative, not by prose.
+#[test]
+fn initiative_orders_the_blows_a_fast_foe_pre_empts_a_slow_player() {
+    let mut game = GameSession::open(arena_gauntlet());
+    game.command("hero", "go north").assert_landed();
+    let map = arena_gauntlet();
+    let enc = map.encounter_for("arena").unwrap();
+    assert_eq!(
+        enc.hp(game.world(), "sol"),
+        12,
+        "Sol is at full HP before the fight"
+    );
+
+    // ONE command — Rhea's turn — but the Sentinel (faster than Sol) folds its strike into the
+    // same initiative pass and hits Sol before Sol acts.
+    game.command("hero", "use strike on sentinel")
+        .assert_landed();
+    assert!(
+        enc.hp(game.world(), "sol") < 12,
+        "the faster Sentinel struck Sol in the opening exchange, before Sol could act"
+    );
+    assert_eq!(
+        enc.hp(game.world(), "rhea"),
+        18,
+        "Rhea, acting first, took no hit"
+    );
+}
+
+/// **A cooldown SPECIAL is a real resource.** Rhea's `cleave` (a d10 special, 2-round cooldown)
+/// cannot be used again until it refreshes: the turn after a cleave, a second cleave is refused
+/// ([`GameRefusal::AbilityUnavailable`]) while a plain `strike` still lands. No negative resource,
+/// no infinite specials.
+#[test]
+fn a_cooldown_special_is_unavailable_until_it_refreshes() {
+    let mut game = GameSession::open(arena_gauntlet());
+    game.command("hero", "go north").assert_landed();
+    // Round 1: Rhea cleaves (sets the cooldown), Sol bolts → round wraps back to Rhea.
+    game.command("hero", "use cleave on sentinel")
+        .assert_landed();
+    game.command("hero", "use bolt on sentinel").assert_landed();
+    let map = arena_gauntlet();
+    let enc = map.encounter_for("arena").unwrap();
+    assert_eq!(
+        enc.current_actor(game.world()).map(|c| c.id.as_str()),
+        Some("rhea"),
+        "round 2 opens on Rhea"
+    );
+
+    // Round 2: cleave is still on cooldown — refused; a strike lands instead.
+    let before = game.world().ledger.len();
+    match game.command("hero", "use cleave on sentinel") {
+        PlayResult::Refused(GameRefusal::AbilityUnavailable { ability, .. }) => {
+            assert_eq!(ability, "cleave");
+        }
+        other => panic!("cleave must be on cooldown in round 2, got {other:?}"),
+    }
+    assert_eq!(
+        game.world().ledger.len(),
+        before,
+        "a refused special leaves no receipt"
+    );
+    game.command("hero", "use strike on sentinel")
+        .assert_landed();
+}
+
+/// A minimal 1v1 arena: a fast Hero (who can guard) versus a slow Brute. The trivial encounter —
+/// the shape the pre-existing one-shot [`CombatEnemy`] fills — expressed in the new engine.
+fn duel_world() -> GameWorld {
+    let mut rooms: std::collections::BTreeMap<String, Room> = std::collections::BTreeMap::new();
+    rooms.insert(
+        "pit".into(),
+        Room::new("pit", "The Pit", "sand and iron").exit(
+            "out",
+            Exit::gated("exit", Gate::NeedsFlag("brute_down".into(), 1)),
+        ),
+    );
+    rooms.insert(
+        "exit".into(),
+        Room::new("exit", "The Ledge", "daylight").item("laurel"),
+    );
+    let enc = EncounterRule {
+        id: "pit".into(),
+        room: "pit".into(),
+        combatants: vec![
+            Combatant::player(
+                "hero",
+                "Hero",
+                20,
+                2,
+                0,
+                20,
+                vec![Ability::strike("strike", 6), Ability::guard("guard", 5)],
+            ),
+            Combatant::foe("brute", "the Brute", 8, 4, 0, 5, 6),
+        ],
+        victory_flag: ("brute_down".into(), 1),
+        defeat_flag: ("hero_down".into(), 1),
+        victory_narration: "the Brute topples".into(),
+        defeat_narration: "the Hero falls".into(),
+    };
+    GameWorld {
+        rooms,
+        use_rules: Vec::new(),
+        hostiles: std::collections::BTreeMap::new(),
+        combat: std::collections::BTreeMap::new(),
+        npcs: Vec::new(),
+        dialogue: Vec::new(),
+        spells: Vec::new(),
+        spell_rules: Vec::new(),
+        consumables: Vec::new(),
+        statuses: Vec::new(),
+        loot: Vec::new(),
+        encounters: vec![enc],
+        player_max_hp: 0,
+        light: None,
+        start: "pit".into(),
+        objective: Objective {
+            room: "exit".into(),
+            holding: "laurel".into(),
+        },
+        lose: vec![LoseCondition {
+            flag: "hero_down".into(),
+            at_least: 1,
+            description: "the Hero was slain".into(),
+        }],
+    }
+}
+
+/// **The TRIVIAL 1v1 case works** — the shape the one-shot [`CombatEnemy`] fills, now a valid
+/// degenerate encounter. A fast Hero out-duels a slow Brute over a few verified-rolled strikes,
+/// felling it opens the ledge, and the win re-verifies on both tiers. (The five bundled games keep
+/// their own [`CombatEnemy`]/[`Attack`] combat unchanged — this shows the new engine SUBSUMES it.)
+#[test]
+fn the_trivial_1v1_encounter_is_a_valid_case() {
+    let mut game = GameSession::open(duel_world());
+    let map = duel_world();
+    let enc = map.encounter_for("pit").unwrap();
+    let mut steps = 0;
+    while enc.active(game.world()) && steps < 40 {
+        steps += 1;
+        game.command("hero", "use strike on brute").assert_landed();
+    }
+    assert!(
+        !enc.active(game.world()),
+        "the Brute is felled by verified strikes"
+    );
+    assert_eq!(game.world().flags.get("brute_down").copied(), Some(1));
+    game.command("hero", "go out").assert_landed();
+    let win = game.command("hero", "take laurel");
+    assert!(matches!(
+        win,
+        PlayResult::Landed {
+            status: GameStatus::Won,
+            ..
+        }
+    ));
+    assert!(
+        game.verify_report().both_ok(),
+        "the 1v1 duel verifies on both tiers"
+    );
+}
+
+/// **A guard SHIELD really mitigates a blow.** Drive the resolver directly with a hand-built draw
+/// stream and a pre-set huge shield on the Hero: the Brute's blow (whatever it rolls) is fully
+/// absorbed, so the Hero takes ZERO damage that turn. Non-vacuous — without the shield the same
+/// blow would land `roll + 4`; the mitigation arithmetic is load-bearing.
+#[test]
+fn a_guard_shield_mitigates_a_blow_within_the_round() {
+    let map = duel_world();
+    let enc = map.encounter_for("pit").unwrap();
+    let mut world = map.new_world();
+    // Pre-set a huge shield on the Hero (as a `guard` would, but larger than any possible blow).
+    world.flags.insert(enc.shield_flag("hero"), 100);
+
+    // A hand-built stream (2 combatants → draw_count 2). The Hero strikes the Brute (draw 0), then
+    // the Brute strikes the Hero (draw 1) — fully absorbed by the 100 shield.
+    let stream = DrawStream::new(Seed::from_bytes([0x33; 32]), 2);
+    let out = resolve_action_rng(
+        &map,
+        &world,
+        &GameAction::Use("strike".into(), Some("brute".into())),
+        Some(&stream),
+    );
+    let mut after = world.clone();
+    match out {
+        Outcome::Legal(r) => {
+            if let Some(e) = &r.effect {
+                after.apply(e);
+            }
+        }
+        other => panic!("an armed strike is legal, got {other:?}"),
+    }
+    assert_eq!(
+        enc.hp(&after, "hero"),
+        20,
+        "the 100-shield fully absorbed the Brute's blow — the Hero took ZERO damage"
+    );
+    assert!(
+        enc.hp(&after, "brute") < 8,
+        "the Hero's own strike still dealt its rolled damage to the Brute"
+    );
+}
+
+/// **A combat session round-trips through a SaveGame.** The full fight (verifiable randomness and
+/// all) serializes and reloads fail-closed: the reconstructed session re-verifies both tiers and is
+/// at the identical state, proving combat composes with persistence.
+#[test]
+fn a_combat_session_round_trips_through_a_savegame() {
+    let mut game = GameSession::open(arena_gauntlet());
+    game.command("hero", "go north").assert_landed();
+    solve_arena(&mut game);
+    let saved = game.save();
+    let json = serde_json::to_string(&saved).expect("a combat save serializes");
+    let decoded: crate::SaveGame = serde_json::from_str(&json).expect("and deserializes");
+    let reloaded = GameSession::load(&decoded, arena_gauntlet())
+        .expect("a combat save reloads fail-closed (chain + replay + state)");
+    assert_eq!(reloaded.world().scene, game.world().scene);
+    assert_eq!(reloaded.world().flags, game.world().flags);
+    assert!(reloaded.verify_report().both_ok());
 }

@@ -66,6 +66,11 @@ const ACTION_COMMITMENT_DOMAIN: &[u8] = b"attested-dm-action-commitment-v1";
 /// this subsystem's draws from any other (a combat roll, say) so they can never influence one another.
 pub const LOOT_EVENT_KIND: &str = "loot";
 
+/// The purpose tag ([`dregg_dice::EventId`] `event_kind`) for a combat-round draw — domain-separated
+/// from [`LOOT_EVENT_KIND`] (and every other subsystem) so a loot draw and a combat roll can never
+/// influence one another even at the same `seq`/pre-state. See [`EncounterRule`] and [`resolve_encounter`].
+pub const COMBAT_EVENT_KIND: &str = "combat";
+
 // ─────────────────────────────────────────────────────────────────────────────
 // The closed typed action channel — the ONLY moves the AI can propose.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -795,6 +800,474 @@ impl LootRule {
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// TURN-BASED TACTICAL COMBAT — an initiative-ordered ENCOUNTER over committed stats with
+// VERIFIABLE damage rolls. The first slice of a real combat engine beside the one-shot
+// [`Hostile`] and the multi-turn [`CombatEnemy`]: a CLOSED deterministic state machine of
+// combatants in initiative order, a small ABILITY set (strike / guard / a cooldown special),
+// TARGETING (choose an eligible foe), per-round status stacks (a `guard` shield extending the
+// existing [`StatusKind::Shield`] idea into the encounter), and terminal victory/defeat — with
+// every damage roll drawn from the turn's verified `dregg_dice` stream (exactly like the loot
+// chest), so [`verify_ledger_replay`] reproduces the whole fight and a forged damage/target is
+// caught. Combat RIDES the closed [`GameAction::Use`] channel (an ability word, optionally aimed) —
+// NO new [`GameAction`] variant. Prose is not power, at the level of a blow: the AI narrates the
+// strike; the WORLD rolls the die (from a verified draw) and computes the HP.
+//
+// ## The machine
+//
+// An [`EncounterRule`] lists [`Combatant`]s; their HP, cooldowns, and shields live as world flags
+// (so the fight is a closed, reproducible substate committed by [`WorldCell::state_root`]), while
+// their stats + abilities are static committed data. [`initiative`](Combatant::initiative) fixes a
+// total order (ties by id). ONE player command resolves the current player combatant's chosen
+// ability PLUS every foe that acts between it and the next player combatant in initiative order —
+// so a faster foe strikes BEFORE a slower hero's blow lands (initiative is load-bearing), all as
+// ONE receipted turn (one [`WorldEffect::Batch`] of flag writes). A verified draw is consumed per
+// rolled action (foe strikes and player strikes/specials; `guard` rolls nothing), indexed within
+// the round's stream; the count of draws the round may consume is bound up-front as `draw_count`.
+//
+// ## What a fuller engine adds (honest scope — this is a FIRST slice)
+//
+// A 1v1 or small NvM fight with one attack, one defense, integer HP, one shield status, and one
+// cooldown special. It deliberately omits: ranged/positioning + range checks, an action-economy
+// beyond one action/turn, reactions/opportunity effects, an effect QUEUE for interacting statuses
+// (poison-over-combat, stuns, DOTs), downed-not-dead states, equipment modifiers folded from the
+// inventory, and multi-encounter progression. The design's `(combat_id, round, turn, action_index,
+// "hit")` draw indexing is realized coarsely here (per-round stream, per-action index); a fuller
+// engine folds the full ruleset hash into the draw binding and circuitizes the transition.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Which side a [`Combatant`] fights for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Team {
+    /// A player-controlled combatant — acts by a `Use(ability, target)` command on ITS turn.
+    Player,
+    /// A foe — acts AUTOMATICALLY (a deterministic AI) on its initiative turn, folded into the
+    /// same receipted turn as the player command that reaches it in initiative order.
+    Foe,
+}
+
+/// **The bounded thing an ability does.** Damage is a committed stat plus a VERIFIED die roll;
+/// mitigation is a committed defense plus any active shield. A closed set — no free-form scripting
+/// in the trusted transition (the design's rule for a first combat core).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AbilityKind {
+    /// A basic attack: roll d`dice` from the turn's verified stream, add the attacker's
+    /// [`Combatant::attack`], and deal it to the target foe (mitigated by its defense + shield,
+    /// floored at 0). One verified draw per use.
+    Strike {
+        /// The die rolled for damage (e.g. `6` for a d6).
+        dice: u64,
+    },
+    /// Defend: grant SELF a shield of `amount` mitigation for the rest of THIS round (extends the
+    /// existing [`StatusKind::Shield`] idea into the encounter — a per-combatant, per-round stack,
+    /// cleared at round end). Rolls nothing (deterministic).
+    Guard {
+        /// The mitigation the shield subtracts from every blow landed on the guarder this round.
+        amount: i64,
+    },
+    /// A SPECIAL rolled attack with a cooldown: like [`Self::Strike`] (usually a bigger die), but
+    /// unusable while its cooldown counter is above zero. Using it sets the cooldown to `cooldown`
+    /// rounds; each round-end decrements it. A per-ability resource the engine tracks as a world flag.
+    Special {
+        /// The die rolled for damage.
+        dice: u64,
+        /// Rounds of cooldown incurred by using it (unusable until the counter returns to 0).
+        cooldown: i64,
+    },
+}
+
+impl AbilityKind {
+    /// The die this ability rolls for damage, if it rolls at all (`None` for [`Self::Guard`]).
+    pub fn dice(&self) -> Option<u64> {
+        match self {
+            AbilityKind::Strike { dice } | AbilityKind::Special { dice, .. } => Some(*dice),
+            AbilityKind::Guard { .. } => None,
+        }
+    }
+}
+
+/// **An ability a combatant may use** — the command word it rides (`Use(word, target)`) and its
+/// bounded [`AbilityKind`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Ability {
+    /// The command word — `Use("strike", Some("ogre"))` picks the ability named `strike`.
+    pub word: String,
+    /// What it does.
+    pub kind: AbilityKind,
+}
+
+impl Ability {
+    /// A basic strike ability (roll d`dice`).
+    pub fn strike(word: impl Into<String>, dice: u64) -> Ability {
+        Ability {
+            word: word.into(),
+            kind: AbilityKind::Strike { dice },
+        }
+    }
+    /// A guard ability (shield self by `amount` for the round).
+    pub fn guard(word: impl Into<String>, amount: i64) -> Ability {
+        Ability {
+            word: word.into(),
+            kind: AbilityKind::Guard { amount },
+        }
+    }
+    /// A cooldown special ability (roll d`dice`, `cooldown` rounds of cooldown).
+    pub fn special(word: impl Into<String>, dice: u64, cooldown: i64) -> Ability {
+        Ability {
+            word: word.into(),
+            kind: AbilityKind::Special { dice, cooldown },
+        }
+    }
+}
+
+/// **A combatant in an [`EncounterRule`]** — committed stats + abilities. Its HP, cooldowns, and
+/// shields live as world flags (so the fight is a closed, reproducible machine); its stats and its
+/// ability set are static committed data. A [`Team::Player`] combatant is driven by `Use` commands
+/// on its turn; a [`Team::Foe`] acts by a deterministic AI (it uses its first rolling ability on the
+/// lowest-HP living player, ties by initiative order).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Combatant {
+    /// The combatant's stable id — the `Use` *target* that aims at it, and the flag-name key.
+    pub id: String,
+    /// The combatant's display name (for the world's narration).
+    pub name: String,
+    /// Which side it fights for.
+    pub team: Team,
+    /// Its maximum (and starting) hit points — seeded into its HP flag at [`GameWorld::new_world`].
+    pub max_hp: i64,
+    /// A flat damage bonus added to every rolled strike it lands.
+    pub attack: i64,
+    /// A flat mitigation subtracted from every blow landed on it (stacks with an active shield).
+    pub defense: i64,
+    /// Its initiative — higher acts earlier in the round; ties broken by `id` (a total order).
+    pub initiative: i64,
+    /// Its abilities — for a player, the set a command word selects from; for a foe, the AI uses
+    /// the first that rolls (a [`AbilityKind::Strike`] / [`AbilityKind::Special`]).
+    pub abilities: Vec<Ability>,
+}
+
+impl Combatant {
+    /// A player combatant with the given stats and abilities.
+    pub fn player(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        max_hp: i64,
+        attack: i64,
+        defense: i64,
+        initiative: i64,
+        abilities: Vec<Ability>,
+    ) -> Combatant {
+        Combatant {
+            id: id.into(),
+            name: name.into(),
+            team: Team::Player,
+            max_hp,
+            attack,
+            defense,
+            initiative,
+            abilities,
+        }
+    }
+
+    /// A foe combatant. Its `strike_dice` is the die its AI rolls each turn (a single strike).
+    pub fn foe(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        max_hp: i64,
+        attack: i64,
+        defense: i64,
+        initiative: i64,
+        strike_dice: u64,
+    ) -> Combatant {
+        Combatant {
+            id: id.into(),
+            name: name.into(),
+            team: Team::Foe,
+            max_hp,
+            attack,
+            defense,
+            initiative,
+            abilities: vec![Ability::strike("strike", strike_dice)],
+        }
+    }
+}
+
+/// **A world-declared ENCOUNTER — the turn-based tactical combat mechanic.** Stands in [`Self::room`];
+/// a `Use(ability, target)` there whose word is a player ability routes to [`resolve_encounter`]. The
+/// fight is a closed deterministic machine over the [`Combatant`]s' HP/cooldown/shield flags, resolved
+/// against verified `dregg_dice` draws — so [`verify_ledger_replay`] reproduces it and a forged damage
+/// or target is caught. On victory (all foes at ≤0 HP) [`Self::victory_flag`] is set (a downstream
+/// [`Gate`] reads it — e.g. an exit opens); on defeat (all players at ≤0 HP) [`Self::defeat_flag`] is
+/// set (wire it as a [`LoseCondition`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EncounterRule {
+    /// The encounter's stable id — the prefix of its internal flag names (kept distinct from any
+    /// author flag by a `__` separator), so two encounters never collide.
+    pub id: String,
+    /// The room the encounter is fought in.
+    pub room: String,
+    /// The combatants, in any order (initiative is computed). Must contain ≥1 player and ≥1 foe.
+    pub combatants: Vec<Combatant>,
+    /// The flag set once every foe is felled (a downstream [`Gate`] reads it — the combat gate).
+    pub victory_flag: (String, i64),
+    /// The flag set once every player combatant is down (wire it as a [`LoseCondition`]).
+    pub defeat_flag: (String, i64),
+    /// The world's account of the felling of the last foe.
+    pub victory_narration: String,
+    /// The world's account of the party being wiped out.
+    pub defeat_narration: String,
+}
+
+impl EncounterRule {
+    /// The flag holding the initiative cursor (which slot acts next this round).
+    pub fn cursor_flag(&self) -> String {
+        format!("{}__cursor", self.id)
+    }
+    /// The flag holding the current round number.
+    pub fn round_flag(&self) -> String {
+        format!("{}__round", self.id)
+    }
+    /// The flag holding `cid`'s remaining hit points.
+    pub fn hp_flag(&self, cid: &str) -> String {
+        format!("{}__hp_{}", self.id, cid)
+    }
+    /// The flag holding `cid`'s active shield mitigation (cleared at round end).
+    pub fn shield_flag(&self, cid: &str) -> String {
+        format!("{}__shield_{}", self.id, cid)
+    }
+    /// The flag holding the cooldown counter for `cid`'s ability `word`.
+    pub fn cooldown_flag(&self, cid: &str, word: &str) -> String {
+        format!("{}__cd_{}_{}", self.id, cid, word)
+    }
+
+    /// The combatant with `cid`, if any.
+    pub fn combatant(&self, cid: &str) -> Option<&Combatant> {
+        self.combatants.iter().find(|c| c.id == cid)
+    }
+
+    /// The initiative order — higher initiative first, ties by id (a total, deterministic order the
+    /// live session and the replay verifier both compute identically).
+    pub fn order(&self) -> Vec<&Combatant> {
+        let mut v: Vec<&Combatant> = self.combatants.iter().collect();
+        v.sort_by(|a, b| {
+            b.initiative
+                .cmp(&a.initiative)
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        v
+    }
+
+    /// Whether any PLAYER combatant declares an ability named `word` (so a `Use(word, _)` in this
+    /// room routes to combat). A foe's AI-only strike does not make `word` a player command.
+    pub fn knows_ability(&self, word: &str) -> bool {
+        self.combatants
+            .iter()
+            .any(|c| matches!(c.team, Team::Player) && c.abilities.iter().any(|a| a.word == word))
+    }
+
+    fn hp_of(&self, flags: &BTreeMap<String, i64>, cid: &str) -> i64 {
+        flags.get(&self.hp_flag(cid)).copied().unwrap_or(0)
+    }
+
+    /// `cid`'s remaining HP in `world`.
+    pub fn hp(&self, world: &WorldCell, cid: &str) -> i64 {
+        self.hp_of(&world.flags, cid)
+    }
+
+    fn foes_defeated(&self, flags: &BTreeMap<String, i64>) -> bool {
+        self.combatants
+            .iter()
+            .filter(|c| matches!(c.team, Team::Foe))
+            .all(|c| self.hp_of(flags, &c.id) <= 0)
+    }
+
+    fn party_defeated(&self, flags: &BTreeMap<String, i64>) -> bool {
+        self.combatants
+            .iter()
+            .filter(|c| matches!(c.team, Team::Player))
+            .all(|c| self.hp_of(flags, &c.id) <= 0)
+    }
+
+    /// Whether the encounter is still ongoing (neither side wiped) in `world`. A [`GameAction::Use`]
+    /// of a player ability against an active encounter is the RANDOM combat move (see
+    /// [`randomness_for`]); against a finished encounter it is refused ([`GameRefusal::EncounterOver`]).
+    pub fn active(&self, world: &WorldCell) -> bool {
+        !self.foes_defeated(&world.flags) && !self.party_defeated(&world.flags)
+    }
+
+    /// **Whose turn it is** — the living PLAYER combatant a `Use(ability, target)` command would act
+    /// as right now (the first living player at/after the initiative cursor, skipping any leading
+    /// foes and downed combatants). `None` if the encounter is over. A UI reads this to prompt the
+    /// right combatant; a command whose word that combatant does not know is out of initiative
+    /// ([`GameRefusal::NotYourTurn`]).
+    pub fn current_actor(&self, world: &WorldCell) -> Option<&Combatant> {
+        if !self.active(world) {
+            return None;
+        }
+        let order = self.order();
+        let n = order.len() as i64;
+        let mut cursor = world.flags.get(&self.cursor_flag()).copied().unwrap_or(0);
+        for _ in 0..=n {
+            if cursor >= n {
+                cursor = 0;
+            }
+            let c = order[cursor as usize];
+            if matches!(c.team, Team::Player) && self.hp_of(&world.flags, &c.id) > 0 {
+                return Some(c);
+            }
+            cursor += 1;
+        }
+        None
+    }
+
+    /// Seed this encounter's genesis flags into a fresh world-cell (each combatant at full HP, the
+    /// cursor at slot 0, round 0). Called by [`GameWorld::new_world`]; the replay verifier opens the
+    /// same fresh cell, so live and replay share genesis.
+    fn seed(&self, world: &mut WorldCell) {
+        world.flags.insert(self.cursor_flag(), 0);
+        world.flags.insert(self.round_flag(), 0);
+        for c in &self.combatants {
+            world.flags.insert(self.hp_flag(&c.id), c.max_hp);
+        }
+    }
+
+    /// Round-end upkeep on the working flags: clear every shield, decrement every cooldown.
+    fn end_of_round(&self, flags: &mut BTreeMap<String, i64>) {
+        for c in &self.combatants {
+            let sf = self.shield_flag(&c.id);
+            if flags.get(&sf).copied().unwrap_or(0) != 0 {
+                flags.insert(sf, 0);
+            }
+            for a in &c.abilities {
+                if matches!(a.kind, AbilityKind::Special { .. }) {
+                    let cf = self.cooldown_flag(&c.id, &a.word);
+                    let cd = flags.get(&cf).copied().unwrap_or(0);
+                    if cd > 0 {
+                        flags.insert(cf, cd - 1);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Apply a rolled blow: `raw` damage (roll + attacker attack) onto `target`, mitigated by the
+    /// target's defense + active shield (floored at 0), writing the new HP. Returns the net damage.
+    fn deal(&self, flags: &mut BTreeMap<String, i64>, target: &Combatant, raw: i64) -> i64 {
+        let shield = flags
+            .get(&self.shield_flag(&target.id))
+            .copied()
+            .unwrap_or(0);
+        let net = (raw - target.defense - shield).max(0);
+        let hp = self.hp_of(flags, &target.id);
+        flags.insert(self.hp_flag(&target.id), (hp - net).max(0));
+        net
+    }
+
+    /// A foe's automatic turn: strike the lowest-HP living player (ties by initiative order) with
+    /// its first rolling ability, consuming one verified draw.
+    fn foe_act(
+        &self,
+        flags: &mut BTreeMap<String, i64>,
+        foe: &Combatant,
+        stream: &DrawStream,
+        draw_idx: &mut u32,
+        log: &mut Vec<String>,
+    ) {
+        let attack = foe.abilities.iter().find(|a| a.kind.dice().is_some());
+        // Target: the lowest-HP living player; the initiative order gives the deterministic tiebreak.
+        let mut target: Option<&Combatant> = None;
+        let mut best = i64::MAX;
+        for c in self.order() {
+            if matches!(c.team, Team::Player) {
+                let hp = self.hp_of(flags, &c.id);
+                if hp > 0 && hp < best {
+                    best = hp;
+                    target = Some(c);
+                }
+            }
+        }
+        if let (Some(ability), Some(target)) = (attack, target) {
+            let dice = ability.kind.dice().unwrap_or(1);
+            let roll = stream.draw_die(*draw_idx, dice).unwrap_or(1);
+            *draw_idx += 1;
+            let net = self.deal(flags, target, roll as i64 + foe.attack);
+            log.push(format!(
+                "{} strikes {} for {} (rolled {}).",
+                foe.name, target.name, net, roll
+            ));
+        }
+    }
+
+    /// A player's chosen turn. Validates the target/cooldown and applies the bounded effect,
+    /// consuming a verified draw for a rolling ability. Returns the refusal for an illegal target
+    /// or an unavailable ability — the world advances not at all (no receipt).
+    #[allow(clippy::too_many_arguments)]
+    fn player_act(
+        &self,
+        flags: &mut BTreeMap<String, i64>,
+        actor: &Combatant,
+        ability: &Ability,
+        target: &Option<String>,
+        stream: &DrawStream,
+        draw_idx: &mut u32,
+        log: &mut Vec<String>,
+    ) -> Result<(), GameRefusal> {
+        match ability.kind {
+            AbilityKind::Guard { amount } => {
+                flags.insert(self.shield_flag(&actor.id), amount);
+                log.push(format!(
+                    "{} raises a guard (+{} shield).",
+                    actor.name, amount
+                ));
+                Ok(())
+            }
+            AbilityKind::Strike { dice } | AbilityKind::Special { dice, .. } => {
+                if let AbilityKind::Special { cooldown: _, .. } = ability.kind {
+                    let cd = flags
+                        .get(&self.cooldown_flag(&actor.id, &ability.word))
+                        .copied()
+                        .unwrap_or(0);
+                    if cd > 0 {
+                        return Err(GameRefusal::AbilityUnavailable {
+                            ability: ability.word.clone(),
+                            reason: format!("on cooldown for {cd} more round(s)"),
+                        });
+                    }
+                }
+                let tid = match target {
+                    Some(t) => t.clone(),
+                    None => {
+                        return Err(GameRefusal::IllegalTarget {
+                            ability: ability.word.clone(),
+                            target: "(none)".to_string(),
+                        })
+                    }
+                };
+                let foe = match self.combatant(&tid) {
+                    Some(c) if matches!(c.team, Team::Foe) && self.hp_of(flags, &c.id) > 0 => c,
+                    _ => {
+                        return Err(GameRefusal::IllegalTarget {
+                            ability: ability.word.clone(),
+                            target: tid,
+                        })
+                    }
+                };
+                let roll = stream.draw_die(*draw_idx, dice).unwrap_or(1);
+                *draw_idx += 1;
+                let net = self.deal(flags, foe, roll as i64 + actor.attack);
+                if let AbilityKind::Special { cooldown, .. } = ability.kind {
+                    flags.insert(self.cooldown_flag(&actor.id, &ability.word), cooldown);
+                }
+                log.push(format!(
+                    "{} hits {} for {} (rolled {}).",
+                    actor.name, foe.name, net, roll
+                ));
+                Ok(())
+            }
+        }
+    }
+}
+
 /// **The win condition** — reach `room` while HOLDING `item`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Objective {
@@ -851,6 +1324,11 @@ pub struct GameWorld {
     /// no randomness dimension (the five bundled games), so the mechanic is purely additive. See
     /// [`LootRule`].
     pub loot: Vec<LootRule>,
+    /// The turn-based tactical ENCOUNTERS this world declares — initiative-ordered fights over
+    /// committed combatant stats with verifiable damage rolls, keyed by the room they are fought in.
+    /// Empty for a dungeon with no encounter dimension (the five bundled games + the loot demo), so
+    /// the mechanic is purely additive. See [`EncounterRule`].
+    pub encounters: Vec<EncounterRule>,
     /// The player's maximum hit points — accumulated [`PLAYER_WOUNDS_FLAG`] `>=` this is death
     /// (wire it as a [`LoseCondition`] for a combat dungeon). Non-combat dungeons ignore it.
     pub player_max_hp: i64,
@@ -875,7 +1353,18 @@ impl GameWorld {
         if let Some(light) = &self.light {
             world.flags.insert(light.counter.clone(), light.start);
         }
+        // Every declared encounter seeds its combatants at full HP + its cursor/round at 0 — the
+        // fight's genesis substate, committed by the state root exactly like the light counter.
+        for enc in &self.encounters {
+            enc.seed(&mut world);
+        }
         world
+    }
+
+    /// The encounter fought in `room`, if the world declares one. A [`GameAction::Use`] of a player
+    /// ability in that room routes to [`resolve_encounter`].
+    pub fn encounter_for(&self, room: &str) -> Option<&EncounterRule> {
+        self.encounters.iter().find(|e| e.room == room)
     }
 
     /// The room with `id`, if any.
@@ -1091,6 +1580,38 @@ pub enum GameRefusal {
     /// (the jailbreak "I cast WISH") is not a spell at all and refuses through the ordinary
     /// [`GameAction::Use`] path instead — it touches nothing either way.
     SpellNotLearned(String),
+    /// **A combat ability used out of initiative.** The word is not one the combatant whose turn it
+    /// is (`whose`) can use — the player meant a different combatant, or a foe's slot. World
+    /// unchanged, no receipt (anti-ghost). See [`resolve_encounter`].
+    NotYourTurn {
+        /// The combatant whose turn it currently is.
+        whose: String,
+        /// The ability word the player tried to use out of turn.
+        ability: String,
+    },
+    /// **A combat strike aimed at an ineligible target** — not a LIVING FOE of the encounter (an
+    /// absent id, an ally, or an already-felled foe), or a strike with no target at all. World
+    /// unchanged, no receipt.
+    IllegalTarget {
+        /// The ability that was aimed.
+        ability: String,
+        /// The ineligible target named (or `(none)`).
+        target: String,
+    },
+    /// **A combat special used while on cooldown** — the resource is unavailable this round. World
+    /// unchanged, no receipt.
+    AbilityUnavailable {
+        /// The ability word.
+        ability: String,
+        /// Why it is unavailable (e.g. `on cooldown for 2 more round(s)`).
+        reason: String,
+    },
+    /// **A combat command against a finished encounter** — one side is already wiped, so no further
+    /// combat action resolves. World unchanged, no receipt.
+    EncounterOver {
+        /// The encounter that has already ended.
+        encounter: String,
+    },
     /// The game is already over — no further moves resolve.
     GameOver(GameStatus),
 }
@@ -1133,6 +1654,22 @@ impl std::fmt::Display for GameRefusal {
                     "the way into the {room} is pitch dark — without a burning lamp you cannot \
                      enter (your light is spent)"
                 )
+            }
+            GameRefusal::NotYourTurn { whose, ability } => write!(
+                f,
+                "it is {whose}'s turn — you cannot act with '{ability}' out of initiative"
+            ),
+            GameRefusal::IllegalTarget { ability, target } => {
+                write!(
+                    f,
+                    "'{ability}' cannot strike {target}: no living foe by that name"
+                )
+            }
+            GameRefusal::AbilityUnavailable { ability, reason } => {
+                write!(f, "'{ability}' is unavailable: {reason}")
+            }
+            GameRefusal::EncounterOver { encounter } => {
+                write!(f, "the {encounter} encounter is already decided")
             }
             GameRefusal::GameOver(s) => write!(f, "the game is over ({s:?})"),
         }
@@ -1298,6 +1835,18 @@ pub fn resolve_action_rng(
             if target.is_none() {
                 if let Some(loot) = map.loot_rule(&here, item) {
                     return resolve_loot(map, world, loot, rng);
+                }
+            }
+            // COMBAT PATH: an ENCOUNTER stands in this room and `item` is a declared player ability
+            // (`strike` / `guard` / a special). Combat rides the closed `Use` channel exactly like a
+            // spell or a chest — an ability is a spoken command, not a held item — so this branches
+            // BEFORE the holding check. The WORLD rolls the die (from the verified `rng` stream) and
+            // computes the HP; the AI's prose has no power over the blow. It fires only when the world
+            // declares an encounter here whose player set knows this word — so no existing world (none
+            // declares an encounter) is ever routed here (purely additive).
+            if let Some(enc) = map.encounter_for(&here) {
+                if enc.knows_ability(item) {
+                    return resolve_encounter(map, world, enc, item, target, rng);
                 }
             }
             if !world.inventory.contains(item) {
@@ -1680,6 +2229,159 @@ fn resolve_loot(
         narration: format!("{} — you draw the {dropped}.", loot.narration),
         status: status_after(map, world, effect.as_ref()),
         effect,
+    })
+}
+
+/// **Resolve one player COMBAT command — the turn-based tactical engine.** The WORLD, not the prose,
+/// rolls the dice and computes the HP. From the current initiative cursor it plays: any faster foes
+/// that have not yet acted this round, then the player combatant at the cursor (using the chosen
+/// `word` ability, aimed at `target`), then any foes between it and the NEXT player combatant — all as
+/// ONE receipted turn (a [`WorldEffect::Batch`] of flag writes), the cursor left resting on the next
+/// player combatant (or wrapped to the start of the next round). Every rolled action consumes an
+/// indexed draw from the turn's verified `rng` stream, so [`verify_ledger_replay`] reproduces the
+/// whole exchange and a forged damage/target is caught.
+///
+/// REFUSES (world unchanged, no receipt): the encounter is already over ([`GameRefusal::EncounterOver`]);
+/// the word is not an ability the combatant whose turn it is can use — an out-of-initiative action
+/// ([`GameRefusal::NotYourTurn`]); the target is not a living foe ([`GameRefusal::IllegalTarget`]); or a
+/// special is on cooldown ([`GameRefusal::AbilityUnavailable`]). Without a stream (the deterministic
+/// [`resolve_action`] path) it is a fail-closed refusal — the live/replay flows always seed a combat turn.
+fn resolve_encounter(
+    map: &GameWorld,
+    world: &WorldCell,
+    enc: &EncounterRule,
+    word: &str,
+    target: &Option<String>,
+    rng: Option<&DrawStream>,
+) -> Outcome {
+    // Already decided — no further command resolves (checked before requiring a stream, so a
+    // finished encounter refuses uniformly whether or not a draw was seeded).
+    if enc.foes_defeated(&world.flags) || enc.party_defeated(&world.flags) {
+        return Outcome::Refused(GameRefusal::EncounterOver {
+            encounter: enc.id.clone(),
+        });
+    }
+    let stream = match rng {
+        Some(s) => s,
+        // Defensive: a combat command reached the deterministic resolver with no stream. The live and
+        // replay flows both seed a combat turn (randomness_for returns Some for an active encounter),
+        // so this never arises in a valid history — refuse fail-closed rather than fabricate a roll.
+        None => {
+            return Outcome::Refused(GameRefusal::EncounterOver {
+                encounter: enc.id.clone(),
+            })
+        }
+    };
+
+    let order = enc.order();
+    let n = order.len() as i64;
+    // Work on a scratch copy of the flags; the effect is the canonical (BTreeMap-sorted) DIFF, so
+    // live and replay — running this identical simulation over the same pre-state — produce the
+    // byte-identical Batch.
+    let mut flags = world.flags.clone();
+    let mut cursor = flags.get(&enc.cursor_flag()).copied().unwrap_or(0);
+    let mut round = flags.get(&enc.round_flag()).copied().unwrap_or(0);
+    let mut draw_idx: u32 = 0;
+    let mut actor_acted = false;
+    let mut log: Vec<String> = Vec::new();
+
+    loop {
+        // Terminal reached mid-round (the felling / fatal blow) — stop.
+        if enc.foes_defeated(&flags) || enc.party_defeated(&flags) {
+            break;
+        }
+        if cursor >= n {
+            // Round wrap: the round advances, the cursor resets, shields clear + cooldowns tick.
+            // We STOP here (do not pre-play the next round's leading foes) — they act on the next
+            // command, keeping each command's draw budget bounded by one initiative pass.
+            round += 1;
+            cursor = 0;
+            enc.end_of_round(&mut flags);
+            break;
+        }
+        let c = order[cursor as usize];
+        // A downed combatant is skipped (no action, no draw).
+        if enc.hp_of(&flags, &c.id) <= 0 {
+            cursor += 1;
+            continue;
+        }
+        match c.team {
+            Team::Foe => {
+                enc.foe_act(&mut flags, c, stream, &mut draw_idx, &mut log);
+                cursor += 1;
+            }
+            Team::Player => {
+                if !actor_acted {
+                    // THE ACTOR: the player combatant whose turn it is. The command's ability must be
+                    // one THIS combatant can use — else it is an out-of-initiative action (the player
+                    // meant a different combatant), refused with no receipt.
+                    let ability = match c.abilities.iter().find(|a| a.word == word) {
+                        Some(a) => a,
+                        None => {
+                            return Outcome::Refused(GameRefusal::NotYourTurn {
+                                whose: c.name.clone(),
+                                ability: word.to_string(),
+                            })
+                        }
+                    };
+                    if let Err(refusal) = enc.player_act(
+                        &mut flags,
+                        c,
+                        ability,
+                        target,
+                        stream,
+                        &mut draw_idx,
+                        &mut log,
+                    ) {
+                        return Outcome::Refused(refusal);
+                    }
+                    actor_acted = true;
+                    cursor += 1;
+                } else {
+                    // The next living player combatant — stop and await its command.
+                    break;
+                }
+            }
+        }
+    }
+
+    // Commit the cursor + round to the scratch flags, then the terminal flags.
+    flags.insert(enc.cursor_flag(), cursor);
+    flags.insert(enc.round_flag(), round);
+    let ended = if enc.foes_defeated(&flags) {
+        flags.insert(enc.victory_flag.0.clone(), enc.victory_flag.1);
+        Some(true)
+    } else if enc.party_defeated(&flags) {
+        flags.insert(enc.defeat_flag.0.clone(), enc.defeat_flag.1);
+        Some(false)
+    } else {
+        None
+    };
+
+    // The DIFF, in canonical (sorted) order — every flag whose value changed this turn. Combat always
+    // moves at least the cursor, so this is non-empty; a bare `Move`/etc never reaches here.
+    let mut subs: Vec<WorldEffect> = Vec::new();
+    for (k, v) in &flags {
+        if world.flags.get(k) != Some(v) {
+            subs.push(WorldEffect::SetFlag(k.clone(), *v));
+        }
+    }
+    let effect = if subs.is_empty() {
+        None
+    } else {
+        Some(WorldEffect::Batch(subs))
+    };
+
+    let narration = match ended {
+        Some(true) => enc.victory_narration.clone(),
+        Some(false) => enc.defeat_narration.clone(),
+        None if log.is_empty() => "The clash continues.".to_string(),
+        None => log.join(" "),
+    };
+    Outcome::Legal(Resolution {
+        status: status_after(map, world, effect.as_ref()),
+        effect,
+        narration,
     })
 }
 
@@ -2563,6 +3265,19 @@ pub fn randomness_for(
     action: &GameAction,
 ) -> Option<RandomnessNeed> {
     if let GameAction::Use(item, target) = action {
+        // COMBAT: a player-ability `Use` against an ACTIVE encounter in the current room draws the
+        // round's stream — `draw_count` is the combatant count (a safe, constant upper bound on the
+        // rolled actions one command can play: each combatant acts at most once per initiative pass).
+        // Even a `guard` command draws, because the foes folded into the same turn roll. A finished
+        // encounter needs NONE (a combat command against it is refused, drawing nothing).
+        if let Some(enc) = map.encounter_for(&world.scene) {
+            if enc.knows_ability(item) && enc.active(world) {
+                return Some(RandomnessNeed {
+                    event_kind: COMBAT_EVENT_KIND.to_string(),
+                    draw_count: enc.combatants.len() as u32,
+                });
+            }
+        }
         if target.is_none() {
             if let Some(loot) = map.loot_rule(&world.scene, item) {
                 if !loot.opened(world) {
@@ -3026,6 +3741,7 @@ pub fn sunken_vault() -> GameWorld {
         consumables: Vec::new(),
         statuses: Vec::new(),
         loot: Vec::new(),
+        encounters: Vec::new(),
         player_max_hp: 0,
         light: None,
         start: "shore".into(),
@@ -3301,6 +4017,7 @@ pub fn bramble_keep() -> GameWorld {
         consumables: Vec::new(),
         statuses: Vec::new(),
         loot: Vec::new(),
+        encounters: Vec::new(),
         player_max_hp: 10,
         light: None,
         start: "gatehouse".into(),
@@ -3678,6 +4395,7 @@ pub fn starfall_spire() -> GameWorld {
         consumables: Vec::new(),
         statuses: Vec::new(),
         loot: Vec::new(),
+        encounters: Vec::new(),
         player_max_hp: 10,
         light: None,
         start: "threshold".into(),
@@ -3950,6 +4668,7 @@ pub fn deepdark_mine() -> GameWorld {
         consumables: Vec::new(),
         statuses: Vec::new(),
         loot: Vec::new(),
+        encounters: Vec::new(),
         player_max_hp: 0,
         light: Some(light),
         start: "pithead".into(),
@@ -4253,6 +4972,7 @@ pub fn venom_deep() -> GameWorld {
         consumables,
         statuses,
         loot: Vec::new(),
+        encounters: Vec::new(),
         player_max_hp: 12,
         light: None,
         start: "gatehouse".into(),
@@ -4334,6 +5054,7 @@ pub fn loot_chest_demo() -> GameWorld {
         consumables: Vec::new(),
         statuses: Vec::new(),
         loot,
+        encounters: Vec::new(),
         player_max_hp: 0,
         light: None,
         start: "hoard".into(),
@@ -4342,6 +5063,123 @@ pub fn loot_chest_demo() -> GameWorld {
             holding: "crown".into(),
         },
         lose: Vec::new(),
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE ARENA GAUNTLET — the combat-engine showcase: a party of two must fell a Sentinel in an
+// initiative-ordered fight before the reliquary opens. Initiative, an ability choice, and a
+// VERIFIED damage roll are all load-bearing to the win.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// **THE ARENA GAUNTLET** — a three-room dungeon whose one gate is a real turn-based fight.
+///
+/// * `gate` (start) → north → `arena`.
+/// * `arena` holds the [`EncounterRule`]: the party (**Rhea** the fighter, **Sol** the mage) versus
+///   a **Sentinel**. Initiative order is Rhea (12), Sentinel (8), Sol (5) — so each round the
+///   Sentinel strikes AFTER Rhea but BEFORE Sol, and it targets the lowest-HP living party member.
+///   Rhea knows `strike` (d6), `guard` (+4 shield), and `cleave` (a d10 special, 2-round cooldown);
+///   Sol knows `bolt` (d8) and `ward` (+3 guard). Felling the Sentinel sets `sentinel_down`.
+/// * `arena` → north → `reliquary`, an exit GATED on `sentinel_down >= 1` — you cannot pass until
+///   the fight is WON, and the fight is won only by rolled damage the engine computes and replay
+///   reproduces. `reliquary` holds the `trophy`; the objective is to stand there HOLDING it.
+///
+/// A party wipe (`party_wiped`) is a [`LoseCondition`]. The Sentinel's 26 HP and the party's dice
+/// make the fight take several rounds, so the win depends on the verified rolls (and on spending a
+/// `guard`/`ward` when the Sentinel's blows would otherwise drop a party member) — not on prose.
+pub fn arena_gauntlet() -> GameWorld {
+    let mut rooms: BTreeMap<String, Room> = BTreeMap::new();
+    rooms.insert(
+        "gate".into(),
+        Room::new(
+            "gate",
+            "The Iron Gate",
+            "A portcullis groans up onto sand and torchlight.",
+        )
+        .exit("north", Exit::open("arena")),
+    );
+    rooms.insert(
+        "arena".into(),
+        Room::new(
+            "arena",
+            "The Arena",
+            "A ring of packed sand under a high, cold Sentinel of riveted bronze.",
+        )
+        .exit(
+            "north",
+            Exit::gated("reliquary", Gate::NeedsFlag("sentinel_down".into(), 1)),
+        ),
+    );
+    rooms.insert(
+        "reliquary".into(),
+        Room::new(
+            "reliquary",
+            "The Reliquary",
+            "Beyond the fallen Sentinel, a single plinth bears the trophy.",
+        )
+        .item("trophy"),
+    );
+
+    let encounter = EncounterRule {
+        id: "arena".into(),
+        room: "arena".into(),
+        combatants: vec![
+            Combatant::player(
+                "rhea",
+                "Rhea",
+                18,
+                3,
+                1,
+                12,
+                vec![
+                    Ability::strike("strike", 6),
+                    Ability::guard("guard", 4),
+                    Ability::special("cleave", 10, 2),
+                ],
+            ),
+            Combatant::player(
+                "sol",
+                "Sol",
+                12,
+                2,
+                0,
+                5,
+                vec![Ability::strike("bolt", 8), Ability::guard("ward", 3)],
+            ),
+            Combatant::foe("sentinel", "the Sentinel", 26, 3, 1, 8, 6),
+        ],
+        victory_flag: ("sentinel_down".into(), 1),
+        defeat_flag: ("party_wiped".into(), 1),
+        victory_narration:
+            "The Sentinel's core cracks and its light goes out — the way north opens.".into(),
+        defeat_narration: "The party falls to the sand; the Sentinel stands over them.".into(),
+    };
+
+    GameWorld {
+        rooms,
+        use_rules: Vec::new(),
+        hostiles: BTreeMap::new(),
+        combat: BTreeMap::new(),
+        npcs: Vec::new(),
+        dialogue: Vec::new(),
+        spells: Vec::new(),
+        spell_rules: Vec::new(),
+        consumables: Vec::new(),
+        statuses: Vec::new(),
+        loot: Vec::new(),
+        encounters: vec![encounter],
+        player_max_hp: 0,
+        light: None,
+        start: "gate".into(),
+        objective: Objective {
+            room: "reliquary".into(),
+            holding: "trophy".into(),
+        },
+        lose: vec![LoseCondition {
+            flag: "party_wiped".into(),
+            at_least: 1,
+            description: "the party was wiped out by the Sentinel".into(),
+        }],
     }
 }
 

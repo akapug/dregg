@@ -65,14 +65,15 @@ pub use prompt_template::{
 
 pub mod game;
 pub use game::{
-    action_commitment, bramble_keep, deepdark_mine, loot_chest_demo, randomness_for,
-    randomness_request, resolve_action, resolve_action_rng, starfall_spire, sunken_vault,
-    venom_deep, verify_ledger_replay, verify_seed, CombatEnemy, ConsumableEffect, ConsumableRule,
-    DialogueGrant, DialogueRule, Exit, GameAction, GameBinding, GameBrain, GameRefusal,
-    GameSession, GameStatus, GameWorld, Gate, GateReason, Hostile, LightRule, LootRule,
-    LoseCondition, Npc, Objective, Outcome, PlayResult, Proposal, RandomnessNeed, RefuelRule,
-    ReplayMismatch, Resolution, Room, ScriptedGm, SessionRandomness, Spell, SpellEffect, SpellRule,
-    StatusKind, StatusRule, UseRule, VerificationReport, DEFAULT_GAME_RNG_SEED, LOOT_EVENT_KIND,
+    action_commitment, arena_gauntlet, bramble_keep, deepdark_mine, loot_chest_demo,
+    randomness_for, randomness_request, resolve_action, resolve_action_rng, starfall_spire,
+    sunken_vault, venom_deep, verify_ledger_replay, verify_seed, Ability, AbilityKind, CombatEnemy,
+    Combatant, ConsumableEffect, ConsumableRule, DialogueGrant, DialogueRule, EncounterRule, Exit,
+    GameAction, GameBinding, GameBrain, GameRefusal, GameSession, GameStatus, GameWorld, Gate,
+    GateReason, Hostile, LightRule, LootRule, LoseCondition, Npc, Objective, Outcome, PlayResult,
+    Proposal, RandomnessNeed, RefuelRule, ReplayMismatch, Resolution, Room, ScriptedGm,
+    SessionRandomness, Spell, SpellEffect, SpellRule, StatusKind, StatusRule, Team, UseRule,
+    VerificationReport, COMBAT_EVENT_KIND, DEFAULT_GAME_RNG_SEED, LOOT_EVENT_KIND,
     PLAYER_WOUNDS_FLAG,
 };
 // `PromptBinding` is defined below (it is tightly coupled to the chain-link hashing); re-exported
