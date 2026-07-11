@@ -52,7 +52,8 @@ namespace Dregg2.Circuit.Emit.EffectVmEmitMakeSovereign
 
 open Dregg2.Circuit
 open Dregg2.Circuit.Emit.EffectVmEmit
-open Dregg2.Circuit.Emit.EffectVmEmitTransfer (eSA site0 site1 site2)
+open Dregg2.Circuit.Emit.EffectVmEmitTransfer (eSA site0 site1 site2 eqToModEq gate_modEq_iff
+  not_modEq_zero_of_canon)
 open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (CellState RowEncodes)
 open Dregg2.Exec.CircuitEmit (EmittedExpr)
 open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
@@ -103,12 +104,12 @@ def makeSovereignVmDescriptor : EffectVmDescriptor :=
 record is dropped behind the sovereign commitment). The EffectVM-row projection of the rebind's
 balance-drop. -/
 def DroppedBlockIntent (env : VmRowEnv) : Prop :=
-  env.loc (saCol state.BALANCE_LO) = 0
-  ∧ env.loc (saCol state.BALANCE_HI) = 0
-  ∧ env.loc (saCol state.NONCE) = 0
-  ∧ env.loc (saCol state.CAP_ROOT) = 0
-  ∧ env.loc (saCol state.RESERVED) = 0
-  ∧ (∀ i < 8, env.loc (saCol (state.FIELD_BASE + i)) = 0)
+  env.loc (saCol state.BALANCE_LO) ≡ 0 [ZMOD 2013265921]
+  ∧ env.loc (saCol state.BALANCE_HI) ≡ 0 [ZMOD 2013265921]
+  ∧ env.loc (saCol state.NONCE) ≡ 0 [ZMOD 2013265921]
+  ∧ env.loc (saCol state.CAP_ROOT) ≡ 0 [ZMOD 2013265921]
+  ∧ env.loc (saCol state.RESERVED) ≡ 0 [ZMOD 2013265921]
+  ∧ (∀ i < 8, env.loc (saCol (state.FIELD_BASE + i)) ≡ 0 [ZMOD 2013265921])
 
 /-! ## §5 — FAITHFULNESS. -/
 
@@ -154,10 +155,12 @@ theorem makeSovereignVm_rejects_nonzero (env : VmRowEnv) (hwrong : ¬ DroppedBlo
 /-- **Anti-ghost (readable balance survived).** A row whose post-`bal_lo` is non-zero fails the
 drop-to-zero gate — a sovereign rebind cannot leave the readable balance behind the commitment. -/
 theorem makeSovereignVm_rejects_surviving_balance (env : VmRowEnv)
+    (hcanon : 0 ≤ env.loc (saCol state.BALANCE_LO)
+      ∧ env.loc (saCol state.BALANCE_LO) < 2013265921)
     (hwrong : env.loc (saCol state.BALANCE_LO) ≠ 0) :
     ¬ (gZero state.BALANCE_LO).holdsVm env false false := by
   simp only [gZero, VmConstraint.holdsVm, eSA, EmittedExpr.eval]
-  exact hwrong
+  exact not_modEq_zero_of_canon (b := 0) (by ring) hcanon (by norm_num) hwrong
 
 /-! ## §7 — the commitment binding (inherited from the keystone). -/
 
@@ -225,11 +228,11 @@ theorem makeSovereign_row_matches_executor (env : VmRowEnv) (pre post : CellStat
     (hgates : ∀ c ∈ makeSovereignRowGates, c.holdsVm env false false)
     (s s' : RecChainedState) (actor cell : CellId)
     (hspec : MakeSovereignSpec s actor cell s') :
-    post.balLo = (cellProj s'.kernel cell).balLo
-    ∧ post.balHi = (cellProj s'.kernel cell).balHi
-    ∧ post.capRoot = (cellProj s'.kernel cell).capRoot
-    ∧ post.reserved = (cellProj s'.kernel cell).reserved
-    ∧ (∀ i, post.fields i = (cellProj s'.kernel cell).fields i) := by
+    post.balLo ≡ (cellProj s'.kernel cell).balLo [ZMOD 2013265921]
+    ∧ post.balHi ≡ (cellProj s'.kernel cell).balHi [ZMOD 2013265921]
+    ∧ post.capRoot ≡ (cellProj s'.kernel cell).capRoot [ZMOD 2013265921]
+    ∧ post.reserved ≡ (cellProj s'.kernel cell).reserved [ZMOD 2013265921]
+    ∧ (∀ i, post.fields i ≡ (cellProj s'.kernel cell).fields i [ZMOD 2013265921]) := by
   obtain ⟨hLo, hHi, hN, hCap, hRes, hFld⟩ := (makeSovereignVm_faithful env).mp hgates
   obtain ⟨eLo, eHi, eN, eCap, eRes, eFld⟩ := makeSovereign_target_dropped s s' actor cell hspec
   obtain ⟨_, _, _, _, _, _, _, _, _, hsaLo, hsaHi, _, hsaF, hsaCap, hsaRes, _, _, _⟩ := henc
@@ -280,17 +283,23 @@ def zeroRow : VmRowEnv where
 theorem zeroRow_realizes_intent : DroppedBlockIntent zeroRow := by
   unfold DroppedBlockIntent zeroRow
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
-  · show (if saCol state.BALANCE_LO = SEL_MAKESOVEREIGN then (1:ℤ) else 0) = 0
+  · refine eqToModEq ?_
+    show (if saCol state.BALANCE_LO = SEL_MAKESOVEREIGN then (1:ℤ) else 0) = 0
     rw [if_neg]; · decide
-  · show (if saCol state.BALANCE_HI = SEL_MAKESOVEREIGN then (1:ℤ) else 0) = 0
+  · refine eqToModEq ?_
+    show (if saCol state.BALANCE_HI = SEL_MAKESOVEREIGN then (1:ℤ) else 0) = 0
     rw [if_neg]; · decide
-  · show (if saCol state.NONCE = SEL_MAKESOVEREIGN then (1:ℤ) else 0) = 0
+  · refine eqToModEq ?_
+    show (if saCol state.NONCE = SEL_MAKESOVEREIGN then (1:ℤ) else 0) = 0
     rw [if_neg]; · decide
-  · show (if saCol state.CAP_ROOT = SEL_MAKESOVEREIGN then (1:ℤ) else 0) = 0
+  · refine eqToModEq ?_
+    show (if saCol state.CAP_ROOT = SEL_MAKESOVEREIGN then (1:ℤ) else 0) = 0
     rw [if_neg]; · decide
-  · show (if saCol state.RESERVED = SEL_MAKESOVEREIGN then (1:ℤ) else 0) = 0
+  · refine eqToModEq ?_
+    show (if saCol state.RESERVED = SEL_MAKESOVEREIGN then (1:ℤ) else 0) = 0
     rw [if_neg]; · decide
   · intro i hi
+    refine eqToModEq ?_
     show (if saCol (state.FIELD_BASE + i) = SEL_MAKESOVEREIGN then (1:ℤ) else 0) = 0
     rw [if_neg]
     simp only [saCol, STATE_AFTER_BASE, PARAM_BASE, STATE_BEFORE_BASE, NUM_EFFECTS, STATE_SIZE,
@@ -307,9 +316,14 @@ def forgedRow : VmRowEnv where
 (the readable balance survived), so the drop-to-zero gate REJECTS it. -/
 theorem forgedRow_rejected : ¬ (gZero state.BALANCE_LO).holdsVm forgedRow false false := by
   apply makeSovereignVm_rejects_surviving_balance
-  show (if saCol state.BALANCE_LO = saCol state.BALANCE_LO then (5:ℤ)
-    else zeroRow.loc (saCol state.BALANCE_LO)) ≠ 0
-  rw [if_pos rfl]; norm_num
+  · show (0:ℤ) ≤ (if saCol state.BALANCE_LO = saCol state.BALANCE_LO then (5:ℤ)
+        else zeroRow.loc (saCol state.BALANCE_LO))
+      ∧ (if saCol state.BALANCE_LO = saCol state.BALANCE_LO then (5:ℤ)
+        else zeroRow.loc (saCol state.BALANCE_LO)) < 2013265921
+    rw [if_pos rfl]; norm_num
+  · show (if saCol state.BALANCE_LO = saCol state.BALANCE_LO then (5:ℤ)
+      else zeroRow.loc (saCol state.BALANCE_LO)) ≠ 0
+    rw [if_pos rfl]; norm_num
 
 /-! ## §12 — axiom-hygiene tripwires. -/
 
@@ -390,13 +404,15 @@ def makeSovereignRuntimeVmDescriptor : EffectVmDescriptor :=
 /-- **`SovRuntimeRowIntent env`** — balances / `cap_root` / fields UNCHANGED; the nonce TICKS by 1; the
 reserved word advances by 256 (the mode bit), both gated off on NoOp pad rows. -/
 def SovRuntimeRowIntent (env : VmRowEnv) : Prop :=
-  env.loc (saCol state.BALANCE_LO) = env.loc (sbCol state.BALANCE_LO)
-  ∧ env.loc (saCol state.BALANCE_HI) = env.loc (sbCol state.BALANCE_HI)
-  ∧ env.loc (saCol state.NONCE) = env.loc (sbCol state.NONCE) + (1 - env.loc sel.NOOP)
-  ∧ env.loc (saCol state.CAP_ROOT) = env.loc (sbCol state.CAP_ROOT)
+  env.loc (saCol state.BALANCE_LO) ≡ env.loc (sbCol state.BALANCE_LO) [ZMOD 2013265921]
+  ∧ env.loc (saCol state.BALANCE_HI) ≡ env.loc (sbCol state.BALANCE_HI) [ZMOD 2013265921]
+  ∧ env.loc (saCol state.NONCE)
+      ≡ env.loc (sbCol state.NONCE) + (1 - env.loc sel.NOOP) [ZMOD 2013265921]
+  ∧ env.loc (saCol state.CAP_ROOT) ≡ env.loc (sbCol state.CAP_ROOT) [ZMOD 2013265921]
   ∧ env.loc (saCol state.RESERVED)
-      = env.loc (sbCol state.RESERVED) + 256 * (1 - env.loc sel.NOOP)
-  ∧ (∀ i < 8, env.loc (saCol (state.FIELD_BASE + i)) = env.loc (sbCol (state.FIELD_BASE + i)))
+      ≡ env.loc (sbCol state.RESERVED) + 256 * (1 - env.loc sel.NOOP) [ZMOD 2013265921]
+  ∧ (∀ i < 8, env.loc (saCol (state.FIELD_BASE + i))
+      ≡ env.loc (sbCol (state.FIELD_BASE + i)) [ZMOD 2013265921])
 
 /-- **FAITHFULNESS.** The v2 per-row gates hold IFF `SovRuntimeRowIntent` holds. -/
 theorem sovereignRuntimeVm_faithful (env : VmRowEnv) :
@@ -416,45 +432,52 @@ theorem sovereignRuntimeVm_faithful (env : VmRowEnv) :
       exact Or.inr ⟨i, hi, rfl⟩
     simp only [VmConstraint.holdsVm, gSovBalLoFreeze, gBalHi, gNonce, gCapPass, gSovReserved,
       eSA, eSB, eSub, eSelNoop, EmittedExpr.eval] at hLo hHi hNon hCap hRes
-    refine ⟨by linarith [hLo], by linarith [hHi], by linarith [hNon], by linarith [hCap],
-      by linarith [hRes], ?_⟩
+    refine ⟨(gate_modEq_iff (by ring)).mp hLo, (gate_modEq_iff (by ring)).mp hHi,
+      (gate_modEq_iff (by ring)).mp hNon, (gate_modEq_iff (by ring)).mp hCap,
+      (gate_modEq_iff (by ring)).mp hRes, ?_⟩
     intro i hi
-    have := hFld i hi
-    simp only [VmConstraint.holdsVm, gFieldPass, eSA, eSB, eSub, EmittedExpr.eval] at this
-    linarith
+    have hfi := hFld i hi
+    simp only [VmConstraint.holdsVm, gFieldPass, eSA, eSB, eSub, EmittedExpr.eval] at hfi
+    exact (gate_modEq_iff (by ring)).mp hfi
   · rintro ⟨hLo, hHi, hNon, hCap, hRes, hFld⟩ c hc
     simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
       List.mem_range] at hc
     rcases hc with (rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩
     · simp only [VmConstraint.holdsVm, gSovBalLoFreeze, eSA, eSB, eSub, EmittedExpr.eval]
-      rw [hLo]; ring
-    · simp only [VmConstraint.holdsVm, gBalHi, eSA, eSB, eSub, EmittedExpr.eval]; rw [hHi]; ring
+      exact (gate_modEq_iff (by ring)).mpr hLo
+    · simp only [VmConstraint.holdsVm, gBalHi, eSA, eSB, eSub, EmittedExpr.eval]
+      exact (gate_modEq_iff (by ring)).mpr hHi
     · simp only [VmConstraint.holdsVm, gNonce, eSA, eSB, eSub, eSelNoop, EmittedExpr.eval]
-      rw [hNon]; ring
-    · simp only [VmConstraint.holdsVm, gCapPass, eSA, eSB, eSub, EmittedExpr.eval]; rw [hCap]; ring
+      exact (gate_modEq_iff (by ring)).mpr hNon
+    · simp only [VmConstraint.holdsVm, gCapPass, eSA, eSB, eSub, EmittedExpr.eval]
+      exact (gate_modEq_iff (by ring)).mpr hCap
     · simp only [VmConstraint.holdsVm, gSovReserved, eSA, eSB, eSub, eSelNoop, EmittedExpr.eval]
-      rw [hRes]; ring
+      exact (gate_modEq_iff (by ring)).mpr hRes
     · simp only [VmConstraint.holdsVm, gFieldPass, eSA, eSB, eSub, EmittedExpr.eval]
-      rw [hFld i hi]; ring
+      exact (gate_modEq_iff (by ring)).mpr (hFld i hi)
 
 /-- **Anti-ghost (mode bit NOT set).** A row whose reserved word does NOT advance by 256 on the active
 row fails the mode-bit gate — a sovereignty claim without the mode bit is UNSAT. -/
 theorem sovereignRuntimeVm_rejects_unset_mode (env : VmRowEnv)
+    (hcanonNew : 0 ≤ env.loc (saCol state.RESERVED)
+      ∧ env.loc (saCol state.RESERVED) < 2013265921)
+    (hcanonMode : 0 ≤ env.loc (sbCol state.RESERVED) + 256 * (1 - env.loc sel.NOOP)
+      ∧ env.loc (sbCol state.RESERVED) + 256 * (1 - env.loc sel.NOOP) < 2013265921)
     (hwrong : env.loc (saCol state.RESERVED)
         ≠ env.loc (sbCol state.RESERVED) + 256 * (1 - env.loc sel.NOOP)) :
     ¬ (VmConstraint.gate gSovReserved).holdsVm env false false := by
   simp only [VmConstraint.holdsVm, gSovReserved, eSA, eSB, eSub, eSelNoop, EmittedExpr.eval]
-  intro h; apply hwrong; linarith
+  exact not_modEq_zero_of_canon (by ring) hcanonNew hcanonMode hwrong
 
 /-- **`SovRuntimeCellSpec pre post`** — the per-cell runtime makeSovereign spec: balances / capRoot /
 fields FROZEN, nonce +1, reserved +256 (the packed mode bit). -/
 def SovRuntimeCellSpec (pre post : CellState) : Prop :=
-  post.balLo = pre.balLo
-  ∧ post.balHi = pre.balHi
-  ∧ post.nonce = pre.nonce + 1
-  ∧ (∀ i : Fin 8, post.fields i = pre.fields i)
-  ∧ post.capRoot = pre.capRoot
-  ∧ post.reserved = pre.reserved + 256
+  post.balLo ≡ pre.balLo [ZMOD 2013265921]
+  ∧ post.balHi ≡ pre.balHi [ZMOD 2013265921]
+  ∧ post.nonce ≡ pre.nonce + 1 [ZMOD 2013265921]
+  ∧ (∀ i : Fin 8, post.fields i ≡ pre.fields i [ZMOD 2013265921])
+  ∧ post.capRoot ≡ pre.capRoot [ZMOD 2013265921]
+  ∧ post.reserved ≡ pre.reserved + 256 [ZMOD 2013265921]
 
 theorem sovIntent_to_cellSpec (env : VmRowEnv) (pre post : CellState)
     (hnoop : env.loc sel.NOOP = 0)
@@ -466,12 +489,14 @@ theorem sovIntent_to_cellSpec (env : VmRowEnv) (pre post : CellState)
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
   · rw [← hsaLo, ← hsbLo]; exact hbal
   · rw [← hsaHi, ← hsbHi]; exact hbhi
-  · rw [← hsaN, ← hsbN, hnon, hnoop]; ring
+  · rw [← hsaN, ← hsbN]
+    have h := hnon; rw [hnoop] at h; simpa using h
   · intro i
     have := hfld i.val i.isLt
     rw [← hsaF i, ← hsbF i]; exact this
   · rw [← hsaCap, ← hsbCap]; exact hcap
-  · rw [← hsaRes, ← hsbRes, hres, hnoop]; ring
+  · rw [← hsaRes, ← hsbRes]
+    have h := hres; rw [hnoop] at h; simpa using h
 
 /-- **`sovereignRuntime_full_sound`** — the v2 descriptor's row soundness: a satisfying row, decoded,
 pins the full per-cell frame-freeze + mode-bit + nonce-tick post-state AND publishes its commit as
@@ -481,7 +506,7 @@ theorem sovereignRuntime_full_sound (hash : List ℤ → ℤ) (env : VmRowEnv)
     (henc : RowEncodesRevoke env pre post)
     (hgatesat : satisfiedVm hash makeSovereignRuntimeVmDescriptor env true false)
     (hsat : satisfiedVm hash makeSovereignRuntimeVmDescriptor env true true) :
-    SovRuntimeCellSpec pre post ∧ post.commit = env.pub pi.NEW_COMMIT := by
+    SovRuntimeCellSpec pre post ∧ post.commit ≡ env.pub pi.NEW_COMMIT [ZMOD 2013265921] := by
   obtain ⟨hcs, _⟩ := hsat
   obtain ⟨hcsT, _⟩ := hgatesat
   have hgates' : ∀ c ∈ sovereignRuntimeRowGates, c.holdsVm env false false := by
@@ -526,8 +551,10 @@ def goodSovRow : VmRowEnv where
 /-- **NON-VACUITY (witness TRUE).** `goodSovRow` realizes the runtime makeSovereign intent. -/
 theorem goodSovRow_realizes_intent : SovRuntimeRowIntent goodSovRow := by
   unfold SovRuntimeRowIntent goodSovRow
-  refine ⟨by decide, by decide, by decide, by decide, by decide, ?_⟩
+  refine ⟨eqToModEq (by decide), eqToModEq (by decide), eqToModEq (by decide),
+    eqToModEq (by decide), eqToModEq (by decide), ?_⟩
   intro i hi
+  refine eqToModEq ?_
   show (if saCol (state.FIELD_BASE + i) = saCol state.NONCE then (1:ℤ)
         else if saCol (state.FIELD_BASE + i) = saCol state.RESERVED then 256 else 0)
       = (if sbCol (state.FIELD_BASE + i) = saCol state.NONCE then (1:ℤ)
@@ -559,8 +586,9 @@ def badSovRow : VmRowEnv where
 /-- **NON-VACUITY (witness FALSE / concrete anti-ghost).** `badSovRow` claims sovereignty without
 setting the mode bit; the `gSovReserved` gate REJECTS it. -/
 theorem badSovRow_rejected : ¬ (VmConstraint.gate gSovReserved).holdsVm badSovRow false false := by
-  apply sovereignRuntimeVm_rejects_unset_mode
-  decide
+  apply sovereignRuntimeVm_rejects_unset_mode <;>
+    simp only [badSovRow, goodSovRow, sel.NOOP, sbCol, saCol, STATE_BEFORE_BASE, STATE_AFTER_BASE,
+      PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.RESERVED, state.NONCE] <;> norm_num
 
 #guard makeSovereignRuntimeVmDescriptor.constraints.length == 13 + 14 + 4 + 3 + 1
 #guard makeSovereignRuntimeVmDescriptor.hashSites.length == 4
