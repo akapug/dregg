@@ -44,9 +44,13 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use dregg_app_framework::{
     Action, AgentCipherclerk, AppCipherclerk, AuthRequired, CellId, CellMode, CellProgram, Effect,
-    EmbeddedExecutor, Event, FieldElement, StateConstraint, TurnReceipt, field_from_bytes,
-    field_from_u64, symbol,
+    EmbeddedExecutor, Event, FieldElement, StateConstraint, field_from_bytes, field_from_u64,
+    symbol,
 };
+
+/// The executor's turn receipt, re-exported so a consumer of [`VoteEngine`] can
+/// name the `cast` return type without depending on the framework directly.
+pub use dregg_app_framework::TurnReceipt;
 use dregg_cell::{Cell, FactoryCreationParams};
 use dregg_intent::agent_mandate::{Auth, Caveat, DelegTree, Mandate, Rights};
 
@@ -392,46 +396,26 @@ impl CollectiveChoice {
         Ok(Tally { per_option, total })
     }
 
-    fn poll_program(quorum_m: u64, option_count: usize) -> CellProgram {
-        let mut cs: Vec<StateConstraint> = vec![
-            StateConstraint::WriteOnce {
-                index: QUESTION_HASH_SLOT,
-            },
-            StateConstraint::WriteOnce {
-                index: ELECTORATE_ROOT_SLOT,
-            },
-            StateConstraint::WriteOnce {
-                index: QUORUM_M_SLOT,
-            },
-            StateConstraint::WriteOnce {
-                index: OPTION_COUNT_SLOT,
-            },
-            StateConstraint::WriteOnce { index: CLOSED_SLOT },
-            StateConstraint::WriteOnce {
-                index: RESOLVED_SLOT,
-            },
-        ];
-        for i in 0..MAX_OPTIONS {
-            cs.push(StateConstraint::Monotonic {
-                index: TALLY_BASE + i as u8,
-            });
-        }
-        // THE QUORUM GATE (lifted from polis:637): `M·RESOLVED − Σ TALLY_i ≤ 0`.
-        // RESOLVED == 0 ⇒ `−Σ TALLY ≤ 0` (always true); arming RESOLVED := 1
-        // DEMANDS `Σ TALLY ≥ M` in the same post-state — the decision-turn.
-        let mut terms: Vec<(i64, u8)> = vec![(quorum_m as i64, RESOLVED_SLOT)];
-        for i in 0..option_count {
-            terms.push((-1, TALLY_BASE + i as u8));
-        }
-        cs.push(StateConstraint::AffineLe { terms, c: 0 });
-        CellProgram::always(cs)
+    /// **Per-option-gated poll** — like [`VoteEngine::open_poll`], but the quorum
+    /// `AffineLe` gates on ONE option's tally instead of the total:
+    /// `M·RESOLVED − TALLY_gate ≤ 0`, so the decision-turn commits only once the
+    /// *gated option itself* has at least `quorum_m` votes. This is the
+    /// constitutional shape (`dregg-governance`): a proposal enacts only when
+    /// APPROVE reaches the 2n/3+1 threshold — `M` other-option ballots never arm
+    /// `RESOLVED`.
+    pub fn open_poll_gated(
+        &mut self,
+        spec: PollSpec,
+        gate_option: usize,
+    ) -> Result<PollId, VoteError> {
+        self.open_poll_inner(spec, Some(gate_option))
     }
-}
 
-impl VoteEngine for CollectiveChoice {
-    type Error = VoteError;
-
-    fn open_poll(&mut self, spec: PollSpec) -> Result<PollId, VoteError> {
+    fn open_poll_inner(
+        &mut self,
+        spec: PollSpec,
+        gate_option: Option<usize>,
+    ) -> Result<PollId, VoteError> {
         let option_count = spec.options.len();
         if option_count == 0 || option_count > MAX_OPTIONS {
             return Err(VoteError::BadPollSpec(format!(
@@ -440,6 +424,13 @@ impl VoteEngine for CollectiveChoice {
         }
         if spec.quorum_m == 0 {
             return Err(VoteError::BadPollSpec("quorum_m must be >= 1".into()));
+        }
+        if let Some(g) = gate_option
+            && g >= option_count
+        {
+            return Err(VoteError::BadPollSpec(format!(
+                "gate option {g} out of range for {option_count} options"
+            )));
         }
 
         let operator = self.operator_pk();
@@ -454,7 +445,7 @@ impl VoteEngine for CollectiveChoice {
         .as_bytes();
         let poll_cell = CellId::derive_raw(&operator, &token);
 
-        let program = Self::poll_program(spec.quorum_m, option_count);
+        let program = Self::poll_program(spec.quorum_m, option_count, gate_option);
         let electorate: BTreeSet<[u8; 32]> = spec.electorate.iter().copied().collect();
 
         // Seed the poll (tally-board) cell: install the full program so the
@@ -505,6 +496,56 @@ impl VoteEngine for CollectiveChoice {
             },
         );
         Ok(PollId(poll_cell))
+    }
+
+    fn poll_program(quorum_m: u64, option_count: usize, gate_option: Option<usize>) -> CellProgram {
+        let mut cs: Vec<StateConstraint> = vec![
+            StateConstraint::WriteOnce {
+                index: QUESTION_HASH_SLOT,
+            },
+            StateConstraint::WriteOnce {
+                index: ELECTORATE_ROOT_SLOT,
+            },
+            StateConstraint::WriteOnce {
+                index: QUORUM_M_SLOT,
+            },
+            StateConstraint::WriteOnce {
+                index: OPTION_COUNT_SLOT,
+            },
+            StateConstraint::WriteOnce { index: CLOSED_SLOT },
+            StateConstraint::WriteOnce {
+                index: RESOLVED_SLOT,
+            },
+        ];
+        for i in 0..MAX_OPTIONS {
+            cs.push(StateConstraint::Monotonic {
+                index: TALLY_BASE + i as u8,
+            });
+        }
+        // THE QUORUM GATE (lifted from polis:637): `M·RESOLVED − Σ TALLY_i ≤ 0`.
+        // RESOLVED == 0 ⇒ `−Σ TALLY ≤ 0` (always true); arming RESOLVED := 1
+        // DEMANDS `Σ TALLY ≥ M` in the same post-state — the decision-turn.
+        // With a gate option, the sum narrows to THAT option's tally alone:
+        // `M·RESOLVED − TALLY_gate ≤ 0` (the constitutional per-option threshold).
+        let mut terms: Vec<(i64, u8)> = vec![(quorum_m as i64, RESOLVED_SLOT)];
+        match gate_option {
+            Some(g) => terms.push((-1, TALLY_BASE + g as u8)),
+            None => {
+                for i in 0..option_count {
+                    terms.push((-1, TALLY_BASE + i as u8));
+                }
+            }
+        }
+        cs.push(StateConstraint::AffineLe { terms, c: 0 });
+        CellProgram::always(cs)
+    }
+}
+
+impl VoteEngine for CollectiveChoice {
+    type Error = VoteError;
+
+    fn open_poll(&mut self, spec: PollSpec) -> Result<PollId, VoteError> {
+        self.open_poll_inner(spec, None)
     }
 
     fn cast(

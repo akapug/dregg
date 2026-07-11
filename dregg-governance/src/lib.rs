@@ -46,20 +46,30 @@
 //! branch-vote is a poll over the story's available branches. Options differ;
 //! the engine does not. See `tests/teeth.rs::same_vote_engine_drives_all_three_faces`.
 //!
-//! ## `VoteEngine` and the wider `collective-choice`
+//! ## `VoteEngine` and the wider `collective-choice` — RECONCILED
 //!
-//! The [`VoteEngine`] trait here is defined *locally* from the census shape
-//! (`docs/deos/STARBRIDGE-APPS-CENSUS.md` §2, the `open_poll/cast/tally/resolve`
-//! interface). It is the reconciliation surface: a future shared
-//! `collective-choice` crate registers against these four methods, and the CYOA
-//! runtime (`docs/deos/SPWEEN-ON-DREGG.md` §4.2) drives its branch-votes through
-//! the same trait.
+//! The `collective-choice` crate's **executor-backed engine is the canonical
+//! vote substrate**: every ballot there is a real verified turn (a `WriteOnce`
+//! ballot cell, a `Monotonic` tally, an in-cell `AffineLe` quorum gate, a
+//! nullifier set). The constitution face runs over it via [`substrate`]
+//! ([`substrate::ExecutorGovernance`] + [`substrate::ExecutorEnactReactor`]):
+//! a proposal opens an executor poll whose per-option `AffineLe` gate IS the
+//! constitutional `required_votes_for`, votes are ballot-cap turns, and the
+//! reactor auto-enacts on the real `ConstitutionManager`.
+//!
+//! The [`VoteEngine`] trait and [`CollectiveChoice`] object in THIS file remain
+//! the in-memory causal-log face (defined from the census shape,
+//! `docs/deos/STARBRIDGE-APPS-CENSUS.md` §2): content-addressed `VoteBlock`s,
+//! the light-client-recomputable `derive_tally`/`verify_tally` path, and the
+//! shared-shape demonstration that governance, community polls, and CYOA
+//! branch-votes (`docs/deos/SPWEEN-ON-DREGG.md` §4.2) are one primitive.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 pub mod community;
 pub mod governance;
 pub mod reactor;
+pub mod substrate;
 
 /// A voter's public-key identity (an ed25519 key, matching the constitution's
 /// `[u8; 32]` participant keys).

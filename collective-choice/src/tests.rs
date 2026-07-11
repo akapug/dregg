@@ -194,6 +194,65 @@ fn delegated_vote_counts_once_and_cannot_amplify() {
     );
 }
 
+// ── the per-option gate (the constitutional threshold shape) ─────────────────
+
+#[test]
+fn gated_poll_refuses_resolution_until_the_gated_option_reaches_m() {
+    let mut e = engine();
+    // Gate on option 1 ("approve") with M = 2, over a 3-voter electorate.
+    let poll = e
+        .open_poll_gated(spec("enact?", 2, vec![ALICE, BOB, CAROL], 2), 1)
+        .unwrap();
+
+    // TWO votes land on option 0 — total (2) reaches M, but the GATED option has
+    // 0. The old Σ-TALLY gate would arm RESOLVED here; the per-option gate
+    // (`2·RESOLVED − TALLY_1 ≤ 0`) refuses the decision-turn.
+    let a = e.issue_ballot(poll, ALICE).unwrap();
+    e.cast(poll, &a, 0).unwrap();
+    let b = e.issue_ballot(poll, BOB).unwrap();
+    e.cast(poll, &b, 0).unwrap();
+    assert_eq!(e.tally(poll).unwrap().total, 2);
+    assert!(
+        e.resolve(poll).unwrap().is_none(),
+        "M ballots on OTHER options must not arm a per-option-gated RESOLVED"
+    );
+
+    // Votes on the gated option itself... one is still below M.
+    let c = e.issue_ballot(poll, CAROL).unwrap();
+    e.cast(poll, &c, 1).unwrap();
+    assert!(
+        e.resolve(poll).unwrap().is_none(),
+        "gated option at 1 < M must still refuse"
+    );
+}
+
+#[test]
+fn gated_poll_resolves_once_the_gated_option_itself_reaches_m() {
+    let mut e = engine();
+    let poll = e
+        .open_poll_gated(spec("enact?", 2, vec![ALICE, BOB, CAROL], 2), 1)
+        .unwrap();
+    for v in [ALICE, BOB] {
+        let cap = e.issue_ballot(poll, v).unwrap();
+        e.cast(poll, &cap, 1).unwrap();
+    }
+    let decision = e
+        .resolve(poll)
+        .unwrap()
+        .expect("gated option at M commits the decision-turn");
+    assert_eq!(decision.winner, 1);
+    assert_eq!(decision.winner_tally, 2);
+}
+
+#[test]
+fn gated_poll_with_out_of_range_gate_is_refused() {
+    let mut e = engine();
+    match e.open_poll_gated(spec("bad gate", 2, vec![ALICE], 1), 2) {
+        Err(VoteError::BadPollSpec(_)) => {}
+        other => panic!("an out-of-range gate option must be refused, got {other:?}"),
+    }
+}
+
 // ── the shape spween-dregg / dregg-governance consume ───────────────────────
 
 #[test]

@@ -20,4 +20,11 @@ name = "dregg_governance"
 # equivocator auto-eviction), rather than mirroring it.
 dregg-blocklace = { path = "../blocklace" }
 
+# The CANONICAL vote substrate — the executor-backed engine (WriteOnce ballot
+# cells, Monotonic tallies, the per-option AffineLe quorum gate, Mandate
+# delegation, nullifier set). `src/substrate.rs` runs the constitution face over
+# it; the in-memory `CollectiveChoice` in this crate remains the causal-log /
+# light-client derivation face.
+collective-choice = { path = "../collective-choice" }
+
 blake3 = "1"
