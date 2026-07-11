@@ -57,7 +57,7 @@ open Dregg2.Circuit (Assignment)
 open Dregg2.Circuit.Emit.EffectVmEmit
 open Dregg2.Circuit.DescriptorIR2
 open Dregg2.Circuit.Emit.EffectVmEmitV2
-open Dregg2.Circuit.Emit.EffectVmEmitRotation (PUB_COMMIT PUB_HEIGHT)
+open Dregg2.Circuit.Emit.EffectVmEmitRotation (PUB_COMMIT PUB_HEIGHT canon_eq_of_modEq)
 open Dregg2.Circuit.Emit.EffectVmEmitRotationR
 open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
 open Dregg2.Crypto
@@ -416,9 +416,9 @@ theorem rotationCaveatProbe_publishes (permOut : List ℤ → List ℤ) (hash : 
     (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
     (hf : Satisfied2Faithful permOut hash rotationCaveatProbeVmDescriptor2 minit mfin maddrs t)
     (i : Nat) (hi : i < t.rows.length) (hlast : i + 1 = t.rows.length) :
-    (envAt t i).loc (stateCommitCol 24) = (envAt t i).pub PUB_COMMIT
-    ∧ (envAt t i).loc (committedHeightCol 24) = (envAt t i).pub PUB_HEIGHT
-    ∧ (envAt t i).loc CAVEAT_COMMIT = (envAt t i).pub PUB_CAVEAT := by
+    (envAt t i).loc (stateCommitCol 24) ≡ (envAt t i).pub PUB_COMMIT [ZMOD 2013265921]
+    ∧ (envAt t i).loc (committedHeightCol 24) ≡ (envAt t i).pub PUB_HEIGHT [ZMOD 2013265921]
+    ∧ (envAt t i).loc CAVEAT_COMMIT ≡ (envAt t i).pub PUB_CAVEAT [ZMOD 2013265921] := by
   have h := satisfied2Faithful_satisfiedVm permOut hash rotationCaveatProbeVmDescriptor
     minit mfin maddrs t (by decide) hf i hi
   have h1 := h.1 (.piBinding .last (stateCommitCol 24) PUB_COMMIT)
@@ -443,6 +443,14 @@ theorem rotationCaveatProbe_binds_published (permOut : List ℤ → List ℤ) (h
     (hf' : Satisfied2Faithful permOut hash rotationCaveatProbeVmDescriptor2 minit' mfin' maddrs' t')
     (i j : Nat) (hi : i < t.rows.length) (hj : j < t'.rows.length)
     (hlast : i + 1 = t.rows.length) (hlast' : j + 1 = t'.rows.length)
+    (hcCanon : 0 ≤ (envAt t i).loc (stateCommitCol 24)
+      ∧ (envAt t i).loc (stateCommitCol 24) < 2013265921)
+    (hcCanon' : 0 ≤ (envAt t' j).loc (stateCommitCol 24)
+      ∧ (envAt t' j).loc (stateCommitCol 24) < 2013265921)
+    (hhCanon : 0 ≤ (envAt t i).pub PUB_HEIGHT ∧ (envAt t i).pub PUB_HEIGHT < 2013265921)
+    (hhCanon' : 0 ≤ (envAt t' j).pub PUB_HEIGHT ∧ (envAt t' j).pub PUB_HEIGHT < 2013265921)
+    (hkCanon : 0 ≤ (envAt t i).loc CAVEAT_COMMIT ∧ (envAt t i).loc CAVEAT_COMMIT < 2013265921)
+    (hkCanon' : 0 ≤ (envAt t' j).loc CAVEAT_COMMIT ∧ (envAt t' j).loc CAVEAT_COMMIT < 2013265921)
     (hpub : (envAt t i).pub PUB_COMMIT = (envAt t' j).pub PUB_COMMIT)
     (hcav : (envAt t i).pub PUB_CAVEAT = (envAt t' j).pub PUB_CAVEAT) :
     preLimbs 24 (envAt t i).loc = preLimbs 24 (envAt t' j).loc
@@ -456,17 +464,42 @@ theorem rotationCaveatProbe_binds_published (permOut : List ℤ → List ℤ) (h
   obtain ⟨hp, hq⟩ := rotationCaveatProbe_pins permOut hash minit mfin maddrs t hf i hi
   obtain ⟨hp', hq'⟩ := rotationCaveatProbe_pins permOut hash minit' mfin' maddrs' t'
     hf' j hj
+  -- Lift the two state-commit pins to a genuine ℤ equality of the digest columns via canonicality.
+  have hcCong : (envAt t i).loc (stateCommitCol 24)
+      ≡ (envAt t' j).loc (stateCommitCol 24) [ZMOD 2013265921] :=
+    calc (envAt t i).loc (stateCommitCol 24)
+        ≡ (envAt t i).pub PUB_COMMIT [ZMOD 2013265921] := hc
+      _ = (envAt t' j).pub PUB_COMMIT := hpub
+      _ ≡ (envAt t' j).loc (stateCommitCol 24) [ZMOD 2013265921] := hc'.symm
+  have hcEq : (envAt t i).loc (stateCommitCol 24) = (envAt t' j).loc (stateCommitCol 24) :=
+    canon_eq_of_modEq hcCanon hcCanon' hcCong
   have hwire : wireCommitR hash (preLimbs 24 (envAt t i).loc) ((envAt t i).loc (irootCol 24))
       = wireCommitR hash (preLimbs 24 (envAt t' j).loc) ((envAt t' j).loc (irootCol 24)) := by
-    rw [← hp, ← hp', hc, hc', hpub]
+    rw [← hp, ← hp', hcEq]
   obtain ⟨hpre, hir⟩ := wireCommitR_binds hash hCR
     (by rw [preLimbs_length, preLimbs_length]) hwire
+  -- Lift the two caveat-commit pins to a genuine ℤ equality via canonicality.
+  have hkCong : (envAt t i).loc CAVEAT_COMMIT
+      ≡ (envAt t' j).loc CAVEAT_COMMIT [ZMOD 2013265921] :=
+    calc (envAt t i).loc CAVEAT_COMMIT
+        ≡ (envAt t i).pub PUB_CAVEAT [ZMOD 2013265921] := hk
+      _ = (envAt t' j).pub PUB_CAVEAT := hcav
+      _ ≡ (envAt t' j).loc CAVEAT_COMMIT [ZMOD 2013265921] := hk'.symm
+  have hkEq : (envAt t i).loc CAVEAT_COMMIT = (envAt t' j).loc CAVEAT_COMMIT :=
+    canon_eq_of_modEq hkCanon hkCanon' hkCong
   have hcc : caveatCommit hash (blockManifest (envAt t i).loc)
       = caveatCommit hash (blockManifest (envAt t' j).loc) := by
-    rw [← hq, ← hq', hk, hk', hcav]
+    rw [← hq, ← hq', hkEq]
   refine ⟨hpre, hir, ?_, caveatCommit_binds hash hCR hcc⟩
-  rw [← hh, ← hh']
-  exact congrArg (fun L => L.getD (committedHeightCol 24) 0) hpre
+  have hHtEq : (envAt t i).loc (committedHeightCol 24)
+      = (envAt t' j).loc (committedHeightCol 24) :=
+    congrArg (fun L => L.getD (committedHeightCol 24) 0) hpre
+  have hHtCong : (envAt t i).pub PUB_HEIGHT ≡ (envAt t' j).pub PUB_HEIGHT [ZMOD 2013265921] :=
+    calc (envAt t i).pub PUB_HEIGHT
+        ≡ (envAt t i).loc (committedHeightCol 24) [ZMOD 2013265921] := hh.symm
+      _ = (envAt t' j).loc (committedHeightCol 24) := hHtEq
+      _ ≡ (envAt t' j).pub PUB_HEIGHT [ZMOD 2013265921] := hh'
+  exact canon_eq_of_modEq hhCanon hhCanon' hHtCong
 
 #assert_axioms rotationCaveatProbe_pins
 #assert_axioms rotationCaveatProbe_publishes
