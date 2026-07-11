@@ -611,6 +611,7 @@ fn build(src: &str) -> Result<(GameWorld, Prov), DungeonError> {
         consumables: b.consumables,
         statuses: b.statuses,
         loot: Vec::new(),
+        encounters: Vec::new(),
         player_max_hp: b.player_max_hp,
         light: b.light,
         start,
