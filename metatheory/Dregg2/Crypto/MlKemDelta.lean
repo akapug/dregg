@@ -575,6 +575,121 @@ theorem hoeffding_budget_exceeds_2800 :
 forecloses the range-based route. -/
 theorem deltaV_alone_exceeds_2800 : (2800 : ℝ) < 10816 := by norm_num
 
+/-! ## §11 — CAN A VARIANCE-BASED CONCENTRATION CLOSE δ? The Mathlib probe + the Bernstein arithmetic.
+
+§10 proved the range-Hoeffding route overshoots the `V ≤ 2800` variance budget by 16×. The natural next
+move is a VARIANCE-based exponential tail (Bernstein / Bennett / sub-gamma), whose exponent `t²/(2(V + b·t/3))`
+uses the true variance `V` rather than the range-Hoeffding proxy. This section records the PRECISE outcome of
+attempting that — and it is a NEGATIVE determination on two independent grounds.
+
+**(A) Mathlib ships no variance-based exponential tail.** A full sweep of `Mathlib.Probability.*` finds:
+* `Mathlib/Probability/Moments/SubGaussian.lean` — only the sub-Gaussian MGF machine and its Chernoff bound
+  (`HasSubgaussianMGF.measure_ge_le`, `measure_sum_ge_le_of_iIndepFun`), whose only per-term constructor from
+  boundedness is `hasSubgaussianMGF_of_mem_Icc` — the RANGE-Hoeffding proxy §10 already refuted.
+* `Mathlib/Probability/Moments/Variance.lean` — the ONLY variance-based tail in Mathlib is Chebyshev's
+  inequality `ProbabilityTheory.meas_ge_le_variance_div_sq : μ {ω | c ≤ |X ω - 𝔼X|} ≤ Var[X] / c²`. That is a
+  POLYNOMIAL (second-moment) tail, not exponential.
+* There is NO `Bernstein`, `subGamma`/`SubGamma`, `Bennett`, `HasSubexponentialMGF`, or any variance-parametrised
+  Chernoff/sub-gamma tail anywhere in the library (the `Bernstein*.lean` files are Bernstein POLYNOMIALS /
+  Schröder–Bernstein, unrelated). **The exact missing lemma** is a `ProbabilityTheory`-level Bernstein/sub-gamma
+  tail of the shape `measure {ε ≤ ∑ Xᵢ} ≤ exp(−ε²/(2(V + b·ε/3)))` for independent centered `|Xᵢ| ≤ b` with
+  `∑ Var[Xᵢ] ≤ V` — a Mathlib-PR-scale addition (its honest proof is a Bennett/Bernstein MGF bound, NOT short),
+  so it is named as the obstruction rather than built here.
+
+**(B) Even GRANTING Bernstein, the Kyber params do NOT clear 164 bits.** This is the load-bearing finding, and it
+is PROVED below as pure arithmetic — so the missing lemma, even if added, would not close δ. Bernstein's exponent
+`E = t²/(2(V + b·t/3))` at the failure threshold `t = 832` and variance budget `V = 2800` carries the
+sub-exponential linear correction `b·t/3`, where `b` is the a.s. bound on each centered summand. The compression
+term `Δv ∈ [−104,104]` (§10) forces `b ≥ 104`, giving `E = 832²/(2·(2800 + 104·832/3)) ≈ 10.94` nats ≈ 15.8 bits
+— hopeless (`bernstein_exponent_honest_lt_11`, `bernstein_honest_misses_delta`). And even in the OPTIMISTIC case
+that ignores `Δv` entirely and uses only the product cross-terms' minimal bound `b = 4`, the exponent is
+`E ≈ 88.5` nats ≈ 127.7 bits per coefficient, ≈ 117.7 after the 768-fold union bound — STILL short of the 164-bit
+δ target (`bernstein_exponent_bestcase_lt_89`, `bernstein_bestcase_misses_delta`). The `b·t/3` penalty is exactly
+what a bounded-but-non-Gaussian variable must pay and is ABSENT from the pure Gaussian exponent `t²/(2V) = 123.6`
+nats ≈ 178.3 bits (168 after union) — the exponent `hoeffding_delta_arith` (§7) uses, which is only legitimate if
+`V = 2800` is a genuine SUB-GAUSSIAN parameter, and §10 proved it is not (the real proxy is 47684).
+
+**CONCLUSION (the deliverable).** δ ≈ 2⁻¹⁶⁴ does NOT close via any generic variance-based concentration in Lean
+today. Mathlib lacks the Bernstein/sub-gamma tail (A), and even that tail would miss the target by ≥ 40 bits at
+Kyber's params (B), because a variance+range concentration cannot recover the near-Gaussian tail. The true
+δ ≈ 2⁻¹⁶⁴ is a property of the EXACT centered-binomial convolution (its CLT-driven near-Gaussianity), reproducible
+only by the exact Kyber δ script (numerically convolving the coefficient distribution), not by any moment/range
+inequality Mathlib ships or could cheaply ship. This is the honest status of the δ residual. -/
+
+/-- **CHEBYSHEV — Mathlib's only variance-based tail — is polynomial and cannot supply the per-coefficient τ.**
+`ProbabilityTheory.meas_ge_le_variance_div_sq` bounds `Pr[832 ≤ |e_total c|] ≤ Var / 832²`. With the true
+variance budget `V = 2800` that is `2800/832² ≥ 2⁻⁸` — astronomically above the `τ = 2⁻¹⁷⁴` the δ target needs
+(a 166-bit shortfall). The polynomial second-moment decay simply cannot reach cryptographic tails. -/
+theorem chebyshev_perCoeff_tail_ge_2pow_neg8 : (2 : ℝ) ^ (-8 : ℤ) ≤ 2800 / (832 : ℝ) ^ 2 := by
+  rw [show (832 : ℝ) ^ 2 = 692224 by norm_num, show (2 : ℝ) ^ (-8 : ℤ) = 1 / 256 by norm_num]
+  norm_num
+
+/-- Chebyshev's variance tail is strictly larger than the required per-coefficient `τ = 2⁻¹⁷⁴` — so it provably
+cannot discharge `PerCoeffHoeffdingTail`. -/
+theorem chebyshev_cannot_supply_tail : (2 : ℝ) ^ (-174 : ℤ) < 2800 / (832 : ℝ) ^ 2 :=
+  lt_of_lt_of_le
+    (zpow_lt_zpow_right₀ (by norm_num : (1 : ℝ) < 2) (by norm_num : (-174 : ℤ) < -8))
+    chebyshev_perCoeff_tail_ge_2pow_neg8
+
+/-- **Bernstein / sub-gamma tail EXPONENT** for a sum of independent centered terms with variance budget `V`,
+per-term a.s. bound `b`, at threshold `t`: `E = t²/(2·(V + b·t/3))`. The `b·t/3` linear term is the
+sub-exponential penalty a bounded-yet-non-Gaussian variable must pay — absent from the pure Gaussian exponent
+`t²/(2V)`. (Mathlib ships no lemma producing this bound; it is stated here only to MEASURE whether it would
+suffice — the arithmetic below shows it does not.) -/
+noncomputable def bernsteinExponent (V b t : ℝ) : ℝ := t ^ 2 / (2 * (V + b * t / 3))
+
+/-- Bernstein's two-sided tail value `2·exp(−E)`. -/
+noncomputable def bernsteinBound (V b t : ℝ) : ℝ := 2 * Real.exp (-bernsteinExponent V b t)
+
+/-- The Bernstein exponent at the HONEST params (`V = 2800`, `b = 104` forced by the `Δv ∈ [−104,104]`
+compression term, `t = 832`) is `< 11` nats (≈ 15.8 bits) — the sub-exponential `b·t/3 ≈ 28843` correction
+swamps `V = 2800`. -/
+theorem bernstein_exponent_honest_lt_11 : bernsteinExponent 2800 104 832 < 11 := by
+  unfold bernsteinExponent
+  rw [div_lt_iff₀ (by norm_num)]
+  norm_num
+
+/-- The Bernstein exponent in the OPTIMISTIC case (ignore `Δv`; use only the product cross-terms' minimal bound
+`b = 4`) is `< 89` nats (≈ 127.7 bits) — better, but STILL below the `164 + 10` bits the 768-union δ target needs. -/
+theorem bernstein_exponent_bestcase_lt_89 : bernsteinExponent 2800 4 832 < 89 := by
+  unfold bernsteinExponent
+  rw [div_lt_iff₀ (by norm_num)]
+  norm_num
+
+/-- **THE BERNSTEIN-MISSES-δ CORE (PROVED).** Whenever the Bernstein exponent stays below `164·ln 2` nats, the
+union-bounded Bernstein estimate `768 · 2·exp(−E)` is STRICTLY GREATER than `δ = 2⁻¹⁶⁴` — i.e. Bernstein fails to
+certify `Pr[fail] ≤ δ`. (`2⁻¹⁶⁴ = exp(−164·ln 2)`; `E < 164·ln 2` gives `exp(−E) > 2⁻¹⁶⁴`, and the `768·2` factor
+only enlarges it.) -/
+theorem bernsteinBound_misses_delta {V b t : ℝ}
+    (hE : bernsteinExponent V b t < 164 * Real.log 2) :
+    MlKemCorrect.mlKem768Delta < 768 * bernsteinBound V b t := by
+  unfold MlKemCorrect.mlKem768Delta bernsteinBound
+  have hδ : (2 : ℝ) ^ (-164 : ℤ) = Real.exp (-(164 * Real.log 2)) := by
+    rw [← Real.exp_log (show (0 : ℝ) < (2 : ℝ) ^ (-164 : ℤ) by positivity), Real.log_zpow]
+    congr 1; push_cast; ring
+  rw [hδ]
+  have hpos := Real.exp_pos (-bernsteinExponent V b t)
+  have h1 : Real.exp (-(164 * Real.log 2)) < Real.exp (-bernsteinExponent V b t) :=
+    Real.exp_lt_exp.mpr (by linarith)
+  linarith [h1, hpos]
+
+/-- **BERNSTEIN AT THE HONEST KYBER PARAMS DOES NOT CLEAR 164 BITS.** With `b = 104` (the `Δv` compression range),
+the union-bounded Bernstein estimate exceeds `δ = 2⁻¹⁶⁴` — off by ≈ 148 bits. -/
+theorem bernstein_honest_misses_delta :
+    MlKemCorrect.mlKem768Delta < 768 * bernsteinBound 2800 104 832 :=
+  bernsteinBound_misses_delta (by
+    have h := bernstein_exponent_honest_lt_11
+    linarith [Real.log_two_gt_d9])
+
+/-- **EVEN THE OPTIMISTIC BERNSTEIN (ignoring `Δv`, `b = 4`) DOES NOT CLEAR 164 BITS.** The union-bounded estimate
+`768·2·exp(−E)` with `E < 89` still exceeds `δ = 2⁻¹⁶⁴` (≈ 117.7 vs 164 bits) — so no choice of the per-term bound
+`b` rescues the variance-based route at Kyber's `(V, t) = (2800, 832)`. -/
+theorem bernstein_bestcase_misses_delta :
+    MlKemCorrect.mlKem768Delta < 768 * bernsteinBound 2800 4 832 :=
+  bernsteinBound_misses_delta (by
+    have h := bernstein_exponent_bestcase_lt_89
+    linarith [Real.log_two_gt_d9])
+
 /-! ## AXIOM HYGIENE — every probabilistic theorem is kernel-clean (⊆ {propext, Classical.choice, Quot.sound}). -/
 
 #assert_all_clean [
@@ -597,7 +712,14 @@ theorem deltaV_alone_exceeds_2800 : (2800 : ℝ) < 10816 := by norm_num
   hoeffdingProxy_cbdProduct,
   hoeffdingProxy_deltaV,
   hoeffding_budget_exceeds_2800,
-  deltaV_alone_exceeds_2800
+  deltaV_alone_exceeds_2800,
+  chebyshev_perCoeff_tail_ge_2pow_neg8,
+  chebyshev_cannot_supply_tail,
+  bernstein_exponent_honest_lt_11,
+  bernstein_exponent_bestcase_lt_89,
+  bernsteinBound_misses_delta,
+  bernstein_honest_misses_delta,
+  bernstein_bestcase_misses_delta
 ]
 
 end Dregg2.Crypto.MlKemDelta
