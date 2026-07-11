@@ -265,3 +265,21 @@ verdict holds:
   three range-checked 30-bit values sum to `3·2^30 ≈ 1.5p > p`, so a 3-term affine gate over them can still hit p.
 CONCLUSION: no invariant rescues the ℤ denotation; the refactor is REQUIRED, confirmed by an independent
 adversarial pass, not just codex's report.
+
+## ⊕⊕ REFRAME (claude, 2026-07-11): a TYPE-TRANSPARENT def change likely shrinks 220 → ~10-30 real-work files
+The 220 is a REFERENCE count, not a re-proof count. The fix need NOT introduce a parallel `Satisfied2F` type; it
+can be a TYPE-PRESERVING definition change: `holdsVm`/`holdsAt`/`arithResidual`'s `body.eval env = 0` (over ℤ) →
+`(body.eval env : ZMod p) = 0` (= `≡ 0 mod p` = the BabyBear constraint, field-faithful). Type stays `Prop`, so
+consumers are untouched.
+MEASURED (grep-heuristic, needs empirical confirmation):
+- 987 OPAQUE `Satisfied2` uses + 273 opaque `.rowConstraints` — FREE (type unchanged).
+- 93 CONSTRUCTOR files (prove `.eval = 0` to BUILD Satisfied2) — survive ~mechanically (`0` over ℤ ⟹ `≡ 0 mod p`;
+  the goal gets WEAKER).
+- Only 8 files squeeze an ORDERED-ℤ conclusion from holdsAt (the true break risk) — and the genuinely-ordered one
+  (memory-address sorting) is in the BUS arms (`memOp`/`lookup`/`mapOp`, `isArith = false`), already handled by
+  LogUp/table soundness (#7), NOT the arithmetic residual. So the residual being changed carries no ordered-ℤ.
+⇒ REAL re-proof cost ≈ the def change (a few DescriptorIR2 defs) + the ~8 ordered-ℤ consumers + spot-verifying the
+93 constructors. Plausibly ~10-30 files, not 220. CONFIRM EMPIRICALLY (the honest next step, not a heuristic): make
+the def change, targeted-build DescriptorIR2 + AirChecksSatisfied + one descriptor file, count actual breakage.
+If confirmed, this is TRACTABLE, not a slog. If the constructors do NOT auto-survive (brittle `= 0` usage), the
+scope is bigger — the build will say.
