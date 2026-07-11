@@ -73,7 +73,7 @@ const TAG_VAULT: i64 = SLOT_CAVEAT_TAG_VAULT_DEPOSIT as i64;
 pub const LIMB_BITS: usize = 15;
 const TWO15: i64 = 1 << LIMB_BITS;
 /// The carry width for the cross-term carries (one bit past the limb width — see the header bound).
-pub const CARRY_BITS: usize = 16;
+pub const CARRY_BITS: usize = 15;
 
 // --- decode aux (mirror carrier_floor, tag 19) ---
 pub const fn bit_col(k: usize) -> usize {

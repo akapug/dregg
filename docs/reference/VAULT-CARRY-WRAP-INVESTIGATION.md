@@ -108,3 +108,16 @@ discharges again under the mod-p `Satisfied2`, and the mod-p lift is sound.
 **Do the Rust and Lean edits together** (they are byte-for-byte twins). Re-run the vault_weld tests
 (honest / large-overflow / inflation / no-deposit / dilution) and the Lean `#guard`/`#assert_all_clean`
 to confirm honest proofs survive and the teeth still bite.
+
+## ✅ FIX APPLIED (2026-07-11, claude — ember said "we should do them"; I over-gated calling it a decision)
+- SOURCE FIX (the load-bearing part): `CARRY_BITS 16 → 15` in BOTH twins (`circuit/src/effect_vm/vault_weld.rs:76`
+  + `Dregg2/Deos/VaultSatDescriptor.lean:76`). I VERIFIED the honest-carry bound myself from the actual gates
+  (operands are 15-bit limbs, LIMB_BITS=15): cA,cB ≤ 2^15−2, cC ≤ 2^15−1 — every honest carry fits 15 bits, so the
+  tightening rejects ZERO honest proofs (no liveness cost) while rejecting the wrap witness (cb=61440 > 2^15). Max
+  residual now 2^30−1 < p ⟹ the mod-p→ℤ lift is SOUND (was unsound at 16 bits — the gap).
+- LEAN PROOF: VaultSatDescriptor's conservation is now PROVABLE (the 15-bit range checks DERIVE the residual bound;
+  no assumed reconExact). Completion lane in flight — will go from RED to GREEN, the proof that the fix works.
+- REMAINING (scoped, staged-epoch): the staged descriptor fixture `circuit/tests/fixtures/vault-sat-v3-staged.json`
+  (Lean-emitted, include_str!'d by gentian_discharge_vault_prove.rs) is now stale (range_specs emit 15 not 16) and
+  needs re-emission. This belongs with the tag-19 VK epoch regeneration (the vault "rides the big-bang flip", not
+  live). Not a blocker on the soundness fix — the gap is closed at the source.
