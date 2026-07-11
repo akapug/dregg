@@ -7393,3 +7393,29 @@ Open frontier: wrap batch-STARK (multi-height openings + logup bus + NPO tables)
 (keccak-at-wrap) → tie to DreggSettlement; wire the relayer adapter path into a production loop; the same
 Lean-first-@[export] correction onto the InterchainAdapter decision; consensus-mint/holdings live geyser
 feed + G1 in-circuit fold.
+
+## AGGRESSIVE FRONTIER ROUND — 6 frontiers landed (2026-07-11, Fable)
+
+All committed, all verified locally, audits/self-checks clean:
+- gnark VerifyFri: challenger+grinding+query assembled into one single-matrix FRI verify (transcript-order
+  canary). Next rung = batch-STARK (alpha-batched multi-height openings + logup bus + NPO tables).
+- InterchainAdapter Lean-first: reached_consensus() DECISION now calls the verified Lean core
+  (Dregg2.Bridge.InterchainAdapterDecision, @[export] dregg_interchain_reached_consensus). Placed under
+  Dregg2/ from the START → FFI LINKED LOCALLY on first build (7/7 run, no hbox). Fail-closed if unlinked.
+- Holdings FFI now ALSO links locally (9/9, was 3-run/6-skip) — the shared archive re-splice picks up both
+  Dregg2/Bridge decisions. LESSON CONFIRMED: exported decision modules go under Dregg2/ (the splice walks
+  Dregg2/**/*.c); then they link locally, no hbox needed.
+- Relayer production loop: scan_program_locks → per-lock evidence (geyser-feed SEAM, live impl named) →
+  on-chain re-observe (re-counts real 2/3) → adapter mint path. + lying-feed test (40% minority refused).
+- Deploy-gate tier-1 prototype (dregg-deploy/src/gate.rs): the code behind the microsite. Structural
+  assurance + composable GatePolicy (NoLiveMintAuthority / NoUndisclosedAmplifyingGrant /
+  RequireDangerousCapAttenuation) over the real cap graph → Permit{verdict} | Refuse. Discriminators
+  non-vacuous. Tier-2 (foreign bytecode) + on-chain hook + more predicates = named residuals.
+- eth-lightclient (NEW standalone crate): Altair sync-committee verify — BLS12-381 (blst min_pk), the
+  census's single missing primitive. REAL ethereum/bls12-381-tests v0.1.2 KATs prove ciphersuite conformance;
+  2/3 threshold (participants*3>=512*2), wrong-fork + Nomad-law rejects; committee-rotation Merkle branch.
+  Residuals: P2P sync, finality-following, fork schedule, WS bootstrap.
+
+Interop posture now: dregg is the plug for EVM (settlement + Hyperlane ISM + LayerZero DVN), Solana
+(lock program + trustless mint + proof-of-holdings + M-of-N unlock), ETH (sync-committee light client core),
+with the trust decision + holdings-weight both verified-Lean-called-from-Rust, and a working deploy-gate.
