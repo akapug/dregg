@@ -63,7 +63,8 @@ open Dregg2.Circuit.Emit.EffectVmEmit
 open Dregg2.Circuit.Emit.EffectVmEmitTransfer
   (eSB eSA ePrm eSub eSelNoop gNonce gBalHi gCapPass gResPass gFieldPass gFieldPassAll
    transitionAll boundaryFirstPins boundaryLastPins
-   transferHashSites transferHash_binds boundaryLast_pins)
+   transferHashSites transferHash_binds boundaryLast_pins
+   eqToModEq gate_modEq_iff not_modEq_zero_of_canon)
 open Dregg2.Circuit.Emit.EffectVmEmitTransferSound
   (CellState absorbedCols commitOf commit_eq_commitOf absorbed_determined_by_commit)
 open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
@@ -141,15 +142,19 @@ def noteCreateVmDescriptor : EffectVmDescriptor :=
 
 /-- **`NoteCreateRowIntent env`** — the intended noteCreate move on the row `env.loc`: the transparent
 `bal_lo` is FROZEN (balance-neutral — the note value is hidden in the commitment, never moved on the
-ledger), the runtime nonce TICKS by one, and balHi/cap/reserved/8 fields are FROZEN. The actual
-commitment-set insert is bound by the §A–§G commitment-root amplification. -/
+ledger), the runtime nonce TICKS by one, and balHi/cap/reserved/8 fields are FROZEN. FIELD-FAITHFUL:
+each clause is a congruence mod `p = 2013265921` (the BabyBear prime) — the deployed circuit enforces
+the freeze IN THE FIELD, so the old ℤ `=` was provably too strong (a canonical trace can carry an ℤ
+residual of `p ≠ 0`). The actual commitment-set insert is bound by the §A–§G commitment-root
+amplification. -/
 def NoteCreateRowIntent (env : VmRowEnv) : Prop :=
-  env.loc (saCol state.BALANCE_LO) = env.loc (sbCol state.BALANCE_LO)
-  ∧ env.loc (saCol state.BALANCE_HI) = env.loc (sbCol state.BALANCE_HI)
-  ∧ env.loc (saCol state.NONCE) = env.loc (sbCol state.NONCE) + 1
-  ∧ env.loc (saCol state.CAP_ROOT) = env.loc (sbCol state.CAP_ROOT)
-  ∧ env.loc (saCol state.RESERVED) = env.loc (sbCol state.RESERVED)
-  ∧ (∀ i < 8, env.loc (saCol (state.FIELD_BASE + i)) = env.loc (sbCol (state.FIELD_BASE + i)))
+  env.loc (saCol state.BALANCE_LO) ≡ env.loc (sbCol state.BALANCE_LO) [ZMOD 2013265921]
+  ∧ env.loc (saCol state.BALANCE_HI) ≡ env.loc (sbCol state.BALANCE_HI) [ZMOD 2013265921]
+  ∧ env.loc (saCol state.NONCE) ≡ env.loc (sbCol state.NONCE) + 1 [ZMOD 2013265921]
+  ∧ env.loc (saCol state.CAP_ROOT) ≡ env.loc (sbCol state.CAP_ROOT) [ZMOD 2013265921]
+  ∧ env.loc (saCol state.RESERVED) ≡ env.loc (sbCol state.RESERVED) [ZMOD 2013265921]
+  ∧ (∀ i < 8, env.loc (saCol (state.FIELD_BASE + i))
+      ≡ env.loc (sbCol (state.FIELD_BASE + i)) [ZMOD 2013265921])
 
 /-! ## §4 — FAITHFULNESS: the emitted per-row gates ⟺ the debit/tick intent. -/
 
@@ -176,31 +181,32 @@ theorem noteCreateVm_faithful (env : VmRowEnv) (hrow : IsNoteCreateRow env) :
       eSA, eSB, eSub, eSelNoop, EmittedExpr.eval] at hLo hHi hNon hCap hRes
     rw [hsN] at hNon
     refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
-    · linarith [hLo]
-    · linarith [hHi]
-    · linarith [hNon]
-    · linarith [hCap]
-    · linarith [hRes]
+    · exact (gate_modEq_iff (by ring)).mp hLo
+    · exact (gate_modEq_iff (by ring)).mp hHi
+    · exact (gate_modEq_iff (by ring)).mp hNon
+    · exact (gate_modEq_iff (by ring)).mp hCap
+    · exact (gate_modEq_iff (by ring)).mp hRes
     · intro i hi
-      have := hFld i hi
-      simp only [VmConstraint.holdsVm, gFieldPass, eSA, eSB, eSub, EmittedExpr.eval] at this
-      linarith
+      have hfi := hFld i hi
+      simp only [VmConstraint.holdsVm, gFieldPass, eSA, eSB, eSub, EmittedExpr.eval] at hfi
+      exact (gate_modEq_iff (by ring)).mp hfi
   · rintro ⟨hLo, hHi, hNon, hCap, hRes, hFld⟩ c hc
     simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
       List.mem_range] at hc
     rcases hc with (rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩
     · simp only [VmConstraint.holdsVm, gBalLoFreeze, eSA, eSB, eSub, EmittedExpr.eval]
-      rw [hLo]; ring
+      exact (gate_modEq_iff (by ring)).mpr hLo
     · simp only [VmConstraint.holdsVm, gBalHi, eSA, eSB, eSub, EmittedExpr.eval]
-      rw [hHi]; ring
+      exact (gate_modEq_iff (by ring)).mpr hHi
     · simp only [VmConstraint.holdsVm, gNonceTick, gNonce, eSA, eSB, eSub, eSelNoop, EmittedExpr.eval]
-      rw [hsN, hNon]; ring
+      rw [hsN]
+      exact (gate_modEq_iff (by ring)).mpr hNon
     · simp only [VmConstraint.holdsVm, gCapPass, eSA, eSB, eSub, EmittedExpr.eval]
-      rw [hCap]; ring
+      exact (gate_modEq_iff (by ring)).mpr hCap
     · simp only [VmConstraint.holdsVm, gResPass, eSA, eSB, eSub, EmittedExpr.eval]
-      rw [hRes]; ring
+      exact (gate_modEq_iff (by ring)).mpr hRes
     · simp only [VmConstraint.holdsVm, gFieldPass, eSA, eSB, eSub, EmittedExpr.eval]
-      rw [hFld i hi]; ring
+      exact (gate_modEq_iff (by ring)).mpr (hFld i hi)
 
 /-! ## §5 — ANTI-GHOST: a row whose post-`bal_lo` is NOT frozen on a noteCreate is rejected. -/
 
@@ -213,14 +219,19 @@ theorem noteCreateVm_rejects_wrong_output (env : VmRowEnv) (hrow : IsNoteCreateR
 
 /-- **Anti-ghost (balance tamper).** A noteCreate row whose post-`bal_lo` is NOT the FROZEN value (a
 smuggled on-trace credit/debit — noteCreate is balance-neutral) has no satisfying gate set —
-`gBalLoFreeze` alone rejects it (UNSAT). The value lives in the commitment, never on the ledger. -/
+`gBalLoFreeze` alone rejects it (UNSAT). The value lives in the commitment, never on the ledger.
+FIELD-FAITHFUL: the tooth rejects a field-`≢` output, so it needs the DEPLOYED range-check
+canonicality — both balance limbs (`transferRanges` wires) lie in `[0, p)`, so a wrong `bal_lo`
+differs from the frozen value by less than `p` and the field gate cannot pass by wrap-around. -/
 theorem noteCreateVm_rejects_balance_mint (env : VmRowEnv)
+    (hcanonNew : 0 ≤ env.loc (saCol state.BALANCE_LO)
+      ∧ env.loc (saCol state.BALANCE_LO) < 2013265921)
+    (hcanonOld : 0 ≤ env.loc (sbCol state.BALANCE_LO)
+      ∧ env.loc (sbCol state.BALANCE_LO) < 2013265921)
     (hwrong : env.loc (saCol state.BALANCE_LO) ≠ env.loc (sbCol state.BALANCE_LO)) :
     ¬ (VmConstraint.gate gBalLoFreeze).holdsVm env false false := by
   simp only [VmConstraint.holdsVm, gBalLoFreeze, eSA, eSB, eSub, EmittedExpr.eval]
-  intro h
-  apply hwrong
-  linarith [h]
+  exact not_modEq_zero_of_canon (by ring) hcanonNew hcanonOld hwrong
 
 /-! ## §6 — The structured per-cell spec (REUSING `CellState`): the FROZEN cell. -/
 
@@ -250,14 +261,15 @@ image): the transparent `balLo` is FROZEN (the note value is hidden in the commi
 the ledger), balHi/8-fields/cap/reserved frozen, nonce TICKED by one. This is the EffectVM-row
 projection of the executor's balance-neutral note-create transition — matching universe-A's
 `NoteCreateASpec` (`noteCreateA_bal_neutral`), with NO divergence. The `value` argument is carried
-(bound into the commitment via §A–§G) but does NOT move `balLo`. -/
+(bound into the commitment via §A–§G) but does NOT move `balLo`. FIELD-FAITHFUL: each clause is a
+mod-`p` congruence (the gates enforce the freeze in the BabyBear field). -/
 def CellNoteSpec (pre : CellState) (value : ℤ) (post : CellState) : Prop :=
-  post.balLo = pre.balLo
-  ∧ post.balHi = pre.balHi
-  ∧ post.nonce = pre.nonce + 1
-  ∧ (∀ i : Fin 8, post.fields i = pre.fields i)
-  ∧ post.capRoot = pre.capRoot
-  ∧ post.reserved = pre.reserved
+  post.balLo ≡ pre.balLo [ZMOD 2013265921]
+  ∧ post.balHi ≡ pre.balHi [ZMOD 2013265921]
+  ∧ post.nonce ≡ pre.nonce + 1 [ZMOD 2013265921]
+  ∧ (∀ i : Fin 8, post.fields i ≡ pre.fields i [ZMOD 2013265921])
+  ∧ post.capRoot ≡ pre.capRoot [ZMOD 2013265921]
+  ∧ post.reserved ≡ pre.reserved [ZMOD 2013265921]
 
 /-- Decode lemma: under `RowEncodesNote`, `NoteCreateRowIntent` IS the structured `CellNoteSpec`. -/
 theorem intent_to_cellNoteSpec (env : VmRowEnv) (pre post : CellState) (value : ℤ)
@@ -280,13 +292,13 @@ theorem intent_to_cellNoteSpec (env : VmRowEnv) (pre post : CellState) (value : 
 
 /-- **`noteCreateDescriptor_full_sound`** — satisfying the WHOLE runnable descriptor, under
 `RowEncodesNote`, forces the structured per-cell FREEZE `CellNoteSpec` AND publishes the post-commit
-as `PI[NEW_COMMIT]`. -/
+as `PI[NEW_COMMIT]` (a mod-`p` pin — the field-faithful boundary binding). -/
 theorem noteCreateDescriptor_full_sound (hash : List ℤ → ℤ) (env : VmRowEnv) (hrow : IsNoteCreateRow env)
     (pre post : CellState) (value : ℤ)
     (henc : RowEncodesNote env pre value post)
     (hgatesat : satisfiedVm hash noteCreateVmDescriptor env true false)
     (hsat : satisfiedVm hash noteCreateVmDescriptor env true true) :
-    CellNoteSpec pre value post ∧ post.commit = env.pub pi.NEW_COMMIT := by
+    CellNoteSpec pre value post ∧ post.commit ≡ env.pub pi.NEW_COMMIT [ZMOD 2013265921] := by
   obtain ⟨hcs, _⟩ := hsat
   obtain ⟨hcsT, _⟩ := hgatesat
   have hgates' : ∀ c ∈ noteCreateRowGates, c.holdsVm env false false := by
@@ -323,17 +335,24 @@ theorem noteCreateDescriptor_full_sound (hash : List ℤ → ℤ) (env : VmRowEn
 
 /-- **`noteCreateDescriptor_commit_binds_state`** — two descriptor-satisfying noteCreate rows publishing
 the SAME `NEW_COMMIT` have identical absorbed state-block columns. So a prover cannot keep `NEW_COMMIT`
-while tampering any absorbed cell of the (frozen) post-state. -/
+while tampering any absorbed cell of the (frozen) post-state. FIELD-FAITHFUL bridge: the circuit pins
+`state_commit ≡ NEW_COMMIT [ZMOD p]`; CANONICALITY of the two published digest columns (Poseidon2's
+output lives in `[0, p)` — an honest side condition, not a weakening) lifts the field congruence to
+the ℤ equality collision-resistance needs. -/
 theorem noteCreateDescriptor_commit_binds_state (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
     (e₁ e₂ : VmRowEnv)
     (hsat₁ : satisfiedVm hash noteCreateVmDescriptor e₁ true true)
     (hsat₂ : satisfiedVm hash noteCreateVmDescriptor e₂ true true)
+    (hcanon₁ : 0 ≤ e₁.loc (saCol state.STATE_COMMIT)
+      ∧ e₁.loc (saCol state.STATE_COMMIT) < 2013265921)
+    (hcanon₂ : 0 ≤ e₂.loc (saCol state.STATE_COMMIT)
+      ∧ e₂.loc (saCol state.STATE_COMMIT) < 2013265921)
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT) :
     absorbedCols e₁ = absorbedCols e₂ := by
   have hs₁ : siteHoldsAll hash e₁ transferHashSites := hsat₁.2.1
   have hs₂ : siteHoldsAll hash e₂ transferHashSites := hsat₂.2.1
   have hc : ∀ (e : VmRowEnv), satisfiedVm hash noteCreateVmDescriptor e true true →
-      e.loc (saCol state.STATE_COMMIT) = e.pub pi.NEW_COMMIT := by
+      e.loc (saCol state.STATE_COMMIT) ≡ e.pub pi.NEW_COMMIT [ZMOD 2013265921] := by
     intro e hsat
     obtain ⟨hcs, _⟩ := hsat
     have hlast : ∀ c ∈ boundaryLastPins, c.holdsVm e false true := by
@@ -349,8 +368,18 @@ theorem noteCreateDescriptor_commit_binds_state (hash : List ℤ → ℤ) (hCR :
         · simp only [VmConstraint.holdsVm] at hh ⊢
           exact hh
     exact (boundaryLast_pins e hlast).1
+  -- each row's published state_commit is ≡ its NEW_COMMIT (mod p); the pubs are equal.
+  have hmod : e₁.loc (saCol state.STATE_COMMIT) ≡ e₂.loc (saCol state.STATE_COMMIT)
+      [ZMOD 2013265921] := by
+    have h2 : e₁.pub pi.NEW_COMMIT ≡ e₂.loc (saCol state.STATE_COMMIT) [ZMOD 2013265921] := by
+      rw [hpub]; exact (hc e₂ hsat₂).symm
+    exact (hc e₁ hsat₁).trans h2
+  -- canonicality of the two digest columns lifts the mod-p congruence to an ℤ equality.
   have hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT) := by
-    rw [hc e₁ hsat₁, hc e₂ hsat₂, hpub]
+    have hdvd := Int.modEq_iff_dvd.mp hmod
+    obtain ⟨l₁, u₁⟩ := hcanon₁
+    obtain ⟨l₂, u₂⟩ := hcanon₂
+    omega
   exact absorbed_determined_by_commit hash hCR e₁ e₂ hs₁ hs₂ hcommit
 
 /-! ## §9 — AGREEMENT: EffectVM balance-NEUTRAL == universe-A balance-NEUTRAL.
@@ -391,9 +420,10 @@ theorem univA_note_is_balance_neutral (st st' : RecChainedState) (cm : Nat) (act
 
 /-- **`noteCreate_balance_neutral_matches_univA` — THE CLOSED DIVERGENCE, now AGREEMENT.** A
 descriptor-satisfying noteCreate row (the EffectVM image) FREEZES the cell's `balLo`
-(`post.balLo = pre.balLo`, from the balance-neutral `CellNoteSpec`), and the committed universe-A spec
-ALSO freezes the projected entry's `balLo`. So the EffectVM descriptor's on-trace post-balance EQUALS
-universe-A's post-balance for EVERY note (no `value = 0` side-condition) — the shielding-convention
+(`post.balLo ≡ pre.balLo [ZMOD p]`, from the balance-neutral `CellNoteSpec` — the field-faithful
+freeze), and the committed universe-A spec ALSO freezes the projected entry's `balLo` (over ℤ). So the
+EffectVM descriptor's on-trace post-balance AGREES (mod `p`) with universe-A's post-balance for EVERY
+note (no `value = 0` side-condition) — the shielding-convention
 divergence is CLOSED, the two surfaces agree by construction (the note value lives in the commitment,
 never on the transparent ledger, in BOTH). -/
 theorem noteCreate_balance_neutral_matches_univA
@@ -404,13 +434,13 @@ theorem noteCreate_balance_neutral_matches_univA
     (hgatesat : satisfiedVm hash noteCreateVmDescriptor env true false)
     (hsat : satisfiedVm hash noteCreateVmDescriptor env true true)
     (hspec : NoteCreateASpec st cm actor st') :
-    post.balLo = (cellProjNote st'.kernel.bal c asset).balLo := by
+    post.balLo ≡ (cellProjNote st'.kernel.bal c asset).balLo [ZMOD 2013265921] := by
   obtain ⟨hcirc, _⟩ :=
     noteCreateDescriptor_full_sound hash env hrow (cellProjNote st.kernel.bal c asset) post value henc hgatesat hsat
-  have hfreeze : post.balLo = (cellProjNote st.kernel.bal c asset).balLo := hcirc.1
+  have hfreeze : post.balLo ≡ (cellProjNote st.kernel.bal c asset).balLo [ZMOD 2013265921] := hcirc.1
   have hneutral := univA_note_is_balance_neutral st st' cm actor c asset hspec
-  -- descriptor freezes: post.balLo = pre.balLo; universe-A freezes: pre'.balLo = pre.balLo. Agree.
-  rw [hfreeze, hneutral]
+  -- descriptor freezes: post ≡ pre (mod p); universe-A freezes (over ℤ): pre'.balLo = pre.balLo. Agree.
+  exact hfreeze.trans (eqToModEq hneutral).symm
 
 /-! ## §11 — THE COMMITMENT-SET INSERT leg the per-row circuit does NOT enforce (honest, LOAD-BEARING).
 
@@ -473,8 +503,9 @@ theorem goodNoteRow_realizes_intent : NoteCreateRowIntent goodNoteRow := by
   simp only [sbCol, saCol, prmCol, SEL_NOTE_CREATE, STATE_BEFORE_BASE, STATE_AFTER_BASE, PARAM_BASE,
     NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.BALANCE_LO, state.BALANCE_HI, state.NONCE,
     state.CAP_ROOT, state.RESERVED, state.FIELD_BASE, param.NOTE_VALUE_LO]
-  refine ⟨rfl, rfl, by norm_num, rfl, rfl, ?_⟩
+  refine ⟨eqToModEq rfl, eqToModEq rfl, eqToModEq (by norm_num), eqToModEq rfl, eqToModEq rfl, ?_⟩
   intro i hi
+  refine eqToModEq ?_
   have e1 : (76 + (3 + i) = 5) = False := by simp; omega
   have e2 : (76 + (3 + i) = 54) = False := by simp; omega
   have e3 : (76 + (3 + i) = 76) = False := by simp
@@ -498,13 +529,12 @@ def badNoteRow : VmRowEnv where
 
 /-- **NON-VACUITY (witness FALSE / concrete anti-ghost).** `badNoteRow`'s post-`bal_lo` is NOT the
 FROZEN `100` (a smuggled on-trace credit), so the `gBalLoFreeze` gate REJECTS it — a concrete UNSAT
-(balance-neutrality has teeth). -/
+(balance-neutrality has teeth). Both limbs (`999`, `100`) are canonical in `[0, p)`. -/
 theorem badNoteRow_rejected : ¬ (VmConstraint.gate gBalLoFreeze).holdsVm badNoteRow false false := by
-  apply noteCreateVm_rejects_balance_mint
-  simp only [badNoteRow, goodNoteRow, sbCol, saCol, prmCol, SEL_NOTE_CREATE, STATE_BEFORE_BASE,
-    STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.BALANCE_LO,
-    state.NONCE, param.NOTE_VALUE_LO]
-  norm_num
+  apply noteCreateVm_rejects_balance_mint <;>
+    simp only [badNoteRow, goodNoteRow, sbCol, saCol, prmCol, SEL_NOTE_CREATE, STATE_BEFORE_BASE,
+      STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.BALANCE_LO,
+      state.NONCE, param.NOTE_VALUE_LO] <;> norm_num
 
 /-! ## §A — STAGE-3 AMPLIFICATION: bind the `commitments` side-table ROOT into the descriptor.
 
@@ -592,28 +622,34 @@ theorem noteCreateRootHash_binds (hash : List ℤ → ℤ) (env : VmRowEnv)
 /-! ## §C — FAITHFULNESS of the root-update gate + ANTI-GHOST over the bound digest. -/
 
 /-- **`NoteCreateRootIntent env`** — the intended `commitments`-root move on the row: the `system_roots`
-digest ADVANCES by the `param2` accumulator step (`sa_digest = sb_digest + step`). This is the per-row
-projection of the membership update `commitments := cm :: commitments` onto its committed digest. -/
+digest ADVANCES by the `param2` accumulator step (`sa_digest ≡ sb_digest + step [ZMOD p]` — the
+field-faithful update). This is the per-row projection of the membership update
+`commitments := cm :: commitments` onto its committed digest. -/
 def NoteCreateRootIntent (env : VmRowEnv) : Prop :=
-  env.loc SYS_DIG_AFTER = env.loc SYS_DIG_BEFORE + env.loc (prmCol COMMIT_ROOT_STEP_PARAM)
+  env.loc SYS_DIG_AFTER
+    ≡ env.loc SYS_DIG_BEFORE + env.loc (prmCol COMMIT_ROOT_STEP_PARAM) [ZMOD 2013265921]
 
 /-- **`noteCreateRoot_gate_faithful`.** The root-update gate holds IFF the digest advances by the
-accumulator step — the gate pins EXACTLY the `commitments`-root update. -/
+accumulator step (mod `p`) — the gate pins EXACTLY the `commitments`-root update in the field. -/
 theorem noteCreateRoot_gate_faithful (env : VmRowEnv) :
     (VmConstraint.gate gCommitRootUpdate).holdsVm env false false ↔ NoteCreateRootIntent env := by
   simp only [VmConstraint.holdsVm, gCommitRootUpdate, ePrmCommitStep, eSub, EmittedExpr.eval,
     NoteCreateRootIntent]
-  constructor
-  · intro h; linarith
-  · intro h; rw [h]; ring
+  exact gate_modEq_iff (by ring)
 
 /-- **Anti-ghost (root tamper).** A row whose after-digest is NOT the advanced accumulator
 (`sb_digest + step`) is rejected by `gCommitRootUpdate` — a dropped/forged `commitments` update is
-UNSAT. -/
+UNSAT. FIELD-FAITHFUL: needs the deployed canonicality — the after-digest and the advanced value
+`sb_digest + step` both lie in `[0, p)` (digest carriers are reduced field elements), so a wrong
+digest differs from the advance by less than `p` and the field gate cannot pass by wrap-around. -/
 theorem noteCreateRoot_rejects_wrong_root (env : VmRowEnv)
+    (hcanonNew : 0 ≤ env.loc SYS_DIG_AFTER ∧ env.loc SYS_DIG_AFTER < 2013265921)
+    (hcanonAdv : 0 ≤ env.loc SYS_DIG_BEFORE + env.loc (prmCol COMMIT_ROOT_STEP_PARAM)
+      ∧ env.loc SYS_DIG_BEFORE + env.loc (prmCol COMMIT_ROOT_STEP_PARAM) < 2013265921)
     (hwrong : env.loc SYS_DIG_AFTER ≠ env.loc SYS_DIG_BEFORE + env.loc (prmCol COMMIT_ROOT_STEP_PARAM)) :
     ¬ (VmConstraint.gate gCommitRootUpdate).holdsVm env false false := by
-  intro h; exact hwrong ((noteCreateRoot_gate_faithful env).mp h)
+  simp only [VmConstraint.holdsVm, gCommitRootUpdate, ePrmCommitStep, eSub, EmittedExpr.eval]
+  exact not_modEq_zero_of_canon (by ring) hcanonNew hcanonAdv hwrong
 
 /-! ## §D — the AMPLIFIED descriptor + the side-table-root anti-ghost tooth (connected to `SystemRoots`). -/
 
@@ -713,7 +749,7 @@ theorem noteCreateFull_sound (hash : List ℤ → ℤ) (env : VmRowEnv) (hrow : 
     (hsat : satisfiedVm hash noteCreateVmDescriptorFull env true true) :
     CellNoteSpec pre value post
       ∧ NoteCreateRootIntent env
-      ∧ post.commit = env.pub pi.NEW_COMMIT := by
+      ∧ post.commit ≡ env.pub pi.NEW_COMMIT [ZMOD 2013265921] := by
   obtain ⟨hcs, hsites, _⟩ := hsat
   obtain ⟨hcsT, _⟩ := hgatesat
   have hfreeze := noteCreateFull_forces_freeze env hrow true hcsT
@@ -774,6 +810,7 @@ def goodRootRow : VmRowEnv where
 `1042 = 1000 + 42`. -/
 theorem goodRootRow_realizes : NoteCreateRootIntent goodRootRow := by
   unfold NoteCreateRootIntent goodRootRow
+  refine eqToModEq ?_
   simp only [SYS_DIG_BEFORE, SYS_DIG_AFTER, prmCol, COMMIT_ROOT_STEP_PARAM, aux_off_sys.SYSTEM_ROOTS_DIGEST,
     PARAM_BASE, STATE_BEFORE_BASE, NUM_EFFECTS, STATE_SIZE]
   norm_num
@@ -786,12 +823,13 @@ def badRootRow : VmRowEnv where
   pub := goodRootRow.pub
 
 /-- **NON-VACUITY (witness FALSE / concrete anti-ghost).** `badRootRow`'s after-digest is NOT the
-advance, so `gCommitRootUpdate` REJECTS it — the bound root has teeth. -/
+advance, so `gCommitRootUpdate` REJECTS it — the bound root has teeth. Both the forged `9999` and
+the intended advance `1042` are canonical in `[0, p)`. -/
 theorem badRootRow_rejected : ¬ (VmConstraint.gate gCommitRootUpdate).holdsVm badRootRow false false := by
-  apply noteCreateRoot_rejects_wrong_root
-  simp only [badRootRow, goodRootRow, SYS_DIG_BEFORE, SYS_DIG_AFTER, prmCol, COMMIT_ROOT_STEP_PARAM,
-    aux_off_sys.SYSTEM_ROOTS_DIGEST, PARAM_BASE, STATE_BEFORE_BASE, NUM_EFFECTS, STATE_SIZE]
-  norm_num
+  apply noteCreateRoot_rejects_wrong_root <;>
+    simp only [badRootRow, goodRootRow, SYS_DIG_BEFORE, SYS_DIG_AFTER, prmCol, COMMIT_ROOT_STEP_PARAM,
+      aux_off_sys.SYSTEM_ROOTS_DIGEST, PARAM_BASE, STATE_BEFORE_BASE, NUM_EFFECTS, STATE_SIZE] <;>
+    norm_num
 
 /-! ## §W — FULL-STATE ON THE RUNNABLE DESCRIPTOR (the magnesium breadth — the GENERIC crown).
 
@@ -831,20 +869,19 @@ def gCommitRootUpdateWide : EmittedExpr :=
   eSub (eSub (.var sysRootsDigestCol) (.var sysRootsDigestColBefore)) ePrmCommitStep
 
 /-- **`NoteCreateRootIntentWide env`** — the dedicated-carrier root move: the `system_roots` digest at
-`sysRootsDigestCol` ADVANCES by the `param2` step over `sysRootsDigestColBefore`. -/
+`sysRootsDigestCol` ADVANCES by the `param2` step over `sysRootsDigestColBefore`
+(mod `p` — the field-faithful update). -/
 def NoteCreateRootIntentWide (env : VmRowEnv) : Prop :=
   env.loc sysRootsDigestCol
-    = env.loc sysRootsDigestColBefore + env.loc (prmCol COMMIT_ROOT_STEP_PARAM)
+    ≡ env.loc sysRootsDigestColBefore + env.loc (prmCol COMMIT_ROOT_STEP_PARAM) [ZMOD 2013265921]
 
 /-- **`gCommitRootUpdateWide_faithful`.** The wide root-update gate holds IFF the dedicated-carrier
-digest advances by the accumulator step. -/
+digest advances by the accumulator step (mod `p`). -/
 theorem gCommitRootUpdateWide_faithful (env : VmRowEnv) :
     (VmConstraint.gate gCommitRootUpdateWide).holdsVm env false false ↔ NoteCreateRootIntentWide env := by
   simp only [VmConstraint.holdsVm, gCommitRootUpdateWide, ePrmCommitStep, eSub, EmittedExpr.eval,
     NoteCreateRootIntentWide]
-  constructor
-  · intro h; linarith
-  · intro h; rw [h]; ring
+  exact gate_modEq_iff (by ring)
 
 /-! ### §W.2 — the WIDE descriptor (dedicated carrier + `wideHashSites`). -/
 
@@ -908,7 +945,8 @@ is FROZEN (fields 4,5,7–12). Non-vacuous: §W.5 inhabits it with a real publis
 /-- **`NoteCreateFullClause hash value preRoots postRoots step`** — the full declarative 17-field
 post-state for a noteCreate over `(pre, post, pr)`: the per-cell balance-neutral `CellNoteSpec`, the
 decoded roots `pr = postRoots`, the `commitments`-root committed-digest advance
-(`systemRootsDigest postRoots = systemRootsDigest preRoots + step`), and every NON-`COMMIT` side-table
+(`systemRootsDigest postRoots ≡ systemRootsDigest preRoots + step [ZMOD p]` — field-faithful, the
+gate pins the carrier delta in the BabyBear field), and every NON-`COMMIT` side-table
 root FROZEN (`postRoots i = preRoots i`). All 17 fields: 1–3 by `CellNoteSpec`; 6 by the digest advance;
 4,5,7–12 by the freeze; 13–17 ride the per-cell value's restLimbs (the named `CommitmentCrossBind`
 factoring, as the §0 census). -/
@@ -917,7 +955,7 @@ def NoteCreateFullClause (hash : List ℤ → ℤ) (value : ℤ) (preRoots postR
   CellNoteSpec pre value post
   ∧ pr = postRoots
   ∧ Dregg2.Exec.SystemRoots.systemRootsDigest hash postRoots
-      = Dregg2.Exec.SystemRoots.systemRootsDigest hash preRoots + step
+      ≡ Dregg2.Exec.SystemRoots.systemRootsDigest hash preRoots + step [ZMOD 2013265921]
   ∧ (∀ i : Fin N_SYSTEM_ROOTS, i.val ≠ Dregg2.Exec.SystemRoots.systemRoot.COMMIT → postRoots i = preRoots i)
 
 /-- **`NoteCreateDecode hash value preRoots postRoots step env pre post pr`** — the structured row decode:
@@ -958,9 +996,9 @@ def noteCreateRunnableSpec (hash : List ℤ → ℤ) (value : ℤ) (preRoots pos
     have hcell := intent_to_cellNoteSpec env pre post value henc hfreeze
     -- the dedicated-carrier root gate ⟹ the digest advances by the `param2` step …
     have hrootW := noteCreateWide_forces_root env true hgates
-    -- … which, decoded, is the `commitments`-root digest advance over `postRoots`/`preRoots`.
+    -- … which, decoded, is the `commitments`-root digest advance over `postRoots`/`preRoots` (mod p).
     have hadvance : Dregg2.Exec.SystemRoots.systemRootsDigest hash postRoots
-        = Dregg2.Exec.SystemRoots.systemRootsDigest hash preRoots + step := by
+        ≡ Dregg2.Exec.SystemRoots.systemRootsDigest hash preRoots + step [ZMOD 2013265921] := by
       have := hrootW
       unfold NoteCreateRootIntentWide at this
       rw [hdigA, hdigB, hstep] at this
@@ -1052,10 +1090,11 @@ theorem noteCreate_fullClause_inhabited (hash : List ℤ → ℤ) :
       (Dregg2.Exec.SystemRoots.systemRootsDigest hash wPostRoots
         - Dregg2.Exec.SystemRoots.systemRootsDigest hash wPreRoots)
       wPre wPost wPostRoots := by
-  refine ⟨?_, rfl, by ring, ?_⟩
+  refine ⟨?_, rfl, eqToModEq (by ring), ?_⟩
   · -- CellNoteSpec wPre 30 wPost: balLo frozen, balHi frozen, nonce+1, fields/cap/reserved frozen.
-    refine ⟨rfl, rfl, by norm_num [wPre, wPost], ?_, rfl, rfl⟩
-    intro i; rfl
+    refine ⟨eqToModEq rfl, eqToModEq rfl, eqToModEq (by norm_num [wPre, wPost]), ?_,
+      eqToModEq rfl, eqToModEq rfl⟩
+    intro i; exact eqToModEq rfl
   · -- every NON-COMMIT root is frozen at 0 (both empty/post agree off the COMMIT index).
     intro i hi
     simp only [wPostRoots, wPreRoots, Dregg2.Exec.SystemRoots.emptySystemRoots]
@@ -1065,16 +1104,18 @@ theorem noteCreate_fullClause_inhabited (hash : List ℤ → ℤ) :
 
 /-- **`noteCreate_fullClause_refutable` — NON-VACUITY (witness FALSE).** A post-state whose `balLo` is a
 forged `999` (NOT the balance-neutral frozen `100`) FAILS `CellNoteSpec`, so `NoteCreateFullClause` is
-REFUTABLE — the clause rejects a smuggled on-trace credit, pinning non-vacuity from both sides. -/
+REFUTABLE — the clause rejects a smuggled on-trace credit, pinning non-vacuity from both sides
+(`999 ≢ 100 [ZMOD p]`: the residual `899` is a nonzero value inside `(−p, p)`). -/
 theorem noteCreate_fullClause_refutable (hash : List ℤ → ℤ) :
     ¬ NoteCreateFullClause hash 30 wPreRoots wPostRoots
         (Dregg2.Exec.SystemRoots.systemRootsDigest hash wPostRoots
           - Dregg2.Exec.SystemRoots.systemRootsDigest hash wPreRoots)
         wPre { wPost with balLo := 999 } wPostRoots := by
   rintro ⟨⟨hbal, _⟩, _⟩
-  -- hbal : (999) = wPre.balLo = 100 (balance-neutral)
-  simp only [wPre] at hbal
-  norm_num at hbal
+  -- hbal : (999) ≡ wPre.balLo = 100 [ZMOD p] (balance-neutral) — refuted: p ∤ (100 − 999).
+  have hdvd := Int.ModEq.dvd hbal
+  simp only [wPre] at hdvd
+  omega
 
 /-! ### §W.6 — RECONCILIATION pins (the wide descriptor's shape). -/
 
