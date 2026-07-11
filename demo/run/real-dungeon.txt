@@ -1,0 +1,36 @@
+── spawning the REAL dungeon-on-dregg service (The Warden's Keep, real WorldCell) ──
+
+── PHASE 1 · play The Warden's Keep to a WIN (each move a real executor turn) ──
+  started · room=gatehall · hp=50 · cell=67f606fcd6e9c6d6…
+  ✔ trade blows with the warden  [tooth: FieldGte hp floor]
+      turn c3e83aa2663fe3bfa876cf5f…  pre 0fab26bb8b1f76ec… post 1ea58d86dbbfe293…
+  ✔ press on into the hall  [tooth: (ungated)]
+      turn 0bb28555212fa256ef1cc70a…  pre 1ea58d86dbbfe293… post d0451a11c347390d…
+  ✔ claim the crown for the Red Hand  [tooth: WriteOnce loot]
+      turn 459f3145081c3eb1461f30b0…  pre d0451a11c347390d… post 2a58fd10131a9069…
+  ✔ descend the collapsing stair  [tooth: Monotonic ratchet]
+      turn 7e6c9261513be1a9d376ba4b…  pre 2a58fd10131a9069… post 88d1bce4c14c2756…
+  ✔ cast the sealing ward  [tooth: FieldLteField budget]
+      turn 22b91fa51d524849ebd77f62…  pre 88d1bce4c14c2756… post 0c2d311c38a1b8c2…
+  ✔ seize the hoard  [tooth: (ungated → END)]
+      turn 347a7a195710d1c6689a6c28…  pre 0c2d311c38a1b8c2… post 7fa2fbdaa9c9be44…
+  ⇒ state: room=(cleared) · ended=true · won=true · gold=500 · depth=1 · relic_owner=1
+
+── verify (O(N) replay + chain-linkage) ──
+  verified=true · replayOk=true · chainLinks=true
+  6 move receipts link cleanly (pre == prev.post)
+
+── PHASE 2 · an illegal move is a REAL executor refusal (fresh session, anti-ghost) ──
+  ✔ Red claims the crown  ·  relic_owner=1  ·  turn 92c8e66165dd5d639fb1b400…
+  ✗ Blue claims the SAME crown → REFUSED by the executor
+      reason: turn error: program violation on cell 67f606fcd6e9c6d6: program constraint violated: field[6] is write-once and was already set
+      anti-ghost: relic_owner still 1 (unchanged, nothing committed)
+
+── Honest scope ──
+  O(N) verify_by_replay + chain-linkage (a stranger re-executes the recorded turn sequence). NOT the succinct light client (separate, Lane-D-blocked) — not claimed here.
+  A production deploy still needs: player auth + per-identity sessions (this is one
+  in-memory session behind a mutex), durable ledger/receipt persistence (state is
+  process memory), and real hosting/TLS (a plain local HTTP/1.1 loop).
+
+ALL ASSERTIONS PASSED — the REAL dungeon-on-dregg engine is deployed, played to a WIN over HTTP
+(real receipts returned), an illegal move refused by the real executor, and /verify true.

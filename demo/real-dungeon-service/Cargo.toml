@@ -1,0 +1,52 @@
+# real-dungeon-service — the REAL `dungeon-on-dregg` engine, playable + verifiable over HTTP.
+#
+# This is the honest replacement for the LARP `dungeon-service` `/game` lane (which hosts
+# `attested-dm`'s toy `WorldCell`/blake3 ledger). Here EVERY endpoint drives the REAL
+# substrate:
+#
+#   * a SESSION is a real `spween_dregg::WorldCell` deployed from `dungeon_on_dregg::deploy_keep`
+#     (The Warden's Keep — a single dregg cell whose game rules are executor-enforced
+#     `CellProgram`/`StateConstraint` teeth: an HP floor `FieldGte`, a `WriteOnce` loot slot,
+#     a `Monotonic` descent ratchet, a cross-slot `FieldLteField` mana budget).
+#   * a MOVE is ONE cap-bounded turn driven at the real `EmbeddedExecutor` via
+#     `WorldCell::apply_choice` — the executor is the SOLE referee. A legal move lands a real
+#     `TurnReceipt`; an ILLEGAL move is a real `WorldError::Refused` that commits NOTHING.
+#   * VERIFY re-drives a fresh, identically-seeded keep through the recorded choice sequence
+#     (`spween_dregg::verify_by_replay`) and checks the receipt chain links (`pre == prev.post`).
+#     HONEST SCOPE: this is O(N) replay verification, NOT the succinct light client.
+#
+# It CONSUMES `dungeon-on-dregg` + `spween-dregg` by composition; it touches neither their src
+# nor `attested-dm/`. A workspace member of the breadstuffs root (root `[patch]`/`[workspace]`
+# apply). Run: `cargo run -p real-dungeon-service` (binds 127.0.0.1:7879; override REAL_DUNGEON_BIND).
+
+[package]
+name = "real-dungeon-service"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+publish = false
+description = "The REAL dungeon-on-dregg engine (The Warden's Keep) hosted over HTTP: a move is a real cap-bounded TurnReceipt at the real executor, an illegal move a real WorldError::Refused, and /verify re-drives the recorded chain by replay. No attested-dm."
+
+[[bin]]
+name = "real-dungeon-service"
+path = "src/main.rs"
+
+[dependencies]
+# THE REAL GAME — the committed playable engine: `deploy_keep` (deploy the augmented Warden's
+# Keep as a real WorldCell), `keep_scene`/`keep_compiled`, `choice_at`, `case_constraints`, and
+# the room/choice coordinate constants. We CONSUME it; we never fork its src.
+dungeon-on-dregg = { path = "../../dungeon-on-dregg" }
+# THE FOUNDATION — the real cell/turn substrate: `WorldCell::apply_choice` (a move = one
+# cap-bounded turn the real executor admits), `verify_by_replay` + the `Playthrough`/`StepReceipt`
+# record, and the `Scene`/`Value` re-exports.
+spween-dregg = { path = "../../spween-dregg" }
+# The narrative DSL — to name a `Choice`/`PassageContent` when enumerating a room's legal moves
+# and driving one at the executor. Same git rev `spween-dregg` + `dungeon-on-dregg` pin.
+spween = { git = "https://github.com/emberian/spween", rev = "afb5b1fce8c9dd3b787e197bddf105adca20e08a" }
+# The framework types — `TurnReceipt` (the receipt a move returns) for the verify-record genesis
+# placeholder. Same `dregg-turn` type the executor mints.
+dregg-app-framework = { path = "../../app-framework", default-features = false }
+# The tiny server-independent HTTP/1.1 serve loop the handler binds to.
+http-serve = { path = "../../http-serve" }
+# JSON for the request/response bodies.
+serde_json = { workspace = true }
