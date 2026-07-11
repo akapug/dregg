@@ -669,3 +669,14 @@ CombatEnemy/Attack + 5 games untouched. examples/combat.rs (Arena Gauntlet) init
 ## FIRING: OVERWORLD (attested-dm overworld layer + demo/ region-map hub — connect the games into a navigable world
 with travel + completion tracking via savegame). Writing the .dungeon DSL REFERENCE myself (docs/, disjoint).
 Deferred: real threshold drand-BLS beacon (#2, crypto-purity follow-up); collective co-authoring; game.rs module-split.
+
+## ✅✅ Overworld + README consolidation + real drand-BLS beacon COMMITTED
+- OVERWORLD (attested-dm+demo/): 5 games -> one region, verified-completion-gated travel (a forged/unfinished/wrong-
+  game session refused credit — record_completion re-verifies Won+chain+replay); /region SVG map. 120 lib + overworld.
+- README brought current (5 games+combat+overworld+trust ladder+real test counts); .dungeon authoring guide written.
+- REAL drand-BLS beacon (dice/): drand quicknet threshold BLS, INTEROP-tested vs the real published League-of-Entropy
+  vector (group key 83cf0f28..., round 1e6); forged sig rejected; hatch #2 CLOSED. 41 dice tests. attested-dm serde-
+  compat (still 120+19+6). RANDOMNESS MOAT FULLY CLOSED (#1/#2/#4/#5; MLWE-assumed pseudorandomness the only floor).
+- AUDIT: attested-dm 145 + dregg-dice 41 + pqvrf 11 + collective-choice 6 green; dungeon-service builds. Trust doc current.
+## FIRING (deep-night capstone, low-risk — verified at harvest): collective CO-AUTHORING — a crowd quorum-votes edits
+to a shared .dungeon draft (the collectivity heart).
