@@ -16,11 +16,13 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use dregg_zkoracle_prove::notary_server::{generate_notary_key, verifying_key_of};
+use dregg_zkoracle_prove::notary_server::{
+    generate_notary_key, load_notary_key, load_or_generate_notary_key, verifying_key_of,
+};
 use dregg_zkoracle_prove::sigv4::AwsCredentials;
 use dregg_zkoracle_prove::tlsn_bedrock::{
     BedrockExchange, authorization_hidden, run_bedrock_roundtrip_blocking,
-    verify_bedrock_presentation,
+    run_bedrock_roundtrip_with_durable_notary, verify_bedrock_presentation,
 };
 
 fn amz_date(unix: u64) -> String {
@@ -195,4 +197,104 @@ fn bedrock_attested_by_separate_pinned_notary() {
         tokens.map(|t| t > 64).unwrap_or(false),
         "a full-length completion (>64 output tokens) must be attested; got {tokens:?}"
     );
+}
+
+/// **The DURABLE trust root, DRIVEN live.** The notary key is PERSISTED to a file
+/// (provisioned once as an operator would), and its public pin is read OUT OF BAND — the value
+/// a verifier holds independently of any single run. The Bedrock roundtrip runs under that
+/// durable notary, and a verifier holding the KNOWN durable key (loaded from config, not
+/// handed out by the run) ACCEPTS the attestation, while a wrong key is REJECTED (non-vacuous).
+///
+/// Cross-RUN stability of the persisted key is proven hermetically (no paid call) by
+/// `tests/notary_durable_key.rs`; this test keeps to a single Bedrock call and proves the live
+/// attestation verifies under the independently-loaded durable pin.
+#[test]
+#[ignore = "live: real network + paid Bedrock call + heavy MPC-TLS 2PC under a DURABLE pinned notary"]
+fn bedrock_attested_under_durable_pinned_notary() {
+    let creds = AwsCredentials {
+        access_key_id: std::env::var("AWS_ACCESS_KEY_ID").expect("AWS_ACCESS_KEY_ID"),
+        secret_access_key: std::env::var("AWS_SECRET_ACCESS_KEY").expect("AWS_SECRET_ACCESS_KEY"),
+    };
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    let host = "bedrock-runtime.us-east-1.amazonaws.com".to_string();
+    let body = r#"{"messages":[{"role":"user","content":[{"text":"I raise the lantern and step into the flooded antechamber. Narrate in one vivid sentence."}]}],"system":[{"text":"You are the dungeon master of a drowned dark-fantasy vault."}],"inferenceConfig":{"maxTokens":64}}"#;
+
+    let ex = BedrockExchange {
+        host: host.clone(),
+        region: "us-east-1".to_string(),
+        model_id: "us.anthropic.claude-haiku-4-5-20251001-v1:0".to_string(),
+        request_body: body.to_string(),
+        creds,
+        amz_date: amz_date(now),
+    };
+
+    // Provision the DURABLE notary key at an operator-controlled path (once), and record its
+    // public pin OUT OF BAND — this is the anchor a verifier holds, independent of any run.
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("zkoracle-notary-live-{nanos}"));
+    let key_path = dir.join("notary.key");
+    let durable_pin = verifying_key_of(&load_or_generate_notary_key(&key_path).expect("provision"))
+        .expect("durable pin");
+
+    // Run the live Bedrock roundtrip under the DURABLE notary.
+    let rt = run_bedrock_roundtrip_with_durable_notary(&ex, &key_path)
+        .expect("real Bedrock MPC-TLS roundtrip under a durable pinned notary");
+
+    let disclosed = String::from_utf8_lossy(&rt.verified.response_body);
+    eprintln!("── PHASE-E: DURABLE PINNED NOTARY ATTESTS LIVE BEDROCK ──────────");
+    eprintln!("durable key file: {}", key_path.display());
+    eprintln!("pinned-key (fp) : {}", rt.notary_pin.key_fingerprint());
+    eprintln!("pinned server   : {}", rt.verified.server_name);
+    eprintln!("── DISCLOSED BODY (Claude's genuine in-session output) ──────────");
+    eprintln!("{disclosed}");
+    eprintln!("────────────────────────────────────────────────────────────────");
+
+    // The run used the durable key: its pin equals the anchor we recorded out of band.
+    assert_eq!(
+        rt.notary_pin.verifying_key, durable_pin,
+        "the live run must have used the DURABLE persisted key"
+    );
+
+    // A verifier holding the KNOWN durable key (loaded from config, NOT from the run) ACCEPTS.
+    let known_durable = verifying_key_of(&load_notary_key(&key_path).expect("reload")).expect("vk");
+    assert_eq!(
+        known_durable, durable_pin,
+        "reloaded key matches the anchor"
+    );
+    let accepted = verify_bedrock_presentation(&rt.presentation_bytes, &host, &known_durable);
+    assert!(
+        accepted.is_ok(),
+        "a verifier holding the loaded DURABLE pin must ACCEPT: {accepted:?}"
+    );
+
+    // A WRONG key is REJECTED (non-vacuous pin).
+    let wrong = verifying_key_of(&generate_notary_key().expect("wrong")).expect("wrong vk");
+    assert_ne!(
+        wrong, durable_pin,
+        "the wrong key must differ from the durable pin"
+    );
+    let rejected = verify_bedrock_presentation(&rt.presentation_bytes, &host, &wrong);
+    assert!(
+        rejected.is_err(),
+        "an attestation under the durable notary must be REJECTED under a wrong key"
+    );
+    eprintln!(
+        "wrong-key rejected: true  (err = {})",
+        rejected.unwrap_err()
+    );
+
+    assert_eq!(rt.verified.server_name, host, "server pinned to Bedrock");
+    assert!(
+        authorization_hidden(&rt.verified.sent_redacted),
+        "the SigV4 Authorization credential must be hidden by selective disclosure"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
 }

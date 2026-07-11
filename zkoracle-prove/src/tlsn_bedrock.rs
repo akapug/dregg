@@ -26,8 +26,16 @@
 //! signing key the prover never sees, and the prover reaches it only by address. A verifier
 //! trusts an attestation iff its embedded verifying key equals the notary's **pinned** public
 //! key ([`verify_bedrock_presentation`] enforces this — a wrong/unpinned notary is rejected),
-//! so a dishonest prover can no longer sign its own attestation. The residual is pure infra:
-//! hosting that notary at a real internet address and distributing its key out-of-band.
+//! so a dishonest prover can no longer sign its own attestation.
+//!
+//! **Durable trust root (Phase-E gap closed further).** The notary key can now be PERSISTED
+//! ([`crate::notary_server::load_or_generate_notary_key`], keyed by
+//! [`crate::notary_server::NOTARY_KEY_PATH_ENV`]) so re-runs reuse the SAME verifying key —
+//! see [`run_bedrock_roundtrip_with_durable_notary`]. A verifier pins that stable key ONCE,
+//! out-of-band, and accepts every future attestation from this notary; a wrong key is rejected.
+//! The residual is pure operational infra: hosting the notary at a real, stable internet
+//! address, PUBLISHING + independently auditing the pinned key, and running it with uptime and
+//! a documented rotation policy.
 
 #![cfg(feature = "tlsn-live")]
 
@@ -62,7 +70,11 @@ use tlsn::{
 };
 use tlsn_formats::http::{DefaultHttpCommitter, HttpCommit, HttpTranscript};
 
-use crate::notary_server::{HostedNotary, NotaryPin, generate_notary_key, spawn_hosted_notary};
+use std::path::Path;
+
+use crate::notary_server::{
+    HostedNotary, NotaryPin, generate_notary_key, load_or_generate_notary_key, spawn_hosted_notary,
+};
 use crate::sigv4::{AwsCredentials, SignRequest, sign};
 use crate::tlsn_live::VerifiedResponse;
 
@@ -364,40 +376,68 @@ pub fn verify_bedrock_presentation(
     })
 }
 
+/// The full REAL Bedrock MPC-TLS roundtrip against a SEPARATE hosted notary that owns
+/// `notary_key`: spawn the notary as a distinct party on a real localhost socket (the prover
+/// reaches it only by address and never learns its key), run the 2PC prover, then verify under
+/// the notary's PINNED public key and extract the disclosed body.
+async fn run_bedrock_roundtrip_inner(
+    ex: &BedrockExchange,
+    notary_key: k256::ecdsa::SigningKey,
+) -> Result<BedrockRoundtrip> {
+    let notary: HostedNotary = spawn_hosted_notary(notary_key, 1).await?;
+    let pin = notary.pin().clone();
+
+    // The prover reaches the notary ONLY by address.
+    let presentation_bytes = prove_bedrock_presentation(ex, pin.addr).await?;
+    notary.join().await?;
+
+    // Verify under the PINNED notary key (a wrong key would be rejected).
+    let verified = verify_bedrock_presentation(&presentation_bytes, &ex.host, &pin.verifying_key)?;
+
+    Ok(BedrockRoundtrip {
+        verified,
+        presentation_bytes,
+        pinned_server: ex.host.clone(),
+        notary_pin: pin,
+        separate_notary: true,
+    })
+}
+
 /// **Run the full REAL Bedrock MPC-TLS roundtrip against a SEPARATE hosted notary**, then
 /// verify (pinning the notary's key + the Bedrock host) and extract the disclosed body.
 /// Blocking: stands up its own multi-thread runtime. Requires live network + AWS creds.
 ///
 /// The notary is spawned as a distinct party on a real localhost socket, owning a fresh
 /// OS-random signing key the prover never sees; the returned [`BedrockRoundtrip::notary_pin`]
-/// carries the pinned public key the attestation was verified under.
+/// carries the pinned public key the attestation was verified under. This EPHEMERAL variant
+/// mints a new key each run — see [`run_bedrock_roundtrip_with_durable_notary`] for a stable,
+/// re-pinnable trust root.
 pub fn run_bedrock_roundtrip_blocking(ex: &BedrockExchange) -> Result<BedrockRoundtrip> {
+    let notary_key = generate_notary_key()?;
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
-    rt.block_on(async {
-        // Stand up the SEPARATE notary party: it owns a fresh key; we only learn its address
-        // and its public (pinned) key.
-        let notary_key = generate_notary_key()?;
-        let notary: HostedNotary = spawn_hosted_notary(notary_key, 1).await?;
-        let pin = notary.pin().clone();
+    rt.block_on(run_bedrock_roundtrip_inner(ex, notary_key))
+}
 
-        // The prover reaches the notary ONLY by address.
-        let presentation_bytes = prove_bedrock_presentation(ex, pin.addr).await?;
-        notary.join().await?;
-
-        // Verify under the PINNED notary key (a wrong key would be rejected).
-        let verified =
-            verify_bedrock_presentation(&presentation_bytes, &ex.host, &pin.verifying_key)?;
-
-        Ok(BedrockRoundtrip {
-            verified,
-            presentation_bytes,
-            pinned_server: ex.host.clone(),
-            notary_pin: pin,
-            separate_notary: true,
-        })
-    })
+/// **Run the roundtrip against a DURABLE hosted notary** whose signing key is persisted at
+/// `key_path` ([`load_or_generate_notary_key`]): provisioned once, reused on every subsequent
+/// run. Because the key is stable, so is [`BedrockRoundtrip::notary_pin`]'s verifying key — a
+/// verifier can pin it ONCE, out-of-band, and accept every future attestation from this notary.
+///
+/// This closes the "fresh key per run" gap: the trust root is now durable. What full public
+/// deployment still adds is pure operational infra — hosting the notary at a real, stable
+/// internet address; PUBLISHING and independently auditing the pinned key; and running it with
+/// uptime + a documented rotation policy. The cryptographic pinning is identical here.
+pub fn run_bedrock_roundtrip_with_durable_notary(
+    ex: &BedrockExchange,
+    key_path: &Path,
+) -> Result<BedrockRoundtrip> {
+    let notary_key = load_or_generate_notary_key(key_path)?;
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    rt.block_on(run_bedrock_roundtrip_inner(ex, notary_key))
 }
 
 /// Whether the SigV4 `authorization` credential was hidden by selective disclosure.
