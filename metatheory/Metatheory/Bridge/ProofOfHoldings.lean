@@ -109,6 +109,66 @@ verdict, never of surrendered custody. -/
 def grantsWeight (o : HoldingsProof) (h : ProvenHolding) (v : VoterId) (w : Weight) : Prop :=
   h.trust = TrustTier.consensusProven ∧ o.finalized h.slot ∧ h.owner = v ∧ w ≤ h.amount
 
+/-! ## §2b — THE EXECUTABLE, EXPORTED weight VERDICT — the decision is the verified Lean object.
+
+Following the `Dregg2.Grain.R3Verify` / `Fips204Verify` "Lean-first, the assurance IS the code"
+pattern: the fail-closed weight VERDICT lives here as a plain executable `def` (`grantWeightCore`),
+`@[export]`ed as `grantWeightFFI` for the Rust `dregg-governance::holding_weight` to CALL — so the
+DECISION is rendered by the proven object, not re-implemented by a Rust `if`-chain. `grantWeightCore`
+takes the two facts the fast-Rust pre-checks establish — the holding's consensus-proof status and the
+light client's finality verdict — plus the proven amount, and returns the granted weight: `amount` when
+BOTH hold, else `0` (refused). `grantWeightCore_eq_grantsWeight` proves it REALIZES the `grantsWeight`
+spec (at the full grantable weight `w = amount`). -/
+
+/-- **`grantWeightCore isConsensusProven slotFinal amount`** — the EXECUTABLE, `@[export]`ed
+fail-closed weight verdict. The granted weight is `amount` when the holding is consensus-proven
+(`isConsensusProven`) AND its slot is finalized (`slotFinal`, the light client's decidable verdict for
+the `finalized` oracle), else `0` (refused — an `rpc`/StructureOnly tier OR an unfinalized slot grants
+NOTHING). This IS the object `@[export]` compiles to native and `dregg-governance` calls; the ed25519
+owner→voter binding and the positive-amount check remain fast-Rust PRE-CHECKS, but this VERDICT is the
+verified Lean decision. -/
+def grantWeightCore (isConsensusProven slotFinal : Bool) (amount : Weight) : Weight :=
+  if isConsensusProven && slotFinal then amount else 0
+
+/-- **`grantWeightCore_eq_grantsWeight` (THE DECISION REALIZES THE SPEC).** The exported core grants the
+FULL proven weight (`= amount`) IFF the `grantsWeight` predicate holds at `w = amount` — given the light
+client's finality verdict `slotFinal` reflects the `finalized` oracle (`hsf`), the owner is the target
+identity (`hv`), and the holding is positive (`hpos`, the fast-Rust `ZeroAmount` pre-check). So routing
+the weight verdict through `grantWeightCore` computes EXACTLY the `grantsWeight`-backed grant, not a
+weaker or divergent Rust mirror. -/
+theorem grantWeightCore_eq_grantsWeight
+    (o : HoldingsProof) (h : ProvenHolding) (v : VoterId) (slotFinal : Bool)
+    (hsf : slotFinal = true ↔ o.finalized h.slot) (hv : h.owner = v) (hpos : 0 < h.amount) :
+    grantWeightCore h.isConsensusProven slotFinal h.amount = h.amount
+      ↔ grantsWeight o h v h.amount := by
+  have hcp : h.isConsensusProven = true ↔ h.trust = TrustTier.consensusProven := by
+    unfold ProvenHolding.isConsensusProven
+    cases h.trust <;> simp
+  unfold grantWeightCore grantsWeight
+  constructor
+  · intro hcore
+    by_cases hg : (h.isConsensusProven && slotFinal) = true
+    · rw [Bool.and_eq_true] at hg
+      exact ⟨hcp.mp hg.1, hsf.mp hg.2, hv, Nat.le_refl _⟩
+    · rw [if_neg hg] at hcore
+      exact absurd hcore.symm hpos.ne'
+  · rintro ⟨htier, hfin, _, _⟩
+    rw [hcp.mpr htier, hsf.mpr hfin]
+    simp
+
+/-- **CORE FIRES (non-vacuity, POSITIVE).** A consensus-proven, finalized holding grants its FULL
+proven weight through the exported core. -/
+theorem grantWeightCore_grants_full : grantWeightCore true true 100 = 100 := rfl
+
+/-- **CORE REFUSES the rpc tier (non-vacuity, NEGATIVE).** The SAME finalized slot + amount on the
+untrusted (`isConsensusProven = false`) tier grants `0` — the fail-closed tier discriminator, in the
+exported object itself. -/
+theorem grantWeightCore_rpc_refuses : grantWeightCore false true 100 = 0 := rfl
+
+/-- **CORE REFUSES an unfinalized slot (non-vacuity, NEGATIVE).** A consensus-proven holding whose slot
+is NOT final (`slotFinal = false`) grants `0` — the finalization discriminator in the exported object. -/
+theorem grantWeightCore_unfinalized_refuses : grantWeightCore true false 100 = 0 := rfl
+
 /-! ## §3 — The NON-CUSTODIAL grant operation: a pure read that mutates no balance.
 
 On-chain state is a per-account balance map. `grantWeight` reads the proof and returns
@@ -264,7 +324,43 @@ grant `none`. -/
 #guard provenHolding.isConsensusProven == true
 #guard rpcHolding.isConsensusProven == false
 
+/-! ## §7b — The `@[export]` FFI entry (Rust → Lean), running the verified weight VERDICT.
+
+`dregg-governance::holding_weight::grant_weight` does the fast-Rust PRE-CHECKS (the ed25519 owner→voter
+binding verify, the `ProvenHolding` consensus-proof read, the positive-amount check) and marshals the
+two decision facts + the amount onto a wire; the fail-closed weight VERDICT then comes from THIS
+exported core, not a Rust `if`-chain. -/
+
+/-- **FFI entry** (Rust→`dregg-governance`→Lean): space-separated ints
+`"isConsensusProven slotFinal amount"` — `isConsensusProven` nonzero = the holding is consensus-proven,
+`slotFinal` nonzero = the light client finalized its slot — → the extracted `grantWeightCore` as the
+granted weight (`toString`, `= amount` when granted, `"0"` when refused). Runs the VERIFIED Lean weight
+decision as native code, the "Lean is the runtime" shape shared with `dregg_grain_r3_verify` /
+`dregg_fips204_verify`. A negative amount or a malformed input (not three ints) fails CLOSED (`"0"`). -/
+@[export dregg_holding_grant_weight]
+def grantWeightFFI (input : String) : String :=
+  match (input.splitOn " ").filterMap String.toInt? with
+  | [cp, sf, amount] =>
+    if amount < 0 then "0" else toString (grantWeightCore (cp != 0) (sf != 0) amount.toNat)
+  | _ => "0"
+
+/-! It runs on the wire (`#guard`): a consensus-proven + finalized holding grants its full amount; the
+`rpc` tier (`isConsensusProven = 0`) and an unfinalized slot (`slotFinal = 0`) both grant `"0"`; a zero
+amount grants `"0"`; a negative amount and a malformed wire fail CLOSED (`"0"`). -/
+
+#guard grantWeightFFI "1 1 100" = "100"
+#guard grantWeightFFI "0 1 100" = "0"
+#guard grantWeightFFI "1 0 100" = "0"
+#guard grantWeightFFI "1 1 0" = "0"
+#guard grantWeightFFI "1 1 -5" = "0"
+#guard grantWeightFFI "garbage" = "0"
+
 /-! ## §8 — Axiom hygiene — every theorem kernel-clean (CI hard-gate). -/
+
+#assert_axioms grantWeightCore_eq_grantsWeight
+#assert_axioms grantWeightCore_grants_full
+#assert_axioms grantWeightCore_rpc_refuses
+#assert_axioms grantWeightCore_unfinalized_refuses
 
 #assert_axioms weight_backed_and_noncustodial
 #assert_axioms granted_weight_is_backed

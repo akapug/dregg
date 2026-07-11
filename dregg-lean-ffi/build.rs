@@ -288,6 +288,13 @@ fn build_dregg2_archive(meta: &Path, sysroot: &Path, archive: &Path, out_dir: &P
         // export (and its Dregg2.Circuit.RecursiveAggregation import closure's freshly-emitted objects).
         // The Rust `grain-verify::r3_verify` calls it as the LEAN-PROVEN R3-accept gate.
         "Dregg2.Grain.R3Verify",
+        // HOLDING grant-weight verdict extraction: the verified non-custodial proof-of-holdings →
+        // governance-weight DECISION (`@[export] dregg_holding_grant_weight` over `grantWeightCore`,
+        // proved to realize the `grantsWeight` spec by `grantWeightCore_eq_grantsWeight`), so its `.c` IR
+        // is emitted for the splice. The Rust `dregg-governance::holding_weight::grant_weight` routes its
+        // weight verdict through it. (Its IR lands under `.lake/build/ir/Metatheory/`; see the
+        // splice-scope seam note at the `holding_grant_weight_present` probe below.)
+        "Metatheory.Bridge.ProofOfHoldings",
     ];
     let lake_status = Command::new("lake")
         .arg("build")
@@ -1373,6 +1380,7 @@ fn main() {
     println!("cargo::rustc-check-cfg=cfg(dregg_mlkem_decaps_real_present)");
     println!("cargo::rustc-check-cfg=cfg(dregg_mlkem_encaps_real_present)");
     println!("cargo::rustc-check-cfg=cfg(dregg_grain_r3_verify_present)");
+    println!("cargo::rustc-check-cfg=cfg(dregg_holding_grant_weight_present)");
 
     // ── FAIL-LOUD GATE (DREGG_REQUIRE_LEAN) — see docs/BUILD-LEAN-LINKED-NODE.md ─────────────
     // A distribution / CI / validator build REFUSES a silent degrade to the marshal-only shell
@@ -1813,6 +1821,28 @@ fn main() {
         println!("cargo:rustc-cfg=dregg_grain_r3_verify_present");
     }
 
+    // HOLDING grant-weight verdict extraction: probe the spliced archive for the
+    // `@[export] dregg_holding_grant_weight` symbol (the extracted, Lean-verified non-custodial
+    // proof-of-holdings → governance-weight decision — `if isConsensusProven && slotFinal then amount
+    // else 0`, proved to realize `grantsWeight`). Present ⇒ gate the Rust `extern "C"` block, the C shim
+    // string bridge, and the module initializer. `dregg-governance::holding_weight::grant_weight` marshals
+    // the fast-Rust pre-checks' facts + the amount through this to run the LEAN-PROVEN weight verdict.
+    //
+    // NOTE (splice-scope seam): `grantWeightFFI` lives in `Metatheory.Bridge.ProofOfHoldings`, whose IR is
+    // emitted under `.lake/build/ir/Metatheory/` — the `build_dregg2_archive` splice currently walks only
+    // `.lake/build/ir/Dregg2/`, so this symbol is not yet spliced into the seed archive and this probe is
+    // presently false (⇒ the Rust falls back to the fail-closed marshal-only path, matching grain-verify's
+    // staging). Lighting up the linked path needs either relocating the module under `Dregg2/` or
+    // extending the splice to allowlist this Metatheory IR object; deferred so an untested archive change
+    // does not risk the swarm-shared seed. The probe + gated wiring below are inert-until-present, exactly
+    // mirroring the R3 shape, so the day the splice covers it the linked decision path lights up with no
+    // further Rust change.
+    let holding_grant_weight_present =
+        archive_exports(&build_archive, "dregg_holding_grant_weight");
+    if holding_grant_weight_present {
+        println!("cargo:rustc-cfg=dregg_holding_grant_weight_present");
+    }
+
     let mut shim = cc::Build::new();
     shim.file("src/lean_init.c").include(&lean_include);
     // The SINGLE-THREADED / libuv-thread-free init (docs/EMBEDDABLE-LEAN-RUNTIME.md).
@@ -1899,6 +1929,9 @@ fn main() {
     }
     if grain_r3_verify_present {
         shim.define("DREGG_GRAIN_R3_VERIFY", None);
+    }
+    if holding_grant_weight_present {
+        shim.define("DREGG_HOLDING_GRANT_WEIGHT", None);
     }
     if direct_present {
         shim.define("DREGG_DIRECT", None);

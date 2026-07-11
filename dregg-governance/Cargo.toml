@@ -32,6 +32,14 @@ collective-choice = { path = "../collective-choice" }
 # holder locking anything. No cycle: dregg-bridge does not depend on dregg-governance.
 dregg-bridge = { path = "../bridge" }
 
+# The LEAN-PROVEN weight VERDICT. `grant_weight` does the fast-Rust pre-checks (the ed25519
+# owner→voter binding, the consensus-proof read, the positive-amount check) but renders the
+# fail-closed weight DECISION by calling the extracted, `#assert_axioms`-clean Lean
+# `grantWeightCore` (`Metatheory.Bridge.ProofOfHoldings`) via `shadow_holding_grant_weight` —
+# the decision is the verified object, not a Rust `if`-chain. Fail-closed if the Lean core is
+# not in the linked archive (no silent Rust-reimpl fallback), matching `grain-verify`.
+dregg-lean-ffi = { path = "../dregg-lean-ffi" }
+
 # The holder wallet ↔ VoterId binding is an ed25519 signature by the Solana owner key.
 ed25519-dalek = "2"
 

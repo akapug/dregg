@@ -121,12 +121,22 @@ pub struct WeightGrant {
 }
 
 /// Why a weight grant was refused. Every variant grants ZERO weight (fail closed).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// Not `Copy`: [`GrantError::LeanCoreUnavailable`] carries the FFI error string (mirroring
+/// `grain-verify`'s `R3Error`), so a stale archive that lacks the verified verdict core surfaces the
+/// gap rather than silently reimplementing the decision in Rust.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GrantError {
     /// The holding is not consensus-proven (a [`StructureOnly`](dregg_bridge::solana_trustless::LockProofTrust::StructureOnly)
     /// RPC echo, or any non-`ConsensusVerified` trust). The Nomad-law analog: no
     /// supermajority proof, no weight.
     NotConsensusProven,
+    /// The LEAN-PROVEN weight verdict core (`dregg_holding_grant_weight`) is not in the linked
+    /// archive — the decision cannot be rendered by the verified object. Carries the FFI error.
+    /// (Rebuild `dregg-lean-ffi` so the archive splices `Metatheory.Bridge.ProofOfHoldings`.) There
+    /// is NO Rust fallback for the weight DECISION by design: it is the Lean-proven verdict or it is
+    /// not made — matching `grain-verify`'s `R3Error::LeanCoreUnavailable`.
+    LeanCoreUnavailable(String),
     /// The [`OwnerBinding`] is not a valid signature by the holding's `owner` over the
     /// claimed `voter` — the owner did not authorize this voter.
     UnboundOwner,
@@ -164,12 +174,29 @@ pub enum GrantError {
 /// This performs NO dedup — it is the stateless core. Use [`HoldingWeightRegistry`] when
 /// you need the per-poll no-double-count nullifier.
 ///
+/// ## The weight VERDICT is the Lean-proven object, not this Rust
+///
+/// The ed25519 owner→voter binding, the consensus-proof read, and the positive-amount check are
+/// fast-Rust PRE-CHECKS — they establish the FACTS. The fail-closed weight VERDICT itself is NOT
+/// decided here: the two decision facts (consensus-proven status, the light client's finality
+/// verdict) plus the proven amount are marshalled onto a wire and routed to
+/// `Metatheory.Bridge.ProofOfHoldings.grantWeightFFI` (the `@[export] dregg_holding_grant_weight`
+/// entry, reached via [`dregg_lean_ffi::shadow_holding_grant_weight`]) — the extracted,
+/// `#assert_axioms`-clean `grantWeightCore`, PROVED to realize the `grantsWeight` spec by
+/// `grantWeightCore_eq_grantsWeight`. The returned weight IS the verified decision's output, not a
+/// Rust `holding.amount` literal. A `ConsensusVerified` holding is proven over a FINALIZED bank hash,
+/// so finalization is entailed by the consensus proof — `slotFinal` is the same fact on this path
+/// (see the `grantWeight` doc in the Lean model).
+///
 /// Fail-closed order: consensus first (a `StructureOnly` holding is refused before its
-/// signature is even examined), then the binding, then a positive-amount check.
+/// signature is even examined), then the binding, then a positive-amount check; and if the
+/// Lean verdict core is not linked, [`GrantError::LeanCoreUnavailable`] — NEVER a silent Rust
+/// reimplementation of the decision.
 pub fn grant_weight(
     holding: &ProvenHolding,
     binding: &OwnerBinding,
 ) -> Result<WeightGrant, GrantError> {
+    // PRE-CHECKS (fast Rust) — establish the facts the verified decision reads.
     if !holding.is_consensus_proven() {
         return Err(GrantError::NotConsensusProven);
     }
@@ -179,9 +206,31 @@ pub fn grant_weight(
     if holding.amount == 0 {
         return Err(GrantError::ZeroAmount);
     }
+
+    // THE VERDICT — the LEAN-PROVEN grantWeightCore over the wire
+    // "isConsensusProven slotFinal amount". A `ConsensusVerified` holding is proven over a finalized
+    // bank hash, so `slotFinal` is the consensus-proof fact itself on this path. Rust never decides the
+    // weight; it marshals to the verified object.
+    let consensus = holding.is_consensus_proven();
+    let slot_final = consensus;
+    let wire = format!(
+        "{} {} {}",
+        consensus as u8, slot_final as u8, holding.amount
+    );
+    let out = dregg_lean_ffi::shadow_holding_grant_weight(&wire)
+        .map_err(GrantError::LeanCoreUnavailable)?;
+    let weight: u64 = out
+        .parse()
+        .map_err(|_| GrantError::LeanCoreUnavailable(format!("non-numeric verdict: {out:?}")))?;
+    if weight == 0 {
+        // The verified decision refused (a `0` verdict). With the pre-checks satisfied this is a
+        // core disagreement; fail closed rather than fabricate a grant.
+        return Err(GrantError::NotConsensusProven);
+    }
+
     Ok(WeightGrant {
         voter: binding.voter,
-        weight: holding.amount,
+        weight,
         slot: holding.slot,
         token_account: holding.token_account,
     })
@@ -316,6 +365,25 @@ mod tests {
 
     use crate::{DecisionRule, Electorate, PollSpec};
 
+    /// The weight VERDICT is the Lean-proven `grantWeightCore` (`dregg_holding_grant_weight`); there
+    /// is NO Rust fallback for the decision (by design). When the extracted core is not in the linked
+    /// archive, [`grant_weight`] fail-closes with [`GrantError::LeanCoreUnavailable`], so the positive
+    /// grant-path tests can only run once the archive splices `Metatheory.Bridge.ProofOfHoldings`.
+    /// This guard skips them (with a note) rather than assert a Rust decision we deliberately do not
+    /// have — mirroring `grain-verify`'s R3 test. The PRE-CHECK tests (`NotConsensusProven` /
+    /// `UnboundOwner` / `ZeroAmount`) do NOT call it: those errors fire before the Lean verdict.
+    fn lean_verdict_core_or_skip() -> bool {
+        if dregg_lean_ffi::holding_grant_weight_core_available() {
+            return true;
+        }
+        eprintln!(
+            "holding-weight: the Lean-proven verdict core `dregg_holding_grant_weight` is not in \
+             the linked archive — rebuild dregg-lean-ffi to splice Metatheory.Bridge.ProofOfHoldings, \
+             then re-run. (No Rust fallback for the weight decision by design.)"
+        );
+        false
+    }
+
     /// A deterministic owner keypair from a seed byte.
     fn owner_key(seed: u8) -> SigningKey {
         SigningKey::from_bytes(&[seed; 32])
@@ -343,6 +411,9 @@ mod tests {
 
     #[test]
     fn holding_consensus_proven_grants_weight_equal_to_amount() {
+        if !lean_verdict_core_or_skip() {
+            return;
+        }
         let owner = owner_key(1);
         let owner_pk = owner.verifying_key().to_bytes();
         let voter: VoterId = [9u8; 32];
@@ -418,6 +489,9 @@ mod tests {
 
     #[test]
     fn same_token_account_cannot_be_counted_twice_in_a_poll() {
+        if !lean_verdict_core_or_skip() {
+            return;
+        }
         let owner = owner_key(5);
         let owner_pk = owner.verifying_key().to_bytes();
         let voter: VoterId = [4u8; 32];
@@ -451,6 +525,9 @@ mod tests {
 
     #[test]
     fn a_holding_at_the_wrong_snapshot_slot_is_refused() {
+        if !lean_verdict_core_or_skip() {
+            return;
+        }
         // THE MOVE-THE-SAME-TOKENS DEFENSE: a poll pins ONE finalized snapshot slot;
         // proving the same balance at a different slot (having moved it to a fresh
         // account) is refused, so it cannot double-count.
@@ -487,6 +564,9 @@ mod tests {
 
     #[test]
     fn refused_grant_does_not_spend_the_nullifier() {
+        if !lean_verdict_core_or_skip() {
+            return;
+        }
         // A holding refused (StructureOnly) must NOT consume the nullifier, so a later
         // genuine consensus proof of the same account can still be counted.
         let owner = owner_key(6);
@@ -518,6 +598,9 @@ mod tests {
 
     #[test]
     fn end_to_end_grant_and_cast_into_a_plurality_poll() {
+        if !lean_verdict_core_or_skip() {
+            return;
+        }
         // The weight flows all the way into the real CollectiveChoice tally.
         let mut engine = CollectiveChoice::new();
         let poll = engine.open_poll(PollSpec {
@@ -572,6 +655,9 @@ mod tests {
 
     #[test]
     fn poll_not_open_on_the_engine_does_not_burn_the_nullifier() {
+        if !lean_verdict_core_or_skip() {
+            return;
+        }
         // MINOR-2: if grant_and_cast targets a poll the engine has no ballot box for,
         // it must NOT consume the (poll, token_account) nullifier — otherwise a correct
         // later attempt (once the poll opens) is permanently DoS'd.

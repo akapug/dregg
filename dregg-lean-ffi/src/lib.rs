@@ -418,6 +418,36 @@ pub fn shadow_grain_r3_verify(wire: &str) -> Result<String, String> {
     ffi::lean_grain_r3_verify(wire)
 }
 
+/// Whether the linked archive exports the extracted, Lean-verified HOLDING grant-weight verdict core
+/// (`dregg_holding_grant_weight`, the C-ABI entry over `Metatheory.Bridge.ProofOfHoldings.grantWeightFFI`
+/// = the PROVED `grantWeightCore`). When false, a caller (`dregg-governance::holding_weight::grant_weight`)
+/// cannot render the Lean-proven weight verdict and must surface the archive gap. Distinct from
+/// [`lean_available`]: a stale archive can lack this export.
+pub fn holding_grant_weight_core_available() -> bool {
+    ffi::holding_grant_weight_present() && lean_init_once().is_ok()
+}
+
+/// Run the VERIFIED, extracted HOLDING grant-weight verdict core `@[export] dregg_holding_grant_weight`
+/// (the executable `Metatheory.Bridge.ProofOfHoldings.grantWeightCore`, PROVED to REALIZE the
+/// `grantsWeight` spec by `grantWeightCore_eq_grantsWeight`). This runs the fail-closed weight VERDICT as
+/// a Lean-verified object (leanc-native): an `rpc`/StructureOnly tier or an unfinalized slot grants `0`
+/// (refused), a consensus-proven finalized holding grants its full proven amount.
+///
+/// Wire grammar the export reads:
+///   * in:  `"isConsensusProven slotFinal amount"` (three decimal ints — the holding's consensus-proof
+///     status as 0/1, the light client's finality verdict as 0/1, and the proven balance).
+///   * out: the granted weight as a decimal string (`= amount` when granted, `"0"` when refused; `"0"`
+///     is also the fail-closed answer for a negative amount or a malformed wire).
+///
+/// `dregg-governance::holding_weight::grant_weight` does the fast-Rust PRE-CHECKS (the ed25519 owner→voter
+/// binding, the consensus-proof read, the positive-amount check) and routes the weight VERDICT through
+/// THIS entry — the DECISION is the Lean-proven object, Rust is the thin marshaller. Returns `Err` if the
+/// archive lacks the export.
+pub fn shadow_holding_grant_weight(wire: &str) -> Result<String, String> {
+    ensure_lean_init()?;
+    ffi::lean_holding_grant_weight(wire)
+}
+
 /// Parse a shadow output wire into a [`ShadowVerdict`], surfacing marshal/parse errors.
 pub fn decode_shadow_verdict(output: &str) -> Result<ShadowVerdict, String> {
     match marshal::unmarshal_result(output) {
@@ -583,6 +613,12 @@ mod ffi {
         ) -> usize;
         #[cfg(dregg_grain_r3_verify_present)]
         fn dregg_grain_r3_verify_str(
+            in_utf8: *const c_char,
+            out: *mut c_char,
+            out_cap: usize,
+        ) -> usize;
+        #[cfg(dregg_holding_grant_weight_present)]
+        fn dregg_holding_grant_weight_str(
             in_utf8: *const c_char,
             out: *mut c_char,
             out_cap: usize,
@@ -992,6 +1028,42 @@ mod ffi {
         false
     }
 
+    /// HOLDING-GRANT-WEIGHT extraction — run the VERIFIED Lean fail-closed weight verdict core
+    /// (leanc-native). Input: `"isConsensusProven slotFinal amount"` (three decimal ints); output: the
+    /// granted weight as a decimal string (`= amount` when granted, `"0"` when refused, and the
+    /// fail-closed answer for a negative amount / malformed wire). This is the PROVED
+    /// `Metatheory.Bridge.ProofOfHoldings.grantWeightCore` (`if isConsensusProven && slotFinal then amount
+    /// else 0`), proved to REALIZE the `grantsWeight` spec by `grantWeightCore_eq_grantsWeight` — the
+    /// non-custodial proof-of-holdings → governance-weight decision as a Lean-verified object, the object
+    /// `dregg-governance::holding_weight::grant_weight` routes its weight verdict through.
+    #[cfg(dregg_holding_grant_weight_present)]
+    pub fn lean_holding_grant_weight(wire: &str) -> Result<String, String> {
+        lean_string_bridge(
+            wire,
+            dregg_holding_grant_weight_str,
+            "dregg_holding_grant_weight_str",
+        )
+    }
+
+    #[cfg(not(dregg_holding_grant_weight_present))]
+    pub fn lean_holding_grant_weight(_wire: &str) -> Result<String, String> {
+        Err(
+            "dregg_holding_grant_weight not exported by the linked archive (rebuild to enable)"
+                .into(),
+        )
+    }
+
+    /// `true` iff the linked archive carries the extracted HOLDING grant-weight verdict core.
+    #[cfg(dregg_holding_grant_weight_present)]
+    pub fn holding_grant_weight_present() -> bool {
+        true
+    }
+
+    #[cfg(not(dregg_holding_grant_weight_present))]
+    pub fn holding_grant_weight_present() -> bool {
+        false
+    }
+
     #[cfg(all(test, dregg_fips204_verify_present))]
     mod fips204_verify_extraction {
         use super::*;
@@ -1322,6 +1394,14 @@ mod ffi {
     }
 
     pub fn lean_grain_r3_verify(_wire: &str) -> Result<String, String> {
+        Err("Lean static lib not linked".into())
+    }
+
+    pub fn holding_grant_weight_present() -> bool {
+        false
+    }
+
+    pub fn lean_holding_grant_weight(_wire: &str) -> Result<String, String> {
         Err("Lean static lib not linked".into())
     }
 }

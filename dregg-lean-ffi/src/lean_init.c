@@ -278,6 +278,25 @@ extern lean_object *dregg_fips204_sign_real(lean_object *input);
 extern lean_object *dregg_grain_r3_verify(lean_object *input);
 #endif
 
+/* The @[export]ed Lean `String -> String` VERIFIED HOLDING grant-weight verdict core
+ * (`Metatheory.Bridge.ProofOfHoldings.grantWeightFFI`): decodes the wire `"isConsensusProven slotFinal
+ * amount"` (three decimal ints), runs the PROVED `grantWeightCore` (`if isConsensusProven && slotFinal
+ * then amount else 0`) and returns the granted weight as a decimal string (`= amount` when granted,
+ * `"0"` when refused; `"0"` is also the fail-closed answer for a negative amount / malformed wire). This
+ * is the non-custodial proof-of-holdings → governance-weight DECISION as leanc-native code, proved to
+ * realize the `grantsWeight` spec (`grantWeightCore_eq_grantsWeight`); `dregg-governance` does the
+ * fast-Rust pre-checks and routes the weight verdict through it. GATED on DREGG_HOLDING_GRANT_WEIGHT
+ * (build.rs probes + defines it). NOTE: like R3's export it needs NO module initializer — its generated
+ * C hoists the string literals into STATIC CONST `lean_string_object`s and its closure into a LAZY
+ * `lean_once_cell`, so `dregg_holding_grant_weight` is self-contained. We therefore deliberately do NOT
+ * reference `initialize_Metatheory_Metatheory_Bridge_ProofOfHoldings`: that initializer chains into the
+ * `Dregg2.Tactics` (Mathlib-tactic) import closure's init symbols the leanc-native archive does not
+ * carry; leaving it unreferenced lets `-dead_strip` drop the proof closure — the pure verdict core links
+ * and runs on the always-initialized Init runtime. */
+#ifdef DREGG_HOLDING_GRANT_WEIGHT
+extern lean_object *dregg_holding_grant_weight(lean_object *input);
+#endif
+
 /* ── NO-COPY BOUNDARY runtime helpers (linkable wrappers over the `static inline`
  * <lean/lean.h> primitives the no-copy `lean_direct.rs` boundary needs). `lean_inc_ref`,
  * `lean_dec_ref`, `lean_box`, and `lean_string_cstr` are `static inline` in the header (no
@@ -574,6 +593,29 @@ size_t dregg_grain_r3_verify_str(const char *in_utf8, char *out, size_t out_cap)
     }
     lean_object *in_obj = lean_mk_string(in_utf8);
     lean_object *res = dregg_grain_r3_verify(in_obj);
+    const char *cstr = lean_string_cstr(res);
+    size_t full = strlen(cstr);
+    size_t copy = (full < out_cap - 1) ? full : (out_cap - 1);
+    memcpy(out, cstr, copy);
+    out[copy] = '\0';
+    lean_dec_ref(res);
+    return full;
+}
+#endif
+
+#ifdef DREGG_HOLDING_GRANT_WEIGHT
+/* dregg_holding_grant_weight_str — the C string bridge over the VERIFIED Lean `String -> String` HOLDING
+ * grant-weight verdict-core export (`Metatheory.Bridge.ProofOfHoldings.grantWeightFFI`). Input:
+ * `"isConsensusProven slotFinal amount"` (three decimal ints). Output: the granted weight as a decimal
+ * string (`= amount` when granted, `"0"` when refused / fail-closed). Runs the PROVED `grantWeightCore`
+ * — the non-custodial proof-of-holdings → governance-weight decision, proved to realize the
+ * `grantsWeight` spec. Same return contract as the bridges above. */
+size_t dregg_holding_grant_weight_str(const char *in_utf8, char *out, size_t out_cap) {
+    if (out == 0 || out_cap == 0) {
+        return (size_t)-1;
+    }
+    lean_object *in_obj = lean_mk_string(in_utf8);
+    lean_object *res = dregg_holding_grant_weight(in_obj);
     const char *cstr = lean_string_cstr(res);
     size_t full = strlen(cstr);
     size_t copy = (full < out_cap - 1) ? full : (out_cap - 1);
