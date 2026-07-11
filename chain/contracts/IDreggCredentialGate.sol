@@ -57,9 +57,11 @@ interface IDreggCredentialGate {
     /// @dev Verifies the credential, then mints the NFT. The minter's identity remains hidden --
     ///      only the fact that they hold a valid credential is proven.
     ///
-    ///      Sybil resistance: uses a presentation nullifier derived deterministically from
-    ///      (credential_serial, action_domain="mint", tokenId). Each credential can only mint
-    ///      each tokenId once, but the nullifier is unlinkable to the credential's identity.
+    ///      Sybil resistance: the bare presentation nullifier is the replay key —
+    ///      ONE credential presentation mints exactly one token. tokenId is a caller
+    ///      argument the proof does not bind, so it cannot scope the key without
+    ///      opening a replay-mint hole (see the contract's `usedNullifiers` note).
+    ///      The nullifier is unlinkable to the credential's identity.
     ///
     /// @param tokenId The NFT token ID to mint.
     /// @param federationRoot The federation root (which federation issued the credential).
@@ -89,8 +91,20 @@ interface IDreggCredentialGate {
         bytes calldata sp1Proof
     ) external;
 
-    /// @notice Check if a presentation nullifier has been used for a specific action.
-    /// @param nullifier The presentation nullifier.
+    /// @notice Check if a mint presentation nullifier has been used.
+    /// @dev Mint nullifiers are stored by the bare nullifier (one mint per credential).
+    ///      Vote nullifiers are tracked per proposal in a separate mapping.
+    /// @param nullifier The presentation nullifier from the proof's public values.
     /// @return True if already used.
     function isNullifierUsed(bytes32 nullifier) external view returns (bool);
+
+    /// @notice Propose a new admin (step 1 of the two-step admin rotation).
+    /// @dev Only the current admin may propose. Proposing overwrites any prior
+    ///      pending proposal; proposing address(0) cancels rotation.
+    /// @param newAdmin The address that may accept adminship.
+    function proposeAdmin(address newAdmin) external;
+
+    /// @notice Accept adminship (step 2 of the two-step admin rotation).
+    /// @dev Only the currently proposed pending admin may accept.
+    function acceptAdmin() external;
 }

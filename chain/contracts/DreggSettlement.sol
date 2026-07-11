@@ -1,0 +1,165 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+import {IDreggSettlement} from "./IDreggSettlement.sol";
+import {IGroth16Verifier25} from "./IGroth16Verifier25.sol";
+
+/// Concrete dregg whole-history settlement contract at the modern 25-lane
+/// proof shape. See `IDreggSettlement` for the pinned lane order, the
+/// canonical BabyBear bound, and the state-machine semantics (the on-chain
+/// twin of `bridge/src/ethereum.rs::{EthBridgeState, submit_eth_settlement}`).
+contract DreggSettlement is IDreggSettlement {
+    /// BabyBear prime p = 2^31 - 2^27 + 1. Every lane must be < p.
+    uint256 public constant BABYBEAR_P = 2013265921;
+
+    /// The pinned Groth16 verifier (VK baked in by gnark-solidity-verifier).
+    IGroth16Verifier25 public immutable verifier;
+
+    bytes32 private immutable _verifyingKeyHash;
+
+    uint32[8] private _genesisLanes;
+    uint32[8] private _provenLanes;
+    uint64 private _provenHeight;
+
+    constructor(
+        IGroth16Verifier25 verifier_,
+        bytes32 verifyingKeyHash_,
+        uint32[8] memory genesisRoot_
+    ) {
+        // Fail closed: a codeless verifier address must never be pinned.
+        // (A staticcall to a codeless address "succeeds"; the census flagged
+        // this exact fail-open pattern in the legacy contracts.)
+        if (address(verifier_).code.length == 0) {
+            revert VerifierHasNoCode(address(verifier_));
+        }
+        if (verifyingKeyHash_ == bytes32(0)) {
+            revert ZeroVerifyingKeyHash();
+        }
+        verifier = verifier_;
+        _verifyingKeyHash = verifyingKeyHash_;
+
+        // The genesis anchor is pinned AT DEPLOYMENT, authenticated by the
+        // deployer — mirroring `EthBridgeState::new(genesis_root)`
+        // (bridge/src/ethereum.rs). It is NOT established by whoever calls
+        // settle() first: since genesis_root is a public input to the wrapped
+        // circuit (not baked into the VK), a first-caller-establishes model
+        // would let anyone holding a valid proof over ANY dregg instance under
+        // the same circuit VK front-run deployment and anchor a foreign chain.
+        for (uint256 i = 0; i < 8; i++) {
+            _requireCanonical(i, genesisRoot_[i]);
+        }
+        _genesisLanes = genesisRoot_;
+        _provenLanes = genesisRoot_;
+    }
+
+    // ------------------------------------------------------------------
+    // Views
+    // ------------------------------------------------------------------
+
+    function provenRoot() external view returns (bytes32) {
+        return packLanes(_provenLanes);
+    }
+
+    function provenRootLanes() external view returns (uint32[8] memory) {
+        return _provenLanes;
+    }
+
+    function genesisAnchor() external view returns (bytes32) {
+        return packLanes(_genesisLanes);
+    }
+
+    function genesisAnchorLanes() external view returns (uint32[8] memory) {
+        return _genesisLanes;
+    }
+
+    /// Always true: the genesis anchor is pinned at construction. Retained for
+    /// interface compatibility with the (former) first-settle-establishes model.
+    function genesisEstablished() external pure returns (bool) {
+        return true;
+    }
+
+    function provenHeight() external view returns (uint64) {
+        return _provenHeight;
+    }
+
+    function verifyingKeyHash() external view returns (bytes32) {
+        return _verifyingKeyHash;
+    }
+
+    /// keccak256 over the tight 32-byte big-endian packing of the 8 lanes:
+    /// lane i occupies bytes [4i, 4i+4). Off-chain mirror for indexing.
+    function packLanes(uint32[8] memory lanes) public pure returns (bytes32) {
+        return keccak256(
+            abi.encodePacked(
+                lanes[0], lanes[1], lanes[2], lanes[3],
+                lanes[4], lanes[5], lanes[6], lanes[7]
+            )
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Settlement
+    // ------------------------------------------------------------------
+
+    function settle(
+        uint256[2] calldata a,
+        uint256[2][2] calldata b,
+        uint256[2] calldata c,
+        uint32[8] calldata genesisRoot,
+        uint32[8] calldata finalRoot,
+        uint32 numTurns,
+        uint32[8] calldata chainDigest
+    ) external {
+        // 1. Every lane canonical BabyBear, and assemble the 25-lane vector
+        //    in the pinned order: genesis[0..8) ++ final[8..16) ++
+        //    numTurns[16] ++ chainDigest[17..25).
+        uint256[25] memory inputs;
+        for (uint256 i = 0; i < 8; i++) {
+            _requireCanonical(i, genesisRoot[i]);
+            inputs[i] = genesisRoot[i];
+        }
+        for (uint256 i = 0; i < 8; i++) {
+            _requireCanonical(8 + i, finalRoot[i]);
+            inputs[8 + i] = finalRoot[i];
+        }
+        _requireCanonical(16, numTurns);
+        inputs[16] = numTurns;
+        for (uint256 i = 0; i < 8; i++) {
+            _requireCanonical(17 + i, chainDigest[i]);
+            inputs[17 + i] = chainDigest[i];
+        }
+
+        // 2. Monotone height (mirrors `advance.height <= state.proven_height`
+        //    rejection in submit_eth_settlement: height must strictly grow).
+        if (numTurns == 0) revert ZeroTurns();
+
+        // 3. Continuity (mirrors `advance.old_root != state.proven_root` +
+        //    `proof.public_inputs.genesis_root != advance.old_root`): the
+        //    proof's genesis lanes must equal the current proven root. The
+        //    genesis anchor was pinned at construction, so the very first
+        //    settle chains from it exactly like every later one.
+        bytes32 packedOld = packLanes(_provenLanes);
+        for (uint256 i = 0; i < 8; i++) {
+            if (genesisRoot[i] != _provenLanes[i]) {
+                revert ContinuityBroken(packedOld, packLanes(genesisRoot));
+            }
+        }
+
+        // 4. The pairing check. Typed interface call: a false return OR a
+        //    revert OR a codeless verifier all reject (fail closed).
+        if (!verifier.verifyProof(a, b, c, inputs)) revert ProofRejected();
+
+        // 5. Effects.
+        _provenLanes = finalRoot;
+        _provenHeight += numTurns;
+
+        emit Settled(packedOld, packLanes(finalRoot), _provenHeight);
+        emit SettledLanes(genesisRoot, finalRoot, numTurns, chainDigest);
+    }
+
+    function _requireCanonical(uint256 laneIndex, uint32 value) private pure {
+        if (uint256(value) >= BABYBEAR_P) {
+            revert NonCanonicalLane(laneIndex, value);
+        }
+    }
+}
