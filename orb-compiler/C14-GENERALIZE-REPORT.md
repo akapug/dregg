@@ -273,4 +273,4 @@ the emitted bytes; the emitter is validated, not trusted.
 - `verifyScript.sml` / `verify_out.txt` — printed statements + tags +
   `axioms = 0` for all seven theories.
 - `Holmakefile` — `INCLUDES` the CakeML pancake/backend/proofs dirs + `~/c2`
-  (`machineStepLinkA`); build with `CAKEMLDIR=~/src/cakeml`.
+  (`machineStepLinkA`); build with `CAKEMLDIR=/home/hbox/src/cakeml`.

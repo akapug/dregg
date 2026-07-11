@@ -188,7 +188,7 @@ whole-program spec-refinement into the single end-to-end theorem.
   `boundScanProg_linkB` (the instantiated `pan_to_target_compile_semantics`).
 - `boundscan.pnk` — the exact emitted text (identical to C10's).
 - `Holmakefile` — `INCLUDES` incl. `pancake/proofs`, `compiler/backend/proofs`
-  (build with `CAKEMLDIR=~/src/cakeml`).
+  (build with `CAKEMLDIR=/home/hbox/src/cakeml`).
 - `verify_c11.sml` / `verify_out.txt` — printed statements + program text.
 - `tags_out.txt` — `[oracles: DISK_THM] [axioms: ]` on `boundScanProg_linkB`,
   `axioms "boundScanLinkBInst" = 0`.

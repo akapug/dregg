@@ -253,5 +253,5 @@ the emitted bytes (`statusClassProg_is_parser_output`).
   clock-lift, single-Function install, and **the final composition
   `status_machine_code`**.
 - `Holmakefile` — INCLUDES the CakeML pancake/backend/proofs dirs; build with
-  `CAKEMLDIR=~/src/cakeml`. **No `~/c2` dependency** — C15 is
+  `CAKEMLDIR=/home/hbox/src/cakeml`. **No `~/c2` dependency** — C15 is
   machine-step-independent (the generic tactic replaced c2's guard lemmas).

@@ -9,7 +9,13 @@ open Lake DSL
     ABI-identical aliases in ffi/glibc_isoc23_compat.o, inserted before that archive.
     HACL/EverCrypt (-levercrypt) is resolved via LIBRARY_PATH (=$HACL_DIST, the project
     convention) rather than a hard-coded -L path, so it is machine-independent. -/
-def osLink (core : Array String) : Array String :=
+def osLink (coreIn : Array String) : Array String :=
+  -- Every standalone Lean serve exe that links the crypto shim needs the
+  -- post-quantum seam symbols (drorb_pq_ml_dsa_verify / drorb_pq_ml_kem_*),
+  -- which the pure-Lean exes cannot get from the dregg-pq Rust crate (a
+  -- dataplane-only path-dep). ffi/pq_stub.o gives fail-closed definitions so
+  -- the link is total; the deployed dataplane binary links the REAL dregg wire.
+  let core := #["ffi/pq_stub.o"] ++ coreIn
   if System.Platform.isOSX then
     #["-Wl,-no_data_const"] ++ core
   else
@@ -279,6 +285,7 @@ lean_lib QuicServer
 @[default_target] lean_lib DrainCorrect
 @[default_target] lean_lib WsFrameCorrect
 @[default_target] lean_lib MtlsVerifyCorrect
+@[default_target] lean_lib MtlsHybridCorrect
 @[default_target] lean_lib SocksCorrect
 @[default_target] lean_lib H2StreamCorrect
 @[default_target] lean_lib BodyClCorrect
@@ -952,3 +959,11 @@ lean_lib QueryRouteProven where
 @[default_target] lean_lib ContentLengthProven where
   srcDir := "."
   roots := #[`Proto.ContentLengthProven]
+
+@[default_target] lean_lib IpFilterDeployedProven where
+  srcDir := "."
+  roots := #[`Proto.IpFilterDeployedProven]
+
+@[default_target] lean_lib RateDeployedProven where
+  srcDir := "."
+  roots := #[`Proto.RateDeployedProven]

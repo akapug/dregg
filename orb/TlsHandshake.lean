@@ -126,6 +126,19 @@ seam (instantiated with the verified HACL* binding by the executables that
 link it). -/
 def p256Group : Nat := 0x0017
 
+/-- The `X25519MLKEM768` hybrid named group (IETF `draft-ietf-tls-ecdhe-mlkem`
+/ IANA code point `0x11EC`) — the STANDARD post-quantum hybrid key exchange, wire
+interoperable with rustls / Chrome / Firefox / OpenSSL 3.5. The `key_share` is an
+ML-KEM-768 encapsulation-key/ciphertext concatenated with an X25519 share (**ML-KEM
+FIRST**, `post_quantum_first`); the ECDHE input to the TLS 1.3 key schedule is the RAW
+concatenation `ml_kem_ss(32) ‖ x25519_ss(32)` (SP800-56C style, ML-KEM first) fed
+DIRECTLY into the schedule — NO extra combiner KDF (the key schedule's own HKDF binds
+both). Because BOTH shared secrets contribute, a recorded handshake is not
+harvest-now-decrypt-later vulnerable. (This is the IETF `ecdhe-mlkem` construction, NOT
+the draft-connolly X-Wing KEM combiner `Crypto.Xwing.xwingCombine`, which is kept for
+dregg's internal peer-KEX but is off this TLS path.) -/
+def xwingGroup : Nat := 0x11EC
+
 /-- The TLS 1.3 code point (`supported_versions`). -/
 def tls13 : Nat := 0x0304
 
@@ -292,6 +305,9 @@ structure ClientHello where
   /-- The client's `secp256r1` share from `key_share` (a 65-byte uncompressed
   point), if offered. -/
   keyShareP256 : Option Tls.Bytes := none
+  /-- The client's `X25519MLKEM768` hybrid share from `key_share`
+  (`client_x25519_pub(32) ‖ client_mlkem_ek(1184)`, 1216 bytes), if offered. -/
+  keyShareHybrid : Option Tls.Bytes := none
   /-- Whether `psk_key_exchange_modes` (§4.2.9) offered `psk_dhe_ke` — the
   only PSK mode this server resumes with. -/
   pskDheKe : Bool := false
@@ -405,6 +421,7 @@ def parseClientHello (input : Tls.Bytes) : Option ClientHello := do
            sigAlgs := sigAlgs
            alpnOffered := alpn
            keyShareP256 := ksP256
+           keyShareHybrid := shareOf xwingGroup
            pskDheKe := pskDheKe
            psk := psk
            statusRequested := statusReq
@@ -920,6 +937,11 @@ structure ServerParams where
   /-- The `max_early_data_size` advertised on issued tickets when the
   deployment opts into 0-RTT. -/
   maxEarlyData : Nat := 16384
+  /-- **Hybrid-KEX pin** (§ post-quantum): when `true`, this deployment accepts ONLY the
+  `X25519MLKEM768` X-Wing key exchange — a classical-only ClientHello (bare X25519 /
+  P-256, no hybrid share) is REJECTED, never silently downgraded to a classical shared
+  secret. Defaults `false` (classical X25519 still served alongside the hybrid). -/
+  requireHybridKex : Bool := false
 
 /-- The default certificate entry: the legacy Ed25519 `certSeed`/`certData`/
 `certChain` fields as a `CertEntry` (name-agnostic, staple from
@@ -1301,6 +1323,109 @@ theorem earlyGate_needs_matching_ticket (params : ServerParams)
     simp only [Bool.and_eq_true, beq_iff_eq] at hmatch
     exact ⟨info, rfl, hmatch.1, hmatch.2⟩
 
+/-- **The server side of the STANDARD `X25519MLKEM768` key exchange** (IETF
+`draft-ietf-tls-ecdhe-mlkem`, code point `0x11EC`) — wire interoperable with rustls /
+Chrome / Firefox / OpenSSL 3.5. The client `key_share` is `client_mlkem_ek(1184) ‖
+client_x25519_pub(32)` (1216 bytes, **ML-KEM FIRST** — `post_quantum_first`). The server
+(1) ML-KEM-ENCAPSULATEs to the client's encapsulation key — the post-quantum half,
+dregg's proven core via `Crypto.mlKemEncaps`, yielding `ct(1088) ‖ ss(32)`; (2) X25519-DHs
+its ephemeral against the client's X25519 public key — the classical half, the SAME
+EverCrypt `Crypto.x25519` every handshake funnels through. Returns the server `key_share`
+`ml_kem_ct(1088) ‖ server_x25519_pub(32)` (1120 bytes, ML-KEM first) and the `dhe` =
+**RAW concatenation `ml_kem_ss(32) ‖ x25519_ss(32)`** (64 bytes, ML-KEM first, SP800-56C
+style) fed DIRECTLY into the TLS 1.3 key schedule — NO extra combiner KDF over it (the
+key schedule's own HKDF-Extract handles it; this drops `Crypto.Xwing.xwingCombine` from
+the TLS path). Fail-CLOSED: a short share, a low-order X25519 point, or an ML-KEM encaps
+fault yields `none`. -/
+def hybridServerKex (params : ServerParams) (clientShare : Tls.Bytes) :
+    Option (ByteArray × ByteArray) := do
+  -- client share = ML-KEM-768 encapsulation-key(1184) ‖ X25519 public(32), ML-KEM first.
+  let (cMlkemEk, rest) ← takeN 1184 clientShare
+  let (cxPub, _) ← takeN 32 rest
+  -- (1) post-quantum half: ML-KEM-768 encapsulate to the client's ek → ct(1088) ‖ ss(32).
+  let ctSs ← Crypto.mlKemEncaps (ofBytes cMlkemEk)
+  let ct := ctSs.extract 0 1088
+  let ssPq := ctSs.extract 1088 1120
+  -- (2) classical half: X25519 DH against the client's public; server ephemeral public.
+  let ssX ← Crypto.x25519 params.ephemeralPriv (ofBytes cxPub)
+  let sPub ← Crypto.x25519Base params.ephemeralPriv
+  -- server share = ML-KEM ciphertext(1088) ‖ X25519 public(32), ML-KEM first.
+  let serverShare := ct ++ sPub
+  -- dhe = RAW concat ML-KEM ss ‖ X25519 ss (ML-KEM first), straight into the key schedule.
+  let dhe := ssPq ++ ssX
+  some (serverShare, dhe)
+
+/-! ### The STANDARD hybrid-KEX soundness (`draft-ietf-tls-ecdhe-mlkem`, `0x11EC`).
+
+The deployed `0x11EC` path no longer routes the shared secret through the draft-connolly
+X-Wing combiner KDF (`Crypto.Xwing.xwingCombine`); it hands the RAW concatenation
+`ml_kem_ss ‖ x25519_ss` straight to the TLS 1.3 key schedule (RFC 8446 §7.1: `Handshake
+Secret = HKDF-Extract(Derive-Secret(ES,"derived",""), dhe)`). Soundness therefore rests on
+the key schedule's own HKDF-Extract being a dual-PRF over the concatenation, composed with
+dregg's proven ML-KEM IND-CCA — RE-USING the abstract combiner algebra
+(`Crypto.Xwing.binds_both` / `unpredictable_via_*`) instantiated at the concrete TLS
+key-schedule combiner rather than `xwingKdf`. -/
+
+/-- The standard `dhe`: RAW concatenation `ml_kem_ss ‖ x25519_ss` — ML-KEM FIRST,
+SP800-56C style, exactly what a rustls X25519MLKEM768 peer derives. No X-Wing combiner. -/
+def ecdheMlkemDhe (ssPq ssX : ByteArray) : ByteArray := ssPq ++ ssX
+
+/-- **The TLS-key-schedule hybrid combiner.** The real RFC 8446 §7.1 Handshake-Secret
+extract of the raw hybrid concat under the no-PSK early secret — exactly the HKDF that
+consumes the `dhe` this KEX produces. Convention (matching `Crypto.Xwing.binds_both`):
+first key = X25519 ss, second key = ML-KEM ss, third = transcript (bound downstream in the
+traffic-secret derivations). `getD` fires only on the impossible HKDF size fault. -/
+def ecdheMlkemKdf (ssX ssPq _tr : ByteArray) : ByteArray :=
+  (TlsCrypto.earlySecretNoPsk.bind
+    (fun es => TlsCrypto.handshakeSecret es (ecdheMlkemDhe ssPq ssX))).getD ByteArray.empty
+
+/-- **The `dhe` is the RAW concat, ML-KEM first — never the X-Wing combiner** (the
+tripwire). `hybridServerKex` sets `dhe := ssPq ++ ssX` verbatim; this pins the
+construction so a regression back to `xwingCombine` (or the wrong secret order) breaks the
+proof. `rfl`-clean. -/
+theorem ecdhe_mlkem_dhe_is_raw_concat (ssPq ssX : ByteArray) :
+    ecdheMlkemDhe ssPq ssX = ssPq ++ ssX := rfl
+
+/-- **The TLS-key-schedule combiner IS the real §7.1 Handshake-Secret extract** of the raw
+concat — no hidden KDF, no `xwingCombine`. Names the real `TlsCrypto.handshakeSecret`;
+`rfl`-clean. -/
+theorem ecdhe_mlkem_kdf_is_keyschedule (ssX ssPq tr : ByteArray) :
+    ecdheMlkemKdf ssX ssPq tr =
+      (TlsCrypto.earlySecretNoPsk.bind
+        (fun es => TlsCrypto.handshakeSecret es (ssPq ++ ssX))).getD ByteArray.empty := rfl
+
+/-- **The TLS-key-schedule PRF assumption** (named, the trust boundary). The RFC 8446 §7.1
+Handshake-Secret HKDF-Extract, applied to the hybrid concatenation `ml_kem_ss ‖ x25519_ss`,
+is a dual-PRF: unpredictability of EITHER secret (the other + transcript held fixed)
+survives the extract. The functional shadow of HKDF-SHA256's dual-PRF security — exactly
+the assumption the standard `ecdhe-mlkem` construction leans on instead of an explicit
+combiner. Replaces `Crypto.Xwing.xwing_kdf_dualPRF` on this path. -/
+axiom tls_keyschedule_hybrid_dualPRF : Crypto.Xwing.DualPRF ecdheMlkemKdf
+
+/-- **`tls_ecdhe_mlkem_sound` — the standard hybrid `dhe` binds BOTH halves.** Under the
+TLS-key-schedule dual-PRF, the schedule's shared secret is UNPREDICTABLE (IND-CCA) if
+EITHER the X25519 OR the ML-KEM secret source is — through the corresponding channel:
+break-one-still-safe. The composition proof; the ML-KEM IND-CCA leg it can consume rests on
+dregg's proven core (`Crypto.Xwing.mlKem_ind_cca`). Non-vacuous, names the concrete
+key-schedule combiner. -/
+theorem tls_ecdhe_mlkem_sound {In : Type} (tr ssx sspq : ByteArray)
+    (sourceX sourcePq : In → ByteArray)
+    (heither : Crypto.Xwing.Unpredictable sourceX ∨ Crypto.Xwing.Unpredictable sourcePq) :
+    Crypto.Xwing.Unpredictable (fun i => ecdheMlkemKdf (sourceX i) sspq tr) ∨
+    Crypto.Xwing.Unpredictable (fun i => ecdheMlkemKdf ssx (sourcePq i) tr) :=
+  Crypto.Xwing.binds_both ecdheMlkemKdf tls_keyschedule_hybrid_dualPRF
+    tr ssx sspq sourceX sourcePq heither
+
+/-- **Harvest-now-decrypt-later is defeated on the STANDARD path.** Even if the classical
+X25519 secret is fully known to a (quantum) adversary (`ssx` fixed), the key-schedule
+secret stays UNPREDICTABLE because the ML-KEM half does — resting on dregg's IND-CCA (the
+MLWE floor). A MITM breaking ONLY X25519 cannot derive the session key. -/
+theorem tls_ecdhe_mlkem_pq_protects (tr ssx ek : ByteArray) :
+    Crypto.Xwing.Unpredictable
+      (fun coins => ecdheMlkemKdf ssx (Crypto.Xwing.mlKemSource ek coins) tr) :=
+  Crypto.Xwing.unpredictable_via_pq ecdheMlkemKdf tls_keyschedule_hybrid_dualPRF
+    tr ssx (Crypto.Xwing.mlKemSource ek) (Crypto.Xwing.mlKem_ind_cca ek)
+
 /-- The key-exchange tail of a hello step, after version/suite/sigalg/ALPN
 negotiation succeeded: validate any PSK offer (§4.2.11), agree the ECDHE
 secret over the client's share (x25519 preferred, secp256r1 through the
@@ -1328,8 +1453,23 @@ def kexStep (params : ServerParams) (retried : Option Retry) (ch : ClientHello)
     let withEarly := fun (est : Established) =>
       { est with skipEarly :=
           if ch.earlyData && early?.isNone then 1024 else 0 }
-    match ch.keyShare with
-    | some cpub =>
+    match (if params.groupsSupported.contains xwingGroup then ch.keyShareHybrid else none),
+          params.requireHybridKex, ch.keyShare with
+    | some hyShare, _, _ =>
+      -- Standard X25519MLKEM768 hybrid KEX: dhe = raw ml_kem_ss ‖ x25519_ss (both halves).
+      match hybridServerKex params hyShare with
+      | some (serverShare, dhe) =>
+        match buildFlight params suite alpnSel psk? xwingGroup
+                ch.sessionId serverShare dhe (t0 ++ chMsg)
+                entry ch.statusRequested early? with
+        | some (est, flight, hsPlain) =>
+          (.waitClientFinished (withEarly est),
+           { flight := flight, hsPlain := hsPlain })
+        | none => rejectWith internalErrorDesc
+      | none => rejectWith illegalParameterDesc
+    -- Hybrid-pinned peer, no X-Wing share offered: no classical downgrade (§ PQ).
+    | none, true, _ => rejectWith handshakeFailureDesc
+    | none, false, some cpub =>
       match x25519Base params.ephemeralPriv,
             x25519 params.ephemeralPriv (ofBytes cpub) with
       | some serverPub, some dhe =>
@@ -1341,7 +1481,7 @@ def kexStep (params : ServerParams) (retried : Option Retry) (ch : ClientHello)
            { flight := flight, hsPlain := hsPlain })
         | none => rejectWith internalErrorDesc
       | _, _ => rejectWith illegalParameterDesc
-    | none =>
+    | none, false, none =>
       -- No x25519 share; a secp256r1 share works when this deployment
       -- instantiated the P-256 seam.
       match (if params.groupsSupported.contains p256Group
@@ -1602,6 +1742,22 @@ theorem hrr_group_sound (params : ServerParams) (buf : Tls.Bytes) (r : Retry)
   obtain ⟨ch, hch, -, hfind⟩ := hrr_only_without_share params buf r h
   exact ⟨List.mem_of_find?_eq_some hfind,
          ch, hch, by simpa using List.find?_some hfind⟩
+
+/-- **`tls_kex_hybrid_downgrade_safe` — no classical downgrade against a hybrid-pinned
+peer.** A deployment that pins hybrid key exchange (`requireHybridKex = true`) never
+completes a key-exchange flight for a client that offered no `X25519MLKEM768` share: a
+classical-only ClientHello (bare X25519 / P-256) is rejected — the FSM never reaches
+`waitClientFinished` with a classical shared secret. The KEX-layer mirror of
+`Jwt.jwt_hybrid_no_downgrade`. -/
+theorem tls_kex_hybrid_downgrade_safe (params : ServerParams) (retried : Option Retry)
+    (ch : ClientHello) (suite : Nat) (alpnSel : Option Tls.Bytes) (buf : Tls.Bytes)
+    (est : Established)
+    (hpin : params.requireHybridKex = true)
+    (hnohybrid : ch.keyShareHybrid = none) :
+    (kexStep params retried ch suite alpnSel buf).1 ≠ .waitClientFinished est := by
+  unfold kexStep
+  simp only [hnohybrid, ite_self, hpin]
+  split <;> exact fun h => HsState.noConfusion h
 
 /-- **The negotiated suite is the one the flight is built for**: the
 `Established` a successful flight carries records exactly the suite the
@@ -1934,3 +2090,9 @@ theorem realConfig_shortcut_completes (dhe thHS thAP : ByteArray) (hs : Tls.HsCo
       = .done { id := 0 } 1 [] .h1 [] [] := rfl
 
 end TlsHandshake
+
+#print axioms TlsHandshake.tls_kex_hybrid_downgrade_safe
+#print axioms TlsHandshake.tls_ecdhe_mlkem_sound
+#print axioms TlsHandshake.tls_ecdhe_mlkem_pq_protects
+#print axioms TlsHandshake.ecdhe_mlkem_dhe_is_raw_concat
+#print axioms TlsHandshake.ecdhe_mlkem_kdf_is_keyschedule

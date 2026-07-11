@@ -117,6 +117,13 @@ the RFC 7518 §3.6 unsecured pseudo-algorithm — modeled explicitly so its
 rejection is a theorem, not an omission. -/
 inductive Alg where
   | none | hs256 | hs384 | hs512 | rs256 | rs384 | rs512 | es256 | es384 | ps256 | eddsa
+  /-- **Hybrid ed25519 ∧ ML-DSA-65** (post-quantum). Not an RFC 7518 registry
+  entry: the orb-federation composite that verifies a token ONLY when BOTH the
+  classical Ed25519 signature AND the FIPS-204 ML-DSA-65 signature check out —
+  copying dregg's federation-core `ed25519 ∧ ML-DSA-65` construction verbatim.
+  Fail-closed: a downgrade to `eddsa`-only for a `hybrid`-enrolled key is rejected
+  by the same key-pinning that blocks classical algorithm confusion. -/
+  | hybrid
 deriving Repr, DecidableEq
 
 /-- Opaque symmetric/asymmetric key material (bytes behind the boundary). -/
@@ -249,6 +256,20 @@ structure Config where
   material. Verification itself is NOT a boundary — it routes to the F*-verified
   `Crypto.ed25519Verify` (see `edVerify` / `verifyFor`). -/
   edPubKey : KeyMaterial → Bytes
+  /-- **ML-DSA-65 pinned public key** — the post-quantum half of a `hybrid` key.
+  The FIPS 204 ML-DSA-65 public-key bytes ENROLLED for this key's holder (the
+  pinned roster). Like the EdDSA path, verification is NOT a boundary — the PQ
+  half routes to dregg's proven `Crypto.mlDsaVerify`. Pinned here, never taken
+  from the token — matching dregg's `Id = H(ed25519 ‖ ml_dsa)` construction.
+  Defaults empty (a key that has not enrolled a PQ half). -/
+  mlDsaPubKey : KeyMaterial → Bytes := fun _ => []
+  /-- FIPS 204 `ctx` domain-separation string for the ML-DSA-65 half, pinned per
+  surface so a signature minted for one surface never verifies on another. -/
+  mlDsaCtx : Bytes := []
+  /-- Split a `hybrid` token's signature segment into its `(ed25519, ML-DSA-65)`
+  halves (boundary: the byte-level codec). `none` ⇒ fail-closed (the hybrid can
+  never verify), so a token missing either half is rejected. -/
+  splitHybridSig : Bytes → Option (Bytes × Bytes) := fun _ => none
 
 /-! ## Token extraction (multi-source) -/
 
@@ -379,6 +400,8 @@ primitive); EdDSA routes to the F*-verified `Crypto.ed25519Verify`. -/
 /-- The verification family an algorithm belongs to. -/
 inductive Family where
   | hmac | rsaPkcs1 | rsaPss | ecdsa | eddsa
+  /-- The post-quantum hybrid family: ed25519 ∧ ML-DSA-65 (both must verify). -/
+  | hybrid
 deriving Repr, DecidableEq
 
 /-- RFC 7518 §3.1 / RFC 8037 §3.1 routing. The unsecured `none` routes to no
@@ -395,6 +418,7 @@ def algFamily : Alg → Option Family
   | .es256 => some .ecdsa
   | .es384 => some .ecdsa
   | .eddsa => some .eddsa
+  | .hybrid => some .hybrid
 
 /-- **EdDSA verification via the verified boundary.** The Ed25519 public key,
 signing input, and signature (all `List UInt8`) are marshalled to `ByteArray` and
@@ -403,6 +427,29 @@ correctness is discharged upstream (`Crypto.Assumptions.ed25519_sign_verify_roun
 This is not a re-stub: the RFC 8037 EdDSA path IS the verified primitive. -/
 def edVerify (pub signingInput sig : Bytes) : Bool :=
   Crypto.ed25519Verify ⟨pub.toArray⟩ ⟨signingInput.toArray⟩ ⟨sig.toArray⟩
+
+/-- **ML-DSA-65 verification via dregg's proven boundary.** The pinned ML-DSA-65
+public key, signing input, signature, and FIPS 204 `ctx` (all `List UInt8`) are
+marshalled to `ByteArray` and handed to `Crypto.mlDsaVerify` — dregg's extracted,
+Lean-verified FIPS-204 verify (`Dregg2.Crypto.MlDsaVerifyReal.verifyCore`). Not a
+boundary stub: the PQ path IS the verified primitive. -/
+def mldsaVerify (pub signingInput sig ctx : Bytes) : Bool :=
+  Crypto.mlDsaVerify ⟨pub.toArray⟩ ⟨signingInput.toArray⟩ ⟨sig.toArray⟩ ⟨ctx.toArray⟩
+
+/-- **The hybrid verify — ed25519 ∧ ML-DSA-65, fail-closed.** The signature
+segment is split into its two halves; the token verifies ONLY when BOTH the
+classical Ed25519 signature (over the signing input, under the pinned ed25519 key)
+AND the post-quantum ML-DSA-65 signature (over the same signing input, under the
+pinned ML-DSA-65 key and the FIPS 204 `ctx`) verify. Either half missing (`none`
+split) or bad ⇒ `false`. This copies dregg's federation-core BOTH-verify
+construction verbatim: both halves cover the same canonical signing input, the PQ
+key is pinned (enrolled roster, not self-carried), and `ctx` domain-separates. -/
+def hybridVerify (cfg : Config) (km : KeyMaterial) (si sig : Bytes) : Bool :=
+  match cfg.splitHybridSig sig with
+  | some (edSig, mldsaSig) =>
+      edVerify (cfg.edPubKey km) si edSig
+        && mldsaVerify (cfg.mlDsaPubKey km) si mldsaSig cfg.mlDsaCtx
+  | none => false
 
 /-- Dispatch to the family's verifier. The `Alg` is passed through so a family
 verifier that spans digests (HMAC, RSA, ECDSA) selects the right hash. -/
@@ -414,6 +461,7 @@ def familyVerify (cfg : Config) (f : Family) (a : Alg) (km : KeyMaterial)
   | .rsaPss => cfg.verifyRsaPss a km si sig
   | .ecdsa => cfg.verifyEcdsa a km si sig
   | .eddsa => edVerify (cfg.edPubKey km) si sig
+  | .hybrid => hybridVerify cfg km si sig
 
 /-- **The complete verify matrix.** Route `a` to its family's verifier; the
 unsecured `none` verifies nothing (`false`). Total over every `Alg`. -/
@@ -666,6 +714,113 @@ theorem eddsa_uses_evercrypt (cfg : Config) (km : KeyMaterial) (si sig : Bytes) 
       = Crypto.ed25519Verify ⟨(cfg.edPubKey km).toArray⟩ ⟨si.toArray⟩ ⟨sig.toArray⟩ :=
   rfl
 
+/-! ## Post-quantum hybrid (ed25519 ∧ ML-DSA-65)
+
+The `hybrid` slot of the matrix composes the classical Ed25519 verify with dregg's
+proven FIPS-204 ML-DSA-65 verify. Two properties are the point of this cut:
+
+* **`jwt_hybrid_sound`** — the hybrid verifies IFF *both* halves verify. This is a
+  pure control-flow (composition) fact and rests on NO crypto axiom: it holds for
+  every behavior of the two primitives, naming BOTH real verifiers (non-vacuous).
+* **`jwt_hybrid_no_downgrade`** — a `hybrid`-enrolled key rejects a token whose
+  `alg` is not `hybrid` (in particular an `eddsa`-only, classical-only token). The
+  same key-pinning that makes classical algorithm confusion impossible
+  (`jwt_alg_confusion_safe`) blocks a PQ→classical downgrade — the load-bearing
+  anti-downgrade guarantee.
+
+The ML-DSA half's forgery-resistance is NOT re-proved here — it is dregg's proven
+`MlDsaVerifyReal.verifyCore`, surfaced as `Crypto.Assumptions.mlDsaVerify_authentic`
+and discharged in `Crypto.mlDsaVerify_authentic_at`. The orb's NEW proofs are the
+composition (`jwt_hybrid_sound`), the fail-closed both-verify
+(`jwt_hybrid_fail_closed`), and the no-downgrade pinning. -/
+
+/-- **`jwt_hybrid_sound`.** The hybrid verify accepts IFF BOTH the classical
+Ed25519 signature AND the post-quantum ML-DSA-65 signature verify (once the
+signature segment splits into its two halves). Non-vacuous: it names both real
+primitives (`Crypto.ed25519Verify`, `Crypto.mlDsaVerify`). Axiom-clean — a
+statement about the composition's control flow, holding for every behavior of the
+two verifiers. -/
+theorem jwt_hybrid_sound (cfg : Config) (km : KeyMaterial) (si sig edSig mldsaSig : Bytes)
+    (hsplit : cfg.splitHybridSig sig = some (edSig, mldsaSig)) :
+    verifyFor cfg Alg.hybrid km si sig = true ↔
+      (Crypto.ed25519Verify ⟨(cfg.edPubKey km).toArray⟩ ⟨si.toArray⟩ ⟨edSig.toArray⟩ = true
+        ∧ Crypto.mlDsaVerify ⟨(cfg.mlDsaPubKey km).toArray⟩ ⟨si.toArray⟩ ⟨mldsaSig.toArray⟩
+            ⟨cfg.mlDsaCtx.toArray⟩ = true) := by
+  unfold verifyFor
+  simp only [algFamily, familyVerify, hybridVerify, edVerify, mldsaVerify, hsplit,
+    Bool.and_eq_true]
+
+/-- **At the decision tail: an admitted `hybrid` token had BOTH halves verify.**
+The signature gate was the hybrid conjunction, so a classical-only OR a PQ-only
+signature never reaches admit — fail-closed on both directions. -/
+theorem afterKey_hybrid_both (cfg : Config) (ctx : Ctx) (jws : Jws) (key : Key)
+    {hdrs : List (String × String)}
+    (hal : jws.header.alg = Alg.hybrid)
+    (h : afterKey cfg ctx jws key = .admit hdrs) :
+    ∃ edSig mldsaSig, cfg.splitHybridSig jws.signature = some (edSig, mldsaSig) ∧
+      edVerify (cfg.edPubKey key.material) jws.signingInput edSig = true ∧
+      mldsaVerify (cfg.mlDsaPubKey key.material) jws.signingInput mldsaSig cfg.mlDsaCtx = true := by
+  obtain ⟨_, _, _, hs, _, _, _⟩ := afterKey_admit cfg ctx jws key h
+  rw [hal] at hs
+  unfold Config.sigValid verifyFor at hs
+  simp only [algFamily, familyVerify, hybridVerify] at hs
+  cases hsp : cfg.splitHybridSig jws.signature with
+  | none => rw [hsp] at hs; simp at hs
+  | some p =>
+    obtain ⟨edSig, mldsaSig⟩ := p
+    rw [hsp] at hs
+    simp only [Bool.and_eq_true] at hs
+    exact ⟨edSig, mldsaSig, rfl, hs.1, hs.2⟩
+
+/-- **`jwt_hybrid_fail_closed`.** Whole-decision form: if the enrolled key is
+`hybrid` and the request is admitted, then BOTH the Ed25519 and the ML-DSA-65
+signatures verified over the signing input. A classical-only (broken-PQ) or a
+PQ-only (broken-classical) token cannot admit against a hybrid-enrolled key. -/
+theorem jwt_hybrid_fail_closed (cfg : Config) (ctx : Ctx)
+    {hdrs : List (String × String)}
+    (h : authenticate cfg ctx = .admit hdrs) :
+    ∃ (jws : Jws) (key : Key), selectKey cfg jws.header = some key ∧
+      (key.alg = Alg.hybrid →
+        ∃ edSig mldsaSig, cfg.splitHybridSig jws.signature = some (edSig, mldsaSig) ∧
+          edVerify (cfg.edPubKey key.material) jws.signingInput edSig = true ∧
+          mldsaVerify (cfg.mlDsaPubKey key.material) jws.signingInput mldsaSig
+            cfg.mlDsaCtx = true) := by
+  obtain ⟨_, jws, key, _, _, hk, ha⟩ := authenticate_admit cfg ctx h
+  refine ⟨jws, key, hk, fun hhyb => ?_⟩
+  obtain ⟨_, a2, _, _, _, _, _⟩ := afterKey_admit cfg ctx jws key ha
+  exact afterKey_hybrid_both cfg ctx jws key (a2.trans hhyb) ha
+
+/-- **`jwt_hybrid_no_downgrade`.** A `hybrid`-enrolled key rejects any token whose
+`alg` is not `hybrid`. The key's algorithm is pinned, so a downgrade to a weaker
+`alg` (a classical-only forgery) cannot be admitted — the anti-downgrade property. -/
+theorem jwt_hybrid_no_downgrade (cfg : Config) (ctx : Ctx) (jws : Jws) (key : Key)
+    {hdrs : List (String × String)}
+    (hkey : key.alg = Alg.hybrid)
+    (hdown : jws.header.alg ≠ Alg.hybrid)
+    (h : afterKey cfg ctx jws key = .admit hdrs) : False := by
+  obtain ⟨_, a2, _, _, _, _, _⟩ := afterKey_admit cfg ctx jws key h
+  exact hdown (a2.trans hkey)
+
+/-- The concrete PQ-downgrade case: a `hybrid`-enrolled key rejects an `eddsa`-only
+(classical Ed25519) token — no falling back to classical-only for a PQ identity. -/
+theorem jwt_hybrid_rejects_ed25519_only (cfg : Config) (ctx : Ctx) (jws : Jws) (key : Key)
+    {hdrs : List (String × String)}
+    (hkey : key.alg = Alg.hybrid)
+    (hed : jws.header.alg = Alg.eddsa)
+    (h : afterKey cfg ctx jws key = .admit hdrs) : False :=
+  jwt_hybrid_no_downgrade cfg ctx jws key hkey (by rw [hed]; decide) h
+
+/-- Whole-decision form of no-downgrade: any admitted request under a `hybrid`
+key necessarily carried a `hybrid`-`alg` token. -/
+theorem jwt_hybrid_admit_is_hybrid (cfg : Config) (ctx : Ctx)
+    {hdrs : List (String × String)}
+    (h : authenticate cfg ctx = .admit hdrs) :
+    ∃ (jws : Jws) (key : Key), selectKey cfg jws.header = some key ∧
+      (key.alg = Alg.hybrid → jws.header.alg = Alg.hybrid) := by
+  obtain ⟨_, jws, key, _, _, hk, ha⟩ := authenticate_admit cfg ctx h
+  obtain ⟨_, a2, _, _, _, _, _⟩ := afterKey_admit cfg ctx jws key ha
+  exact ⟨jws, key, hk, fun hhyb => a2.trans hhyb⟩
+
 /-! ## Critical-header rejection (RFC 7515 §4.1.11) -/
 
 /-- **`jwt_crit_unknown_rejected`.** A token carrying an unrecognized `crit`
@@ -702,3 +857,10 @@ end Jwt
 #print axioms Jwt.eddsa_uses_evercrypt
 #print axioms Jwt.jwt_crit_unknown_rejected
 #print axioms Jwt.jwt_crit_understood
+#print axioms Jwt.jwt_hybrid_sound
+#print axioms Jwt.afterKey_hybrid_both
+#print axioms Jwt.jwt_hybrid_fail_closed
+#print axioms Jwt.jwt_hybrid_no_downgrade
+#print axioms Jwt.jwt_hybrid_rejects_ed25519_only
+#print axioms Jwt.jwt_hybrid_admit_is_hybrid
+#print axioms Crypto.mlDsaVerify_authentic_at

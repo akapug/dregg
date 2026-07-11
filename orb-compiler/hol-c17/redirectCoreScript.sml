@@ -4,7 +4,7 @@
    hand proof).
 
    THE FRAGMENT: `Redirect.Code.status` from the drorb serve
-   (orb/Redirect.lean) — the redirect-status pick of RFC 9110
+   (/Users/ember/dev/drorb/Redirect.lean) — the redirect-status pick of RFC 9110
    §15.4.  It is called by `Redirect.redirect` -> `redirectFor`/`redirectStage`,
    which is position 6 of `Reactor.Deploy.deployStagesFull2` (the real ten-stage
    orb serve).  It is genuinely LOOP-FREE: a total `match` on the 4-constructor

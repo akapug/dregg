@@ -6,7 +6,7 @@
    `=`).
 
    THE FRAGMENT: `Cache.Meta.isFresh` from the drorb serve
-   (orb/Cache.lean) — the RFC 9111 §4.2 freshness gate
+   (/Users/ember/dev/drorb/Cache.lean) — the RFC 9111 §4.2 freshness gate
    `response_is_fresh = (freshness_lifetime > current_age)`.  It is consulted by
    `Reactor.Stage.Cache.Config.onReq` -> `cacheEmptyStage`, position 4 of
    `Reactor.Deploy.deployStagesFull2`.  Genuinely LOOP-FREE: a single `<` on the

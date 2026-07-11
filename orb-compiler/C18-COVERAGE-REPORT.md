@@ -254,7 +254,7 @@ N=1, result offset +8w) — identical to C15/C17, so free.
   prints `functions <prog>` (provenance for the transcribed cores; not in the trust
   chain).
 - `Holmakefile` — includes the CakeML pancake/backend/proofs dirs;
-  `CAKEMLDIR=~/src/cakeml`.
+  `CAKEMLDIR=/home/hbox/src/cakeml`.
 
 ## 8. Verdict
 

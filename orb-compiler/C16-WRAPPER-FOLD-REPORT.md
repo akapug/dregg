@@ -201,4 +201,4 @@ re-declared C5/C6 clocked-loop machinery + `panAuto`.
   + `statusclass.pnk` / `machinestep_gate.pnk` — the two primitives' cores/decls
   (verified-parser inputs) the generator consumes.
 - `Holmakefile` — INCLUDES the CakeML pancake/backend/proofs dirs + `~/c2`; build with
-  `CAKEMLDIR=~/src/cakeml`.
+  `CAKEMLDIR=/home/hbox/src/cakeml`.

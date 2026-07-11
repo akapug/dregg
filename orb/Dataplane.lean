@@ -1516,7 +1516,7 @@ def drorbTlsServe (fd : UInt32) (certDer seed
       serverRandom := rnd
       certSeed := seed
       certData := certDer
-      groupsSupported := [x25519Group]
+      groupsSupported := [xwingGroup, x25519Group]
       certs := deployedCerts ecdsaCert ecdsaPriv ecdsaSni rsaCert rsaN rsaE rsaD rsaSni }
   let maxEarly := if earlyDir.isSome then params.maxEarlyData else 0
   try
