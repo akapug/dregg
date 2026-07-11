@@ -7359,3 +7359,19 @@ holder's OWN account, no lock) + holding-to-weight (the census "missing spine": 
 intact, fail-closed on StructureOnly, no double-count) + Lean soundness model (weight backed by finalized
 holding AND custody preserved, non-vacuous). Auditors gated on CUSTODY-VIOLATION. Docs+article reframe to
 lead with proof-of-holdings (lock = the exception) follows the code.
+
+## proof-of-holdings wave COMPLETE (2026-07-11, Fable — the dreggic non-custodial correction)
+
+The full flagship landed + audit-hardened: ProvenHolding foundation → verifier (owner-program FORGERY
+fixed: an attacker account with fake SPL layout in a genuine finalized accounts hash is refused) →
+holding-weight governance binding (2 minors fixed: per-poll snapshot slot closes move-the-same-tokens
+double-count; grant_and_cast no longer burns the nullifier before the engine accepts) → Lean model
+(deployed grantWeight now enforces finalization, not just the spec). All green, all custody-preserving.
+The census "missing spine" (proof-of-holding → vote weight, custody intact) is BUILT: prove you hold it,
+keep it, vote with it. The Solana lock program stays as the value-import/bond EXCEPTION, not participation.
+
+Remaining wave residuals (followups): consensus-mint + holdings live geyser feed + G1 in-circuit
+(bridge_action_air) light-client witness (shared seam); wire the InterchainAdapter trait + these into the
+live relayers; docs+article reframe to lead with proof-of-holdings. gnark wrap next rung: batch-STARK
+per-table (logup + NPO tables) → message-root proof-bound (keccak-at-wrap) → tie to DreggSettlement.
+Deploy-gate design note + microsite shipped (docs/deos/DEPLOY-GATE-DESIGN.md).
