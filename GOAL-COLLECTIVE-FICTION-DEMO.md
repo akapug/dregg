@@ -680,3 +680,21 @@ Deferred: real threshold drand-BLS beacon (#2, crypto-purity follow-up); collect
 - AUDIT: attested-dm 145 + dregg-dice 41 + pqvrf 11 + collective-choice 6 green; dungeon-service builds. Trust doc current.
 ## FIRING (deep-night capstone, low-risk — verified at harvest): collective CO-AUTHORING — a crowd quorum-votes edits
 to a shared .dungeon draft (the collectivity heart).
+
+## ✅✅✅ Collective CO-AUTHORING COMMITTED (The Commons Forge) — the collectivity capstone
+shared-draft crate + coauthor_api (additive module) + /coauthor page. Crowd quorum-votes bounded structured edits;
+Draft::dispose re-parses via attested_dm::parse_dungeon (real fail-closed gate). DRIVEN non-vacuous: a certified
+breaking AddExit (threshold->nowhere) REFUSED by the validator despite quorum met + rolled back; a certified AddRoom
+applied (draft grows, cert emitted); the grown draft PLAYS (/game/verify=true); append-only certified history. 5
+shared-draft tests + all 12 drivers pass. The crowd proposes; the validator disposes.
+NOTE (env): a 'link failure' tonight was DISK PRESSURE from my ~dozen CARGO_TARGET_DIR=/tmp/<name> verify dirs (each
+multi-GB) filling the disk — cleaned up (freed ~28GB); reuse one target dir, not fresh ones per check.
+## ══ TONIGHT'S ARC (deep-night consolidation checkpoint) ══
+The platform went from '5 dungeon games' to a VERIFIABLE COLLECTIVE ARCADE, all committed + verified-by-driving:
+persistence (self-verifying saves) · LB-VRF (pqvrf, PQ VRF bound to the proved Lean uniqueness->MSIS leg) · LB-VRF
+wired into randomness · frontend/UX polish (cohesive+mobile+a11y+collective-vote UX) · trust-levels doc · Hybrid
+randomness (key-chain #1 + drand-BLS beacon #2 + timeout #5) · quorum-certified /party · combat engine · .dungeon
+authoring reference · overworld (verified-completion-gated) · README consolidation · real drand-BLS quicknet beacon
+(interop-tested — RANDOMNESS MOAT FULLY CLOSED, MLWE-assumed pseudorandomness the only floor) · collective
+co-authoring. Suites green: attested-dm 145 + dregg-dice 41 + pqvrf 11 + collective-choice 6 + shared-draft 5;
+dungeon-service builds; 12 demo drivers pass. Honest gaps tracked in HORIZONLOG.
