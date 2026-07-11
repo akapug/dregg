@@ -230,18 +230,23 @@ def honAnchors_arTrace (hash : List ℤ → ℤ) : IvcAnchor hash (arTrace hash)
 `accumulated_hash` genuinely IS `ivcChain hash pi[seed] 1 (rootsOf g)` — a REAL fold — but over the
 ANCHOR `g`'s roots `[7, 9]`, NOT `arTrace`'s own roots `[999, 9]`. The public commitment (a hash of
 only the last triple, with `old_hash_last` free) carries no binding on the trace's intermediate roots;
-it certifies the anchor's chain, which the forged trace re-uses wholesale for its last row. -/
-theorem anchor_commits_to_g_roots (hash : List ℤ → ℤ) :
+it certifies the anchor's chain, which the forged trace re-uses wholesale for its last row.
+FIELD-FAITHFUL: threads the base's boundary canonicality envelope `IvcTraceCanon` through
+`honTrace_canon`, whose only input is `hcanonHash` — the deployed Poseidon2 chip writes canonical
+BabyBear representatives (`0 ≤ hash l < p`). -/
+theorem anchor_commits_to_g_roots (hash : List ℤ → ℤ)
+    (hcanonHash : ∀ l, 0 ≤ hash l ∧ hash l < 2013265921) :
     (arTrace hash).pub Ivc.PI_ACC_HASH
         = ivcChain hash ((honTrace hash).pub Ivc.PI_INITIAL_HASH) 1 (rootsOf (honTrace hash))
       ∧ rootsOf (honTrace hash) = [7, 9]
       ∧ rootsOf (arTrace hash) = [999, 9] := by
   refine ⟨?_, rfl, rfl⟩
-  -- honTrace meets ALL of `ivc_multi_refines_chain`'s hypotheses, so its published acc IS the genuine
-  -- chain of ITS OWN roots; and `arTrace`'s published acc is definitionally `honTrace`'s (shared pub).
+  -- honTrace meets ALL of `ivc_multi_refines_chain`'s hypotheses (the canonicality envelope via
+  -- `honTrace_canon`), so its published acc IS the genuine chain of ITS OWN roots; and `arTrace`'s
+  -- published acc is definitionally `honTrace`'s (shared pub).
   exact (ivc_multi_refines_chain hash (honTrace hash) (fun _ => 0) (fun _ => (0, 0)) []
     (by simp [honTrace]) (honTf_sound hash) (honTrace_satisfied2 hash)
-    (honTrace_continuity hash) (honTrace_stepinc hash)).1
+    (honTrace_canon hash hcanonHash) (honTrace_continuity hash) (honTrace_stepinc hash)).1
 
 /-! ## §5 — THE IMPOSSIBILITY: the DFA-style anchor does NOT discharge the residual. -/
 
