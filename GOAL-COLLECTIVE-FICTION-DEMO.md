@@ -736,3 +736,20 @@ run-party pass BARE now (previously run-games timed out on the hosted narrator, 
 verification harness is now robust — no external env needed.
 ## ══ HOLD (morning) ══ Platform complete + audited (208 green) + drivers hardened + docs current. Remaining
 HORIZONLOG closures are medium-risk engine/DESIGN work for ember. Holding; loop resumes when ember returns.
+
+## ═══════════ REBUILD → REAL dregg app (2026-07-11, post-LARP-diagnosis) ═══════════
+The prior all-night build was LARP (attested-dm reimplemented dregg's SHAPE in its VOCABULARY, never on the real
+turn/cell/exec-lean/circuit/lightclient). ember named it; verified. Approved plan: ~/.claude/plans/ok-yeah-wanna-
+binary-tide.md (full spine A→E, all real). Real stakeholders: authors (compile-a-universe) + players (discord coord).
+GROUNDING (real code, hardest-first — the discipline the LARP skipped):
+- D-crown boundary is TRACTABLE (not "new AIR"): the path EXISTS — a CellProgram → cellprogram_to_descriptor2
+  (circuit-prove/src/custom_leaf_adapter.rs:668) → prove_custom_leaf (:994) → prove_turn_chain_recursive →
+  lightclient::verify_history. 9 sibling leaf-adapters do this shape. HONEST boundary: not every StateConstraint
+  lowers (unseeded-chained-hash/fact-sponge/arbitrary-lookup REFUSED w/ a precise blocker) — de-risk = which of the
+  game's teeth lower. A & D UNIFY around one artifact: the CellProgram.
+- Phase-A foundation = spween-dregg WorldCell/Driver/compile_scene/verify (real executor turns + a real scene→
+  CellProgram compiler); mud-dregg is the dungeon precedent (rooms=cells, a command=a real cap-bounded turn).
+EXECUTING (2 disjoint de-risk slices firing): D-crown slice [adc0b7c, circuit-prove — which teeth lower +
+CellProgram→fold→verify_history accepts + forgery rejected]; Phase-A slice [a271263, dungeon-on-dregg — a move is a
+real TurnReceipt, illegal = real executor refusal]. E-provenance (real MPC-TLS to live api.anthropic.com + pinned
+notary) needs ember's operational input (real key + notary deploy) — flagged, not fired autonomously.
