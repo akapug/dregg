@@ -21,6 +21,14 @@ contract DreggSettlement is IDreggSettlement {
     uint32[8] private _provenLanes;
     uint64 private _provenHeight;
 
+    /// Every dregg state root this contract has ever proven (packed key), incl.
+    /// the genesis anchor. A cross-chain verifier (Hyperlane ISM, LayerZero DVN)
+    /// checks a message against the root proven AT DISPATCH TIME, which by the
+    /// time the message is processed is no longer `provenRoot()` — so historical
+    /// proven roots must remain queryable. `bytes32(0)` is never recorded
+    /// (the Nomad-law default), so `isProvenRoot(0)` is always false.
+    mapping(bytes32 => bool) private _provenRoots;
+
     constructor(
         IGroth16Verifier25 verifier_,
         bytes32 verifyingKeyHash_,
@@ -50,11 +58,20 @@ contract DreggSettlement is IDreggSettlement {
         }
         _genesisLanes = genesisRoot_;
         _provenLanes = genesisRoot_;
+        _provenRoots[packLanes(genesisRoot_)] = true;
     }
 
     // ------------------------------------------------------------------
     // Views
     // ------------------------------------------------------------------
+
+    /// True iff `root` (a `packLanes` key) has ever been proven by this contract
+    /// (any historical proven root, plus the genesis anchor). `isProvenRoot(0)`
+    /// is always false — the Nomad-law default is never accepted. Cross-chain
+    /// verifiers gate message acceptance on this.
+    function isProvenRoot(bytes32 root) external view returns (bool) {
+        return _provenRoots[root];
+    }
 
     function provenRoot() external view returns (bytes32) {
         return packLanes(_provenLanes);
@@ -152,6 +169,7 @@ contract DreggSettlement is IDreggSettlement {
         // 5. Effects.
         _provenLanes = finalRoot;
         _provenHeight += numTurns;
+        _provenRoots[packLanes(finalRoot)] = true;
 
         emit Settled(packedOld, packLanes(finalRoot), _provenHeight);
         emit SettledLanes(genesisRoot, finalRoot, numTurns, chainDigest);

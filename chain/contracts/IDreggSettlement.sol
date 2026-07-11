@@ -83,6 +83,12 @@ interface IDreggSettlement {
     // Views
     // ------------------------------------------------------------------
 
+    /// True iff `root` (a `packLanes` key) has ever been proven by this contract
+    /// (any historical proven root + the genesis anchor). `isProvenRoot(0)` is
+    /// always false. Cross-chain verifiers gate message acceptance on this so a
+    /// message proven under a since-superseded root still verifies.
+    function isProvenRoot(bytes32 root) external view returns (bool);
+
     /// Current proven dregg state root, as keccak256 of the tightly packed
     /// 8 big-endian uint32 lanes (for indexing / event correlation).
     /// bytes32(0) until the first settle.
