@@ -70,6 +70,16 @@ pub mod collective;
 /// another cell" becomes a kernel predicate the [`EmbeddedExecutor`](dregg_app_framework::EmbeddedExecutor)
 /// re-checks across cells — NOT a host `if`.
 pub mod multicell;
+
+/// VERIFIABLE RANDOMNESS landed on a real turn. The single-cell keep's combat uses a
+/// FIXED damage rule (the compiler's `FieldGte(hp, 1)` tooth); [`dice_combat`] wires a
+/// real [`dregg_dice::DrawStream`] roll into a combat blow — the damage is a real draw
+/// over a [`dregg_dice::RandomnessRequest`] binding the turn context, bound into the
+/// real [`TurnReceipt`] via an `EmitEvent` (mirroring [`narrator`]'s narration binding)
+/// and REPRODUCED on replay ([`dice_combat::reverify_draw`] re-derives the same draw; a
+/// forged roll is caught). Reproducible offline via the `Deterministic` source; the
+/// non-grindable `ServerVrf`/`Hybrid` sources are a named `dregg-dice` follow-up.
+pub mod dice_combat;
 use dregg_cell::program::HeapAtom;
 use spween::{Choice, PassageContent, Scene};
 use spween_dregg::{CompiledStory, WorldCell, choice_method, compile_scene, parse};

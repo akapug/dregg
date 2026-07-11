@@ -67,6 +67,14 @@ dregg-types = { path = "../types" }
 # reproducible; the public key is the genuine verifying key, and only the secret
 # holder can produce an admissible ballot signature.
 blake3 = "1"
+# VERIFIABLE RANDOMNESS — the real `dregg-dice` draw stream. A combat blow's damage
+# is a real `DrawStream::draw_die` over a `RandomnessRequest`/`EventId` that binds the
+# turn context (pre-state, action, purpose, draw-count), and the draw's evidence rides
+# the real `TurnReceipt` via an `EmitEvent` (mirroring the narration binding). Replay
+# re-derives the SAME draw from the recorded request + evidence (the crate's pure
+# `RandomnessSource::seed` verifier), so a forged roll is caught. Same `dregg-dice` the
+# design's Phase-2 randomness slice ships. (Package name `dregg-dice`, path `../dice`.)
+dregg-dice = { path = "../dice" }
 # The real turn crate — for the `WitnessBlob`/`WitnessKind` carrier the MULTI-CELL
 # module attaches to a gated turn (the Merkle-open witness of item-A's finalized
 # state, referenced by the peer-cell `ObservedFieldEquals` at `proof_witness_index`).
