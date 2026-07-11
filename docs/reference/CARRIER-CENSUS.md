@@ -421,3 +421,22 @@ denotation (`holdsVm`/`holdsAt`/`arithResidual`/`Satisfied2`) to BabyBear/mod-p.
 even affine deployed gates bite. Scope of (A) is the open question (Satisfied2 is used tree-wide); codex has the
 (A) beachhead (`MainAirAcceptF`, `ood_forces_mainAirAccept_field`). EMBER-GATED: greenlight + scope the
 holdsAt/Satisfied2 → mod-p refactor.
+
+## ⚠⚠⚠ POSSIBLE DEPLOYED SOUNDNESS GAP (2026-07-11, mod-p migration surfaced it): VaultSatDescriptor carry-wrap
+The ℤ→mod-p field-faithfulness migration EXPOSED a concrete instance of the K′(a) multi-term-wrap finding in the
+DEPLOYED vault settlement circuit. `Dregg2/Deos/VaultSatDescriptor.lean`'s overflow-safe schoolbook-product gates
+use `CARRY_BITS = 16` carries multiplied by `2^15`, so a single gate residual can reach `2^15·(2^16−1) = 2^31−1 =
+2147483647 > p = 2013265921`. Consequence: the per-gate `≡ 0 [ZMOD p]` → ℤ `= 0` lift is UNSOUND in isolation — a
+concrete adversarial witness `(t1 = 1, cb = 61440)` satisfies gate B mod p for `V = 0` while the ℤ equation forces
+`0`. So `vaultSatV3_forces`'s exact-ℤ settlement conclusions (asset/share conservation via `linear_combination`
+over the limb gates) CANNOT be discharged from mod-p + the existing range checks alone.
+SEVERITY UNRESOLVED — two possibilities:
+  (A) LIVE DEPLOYED GAP: if the deployed Rust vault range-checks carries to [0, 2^16), an attacker could forge a
+      wrapping carry to satisfy the product gate mod p while violating the true ℤ conservation → forged vault
+      settlement. HIGH severity if so.
+  (B) LEAN-MODEL-ONLY: if the deployed Rust actually range-checks carries to [0, 2^15) (max residual < 2^30 < p,
+      safe), then only the Lean CARRY_BITS=16 is wrong and the fix is tightening it to 15 to match deployed.
+INVESTIGATION NEEDED: the deployed vault circuit's actual carry range-check width (15 vs 16 bits), + whether a
+global bounded-reconstruction theorem (Σ limbs < p) holds. The Lean lane HONESTLY REFUSED to paper over it with a
+possibly-unsound lift (VaultSatDescriptor.lean:254 stays red pending resolution) — the right call. This is the
+migration doing its job: a field-faithful denotation makes carry-wrap UNIGNORABLE where the ℤ model hid it.
