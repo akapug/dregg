@@ -66,7 +66,8 @@ open Dregg2.Circuit
 open Dregg2.Circuit.Emit.EffectVmEmit
 open Dregg2.Circuit.Emit.EffectVmEmitTransfer
   (eSB eSA ePrm eSub eSelNoop gNonce transitionAll boundaryFirstPins boundaryLastPins
-   transferHashSites site0 site1 site2 site3 boundaryLast_pins)
+   transferHashSites site0 site1 site2 site3 boundaryLast_pins
+   gate_modEq_iff not_modEq_zero_of_canon)
 open Dregg2.Circuit.Emit.EffectVmEmitTransferSound
   (CellState absorbedCols transferDescriptor_commit_binds_state)
 open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
@@ -181,12 +182,13 @@ single ledger entry the row carries. -/
 sequence counter — distinct from universe-A's frozen ledger nonce; see the §7 connector). -/
 def BurnRowIntent (env : VmRowEnv) : Prop :=
   env.loc (saCol state.BALANCE_LO)
-      = env.loc (sbCol state.BALANCE_LO) - env.loc (prmCol param.BURN_AMOUNT_LO)
-  ∧ env.loc (saCol state.BALANCE_HI) = env.loc (sbCol state.BALANCE_HI)
-  ∧ env.loc (saCol state.NONCE) = env.loc (sbCol state.NONCE) + 1
-  ∧ env.loc (saCol state.CAP_ROOT) = env.loc (sbCol state.CAP_ROOT)
-  ∧ env.loc (saCol state.RESERVED) = env.loc (sbCol state.RESERVED)
-  ∧ (∀ i < 8, env.loc (saCol (state.FIELD_BASE + i)) = env.loc (sbCol (state.FIELD_BASE + i)))
+      ≡ env.loc (sbCol state.BALANCE_LO) - env.loc (prmCol param.BURN_AMOUNT_LO) [ZMOD 2013265921]
+  ∧ env.loc (saCol state.BALANCE_HI) ≡ env.loc (sbCol state.BALANCE_HI) [ZMOD 2013265921]
+  ∧ env.loc (saCol state.NONCE) ≡ env.loc (sbCol state.NONCE) + 1 [ZMOD 2013265921]
+  ∧ env.loc (saCol state.CAP_ROOT) ≡ env.loc (sbCol state.CAP_ROOT) [ZMOD 2013265921]
+  ∧ env.loc (saCol state.RESERVED) ≡ env.loc (sbCol state.RESERVED) [ZMOD 2013265921]
+  ∧ (∀ i < 8, env.loc (saCol (state.FIELD_BASE + i))
+      ≡ env.loc (sbCol (state.FIELD_BASE + i)) [ZMOD 2013265921])
 
 /-- The row is a burn row: `s_burn = 1`, `s_noop = 0`. The `s_noop = 0` clause is what the global
 nonce-tick gate factors on (a burn row is non-NoOp, so the nonce ticks). -/
@@ -218,40 +220,49 @@ theorem burnVm_faithful (env : VmRowEnv) (hrow : IsBurnRow env) :
       ePrmBurnAmt, eSA, eSB, eSub, eSelNoop, EmittedExpr.eval] at hLo hHi hNon hCap hRes
     rw [hsN] at hNon
     refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
-    · linarith [hLo]
-    · linarith [hHi]
-    · linarith [hNon]
-    · linarith [hCap]
-    · linarith [hRes]
+    · exact (gate_modEq_iff (by ring)).mp hLo
+    · exact (gate_modEq_iff (by ring)).mp hHi
+    · exact (gate_modEq_iff (by ring)).mp hNon
+    · exact (gate_modEq_iff (by ring)).mp hCap
+    · exact (gate_modEq_iff (by ring)).mp hRes
     · intro i hi
-      have := hFld i hi
-      simp only [VmConstraint.holdsVm, gFieldFix, eSA, eSB, eSub, EmittedExpr.eval] at this
-      linarith
+      have hfi := hFld i hi
+      simp only [VmConstraint.holdsVm, gFieldFix, eSA, eSB, eSub, EmittedExpr.eval] at hfi
+      exact (gate_modEq_iff (by ring)).mp hfi
   · rintro ⟨hLo, hHi, hNon, hCap, hRes, hFld⟩ c hc
     simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
       List.mem_range] at hc
     rcases hc with (rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩
     · simp only [VmConstraint.holdsVm, gBalLoDebit, ePrmBurnAmt, eSA, eSB, eSub, EmittedExpr.eval]
-      rw [hLo]; ring
+      exact (gate_modEq_iff (by ring)).mpr hLo
     · simp only [VmConstraint.holdsVm, gBalHiFix, eSA, eSB, eSub, EmittedExpr.eval]
-      rw [hHi]; ring
+      exact (gate_modEq_iff (by ring)).mpr hHi
     · simp only [VmConstraint.holdsVm, gNonceTick, gNonce, eSA, eSB, eSub, eSelNoop, EmittedExpr.eval]
-      rw [hsN, hNon]; ring
+      rw [hsN]
+      exact (gate_modEq_iff (by ring)).mpr hNon
     · simp only [VmConstraint.holdsVm, gCapFix, eSA, eSB, eSub, EmittedExpr.eval]
-      rw [hCap]; ring
+      exact (gate_modEq_iff (by ring)).mpr hCap
     · simp only [VmConstraint.holdsVm, gResFix, eSA, eSB, eSub, EmittedExpr.eval]
-      rw [hRes]; ring
+      exact (gate_modEq_iff (by ring)).mpr hRes
     · simp only [VmConstraint.holdsVm, gFieldFix, eSA, eSB, eSub, EmittedExpr.eval]
-      rw [hFld i hi]; ring
+      exact (gate_modEq_iff (by ring)).mpr (hFld i hi)
 
 /-- **Anti-ghost (balance tamper).** A burn row whose post-`bal_lo` is NOT the debit `old - amount`
-fails the `gBalLoDebit` gate (UNSAT). -/
+fails the `gBalLoDebit` gate (UNSAT). FIELD-FAITHFUL: the tooth now rejects a field-`≢` output, so it
+needs the DEPLOYED range-check canonicality — the after-balance (`saCol BALANCE_LO`, a `ranges` wire)
+and the intended debited balance both lie in `[0, p)`. Under canonicality a WRONG `bal_lo` differs from
+the intended value by less than `p`, so `p` cannot divide the residual and the field gate is UNSAT (no
+wrap-around forgery). -/
 theorem burnVm_rejects_wrong_balance (env : VmRowEnv)
+    (hcanonNew : 0 ≤ env.loc (saCol state.BALANCE_LO)
+      ∧ env.loc (saCol state.BALANCE_LO) < 2013265921)
+    (hcanonMove : 0 ≤ env.loc (sbCol state.BALANCE_LO) - env.loc (prmCol param.BURN_AMOUNT_LO)
+      ∧ env.loc (sbCol state.BALANCE_LO) - env.loc (prmCol param.BURN_AMOUNT_LO) < 2013265921)
     (hwrong : env.loc (saCol state.BALANCE_LO)
       ≠ env.loc (sbCol state.BALANCE_LO) - env.loc (prmCol param.BURN_AMOUNT_LO)) :
     ¬ (VmConstraint.gate gBalLoDebit).holdsVm env false false := by
   simp only [VmConstraint.holdsVm, gBalLoDebit, ePrmBurnAmt, eSA, eSB, eSub, EmittedExpr.eval]
-  intro h; apply hwrong; linarith [h]
+  exact not_modEq_zero_of_canon (by ring) hcanonNew hcanonMove hwrong
 
 /-! ## §5 — `CellBurnSpec` + `RowEncodes` → the structured per-cell soundness.
 
@@ -264,12 +275,12 @@ frozen, and the runtime nonce TICKS by one (the per-cell sequence counter). The 
 in §7 reconciles this tick against the FROZEN ledger nonce via `CellBurnSpecFrozenNonce`, exactly as
 the transfer keystone reconciles its row nonce-tick. -/
 def CellBurnSpec (pre : CellState) (amt : ℤ) (post : CellState) : Prop :=
-  post.balLo = pre.balLo - amt
-  ∧ post.balHi = pre.balHi
-  ∧ post.nonce = pre.nonce + 1
-  ∧ (∀ i : Fin 8, post.fields i = pre.fields i)
-  ∧ post.capRoot = pre.capRoot
-  ∧ post.reserved = pre.reserved
+  post.balLo ≡ pre.balLo - amt [ZMOD 2013265921]
+  ∧ post.balHi ≡ pre.balHi [ZMOD 2013265921]
+  ∧ post.nonce ≡ pre.nonce + 1 [ZMOD 2013265921]
+  ∧ (∀ i : Fin 8, post.fields i ≡ pre.fields i [ZMOD 2013265921])
+  ∧ post.capRoot ≡ pre.capRoot [ZMOD 2013265921]
+  ∧ post.reserved ≡ pre.reserved [ZMOD 2013265921]
 
 /-- `RowEncodes env pre amt post` — the row's `state_before`/`amount`/`state_after` columns decode to
 `pre`/`amt`/`post` (column-by-column), plus the published OLD/NEW commitments. -/
@@ -300,9 +311,7 @@ theorem intent_to_cellSpec (env : VmRowEnv) (pre post : CellState) (amt : ℤ)
           hsaLo, hsaHi, hsaN, hsaF, hsaCap, hsaRes, hsaC, hOld, hNew⟩ := henc
   obtain ⟨hbal, hbhi, hnon, hcap, hres, hfld⟩ := hint
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
-  · have : post.balLo = pre.balLo - env.loc (prmCol param.BURN_AMOUNT_LO) := by
-      rw [← hsaLo, ← hsbLo]; exact hbal
-    rw [this, hpAmt]
+  · rw [← hsaLo, ← hsbLo, ← hpAmt]; exact hbal
   · rw [← hsaHi, ← hsbHi]; exact hbhi
   · rw [← hsaN, ← hsbN]; exact hnon
   · intro i; have := hfld i.val i.isLt; rw [← hsaF i, ← hsbF i]; exact this
@@ -333,7 +342,7 @@ theorem burnDescriptor_full_sound (hash : List ℤ → ℤ) (env : VmRowEnv) (hr
     (henc : RowEncodes env pre amt post)
     (hgatesat : satisfiedVm hash burnVmDescriptor env true false)
     (hsat : satisfiedVm hash burnVmDescriptor env true true) :
-    CellBurnSpec pre amt post ∧ post.commit = env.pub pi.NEW_COMMIT := by
+    CellBurnSpec pre amt post ∧ post.commit ≡ env.pub pi.NEW_COMMIT [ZMOD 2013265921] := by
   obtain ⟨hcs, _hsites⟩ := hsat
   obtain ⟨hcsT, _⟩ := hgatesat
   have hgates : ∀ c ∈ burnRowGates, c.holdsVm env true false := by
@@ -411,12 +420,12 @@ nonce-FREEZE variant. We unify against THAT and report the nonce-tick gap exactl
 /-- The executor's genuine per-entry image: `CellBurnSpec` with the nonce-TICK replaced by
 nonce-FREEZE. Every other clause (balLo debit, balHi/fields/capRoot/reserved freeze) is identical. -/
 def CellBurnSpecFrozenNonce (pre : CellState) (amt : ℤ) (post : CellState) : Prop :=
-  post.balLo = pre.balLo - amt
-  ∧ post.balHi = pre.balHi
-  ∧ post.nonce = pre.nonce          -- FROZEN (executor ledger image) — keystone instead demands `+ 1`
-  ∧ (∀ i : Fin 8, post.fields i = pre.fields i)
-  ∧ post.capRoot = pre.capRoot
-  ∧ post.reserved = pre.reserved
+  post.balLo ≡ pre.balLo - amt [ZMOD 2013265921]
+  ∧ post.balHi ≡ pre.balHi [ZMOD 2013265921]
+  ∧ post.nonce ≡ pre.nonce [ZMOD 2013265921]  -- FROZEN (executor ledger image) — keystone demands `+ 1`
+  ∧ (∀ i : Fin 8, post.fields i ≡ pre.fields i [ZMOD 2013265921])
+  ∧ post.capRoot ≡ pre.capRoot [ZMOD 2013265921]
+  ∧ post.reserved ≡ pre.reserved [ZMOD 2013265921]
 
 /-- **`unify_burn` — THE UNIFICATION (frozen-nonce variant).** A committed universe-A burn
 (`BurnSpec`), projected onto the burned `(cell, asset)` entry under `cellProjA`, satisfies the
@@ -426,10 +435,13 @@ keystone's frozen-nonce spec, NOT a fourth spec. -/
 theorem unify_burn (s s' : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : ℤ)
     (hspec : BurnSpec s actor cell a amt s') :
     CellBurnSpecFrozenNonce (cellProjA s.kernel cell a) amt (cellProjA s'.kernel cell a) := by
-  refine ⟨?_, rfl, rfl, fun _ => rfl, rfl, rfl⟩
-  show s'.kernel.bal cell a = s.kernel.bal cell a - amt
-  rw [hspec.2.1]
-  exact (recBurn_ledger_correct s.kernel.bal cell a amt hspec.1.2.2.2.2.2.1).1
+  refine ⟨?_, Int.ModEq.refl _, Int.ModEq.refl _, fun _ => Int.ModEq.refl _,
+    Int.ModEq.refl _, Int.ModEq.refl _⟩
+  have h : s'.kernel.bal cell a = s.kernel.bal cell a - amt := by
+    rw [hspec.2.1]
+    exact (recBurn_ledger_correct s.kernel.bal cell a amt hspec.1.2.2.2.2.2.1).1
+  show s'.kernel.bal cell a ≡ s.kernel.bal cell a - amt [ZMOD 2013265921]
+  rw [h]
 
 /-- **`unify_burn_well` — THE WELL LEG (W1).** The SAME committed burn, projected onto the ISSUER's
 well `(a, a)`, satisfies the frozen-nonce spec with the NEGATED amount: the well RISES by exactly
@@ -438,11 +450,14 @@ well `(a, a)`, satisfies the frozen-nonce spec with the NEGATED amount: the well
 theorem unify_burn_well (s s' : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : ℤ)
     (hspec : BurnSpec s actor cell a amt s') :
     CellBurnSpecFrozenNonce (cellProjA s.kernel a a) (-amt) (cellProjA s'.kernel a a) := by
-  refine ⟨?_, rfl, rfl, fun _ => rfl, rfl, rfl⟩
-  show s'.kernel.bal a a = s.kernel.bal a a - (-amt)
-  rw [hspec.2.1]
-  have := (recBurn_ledger_correct s.kernel.bal cell a amt hspec.1.2.2.2.2.2.1).2.1
-  omega
+  refine ⟨?_, Int.ModEq.refl _, Int.ModEq.refl _, fun _ => Int.ModEq.refl _,
+    Int.ModEq.refl _, Int.ModEq.refl _⟩
+  have h : s'.kernel.bal a a = s.kernel.bal a a - (-amt) := by
+    rw [hspec.2.1]
+    have := (recBurn_ledger_correct s.kernel.bal cell a amt hspec.1.2.2.2.2.2.1).2.1
+    omega
+  show s'.kernel.bal a a ≡ s.kernel.bal a a - (-amt) [ZMOD 2013265921]
+  rw [h]
 
 /-- **`unify_burn_exec` — same, stated against the executor directly.** A committed
 `recCBurnAsset s actor cell a amt = some s'` (the REAL record-kernel transition) projects per-entry to
@@ -460,7 +475,10 @@ universe-A ledger nonce). -/
 theorem exec_nonce_is_frozen_not_ticked (s s' : RecChainedState) (actor cell : CellId) (a : AssetId)
     (amt : ℤ) (h : recCBurnAsset s actor cell a amt = some s') :
     (cellProjA s'.kernel cell a).nonce = (cellProjA s.kernel cell a).nonce :=
-  (unify_burn_exec s s' actor cell a amt h).2.2.1
+  -- `cellProjA` freezes the projected ledger-entry nonce to `0` before AND after (universe-A's burn
+  -- touches only `bal`), so this holds LITERALLY (`0 = 0`) — a strictly stronger ℤ statement than the
+  -- mod-p nonce-freeze clause of `unify_burn_exec` that it witnesses.
+  rfl
 
 /-- **`descriptor_agrees_with_executor` — THE per-cell circuit⟺executor agreement (modulo the
 nonce-tick gap).** Suppose (a) the RUNNABLE descriptor is satisfied on a genuine burn row and its
@@ -476,21 +494,21 @@ theorem descriptor_agrees_with_executor
     (hgatesat : satisfiedVm hash burnVmDescriptor env true false)
     (hsat : satisfiedVm hash burnVmDescriptor env true true)
     (hexec : recCBurnAsset s actor cell a amt = some s') :
-    post.balLo = (cellProjA s'.kernel cell a).balLo
-    ∧ post.balHi = (cellProjA s'.kernel cell a).balHi
-    ∧ (∀ i, post.fields i = (cellProjA s'.kernel cell a).fields i)
-    ∧ post.capRoot = (cellProjA s'.kernel cell a).capRoot
-    ∧ post.reserved = (cellProjA s'.kernel cell a).reserved := by
+    post.balLo ≡ (cellProjA s'.kernel cell a).balLo [ZMOD 2013265921]
+    ∧ post.balHi ≡ (cellProjA s'.kernel cell a).balHi [ZMOD 2013265921]
+    ∧ (∀ i, post.fields i ≡ (cellProjA s'.kernel cell a).fields i [ZMOD 2013265921])
+    ∧ post.capRoot ≡ (cellProjA s'.kernel cell a).capRoot [ZMOD 2013265921]
+    ∧ post.reserved ≡ (cellProjA s'.kernel cell a).reserved [ZMOD 2013265921] := by
   obtain ⟨hcirc, _⟩ :=
     burnDescriptor_full_sound hash env hrow (cellProjA s.kernel cell a) post amt henc hgatesat hsat
   obtain ⟨hcLo, hcHi, _hcN, hcF, hcCap, hcRes⟩ := hcirc
   obtain ⟨heLo, heHi, _heN, heF, heCap, heRes⟩ := unify_burn_exec s s' actor cell a amt hexec
   refine ⟨?_, ?_, ?_, ?_, ?_⟩
-  · rw [hcLo, heLo]
-  · rw [hcHi, heHi]
-  · intro i; rw [hcF i, heF i]
-  · rw [hcCap, heCap]
-  · rw [hcRes, heRes]
+  · exact hcLo.trans heLo.symm
+  · exact hcHi.trans heHi.symm
+  · intro i; exact (hcF i).trans (heF i).symm
+  · exact hcCap.trans heCap.symm
+  · exact hcRes.trans heRes.symm
 
 /-! ## §8 — NON-VACUITY: a concrete burn that the descriptor accepts; one it rejects.
 
@@ -524,11 +542,12 @@ theorem goodBurnRow_isBurnRow : IsBurnRow goodBurnRow := by
 /-- **NON-VACUITY (witness TRUE).** `goodBurnRow` REALIZES the burn intent: `bal_lo 100 → 70 = 100 - 30`,
 nonce ticks `5 → 6`, frame frozen. So the faithfulness biconditional's intent side is inhabited. -/
 theorem goodBurnRow_realizes_intent : BurnRowIntent goodBurnRow := by
+  have emod : ∀ {a b : ℤ}, a = b → a ≡ b [ZMOD 2013265921] := fun h => h ▸ Int.ModEq.refl _
   unfold BurnRowIntent goodBurnRow
   simp only [sbCol, saCol, prmCol, selB.BURN, STATE_BEFORE_BASE, STATE_AFTER_BASE, PARAM_BASE,
     NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.BALANCE_LO, state.BALANCE_HI, state.NONCE,
     state.CAP_ROOT, state.RESERVED, state.FIELD_BASE, param.BURN_AMOUNT_LO]
-  refine ⟨by norm_num, rfl, by norm_num, rfl, rfl, ?_⟩
+  refine ⟨emod (by norm_num), emod rfl, emod (by norm_num), emod rfl, emod rfl, ?_⟩
   intro i hi
   have e1 : (76 + (3 + i) = 46) = False := by simp; omega
   have e2 : (76 + (3 + i) = 54) = False := by simp; omega
@@ -543,6 +562,7 @@ theorem goodBurnRow_realizes_intent : BurnRowIntent goodBurnRow := by
   have f5 : (54 + (3 + i) = 78) = False := by simp; omega
   have f6 : (54 + (3 + i) = 69) = False := by simp; omega
   simp only [e1, e2, e3, e4, e5, e6, f1, f2, f3, f4, f5, f6, if_false]
+  exact Int.ModEq.refl _
 
 /-- A FORGED burn row: `goodBurnRow` with post-`bal_lo` tampered to `999 ≠ 70`. -/
 def badBurnRow : VmRowEnv where
@@ -553,11 +573,10 @@ def badBurnRow : VmRowEnv where
 /-- **NON-VACUITY (witness FALSE / concrete anti-ghost).** `badBurnRow`'s post-`bal_lo` is NOT the
 debit, so `gBalLoDebit` REJECTS it — a concrete UNSAT. -/
 theorem badBurnRow_rejected : ¬ (VmConstraint.gate gBalLoDebit).holdsVm badBurnRow false false := by
-  apply burnVm_rejects_wrong_balance
-  simp only [badBurnRow, goodBurnRow, sbCol, saCol, prmCol, selB.BURN, STATE_BEFORE_BASE,
-    STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.BALANCE_LO,
-    state.NONCE, param.BURN_AMOUNT_LO]
-  norm_num
+  apply burnVm_rejects_wrong_balance <;>
+    simp only [badBurnRow, goodBurnRow, sbCol, saCol, prmCol, selB.BURN, STATE_BEFORE_BASE,
+      STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.BALANCE_LO,
+      state.NONCE, param.BURN_AMOUNT_LO] <;> norm_num
 
 /-! ## §8½ — THE CLASS-A CAPSTONE (per-cell, the transfer bar exactly).
 
@@ -582,12 +601,12 @@ theorem burnDescriptor_classA (hash : List ℤ → ℤ) (env : VmRowEnv) (hrow :
     (hsat : satisfiedVm hash burnVmDescriptor env true true)
     (hexec : recCBurnAsset s actor cell a amt = some s') :
     CellBurnSpec (cellProjA s.kernel cell a) amt post
-    ∧ post.commit = env.pub pi.NEW_COMMIT
-    ∧ post.balLo = (cellProjA s'.kernel cell a).balLo
-    ∧ post.balHi = (cellProjA s'.kernel cell a).balHi
-    ∧ (∀ i, post.fields i = (cellProjA s'.kernel cell a).fields i)
-    ∧ post.capRoot = (cellProjA s'.kernel cell a).capRoot
-    ∧ post.reserved = (cellProjA s'.kernel cell a).reserved := by
+    ∧ post.commit ≡ env.pub pi.NEW_COMMIT [ZMOD 2013265921]
+    ∧ post.balLo ≡ (cellProjA s'.kernel cell a).balLo [ZMOD 2013265921]
+    ∧ post.balHi ≡ (cellProjA s'.kernel cell a).balHi [ZMOD 2013265921]
+    ∧ (∀ i, post.fields i ≡ (cellProjA s'.kernel cell a).fields i [ZMOD 2013265921])
+    ∧ post.capRoot ≡ (cellProjA s'.kernel cell a).capRoot [ZMOD 2013265921]
+    ∧ post.reserved ≡ (cellProjA s'.kernel cell a).reserved [ZMOD 2013265921] := by
   obtain ⟨hspec, hcommit⟩ :=
     burnDescriptor_full_sound hash env hrow (cellProjA s.kernel cell a) post amt henc hgatesat hsat
   obtain ⟨hLo, hHi, hF, hCap, hRes⟩ :=
