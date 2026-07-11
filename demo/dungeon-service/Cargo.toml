@@ -35,6 +35,10 @@ path = "src/main.rs"
 [dependencies]
 # THE DM — the provably-honest, un-jailbreakable narrator + world-cell + caps.
 attested-dm = { path = "../../attested-dm" }
+# THE SHARED DRAFT + EDIT MODEL — the collective co-authoring data heart: a Draft renders to
+# .dungeon source, an Edit is a bounded typed proposal, and dispose re-validates via parse_dungeon
+# (the validator disposes a voted-for breaking edit). The /coauthor lane wires this to the quorum.
+shared-draft = { path = "../../shared-draft" }
 # THE COLLECTIVE-CHOICE ENGINE — the quorum-certified voting substrate The Commons runs on
 # (privacy-voting `WriteOnce` ballots, `Monotonic` tallies, the polis `AffineLe` quorum gate).
 # The /party lane's crowd-vote resolves through THIS engine: a decision certifies only once the

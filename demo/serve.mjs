@@ -78,6 +78,11 @@ export async function buildParty() {
   return bundle("party.ts");
 }
 
+/** Bundle THE COMMONS FORGE (collective co-authoring — the crowd quorum-votes structured edits over /coauthor/*). */
+export async function buildCoauthor() {
+  return bundle("coauthor.ts");
+}
+
 /** Bundle THE FORGE (write a .dungeon, author + play it live over the /game service). */
 export async function buildForge() {
   return bundle("forge.ts");
@@ -137,12 +142,14 @@ export async function makeServer(port = 0, opts = {}) {
   const dungeonJs = await buildDungeon();
   const vaultJs = await buildVault();
   const partyJs = await buildParty();
+  const coauthorJs = await buildCoauthor();
   const forgeJs = await buildForge();
   const regionJs = await buildRegion();
   const index = await readFile(path.join(__dirname, "index.html"), "utf8");
   const dungeon = await readFile(path.join(__dirname, "dungeon.html"), "utf8");
   const vault = await readFile(path.join(__dirname, "vault.html"), "utf8");
   const party = await readFile(path.join(__dirname, "party.html"), "utf8");
+  const coauthor = await readFile(path.join(__dirname, "coauthor.html"), "utf8");
   const hub = await readFile(path.join(__dirname, "hub.html"), "utf8");
   const region = await readFile(path.join(__dirname, "region.html"), "utf8");
   const author = await readFile(path.join(__dirname, "author.html"), "utf8");
@@ -170,10 +177,10 @@ export async function makeServer(port = 0, opts = {}) {
       //    proxied to the native attested-dm service. There is no JS stand-in for either (both
       //    are a real GameSession over the engine); the page needs the native service
       //    (set DM_URL / DM_PORT). ──
-      if (url.startsWith("/game/") || url.startsWith("/party/")) {
+      if (url.startsWith("/game/") || url.startsWith("/party/") || url.startsWith("/coauthor/")) {
         if (!DM_URL) {
           res.writeHead(503, { "content-type": "application/json; charset=utf-8" });
-          return res.end(JSON.stringify({ error: "the /game + /party API needs the native attested-dm dungeon-service; start it and set DM_URL or DM_PORT (default 8790)" }));
+          return res.end(JSON.stringify({ error: "the /game + /party + /coauthor API needs the native attested-dm dungeon-service; start it and set DM_URL or DM_PORT (default 8790)" }));
         }
         const body = method === "POST" ? await readBody(req) : undefined;
         const r = await fetch(`${DM_URL}${url}`, {
@@ -237,6 +244,10 @@ export async function makeServer(port = 0, opts = {}) {
       // ── The Collective Dungeon (the crowd steers one party by vote) ──
       if (url === "/party" || url === "/party.html") return send(res, party, MIME[".html"]);
       if (url === "/party.js") return send(res, partyJs, MIME[".js"]);
+
+      // ── The Commons Forge (the crowd co-authors one shared draft by quorum-certified vote) ──
+      if (url === "/coauthor" || url === "/coauthor.html" || url === "/commons-forge") return send(res, coauthor, MIME[".html"]);
+      if (url === "/coauthor.js") return send(res, coauthorJs, MIME[".js"]);
 
       // ── The Forge (write a .dungeon, author + play it live over the /game service) ──
       if (url === "/forge" || url === "/forge.html") return send(res, forge, MIME[".html"]);
