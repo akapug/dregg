@@ -49,8 +49,8 @@ use dregg_dice::{
 };
 
 use crate::{
-    slot_confined, world_binding, DmError, DmMove, DungeonMaster, PromptBinding, RandomnessRecord,
-    Receipt, RecordedDm, WorldCell, WorldEffect,
+    slot_confined, world_binding, DmError, DmMove, DungeonMaster, LoadError, PromptBinding,
+    RandomnessRecord, Receipt, RecordedDm, WorldCell, WorldEffect,
 };
 
 /// Domain separator for [`GameWorld::game_binding`] — the committed game identity a randomness
@@ -75,7 +75,7 @@ pub const LOOT_EVENT_KIND: &str = "loot";
 /// mutations, only *name* one of these moves. The [`resolve_action`] resolver then decides
 /// what (if anything) actually happens. Riding the chain via [`GameBinding`], the on-ledger
 /// receipt commits to exactly which typed move produced each turn.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum GameAction {
     /// Move toward a destination — named either by a room id or by an exit direction
     /// (`"north"`, `"down"`, …). Succeeds only through an OPEN exit from the current room.
@@ -155,7 +155,7 @@ impl GameAction {
 /// resolver admitted, and the room it acted in. Bound into the turn's receipt (see
 /// [`crate::chain_receipt_id`]) so the chain commits to the sequence of *moves*, not just the
 /// prose: a rewritten action or swapped room breaks the link.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct GameBinding {
     /// The typed action the resolver admitted this turn.
     pub action: GameAction,
@@ -1744,7 +1744,11 @@ fn move_effect(map: &GameWorld, world: &WorldCell, to_room: &str) -> WorldEffect
 /// flags, checked against the lose conditions (first) and then the win objective. A
 /// [`WorldEffect::Batch`] is folded so a multi-flag combat exchange (foe wounds + player wounds)
 /// is judged against the SAME post-state it lands.
-fn status_after(map: &GameWorld, world: &WorldCell, effect: Option<&WorldEffect>) -> GameStatus {
+pub(crate) fn status_after(
+    map: &GameWorld,
+    world: &WorldCell,
+    effect: Option<&WorldEffect>,
+) -> GameStatus {
     let mut room = world.scene.clone();
     let mut extra_items: BTreeSet<String> = BTreeSet::new();
     let mut removed_items: BTreeSet<String> = BTreeSet::new();
@@ -2258,6 +2262,124 @@ impl<B: GameBrain> GameSession<B> {
             replay: self.verify_replay(),
         }
     }
+
+    /// **Serialize this session to a portable [`crate::SaveGame`].** Captures the world identity
+    /// (a fingerprint of the static map), the current [`WorldCell`] state (scene / flags /
+    /// inventory), the full receipt ledger (every landed turn's receipt + fields + verifiable
+    /// randomness, minus the re-derivable attestation), the pinned DM notary seed, and the
+    /// randomness provider — enough to REPLAY and CONTINUE. See [`crate::savegame`] for exactly
+    /// what is captured and why it suffices, and [`GameSession::load`] for the fail-closed
+    /// reconstruction. Available for any brain; a loaded session uses the default [`ScriptedGm`].
+    pub fn save(&self) -> crate::SaveGame {
+        crate::SaveGame {
+            format_version: crate::SAVEGAME_FORMAT_VERSION,
+            world_fingerprint: crate::savegame::world_fingerprint(&self.map),
+            // A `GameSession` always narrates under the default modeled carrier
+            // (`DungeonMaster::recorded` → `DmAttestationCarrier::default`), so its notary seed is
+            // `DEFAULT_DM_SEED`; recorded explicitly so a future custom-carrier session round-trips.
+            dm_seed: crate::DEFAULT_DM_SEED,
+            rng: self.rng.clone(),
+            scene: self.world.scene.clone(),
+            flags: self.world.flags.clone(),
+            inventory: self.world.inventory.clone(),
+            ledger: crate::savegame::save_ledger(&self.world.ledger),
+        }
+    }
+}
+
+impl GameSession<ScriptedGm> {
+    /// **Reconstruct a session from a [`crate::SaveGame`] and its map, RE-VERIFYING fail-closed.**
+    /// The caller supplies the same static [`GameWorld`] the session was played on (a bundled
+    /// constructor, or [`crate::parse_dungeon`] over a `.dungeon` source) — the map is the registry
+    /// hook, its identity confirmed against the save's fingerprint. A save is accepted ONLY when,
+    /// in order:
+    ///
+    /// 1. the format version is understood and the map fingerprint matches ([`LoadError::Decode`] /
+    ///    [`LoadError::WorldMismatch`]);
+    /// 2. the rebuilt ledger passes the **integrity tier** [`WorldCell::verify_ledger`] — stored
+    ///    receipts recompute and the re-derived attestations verify ([`LoadError::ChainBroken`]);
+    /// 3. it passes the **re-execution tier** [`verify_ledger_replay`] — every recorded effect is
+    ///    the rule-correct resolution of its bound action from genesis ([`LoadError::ReplayMismatch`]);
+    /// 4. the saved scene/flags/inventory equal the state that re-execution reproduces
+    ///    ([`LoadError::WorldMismatch`]).
+    ///
+    /// A tampered or corrupt save fails one of these and is REFUSED — never silently resumed. On
+    /// success the returned session continues IDENTICALLY: the same next moves produce the same
+    /// effects and the same chain as if it had never been saved.
+    pub fn load(
+        save: &crate::SaveGame,
+        map: GameWorld,
+    ) -> Result<GameSession<ScriptedGm>, LoadError> {
+        // (0) FORMAT — refuse a version this build does not understand.
+        if save.format_version != crate::SAVEGAME_FORMAT_VERSION {
+            return Err(LoadError::Decode(format!(
+                "unsupported savegame format version {} (this build reads v{})",
+                save.format_version,
+                crate::SAVEGAME_FORMAT_VERSION
+            )));
+        }
+        // (1) WORLD IDENTITY — the provided map must be the one the session was played on.
+        if crate::savegame::world_fingerprint(&map) != save.world_fingerprint {
+            return Err(LoadError::WorldMismatch {
+                reason: "the provided GameWorld does not match the one this session was saved on \
+                         (map fingerprint mismatch)"
+                    .to_string(),
+            });
+        }
+        // (2) REBUILD the attested ledger: re-derive each deterministic modeled attestation from
+        //     the pinned notary seed + the recorded narration, reassembling with the stored receipt.
+        let carrier = crate::DmAttestationCarrier::from_seed(&save.dm_seed);
+        let config = carrier.config().clone();
+        let ledger = crate::savegame::rebuild_ledger(&carrier, &save.ledger)?;
+
+        // Assemble the reconstructed world-cell (scene/flags/inventory + the rebuilt ledger).
+        let mut world = WorldCell::new(save.scene.clone());
+        world.flags = save.flags.clone();
+        world.inventory = save.inventory.clone();
+        world.ledger = ledger;
+
+        // (3) TIER 1 — chain integrity over the rebuilt ledger against the STORED receipts. A
+        //     tampered recorded field (effect / action / narration / binding) no longer recomputes
+        //     its stored receipt id → ChainBroken.
+        world
+            .verify_ledger(&config)
+            .map_err(LoadError::ChainBroken)?;
+
+        // (4) TIER 2 — from-genesis RE-EXECUTION: every recorded effect must be the rule-correct
+        //     resolution of its bound action against `map`. Catches a rule-incorrect effect a
+        //     re-linked (chain-valid) forgery carries, and re-verifies every loot draw.
+        verify_ledger_replay(&map, &world.ledger).map_err(LoadError::ReplayMismatch)?;
+
+        // (5) STATE CONSISTENCY — the SAVED scene/flags/inventory must equal the state the ledger
+        //     reproduces on re-execution. A tampered saved flag/scene/inventory (that leaves the
+        //     ledger intact, so tiers 1+2 pass) is caught HERE.
+        let replay = crate::savegame::replay_final_state(&map, &world.ledger);
+        if replay.scene != world.scene
+            || replay.flags != world.flags
+            || replay.inventory != world.inventory
+        {
+            return Err(LoadError::WorldMismatch {
+                reason:
+                    "the saved world state (scene/flags/inventory) does not match the state the \
+                         recorded ledger reproduces on re-execution"
+                        .to_string(),
+            });
+        }
+
+        // (6) STATUS — recomputed from the reconstructed state (never trusted from the save).
+        let status = status_after(&map, &world, None);
+
+        // Reassemble the session exactly as `open` would, with the reconstructed world + provider.
+        let dm = DungeonMaster::recorded(crate::DmCaps::narrator(map.all_items()));
+        Ok(GameSession {
+            map,
+            dm,
+            brain: ScriptedGm,
+            world,
+            status,
+            rng: save.rng.clone(),
+        })
+    }
 }
 
 /// **The two independent verification claims of a session, reported separately.** The design's
@@ -2513,7 +2635,7 @@ pub const DEFAULT_GAME_RNG_SEED: [u8; 32] = [0x5E; 32];
 /// draw, and the draw is a pure reconstructible function of the verified seed — but commit-reveal
 /// does NOT close selective abort (the last revealer can withhold on an unfavorable draw). The
 /// registered-VRF + delayed-beacon `Hybrid` source (a follow-up) closes that.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct SessionRandomness {
     server_secret: [u8; 32],
     player_secret: [u8; 32],

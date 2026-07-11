@@ -1435,6 +1435,8 @@ dependencies = [
  "dregg-dice",
  "dregg-node-target",
  "dregg-zkoracle-prove",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

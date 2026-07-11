@@ -84,6 +84,12 @@ pub use game::{
 pub mod dungeon_dsl;
 pub use dungeon_dsl::{parse_dungeon, parse_world, validate, DungeonError, Issue, Severity};
 
+// SAVE / LOAD PERSISTENCE — serialize a session (world identity + current world state + the full
+// receipt ledger + the randomness provider) to a portable `SaveGame`, and reconstruct + RE-VERIFY
+// it fail-closed on load. Purely additive: every existing playthrough is untouched.
+pub mod savegame;
+pub use savegame::{LoadError, SaveGame, SavedEntry, SAVEGAME_FORMAT_VERSION};
+
 use dregg_dice::{EvidenceKind, RandomnessEvidence, RandomnessRequest};
 use dregg_node_target::{NodeTarget, SubmittedTurn};
 use dregg_zkoracle_prove::{
@@ -252,7 +258,7 @@ pub fn genesis_prev() -> [u8; 32] {
 /// already commits to the template hash + world + player so none of the three can be swapped
 /// after the fact without breaking the chain. A turn with no player input (an explicit
 /// [`DungeonMaster::narrate_move`]) carries `None`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PromptBinding {
     /// The committed template's identity — [`PromptTemplate::template_hash`].
     pub template_hash: [u8; 32],
@@ -292,7 +298,7 @@ impl PromptBinding {
 /// verified seed — so grinding `draw_count`/action/pre-state is always detectable. It does **not**
 /// close selective-abort (the last revealer can withhold on an unfavorable draw); the registered-VRF
 /// + delayed-beacon `Hybrid` source is the follow-up that closes that. See `dregg_dice` crate docs.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RandomnessRecord {
     /// Everything bound before the result (the seed's binding context) — its event id rides the chain.
     pub request: RandomnessRequest,
@@ -523,7 +529,7 @@ fn clean_field(text: &str) -> String {
 /// A world-effect the DM proposes alongside a narration — the cap-gated affordance that
 /// advances the world. Each is checked against [`DmCaps`] before it lands; an ungranted
 /// one is refused fail-closed.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum WorldEffect {
     /// Advance the current scene to a named passage.
     AdvanceScene(String),

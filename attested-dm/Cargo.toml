@@ -67,6 +67,14 @@ blake3 = "1"
 # confirm it landed). One flip from a live federation; a rejected submit refuses the turn.
 dregg-node-target = { path = "../node-target" }
 
+# SAVE / LOAD PERSISTENCE — a `SaveGame` serializes a session (world identity + the current
+# world state + the full receipt ledger + the randomness provider) to a portable JSON form and
+# `GameSession::load` reconstructs + RE-VERIFIES it fail-closed (chain integrity + from-genesis
+# re-execution). `dregg-dice`'s randomness records already derive serde, so the whole ledger
+# round-trips. Unlocks resumable web / cross-session play. See `src/savegame.rs`.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
 [features]
 # THE CROWN, run REAL-LOCALLY. Attest the narration over a GENUINE local MPC-TLS 2PC
 # roundtrip (zkoracle-prove's vendored TLSNotary) instead of the modeled ed25519
