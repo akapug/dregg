@@ -770,3 +770,18 @@ notary) needs ember's operational input (real key + notary deploy) — flagged, 
 - FIRING: Phase-A scale [a6495e1 — combat/loot/resource as real executor teeth + name the multi-cell/cross-cell
   ceiling]; Phase-D lowering [a2eebb7 — the StateConstraint→ConstraintExpr compiler + bit-decomposition range gadgets,
   leaf-level (full fold upstream-gated)]. Next: E-Bedrock MPC-TLS spike; track Lane-D's limb migration to unblock the fold.
+
+## Rebuild progress — Phase-A scale + D-lowering COMMITTED, ceilings de-risked (2026-07-11)
+- ✅ Phase-A SCALE committed (dungeon-on-dregg, driven 11/11 + spween-dregg 9/9): 5 richer mechanics as REAL executor
+  teeth — combat HP floor (FieldGte), loot first-grabber (WriteOnce), mana budget (FieldLteField), one-way descent
+  (Monotonic), heap inventory (HeapField, 20 items past the 15 registers). Each: driven legal-commit + illegal-refusal
+  + anti-ghost. CEILINGS de-risked: multi-cell = a CONCURRENCY/authority wall not capacity; cross-cell gating primitive
+  EXISTS (Witnessed/ObservedFieldEquals) — wiring not inventing.
+- ✅ D-LOWERING committed (game-turn-slice, driven): the StateConstraint->ConstraintExpr compiler + a real bit-
+  decomposition range gadget — ordering teeth (FieldGte/Monotonic) lower + prove as leaves, forged-ordering rejected.
+  Phase D = wiring + wait for Lane D's limb fix.
+THE TRUST SPINE IS REAL END-TO-LEAF (all driven by me): game rules -> real executor turn (A) -> real circuit leaf w/
+ordering teeth (D-lowering) -> [full fold, Lane-D gated] -> verify_history. FIRING: E-Bedrock provenance spike
+[a955905]; Phase-B narration-into-real-TurnReceipt [a8402cb]. Next: harvest E+B; Phase C (collective rebind onto real
+turns); multi-cell + cross-cell wiring (Witnessed); track Lane D for the full fold; then the stakeholder surfaces
+(discord-bot players, author universe-compile).
