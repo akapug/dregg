@@ -934,3 +934,14 @@ gated/mana-gated spells]. (Both append their own lib.rs mod line; main loop reco
 lane (the bot). WHEN THE PAYMENT LANE LANDS: verify+commit it, then the bot swarm — ENGINE MIGRATION (first-class) +
 gallery->UGC + Midjourney orchestration (wire dormant discord_caps) + dead-code sweep. Balanced: substance (real
 engine + game depth) + surface (bot platform) + economy (payments).
+
+## ✅ GAME DEPTH committed (2026-07-11) — the rebalance delivered
+dungeon-on-dregg now has real RPG depth (driven by me, 87/87): a tactical turn-based COMBAT engine (party vs enemies,
+initiative, abilities, status effects, executor teeth: HP-floor/turn-order/cost/cooldown/execute-only-weakened);
+d20 SKILL CHECKS (pass/fail a real FieldLteField tooth, check-gated door); class/mana-gated SPELLS. Verifiable dice
+bound into real turns, forgeries caught. The engine is genuinely deep now, ready for the bot to migrate onto.
+STATE: widths ✅ (deploy/progression/procgen/UGC/MUD) · revenue foundation ✅ (dregg-pay) · game depth ✅ (combat/
+skills/spells). RUNNING: bot payment integration [aa75cdf]. PENDING (when it lands): the bot swarm — #1 ENGINE
+MIGRATION (bot /dungeon attested-dm -> real dungeon-on-dregg, now DEEP), then gallery->UGC + Midjourney orchestration
+(wire dormant discord_caps) + dead-code sweep. Honest floors still open: the crown (verify_history, Lane-D-gated),
+non-grindable-dice-as-default, cross-node finality.
