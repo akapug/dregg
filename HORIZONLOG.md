@@ -7375,3 +7375,21 @@ Remaining wave residuals (followups): consensus-mint + holdings live geyser feed
 live relayers; docs+article reframe to lead with proof-of-holdings. gnark wrap next rung: batch-STARK
 per-table (logup + NPO tables) → message-root proof-bound (keccak-at-wrap) → tie to DreggSettlement.
 Deploy-gate design note + microsite shipped (docs/deos/DEPLOY-GATE-DESIGN.md).
+
+## FFI link-up LIVE on hbox + relayer/gnark/docs wave (2026-07-11, Fable)
+
+THE MILESTONE: the holdings grant DECISION now runs verified-Lean-called-from-Rust FOR REAL, not just wired.
+Relocated Dregg2.Bridge.ProofOfHoldings under Dregg2/ (the splice walks Dregg2/**/*.c); hbox archive build
+(ssh hboxip, ~2min warm) confirms: nm libdregg_lean.a finds dregg_holding_grant_weight,
+holding_grant_weight_core_available()=true, cargo test -p dregg-governance holding = 9/9 (the 6 grant-path
+tests that skipped now EXECUTE the FFI path end-to-end). The proof governs the running code.
+
+Wave landed (3 lanes, audits pass): relayer path through the InterchainAdapter trust-dial + destination-
+federation check (method on the relayer, tested both polarities; production-loop wiring = followup);
+Poseidon2-w24 gnark gadget (fork-extracted constants, for the NPO segment-digest sponge); docs reframed to
+lead with proof-of-holdings (lock = the exception), FFI status corrected to LINKED+VERIFIED.
+
+Open frontier: wrap batch-STARK (multi-height openings + logup bus + NPO tables) → message-root proof-bound
+(keccak-at-wrap) → tie to DreggSettlement; wire the relayer adapter path into a production loop; the same
+Lean-first-@[export] correction onto the InterchainAdapter decision; consensus-mint/holdings live geyser
+feed + G1 in-circuit fold.
