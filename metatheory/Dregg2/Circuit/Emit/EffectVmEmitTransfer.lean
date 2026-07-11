@@ -63,6 +63,40 @@ def eSelNoop : EmittedExpr := .var sel.NOOP
 /-- `a - b` as an `EmittedExpr` (`a + (-1)·b`). -/
 def eSub (a b : EmittedExpr) : EmittedExpr := .add a (.mul (.const (-1)) b)
 
+/-! ## §0.5 — Field-denotation glue.
+
+`VmConstraint.holdsVm` on a gate now asserts the body is `≡ 0 [ZMOD p]` (`p = 2013265921`, the
+BabyBear prime), NOT `= 0` over ℤ — the DEPLOYED field constraint. These helpers translate between a
+gate body vanishing mod `p` and the field-level move it enforces, using `p`'s primality (proved in
+`BabyBearFriField`) and the deployed range-check canonicality `0 ≤ cell < p`. -/
+
+/-- The BabyBear modulus `p = 2013265921` is prime (over ℤ). Reuses the campaign's canonical fact. -/
+theorem pPrimeInt : Prime (2013265921 : ℤ) := by
+  exact_mod_cast Nat.prime_iff_prime_int.mp Dregg2.Circuit.BabyBearFriField.babyBearP_prime
+
+/-- Lift an integer equality to a mod-`p` congruence (the POSITIVE-direction glue: a real trace with
+`residual = 0` satisfies the field gate `residual ≡ 0`). -/
+theorem eqToModEq {a b : ℤ} (h : a = b) : a ≡ b [ZMOD 2013265921] := by rw [h]
+
+/-- A gate body `x = a − b` vanishes mod `p` IFF the two field values are congruent mod `p`. This is
+the field-faithful equivalence: the gate `x ≡ 0 [ZMOD p]` says exactly `a ≡ b [ZMOD p]`. -/
+theorem gate_modEq_iff {x a b : ℤ} (hx : x = a - b) :
+    (x ≡ 0 [ZMOD 2013265921]) ↔ (a ≡ b [ZMOD 2013265921]) := by
+  rw [Int.modEq_zero_iff_dvd, Int.modEq_iff_dvd, hx]
+  constructor
+  · rintro ⟨k, hk⟩; exact ⟨-k, by omega⟩
+  · rintro ⟨k, hk⟩; exact ⟨-k, by omega⟩
+
+/-- NEGATIVE-tooth glue: a gate body `x = a − b` with BOTH field values CANONICAL (`0 ≤ · < p`, the
+deployed range-check invariant) does NOT vanish mod `p` when `a ≠ b`. Prime `p` is unnecessary here —
+canonicality forces the residual into `(−p, p)`, so `p ∣ residual` collapses it to `0`. -/
+theorem not_modEq_zero_of_canon {x a b : ℤ} (hx : x = a - b)
+    (ha : 0 ≤ a ∧ a < 2013265921) (hb : 0 ≤ b ∧ b < 2013265921) (hne : a ≠ b) :
+    ¬ (x ≡ 0 [ZMOD 2013265921]) := by
+  rw [Int.modEq_zero_iff_dvd, hx]
+  rintro ⟨k, hk⟩
+  omega
+
 /-! ## §1 — The TRANSFER gate bodies (term-for-term the running prover's, ungated by `s_transfer`).
 
 We emit the gates ALREADY specialized to a transfer row: the running prover multiplies each by
@@ -198,23 +232,29 @@ ticks by one, and `direction` is a bit. This is the EffectVM-row projection of
 `CircuitSpecTriangle.intentTransfer`'s debit-src/credit-dst (here the actor cell's own limb moves
 by the signed amount; `direction = 1` debits, `direction = 0` credits). -/
 
-/-- **`TransferRowIntent env`** — the intended transfer move on the row `env.loc`. -/
+/-- **`TransferRowIntent env`** — the intended transfer move on the row `env.loc`. FIELD-FAITHFUL:
+each clause is a congruence mod `p = 2013265921` (the BabyBear prime), because the deployed circuit
+enforces the move IN THE FIELD — a canonical trace can carry an ℤ residual equal to `p ≠ 0`, so the
+old ℤ `=` was provably too strong. The gate set holds IFF this field move holds (no canonicality
+needed for the biconditional — both sides live in the field). -/
 def TransferRowIntent (env : VmRowEnv) : Prop :=
-  -- direction is a bit
-  (env.loc (prmCol param.DIRECTION) = 0 ∨ env.loc (prmCol param.DIRECTION) = 1)
-  -- balance lo moves by the signed amount: new = old + amount·(1 - 2·direction)
+  -- direction is a bit (mod p)
+  (env.loc (prmCol param.DIRECTION) ≡ 0 [ZMOD 2013265921]
+    ∨ env.loc (prmCol param.DIRECTION) ≡ 1 [ZMOD 2013265921])
+  -- balance lo moves by the signed amount: new ≡ old + amount·(1 - 2·direction)
   ∧ env.loc (saCol state.BALANCE_LO)
-      = env.loc (sbCol state.BALANCE_LO)
-        + env.loc (prmCol param.AMOUNT) * (1 - 2 * env.loc (prmCol param.DIRECTION))
+      ≡ env.loc (sbCol state.BALANCE_LO)
+        + env.loc (prmCol param.AMOUNT) * (1 - 2 * env.loc (prmCol param.DIRECTION)) [ZMOD 2013265921]
   -- balance hi unchanged
-  ∧ env.loc (saCol state.BALANCE_HI) = env.loc (sbCol state.BALANCE_HI)
+  ∧ env.loc (saCol state.BALANCE_HI) ≡ env.loc (sbCol state.BALANCE_HI) [ZMOD 2013265921]
   -- nonce ticks by one
-  ∧ env.loc (saCol state.NONCE) = env.loc (sbCol state.NONCE) + 1
+  ∧ env.loc (saCol state.NONCE) ≡ env.loc (sbCol state.NONCE) + 1 [ZMOD 2013265921]
   -- cap root + reserved fixed
-  ∧ env.loc (saCol state.CAP_ROOT) = env.loc (sbCol state.CAP_ROOT)
-  ∧ env.loc (saCol state.RESERVED) = env.loc (sbCol state.RESERVED)
+  ∧ env.loc (saCol state.CAP_ROOT) ≡ env.loc (sbCol state.CAP_ROOT) [ZMOD 2013265921]
+  ∧ env.loc (saCol state.RESERVED) ≡ env.loc (sbCol state.RESERVED) [ZMOD 2013265921]
   -- the 8 fields fixed
-  ∧ (∀ i < 8, env.loc (saCol (state.FIELD_BASE + i)) = env.loc (sbCol (state.FIELD_BASE + i)))
+  ∧ (∀ i < 8, env.loc (saCol (state.FIELD_BASE + i))
+      ≡ env.loc (sbCol (state.FIELD_BASE + i)) [ZMOD 2013265921])
 
 /-! ## §6 — The transfer-row environment hypothesis (selectors).
 
@@ -252,28 +292,28 @@ theorem transferRowGates_holds_iff (env : VmRowEnv) (hrow : IsTransferRow env) :
       apply h
       simp only [List.mem_append, List.mem_map, List.mem_range]
       exact Or.inr ⟨i, hi, rfl⟩
-    -- unfold each holds
+    -- unfold each holds (now each body is `≡ 0 [ZMOD p]`)
     simp only [VmConstraint.holdsVm, gBalLo, gBalHi, gDirBool, gNonce, gCapPass, gResPass,
       eSA, eSB, ePrm, eSub, eSelNoop, EmittedExpr.eval] at hLo hHi hDir hNon hCap hRes
     rw [hsN] at hNon
     refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
-    · -- direction bit, from direction·(direction-1) = 0
-      have hd0 : env.loc (prmCol param.DIRECTION)
-                  * (env.loc (prmCol param.DIRECTION) + -1) = 0 := hDir
-      rcases mul_eq_zero.mp hd0 with hd | hd
-      · exact Or.inl hd
-      · exact Or.inr (by linarith)
-    · -- balance lo move: hLo is `(new - old) + (-amount + 2·(dir·amount)) = 0`.
-      nlinarith [hLo]
-    · linarith [hHi]
-    · -- nonce: hNon is `(new - old) - (1 - 0) = 0`.
-      linarith [hNon]
-    · linarith [hCap]
-    · linarith [hRes]
+    · -- direction bit, from p ∣ direction·(direction-1); p prime ⟹ p ∣ dir ∨ p ∣ (dir-1)
+      rw [Int.modEq_zero_iff_dvd] at hDir
+      rcases (pPrimeInt.dvd_mul.mp hDir) with hd | hd
+      · exact Or.inl (by rw [Int.modEq_zero_iff_dvd]; exact hd)
+      · refine Or.inr ?_
+        rw [Int.modEq_iff_dvd]; obtain ⟨k, hk⟩ := hd; exact ⟨-k, by omega⟩
+    · -- balance lo move: hLo is `(new - old) + (-amount + 2·(dir·amount)) ≡ 0`.
+      exact (gate_modEq_iff (by ring)).mp hLo
+    · exact (gate_modEq_iff (by ring)).mp hHi
+    · -- nonce: hNon is `(new - old) - (1 - 0) ≡ 0`.
+      exact (gate_modEq_iff (by ring)).mp hNon
+    · exact (gate_modEq_iff (by ring)).mp hCap
+    · exact (gate_modEq_iff (by ring)).mp hRes
     · intro i hi
-      have := hFld i hi
-      simp only [VmConstraint.holdsVm, gFieldPass, eSA, eSB, eSub, EmittedExpr.eval] at this
-      linarith
+      have hfi := hFld i hi
+      simp only [VmConstraint.holdsVm, gFieldPass, eSA, eSB, eSub, EmittedExpr.eval] at hfi
+      exact (gate_modEq_iff (by ring)).mp hfi
   · rintro ⟨hDir, hLo, hHi, hNon, hCap, hRes, hFld⟩ c hc
     simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
       List.mem_range] at hc
@@ -281,25 +321,33 @@ theorem transferRowGates_holds_iff (env : VmRowEnv) (hrow : IsTransferRow env) :
     rcases hc with (rfl | rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩
     · -- gBalLo
       simp only [VmConstraint.holdsVm, gBalLo, eSA, eSB, ePrm, eSub, EmittedExpr.eval]
-      rw [hLo]; ring
+      exact (gate_modEq_iff (by ring)).mpr hLo
     · -- gBalHi
       simp only [VmConstraint.holdsVm, gBalHi, eSA, eSB, eSub, EmittedExpr.eval]
-      rw [hHi]; ring
-    · -- gDirBool
+      exact (gate_modEq_iff (by ring)).mpr hHi
+    · -- gDirBool: from `dir ≡ 0 ∨ dir ≡ 1` the boolean gate `dir·(dir-1) ≡ 0` holds
       simp only [VmConstraint.holdsVm, gDirBool, ePrm, EmittedExpr.eval]
-      rcases hDir with hd | hd <;> rw [hd] <;> ring
+      rw [Int.modEq_zero_iff_dvd]
+      rcases hDir with hd | hd
+      · rw [Int.modEq_zero_iff_dvd] at hd
+        exact dvd_mul_of_dvd_left hd _
+      · rw [Int.modEq_iff_dvd] at hd
+        have hdd : (2013265921 : ℤ) ∣ (env.loc (prmCol param.DIRECTION) + -1) := by
+          obtain ⟨k, hk⟩ := hd; exact ⟨-k, by omega⟩
+        exact dvd_mul_of_dvd_right hdd _
     · -- gNonce
       simp only [VmConstraint.holdsVm, gNonce, eSA, eSB, eSub, eSelNoop, EmittedExpr.eval]
-      rw [hsN, hNon]; ring
+      rw [hsN]
+      exact (gate_modEq_iff (by ring)).mpr hNon
     · -- gCapPass
       simp only [VmConstraint.holdsVm, gCapPass, eSA, eSB, eSub, EmittedExpr.eval]
-      rw [hCap]; ring
+      exact (gate_modEq_iff (by ring)).mpr hCap
     · -- gResPass
       simp only [VmConstraint.holdsVm, gResPass, eSA, eSB, eSub, EmittedExpr.eval]
-      rw [hRes]; ring
+      exact (gate_modEq_iff (by ring)).mpr hRes
     · -- gFieldPass i
       simp only [VmConstraint.holdsVm, gFieldPass, eSA, eSB, eSub, EmittedExpr.eval]
-      rw [hFld i hi]; ring
+      exact (gate_modEq_iff (by ring)).mpr (hFld i hi)
 
 /-- **`transferVm_faithful` — THE deliverable (the load-bearing direction + converse).** On a
 transfer row, the emitted descriptor's per-row gates hold IFF the transfer intent holds. So the
@@ -323,27 +371,38 @@ theorem transferVm_rejects_wrong_output (env : VmRowEnv) (hrow : IsTransferRow e
   fun h => hwrong ((transferVm_faithful env hrow).mp h)
 
 /-- **Anti-ghost (balance tamper).** A transfer row whose post-`bal_lo` is NOT the signed move has
-no satisfying gate set — the `gBalLo` gate alone rejects it (UNSAT). -/
+no satisfying gate set — the `gBalLo` gate alone rejects it (UNSAT). FIELD-FAITHFUL: the tooth now
+rejects a field-`≢` output, so it needs the DEPLOYED range-check canonicality — the after-balance
+(`saCol BALANCE_LO`, a `transferRanges` wire) and the intended debited balance both lie in `[0, p)`.
+Under canonicality a WRONG `bal_lo` differs from the intended value by less than `p`, so `p` cannot
+divide the residual and the field gate is UNSAT (no wrap-around forgery). -/
 theorem transferVm_rejects_wrong_balance (env : VmRowEnv)
+    (hcanonNew : 0 ≤ env.loc (saCol state.BALANCE_LO)
+      ∧ env.loc (saCol state.BALANCE_LO) < 2013265921)
+    (hcanonMove : 0 ≤ env.loc (sbCol state.BALANCE_LO)
+        + env.loc (prmCol param.AMOUNT) * (1 - 2 * env.loc (prmCol param.DIRECTION))
+      ∧ env.loc (sbCol state.BALANCE_LO)
+        + env.loc (prmCol param.AMOUNT) * (1 - 2 * env.loc (prmCol param.DIRECTION)) < 2013265921)
     (hwrong : env.loc (saCol state.BALANCE_LO)
       ≠ env.loc (sbCol state.BALANCE_LO)
         + env.loc (prmCol param.AMOUNT) * (1 - 2 * env.loc (prmCol param.DIRECTION))) :
     ¬ (VmConstraint.gate gBalLo).holdsVm env false false := by
   simp only [VmConstraint.holdsVm, gBalLo, eSA, eSB, ePrm, eSub, EmittedExpr.eval]
-  intro h
-  apply hwrong
-  linarith [h]
+  exact not_modEq_zero_of_canon (by ring) hcanonNew hcanonMove hwrong
 
 /-- **Anti-ghost (nonce tamper).** A transfer row whose nonce does NOT tick by one (`s_noop = 0`)
-fails the `gNonce` gate. -/
+fails the `gNonce` gate. FIELD-FAITHFUL: needs the deployed canonicality — the after-nonce lies in
+`[0, p)` and the pre-nonce ticked (`old + 1`) lies in `[0, p)` (nonces are far below the modulus), so
+a wrong nonce differs from `old + 1` by less than `p` and the field gate cannot pass by wrap-around. -/
 theorem transferVm_rejects_wrong_nonce (env : VmRowEnv) (hsN : env.loc sel.NOOP = 0)
+    (hcanonNew : 0 ≤ env.loc (saCol state.NONCE) ∧ env.loc (saCol state.NONCE) < 2013265921)
+    (hcanonTick : 0 ≤ env.loc (sbCol state.NONCE) + 1
+      ∧ env.loc (sbCol state.NONCE) + 1 < 2013265921)
     (hwrong : env.loc (saCol state.NONCE) ≠ env.loc (sbCol state.NONCE) + 1) :
     ¬ (VmConstraint.gate gNonce).holdsVm env false false := by
   simp only [VmConstraint.holdsVm, gNonce, eSA, eSB, eSub, eSelNoop, EmittedExpr.eval]
-  intro h
-  apply hwrong
-  rw [hsN] at h
-  linarith
+  rw [hsN]
+  exact not_modEq_zero_of_canon (by ring) hcanonNew hcanonTick hwrong
 
 /-! ## §9 — Boundary + transition faithfulness (the PI/continuity clauses pin the turn boundary).
 
@@ -356,12 +415,12 @@ intended pin. We expose them as faithfulness lemmas: a satisfying descriptor pin
 nonce/balances/commitment to the public inputs (turn-identity binding). -/
 theorem boundaryFirst_pins (env : VmRowEnv)
     (h : ∀ c ∈ boundaryFirstPins, c.holdsVm env true false) :
-    env.loc (sbCol state.NONCE) = env.pub pi.ACTOR_NONCE
-    ∧ env.loc (sbCol state.BALANCE_LO) = env.pub pi.INIT_BAL_LO
-    ∧ env.loc (sbCol state.BALANCE_HI) = env.pub pi.INIT_BAL_HI
-    ∧ env.loc (sbCol state.STATE_COMMIT) = env.pub pi.OLD_COMMIT := by
+    env.loc (sbCol state.NONCE) ≡ env.pub pi.ACTOR_NONCE [ZMOD 2013265921]
+    ∧ env.loc (sbCol state.BALANCE_LO) ≡ env.pub pi.INIT_BAL_LO [ZMOD 2013265921]
+    ∧ env.loc (sbCol state.BALANCE_HI) ≡ env.pub pi.INIT_BAL_HI [ZMOD 2013265921]
+    ∧ env.loc (sbCol state.STATE_COMMIT) ≡ env.pub pi.OLD_COMMIT [ZMOD 2013265921] := by
   have key : ∀ col k, VmConstraint.piBinding VmRow.first col k ∈ boundaryFirstPins →
-      env.loc col = env.pub k := by
+      env.loc col ≡ env.pub k [ZMOD 2013265921] := by
     intro col k hmem
     have hh := h _ hmem
     simp only [VmConstraint.holdsVm] at hh
@@ -373,11 +432,11 @@ theorem boundaryFirst_pins (env : VmRowEnv)
 post-state commitment) and the final balances to their PIs. -/
 theorem boundaryLast_pins (env : VmRowEnv)
     (h : ∀ c ∈ boundaryLastPins, c.holdsVm env false true) :
-    env.loc (saCol state.STATE_COMMIT) = env.pub pi.NEW_COMMIT
-    ∧ env.loc (saCol state.BALANCE_LO) = env.pub pi.FINAL_BAL_LO
-    ∧ env.loc (saCol state.BALANCE_HI) = env.pub pi.FINAL_BAL_HI := by
+    env.loc (saCol state.STATE_COMMIT) ≡ env.pub pi.NEW_COMMIT [ZMOD 2013265921]
+    ∧ env.loc (saCol state.BALANCE_LO) ≡ env.pub pi.FINAL_BAL_LO [ZMOD 2013265921]
+    ∧ env.loc (saCol state.BALANCE_HI) ≡ env.pub pi.FINAL_BAL_HI [ZMOD 2013265921] := by
   have key : ∀ col k, VmConstraint.piBinding VmRow.last col k ∈ boundaryLastPins →
-      env.loc col = env.pub k := by
+      env.loc col ≡ env.pub k [ZMOD 2013265921] := by
     intro col k hmem
     have hh := h _ hmem
     simp only [VmConstraint.holdsVm] at hh
@@ -428,7 +487,7 @@ This is purely the `boundaryLastPins` (`.piBinding .last`) clause, which fires u
 it does NOT depend on the gates (which run under `when_transition()`). -/
 theorem transferVmDescriptor_pins_commit (hash : List ℤ → ℤ) (env : VmRowEnv)
     (hsat : satisfiedVm hash transferVmDescriptor env true true) :
-    env.loc (saCol state.STATE_COMMIT) = env.pub pi.NEW_COMMIT := by
+    env.loc (saCol state.STATE_COMMIT) ≡ env.pub pi.NEW_COMMIT [ZMOD 2013265921] := by
   obtain ⟨hcs, _hsites⟩ := hsat
   have hlast : ∀ c ∈ boundaryLastPins, c.holdsVm env false true := by
     intro c hc
@@ -463,7 +522,7 @@ theorem transferVmDescriptor_pins_intent (hash : List ℤ → ℤ) (env : VmRowE
     (hgatesat : satisfiedVm hash transferVmDescriptor env true false)
     (hsat : satisfiedVm hash transferVmDescriptor env true true) :
     TransferRowIntent env
-    ∧ env.loc (saCol state.STATE_COMMIT) = env.pub pi.NEW_COMMIT := by
+    ∧ env.loc (saCol state.STATE_COMMIT) ≡ env.pub pi.NEW_COMMIT [ZMOD 2013265921] := by
   obtain ⟨hcsT, _⟩ := hgatesat
   -- The per-row gates, drawn at the ACTIVE row (`isLast = false`), where `when_transition()` binds.
   have hgates' : ∀ c ∈ transferRowGates, c.holdsVm env false false := by
@@ -519,7 +578,8 @@ theorem goodRow_realizes_intent : TransferRowIntent goodRow := by
   simp only [sbCol, saCol, prmCol, sel.TRANSFER, STATE_BEFORE_BASE, STATE_AFTER_BASE, PARAM_BASE,
     NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.BALANCE_LO, state.BALANCE_HI, state.NONCE,
     state.CAP_ROOT, state.RESERVED, state.FIELD_BASE, param.AMOUNT, param.DIRECTION]
-  refine ⟨Or.inr ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨Or.inr (eqToModEq ?_), eqToModEq ?_, eqToModEq ?_, eqToModEq ?_, eqToModEq ?_,
+    eqToModEq ?_, ?_⟩
   · rfl
   · norm_num
   · rfl
@@ -527,6 +587,7 @@ theorem goodRow_realizes_intent : TransferRowIntent goodRow := by
   · rfl
   · rfl
   · intro i hi
+    refine eqToModEq ?_
     -- both `state_after.field[i]` (col 79+i) and `state_before.field[i]` (col 57+i) miss every
     -- named column of `goodRow`, so both sides are the final `else 0`.
     have e1 : (76 + (3 + i) = 1) = False := by simp; omega
@@ -555,11 +616,11 @@ def badRow : VmRowEnv where
 /-- **NON-VACUITY (witness FALSE / concrete anti-ghost).** `badRow`'s post-`bal_lo` is NOT the
 signed move, so the `gBalLo` gate REJECTS it — a concrete UNSAT, the anti-ghost end-to-end. -/
 theorem badRow_rejected : ¬ (VmConstraint.gate gBalLo).holdsVm badRow false false := by
-  apply transferVm_rejects_wrong_balance
-  simp only [badRow, goodRow, sbCol, saCol, prmCol, sel.TRANSFER, STATE_BEFORE_BASE,
-    STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.BALANCE_LO,
-    state.NONCE, param.AMOUNT, param.DIRECTION]
-  norm_num
+  -- `badRow` post-`bal_lo = 999`; intended move `= 100 + 30·(1 − 2·1) = 70`; both canonical in [0, p).
+  apply transferVm_rejects_wrong_balance <;>
+    simp only [badRow, goodRow, sbCol, saCol, prmCol, sel.TRANSFER, STATE_BEFORE_BASE,
+      STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.BALANCE_LO,
+      state.NONCE, param.AMOUNT, param.DIRECTION] <;> norm_num
 
 /-! ## §11.5 — THE FEE DEBIT (trust-surface hole #5 close).
 
@@ -614,15 +675,17 @@ def transferFeeVmDescriptor : EffectVmDescriptor :=
 signed transfer amount AND the fee is debited; everything else (hi limb, nonce tick, cap_root, the 8
 fields) matches the unfee'd intent. RESERVED is NO LONGER frozen (it carries the fee). -/
 def TransferFeeRowIntent (env : VmRowEnv) : Prop :=
-  (env.loc (prmCol param.DIRECTION) = 0 ∨ env.loc (prmCol param.DIRECTION) = 1)
+  (env.loc (prmCol param.DIRECTION) ≡ 0 [ZMOD 2013265921]
+    ∨ env.loc (prmCol param.DIRECTION) ≡ 1 [ZMOD 2013265921])
   ∧ env.loc (saCol state.BALANCE_LO)
-      = env.loc (sbCol state.BALANCE_LO)
+      ≡ env.loc (sbCol state.BALANCE_LO)
         + env.loc (prmCol param.AMOUNT) * (1 - 2 * env.loc (prmCol param.DIRECTION))
-        - env.loc feeCol
-  ∧ env.loc (saCol state.BALANCE_HI) = env.loc (sbCol state.BALANCE_HI)
-  ∧ env.loc (saCol state.NONCE) = env.loc (sbCol state.NONCE) + 1
-  ∧ env.loc (saCol state.CAP_ROOT) = env.loc (sbCol state.CAP_ROOT)
-  ∧ (∀ i < 8, env.loc (saCol (state.FIELD_BASE + i)) = env.loc (sbCol (state.FIELD_BASE + i)))
+        - env.loc feeCol [ZMOD 2013265921]
+  ∧ env.loc (saCol state.BALANCE_HI) ≡ env.loc (sbCol state.BALANCE_HI) [ZMOD 2013265921]
+  ∧ env.loc (saCol state.NONCE) ≡ env.loc (sbCol state.NONCE) + 1 [ZMOD 2013265921]
+  ∧ env.loc (saCol state.CAP_ROOT) ≡ env.loc (sbCol state.CAP_ROOT) [ZMOD 2013265921]
+  ∧ (∀ i < 8, env.loc (saCol (state.FIELD_BASE + i))
+      ≡ env.loc (sbCol (state.FIELD_BASE + i)) [ZMOD 2013265921])
 
 /-- **`transferFeeVm_faithful` — the fee'd deliverable.** On a transfer row, the fee'd descriptor's
 per-row gates hold IFF the fee'd transfer intent holds. So the concrete circuit enforces EXACTLY
@@ -647,50 +710,64 @@ theorem transferFeeVm_faithful (env : VmRowEnv) (hrow : IsTransferRow env) :
       eSA, eSB, ePrm, eSub, eSelNoop, EmittedExpr.eval] at hLo hHi hDir hNon hCap
     rw [hsN] at hNon
     refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
-    · have hd0 : env.loc (prmCol param.DIRECTION)
-                  * (env.loc (prmCol param.DIRECTION) + -1) = 0 := hDir
-      rcases mul_eq_zero.mp hd0 with hd | hd
-      · exact Or.inl hd
-      · exact Or.inr (by linarith)
-    · nlinarith [hLo]
-    · linarith [hHi]
-    · linarith [hNon]
-    · linarith [hCap]
+    · rw [Int.modEq_zero_iff_dvd] at hDir
+      rcases (pPrimeInt.dvd_mul.mp hDir) with hd | hd
+      · exact Or.inl (by rw [Int.modEq_zero_iff_dvd]; exact hd)
+      · refine Or.inr ?_
+        rw [Int.modEq_iff_dvd]; obtain ⟨k, hk⟩ := hd; exact ⟨-k, by omega⟩
+    · exact (gate_modEq_iff (by ring)).mp hLo
+    · exact (gate_modEq_iff (by ring)).mp hHi
+    · exact (gate_modEq_iff (by ring)).mp hNon
+    · exact (gate_modEq_iff (by ring)).mp hCap
     · intro i hi
-      have := hFld i hi
-      simp only [VmConstraint.holdsVm, gFieldPass, eSA, eSB, eSub, EmittedExpr.eval] at this
-      linarith
+      have hfi := hFld i hi
+      simp only [VmConstraint.holdsVm, gFieldPass, eSA, eSB, eSub, EmittedExpr.eval] at hfi
+      exact (gate_modEq_iff (by ring)).mp hfi
   · rintro ⟨hDir, hLo, hHi, hNon, hCap, hFld⟩ c hc
     simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
       List.mem_range] at hc
     rcases hc with (rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩
     · simp only [VmConstraint.holdsVm, gBalLoFee, gBalLo, eSA, eSB, ePrm, eSub, EmittedExpr.eval]
-      rw [hLo]; ring
+      exact (gate_modEq_iff (by ring)).mpr hLo
     · simp only [VmConstraint.holdsVm, gBalHi, eSA, eSB, eSub, EmittedExpr.eval]
-      rw [hHi]; ring
+      exact (gate_modEq_iff (by ring)).mpr hHi
     · simp only [VmConstraint.holdsVm, gDirBool, ePrm, EmittedExpr.eval]
-      rcases hDir with hd | hd <;> rw [hd] <;> ring
+      rw [Int.modEq_zero_iff_dvd]
+      rcases hDir with hd | hd
+      · rw [Int.modEq_zero_iff_dvd] at hd
+        exact dvd_mul_of_dvd_left hd _
+      · rw [Int.modEq_iff_dvd] at hd
+        have hdd : (2013265921 : ℤ) ∣ (env.loc (prmCol param.DIRECTION) + -1) := by
+          obtain ⟨k, hk⟩ := hd; exact ⟨-k, by omega⟩
+        exact dvd_mul_of_dvd_right hdd _
     · simp only [VmConstraint.holdsVm, gNonce, eSA, eSB, eSub, eSelNoop, EmittedExpr.eval]
-      rw [hsN, hNon]; ring
+      rw [hsN]
+      exact (gate_modEq_iff (by ring)).mpr hNon
     · simp only [VmConstraint.holdsVm, gCapPass, eSA, eSB, eSub, EmittedExpr.eval]
-      rw [hCap]; ring
+      exact (gate_modEq_iff (by ring)).mpr hCap
     · simp only [VmConstraint.holdsVm, gFieldPass, eSA, eSB, eSub, EmittedExpr.eval]
-      rw [hFld i hi]; ring
+      exact (gate_modEq_iff (by ring)).mpr (hFld i hi)
 
 /-- **Anti-ghost (fee tamper / the light-client tooth).** A fee'd transfer row whose post-`bal_lo`
 is NOT `old − transfer − fee` — i.e. the published fee column claims a SMALLER fee than the balance
 actually moved, or the fee was not debited — fails the `gBalLoFee` gate (UNSAT). This is the
 in-circuit bite: a ledgerless verifier needs NO trusted `+ turn.fee` reconstruction. -/
 theorem transferFeeVm_rejects_wrong_fee (env : VmRowEnv)
+    (hcanonNew : 0 ≤ env.loc (saCol state.BALANCE_LO)
+      ∧ env.loc (saCol state.BALANCE_LO) < 2013265921)
+    (hcanonMove : 0 ≤ env.loc (sbCol state.BALANCE_LO)
+        + env.loc (prmCol param.AMOUNT) * (1 - 2 * env.loc (prmCol param.DIRECTION))
+        - env.loc feeCol
+      ∧ env.loc (sbCol state.BALANCE_LO)
+        + env.loc (prmCol param.AMOUNT) * (1 - 2 * env.loc (prmCol param.DIRECTION))
+        - env.loc feeCol < 2013265921)
     (hwrong : env.loc (saCol state.BALANCE_LO)
       ≠ env.loc (sbCol state.BALANCE_LO)
         + env.loc (prmCol param.AMOUNT) * (1 - 2 * env.loc (prmCol param.DIRECTION))
         - env.loc feeCol) :
     ¬ (VmConstraint.gate gBalLoFee).holdsVm env false false := by
   simp only [VmConstraint.holdsVm, gBalLoFee, gBalLo, eSA, eSB, ePrm, eSub, EmittedExpr.eval]
-  intro h
-  apply hwrong
-  linarith [h]
+  exact not_modEq_zero_of_canon (by ring) hcanonNew hcanonMove hwrong
 
 /-! ## §12 — Axiom-hygiene pins (the honesty tripwire). -/
 
