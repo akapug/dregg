@@ -89,13 +89,18 @@ theorem delegateAttenVm_faithful (env : VmRowEnv) :
       ↔ AttenRowIntent env :=
   attenuateVm_faithful env
 
-/-- **Anti-ghost.** A `delegateAttenA` row whose post-`cap_root` ≠ the supplied digest fails the MOVE
-gate (UNSAT). -/
+/-- **Anti-ghost.** A `delegateAttenA` row whose post-`cap_root` ≠ the supplied digest (both cells
+canonical, i.e. in `[0, p)` for the BabyBear prime `p = 2013265921`) fails the MOVE gate (UNSAT mod
+`p`). -/
 theorem delegateAttenVm_rejects_wrong_capRoot (env : VmRowEnv)
+    (hcanonNew : 0 ≤ env.loc (saCol state.CAP_ROOT)
+      ∧ env.loc (saCol state.CAP_ROOT) < 2013265921)
+    (hcanonDig : 0 ≤ env.loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitAttenuateA.paramA.CAP_DIGEST_NEW)
+      ∧ env.loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitAttenuateA.paramA.CAP_DIGEST_NEW) < 2013265921)
     (hwrong : env.loc (saCol state.CAP_ROOT)
       ≠ env.loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitAttenuateA.paramA.CAP_DIGEST_NEW)) :
     ¬ (VmConstraint.gate gCapMove).holdsVm env false false :=
-  attenuateVm_rejects_wrong_capRoot env hwrong
+  attenuateVm_rejects_wrong_capRoot env hcanonNew hcanonDig hwrong
 
 /-! ## §2 — The structured per-cell soundness (reused). -/
 
@@ -225,13 +230,18 @@ non-amp: definitionally the shared genuine-non-amp descriptor (recompute + `gran
 def delegateAttenVmDescriptorGenuineNonAmp : EffectVmDescriptor := attenuateVmDescriptorGenuineNonAmp
 
 /-- **`delegateAttenNonAmp_in_circuit`** — a satisfying `delegateAtten` witness FORCES `granted ⊑ held`
-per bit. Inherited from the shared in-circuit non-amp tooth. -/
+per bit (both bit cells canonical, i.e. in `[0, p)` for the BabyBear prime `p = 2013265921`). Inherited
+from the shared in-circuit non-amp tooth. -/
 theorem delegateAttenNonAmp_in_circuit (env : Dregg2.Circuit.Emit.EffectVmEmit.VmRowEnv)
     (hcon : ∀ c ∈ delegateAttenVmDescriptorGenuineNonAmp.constraints, c.holdsVm env false false)
-    (i : Nat) (hi : i < Dregg2.Circuit.Emit.EffectVmEmitCapReshape.MASK_BITS) :
+    (i : Nat) (hi : i < Dregg2.Circuit.Emit.EffectVmEmitCapReshape.MASK_BITS)
+    (hgc : 0 ≤ env.loc (Dregg2.Circuit.Emit.EffectVmEmitCapReshape.dcol.grantedBit i)
+      ∧ env.loc (Dregg2.Circuit.Emit.EffectVmEmitCapReshape.dcol.grantedBit i) < 2013265921)
+    (hhc : 0 ≤ env.loc (Dregg2.Circuit.Emit.EffectVmEmitCapReshape.dcol.heldBit i)
+      ∧ env.loc (Dregg2.Circuit.Emit.EffectVmEmitCapReshape.dcol.heldBit i) < 2013265921) :
     env.loc (Dregg2.Circuit.Emit.EffectVmEmitCapReshape.dcol.grantedBit i) = 0
     ∨ env.loc (Dregg2.Circuit.Emit.EffectVmEmitCapReshape.dcol.heldBit i) = 1 :=
-  attenuateGenuineNonAmp_in_circuit env hcon i hi
+  attenuateGenuineNonAmp_in_circuit env hcon i hi hgc hhc
 
 /-- **`delegateAttenNonAmp_rejects_amplify`** — an amplifying `delegateAtten` (granted bit set, held bit
 clear) does NOT satisfy the descriptor. Inherited from the shared rejection. -/

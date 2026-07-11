@@ -48,7 +48,8 @@ open Dregg2.Circuit.Emit.EffectVmEmit
 open Dregg2.Circuit.Emit.EffectVmEmitTransfer
   (eSB eSA eSub eSelNoop gBalHi gNonce gCapPass gResPass gFieldPass gFieldPassAll
    transitionAll boundaryFirstPins boundaryLastPins
-   transferHashSites boundaryLast_pins)
+   transferHashSites boundaryLast_pins
+   gate_modEq_iff not_modEq_zero_of_canon eqToModEq)
 open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (CellState absorbedCols absorbed_determined_by_commit)
 open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
 open Dregg2.Exec.CircuitEmit (EmittedExpr)
@@ -105,12 +106,14 @@ def introduceVmDescriptor : EffectVmDescriptor :=
 /-- **`IntroduceRowIntent env`** — every economic state-block column UNCHANGED (incl. `cap_root`) EXCEPT
 the nonce, which TICKS by 1 (on a non-NoOp row `s_noop = 0`). The cap-table grant is out-of-row. -/
 def IntroduceRowIntent (env : VmRowEnv) : Prop :=
-  env.loc (saCol state.BALANCE_LO) = env.loc (sbCol state.BALANCE_LO)
-  ∧ env.loc (saCol state.BALANCE_HI) = env.loc (sbCol state.BALANCE_HI)
-  ∧ env.loc (saCol state.NONCE) = env.loc (sbCol state.NONCE) + (1 - env.loc sel.NOOP)
-  ∧ env.loc (saCol state.CAP_ROOT) = env.loc (sbCol state.CAP_ROOT)
-  ∧ env.loc (saCol state.RESERVED) = env.loc (sbCol state.RESERVED)
-  ∧ (∀ i < 8, env.loc (saCol (state.FIELD_BASE + i)) = env.loc (sbCol (state.FIELD_BASE + i)))
+  env.loc (saCol state.BALANCE_LO) ≡ env.loc (sbCol state.BALANCE_LO) [ZMOD 2013265921]
+  ∧ env.loc (saCol state.BALANCE_HI) ≡ env.loc (sbCol state.BALANCE_HI) [ZMOD 2013265921]
+  ∧ env.loc (saCol state.NONCE)
+      ≡ env.loc (sbCol state.NONCE) + (1 - env.loc sel.NOOP) [ZMOD 2013265921]
+  ∧ env.loc (saCol state.CAP_ROOT) ≡ env.loc (sbCol state.CAP_ROOT) [ZMOD 2013265921]
+  ∧ env.loc (saCol state.RESERVED) ≡ env.loc (sbCol state.RESERVED) [ZMOD 2013265921]
+  ∧ (∀ i < 8, env.loc (saCol (state.FIELD_BASE + i))
+      ≡ env.loc (sbCol (state.FIELD_BASE + i)) [ZMOD 2013265921])
 
 /-! ## §4 — FAITHFULNESS. -/
 
@@ -131,24 +134,29 @@ theorem introduceVm_faithful (env : VmRowEnv) :
       exact Or.inr ⟨i, hi, rfl⟩
     simp only [VmConstraint.holdsVm, gBalLoFreeze, gBalHi, gNonce, gCapPass, gResPass,
       eSA, eSB, eSub, eSelNoop, EmittedExpr.eval] at hLo hHi hNon hCap hRes
-    refine ⟨by linarith [hLo], by linarith [hHi], by linarith [hNon], by linarith [hCap],
-      by linarith [hRes], ?_⟩
+    refine ⟨(gate_modEq_iff (by ring)).mp hLo, (gate_modEq_iff (by ring)).mp hHi,
+      (gate_modEq_iff (by ring)).mp hNon, (gate_modEq_iff (by ring)).mp hCap,
+      (gate_modEq_iff (by ring)).mp hRes, ?_⟩
     intro i hi
-    have := hFld i hi
-    simp only [VmConstraint.holdsVm, gFieldPass, eSA, eSB, eSub, EmittedExpr.eval] at this
-    linarith
+    have hfi := hFld i hi
+    simp only [VmConstraint.holdsVm, gFieldPass, eSA, eSB, eSub, EmittedExpr.eval] at hfi
+    exact (gate_modEq_iff (by ring)).mp hfi
   · rintro ⟨hLo, hHi, hNon, hCap, hRes, hFld⟩ c hc
     simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
       List.mem_range] at hc
     rcases hc with (rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩
-    · simp only [VmConstraint.holdsVm, gBalLoFreeze, eSA, eSB, eSub, EmittedExpr.eval]; rw [hLo]; ring
-    · simp only [VmConstraint.holdsVm, gBalHi, eSA, eSB, eSub, EmittedExpr.eval]; rw [hHi]; ring
+    · simp only [VmConstraint.holdsVm, gBalLoFreeze, eSA, eSB, eSub, EmittedExpr.eval]
+      exact (gate_modEq_iff (by ring)).mpr hLo
+    · simp only [VmConstraint.holdsVm, gBalHi, eSA, eSB, eSub, EmittedExpr.eval]
+      exact (gate_modEq_iff (by ring)).mpr hHi
     · simp only [VmConstraint.holdsVm, gNonce, eSA, eSB, eSub, eSelNoop, EmittedExpr.eval]
-      rw [hNon]; ring
-    · simp only [VmConstraint.holdsVm, gCapPass, eSA, eSB, eSub, EmittedExpr.eval]; rw [hCap]; ring
-    · simp only [VmConstraint.holdsVm, gResPass, eSA, eSB, eSub, EmittedExpr.eval]; rw [hRes]; ring
+      exact (gate_modEq_iff (by ring)).mpr hNon
+    · simp only [VmConstraint.holdsVm, gCapPass, eSA, eSB, eSub, EmittedExpr.eval]
+      exact (gate_modEq_iff (by ring)).mpr hCap
+    · simp only [VmConstraint.holdsVm, gResPass, eSA, eSB, eSub, EmittedExpr.eval]
+      exact (gate_modEq_iff (by ring)).mpr hRes
     · simp only [VmConstraint.holdsVm, gFieldPass, eSA, eSB, eSub, EmittedExpr.eval]
-      rw [hFld i hi]; ring
+      exact (gate_modEq_iff (by ring)).mpr (hFld i hi)
 
 /-! ## §5 — ANTI-GHOST. -/
 
@@ -156,28 +164,41 @@ theorem introduceVm_rejects_wrong_output (env : VmRowEnv) (hwrong : ¬ Introduce
     ¬ (∀ c ∈ introduceRowGates, c.holdsVm env false false) :=
   fun h => hwrong ((introduceVm_faithful env).mp h)
 
-/-- **Anti-ghost (balance moved).** A row whose post-`bal_lo` ≠ pre-`bal_lo` fails the freeze gate. -/
+/-- **Anti-ghost (balance moved).** A row whose post-`bal_lo` ≠ pre-`bal_lo` (both cells canonical,
+`0 ≤ · < p` for the BabyBear prime `p = 2013265921`) fails the freeze gate — the field gate cannot
+pass by wrap-around. -/
 theorem introduceVm_rejects_moved_balance (env : VmRowEnv)
+    (hcanonNew : 0 ≤ env.loc (saCol state.BALANCE_LO)
+      ∧ env.loc (saCol state.BALANCE_LO) < 2013265921)
+    (hcanonOld : 0 ≤ env.loc (sbCol state.BALANCE_LO)
+      ∧ env.loc (sbCol state.BALANCE_LO) < 2013265921)
     (hwrong : env.loc (saCol state.BALANCE_LO) ≠ env.loc (sbCol state.BALANCE_LO)) :
     ¬ (VmConstraint.gate gBalLoFreeze).holdsVm env false false := by
   simp only [VmConstraint.holdsVm, gBalLoFreeze, eSA, eSB, eSub, EmittedExpr.eval]
-  intro h; apply hwrong; linarith
+  exact not_modEq_zero_of_canon (by ring) hcanonNew hcanonOld hwrong
 
 /-- **Anti-ghost (cap-root tamper on row).** A row whose post-`cap_root` ≠ pre-`cap_root` fails the freeze
 gate — the runtime row freezes `cap_root` (the grant rides effects_hash); no on-row cap move is allowed. -/
 theorem introduceVm_rejects_moved_capRoot (env : VmRowEnv)
+    (hcanonNew : 0 ≤ env.loc (saCol state.CAP_ROOT)
+      ∧ env.loc (saCol state.CAP_ROOT) < 2013265921)
+    (hcanonOld : 0 ≤ env.loc (sbCol state.CAP_ROOT)
+      ∧ env.loc (sbCol state.CAP_ROOT) < 2013265921)
     (hwrong : env.loc (saCol state.CAP_ROOT) ≠ env.loc (sbCol state.CAP_ROOT)) :
     ¬ (VmConstraint.gate gCapPass).holdsVm env false false := by
   simp only [VmConstraint.holdsVm, gCapPass, eSA, eSB, eSub, EmittedExpr.eval]
-  intro h; apply hwrong; linarith
+  exact not_modEq_zero_of_canon (by ring) hcanonNew hcanonOld hwrong
 
 /-- **Anti-ghost (nonce tamper).** A row whose nonce does NOT tick by 1 fails the reconciled `gNonce`
 tick gate — a frozen-nonce trace (the pre-v2 convention) is now correctly UNSAT. -/
 theorem introduceVm_rejects_nonce_freeze (env : VmRowEnv)
+    (hcanonNew : 0 ≤ env.loc (saCol state.NONCE) ∧ env.loc (saCol state.NONCE) < 2013265921)
+    (hcanonTick : 0 ≤ env.loc (sbCol state.NONCE) + (1 - env.loc sel.NOOP)
+      ∧ env.loc (sbCol state.NONCE) + (1 - env.loc sel.NOOP) < 2013265921)
     (hwrong : env.loc (saCol state.NONCE) ≠ env.loc (sbCol state.NONCE) + (1 - env.loc sel.NOOP)) :
     ¬ (VmConstraint.gate gNonce).holdsVm env false false := by
   simp only [VmConstraint.holdsVm, gNonce, eSA, eSB, eSub, eSelNoop, EmittedExpr.eval]
-  intro h; apply hwrong; linarith
+  exact not_modEq_zero_of_canon (by ring) hcanonNew hcanonTick hwrong
 
 /-! ## §6 — the commitment binding (REUSED; hash sites identical to transfer's). -/
 
@@ -213,12 +234,12 @@ def RowEncodesIntroduce (env : VmRowEnv) (pre post : CellState) : Prop :=
 /-- **`IntroduceCellSpec pre post`** — the per-cell FULL-state introduce row spec: economic block (incl.
 `capRoot`) FROZEN; the nonce TICKS by 1. (The cap-table grant is off-row.) -/
 def IntroduceCellSpec (pre post : CellState) : Prop :=
-  post.balLo = pre.balLo
-  ∧ post.balHi = pre.balHi
-  ∧ post.nonce = pre.nonce + 1
-  ∧ (∀ i : Fin 8, post.fields i = pre.fields i)
-  ∧ post.capRoot = pre.capRoot
-  ∧ post.reserved = pre.reserved
+  post.balLo ≡ pre.balLo [ZMOD 2013265921]
+  ∧ post.balHi ≡ pre.balHi [ZMOD 2013265921]
+  ∧ post.nonce ≡ pre.nonce + 1 [ZMOD 2013265921]
+  ∧ (∀ i : Fin 8, post.fields i ≡ pre.fields i [ZMOD 2013265921])
+  ∧ post.capRoot ≡ pre.capRoot [ZMOD 2013265921]
+  ∧ post.reserved ≡ pre.reserved [ZMOD 2013265921]
 
 theorem intent_to_cellSpec (env : VmRowEnv) (pre post : CellState)
     (hnoop : env.loc sel.NOOP = 0)
@@ -230,7 +251,10 @@ theorem intent_to_cellSpec (env : VmRowEnv) (pre post : CellState)
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
   · rw [← hsaLo, ← hsbLo]; exact hbal
   · rw [← hsaHi, ← hsbHi]; exact hbhi
-  · rw [← hsaN, ← hsbN, hnon, hnoop]; ring
+  · have h := hnon
+    rw [hnoop] at h
+    rw [← hsaN, ← hsbN]
+    simpa using h
   · intro i
     have := hfld i.val i.isLt
     rw [← hsaF i, ← hsbF i]; exact this
@@ -244,7 +268,7 @@ theorem introduceDescriptor_full_sound (hash : List ℤ → ℤ) (env : VmRowEnv
     (henc : RowEncodesIntroduce env pre post)
     (hgatesat : satisfiedVm hash introduceVmDescriptor env true false)
     (hsat : satisfiedVm hash introduceVmDescriptor env true true) :
-    IntroduceCellSpec pre post ∧ post.commit = env.pub pi.NEW_COMMIT := by
+    IntroduceCellSpec pre post ∧ post.commit ≡ env.pub pi.NEW_COMMIT [ZMOD 2013265921] := by
   obtain ⟨hcs, _⟩ := hsat
   obtain ⟨hcsT, _⟩ := hgatesat
   have hgates' : ∀ c ∈ introduceRowGates, c.holdsVm env false false := by
@@ -282,12 +306,19 @@ theorem introduceDescriptor_commit_binds_state (hash : List ℤ → ℤ)
     (e₁ e₂ : VmRowEnv)
     (hsat₁ : satisfiedVm hash introduceVmDescriptor e₁ true true)
     (hsat₂ : satisfiedVm hash introduceVmDescriptor e₂ true true)
+    -- FIELD-FAITHFUL bridge: the published commitment is a CANONICAL field element (Poseidon2's
+    -- output lives in `[0, p)`). The circuit pins `state_commit ≡ NEW_COMMIT [ZMOD p]`; canonicality
+    -- of the two digest columns lifts that field congruence to the ℤ equality CR needs.
+    (hcanon₁ : 0 ≤ e₁.loc (saCol state.STATE_COMMIT)
+      ∧ e₁.loc (saCol state.STATE_COMMIT) < 2013265921)
+    (hcanon₂ : 0 ≤ e₂.loc (saCol state.STATE_COMMIT)
+      ∧ e₂.loc (saCol state.STATE_COMMIT) < 2013265921)
     (hpub : e₁.pub pi.NEW_COMMIT = e₂.pub pi.NEW_COMMIT) :
     absorbedCols e₁ = absorbedCols e₂ := by
   have hs₁ : siteHoldsAll hash e₁ introduceHashSites := hsat₁.2.1
   have hs₂ : siteHoldsAll hash e₂ introduceHashSites := hsat₂.2.1
   have hc : ∀ (e : VmRowEnv), satisfiedVm hash introduceVmDescriptor e true true →
-      e.loc (saCol state.STATE_COMMIT) = e.pub pi.NEW_COMMIT := by
+      e.loc (saCol state.STATE_COMMIT) ≡ e.pub pi.NEW_COMMIT [ZMOD 2013265921] := by
     intro e hsat
     obtain ⟨hcs, _⟩ := hsat
     have hlast : ∀ c ∈ boundaryLastPins, c.holdsVm e false true := by
@@ -303,8 +334,16 @@ theorem introduceDescriptor_commit_binds_state (hash : List ℤ → ℤ)
         · simp only [VmConstraint.holdsVm] at hh ⊢
           exact hh
     exact (boundaryLast_pins e hlast).1
+  have hmod : e₁.loc (saCol state.STATE_COMMIT) ≡ e₂.loc (saCol state.STATE_COMMIT)
+      [ZMOD 2013265921] := by
+    have h2 : e₁.pub pi.NEW_COMMIT ≡ e₂.loc (saCol state.STATE_COMMIT) [ZMOD 2013265921] := by
+      rw [hpub]; exact (hc e₂ hsat₂).symm
+    exact (hc e₁ hsat₁).trans h2
   have hcommit : e₁.loc (saCol state.STATE_COMMIT) = e₂.loc (saCol state.STATE_COMMIT) := by
-    rw [hc e₁ hsat₁, hc e₂ hsat₂, hpub]
+    have hdvd := Int.modEq_iff_dvd.mp hmod
+    obtain ⟨l₁, u₁⟩ := hcanon₁
+    obtain ⟨l₂, u₂⟩ := hcanon₂
+    omega
   exact absorbed_determined_by_commit hash hCR e₁ e₂ hs₁ hs₂ hcommit
 
 /-! ## §9 — THE CONNECTOR — the cap-table grant (OFF-ROW), via `introduceA_full_sound`. -/
@@ -360,14 +399,16 @@ theorem goodIntroduceRow_noop : goodIntroduceRow.loc sel.NOOP = 0 := by
 theorem goodIntroduceRow_realizes_intent : IntroduceRowIntent goodIntroduceRow := by
   unfold IntroduceRowIntent
   have hnoop : goodIntroduceRow.loc sel.NOOP = 0 := goodIntroduceRow_noop
-  refine ⟨rfl, rfl, ?_, rfl, rfl, ?_⟩
+  refine ⟨eqToModEq rfl, eqToModEq rfl, ?_, eqToModEq rfl, eqToModEq rfl, ?_⟩
   · rw [hnoop]
+    refine eqToModEq ?_
     show goodIntroduceRow.loc (saCol state.NONCE) = goodIntroduceRow.loc (sbCol state.NONCE) + (1 - 0)
     simp only [goodIntroduceRow, SEL_INTRODUCE, sbCol, saCol, STATE_BEFORE_BASE,
       STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.BALANCE_LO,
       state.NONCE]
     norm_num
   · intro i hi
+    refine eqToModEq ?_
     show goodIntroduceRow.loc (saCol (state.FIELD_BASE + i)) = goodIntroduceRow.loc (sbCol (state.FIELD_BASE + i))
     simp only [goodIntroduceRow, SEL_INTRODUCE, sbCol, saCol, STATE_BEFORE_BASE,
       STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.BALANCE_LO,
@@ -393,11 +434,20 @@ def badIntroduceRow : VmRowEnv where
 /-- **NON-VACUITY (witness FALSE / concrete anti-ghost).** `badIntroduceRow`'s post-`bal_lo` is forged, so
 `gBalLoFreeze` REJECTS it. -/
 theorem badIntroduceRow_rejected : ¬ (VmConstraint.gate gBalLoFreeze).holdsVm badIntroduceRow false false := by
+  have hsa : badIntroduceRow.loc (saCol state.BALANCE_LO) = 999 := by
+    simp only [badIntroduceRow, goodIntroduceRow, sbCol, saCol, SEL_INTRODUCE, STATE_BEFORE_BASE,
+      STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.BALANCE_LO,
+      state.NONCE]
+    norm_num
+  have hsb : badIntroduceRow.loc (sbCol state.BALANCE_LO) = 100 := by
+    simp only [badIntroduceRow, goodIntroduceRow, sbCol, saCol, SEL_INTRODUCE, STATE_BEFORE_BASE,
+      STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.BALANCE_LO,
+      state.NONCE]
+    norm_num
   apply introduceVm_rejects_moved_balance
-  simp only [badIntroduceRow, goodIntroduceRow, sbCol, saCol, SEL_INTRODUCE, STATE_BEFORE_BASE,
-    STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.BALANCE_LO,
-    state.NONCE]
-  norm_num
+  · rw [hsa]; norm_num
+  · rw [hsb]; norm_num
+  · rw [hsa, hsb]; norm_num
 
 /-- A FROZEN-NONCE introduce row: `goodIntroduceRow` with the post-nonce held at `5`. -/
 def staleNonceIntroduceRow : VmRowEnv where
@@ -409,11 +459,25 @@ def staleNonceIntroduceRow : VmRowEnv where
 reconciled `gNonce` tick gate. -/
 theorem staleNonceIntroduceRow_rejected :
     ¬ (VmConstraint.gate gNonce).holdsVm staleNonceIntroduceRow false false := by
+  have hsa : staleNonceIntroduceRow.loc (saCol state.NONCE) = 5 := by
+    simp only [staleNonceIntroduceRow, goodIntroduceRow, sel.NOOP, sbCol, saCol, SEL_INTRODUCE,
+      STATE_BEFORE_BASE, STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS,
+      state.BALANCE_LO, state.NONCE]
+    norm_num
+  have hsb : staleNonceIntroduceRow.loc (sbCol state.NONCE) = 5 := by
+    simp only [staleNonceIntroduceRow, goodIntroduceRow, sel.NOOP, sbCol, saCol, SEL_INTRODUCE,
+      STATE_BEFORE_BASE, STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS,
+      state.BALANCE_LO, state.NONCE]
+    norm_num
+  have hnoop : staleNonceIntroduceRow.loc sel.NOOP = 0 := by
+    simp only [staleNonceIntroduceRow, goodIntroduceRow, sel.NOOP, sbCol, saCol, SEL_INTRODUCE,
+      STATE_BEFORE_BASE, STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS,
+      state.BALANCE_LO, state.NONCE]
+    norm_num
   apply introduceVm_rejects_nonce_freeze
-  simp only [staleNonceIntroduceRow, goodIntroduceRow, sel.NOOP, sbCol, saCol, SEL_INTRODUCE,
-    STATE_BEFORE_BASE, STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS,
-    state.BALANCE_LO, state.NONCE]
-  norm_num
+  · rw [hsa]; norm_num
+  · rw [hsb, hnoop]; norm_num
+  · rw [hsa, hsb, hnoop]; norm_num
 
 
 /-! ## §G — THE GENUINE CLASS-A `introduce` — `cap_root` RECOMPUTED in-row (inherits the shared primitive).
@@ -486,14 +550,19 @@ open Dregg2.Circuit.Emit.EffectVmEmitAttenuateA
 definitionally the shared genuine-non-amp descriptor (recompute + `granted ⊑ held`). -/
 def introduceVmDescriptorGenuineNonAmp : EffectVmDescriptor := attenuateVmDescriptorGenuineNonAmp
 
-/-- **`introduceNonAmp_in_circuit`** — a satisfying `introduce` witness FORCES `granted ⊑ held` per bit.
-Inherited from the shared in-circuit non-amp tooth. -/
+/-- **`introduceNonAmp_in_circuit`** — a satisfying `introduce` witness FORCES `granted ⊑ held` per bit
+(both bit cells canonical, i.e. in `[0, p)` for the BabyBear prime `p = 2013265921`). Inherited from
+the shared in-circuit non-amp tooth. -/
 theorem introduceNonAmp_in_circuit (env : Dregg2.Circuit.Emit.EffectVmEmit.VmRowEnv)
     (hcon : ∀ c ∈ introduceVmDescriptorGenuineNonAmp.constraints, c.holdsVm env false false)
-    (i : Nat) (hi : i < Dregg2.Circuit.Emit.EffectVmEmitCapReshape.MASK_BITS) :
+    (i : Nat) (hi : i < Dregg2.Circuit.Emit.EffectVmEmitCapReshape.MASK_BITS)
+    (hgc : 0 ≤ env.loc (Dregg2.Circuit.Emit.EffectVmEmitCapReshape.dcol.grantedBit i)
+      ∧ env.loc (Dregg2.Circuit.Emit.EffectVmEmitCapReshape.dcol.grantedBit i) < 2013265921)
+    (hhc : 0 ≤ env.loc (Dregg2.Circuit.Emit.EffectVmEmitCapReshape.dcol.heldBit i)
+      ∧ env.loc (Dregg2.Circuit.Emit.EffectVmEmitCapReshape.dcol.heldBit i) < 2013265921) :
     env.loc (Dregg2.Circuit.Emit.EffectVmEmitCapReshape.dcol.grantedBit i) = 0
     ∨ env.loc (Dregg2.Circuit.Emit.EffectVmEmitCapReshape.dcol.heldBit i) = 1 :=
-  attenuateGenuineNonAmp_in_circuit env hcon i hi
+  attenuateGenuineNonAmp_in_circuit env hcon i hi hgc hhc
 
 /-- **`introduceNonAmp_rejects_amplify`** — an amplifying `introduce` (granted bit set, held bit clear)
 does NOT satisfy the descriptor. Inherited from the shared rejection. -/
@@ -640,7 +709,8 @@ theorem introduceWide_realizes :
         commit := 0 }
       { balLo := 100, balHi := 0, nonce := 6, fields := fun _ => 0, capRoot := 0, reserved := 0,
         commit := 0 } :=
-  ⟨rfl, rfl, rfl, fun _ => rfl, rfl, rfl⟩
+  ⟨Int.ModEq.refl _, Int.ModEq.refl _, eqToModEq (by norm_num), fun _ => Int.ModEq.refl _,
+   Int.ModEq.refl _, Int.ModEq.refl _⟩
 
 /-- **`introduceWide_clause_not_trivial` — the clause is REFUTABLE (witness FALSE).** A post-state whose
 nonce did NOT tick (held at `5`, demanding `5 + 1 = 6`) FAILS `IntroduceCellSpec` — so the clause is not
@@ -652,8 +722,9 @@ theorem introduceWide_clause_not_trivial :
         { balLo := 100, balHi := 0, nonce := 5, fields := fun _ => 0, capRoot := 0, reserved := 0,
           commit := 0 } := by
   rintro ⟨_, _, hnon, _⟩
-  -- hnon : (5 : ℤ) = 5 + 1 — absurd
-  exact absurd hnon (by decide)
+  -- hnon : (5 : ℤ) ≡ 5 + 1 [ZMOD p] — would need p ∣ 1
+  have hdvd := Int.ModEq.dvd hnon
+  omega
 
 #assert_axioms introduceWide_constraints_eq
 #assert_axioms introduce_runnable_full_sound
