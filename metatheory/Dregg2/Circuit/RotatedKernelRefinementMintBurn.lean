@@ -20,15 +20,26 @@ refinement re-exported (`bridgeMint_descriptorRefines`, an alias).
 
 Just as `transfer_descriptorRefines`, the honest split is:
   * the per-row circuit (`burnVm_faithful` / `mintVm_faithful`, lifted through `RowEncodes` to
-    `CellBurnSpec` / `CellMintSpec`) FORCES the moved limb of the DESIGNATED debit/credit row, and the
-    live range tooth on `bal_lo` pins non-negativity ⟹ availability;
+    `CellBurnSpec` / `CellMintSpec`) FORCES the moved limb of the DESIGNATED debit/credit row — now, after
+    the DEBT-A field migration, as a mod-`p` (BabyBear) CONGRUENCE (`burn_debit_forced` /
+    `mint_credit_forced`);
   * the kernel-only residual (the authority/liveness/distinctness guard, the 16-field frame, the
     receipt log, and the CROSS-cell ledger frame `recTransferBal`) is NAMED as explicit decode legs in
     `rotatedEncodesBurn` / `rotatedEncodesMint` — not assumed away.
 
+⚠⚠ DEBT-A FINDING (burn availability is a DEPLOYED FORGERY). The mod-`p` migration REMOVED burn
+availability (`amt ≤ bal cell a`) from the circuit-forced bucket: the debit gate is now a field
+congruence and `BURN_AMOUNT_LO` is un-range-checked, so with `p < 2^31` an over-burn wraps into the
+30-bit range. This is WORSE than transfer's twin — burn's ledger frame CREDITS the well `(a,a)` by `amt`,
+so the over-burn INFLATES well supply = mint-from-nothing (§3, `⚠⚠ BURN AVAILABILITY IS NOT
+CIRCUIT-FORCED`, concrete forgery given). Availability is therefore relocated to a NAMED
+`rotatedEncodesBurn.guardAvail` residual pending the EMBER-GATED denotation fix. Mint has NO availability
+gate (the well is negative-capable) → NO mint-side forgery. The mod-`p` conservation teeth
+(`burn_debit_forced` / `mint_credit_forced`) still forbid wrong-amount witnesses.
+
 The both-polarity teeth (`burn_descriptorRefines_rejects_wrong_debit`, … `_wrong_credit` for mint)
-witness that the circuit genuinely bites: a decode claiming a moved-limb post NOT equal to the
-circuit-forced debit/credit is UNSAT, because the gate pins the limb to `pre ∓ amount`.
+witness that the circuit genuinely bites: a decode claiming a moved-limb post NOT `≡ pre ∓ amount [ZMOD
+p]` is UNSAT, because the gate pins the limb as a BabyBear field congruence.
 
 ## Axiom hygiene
 
@@ -168,6 +179,15 @@ structure rotatedEncodesBurn (hash : List ℤ → ℤ)
   -- STAGE-3 authority split: holder self-redeem (`actor = cell`) OR issuer authority.
   guardAuth : actor = cell ∨ mintAuthorizedB pre.kernel.caps actor a = true
   guardNonNeg : 0 ≤ amt
+  -- ⚠⚠ AVAILABILITY — NAMED decode residual (NOT circuit-forced). SEE `⚠⚠ BURN AVAILABILITY IS NOT
+  -- CIRCUIT-FORCED`, §3. The mod-`p` (BabyBear) `bal_lo` debit gate + the 30-bit range check do NOT
+  -- enforce `amt ≤ bal cell a` over ℤ: `p = 2013265921 < 2^31`, and `BURN_AMOUNT_LO` is un-range-checked,
+  -- so an underflow `pre.bal − amt + p ∈ [0, 2^30)` passes the range while over-burning. This is WORSE
+  -- than the transfer twin: burn's ledger frame CREDITS the well `(a,a)` by `amt` (`recTransferBal cell a
+  -- a amt`), so an over-burn INFLATES well supply — a mint-from-nothing. Relocated here as an honest,
+  -- visible admissibility obligation (joining `guardAuth`) pending the EMBER-GATED denotation fix
+  -- (range-check `BURN_AMOUNT_LO < p − 2^30`, a borrow / no-underflow bit, or a field `p ≥ 2^{2·bits}`).
+  guardAvail : amt ≤ pre.kernel.bal cell a
   guardLiveCell : cell ∈ pre.kernel.accounts
   guardLiveWell : a ∈ pre.kernel.accounts
   guardDistinct : cell ≠ a
@@ -196,63 +216,68 @@ structure rotatedEncodesBurn (hash : List ℤ → ℤ)
   frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
   logAdv : post.log = Spec.SupplyDestruction.burnReceipt actor cell a amt :: pre.log
 
-/-! ## §3 — BURN: the circuit FORCES the holder debit + availability. -/
+/-! ## §3 — BURN: the circuit FORCES the holder debit (mod-`p`); availability is a NAMED residual. -/
 
-/-- The holder row's per-cell spec, read onto the kernel ledger: `post.bal cell a = pre.bal cell a −
-amt`. The circuit FORCES it (the burn gate `bal_lo' = bal_lo − param1`). -/
+/-- The holder row's per-cell spec, read onto the kernel ledger: `post.bal cell a ≡ pre.bal cell a −
+amt [ZMOD p]`. **MOD-p CORRECTION (DEBT-A migration):** the deployed `bal_lo` debit gate `holdsVm` now
+denotes `gBalLoDebit.eval ≡ 0 [ZMOD 2013265921]` (a BabyBear field constraint), NOT the old ℤ `= 0`, and
+`CellBurnSpec` migrated to a `≡ [ZMOD p]` congruence. So the circuit FORCES the debit move only as a
+mod-`p` congruence — a canonical trace can carry an ℤ residual equal to `p ≠ 0`. The move IS still
+circuit-forced, just in the field (mirror of transfer's `debit_forced`). -/
 theorem burn_debit_forced (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
     {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash burnV3 minit mfin maddrs t)
     (pre post : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : ℤ)
     (henc : rotatedEncodesBurn hash minit mfin maddrs t pre post actor cell a amt) :
-    post.kernel.bal cell a = pre.kernel.bal cell a - amt := by
+    post.kernel.bal cell a ≡ pre.kernel.bal cell a - amt [ZMOD 2013265921] := by
   have hspec : EffectVmEmitBurn.CellBurnSpec henc.holderPre amt henc.holderPost :=
     rotated_row_cellSpec_burn hash hside hsat henc.di henc.hdi henc.hdiNotLast henc.holderPre
       henc.holderPost amt henc.hdiEnc henc.hdiRow
   obtain ⟨hmove, _, _, _, _, _⟩ := hspec
-  rw [← henc.hholderPost, ← henc.hholderPre, hmove]
+  -- hmove : holderPost.balLo ≡ holderPre.balLo − amt [ZMOD p]; the limb ties are ℤ equalities of subterms.
+  rwa [henc.hholderPost, henc.hholderPre] at hmove
 
-/-- **Availability is CIRCUIT-FORCED (burn).** On the holder row the live range tooth pins `0 ≤
-holderPost.balLo`; with the debit gate `holderPost.balLo = holderPre.balLo − amount`, this is exactly
-`amt ≤ pre.bal cell a` — the `BurnGuard` availability leg, enforced by the running circuit. -/
-theorem burn_availability_forced (hash : List ℤ → ℤ)
-    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
-    {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
-    (hsat : Satisfied2 hash burnV3 minit mfin maddrs t)
-    (pre post : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : ℤ)
-    (henc : rotatedEncodesBurn hash minit mfin maddrs t pre post actor cell a amt) :
-    amt ≤ pre.kernel.bal cell a := by
-  -- the v1 denotation on the holder row (i-dependent flags).
-  have hv1 : satisfiedVm hash EffectVmEmitBurn.burnVmDescriptor
-      (envAt t henc.di) (henc.di == 0) (henc.di + 1 == t.rows.length) :=
-    rotV3Frozen_sound_v1 permOut hash EffectVmEmitBurn.burnVmDescriptor minit mfin maddrs t
-      burn_graduable (hside.toFaithful hsat) henc.di henc.hdi
-  -- the balance-debit gate (flag-independent) and the live range tooth (`hv1.2.2`).
-  have hbal := rotated_row_gates_burn hash hside hsat henc.di henc.hdi henc.hdiNotLast
-    (.gate EffectVmEmitBurn.gBalLoDebit)
-    (by simp [EffectVmEmitBurn.burnRowGates])
-  have hrng := hv1.2.2 (⟨saCol state.BALANCE_LO, 30⟩) (by simp [EffectVmEmitBurn.burnVmDescriptor])
-  simp only [VmConstraint.holdsVm, EffectVmEmitBurn.gBalLoDebit, EffectVmEmitBurn.ePrmBurnAmt,
-    eSA, eSB, eSub, Dregg2.Exec.CircuitEmit.EmittedExpr.eval] at hbal
-  have hnn : 0 ≤ (envAt t henc.di).loc (saCol state.BALANCE_LO) := hrng.1
-  -- decode the holder row's pre-limb / amount columns through RowEncodes.
-  obtain ⟨hsbLo, _, _, _, _, _, _, hpAmt, _⟩ := henc.hdiEnc
-  have hdebit : (envAt t henc.di).loc (saCol state.BALANCE_LO)
-      = (envAt t henc.di).loc (sbCol state.BALANCE_LO)
-        - (envAt t henc.di).loc (prmCol EffectVmEmitBurn.param.BURN_AMOUNT_LO) := by
-    linarith [hbal]
-  have hle : (envAt t henc.di).loc (prmCol EffectVmEmitBurn.param.BURN_AMOUNT_LO)
-      ≤ (envAt t henc.di).loc (sbCol state.BALANCE_LO) := by linarith [hdebit, hnn]
-  rw [hpAmt] at hle
-  rw [hsbLo, henc.hholderPre] at hle
-  exact hle
+/-! ### ⚠⚠ BURN AVAILABILITY IS NOT CIRCUIT-FORCED under the mod-p denotation — the wrap-class forgery.
+
+**Finding (DEBT-A migration, 2026-07-11).** The old `burn_availability_forced` derived `amt ≤ pre.bal
+cell a` from `0 ≤ holderPost.balLo` (range) + `holderPost.balLo = holderPre.balLo − amount` (gate, over
+ℤ). The mod-p migration replaced the debit gate ℤ equality with a BabyBear field congruence: `holdsVm
+(.gate gBalLoDebit)` now denotes `gBalLoDebit.eval ≡ 0 [ZMOD 2013265921]`, so the circuit forces only
+`holderPost.balLo ≡ holderPre.balLo − amt [ZMOD p]`, and the range table pins only `0 ≤ holderPost.balLo
+< 2^30`. Because `p = 2013265921 < 2^31` and `BURN_AMOUNT_LO` carries **no** range check, a prover can
+pick `amt` with `pre.bal − amt < 0` yet whose canonical field value `pre.bal − amt + p` lands in
+`[0, 2^30)` — passing the range check while over-burning.
+
+CONCRETE forgery (holder-debit gate `post − pre + amt ≡ 0 [ZMOD p]`):
+  `pre.bal cell a = 0`, `amt = 1000000000` ⟹ `holderPost.balLo = p − 1000000000 = 1013265921 ∈ [0, 2^30)`.
+The gate holds mod-`p` and `0 ≤ holderPost.balLo < 2^30`, yet `amt = 10^9 > 0 = pre.bal cell a` — an
+underflow. This is the SAME wrap-class as transfer's availability gap, but **WORSE**: burn's ledger
+frame `hledgerFrame = recTransferBal pre.bal cell a a amt` CREDITS the well `(a,a)` by `amt`, so the
+over-burn INFLATES the well's supply — a mint-from-nothing (the debit "spends" a balance that was not
+there, the credit manufactures the well side). Mod-`p` alone does not pin the ℤ value, and the adversary
+picks a `p`-shifted decomposition.
+
+An INEQUALITY has no mod-`p`-faithful restatement (order is not preserved mod `p`), so — unlike
+`burn_debit_forced` — burn availability CANNOT be restated-and-proved. It is a genuine forgery the
+migration exposed. Classification (deployed gap vs modeling gap) and the fix are DENOTATION changes owned
+by the migration lane / EMBER-GATED: range-check `BURN_AMOUNT_LO` to `< p − 2^30`, add a borrow /
+no-underflow bit, or a field with `p ≥ 2^{2·BAL_LIMB_BITS}`.
+
+⚑ HONEST RELOCATION (not laundering): burn availability is therefore moved OUT of the circuit-forced
+bucket and NAMED as an explicit `rotatedEncodesBurn.guardAvail` decode residual — joining `guardAuth` /
+`guardLiveCell` / … as an admissibility leg the per-cell value block does not carry — with this note as
+its provenance. `burn_descriptorRefines` sources availability from `henc.guardAvail`, so a wrong-amount /
+non-conserving burn is still refused by `burn_debit_forced` (mod-`p`), but the availability leg now rides
+an honest, visible assumption pending the denotation fix. -/
 
 set_option maxHeartbeats 800000 in
 /-- **`burn_descriptorRefines` — THE BURN CIRCUIT→KERNEL REFINEMENT.** Satisfying the LIVE rotated burn
 descriptor (`Satisfied2 hash burnV3 …`, with the chip/range side conditions) together with
 `rotatedEncodesBurn` forces the kernel's `BurnSpec pre actor cell a amt post`. The holder ledger debit
-and the AVAILABILITY guard come FROM THE WITNESS (`burn_debit_forced` / `burn_availability_forced`); the
+MOVEMENT comes FROM THE WITNESS (`burn_debit_forced`, mod-`p`); ⚠ AVAILABILITY (`amt ≤ bal cell a`) is
+NO LONGER circuit-forced under mod-`p` (a wrap-class forgery that INFLATES the well — see `⚠⚠ BURN
+AVAILABILITY IS NOT CIRCUIT-FORCED`, §3) and is a NAMED decode residual `henc.guardAvail`. The rest of the
 kernel-side residual (authority / liveness / distinctness / the 16-field frame / the well-credit ledger
 frame / the log) comes from the decode. -/
 theorem burn_descriptorRefines (hash : List ℤ → ℤ)
@@ -264,8 +289,10 @@ theorem burn_descriptorRefines (hash : List ℤ → ℤ)
     Spec.SupplyDestruction.BurnSpec pre actor cell a amt post := by
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · -- BurnGuard: authority / non-neg / AVAILABILITY / live-cell / live-well / distinct / lifecycle-live.
-    exact ⟨henc.guardAuth, henc.guardNonNeg,
-      burn_availability_forced hash hside hsat pre post actor cell a amt henc,
+    -- ⚠ availability is `henc.guardAvail` — a NAMED decode residual, NOT circuit-forced under mod-p (a
+    -- wrap-class forgery that inflates the well; see `⚠⚠ BURN AVAILABILITY IS NOT CIRCUIT-FORCED`, §3).
+    -- The debit MOVEMENT is still circuit-forced (mod-p) via `burn_debit_forced` (the §3 tooth).
+    exact ⟨henc.guardAuth, henc.guardNonNeg, henc.guardAvail,
       henc.guardLiveCell, henc.guardLiveWell, henc.guardDistinct, henc.guardLifecycleLive⟩
   · exact henc.hledgerFrame
   · exact henc.logAdv
@@ -288,16 +315,17 @@ theorem burn_descriptorRefines (hash : List ℤ → ℤ)
   · exact henc.frRevokedRoot
   · exact henc.frCommitmentsRoot
 
-/-- **`burn_descriptorRefines_rejects_wrong_debit` — the conservation tooth (burn).** A decode claiming
-a holder post-balance NOT the genuine debit `pre.bal cell a − amt` rides NO satisfying witness: the
-circuit pins the burn limb, so a wrong-amount burn is UNSAT. -/
+/-- **`burn_descriptorRefines_rejects_wrong_debit` — the conservation tooth (burn, mod-p).** A decode
+claiming a holder post-balance NOT the genuine debit `pre.bal cell a − amt` **mod `p`** rides NO
+satisfying witness: the circuit pins the burn limb as a BabyBear field congruence, so a wrong-amount /
+non-conserving burn (one that is not `≡ pre.bal − amt [ZMOD p]`) is UNSAT. -/
 theorem burn_descriptorRefines_rejects_wrong_debit (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
     {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash burnV3 minit mfin maddrs t)
     (pre post : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : ℤ)
     (henc : rotatedEncodesBurn hash minit mfin maddrs t pre post actor cell a amt)
-    (hwrong : post.kernel.bal cell a ≠ pre.kernel.bal cell a - amt) :
+    (hwrong : ¬ (post.kernel.bal cell a ≡ pre.kernel.bal cell a - amt [ZMOD 2013265921])) :
     False :=
   hwrong (burn_debit_forced hash hside hsat pre post actor cell a amt henc)
 
@@ -414,20 +442,24 @@ structure rotatedEncodesMint (hash : List ℤ → ℤ)
 
 /-! ## §6 — MINT: the circuit FORCES the recipient credit. -/
 
-/-- The recipient row's per-cell spec, read onto the kernel ledger: `post.bal cell a = pre.bal cell a +
-amt`. The circuit FORCES it (the mint credit gate `bal_lo' = bal_lo + param1`). -/
+/-- The recipient row's per-cell spec, read onto the kernel ledger: `post.bal cell a ≡ pre.bal cell a +
+amt [ZMOD p]`. **MOD-p CORRECTION (DEBT-A migration):** the deployed `bal_lo` credit gate `holdsVm` now
+denotes a BabyBear field congruence and `CellMintSpec` migrated to `≡ [ZMOD p]`, so the circuit FORCES the
+`+amount` credit only as a mod-`p` congruence (mirror of transfer's `credit_forced`). (Note: a mint has
+NO availability gate — the well is negative-capable — so there is NO mint-side availability forgery.) -/
 theorem mint_credit_forced (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
     {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash mintV3 minit mfin maddrs t)
     (pre post : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : ℤ)
     (henc : rotatedEncodesMint hash minit mfin maddrs t pre post actor cell a amt) :
-    post.kernel.bal cell a = pre.kernel.bal cell a + amt := by
+    post.kernel.bal cell a ≡ pre.kernel.bal cell a + amt [ZMOD 2013265921] := by
   have hspec : EffectVmEmitMint.CellMintSpec henc.recipPre amt henc.recipPost :=
     rotated_row_cellSpec_mint hash hside hsat henc.ci henc.hci henc.hciNotLast henc.recipPre
       henc.recipPost amt henc.hciEnc henc.hciRow
   obtain ⟨hmove, _, _, _, _, _⟩ := hspec
-  rw [← henc.hrecipPost, ← henc.hrecipPre, hmove]
+  -- hmove : recipPost.balLo ≡ recipPre.balLo + amt [ZMOD p]; the limb ties are ℤ equalities of subterms.
+  rwa [henc.hrecipPost, henc.hrecipPre] at hmove
 
 set_option maxHeartbeats 800000 in
 /-- **`mint_descriptorRefines` — THE MINT CIRCUIT→KERNEL REFINEMENT.** Satisfying the LIVE rotated mint
@@ -468,16 +500,17 @@ theorem mint_descriptorRefines (hash : List ℤ → ℤ)
   · exact henc.frRevokedRoot
   · exact henc.frCommitmentsRoot
 
-/-- **`mint_descriptorRefines_rejects_wrong_credit` — the conservation tooth (mint).** A decode claiming
-a recipient post-balance NOT the genuine credit `pre.bal cell a + amt` rides NO satisfying witness: the
-circuit pins the mint limb, so a wrong-amount mint is UNSAT. -/
+/-- **`mint_descriptorRefines_rejects_wrong_credit` — the conservation tooth (mint, mod-p).** A decode
+claiming a recipient post-balance NOT the genuine credit `pre.bal cell a + amt` **mod `p`** rides NO
+satisfying witness: the circuit pins the mint limb as a BabyBear field congruence, so a wrong-amount
+mint (one that is not `≡ pre.bal + amt [ZMOD p]`) is UNSAT. -/
 theorem mint_descriptorRefines_rejects_wrong_credit (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
     {permOut : List ℤ → List ℤ} (hside : RotTableSide permOut hash t)
     (hsat : Satisfied2 hash mintV3 minit mfin maddrs t)
     (pre post : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : ℤ)
     (henc : rotatedEncodesMint hash minit mfin maddrs t pre post actor cell a amt)
-    (hwrong : post.kernel.bal cell a ≠ pre.kernel.bal cell a + amt) :
+    (hwrong : ¬ (post.kernel.bal cell a ≡ pre.kernel.bal cell a + amt [ZMOD 2013265921])) :
     False :=
   hwrong (mint_credit_forced hash hside hsat pre post actor cell a amt henc)
 
@@ -508,7 +541,6 @@ theorem bridgeMint_descriptorRefines (hash : List ℤ → ℤ)
 #assert_axioms rotated_row_gates_burn
 #assert_axioms rotated_row_cellSpec_burn
 #assert_axioms burn_debit_forced
-#assert_axioms burn_availability_forced
 #assert_axioms burn_descriptorRefines
 #assert_axioms burn_descriptorRefines_rejects_wrong_debit
 #assert_axioms rotated_row_gates_mint

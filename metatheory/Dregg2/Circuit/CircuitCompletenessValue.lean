@@ -131,9 +131,13 @@ def burn_rotatedEncodesBurn_construct (hash : List ℤ → ℤ)
   hholderPost := prover.hholderPost
   -- the ledger frame IS the spec's `bal = recTransferBal …` clause.
   hledgerFrame := hspec.2.1
-  -- the guards come from the spec's `BurnGuard` (`hspec.1`).
+  -- the guards come from the spec's `BurnGuard` (`hspec.1`). `guardAvail` (`amt ≤ bal cell a`) is the
+  -- NAMED availability residual — the spec DETERMINES it (`BurnGuard`'s 3rd conjunct); on the soundness
+  -- side it is NOT circuit-forced under mod-p (a wrap-class forgery — see `RotatedKernelRefinementMintBurn`
+  -- §3), so completeness simply discharges the honest assumption from the kernel-valid spec.
   guardAuth     := hspec.1.1
   guardNonNeg   := hspec.1.2.1
+  guardAvail    := hspec.1.2.2.1
   guardLiveCell := hspec.1.2.2.2.1
   guardLiveWell := hspec.1.2.2.2.2.1
   guardDistinct := hspec.1.2.2.2.2.2.1
