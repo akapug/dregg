@@ -42,7 +42,9 @@ async fn lock_writes_decodable_72_byte_record() {
     let mint_authority = Keypair::new();
     let user = Keypair::new();
     let user_token = Keypair::new();
-    let unlock_authority = Pubkey::new_from_array([0x55u8; 32]);
+    // A 2-of-3 oracle set for the vault (the Lock path does not exercise it, but
+    // InitVault now requires a valid set).
+    let oracle_keys: Vec<[u8; 32]> = vec![[0x55u8; 32], [0x56u8; 32], [0x57u8; 32]];
 
     // Pre-seed the mint account and the user's token account with balance, so the
     // test focuses on InitVault + Lock (mint setup is not the code under test).
@@ -116,7 +118,8 @@ async fn lock_writes_decodable_72_byte_record() {
             AccountMeta::new_readonly(system_program::id(), false),
         ],
         data: LockInstruction::InitVault {
-            unlock_authority: unlock_authority.to_bytes(),
+            oracle_threshold: 2,
+            oracle_keys: oracle_keys.clone(),
         }
         .pack(),
     };

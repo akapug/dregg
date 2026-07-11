@@ -5,6 +5,7 @@
 //! rejected (`LockError::InvalidInstruction`) rather than defaulted.
 
 use crate::error::LockError;
+use crate::state::MAX_ORACLE_KEYS;
 
 /// 1-byte instruction tags.
 pub const TAG_INIT_VAULT: u8 = 0;
@@ -15,11 +16,15 @@ pub const TAG_UNLOCK: u8 = 2;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LockInstruction {
     /// Create the program-owned vault (config PDA + SPL token vault account whose
-    /// SPL authority is the vault-authority PDA). `unlock_authority` is the ed25519
-    /// pubkey permitted to sign [`LockInstruction::Unlock`] (the bridge authority;
-    /// a real deployment gates this on a dregg burn-attestation — see the residual
-    /// note in `lib.rs`).
-    InitVault { unlock_authority: [u8; 32] },
+    /// SPL authority is the vault-authority PDA). The unlock trust boundary is an
+    /// **M-of-N ed25519 oracle key-set**: `oracle_threshold` (M) valid signatures
+    /// from DISTINCT `oracle_keys` (N) over the canonical unlock message hash are
+    /// required to release funds (see [`LockInstruction::Unlock`] and
+    /// [`crate::attestation`]). Fail-closed: `1 <= M <= N <= MAX_ORACLE_KEYS`.
+    InitVault {
+        oracle_threshold: u8,
+        oracle_keys: Vec<[u8; 32]>,
+    },
     /// Lock `amount` of $DREGG for the dregg cell `dregg_recipient`. Transfers the
     /// tokens into the vault and writes a fresh 72-byte lock record. THE mint path.
     Lock {
@@ -27,8 +32,12 @@ pub enum LockInstruction {
         dregg_recipient: [u8; 32],
     },
     /// Release `amount` of $DREGG from the vault to the recipient token account,
-    /// authorized by `unlock_authority`. `redeem_id` is the replay nonce (a
-    /// redeem-receipt PDA keyed by it must not already exist).
+    /// authorized by a threshold of oracle-set ed25519 signatures over the canonical
+    /// unlock message hash of `SolanaUnlockRequest { spl_mint = config.mint, amount,
+    /// solana_recipient = recipient token account, redeem_id }`. `redeem_id` is also
+    /// the replay nonce (a redeem-receipt PDA keyed by it must not already exist).
+    /// The signatures ride in ed25519 native-program instructions in the same
+    /// transaction — the wire args are unchanged from v1.
     Unlock { amount: u64, redeem_id: [u8; 32] },
 }
 
@@ -39,8 +48,34 @@ impl LockInstruction {
         let (&tag, rest) = data.split_first().ok_or(LockError::InvalidInstruction)?;
         match tag {
             TAG_INIT_VAULT => {
-                let unlock_authority = read_array32(rest, 0, 32)?;
-                Ok(Self::InitVault { unlock_authority })
+                // payload: threshold(1) ‖ count(1) ‖ keys(count * 32)
+                if rest.len() < 2 {
+                    return Err(LockError::InvalidInstruction);
+                }
+                let oracle_threshold = rest[0];
+                let count = rest[1] as usize;
+                if count == 0 || count > MAX_ORACLE_KEYS {
+                    return Err(LockError::InvalidInstruction);
+                }
+                // exact length: no trailing junk, no short buffer.
+                if rest.len() != 2 + count * 32 {
+                    return Err(LockError::InvalidInstruction);
+                }
+                let mut oracle_keys = Vec::with_capacity(count);
+                for i in 0..count {
+                    let mut k = [0u8; 32];
+                    let off = 2 + i * 32;
+                    k.copy_from_slice(&rest[off..off + 32]);
+                    oracle_keys.push(k);
+                }
+                // threshold sanity here too (state re-validates on pack): 1 <= M <= N.
+                if oracle_threshold == 0 || oracle_threshold as usize > count {
+                    return Err(LockError::InvalidInstruction);
+                }
+                Ok(Self::InitVault {
+                    oracle_threshold,
+                    oracle_keys,
+                })
             }
             TAG_LOCK => {
                 if rest.len() != 8 + 32 {
@@ -68,10 +103,17 @@ impl LockInstruction {
     /// Serialize (used by clients / tests to build the instruction data).
     pub fn pack(&self) -> Vec<u8> {
         match self {
-            Self::InitVault { unlock_authority } => {
-                let mut d = Vec::with_capacity(1 + 32);
+            Self::InitVault {
+                oracle_threshold,
+                oracle_keys,
+            } => {
+                let mut d = Vec::with_capacity(1 + 2 + oracle_keys.len() * 32);
                 d.push(TAG_INIT_VAULT);
-                d.extend_from_slice(unlock_authority);
+                d.push(*oracle_threshold);
+                d.push(oracle_keys.len() as u8);
+                for k in oracle_keys {
+                    d.extend_from_slice(k);
+                }
                 d
             }
             Self::Lock {
@@ -124,7 +166,8 @@ mod tests {
     fn roundtrip_all_tags() {
         for ix in [
             LockInstruction::InitVault {
-                unlock_authority: [7u8; 32],
+                oracle_threshold: 2,
+                oracle_keys: vec![[7u8; 32], [8u8; 32], [9u8; 32]],
             },
             LockInstruction::Lock {
                 amount: 123,
@@ -184,8 +227,50 @@ mod tests {
 
     #[test]
     fn short_init_rejected() {
-        let mut d = vec![TAG_INIT_VAULT];
-        d.extend_from_slice(&[0u8; 31]);
+        // tag + threshold + count=2 but only one key's worth of bytes follows.
+        let mut d = vec![TAG_INIT_VAULT, 1u8, 2u8];
+        d.extend_from_slice(&[0u8; 32]);
+        assert_eq!(
+            LockInstruction::unpack(&d),
+            Err(LockError::InvalidInstruction)
+        );
+    }
+
+    #[test]
+    fn init_zero_count_rejected() {
+        // count = 0 (empty oracle set) — NOMAD-LAW, refused at parse.
+        assert_eq!(
+            LockInstruction::unpack(&[TAG_INIT_VAULT, 0u8, 0u8]),
+            Err(LockError::InvalidInstruction)
+        );
+    }
+
+    #[test]
+    fn init_zero_threshold_rejected() {
+        // count = 1, threshold = 0 — NOMAD-LAW, refused at parse.
+        let mut d = vec![TAG_INIT_VAULT, 0u8, 1u8];
+        d.extend_from_slice(&[5u8; 32]);
+        assert_eq!(
+            LockInstruction::unpack(&d),
+            Err(LockError::InvalidInstruction)
+        );
+    }
+
+    #[test]
+    fn init_threshold_gt_count_rejected() {
+        // count = 1, threshold = 2 (> N).
+        let mut d = vec![TAG_INIT_VAULT, 2u8, 1u8];
+        d.extend_from_slice(&[5u8; 32]);
+        assert_eq!(
+            LockInstruction::unpack(&d),
+            Err(LockError::InvalidInstruction)
+        );
+    }
+
+    #[test]
+    fn init_oversized_count_rejected() {
+        // count exceeds MAX_ORACLE_KEYS.
+        let d = vec![TAG_INIT_VAULT, 1u8, (MAX_ORACLE_KEYS + 1) as u8];
         assert_eq!(
             LockInstruction::unpack(&d),
             Err(LockError::InvalidInstruction)

@@ -26,15 +26,22 @@
 //! extra account. (The mirror computes `nullifier = H(spl_mint, lock_id)`; a unique
 //! `lock_id` ⇒ a unique consume-once nullifier.)
 //!
-//! ## Trust residual (unlock)
+//! ## Unlock trust boundary — threshold attestation (residual CLOSED)
 //!
-//! [`instruction::LockInstruction::Unlock`] models the redeem path: it checks a
-//! configured ed25519 `unlock_authority` signature + a redeem-receipt-PDA anti-replay,
-//! then CPI-transfers `$DREGG` out. A real deployment gates this on *verifying a
-//! dregg burn/unlock attestation* on-chain (a threshold-sig check over the
-//! `SolanaUnlockRequest`); that verification is the named residual — see the module
-//! `unlock` note in [`processor`].
+//! [`instruction::LockInstruction::Unlock`] is the redeem path. It does NOT trust a
+//! single configured key: it VERIFIES, on-chain, an **M-of-N ed25519 threshold
+//! attestation** over the canonical [`attestation::unlock_message_hash`] of the
+//! `SolanaUnlockRequest { spl_mint = config.mint, amount, solana_recipient =
+//! recipient token account, redeem_id }` (the dual of `SolanaLockAttestation`,
+//! `bridge/src/solana_mirror.rs`). The signatures ride in ed25519 native-program
+//! (precompile) instructions in the same transaction; the processor reads the
+//! instructions sysvar, resolves exactly the (pubkey, message) pairs the runtime
+//! precompile verified, and requires `>= M` from DISTINCT configured oracle keys
+//! over the reconstructed hash — plus the unchanged redeem-receipt-PDA anti-replay.
+//! Fail-closed on: too few sigs, a duplicate signer, a non-configured signer, a
+//! wrong payload, replay, and (NOMAD-LAW) an empty signature set or `M = 0`.
 
+pub mod attestation;
 pub mod error;
 pub mod instruction;
 pub mod record;
