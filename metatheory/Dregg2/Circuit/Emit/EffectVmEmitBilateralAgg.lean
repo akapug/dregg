@@ -45,6 +45,7 @@ seat break the `cum = 1` boundary) — the cross-federation-double-spend rejecti
 gauntlet drives, now as theorems over the emitted descriptor.
 -/
 import Dregg2.Circuit.DescriptorIR2
+import Dregg2.Circuit.Emit.EffectVmEmitTransfer
 
 namespace Dregg2.Circuit.Emit.EffectVmEmitBilateralAgg
 
@@ -278,9 +279,16 @@ def aggWindowHolds (env : VmRowEnv) (isFirst isLast : Bool) : Prop :=
 
 /-- **CG-2 tooth.** A FIRST-row whose carried `turn_hash[0]` disagrees with the published outer
 PI `turn_hash[0]` cannot satisfy the descriptor — the agreement is real, not decorative. (The
-same holds on the last row and for every identity felt; this is the representative.) -/
+same holds on the last row and for every identity felt; this is the representative.)
+Field-faithful: the binding asserts a mod-`p` congruence, so the tooth carries the deployed
+range-check CANONICALITY (`0 ≤ · < p` on both the column and the PI) — two canonical values
+congruent mod `p` are equal, so a genuine disagreement is UNSAT. -/
 theorem agg_rejects_turn_mismatch
     (env : VmRowEnv)
+    (hcanonCol : 0 ≤ env.loc (Agg.schCol Sched.TURN_HASH_BASE) ∧
+      env.loc (Agg.schCol Sched.TURN_HASH_BASE) < 2013265921)
+    (hcanonPi : 0 ≤ env.pub OuterPi.TURN_HASH_BASE ∧
+      env.pub OuterPi.TURN_HASH_BASE < 2013265921)
     (hdis : env.loc (Agg.schCol Sched.TURN_HASH_BASE) ≠ env.pub OuterPi.TURN_HASH_BASE) :
     ¬ aggWindowHolds env true false := by
   intro h
@@ -303,17 +311,24 @@ theorem agg_rejects_turn_mismatch
     unfold aggConstraints
     exact List.mem_append_left _ (List.mem_append_left _
       (List.mem_append_left _ (List.mem_append_left _ hin)))
-  -- Its denotation on the first row is `loc col = pub k` (the `isFirst = true` hyp discharged by
-  -- `simp`), contradicting `hdis`.
+  -- Its denotation on the first row is `loc col ≡ pub k [ZMOD p]` (the `isFirst = true` hyp
+  -- discharged by `simp`); canonicality collapses the congruence to equality, contradicting `hdis`.
   have hc := h _ hmem
   simp only [cg2PiBind, VmConstraint2.holdsAt, VmConstraint.holdsVm] at hc
-  exact hdis (hc trivial)
+  exact EffectVmEmitTransfer.not_modEq_zero_of_canon
+    (x := env.loc (Agg.schCol Sched.TURN_HASH_BASE) - env.pub OuterPi.TURN_HASH_BASE)
+    rfl hcanonCol hcanonPi hdis
+    ((EffectVmEmitTransfer.gate_modEq_iff rfl).mpr (hc trivial))
 
 /-- **CG-4 tooth (single-agent boundary).** If the last row's `is_agent_cumulative` is NOT 1, the
 descriptor is unsatisfiable on that (last) row — exactly the boundary that pins "exactly ONE
-agent cell per bundle" (two agent rows would drive the cumulative to ≥ 2). -/
+agent cell per bundle" (two agent rows would drive the cumulative to ≥ 2). Field-faithful: the
+boundary gate asserts `cum − 1 ≡ 0 [ZMOD p]`, so the tooth carries the deployed range-check
+CANONICALITY (`0 ≤ cum < p`) — a canonical value congruent to 1 mod `p` IS 1. -/
 theorem agg_rejects_bad_agent_count
     (env : VmRowEnv)
+    (hcanonCum : 0 ≤ env.loc Agg.IS_AGENT_CUMULATIVE_COL ∧
+      env.loc Agg.IS_AGENT_CUMULATIVE_COL < 2013265921)
     (hbad : env.loc Agg.IS_AGENT_CUMULATIVE_COL ≠ 1) :
     ¬ aggWindowHolds env false true := by
   intro h
@@ -325,11 +340,11 @@ theorem agg_rejects_bad_agent_count
     refine List.mem_append_right _ ?_
     simp [List.mem_cons]
   have hc := h _ hmem
-  -- `lastCumIsOne` on the last row asserts `loc cum + (-1) = 0`, i.e. `loc cum = 1` (the
-  -- `isLast = true` hyp discharged by `simp`).
+  -- `lastCumIsOne` on the last row asserts `loc cum + (-1) ≡ 0 [ZMOD p]` (the `isLast = true`
+  -- hyp discharged by `simp`); canonicality collapses it to `loc cum = 1`.
   simp only [lastCumIsOne, VmConstraint2.holdsAt, VmConstraint.holdsVm, EmittedExpr.eval] at hc
-  apply hbad
-  have heq := hc trivial
-  linarith
+  exact EffectVmEmitTransfer.not_modEq_zero_of_canon
+    (x := env.loc Agg.IS_AGENT_CUMULATIVE_COL + (-1)) (by ring) hcanonCum
+    ⟨by norm_num, by norm_num⟩ hbad (hc trivial)
 
 end Dregg2.Circuit.Emit.EffectVmEmitBilateralAgg

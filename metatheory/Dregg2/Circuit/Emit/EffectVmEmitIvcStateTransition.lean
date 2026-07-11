@@ -60,6 +60,7 @@ UNSAT), and `ivc_step_is_hashed` (against a sound chip table the `new_hash` colu
 `hash([IVC_DOMAIN_TAG, old_hash, new_root, step])`), axiom-clean.
 -/
 import Dregg2.Circuit.DescriptorIR2
+import Dregg2.Circuit.Emit.EffectVmEmitTransfer
 import Dregg2.Tactics
 
 namespace Dregg2.Circuit.Emit.EffectVmEmitIvcStateTransition
@@ -195,9 +196,14 @@ def ivcWindowHolds (hash : List ℤ → ℤ) (tf : TraceFamily) (env : VmRowEnv)
 
 /-- **The published-hash tooth.** A LAST row whose `new_hash` disagrees with the published
 `accumulated_hash` (`pi[3]`) cannot satisfy the descriptor — the boundary that binds the fold
-output to the caller (the Rust last-row `new_hash == accumulated_hash` boundary). -/
+output to the caller (the Rust last-row `new_hash == accumulated_hash` boundary). Field-faithful:
+the binding asserts a mod-`p` congruence, so the tooth carries the deployed range-check
+CANONICALITY (`0 ≤ · < p` on both the column and the PI) — two canonical values congruent mod `p`
+are equal, so a genuine disagreement is UNSAT. -/
 theorem ivc_rejects_tampered_published_hash
     (hash : List ℤ → ℤ) (tf : TraceFamily) (env : VmRowEnv)
+    (hcanonNew : 0 ≤ env.loc Ivc.NEW_HASH_COL ∧ env.loc Ivc.NEW_HASH_COL < 2013265921)
+    (hcanonAcc : 0 ≤ env.pub Ivc.PI_ACC_HASH ∧ env.pub Ivc.PI_ACC_HASH < 2013265921)
     (hbad : env.loc Ivc.NEW_HASH_COL ≠ env.pub Ivc.PI_ACC_HASH) :
     ¬ ivcWindowHolds hash tf env false true := by
   intro h
@@ -206,13 +212,18 @@ theorem ivc_rejects_tampered_published_hash
     simp [ivcConstraints]
   have hc := h _ hmem
   simp only [lastNewHashBind, VmConstraint2.holdsAt, VmConstraint.holdsVm] at hc
-  exact hbad (hc trivial)
+  exact EffectVmEmitTransfer.not_modEq_zero_of_canon
+    (x := env.loc Ivc.NEW_HASH_COL - env.pub Ivc.PI_ACC_HASH) rfl hcanonNew hcanonAcc hbad
+    ((EffectVmEmitTransfer.gate_modEq_iff rfl).mpr (hc trivial))
 
 /-- **The seed tooth (the named-gate anchor).** A FIRST row whose `old_hash` disagrees with the
 published seed `pi[initial_hash]` cannot satisfy the descriptor — the restructured row-0 boundary
-that pins the accumulated-hash base case to the caller-established seed. -/
+that pins the accumulated-hash base case to the caller-established seed. Field-faithful: same
+canonicality envelope as the published-hash tooth (`0 ≤ · < p` on the column and the PI). -/
 theorem ivc_rejects_tampered_seed
     (hash : List ℤ → ℤ) (tf : TraceFamily) (env : VmRowEnv)
+    (hcanonOld : 0 ≤ env.loc Ivc.OLD_HASH_COL ∧ env.loc Ivc.OLD_HASH_COL < 2013265921)
+    (hcanonSeed : 0 ≤ env.pub Ivc.PI_INITIAL_HASH ∧ env.pub Ivc.PI_INITIAL_HASH < 2013265921)
     (hbad : env.loc Ivc.OLD_HASH_COL ≠ env.pub Ivc.PI_INITIAL_HASH) :
     ¬ ivcWindowHolds hash tf env true false := by
   intro h
@@ -221,7 +232,9 @@ theorem ivc_rejects_tampered_seed
     simp [ivcConstraints]
   have hc := h _ hmem
   simp only [firstSeedBind, VmConstraint2.holdsAt, VmConstraint.holdsVm] at hc
-  exact hbad (hc trivial)
+  exact EffectVmEmitTransfer.not_modEq_zero_of_canon
+    (x := env.loc Ivc.OLD_HASH_COL - env.pub Ivc.PI_INITIAL_HASH) rfl hcanonOld hcanonSeed hbad
+    ((EffectVmEmitTransfer.gate_modEq_iff rfl).mpr (hc trivial))
 
 /-- **The real-hash tooth.** Against a SOUND chip table, the descriptor's per-row lookup ENFORCES
 `new_hash = Poseidon2([IVC_DOMAIN_TAG, old_hash, new_root, step])`: the `new_hash` column is the
