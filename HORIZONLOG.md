@@ -7175,3 +7175,29 @@ A DEPLOYED SOUNDNESS GAP: `apply.rs:1178` — "M2-a relies on the honest prover"
 premises); ShieldedTransfer's kernel part proved, nullifier-ONLY (my census said "nullifier+balance" — wrong,
 corrected); the reactive subsystem turned DEBT-B's off-kernel claim into THEOREMS + proved no-double-react by
 riding the committed nullifier gate (`515f635d9`).
+
+## collectivity-web all-night (2026-07-11, Fable — the verifiable collective arcade)
+
+Named follow-ups from tonight's build arc (attested-dm game platform + dregg-dice/pqvrf randomness + demo/):
+- **drand HTTP round-fetch client** · named in the drand-BLS beacon commit (dice/) · closure: a small client
+  fetching `(round, signature)` from api.drand.sh — the pure BLS *verification* is done + interop-tested; only the
+  network fetch is outside the verifier crate.
+- **MLWE-assumed pseudorandomness** (LB-VRF / Hybrid floor) · named in pqvrf + the Hybrid commit · this is a FLOOR
+  item — the Lean's undischarged `Pseudorandom` obligation for LB-VRF; closure = accept as the crypto floor or a
+  real reduction. (Uniqueness→Module-SIS IS proved + exhibited.)
+- **LB-VRF one-time → multi-eval key rotation** · named in the wiring · closure: make the genesis Merkle key-chain
+  (built in the Hybrid) the default for repeated draws (currently per-event key committed in the request).
+- **Custody keys for /party + co-authoring** · named in both quorum commits · closure: bind each seat to a real
+  custody key + signed ballot (currently demo `blake3(name)` identities); persist drafts/progress per-identity.
+- **Combat engine — fuller scope** · named in the combat commit · closure: ranged/positioning, action economy,
+  reactions, a status effect-queue, downed-vs-dead, equipment, multi-encounter; fold the combat ruleset hash into
+  the draw binding.
+- **Overworld progress persistence** · named in the overworld commit · closure: persist progress per-identity +
+  fold each cleared head into a region-level commitment; add venom-deep to the /vault picker.
+- **DSL: combat encounters + loot not yet authorable** · named in docs/AUTHORING-DUNGEONS.md · closure: add
+  encounter + loot directives to `dungeon_dsl`; free-form/richer co-authoring edits beyond the bounded set.
+- **Level 3 zk frontier** (fold resolver invariants in-circuit, smallest = inventory-conservation) · named in
+  docs/TRUST-LEVELS.md + DESIGN-verifiable-game.md · closure: realize via circuit-prove — rests on the (assumed)
+  STARK soundness, so "verifiable under the deployed prover assumptions," not "trustless from first principles."
+- **Attestation authentic-leg is a fixture** · standing honest gap · closure: a real model-produced-the-bytes
+  attestation (the tlsn-live MPC-TLS carrier); the well-formed leg (JSON-parse cert) is genuine.
