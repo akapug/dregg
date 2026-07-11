@@ -49,6 +49,7 @@ Poseidon2 of `(acc_in, digest)` — the residual the hand-AIR could only close a
 axiom-clean.
 -/
 import Dregg2.Circuit.DescriptorIR2
+import Dregg2.Circuit.Emit.EffectVmEmitTransfer
 import Dregg2.Tactics
 
 namespace Dregg2.Circuit.Emit.EffectVmEmitBundleFold
@@ -156,9 +157,14 @@ def foldWindowHolds (hash : List ℤ → ℤ) (tf : TraceFamily) (env : VmRowEnv
 
 /-- **The tampered-final tooth.** A LAST row whose `acc_out` disagrees with the published `final`
 accumulator cannot satisfy the descriptor — exactly the boundary that binds the fold output to the
-children (the Rust `tree_fold_rejects_tampered_final_acc` rejection). -/
+children (the Rust `tree_fold_rejects_tampered_final_acc` rejection). Field-faithful: the binding
+asserts a mod-`p` congruence, so the tooth carries the deployed range-check CANONICALITY
+(`0 ≤ · < p` on both the column and the PI) — two canonical values congruent mod `p` are equal,
+so a genuine disagreement is UNSAT. -/
 theorem fold_rejects_tampered_final
     (hash : List ℤ → ℤ) (tf : TraceFamily) (env : VmRowEnv)
+    (hcanonOut : 0 ≤ env.loc Fold.ACC_OUT_COL ∧ env.loc Fold.ACC_OUT_COL < 2013265921)
+    (hcanonFin : 0 ≤ env.pub Fold.PI_FINAL ∧ env.pub Fold.PI_FINAL < 2013265921)
     (hbad : env.loc Fold.ACC_OUT_COL ≠ env.pub Fold.PI_FINAL) :
     ¬ foldWindowHolds hash tf env false true := by
   intro h
@@ -166,10 +172,12 @@ theorem fold_rejects_tampered_final
     show _ ∈ foldConstraints
     simp [foldConstraints]
   have hc := h _ hmem
-  -- `lastAccBind` on the last row asserts `loc acc_out = pub final` (the `isLast = true` hyp
-  -- discharged by `simp`), contradicting `hbad`.
+  -- `lastAccBind` on the last row asserts `loc acc_out ≡ pub final [ZMOD p]` (the `isLast = true`
+  -- hyp discharged by `simp`); canonicality collapses the congruence to equality, contradicting `hbad`.
   simp only [lastAccBind, VmConstraint2.holdsAt, VmConstraint.holdsVm] at hc
-  exact hbad (hc trivial)
+  exact EffectVmEmitTransfer.not_modEq_zero_of_canon
+    (x := env.loc Fold.ACC_OUT_COL - env.pub Fold.PI_FINAL) rfl hcanonOut hcanonFin hbad
+    ((EffectVmEmitTransfer.gate_modEq_iff rfl).mpr (hc trivial))
 
 /-- **The real-compress tooth (retires the hand-AIR's residual).** Against a SOUND chip table, the
 descriptor's compress lookup ENFORCES `acc_out = Poseidon2(acc_in, digest)`: the `acc_out` column
