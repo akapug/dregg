@@ -864,3 +864,14 @@ HONEST GAPS REMAINING after the grind: (a) LIGHT-CLIENT crown — Lane-D-blocked
 compiled a universe, no player via discord (the stakeholder surfaces — the biggest remaining value). (c) brain channel-
 confined not JAILED (deos-hermes unwired). (d) multi-cell finality host-recomputed not cross-node. (e) the assembled
 universe defaults to the Deterministic (grindable) dice source not the non-grindable VRF/Hybrid.
+
+## ═══ WIDTHS PHASE (2026-07-11): go equally deep along the breadth, same rigor ═══
+The moat is real (verifiable substrate). Now the original ambition's BREADTH, on the real dregg substrate, driven.
+Max-leverage order (mirrors the original): deploy/exist -> UGC flywheel -> progression+skill-checks -> procgen -> MUD.
+WAVE 1 firing (3 disjoint lanes): DEPLOY the real engine [a71e75f, demo/ — a running service hosting dungeon-on-dregg,
+a move is a real TurnReceipt over HTTP, playable+verifiable — make it EXIST for authors/players] · CHARACTER
+PROGRESSION [a9a66d4, dungeon-on-dregg — XP/level/class as real cell state, level-up executor-GATED (no XP no level),
+class-locked abilities] · PROCGEN [ad0f9da, new procgen-dregg crate — a provably-fair dungeon from a committed
+dregg-dice seed, reproducible, parses+validates]. NEXT waves: UGC flywheel (publish/rate + no-cheat leaderboards on
+the receipt chain) · persistent MUD (many player-cells, branch-stitch) · presentation. Crown (verify_history) still
+Lane-D-gated.
