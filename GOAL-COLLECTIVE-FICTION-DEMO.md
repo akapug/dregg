@@ -904,3 +904,18 @@ Bedrock (dregg-narrator) with a PER-USER cap (replacing the single global $20); 
 to the real dungeon-on-dregg engine.
 ## Widths wave 2 status: UGC leaderboard ✅ committed (8/8). MUD ✅ 57/57 ON DISK but re-verify BLOCKED by a concurrent-
 ## lane FFI break (lean_holding_grant_weight — not mine) — HELD; commit when the tree clears + I re-drive it.
+
+## Revenue rail + widths (2026-07-11 cont.)
+- ✅ dregg-pay COMMITTED (payment backend B, driven 12+e2e by me): HD deposit addrs (SLIP-0010 ed25519) + watcher
+  (reuses bridge solana_holdings SPL decode + consensus verify) + per-user idempotent CreditLedger + sweeper. Devnet/
+  mock, no mainnet keys/mint/treasury in source. Custody = the seed. Endgame = protocol-native settlement.
+- ✅ MUD COMMITTED (driven 7/57 by me, FFI break cleared): multi-player on starbridge World — distinct player-cells,
+  CapabilityNotHeld, contested->one-owner (WriteOnce), concurrent->branch-stitch #-conflict.
+- FIRING: discord-bot payment integration [aa75cdf] — sqlite CreditStore + /buy-credits + /balance + the /dungeon
+  credit GATE + PAID narration -> real Bedrock with a PER-USER cap (replacing the global $20), free tier intact.
+  Devnet/mock, driven (no live Discord needed for the logic).
+- NEXT (the "Midjourney phase"): the bot as an admin-privileged Discord-native PLATFORM — categories/channels
+  orchestrated by the bot (THE FORGE = craft+publish to the UGC registry · THE ARCADE = per-party channels, collective
+  quorum play, real-Bedrock, real receipts · LEADERBOARDS = the no-cheat boards · DAILY = the procgen daily · CREDITS
+  = /buy-credits + the attestation "you paid for real Claude"). Ties EVERY width into one living server.
+  Then: migrate the bot's /dungeon from attested-dm (LARP) to the real dungeon-on-dregg engine.
