@@ -22,6 +22,14 @@
 //! Freshness (is the doc *recent*) is enforced only in the trait entry point
 //! against wall-clock now; the crypto core uses the doc's timestamp so a captured
 //! fixture verifies deterministically forever.
+//!
+//! ## AMD SEV-SNP ([`snp::SnpVerifier`])
+//!
+//! Parses the fixed-layout 1184-byte SEV-SNP `ATTESTATION_REPORT`, extracts the launch
+//! `measurement` (folded to 32 bytes via SHA-256) and `report_data` (first 32 bytes),
+//! and verifies the report-body ECDSA-P384/SHA-384 signature with the chip's VCEK
+//! public key after checking VCEK ← ASK ← pinned-ARK. Fail-closed: with no pinned AMD
+//! roots installed it rejects every report. See [`snp`].
 
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -31,6 +39,9 @@ use serde::Deserialize;
 use serde_bytes::ByteBuf;
 use sha2::{Digest, Sha256};
 use x509_parser::prelude::*;
+
+pub mod snp;
+pub use snp::SnpVerifier;
 
 /// The pinned AWS Nitro Enclaves root G1 certificate (PEM).
 const AWS_NITRO_ROOT_PEM: &[u8] = include_bytes!("aws_nitro_root_g1.pem");
