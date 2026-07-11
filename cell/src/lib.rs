@@ -60,6 +60,7 @@ pub mod revocation_channel;
 pub mod revoked_set;
 pub mod ring_closure;
 pub mod state;
+pub mod tee_attest;
 /// γ.2 unilateral binding (1-arity sibling) — plain data type used by
 /// `peer_exchange` to ship per-cell self-attestations. PI / accumulator
 /// logic lives in `dregg_turn::bilateral_schedule`.
