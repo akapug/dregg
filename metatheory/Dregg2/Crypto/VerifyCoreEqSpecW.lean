@@ -207,23 +207,43 @@ theorem wRowHat_eq_wRow (terms : List (Poly × Poly)) (c s : Poly)
   congr 2
   exact foldl_pointwise_expandA terms zeroPoly hAhat
 
+/-- `terms.map (fun t => (intt t.1, t.2))` inherits the size-256 hypotheses (`intt` preserves size; the
+second component is unchanged) — the honest-key `hterm` shared by the two theorems below. -/
+theorem hatTerms_hterm (terms : List (Poly × Poly))
+    (hAhat : ∀ t ∈ terms, t.1.size = 256 ∧ (∀ (p : Nat), t.1[p]! < q))
+    (hz : ∀ t ∈ terms, t.2.size = 256) :
+    ∀ t ∈ terms.map (fun t => (intt t.1, t.2)), t.1.size = 256 ∧ t.2.size = 256 := by
+  intro t ht
+  rw [List.mem_map] at ht
+  obtain ⟨t0, ht0, rfl⟩ := ht
+  exact ⟨MlDsaRing.intt_size t0.1 (hAhat t0 ht0).1 (hAhat t0 ht0).2, hz t0 ht0⟩
+
+/-- The stored-`Â` per-row value stays reduced (`< q`) — the same `intt`-range fact as `wRow_lt`. -/
+theorem wRowHat_lt (terms : List (Poly × Poly)) (c s : Poly) (p : Nat) : (wRowHat terms c s)[p]! < q :=
+  intt_lt _ (subPoly_size _ _) (subPoly_lt _ _) p
+
 /-- **`WOneRecoversSpec` for the HONEST KEY — unconditional.** verifyCore's per-row coefficient array `w_i`
 built from the STORED NTT-domain matrix `Â` (`wRowHat`), read at coordinate `jj`, IS the canonical `ℤ_q` rep
 of the `jj`-th power-basis coordinate of the abstract `R_q` matvec `(A·z − c·s)_i` with `A_ij := intt Â_ij`.
 No `ntt A_ij = Â_ij` residual remains — it is discharged by `ExpandAIsMatrix`. The last Seam-1 verify non-gap
-is closed: the executable applies the FIPS rounding to exactly the coordinates of the spec's recovery argument. -/
+is closed: the executable applies the FIPS rounding to exactly the coordinates of the spec's recovery argument.
+
+Proof = `wOne_recovers` applied to the ExpandA preimage list `A_ij := intt Â_ij`, after `wRowHat_eq_wRow`
+(`ExpandAIsMatrix`) identifies `wRowHat` with `wRow` on those preimages. The `generalize` is load-bearing:
+`wOne_recovers`/`wRow_toRq`/etc. elaborate fine over a bare list VARIABLE, but instantiating them at the
+concrete `terms.map (fun t => (intt t.1, t.2))` makes the elaborator whnf `toRq`/`AdjoinRoot` reductions over
+that closed expression and hit the heartbeat wall. Abstracting it to a fresh `M` first keeps it opaque. -/
 theorem wOne_recovers_hat (terms : List (Poly × Poly)) (c s : Poly)
     (hAhat : ∀ t ∈ terms, t.1.size = 256 ∧ (∀ (p : Nat), t.1[p]! < q))
     (hz : ∀ t ∈ terms, t.2.size = 256) (hc : c.size = 256) (hs : s.size = 256)
     (jj : Fin pbW.dim) :
     (wRowHat terms c s)[(jj : ℕ)]!
       = (pbW.basis.repr (rqMatvec (terms.map (fun t => (intt t.1, t.2))) c s) jj).val := by
-  rw [wRowHat_eq_wRow terms c s hAhat]
-  refine wOne_recovers (terms.map (fun t => (intt t.1, t.2))) c s ?_ hc hs jj
-  intro t ht
-  rw [List.mem_map] at ht
-  obtain ⟨t0, ht0, rfl⟩ := ht
-  exact ⟨MlDsaRing.intt_size t0.1 (hAhat t0 ht0).1 (hAhat t0 ht0).2, hz t0 ht0⟩
+  have hterm := hatTerms_hterm terms hAhat hz
+  have hEq := wRowHat_eq_wRow terms c s hAhat
+  generalize hM : terms.map (fun t => (intt t.1, t.2)) = M at hterm hEq ⊢
+  rw [hEq]
+  exact wOne_recovers M c s hterm hc hs jj
 
 #assert_axioms expandA_is_matrix
 #assert_axioms wRowHat_eq_wRow
