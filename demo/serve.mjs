@@ -179,6 +179,12 @@ export async function makeServer(port = 0, opts = {}) {
         return res.end(text);
       }
 
+      // ── shared site chrome (theme toggle + share); same-origin so a strict `script-src 'self'` CSP allows it ──
+      if (url === "/theme.js") {
+        const js = await readFile(path.join(__dirname, "theme.js"), "utf8");
+        return send(res, js, MIME[".js"]);
+      }
+
       // ── The Commons (existing, unchanged) ──
       if (url === "/" || url === "/index.html") return send(res, index, MIME[".html"]);
       if (url === "/app.js") return send(res, appJs, MIME[".js"]);

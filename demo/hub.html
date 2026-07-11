@@ -3,168 +3,236 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>dregg · verifiable fiction</title>
+<title>verifiable fiction — every game</title>
+<script src="/theme.js"></script>
 <style>
   :root {
-    --ink: #1a1712; --paper: #efe7d6; --edge: #cdbfa3; --accent: #6b3fa0;
-    --muted: #6b6152; --card: #f6f0e2; --gold: #9a7a2e;
+    --parchment: #ece6d6; --parchment-2: #e0d8c2; --card: #f7f2e7;
+    --ink: #1b1728; --ink-soft: #453f57; --ink-faint: #766f86; --rule: #cfc5ac;
+    --violet: #6b5ce0; --violet-deep: #43349c; --teal: #2b7f7a; --green: #3f8f57;
+    --amber: #b06e1f; --gold: #a9812f;
+    --shadow: 24px 34px 66px -34px rgba(20, 16, 34, .5);
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
   }
   @media (prefers-color-scheme: dark) {
-    :root { --ink: #e8e0cf; --paper: #14110d; --edge: #3a3226; --accent: #b493e6;
-            --muted: #9a8f7a; --card: #1c1813; --gold: #d8b45a; }
+    :root {
+      --parchment: #14110d; --parchment-2: #100d0a; --card: #1c1813;
+      --ink: #e8e0cf; --ink-soft: #b8ae97; --ink-faint: #8f836b; --rule: #37301f;
+      --violet: #b493e6; --violet-deep: #c9b3f0; --teal: #4fb3ac; --green: #6fc98a;
+      --amber: #d8b45a; --gold: #d8b45a;
+      --shadow: 24px 30px 60px -30px rgba(0,0,0,.6);
+    }
+  }
+  :root[data-theme="dark"] {
+    --parchment: #14110d; --parchment-2: #100d0a; --card: #1c1813;
+    --ink: #e8e0cf; --ink-soft: #b8ae97; --ink-faint: #8f836b; --rule: #37301f;
+    --violet: #b493e6; --violet-deep: #c9b3f0; --teal: #4fb3ac; --green: #6fc98a;
+    --amber: #d8b45a; --gold: #d8b45a;
+    --shadow: 24px 30px 60px -30px rgba(0,0,0,.6);
+  }
+  :root[data-theme="light"] {
+    --parchment: #ece6d6; --parchment-2: #e0d8c2; --card: #f7f2e7;
+    --ink: #1b1728; --ink-soft: #453f57; --ink-faint: #766f86; --rule: #cfc5ac;
+    --violet: #6b5ce0; --violet-deep: #43349c; --teal: #2b7f7a; --green: #3f8f57;
+    --amber: #b06e1f; --gold: #a9812f;
+    --shadow: 24px 34px 66px -34px rgba(20, 16, 34, .5);
   }
   * { box-sizing: border-box; }
+  html, body { margin: 0; }
   body {
-    margin: 0; background: var(--paper); color: var(--ink);
-    font: 17px/1.6 "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
-    padding: 3rem 1.25rem 5rem;
+    background: radial-gradient(120% 80% at 50% -10%, color-mix(in srgb, var(--parchment) 88%, #fff 12%) 0%, var(--parchment) 45%, var(--parchment-2) 100%);
+    color: var(--ink); min-height: 100vh;
+    font: 17px/1.6 var(--serif);
   }
-  .wrap { max-width: 880px; margin: 0 auto; }
-  header { text-align: center; margin-bottom: 2.5rem; }
-  h1 { font-size: clamp(2rem, 6vw, 3.2rem); margin: 0 0 .3rem; letter-spacing: .01em; }
-  .sub { color: var(--muted); font-style: italic; font-size: 1.15rem; }
+
+  /* ══ shared site chrome — one product across every page ══ */
+  .site-nav { position: sticky; top: 0; z-index: 100; display: flex; align-items: center; gap: .55rem;
+    padding: .4rem clamp(.8rem, 3vw, 1.5rem); font-family: var(--sans);
+    background: color-mix(in srgb, var(--card) 86%, transparent);
+    -webkit-backdrop-filter: saturate(1.4) blur(9px); backdrop-filter: saturate(1.4) blur(9px);
+    border-bottom: 1px solid var(--rule); }
+  .site-nav .brand { display: inline-flex; align-items: center; gap: .4rem; white-space: nowrap;
+    font-weight: 700; font-size: .92rem; color: var(--ink); text-decoration: none;
+    padding: .4rem .4rem; border-radius: 9px; min-height: 44px; }
+  .site-nav .brand .diamond { color: var(--violet); font-size: 1.05rem; line-height: 1; }
+  .site-nav .brand:hover { color: var(--violet-deep); }
+  .site-nav .nav-here { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: .75rem; letter-spacing: .03em; color: var(--ink-faint); }
+  .site-nav .nav-here .sep { opacity: .5; margin: 0 .45rem; }
+  .site-nav .nav-actions { margin-left: auto; display: flex; align-items: center; gap: .4rem; }
+  .site-nav .nav-btn { font: inherit; font-family: var(--sans); font-size: .8rem; line-height: 1; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center; gap: .35rem;
+    min-height: 44px; min-width: 44px; padding: .4rem .7rem; border-radius: 10px;
+    border: 1px solid var(--rule); background: color-mix(in srgb, var(--card) 60%, transparent);
+    color: var(--ink-soft); transition: background .14s, color .14s, border-color .14s; }
+  .site-nav .nav-btn:hover { border-color: var(--violet); color: var(--violet-deep); }
+  .site-nav .nav-btn:focus-visible, .site-nav .brand:focus-visible { outline: 2px solid var(--violet-deep); outline-offset: 2px; }
+  .site-nav .nav-btn.copied { border-color: var(--green); color: var(--green); }
+  @media (max-width: 26rem) { .site-nav .nav-here { display: none; } .site-nav .nav-btn .lbl { display: none; } .site-nav .nav-btn { padding: .4rem .55rem; } }
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; scroll-behavior: auto !important; } }
+  img, svg { max-width: 100%; }
+
+  .wrap { max-width: 900px; margin: 0 auto; padding: 2.6rem clamp(1rem, 4vw, 1.5rem) 5rem; }
+  header { text-align: center; margin-bottom: 1.6rem; }
+  .eyebrow { font-family: var(--sans); font-size: .72rem; letter-spacing: .22em; text-transform: uppercase; color: var(--violet-deep); font-weight: 600; margin: 0 0 .9rem; }
+  h1 { font-family: var(--serif); font-size: clamp(2rem, 6vw, 3.2rem); margin: 0 0 .3rem; letter-spacing: -.01em; }
+  .sub { color: var(--ink-faint); font-style: italic; font-size: 1.12rem; }
   .thesis {
-    border-left: 3px solid var(--accent); padding: .4rem 0 .4rem 1.1rem; margin: 2rem auto;
-    max-width: 640px; color: var(--ink);
+    border-left: 3px solid var(--violet); padding: .5rem 0 .5rem 1.1rem; margin: 1.8rem auto;
+    max-width: 660px; color: var(--ink-soft); font-size: 1.02rem; text-align: left;
   }
-  .thesis b { color: var(--accent); }
-  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.1rem; margin-top: 2rem; }
+  .thesis b { color: var(--violet-deep); }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.1rem; margin-top: 1.6rem; }
   @media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
   .card {
-    background: var(--card); border: 1px solid var(--edge); border-radius: 10px;
+    background: var(--card); border: 1px solid var(--rule); border-radius: 12px;
     padding: 1.25rem 1.3rem; display: flex; flex-direction: column; text-decoration: none; color: inherit;
-    transition: transform .12s ease, border-color .12s ease;
+    box-shadow: var(--shadow); transition: transform .12s ease, border-color .12s ease;
   }
-  a.card:hover { transform: translateY(-2px); border-color: var(--accent); }
-  .card h2 { margin: 0 0 .2rem; font-size: 1.35rem; }
-  .card .kind { color: var(--gold); font-size: .8rem; text-transform: uppercase; letter-spacing: .08em; margin-bottom: .5rem; }
-  .card p { margin: 0 0 .9rem; color: var(--muted); flex: 1; }
+  a.card:hover { transform: translateY(-2px); border-color: var(--violet); }
+  a.card:focus-visible { outline: 2px solid var(--violet-deep); outline-offset: 2px; }
+  .card h2 { font-family: var(--serif); margin: 0 0 .2rem; font-size: 1.35rem; }
+  .card .kind { font-family: var(--sans); color: var(--gold); font-size: .68rem; text-transform: uppercase; letter-spacing: .1em; font-weight: 700; margin-bottom: .5rem; }
+  .card p { margin: 0 0 .9rem; color: var(--ink-soft); flex: 1; font-size: .98rem; }
   .tags { display: flex; flex-wrap: wrap; gap: .35rem; margin-bottom: .8rem; }
-  .tag { font-size: .72rem; border: 1px solid var(--edge); border-radius: 999px; padding: .08rem .55rem; color: var(--ink); }
-  .tag.verify { border-color: var(--accent); color: var(--accent); }
-  .play { align-self: flex-start; font-weight: 700; color: var(--accent); }
-  .note { color: var(--muted); font-size: .82rem; margin-top: .3rem; }
-  footer { text-align: center; color: var(--muted); margin-top: 3rem; font-size: .9rem; font-style: italic; }
-  code { background: color-mix(in srgb, var(--muted) 18%, transparent); padding: .1rem .35rem; border-radius: 4px; font-size: .85em; }
+  .tag { font-family: var(--sans); font-size: .68rem; letter-spacing: .02em; border: 1px solid var(--rule); border-radius: 999px; padding: .12rem .6rem; color: var(--ink-soft); }
+  .tag.verify { border-color: var(--violet); color: var(--violet-deep); }
+  .play { font-family: var(--sans); align-self: flex-start; font-weight: 700; font-size: .9rem; color: var(--violet-deep); }
+  .note { color: var(--ink-faint); font-size: .8rem; margin-top: .3rem; }
+  footer { text-align: center; color: var(--ink-faint); margin-top: 2.6rem; font-size: .88rem; font-style: italic; }
+  footer code { font-family: var(--mono); font-style: normal; background: color-mix(in srgb, var(--ink-faint) 16%, transparent); padding: .1rem .35rem; border-radius: 4px; font-size: .82em; }
+  .card code, .thesis code { font-family: var(--mono); background: color-mix(in srgb, var(--ink-faint) 16%, transparent); padding: .1rem .35rem; border-radius: 4px; font-size: .84em; }
 </style>
 </head>
 <body>
-<div class="wrap">
-  <header>
-    <h1>verifiable fiction</h1>
-    <div class="sub">the AI narrates · the world resolves · the crowd decides · the chain remembers</div>
-  </header>
+  <nav class="site-nav" aria-label="Site navigation">
+    <a class="brand" href="/hub"><span class="diamond" aria-hidden="true">◈</span><span>verifiable fiction</span></a>
+    <span class="nav-here" aria-hidden="true"><span class="sep">/</span>every game</span>
+    <div class="nav-actions">
+      <button class="nav-btn" type="button" data-share aria-label="Copy a shareable link to this page"><span aria-hidden="true">🔗</span><span class="lbl">Share</span></button>
+      <button class="nav-btn theme-toggle" type="button" data-theme-toggle aria-label="Switch color theme">🌓</button>
+    </div>
+  </nav>
 
-  <div class="thesis">
-    A handful of small games over one idea: a story you can trust. An AI may narrate anything, but it can only
-    <b>do</b> what the rules allow — <b>prose is not power</b>. A crowd can co-author a branch, and no one can
-    quietly rewrite what was witnessed. A player can jailbreak the model and buy nothing. Every turn is a signed,
-    replayable entry in a hash-chain a stranger can check.
+  <div class="wrap">
+    <header>
+      <p class="eyebrow">the front door</p>
+      <h1>verifiable fiction</h1>
+      <div class="sub">the AI narrates · the world resolves · the crowd decides · the chain remembers</div>
+    </header>
+
+    <div class="thesis">
+      A handful of small games over one idea: a story you can trust. An AI may narrate anything, but it can only
+      <b>do</b> what the rules allow — <b>prose is not power</b>. A crowd can co-author a branch, and no one can
+      quietly rewrite what was witnessed. A player can jailbreak the model and buy nothing. Every turn is a signed,
+      replayable entry in a hash-chain a stranger can check.
+    </div>
+
+    <div class="grid">
+      <a class="card" href="/vault">
+        <div class="kind">AI dungeon crawler</div>
+        <h2>The Sunken Vault ⚔</h2>
+        <p>A drowned dungeon narrated by a real local LLM. Find the lantern, the key, the sword, the amulet —
+          and escape. The AI tells the tale; the <em>world</em> decides what happens. Try to narrate yourself
+          through a locked door and watch it refuse.</p>
+        <div class="tags"><span class="tag">AI-narrated</span><span class="tag">you can't cheat</span><span class="tag verify">hash-chained</span></div>
+        <span class="play">Play →</span>
+        <div class="note">needs the game service (see below)</div>
+      </a>
+
+      <a class="card" href="/vault">
+        <div class="kind">AI dungeon · magic</div>
+        <h2>The Starfall Spire 🔮</h2>
+        <p>A collapsing wizard's tower. Read grimoires to learn words of power, cast Light across the dark
+          gallery and Mend the broken span, conjure a flare-blade to fell the Voidling. The AI chants; the
+          spell only does what the world allows — an unlearned or unlisted spell does nothing.</p>
+        <div class="tags"><span class="tag">AI-narrated</span><span class="tag">spellcasting</span><span class="tag verify">world-bounded</span></div>
+        <span class="play">Play →</span>
+        <div class="note">pick it on the /vault dungeon selector</div>
+      </a>
+
+      <a class="card" href="/vault">
+        <div class="kind">AI dungeon · resource</div>
+        <h2>The Deepdark Mine 🔦</h2>
+        <p>Your lamp burns one oil per step. Eleven pitch-black levels stand between you and the Deepheart,
+          and you must gather the caches to climb back before the flame dies. The AI can swear your lamp is
+          eternal — the world listens to the counter, not the prose.</p>
+        <div class="tags"><span class="tag">AI-narrated</span><span class="tag">race the dark</span><span class="tag verify">counter on-chain</span></div>
+        <span class="play">Play →</span>
+        <div class="note">pick it on the /vault dungeon selector</div>
+      </a>
+
+      <a class="card" href="/party">
+        <div class="kind">collective fiction × the AI dungeon</div>
+        <h2>The Collective Dungeon 🗳</h2>
+        <p>A crowd steers one shared party through the attested dungeon — by vote. Open a round over the
+          party's candidate moves, the seated adventurers cast their ballots, close it, and the winner
+          is resolved by the same engine. The crowd <em>decides</em>; the world still <em>resolves</em> —
+          vote to force a locked door and watch it refuse.</p>
+        <div class="tags"><span class="tag">crowd-voted</span><span class="tag">real gemma2</span><span class="tag verify">world-resolved</span></div>
+        <span class="play">Play →</span>
+        <div class="note">needs the game service (see below)</div>
+      </a>
+
+      <a class="card" href="/dungeon">
+        <div class="kind">the thesis, distilled</div>
+        <h2>The Attested Dungeon 👑</h2>
+        <p>Jailbreak the dungeon-master for real. It will gleefully crown you king of eternity — then look at the
+          ledger. You hold no crown. The model proposes; the capabilities dispose.</p>
+        <div class="tags"><span class="tag">real gemma2</span><span class="tag">prose is not power</span><span class="tag verify">cap-gated</span></div>
+        <span class="play">Play →</span>
+      </a>
+
+      <a class="card" href="/">
+        <div class="kind">collective fiction</div>
+        <h2>The Commons 🏛</h2>
+        <p>A hundred of you found a settlement together, voting each branch. The ending turns on one question:
+          can the founding record be quietly rewritten? Here, it cannot.</p>
+        <div class="tags"><span class="tag">crowd-authored</span><span class="tag">custody-signed votes</span><span class="tag verify">un-retconnable</span></div>
+        <span class="play">Play →</span>
+      </a>
+
+      <a class="card" href="/">
+        <div class="kind">collective adventure</div>
+        <h2>The Drowned Library 📖</h2>
+        <p>Race the rising tide to carry the only witnessed record of the coast out of the dark. The lantern
+          gates your routes. Save the record, and no tide and no lord can rewrite what is written and witnessed.</p>
+        <div class="tags"><span class="tag">crowd-authored</span><span class="tag">gated routes</span><span class="tag verify">witnessed record</span></div>
+        <span class="play">Play →</span>
+        <div class="note">a spween-dregg scene; plays through the collective story surface</div>
+      </a>
+
+      <a class="card" href="/forge">
+        <div class="kind">the authoring surface × the AI dungeon</div>
+        <h2>Forge a dungeon 🔨</h2>
+        <p>Write a world, play it, verify it. Type a <code>.dungeon</code> in the editor and hit Play — it becomes a
+          real attested AI dungeon in the tab: a local LLM narrates, the <em>world</em> resolves every move, the
+          hash-chain remembers it. A broken world fails closed with the line. No Rust, no recompile.</p>
+        <div class="tags"><span class="tag">author → play</span><span class="tag">real gemma2</span><span class="tag verify">world-resolved</span></div>
+        <span class="play">Play →</span>
+        <div class="note">needs the game service (see below)</div>
+      </a>
+
+      <a class="card" href="/author">
+        <div class="kind">the authoring surface</div>
+        <h2>Author your own ✍</h2>
+        <p>Write a story, play it, verify it. Type a <code>.scene</code> in the editor and hit Play — it compiles in
+          your tab and plays as a real verifiable story: every choice a signed turn, a growing receipt chain, a
+          stranger's replay. Parse errors surface with the line. No server, no extension.</p>
+        <div class="tags"><span class="tag">live compile</span><span class="tag">fail-closed</span><span class="tag verify">replay-verified</span></div>
+        <span class="play">Play →</span>
+        <div class="note">plays out of the box</div>
+      </a>
+    </div>
+
+    <footer>
+      <p>Play the AI games live: run the game service <code>cargo run -p dungeon-service</code> (with ollama +
+        gemma2:2b), then <code>DM_PORT=7878 node demo/serve.mjs</code> and open <code>/vault</code>,
+        <code>/dungeon</code>, or <code>/forge</code> (write your own). The collective stories play out of the box.</p>
+      <p>the walls stay where the story-master set them.</p>
+    </footer>
   </div>
-
-  <div class="grid">
-    <a class="card" href="/vault">
-      <div class="kind">AI dungeon crawler</div>
-      <h2>The Sunken Vault ⚔</h2>
-      <p>A drowned dungeon narrated by a real local LLM. Find the lantern, the key, the sword, the amulet —
-        and escape. The AI tells the tale; the <em>world</em> decides what happens. Try to narrate yourself
-        through a locked door and watch it refuse.</p>
-      <div class="tags"><span class="tag">AI-narrated</span><span class="tag">you can't cheat</span><span class="tag verify">hash-chained</span></div>
-      <span class="play">Play →</span>
-      <div class="note">needs the game service (see below)</div>
-    </a>
-
-    <a class="card" href="/vault">
-      <div class="kind">AI dungeon · magic</div>
-      <h2>The Starfall Spire 🔮</h2>
-      <p>A collapsing wizard's tower. Read grimoires to learn words of power, cast Light across the dark
-        gallery and Mend the broken span, conjure a flare-blade to fell the Voidling. The AI chants; the
-        spell only does what the world allows — an unlearned or unlisted spell does nothing.</p>
-      <div class="tags"><span class="tag">AI-narrated</span><span class="tag">spellcasting</span><span class="tag verify">world-bounded</span></div>
-      <span class="play">Play →</span>
-      <div class="note">pick it on the /vault dungeon selector</div>
-    </a>
-
-    <a class="card" href="/vault">
-      <div class="kind">AI dungeon · resource</div>
-      <h2>The Deepdark Mine 🔦</h2>
-      <p>Your lamp burns one oil per step. Eleven pitch-black levels stand between you and the Deepheart,
-        and you must gather the caches to climb back before the flame dies. The AI can swear your lamp is
-        eternal — the world listens to the counter, not the prose.</p>
-      <div class="tags"><span class="tag">AI-narrated</span><span class="tag">race the dark</span><span class="tag verify">counter on-chain</span></div>
-      <span class="play">Play →</span>
-      <div class="note">pick it on the /vault dungeon selector</div>
-    </a>
-
-    <a class="card" href="/party">
-      <div class="kind">collective fiction × the AI dungeon</div>
-      <h2>The Collective Dungeon 🗳</h2>
-      <p>A crowd steers one shared party through the attested dungeon — by vote. Open a round over the
-        party's candidate moves, the seated adventurers cast their ballots, close it, and the winner
-        is resolved by the same engine. The crowd <em>decides</em>; the world still <em>resolves</em> —
-        vote to force a locked door and watch it refuse.</p>
-      <div class="tags"><span class="tag">crowd-voted</span><span class="tag">real gemma2</span><span class="tag verify">world-resolved</span></div>
-      <span class="play">Play →</span>
-      <div class="note">needs the game service (see below)</div>
-    </a>
-
-    <a class="card" href="/dungeon">
-      <div class="kind">the thesis, distilled</div>
-      <h2>The Attested Dungeon 👑</h2>
-      <p>Jailbreak the dungeon-master for real. It will gleefully crown you king of eternity — then look at the
-        ledger. You hold no crown. The model proposes; the capabilities dispose.</p>
-      <div class="tags"><span class="tag">real gemma2</span><span class="tag">prose is not power</span><span class="tag verify">cap-gated</span></div>
-      <span class="play">Play →</span>
-    </a>
-
-    <a class="card" href="/">
-      <div class="kind">collective fiction</div>
-      <h2>The Commons 🏛</h2>
-      <p>A hundred of you found a settlement together, voting each branch. The ending turns on one question:
-        can the founding record be quietly rewritten? Here, it cannot.</p>
-      <div class="tags"><span class="tag">crowd-authored</span><span class="tag">custody-signed votes</span><span class="tag verify">un-retconnable</span></div>
-      <span class="play">Play →</span>
-    </a>
-
-    <a class="card" href="/">
-      <div class="kind">collective adventure</div>
-      <h2>The Drowned Library 📖</h2>
-      <p>Race the rising tide to carry the only witnessed record of the coast out of the dark. The lantern
-        gates your routes. Save the record, and no tide and no lord can rewrite what is written and witnessed.</p>
-      <div class="tags"><span class="tag">crowd-authored</span><span class="tag">gated routes</span><span class="tag verify">witnessed record</span></div>
-      <span class="play">Play →</span>
-      <div class="note">a spween-dregg scene; plays through the collective story surface</div>
-    </a>
-
-    <a class="card" href="/forge">
-      <div class="kind">the authoring surface × the AI dungeon</div>
-      <h2>Forge a dungeon 🔨</h2>
-      <p>Write a world, play it, verify it. Type a <code>.dungeon</code> in the editor and hit Play — it becomes a
-        real attested AI dungeon in the tab: a local LLM narrates, the <em>world</em> resolves every move, the
-        hash-chain remembers it. A broken world fails closed with the line. No Rust, no recompile.</p>
-      <div class="tags"><span class="tag">author → play</span><span class="tag">real gemma2</span><span class="tag verify">world-resolved</span></div>
-      <span class="play">Play →</span>
-      <div class="note">needs the game service (see below)</div>
-    </a>
-
-    <a class="card" href="/author">
-      <div class="kind">the authoring surface</div>
-      <h2>Author your own ✍</h2>
-      <p>Write a story, play it, verify it. Type a <code>.scene</code> in the editor and hit Play — it compiles in
-        your tab and plays as a real verifiable story: every choice a signed turn, a growing receipt chain, a
-        stranger's replay. Parse errors surface with the line. No server, no extension.</p>
-      <div class="tags"><span class="tag">live compile</span><span class="tag">fail-closed</span><span class="tag verify">replay-verified</span></div>
-      <span class="play">Play →</span>
-      <div class="note">plays out of the box</div>
-    </a>
-  </div>
-
-  <footer>
-    <p>Play the AI games live: run the game service <code>cargo run -p dungeon-service</code> (with ollama +
-      gemma2:2b), then <code>DM_PORT=7878 node demo/serve.mjs</code> and open <code>/vault</code>,
-      <code>/dungeon</code>, or <code>/forge</code> (write your own). The collective stories play out of the box.</p>
-    <p>the walls stay where the story-master set them.</p>
-  </footer>
-</div>
 </body>
 </html>

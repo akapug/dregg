@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'" />
   <title>The Forge — write a dungeon, play it, verify it</title>
+  <script src="/theme.js"></script>
   <style>
     :root {
       --parchment: #ece6d6; --parchment-2: #e0d8c2; --card: #f7f2e7;
@@ -26,6 +27,22 @@
         --editor-bg: #0c0a12; --editor-ink: #e6e1ff; --editor-gutter: #4a4470; --editor-comment: #746da0;
         --shadow: 24px 30px 60px -30px rgba(0,0,0,.6);
       }
+    }
+    :root[data-theme="dark"] {
+      --parchment: #14110d; --parchment-2: #100d0a; --card: #1c1813;
+      --ink: #e8e0cf; --ink-soft: #b8ae97; --ink-faint: #8f836b; --rule: #37301f;
+      --violet: #b493e6; --violet-deep: #c9b3f0; --teal: #4fb3ac; --green: #6fc98a;
+      --red: #e8837f; --red-soft: #2a1a1a; --red-line: #4a2f2f; --amber: #d8b45a; --gold: #d8b45a;
+      --editor-bg: #0c0a12; --editor-ink: #e6e1ff; --editor-gutter: #4a4470; --editor-comment: #746da0;
+      --shadow: 24px 30px 60px -30px rgba(0,0,0,.6);
+    }
+    :root[data-theme="light"] {
+      --parchment: #ece6d6; --parchment-2: #e0d8c2; --card: #f7f2e7;
+      --ink: #1b1728; --ink-soft: #453f57; --ink-faint: #766f86; --rule: #cfc5ac;
+      --violet: #6b5ce0; --violet-deep: #43349c; --teal: #2b7f7a; --green: #3f8f57;
+      --red: #a8262f; --red-soft: #f7e6e6; --red-line: #e7c4c4; --amber: #b06e1f; --gold: #a9812f;
+      --editor-bg: #201d33; --editor-ink: #e9e5ff; --editor-gutter: #6a6394; --editor-comment: #8f88c0;
+      --shadow: 24px 34px 66px -34px rgba(20, 16, 34, .5);
     }
     * { box-sizing: border-box; }
     html, body { margin: 0; }
@@ -242,9 +259,45 @@
     .rm-you-dot { fill: var(--violet); }
 
     footer { margin-top: 2.4rem; font-size: .76rem; color: var(--ink-faint); }
+
+    /* ══ shared site chrome — one product across every page ══ */
+    .site-nav { position: sticky; top: 0; z-index: 100; display: flex; align-items: center; gap: .55rem;
+      padding: .4rem clamp(.8rem, 3vw, 1.5rem); font-family: var(--sans);
+      background: color-mix(in srgb, var(--card) 86%, transparent);
+      -webkit-backdrop-filter: saturate(1.4) blur(9px); backdrop-filter: saturate(1.4) blur(9px);
+      border-bottom: 1px solid var(--rule); }
+    .site-nav .brand { display: inline-flex; align-items: center; gap: .4rem; white-space: nowrap;
+      font-weight: 700; font-size: .92rem; color: var(--ink); text-decoration: none;
+      padding: .4rem .4rem; border-radius: 9px; min-height: 44px; }
+    .site-nav .brand .diamond { color: var(--violet); font-size: 1.05rem; line-height: 1; }
+    .site-nav .brand:hover { color: var(--violet-deep); }
+    .site-nav .nav-here { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      font-size: .75rem; letter-spacing: .03em; color: var(--ink-faint); }
+    .site-nav .nav-here .sep { opacity: .5; margin: 0 .45rem; }
+    .site-nav .nav-actions { margin-left: auto; display: flex; align-items: center; gap: .4rem; }
+    .site-nav .nav-btn { font: inherit; font-family: var(--sans); font-size: .8rem; line-height: 1; cursor: pointer;
+      display: inline-flex; align-items: center; justify-content: center; gap: .35rem;
+      min-height: 44px; min-width: 44px; padding: .4rem .7rem; border-radius: 10px;
+      border: 1px solid var(--rule); background: color-mix(in srgb, var(--card) 60%, transparent);
+      color: var(--ink-soft); transition: background .14s, color .14s, border-color .14s; }
+    .site-nav .nav-btn:hover { border-color: var(--violet); color: var(--violet-deep); }
+    .site-nav .nav-btn:focus-visible, .site-nav .brand:focus-visible { outline: 2px solid var(--violet-deep); outline-offset: 2px; }
+    .site-nav .nav-btn.copied { border-color: var(--green); color: var(--green); }
+    @media (max-width: 26rem) { .site-nav .nav-here { display: none; } .site-nav .nav-btn .lbl { display: none; } .site-nav .nav-btn { padding: .4rem .55rem; } }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; scroll-behavior: auto !important; } }
+    @media (max-width: 30rem) { .page { padding-left: 1rem; padding-right: 1rem; } }
+    img, svg { max-width: 100%; }
   </style>
 </head>
 <body>
+  <nav class="site-nav" aria-label="Site navigation">
+    <a class="brand" href="/hub"><span class="diamond" aria-hidden="true">◈</span><span>verifiable fiction</span></a>
+    <span class="nav-here" aria-hidden="true"><span class="sep">/</span>The Forge</span>
+    <div class="nav-actions">
+      <button class="nav-btn" type="button" data-share aria-label="Copy a shareable link to the forge page"><span aria-hidden="true">🔗</span><span class="lbl">Share</span></button>
+      <button class="nav-btn theme-toggle" type="button" data-theme-toggle aria-label="Switch color theme">🌓</button>
+    </div>
+  </nav>
   <main class="page">
     <p class="eyebrow">The Forge · write it, play it, verify it</p>
     <h1 class="title">Forge your own <span class="amp">attested</span> dungeon</h1>

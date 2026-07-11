@@ -1,6 +1,6 @@
 THE FORGE — write a .dungeon world, play it, verify it
-driven run · attested-dm /game/author contract · narratorKind: model:gemma2:2b (a REAL local model)
-served at http://127.0.0.1:57337/forge
+driven run · attested-dm /game/author contract · narratorKind: model:us.anthropic.claude-haiku-4-5-20251001-v1:0 (a REAL local model)
+served at http://127.0.0.1:52071/forge
 ============================================================================
 
 Write a .dungeon world in text; hit ▶ Play and it becomes a real attested AI dungeon:
@@ -24,23 +24,23 @@ THE WINNING PLAYTHROUGH OF THE AUTHORED WORLD  (each move LANDS; the rail grows 
 ----------------------------------------------------------------------------
 
   » take candle   (a light for the dark stair)
-    gemma2: The stone archway hums faintly, as if the moss itself is breathing. You reach out to grasp the candle, its wick still unlit, and feel a chill settle in your bones.
+    haiku: The stone archway, slick with moss and damp with unseen moisture, seems to sigh as you reach out. The candle's wick is still, a single thread of hope in the gloom.
     world : LANDED → room gatehouse · receipt rail #1 · status playing
 
   » go north   (into the long hall)
-    gemma2: The archway groans as you push through, its moss-covered surface slick with dampness. A faint scent of mildew hangs in the air, mingling with the chill of the stone.
+    haiku: The archway groans as you push through, a damp chill clinging to your cloak. The scent of moss and decay hangs heavy in the air, punctuated by the faintest hint of something else, something metallic and sharp.
     world : LANDED → room hall · receipt rail #2 · status playing
 
   » go down   (down the now-passable stair)
-    gemma2: The stone steps are slick and cold beneath your feet, echoing with a faint, mournful hum. A chill wind whispers through the crypt's maw as you descend into darkness.
+    haiku: The stone steps are slick and cold beneath your feet, echoing with a faint, mournful hum. A chill wind whispers through the crypt's maw as you descend into darkness.
     world : LANDED → room crypt · receipt rail #3 · status playing
 
   » take relic   (the glowing relic)
-    gemma2: As you approach the bier, its surface seems to shimmer with an inner light. The relic's form is obscured by a veil of smoke and dust, but you can feel its presence as if it were breathing in your direction.
+    haiku: As you approach the bier, its surface seems to shimmer with an inner light. The relic's glow intensifies as your fingers brush against it.
     world : LANDED → room crypt · receipt rail #4 · status playing
 
   » go north   (into the shrine — WIN)
-    gemma2: The crypt's stone walls are slick with age, and a chill settles in your bones as you approach the bier. A faint scent of incense hangs heavy in the air, mingling with the musty smell of decay.
+    haiku: The crypt's stone walls are slick with age, and a chill settles in your bones as you approach the bier. A faint scent of incense hangs heavy in the air, mingling with the musty smell of decay.
     world : LANDED → room shrine · receipt rail #5 · status won
 
   RESULT: status = WON · 5 verified turns · carrying [candle, relic]
