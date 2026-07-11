@@ -875,3 +875,16 @@ class-locked abilities] · PROCGEN [ad0f9da, new procgen-dregg crate — a prova
 dregg-dice seed, reproducible, parses+validates]. NEXT waves: UGC flywheel (publish/rate + no-cheat leaderboards on
 the receipt chain) · persistent MUD (many player-cells, branch-stitch) · presentation. Crown (verify_history) still
 Lane-D-gated.
+
+## Widths WAVE 1 COMPLETE + WAVE 2 firing (2026-07-11)
+- ✅ DEPLOY (demo/real-dungeon-service): the REAL dungeon-on-dregg engine live over HTTP — a move is a real TurnReceipt,
+  an illegal move a real executor refusal (field[6] write-once), /verify=true, played to WIN over the wire. Driven by me.
+- ✅ PROGRESSION (dungeon-on-dregg): XP/level/class as real cell state, level-up executor-GATED (FieldGte on XP,
+  premature refused), class-locked abilities. 50/50. Driven by me.
+- ✅ PROCGEN (procgen-dregg, new crate): a provably-fair dungeon from a committed dregg-dice seed, byte-identical re-gen,
+  parses+validates, wrong-seed rejected. 7/7. Driven by me.
+WAVE 2 firing (2 disjoint lanes): UGC FLYWHEEL + NO-CHEAT LEADERBOARD [ae80f5d, new ugc-dregg — publish universes +
+completions ranked ONLY if they re-verify to a win; a cheat rejected] · PERSISTENT MUD [a9aee16, dungeon-on-dregg/mud
+— many player-cells in one shared multi-cell world, contested grabs = real conflicts]. NEXT: skill-checks, presentation.
+Crown (verify_history) still Lane-D-gated. Honest gaps still open: the crown, cross-node finality, the LLM jail, VRF-
+as-default-source.
