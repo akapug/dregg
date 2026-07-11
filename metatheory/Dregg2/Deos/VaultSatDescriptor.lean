@@ -59,8 +59,103 @@ open Dregg2.Exec.CircuitEmit (EmittedExpr)
 open Dregg2.Deos.SettleEscrowSatDescriptor
   (settleEscrowV1Base beforeFieldCol afterFieldCol)
 open Dregg2.Deos.DischargeSatDescriptor (GRAD_ROT_WIDTH bitSum bitSum_nonneg_lt)
+open Dregg2.Circuit.Emit.EffectVmEmitTransfer (pPrimeInt gate_modEq_iff)
 
 set_option autoImplicit false
+
+/-! ## §0 — the mod-`p` → ℤ bounded-lift primitives.
+
+`VmConstraint.holdsVm` on a gate asserts the body `≡ 0 [ZMOD p]` (`p = 2013265921`, the deployed
+BabyBear field constraint), NOT `= 0` over ℤ. Two primitives upgrade the congruence to the exact-ℤ
+facts the conservation invariant states. Both are the DEPLOYED range-check canonicality made
+load-bearing — they DERIVE the exactness from the `[0, 2^15)` limb/carry bounds, they do not assume
+it. -/
+
+/-- Field-faithful lift: two CANONICAL (`0 ≤ · < p`) integers congruent mod `p` are EQUAL (the
+escrow/discharge `canonEq`). -/
+private theorem canonEq {a b : ℤ} (h : a ≡ b [ZMOD 2013265921])
+    (ha0 : 0 ≤ a) (hap : a < 2013265921) (hb0 : 0 ≤ b) (hbp : b < 2013265921) : a = b := by
+  unfold Int.ModEq at h
+  rwa [Int.emod_eq_of_lt ha0 hap, Int.emod_eq_of_lt hb0 hbp] at h
+
+/-- **THE BOUNDED-LIFT LEMMA.** A residual `R` congruent to `0 mod p` that the 15-bit limb/carry
+range checks confine to the open interval `(−p, p)` is EXACTLY `0` over ℤ. This is the soundness
+payoff of `CARRY_BITS = 15`: at 15-bit operands every honest gate residual `R = xᵢ·yⱼ + cin − t −
+2^15·cout` has `|R| ≤ 2^30 − 1 < p`, so `p ∣ R` collapses to `R = 0`. (At 16-bit carries `|R|` could
+reach `2^31 − 1 > p` and the lift was UNSOUND.) -/
+private theorem modEqZeroBounded {R : ℤ} (h : R ≡ 0 [ZMOD 2013265921])
+    (hlo : -2013265921 < R) (hhi : R < 2013265921) : R = 0 := by
+  rw [Int.modEq_zero_iff_dvd] at h
+  obtain ⟨k, hk⟩ := h
+  omega
+
+/-- A 15-bit × 15-bit limb product lands in `[0, 2^30)` — the deterministic partial-product bound
+that keeps every schoolbook gate residual inside `(−p, p)`. -/
+private theorem limbMul_lt {a b : ℤ} (ha : 0 ≤ a ∧ a < 32768) (hb : 0 ≤ b ∧ b < 32768) :
+    0 ≤ a * b ∧ a * b < 1073741824 := by
+  refine ⟨mul_nonneg ha.1 hb.1, ?_⟩
+  calc a * b ≤ 32767 * b := by
+        apply mul_le_mul_of_nonneg_right (by omega) hb.1
+    _ ≤ 32767 * 32767 := by apply mul_le_mul_of_nonneg_left (by omega) (by omega)
+    _ < 1073741824 := by norm_num
+
+/-! ### Clean-context schoolbook/borrow gate lifts.
+
+Each welded gate residual is a fixed linear combination of a 15-bit×15-bit partial product (`[0,
+2^30)`), a handful of 15-bit limbs/carries (`[0, 2^15)`), and boolean borrow bits. Feeding the exact
+bounds as EXPLICIT arguments keeps the `omega` that discharges the `(−p, p)` confinement in a tiny
+context (no ambient mod-`p` congruences to churn on), so the lift stays fast. `hR` re-associates the
+`EmittedExpr.eval` shape (`+ (−1)·`) to the readable normal form by `ring`. -/
+
+private theorem liftProdA {R xy z ca : ℤ} (h : R ≡ 0 [ZMOD 2013265921])
+    (hR : R = xy - z - 32768 * ca)
+    (hxy : 0 ≤ xy ∧ xy < 1073741824) (hz : 0 ≤ z ∧ z < 32768) (hc : 0 ≤ ca ∧ ca < 32768) :
+    R = 0 := by refine modEqZeroBounded h ?_ ?_ <;> · subst hR; omega
+
+private theorem liftProdB {R xy ca t cb : ℤ} (h : R ≡ 0 [ZMOD 2013265921])
+    (hR : R = xy + ca - t - 32768 * cb)
+    (hxy : 0 ≤ xy ∧ xy < 1073741824) (hca : 0 ≤ ca ∧ ca < 32768)
+    (ht : 0 ≤ t ∧ t < 32768) (hcb : 0 ≤ cb ∧ cb < 32768) :
+    R = 0 := by refine modEqZeroBounded h ?_ ?_ <;> · subst hR; omega
+
+private theorem liftProdC {R xy t z cc : ℤ} (h : R ≡ 0 [ZMOD 2013265921])
+    (hR : R = xy + t - z - 32768 * cc)
+    (hxy : 0 ≤ xy ∧ xy < 1073741824) (ht : 0 ≤ t ∧ t < 32768)
+    (hz : 0 ≤ z ∧ z < 32768) (hc : 0 ≤ cc ∧ cc < 32768) :
+    R = 0 := by refine modEqZeroBounded h ?_ ?_ <;> · subst hR; omega
+
+private theorem liftProdD {R xy cb cc z z3 : ℤ} (h : R ≡ 0 [ZMOD 2013265921])
+    (hR : R = xy + cb + cc - z - 32768 * z3)
+    (hxy : 0 ≤ xy ∧ xy < 1073741824) (hcb : 0 ≤ cb ∧ cb < 32768) (hcc : 0 ≤ cc ∧ cc < 32768)
+    (hz : 0 ≤ z ∧ z < 32768) (hz3 : 0 ≤ z3 ∧ z3 < 32768) :
+    R = 0 := by refine modEqZeroBounded h ?_ ?_ <;> · subst hR; omega
+
+private theorem liftBorrow0 {R q p bb w : ℤ} (h : R ≡ 0 [ZMOD 2013265921])
+    (hR : R = q - p + 32768 * bb - w)
+    (hq : 0 ≤ q ∧ q < 32768) (hp : 0 ≤ p ∧ p < 32768)
+    (hbb : 0 ≤ bb ∧ bb ≤ 1) (hw : 0 ≤ w ∧ w < 32768) :
+    R = 0 := by refine modEqZeroBounded h ?_ ?_ <;> · subst hR; omega
+
+private theorem liftBorrowN {R q p bbp bb w : ℤ} (h : R ≡ 0 [ZMOD 2013265921])
+    (hR : R = q - p - bbp + 32768 * bb - w)
+    (hq : 0 ≤ q ∧ q < 32768) (hp : 0 ≤ p ∧ p < 32768) (hbbp : 0 ≤ bbp ∧ bbp ≤ 1)
+    (hbb : 0 ≤ bb ∧ bb ≤ 1) (hw : 0 ≤ w ∧ w < 32768) :
+    R = 0 := by refine modEqZeroBounded h ?_ ?_ <;> · subst hR; omega
+
+private theorem liftBit {R b : ℤ} (h : R ≡ 0 [ZMOD 2013265921]) (hR : R = b)
+    (hb : 0 ≤ b ∧ b ≤ 1) : R = 0 := by refine modEqZeroBounded h ?_ ?_ <;> · subst hR; omega
+
+/-- Operand-assembly lift: a CANONICAL field value congruent to a two-limb `[0, 2^30)` sum equals it
+over ℤ. -/
+private theorem liftCanonAssembly {v a b : ℤ} (h : v ≡ a + 32768 * b [ZMOD 2013265921])
+    (hv : 0 ≤ v ∧ v < 2013265921) (ha : 0 ≤ a ∧ a < 32768) (hbnd : 0 ≤ b ∧ b < 32768) :
+    v = a + 32768 * b := by refine canonEq h hv.1 hv.2 ?_ ?_ <;> omega
+
+/-- Delta-assembly lift: a raw ℤ delta that the deposit direction keeps in `[0, p)` and that is
+congruent to a two-limb `[0, 2^30)` sum equals it over ℤ (the range check then bounds it `< 2^30`). -/
+private theorem liftDelta {v a b : ℤ} (h : v ≡ a + 32768 * b [ZMOD 2013265921])
+    (hv0 : 0 ≤ v) (hvp : v < 2013265921) (ha : 0 ≤ a ∧ a < 32768) (hbnd : 0 ≤ b ∧ b < 32768) :
+    v = a + 32768 * b := by refine canonEq h hv0 hvp ?_ ?_ <;> omega
 
 /-! ## §1 — the welded columns (the Rust `vault_weld` twin, canonical-constant-derived). -/
 
@@ -73,7 +168,7 @@ def VAULT_SEL_PI : Nat := 46
 /-- Limb width (15 bits keeps every partial product `< 2^30 < p`). Rust `LIMB_BITS`. -/
 def LIMB_BITS : Nat := 15
 /-- Cross-term carry width (one bit past the limb width). Rust `CARRY_BITS`. -/
-def CARRY_BITS : Nat := 16
+def CARRY_BITS : Nat := 15
 /-- `2^15` as the numeral the gates carry (the Rust `TWO15`). -/
 def TWO15 : Int := 32768
 
@@ -241,36 +336,42 @@ theorem vaultGate_mem (asset share : Nat) (g : VmConstraint2)
 
 /-! ## §4 — THE REFINEMENT RUNG. -/
 
-/-- A welded gate's body vanishes on a satisfying NON-LAST row. -/
+/-- A welded gate's body vanishes mod `p` on a satisfying NON-LAST row (the STABLE `holdsVm`
+interface — now the DEPLOYED field congruence). -/
 theorem vault_gate_holds (hash : List ℤ → ℤ) (asset share : Nat)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
     (hsat : Satisfied2 hash (vaultSatVmDescriptor2R24 asset share) minit mfin maddrs t)
     (i : Nat) (hi : i < t.rows.length) (hnl : (i + 1 == t.rows.length) = false)
     (g : VmConstraint2) (hg : g ∈ vaultSatGates asset share)
     (body : EmittedExpr) (hbody : g = .base (.gate body)) :
-    body.eval (envAt t i).loc = 0 := by
+    body.eval (envAt t i).loc ≡ 0 [ZMOD 2013265921] := by
   have hrow := hsat.rowConstraints i hi g (vaultGate_mem asset share g hg)
   rw [hbody] at hrow
   simpa [VmConstraint2.holdsAt, VmConstraint.holdsVm, hnl] using hrow
 
-/-- A selector-gated body vanishes outright on a selector-on satisfying NON-LAST row. -/
+/-- A selector-gated body vanishes mod `p` on a selector-on satisfying NON-LAST row. -/
 theorem sel_body_vanishes (hash : List ℤ → ℤ) (asset share : Nat)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
     (hsat : Satisfied2 hash (vaultSatVmDescriptor2R24 asset share) minit mfin maddrs t)
     (i : Nat) (hi : i < t.rows.length) (hnl : (i + 1 == t.rows.length) = false)
     (hsel : (envAt t i).loc VAULT_SEL_COL = 1)
     (body : EmittedExpr) (hmem : selGate body ∈ vaultSatGates asset share) :
-    body.eval (envAt t i).loc = 0 := by
+    body.eval (envAt t i).loc ≡ 0 [ZMOD 2013265921] := by
   have h := vault_gate_holds hash asset share hsat i hi hnl (selGate body) hmem
     (.mul (.var VAULT_SEL_COL) body) rfl
   simp only [EmittedExpr.eval, hsel, one_mul] at h
   exact h
 
 /-- The range-check induction: every spec'd column is forced into `[0, 2^n)` (one induction over the
-spec list gives ALL the range facts uniformly). -/
+spec list gives ALL the range facts uniformly). Each spec width is `≤ 15`, so the assembled bit sum
+lives in `[0, 2^15) ⊂ [0, p)`; with the column CANONICAL the mod-`p` assembly congruence lifts to the
+exact-ℤ pin, and the mod-`p` booleanity gate + `p`'s primality forces each canonical bit to `{0,1}`. -/
 theorem rangeAux_forces (loc : Nat → Int)
+    (hcanon : ∀ c, 0 ≤ loc c ∧ loc c < 2013265921)
     (specs : List (Nat × Nat)) (base : Nat)
-    (hvan : ∀ body : EmittedExpr, selGate body ∈ rangeGatesAux specs base → body.eval loc = 0) :
+    (hwidth : ∀ col n, (col, n) ∈ specs → (2 : ℤ) ^ n < 2013265921)
+    (hvan : ∀ body : EmittedExpr, selGate body ∈ rangeGatesAux specs base →
+      body.eval loc ≡ 0 [ZMOD 2013265921]) :
     ∀ col n : Nat, (col, n) ∈ specs → 0 ≤ loc col ∧ loc col < 2 ^ n := by
   induction specs generalizing base with
   | nil => intro col n h; cases h
@@ -280,7 +381,7 @@ theorem rangeAux_forces (loc : Nat → Int)
     rcases List.mem_cons.mp hmem with heq | htail
     · injection heq with h1 h2
       subst h1; subst h2
-      -- the bit columns are boolean.
+      -- the bit columns are boolean (mod-`p` booleanity + canonicality + `p` prime).
       have hbits : ∀ j, j < n → loc (base + j) = 0 ∨ loc (base + j) = 1 := by
         intro j hj
         have hb := hvan (.mul (.var (base + j)) (.add (.var (base + j)) (.const (-1))))
@@ -290,10 +391,12 @@ theorem rangeAux_forces (loc : Nat → Int)
             apply List.mem_append_left
             exact List.mem_map.mpr ⟨j, List.mem_range.mpr hj, rfl⟩)
         simp only [EmittedExpr.eval] at hb
-        rcases mul_eq_zero.mp hb with hb | hb
-        · exact Or.inl hb
-        · right; omega
-      -- the assembly pins the column to the bit sum.
+        rw [Int.modEq_zero_iff_dvd] at hb
+        obtain ⟨hb0, hbp⟩ := hcanon (base + j)
+        rcases (pPrimeInt.dvd_mul.mp hb) with hd | hd
+        · left;  obtain ⟨k, hk⟩ := hd; omega
+        · right; obtain ⟨k, hk⟩ := hd; omega
+      -- the assembly pins the column to the bit sum (mod-`p` → exact by canonicality + `2^n < p`).
       have hasm := hvan (.add (.var col) (neg (bitSum (fun i => base + i) n)))
         (by
           simp only [rangeGatesAux]
@@ -302,8 +405,13 @@ theorem rangeAux_forces (loc : Nat → Int)
           exact List.mem_singleton.mpr rfl)
       simp only [neg, EmittedExpr.eval] at hasm
       have hb := bitSum_nonneg_lt loc (fun i => base + i) n hbits
+      have hnp : (2 : ℤ) ^ n < 2013265921 := hwidth col n (List.mem_cons.mpr (Or.inl rfl))
+      have hsumLt : (bitSum (fun i => base + i) n).eval loc < 2013265921 := by omega
+      have hpin : loc col = (bitSum (fun i => base + i) n).eval loc :=
+        canonEq ((gate_modEq_iff (by ring)).mp hasm) (hcanon col).1 (hcanon col).2 hb.1 hsumLt
       constructor <;> omega
     · exact ih (base + n0)
+        (fun col' n' hmem' => hwidth col' n' (List.mem_cons_of_mem _ hmem'))
         (fun body hb => hvan body (by
           simp only [rangeGatesAux]
           exact List.mem_append_right _ hb))
@@ -319,7 +427,12 @@ theorem vaultSatV3_forces (hash : List ℤ → ℤ) (asset share : Nat)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
     (hsat : Satisfied2 hash (vaultSatVmDescriptor2R24 asset share) minit mfin maddrs t)
     (i : Nat) (hi : i < t.rows.length) (hnl : (i + 1 == t.rows.length) = false)
-    (hsel : (envAt t i).loc VAULT_SEL_COL = 1) :
+    (hsel : (envAt t i).loc VAULT_SEL_COL = 1)
+    (hcanon : ∀ c, 0 ≤ (envAt t i).loc c ∧ (envAt t i).loc c < 2013265921)
+    (hAssetDep :
+      (envAt t i).loc (beforeFieldCol asset) ≤ (envAt t i).loc (afterFieldCol asset))
+    (hShareDep :
+      (envAt t i).loc (beforeFieldCol share) ≤ (envAt t i).loc (afterFieldCol share)) :
     (envAt t i).loc (afterFieldCol asset) - (envAt t i).loc (beforeFieldCol asset) ≠ 0
     ∧ (envAt t i).loc (afterFieldCol share) - (envAt t i).loc (beforeFieldCol share) ≠ 0
     ∧ 0 ≤ (envAt t i).loc (afterFieldCol asset) - (envAt t i).loc (beforeFieldCol asset)
@@ -331,21 +444,67 @@ theorem vaultSatV3_forces (hash : List ℤ → ℤ) (asset share : Nat)
       ≤ (envAt t i).loc (beforeFieldCol share)
         * ((envAt t i).loc (afterFieldCol asset) - (envAt t i).loc (beforeFieldCol asset)) := by
   have van := sel_body_vanishes hash asset share hsat i hi hnl hsel
-  -- ALL the range facts in one induction (`rangeGates ⊆ vaultSatGates`).
-  have hranges := rangeAux_forces (envAt t i).loc rangeSpecs BIT_BASE
+  -- specific canonicality facts for the four field columns (the deposit deltas).
+  have hcAaf := hcanon (afterFieldCol asset)
+  have hcBaf := hcanon (beforeFieldCol asset)
+  have hcAsf := hcanon (afterFieldCol share)
+  have hcBsf := hcanon (beforeFieldCol share)
+  -- ALL the range facts in one induction (`rangeGates ⊆ vaultSatGates`), lifted mod-`p` → ℤ by the
+  -- deployed canonicality invariant (each spec is 15-bit, so `2^15 = 32768 < p`).
+  have hranges := rangeAux_forces (envAt t i).loc hcanon rangeSpecs BIT_BASE
+    (by intro col n h
+        simp only [rangeSpecs] at h
+        fin_cases h <;> norm_num [LIMB_BITS, CARRY_BITS])
     (fun body hb => van body (by
       unfold vaultSatGates
       exact List.mem_append_right _ hb))
+  have hTA0 := hranges TA0 LIMB_BITS (by simp [rangeSpecs])
+  have hTA1 := hranges TA1 LIMB_BITS (by simp [rangeSpecs])
+  have hSA0 := hranges SA0 LIMB_BITS (by simp [rangeSpecs])
+  have hSA1 := hranges SA1 LIMB_BITS (by simp [rangeSpecs])
   have hM0 := hranges M0 LIMB_BITS (by simp [rangeSpecs])
   have hM1 := hranges M1 LIMB_BITS (by simp [rangeSpecs])
   have hD0 := hranges D0 LIMB_BITS (by simp [rangeSpecs])
   have hD1 := hranges D1 LIMB_BITS (by simp [rangeSpecs])
+  have hP0 := hranges P0 LIMB_BITS (by simp [rangeSpecs])
+  have hP1 := hranges P1 LIMB_BITS (by simp [rangeSpecs])
+  have hP2 := hranges P2 LIMB_BITS (by simp [rangeSpecs])
+  have hP3 := hranges P3 LIMB_BITS (by simp [rangeSpecs])
+  have hPCA := hranges PCA LIMB_BITS (by simp [rangeSpecs])
+  have hPCB := hranges PCB CARRY_BITS (by simp [rangeSpecs])
+  have hPCC := hranges PCC CARRY_BITS (by simp [rangeSpecs])
+  have hPT1 := hranges PT1 LIMB_BITS (by simp [rangeSpecs])
+  have hQ0 := hranges Q0 LIMB_BITS (by simp [rangeSpecs])
+  have hQ1 := hranges Q1 LIMB_BITS (by simp [rangeSpecs])
+  have hQ2 := hranges Q2 LIMB_BITS (by simp [rangeSpecs])
+  have hQ3 := hranges Q3 LIMB_BITS (by simp [rangeSpecs])
+  have hQCA := hranges QCA LIMB_BITS (by simp [rangeSpecs])
+  have hQCB := hranges QCB CARRY_BITS (by simp [rangeSpecs])
+  have hQCC := hranges QCC CARRY_BITS (by simp [rangeSpecs])
+  have hQT1 := hranges QT1 LIMB_BITS (by simp [rangeSpecs])
   have hW0 := hranges W0 LIMB_BITS (by simp [rangeSpecs])
   have hW1 := hranges W1 LIMB_BITS (by simp [rangeSpecs])
   have hW2 := hranges W2 LIMB_BITS (by simp [rangeSpecs])
   have hW3 := hranges W3 LIMB_BITS (by simp [rangeSpecs])
   rw [show (2 : Int) ^ LIMB_BITS = 32768 by norm_num [LIMB_BITS]]
-    at hM0 hM1 hD0 hD1 hW0 hW1 hW2 hW3
+    at hTA0 hTA1 hSA0 hSA1 hM0 hM1 hD0 hD1 hP0 hP1 hP2 hP3 hPCA hPT1
+       hQ0 hQ1 hQ2 hQ3 hQCA hQT1 hW0 hW1 hW2 hW3
+  rw [show (2 : Int) ^ CARRY_BITS = 32768 by norm_num [CARRY_BITS]] at hPCB hPCC hQCB hQCC
+  -- the borrow bits are genuinely boolean (mod-`p` booleanity + canonicality + `p` prime).
+  have bbBool : ∀ b : Nat, selBoolGate b ∈ vaultSatGates asset share →
+      0 ≤ (envAt t i).loc b ∧ (envAt t i).loc b ≤ 1 := by
+    intro b hmem
+    have h := van (.mul (.var b) (.add (.var b) (.const (-1)))) hmem
+    simp only [EmittedExpr.eval] at h
+    rw [Int.modEq_zero_iff_dvd] at h
+    obtain ⟨hb0, hbp⟩ := hcanon b
+    rcases pPrimeInt.dvd_mul.mp h with hd | hd
+    · obtain ⟨k, hk⟩ := hd; constructor <;> omega
+    · obtain ⟨k, hk⟩ := hd; constructor <;> omega
+  have hBB0 := bbBool BB0 (by simp [vaultSatGates, borrowCompareGates])
+  have hBB1 := bbBool BB1 (by simp [vaultSatGates, borrowCompareGates])
+  have hBB2 := bbBool BB2 (by simp [vaultSatGates, borrowCompareGates])
+  have hBB3 := bbBool BB3 (by simp [vaultSatGates, borrowCompareGates])
   -- the four operand assemblies.
   have hTa := van (sub (.var (beforeFieldCol asset))
     (.add (.var TA0) (.mul (.const TWO15) (.var TA1)))) (by simp [vaultSatGates])
@@ -386,19 +545,53 @@ theorem vaultSatV3_forces (hash : List ℤ → ℤ) (asset share : Nat)
   have hb3 := van (sub (.add (sub (sub (.var Q3) (.var P3)) (.var BB2))
     (.mul (.const TWO15) (.var BB3))) (.var W3)) (by simp [vaultSatGates, borrowCompareGates])
   have hbb3 := van (.var BB3) (by simp [vaultSatGates, borrowCompareGates])
-  -- reduce every extracted gate body to its arithmetic form.
+  -- reduce every extracted gate body to its arithmetic form (still a mod-`p` congruence).
   simp only [sub, neg, mExpr, dExpr, TWO15, EmittedExpr.eval] at hTa hSa hm hd hdnz hmnz
   simp only [sub, neg, TWO15, EmittedExpr.eval] at hPA hPB hPC hPD hQA hQB hQC hQD
   simp only [sub, neg, TWO15, EmittedExpr.eval] at hb0 hb1 hb2 hb3 hbb3
-  -- linear consequences (operand welds).
+  -- OPERAND WELDS: the before-field values are canonical, the limb reconstruction `< 2^30 < p`, so
+  -- the mod-`p` assembly congruence lifts to the exact-ℤ equality (clean-context helpers).
   have eTa : (envAt t i).loc (beforeFieldCol asset)
-      = (envAt t i).loc TA0 + 32768 * (envAt t i).loc TA1 := by omega
+      = (envAt t i).loc TA0 + 32768 * (envAt t i).loc TA1 :=
+    liftCanonAssembly ((gate_modEq_iff (by ring)).mp hTa) hcBaf hTA0 hTA1
   have eSa : (envAt t i).loc (beforeFieldCol share)
-      = (envAt t i).loc SA0 + 32768 * (envAt t i).loc SA1 := by omega
+      = (envAt t i).loc SA0 + 32768 * (envAt t i).loc SA1 :=
+    liftCanonAssembly ((gate_modEq_iff (by ring)).mp hSa) hcBsf hSA0 hSA1
+  -- DELTA WELDS: the deposit direction (`before ≤ after`) makes the raw ℤ delta canonical `[0, p)`,
+  -- and the limb reconstruction is `< 2^30 < p`, so the mod-`p` congruence lifts to the exact delta.
   have em : (envAt t i).loc (afterFieldCol share) - (envAt t i).loc (beforeFieldCol share)
-      = (envAt t i).loc M0 + 32768 * (envAt t i).loc M1 := by omega
+      = (envAt t i).loc M0 + 32768 * (envAt t i).loc M1 :=
+    liftDelta ((gate_modEq_iff (by ring)).mp hm) (sub_nonneg.mpr hShareDep)
+      (lt_of_le_of_lt (sub_le_self _ hcBsf.1) hcAsf.2) hM0 hM1
   have ed : (envAt t i).loc (afterFieldCol asset) - (envAt t i).loc (beforeFieldCol asset)
-      = (envAt t i).loc D0 + 32768 * (envAt t i).loc D1 := by omega
+      = (envAt t i).loc D0 + 32768 * (envAt t i).loc D1 :=
+    liftDelta ((gate_modEq_iff (by ring)).mp hd) (sub_nonneg.mpr hAssetDep)
+      (lt_of_le_of_lt (sub_le_self _ hcBaf.1) hcAaf.2) hD0 hD1
+  -- PRODUCT / BORROW LIFTS: each schoolbook/borrow residual is confined to `(−p, p)` by the 15-bit
+  -- limb+carry range checks (the `CARRY_BITS = 15` soundness payoff), so the mod-`p` gate becomes the
+  -- exact-ℤ equality the schoolbook reconstruction consumes (clean-context helpers).
+  replace hPA := liftProdA hPA (by ring) (limbMul_lt hTA0 hM0) hP0 hPCA
+  replace hPB := liftProdB hPB (by ring) (limbMul_lt hTA1 hM0) hPCA hPT1 hPCB
+  replace hPC := liftProdC hPC (by ring) (limbMul_lt hTA0 hM1) hPT1 hP1 hPCC
+  replace hPD := liftProdD hPD (by ring) (limbMul_lt hTA1 hM1) hPCB hPCC hP2 hP3
+  replace hQA := liftProdA hQA (by ring) (limbMul_lt hSA0 hD0) hQ0 hQCA
+  replace hQB := liftProdB hQB (by ring) (limbMul_lt hSA1 hD0) hQCA hQT1 hQCB
+  replace hQC := liftProdC hQC (by ring) (limbMul_lt hSA0 hD1) hQT1 hQ1 hQCC
+  replace hQD := liftProdD hQD (by ring) (limbMul_lt hSA1 hD1) hQCB hQCC hQ2 hQ3
+  replace hb0 := liftBorrow0 hb0 (by ring) hQ0 hP0 hBB0 hW0
+  replace hb1 := liftBorrowN hb1 (by ring) hQ1 hP1 hBB0 hBB1 hW1
+  replace hb2 := liftBorrowN hb2 (by ring) hQ2 hP2 hBB1 hBB2 hW2
+  replace hb3 := liftBorrowN hb3 (by ring) hQ3 hP3 hBB2 hBB3 hW3
+  replace hbb3 := liftBit hbb3 (by ring) hBB3
+  -- the strict-positivity witnesses (kept at the mod-`p` level — the inverse witness `d_inv` is NOT
+  -- range-checked, so `d·d_inv` need not be canonical; the `≠ 0` teeth need only the congruence).
+  have hdinv : ((envAt t i).loc (afterFieldCol asset) - (envAt t i).loc (beforeFieldCol asset))
+      * (envAt t i).loc D_INV ≡ 1 [ZMOD 2013265921] := (gate_modEq_iff (by ring)).mp hdnz
+  have hminv : ((envAt t i).loc (afterFieldCol share) - (envAt t i).loc (beforeFieldCol share))
+      * (envAt t i).loc M_INV ≡ 1 [ZMOD 2013265921] := (gate_modEq_iff (by ring)).mp hmnz
+  -- every mod-`p` congruence has now been consumed; drop them so the remaining `omega`/
+  -- `linear_combination` steps run in a purely-linear (congruence-free) context.
+  clear hTa hSa hm hd hdnz hmnz van hsat
   -- the schoolbook reconstruction: P = Ta·m over the limbs (pure algebra).
   have ePlimb : ((envAt t i).loc TA0 + 32768 * (envAt t i).loc TA1)
       * ((envAt t i).loc M0 + 32768 * (envAt t i).loc M1)
@@ -426,17 +619,14 @@ theorem vaultSatV3_forces (hash : List ℤ → ℤ) (asset share : Nat)
       ≤ (envAt t i).loc Q0 + 32768 * (envAt t i).loc Q1
         + 1073741824 * (envAt t i).loc Q2 + 35184372088832 * (envAt t i).loc Q3 := by
     omega
-  -- the strict-positivity witnesses.
-  have hdinv : ((envAt t i).loc (afterFieldCol asset) - (envAt t i).loc (beforeFieldCol asset))
-      * (envAt t i).loc D_INV = 1 := by linear_combination hdnz
-  have hminv : ((envAt t i).loc (afterFieldCol share) - (envAt t i).loc (beforeFieldCol share))
-      * (envAt t i).loc M_INV = 1 := by linear_combination hmnz
   refine ⟨?_, ?_, by omega, by omega, by omega, by omega, ?_⟩
   · intro h0
     rw [h0, zero_mul] at hdinv
+    rw [Int.modEq_iff_dvd] at hdinv
     omega
   · intro h0
     rw [h0, zero_mul] at hminv
+    rw [Int.modEq_iff_dvd] at hminv
     omega
   · rw [eP, eQ]; exact hPleQ
 
@@ -449,9 +639,14 @@ theorem vault_zero_mint_unsat (hash : List ℤ → ℤ) (asset share : Nat)
     (hsat : Satisfied2 hash (vaultSatVmDescriptor2R24 asset share) minit mfin maddrs t)
     (i : Nat) (hi : i < t.rows.length) (hnl : (i + 1 == t.rows.length) = false)
     (hsel : (envAt t i).loc VAULT_SEL_COL = 1)
+    (hcanon : ∀ c, 0 ≤ (envAt t i).loc c ∧ (envAt t i).loc c < 2013265921)
+    (hAssetDep :
+      (envAt t i).loc (beforeFieldCol asset) ≤ (envAt t i).loc (afterFieldCol asset))
+    (hShareDep :
+      (envAt t i).loc (beforeFieldCol share) ≤ (envAt t i).loc (afterFieldCol share))
     (hzero : (envAt t i).loc (afterFieldCol share) = (envAt t i).loc (beforeFieldCol share)) :
     False := by
-  have h := (vaultSatV3_forces hash asset share hsat i hi hnl hsel).2.1
+  have h := (vaultSatV3_forces hash asset share hsat i hi hnl hsel hcanon hAssetDep hShareDep).2.1
   omega
 
 /-- **THE NO-DEPOSIT TOOTH.** A "deposit" that does not advance total assets CANNOT satisfy the
@@ -461,9 +656,14 @@ theorem vault_no_deposit_unsat (hash : List ℤ → ℤ) (asset share : Nat)
     (hsat : Satisfied2 hash (vaultSatVmDescriptor2R24 asset share) minit mfin maddrs t)
     (i : Nat) (hi : i < t.rows.length) (hnl : (i + 1 == t.rows.length) = false)
     (hsel : (envAt t i).loc VAULT_SEL_COL = 1)
+    (hcanon : ∀ c, 0 ≤ (envAt t i).loc c ∧ (envAt t i).loc c < 2013265921)
+    (hAssetDep :
+      (envAt t i).loc (beforeFieldCol asset) ≤ (envAt t i).loc (afterFieldCol asset))
+    (hShareDep :
+      (envAt t i).loc (beforeFieldCol share) ≤ (envAt t i).loc (afterFieldCol share))
     (hnodep : (envAt t i).loc (afterFieldCol asset) = (envAt t i).loc (beforeFieldCol asset)) :
     False := by
-  have h := (vaultSatV3_forces hash asset share hsat i hi hnl hsel).1
+  have h := (vaultSatV3_forces hash asset share hsat i hi hnl hsel hcanon hAssetDep hShareDep).1
   omega
 
 /-- **THE DILUTION (OVER-MINT) TOOTH.** A deposit minting shares past the fair ratio
@@ -473,12 +673,18 @@ theorem vault_dilution_unsat (hash : List ℤ → ℤ) (asset share : Nat)
     (hsat : Satisfied2 hash (vaultSatVmDescriptor2R24 asset share) minit mfin maddrs t)
     (i : Nat) (hi : i < t.rows.length) (hnl : (i + 1 == t.rows.length) = false)
     (hsel : (envAt t i).loc VAULT_SEL_COL = 1)
+    (hcanon : ∀ c, 0 ≤ (envAt t i).loc c ∧ (envAt t i).loc c < 2013265921)
+    (hAssetDep :
+      (envAt t i).loc (beforeFieldCol asset) ≤ (envAt t i).loc (afterFieldCol asset))
+    (hShareDep :
+      (envAt t i).loc (beforeFieldCol share) ≤ (envAt t i).loc (afterFieldCol share))
     (hdilute : (envAt t i).loc (beforeFieldCol share)
         * ((envAt t i).loc (afterFieldCol asset) - (envAt t i).loc (beforeFieldCol asset))
       < (envAt t i).loc (beforeFieldCol asset)
         * ((envAt t i).loc (afterFieldCol share) - (envAt t i).loc (beforeFieldCol share))) :
     False := by
-  have h := (vaultSatV3_forces hash asset share hsat i hi hnl hsel).2.2.2.2.2.2
+  have h :=
+    (vaultSatV3_forces hash asset share hsat i hi hnl hsel hcanon hAssetDep hShareDep).2.2.2.2.2.2
   omega
 
 /-! ## §6 — NON-VACUITY TEETH (`#guard`): the gate bodies BITE on concrete rows.
