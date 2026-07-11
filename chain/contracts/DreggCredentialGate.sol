@@ -23,7 +23,16 @@ contract DreggCredentialGate is IDreggCredentialGate {
 
     // ─── State ──────────────────────────────────────────────────────────────
 
-    /// Spent presentation nullifiers (sybil resistance).
+    /// Spent presentation nullifiers (sybil resistance). The key is the BARE
+    /// nullifier the proof commits: one credential presentation = one mint, ever.
+    ///
+    /// Per-tokenId minting (the interface's aspirational (serial, domain, tokenId)
+    /// scoping) is UNSOUND under the current proof format, which exposes only
+    /// (valid, fedRoot, predHash, nullifier) — `tokenId` is a caller-supplied
+    /// argument the proof never binds, so scoping the key by tokenId would let one
+    /// credential replay-mint unlimited NFTs (tokenId = 0,1,2,…). Per-tokenId
+    /// scoping is safe ONLY once tokenId (or an action domain that includes it) is
+    /// folded into the presentation nullifier and exposed as a checked public value.
     mapping(bytes32 => bool) public usedNullifiers;
 
     /// Trusted federation roots. Only credentials proven against these roots are accepted.
@@ -31,6 +40,9 @@ contract DreggCredentialGate is IDreggCredentialGate {
 
     /// Admin address (can add/remove trusted federations).
     address public admin;
+
+    /// Proposed next admin (two-step rotation: proposeAdmin then acceptAdmin).
+    address public pendingAdmin;
 
     // ─── ERC-721-like State (minimal, non-standard) ─────────────────────────
 
@@ -77,6 +89,12 @@ contract DreggCredentialGate is IDreggCredentialGate {
     /// Emitted when a federation root is added/removed from the trusted set.
     event FederationTrustUpdated(bytes32 indexed federationRoot, bool trusted);
 
+    /// Emitted when an admin rotation is proposed.
+    event AdminProposed(address indexed currentAdmin, address indexed proposedAdmin);
+
+    /// Emitted when a proposed admin accepts and the rotation completes.
+    event AdminTransferred(address indexed previousAdmin, address indexed newAdmin);
+
     // ─── Errors ─────────────────────────────────────────────────────────────
 
     error Unauthorized();
@@ -86,6 +104,7 @@ contract DreggCredentialGate is IDreggCredentialGate {
     error TokenAlreadyMinted(uint256 tokenId);
     error AlreadyVoted(uint256 proposalId, bytes32 nullifier);
     error InvalidProofOutputs();
+    error VerifierNotContract();
 
     // ─── Constructor ────────────────────────────────────────────────────────
 
@@ -93,6 +112,10 @@ contract DreggCredentialGate is IDreggCredentialGate {
     /// @param _programVkey Verification key for the dregg credential verifier program.
     /// @param _admin Admin address for managing trusted federations.
     constructor(address _sp1Verifier, bytes32 _programVkey, address _admin) {
+        // Fail-closed: a staticcall to a codeless address returns success, so a
+        // misconfigured verifier would silently accept every proof. Refuse to
+        // deploy against an address with no code.
+        if (_sp1Verifier.code.length == 0) revert VerifierNotContract();
         sp1Verifier = _sp1Verifier;
         programVkey = _programVkey;
         admin = _admin;
@@ -107,6 +130,21 @@ contract DreggCredentialGate is IDreggCredentialGate {
         emit FederationTrustUpdated(federationRoot, trusted);
     }
 
+    /// @inheritdoc IDreggCredentialGate
+    function proposeAdmin(address newAdmin) external {
+        if (msg.sender != admin) revert Unauthorized();
+        pendingAdmin = newAdmin;
+        emit AdminProposed(admin, newAdmin);
+    }
+
+    /// @inheritdoc IDreggCredentialGate
+    function acceptAdmin() external {
+        if (msg.sender != pendingAdmin) revert Unauthorized();
+        emit AdminTransferred(admin, msg.sender);
+        admin = msg.sender;
+        pendingAdmin = address(0);
+    }
+
     // ─── Credential Verification ────────────────────────────────────────────
 
     /// @inheritdoc IDreggCredentialGate
@@ -117,6 +155,10 @@ contract DreggCredentialGate is IDreggCredentialGate {
     ) external view returns (bool) {
         // Check federation is trusted.
         if (!trustedFederations[federationRoot]) revert UntrustedFederation(federationRoot);
+
+        // Fail-closed: a staticcall to a codeless address succeeds vacuously,
+        // so a verifier with no code must never be able to accept.
+        if (sp1Verifier.code.length == 0) revert VerifierNotContract();
 
         // Decode and verify the SP1 proof.
         (bytes memory proofBytes, bytes memory publicValues) = abi.decode(
@@ -161,8 +203,8 @@ contract DreggCredentialGate is IDreggCredentialGate {
         // Check federation is trusted.
         if (!trustedFederations[federationRoot]) revert UntrustedFederation(federationRoot);
 
-        // Check token not already minted.
-        if (tokenOwner[tokenId] != address(0)) revert TokenAlreadyMinted(tokenId);
+        // Fail-closed verifier guard (see verifyCredential).
+        if (sp1Verifier.code.length == 0) revert VerifierNotContract();
 
         // Decode and verify the SP1 proof.
         (bytes memory proofBytes, bytes memory publicValues) = abi.decode(
@@ -192,9 +234,14 @@ contract DreggCredentialGate is IDreggCredentialGate {
         if (proofFedRoot != federationRoot) revert InvalidProofOutputs();
         if (proofPredHash != predicateHash) revert InvalidProofOutputs();
 
-        // Sybil resistance: check nullifier not already used for minting.
+        // Sybil resistance: the BARE presentation nullifier is the replay key —
+        // one credential presentation mints exactly one token. tokenId is NOT bound
+        // in the proof, so it must not scope the key (see `usedNullifiers`).
         if (usedNullifiers[nullifier]) revert NullifierAlreadyUsed(nullifier);
         usedNullifiers[nullifier] = true;
+
+        // Check token not already minted.
+        if (tokenOwner[tokenId] != address(0)) revert TokenAlreadyMinted(tokenId);
 
         // Mint the token to msg.sender.
         tokenOwner[tokenId] = msg.sender;
@@ -217,6 +264,9 @@ contract DreggCredentialGate is IDreggCredentialGate {
     ) external {
         // Check federation is trusted.
         if (!trustedFederations[federationRoot]) revert UntrustedFederation(federationRoot);
+
+        // Fail-closed verifier guard (see verifyCredential).
+        if (sp1Verifier.code.length == 0) revert VerifierNotContract();
 
         // Decode and verify the SP1 proof.
         (bytes memory proofBytes, bytes memory publicValues) = abi.decode(

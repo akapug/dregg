@@ -58,6 +58,11 @@ interface IDreggVault {
     ///
     ///      The proof is verified via the SP1 Verifier Gateway. If valid, the vault
     ///      releases the tokens and records the nullifier as spent.
+    ///
+    ///      Additional fail-closed checks: the proof's committed note tree root must
+    ///      equal the current on-chain root or one of the recent historical roots
+    ///      (see isKnownRoot), and the withdrawal amount must not exceed the vault's
+    ///      tracked deposit balance for that token (solvency).
     /// @param token The ERC-20 token address (address(0) for native ETH).
     /// @param amount The amount to withdraw.
     /// @param recipient The address to receive the tokens.
@@ -81,4 +86,15 @@ interface IDreggVault {
     /// @notice Get the total number of deposits (and thus the next leaf index).
     /// @return The number of notes in the commitment tree.
     function depositCount() external view returns (uint256);
+
+    /// @notice Check whether a root is acceptable for withdrawal proofs: the current
+    ///         note tree root or one of the recent roots in the ring buffer.
+    /// @param root The note tree root the proof committed to.
+    /// @return True if the root is the current root or a recent historical root.
+    function isKnownRoot(bytes32 root) external view returns (bool);
+
+    /// @notice Get the vault's tracked deposit balance for a token (address(0) = ETH).
+    /// @param token The token address.
+    /// @return The total deposited minus withdrawn amount for that token.
+    function tokenBalances(address token) external view returns (uint256);
 }

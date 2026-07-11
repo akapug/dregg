@@ -100,10 +100,12 @@ contract DreggCredentialGateTest is Test {
 
         assertEq(gate.tokenOwner(tokenId), user);
         assertEq(gate.balanceOf(user), 1);
+        // The bare presentation nullifier is the replay key: one mint per credential.
         assertTrue(gate.usedNullifiers(nullifier));
     }
 
-    function test_mintRejectsDuplicateNullifier() public {
+    function test_mintRejectsDuplicateNullifierSameToken() public {
+        // Replaying the same nullifier against the SAME tokenId must revert.
         bytes32 nullifier = keccak256("mintNull2");
         bytes memory publicValues = abi.encode(true, FED_ROOT, PRED_HASH, nullifier);
         bytes memory sp1Proof = abi.encode(hex"5678", publicValues);
@@ -111,10 +113,29 @@ contract DreggCredentialGateTest is Test {
         vm.prank(user);
         gate.mintWithCredential(1, FED_ROOT, PRED_HASH, sp1Proof);
 
-        // Same nullifier, different tokenId -- should still revert (sybil resistance).
         vm.prank(user);
         vm.expectRevert(abi.encodeWithSelector(DreggCredentialGate.NullifierAlreadyUsed.selector, nullifier));
-        gate.mintWithCredential(2, FED_ROOT, PRED_HASH, sp1Proof);
+        gate.mintWithCredential(1, FED_ROOT, PRED_HASH, sp1Proof);
+    }
+
+    function test_mintRejectsReplayAcrossTokenIds() public {
+        // SOUNDNESS: tokenId is a caller argument the proof never binds, so one
+        // credential presentation must NOT be replayable to mint a second (different)
+        // tokenId. The bare nullifier is the key: the second mint reverts.
+        bytes32 nullifier = keccak256("mintNull3");
+        bytes memory publicValues = abi.encode(true, FED_ROOT, PRED_HASH, nullifier);
+        bytes memory sp1Proof = abi.encode(hex"5678", publicValues);
+
+        vm.prank(user);
+        gate.mintWithCredential(10, FED_ROOT, PRED_HASH, sp1Proof);
+
+        vm.prank(user);
+        vm.expectRevert(abi.encodeWithSelector(DreggCredentialGate.NullifierAlreadyUsed.selector, nullifier));
+        gate.mintWithCredential(11, FED_ROOT, PRED_HASH, sp1Proof);
+
+        assertEq(gate.tokenOwner(10), user);
+        assertEq(gate.tokenOwner(11), address(0));
+        assertEq(gate.balanceOf(user), 1);
     }
 
     function test_mintRejectsAlreadyMintedToken() public {
@@ -141,7 +162,7 @@ contract DreggCredentialGateTest is Test {
         uint256 proposalId = 7;
         bytes32 nullifier = keccak256("voteNull1");
         bytes memory publicValues = abi.encode(true, FED_ROOT, PRED_HASH, nullifier);
-        bytes memory sp1Proof = abi.encode(hex"vote", publicValues);
+        bytes memory sp1Proof = abi.encode(hex"707e", publicValues);
 
         vm.prank(user);
         gate.voteWithCredential(proposalId, true, FED_ROOT, PRED_HASH, sp1Proof);
@@ -155,7 +176,7 @@ contract DreggCredentialGateTest is Test {
         uint256 proposalId = 8;
         bytes32 nullifier = keccak256("voteNull2");
         bytes memory publicValues = abi.encode(true, FED_ROOT, PRED_HASH, nullifier);
-        bytes memory sp1Proof = abi.encode(hex"vote", publicValues);
+        bytes memory sp1Proof = abi.encode(hex"707e", publicValues);
 
         vm.prank(user);
         gate.voteWithCredential(proposalId, true, FED_ROOT, PRED_HASH, sp1Proof);
@@ -168,8 +189,8 @@ contract DreggCredentialGateTest is Test {
     function test_voteAllowsSameNullifierDifferentProposal() public {
         bytes32 nullifier1 = keccak256("voteMulti1");
         bytes32 nullifier2 = keccak256("voteMulti2");
-        bytes memory sp1Proof1 = abi.encode(hex"v1", abi.encode(true, FED_ROOT, PRED_HASH, nullifier1));
-        bytes memory sp1Proof2 = abi.encode(hex"v2", abi.encode(true, FED_ROOT, PRED_HASH, nullifier2));
+        bytes memory sp1Proof1 = abi.encode(hex"01", abi.encode(true, FED_ROOT, PRED_HASH, nullifier1));
+        bytes memory sp1Proof2 = abi.encode(hex"02", abi.encode(true, FED_ROOT, PRED_HASH, nullifier2));
 
         vm.prank(user);
         gate.voteWithCredential(1, true, FED_ROOT, PRED_HASH, sp1Proof1);
@@ -188,10 +209,103 @@ contract DreggCredentialGateTest is Test {
     function test_mintRevertsOnInvalidProof() public {
         verifier.setShouldPass(false);
         bytes32 nullifier = keccak256("failMint");
-        bytes memory sp1Proof = abi.encode(hex"bad", abi.encode(true, FED_ROOT, PRED_HASH, nullifier));
+        bytes memory sp1Proof = abi.encode(hex"0bad", abi.encode(true, FED_ROOT, PRED_HASH, nullifier));
 
         vm.prank(user);
         vm.expectRevert(DreggCredentialGate.ProofVerificationFailed.selector);
         gate.mintWithCredential(99, FED_ROOT, PRED_HASH, sp1Proof);
+    }
+
+    // ─── Fail-Closed Verifier (codeless address must never accept) ──────────
+
+    function test_constructorRejectsCodelessVerifier() public {
+        address codeless = address(0x5678);
+        vm.expectRevert(DreggCredentialGate.VerifierNotContract.selector);
+        new DreggCredentialGate(codeless, PROGRAM_VKEY, admin);
+    }
+
+    function test_verifyCredentialRevertsWhenVerifierLosesCode() public {
+        bytes memory sp1Proof = abi.encode(
+            hex"1234",
+            abi.encode(true, FED_ROOT, PRED_HASH, keccak256("codelessNull"))
+        );
+
+        // Strip the verifier's code: the raw staticcall would now succeed
+        // vacuously, so the call-time guard must reject.
+        vm.etch(address(verifier), "");
+
+        vm.expectRevert(DreggCredentialGate.VerifierNotContract.selector);
+        gate.verifyCredential(FED_ROOT, PRED_HASH, sp1Proof);
+    }
+
+    function test_mintRevertsWhenVerifierLosesCode() public {
+        bytes memory sp1Proof = abi.encode(
+            hex"1234",
+            abi.encode(true, FED_ROOT, PRED_HASH, keccak256("codelessMint"))
+        );
+
+        vm.etch(address(verifier), "");
+
+        vm.prank(user);
+        vm.expectRevert(DreggCredentialGate.VerifierNotContract.selector);
+        gate.mintWithCredential(77, FED_ROOT, PRED_HASH, sp1Proof);
+    }
+
+    function test_voteRevertsWhenVerifierLosesCode() public {
+        bytes memory sp1Proof = abi.encode(
+            hex"1234",
+            abi.encode(true, FED_ROOT, PRED_HASH, keccak256("codelessVote"))
+        );
+
+        vm.etch(address(verifier), "");
+
+        vm.prank(user);
+        vm.expectRevert(DreggCredentialGate.VerifierNotContract.selector);
+        gate.voteWithCredential(3, true, FED_ROOT, PRED_HASH, sp1Proof);
+    }
+
+    // ─── Two-Step Admin Rotation ────────────────────────────────────────────
+
+    function test_adminRotationTwoStep() public {
+        address newAdmin = address(0xAD31);
+
+        gate.proposeAdmin(newAdmin);
+        assertEq(gate.pendingAdmin(), newAdmin);
+        assertEq(gate.admin(), admin); // proposal alone does NOT rotate
+
+        vm.prank(newAdmin);
+        gate.acceptAdmin();
+        assertEq(gate.admin(), newAdmin);
+        assertEq(gate.pendingAdmin(), address(0));
+
+        // New admin holds the power...
+        bytes32 newRoot = bytes32(uint256(0x1111));
+        vm.prank(newAdmin);
+        gate.setFederationTrust(newRoot, true);
+        assertTrue(gate.trustedFederations(newRoot));
+
+        // ...and the old admin has lost it.
+        vm.expectRevert(DreggCredentialGate.Unauthorized.selector);
+        gate.setFederationTrust(newRoot, false);
+    }
+
+    function test_proposeAdminRejectsNonAdmin() public {
+        vm.prank(user);
+        vm.expectRevert(DreggCredentialGate.Unauthorized.selector);
+        gate.proposeAdmin(user);
+    }
+
+    function test_acceptAdminRejectsNonPending() public {
+        gate.proposeAdmin(address(0xAD31));
+
+        vm.prank(user); // not the proposed admin
+        vm.expectRevert(DreggCredentialGate.Unauthorized.selector);
+        gate.acceptAdmin();
+    }
+
+    function test_acceptAdminRejectsWhenNothingProposed() public {
+        vm.prank(user);
+        vm.expectRevert(DreggCredentialGate.Unauthorized.selector);
+        gate.acceptAdmin();
     }
 }

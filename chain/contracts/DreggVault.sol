@@ -27,8 +27,15 @@ contract DreggVault is IDreggVault {
     // ─── State ──────────────────────────────────────────────────────────────
 
     /// Incremental Merkle tree of note commitments (simplified: stores leaves only).
-    /// In production, this would be an incremental Merkle tree (like Tornado Cash's).
-    /// For now, we track the leaves and recompute roots on demand.
+    ///
+    /// PLACEHOLDER: this keccak256 tree is a stand-in pending Poseidon2 circuit
+    /// alignment. The real note tree is Poseidon2 (see IDreggVault noteCommitment
+    /// docs); the SP1 guest program proves membership against the Poseidon2 tree,
+    /// so until the on-chain tree is rebuilt as an incremental Poseidon2 tree the
+    /// keccak root here and the circuit root only agree because the federation
+    /// mirrors deposits. The root COMPARISON below is real (withdraw proofs must
+    /// commit to the current root or one of the last ROOT_HISTORY_SIZE roots);
+    /// the hash function is the placeholder.
     bytes32[] private noteCommitments;
 
     /// Current root of the note commitment tree.
@@ -37,11 +44,27 @@ contract DreggVault is IDreggVault {
     /// Total number of deposits (== noteCommitments.length).
     uint256 public depositCount;
 
+    /// Ring buffer of recent tree roots (Tornado-style). Withdrawals may prove
+    /// against any of the last ROOT_HISTORY_SIZE roots, so a proof generated
+    /// just before a new deposit remains spendable.
+    uint256 public constant ROOT_HISTORY_SIZE = 32;
+    bytes32[ROOT_HISTORY_SIZE] public rootHistory;
+    uint256 public rootHistoryCount;
+
     /// Spent nullifiers (prevents double-withdrawal).
     mapping(bytes32 => bool) public usedNullifiers;
 
     /// Deposits indexed by note commitment (for frontend querying).
     mapping(bytes32 => DepositRecord) public deposits;
+
+    /// Per-token deposited balance (address(0) = native ETH). Withdrawals may
+    /// never exceed what was actually deposited for that token (solvency).
+    mapping(address => uint256) public tokenBalances;
+
+    /// Reentrancy guard status.
+    uint256 private constant _NOT_ENTERED = 1;
+    uint256 private constant _ENTERED = 2;
+    uint256 private _reentrancyStatus = _NOT_ENTERED;
 
     // ─── Types ──────────────────────────────────────────────────────────────
 
@@ -64,12 +87,30 @@ contract DreggVault is IDreggVault {
     error AmountMismatch();
     error RecipientMismatch();
     error TokenMismatch();
+    error VerifierNotContract();
+    error UnknownRoot(bytes32 root);
+    error InsufficientVaultBalance(address token, uint256 requested, uint256 available);
+    error ReentrantCall();
+
+    // ─── Modifiers ──────────────────────────────────────────────────────────
+
+    /// Minimal hand-rolled reentrancy guard (no external dependency).
+    modifier nonReentrant() {
+        if (_reentrancyStatus == _ENTERED) revert ReentrantCall();
+        _reentrancyStatus = _ENTERED;
+        _;
+        _reentrancyStatus = _NOT_ENTERED;
+    }
 
     // ─── Constructor ────────────────────────────────────────────────────────
 
     /// @param _sp1Verifier Address of the SP1 Verifier Gateway.
     /// @param _programVkey Verification key for the dregg guest program.
     constructor(address _sp1Verifier, bytes32 _programVkey) {
+        // Fail-closed: a staticcall to a codeless address returns success, so a
+        // misconfigured verifier would silently accept every proof. Refuse to
+        // deploy against an address with no code.
+        if (_sp1Verifier.code.length == 0) revert VerifierNotContract();
         sp1Verifier = _sp1Verifier;
         programVkey = _programVkey;
     }
@@ -110,10 +151,12 @@ contract DreggVault is IDreggVault {
         });
         noteCommitments.push(noteCommitment);
         depositCount = leafIndex + 1;
+        tokenBalances[token] += amount;
 
         // Update the tree root (simplified: hash of all commitments).
         // In production, use an incremental Merkle tree for O(log n) updates.
         noteTreeRoot = _computeRoot();
+        _recordRoot(noteTreeRoot);
 
         emit Deposit(token, amount, noteCommitment, leafIndex);
     }
@@ -134,8 +177,10 @@ contract DreggVault is IDreggVault {
         });
         noteCommitments.push(noteCommitment);
         depositCount = leafIndex + 1;
+        tokenBalances[address(0)] += msg.value;
 
         noteTreeRoot = _computeRoot();
+        _recordRoot(noteTreeRoot);
 
         emit Deposit(address(0), msg.value, noteCommitment, leafIndex);
     }
@@ -148,27 +193,11 @@ contract DreggVault is IDreggVault {
         uint256 amount,
         address recipient,
         bytes calldata sp1Proof
-    ) external {
+    ) external nonReentrant {
         if (amount == 0) revert ZeroAmount();
 
-        // Decode the SP1 proof into its components.
-        // SP1 proofs are encoded as: abi.encode(proofBytes, publicValues)
-        (bytes memory proofBytes, bytes memory publicValues) = abi.decode(
-            sp1Proof,
-            (bytes, bytes)
-        );
-
-        // Verify the proof via the SP1 Verifier Gateway.
-        // The gateway reverts if the proof is invalid.
-        (bool verifySuccess, ) = sp1Verifier.staticcall(
-            abi.encodeWithSignature(
-                "verifyProof(bytes32,bytes,bytes)",
-                programVkey,
-                publicValues,
-                proofBytes
-            )
-        );
-        if (!verifySuccess) revert ProofVerificationFailed();
+        // Decode + verify the SP1 proof (fail-closed on a codeless verifier).
+        bytes memory publicValues = _verifySp1(sp1Proof);
 
         // Decode public values committed by the SP1 guest program.
         // Expected format: (bool valid, bytes32 nullifier, address token, uint256 amount, address recipient, bytes32 noteTreeRoot)
@@ -178,7 +207,7 @@ contract DreggVault is IDreggVault {
             address proofToken,
             uint256 proofAmount,
             address proofRecipient,
-            /* bytes32 proofRoot -- we trust the proof verified against our program */
+            bytes32 proofRoot
         ) = abi.decode(publicValues, (bool, bytes32, address, uint256, address, bytes32));
 
         // Verify the proof's public outputs match the withdrawal parameters.
@@ -187,9 +216,18 @@ contract DreggVault is IDreggVault {
         if (proofRecipient != recipient) revert RecipientMismatch();
         if (proofToken != token) revert TokenMismatch();
 
-        // Check and mark the nullifier as used.
+        // The proof must commit to the current note tree root or one of the
+        // recent roots in the ring buffer (Tornado-style grace window).
+        if (!isKnownRoot(proofRoot)) revert UnknownRoot(proofRoot);
+
+        // Solvency: never release more of a token than was deposited.
+        uint256 available = tokenBalances[token];
+        if (amount > available) revert InsufficientVaultBalance(token, amount, available);
+
+        // Check and mark the nullifier as used BEFORE any external transfer.
         if (usedNullifiers[nullifier]) revert NullifierAlreadyUsed(nullifier);
         usedNullifiers[nullifier] = true;
+        tokenBalances[token] = available - amount;
 
         // Transfer funds to recipient.
         if (token == address(0)) {
@@ -220,7 +258,48 @@ contract DreggVault is IDreggVault {
         return usedNullifiers[nullifier];
     }
 
+    /// @notice True if `root` is the current note tree root or one of the last
+    ///         ROOT_HISTORY_SIZE roots. The zero root is never accepted.
+    function isKnownRoot(bytes32 root) public view returns (bool) {
+        if (root == bytes32(0)) return false;
+        if (root == noteTreeRoot) return true;
+        uint256 filled = rootHistoryCount < ROOT_HISTORY_SIZE ? rootHistoryCount : ROOT_HISTORY_SIZE;
+        for (uint256 i = 0; i < filled; i++) {
+            if (rootHistory[i] == root) return true;
+        }
+        return false;
+    }
+
     // ─── Internal ───────────────────────────────────────────────────────────
+
+    /// Decode an SP1 proof envelope and verify it via the SP1 Verifier Gateway.
+    /// Fail-closed: a staticcall to a codeless address succeeds vacuously, so a
+    /// verifier with no code (even one that lost its code after deploy) must
+    /// never be able to accept. Returns the proof's public values on success.
+    function _verifySp1(bytes calldata sp1Proof) internal view returns (bytes memory publicValues) {
+        if (sp1Verifier.code.length == 0) revert VerifierNotContract();
+
+        // SP1 proofs are encoded as: abi.encode(proofBytes, publicValues)
+        bytes memory proofBytes;
+        (proofBytes, publicValues) = abi.decode(sp1Proof, (bytes, bytes));
+
+        // The gateway reverts if the proof is invalid.
+        (bool verifySuccess, ) = sp1Verifier.staticcall(
+            abi.encodeWithSignature(
+                "verifyProof(bytes32,bytes,bytes)",
+                programVkey,
+                publicValues,
+                proofBytes
+            )
+        );
+        if (!verifySuccess) revert ProofVerificationFailed();
+    }
+
+    /// Record a new root in the ring buffer of recent roots.
+    function _recordRoot(bytes32 newRoot) internal {
+        rootHistory[rootHistoryCount % ROOT_HISTORY_SIZE] = newRoot;
+        rootHistoryCount += 1;
+    }
 
     /// Compute the Merkle root of all note commitments.
     /// Simplified implementation: iterative hashing. In production, use an

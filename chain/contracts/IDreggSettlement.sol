@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-/// dregg whole-chain settlement verifier.
+/// dregg whole-history settlement verifier (25-lane proof shape, post-v11).
 ///
 /// Verifies a Groth16(BN254) proof that wraps the dregg recursive STARK
 /// (`circuit-prove/src/ivc_turn_chain.rs::WholeChainProof`) attesting
@@ -12,43 +12,128 @@ pragma solidity ^0.8.20;
 /// The wrapped proof's circuit IS the STARK verifier
 /// (`verify_turn_chain_recursive_from_parts`): the VK-fingerprint pin, the
 /// fork batch-STARK FRI verification, and the segment tooth binding the
-/// exposed `[first_old, last_new, count, acc]` to these four public inputs.
+/// exposed `[first_old, last_new, count, acc]` to these public inputs.
 ///
-/// This interface is the on-chain twin of `dregg-bridge::ethereum`'s
-/// `solidity_verifier_interface()` (`bridge/src/ethereum.rs`) and consumes
-/// the calldata layout of `EthSettlementProof::to_calldata` / the `(A,B,C)`
-/// slicing of `Groth16Calldata`. The four public inputs are the BabyBear
-/// `WholeChainProof.{genesis_root, final_root, num_turns, chain_digest}`
-/// re-encoded as EVM words (each BabyBear is 31-bit, embedding losslessly).
+/// ## The 25-lane public-input contract (pinned)
+///
+/// The whole-chain claim is 25 BabyBear lanes, in this exact order:
+///
+///   [0..8)   genesis_root  — `[BabyBear; 8]` (SEG_ANCHOR_WIDTH = 8)
+///   [8..16)  final_root    — `[BabyBear; 8]`
+///   [16]     num_turns     — 1 lane
+///   [17..25) chain_digest  — `[BabyBear; 8]` (SEG_DIGEST_WIDTH = 8)
+///
+/// Every lane is a canonical BabyBear residue: strictly less than
+/// p = 2^31 - 2^27 + 1 = 2013265921 (0x78000001). `settle` rejects any
+/// non-canonical lane before touching the verifier.
+///
+/// ## Settlement state machine (on-chain twin of `dregg-bridge::ethereum`)
+///
+/// Mirrors `EthBridgeState` + `submit_eth_settlement`
+/// (`bridge/src/ethereum.rs`): the first accepted settle establishes the
+/// genesis anchor; every later settle must CHAIN — its `genesisRoot` lanes
+/// must equal the current proven root (the previous proof's `finalRoot`) —
+/// and height is strictly monotone (`numTurns >= 1`, provenHeight
+/// accumulates). Note the continuity rule is the Rust bridge's
+/// (proof genesis == current proven root), i.e. proofs are chained spans,
+/// not repeated whole-history re-proofs from the original anchor.
 interface IDreggSettlement {
-    /// Current proven dregg state root (the contract's settled state).
+    // ------------------------------------------------------------------
+    // Errors (all reject paths are typed; the contract fails closed)
+    // ------------------------------------------------------------------
+
+    /// The verifier address pinned at construction has no code.
+    error VerifierHasNoCode(address verifier);
+
+    /// The expected verifying-key hash pinned at construction is zero.
+    error ZeroVerifyingKeyHash();
+
+    /// Lane `laneIndex` (in the pinned 25-lane order) carries `value`,
+    /// which is not a canonical BabyBear residue (`value >= 2013265921`).
+    error NonCanonicalLane(uint256 laneIndex, uint32 value);
+
+    /// `numTurns == 0`: height would not strictly advance.
+    error ZeroTurns();
+
+    /// The submitted proof's genesisRoot does not chain from the current
+    /// proven root. Both sides are keccak-packed lane digests.
+    error ContinuityBroken(bytes32 expectedGenesis, bytes32 gotGenesis);
+
+    /// The Groth16 verifier returned false for the pairing check.
+    error ProofRejected();
+
+    // ------------------------------------------------------------------
+    // Events
+    // ------------------------------------------------------------------
+
+    /// A settlement was accepted. Roots are keccak256 over the 32-byte
+    /// big-endian packing of the 8 lanes (lane i at bytes [4i, 4i+4));
+    /// `height` is the new cumulative proven height.
+    event Settled(bytes32 indexed oldRoot, bytes32 indexed newRoot, uint64 height);
+
+    /// The raw lanes of an accepted settlement (full 25-lane statement).
+    event SettledLanes(
+        uint32[8] genesisRoot,
+        uint32[8] finalRoot,
+        uint32 numTurns,
+        uint32[8] chainDigest
+    );
+
+    // ------------------------------------------------------------------
+    // Views
+    // ------------------------------------------------------------------
+
+    /// Current proven dregg state root, as keccak256 of the tightly packed
+    /// 8 big-endian uint32 lanes (for indexing / event correlation).
+    /// bytes32(0) until the first settle.
     function provenRoot() external view returns (bytes32);
 
-    /// Current proven height (monotone).
+    /// Current proven dregg state root as raw BabyBear lanes.
+    function provenRootLanes() external view returns (uint32[8] memory);
+
+    /// The genesis anchor (established by the first accepted settle), as the
+    /// keccak-packed digest of its 8 lanes. bytes32(0) until established.
+    function genesisAnchor() external view returns (bytes32);
+
+    /// The genesis anchor as raw BabyBear lanes.
+    function genesisAnchorLanes() external view returns (uint32[8] memory);
+
+    /// Whether the first settle has established the genesis anchor.
+    function genesisEstablished() external view returns (bool);
+
+    /// Current proven height (cumulative finalized turns; strictly monotone).
     function provenHeight() external view returns (uint64);
 
     /// keccak256 of the Groth16 verifying key this contract checks against —
     /// the on-chain commitment to `EthSettlementProof.verifying_key_hash`.
+    /// (The VK itself is baked into the IGroth16Verifier25 implementation;
+    /// this hash lets off-chain tooling cross-check the deployment.)
     function verifyingKeyHash() external view returns (bytes32);
 
+    // ------------------------------------------------------------------
+    // Settlement
+    // ------------------------------------------------------------------
+
     /// Submit a settlement.
-    /// @param a,b,c       Groth16 proof points (BN254): a in G1, b in G2, c in G1.
-    ///                    Word order matches EIP-197 (B's imaginary coord first),
-    ///                    sliced by `Groth16Calldata::from_proof_bytes`.
-    /// @param genesisRoot Must equal the current provenRoot (continuity).
-    /// @param finalRoot   The new proven root on success.
-    /// @param numTurns    Number of finalized turns folded.
-    /// @param chainDigest Digest over the ordered (old,new) root pairs.
-    /// Reverts if the pairing check fails or genesisRoot != provenRoot.
+    /// @param a,b,c       Groth16 proof points (BN254): a in G1, b in G2,
+    ///                    c in G1. Word order matches EIP-197 (B's imaginary
+    ///                    coord first).
+    /// @param genesisRoot The 8 anchor lanes the proof starts from. First
+    ///                    settle: establishes the genesis anchor. Later
+    ///                    settles: must equal the current proven root lanes.
+    /// @param finalRoot   The 8 lanes of the new proven root on success.
+    /// @param numTurns    Number of finalized turns folded (must be >= 1).
+    /// @param chainDigest The 8 digest lanes committing to the ordered
+    ///                    (old, new) root pairs.
+    /// Reverts on any non-canonical lane, broken continuity, zero turns, or
+    /// a failed pairing check.
     function settle(
         uint256[2] calldata a,
         uint256[2][2] calldata b,
         uint256[2] calldata c,
-        bytes32 genesisRoot,
-        bytes32 finalRoot,
-        uint64  numTurns,
-        bytes32 chainDigest
+        uint32[8] calldata genesisRoot,
+        uint32[8] calldata finalRoot,
+        uint32 numTurns,
+        uint32[8] calldata chainDigest
     ) external;
-
-    event Settled(bytes32 indexed oldRoot, bytes32 indexed newRoot, uint64 height);
 }

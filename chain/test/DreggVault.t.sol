@@ -55,6 +55,35 @@ contract MockERC20 {
     }
 }
 
+/// @dev Recipient that attempts to re-enter withdraw() from its receive hook,
+/// using a SECOND valid proof (fresh nullifier). Records whether the reentrant
+/// call succeeded so tests can assert the guard blocked it.
+contract ReentrantRecipient {
+    DreggVault public vault;
+    bytes public innerProof;
+    uint256 public innerAmount;
+    bool public reentryAttempted;
+    bool public reentrySucceeded;
+
+    constructor(DreggVault _vault) {
+        vault = _vault;
+    }
+
+    function arm(bytes calldata _innerProof, uint256 _innerAmount) external {
+        innerProof = _innerProof;
+        innerAmount = _innerAmount;
+    }
+
+    receive() external payable {
+        if (!reentryAttempted) {
+            reentryAttempted = true;
+            try vault.withdraw(address(0), innerAmount, address(this), innerProof) {
+                reentrySucceeded = true;
+            } catch {}
+        }
+    }
+}
+
 contract DreggVaultTest is Test {
     DreggVault public vault;
     MockSP1Verifier public verifier;
@@ -265,7 +294,7 @@ contract DreggVaultTest is Test {
             RECIPIENT, // proof says RECIPIENT
             vault.noteTreeRoot()
         );
-        bytes memory proofBytes = hex"fr01";
+        bytes memory proofBytes = hex"f001";
         bytes memory sp1Proof = abi.encode(proofBytes, publicValues);
 
         address attacker = address(0xA77AC6);
@@ -286,7 +315,7 @@ contract DreggVaultTest is Test {
             RECIPIENT,
             vault.noteTreeRoot()
         );
-        bytes memory proofBytes = hex"amt1";
+        bytes memory proofBytes = hex"a171";
         bytes memory sp1Proof = abi.encode(proofBytes, publicValues);
 
         // Try to withdraw more than the proof commits to.
@@ -306,12 +335,203 @@ contract DreggVaultTest is Test {
             RECIPIENT,
             vault.noteTreeRoot()
         );
-        bytes memory proofBytes = hex"tok1";
+        bytes memory proofBytes = hex"70c1";
         bytes memory sp1Proof = abi.encode(proofBytes, publicValues);
 
         // Try to withdraw a token instead of ETH.
         vm.expectRevert(DreggVault.TokenMismatch.selector);
         vault.withdraw(address(token), 0.5 ether, RECIPIENT, sp1Proof);
+    }
+
+    // ─── Fail-Closed Verifier (codeless address must never accept) ──────────
+
+    function test_constructorRejectsCodelessVerifier() public {
+        address codeless = address(0x1234);
+        vm.expectRevert(DreggVault.VerifierNotContract.selector);
+        new DreggVault(codeless, PROGRAM_VKEY);
+    }
+
+    function test_withdrawRevertsWhenVerifierLosesCode() public {
+        vault.depositETH{value: 1 ether}(keccak256("codelessNote"));
+
+        bytes memory publicValues = abi.encode(
+            true,
+            keccak256("codelessNullifier"),
+            address(0),
+            uint256(0.5 ether),
+            RECIPIENT,
+            vault.noteTreeRoot()
+        );
+        bytes memory sp1Proof = abi.encode(hex"1234", publicValues);
+
+        // Strip the verifier's code: the raw staticcall would now succeed
+        // vacuously, so the call-time guard must reject.
+        vm.etch(address(verifier), "");
+
+        vm.expectRevert(DreggVault.VerifierNotContract.selector);
+        vault.withdraw(address(0), 0.5 ether, RECIPIENT, sp1Proof);
+    }
+
+    // ─── Solvency ───────────────────────────────────────────────────────────
+
+    function test_withdrawRevertsWhenExceedingEthBalance() public {
+        vault.depositETH{value: 0.5 ether}(keccak256("solvNote"));
+        // Give the vault raw ETH outside the deposit path -- it must NOT count.
+        vm.deal(address(vault), 10 ether);
+
+        bytes memory publicValues = abi.encode(
+            true,
+            keccak256("solvNullifier"),
+            address(0),
+            uint256(1 ether),
+            RECIPIENT,
+            vault.noteTreeRoot()
+        );
+        bytes memory sp1Proof = abi.encode(hex"1234", publicValues);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                DreggVault.InsufficientVaultBalance.selector,
+                address(0),
+                uint256(1 ether),
+                uint256(0.5 ether)
+            )
+        );
+        vault.withdraw(address(0), 1 ether, RECIPIENT, sp1Proof);
+    }
+
+    function test_withdrawRevertsForTokenNeverDeposited() public {
+        // Only ETH was deposited; a token withdrawal has zero solvency.
+        vault.depositETH{value: 1 ether}(keccak256("crossNote"));
+        token.mint(address(vault), 5 ether); // direct transfer, not a deposit
+
+        bytes memory publicValues = abi.encode(
+            true,
+            keccak256("crossNullifier"),
+            address(token),
+            uint256(1 ether),
+            RECIPIENT,
+            vault.noteTreeRoot()
+        );
+        bytes memory sp1Proof = abi.encode(hex"1234", publicValues);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                DreggVault.InsufficientVaultBalance.selector,
+                address(token),
+                uint256(1 ether),
+                uint256(0)
+            )
+        );
+        vault.withdraw(address(token), 1 ether, RECIPIENT, sp1Proof);
+    }
+
+    function test_withdrawFullBalanceSucceedsAndUpdatesAccounting() public {
+        vault.depositETH{value: 1 ether}(keccak256("fullNote"));
+        assertEq(vault.tokenBalances(address(0)), 1 ether);
+
+        bytes memory publicValues = abi.encode(
+            true,
+            keccak256("fullNullifier"),
+            address(0),
+            uint256(1 ether),
+            RECIPIENT,
+            vault.noteTreeRoot()
+        );
+        bytes memory sp1Proof = abi.encode(hex"1234", publicValues);
+
+        vault.withdraw(address(0), 1 ether, RECIPIENT, sp1Proof);
+
+        assertEq(RECIPIENT.balance, 1 ether);
+        assertEq(vault.tokenBalances(address(0)), 0);
+    }
+
+    // ─── Root Binding (proof root must be current or recent) ────────────────
+
+    function test_withdrawRejectsUnknownRoot() public {
+        vault.depositETH{value: 1 ether}(keccak256("rootNote"));
+
+        bytes32 bogusRoot = keccak256("not a real root");
+        bytes memory publicValues = abi.encode(
+            true,
+            keccak256("rootNullifier"),
+            address(0),
+            uint256(0.5 ether),
+            RECIPIENT,
+            bogusRoot
+        );
+        bytes memory sp1Proof = abi.encode(hex"1234", publicValues);
+
+        vm.expectRevert(abi.encodeWithSelector(DreggVault.UnknownRoot.selector, bogusRoot));
+        vault.withdraw(address(0), 0.5 ether, RECIPIENT, sp1Proof);
+    }
+
+    function test_withdrawRejectsZeroRoot() public {
+        vault.depositETH{value: 1 ether}(keccak256("zeroRootNote"));
+
+        bytes memory publicValues = abi.encode(
+            true,
+            keccak256("zeroRootNullifier"),
+            address(0),
+            uint256(0.5 ether),
+            RECIPIENT,
+            bytes32(0)
+        );
+        bytes memory sp1Proof = abi.encode(hex"1234", publicValues);
+
+        vm.expectRevert(abi.encodeWithSelector(DreggVault.UnknownRoot.selector, bytes32(0)));
+        vault.withdraw(address(0), 0.5 ether, RECIPIENT, sp1Proof);
+    }
+
+    function test_withdrawAcceptsRecentHistoricalRoot() public {
+        // Deposit, snapshot the root, then deposit again (root moves on).
+        vault.depositETH{value: 1 ether}(keccak256("histNote1"));
+        bytes32 oldRoot = vault.noteTreeRoot();
+        vault.depositETH{value: 1 ether}(keccak256("histNote2"));
+        assertTrue(vault.noteTreeRoot() != oldRoot);
+
+        // A proof generated against the old root is still spendable.
+        bytes memory publicValues = abi.encode(
+            true,
+            keccak256("histNullifier"),
+            address(0),
+            uint256(0.5 ether),
+            RECIPIENT,
+            oldRoot
+        );
+        bytes memory sp1Proof = abi.encode(hex"1234", publicValues);
+
+        vault.withdraw(address(0), 0.5 ether, RECIPIENT, sp1Proof);
+        assertEq(RECIPIENT.balance, 0.5 ether);
+    }
+
+    // ─── Reentrancy ─────────────────────────────────────────────────────────
+
+    function test_reentrantWithdrawBlocked() public {
+        vault.depositETH{value: 1 ether}(keccak256("reNote"));
+        ReentrantRecipient attacker = new ReentrantRecipient(vault);
+        bytes32 root = vault.noteTreeRoot();
+
+        // Inner proof: a fresh nullifier, otherwise valid. Without the
+        // nonReentrant guard this reentrant withdrawal would SUCCEED.
+        bytes32 innerNullifier = keccak256("reNullInner");
+        bytes memory innerProof = abi.encode(
+            hex"02",
+            abi.encode(true, innerNullifier, address(0), uint256(0.25 ether), address(attacker), root)
+        );
+        attacker.arm(innerProof, 0.25 ether);
+
+        bytes memory outerProof = abi.encode(
+            hex"01",
+            abi.encode(true, keccak256("reNullOuter"), address(0), uint256(0.25 ether), address(attacker), root)
+        );
+
+        vault.withdraw(address(0), 0.25 ether, address(attacker), outerProof);
+
+        assertTrue(attacker.reentryAttempted());
+        assertFalse(attacker.reentrySucceeded());
+        assertEq(address(attacker).balance, 0.25 ether); // only the outer withdrawal paid
+        assertFalse(vault.usedNullifiers(innerNullifier)); // inner nullifier not consumed
     }
 
     // ─── View Functions ─────────────────────────────────────────────────────
