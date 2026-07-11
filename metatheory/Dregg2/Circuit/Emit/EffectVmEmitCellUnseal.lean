@@ -38,6 +38,13 @@ post-state — the per-cell block (`CellUnsealCellSpec`) AND every one of the 8 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; Poseidon2 CR enters ONLY through the named
 `Poseidon2SpongeCR` portal (in the generic theorems). `fullClause`
 NON-VACUOUS. Read-only imports; owns only its own declarations.
+
+## The field-faithful denotation
+
+Gates hold `≡ 0 [ZMOD 2013265921]` (BabyBear), not ℤ `= 0`. The ℤ-stated intent is read back through
+the EXPLICIT canonicality envelope `CellUnsealRowCanon` (state cells canonical in `[0, p)`, boolean
+NOOP, in-field nonce tick — the deployed range-check invariant), witnessed satisfiable by
+`goodUnsealRow_canonical`; the anti-ghost teeth carry the same per-cell bounds (`¬ (p ∣ residual)`).
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitTransfer
 import Dregg2.Circuit.Emit.EffectVmEmitTransferSound
@@ -114,10 +121,33 @@ def CellUnsealRowIntent (env : VmRowEnv) : Prop :=
   ∧ env.loc (saCol state.RESERVED) = env.loc (sbCol state.RESERVED)
   ∧ (∀ i < 8, env.loc (saCol (state.FIELD_BASE + i)) = env.loc (sbCol (state.FIELD_BASE + i)))
 
-/-! ## §5 — FAITHFULNESS: the emitted per-row gates ⟺ the runtime-reconciled intent. -/
+/-- **`CellUnsealRowCanon env`** — the row's EXPLICIT canonicality envelope (the deployed range-check /
+field-representative invariant, carried as named hypotheses): every state-block cell of both windows
+is a canonical BabyBear representative in `[0, p)`; the NOOP selector is boolean (GROUP-1 selector
+validity); and the pre-nonce tick stays in-field (`nonce_before + 1 < p` — the per-cell sequence
+counter is far below `p`). Under the mod-p `holdsVm` denotation these are exactly the hypotheses that
+let the ℤ-stated row intent be read back off the field-checked gates (a `≡ 0 [ZMOD p]` residual
+strictly inside `(-p, p)` is `0`). -/
+def CellUnsealRowCanon (env : VmRowEnv) : Prop :=
+  (∀ off, off < STATE_SIZE →
+      (0 ≤ env.loc (sbCol off) ∧ env.loc (sbCol off) < 2013265921)
+      ∧ (0 ≤ env.loc (saCol off) ∧ env.loc (saCol off) < 2013265921))
+  ∧ (env.loc sel.NOOP = 0 ∨ env.loc sel.NOOP = 1)
+  ∧ env.loc (sbCol state.NONCE) + 1 < 2013265921
 
-theorem cellUnsealVm_faithful (env : VmRowEnv) :
+/-! ## §5 — FAITHFULNESS (mod-p, under the explicit canonicality envelope). -/
+
+/-- **`cellUnsealVm_faithful`.** On a cellUnseal row, under the explicit canonicality envelope, the
+emitted per-row gates all hold IFF `CellUnsealRowIntent` holds — the gates pin EXACTLY the passthrough
++ nonce-tick, read back off the field-checked (`≡ 0 [ZMOD p]`) bodies via canonicality. -/
+theorem cellUnsealVm_faithful (env : VmRowEnv) (hcanon : CellUnsealRowCanon env) :
     (∀ c ∈ cellUnsealRowGates, c.holdsVm env false false) ↔ CellUnsealRowIntent env := by
+  obtain ⟨hcells, hnoopB, hovf⟩ := hcanon
+  have hbLo := hcells state.BALANCE_LO (by norm_num [state.BALANCE_LO, STATE_SIZE])
+  have hbHi := hcells state.BALANCE_HI (by norm_num [state.BALANCE_HI, STATE_SIZE])
+  have hbN := hcells state.NONCE (by norm_num [state.NONCE, STATE_SIZE])
+  have hbCap := hcells state.CAP_ROOT (by norm_num [state.CAP_ROOT, STATE_SIZE])
+  have hbRes := hcells state.RESERVED (by norm_num [state.RESERVED, STATE_SIZE])
   unfold cellUnsealRowGates gFieldPassAll CellUnsealRowIntent
   constructor
   · intro h
@@ -133,46 +163,65 @@ theorem cellUnsealVm_faithful (env : VmRowEnv) :
       exact Or.inr ⟨i, hi, rfl⟩
     simp only [VmConstraint.holdsVm, gBalLoFreeze, gBalHi, gNonce, gCapPass, gResPass,
       eSA, eSB, eSub, eSelNoop, EmittedExpr.eval] at hLo hHi hNon hCap hRes
-    refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
-    · linarith [hLo]
-    · linarith [hHi]
-    · linarith [hNon]
-    · linarith [hCap]
-    · linarith [hRes]
-    · intro i hi
-      have := hFld i hi
-      simp only [VmConstraint.holdsVm, gFieldPass, eSA, eSB, eSub, EmittedExpr.eval] at this
-      linarith
+    rw [Int.modEq_zero_iff_dvd] at hLo hHi hNon hCap hRes
+    refine ⟨by omega, by omega, by omega, by omega, by omega, ?_⟩
+    intro i hi
+    have hFi := hFld i hi
+    have hbF := hcells (state.FIELD_BASE + i) (by simp only [state.FIELD_BASE, STATE_SIZE]; omega)
+    simp only [VmConstraint.holdsVm, gFieldPass, eSA, eSB, eSub, EmittedExpr.eval] at hFi
+    rw [Int.modEq_zero_iff_dvd] at hFi
+    omega
   · rintro ⟨hLo, hHi, hNon, hCap, hRes, hFld⟩ c hc
     simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, List.mem_map,
       List.mem_range] at hc
     rcases hc with (rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩
     · simp only [VmConstraint.holdsVm, gBalLoFreeze, eSA, eSB, eSub, EmittedExpr.eval]
-      rw [hLo]; ring
+      rw [Int.modEq_zero_iff_dvd]; omega
     · simp only [VmConstraint.holdsVm, gBalHi, eSA, eSB, eSub, EmittedExpr.eval]
-      rw [hHi]; ring
+      rw [Int.modEq_zero_iff_dvd]; omega
     · simp only [VmConstraint.holdsVm, gNonce, eSA, eSB, eSub, eSelNoop, EmittedExpr.eval]
-      rw [hNon]; ring
+      rw [Int.modEq_zero_iff_dvd]; omega
     · simp only [VmConstraint.holdsVm, gCapPass, eSA, eSB, eSub, EmittedExpr.eval]
-      rw [hCap]; ring
+      rw [Int.modEq_zero_iff_dvd]; omega
     · simp only [VmConstraint.holdsVm, gResPass, eSA, eSB, eSub, EmittedExpr.eval]
-      rw [hRes]; ring
+      rw [Int.modEq_zero_iff_dvd]; omega
     · simp only [VmConstraint.holdsVm, gFieldPass, eSA, eSB, eSub, EmittedExpr.eval]
-      rw [hFld i hi]; ring
+      rw [Int.modEq_zero_iff_dvd]
+      have := hFld i hi
+      omega
 
-/-! ## §6 — ANTI-GHOST (gate level). -/
+/-! ## §6 — ANTI-GHOST (gate level; the teeth carry the explicit canonicality — none dropped). -/
 
+/-- **Anti-ghost (balance moved).** A row whose post-`bal_lo` ≠ pre-`bal_lo` fails the freeze gate — a
+lifecycle flag flip cannot silently move value. Both cells canonical in `[0, p)` (the deployed
+range-check invariant), so the moved-balance residual is nonzero strictly inside `(-p, p)`:
+`¬ (p ∣ residual)`. -/
 theorem cellUnsealVm_rejects_moved_balance (env : VmRowEnv)
+    (hsa : 0 ≤ env.loc (saCol state.BALANCE_LO) ∧ env.loc (saCol state.BALANCE_LO) < 2013265921)
+    (hsb : 0 ≤ env.loc (sbCol state.BALANCE_LO) ∧ env.loc (sbCol state.BALANCE_LO) < 2013265921)
     (hwrong : env.loc (saCol state.BALANCE_LO) ≠ env.loc (sbCol state.BALANCE_LO)) :
     ¬ (VmConstraint.gate gBalLoFreeze).holdsVm env false false := by
   simp only [VmConstraint.holdsVm, gBalLoFreeze, eSA, eSB, eSub, EmittedExpr.eval]
-  intro h; apply hwrong; linarith
+  rw [Int.modEq_zero_iff_dvd]
+  intro h
+  exact hwrong (by omega)
 
+/-- **Anti-ghost (nonce tamper).** A row whose nonce does NOT tick by 1 (on `s_noop = 0`) fails the
+reconciled `gNonce` tick gate. Canonicality: both nonce cells canonical, the tick in-field
+(`nonce_before + 1 < p`), the NOOP selector boolean — the tampered residual lies strictly inside
+`(-p, p)` and is nonzero. -/
 theorem cellUnsealVm_rejects_nonce_freeze (env : VmRowEnv)
+    (hsa : 0 ≤ env.loc (saCol state.NONCE) ∧ env.loc (saCol state.NONCE) < 2013265921)
+    (hsb : 0 ≤ env.loc (sbCol state.NONCE) ∧ env.loc (sbCol state.NONCE) + 1 < 2013265921)
+    (hnoopB : env.loc sel.NOOP = 0 ∨ env.loc sel.NOOP = 1)
     (hwrong : env.loc (saCol state.NONCE) ≠ env.loc (sbCol state.NONCE) + (1 - env.loc sel.NOOP)) :
     ¬ (VmConstraint.gate gNonce).holdsVm env false false := by
   simp only [VmConstraint.holdsVm, gNonce, eSA, eSB, eSub, eSelNoop, EmittedExpr.eval]
-  intro h; apply hwrong; linarith
+  rw [Int.modEq_zero_iff_dvd]
+  intro h
+  have hnoop01 : 0 ≤ env.loc sel.NOOP ∧ env.loc sel.NOOP ≤ 1 := by
+    rcases hnoopB with h' | h' <;> rw [h'] <;> norm_num
+  exact hwrong (by omega)
 
 /-! ## §7 — the structured per-cell spec (REUSING `CellState`): passthrough + nonce tick. -/
 
@@ -229,6 +278,8 @@ theorem intent_to_cellSpec (env : VmRowEnv) (pre post : CellState)
 the post-commit as `PI[NEW_COMMIT]`. -/
 theorem cellUnsealDescriptor_full_sound (hash : List ℤ → ℤ) (env : VmRowEnv)
     (pre post : CellState) (hnoop : env.loc sel.NOOP = 0)
+    (hcanon : CellUnsealRowCanon env)
+    (hpubc : 0 ≤ env.pub pi.NEW_COMMIT ∧ env.pub pi.NEW_COMMIT < 2013265921)
     (henc : RowEncodesUnseal env pre post)
     (hgatesat : satisfiedVm hash cellUnsealVmDescriptor env true false)
     (hsat : satisfiedVm hash cellUnsealVmDescriptor env true true) :
@@ -247,7 +298,7 @@ theorem cellUnsealDescriptor_full_sound (hash : List ℤ → ℤ) (env : VmRowEn
       List.mem_range] at hc
     rcases hc with (rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩ <;>
       simpa only [VmConstraint.holdsVm] using this
-  have hint := (cellUnsealVm_faithful env).mp hgates'
+  have hint := (cellUnsealVm_faithful env hcanon).mp hgates'
   refine ⟨intent_to_cellSpec env pre post hnoop henc hint, ?_⟩
   have hlast : ∀ c ∈ boundaryLastPins, c.holdsVm env false true := by
     intro c hc
@@ -261,9 +312,13 @@ theorem cellUnsealDescriptor_full_sound (hash : List ℤ → ℤ) (env : VmRowEn
     rcases hc with rfl | rfl | rfl <;>
       · simp only [VmConstraint.holdsVm] at hh ⊢
         exact hh
-  have hpin := (boundaryLast_pins env hlast).1
+  -- The NEW_COMMIT pin (mod-p) lifted to ℤ equality by canonicality of the commit cell + the PI.
+  have hmod := (boundaryLast_pins env hlast).1
+  have hdvd := Int.ModEq.dvd hmod
+  have hcell := (hcanon.1 state.STATE_COMMIT (by norm_num [state.STATE_COMMIT, STATE_SIZE])).2
   obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, _, hsaC, _, _⟩ := henc
-  rw [← hsaC]; exact hpin
+  rw [← hsaC]
+  omega
 
 /-! ## §9 — THE FULL-STATE LIFT: the WIDE descriptor + the magnesium crown. -/
 
@@ -279,9 +334,11 @@ def cellUnsealVmDescriptorWide : EffectVmDescriptor :=
 theorem cellUnsealWide_constraints_eq :
     cellUnsealVmDescriptorWide.constraints = cellUnsealVmDescriptor.constraints := rfl
 
-/-- The GATE-ONLY per-cell soundness (no hash-site hypothesis — the THIN per-effect content). -/
+/-- The GATE-ONLY per-cell soundness (no hash-site hypothesis — the THIN per-effect content),
+under the explicit canonicality envelope (the mod-p read-back needs it). -/
 theorem cellUnsealGates_give_cellSpec (env : VmRowEnv) (pre post : CellState)
-    (hnoop : env.loc sel.NOOP = 0) (henc : RowEncodesUnseal env pre post)
+    (hnoop : env.loc sel.NOOP = 0) (hcanon : CellUnsealRowCanon env)
+    (henc : RowEncodesUnseal env pre post)
     (hgates : ∀ c ∈ cellUnsealVmDescriptor.constraints, c.holdsVm env true false) :
     CellUnsealCellSpec pre post := by
   have hrowgates : ∀ c ∈ cellUnsealRowGates, c.holdsVm env false false := by
@@ -296,25 +353,28 @@ theorem cellUnsealGates_give_cellSpec (env : VmRowEnv) (pre post : CellState)
       List.mem_range] at hc
     rcases hc with (rfl | rfl | rfl | rfl | rfl) | ⟨i, hi, rfl⟩ <;>
       simpa only [VmConstraint.holdsVm] using hh
-  exact intent_to_cellSpec env pre post hnoop henc ((cellUnsealVm_faithful env).mp hrowgates)
+  exact intent_to_cellSpec env pre post hnoop henc ((cellUnsealVm_faithful env hcanon).mp hrowgates)
 
 /-- **`CellUnsealFullClause`** — the FULL 17-field declarative post for cellUnseal: the per-cell
 `CellUnsealCellSpec` (economic block FROZEN, the seq-nonce TICKS) AND the `system_roots` sub-block FROZEN. -/
 def CellUnsealFullClause (preRoots : SysRoots) (pre post : CellState) (postRoots : SysRoots) : Prop :=
   CellUnsealCellSpec pre post ∧ postRoots = preRoots
 
-/-- **`cellUnsealRunnableSpec`** — the FULL-state RUNNABLE instance for cellUnseal. THIN; NON-VACUOUS. -/
+/-- **`cellUnsealRunnableSpec`** — the FULL-state RUNNABLE instance for cellUnseal. THIN; NON-VACUOUS.
+The structured decode carries the explicit canonicality envelope (`CellUnsealRowCanon` — the deployed
+range-check invariant), which the mod-p gate read-back consumes; `goodUnsealRow_canonical` witnesses
+its satisfiability. -/
 def cellUnsealRunnableSpec (preRoots : SysRoots) : RunnableFullStateSpec CellState where
   descriptor    := cellUnsealVmDescriptorWide
   usesWideSites := rfl
   isRow         := IsCellUnsealRow
   decodeAfter   := fun env pre post postRoots =>
-    RowEncodesUnseal env pre post ∧ postRoots = preRoots
+    RowEncodesUnseal env pre post ∧ postRoots = preRoots ∧ CellUnsealRowCanon env
   fullClause    := CellUnsealFullClause preRoots
   decodeFull    := by
     intro env pre post postRoots hrow hdec hgates
-    obtain ⟨henc, hroots⟩ := hdec
-    exact ⟨cellUnsealGates_give_cellSpec env pre post hrow.2 henc
+    obtain ⟨henc, hroots, hcanon⟩ := hdec
+    exact ⟨cellUnsealGates_give_cellSpec env pre post hrow.2 hcanon henc
             (cellUnsealWide_constraints_eq ▸ hgates), hroots⟩
 
 /-- **`cellUnseal_runnable_full_sound` — the magnesium crown for cellUnseal.** A row satisfying the WIDE
@@ -322,12 +382,12 @@ RUNNABLE cellUnseal descriptor, decoded by `RowEncodesUnseal` with the frozen-ro
 FULL 17-field post-state: the per-cell block (`CellUnsealCellSpec`) AND all 8 side-table roots FROZEN. -/
 theorem cellUnseal_runnable_full_sound (hash : List ℤ → ℤ) (preRoots : SysRoots)
     (env : VmRowEnv) (pre post : CellState) (postRoots : SysRoots)
-    (hrow : IsCellUnsealRow env)
+    (hrow : IsCellUnsealRow env) (hcanon : CellUnsealRowCanon env)
     (henc : RowEncodesUnseal env pre post) (hroots : postRoots = preRoots)
     (hsat : satisfiedVm hash cellUnsealVmDescriptorWide env true false) :
     CellUnsealCellSpec pre post ∧ postRoots = preRoots :=
   runnable_full_sound (cellUnsealRunnableSpec preRoots) hash env pre post postRoots hrow
-    ⟨henc, hroots⟩ hsat
+    ⟨henc, hroots, hcanon⟩ hsat
 
 /-! ## §10 — THE ANTI-GHOST. -/
 
@@ -386,6 +446,118 @@ theorem cellUnseal_clause_rejects_root_drop :
   simp only [cellUnsealPreRoots, emptySystemRoots] at h0
   norm_num at h0
 
+/-! ## §11b — NON-VACUITY at the ROW level: a concrete runtime cellUnseal row realizes the intent AND
+the canonicality envelope (so the mod-p hypotheses are jointly satisfiable, not a vacuous guard);
+concrete tampers are rejected. -/
+
+/-- A concrete cellUnseal row: state-block passthrough + nonce TICK (bal_lo 100 → 100, nonce 5 → 6,
+frame 0, `s_noop = 0`). -/
+def goodUnsealRow : VmRowEnv where
+  loc := fun v =>
+    if v = SEL_CELLUNSEAL then 1
+    else if v = sbCol state.BALANCE_LO then 100
+    else if v = saCol state.BALANCE_LO then 100
+    else if v = sbCol state.NONCE then 5
+    else if v = saCol state.NONCE then 6
+    else 0
+  nxt := fun _ => 0
+  pub := fun _ => 0
+
+theorem goodUnsealRow_noop : goodUnsealRow.loc sel.NOOP = 0 := by
+  show goodUnsealRow.loc 0 = 0
+  simp only [goodUnsealRow, SEL_CELLUNSEAL, sbCol, saCol, STATE_BEFORE_BASE,
+    STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.BALANCE_LO, state.NONCE]
+  norm_num
+
+/-- **NON-VACUITY (witness TRUE).** `goodUnsealRow` REALIZES the runtime cellUnseal intent
+(passthrough + nonce tick). -/
+theorem goodUnsealRow_realizes_intent : CellUnsealRowIntent goodUnsealRow := by
+  unfold CellUnsealRowIntent
+  have hnoop : goodUnsealRow.loc sel.NOOP = 0 := goodUnsealRow_noop
+  refine ⟨rfl, rfl, ?_, rfl, rfl, ?_⟩
+  · rw [hnoop]
+    show goodUnsealRow.loc (saCol state.NONCE) = goodUnsealRow.loc (sbCol state.NONCE) + (1 - 0)
+    simp only [goodUnsealRow, SEL_CELLUNSEAL, sbCol, saCol, STATE_BEFORE_BASE,
+      STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.BALANCE_LO,
+      state.NONCE]
+    norm_num
+  · intro i hi
+    show goodUnsealRow.loc (saCol (state.FIELD_BASE + i)) = goodUnsealRow.loc (sbCol (state.FIELD_BASE + i))
+    simp only [goodUnsealRow, SEL_CELLUNSEAL, sbCol, saCol, STATE_BEFORE_BASE,
+      STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.BALANCE_LO,
+      state.NONCE, state.FIELD_BASE]
+    have e1 : (76 + (3 + i) = 50) = False := eq_false (by omega)
+    have e2 : (76 + (3 + i) = 54 + 0) = False := eq_false (by omega)
+    have e3 : (76 + (3 + i) = 76 + 0) = False := eq_false (by omega)
+    have e4 : (76 + (3 + i) = 54 + 2) = False := eq_false (by omega)
+    have e5 : (76 + (3 + i) = 76 + 2) = False := eq_false (by omega)
+    have f1 : (54 + (3 + i) = 50) = False := eq_false (by omega)
+    have f2 : (54 + (3 + i) = 54 + 0) = False := eq_false (by omega)
+    have f3 : (54 + (3 + i) = 76 + 0) = False := eq_false (by omega)
+    have f4 : (54 + (3 + i) = 54 + 2) = False := eq_false (by omega)
+    have f5 : (54 + (3 + i) = 76 + 2) = False := eq_false (by omega)
+    simp only [e1, e2, e3, e4, e5, f1, f2, f3, f4, f5, if_false]
+
+/-- **NON-VACUITY (canonicality witness).** The honest row satisfies the explicit canonicality
+envelope — the mod-p hypotheses are jointly satisfiable, not a vacuous guard. -/
+theorem goodUnsealRow_canonical : CellUnsealRowCanon goodUnsealRow := by
+  refine ⟨?_, Or.inl goodUnsealRow_noop, ?_⟩
+  · intro off hoff
+    have hall : ∀ v, 0 ≤ goodUnsealRow.loc v ∧ goodUnsealRow.loc v < 2013265921 := by
+      intro v
+      simp only [goodUnsealRow]
+      split_ifs <;> norm_num
+    exact ⟨hall _, hall _⟩
+  · show goodUnsealRow.loc (sbCol state.NONCE) + 1 < 2013265921
+    simp only [goodUnsealRow, SEL_CELLUNSEAL, sbCol, saCol, STATE_BEFORE_BASE,
+      STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.BALANCE_LO,
+      state.NONCE]
+    norm_num
+
+/-- A FORGED cellUnseal row: `goodUnsealRow` with the post-`bal_lo` minted to `999`. -/
+def badUnsealRow : VmRowEnv where
+  loc := fun v => if v = saCol state.BALANCE_LO then 999 else goodUnsealRow.loc v
+  nxt := goodUnsealRow.nxt
+  pub := goodUnsealRow.pub
+
+/-- **NON-VACUITY (witness FALSE / concrete anti-ghost).** `badUnsealRow`'s post-`bal_lo` is NOT
+frozen (forged mint), so `gBalLoFreeze` REJECTS it — a concrete UNSAT (conservation has teeth). -/
+theorem badUnsealRow_rejected : ¬ (VmConstraint.gate gBalLoFreeze).holdsVm badUnsealRow false false := by
+  apply cellUnsealVm_rejects_moved_balance <;>
+    · simp only [badUnsealRow, goodUnsealRow, sbCol, saCol, SEL_CELLUNSEAL, STATE_BEFORE_BASE,
+        STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS, state.BALANCE_LO,
+        state.NONCE]
+      norm_num
+
+/-- A FROZEN-NONCE cellUnseal row: `goodUnsealRow` with the post-nonce held at `5`. -/
+def staleNonceUnsealRow : VmRowEnv where
+  loc := fun v => if v = saCol state.NONCE then 5 else goodUnsealRow.loc v
+  nxt := goodUnsealRow.nxt
+  pub := goodUnsealRow.pub
+
+/-- **NON-VACUITY (cutover witness FALSE).** A frozen-nonce row is UNSAT under the reconciled `gNonce`
+tick gate — the descriptor agrees with the hand-AIR (which ticks). -/
+theorem staleNonceUnsealRow_rejected :
+    ¬ (VmConstraint.gate gNonce).holdsVm staleNonceUnsealRow false false := by
+  apply cellUnsealVm_rejects_nonce_freeze
+  · simp only [staleNonceUnsealRow, goodUnsealRow, sbCol, saCol, SEL_CELLUNSEAL,
+      STATE_BEFORE_BASE, STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS,
+      state.BALANCE_LO, state.NONCE]
+    norm_num
+  · simp only [staleNonceUnsealRow, goodUnsealRow, sbCol, saCol, SEL_CELLUNSEAL,
+      STATE_BEFORE_BASE, STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS,
+      state.BALANCE_LO, state.NONCE]
+    norm_num
+  · left
+    simp only [staleNonceUnsealRow, goodUnsealRow, sel.NOOP, sbCol, saCol, SEL_CELLUNSEAL,
+      STATE_BEFORE_BASE, STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS,
+      state.BALANCE_LO, state.NONCE]
+    norm_num
+  · simp only [staleNonceUnsealRow, goodUnsealRow, sel.NOOP, sbCol, saCol, SEL_CELLUNSEAL,
+      STATE_BEFORE_BASE, STATE_AFTER_BASE, PARAM_BASE, NUM_EFFECTS, STATE_SIZE, NUM_PARAMS,
+      state.BALANCE_LO, state.NONCE]
+    norm_num
+
 /-! ## §12 — layout + axiom-hygiene tripwires. -/
 
 #guard cellUnsealVmDescriptor.constraints.length == 13 + 14 + 4 + 3 + 1
@@ -395,6 +567,8 @@ theorem cellUnseal_clause_rejects_root_drop :
 #guard cellUnsealVmDescriptorWide.constraints.length == cellUnsealVmDescriptor.constraints.length
 
 #assert_axioms cellUnsealVm_faithful
+#assert_axioms cellUnsealVm_rejects_moved_balance
+#assert_axioms cellUnsealVm_rejects_nonce_freeze
 #assert_axioms cellUnsealDescriptor_full_sound
 #assert_axioms cellUnsealGates_give_cellSpec
 #assert_axioms cellUnseal_runnable_full_sound
@@ -403,5 +577,9 @@ theorem cellUnseal_clause_rejects_root_drop :
 #assert_axioms goodCellUnseal_realizes
 #assert_axioms cellUnseal_clause_not_trivial
 #assert_axioms cellUnseal_clause_rejects_root_drop
+#assert_axioms goodUnsealRow_realizes_intent
+#assert_axioms goodUnsealRow_canonical
+#assert_axioms badUnsealRow_rejected
+#assert_axioms staleNonceUnsealRow_rejected
 
 end Dregg2.Circuit.Emit.EffectVmEmitCellUnseal
