@@ -815,3 +815,14 @@ geometry is evolving 170->172->178, track + fire when stable]; hosted notary (E 
 stakeholder surfaces (discord-bot players, author universe-compile); E->B wire (Bedrock carrier into narrate_turn_
 attested for end-to-end real provenance). ENTWINGLE: the executor-verification path IS DreggCloud's rung-upgrade;
 the Bedrock MPC-TLS carrier is reusable dregg-wide.
+
+## Cook-down: #3 hosted-notary + #7 maxTokens CLOSED (2026-07-11)
+- ✅ zkoracle-prove: the E-provenance notary is now a SEPARATE hosted party (notary_server.rs — a distinct tokio task
+  on a real TCP socket, its signing key from OS entropy the prover never sees, only the public verifying key pinned);
+  verify_bedrock_presentation REJECTS any presentation whose key != the pin. MAX_RECV_DATA 32KiB->64KiB. Verified BY
+  ME (live): separate-notary=true, socket 127.0.0.1:62311, pinned-key 02854c06..., a genuine 768-token Claude
+  narration ("The Drowned Vault Descends"), WRONG-KEY REJECTED (non-vacuous, on key value). Residual = public hosting
+  (infra, not crypto). Prover can no longer sign its own attestation.
+COOK-DOWN BOARD: #1 full-fold (Lane-D-gated, evolving — tracked) · #2 multi-cell (running a2748e7) · #3 hosted-notary
+✅ · #4 E->B wire (queued behind multi-cell) · #5 custody keys (queued) · #6 real confined brain (queued) · #7
+maxTokens ✅ · #8 StarkSound (terminal floor, stays). Target: everything real except #8.
