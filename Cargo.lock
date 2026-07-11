@@ -15390,18 +15390,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "real-dungeon-service"
-version = "0.1.0"
-dependencies = [
- "dregg-app-framework",
- "dungeon-on-dregg",
- "http-serve",
- "serde_json",
- "spween",
- "spween-dregg",
-]
-
-[[package]]
 name = "redb"
 version = "2.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
