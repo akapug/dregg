@@ -50,6 +50,9 @@ pub mod meter;
 // ── the agent runtime ────────────────────────────────────────────────────────
 pub mod agent;
 pub mod brain;
+// the execution-audit rail: the witnessed-nondeterminism envelope + replay hooks
+// (every LLM / tool / kernel-turn input captured so a turn re-executes for audit)
+pub mod envelope;
 pub mod federation_qa;
 pub mod harness;
 pub mod hermes;
