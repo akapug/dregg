@@ -19,8 +19,11 @@
 //! executes behind the operator's signer — the deferred [`crate::sweeper::SolanaSweeper`]
 //! /operator-signed settlement (`otc_settle`, a follow-up). Custody is the seed/signer.
 
-use crate::config::PayConfig;
+use crate::config::{DepositAddress, PayConfig};
 use crate::pricing::{PriceError, PriceOracle, discount_factor};
+use crate::swap::{Signer, SignerError};
+use crate::treasury::{Treasury, TreasuryStore};
+use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
 
 /// A computed OTC fill: bring `usdc_in`, receive `dregg_out`, at the discounted rate.
 #[derive(Clone, Debug, PartialEq)]
@@ -131,11 +134,138 @@ pub fn otc_quote(
     })
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// otc_settle — the deferred, signer-gated OTC settlement
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A completed OTC settlement: the `$DREGG` moved to the buyer + the USDC-in recorded.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OtcSettlement {
+    /// The buyer the `$DREGG` was transferred to.
+    pub buyer: DepositAddress,
+    /// Atomic `$DREGG` moved out of the pile to the buyer.
+    pub dregg_out: u64,
+    /// Atomic USDC recorded in from the buyer (fuels the treasury).
+    pub usdc_in: u64,
+    /// The pile balance (atomic `$DREGG`) after the settlement.
+    pub pile_after: u64,
+    /// The fuel balance (atomic USDC) after the settlement.
+    pub fuel_after: u64,
+    /// The settlement transaction reference (the operator-signed transfer's signature on
+    /// the real path; a synthetic id on the mock path).
+    pub reference: String,
+}
+
+/// Why an OTC settlement was refused.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OtcSettleError {
+    /// The pile can no longer cover the quoted fill — fail closed (need vs have). Reuses
+    /// [`otc_quote`]'s pile check at settle time (the pile may have shrunk since quoting).
+    InsufficientPile {
+        /// Atomic `$DREGG` the settlement needs.
+        needed: u64,
+        /// Atomic `$DREGG` currently in the pile.
+        available: u64,
+    },
+    /// The operator signer failed.
+    Signer(SignerError),
+}
+
+impl std::fmt::Display for OtcSettleError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OtcSettleError::InsufficientPile { needed, available } => write!(
+                f,
+                "OTC settle refused: pile short — need {needed} atomic $DREGG, have {available}"
+            ),
+            OtcSettleError::Signer(e) => write!(f, "OTC settle refused: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for OtcSettleError {}
+
+impl From<SignerError> for OtcSettleError {
+    fn from(e: SignerError) -> Self {
+        OtcSettleError::Signer(e)
+    }
+}
+
+/// The canonical bytes an OTC settlement SIGNS — binds `buyer ‖ usdc_in ‖ dregg_out` so an
+/// operator signature can't be replayed onto a different fill.
+pub fn otc_settle_message(buyer: &DepositAddress, usdc_in: u64, dregg_out: u64) -> Vec<u8> {
+    let mut m = Vec::with_capacity(22 + 32 + 8 + 8);
+    m.extend_from_slice(b"dregg-pay/otc-settle/v1");
+    m.extend_from_slice(&buyer.to_bytes());
+    m.extend_from_slice(&usdc_in.to_le_bytes());
+    m.extend_from_slice(&dregg_out.to_le_bytes());
+    m
+}
+
+/// Settle a previously-computed [`OtcQuote`], **behind the operator's signer**: move the
+/// quoted `$DREGG` out of the pile to `buyer` and record the USDC-in as fuel.
+///
+/// Fail closed: RE-checks the pile can still cover the fill ([`OtcSettleError::InsufficientPile`]
+/// — reusing [`otc_quote`]'s check shape, since the pile may have shrunk since the quote)
+/// BEFORE anything moves; a signer failure refuses with no move. The operator [`Signer`]
+/// signs the `$DREGG` transfer ([`otc_settle_message`]); the real on-chain transfer
+/// executes behind that signature — `dregg-pay` holds no key.
+pub fn otc_settle<S: TreasuryStore>(
+    quote: &OtcQuote,
+    buyer: &DepositAddress,
+    signer: &dyn Signer,
+    treasury: &Treasury<S>,
+) -> Result<OtcSettlement, OtcSettleError> {
+    // Fail closed FIRST: the pile must still cover the fill (the quote may be stale).
+    let pile = treasury.dregg_balance();
+    if quote.dregg_out > pile {
+        return Err(OtcSettleError::InsufficientPile {
+            needed: quote.dregg_out,
+            available: pile,
+        });
+    }
+
+    // The operator signs the $DREGG transfer to the buyer (no key in dregg-pay).
+    let message = otc_settle_message(buyer, quote.usdc_in, quote.dregg_out);
+    let signature = signer.sign(&message)?;
+    // Verify the operator signature (a custody sanity tooth — real ed25519, no network).
+    if let Ok(vk) = VerifyingKey::from_bytes(&signer.public_key()) {
+        if let Ok(sig) = Signature::from_slice(&signature) {
+            if vk.verify(&message, &sig).is_err() {
+                return Err(OtcSettleError::Signer(SignerError::Backend(
+                    "operator signature failed to verify".into(),
+                )));
+            }
+        }
+    }
+
+    // Move: pile DOWN to the buyer, USDC-in recorded as fuel.
+    let pile_after =
+        treasury
+            .withdraw_dregg(quote.dregg_out)
+            .map_err(|_| OtcSettleError::InsufficientPile {
+                needed: quote.dregg_out,
+                available: treasury.dregg_balance(),
+            })?;
+    let fuel_after = treasury.deposit_usdc(quote.usdc_in);
+
+    Ok(OtcSettlement {
+        buyer: *buyer,
+        dregg_out: quote.dregg_out,
+        usdc_in: quote.usdc_in,
+        pile_after,
+        fuel_after,
+        reference: format!("mock-otc-settle:{}:{}", buyer.to_base58(), quote.dregg_out),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::DepositAddress;
     use crate::pricing::MockOracle;
+    use crate::swap::MockSigner;
+    use crate::treasury::{InMemoryTreasuryStore, Treasury};
 
     fn cfg() -> PayConfig {
         PayConfig::devnet_mock(
@@ -199,5 +329,58 @@ mod tests {
             err,
             OtcError::PriceUnavailable(PriceError::InvalidDiscount(10_000))
         );
+    }
+
+    fn seeded_treasury(pile: u64) -> Treasury<InMemoryTreasuryStore> {
+        let t = Treasury::new(InMemoryTreasuryStore::new(), 6);
+        t.deposit_dregg(pile);
+        t
+    }
+
+    #[test]
+    fn otc_settle_moves_pile_to_buyer_and_records_usdc_mock_signed() {
+        let c = cfg();
+        let oracle = MockOracle::new(0.005);
+        // Bring $1.00 → 222_222_222 atomic $DREGG. Pile has plenty.
+        let pile = 1_000_000_000u64;
+        let t = seeded_treasury(pile);
+        let quote = otc_quote(1_000_000, t.dregg_balance(), &oracle, &c).unwrap();
+
+        let buyer = DepositAddress([0xAB; 32]);
+        let signer = MockSigner::from_seed([5u8; 32]);
+        let settled = otc_settle(&quote, &buyer, &signer, &t).unwrap();
+
+        assert_eq!(settled.dregg_out, 222_222_222);
+        assert_eq!(settled.usdc_in, 1_000_000);
+        assert_eq!(settled.buyer, buyer);
+        // Pile DOWN by the fill; USDC-in recorded as fuel.
+        assert_eq!(t.dregg_balance(), pile - 222_222_222);
+        assert_eq!(settled.pile_after, pile - 222_222_222);
+        assert_eq!(t.usdc_balance(), 1_000_000, "USDC-in recorded as fuel");
+        assert_eq!(settled.fuel_after, 1_000_000);
+    }
+
+    #[test]
+    fn otc_settle_refuses_when_pile_short_no_move() {
+        let c = cfg();
+        let oracle = MockOracle::new(0.005);
+        // Quote against a fat pile, then settle against a treasury that only has a little.
+        let quote = otc_quote(1_000_000, 1_000_000_000, &oracle, &c).unwrap();
+        assert_eq!(quote.dregg_out, 222_222_222);
+
+        let t = seeded_treasury(100_000_000); // pile shrank below the quote
+        let buyer = DepositAddress([0xAB; 32]);
+        let signer = MockSigner::from_seed([5u8; 32]);
+        let err = otc_settle(&quote, &buyer, &signer, &t).unwrap_err();
+        assert_eq!(
+            err,
+            OtcSettleError::InsufficientPile {
+                needed: 222_222_222,
+                available: 100_000_000
+            }
+        );
+        // Nothing moved on the refusal.
+        assert_eq!(t.dregg_balance(), 100_000_000);
+        assert_eq!(t.usdc_balance(), 0);
     }
 }

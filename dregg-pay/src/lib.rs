@@ -64,10 +64,12 @@
 //!   Mainnet is a config flip on ember's go; custody remains the seed/signer.
 
 pub mod config;
+pub mod governance;
 pub mod hd;
 pub mod ledger;
 pub mod otc;
 pub mod pricing;
+pub mod swap;
 pub mod sweeper;
 pub mod treasury;
 pub mod watcher;
@@ -77,16 +79,26 @@ pub use config::{
     DEFAULT_OTC_DISCOUNT_BPS, DEFAULT_PRICE_USD_PER_RUN, DEFAULT_USDC_DECIMALS, DepositAddress,
     Network, PayConfig, SPL_TOKEN_PROGRAM_ID, Seed, UserId, parse_pubkey_base58,
 };
+pub use governance::{
+    APPROVE_OPTION, GovernanceError, LiquidityGovernance, LiquidityProposal, REJECT_OPTION,
+};
 pub use hd::{
     DepositAddressProvider, HdDeposit, derive_deposit_address, derive_signing_key, user_index,
 };
 pub use ledger::{
     CreditLedger, CreditOutcome, CreditStore, DebitError, InMemoryStore, StoreCreditOutcome,
 };
-pub use otc::{OtcError, OtcQuote, otc_dregg_out, otc_quote};
+pub use otc::{
+    OtcError, OtcQuote, OtcSettleError, OtcSettlement, otc_dregg_out, otc_quote, otc_settle,
+    otc_settle_message,
+};
 pub use pricing::{
     HttpGet, JupiterPriceOracle, MockOracle, PriceError, PriceOracle, discount_factor,
     parse_jupiter_price, runs_for_payment,
+};
+pub use swap::{
+    GovernanceAuthority, JupiterSwap, MockSigner, MockSwapVenue, Signer, SignerError,
+    SwapAuthorization, SwapError, SwapOutcome, SwapRoute, SwapVenue, UnsignedSwapTx, swap_message,
 };
 pub use sweeper::{
     MockSweeper, SolanaSweeper, SweepError, SweepOutcome, SweepRequest, Sweeper, TxSubmitter,

@@ -14,6 +14,12 @@ description = "Payment backend for accepting $DREGG (SPL token on Solana) for re
 # balance read live in the bridge crate's `solana_holdings` (reused verbatim, not
 # reimplemented). No cycle: bridge does not depend on dregg-pay.
 dregg-bridge = { path = "../bridge" }
+# The quorum engine for the liquidity VOTE: poll → write-once ballots → monotone
+# tally → the quorum `AffineLe` gate — the SAME engine the bot's `/party` uses. The
+# governance module drives a liquidity-event proposal through it; a passed vote is
+# what mints a `SwapAuthorization`. No cycle: collective-choice does not depend on
+# dregg-pay.
+collective-choice = { path = "../collective-choice" }
 # SLIP-0010 ed25519 hardened derivation = HMAC-SHA512; the derived key is a real
 # ed25519 keypair whose public key IS the Solana deposit address.
 hmac = { workspace = true }

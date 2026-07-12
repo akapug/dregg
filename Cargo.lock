@@ -5635,6 +5635,8 @@ dependencies = [
  "dregg-bridge",
  "dregg-lean-ffi",
  "ed25519-dalek",
+ "k256",
+ "sha3",
 ]
 
 [[package]]
@@ -5814,6 +5816,7 @@ dependencies = [
  "dregg-lean-ffi",
  "dregg-macaroon",
  "dregg-net",
+ "dregg-pay",
  "dregg-persist",
  "dregg-pq",
  "dregg-query",
@@ -5894,6 +5897,7 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "bs58",
+ "collective-choice",
  "dregg-bridge",
  "ed25519-dalek",
  "hmac 0.12.1",
@@ -6513,6 +6517,18 @@ dependencies = [
  "tlsn-server-fixture-certs",
  "tokio",
  "tokio-util",
+]
+
+[[package]]
+name = "dreggnet-offerings"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "deos-view",
+ "dregg-app-framework",
+ "dungeon-on-dregg",
+ "spween",
+ "spween-dregg",
 ]
 
 [[package]]
