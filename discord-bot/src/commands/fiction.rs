@@ -31,290 +31,86 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 use serenity::all::{
-    ButtonStyle, CommandInteraction, CommandOptionType, ComponentInteraction, Context,
+    ButtonStyle, ChannelId, CommandInteraction, CommandOptionType, ComponentInteraction, Context,
     CreateActionRow, CreateButton, CreateCommand, CreateCommandOption, CreateEmbed,
-    CreateEmbedFooter, CreateInteractionResponse, CreateInteractionResponseMessage,
+    CreateEmbedFooter, CreateInteractionResponse, CreateInteractionResponseMessage, CreateMessage,
+    Permissions,
 };
 
-use dregg_app_framework::TurnReceipt;
-use dungeon_on_dregg::{deploy_keep, keep_scene};
-use spween::{CompareOp, ConditionClause, ConditionExpr, PassageContent, Scene};
-use spween_dregg::{
-    Playthrough, StepReceipt, VerifyBreak, WorldCell, WorldError, value_to_u64, verify_by_replay,
+use dreggnet_offerings::dungeon::{
+    DungeonOffering, DungeonSession as OfferingSession, KEEP_NAME, KEEP_OBJECTIVE, TURN_CHOOSE,
+};
+use dreggnet_offerings::{
+    Action as OfferingAction, DreggIdentity, Offering, Outcome, SessionConfig,
 };
 
 use crate::BotState;
 use crate::cipherclerk::UserCipherclerk;
+use crate::orchestration::{OpenAuthority, SessionSpec};
 
 /// The bot-branded teal (matches `embeds::DREGG_COLOR`).
 const DUNGEON_COLOR: u32 = 0x7B2CBF;
 /// The honest tagline that footers every dungeon surface.
 const TAGLINE: &str = "the AI narrates · the world resolves · the chain remembers";
-/// The hosted universe's display name.
-const KEEP_NAME: &str = "The Warden's Keep";
-/// The Keep's objective, stated for the party.
-const KEEP_OBJECTIVE: &str = "trade past the gate-warden, claim the crown, descend the collapsing stair, and seize the hoard";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// The REAL engine adapter — a session over a dungeon-on-dregg WorldCell.
+// The REAL engine adapter — the bot's Discord frontend over the dreggnet-offerings
+// core. `/dungeon` no longer carries its own `RealSession`: it CONSUMES the committed
+// `DungeonOffering` (offering #0) over the SAME `spween-dregg` WorldCell it used to
+// drive inline. The crate owns open / actions / advance (one real turn → Landed/Refused)
+// / verify (replay); the bot owns the ballot (write-once rounds), the payment gate
+// (`narrate_room_gated`), and the embeds. The old inline substrate seam is gone —
+// proving the offering core carries exactly what the dungeon needs.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// The outcome of applying a round's plurality winner as a real turn.
-#[derive(Clone, Debug)]
-pub enum MoveOutcome {
-    /// The move landed as one verified, committed turn — a real [`TurnReceipt`].
-    Landed {
-        /// The committed turn's receipt (a genuine `turn_hash`, chained pre/post state).
-        receipt: TurnReceipt,
-        /// Whether this move ended the dungeon (navigated to `END`).
-        ended: bool,
-    },
-    /// The real executor REFUSED the move (an installed `StateConstraint` bit): nothing
-    /// committed, no receipt — the anti-ghost tooth. Carries the executor's reason.
-    Refused(String),
+/// The move outcome carried through the bot's rendering — the offering core's own
+/// anti-ghost [`Outcome`]: a landed real `TurnReceipt`, or a real executor refusal.
+type MoveOutcome = Outcome;
+
+/// The stateless offering the bot drives (the free tier — the bot runs its OWN narrator
+/// payment gate in [`narrate_room_gated`], so the offering's `price` is unused here).
+fn offering() -> DungeonOffering {
+    DungeonOffering::new()
 }
 
-/// **A play session over the REAL substrate.** Owns the live [`WorldCell`] (the committed
-/// dungeon-on-dregg Keep), the owned scene (choices/conditions the ballot is built from),
-/// the deterministic seed, and the accumulated [`Playthrough`] (genesis + committed steps)
-/// that `/dungeon verify` re-verifies by replay.
-pub struct RealSession {
-    /// The live world-cell — genesis committed, subsequent moves committed on it.
-    world: WorldCell,
-    /// The owned Keep scene (deterministic; a re-deploy under `seed` reproduces it).
-    scene: Scene,
-    /// The deterministic deploy seed — `verify` re-deploys a fresh identically-seeded cell.
-    seed: u8,
-    /// The genesis receipt (intro entry effects + initial passage bind).
-    genesis: TurnReceipt,
-    /// The committed slot vector right after genesis (the replay verifier reproduces it).
-    genesis_state: Vec<u64>,
-    /// The committed choice-steps, in order — each a real landed turn.
-    steps: Vec<StepReceipt>,
+/// The collective identity a plurality turn is attributed to. A dungeon round is a
+/// CROWD decision (the winning move), not one mover — so the committed turn's session-
+/// level actor is "the party". The write-once ballot below records the per-identity
+/// votes; this names who the resolved turn is attributed to on the substrate.
+fn party_actor() -> DreggIdentity {
+    DreggIdentity("party".to_string())
 }
 
-impl RealSession {
-    /// Open a fresh session hosting the Keep: deploy a real world-cell under `seed`, run
-    /// the intro's entry effects as the genesis turn (via the stock [`Driver`], which we
-    /// then finish to hold the post-genesis cell), and record the genesis snapshot.
-    pub fn open(seed: u8) -> Result<RealSession, WorldError> {
-        let scene = keep_scene();
-        let world = deploy_keep(seed);
-        // Drive genesis with the stock runtime (intro entry effects: hp=50, mana_budget=50),
-        // then finish to hold the post-genesis world-cell for direct `apply_choice` play.
-        let driver = spween_dregg::Driver::start(world, &scene)?;
-        let genesis = driver.genesis().cloned().unwrap_or_default();
-        let genesis_state = driver.playthrough().genesis_state;
-        let (world, _no_steps) = driver.finish();
-        Ok(RealSession {
-            world,
-            scene,
-            seed,
-            genesis,
-            genesis_state,
-            steps: Vec::new(),
-        })
-    }
-
-    /// The current passage name (the "room"), if the dungeon is still running.
-    pub fn current_passage_name(&self) -> Option<String> {
-        let idx = self.world.read_passage()?;
-        self.scene.passages.get(idx).map(|p| p.name.to_string())
-    }
-
-    /// The current room's prose (the scene's authored description of the passage).
-    pub fn current_prose(&self) -> String {
-        let Some(idx) = self.world.read_passage() else {
-            return String::new();
-        };
-        let Some(passage) = self.scene.passages.get(idx) else {
-            return String::new();
-        };
-        let mut out = String::new();
-        for c in &passage.content {
-            if let PassageContent::Prose(p) = c {
-                if !out.is_empty() {
-                    out.push(' ');
-                }
-                out.push_str(p.text.trim());
-            }
-        }
-        out
-    }
-
-    /// Whether the dungeon has ended.
-    pub fn is_ended(&self) -> bool {
-        self.world.read_passage().is_none()
-    }
-
-    /// The number of real verified turns so far (genesis + committed steps).
-    pub fn receipts_len(&self) -> usize {
-        1 + self.steps.len()
-    }
-
-    /// Read a narrative var off the committed cell state.
-    pub fn read_var(&self, name: &str) -> u64 {
-        self.world.read_var(name)
-    }
-
-    /// **Build the ballot for the current room** — the current passage's choices, in the
-    /// SAME order the compiler indexed them (so the ballot option's `choice_index` is
-    /// exactly the index [`WorldCell::apply_choice`] checks the gate case against). A
-    /// choice whose scene condition currently fails is marked `🔒` (a decoration; the
-    /// executor is the sole referee — a transition-gated illegal move still surfaces as a
-    /// real refusal on close).
-    pub fn round_options(&self) -> Vec<VoteOption> {
-        let Some(idx) = self.world.read_passage() else {
-            return Vec::new();
-        };
-        let Some(passage) = self.scene.passages.get(idx) else {
-            return Vec::new();
-        };
-        let mut out = Vec::new();
-        for (choice_index, choice) in passage
-            .content
-            .iter()
-            .filter_map(|c| match c {
-                PassageContent::Choice(ch) => Some(ch),
-                _ => None,
-            })
-            .enumerate()
-        {
-            let available = choice
-                .condition
-                .as_ref()
-                .map(|c| eval_condition(&c.expr, &self.world))
-                .unwrap_or(true);
-            let label = if available {
-                choice.text.to_string()
+/// **Build the ballot for the current room** from the offering's cap-gated actions, in
+/// the SAME order the offering indexes them (so the ballot option's `choice_index` is
+/// exactly the action `arg` [`WorldCell::apply_choice`] checks the gate case against). A
+/// currently-ineligible action is marked `🔒` (a decoration; the executor is the sole
+/// referee — a gated illegal move still surfaces as a real refusal on close).
+fn round_options(session: &OfferingSession) -> Vec<VoteOption> {
+    offering()
+        .actions(session)
+        .into_iter()
+        .map(|a| {
+            let label = if a.enabled {
+                a.label
             } else {
-                format!("🔒 {}", choice.text)
+                format!("🔒 {}", a.label)
             };
-            out.push(VoteOption {
+            VoteOption {
                 label: truncate(&label, 80),
-                choice_index,
-            });
-        }
-        out
-    }
-
-    /// **Apply a winning choice as ONE real cap-bounded turn.** The `choice_index` is the
-    /// index of the winning move among the current passage's choices. A legal move commits
-    /// a real [`TurnReceipt`] (recorded onto the playthrough); an illegal one is a real
-    /// [`WorldError::Refused`] — nothing commits, no step recorded (anti-ghost).
-    pub fn apply_winner(&mut self, choice_index: usize) -> MoveOutcome {
-        let Some(idx) = self.world.read_passage() else {
-            return MoveOutcome::Refused("the dungeon has already ended".to_string());
-        };
-        let passage_name = match self.scene.passages.get(idx) {
-            Some(p) => p.name.to_string(),
-            None => return MoveOutcome::Refused("no current passage".to_string()),
-        };
-        let Some(choice) = nth_choice(&self.scene, &passage_name, choice_index) else {
-            return MoveOutcome::Refused("that move is not on the current ballot".to_string());
-        };
-        match self
-            .world
-            .apply_choice(&passage_name, choice_index, &choice)
-        {
-            Ok(receipt) => {
-                let step = StepReceipt {
-                    passage: passage_name,
-                    choice_index,
-                    receipt: receipt.clone(),
-                    state: self.world.snapshot(),
-                };
-                self.steps.push(step);
-                let ended = self.world.read_passage().is_none();
-                MoveOutcome::Landed { receipt, ended }
+                choice_index: a.arg as usize,
             }
-            Err(WorldError::Refused(why)) => MoveOutcome::Refused(why),
-            Err(e) => MoveOutcome::Refused(e.to_string()),
-        }
-    }
-
-    /// The recorded playthrough (genesis + committed steps) — the input to replay-verify.
-    pub fn playthrough(&self) -> Playthrough {
-        Playthrough {
-            genesis: self.genesis.clone(),
-            genesis_state: self.genesis_state.clone(),
-            steps: self.steps.clone(),
-        }
-    }
-
-    /// **Re-verify the whole receipt chain by REPLAY.** Re-drives a fresh, identically-
-    /// seeded world-cell through the recorded choices and confirms it reproduces exactly
-    /// the committed state chain in passage order (a forged/reordered record fails). This
-    /// is [`spween_dregg::verify_by_replay`] over the real substrate — not a hash-chain walk.
-    pub fn verify(&self) -> Result<(), VerifyBreak> {
-        verify_by_replay(deploy_keep(self.seed), &self.scene, &self.playthrough())
-    }
-
-    /// A compact one-line projection of the party's committed state (for the embed).
-    pub fn state_line(&self) -> String {
-        let owner = match self.read_var("relic_owner") {
-            1 => "Red Hand",
-            2 => "Blue Hand",
-            _ => "unclaimed",
-        };
-        format!(
-            "HP {} · depth {} · gold {} · crown {} · will spent {}",
-            self.read_var("hp"),
-            self.read_var("depth"),
-            self.read_var("gold"),
-            owner,
-            self.read_var("mana_spent"),
-        )
-    }
-}
-
-/// Pull the `n`-th `Choice` out of `passage` in the scene (the same ordering the compiler
-/// indexes with `choice_method(passage, n)`). `None` if the passage or index is absent — a
-/// non-panicking lookup used when applying a possibly-stale ballot winner.
-fn nth_choice(scene: &Scene, passage_name: &str, n: usize) -> Option<spween::Choice> {
-    let passage = scene
-        .passages
-        .iter()
-        .find(|p| p.name.as_str() == passage_name)?;
-    passage
-        .content
-        .iter()
-        .filter_map(|c| match c {
-            PassageContent::Choice(ch) => Some(ch),
-            _ => None,
         })
-        .nth(n)
-        .cloned()
+        .collect()
 }
 
-/// Evaluate a scene condition against the committed cell state (mirrors the runtime's own
-/// evaluation via the public world reads). Used only to decorate a ballot label with `🔒`;
-/// the installed `CellProgram` gate is the sole authority over whether the move lands.
-fn eval_condition(expr: &ConditionExpr, world: &WorldCell) -> bool {
-    match expr {
-        ConditionExpr::Atom(clause) => eval_clause(clause, world),
-        ConditionExpr::And(a, b) => eval_condition(a, world) && eval_condition(b, world),
-        ConditionExpr::Or(a, b) => eval_condition(a, world) || eval_condition(b, world),
-    }
-}
-
-fn eval_clause(clause: &ConditionClause, world: &WorldCell) -> bool {
-    match clause {
-        ConditionClause::Has(h) => world.read_membership(&h.category, &h.key),
-        ConditionClause::Compare(c) => {
-            let lhs = world.read_var(&c.var);
-            let rhs = value_to_u64(&c.value);
-            match c.op {
-                CompareOp::Ge => lhs >= rhs,
-                CompareOp::Le => lhs <= rhs,
-                CompareOp::Gt => lhs > rhs,
-                CompareOp::Lt => lhs < rhs,
-                CompareOp::Eq => lhs == rhs,
-                CompareOp::Ne => lhs != rhs,
-            }
-        }
-        ConditionClause::Not(inner) => !eval_clause(inner, world),
-    }
+/// **Apply a winning choice as ONE real cap-bounded turn** through the offering core. A
+/// legal move commits a real `TurnReceipt` ([`Outcome::Landed`]); an illegal one is a
+/// real executor refusal ([`Outcome::Refused`]) that commits nothing (anti-ghost). The
+/// bot never reaches the substrate directly — the offering's `advance` is the sole path.
+fn apply_winner(session: &mut OfferingSession, choice_index: usize) -> MoveOutcome {
+    let action = OfferingAction::new("", TURN_CHOOSE, choice_index as i64, true);
+    offering().advance(session, action, party_actor())
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -409,8 +205,9 @@ impl Round {
 /// A per-channel play session — the real engine, the world's name, the live round, and how
 /// the last narration was produced (never misreported).
 pub struct DungeonSession {
-    /// The REAL engine session (world-cell + receipt chain).
-    pub real: RealSession,
+    /// The offering-core play session (world-cell + receipt chain), from
+    /// `dreggnet_offerings::dungeon` — the bot drives it through the [`Offering`] trait.
+    pub session: OfferingSession,
     /// The world's display name.
     pub name: String,
     /// The live voting round.
@@ -420,6 +217,10 @@ pub struct DungeonSession {
     /// The narration text posted for the current room — kept so a live vote re-render
     /// preserves the prose (a vote never re-hits the network, so it never misreports it).
     pub last_narration: String,
+    /// If this run got its OWN orchestrated surface (a per-run thread spun via
+    /// [`SessionOrchestrator`]), the session key to tear it down with at completion.
+    /// `None` = the classic in-channel run (no orchestrated surface to archive).
+    pub orchestrated_key: Option<String>,
 }
 
 /// How a piece of narration was produced — surfaced honestly in the embed footer.
@@ -449,12 +250,6 @@ impl NarratorKind {
 fn sessions() -> &'static Mutex<HashMap<u64, DungeonSession>> {
     static SESSIONS: OnceLock<Mutex<HashMap<u64, DungeonSession>>> = OnceLock::new();
     SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-/// The deterministic deploy seed for a channel's session (stable per channel, so a re-open
-/// reproduces the same world identity — what the replay verifier leans on).
-fn channel_seed(channel: u64) -> u8 {
-    ((channel % 251) + 1) as u8
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -542,39 +337,66 @@ async fn handle_list(ctx: &Context, command: &CommandInteraction) {
 
 // ─── /dungeon start ──────────────────────────────────────────────────────────
 
-// ORCHESTRATION SEAM (documented, deliberately NOT wired here). `state.orchestrator`
-// (`crate::orchestration::SessionOrchestrator`) can spin a dedicated per-run channel or
-// thread for a dungeon session — gated, category-filed, queue-linked, and fully torn down
-// (with every capability cell revoked) at the end. The wiring would be, at session open:
-//
-//     let spec = orchestration::SessionSpec::new("dungeon", session_id, guild_id,
-//             command.user.id.get(), command.user.id.get())
-//         .admin(state.config.admin_discord_id)
-//         .queue("dungeon-run")
-//         .announce("The dungeon awakens.")
-//         .topic("a dungeon run");
-//     let live = state.orchestrator
-//         .open(spec, &state.discord_caps, &state.event_bridge, &ctx.http).await?;
-//     // ...run in live.channel_id...
-//
-// and at `/dungeon close`: `state.orchestrator.teardown(&spec.key(), ..).await`.
-//
-// It is NOT wired into THIS handler because `/dungeon` is intentionally an IN-CHANNEL
-// experience: a session is keyed by the channel the command was issued in (`sessions()`),
-// and the whole run — narration, ballots, `/dungeon close` — happens inline there. Making
-// `/dungeon start` mint a fresh channel instead would be a UX change (and needs
-// MANAGE_CHANNELS + an owning guild), so it stays behind this seam. The bootstrap half IS
-// live (see `guild_create` in `main.rs`): the offering category is prepared per guild, so
-// a future channel-spun `/dungeon` mode files under a category that already exists.
-// TODO(offering-sessions): add a `/dungeon start --private` (or a distinct offering) that
-// opens a dedicated orchestrated surface via the seam above.
-async fn handle_start(ctx: &Context, command: &CommandInteraction, state: &BotState) {
-    let channel = command.channel_id.get();
-    let seed = channel_seed(channel);
+/// **The channel-spin decision (the documented seam, now wired).** Decide whether a
+/// `/dungeon start` gets its OWN dedicated per-run surface, and build the orchestrator
+/// [`SessionSpec`] for it — or fall back to the classic in-channel run.
+///
+/// The UX call: a **THREAD per run**, not a whole channel. A thread is lighter (it does
+/// not clutter the guild sidebar), Discord archives it natively at teardown, and it keeps
+/// the party in the invoking channel's context (the run is a branch of the conversation,
+/// not a room elsewhere). A dedicated channel is only warranted for a semi-private run
+/// with its own permission overwrites; a dungeon is a collective, watchable crawl.
+///
+/// It is **gated**, so `/dungeon` never breaks where the bot cannot spin threads:
+/// - **not in a guild** (a DM) → `None` (there is nothing to thread under);
+/// - **the bot lacks the thread perms** (`CREATE_PUBLIC_THREADS` + `SEND_MESSAGES_IN_THREADS`
+///   in this channel) → `None`.
+///
+/// On `None`, [`handle_start`] plays the run in the invoking channel exactly as before.
+/// The spec is keyed by the invoking channel id (one live dungeon thread per channel; a
+/// re-open returns the existing session), self-service (the requester owns the run they
+/// start — [`OpenAuthority::AdminOrSelfOwner`]), public (a run the channel can watch), and
+/// queue-linked so messages in the thread become dregg turns.
+fn plan_thread_spin(
+    guild_id: Option<u64>,
+    app_perms: Option<Permissions>,
+    invoking_channel: u64,
+    requester: u64,
+    admin_id: Option<u64>,
+) -> Option<SessionSpec> {
+    let guild_id = guild_id?;
+    let perms = app_perms?;
+    if !(perms.contains(Permissions::CREATE_PUBLIC_THREADS)
+        && perms.contains(Permissions::SEND_MESSAGES_IN_THREADS))
+    {
+        return None;
+    }
+    Some(
+        SessionSpec::new(
+            "dungeon",
+            invoking_channel.to_string(),
+            guild_id,
+            requester,
+            requester,
+        )
+        .admin(admin_id)
+        .authority(OpenAuthority::AdminOrSelfOwner)
+        .in_thread(invoking_channel)
+        .public()
+        .queue("dungeon-run")
+        .announce("The dungeon awakens — the party plays here.")
+        .topic("a dregg dungeon run"),
+    )
+}
 
-    // Deploy the real world-cell FIRST (no lock, no network) — fail-closed if it refuses.
-    let real = match RealSession::open(seed) {
-        Ok(r) => r,
+async fn handle_start(ctx: &Context, command: &CommandInteraction, state: &BotState) {
+    let invoking_channel = command.channel_id.get();
+
+    // Deploy the real world-cell FIRST (no lock, no network) via the OFFERING core —
+    // fail-closed if it refuses. The deterministic seed is the invoking channel id, so a
+    // re-open reproduces the same world identity (what the replay verifier leans on).
+    let session = match offering().open(SessionConfig::with_seed(invoking_channel)) {
+        Ok(s) => s,
         Err(e) => {
             let embed = error_embed(
                 "The Keep did not deploy",
@@ -585,34 +407,104 @@ async fn handle_start(ctx: &Context, command: &CommandInteraction, state: &BotSt
         }
     };
 
+    // THE CHANNEL-SPIN SEAM, WIRED. Spin a per-run thread iff gating allows; otherwise
+    // (DM, or a perms-poor guild) `orchestrated_key` stays `None` and the run plays in
+    // the invoking channel exactly as before. A spin failure mid-flight also falls back.
+    let mut target_channel = invoking_channel;
+    let mut orchestrated_key = None;
+    if let Some(spec) = plan_thread_spin(
+        command.guild_id.map(|g| g.get()),
+        command.app_permissions,
+        invoking_channel,
+        command.user.id.get(),
+        state.config.admin_discord_id,
+    ) {
+        match state
+            .orchestrator
+            .open(
+                spec.clone(),
+                &state.discord_caps,
+                &state.event_bridge,
+                &ctx.http,
+            )
+            .await
+        {
+            Ok(live) => {
+                target_channel = live.channel_id;
+                orchestrated_key = Some(spec.key());
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "dungeon thread-spin failed; falling back in-channel");
+            }
+        }
+    }
+
     // Insert the session + first round inside the lock, snapshot the render data, then
-    // narrate OUTSIDE the lock (narration hits the network).
+    // narrate OUTSIDE the lock (narration hits the network). Keyed by `target_channel` —
+    // the thread id when spun, else the invoking channel — so a button press or
+    // `/dungeon close` from inside that surface resolves against this session.
     let (room_name, room_desc, snap) = {
         let mut store = sessions().lock().unwrap_or_else(|e| e.into_inner());
-        let options = real.round_options();
-        let room_name = real
+        let options = round_options(&session);
+        let room_name = session
             .current_passage_name()
             .unwrap_or_else(|| "the threshold".to_string());
-        let room_desc = real.current_prose();
+        let room_desc = session.current_prose();
         let round = Round::new(0, options);
         let sess = DungeonSession {
-            real,
+            session,
             name: KEEP_NAME.to_string(),
             round,
             narrator: NarratorKind::Scripted,
             last_narration: String::new(),
+            orchestrated_key,
         };
         let snap = render_snapshot(&sess);
-        store.insert(channel, sess);
+        store.insert(target_channel, sess);
         (room_name, room_desc, snap)
     };
 
     let (narration, kind) =
         narrate_room_gated(state, command.user.id.get(), &room_name, &room_desc).await;
     if let Ok(mut store) = sessions().lock() {
-        if let Some(sess) = store.get_mut(&channel) {
+        if let Some(sess) = store.get_mut(&target_channel) {
             sess.narrator = kind;
             sess.last_narration = narration.clone();
+        }
+    }
+
+    if target_channel != invoking_channel {
+        // The run lives in its OWN thread: post the room + ballot there and point the
+        // invoker to it (an ephemeral pointer, so the parent channel is not spammed).
+        let posted = ChannelId::new(target_channel)
+            .send_message(
+                &ctx.http,
+                CreateMessage::new()
+                    .embed(round_embed(&snap, &narration, kind))
+                    .components(ballot_rows(&snap.options, snap.round)),
+            )
+            .await;
+        if posted.is_ok() {
+            let ping = base_embed(&format!("{KEEP_NAME} — your run has its own thread"))
+                .description(format!(
+                    "The party plays in <#{target_channel}>. Vote the buttons there; run \
+                     `/dungeon close` and `/dungeon verify` from inside the thread."
+                ))
+                .footer(footer(kind));
+            respond(ctx, command, ping, vec![], true).await;
+            return;
+        }
+        // Posting into the thread failed — re-key the session under the invoking channel
+        // (dropping the orchestrated key, since we will not run in the thread) and post
+        // the room here instead, so the run still happens. The empty thread is left for
+        // the orchestrator's own teardown paths.
+        tracing::warn!("posting the dungeon room into the spun thread failed; playing in-channel");
+        {
+            let mut store = sessions().lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(mut moved) = store.remove(&target_channel) {
+                moved.orchestrated_key = None;
+                store.insert(invoking_channel, moved);
+            }
         }
     }
 
@@ -634,6 +526,10 @@ async fn handle_close(ctx: &Context, command: &CommandInteraction, state: &BotSt
             next_room_name: String,
             next_room_desc: String,
             next_snapshot: Option<RenderSnapshot>,
+            /// The orchestrated-surface key to tear down, iff this close ENDED the run
+            /// AND the run had its own spun thread. `None` = keep the surface (round did
+            /// not end) or an in-channel run (nothing to archive).
+            teardown_key: Option<String>,
         },
     }
 
@@ -651,9 +547,10 @@ async fn handle_close(ctx: &Context, command: &CommandInteraction, state: &BotSt
                     let round_no = sess.round.round;
                     let was_tie = is_tie(&tally, winner_pos);
 
-                    // THE WORLD DISPOSES — apply the crowd's choice as one real cap-bounded turn.
-                    let outcome = sess.real.apply_winner(winner.choice_index);
-                    let receipts = sess.real.receipts_len();
+                    // THE WORLD DISPOSES — resolve the crowd's choice as one real cap-bounded
+                    // turn THROUGH THE OFFERING CORE (`advance`).
+                    let outcome = apply_winner(&mut sess.session, winner.choice_index);
+                    let receipts = sess.session.receipts_len();
 
                     let resolution = ResolvedRound {
                         world_name: sess.name.clone(),
@@ -663,32 +560,35 @@ async fn handle_close(ctx: &Context, command: &CommandInteraction, state: &BotSt
                         total_ballots,
                         was_tie,
                         result: describe_outcome(&outcome),
-                        ended: sess.real.is_ended(),
+                        ended: sess.session.is_ended(),
                         receipts,
                     };
 
-                    if sess.real.is_ended() {
+                    if sess.session.is_ended() {
                         CloseRender::Resolved {
                             resolution,
                             next_room_name: String::new(),
                             next_room_desc: String::new(),
                             next_snapshot: None,
+                            // The run ended — hand back the spun thread (if any) at teardown.
+                            teardown_key: sess.orchestrated_key.clone(),
                         }
                     } else {
-                        let options = sess.real.round_options();
+                        let options = round_options(&sess.session);
                         let next = Round::new(round_no + 1, options);
                         sess.round = next;
                         let next_room_name = sess
-                            .real
+                            .session
                             .current_passage_name()
                             .unwrap_or_else(|| "the dark".to_string());
-                        let next_room_desc = sess.real.current_prose();
+                        let next_room_desc = sess.session.current_prose();
                         let snap = render_snapshot(sess);
                         CloseRender::Resolved {
                             resolution,
                             next_room_name,
                             next_room_desc,
                             next_snapshot: Some(snap),
+                            teardown_key: None,
                         }
                     }
                 }
@@ -716,6 +616,7 @@ async fn handle_close(ctx: &Context, command: &CommandInteraction, state: &BotSt
             next_room_name,
             next_room_desc,
             next_snapshot,
+            teardown_key,
         } => match next_snapshot {
             Some(snap) => {
                 let (narration, kind) = narrate_room_gated(
@@ -738,6 +639,18 @@ async fn handle_close(ctx: &Context, command: &CommandInteraction, state: &BotSt
             None => {
                 let embed = resolution_final_embed(&resolution);
                 respond(ctx, command, embed, vec![], false).await;
+                // The run ended: if it had its own spun thread, TEAR IT DOWN — archive the
+                // surface, unlink the queue, and revoke every capability cell it held. A
+                // best-effort archive: a failure here does not un-end the run.
+                if let Some(key) = teardown_key {
+                    if let Err(e) = state
+                        .orchestrator
+                        .teardown(&key, &state.discord_caps, &state.event_bridge, &ctx.http)
+                        .await
+                    {
+                        tracing::warn!(error = %e, session = %key, "dungeon teardown failed");
+                    }
+                }
             }
         },
     }
@@ -810,20 +723,23 @@ async fn handle_verify(ctx: &Context, command: &CommandInteraction) {
         match store.get(&channel) {
             None => VerifyOutcome::NoSession,
             Some(sess) => {
-                let count = sess.real.receipts_len();
-                match sess.real.verify() {
-                    Ok(()) => VerifyOutcome::Result {
+                let count = sess.session.receipts_len();
+                // Re-verify by replay THROUGH THE OFFERING CORE (`Offering::verify`).
+                let report = offering().verify(&sess.session);
+                if report.verified {
+                    VerifyOutcome::Result {
                         verified: true,
                         count,
                         name: sess.name.clone(),
                         break_msg: None,
-                    },
-                    Err(b) => VerifyOutcome::Result {
+                    }
+                } else {
+                    VerifyOutcome::Result {
                         verified: false,
                         count,
                         name: sess.name.clone(),
-                        break_msg: Some(b.to_string()),
-                    },
+                        break_msg: Some(report.detail),
+                    }
                 }
             }
         }
@@ -995,17 +911,17 @@ pub struct RenderSnapshot {
 
 fn render_snapshot(sess: &DungeonSession) -> RenderSnapshot {
     let room_name = sess
-        .real
+        .session
         .current_passage_name()
         .unwrap_or_else(|| "the dark".to_string());
     RenderSnapshot {
         world_name: sess.name.clone(),
         round: sess.round.round,
         room_name,
-        room_desc: sess.real.current_prose(),
-        state_line: sess.real.state_line(),
+        room_desc: sess.session.current_prose(),
+        state_line: sess.session.state_line(),
         objective: KEEP_OBJECTIVE.to_string(),
-        receipts: sess.real.receipts_len(),
+        receipts: sess.session.receipts_len(),
         options: sess.round.options.clone(),
         tally: sess.round.tally(),
         ballots: sess.round.ballots.len(),
@@ -1294,6 +1210,14 @@ mod tests {
         }
     }
 
+    /// Open a fresh Keep session through the OFFERING core (the same path `/dungeon start`
+    /// drives): `DungeonOffering::open` deploys a real, deterministically-seeded world-cell.
+    fn open_keep(seed: u64) -> OfferingSession {
+        offering()
+            .open(SessionConfig::with_seed(seed))
+            .expect("the Keep opens on a real world-cell")
+    }
+
     // ── (a) round / ballot logic ─────────────────────────────────────────────
 
     #[test]
@@ -1347,17 +1271,17 @@ mod tests {
     /// playthrough re-verifies by replay against a fresh identically-seeded world-cell.
     #[test]
     fn a_voted_legal_move_lands_a_real_receipt() {
-        let mut sess = RealSession::open(7).expect("the Keep opens on a real world-cell");
+        let mut sess = open_keep(7);
         assert_eq!(sess.current_passage_name().as_deref(), Some("gatehall"));
         assert_eq!(sess.receipts_len(), 1, "genesis is the first verified turn");
 
         // "Press on into the plundered hall" — an ungated, legal move (choice KP_PRESS_ON).
-        let opts = sess.round_options();
+        let opts = round_options(&sess);
         assert!(
             opts.iter().any(|o| o.choice_index == KP_PRESS_ON),
             "the ballot offers the ungated press-on move"
         );
-        match sess.apply_winner(KP_PRESS_ON) {
+        match apply_winner(&mut sess, KP_PRESS_ON) {
             MoveOutcome::Landed { receipt, ended } => {
                 assert!(!ended, "pressing on does not end the Keep");
                 assert_ne!(receipt.turn_hash, [0u8; 32], "a genuine committed turn");
@@ -1371,9 +1295,11 @@ mod tests {
             "the world advanced to the plundered hall"
         );
 
-        // The real receipt chain re-verifies by replay.
-        sess.verify()
-            .expect("the honest playthrough re-verifies via verify_by_replay");
+        // The real receipt chain re-verifies by replay, through the offering's `verify`.
+        assert!(
+            offering().verify(&sess).verified,
+            "the honest playthrough re-verifies via verify_by_replay"
+        );
     }
 
     /// A voted ILLEGAL move is a REAL executor refusal — world unchanged, no receipt
@@ -1381,11 +1307,11 @@ mod tests {
     /// floor (`FieldGte`) is refused, and the honest chain still re-verifies.
     #[test]
     fn a_voted_illegal_move_is_a_real_executor_refusal_no_receipt() {
-        let mut sess = RealSession::open(8).expect("the Keep opens");
+        let mut sess = open_keep(8);
 
         // Two survivable trade-blows (hp 50 → 30 → 10), each a real committed turn.
         for _ in 0..2 {
-            match sess.apply_winner(KP_TRADE_BLOWS) {
+            match apply_winner(&mut sess, KP_TRADE_BLOWS) {
                 MoveOutcome::Landed { receipt, ended } => {
                     assert!(!ended);
                     assert_ne!(receipt.turn_hash, [0u8; 32]);
@@ -1397,7 +1323,7 @@ mod tests {
         let receipts_before = sess.receipts_len();
 
         // At hp 10 the gate-warden choice is now shown locked (its `{ hp >= 21 }` fails).
-        let opts = sess.round_options();
+        let opts = round_options(&sess);
         let blow = opts
             .iter()
             .find(|o| o.choice_index == KP_TRADE_BLOWS)
@@ -1409,7 +1335,7 @@ mod tests {
         );
 
         // The crowd votes it anyway — the REAL executor refuses (FieldGte on the post-state).
-        match sess.apply_winner(KP_TRADE_BLOWS) {
+        match apply_winner(&mut sess, KP_TRADE_BLOWS) {
             MoveOutcome::Refused(_) => {}
             other => panic!("a killing blow must be a real executor refusal, got {other:?}"),
         }
@@ -1427,35 +1353,36 @@ mod tests {
         );
 
         // The honest chain (genesis + two blows) still re-verifies by replay.
-        sess.verify()
-            .expect("the honest prefix re-verifies after the refusal");
+        assert!(
+            offering().verify(&sess).verified,
+            "the honest prefix re-verifies after the refusal"
+        );
     }
 
-    /// The recorded playthrough re-verifies through a full legal sequence, and a forged
-    /// (ineligible) choice fails replay — the real receipt-chain tooth end to end.
+    /// The recorded playthrough re-verifies through a full legal sequence via the offering's
+    /// own `verify` (`verify_by_replay` under the hood).
+    ///
+    /// The forged/tamper tooth (a mutated committed step fails replay) is now OWNED BY THE
+    /// ENGINE, not the frontend: it lives in `dreggnet_offerings::dungeon`'s
+    /// `a_forged_choice_fails_replay`, which reaches the session's private `seed`/`scene` to
+    /// forge the record. A frontend cannot — and by design must not — reach those internals,
+    /// so the dedup put the tamper test where the substrate is owned.
     #[test]
-    fn the_playthrough_reverifies_and_a_forged_choice_fails() {
-        let mut sess = RealSession::open(9).expect("the Keep opens");
+    fn the_playthrough_reverifies_through_the_offering() {
+        let mut sess = open_keep(9);
         // A legal opening: press on into the hall, claim the crown for the Red Hand.
         assert!(matches!(
-            sess.apply_winner(KP_PRESS_ON),
+            apply_winner(&mut sess, KP_PRESS_ON),
             MoveOutcome::Landed { .. }
         ));
         // hall: claim red (choice 0).
-        assert!(matches!(sess.apply_winner(0), MoveOutcome::Landed { .. }));
-        sess.verify().expect("the legal playthrough re-verifies");
-
-        // Forge the recorded record: swap the first step's choice for a different one and
-        // confirm replay rejects it (state divergence or an executor refusal on re-drive).
-        let mut play = sess.playthrough();
-        if let Some(first) = play.steps.first_mut() {
-            // gatehall had choices 0 (trade-blows) and 1 (press-on); forge 1 → 0.
-            first.choice_index = 0;
-        }
-        let out = verify_by_replay(deploy_keep(9), &sess.scene, &play);
+        assert!(matches!(
+            apply_winner(&mut sess, 0),
+            MoveOutcome::Landed { .. }
+        ));
         assert!(
-            out.is_err(),
-            "a forged choice must fail replay, got {out:?}"
+            offering().verify(&sess).verified,
+            "the legal playthrough re-verifies"
         );
     }
 
@@ -1476,8 +1403,8 @@ mod tests {
 
     #[test]
     fn round_options_offer_the_start_room_moves() {
-        let sess = RealSession::open(3).expect("open");
-        let options = sess.round_options();
+        let sess = open_keep(3);
+        let options = round_options(&sess);
         assert!(
             options.len() >= 2,
             "the gatehall offers more than one candidate move"
@@ -1490,6 +1417,58 @@ mod tests {
         assert!(
             !press.label.starts_with('🔒'),
             "an ungated move is not locked"
+        );
+    }
+
+    // ── the channel-spin decision (the wired seam), driven purely ─────────────
+
+    /// The channel-spin gate: a guild + the bot's thread perms spins a per-run THREAD
+    /// with the right `SessionSpec` shape; a DM or a perms-poor guild falls back to the
+    /// in-channel run (the fallback path the live `/dungeon` leans on).
+    #[test]
+    fn plan_thread_spin_gates_on_guild_and_perms() {
+        use crate::orchestration::SurfaceKind;
+        let full = Permissions::CREATE_PUBLIC_THREADS | Permissions::SEND_MESSAGES_IN_THREADS;
+
+        // A guild + the thread perms → a thread SessionSpec of the right shape.
+        let spec = plan_thread_spin(Some(42), Some(full), 555, 999, Some(7))
+            .expect("a perms-holding guild spins a per-run thread");
+        assert_eq!(spec.offering, "dungeon");
+        assert_eq!(spec.session_id, "555", "keyed by the invoking channel");
+        assert_eq!(spec.guild_id, 42);
+        assert_eq!(spec.requested_by, 999);
+        assert_eq!(spec.owner_id, 999, "the requester owns the run they start");
+        assert_eq!(spec.admin_id, Some(7));
+        assert_eq!(
+            spec.authority,
+            OpenAuthority::AdminOrSelfOwner,
+            "self-service so any user may start a run"
+        );
+        assert!(!spec.private, "a dungeon is a collective, watchable crawl");
+        assert_eq!(spec.queue_name.as_deref(), Some("dungeon-run"));
+        assert_eq!(
+            spec.surface,
+            SurfaceKind::Thread {
+                parent_channel_id: 555
+            },
+            "a thread under the invoking channel — not a whole new channel"
+        );
+        assert_eq!(spec.key(), "dungeon/555");
+
+        // No guild (a DM) → no spin, fall back in-channel.
+        assert!(
+            plan_thread_spin(None, Some(full), 555, 999, None).is_none(),
+            "a DM cannot thread — fall back in-channel"
+        );
+        // A guild but the bot lacks a required thread perm → no spin, fall back in-channel.
+        let partial = Permissions::CREATE_PUBLIC_THREADS; // missing SEND_MESSAGES_IN_THREADS
+        assert!(
+            plan_thread_spin(Some(42), Some(partial), 555, 999, None).is_none(),
+            "missing SEND_MESSAGES_IN_THREADS → no spin"
+        );
+        assert!(
+            plan_thread_spin(Some(42), None, 555, 999, None).is_none(),
+            "unknown app perms → no spin"
         );
     }
 }
