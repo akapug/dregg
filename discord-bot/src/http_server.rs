@@ -1095,6 +1095,12 @@ mod tests {
             admin_token,
         };
         let fed = dregg_captp::FederationId([0u8; 32]);
+        // A devnet/mock pay state with no hosted backend — these tests do not exercise paid runs.
+        let pay = crate::pay::PayState::devnet_mock_no_backend(
+            db.clone(),
+            &[0u8; 32],
+            tokio::runtime::Handle::current(),
+        );
         Arc::new(BotState {
             config,
             db,
@@ -1112,6 +1118,7 @@ mod tests {
             handoff_broker: Mutex::new(crate::handoff_flow::HandoffBroker::new(fed)),
             card_applets: crate::viewnode_applet::CardApplets::new(),
             channel_hermes: std::sync::Mutex::new(std::collections::HashMap::new()),
+            pay,
         })
     }
 

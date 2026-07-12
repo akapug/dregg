@@ -65,6 +65,11 @@ pub mod bot_reactor;
 mod devnet;
 pub mod discord_caps;
 mod embeds;
+// $DREGG-paid, real-AI dungeon runs: the sqlite-backed `dregg_pay::CreditStore`, the per-user
+// deposit-address provider, the credit ledger, the payment poll, and the `/dungeon` gate that
+// debits one earned credit and routes to real Bedrock (`dregg_narrator`) under a PER-RUN budget.
+// Free tier stays ollama/scripted. Devnet/mock by default; mainnet is an operator env flip.
+pub mod pay;
 // Real selective-disclosure proofs: parses a predicate (`age>=18`), reads the
 // subject's attribute, and wires the SDK's `prove_predicate_unlinkable` so
 // `/credential verify` emits a GENUINE unlinkable STARK proof (not a null one).
@@ -159,6 +164,9 @@ const REGISTERED_COMMAND_NAMES: &[&str] = &[
     "key",
     // ─── shared AI-narrated on-chain dungeon (buttons are write-once ballots) ─────
     "dungeon",
+    // ─── $DREGG-paid real-AI runs: buy run-credits, check balance ────────────────
+    "buy-credits",
+    "balance",
 ];
 
 #[cfg(test)]
@@ -200,6 +208,11 @@ pub struct BotState {
     /// (derived from their custodial seed). See [`hermes_channel`].
     pub channel_hermes:
         std::sync::Mutex<std::collections::HashMap<u64, hermes_channel::ChannelHermes>>,
+    /// $DREGG earning state: the sqlite-backed per-user run-credit ledger, the deterministic
+    /// deposit-address provider, the payment watcher, and the paid real-AI narrator. Powers
+    /// `/buy-credits`, `/balance`, the payment poll, and the `/dungeon` credit gate. Devnet/mock by
+    /// default; mainnet is an operator env flip (`PayConfig::from_env`). See [`crate::pay`].
+    pub pay: pay::PayState,
 }
 
 /// The main event handler for Discord gateway events.
@@ -272,6 +285,9 @@ impl EventHandler for Handler {
             commands::key::register(),
             // ─── shared AI-narrated on-chain dungeon ─────────────────────────
             commands::fiction::register(),
+            // ─── $DREGG-paid real-AI runs ────────────────────────────────────
+            commands::pay::register_buy(),
+            commands::pay::register_balance(),
         ];
         debug_assert_eq!(commands.len(), REGISTERED_COMMAND_NAMES.len());
 
@@ -366,6 +382,8 @@ impl EventHandler for Handler {
                 "channel" => commands::channel::handle(&ctx, &command, &self.state).await,
                 "key" => commands::key::handle(&ctx, &command, &self.state).await,
                 "dungeon" => commands::fiction::handle(&ctx, &command, &self.state).await,
+                "buy-credits" => commands::pay::handle_buy(&ctx, &command, &self.state).await,
+                "balance" => commands::pay::handle_balance(&ctx, &command, &self.state).await,
                 _ => {
                     tracing::warn!("Unknown command: {name}");
                 }
@@ -568,6 +586,31 @@ async fn main() {
     let discord_caps = DiscordCapRegistry::new();
     let event_bridge = EventBridge::new(config.devnet_url.clone());
 
+    // Build the $DREGG earning state (devnet/mock by default; mainnet is an operator env flip via
+    // DREGG_PAY_*). The sqlite CreditStore drives on this multi-thread runtime. Built on a blocking
+    // thread because the hosted Bedrock client (when configured) constructs its OWN Tokio runtime,
+    // which must not happen on an async worker.
+    let pay = {
+        let db_for_pay = db.clone();
+        let bot_secret = config.bot_secret;
+        let handle = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || {
+            pay::PayState::from_env_or_devnet(db_for_pay, &bot_secret, handle)
+        })
+        .await
+        .expect("build pay state")
+    };
+    info!(
+        "Pay backend ready: network={:?} price_per_run={} paid_narrator={}",
+        pay.network(),
+        pay.price_per_run(),
+        if pay.paid.is_some() {
+            "bedrock"
+        } else {
+            "free-tier-only"
+        },
+    );
+
     // Build shared state (now carries the real federation + HTTP config).
     let state = Arc::new(BotState {
         config,
@@ -584,6 +627,7 @@ async fn main() {
         ))),
         card_applets: viewnode_applet::CardApplets::new(),
         channel_hermes: std::sync::Mutex::new(std::collections::HashMap::new()),
+        pay,
     });
 
     // §4.7 Production HTTP read surface (Starbridge RemoteRuntime + humans).

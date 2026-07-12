@@ -84,6 +84,15 @@ dregg-sdk = { path = "../sdk" }
 # consumed (not modified) to power `/dungeon`: a channel plays a shared on-chain crawl, buttons
 # are write-once ballots, the plurality winner resolves through the engine, `/verify` re-checks.
 attested-dm = { path = "../attested-dm" }
+# The $DREGG payment backend (the "B" custodial HD-deposit model): per-user SLIP-0010 deposit
+# addresses, a Watcher (Mock/Solana), a per-user run-credits ledger over a pluggable CreditStore,
+# a sweeper. Consumed (not modified) so a paid /dungeon run debits one earned credit. Root member;
+# its workspace-inherited deps resolve against the root manifest it lives under.
+dregg-pay = { path = "../dregg-pay" }
+# The hosted narrator behind a HARD, self-enforced USD ceiling (AWS Bedrock → Nova). Consumed for
+# the PAID real-AI narration: `metered_converse` (reserve → call → true-up) under a PER-RUN budget
+# (the debited credit = the budget), NOT the single global cap. Free tier stays ollama/scripted.
+dregg-narrator = { path = "../narrator" }
 dregg-turn = { path = "../turn" }
 # The predicate-proof primitives for REAL selective disclosure: `PredicateType`
 # (the comparator) + `BabyBear` (the threshold field element), the inputs to the
@@ -131,6 +140,10 @@ chacha20poly1305 = "0.10"
 # `ServiceExt::oneshot` drives the admin webportal router in tests without
 # binding a socket (already in the lockfile transitively via tower-http).
 tower = { version = "0.5", features = ["util"] }
+# A self-cleaning temp dir for the sqlite-CreditStore persistence-across-restart test
+# and the per-run narrator budget-ledger files (no /tmp litter). Already in the root lock
+# (narrator dev-deps it); named here for the standalone bot workspace.
+tempfile = "3"
 
 [lints]
 workspace = true

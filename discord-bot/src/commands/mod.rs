@@ -57,8 +57,12 @@ pub mod fiction;
 pub mod governance;
 pub mod handoff;
 pub mod intent;
+// `/buy-credits` + `/balance` — the $DREGG earning surface: issue the caller's deterministic
+// deposit address + price, and show their persisted run-credit balance. A paid /dungeon run
+// spends one credit for a real-AI (Bedrock) narration. See `crate::pay`.
 #[allow(dead_code)]
 pub mod names;
+pub mod pay;
 pub mod polis;
 #[allow(dead_code)]
 pub mod queue;

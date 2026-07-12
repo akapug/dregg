@@ -560,7 +560,126 @@ impl Database {
         .execute(&pool)
         .await?;
 
+        // ─── $DREGG payment credits (dregg-pay CreditStore backing) ──────────
+        // Per-user run-credit balance, the idempotency ledger of credited payment
+        // references, and the user→deposit-index map. Credits survive restart. See
+        // migrations/004_dregg_pay.sql.
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS pay_credits (
+                user    TEXT PRIMARY KEY,
+                credits INTEGER NOT NULL DEFAULT 0
+            )",
+        )
+        .execute(&pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS pay_processed (
+                reference TEXT PRIMARY KEY
+            )",
+        )
+        .execute(&pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS pay_deposit_index (
+                user            TEXT PRIMARY KEY,
+                deposit_index   INTEGER NOT NULL,
+                deposit_address TEXT NOT NULL,
+                assigned_at     INTEGER NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await?;
+
         Ok(Self { pool })
+    }
+
+    // ─── $DREGG payment credits (dregg-pay CreditStore backing) ─────────────
+
+    /// A user's persisted run-credit balance (0 if none). The read half of
+    /// `dregg_pay::CreditStore::balance`.
+    pub async fn pay_credit_balance(&self, user: &str) -> Result<u64, sqlx::Error> {
+        let row: Option<(i64,)> = sqlx::query_as("SELECT credits FROM pay_credits WHERE user = ?")
+            .bind(user)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.map(|(c,)| c.max(0) as u64).unwrap_or(0))
+    }
+
+    /// Set a user's run-credit balance (the write half of
+    /// `dregg_pay::CreditStore::set_balance`). Upsert by user.
+    pub async fn pay_set_credit_balance(
+        &self,
+        user: &str,
+        credits: u64,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO pay_credits (user, credits) VALUES (?, ?)
+             ON CONFLICT(user) DO UPDATE SET credits = excluded.credits",
+        )
+        .bind(user)
+        .bind(credits as i64)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Whether a payment reference has already been credited (idempotency key).
+    pub async fn pay_is_processed(&self, reference: &str) -> Result<bool, sqlx::Error> {
+        let row: Option<(String,)> =
+            sqlx::query_as("SELECT reference FROM pay_processed WHERE reference = ?")
+                .bind(reference)
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(row.is_some())
+    }
+
+    /// Record a payment reference as credited (idempotency key). `INSERT OR IGNORE`
+    /// so marking the same reference twice is harmless.
+    pub async fn pay_mark_processed(&self, reference: &str) -> Result<(), sqlx::Error> {
+        sqlx::query("INSERT OR IGNORE INTO pay_processed (reference) VALUES (?)")
+            .bind(reference)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// The persisted deposit index for a user, if one was explicitly assigned.
+    pub async fn pay_get_deposit_index(
+        &self,
+        user: &str,
+    ) -> Result<Option<(u32, String)>, sqlx::Error> {
+        let row: Option<(i64, String)> = sqlx::query_as(
+            "SELECT deposit_index, deposit_address FROM pay_deposit_index WHERE user = ?",
+        )
+        .bind(user)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|(i, a)| (i as u32, a)))
+    }
+
+    /// Persist a user→deposit-index assignment (idempotent; first assignment wins so a
+    /// user's deposit address is stable). `deposit_address` is the base58 address cache.
+    pub async fn pay_assign_deposit_index(
+        &self,
+        user: &str,
+        deposit_index: u32,
+        deposit_address: &str,
+        assigned_at: i64,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT OR IGNORE INTO pay_deposit_index
+                (user, deposit_index, deposit_address, assigned_at)
+             VALUES (?, ?, ?, ?)",
+        )
+        .bind(user)
+        .bind(deposit_index as i64)
+        .bind(deposit_address)
+        .bind(assigned_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     // ─── Dungeon world library ──────────────────────────────────────────────
