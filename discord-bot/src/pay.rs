@@ -591,6 +591,7 @@ mod tests {
                 deposit.to_base58(),
                 3 * price_per_run + 250
             )),
+            asset: dregg_pay::Asset::Dregg,
         };
         assert_eq!(pay.ledger.credit(&pr), CreditOutcome::AlreadyCredited);
         assert_eq!(pay.balance(user), 3, "idempotent by reference");
