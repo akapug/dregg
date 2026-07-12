@@ -126,21 +126,30 @@ impl ChainId {
 ///
 /// Field conventions per chain:
 ///
-/// | field      | Solana              | EVM                          | Cosmos                     |
-/// |------------|---------------------|------------------------------|----------------------------|
-/// | `holder`   | owner wallet pubkey | 20-byte address, left-padded | 32-byte account id/hash    |
-/// | `asset`    | SPL mint pubkey     | 20-byte token addr, padded   | denom commitment (hash)    |
-/// | `snapshot` | slot                | block number                 | height                     |
+/// | field      | Solana              | EVM                          | Cosmos                        |
+/// |------------|---------------------|------------------------------|-------------------------------|
+/// | `holder`   | owner wallet pubkey | 20-byte address, left-padded | account address, left-padded  |
+/// | `asset`    | SPL mint pubkey     | 20-byte token addr, padded   | denom commitment (hash)       |
+/// | `snapshot` | slot                | block number                 | height                        |
+///
+/// (The usual Cosmos secp256k1 account address is 20 bytes —
+/// `ripemd160(sha256(pubkey))` — left-zero-padded like the EVM address; 32-byte
+/// module/ICA accounts fill the field and have no wallet key to bind with.)
 ///
 /// `holder` doubles as the identity the owner→voter binding is verified against:
 /// an Ed25519 [`OwnerBinding`](crate::holding_weight::OwnerBinding) verifies `holder`
-/// as an Ed25519 pubkey (Solana natively; a non-EVM holder may register an Ed25519
-/// binding key as their 32-byte `holder` at the edge), and for an EVM-family holding
+/// as an Ed25519 pubkey (Solana natively; a holder may register an Ed25519
+/// binding key as their 32-byte `holder` at the edge), for an EVM-family holding
 /// the left-zero-padded 20-byte address binds NATIVELY with the wallet's own
 /// secp256k1 key via [`EvmOwnerBinding`](crate::holding_weight::EvmOwnerBinding)
 /// (EIP-191 `personal_sign` + public-key recovery — see
-/// [`verify_evm_binding`](crate::holding_weight::verify_evm_binding)). A Cosmos
-/// secp256k1 (bech32/Amino) address binding remains the named follow-up.
+/// [`verify_evm_binding`](crate::holding_weight::verify_evm_binding)), and for a
+/// Cosmos-SDK holding the left-zero-padded 20-byte account address binds NATIVELY
+/// with the wallet's own secp256k1 key via
+/// [`CosmosOwnerBinding`](crate::holding_weight::CosmosOwnerBinding) (pubkey-carrying;
+/// verify under the carried key, then require its derived address == holder — see
+/// [`verify_cosmos_binding`](crate::holding_weight::verify_cosmos_binding)). The
+/// binding trilogy (Solana Ed25519 · EVM secp256k1 · Cosmos secp256k1) is complete.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ProvenForeignHolding {
     /// The chain the holding was proven on (scopes the nullifier).

@@ -65,15 +65,24 @@
 //! count; a holder legitimately holds on both), while re-presenting one network's
 //! holding twice is refused.
 //!
-//! The owner→voter binding is likewise per-family: a Solana holder binds with the
-//! Ed25519 [`OwnerBinding`] (unchanged), while an EVM-family holder — whose `holder`
-//! is a left-zero-padded 20-byte address, NOT an Ed25519 key — binds natively with
-//! their own secp256k1 wallet key via [`EvmOwnerBinding`] (EIP-191 `personal_sign` +
-//! ECDSA public-key recovery). [`grant_foreign_weight`] accepts either form through
-//! the [`HolderBinding`] dispatch, which ties each form to the holding's chain/holder
-//! SHAPE (Solana stays Ed25519-only; an EVM signature can never bind a Solana
-//! holding). A Cosmos secp256k1 (bech32/Amino) binding is the remaining named
-//! follow-up in this family story.
+//! The owner→voter binding is likewise per-family — the trilogy is complete, so a
+//! holder on ANY of the three families binds with their own wallet key:
+//!
+//! - **Solana**: the Ed25519 [`OwnerBinding`] (unchanged);
+//! - **EVM**: `holder` is a left-zero-padded 20-byte keccak address, NOT an Ed25519
+//!   key — binds natively with the wallet's secp256k1 key via [`EvmOwnerBinding`]
+//!   (EIP-191 `personal_sign` + ECDSA public-key recovery);
+//! - **Cosmos**: `holder` is a left-zero-padded 20-byte
+//!   `ripemd160(sha256(pubkey))` account address (bech32 is only its display
+//!   encoding) — binds natively with the wallet's secp256k1 key via
+//!   [`CosmosOwnerBinding`], which CARRIES the 33-byte compressed pubkey (an
+//!   address is a hash, so there is no recovery trick: verify under the carried
+//!   key, then require the key's derived address == holder).
+//!
+//! [`grant_foreign_weight`] accepts any form through the [`HolderBinding`]
+//! dispatch, which ties each form to the holding's chain/holder SHAPE (Solana
+//! stays Ed25519-only; an EVM signature can never bind a Solana or Cosmos
+//! holding; a Cosmos binding can never bind a Solana or EVM holding).
 //!
 //! The ballot domain is `u64` ([`VoteBlock::weight`](crate::VoteBlock::weight)) while a foreign grant is `u128`
 //! (EVM-scale): [`foreign_grant_and_cast`](HoldingWeightRegistry::foreign_grant_and_cast)
@@ -289,6 +298,180 @@ pub fn verify_evm_binding(holder: &[u8; 32], binding: &EvmOwnerBinding) -> bool 
     evm_address_of_pubkey(&recovered) == address
 }
 
+// ─── The Cosmos (secp256k1 / bech32-account) owner→voter binding ────────────────
+//
+// A Cosmos holder's `ProvenForeignHolding::holder` is the 20-byte Cosmos-SDK
+// account address — `ripemd160(sha256(compressed_secp256k1_pubkey))` — left-zero-
+// padded to 32 bytes by the cosmos-lightclient edge (`cosmos-lightclient/src/
+// bank.rs`, `foreign_holding_fields`: `holder[32 - len..] = address`), the same
+// padding convention as EVM. The bech32 string (`cosmos1…`) is only the DISPLAY
+// encoding of those 20 bytes; the on-wire holder identity is the raw hash.
+//
+// Unlike EVM there is no public-key RECOVERY trick that both verifies the
+// signature and identifies the signer: the Cosmos convention is that a signature
+// travels WITH its 33-byte compressed pubkey. So the binding carries the pubkey,
+// the signature verifies under it, and the pubkey is then tied to the proven
+// account by requiring its derived address to BE the holder address. Skipping
+// (or mis-deriving) that hash equality would let ANY keypair "bind" any Cosmos
+// holding — it is the load-bearing check of this path.
+
+/// Domain separator for the **Cosmos** owner→voter binding — the third sibling of
+/// [`BIND_DOMAIN`] / [`EVM_BIND_DOMAIN`], versioned independently. (35 ASCII bytes.)
+pub const COSMOS_BIND_DOMAIN: &[u8] = b"dregg-holding-weight-bind-cosmos-v1";
+
+/// The exact sign bytes a Cosmos holder signs to authorize `voter`:
+///
+/// ```text
+/// COSMOS_BIND_DOMAIN(35) ‖ address(20) ‖ voter(32)      — 87 bytes total
+/// ```
+///
+/// where `address` is the holder's raw 20-byte account address
+/// (`ripemd160(sha256(pubkey))` — see [`cosmos_address_of_pubkey`]). As with the
+/// other two families, the message commits to the target [`VoterId`] (no replay to
+/// another voter) and to the signing address itself, but deliberately NOT to a poll
+/// or holding — the binding is a durable owner→voter link; per-poll uniqueness is
+/// the nullifier's job. The ECDSA prehash is the SHA-256 of these bytes — see
+/// [`cosmos_binding_prehash`] for the exact digest and an honest statement of
+/// which scheme this is.
+pub fn cosmos_binding_message(address: &[u8; 20], voter: &VoterId) -> Vec<u8> {
+    let mut m = Vec::with_capacity(COSMOS_BIND_DOMAIN.len() + 20 + 32);
+    m.extend_from_slice(COSMOS_BIND_DOMAIN);
+    m.extend_from_slice(address);
+    m.extend_from_slice(voter);
+    m
+}
+
+/// The 32-byte ECDSA prehash a Cosmos holder actually signs:
+///
+/// ```text
+/// SHA-256( COSMOS_BIND_DOMAIN ‖ address(20) ‖ voter(32) )
+/// ```
+///
+/// ## Which scheme this is (honestly)
+///
+/// This is a **dregg-specific sign doc, NOT ADR-036 amino-JSON**. It keeps the
+/// standard Cosmos secp256k1 digest step — ECDSA over the SHA-256 of the sign
+/// bytes — but the sign bytes are dregg's fixed 87-byte domain-separated message
+/// rather than an amino-JSON `StdSignDoc`. A stock wallet's `signArbitrary`
+/// (ADR-036) output will therefore NOT verify here: ADR-036 wraps the payload in
+/// a JSON doc whose `signer` field needs the network's bech32 HRP — a
+/// prover-supplied display string this binding deliberately does not carry.
+/// Wallet-compatible ADR-036 framing is a relayer/UX-edge follow-up; the SECURITY
+/// content — the signature commits to exactly `(address, voter)` under a
+/// dregg-only domain, so it can never be replayed as a transaction or for another
+/// voter — is the same under either frame.
+pub fn cosmos_binding_prehash(address: &[u8; 20], voter: &VoterId) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(cosmos_binding_message(address, voter)).into()
+}
+
+/// The canonical Cosmos-SDK account address of a secp256k1 public key:
+/// `ripemd160(sha256(compressed_pubkey(33)))` — 20 bytes.
+///
+/// Hashes the canonical compressed SEC1 encoding of the PARSED key — never raw
+/// prover-supplied bytes — so the address is a function of the key itself and no
+/// alternative encoding of the same point can derive a different address.
+pub fn cosmos_address_of_pubkey(vk: &k256::ecdsa::VerifyingKey) -> [u8; 20] {
+    use ripemd::Ripemd160;
+    use sha2::{Digest, Sha256};
+    let point = vk.to_encoded_point(true);
+    let bytes = point.as_bytes(); // 0x02/0x03 ‖ x(32)
+    debug_assert_eq!(bytes.len(), 33, "compressed SEC1 point");
+    let sha = Sha256::digest(bytes);
+    let rip = Ripemd160::digest(sha);
+    let mut addr = [0u8; 20];
+    addr.copy_from_slice(&rip);
+    addr
+}
+
+/// Extract the 20-byte Cosmos account address from a 32-byte `holder` field,
+/// FAIL-CLOSED: only a correctly left-zero-padded holder (`holder[0..12] == 0`) is
+/// a 20-byte account address per the cosmos-lightclient edge convention. Anything
+/// else — notably a 32-byte module/ICA account (which fills the field and has no
+/// single secp256k1 key to bind with anyway) or an Ed25519 pubkey registered as
+/// the holder identity — is `None`; the Cosmos binding path refuses it rather than
+/// treating 20 arbitrary bytes as an address.
+pub fn cosmos_address_of_holder(holder: &[u8; 32]) -> Option<[u8; 20]> {
+    if holder[0..12] != [0u8; 12] {
+        return None;
+    }
+    let mut addr = [0u8; 20];
+    addr.copy_from_slice(&holder[12..32]);
+    Some(addr)
+}
+
+/// A Cosmos holder's authorization of a dregg [`VoterId`]: a 64-byte secp256k1
+/// ECDSA `(r ‖ s)` signature made by the wallet key whose account address IS the
+/// holding's `holder`, over [`cosmos_binding_prehash`]`(address, voter)`, carried
+/// together with that wallet's 33-byte compressed pubkey (Cosmos signatures ship
+/// the pubkey; there is no recovery id). Non-custodial: it is a signature, not a
+/// transaction.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CosmosOwnerBinding {
+    /// The dregg voter identity the owner authorizes to carry this weight.
+    pub voter: VoterId,
+    /// The signer's compressed SEC1 public key (`0x02`/`0x03` ‖ x). Prover-supplied
+    /// and therefore UNTRUSTED until its derived address matches the holder — see
+    /// [`verify_cosmos_binding`].
+    pub pubkey: [u8; 33],
+    /// The 64-byte `r(32) ‖ s(32)` signature. `s` must be in the low half of the
+    /// order (the non-malleable form, as Cosmos-SDK enforces on transactions); a
+    /// high-S signature is refused as malleable.
+    pub sig: [u8; 64],
+}
+
+/// Verify that `binding` is a genuine authorization, by the secp256k1 key whose
+/// Cosmos account address is embedded in `holder`, of `binding.voter`. FAIL-CLOSED
+/// `false` when:
+///
+/// - `holder` is not a left-zero-padded 20-byte address (`holder[0..12] != 0`);
+/// - the carried pubkey does not parse as a valid compressed SEC1 point (33 bytes
+///   ⇒ tag `0x02`/`0x03` with an on-curve x; anything else refuses);
+/// - the parsed pubkey's derived address `ripemd160(sha256(pubkey))` differs from
+///   the holder address — THE load-bearing check: the pubkey is prover-supplied,
+///   and without this hash equality any keypair could "bind" any Cosmos holding;
+/// - `r`/`s` do not parse as nonzero in-range scalars;
+/// - `s` is in the high half of the order (the malleable twin — rejected so a
+///   third party cannot mint a "different" binding from an observed one);
+/// - the signature does not verify under the pubkey over the recomputed prehash.
+///
+/// The prehash is [`cosmos_binding_prehash`]`(address, binding.voter)` — recomputed
+/// here from the claimed holder and voter, never taken from the prover — so a
+/// signature the owner made for voter A, re-presented for voter B, verifies against
+/// a different digest and is refused.
+pub fn verify_cosmos_binding(holder: &[u8; 32], binding: &CosmosOwnerBinding) -> bool {
+    use k256::ecdsa::signature::hazmat::PrehashVerifier;
+    use k256::ecdsa::{Signature as CosmosSignature, VerifyingKey as CosmosVerifyingKey};
+
+    // FAIL CLOSED: only a genuinely padded 20-byte account address takes this path.
+    let Some(address) = cosmos_address_of_holder(holder) else {
+        return false;
+    };
+    let Ok(vk) = CosmosVerifyingKey::from_sec1_bytes(&binding.pubkey) else {
+        return false; // not a valid compressed point
+    };
+    // Tie the UNTRUSTED carried pubkey to the PROVEN account: its canonical
+    // ripemd160(sha256(·)) address must be the holder address, byte for byte.
+    if cosmos_address_of_pubkey(&vk) != address {
+        return false;
+    }
+    let Ok(sig) = CosmosSignature::from_slice(&binding.sig) else {
+        return false; // r or s zero / out of range
+    };
+    // Reject the malleable high-S twin (normalize_s returns Some IFF s was high) —
+    // the same rule the EVM path enforces, and the same low-S rule Cosmos-SDK
+    // applies to transaction signatures.
+    if sig.normalize_s().is_some() {
+        return false;
+    }
+    // Recompute the prehash from the CLAIMED (holder, voter) — the voter
+    // commitment lives here.
+    let prehash = cosmos_binding_prehash(&address, &binding.voter);
+    // k256's verify_prehash itself also refuses high-S outright (defense in depth,
+    // same as the EVM path's recover_from_prehash).
+    vk.verify_prehash(&prehash, &sig).is_ok()
+}
+
 /// The ONE owner→voter authorization interface the chain-agnostic grant path
 /// dispatches on: each binding form knows which holdings it may vouch for
 /// ([`verifies_for`](Self::verifies_for)) — the dispatch is by the holding's
@@ -303,6 +486,10 @@ pub fn verify_evm_binding(holder: &[u8; 32], binding: &EvmOwnerBinding) -> bool 
 ///   chain ([`ChainId::Evm`]) whose `holder` is a left-zero-padded EVM address. A
 ///   Solana or Cosmos holding presented with an EVM binding is refused outright —
 ///   Solana stays Ed25519-only.
+/// - [`CosmosOwnerBinding`] (secp256k1, pubkey-carrying): verifies ONLY for a
+///   holding on a Cosmos-SDK chain ([`ChainId::Cosmos`]) whose `holder` is a
+///   left-zero-padded 20-byte `ripemd160(sha256(pubkey))` account address. A
+///   Solana or EVM holding presented with a Cosmos binding is refused outright.
 pub trait HolderBinding {
     /// The dregg voter this binding authorizes.
     fn voter(&self) -> VoterId;
@@ -332,6 +519,20 @@ impl HolderBinding for EvmOwnerBinding {
     }
 }
 
+impl HolderBinding for CosmosOwnerBinding {
+    fn voter(&self) -> VoterId {
+        self.voter
+    }
+    fn verifies_for(&self, holding: &ProvenForeignHolding) -> bool {
+        // Chain-shape dispatch: the pubkey-carrying Cosmos binding vouches ONLY for
+        // a Cosmos-SDK holding. A Solana/EVM holder can never be bound by it (fail
+        // closed) — in particular an EVM holding, whose padded-20-byte holder SHAPE
+        // is identical, still refuses here: keccak and ripemd160-sha256 addresses of
+        // one key differ, and the chain gate refuses before any hashing anyway.
+        matches!(holding.chain, ChainId::Cosmos(_)) && verify_cosmos_binding(&holding.holder, self)
+    }
+}
+
 /// A runtime-tagged either-form binding, for callers (relayers, wire decoders) that
 /// carry both shapes through one channel. Dispatches to the underlying form's
 /// [`HolderBinding`] impl — the tag grants no authority; verification still runs
@@ -342,6 +543,9 @@ pub enum VoterBinding {
     Ed25519(OwnerBinding),
     /// A secp256k1 [`EvmOwnerBinding`] (EVM-family address holders).
     Evm(EvmOwnerBinding),
+    /// A secp256k1 pubkey-carrying [`CosmosOwnerBinding`] (Cosmos-SDK account
+    /// address holders).
+    Cosmos(CosmosOwnerBinding),
 }
 
 impl HolderBinding for VoterBinding {
@@ -349,12 +553,14 @@ impl HolderBinding for VoterBinding {
         match self {
             VoterBinding::Ed25519(b) => b.voter(),
             VoterBinding::Evm(b) => b.voter(),
+            VoterBinding::Cosmos(b) => b.voter(),
         }
     }
     fn verifies_for(&self, holding: &ProvenForeignHolding) -> bool {
         match self {
             VoterBinding::Ed25519(b) => b.verifies_for(holding),
             VoterBinding::Evm(b) => b.verifies_for(holding),
+            VoterBinding::Cosmos(b) => b.verifies_for(holding),
         }
     }
 }
@@ -520,11 +726,14 @@ pub fn grant_weight(
 ///    [`GrantError::NotConsensusProven`] and grants ZERO (the Nomad-law analog), before
 ///    its signature is even examined;
 /// 2. `binding` must be a genuine authorization by `holding.holder` of
-///    `binding.voter()` (else [`GrantError::UnboundOwner`]) — EITHER form of
+///    `binding.voter()` (else [`GrantError::UnboundOwner`]) — ANY form of
 ///    [`HolderBinding`]: an Ed25519 [`OwnerBinding`] (Solana native — the pre-existing
-///    path, unchanged), or a secp256k1 [`EvmOwnerBinding`] which is accepted ONLY for
-///    an EVM-family holding with a zero-padded EVM-address holder (chain-shape
-///    dispatch; a Solana holding can never be bound by an EVM signature);
+///    path, unchanged), a secp256k1 [`EvmOwnerBinding`] accepted ONLY for an
+///    EVM-family holding with a zero-padded EVM-address holder, or a secp256k1
+///    pubkey-carrying [`CosmosOwnerBinding`] accepted ONLY for a Cosmos-SDK holding
+///    with a zero-padded `ripemd160(sha256(pubkey))` account-address holder
+///    (chain-shape dispatch; a Solana holding can never be bound by either
+///    secp256k1 form, and the EVM/Cosmos forms can never cross);
 /// 3. the proven amount must be positive (else [`GrantError::ZeroAmount`]);
 /// 4. the weight VERDICT is rendered by the LEAN-PROVEN `grantWeightCore` over the wire
 ///    — never a Rust `if`-chain; a missing core is [`GrantError::LeanCoreUnavailable`],
@@ -1983,6 +2192,406 @@ mod tests {
             grant_foreign_weight(&solana, &VoterBinding::Ed25519(ed_binding)),
             Err(GrantError::ZeroAmount),
             "Ed25519 on Solana clears the binding gate exactly as before"
+        );
+    }
+
+    // ─── The Cosmos (secp256k1 / bech32-account) owner→voter binding ────────────
+
+    use k256::ecdsa::signature::hazmat::{PrehashSigner, PrehashVerifier};
+
+    /// A Cosmos wallet key is the same secp256k1 scalar an EVM wallet holds —
+    /// `evm_key` doubles as the deterministic Cosmos test key.
+    fn cosmos_addr(key: &EvmSigningKey) -> [u8; 20] {
+        cosmos_address_of_pubkey(key.verifying_key())
+    }
+
+    fn cosmos_pubkey(key: &EvmSigningKey) -> [u8; 33] {
+        key.verifying_key()
+            .to_encoded_point(true)
+            .as_bytes()
+            .try_into()
+            .expect("compressed SEC1 is 33 bytes")
+    }
+
+    /// A GENUINE Cosmos binding: the wallet key REALLY signs (RFC-6979 ECDSA,
+    /// low-S) the SHA-256 prehash of the binding message for its OWN account
+    /// address, and ships its compressed pubkey alongside — the Cosmos wire shape
+    /// (pubkey + 64-byte (r ‖ s), no recovery id).
+    fn cosmos_bind(key: &EvmSigningKey, voter: VoterId) -> CosmosOwnerBinding {
+        let prehash = cosmos_binding_prehash(&cosmos_addr(key), &voter);
+        let sig: EvmSignature = key.sign_prehash(&prehash).expect("signs");
+        let mut bytes = [0u8; 64];
+        bytes.copy_from_slice(&sig.to_bytes());
+        CosmosOwnerBinding {
+            voter,
+            pubkey: cosmos_pubkey(key),
+            sig: bytes,
+        }
+    }
+
+    #[test]
+    fn cosmos_binding_message_and_prehash_are_the_documented_bytes() {
+        use sha2::{Digest, Sha256};
+        assert_eq!(COSMOS_BIND_DOMAIN, b"dregg-holding-weight-bind-cosmos-v1");
+        assert_eq!(COSMOS_BIND_DOMAIN.len(), 35);
+        let addr = [0xABu8; 20];
+        let voter: VoterId = [0xCDu8; 32];
+        let msg = cosmos_binding_message(&addr, &voter);
+        // domain(35) ‖ address(20) ‖ voter(32) — byte for byte.
+        assert_eq!(msg.len(), 87);
+        assert_eq!(&msg[..35], COSMOS_BIND_DOMAIN);
+        assert_eq!(&msg[35..55], &addr);
+        assert_eq!(&msg[55..87], &voter);
+        // The prehash is exactly SHA-256 of those bytes (the dregg-specific sign
+        // doc — documented as NOT ADR-036 amino-JSON).
+        let expect: [u8; 32] = Sha256::digest(&msg).into();
+        assert_eq!(cosmos_binding_prehash(&addr, &voter), expect);
+    }
+
+    #[test]
+    fn cosmos_address_derivation_matches_the_known_hash160_vector() {
+        // ADVERSARIAL GROUND TRUTH for ripemd160(sha256(compressed_pubkey)): the
+        // widely-published hash160 vector (the Bitcoin-wiki "technical background"
+        // example — Cosmos uses the IDENTICAL construction over the identical
+        // curve). If the derivation hashed the wrong encoding (uncompressed, or
+        // raw supplied bytes) or composed the digests in the wrong order, this
+        // pins it.
+        let sk = EvmSigningKey::from_slice(&[
+            0x18, 0xE1, 0x4A, 0x7B, 0x6A, 0x30, 0x7F, 0x42, 0x6A, 0x94, 0xF8, 0x11, 0x47, 0x01,
+            0xE7, 0xC8, 0xE7, 0x74, 0xE7, 0xF9, 0xA4, 0x7E, 0x2C, 0x20, 0x35, 0xDB, 0x29, 0xA2,
+            0x06, 0x32, 0x17, 0x25,
+        ])
+        .expect("the vector's private scalar");
+        assert_eq!(
+            cosmos_pubkey(&sk),
+            [
+                0x02, 0x50, 0x86, 0x3A, 0xD6, 0x4A, 0x87, 0xAE, 0x8A, 0x2F, 0xE8, 0x3C, 0x1A, 0xF1,
+                0xA8, 0x40, 0x3C, 0xB5, 0x3F, 0x53, 0xE4, 0x86, 0xD8, 0x51, 0x1D, 0xAD, 0x8A, 0x04,
+                0x88, 0x7E, 0x5B, 0x23, 0x52,
+            ],
+            "the vector's compressed pubkey"
+        );
+        assert_eq!(
+            cosmos_address_of_pubkey(sk.verifying_key()),
+            [
+                0xF5, 0x4A, 0x58, 0x51, 0xE9, 0x37, 0x2B, 0x87, 0x81, 0x0A, 0x8E, 0x60, 0xCD, 0xD2,
+                0xE7, 0xCF, 0xD8, 0x0B, 0x6E, 0x31,
+            ],
+            "ripemd160(sha256(compressed_pubkey)) — the published hash160"
+        );
+    }
+
+    #[test]
+    fn a_genuine_cosmos_signature_by_the_holders_key_binds() {
+        // ACCEPT polarity, default-run (no Lean core needed): the account's own
+        // key signing the dregg Cosmos sign doc, shipping its own pubkey, binds.
+        let key = evm_key(0x30);
+        let voter: VoterId = [0x40u8; 32];
+        let holder = padded_holder(cosmos_addr(&key));
+        let binding = cosmos_bind(&key, voter);
+        assert!(
+            verify_cosmos_binding(&holder, &binding),
+            "the holder's own wallet key must bind"
+        );
+        // The binding stage of grant_foreign_weight PASSES for it: on a
+        // zero-amount holding the error is ZeroAmount — the check fell through
+        // the UnboundOwner gate and hit the next one (positive binding polarity
+        // pinned into the grant path without the Lean verdict core).
+        let empty = foreign(ChainId::cosmos("cosmoshub-4"), holder, [0x2Au8; 32], 0, 7);
+        assert_eq!(
+            grant_foreign_weight(&empty, &binding),
+            Err(GrantError::ZeroAmount),
+            "a genuine Cosmos binding must clear the UnboundOwner gate"
+        );
+    }
+
+    #[test]
+    fn cosmos_holding_grants_weight_via_the_native_secp256k1_binding() {
+        if !lean_verdict_core_or_skip() {
+            return;
+        }
+        // End-to-end ACCEPT: a Cosmos account-address holder — NO Ed25519 key
+        // anywhere — binds their proven cosmoshub-4 holding to a dregg voter and
+        // the weight lands. This closes the trilogy: Solana Ed25519, EVM
+        // secp256k1-address, Cosmos secp256k1-address holders all vote natively.
+        let key = evm_key(0x31);
+        let voter: VoterId = [0x41u8; 32];
+        let holder = padded_holder(cosmos_addr(&key));
+        let binding = cosmos_bind(&key, voter);
+        let chain = ChainId::cosmos("cosmoshub-4");
+        let poll = PollId([0xA0u8; 32]);
+        let mut reg = HoldingWeightRegistry::new();
+        reg.open_chain_snapshot(poll, chain, 21_000_000);
+        let h = foreign(chain, holder, [0x2Bu8; 32], 4_321, 21_000_000);
+
+        let grant = reg.grant_foreign_into_poll(poll, &h, &binding).unwrap();
+        assert_eq!(grant.voter, voter);
+        assert_eq!(grant.weight, 4_321);
+        assert_eq!(grant.chain, chain);
+        // The nullifier fired — the same holding cannot count twice.
+        assert_eq!(
+            reg.grant_foreign_into_poll(poll, &h, &binding),
+            Err(GrantError::AlreadyCounted),
+        );
+        // And the runtime-tagged VoterBinding wrapper reaches the same verdict.
+        let poll2 = PollId([0xA1u8; 32]);
+        reg.open_chain_snapshot(poll2, chain, 21_000_000);
+        let wrapped = VoterBinding::Cosmos(binding);
+        assert_eq!(
+            reg.grant_foreign_into_poll(poll2, &h, &wrapped)
+                .unwrap()
+                .weight,
+            4_321,
+        );
+    }
+
+    #[test]
+    fn a_cosmos_signature_by_a_different_key_is_refused() {
+        // REJECT polarity: the attacker signs the EXACT binding message for the
+        // victim's address but carries the VICTIM's pubkey — the address check
+        // passes, and the signature then fails to verify under that pubkey.
+        let victim = evm_key(0x32);
+        let attacker = evm_key(0x67);
+        let voter: VoterId = [0x42u8; 32];
+        let victim_addr = cosmos_addr(&victim);
+        let holder = padded_holder(victim_addr);
+
+        let prehash = cosmos_binding_prehash(&victim_addr, &voter);
+        let sig: EvmSignature = attacker.sign_prehash(&prehash).unwrap();
+        let mut bytes = [0u8; 64];
+        bytes.copy_from_slice(&sig.to_bytes());
+        let forged = CosmosOwnerBinding {
+            voter,
+            pubkey: cosmos_pubkey(&victim), // the victim's key did NOT make this sig
+            sig: bytes,
+        };
+        assert!(
+            !verify_cosmos_binding(&holder, &forged),
+            "a signature by any key other than the address's must be refused"
+        );
+        let h = foreign(ChainId::cosmos("cosmoshub-4"), holder, [0x2Cu8; 32], 900, 5);
+        assert_eq!(
+            grant_foreign_weight(&h, &forged),
+            Err(GrantError::UnboundOwner),
+        );
+    }
+
+    #[test]
+    fn a_cosmos_pubkey_whose_address_is_not_the_holders_is_refused() {
+        // REJECT polarity — THE load-bearing check: the attacker presents a fully
+        // SELF-CONSISTENT binding (their own pubkey + a genuine signature under it
+        // over the victim-address message), but ripemd160(sha256(their pubkey)) is
+        // not the holder address. Without the derived-address equality this would
+        // pass — any keypair could bind any Cosmos holding.
+        let victim = evm_key(0x33);
+        let attacker = evm_key(0x68);
+        let voter: VoterId = [0x43u8; 32];
+        let victim_addr = cosmos_addr(&victim);
+        let holder = padded_holder(victim_addr);
+
+        let prehash = cosmos_binding_prehash(&victim_addr, &voter);
+        let sig: EvmSignature = attacker.sign_prehash(&prehash).unwrap();
+        let mut bytes = [0u8; 64];
+        bytes.copy_from_slice(&sig.to_bytes());
+        let forged = CosmosOwnerBinding {
+            voter,
+            pubkey: cosmos_pubkey(&attacker), // valid sig under THIS key...
+            sig: bytes,
+        };
+        // ...(control: the signature REALLY verifies under the carried pubkey
+        // over the victim-address prehash — so the derived-address equality is
+        // the ONLY gate standing between this forgery and a grant)...
+        assert!(
+            attacker
+                .verifying_key()
+                .verify_prehash(&prehash, &sig)
+                .is_ok(),
+            "control: the forgery is self-consistent pubkey/sig-wise"
+        );
+        // ...but its derived address is not the victim's holder — refused.
+        assert!(
+            !verify_cosmos_binding(&holder, &forged),
+            "a pubkey whose derived address is not the holder must be refused"
+        );
+        let h = foreign(ChainId::cosmos("cosmoshub-4"), holder, [0x2Du8; 32], 900, 5);
+        assert_eq!(
+            grant_foreign_weight(&h, &forged),
+            Err(GrantError::UnboundOwner),
+        );
+    }
+
+    #[test]
+    fn a_cosmos_binding_replayed_for_a_different_voter_is_refused() {
+        // REJECT polarity: the sign doc commits to the voter. A signature the
+        // owner genuinely made for voter A, re-presented claiming voter B,
+        // verifies against a DIFFERENT recomputed prehash and fails.
+        let key = evm_key(0x34);
+        let voter_a: VoterId = [0xA2u8; 32];
+        let voter_b: VoterId = [0xB2u8; 32];
+        let holder = padded_holder(cosmos_addr(&key));
+        let genuine = cosmos_bind(&key, voter_a);
+        assert!(verify_cosmos_binding(&holder, &genuine), "control: A binds");
+        let replayed = CosmosOwnerBinding {
+            voter: voter_b,
+            pubkey: genuine.pubkey,
+            sig: genuine.sig,
+        };
+        assert!(
+            !verify_cosmos_binding(&holder, &replayed),
+            "a binding for voter A must not authorize voter B"
+        );
+        let h = foreign(ChainId::cosmos("cosmoshub-4"), holder, [0x2Eu8; 32], 900, 5);
+        assert_eq!(
+            grant_foreign_weight(&h, &replayed),
+            Err(GrantError::UnboundOwner),
+        );
+    }
+
+    #[test]
+    fn a_non_padded_cosmos_holder_is_refused() {
+        // REJECT polarity, fail-closed on SHAPE: holder[0..12] must be zero. Even
+        // a GENUINE signature by the key whose address sits in holder[12..32] is
+        // refused when the padding bytes are nonzero — a 32-byte module/ICA
+        // account (or any other identity scheme) must not be "bindable" via its
+        // low 20 bytes.
+        let key = evm_key(0x35);
+        let voter: VoterId = [0x45u8; 32];
+        let mut holder = padded_holder(cosmos_addr(&key));
+        holder[0] = 1; // corrupt the padding
+        assert_eq!(cosmos_address_of_holder(&holder), None);
+        let binding = cosmos_bind(&key, voter);
+        assert!(
+            !verify_cosmos_binding(&holder, &binding),
+            "a holder with nonzero padding is NOT a 20-byte account address — refuse"
+        );
+        let h = foreign(ChainId::cosmos("cosmoshub-4"), holder, [0x2Fu8; 32], 900, 5);
+        assert_eq!(
+            grant_foreign_weight(&h, &binding),
+            Err(GrantError::UnboundOwner),
+        );
+        // A full 32-byte (module/ICA-shaped) holder likewise refuses.
+        assert_eq!(cosmos_address_of_holder(&[0x77u8; 32]), None);
+    }
+
+    #[test]
+    fn a_cosmos_high_s_signature_is_refused() {
+        // REJECT polarity: the (r, -s) malleable twin of a valid signature. The
+        // twin carries the SAME mathematical authorization — normalizing its s
+        // returns the genuine signature bytes exactly — so without the low-S rule
+        // any observer of one binding could mint a second, distinct-bytes
+        // "binding". Enforced at TWO layers: our explicit normalize_s refusal in
+        // verify_cosmos_binding, and k256's own verify_prehash refusing high-S
+        // outright (the same defense-in-depth the EVM path documents).
+        let key = evm_key(0x36);
+        let voter: VoterId = [0x46u8; 32];
+        let addr = cosmos_addr(&key);
+        let holder = padded_holder(addr);
+        let genuine = cosmos_bind(&key, voter);
+        assert!(
+            verify_cosmos_binding(&holder, &genuine),
+            "control: genuine binds"
+        );
+
+        let sig = EvmSignature::from_slice(&genuine.sig).unwrap();
+        let high = EvmSignature::from_scalars(sig.r().to_bytes(), (-*sig.s()).to_bytes())
+            .expect("the negated-s twin is a well-formed signature");
+        assert!(
+            high.normalize_s().is_some(),
+            "the twin really is high-S (k256 signing emits low-S, so -s is high)"
+        );
+        // The adversarial heart: the twin IS the same authorization under
+        // different bytes — normalizing it back yields the genuine signature.
+        assert_eq!(
+            high.normalize_s().unwrap().to_bytes(),
+            sig.to_bytes(),
+            "the high-S twin renormalizes to the genuine signature"
+        );
+        // Defense in depth: k256's own verifier refuses the high-S form too.
+        let prehash = cosmos_binding_prehash(&addr, &voter);
+        assert!(
+            key.verifying_key().verify_prehash(&prehash, &high).is_err(),
+            "k256 itself refuses a high-S signature"
+        );
+
+        let mut forged_sig = [0u8; 64];
+        forged_sig.copy_from_slice(&high.to_bytes());
+        let forged = CosmosOwnerBinding {
+            voter,
+            pubkey: genuine.pubkey,
+            sig: forged_sig,
+        };
+        assert!(
+            !verify_cosmos_binding(&holder, &forged),
+            "the malleable high-S twin must be refused"
+        );
+        let h = foreign(ChainId::cosmos("cosmoshub-4"), holder, [0x3Au8; 32], 900, 5);
+        assert_eq!(
+            grant_foreign_weight(&h, &forged),
+            Err(GrantError::UnboundOwner),
+        );
+    }
+
+    #[test]
+    fn a_malformed_cosmos_pubkey_is_refused() {
+        // REJECT polarity: the carried pubkey must be a valid COMPRESSED SEC1
+        // point. An uncompressed lead byte (0x04 — 33 bytes is the wrong length
+        // for it anyway), an unknown tag, an off-curve/over-p x, or all-zeros must
+        // refuse at the parse, never reach the hash-and-verify.
+        let key = evm_key(0x37);
+        let voter: VoterId = [0x47u8; 32];
+        let holder = padded_holder(cosmos_addr(&key));
+        let genuine = cosmos_bind(&key, voter);
+        for tamper in [0x00u8, 0x04, 0x05, 0xFF] {
+            let mut bad = genuine.clone();
+            bad.pubkey[0] = tamper;
+            assert!(
+                !verify_cosmos_binding(&holder, &bad),
+                "pubkey tag {tamper:#x} must be refused"
+            );
+        }
+        let mut bad = genuine.clone();
+        bad.pubkey = [0u8; 33];
+        assert!(!verify_cosmos_binding(&holder, &bad), "zero pubkey refused");
+        bad.pubkey = [0xFFu8; 33];
+        assert!(
+            !verify_cosmos_binding(&holder, &bad),
+            "an over-p x coordinate must be refused"
+        );
+    }
+
+    #[test]
+    fn a_cosmos_binding_never_binds_a_solana_or_evm_holding() {
+        // REJECT polarity, chain-shape dispatch: even a cryptographically-valid
+        // Cosmos binding whose derived address matches the holder bytes is refused
+        // when the holding is not Cosmos-family — Solana stays Ed25519-only, and
+        // an EVM holding (whose padded-20-byte holder SHAPE is identical) must
+        // never be bound by a ripemd160-sha256 address scheme.
+        let key = evm_key(0x38);
+        let voter: VoterId = [0x48u8; 32];
+        let holder = padded_holder(cosmos_addr(&key));
+        let binding = cosmos_bind(&key, voter);
+        // Control: the same (holder, binding) pair IS valid signature-wise.
+        assert!(verify_cosmos_binding(&holder, &binding));
+        for chain in [ChainId::Solana, ChainId::ETHEREUM, ChainId::BASE] {
+            let h = foreign(chain, holder, [0x3Bu8; 32], 900, 5);
+            assert_eq!(
+                grant_foreign_weight(&h, &binding),
+                Err(GrantError::UnboundOwner),
+                "{chain:?}: a Cosmos binding must not bind a non-Cosmos holding",
+            );
+            // The tagged wrapper reaches the same refusal.
+            assert_eq!(
+                grant_foreign_weight(&h, &VoterBinding::Cosmos(binding.clone())),
+                Err(GrantError::UnboundOwner),
+            );
+        }
+        // And the SAME KEY's addresses genuinely differ per family — the keccak
+        // EVM address of this key is NOT its Cosmos account address, so even
+        // without the chain gate the cross-family holder bytes would not match.
+        assert_ne!(
+            evm_address_of_pubkey(key.verifying_key()),
+            cosmos_addr(&key),
+            "keccak-address ≠ ripemd160-sha256-address for one key"
         );
     }
 }

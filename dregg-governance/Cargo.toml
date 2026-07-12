@@ -52,4 +52,13 @@ ed25519-dalek = "2"
 k256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
 sha3 = "0.10"
 
+# The Cosmos (secp256k1/bech32-account) owner→voter binding: a Cosmos account
+# address is ripemd160(sha256(compressed_pubkey)) — sha2 + ripemd are the
+# maintained RustCrypto digests for that derivation (never hand-rolled). The
+# signature itself verifies under the SAME k256 dep the EVM binding uses —
+# verify-under-carried-pubkey rather than recovery, because Cosmos signatures
+# ship the 33-byte pubkey alongside the 64-byte (r, s).
+ripemd = "0.1"
+sha2 = "0.10"
+
 blake3 = "1"
