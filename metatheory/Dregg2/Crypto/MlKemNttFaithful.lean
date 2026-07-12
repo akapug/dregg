@@ -677,18 +677,10 @@ theorem do_eq_fold (w : Poly) : nttCleanDo w = nttFold w := by
 theorem ntt_eq_fold (w : Poly) : ntt w = nttFold w := by
   rw [show ntt w = nttCleanDo w by unfold ntt nttCleanDo bfSweep; rfl, do_eq_fold]
 
-/-! ### The twiddle cast — `zetaTwiddle k = ζ^{brv7 k}` in the field. -/
+/-! ### The twiddle cast — `zetaTwiddle k = ζ^{brv7 k}` in the field.
 
-def pstep (st : Nat × Nat × Nat) (_ : Nat) : Nat × Nat × Nat :=
-  (mulModQ st.1 st.1, st.2.1 / 2, if st.2.1 % 2 == 1 then mulModQ st.2.2 st.1 else st.2.2)
-
-theorem powModQ_eq_fold (base e : Nat) :
-    powModQ base e = (List.foldl pstep (base % q, e, 1) (List.range' 0 32 1)).2.2 := by
-  unfold powModQ
-  simp only [Id.run, Std.Legacy.Range.forIn_eq_forIn_range', bind_pure_comp, map_pure,
-    ← apply_ite, List.forIn_pure_yield_eq_foldl, Std.Legacy.Range.size, Nat.sub_zero,
-    Nat.add_sub_cancel, Nat.div_one]
-  rfl
+The ladder desugaring — `pstep` and `powModQ_eq_fold` (`forIn → List.foldl`) — lives in `MlKemRing`
+next to `powModQ`, where it also shrinks `zeta_order` to kernel `decide`. -/
 
 theorem pow_fold_inv (b0 ex0 : Nat) : ∀ (n res : Nat),
     (((List.range' 0 n 1).foldl pstep (b0, ex0, res)).2.2 : ZMod q)
@@ -2347,5 +2339,9 @@ above (`nttLeftInverse_sample`, `nttMulHom_sample`) are concrete non-vacuity sam
 #assert_axioms ntt_pair
 #assert_axioms nttLeftInverse_proven
 #assert_axioms mlkem_ntt_ring_faithful
+-- TRUST-SHRINK (loop leg): the ζ-order gate closes by kernel `decide` through the `forIn → List.foldl`
+-- conversion `powModQ_eq_fold` (in `MlKemRing`) — pin BOTH kernel-clean (no `ofReduceBool`/`trustCompiler`).
+#assert_axioms powModQ_eq_fold
+#assert_axioms zeta_order
 
 end Dregg2.Crypto.MlKemRing

@@ -822,20 +822,10 @@ the honest field power `(ζ : ℤ_q)^{brv8 k}`. Both `powModQ` (square-and-multi
 `brv8` (8-bit reversal) are imperative `Id.run do` loops; each is characterized from its actual def:
 `cast_powModQ` proves the ladder computes `base^e` in `ℤ_q` (loop invariant `result = base^{e mod 2^t}`,
 `b = base^{2^t}`, `ex = e / 2^t` after `t` steps), and `brv8_lt` bounds `brv8 k < 256 < 2^32` (so the ladder
-covers the exponent). No `native_decide`. -/
+covers the exponent). No `native_decide`.
 
-/-- The desugared square-and-multiply step of `powModQ`; state `(b, ex, result)`. -/
-def pstep (st : Nat × Nat × Nat) (_ : Nat) : Nat × Nat × Nat :=
-  (mulModQ st.1 st.1, st.2.1 / 2, if st.2.1 % 2 == 1 then mulModQ st.2.2 st.1 else st.2.2)
-
-/-- `powModQ` as the explicit 32-step ladder fold (`result` is the third component). -/
-theorem powModQ_eq_fold (base e : Nat) :
-    powModQ base e = (List.foldl pstep (base % q, e, 1) (List.range' 0 32 1)).2.2 := by
-  unfold powModQ
-  simp only [Id.run, Std.Legacy.Range.forIn_eq_forIn_range', bind_pure_comp, map_pure,
-    ← apply_ite, List.forIn_pure_yield_eq_foldl, Std.Legacy.Range.size, Nat.sub_zero,
-    Nat.add_sub_cancel, Nat.div_one]
-  rfl
+The ladder desugaring itself — `pstep` and `powModQ_eq_fold` (`forIn → List.foldl`) — lives in `MlDsaRing`
+next to `powModQ`, where it also shrinks `zeta_primitive_512th_root` to kernel `decide`. -/
 
 /-- **Ladder loop invariant** in `ℤ_q`: after `n` steps `result = res·b0^{ex0 mod 2ⁿ}`, `b = b0^{2ⁿ}`,
 `ex = ex0 / 2ⁿ`. The square-and-multiply correctness, proved entrywise from the fold (not asserted). -/
@@ -2598,5 +2588,9 @@ deliberately NOT gated here — it is the accepted computational residual, isola
 #assert_axioms ringRepFaithful_proven
 #assert_axioms root_orth
 #assert_axioms nttRightInverse_proven
+-- TRUST-SHRINK (loop leg): the ζ gate closes by kernel `decide` through the `forIn → List.foldl`
+-- conversion `powModQ_eq_fold` (in `MlDsaRing`) — pin BOTH kernel-clean (no `ofReduceBool`/`trustCompiler`).
+#assert_axioms powModQ_eq_fold
+#assert_axioms zeta_primitive_512th_root
 
 end Dregg2.Crypto.MlDsaRing

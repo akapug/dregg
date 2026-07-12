@@ -24,22 +24,27 @@ Getting `pointwiseNtt` wrong — plain coefficient product, or the wrong `γ` mo
 
 ## THE ANTI-FAKE GATE (checked, not asserted)
 
-Executable `native_decide` theorems over CONCRETE polynomials pin the transform:
+Executable theorems over CONCRETE polynomials pin the transform:
 
 * `zeta_order` — `ζ¹²⁸ ≡ −1` and `ζ²⁵⁶ ≡ 1 (mod q)`: `ζ = 17` is a primitive 256th root (NOT 512th). If it
-  were the wrong order the incomplete factorisation would not hold.
-* `ntt_intt_id` — `intt (ntt a) = a` (round-trip; the inverse, with its `128⁻¹ = 3303` scale, is a true inverse).
+  were the wrong order the incomplete factorisation would not hold. Kernel `decide` via `powModQ_eq_fold`
+  (the `forIn → List.foldl` conversion) — NO compiled-evaluation residual.
+* `ntt_intt_id` — `intt (ntt a) = a` (round-trip; the inverse, with its `128⁻¹ = 3303` scale, is a true
+  inverse). `native_decide`.
 * `ntt_computes_negacyclic_mul` — `intt (pointwiseNtt (ntt a) (ntt b)) = schoolbookMul a b`, on a pair with
   genuine high-degree wraparound (so the `X²⁵⁶ = −1` sign is exercised). THE load-bearing gate: it forces the
   incomplete NTT + the `BaseCaseMultiply` base-case moduli `γ_i = ζ^{2·brv(i)+1}` to ALL be right — a plain
-  coefficient product would fail it.
+  coefficient product would fail it. `native_decide`.
 
-`native_decide` runs the COMPILED `def`s. No `sorry`, no user `axiom`, no toy substitute for the transform.
+The `native_decide` gates run the COMPILED `def`s. No `sorry`, no user `axiom`, no toy substitute for the
+transform.
 
 ## RESIDUAL
 
-The gate theorems use `native_decide`, whose trusted base is `Lean.ofReduceBool` + `Lean.trustCompiler` (the
-compiled-evaluation residual — the SAME class `Keccak`, `MlDsaRing`, and `Fips204Verify` already name).
+The two POLY-LOOP gates (`ntt_intt_id`, `ntt_computes_negacyclic_mul`) use `native_decide`, whose trusted
+base is `Lean.ofReduceBool` + `Lean.trustCompiler` (the compiled-evaluation residual — the SAME class
+`Keccak`, `MlDsaRing`, and `Fips204Verify` already name). `zeta_order` is kernel-`decide`-clean: axiom set
+⊆ {propext, Classical.choice, Quot.sound}.
 -/
 
 namespace Dregg2.Crypto.MlKemRing
@@ -69,6 +74,23 @@ def powModQ (base e : Nat) : Nat := Id.run do
     b := mulModQ b b
     ex := ex / 2
   return result
+
+/-- The desugared square-and-multiply step of `powModQ`; state `(b, ex, result)`. -/
+def pstep (st : Nat × Nat × Nat) (_ : Nat) : Nat × Nat × Nat :=
+  (mulModQ st.1 st.1, st.2.1 / 2, if st.2.1 % 2 == 1 then mulModQ st.2.2 st.1 else st.2.2)
+
+/-- **`powModQ` as the explicit 32-step ladder fold** (`result` is the third component). The `for _ in
+[0:32]` loop desugars to `Std.Range.forIn`, whose well-founded recursion the KERNEL cannot reduce — so
+concrete `powModQ` facts get stuck under `decide`. `List.foldl` over the concrete `List.range' 0 32 1`
+DOES kernel-reduce; rewriting through this lemma is what lets `zeta_order` close by kernel `decide`
+(no `Lean.ofReduceBool`/`trustCompiler`). Consumed upstream by `MlKemNttFaithful`'s ladder invariant. -/
+theorem powModQ_eq_fold (base e : Nat) :
+    powModQ base e = (List.foldl pstep (base % q, e, 1) (List.range' 0 32 1)).2.2 := by
+  unfold powModQ
+  simp only [Id.run, Std.Legacy.Range.forIn_eq_forIn_range', bind_pure_comp, map_pure,
+    ← apply_ite, List.forIn_pure_yield_eq_foldl, Std.Legacy.Range.size, Nat.sub_zero,
+    Nat.add_sub_cancel, Nat.div_one]
+  rfl
 
 /-! ## The negacyclic ring `R_q = ℤ_q[X]/(X²⁵⁶+1)` -/
 
@@ -206,8 +228,12 @@ def sampleA : Poly := setC (setC (setC zeroPoly 0 1) 1 2) 255 7
 def sampleB : Poly := setC (setC (setC zeroPoly 0 4) 100 5) 200 6
 
 /-- **`ζ = 17` is a primitive 256th root** (NOT 512th): `ζ¹²⁸ ≡ −1` and `ζ²⁵⁶ ≡ 1 (mod q)`. The property that
-makes the INCOMPLETE Kyber factorisation `X²⁵⁶+1 = Π(X² − ζ^{2·brv(i)+1})` hold. -/
-theorem zeta_order : powModQ zeta 128 = q - 1 ∧ powModQ zeta 256 = 1 := by native_decide
+makes the INCOMPLETE Kyber factorisation `X²⁵⁶+1 = Π(X² − ζ^{2·brv(i)+1})` hold.
+Kernel `decide` via `powModQ_eq_fold` (the `forIn → List.foldl` conversion; `Std.Range.forIn`'s
+well-founded recursion does not kernel-reduce, the concrete fold does) — NO
+`Lean.ofReduceBool`/`trustCompiler` residual. -/
+theorem zeta_order : powModQ zeta 128 = q - 1 ∧ powModQ zeta 256 = 1 := by
+  rw [powModQ_eq_fold zeta 128, powModQ_eq_fold zeta 256]; decide
 
 /-- **Round-trip**: `intt (ntt a) = a` on a concrete nonzero poly. The inverse transform is a true inverse
 (correct twiddle order AND `128⁻¹ = 3303` scaling). -/

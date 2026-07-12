@@ -15,25 +15,28 @@ whole verify rests on THIS module's `ntt`/`intt` being an honest length-256 nega
 
 ## THE ANTI-FAKE GATE (checked, not asserted)
 
-Executable `native_decide` theorems over CONCRETE polynomials pin the transform:
+Executable theorems over CONCRETE polynomials pin the transform:
 
-* `ntt_intt_id` — `intt (ntt a) = a` (round-trip; the inverse is a true inverse).
+* `ntt_intt_id` — `intt (ntt a) = a` (round-trip; the inverse is a true inverse). `native_decide`.
 * `ntt_computes_negacyclic_mul` — `intt (pointwiseMul (ntt a) (ntt b)) = schoolbookMul a b`, on a pair with
   genuine high-degree wraparound (so the `X²⁵⁶ = −1` sign is exercised). THE load-bearing gate: the fast
-  transform equals the real negacyclic ring product.
+  transform equals the real negacyclic ring product. `native_decide`.
 * `zeta_primitive_512th_root` — `ζ²⁵⁶ ≡ −1 (mod q)` for `ζ = 1753` (the property that makes the negacyclic
-  NTT well-defined at all).
-* `mul_mod_q_sanity` — `(q−1)·(q−1) ≡ 1 (mod q)` (reduction sanity).
+  NTT well-defined at all). Kernel `decide` via `powModQ_eq_fold` (the `forIn → List.foldl` conversion) —
+  NO compiled-evaluation residual.
+* `mul_mod_q_sanity` — `(q−1)·(q−1) ≡ 1 (mod q)` (reduction sanity). Kernel `decide`.
 
-`native_decide` runs the COMPILED `def`s. If the ζ-power order (FIPS 204 Algorithm 41 uses `ζ^{brv(k)}`, the
-8-bit-reversed exponent), the bit-reversal, or the `intt` scaling (`256⁻¹ mod q = 8347681`) were wrong, these
-theorems would NOT close. No `sorry`, no user `axiom`, no toy substitute for the transform.
+The `native_decide` gates run the COMPILED `def`s. If the ζ-power order (FIPS 204 Algorithm 41 uses
+`ζ^{brv(k)}`, the 8-bit-reversed exponent), the bit-reversal, or the `intt` scaling (`256⁻¹ mod q = 8347681`)
+were wrong, these theorems would NOT close. No `sorry`, no user `axiom`, no toy substitute for the transform.
 
 ## RESIDUAL
 
-The gate theorems use `native_decide`, whose trusted base is `Lean.ofReduceBool` + `Lean.trustCompiler` (the
-compiled-evaluation residual — the SAME class `Keccak` and `Fips204Verify` already name for their extracted
-cores).
+The two POLY-LOOP gates (`ntt_intt_id`, `ntt_computes_negacyclic_mul`) use `native_decide`, whose trusted
+base is `Lean.ofReduceBool` + `Lean.trustCompiler` (the compiled-evaluation residual — the SAME class
+`Keccak` and `Fips204Verify` already name for their extracted cores). The scalar gates
+(`zeta_primitive_512th_root`, `mul_mod_q_sanity`) are kernel-`decide`-clean: axiom set ⊆
+{propext, Classical.choice, Quot.sound}.
 -/
 
 namespace Dregg2.Crypto.MlDsaRing
@@ -63,6 +66,23 @@ def powModQ (base e : Nat) : Nat := Id.run do
     b := mulModQ b b
     ex := ex / 2
   return result
+
+/-- The desugared square-and-multiply step of `powModQ`; state `(b, ex, result)`. -/
+def pstep (st : Nat × Nat × Nat) (_ : Nat) : Nat × Nat × Nat :=
+  (mulModQ st.1 st.1, st.2.1 / 2, if st.2.1 % 2 == 1 then mulModQ st.2.2 st.1 else st.2.2)
+
+/-- **`powModQ` as the explicit 32-step ladder fold** (`result` is the third component). The `for _ in
+[0:32]` loop desugars to `Std.Range.forIn`, whose well-founded recursion the KERNEL cannot reduce — so
+concrete `powModQ` facts get stuck under `decide`. `List.foldl` over the concrete `List.range' 0 32 1`
+DOES kernel-reduce; rewriting through this lemma is what lets `zeta_primitive_512th_root` close by kernel
+`decide` (no `Lean.ofReduceBool`/`trustCompiler`). Consumed upstream by `NttFaithful`'s ladder invariant. -/
+theorem powModQ_eq_fold (base e : Nat) :
+    powModQ base e = (List.foldl pstep (base % q, e, 1) (List.range' 0 32 1)).2.2 := by
+  unfold powModQ
+  simp only [Id.run, Std.Legacy.Range.forIn_eq_forIn_range', bind_pure_comp, map_pure,
+    ← apply_ite, List.forIn_pure_yield_eq_foldl, Std.Legacy.Range.size, Nat.sub_zero,
+    Nat.add_sub_cancel, Nat.div_one]
+  rfl
 
 /-! ## The negacyclic ring `R_q = ℤ_q[X]/(X²⁵⁶+1)` -/
 
@@ -175,7 +195,8 @@ def pointwiseMul (a b : Poly) : Poly := Id.run do
     c := c.set! i (mulModQ a[i]! b[i]!)
   return c
 
-/-! ## THE ANTI-FAKE GATE — `native_decide` over concrete polynomials.
+/-! ## THE ANTI-FAKE GATE — concrete-polynomial theorems (`native_decide` for the poly loops, kernel
+`decide` for the scalar facts).
 
 If the ζ-power order, the bit-reversal, or the `intt` scaling were wrong, these would NOT close. -/
 
@@ -191,10 +212,11 @@ theorem mul_mod_q_sanity : mulModQ (q - 1) (q - 1) = 1 := by decide
 
 /-- **`ζ` is a primitive 512th root**: `ζ²⁵⁶ ≡ −1 (mod q)`. The property that makes the negacyclic NTT
 well-defined; if `ζ = 1753` or `q` were wrong this fails.
-`native_decide` (genuine limit): `powModQ` is a `for _ in [0:32]` loop; `Std.Range.forIn` uses well-founded
-recursion that does NOT reduce under the kernel, so `decide` gets stuck. (The field-cast form `ζ^256 = -1` in
-`ZMod q` — `NttFaithful.zeta_root_witness` — IS kernel-`decide`-clean.) -/
-theorem zeta_primitive_512th_root : powModQ zeta 256 = q - 1 := by native_decide
+Kernel `decide` via `powModQ_eq_fold`: the `for _ in [0:32]` ladder itself does NOT kernel-reduce
+(`Std.Range.forIn` is well-founded recursion), but the equivalent `List.foldl` over the concrete
+`List.range' 0 32 1` does — so this carries NO `Lean.ofReduceBool`/`trustCompiler` residual. -/
+theorem zeta_primitive_512th_root : powModQ zeta 256 = q - 1 := by
+  rw [powModQ_eq_fold]; decide
 
 /-- **Round-trip**: `intt (ntt a) = a` on a concrete nonzero poly. The inverse transform is a true inverse
 (correct twiddle order AND `256⁻¹` scaling). -/
