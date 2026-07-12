@@ -39,13 +39,16 @@ structural fact about the committed trace, never an AIR-arithmetic consequence.
 `hbus` requires, for every non-arithmetic `transferV3` constraint (all `.lookup`, chip or range),
 `Lookup.holdsAt t.tf env = (l.tuple.map (·.eval env.loc)) ∈ t.tf l.table` — the evaluated tuple is a
 row of the committed table. AIR acceptance does NOT force this: `arithResidual (.lookup _) = 0` by
-construction, so the quotient check is silent on lookups. The bridge "the LogUp bus balances ⟹ the
-looked-up multiset is supported by the table" is EXPLICITLY out of the Lean semantics —
-`Dregg2.Circuit.Lookup` (`Lookup.lean:17-18`): "LogUp is merely how the prover ENFORCES it
-efficiently — that lives in the Rust AIR, not in this semantics." So `hbus` REMAINS, reducing to
-(a) LogUp permutation-argument soundness (NOT modeled in Lean) PLUS (b) chip/range table faithfulness
-(`deployedChipTbl_sound` / `RangeTableSound` — these ARE at the deployed argument). `hbus_is_lookup`
-below pins the shape: every remaining `hbus` obligation is a chip/range lookup membership.
+construction, so the quotient check is silent on lookups. The bridge "the LogUp bus balances at a
+non-exceptional challenge ⟹ the looked-up support is contained in the table" is now a THEOREM in Lean —
+`LogUpSoundness.busBalance_forces_membership` (Schwartz–Zippel via `card_roots'` on `busNum`), the exact
+`hmem : tuple ∈ tbl` `DescriptorIR2.chip_lookup_sound_N` consumes. So `hbus` is REDUCED to the NAMED
+floor (`LogUpSoundness` §8): (a) LogUp-SZ soundness — PROVED (support containment for the distinct
+lookups; repeated-value multiplicity a named provable higher-pole extension) PLUS (b) chip/range table
+faithfulness (range = STRUCTURAL `rangeRows 30 = [0,2^30)`, never enumerated; chip =
+`deployedChipTbl_sound` at the Poseidon2 floor) PLUS (c) the FS non-exceptionality ε-bound PLUS (d) the
+one UNMODELED wire — the deployed bus's column layout (which columns carry `A`, `B`, `α`, the cumulative
+sum). `hbus_is_lookup` below pins the shape; the SZ arrow is no longer assumed, only that final wire is.
 
 ## Axiom hygiene
 

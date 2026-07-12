@@ -210,6 +210,30 @@ theorem degree_busNum_lt (A B : List F) :
       _ = ((A.length + B.length : ℕ) : WithBot ℕ) := by push_cast; ring
   exact lt_of_le_of_lt (degree_sub_le _ _) (max_lt h1 h2)
 
+/-! ### Permutation-invariance of the numerator (a bus does not care about looked-up-row order).
+
+`prodLin`/`sumSkip`/`busNum` depend only on the MULTISET of `A` — a reordering of the looked-up rows
+leaves the polynomial identity untouched. This is what lets us bring ANY single looked-up value to the
+head, where `busNum_ne_zero_of_forged` (§5) bites. -/
+
+/-- `prodLin` is permutation-invariant (it is a product over `A`). -/
+theorem prodLin_perm {A A' : List F} (h : A.Perm A') : prodLin A = prodLin A' := by
+  unfold prodLin; exact List.Perm.prod_eq (h.map _)
+
+/-- `sumSkip` is permutation-invariant (it is the derivative of the perm-invariant `prodLin`). -/
+theorem sumSkip_perm {A A' : List F} (h : A.Perm A') : sumSkip A = sumSkip A' := by
+  rw [sumSkip_eq_derivative, sumSkip_eq_derivative, prodLin_perm h]
+
+/-- **`busNum` is permutation-invariant in the lookup side.** Reordering the looked-up rows `A` leaves
+`busNum A B` unchanged — the polynomial sees only the multiset. -/
+theorem busNum_perm_left {A A' : List F} (h : A.Perm A') (B : List F) :
+    busNum A B = busNum A' B := by
+  unfold busNum; rw [prodLin_perm h, sumSkip_perm h]
+
+/-- `busNum A A = 0` — an HONEST bus (lookups exactly the table) has a vanishing numerator, so its
+exceptional set is empty and every challenge balances. The completeness face of the SZ argument. -/
+theorem busNum_self (A : List F) : busNum A A = 0 := sub_self _
+
 /-! ## §4 — The exceptional set and the Schwartz–Zippel soundness bound. -/
 
 variable [DecidableEq F]
@@ -228,6 +252,11 @@ theorem exceptionalSet_card_lt {A B : List F} (hne : busNum A B ≠ 0) :
       ≤ Multiset.card (busNum A B).roots := Multiset.toFinset_card_le _
     _ ≤ (busNum A B).natDegree := card_roots' _
     _ < A.length + B.length := hnd
+
+/-- The exceptional set is permutation-invariant in the lookup side (it reads only `busNum`). -/
+theorem exceptionalSet_perm_left {A A' : List F} (h : A.Perm A') (B : List F) :
+    exceptionalSet A B = exceptionalSet A' B := by
+  unfold exceptionalSet; rw [busNum_perm_left h B]
 
 /-! ## §5 — The forged-lookup tooth: a non-member makes `busNum` nonzero. -/
 
@@ -283,6 +312,54 @@ theorem logup_forged_lookup_sound {A B : List F} {c α : F}
   rw [exceptionalSet, Multiset.mem_toFinset, mem_roots hne]
   exact hroot
 
+/-! ## §5½ — THE BRIDGE: bus-balance ⟹ membership (`hbus`'s missing arrow, proved by SZ).
+
+`logup_forged_lookup_sound` (§5) is the CONTRAPOSITIVE, stated at the head. Here is the POSITIVE form
+`AirLegsDischarged.hbus_is_lookup` calls for: a bus that balances at a NON-exceptional challenge forces
+every looked-up value to be a TABLE MEMBER. This is the exact `hmem : tuple ∈ tbl` hypothesis that
+`DescriptorIR2.chip_lookup_sound_N` / the range lever consume — DERIVED, no longer assumed. -/
+
+/-- **`busBalance_forces_membership_single` — the single-occurrence membership bridge.** If the LogUp
+bus BALANCES at `α` (off the poles) and `α` is NON-exceptional (not a root of `busNum`), then any value
+`c` looked up EXACTLY ONCE (`A.count c = 1`) is a member of the table `B`. Pure Schwartz–Zippel: were
+`c ∉ B`, `busNum` would be nonzero (`busNum_ne_zero_of_forged`, via the head brought over by
+`busNum_perm_left`), so a balancing `α` would have to be one of its `< |A|+|B|` roots — i.e.
+exceptional. The `card_roots'` route, run in the accept ⟹ membership direction. -/
+theorem busBalance_forces_membership_single {A B : List F} {α c : F}
+    (hpA : ∀ a ∈ A, α + a ≠ 0) (hpB : ∀ b ∈ B, α + b ≠ 0)
+    (hbal : logupSum α A = logupSum α B)
+    (hnonexc : α ∉ exceptionalSet A B)
+    (hc : c ∈ A) (hcount : A.count c = 1) : c ∈ B := by
+  by_contra hcB
+  -- Bring the single occurrence of `c` to the head: `A ~ c :: A.erase c`, with `c ∉ A.erase c`.
+  have hperm : A.Perm (c :: A.erase c) := List.perm_cons_erase hc
+  have hcA' : c ∉ A.erase c := by
+    rw [← List.count_eq_zero, List.count_erase_self, hcount]
+  -- A forged head makes the numerator a NONZERO polynomial.
+  have hne : busNum (c :: A.erase c) B ≠ 0 := busNum_ne_zero_of_forged hcA' hcB
+  -- Transport the balance / non-exceptionality / poles across the permutation.
+  have hbal' : logupSum α (c :: A.erase c) = logupSum α B := by
+    rw [← logupSum_perm α hperm]; exact hbal
+  have hnonexc' : α ∉ exceptionalSet (c :: A.erase c) B := by
+    rwa [exceptionalSet_perm_left hperm B] at hnonexc
+  have hpA' : ∀ x ∈ c :: A.erase c, α + x ≠ 0 := fun x hx => hpA x (hperm.mem_iff.mpr hx)
+  -- A balancing challenge is a root of the (nonzero) numerator: it lands in the exceptional set.
+  have hroot : (busNum (c :: A.erase c) B).eval α = 0 := (bus_zero_iff_busNum hpA' hpB).mp hbal'
+  exact hnonexc' (by rw [exceptionalSet, Multiset.mem_toFinset, mem_roots hne]; exact hroot)
+
+/-- **`busBalance_forces_membership` — support containment for DISTINCT looked-up values.** When the
+looked-up list `A` has no repeats (`A.Nodup`), a balancing non-exceptional bus forces EVERY looked-up
+value into the table: `∀ c ∈ A, c ∈ B`. The multiset support of the trace's lookups is contained in the
+table support — the soundness statement a range/chip lookup needs. (Repeated looked-up values are the
+higher-order-pole residual named in §8; each DISTINCT value is covered here.) -/
+theorem busBalance_forces_membership {A B : List F} {α : F}
+    (hpA : ∀ a ∈ A, α + a ≠ 0) (hpB : ∀ b ∈ B, α + b ≠ 0)
+    (hbal : logupSum α A = logupSum α B)
+    (hnonexc : α ∉ exceptionalSet A B)
+    (hnodup : A.Nodup) : ∀ c ∈ A, c ∈ B := fun _ hc =>
+  busBalance_forces_membership_single hpA hpB hbal hnonexc hc
+    (List.count_eq_one_of_mem hnodup hc)
+
 /-! ## §6 — Completeness (the easy direction, full). -/
 
 omit [DecidableEq F] in
@@ -298,6 +375,10 @@ theorem logup_complete (α : F) {A : List F} {B : List (F × ℕ)} (h : A.Perm (
 #assert_axioms exceptionalSet_card_lt
 #assert_axioms busNum_ne_zero_of_forged
 #assert_axioms logup_forged_lookup_sound
+#assert_axioms busNum_perm_left
+#assert_axioms exceptionalSet_perm_left
+#assert_axioms busBalance_forces_membership_single
+#assert_axioms busBalance_forces_membership
 #assert_axioms logup_complete
 
 /-! ## §7 — BabyBear instantiation + the concrete soundness error. -/
@@ -344,24 +425,64 @@ theorem forged_lookup_exceptional_small :
     (exceptionalSet ([7] : List BabyBear) tbl3).card < 1 + tbl3.length :=
   exceptionalSet_card_lt forged_lookup_bites
 
+/-- MEMBERSHIP-BRIDGE TOOTH (fires, not vacuous): the honest lookup `[20]` against the table `[20]`
+balances at the non-exceptional `α = 0` (the honest bus has an EMPTY exceptional set, `busNum_self`),
+so `busBalance_forces_membership_single` DERIVES `20 ∈ [20]`. Exercises the whole accept ⟹ membership
+path on concrete BabyBear values, so the landing lemma is not vacuously stated. -/
+theorem membership_bridge_fires : (20 : BabyBear) ∈ ([20] : List BabyBear) := by
+  refine busBalance_forces_membership_single (α := (0 : BabyBear)) (c := 20)
+    (A := [20]) (B := [20]) ?_ ?_ rfl ?_ (by simp) (by decide)
+  · intro a ha; simp at ha; subst ha; decide
+  · intro b hb; simp at hb; subst hb; decide
+  · -- α = 0 is non-exceptional: the honest bus's numerator is 0, whose root set is empty.
+    rw [exceptionalSet, busNum_self, roots_zero]; simp
+
 end BabyBear
 
-/-! ## §8 — The connection to `AirChecksSatisfied.hbus` (reduced, NOT discharged).
+/-! ## §8 — The connection to `AirChecksSatisfied.hbus` (REDUCED to a NAMED floor; the SZ arrow proved).
 
-`AirChecksSatisfied.mainAirAccept_forces_rowConstraints` carries `hbus`: the `lookup` arm's denotation
-`Lookup.holdsAt` (`DescriptorIR2.lean:447`) says the evaluated tuple IS a row of the table. §5 delivers
-exactly the security content: if a looked-up value were ABSENT from the table (a `holdsAt` violation),
-the LogUp bus would be a NONZERO polynomial, balancing only on the `< |A|+|B|`-element exceptional set —
-so a verifier that samples `α` uniformly rejects the forgery except with probability `≤ (|A|+|B|)/|F|`.
+`AirLegsDischarged.hbus_is_lookup` pins every remaining `hbus` obligation to a chip/range LOOKUP
+membership: `Lookup.holdsAt` says the evaluated tuple IS a row of the committed table. §5½ now supplies
+the missing ARROW as a THEOREM, not an assumption: `busBalance_forces_membership` — a bus that balances
+at a non-exceptional challenge FORCES support containment `∀ c ∈ A, c ∈ B` (`busBalance_forces_membership_single`
+for any single-occurrence value; the `Nodup` corollary for the distinct support), by the identical
+`card_roots'` Schwartz–Zippel route `OodSoundnessGame.rlc_debatch` runs on the batching challenge. This
+is exactly the `hmem : tuple ∈ tbl` hypothesis `DescriptorIR2.chip_lookup_sound_N` and the range lever
+consume — now DERIVED from the bus, not carried.
 
-WHAT REMAINS (the honest residual — `hbus` is REDUCED to this, NOT closed): the DEPLOYED bus's column
-layout is UNMODELED here. To discharge `hbus` one must exhibit, from the descriptor's actual AIR columns,
-(1) the list `A` of per-row looked-up tuples and the table `B` with its multiplicity column, (2) the
-challenge column `α` and the running cumulative-sum column whose boundary-zero IS `logupSum α A =
-logupSumM α B`, and (3) the pole-avoidance side-condition on `α`. None of that plumbing exists in
-`Dregg2/Circuit/`, so this file does NOT claim `hbus` proved — it proves the Schwartz–Zippel core the
-plumbing would invoke. -/
+So `hbus` is REDUCED to the following NAMED floor (no longer a bare premise):
 
+  1. **LogUp-SZ soundness — PROVED here.** `busBalance_forces_membership` (support containment) +
+     `logup_complete` (completeness) + the FS ε-bound `≤ (|A|+|B|)/|F|` (`exceptionalSet_card_lt`,
+     `babybear_soundness_error`), the same quantitative game frame as `OodSoundnessGame`.
+  2. **Chip/range TABLE FAITHFULNESS — the table `B` IS the honest function's graph.** For the RANGE
+     table this is STRUCTURAL, not a floor: `rangeRows BAL_LIMB_BITS = Lookup.rangeTable 30` is
+     definitionally `[0, 2^30)`, so its faithfulness is `rfl`-level — and CRUCIALLY it is argued
+     symbolically over `List.range (2^30)`, NEVER enumerated (2^30 ≈ 10⁹ rows are not `#eval`-able).
+     For the CHIP table it is the real-permutation carrier `ChipTableSoundN permOutDeployed`
+     (`deployedChipTbl_sound`) — i.e. the Poseidon2 floor already named elsewhere, not a new obligation.
+  3. **FS non-exceptionality ε-bound** — `α ∉ exceptionalSet`, a bounded-advantage event, ε ≤ deg/|F|
+     (`OodSoundnessGame.oodNonExc_winProb_le`, transported to the LogUp bus here).
+
+WHAT GENUINELY REMAINS (two honest residuals, precisely named — neither a fresh crypto primitive):
+  * **Column-layout plumbing (irreducible HERE).** Exhibiting, from the descriptor's actual AIR
+    columns, (i) the list `A` of per-row looked-up tuples and the table `B` with its multiplicity
+    column, (ii) the challenge column `α` and the running cumulative-sum column whose boundary-zero IS
+    `logupSum α A = logupSumM α B`, (iii) the pole-avoidance side-condition. This plumbing is UNMODELED
+    in `Dregg2/Circuit/` — the same unmodeled-layout residual `OodSoundnessGame` names for the OOD Λ-column.
+  * **Repeated-value multiplicity (a PROVABLE SZ extension, not irreducible).** The support-containment
+    theorem is proved per DISTINCT looked-up value (single-occurrence head). A value looked up `k > 1`
+    times and absent from `B` gives `busNum` a zero of order `k−1` at `−c` with a NONZERO residue
+    `(k · ∏…) ≠ 0` whenever `k` is below the field characteristic (`k ≪ 2·10⁹` always) — the same argument
+    at a higher-order pole. Proving it in Lean is the `rootMultiplicity` extension of `busNum_ne_zero_of_forged`;
+    it needs no new assumption, only more polynomial bookkeeping. NAMED, not laundered.
+
+This file therefore DISCHARGES the LogUp-SZ arrow of `hbus` for the distinct support (shared across ALL
+27 effects — the bus is one argument, not 27), reducing `hbus` to {chip/range table faithfulness (§2,
+structural for range / Poseidon2-floor for chip) + FS ε + the column-layout wire + the multiplicity
+extension}. -/
+
+#check @busBalance_forces_membership
 #check @logup_forged_lookup_sound
 #check @exceptionalSet_card_lt
 
