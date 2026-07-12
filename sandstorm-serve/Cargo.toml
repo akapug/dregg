@@ -1,0 +1,51 @@
+# sandstorm-serve — the SERVING weld sandstorm-bridge names as a follow-up,
+# made executable: serve a grain's WebSession surface over the substrate's
+# site-serving crate (`http-serve`), with the `X-Sandstorm-*` identity headers
+# derived from a real `dga1_` dregg-auth capability per request, over
+# archive-first custody of the exact signed `.spk` bytes and the grain's
+# committed `/var` (a real cell-heap `DataRoot`, checkpointed durably before a
+# response is acknowledged).
+#
+# The OTHER named weld — compute-tier `exec_workload` (actually running the
+# packaged app under grain-jail / a microVM) — is NOT here. The serving surface
+# takes a pluggable `GrainBody`; the default `NoBody` refuses every request
+# with a typed 503 naming that missing weld, and the in-process demo body says
+# what it is. Nothing simulates the app.
+
+[package]
+name = "sandstorm-serve"
+version = { workspace = true }
+edition = "2021"
+publish = false
+description = "Serve a Sandstorm grain's WebSession over http-serve: cap-derived X-Sandstorm-* headers, archive-first .spk + /var custody, honest pluggable body seam"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+# The grain model this crate serves: .spk parse/verify, manifest → GrainSpec,
+# /var = cell umem heap (DataRoot), grain lifecycle, the WebSession HTTP shim +
+# cap → X-Sandstorm-* derivation, and the dga1_ powerbox rail.
+sandstorm-bridge = { path = "../sandstorm-bridge" }
+
+# The substrate's site-serving surface this weld binds onto: the hardened
+# std-net HTTP/1.1 serve loop (slow-loris/body/header bounds, ConnGate).
+http-serve = { path = "../http-serve" }
+
+# The cap rail's public-key type (the host root a daemon verifies caps under).
+dregg-auth = { path = "../dregg-auth" }
+
+# Custody archive: digest chain + bounded postcard records + exclusive lock.
+blake3 = "1"
+postcard = { version = "1", features = ["use-std"] }
+fs2 = "0.4"
+libc = "0.2"
+
+[dev-dependencies]
+ed25519-dalek = { version = "2.1", features = ["std"] }
+grain-commons = { path = "../grain-commons" }
+tempfile = { workspace = true }
+
+[lints.rust]
+unsafe_code = "forbid"
