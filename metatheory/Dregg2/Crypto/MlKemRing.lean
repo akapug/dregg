@@ -29,22 +29,23 @@ Executable theorems over CONCRETE polynomials pin the transform:
 * `zeta_order` — `ζ¹²⁸ ≡ −1` and `ζ²⁵⁶ ≡ 1 (mod q)`: `ζ = 17` is a primitive 256th root (NOT 512th). If it
   were the wrong order the incomplete factorisation would not hold. Kernel `decide` via `powModQ_eq_fold`
   (the `forIn → List.foldl` conversion) — NO compiled-evaluation residual.
-* `ntt_intt_id` — `intt (ntt a) = a` (round-trip; the inverse, with its `128⁻¹ = 3303` scale, is a true
-  inverse). `native_decide`.
-* `ntt_computes_negacyclic_mul` — `intt (pointwiseNtt (ntt a) (ntt b)) = schoolbookMul a b`, on a pair with
-  genuine high-degree wraparound (so the `X²⁵⁶ = −1` sign is exercised). THE load-bearing gate: it forces the
-  incomplete NTT + the `BaseCaseMultiply` base-case moduli `γ_i = ζ^{2·brv(i)+1}` to ALL be right — a plain
-  coefficient product would fail it. `native_decide`.
+* `ntt_intt_id` — `intt (ntt c) = c` FOR ALL canonical reduced polys (round-trip; the inverse, with its
+  `128⁻¹ = 3303` scale, is a true inverse). Proven in `Dregg2.Crypto.MlKemNttFaithful` (which characterizes
+  THIS module's imperative loops entrywise) — a ∀-theorem, axiom-clean, no `native_decide`.
+* `ntt_computes_negacyclic_mul` — `intt (pointwiseNtt (ntt a) (ntt b)) = schoolbookMul a b` FOR ALL size-256
+  poly pairs. THE load-bearing gate: it forces the incomplete NTT + the `BaseCaseMultiply` base-case moduli
+  `γ_i = ζ^{2·brv(i)+1}` to ALL be right — a plain coefficient product would fail it. Also a ∀-theorem in
+  `MlKemNttFaithful` (= `mlkem_ntt_ring_faithful` under its gate name), axiom-clean, no `native_decide`.
+  (Both were formerly one-sample `native_decide` gates here; the samples survive there as kernel-clean
+  specializations.)
 
-The `native_decide` gates run the COMPILED `def`s. No `sorry`, no user `axiom`, no toy substitute for the
-transform.
+No `sorry`, no user `axiom`, no toy substitute for the transform.
 
 ## RESIDUAL
 
-The two POLY-LOOP gates (`ntt_intt_id`, `ntt_computes_negacyclic_mul`) use `native_decide`, whose trusted
-base is `Lean.ofReduceBool` + `Lean.trustCompiler` (the compiled-evaluation residual — the SAME class
-`Keccak`, `MlDsaRing`, and `Fips204Verify` already name). `zeta_order` is kernel-`decide`-clean: axiom set
-⊆ {propext, Classical.choice, Quot.sound}.
+None from this module: NO `native_decide` remains here (the former compiled-evaluation residual on the two
+poly-loop gates is GONE — they are ∀-proven in `MlKemNttFaithful`). `zeta_order` is kernel-`decide`-clean:
+axiom set ⊆ {propext, Classical.choice, Quot.sound}.
 -/
 
 namespace Dregg2.Crypto.MlKemRing
@@ -217,7 +218,9 @@ def pointwiseNtt (a b : Poly) : Poly := Id.run do
     c := c.set! (2*i+1) c1
   return c
 
-/-! ## THE ANTI-FAKE GATE — `native_decide` over concrete polynomials.
+/-! ## THE ANTI-FAKE GATE — executable theorems (kernel `decide` for the ζ order; the poly-loop gates
+`ntt_intt_id` / `ntt_computes_negacyclic_mul` are ∀-theorems in `Dregg2.Crypto.MlKemNttFaithful`, proven
+from these very loop defs, axiom-clean — no `native_decide` anywhere in this module).
 
 If the ζ order, the 7-bit reversal, the `intt` scaling, or the base-case moduli were wrong, these fail. -/
 
@@ -234,17 +237,5 @@ well-founded recursion does not kernel-reduce, the concrete fold does) — NO
 `Lean.ofReduceBool`/`trustCompiler` residual. -/
 theorem zeta_order : powModQ zeta 128 = q - 1 ∧ powModQ zeta 256 = 1 := by
   rw [powModQ_eq_fold zeta 128, powModQ_eq_fold zeta 256]; decide
-
-/-- **Round-trip**: `intt (ntt a) = a` on a concrete nonzero poly. The inverse transform is a true inverse
-(correct twiddle order AND `128⁻¹ = 3303` scaling). -/
-theorem ntt_intt_id : intt (ntt sampleA) = sampleA := by native_decide
-
-/-- **THE load-bearing gate**: the fast INCOMPLETE-NTT path equals the ground-truth negacyclic ring product,
-`intt (pointwiseNtt (ntt a) (ntt b)) = schoolbookMul a b`. The chosen `a, b` have high-degree terms
-(`X²⁵⁵ · X²⁰⁰` lands at `X⁴⁵⁵ = −X¹⁹⁹`), so the `X²⁵⁶ = −1` sign is exercised; and because pointwise mult is
-`BaseCaseMultiply` (Alg 12) — a plain coefficient product would FAIL this — the base-case moduli
-`γ_i = ζ^{2·brv(i)+1}` are forced correct. -/
-theorem ntt_computes_negacyclic_mul :
-    intt (pointwiseNtt (ntt sampleA) (ntt sampleB)) = schoolbookMul sampleA sampleB := by native_decide
 
 end Dregg2.Crypto.MlKemRing

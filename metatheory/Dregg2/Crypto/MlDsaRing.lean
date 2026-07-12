@@ -15,26 +15,30 @@ whole verify rests on THIS module's `ntt`/`intt` being an honest length-256 nega
 
 ## THE ANTI-FAKE GATE (checked, not asserted)
 
-Executable theorems over CONCRETE polynomials pin the transform:
+Executable theorems pin the transform:
 
-* `ntt_intt_id` — `intt (ntt a) = a` (round-trip; the inverse is a true inverse). `native_decide`.
-* `ntt_computes_negacyclic_mul` — `intt (pointwiseMul (ntt a) (ntt b)) = schoolbookMul a b`, on a pair with
-  genuine high-degree wraparound (so the `X²⁵⁶ = −1` sign is exercised). THE load-bearing gate: the fast
-  transform equals the real negacyclic ring product. `native_decide`.
+* `ntt_intt_id` — `intt (ntt c) = c` FOR ALL canonical reduced polys (round-trip; the inverse is a true
+  inverse). Proven in `Dregg2.Crypto.NttFaithful` (which characterizes THIS module's imperative loop defs
+  entrywise and closes the CT/GS stage inductions) — a ∀-theorem, axiom-clean, no `native_decide`. It
+  lives there (not here) only because the proof needs Mathlib's `ZMod`; the statement is about these defs.
+* `ntt_computes_negacyclic_mul` — `intt (pointwiseMul (ntt a) (ntt b)) = schoolbookMul a b` FOR ALL
+  size-256 poly pairs. THE load-bearing gate: the fast transform equals the real negacyclic ring product.
+  Also a ∀-theorem in `Dregg2.Crypto.NttFaithful` (= `ringRepFaithful_proven` under its gate name),
+  axiom-clean, no `native_decide`. (Both were formerly one-sample `native_decide` gates here; the samples
+  survive there as kernel-clean specializations, `nttLeftInverse_sample`/`ntt_negacyclic_mul_sample`.)
 * `zeta_primitive_512th_root` — `ζ²⁵⁶ ≡ −1 (mod q)` for `ζ = 1753` (the property that makes the negacyclic
   NTT well-defined at all). Kernel `decide` via `powModQ_eq_fold` (the `forIn → List.foldl` conversion) —
   NO compiled-evaluation residual.
 * `mul_mod_q_sanity` — `(q−1)·(q−1) ≡ 1 (mod q)` (reduction sanity). Kernel `decide`.
 
-The `native_decide` gates run the COMPILED `def`s. If the ζ-power order (FIPS 204 Algorithm 41 uses
-`ζ^{brv(k)}`, the 8-bit-reversed exponent), the bit-reversal, or the `intt` scaling (`256⁻¹ mod q = 8347681`)
-were wrong, these theorems would NOT close. No `sorry`, no user `axiom`, no toy substitute for the transform.
+If the ζ-power order (FIPS 204 Algorithm 41 uses `ζ^{brv(k)}`, the 8-bit-reversed exponent), the
+bit-reversal, or the `intt` scaling (`256⁻¹ mod q = 8347681`) were wrong, these theorems would NOT close.
+No `sorry`, no user `axiom`, no toy substitute for the transform.
 
 ## RESIDUAL
 
-The two POLY-LOOP gates (`ntt_intt_id`, `ntt_computes_negacyclic_mul`) use `native_decide`, whose trusted
-base is `Lean.ofReduceBool` + `Lean.trustCompiler` (the compiled-evaluation residual — the SAME class
-`Keccak` and `Fips204Verify` already name for their extracted cores). The scalar gates
+None from this module: NO `native_decide` remains here (the former compiled-evaluation residual on the two
+poly-loop gates is GONE — they are ∀-proven in `NttFaithful`). The scalar gates
 (`zeta_primitive_512th_root`, `mul_mod_q_sanity`) are kernel-`decide`-clean: axiom set ⊆
 {propext, Classical.choice, Quot.sound}.
 -/
@@ -195,8 +199,9 @@ def pointwiseMul (a b : Poly) : Poly := Id.run do
     c := c.set! i (mulModQ a[i]! b[i]!)
   return c
 
-/-! ## THE ANTI-FAKE GATE — concrete-polynomial theorems (`native_decide` for the poly loops, kernel
-`decide` for the scalar facts).
+/-! ## THE ANTI-FAKE GATE — executable theorems (kernel `decide` for the scalar facts; the poly-loop
+gates `ntt_intt_id` / `ntt_computes_negacyclic_mul` are ∀-theorems in `Dregg2.Crypto.NttFaithful`,
+proven from these very loop defs, axiom-clean — no `native_decide` anywhere in this module).
 
 If the ζ-power order, the bit-reversal, or the `intt` scaling were wrong, these would NOT close. -/
 
@@ -217,15 +222,5 @@ Kernel `decide` via `powModQ_eq_fold`: the `for _ in [0:32]` ladder itself does 
 `List.range' 0 32 1` does — so this carries NO `Lean.ofReduceBool`/`trustCompiler` residual. -/
 theorem zeta_primitive_512th_root : powModQ zeta 256 = q - 1 := by
   rw [powModQ_eq_fold]; decide
-
-/-- **Round-trip**: `intt (ntt a) = a` on a concrete nonzero poly. The inverse transform is a true inverse
-(correct twiddle order AND `256⁻¹` scaling). -/
-theorem ntt_intt_id : intt (ntt sampleA) = sampleA := by native_decide
-
-/-- **THE load-bearing gate**: the fast NTT path equals the ground-truth negacyclic ring product,
-`intt (pointwiseMul (ntt a) (ntt b)) = schoolbookMul a b`. The chosen `a, b` have high-degree terms
-(`X²⁵⁵ · X²⁰⁰` lands at `X⁴⁵⁵ = −X¹⁹⁹`), so the `X²⁵⁶ = −1` sign is genuinely exercised. -/
-theorem ntt_computes_negacyclic_mul :
-    intt (pointwiseMul (ntt sampleA) (ntt sampleB)) = schoolbookMul sampleA sampleB := by native_decide
 
 end Dregg2.Crypto.MlDsaRing

@@ -35,9 +35,9 @@ INSTANTIATION (`hash := SHAKE256-framing`, `challenge := sampleInBall`, `round :
 NOT a gap. The genuine remaining MATHEMATICAL bridges are named as `Prop`s below:
 
 * **`RingRepFaithful`** — the concrete fast NTT path computes the negacyclic ring product for ALL polys:
-  `intt (pointwiseMul (ntt a) (ntt b)) = schoolbookMul a b`. Today only `MlDsaRing.ntt_computes_negacyclic_mul`
-  (ONE sample pair, `native_decide`) is proven. This is the ∀-lift — a real NTT-correctness proof, LIFTABLE
-  from Mathlib's roots-of-unity/DFT machinery, NOT a hardness carrier. IT is what makes verifyCore's per-row
+  `intt (pointwiseMul (ntt a) (ntt b)) = schoolbookMul a b`. CLOSED for-all in `Dregg2.Crypto.NttFaithful`
+  (`ringRepFaithful_proven`, carried under the gate name `ntt_computes_negacyclic_mul` there) — a real
+  NTT-correctness proof, axiom-clean, no `native_decide`, NOT a hardness carrier. IT makes verifyCore's per-row
   `intt(Σ Â⊙ntt(z) − ĉ⊙ntt(2^d·t1))` equal the spec's `A·z − c·t1·2^d`.
 * **`WOneRecoversSpec`** — the concrete per-coefficient `w1` array equals the abstract recovery
   `UseHint(h, A·z − c·t1·2^d)`; combines `RingRepFaithful`, `ExpandA`-as-matrix, and the rounding leg. This
@@ -161,9 +161,9 @@ theorem verify_accept_imp_normBound (pk M ctx sig : List UInt8)
 / `expandA`-matmul / `decompose`-rounding is a legitimate INSTANTIATION, not a gap. The genuine remaining
 MATHEMATICAL bridges — each a real ∀-statement, none a hardness carrier — are named here as `Prop`s. -/
 
-/-- **RESIDUAL (ring representation).** The concrete fast NTT path computes the negacyclic ring product for
-ALL poly pairs. Today only `MlDsaRing.ntt_computes_negacyclic_mul` (one `native_decide` sample) is proven;
-this is the ∀-lift, a real NTT-correctness proof liftable from Mathlib's DFT/roots-of-unity machinery. It is
+/-- **RESIDUAL (ring representation) — CLOSED.** The concrete fast NTT path computes the negacyclic ring
+product for ALL poly pairs. Proven for-all in `Dregg2.Crypto.NttFaithful` (`ringRepFaithful_proven`, gate
+name `ntt_computes_negacyclic_mul` there), axiom-clean, no `native_decide` — Mathlib roots-of-unity. It is
 exactly what turns verifyCore's `intt(Σ Â⊙ntt(z) − ĉ⊙ntt(2^d·t1))` into the spec's `A·z − c·t1·2^d`. -/
 def RingRepFaithful : Prop :=
   ∀ a b : Poly, a.size = 256 → b.size = 256 →

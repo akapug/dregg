@@ -3,7 +3,9 @@
 
 `VerifyCoreSpec.RingRepFaithful : Prop := ∀ a b : Poly, intt (pointwiseMul (ntt a) (ntt b)) = schoolbookMul a b`
 is the load-bearing ∀-bridge behind `verifyCore = spec`: the fast NTT multiply computes the negacyclic ring
-product for ALL poly pairs, not just the one `native_decide` sample `MlDsaRing.ntt_computes_negacyclic_mul`.
+product for ALL poly pairs. The former one-sample `native_decide` gates (`ntt_computes_negacyclic_mul`,
+`ntt_intt_id`) are now themselves ∀-theorems HERE, proven from this closure — no `native_decide` remains
+anywhere in this module (the concrete samples are kernel-clean specializations).
 
 ## What THIS module establishes (all axiom-clean, no `native_decide` in any ∀-body)
 
@@ -23,8 +25,8 @@ product for ALL poly pairs, not just the one `native_decide` sample `MlDsaRing.n
    rewrite `intt(ntt a ⊙ ntt b) = intt(ntt(a·b)) = a·b`.
 
 3. **Non-vacuity of both residuals** on a wraparound-exercising sample (`nttLeftInverse_sample`,
-   `nttMulHom_sample`, concrete `native_decide` witnesses — NOT inside any ∀). Both hypotheses of the
-   reduction genuinely HOLD, so `ringRepFaithful_of` is a real reduction, not a vacuous implication.
+   `nttMulHom_sample`, `ntt_negacyclic_mul_sample`) — now KERNEL-CLEAN specializations of the proven
+   ∀-theorems (guards `sampleA_size`/`sampleA_lt` by `decide`/`set!_lt`), no `native_decide` anywhere.
 
 ## THE LADDER climbed here (rungs 0/1/3 CLOSED; rung 2 is the named wall)
 
@@ -685,6 +687,10 @@ theorem zeroPoly_get (m : Nat) : zeroPoly[m]! = 0 := by
 theorem zeroPoly_cast (m : Nat) : ((zeroPoly[m]! : Nat) : ZMod q) = 0 := by
   rw [zeroPoly_get]; simp
 
+/-- `zeroPoly` is reduced: every coefficient `< q`. -/
+theorem zeroPoly_lt : ∀ (p : Nat), zeroPoly[p]! < q := by
+  intro p; rw [zeroPoly_get]; unfold q; omega
+
 set_option maxRecDepth 8000 in
 /-- **Outer accumulator.** Summing the per-row contributions across all rows `i < ni`: slot `m` carries
 `∑_{i<ni} ∑_{j<256} cJ(i,j,m)`. -/
@@ -990,17 +996,10 @@ theorem ringRepFaithful_of (hInv : NttLeftInverse) (hHom : NttMulHom) : RingRepF
 
 /-! ## PART 3 — NON-VACUITY: both residuals HOLD on a wraparound-exercising sample.
 
-`native_decide` here is the concrete SAMPLE witness only — NOT inside any ∀-theorem. It certifies that the two
-hypotheses of `ringRepFaithful_of` are genuinely true (so the reduction is real, not a vacuous implication),
-on the same high-degree `sampleA, sampleB` whose product exercises the `X²⁵⁶ = −1` sign wrap. -/
-
-/-- The left-inverse residual holds on the concrete sample (this is `MlDsaRing.ntt_intt_id`, restated as a
-witness that `NttLeftInverse` is instantiable). -/
-theorem nttLeftInverse_sample : intt (ntt sampleA) = sampleA := by native_decide
-
-/-- The ring-hom residual holds on the concrete wraparound sample: `ntt(a·b) = ntt a ⊙ ntt b`. -/
-theorem nttMulHom_sample :
-    ntt (schoolbookMul sampleA sampleB) = pointwiseMul (ntt sampleA) (ntt sampleB) := by native_decide
+The concrete witnesses (`nttLeftInverse_sample`, `nttMulHom_sample`, on the high-degree `sampleA, sampleB`
+whose product exercises the `X²⁵⁶ = −1` sign wrap) live AFTER the closure theorems below — they are now
+kernel-clean SPECIALIZATIONS of the proven ∀-theorems (guards `sampleA_size`/`sampleA_lt` discharged by
+`decide`/`set!_lt`), carrying NO `ofReduceBool`/`trustCompiler`; the former `native_decide` proofs are GONE. -/
 
 /-! ### RUNG 2, step 2 — THE CT STAGE-INVARIANT INDUCTION, CLOSED (forward `nttEvalsAtRoots`).
 
@@ -2316,6 +2315,62 @@ of the textbook reduction are now proven for-all (no `native_decide` in any `∀
 theorem ringRepFaithful_proven : Dregg2.Crypto.VerifyCoreSpec.RingRepFaithful :=
   ringRepFaithful_of_leftInverse nttLeftInverse_proven
 
+/-! ### THE GATE NAMES, FOR-ALL — the former `MlDsaRing` one-sample `native_decide` gates, restated as the
+∀-theorems they always wanted to be (and proven from the closure above, not re-asserted). The `native_decide`
+compiled-evaluation residual on both is GONE; axiom set ⊆ {propext, Classical.choice, Quot.sound}. -/
+
+/-- **Round-trip, FOR ALL canonical reduced polys**: `intt (ntt c) = c`. The inverse transform is a true
+inverse (correct twiddle order AND `256⁻¹` scaling) — formerly the one-sample `native_decide` gate
+`MlDsaRing.ntt_intt_id`; now the guarded ∀-theorem (= `nttLeftInverse_proven` under its gate name). -/
+theorem ntt_intt_id (c : Poly) (hc : c.size = 256) (hred : ∀ (p : Nat), c[p]! < q) :
+    intt (ntt c) = c :=
+  nttLeftInverse_proven c hc hred
+
+/-- **THE load-bearing gate, FOR ALL size-256 poly pairs**: the fast NTT path equals the ground-truth
+negacyclic ring product, `intt (pointwiseMul (ntt a) (ntt b)) = schoolbookMul a b` — formerly the one-sample
+`native_decide` gate `MlDsaRing.ntt_computes_negacyclic_mul`; now the ∀-theorem (= `ringRepFaithful_proven`
+under its gate name; no reduced-ness guard needed — both sides reduce internally). -/
+theorem ntt_computes_negacyclic_mul (a b : Poly) (ha : a.size = 256) (hb : b.size = 256) :
+    intt (pointwiseMul (ntt a) (ntt b)) = schoolbookMul a b :=
+  ringRepFaithful_proven a b ha hb
+
+/-! ### NON-VACUITY (PART 3, relocated): the guards are genuinely instantiable, kernel-clean.
+
+`sampleA`/`sampleB` (`1 + 2X + 7X²⁵⁵`, `4 + 5X¹⁰⁰ + 6X²⁰⁰`; the product exercises the `X²⁵⁶ = −1` wrap)
+satisfy both guards by kernel reasoning (`size_set!` chain + `set!_lt`/`zeroPoly_lt` + tiny `decide`s), so
+every ∀-gate above yields its concrete instance WITHOUT `native_decide` — the former compiled-evaluation
+witnesses are now kernel-clean corollaries. -/
+
+/-- `sampleA` is canonical: 256 coefficients. -/
+theorem sampleA_size : sampleA.size = 256 := by
+  unfold sampleA setC; rw [size_set!, size_set!, size_set!]; simp [zeroPoly]
+
+/-- `sampleB` is canonical: 256 coefficients. -/
+theorem sampleB_size : sampleB.size = 256 := by
+  unfold sampleB setC; rw [size_set!, size_set!, size_set!]; simp [zeroPoly]
+
+/-- `sampleA` is reduced: every coefficient `< q`. -/
+theorem sampleA_lt : ∀ (p : Nat), sampleA[p]! < q := by
+  unfold sampleA setC
+  exact set!_lt _ _ _ (set!_lt _ _ _ (set!_lt _ _ _ zeroPoly_lt (by decide)) (by decide)) (by decide)
+
+/-- The left-inverse residual holds on the concrete sample (this is the old `MlDsaRing.ntt_intt_id`
+statement) — now a kernel-clean specialization of `ntt_intt_id`, NOT a `native_decide` run. -/
+theorem nttLeftInverse_sample : intt (ntt sampleA) = sampleA :=
+  ntt_intt_id sampleA sampleA_size sampleA_lt
+
+/-- The ring-hom residual holds on the concrete wraparound sample: `ntt(a·b) = ntt a ⊙ ntt b` —
+kernel-clean specialization of `nttMulHom_proven`. -/
+theorem nttMulHom_sample :
+    ntt (schoolbookMul sampleA sampleB) = pointwiseMul (ntt sampleA) (ntt sampleB) :=
+  nttMulHom_proven sampleA sampleB sampleA_size sampleB_size
+
+/-- The full fast-multiply gate on the concrete wraparound sample (the old
+`MlDsaRing.ntt_computes_negacyclic_mul` statement) — kernel-clean specialization. -/
+theorem ntt_negacyclic_mul_sample :
+    intt (pointwiseMul (ntt sampleA) (ntt sampleB)) = schoolbookMul sampleA sampleB :=
+  ntt_computes_negacyclic_mul sampleA sampleB sampleA_size sampleB_size
+
 /-! ## PART 1h — `intt`-LINEARITY: the inverse transform commutes with `+`/`−` (leg 1 of the matmul bridge).
 
 `intt` is a composition of Gentleman–Sande butterfly sweeps (each ℤ_q-linear, `cast_gsSweep`) and a final
@@ -2381,10 +2436,6 @@ theorem pointwiseMul_lt (a b : Poly) : ∀ (p : Nat), (pointwiseMul a b)[p]! < q
   by_cases hp : p < 256
   · rw [pointwiseMul_getElem a b p hp]; exact mulModQ_lt _ _
   · rw [getElem!_ge _ p (by rw [pointwiseMul_size]; omega)]; unfold q; omega
-
-/-- `zeroPoly` is reduced (`< q`) at every slot. -/
-theorem zeroPoly_lt : ∀ (p : Nat), zeroPoly[p]! < q := by
-  intro p; rw [zeroPoly_get]; unfold q; omega
 
 /-- `intt` preserves the 256-coefficient length (reduced size-256 input). -/
 theorem intt_size (v : Poly) (hv : v.size = 256) (hvlt : ∀ (p : Nat), v[p]! < q) :
@@ -2540,8 +2591,9 @@ theorem intt_sub (u v : Poly) (hu : u.size = 256) (hv : v.size = 256)
 #assert_axioms intt_sub
 
 /-! ## Axiom gate on the new keystones (⊆ {propext, Classical.choice, Quot.sound}).
-Every rung climbed is checked clean; `zeta_root_witness`'s `ofReduceBool` (the concrete ζ=1753 pin) is
-deliberately NOT gated here — it is the accepted computational residual, isolated from the ∀-theorems. -/
+Every rung climbed is checked clean — including `zeta_root_witness` (the concrete ζ=1753 pin), which closes
+by kernel `decide` (the `Monoid.npow` route), so even the concrete pin carries no `ofReduceBool`. -/
+#assert_axioms zeta_root_witness
 #assert_axioms cast_addQ
 #assert_axioms cast_subQ
 #assert_axioms cast_mulModQ
@@ -2588,6 +2640,16 @@ deliberately NOT gated here — it is the accepted computational residual, isola
 #assert_axioms ringRepFaithful_proven
 #assert_axioms root_orth
 #assert_axioms nttRightInverse_proven
+-- THE GATE NAMES, FOR-ALL (former `native_decide` samples) + their kernel-clean sample specializations:
+-- every one ⊆ {propext, Classical.choice, Quot.sound}; the compiled-evaluation residual is GONE.
+#assert_axioms ntt_intt_id
+#assert_axioms ntt_computes_negacyclic_mul
+#assert_axioms sampleA_size
+#assert_axioms sampleB_size
+#assert_axioms sampleA_lt
+#assert_axioms nttLeftInverse_sample
+#assert_axioms nttMulHom_sample
+#assert_axioms ntt_negacyclic_mul_sample
 -- TRUST-SHRINK (loop leg): the ζ gate closes by kernel `decide` through the `forIn → List.foldl`
 -- conversion `powModQ_eq_fold` (in `MlDsaRing`) — pin BOTH kernel-clean (no `ofReduceBool`/`trustCompiler`).
 #assert_axioms powModQ_eq_fold

@@ -28,8 +28,8 @@ of the `R_q` value. THIS module closes that coordinate inverse:
 (pointwiseMul (ntt c) (ntt s)))`, i.e. verifyCore's per-row value with the matrix entry `Â_ij` written as
 `ntt A_ij` for a ring preimage `A_ij`. The executable stores `Â := expandA ρ` DIRECTLY in the NTT domain, so
 `A_ij = intt Â_ij` and `ntt A_ij = Â_ij` needs the NTT right-inverse `ntt ∘ intt = id` (`ExpandAIsMatrix`) —
-a real, liftable NTT-correctness fact (same class as the already-closed `ringRepFaithful_proven`, and today a
-`native_decide` sample `MlDsaRing.ntt_intt_id`), NOT a hardness carrier. The final `challengeMatches =
+a real NTT-correctness fact, CLOSED for-all (`MlDsaRing.nttRightInverse_proven`; the left inverse is the
+∀-gate `ntt_intt_id` in `NttFaithful` — axiom-clean, no `native_decide`), NOT a hardness carrier. The final `challengeMatches =
 verifyB.hash` identification additionally wraps `w1Encode(w1')` under SHAKE-256 — a legitimate INSTANTIATION
 of `verifyB`'s generic `hash` field (its collision-resistance lives on the `HashSig`/`FoQrom` floor), not a
 soundness gap. Both are named precisely; the coordinate math — the `WOneRecoversSpec` core — is CLOSED here.

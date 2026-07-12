@@ -1,10 +1,12 @@
 /-
 # `Dregg2.Crypto.MlKemNttFaithful` — the ∀-lift of ML-KEM-768's INCOMPLETE-NTT faithfulness.
 
-The load-bearing gate `MlKemRing.ntt_computes_negacyclic_mul` — `intt (pointwiseNtt (ntt a) (ntt b)) =
-schoolbookMul a b` — is currently ONE `native_decide` sample. This module proves the ∀-form (the NTT-multiply
-computes the negacyclic ring product for ALL canonical poly pairs), mirroring the CLOSED ML-DSA analog
-`Dregg2.Crypto.NttFaithful` (`ringRepFaithful_proven` + its whole ladder).
+The load-bearing gate `ntt_computes_negacyclic_mul` — `intt (pointwiseNtt (ntt a) (ntt b)) =
+schoolbookMul a b` — was formerly ONE `native_decide` sample in `MlKemRing`. This module proves the ∀-form
+(the NTT-multiply computes the negacyclic ring product for ALL canonical poly pairs), mirroring the CLOSED
+ML-DSA analog `Dregg2.Crypto.NttFaithful` (`ringRepFaithful_proven` + its whole ladder) — and now carries
+the gate names themselves (`ntt_intt_id`, `ntt_computes_negacyclic_mul`) as ∀-theorems, with the concrete
+samples kernel-clean specializations. NO `native_decide` remains anywhere in this module.
 
 ## THE KEY DIFFERENCE — ML-KEM's NTT is INCOMPLETE (the Kyber-vs-Dilithium split)
 
@@ -58,7 +60,8 @@ orthogonality `zeta_sq_orthogonality`), leaving `128⁻¹·128·c[2i+r] = c[2i+r
 Every keystone (forward AND inverse) is `#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}); the
 `ζ`-order, `brv7` congruences, and `brv7` involution are plain `decide` (kernel reduction, NOT `native_decide`),
 so no `ofReduceBool` residual in any `∀`-body. The guards (`a.size = 256`, reducedness) match the deployed
-pipeline exactly, as in the ML-DSA proof; the existing concrete `native_decide` sample is untouched (non-vacuity).
+pipeline exactly, as in the ML-DSA proof; the concrete non-vacuity samples are kernel-clean specializations
+of the ∀-theorems (guards discharged by `set!_lt`/`decide`) — the former `native_decide` witnesses are GONE.
 -/
 import Dregg2.Crypto.MlKemRing
 import Dregg2.Tactics
@@ -2262,17 +2265,60 @@ theorem mlkem_ntt_ring_faithful :
       intt (pointwiseNtt (ntt a) (ntt b)) = schoolbookMul a b :=
   mlkem_faithful_of nttLeftInverse_proven
 
-/-! ## NON-VACUITY — both residuals HOLD on the wraparound sample (`native_decide` witnesses, NOT in any ∀). -/
+/-! ### THE GATE NAMES, FOR-ALL — the former `MlKemRing` one-sample `native_decide` gates, restated as the
+∀-theorems (proven from the closure above, not re-asserted). The `native_decide` compiled-evaluation residual
+on both is GONE; axiom set ⊆ {propext, Classical.choice, Quot.sound}. -/
 
-theorem nttLeftInverse_sample : intt (ntt sampleA) = sampleA := by native_decide
+/-- **Round-trip, FOR ALL canonical reduced polys**: `intt (ntt c) = c` (correct twiddle order AND the
+`128⁻¹ = 3303` scaling) — formerly the one-sample `native_decide` gate `MlKemRing.ntt_intt_id`; now the
+guarded ∀-theorem (= `nttLeftInverse_proven` under its gate name). -/
+theorem ntt_intt_id (c : Poly) (hc : c.size = 256) (hred : ∀ (p : Nat), c[p]! < q) :
+    intt (ntt c) = c :=
+  nttLeftInverse_proven c hc hred
+
+/-- **THE load-bearing gate, FOR ALL size-256 poly pairs**: the fast INCOMPLETE-NTT path equals the
+ground-truth negacyclic ring product — it forces the 7-stage transform AND the `BaseCaseMultiply` moduli
+`γ_i = ζ^{2·brv7(i)+1}` to all be right (a plain coefficient product fails it). Formerly the one-sample
+`native_decide` gate `MlKemRing.ntt_computes_negacyclic_mul`; now the ∀-theorem
+(= `mlkem_ntt_ring_faithful` under its gate name). -/
+theorem ntt_computes_negacyclic_mul (a b : Poly) (ha : a.size = 256) (hb : b.size = 256) :
+    intt (pointwiseNtt (ntt a) (ntt b)) = schoolbookMul a b :=
+  mlkem_ntt_ring_faithful a b ha hb
+
+/-! ## NON-VACUITY — both residuals HOLD on the wraparound sample, now as KERNEL-CLEAN specializations of
+the ∀-theorems (guards `sampleA_size`/`sampleA_lt` by `size_set!`/`set!_lt` + tiny `decide`s); the former
+`native_decide` witnesses are GONE. -/
+
+/-- `sampleA` is canonical: 256 coefficients. -/
+theorem sampleA_size : sampleA.size = 256 := by
+  unfold sampleA setC; rw [size_set!, size_set!, size_set!]; simp [zeroPoly]
+
+/-- `sampleB` is canonical: 256 coefficients. -/
+theorem sampleB_size : sampleB.size = 256 := by
+  unfold sampleB setC; rw [size_set!, size_set!, size_set!]; simp [zeroPoly]
+
+/-- `sampleA` is reduced: every coefficient `< q`. -/
+theorem sampleA_lt : ∀ (p : Nat), sampleA[p]! < q := by
+  unfold sampleA setC
+  exact set!_lt _ _ _ (set!_lt _ _ _ (set!_lt _ _ _ zeroPoly_lt (by decide)) (by decide)) (by decide)
+
+theorem nttLeftInverse_sample : intt (ntt sampleA) = sampleA :=
+  ntt_intt_id sampleA sampleA_size sampleA_lt
 
 theorem nttMulHom_sample :
-    ntt (schoolbookMul sampleA sampleB) = pointwiseNtt (ntt sampleA) (ntt sampleB) := by native_decide
+    ntt (schoolbookMul sampleA sampleB) = pointwiseNtt (ntt sampleA) (ntt sampleB) :=
+  nttMulHom_proven sampleA sampleB sampleA_size sampleB_size
+
+/-- The full fast-multiply gate on the concrete wraparound sample (the old
+`MlKemRing.ntt_computes_negacyclic_mul` statement) — kernel-clean specialization. -/
+theorem ntt_negacyclic_mul_sample :
+    intt (pointwiseNtt (ntt sampleA) (ntt sampleB)) = schoolbookMul sampleA sampleB :=
+  ntt_computes_negacyclic_mul sampleA sampleB sampleA_size sampleB_size
 
 /-! ## Axiom gate — every FORWARD keystone ⊆ {propext, Classical.choice, Quot.sound}.
 The `ζ`-order (`zeta_pow_neg_one`) and `brv7` congruences are plain `decide` (kernel reduction, NOT
-`native_decide`), so no `ofReduceBool` residual leaks into any `∀`-theorem. The two `native_decide` witnesses
-above (`nttLeftInverse_sample`, `nttMulHom_sample`) are concrete non-vacuity samples — deliberately NOT gated. -/
+`native_decide`), so no `ofReduceBool` residual leaks into any `∀`-theorem — and the non-vacuity samples
+are now kernel-clean specializations, gated below too: NO `native_decide` anywhere in this module. -/
 #assert_axioms cast_addQ
 #assert_axioms cast_subQ
 #assert_axioms cast_mulModQ
@@ -2339,6 +2385,15 @@ above (`nttLeftInverse_sample`, `nttMulHom_sample`) are concrete non-vacuity sam
 #assert_axioms ntt_pair
 #assert_axioms nttLeftInverse_proven
 #assert_axioms mlkem_ntt_ring_faithful
+-- THE GATE NAMES, FOR-ALL (former `native_decide` samples) + their kernel-clean sample specializations.
+#assert_axioms ntt_intt_id
+#assert_axioms ntt_computes_negacyclic_mul
+#assert_axioms sampleA_size
+#assert_axioms sampleB_size
+#assert_axioms sampleA_lt
+#assert_axioms nttLeftInverse_sample
+#assert_axioms nttMulHom_sample
+#assert_axioms ntt_negacyclic_mul_sample
 -- TRUST-SHRINK (loop leg): the ζ-order gate closes by kernel `decide` through the `forIn → List.foldl`
 -- conversion `powModQ_eq_fold` (in `MlKemRing`) — pin BOTH kernel-clean (no `ofReduceBool`/`trustCompiler`).
 #assert_axioms powModQ_eq_fold

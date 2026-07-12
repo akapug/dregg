@@ -55,8 +55,8 @@ PREDICATE: the SHAKE challenge fixed-point (`VerifyCoreSpec.challengeMatches`) A
   `VerifyCoreEqSpec` (at the γ₁ = 2¹⁹ width, `cbits = 20`), left unwired here.
 * **`Â_il = ntt(A_il)`** (NTT-domain matrix ↔ normal-domain matrix). `signRing_w_row` is stated in the
   normal-domain `(ntt t.1)(ntt t.2)` shape; identifying it with signCore's already-NTT-domain `expandA`
-  matrix `Â` needs `ntt ∘ intt = id` for-all (today only `MlDsaRing.ntt_intt_id`, one `native_decide`
-  sample). This is the IDENTICAL residual on the verify side (`toRq_intt_matmul_row` has the same shape) — a
+  matrix `Â` needs `ntt ∘ intt = id` for-all (CLOSED: `MlDsaRing.nttRightInverse_proven` in
+  `Dregg2.Crypto.NttFaithful`, axiom-clean, no `native_decide`). This is the IDENTICAL residual on the verify side (`toRq_intt_matmul_row` has the same shape) — a
   faithful-NTT fact, not a hardness carrier.
 * **The abstract `MlDsaParams.sign` instance over `R_q^k`** (constructing `A : R_q^l →ₗ R_q^k` as a
   `LinearMap`) is not built — as on the verify side, we stop at the per-row/per-coefficient `toRq` identities
