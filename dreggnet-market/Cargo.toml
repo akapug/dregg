@@ -1,0 +1,40 @@
+[package]
+name = "dreggnet-market"
+version = "0.1.0"
+edition = "2024"
+description = "DreggNet offering #commerce — a sealed-bid AUCTION/MARKET (list → sealed bid → settle) as a `dreggnet_offerings::Offering`. Proves the Offering abstraction reaches an ECONOMIC flow (value moves), beyond the game/agent/grain/governance offerings. Wraps the REAL sealed-auction substrate (`starbridge-sealed-auction`): a listing is a factory-born auction cell (a real verified birth turn); a bid is a sealed commit-reveal (`WriteOnce` commit board — a double-bid is a real executor refusal; a bid after the commit phase closes is refused); a settle reveals + clears to the winning sealed bid, and the value moves through the VERIFIED per-asset ring settlement (`dregg_intent::verified_settle::settle_ring_verified`, per-asset Σδ=0). The executor is the sole referee — a below-reserve / no-valid-bid auction does NOT settle."
+
+[dependencies]
+# THE OFFERING CORE — the frontend-agnostic `Offering` trait (open/actions/advance/
+# verify/render/price), `Action`/`Outcome`/`Surface`/`DreggIdentity`/`TurnReceipt`.
+# A `MarketOffering` is one more instance of the SAME abstraction the dungeon/council use.
+dreggnet-offerings = { path = "../dreggnet-offerings" }
+# THE COMMERCE SUBSTRATE — the sealed-bid auction: the in-process `Auction` commit/reveal/
+# settle state machine (its `settle` folds the award ring through the VERIFIED executor,
+# conservation-checked), `Bid`/`Seal`, and the on-ledger auction cell (the factory descriptor
+# whose `WriteOnce` commit board + `StrictMonotonic(PHASE)` lifecycle the executor re-enforces
+# every touching turn) with its `*_effects` turn builders. Consumed, NOT re-implemented.
+starbridge-sealed-auction = { path = "../starbridge-apps/sealed-auction" }
+# THE VERIFIED VALUE MOVE — `VerifiedLedger`/`VerifiedLeg`/`settle_ring_verified`: the conserved
+# per-asset ring settlement (the Rust image of the Lean `Ring.settleRing`, per-asset Σδ=0) the
+# auction clears the winning trade through. This is where the money actually moves.
+dregg-intent = { path = "../intent" }
+# The executor seam — `AppCipherclerk`/`AgentCipherclerk`/`EmbeddedExecutor` (the real embedded
+# verified executor a turn is refereed by), `TurnReceipt`, `Effect`, `field_from_u64`, and the
+# factory-birth path (`create_from_factory` + `FactoryCreationParams`). `default-features = false`
+# takes the executor/turn core (no gpui), matching dreggnet-offerings.
+dregg-app-framework = { path = "../app-framework", default-features = false }
+# `FactoryCreationParams` / `CellState` / `CellMode` — the factory-birth parameters and the live
+# cell state the phase precondition reads. `default-features = false` matches the substrate crate.
+dregg-cell = { path = "../cell", default-features = false }
+# `CellId` — the born auction cell's id (derived from owner+token, the listing's on-ledger handle).
+dregg-types = { path = "../types" }
+# The deos affordance view-tree an offering's `render` produces (`Section`/`Menu`/`Text`) — the
+# SAME surface model dreggnet-offerings re-exports; used to paint the listing + bids as affordances.
+deos-view = { path = "../deos-view", default-features = false }
+# Deterministic bidder-handle + nonce derivation (a `DreggIdentity` → a stable auction `CellId`
+# handle; a sealed bid's blinding nonce) — the same hash the substrate seals bids with.
+blake3 = "1"
+
+[lints]
+workspace = true
