@@ -415,7 +415,9 @@ Suppose, for the Argus emitEvent term:
 
 Then the RUNNABLE descriptor's pinned post-state `post` AGREES with the EXECUTOR's post-cell projection
 `cellProjE s'.kernel c` on every CONSERVED economic-kernel component (`balLo`/`balHi`/`fields`/`capRoot`/
-`reserved`), AND the side-table roots `sr` are FROZEN at `preRoots`. So the circuit the prover RUNS for
+`reserved`) — as the DEBT-A BabyBear-field congruence `≡ [ZMOD 2013265921]` the deployed gate actually
+forces (a FREEZE/TICK equality, NOT an order, so mod-p-faithful with no ℤ-lift), AND the side-table roots
+`sr` are FROZEN at `preRoots`. So the circuit the prover RUNS for
 emit binds the full 17-field kernel post-state the IR term's executor produces — the per-cell economic
 block (via the absorbed columns) AND the 8 side-table roots (via the wide commitment).
 
@@ -435,30 +437,36 @@ theorem emitEvent_runnable_full_state_weld
     (hpre : pre = cellProjE s.kernel c)
     (hgatesat : satisfiedVm hash emitEventVmDescriptorWide env true false)
     (hexec : execFullA s (.emitEventA actor cell topic data) = some s') :
-    ( post.balLo = (cellProjE s'.kernel c).balLo
-      ∧ post.balHi = (cellProjE s'.kernel c).balHi
-      ∧ (∀ i, post.fields i = (cellProjE s'.kernel c).fields i)
-      ∧ post.capRoot = (cellProjE s'.kernel c).capRoot
-      ∧ post.reserved = (cellProjE s'.kernel c).reserved )
-    ∧ post.nonce = (cellProjE s'.kernel c).nonce + 1
+    ( post.balLo ≡ (cellProjE s'.kernel c).balLo [ZMOD 2013265921]
+      ∧ post.balHi ≡ (cellProjE s'.kernel c).balHi [ZMOD 2013265921]
+      ∧ (∀ i, post.fields i ≡ (cellProjE s'.kernel c).fields i [ZMOD 2013265921])
+      ∧ post.capRoot ≡ (cellProjE s'.kernel c).capRoot [ZMOD 2013265921]
+      ∧ post.reserved ≡ (cellProjE s'.kernel c).reserved [ZMOD 2013265921] )
+    ∧ post.nonce ≡ (cellProjE s'.kernel c).nonce + 1 [ZMOD 2013265921]
     ∧ sr = preRoots := by
   -- RUNNABLE circuit side: the wide descriptor pins `EmitTickCellSpec pre post` (economic block frozen,
-  -- the actor nonce ticked) + frozen roots.
+  -- the actor nonce ticked) + frozen roots. Under DEBT-A the `holdsVm .gate` denotation is a BabyBear
+  -- field congruence, so each block-freeze / nonce-tick fact is `≡ [ZMOD p]` (the deployed circuit forces
+  -- the value mod p, `p = 2013265921 < 2³¹`), NOT a bare ℤ equality.
   obtain ⟨hfreeze, hsr⟩ :=
     emitEvent_runnable_full_sound hash env pre post sr preRoots hrow henc hroots hgatesat
   obtain ⟨hcLo, hcHi, hcN, hcF, hcCap, hcRes⟩ := hfreeze
   -- executor side: the committed emit freezes the WHOLE kernel (all 6 block components, INCLUDING the
-  -- cell-nonce FIELD), so `cellProjE` of pre = post per cell.
+  -- cell-nonce FIELD), so `cellProjE` of post ≡ pre [ZMOD p] per cell.
   obtain ⟨heLo, heHi, heN, heF, heCap, heRes⟩ := unify_emitEvent_exec s s' actor cell c topic data hexec
   subst hpre
+  -- Compose the two mod-p congruences (descriptor-post ≡ pre, executor-post ≡ pre) by transitivity into
+  -- descriptor-post ≡ executor-post, faithful to the field denotation (NO ℤ-lift: order is never invoked,
+  -- these are FREEZE/TICK equalities, not the availability-class order over an un-range-checked limb).
   refine ⟨⟨?_, ?_, ?_, ?_, ?_⟩, ?_, hsr⟩
-  · rw [hcLo, heLo]
-  · rw [hcHi, heHi]
-  · intro i; rw [hcF i, heF i]
-  · rw [hcCap, heCap]
-  · rw [hcRes, heRes]
-  · -- the actor-nonce ticks ONE above the (frozen) cell-nonce field.
-    rw [hcN, heN]
+  · exact hcLo.trans heLo.symm
+  · exact hcHi.trans heHi.symm
+  · intro i; exact (hcF i).trans (heF i).symm
+  · exact hcCap.trans heCap.symm
+  · exact hcRes.trans heRes.symm
+  · -- the actor-nonce ticks ONE above the (frozen) cell-nonce field, mod p: descriptor-post ≡ pre + 1,
+    -- executor-post ≡ pre ⇒ pre + 1 ≡ executor-post + 1 ⇒ descriptor-post ≡ executor-post + 1.
+    exact hcN.trans (heN.symm.add_right 1)
 
 #assert_axioms emitEvent_runnable_full_state_weld
 
