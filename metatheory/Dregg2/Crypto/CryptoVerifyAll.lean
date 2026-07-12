@@ -39,3 +39,18 @@ import Dregg2.Crypto.UcSignatureQuant
 import Dregg2.Crypto.HybridThresholdQuant
 import Dregg2.Crypto.ProtocolSoundnessQuant
 import Dregg2.Crypto.AcvpKats
+import Dregg2.Tactics
+
+/-! ## Trust-shrink pins — the loop-leg `forIn → List.foldl` conversions.
+
+The SHAKE KATs and both ζ gates close by KERNEL `decide` through the fold towers
+(`Keccak.shake256_eq_fold`/`shake128_eq_fold`, `MlDsaRing.powModQ_eq_fold`,
+`MlKemRing.powModQ_eq_fold`): pinned here so a `native_decide` regression
+(`Lean.ofReduceBool`/`trustCompiler` re-entering these axiom sets) fails THIS aggregator. -/
+#assert_all_clean [Dregg2.Crypto.Keccak.shake256_empty_kat,
+  Dregg2.Crypto.Keccak.shake128_empty_kat,
+  Dregg2.Crypto.Keccak.shake256_abc_kat,
+  Dregg2.Crypto.Keccak.shake128_abc_kat,
+  Dregg2.Crypto.Keccak.shake256_empty_prefix,
+  Dregg2.Crypto.MlDsaRing.zeta_primitive_512th_root,
+  Dregg2.Crypto.MlKemRing.zeta_order]

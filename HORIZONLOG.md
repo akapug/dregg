@@ -7558,3 +7558,19 @@ mismatch; cross-crate tags pinned (Solana 0/Evm 1/Cosmos 2). Thread-3 core DONE.
 Wave 2 running: Base OP-stack finality (L1-anchored output root → L2 state → ERC-20, in eth-lightclient) +
 secp256k1 EVM-address owner binding (so EVM holders can actually bind→vote, closing the Ed25519-only gap).
 Followups: Cosmos secp256k1/bech32 binding; the shrink-layer + rung-3 fold-P0 blocked on circuit-prove churn.
+
+## Trust-shrink loop leg: forIn→List.foldl kills 7 native_decide, incl ALL SHAKE KATs (2026-07-12, Fable lane)
+
+The Seam-4 loop-based native_decide gates were structure-bound, NOT cost-bound. Std.Range.forIn is WF
+recursion the kernel cannot reduce; the equal List.foldl over concrete List.range' reduces fine, and the
+kernel GMP-accelerates the Nat bitwise ops under UInt64/BitVec — a full fold-shaped Keccak-f[1600] kernel-
+reduces in ~5s (probe-measured). Landed (611df076a + this): powModQ_eq_fold moved down into MlDsaRing/
+MlKemRing (zeta_primitive_512th_root + zeta_order → kernel decide), and Keccak.lean grew the full conversion
+tower (kRoundFold/kFFold/absorbFold/squeezeFold + _eq_fold, squeezeFold matching the do-desugaring's MProd
+state) → all 5 SHAKE KATs kernel decide; Keccak.lean now has ZERO native_decide. Axiom sets verified
+{propext, Classical.choice, Quot.sound}; 11 keystones pinned in CryptoVerifyAll #assert_all_clean; chain
+green (8533 jobs). Dregg2/Crypto native_decide: 86 → 79.
+- FOLLOW-UP (winnable, same tower): MlDsaRing/MlKemRing poly gates (ntt_intt_id, ntt_computes_negacyclic_mul)
+  — ntt/intt/pointwise fold mirrors; schoolbookMul is 65K mulModQ ≈ 1-2min kernel, batch at leaf modules.
+- GENUINELY cost-bound (stays native_decide): AcvpKats ML-DSA/ML-KEM batches — dozens-to-hundreds of
+  keccakF + NTT per theorem ≈ hours of kernel time vs seconds compiled.
