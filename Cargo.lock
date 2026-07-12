@@ -5899,6 +5899,7 @@ dependencies = [
 name = "dregg-pay"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "blake3",
  "bs58",
  "collective-choice",
@@ -6229,6 +6230,7 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "dregg-app-framework",
+ "dregg-captp",
  "dregg-cell",
  "dregg-types",
  "serde",
@@ -6524,6 +6526,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "dreggnet-council"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "collective-choice",
+ "deos-view",
+ "dregg-app-framework",
+ "dregg-cell",
+ "dreggnet-offerings",
+]
+
+[[package]]
 name = "dreggnet-grain"
 version = "0.1.0"
 dependencies = [
@@ -6541,6 +6555,7 @@ name = "dreggnet-hermes"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "deos-hermes",
  "deos-view",
  "dregg-sdk",
  "dreggnet-offerings",
@@ -6587,6 +6602,21 @@ dependencies = [
  "serde_json",
  "tokio",
  "tower",
+]
+
+[[package]]
+name = "dreggnet-wechat"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "deos-view",
+ "dregg-sdk",
+ "dreggnet-offerings",
+ "dungeon-on-dregg",
+ "hex",
+ "serde",
+ "serde_json",
+ "zeroize",
 ]
 
 [[package]]
@@ -8558,6 +8588,7 @@ dependencies = [
  "dregg-circuit",
  "dregg-circuit-prove",
  "dregg-lean-ffi",
+ "dregg-query",
  "dregg-sdk",
  "dregg-turn",
  "grain-verify",
@@ -16601,6 +16632,25 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+]
+
+[[package]]
+name = "sandstorm-serve"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-auth",
+ "ed25519-dalek",
+ "fs2",
+ "grain-commons",
+ "http-serve",
+ "libc",
+ "postcard",
+ "sandstorm-bridge",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

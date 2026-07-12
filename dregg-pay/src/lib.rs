@@ -56,12 +56,16 @@
 //! * **The endgame is protocol-native settlement** — run budget as a conserved
 //!   on-chain `Effect::Transfer` balance, so no operator holds user funds. This
 //!   backend is the pragmatic bridge to that.
-//! * **Deferred, signer-gated follow-ups.** This crate is the payment / treasury /
-//!   pricing / OTC-QUOTE core. Three pieces execute behind the operator's signer and
-//!   are NOT here yet: (1) the pile→fuel **swap execution** (`$DREGG`→SOL→USDC via
-//!   Jupiter), (2) the collective-governed **liquidity vote**, and (3) the **OTC
-//!   transfer settlement** (`otc_settle` — moving the quoted `$DREGG` to the buyer).
-//!   Mainnet is a config flip on ember's go; custody remains the seed/signer.
+//! * **Signer-gated edges — built here, behind the operator's signer.** The
+//!   collective-governed **liquidity vote** ([`governance`]), the pile→fuel **swap
+//!   execution** ([`swap`] — the real Jupiter v6 `$DREGG`→SOL→USDC quote + swap-tx
+//!   build, over injected [`HttpGet`]/[`HttpPost`] seams), and the **OTC transfer
+//!   settlement** ([`otc::otc_settle`]) all land in this crate. Each verifies a
+//!   governance/vote gate and signs behind an operator-held [`Signer`]; `dregg-pay`
+//!   holds no key. What a LIVE swap still needs is a real HTTP transport bound to the
+//!   seams, the operator's secured signer over the built tx, and broadcast (splice the
+//!   signature, `sendTransaction`, read realized-out) — mainnet is a config flip on
+//!   ember's go; custody remains the seed/signer.
 
 pub mod config;
 pub mod governance;
@@ -97,8 +101,9 @@ pub use pricing::{
     parse_jupiter_price, runs_for_payment,
 };
 pub use swap::{
-    GovernanceAuthority, JupiterSwap, MockSigner, MockSwapVenue, Signer, SignerError,
-    SwapAuthorization, SwapError, SwapOutcome, SwapRoute, SwapVenue, UnsignedSwapTx, swap_message,
+    BuiltSwap, GovernanceAuthority, HttpPost, JupiterQuote, JupiterSwap, JupiterVenue, MockSigner,
+    MockSwapVenue, RouteHop, Signer, SignerError, SwapAuthorization, SwapError, SwapOutcome,
+    SwapRoute, SwapVenue, UnsignedSwapTx, parse_jupiter_quote, solana_sign_target, swap_message,
 };
 pub use sweeper::{
     MockSweeper, SolanaSweeper, SweepError, SweepOutcome, SweepRequest, Sweeper, TxSubmitter,

@@ -34,6 +34,9 @@ zeroize = { workspace = true }
 # Parse the Jupiter response structurally. Text-searching for the mint lets an
 # attacker place it in an unrelated `id` value and smuggle a different price.
 serde_json = { workspace = true }
+# Decode Jupiter's base64-encoded `swapTransaction` (the real unsigned v6 tx bytes)
+# back into the exact Solana message the operator signs. No network in the core.
+base64 = { workspace = true }
 
 [dev-dependencies]
 # Verify the derived deposit key produces real, verifiable ed25519 signatures
