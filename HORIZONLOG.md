@@ -7592,3 +7592,15 @@ game slot-0 (status==DEFENDER_WINS) → ASR blacklist exclusion → airgap predi
 The type-621 rootClaim recomputes EXACTLY as a v0 output root, so base.rs's L2 tail carries over; only new helper
 = verify_evm_storage_slot_absent (MPT exclusion). Trust delta named honestly (TEE/ZK-soundness-at-creation, not
 challenger-liveness). First build increment: live game index 17049. Build is the honest live-Base completion.
+
+## Live-Base fault-proof anchor BUILT + alloy-trie exclusion finding (2026-07-12, multichain lane)
+eth-lightclient/src/base_fault_proof.rs: the 8-link type-621 AggregateVerifier trust chain (ASR respectedType
+-> keystone GameId binding -> game slot-0 DEFENDER_WINS -> blacklist EXCLUSION -> airgap predicate -> reuses
+verify_op_output_root -> L2 ERC-20). REAL-EXTERNAL fixture (live game 17049, L1 block 25514711; every packed
+word matched raw eth_getStorageAt, UUID vs on-chain getGameUUID). 132 crate tests. SECURITY FINDING (verified
+myself): alloy-trie 0.9.5 verify_proof(..,None,..) accepts a truncated INCLUSION-proof prefix as EXCLUSION ->
+blacklist-bypass; compensated with a strict-termination re-walk (both gates required) + a pinning test.
+⚑ REPORT UPSTREAM to alloy-trie. Closed a residual: FinalizedExecution.execution_timestamp (consensus-verified
+airgap clock). Trust delta honest (policy_delay = caller knob not protocol guarantee; TEE-or-ZK validity floor).
+Live-Base proof-of-holdings now real (not just the legacy L2OutputOracle). Followup: upstream the alloy-trie fix;
+CWIA code-hash recomputation (currently a fixture constant).
