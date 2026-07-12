@@ -5245,6 +5245,7 @@ dependencies = [
  "p3-air",
  "p3-baby-bear",
  "p3-batch-stark",
+ "p3-bn254",
  "p3-challenger",
  "p3-circuit",
  "p3-circuit-prover",
@@ -5255,6 +5256,7 @@ dependencies = [
  "p3-lookup",
  "p3-matrix",
  "p3-merkle-tree",
+ "p3-poseidon2",
  "p3-poseidon2-circuit-air",
  "p3-recursion",
  "p3-symmetric",
@@ -5636,6 +5638,8 @@ dependencies = [
  "dregg-lean-ffi",
  "ed25519-dalek",
  "k256",
+ "ripemd",
+ "sha2 0.10.9",
  "sha3",
 ]
 
@@ -6529,6 +6533,36 @@ dependencies = [
  "dungeon-on-dregg",
  "spween",
  "spween-dregg",
+]
+
+[[package]]
+name = "dreggnet-telegram"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "deos-view",
+ "dregg-sdk",
+ "dreggnet-offerings",
+ "dungeon-on-dregg",
+ "hex",
+ "serde",
+ "serde_json",
+ "zeroize",
+]
+
+[[package]]
+name = "dreggnet-web"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "blake3",
+ "deos-view",
+ "dreggnet-offerings",
+ "dungeon-on-dregg",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower",
 ]
 
 [[package]]
@@ -13469,6 +13503,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "p3-bn254"
+version = "0.5.1"
+source = "git+https://github.com/Plonky3/Plonky3?rev=82cfad73cd734d37a0d51953094f970c531817ec#82cfad73cd734d37a0d51953094f970c531817ec"
+dependencies = [
+ "num-bigint",
+ "p3-field",
+ "p3-poseidon2",
+ "p3-symmetric",
+ "p3-util",
+ "paste",
+ "rand 0.10.1",
+ "serde",
+]
+
+[[package]]
 name = "p3-challenger"
 version = "0.5.1"
 source = "git+https://github.com/Plonky3/Plonky3?rev=82cfad73cd734d37a0d51953094f970c531817ec#82cfad73cd734d37a0d51953094f970c531817ec"
@@ -14942,7 +14991,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b570b25f7617e43d59005d0990ccb79e950a423952cea19671b7a876da390adf"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "syn 2.0.118",
@@ -15864,6 +15913,15 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "ripemd"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bd124222d17ad93a644ed9d011a40f4fb64aa54275c08cc216524a9ea82fb09f"
+dependencies = [
+ "digest 0.10.7",
 ]
 
 [[package]]
@@ -20730,7 +20788,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand 2.4.1",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.61.2",

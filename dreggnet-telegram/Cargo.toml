@@ -1,0 +1,63 @@
+# `dreggnet-telegram` — the FIRST non-Discord frontend for DreggNet Cloud.
+#
+# A `TelegramFrontend` implementing the frontend-agnostic `Frontend` trait from
+# the committed `dreggnet-offerings` crate, so a Telegram user plays the SAME
+# `DungeonOffering` (offering #0) on the SAME real dregg substrate as the Discord
+# bot — the same cap-gated affordances, the same real verifiable `TurnReceipt`s.
+# It proves the frontend-agnostic core: only the SURFACE differs (an inline
+# keyboard instead of Discord buttons); the executor stays the sole referee.
+#
+# THE INJECTED-TRANSPORT SEAM (the load-bearing design decision): the Telegram
+# Bot API surface is split into a PURE request-builder (`api::build_present_request`
+# → a serde `SendMessageRequest` == the real Bot API `sendMessage` wire body) and a
+# `Transport` trait that actually sends it. `MockTransport` records requests with NO
+# token and NO network, so the whole frontend logic is driven in a unit test — the
+# same split the discord-bot uses (`build_*_request` pure, separate from the live
+# `Http` call). A live `RawBotApi<H>` over an injected `HttpPost` is provided for a
+# real deploy; it needs a token + a reqwest-backed `HttpPost` impl (honest scope).
+#
+# A breadstuffs workspace MEMBER (registered in the root `members`, not
+# `default-members` — a heavy narrative-adjacent crate). Build/test on persvati:
+#   scripts/pbuild tg 'cargo test -p dreggnet-telegram'
+[package]
+name = "dreggnet-telegram"
+version = "0.1.0"
+edition = "2024"
+description = "A TelegramFrontend implementing dreggnet-offerings' Frontend trait: a Telegram user plays the same DungeonOffering on the same real dregg substrate as the Discord bot (derived identity, Surface->inline keyboard, callback->Action), with the Bot API transport INJECTED so the logic is testable with no token/network."
+
+[dependencies]
+# THE CORE — the frontend-agnostic Offering/Session/Frontend model + `DungeonOffering`
+# (offering #0) over the real substrate. This crate is a `Frontend` impl; it does NOT
+# re-implement any offering logic.
+dreggnet-offerings = { path = "../dreggnet-offerings" }
+# THE DEOS SURFACE — `ViewNode`, the serializable affordance view-tree an offering's
+# `render` produces. The Telegram renderer walks it into message text + an inline
+# keyboard. `default-features = false` = the gpui-free view-tree model only.
+deos-view = { path = "../deos-view", default-features = false }
+# REAL DERIVED IDENTITY — `AgentCipherclerk::from_key_bytes` → a genuine Ed25519 signing
+# identity, mirroring `discord-bot/cipherclerk.rs`'s `UserCipherclerk::derive` (only the
+# BLAKE3 domain differs: `dregg-telegram-bot-v1` vs `-discord-bot-v1`). `default-features
+# = false` = the offline cipherclerk core (no prover / exec-lean).
+dregg-sdk = { path = "../sdk", default-features = false }
+# The seed derivation (BLAKE3 derive_key) + the callback-data hash-free identity path.
+blake3 = "1"
+# Wipe the transient seed copy handed to `from_key_bytes` (as the discord cclerk does).
+zeroize = { workspace = true }
+# Hex-encode the derived Ed25519 public key (the `DreggIdentity` handle), matching the
+# discord bot's `hex::encode(agent.public_key().0)`.
+hex = "0.4"
+# The Bot API request/response bodies ARE serde types: a `SendMessageRequest` serializes
+# to exactly the real `sendMessage` JSON wire body (chat_id/text/reply_markup), so a test
+# asserting the request shape asserts the real wire shape.
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# A workspace MEMBER of the breadstuffs root (registered in `members`, not
+# `default-members`). The root `[workspace]` + `[patch]` tables apply; no standalone
+# `[workspace]`/`[patch]` here.
+
+[dev-dependencies]
+# Offering #0's committed universe — the `KP_*` choice constants the driven tests play a
+# winning / illegal line with (exactly as `dreggnet-offerings/tests/driven.rs` does). A
+# test-only dep: the frontend itself is offering-agnostic (it renders any `Offering`).
+dungeon-on-dregg = { path = "../dungeon-on-dregg" }

@@ -1,0 +1,56 @@
+# `dreggnet-web` — the WEB `Frontend` over the frontend-agnostic `dreggnet-offerings` core.
+#
+# The THIRD surface (Discord #0, Telegram, WEB) over ONE offering core. A
+# `WebFrontend` implements `dreggnet_offerings::Frontend` as an affordance-renderer
+# that paints a deos `Surface` into an HTML fragment (room prose/state + a form/button
+# per cap-gated affordance, each POSTing its `Action`), and an `axum` session surface:
+#   GET  /session/{id}          renders the current Surface as HTML
+#   POST /session/{id}/act      collects the Action, advances ONE real turn, re-renders
+#   GET  /session/{id}/verify   re-verifies the committed chain by replay
+#
+# HONEST SCOPE: this renders the affordance Surface as HTML DIRECTLY. The fuller
+# `deos-js` + `deos-web-cells` integration (the live signal-bound web cell rendering)
+# is the follow-up; it, plus a real deployment (a served bind address, sessions in a
+# store, `dregg-pay` credit debits on the paid tier), is out of scope here.
+#
+# A breadstuffs workspace MEMBER (root `members`, NOT `default-members` — a heavy
+# narrative-adjacent crate, matching `dreggnet-offerings`). Build/test:
+#   cargo test -p dreggnet-web
+[package]
+name = "dreggnet-web"
+version = "0.1.0"
+edition = "2024"
+description = "The web Frontend over dreggnet-offerings: a WebFrontend affordance-renderer (deos Surface -> HTML fragment) + an axum session surface (GET renders, POST advances one real turn), the third surface over the ONE offering core."
+
+[dependencies]
+# THE OFFERING CORE — the frontend-agnostic Offering/Frontend traits, DungeonOffering
+# (offering #0), Surface/Action/Outcome. This crate is a `Frontend` impl OVER it; it
+# does NOT modify it.
+dreggnet-offerings = { path = "../dreggnet-offerings" }
+# THE DEOS SURFACE — `ViewNode`/`MenuItem`, the view-tree a Surface wraps. The web
+# renderer WALKS this tree into HTML. `default-features = false` = the gpui-free
+# view-tree model only (no native/gpui/mozjs), matching dreggnet-offerings.
+deos-view = { path = "../deos-view", default-features = false }
+# The HTTP surface — axum 0.8 (the workspace's version; matches node/api.rs +
+# discord-bot/http_server.rs). Default features carry the `Form`/`Query` extractors
+# + the `Html`/`Json` responses this surface uses.
+axum = { version = "0.8" }
+# Form/query deserialization for the POST /act body ({turn, arg}) + the ?user= param.
+serde = { version = "1", features = ["derive"] }
+# The JSON body of GET /session/{id}/verify (the replay VerifyReport over HTTP).
+serde_json = "1"
+# Deterministic identity derivation (mirror of the MockFrontend shape: a web user ->
+# a stable DreggIdentity via blake3) + a deterministic session seed from a session id.
+blake3 = "1"
+
+[dev-dependencies]
+# Drive the axum handlers with no real network — `ServiceExt::oneshot`.
+tower = { version = "0.5", features = ["util"] }
+# The async test runtime for the oneshot-driven handlers.
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread"] }
+# The KP_* choice constants the driven test plays a winning / illegal line with.
+dungeon-on-dregg = { path = "../dungeon-on-dregg" }
+
+# A workspace MEMBER of the breadstuffs root (registered in `members`, not
+# `default-members`). The root `[workspace]` + `[patch]` tables apply; no standalone
+# `[workspace]`/`[patch]` here.
