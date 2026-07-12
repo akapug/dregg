@@ -1,0 +1,44 @@
+# `dreggnet-council` — a COLLECTIVE-GOVERNANCE offering (propose → vote → enact).
+#
+# The fourth DreggNet offering, beyond game (`dungeon`), agent (hosted-Hermes),
+# and grain (Sandstorm): a `dreggnet_offerings::Offering` whose per-session thing
+# is a COUNCIL over a real cell. It proves the Offering abstraction carries a
+# governance flow, not just a narrative one — the SAME `open/actions/advance/
+# verify/render/price` shape hosts propose → vote → enact.
+#
+# It is ASSEMBLY, not invention: the vote is the real `collective-choice` quorum
+# engine (write-once ballots + monotone tally + the polis AffineLe quorum gate),
+# and the enactment is a real committed turn on a council cell through the same
+# `EmbeddedExecutor` substrate the dungeon uses. A passed proposal enacts a real,
+# executor-refereed cell-state effect; a below-quorum one does not.
+#
+# A workspace MEMBER of the breadstuffs root (registered in `members`, not
+# `default-members`). The root `[workspace]` + `[patch]` tables apply; no
+# standalone `[workspace]`/`[patch]` here. Build/test:
+#   cargo test -p dreggnet-council
+[package]
+name = "dreggnet-council"
+version = "0.1.0"
+edition = "2024"
+description = "A collective-governance DreggNet offering — propose → vote → enact — implementing dreggnet_offerings::Offering over the real collective-choice quorum engine, enacting a passed proposal as a committed executor-refereed turn."
+
+[dependencies]
+# THE OFFERING CORE — the `Offering` trait (open/actions/advance/verify/render/
+# price), `Action`/`Outcome`/`Surface`/`VerifyReport`/`DreggIdentity`/`SessionConfig`.
+dreggnet-offerings = { path = "../dreggnet-offerings" }
+# THE QUORUM ENGINE — poll → write-once ballots → monotone tally → the AffineLe
+# quorum decision-turn. The SAME engine `/party` and the dregg-pay liquidity vote
+# consume. The council does NOT re-implement voting: it opens a per-option-gated
+# poll, casts ballots, and reads the executor-refereed decision.
+collective-choice = { path = "../collective-choice" }
+# THE SUBSTRATE — `EmbeddedExecutor` + `AppCipherclerk` (the real verified-turn
+# executor the enactment commits against), plus `Cell`/`Effect`/`CellProgram`/
+# `StateConstraint`/`FieldElement` for the council cell. `default-features = false`:
+# the wasm-clean core (matches collective-choice / dreggnet-offerings).
+dregg-app-framework = { path = "../app-framework", default-features = false }
+dregg-cell = { path = "../cell", default-features = false }
+# THE DEOS SURFACE — the gpui-free `ViewNode`/`MenuItem` an offering's `render`
+# produces (the council's proposals + votes as cap-gated affordances).
+deos-view = { path = "../deos-view", default-features = false }
+# The council-cell token / federation-id derivation (same hash the substrate uses).
+blake3 = "1"

@@ -1,0 +1,70 @@
+# `dreggnet-wechat` — the FOURTH frontend for DreggNet Cloud (after Discord #0,
+# Telegram, web).
+#
+# A `WeChatFrontend` implementing the frontend-agnostic `Frontend` trait from the
+# committed `dreggnet-offerings` crate, so a WeChat user plays the SAME
+# `DungeonOffering` (offering #0) on the SAME real dregg substrate as the Discord
+# bot — the same cap-gated affordances, the same real verifiable `TurnReceipt`s.
+# Only the SURFACE differs; the executor stays the sole referee.
+#
+# THE WECHAT SURFACE MODEL (the load-bearing platform decision): a WeChat Official
+# Account forbids arbitrary per-message buttons (its persistent menu is static; a
+# template message is a fixed-format notification). So dynamic, per-turn cap-gated
+# affordances are presented as a NUMBERED LIST in an OA text message and the user
+# REPLIES WITH THE NUMBER — the WeChat analogue of Telegram's inline keyboard. The
+# reply arrives as an inbound text message (the OA webhook). This is the lightest,
+# OA-native path (a subscription/service account, no Mini-Program review). A
+# `MiniProgramCard` payload is provided for the RICH surface (real buttons in WXML),
+# but the OA numbered-reply path is CANONICAL — the cleanest for lightweight play.
+#
+# THE INJECTED-TRANSPORT SEAM: the WeChat API surface is split into a PURE
+# request-builder (`api::build_present_request` → a serde `CustomSendRequest` == the
+# real `cgi-bin/message/custom/send` JSON wire body) and a `Transport` trait that
+# actually sends it. `MockTransport` records requests with NO token and NO network,
+# so the whole frontend logic is driven in a unit test. A live `RawWeChatApi<H>` over
+# an injected `HttpPost` is provided for a real deploy; it needs an access-token +
+# a reqwest-backed `HttpPost` impl (honest scope — the token/cert is the live edge).
+#
+# A breadstuffs workspace MEMBER (registered in the root `members`, not
+# `default-members` — a heavy narrative-adjacent crate). Build/test on persvati:
+#   ssh persvati '... cd dregg-build/botverify && cargo test -p dreggnet-wechat'
+[package]
+name = "dreggnet-wechat"
+version = "0.1.0"
+edition = "2024"
+description = "A WeChatFrontend implementing dreggnet-offerings' Frontend trait: a WeChat user plays the same DungeonOffering on the same real dregg substrate as the Discord bot (derived identity from the OpenID, Surface->OA numbered-reply text message / Mini-Program card, reply->Action), with the WeChat API transport INJECTED so the logic is testable with no token/network."
+
+[dependencies]
+# THE CORE — the frontend-agnostic Offering/Session/Frontend model + `DungeonOffering`
+# (offering #0) over the real substrate. This crate is a `Frontend` impl; it does NOT
+# re-implement any offering logic.
+dreggnet-offerings = { path = "../dreggnet-offerings" }
+# THE DEOS SURFACE — `ViewNode`, the serializable affordance view-tree an offering's
+# `render` produces. The WeChat renderer walks it into OA message text; its affordances
+# become a numbered reply list. `default-features = false` = the gpui-free model only.
+deos-view = { path = "../deos-view", default-features = false }
+# REAL DERIVED IDENTITY — `AgentCipherclerk::from_key_bytes` → a genuine Ed25519 signing
+# identity, mirroring the telegram/discord derivation (only the BLAKE3 domain differs:
+# `dregg-wechat-v1`). `default-features = false` = the offline cipherclerk core.
+dregg-sdk = { path = "../sdk", default-features = false }
+# The seed derivation (BLAKE3 derive_key over the WeChat-scoped domain).
+blake3 = "1"
+# Wipe the transient seed copy handed to `from_key_bytes` (as the telegram cclerk does).
+zeroize = { workspace = true }
+# Hex-encode the derived Ed25519 public key (the `DreggIdentity` handle).
+hex = "0.4"
+# The WeChat API request/response bodies ARE serde types: a `CustomSendRequest` serializes
+# to exactly the real `custom/send` JSON wire body (touser/msgtype/text.content), so a test
+# asserting the request shape asserts the real wire shape.
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# A workspace MEMBER of the breadstuffs root (registered in `members`, not
+# `default-members`). The root `[workspace]` + `[patch]` tables apply; no standalone
+# `[workspace]`/`[patch]` here.
+
+[dev-dependencies]
+# Offering #0's committed universe — the `KP_*` choice constants the driven tests play a
+# winning / illegal line with (exactly as `dreggnet-telegram/tests/driven.rs` does). A
+# test-only dep: the frontend itself is offering-agnostic (it renders any `Offering`).
+dungeon-on-dregg = { path = "../dungeon-on-dregg" }
