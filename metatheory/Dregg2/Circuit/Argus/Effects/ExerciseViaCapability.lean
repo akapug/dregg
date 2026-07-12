@@ -288,11 +288,12 @@ Then:
   * **frozen-frame leg (per-cell):** the circuit's pinned post-state `post` FREEZES the whole economic
     block relative to `pre` — `balLo`/`balHi`/the 8 `fields`/`capRoot`/`reserved` (the cap-exercise HOLD
     layer moves no value), via the audited `ExerciseCellSpec`;
-  * **agreement leg (per-cell):** the circuit's pinned post-`balLo` AGREES with the EXECUTOR's projected
-    post-balance `balProj s'.kernel c` (here `= balProj s.kernel c`, the executor's frozen kernel), via
-    the connector `descriptor_agrees_with_executor_exercise`. So the circuit binds the conserved balance
-    the IR term's executor produces;
-  * **the NONCE-TICK divergence (explicit):** `post.nonce = pre.nonce + 1` — the descriptor row TICKS the
+  * **agreement leg (per-cell):** the circuit's pinned post-`balLo` AGREES — as a field-element congruence
+    `≡ [ZMOD p]` on the canonical `bal_lo` column — with the EXECUTOR's projected post-balance
+    `balProj s'.kernel c` (here `= balProj s.kernel c`, the executor's frozen kernel), via the connector
+    `descriptor_agrees_with_executor_exercise`. So the circuit binds the conserved balance the IR term's
+    executor produces;
+  * **the NONCE-TICK divergence (explicit, mod `p`):** `post.nonce ≡ pre.nonce + 1 [ZMOD p]` — the descriptor row TICKS the
     cell nonce, while the executor's hold-step FREEZES the kernel (nonce included). This is the same
     structural divergence transfer/burn carry; on the hold layer it is left EXPLICIT (reconciled at the
     turn level by the prologue's single tick, `Argus.Nonce.perEffect_nonce_reconciles_to_turn`, cited).
@@ -316,13 +317,15 @@ theorem exercise_compile_sound
     (hgatesat : satisfiedVm hash compileExercise env true false)
     (hsat : satisfiedVm hash compileExercise env true true)
     (hexec : interp (exerciseStmt actor target) s.kernel = some k') :
-    -- frozen-frame leg: the whole economic block is frozen at the hold layer (pre = post on bal/fields/…) …
+    -- frozen-frame leg: the whole economic block is frozen at the hold layer (pre ≡ post on bal/fields/…) …
     ( ExerciseCellSpec pre post )
     -- … the agreement leg: the descriptor's post-`balLo` IS the executor's committed (frozen) post-balance
-    --   `balProj k' c` (the kernel `interp`/`exerciseStepA` produces) …
-    ∧ ( post.balLo = balProj k' c )
-    -- … and the EXPLICIT nonce-tick divergence: the row ticks the cell nonce; the executor freezes it.
-    ∧ ( post.nonce = pre.nonce + 1 ) := by
+    --   `balProj k' c` (the kernel `interp`/`exerciseStepA` produces), as a FIELD-ELEMENT congruence
+    --   (`≡ [ZMOD p]` — the circuit pins field elements on the canonical `bal_lo` column) …
+    ∧ ( post.balLo ≡ balProj k' c [ZMOD 2013265921] )
+    -- … and the EXPLICIT nonce-tick divergence (mod `p`): the row ticks the cell nonce; the executor
+    --   freezes it. The pin is the field congruence on the canonical `nonce` column.
+    ∧ ( post.nonce ≡ pre.nonce + 1 [ZMOD 2013265921] ) := by
   -- circuit side: the audited descriptor soundness forces the per-cell `ExerciseCellSpec` (frame freeze +
   -- nonce tick) on this `s_noop = 0` exercise row.
   rw [compileExercise_eq] at hsat hgatesat
@@ -333,7 +336,7 @@ theorem exercise_compile_sound
     exerciseStmt_to_holdSpec s actor target k' hexec
   -- the connector welds the descriptor's frozen `balLo` against the executor's projected post-balance
   -- `balProj s'.kernel c` = `balProj k' c` (the chained state's kernel IS `k'`).
-  have hagree : post.balLo = balProj k' c :=
+  have hagree : post.balLo ≡ balProj k' c [ZMOD 2013265921] :=
     descriptor_agrees_with_executor_exercise hash env hnoop s
       { kernel := k', log := authReceipt actor :: s.log } actor target c pre post
       hpreBal henc hgatesat hsat hhold
