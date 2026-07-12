@@ -735,6 +735,16 @@ pub struct CanonicalHeapTree8 {
     sorted_leaves: Vec<HeapLeaf>,
     /// Tree depth.
     depth: usize,
+    /// **AAFI (append-at-free-index) counter** (gap-#5 storage half, ADDITIVE).
+    /// The next physical slot an [`CanonicalHeapTree8::insert_witness_aafi`]
+    /// append would occupy: one past the current leaf count (sentinels
+    /// included). The sorted-compacted `sorted_leaves`/`root8` layer above is
+    /// UNTOUCHED by this — `next_free_index` is the parallel append-ordered
+    /// coordinate the eventual atomic AIR cutover (the deployed VK-regen flip)
+    /// will commit against, mirroring the proven Lean `imtInsert`'s "splice
+    /// after the low leaf, no shift". Set by [`CanonicalHeapTree8::new`] to the
+    /// leaf count; never re-compacted.
+    next_free_index: usize,
 }
 
 impl CanonicalHeapTree8 {
@@ -778,6 +788,10 @@ impl CanonicalHeapTree8 {
 
         Self {
             levels,
+            // The AAFI append cursor: the first free physical slot is one past
+            // the current leaf count (sentinels included). Purely additive — the
+            // sorted-compacted `sorted_leaves`/`root8` layer is unaffected.
+            next_free_index: leaves.len(),
             sorted_leaves: leaves,
             depth,
         }
@@ -895,6 +909,120 @@ impl CanonicalHeapTree8 {
         })
     }
 
+    /// The next free physical slot an AAFI ([`insert_witness_aafi`](Self::insert_witness_aafi))
+    /// append would occupy (sentinels included). The parallel append-ordered
+    /// coordinate, ADDITIVE to the sorted-compacted `sorted_leaves`/`root8` layer.
+    pub fn next_free_index(&self) -> usize {
+        self.next_free_index
+    }
+
+    /// **`insert_witness_aafi`** — the gap-#5 AAFI (append-at-free-index) INSERT
+    /// witness, the *storage half* of the closure, ADDITIVE to the existing
+    /// splice-and-rebuild [`insert_witness`](Self::insert_witness). Where
+    /// `insert_witness` places the fresh leaf in its SORTED position (shifting
+    /// every later position, re-compacting the tree), the AAFI insert mirrors the
+    /// PROVEN Lean `Dregg2.Circuit.IndexedMerkleTree.imtInsert` EXACTLY:
+    ///
+    ///   1. find the unique low leaf whose POINTER gap brackets `k`
+    ///      (`low.addr < k < low.next_addr` — the `ImtAbsent` bracket, so an
+    ///      out-of-gap / present / out-of-range key yields NO witness: the §3
+    ///      double-spend the AIR will reject);
+    ///   2. UPDATE the low leaf `next_addr := k` (in place, its physical position
+    ///      STABLE — no shift);
+    ///   3. APPEND the new leaf `(k, value, low_oldNext)` at the next free index
+    ///      (positions STABLE, no re-compaction).
+    ///
+    /// The two edits are the two O(depth) Merkle-path updates the Lean proof
+    /// (`imtInsert_preserves`, `imtLowUpdate_binds`) reasons about; the returned
+    /// `append_order_after` is the physical AAFI layout (base positions unchanged,
+    /// low edited in place, new leaf at `free_index`) and `new_root` is that
+    /// layout's 8-felt fold — a PARALLEL commitment lineage the eventual atomic
+    /// AIR cutover consumes. This does NOT touch the sorted-compacted `root8`.
+    ///
+    /// Returns `None` if `k` collides with a sentinel, is already present, or has
+    /// no bracketing low leaf (an out-of-gap key). O(log n) placement, O(depth)
+    /// paths — never the `2^depth` enumeration.
+    pub fn insert_witness_aafi(&self, new_leaf: HeapLeaf) -> Option<AafiInsertWitness8> {
+        let key = new_leaf.addr;
+        let key_u = key.as_u32();
+        // Sentinel collision guard (mirrors `insert_witness`): `k` must lie
+        // strictly inside the open key range (MIN, MAX).
+        if key == SENTINEL_MIN || key_u >= SENTINEL_MAX.as_u32() {
+            return None;
+        }
+        // A present key is never an AAFI insert — imtInsert on a present key is a
+        // no-op (no bracket matches). This is the §3 double-spend refusal.
+        if self.position_of(key).is_some() {
+            return None;
+        }
+        // The low leaf = the predecessor with the largest `addr < k`. On the
+        // well-linked sorted chain its `next_addr` is the successor's addr (or
+        // MAX), so the pointer gap `(low.addr, low.next_addr)` is exactly `k`'s
+        // bracket. O(log n) via the sorted binary search.
+        let pred = self
+            .sorted_leaves
+            .partition_point(|l| l.addr.as_u32() < key_u);
+        if pred == 0 {
+            // No leaf below `k` — impossible while the MIN sentinel is present
+            // and `k > MIN`, but a defensive no-witness rather than an index panic.
+            return None;
+        }
+        let low_position = pred - 1;
+        let low_leaf_old = self.sorted_leaves[low_position];
+        // THE POINTER-BRACKET GATE (`ImtAbsent`): `low.addr < k < low.next_addr`.
+        // `low.addr < k` holds by construction (predecessor); the hi bracket is
+        // the load-bearing check — a key beyond the low leaf's pointer gap has no
+        // valid AAFI witness (the malformed insert the AIR rejects).
+        if !(low_leaf_old.addr.as_u32() < key_u && key_u < low_leaf_old.next_addr.as_u32()) {
+            return None;
+        }
+
+        // (i) low-leaf pointer update: `next_addr := k` (position STABLE).
+        let low_leaf_new = HeapLeaf {
+            next_addr: key,
+            ..low_leaf_old
+        };
+        // (ii) the appended new leaf `(k, value, low_oldNext)` — inherits the low
+        // leaf's OLD pointer, exactly the Lean `{ addr:=k, value:=v, nextAddr:=l.nextAddr }`.
+        let appended = HeapLeaf {
+            addr: key,
+            value: new_leaf.value,
+            next_addr: low_leaf_old.next_addr,
+        };
+        let free_index = self.next_free_index;
+
+        // The physical AAFI layout AFTER the insert: base positions unchanged
+        // (no re-compaction), the low leaf edited IN PLACE, the new leaf at the
+        // free slot. This is the append-ordered representation the atomic AIR
+        // cutover will commit — computed here WITHOUT disturbing `sorted_leaves`.
+        let mut append_order_after = self.sorted_leaves.clone();
+        append_order_after[low_position] = low_leaf_new;
+        debug_assert_eq!(append_order_after.len(), free_index);
+        append_order_after.push(appended);
+
+        // The low leaf's membership path against the CURRENT (pre-insert) root —
+        // the opening the low-update Merkle leg (`imtLowUpdate_binds`) recomposes.
+        let (low_siblings, low_directions) = self.prove_membership(low_position)?;
+
+        // `new_root` = the 8-felt fold of the append-ordered layout (physical
+        // order, NOT re-sorted): a distinct commitment lineage from the
+        // sorted-compacted `root8` (same leaf SET, different positions). O(n·depth).
+        let new_root = fold_append_order_8(&append_order_after, self.depth);
+
+        Some(AafiInsertWitness8 {
+            free_index,
+            low_position,
+            low_leaf_old,
+            low_leaf_new,
+            new_leaf: appended,
+            append_order_after,
+            low_siblings,
+            low_directions,
+            old_root: self.root8().limbs(),
+            new_root,
+        })
+    }
+
     /// Apply an in-place VALUE update at an EXISTING address, returning the new
     /// 8-felt root in **O(depth)** `node8` hashes — the 8-felt twin of
     /// [`CanonicalHeapTree::apply_value_update`]. Only the single leaf→root path
@@ -967,6 +1095,100 @@ pub struct HeapInsertWitness8 {
     pub old_root: [BabyBear; HEAP_DIGEST_W],
     /// The recomposed post-insert 8-felt root.
     pub new_root: [BabyBear; HEAP_DIGEST_W],
+}
+
+/// Fold an APPEND-ORDERED leaf vector (physical positions = vector indices, NOT
+/// re-sorted) into the 8-felt heap root via the SAME sparse `node8` fold
+/// [`CanonicalHeapTree8::new`] uses. This is the AAFI commitment: it commits the
+/// leaves at their append positions, so it differs from the sorted-compacted
+/// [`compute_canonical_heap_root_8`] over the same SET (different positions).
+/// Used by [`CanonicalHeapTree8::insert_witness_aafi`] for the post-insert root.
+fn fold_append_order_8(leaves: &[HeapLeaf], depth: usize) -> [BabyBear; HEAP_DIGEST_W] {
+    if leaves.is_empty() {
+        return heap_empty_subtree_root_8(depth);
+    }
+    let mut cur: Vec<[BabyBear; HEAP_DIGEST_W]> = leaves.iter().map(HeapLeaf::digest8).collect();
+    for level in 0..depth {
+        let prev_len = cur.len();
+        let next_len = prev_len.div_ceil(2);
+        let mut next_level = Vec::with_capacity(next_len);
+        for i in 0..next_len {
+            let l = cur[2 * i];
+            let r = cur
+                .get(2 * i + 1)
+                .copied()
+                .unwrap_or_else(|| heap_empty_subtree_root_8(level));
+            next_level.push(heap_node8(l, r));
+        }
+        cur = next_level;
+    }
+    debug_assert_eq!(cur.len(), 1);
+    cur[0]
+}
+
+/// **`AafiInsertWitness8`** — the gap-#5 AAFI (append-at-free-index) insert
+/// witness produced by [`CanonicalHeapTree8::insert_witness_aafi`]. The storage
+/// mirror of the proven Lean `imtInsert`: the low-leaf pointer update
+/// (`next_addr := k`, position STABLE) plus the appended new leaf
+/// `(k, value, low_oldNext)` at `free_index` (positions STABLE, no
+/// re-compaction). ADDITIVE — a parallel append-ordered commitment lineage; the
+/// sorted-compacted `root8` is untouched.
+#[derive(Clone, Debug)]
+pub struct AafiInsertWitness8 {
+    /// The physical free slot the new leaf is appended at (no shift).
+    pub free_index: usize,
+    /// The physical position of the low (bracketing) leaf in the tree.
+    pub low_position: usize,
+    /// The low leaf BEFORE the update (`low.addr < k < low.next_addr`).
+    pub low_leaf_old: HeapLeaf,
+    /// The low leaf AFTER the pointer update (`next_addr := k`), position stable.
+    pub low_leaf_new: HeapLeaf,
+    /// The appended new leaf `(k, value, low_oldNext)` — the Lean spliced pair's
+    /// second element, inheriting the low leaf's OLD pointer.
+    pub new_leaf: HeapLeaf,
+    /// The physical AAFI layout AFTER the insert (base positions unchanged, low
+    /// edited in place, new leaf at `free_index`). Walking its linked chain from
+    /// the MIN sentinel yields the sorted `imtInsert` result.
+    pub append_order_after: Vec<HeapLeaf>,
+    /// The low leaf's 8-felt membership siblings against `old_root` (bottom-up).
+    pub low_siblings: Vec<[BabyBear; HEAP_DIGEST_W]>,
+    /// Direction bits for the low leaf's opening.
+    pub low_directions: Vec<u8>,
+    /// The authenticated pre-insert sorted-compacted 8-felt root.
+    pub old_root: [BabyBear; HEAP_DIGEST_W],
+    /// The post-insert AAFI 8-felt root (the append-ordered layout's fold).
+    pub new_root: [BabyBear; HEAP_DIGEST_W],
+}
+
+impl AafiInsertWitness8 {
+    /// Walk the linked chain of the post-insert AAFI layout from the MIN
+    /// sentinel, following `next_addr` pointers, into SORTED order. On a
+    /// well-linked chain this reconstructs the sorted leaf sequence regardless of
+    /// physical (append) position — the twin of the Lean `imtInsert` result list.
+    /// Returns `None` if the chain is not well-linked (a broken pointer).
+    pub fn linked_chain_sorted(&self) -> Option<Vec<HeapLeaf>> {
+        use std::collections::HashMap;
+        let by_addr: HashMap<u32, HeapLeaf> = self
+            .append_order_after
+            .iter()
+            .map(|l| (l.addr.as_u32(), *l))
+            .collect();
+        let mut out = Vec::with_capacity(self.append_order_after.len());
+        let mut cur = by_addr.get(&SENTINEL_MIN.as_u32()).copied()?;
+        let max = SENTINEL_MAX.as_u32();
+        loop {
+            out.push(cur);
+            if out.len() > self.append_order_after.len() {
+                return None; // cycle guard
+            }
+            let next = cur.next_addr.as_u32();
+            if next == max {
+                break;
+            }
+            cur = by_addr.get(&next).copied()?;
+        }
+        Some(out)
+    }
 }
 
 /// Compute the 8-felt canonical heap tree over a cell's entries — the
@@ -1352,5 +1574,280 @@ mod tests {
                 }
             }
         }
+    }
+
+    // ======================================================================
+    // AAFI (append-at-free-index) DIFFERENTIAL vs the PROVEN Lean spec
+    // `Dregg2/Circuit/IndexedMerkleTree.lean` (`imtInsert`, `imtInsert_preserves`).
+    // The gate: `insert_witness_aafi` must MATCH `imtInsert` — appended leaf,
+    // updated low pointer, linked chain, sorted-preservation. NO laundering.
+    // ======================================================================
+
+    /// A leaf at a RAW literal `addr` (deterministic ordering, unlike hashed
+    /// `entry`), unlinked (`next_addr = MAX`, relinked by the tree builder).
+    fn raw(addr: u32, value: u32) -> HeapLeaf {
+        HeapLeaf::entry(BabyBear::new(addr), BabyBear::new(value))
+    }
+
+    /// The faithful Rust twin of the Lean `imtInsert` (list-based, splice AFTER
+    /// the first bracketing low leaf). Operates on the SORTED linked chain; a
+    /// present / out-of-gap key falls through every branch → identity (no new
+    /// leaf), exactly as the Lean recursion bottoms out at `[]`.
+    fn imt_insert_oracle(chain: &[HeapLeaf], k: BabyBear, v: BabyBear) -> Vec<HeapLeaf> {
+        let ku = k.as_u32();
+        let mut out: Vec<HeapLeaf> = Vec::with_capacity(chain.len() + 1);
+        for (i, &l) in chain.iter().enumerate() {
+            if l.addr.as_u32() < ku && ku < l.next_addr.as_u32() {
+                // { l with nextAddr := k } :: { addr:=k, value:=v, nextAddr:=l.nextAddr } :: rest
+                out.push(HeapLeaf { next_addr: k, ..l });
+                out.push(HeapLeaf {
+                    addr: k,
+                    value: v,
+                    next_addr: l.next_addr,
+                });
+                out.extend_from_slice(&chain[i + 1..]);
+                return out;
+            }
+            out.push(l);
+        }
+        out // no bracket matched — identity
+    }
+
+    /// The Rust twin of the Lean `ImtSorted`: a strictly-increasing well-linked
+    /// chain — each leaf `addr < next_addr`, each `next_addr` equals the next
+    /// leaf's `addr`, the last points to `SENTINEL_MAX`.
+    fn is_imt_sorted(chain: &[HeapLeaf]) -> bool {
+        if chain.is_empty() {
+            return false;
+        }
+        for i in 0..chain.len() {
+            if chain[i].addr.as_u32() >= chain[i].next_addr.as_u32() {
+                return false;
+            }
+            let expected_next = if i + 1 < chain.len() {
+                chain[i + 1].addr
+            } else {
+                SENTINEL_MAX
+            };
+            if chain[i].next_addr != expected_next {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// DIFFERENTIAL — genesis → first insert: the low leaf is the MIN sentinel,
+    /// the append lands at free index 1, and the walked chain matches `imtInsert`.
+    #[test]
+    fn aafi_matches_imt_insert_genesis_first() {
+        let tree = CanonicalHeapTree8::new(vec![], HEAP_TREE_DEPTH);
+        let chain_before = tree.sorted_leaves().to_vec();
+        assert_eq!(
+            chain_before,
+            vec![min_sentinel_leaf()],
+            "genesis = [MIN → MAX]"
+        );
+        assert!(is_imt_sorted(&chain_before));
+
+        let k = BabyBear::new(40);
+        let v = BabyBear::new(4);
+        let w = tree
+            .insert_witness_aafi(HeapLeaf::entry(k, v))
+            .expect("in-gap fresh key");
+
+        assert_eq!(w.free_index, 1, "append after the single sentinel");
+        assert_eq!(w.low_position, 0);
+        assert_eq!(w.low_leaf_old, min_sentinel_leaf());
+        assert_eq!(w.low_leaf_new.next_addr, k, "low pointer updated → k");
+        assert_eq!(
+            w.new_leaf,
+            HeapLeaf {
+                addr: k,
+                value: v,
+                next_addr: SENTINEL_MAX
+            },
+            "appended (k, v, low_oldNext=MAX)"
+        );
+        // Physical layout: sentinel edited in place at 0, new leaf appended at 1.
+        assert_eq!(w.append_order_after[0], w.low_leaf_new);
+        assert_eq!(w.append_order_after[1], w.new_leaf);
+
+        let walked = w.linked_chain_sorted().expect("well-linked");
+        let oracle = imt_insert_oracle(&chain_before, k, v);
+        assert_eq!(walked, oracle, "AAFI linked chain must equal imtInsert");
+        assert!(
+            is_imt_sorted(&walked),
+            "imtInsert_preserves: chain stays sorted"
+        );
+    }
+
+    /// DIFFERENTIAL — mid-chain insert: the fresh key lands strictly inside an
+    /// interior pointer gap; base positions STABLE (no re-compaction), only the
+    /// low leaf edited in place + the new leaf appended at the free slot.
+    #[test]
+    fn aafi_matches_imt_insert_midchain() {
+        let tree =
+            CanonicalHeapTree8::new(vec![raw(10, 1), raw(30, 3), raw(50, 5)], HEAP_TREE_DEPTH);
+        let chain_before = tree.sorted_leaves().to_vec();
+        let k = BabyBear::new(20); // in the (10, 30) gap → mid-chain
+        let v = BabyBear::new(2);
+        let w = tree
+            .insert_witness_aafi(HeapLeaf::entry(k, v))
+            .expect("fresh in-gap key");
+
+        assert_eq!(
+            w.free_index,
+            chain_before.len(),
+            "append at the physical end"
+        );
+        assert_ne!(w.low_leaf_old, min_sentinel_leaf(), "genuinely mid-chain");
+        assert_eq!(w.low_leaf_old.addr, BabyBear::new(10));
+        assert!(
+            w.low_leaf_old.addr.as_u32() < k.as_u32()
+                && k.as_u32() < w.low_leaf_old.next_addr.as_u32(),
+            "pointer bracket low.addr < k < low.next_addr"
+        );
+        assert_eq!(w.low_leaf_new.next_addr, k);
+        assert_eq!(w.new_leaf.addr, k);
+        assert_eq!(
+            w.new_leaf.next_addr, w.low_leaf_old.next_addr,
+            "new leaf inherits low_oldNext"
+        );
+
+        // STABILITY: every base position unchanged except the low leaf.
+        for (i, &l) in chain_before.iter().enumerate() {
+            if i == w.low_position {
+                assert_eq!(w.append_order_after[i], w.low_leaf_new);
+            } else {
+                assert_eq!(w.append_order_after[i], l, "position {i} must not shift");
+            }
+        }
+
+        let walked = w.linked_chain_sorted().expect("well-linked");
+        let oracle = imt_insert_oracle(&chain_before, k, v);
+        assert_eq!(walked, oracle, "AAFI linked chain must equal imtInsert");
+        assert!(is_imt_sorted(&walked));
+        assert_ne!(
+            w.new_root, w.old_root,
+            "the AAFI insert moves the AAFI root"
+        );
+    }
+
+    /// SOUNDNESS-PREVIEW — an out-of-gap key has NO valid AAFI witness (the
+    /// malformed insert the AIR rejects). The §3 double-spend attempt (claiming
+    /// to insert an ALREADY-PRESENT address) is a no-op under `imtInsert`
+    /// (identity, no new leaf) and yields `None` here — the pointer bracket
+    /// `low.addr < k < low.next_addr` cannot straddle a present key.
+    #[test]
+    fn aafi_no_witness_for_out_of_gap_keys() {
+        let tree =
+            CanonicalHeapTree8::new(vec![raw(10, 1), raw(20, 2), raw(30, 3)], HEAP_TREE_DEPTH);
+        let chain = tree.sorted_leaves().to_vec();
+
+        // §3: a PRESENT key — imtInsert is identity (no new leaf); AAFI = None.
+        let present = BabyBear::new(20);
+        assert_eq!(
+            imt_insert_oracle(&chain, present, BabyBear::new(99)),
+            chain,
+            "imtInsert on a present key is identity (no new leaf)"
+        );
+        assert!(
+            tree.insert_witness_aafi(raw(20, 99)).is_none(),
+            "present key: no valid AAFI witness (§3 double-spend refused)"
+        );
+
+        // Sentinel collisions and out-of-range keys → None.
+        assert!(
+            tree.insert_witness_aafi(HeapLeaf::entry(SENTINEL_MIN, BabyBear::new(1)))
+                .is_none()
+        );
+        assert!(
+            tree.insert_witness_aafi(HeapLeaf::entry(SENTINEL_MAX, BabyBear::new(1)))
+                .is_none()
+        );
+
+        // LIVENESS boundary: a fresh key above the largest leaf (low = 30, whose
+        // pointer is MAX) IS bracketed → a valid witness.
+        assert!(
+            tree.insert_witness_aafi(raw(1000, 7)).is_some(),
+            "a fresh in-range key beyond the last leaf has a witness"
+        );
+    }
+
+    /// LIVENESS — an honest sequence of in-gap inserts each produces a valid AAFI
+    /// witness (append + low-update), the walked chain matches `imtInsert` at
+    /// EVERY step, and stays `ImtSorted`; the spine grows by exactly the key.
+    #[test]
+    fn aafi_liveness_honest_chain_stays_sorted() {
+        let inserts = [(40u32, 4u32), (20, 2), (60, 6), (30, 3), (50, 5)];
+        let mut set: Vec<HeapLeaf> = Vec::new();
+        let mut oracle_chain = CanonicalHeapTree8::new(vec![], HEAP_TREE_DEPTH)
+            .sorted_leaves()
+            .to_vec();
+
+        for &(a, v) in &inserts {
+            let tree = CanonicalHeapTree8::new(set.clone(), HEAP_TREE_DEPTH);
+            let base_chain = tree.sorted_leaves().to_vec();
+            assert_eq!(
+                base_chain, oracle_chain,
+                "the sorted-compacted chain equals the running imtInsert chain"
+            );
+
+            let ka = BabyBear::new(a);
+            let vv = BabyBear::new(v);
+            let w = tree
+                .insert_witness_aafi(HeapLeaf::entry(ka, vv))
+                .expect("honest in-gap insert has a witness");
+            assert_eq!(w.new_leaf.addr, ka, "append + ");
+            assert_eq!(w.low_leaf_new.next_addr, ka, "low-update");
+
+            let walked = w.linked_chain_sorted().expect("well-linked");
+            let oracle_next = imt_insert_oracle(&oracle_chain, ka, vv);
+            assert_eq!(
+                walked, oracle_next,
+                "AAFI chain matches imtInsert at each step"
+            );
+            assert!(is_imt_sorted(&walked), "chain stays ImtSorted");
+            assert!(
+                walked.iter().any(|l| l.addr == ka),
+                "the key is present-after"
+            );
+            assert_eq!(
+                walked.len(),
+                oracle_chain.len() + 1,
+                "spine grows by exactly one (the fresh key)"
+            );
+
+            oracle_chain = oracle_next;
+            set.push(HeapLeaf::entry(ka, vv));
+        }
+    }
+
+    /// PURELY ADDITIVE — producing an AAFI witness does NOT mutate the
+    /// sorted-compacted layer (`root8` / `sorted_leaves` / `next_free_index`
+    /// unchanged); the AAFI `new_root` is the deterministic append-order fold,
+    /// and `old_root` equals the sorted-compacted root (base physical == sorted).
+    #[test]
+    fn aafi_is_non_mutating_and_additive() {
+        let tree = CanonicalHeapTree8::new(vec![raw(10, 1), raw(20, 2)], HEAP_TREE_DEPTH);
+        let root_before = tree.root8().limbs();
+        let sorted_before = tree.sorted_leaves().to_vec();
+        let nfi = tree.next_free_index();
+
+        let w = tree.insert_witness_aafi(raw(15, 9)).expect("fresh in-gap");
+
+        assert_eq!(
+            tree.root8().limbs(),
+            root_before,
+            "root8 unchanged by AAFI witness"
+        );
+        assert_eq!(tree.sorted_leaves(), sorted_before.as_slice());
+        assert_eq!(tree.next_free_index(), nfi);
+        assert_eq!(
+            w.new_root,
+            fold_append_order_8(&w.append_order_after, HEAP_TREE_DEPTH),
+            "AAFI new_root is the append-order fold"
+        );
+        assert_eq!(w.old_root, root_before, "old_root == sorted-compacted root");
     }
 }
