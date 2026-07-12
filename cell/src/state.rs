@@ -410,20 +410,14 @@ pub const FIELDS_ROOT_CONTEXT: &str = "dregg-cell:fields-root v1";
 pub fn fields_root_leaves(map: &BTreeMap<u64, FieldElement>) -> Vec<HeapLeaf> {
     let mut leaves: Vec<HeapLeaf> = map
         .iter()
-        .map(|(key, value)| HeapLeaf {
-            addr: field_key_hash(*key),
-            value: fold_bytes32(value),
-        })
+        .map(|(key, value)| HeapLeaf::entry(field_key_hash(*key), fold_bytes32(value)))
         .collect();
     // RESERVE the protocol-reserved refusal-audit slot (position-stable, value
     // ZERO) when the map does not already carry it — so a refusal WRITE opens
     // the slot's existing path rather than re-indexing the sorted tree.
     let audit_addr = field_key_hash(REFUSAL_AUDIT_EXT_KEY);
     if !leaves.iter().any(|l| l.addr == audit_addr) {
-        leaves.push(HeapLeaf {
-            addr: audit_addr,
-            value: BabyBear::ZERO,
-        });
+        leaves.push(HeapLeaf::entry(audit_addr, BabyBear::ZERO));
     }
     leaves
 }
@@ -539,9 +533,11 @@ pub fn compute_canonical_heap_root_8(
 ) -> dregg_circuit::Faithful8 {
     let leaves: Vec<HeapLeaf> = map
         .iter()
-        .map(|((coll, key), value)| HeapLeaf {
-            addr: heap_addr(BabyBear::new(*coll), BabyBear::new(*key)),
-            value: fold_bytes32(value),
+        .map(|((coll, key), value)| {
+            HeapLeaf::entry(
+                heap_addr(BabyBear::new(*coll), BabyBear::new(*key)),
+                fold_bytes32(value),
+            )
         })
         .collect();
     compute_canonical_heap_root_8_circuit(leaves)
@@ -966,10 +962,10 @@ impl CellState {
     /// to the free-function root over the same map.
     #[inline]
     fn heap_leaf(coll: u32, key: u32, value: &FieldElement) -> HeapLeaf {
-        HeapLeaf {
-            addr: heap_addr(BabyBear::new(coll), BabyBear::new(key)),
-            value: fold_bytes32(value),
-        }
+        HeapLeaf::entry(
+            heap_addr(BabyBear::new(coll), BabyBear::new(key)),
+            fold_bytes32(value),
+        )
     }
 
     /// Rebuild the incremental heap-tree cache from the CURRENT `heap_map` and

@@ -1637,13 +1637,6 @@ mod tests {
         let ivc_proof = prove_ivc(initial_root, deltas).unwrap();
         assert_eq!(ivc_proof.step_count, 5);
 
-        // Real STARK proof must be present
-        assert!(
-            ivc_proof.stark_proof.is_some(),
-            "IVC proof must contain a real STARK proof"
-        );
-
-        // Verify via real STARK
         let result = verify_ivc(&ivc_proof, Some(initial_root));
         assert_eq!(result, IvcVerification::Valid);
 
@@ -1656,9 +1649,6 @@ mod tests {
 
         let ivc_proof = prove_ivc(initial_root, deltas).unwrap();
         assert_eq!(ivc_proof.step_count, 10);
-
-        // Real STARK proof must be present
-        assert!(ivc_proof.stark_proof.is_some());
 
         let result = verify_ivc(&ivc_proof, Some(initial_root));
         assert_eq!(result, IvcVerification::Valid);
@@ -1956,14 +1946,13 @@ mod tests {
     #[test]
     fn ivc_proof_size_comparison() {
         // Compare IVC proof sizes across different chain lengths
-        println!("\n=== IVC Real STARK Proof Size Comparison ===");
+        println!("\n=== IVC Proof Size Comparison ===");
         let mut ivc_sizes = Vec::new();
 
         for n in [1, 2, 5, 10, 16] {
             let (initial_root, deltas) = create_test_chain(n);
 
             let ivc_proof = prove_ivc(initial_root, deltas).unwrap();
-            assert!(ivc_proof.stark_proof.is_some(), "must have real STARK");
             let ivc_size = ivc_proof.proof_size_bytes();
             ivc_sizes.push((n, ivc_size));
 
@@ -1974,7 +1963,7 @@ mod tests {
                 IvcVerification::Valid,
                 "proof for {n}-step must verify"
             );
-            println!("  {n:>2}-step: IVC STARK = {ivc_size:>6} B");
+            println!("  {n:>2}-step: IVC proof = {ivc_size:>6} B");
         }
 
         // Verify sub-linear growth: 20-step IVC vs 5-step IVC
@@ -2076,48 +2065,23 @@ mod tests {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Real STARK IVC tests
+    // Digest-binding tamper tests
+    //
+    // stark-kill (f04b2dd1e) deleted the hand-STARK proof carried inside
+    // IvcProof (`stark_proof` field + prove_ivc_stark/verify_ivc_stark). The
+    // surviving verification surface is the BLAKE3 digest binding checked by
+    // `verify_ivc`: `proof.trace_digest == compute_ivc_digest(initial, final,
+    // steps, accumulated_hash, trace_commitment)` plus public-input
+    // consistency. These tests keep every tamper tooth that has a surviving
+    // equivalent on that surface.
     // ─────────────────────────────────────────────────────────────────────────
 
     #[test]
-    fn ivc_real_stark_five_steps_prove_verify() {
-        // Build IVC chain with 5 steps, finalize with real STARK, verify passes.
-        let (initial_root, deltas) = create_test_chain(5);
-
-        let mut builder = IvcBuilder::new(initial_root);
-        for delta in &deltas {
-            builder.add_fold(delta.clone()).unwrap();
-        }
-        assert_eq!(builder.step_count(), 5);
-
-        let ivc_proof = builder.finalize().unwrap();
-
-        // Must contain a real STARK proof
-        assert!(
-            ivc_proof.stark_proof.is_some(),
-            "finalize() must produce a real STARK proof"
-        );
-
-        // Verify passes
-        let result = verify_ivc(&ivc_proof, Some(initial_root));
-        assert_eq!(result, IvcVerification::Valid);
-
-        // Also verify via the AIR-based path
-        let ivc_proof_air = builder.finalize_with_air().unwrap();
-        assert!(ivc_proof_air.stark_proof.is_some());
-        let result_air = verify_ivc(&ivc_proof_air, Some(initial_root));
-        assert_eq!(result_air, IvcVerification::Valid);
-    }
-
-    #[test]
-    fn ivc_real_stark_tampered_accumulated_hash_fails() {
-        // Tamper with accumulated hash -> verify fails.
+    fn ivc_tampered_accumulated_hash_fails() {
+        // Tampering the claimed accumulated hash breaks the digest binding.
         let (initial_root, deltas) = create_test_chain(5);
         let mut ivc_proof = prove_ivc(initial_root, deltas).unwrap();
-        assert!(ivc_proof.stark_proof.is_some());
 
-        // Tamper with the accumulated hash (this changes the public inputs
-        // that the STARK was proven against, so verification will fail).
         ivc_proof.accumulated_hash = BabyBear::new(0xDEADBEEF);
 
         let result = verify_ivc(&ivc_proof, Some(initial_root));
@@ -2129,50 +2093,62 @@ mod tests {
     }
 
     #[test]
-    fn ivc_real_stark_tampered_proof_bytes_fails() {
-        // Tamper with STARK proof bytes -> verify fails.
+    fn ivc_tampered_trace_commitment_fails() {
+        // The trace commitment is a digest input; flipping a byte must fail.
         let (initial_root, deltas) = create_test_chain(5);
         let mut ivc_proof = prove_ivc(initial_root, deltas).unwrap();
-        assert!(ivc_proof.stark_proof.is_some());
 
-        // Tamper with the trace commitment inside the STARK proof
-        if let Some(ref mut sp) = ivc_proof.stark_proof {
-            sp.trace_commitment[0] ^= 0xFF;
-        }
+        ivc_proof.trace_commitment[0] ^= 0xFF;
 
         let result = verify_ivc(&ivc_proof, Some(initial_root));
         assert_eq!(
             result,
             IvcVerification::ProofInvalid,
-            "Tampered STARK proof bytes must cause verification failure"
+            "Tampered trace commitment must cause verification failure"
         );
     }
 
     #[test]
-    fn ivc_real_stark_tampered_query_values_fails() {
-        // Tamper with query values inside the STARK proof.
+    fn ivc_tampered_trace_digest_fails() {
+        // Directly corrupting the bound digest must fail.
         let (initial_root, deltas) = create_test_chain(5);
         let mut ivc_proof = prove_ivc(initial_root, deltas).unwrap();
-        assert!(ivc_proof.stark_proof.is_some());
 
-        // Tamper with a query proof value
-        if let Some(ref mut sp) = ivc_proof.stark_proof {
-            if let Some(q) = sp.query_proofs.first_mut() {
-                q.trace_values[0] ^= 1;
-            }
-        }
+        ivc_proof.proof.trace_digest[0] ^= 1;
 
         let result = verify_ivc(&ivc_proof, Some(initial_root));
         assert_eq!(
             result,
             IvcVerification::ProofInvalid,
-            "Tampered query values must cause verification failure"
+            "Tampered trace digest must cause verification failure"
         );
     }
 
     #[test]
-    fn ivc_real_stark_state_transition_air_direct() {
-        // Directly test the StateTransitionAir: generate trace, prove, verify.
+    fn ivc_inconsistent_public_inputs_fail() {
+        // verify_ivc cross-checks the proof's embedded public inputs against
+        // the top-level claims; every slot must be load-bearing.
+        let (initial_root, deltas) = create_test_chain(3);
+        let ivc_proof = prove_ivc(initial_root, deltas).unwrap();
+
+        for slot in 0..4 {
+            let mut tampered = ivc_proof.clone();
+            tampered.proof.public_inputs[slot] += BabyBear::new(1);
+            let result = verify_ivc(&tampered, Some(initial_root));
+            assert_ne!(
+                result,
+                IvcVerification::Valid,
+                "tampered public input slot {slot} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn ivc_state_transition_trace_is_correct_hash_chain() {
+        // The StateTransitionAir's hand-STARK prover died with stark-kill; the
+        // trace generator survives (it feeds the descriptor-world consumers).
+        // Its tooth: the emitted trace IS the sequential Poseidon2 hash chain
+        // and the public inputs bind the true endpoints.
         let initial_root = BabyBear::new(42);
         let new_roots = vec![
             BabyBear::new(100),
@@ -2181,450 +2157,59 @@ mod tests {
             BabyBear::new(400),
         ];
 
-        let (stark_proof, public_inputs) = prove_ivc_stark(initial_root, &new_roots);
+        let (trace, public_inputs) = generate_state_transition_trace(initial_root, &new_roots);
 
-        // Public inputs should be [initial_root, final_root, step_count, accumulated_hash]
+        // Public inputs: [initial_root, final_root, step_count, accumulated_hash]
         assert_eq!(public_inputs[0], initial_root);
         assert_eq!(public_inputs[1], *new_roots.last().unwrap());
         assert_eq!(public_inputs[2], BabyBear::new(4));
-
-        // Verify the proof
-        let result = verify_ivc_stark(&stark_proof, &public_inputs);
-        assert!(
-            result.is_ok(),
-            "StateTransitionAir STARK must verify: {:?}",
-            result.err()
-        );
-    }
-
-    #[test]
-    fn ivc_real_stark_wrong_public_inputs_fails() {
-        // Prove with correct data but verify with wrong public inputs.
-        let initial_root = BabyBear::new(42);
-        let new_roots = vec![BabyBear::new(100), BabyBear::new(200)];
-
-        let (stark_proof, _) = prove_ivc_stark(initial_root, &new_roots);
-
-        // Wrong initial root
-        let wrong_pi = vec![
-            BabyBear::new(999),
-            BabyBear::new(200),
-            BabyBear::new(2),
-            BabyBear::new(0),
-        ];
-        let result = verify_ivc_stark(&stark_proof, &wrong_pi);
-        assert!(
-            result.is_err(),
-            "Wrong public inputs must fail verification"
-        );
-    }
-
-    #[test]
-    fn ivc_backward_compat_legacy_proof_without_stark() {
-        // A proof without a stark_proof field should still verify via the legacy
-        // digest-based path.
-        let (initial_root, deltas) = create_test_chain(3);
-        let mut ivc_proof = prove_ivc(initial_root, deltas).unwrap();
-
-        // Remove the STARK proof to simulate a legacy proof
-        ivc_proof.stark_proof = None;
-
-        // Should still verify via the legacy digest check
-        let result = verify_ivc(&ivc_proof, Some(initial_root));
         assert_eq!(
-            result,
-            IvcVerification::Valid,
-            "Legacy proof without STARK must still verify via digest"
+            public_inputs[3],
+            recompute_accumulated_hash(initial_root, &new_roots),
+            "bound accumulated hash must equal the recomputed chain"
         );
+
+        // Row 0 starts at the base case; every row satisfies the hash relation
+        // new_hash == extend(old_hash, new_root, step) and rows chain.
+        assert_eq!(
+            trace[0][st_col::OLD_HASH],
+            initial_accumulated_hash(initial_root)
+        );
+        for (i, &root) in new_roots.iter().enumerate() {
+            let row = &trace[i];
+            assert_eq!(row[st_col::STEP], BabyBear::new((i + 1) as u32));
+            assert_eq!(row[st_col::NEW_ROOT], root);
+            assert_eq!(
+                row[st_col::NEW_HASH],
+                extend_accumulated_hash(row[st_col::OLD_HASH], root, (i + 1) as u32),
+                "row {i} violates the hash-chain relation"
+            );
+            if i + 1 < new_roots.len() {
+                assert_eq!(
+                    trace[i + 1][st_col::OLD_HASH],
+                    row[st_col::NEW_HASH],
+                    "rows {i}->{} break chain continuity",
+                    i + 1
+                );
+            }
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Validated IVC tests (fold-validity gap closure)
+    // Validated IVC (fold-validity gap closure) — DELETED by stark-kill
+    //
+    // prove_validated_ivc / verify_validated_ivc / ValidatedIvcProof /
+    // IvcBuilder::finalize_validated — the per-step Merkle-membership STARKs
+    // over the hand engine — were deleted in f04b2dd1e with no surviving
+    // equivalent composition in this crate, so their tests (honest prove/verify
+    // at 1/3/5 steps, fabricated-root, tampered-membership, tampered-chain,
+    // root-mismatch, empty-chain, chain-break, builder integration, witness
+    // count) died with the engine. The membership tooth lives on in the
+    // descriptor world: circuit-prove/tests/merkle_membership_emit_gate.rs
+    // (per-leaf membership via prove_vm_descriptor2) and the whole-chain
+    // recursion (circuit-prove/src/ivc_turn_chain.rs), which folds REAL
+    // per-turn leaves instead of trusting summaries.
     // ─────────────────────────────────────────────────────────────────────────
-
-    /// Build a real Poseidon2 Merkle tree and return witnesses for a validated IVC chain.
-    ///
-    /// Each step removes one fact from the tree. The tree is rebuilt without that fact
-    /// for the next step (giving a genuine new_root).
-    fn build_validated_ivc_chain(num_steps: usize) -> (BabyBear, Vec<FoldStepWitness>) {
-        use crate::poseidon2::hash_fact;
-
-        assert!(num_steps >= 1);
-
-        // Create facts for all steps (each will be removed one at a time).
-        let facts: Vec<(BabyBear, [BabyBear; 3])> = (0..num_steps)
-            .map(|i| {
-                let pred = BabyBear::new((i as u32) * 100 + 1);
-                let terms = [
-                    BabyBear::new((i as u32) * 100 + 2),
-                    BabyBear::new((i as u32) * 100 + 3),
-                    BabyBear::new((i as u32) * 100 + 4),
-                ];
-                (pred, terms)
-            })
-            .collect();
-
-        let fact_hashes: Vec<BabyBear> = facts
-            .iter()
-            .map(|(pred, terms)| hash_fact(*pred, terms))
-            .collect();
-
-        // Build successive trees: tree_i has facts[i..num_steps] as leaves.
-        // At step i, we remove fact[i] from tree_i to get tree_{i+1}.
-        let tree_depth = 2; // depth 2 = up to 16 leaves, enough for testing
-
-        let mut witnesses = Vec::with_capacity(num_steps);
-        let mut current_leaves: Vec<BabyBear> = fact_hashes.clone();
-
-        // Build the initial tree.
-        let mut current_root = build_poseidon2_tree(&current_leaves, tree_depth);
-
-        for i in 0..num_steps {
-            // Get the Merkle proof for fact[i] in the current tree.
-            let (siblings, positions) = get_merkle_proof_for_leaf(&current_leaves, i, tree_depth);
-
-            let old_root = current_root;
-
-            // Remove the fact: replace with ZERO and rebuild.
-            current_leaves[i] = BabyBear::ZERO;
-            let new_root = build_poseidon2_tree(&current_leaves, tree_depth);
-
-            witnesses.push(FoldStepWitness {
-                old_root,
-                new_root,
-                removed_fact_hash: fact_hashes[i],
-                merkle_siblings: siblings,
-                merkle_positions: positions,
-            });
-
-            current_root = new_root;
-        }
-
-        let initial_root = witnesses[0].old_root;
-        (initial_root, witnesses)
-    }
-
-    /// Build a Poseidon2 4-ary Merkle tree from leaves. Pads with ZERO.
-    fn build_poseidon2_tree(leaves: &[BabyBear], depth: usize) -> BabyBear {
-        use crate::poseidon2::hash_4_to_1;
-        let capacity = 4usize.pow(depth as u32);
-        let mut level: Vec<BabyBear> = Vec::with_capacity(capacity);
-        for i in 0..capacity {
-            if i < leaves.len() {
-                level.push(leaves[i]);
-            } else {
-                level.push(BabyBear::ZERO);
-            }
-        }
-        for _ in 0..depth {
-            let mut next = Vec::with_capacity(level.len() / 4);
-            for chunk in level.chunks(4) {
-                next.push(hash_4_to_1(&[chunk[0], chunk[1], chunk[2], chunk[3]]));
-            }
-            level = next;
-        }
-        level[0]
-    }
-
-    /// Get the Merkle proof (siblings, positions) for a leaf at a given index.
-    fn get_merkle_proof_for_leaf(
-        leaves: &[BabyBear],
-        leaf_idx: usize,
-        depth: usize,
-    ) -> (Vec<[BabyBear; 3]>, Vec<u8>) {
-        use crate::poseidon2::hash_4_to_1;
-        let capacity = 4usize.pow(depth as u32);
-        let mut padded: Vec<BabyBear> = Vec::with_capacity(capacity);
-        for i in 0..capacity {
-            if i < leaves.len() {
-                padded.push(leaves[i]);
-            } else {
-                padded.push(BabyBear::ZERO);
-            }
-        }
-
-        // Build all levels.
-        let mut all_levels: Vec<Vec<BabyBear>> = Vec::with_capacity(depth + 1);
-        all_levels.push(padded);
-        for _ in 0..depth {
-            let prev = all_levels.last().unwrap();
-            let mut next = Vec::with_capacity(prev.len() / 4);
-            for chunk in prev.chunks(4) {
-                next.push(hash_4_to_1(&[chunk[0], chunk[1], chunk[2], chunk[3]]));
-            }
-            all_levels.push(next);
-        }
-
-        // Extract proof for the leaf.
-        let mut siblings = Vec::with_capacity(depth);
-        let mut positions = Vec::with_capacity(depth);
-        let mut idx = leaf_idx;
-
-        for level in 0..depth {
-            let pos_in_group = (idx % 4) as u8;
-            let group_base = (idx / 4) * 4;
-            positions.push(pos_in_group);
-
-            let mut sibs = [BabyBear::ZERO; 3];
-            let mut sib_i = 0;
-            for j in 0..4 {
-                if j == pos_in_group as usize {
-                    continue;
-                }
-                sibs[sib_i] = all_levels[level][group_base + j];
-                sib_i += 1;
-            }
-            siblings.push(sibs);
-            idx /= 4;
-        }
-
-        (siblings, positions)
-    }
-
-    #[test]
-    fn ivc_validated_three_steps_prove_verify() {
-        // Build a real Poseidon2 tree, remove facts one by one, prove validated IVC.
-        let (initial_root, witnesses) = build_validated_ivc_chain(3);
-
-        let result = prove_validated_ivc(initial_root, &witnesses);
-        assert!(
-            result.is_ok(),
-            "prove_validated_ivc failed: {:?}",
-            result.err()
-        );
-
-        let proof = result.unwrap();
-        assert_eq!(proof.step_count, 3);
-        assert_eq!(proof.initial_root, initial_root);
-        assert_eq!(proof.fold_membership_proofs.len(), 3);
-
-        // Verify the validated proof.
-        let verification = verify_validated_ivc(&proof);
-        assert_eq!(
-            verification,
-            ValidatedIvcVerification::Valid,
-            "Validated IVC proof must verify: {:?}",
-            verification
-        );
-    }
-
-    #[test]
-    fn ivc_validated_single_step() {
-        let (initial_root, witnesses) = build_validated_ivc_chain(1);
-
-        let proof = prove_validated_ivc(initial_root, &witnesses).unwrap();
-        assert_eq!(proof.step_count, 1);
-
-        let verification = verify_validated_ivc(&proof);
-        assert_eq!(verification, ValidatedIvcVerification::Valid);
-    }
-
-    #[test]
-    fn ivc_validated_five_steps() {
-        let (initial_root, witnesses) = build_validated_ivc_chain(5);
-
-        let proof = prove_validated_ivc(initial_root, &witnesses).unwrap();
-        assert_eq!(proof.step_count, 5);
-
-        let verification = verify_validated_ivc(&proof);
-        assert_eq!(
-            verification,
-            ValidatedIvcVerification::Valid,
-            "5-step validated IVC must verify"
-        );
-
-        println!(
-            "Validated IVC 5-step: chain_proof={} bytes, {} membership proofs",
-            stark::proof_to_bytes(&proof.chain_proof).len(),
-            proof.fold_membership_proofs.len()
-        );
-    }
-
-    #[test]
-    fn ivc_validated_fabricated_root_transition_fails() {
-        // A malicious prover fabricates a root transition (no real removal).
-        // The membership proof will fail because the fact doesn't exist in the tree.
-        let (initial_root, mut witnesses) = build_validated_ivc_chain(3);
-
-        // Tamper: change the removed_fact_hash in step 1 to something not in the tree.
-        witnesses[1].removed_fact_hash = BabyBear::new(0xDEADBEEF);
-
-        let result = prove_validated_ivc(initial_root, &witnesses);
-        // This should fail because the Merkle proof's leaf doesn't match the claimed fact.
-        assert!(
-            result.is_err(),
-            "Fabricated root transition should fail proving: {:?}",
-            result
-        );
-    }
-
-    #[test]
-    fn ivc_validated_tampered_membership_proof_fails() {
-        // Prove correctly, then tamper with one membership proof.
-        let (initial_root, witnesses) = build_validated_ivc_chain(3);
-
-        let mut proof = prove_validated_ivc(initial_root, &witnesses).unwrap();
-
-        // Tamper: corrupt the trace commitment in the second membership proof.
-        proof.fold_membership_proofs[1].proof.trace_commitment[0] ^= 0xFF;
-
-        let verification = verify_validated_ivc(&proof);
-        match verification {
-            ValidatedIvcVerification::MembershipProofInvalid { step, .. } => {
-                assert_eq!(step, 1, "Should fail at step 1 where we tampered");
-            }
-            other => panic!("Expected MembershipProofInvalid at step 1, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn ivc_validated_tampered_chain_proof_fails() {
-        // Prove correctly, then tamper with the chain proof.
-        let (initial_root, witnesses) = build_validated_ivc_chain(3);
-
-        let mut proof = prove_validated_ivc(initial_root, &witnesses).unwrap();
-
-        // Tamper: corrupt the chain proof's trace commitment.
-        proof.chain_proof.trace_commitment[0] ^= 0xFF;
-
-        let verification = verify_validated_ivc(&proof);
-        match verification {
-            ValidatedIvcVerification::ChainProofInvalid(_) => {}
-            other => panic!("Expected ChainProofInvalid, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn ivc_validated_root_mismatch_fails() {
-        // Prove correctly, then tamper with step_roots to create a mismatch.
-        let (initial_root, witnesses) = build_validated_ivc_chain(3);
-
-        let mut proof = prove_validated_ivc(initial_root, &witnesses).unwrap();
-
-        // Tamper: change step_roots[1].0 (old_root of step 1) so it doesn't match
-        // the membership proof's old_root.
-        let orig = proof.step_roots[1].0;
-        proof.step_roots[1].0 = BabyBear::new(orig.0 + 1);
-
-        let verification = verify_validated_ivc(&proof);
-        match verification {
-            ValidatedIvcVerification::RootMismatch { step } => {
-                assert_eq!(step, 1);
-            }
-            other => panic!("Expected RootMismatch at step 1, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn ivc_validated_empty_chain_fails() {
-        let initial_root = BabyBear::new(42);
-        let result = prove_validated_ivc(initial_root, &[]);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("empty"));
-    }
-
-    #[test]
-    fn ivc_validated_chain_break_fails() {
-        // Create witnesses with a chain break (step 1's old_root != step 0's new_root).
-        let (initial_root, mut witnesses) = build_validated_ivc_chain(3);
-
-        // Break the chain: change step 1's old_root.
-        witnesses[1].old_root = BabyBear::new(0xBADBAD);
-
-        let result = prove_validated_ivc(initial_root, &witnesses);
-        assert!(result.is_err(), "Chain break should fail: {:?}", result);
-        assert!(result.unwrap_err().contains("Chain break"));
-    }
-
-    #[test]
-    fn ivc_validated_builder_integration() {
-        // Test the IvcBuilder::finalize_validated path.
-        let (initial_root, witnesses) = build_validated_ivc_chain(3);
-
-        // Also build FoldDeltas from the same data (for the builder).
-        let _deltas: Vec<FoldDelta> = witnesses
-            .iter()
-            .map(|w| {
-                let fold = FoldWitness {
-                    old_root: w.old_root,
-                    new_root: w.new_root,
-                    removed_facts: vec![RemovedFact {
-                        predicate: BabyBear::new(1), // dummy - builder checks fold AIR
-                        terms: [BabyBear::ZERO; 3],
-                        membership_proof: None,
-                    }],
-                    num_added_checks: 1, // use checks-only path to pass fold AIR
-                    added_checks_commitment: crate::fold_air::compute_test_checks_commitment(1),
-                };
-                FoldDelta::new(fold)
-            })
-            .collect();
-
-        // The builder uses FoldAir for each step. For this test we construct
-        // deltas that pass the FoldAir (checks-only, to avoid needing full
-        // membership proofs in the mock prover path too).
-        let checks_deltas: Vec<FoldDelta> = witnesses
-            .iter()
-            .map(|w| {
-                FoldDelta::new(FoldWitness {
-                    old_root: w.old_root,
-                    new_root: w.new_root,
-                    removed_facts: vec![],
-                    num_added_checks: 1,
-                    added_checks_commitment: crate::fold_air::compute_test_checks_commitment(1),
-                })
-            })
-            .collect();
-
-        let mut builder = IvcBuilder::new(initial_root);
-        for delta in &checks_deltas {
-            builder.add_fold(delta.clone()).unwrap();
-        }
-
-        // Finalize with validated proof.
-        let result = builder.finalize_validated(&witnesses);
-        assert!(result.is_some());
-        let validated = result.unwrap();
-        assert!(
-            validated.is_ok(),
-            "finalize_validated failed: {:?}",
-            validated.err()
-        );
-
-        let proof = validated.unwrap();
-        let verification = verify_validated_ivc(&proof);
-        assert_eq!(verification, ValidatedIvcVerification::Valid);
-    }
-
-    #[test]
-    fn ivc_validated_wrong_witness_count_fails() {
-        let (initial_root, witnesses) = build_validated_ivc_chain(3);
-
-        let checks_deltas: Vec<FoldDelta> = witnesses
-            .iter()
-            .map(|w| {
-                FoldDelta::new(FoldWitness {
-                    old_root: w.old_root,
-                    new_root: w.new_root,
-                    removed_facts: vec![],
-                    num_added_checks: 1,
-                    added_checks_commitment: crate::fold_air::compute_test_checks_commitment(1),
-                })
-            })
-            .collect();
-
-        let mut builder = IvcBuilder::new(initial_root);
-        for delta in &checks_deltas {
-            builder.add_fold(delta.clone()).unwrap();
-        }
-
-        // Pass wrong number of witnesses.
-        let result = builder.finalize_validated(&witnesses[..2]);
-        assert!(result.is_some());
-        let validated = result.unwrap();
-        assert!(validated.is_err());
-        assert!(validated.unwrap_err().contains("Expected 3"));
-    }
 
     // ========================================================================
     // ADVERSARIAL TEST (Gap 3): Plain IvcProof accepts fabricated fold steps
@@ -2634,8 +2219,10 @@ mod tests {
     /// arbitrary intermediate roots (no fold validity check). The hash chain is
     /// cryptographically correct, but the fold steps may be invalid.
     ///
-    /// This test shows WHY `ValidatedIvcProof` is needed for adversarial settings:
-    /// `verify_ivc` only checks the hash-chain arithmetic, not fold validity.
+    /// This documents the residual: `verify_ivc` only checks the hash-chain
+    /// arithmetic + digest binding, not fold validity. If this test ever FAILS,
+    /// `verify_ivc` grew a fold-validity check and this documentation (and the
+    /// Gap 3 warning on `verify_ivc`) must be updated.
     #[test]
     fn test_adversarial_plain_ivc_accepts_invalid_folds() {
         // Create a fold chain where the intermediate roots are FABRICATED.
@@ -2646,11 +2233,14 @@ mod tests {
 
         // Build an IVC proof directly using fabricated roots.
         // This bypasses fold validation entirely.
-        let (stark_proof, _) = prove_ivc_stark(initial_root, &[fake_root_1, fake_root_2]);
         let accumulated_hash =
             recompute_accumulated_hash(initial_root, &[fake_root_1, fake_root_2]);
         let accumulated_hash_wide =
             recompute_accumulated_hash_wide(initial_root, &[fake_root_1, fake_root_2]);
+
+        // Any NON-ZERO commitment works: verify_ivc only checks that the
+        // digest binds it, not that it commits to a real execution trace.
+        let trace_commitment = [0xABu8; 32];
 
         let ivc_proof = IvcProof {
             initial_root,
@@ -2667,7 +2257,7 @@ mod tests {
                     fake_root_2,
                     2,
                     accumulated_hash,
-                    &[0u8; 32],
+                    &trace_commitment,
                 ),
                 public_inputs: vec![
                     initial_root,
@@ -2677,8 +2267,7 @@ mod tests {
                 ],
                 simulated_proof_size_bytes: 1024,
             },
-            trace_commitment: [0u8; 32],
-            stark_proof: Some(stark_proof),
+            trace_commitment,
         };
 
         // THE GAP: verify_ivc ACCEPTS this proof even though the fold steps
@@ -2689,14 +2278,15 @@ mod tests {
             result,
             IvcVerification::Valid,
             "Gap 3 demonstration: verify_ivc accepts fabricated fold steps. \
-             This is the soundness gap that ValidatedIvcProof closes."
+             This is the soundness gap a fold-validity companion must close."
         );
 
-        // THE FIX: ValidatedIvcProof would require per-step Merkle membership
-        // proofs. Since no valid Merkle proof exists for the fabricated roots,
-        // prove_validated_ivc would fail at proof generation time.
-        //
-        // Verifiers in adversarial settings MUST require ValidatedIvcProof.
+        // THE FIX used to be ValidatedIvcProof (per-step Merkle-membership
+        // STARKs); stark-kill (f04b2dd1e) deleted it with the hand engine.
+        // Fold validity for adversarial settings now lives on the descriptor
+        // prover (circuit-prove merkle-membership emit gates) and the
+        // whole-chain recursion (circuit-prove/src/ivc_turn_chain.rs), which
+        // fold REAL leaves instead of trusting claimed roots.
     }
 
     // ========================================================================
@@ -2752,201 +2342,108 @@ mod tests {
         summaries
     }
 
-    #[test]
-    fn multi_turn_honest_chain_folds_and_verifies() {
-        for n in [1usize, 2, 3, 5] {
-            let summaries = build_turn_chain(n);
-            let proof = prove_multi_turn_ivc(&summaries)
-                .unwrap_or_else(|| panic!("honest {n}-turn chain must prove"));
-
-            assert_eq!(proof.num_turns, n as u32);
-            assert_eq!(proof.initial_state_root, summaries[0].pre_state_root);
-            assert_eq!(
-                proof.final_state_root,
-                summaries.last().unwrap().post_state_root
-            );
-
-            let result = verify_multi_turn_ivc(&proof, Some(proof.initial_state_root));
-            assert_eq!(
-                result,
-                MultiTurnVerification::Valid,
-                "honest {n}-turn chain must verify"
-            );
-        }
-    }
+    // ─────────────────────────────────────────────────────────────────────────
+    // stark-kill (f04b2dd1e) deleted MultiTurnIvcAir / prove_multi_turn_ivc /
+    // verify_multi_turn_ivc — the hand-STARK fold over TurnTransitionSummary —
+    // and the AIR-level tests (honest-chain prove/verify, broken state/receipt
+    // link, tampered endpoint/accumulator, inconsistent turn, reorder, empty
+    // chain, chain-too-long, genesis-link) died with the engine. The
+    // chain-structure teeth now live on the recursion path:
+    // circuit-prove/src/ivc_turn_chain.rs (TurnChainBindingAir + the
+    // whole-chain recursive fold), which enforces continuity, positional
+    // digest binding and endpoint pinning in-circuit over REAL per-turn
+    // leaves. What survives HERE are the hash primitives the summaries are
+    // built from; their teeth stay bitten below.
+    // ─────────────────────────────────────────────────────────────────────────
 
     #[test]
-    fn multi_turn_binds_true_endpoints() {
-        let summaries = build_turn_chain(4);
-        let proof = prove_multi_turn_ivc(&summaries).unwrap();
-
-        // The folded PI binds the genuine start and end.
-        assert_eq!(proof.initial_state_root, BabyBear::new(1_000));
-        assert_eq!(proof.final_state_root, summaries[3].post_state_root);
-
-        // Verifying against a WRONG expected initial state is rejected.
-        let wrong = verify_multi_turn_ivc(&proof, Some(BabyBear::new(424242)));
-        assert_eq!(wrong, MultiTurnVerification::InitialStateMismatch);
-    }
-
-    #[test]
-    fn multi_turn_broken_state_link_rejected_at_prove() {
-        // Adversary tampers an intermediate post->pre state transition.
-        let mut summaries = build_turn_chain(4);
-        // Break: turn 2's pre_state no longer equals turn 1's post_state.
-        summaries[2].pre_state_root = BabyBear::new(0xBADC0DE);
-
-        // The honest prover refuses to build a trace the AIR would reject.
-        let res = prove_multi_turn_ivc(&summaries);
-        assert!(
-            res.is_none(),
-            "a broken state-root link must not produce a proof"
-        );
-    }
-
-    #[test]
-    fn multi_turn_broken_receipt_link_rejected_at_prove() {
-        // Adversary tampers the receipt-chain link of an intermediate turn.
-        let mut summaries = build_turn_chain(4);
-        // Break: turn 2's previous_receipt link (canonically encoded) no longer
-        // matches turn 1's receipt.
-        summaries[2].previous_receipt_hash =
-            TurnTransitionSummary::encode_receipt_link(BabyBear::new(0xC0FFEE));
-
-        let res = prove_multi_turn_ivc(&summaries);
-        assert!(
-            res.is_none(),
-            "a broken receipt-chain link must not produce a proof"
-        );
-    }
-
-    #[test]
-    fn multi_turn_tampered_endpoint_rejected_by_verifier() {
-        // Adversary proves an honest chain, then forges the public endpoint.
-        let summaries = build_turn_chain(4);
-        let mut proof = prove_multi_turn_ivc(&summaries).unwrap();
-
-        // Tamper the final_state_root claim. The STARK was proven against the
-        // true endpoints, so verification (which feeds the tampered value as a
-        // public input / boundary constraint) must fail.
-        proof.final_state_root = BabyBear::new(0xFEEDFACE);
-
-        let result = verify_multi_turn_ivc(&proof, Some(proof.initial_state_root));
-        assert!(
-            matches!(result, MultiTurnVerification::ProofInvalid(_)),
-            "tampered final_state_root must be rejected, got {result:?}"
-        );
-    }
-
-    #[test]
-    fn multi_turn_tampered_accumulator_rejected_by_verifier() {
-        let summaries = build_turn_chain(3);
-        let mut proof = prove_multi_turn_ivc(&summaries).unwrap();
-        proof.folded_accumulator = BabyBear::new(0xDEADBEEF);
-        let result = verify_multi_turn_ivc(&proof, None);
-        assert!(
-            matches!(result, MultiTurnVerification::ProofInvalid(_)),
-            "tampered folded_accumulator must be rejected, got {result:?}"
-        );
-    }
-
-    #[test]
-    fn multi_turn_inconsistent_turn_rejected() {
-        // A turn whose bilateral aggregate flagged inconsistency (flag = 0) must
-        // be rejected by the multi-turn fold. We make the LAST turn inconsistent
-        // (no successor turn to also break the link), so the trace IS built and
-        // the STARK must reject it via the consistency constraints (C3 on earlier
-        // rows / the last-row consistency boundary on the final row).
-        let mut summaries = build_turn_chain(2);
-        let last = summaries.len() - 1;
-        summaries[last].bilateral_consistent = BabyBear::ZERO;
-
-        let res = prove_multi_turn_ivc(&summaries);
-        match res {
-            Some(proof) => {
-                let result = verify_multi_turn_ivc(&proof, None);
-                assert!(
-                    matches!(result, MultiTurnVerification::ProofInvalid(_)),
-                    "a turn with bilateral_consistent=0 must be rejected, got {result:?}"
-                );
-            }
-            // If prove refused to build, that's also an acceptable rejection.
-            None => {}
-        }
-
-        // Also exercise an interior inconsistent turn: it breaks the receipt link
-        // for the following turn (receipt depends on the consistency flag), so the
-        // honest prover refuses — a still-stronger rejection path.
-        let mut interior = build_turn_chain(3);
-        interior[1].bilateral_consistent = BabyBear::ZERO;
-        let res2 = prove_multi_turn_ivc(&interior);
-        if let Some(proof) = res2 {
-            assert!(matches!(
-                verify_multi_turn_ivc(&proof, None),
-                MultiTurnVerification::ProofInvalid(_)
-            ));
-        }
-    }
-
-    #[test]
-    fn multi_turn_reordered_chain_rejected() {
-        // Splice/reorder: take an honest 3-turn chain and swap turns 1 and 2.
-        // The reordered chain breaks state continuity and receipt linkage, so the
-        // honest prover refuses. We assert the reordered chain does NOT produce a
-        // proof that verifies against the ORIGINAL chain's endpoints.
-        let honest = build_turn_chain(3);
-        let honest_proof = prove_multi_turn_ivc(&honest).unwrap();
-        let honest_acc = honest_proof.folded_accumulator;
-
-        let mut reordered = honest.clone();
-        reordered.swap(1, 2);
-
-        // The reordered chain is internally broken (links no longer match), so the
-        // prover rejects it.
-        let res = prove_multi_turn_ivc(&reordered);
-        assert!(
-            res.is_none(),
-            "a reordered/spliced chain must not produce a proof"
-        );
-
-        // Even if an adversary somehow assembled an accumulator, it cannot equal
-        // the honest accumulator under reordering because step indices are
-        // absorbed positionally. (Sanity: a fresh 3-turn chain with the same
-        // turns in a different order yields a different accumulator — verified
-        // implicitly by the prover refusal above.)
-        let _ = honest_acc;
-    }
-
-    #[test]
-    fn multi_turn_empty_chain_rejected() {
-        let res = prove_multi_turn_ivc(&[]);
-        assert!(res.is_none(), "empty chain must not produce a proof");
-    }
-
-    #[test]
-    fn multi_turn_chain_too_long_rejected_at_verify() {
-        // Construct a proof, then lie about num_turns to exceed the cap.
-        let summaries = build_turn_chain(2);
-        let mut proof = prove_multi_turn_ivc(&summaries).unwrap();
-        proof.num_turns = MAX_TURN_CHAIN_LEN + 1;
-        let result = verify_multi_turn_ivc(&proof, None);
-        assert_eq!(result, MultiTurnVerification::ChainTooLong);
-    }
-
-    #[test]
-    fn multi_turn_genesis_must_have_zero_prev_receipt() {
-        // Adversary gives the genesis turn a non-zero inbound link.
-        let mut summaries = build_turn_chain(2);
-        summaries[0].previous_receipt_hash = [
+    fn multi_turn_receipt_hash_binds_every_input() {
+        // Every input to the per-turn receipt hash must be load-bearing. The
+        // bilateral_consistent flip is the surviving remnant of the
+        // "inconsistent turn rejected" tooth: a turn whose flag differs yields
+        // a different receipt, which breaks its successor's inbound link.
+        let base = turn_receipt_hash(
+            BabyBear::new(11),
+            BabyBear::new(22),
+            BabyBear::new(33),
+            BabyBear::new(44),
             BabyBear::new(1),
-            BabyBear::ZERO,
-            BabyBear::ZERO,
-            BabyBear::ZERO,
-        ];
-        let res = prove_multi_turn_ivc(&summaries);
-        assert!(
-            res.is_none(),
-            "genesis turn with non-zero previous_receipt_hash must be rejected"
         );
+        let inputs = [
+            BabyBear::new(11),
+            BabyBear::new(22),
+            BabyBear::new(33),
+            BabyBear::new(44),
+            BabyBear::new(1),
+        ];
+        for i in 0..inputs.len() {
+            let mut flipped = inputs;
+            flipped[i] += BabyBear::new(1);
+            let v = turn_receipt_hash(flipped[0], flipped[1], flipped[2], flipped[3], flipped[4]);
+            assert_ne!(base, v, "receipt-hash input {i} is not bound");
+        }
+    }
+
+    #[test]
+    fn multi_turn_accumulator_is_order_and_position_sensitive() {
+        let acc0 = BabyBear::ZERO;
+        let r1 = BabyBear::new(0xAAAA);
+        let r2 = BabyBear::new(0xBBBB);
+
+        // Reordering receipts changes the accumulator (splice detection).
+        let acc_12 = extend_turn_accumulator(extend_turn_accumulator(acc0, r1, 0), r2, 1);
+        let acc_21 = extend_turn_accumulator(extend_turn_accumulator(acc0, r2, 0), r1, 1);
+        assert_ne!(
+            acc_12, acc_21,
+            "reordered receipts must change the folded accumulator"
+        );
+
+        // The step index is absorbed: the same receipt at a different position
+        // yields a different accumulator (shift/duplication detection).
+        assert_ne!(
+            extend_turn_accumulator(acc0, r1, 0),
+            extend_turn_accumulator(acc0, r1, 1),
+            "step index must be bound positionally"
+        );
+    }
+
+    #[test]
+    fn multi_turn_chain_links_receipts_canonically() {
+        // An honestly-linked chain: genesis carries the all-zero inbound link,
+        // every later turn's previous_receipt_hash is the canonical
+        // [receipt, 0, 0, 0] encoding of its predecessor's RECOMPUTED receipt
+        // hash, and state roots chain post -> pre. Falsifiable against any
+        // drift in encode_receipt_link / turn_receipt_hash / turn_hash_digest.
+        let summaries = build_turn_chain(4);
+
+        assert_eq!(
+            summaries[0].previous_receipt_hash,
+            [BabyBear::ZERO; AGGREGATE_DIGEST_WIDTH],
+            "genesis turn must carry the all-zero inbound link"
+        );
+
+        let mut prev_receipt = BabyBear::ZERO;
+        for (i, s) in summaries.iter().enumerate() {
+            if i > 0 {
+                assert_eq!(
+                    s.pre_state_root,
+                    summaries[i - 1].post_state_root,
+                    "state-root chain break at turn {i}"
+                );
+                assert_eq!(
+                    s.previous_receipt_hash,
+                    TurnTransitionSummary::encode_receipt_link(prev_receipt),
+                    "receipt link at turn {i} is not the canonical encoding"
+                );
+                assert_eq!(s.previous_receipt_link(), prev_receipt);
+            }
+            prev_receipt = turn_receipt_hash(
+                s.turn_hash_digest(),
+                s.pre_state_root,
+                s.post_state_root,
+                s.previous_receipt_link(),
+                s.bilateral_consistent,
+            );
+        }
     }
 }

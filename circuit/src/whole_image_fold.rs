@@ -606,10 +606,7 @@ mod tests {
     use super::*;
 
     fn leaf(addr: u32, value: u32) -> HeapLeaf {
-        HeapLeaf {
-            addr: BabyBear::new(addr),
-            value: BabyBear::new(value),
-        }
+        HeapLeaf::entry(BabyBear::new(addr), BabyBear::new(value))
     }
 
     /// The fold is order-independent in the declared view (the sorted insert canonicalizes),

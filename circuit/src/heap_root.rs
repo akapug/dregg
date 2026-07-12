@@ -93,35 +93,82 @@ pub fn heap_addr(coll: BabyBear, key: BabyBear) -> BabyBear {
     hash_many(&[coll, key])
 }
 
-/// One heap entry: the sorted-tree leaf `(addr, value)`. The leaf digest is
-/// the arity-2 image `hash[addr, value]` (`EffectVmEmitHeapRoot.leafOf` /
-/// `Substrate.Heap.leafOf`), recomputed in-row by `siteHeapLeaf`.
+/// One heap entry: the **indexed-Merkle-tree (IMT) leaf** — a linked-list node
+/// `(addr, value, next_addr)`. `next_addr` is the POINTER to the next-larger
+/// present address (the sorted linked-list link; the genesis sentinel points
+/// `MIN → MAX`). The leaf digest is the arity-3 image `hash[addr, value,
+/// next_addr]` — the deployed mirror of the PROVEN Lean model
+/// `Dregg2.Circuit.IndexedMerkleTree.{ImtLeaf, imtLeafHash}` (arity 2 → 3, the
+/// gap-#5 IMT closure). The pointer IS the absence bracket: a key `k` is absent
+/// iff ONE low-leaf brackets it `low.addr < k < low.next_addr` — no physical-
+/// position adjacency (`ImtAbsent` / `imtAbsent_excludes`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HeapLeaf {
     /// The sort key: [`heap_addr`] of the entry's `(collection_id, key)`.
     pub addr: BabyBear,
     /// The stored value felt.
     pub value: BabyBear,
+    /// The IMT pointer: the next-larger present address (the sorted linked-list
+    /// link, and the non-membership bracket). Linked by [`CanonicalHeapTree::new`]
+    /// to the successor's `addr` (sentinel-terminated); the Lean `ImtLeaf.nextAddr`.
+    pub next_addr: BabyBear,
 }
 
 impl HeapLeaf {
-    /// The arity-2 Poseidon2 leaf digest `hash[addr, value]`. This is the
-    /// value the sorted Merkle tree stores at the leaf position; the leaf is
-    /// *placed* by its `addr` ordering.
+    /// An UNLINKED leaf `(addr, value)`: `next_addr` seeded to [`SENTINEL_MAX`]
+    /// (the "points to the top sentinel" default). The tree builders
+    /// ([`CanonicalHeapTree::new`] / [`CanonicalHeapTree8::new`]) RELINK
+    /// `next_addr` to each leaf's sorted successor, so a caller assembling a leaf
+    /// set for a tree need only supply `(addr, value)` — the deployed
+    /// ergonomic construction that keeps the linked-chain invariant the
+    /// producer's job, not every call site's. Mirrors the Lean `imtToHeap`
+    /// projection direction: the map is `(addr) → value`; the pointer is
+    /// producer-maintained machinery.
+    pub fn entry(addr: BabyBear, value: BabyBear) -> HeapLeaf {
+        HeapLeaf {
+            addr,
+            value,
+            next_addr: SENTINEL_MAX,
+        }
+    }
+
+    /// The arity-3 Poseidon2 IMT leaf digest `hash[addr, value, next_addr]`.
+    /// This is the value the sorted Merkle tree stores at the leaf position; the
+    /// leaf is *placed* by its `addr` ordering, and the `next_addr` pointer binds
+    /// the linked chain into the commitment (the Lean `imtLeafHash`, CR-injective
+    /// on all three fields — `imtLeafHash_injective`).
     pub fn digest(&self) -> BabyBear {
-        hash_many(&[self.addr, self.value])
+        hash_many(&[self.addr, self.value, self.next_addr])
     }
 }
 
-/// The sentinel leaf for a given sort key (MIN or MAX). The value is zero;
-/// the sentinel exists only to bracket the sorted key range so a
-/// non-membership proof can place an absent address between two adjacent
-/// present addresses (`Crypto.NonMembership.sorted_gap_excludes`, reused by
-/// `Substrate.Heap.get_none_of_gap`).
-fn sentinel_leaf(key: BabyBear) -> HeapLeaf {
+/// The MIN sentinel leaf `{MIN, 0, MAX}` — the genesis IMT node pointing
+/// `MIN → MAX` (the Lean `genesis lo hi = [{addr:=lo, value:=0, nextAddr:=hi}]`).
+/// The single sentinel that brackets the whole key range on the empty heap; real
+/// inserts splice between it and its `next_addr`. The MAX sentinel is NO LONGER a
+/// separate sorted leaf — it survives only as the terminal `next_addr` pointer of
+/// the current largest leaf.
+fn min_sentinel_leaf() -> HeapLeaf {
     HeapLeaf {
-        addr: key,
+        addr: SENTINEL_MIN,
         value: BabyBear::ZERO,
+        next_addr: SENTINEL_MAX,
+    }
+}
+
+/// Relink the `next_addr` pointers of an ALREADY-sorted, sentinel-headed leaf
+/// list into the IMT chain: each leaf points to its successor's `addr`, and the
+/// last leaf points to [`SENTINEL_MAX`] (the terminal pointer). The Rust twin of
+/// the Lean `ImtSorted` well-linked invariant (`l.nextAddr = l'.addr`, last
+/// `l.addr < l.nextAddr = MAX`). Called by the tree builders after the sort+dedup.
+fn relink_next_addrs(leaves: &mut [HeapLeaf]) {
+    let n = leaves.len();
+    for i in 0..n {
+        leaves[i].next_addr = if i + 1 < n {
+            leaves[i + 1].addr
+        } else {
+            SENTINEL_MAX
+        };
     }
 }
 
@@ -156,11 +203,15 @@ impl CanonicalHeapTree {
     /// duplicate addresses never occur; belt-and-suspenders), then builds the
     /// padded binary tree.
     pub fn new(mut leaves: Vec<HeapLeaf>, depth: usize) -> Self {
-        leaves.push(sentinel_leaf(SENTINEL_MIN));
-        leaves.push(sentinel_leaf(SENTINEL_MAX));
+        // IMT genesis: the SINGLE MIN sentinel `{MIN, 0, MAX}` (points MIN → MAX).
+        // The MAX sentinel is no longer a separate sorted leaf — it is the terminal
+        // `next_addr` pointer the relink installs on the largest real leaf.
+        leaves.push(min_sentinel_leaf());
         // Sort by the canonical sort key (addr). Deterministic, total.
         leaves.sort_by_key(|l| l.addr.as_u32());
         leaves.dedup_by_key(|l| l.addr.as_u32());
+        // Link the IMT chain: each leaf's next_addr = successor's addr (last → MAX).
+        relink_next_addrs(&mut leaves);
 
         let capacity = 1usize << depth;
         // The heap must fit (minus the two sentinels). Fail loudly rather
@@ -341,9 +392,14 @@ impl CanonicalHeapTree {
     /// position; fresh-address inserts use [`CanonicalHeapTree::insert_witness`]).
     /// The returned `old_root` equals this tree's root; `new_root` is the root
     /// after the single-leaf replacement (recomputed over the shared sibling path).
-    pub fn update_witness(&self, new_leaf: HeapLeaf) -> Option<HeapUpdateWitness> {
+    pub fn update_witness(&self, mut new_leaf: HeapLeaf) -> Option<HeapUpdateWitness> {
         let pos = self.position_of(new_leaf.addr)?;
         let old_leaf = self.sorted_leaves[pos];
+        // A value update HOLDS THE POINTER FIXED (the IMT chain is unchanged): the
+        // new leaf inherits the committed `next_addr`, so old/new share the sorted
+        // position AND the linked-chain link (Lean `imtInsert` never re-points on a
+        // value write).
+        new_leaf.next_addr = old_leaf.next_addr;
         let (siblings, directions) = self.prove_membership(pos)?;
 
         // Recompute the new root over the SAME siblings with the new leaf
@@ -400,7 +456,9 @@ impl CanonicalHeapTree {
         let new_pos = new_tree.position_of(key)?;
         let (siblings, directions) = new_tree.prove_membership(new_pos)?;
         Some(HeapInsertWitness {
-            new_leaf,
+            // The LINKED new leaf (its next_addr = the old successor's addr, set by
+            // the relink in `new`), so `new_leaf.digest()` opens against `new_root`.
+            new_leaf: new_tree.sorted_leaves[new_pos],
             siblings,
             directions,
             old_root: self.root(),
@@ -423,14 +481,17 @@ impl CanonicalHeapTree {
     /// write, turning the O(n) full recompute into an O(log n) path update.
     pub fn apply_value_update(&mut self, addr: BabyBear, value: BabyBear) -> Option<BabyBear> {
         let pos = self.position_of(addr)?;
-        // Refresh the retained sorted leaf (addr unchanged ⇒ sort order preserved).
+        // Refresh the retained sorted leaf (addr unchanged ⇒ sort order preserved;
+        // the IMT next_addr pointer is HELD FIXED — a value update never re-links
+        // the chain, mirroring the Lean `imtInsert` head-addr/pointer invariant).
         self.sorted_leaves[pos].value = value;
+        let leaf = self.sorted_leaves[pos];
         // Recompute only the leaf→root path. A sibling beyond the stored prefix is
         // the all-padding empty-subtree root for its level (unchanged by this
         // write); `node()` supplies it. Every ancestor of a stored leaf is itself
         // within its level's non-empty prefix, so the parent writes are in-bounds.
         let mut idx = pos;
-        let mut cur = HeapLeaf { addr, value }.digest();
+        let mut cur = leaf.digest();
         self.levels[0][idx] = cur;
         for level in 0..self.depth {
             let (l, r) = if idx & 1 == 0 {
@@ -460,10 +521,7 @@ pub fn compute_heap_root_entries(entries: &[((BabyBear, BabyBear), BabyBear)]) -
     compute_heap_root(
         entries
             .iter()
-            .map(|((coll, key), value)| HeapLeaf {
-                addr: heap_addr(*coll, *key),
-                value: *value,
-            })
+            .map(|((coll, key), value)| HeapLeaf::entry(heap_addr(*coll, *key), *value))
             .collect(),
     )
 }
@@ -524,7 +582,7 @@ impl HeapLeaf {
     /// the same permutation's out0); lanes 1..7 are the faithful completion the
     /// 1-felt chain dropped. Twin of [`crate::cap_root::CapLeaf::digest`].
     pub fn digest8(&self) -> [BabyBear; HEAP_DIGEST_W] {
-        crate::descriptor_ir2::chip_absorb_all_lanes(2, &[self.addr, self.value])
+        crate::descriptor_ir2::chip_absorb_all_lanes(3, &[self.addr, self.value, self.next_addr])
     }
 }
 
@@ -565,10 +623,12 @@ pub fn heap_empty_subtree_root_8(level: usize) -> [BabyBear; HEAP_DIGEST_W] {
 /// (`docs/FAITHFUL-COMMITMENT-LAW.md`).
 pub fn compute_canonical_heap_root_8(leaves: Vec<HeapLeaf>) -> Faithful8 {
     let mut leaves = leaves;
-    leaves.push(sentinel_leaf(SENTINEL_MIN));
-    leaves.push(sentinel_leaf(SENTINEL_MAX));
+    // IMT genesis: the single MIN sentinel `{MIN, 0, MAX}`; the relink installs
+    // the terminal MAX pointer on the largest real leaf (no separate MAX leaf).
+    leaves.push(min_sentinel_leaf());
     leaves.sort_by_key(|l| l.addr.as_u32());
     leaves.dedup_by_key(|l| l.addr.as_u32());
+    relink_next_addrs(&mut leaves);
 
     let depth = HEAP_TREE_DEPTH;
     let capacity = 1usize << depth;
@@ -608,10 +668,7 @@ pub fn compute_canonical_heap_root_8_entries(
     compute_canonical_heap_root_8(
         entries
             .iter()
-            .map(|((coll, key), value)| HeapLeaf {
-                addr: heap_addr(*coll, *key),
-                value: *value,
-            })
+            .map(|((coll, key), value)| HeapLeaf::entry(heap_addr(*coll, *key), *value))
             .collect(),
     )
 }
@@ -685,10 +742,12 @@ impl CanonicalHeapTree8 {
     /// sorted+sentinel+dedup+sparse-fold discipline as [`CanonicalHeapTree::new`],
     /// at 8-felt width.
     pub fn new(mut leaves: Vec<HeapLeaf>, depth: usize) -> Self {
-        leaves.push(sentinel_leaf(SENTINEL_MIN));
-        leaves.push(sentinel_leaf(SENTINEL_MAX));
+        // IMT genesis: the single MIN sentinel `{MIN, 0, MAX}`; the relink installs
+        // the terminal MAX pointer (no separate MAX leaf).
+        leaves.push(min_sentinel_leaf());
         leaves.sort_by_key(|l| l.addr.as_u32());
         leaves.dedup_by_key(|l| l.addr.as_u32());
+        relink_next_addrs(&mut leaves);
 
         let capacity = 1usize << depth;
         assert!(
@@ -780,9 +839,11 @@ impl CanonicalHeapTree8 {
     /// Build an 8-felt [`HeapUpdateWitness8`] for an in-place value write at an
     /// EXISTING address. The 8-felt twin of [`CanonicalHeapTree::update_witness`]:
     /// `new_root8` is recomposed over the SAME sibling path via [`heap_node8`].
-    pub fn update_witness(&self, new_leaf: HeapLeaf) -> Option<HeapUpdateWitness8> {
+    pub fn update_witness(&self, mut new_leaf: HeapLeaf) -> Option<HeapUpdateWitness8> {
         let pos = self.position_of(new_leaf.addr)?;
         let old_leaf = self.sorted_leaves[pos];
+        // Value update holds the IMT pointer fixed (chain unchanged).
+        new_leaf.next_addr = old_leaf.next_addr;
         let (siblings, directions) = self.prove_membership(pos)?;
         let new_root = recompose_membership_8(new_leaf.digest8(), &siblings, &directions);
         Some(HeapUpdateWitness8 {
@@ -824,7 +885,9 @@ impl CanonicalHeapTree8 {
         let new_pos = new_tree.position_of(key)?;
         let (siblings, directions) = new_tree.prove_membership(new_pos)?;
         Some(HeapInsertWitness8 {
-            new_leaf,
+            // The LINKED new leaf (its next_addr = the sorted successor's addr, set by the relink),
+            // so `new_leaf.digest8()` opens against `new_root`.
+            new_leaf: new_tree.sorted_leaves[new_pos],
             siblings,
             directions,
             old_root: self.root8().limbs(),
@@ -848,13 +911,15 @@ impl CanonicalHeapTree8 {
     /// update at 8-felt width.
     pub fn apply_value_update(&mut self, addr: BabyBear, value: BabyBear) -> Option<Faithful8> {
         let pos = self.position_of(addr)?;
-        // Refresh the retained sorted leaf (addr unchanged ⇒ sort order preserved).
+        // Refresh the retained sorted leaf (addr unchanged ⇒ sort order preserved;
+        // the IMT next_addr pointer is HELD FIXED — a value update never re-links).
         self.sorted_leaves[pos].value = value;
+        let leaf = self.sorted_leaves[pos];
         // Recompute only the leaf→root path. A sibling beyond the stored prefix is
         // the all-padding empty-subtree root for its level (unchanged by this
         // write); `node8()` supplies it.
         let mut idx = pos;
-        let mut cur = HeapLeaf { addr, value }.digest8();
+        let mut cur = leaf.digest8();
         self.levels[0][idx] = cur;
         for level in 0..self.depth {
             let (l, r) = if idx & 1 == 0 {
@@ -916,10 +981,10 @@ mod tests {
     use super::*;
 
     fn entry(coll: u32, key: u32, value: u32) -> HeapLeaf {
-        HeapLeaf {
-            addr: heap_addr(BabyBear::new(coll), BabyBear::new(key)),
-            value: BabyBear::new(value),
-        }
+        HeapLeaf::entry(
+            heap_addr(BabyBear::new(coll), BabyBear::new(key)),
+            BabyBear::new(value),
+        )
     }
 
     /// The empty root is deterministic and non-zero (the sentinels hash into
@@ -988,10 +1053,10 @@ mod tests {
             vec![entry(1, 1, 10), entry(1, 2, 20), entry(2, 1, 30)],
             HEAP_TREE_DEPTH,
         );
-        let new_leaf = HeapLeaf {
-            addr: heap_addr(BabyBear::new(1), BabyBear::new(2)),
-            value: BabyBear::new(77),
-        };
+        let new_leaf = HeapLeaf::entry(
+            heap_addr(BabyBear::new(1), BabyBear::new(2)),
+            BabyBear::new(77),
+        );
         let w = tree.update_witness(new_leaf).expect("addr is present");
         assert_eq!(w.old_leaf.value, BabyBear::new(20));
         assert_eq!(w.old_root, tree.root());
@@ -1001,10 +1066,10 @@ mod tests {
             "path-recomputed post-root must equal the rebuilt tree root"
         );
         // A fabricated (absent) address has no authenticated witness.
-        let absent = HeapLeaf {
-            addr: heap_addr(BabyBear::new(9), BabyBear::new(9)),
-            value: BabyBear::new(1),
-        };
+        let absent = HeapLeaf::entry(
+            heap_addr(BabyBear::new(9), BabyBear::new(9)),
+            BabyBear::new(1),
+        );
         assert!(tree.update_witness(absent).is_none());
     }
 
@@ -1013,10 +1078,10 @@ mod tests {
     #[test]
     fn insert_witness_recomputes_post_root() {
         let tree = CanonicalHeapTree::new(vec![entry(1, 1, 10), entry(1, 3, 30)], HEAP_TREE_DEPTH);
-        let new_leaf = HeapLeaf {
-            addr: heap_addr(BabyBear::new(1), BabyBear::new(2)),
-            value: BabyBear::new(20),
-        };
+        let new_leaf = HeapLeaf::entry(
+            heap_addr(BabyBear::new(1), BabyBear::new(2)),
+            BabyBear::new(20),
+        );
         let w = tree.insert_witness(new_leaf).expect("addr is fresh");
         assert_eq!(w.old_root, tree.root());
         let rebuilt = compute_heap_root(vec![entry(1, 1, 10), entry(1, 2, 20), entry(1, 3, 30)]);
@@ -1024,8 +1089,9 @@ mod tests {
             w.new_root, rebuilt,
             "insert-witness new root must equal the rebuilt tree root"
         );
-        // Recompute the path top from the witness to cross-check.
-        let mut cur = new_leaf.digest();
+        // Recompute the path top from the witness to cross-check (the witness's
+        // LINKED new leaf — its next_addr pointer set by the relink).
+        let mut cur = w.new_leaf.digest();
         for level in 0..HEAP_TREE_DEPTH {
             cur = if w.directions[level] == 0 {
                 hash_fact(cur, &[w.siblings[level]])
@@ -1181,10 +1247,11 @@ mod tests {
     /// levels)` so membership can be cross-checked against the dense arrays.
     fn dense_build(leaves: Vec<HeapLeaf>, depth: usize) -> (Vec<HeapLeaf>, Vec<Vec<BabyBear>>) {
         let mut leaves = leaves;
-        leaves.push(sentinel_leaf(SENTINEL_MIN));
-        leaves.push(sentinel_leaf(SENTINEL_MAX));
+        // Mirror the IMT `new`: single MIN sentinel + relink (no separate MAX leaf).
+        leaves.push(min_sentinel_leaf());
         leaves.sort_by_key(|l| l.addr.as_u32());
         leaves.dedup_by_key(|l| l.addr.as_u32());
+        relink_next_addrs(&mut leaves);
         let capacity = 1usize << depth;
         assert!(leaves.len() <= capacity);
         let mut leaf_digests: Vec<BabyBear> = leaves.iter().map(HeapLeaf::digest).collect();

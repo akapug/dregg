@@ -1453,10 +1453,7 @@ pub fn generate_rotated_note_spend_trace_with_nullifier_tree(
     }
     let before_root8 = before_tree.root8();
     let mut after_leaves = before_nullifiers.to_vec();
-    after_leaves.push(HeapLeaf {
-        addr: nf_key,
-        value: nf_value,
-    });
+    after_leaves.push(HeapLeaf::entry(nf_key, nf_value));
     // The after-tree is built only to read its root8; move `after_leaves` in (no clone).
     let after_root8 = CanonicalHeapTree8::new(after_leaves, HEAP_TREE_DEPTH).root8();
 
@@ -1550,10 +1547,8 @@ pub fn generate_rotated_create_cell_trace_with_accounts_tree(
     }
     let before_root8 = before_tree.root8();
     let mut after_leaves = before_accounts.to_vec();
-    after_leaves.push(HeapLeaf {
-        addr: cell_key,
-        value: cell_key, // the born-empty cell rides its own key as its leaf value.
-    });
+    // the born-empty cell rides its own key as its leaf value (tree relinks next_addr).
+    after_leaves.push(HeapLeaf::entry(cell_key, cell_key));
     // The after-tree is built only to read its root8; move `after_leaves` in (no clone).
     let after_root8 = CanonicalHeapTree8::new(after_leaves, HEAP_TREE_DEPTH).root8();
 
@@ -1632,10 +1627,7 @@ pub fn generate_rotated_note_create_trace_with_commitments_tree(
     let before_tree = CanonicalHeapTree8::new(before_commitments.to_vec(), HEAP_TREE_DEPTH);
     let before_root8 = before_tree.root8();
     let mut after_leaves = before_commitments.to_vec();
-    after_leaves.push(HeapLeaf {
-        addr: cm_key,
-        value: cm_value,
-    });
+    after_leaves.push(HeapLeaf::entry(cm_key, cm_value));
     // The after-tree is built only to read its root8; move `after_leaves` in (no clone).
     let after_root8 = CanonicalHeapTree8::new(after_leaves, HEAP_TREE_DEPTH).root8();
 
@@ -1729,10 +1721,7 @@ pub fn generate_rotated_refusal_trace_with_fields_tree(
     );
     let mut before_leaves = before_fields_leaves.to_vec();
     if !before_leaves.iter().any(|l| l.addr == audit_key) {
-        before_leaves.push(HeapLeaf {
-            addr: audit_key,
-            value: BabyBear::ZERO,
-        });
+        before_leaves.push(HeapLeaf::entry(audit_key, BabyBear::ZERO));
     }
 
     // The BEFORE fields tree (the openable accumulator before the refusal) and the AFTER tree
@@ -1753,10 +1742,7 @@ pub fn generate_rotated_refusal_trace_with_fields_tree(
     }
     let before_root8 = before_tree.root8();
     let after_root8: [BabyBear; HEAP_DIGEST_W] = before_tree
-        .update_witness(HeapLeaf {
-            addr: audit_key,
-            value: audit_value,
-        })
+        .update_witness(HeapLeaf::entry(audit_key, audit_value))
         .ok_or_else(|| {
             "refusal fields-root write: 8-felt update witness for the audit slot failed".to_string()
         })?
@@ -1875,17 +1861,14 @@ pub fn generate_rotated_refusal_write_wide(
     let before_leaves = &map_heaps[0];
     let before_tree = CanonicalHeapTree8::new(before_leaves.clone(), HEAP_TREE_DEPTH);
     let before_root8 = before_tree.root8();
-    let old_value = before_tree
+    let _old_value = before_tree
         .sorted_leaves()
         .iter()
         .find(|l| l.addr == audit_key)
         .map(|l| l.value)
         .ok_or_else(|| "refusal fields-write wide: BEFORE audit leaf vanished".to_string())?;
     let update = before_tree
-        .update_witness(HeapLeaf {
-            addr: audit_key,
-            value: audit_value,
-        })
+        .update_witness(HeapLeaf::entry(audit_key, audit_value))
         .ok_or_else(|| "refusal fields-write wide: 8-felt update witness failed".to_string())?;
     let fields_siblings: Vec<[BabyBear; HEAP_DIGEST_W]> = update.siblings.clone();
     let fields_directions: Vec<u8> = update.directions.clone();
@@ -1898,10 +1881,10 @@ pub fn generate_rotated_refusal_write_wide(
     }
     let read_base = REFUSAL_WRITE_READ_BASE; // 829
     let after_spine_base = read_base + CAP_OPEN_SPAN; // 1158
-    let read_leaf = HeapLeaf {
-        addr: audit_key,
-        value: old_value,
-    };
+    // The committed BEFORE leaf (carries the IMT next_addr pointer, so its arity-3 digest8 opens
+    // against the BEFORE root8); a value update holds the pointer fixed for the after-spine leaf.
+    let read_leaf = update.old_leaf;
+    let audit_next = update.old_leaf.next_addr;
     // Grow each row to the deployed host width and lay the membership appendix (the READ open of the OLD
     // audit leaf against the BEFORE root8, and the after-spine open of the UPDATED audit leaf against the
     // AFTER root8, over the SHARED sibling path). SHARED byte-for-byte with heap's `fill_heap_open_read` /
@@ -1921,6 +1904,7 @@ pub fn generate_rotated_refusal_write_wide(
             after_spine_base,
             audit_key,
             audit_value,
+            audit_next,
             &fields_siblings,
             &fields_directions,
         );
@@ -2099,10 +2083,7 @@ pub fn generate_rotated_cap_write_base(
                     )
                 })?;
             let w = before_tree
-                .update_witness(HeapLeaf {
-                    addr: removed_key,
-                    value: BabyBear::ZERO,
-                })
+                .update_witness(HeapLeaf::entry(removed_key, BabyBear::ZERO))
                 .ok_or_else(|| {
                     format!(
                         "cap-write Remove: update witness for key {} failed",
@@ -2148,10 +2129,7 @@ pub fn generate_rotated_cap_write_base(
                     )
                 })?;
             let w = before_tree
-                .insert_witness(HeapLeaf {
-                    addr: inserted_key,
-                    value: inserted_value,
-                })
+                .insert_witness(HeapLeaf::entry(inserted_key, inserted_value))
                 .ok_or_else(|| {
                     format!(
                         "cap-write Insert: insert witness for fresh key {} failed (already present or \
@@ -2193,10 +2171,7 @@ pub fn generate_rotated_cap_write_base(
                     )
                 })?;
             let w = before_tree
-                .update_witness(HeapLeaf {
-                    addr: updated_key,
-                    value: keep_mask,
-                })
+                .update_witness(HeapLeaf::entry(updated_key, keep_mask))
                 .ok_or_else(|| {
                     format!(
                         "cap-write Update: update witness for key {} failed",
@@ -3182,15 +3157,19 @@ fn fill_heap_after_spine(
     base_as: usize,
     addr: BabyBear,
     new_value: BabyBear,
+    next_addr: BabyBear,
     siblings: &[[BabyBear; crate::heap_root::HEAP_DIGEST_W]],
     directions: &[u8],
 ) {
     use crate::heap_root::{HEAP_DIGEST_W, HeapLeaf, heap_node8};
     row[base_as] = addr;
     row[base_as + 1] = new_value;
+    // The UPDATED leaf's arity-3 IMT digest `hash[addr, new_value, next_addr]` — a value update
+    // holds the pointer fixed, so `next_addr` is the committed leaf's pointer.
     let leaf_digest = HeapLeaf {
         addr,
         value: new_value,
+        next_addr,
     }
     .digest8();
     for (j, &d) in leaf_digest.iter().enumerate() {
@@ -3484,6 +3463,39 @@ pub fn append_wide_carriers_cap_open(
         ));
     }
     Ok(append_wide_carriers(trace, base_pis, CAP_OPEN_WIDTH))
+}
+
+/// The AVAIL-AWARE wide cap-open lift (GAP #4, the wide cap-open-EFF member): a hardened
+/// `…-v1-avail` cap-open member (the `transferCapOpenEffVmDescriptor2R24` key post-regen) widens
+/// its v1 FACE by the availability witness columns, so the cap-open appendix — and hence the
+/// wide carrier base — rides at `CAP_OPEN_WIDTH + avail_pad` (the retargeted wide row is Lean
+/// `wideAppend transferCapOpenEffV3Avail TR_AVAIL_BB (TR_AVAIL_BB + 239)`), and the carriers
+/// re-absorb the limbs at the avail-shifted rotated bases (`BEFORE/AFTER_BASE + avail_pad`).
+/// At `avail_pad = 0` this is byte-identical to [`append_wide_carriers_cap_open`]. Derive the
+/// pad from the RESOLVED descriptor's name ([`avail_pad_for_descriptor_name`]) — the pad is a
+/// property of the descriptor being proven.
+pub fn append_wide_carriers_cap_open_avail(
+    trace: &mut [Vec<BabyBear>],
+    base_pis: Vec<BabyBear>,
+    avail_pad: usize,
+) -> Result<Vec<BabyBear>, String> {
+    if trace.is_empty() {
+        return Err("cap-open wide: empty base trace".into());
+    }
+    if trace[0].len() != CAP_OPEN_WIDTH + avail_pad {
+        return Err(format!(
+            "cap-open wide: base trace width {} != {} (CAP_OPEN_WIDTH {CAP_OPEN_WIDTH} + avail pad \
+             {avail_pad}; widen_to_cap_open_avail first)",
+            trace[0].len(),
+            CAP_OPEN_WIDTH + avail_pad
+        ));
+    }
+    Ok(append_wide_carriers_avail(
+        trace,
+        base_pis,
+        CAP_OPEN_WIDTH + avail_pad,
+        avail_pad,
+    ))
 }
 
 /// The cap-root 8-felt GROUP column at lane `lane` for the rotated block based at `block_base` (the
@@ -4274,7 +4286,37 @@ pub fn generate_rotated_transfer_shape_with_fee_wide(
     caveat: &RotatedCaveatManifest,
     fee: u64,
 ) -> Result<(Vec<Vec<BabyBear>>, Vec<BabyBear>), String> {
-    let (mut trace, base_pis) = generate_rotated_effect_vm_trace_with_fee(
+    generate_rotated_transfer_shape_with_fee_wide_avail(
+        0,
+        initial_state,
+        effects,
+        before_w,
+        after_w,
+        caveat,
+        fee,
+    )
+}
+
+/// The AVAIL-AWARE wide fee-in-proof generator (GAP #4, the wide FEE leg): the fee-aware base
+/// trace at the availability pad ([`generate_rotated_effect_vm_trace_with_fee_avail`] — the
+/// 16-col §11.8 fee weld witness at `[V1_WIDTH, V1_WIDTH + 16)`, every appendix base shifted,
+/// the weld RE-LAID post-fee-surgery from the published fee) + the generic widener at the
+/// avail-shifted host width (`GRAD_ROT_WIDTH + avail_pad`), limbs re-absorbed at the shifted
+/// rotated bases. The SDK wide fee provers route here with
+/// [`avail_pad_for_descriptor_name`]`(&desc.name)` — a hardened `…-v1-fee-avail` WIDE member
+/// (the post-retarget `transferFeeVmDescriptor2R24` row) gets [`TRANSFER_FEE_AVAIL_PAD`];
+/// every bare member takes pad 0 (byte-identical to the legacy path).
+pub fn generate_rotated_transfer_shape_with_fee_wide_avail(
+    avail_pad: usize,
+    initial_state: &CellState,
+    effects: &[Effect],
+    before_w: &RotatedBlockWitness,
+    after_w: &RotatedBlockWitness,
+    caveat: &RotatedCaveatManifest,
+    fee: u64,
+) -> Result<(Vec<Vec<BabyBear>>, Vec<BabyBear>), String> {
+    let (mut trace, base_pis) = generate_rotated_effect_vm_trace_with_fee_avail(
+        avail_pad,
         initial_state,
         effects,
         before_w,
@@ -4290,8 +4332,9 @@ pub fn generate_rotated_transfer_shape_with_fee_wide(
             ROT_PI_COUNT + 1 + DFA_RC_LEN
         ));
     }
-    let dpis = append_wide_carriers(&mut trace, base_pis, GRAD_ROT_WIDTH);
-    debug_assert_eq!(trace[0].len(), WIDE_WIDTH);
+    let dpis =
+        append_wide_carriers_avail(&mut trace, base_pis, GRAD_ROT_WIDTH + avail_pad, avail_pad);
+    debug_assert_eq!(trace[0].len(), WIDE_WIDTH + avail_pad);
     debug_assert_eq!(dpis.len(), WIDE_PI_COUNT + 1); // 46 base + fee + 4 rc + 16 wide = 67
     Ok((trace, dpis))
 }
@@ -4474,7 +4517,7 @@ pub fn generate_rotated_heap_write_wide(
         ));
     }
     let update = before_tree
-        .update_witness(HeapLeaf { addr, value })
+        .update_witness(HeapLeaf::entry(addr, value))
         .ok_or_else(|| {
             format!(
                 "heap-write wide: 8-felt update witness for addr {} failed",
@@ -4496,7 +4539,7 @@ pub fn generate_rotated_heap_write_wide(
         ));
     }
     // The OLD value at the addressed key (the read-leaf value the before-open authenticates).
-    let old_value = before_tree
+    let _old_value = before_tree
         .sorted_leaves()
         .iter()
         .find(|l| l.addr == addr)
@@ -4536,10 +4579,10 @@ pub fn generate_rotated_heap_write_wide(
     // `815 + CAP_OPEN_SPAN(329) = 1144`. Fill both on EVERY row (the membership gates are per-row).
     let read_base = HEAP_WRITE_READ_BASE; // 815
     let after_spine_base = read_base + CAP_OPEN_SPAN; // 1144
-    let read_leaf = HeapLeaf {
-        addr,
-        value: old_value,
-    };
+    // The committed BEFORE leaf (carries the IMT next_addr pointer); the value update holds the
+    // pointer fixed, so the after-spine UPDATED leaf shares it.
+    let read_leaf = update.old_leaf;
+    let heap_next = update.old_leaf.next_addr;
     for row in trace.iter_mut() {
         // FAITHFUL 8-felt before/after heap-root groups (never the lane-0 scalar squeeze).
         for lane in 0..HEAP_DIGEST_W {
@@ -4570,6 +4613,7 @@ pub fn generate_rotated_heap_write_wide(
             after_spine_base,
             addr,
             value,
+            heap_next,
             &heap_siblings,
             &heap_directions,
         );
@@ -4693,7 +4737,7 @@ fn lay_accum_insert_read_appendix(
     let value = trace[0][value_col];
     let before_tree = CanonicalHeapTree8::new(before_leaves.to_vec(), HEAP_TREE_DEPTH);
     let w = before_tree
-        .insert_witness(HeapLeaf { addr: key, value })
+        .insert_witness(HeapLeaf::entry(key, value))
         .ok_or_else(|| {
             format!(
                 "accum insert wide: 8-felt insert_witness for the fresh key {} failed (key already \
@@ -4709,7 +4753,9 @@ fn lay_accum_insert_read_appendix(
             w.directions.len()
         ));
     }
-    let read_leaf = HeapLeaf { addr: key, value };
+    // The spliced (LINKED) new leaf — its arity-3 IMT digest8 (with next_addr = the sorted
+    // successor's addr) opens against the AFTER root8 over the insert-witness path.
+    let read_leaf = w.new_leaf;
     for row in trace.iter_mut() {
         // Ungated families pin the key/value columns constant on every row; the selector-gated
         // noteSpend leaves them as the base generator laid them (real on the active row, 0 on padding),
@@ -5438,10 +5484,7 @@ pub fn generate_rotated_effect_vm_descriptor_and_trace_wide(
         let leaves: Vec<HeapLeaf> = before_nullifiers
             .unwrap_or(&[])
             .iter()
-            .map(|nf| HeapLeaf {
-                addr: *nf,
-                value: BabyBear::new(1),
-            })
+            .map(|nf| HeapLeaf::entry(*nf, BabyBear::new(1)))
             .collect();
         generate_rotated_note_spend_wide(initial_state, effects, before, after, caveat, &leaves)
             .map_err(|e| format!("wide note-spend generation: {e}"))?

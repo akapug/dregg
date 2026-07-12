@@ -4,8 +4,7 @@
 //! When a note is spent, its nullifier is revealed and recorded here TOGETHER
 //! with the spent note's value — the SAME `(addr, value)` leaf the deployed
 //! circuit noteSpend grow-gate inserts (`trace_rotated.rs`
-//! `generate_rotated_note_spend_trace_with_nullifier_tree`: `HeapLeaf { addr:
-//! fold(nf), value: NOTE_VALUE_LO }`). The accumulator is therefore an auditable
+//! `generate_rotated_note_spend_trace_with_nullifier_tree`: `HeapLeaf::entry(//! fold(nf), NOTE_VALUE_LO)`). The accumulator is therefore an auditable
 //! `(nullifier, value)` record, NOT a bare set: keeping the value is what makes
 //! the committed [`Self::root8`] cross-turn-continuous with the circuit (turn
 //! N's after-root == turn N+1's before-root over the same leaves). The value is
@@ -339,13 +338,13 @@ impl NullifierSet {
         nullifier: &[u8; 32],
         value: u64,
     ) -> dregg_circuit::heap_root::HeapLeaf {
-        dregg_circuit::heap_root::HeapLeaf {
-            addr: dregg_circuit::effect_vm::fold_bytes32_to_bb(nullifier),
-            // The circuit's leaf value is `split_u64(value).0` — the low 30 bits
-            // of the note value as a BabyBear (`NOTE_VALUE_LO`). Fold through the
-            // circuit's OWN helper so the encoding cannot drift.
-            value: dregg_circuit::effect_vm::split_u64(value).0,
-        }
+        // The circuit's leaf value is `split_u64(value).0` — the low 30 bits of the note value as a
+        // BabyBear (`NOTE_VALUE_LO`). Fold through the circuit's OWN helper so the encoding cannot
+        // drift. The IMT `next_addr` pointer is relinked by the tree builder.
+        dregg_circuit::heap_root::HeapLeaf::entry(
+            dregg_circuit::effect_vm::fold_bytes32_to_bb(nullifier),
+            dregg_circuit::effect_vm::split_u64(value).0,
+        )
     }
 
     /// **The faithful 8-felt (~124-bit) accumulator root of the spent-nullifier
@@ -606,8 +605,7 @@ mod tests {
     /// set equals a `CanonicalHeapTree8` built by REPRODUCING the deployed grow-gate's
     /// exact after-tree construction from `trace_rotated.rs`
     /// (`generate_rotated_note_spend_trace_with_nullifier_tree`, lines ~1204/1225):
-    /// each inserted leaf is `HeapLeaf { addr: <spend row NULLIFIER col>, value:
-    /// <spend row NOTE_VALUE_LO col> }`, where the NULLIFIER column is
+    /// each inserted leaf is `HeapLeaf::entry(<spend row NULLIFIER col>, /// <spend row NOTE_VALUE_LO col>)`, where the NULLIFIER column is
     /// `fold_bytes32_to_bb(nf)` (what the executor threads as `Effect::NoteSpend.nullifier`)
     /// and NOTE_VALUE_LO is `split_u64(value).0`. Both are folded through the
     /// circuit's OWN `fold_bytes32_to_bb`/`split_u64` helpers, so this is genuine
@@ -634,10 +632,7 @@ mod tests {
         // `nf_value = trace[0][PARAM_BASE + NOTE_VALUE_LO]` (= split_u64(value).0).
         let growgate_leaves: Vec<HeapLeaf> = spends
             .iter()
-            .map(|(n, v)| HeapLeaf {
-                addr: fold_bytes32_to_bb(&n.0),
-                value: split_u64(*v).0,
-            })
+            .map(|(n, v)| HeapLeaf::entry(fold_bytes32_to_bb(&n.0), split_u64(*v).0))
             .collect();
         let expected = CanonicalHeapTree8::new(growgate_leaves, HEAP_TREE_DEPTH).root8();
 

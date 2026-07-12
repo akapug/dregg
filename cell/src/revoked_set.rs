@@ -152,13 +152,13 @@ impl RevokedSet {
         cred_nul: &[u8; 32],
         revocation_height: u64,
     ) -> dregg_circuit::heap_root::HeapLeaf {
-        dregg_circuit::heap_root::HeapLeaf {
-            addr: dregg_circuit::effect_vm::fold_bytes32_to_bb(cred_nul),
-            // The leaf value is `split_u64(revocation_height).0` — the low 30 bits
-            // of the audit height as a BabyBear. Fold through the circuit's OWN
-            // helper so the encoding cannot drift.
-            value: dregg_circuit::effect_vm::split_u64(revocation_height).0,
-        }
+        // The leaf value is `split_u64(revocation_height).0` — the low 30 bits of the audit height
+        // as a BabyBear. Fold through the circuit's OWN helper so the encoding cannot drift. The IMT
+        // `next_addr` pointer is relinked by the tree builder.
+        dregg_circuit::heap_root::HeapLeaf::entry(
+            dregg_circuit::effect_vm::fold_bytes32_to_bb(cred_nul),
+            dregg_circuit::effect_vm::split_u64(revocation_height).0,
+        )
     }
 
     /// **The faithful 8-felt (~124-bit) accumulator root of the revoked-credential
@@ -310,8 +310,7 @@ mod tests {
 
     /// (c) **Encoding-match tooth:** `root8` over the set equals a
     /// `CanonicalHeapTree8` built by REPRODUCING the grow-gate's exact after-tree
-    /// construction: each inserted leaf is `HeapLeaf { addr:
-    /// fold_bytes32_to_bb(cred_nul), value: split_u64(height).0 }`. Both are folded
+    /// construction: each inserted leaf is `HeapLeaf::entry(/// fold_bytes32_to_bb(cred_nul), split_u64(height).0)`. Both are folded
     /// through the circuit's OWN helpers, so this is genuine byte-identity with the
     /// grow-gate, not a re-assertion of a private formula.
     #[test]
@@ -331,10 +330,7 @@ mod tests {
 
         let growgate_leaves: Vec<HeapLeaf> = revocations
             .iter()
-            .map(|(c, h)| HeapLeaf {
-                addr: fold_bytes32_to_bb(c),
-                value: split_u64(*h).0,
-            })
+            .map(|(c, h)| HeapLeaf::entry(fold_bytes32_to_bb(c), split_u64(*h).0))
             .collect();
         let expected = CanonicalHeapTree8::new(growgate_leaves, HEAP_TREE_DEPTH).root8();
 

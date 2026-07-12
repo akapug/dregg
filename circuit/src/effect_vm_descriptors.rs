@@ -3362,11 +3362,11 @@ mod tests {
         ));
 
         // The COMMITTED members classify as live v2 — narrow (v3rot registry) and wide.
+        // Both registries are `key\tname\tjson` (3 fields — see V3_STAGED_REGISTRY_TSV docs).
         let narrow_json = V3_STAGED_REGISTRY_TSV
             .lines()
             .find_map(|line| {
-                let mut it = line.splitn(4, '\t');
-                let _tag = it.next()?;
+                let mut it = line.splitn(3, '\t');
                 if it.next() == Some("customVmDescriptor2R24") {
                     let _name = it.next();
                     it.next()

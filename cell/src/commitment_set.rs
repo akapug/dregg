@@ -4,8 +4,7 @@
 //! When a note is created, its commitment is published and recorded here TOGETHER
 //! with the created note's value — the SAME `(addr, value)` leaf the deployed
 //! circuit noteCreate grow-gate inserts (`trace_rotated.rs`
-//! `generate_rotated_note_create_trace_with_commitments_tree`: `HeapLeaf { addr:
-//! fold(commitment), value: split_u64(value).0 }`). The accumulator is therefore an
+//! `generate_rotated_note_create_trace_with_commitments_tree`: `HeapLeaf::entry(//! fold(commitment), split_u64(value).0)`). The accumulator is therefore an
 //! auditable `(commitment, value)` record: keeping the value is what makes the
 //! committed [`Self::root8`] cross-turn-continuous with the circuit (turn N's
 //! after-root == turn N+1's before-root over the same leaves).
@@ -136,13 +135,13 @@ impl CommitmentSet {
         commitment: &[u8; 32],
         value: u64,
     ) -> dregg_circuit::heap_root::HeapLeaf {
-        dregg_circuit::heap_root::HeapLeaf {
-            addr: dregg_circuit::effect_vm::fold_bytes32_to_bb(commitment),
-            // The circuit's leaf value is `split_u64(value).0` — the low 30 bits
-            // of the note value as a BabyBear (`NOTE_VALUE_LO`). Fold through the
-            // circuit's OWN helper so the encoding cannot drift.
-            value: dregg_circuit::effect_vm::split_u64(value).0,
-        }
+        // The circuit's leaf value is `split_u64(value).0` — the low 30 bits of the note value as a
+        // BabyBear (`NOTE_VALUE_LO`). Fold through the circuit's OWN helper so the encoding cannot
+        // drift. The IMT `next_addr` pointer is relinked by the tree builder.
+        dregg_circuit::heap_root::HeapLeaf::entry(
+            dregg_circuit::effect_vm::fold_bytes32_to_bb(commitment),
+            dregg_circuit::effect_vm::split_u64(value).0,
+        )
     }
 
     /// **The faithful 8-felt (~124-bit) accumulator root of the created-commitment
@@ -290,8 +289,7 @@ mod tests {
     /// **Encoding-match tooth:** `root8` over the set equals a `CanonicalHeapTree8`
     /// built by REPRODUCING the deployed grow-gate's exact after-tree construction
     /// from `trace_rotated.rs` (`generate_rotated_note_create_trace_with_commitments_tree`):
-    /// each inserted leaf is `HeapLeaf { addr: fold_bytes32_to_bb(cm), value:
-    /// split_u64(value).0 }`. Both are folded through the circuit's OWN helpers, so
+    /// each inserted leaf is `HeapLeaf::entry(fold_bytes32_to_bb(cm), /// split_u64(value).0)`. Both are folded through the circuit's OWN helpers, so
     /// this is genuine byte-identity with the grow-gate.
     #[test]
     fn root8_matches_growgate_after_tree_encoding() {
@@ -310,10 +308,7 @@ mod tests {
 
         let growgate_leaves: Vec<HeapLeaf> = creates
             .iter()
-            .map(|(c, v)| HeapLeaf {
-                addr: fold_bytes32_to_bb(&c.0),
-                value: split_u64(*v).0,
-            })
+            .map(|(c, v)| HeapLeaf::entry(fold_bytes32_to_bb(&c.0), split_u64(*v).0))
             .collect();
         let expected = CanonicalHeapTree8::new(growgate_leaves, HEAP_TREE_DEPTH).root8();
 

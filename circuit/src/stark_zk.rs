@@ -89,8 +89,12 @@ mod zk_plonky3 {
         let mut seed = [0u8; 32];
         getrandom::fill(&mut seed).expect("getrandom failed seeding ZK blinding RNG");
         let mut s32 = <SmallRng as SeedableRng>::Seed::default();
-        let n = core::cmp::min(s32.as_ref().len(), seed.len());
-        s32.as_mut()[..n].copy_from_slice(&seed[..n]);
+        // Explicit `&mut [u8]` annotation: the Seed type's AsRef/AsMut become
+        // ambiguous under dev-dependency feature unification (E0282 in the
+        // lib-test build only), so pin the slice type.
+        let s: &mut [u8] = s32.as_mut();
+        let n = core::cmp::min(s.len(), seed.len());
+        s[..n].copy_from_slice(&seed[..n]);
         SmallRng::from_seed(s32)
     }
 
