@@ -270,21 +270,36 @@ pub fn authorize_open(spec: &SessionSpec) -> Result<(), OrchestrationError> {
     }
 }
 
+/// The cell a per-(guild, offering) category is minted under. Shared by every run
+/// of an offering — NOT per-session — so the second run reuses the first's category
+/// instead of stacking duplicates, and a `guild_create` bootstrap mints the SAME
+/// cell a later session reuses.
+pub fn offering_category_cell(guild_id: u64, offering: &str) -> String {
+    format!("discord/category/{guild_id}/{offering}")
+}
+
+/// The CATEGORY write for an offering, independent of any one session. This is the
+/// single definition of "the offering's category": both [`plan_category`] (open
+/// path) and [`plan_bootstrap`] (guild_create path) go through it, so the category
+/// a bootstrap prepares is byte-for-byte the one an `open()` files its session
+/// under.
+pub fn plan_offering_category(guild_id: u64, offering: &str) -> PlannedCap {
+    PlannedCap {
+        cell_id: offering_category_cell(guild_id, offering),
+        capability: DiscordCapability::CreateCategory {
+            guild_id,
+            name: channels::category_name_for(offering),
+        },
+    }
+}
+
 /// The CATEGORY this offering's sessions are filed under, if it groups them.
 /// `None` for a thread session (its parent is its channel) or when grouping is off.
 pub fn plan_category(spec: &SessionSpec) -> Option<PlannedCap> {
     if !spec.group_under_category || matches!(spec.surface, SurfaceKind::Thread { .. }) {
         return None;
     }
-    Some(PlannedCap {
-        // Category cells are per-(guild, offering), NOT per-session: every run of an
-        // offering shares one category, so the cell that mints it is shared too.
-        cell_id: format!("discord/category/{}/{}", spec.guild_id, spec.offering),
-        capability: DiscordCapability::CreateCategory {
-            guild_id: spec.guild_id,
-            name: channels::category_name_for(&spec.offering),
-        },
-    })
+    Some(plan_offering_category(spec.guild_id, &spec.offering))
 }
 
 /// The session's SURFACE, given the resolved parent category (`None` = top-level,
@@ -394,6 +409,93 @@ pub fn plan_teardown(spec: &SessionSpec, channel_id: u64) -> TeardownPlan {
             },
         }),
     }
+}
+
+// =============================================================================
+// The guild-create bootstrap: what a guild needs BEFORE any session opens
+// =============================================================================
+
+/// What must be in place in a guild BEFORE the first session of an offering can
+/// open: the per-offering CATEGORY its runs are filed under, and the base role ids
+/// its sessions grant. A `guild_create` handler ensures this the moment the bot
+/// joins (or restarts against) a guild, so the first `/dungeon` neither pays the
+/// category-mint round-trip on the user's critical path nor lands its channel
+/// un-filed.
+///
+/// Offering-agnostic, exactly like [`SessionSpec`]: `offering` is just a name, and
+/// the dungeon, hosted-Hermes and grains all bootstrap the same way.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OfferingBootstrap {
+    pub offering: String,
+    pub guild_id: u64,
+    /// Who the bootstrap's guild-writes are attributed to in the audit log — the
+    /// bot/admin acting on `guild_create`, not any end user.
+    pub registered_by: u64,
+    /// Mint-if-absent the per-offering category. `false` for a threads-only
+    /// offering, whose sessions live under an existing channel rather than a
+    /// category (see [`SurfaceKind::Thread`]).
+    pub ensure_category: bool,
+    /// The base role ids this offering's sessions assign at open. Bootstrap RECORDS
+    /// them (so a handler can verify them against the live guild's role list); it
+    /// deliberately does NOT mint them. Role *creation* would need a `CreateRole`
+    /// [`DiscordCapability`] the engine does not expose, and driving
+    /// `serenity`'s `create_role` directly would break this layer's invariant that
+    /// the ONE place a guild write happens is [`DiscordCapRegistry::exercise`]. A
+    /// base role that does not already exist surfaces at `AssignRole` time, per run.
+    pub base_role_ids: Vec<u64>,
+}
+
+impl OfferingBootstrap {
+    /// A category-grouped offering bootstrap — the default, and what the dungeon
+    /// wants (one `dreggnet-dungeon` category holding every run).
+    pub fn new(offering: impl Into<String>, guild_id: u64, registered_by: u64) -> Self {
+        Self {
+            offering: offering.into(),
+            guild_id,
+            registered_by,
+            ensure_category: true,
+            base_role_ids: Vec::new(),
+        }
+    }
+
+    /// A threads-only offering: its sessions open under an existing channel, so
+    /// there is no per-offering category to prepare.
+    pub fn without_category(mut self) -> Self {
+        self.ensure_category = false;
+        self
+    }
+
+    /// Declare the base role ids this offering's sessions grant (recorded, not
+    /// minted — see [`OfferingBootstrap::base_role_ids`]).
+    pub fn base_roles(mut self, ids: impl IntoIterator<Item = u64>) -> Self {
+        self.base_role_ids = ids.into_iter().collect();
+        self
+    }
+}
+
+/// The one guild-write a bootstrap drives — the per-offering category — or `None`
+/// for a threads-only offering that files nothing under a category. Pure, and it
+/// resolves to the SAME [`PlannedCap`] a later [`plan_category`] does, so bootstrap
+/// and open agree on one category per offering.
+pub fn plan_bootstrap(spec: &OfferingBootstrap) -> Option<PlannedCap> {
+    if !spec.ensure_category {
+        return None;
+    }
+    Some(plan_offering_category(spec.guild_id, &spec.offering))
+}
+
+/// What a bootstrap prepared for an offering in a guild.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BootstrapReport {
+    pub offering: String,
+    pub guild_id: u64,
+    /// The category every session of this offering will be filed under — minted
+    /// here if absent, then cached so the first session reuses it. `None` for a
+    /// threads-only offering.
+    pub category_id: Option<u64>,
+    /// The base role ids the offering declared (recorded, not minted — see
+    /// [`OfferingBootstrap::base_role_ids`]).
+    pub base_role_ids: Vec<u64>,
 }
 
 // =============================================================================
@@ -633,32 +735,112 @@ impl SessionOrchestrator {
         Ok(session)
     }
 
-    /// Resolve this offering's category, minting it on first use.
+    /// GUILD-CREATE BOOTSTRAP for one offering: ensure everything it needs in a
+    /// guild BEFORE its first session opens. Drives the per-offering category live
+    /// (mint-if-absent, then cache) so a later `open()` finds it ready. Idempotent:
+    /// a second bootstrap of an offering whose category is already cached mints
+    /// nothing and issues no guild-write.
+    ///
+    /// A `guild_create` handler calls this for every offering the guild hosts. Base
+    /// roles are recorded, not minted (see [`OfferingBootstrap::base_role_ids`]).
+    pub async fn bootstrap_offering(
+        &self,
+        spec: &OfferingBootstrap,
+        caps: &DiscordCapRegistry,
+        http: &Arc<Http>,
+    ) -> Result<BootstrapReport, OrchestrationError> {
+        let category_id = if spec.ensure_category {
+            Some(
+                self.ensure_offering_category(
+                    spec.guild_id,
+                    &spec.offering,
+                    caps,
+                    http,
+                    spec.registered_by,
+                )
+                .await?,
+            )
+        } else {
+            None
+        };
+
+        info!(
+            offering = %spec.offering,
+            guild_id = spec.guild_id,
+            ?category_id,
+            base_roles = spec.base_role_ids.len(),
+            "Bootstrapped offering"
+        );
+        Ok(BootstrapReport {
+            offering: spec.offering.clone(),
+            guild_id: spec.guild_id,
+            category_id,
+            base_role_ids: spec.base_role_ids.clone(),
+        })
+    }
+
+    /// GUILD-CREATE BOOTSTRAP for a whole guild — every offering it hosts, in one
+    /// call from the `guild_create` handler. Fails fast on the first offering that
+    /// cannot be prepared, so a guild the bot lacks `MANAGE_CHANNELS` in surfaces
+    /// the error rather than silently half-preparing.
+    pub async fn bootstrap_guild(
+        &self,
+        specs: &[OfferingBootstrap],
+        caps: &DiscordCapRegistry,
+        http: &Arc<Http>,
+    ) -> Result<Vec<BootstrapReport>, OrchestrationError> {
+        let mut reports = Vec::with_capacity(specs.len());
+        for spec in specs {
+            reports.push(self.bootstrap_offering(spec, caps, http).await?);
+        }
+        Ok(reports)
+    }
+
+    /// Resolve this offering's category for a session, minting it on first use.
     async fn ensure_category(
         &self,
         spec: &SessionSpec,
         caps: &DiscordCapRegistry,
         http: &Arc<Http>,
     ) -> Result<Option<u64>, OrchestrationError> {
-        let Some(planned) = plan_category(spec) else {
+        // A thread session or an ungrouped one files under no category.
+        if plan_category(spec).is_none() {
             return Ok(None);
-        };
-
-        let cache_key = (spec.guild_id, spec.offering.clone());
-        if let Some(id) = self.categories.read().await.get(&cache_key) {
-            return Ok(Some(*id));
         }
-
         let id = self
-            .drive(caps, http, &planned, spec)
-            .await?
-            .ok_or_else(|| OrchestrationError::NoIdReturned("category".into()))?;
-        self.categories.write().await.insert(cache_key, id);
+            .ensure_offering_category(spec.guild_id, &spec.offering, caps, http, spec.requested_by)
+            .await?;
         Ok(Some(id))
     }
 
-    /// Register a planned capability and exercise it — the one place this layer
-    /// touches the guild. Returns the id Discord minted, if any.
+    /// Resolve (mint-if-absent) the per-offering category and cache it. The single
+    /// place a category is minted — shared by the open path and the guild_create
+    /// bootstrap, so both consult and populate the SAME cache and neither mints a
+    /// duplicate. A cache hit returns without touching the guild at all.
+    async fn ensure_offering_category(
+        &self,
+        guild_id: u64,
+        offering: &str,
+        caps: &DiscordCapRegistry,
+        http: &Arc<Http>,
+        registered_by: u64,
+    ) -> Result<u64, OrchestrationError> {
+        let cache_key = (guild_id, offering.to_string());
+        if let Some(id) = self.categories.read().await.get(&cache_key) {
+            return Ok(*id);
+        }
+
+        let planned = plan_offering_category(guild_id, offering);
+        let id = self
+            .drive_cap(caps, http, &planned, guild_id, registered_by)
+            .await?
+            .ok_or_else(|| OrchestrationError::NoIdReturned("category".into()))?;
+        self.categories.write().await.insert(cache_key, id);
+        Ok(id)
+    }
+
+    /// Register a planned capability and exercise it, attributed to this session's
+    /// requester — the one place this layer touches the guild.
     async fn drive(
         &self,
         caps: &DiscordCapRegistry,
@@ -666,19 +848,34 @@ impl SessionOrchestrator {
         planned: &PlannedCap,
         spec: &SessionSpec,
     ) -> Result<Option<u64>, OrchestrationError> {
+        self.drive_cap(caps, http, planned, spec.guild_id, spec.requested_by)
+            .await
+    }
+
+    /// Register a planned capability and exercise it — the primitive both the
+    /// session path (`drive`) and the guild_create bootstrap go through. Returns the
+    /// id Discord minted, if any. A write that does not land leaves no cell behind.
+    async fn drive_cap(
+        &self,
+        caps: &DiscordCapRegistry,
+        http: &Arc<Http>,
+        planned: &PlannedCap,
+        guild_id: u64,
+        registered_by: u64,
+    ) -> Result<Option<u64>, OrchestrationError> {
         caps.register(RegisteredDiscordCap {
             cell_id: planned.cell_id.clone(),
             uri: None,
             capability: planned.capability.clone(),
-            guild_id: spec.guild_id,
-            registered_by: spec.requested_by,
+            guild_id,
+            registered_by,
         })
         .await;
 
         match caps.exercise(&planned.cell_id, http).await {
             Ok(outcome) => Ok(outcome.created_id),
             Err(e) => {
-                warn!(cell = %planned.cell_id, error = %e, "Session guild-write failed");
+                warn!(cell = %planned.cell_id, error = %e, "Guild-write failed");
                 // Do not leave a cell registered for a write that did not land.
                 caps.unregister(&planned.cell_id).await;
                 Err(e.into())
@@ -1130,5 +1327,162 @@ mod tests {
                 .get(&(GUILD, "dungeon".to_string())),
             Some(&CATEGORY)
         );
+    }
+
+    // ─── guild_create bootstrap ──────────────────────────────────────────────
+
+    #[test]
+    fn the_bootstrap_category_plan_produces_the_create_category_request() {
+        let boot = OfferingBootstrap::new("dungeon", GUILD, ADMIN);
+        let planned = plan_bootstrap(&boot).expect("a grouped offering bootstraps a category");
+        assert_eq!(planned.cell_id, "discord/category/1111/dungeon");
+
+        let DiscordCapability::CreateCategory { guild_id, name } = planned.capability else {
+            panic!("a bootstrap plans a CreateCategory");
+        };
+        assert_eq!(guild_id, GUILD);
+        assert_eq!(name, "dreggnet-dungeon");
+
+        // The exact request `exercise(CreateCategory { .. })` would put on the wire.
+        let body =
+            serde_json::to_value(crate::discord_caps::build_category_request(&name, "r")).unwrap();
+        assert_eq!(body["name"], "dreggnet-dungeon");
+        assert_eq!(
+            body["type"],
+            serde_json::to_value(serenity::all::ChannelType::Category).unwrap()
+        );
+        assert!(
+            body.get("parent_id").is_none(),
+            "Discord does not nest categories"
+        );
+    }
+
+    #[test]
+    fn bootstrap_prepares_the_exact_category_a_later_open_reuses() {
+        // The load-bearing invariant: the category a guild_create bootstrap mints
+        // MUST be byte-for-byte the one a later open() files its session under — same
+        // cell id, same capability — or the bootstrap prepares one category and the
+        // first session mints a second, orphaning it.
+        let boot = OfferingBootstrap::new("dungeon", GUILD, ADMIN);
+        let sess = dungeon_spec();
+        assert_eq!(
+            plan_bootstrap(&boot),
+            plan_category(&sess),
+            "bootstrap and open must resolve to ONE category per offering"
+        );
+    }
+
+    #[test]
+    fn a_threads_only_offering_bootstraps_no_category() {
+        let boot = OfferingBootstrap::new("chat", GUILD, ADMIN).without_category();
+        assert!(
+            plan_bootstrap(&boot).is_none(),
+            "a threads-only offering files nothing under a category"
+        );
+    }
+
+    #[tokio::test]
+    async fn bootstrapping_a_seeded_offering_reuses_its_category_without_a_guild_write() {
+        // A guild whose category already exists (seeded) is prepared with NO guild
+        // write — proven by driving the real bootstrap with an unusable Http and
+        // still getting the seeded id back. This is what makes guild_create cheap on
+        // a restart.
+        let orch = SessionOrchestrator::new();
+        let caps = DiscordCapRegistry::new();
+        let http = Arc::new(Http::new("Bot invalid"));
+        orch.seed_category(GUILD, "dungeon", CATEGORY).await;
+
+        let report = orch
+            .bootstrap_offering(
+                &OfferingBootstrap::new("dungeon", GUILD, ADMIN).base_roles([ROLE]),
+                &caps,
+                &http,
+            )
+            .await
+            .expect("a seeded category needs no guild write");
+        assert_eq!(report.category_id, Some(CATEGORY));
+        assert_eq!(
+            report.base_role_ids,
+            vec![ROLE],
+            "declared base roles are carried through to the report"
+        );
+        assert!(
+            caps.list_for_guild(GUILD).await.is_empty(),
+            "reusing a cached category registers no capability"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_categoryless_bootstrap_touches_no_guild_and_reports_no_category() {
+        let orch = SessionOrchestrator::new();
+        let caps = DiscordCapRegistry::new();
+        let http = Arc::new(Http::new("Bot invalid"));
+
+        let report = orch
+            .bootstrap_offering(
+                &OfferingBootstrap::new("chat", GUILD, ADMIN).without_category(),
+                &caps,
+                &http,
+            )
+            .await
+            .expect("a threads-only offering prepares nothing to fail on");
+        assert_eq!(report.category_id, None);
+        assert!(caps.list_for_guild(GUILD).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_failed_bootstrap_leaves_no_registered_capability_and_caches_nothing() {
+        // With an invalid token the category mint fails. The bootstrap must not leave
+        // the cell it registered sitting as a live authority, NOR cache a bogus id —
+        // a retry after the guild grants MANAGE_CHANNELS must still mint.
+        let orch = SessionOrchestrator::new();
+        let caps = DiscordCapRegistry::new();
+        let http = Arc::new(Http::new("Bot invalid"));
+
+        let err = orch
+            .bootstrap_offering(
+                &OfferingBootstrap::new("dungeon", GUILD, ADMIN),
+                &caps,
+                &http,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, OrchestrationError::Discord(_)));
+        assert!(
+            caps.list_for_guild(GUILD).await.is_empty(),
+            "a failed bootstrap leaves no cell registered"
+        );
+        assert!(
+            orch.categories
+                .read()
+                .await
+                .get(&(GUILD, "dungeon".to_string()))
+                .is_none(),
+            "a failed mint must not cache a category id"
+        );
+    }
+
+    #[tokio::test]
+    async fn bootstrap_guild_prepares_every_offering_it_hosts() {
+        let orch = SessionOrchestrator::new();
+        let caps = DiscordCapRegistry::new();
+        let http = Arc::new(Http::new("Bot invalid"));
+        orch.seed_category(GUILD, "dungeon", CATEGORY).await;
+        orch.seed_category(GUILD, "hosted-hermes", 4445).await;
+
+        let reports = orch
+            .bootstrap_guild(
+                &[
+                    OfferingBootstrap::new("dungeon", GUILD, ADMIN),
+                    OfferingBootstrap::new("hosted-hermes", GUILD, ADMIN),
+                ],
+                &caps,
+                &http,
+            )
+            .await
+            .expect("both offerings' categories are seeded");
+        assert_eq!(reports.len(), 2);
+        assert_eq!(reports[0].category_id, Some(CATEGORY));
+        assert_eq!(reports[1].category_id, Some(4445));
     }
 }

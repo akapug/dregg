@@ -26,25 +26,53 @@
 //! player's cipherclerk now signs their submitted run, binding the completion to their
 //! custodial identity (see [`sign_run`]).
 //!
+//! ## Persistence — DURABLE, with boot-time re-verification
+//!
+//! The live [`Registry`] is still the process-wide `OnceLock<Mutex<Registry>>` cache, but
+//! it is now **backed by a durable [`GalleryStore`]**. A published universe's *public
+//! source* (name / author / seed-epoch / win) and a submitted completion's *moves +
+//! player + claimed turns* are written to the store; on boot [`load_registry`] reads them
+//! back and **replays each one through [`Registry::publish`] / [`Registry::submit`]** —
+//! which RE-VERIFIES every completion by replay against a fresh, identically-seeded world.
+//!
+//! Only the minimal, reproducible input is stored — a universe's seed-epoch (not a cached
+//! world), a completion's *move sequence* (not a trusted receipt blob). The receipt chain
+//! is deterministically re-recorded and re-checked at load, so **a tampered DB row cannot
+//! resurrect a cheat**: edit the moves to a non-winning line and the no-cheat gate rejects
+//! it (`DidNotWin` / a refused move); edit `claimed_turns` and it rejects (`ResultMismatch`);
+//! edit a universe's source/author/epoch and its recomputed content address no longer
+//! matches its stored id, so the row is dropped. None of these land on the board.
+//!
+//! The main loop wires a sqlite [`GalleryStore`] to the bot `Database` (see the wiring note
+//! below); tests here drive the whole persist → reload → re-verify cycle against the
+//! [`InMemoryGalleryStore`], including the tampered-row rejections.
+//!
 //! ## Honest scope
 //!
-//! * **Persistence gap.** The [`Registry`] is in-memory and per-process (`ugc-dregg`'s
-//!   own crate docs name this too). A bot restart drops published universes and their
-//!   boards back to [`seed_registry`]'s built-in dungeon. Closing it needs a store the
-//!   main loop owns (see the module TODO below) — nothing here is written to `db.rs`.
 //! * **Auctions are gone, not stubbed.** `ugc-dregg` has no auction/bid concept, so
 //!   `auctions`/`mybids` are NOT carried forward as dead UI. The bidding *machinery*
 //!   (cclerk signing) is repurposed onto `play`, which is a real submission.
 //! * **Author identity** is a *name*, not a verified signing key (ugc-dregg's own named
 //!   gap). The `play` signature binds the *player*; the *author* string is still trusted.
 //
-// TODO(main-loop, persistence): the registry lives in this module's `OnceLock` because
-// `db.rs` and `BotState` are main-loop-owned. To survive a restart it wants either
-// (a) a `pub universes: Mutex<ugc_dregg::Registry>` on `BotState`, or (b) a
-// `universes(id, name, author, source, deploy_seed, provenance, win)` +
-// `completions(universe_id, player, turns, playthrough)` pair of tables, replayed
-// through `Registry::publish`/`submit` on boot — which re-verifies every stored
-// completion at load, so a tampered DB row cannot resurrect a cheat.
+// ─── MAIN-LOOP WIRING (what closes the loop; NOT owned by this file) ─────────────
+// This module OWNS the `GalleryStore` trait, its `InMemoryGalleryStore` (tests), and the
+// boot-replay-reverify (`load_registry`). The main loop wires the persistent backing:
+//
+//   1. `migrations/005_ugc_gallery.sql` — the two tables (`ugc_universes`,
+//      `ugc_completions`). Add the matching inline `CREATE TABLE IF NOT EXISTS` to
+//      `Database::connect` (the bot's schema-in-code pattern), and four `Database`
+//      methods: `persist_ugc_universe(..)`, `persist_ugc_completion(..)` (both
+//      `INSERT OR IGNORE` on the PK), `list_ugc_universes()`, `list_ugc_completions()`.
+//   2. A bot-owned `SqliteGalleryStore` implementing `gallery::GalleryStore` over the
+//      async `Database` — exactly like `pay::SqliteCreditStore` (sync trait, drives each
+//      async query with `tokio::task::block_in_place`). Its four methods map to the four
+//      `Database` methods above and translate rows to/from `StoredUniverse` /
+//      `StoredCompletion`.
+//   3. At boot, ONE call: `gallery::install_store(Box::new(SqliteGalleryStore::new(db, handle)))`.
+//      `install_store` records the store AND loads+re-verifies the live registry from it.
+//      No `BotState` field is needed — the store is held in this module's `OnceLock`, and
+//      the handlers persist through it after each successful publish / play.
 
 use std::sync::{Mutex, OnceLock};
 
@@ -68,11 +96,50 @@ use crate::embeds;
 // The registry — the real `ugc-dregg` one, in-memory (see the persistence gap above).
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/// The process-wide UGC registry. Seeded with the built-in salt-shore dungeon (+ the
-/// house's par run) so the gallery is never empty on a cold boot.
+/// The live process-wide UGC registry cache.
+static REGISTRY: OnceLock<Mutex<Registry>> = OnceLock::new();
+/// The durable backing store, installed once by the main loop at boot
+/// ([`install_store`]). When present, the live registry is loaded + re-verified from it.
+static GALLERY_STORE: OnceLock<Box<dyn GalleryStore + Send + Sync>> = OnceLock::new();
+
+/// The process-wide UGC registry — the live cache. On first touch it is built from the
+/// durable [`GalleryStore`] if one is installed (every stored completion re-verified by
+/// replay), otherwise from [`seed_registry`]'s built-in dungeon so the gallery is never
+/// empty on a cold boot.
 fn registry() -> &'static Mutex<Registry> {
-    static REGISTRY: OnceLock<Mutex<Registry>> = OnceLock::new();
-    REGISTRY.get_or_init(|| Mutex::new(seed_registry()))
+    REGISTRY.get_or_init(|| {
+        let reg = match GALLERY_STORE.get() {
+            Some(store) => load_registry(store.as_ref()),
+            None => seed_registry(),
+        };
+        Mutex::new(reg)
+    })
+}
+
+/// **Main-loop entry point.** Install the durable store and load the live registry from
+/// it (re-verifying every persisted completion by replay). First install wins; call once
+/// at boot BEFORE any `/gallery` command is served.
+pub fn install_store(store: Box<dyn GalleryStore + Send + Sync>) {
+    let _ = GALLERY_STORE.set(store);
+    // Force the live registry to initialize from the freshly-installed store now, so the
+    // cache already reflects the persisted (and re-verified) state before serving.
+    let _ = registry();
+}
+
+/// Persist a published universe to the durable store, if one is installed. Called after a
+/// successful in-memory publish (never while holding the registry lock).
+fn store_universe(u: &StoredUniverse) {
+    if let Some(store) = GALLERY_STORE.get() {
+        let _ = store.persist_universe(u);
+    }
+}
+
+/// Persist an accepted completion to the durable store, if one is installed. Called after
+/// a successful in-memory play (never while holding the registry lock).
+fn store_completion(c: &StoredCompletion) {
+    if let Some(store) = GALLERY_STORE.get() {
+        let _ = store.persist_completion(c);
+    }
 }
 
 /// The built-in universe: `dungeon-on-dregg`'s real, winnable salt-shore dungeon
@@ -108,6 +175,282 @@ fn seed_registry() -> Registry {
     }
 
     reg
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// The durable store — persists the PUBLIC, REPRODUCIBLE input of a universe / completion,
+// and replays it through the real no-cheat gate on boot. A tampered row cannot survive.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// A published universe's **public source** as persisted — everything needed to
+/// reconstruct it through a PUBLIC `ugc-dregg` constructor (so reconstruction re-runs the
+/// same publish path, not a cached shape). Content-addressed: `id_hex` is the address the
+/// world hashed to at publish time, and reconstruction recomputes it — a mismatch means
+/// the row was tampered and is dropped.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredUniverse {
+    /// The universe content address (hex) at publish time — the row PK + tamper check.
+    pub id_hex: String,
+    /// `"daily"` (procgen from a committed seed-epoch) or `"authored"` (direct spween source).
+    pub kind: String,
+    /// Display name (derived for `daily`; authoritative for `authored`).
+    pub name: String,
+    /// The author label.
+    pub author: String,
+    /// The spween source — the authoritative bytes for `authored`; empty for `daily`
+    /// (regenerated byte-for-byte from the seed-epoch).
+    pub source: String,
+    /// `daily` only: hex of the 32-byte epoch commitment (`blake3(seed_text)`) that
+    /// `Universe::daily` regenerates the whole world from.
+    pub epoch_hex: Option<String>,
+    /// The declared win condition's `(var, value)` vars, as JSON.
+    pub win_json: String,
+}
+
+impl StoredUniverse {
+    /// The persistable descriptor for a `daily` (procgen) universe. `epoch` is
+    /// `blake3(seed_text)` — the commitment `Universe::daily` regenerates from.
+    fn daily_desc(id: UniverseId, author: &str, epoch: &[u8; 32], u: &Universe) -> StoredUniverse {
+        StoredUniverse {
+            id_hex: id_hex(&id),
+            kind: "daily".to_string(),
+            name: u.name().to_string(),
+            author: author.to_string(),
+            source: String::new(),
+            epoch_hex: Some(hex32(epoch)),
+            win_json: serde_json::to_string(&u.win().vars).unwrap_or_else(|_| "[]".to_string()),
+        }
+    }
+
+    /// The persistable descriptor for an `authored` universe (the built-in dungeon, or a
+    /// future authored publish). The main loop can call this to persist an authored world;
+    /// the current `/gallery publish` only mints `daily` universes.
+    #[allow(dead_code)]
+    fn authored_desc(u: &Universe) -> StoredUniverse {
+        StoredUniverse {
+            id_hex: id_hex(&u.id()),
+            kind: "authored".to_string(),
+            name: u.name().to_string(),
+            author: u.author().to_string(),
+            source: u.source().to_string(),
+            epoch_hex: None,
+            win_json: serde_json::to_string(&u.win().vars).unwrap_or_else(|_| "[]".to_string()),
+        }
+    }
+}
+
+/// A submitted completion as persisted — the **player + the move sequence** (choice
+/// indices) + the claimed turns. The receipt chain is deliberately NOT stored: it is
+/// deterministically re-recorded from the moves on a fresh identically-seeded world and
+/// re-verified at load. Storing the minimal input (moves, not a trusted blob) means a
+/// tampered row is only ever a different move sequence or a lied result — both of which
+/// the no-cheat gate re-checks by replay.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredCompletion {
+    /// Idempotency PK — `blake3(universe_id_hex ‖ player ‖ moves_json)`. A re-submit of the
+    /// same run is a no-op; a different run is a different key.
+    pub key_hex: String,
+    /// The full universe content address (hex) this completion is for.
+    pub universe_id_hex: String,
+    /// The player's name.
+    pub player: String,
+    /// The move sequence (choice indices), as a JSON array.
+    pub moves_json: String,
+    /// The claimed turns-to-win. Stored INDEPENDENTLY of the moves, so a tampered value
+    /// (≠ the verified move count) is rejected as `ResultMismatch` on reload.
+    pub claimed_turns: i64,
+}
+
+impl StoredCompletion {
+    /// Build a persistable completion from a resolved (full-hex) universe id, the player,
+    /// the moves, and the verified turn count.
+    fn new(
+        universe_id_hex: &str,
+        player: &str,
+        moves: &[usize],
+        claimed_turns: usize,
+    ) -> StoredCompletion {
+        let moves_json = serde_json::to_string(moves).unwrap_or_else(|_| "[]".to_string());
+        let mut h = blake3::Hasher::new();
+        h.update(universe_id_hex.as_bytes());
+        h.update(&[0]);
+        h.update(player.as_bytes());
+        h.update(&[0]);
+        h.update(moves_json.as_bytes());
+        StoredCompletion {
+            key_hex: hex32(h.finalize().as_bytes()),
+            universe_id_hex: universe_id_hex.to_string(),
+            player: player.to_string(),
+            moves_json,
+            claimed_turns: claimed_turns as i64,
+        }
+    }
+}
+
+/// The durable gallery store. Sync (interior mutability, `&self`) so the live cache can be
+/// backed by it without an async boundary — exactly the shape of `dregg-pay`'s
+/// `CreditStore`. The main loop supplies a sqlite impl; tests use [`InMemoryGalleryStore`].
+/// Persist methods MUST be idempotent by PK (`INSERT OR IGNORE`), so a double write / a
+/// double load never duplicates a universe or a board entry.
+pub trait GalleryStore {
+    /// Persist a published universe (idempotent by `id_hex`).
+    fn persist_universe(&self, u: &StoredUniverse) -> Result<(), String>;
+    /// Persist an accepted completion (idempotent by `key_hex`).
+    fn persist_completion(&self, c: &StoredCompletion) -> Result<(), String>;
+    /// Every persisted universe.
+    fn list_universes(&self) -> Result<Vec<StoredUniverse>, String>;
+    /// Every persisted completion.
+    fn list_completions(&self) -> Result<Vec<StoredCompletion>, String>;
+}
+
+/// A thread-safe in-memory [`GalleryStore`] for tests and single-process runs. Idempotent
+/// by PK, matching the sqlite impl's `INSERT OR IGNORE`.
+#[derive(Default)]
+pub struct InMemoryGalleryStore {
+    inner: Mutex<InMemGallery>,
+}
+
+#[derive(Default)]
+struct InMemGallery {
+    universes: Vec<StoredUniverse>,
+    completions: Vec<StoredCompletion>,
+}
+
+impl InMemoryGalleryStore {
+    /// A fresh empty store.
+    pub fn new() -> InMemoryGalleryStore {
+        InMemoryGalleryStore::default()
+    }
+
+    /// TEST HOOK: mutate the raw persisted rows, to simulate a **tampered database** (an
+    /// operator or attacker editing a row on disk). The reload path must reject whatever
+    /// this produces if it no longer re-verifies.
+    #[cfg(test)]
+    fn tamper(&self, f: impl FnOnce(&mut Vec<StoredUniverse>, &mut Vec<StoredCompletion>)) {
+        let mut g = self.inner.lock().expect("gallery store lock");
+        let InMemGallery {
+            universes,
+            completions,
+        } = &mut *g;
+        f(universes, completions);
+    }
+}
+
+impl GalleryStore for InMemoryGalleryStore {
+    fn persist_universe(&self, u: &StoredUniverse) -> Result<(), String> {
+        let mut g = self.inner.lock().expect("gallery store lock");
+        if !g.universes.iter().any(|x| x.id_hex == u.id_hex) {
+            g.universes.push(u.clone());
+        }
+        Ok(())
+    }
+    fn persist_completion(&self, c: &StoredCompletion) -> Result<(), String> {
+        let mut g = self.inner.lock().expect("gallery store lock");
+        if !g.completions.iter().any(|x| x.key_hex == c.key_hex) {
+            g.completions.push(c.clone());
+        }
+        Ok(())
+    }
+    fn list_universes(&self) -> Result<Vec<StoredUniverse>, String> {
+        Ok(self
+            .inner
+            .lock()
+            .expect("gallery store lock")
+            .universes
+            .clone())
+    }
+    fn list_completions(&self) -> Result<Vec<StoredCompletion>, String> {
+        Ok(self
+            .inner
+            .lock()
+            .expect("gallery store lock")
+            .completions
+            .clone())
+    }
+}
+
+/// **BOOT REPLAY + RE-VERIFY.** Build a live [`Registry`] from the durable store: start
+/// from the built-in seed, reconstruct every persisted universe through a real `ugc-dregg`
+/// constructor, then replay every persisted completion through [`Registry::submit`] — the
+/// no-cheat gate, which re-executes the moves on a fresh identically-seeded world and only
+/// ranks a completion that provably reaches the win with a truthful turn count.
+///
+/// Every rejection here is silent-and-correct: a tampered universe row whose recomputed
+/// content address no longer matches its stored id is dropped; a tampered completion
+/// (non-winning moves, a refused move, or a lied `claimed_turns`) never lands on the board.
+pub fn load_registry(store: &dyn GalleryStore) -> Registry {
+    let mut reg = seed_registry();
+
+    for su in store.list_universes().unwrap_or_default() {
+        if let Some(universe) = reconstruct_universe(&su) {
+            // Tamper check: the reconstructed world must hash back to the stored address.
+            if id_hex(&universe.id()) == su.id_hex {
+                reg.publish(universe);
+            }
+        }
+    }
+
+    for sc in store.list_completions().unwrap_or_default() {
+        replay_completion(&mut reg, &sc);
+    }
+
+    reg
+}
+
+/// Reconstruct a universe from its persisted public source, through a PUBLIC constructor.
+/// Returns `None` if the row does not reconstruct (a bad kind, a corrupt seed-epoch, or a
+/// source that no longer parses/compiles) — such a row is simply dropped.
+fn reconstruct_universe(su: &StoredUniverse) -> Option<Universe> {
+    match su.kind.as_str() {
+        "daily" => {
+            let epoch = decode_hex32(su.epoch_hex.as_deref()?)?;
+            Universe::daily(&su.author, &epoch).ok()
+        }
+        "authored" => {
+            let vars: Vec<(String, u64)> = serde_json::from_str(&su.win_json).ok()?;
+            Universe::authored(&su.name, &su.author, &su.source, WinCondition { vars }).ok()
+        }
+        _ => None,
+    }
+}
+
+/// Replay one persisted completion through the no-cheat gate. Re-records the moves on a
+/// fresh world and submits with the STORED `claimed_turns`; any rejection (unknown/tampered
+/// universe, a refused move, `DidNotWin`, `ResultMismatch`, `FailedVerification`) is dropped
+/// — it does not land on the board.
+fn replay_completion(reg: &mut Registry, sc: &StoredCompletion) {
+    let Some(id) = find_universe(reg, &sc.universe_id_hex) else {
+        return;
+    };
+    let Some(universe) = reg.universe(id).cloned() else {
+        return;
+    };
+    let Ok(moves) = serde_json::from_str::<Vec<usize>>(&sc.moves_json) else {
+        return;
+    };
+    // A tampered (illegal) move sequence is refused by the real executor here.
+    let Ok(play) = record_playthrough(&universe, &moves) else {
+        return;
+    };
+    // Submit with the STORED claimed_turns — a tampered value trips ResultMismatch.
+    let _ = reg.submit(Completion {
+        universe: id,
+        player: sc.player.clone(),
+        play,
+        claimed_turns: sc.claimed_turns as usize,
+    });
+}
+
+/// Decode a 64-char hex string to 32 bytes (`None` on any malformed input).
+fn decode_hex32(s: &str) -> Option<[u8; 32]> {
+    if s.len() != 64 {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    for (i, byte) in out.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(s.get(2 * i..2 * i + 2)?, 16).ok()?;
+    }
+    Some(out)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -540,16 +883,32 @@ async fn handle_publish(ctx: &Context, command: &CommandInteraction) {
     let author = command.user.name.clone();
     defer_ephemeral(ctx, command).await;
 
+    // The epoch commitment `Universe::daily` regenerates the world from — the same
+    // `blake3(seed_text)` `publish_universe` derives internally, captured here so we can
+    // persist the universe's reproducible public source.
+    let epoch: [u8; 32] = *blake3::hash(seed_text.as_bytes()).as_bytes();
+
+    // Capture the persistable descriptor + view under the lock; persist AFTER releasing it
+    // (the store may do blocking sqlite IO — never hold the registry lock across it).
     let result = {
         let mut reg = registry().lock().expect("universe registry lock");
         publish_universe(&mut reg, &author, &seed_text).and_then(|id| {
+            let stored = reg
+                .universe(id)
+                .map(|u| StoredUniverse::daily_desc(id, &author, &epoch, u));
             show_universe(&reg, &id_hex(&id))
+                .map(|view| (stored, view))
                 .ok_or_else(|| "published universe vanished".to_string())
         })
     };
 
     match result {
-        Ok(view) => {
+        Ok((stored, view)) => {
+            // Durable: the published universe survives a restart (re-derived from its
+            // seed-epoch and re-verified on boot).
+            if let Some(stored) = stored {
+                store_universe(&stored);
+            }
             let embed = embeds::success_embed("Universe Published")
                 .description(format!(
                     "**{}** by **{}**\n\nID: `{}`",
@@ -637,13 +996,22 @@ async fn handle_play(ctx: &Context, command: &CommandInteraction, state: &BotSta
         UserCipherclerk::derive(&state.config.bot_secret, user_id, state.federation_id_bytes);
     let signature = sign_run(&cclerk, &needle, &moves);
 
+    // Resolve the universe to its FULL content address under the lock (the completion is
+    // stored against the full id, not the user-typed prefix), then submit.
     let outcome = {
         let mut reg = registry().lock().expect("universe registry lock");
-        play_universe(&mut reg, &needle, &player, &moves)
+        let resolved_hex = find_universe(&reg, &needle).map(|id| id_hex(&id));
+        play_universe(&mut reg, &needle, &player, &moves).map(|acc| (resolved_hex, acc))
     };
 
     match outcome {
-        Ok(accepted) => {
+        Ok((resolved_hex, accepted)) => {
+            // Durable: the verified completion survives a restart. Only the moves + player
+            // + verified turns are stored; the board is rebuilt by REPLAY on boot, so a
+            // tampered row cannot resurrect a cheat.
+            if let Some(hex) = &resolved_hex {
+                store_completion(&StoredCompletion::new(hex, &player, &moves, accepted.turns));
+            }
             let embed = embeds::success_embed("Run Verified — You're On The Board")
                 .description(
                     "Your moves were **re-executed on a fresh, identically-seeded world** and they \
@@ -946,5 +1314,193 @@ mod tests {
             matches!(out, Err(PlayError::RecordRefused(_))),
             "an impossible choice is refused by the executor, got {out:?}"
         );
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // DURABLE STORE — persist → reload → RE-VERIFY, and every tampered-row rejection.
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// Publish a daily universe from `seed` and win it, persisting BOTH to `store`.
+    /// Returns the full universe id hex, the winning moves, and the verified turns.
+    fn seed_store_with_daily_win(
+        store: &InMemoryGalleryStore,
+        seed: &str,
+        player: &str,
+    ) -> (String, Vec<usize>, usize) {
+        let epoch: [u8; 32] = *blake3::hash(seed.as_bytes()).as_bytes();
+        let mut reg = Registry::new();
+        let id = publish_universe(&mut reg, "ember", seed).expect("publishes");
+        let idhex = id_hex(&id);
+        store
+            .persist_universe(&StoredUniverse::daily_desc(
+                id,
+                "ember",
+                &epoch,
+                reg.universe(id).expect("published"),
+            ))
+            .expect("persist universe");
+        let moves = winning_moves(&reg, id);
+        let accepted = play_universe(&mut reg, &idhex, player, &moves).expect("a real win");
+        store
+            .persist_completion(&StoredCompletion::new(
+                &idhex,
+                player,
+                &moves,
+                accepted.turns,
+            ))
+            .expect("persist completion");
+        (idhex, moves, accepted.turns)
+    }
+
+    #[test]
+    fn durable_store_persists_and_reload_reverifies_the_board() {
+        let store = InMemoryGalleryStore::new();
+        let (idhex, moves, turns) = seed_store_with_daily_win(&store, "durable-gallery-1", "ada");
+
+        assert_eq!(
+            store.list_universes().unwrap().len(),
+            1,
+            "universe persisted"
+        );
+        assert_eq!(
+            store.list_completions().unwrap().len(),
+            1,
+            "completion persisted"
+        );
+
+        // A FRESH process: rebuild the live registry from the store alone. Every completion
+        // is re-verified by replay on a fresh identically-seeded world.
+        let reg2 = load_registry(&store);
+        let view = show_universe(&reg2, &idhex).expect("universe survived the restart");
+        assert_eq!(
+            view.board.len(),
+            1,
+            "the verified completion was rebuilt by replay"
+        );
+        assert_eq!(view.board[0].player, "ada");
+        assert_eq!(view.board[0].turns, turns);
+
+        // Idempotent: a second load does not duplicate the board entry...
+        let reg3 = load_registry(&store);
+        assert_eq!(
+            show_universe(&reg3, &idhex).unwrap().board.len(),
+            1,
+            "double-load did not duplicate"
+        );
+        // ...and re-persisting the identical run is a no-op (idempotency PK).
+        store
+            .persist_completion(&StoredCompletion::new(&idhex, "ada", &moves, turns))
+            .unwrap();
+        assert_eq!(store.list_completions().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_tampered_completion_row_does_not_reverify_and_is_off_the_board() {
+        let store = InMemoryGalleryStore::new();
+        let (idhex, _moves, _turns) =
+            seed_store_with_daily_win(&store, "durable-gallery-tamper-moves", "ada");
+
+        // Non-vacuous baseline: the UNtampered store rebuilds a 1-entry board.
+        assert_eq!(
+            show_universe(&load_registry(&store), &idhex)
+                .unwrap()
+                .board
+                .len(),
+            1
+        );
+
+        // TAMPER the DB row: rewrite the moves to a non-winning line (take the key and
+        // stop — never reach the hoard). This is exactly a forged/edited stored playthrough.
+        store.tamper(|_us, cs| {
+            for c in cs.iter_mut() {
+                c.moves_json = "[0]".to_string();
+            }
+        });
+
+        let reg = load_registry(&store);
+        let view = show_universe(&reg, &idhex).expect("universe still loads");
+        assert_eq!(
+            view.board.len(),
+            0,
+            "the tampered completion did NOT re-verify — the no-cheat gate kept it off the board"
+        );
+    }
+
+    #[test]
+    fn a_tampered_claimed_turns_row_is_rejected_as_result_mismatch() {
+        let store = InMemoryGalleryStore::new();
+        let (idhex, _moves, _turns) =
+            seed_store_with_daily_win(&store, "durable-gallery-tamper-turns", "ada");
+
+        // TAMPER: keep the genuinely-winning moves, but LIE about the turn count. The
+        // result-binding tooth (`ResultMismatch`) survives persistence.
+        store.tamper(|_us, cs| {
+            for c in cs.iter_mut() {
+                c.claimed_turns += 99;
+            }
+        });
+
+        let reg = load_registry(&store);
+        assert_eq!(
+            show_universe(&reg, &idhex).unwrap().board.len(),
+            0,
+            "a lied claimed_turns trips ResultMismatch on reload"
+        );
+    }
+
+    #[test]
+    fn a_tampered_universe_row_is_dropped_and_takes_its_board_with_it() {
+        let store = InMemoryGalleryStore::new();
+        let (idhex, _moves, _turns) =
+            seed_store_with_daily_win(&store, "durable-gallery-tamper-universe", "ada");
+
+        // Baseline: untampered, the universe + its board come back.
+        assert!(show_universe(&load_registry(&store), &idhex).is_some());
+
+        // TAMPER the universe row: change the author so `Universe::daily` reconstructs a
+        // DIFFERENT world whose recomputed content address no longer matches the stored id.
+        store.tamper(|us, _cs| {
+            for u in us.iter_mut() {
+                u.author = "mallory".to_string();
+            }
+        });
+
+        let reg = load_registry(&store);
+        assert!(
+            show_universe(&reg, &idhex).is_none(),
+            "the tampered universe row was dropped (recomputed id != stored id)"
+        );
+    }
+
+    #[test]
+    fn an_authored_universe_and_its_win_roundtrip_through_the_store() {
+        let store = InMemoryGalleryStore::new();
+        let winning = [CH_TAKE_LANTERN, CH_DESCEND, CH_CLAIM];
+        let idhex = {
+            let mut reg = Registry::new();
+            let id = publish_dungeon(&mut reg);
+            let idhex = id_hex(&id);
+            store
+                .persist_universe(&StoredUniverse::authored_desc(reg.universe(id).unwrap()))
+                .unwrap();
+            let accepted = play_universe(&mut reg, &idhex, "ada", &winning).expect("real win");
+            store
+                .persist_completion(&StoredCompletion::new(
+                    &idhex,
+                    "ada",
+                    &winning,
+                    accepted.turns,
+                ))
+                .unwrap();
+            idhex
+        };
+
+        // Reload reconstructs the authored universe from its stored source + win, and
+        // re-verifies the completion.
+        let reg = load_registry(&store);
+        let view = show_universe(&reg, &idhex).expect("authored universe survived restart");
+        assert!(view.win.contains("gold"), "the win condition roundtripped");
+        assert_eq!(view.board.len(), 1);
+        assert_eq!(view.board[0].turns, 3);
     }
 }

@@ -542,6 +542,32 @@ async fn handle_list(ctx: &Context, command: &CommandInteraction) {
 
 // ─── /dungeon start ──────────────────────────────────────────────────────────
 
+// ORCHESTRATION SEAM (documented, deliberately NOT wired here). `state.orchestrator`
+// (`crate::orchestration::SessionOrchestrator`) can spin a dedicated per-run channel or
+// thread for a dungeon session — gated, category-filed, queue-linked, and fully torn down
+// (with every capability cell revoked) at the end. The wiring would be, at session open:
+//
+//     let spec = orchestration::SessionSpec::new("dungeon", session_id, guild_id,
+//             command.user.id.get(), command.user.id.get())
+//         .admin(state.config.admin_discord_id)
+//         .queue("dungeon-run")
+//         .announce("The dungeon awakens.")
+//         .topic("a dungeon run");
+//     let live = state.orchestrator
+//         .open(spec, &state.discord_caps, &state.event_bridge, &ctx.http).await?;
+//     // ...run in live.channel_id...
+//
+// and at `/dungeon close`: `state.orchestrator.teardown(&spec.key(), ..).await`.
+//
+// It is NOT wired into THIS handler because `/dungeon` is intentionally an IN-CHANNEL
+// experience: a session is keyed by the channel the command was issued in (`sessions()`),
+// and the whole run — narration, ballots, `/dungeon close` — happens inline there. Making
+// `/dungeon start` mint a fresh channel instead would be a UX change (and needs
+// MANAGE_CHANNELS + an owning guild), so it stays behind this seam. The bootstrap half IS
+// live (see `guild_create` in `main.rs`): the offering category is prepared per guild, so
+// a future channel-spun `/dungeon` mode files under a category that already exists.
+// TODO(offering-sessions): add a `/dungeon start --private` (or a distinct offering) that
+// opens a dedicated orchestrated surface via the seam above.
 async fn handle_start(ctx: &Context, command: &CommandInteraction, state: &BotState) {
     let channel = command.channel_id.get();
     let seed = channel_seed(channel);

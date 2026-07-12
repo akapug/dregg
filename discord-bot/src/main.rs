@@ -66,6 +66,11 @@ mod devnet;
 pub mod discord_caps;
 mod embeds;
 pub mod orchestration;
+// The sqlite-backed `commands::gallery::GalleryStore` — the durable backing of the
+// `/gallery` universe registry over the bot's async `Database` (the sync↔async bridge
+// mirrors `pay::SqliteCreditStore`). Installed once at boot; the gallery module then
+// loads + re-verifies the live registry from it. See [`gallery_store`].
+pub mod gallery_store;
 // $DREGG-paid, real-AI dungeon runs: the sqlite-backed `dregg_pay::CreditStore`, the per-user
 // deposit-address provider, the credit ledger, the payment poll, and the `/dungeon` gate that
 // debits one earned credit and routes to real Bedrock (`dregg_narrator`) under a PER-RUN budget.
@@ -95,7 +100,7 @@ use std::sync::Arc;
 
 use serenity::Client;
 use serenity::all::{
-    Command, Context, EventHandler, GatewayIntents, Interaction, Message, Presence, Ready,
+    Command, Context, EventHandler, GatewayIntents, Guild, Interaction, Message, Presence, Ready,
 };
 use serenity::async_trait;
 use tokio::sync::Mutex;
@@ -185,6 +190,12 @@ pub struct BotState {
     pub discord_caps: DiscordCapRegistry,
     /// Event bridge: Discord events → dregg turns.
     pub event_bridge: EventBridge,
+    /// The offering session→surface lifecycle (the "Midjourney layer"): spins a
+    /// per-session channel/thread by EXERCISING `discord_caps`, links it to a dregg
+    /// queue, and revokes every cap cell at teardown. A `guild_create` handler drives
+    /// its per-offering bootstrap (mint-if-absent the offering category) the moment the
+    /// bot joins/restarts against a guild. See [`orchestration`].
+    pub orchestrator: orchestration::SessionOrchestrator,
     /// The federation id this bot binds cipherclerk signatures to. Threaded
     /// through every per-user `UserCipherclerk::derive(...)` call so the
     /// AppCipherclerk's action signatures are bound to the correct group.
@@ -305,6 +316,50 @@ impl EventHandler for Handler {
         // `/api/op` HTTP command path). The bot is a chain-reactor, not an
         // endpoint the desktop pokes.
         bot_reactor::start(self.state.clone(), ctx.http.clone());
+    }
+
+    /// The moment the bot joins (or restarts against) a guild: bootstrap every
+    /// offering the guild hosts BEFORE its first session opens. For the dungeon this
+    /// mints-if-absent the `dreggnet-dungeon` category (by EXERCISING a `CreateCategory`
+    /// capability) and caches it, so a later `orchestrator.open(...)` files its session
+    /// channel under a category that already exists rather than paying the mint on the
+    /// user's critical path. An `Err` here means the bot lacks `MANAGE_CHANNELS` in this
+    /// guild — logged as a warning, not fatal (the bot serves everything else fine).
+    async fn guild_create(&self, ctx: Context, guild: Guild, _is_new: Option<bool>) {
+        let guild_id = guild.id.get();
+        // Attribute the bootstrap's guild-writes to the pinned admin in the audit log
+        // (the bot/admin acting on guild_create, not any end user); `0` when unpinned.
+        let registered_by = self.state.config.admin_discord_id.unwrap_or(0);
+        let bootstraps = [orchestration::OfferingBootstrap::new(
+            "dungeon",
+            guild_id,
+            registered_by,
+        )];
+        match self
+            .state
+            .orchestrator
+            .bootstrap_guild(&bootstraps, &self.state.discord_caps, &ctx.http)
+            .await
+        {
+            Ok(reports) => {
+                for report in reports {
+                    info!(
+                        offering = %report.offering,
+                        guild_id = report.guild_id,
+                        category_id = ?report.category_id,
+                        "Bootstrapped offering on guild_create"
+                    );
+                }
+            }
+            Err(e) => {
+                warn!(
+                    guild_id,
+                    error = %e,
+                    "Failed to bootstrap offerings on guild_create (the bot likely lacks \
+                     MANAGE_CHANNELS in this guild); sessions can still open once granted"
+                );
+            }
+        }
     }
 
     async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
@@ -505,6 +560,22 @@ async fn main() {
         .expect("failed to connect to database");
     info!("Database connected");
 
+    // Install the durable UGC-gallery store and load + re-verify the live registry from
+    // it (every persisted completion re-executed on a fresh identically-seeded world).
+    // First install wins; done BEFORE any `/gallery` command is served. Built on a
+    // blocking thread because `install_store` drives the sync GalleryStore (which uses
+    // `block_in_place`) and forces the registry to initialize from the store now.
+    {
+        let store =
+            gallery_store::SqliteGalleryStore::new(db.clone(), tokio::runtime::Handle::current());
+        tokio::task::spawn_blocking(move || {
+            commands::gallery::install_store(Box::new(store));
+        })
+        .await
+        .expect("install gallery store");
+    }
+    info!("UGC gallery store installed (registry loaded + re-verified from sqlite)");
+
     // Create devnet client.
     let devnet = DevnetClient::new(&config.devnet_url);
     info!("Devnet client configured for {}", config.devnet_url);
@@ -621,6 +692,7 @@ async fn main() {
         captp,
         discord_caps,
         event_bridge,
+        orchestrator: orchestration::SessionOrchestrator::new(),
         federation_id_bytes,
         nullifier_set: Mutex::new(Vec::new()), // §4.7 friend-clique soft-federation
         handoff_broker: Mutex::new(handoff_flow::HandoffBroker::new(dregg_captp::FederationId(
@@ -642,8 +714,13 @@ async fn main() {
         state.config.http_host, state.config.http_port
     );
 
-    // Build Discord client (GUILD_PRESENCES + GUILD_MESSAGES for message bridging).
-    let intents = GatewayIntents::GUILD_PRESENCES
+    // Build Discord client. GUILD_PRESENCES + GUILD_MESSAGES for message bridging;
+    // GUILDS delivers `guild_create` (the offering-bootstrap trigger) + guild/channel
+    // metadata; GUILD_MEMBERS is needed to resolve members for per-session role grants
+    // (`orchestration`'s AssignRole path).
+    let intents = GatewayIntents::GUILDS
+        | GatewayIntents::GUILD_MEMBERS
+        | GatewayIntents::GUILD_PRESENCES
         | GatewayIntents::GUILD_MESSAGES
         | GatewayIntents::MESSAGE_CONTENT
         | GatewayIntents::GUILD_MESSAGE_REACTIONS;

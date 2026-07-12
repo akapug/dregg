@@ -1113,6 +1113,7 @@ mod tests {
             ),
             discord_caps: DiscordCapRegistry::new(),
             event_bridge: EventBridge::new("http://localhost:0".into()),
+            orchestrator: crate::orchestration::SessionOrchestrator::new(),
             federation_id_bytes: [0u8; 32],
             nullifier_set: Mutex::new(Vec::new()),
             handoff_broker: Mutex::new(crate::handoff_flow::HandoffBroker::new(fed)),

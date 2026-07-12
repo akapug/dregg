@@ -592,6 +592,46 @@ impl Database {
         .execute(&pool)
         .await?;
 
+        // ─── UGC gallery (commands::gallery GalleryStore backing) ────────────
+        // The durable backing of the `/gallery` universe registry: published
+        // universes (their reproducible PUBLIC source — never a cached world)
+        // and accepted completions (the player + move sequence — never a trusted
+        // receipt blob). Both are re-verified by REPLAY on boot (see
+        // `commands::gallery::load_registry`), so a tampered row cannot resurrect
+        // a cheat. See migrations/005_ugc_gallery.sql.
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS ugc_universes (
+                id_hex    TEXT PRIMARY KEY,
+                kind      TEXT NOT NULL,
+                name      TEXT NOT NULL,
+                author    TEXT NOT NULL,
+                source    TEXT NOT NULL,
+                epoch_hex TEXT,
+                win_json  TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS ugc_completions (
+                key_hex         TEXT PRIMARY KEY,
+                universe_id_hex TEXT NOT NULL,
+                player          TEXT NOT NULL,
+                moves_json      TEXT NOT NULL,
+                claimed_turns   INTEGER NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_ugc_completions_universe
+             ON ugc_completions (universe_id_hex)",
+        )
+        .execute(&pool)
+        .await?;
+
         Ok(Self { pool })
     }
 
@@ -680,6 +720,87 @@ impl Database {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    // ─── UGC gallery (commands::gallery GalleryStore backing) ───────────────
+
+    /// Persist a published universe's reproducible public source (idempotent by
+    /// `id_hex` — `INSERT OR IGNORE`, matching the store trait's idempotency contract).
+    pub async fn persist_ugc_universe(&self, row: &UgcUniverseRow) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT OR IGNORE INTO ugc_universes
+                (id_hex, kind, name, author, source, epoch_hex, win_json)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&row.id_hex)
+        .bind(&row.kind)
+        .bind(&row.name)
+        .bind(&row.author)
+        .bind(&row.source)
+        .bind(&row.epoch_hex)
+        .bind(&row.win_json)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Persist an accepted completion (idempotent by `key_hex` — `INSERT OR IGNORE`).
+    pub async fn persist_ugc_completion(&self, row: &UgcCompletionRow) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT OR IGNORE INTO ugc_completions
+                (key_hex, universe_id_hex, player, moves_json, claimed_turns)
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(&row.key_hex)
+        .bind(&row.universe_id_hex)
+        .bind(&row.player)
+        .bind(&row.moves_json)
+        .bind(row.claimed_turns)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Every persisted universe (the boot-replay source).
+    pub async fn list_ugc_universes(&self) -> Result<Vec<UgcUniverseRow>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT id_hex, kind, name, author, source, epoch_hex, win_json
+             FROM ugc_universes",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|row| UgcUniverseRow {
+                id_hex: row.get("id_hex"),
+                kind: row.get("kind"),
+                name: row.get("name"),
+                author: row.get("author"),
+                source: row.get("source"),
+                epoch_hex: row.get("epoch_hex"),
+                win_json: row.get("win_json"),
+            })
+            .collect())
+    }
+
+    /// Every persisted completion (re-verified by replay on boot).
+    pub async fn list_ugc_completions(&self) -> Result<Vec<UgcCompletionRow>, sqlx::Error> {
+        let rows = sqlx::query(
+            "SELECT key_hex, universe_id_hex, player, moves_json, claimed_turns
+             FROM ugc_completions",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|row| UgcCompletionRow {
+                key_hex: row.get("key_hex"),
+                universe_id_hex: row.get("universe_id_hex"),
+                player: row.get("player"),
+                moves_json: row.get("moves_json"),
+                claimed_turns: row.get("claimed_turns"),
+            })
+            .collect())
     }
 
     // ─── Dungeon world library ──────────────────────────────────────────────
@@ -1968,6 +2089,32 @@ fn chrono_now() -> i64 {
 fn short_local_hash(input: &str) -> String {
     let hash = blake3::hash(input.as_bytes()).to_hex().to_string();
     hash[..12.min(hash.len())].to_string()
+}
+
+/// A persisted UGC-gallery universe row — the plain DB shape of a published
+/// universe's reproducible public source. `commands::gallery`'s `SqliteGalleryStore`
+/// translates this to/from its `StoredUniverse` (kept out of the DB layer so `db`
+/// stays free of the gallery command types).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UgcUniverseRow {
+    pub id_hex: String,
+    pub kind: String,
+    pub name: String,
+    pub author: String,
+    pub source: String,
+    pub epoch_hex: Option<String>,
+    pub win_json: String,
+}
+
+/// A persisted UGC-gallery completion row — the plain DB shape of an accepted
+/// completion (player + move sequence + claimed turns). Re-verified by replay on boot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UgcCompletionRow {
+    pub key_hex: String,
+    pub universe_id_hex: String,
+    pub player: String,
+    pub moves_json: String,
+    pub claimed_turns: i64,
 }
 
 /// One published dungeon world in the community library. The `source` is authoritative (loaders
