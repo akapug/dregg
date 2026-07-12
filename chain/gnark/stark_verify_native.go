@@ -52,15 +52,22 @@
 //	hand-encoding); plus the global WitnessChecks cumulative-sum balance
 //	across all 28 lookups.
 //
-//	NAMED RESIDUAL (the remaining soundness seam before the Groth16 wrap):
-//	the OPENED VALUES this layer consumes are transcript-BOUND (the
-//	challenger replay absorbs them), but their consistency with the
-//	trace/quotient/preprocessed/permutation COMMITMENTS still rides the
-//	host-computed FRI reduced openings — deriving those in-circuit
-//	(open_input's input-batch Merkle openings + the alpha-combination,
-//	verifier.rs:524 at the pinned rev) is the one remaining assembly step;
-//	see fri_verify_native.go HONEST SCOPE. After that: bake the shape/DAG
-//	as VK constants, size the Groth16 wrap, and pin the DreggSettlement VK.
+//	SEAM CLOSED (stark_open_input.go, verified on the real proof in
+//	apex_shrink_open_input_test.go): the OPENED VALUES this layer consumes
+//	are transcript-bound AND commitment-bound — the open_input layer
+//	Merkle-opens the input batches against the trace/quotient/preprocessed/
+//	permutation commitments, derives the FRI reduced openings from those
+//	opened columns (the alpha-combination, verifier.rs:524 at the pinned
+//	rev), and asserts them equal to the fold seeds VerifyFriNative walks.
+//	The assembled circuit (apexShrinkFullVerifyCircuit) is therefore
+//	commitments → (Merkle open + α-reduce) → FRI low-degree, with the same
+//	opened-at-zeta values feeding the constraint/quotient identity here.
+//
+//	NAMED REMAINING (assembly, not soundness): bake the shape/constraint-DAG
+//	as VK constants, size + compile the Groth16 wrap, and pin the
+//	DreggSettlement.sol VK. Cryptographic assumption carried (not a seam):
+//	FRI soundness itself — StarkSound half (i), the deep low-degree
+//	extraction — also carried on the Lean side.
 package friverifier
 
 import (
