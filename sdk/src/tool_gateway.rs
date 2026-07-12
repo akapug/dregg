@@ -548,6 +548,43 @@ impl ToolGateway {
         Self::admit_priced(runtime, parent_token, grant, None)
     }
 
+    /// DETERMINISTIC twin of [`ToolGateway::admit`]: admit a worker whose
+    /// committed identity is rebuilt from seeds instead of fresh randomness.
+    ///
+    /// Semantics are exactly [`ToolGateway::admit`] (same cap-gated worker
+    /// scoped to `grant.tool_method`, same mandate program, free/rate-only —
+    /// no charge), except the worker cipherclerk is
+    /// [`AgentCipherclerk::from_key_bytes`]`(worker_seed)` and the biscuit
+    /// issuer keypair is rebuilt from `issuer_seed` (via
+    /// [`AgentRuntime::spawn_sub_agent_scoped_seeded`]). Re-admitting with the
+    /// same seeds — even on a fresh runtime + ledger after a process restart —
+    /// reproduces the same [`Self::worker_cell`] and the same cell
+    /// `verification_key`, so a capability credential minted in an earlier
+    /// epoch still verifies against the recreated worker cell.
+    ///
+    /// # Security contract
+    ///
+    /// Both seeds are PRIVATE KEYS: derive them from an already-custodied
+    /// secret with strict, distinct domain separation, and never persist the
+    /// derived seeds or the issuer private key — only the custodied root
+    /// secret. See [`AgentRuntime::spawn_sub_agent_scoped_seeded`].
+    pub fn admit_seeded(
+        runtime: &AgentRuntime,
+        parent_token: &HeldToken,
+        grant: ToolGrant,
+        worker_seed: [u8; 32],
+        issuer_seed: [u8; 32],
+    ) -> Result<Self, SdkError> {
+        let worker = runtime.spawn_sub_agent_scoped_seeded(
+            &Attenuation::default(),
+            parent_token,
+            &[grant.tool_method.as_str()],
+            worker_seed,
+            issuer_seed,
+        )?;
+        Self::finish_admit(runtime, grant, None, worker)
+    }
+
     /// Admit a worker under a delegated tool mandate WITH a per-call PRICE — the
     /// metered, PAID market gateway.
     ///
@@ -575,6 +612,18 @@ impl ToolGateway {
             parent_token,
             &[grant.tool_method.as_str()],
         )?;
+        Self::finish_admit(runtime, grant, charge, worker)
+    }
+
+    /// Shared admit tail for [`ToolGateway::admit_priced`] /
+    /// [`ToolGateway::admit_seeded`]: install the mandate program on the
+    /// already-spawned worker cell and assemble the gateway.
+    fn finish_admit(
+        runtime: &AgentRuntime,
+        grant: ToolGrant,
+        charge: Option<Charge>,
+        worker: SubAgent,
+    ) -> Result<Self, SdkError> {
         let worker_cell = worker.cell_id();
 
         // Install the mandate program (rate ceiling + monotonic counter) on the
@@ -1311,5 +1360,187 @@ mod tests {
             }
             other => panic!("expected a Predicate program, got {other:?}"),
         }
+    }
+
+    // ------------------------------------------------------------------
+    // DETERMINISTIC (seeded) admission — the capacity-restart seam.
+    // ------------------------------------------------------------------
+
+    use std::sync::{Arc, RwLock};
+
+    use dregg_token::{BiscuitToken, biscuit_auth};
+
+    /// A fresh runtime with a RANDOM parent identity + a root token to delegate
+    /// from. Each call simulates a distinct process epoch: nothing about the
+    /// parent is shared between two calls.
+    fn fresh_epoch() -> (AgentRuntime, HeldToken) {
+        let mut cclerk = crate::AgentCipherclerk::new();
+        let root = cclerk.mint_token(&[7u8; 32], "compute");
+        let runtime = AgentRuntime::new(Arc::new(RwLock::new(cclerk)), "compute");
+        (runtime, root)
+    }
+
+    fn seeded_grant() -> ToolGrant {
+        ToolGrant {
+            tool_id: 77,
+            rate_limit: 3,
+            deadline: 100,
+            tool_method: "search".to_string(),
+        }
+    }
+
+    /// The worker cell's recorded `verification_key` (hash, data) in `runtime`'s
+    /// ledger — the executor's trust anchor for the worker's cap credential.
+    fn recorded_verification_key(runtime: &AgentRuntime, cell: CellId) -> ([u8; 32], Vec<u8>) {
+        let ledger = runtime.ledger().lock().unwrap();
+        let vk = ledger
+            .get(&cell)
+            .expect("worker cell exists")
+            .verification_key
+            .clone()
+            .expect("worker cell records a verification key");
+        (vk.hash, vk.data)
+    }
+
+    #[test]
+    fn admit_seeded_restart_reproduces_identity_and_first_epoch_credential_verifies() {
+        // RESTART SIMULATION: two completely fresh runtimes + ledgers (random,
+        // DIFFERENT parent identities — only the seeds are shared) must rebuild
+        // the SAME committed worker identity, and a capability credential minted
+        // in the first epoch must still verify against the second epoch's
+        // recreated trust anchor.
+        let worker_seed = [0x11u8; 32];
+        let issuer_seed = [0x22u8; 32];
+
+        let (rt1, root1) = fresh_epoch();
+        let gw1 = ToolGateway::admit_seeded(&rt1, &root1, seeded_grant(), worker_seed, issuer_seed)
+            .expect("epoch-1 seeded admit");
+        let cell1 = gw1.worker_cell();
+        let issuer1 = gw1.worker_for_test().cap_issuer();
+        let epoch1_credential = gw1.worker_for_test().cap_token().to_vec();
+        let vk1 = recorded_verification_key(&rt1, cell1);
+        drop(gw1);
+        drop(rt1);
+
+        let (rt2, root2) = fresh_epoch();
+        let mut gw2 =
+            ToolGateway::admit_seeded(&rt2, &root2, seeded_grant(), worker_seed, issuer_seed)
+                .expect("epoch-2 seeded admit");
+        let cell2 = gw2.worker_cell();
+        let issuer2 = gw2.worker_for_test().cap_issuer();
+        let vk2 = recorded_verification_key(&rt2, cell2);
+
+        // Identical committed identity across epochs.
+        assert_eq!(cell1, cell2, "same seeds rebuild the same worker CellId");
+        assert_eq!(
+            issuer1, issuer2,
+            "same seeds rebuild the same biscuit issuer"
+        );
+        assert_eq!(vk1, vk2, "same seeds rebuild the same verification_key");
+        assert_eq!(
+            vk2.1,
+            issuer2.to_vec(),
+            "the recorded verification_key IS the issuer public key"
+        );
+        assert_eq!(
+            vk2.0,
+            *blake3::hash(&issuer2).as_bytes(),
+            "verification_key hash commits to the issuer public key"
+        );
+
+        // The FIRST epoch's credential still verifies against the SECOND
+        // epoch's recreated trust anchor: parsing an encoded biscuit under a
+        // root public key checks its signature chain, so this only passes if
+        // the recreated verification_key really is the epoch-1 issuer.
+        let anchor = biscuit_auth::PublicKey::from_bytes(&vk2.1, biscuit_auth::Algorithm::Ed25519)
+            .expect("recorded verification_key is a valid ed25519 public key");
+        let encoded =
+            std::str::from_utf8(&epoch1_credential).expect("cap token is an encoded string");
+        BiscuitToken::from_encoded(encoded, anchor)
+            .expect("epoch-1 credential verifies against the epoch-2 trust anchor");
+
+        // NEGATIVE CONTROL (non-vacuous): the same credential does NOT verify
+        // under an unrelated issuer key.
+        let stranger = biscuit_auth::KeyPair::new().public();
+        assert!(
+            BiscuitToken::from_encoded(encoded, stranger).is_err(),
+            "the credential must not verify under a stranger issuer"
+        );
+
+        // END-TO-END: the executor itself admits a turn under the recreated
+        // identity (the credential verifies against the recreated worker cell
+        // through the real `verify_token_authorization` gate).
+        let out = gw2
+            .invoke(77, 50, vec![])
+            .expect("seeded worker's in-mandate call commits through the executor");
+        assert_eq!(out.calls_made, 1);
+    }
+
+    #[test]
+    fn admit_seeded_different_seeds_change_exactly_the_seeded_identity_leg() {
+        let worker_seed = [0x11u8; 32];
+        let issuer_seed = [0x22u8; 32];
+
+        let (rt_a, root_a) = fresh_epoch();
+        let gw_a =
+            ToolGateway::admit_seeded(&rt_a, &root_a, seeded_grant(), worker_seed, issuer_seed)
+                .expect("baseline seeded admit");
+
+        // Different worker seed → different worker cell.
+        let (rt_b, root_b) = fresh_epoch();
+        let gw_b =
+            ToolGateway::admit_seeded(&rt_b, &root_b, seeded_grant(), [0x33u8; 32], issuer_seed)
+                .expect("different-worker-seed admit");
+        assert_ne!(
+            gw_a.worker_cell(),
+            gw_b.worker_cell(),
+            "a different worker seed yields a different worker cell"
+        );
+        assert_eq!(
+            gw_a.worker_for_test().cap_issuer(),
+            gw_b.worker_for_test().cap_issuer(),
+            "the issuer leg is unchanged when only the worker seed differs"
+        );
+
+        // Different issuer seed → same worker cell, different issuer/anchor.
+        let (rt_c, root_c) = fresh_epoch();
+        let gw_c =
+            ToolGateway::admit_seeded(&rt_c, &root_c, seeded_grant(), worker_seed, [0x44u8; 32])
+                .expect("different-issuer-seed admit");
+        assert_eq!(
+            gw_a.worker_cell(),
+            gw_c.worker_cell(),
+            "the worker leg is unchanged when only the issuer seed differs"
+        );
+        assert_ne!(
+            gw_a.worker_for_test().cap_issuer(),
+            gw_c.worker_for_test().cap_issuer(),
+            "a different issuer seed yields a different issuer"
+        );
+        assert_ne!(
+            recorded_verification_key(&rt_a, gw_a.worker_cell()),
+            recorded_verification_key(&rt_c, gw_c.worker_cell()),
+            "a different issuer seed yields a different recorded verification_key"
+        );
+    }
+
+    #[test]
+    fn random_admit_still_produces_distinct_identities() {
+        // REGRESSION GUARD: the refactor must leave the RANDOM path random —
+        // two plain admits mint distinct workers AND distinct issuers.
+        let (rt1, root1) = fresh_epoch();
+        let gw1 = ToolGateway::admit(&rt1, &root1, seeded_grant()).expect("random admit 1");
+        let (rt2, root2) = fresh_epoch();
+        let gw2 = ToolGateway::admit(&rt2, &root2, seeded_grant()).expect("random admit 2");
+        assert_ne!(
+            gw1.worker_cell(),
+            gw2.worker_cell(),
+            "random admits must not collide on worker cells"
+        );
+        assert_ne!(
+            gw1.worker_for_test().cap_issuer(),
+            gw2.worker_for_test().cap_issuer(),
+            "random admits must not collide on issuers"
+        );
     }
 }
