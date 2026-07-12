@@ -1,0 +1,50 @@
+# `dreggnet-offerings` — the frontend-agnostic Offering/Session core of DreggNet Cloud.
+#
+# The dungeon we built is OFFERING #0 — the first instance of a general pattern
+# (a confined, verifiable, paid, per-session thing on the real dregg substrate).
+# This crate extracts that pattern out of `discord-bot/fiction.rs` into a reusable
+# `Offering` trait + a `Frontend` abstraction, so Telegram/WeChat/web frontends and
+# hosted-Hermes/grain offerings plug into ONE core. See
+# `docs/DREGGNET-CLOUD-OFFERINGS.md` (the design).
+#
+# It is FRONTEND-AGNOSTIC: NO serenity/Discord dependency. The discord-bot becomes
+# a thin `Frontend` impl (a follow-up); this crate is the core the bot consumes.
+#
+# A breadstuffs workspace member (registered in the root `members`, not
+# `default-members` — a heavy narrative-adjacent crate). Build/test:
+#   cargo test -p dreggnet-offerings
+[package]
+name = "dreggnet-offerings"
+version = "0.1.0"
+edition = "2024"
+description = "The frontend-agnostic Offering/Session core of DreggNet Cloud: an Offering trait (open/actions/advance/verify/render/price) over the real dregg substrate, a DungeonOffering (offering #0) over spween-dregg's WorldCell, and a Frontend affordance-renderer abstraction (no Discord dep)."
+
+[dependencies]
+# THE SUBSTRATE — the real verifiable world-cell binding: `WorldCell` (a move is ONE
+# cap-bounded turn the real `EmbeddedExecutor` admits IFF the installed gate passes),
+# `Driver`, `Playthrough`/`StepReceipt`, and `verify_by_replay` (the replay verifier).
+spween-dregg = { path = "../spween-dregg" }
+# OFFERING #0's committed universe — "The Warden's Keep": `deploy_keep` / `keep_scene`
+# (+ the `KP_*` choice constants the tests drive winning/illegal lines with).
+dungeon-on-dregg = { path = "../dungeon-on-dregg" }
+# The narrative DSL the substrate is built on — `Choice`/`PassageContent`/
+# `ConditionExpr` (naming a choice + evaluating its scene condition to decorate a
+# locked affordance). Same git rev spween-dregg / dungeon-on-dregg pin.
+spween = { git = "https://github.com/emberian/spween", rev = "afb5b1fce8c9dd3b787e197bddf105adca20e08a" }
+# `TurnReceipt` — the real committed-turn receipt an `Outcome::Landed` carries.
+# `default-features = false` drops the non-wasm `server` feature (we need only the
+# executor/turn core), matching spween-dregg / dungeon-on-dregg.
+dregg-app-framework = { path = "../app-framework", default-features = false }
+# THE DEOS SURFACE — `tree::ViewNode`, the gpui-free serializable deos affordance
+# view-tree an offering's `render` produces (a `Section`/`Menu`/`Button` of cap-gated
+# affordances). `default-features = false` takes ONLY the always-compiled gpui-free
+# view-tree model (no `native` → no gpui, no mozjs). This is the doc's mandate: an
+# offering's Surface IS a deos ViewNode — do not reinvent `Surface`/`Action`.
+deos-view = { path = "../deos-view", default-features = false }
+# Deterministic frontend-agnostic identity derivation (the mock frontend maps a
+# platform user id → a stable `DreggIdentity`); same crate the substrate hashes with.
+blake3 = "1"
+
+# A workspace MEMBER of the breadstuffs root (registered in `members`, not
+# `default-members`). The root `[workspace]` + `[patch]` tables apply; no standalone
+# `[workspace]`/`[patch]` here.
