@@ -7965,3 +7965,24 @@ the expose_claim state root as a gnark public input — without this there is no
 (c) BAKE the VK (shape + constraint DAG as circuit constants); (d) replace the MOCK verifier in DreggSettlement.t.sol
 with the generated real one; (e) make the Lean tie REAL (a differential to Satisfied2/deciden) or drop the claim;
 (f) remove/neuter the vacuous hand mode. THEN the message→root 26th-PI residual.
+
+## ⚠⚠ SOLANA SCOPE CORRECTION (2026-07-12) — critic found a FORGERY in the shipped proof-of-holdings path
+I OVERCLAIMED the Solana read side too (said "real, consensus-anchored, arguably ahead" — wrong for the SHIPPED path).
+The opus critic (a6dd0464bd2ef3cce) found: prove_holding_consensus (solana_holdings.rs:264) + the PRODUCTION entry
+SolanaWatcher::verify_consensus (dregg-pay/watcher.rs:307) grant ConsensusVerified off a CALLER-SUPPLIED, UNVERIFIED
+EpochStakeTable. FORGERY (no sig-forge/hash-break): attacker makes a 1-key stake table (their key = 100%), builds an
+SPL blob (owner=SPL token, amount=u64::MAX) into a 1-leaf accounts_hash → bank_hash, signs 1 vote → 1*3≥1*2 passes
+is_supermajority → ConsensusVerified holding of u64::MAX → governance weight (holding_weight.rs:750). "2/3 of stake"
+= 2/3 of a table the attacker WROTE. solana_consensus.rs:130 admits it: "the verifier's TRUSTED input".
+ALSO: (F3) the tally counts dregg-DOMAIN sigs (vote_message b"dregg-solana-tower-vote:v1"), NOT real Solana Tower-BFT
+authorized-voter votes — tally_authorized exists but isn't called on the holdings path. (F4) PoH is vacuous (attacker-
+chosen anchor; verify_poh_anchored exists but unused here). (F2) the production relayer uses the legacy supplied-table
+path; the anchored methods are #[cfg(test)]-gated.
+WHAT HOLDS: the consensus ARITHMETIC is real (distinct-voter collapse, forged-sig=0, exact (slot,bank_hash), u128
+denom, real bank-hash + 16-ary inclusion recomputation); the owner-program check is real (but vacuous under a forged
+table); solana-lock settle = M-of-N oracle-attested, HONESTLY scoped; the provenance layer (derive_stake_table/
+from_anchor/tally_authorized/WeakSubjectivityAnchor) is GENUINELY GOOD — just NOT WIRED into holdings/relayer.
+CORRECTED CLAIM: Solana holdings = trustless-ARITHMETIC over a TRUSTED stake table, NOT a trustless light client.
+FIX (the closure EXISTS, it's a WIRING fix): route holdings through from_anchor + tally_authorized against a
+governance-PINNED WeakSubjectivityAnchor (like verify_lock_proof_consensus_anchored + check_pinned_anchor); stop
+passing a bare EpochStakeTable into any production entry; add the forged-table REJECT test. Launching.
