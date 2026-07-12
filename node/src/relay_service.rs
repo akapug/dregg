@@ -681,7 +681,7 @@ fn verify_owner_signature(
 }
 
 fn hex_decode_var(s: &str) -> Result<Vec<u8>, ()> {
-    if !s.len().is_multiple_of(2) {
+    if !s.is_ascii() || !s.len().is_multiple_of(2) {
         return Err(());
     }
     let mut out = Vec::with_capacity(s.len() / 2);
@@ -1285,7 +1285,7 @@ fn queue_root_from_template_entries(
 }
 
 fn hex_decode_32(s: &str) -> Option<[u8; 32]> {
-    if s.len() != 64 {
+    if !s.is_ascii() || s.len() != 64 {
         return None;
     }
     let mut bytes = [0u8; 32];
@@ -1331,6 +1331,17 @@ mod tests {
         let sk = SigningKey::from_bytes(&seed);
         let pk = sk.verifying_key().to_bytes();
         (sk, pk)
+    }
+
+    #[test]
+    fn hex_decoders_reject_non_ascii_input() {
+        let variable = format!("a\u{e9}0");
+        assert_eq!(variable.len(), 4);
+        assert!(hex_decode_var(&variable).is_err());
+
+        let fixed = format!("a\u{e9}{}", "0".repeat(61));
+        assert_eq!(fixed.len(), 64);
+        assert_eq!(hex_decode_32(&fixed), None);
     }
 
     fn test_config() -> RelayConfig {

@@ -2368,7 +2368,7 @@ pub(crate) fn parse_federation_descriptor(
     let members: Vec<dregg_types::PublicKey> = members_hex
         .iter()
         .filter_map(|h| {
-            if h.len() != 64 {
+            if !h.is_ascii() || h.len() != 64 {
                 return None;
             }
             // Use the same robust hex decode pattern as hex_decode_32 in main.rs
