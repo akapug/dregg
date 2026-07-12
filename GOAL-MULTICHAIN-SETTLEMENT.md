@@ -138,3 +138,19 @@ remaining value — thread 1 (wrap shrink-layer, ~5M→~1-2M) + thread 2 (rung-3
 active work; proceeding despite churn = collision risk, against discipline). Pacing: re-poll circuit-prove each
 wakeup; seize the wrap the instant it quiets. Meanwhile: e2e-eth validation + remaining small refinements
 (finalization-window, ADR-036 Cosmos, upstream the alloy-trie fix — the last is outward-facing, ember-gated).
+
+## ⚑ LATEST (07-12 ~5am) — wrap moving on BOTH sides
+- CHURN MISREAD CORRECTED: the 9 "uncommitted" circuit-prove files are pre-existing STALE tests/*_audit_*.rs (in
+  the git status at session START), NOT active work. Real churn = the COMMITS, which stopped. circuit-prove/src QUIET.
+- gnark NATIVE VerifyFri MEASURED + committed (ef2b2f6d1): emulated 40,938,030 → native 1,018,263 R1CS (40.2×);
+  HASHING 40.7M→0.8M (51×); fold residual byte-IDENTICAL (shared friFoldRowArity2, code-guaranteed). The
+  re-architecture's central hashing bet is CONFIRMED. Single-matrix scope (full ~5.2M awaits reduced-opening + shrink).
+- GIT HYGIENE FIX: poseidon2_bn254*.go were UNTRACKED since session start (prior-session Exp-2); my committed gnark
+  work depends on them → committed so chain/gnark builds from a clean checkout. (Watch: the shared tree has heavy
+  multi-terminal churn — only ever commit MY named files.)
+- Rust SHRINK LAYER (DreggOuterConfig = Poseidon2Bn254 MMCS + MultiField32Challenger) LAUNCHED (additive, circuit-prove,
+  self-contained synthetic prove/verify; real-apex shrink = named residual, needs the apex-verifier AIR + the blocked
+  apex pipeline). This + the gnark native VerifyFri = the wrap's two sides meeting. Waiting.
+NEXT: harvest the shrink layer; if it needs the apex-verifier AIR / real apex, that's the blocked end-to-end piece.
+The wrap's MEASURED + ASSEMBLED (gnark) + CONFIG (rust) are the achievable pieces; end-to-end real-apex verify awaits
+the (other-terminal) apex pipeline fix.
