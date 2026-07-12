@@ -612,3 +612,32 @@ INVESTIGATION.md`): the specified per-row sorted-splice is NOT faithfully forcea
 STATUS: gap #5 stays OPEN + CLASSIFIED (verdict B maintained-invariant assumption with a precise IMT closure), NOT
 faked shut. kernelConfigSound's CanonicalHeapExtract remains a genuine assumption until the IMT migration. The other
 4 wrap gaps had local gate fixes; this one needs the rep change — a deeper, correctly-scoped finding.
+
+### ★★ GAP #5 CLOSURE OBSTRUCTION (2026-07-12): the insert soundness needs a MEMORY-COMMITMENT REDEFINITION (ember decision)
+The IMT leaf-format + pointer-bracket ABSENCE landed (919b2b0b8) and the Lean IMT closure is PROVEN (531f2a009:
+imtInsert_preserves / canonicalHeapExtract_of_imt / double-spend UNSAT). BUT the deployed INSERT two-path
+(soundness-completer) is NOT buildable against the deployed heap-tree layout — a genuine architectural obstruction the
+fix lane named rather than laundering:
+- The deployed heap is a COMPACTED SORTED ARRAY: insert_witness (heap_root.rs:861-896) does splice-and-REBUILD
+  (partition → splice → CanonicalHeapTree::new re-sort+re-compact), so the new leaf lands at its sorted-compacted
+  position and the ENTIRE SUFFIX shifts up by one (O(n) positions change).
+- The AIR binds "only this leaf changed" via a SHARED sibling path (cur_old→MAP_ROOT, cur_new→MAP_NEW_ROOT over shared
+  (MAP_SIB0,MAP_DIR0)) — sound for VALUE-UPDATES (position stable), but for INSERT there is NO shared pre-image for the
+  shifted suffix. Opening the two local edits leaves the shifted region FREE ⟹ a malicious new_root8 (de-linking any
+  leaf) is still SAT. imtInsert_preserves needs "only low + the new slot changed, nothing else" — unbindable when the
+  suffix shifts. This is the FLIP SIDE of the compacted-array-shift obstruction: the deployed tree IS the compacted
+  array. The Lean IMT assumes APPEND-at-free-index (stable positions); the deployed circuit diverges on the insert.
+- STATUS: gap #5's ABSENCE arm is CLOSED (pointer-bracket, 919b2b0b8); the INSERT arm remains OPEN — the committed
+  root's sortedness is a PRODUCER-TRUST assumption, not an in-circuit forced invariant. Narrowed, not closed.
+★ THE DECISION (ember-gated — a memory-commitment redefinition, the "be thoughtful, don't fire commitment changes from
+thin context" case; NOT a per-row AIR patch): to get stable positions so the two shared-path openings bind —
+  (a) APPEND-AT-FREE-INDEX storage — root becomes INSERTION-ORDER-DEPENDENT, breaking root_is_input_order_independent
+      (heap_root.rs:1019) + the foundational "cell & executor compute byte-identical roots from the (addr→value) map"
+      invariant (heap_root.rs:15-25); the cell must persist a position assignment; OR
+  (b) SPARSE-BY-ADDR tree (position = addr bits, depth ~31) — order-independent but a different tree, ~2× path depth +
+      full retree.
+Both change EVERY committed heap root ⟹ VK + all heap-root fixtures regen + cell/executor recompute rewrite +
+differential-test rebuild. The AIR side (2nd sibling path + the range gate via eval_lex_lt) is fixed-width-expressible
+and NOT the blocker; the blocker is the deployed commitment/producer layout. Recommend surfacing to ember. Aligns with
+the sorted-Merkle-accumulator unification direction — IMT-over-sparse-by-addr is likely the convergence (order-indep +
+forceable insert), at the cost of depth.
