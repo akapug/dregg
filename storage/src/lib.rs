@@ -86,6 +86,9 @@ pub mod inbox;
 pub mod multi_asset;
 pub mod namespace_mount;
 pub mod operator;
+/// Per-grain, owner-anchored bonded-operator placement: deterministic,
+/// bond-weighted rendezvous selection of k-of-n operators for a grain.
+pub mod placement;
 #[cfg(feature = "kzg")]
 pub mod programmable;
 pub mod pubsub;

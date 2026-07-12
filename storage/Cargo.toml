@@ -10,6 +10,12 @@ kzg = ["poly-commitment", "ark-ec", "ark-ff", "ark-poly", "ark-bn254", "ark-std"
 
 [dependencies]
 blake3 = "1"
+# ed25519 signatures for PoR-challenge operator authentication: a durability
+# deal's challenge response must be SIGNED by the assigned operator's key so a
+# valid response proves *that operator* holds *that shard* (not merely that some
+# holder of a shard copy produced an opening). Same crate + major the node signs
+# blocks with (`node/Cargo.toml`'s ed25519-dalek 2).
+ed25519-dalek = { version = "2", features = ["std"] }
 serde = { version = "1", features = ["derive"] }
 # postcard (de)serialization of the IR-v2 batch proof (`Ir2BatchProof`) that the
 # private-consumption path verifies via the p3 descriptor prover. This replaced

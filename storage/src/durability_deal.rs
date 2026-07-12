@@ -43,6 +43,7 @@
 use crate::ContentHash;
 use crate::availability::{self, AvailabilityError, AvailabilityManifest};
 use crate::erasure::{self, ErasureChunk};
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 
 /// One erasure shard bound to the bonded operator that stores it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -113,6 +114,15 @@ pub enum ChallengeError {
     /// position (tampered data, forged leaf, wrong-position, or wrong shard
     /// entirely). This is the PoR-genuineness verdict.
     ProofInvalid { index: usize },
+    /// The operator identity placed with this shard is not a well-formed
+    /// ed25519 verifying key, so no signature over it can be checked.
+    BadOperatorKey { index: usize },
+    /// The response opened correctly, but its authenticating signature was not
+    /// produced by the operator this shard was placed with over the exact
+    /// `(deal_root, shard_index, challenge_nonce)` challenged. This is the
+    /// operator-authentication verdict: it fails a copy-holder that is not the
+    /// assigned operator, and a stale or replayed nonce.
+    SignatureInvalid { index: usize },
 }
 
 impl std::fmt::Display for ChallengeError {
@@ -131,11 +141,63 @@ impl std::fmt::Display for ChallengeError {
             ChallengeError::ProofInvalid { index } => {
                 write!(f, "shard {index} did not open against the deal root")
             }
+            ChallengeError::BadOperatorKey { index } => {
+                write!(f, "shard {index} operator is not a valid ed25519 key")
+            }
+            ChallengeError::SignatureInvalid { index } => {
+                write!(
+                    f,
+                    "shard {index} response was not signed by its assigned operator over the challenged nonce"
+                )
+            }
         }
     }
 }
 
 impl std::error::Error for ChallengeError {}
+
+/// Domain separator for the PoR challenge preimage, so an operator's shard
+/// signature can never be replayed as a signature in any other protocol.
+const POR_CHALLENGE_DOMAIN: &[u8] = b"dregg-storage/durability-deal/por-challenge/v1";
+
+/// The exact bytes an assigned operator must sign to answer a PoR challenge:
+/// the domain tag, the deal root, the challenged shard index, and the challenge
+/// nonce. Binding all three means a valid signature proves *this operator*
+/// answered *this shard* under *this* nonce — a stale nonce, a different shard,
+/// or a different deal yields a different preimage and thus a failing check.
+pub fn challenge_message(deal_root: &ContentHash, shard_index: usize, nonce: u64) -> Vec<u8> {
+    let mut m = Vec::with_capacity(POR_CHALLENGE_DOMAIN.len() + 32 + 8 + 8);
+    m.extend_from_slice(POR_CHALLENGE_DOMAIN);
+    m.extend_from_slice(&deal_root.0);
+    m.extend_from_slice(&(shard_index as u64).to_le_bytes());
+    m.extend_from_slice(&nonce.to_le_bytes());
+    m
+}
+
+/// An operator identity from which the ed25519 verifying key it is bonded under
+/// can be recovered, so a PoR response can be authenticated as coming from the
+/// *assigned* operator rather than any holder of a shard copy.
+///
+/// Implemented for [`VerifyingKey`] directly and for a raw 32-byte key, so a
+/// deal can be parameterised either way; a bonded-operator id in practice *is*
+/// its key (or a hash the caller resolves to a key before building the deal).
+pub trait OperatorKey {
+    /// The operator's ed25519 verifying key, or `None` if the identity is not a
+    /// well-formed key (a malformed placement, surfaced as `BadOperatorKey`).
+    fn verifying_key(&self) -> Option<VerifyingKey>;
+}
+
+impl OperatorKey for VerifyingKey {
+    fn verifying_key(&self) -> Option<VerifyingKey> {
+        Some(*self)
+    }
+}
+
+impl OperatorKey for [u8; 32] {
+    fn verifying_key(&self) -> Option<VerifyingKey> {
+        VerifyingKey::from_bytes(self).ok()
+    }
+}
 
 /// The `(k, n)` shard layout a blob of `data_len` bytes will produce under the
 /// given encoder parameters — so a caller can size its bonded-operator set
@@ -272,6 +334,56 @@ impl<Op> DurabilityDeal<Op> {
         if !erasure::verify_chunk_against_root(response, &self.root) {
             return Err(ChallengeError::ProofInvalid { index: shard_index });
         }
+        Ok(())
+    }
+}
+
+impl<Op: OperatorKey> DurabilityDeal<Op> {
+    /// PoR challenge that authenticates the **assigned operator**, not merely
+    /// the existence of an opening.
+    ///
+    /// The challenger picks `nonce` and asks the operator holding `shard_index`
+    /// to return its shard (`response`) *and* an ed25519 signature over
+    /// [`challenge_message`]`(root, shard_index, nonce)`. Verification passes
+    /// iff **both** legs hold:
+    ///
+    /// 1. the opening leg — [`verify_challenge`](Self::verify_challenge): the
+    ///    response is the committed shard for this placement and opens against
+    ///    the deal root at that position (a genuine RS shard, not a lie); and
+    /// 2. the operator leg — `signature` verifies under the ed25519 key named
+    ///    by `placements[shard_index].operator` over that exact preimage.
+    ///
+    /// Because the key is taken from the *placement*, a copy-holder that is not
+    /// the assigned operator cannot answer (leg 2 fails); because the nonce is
+    /// bound into the signed preimage, a stale or replayed nonce fails (the
+    /// preimage differs). That is what makes the challenge a proof that *that
+    /// operator* still holds *that shard*, closing the durability PoR hole where
+    /// only the opening was checked.
+    pub fn verify_challenge_authenticated(
+        &self,
+        shard_index: usize,
+        nonce: u64,
+        response: &ErasureChunk,
+        signature: &Signature,
+    ) -> Result<(), ChallengeError> {
+        // Leg 1: the shard itself is genuine (unchanged — both legs must pass).
+        self.verify_challenge(shard_index, response)?;
+
+        // Leg 2: authenticate the operator. The key comes from the placement,
+        // so only the operator this shard was bonded to can produce a passing
+        // signature over the exact challenged (root, index, nonce) preimage.
+        let placement = self
+            .placements
+            .iter()
+            .find(|p| p.index == shard_index)
+            .ok_or(ChallengeError::UnknownShard { index: shard_index })?;
+        let vk = placement
+            .operator
+            .verifying_key()
+            .ok_or(ChallengeError::BadOperatorKey { index: shard_index })?;
+        let message = challenge_message(&self.root, shard_index, nonce);
+        vk.verify(&message, signature)
+            .map_err(|_| ChallengeError::SignatureInvalid { index: shard_index })?;
         Ok(())
     }
 }
@@ -528,5 +640,164 @@ mod tests {
         // Still reconstructs from the data shards alone.
         let data_only: Vec<ErasureChunk> = chunks.into_iter().filter(|c| !c.is_parity).collect();
         assert_eq!(deal.reconstruct(&data_only).unwrap(), data);
+    }
+
+    use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
+
+    /// Deterministic signing key from a one-byte seed (no rng dependency).
+    fn signer(seed: u8) -> SigningKey {
+        SigningKey::from_bytes(&[seed; 32])
+    }
+
+    /// Build a deal whose operators are real ed25519 keys, returning the deal,
+    /// the shards, and the signing keys (in shard-index order) so a test can
+    /// mint honest or forged challenge responses.
+    fn signed_deal(
+        data: &[u8],
+        chunk_size: usize,
+        expansion: usize,
+    ) -> (
+        DurabilityDeal<VerifyingKey>,
+        Vec<ErasureChunk>,
+        Vec<SigningKey>,
+    ) {
+        let (_, n) = shard_layout(data.len(), chunk_size, expansion);
+        let signers: Vec<SigningKey> = (0..n as u8).map(signer).collect();
+        let operators: Vec<VerifyingKey> = signers.iter().map(|s| s.verifying_key()).collect();
+        let (deal, chunks) = create(data, chunk_size, expansion, &operators).unwrap();
+        (deal, chunks, signers)
+    }
+
+    #[test]
+    fn authenticated_challenge_by_assigned_operator_verifies() {
+        let data = b"the assigned operator signs the challenge and both legs pass";
+        let (deal, chunks, signers) = signed_deal(data, 8, 2);
+        let nonce = 0x0A11_CE00_u64;
+        for i in 0..deal.n {
+            let msg = challenge_message(&deal.root, i, nonce);
+            let sig = signers[i].sign(&msg);
+            assert_eq!(
+                deal.verify_challenge_authenticated(i, nonce, &chunks[i], &sig),
+                Ok(()),
+                "assigned operator {i} failed the authenticated PoR challenge"
+            );
+        }
+    }
+
+    #[test]
+    fn authenticated_challenge_by_wrong_operator_is_rejected() {
+        // A different key signs a byte-perfect opening for the challenged shard.
+        // The opening leg passes (the shard is genuine), but the operator leg
+        // fails: a copy-holder is not the bonded operator.
+        let data = b"a copy holder cannot answer for the operator it is not, no";
+        let (deal, chunks, signers) = signed_deal(data, 8, 2);
+        assert!(deal.n >= 2);
+        let nonce = 7;
+        let target = 0usize;
+        let impostor = 1usize; // a different assigned key, standing in as a copy-holder
+        let msg = challenge_message(&deal.root, target, nonce);
+        let sig = signers[impostor].sign(&msg);
+        assert_eq!(
+            deal.verify_challenge_authenticated(target, nonce, &chunks[target], &sig),
+            Err(ChallengeError::SignatureInvalid { index: target })
+        );
+        // A brand-new key never placed in the deal is likewise rejected.
+        let outsider = signer(200).sign(&msg);
+        assert_eq!(
+            deal.verify_challenge_authenticated(target, nonce, &chunks[target], &outsider),
+            Err(ChallengeError::SignatureInvalid { index: target })
+        );
+    }
+
+    #[test]
+    fn authenticated_challenge_with_stale_nonce_is_rejected() {
+        // The operator signs an OLD nonce; the challenger verifies under the
+        // CURRENT one. The signed preimage differs, so the check fails even
+        // though the signer is the correct assigned operator with a genuine
+        // shard. Then the SAME operator signing the CURRENT nonce passes.
+        let data = b"a signature over a stale nonce must not answer a fresh one";
+        let (deal, chunks, signers) = signed_deal(data, 8, 2);
+        let stale = 100_u64;
+        let current = 101_u64;
+        let target = 0usize;
+        let stale_sig = signers[target].sign(&challenge_message(&deal.root, target, stale));
+        assert_eq!(
+            deal.verify_challenge_authenticated(target, current, &chunks[target], &stale_sig),
+            Err(ChallengeError::SignatureInvalid { index: target })
+        );
+        let fresh_sig = signers[target].sign(&challenge_message(&deal.root, target, current));
+        assert_eq!(
+            deal.verify_challenge_authenticated(target, current, &chunks[target], &fresh_sig),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn authenticated_challenge_still_requires_a_genuine_opening() {
+        // Both legs must pass: even the correct operator's signature cannot
+        // rescue a shard that fails the opening leg (a forged/tampered shard).
+        let data = b"the operator signature does not excuse a lying shard opening";
+        let (deal, chunks, signers) = signed_deal(data, 8, 2);
+        let nonce = 42;
+        let target = 0usize;
+        // Tamper the shard but recompute its integrity leaf; the forged leaf is
+        // not in the deal tree, so the opening leg rejects it before leg 2.
+        let mut forged = chunks[target].clone();
+        forged.data[0] ^= 0xFF;
+        forged.commitment = erasure::chunk_commitment_dual(&forged.data).blake3;
+        let sig = signers[target].sign(&challenge_message(&deal.root, target, nonce));
+        assert_eq!(
+            deal.verify_challenge_authenticated(target, nonce, &forged, &sig),
+            Err(ChallengeError::ProofInvalid { index: target })
+        );
+    }
+
+    #[test]
+    fn authenticated_challenge_rejects_wrong_shard_response() {
+        // Operator signs the right nonce but returns a different shard's
+        // opening; the opening leg's shard-binding catches it up front.
+        let data = b"an operator must answer the shard it was actually challenged on";
+        let (deal, chunks, signers) = signed_deal(data, 8, 2);
+        assert!(deal.n >= 2);
+        let nonce = 9;
+        let challenged = 0usize;
+        let responded = 1usize;
+        let sig = signers[challenged].sign(&challenge_message(&deal.root, challenged, nonce));
+        assert_eq!(
+            deal.verify_challenge_authenticated(challenged, nonce, &chunks[responded], &sig),
+            Err(ChallengeError::WrongShard {
+                challenged,
+                responded,
+            })
+        );
+    }
+
+    #[test]
+    fn raw_byte_key_operators_authenticate() {
+        // The OperatorKey impl for a raw 32-byte id: a deal keyed by the
+        // operators' key BYTES authenticates the same way as one keyed by
+        // VerifyingKey, so a bonded id that *is* a key works directly.
+        let data = b"raw 32-byte operator ids that are ed25519 keys authenticate";
+        let (_, n) = shard_layout(data.len(), 8, 2);
+        assert!(n >= 2);
+        let signers: Vec<SigningKey> = (0..n as u8).map(signer).collect();
+        let operators: Vec<[u8; 32]> = signers
+            .iter()
+            .map(|s| s.verifying_key().to_bytes())
+            .collect();
+        let (deal, chunks) = create(data, 8, 2, &operators).unwrap();
+        let nonce = 555;
+        let target = 0usize;
+        let sig = signers[target].sign(&challenge_message(&deal.root, target, nonce));
+        assert_eq!(
+            deal.verify_challenge_authenticated(target, nonce, &chunks[target], &sig),
+            Ok(())
+        );
+        // A non-assigned key over the raw-byte deal is still rejected.
+        let wrong = signers[1].sign(&challenge_message(&deal.root, target, nonce));
+        assert_eq!(
+            deal.verify_challenge_authenticated(target, nonce, &chunks[target], &wrong),
+            Err(ChallengeError::SignatureInvalid { index: target })
+        );
     }
 }
