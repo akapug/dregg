@@ -7502,3 +7502,24 @@ leaves. NOT a verified chain — verified light-client RULES over verified-crypt
 the Lean specs ARE the seed chain-finality models. Fold-path doc maps the DECO-proven custom-leaf route (rung
 3); the AIR is the heavy next tier. Files: metatheory/Dregg2/Bridge/{VerifiedLightClient,LightClient{Tendermint,
 Eth,Mpt}}.lean + docs/deos/VERIFIED-LIGHTCLIENT-FOLD-PATH.md. Synthesis agent starved on session usage limit.
+
+## Parallel burst landed: CR-floor + native-hash + gov-spine + deploy-gate (2026-07-12, Fable panels)
+
+Four disjoint frontiers, one burst; auditors caught 2 real MAJORs, fixed pre-commit:
+- CR-floor (Lean): verified light-client hash soundness now = dregg's PortalFloor CR carrier (hashCR:Prop +
+  noCollision), NOT pigeonhole-false injectivity. Dischargeable by a real hash; both-polarity non-vacuity
+  (collapseLeaf refutes). All 3 chains re-proven, verified myself lake env lean exit 0 axiom-clean.
+- gnark native-hash (Go): native-BN254 Merkle + challenger gadgets on the KAT'd Poseidon2Bn254. MEASURED
+  60.8x (Merkle) / 61.9x (challenger) vs emulated — the wrap re-architecture's first real code. MultiField
+  pack/split = named followup.
+- Cross-chain governance spine (Rust): ProvenForeignHolding {chain,holder,asset,amount,snapshot,consensus_proven}
+  + From<&ProvenHolding>; grant_foreign_weight = one generic fail-closed core; per-(poll,chain) snapshot +
+  per-(poll,chain+holder+asset) nullifier. FEATURE: prove-you-hold-$DREGG-on-any-chain -> vote, custody intact.
+  AUDIT MAJOR fixed: legacy path spent (poll,token_account) vs foreign (poll,chain+holder+asset) = DOUBLE-COUNT
+  by mixing paths; unified onto one keyspace + the auditor's exact regression probe.
+- Deploy-gate (Rust): NoLiveUpgradeAuthority (SET_VK|SET_PROGRAM) + NoLiveBridgeOps (BRIDGE_OPS) supply-bit
+  policies; fair_launch covers all. AUDIT MAJOR fixed: mask missed EFFECT_SET_PERMISSIONS (1<<7, re-opens the
+  SetProgram/SetVK gates -> upgrade -> mint); added it + bite test.
+Pattern working: fast Fable lanes + adversarial audit catches real exploitable holes + integrator fixes before
+commit. Non-custodial proof-of-holdings governance now spans Solana/EVM/Cosmos (one binding). gov followups:
+EVM U256>u128 refuse-not-truncate; Cosmos bank decode; u128->u64 fail-closed narrow; multi-network tag.
