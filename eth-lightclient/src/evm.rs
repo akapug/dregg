@@ -148,6 +148,76 @@ pub fn erc20_balance_slot_key(holder: &[u8; 20], balances_slot: u64) -> [u8; 32]
     keccak256(preimage).0
 }
 
+/// An MPT proof did not open the claimed key/value under the claimed root. The
+/// generalized-helper failure marker — callers ([`verify_erc20_holding`],
+/// [`crate::base`]) map it onto their own fail-closed error vocabulary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MptProofInvalid;
+
+/// **The generalized EIP-1186 ACCOUNT proof open** — `state_root --MPT-->
+/// keccak256(address) -> RLP([nonce, balance, storageHash, codeHash])`.
+///
+/// This is the exact account-trie step of [`verify_erc20_holding`], factored out so
+/// the SAME audited machinery verifies both an L1 token account and an OP-stack L1
+/// contract account (the Base output-root anchor, [`crate::base`]). Reconstructing
+/// the full RLP account leaf binds all four fields at once — a wrong field, wrong
+/// address, or wrong state root fails closed.
+pub fn verify_evm_account_proof(
+    state_root: [u8; 32],
+    address: [u8; 20],
+    account: &AccountClaim,
+    account_proof: &[Vec<u8>],
+) -> Result<(), MptProofInvalid> {
+    let trie_account = TrieAccount {
+        nonce: account.nonce,
+        balance: account.balance,
+        storage_root: account.storage_hash.into(),
+        code_hash: account.code_hash.into(),
+    };
+    let account_rlp = alloy_rlp::encode(&trie_account);
+    let account_key = Nibbles::unpack(keccak256(address));
+    let account_proof_bytes: Vec<alloy_primitives::Bytes> = account_proof
+        .iter()
+        .map(|n| alloy_primitives::Bytes::copy_from_slice(n))
+        .collect();
+    verify_proof(
+        state_root.into(),
+        account_key,
+        Some(account_rlp),
+        &account_proof_bytes,
+    )
+    .map_err(|_| MptProofInvalid)
+}
+
+/// **The generalized EIP-1186 STORAGE-slot proof open** — `storage_hash --MPT-->
+/// keccak256(slot_key) -> RLP(value)` where `value` is the slot's `uint256` content
+/// (EVM storage values are stored as minimal big-endian RLP).
+///
+/// `slot_key` is the RAW 32-byte storage slot (pre-keccak): a mapping-derived key
+/// ([`erc20_balance_slot_key`]) for ERC-20 balances, or a dynamic-array element slot
+/// for the OP-stack `l2Outputs` anchor ([`crate::base`]). Fail-closed: a tampered
+/// node, wrong slot, or wrong value refuses.
+pub fn verify_evm_storage_slot(
+    storage_hash: [u8; 32],
+    slot_key: [u8; 32],
+    value: U256,
+    storage_proof: &[Vec<u8>],
+) -> Result<(), MptProofInvalid> {
+    let storage_key = Nibbles::unpack(keccak256(slot_key));
+    let value_rlp = alloy_rlp::encode(value);
+    let storage_proof_bytes: Vec<alloy_primitives::Bytes> = storage_proof
+        .iter()
+        .map(|n| alloy_primitives::Bytes::copy_from_slice(n))
+        .collect();
+    verify_proof(
+        storage_hash.into(),
+        storage_key,
+        Some(value_rlp),
+        &storage_proof_bytes,
+    )
+    .map_err(|_| MptProofInvalid)
+}
+
 /// **Prove a holder's ERC-20 balance against a caller-supplied state root —
 /// non-custodially.** Mints a [`HoldingTrust::StructureOnly`] holding: the MPT chain is
 /// fully verified, but THIS function has no evidence the `state_root` itself is
@@ -184,40 +254,17 @@ pub fn verify_erc20_holding(
     //     Reconstruct the exact RLP account leaf; verify_proof checks the terminal
     //     value equals it. This binds nonce/balance/storageHash/codeHash all at once —
     //     any wrong field (or wrong contract, or wrong state root) fails closed.
-    let trie_account = TrieAccount {
-        nonce: account.nonce,
-        balance: account.balance,
-        storage_root: account.storage_hash.into(),
-        code_hash: account.code_hash.into(),
-    };
-    let account_rlp = alloy_rlp::encode(&trie_account);
-    let account_key = Nibbles::unpack(keccak256(token));
-    let account_proof_bytes: Vec<alloy_primitives::Bytes> = account_proof
-        .iter()
-        .map(|n| alloy_primitives::Bytes::copy_from_slice(n))
-        .collect();
-    verify_proof(
-        state_root.into(),
-        account_key,
-        Some(account_rlp),
-        &account_proof_bytes,
-    )
-    .map_err(|_| Erc20ProofError::AccountProofInvalid)?;
+    verify_evm_account_proof(state_root, token, account, account_proof)
+        .map_err(|_| Erc20ProofError::AccountProofInvalid)?;
 
     // (2) STORAGE PROOF: storage_hash --MPT--> keccak256(slot_key) -> RLP(balance).
     //     The storage-trie value is the minimal big-endian RLP of the uint256 balance.
     let slot_key = erc20_balance_slot_key(&holder, balances_slot);
-    let storage_key = Nibbles::unpack(keccak256(slot_key));
-    let balance_rlp = alloy_rlp::encode(claimed_balance);
-    let storage_proof_bytes: Vec<alloy_primitives::Bytes> = storage_proof
-        .iter()
-        .map(|n| alloy_primitives::Bytes::copy_from_slice(n))
-        .collect();
-    verify_proof(
-        account.storage_hash.into(),
-        storage_key,
-        Some(balance_rlp),
-        &storage_proof_bytes,
+    verify_evm_storage_slot(
+        account.storage_hash,
+        slot_key,
+        claimed_balance,
+        storage_proof,
     )
     .map_err(|_| Erc20ProofError::StorageProofInvalid)?;
 
