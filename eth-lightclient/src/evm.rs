@@ -251,7 +251,7 @@ pub fn verify_erc20_holding_finalized(
     claimed_balance: U256,
 ) -> Result<ProvenErc20Holding, Erc20ProofError> {
     let mut holding = verify_erc20_holding(
-        finalized.execution_state_root,
+        finalized.execution_state_root(),
         account_proof,
         storage_proof,
         token,
@@ -259,7 +259,7 @@ pub fn verify_erc20_holding_finalized(
         balances_slot,
         account,
         claimed_balance,
-        finalized.execution_block_number,
+        finalized.execution_block_number(),
     )?;
     holding.trust = HoldingTrust::ConsensusProven;
     Ok(holding)

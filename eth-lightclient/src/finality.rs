@@ -72,34 +72,30 @@ pub struct LightClientUpdate {
 
 /// The result of a verified finality-following step: the light client now trusts
 /// this finalized beacon header and the EVM execution state root beneath it.
+///
+/// **Unforgeable by construction.** All fields are PRIVATE, so external code can
+/// neither build one by struct literal nor MUTATE a legitimately-obtained one (a bare
+/// private seal would still allow `f.execution_state_root = fabricated`). The only
+/// ways to obtain one are [`verify_finalized_update`] (the real light-client path) and
+/// the loud, greppable [`FinalizedExecution::new_unchecked`]. This makes "the root came
+/// from a verified update" a type-level property, not a doc-convention — the exact
+/// unforgeable-`VerifiedHeader` discipline the Cosmos light client uses. Read the fields
+/// through the accessors.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FinalizedExecution {
-    /// The finalized beacon slot.
-    pub finalized_slot: u64,
-    /// `hash_tree_root(finalized_header.beacon)` — the proven finalized block root.
-    pub finalized_beacon_root: [u8; 32],
-    /// The finalized execution block number.
-    pub execution_block_number: u64,
-    /// The finalized execution block hash.
-    pub execution_block_hash: [u8; 32],
-    /// The finalized EVM world-state MPT root — the anchor for proof-of-holdings.
-    pub execution_state_root: [u8; 32],
-    /// A private seal: this field cannot be named outside this module, so a
-    /// `FinalizedExecution` CANNOT be built by an external struct literal. The only
-    /// in-module constructors are [`verify_finalized_update`] (the real light-client
-    /// path) and the loud [`FinalizedExecution::new_unchecked`]. This turns "the root
-    /// came from a verified update" from a doc-convention into a type-level property:
-    /// a caller minting `consensus_proven=true` from a fabricated root must reach for
-    /// a visibly-`_unchecked` API. Fields stay `pub` for reading.
-    _verified: (),
+    finalized_slot: u64,
+    finalized_beacon_root: [u8; 32],
+    execution_block_number: u64,
+    execution_block_hash: [u8; 32],
+    execution_state_root: [u8; 32],
 }
 
 impl FinalizedExecution {
     /// Construct a `FinalizedExecution` WITHOUT light-client verification — the caller
     /// ASSERTS these values came from a genuinely verified finality update (the
-    /// `from_utf8_unchecked` idiom). Production code obtains a `FinalizedExecution`
-    /// ONLY from [`verify_finalized_update`]; every other construction site is a loud,
-    /// greppable `new_unchecked` (tests, or a caller wiring its own verified update).
+    /// `from_utf8_unchecked` idiom). Production code obtains one ONLY from
+    /// [`verify_finalized_update`]; every other construction site is a loud, greppable
+    /// `new_unchecked` (tests, or a caller wiring its own verified update).
     pub fn new_unchecked(
         finalized_slot: u64,
         finalized_beacon_root: [u8; 32],
@@ -113,8 +109,28 @@ impl FinalizedExecution {
             execution_block_number,
             execution_block_hash,
             execution_state_root,
-            _verified: (),
         }
+    }
+
+    /// The finalized beacon slot.
+    pub fn finalized_slot(&self) -> u64 {
+        self.finalized_slot
+    }
+    /// `hash_tree_root(finalized_header.beacon)` — the proven finalized block root.
+    pub fn finalized_beacon_root(&self) -> [u8; 32] {
+        self.finalized_beacon_root
+    }
+    /// The finalized execution block number.
+    pub fn execution_block_number(&self) -> u64 {
+        self.execution_block_number
+    }
+    /// The finalized execution block hash.
+    pub fn execution_block_hash(&self) -> [u8; 32] {
+        self.execution_block_hash
+    }
+    /// The finalized EVM world-state MPT root — the anchor for proof-of-holdings.
+    pub fn execution_state_root(&self) -> [u8; 32] {
+        self.execution_state_root
     }
 }
 
@@ -204,6 +220,5 @@ pub fn verify_finalized_update(
         execution_block_number: update.finalized_header.execution.block_number,
         execution_block_hash: update.finalized_header.execution.block_hash,
         execution_state_root,
-        _verified: (),
     })
 }

@@ -193,8 +193,13 @@ fn finalized_path_yields_consensus_proven_true() {
 /// a mismatched anchor).
 #[test]
 fn finalized_path_wrong_root_rejects() {
-    let mut finalized = finalized_at_fixture_root();
-    finalized.execution_state_root[0] ^= 0x01;
+    // Build a fresh (unchecked) FinalizedExecution with a TAMPERED root — the fields
+    // are private, so this is the only way to get a wrong-root anchor (which is the
+    // point: no mutating a legitimately-verified one).
+    let mut root = h32(weth::STATE_ROOT);
+    root[0] ^= 0x01;
+    let finalized =
+        FinalizedExecution::new_unchecked(0, [0u8; 32], weth::BLOCK_NUMBER, [0u8; 32], root);
     let r = verify_erc20_holding_finalized(
         &finalized,
         &nodes(weth::ACCOUNT_PROOF),
