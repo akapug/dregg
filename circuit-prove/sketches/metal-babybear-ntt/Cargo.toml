@@ -1,0 +1,25 @@
+[package]
+name = "metal-babybear-ntt"
+version = "0.1.0"
+edition = "2021"
+
+# Standalone probe crate — deliberately NOT a workspace member (empty [workspace]
+# opts out of the breadstuffs root workspace). Run with `cargo run --release`
+# from this directory. Sibling of wgpu-babybear-ntt (the portable-WGSL NTT
+# probe, measured at ~16-20% of the copy ceiling on M2 Max) — this one is the
+# HAND-TUNED NATIVE METAL (MSL) version: native 64-bit/mulhi Montgomery
+# arithmetic, threadgroup-memory tiling, simdgroup-shuffle butterflies. Same
+# parity discipline (bit-exact vs pinned Plonky3 rev 82cfad7) and the same
+# measurement protocol (copy-ceiling %, Melem/s, CPU baselines). Results in
+# docs/deos/GPU-PROVER-PROTOTYPE.md.
+[workspace]
+
+[dependencies]
+metal = "0.33"
+objc = "0.2"
+rand = "0.8"
+rayon = "1"
+p3-baby-bear = { git = "https://github.com/Plonky3/Plonky3", rev = "82cfad73cd734d37a0d51953094f970c531817ec" }
+p3-field = { git = "https://github.com/Plonky3/Plonky3", rev = "82cfad73cd734d37a0d51953094f970c531817ec" }
+p3-dft = { git = "https://github.com/Plonky3/Plonky3", rev = "82cfad73cd734d37a0d51953094f970c531817ec", features = ["parallel"] }
+p3-matrix = { git = "https://github.com/Plonky3/Plonky3", rev = "82cfad73cd734d37a0d51953094f970c531817ec" }
