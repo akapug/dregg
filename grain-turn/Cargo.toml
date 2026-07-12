@@ -33,6 +33,11 @@ dregg-sdk = { path = "../sdk" }
 dregg-cell = { path = "../cell" }
 # The action commit witnessed at ACTION_SLOT (same crypto tier dregg-agent uses).
 blake3 = "1"
+# The receipt-log MMR (`Blake3Mmr`, the Rust embodiment of `Dregg2.Lightclient.MMR`)
+# whose per-grain root the minter binds at HISTORY_ROOT_SLOT on every metered turn —
+# the per-grain CommitBindsMMR rung (witnessed history rides the committed cell state).
+# Lean-free, prover-free crate (serde + blake3), so the R2 minter stays lean.
+dregg-query = { path = "../dregg-query" }
 
 # The R3 adapter's proving deps — OPTIONAL, only under `prover`. `dregg-turn` carries
 # the rotated-leg mint recipe (`mint_rotated_participant_leg`); `dregg-circuit` the

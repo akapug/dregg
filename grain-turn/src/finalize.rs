@@ -12,9 +12,10 @@
 //!
 //! ## A grain turn is HETEROGENEOUS → a cohort-run CHAIN, not one leg
 //!
-//! Every grain turn writes ≥3 DISTINCT field slots in ONE executor turn — `calls_made`
-//! (slot 4, gateway-prepended), `consumed` (5), `heap_root` (6), `action` (7) — and each
-//! `SetField` slot resolves to its own rotated descriptor (`setFieldVmDescriptor2-{4,5,6,7}R24`).
+//! Every grain turn writes ≥4 DISTINCT field slots in ONE executor turn — `calls_made`
+//! (slot 4, gateway-prepended), `history_root` (3, the per-grain CommitBindsMMR weld),
+//! `consumed` (5), `heap_root` (6), `action` (7) — and each `SetField` slot resolves to
+//! its own rotated descriptor (`setFieldVmDescriptor2-{3,4,5,6,7}R24`).
 //! The wide producer proves ONE homogeneous cohort per leg (it refuses a "heterogeneous
 //! multi-effect turn"), and a [`FinalizedTurn`] holds exactly ONE rotated leg. So one grain
 //! turn maps to N `FinalizedTurn`s — a cohort-run chain (mirroring the executor's own
@@ -139,7 +140,7 @@ pub fn finalize_grain_turn(record: &GrainTurnRecord) -> Result<Vec<FinalizedTurn
         // The after-block cell: the real pre-cell for INTERIOR runs (before == after, the
         // turn-invariant limbs; the state block rides the welds), the real POST-cell only
         // for the FINAL run (mirrors `prove_cohort_run_chain`). `cells_root` folds the cell
-        // id alone and the grain SetFields to slots 4..7 leave the authority residue fixed,
+        // id alone and the grain SetFields to slots 3..7 leave the authority residue fixed,
         // so the interior after-block limbs equal the final-run old-block limbs — the chain
         // closes by construction.
         let after_cell = if i + 1 == n_runs {

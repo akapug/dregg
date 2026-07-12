@@ -18,6 +18,12 @@
 //!
 //! The grain turn-cell IS the [`ToolGateway`]'s cap-gated worker cell. Its slots:
 //!
+//! * **`history_root`** (slot [`HISTORY_ROOT_SLOT`], = 3) — the per-grain
+//!   CommitBindsMMR rung: the [`Blake3Mmr`](dregg_query::Blake3Mmr) root over this
+//!   grain's receipt chain STRICTLY BEFORE this turn (leaf `i` = the canonical
+//!   `dregg-receipt-v3` `TurnReceipt::receipt_hash` of the grain's turn `i`),
+//!   witnessed on the same metered turn — so the committed post-state PINS the
+//!   grain's whole prior history. See [`verify_grain_history`].
 //! * **`calls_made`** (slot [`CALLS_MADE_SLOT`](dregg_sdk::CALLS_MADE_SLOT), = 4) — the metered turn counter the
 //!   gateway advances `c → c+1` on every committed invocation, carrying the proven
 //!   [`mandate_program`](dregg_sdk::ToolGateway) backstop
@@ -95,6 +101,150 @@ pub struct GrainTurnRecord {
 /// `consumed` total (written on the metered turn). Distinct from
 /// [`CALLS_MADE_SLOT`](dregg_sdk::CALLS_MADE_SLOT) (the gateway-owned counter) and [`HEAP_ROOT_SLOT`].
 pub const CONSUMED_SLOT: usize = 5;
+
+/// Slot on the grain turn-cell that witnesses the **per-grain receipt-history MMR
+/// root** — the CommitBindsMMR weld at the grain rung.
+///
+/// On every minted turn `N` (0-based) the minter writes
+/// [`grain_history_root`]`(receipt_hashes[0..N])` here: the
+/// [`Blake3Mmr`](dregg_query::Blake3Mmr) root whose leaf `i` is the canonical
+/// `dregg-receipt-v3` digest (`TurnReceipt::receipt_hash`) of this grain's
+/// committed turn `i` — the grain's receipt chain **strictly before** this turn.
+/// The prefix (not the log including this turn) is what breaks the circularity:
+/// turn `N`'s own receipt absorbs the post-state hash, and the post-state now
+/// absorbs the history root, so the root can only cover receipts `0..N-1`; turn
+/// `N`'s receipt is pinned by the NEXT turn's committed state (and, at the
+/// frontier, by its own `post_state_hash` binding + the executor signature).
+///
+/// Because the value rides an ordinary committed `SetField` (slot 3 < 8, so it
+/// stays R3-foldable through `setFieldVmDescriptor2-3R24`), it is folded by
+/// `compute_canonical_state_commitment` → `Ledger::hash_cell` → the ledger root
+/// that `post_state_hash`, quorum finalization votes, and owner-countersigned
+/// checkpoints all sign. Witnessed history therefore inherits WHATEVER anchor the
+/// grain cell's committed state has — per-grain, riding the existing commitment;
+/// no new aggregate root, no commitment-formula change, no VK rotation.
+///
+/// The turn-carried value is chosen by the minter (the grain host), NOT
+/// recomputed per-node — replicas applying the same signed turn commit the same
+/// byte, so per-node receipt-timestamp skew cannot diverge committed state.
+/// Its truthfulness is verifier-checked ([`verify_grain_history`]); a host that
+/// writes a false root is caught against the genuine chain and the false claim is
+/// itself host-signed evidence.
+///
+/// A cell that predates this binding carries the slot's zero default — a TYPED
+/// lower rung ([`GrainHistoryVerdict::Unbound`]), never mistaken for "bound empty
+/// history" (the empty-log root is the domain-tagged `Blake3Mmr` empty constant,
+/// which is nonzero — even the grain's FIRST turn binds a nonzero value).
+pub const HISTORY_ROOT_SLOT: usize = 3;
+
+/// **The per-grain receipt-history MMR root** — the value bound at
+/// [`HISTORY_ROOT_SLOT`]. Leaf `i` is `receipt_hashes[i]`, the canonical
+/// `dregg-receipt-v3` digest of the grain's committed turn `i`; the structure and
+/// root are the [`Blake3Mmr`](dregg_query::Blake3Mmr) forest (peaks bagged
+/// youngest-outward — Lean `mroot`, whose `mroot_injective` makes tamper /
+/// truncate / extend / reorder each move the root). The empty log yields the
+/// domain-tagged (nonzero) empty root, so "bound empty history" and "no binding"
+/// (the zero slot default) stay distinguishable.
+pub fn grain_history_root(receipt_hashes: &[[u8; 32]]) -> [u8; 32] {
+    dregg_query::Mmr::from_values(dregg_query::Blake3Mmr, receipt_hashes.to_vec()).root()
+}
+
+/// The typed verdict of [`verify_grain_history`] — what the committed grain
+/// cell state says about a presented receipt-hash log.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GrainHistoryVerdict {
+    /// The committed state BINDS the presented history: the log's length matches
+    /// the on-ledger `calls_made` counter and the committed
+    /// [`HISTORY_ROOT_SLOT`] equals the recomputed MMR root over the log's
+    /// prefix (every receipt but the frontier one). The interior of the chain is
+    /// non-equivocable relative to this committed state.
+    Bound,
+    /// The cell carries the slot's zero default — it predates the binding (or
+    /// was never driven through [`ToolGatewayMinter`]). EXPLICITLY the lower
+    /// rung: history is tamper-evident-given-a-trusted-root only, NOT
+    /// state-anchored. Never conflated with "bound empty history".
+    Unbound,
+    /// The on-ledger `calls_made` counter is not the canonical
+    /// `field_from_u64` encoding — the cell is not a grain turn-cell shape this
+    /// verifier can decide.
+    MalformedCallsMade,
+    /// The presented log's length disagrees with the on-ledger `calls_made`
+    /// counter (one committed grain turn ⇒ one receipt).
+    LengthMismatch {
+        /// The on-ledger committed turn count.
+        calls_made: u64,
+        /// How many receipt hashes the operator presented.
+        presented: u64,
+    },
+    /// THE EQUIVOCATION TOOTH: the presented log's prefix root disagrees with
+    /// the root the committed state binds — a DIVERGENT history for this
+    /// committed state, refused with both roots as evidence.
+    Divergent {
+        /// The root the committed cell state binds ([`HISTORY_ROOT_SLOT`]).
+        committed: [u8; 32],
+        /// The root recomputed over the presented log's prefix.
+        recomputed: [u8; 32],
+    },
+}
+
+/// **Verify a grain's receipt history against its committed cell state** — the
+/// light-client check the [`HISTORY_ROOT_SLOT`] binding exists for.
+///
+/// `cell` is the grain turn-cell's COMMITTED state (obtained from a source the
+/// caller already trusts/verifies: the real ledger, a finalized-state Merkle
+/// opening, an owner-countersigned checkpoint, a
+/// [`GrainTurnRecord::after_cell`] capture). `receipt_hashes` is the FULL
+/// receipt-hash log the operator presents for this grain — one
+/// `TurnReceipt::receipt_hash` per committed grain turn, in commit order.
+///
+/// The check: `receipt_hashes.len()` must equal the committed `calls_made`
+/// counter, and the committed [`HISTORY_ROOT_SLOT`] must equal
+/// [`grain_history_root`] over `receipt_hashes[0 .. len-1]` (the state committed
+/// by turn `N` binds receipts `0..N-1`; see [`HISTORY_ROOT_SLOT`] for why the
+/// frontier receipt is excluded — it is pinned by its own `post_state_hash`
+/// binding + executor signature, and by the NEXT turn's state once one lands).
+///
+/// Fail-closed and typed: an all-zero slot is [`GrainHistoryVerdict::Unbound`]
+/// (the explicit pre-binding rung), a divergent history is
+/// [`GrainHistoryVerdict::Divergent`] carrying both roots — never a panic,
+/// never a false `Bound`.
+pub fn verify_grain_history(
+    cell: &dregg_cell::Cell,
+    receipt_hashes: &[[u8; 32]],
+) -> GrainHistoryVerdict {
+    let committed = cell.state.fields[HISTORY_ROOT_SLOT];
+    if committed == [0u8; 32] {
+        return GrainHistoryVerdict::Unbound;
+    }
+    // Decode the canonical `field_from_u64` (big-endian low 8 bytes) counter.
+    let calls_made_field = cell.state.fields[CALLS_MADE_SLOT as usize];
+    if calls_made_field[..24].iter().any(|b| *b != 0) {
+        return GrainHistoryVerdict::MalformedCallsMade;
+    }
+    let calls_made = u64::from_be_bytes(
+        calls_made_field[24..32]
+            .try_into()
+            .expect("8-byte slice of a 32-byte field"),
+    );
+    let presented = receipt_hashes.len() as u64;
+    if calls_made != presented {
+        return GrainHistoryVerdict::LengthMismatch {
+            calls_made,
+            presented,
+        };
+    }
+    // The state committed by turn N binds receipts 0..N-1.
+    let prefix = &receipt_hashes[..receipt_hashes.len().saturating_sub(1)];
+    let recomputed = grain_history_root(prefix);
+    if recomputed == committed {
+        GrainHistoryVerdict::Bound
+    } else {
+        GrainHistoryVerdict::Divergent {
+            committed,
+            recomputed,
+        }
+    }
+}
 
 /// Slot on the grain turn-cell that witnesses the agent's committed cell
 /// `heap_root` at the point of the call (written on the metered turn).
@@ -183,6 +333,11 @@ pub struct ToolGatewayMinter {
     /// The per-turn R3-adapter records (pre-cell, effects, post-cell) captured on every
     /// committed turn — the input `finalize_session` folds into `FinalizedTurn`s.
     records: Vec<GrainTurnRecord>,
+    /// The grain's receipt-hash log, in commit order — leaf `i` is the canonical
+    /// `dregg-receipt-v3` digest (`TurnReceipt::receipt_hash`) of committed turn
+    /// `i`. The MMR values whose root ([`grain_history_root`]) the next turn
+    /// binds at [`HISTORY_ROOT_SLOT`] (the per-grain CommitBindsMMR weld).
+    receipt_log: Vec<[u8; 32]>,
 }
 
 impl ToolGatewayMinter {
@@ -209,6 +364,7 @@ impl ToolGatewayMinter {
             minted: Vec::new(),
             pending_attestation: None,
             records: Vec::new(),
+            receipt_log: Vec::new(),
         })
     }
 
@@ -239,6 +395,7 @@ impl ToolGatewayMinter {
             minted: Vec::new(),
             pending_attestation: None,
             records: Vec::new(),
+            receipt_log: Vec::new(),
         })
     }
 
@@ -306,6 +463,23 @@ impl ToolGatewayMinter {
         &self.records
     }
 
+    /// The grain's receipt-hash log, in commit order — one canonical
+    /// `dregg-receipt-v3` digest (`TurnReceipt::receipt_hash`) per committed
+    /// turn. The MMR leaves behind the [`HISTORY_ROOT_SLOT`] binding; hand this
+    /// (from a source you trust — this accessor is the HOST's copy) to
+    /// [`verify_grain_history`] against an independently obtained committed cell.
+    pub fn receipt_log(&self) -> &[[u8; 32]] {
+        &self.receipt_log
+    }
+
+    /// Clone the CURRENT committed grain worker cell straight off the real ledger
+    /// (a genuine `Cell` snapshot, not a mirror). Public twin of the R3 capture's
+    /// snapshot — the committed state [`verify_grain_history`] checks a presented
+    /// receipt log against. `None` if the cell is absent (never, after admission).
+    pub fn committed_worker_cell(&self) -> Option<dregg_cell::Cell> {
+        self.snapshot_worker_cell()
+    }
+
     /// Clone the CURRENT committed grain worker cell straight off the real ledger
     /// (a genuine `Cell` snapshot, not a mirror) — the pre/post state the R3 leg
     /// binds. `None` if the cell is absent (never, after admission).
@@ -325,12 +499,26 @@ impl GrainTurnMinter for ToolGatewayMinter {
     ) -> Result<[u8; 32], String> {
         let cell = self.gateway.worker_cell();
         // The tool's witness work rides the SAME metered turn as the gateway's
-        // `calls_made : c → c+1` advance: the session's consumed total, the
-        // agent's heap root, AND the action commit (`action_commit(label, cost)`)
-        // are written as grain-turn-cell state, so the committed turn witnesses
-        // WHAT the action was — which action, at what cost, over which heap —
-        // not merely that a turn happened.
+        // `calls_made : c → c+1` advance: the prior-history MMR root, the
+        // session's consumed total, the agent's heap root, AND the action commit
+        // (`action_commit(label, cost)`) are written as grain-turn-cell state, so
+        // the committed turn witnesses WHAT the action was — which action, at
+        // what cost, over which heap, extending WHICH witnessed history — not
+        // merely that a turn happened.
         let mut work = vec![
+            // THE PER-GRAIN CommitBindsMMR WELD: witness the MMR root over this
+            // grain's receipt chain STRICTLY BEFORE this turn (leaf i = committed
+            // turn i's `receipt_hash`), so the committed post-state pins the whole
+            // prior history — non-equivocable relative to any anchor the cell's
+            // committed state has (post_state_hash, finalization quorum root,
+            // owner-countersigned checkpoint). The prefix (not the log including
+            // this turn) breaks the receipt↔state circularity; this turn's own
+            // receipt is pinned by the NEXT turn's state (see HISTORY_ROOT_SLOT).
+            Effect::SetField {
+                cell,
+                index: HISTORY_ROOT_SLOT,
+                value: grain_history_root(&self.receipt_log),
+            },
             Effect::SetField {
                 cell,
                 index: CONSUMED_SLOT,
@@ -380,6 +568,9 @@ impl GrainTurnMinter for ToolGatewayMinter {
             .map_err(|e| e.to_string())?;
         let turn_hash = receipt.receipt.turn_hash;
         self.minted.push(turn_hash);
+        // Advance the history MMR: this committed turn's receipt digest becomes
+        // leaf N of the log the NEXT turn's HISTORY_ROOT_SLOT write binds.
+        self.receipt_log.push(receipt.receipt.receipt_hash());
 
         // R3-ADAPTER CAPTURE (post-state). Record the committed turn only if both
         // snapshots exist (they always do after admission) — a missing snapshot is not
