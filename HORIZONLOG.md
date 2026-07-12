@@ -7583,3 +7583,12 @@ length-bounds deleteL2Outputs defense)→keccak-preimage(triple-verified incl. L
 ERC-20. REAL-EXTERNAL fixture. RESIDUAL named loud: live Base = fault proofs (FaultDisputeGame), not implemented.
 Non-custodial prove-and-vote now spans Solana + EVM(Ethereum/Base) + Cosmos(proof; binding = next). circuit-prove
 still churned (carrier flag-day) → wrap shrink-layer + rung-3 fold-P0 deferred.
+
+## Base fault-proof anchor plan — live Base = type-621 TEE+ZK validity game (2026-07-12)
+docs/deos/BASE-FAULT-PROOF-ANCHOR.md (live-validated). DISCOVERY: live Base is past classic CANNON — respected
+game type 621 = AggregateVerifier dual-attestation (TEE-attestation OR ZK proof) VALIDITY game; a challenge is
+the counter-proof. Trust chain (slot math raw-eth_getStorageAt-validated): L1 finality → ASR → DGF GameId →
+game slot-0 (status==DEFENDER_WINS) → ASR blacklist exclusion → airgap predicate → verify_op_output_root(reuses).
+The type-621 rootClaim recomputes EXACTLY as a v0 output root, so base.rs's L2 tail carries over; only new helper
+= verify_evm_storage_slot_absent (MPT exclusion). Trust delta named honestly (TEE/ZK-soundness-at-creation, not
+challenger-liveness). First build increment: live game index 17049. Build is the honest live-Base completion.
