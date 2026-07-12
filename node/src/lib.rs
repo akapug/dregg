@@ -67,12 +67,14 @@ pub mod prove_pool;
 pub mod relay_dispute;
 pub mod relay_service;
 pub mod relay_slash_intake;
+pub mod relay_slash_submit;
 pub mod routing_table;
 pub mod self_cell;
 #[cfg(feature = "deos-host")]
 pub mod shared_world;
 #[cfg(all(test, feature = "deos-host"))]
 mod shared_world_e2e;
+pub mod slash_treasury_mirror;
 pub mod starbridge_seed;
 pub mod state;
 pub mod storage_service;

@@ -53,6 +53,12 @@ dregg-storage-templates = { path = "../dregg-storage-templates" }
 dregg-captp = { path = "../captp" }
 dregg-app-framework = { path = "../app-framework" }
 dregg-credentials = { path = "../credentials" }
+# The dregg-pay treasury MIRROR for slash remainders (slash_treasury_mirror.rs): when a
+# realized slash Transfers the seizure remainder to the treasury cell, the operator's
+# dregg-pay Treasury records the SAME amount via deposit_dregg — an audit view of the one
+# conserving Transfer, not a second creation of value. dregg-pay is a leaf over
+# dregg-bridge; no cycle back into the node.
+dregg-pay = { path = "../dregg-pay" }
 # The gpui-free reflective substrate (deos-reflect): `reflect_cell` over any
 # `Ledger`. The node uses the SAME reflector deos-js's crawl calls to surface its
 # OWN runtime state AS A CELL (`self_cell.rs` — the reflexive-image Hearth step).
