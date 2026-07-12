@@ -50,12 +50,26 @@
 //! poll is [`GrantError::AlreadyCounted`]. A different poll, or a different token
 //! account, is a distinct nullifier and is allowed.
 
+//!
+//! ## Cross-chain: the ONE weight binding
+//!
+//! The same spine now runs for ANY chain via the chain-agnostic
+//! [`ProvenForeignHolding`](crate::proven_foreign_holding::ProvenForeignHolding):
+//! [`grant_foreign_weight`] is the generic fail-closed core (consensus verdict →
+//! owner binding → positive amount → the Lean-proven weight verdict), and the
+//! Solana-specific [`grant_weight`] is a thin wrapper over it (`From` + the
+//! generic). The registry pins a snapshot **per (poll, chain)** and consumes a
+//! per-`(poll, chain+holder+asset)` nullifier — so the same holder on two
+//! different chains is two DISTINCT facts (both count; a holder legitimately
+//! holds on both), while re-presenting one chain's holding twice is refused.
+
 use std::collections::{BTreeMap, HashSet};
 
 use ed25519_dalek::{Signature, VerifyingKey};
 
 use dregg_bridge::solana_holdings::ProvenHolding;
 
+use crate::proven_foreign_holding::{ChainId, ProvenForeignHolding};
 use crate::{CastOutcome, CollectiveChoice, OptionId, PollId, VoteEngine, VoterId};
 
 /// Domain separator for the owner→voter binding signature. Committing to a domain keeps
@@ -118,6 +132,26 @@ pub struct WeightGrant {
     pub slot: u64,
     /// The SPL token account the weight came from — the per-poll nullifier key.
     pub token_account: [u8; 32],
+}
+
+/// The weight granted to a [`VoterId`] from one chain-agnostic proven holding, as of
+/// the proven per-chain snapshot height. NON-CUSTODIAL: producing this moved no value
+/// and locked nothing, on any chain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ForeignWeightGrant {
+    /// The dregg voter the weight is granted to (the bound identity).
+    pub voter: VoterId,
+    /// The granted weight — the Lean verdict's output, equal to the proven balance.
+    /// `u128` to carry an EVM-scale balance without truncation.
+    pub weight: u128,
+    /// The chain the holding was proven on.
+    pub chain: ChainId,
+    /// The finalized snapshot height (slot / block number / height) the balance was
+    /// proven at.
+    pub snapshot: u64,
+    /// The consume-once nullifier this grant fired
+    /// ([`ProvenForeignHolding::nullifier_key`]: chain+holder+asset scoped).
+    pub nullifier: [u8; 32],
 }
 
 /// Why a weight grant was refused. Every variant grants ZERO weight (fail closed).
@@ -196,11 +230,54 @@ pub fn grant_weight(
     holding: &ProvenHolding,
     binding: &OwnerBinding,
 ) -> Result<WeightGrant, GrantError> {
+    // The THIN WRAPPER: convert to the chain-agnostic fact and run the ONE generic
+    // fail-closed core. All checks (consensus verdict, owner binding, positive amount,
+    // the Lean-proven weight verdict) happen in `grant_foreign_weight`.
+    let foreign = ProvenForeignHolding::from(holding);
+    let grant = grant_foreign_weight(&foreign, binding)?;
+    // The Solana amount was a u64, so the verdict (== the amount) fits back losslessly;
+    // anything else is a core disagreement — fail closed.
+    let weight = u64::try_from(grant.weight).map_err(|_| {
+        GrantError::LeanCoreUnavailable(format!(
+            "verdict {} overflows the Solana u64 amount domain",
+            grant.weight
+        ))
+    })?;
+    Ok(WeightGrant {
+        voter: grant.voter,
+        weight,
+        slot: holding.slot,
+        token_account: holding.token_account,
+    })
+}
+
+/// **The generic, chain-agnostic weight-granting core** — the ONE binding from a proven
+/// holding on ANY chain to dregg vote weight, non-custodially. Same fail-closed order
+/// as the Solana path always had (it now IS the Solana path — [`grant_weight`] wraps
+/// this):
+///
+/// 1. `consensus_proven` must be `true` — a structure-only RPC echo from any chain is
+///    [`GrantError::NotConsensusProven`] and grants ZERO (the Nomad-law analog), before
+///    its signature is even examined;
+/// 2. `binding` must be a genuine Ed25519 authorization by `holding.holder` of
+///    `binding.voter` (else [`GrantError::UnboundOwner`]);
+/// 3. the proven amount must be positive (else [`GrantError::ZeroAmount`]);
+/// 4. the weight VERDICT is rendered by the LEAN-PROVEN `grantWeightCore` over the wire
+///    — never a Rust `if`-chain; a missing core is [`GrantError::LeanCoreUnavailable`],
+///    NEVER a silent Rust reimplementation.
+///
+/// Performs NO dedup — the stateless core. Use
+/// [`HoldingWeightRegistry::grant_foreign_into_poll`] for the per-poll snapshot pin and
+/// the per-`(poll, chain+holder+asset)` nullifier.
+pub fn grant_foreign_weight(
+    holding: &ProvenForeignHolding,
+    binding: &OwnerBinding,
+) -> Result<ForeignWeightGrant, GrantError> {
     // PRE-CHECKS (fast Rust) — establish the facts the verified decision reads.
     if !holding.is_consensus_proven() {
         return Err(GrantError::NotConsensusProven);
     }
-    if !verify_binding(&holding.owner, binding) {
+    if !verify_binding(&holding.holder, binding) {
         return Err(GrantError::UnboundOwner);
     }
     if holding.amount == 0 {
@@ -208,31 +285,30 @@ pub fn grant_weight(
     }
 
     // THE VERDICT — the LEAN-PROVEN grantWeightCore over the wire
-    // "isConsensusProven slotFinal amount". A `ConsensusVerified` holding is proven over a finalized
-    // bank hash, so `slotFinal` is the consensus-proof fact itself on this path. Rust never decides the
-    // weight; it marshals to the verified object.
+    // "isConsensusProven finalized amount". A consensus-proven holding is proven over a
+    // FINALIZED anchor (bank hash / finalized state_root / Tendermint commit) on every
+    // supported chain, so finality is the consensus-proof fact itself on this path.
+    // Rust never decides the weight; it marshals to the verified object.
     let consensus = holding.is_consensus_proven();
-    let slot_final = consensus;
-    let wire = format!(
-        "{} {} {}",
-        consensus as u8, slot_final as u8, holding.amount
-    );
+    let finalized = consensus;
+    let wire = format!("{} {} {}", consensus as u8, finalized as u8, holding.amount);
     let out = dregg_lean_ffi::shadow_holding_grant_weight(&wire)
         .map_err(GrantError::LeanCoreUnavailable)?;
-    let weight: u64 = out
+    let weight: u128 = out
         .parse()
         .map_err(|_| GrantError::LeanCoreUnavailable(format!("non-numeric verdict: {out:?}")))?;
     if weight == 0 {
-        // The verified decision refused (a `0` verdict). With the pre-checks satisfied this is a
-        // core disagreement; fail closed rather than fabricate a grant.
+        // The verified decision refused (a `0` verdict). With the pre-checks satisfied
+        // this is a core disagreement; fail closed rather than fabricate a grant.
         return Err(GrantError::NotConsensusProven);
     }
 
-    Ok(WeightGrant {
+    Ok(ForeignWeightGrant {
         voter: binding.voter,
         weight,
-        slot: holding.slot,
-        token_account: holding.token_account,
+        chain: holding.chain,
+        snapshot: holding.snapshot,
+        nullifier: holding.nullifier_key(),
     })
 }
 
@@ -242,13 +318,17 @@ pub fn grant_weight(
 /// twice in one poll.
 #[derive(Clone, Debug, Default)]
 pub struct HoldingWeightRegistry {
-    /// The fired nullifiers: a `(poll, token_account)` is present once its weight has
-    /// been granted into that poll.
+    /// The fired nullifiers: present once a holding's weight has been granted into
+    /// that poll. Solana's legacy path stores the raw SPL `token_account`; the generic
+    /// cross-chain path stores the domain-separated
+    /// [`ProvenForeignHolding::nullifier_key`] (chain+holder+asset digest) — the blake3
+    /// derive-key domain keeps the two spaces from colliding.
     spent: HashSet<(PollId, [u8; 32])>,
-    /// The finalized SNAPSHOT slot each poll pins its holding-weight to. Every holding
-    /// counted in a poll must be proven at exactly this slot (see
+    /// The finalized SNAPSHOT height each poll pins its holding-weight to, PER CHAIN
+    /// (a Solana slot and an EVM block number live on different clocks). Every holding
+    /// counted in a poll must be proven at exactly its chain's pinned height (see
     /// [`GrantError::WrongSnapshot`]).
-    poll_snapshot: BTreeMap<PollId, u64>,
+    poll_snapshot: BTreeMap<(PollId, ChainId), u64>,
 }
 
 impl HoldingWeightRegistry {
@@ -257,22 +337,40 @@ impl HoldingWeightRegistry {
         HoldingWeightRegistry::default()
     }
 
-    /// Pin `poll`'s holding-weight SNAPSHOT to the finalized `slot`. Every holding
-    /// counted in `poll` must be proven at exactly this slot — the defence against
-    /// double-counting the same tokens by proving them across accounts at different
-    /// slots. Call once when the poll's holding-weight window opens.
+    /// Pin `poll`'s **Solana** holding-weight SNAPSHOT to the finalized `slot` — the
+    /// legacy single-chain entry, now sugar for
+    /// [`open_chain_snapshot`](Self::open_chain_snapshot)`(poll, ChainId::Solana, slot)`.
+    /// Every Solana holding counted in `poll` must be proven at exactly this slot — the
+    /// defence against double-counting the same tokens by proving them across accounts
+    /// at different slots. Call once when the poll's holding-weight window opens.
     pub fn open_snapshot(&mut self, poll: PollId, slot: u64) {
-        self.poll_snapshot.insert(poll, slot);
+        self.open_chain_snapshot(poll, ChainId::Solana, slot);
     }
 
-    /// The pinned snapshot slot for `poll`, if any.
+    /// Pin `poll`'s holding-weight SNAPSHOT for `chain` to the finalized `height`.
+    /// Each chain gets its OWN pin (its own clock); a holding proven at any other
+    /// height on that chain is [`GrantError::WrongSnapshot`], and a chain with no pin
+    /// refuses outright ([`GrantError::NoSnapshot`] — fail closed).
+    pub fn open_chain_snapshot(&mut self, poll: PollId, chain: ChainId, height: u64) {
+        self.poll_snapshot.insert((poll, chain), height);
+    }
+
+    /// The pinned **Solana** snapshot slot for `poll`, if any.
     pub fn snapshot_of(&self, poll: PollId) -> Option<u64> {
-        self.poll_snapshot.get(&poll).copied()
+        self.chain_snapshot_of(poll, ChainId::Solana)
     }
 
-    /// Has `token_account` already granted weight in `poll`?
-    pub fn is_spent(&self, poll: PollId, token_account: &[u8; 32]) -> bool {
-        self.spent.contains(&(poll, *token_account))
+    /// The pinned snapshot height for `poll` on `chain`, if any.
+    pub fn chain_snapshot_of(&self, poll: PollId, chain: ChainId) -> Option<u64> {
+        self.poll_snapshot.get(&(poll, chain)).copied()
+    }
+
+    /// Has this Solana `holding` already granted weight in `poll`? (Queries the
+    /// unified `(poll, chain+holder+asset)` nullifier — the SAME key the foreign path
+    /// uses, so the two registry paths share one consume-once keyspace.)
+    pub fn is_spent(&self, poll: PollId, holding: &ProvenHolding) -> bool {
+        self.spent
+            .contains(&(poll, ProvenForeignHolding::from(holding).nullifier_key()))
     }
 
     /// How many distinct holdings have granted weight (across all polls)?
@@ -294,7 +392,55 @@ impl HoldingWeightRegistry {
         binding: &OwnerBinding,
     ) -> Result<WeightGrant, GrantError> {
         let grant = self.check_grant(poll, holding, binding)?;
-        self.spent.insert((poll, grant.token_account));
+        // ONE nullifier keyspace with the foreign path: a Solana holding fires the
+        // SAME (poll, chain+holder+asset) key grant_foreign_into_poll uses, so it can
+        // never be counted twice by mixing the two registry paths.
+        self.spent
+            .insert((poll, ProvenForeignHolding::from(holding).nullifier_key()));
+        Ok(grant)
+    }
+
+    /// Has this chain-agnostic holding's `(poll, chain+holder+asset)` nullifier
+    /// already fired in `poll`?
+    pub fn is_foreign_spent(&self, poll: PollId, holding: &ProvenForeignHolding) -> bool {
+        self.spent.contains(&(poll, holding.nullifier_key()))
+    }
+
+    /// **The cross-chain grant**: grant `holding`'s weight to its bound voter in
+    /// `poll`, whatever chain it was proven on, enforcing:
+    ///
+    /// - the per-`(poll, chain)` SNAPSHOT pin — the holding must be proven at exactly
+    ///   the height [`open_chain_snapshot`](Self::open_chain_snapshot) pinned for its
+    ///   chain (no pin → [`GrantError::NoSnapshot`], fail closed);
+    /// - the full fail-closed [`grant_foreign_weight`] check (consensus verdict →
+    ///   owner binding → positive amount → the Lean-proven weight verdict);
+    /// - the per-`(poll, chain+holder+asset)` consume-once nullifier — the same
+    ///   holder+asset on the same chain counts ONCE per poll
+    ///   ([`GrantError::AlreadyCounted`]), while the same holder on a DIFFERENT chain
+    ///   is a distinct nullifier and legitimately counts too.
+    ///
+    /// A holding refused for any [`GrantError`] leaves the nullifier set unchanged, so
+    /// a genuinely-later valid proof of the same holding can still be counted.
+    pub fn grant_foreign_into_poll(
+        &mut self,
+        poll: PollId,
+        holding: &ProvenForeignHolding,
+        binding: &OwnerBinding,
+    ) -> Result<ForeignWeightGrant, GrantError> {
+        let snapshot = self
+            .chain_snapshot_of(poll, holding.chain)
+            .ok_or(GrantError::NoSnapshot)?;
+        if holding.snapshot != snapshot {
+            return Err(GrantError::WrongSnapshot {
+                holding_slot: holding.snapshot,
+                poll_snapshot: snapshot,
+            });
+        }
+        let grant = grant_foreign_weight(holding, binding)?;
+        if self.spent.contains(&(poll, grant.nullifier)) {
+            return Err(GrantError::AlreadyCounted);
+        }
+        self.spent.insert((poll, grant.nullifier));
         Ok(grant)
     }
 
@@ -311,9 +457,7 @@ impl HoldingWeightRegistry {
         binding: &OwnerBinding,
     ) -> Result<WeightGrant, GrantError> {
         let snapshot = self
-            .poll_snapshot
-            .get(&poll)
-            .copied()
+            .chain_snapshot_of(poll, ChainId::Solana)
             .ok_or(GrantError::NoSnapshot)?;
         if holding.slot != snapshot {
             return Err(GrantError::WrongSnapshot {
@@ -322,7 +466,10 @@ impl HoldingWeightRegistry {
             });
         }
         let grant = grant_weight(holding, binding)?;
-        if self.spent.contains(&(poll, grant.token_account)) {
+        if self
+            .spent
+            .contains(&(poll, ProvenForeignHolding::from(holding).nullifier_key()))
+        {
             return Err(GrantError::AlreadyCounted);
         }
         Ok(grant)
@@ -351,8 +498,10 @@ impl HoldingWeightRegistry {
         let block = engine
             .next_block(poll, grant.voter, choice, grant.weight)
             .ok_or(GrantError::PollNotOpen)?; // unknown poll: no ballot box — nullifier untouched
-        // The engine accepted a ballot box: NOW consume the nullifier and cast.
-        self.spent.insert((poll, grant.token_account));
+        // The engine accepted a ballot box: NOW consume the nullifier and cast — the
+        // unified (poll, chain+holder+asset) key, so the two registry paths share it.
+        self.spent
+            .insert((poll, ProvenForeignHolding::from(holding).nullifier_key()));
         Ok(engine.cast(poll, block))
     }
 }
@@ -633,12 +782,18 @@ mod tests {
         );
         assert_eq!(tally.distinct_voters, 1);
 
-        // A second holding bound to the SAME voter is refused by the engine's own
-        // one-vote-per-voter rule (distinct token-account nullifier here, same voter).
-        let h2 = proven(owner_pk, [49u8; 32], 111, 20);
+        // A DIFFERENT holder (owner2) bound to the SAME voter is a DISTINCT nullifier
+        // (different holder), so it clears the consume-once guard and reaches the
+        // engine, whose own one-vote-per-voter rule refuses the second vote. (The same
+        // holder re-presenting is caught earlier by the nullifier — see
+        // solana_holding_cannot_double_count_across_the_two_registry_paths.)
+        let owner2 = owner_key(8);
+        let owner2_pk = owner2.verifying_key().to_bytes();
+        let binding2 = bind(&owner2, voter);
+        let h2 = proven(owner2_pk, [49u8; 32], 111, 20);
         let outcome2 = reg
-            .grant_and_cast(&mut engine, poll, OptionId(1), &h2, &binding)
-            .expect("nullifier allows a distinct account; engine then judges the voter");
+            .grant_and_cast(&mut engine, poll, OptionId(1), &h2, &binding2)
+            .expect("a distinct holder clears the nullifier; the engine then judges the voter");
         assert_eq!(outcome2, CastOutcome::RefusedDoubleVote);
         assert_eq!(
             engine
@@ -678,7 +833,7 @@ mod tests {
             Err(GrantError::PollNotOpen),
         );
         assert!(
-            !reg.is_spent(ghost, &[0xC3u8; 32]),
+            !reg.is_spent(ghost, &h),
             "a poll-not-open failure must leave the nullifier available",
         );
         assert_eq!(reg.granted_count(), 0);
@@ -698,5 +853,279 @@ mod tests {
                 .unwrap(),
             CastOutcome::Accepted,
         );
+    }
+
+    #[test]
+    fn solana_holding_cannot_double_count_across_the_two_registry_paths() {
+        // The audit's exact probe: the SAME Solana holding must not count twice by
+        // mixing grant_into_poll (legacy) and grant_foreign_into_poll (generic). They
+        // now share ONE (poll, chain+holder+asset) nullifier keyspace.
+        let owner = owner_key(31);
+        let owner_pk = owner.verifying_key().to_bytes();
+        let voter: VoterId = [31u8; 32];
+        let binding = bind(&owner, voter);
+        let h = proven(owner_pk, [0xABu8; 32], 500, 9);
+        let poll = PollId([0x77u8; 32]);
+        let mut reg = HoldingWeightRegistry::new();
+        reg.open_snapshot(poll, 9); // the Solana snapshot
+
+        assert_eq!(reg.grant_into_poll(poll, &h, &binding).unwrap().weight, 500);
+        assert_eq!(reg.granted_count(), 1);
+        // The SAME holding via the foreign path is now AlreadyCounted — NOT a second
+        // independent nullifier.
+        assert_eq!(
+            reg.grant_foreign_into_poll(poll, &ProvenForeignHolding::from(&h), &binding),
+            Err(GrantError::AlreadyCounted),
+        );
+        assert_eq!(
+            reg.granted_count(),
+            1,
+            "one holding = one nullifier, whichever path"
+        );
+    }
+
+    // ─── The CROSS-CHAIN spine: one weight binding for ANY chain ────────────────
+
+    /// A consensus-proven chain-agnostic holding on `chain`, held by `holder`.
+    fn foreign(
+        chain: ChainId,
+        holder: [u8; 32],
+        asset: [u8; 32],
+        amount: u128,
+        snapshot: u64,
+    ) -> ProvenForeignHolding {
+        ProvenForeignHolding {
+            chain,
+            holder,
+            asset,
+            amount,
+            snapshot,
+            consensus_proven: true,
+        }
+    }
+
+    #[test]
+    fn a_consensus_proven_holding_on_each_chain_grants_weight_to_its_bound_voter() {
+        if !lean_verdict_core_or_skip() {
+            return;
+        }
+        // The SAME generic path grants from Solana, EVM, and Cosmos facts alike.
+        let poll = PollId([70u8; 32]);
+        let mut reg = HoldingWeightRegistry::new();
+        for (i, chain) in [ChainId::Solana, ChainId::Evm, ChainId::Cosmos]
+            .into_iter()
+            .enumerate()
+        {
+            let owner = owner_key(40 + i as u8);
+            let holder = owner.verifying_key().to_bytes();
+            let voter: VoterId = [40 + i as u8; 32];
+            let snapshot = 1_000 + i as u64; // each chain has its OWN clock
+            reg.open_chain_snapshot(poll, chain, snapshot);
+            let h = foreign(chain, holder, [0xAAu8; 32], 300 + i as u128, snapshot);
+            let grant = reg
+                .grant_foreign_into_poll(poll, &h, &bind(&owner, voter))
+                .unwrap_or_else(|e| panic!("{chain:?} grant refused: {e:?}"));
+            assert_eq!(
+                grant.voter, voter,
+                "{chain:?}: weight goes to the BOUND voter"
+            );
+            assert_eq!(
+                grant.weight,
+                300 + i as u128,
+                "{chain:?}: weight = proven balance"
+            );
+            assert_eq!(grant.chain, chain);
+            assert_eq!(grant.snapshot, snapshot);
+        }
+        assert_eq!(
+            reg.granted_count(),
+            3,
+            "three chains, three distinct nullifiers"
+        );
+    }
+
+    #[test]
+    fn a_structure_only_foreign_holding_grants_zero_on_every_chain() {
+        // REJECT polarity, NO Lean core needed (the pre-check fires first): an
+        // unproven (RPC-echo) fact from ANY chain grants ZERO — the Nomad-law analog.
+        for chain in [ChainId::Solana, ChainId::Evm, ChainId::Cosmos] {
+            let owner = owner_key(50);
+            let holder = owner.verifying_key().to_bytes();
+            let voter: VoterId = [50u8; 32];
+            let mut h = foreign(chain, holder, [0xBBu8; 32], 1_000_000_000, 5);
+            h.consensus_proven = false; // the structure-only rung
+            assert_eq!(
+                grant_foreign_weight(&h, &bind(&owner, voter)),
+                Err(GrantError::NotConsensusProven),
+                "{chain:?}: an unproven holding must grant ZERO, never its claimed amount",
+            );
+        }
+    }
+
+    #[test]
+    fn foreign_unbound_owner_is_refused() {
+        // REJECT polarity, NO Lean core needed: a binding not signed by the holding's
+        // holder key grants nothing, on the generic path too.
+        let owner = owner_key(51);
+        let holder = owner.verifying_key().to_bytes();
+        let attacker = owner_key(52);
+        let voter: VoterId = [51u8; 32];
+        let h = foreign(ChainId::Evm, holder, [0xCCu8; 32], 700, 9);
+        assert_eq!(
+            grant_foreign_weight(&h, &bind(&attacker, voter)),
+            Err(GrantError::UnboundOwner),
+            "a signature not by the holder must be refused",
+        );
+        // And a signature the owner made for a DIFFERENT voter cannot be re-pointed.
+        let real = bind(&owner, voter);
+        let swapped = OwnerBinding {
+            voter: [99u8; 32],
+            sig: real.sig,
+        };
+        assert_eq!(
+            grant_foreign_weight(&h, &swapped),
+            Err(GrantError::UnboundOwner),
+        );
+    }
+
+    #[test]
+    fn same_poll_holder_chain_asset_cannot_count_twice() {
+        if !lean_verdict_core_or_skip() {
+            return;
+        }
+        let owner = owner_key(53);
+        let holder = owner.verifying_key().to_bytes();
+        let voter: VoterId = [53u8; 32];
+        let binding = bind(&owner, voter);
+        let poll = PollId([71u8; 32]);
+        let mut reg = HoldingWeightRegistry::new();
+        reg.open_chain_snapshot(poll, ChainId::Cosmos, 88);
+        let h = foreign(ChainId::Cosmos, holder, [0xDDu8; 32], 400, 88);
+
+        assert_eq!(
+            reg.grant_foreign_into_poll(poll, &h, &binding)
+                .unwrap()
+                .weight,
+            400
+        );
+        assert!(reg.is_foreign_spent(poll, &h));
+        // REJECT polarity: re-presenting the same (poll, chain+holder+asset) is refused.
+        assert_eq!(
+            reg.grant_foreign_into_poll(poll, &h, &binding),
+            Err(GrantError::AlreadyCounted),
+            "the same holding must not grant weight twice in one poll",
+        );
+        // A DIFFERENT poll is a fresh nullifier.
+        let other_poll = PollId([72u8; 32]);
+        reg.open_chain_snapshot(other_poll, ChainId::Cosmos, 88);
+        assert_eq!(
+            reg.grant_foreign_into_poll(other_poll, &h, &binding)
+                .unwrap()
+                .weight,
+            400,
+        );
+    }
+
+    #[test]
+    fn the_same_holder_on_two_different_chains_is_two_distinct_nullifiers() {
+        if !lean_verdict_core_or_skip() {
+            return;
+        }
+        // A holder who LEGITIMATELY holds on two chains counts both — the nullifier is
+        // chain-scoped, so chain A's grant does not occupy chain B's slot.
+        let owner = owner_key(54);
+        let holder = owner.verifying_key().to_bytes();
+        let voter: VoterId = [54u8; 32];
+        let binding = bind(&owner, voter);
+        let poll = PollId([73u8; 32]);
+        let mut reg = HoldingWeightRegistry::new();
+        reg.open_chain_snapshot(poll, ChainId::Evm, 2_000);
+        reg.open_chain_snapshot(poll, ChainId::Cosmos, 3_000);
+
+        let on_evm = foreign(ChainId::Evm, holder, [0xEEu8; 32], 111, 2_000);
+        let on_cosmos = foreign(ChainId::Cosmos, holder, [0xEEu8; 32], 222, 3_000);
+        let g1 = reg
+            .grant_foreign_into_poll(poll, &on_evm, &binding)
+            .unwrap();
+        let g2 = reg
+            .grant_foreign_into_poll(poll, &on_cosmos, &binding)
+            .unwrap();
+        assert_eq!(g1.weight, 111);
+        assert_eq!(g2.weight, 222, "the second chain's holding counts too");
+        assert_ne!(
+            g1.nullifier, g2.nullifier,
+            "chain-scoped: two DISTINCT nullifiers"
+        );
+        assert_eq!(reg.granted_count(), 2);
+        // But the SAME chain again is still refused.
+        assert_eq!(
+            reg.grant_foreign_into_poll(poll, &on_evm, &binding),
+            Err(GrantError::AlreadyCounted),
+        );
+    }
+
+    #[test]
+    fn foreign_snapshot_pin_is_per_chain_and_fail_closed() {
+        if !lean_verdict_core_or_skip() {
+            return;
+        }
+        let owner = owner_key(55);
+        let holder = owner.verifying_key().to_bytes();
+        let voter: VoterId = [55u8; 32];
+        let binding = bind(&owner, voter);
+        let poll = PollId([74u8; 32]);
+        let mut reg = HoldingWeightRegistry::new();
+        reg.open_chain_snapshot(poll, ChainId::Evm, 5_000);
+
+        // Proven at a different height on the pinned chain → refused.
+        let stale = foreign(ChainId::Evm, holder, [0x11u8; 32], 500, 5_001);
+        assert_eq!(
+            reg.grant_foreign_into_poll(poll, &stale, &binding),
+            Err(GrantError::WrongSnapshot {
+                holding_slot: 5_001,
+                poll_snapshot: 5_000
+            }),
+        );
+        // A chain with NO pin refuses outright — the Evm pin does not leak to Cosmos.
+        let unpinned = foreign(ChainId::Cosmos, holder, [0x11u8; 32], 500, 5_000);
+        assert_eq!(
+            reg.grant_foreign_into_poll(poll, &unpinned, &binding),
+            Err(GrantError::NoSnapshot),
+        );
+        // Neither refusal spent a nullifier.
+        assert_eq!(reg.granted_count(), 0);
+    }
+
+    #[test]
+    fn the_solana_from_lights_up_the_generic_path_end_to_end() {
+        if !lean_verdict_core_or_skip() {
+            return;
+        }
+        // A REAL bridge ProvenHolding → From → the generic grant: the Solana edge is
+        // live through the ONE cross-chain binding, and the thin-wrapper grant_weight
+        // agrees with it.
+        let owner = owner_key(56);
+        let owner_pk = owner.verifying_key().to_bytes();
+        let voter: VoterId = [56u8; 32];
+        let binding = bind(&owner, voter);
+        let h = proven(owner_pk, [0x42u8; 32], 12_345, 6_000);
+
+        let f = ProvenForeignHolding::from(&h);
+        let poll = PollId([75u8; 32]);
+        let mut reg = HoldingWeightRegistry::new();
+        reg.open_chain_snapshot(poll, ChainId::Solana, 6_000);
+        let g = reg.grant_foreign_into_poll(poll, &f, &binding).unwrap();
+        assert_eq!(g.voter, voter);
+        assert_eq!(
+            g.weight, 12_345u128,
+            "the proven Solana balance became weight"
+        );
+        assert_eq!(g.chain, ChainId::Solana);
+        assert_eq!(g.snapshot, 6_000);
+
+        // The legacy Solana entry is the thin wrapper over the SAME core: same verdict.
+        let legacy = grant_weight(&h, &binding).unwrap();
+        assert_eq!(legacy.weight as u128, g.weight);
+        assert_eq!(legacy.voter, g.voter);
     }
 }
