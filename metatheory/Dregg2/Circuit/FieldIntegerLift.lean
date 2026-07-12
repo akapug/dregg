@@ -90,6 +90,68 @@ theorem ood_forces_mainAirAccept_field (d : EffectVmDescriptor2) (t : VmTrace)
     rw [← I.hCrow i hi c ha, hCq, eval_mul, I.hZrow i hi, zero_mul]
   · cases c <;> simp_all [isArith, arithResidual]
 
+/-! ## Discharging the domain-geometry axis `hZrow` with a committed vanishing polynomial.
+
+`OodInterpF` carries three residual axes: `hZrow` (the trace rows are roots of the vanishing
+polynomial — pure evaluation-domain GEOMETRY), `hood` (the OOD quotient identity at ζ — the image of
+`verifyAlgo`'s opaque `TableOpening.constraintEval = vanishingAtZeta·quotientAtZeta`, whose link to the
+interpolated `constraintPoly` is the RLC/commitment-opening residual), and `hnonexc` (ζ ∉ the
+exceptional root set — Fiat–Shamir). Only `hZrow` is structurally dischargeable in-tree: the deployed
+domain's vanishing polynomial is `∏_{i<n} (X - rowPt i)`, which vanishes at every real trace row
+`rowPt j` (the `j`-th factor is zero) and is a genuine monic degree-`n` object (NOT the trivial zero
+polynomial). Supplying it reduces `OodInterpF d t` to EXACTLY the two crypto residuals `hood` + `hnonexc`. -/
+
+/-- The committed vanishing polynomial of the deployed trace domain: `∏_{i<n} (X - rowPt i)`. -/
+noncomputable def vanishingPoly (t : VmTrace) : Polynomial BabyBear :=
+  ∏ i ∈ Finset.range t.rows.length, (X - C (rowPt i))
+
+/-- **`hZrow`, DISCHARGED.** The domain vanisher is zero at every real trace row: the `rowPt i` factor
+of the product vanishes there. -/
+theorem vanishingPoly_eval_rowPt (t : VmTrace) (i : ℕ) (hi : i < t.rows.length) :
+    (vanishingPoly t).eval (rowPt i) = 0 := by
+  rw [vanishingPoly, eval_prod]
+  exact Finset.prod_eq_zero (Finset.mem_range.mpr hi) (by simp)
+
+/-- The domain vanisher is monic of degree `t.rows.length` — a genuine object, not the trivial zero
+polynomial, so `hZrow` is discharged by real content. -/
+theorem vanishingPoly_monic (t : VmTrace) : (vanishingPoly t).Monic :=
+  monic_prod_of_monic _ _ (fun i _ => monic_X_sub_C (rowPt i))
+
+theorem vanishingPoly_ne_zero (t : VmTrace) : vanishingPoly t ≠ 0 :=
+  (vanishingPoly_monic t).ne_zero
+
+/-- **The OOD landing on the REAL `VmTrace`, reduced to the two crypto residuals.** With the committed
+domain vanisher `vanishingPoly t` supplied (so `hcap` and `hZrow` are discharged, and `hCrow` was
+already discharged by `TraceColumnInterp.constraintPoly_eval_eq_arithResidual`), the field-valued
+per-row AIR identity `MainAirAcceptF d t` follows from EXACTLY two inputs: `hood` — the OOD quotient
+identity at ζ, per constraint (the image of `verifyAlgo`'s `constraintEval = vanishingAtZeta ·
+quotientAtZeta`, modulo the RLC-batching + commitment-opening link that `TableOpening.constraintEval`
+leaves opaque) — and `hnonexc` — ζ non-exceptional (Fiat–Shamir). NO interpolation or domain axis
+remains; this is the precise residual frontier for `transferV3`. -/
+theorem ood_forces_mainAirAccept_field_of_residuals (d : EffectVmDescriptor2) (t : VmTrace)
+    (hcap : t.rows.length ≤ domainSize) (ζ : BabyBear)
+    (qp : VmConstraint2 → Polynomial BabyBear)
+    (hood : ∀ c ∈ d.constraints, isArith c →
+        (constraintPoly d t c).eval ζ = (vanishingPoly t).eval ζ * (qp c).eval ζ)
+    (hnonexc : ∀ c ∈ d.constraints, isArith c →
+        ζ ∉ exceptionalSet (constraintPoly d t c - vanishingPoly t * qp c)) :
+    MainAirAcceptF d t :=
+  ood_forces_mainAirAccept_field d t
+    { hcap := hcap, ζ := ζ, Zp := vanishingPoly t, qp := qp
+    , hZrow := vanishingPoly_eval_rowPt t
+    , hood := hood, hnonexc := hnonexc }
+
+/-! ### Teeth for the discharged domain axis (both truth-values). -/
+
+/-- FIRE: the committed vanisher is zero at a real trace row of the honest toy trace. -/
+theorem vanishingPoly_eval_rowPt_fires :
+    (vanishingPoly tHonest).eval (rowPt 0) = 0 :=
+  vanishingPoly_eval_rowPt tHonest 0 (by simp [tHonest])
+
+/-- NON-VACUITY: the committed vanisher is a genuine monic polynomial, not the trivial `0`. -/
+theorem vanishingPoly_tHonest_ne_zero : vanishingPoly tHonest ≠ 0 :=
+  vanishingPoly_ne_zero tHonest
+
 /-! ## A deployed-modulus multiplicative counterexample -/
 
 /-- The real expression grammar's compound gate `((col 0 + col 1) * col 2)`. -/
@@ -171,6 +233,11 @@ theorem mainAirAcceptF_does_not_imply_MainAirAcceptZ :
 #assert_axioms canonical_babyBear_sub_eq_zero_lifts
 #assert_axioms OodInterpF.hCrow
 #assert_axioms ood_forces_mainAirAccept_field
+#assert_axioms vanishingPoly_eval_rowPt
+#assert_axioms vanishingPoly_monic
+#assert_axioms ood_forces_mainAirAccept_field_of_residuals
+#assert_axioms vanishingPoly_eval_rowPt_fires
+#assert_axioms vanishingPoly_tHonest_ne_zero
 #assert_axioms mainAirAcceptF_does_not_imply_MainAirAcceptZ
 
 end Dregg2.Circuit.FieldIntegerLift
