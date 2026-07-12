@@ -7537,3 +7537,11 @@ Four disjoint frontiers, one burst; auditors caught 2 real MAJORs, fixed pre-com
 Pattern working: fast Fable lanes + adversarial audit catches real exploitable holes + integrator fixes before
 commit. Non-custodial proof-of-holdings governance now spans Solana/EVM/Cosmos (one binding). gov followups:
 EVM U256>u128 refuse-not-truncate; Cosmos bank decode; u128->u64 fail-closed narrow; multi-network tag.
+
+## rung-3 fold pilot = EVM-MPT/keccak (grounded plan) (2026-07-12, multichain lane)
+docs/deos/VERIFIED-LIGHTCLIENT-FOLD-PILOT.md: pilot = fold the verified EVM-MPT inclusion (cheapest crypto,
+one keccak, zero sigs) as a foldable CellProgram custom leaf. Verified the load-bearing citations: the old
+<=4-PI blocker is STALE (custom_leaf_adapter multi-chunk absorb + 32-PI tooth), MPT leaf folds through the
+deployed CarrierWitness::Custom arm (ivc_turn_chain.rs:3107) zero-new-circuit-code + no VK movement; mptVerify
+is H-parametric (clean Lean-first link). Ladder P0->P1->P2 (TID_KECCAK chip = real rung 3). COORD: fold
+machinery shared with stark-kill's rung-3 ladder — P0 build must be additive + collision-checked first.
