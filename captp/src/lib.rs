@@ -83,6 +83,7 @@ pub use dregg_types::FederationId;
 
 pub mod custody;
 pub mod data_plane;
+pub mod fraud_proof;
 pub mod gc;
 pub mod handoff;
 pub mod handoff_session;
@@ -96,6 +97,7 @@ pub mod uri;
 pub mod verified_gate;
 
 pub use data_plane::{Bus, ChannelName, DataPlaneError, Delivery, SendCap, TopicName, Wake, Waker};
+pub use fraud_proof::{Acquittal, Conviction, FraudProof, OwnerAnchoredFact, Verdict};
 pub use gc::{DropMessage, DropResult, ExportGcManager, ImportGcManager, SessionId};
 pub use handoff::{
     HandoffAcceptance, HandoffCertificate, HandoffError, HandoffPresentation,
