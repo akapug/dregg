@@ -7744,3 +7744,43 @@ The ~18min shrink prove ran on the LAPTOP (12 cores), CPU-only Plonky3, shrink a
 5. FRONTIER: folding recursion (Nova/HyperNova) — no FRI-per-step; big migration, long horizon.
 Note: the shrink prove is a ONE-TIME OFF-CHAIN cost (produces the proof → Groth16 → EVM), so even 18min is
 deployable; faster = throughput/cost. #1+#2 are immediate; #3 is the ceiling-raiser.
+
+## Cap-open transfer availability weld — eff + TB twin CLOSED (2026-07-12, cap-open avail lane)
+The cap-open member of the GAP #4 wrap class (remaining item ③ of the availability flip): the LIVE
+transfer cap-open keys (`transferCapOpenEffVmDescriptor2R24` + `transferCapOpenTBVmDescriptor2R24`)
+were the same `gBalLo` debit shape over the BARE v1 face — cap-AUTHORIZED over-debit passed exactly
+as the bare cohort forgery. CLOSED by re-hosting the appendix on the hardened base:
+Dregg2/Circuit/RotatedKernelRefinementCapOpenAvail.lean (NEW) = transferCapOpenEffV3Avail /
+transferCapOpenEffV3TBAvail (`effCapOpenV3`/`effCapOpenV3TB` at `transferV3Avail`, everything
+width-parametric already) + the peels (selector/TB/appendix strip → `Satisfied2 transferV3Avail`)
++ capOpen{,TB}Avail_availability_and_exact_move_forced (consumes RotatedKernelRefinementAvail's
+discharge verbatim — availability FORCED, rejects_overdebit teeth) + the authority keystones
+re-instantiated at the hardened base (authorizes / rejects_wrong_facet / TB authorizes /
+rejects_mismatched_src — facet gates + non-amp untouched); #assert_axioms-clean, geometry #guards
+(1657/1986/1988, pi 46/49, 6 tables). Emission retargeted (EmitRotationV3 override + TB line);
+fresh emit VALIDATED: diff = only the flipped keys; capopen-eff/TB lines carry widths 1986/1988,
+pi 46/49, 6×15-bit lookups into table 84 at wires 188..193 (byte-matched to the cohort avail
+members). Rust: widen_to_cap_open{,_tb}_avail (pad-shifted appendix/TB columns; bare = pad 0
+delegates), SDK build_effect_vm_cap_open_leg descriptor-name-driven (avail generator + shifted
+widens; PI indices unchanged), cap-open drift gate pad-aware; cap_open_avail_roundtrip.rs proves
+both keys against committed bare AND freshly-emitted hardened bytes (DREGG_AVAIL_REGISTRY_TSV),
+forged-BRW1 REFUSED + #225 forged-src anchor still bites on the hardened member.
+REMAINING (named): ① the WIDE cap-open twins (EmitWideRegistryProbe TB host + the wide cap-open
+tail) still ride the bare base — same-class close; the SDK wide route stays consistent (the wide
+descriptor's own name derives pad 0) but the wrap window stays open on the wide leg until its
+flip; ② in-library v3RegistryCapOpen tail + apex Rfix re-key onto the hardened members (rides the
+same flag-day as the transfer/burn re-key); ③ ember-gated VK regen unchanged (this lane emits, it
+does not flip).
+
+## ⚑⚑ APPLE SILICON FAST PROVER — MEASURED + VERIFIED (2026-07-12, ember asked "fast prover on Apple Silicon?")
+docs/deos/GPU-PROVER-PROTOTYPE.md: cross-platform strategy (ICICLE is WRONG for us — no box we own runs CUDA:
+hbox=AMD RX 6700 XT gfx1031, persvati=AMD Strix, no NVIDIA; ICICLE has no Plonky3 backend + Metal lacks
+Poseidon2). VERIFIED MYSELF on THIS M2 Max: wgpu/WGSL BabyBear Montgomery multiply = 106.63 Gmul/s, BIT-EXACT
+parity with pinned Plonky3 on all 4,194,304 lanes; CPU 1-thread = 0.25 Gmul/s (~427x/thread, ~10-35x/12-core).
+KEY CORRECTION: the shrink's NTT is over BabyBear (31-bit), NOT BN254 — only the HASH is BN254 — so the GPU
+work is simple 32-bit kernels. PATH: a wgpu/WGSL BabyBear kernel suite (NTT + Poseidon2-W16/24 + Merkle) behind
+2 Plonky3 trait seams (TwoAdicSubgroupDft + MMCS hasher) = ONE source → Apple Metal + AMD-hbox Vulkan (no ROCm!)
++ NVIDIA, pure-Rust. Futhark(HIP) = server escape hatch. RISC0's Metal BabyBear prover = prior art. STRATEGIC:
+fast Apple Silicon BabyBear proving = CLIENT-SIDE proving (prove your own turn/holding on your Mac) = dregg's
+non-custodial soul. SEQUENCING: config-only blowup rebalance (18min→est 1-3min, sweep running) FIRST; then the
+wgpu NTT kernel (dominant LDE cost) as the first end-to-end GPU increment.
