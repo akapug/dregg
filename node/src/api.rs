@@ -406,19 +406,28 @@ fn build_effect(spec: TurnEffectSpec, default_cell: CellId) -> Result<dregg_turn
             to,
             target,
             slot,
-        } => Effect::GrantCapability {
-            from: resolve(from)?,
-            to: parse_cell_id(&to)?,
-            cap: dregg_cell::CapabilityRef {
-                target: parse_cell_id(&target)?,
-                slot,
-                permissions: dregg_cell::AuthRequired::None,
-                breadstuff: None,
-                expires_at: None,
-                allowed_effects: None,
-                stored_epoch: None,
-            },
-        },
+        } => {
+            let target = parse_cell_id(&target)?;
+            Effect::GrantCapability {
+                from: resolve(from)?,
+                to: parse_cell_id(&to)?,
+                cap: dregg_cell::CapabilityRef {
+                    target,
+                    slot,
+                    permissions: dregg_cell::AuthRequired::None,
+                    breadstuff: None,
+                    expires_at: None,
+                    allowed_effects: None,
+                    stored_epoch: None,
+                    provenance: dregg_cell::derivation::cap_provenance(
+                        &target,
+                        slot,
+                        &dregg_cell::derivation::mint_provenance(),
+                        &[0u8; 32],
+                    ),
+                },
+            }
+        }
     })
 }
 
@@ -8363,6 +8372,38 @@ mod tests {
     /// Helper: create a deterministic key pair for testing.
     fn test_key(name: &str) -> [u8; 32] {
         *blake3::hash(format!("dregg-node-atomic-test:{name}").as_bytes()).as_bytes()
+    }
+
+    #[test]
+    fn thin_grant_builds_mint_rooted_provenance() {
+        let from = CellId([1u8; 32]);
+        let to = CellId([2u8; 32]);
+        let target = CellId([3u8; 32]);
+        let slot = 7;
+        let effect = build_effect(
+            TurnEffectSpec::GrantCapability {
+                from: Some(hex_encode(from.as_bytes())),
+                to: hex_encode(to.as_bytes()),
+                target: hex_encode(target.as_bytes()),
+                slot,
+            },
+            from,
+        )
+        .expect("grant effect builds");
+
+        let dregg_turn::Effect::GrantCapability { cap, .. } = effect else {
+            panic!("expected capability grant");
+        };
+        assert_eq!(
+            cap.provenance,
+            dregg_cell::derivation::cap_provenance(
+                &target,
+                slot,
+                &dregg_cell::derivation::mint_provenance(),
+                &[0u8; 32],
+            )
+        );
+        assert_ne!(cap.provenance, [0u8; 32]);
     }
 
     /// Fail-CLOSED authority-label parsing (twin of the deos-js `parse_auth_label` fix):
