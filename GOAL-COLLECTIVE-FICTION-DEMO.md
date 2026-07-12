@@ -984,3 +984,19 @@ deterministic unique-id as a content hash. Reverted the binding; verify.rs stays
 NOT a verify bug: whether turn_hash SHOULD be a deterministic content hash is a turn-crate design question — but the
 replay security holds regardless.) The discipline earned its keep twice: caught codex's bad spween fix, then refuted
 its plausible-but-wrong finding by driving.
+
+## Turn-hash determinism: analyzed to the floor — B (accept), option-2 gated on require_pq (2026-07-12)
+Full chain traced: turn_hash = turn.hash() folds forest_hash folds action.hash(), and action.hash() DELIBERATELY binds
+the authorization — including the HYBRID ML-DSA half (hedged/randomized per signing). Rationale IN CODE (action.rs
+~1586): "Binding the PQ material here means the OUTER turn envelope's signatures cover it: a tampering executor cannot
+swap or strip the PQ half." So the turn_hash non-determinism is the PRICE of a load-bearing ANTI-PQ-DOWNGRADE binding,
+not a bug. CONFIRMED the executor's require_pq defaults FALSE (AtomicBool::new(false), all ctors) — with it OFF (the
+rollout default) a stripped/classical-only turn is ACCEPTED (authorize.rs 995-1001), so the hash-binding is the SOLE
+anti-downgrade protection today. => Naive content-addressing (codex's premise / options A & 2) is UNSAFE now; verify_
+by_replay (reproduced STATE + forged-CHOICE refusal + state-hash LINKAGE) is already sound. Mina validates the target
+shape (commitment over BODIES; authorization authorizes it separately, verified against it — docs.minaprotocol.com/
+AccountUpdate) but Mina's safety rests on VERIFYING the auth against the commitment, which for us means require_pq ON.
+NAMED FOLLOW-UP (gated): once require_pq is universally ON, the auth-check enforces PQ Mina-style, the PQ-in-hash binding
+becomes redundant, and action.hash() can be content-addressed -> deterministic turn_hash -> replay-binding/dedup/
+content-addressing. Track with the require_pq rollout. The discipline earned its keep a THIRD time: nearly content-
+addressed a turn + would have silently removed the sole anti-quantum-downgrade guarantee.
