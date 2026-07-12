@@ -179,22 +179,27 @@ func merkleRootFromOpeningBn254Ref(e0, e1 bbExtRef, pathBits []uint32, siblings 
 
 // friNativeQueryOpeningRef is one query's opening data for the native-hash
 // flow: BabyBear evals (folded arithmetic), native BN254 Merkle paths.
+// RollIns aligns with the proof's RollInAfterRound schedule (nil when all
+// inputs live at the max height).
 type friNativeQueryOpeningRef struct {
 	InitialEval  bbExtRef
+	RollIns      []bbExtRef
 	Siblings     []bbExtRef     // [R]
-	MerkleProofs [][]fr.Element // [R][lfh_r] native sibling nodes, bottom-up
+	MerkleProofs [][]fr.Element // [R][logMax-r-1] native sibling nodes, bottom-up
 }
 
-// friNativeProofRef is the native-hash single-matrix FRI proof: native BN254
-// commit roots, BabyBear final poly, grinding witness, per-query openings.
-// Betas and query indices are absent by design — re-derived from the
-// MultiField transcript.
+// friNativeProofRef is the native-hash batched FRI proof: native BN254
+// commit roots, BabyBear final poly, grinding witness, per-query openings,
+// and the structural multi-height roll-in schedule (rounds after whose fold a
+// reduced opening enters — verifier.rs:471-480). Betas and query indices are
+// absent by design — re-derived from the MultiField transcript.
 type friNativeProofRef struct {
-	R           int
-	CommitRoots []fr.Element // [R]
-	FinalPoly   []bbExtRef   // [2^LogFinalPolyLen]
-	PowWitness  uint32
-	Queries     []friNativeQueryOpeningRef
+	R                int
+	CommitRoots      []fr.Element // [R]
+	FinalPoly        []bbExtRef   // [2^LogFinalPolyLen]
+	PowWitness       uint32
+	RollInAfterRound []int
+	Queries          []friNativeQueryOpeningRef
 }
 
 // verifyFriNativeRef drives the MultiField transcript exactly as
@@ -242,23 +247,29 @@ func verifyFriNativeRefImpl(c *multiFieldChallengerRef, cfg friConfigRef, p *fri
 
 	logGlobalMaxHeight := R + cfg.LogBlowup + cfg.LogFinalPolyLen
 	for _, q := range p.Queries {
+		if len(q.RollIns) != len(p.RollInAfterRound) {
+			return false
+		}
 		// verifier.rs:268 index = sample_bits(log_global_max_height + extra).
 		index := uint(c.sampleBits(logGlobalMaxHeight + cfg.ExtraQueryIndexBits))
 		// verifier.rs:287 domain_index = index >> extra.
 		domainIndex := index >> uint(cfg.ExtraQueryIndexBits)
 
-		indexBits := make([]uint32, R)
-		for i := 0; i < R; i++ {
+		indexBits := make([]uint32, logGlobalMaxHeight)
+		for i := 0; i < logGlobalMaxHeight; i++ {
 			indexBits[i] = uint32((domainIndex >> uint(i)) & 1)
 		}
 		finalEval := finalPolyEvalRef(p.FinalPoly, domainIndex, logGlobalMaxHeight)
 
 		// Per-query fold chain with NATIVE Merkle openings; the fold itself is
 		// friFoldCoreRef/invSFromParentRef — the unchanged arithmetic residual.
+		// Round r's committed matrix has 2^(logMax-r-1) rows: path depth and
+		// parent-index span are logMax-r-1 (== R-r-1 when LogBlowup is 0).
 		folded := q.InitialEval
 		ok := true
+		ri := 0
 		for r := 0; r < R; r++ {
-			lfh := R - r - 1
+			lfh := logGlobalMaxHeight - r - 1
 			bR := indexBits[r]
 			var e0, e1 bbExtRef
 			if bR == 1 {
@@ -273,8 +284,15 @@ func verifyFriNativeRefImpl(c *multiFieldChallengerRef, cfg friConfigRef, p *fri
 			}
 			parent := indexFromBits(indexBits, r+1, lfh)
 			folded = friFoldCoreRef(e0, e1, betas[r], invSFromParentRef(parent, lfh, R, r))
+
+			// Multi-height roll-in (verifier.rs:477-479): folded += beta^2 * ro.
+			if ri < len(p.RollInAfterRound) && p.RollInAfterRound[ri] == r {
+				betaSq := bbExtMulRef(betas[r], betas[r])
+				folded = bbExtAddRef(folded, bbExtMulRef(betaSq, q.RollIns[ri]))
+				ri++
+			}
 		}
-		if !ok || folded != finalEval {
+		if !ok || ri != len(p.RollInAfterRound) || folded != finalEval {
 			return false
 		}
 	}

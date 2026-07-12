@@ -31,10 +31,14 @@ import (
 	"github.com/consensys/gnark/frontend/cs/r1cs"
 )
 
-// shrinkMaxDegreeBits is the measured max degree_bits of the real shrink
-// proof (circuit-prove sweep prints degree_bits per setting; the verifier
-// circuit's tables are the same at every FRI shape, so this is one number).
-const shrinkMaxDegreeBits = 12
+// shrinkMaxDegreeBits is the MEASURED max degree_bits of the real shrink
+// proof. The circuit-prove sweep prints degree_bits [9, 9, 15, 14, 15] for the
+// real 2-turn apex — max 15 — and those table heights are a property of the
+// verifier circuit, INDEPENDENT of the FRI blowup, so this one number holds at
+// every setting. log_global_max_height = max_degree_bits + log_blowup, so the
+// gadget's stand-in R = 15 + log_blowup per setting (deepest Merkle path
+// R-1 levels), matching the real FRI depth the shrink prover commits.
+const shrinkMaxDegreeBits = 15
 
 func TestWrapNativeHashQuerySweep(t *testing.T) {
 	const prefixLen = 9

@@ -44,14 +44,33 @@
 // KATs in fri_leaf_hash_kat_test.go (digests computed by the REAL fork sponge
 // + MerkleTreeMmcs over the pinned permutation).
 //
-// HONEST SCOPE (mirrors the fri_verify.go scope, plus the shrink-layer gap):
-// single-matrix, arity-2, LogFinalPolyLen = 0. This gadget MEASURES the
-// native-hash wrap verifier and validates the constraint premise against a
-// SYNTHETIC native-hash FRI instance built by the tests — it does NOT yet
-// verify a real dregg apex. A real apex verify awaits the Rust shrink layer
-// (DreggOuterConfig: re-prove the apex with a BN254-native-hash MMCS +
-// MultiField32Challenger, currently blocked in circuit-prove); the measurement
-// does not need the shrink layer, the end-to-end real-apex verify does.
+// HONEST SCOPE — what this verifies of a REAL shrink proof, and what remains.
+//
+// The Rust shrink layer LANDED (circuit-prove/src/apex_shrink.rs: a real
+// ir2_leaf_wrap apex re-proven under DreggOuterConfig), and this gadget now
+// verifies the FRI CORE of that REAL shrink proof end-to-end
+// (apex_shrink_real_fixture_test.go over fixtures/apex_shrink_fri_real.json,
+// exported + self-checked by circuit-prove/src/apex_shrink_gnark_export.rs):
+//
+//   VERIFIED IN-CIRCUIT against real data: the full Fiat–Shamir transcript
+//   (the pre-FRI prefix replayed event-for-event with every sampled challenge
+//   pinned to the Rust value, then betas/PoW/query indices drawn live), the
+//   commit-phase native Merkle openings for every query and round, the fold
+//   arithmetic with multi-height ROLL-INS (verifier.rs:471-480: reduced
+//   openings entering as the fold passes each input height, scaled by
+//   beta^arity), the query grinding, and the final-polynomial check.
+//   Arity-2, LogFinalPolyLen = 0 (the DreggOuterConfig shape; blowup/query
+//   split as pinned by the fixture).
+//
+//   NAMED RESIDUAL (the remaining gap to a FULL batch-STARK verify, i.e. the
+//   last piece before the Groth16 wrap): the per-query reduced openings
+//   (InitialEval + RollIns) enter as WITNESSES, computed host-side from the
+//   real opened values and alpha. In-circuit they must eventually be DERIVED:
+//   (a) verify the input batch openings (open_input's Merkle checks against
+//   the main/preprocessed/quotient/permutation commitments) and the
+//   alpha-combination sum, and (b) evaluate each instance's constraints at
+//   zeta and check the quotient recomposition. Neither changes the
+//   transcript; the transcript is fully bound today.
 package friverifier
 
 import (
@@ -61,12 +80,15 @@ import (
 )
 
 // FriNativeQueryOpening is one query's opening data for the native-hash flow:
-// the initial reduced-opening seed and, per commit round, the sibling
-// evaluation (BabyBear ext, folded natively) plus the NATIVE Merkle path
-// (one BN254 sibling node per level, bottom-up). The query index is drawn from
-// the challenger inside VerifyFriNative, not carried here.
+// the initial reduced-opening seed, the roll-in reduced openings (aligned
+// with the structural rollInAfterRound schedule; empty when all inputs live
+// at the max height), and, per commit round, the sibling evaluation (BabyBear
+// ext, folded natively) plus the NATIVE Merkle path (one BN254 sibling node
+// per level, bottom-up). The query index is drawn from the challenger inside
+// VerifyFriNative, not carried here.
 type FriNativeQueryOpening struct {
 	InitialEval  BBExt
+	RollIns      []BBExt
 	Siblings     []BBExt
 	MerkleProofs [][]frontend.Variable // [R][lfh_r] native sibling nodes
 }
@@ -133,18 +155,35 @@ func friMerkleLeafHashNative(api frontend.API, e0, e1 BBExt) frontend.Variable {
 // The sibling-group reconstruction, the fold (friFoldRowArity2 — the SAME code
 // path as the emulated verifier), and the final-poly check are identical; only
 // the commitment opening swaps to VerifyMerklePathBn254.
+//
+// `logMaxHeight` is the log of the initial (largest) evaluation domain
+// (R + LogBlowup + LogFinalPolyLen): round r's commit-phase matrix has
+// 2^(logMaxHeight-r-1) rows, so its native Merkle path has
+// logMaxHeight - r - 1 levels and the fold's parent index is the same bit
+// span (with LogBlowup = 0 this degenerates to the old R - r - 1).
+//
+// `rollInAfterRound` (STRUCTURAL, strictly ascending) lists the rounds after
+// whose fold a reduced opening enters the chain (verifier.rs:471-480: an
+// input matrix lives at the just-reached height); `rollIns` carries the
+// corresponding values, scaled by beta^2 = beta^arity for independence.
 func VerifyFriQueryNative(
 	bb *BBApi,
 	R int,
+	logMaxHeight int,
 	commitRoots []frontend.Variable, // [R] native BN254 roots
 	betas []BBExt,
 	siblings []BBExt,
-	merkleProofs [][]frontend.Variable, // [R][lfh_r] native sibling nodes
-	indexBits []frontend.Variable,
+	merkleProofs [][]frontend.Variable, // [R][logMaxHeight-r-1] native sibling nodes
+	indexBits []frontend.Variable, // [logMaxHeight]
 	initialEval BBExt,
+	rollInAfterRound []int,
+	rollIns []BBExt,
 	finalEval BBExt,
 ) {
 	api := bb.API()
+	if len(rollIns) != len(rollInAfterRound) {
+		panic("VerifyFriQueryNative: rollIns must align with the rollInAfterRound schedule")
+	}
 
 	// Fail-closed witness ingestion (mirrors VerifyFriQuery). The BabyBear
 	// values must be canonical — for the packed leaf, canonicity IS the
@@ -159,10 +198,14 @@ func VerifyFriQueryNative(
 		bb.ExtAssertIsCanonical(betas[r])
 		bb.ExtAssertIsCanonical(siblings[r])
 	}
+	for i := range rollIns {
+		bb.ExtAssertIsCanonical(rollIns[i])
+	}
 
 	folded := initialEval
+	ri := 0
 	for r := 0; r < R; r++ {
-		lfh := R - r - 1
+		lfh := logMaxHeight - r - 1
 		bR := indexBits[r]
 
 		// Reconstruct the arity-2 sibling group (verifier.rs:422-433): the
@@ -182,6 +225,17 @@ func VerifyFriQueryNative(
 		// Fold with beta — the shared emulated-BabyBear fold path (the
 		// arithmetic residual; the hash swap does not touch it).
 		folded = friFoldRowArity2(bb, e0, e1, betas[r], indexBits[r+1:r+1+lfh])
+
+		// Roll in the reduced opening for the just-reached height
+		// (verifier.rs:477-479): folded += beta^2 * ro.
+		if ri < len(rollInAfterRound) && rollInAfterRound[ri] == r {
+			betaSq := bb.ExtMul(betas[r], betas[r])
+			folded = bb.ExtAdd(folded, bb.ExtMul(betaSq, rollIns[ri]))
+			ri++
+		}
+	}
+	if ri != len(rollInAfterRound) {
+		panic("VerifyFriQueryNative: rollInAfterRound schedule not consumed (round out of range)")
 	}
 
 	// Final-polynomial check (LogFinalPolyLen == 0 scope: a single constant).
@@ -204,12 +258,14 @@ func CheckWitnessNative(c *MultiFieldChallenger, powBits int, witness frontend.V
 	}
 }
 
-// VerifyFriNative constrains the single-matrix FRI verifier flow with the
+// VerifyFriNative constrains the batched FRI verifier flow with the
 // NATIVE-HASH transcript and commitments, drawing the betas and query indices
 // from `ch` in the SAME fork-faithful transcript order as VerifyFri. `ch` is
-// the MultiField challenger positioned at the commit phase. A tampered
-// root/opening/witness/final-poly, or a divergent transcript, yields an
-// unsatisfiable constraint system (fail-closed).
+// the MultiField challenger positioned at the commit phase.
+// `rollInAfterRound` is the structural multi-height roll-in schedule (nil for
+// the single-height case). A tampered root/opening/witness/final-poly/roll-in,
+// or a divergent transcript, yields an unsatisfiable constraint system
+// (fail-closed).
 func VerifyFriNative(
 	bb *BBApi,
 	cfg FriConfig,
@@ -218,9 +274,10 @@ func VerifyFriNative(
 	finalPoly []BBExt,
 	powWitness frontend.Variable,
 	queries []FriNativeQueryOpening,
+	rollInAfterRound []int,
 	ch *MultiFieldChallenger,
 ) {
-	verifyFriNativeImpl(bb, cfg, R, commitRoots, finalPoly, powWitness, queries, ch, false)
+	verifyFriNativeImpl(bb, cfg, R, commitRoots, finalPoly, powWitness, queries, rollInAfterRound, ch, false)
 }
 
 // verifyFriNativeImpl is VerifyFriNative with the same test-only order flag as
@@ -236,6 +293,7 @@ func verifyFriNativeImpl(
 	finalPoly []BBExt,
 	powWitness frontend.Variable,
 	queries []FriNativeQueryOpening,
+	rollInAfterRound []int,
 	ch *MultiFieldChallenger,
 	swapOrder bool,
 ) {
@@ -244,6 +302,12 @@ func verifyFriNativeImpl(
 	}
 	if cfg.LogFinalPolyLen != 0 {
 		panic("VerifyFriNative: single-round-set scope requires LogFinalPolyLen==0")
+	}
+	for i := range rollInAfterRound {
+		if rollInAfterRound[i] < 0 || rollInAfterRound[i] >= R ||
+			(i > 0 && rollInAfterRound[i] <= rollInAfterRound[i-1]) {
+			panic("VerifyFriNative: rollInAfterRound must be strictly ascending rounds in [0, R)")
+		}
 	}
 
 	// Commit phase (verifier.rs:214-227): the root is observed as a NATIVE
@@ -275,14 +339,15 @@ func verifyFriNativeImpl(
 	CheckWitnessNative(ch, cfg.QueryPowBits, powWitness)
 
 	// Per query: sample the index, run the native-hash fold chain.
-	numIndexBits := R + cfg.LogBlowup + cfg.LogFinalPolyLen + cfg.ExtraQueryIndexBits
-	finalEval := finalPoly[0] // LogFinalPolyLen==0: the final domain is a point.
+	logMaxHeight := R + cfg.LogBlowup + cfg.LogFinalPolyLen
+	numIndexBits := logMaxHeight + cfg.ExtraQueryIndexBits
+	finalEval := finalPoly[0] // LogFinalPolyLen==0: the final poly is a constant.
 	for _, q := range queries {
 		// verifier.rs:268 index = sample_bits(log_global_max_height + extra).
 		idxBits := ch.SampleBitsDecomposed(numIndexBits)
 		// verifier.rs:287 domain_index = index >> extra: drop the low extra bits.
 		domainBits := idxBits[cfg.ExtraQueryIndexBits:]
-		VerifyFriQueryNative(bb, R, commitRoots, betas, q.Siblings, q.MerkleProofs,
-			domainBits, q.InitialEval, finalEval) // verifier.rs:298 verify_query
+		VerifyFriQueryNative(bb, R, logMaxHeight, commitRoots, betas, q.Siblings, q.MerkleProofs,
+			domainBits, q.InitialEval, rollInAfterRound, q.RollIns, finalEval) // verifier.rs:298 verify_query
 	}
 }

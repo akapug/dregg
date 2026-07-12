@@ -58,14 +58,18 @@
 //! ## HONEST SCOPE / named residual
 //!
 //! Landed here: the split-config instantiation + real-apex shrink + Rust-side
-//! verify (see `tests/apex_shrink_bn254_tooth.rs`). NOT yet landed: the
-//! gnark-side fixture export — serializing the shrink proof's FRI opening data
-//! (commit roots, final poly, PoW witness, per-query openings) plus the
-//! transcript prefix into a `chain/gnark` test fixture so `VerifyFriNative`
-//! verifies a REAL shrink proof end-to-end. That export is the single
-//! remaining increment between this module and the gnark wrap; nothing in it
-//! is design-blocked (the two sides already KAT-agree on the permutation,
-//! challenger pack/split, compression, and MMCS leaf hash).
+//! verify (see `tests/apex_shrink_bn254_tooth.rs`), and the gnark-side fixture
+//! export ([`crate::apex_shrink_gnark_export`], test
+//! `tests/apex_shrink_gnark_fixture.rs`): the shrink proof's FRI opening data
+//! (commit roots, final poly, PoW witness, per-query openings + reduced
+//! openings) plus the full pre-FRI transcript event log, which
+//! `chain/gnark`'s `VerifyFriNative` verifies against the REAL transcript
+//! (fixture `chain/gnark/fixtures/apex_shrink_fri_real.json`). The NAMED
+//! residual on the gnark side is the full batch-STARK verify — in-circuit
+//! input batch openings + alpha reduction, constraint evaluation at zeta,
+//! quotient recomposition — and then the Groth16 wrap of that circuit (see
+//! the HONEST SCOPE in `apex_shrink_gnark_export.rs` and
+//! `chain/gnark/fri_verify_native.go`).
 
 use std::rc::Rc;
 
@@ -73,6 +77,7 @@ use p3_baby_bear::BabyBear as P3BabyBear;
 use p3_batch_stark::ProverData;
 use p3_circuit_prover::{
     AirVariant, BatchStarkProof, BatchStarkProver, CircuitProverData, ConstraintProfile,
+    TablePacking,
     common::{NpoAirBuilder, NpoPreprocessor, get_airs_and_degrees_with_prep},
     expose_claim_air_builders, expose_claim_preprocessor, poseidon2_air_builders,
     poseidon2_preprocessor, recompose_air_builders, recompose_preprocessor,
@@ -124,14 +129,73 @@ pub fn shrink_apex_to_outer(
     shrink_recursion_input_to_outer(&input, inner_config, outer_config)
 }
 
+/// The default TablePacking the shrink proves at — the byte-for-byte packing
+/// `prove_next_layer` uses (`ProveNextLayerParams::default().table_packing`:
+/// public_lanes 1, alu_lanes 4, horner_packed_steps 2, all NPO lanes 1). The
+/// `_with_packing` entrypoints below let a caller retarget it; passing THIS is
+/// identical to the parameterless path.
+///
+/// See docs/deos/APEX-VERIFIER-AIR-REDUCTION.md: the ALU table (the
+/// reduced-opening Horner arithmetic — ~752 opened columns × 19 FRI queries) is
+/// one of the two 2^15-row tables of the measured shrink, and it is
+/// packing-reducible WITHOUT moving the global FRI max height (held at 2^15 by
+/// the poseidon2-W16 Merkle-hash table, whose height NPO packing is left
+/// untouched). Because the FRI shape — query count, fold rounds, blowup — is
+/// unchanged, the gnark contract (`chain/gnark/fri_verify_native.go`, compiled
+/// at R=18 arity-2 rounds / 19 queries / blowup 64) is unaffected; only this
+/// prover's LDE work on the ALU table shrinks.
+pub fn default_shrink_packing() -> TablePacking {
+    ProveNextLayerParams::default().table_packing
+}
+
+/// [`shrink_apex_to_outer`] at a caller-chosen [`TablePacking`]. Use
+/// [`default_shrink_packing`] as the baseline; a heavier ALU packing (e.g.
+/// `TablePacking::new(1, 8).with_horner_pack_k(4)`) trims the ALU-table LDE.
+pub fn shrink_apex_to_outer_with_packing(
+    apex: &RecursionOutput<DreggRecursionConfig>,
+    inner_config: &DreggRecursionConfig,
+    outer_config: &DreggOuterConfig,
+    packing: &TablePacking,
+) -> Result<ApexShrinkProof, String> {
+    let input = apex.into_recursion_input::<BatchOnly>();
+    shrink_recursion_input_to_outer_with_packing(&input, inner_config, outer_config, packing)
+}
+
 /// The split-config core: build the verifier circuit for `input` under the
 /// INNER (BabyBear-hash) config, then commit + prove it under the OUTER
 /// (BN254-hash) config. Generic over the recursion input's AIR parameter so a
 /// uni-STARK inner proof can flow through the same seam as the batch apex.
+///
+/// Proves at [`default_shrink_packing`]; use
+/// [`shrink_recursion_input_to_outer_with_packing`] to retarget the packing.
 pub fn shrink_recursion_input_to_outer<A>(
     input: &RecursionInput<'_, DreggRecursionConfig, A>,
     inner_config: &DreggRecursionConfig,
     outer_config: &DreggOuterConfig,
+) -> Result<ApexShrinkProof, String>
+where
+    A: RecursiveAir<P3BabyBear, EF, LogUpGadget>,
+{
+    shrink_recursion_input_to_outer_with_packing(
+        input,
+        inner_config,
+        outer_config,
+        &default_shrink_packing(),
+    )
+}
+
+/// [`shrink_recursion_input_to_outer`] at an explicit [`TablePacking`]. The
+/// SAME `packing` is threaded to both the table-AIR extraction
+/// (`get_airs_and_degrees_with_prep`) and the prover (`with_table_packing`), so
+/// the shrink proof is internally consistent and self-describing (the verifier
+/// rebuilds the AIRs from `proof.table_packing`). The FRI knobs come from
+/// `outer_config`, NOT from packing — reducing a non-max table's height never
+/// changes the FRI shape the gnark side depends on.
+pub fn shrink_recursion_input_to_outer_with_packing<A>(
+    input: &RecursionInput<'_, DreggRecursionConfig, A>,
+    inner_config: &DreggRecursionConfig,
+    outer_config: &DreggOuterConfig,
+    packing: &TablePacking,
 ) -> Result<ApexShrinkProof, String>
 where
     A: RecursiveAir<P3BabyBear, EF, LogUpGadget>,
@@ -144,7 +208,9 @@ where
         build_next_layer_circuit::<DreggRecursionConfig, A, _, D>(input, inner_config, &backend)
             .map_err(|e| format!("apex-verifier circuit build failed: {e:?}"))?;
 
-    let params = ProveNextLayerParams::default();
+    // The constraint profile stays `prove_next_layer`'s default (Standard →
+    // Baseline ALU); only the packing is caller-controlled.
+    let constraint_profile = ProveNextLayerParams::default().constraint_profile;
 
     // (2) Extract the circuit's table AIRs + preprocessed columns AT THE OUTER
     // CONFIG. The preprocessor/builder set mirrors the FRI backend's own
@@ -167,10 +233,10 @@ where
     let (airs_degrees, primitive_columns, non_primitive_columns) =
         get_airs_and_degrees_with_prep::<DreggOuterConfig, EF, D>(
             &circuit,
-            &params.table_packing,
+            packing,
             &preprocessors,
             &air_builders,
-            params.constraint_profile,
+            constraint_profile,
         )
         .map_err(|e| format!("outer-config table-AIR extraction failed: {e:?}"))?;
     let (airs, degrees): (Vec<_>, Vec<_>) = airs_degrees.into_iter().unzip();
@@ -216,12 +282,12 @@ where
     // ALU variant must match what `get_airs_and_degrees_with_prep` built at
     // this constraint profile — the same Standard→Baseline mapping
     // `prove_next_layer` applies.
-    let alu_variant = match params.constraint_profile {
+    let alu_variant = match constraint_profile {
         ConstraintProfile::Standard => AirVariant::Baseline,
         ConstraintProfile::RecursionOptimized => AirVariant::Optimized,
     };
     let prover = outer_shrink_prover(outer_config)
-        .with_table_packing(params.table_packing.clone())
+        .with_table_packing(packing.clone())
         .with_alu_variant(alu_variant);
     let proof = prover
         .prove_all_tables(&traces, &circuit_prover_data)
@@ -256,7 +322,9 @@ pub fn verify_shrink_proof(
 /// `FriRecursionBackendForExt::non_primitive_provers` — the SAME provers,
 /// constructed through `BatchStarkProver`'s public registration API because
 /// the backend's are typed at the inner config.
-fn outer_shrink_prover(outer_config: &DreggOuterConfig) -> BatchStarkProver<DreggOuterConfig> {
+pub(crate) fn outer_shrink_prover(
+    outer_config: &DreggOuterConfig,
+) -> BatchStarkProver<DreggOuterConfig> {
     let mut prover = BatchStarkProver::new(outer_config.clone());
     prover.register_poseidon2_table::<D>(Poseidon2Config::BABY_BEAR_D4_W16);
     prover.register_poseidon2_table::<D>(Poseidon2Config::BABY_BEAR_D4_W24);
