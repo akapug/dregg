@@ -25,6 +25,17 @@
 //!    multi-height batch openings folded in as the domain shrinks past each
 //!    input height), the per-round sibling evaluations, and the per-round
 //!    native Merkle paths.
+//! 3. **The INPUT-BATCH openings** (the `open_input` seam, p3-fri
+//!    `verifier.rs:524` at the pinned rev) — the structural PCS round shapes
+//!    (`input_rounds`: per round, per matrix, the LDE log-height / opened
+//!    width / opening-point count / next-point generator bits) and, per query
+//!    and per round, the opened rows at the query point plus the native
+//!    Merkle path against the round's commitment
+//!    (main/quotient/preprocessed/permutation). With these, the gnark side
+//!    DERIVES the per-query reduced openings in-circuit — the Merkle
+//!    verification of the input batches followed by the alpha-combination
+//!    Σ αᵏ·(p(z)−p(x))/(z−x) — and binds them against the FRI fold seeds,
+//!    closing the opened-values ↔ commitments soundness seam.
 //!
 //! ## Why the export is trustworthy (self-checks, run on every export)
 //!
@@ -42,17 +53,16 @@
 //!
 //! ## HONEST SCOPE
 //!
-//! The fixture drives the gnark side's FRI CORE over real data: transcript
-//! agreement, commit-phase Merkle openings, fold arithmetic, PoW, final poly.
-//! The reduced openings (initial + roll-ins) are computed HOST-SIDE from the
-//! real opened values and the real alpha and enter the gnark circuit as
-//! witnesses. The remaining in-circuit gap for a FULL batch-STARK verify —
-//! named residual, tracked in `chain/gnark/fri_verify_native.go` — is:
-//! (a) in-circuit verification of the input batch openings (the
-//! `open_input` Merkle checks against main/preprocessed/quotient/permutation
-//! commitments) and the alpha-combination that produces the reduced openings,
-//! (b) per-instance constraint evaluation at zeta and the quotient
-//! recomposition check. Neither changes the transcript this fixture pins.
+//! The fixture drives the gnark side over real data: transcript agreement,
+//! commit-phase Merkle openings, fold arithmetic, PoW, final poly, the
+//! STARK-algebra layer (constraint eval at zeta + quotient identity), AND —
+//! since fixture v2 — the input-batch openings that let the gnark circuit
+//! DERIVE the reduced openings from the committed columns (`open_input`).
+//! The exported reduced openings (initial + roll-ins) remain in the fixture
+//! as the fold-seed witnesses; the gnark circuit re-derives them from the
+//! input-batch data and asserts equality, so they are commitment-BOUND, not
+//! trusted. Remaining before the Groth16 wrap: bake the shape/DAG as VK
+//! constants and size the wrap (see `chain/gnark/stark_verify_native.go`).
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -135,21 +145,64 @@ pub struct FixtureFriShape {
     pub log_global_max_height: usize,
 }
 
+/// One input-batch matrix's structural shape (VK-side data; the widths and
+/// degree bits are also transcript-bound by the binding block). The order of
+/// matrices per round is EXACTLY `verify_batch`'s `coms_to_verify` order —
+/// the same order the opened-values-at-zeta stream flattens in, so the gnark
+/// side consumes that stream sequentially during the alpha-combination.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FixtureInputMatrix {
+    /// log2 of the COMMITTED (LDE) height: `log2(domain.size()) + log_blowup`.
+    pub log_height: usize,
+    /// Opened row width (base-field columns).
+    pub width: usize,
+    /// Opening points: 1 = zeta only; 2 = zeta then zeta_next.
+    pub num_points: usize,
+    /// When `num_points == 2`: log2 of the TRACE domain whose subgroup
+    /// generator advances zeta to zeta_next (`domain.next_point`,
+    /// commit/src/domain.rs:169: multiplication by the subgroup generator).
+    /// 0 when `num_points == 1`.
+    pub next_point_bits: usize,
+}
+
+/// One PCS input round's structural shape (matrices in batch order).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FixtureInputRound {
+    pub matrices: Vec<FixtureInputMatrix>,
+}
+
+/// One query's opening of ONE input batch (aligned with `input_rounds`):
+/// the opened rows at the query point (one per matrix, batch order) and the
+/// native Merkle path (bottom-up, one BN254 word per level of the batch
+/// tree — `max(log_height)` levels; lower matrices inject via row hashes,
+/// not path nodes — merkle-tree/src/mmcs.rs:1052 `verify_batch`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FixtureInputBatch {
+    pub rows: Vec<Vec<u32>>,
+    pub path: Vec<String>,
+}
+
 /// One query's FRI opening data.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FixtureQuery {
     /// The expected sampled query index (pinned in-circuit).
     pub expected_index: u64,
-    /// Reduced opening at `log_global_max_height` (the fold seed).
+    /// Reduced opening at `log_global_max_height` (the fold seed). Since
+    /// fixture v2 the gnark circuit RE-DERIVES this from `input_openings`
+    /// and asserts equality (commitment binding).
     pub initial_eval: [u32; 4],
     /// Reduced openings rolled in as the fold passes each input height,
-    /// aligned with `roll_in_rounds` (same order).
+    /// aligned with `roll_in_rounds` (same order). Re-derived in-circuit
+    /// like `initial_eval`.
     pub roll_ins: Vec<[u32; 4]>,
     /// Per commit round: the sibling evaluation (arity 2 ⇒ one per round).
     pub siblings: Vec<[u32; 4]>,
     /// Per commit round: the native Merkle path (bottom-up, one BN254 word
     /// per level; round r has `log_global_max_height - r - 1` levels).
     pub merkle_paths: Vec<Vec<String>>,
+    /// Per input round (aligned with `input_rounds`): the opened rows at the
+    /// query point + the batch Merkle path (the `open_input` witnesses).
+    pub input_openings: Vec<FixtureInputBatch>,
 }
 
 /// The full gnark fixture for one real shrink proof.
@@ -174,6 +227,9 @@ pub struct RealShrinkFriFixture {
     /// Rounds AFTER whose fold a reduced opening rolls in (ascending;
     /// identical across queries — the input heights are structural).
     pub roll_in_rounds: Vec<usize>,
+    /// The structural PCS input-round shapes (trace, quotient, preprocessed,
+    /// permutation — `verify_batch`'s `coms_to_verify` order).
+    pub input_rounds: Vec<FixtureInputRound>,
     pub queries: Vec<FixtureQuery>,
 }
 
@@ -487,29 +543,55 @@ pub fn export_real_shrink_fri_fixture(
         .collect::<Result<_, _>>()?;
 
     let mut coms: Vec<ComRound> = Vec::new();
+    // The structural input-round shapes, built ALONGSIDE coms so the
+    // (log_height, width, points, next-generator) tuples come from the same
+    // objects the real pcs.verify consumes (self-check 1 below covers both).
+    let mut input_rounds: Vec<FixtureInputRound> = Vec::new();
+    let mat_shape = |domain: &OuterDomain, width: usize, num_points: usize, next_bits: usize| {
+        FixtureInputMatrix {
+            log_height: log2_strict(domain.size()) + OUTER_FRI_LOG_BLOWUP,
+            width,
+            num_points,
+            next_point_bits: if num_points == 2 { next_bits } else { 0 },
+        }
+    };
     // Trace round.
     let mut trace_round = Vec::with_capacity(n);
+    let mut trace_shape = Vec::with_capacity(n);
     for i in 0..n {
         let inst = &p.opened_values.instances[i].base_opened_values;
         let mut points = vec![(zeta, inst.trace_local.clone())];
         if let Some(next) = &inst.trace_next {
             points.push((zeta_nexts[i], next.clone()));
         }
+        trace_shape.push(mat_shape(
+            &ext_doms[i],
+            inst.trace_local.len(),
+            points.len(),
+            p.degree_bits[i],
+        ));
         trace_round.push((ext_doms[i], points));
     }
     coms.push((p.commitments.main.clone(), trace_round));
+    input_rounds.push(FixtureInputRound {
+        matrices: trace_shape,
+    });
     // Quotient chunks round (natural domains of size 2^ext_db, flattened).
     let mut qc_round = Vec::new();
+    let mut qc_shape = Vec::new();
     for i in 0..n {
         let inst = &p.opened_values.instances[i].base_opened_values;
         for chunk in &inst.quotient_chunks {
+            qc_shape.push(mat_shape(&ext_doms[i], chunk.len(), 1, 0));
             qc_round.push((ext_doms[i], vec![(zeta, chunk.clone())]));
         }
     }
     coms.push((p.commitments.quotient_chunks.clone(), qc_round));
+    input_rounds.push(FixtureInputRound { matrices: qc_shape });
     // Preprocessed round.
     if let Some(global) = &common.preprocessed {
         let mut pre_round = Vec::new();
+        let mut pre_shape = Vec::new();
         for &inst_idx in &global.matrix_to_instance {
             let inst = &p.opened_values.instances[inst_idx].base_opened_values;
             let local = inst
@@ -524,16 +606,32 @@ pub fn export_real_shrink_fri_fixture(
             if let Some(next) = &inst.preprocessed_next {
                 points.push((zeta_nexts[inst_idx], next.clone()));
             }
+            pre_shape.push(mat_shape(
+                &pre_domain,
+                local.len(),
+                points.len(),
+                p.degree_bits[inst_idx],
+            ));
             pre_round.push((pre_domain, points));
         }
         coms.push((global.commitment.clone(), pre_round));
+        input_rounds.push(FixtureInputRound {
+            matrices: pre_shape,
+        });
     }
     // Permutation round.
     if let Some(perm_commit) = &p.commitments.permutation {
         let mut perm_round = Vec::new();
+        let mut perm_shape = Vec::new();
         for i in 0..n {
             let inst = &p.opened_values.instances[i];
             if !inst.permutation_local.is_empty() {
+                perm_shape.push(mat_shape(
+                    &ext_doms[i],
+                    inst.permutation_local.len(),
+                    2,
+                    p.degree_bits[i],
+                ));
                 perm_round.push((
                     ext_doms[i],
                     vec![
@@ -544,6 +642,9 @@ pub fn export_real_shrink_fri_fixture(
             }
         }
         coms.push((perm_commit.clone(), perm_round));
+        input_rounds.push(FixtureInputRound {
+            matrices: perm_shape,
+        });
     }
 
     // ---- SELF-CHECK 1: the REAL pcs.verify accepts from the recorded state.
@@ -664,6 +765,61 @@ pub fn export_real_shrink_fri_fixture(
             ));
         }
         let initial_eval = ro[0].1;
+
+        // Serialize the input-batch openings (already host-verified by the
+        // real val_mmcs.verify_batch inside open_input_replica), shape-checked
+        // against the structural input_rounds.
+        if qp.input_proof.len() != input_rounds.len() {
+            return Err(format!(
+                "query {qi}: {} input batches for {} structural rounds",
+                qp.input_proof.len(),
+                input_rounds.len()
+            ));
+        }
+        let mut input_openings: Vec<FixtureInputBatch> = Vec::with_capacity(qp.input_proof.len());
+        for (ri, (batch, round_shape)) in qp.input_proof.iter().zip(input_rounds.iter()).enumerate()
+        {
+            if batch.opened_values.len() != round_shape.matrices.len() {
+                return Err(format!(
+                    "query {qi} input round {ri}: {} opened rows for {} matrices",
+                    batch.opened_values.len(),
+                    round_shape.matrices.len()
+                ));
+            }
+            for (row, m) in batch.opened_values.iter().zip(&round_shape.matrices) {
+                if row.len() != m.width {
+                    return Err(format!(
+                        "query {qi} input round {ri}: row width {} != matrix width {}",
+                        row.len(),
+                        m.width
+                    ));
+                }
+            }
+            let max_lh = round_shape
+                .matrices
+                .iter()
+                .map(|m| m.log_height)
+                .max()
+                .ok_or("empty input round")?;
+            if batch.opening_proof.len() != max_lh {
+                return Err(format!(
+                    "query {qi} input round {ri}: path has {} levels, tree height is {max_lh}",
+                    batch.opening_proof.len()
+                ));
+            }
+            input_openings.push(FixtureInputBatch {
+                rows: batch
+                    .opened_values
+                    .iter()
+                    .map(|row| row.iter().map(bb_u32).collect())
+                    .collect(),
+                path: batch
+                    .opening_proof
+                    .iter()
+                    .map(|d| bn254_hex(&d[0]))
+                    .collect(),
+            });
+        }
         let mut ro_iter = ro[1..].iter().peekable();
 
         let mut folded = initial_eval;
@@ -749,15 +905,17 @@ pub fn export_real_shrink_fri_fixture(
             roll_ins: q_roll_vals.iter().map(ef_coords).collect(),
             siblings,
             merkle_paths,
+            input_openings,
         });
     }
 
     Ok(RealShrinkFriFixture {
-        version: 1,
+        version: 2,
         description: "REAL dregg apex shrink proof (BatchStarkProof<DreggOuterConfig> over a real \
-                      ir2_leaf_wrap apex): pre-FRI transcript events + FRI commit-phase data for \
-                      chain/gnark VerifyFriNative. Reduced openings computed host-side (see \
-                      apex_shrink_gnark_export.rs HONEST SCOPE)."
+                      ir2_leaf_wrap apex): pre-FRI transcript events + FRI commit-phase data + \
+                      per-query INPUT-BATCH openings (open_input) for the chain/gnark native \
+                      verifier — the reduced openings are re-derived in-circuit from the \
+                      committed columns (see apex_shrink_gnark_export.rs HONEST SCOPE)."
             .into(),
         degree_bits: p.degree_bits.clone(),
         fri: FixtureFriShape {
@@ -785,6 +943,7 @@ pub fn export_real_shrink_fri_fixture(
         final_poly: fri.final_poly.iter().map(ef_coords).collect(),
         query_pow_witness: bb_u32(&fri.query_pow_witness),
         roll_in_rounds: roll_in_rounds.unwrap_or_default(),
+        input_rounds,
         queries: queries_out,
     })
 }

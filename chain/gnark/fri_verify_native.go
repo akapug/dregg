@@ -62,15 +62,16 @@
 //   Arity-2, LogFinalPolyLen = 0 (the DreggOuterConfig shape; blowup/query
 //   split as pinned by the fixture).
 //
-//   NAMED RESIDUAL (the remaining gap to a FULL batch-STARK verify, i.e. the
-//   last piece before the Groth16 wrap): the per-query reduced openings
-//   (InitialEval + RollIns) enter as WITNESSES, computed host-side from the
-//   real opened values and alpha. In-circuit they must eventually be DERIVED:
-//   (a) verify the input batch openings (open_input's Merkle checks against
-//   the main/preprocessed/quotient/permutation commitments) and the
-//   alpha-combination sum, and (b) evaluate each instance's constraints at
-//   zeta and check the quotient recomposition. Neither changes the
-//   transcript; the transcript is fully bound today.
+//   SEAM CLOSED (stark_open_input.go): the per-query reduced openings
+//   (InitialEval + RollIns) still enter as witnesses for the fold chain, but
+//   the open_input layer now RE-DERIVES them in-circuit — the input-batch
+//   Merkle openings against the main/quotient/preprocessed/permutation
+//   commitments plus the alpha-combination Σ αᵏ(p(z)−p(x))/(z−x) — and
+//   asserts equality, so they are commitment-BOUND (the assembled circuit in
+//   stark_algebra_real_fixture_test.go wires this via the query bits this
+//   function returns). Constraint-eval-at-zeta + quotient recomposition:
+//   stark_verify_native.go. Remaining before the Groth16 wrap: bake the
+//   shape/DAG as VK constants and size the wrap.
 package friverifier
 
 import (
@@ -266,6 +267,11 @@ func CheckWitnessNative(c *MultiFieldChallenger, powBits int, witness frontend.V
 // the single-height case). A tampered root/opening/witness/final-poly/roll-in,
 // or a divergent transcript, yields an unsatisfiable constraint system
 // (fail-closed).
+//
+// Returns each query's live-sampled DOMAIN index bits (LSB-first, the extra
+// query-index bits already dropped) so the open_input layer
+// (stark_open_input.go) can verify the input-batch openings and derive the
+// reduced openings at the SAME query points the fold walked.
 func VerifyFriNative(
 	bb *BBApi,
 	cfg FriConfig,
@@ -276,8 +282,8 @@ func VerifyFriNative(
 	queries []FriNativeQueryOpening,
 	rollInAfterRound []int,
 	ch *MultiFieldChallenger,
-) {
-	verifyFriNativeImpl(bb, cfg, R, commitRoots, finalPoly, powWitness, queries, rollInAfterRound, ch, false)
+) [][]frontend.Variable {
+	return verifyFriNativeImpl(bb, cfg, R, commitRoots, finalPoly, powWitness, queries, rollInAfterRound, ch, false)
 }
 
 // verifyFriNativeImpl is VerifyFriNative with the same test-only order flag as
@@ -296,7 +302,7 @@ func verifyFriNativeImpl(
 	rollInAfterRound []int,
 	ch *MultiFieldChallenger,
 	swapOrder bool,
-) {
+) [][]frontend.Variable {
 	if len(finalPoly) != (1 << cfg.LogFinalPolyLen) {
 		panic("VerifyFriNative: len(finalPoly) must equal 2^LogFinalPolyLen")
 	}
@@ -342,12 +348,15 @@ func verifyFriNativeImpl(
 	logMaxHeight := R + cfg.LogBlowup + cfg.LogFinalPolyLen
 	numIndexBits := logMaxHeight + cfg.ExtraQueryIndexBits
 	finalEval := finalPoly[0] // LogFinalPolyLen==0: the final poly is a constant.
+	queryBits := make([][]frontend.Variable, 0, len(queries))
 	for _, q := range queries {
 		// verifier.rs:268 index = sample_bits(log_global_max_height + extra).
 		idxBits := ch.SampleBitsDecomposed(numIndexBits)
 		// verifier.rs:287 domain_index = index >> extra: drop the low extra bits.
 		domainBits := idxBits[cfg.ExtraQueryIndexBits:]
+		queryBits = append(queryBits, domainBits)
 		VerifyFriQueryNative(bb, R, logMaxHeight, commitRoots, betas, q.Siblings, q.MerkleProofs,
 			domainBits, q.InitialEval, rollInAfterRound, q.RollIns, finalEval) // verifier.rs:298 verify_query
 	}
+	return queryBits
 }

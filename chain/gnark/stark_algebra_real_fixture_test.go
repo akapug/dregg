@@ -15,10 +15,11 @@
 // the pinned 5-instance shape (see stark_verify_native.go ShrinkVk).
 //
 // HONEST SCOPE: see stark_verify_native.go — the constraint evaluation and
-// quotient identity are REAL checks for all 5 instances; the remaining
-// soundness seam is the in-circuit derivation of the FRI reduced openings
-// from these same opened values (open_input), which still enter the FRI
-// core as host-computed witnesses.
+// quotient identity are REAL checks for all 5 instances, and the open_input
+// seam is CLOSED: the assembled circuit below Merkle-opens the input batches
+// against the transcript-observed commitments and re-derives the FRI reduced
+// openings from the opened columns (stark_open_input.go), binding the fold
+// seeds to the committed trace.
 package friverifier
 
 import (
@@ -35,15 +36,22 @@ import (
 // ----------------------------------------------------------------------------
 
 // shrinkStarkPrefixLoc holds flat offsets into the prefix observe/sample
-// streams for the STARK-algebra inputs.
+// streams for the STARK-algebra inputs, plus (for the open_input seam) the
+// FRI batch-combination alpha and the four input-round commitment digests'
+// offsets into the flat digest-word stream.
 type shrinkStarkPrefixLoc struct {
 	permChSampleOff int // 8 values: perm alpha then perm beta coords
 	alphaSampleOff  int // 4 values
 	zetaSampleOff   int // 4 values
+	friAlphaOff     int // 4 values: the FRI batch-combination alpha
 	openedObsOff    int // 4*totalEF values
 	openedObsLen    int
 	cumObsOff       int // 4*numGlobalLookups values
 	cumObsLen       int
+	// Digest-word offsets of the input-round commitments, in PCS ROUND order
+	// (trace=main, quotient, preprocessed, permutation) — the roots the
+	// open_input Merkle checks bind against.
+	inputRootDigOff [4]int
 }
 
 // locateShrinkStarkPrefix walks the fixture's event stream and anchors the
@@ -64,15 +72,21 @@ func locateShrinkStarkPrefix(fx *shrinkRealFixture) (shrinkStarkPrefixLoc, error
 	// Cumulative flat offsets per event.
 	obsOff := make([]int, n)
 	sampOff := make([]int, n)
-	obs, samp := 0, 0
+	digOff := make([]int, n)
+	var digEvents []int
+	obs, samp, dig := 0, 0, 0
 	for i, ev := range evs {
 		obsOff[i] = obs
 		sampOff[i] = samp
+		digOff[i] = dig
 		switch ev.Kind {
 		case "observe_bb":
 			obs += len(ev.Values)
 		case "sample_bb":
 			samp += len(ev.Values)
+		case "observe_digest":
+			dig += len(ev.Words)
+			digEvents = append(digEvents, i)
 		}
 	}
 	check := func(i int, kind string, vals int) error {
@@ -101,14 +115,35 @@ func locateShrinkStarkPrefix(fx *shrinkRealFixture) (shrinkStarkPrefixLoc, error
 	if len(evs[n-2].Values)%4 != 0 || len(evs[n-6].Values)%4 != 0 {
 		return shrinkStarkPrefixLoc{}, fmt.Errorf("opened/cum streams not EF-aligned")
 	}
+	// The four commitment digests, in OBSERVE order main, preprocessed,
+	// permutation, quotient (verify_batch's transcript); the permutation and
+	// quotient anchors were already pinned above. Each cap is one root
+	// (cap height 0), one BN254 word.
+	if len(digEvents) != 4 {
+		return shrinkStarkPrefixLoc{}, fmt.Errorf("%d digest events (want 4 commitment caps)", len(digEvents))
+	}
+	if digEvents[2] != n-7 || digEvents[3] != n-4 {
+		return shrinkStarkPrefixLoc{}, fmt.Errorf("digest events %v do not anchor perm/quotient", digEvents)
+	}
+	for _, i := range digEvents {
+		if len(evs[i].Words) != 1 {
+			return shrinkStarkPrefixLoc{}, fmt.Errorf("event %d: cap has %d words (want 1)", i, len(evs[i].Words))
+		}
+	}
 	return shrinkStarkPrefixLoc{
 		permChSampleOff: sampOff[n-8],
 		alphaSampleOff:  sampOff[n-5],
 		zetaSampleOff:   sampOff[n-3],
+		friAlphaOff:     sampOff[n-1],
 		openedObsOff:    obsOff[n-2],
 		openedObsLen:    len(evs[n-2].Values),
 		cumObsOff:       obsOff[n-6],
 		cumObsLen:       len(evs[n-6].Values),
+		// PCS round order: trace(main), quotient, preprocessed, permutation.
+		inputRootDigOff: [4]int{
+			digOff[digEvents[0]], digOff[digEvents[3]],
+			digOff[digEvents[1]], digOff[digEvents[2]],
+		},
 	}, nil
 }
 
@@ -174,6 +209,7 @@ type shrinkStarkExtract struct {
 	loc      shrinkStarkPrefixLoc
 	openedEF []bbExtRef
 	cumSums  []bbExtRef
+	friAlpha bbExtRef // the FRI batch-combination alpha (open_input)
 	ch       shrinkStarkChallengesRef
 }
 
@@ -220,6 +256,7 @@ func extractShrinkStark(t *testing.T, fx *shrinkRealFixture) *shrinkStarkExtract
 		loc:      loc,
 		openedEF: groupEF(obs[loc.openedObsOff : loc.openedObsOff+loc.openedObsLen]),
 		cumSums:  groupEF(obs[loc.cumObsOff : loc.cumObsOff+loc.cumObsLen]),
+		friAlpha: ext(loc.friAlphaOff),
 		ch: shrinkStarkChallengesRef{
 			permAlpha: ext(loc.permChSampleOff),
 			permBeta:  ext(loc.permChSampleOff + 4),
@@ -448,12 +485,15 @@ func TestApexShrinkRealFixtureStarkAlgebraGadgetRejectsTampers(t *testing.T) {
 // The assembled native verify: transcript replay + STARK algebra + FRI core
 // ----------------------------------------------------------------------------
 
-// apexShrinkFullVerifyCircuit is the fullest assembled native-verify shape so
-// far: ONE Define that replays the real pre-FRI transcript (pinning every
-// challenge), runs the STARK-algebra layer over the SAME transcript-bound
-// opened values, and verifies the FRI core — everything on the real proof.
-// (The remaining gap to a full batch-STARK verify is named in
-// stark_verify_native.go HONEST SCOPE.)
+// apexShrinkFullVerifyCircuit is the ASSEMBLED native verify: ONE Define that
+// replays the real pre-FRI transcript (pinning every challenge), runs the
+// STARK-algebra layer over the SAME transcript-bound opened values, verifies
+// the FRI core, and — the open_input seam closure — Merkle-opens the input
+// batches against the transcript-observed commitments and re-derives the FRI
+// reduced openings from the opened columns, binding them to the fold seeds:
+//
+//	commitments → (Merkle open + α-reduce) → FRI low-degree
+//	           ↘ opened-at-zeta → constraint/quotient identity → accept
 type apexShrinkFullVerifyCircuit struct {
 	script           []shrinkPrefixOp
 	cfg              FriConfig
@@ -461,7 +501,8 @@ type apexShrinkFullVerifyCircuit struct {
 	rollInAfterRound []int
 	shapes           []StarkInstanceShape
 	loc              shrinkStarkPrefixLoc
-	sym              *SymbolicConstraints // structural: FULL constraint eval
+	sym              *SymbolicConstraints  // structural: FULL constraint eval
+	inputRounds      []OpenInputRoundShape // structural: open_input shapes
 
 	PrefixObs     []frontend.Variable
 	PrefixDigests []frontend.Variable
@@ -470,6 +511,7 @@ type apexShrinkFullVerifyCircuit struct {
 	FinalPoly     []BBExt
 	PowWitness    frontend.Variable
 	Queries       []FriNativeQueryOpening
+	InputOpenings [][]OpenInputBatchOpening // [query][input round]
 }
 
 func (c *apexShrinkFullVerifyCircuit) Define(api frontend.API) error {
@@ -508,21 +550,39 @@ func (c *apexShrinkFullVerifyCircuit) Define(api frontend.API) error {
 		copy(e[:], c.PrefixSamples[off:off+4])
 		return e
 	}
+	openedEF := groupEF(c.PrefixObs[c.loc.openedObsOff : c.loc.openedObsOff+c.loc.openedObsLen])
+	zeta := sampleExt(c.loc.zetaSampleOff)
 	VerifyShrinkStarkAlgebra(bb, c.shapes,
-		groupEF(c.PrefixObs[c.loc.openedObsOff:c.loc.openedObsOff+c.loc.openedObsLen]),
+		openedEF,
 		groupEF(c.PrefixObs[c.loc.cumObsOff:c.loc.cumObsOff+c.loc.cumObsLen]),
 		ShrinkStarkChallenges{
 			PermAlpha: sampleExt(c.loc.permChSampleOff),
 			PermBeta:  sampleExt(c.loc.permChSampleOff + 4),
 			Alpha:     sampleExt(c.loc.alphaSampleOff),
-			Zeta:      sampleExt(c.loc.zetaSampleOff),
+			Zeta:      zeta,
 		},
 		c.sym, nil)
 
 	// FRI core, drawing betas and query indices live from the same
 	// transcript.
-	VerifyFriNative(bb, c.cfg, c.r, c.CommitRoots, c.FinalPoly, c.PowWitness,
+	queryBits := VerifyFriNative(bb, c.cfg, c.r, c.CommitRoots, c.FinalPoly, c.PowWitness,
 		c.Queries, c.rollInAfterRound, ch)
+
+	// open_input: bind the fold seeds to the COMMITTED columns. Roots are the
+	// transcript-observed commitment digests; zeta / the FRI alpha are the
+	// pinned transcript challenges; the opened-at-zeta values are the same
+	// variables the algebra layer consumed; the index bits are the same the
+	// fold walked.
+	roots := make([]frontend.Variable, len(c.loc.inputRootDigOff))
+	for i, off := range c.loc.inputRootDigOff {
+		roots[i] = c.PrefixDigests[off]
+	}
+	pre := NewOpenInputPrecomp(bb, c.inputRounds, zeta, sampleExt(c.loc.friAlphaOff),
+		c.r+c.cfg.LogBlowup+c.cfg.LogFinalPolyLen)
+	for qi := range c.Queries {
+		BindOpenInputToFriSeedsNative(bb, c.inputRounds, pre, queryBits[qi], roots,
+			c.InputOpenings[qi], openedEF, c.Queries[qi], c.rollInAfterRound)
+	}
 	return nil
 }
 
@@ -537,12 +597,14 @@ func allocApexShrinkFullVerifyCircuit(t *testing.T, fx *shrinkRealFixture, ex *s
 		shapes:           ex.shapes,
 		loc:              ex.loc,
 		sym:              sym,
+		inputRounds:      shrinkInputRoundsFromFixture(t, fx, ex.shapes),
 		PrefixObs:        inner.PrefixObs,
 		PrefixDigests:    inner.PrefixDigests,
 		PrefixSamples:    inner.PrefixSamples,
 		CommitRoots:      inner.CommitRoots,
 		FinalPoly:        inner.FinalPoly,
 		Queries:          inner.Queries,
+		InputOpenings:    allocShrinkInputOpenings(fx),
 	}
 }
 
@@ -560,6 +622,7 @@ func assignApexShrinkFullVerifyCircuit(t *testing.T, fx *shrinkRealFixture, ex *
 		shapes:           ex.shapes,
 		loc:              ex.loc,
 		sym:              sym,
+		inputRounds:      shrinkInputRoundsFromFixture(t, fx, ex.shapes),
 		PrefixObs:        inner.PrefixObs,
 		PrefixDigests:    inner.PrefixDigests,
 		PrefixSamples:    inner.PrefixSamples,
@@ -567,6 +630,7 @@ func assignApexShrinkFullVerifyCircuit(t *testing.T, fx *shrinkRealFixture, ex *
 		FinalPoly:        inner.FinalPoly,
 		PowWitness:       inner.PowWitness,
 		Queries:          inner.Queries,
+		InputOpenings:    assignShrinkInputOpenings(t, fx),
 	}
 }
 
