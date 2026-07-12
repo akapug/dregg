@@ -539,3 +539,28 @@ live registry still routes the bare gap-carrying descriptors until the ONE ember
 (the widened descriptors + VK commits + drift-gate FP pins + fixture re-emissions all ride that single regen). No
 live routing changed; no liveness degraded. THE CAMPAIGN: found four exploitable deployed soundness gaps the ℤ
 "verified" model hid, and closed all four with field-faithful in-circuit enforcement + proofs + forgery-UNSAT witnesses.
+
+## ⚠⚠ CANONICAL-HEAP-TREE (5th-candidate, SEVERITY PENDING RECONCILIATION) — 2026-07-12
+Refusing to CARRY the `CanonicalHeapTree` fact (ember: "prove real config evolution, don't carry facts") exposed a
+real question about the deployed memory/heap circuit. Doc: `docs/reference/CANONICAL-HEAP-TREE-INVESTIGATION.md`
+(verdict B with a C caveat). The memory soundness of the 7 mapOp effects (NoteSpend nullifiers / NoteCreate
+commitments / cell-creation / HeapWrite) needs the committed heap to be a genuine SORTED tree so ABSENCE proofs are
+complete. Confirmed IN LEAN: `SortedTreeNonMembership{,Heap8}` carry `SpineCommits.sorted` as a HYPOTHESIS (never an
+axiom; consumed, not forced) — the per-turn MapOps AIR forces path-binding + per-POSITION adjacency (idx_upper =
+idx_lower+1, key_lo < k < key_hi) but the Lean model does NOT derive whole-tree key-ordering `key(pos i) <
+key(pos i+1)`.
+THE TENSION (unresolved — the two fixes differ): (a) REAL DEPLOYED GAP — if the deployed per-turn mapOps `.insert`
+gate is an in-place position overwrite (investigation's read, trace_rotated.rs:~601) with NO sorted-splice
+enforcement, then a malicious prover commits a NON-SORTED heap and forges an absence → DOUBLE-SPEND. Concrete
+witness: heap [MIN,(20),(30),(25,n),MAX] with spent nullifier n at addr 25 OUT OF ORDER at position 3; prove n
+absent via positions 1-2 (20<25<30 brackets 25, both open to the genuine root); the circuit never checks
+pos2.key(30) < pos3.key(25) → forge accepted → re-spend n. vs (b) FAITHFULNESS DEBT — `heap_root.rs:39` claims
+"genuine in-circuit sorted-tree update/insert gates" and `whole_image_fold.rs:165` is "a sorted-insert chain pinned
+at both ends"; IF those force sorted placement on the per-turn insert path, sortedness is DISCHARGEABLE from
+acceptance and the fix is in the LEAN (derive SpineCommits.sorted, stop carrying it).
+RECONCILIATION NEEDED: does the DEPLOYED per-turn mapOps insert gate force sorted placement (heap_root sorted-tree
+gates wired to the mapOps path → faithfulness debt) or not (in-place overwrite → real gap)? Investigating. FIX either
+way is one shared lane for all 7 mapOp effects: (real gap) strengthen the .insert gate to sorted-splice + discharge
+the chain invariant from sorted genesis (whole_image_fold pattern); (faithfulness) wire the deployed sorted-tree
+gates into the Lean derivation. The config-evolution object carries `CanonicalHeapExtract` as the ONE named residual
+until this resolves.
