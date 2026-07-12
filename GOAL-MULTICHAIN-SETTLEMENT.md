@@ -40,10 +40,11 @@ Deferred: workspace consolidation (root Cargo.toml churned by other terminals �
 edge conversions use minimal-primitive-fields at the crate edge, so they DON'T need it).
 
 ## Next 3 moves
-1. Launch gnark MultiField challenger (Fable) + rung-3 fold-pilot grounding scout (Fable).
-2. Dep-check: can eth-lightclient/cosmos-lightclient join the workspace (member-not-default)? →
-   decides the cross-chain edge-conversion shape.
-3. Launch cross-chain edge lanes (shaped by #2) + widen-sockets.
+1. Commit gov-narrow-tag (Evm→u64 widening; test compiling). Wave 1 then fully integrated.
+2. Wave 2 (clean-and-mine): governance-side `from_foreign_fields` constructor (completes the
+   cross-chain edge→ProvenForeignHolding wire, with cross-crate tag-consistency tests) + Base
+   OP-stack finality source (eth-lightclient) + opportunistic deploy-gate/socket widening.
+3. Pick up the Rust shrink layer + fold-P0 the moment circuit-prove goes quiet (currently churned).
 
 ## ⚠ Collision map (checked 07-12)
 circuit-prove/ is ACTIVELY churned by stark-kill/vk-epoch (ivc_turn_chain.rs uncommitted-modified now;
@@ -58,5 +59,16 @@ Rust shrink layer waits on circuit-prove going quiet.
   CR-floored, cross-chain gov spine, deploy-gate policies.
 - 07-12 rung-3 fold-pilot PLAN committed (VERIFIED-LIGHTCLIENT-FOLD-PILOT.md): EVM-MPT/keccak cheapest;
   folds through deployed CarrierWitness::Custom (verified citations). Build DEFERRED (circuit-prove churn).
-- 07-12 Wave 1 launched (4 Fable lanes + audits): gnark-multifield, eth-edge, cosmos-edge, gov-narrow-tag.
-  Waiting on completion.
+- 07-12 Wave 1 landed (4 Fable lanes + audits, all fail-open=false/vacuity=false):
+  · gnark-multifield: BabyBear→BN254 pack/split, MEASURED 32.3× (984 vs 31,747 R1CS), fork-executed KAT. Committed.
+  · cosmos-edge: bank-balance decode + bisection, real on-chain ATOM KAT. Committed.
+  · eth-edge: EVM holding→foreign-fields (U256>u128 refuse) + Electra rotation. AUDIT MINOR fixed:
+    FinalizedExecution made genuinely unforgeable (private fields + accessors, not just a sealed literal —
+    the pub fields still allowed mutation). Committed (2 commits: lane + hardening).
+  · gov-narrow-tag: u128→u64 fail-closed narrow + multi-network ChainId(Evm(u64)/Cosmos(hash)). Committed;
+    fixed the lane's own stale 5-byte wire test + added the Palm(>2³²) representability test. WAVE 1 DONE.
+  Audit pattern held: caught the mutation-hole in my own first seal; fixed before final commit.
+- 07-12 CROSS-CHAIN WIRE done: ProvenForeignHolding::from_foreign_fields(chain, chain_tag,...) pairs the standalone
+  edges' fields with the full ChainId, fail-closed on family-tag mismatch; cross-crate tags pinned. Thread-3 core DONE.
+- 07-12 Wave 2 launched (Fable): Base OP-stack finality (eth-lightclient) + secp256k1 EVM-address owner binding
+  (dregg-governance) — disjoint. Waiting on both.

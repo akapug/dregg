@@ -7545,3 +7545,16 @@ one keccak, zero sigs) as a foldable CellProgram custom leaf. Verified the load-
 deployed CarrierWitness::Custom arm (ivc_turn_chain.rs:3107) zero-new-circuit-code + no VK movement; mptVerify
 is H-parametric (clean Lean-first link). Ladder P0->P1->P2 (TID_KECCAK chip = real rung 3). COORD: fold
 machinery shared with stark-kill's rung-3 ladder — P0 build must be additive + collision-checked first.
+
+## Wave 1 + cross-chain wire landed (2026-07-12, multichain-settlement lane, Fable)
+Wave 1 (4 lanes, all audited, all fail-open=false): gnark MultiField challenger [BabyBear→BN254 pack/split,
+MEASURED 32.3× (984 vs 31,747 R1CS), fork-executed KAT] · cosmos bank-balance edge + bisection [real ATOM KAT]
+· eth EVM edge (U256>u128 refuse) + Electra rotation · gov u128→u64 fail-closed narrow + multi-network
+ChainId(Evm u64/Cosmos hash). Audit caught + I fixed: eth FinalizedExecution made genuinely unforgeable
+(private fields+accessors, not just a sealed literal — pub fields still allowed mutation); Evm widened u32→u64
+(Palm EIP-155 id > 2³²). THEN the cross-chain wire: ProvenForeignHolding::from_foreign_fields(chain, chain_tag,
+...) pairs the standalone edges' plain-primitive fields with the full ChainId, fail-closed on family-tag
+mismatch; cross-crate tags pinned (Solana 0/Evm 1/Cosmos 2). Thread-3 core DONE.
+Wave 2 running: Base OP-stack finality (L1-anchored output root → L2 state → ERC-20, in eth-lightclient) +
+secp256k1 EVM-address owner binding (so EVM holders can actually bind→vote, closing the Ed25519-only gap).
+Followups: Cosmos secp256k1/bech32 binding; the shrink-layer + rung-3 fold-P0 blocked on circuit-prove churn.
