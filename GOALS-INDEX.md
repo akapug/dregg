@@ -18,6 +18,7 @@ file; never clobber another lane's.
 | **verified-system** | `GOAL-VERIFIED-SYSTEM.md` | ⚠ **RETRACTED 07-09** — declared "done" on NAMED carriers (`StarkSound`/`RestHashIffFrame`/toy models); superseded by **honest-verification** |
 | **honest-verification** | `GOAL-HONEST-VERIFICATION.md` | RETIRE THE CARRIER DEBT: discharge every DEBT-A (`StarkSound`) + DEBT-B (finite-map / `RestHashIffFrame`) carrier to a PROVED theorem or a genuine floor item, so the apex rests only on `{Poseidon2SpongeCR, lattice/DL, leanc}` — no `seL4-cited`, nothing named. Hub for `CARRIER-CENSUS` + `DEBT-B` + `DELTA-FUTURE` |
 | **dreggic-collectivity-web** | `GOAL-COLLECTIVE-FICTION-DEMO.md` | make the verifiable collective-fiction/game WEB platform as good as possible — attested-dm engine + demo/ arcade frontend/UX + collective voting/co-authoring + dregg-dice/pqvrf verifiable randomness + verify_replay trust + authoring + docs |
+| **multichain-settlement** | `GOAL-MULTICHAIN-SETTLEMENT.md` | dregg = the trustless plug for every chain — proof-carrying settlement + non-custodial proof-of-holdings governance (Solana/EVM/Cosmos) + the STARK→EVM wrap made efficient (chain/gnark BN254-native-hash) + verified light clients toward rung-3 folded. Owns chain/gnark + bridge/light-clients + gov cross-chain spine + dregg-deploy; stark-kill owns trace_rotated.rs/AIRs |
 
 **Shared-tree discipline (all lanes):** additive-only in swarms; commit surgically — NEVER
 stage another lane's files (e.g. `dregg-lean-ffi/src/lib.rs`, another `GOAL-*.md`); no git
