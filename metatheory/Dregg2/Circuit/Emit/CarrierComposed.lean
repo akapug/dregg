@@ -59,7 +59,7 @@ open Dregg2.Circuit.DeployedCapTree (Digest8)
 open Dregg2.Circuit.Emit.EffectVmEmit (VmConstraint holdsVm_piFirst_true)
 open Dregg2.Circuit.Emit.EffectVmEmitRotationV3
   (makeSovereignV3 withDfaRcPins satisfied2_of_withDfaRcPins)
-open Dregg2.Circuit.Emit.EffectVmEmitRotationWide (wideAppend isLegacyCommitPin1)
+open Dregg2.Circuit.Emit.EffectVmEmitRotationWide (wideAppend isLegacyCommitPin1 wideAppendixSpan)
 open Dregg2.Circuit.Emit.CarrierOctetGates
   (withSovereignKeyCommit withSovereignKeyCommit_forces withSovereignKeyCommit_rejects_forged
    satisfied2_of_withSovereignKeyCommit
@@ -67,8 +67,8 @@ open Dregg2.Circuit.Emit.CarrierOctetGates
 open Dregg2.Circuit.Emit.CapOpenEmit (transferV3)
 
 set_option autoImplicit false
--- v13 fields-octet grow: the wide appendix is 57 carriers/side; `decide`/`rfl` reductions over the
--- widened composed members need more kernel recursion depth.
+-- Wide-carrier rotation: the wide appendix is 60 carriers/side (960 columns total); `decide`/`rfl`
+-- reductions over the widened composed members need more kernel recursion depth.
 set_option maxRecDepth 16000
 
 /-- The sovereign KEY_COMMIT teeth column base — the ABSOLUTE trace column of the executor's
@@ -232,18 +232,18 @@ def MS_WIDE_BB : Nat :=
 /-- **`makeSovereignV3DeployedWide`** — the WIDE deployed sovereign member (the
 `WIDE_REGISTRY_STAGED_TSV` row under the live key, via `EmitWideRegistryProbe`'s in-place
 replacement): teeth PIs 58..61 strictly AHEAD of the 16 wide anchors (62..77), the KEY_COMMIT
-gate OUTERMOST (its 32-column digest appendix at the wide trace end, `dgBase = 2559`). -/
+gate OUTERMOST (its 32-column digest appendix at the wide trace end, `dgBase = 2607`). -/
 def makeSovereignV3DeployedWide : EffectVmDescriptor2 :=
   withSovereignKeyCommit (wideAppend makeSovereignV3Pinned MS_WIDE_BB (MS_WIDE_BB + 239))
     SOVEREIGN_KEY_COMMIT_COL
 
--- Geometry: narrow 62 PIs / width +32; wide 78 PIs / 1647+912+32 = 2591 wide, teeth ahead of anchors.
+-- Geometry: narrow 62 PIs / width +32; wide 78 PIs / 1647+960+32 = 2639 wide, teeth ahead of anchors.
 #guard makeSovereignV3.piCount == 54
 #guard makeSovereignV3Pinned.piCount == 62
 #guard makeSovereignV3Deployed.piCount == 62
 #guard makeSovereignV3Deployed.traceWidth == makeSovereignV3.traceWidth + 32
 #guard makeSovereignV3DeployedWide.piCount == 78
-#guard makeSovereignV3DeployedWide.traceWidth == makeSovereignV3.traceWidth + 912 + 32
+#guard makeSovereignV3DeployedWide.traceWidth == makeSovereignV3.traceWidth + wideAppendixSpan + 32
 #guard makeSovereignV3.traceWidth == 1647
 #guard MS_WIDE_BB == 188
 
@@ -482,35 +482,37 @@ theorem withMembershipTeethPinsAt_constraints (teethCol : Nat) (g : EffectVmDesc
       = g.constraints ++ (List.range 2).map (fun j =>
           VmConstraint2.base (.piBinding .first (teethCol + j) (g.piCount + j))) := rfl
 
-/-- The WIDE membership teeth columns: PAST the wide carriers (`1647 + 912 = 2559..2560` — the
-producer lays the host at 1647, `append_wide_carriers` the 912 carrier columns at 1647..2558, and
-the teeth ride the END, exactly the `membership_binding_deployed_tooth.rs` twin geometry). -/
-def MEMBERSHIP_TEETH_COL_WIDE : Nat := 2559
+/-- The WIDE membership teeth columns: PAST the wide carriers (`1647 + 960 = 2607..2608` — the
+producer lays the host at 1647, `append_wide_carriers` the 960 carrier columns at 1647..2606, and
+the teeth ride the END, exactly the `membership_binding_deployed_tooth.rs` twin geometry).
+Pinned by the `#guard` below to the DERIVED `transferV3.traceWidth + wideAppendixSpan` (the
+numeral form keeps the downstream `omega` disequalities decidable). -/
+def MEMBERSHIP_TEETH_COL_WIDE : Nat := 2607
 
-#guard MEMBERSHIP_TEETH_COL_WIDE == transferV3.traceWidth + 912
+#guard MEMBERSHIP_TEETH_COL_WIDE == transferV3.traceWidth + wideAppendixSpan
 
 /-- **`transferV3MembershipWide`** — the WIDE deployed membership-teeth transfer member (the
 `WIDE_REGISTRY_STAGED_TSV` row under the live key `transferVmDescriptor2R24`): teeth PIs 50..51
 strictly AHEAD of the 16 wide anchors (52..67); the wide carriers at the HOST width 1647 (the
-producer's `append_wide_carriers` base — UNSHIFTED); the teeth COLUMNS past them (2559..2560);
+producer's `append_wide_carriers` base — UNSHIFTED); the teeth COLUMNS past them (2607..2608);
 `traceWidth` bumped +2 to cover them. -/
 def transferV3MembershipWide : EffectVmDescriptor2 :=
   let w := wideAppend (withMembershipTeethPinsAt MEMBERSHIP_TEETH_COL_WIDE (withDfaRcPins transferV3))
     TR_WIDE_BB (TR_WIDE_BB + 239)
   { w with traceWidth := w.traceWidth + 2 }
 
--- Geometry: narrow 52 PIs / width 1649; wide 68 PIs / 2561 wide (carriers 1647.., teeth 2559..2560).
+-- Geometry: narrow 52 PIs / width 1649; wide 68 PIs / 2609 wide (carriers 1647.., teeth 2607..2608).
 #guard transferV3.piCount == 46
 #guard transferV3Membership.piCount == 52
 #guard transferV3Membership.traceWidth == transferV3.traceWidth + 2
 #guard transferV3.traceWidth == 1647
 #guard transferV3MembershipWide.piCount == 68
-#guard transferV3MembershipWide.traceWidth == 1647 + 912 + 2
+#guard transferV3MembershipWide.traceWidth == transferV3.traceWidth + wideAppendixSpan + 2
 
 /-- **THE DEPLOYED MEMBERSHIP EXPOSURE KEYSTONE (wide — the `WIDE_REGISTRY_STAGED_TSV` member the
 fold tooth proves).** On any `Satisfied2` witness of the wide member, each published teeth PI
 (50..51) is CONGRUENT (mod the BabyBear prime — the field-faithful pin denotation) to its teeth
-column (2559..2560) on the first row — the exposure the fold arm's admission gate
+column (2607..2608) on the first row — the exposure the fold arm's admission gate
 (`carrier_claim_pins_admitted`) requires: a genuine `PiBinding` at every claim
 slot. (The BINDING of the claimed tuple is the FOLD edge — `MembershipBackingAttack` §A/§A′
 stand as deployed-AIR facts; see the §5 module doc.) -/

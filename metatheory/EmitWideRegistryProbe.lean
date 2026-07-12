@@ -7,7 +7,7 @@ registry (57 members):
 
   `<live key>\t<member.name>\t<emitVmJson2 (wide member)>`
 
-Each wide member is the proven `wideAppend host bb (bb+91)` of the corresponding live descriptor — the
+Each wide member is the proven `wideAppend host bb (bb+239)` of the corresponding live descriptor — the
 two 13×8 BEFORE/AFTER carriers + the 16 wide commit PIs (the 8-felt ~124-bit before/after anchors)
 appended past the host, NO narrowing. The emit order is the live order:
 

@@ -15,14 +15,14 @@ THIS module is the proof infrastructure that closes that gap — purely additive
     a chip lookup binding ALL `CHIP_OUT_LANES` output columns (`chipLookupTupleN [c0..c7]`),
     discharged by the wide lever `chip_lookup_sound_N`. Where the 1-felt path forces ONE digest
     column (out0), the wide path forces the WHOLE 8-felt permutation output column-for-column.
-  * **§2 `rotV3WideSitesAt`** — the rotated block's 13 chained absorptions emitted as wide lookups:
-    the 4-wide head (no carrier), eleven body groups (the prior 8-felt carrier ‖ 3 limbs = arity 11
-    = `CHIP_RATE`), the iroot final (carrier ‖ iroot = arity 9). Each carrier is 8 COLUMNS, threaded
+  * **§2 `rotV3WideSitesAt`** — the rotated block's 60 chained absorptions emitted as wide lookups:
+    the 4-wide head (no carrier), fifty-eight body groups (the prior 8-felt carrier ‖ 3 limbs = arity 11
+    = `CHIP_RATE`), the iroot final (carrier ‖ iroot ‖ 0 ‖ 0 = arity 11). Each carrier is 8 COLUMNS, threaded
     by column reference (position-independent, like `rotV3SitesAt`). The state-commit carrier is the
     final 8 columns.
   * **§3 `rotV3WidePin`** — the WIDE pin (the analog of `rotV3SitesAt_pin`): a satisfying wide-emitted
     witness binds the 8 state-commit columns = `wireCommitR8 permW (preLimbs) iroot`. Discharged
-    site-by-site through `chip_lookup_sound_N` (`chainFrom8` folded literally, 13 cases).
+    site-by-site through `chip_lookup_sound_N` (`chainFrom8` folded literally, 60 cases).
   * **§4 `rotateV3Wide` / `v3OfWide`** — the parallel emission, threaded where `v3Of` threads the
     1-felt path, but as a NEW function (the live registry KEEPS using `v3Of` — live wire untouched).
   * **§5 the re-proved wide keystone tower** — `rotV3Wide_pins` / `rotV3Wide_publishes` /
@@ -100,17 +100,17 @@ theorem siteLookupsN_sound (permW : List ℤ → List ℤ) (tbl : Table)
     ∀ p ∈ sites, p.2.map env.loc = permW (p.1.map (·.eval env.loc)) :=
   fun p hp => siteLookupN_sound permW tbl hSound env p.1 p.2 (hfit p hp) (hlk p hp)
 
-/-! ## §2 — `rotV3WideSitesAt`: the rotated block as 13 WIDE chained lookups.
+/-! ## §2 — `rotV3WideSitesAt`: the rotated block as 60 WIDE chained lookups.
 
 Layout, parametric in the limb base `base` and the wide-carrier base `cbase`:
-  * limbs `base+0 .. base+111` (112 pre-iroot limbs), iroot `base+112` (the §3.8 `wireCommitR8` shape).
-  * 57 carriers, each 8 columns: carrier `k` at `cbase + 8*k .. cbase + 8*k+7`. Carrier 56 (the
+  * limbs `base+0 .. base+177` (178 pre-iroot limbs), iroot `base+178` (the `wireCommitR8` shape).
+  * 60 carriers, each 8 columns: carrier `k` at `cbase + 8*k .. cbase + 8*k+7`. Carrier 59 (the
     state-commit carrier) is the published 8-felt commitment block.
 
 Each site's input EXPRESSIONS:
   * site 0 (head): `[l0, l1, l2, l3]` (4 inputs, NO carrier) → carrier 0.
-  * sites 1..36 (body): `(carrier k-1 ‖ 3 limbs)` (11 inputs = `CHIP_RATE`) → carrier k.
-  * site 56 (final): `(carrier 55 ‖ iroot ‖ 0 ‖ 0)` (11 inputs) → carrier 56 (state commit). -/
+  * sites 1..58 (body): `(carrier k-1 ‖ 3 limbs)` (11 inputs = `CHIP_RATE`) → carrier k.
+  * site 59 (final): `(carrier 58 ‖ iroot ‖ 0 ‖ 0)` (11 inputs) → carrier 59 (state commit). -/
 
 /-- The 8 columns of wide carrier `k` at carrier base `cbase`. -/
 def carrierCols (cbase k : Nat) : List Nat :=
@@ -130,8 +130,8 @@ the 3 limb columns. -/
 def bodyIns (cbase prevK limb0 limb1 limb2 : Nat) : List EmittedExpr :=
   (carrierCols cbase prevK).map .var ++ [.var limb0, .var limb1, .var limb2]
 
-/-- The 57 (inputs, 8-output-columns) wide-lookup specs for a rotated block at `(base, cbase)` (v13:
-169-limb shape — head + 55 body groups + final, state-commit carrier 56). -/
+/-- The 60 (inputs, 8-output-columns) wide-lookup specs for a rotated block at `(base, cbase)` (the
+178-limb shape — head + 58 body groups + the final iroot carrier, state-commit carrier 59). -/
 def rotV3WideSpecs (base cbase : Nat) : List (List EmittedExpr × List Nat) :=
   [ -- head: [l0,l1,l2,l3] → carrier 0
     ([.var (base+0), .var (base+1), .var (base+2), .var (base+3)], carrierCols cbase 0)
@@ -207,9 +207,41 @@ theorem rotV3WideSpecs_fit (base cbase : Nat) :
   rcases hp with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;>
     simp [bodyIns, carrierCols, CHIP_RATE, CHIP_OUT_LANES]
 
+/-! ### The DERIVED wide-carrier geometry (single source: `rotV3WideSpecs`).
+
+`wideNumCarriers` is DERIVED from the spec list (one 8-felt carrier per emitted wide lookup),
+never declared as a free literal: the allocation constants (`wideCarrierBlockSpan` /
+`wideAppendixSpan`) and the commit-carrier index all flow from it, and the Rust twins
+(`trace_rotated.rs::WIDE_NUM_CARRIERS` etc., derived there from `NUM_PRE_LIMBS` by the shared
+const fn) are pinned to the same values. The RETIRED v1 shape (169 limbs → 57 carriers →
+912-column appendix, commit carrier 56) is version-refused on the Rust side; THIS is the
+flag-day v2 shape: 178 limbs → 60 carriers → 480-column block → 960-column appendix, commit
+carrier 59. -/
+
+/-- The number of 8-felt carriers one wide commitment chain emits: exactly one per wide-lookup
+spec (head + 58 three-limb body groups + the final iroot carrier = 60 at the 178-limb shape). -/
+def wideNumCarriers : Nat := (rotV3WideSpecs 0 0).length
+
+theorem wideNumCarriers_eq : wideNumCarriers = 60 := rfl
+
+/-- One wide carrier block's column span: 8 columns per carrier (480). -/
+def wideCarrierBlockSpan : Nat := 8 * wideNumCarriers
+
+theorem wideCarrierBlockSpan_eq : wideCarrierBlockSpan = 480 := rfl
+
+/-- The two-block (BEFORE + AFTER) wide appendix span `rotateV3Wide`/`wideAppend` allocate (960). -/
+def wideAppendixSpan : Nat := 2 * wideCarrierBlockSpan
+
+theorem wideAppendixSpan_eq : wideAppendixSpan = 960 := rfl
+
+/-- The in-block index of the state-commit carrier: the FINAL carrier (59). -/
+def wideCommitCarrier : Nat := wideNumCarriers - 1
+
+theorem wideCommitCarrier_eq : wideCommitCarrier = 59 := rfl
+
 /-! ## §3 — `rotV3WidePin`: the wide pin (state-commit carrier = `wireCommitR8`). -/
 
-/-- The pre-iroot limb list a block carries (112 limbs, `preLimbsAt`-shaped — identical columns to
+/-- The pre-iroot limb list a block carries (178 limbs, `preLimbsAt`-shaped — identical columns to
 the 1-felt path, so the wide commitment binds the SAME limbs the live wire commits). -/
 def preLimbsWide (base : Nat) (a : Assignment) : List ℤ := preLimbsAt base a
 
@@ -224,10 +256,10 @@ private theorem bodyIns_eval (cbase prevK l0 l1 l2 : Nat) (a : Assignment) :
   simp [bodyIns, carrierVals, EmittedExpr.eval, List.map_append, List.map_map, Function.comp_def]
 
 set_option maxHeartbeats 6400000 in
-/-- **THE WIDE PIN, parametric in `(base, cbase)`** (v12): the thirty-eight wide-lookup output
+/-- **THE WIDE PIN, parametric in `(base, cbase)`**: the sixty wide-lookup output
 bindings compose (via `chip_lookup_sound_N` per site, the `chainFrom8` fold literally) into the
-8-felt chained rotated commitment — the row's state-commit carrier (carrier 56) IS `wireCommitR8` of
-the row's OWN 112 limbs and iroot. The wide analog of `rotV3SitesAt_pin`, the keystone `wireCommitR8`
+8-felt chained rotated commitment — the row's state-commit carrier (carrier 59) IS `wireCommitR8` of
+the row's OWN 178 limbs and iroot. The wide analog of `rotV3SitesAt_pin`, the keystone `wireCommitR8`
 load-bearing in every step. -/
 theorem rotV3WidePin (permW : List ℤ → List ℤ) (tbl : Table)
     (hSound : ChipTableSoundN permW tbl) (env : VmRowEnv) (base cbase : Nat)
@@ -498,17 +530,18 @@ is untouched. The wide BEFORE/AFTER blocks read the SAME `preLimbsAt` columns th
 commits, so the wide commitment binds the SAME 178 limbs + iroot, at full 8-felt width.
 
 Layout (past `rotateV3 d`'s width `w = d.traceWidth + APPENDIX_SPAN`):
-  * BEFORE wide carriers at `w` (57×8 = 456 columns); the wide BEFORE block's limbs are the live
+  * BEFORE wide carriers at `w` (60×8 = 480 columns); the wide BEFORE block's limbs are the live
     BEFORE block's columns `d.traceWidth + 0 .. + 178`.
-  * AFTER wide carriers at `w + 456`; the wide AFTER block's limbs are the live AFTER block's
-    columns `d.traceWidth + 239 + 0 .. + 169`.
+  * AFTER wide carriers at `w + 480`; the wide AFTER block's limbs are the live AFTER block's
+    columns `d.traceWidth + 239 + 0 .. + 178`.
   * 16 appended PI slots: `piCount' .. piCount'+7` = BEFORE commit's 8 columns (first row),
     `piCount'+8 .. +15` = AFTER commit's 8 columns (last row), where `piCount' = (rotateV3 d).piCount`. -/
 
 /-- The BEFORE-block wide-carrier base of a host of (graduated) width `w`. -/
 def wideBeforeCBase (w : Nat) : Nat := w
-/-- The AFTER-block wide-carrier base. -/
-def wideAfterCBase (w : Nat) : Nat := w + 456
+/-- The AFTER-block wide-carrier base: one full carrier block (60 × 8 = 480 columns) past the
+BEFORE block's base — derived, so the AFTER block starts exactly where the BEFORE block ends. -/
+def wideAfterCBase (w : Nat) : Nat := w + wideCarrierBlockSpan
 
 /-- The 8-column PI pins of a commit carrier `cols` to PI slots `piBase..piBase+7`, on `row`. -/
 def commitPins (row : VmRow) (cols : List Nat) (piBase : Nat) : List VmConstraint2 :=
@@ -525,9 +558,9 @@ def rotateV3Wide (d : EffectVmDescriptor) : EffectVmDescriptor2 :=
   let cbB := wideBeforeCBase w
   let cbA := wideAfterCBase w
   { host with
-    traceWidth := w + 912           -- + 2 × (57 carriers × 8)
+    traceWidth := w + wideAppendixSpan  -- + 2 × (wideNumCarriers × 8) = + 960
     piCount    := host.piCount + 16
-    tables     := v2Tables (w + 912)
+    tables     := v2Tables (w + wideAppendixSpan)
     constraints := host.constraints
       ++ rotV3WideLookups bb cbB
       ++ rotV3WideLookups ab cbA
@@ -543,7 +576,7 @@ def v3OfWide (d : EffectVmDescriptor) : EffectVmDescriptor2 := rotateV3Wide d
 `rotV3Wide_pins`/`rotV3Wide_publishes`/`rotV3Wide_binds_published`: the wide analogs of
 `rotV3_pins`/`rotV3_publishes`/`rotV3_binds_published`. The floor swaps `Poseidon2SpongeCR` →
 `Poseidon2WideCR` + `Poseidon2Width8`; the binding invokes `wireCommitR8_binds` (the keystone is
-LOAD-BEARING — the published 8-felt commit = the chained `wireCommitR8` digest of the 169 limbs). -/
+LOAD-BEARING — the published 8-felt commit = the chained `wireCommitR8` digest of the 178 limbs). -/
 
 /-- The wide BEFORE/AFTER lookups are members of `rotateV3Wide d`'s constraints (for `rowConstraints`
 extraction). -/
@@ -832,7 +865,7 @@ NOT re-graduate a bare `d`.
 and the host's BEFORE/AFTER limb bases `bb ab` (the columns `rotateV3` laid the limbs at — `bb =
 d.traceWidth`, `ab = d.traceWidth + 239`, UNMOVED by any gate, which only appends constraints), it:
 
-  * bases the two 38×8 wide-carrier regions PAST `h.traceWidth` (`wideBeforeCBase h.traceWidth` /
+  * bases the two 60×8 wide-carrier regions PAST `h.traceWidth` (`wideBeforeCBase h.traceWidth` /
     `wideAfterCBase h.traceWidth`) — they cannot collide with the host's columns or its gates' columns;
   * pins the two 8-felt commits to 16 PI slots PAST `h.piCount`;
   * PRESERVES `h`'s constraints, gates, hash sites, ranges, AND mem/map logs verbatim (it ONLY APPENDS
@@ -842,7 +875,7 @@ d.traceWidth`, `ab = d.traceWidth + 239`, UNMOVED by any gate, which only append
     so anything provable about `h` (its gates' soundness) still holds, AND the wide binding is forced.
 
 The wide lookups read the SAME `preLimbsAt bb`/`preLimbsAt ab` columns the host's 1-felt chain commits,
-so the 8-felt binding is over the same 37 limbs + iroot. -/
+so the 8-felt binding is over the same 178 limbs + iroot. -/
 
 /-! ### §7.0 — `isLegacyCommitPin1`: the ~31-bit 1-felt commit pin to RETIRE.
 
@@ -864,7 +897,7 @@ def isLegacyCommitPin1 (bb ab : Nat) : VmConstraint2 → Bool
   | .base (.piBinding .last  col _) => col == ab + B_STATE_COMMIT
   | _ => false
 
-/-- **`wideAppend h bb ab`** — append the two wide BEFORE/AFTER carrier blocks (each 38×8, based past
+/-- **`wideAppend h bb ab`** — append the two wide BEFORE/AFTER carrier blocks (each 60×8, based past
 `h.traceWidth`) and their 16 commit PI pins (past `h.piCount`) onto an ARBITRARY graduated/gated host
 `h`, RETIRING the host's two 1-felt `STATE_COMMIT` PI pins (the ~31-bit waist — `isLegacyCommitPin1`).
 The host's name/hashSites/ranges and ALL its OTHER existing constraints (its gates) are untouched; the
@@ -875,9 +908,9 @@ def wideAppend (h : EffectVmDescriptor2) (bb ab : Nat) : EffectVmDescriptor2 :=
   let cbB := wideBeforeCBase w
   let cbA := wideAfterCBase w
   { h with
-    traceWidth := w + 912           -- + 2 × (57 carriers × 8)
+    traceWidth := w + wideAppendixSpan  -- + 2 × (wideNumCarriers × 8) = + 960
     piCount    := h.piCount + 16
-    tables     := v2Tables (w + 912)
+    tables     := v2Tables (w + wideAppendixSpan)
     constraints := (h.constraints.filter (fun c => !isLegacyCommitPin1 bb ab c))
       ++ rotV3WideLookups bb cbB
       ++ rotV3WideLookups ab cbA
@@ -1004,11 +1037,92 @@ theorem wideAppend_afterPin_mem (h : EffectVmDescriptor2) (bb ab : Nat) (k : Nat
       rw [carrierCols_length]; exact hk
     simp [List.getD_eq_getElem?_getD, List.getElem?_eq_getElem hk']
 
+/-! ### §7.1½ — THE EMITTED COLUMN BOUNDS (the v2 geometry-repair facts).
+
+Under the RETIRED v1 constants (57-carrier span = 456, appendix = 912) the 60-carrier spec list
+OVERRAN its allocation: the BEFORE block's carriers 57..59 collided with the AFTER block's base,
+and the AFTER block's tail carriers ran PAST the declared `traceWidth`. These theorems pin the v2
+repair: every emitted wide-carrier column of BOTH blocks lies strictly inside the widened trace,
+the two blocks are disjoint, and the AFTER commit carrier ends FLUSH at the last allocated column. -/
+
+/-- Every wide spec's OUTPUT-CARRIER column lies strictly within its block's span (`cbase ..
+cbase + wideCarrierBlockSpan`): the spec list emits carriers 0..59 only, each with its 8 columns
+at `cbase + 8·k + j`, `j < 8`, `k ≤ 59`. -/
+theorem rotV3WideSpecs_outCols_lt (base cbase : Nat) :
+    ∀ p ∈ rotV3WideSpecs base cbase, ∀ c ∈ p.2, c < cbase + wideCarrierBlockSpan := by
+  intro p hp
+  simp only [rotV3WideSpecs, List.mem_cons, List.not_mem_nil, or_false] at hp
+  rcases hp with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;>
+    · intro c hc
+      simp only [carrierCols, List.mem_map, List.mem_range] at hc
+      obtain ⟨j, hj, rfl⟩ := hc
+      have hj8 : j < 8 := by simpa [CHIP_OUT_LANES] using hj
+      rw [wideCarrierBlockSpan_eq]
+      omega
+
+/-- Every column of an in-range carrier lies strictly within its block's span. -/
+theorem carrierCols_lt_span (cbase k : Nat) (hk : k < wideNumCarriers) :
+    ∀ c ∈ carrierCols cbase k, c < cbase + wideCarrierBlockSpan := by
+  intro c hc
+  simp only [carrierCols, List.mem_map, List.mem_range] at hc
+  obtain ⟨j, hj, rfl⟩ := hc
+  have hj8 : j < 8 := by simpa [CHIP_OUT_LANES] using hj
+  rw [wideNumCarriers_eq] at hk
+  rw [wideCarrierBlockSpan_eq]
+  omega
+
+/-- **BLOCK DISJOINTNESS** — every BEFORE-block emitted carrier column lies strictly below the
+AFTER block's base (the v1 456-column overlap is repaired: the AFTER base is one FULL block span
+past the BEFORE base). -/
+theorem wide_blocks_disjoint (w base : Nat) :
+    ∀ p ∈ rotV3WideSpecs base (wideBeforeCBase w), ∀ c ∈ p.2, c < wideAfterCBase w := by
+  intro p hp c hc
+  have := rotV3WideSpecs_outCols_lt base (wideBeforeCBase w) p hp c hc
+  simpa [wideAfterCBase, wideBeforeCBase] using this
+
+/-- **THE ALLOCATED-WIDTH BOUND** — every emitted wide-carrier output column of BOTH appended
+blocks lies strictly below `(wideAppend h bb ab).traceWidth`. Under the retired v1 912-column
+appendix this was FALSE for the AFTER block (its tail carriers ran to `h.traceWidth + 935`);
+the v2 `wideAppendixSpan` allocation restores it. -/
+theorem wideAppend_outCols_lt_width (h : EffectVmDescriptor2) (bb ab : Nat) :
+    (∀ p ∈ rotV3WideSpecs bb (wideBeforeCBase h.traceWidth), ∀ c ∈ p.2,
+        c < (wideAppend h bb ab).traceWidth)
+    ∧ (∀ p ∈ rotV3WideSpecs ab (wideAfterCBase h.traceWidth), ∀ c ∈ p.2,
+        c < (wideAppend h bb ab).traceWidth) := by
+  have hw : (wideAppend h bb ab).traceWidth = h.traceWidth + wideAppendixSpan := rfl
+  constructor
+  · intro p hp c hc
+    have hlt := rotV3WideSpecs_outCols_lt bb (wideBeforeCBase h.traceWidth) p hp c hc
+    rw [hw]
+    simp only [wideBeforeCBase] at hlt
+    simp only [wideAppendixSpan]
+    omega
+  · intro p hp c hc
+    have hlt := rotV3WideSpecs_outCols_lt ab (wideAfterCBase h.traceWidth) p hp c hc
+    rw [hw]
+    simp only [wideAfterCBase] at hlt
+    simp only [wideAppendixSpan]
+    omega
+
+/-- **THE FLUSH FIT** — the AFTER block's commit carrier ends EXACTLY at the last allocated
+column: `wideAfterCBase + 8·wideCommitCarrier + 8 = traceWidth` (no slack, no overrun). -/
+theorem wideAppend_flush_fit (h : EffectVmDescriptor2) (bb ab : Nat) :
+    wideAfterCBase h.traceWidth + 8 * wideCommitCarrier + 8
+      = (wideAppend h bb ab).traceWidth := by
+  have hw : (wideAppend h bb ab).traceWidth = h.traceWidth + wideAppendixSpan := rfl
+  rw [hw]
+  simp only [wideAfterCBase, wideCommitCarrier_eq, wideCarrierBlockSpan_eq, wideAppendixSpan_eq]
+
+#assert_axioms rotV3WideSpecs_outCols_lt
+#assert_axioms wide_blocks_disjoint
+#assert_axioms wideAppend_outCols_lt_width
+#assert_axioms wideAppend_flush_fit
+
 /-! ### §7.2 — the GATED-HOST keystone tower (the generalizations of §5 over an arbitrary host). -/
 
 /-- **`wideAppend_pins`** — a `Satisfied2` witness of `wideAppend h bb ab` forces the BEFORE/AFTER wide
 lookups on every row: each block's 8 state-commit carrier columns ARE `wireCommitR8` of the row's own
-37 limbs (at `bb`/`ab`) and iroot. REGARDLESS of `h`'s gates — the wide lookups are appended
+178 limbs (at `bb`/`ab`) and iroot. REGARDLESS of `h`'s gates — the wide lookups are appended
 constraints of `wideAppend h bb ab`, extracted from `rowConstraints` independently of `h`'s
 constraints. -/
 theorem wideAppend_pins (hash : List ℤ → ℤ) (permW : List ℤ → List ℤ) (h : EffectVmDescriptor2)
@@ -1064,7 +1178,7 @@ theorem wideAppend_publishes (hash : List ℤ → ℤ) (h : EffectVmDescriptor2)
 set_option maxHeartbeats 1600000 in
 /-- **`wideAppend_binds_published` — THE GATED-HOST WIDE END-TO-END KEYSTONE.** Two `Satisfied2`
 witnesses of `wideAppend h bb ab` publishing the SAME 8-felt BEFORE commit and the SAME 8-felt AFTER
-commit agree on the WHOLE before-block 37-limb list + iroot AND the WHOLE after-block 37-limb list +
+commit agree on the WHOLE before-block 178-limb list + iroot AND the WHOLE after-block 178-limb list +
 iroot — the GENUINE ~124-bit binding via the FAITHFUL `wireCommitR8_binds`, over an ARBITRARY gated
 host `h`. The host's gates constrain OTHER columns; the wide binding is over the appended carriers +
 the shared `preLimbsAt bb`/`ab` columns, so the gates neither weaken nor are weakened by it. -/
@@ -1228,7 +1342,7 @@ the gate's selector column and the host's columns are below `wideBeforeCBase hos
 wide block cannot collide with the gate. (`withSelectorGate` does not change width/piCount, so the
 host width is the graduated rotation's — `wideAppend` bases past it.) -/
 theorem wideAppendOverGated_width (d : EffectVmDescriptor) (s : Nat) :
-    (wideAppendOverGated d s).traceWidth = (withSelectorGate s (v3Of d)).traceWidth + 912
+    (wideAppendOverGated d s).traceWidth = (withSelectorGate s (v3Of d)).traceWidth + wideAppendixSpan
     ∧ (wideAppendOverGated d s).piCount = (withSelectorGate s (v3Of d)).piCount + 16 := by
   unfold wideAppendOverGated wideAppend; exact ⟨rfl, rfl⟩
 
@@ -1263,14 +1377,14 @@ new-cell-key pins), so the limb columns are UNMOVED by any gate — the limb bas
 `graduateV1` adds `(CHIP_OUT_LANES-1)·n_sites` chip-lane columns PAST the limbs, so the gated host's
 `traceWidth` is NOT the limb base; the limb base is the face's `traceWidth`, supplied explicitly.
 
-`v3RegistryWide` wraps each member `h` through `wideAppend h bb (bb+51)` with its real per-member `bb`
+`v3RegistryWide` wraps each member `h` through `wideAppend h bb (bb+239)` with its real per-member `bb`
 (the face `traceWidth`). The two faithfulness obligations lift member-by-member, GENERICALLY over the
 `(h, bb)`:
   * **gates survive** — `wideAppend_satisfied2_host`: a `wideAppend h bb ab` witness is a `Satisfied2`
     of `h`, so every soundness theorem the live member carries (its disc / perms-vk / grow gates) still
     holds (the CONJUNCTION leg);
   * **the 8-felt commit binds** — `wideAppend_binds_published`: two witnesses publishing the SAME 8-felt
-    BEFORE/AFTER commits agree on the WHOLE 37-limb list + iroot, the genuine ~124-bit binding via
+    BEFORE/AFTER commits agree on the WHOLE 178-limb list + iroot, the genuine ~124-bit binding via
     `wireCommitR8_binds`.
 
 ADDITIVE: a NEW def + its fold soundness. The live `v3Registry` / wire / geometry / PI / VK are
@@ -1377,7 +1491,7 @@ that member. -/
 /-- **`v3RegistryWide_sound` — THE GATE-SURVIVAL FOLD.** Every `v3RegistryWide` entry preserves its
 live member's gates: a `Satisfied2` witness of the wide entry is a `Satisfied2` of the underlying live
 `v3Registry` member `h` with its two 1-felt `STATE_COMMIT` PI pins RETIRED (`dropLegacyCommitPins1 h bb
-(bb+51)`), so EVERY soundness theorem `h` carries (its disc / perms-vk / grow / record-pin gates — which
+(bb+239)`), so EVERY soundness theorem `h` carries (its disc / perms-vk / grow / record-pin gates — which
 are NOT the dropped commit pins) holds of the wide witness unchanged. The wide block is a CONJUNCTION
 appended past the host; the retired pins were the LEGACY 1-felt commit binding, superseded by the wide. -/
 theorem v3RegistryWide_sound (hash : List ℤ → ℤ)
@@ -1394,8 +1508,8 @@ theorem v3RegistryWide_sound (hash : List ℤ → ℤ)
 
 /-- **`v3RegistryWide_binds` — THE 8-FELT BINDING FOLD.** Every `v3RegistryWide` entry's published
 8-felt BEFORE/AFTER commits BIND: two `Satisfied2` witnesses of the SAME wide entry publishing the same
-8-felt BEFORE commit and the same 8-felt AFTER commit agree on the WHOLE before-block 37-limb list +
-iroot AND the whole after-block 37-limb list + iroot — the genuine ~124-bit binding via the faithful
+8-felt BEFORE commit and the same 8-felt AFTER commit agree on the WHOLE before-block 178-limb list +
+iroot AND the whole after-block 178-limb list + iroot — the genuine ~124-bit binding via the faithful
 `wireCommitR8_binds`, member-by-member over the live cohort. -/
 theorem v3RegistryWide_binds (hash : List ℤ → ℤ) (permW : List ℤ → List ℤ)
     (hCR : Poseidon2WideCR permW) (hW : Poseidon2Width8 permW)

@@ -70,14 +70,14 @@ fn bridge(w: &rw::RotationWitness) -> RotatedBlockWitness {
 /// Every new member carries 16 wide-commit PiBindings (the 8-felt before/after anchors).
 #[test]
 fn new_wide_members_carry_16_commit_pis() {
-    // The committed post-v13-regen shapes (the registry drift pins): the TB host grew with the
-    // v13 graduated base + membership columns (wide 2824), heapWrite carries the OPTION-I after-spine
-    // host (wide 2951), supplyMint rides the transfer-shape host (wide 2493) at the UNWRAPPED 62 PIs
+    // The committed post-v2-carrier-rotation shapes (the registry drift pins): the TB host +
+    // membership columns (wide 2938), heapWrite carries the OPTION-I after-spine host (wide 3065),
+    // supplyMint rides the transfer-shape host (wide 2607 = WIDE_WIDTH) at the UNWRAPPED 62 PIs
     // (never rc-wrapped, like cap-open). Widths read directly from the committed wide registry rows.
     for (name, want_w, want_pi) in [
-        ("transferCapOpenTBVmDescriptor2R24", 2824usize, 65usize),
-        ("heapWriteVmDescriptor2R24", 2951, 20),
-        ("supplyMintVmDescriptor2R24", 2493, 62),
+        ("transferCapOpenTBVmDescriptor2R24", 2938usize, 65usize),
+        ("heapWriteVmDescriptor2R24", 3065, 20),
+        ("supplyMintVmDescriptor2R24", 2607, 62),
     ] {
         let d = parse_vm_descriptor2(wide_json(name)).unwrap();
         assert_eq!(d.trace_width, want_w, "{name} wide width");
@@ -166,8 +166,8 @@ fn wide_supply_mint_proves_and_verifies() {
         parse_vm_descriptor2(wide_json(name)).unwrap().name
     );
     assert_eq!(
-        desc.trace_width, 2493,
-        "supplyMint wide width 2493 (committed wide supplyMintVmDescriptor2R24)"
+        desc.trace_width, 2607,
+        "supplyMint wide width 2607 (committed wide supplyMintVmDescriptor2R24)"
     );
     assert_eq!(
         desc.public_input_count, 62,
@@ -261,8 +261,8 @@ fn wide_heap_write_proves_and_verifies() {
 
     let desc = parse_vm_descriptor2(wide_json(name)).unwrap();
     assert_eq!(
-        desc.trace_width, 2951,
-        "heapWrite wide width 2951 (OPTION I after-spine, v13 graduated base — committed wide heapWriteVmDescriptor2R24)"
+        desc.trace_width, 3065,
+        "heapWrite wide width 3065 (OPTION I after-spine, committed wide heapWriteVmDescriptor2R24)"
     );
     assert_eq!(desc.public_input_count, 20, "heapWrite wide 20 PIs");
     assert_eq!(trace[0].len(), desc.trace_width);
@@ -358,8 +358,8 @@ fn wide_transfer_cap_open_tb_proves_and_verifies() {
 
     let desc = parse_vm_descriptor2(wide_json(name)).unwrap();
     assert_eq!(
-        desc.trace_width, 2824,
-        "transferCapOpenTB wide width 2824 (committed wide transferCapOpenTBVmDescriptor2R24)"
+        desc.trace_width, 2938,
+        "transferCapOpenTB wide width 2938 (committed wide transferCapOpenTBVmDescriptor2R24)"
     );
     assert_eq!(desc.public_input_count, 65, "transferCapOpenTB wide 65 PIs");
     assert_eq!(trace[0].len(), desc.trace_width);
@@ -391,5 +391,110 @@ fn wide_transfer_cap_open_tb_proves_and_verifies() {
     );
     eprintln!(
         "WIDE transferCapOpenTB: PROVED + VERIFIED at width 1029 (turn-identity anchor + faithful 8-felt commit, 65 PIs); forged-src tooth bites."
+    );
+}
+
+/// **THE GEOMETRY VERSION BOUNDARY, POSITIVE ARM** — every committed wide member (the bare
+/// wide registry AND the welded registry) rides the LIVE v2 wide-carrier geometry: the
+/// structural detector measures its BEFORE→AFTER commit-carrier block span as 480 (60
+/// carriers) and admits it at `WIDE_CARRIER_GEOMETRY_VERSION`.
+#[test]
+fn wide_registries_are_geometry_version_v2() {
+    use dregg_circuit::effect_vm_descriptors::{
+        WIDE_CARRIER_GEOMETRY_VERSION, WIDE_UMEM_WELD_REGISTRY_TSV, wide_carrier_geometry_version,
+    };
+    for (tsv, which) in [
+        (WIDE_REGISTRY_STAGED_TSV, "bare wide"),
+        (WIDE_UMEM_WELD_REGISTRY_TSV, "wide+umem welded"),
+    ] {
+        for line in tsv.lines().filter(|l| !l.is_empty()) {
+            let mut it = line.splitn(3, '\t');
+            let key = it.next().expect("key");
+            let _name = it.next();
+            let json = it.next().expect("json");
+            let d = parse_vm_descriptor2(json).unwrap_or_else(|e| panic!("{key} parses: {e}"));
+            assert_eq!(
+                wide_carrier_geometry_version(&d),
+                Ok(WIDE_CARRIER_GEOMETRY_VERSION),
+                "{which} member {key} must ride the live v2 wide-carrier geometry"
+            );
+        }
+    }
+}
+
+/// **THE GEOMETRY VERSION BOUNDARY, NEGATIVE ARM (the flag-day rejection tooth)** — an
+/// artifact shaped like the RETIRED v1 registry/VK (57 carriers → 456-column block span →
+/// 912-column appendix, commit carrier 56) is refused with the TYPED
+/// `WideGeometryVersionError::RetiredV1`, and a nonsense span fails closed as
+/// `UnknownGeometry` — never silently accepted, never silently widened.
+#[test]
+fn retired_v1_wide_geometry_is_version_refused() {
+    use dregg_circuit::descriptor_ir2::{EffectVmDescriptor2, VmConstraint2};
+    use dregg_circuit::effect_vm_descriptors::{
+        WIDE_CARRIER_BLOCK_SPAN_RETIRED_V1, WideGeometryVersionError,
+        require_wide_carrier_geometry_v2, wide_carrier_geometry_version,
+    };
+    use dregg_circuit::lean_descriptor_air::{VmConstraint, VmRow};
+
+    // Synthesize the v1 anchor-pin shape: host 1581 (the v13 rotated cohort), appendix 912,
+    // BEFORE commit carrier at host + 8·56, AFTER at host + 456 + 8·56 (= width − 8).
+    let v1_host = 1581usize;
+    let v1_width = v1_host + 912;
+    let pi = 62usize; // 46-PI host + 16 wide anchors
+    let mk_pin = |row: VmRow, col: usize, pi_index: usize| {
+        VmConstraint2::Base(VmConstraint::PiBinding { row, col, pi_index })
+    };
+    let mut constraints = Vec::new();
+    for j in 0..8usize {
+        constraints.push(mk_pin(VmRow::First, v1_host + 8 * 56 + j, pi - 16 + j));
+        constraints.push(mk_pin(VmRow::Last, v1_host + 456 + 8 * 56 + j, pi - 8 + j));
+    }
+    let legacy = EffectVmDescriptor2 {
+        name: "transferVmDescriptor2R24Wide-legacy-v1".to_string(),
+        trace_width: v1_width,
+        public_input_count: pi,
+        tables: vec![],
+        constraints,
+        hash_sites: vec![],
+        ranges: vec![],
+    };
+    assert_eq!(
+        wide_carrier_geometry_version(&legacy),
+        Err(WideGeometryVersionError::RetiredV1 {
+            name: "transferVmDescriptor2R24Wide-legacy-v1".to_string(),
+            block_span: WIDE_CARRIER_BLOCK_SPAN_RETIRED_V1,
+        }),
+        "the retired 57/56/912 shape gets the TYPED version refusal"
+    );
+    assert!(require_wide_carrier_geometry_v2(&legacy).is_err());
+
+    // A nonsense block span (neither v2's 480 nor v1's 456) fails closed as UnknownGeometry.
+    let mut weird = legacy.clone();
+    weird.name = "weird-span".to_string();
+    weird.constraints = (0..8usize)
+        .flat_map(|j| {
+            [
+                mk_pin(VmRow::First, 100 + j, pi - 16 + j),
+                mk_pin(VmRow::Last, 100 + 123 + j, pi - 8 + j),
+            ]
+        })
+        .collect();
+    assert_eq!(
+        wide_carrier_geometry_version(&weird),
+        Err(WideGeometryVersionError::UnknownGeometry {
+            name: "weird-span".to_string(),
+            block_span: 123,
+        })
+    );
+
+    // Missing anchors fail closed too (a narrow artifact presented as wide).
+    let mut anchorless = legacy.clone();
+    anchorless.name = "anchorless".to_string();
+    anchorless.constraints.clear();
+    assert_eq!(
+        wide_carrier_geometry_version(&anchorless),
+        Err(WideGeometryVersionError::MissingAnchors {
+            name: "anchorless".to_string(),
+        })
     );
 }

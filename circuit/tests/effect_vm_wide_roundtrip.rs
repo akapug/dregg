@@ -14,7 +14,7 @@
 //!     (`generate_rotated_create_cell_wide`).
 //!
 //! PLUS the **EXECUTOR ANCHORING differential** (the wide analog of slice-1's G3 cell≡circuit check):
-//! the wide producer's 8-felt commit (the BEFORE carrier-12 columns) byte-equals
+//! the wide producer's 8-felt commit (the BEFORE commit-carrier columns) byte-equals
 //! `dregg_cell::commitment::compute_canonical_state_commitment_v9_felt8` for the live cell — so the
 //! deployed executor (after the eventual flip) can anchor the 8 wide PIs to the trusted cell.
 //!
@@ -33,8 +33,8 @@ use dregg_circuit::descriptor_ir2::{
     verify_vm_descriptor2,
 };
 use dregg_circuit::effect_vm::trace_rotated::{
-    DFA_RC_LEN, ROT_PI_COUNT, RotatedBlockWitness, WIDE_COMMIT_CARRIER, WIDE_NUM_CARRIERS,
-    empty_caveat_manifest, generate_rotated_create_cell_wide,
+    DFA_RC_LEN, ROT_PI_COUNT, RotatedBlockWitness, SET_FIELD_DYN_HOST_WIDTH, WIDE_COMMIT_CARRIER,
+    WIDE_NUM_CARRIERS, empty_caveat_manifest, generate_rotated_create_cell_wide,
     generate_rotated_create_from_factory_wide, generate_rotated_note_create_wide,
     generate_rotated_note_spend_wide, generate_rotated_set_field_dyn_wide,
     generate_rotated_spawn_wide, generate_rotated_transfer_shape_wide,
@@ -154,9 +154,9 @@ fn assert_roundtrip(
         "{name}: descriptor PI count matches"
     );
 
-    // The 8 BEFORE wide PIs (at wide_pi_base..+8) equal the BEFORE carrier-12 columns on row 0.
+    // The 8 BEFORE wide PIs (at wide_pi_base..+8) equal the BEFORE commit-carrier columns on row 0.
     // Read from the RAW (pre-refuse) trace: `before_commit_8` derives the carrier base as
-    // `width − 2·8·WIDE_NUM_CARRIERS` (the carriers are the last 912 columns of the WIDE member); the
+    // `width − 2·8·WIDE_NUM_CARRIERS` (the carriers are the last 960 columns of the WIDE member); the
     // gentian refuse aux rides PAST them, so growing the trace would shift that derived base.
     let commit = before_commit_8(trace);
     for j in 0..8 {
@@ -179,7 +179,7 @@ fn assert_roundtrip(
 /// **THE EXECUTOR-ANCHORING differential (wide analog of slice-1's G3 cell≡circuit check).** The
 /// CELL's chip-faithful 8-felt commit — `wire_commit_8_chip` over the cell's own
 /// `compute_rotated_pre_limbs(cell, ctx)` + iroot — byte-equals the CIRCUIT's published BEFORE wide
-/// carrier-12, so the deployed executor (after the flip) can anchor the 8 wide PIs to the trusted
+/// commit carrier, so the deployed executor (after the flip) can anchor the 8 wide PIs to the trusted
 /// cell. `wire_commit_8_chip` is the byte-twin of the circuit's `fill_wide_block` (the arity-tagged
 /// chip chain the wide carriers are filled with) — NOT the plain `single_perm_compress`-based
 /// `wire_commit_8` the cell's `compute_canonical_state_commitment_v9_felt8` currently delegates to,
@@ -208,7 +208,7 @@ fn assert_executor_anchor(
     let circuit_carrier12 = before_commit_8(trace);
     assert_eq!(
         cell_felt8, circuit_carrier12,
-        "{name}: cell chip-faithful 8-felt commit == circuit wide carrier-12 (executor anchoring)"
+        "{name}: cell chip-faithful 8-felt commit == circuit wide commit carrier (executor anchoring)"
     );
     // and it is genuinely 8 felts (NOT a 1-felt lane0 squeeze padded with zeros): at least one of
     // the felts 1..8 is non-zero for a field-bearing authority-carrying cell.
@@ -227,7 +227,7 @@ fn assert_executor_anchor(
          carrier — the cell-side flip cutover is complete"
     );
     eprintln!(
-        "WIDE {name}: executor-anchoring differential holds (cell chip-8-felt ≡ circuit carrier-12; \
+        "WIDE {name}: executor-anchoring differential holds (cell chip-8-felt ≡ circuit commit carrier; \
          the cell `_felt8` is repointed to wire_commit_8_chip — the flip cutover is complete)."
     );
 }
@@ -238,7 +238,7 @@ fn assert_executor_anchor(
 /// bare `compute_rotated_pre_limbs` (which would `hash_bytes` a [0;32] root). The executor anchors
 /// the published 8-felt commit against the TRUSTED before-state limbs the kernel supplies (incl. the
 /// turn's before-set root): here we read the BEFORE block's own limbs off the row (the trusted limbs
-/// the executor holds) and assert `wire_commit_8_chip(limbs, iroot) == carrier-12` — the SAME chip
+/// the executor holds) and assert `wire_commit_8_chip(limbs, iroot) == commit carrier` — the SAME chip
 /// primitive the cell-side flip uses. This proves the executor's anchoring primitive reproduces the
 /// circuit's published wide commit for the grow-gate shape. The plain `wire_commit_8` still DIVERGES.
 fn assert_executor_anchor_grow_gate(name: &str, trace: &[Vec<BabyBear>]) {
@@ -253,7 +253,7 @@ fn assert_executor_anchor_grow_gate(name: &str, trace: &[Vec<BabyBear>]) {
     let circuit_carrier12 = before_commit_8(trace);
     assert_eq!(
         anchored, circuit_carrier12,
-        "{name}: wire_commit_8_chip(trusted before-limbs) == circuit wide carrier-12 (grow-gate \
+        "{name}: wire_commit_8_chip(trusted before-limbs) == circuit wide commit carrier (grow-gate \
          executor anchoring — the published 8-felt commit binds the grown-set limbs)"
     );
     assert!(
@@ -352,10 +352,10 @@ fn wide_set_field_dyn_dynamic_overflow_proves_and_verifies() {
     let desc = wide_desc(name);
     assert_eq!(
         desc.trace_width,
-        1553 + 2 * 8 * WIDE_NUM_CARRIERS + 48,
-        "setFieldDyn wide width = the committed narrow V1Face host (1553 = GRAD_ROT_WIDTH 1581 − four \
-         chip sites × 7 = 28) + the 2·8·WIDE_NUM_CARRIERS wide-carrier appendix (912 = 2465) + the \
-         gentian capacity-floor refuse widening (3·REFUSE_STRIDE = 48 = 2513, setFieldDyn is a bare \
+        SET_FIELD_DYN_HOST_WIDTH + 2 * 8 * WIDE_NUM_CARRIERS + 48,
+        "setFieldDyn wide width = the committed narrow V1Face host (GRAD_ROT_WIDTH − four \
+         chip sites × 7 = 28) + the 2·8·WIDE_NUM_CARRIERS wide-carrier appendix (960) + the \
+         gentian capacity-floor refuse widening (3·REFUSE_STRIDE = 48, setFieldDyn is a bare \
          cohort member)"
     );
     assert_eq!(
@@ -823,5 +823,110 @@ fn wide_birth_wrappers_refuse_mismatched_lead() {
         )
         .is_err(),
         "spawn wide wrapper must refuse a createCell lead"
+    );
+}
+
+/// **THE V2 GEOMETRY NO-PANIC BOUNDARY TOOTH (flag-day wide-carrier rotation).**
+/// `append_wide_carriers` fills BOTH wide carrier blocks up to EXACTLY the last allocated
+/// byte (flush fit) and the commitment carrier is 59. Under the RETIRED v1 declarations
+/// (`WIDE_NUM_CARRIERS = 57` / commit 56 / 912-column appendix) this very call PANICKED:
+/// the 60-carrier generator overran the 912-column allocation (the AFTER block's tail
+/// carriers ran to `host + 935`) and collided the BEFORE block into the AFTER base.
+#[test]
+fn wide_carrier_blocks_fill_exactly_the_allocated_appendix() {
+    use dregg_circuit::descriptor_ir2::chip_absorb_all_lanes;
+    use dregg_circuit::effect_vm::trace_rotated::{
+        AFTER_BASE, B_IROOT, BEFORE_BASE, GRAD_ROT_WIDTH, NUM_PRE_LIMBS, WIDE_CARRIER_APPENDIX,
+        WIDE_CARRIER_BLOCK_SPAN, append_wide_carriers, wide_carriers_for_limbs,
+    };
+    // The derived flag-day geometry (the shared const fn is the single source).
+    assert_eq!(WIDE_NUM_CARRIERS, wide_carriers_for_limbs(NUM_PRE_LIMBS));
+    assert_eq!(WIDE_NUM_CARRIERS, 60, "178 pre-limbs -> 60 carriers");
+    assert_eq!(WIDE_COMMIT_CARRIER, 59, "the commitment carrier is 59");
+    assert_eq!(WIDE_CARRIER_BLOCK_SPAN, 480);
+    assert_eq!(WIDE_CARRIER_APPENDIX, 960);
+
+    // A base row with recognizable limb material in both rotated blocks (limbs + iroot).
+    let host_width = GRAD_ROT_WIDTH;
+    let mut row = vec![BabyBear::ZERO; host_width];
+    for i in 0..=B_IROOT {
+        row[BEFORE_BASE + i] = BabyBear::new(1_000 + i as u32);
+        row[AFTER_BASE + i] = BabyBear::new(2_000 + i as u32);
+    }
+    let mut trace = vec![row];
+    let base_pis = vec![BabyBear::ZERO; ROT_PI_COUNT + DFA_RC_LEN];
+    // v1 constants make THIS call panic (index out of bounds); v2 must not.
+    let dpis = append_wide_carriers(&mut trace, base_pis, host_width);
+    let row = &trace[0];
+    assert_eq!(
+        row.len(),
+        host_width + WIDE_CARRIER_APPENDIX,
+        "flush allocation"
+    );
+
+    // Flush fit: the BEFORE commit carrier ends exactly at the BEFORE block's end, the AFTER
+    // commit carrier exactly at the last allocated column.
+    let before_commit = host_width + 8 * WIDE_COMMIT_CARRIER;
+    let after_commit = host_width + WIDE_CARRIER_BLOCK_SPAN + 8 * WIDE_COMMIT_CARRIER;
+    assert_eq!(before_commit + 8, host_width + WIDE_CARRIER_BLOCK_SPAN);
+    assert_eq!(after_commit + 8, row.len());
+
+    // Both blocks' LAST ALLOCATED BYTES are genuinely filled: recompute each block's chain
+    // with the SAME chip-faithful derivation (an independent loop over the same shape) and
+    // compare the commit carrier lane-for-lane.
+    let recompute = |limb_base: usize| -> [BabyBear; 8] {
+        let head = [
+            row[limb_base],
+            row[limb_base + 1],
+            row[limb_base + 2],
+            row[limb_base + 3],
+        ];
+        let mut d = chip_absorb_all_lanes(4, &head);
+        let mut col = 4usize;
+        let mut carrier = 0usize;
+        while col < NUM_PRE_LIMBS {
+            let mut ins = [BabyBear::ZERO; 11];
+            ins[..8].copy_from_slice(&d);
+            let arity = if NUM_PRE_LIMBS - col >= 3 {
+                ins[8] = row[limb_base + col];
+                ins[9] = row[limb_base + col + 1];
+                ins[10] = row[limb_base + col + 2];
+                col += 3;
+                11
+            } else {
+                ins[8] = row[limb_base + col];
+                col += 1;
+                9
+            };
+            d = chip_absorb_all_lanes(arity, &ins);
+            carrier += 1;
+        }
+        let mut ins = [BabyBear::ZERO; 11];
+        ins[..8].copy_from_slice(&d);
+        ins[8] = row[limb_base + B_IROOT];
+        carrier += 1;
+        assert_eq!(carrier, WIDE_COMMIT_CARRIER, "the chain ends on carrier 59");
+        chip_absorb_all_lanes(11, &ins)
+    };
+    assert_eq!(
+        &row[before_commit..before_commit + 8],
+        &recompute(BEFORE_BASE)
+    );
+    assert_eq!(&row[after_commit..after_commit + 8], &recompute(AFTER_BASE));
+
+    // The published 16-PI tail is exactly the two commit carriers (BEFORE first row, AFTER
+    // last row), and the final allocated byte of each block is FILLED (not dead slack).
+    let n = dpis.len();
+    assert_eq!(&dpis[n - 16..n - 8], &row[before_commit..before_commit + 8]);
+    assert_eq!(&dpis[n - 8..], &row[after_commit..after_commit + 8]);
+    assert_ne!(
+        row[host_width + WIDE_CARRIER_BLOCK_SPAN - 1],
+        BabyBear::ZERO,
+        "the BEFORE block's last allocated byte is filled"
+    );
+    assert_ne!(
+        row[row.len() - 1],
+        BabyBear::ZERO,
+        "the AFTER block's last allocated byte is filled"
     );
 }

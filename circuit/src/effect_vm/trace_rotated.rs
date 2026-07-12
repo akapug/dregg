@@ -1594,12 +1594,13 @@ pub fn generate_rotated_refusal_trace_with_fields_tree(
 /// `829 + 329 + 143 = 1301`. A satisfying trace FORCES the faithful 8-felt fields-write over the full
 /// ~124-bit BEFORE/AFTER root blocks (`effFieldsWriteV3_forces_write8`) — never the lane-0 squeeze the
 /// map_op-only host would leave. The wide carrier lands at THIS host width: `1301 + 608 = 1669`.
-pub const REFUSAL_WRITE_HOST_WIDTH: usize = 2053; // v13: wide 2965 − 912 carriers
+pub const REFUSAL_WRITE_HOST_WIDTH: usize =
+    GRAD_ROT_WIDTH + CAP_OPEN_SPAN + CAP_OPEN_AFTER_SPINE_SPAN; // 2119 (wide 3079 − WIDE_CARRIER_APPENDIX), derived: the Class-A refusal base IS the graduated rotated base
 /// The fields-open READ appendix base column (the Class-A base `refusalFieldsWriteV3`'s trace width =
-/// the graduated rotated base `GRAD_ROT_WIDTH`). v12 grew the graduated base by +176 (983→1159), so the READ appendix sits at 1159 — `REFUSAL_WRITE_HOST_WIDTH −
-/// CAP_OPEN_SPAN(329) − AFTER_SPINE_SPAN(143) = 1631 − 472 = 1159`. (The v10 value 829 laid the
-/// membership 154 columns too low, so the deployed after-spine constraints — which reference the
-/// v11 base — read zero-padding and rejected.)
+/// the graduated rotated base `GRAD_ROT_WIDTH`): `REFUSAL_WRITE_HOST_WIDTH −
+/// CAP_OPEN_SPAN(329) − AFTER_SPINE_SPAN(143) = GRAD_ROT_WIDTH` (2119 − 472 = 1647). Derived, so it
+/// tracks the graduated base. (Historically a too-low literal here laid the membership columns
+/// against zero-padding and the deployed after-spine constraints rejected.)
 pub const REFUSAL_WRITE_READ_BASE: usize =
     REFUSAL_WRITE_HOST_WIDTH - CAP_OPEN_SPAN - CAP_OPEN_AFTER_SPINE_SPAN;
 
@@ -1709,7 +1710,7 @@ pub fn generate_rotated_refusal_write_wide(
     debug_assert_eq!(
         trace[0].len(),
         REFUSAL_WRITE_HOST_WIDTH + 2 * WIDE_NUM_CARRIERS * 8
-    ); // 2965
+    ); // 3079 (REFUSAL_WRITE_HOST_WIDTH + WIDE_CARRIER_APPENDIX)
     Ok((trace, dpis, map_heaps))
 }
 
@@ -2473,7 +2474,7 @@ pub fn empty_caveat_manifest() -> RotatedCaveatManifest {
 pub const CAP_OPEN_DEPTH: usize = 16;
 /// The base column of the cap-open appendix. Phase B-GATE GRADUATED the rotated base (appending the
 /// 7-lane chip blocks at the END), so the cap-open appendix now starts at the GRADUATED rotated
-/// width `GRAD_ROT_WIDTH = 608` (the committed `attenuateVmDescriptor2R24.trace_width`), NOT at the
+/// width `GRAD_ROT_WIDTH` (the committed `attenuateVmDescriptor2R24.trace_width`), NOT at the
 /// un-graduated `ROT_WIDTH = 328`. The cap-open builds ON the graduated rotated layout.
 pub const CAP_OPEN_BASE: usize = GRAD_ROT_WIDTH; // 608
 /// The width of the FULL `EffectMask` bit decomposition (residual (a) — GENUINE MEMBERSHIP). The
@@ -3224,7 +3225,7 @@ pub fn widen_to_cap_open(trace: &mut [Vec<BabyBear>], w: &CapOpenWitness) -> Res
 
 /// **THE WIDE CAP-OPEN widener (the 1026-wide cap-open tail's faithful 8-felt commit).** Given a
 /// fully-laid `CAP_OPEN_WIDTH`-wide cap-open trace (a base rotated trace already passed through
-/// [`widen_to_cap_open`]) and its base PI vector, appends the two 13×8 BEFORE/AFTER wide carrier
+/// [`widen_to_cap_open`]) and its base PI vector, appends the two `WIDE_NUM_CARRIERS`×8 BEFORE/AFTER wide carrier
 /// blocks at `CAP_OPEN_WIDTH = 818` / `+104` and the 16 wide commit PIs — the cap-open tail's wide
 /// member is `wideAppend (capOpenHost) 187 238` (width 1026), carriers PAST the 210-col cap-open
 /// appendix. The cap-open host constraints / membership columns are CARRIED UNCHANGED; the wide
@@ -3564,55 +3565,107 @@ pub fn transfer_caveat_manifest() -> RotatedCaveatManifest {
 // ============================================================================
 // THE FAITHFUL 8-FELT WIDE COMMITMENT APPENDIX (Lean
 // `EffectVmEmitRotationWide.wideAppend` over `transferV3`, the `v3RegistryWide`
-// transfer member — descriptor `transferVmDescriptor2R24Wide`, width 816 / PI 54).
+// transfer member — descriptor `transferVmDescriptor2R24Wide`, width `WIDE_WIDTH` = 2607 /
+// PI `WIDE_PI_COUNT` = 66).
 //
 // STAGED-ADDITIVE: this is a PARALLEL wide producer BESIDE the live 1-felt path. The live
-// `generate_rotated_effect_vm_trace` (608 / 38-PI) is UNTOUCHED; this WIDENS its output to 816
-// by appending two 13-carrier × 8-felt wide commitment chains (BEFORE + AFTER) that re-absorb the
-// SAME rotated limbs the 1-felt block already lays, exposing the genuine 8-felt (~124-bit) state
-// commitment. The 16 appended PIs publish the BEFORE first-row + AFTER last-row 8-felt commits.
+// `generate_rotated_effect_vm_trace` (GRAD_ROT_WIDTH = 1647) is UNTOUCHED; this WIDENS its
+// output to `WIDE_WIDTH` by appending two `WIDE_NUM_CARRIERS` (60) × 8-felt wide commitment
+// chains (BEFORE + AFTER) that re-absorb the SAME rotated limbs the 1-felt block already lays,
+// exposing the genuine 8-felt (~124-bit) state commitment. The 16 appended PIs publish the
+// BEFORE first-row + AFTER last-row 8-felt commits.
 //
-// The geometry is read off the committed wide descriptor
-// (`circuit/descriptors/rotation-wide-transfer-staged.tsv`):
-//   * BEFORE wide carriers: base `WIDE_BEFORE_CBASE = 608`, carrier `k` at `608 + 8·k .. +7`
-//     (13 carriers → cols 608..711); carrier 12 (cols 704..711) = the BEFORE 8-felt commit.
-//   * AFTER  wide carriers: base `WIDE_AFTER_CBASE  = 712`, carrier `k` at `712 + 8·k .. +7`
-//     (13 carriers → cols 712..815); carrier 12 (cols 808..815) = the AFTER 8-felt commit.
-//   * The chain absorbs the rotated block's limbs (`BEFORE_BASE + 0..36` then iroot at
-//     `BEFORE_BASE + B_IROOT`) — the SAME columns the 1-felt `wireCommitR` reads. The chip lookups
-//     are: head arity-4 over `[l0..l3]`, eleven body arity-11 over `prev8 ‖ [l3i,l3i+1,l3i+2]`,
-//     final arity-9 over `prev8 ‖ [iroot]`. Each carrier is filled CHIP-FAITHFULLY (the chip table
-//     derives `out0..out7` from the genuine permutation with the arity-tag seeding, so a carrier
-//     must equal `chip_absorb_all_lanes(arity, inputs)` or the `out[i] == lane[i]` AIR bites).
-//   * PIs 38..45 ← BEFORE carrier-12 (cols 704..711) on the FIRST row; PIs 46..53 ← AFTER
-//     carrier-12 (cols 808..815) on the LAST row.
+// The geometry (v2 flag-day, derived from `NUM_PRE_LIMBS = 178` via `wide_carriers_for_limbs`;
+// the emitted twin is `circuit/descriptors/rotation-wide-transfer-staged.tsv`):
+//   * BEFORE wide carriers: base `WIDE_BEFORE_CBASE = 1647`, carrier `k` at `1647 + 8·k .. +7`
+//     (60 carriers → cols 1647..2126); carrier 59 (cols 2119..2126) = the BEFORE 8-felt commit.
+//   * AFTER  wide carriers: base `WIDE_AFTER_CBASE  = 2127`, carrier `k` at `2127 + 8·k .. +7`
+//     (60 carriers → cols 2127..2606); carrier 59 (cols 2599..2606) = the AFTER 8-felt commit,
+//     ending FLUSH at `WIDE_WIDTH − 1` (const-asserted below).
+//   * The chain absorbs the rotated block's limbs (`BEFORE_BASE + 0..NUM_PRE_LIMBS` then iroot
+//     at `BEFORE_BASE + B_IROOT`) — the SAME columns the 1-felt `wireCommitR` reads. The chip
+//     lookups are: head arity-4 over `[l0..l3]`, fifty-eight body arity-11 over
+//     `prev8 ‖ [l3i,l3i+1,l3i+2]`, final arity-11 over `prev8 ‖ [iroot, 0, 0]`. Each carrier is
+//     filled CHIP-FAITHFULLY (the chip table derives `out0..out7` from the genuine permutation
+//     with the arity-tag seeding, so a carrier must equal `chip_absorb_all_lanes(arity, inputs)`
+//     or the `out[i] == lane[i]` AIR bites).
+//   * The 8 PIs after the host's ← BEFORE carrier-59 on the FIRST row; the final 8 ← AFTER
+//     carrier-59 on the LAST row.
 // ============================================================================
 
-/// The number of 8-felt carriers per wide commitment chain (head + 55 arity-11 body groups + the
-/// final iroot carrier). v13: the fields-octet grow (NUM_PRE_LIMBS 112→169) lifts the body from 36 to
-/// 55 groups, so the wide chain runs 38→57 carriers (`1 + (169-4)/3 + 1 = 57`).
-pub const WIDE_NUM_CARRIERS: usize = 57;
-/// The committed wide trace width (`wideAppend` adds `2 × WIDE_NUM_CARRIERS × 8` carrier columns to the
-/// graduated rotated base): `transferVmDescriptor2R24Wide.trace_width` (v13: 1581 + 912 = 2493).
-pub const WIDE_WIDTH: usize = GRAD_ROT_WIDTH + 2 * WIDE_NUM_CARRIERS * 8;
+/// The number of 8-felt carriers one wide commitment chain needs for `n` pre-iroot limbs — the
+/// SHARED const derivation both the allocation constants below and the generator
+/// ([`fill_wide_block`]'s loop) obey: one arity-4 head (consumes 4 limbs), then the body loop
+/// (3 limbs per arity-11 carrier while ≥ 3 remain, else 1 limb per arity-9 carrier), then the
+/// final iroot carrier. MUST mirror `fill_wide_block` exactly (const-asserted below; the
+/// generator debug-asserts it lands on [`WIDE_COMMIT_CARRIER`]).
+pub const fn wide_carriers_for_limbs(n: usize) -> usize {
+    let body = n - 4;
+    // head + 3-limb body groups + 1-limb leftover carriers + the final iroot carrier.
+    1 + body / 3 + body % 3 + 1
+}
+/// The number of 8-felt carriers per wide commitment chain, DERIVED from [`NUM_PRE_LIMBS`]
+/// (178 → head + 58 clean three-limb body groups + the final iroot carrier = 60). The RETIRED
+/// v1 geometry (169 limbs → 57 carriers) is version-refused at the registry boundary
+/// (`effect_vm_descriptors::WIDE_CARRIER_GEOMETRY_VERSION`), never silently widened.
+pub const WIDE_NUM_CARRIERS: usize = wide_carriers_for_limbs(NUM_PRE_LIMBS);
+/// One wide carrier block's column span (8 columns per carrier): 480.
+pub const WIDE_CARRIER_BLOCK_SPAN: usize = WIDE_NUM_CARRIERS * 8;
+/// The two-block (BEFORE + AFTER) wide carrier appendix span: 960.
+pub const WIDE_CARRIER_APPENDIX: usize = 2 * WIDE_CARRIER_BLOCK_SPAN;
+/// The committed wide trace width (`wideAppend` adds the [`WIDE_CARRIER_APPENDIX`] carrier columns
+/// to the graduated rotated base): `transferVmDescriptor2R24Wide.trace_width` (1647 + 960 = 2607).
+pub const WIDE_WIDTH: usize = GRAD_ROT_WIDTH + WIDE_CARRIER_APPENDIX;
 /// The base column of the BEFORE wide carrier block (`wideBeforeCBase = h.traceWidth = GRAD_ROT_WIDTH`).
 pub const WIDE_BEFORE_CBASE: usize = GRAD_ROT_WIDTH;
-/// The base column of the AFTER wide carrier block (`wideAfterCBase = h.traceWidth + WIDE_NUM_CARRIERS × 8`).
-pub const WIDE_AFTER_CBASE: usize = GRAD_ROT_WIDTH + WIDE_NUM_CARRIERS * 8;
-/// The in-block carrier index of the final 8-felt commitment carrier (v13: carrier 56).
-pub const WIDE_COMMIT_CARRIER: usize = WIDE_NUM_CARRIERS - 1; // 56
+/// The base column of the AFTER wide carrier block (`wideAfterCBase = h.traceWidth + WIDE_CARRIER_BLOCK_SPAN`).
+pub const WIDE_AFTER_CBASE: usize = GRAD_ROT_WIDTH + WIDE_CARRIER_BLOCK_SPAN;
+/// The in-block carrier index of the final 8-felt commitment carrier (59).
+pub const WIDE_COMMIT_CARRIER: usize = WIDE_NUM_CARRIERS - 1; // 59
+
+// FLAG-DAY GEOMETRY PINS (the wide-carrier rotation, v2): the derived constants must land on the
+// exact 178-limb / 60-carrier / 960-column shape — a drift in `NUM_PRE_LIMBS` or the derivation
+// breaks the build here, not at proving time. (The Lean twins are `wideNumCarriers_eq` /
+// `wideCarrierBlockSpan_eq` / `wideAppendixSpan_eq` / `wideCommitCarrier_eq` in
+// `EffectVmEmitRotationWide.lean`.)
+const _: () = {
+    assert!(
+        NUM_PRE_LIMBS == 178,
+        "wide geometry v2 is pinned to 178 pre-iroot limbs"
+    );
+    assert!(
+        WIDE_NUM_CARRIERS == 60,
+        "178 limbs need 60 wide carriers (head + 58 body + iroot)"
+    );
+    assert!(
+        WIDE_COMMIT_CARRIER == 59,
+        "the final (commitment) carrier is 59"
+    );
+    assert!(
+        WIDE_CARRIER_BLOCK_SPAN == 480,
+        "one wide carrier block spans 480 columns"
+    );
+    assert!(
+        WIDE_CARRIER_APPENDIX == 960,
+        "the two-block wide appendix spans 960 columns"
+    );
+    // The AFTER block's commit carrier ends FLUSH at the allocated width (no slack, no overrun).
+    assert!(WIDE_AFTER_CBASE + 8 * WIDE_COMMIT_CARRIER + 8 == WIDE_WIDTH);
+};
 /// The committed wide public-input count for the bare transfer-shape member
 /// (`h.piCount + 16`, where `h.piCount = ROT_PI_COUNT + DFA_RC_LEN` — the wide host is the
 /// `withDfaRcPins`-wrapped member, so the 4 dsl rc PIs ride BETWEEN the base 46 and the 16 wide
 /// commit PIs).
 pub const WIDE_PI_COUNT: usize = ROT_PI_COUNT + DFA_RC_LEN + 16; // 66
 
-/// Fill one block's 13-carrier × 8-felt wide commitment chain at `cbase`, reading the limbs from
-/// the rotated block at `limb_base` (`BEFORE_BASE` / `AFTER_BASE`). Each carrier's 8 output lanes
-/// are filled CHIP-FAITHFULLY (`chip_absorb_all_lanes`), so the wide chip lookups' `out[i] ==
-/// lane[i]` equalities hold and the published 8-felt commit binds the 37 limbs + iroot. The chain
-/// shape (4-wide head, eleven 3-wide arity-11 body groups, arity-9 iroot final) is the byte twin of
-/// `poseidon2::wire_commit_8` and the Lean `wireCommitR8` — but seeded through the chip's arity tag.
+/// Fill one block's [`WIDE_NUM_CARRIERS`]-carrier × 8-felt wide commitment chain at `cbase`,
+/// reading the limbs from the rotated block at `limb_base` (`BEFORE_BASE` / `AFTER_BASE`). Each
+/// carrier's 8 output lanes are filled CHIP-FAITHFULLY (`chip_absorb_all_lanes`), so the wide chip
+/// lookups' `out[i] == lane[i]` equalities hold and the published 8-felt commit binds the
+/// [`NUM_PRE_LIMBS`] limbs + iroot. The chain shape (4-wide head, fifty-eight 3-wide arity-11 body
+/// groups, the arity-11 `iroot ‖ 0 ‖ 0` final) is the byte twin of `poseidon2::wire_commit_8` and
+/// the Lean `wireCommitR8` — but seeded through the chip's arity tag. The loop's carrier count is
+/// the SAME derivation as [`wide_carriers_for_limbs`] (debug-asserted at the end).
 fn fill_wide_block(row: &mut [BabyBear], cbase: usize, limb_base: usize) {
     use crate::descriptor_ir2::chip_absorb_all_lanes;
     // head: arity-4 absorb of limbs l0..l3 → carrier 0.
@@ -3640,7 +3693,7 @@ fn fill_wide_block(row: &mut [BabyBear], cbase: usize, limb_base: usize) {
             arity = 11;
             col += 3;
         } else {
-            // (the 37-limb transfer shape has NO leftover — 33 body limbs = 11 groups of 3 — but
+            // (the 178-limb shape has NO leftover — 174 body limbs = 58 groups of 3 — but
             // keep the leftover arm faithful for parametricity: an arity-9 `prev8 ‖ 1 limb`.)
             inputs[8] = row[limb_base + col];
             arity = 9;
@@ -3662,16 +3715,18 @@ fn fill_wide_block(row: &mut [BabyBear], cbase: usize, limb_base: usize) {
     row[cbase + 8 * carrier..cbase + 8 * carrier + 8].copy_from_slice(&d);
     debug_assert_eq!(
         carrier, WIDE_COMMIT_CARRIER,
-        "wide chain must end on carrier 56"
+        "wide chain must end on the derived commitment carrier (59 at 178 limbs) — \
+         `wide_carriers_for_limbs` and this loop have diverged"
     );
 }
 
 /// **THE WIDE TRANSFER trace generator (`transferVmDescriptor2R24Wide`, faithful 8-felt commit).**
 ///
-/// Widens the LIVE 608-wide rotated transfer trace ([`generate_rotated_effect_vm_trace`]) to the
-/// committed 816-wide wide descriptor: it appends the BEFORE/AFTER 13×8 wide commitment carriers
-/// (re-absorbing the rotated limbs the 1-felt block already lays) and the 16 wide commit PIs. The
-/// live 1-felt carriers/PIs (cols < 608, PIs 0..37) are CARRIED UNCHANGED — this is purely
+/// Widens the LIVE `GRAD_ROT_WIDTH`-wide rotated transfer trace
+/// ([`generate_rotated_effect_vm_trace`]) to the committed `WIDE_WIDTH` wide descriptor: it
+/// appends the BEFORE/AFTER `WIDE_NUM_CARRIERS`×8 wide commitment carriers (re-absorbing the
+/// rotated limbs the 1-felt block already lays) and the 16 wide commit PIs. The
+/// live 1-felt carriers/PIs (cols < `GRAD_ROT_WIDTH`) are CARRIED UNCHANGED — this is purely
 /// additive. Returns `(trace, dpis)` ready for `prove_vm_descriptor2` against the wide descriptor.
 pub fn generate_rotated_transfer_wide(
     initial_state: &CellState,
@@ -3693,7 +3748,7 @@ pub fn generate_rotated_transfer_wide(
     }
 
     // Widen each row + append the 16 wide PIs via the generic widener (transfer's host width is
-    // `GRAD_ROT_WIDTH = 608`, so the carriers land at `WIDE_BEFORE_CBASE = 608`).
+    // `GRAD_ROT_WIDTH`, so the carriers land at `WIDE_BEFORE_CBASE`).
     let dpis = append_wide_carriers(&mut trace, base_pis, GRAD_ROT_WIDTH);
     debug_assert_eq!(trace[0].len(), WIDE_WIDTH);
     debug_assert_eq!(dpis.len(), WIDE_PI_COUNT);
@@ -3703,14 +3758,15 @@ pub fn generate_rotated_transfer_wide(
 /// **THE GENERIC WIDE WIDENER (parametric in the host width / carrier base).** Given a fully-laid
 /// rotated base trace (its `BEFORE_BASE`/`AFTER_BASE` limb blocks final, including any grow-gate root
 /// override + `recompute_block_commit`) and its base PI vector, this:
-///   * resizes each row to `host_width + 608` and fills the two 13×8 BEFORE/AFTER wide carrier blocks
-///     at `cbB = host_width` / `cbA = host_width + 304` (the `wideBeforeCBase`/`wideAfterCBase` Lean
+///   * resizes each row to `host_width + WIDE_CARRIER_APPENDIX` and fills the two
+///     `WIDE_NUM_CARRIERS`×8 BEFORE/AFTER wide carrier blocks at `cbB = host_width` /
+///     `cbA = host_width + WIDE_CARRIER_BLOCK_SPAN` (the `wideBeforeCBase`/`wideAfterCBase` Lean
 ///     layout), chip-faithfully via [`fill_wide_block`] — reading the SAME `BEFORE_BASE`/`AFTER_BASE`
-///     limbs the 1-felt block lays (so the 8-felt commit binds the same 37 limbs + iroot);
-///   * APPENDS the 16 wide commit PIs PAST the base PIs: BEFORE commit (carrier 12, first row) then
-///     AFTER commit (carrier 12, last row).
-///     `host_width` is the wide member's HOST width (`d.traceWidth` in Lean): `GRAD_ROT_WIDTH = 608` for
-///     the 816-wide families, `CAP_OPEN_WIDTH = 818` for the 1026-wide cap-open tail. The wide carriers
+///     limbs the 1-felt block lays (so the 8-felt commit binds the same `NUM_PRE_LIMBS` limbs + iroot);
+///   * APPENDS the 16 wide commit PIs PAST the base PIs: BEFORE commit (carrier `WIDE_COMMIT_CARRIER`,
+///     first row) then AFTER commit (carrier `WIDE_COMMIT_CARRIER`, last row).
+///     `host_width` is the wide member's HOST width (`d.traceWidth` in Lean): `GRAD_ROT_WIDTH` for
+///     the rotated-cohort families, wider for the cap-open/after-spine tails. The wide carriers
 ///     land STRICTLY PAST the host's columns + gates (the appendix is purely additive), member-uniform
 ///     because `BEFORE_BASE`/`AFTER_BASE` (187/238) are uniform across the cohort. The number of base
 ///     PIs is preserved (the grow-gate families carry an extra PI[38]); the 16 wide PIs append after.
@@ -3759,9 +3815,9 @@ pub fn append_wide_carriers(
 
 /// **THE WIDE BURN/MINT trace generator (transfer-shape cohort).** Burn and mint carry the bare
 /// 38-PI rotated vector exactly as transfer does (no grow-gate root, no record pin); their wide
-/// member is `wideAppend burn 187 238` (width 816 / PI 54), the SAME carrier shape as transfer. This
+/// member is `wideAppend burn 187 238` (width `WIDE_WIDTH` / PI `WIDE_PI_COUNT`), the SAME carrier shape as transfer. This
 /// wraps the LIVE base generator ([`generate_rotated_effect_vm_trace`], which proves any cohort
-/// member's real turn) + the generic widener at `GRAD_ROT_WIDTH = 608`. Returns `(trace, dpis)`.
+/// member's real turn) + the generic widener at `GRAD_ROT_WIDTH`. Returns `(trace, dpis)`.
 pub fn generate_rotated_transfer_shape_wide(
     initial_state: &CellState,
     effects: &[Effect],
@@ -3784,9 +3840,9 @@ pub fn generate_rotated_transfer_shape_wide(
 }
 
 /// **THE WIDE RECORD-PIN trace generator (the record-pin cohort — setPermissions / setVK / cellSeal /
-/// cellUnseal / cellDestroy / receiptArchive / refusal, 816-wide / 55-PI).** The base generator
+/// cellUnseal / cellDestroy / receiptArchive / refusal, `WIDE_WIDTH`-wide).** The base generator
 /// ([`generate_rotated_effect_vm_trace`]) pushes the record/lifecycle pin as PI 38 for these leads (39
-/// base PIs); this appends the wide carriers at `GRAD_ROT_WIDTH = 608` (so the published 8-felt commit
+/// base PIs); this appends the wide carriers at `GRAD_ROT_WIDTH` (so the published 8-felt commit
 /// rides PIs 39..54, after the record pin at 38). Returns `(trace, dpis)`.
 pub fn generate_rotated_record_pin_wide(
     initial_state: &CellState,
@@ -3903,10 +3959,10 @@ pub fn append_sovereign_key_commit_rider(
     Ok(())
 }
 
-/// **THE WIDE FEE-IN-PROOF trace generator (`transferFeeVmDescriptor2R24Wide`, 816-wide / 55-PI).**
+/// **THE WIDE FEE-IN-PROOF trace generator (`transferFeeVmDescriptor2R24Wide`, `WIDE_WIDTH`-wide).**
 /// The wide twin of the fee-aware base generator ([`generate_rotated_effect_vm_trace_with_fee`]): it
 /// debits the fee in-proof (so the rotated AFTER limbs carry the post-fee balance) and then appends
-/// the BEFORE/AFTER 13×8 wide carriers + 16 wide commit PIs at `GRAD_ROT_WIDTH = 608`. Because
+/// the BEFORE/AFTER `WIDE_NUM_CARRIERS`×8 wide carriers + 16 wide commit PIs at `GRAD_ROT_WIDTH`. Because
 /// `fill_wide_block` re-absorbs the SAME post-fee `BEFORE_BASE`/`AFTER_BASE` limbs the fee rewrite
 /// laid, the published 8-felt commit (PIs 39..54, after the fee's PI 38) binds the post-fee state at
 /// ~124 bits. The live sovereign transfer IS fee'd — this is its wide producer leg. Returns
@@ -4028,15 +4084,16 @@ pub fn generate_rotated_stripe_mint_wide(
 /// AFTER-spine appendix (`AFTER_SPINE_SPAN = 143`): `815 + 329 + 143 = 1287`. A satisfying trace FORCES
 /// the faithful 8-felt heap-write over the full ~124-bit BEFORE/AFTER root blocks
 /// (`effHeapWriteV3_forces_write8`) — never the lane-0 squeeze the map_op-only host would leave. The
-/// wide carriers land at THIS host width: `1287 + 608 = 1655`.
-pub const HEAP_WRITE_HOST_WIDTH: usize = 2039; // v13: wide 2951 − 912 carriers
+/// wide carriers land at THIS host width.
+pub const HEAP_WRITE_HOST_WIDTH: usize =
+    (GRAD_ROT_WIDTH - 14) + CAP_OPEN_SPAN + CAP_OPEN_AFTER_SPINE_SPAN; // 2105 (wide 3065 − WIDE_CARRIER_APPENDIX); the graduated Class-A heap base is 14 columns narrower than the rotated cohort base (1633 = 1647 − 14, invariant across v11/v12/v13)
 // NB: the READ appendix base is `HEAP_WRITE_HOST_WIDTH − CAP_OPEN_SPAN − AFTER_SPINE_SPAN`
 // (the graduated Class-A heap base, v12 = 1145); see [`HEAP_WRITE_READ_BASE`] below.
 /// The heap-open READ appendix base column (the splice base `heapWriteV3`'s trace width = the
-/// graduated Class-A heap base). v11 grew the base by +154 (deployed Lean base is 969), so the READ
-/// appendix sits at `HEAP_WRITE_HOST_WIDTH − CAP_OPEN_SPAN(329) − AFTER_SPINE_SPAN(143) = 1617 − 472
-/// = 1145`. (The v10 value 815 laid the membership 154 columns too low against the deployed after-spine
-/// constraints.)
+/// graduated Class-A heap base, `GRAD_ROT_WIDTH − 14`): `HEAP_WRITE_HOST_WIDTH −
+/// CAP_OPEN_SPAN(329) − AFTER_SPINE_SPAN(143) = 2105 − 472 = 1633`. Derived, so it tracks the
+/// graduated base. (Historically a too-low literal here laid the membership columns against
+/// zero-padding and the deployed after-spine constraints rejected.)
 pub const HEAP_WRITE_READ_BASE: usize =
     HEAP_WRITE_HOST_WIDTH - CAP_OPEN_SPAN - CAP_OPEN_AFTER_SPINE_SPAN;
 
@@ -4235,7 +4292,7 @@ pub fn generate_rotated_heap_write_wide(
     debug_assert_eq!(
         trace[0].len(),
         HEAP_WRITE_HOST_WIDTH + 2 * WIDE_NUM_CARRIERS * 8
-    ); // 2951 (OPTION I after-spine host)
+    ); // 3065 (HEAP_WRITE_HOST_WIDTH + WIDE_CARRIER_APPENDIX — OPTION I after-spine host)
     debug_assert_eq!(dpis.len(), 20); // 4 base (2 retired) + 16 wide
     Ok((trace, dpis, vec![heap_leaves.to_vec()]))
 }
@@ -4247,7 +4304,7 @@ pub fn generate_rotated_heap_write_wide(
 /// LIVE rotated transfer base, widens it to the turn-bound cap-open shape ([`widen_to_cap_open_tb`] —
 /// the 91 cap-membership columns + the two `actor`/`dst` turn-identity columns), publishes the 49-PI
 /// turn-bound vector ([`cap_open_tb_dpis`]: 46 rotated + `src`/`actor`/`dst` at 46/47/48), and then
-/// appends the BEFORE/AFTER 13×8 wide carriers + 16 wide commit PIs at the cap-open-TB host width
+/// appends the BEFORE/AFTER `WIDE_NUM_CARRIERS`×8 wide carriers + 16 wide commit PIs at the cap-open-TB host width
 /// (`CAP_OPEN_TB_WIDTH = 821`). The cap-membership host columns, the turn-identity pins, and the live
 /// 1-felt carriers are CARRIED UNCHANGED — the wide append is purely additive, preserving the 8-felt
 /// before/after anchors. The verifier ANCHORS the three turn-identity PIs to the trusted turn
@@ -4413,7 +4470,7 @@ pub fn generate_rotated_note_spend_wide(
 
 /// **THE WIDE NOTECREATE trace generator (grow-gate cohort).** Wraps the commitments-tree generator
 /// ([`generate_rotated_note_create_trace_with_commitments_tree`], limb-27 override + recompute), then
-/// appends the wide carriers at `GRAD_ROT_WIDTH = 608` (wide member width 816 / PI 55).
+/// appends the wide carriers at `GRAD_ROT_WIDTH` (wide member width `WIDE_WIDTH`).
 pub fn generate_rotated_note_create_wide(
     initial_state: &CellState,
     effects: &[Effect],
@@ -4585,8 +4642,8 @@ pub fn generate_rotated_spawn_wide(
 /// deployment-real fields-tree generator ([`generate_rotated_refusal_trace_with_fields_tree`], which
 /// overrides limb 36 = `B_FIELDS_ROOT` with the openable accumulator roots + recomputes the block
 /// commits so the `.write` map-op opens the genuine sorted write), then appends the wide carriers at
-/// `GRAD_ROT_WIDTH = 608`. The refusal lead carries the extra PI[38] (the record/lifecycle pin) before
-/// the 16 wide PIs (wide member width 816 / PI 55) — the SAME 39-base+16-wide geometry the record-pin
+/// `GRAD_ROT_WIDTH`. The refusal lead carries the extra record/lifecycle pin before
+/// the 16 wide PIs — the SAME base+16-wide geometry the record-pin
 /// wide producer lays, so a refusal proven here verifies through the same wide descriptor path. This is
 /// the wide twin of the non-wide fields-tree generator the forge-detector exercises; threading a
 /// NON-empty `map_heaps` (the BEFORE fields-tree leaf set + the reserved audit slot) is what makes an
@@ -4627,9 +4684,9 @@ pub fn generate_rotated_refusal_wide(
 /// `setFieldDynV1Face` carries FOUR fewer chip sites than the standard rotated host (36 vs 40 — the
 /// setField face does not fire the economic balance-hash sites), so its graduated width is
 /// `ROT_WIDTH + 7·36 = 328 + 252 = 580`… +1 reserved = **581** (the committed
-/// `setFieldDynVmDescriptor2R24.trace_width`, distinct from `GRAD_ROT_WIDTH = 608`). The wide
+/// `setFieldDynVmDescriptor2R24.trace_width`, distinct from `GRAD_ROT_WIDTH`). The wide
 /// carriers (the `setFieldDynVmDescriptor2R24Wide` member) land at THIS host width.
-pub const SET_FIELD_DYN_HOST_WIDTH: usize = GRAD_ROT_WIDTH - 28; // v13: 1581 − 4·7 sites = 1553 (wide 2465 − 912 carriers)
+pub const SET_FIELD_DYN_HOST_WIDTH: usize = GRAD_ROT_WIDTH - 28; // 1647 − 4·7 sites = 1619 (wide 2579 − WIDE_CARRIER_APPENDIX)
 
 /// The slot-index param column the dynamic setField indexes the 8-cell overflow memory by
 /// (`prmCol SLOT = prmCol VALUE = param1`, col 69 — both addr AND value of the Blum write, the
@@ -4762,7 +4819,7 @@ pub fn generate_rotated_set_field_dyn_base(
 
 /// **THE WIDE setFieldDyn trace generator (`setFieldDynVmDescriptor2R24Wide`, 789-wide / 63 PI).**
 /// The 581-wide V1Face base ([`generate_rotated_set_field_dyn_base`]) + `append_wide_carriers` at the
-/// `SET_FIELD_DYN_HOST_WIDTH = 581` host (NOT `GRAD_ROT_WIDTH = 608` — the setField face has four
+/// `SET_FIELD_DYN_HOST_WIDTH` host (NOT `GRAD_ROT_WIDTH` — the setField face has four
 /// fewer chip sites). Returns `(trace, dpis, mem_boundary)` ready for the wide descriptor.
 pub fn generate_rotated_set_field_dyn_wide(
     initial_state: &CellState,
@@ -4784,7 +4841,7 @@ pub fn generate_rotated_set_field_dyn_wide(
     debug_assert_eq!(
         trace[0].len(),
         SET_FIELD_DYN_HOST_WIDTH + 2 * WIDE_NUM_CARRIERS * 8
-    ); // 2465
+    ); // 2579 (SET_FIELD_DYN_HOST_WIDTH + WIDE_CARRIER_APPENDIX)
     Ok((trace, dpis, mem_boundary))
 }
 
@@ -4799,7 +4856,7 @@ pub fn generate_rotated_set_field_dyn_wide(
 /// V1Face host as setFieldDyn (the carriers ride the identical 8-felt blocks);
 /// the trace SHAPE differs (a Custom row, no Blum-memory boundary), but the wide
 /// geometry is `append_wide_carriers` at 581.
-pub const CUSTOM_HOST_WIDTH: usize = GRAD_ROT_WIDTH - 28; // v13: 1581 − 4·7 sites = 1553 (wide 2465 − 912 carriers)
+pub const CUSTOM_HOST_WIDTH: usize = GRAD_ROT_WIDTH - 28; // 1647 − 4·7 sites = 1619 (wide 2579 − WIDE_CARRIER_APPENDIX)
 
 /// **THE WIDE custom trace generator (`customVmDescriptor2R24`, 789-wide / 70 PI).**
 ///

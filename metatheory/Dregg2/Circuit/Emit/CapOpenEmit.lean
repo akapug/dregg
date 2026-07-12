@@ -1873,6 +1873,7 @@ honest recompute is stable; the commit is 8 felts wide. -/
 section CapOpenWideAntiLaundering
 open Dregg2.Circuit.Emit.EffectVmEmitRotationR (refWide demoPre24)
 -- the representative cap-open member IS a `wideAppend` at its face `bb` (position 42 = transferEff).
+set_option maxRecDepth 16000 in  -- the v2 wide appendix (960, derived) deepens this kernel reduction
 theorem v3RegistryCapOpenWide_transferEff_is_wideAppend :
     v3RegistryCapOpenWide[42]?.map (·.2)
       = some (Dregg2.Circuit.Emit.EffectVmEmitRotationWide.wideAppend transferCapOpenEffV3

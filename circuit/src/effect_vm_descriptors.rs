@@ -821,7 +821,7 @@ pub const V3_STAGED_CAVEAT_DESCRIPTORS: &[(&str, &str, &str)] = &[(
 pub const V3_STAGED_REGISTRY_TSV: &str =
     include_str!("../descriptors/rotation-v3-staged-registry.tsv");
 pub const V3_STAGED_REGISTRY_FP: &str =
-    "7b56ff5fd6e35e67f32bc6e94bbd1579634866d0d291534241b2f59efc42b1bf";
+    "81cb9bfe624a6c573a5b68ec457ad580b2088f1d74f8c30dceb8ec685a5e8653";
 
 /// **THE UMEM-FORM COHORT REGISTRY (STAGED, VK-RISK-FREE).** The 9 per-effect FIXED-cohort umem
 /// descriptors — `setFieldUMem` · `setHeapUMem` · `grantUMem` · `attenuateUMem` ·
@@ -1002,7 +1002,7 @@ pub fn weld_umem_into_rotated_descriptor_cohort(
 
 /// **THE WIDE ROTATED+UMEM WELD (STAGED, VK-RISK-FREE) — the real flip precursor the VK epoch
 /// needs.** Weld the universal-memory COHORT leg INTO a WIDE descriptor (a member of
-/// [`WIDE_REGISTRY_STAGED_TSV`], the verified Lean `v3RegistryCapOpenWide`, carrying the two 13×8
+/// [`WIDE_REGISTRY_STAGED_TSV`], the verified Lean `v3RegistryCapOpenWide`, carrying the two 60×8
 /// BEFORE/AFTER carriers + the 16 wide commit PIs = the 8-felt ~124-bit before/after anchors).
 ///
 /// IDENTICAL append shape to [`weld_umem_into_rotated_descriptor`] — the single-domain cohort
@@ -1196,15 +1196,16 @@ pub const WIDE_TRANSFER_STAGED_TSV: &str =
 /// (`metatheory/EmitWideRegistryProbe.lean`). `grantCapWriteCapOpen` is reconciled OUT (it is not a
 /// live `V3_STAGED_REGISTRY_TSV` member). ADDITIVE: the live 1-felt `V3_STAGED_REGISTRY_TSV` / FP / VK
 /// are UNTOUCHED — this is the parallel wide path beside them. The transfer row (row 0) is
-/// byte-identical to `WIDE_TRANSFER_STAGED_TSV`. The wide carriers land PAST each member's host width
-/// (801/829, the heapWrite after-spine host 1287, and the faithful 8-felt cap-open family
-/// 1158/1160/1301), re-absorbing the SAME rotated limbs the 1-felt block lays into a genuine 8-felt
-/// (~124-bit) commitment (wide widths 1169/1197/1526/1528/1655/1669, each carrying the 16 wide commit
-/// PIs = the 8-felt before/after anchors).
+/// byte-identical to `WIDE_TRANSFER_STAGED_TSV`. The wide carriers land PAST each member's host
+/// width, re-absorbing the SAME rotated limbs the 1-felt block lays into a genuine 8-felt
+/// (~124-bit) commitment (each wide member = its host width + the 960-column
+/// `trace_rotated::WIDE_CARRIER_APPENDIX`, carrying the 16 wide commit PIs = the 8-felt
+/// before/after anchors; the per-member widths are pinned by the drift tooth in
+/// `wide_registry_parses_and_is_name_stable`).
 pub const WIDE_REGISTRY_STAGED_TSV: &str =
     include_str!("../descriptors/rotation-wide-registry-staged.tsv");
 pub const WIDE_REGISTRY_STAGED_FP: &str =
-    "cfd558510a177f607cc34f2a93e64be21466c6958bd2452e9da08db0ac6f5b0e";
+    "bab59c1bf66f9ebdb87691f904f4a655610a3f4746496444ee94b919a51970bf";
 
 /// **THE LEAN-EMITTED WIDE+UMEM WELDED REGISTRY (STAGED, VK-RISK-FREE) — the WIDE+umem weld's
 /// MISSING VERIFIER LEG.** A member-for-member, name-stable welded twin of the wire's WIDE cap-open
@@ -1230,7 +1231,154 @@ pub const WIDE_REGISTRY_STAGED_FP: &str =
 pub const WIDE_UMEM_WELD_REGISTRY_TSV: &str =
     include_str!("../descriptors/rotation-wide-umem-welded-registry-staged.tsv");
 pub const WIDE_UMEM_WELD_REGISTRY_FP: &str =
-    "9159e8168b59bdc2be12b7b1df4df4b09b47ae90bfa9474428ed2bd00cb346fa";
+    "55df51aba83bde3f4666c46eda01d9164c236fe2a16e94b6c81b10312e0d656b";
+
+// ============================================================================
+// THE WIDE-CARRIER GEOMETRY VERSION BOUNDARY (the flag-day rotation, v2).
+//
+// v1 (RETIRED): 169 pre-iroot limbs → 57 carriers → 456-column block span → 912-column
+//   appendix, commit carrier 56.
+// v2 (LIVE):    178 pre-iroot limbs → 60 carriers → 480-column block span → 960-column
+//   appendix, commit carrier 59 (`trace_rotated::WIDE_NUM_CARRIERS` et al., derived from
+//   `NUM_PRE_LIMBS` by the shared `wide_carriers_for_limbs`).
+//
+// This is an APPROVED FLAG-DAY rotation: there is NO compatibility shim at the same
+// assurance rung. A carried v1 registry member / VK-bearing descriptor is refused HERE with
+// a TYPED error (`WideGeometryVersionError::RetiredV1`), never silently accepted or silently
+// widened. The detector is STRUCTURAL and shift-invariant: it reads the descriptor's own 16
+// wide anchor pins (the LAST 16 PI slots — 8 first-row BEFORE-commit columns, 8 last-row
+// AFTER-commit columns) and measures the carrier BLOCK SPAN as the column distance between
+// the BEFORE and AFTER commit carriers, which appended tails (umem welds, teeth, digest
+// appendixes, refuse welds) never move.
+// ============================================================================
+
+/// The LIVE wide-carrier geometry version (see the boundary note above).
+pub const WIDE_CARRIER_GEOMETRY_VERSION: u32 = 2;
+/// The RETIRED v1 per-block carrier span (57 carriers × 8 = 456 columns over the 169-limb body).
+pub const WIDE_CARRIER_BLOCK_SPAN_RETIRED_V1: usize = 456;
+
+/// Typed refusal at the wide-carrier geometry-version boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WideGeometryVersionError {
+    /// The artifact carries the RETIRED v1 (57-carrier / 456-block-span / 912-appendix)
+    /// carrier shape. Old registries/VKs are version-refused, not widened.
+    RetiredV1 {
+        /// The presented descriptor's name.
+        name: String,
+        /// The measured BEFORE→AFTER commit-carrier span (456 for v1).
+        block_span: usize,
+    },
+    /// The artifact's anchor pins measure a block span that matches NO known wide-carrier
+    /// geometry version (neither the live v2 nor the retired v1).
+    UnknownGeometry {
+        /// The presented descriptor's name.
+        name: String,
+        /// The measured BEFORE→AFTER commit-carrier span.
+        block_span: usize,
+    },
+    /// The artifact claims a wide PI tail but its 16 wide anchor pins are missing or
+    /// malformed (no first-row BEFORE / last-row AFTER commit pins at the tail slots).
+    MissingAnchors {
+        /// The presented descriptor's name.
+        name: String,
+    },
+}
+
+impl core::fmt::Display for WideGeometryVersionError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::RetiredV1 { name, block_span } => write!(
+                f,
+                "'{name}': RETIRED wide-carrier geometry v1 (block span {block_span} = 57 \
+                 carriers; the live version is v{WIDE_CARRIER_GEOMETRY_VERSION}: 60 carriers / \
+                 480-column block / commit carrier 59) — old registries/VKs are version-refused, \
+                 not silently widened"
+            ),
+            Self::UnknownGeometry { name, block_span } => write!(
+                f,
+                "'{name}': wide anchor pins measure carrier block span {block_span}, which is \
+                 no known wide-carrier geometry version (live v{WIDE_CARRIER_GEOMETRY_VERSION} \
+                 = 480; retired v1 = {WIDE_CARRIER_BLOCK_SPAN_RETIRED_V1})"
+            ),
+            Self::MissingAnchors { name } => write!(
+                f,
+                "'{name}': wide-shaped descriptor is missing its 16 wide anchor pins (no \
+                 first-row BEFORE / last-row AFTER commit pins at the PI tail)"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for WideGeometryVersionError {}
+
+/// **The structural wide-carrier geometry-version detector.** Reads the descriptor's own 16
+/// wide anchor pins — the LAST 16 PI slots, of which slot `piCount-16` is the first-row
+/// BEFORE-commit lane-0 pin and slot `piCount-8` the last-row AFTER-commit lane-0 pin — and
+/// measures the carrier BLOCK SPAN as `after_col - before_col`. That span is exactly
+/// `WIDE_NUM_CARRIERS × 8` for every `wideAppend`-derived member and is INVARIANT under every
+/// appended tail (umem weld columns, teeth columns, digest appendixes, refuse welds), so it
+/// classifies any carried wide artifact regardless of composition:
+///
+/// * `Ok(WIDE_CARRIER_GEOMETRY_VERSION)` — the live v2 span (480);
+/// * `Err(RetiredV1)` — the retired v1 span (456): explicit version refusal;
+/// * `Err(UnknownGeometry)` / `Err(MissingAnchors)` — fail closed on anything else.
+pub fn wide_carrier_geometry_version(
+    d: &crate::descriptor_ir2::EffectVmDescriptor2,
+) -> Result<u32, WideGeometryVersionError> {
+    use crate::descriptor_ir2::VmConstraint2;
+    use crate::effect_vm::trace_rotated::WIDE_CARRIER_BLOCK_SPAN;
+    use crate::lean_descriptor_air::{VmConstraint, VmRow};
+    let pi = d.public_input_count;
+    if pi < 16 {
+        return Err(WideGeometryVersionError::MissingAnchors {
+            name: d.name.clone(),
+        });
+    }
+    let mut before0: Option<usize> = None; // first-row pin of PI slot pi-16 (BEFORE lane 0)
+    let mut after0: Option<usize> = None; // last-row pin of PI slot pi-8 (AFTER lane 0)
+    for c in &d.constraints {
+        if let VmConstraint2::Base(VmConstraint::PiBinding { row, col, pi_index }) = c {
+            match row {
+                VmRow::First if *pi_index == pi - 16 => before0 = Some(*col),
+                VmRow::Last if *pi_index == pi - 8 => after0 = Some(*col),
+                _ => {}
+            }
+        }
+    }
+    let (Some(b), Some(a)) = (before0, after0) else {
+        return Err(WideGeometryVersionError::MissingAnchors {
+            name: d.name.clone(),
+        });
+    };
+    let Some(block_span) = a.checked_sub(b) else {
+        return Err(WideGeometryVersionError::MissingAnchors {
+            name: d.name.clone(),
+        });
+    };
+    if block_span == WIDE_CARRIER_BLOCK_SPAN {
+        Ok(WIDE_CARRIER_GEOMETRY_VERSION)
+    } else if block_span == WIDE_CARRIER_BLOCK_SPAN_RETIRED_V1 {
+        Err(WideGeometryVersionError::RetiredV1 {
+            name: d.name.clone(),
+            block_span,
+        })
+    } else {
+        Err(WideGeometryVersionError::UnknownGeometry {
+            name: d.name.clone(),
+            block_span,
+        })
+    }
+}
+
+/// **The v2 admission gate** — `Ok(())` iff the carried wide artifact rides the LIVE
+/// wide-carrier geometry version. Every wide acceptance boundary (the IVC `admit_welded_leg`,
+/// registry consumers) calls THIS, so the retired 57/56 shape is refused with the typed
+/// [`WideGeometryVersionError`], never silently admitted.
+pub fn require_wide_carrier_geometry_v2(
+    d: &crate::descriptor_ir2::EffectVmDescriptor2,
+) -> Result<(), WideGeometryVersionError> {
+    wide_carrier_geometry_version(d).map(|_| ())
+}
 
 /// The rotated probe layout at register count `r` (the Rust twin of the Lean parametric
 /// layout `EffectVmEmitRotationR`: columns are FUNCTIONS of R; the chunking is 4-wide head,
@@ -2655,30 +2803,34 @@ mod tests {
                 "wide registry key {i} name-stable with the live registry"
             );
             let d = parse_vm_descriptor2(json).unwrap_or_else(|e| panic!("{key} wide parses: {e}"));
-            // the wide member is `host + 608` (the pre_limbs re-lay grew the carrier blocks) and
-            // `host.piCount + 16`. The committed host widths in play (read from the emitted
-            // rotation-wide-registry-staged.tsv): custom/setFieldDyn → 2465, the rotated cohort → 2493,
-            // the cap-open family + the §J′ insert hosts → 2822, the turn-identity-pinned
-            // transferCapOpenTB → 2824, heapWrite's after-spine membership host → 2951, the refusal
-            // fields-write weld + the cap-WRITE after-spine members → 2965 — every wide width is
-            // `host + 608` — PLUS the two teeth-exposing advances off the rotated-cohort width (2493):
-            // the membership-teeth transfer (2493 + 2 teeth columns past the carriers → 2495,
-            // `CarrierComposed.transferV3MembershipWide`) and the KEY_COMMIT-gated sovereign (2493 +
-            // the 32-column chip-digest appendix → 2525, `CarrierComposed.makeSovereignV3DeployedWide`).
-            // THE GENTIAN FLAG-DAY: every BARE-COHORT member carries the `3·REFUSE_STRIDE = 48`-column
-            // floor-refuse weld PAST its width, so each refused base rides `base + 48`: custom/setFieldDyn
-            // 2465→2513, the rotated cohort 2493→2541, the membership-teeth transfer 2495→2543, the
-            // KEY_COMMIT sovereign 2525→2573, the §J′ insert / cap-open bare-cohort hosts 2822→2870, and
-            // the refusal fields-write / cap-WRITE bare-cohort members 2965→3013. The NON-cohort members
-            // keep their base (cap-open 2822, transferCapOpenTB 2824, heapWrite 2951, refusal/write 2965,
-            // plus the 2 rotated-cohort-width non-cohort rows at 2493). Any member off this exact set (a
-            // carrier block that grew/shrank, or a refuse weld mis-sized) fails this drift tooth.
+            // the wide member is `host + WIDE_CARRIER_APPENDIX (960)` (the v2 flag-day 60-carrier
+            // appendix) and `host.piCount + 16`. The committed wide widths — READ OFF THE EMITTED
+            // rotation-wide-registry-staged.tsv, never hand-derived — are:
+            //   * 2607 — the rotated-cohort base wide (GRAD_ROT_WIDTH 1647 + 960; supplyMint + the
+            //     non-cohort rotated-width rows);
+            //   * 2627 — custom/setFieldDyn (host 1619 = GRAD_ROT_WIDTH − 28) + the gentian 48-column
+            //     floor-refuse weld (2579 + 48);
+            //   * 2655 — the bare-cohort members: 2607 + the gentian 48-column floor-refuse weld;
+            //   * 2657 — the membership-teeth transfer (2607 + 2 teeth columns + 48,
+            //     `CarrierComposed.transferV3MembershipWide`);
+            //   * 2687 — the KEY_COMMIT-gated sovereign (2607 + the 32-column chip-digest appendix
+            //     + 48, `CarrierComposed.makeSovereignV3DeployedWide`);
+            //   * 2936 — the cap-open family + the §J′ insert hosts (host 1976 + 960);
+            //   * 2938 — the turn-identity-pinned transferCapOpenTB (host 1978 + 960);
+            //   * 2984 — cap-open bare-cohort hosts + the gentian refuse (2936 + 48);
+            //   * 3065 — heapWrite's after-spine membership host (HEAP_WRITE_HOST_WIDTH 2105 + 960);
+            //   * 3079 — the refusal fields-write weld + cap-WRITE after-spine members
+            //     (REFUSAL_WRITE_HOST_WIDTH 2119 + 960);
+            //   * 3127 — the refusal fields-write / cap-WRITE bare-cohort members (3079 + 48).
+            // Any member off this exact set (a carrier block that grew/shrank, or a refuse weld
+            // mis-sized) fails this drift tooth. The RETIRED v1 (912-appendix) widths are refused
+            // structurally by `wide_carrier_geometry_version` (the versioned boundary).
             assert!(
                 matches!(
                     d.trace_width,
-                    2493 | 2513 | 2541 | 2543 | 2573 | 2822 | 2824 | 2870 | 2951 | 2965 | 3013
+                    2607 | 2627 | 2655 | 2657 | 2687 | 2936 | 2938 | 2984 | 3065 | 3079 | 3127
                 ),
-                "{key}: wide width {} is a known wide geometry (2493 / 2513 / 2541 / 2543 / 2573 / 2822 / 2824 / 2870 / 2951 / 2965 / 3013)",
+                "{key}: wide width {} is a known wide geometry (2607 / 2627 / 2655 / 2657 / 2687 / 2936 / 2938 / 2984 / 3065 / 3079 / 3127)",
                 d.trace_width
             );
             // Every wide member carries the 16 wide-commit PIs (the 8-felt ~124-bit before/after

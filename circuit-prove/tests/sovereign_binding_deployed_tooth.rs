@@ -129,14 +129,19 @@ fn keyed_sovereign_twin() -> (EffectVmDescriptor2, usize) {
         insert_at + KEY_COMMIT_LEN + 16,
         "the NATIVE sovereign row carries the 4 teeth claim PIs (58..61) ahead of the 16 anchors"
     );
-    // The KEY_COMMIT gate's digest appendix (4 quads × 8 lanes) rides at the FIXED sovereign wide base
-    // (2493 = the wide host); the member is 2525, THEN the gentian capacity-floor refuse (makeSovereign
-    // is a bare cohort member) widens it +48 -> 2573, with the refuse aux PAST the digest.
-    assert_eq!(
-        desc.trace_width, 2573,
-        "the native sovereign row carries the 32-column KEY_COMMIT digest appendix (base 2493) + the \
-         48-column gentian capacity-floor refuse aux at the wide end"
-    );
+    // The KEY_COMMIT gate's digest appendix (4 quads × 8 lanes) rides at the sovereign wide base
+    // (GRAD_ROT_WIDTH + WIDE_CARRIER_APPENDIX = the wide host); the member adds the 32-column
+    // digest, THEN the gentian capacity-floor refuse (makeSovereign is a bare cohort member)
+    // widens it +48, with the refuse aux PAST the digest.
+    {
+        use dregg_circuit::effect_vm::trace_rotated::{GRAD_ROT_WIDTH, WIDE_CARRIER_APPENDIX};
+        assert_eq!(
+            desc.trace_width,
+            GRAD_ROT_WIDTH + WIDE_CARRIER_APPENDIX + 32 + 48,
+            "the native sovereign row carries the 32-column KEY_COMMIT digest appendix (at the \
+             wide host width) + the 48-column gentian capacity-floor refuse aux at the wide end"
+        );
+    }
     (desc, insert_at)
 }
 

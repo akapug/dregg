@@ -2090,6 +2090,27 @@ fn admit_welded_leg(t: &FinalizedTurn, index: usize) -> Result<(), TurnChainErro
             ),
         });
     }
+    // THE WIDE-CARRIER GEOMETRY VERSION BOUNDARY (flag-day v2). A carried WIDE-form leg whose
+    // carrier blocks ride the RETIRED v1 shape (57 carriers / 456-column block span / 912-column
+    // appendix over the 169-limb body) is refused HERE with the TYPED
+    // `WideGeometryVersionError::RetiredV1` — old 57/56 registry members and their VKs cannot
+    // re-enter at the upgraded assurance rung, and are never silently widened. The detector is
+    // structural (the leg's own 16 wide anchor pins), so it bites BEFORE registry grounding:
+    // a v1 artifact gets the explicit version refusal, not a generic off-registry error.
+    if leg.descriptor.name.ends_with(WIDE_UMEM_WELD_SUFFIX)
+        || leg
+            .descriptor
+            .name
+            .ends_with(WIDE_UMEM_MULTIDOMAIN_WELD_SUFFIX)
+    {
+        use dregg_circuit::effect_vm_descriptors::require_wide_carrier_geometry_v2;
+        if let Err(e) = require_wide_carrier_geometry_v2(&leg.descriptor) {
+            return Err(TurnChainError::TurnProofInvalid {
+                index,
+                reason: format!("wide-carrier geometry version boundary: {e}"),
+            });
+        }
+    }
     // GROUND THE VERIFIER LEG against the Lean-emitted welded registry. The WIDE single-domain weld
     // (`-umem-wide-welded-staged`, NOT the multidomain twin) has a committed, Lean-grounded descriptor
     // set ([`WIDE_UMEM_WELD_REGISTRY_TSV`], the verified `EffectVmEmitUMemWeldWide.weldedWideRegistry`).
