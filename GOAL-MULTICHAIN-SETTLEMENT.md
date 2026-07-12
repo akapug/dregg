@@ -252,3 +252,12 @@ RUNNING: native Metal NTT lane (kernel #1 of the all-Metal backend — native ul
 targeting 50-70% bandwidth vs wgpu's ~20%); gnark-verify-real-shrink (waiting in the build-lock line — LEAVE IT).
 NEXT (autonomy, ember pre-approved): after the NTT number → full all-Metal backend (Poseidon2+Merkle) + auto-tune
 knobs from the start (M4-measured not assumed). Is the M4 ssh-reachable? (ember Q pending — run the probe on both).
+
+## ⚑ GPU BACKEND SETTLED (07-12, measured both kernel classes): PORTABLE wgpu, no native seam
+NTT (bandwidth-bound) native≈wgpu tie; Poseidon2/Merkle (COMPUTE-bound, the dominant cost) native only 1.2-1.35x
+(my "3x ALU win" was a microprobe artifact — Poseidon2 is 1/3 mul + 2/3 add/sub-at-equal-rate, and wgpu's in-context
+mul is ~185 not 60-106). Whole-prover native seam capped 1.27x → not worth it. ONE wgpu/Vulkan+Metal backend,
+auto-tune per device (split-twiddle helps both). THE REAL PRIZE: GPU offload = 38-64x over CPU (2^21 Merkle 12-15ms
+GPU vs 485ms CPU) → wire the wgpu prover behind Plonky3 DFT+hash trait seams → the ~95s shrink → seconds → client-side.
+NEXT (item 2, the ultimate measurement): the GPU-PROVER WIRING — TwoAdicSubgroupDft(NTT) + MMCS hasher(Poseidon2)
+behind DreggOuterConfig, measure REAL end-to-end shrink prove GPU-vs-CPU on M2 Max (unified memory = no copy tax).
