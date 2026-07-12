@@ -261,3 +261,9 @@ auto-tune per device (split-twiddle helps both). THE REAL PRIZE: GPU offload = 3
 GPU vs 485ms CPU) → wire the wgpu prover behind Plonky3 DFT+hash trait seams → the ~95s shrink → seconds → client-side.
 NEXT (item 2, the ultimate measurement): the GPU-PROVER WIRING — TwoAdicSubgroupDft(NTT) + MMCS hasher(Poseidon2)
 behind DreggOuterConfig, measure REAL end-to-end shrink prove GPU-vs-CPU on M2 Max (unified memory = no copy tax).
+
+## ⚑⚑⚑ WRAP END-TO-END (FRI-core) ON REAL DATA — DONE (07-12 ~1:16pm)
+gnark VerifyFriNative gadget verifies a REAL dregg apex's BN254-native shrink proof (fold→shrink→export→gnark-verify;
+verified myself; 10 reject canaries). SCOPE FRI-core; residual = full-STARK verify → Groth16 → EVM. THE WRAP WORKS.
+The multichain goal: thread 1 (wrap) core DONE end-to-end on real data; thread 2 (fold-P0 leaf) done; thread 3 done.
+Perf: blowup 8x free; GPU-wiring Amdahl-capped ~2-2.5x (BN254-t3 microprobe decides). GPU value Q → ember.

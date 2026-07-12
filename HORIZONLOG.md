@@ -7924,3 +7924,14 @@ slice. DECIDER LANE launched: Poseidon2-W16 + Merkle-commit native-vs-wgpu head-
 poseidon2-merkle-bench). If native wins ~2-3x on Poseidon2 (likely) AND hashing dominates → native IS worth a seam
 for the hash-dominated prover. ULTIMATE measurement = wire the GPU kernels behind the Plonky3 DFT+hash trait seams
 and measure REAL end-to-end shrink prove-time (native vs wgpu vs CPU) — micro-benchmarks inform, the full prover decides.
+
+## ⚑⚑⚑ WRAP END-TO-END (FRI-core) ON REAL DATA (2026-07-12): gnark verifies a real apex's shrink proof
+The wrap's cross-side agreement closed on a REAL proof (not KATs/synthetic). Pipeline: fold a real ir2_leaf_wrap
+apex (capstone chain) → shrink BN254-native under DreggOuterConfig (blowup-8, ~95s) → export FRI data (481KB
+fixture) → gnark VerifyFriNative gadget ACCEPTS it (verified myself, 2.64s) + 10 reject canaries bite. So the Rust
+shrink prover + the gnark verifier agree on a real apex's shrink proof, end-to-end. SCOPE = FRI-core (transcript +
+native-BN254 Merkle openings + fold + multi-height roll-ins + PoW + final-poly; reduced openings as host witnesses).
+RESIDUAL = full 5-instance batch-STARK verify (constraint eval + quotient) → Groth16 → EVM. Fixture uses the
+capstone chain (transfer-chain fixture awaits the sibling GAP#4 wide-registry regen). THE WRAP WORKS on real data.
+GPU perf (ember value Q pending): blowup gave 8x free; GPU-wiring Amdahl-capped ~2-2.5x shrink (DFT only 1-2%,
+BN254-hash the dominant ~60% — BN254-t3 wgpu microprobe running = the decisive number). Server-shrink vs client-turn-proof = ember's call.
