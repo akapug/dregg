@@ -312,3 +312,14 @@ any ConsensusVerified-without-supermajority path?) — same discipline the EVM c
 M-of-N oracle-attested (honest); succinct wrapper reuses the recursive-STARK verify surface (the wrap unlocks it).
 DISCIPLINE MINTED: send an adversarial critic at EVERY completion claim; never report R1CS-satisfiability as a proof
 or a mock as a verifier.
+
+## ⚑ SOLANA FORGERY CLOSED + VERIFIED MYSELF (07-12 ~3:52pm)
+The critic-found stake-table forgery is FIXED (committed). All production ConsensusVerified paths now route through
+the anchored provenance closure (from_anchor + tally_authorized + governance-PINNED WeakSubjectivityAnchor); the
+bare-table path is #[cfg(test)]-gated. VERIFIED MYSELF: the attacker's 1-key stake table REJECTS (AnchorRootMismatch)
+on BOTH the bridge path AND the production watcher; honest anchored holding ACCEPTS; fails closed without a pinned
+anchor; plain build has no bare-table→ConsensusVerified path. Corrected claim: Solana holdings now genuinely trustless
+over a governance-pinned weak-subjectivity anchor (the standard light-client trust model), NOT "trusted-table arithmetic".
+RESIDUAL (operator, named): deployed config must pin the real governance-chosen (epoch, stake_table_root).
+SCORECARD: 2 critics → 2 real holes (EVM verifier binds no state root; Solana trusted stake table) → EVM being fixed,
+SOLANA FIXED+VERIFIED. Critics-at-completion = standing practice. EVM lane (binding + Groth16) still running.
