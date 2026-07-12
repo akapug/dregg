@@ -1000,3 +1000,15 @@ NAMED FOLLOW-UP (gated): once require_pq is universally ON, the auth-check enfor
 becomes redundant, and action.hash() can be content-addressed -> deterministic turn_hash -> replay-binding/dedup/
 content-addressing. Track with the require_pq rollout. The discipline earned its keep a THIRD time: nearly content-
 addressed a turn + would have silently removed the sole anti-quantum-downgrade guarantee.
+
+## require_pq readiness: DRIVEN → STOP (2026-07-12)
+The conservative require_pq lane flipped require_pq false→true (all 3 executor ctors), ran the turn/executor suite on
+persvati, and concluded STOP: enabling require_pq globally now is NOT cleanly safe (classical-only producers/fixtures
+still exist — sign_action_classical is a live legacy-compat path, and executor test fixtures use Authorization::
+Signature). Reverted the flip; require_pq stays false (committed-green). CONSEQUENCE: the turn-hash content-addressing
+(option 2 / codex's completeness) stays DEFERRED — it is gated on require_pq being universally ON, which requires first
+migrating ALL turn producers to hybrid (a real rollout, not a flag flip). B remains correct: verify_by_replay (state +
+forged-choice refusal + linkage) is sound; the turn_hash non-determinism is the price of the anti-PQ-downgrade
+hash-binding while require_pq is off. NAMED PREREQUISITE for option 2: the require_pq rollout (hybrid-everywhere) — a
+separate effort. Discipline held: the lane drove the flip, found it unsafe, and STOPPED rather than shipping a broken
+core change.
