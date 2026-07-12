@@ -53,9 +53,10 @@
 //!    port is a NAMED residual on the gnark side (`fri_verify_native.go` names
 //!    the production leaf layout as this config's to define; this config now
 //!    defines it: the MMCS row sponge above).
-//! 5. **FRI knobs** — [`OUTER_FRI_LOG_BLOWUP`]=6, log_final_poly_len=0,
-//!    max_log_arity=1 (fold by 2), [`OUTER_FRI_NUM_QUERIES`]=19, commit_pow=0,
-//!    [`OUTER_FRI_QUERY_POW_BITS`]=16 — the `ir2_leaf_wrap_config` shape
+//! 5. **FRI knobs** — [`OUTER_FRI_LOG_BLOWUP`]=3 (blowup 8, rebalanced from 6 on
+//!    measured data — ~8× faster shrink prove), log_final_poly_len=0,
+//!    max_log_arity=1 (fold by 2), [`OUTER_FRI_NUM_QUERIES`]=38, commit_pow=0,
+//!    [`OUTER_FRI_QUERY_POW_BITS`]=16 (3·38+16 = 130 conjectured bits)
 //!    (`ivc_turn_chain.rs`) and the exact shape the gnark side compiled and
 //!    measured (`fri_verify_native_test.go`: R=18 arity-2 rounds, 19 queries,
 //!    QueryPowBits 16). Conjectured soundness 6·19+16 = 130 bits, the same bar
@@ -116,10 +117,16 @@ pub const OUTER_DIGEST_ELEMS: usize = 1;
 /// Challenge extension degree (unchanged from the inner config).
 const D: usize = 4;
 
-/// FRI log blowup — matches `ir2_leaf_wrap_config` and the gnark measurement shape.
-pub const OUTER_FRI_LOG_BLOWUP: usize = 6;
-/// FRI query count — 19 queries at blowup 6 (+16 PoW) = 130 conjectured bits.
-pub const OUTER_FRI_NUM_QUERIES: usize = 19;
+/// FRI log blowup. **Rebalanced from 6 → 3 (blowup 64 → 8) on MEASURED data**: the
+/// native-hash swap made per-query gnark verify cheap (~243 R1CS/hash), which inverted
+/// the original "high-blowup / few-queries" tuning. The shrink PROVE is dominated by the
+/// blowup LDE (NTT); at blowup 8 the real-apex shrink measured **~95s vs ~760s at blowup
+/// 64 (≈8× faster)**, for a trivial gnark-verify cost bump (1.02M → 1.46M R1CS, both far
+/// under the ~5M Groth16 ceiling). Soundness held: 3·38 + 16 = 130 conjectured bits.
+/// (blowup 4 / 57 queries panicked — a config edge; blowup 8 is the stable sweet spot.)
+pub const OUTER_FRI_LOG_BLOWUP: usize = 3;
+/// FRI query count — 38 queries at blowup 8 (+16 PoW) = 3·38+16 = 130 conjectured bits.
+pub const OUTER_FRI_NUM_QUERIES: usize = 38;
 /// FRI query proof-of-work bits.
 pub const OUTER_FRI_QUERY_POW_BITS: usize = 16;
 
