@@ -406,19 +406,28 @@ fn build_effect(spec: TurnEffectSpec, default_cell: CellId) -> Result<dregg_turn
             to,
             target,
             slot,
-        } => Effect::GrantCapability {
-            from: resolve(from)?,
-            to: parse_cell_id(&to)?,
-            cap: dregg_cell::CapabilityRef {
-                target: parse_cell_id(&target)?,
-                slot,
-                permissions: dregg_cell::AuthRequired::None,
-                breadstuff: None,
-                expires_at: None,
-                allowed_effects: None,
-                stored_epoch: None,
-            },
-        },
+        } => {
+            let cap_target = parse_cell_id(&target)?;
+            Effect::GrantCapability {
+                from: resolve(from)?,
+                to: parse_cell_id(&to)?,
+                cap: dregg_cell::CapabilityRef {
+                    target: cap_target,
+                    slot,
+                    permissions: dregg_cell::AuthRequired::None,
+                    breadstuff: None,
+                    expires_at: None,
+                    allowed_effects: None,
+                    stored_epoch: None,
+                    provenance: dregg_cell::derivation::cap_provenance(
+                        &cap_target,
+                        slot,
+                        &dregg_cell::derivation::mint_provenance(),
+                        &[0u8; 32],
+                    ),
+                },
+            }
+        }
     })
 }
 
@@ -510,7 +519,21 @@ pub struct AttestedRootInfo {
     pub height: u64,
     pub merkle_root: String,
     pub timestamp: i64,
+    /// LOCAL light-client signature count (`quorum_signatures.len()`); on a
+    /// full node this is 1 and is NOT the cross-node quorum. Kept for wire
+    /// compatibility — gate on `quorum`/`threshold` instead.
     pub signatures: usize,
+    /// The number of cross-node committee finalization votes assembled for this
+    /// root (`finalization_quorum.len()`). A consumer gates acceptance on
+    /// `quorum >= threshold`. COUNT ONLY — not signature-verified server-side;
+    /// trust still derives from the independently recomputed ledger root.
+    pub quorum: usize,
+    /// The committee vote count required for a valid finalization quorum.
+    pub threshold: usize,
+    /// Structural completeness (QC present, or count >= threshold) per
+    /// `StoredAttestedRoot::is_structurally_complete` — still count-only, no
+    /// cryptographic signature verification.
+    pub structurally_complete: bool,
 }
 
 #[derive(Serialize)]
@@ -1628,6 +1651,7 @@ pub fn router_with_cors(
         .route("/api/membership", get(get_membership))
         .route("/api/cells", get(get_all_cells))
         .route("/api/cell/{id}", get(get_cell_detail))
+        .route("/api/cell/{id}/proof", get(get_cell_proof))
         .route("/api/node/cells/{id}", get(get_cell_detail))
         .route("/api/tokens", get(get_tokens))
         // DEOS-HOST discovery: a hosted private server's cap-gated affordance surface,
@@ -1646,6 +1670,11 @@ pub fn router_with_cors(
         // EXACTLY the committed receipt range. Public (read-only over the log).
         .route("/api/receipts/index/root", get(get_receipt_index_root))
         .route("/api/receipts/index/range", get(get_receipt_index_range))
+        // The SIGNED index head: the same root, signed by the node's
+        // federation key and anchored to the latest attested root's
+        // quorum-pinned coordinates (docs/deos/CONSENSUS-BINDS-INDEX.md
+        // rung A — node-bound + consensus-anchored, NOT quorum-bound).
+        .route("/api/receipts/index/head", get(get_receipt_index_head))
         // ORGANS identity rider — the KERI-shaped identity event-log export:
         // a cell's chained / signed / witness-receipted key-event history as
         // a PORTABLE artifact (independently checkable via
@@ -2257,6 +2286,57 @@ async fn get_receipt_index_root(
     Json(dregg_query::client::IndexRootResponse {
         root: hex_encode(&s.receipt_index.root()),
         len: s.receipt_index.len(),
+    })
+}
+
+/// `GET /api/receipts/index/head` → [`dregg_query::client::SignedIndexHead`].
+///
+/// The SAME MMR root `/index/root` serves, but SIGNED by this node's
+/// federation key and BOUND to the latest consensus-attested coordinates
+/// (blocklace block id, height, canonical ledger root — the values the
+/// committee's finalization quorum pins). Rung A of
+/// `docs/deos/CONSENSUS-BINDS-INDEX.md`: a NODE-bound, consensus-ANCHORED
+/// claim (non-repudiation + portable equivocation evidence), deliberately
+/// NOT presented as quorum-signed — the per-node receipt chain cannot be
+/// quorum-co-signed while `receipt_hash()` absorbs the local wall clock and
+/// node-local turns interleave with finalized ones.
+async fn get_receipt_index_head(
+    State(state): State<NodeState>,
+) -> Json<dregg_query::client::SignedIndexHead> {
+    let mut s = state.write().await;
+    s.sync_receipt_index();
+    let root = s.receipt_index.root();
+    let len = s.receipt_index.len();
+    // The consensus anchor: the latest attested root's quorum-pinned
+    // coordinates. A fresh node (no attested root yet) signs the explicitly
+    // UNANCHORED framing (block_id = None, height 0, zero ledger root) —
+    // distinct bytes from any anchored head by the preimage's option tag.
+    let (block_id, height, merkle_root) = s
+        .store
+        .latest_attested_root()
+        .ok()
+        .flatten()
+        .map(|r| (r.blocklace_block_id, r.height, r.merkle_root))
+        .unwrap_or((None, 0, [0u8; 32]));
+    let federation_id = crate::executor_setup::federation_id_for_executor(&s);
+    let msg = dregg_query::client::index_head_signing_message(
+        &federation_id,
+        block_id.as_ref(),
+        height,
+        &merkle_root,
+        len,
+        &root,
+    );
+    let sig = dregg_types::sign(&s.cclerk.gossip_signing_key(), &msg);
+    Json(dregg_query::client::SignedIndexHead {
+        root: hex_encode(&root),
+        len,
+        block_id: block_id.map(|b| hex_encode(&b)),
+        height,
+        merkle_root: hex_encode(&merkle_root),
+        federation_id: hex_encode(&federation_id),
+        signer: hex_encode(&s.cclerk.public_key().0),
+        signature: hex_encode(&sig.0),
     })
 }
 
@@ -4116,8 +4196,15 @@ async fn get_cell_detail(
     let cell_id_bytes: [u8; 32] = hex_decode(&id).map_err(|_| StatusCode::BAD_REQUEST)?;
     let cell_id = dregg_cell::CellId(cell_id_bytes);
 
-    match s.ledger.get(&cell_id) {
-        Some(cell) => Ok(Json(CellDetailResponse {
+    Ok(Json(cell_detail_response(id, s.ledger.get(&cell_id))))
+}
+
+/// Build the `CellDetailResponse` projection for a cell (or the not-found stub).
+/// Shared by `GET /api/cell/{id}` and the inclusion-proof endpoint so both serve a
+/// byte-identical cell view.
+fn cell_detail_response(id: String, cell: Option<&dregg_cell::Cell>) -> CellDetailResponse {
+    match cell {
+        Some(cell) => CellDetailResponse {
             id: id.clone(),
             found: true,
             balance: cell.state.balance(),
@@ -4142,8 +4229,8 @@ async fn get_cell_detail(
             fields: cell.state.fields.iter().map(|f| hex_encode(f)).collect(),
             capabilities: cell.capabilities.iter().cloned().collect(),
             capability_tombstones: cell.capabilities.tombstoned_slots().collect(),
-        })),
-        None => Ok(Json(CellDetailResponse {
+        },
+        None => CellDetailResponse {
             id,
             found: false,
             balance: 0,
@@ -4163,8 +4250,122 @@ async fn get_cell_detail(
             fields: Vec::new(),
             capabilities: Vec::new(),
             capability_tombstones: Vec::new(),
-        })),
+        },
     }
+}
+
+#[derive(Deserialize)]
+pub struct CellProofQuery {
+    /// Optional NO-ROLLBACK assertion: require the node's latest attested height to
+    /// be at least this, else 409. Does NOT time-travel the ledger — the proof is
+    /// always served over the CURRENT ledger (first cut, option (a)); snapshots are
+    /// only retained at checkpoint boundaries, which do not line up with attested
+    /// heights, so arbitrary-height reconstruction is not offered.
+    pub height: Option<u64>,
+}
+
+#[derive(Serialize)]
+pub struct CellProofResponse {
+    /// The cell view — byte-identical to `GET /api/cell/{id}`.
+    pub cell: CellDetailResponse,
+    /// `canonical_ledger_root` of the SERVED (current) ledger. `leaves` reconstruct
+    /// exactly this; the verifier recomputes the flat root from `leaves` and checks
+    /// equality.
+    pub merkle_root: String,
+    /// The FULL sorted leaf set of the served ledger: `[cell_id_hex, leaf_hash_hex]`,
+    /// `leaf_hash = BLAKE3(postcard(cell))`, sorted by id (flat root, no opening).
+    pub leaves: Vec<(String, String)>,
+    /// Advisory anchor height: equals `attested_height` (the latest attested height),
+    /// NOT the height of the served leaves. Only when `is_attested` is true does the
+    /// served ledger correspond to this attested height.
+    pub height: u64,
+    /// Latest quorum-attested root the node holds (may LAG the served ledger, since
+    /// the finalization quorum forms async over gossip). 0 when none exists yet.
+    pub attested_height: u64,
+    /// Hex of that root's `merkle_root` ("" when none exists yet).
+    pub attested_merkle_root: String,
+    /// `finalization_quorum.len()` on the latest attested root — the REAL cross-node
+    /// vote count (NOT the local single signature).
+    pub quorum: usize,
+    /// Signatures required for that root's quorum.
+    pub threshold: usize,
+    /// Server-computed convenience: the served ledger's root IS the latest attested
+    /// root AND that root carries a `>= threshold` quorum. A consumer may gate on this
+    /// or recompute it from the fields above.
+    pub is_attested: bool,
+}
+
+/// GET /api/cell/{id}/proof — a cell-inclusion proof against the flat ledger root.
+///
+/// First cut (option (a)): serves the CURRENT ledger's full leaf set + flat root,
+/// plus the latest quorum-attested root. The verifier recomputes
+/// `canonical_ledger_root` from `leaves`, checks it == `merkle_root`, and checks the
+/// target `(id, leaf_hash)` is a leaf. The read is consensus-backed only when
+/// `merkle_root == attested_merkle_root` and `quorum >= threshold` (`is_attested`).
+/// The node does not retain ledger state at arbitrary attested heights (snapshots
+/// exist only at checkpoint boundaries), so it does not time-travel; `?height=H` is a
+/// no-rollback assertion checked against the latest attested height.
+async fn get_cell_proof(
+    State(state): State<NodeState>,
+    AxumPath(id): AxumPath<String>,
+    Query(params): Query<CellProofQuery>,
+) -> Result<Json<CellProofResponse>, StatusCode> {
+    let s = state.read().await;
+
+    let cell_id_bytes: [u8; 32] = hex_decode(&id).map_err(|_| StatusCode::BAD_REQUEST)?;
+    let cell_id = dregg_cell::CellId(cell_id_bytes);
+
+    let cell = cell_detail_response(id, s.ledger.get(&cell_id));
+
+    // Full sorted leaf set + flat root of the CURRENT ledger. Construction is
+    // byte-identical to the attested root (both fold through
+    // `canonical_ledger_root_from_leaves`), so a served root that equals an attested
+    // root is a genuine match, not a coincidence of encoding.
+    let leaf_entries = dregg_persist::canonical_ledger_leaves(&s.ledger);
+    let merkle_root = hex_encode(&dregg_persist::canonical_ledger_root_from_leaves(
+        &leaf_entries,
+    ));
+    let leaves: Vec<(String, String)> = leaf_entries
+        .iter()
+        .map(|(cid, h)| (hex_encode(cid), hex_encode(h)))
+        .collect();
+
+    // Latest quorum-attested root (may lag the served ledger).
+    let latest = s.store.latest_attested_root().ok().flatten();
+    let attested_height = latest.as_ref().map(|r| r.height).unwrap_or(0);
+    let attested_merkle_root = latest
+        .as_ref()
+        .map(|r| hex_encode(&r.merkle_root))
+        .unwrap_or_default();
+    let quorum = latest
+        .as_ref()
+        .map(|r| r.finalization_quorum.len())
+        .unwrap_or(0);
+    let threshold = latest.as_ref().map(|r| r.threshold).unwrap_or(0);
+
+    // No-rollback assertion: if the caller demands an anchor at height H, the node
+    // must have attested at least that far.
+    if let Some(h) = params.height {
+        if attested_height < h {
+            return Err(StatusCode::CONFLICT);
+        }
+    }
+
+    let is_attested = !attested_merkle_root.is_empty()
+        && attested_merkle_root == merkle_root
+        && quorum >= threshold;
+
+    Ok(Json(CellProofResponse {
+        cell,
+        merkle_root,
+        leaves,
+        height: attested_height,
+        attested_height,
+        attested_merkle_root,
+        quorum,
+        threshold,
+        is_attested,
+    }))
 }
 
 /// Hash a passphrase with Argon2id and derive a bearer seed.
@@ -5119,6 +5320,9 @@ async fn get_federation_roots(State(state): State<NodeState>) -> Json<Vec<Attest
             merkle_root: hex_encode(&r.merkle_root),
             timestamp: r.timestamp,
             signatures: r.quorum_signatures.len(),
+            quorum: r.finalization_quorum.len(),
+            threshold: r.threshold,
+            structurally_complete: r.is_structurally_complete(),
         })
         .collect();
     Json(infos)

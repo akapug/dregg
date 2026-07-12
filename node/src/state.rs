@@ -428,8 +428,14 @@ pub struct NodeStateInner {
     /// Trust-anchor residual (THE ROTATION): the root here is blake3 with
     /// arity-separated domains, NOT the model's in-circuit Poseidon2. Binding
     /// this root into `recStateCommit` (so the IVC aggregate pins it) is THE
-    /// ROTATION's `CommitBindsMMR` weld — until then the served root is an
-    /// out-of-band trust anchor.
+    /// ROTATION's `CommitBindsMMR` weld. Until then the strongest served
+    /// binding is `GET /api/receipts/index/head`: the same root SIGNED by the
+    /// node's federation key and anchored to the latest quorum-pinned
+    /// attested root — node-bound + consensus-ANCHORED, deliberately NOT
+    /// claimed as quorum-bound (receipt hashes absorb the local wall clock
+    /// and the chain interleaves node-local turns, so a committee cannot
+    /// co-sign this per-node root; the rung ladder toward the real quorum
+    /// weld is docs/deos/CONSENSUS-BINDS-INDEX.md).
     pub receipt_index: dregg_query::Mmr<dregg_query::Blake3Mmr>,
 
     /// Node-local witness artifacts keyed by receipt hash.

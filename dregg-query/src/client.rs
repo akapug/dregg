@@ -147,6 +147,99 @@ pub fn index_root_path() -> &'static str {
 pub fn index_range_path(lo: u64, hi: u64) -> String {
     format!("/api/receipts/index/range?lo={lo}&hi={hi}")
 }
+pub fn index_head_path() -> &'static str {
+    "/api/receipts/index/head"
+}
+
+/// Domain tag for the SIGNED index head ([`index_head_signing_message`]).
+/// A v2 (hybrid ML-DSA half, as the finalization votes carry) would bump it.
+pub const INDEX_HEAD_DOMAIN_V1: &[u8] = b"dregg-receipt-index-head-v1";
+
+/// The exact bytes the node signs for `GET /api/receipts/index/head` — the
+/// SINGLE source of truth for the head preimage (node signer and any client
+/// verifier reconstruct byte-identical messages by construction, the same
+/// discipline as `dregg_types::finalization_vote_signing_message`).
+///
+/// Layout: `domain || federation_id || (0x01||block_id | 0x00) || height_le
+/// || merkle_root || len_le || mroot`. The ANCHOR half (`block_id`,
+/// `height`, `merkle_root`) is the latest attested root's quorum-pinned
+/// coordinates; the CLAIM half is the index head. The MMR root is
+/// deliberately the LAST 32 bytes — the same root-last layout the model's
+/// `CommitBindsMMR` obligation proves against (`commit = hash (limbs ++
+/// [mroot])`), so this rung, the vote-v3 rung, and THE ROTATION's sponge
+/// limb all pin one shape (docs/deos/CONSENSUS-BINDS-INDEX.md).
+pub fn index_head_signing_message(
+    federation_id: &[u8; 32],
+    block_id: Option<&[u8; 32]>,
+    height: u64,
+    merkle_root: &[u8; 32],
+    len: u64,
+    root: &[u8; 32],
+) -> Vec<u8> {
+    let mut msg = Vec::with_capacity(INDEX_HEAD_DOMAIN_V1.len() + 32 + 33 + 8 + 32 + 8 + 32);
+    msg.extend_from_slice(INDEX_HEAD_DOMAIN_V1);
+    msg.extend_from_slice(federation_id);
+    // 0x00 / 0x01||32-byte option framing, as `AttestedRoot::signing_message`
+    // frames its optional roots — a missing anchor is unambiguous bytes.
+    match block_id {
+        Some(id) => {
+            msg.push(0x01);
+            msg.extend_from_slice(id);
+        }
+        None => msg.push(0x00),
+    }
+    msg.extend_from_slice(&height.to_le_bytes());
+    msg.extend_from_slice(merkle_root);
+    msg.extend_from_slice(&len.to_le_bytes());
+    msg.extend_from_slice(root);
+    msg
+}
+
+/// `GET /api/receipts/index/head` response — the node's receipt-index MMR
+/// head, SIGNED by the node's federation key and anchored to the latest
+/// consensus-attested coordinates.
+///
+/// TRUST LABEL (precise): a NODE-BOUND, CONSENSUS-ANCHORED claim — NOT a
+/// quorum-signed root and NOT the `CommitBindsMMR` IVC weld. Over the bare
+/// `/index/root` claim the signature buys: (1) non-repudiation — the root is
+/// attributable to the node's federation key; (2) anchoring — the preimage
+/// binds the `(block_id, height, merkle_root)` the committee's finalization
+/// quorum pins, positioning the claim in verified history; (3) fork
+/// evidence — two DIFFERENT heads signed at the SAME anchor by one key are
+/// portable proof of index equivocation. The committee does NOT vouch for
+/// the root itself: the receipt chain is per-node (receipt hashes absorb the
+/// executing node's wall clock; node-local turns interleave), so a quorum
+/// cannot co-sign it — the honest rung ladder toward that is
+/// `docs/deos/CONSENSUS-BINDS-INDEX.md`.
+///
+/// A client verifies `signature` (ed25519, `verify_strict`) over
+/// [`index_head_signing_message`] under a `signer` key it independently
+/// trusts for this federation (genesis/operator roster), then uses `root` as
+/// the `trusted_root` for [`AttestedSlice::verify`]. This ADDS a check to
+/// the existing TOFU root pin; it does not replace watching.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SignedIndexHead {
+    /// Hex 32-byte MMR root (the same value `/index/root` serves).
+    pub root: String,
+    /// The indexed log length at signing (redundant with the root via the
+    /// peak heights; the verifier never trusts it).
+    pub len: u64,
+    /// Hex 32-byte blocklace block id of the latest attested root; `None`
+    /// on a fresh node with no attested root yet.
+    pub block_id: Option<String>,
+    /// Height of the latest attested root (0 when unanchored).
+    pub height: u64,
+    /// Hex 32-byte canonical ledger root of the latest attested root — the
+    /// quorum-pinned coordinate (all-zero when unanchored).
+    pub merkle_root: String,
+    /// Hex 32-byte federation id the node signs under.
+    pub federation_id: String,
+    /// Hex 32-byte ed25519 public key: the node's federation identity (the
+    /// same key that signs its `AttestedRoot` quorum signatures).
+    pub signer: String,
+    /// Hex 64-byte ed25519 signature over [`index_head_signing_message`].
+    pub signature: String,
+}
 
 /// The subset of `node/src/events.rs::ReceiptEvent` this crate reads —
 /// deserialize a `/api/events` row into this, then map with
@@ -182,5 +275,52 @@ pub fn receipt_record_from_event(ev: ReceiptEventRow) -> ReceiptRecord {
             .into_iter()
             .map(|kind| EffectSummary::Other { name: kind })
             .collect(),
+    }
+}
+
+#[cfg(test)]
+mod index_head_tests {
+    use super::*;
+
+    const FED: [u8; 32] = [1; 32];
+    const BLK: [u8; 32] = [2; 32];
+    const LEDGER: [u8; 32] = [3; 32];
+    const ROOT: [u8; 32] = [4; 32];
+
+    fn base() -> Vec<u8> {
+        index_head_signing_message(&FED, Some(&BLK), 7, &LEDGER, 42, &ROOT)
+    }
+
+    #[test]
+    fn preimage_binds_every_field() {
+        let m = base();
+        let cases = [
+            index_head_signing_message(&[9; 32], Some(&BLK), 7, &LEDGER, 42, &ROOT),
+            index_head_signing_message(&FED, Some(&[9; 32]), 7, &LEDGER, 42, &ROOT),
+            index_head_signing_message(&FED, Some(&BLK), 8, &LEDGER, 42, &ROOT),
+            index_head_signing_message(&FED, Some(&BLK), 7, &[9; 32], 42, &ROOT),
+            index_head_signing_message(&FED, Some(&BLK), 7, &LEDGER, 43, &ROOT),
+            index_head_signing_message(&FED, Some(&BLK), 7, &LEDGER, 42, &[9; 32]),
+        ];
+        for (i, c) in cases.iter().enumerate() {
+            assert_ne!(&m, c, "field {i} must be bound into the preimage");
+        }
+    }
+
+    #[test]
+    fn preimage_option_framing_is_unambiguous() {
+        // An unanchored head (fresh node) vs an anchor whose block id is
+        // all-zero MUST be distinct bytes (0x00 vs 0x01||zeros framing).
+        let none = index_head_signing_message(&FED, None, 0, &[0; 32], 42, &ROOT);
+        let zero = index_head_signing_message(&FED, Some(&[0; 32]), 0, &[0; 32], 42, &ROOT);
+        assert_ne!(none, zero);
+    }
+
+    #[test]
+    fn preimage_ends_with_the_mmr_root() {
+        // Root-LAST mirrors the model layout `commit = hash (limbs ++
+        // [mroot])` (`CommitBindsMMR`): the bound root is the final 32 bytes.
+        let m = base();
+        assert_eq!(&m[m.len() - 32..], &ROOT);
     }
 }
