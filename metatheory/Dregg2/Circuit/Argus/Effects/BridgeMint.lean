@@ -214,7 +214,7 @@ open Dregg2.Circuit.Emit.EffectVmEmit
 open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (CellState)
 open Dregg2.Circuit.Emit.EffectVmEmitBridgeMint
   (bridgeMintVmDescriptor bridgeMintDescriptor_full_sound CellBridgeMintSpec IsBridgeMintRow cellProjA
-   RowEncodes)
+   RowEncodes BridgeMintRowCanon)
 
 /-! ### §4.0 — `compileBridgeMint` — the effect-keyed circuit interpretation of the bridgeMint term.
 
@@ -291,6 +291,15 @@ pins the per-(cell,asset) credited state the IR term's executor produces, with t
 turn's one prologue tick (NOT a carried divergence). -/
 theorem bridgeMint_compile_sound
     (hash : List ℤ → ℤ) (env : VmRowEnv) (hrow : IsBridgeMintRow env)
+    -- DEBT-A: `holdsVm .gate` denotes `≡ 0 [ZMOD p]`; the migrated descriptor soundness reads its ℤ-stated
+    -- CREDIT back off the field-checked gates only under the deployed range-check's canonicality envelope
+    -- (`BridgeMintRowCanon` — every state limb + the credit `bal_lo+value` + the nonce tick strictly in
+    -- `[0, p)`) and the NEW_COMMIT public input in-field (`hpubc`). bridgeMint's spec is an EQUALITY credit
+    -- (`post.balLo = pre.balLo + value`), NOT an order over an un-range-checked limb, so this is repairable
+    -- by threading canonicality — no availability-class (`amt ≤ bal`) wrap forgery here (there is no `≤`).
+    (hcanon : BridgeMintRowCanon env)
+    (hpubc : 0 ≤ env.pub Dregg2.Circuit.Emit.EffectVmEmit.pi.NEW_COMMIT
+      ∧ env.pub Dregg2.Circuit.Emit.EffectVmEmit.pi.NEW_COMMIT < 2013265921)
     (k k' : RecordKernelState) (actor cell : CellId) (a : AssetId) (value : ℤ) (post : CellState)
     (henc : RowEncodes env (cellProjA k cell a) value post)
     (hgatesat : satisfiedVm hash compileBridgeMint env true false)
@@ -310,7 +319,8 @@ theorem bridgeMint_compile_sound
   -- `CellBridgeMintSpec` (balLo credited by `value`, frame frozen, nonce ticked).
   rw [compileBridgeMint_eq] at hsat hgatesat
   obtain ⟨hcLo, hcHi, hcN, hcF, hcCap, hcRes⟩ :=
-    (bridgeMintDescriptor_full_sound hash env hrow (cellProjA k cell a) post value henc hgatesat hsat).1
+    (bridgeMintDescriptor_full_sound hash env hrow hcanon hpubc
+      (cellProjA k cell a) post value henc hgatesat hsat).1
   -- executor side: the §2 cornerstone turns the IR term's `interp` into the verified `recKMintAsset`; its
   -- per-(cell,asset) projection gives the credited balLo (the frozen limbs are `0 = 0`).
   rw [interp_bridgeMintStmt_eq_recKMintAsset] at hexec
@@ -330,6 +340,9 @@ contribution), the prologue ticks once, and the descriptor's per-effect post non
 prologue tick. So the bridge-mint row's `+1` is the turn's one tick — the divergence is CLOSED. -/
 theorem bridgeMint_compile_sound_nonce_is_turn_tick
     (hash : List ℤ → ℤ) (env : VmRowEnv) (hrow : IsBridgeMintRow env)
+    (hcanon : BridgeMintRowCanon env)
+    (hpubc : 0 ≤ env.pub Dregg2.Circuit.Emit.EffectVmEmit.pi.NEW_COMMIT
+      ∧ env.pub Dregg2.Circuit.Emit.EffectVmEmit.pi.NEW_COMMIT < 2013265921)
     (k k' : RecordKernelState) (actor cell : CellId) (a : AssetId) (value : ℤ) (post : CellState)
     (henc : RowEncodes env (cellProjA k cell a) value post)
     (hgatesat : satisfiedVm hash compileBridgeMint env true false)
@@ -346,7 +359,8 @@ theorem bridgeMint_compile_sound_nonce_is_turn_tick
         ((Dregg2.Exec.Admission.commitPrologue s cell fee).kernel.cell cell)
     ∧ post.nonce = (cellProjA k' cell a).nonce + 1 := by
   have hr : NonceReconciled (cellProjA k cell a).nonce post.nonce (cellProjA k' cell a).nonce :=
-    (bridgeMint_compile_sound hash env hrow k k' actor cell a value post henc hgatesat hsat hexec).2
+    (bridgeMint_compile_sound hash env hrow hcanon hpubc k k' actor cell a value post henc
+      hgatesat hsat hexec).2
   obtain ⟨_hzero, htick, hmatch, hresid⟩ :=
     Dregg2.Circuit.Argus.perEffect_nonce_reconciles_to_turn hr s cell fee hexecAgent hpre
   exact ⟨htick, hmatch, hresid⟩
