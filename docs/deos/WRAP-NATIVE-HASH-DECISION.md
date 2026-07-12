@@ -143,6 +143,32 @@ the dominant remaining uncertainty), not from a real apex proof. This regression
 (likely from in-flight DEBT-A wide-commit carrier work) blocks end-to-end wrap
 validation and should be fixed.
 
+## ⚑ MEASURED (2026-07-12): native-hash VerifyFri assembled + the hashing bet CONFIRMED
+
+`chain/gnark/fri_verify_native.go` — the native-hash twin of `VerifyFri` (MultiFieldChallenger
++ native BN254 Merkle, same fork-faithful order, fold on emulated BabyBear via the SHARED
+`friFoldRowArity2` path). Compiled at the ir2 shape (R=18 arity-2 rounds, 19 queries,
+QueryPowBits=16):
+
+| term | emulated | native | swing |
+|---|---|---|---|
+| **TOTAL** | 40,938,030 | **1,018,263** | **40.2×** |
+| hashing + transcript | 40,717,530 | 797,763 | **51.0×** |
+| fold-arith residual | 220,500 | 220,500 | 1× (byte-identical, code-guaranteed) |
+
+The re-architecture's **central bet is confirmed**: the dominant hashing term collapses
+**40.7M → 0.8M (51×)**, and the fold residual is provably untouched (both circuits call one
+shared fold path). Emulated ~40.9M lands in the ~30-70M band; native ~1.0M in the ~1-6M band.
+
+**Honest scope of this measurement:** the synthetic instance is SINGLE-MATRIX — it exercises
+the FRI-core hashing + one fold chain, NOT the batch-STARK reduced-opening residual (the ~3.2M
+term above from ~752 opened columns × 19 queries). So it validates the DOMINANT HASHING term
+directly and strongly; the full ~5.2M native total awaits the reduced-opening assembly + the
+Rust shrink layer (`DreggOuterConfig`). It verifies a synthetic native-hash FRI, not a real
+dregg apex (that needs the shrink layer). Verification boundary: the gadget + canaries +
+challenger 61.9× were re-confirmed independently; the 40M-compile total is the committed
+measurement test's figure (reproducible).
+
 ## Validate before re-architecting (the disciplined path)
 
 Do NOT rip out gadgets yet. Two cheap experiments settle dregg's real numbers:
