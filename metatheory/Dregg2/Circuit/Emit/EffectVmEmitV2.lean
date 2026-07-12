@@ -1567,4 +1567,230 @@ def v2Registry : List (String × EffectVmDescriptor2) :=
 #assert_axioms setFieldDyn_readback_genuine
 #assert_axioms setFieldDyn_slot_bounded
 
+/-! ## §10 — THE MULTI-WIDTH GRADUATION (`graduableWide`): 15-bit borrow-limb range teeth reach
+the graduation/rotation tower.
+
+`graduable` demands EVERY range tooth at the shared `BAL_LIMB_BITS = 30` width, and `graduateV1`
+lowers every tooth into the ONE 30-bit table — correct for the surveyed registry, but it LOCKS OUT
+the §11.7 hardened availability descriptors (`EffectVmEmitTransfer.transferVmDescriptorAvail`):
+their borrow-weld limbs are 15-BIT teeth (`transferAvailRanges`), and lowering a 15-bit tooth into
+the 30-bit table would only bound the limb `< 2^30` — DEFEATING the borrow proof, whose residuals
+must stay `< 2^16 < p` (`transferAvail_derives_availability`). This section is the multi-width
+enabler, PURELY ADDITIVE beside the single-width path:
+
+  * `WIDE_RANGE_WIDTHS` — the allowed widths `{15, BAL_LIMB_BITS}`;
+  * `rangeTidW` — the width-indexed table id (`BAL_LIMB_BITS` stays the shared `.range`; 15 rides
+    a width-tagged custom id) + `rangeLookupW`, the WIDTH-PRESERVING lowering;
+  * `graduableWide` — the relaxed decidable side condition (every tooth at an ALLOWED width;
+    `graduable ⟹ graduableWide`, `graduableWide_of_graduable`);
+  * `graduateV1Wide` — the multi-width graduation: identical to `graduateV1` except each range
+    tooth lowers into ITS OWN width's table (a 15-bit limb is bounded `< 2^15` EXACTLY);
+  * `graduateV1Wide_sound` / `Satisfied2FaithfulWide` / `satisfied2FaithfulWide_satisfiedVm` —
+    the soundness collapse mirroring §4/§4F, per-width table pins in place of the single pin.
+
+Deployment note (do NOT over-read): the deployed `Ir2Air` assembly realizes the `.range` pin
+today; the 15-bit pin (`t.tf (rangeTidW 15) = rangeRows 15`) is the table the availability-weld
+assembly must realize (the Rust weld's `RangeSpec { bits: 15 }` teeth, `transfer_avail_weld.rs`) —
+part of the SAME ember-gated registry/VK regen that routes the hardened descriptor. -/
+
+/-- The allowed multi-width range widths: 15 = the borrow-weld limb width (`transferAvailRanges` —
+residuals stay `< 2^16 < p`), `BAL_LIMB_BITS` = 30 = the shared balance-limb width. -/
+def WIDE_RANGE_WIDTHS : List Nat := [15, BAL_LIMB_BITS]
+
+/-- The width-tagged custom-table id base for non-`BAL_LIMB_BITS` range widths (offset past the
+allocated custom ids: SUBMASK 0, UMEM 1, umem-boundary 2). Width `b` rides `.custom (64 + b)` —
+e.g. the 15-bit table is `.custom 79` (wire id 84). -/
+def RANGE_W_TID_BASE : Nat := 64
+
+/-- The width-indexed range-table id: the shared 30-bit table stays `.range` (so the single-width
+world embeds unchanged); every other allowed width rides its width-tagged custom id. -/
+def rangeTidW (bits : Nat) : TableId :=
+  if bits = BAL_LIMB_BITS then .range else .custom (RANGE_W_TID_BASE + bits)
+
+theorem rangeTidW_bal : rangeTidW BAL_LIMB_BITS = .range := rfl
+
+/-- The per-width table pins subsume the legacy single pin (`rangeTidW BAL_LIMB_BITS = .range`). -/
+theorem rangeTablesWide_range {tf : TraceFamily}
+    (h : ∀ b ∈ WIDE_RANGE_WIDTHS, tf (rangeTidW b) = rangeRows b) :
+    tf .range = rangeRows BAL_LIMB_BITS := by
+  have hb : BAL_LIMB_BITS ∈ WIDE_RANGE_WIDTHS := by simp [WIDE_RANGE_WIDTHS]
+  simpa [rangeTidW_bal] using h BAL_LIMB_BITS hb
+
+/-- The width-preserving range lowering: a `bits`-wide tooth looks up ITS OWN width's table. -/
+def rangeLookupW (r : VmRange) : Dregg2.Circuit.DescriptorIR2.Lookup :=
+  { table := rangeTidW r.bits, tuple := [.var r.wire] }
+
+/-- A v1 descriptor is WIDE-GRADUABLE: well-formed site references, chip-rate fit, and every
+range tooth at an ALLOWED width (15-bit borrow limbs admitted beside the 30-bit balance limbs). -/
+def graduableWide (d : EffectVmDescriptor) : Bool :=
+  sitesWF d.hashSites && sitesFit d.hashSites
+    && d.ranges.all (fun r => decide (r.bits ∈ WIDE_RANGE_WIDTHS))
+
+/-- Unpack the decidable `graduableWide` check into the three propositional side conditions. -/
+theorem graduableWide_spec {d : EffectVmDescriptor} (h : graduableWide d = true) :
+    sitesWF d.hashSites = true ∧ sitesFit d.hashSites = true
+      ∧ ∀ r ∈ d.ranges, r.bits ∈ WIDE_RANGE_WIDTHS := by
+  unfold graduableWide at h
+  simp only [Bool.and_eq_true] at h
+  obtain ⟨⟨h1, h2⟩, h3⟩ := h
+  refine ⟨h1, h2, fun r hr => ?_⟩
+  have := List.all_eq_true.mp h3 r hr
+  exact of_decide_eq_true this
+
+/-- The single-width gate implies the wide gate (30 is an allowed width). -/
+theorem graduableWide_of_graduable {d : EffectVmDescriptor} (h : graduable d = true) :
+    graduableWide d = true := by
+  obtain ⟨h1, h2, h3⟩ := graduable_spec h
+  unfold graduableWide
+  simp only [Bool.and_eq_true, List.all_eq_true]
+  refine ⟨⟨h1, h2⟩, fun r hr => ?_⟩
+  simp [h3 r hr, WIDE_RANGE_WIDTHS]
+
+/-- **`graduateV1Wide`** — the multi-width re-anchor: `graduateV1` verbatim except each range tooth
+lowers via `rangeLookupW` into its OWN width's table. The width-tagged range tables join the
+declared table family. -/
+def graduateV1Wide (d : EffectVmDescriptor) : EffectVmDescriptor2 :=
+  { name        := d.name
+  , traceWidth  := d.traceWidth + (CHIP_OUT_LANES - 1) * d.hashSites.length
+  , piCount     := d.piCount
+  , tables      :=
+      v2Tables (d.traceWidth + (CHIP_OUT_LANES - 1) * d.hashSites.length)
+        ++ (WIDE_RANGE_WIDTHS.filter (fun b => !(b == BAL_LIMB_BITS))).map
+             (fun b => ⟨rangeTidW b, "range_w" ++ toString b, 1, .rangeLimb b⟩)
+  , constraints :=
+      d.constraints.map .base
+        ++ d.hashSites.mapIdx (fun i s =>
+             .lookup (siteLookup d.hashSites s (d.traceWidth + (CHIP_OUT_LANES - 1) * i)))
+        ++ d.ranges.map (fun r => .lookup (rangeLookupW r))
+  , hashSites   := []
+  , ranges      := [] }
+
+/-- **A width-preserving range lookup REPLACES a v1 `VmRange` tooth at ITS OWN width.** Against
+the faithful `bits`-wide table, looking up `[col w]` enforces exactly `VmRange.holds ⟨w, bits⟩` —
+the wire lies in `[0, 2^bits)`. The 15-bit instance is the borrow-proof enabler. -/
+theorem lookup_replaces_rangeW (bits : Nat) (tf : TraceFamily)
+    (hr : tf (rangeTidW bits) = rangeRows bits) (env : VmRowEnv) (w : Nat)
+    (h : Dregg2.Circuit.DescriptorIR2.Lookup.holdsAt tf env ⟨rangeTidW bits, [.var w]⟩) :
+    VmRange.holds env ⟨w, bits⟩ := by
+  unfold Dregg2.Circuit.DescriptorIR2.Lookup.holdsAt at h
+  rw [hr] at h
+  simp only [List.map_cons, List.map_nil, EmittedExpr.eval] at h
+  exact (range_row_mem_iff _ bits).mp h
+
+/-- **`graduateV1Wide_sound`** — the multi-width re-anchor keystone, mirroring `graduateV1_sound`:
+a `Satisfied2` witness of the wide graduation, against a sound chip table + the per-width faithful
+range tables, yields the FULL v1 denotation `satisfiedVm` (15-bit teeth bounded `< 2^15` EXACTLY)
+on every row window. -/
+theorem graduateV1Wide_sound (hash : List ℤ → ℤ) (d : EffectVmDescriptor)
+    (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
+    (hchip : ChipTableSound hash (t.tf .poseidon2))
+    (hrangeW : ∀ b ∈ WIDE_RANGE_WIDTHS, t.tf (rangeTidW b) = rangeRows b)
+    (hgrad : graduableWide d = true)
+    (hsat : Satisfied2 hash (graduateV1Wide d) minit mfin maddrs t) :
+    ∀ i, i < t.rows.length →
+      satisfiedVm hash d (envAt t i) (i == 0) (i + 1 == t.rows.length) := by
+  obtain ⟨hwf, hfit, hbits⟩ := graduableWide_spec hgrad
+  intro i hi
+  have hrow := hsat.rowConstraints i hi
+  refine ⟨?_, ?_, ?_⟩
+  · -- the v1 constraints, embedded
+    intro c hc
+    have hmem : VmConstraint2.base c ∈ (graduateV1Wide d).constraints := by
+      unfold graduateV1Wide
+      simp only [List.mem_append, List.mem_map, List.mem_mapIdx]
+      exact Or.inl (Or.inl ⟨c, hc, rfl⟩)
+    exact hrow _ hmem
+  · -- the hash sites, via the chip-lookup induction (verbatim `graduateV1_sound`)
+    apply siteLookups_sound hash (t.tf .poseidon2) hchip (envAt t i) d.hashSites d.traceWidth hwf
+    · intro s hs
+      exact of_decide_eq_true (List.all_eq_true.mp hfit s hs)
+    · intro j hj
+      have hmem : VmConstraint2.lookup
+          (siteLookup d.hashSites d.hashSites[j]
+            (d.traceWidth + (CHIP_OUT_LANES - 1) * j))
+          ∈ (graduateV1Wide d).constraints := by
+        unfold graduateV1Wide
+        simp only [List.mem_append, List.mem_map, List.mem_mapIdx]
+        exact Or.inl (Or.inr ⟨j, hj, rfl⟩)
+      exact hrow _ hmem
+  · -- the range teeth, each via ITS OWN width's table
+    intro r hr
+    have hb : r.bits ∈ WIDE_RANGE_WIDTHS := hbits r hr
+    have hmem : VmConstraint2.lookup (rangeLookupW r) ∈ (graduateV1Wide d).constraints := by
+      unfold graduateV1Wide
+      simp only [List.mem_append, List.mem_map, List.mem_mapIdx]
+      exact Or.inr ⟨r, hr, rfl⟩
+    exact lookup_replaces_rangeW r.bits t.tf (hrangeW r.bits hb) (envAt t i) r.wire (hrow _ hmem)
+
+/-- **`Satisfied2FaithfulWide`** — the §4F faithful deployed denotation with the PER-WIDTH range
+pins in place of the single `.range` pin: `Satisfied2` + the wide chip soundness + every allowed
+width's table bound to its genuine limb rows. -/
+structure Satisfied2FaithfulWide (permOut : List ℤ → List ℤ) (hash : List ℤ → ℤ)
+    (d : EffectVmDescriptor2) (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ)
+    (t : VmTrace) : Prop extends Satisfied2 hash d minit mfin maddrs t where
+  /-- the genuine permutation exposes exactly `CHIP_OUT_LANES` output lanes. -/
+  permWidth : ∀ ins, (permOut ins).length = CHIP_OUT_LANES
+  /-- the v1 digest IS lane 0 of the genuine permutation (the deployed squeeze). -/
+  chipHashIsLane0 : ∀ ins, hash ins = (permOut ins).headD 0
+  /-- THE CHIP-TABLE-FAITHFUL CONJUNCT (`Ir2Air::Chip`), bound to `t.tf .poseidon2`. -/
+  chipTableFaithful : ChipTableSoundN permOut (t.tf .poseidon2)
+  /-- THE PER-WIDTH RANGE-FAITHFUL CONJUNCT: every allowed width's table is its genuine limb
+  table (subsumes the single `.range` pin at `b = BAL_LIMB_BITS`). -/
+  rangeTablesWideFaithful : ∀ b ∈ WIDE_RANGE_WIDTHS, t.tf (rangeTidW b) = rangeRows b
+
+/-- The wide faithful object PROJECTS to the single-width faithful object (the `.range` pin is
+the `b = BAL_LIMB_BITS` instance). -/
+theorem Satisfied2FaithfulWide.toFaithful {permOut : List ℤ → List ℤ} {hash : List ℤ → ℤ}
+    {d : EffectVmDescriptor2} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    (h : Satisfied2FaithfulWide permOut hash d minit mfin maddrs t) :
+    Satisfied2Faithful permOut hash d minit mfin maddrs t :=
+  { h.toSatisfied2 with
+    permWidth := h.permWidth
+    chipHashIsLane0 := h.chipHashIsLane0
+    chipTableFaithful := h.chipTableFaithful
+    rangeTableFaithful := rangeTablesWide_range h.rangeTablesWideFaithful }
+
+/-- The legacy chip soundness, discharged from the wide faithful structure (not assumed). -/
+theorem Satisfied2FaithfulWide.chipSound {permOut : List ℤ → List ℤ} {hash : List ℤ → ℤ}
+    {d : EffectVmDescriptor2} {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    (h : Satisfied2FaithfulWide permOut hash d minit mfin maddrs t) :
+    ChipTableSound hash (t.tf .poseidon2) :=
+  h.toFaithful.chipSound
+
+/-- **`satisfied2FaithfulWide_satisfiedVm` — THE WIDE COLLAPSE RECIPE.** From a wide-faithful
+witness of the wide graduation `graduateV1Wide d` (and `graduableWide d`), the v1 denotation
+`satisfiedVm` holds on every row window — no free `hchip`/`hrange` lever, and the 15-bit teeth
+return at their genuine width. -/
+theorem satisfied2FaithfulWide_satisfiedVm (permOut : List ℤ → List ℤ) (hash : List ℤ → ℤ)
+    (d : EffectVmDescriptor)
+    (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
+    (hgrad : graduableWide d = true)
+    (h : Satisfied2FaithfulWide permOut hash (graduateV1Wide d) minit mfin maddrs t) :
+    ∀ i, i < t.rows.length →
+      satisfiedVm hash d (envAt t i) (i == 0) (i + 1 == t.rows.length) :=
+  graduateV1Wide_sound hash d minit mfin maddrs t h.chipSound h.rangeTablesWideFaithful hgrad
+    h.toSatisfied2
+
+-- The wide gate ADMITS the hardened availability descriptor the single-width gate REFUSES —
+-- exactly the lock-out `graduableWide` exists to lift.
+#guard graduableWide EffectVmEmitTransfer.transferVmDescriptorAvail
+#guard !(graduable EffectVmEmitTransfer.transferVmDescriptorAvail)
+-- The bare transfer is graduable BOTH ways (the single-width world embeds).
+#guard graduableWide EffectVmEmitTransfer.transferVmDescriptor
+-- The 15-bit table bounds a 15-bit limb EXACTLY (the borrow-proof enabler): 2^15−1 ∈, 2^15 ∉ —
+-- lowering into the 30-bit table would have admitted 2^15 (`range_row_mem_iff`: `2^15 < 2^30`)
+-- and killed the borrow proof. (No `rangeRows 30` #guard — evaluating it materializes a 2^30-element
+-- list, the documented `.range` whnf trap.)
+#guard ([32767] : List ℤ) ∈ rangeRows 15
+#guard ¬ (([32768] : List ℤ) ∈ rangeRows 15)
+
+#assert_axioms graduableWide_spec
+#assert_axioms graduableWide_of_graduable
+#assert_axioms rangeTablesWide_range
+#assert_axioms lookup_replaces_rangeW
+#assert_axioms graduateV1Wide_sound
+#assert_axioms Satisfied2FaithfulWide.toFaithful
+#assert_axioms Satisfied2FaithfulWide.chipSound
+#assert_axioms satisfied2FaithfulWide_satisfiedVm
+
 end Dregg2.Circuit.Emit.EffectVmEmitV2

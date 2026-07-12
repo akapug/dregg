@@ -5819,4 +5819,72 @@ theorem customV3_binds_proof (hash : List ℤ → ℤ)
 #guard wireCommitR refSponge ((List.range 31).map (fun i => (300 + i : ℤ))) 7
   != wireCommitR refSponge ((List.range 31).map (fun i => (300 + i : ℤ))) 8
 
+/-! ## THE MULTI-WIDTH (`graduableWide`) ROTATION LIFTS — the hardened 15-bit availability
+descriptors reach the rotation tower.
+
+Mirrors of `graduable_rotateV3` / `graduable_rotateV3FrozenAuthority` / `v3OfFrozen` /
+`rotV3Frozen_sound_v1` at the §10 multi-width graduation (`graduateV1Wide`,
+`EffectVmEmitV2.lean`): a rotated `Satisfied2FaithfulWide` witness over a wide-graduable member
+(e.g. `EffectVmEmitTransfer.transferVmDescriptorAvail`, whose borrow-weld limbs are 15-BIT range
+teeth) lowers to its per-row v1 denotation `satisfiedVm` — which the availability keystone
+(`transferAvail_derives_availability`) consumes. ADDITIVE: the single-width `graduable` path and
+every existing registry member are untouched; rotation preserves the wide side conditions because
+`rotateV3` appends only col-only sites and keeps `ranges` verbatim (the SAME facts
+`graduable_rotateV3` uses). -/
+
+/-- The WIDE graduation side conditions LIFT through the rotation (the `graduableWide` mirror of
+`graduable_rotateV3`: appendix sites are col-only + chip-rate-fitting; ranges are verbatim). -/
+theorem graduableWide_rotateV3 {d : EffectVmDescriptor} (h : graduableWide d = true) :
+    graduableWide (rotateV3 d) = true := by
+  unfold graduableWide at h ⊢
+  simp only [Bool.and_eq_true] at h ⊢
+  obtain ⟨⟨h1, h2⟩, h3⟩ := h
+  refine ⟨⟨?_, ?_⟩, h3⟩
+  · show sitesWFAux 0 (d.hashSites ++ rotV3Appendix d.traceWidth) = true
+    rw [sitesWFAux_append_colOnly 0 d.hashSites _ (rotV3Appendix_colOnly d.traceWidth)]
+    exact h1
+  · show sitesFit (d.hashSites ++ rotV3Appendix d.traceWidth) = true
+    unfold sitesFit at h2 ⊢
+    rw [List.all_append, h2, Bool.true_and, List.all_eq_true]
+    intro s hs
+    unfold rotV3Appendix at hs
+    rcases List.mem_append.mp hs with hs' | hs'
+    · rcases List.mem_append.mp hs' with hs'' | hs'' <;> fin_cases hs'' <;> rfl
+    · fin_cases hs' <;> rfl
+
+/-- Continuity welds are CONSTRAINTS; `graduableWide` reads only sites/ranges (the wide mirror of
+`graduable_rotateV3FrozenAuthority`). -/
+theorem graduableWide_rotateV3FrozenAuthority {d : EffectVmDescriptor}
+    (h : graduableWide d = true) : graduableWide (rotateV3FrozenAuthority d) = true := by
+  have hr := graduableWide_rotateV3 h
+  unfold rotateV3FrozenAuthority
+  unfold graduableWide at hr ⊢
+  simpa using hr
+
+/-- **`v3OfFrozenWide d`** — the WIDE graduated rotated descriptor of a hardened member (the
+`graduateV1Wide` analog of `v3OfFrozen`): same rotation + authority-continuity weld, range teeth
+lowered per-width (the 15-bit borrow limbs into the 15-bit table). -/
+def v3OfFrozenWide (d : EffectVmDescriptor) : EffectVmDescriptor2 :=
+  graduateV1Wide (rotateV3FrozenAuthority d)
+
+/-- **`rotV3FrozenWide_sound_v1`** — a `Satisfied2FaithfulWide` witness of the WIDE frozen
+graduation yields the full v1 denotation of the original descriptor on every row (the
+`graduableWide` mirror of `rotV3Frozen_sound_v1`). This is the bridge that lets a rotated witness
+over the hardened availability descriptor reach `transferAvail_derives_availability`. -/
+theorem rotV3FrozenWide_sound_v1 (permOut : List ℤ → List ℤ) (hash : List ℤ → ℤ)
+    (d : EffectVmDescriptor)
+    (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
+    (hgrad : graduableWide d = true)
+    (hf : Satisfied2FaithfulWide permOut hash (v3OfFrozenWide d) minit mfin maddrs t) :
+    ∀ i, i < t.rows.length →
+      satisfiedVm hash d (envAt t i) (i == 0) (i + 1 == t.rows.length) := by
+  intro i hi
+  exact rotateV3FrozenAuthority_satisfiedVm_v1 hash d _ _ _
+    (satisfied2FaithfulWide_satisfiedVm permOut hash (rotateV3FrozenAuthority d) minit mfin maddrs
+      t (graduableWide_rotateV3FrozenAuthority hgrad) hf i hi)
+
+#assert_axioms graduableWide_rotateV3
+#assert_axioms graduableWide_rotateV3FrozenAuthority
+#assert_axioms rotV3FrozenWide_sound_v1
+
 end Dregg2.Circuit.Emit.EffectVmEmitRotationV3

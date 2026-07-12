@@ -256,12 +256,17 @@ structure rotatedEncodes (hash : List ℤ → ℤ)
   -- the residual admissibility legs (kernel side-tables, not in the value block).
   guardAuth : authorizedB pre.kernel.caps tr = true
   guardNonNeg : 0 ≤ tr.amt
-  -- ⚠⚠ AVAILABILITY — NAMED decode residual (NOT circuit-forced). The mod-p (BabyBear) balance gate +
-  -- 30-bit range check do NOT enforce `amt ≤ bal` over ℤ: `p < 2^31` and the amount limb is
-  -- un-range-checked, so an underflow `pre.bal − amt + p ∈ [0, 2^30)` passes the range while spending
-  -- more than the balance (wrap-class gap — see `⚠⚠ AVAILABILITY IS NOT CIRCUIT-FORCED`, §3). Relocated
-  -- here as an honest, visible admissibility obligation (like `guardAuth`) pending the EMBER-GATED
-  -- denotation fix (amount range-check / borrow bit / larger field).
+  -- ⚠⚠ AVAILABILITY — NAMED decode residual (NOT circuit-forced) ON THIS BARE PATH. The mod-p
+  -- (BabyBear) balance gate + 30-bit range check do NOT enforce `amt ≤ bal` over ℤ: `p < 2^31` and the
+  -- amount limb is un-range-checked, so an underflow `pre.bal − amt + p ∈ [0, 2^30)` passes the range
+  -- while spending more than the balance (wrap-class gap — see `⚠⚠ AVAILABILITY IS NOT CIRCUIT-FORCED`,
+  -- §3). Relocated here as an honest, visible admissibility obligation (like `guardAuth`).
+  -- ⚑ THE CLOSURE IS PROVEN: on the HARDENED graduable-wide path (`RotatedKernelRefinementAvail`:
+  -- `transferV3Avail = v3OfFrozenWide transferVmDescriptorAvail`, 15-bit borrow-weld teeth lowered
+  -- per-width) this leg is CIRCUIT-FORCED — `availability_and_exact_move_forced` derives it (plus the
+  -- exact ℤ debit) from the witness, and `rotatedEncodesAvail.toEncodes` rebuilds THIS structure with
+  -- `guardAvail` proven. The residual remains here only until the EMBER-GATED registry flip
+  -- (`v3RegistryBare` transfer entry → `transferV3Avail` + 15-bit range table realization + VK regen).
   guardAvail : tr.amt ≤ pre.kernel.bal tr.src a
   guardDistinct : tr.src ≠ tr.dst
   guardLiveSrc : tr.src ∈ pre.kernel.accounts

@@ -932,10 +932,14 @@ trace satisfying the hardened descriptor FORCES `amount ≤ before.bal_lo` AND t
 before − amount` — with NO `hcanonMove` assumption. The only hypothesis is the DEPLOYED canonicality
 invariant `0 ≤ loc c < p` (each column a canonical field element — the SAME fact
 `transferVm_rejects_wrong_balance` uses, NOT availability laundered in). The borrow chain + 15-bit limb
-range checks make the subtraction exact over ℤ, so the underflow wrap is STRUCTURALLY impossible. -/
-theorem transferAvail_derives_availability (hash : List ℤ → ℤ) (env : VmRowEnv)
+range checks make the subtraction exact over ℤ, so the underflow wrap is STRUCTURALLY impossible.
+Stated at an ARBITRARY `isFirst` (only `isLast = false` is load-bearing — every weld constraint is a
+`.gate`, bound on the transition domain), so a rotated witness's designated debit row at ANY trace
+index `i` (flags `(i == 0, false)`) consumes it — the `RotatedKernelRefinementAvail` bridge. -/
+theorem transferAvail_derives_availability_row (hash : List ℤ → ℤ) (env : VmRowEnv)
+    (isFirst : Bool)
     (hcanon : ∀ c, 0 ≤ env.loc c ∧ env.loc c < 2013265921)
-    (hsat : satisfiedVm hash transferVmDescriptorAvail env true false)
+    (hsat : satisfiedVm hash transferVmDescriptorAvail env isFirst false)
     (hdir : env.loc (prmCol param.DIRECTION) = 1) :
     env.loc (prmCol param.AMOUNT) ≤ env.loc (sbCol state.BALANCE_LO)
     ∧ env.loc (saCol state.BALANCE_LO)
@@ -993,6 +997,17 @@ theorem transferAvail_derives_availability (hash : List ℤ → ℤ) (env : VmRo
   constructor
   · omega
   · omega
+
+/-- The boundary-row (`isFirst = true`) form of `transferAvail_derives_availability_row`, the
+original statement kept for existing consumers. -/
+theorem transferAvail_derives_availability (hash : List ℤ → ℤ) (env : VmRowEnv)
+    (hcanon : ∀ c, 0 ≤ env.loc c ∧ env.loc c < 2013265921)
+    (hsat : satisfiedVm hash transferVmDescriptorAvail env true false)
+    (hdir : env.loc (prmCol param.DIRECTION) = 1) :
+    env.loc (prmCol param.AMOUNT) ≤ env.loc (sbCol state.BALANCE_LO)
+    ∧ env.loc (saCol state.BALANCE_LO)
+        = env.loc (sbCol state.BALANCE_LO) - env.loc (prmCol param.AMOUNT) :=
+  transferAvail_derives_availability_row hash env true hcanon hsat hdir
 
 /-- **THE FORGERY IS UNSAT (GAP #4 witness).** The audit's over-debit forgery witness (`before=1,
 amount=1006632961, after=1006632961, direction=1`) CANNOT satisfy the hardened descriptor: its debit
@@ -1163,6 +1178,7 @@ theorem goodCreditRow_ranges_hold (r : VmRange) (hr : r ∈ transferAvailRanges)
 -- LIVENESS witness (kernel-evaluated): every weld gate body is 0 on the honest debit AND credit rows.
 #guard transferAvailGates.all (fun c => match c with | .gate b => b.eval goodAvailRow.loc == 0 | _ => true)
 #guard transferAvailGates.all (fun c => match c with | .gate b => b.eval goodCreditRow.loc == 0 | _ => true)
+#assert_axioms transferAvail_derives_availability_row
 #assert_axioms transferAvail_derives_availability
 #assert_axioms transferAvail_forgery_unsat
 #assert_axioms transferAvail_credit_no_overflow
