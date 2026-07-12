@@ -32,7 +32,7 @@ subagents model:'fable' · commits sign Opus 4.8 · honest scoping (rung-2≠run
 verified-chain) · NEVER touch trace_rotated.rs / files another terminal edits · maintained libs for
 foreign crypto · HORIZONLOG every follow-up · measure before believing a lever · disjoint waves.
 
-## Current thrust
+## Current thrust (07-12 ~3am: unblocked scope COMPLETE; pacing on circuit-prove for the wrap)
 Wave 1 LAUNCHED (Fable): gnark-multifield [wrap] · eth-edge (EVM U256>u128 refuse + post-Electra
 rotation) · cosmos-edge (bank decode + bisection) · gov-narrow-tag (u128→u64 fail-closed +
 multi-network ChainId) — each adversarially audited. + rung-3 fold-pilot grounding scout.
@@ -101,6 +101,10 @@ Op-note: use `git commit -F` for messages containing quotes (hit a nested-double
 - 07-12 Real e2e ETH light-client→holding validation LAUNCHED (Fable): chain a genuine sync-committee-signed
   mainnet update all the way to a holding (the composed-chain validation the isolated KATs miss). Honest-labeling
   required (real-external vs round-trip). Waiting.
+- 07-12 Real e2e ETH validation COMMITTED: GOLD result — every link real-external live mainnet data (real BLS over
+  the real 512-key committee 397/512 → real Electra finality/execution branch → real WETH eth_getProof →
+  ConsensusProven). 8 reject tests on real data. 142 crate tests. The ETH light client (underpins ETH+Base) is now
+  empirically validated end-to-end. NO forced busywork after this — pacing on the wrap-unblock.
 
 ## ⚑ PLATEAU NOTE (07-12 ~3am): unblocked multichain work is COMPREHENSIVELY done.
 Thread 3 + all its refinements shipped (edges, wire, multi-network, narrowing, binding TRILOGY, Base legacy +
