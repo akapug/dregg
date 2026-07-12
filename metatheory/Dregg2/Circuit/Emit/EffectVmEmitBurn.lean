@@ -724,10 +724,15 @@ descriptor FORCES `amount ≤ before.bal_lo` AND the exact ℤ debit `after = be
 `hcanonMove` assumption. The only hypothesis is the DEPLOYED canonicality invariant `0 ≤ loc c < p`
 (each column a canonical field element — the SAME fact `burnVm_rejects_wrong_balance` uses, NOT
 availability laundered in). The borrow chain + 15-bit limb range checks make the subtraction exact
-over ℤ, so the underflow wrap (the well-supply-inflation forgery) is STRUCTURALLY impossible. -/
-theorem burnAvail_derives_availability (hash : List ℤ → ℤ) (env : VmRowEnv)
+over ℤ, so the underflow wrap (the well-supply-inflation forgery) is STRUCTURALLY impossible.
+Stated at an ARBITRARY `isFirst` (only `isLast = false` is load-bearing — every weld constraint is a
+`.gate`, bound on the transition domain), so a rotated witness's designated debit row at ANY trace
+index `i` (flags `(i == 0, false)`) consumes it — the `RotatedKernelRefinementMintBurnAvail` bridge
+(the transfer `transferAvail_derives_availability_row` mirror). -/
+theorem burnAvail_derives_availability_row (hash : List ℤ → ℤ) (env : VmRowEnv)
+    (isFirst : Bool)
     (hcanon : ∀ c, 0 ≤ env.loc c ∧ env.loc c < 2013265921)
-    (hsat : satisfiedVm hash burnVmDescriptorAvail env true false) :
+    (hsat : satisfiedVm hash burnVmDescriptorAvail env isFirst false) :
     env.loc (prmCol param.BURN_AMOUNT_LO) ≤ env.loc (sbCol state.BALANCE_LO)
     ∧ env.loc (saCol state.BALANCE_LO)
         = env.loc (sbCol state.BALANCE_LO) - env.loc (prmCol param.BURN_AMOUNT_LO) := by
@@ -785,6 +790,16 @@ theorem burnAvail_derives_availability (hash : List ℤ → ℤ) (env : VmRowEnv
   · omega
   · omega
 
+/-- The boundary-row (`isFirst = true`) form of `burnAvail_derives_availability_row`, the
+original statement kept for existing consumers. -/
+theorem burnAvail_derives_availability (hash : List ℤ → ℤ) (env : VmRowEnv)
+    (hcanon : ∀ c, 0 ≤ env.loc c ∧ env.loc c < 2013265921)
+    (hsat : satisfiedVm hash burnVmDescriptorAvail env true false) :
+    env.loc (prmCol param.BURN_AMOUNT_LO) ≤ env.loc (sbCol state.BALANCE_LO)
+    ∧ env.loc (saCol state.BALANCE_LO)
+        = env.loc (sbCol state.BALANCE_LO) - env.loc (prmCol param.BURN_AMOUNT_LO) :=
+  burnAvail_derives_availability_row hash env true hcanon hsat
+
 /-- **THE BURN FORGERY IS UNSAT (the well-supply-inflation witness).** The audit's over-burn forgery
 witness (`before=1, amount=1006632961, after=1006632961`) — the one whose ledger frame would CREDIT
 the well by the forged 10^9 — CANNOT satisfy the hardened descriptor: its debit availability
@@ -840,6 +855,7 @@ theorem goodBurnAvailRow_ranges_hold (r : VmRange) (hr : r ∈ burnAvailRanges) 
 #guard burnVmDescriptorAvail.traceWidth == 196
 -- LIVENESS witness (kernel-evaluated): every weld gate body is 0 on the honest burn row.
 #guard burnAvailGates.all (fun c => match c with | .gate b => b.eval goodBurnAvailRow.loc == 0 | _ => true)
+#assert_axioms burnAvail_derives_availability_row
 #assert_axioms burnAvail_derives_availability
 #assert_axioms burnAvail_forgery_unsat
 #assert_axioms goodBurnAvailRow_gates_hold
