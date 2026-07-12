@@ -15,6 +15,8 @@ here is the native one; nothing references the dead operated fabric.
 | [DISASTER-RECOVERY.md](DISASTER-RECOVERY.md) | lost keys, store corruption, lost box, re-sync |
 | [KEY-MANAGEMENT.md](KEY-MANAGEMENT.md) | credential lifecycles + what each rotation costs |
 | [UPGRADE.md](UPGRADE.md) | safe redeploy: `deploy/aws/update-gated.sh` (health gate + rollback) |
+| [PAYMENTS-GO-LIVE.md](PAYMENTS-GO-LIVE.md) | the native `$DREGG`/USDC payment rail — devnet→mainnet go-live, custody contract, treasury refuel, the deferred signer-gated edges |
+| [DISCORD-BOT.md](DISCORD-BOT.md) | running the bot frontend (env, hbox deploy, the paid-run flow, monitor, keys) |
 
 Companions elsewhere in the tree:
 
@@ -31,7 +33,8 @@ were dropped, not lost: `MESH.md` + headscale/WireGuard overlay operations
 (native peers over public QUIC + security groups; overlay joins are a
 per-federation deployment concern — `docs/OPERATOR-ONBOARDING.md`),
 `HARDWARE-PERSVATI.md` + thermal tuning (no operated compute box),
-`STRIPE-SETUP/OPS.md` (no operated USD-credit rail), `OPS-DASHBOARD.md` (the
+`STRIPE-SETUP/OPS.md` (superseded — the native rail is the `$DREGG`/USDC
+`dregg-pay` rail; see PAYMENTS-GO-LIVE.md, not Stripe), `OPS-DASHBOARD.md` (the
 the prior operated layer ops aggregator; the native pane is Grafana — MONITORING.md), and
 `SECRETS.md`'s edge-box `.env` conventions (native secrets live in
 `/etc/dregg/*.env` + the `secrets/` crate's local store; see KEY-MANAGEMENT).
