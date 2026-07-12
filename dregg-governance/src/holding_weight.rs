@@ -60,8 +60,15 @@
 //! Solana-specific [`grant_weight`] is a thin wrapper over it (`From` + the
 //! generic). The registry pins a snapshot **per (poll, chain)** and consumes a
 //! per-`(poll, chain+holder+asset)` nullifier — so the same holder on two
-//! different chains is two DISTINCT facts (both count; a holder legitimately
-//! holds on both), while re-presenting one chain's holding twice is refused.
+//! different chains — or two different NETWORKS of one family, Base vs Ethereum
+//! ([`ChainId::Evm`] carries the EIP-155 chain id) — is two DISTINCT facts (both
+//! count; a holder legitimately holds on both), while re-presenting one network's
+//! holding twice is refused.
+//!
+//! The ballot domain is `u64` ([`VoteBlock::weight`](crate::VoteBlock::weight)) while a foreign grant is `u128`
+//! (EVM-scale): [`foreign_grant_and_cast`](HoldingWeightRegistry::foreign_grant_and_cast)
+//! narrows through [`narrow_ballot_weight`] — FAIL-CLOSED, a weight above `u64::MAX` is
+//! [`GrantError::WeightOverflow`], never a saturating/truncating cast.
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -199,6 +206,24 @@ pub enum GrantError {
     /// crucially the `(poll, token_account)` nullifier is NOT consumed, so a later
     /// attempt once the poll is open still succeeds.
     PollNotOpen,
+    /// The granted foreign weight (a `u128`, sized for EVM-scale balances) does not fit
+    /// the ballot domain ([`VoteBlock::weight`](crate::VoteBlock::weight) is `u64`). FAIL-CLOSED: the cast is
+    /// REFUSED — never a saturating or truncating narrowing, which would silently
+    /// mis-weigh the ballot (truncation could even shrink a whale to near-zero, or
+    /// saturation could freeze distinct balances to one value). No ballot is cast and
+    /// the nullifier is NOT consumed.
+    WeightOverflow {
+        /// The verdict weight that exceeds `u64::MAX`.
+        weight: u128,
+    },
+}
+
+/// FAIL-CLOSED narrowing at the ballot boundary: a [`ForeignWeightGrant::weight`]
+/// (`u128`, EVM-scale) becomes a [`VoteBlock::weight`](crate::VoteBlock::weight) (`u64`) only if it fits
+/// losslessly; anything above `u64::MAX` is [`GrantError::WeightOverflow`] — NEVER a
+/// saturating/truncating cast. Every foreign grant → ballot cast goes through this.
+pub fn narrow_ballot_weight(weight: u128) -> Result<u64, GrantError> {
+    u64::try_from(weight).map_err(|_| GrantError::WeightOverflow { weight })
 }
 
 /// The pure weight-granting primitive: check that `holding` is consensus-proven and that
@@ -427,6 +452,24 @@ impl HoldingWeightRegistry {
         holding: &ProvenForeignHolding,
         binding: &OwnerBinding,
     ) -> Result<ForeignWeightGrant, GrantError> {
+        let grant = self.check_foreign_grant(poll, holding, binding)?;
+        self.spent.insert((poll, grant.nullifier));
+        Ok(grant)
+    }
+
+    /// The pure fail-closed foreign grant check — the per-`(poll, chain)` snapshot pin,
+    /// the full [`grant_foreign_weight`] verification, and the unspent-nullifier
+    /// confirmation — WITHOUT consuming the nullifier.
+    /// [`grant_foreign_into_poll`](Self::grant_foreign_into_poll) consumes on success;
+    /// [`foreign_grant_and_cast`](Self::foreign_grant_and_cast) defers the consume until
+    /// the engine has accepted the ballot, so a poll-not-open (or weight-overflow)
+    /// failure leaves the nullifier available for a later valid attempt.
+    fn check_foreign_grant(
+        &self,
+        poll: PollId,
+        holding: &ProvenForeignHolding,
+        binding: &OwnerBinding,
+    ) -> Result<ForeignWeightGrant, GrantError> {
         let snapshot = self
             .chain_snapshot_of(poll, holding.chain)
             .ok_or(GrantError::NoSnapshot)?;
@@ -440,8 +483,46 @@ impl HoldingWeightRegistry {
         if self.spent.contains(&(poll, grant.nullifier)) {
             return Err(GrantError::AlreadyCounted);
         }
-        self.spent.insert((poll, grant.nullifier));
         Ok(grant)
+    }
+
+    /// End-to-end cross-chain convenience — the foreign analog of
+    /// [`grant_and_cast`](Self::grant_and_cast): grant `holding`'s weight into `poll`
+    /// (snapshot-pinned, dedup-guarded, whatever chain it was proven on) and cast a
+    /// ballot for `choice` carrying that weight into the [`CollectiveChoice`] engine as
+    /// the bound voter.
+    ///
+    /// **The u128 → u64 NARROWING SEAM, fail-closed**: [`ForeignWeightGrant::weight`]
+    /// is a `u128` (sized for EVM-scale balances) but [`VoteBlock::weight`](crate::VoteBlock::weight) is a `u64`.
+    /// The narrowing runs through [`narrow_ballot_weight`] BEFORE the engine sees a
+    /// ballot: a weight above `u64::MAX` is [`GrantError::WeightOverflow`] — the cast is
+    /// REFUSED, never saturated or truncated, and the nullifier is left unspent (so the
+    /// holder is not permanently locked out; e.g. a re-scaled poll could later accept a
+    /// re-proof).
+    ///
+    /// As with [`grant_and_cast`](Self::grant_and_cast), the nullifier is consumed only
+    /// after the engine accepts a ballot box, so [`GrantError::PollNotOpen`] does not
+    /// burn it; and the engine's own one-vote-per-voter rule still applies on top
+    /// ([`CastOutcome::RefusedDoubleVote`]).
+    pub fn foreign_grant_and_cast(
+        &mut self,
+        engine: &mut CollectiveChoice,
+        poll: PollId,
+        choice: OptionId,
+        holding: &ProvenForeignHolding,
+        binding: &OwnerBinding,
+    ) -> Result<CastOutcome, GrantError> {
+        // Verify WITHOUT consuming the nullifier first — a downstream refusal
+        // (overflow, poll-not-open) must not permanently burn this holding's slot.
+        let grant = self.check_foreign_grant(poll, holding, binding)?;
+        // FAIL-CLOSED narrowing: u128 verdict → u64 ballot domain, or a typed refusal.
+        let weight = narrow_ballot_weight(grant.weight)?;
+        let block = engine
+            .next_block(poll, grant.voter, choice, weight)
+            .ok_or(GrantError::PollNotOpen)?; // unknown poll: no ballot box — nullifier untouched
+        // The engine accepted a ballot box: NOW consume the nullifier and cast.
+        self.spent.insert((poll, grant.nullifier));
+        Ok(engine.cast(poll, block))
     }
 
     /// The pure fail-closed grant check — runs the full [`grant_weight`] verification,
@@ -912,9 +993,13 @@ mod tests {
         // The SAME generic path grants from Solana, EVM, and Cosmos facts alike.
         let poll = PollId([70u8; 32]);
         let mut reg = HoldingWeightRegistry::new();
-        for (i, chain) in [ChainId::Solana, ChainId::Evm, ChainId::Cosmos]
-            .into_iter()
-            .enumerate()
+        for (i, chain) in [
+            ChainId::Solana,
+            ChainId::ETHEREUM,
+            ChainId::cosmos("cosmoshub-4"),
+        ]
+        .into_iter()
+        .enumerate()
         {
             let owner = owner_key(40 + i as u8);
             let holder = owner.verifying_key().to_bytes();
@@ -948,7 +1033,11 @@ mod tests {
     fn a_structure_only_foreign_holding_grants_zero_on_every_chain() {
         // REJECT polarity, NO Lean core needed (the pre-check fires first): an
         // unproven (RPC-echo) fact from ANY chain grants ZERO — the Nomad-law analog.
-        for chain in [ChainId::Solana, ChainId::Evm, ChainId::Cosmos] {
+        for chain in [
+            ChainId::Solana,
+            ChainId::ETHEREUM,
+            ChainId::cosmos("cosmoshub-4"),
+        ] {
             let owner = owner_key(50);
             let holder = owner.verifying_key().to_bytes();
             let voter: VoterId = [50u8; 32];
@@ -970,7 +1059,7 @@ mod tests {
         let holder = owner.verifying_key().to_bytes();
         let attacker = owner_key(52);
         let voter: VoterId = [51u8; 32];
-        let h = foreign(ChainId::Evm, holder, [0xCCu8; 32], 700, 9);
+        let h = foreign(ChainId::ETHEREUM, holder, [0xCCu8; 32], 700, 9);
         assert_eq!(
             grant_foreign_weight(&h, &bind(&attacker, voter)),
             Err(GrantError::UnboundOwner),
@@ -999,8 +1088,14 @@ mod tests {
         let binding = bind(&owner, voter);
         let poll = PollId([71u8; 32]);
         let mut reg = HoldingWeightRegistry::new();
-        reg.open_chain_snapshot(poll, ChainId::Cosmos, 88);
-        let h = foreign(ChainId::Cosmos, holder, [0xDDu8; 32], 400, 88);
+        reg.open_chain_snapshot(poll, ChainId::cosmos("cosmoshub-4"), 88);
+        let h = foreign(
+            ChainId::cosmos("cosmoshub-4"),
+            holder,
+            [0xDDu8; 32],
+            400,
+            88,
+        );
 
         assert_eq!(
             reg.grant_foreign_into_poll(poll, &h, &binding)
@@ -1017,7 +1112,7 @@ mod tests {
         );
         // A DIFFERENT poll is a fresh nullifier.
         let other_poll = PollId([72u8; 32]);
-        reg.open_chain_snapshot(other_poll, ChainId::Cosmos, 88);
+        reg.open_chain_snapshot(other_poll, ChainId::cosmos("cosmoshub-4"), 88);
         assert_eq!(
             reg.grant_foreign_into_poll(other_poll, &h, &binding)
                 .unwrap()
@@ -1039,11 +1134,17 @@ mod tests {
         let binding = bind(&owner, voter);
         let poll = PollId([73u8; 32]);
         let mut reg = HoldingWeightRegistry::new();
-        reg.open_chain_snapshot(poll, ChainId::Evm, 2_000);
-        reg.open_chain_snapshot(poll, ChainId::Cosmos, 3_000);
+        reg.open_chain_snapshot(poll, ChainId::ETHEREUM, 2_000);
+        reg.open_chain_snapshot(poll, ChainId::cosmos("cosmoshub-4"), 3_000);
 
-        let on_evm = foreign(ChainId::Evm, holder, [0xEEu8; 32], 111, 2_000);
-        let on_cosmos = foreign(ChainId::Cosmos, holder, [0xEEu8; 32], 222, 3_000);
+        let on_evm = foreign(ChainId::ETHEREUM, holder, [0xEEu8; 32], 111, 2_000);
+        let on_cosmos = foreign(
+            ChainId::cosmos("cosmoshub-4"),
+            holder,
+            [0xEEu8; 32],
+            222,
+            3_000,
+        );
         let g1 = reg
             .grant_foreign_into_poll(poll, &on_evm, &binding)
             .unwrap();
@@ -1075,10 +1176,10 @@ mod tests {
         let binding = bind(&owner, voter);
         let poll = PollId([74u8; 32]);
         let mut reg = HoldingWeightRegistry::new();
-        reg.open_chain_snapshot(poll, ChainId::Evm, 5_000);
+        reg.open_chain_snapshot(poll, ChainId::ETHEREUM, 5_000);
 
         // Proven at a different height on the pinned chain → refused.
-        let stale = foreign(ChainId::Evm, holder, [0x11u8; 32], 500, 5_001);
+        let stale = foreign(ChainId::ETHEREUM, holder, [0x11u8; 32], 500, 5_001);
         assert_eq!(
             reg.grant_foreign_into_poll(poll, &stale, &binding),
             Err(GrantError::WrongSnapshot {
@@ -1087,7 +1188,13 @@ mod tests {
             }),
         );
         // A chain with NO pin refuses outright — the Evm pin does not leak to Cosmos.
-        let unpinned = foreign(ChainId::Cosmos, holder, [0x11u8; 32], 500, 5_000);
+        let unpinned = foreign(
+            ChainId::cosmos("cosmoshub-4"),
+            holder,
+            [0x11u8; 32],
+            500,
+            5_000,
+        );
         assert_eq!(
             reg.grant_foreign_into_poll(poll, &unpinned, &binding),
             Err(GrantError::NoSnapshot),
@@ -1127,5 +1234,186 @@ mod tests {
         let legacy = grant_weight(&h, &binding).unwrap();
         assert_eq!(legacy.weight as u128, g.weight);
         assert_eq!(legacy.voter, g.voter);
+    }
+
+    // ─── The u128 → u64 NARROWING SEAM (fail-closed) + multi-network EVM ────────
+
+    #[test]
+    fn narrow_ballot_weight_is_fail_closed_never_truncating() {
+        // The pure narrowing (no Lean core involved — this runs ALWAYS):
+        // exactly-u64::MAX fits losslessly...
+        assert_eq!(
+            narrow_ballot_weight(u64::MAX as u128),
+            Ok(u64::MAX),
+            "u64::MAX itself fits the ballot domain"
+        );
+        assert_eq!(narrow_ballot_weight(1), Ok(1));
+        // REJECT polarity: one past the boundary is a TYPED refusal, not a wrap.
+        let over = u64::MAX as u128 + 1;
+        assert_eq!(
+            narrow_ballot_weight(over),
+            Err(GrantError::WeightOverflow { weight: over }),
+        );
+        // The truncation-attack shape: (1 << 64) + 5 truncates to 5 as a `u64 as` cast
+        // — a whale silently shrunk to dust. It must REFUSE instead.
+        let would_truncate_to_5 = (1u128 << 64) + 5;
+        assert_eq!(
+            narrow_ballot_weight(would_truncate_to_5),
+            Err(GrantError::WeightOverflow {
+                weight: would_truncate_to_5
+            }),
+            "a weight whose low 64 bits look tiny must refuse, never truncate",
+        );
+        // And u128::MAX (the saturation-attack shape) likewise refuses.
+        assert_eq!(
+            narrow_ballot_weight(u128::MAX),
+            Err(GrantError::WeightOverflow { weight: u128::MAX }),
+        );
+    }
+
+    #[test]
+    fn an_evm_scale_weight_above_u64_refuses_the_cast_and_spends_nothing() {
+        if !lean_verdict_core_or_skip() {
+            return;
+        }
+        // End-to-end REJECT polarity through the REAL engine: a proven EVM balance
+        // above u64::MAX clears every grant check (it IS a genuine holding) but the
+        // ballot cast REFUSES fail-closed at the narrowing seam — no truncated ballot,
+        // no tally movement, no nullifier burned.
+        let mut engine = CollectiveChoice::new();
+        let poll = engine.open_poll(PollSpec {
+            question: "whale?".into(),
+            options: vec!["no".into(), "yes".into()],
+            electorate: Electorate::Open,
+            rule: DecisionRule::Plurality { quorum: 1 },
+            enact_on_pass: false,
+            nonce: 2,
+        });
+        let owner = owner_key(60);
+        let holder = owner.verifying_key().to_bytes();
+        let voter: VoterId = [60u8; 32];
+        let binding = bind(&owner, voter);
+        let mut reg = HoldingWeightRegistry::new();
+        reg.open_chain_snapshot(poll, ChainId::ETHEREUM, 9_000);
+
+        let too_big = (1u128 << 64) + 5; // would truncate to 5 — the attack shape
+        let whale = foreign(ChainId::ETHEREUM, holder, [0x99u8; 32], too_big, 9_000);
+
+        // The stateless grant itself is fine at u128 (the fact is real)...
+        assert_eq!(
+            grant_foreign_weight(&whale, &binding).unwrap().weight,
+            too_big,
+            "the u128 grant carries the full EVM-scale balance untruncated"
+        );
+        // ...but the CAST refuses at the u64 ballot boundary.
+        assert_eq!(
+            reg.foreign_grant_and_cast(&mut engine, poll, OptionId(1), &whale, &binding),
+            Err(GrantError::WeightOverflow { weight: too_big }),
+        );
+        // Nothing was tallied — especially not a truncated 5.
+        let tally = engine.tally(poll).unwrap();
+        assert_eq!(tally.per_option.get(&OptionId(1)).copied().unwrap_or(0), 0);
+        assert_eq!(tally.distinct_voters, 0);
+        // And the nullifier is NOT spent (the refusal must not lock the holder out).
+        assert!(!reg.is_foreign_spent(poll, &whale));
+        assert_eq!(reg.granted_count(), 0);
+    }
+
+    #[test]
+    fn a_normal_foreign_weight_casts_and_tallies() {
+        if !lean_verdict_core_or_skip() {
+            return;
+        }
+        // ACCEPT polarity: a normal (fits-u64) foreign holding casts through
+        // foreign_grant_and_cast and its full weight reaches the tally.
+        let mut engine = CollectiveChoice::new();
+        let poll = engine.open_poll(PollSpec {
+            question: "cross-chain ship it?".into(),
+            options: vec!["no".into(), "yes".into()],
+            electorate: Electorate::Open,
+            rule: DecisionRule::Plurality { quorum: 1 },
+            enact_on_pass: false,
+            nonce: 3,
+        });
+        let owner = owner_key(61);
+        let holder = owner.verifying_key().to_bytes();
+        let voter: VoterId = [61u8; 32];
+        let binding = bind(&owner, voter);
+        let mut reg = HoldingWeightRegistry::new();
+        reg.open_chain_snapshot(poll, ChainId::BASE, 4_400);
+        let h = foreign(ChainId::BASE, holder, [0x55u8; 32], 555, 4_400);
+
+        assert_eq!(
+            reg.foreign_grant_and_cast(&mut engine, poll, OptionId(1), &h, &binding)
+                .unwrap(),
+            CastOutcome::Accepted,
+        );
+        let tally = engine.tally(poll).unwrap();
+        assert_eq!(
+            tally.per_option.get(&OptionId(1)).copied().unwrap_or(0),
+            555,
+            "the proven foreign balance became ballot weight"
+        );
+        assert_eq!(tally.distinct_voters, 1);
+        // The nullifier fired: the SAME holding re-presented is AlreadyCounted.
+        assert!(reg.is_foreign_spent(poll, &h));
+        assert_eq!(
+            reg.foreign_grant_and_cast(&mut engine, poll, OptionId(1), &h, &binding),
+            Err(GrantError::AlreadyCounted),
+        );
+    }
+
+    #[test]
+    fn the_same_holder_on_base_and_ethereum_is_two_distinct_nullifiers_both_count() {
+        if !lean_verdict_core_or_skip() {
+            return;
+        }
+        // MULTI-NETWORK EVM: Base and Ethereum are different consensus domains under
+        // ONE family tag — the same holder+asset on both is TWO facts; both count,
+        // with two distinct nullifiers and two per-network snapshot pins.
+        let owner = owner_key(62);
+        let holder = owner.verifying_key().to_bytes();
+        let voter: VoterId = [62u8; 32];
+        let binding = bind(&owner, voter);
+        let poll = PollId([76u8; 32]);
+        let mut reg = HoldingWeightRegistry::new();
+        reg.open_chain_snapshot(poll, ChainId::ETHEREUM, 21_000_000);
+        reg.open_chain_snapshot(poll, ChainId::BASE, 17_000_000);
+
+        let on_eth = foreign(ChainId::ETHEREUM, holder, [0x66u8; 32], 100, 21_000_000);
+        let on_base = foreign(ChainId::BASE, holder, [0x66u8; 32], 200, 17_000_000);
+        let g1 = reg
+            .grant_foreign_into_poll(poll, &on_eth, &binding)
+            .unwrap();
+        let g2 = reg
+            .grant_foreign_into_poll(poll, &on_base, &binding)
+            .unwrap();
+        assert_eq!(g1.weight, 100);
+        assert_eq!(g2.weight, 200, "the Base holding counts too");
+        assert_ne!(
+            g1.nullifier, g2.nullifier,
+            "network-scoped: Base and Ethereum mint DISTINCT nullifiers"
+        );
+        assert_eq!(reg.granted_count(), 2);
+        // REJECT polarity: the SAME network+holder+asset a second time is refused —
+        // network multiplicity does not open a same-network double-count.
+        assert_eq!(
+            reg.grant_foreign_into_poll(poll, &on_eth, &binding),
+            Err(GrantError::AlreadyCounted),
+        );
+        assert_eq!(
+            reg.grant_foreign_into_poll(poll, &on_base, &binding),
+            Err(GrantError::AlreadyCounted),
+        );
+        // And one network's pin does not leak to the other: a Base-height proof
+        // presented as Ethereum is WrongSnapshot (fail closed).
+        let cross = foreign(ChainId::ETHEREUM, holder, [0x67u8; 32], 100, 17_000_000);
+        assert_eq!(
+            reg.grant_foreign_into_poll(poll, &cross, &binding),
+            Err(GrantError::WrongSnapshot {
+                holding_slot: 17_000_000,
+                poll_snapshot: 21_000_000
+            }),
+        );
     }
 }
