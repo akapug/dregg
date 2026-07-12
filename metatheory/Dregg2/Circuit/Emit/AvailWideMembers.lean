@@ -714,4 +714,84 @@ theorem declared_vault_unsat_burnAvailWideRefused (hash : List ℤ → ℤ)
 #assert_axioms declared_discharge_unsat_burnAvailWideRefused
 #assert_axioms declared_vault_unsat_burnAvailWideRefused
 
+/-! ## §8 — the AVAIL cap-open EFF wide transfer member (the wide-cap-open-EFF availability
+wrap-forgery twin — the `transferCapOpenEffVmDescriptor2R24` crown host post-retarget).
+
+The TB twin (§2) is a LIVE-ONLY tail member; the EFF member is a CROWN member
+(`v3RegistryCapOpenWide` position 42), so its retarget rides the crown override
+(`EffectVmEmitUMemWeldWide.crownWideHosts` / the bare `EmitWideRegistryProbe` row), not the
+live-only tail. Same shape either way: the already-flipped narrow member
+(`RotatedKernelRefinementCapOpenAvail.transferCapOpenEffV3Avail` — the selector-gated
+effect-general cap-open over the hardened rotated face) wide-appended at the AVAIL face base. -/
+
+/-- **`transferCapOpenEffAvailWide`** — the AVAIL live cap-open EFF wide transfer member: the
+selector-gated effect-general cap-open transfer (`withSelectorGate TRANSFER (effCapOpenV3 …)`,
+fully parametric in its base) over the hardened rotated face, wide-appended at the AVAIL face
+base `TR_AVAIL_BB`. The `transferCapOpenEffVmDescriptor2R24` crown key's post-retarget bytes —
+the wide lift of the already-flipped narrow `transferCapOpenEffV3Avail` (definitionally
+`wideAppend transferCapOpenEffV3Avail TR_AVAIL_BB (TR_AVAIL_BB + 239)`; the refinement tower
+states that tie, this layer restates the term so the emission layer does not import it). -/
+def transferCapOpenEffAvailWide : EffectVmDescriptor2 :=
+  wideAppend
+    (Dregg2.Circuit.Emit.EffectVmEmitRotationV3.withSelectorGate
+      Dregg2.Circuit.Emit.EffectVmEmit.sel.TRANSFER
+      (Dregg2.Circuit.Emit.CapOpenEmit.effCapOpenV3 transferAvailV3W
+        "dregg-effectvm-transfer-v1-avail-rot24-v3-capopen-eff"
+        Dregg2.Circuit.Emit.CapOpenEmit.EFF_TRANSFER))
+    TR_AVAIL_BB (TR_AVAIL_BB + 239)
+
+-- Geometry pins: the EFF member is the narrow avail cap-open (width 1986, 46 PIs) + the wide
+-- appendix (+960 columns, +16 PIs). The Rust `avail_pad_for_descriptor_name` prefix survives.
+#guard transferCapOpenEffAvailWide.piCount == 62
+#guard transferCapOpenEffAvailWide.traceWidth == 2946
+#guard transferCapOpenEffAvailWide.name
+  == "dregg-effectvm-transfer-v1-avail-rot24-v3-capopen-eff"
+
+/-- Face-host constraint membership in the EFF avail wide member (`withSelectorGate` and
+`effCapOpenV3` both only APPEND, and `wideAppend` keeps every non-pin host constraint). -/
+theorem availHost_mem_effAvailWide :
+    ∀ c ∈ transferAvailV3W.constraints,
+      isLegacyCommitPin1 TR_AVAIL_BB (TR_AVAIL_BB + 239) c = false →
+      c ∈ transferCapOpenEffAvailWide.constraints := by
+  intro c hc hnp
+  exact wideAppend_mem_of_host _ TR_AVAIL_BB (TR_AVAIL_BB + 239) c
+    (List.mem_append_left _ (List.mem_append_left _ hc)) hnp
+
+/-- No cap-open appendix constraint is a retired legacy commit pin (the appendix is all
+`.lookup`s + `.base (.gate …)`s — never a `.piBinding`). Decidable — the appendix is concrete. -/
+theorem capOpenAppendixAvail_no_legacy_pins :
+    (Dregg2.Circuit.Emit.CapOpenEmit.capOpenConstraintsEff transferAvailV3W.traceWidth
+        Dregg2.Circuit.Emit.CapOpenEmit.EFF_TRANSFER).all
+      (fun c => !isLegacyCommitPin1 TR_AVAIL_BB (TR_AVAIL_BB + 239) c) = true := by decide
+
+/-- **The cap-open AUTHORITY appendix rides the wide member VERBATIM** — every appendix
+constraint (the depth-16 membership open, the submask facet gates, the mask-recon gates, the
+selected-bit tooth) is a constraint of `transferCapOpenEffAvailWide`. This is what
+`capOpenMem_satisfiedEff` / `capOpenMem_gate_forces` consume to re-establish the authority
+keystones on the wide member: the wide weld does not break the facet gates. -/
+theorem capOpenAppendix_mem_effAvailWide :
+    ∀ c ∈ Dregg2.Circuit.Emit.CapOpenEmit.capOpenConstraintsEff transferAvailV3W.traceWidth
+        Dregg2.Circuit.Emit.CapOpenEmit.EFF_TRANSFER,
+      c ∈ transferCapOpenEffAvailWide.constraints := by
+  intro c hc
+  have hnp := List.all_eq_true.mp capOpenAppendixAvail_no_legacy_pins c hc
+  exact wideAppend_mem_of_host _ TR_AVAIL_BB (TR_AVAIL_BB + 239) c
+    (List.mem_append_left _ (List.mem_append_right _ hc)) (by simpa using hnp)
+
+/-- The EFF avail wide member forces the hardened face's v1 denotation on every row (the
+borrow-weld gates + 15-bit teeth `transferAvail_derives_availability_row` consumes). -/
+theorem effAvailWide_row_v1 (permOut : List ℤ → List ℤ) (hash : List ℤ → ℤ)
+    (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
+    (hf : Satisfied2FaithfulWide permOut hash transferCapOpenEffAvailWide minit mfin maddrs t) :
+    ∀ i, i < t.rows.length →
+      satisfiedVm hash transferVmDescriptorAvail (envAt t i)
+        (i == 0) (i + 1 == t.rows.length) :=
+  wideEmbedded_sound_v1 permOut hash transferVmDescriptorAvail transferCapOpenEffAvailWide
+    TR_AVAIL_BB (TR_AVAIL_BB + 239) minit mfin maddrs t (by decide) transferAvail_clean
+    availHost_mem_effAvailWide hf
+
+#assert_axioms availHost_mem_effAvailWide
+#assert_axioms capOpenAppendix_mem_effAvailWide
+#assert_axioms effAvailWide_row_v1
+
 end Dregg2.Circuit.Emit.AvailWideMembers
