@@ -267,3 +267,15 @@ gnark VerifyFriNative gadget verifies a REAL dregg apex's BN254-native shrink pr
 verified myself; 10 reject canaries). SCOPE FRI-core; residual = full-STARK verify → Groth16 → EVM. THE WRAP WORKS.
 The multichain goal: thread 1 (wrap) core DONE end-to-end on real data; thread 2 (fold-P0 leaf) done; thread 3 done.
 Perf: blowup 8x free; GPU-wiring Amdahl-capped ~2-2.5x (BN254-t3 microprobe decides). GPU value Q → ember.
+
+## ⚑ EVM SETTLEMENT PATH (07-12, ember: keep the EVM stuff moving) — grounded + last-mile launched
+STATE: gnark FRI-core verifies a REAL shrink proof ✓. fri_verifier.go's FULL verify = a documented STUB
+(TODO(milestone 2): trace/quotient + per-table constraint+quotient = "multi-week assembly"). bridge/ethereum.rs:
+"the crypto core NOT in this repo is the Groth16 circuit that IS the STARK verifier." DreggSettlement.sol EXISTS
+(verifies a Groth16 proof over 25 lanes via IGroth16Verifier25; honest residual = the message→root leg is
+OPERATOR-ATTESTED not proof-bound, a named 26th-public-input dregg-circuit obligation). chain/src/verify.rs +
+bridge/ethereum.rs = the submission side (assume a Groth16 proof exists). GAP = native full-STARK verify
+(constraint-eval + quotient-identity on top of VerifyFriNative's FRI-core) → Groth16 wrap → DreggSettlement VK.
+LAUNCHED: the native full-STARK-verify last-mile (constraint-eval + quotient framework on the real fixture, honest
+partial — it's the multi-week assembly). NEXT after it: the Groth16 wrap + the settlement VK; then the message-root
+proof-binding residual (26th PI). GPU de-prioritized (banked: shrink ~2x via BN254 wgpu, Amdahl-capped; ember value call).
