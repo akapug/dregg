@@ -31,12 +31,18 @@ tendermint-light-client-verifier = "=0.40.4"
 # provides the real SHA-256/etc hashers via `HostFunctionsManager`. Version PINNED.
 ics23 = "=0.12.0"
 # prost 0.13 — matches ics23's protobuf runtime; used to decode the raw
-# `CommitmentProof` bytes an ABCI query returns into `ics23::CommitmentProof`.
+# `CommitmentProof` bytes an ABCI query returns into `ics23::CommitmentProof`,
+# and the legacy (SDK < 0.46) protobuf `sdk.Coin` bank-balance value.
 prost = "0.13"
+# sha2 0.10 — already in the tree via tendermint's rust-crypto; used for the
+# denom -> 32-byte asset-id commitment (IBC denoms exceed 32 bytes, so a hash).
+sha2 = "0.10"
 
 [dev-dependencies]
 # Deserialize the genuine cosmoshub-4 RPC fixtures (SignedHeader / validator set).
 serde_json = "1"
+# Encode a legacy protobuf `sdk.Coin` value in the bank-balance reject tests.
+prost = "0.13"
 # Decode the base64 the ABCI query encodes proof ops / values as.
 base64 = "0.22"
 # Decode the app_hash hex.

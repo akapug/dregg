@@ -76,7 +76,7 @@ pub fn trusting_period() -> Duration {
     Duration::from_secs(14 * 24 * 60 * 60) // 14 days
 }
 
-// ---- membership fixture ----
+// ---- membership fixtures ----
 
 pub struct MembershipFixture {
     pub app_hash: Vec<u8>,
@@ -85,8 +85,8 @@ pub struct MembershipFixture {
     pub value: Vec<u8>,
 }
 
-pub fn membership_fixture() -> MembershipFixture {
-    let v: serde_json::Value = serde_json::from_str(&read("membership_proof.json")).unwrap();
+fn membership_fixture_from(name: &str) -> MembershipFixture {
+    let v: serde_json::Value = serde_json::from_str(&read(name)).unwrap();
     let b64 = |k: &str| STANDARD.decode(v[k].as_str().unwrap()).unwrap();
     let app_hash = hex::decode(v["app_hash_hex"].as_str().unwrap()).unwrap();
     let iavl_proof = decode_commitment_proof(&b64("iavl_proof_b64")).unwrap();
@@ -101,4 +101,66 @@ pub fn membership_fixture() -> MembershipFixture {
         key: b64("iavl_key_b64"),
         value: b64("value_b64"),
     }
+}
+
+pub fn membership_fixture() -> MembershipFixture {
+    membership_fixture_from("membership_proof.json")
+}
+
+// ---- bank-balance + skipping fixture set (a second, self-consistent capture:
+// anchor H, adjacent H+1 + its validators, a non-adjacent skip target, and a
+// REAL bonded_tokens_pool uatom balance proof at H whose root is the H+1
+// app_hash; see each file's `_source`) ----
+
+/// The genuine ICS-23 bank-balance proof (bonded_tokens_pool, uatom) captured
+/// at the anchor height; its root is committed as the H+1 header's app_hash.
+pub fn bank_balance_fixture() -> MembershipFixture {
+    membership_fixture_from("bank_balance_proof.json")
+}
+
+pub fn validators_from(name: &str) -> ValidatorSet {
+    let infos: Vec<Info> = serde_json::from_str(&read(name)).expect("validators");
+    ValidatorSet::without_proposer(infos)
+}
+
+fn signed_header(name: &str) -> SignedHeader {
+    serde_json::from_str(&read(name)).expect("SignedHeader parses")
+}
+
+/// The untrusted adjacent SignedHeader (anchor height + 1) of the bank set.
+pub fn bank_untrusted_signed_header() -> SignedHeader {
+    signed_header("bank_commit_h1.json")
+}
+
+/// The validator set at anchor height + 1 of the bank set (the untrusted
+/// adjacent validators AND the anchor's `next_validators`).
+pub fn bank_validators_h1() -> ValidatorSet {
+    validators_from("bank_validators_h1.json")
+}
+
+/// The non-adjacent skip-target SignedHeader (~95 blocks past the anchor).
+pub fn skip_signed_header() -> SignedHeader {
+    signed_header("skip_commit.json")
+}
+
+/// The validator set at the skip-target height.
+pub fn skip_validators() -> ValidatorSet {
+    validators_from("skip_validators.json")
+}
+
+/// The trusted anchor derived from the genuine bank-set anchor header.
+pub fn bank_trusted_state() -> TrustedCosmosState {
+    let th = signed_header("bank_commit_h.json");
+    TrustedCosmosState {
+        chain_id: th.header.chain_id.clone(),
+        header_time: th.header.time,
+        height: th.header.height,
+        next_validators: bank_validators_h1(),
+        next_validators_hash: th.header.next_validators_hash,
+    }
+}
+
+/// A deterministic `now` shortly after the given header's block time.
+pub fn now_after(sh: &SignedHeader) -> Time {
+    sh.header.time.checked_add(Duration::from_secs(60)).unwrap()
 }

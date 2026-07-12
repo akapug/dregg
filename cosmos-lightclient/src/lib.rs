@@ -30,11 +30,20 @@
 //!
 //! 3. [`ProvenCosmosFact`] — the bound result: `(chain_id, height, store_key,
 //!    key, value)` proven at a [`VerifiedHeader`]. It is the Cosmos analog of
-//!    `dregg-bridge::solana_holdings::ProvenHolding`, ready for a
-//!    governance/holdings binding (e.g. an account balance in the `bank` store,
-//!    or an IBC packet commitment). That wire is a named followup; so is the
-//!    OUTBOUND direction (dregg as a CosmWasm client Cosmos verifies), which
-//!    waits on the wrap.
+//!    `dregg-bridge::solana_holdings::ProvenHolding`.
+//!
+//! 4. [`bank`] — the holdings edge: [`foreign_holding_fields`] decodes a
+//!    bank-store balance fact (`0x02 ‖ len ‖ address ‖ denom -> math.Int` /
+//!    legacy `sdk.Coin`) into the plain-primitive [`ForeignHoldingFields`]
+//!    `{chain_tag, holder, asset, amount, snapshot, consensus_proven}` the
+//!    governance layer consumes — chain-id pinned, over-`u128` refused. The
+//!    OUTBOUND direction (dregg as a CosmWasm client Cosmos verifies) remains a
+//!    named followup; it waits on the wrap.
+//!
+//! Header advances come in both Tendermint shapes: **adjacent** (height + 1,
+//! bound by `next_validators_hash`) and **non-adjacent skipping** (any higher
+//! height, bound by the trust-threshold overlap rule — see
+//! [`verify_cosmos_header`]).
 //!
 //! # Trust boundary (honest)
 //!
@@ -45,6 +54,12 @@
 //! [`TrustedCosmosState`] (a header + validator set the operator has verified out
 //! of band). From there each advance is trustless. This is the same
 //! weak-subjectivity posture every Tendermint light client (Hermes, ibc-rs) has.
+
+pub mod bank;
+pub use bank::{
+    cosmos_denom_asset_id, decode_bank_balance_kv, foreign_holding_fields, BankBalance,
+    BankBalanceError, ForeignHoldingFields, BALANCES_PREFIX, BANK_STORE_KEY, COSMOS_CHAIN_TAG,
+};
 
 use core::time::Duration;
 
@@ -105,6 +120,13 @@ pub enum HeaderVerifyError {
     /// or future time, a chain-id mismatch, or a malformed commit. Carries the
     /// verifier's detail.
     Invalid(String),
+    /// The caller-supplied [`TrustedCosmosState`] is internally inconsistent:
+    /// `next_validators` does not hash to `next_validators_hash`. Refused BEFORE
+    /// any verification — in the non-adjacent (skipping) path that set is the
+    /// trust-overlap tally base, and the underlying verifier documents that this
+    /// consistency is the caller's responsibility; we enforce it here instead of
+    /// trusting the relayer.
+    TrustedStateCorrupt(String),
 }
 
 impl core::fmt::Display for HeaderVerifyError {
@@ -114,6 +136,9 @@ impl core::fmt::Display for HeaderVerifyError {
                 write!(f, "insufficient voting power: {d}")
             }
             HeaderVerifyError::Invalid(d) => write!(f, "invalid header: {d}"),
+            HeaderVerifyError::TrustedStateCorrupt(d) => {
+                write!(f, "corrupt trusted state: {d}")
+            }
         }
     }
 }
@@ -160,9 +185,28 @@ impl VerifiedHeader {
 /// stake-weighted **>= 2/3** of the voting power signed the commit (real Ed25519
 /// verification of the canonical vote sign-bytes); the trusted header is within
 /// `trusting_period` of `now`; the untrusted time is monotonic (after the trusted
-/// time) and not from the future (beyond `now + clock_drift`); the chain ids
-/// match; and — for an adjacent block — the trusted `next_validators_hash` equals
-/// the untrusted validator set's hash.
+/// time) and not from the future (beyond `now + clock_drift`); and the chain ids
+/// match.
+///
+/// Two advance shapes, selected by the untrusted height:
+///
+/// - **Adjacent** (`height == trusted.height + 1`): the trusted
+///   `next_validators_hash` must equal the untrusted validator set's hash — the
+///   sequential-verification rule.
+/// - **Non-adjacent / skipping** (`height > trusted.height + 1`): the Tendermint
+///   trust-threshold overlap rule — validators from the TRUSTED
+///   `next_validators` set must account for at least `trust_threshold` (canonically
+///   1/3) of that set's voting power among the signatures of the untrusted
+///   commit, IN ADDITION to the full >= 2/3 rule over the untrusted set. Too
+///   little overlap refuses with [`HeaderVerifyError::NotEnoughVotingPower`]
+///   (fail closed) — bisect to an intermediate height to proceed.
+///
+/// Because the skipping tally is computed over the caller-supplied
+/// `trusted.next_validators`, this function first REQUIRES that set to hash to
+/// `trusted.next_validators_hash` (the commitment from the trusted header) and
+/// refuses with [`HeaderVerifyError::TrustedStateCorrupt`] otherwise — the
+/// underlying verifier leaves that consistency to the caller; we do not trust
+/// the relayer that delivered the set.
 ///
 /// `untrusted_next_validators` is the set that signs `height + 1`; pass `None` if
 /// unavailable (the next-validators-hash cross-check is then skipped, exactly as
@@ -179,6 +223,17 @@ pub fn verify_cosmos_header(
     trusting_period: Duration,
     now: Time,
 ) -> Result<VerifiedHeader, HeaderVerifyError> {
+    // Fail-closed self-consistency: the overlap tally base must BE the set the
+    // trusted header committed to. (The verifier's own NOTE makes this the
+    // caller's responsibility; enforce it here, unconditionally.)
+    let actual = trusted.next_validators.hash();
+    if actual != trusted.next_validators_hash {
+        return Err(HeaderVerifyError::TrustedStateCorrupt(format!(
+            "trusted next_validators hash {actual} != committed next_validators_hash {}",
+            trusted.next_validators_hash
+        )));
+    }
+
     let options = Options {
         trust_threshold,
         trusting_period,
