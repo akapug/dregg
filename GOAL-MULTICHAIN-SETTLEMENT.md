@@ -301,3 +301,14 @@ HELD (not celebrating): (a) FRI low-degree still ASSUMED (StarkSound half (i)); 
 is ANALOGY not a differential-to-Lean (TODO); (c) VK not baked (trusts fixture), Groth16 wrap DOES NOT EXIST,
 DreggSettlement VK not pinned → "near settlement" optimistic. An OPUS adversarial CRITIC is auditing all of this
 (a6826754db48c1dd0) — its findings become the work-list; scope will be corrected to what it survives.
+
+## ⚑ POST-CRITIC WORK-LIST (07-12 ~2:45pm)
+EVM: lane af979acc02de112c6 running — bind the 25-lane statement to the REAL verifier (reject wrong root) + the
+actual Groth16 (early output shows a ~898M-ish number — likely the R1CS count → Groth16 on the laptop probably
+INFEASIBLE = an honest blocker, will confirm) + replace the MOCK verifier + neuter the vacuous hand mode.
+SOLANA: launched an opus adversarial critic (a6dd0464bd2ef3cce) on the ≥2/3-supermajority proof-of-holdings claim
+(is verify_supermajority real crypto or a trusted stake-table/number? is the accounts-hash-inclusion owner-checked?
+any ConsensusVerified-without-supermajority path?) — same discipline the EVM critic applied. solana-lock settle =
+M-of-N oracle-attested (honest); succinct wrapper reuses the recursive-STARK verify surface (the wrap unlocks it).
+DISCIPLINE MINTED: send an adversarial critic at EVERY completion claim; never report R1CS-satisfiability as a proof
+or a mock as a verifier.
