@@ -67,21 +67,24 @@
 //!
 //! This module builds and validates the OUTER CONFIG itself: a synthetic STARK
 //! (Fibonacci AIR) proves and verifies round-trip under it, with BN254-native
-//! commitments (asserted at the type level and by digest magnitude). SHRINKING
-//! A REAL DREGG APEX additionally needs, and does NOT yet have:
+//! commitments (asserted at the type level and by digest magnitude).
 //!
-//! - (a) an in-circuit apex-verifier AIR proven UNDER this config (the
-//!   `FriRecursionConfig`/backend instantiation of the field-generic
-//!   p3-recursion verifier at `Val = BabyBear`, hash = BN254 — the outer
-//!   counterpart of `prepare_circuit_for_verification`), and
-//! - (b) a producible real apex to shrink — currently BLOCKED by the rotated-proof
-//!   pipeline break (`generate_rotated_effect_vm_trace` panics, wide-commit
-//!   carrier count 59≠56 at `circuit/src/effect_vm/trace_rotated.rs:3650/3663`;
-//!   another lane's in-flight DEBT-A work, flagged in
-//!   WRAP-NATIVE-HASH-DECISION.md).
+//! The two residuals this doc used to name are now closed:
 //!
-//! The config + its self-contained prove/verify is this layer's deliverable;
-//! the real-apex shrink is the next increment.
+//! - (a) the apex-verifier AIR proven UNDER this config — LANDED in
+//!   [`crate::apex_shrink`]. Note the instantiation is a CONFIG SPLIT, not a
+//!   `FriRecursionConfig` impl on this type: the verifier circuit is built at
+//!   the INNER config (whose `FriRecursionConfig` describes the proof being
+//!   verified) and its tables are committed + proven at THIS config. This
+//!   config therefore deliberately never implements `FriRecursionConfig` —
+//!   nothing verifies an OUTER proof in-circuit; gnark verifies it natively.
+//! - (b) a producible real apex — the rotated-pipeline carrier flag-day landed
+//!   (`trace_rotated.rs` now documents 59 carriers) and
+//!   `tests/apex_shrink_bn254_tooth.rs` folds a real 2-turn chain and shrinks
+//!   its apex under this config.
+//!
+//! Remaining increment (named in [`crate::apex_shrink`]): the gnark fixture
+//! export — feeding a real shrink proof's FRI data to `VerifyFriNative`.
 
 use std::sync::Arc;
 
@@ -160,9 +163,10 @@ type OuterStarkConfig = StarkConfig<OuterPcs, OuterChallenge, OuterChallenger>;
 /// `Val = BabyBear`, `Challenge = EF4`, BN254-native commitments + transcript.
 ///
 /// Mirrors the `DreggRecursionConfig` wrapper shape (Arc-backed, cheap clone).
-/// It deliberately does NOT yet implement `FriRecursionConfig` — the in-circuit
-/// apex-verifier instantiation under this config is the named next increment
-/// (see the module-level HONEST SCOPE).
+/// It deliberately does NOT implement `FriRecursionConfig`: the shrink layer
+/// ([`crate::apex_shrink`]) builds the apex-verifier circuit at the INNER
+/// config and only COMMITS/PROVES under this one, and no layer ever verifies
+/// an outer proof in-circuit (gnark verifies it natively).
 #[derive(Clone)]
 pub struct DreggOuterConfig {
     config: Arc<OuterStarkConfig>,
