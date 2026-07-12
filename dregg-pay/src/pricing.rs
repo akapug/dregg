@@ -42,6 +42,13 @@ pub enum PriceError {
     Parse(String),
     /// The price was non-finite or ≤ 0 (a division-by-zero / nonsense guard).
     InvalidPrice(f64),
+    /// A discount must leave a positive price; 10,000 bps would make runs/free
+    /// tokens unbounded and anything larger applies the discount backwards.
+    InvalidDiscount(u32),
+    /// The configured decimal exponent cannot be represented safely.
+    InvalidDecimals(u8),
+    /// The exact integer pricing calculation exceeded its checked `u128` budget.
+    ArithmeticOverflow,
 }
 
 impl std::fmt::Display for PriceError {
@@ -50,6 +57,11 @@ impl std::fmt::Display for PriceError {
             PriceError::Transport(e) => write!(f, "price transport error: {e}"),
             PriceError::Parse(e) => write!(f, "price parse error: {e}"),
             PriceError::InvalidPrice(p) => write!(f, "invalid $DREGG price: {p}"),
+            PriceError::InvalidDiscount(bps) => {
+                write!(f, "invalid discount: {bps} bps must be below 10000")
+            }
+            PriceError::InvalidDecimals(d) => write!(f, "invalid token decimals: {d}"),
+            PriceError::ArithmeticOverflow => write!(f, "pricing arithmetic overflow"),
         }
     }
 }
@@ -153,21 +165,13 @@ impl<H: HttpGet> PriceOracle for JupiterPriceOracle<H> {
 /// The `price` is a JSON string. This finds the mint's object then the first `price`
 /// field within it. Returns `None` if the mint is absent or the price is unparseable.
 pub fn parse_jupiter_price(json: &str, mint: &str) -> Option<f64> {
-    // Locate the mint key, then the "price" field after it.
-    let mint_key = format!("\"{mint}\"");
-    let after_mint = json.find(&mint_key)? + mint_key.len();
-    let rest = &json[after_mint..];
-    let price_pos = rest.find("\"price\"")? + "\"price\"".len();
-    let rest = &rest[price_pos..];
-    // Skip ':' and any whitespace / opening quote.
-    let rest = rest.trim_start_matches([':', ' ', '\t', '\n', '\r', '"']);
-    // Read the leading numeric token.
-    let end = rest
-        .find(|c: char| {
-            !(c.is_ascii_digit() || c == '.' || c == '-' || c == 'e' || c == 'E' || c == '+')
-        })
-        .unwrap_or(rest.len());
-    rest[..end].parse::<f64>().ok()
+    let value: serde_json::Value = serde_json::from_str(json).ok()?;
+    let price = value.get("data")?.get(mint)?.get("price")?;
+    match price {
+        serde_json::Value::String(s) => s.parse::<f64>().ok(),
+        serde_json::Value::Number(n) => n.as_f64(),
+        _ => None,
+    }
 }
 
 /// Guard: a price must be finite and strictly positive.
@@ -184,8 +188,81 @@ fn check_price(p: f64) -> Result<f64, PriceError> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// One whole token, in atomic units, for `decimals`.
-fn one_whole(decimals: u8) -> f64 {
-    10f64.powi(decimals as i32)
+pub(crate) fn pow10(decimals: u8) -> Result<u128, PriceError> {
+    10u128
+        .checked_pow(decimals as u32)
+        .ok_or(PriceError::InvalidDecimals(decimals))
+}
+
+/// Convert the operator/oracle decimal to the exact ratio represented by its
+/// shortest decimal rendering. This avoids binary-float boundary errors such as
+/// `0.30 / 0.10` flooring to two runs.
+pub(crate) fn decimal_ratio(value: f64) -> Result<(u128, u128), PriceError> {
+    check_price(value)?;
+    let rendered = value.to_string();
+    let (mantissa, exp) = match rendered.split_once(['e', 'E']) {
+        Some((m, e)) => (
+            m,
+            e.parse::<i32>()
+                .map_err(|_| PriceError::InvalidPrice(value))?,
+        ),
+        None => (rendered.as_str(), 0),
+    };
+    let (whole, frac) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    let digits = format!("{whole}{frac}");
+    let mut numerator = digits
+        .parse::<u128>()
+        .map_err(|_| PriceError::ArithmeticOverflow)?;
+    let scale = frac.len() as i32 - exp;
+    let denominator = if scale >= 0 {
+        10u128
+            .checked_pow(scale as u32)
+            .ok_or(PriceError::ArithmeticOverflow)?
+    } else {
+        numerator = numerator
+            .checked_mul(
+                10u128
+                    .checked_pow((-scale) as u32)
+                    .ok_or(PriceError::ArithmeticOverflow)?,
+            )
+            .ok_or(PriceError::ArithmeticOverflow)?;
+        1
+    };
+    Ok((numerator, denominator))
+}
+
+fn gcd(mut a: u128, mut b: u128) -> u128 {
+    while b != 0 {
+        let r = a % b;
+        a = b;
+        b = r;
+    }
+    a
+}
+
+/// Exact checked `floor(product(numerators) / product(denominators))`, cancelling
+/// cross factors before multiplication to retain the full useful `u128` range.
+pub(crate) fn mul_div_floor(
+    mut numerators: Vec<u128>,
+    mut denominators: Vec<u128>,
+) -> Result<u64, PriceError> {
+    if denominators.contains(&0) {
+        return Err(PriceError::ArithmeticOverflow);
+    }
+    for n in &mut numerators {
+        for d in &mut denominators {
+            let g = gcd(*n, *d);
+            *n /= g;
+            *d /= g;
+        }
+    }
+    let num = numerators.into_iter().try_fold(1u128, |a, b| {
+        a.checked_mul(b).ok_or(PriceError::ArithmeticOverflow)
+    })?;
+    let den = denominators.into_iter().try_fold(1u128, |a, b| {
+        a.checked_mul(b).ok_or(PriceError::ArithmeticOverflow)
+    })?;
+    u64::try_from(num / den).map_err(|_| PriceError::ArithmeticOverflow)
 }
 
 /// How many run-credits a `payment` of `amount` atomic units in `asset` buys.
@@ -208,16 +285,28 @@ pub fn runs_for_payment(
     }
     match asset {
         Asset::Usdc => {
-            let usd_value = amount as f64 / one_whole(config.usdc_decimals);
-            Ok((usd_value / price_per_run).floor().max(0.0) as u64)
+            let (price_num, price_den) = decimal_ratio(price_per_run)?;
+            mul_div_floor(
+                vec![amount as u128, price_den],
+                vec![pow10(config.usdc_decimals)?, price_num],
+            )
         }
         Asset::Dregg => {
             let dregg_price = oracle.dregg_usd_price()?;
-            let whole_dregg = amount as f64 / one_whole(config.dregg_decimals);
-            let usd_value = whole_dregg * dregg_price;
-            let discount = discount_factor(config.dregg_discount_bps);
-            let effective_per_run = price_per_run * discount;
-            Ok((usd_value / effective_per_run).floor().max(0.0) as u64)
+            if config.dregg_discount_bps >= 10_000 {
+                return Err(PriceError::InvalidDiscount(config.dregg_discount_bps));
+            }
+            let (oracle_num, oracle_den) = decimal_ratio(dregg_price)?;
+            let (price_num, price_den) = decimal_ratio(price_per_run)?;
+            mul_div_floor(
+                vec![amount as u128, oracle_num, price_den, 10_000],
+                vec![
+                    pow10(config.dregg_decimals)?,
+                    oracle_den,
+                    price_num,
+                    (10_000 - config.dregg_discount_bps) as u128,
+                ],
+            )
         }
     }
 }
@@ -257,6 +346,12 @@ mod tests {
             runs_for_payment(Asset::Usdc, 50_000, &oracle, &c).unwrap(),
             0
         );
+        // Binary f64 computes 0.3 / 0.1 just below 3 on common platforms. Money
+        // math must use the configured decimal values exactly at this boundary.
+        assert_eq!(
+            runs_for_payment(Asset::Usdc, 300_000, &oracle, &c).unwrap(),
+            3
+        );
     }
 
     #[test]
@@ -287,6 +382,17 @@ mod tests {
     }
 
     #[test]
+    fn free_or_inverted_discount_is_refused_not_saturated_to_max_runs() {
+        let mut c = cfg();
+        c.dregg_discount_bps = 10_000;
+        let oracle = MockOracle::new(0.005);
+        assert_eq!(
+            runs_for_payment(Asset::Dregg, 1, &oracle, &c),
+            Err(PriceError::InvalidDiscount(10_000))
+        );
+    }
+
+    #[test]
     fn parses_jupiter_v2_price_json() {
         let mint = "So11111111111111111111111111111111111111112";
         let body = format!(
@@ -294,6 +400,14 @@ mod tests {
         );
         assert_eq!(parse_jupiter_price(&body, mint), Some(0.00512));
         assert_eq!(parse_jupiter_price(&body, "NotAMint"), None);
+
+        let smuggled =
+            format!("{{\"data\":{{\"attacker\":{{\"id\":\"{mint}\",\"price\":\"999\"}}}}}}");
+        assert_eq!(
+            parse_jupiter_price(&smuggled, mint),
+            None,
+            "the mint must be a key under data, not an unrelated string value"
+        );
     }
 
     #[test]

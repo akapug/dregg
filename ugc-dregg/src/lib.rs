@@ -231,7 +231,7 @@ impl Universe {
         // Deploy once to confirm it actually births a world (fail-closed on publish).
         WorldCell::deploy(&scene, deploy_seed).map_err(|e| PublishError::Compile(e.to_string()))?;
 
-        let id = universe_id(name, author, source);
+        let id = universe_id(name, author, source, deploy_seed, &provenance, &win);
         Ok(Universe {
             id,
             name: name.to_string(),
@@ -602,13 +602,38 @@ fn field(h: &mut blake3::Hasher, bytes: &[u8]) {
     h.update(bytes);
 }
 
-/// The universe commitment: a length-prefixed hash of name ++ author ++ source, so
-/// the same universe content-addresses to the same id.
-fn universe_id(name: &str, author: &str, source: &str) -> UniverseId {
+/// The universe commitment binds every rule that changes verification: scene bytes,
+/// deploy identity, provenance, and the declared win predicate. Omitting `win` would
+/// let `gold == 500` and merely `ENDED` publish under the same supposedly-content-
+/// addressed id.
+fn universe_id(
+    name: &str,
+    author: &str,
+    source: &str,
+    deploy_seed: u8,
+    provenance: &Provenance,
+    win: &WinCondition,
+) -> UniverseId {
     let mut h = domain_hasher(DOMAIN_UNIVERSE_ID);
     field(&mut h, name.as_bytes());
     field(&mut h, author.as_bytes());
     field(&mut h, source.as_bytes());
+    field(&mut h, &[deploy_seed]);
+    match provenance {
+        Provenance::Authored => field(&mut h, b"authored"),
+        Provenance::Procgen { committed_seed } => {
+            field(&mut h, b"procgen");
+            field(&mut h, committed_seed);
+        }
+    }
+    // A win condition is a conjunction, so canonicalize the caller's order.
+    let mut vars = win.vars.clone();
+    vars.sort();
+    h.update(&(vars.len() as u64).to_le_bytes());
+    for (name, value) in vars {
+        field(&mut h, name.as_bytes());
+        h.update(&value.to_le_bytes());
+    }
     UniverseId(*h.finalize().as_bytes())
 }
 

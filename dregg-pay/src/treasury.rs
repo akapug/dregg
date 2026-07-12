@@ -78,6 +78,10 @@ pub enum TreasuryError {
         /// Atomic USDC units available.
         available: u64,
     },
+    /// A cost must be finite and non-negative; NaN must never turn into a free run.
+    InvalidCost,
+    /// Converting the USD decimal to atomic USDC exceeded checked arithmetic.
+    CostOverflow,
 }
 
 impl std::fmt::Display for TreasuryError {
@@ -87,6 +91,10 @@ impl std::fmt::Display for TreasuryError {
                 f,
                 "insufficient USDC fuel: need {needed} atomic USDC, have {available} — refuel the treasury"
             ),
+            TreasuryError::InvalidCost => {
+                write!(f, "inference cost must be finite and non-negative")
+            }
+            TreasuryError::CostOverflow => write!(f, "inference cost conversion overflow"),
         }
     }
 }
@@ -156,9 +164,36 @@ impl<S: TreasuryStore> Treasury<S> {
     }
 
     /// Convert a USD cost to atomic USDC, rounding UP (never under-charge the fuel).
-    pub fn usd_to_atomic_usdc(&self, cost_usd: f64) -> u64 {
-        let atomic = cost_usd.max(0.0) * 10f64.powi(self.usdc_decimals as i32);
-        atomic.ceil() as u64
+    pub fn usd_to_atomic_usdc(&self, cost_usd: f64) -> Result<u64, TreasuryError> {
+        if !cost_usd.is_finite() || cost_usd < 0.0 {
+            return Err(TreasuryError::InvalidCost);
+        }
+        if cost_usd == 0.0 {
+            return Ok(0);
+        }
+        let (mut num, mut den) =
+            crate::pricing::decimal_ratio(cost_usd).map_err(|_| TreasuryError::CostOverflow)?;
+        let scale =
+            crate::pricing::pow10(self.usdc_decimals).map_err(|_| TreasuryError::CostOverflow)?;
+        let g = {
+            let mut a = scale;
+            let mut b = den;
+            while b != 0 {
+                let r = a % b;
+                a = b;
+                b = r;
+            }
+            a
+        };
+        den /= g;
+        num = num
+            .checked_mul(scale / g)
+            .ok_or(TreasuryError::CostOverflow)?;
+        let rounded_up = num
+            .checked_add(den - 1)
+            .ok_or(TreasuryError::CostOverflow)?
+            / den;
+        u64::try_from(rounded_up).map_err(|_| TreasuryError::CostOverflow)
     }
 
     /// Draw down the fuel tank for one inference costing `cost_usd` (real USD). Fails
@@ -169,7 +204,7 @@ impl<S: TreasuryStore> Treasury<S> {
     /// still burns USD inference (fuel out) while only the pile grew — the structural
     /// reason the pile must eventually be converted to fuel.
     pub fn spend_inference_usd(&self, cost_usd: f64) -> Result<u64, TreasuryError> {
-        let needed = self.usd_to_atomic_usdc(cost_usd);
+        let needed = self.usd_to_atomic_usdc(cost_usd)?;
         let available = self.store.usdc_balance();
         if needed > available {
             return Err(TreasuryError::InsufficientFuel { needed, available });
@@ -255,5 +290,16 @@ mod tests {
         assert_eq!(t.withdraw_dregg(600).unwrap(), 400);
         assert!(t.withdraw_dregg(500).is_err());
         assert_eq!(t.dregg_balance(), 400, "failed withdraw changed nothing");
+    }
+
+    #[test]
+    fn non_finite_cost_cannot_buy_a_free_inference() {
+        let t = treasury();
+        t.deposit_usdc(1_000_000);
+        assert_eq!(
+            t.spend_inference_usd(f64::NAN),
+            Err(TreasuryError::InvalidCost)
+        );
+        assert_eq!(t.usdc_balance(), 1_000_000);
     }
 }

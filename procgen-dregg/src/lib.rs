@@ -51,7 +51,9 @@
 //!   work; the pipeline (committed seed -> verified draws -> valid dungeon) is the
 //!   deliverable, not a large content library.
 
-use dregg_dice::{DrawStream, RandomnessEvidence, RandomnessRequest, RandomnessSource};
+use dregg_dice::{
+    DrawStream, EvidenceKind, RandomnessEvidence, RandomnessRequest, RandomnessSource,
+};
 
 pub use dregg_dice::{self, Deterministic, Seed};
 
@@ -250,6 +252,17 @@ pub fn verify_generation(
     claimed_source: &str,
 ) -> bool {
     let req = dungeon_request(seed);
+    // `Deterministic::seed` verifies the context carried BY the evidence, but it
+    // cannot know which context this application committed to. Bind that outer
+    // application invariant here; otherwise a generator can choose a favorable
+    // context after the committed seed is known and still produce self-consistent
+    // evidence for the same request.
+    if !matches!(
+        &evidence.source,
+        EvidenceKind::Deterministic { context } if context == seed.as_bytes()
+    ) {
+        return false;
+    }
     // Pure verifier: re-derive the seed + check the transcript commitment.
     let Ok(verified) = Deterministic::seed(&req, evidence) else {
         return false;
@@ -528,5 +541,35 @@ fn room_display(theme: &Theme, i: usize, adj: usize, noun: usize, objective: usi
         format!("The {}", theme.win_room_hint)
     } else {
         format!("The {} {}", theme.adjectives[adj], theme.nouns[noun])
+    }
+}
+
+#[cfg(test)]
+mod adversarial_tests {
+    use super::*;
+
+    #[test]
+    fn evidence_context_must_equal_the_committed_seed() {
+        let committed = CommittedSeed::from_bytes([0x11; 32]);
+        let attacker_context = [0x22; 32];
+        let req = dungeon_request(&committed);
+        let forged_evidence = Deterministic {
+            context: attacker_context,
+        }
+        .evidence(&req);
+        let forged_seed = Deterministic::seed(&req, &forged_evidence)
+            .expect("the inner evidence is self-consistent");
+        let (forged_source, _) = build_dungeon(&DrawStream::new(forged_seed, req.draw_count));
+
+        assert!(
+            !verify_generation(&committed, &forged_evidence, &forged_source),
+            "self-consistent evidence under an uncommitted context must be refused"
+        );
+        let honest = generate(&committed);
+        assert!(verify_generation(
+            &committed,
+            &honest.evidence,
+            &honest.source
+        ));
     }
 }

@@ -18,6 +18,34 @@ use ugc_dregg::{
     verify_completion,
 };
 
+#[test]
+fn universe_id_binds_the_win_condition() {
+    let source = r#"---
+id: same-world
+title: Same World
+weight: 1
+---
+
+=== start
+
+* [Leave]
+  -> END
+"#;
+    let easy = Universe::authored("same", "author", source, WinCondition::ended()).unwrap();
+    let hard = Universe::authored(
+        "same",
+        "author",
+        source,
+        WinCondition::ended_with(&[("gold", 500)]),
+    )
+    .unwrap();
+    assert_ne!(
+        easy.id(),
+        hard.id(),
+        "changing what counts as a win must change the content address"
+    );
+}
+
 /// The built-in salt-shore dungeon as a published universe. Win = the hoard seized
 /// (`gold == 500`) and the scene ENDED. Minimal winning path is 3 moves.
 fn salt_shore() -> Universe {

@@ -75,15 +75,28 @@ impl From<PriceError> for OtcError {
 
 /// The `$DREGG`-out (atomic) a `usdc_in` (atomic) fill yields at the discounted rate —
 /// the pure pricing, without the pile check. Floors to whole atomic units.
-pub fn otc_dregg_out(usdc_in: u64, oracle_price: f64, config: &PayConfig) -> u64 {
-    let usd_in = usdc_in as f64 / 10f64.powi(config.usdc_decimals as i32);
-    let effective_price = oracle_price * discount_factor(config.otc_discount_bps);
-    if !(effective_price.is_finite() && effective_price > 0.0) {
-        return 0;
+pub fn otc_dregg_out(
+    usdc_in: u64,
+    oracle_price: f64,
+    config: &PayConfig,
+) -> Result<u64, PriceError> {
+    if config.otc_discount_bps >= 10_000 {
+        return Err(PriceError::InvalidDiscount(config.otc_discount_bps));
     }
-    let dregg_out_whole = usd_in / effective_price;
-    let dregg_out_atomic = dregg_out_whole * 10f64.powi(config.dregg_decimals as i32);
-    dregg_out_atomic.floor().max(0.0) as u64
+    let (oracle_num, oracle_den) = crate::pricing::decimal_ratio(oracle_price)?;
+    crate::pricing::mul_div_floor(
+        vec![
+            usdc_in as u128,
+            oracle_den,
+            10_000,
+            crate::pricing::pow10(config.dregg_decimals)?,
+        ],
+        vec![
+            crate::pricing::pow10(config.usdc_decimals)?,
+            oracle_num,
+            (10_000 - config.otc_discount_bps) as u128,
+        ],
+    )
 }
 
 /// Quote an OTC fill: a user brings `usdc_in` atomic USDC and buys `$DREGG` out of the
@@ -101,7 +114,7 @@ pub fn otc_quote(
 ) -> Result<OtcQuote, OtcError> {
     let oracle_price = oracle.dregg_usd_price()?;
     let effective_price_usd = oracle_price * discount_factor(config.otc_discount_bps);
-    let dregg_out = otc_dregg_out(usdc_in, oracle_price, config);
+    let dregg_out = otc_dregg_out(usdc_in, oracle_price, config)?;
     if dregg_out > pile_balance {
         return Err(OtcError::InsufficientPile {
             needed: dregg_out,
@@ -175,5 +188,16 @@ mod tests {
             otc_quote(1_000_000, u64::MAX, &bad, &c),
             Err(OtcError::PriceUnavailable(_))
         ));
+    }
+
+    #[test]
+    fn quote_refuses_a_free_fill_discount() {
+        let mut c = cfg();
+        c.otc_discount_bps = 10_000;
+        let err = otc_quote(1, u64::MAX, &MockOracle::new(0.005), &c).unwrap_err();
+        assert_eq!(
+            err,
+            OtcError::PriceUnavailable(PriceError::InvalidDiscount(10_000))
+        );
     }
 }

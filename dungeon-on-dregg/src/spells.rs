@@ -175,8 +175,8 @@ pub const SPELLBOOK: [Spell; 4] = [FIREBALL, MEND, RALLY, BACKSTAB];
 /// 2. **`caster/create`**: the written class is a valid id (`AnyOf[FieldEquals(class,
 ///    WARRIOR|MAGE|ROGUE)]`); the global `WriteOnce` makes it a one-time move.
 /// 3. **each spell** (`spell/<name>`): `FieldEquals(class, <required>)` (the class-lock)
-///    + `FieldLteField(mana_spent <= mana_budget)` (the mana-gate) + `StrictMonotonic`
-///    on the effect slot (the effect is a real advancing write).
+///    + `FieldLteField(mana_spent <= mana_budget)` (the mana-gate) + exact
+///    `FieldDelta` teeth for the named spell's cost and effect amount.
 pub fn caster_story() -> CompiledStory {
     let mut cases = Vec::new();
 
@@ -234,9 +234,15 @@ pub fn caster_story() -> CompiledStory {
                     left_index: MANA_SPENT_SLOT,
                     right_index: MANA_BUDGET_SLOT,
                 },
-                // THE EFFECT: a real advancing field write.
-                StateConstraint::StrictMonotonic {
+                // Bind the method to its exact economics. A merely monotone effect
+                // would accept a raw Fireball spending 1 mana for 1 damage.
+                StateConstraint::FieldDelta {
+                    index: MANA_SPENT_SLOT,
+                    delta: field_from_u64(spell.cost),
+                },
+                StateConstraint::FieldDelta {
                     index: spell.effect.slot(),
+                    delta: field_from_u64(spell.effect.amount()),
                 },
             ],
         });
@@ -350,9 +356,8 @@ pub fn case_constraints(story: &CompiledStory, method: &str) -> Vec<StateConstra
 mod tests {
     use super::*;
 
-    /// Every spell's case carries the three real teeth: `FieldEquals(class, .)` (the
-    /// class-lock), `FieldLteField(mana_spent <= mana_budget)` (the mana-gate), and a
-    /// `StrictMonotonic` on the effect slot — kernel predicates, not app bookkeeping.
+    /// Every spell's case carries the class-lock, mana ceiling, and exact cost/effect
+    /// deltas — kernel predicates, not app bookkeeping.
     #[test]
     fn every_spell_case_carries_the_class_mana_and_effect_teeth() {
         let story = caster_story();
@@ -377,15 +382,17 @@ mod tests {
                 "{} is mana-gated FieldLteField(spent <= budget); got {cs:?}",
                 spell.name
             );
-            assert!(
-                cs.iter().any(|c| matches!(
-                    c,
-                    StateConstraint::StrictMonotonic { index } if *index == spell.effect.slot()
-                )),
-                "{}'s effect advances StrictMonotonic(slot {}); got {cs:?}",
-                spell.name,
-                spell.effect.slot()
-            );
+            assert!(cs.iter().any(|c| matches!(
+                c,
+                StateConstraint::FieldDelta { index, delta }
+                    if *index == MANA_SPENT_SLOT && *delta == field_from_u64(spell.cost)
+            )));
+            assert!(cs.iter().any(|c| matches!(
+                c,
+                StateConstraint::FieldDelta { index, delta }
+                    if *index == spell.effect.slot()
+                        && *delta == field_from_u64(spell.effect.amount())
+            )));
         }
     }
 
@@ -447,6 +454,35 @@ mod tests {
         create_caster(&funded, MAGE, 4, 30).expect("funded Mage");
         cast(&funded, FIREBALL).expect("a pool of 4 covers the cost-4 Fireball");
         assert_eq!(funded.read_var("mana_spent"), 4);
+    }
+
+    #[test]
+    fn raw_spell_method_cannot_underpay_or_inflate_the_effect() {
+        let world = deploy_caster(33);
+        create_caster(&world, MAGE, 20, 30).expect("create Mage");
+        let cell = world.cell_id();
+        let forged = world.apply_raw(
+            FIREBALL.method,
+            vec![
+                Effect::SetField {
+                    cell,
+                    index: MANA_SPENT_SLOT as usize,
+                    value: field_from_u64(1),
+                },
+                Effect::SetField {
+                    cell,
+                    index: DAMAGE_SLOT as usize,
+                    value: field_from_u64(1000),
+                },
+            ],
+        );
+        assert!(matches!(forged, Err(WorldError::Refused(_))));
+        assert_eq!(world.read_var("mana_spent"), 0);
+        assert_eq!(world.read_var("damage"), 0);
+
+        cast(&world, FIREBALL).expect("the exact cost/effect pair commits");
+        assert_eq!(world.read_var("mana_spent"), FIREBALL.cost);
+        assert_eq!(world.read_var("damage"), FIREBALL.effect.amount());
     }
 
     /// The mana-gate bites CUMULATIVELY: a Mage with pool 6 casts one Fireball (spend

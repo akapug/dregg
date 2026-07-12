@@ -67,6 +67,12 @@ pub enum WatchError {
     /// mint, or was not owned by the SPL Token program (fail closed — reuses the
     /// bridge's [`HoldingProofError`]).
     Holding(HoldingProofError),
+    /// The fetched SPL account's embedded token owner was not the deposit wallet.
+    /// RPC selection is not trusted as proof of attribution.
+    WrongTokenOwner {
+        expected: [u8; 32],
+        actual: [u8; 32],
+    },
 }
 
 impl std::fmt::Display for WatchError {
@@ -74,6 +80,12 @@ impl std::fmt::Display for WatchError {
         match self {
             WatchError::Rpc(e) => write!(f, "rpc error: {e}"),
             WatchError::Holding(e) => write!(f, "holding decode refused: {e}"),
+            WatchError::WrongTokenOwner { expected, actual } => write!(
+                f,
+                "token-account owner mismatch: expected {}, got {}",
+                bs58::encode(expected).into_string(),
+                bs58::encode(actual).into_string()
+            ),
         }
     }
 }
@@ -149,6 +161,7 @@ pub struct MockWatcher {
     chain: MockChain,
     asset: Asset,
     last_seen: Mutex<HashMap<[u8; 32], u64>>,
+    next_reference: Mutex<u64>,
 }
 
 impl MockWatcher {
@@ -166,6 +179,7 @@ impl MockWatcher {
             chain,
             asset,
             last_seen: Mutex::new(HashMap::new()),
+            next_reference: Mutex::new(0),
         }
     }
 
@@ -189,14 +203,29 @@ impl Watcher for MockWatcher {
         let current = self.chain.balance(address);
         let mut seen = self.last_seen.lock().unwrap();
         let prev = *seen.get(&address.to_bytes()).unwrap_or(&0);
-        if current <= prev {
+        if current < prev {
+            // A sweep/outbound transfer lowered the account. Rebase the balance
+            // cursor; otherwise every later deposit at or below the old high-water
+            // mark is ignored forever.
+            seen.insert(address.to_bytes(), current);
+            return Ok(vec![]);
+        }
+        if current == prev {
             return Ok(vec![]);
         }
         let delta = current - prev;
         seen.insert(address.to_bytes(), current);
-        // Reference binds the address + the new cumulative total (monotone ⇒
-        // unique per landed increment).
-        let reference = PaymentRef(format!("mock:{}:{current}", address.to_base58()));
+        // Balance totals repeat after a sweep, so they are not an idempotency key.
+        // Give every emitted mock-chain observation a monotone synthetic sequence.
+        let mut next_reference = self.next_reference.lock().unwrap();
+        *next_reference = next_reference
+            .checked_add(1)
+            .expect("mock payment reference sequence exhausted");
+        let reference = PaymentRef(format!(
+            "mock:{}:{}:{current}",
+            address.to_base58(),
+            *next_reference
+        ));
         Ok(vec![PaymentReceived {
             user: user.clone(),
             deposit_address: *address,
@@ -310,15 +339,25 @@ impl<F: AccountFetcher> Watcher for SolanaWatcher<F> {
             }));
         }
         // Reuse the bridge's exact SPL layout decode.
-        let (mint, _owner, amount) = decode_spl_token_account(&fetched.data)
+        let (mint, owner, amount) = decode_spl_token_account(&fetched.data)
             .ok_or(WatchError::Holding(HoldingProofError::NotTokenAccount))?;
         if mint != self.mint {
             return Err(WatchError::Holding(HoldingProofError::WrongMint));
         }
+        if owner != address.to_bytes() {
+            return Err(WatchError::WrongTokenOwner {
+                expected: address.to_bytes(),
+                actual: owner,
+            });
+        }
 
         let mut seen = self.last_seen.lock().unwrap();
         let prev = *seen.get(&address.to_bytes()).unwrap_or(&0);
-        if amount <= prev {
+        if amount < prev {
+            seen.insert(address.to_bytes(), amount);
+            return Ok(vec![]);
+        }
+        if amount == prev {
             return Ok(vec![]);
         }
         let delta = amount - prev;
@@ -362,6 +401,28 @@ mod tests {
 
         // Re-poll with no new payment ⇒ nothing (watcher-level dedup).
         assert!(watcher.poll(&alice, &addr).unwrap().is_empty());
+    }
+
+    #[test]
+    fn watcher_rebases_after_sweep_and_observes_the_next_deposit() {
+        let chain = MockChain::new();
+        let watcher = MockWatcher::new(chain.clone());
+        let alice = UserId::from("alice");
+        let addr = DepositAddress([1u8; 32]);
+        let treasury = DepositAddress([2u8; 32]);
+
+        chain.credit_onchain(&addr, 500);
+        let first = watcher.poll(&alice, &addr).unwrap();
+        assert_eq!(first[0].amount, 500);
+        assert_eq!(chain.transfer_all(&addr, &treasury), 500);
+        assert!(watcher.poll(&alice, &addr).unwrap().is_empty());
+        chain.credit_onchain(&addr, 500);
+        let second = watcher.poll(&alice, &addr).unwrap();
+        assert_eq!(
+            second[0].amount, 500,
+            "a post-sweep deposit at the old 500-unit high-water mark is new money"
+        );
+        assert_ne!(second[0].reference, first[0].reference);
     }
 
     /// Build a real 165-byte SPL token account layout: `mint(32) ‖ owner(32) ‖
@@ -460,6 +521,34 @@ mod tests {
         assert!(matches!(
             err,
             WatchError::Holding(HoldingProofError::WrongMint)
+        ));
+    }
+
+    #[test]
+    fn solana_watcher_refuses_rpc_account_owned_by_another_wallet() {
+        let mint = [9u8; 32];
+        let victim = [1u8; 32];
+        let attacker = [2u8; 32];
+        let cfg = PayConfig::devnet_mock(
+            *b"seedseedseedseedseedseedseedseed",
+            mint,
+            DepositAddress([3u8; 32]),
+            100,
+        );
+        let watcher = SolanaWatcher::new(
+            &cfg,
+            MockFetcher {
+                acct: Some(FetchedAccount {
+                    data: spl_account_bytes(&mint, &attacker, 50_000_000),
+                    owner_program: SPL_TOKEN_PROGRAM_ID,
+                    slot: 9,
+                }),
+            },
+        );
+        assert!(matches!(
+            watcher.poll(&UserId::from("victim"), &DepositAddress(victim)),
+            Err(WatchError::WrongTokenOwner { expected, actual })
+                if expected == victim && actual == attacker
         ));
     }
 }

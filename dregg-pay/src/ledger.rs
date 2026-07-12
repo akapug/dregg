@@ -12,8 +12,7 @@
 //! conserved on-chain balance; today they are a custodial service ledger over
 //! observed Solana payments.
 
-use std::collections::HashMap;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 use crate::config::UserId;
@@ -23,26 +22,63 @@ use crate::watcher::{PaymentReceived, PaymentRef};
 /// [`InMemoryStore`]; the discord bot supplies a sqlite-backed impl. All methods
 /// take `&self` (interior mutability) so a `CreditLedger` can be shared.
 ///
-/// Idempotency is the store's responsibility: [`CreditStore::mark_processed`]
-/// records a payment reference, and [`CreditStore::is_processed`] reports whether
-/// it was already credited — so re-observing the same payment never double-credits.
+/// Stores can override [`CreditStore::credit_once`] with a database transaction.
+/// The ledger also serializes operations on one store handle, and the in-memory
+/// implementation performs deduplication + balance mutation under one mutex.
 pub trait CreditStore {
     /// The user's current run-credit balance.
     fn balance(&self, user: &UserId) -> u64;
-    /// Set the user's balance.
+    /// Set the user's current balance (compatibility primitive for persistent stores).
     fn set_balance(&self, user: &UserId, credits: u64);
-    /// Has this payment reference already been credited?
+    /// Whether `reference` has already been processed.
     fn is_processed(&self, reference: &PaymentRef) -> bool;
-    /// Record a payment reference as credited (idempotency key).
+    /// Mark `reference` processed.
     fn mark_processed(&self, reference: &PaymentRef);
+    /// Atomically deduplicate `reference` and add `credits`. Implementations backed
+    /// by a database must perform both changes in one transaction.
+    fn credit_once(
+        &self,
+        user: &UserId,
+        reference: &PaymentRef,
+        credits: u64,
+    ) -> StoreCreditOutcome {
+        if self.is_processed(reference) {
+            return StoreCreditOutcome::AlreadyProcessed;
+        }
+        let Some(new_balance) = self.balance(user).checked_add(credits) else {
+            return StoreCreditOutcome::BalanceOverflow;
+        };
+        self.set_balance(user, new_balance);
+        self.mark_processed(reference);
+        StoreCreditOutcome::Credited { new_balance }
+    }
+    /// Atomically spend one credit, returning the remaining balance.
+    fn debit_one(&self, user: &UserId) -> Option<u64> {
+        let remaining = self.balance(user).checked_sub(1)?;
+        self.set_balance(user, remaining);
+        Some(remaining)
+    }
+}
+
+/// The atomic store result behind [`CreditLedger::credit`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StoreCreditOutcome {
+    Credited { new_balance: u64 },
+    AlreadyProcessed,
+    BalanceOverflow,
 }
 
 /// A simple, thread-safe in-memory [`CreditStore`] for tests and single-process
 /// deployments.
 #[derive(Default)]
 pub struct InMemoryStore {
-    balances: Mutex<HashMap<UserId, u64>>,
-    processed: Mutex<HashSet<PaymentRef>>,
+    state: Mutex<InMemoryState>,
+}
+
+#[derive(Default)]
+struct InMemoryState {
+    balances: HashMap<UserId, u64>,
+    processed: HashSet<PaymentRef>,
 }
 
 impl InMemoryStore {
@@ -54,16 +90,49 @@ impl InMemoryStore {
 
 impl CreditStore for InMemoryStore {
     fn balance(&self, user: &UserId) -> u64 {
-        *self.balances.lock().unwrap().get(user).unwrap_or(&0)
+        *self.state.lock().unwrap().balances.get(user).unwrap_or(&0)
     }
     fn set_balance(&self, user: &UserId, credits: u64) {
-        self.balances.lock().unwrap().insert(user.clone(), credits);
+        self.state
+            .lock()
+            .unwrap()
+            .balances
+            .insert(user.clone(), credits);
     }
     fn is_processed(&self, reference: &PaymentRef) -> bool {
-        self.processed.lock().unwrap().contains(reference)
+        self.state.lock().unwrap().processed.contains(reference)
     }
     fn mark_processed(&self, reference: &PaymentRef) {
-        self.processed.lock().unwrap().insert(reference.clone());
+        self.state
+            .lock()
+            .unwrap()
+            .processed
+            .insert(reference.clone());
+    }
+    fn credit_once(
+        &self,
+        user: &UserId,
+        reference: &PaymentRef,
+        credits: u64,
+    ) -> StoreCreditOutcome {
+        let mut state = self.state.lock().unwrap();
+        if state.processed.contains(reference) {
+            return StoreCreditOutcome::AlreadyProcessed;
+        }
+        let current = *state.balances.get(user).unwrap_or(&0);
+        let Some(new_balance) = current.checked_add(credits) else {
+            return StoreCreditOutcome::BalanceOverflow;
+        };
+        state.balances.insert(user.clone(), new_balance);
+        state.processed.insert(reference.clone());
+        StoreCreditOutcome::Credited { new_balance }
+    }
+    fn debit_one(&self, user: &UserId) -> Option<u64> {
+        let mut state = self.state.lock().unwrap();
+        let current = *state.balances.get(user).unwrap_or(&0);
+        let remaining = current.checked_sub(1)?;
+        state.balances.insert(user.clone(), remaining);
+        Some(remaining)
     }
 }
 
@@ -93,6 +162,9 @@ pub enum CreditOutcome {
         /// The amount that was too small.
         amount: u64,
     },
+    /// Crediting would overflow the user's counter. The reference is deliberately
+    /// left unprocessed so an operator can resolve the balance and retry.
+    BalanceOverflow,
 }
 
 /// Why a [`CreditLedger::debit`] failed.
@@ -121,6 +193,7 @@ impl std::error::Error for DebitError {}
 pub struct CreditLedger<S: CreditStore> {
     store: S,
     price_per_run: u64,
+    operations: Mutex<()>,
 }
 
 impl<S: CreditStore> CreditLedger<S> {
@@ -131,6 +204,7 @@ impl<S: CreditStore> CreditLedger<S> {
         CreditLedger {
             store,
             price_per_run,
+            operations: Mutex::new(()),
         }
     }
 
@@ -149,29 +223,25 @@ impl<S: CreditStore> CreditLedger<S> {
     /// [`CreditOutcome::AlreadyCredited`] and changes nothing. This is the primary
     /// entry the watcher feeds.
     pub fn credit(&self, payment: &PaymentReceived) -> CreditOutcome {
-        if self.store.is_processed(&payment.reference) {
-            return CreditOutcome::AlreadyCredited;
-        }
-        // Mark BEFORE mutating balance so a concurrent re-observe of the same ref
-        // cannot double-credit (the store's mark/set are each atomic; a shared
-        // check-then-act is guarded by the is_processed gate above + this mark).
-        self.store.mark_processed(&payment.reference);
-
+        let _operation = self.operations.lock().unwrap();
         let runs = payment.amount / self.price_per_run;
-        if runs == 0 {
-            return CreditOutcome::BelowOneRun {
-                amount: payment.amount,
-            };
-        }
         let consumed = runs * self.price_per_run;
         let remainder = payment.amount - consumed;
-        let new_balance = self.store.balance(&payment.user) + runs;
-        self.store.set_balance(&payment.user, new_balance);
-        CreditOutcome::Credited {
-            runs,
-            amount: consumed,
-            remainder,
-            new_balance,
+        match self
+            .store
+            .credit_once(&payment.user, &payment.reference, runs)
+        {
+            StoreCreditOutcome::AlreadyProcessed => CreditOutcome::AlreadyCredited,
+            StoreCreditOutcome::BalanceOverflow => CreditOutcome::BalanceOverflow,
+            StoreCreditOutcome::Credited { .. } if runs == 0 => CreditOutcome::BelowOneRun {
+                amount: payment.amount,
+            },
+            StoreCreditOutcome::Credited { new_balance } => CreditOutcome::Credited {
+                runs,
+                amount: consumed,
+                remainder,
+                new_balance,
+            },
         }
     }
 
@@ -184,37 +254,33 @@ impl<S: CreditStore> CreditLedger<S> {
     /// payment) marks the reference processed and returns
     /// [`CreditOutcome::BelowOneRun`] — no double-processing on a later re-observe.
     pub fn credit_runs(&self, payment: &PaymentReceived, runs: u64) -> CreditOutcome {
-        if self.store.is_processed(&payment.reference) {
-            return CreditOutcome::AlreadyCredited;
-        }
-        self.store.mark_processed(&payment.reference);
-        if runs == 0 {
-            return CreditOutcome::BelowOneRun {
+        let _operation = self.operations.lock().unwrap();
+        match self
+            .store
+            .credit_once(&payment.user, &payment.reference, runs)
+        {
+            StoreCreditOutcome::AlreadyProcessed => CreditOutcome::AlreadyCredited,
+            StoreCreditOutcome::BalanceOverflow => CreditOutcome::BalanceOverflow,
+            StoreCreditOutcome::Credited { .. } if runs == 0 => CreditOutcome::BelowOneRun {
                 amount: payment.amount,
-            };
-        }
-        let new_balance = self.store.balance(&payment.user) + runs;
-        self.store.set_balance(&payment.user, new_balance);
-        CreditOutcome::Credited {
-            runs,
-            // In the price-fed path the whole payment is consumed into `runs`; the
-            // sub-run remainder is captured by the flooring in `runs_for_payment`.
-            amount: payment.amount,
-            remainder: 0,
-            new_balance,
+            },
+            StoreCreditOutcome::Credited { new_balance } => CreditOutcome::Credited {
+                runs,
+                // In the price-fed path the whole payment is consumed into `runs`.
+                amount: payment.amount,
+                remainder: 0,
+                new_balance,
+            },
         }
     }
 
     /// Spend one run-credit. Fails with [`DebitError::InsufficientCredits`] if the
     /// user has none. Returns the balance remaining after the spend.
     pub fn debit(&self, user: &UserId) -> Result<u64, DebitError> {
-        let bal = self.store.balance(user);
-        if bal == 0 {
-            return Err(DebitError::InsufficientCredits { user: user.clone() });
-        }
-        let remaining = bal - 1;
-        self.store.set_balance(user, remaining);
-        Ok(remaining)
+        let _operation = self.operations.lock().unwrap();
+        self.store
+            .debit_one(user)
+            .ok_or_else(|| DebitError::InsufficientCredits { user: user.clone() })
     }
 
     /// The user's run-credit balance.
@@ -317,5 +383,35 @@ mod tests {
             CreditOutcome::BelowOneRun { amount: 50 }
         );
         assert_eq!(ledger.balance(&UserId::from("bob")), 0);
+    }
+
+    #[test]
+    fn concurrent_duplicate_credit_is_one_atomic_store_transaction() {
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+
+        let ledger = Arc::new(CreditLedger::new(InMemoryStore::new(), 100));
+        let payment = Arc::new(payment("alice", 100, "same-chain-payment"));
+        let start = Arc::new(Barrier::new(9));
+        let mut threads = Vec::new();
+        for _ in 0..8 {
+            let ledger = Arc::clone(&ledger);
+            let payment = Arc::clone(&payment);
+            let start = Arc::clone(&start);
+            threads.push(thread::spawn(move || {
+                start.wait();
+                ledger.credit(&payment)
+            }));
+        }
+        start.wait();
+        let outcomes: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|o| matches!(o, CreditOutcome::Credited { .. }))
+                .count(),
+            1
+        );
+        assert_eq!(ledger.balance(&UserId::from("alice")), 1);
     }
 }

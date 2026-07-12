@@ -25,6 +25,9 @@ bs58 = "0.5"
 blake3 = "1"
 # The HD seed is secret custody material — wipe it on drop.
 zeroize = { workspace = true }
+# Parse the Jupiter response structurally. Text-searching for the mint lets an
+# attacker place it in an unrelated `id` value and smuggle a different price.
+serde_json = { workspace = true }
 
 [dev-dependencies]
 # Verify the derived deposit key produces real, verifiable ed25519 signatures

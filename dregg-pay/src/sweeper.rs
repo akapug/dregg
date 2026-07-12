@@ -185,13 +185,19 @@ impl<F: AccountFetcher, T: TxSubmitter> Sweeper for SolanaSweeper<F, T> {
                         },
                     )));
                 }
-                let (mint, _owner, amt) = decode_spl_token_account(&a.data).ok_or(
+                let (mint, owner, amt) = decode_spl_token_account(&a.data).ok_or(
                     SweepError::Read(WatchError::Holding(HoldingProofError::NotTokenAccount)),
                 )?;
                 if mint != self.mint {
                     return Err(SweepError::Read(WatchError::Holding(
                         HoldingProofError::WrongMint,
                     )));
+                }
+                if owner != address.to_bytes() {
+                    return Err(SweepError::Read(WatchError::WrongTokenOwner {
+                        expected: address.to_bytes(),
+                        actual: owner,
+                    }));
                 }
                 amt
             }

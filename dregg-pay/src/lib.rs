@@ -80,7 +80,9 @@ pub use config::{
 pub use hd::{
     DepositAddressProvider, HdDeposit, derive_deposit_address, derive_signing_key, user_index,
 };
-pub use ledger::{CreditLedger, CreditOutcome, CreditStore, DebitError, InMemoryStore};
+pub use ledger::{
+    CreditLedger, CreditOutcome, CreditStore, DebitError, InMemoryStore, StoreCreditOutcome,
+};
 pub use otc::{OtcError, OtcQuote, otc_dregg_out, otc_quote};
 pub use pricing::{
     HttpGet, JupiterPriceOracle, MockOracle, PriceError, PriceOracle, discount_factor,

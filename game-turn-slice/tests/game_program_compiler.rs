@@ -311,7 +311,7 @@ fn game_program_leaf_accepts() {
 
     let (compiler, program) = build_game_program();
     let assign = honest_assignment();
-    let witness = compiler.witness(&assign, NUM_ROWS);
+    let witness = compiler.witness(&assign, NUM_ROWS).unwrap();
     let pis = game_pis();
     let config = ir2_leaf_wrap_config();
 
@@ -361,7 +361,7 @@ fn forged_ordering_rejects() {
         .set_old(SLOT_SCORE, 100)
         .set_new(SLOT_POINTS, 20)
         .set_new(SLOT_SCENE, SCENE_ID);
-    let w = compiler.witness(&forged_mono, NUM_ROWS);
+    let w = compiler.witness(&forged_mono, NUM_ROWS).unwrap();
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         prove_custom_leaf_with_commitment(&program, &w, NUM_ROWS, &pis, &config)
     }));
@@ -386,7 +386,7 @@ fn forged_ordering_rejects() {
         .set_old(SLOT_SCORE, 100)
         .set_new(SLOT_POINTS, 20)
         .set_new(SLOT_SCENE, SCENE_ID);
-    let w2 = compiler.witness(&forged_gte, NUM_ROWS);
+    let w2 = compiler.witness(&forged_gte, NUM_ROWS).unwrap();
     let r2 = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         prove_custom_leaf_with_commitment(&program, &w2, NUM_ROWS, &pis, &config)
     }));
@@ -425,6 +425,37 @@ fn range_head_signs() {
     assert!(3i128 - 5i128 < 0);
     // Keep the compiler alive so the build wiring is exercised.
     let _ = compiler.width();
+}
+
+#[test]
+fn witness_refuses_babybear_aliases_and_missing_slots() {
+    use dregg_circuit::field::BABYBEAR_P;
+    use game_turn_slice::compiler::WitnessError;
+
+    let mut compiler = GameProgramCompiler::new("alias-boundary", 16);
+    compiler
+        .lower_state_constraint(&StateConstraint::FieldEquals {
+            index: SLOT_HP,
+            value: field_from_u64(1),
+        })
+        .unwrap();
+
+    let aliased = SlotAssignment::new().set_new(SLOT_HP, BABYBEAR_P as u64 + 1);
+    assert!(matches!(
+        compiler.witness(&aliased, 1),
+        Err(WitnessError::OutOfRange {
+            side: "new",
+            index: SLOT_HP,
+            ..
+        })
+    ));
+    assert_eq!(
+        compiler.witness(&SlotAssignment::new(), 1),
+        Err(WitnessError::MissingSlot {
+            side: "new",
+            index: SLOT_HP,
+        })
+    );
 }
 
 // ============================================================================

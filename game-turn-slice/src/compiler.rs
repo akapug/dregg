@@ -81,6 +81,22 @@ pub struct Blocker {
     pub reason: String,
 }
 
+/// A concrete executor assignment that cannot be represented faithfully by this
+/// single-BabyBear-limb game leaf.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WitnessError {
+    MissingSlot {
+        side: &'static str,
+        index: u8,
+    },
+    OutOfRange {
+        side: &'static str,
+        index: u8,
+        value: u64,
+        limit: u128,
+    },
+}
+
 impl std::fmt::Display for Blocker {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}: {}", self.tooth, self.reason)
@@ -663,16 +679,47 @@ impl GameProgramCompiler {
         &self,
         assign: &SlotAssignment,
         num_rows: usize,
-    ) -> HashMap<String, Vec<BabyBear>> {
+    ) -> Result<HashMap<String, Vec<BabyBear>>, WitnessError> {
         let mut w: HashMap<String, Vec<BabyBear>> = HashMap::new();
+        let limit = 1u128 << self.range_bits;
 
         // Value columns.
         for (slot, _) in &self.col_of {
             let name = Self::col_name(*slot);
-            let val = match slot {
-                SlotRef::New(i) => assign.new_slots.get(i).copied().unwrap_or(0),
-                SlotRef::Old(i) => assign.old_slots.get(i).copied().unwrap_or(0),
+            let (side, index, val) = match slot {
+                SlotRef::New(i) => (
+                    "new",
+                    *i,
+                    assign
+                        .new_slots
+                        .get(i)
+                        .copied()
+                        .ok_or(WitnessError::MissingSlot {
+                            side: "new",
+                            index: *i,
+                        })?,
+                ),
+                SlotRef::Old(i) => (
+                    "old",
+                    *i,
+                    assign
+                        .old_slots
+                        .get(i)
+                        .copied()
+                        .ok_or(WitnessError::MissingSlot {
+                            side: "old",
+                            index: *i,
+                        })?,
+                ),
             };
+            if val as u128 >= limit {
+                return Err(WitnessError::OutOfRange {
+                    side,
+                    index,
+                    value: val,
+                    limit,
+                });
+            }
             w.insert(name, vec![BabyBear::from_u64(val); num_rows]);
         }
 
@@ -683,8 +730,8 @@ impl GameProgramCompiler {
             let mut head: i128 = r.constant;
             for &(coeff, slot) in &r.terms {
                 let val = match slot {
-                    SlotRef::New(i) => assign.new_slots.get(&i).copied().unwrap_or(0),
-                    SlotRef::Old(i) => assign.old_slots.get(&i).copied().unwrap_or(0),
+                    SlotRef::New(i) => assign.new_slots[&i],
+                    SlotRef::Old(i) => assign.old_slots[&i],
                 };
                 head += coeff * val as i128;
             }
@@ -695,7 +742,7 @@ impl GameProgramCompiler {
             }
         }
 
-        w
+        Ok(w)
     }
 
     /// The range-gadget teeth this program carries (name + whether its head is in-range for a
