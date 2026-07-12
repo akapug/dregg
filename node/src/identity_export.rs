@@ -278,7 +278,7 @@ fn unhex32(s: &str) -> Result<[u8; 32], String> {
 }
 
 fn unhex_var(s: &str) -> Result<Vec<u8>, String> {
-    if !s.len().is_multiple_of(2) {
+    if !s.is_ascii() || !s.len().is_multiple_of(2) {
         return Err("odd-length hex".into());
     }
     (0..s.len())

@@ -350,7 +350,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 fn hex_decode_32(hex: &str) -> Option<[u8; 32]> {
-    if hex.len() != 64 {
+    if !hex.is_ascii() || hex.len() != 64 {
         return None;
     }
     let mut bytes = [0u8; 32];

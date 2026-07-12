@@ -1993,7 +1993,7 @@ fn parse_ml_dsa_public_key(s: &str) -> Option<dregg_federation::frost::MlDsaPubl
 
 /// Decode a 64-char hex string into a [u8; 32].
 fn hex_decode_32(s: &str) -> Option<[u8; 32]> {
-    if s.len() != 64 {
+    if !s.is_ascii() || s.len() != 64 {
         return None;
     }
     let mut bytes = [0u8; 32];

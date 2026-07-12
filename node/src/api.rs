@@ -2641,7 +2641,7 @@ fn auth_label_str(a: &dregg_cell::AuthRequired) -> &'static str {
 /// input.
 fn hex_decode_32(s: &str) -> Option<[u8; 32]> {
     let s = s.trim();
-    if s.len() != 64 {
+    if !s.is_ascii() || s.len() != 64 {
         return None;
     }
     let mut out = [0u8; 32];
@@ -7626,6 +7626,9 @@ async fn post_peer_exchange(
 }
 
 fn hex_decode_32_result(hex: &str) -> Result<[u8; 32], String> {
+    if !hex.is_ascii() {
+        return Err("hex input must be ASCII".to_string());
+    }
     if hex.len() != 64 {
         return Err(format!("expected 64 hex chars, got {}", hex.len()));
     }
@@ -8363,6 +8366,14 @@ mod tests {
     /// Helper: create a deterministic key pair for testing.
     fn test_key(name: &str) -> [u8; 32] {
         *blake3::hash(format!("dregg-node-atomic-test:{name}").as_bytes()).as_bytes()
+    }
+
+    #[test]
+    fn fixed_hex_decoders_reject_non_ascii_input() {
+        let input = format!("a\u{e9}{}", "0".repeat(61));
+        assert_eq!(input.len(), 64);
+        assert_eq!(hex_decode_32(&input), None);
+        assert!(hex_decode_32_result(&input).is_err());
     }
 
     /// Fail-CLOSED authority-label parsing (twin of the deos-js `parse_auth_label` fix):

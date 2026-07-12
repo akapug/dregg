@@ -561,7 +561,7 @@ fn load_agent_public_key(data_dir: &Path, agent: &str) -> Option<[u8; 32]> {
 }
 
 fn hex_decode_32(hex: &str) -> Option<[u8; 32]> {
-    if hex.len() != 64 {
+    if !hex.is_ascii() || hex.len() != 64 {
         return None;
     }
     let mut bytes = [0u8; 32];

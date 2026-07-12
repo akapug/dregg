@@ -1092,7 +1092,7 @@ impl DeliveryWire {
 /// odd length). The channels data plane carries opaque ciphertext, so this is
 /// the only decode it needs beyond the fixed-32 helper.
 fn hex_to_bytes(s: &str) -> Option<Vec<u8>> {
-    if !s.len().is_multiple_of(2) {
+    if !s.is_ascii() || !s.len().is_multiple_of(2) {
         return None;
     }
     (0..s.len())
