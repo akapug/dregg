@@ -122,6 +122,8 @@ theorem declared_capacity_unsat_wide (hash : List ℤ → ℤ) (hCR : Poseidon2S
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
     (hsat : Satisfied2 hash (gentianWideBareRefuse d) minit mfin maddrs t)
     (hi : 0 < t.rows.length) (hnl : (0 + 1 == t.rows.length) = false)
+    (hcanon : ∀ r c, 0 ≤ (envAt t r).loc c ∧ (envAt t r).loc c < 2013265921)
+    (htag : 0 ≤ tag ∧ tag < 2013265921)
     (committedManifest : RotCaveatManifest)
     (hbind : caveatCommit hash (manifestOf ccDep ebDep (envAt t 0).loc)
       = caveatCommit hash committedManifest)
@@ -130,7 +132,7 @@ theorem declared_capacity_unsat_wide (hash : List ℤ → ℤ) (hCR : Poseidon2S
   refine declared_tag_unsat_at hash hCR tag ccDep ebDep (wideBc d.traceWidth b) (wideIc d.traceWidth b)
     (wideOc d.traceWidth b) (wideFc d.traceWidth b)
     (gentianWideBareRefuse d) (fun g hg => wide_block_mem d g ?_)
-    (wide_block_mem d _ ?_) hsat hi hnl committedManifest hbind hreq
+    (wide_block_mem d _ ?_) hsat hi hnl hcanon htag committedManifest hbind hreq
   · rcases hblock with h | h | h
     · exact Or.inl (h ▸ wide_decode_mem_block d.traceWidth tag b g hg)
     · exact Or.inr (Or.inl (h ▸ wide_decode_mem_block d.traceWidth tag b g hg))
@@ -146,12 +148,14 @@ theorem declared_escrow_unsat_wide (hash : List ℤ → ℤ) (hCR : Poseidon2Spo
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
     (hsat : Satisfied2 hash (gentianWideBareRefuse d) minit mfin maddrs t)
     (hi : 0 < t.rows.length) (hnl : (0 + 1 == t.rows.length) = false)
+    (hcanon : ∀ r c, 0 ≤ (envAt t r).loc c ∧ (envAt t r).loc c < 2013265921)
     (committedManifest : RotCaveatManifest)
     (hbind : caveatCommit hash (manifestOf ccDep ebDep (envAt t 0).loc)
       = caveatCommit hash committedManifest)
     (hreq : (tagSettleEscrow : ℤ) ∈ manifestTags committedManifest) :
     False :=
-  declared_capacity_unsat_wide hash hCR _ 0 d (Or.inl rfl) hsat hi hnl committedManifest hbind hreq
+  declared_capacity_unsat_wide hash hCR _ 0 d (Or.inl rfl) hsat hi hnl hcanon (by decide)
+    committedManifest hbind hreq
 
 /-- Discharge (block 1) is UNSAT under the WIDE bare member when the committed manifest declares it. -/
 theorem declared_discharge_unsat_wide (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
@@ -159,13 +163,14 @@ theorem declared_discharge_unsat_wide (hash : List ℤ → ℤ) (hCR : Poseidon2
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
     (hsat : Satisfied2 hash (gentianWideBareRefuse d) minit mfin maddrs t)
     (hi : 0 < t.rows.length) (hnl : (0 + 1 == t.rows.length) = false)
+    (hcanon : ∀ r c, 0 ≤ (envAt t r).loc c ∧ (envAt t r).loc c < 2013265921)
     (committedManifest : RotCaveatManifest)
     (hbind : caveatCommit hash (manifestOf ccDep ebDep (envAt t 0).loc)
       = caveatCommit hash committedManifest)
     (hreq : (tagDischargeObligation : ℤ) ∈ manifestTags committedManifest) :
     False :=
-  declared_capacity_unsat_wide hash hCR _ 1 d (Or.inr (Or.inl rfl)) hsat hi hnl committedManifest
-    hbind hreq
+  declared_capacity_unsat_wide hash hCR _ 1 d (Or.inr (Or.inl rfl)) hsat hi hnl hcanon (by decide)
+    committedManifest hbind hreq
 
 /-- Vault (block 2) is UNSAT under the WIDE bare member when the committed manifest declares it. -/
 theorem declared_vault_unsat_wide (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash)
@@ -173,13 +178,14 @@ theorem declared_vault_unsat_wide (hash : List ℤ → ℤ) (hCR : Poseidon2Spon
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
     (hsat : Satisfied2 hash (gentianWideBareRefuse d) minit mfin maddrs t)
     (hi : 0 < t.rows.length) (hnl : (0 + 1 == t.rows.length) = false)
+    (hcanon : ∀ r c, 0 ≤ (envAt t r).loc c ∧ (envAt t r).loc c < 2013265921)
     (committedManifest : RotCaveatManifest)
     (hbind : caveatCommit hash (manifestOf ccDep ebDep (envAt t 0).loc)
       = caveatCommit hash committedManifest)
     (hreq : (tagVaultDeposit : ℤ) ∈ manifestTags committedManifest) :
     False :=
-  declared_capacity_unsat_wide hash hCR _ 2 d (Or.inr (Or.inr rfl)) hsat hi hnl committedManifest
-    hbind hreq
+  declared_capacity_unsat_wide hash hCR _ 2 d (Or.inr (Or.inr rfl)) hsat hi hnl hcanon (by decide)
+    committedManifest hbind hreq
 
 /-! ## §4 — THE PEEL: `Satisfied2 (gentianWideBareRefuse d) ⟹ Satisfied2 d`.
 
