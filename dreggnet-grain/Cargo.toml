@@ -1,0 +1,46 @@
+# `dreggnet-grain` — OFFERING #2: a confined GRAIN (a sandboxed app) session as a
+# `dreggnet_offerings::Offering`.
+#
+# Where the dungeon (offering #0) hosts a `WorldCell` playthrough and a hosted-Hermes
+# offering hosts a jailed agent, THIS offering hosts a **confined grain turn-cell**:
+# a cap-gated worker cell admitted through the REAL `grain-turn` R2 minter
+# (`ToolGatewayMinter`), so every `advance` drives ONE genuine `dregg_sdk::ToolGateway::invoke`
+# executor turn on a real `dregg_cell::Cell`. The confinement is the executor's own
+# `calls_made` `FieldLte`/`Monotonic` caveat: the grain is granted exactly `budget`
+# metered turns, and an action past that grant is a REAL executor refusal (the grain
+# cannot act beyond its cap — the jailer is the kernel, not prose).
+#
+# A breadstuffs workspace member (in `members`, not `default-members` — narrative-
+# adjacent). Build/test:  cargo test -p dreggnet-grain
+[package]
+name = "dreggnet-grain"
+version = "0.1.0"
+edition = "2021"
+description = "OFFERING #2 of DreggNet Cloud: a GrainOffering implementing the Offering trait over a confined grain turn-cell — each advance is ONE real cap-bounded grain-turn (grain-turn's ToolGatewayMinter over dregg_sdk::ToolGateway::invoke) landing a genuine committed kernel turn; an action past the grain's granted cap is a REAL executor refusal (confinement enforced host-side, not prose)."
+
+[dependencies]
+# THE OFFERING CORE — the `Offering` trait + `Action`/`Outcome`/`Surface`/`RunCost`/
+# `VerifyReport`/`SessionConfig` this crate implements offering #2 against.
+dreggnet-offerings = { path = "../dreggnet-offerings" }
+# THE REAL CONFINED GRAIN — grain-turn's `ToolGatewayMinter` (THE-GRAIN.md face #1,
+# rung R2): `open` admits a cap-gated grain worker cell under a rate-`budget` grant;
+# `mint_turn` drives a genuine `ToolGateway::invoke` executor turn; the executor's own
+# `calls_made` caveat refuses an over-cap turn HOST-SIDE. Plus `action_commit` /
+# `ACTION_SLOT` — the on-ledger witness a grain turn commits (re-read on verify).
+grain-turn = { path = "../grain-turn" }
+# The `GrainTurnMinter` trait whose `mint_turn` we call to drive each grain turn.
+dregg-agent = { path = "../dregg-agent" }
+# `SdkError` — what `ToolGatewayMinter::open` returns when the executor refuses to
+# admit the grain worker (mapped to `OfferingError::Deploy`).
+dregg-sdk = { path = "../sdk" }
+# `TurnReceipt` — the real committed-turn receipt an `Outcome::Landed` carries. SAME
+# type + same `default-features = false` as `dreggnet-offerings` (a re-export of
+# `dregg_turn::TurnReceipt`), so the `Outcome` type-unifies.
+dregg-app-framework = { path = "../app-framework", default-features = false }
+# THE DEOS SURFACE — the gpui-free `ViewNode`/`MenuItem` view-tree `render` produces.
+deos-view = { path = "../deos-view", default-features = false }
+# The session-derived heap-root witness (the HEAP_ROOT_SLOT a grain turn commits).
+blake3 = "1"
+
+# A workspace MEMBER of the breadstuffs root (registered in `members`). The root
+# `[workspace]` + `[patch]` tables apply; no standalone `[workspace]`/`[patch]` here.

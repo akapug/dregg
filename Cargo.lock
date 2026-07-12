@@ -6524,6 +6524,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "dreggnet-grain"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "deos-view",
+ "dregg-agent",
+ "dregg-app-framework",
+ "dregg-sdk",
+ "dreggnet-offerings",
+ "grain-turn",
+]
+
+[[package]]
+name = "dreggnet-hermes"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "deos-view",
+ "dregg-sdk",
+ "dreggnet-offerings",
+ "zeroize",
+]
+
+[[package]]
 name = "dreggnet-offerings"
 version = "0.1.0"
 dependencies = [

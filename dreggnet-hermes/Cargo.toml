@@ -1,0 +1,50 @@
+# `dreggnet-hermes` — OFFERING #1: a hosted, confined AI-agent session as a
+# `dreggnet_offerings::Offering`.
+#
+# The dungeon (`dreggnet-offerings::dungeon`) is offering #0 — a confined,
+# verifiable, per-session GAME on the real substrate. This crate is the FIRST
+# NON-game instance of the SAME abstraction: a jailed Hermes agent. A user opens
+# a session with a confined agent; each input drives the agent through ONE
+# cap-bounded, metered, receipted turn through the PROVEN `dregg_sdk::ToolGateway`
+# (rate cap + value `Charge` budget); the agent's proposed action is
+# executor-refereed against its cell's mandate — it CANNOT exceed its confinement.
+# `verify` re-verifies the session's confinement chain by replay.
+#
+# HONEST SCOPE: the agent's BRAIN (what tool-call a message maps to) is a
+# scripted/mock `Brain` here — the real Bedrock/BYO-key LLM is the deploy seam
+# (mirrors `discord-bot/src/hermes_channel.rs`'s `classify` shim vs the live ACP
+# brain). The CONFINEMENT + METERING (caps + `Charge` on the verified executor)
+# is REAL substrate, not prose.
+#
+# A breadstuffs workspace MEMBER (registered in root `members`, not
+# `default-members` — it pulls the SDK/executor graph). Build/test:
+#   cargo test -p dreggnet-hermes
+[package]
+name = "dreggnet-hermes"
+version = "0.1.0"
+edition = "2024"
+description = "OFFERING #1 of DreggNet Cloud: a HermesOffering implementing dreggnet_offerings::Offering over a confined, metered agent (dregg_sdk::ToolGateway rate caps + Charge value budget) — a mock/scripted brain proposes an action, the executor referees it against the agent's cell mandate; verify re-checks the confinement chain by replay. Real confinement/metering, mock brain."
+
+[dependencies]
+# THE OFFERING ABSTRACTION — the `Offering` trait (open/actions/advance/verify/
+# render/price), `Action`/`Outcome`/`Surface`/`VerifyReport`/`SessionConfig`/
+# `DreggIdentity` this offering implements + resolves over.
+dreggnet-offerings = { path = "../dreggnet-offerings" }
+# THE CONFINEMENT SUBSTRATE — the PROVEN cap-gated metered gateway: `ToolGateway`
+# (`admit_priced` + `invoke` = a cap-bounded, value-metered, receipted turn on the
+# verified executor), `ToolGrant` (rate cap), `Charge` (value budget), the
+# `GatewayRefusal` teeth, plus `AgentRuntime`/`AgentCipherclerk`/`HeldToken` (the
+# per-session confined identity). Its `TurnReceipt` is the same one an
+# `Outcome::Landed` carries (both re-export `dregg_turn::TurnReceipt`).
+dregg-sdk = { path = "../sdk" }
+# THE DEOS SURFACE — the gpui-free `ViewNode` an offering's `render` produces.
+deos-view = { path = "../deos-view", default-features = false }
+# Deterministic per-session seed derivation (u64 config seed → the 32-byte agent
+# root key), so a session has a replay-verifiable identity.
+blake3 = "1"
+# `Zeroizing` for the agent's root key bytes (the SDK's `from_key_bytes` API).
+zeroize = "1"
+
+# A workspace MEMBER of the breadstuffs root (registered in `members`, not
+# `default-members`). The root `[workspace]` + `[patch]` tables apply; no
+# standalone `[workspace]`/`[patch]` here.
