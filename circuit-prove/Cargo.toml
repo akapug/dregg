@@ -17,6 +17,11 @@ dregg-circuit = { path = "../circuit" }
 # of the recursion prover.
 p3-field = { workspace = true }
 p3-baby-bear = { workspace = true }
+# p3-bn254 + p3-poseidon2: the BN254 scalar field, Poseidon2Bn254, and the
+# ExternalLayerConstants constructor — used ONLY by the outer "shrink" config
+# (dregg_outer_config.rs), the BN254-native-hash wrap layer.
+p3-bn254 = { workspace = true }
+p3-poseidon2 = { workspace = true }
 p3-air = { workspace = true }
 p3-matrix = { workspace = true }
 p3-uni-stark = { workspace = true }

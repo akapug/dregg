@@ -24,6 +24,7 @@ pub mod carrier_pin_twin;
 pub mod custom_leaf_adapter;
 pub mod custom_proof_bind;
 pub mod deco_leaf_adapter;
+pub mod dregg_outer_config;
 pub mod dsl_leaf_adapter;
 pub mod effect_vm_p3_air;
 pub mod factory_leaf_adapter;
