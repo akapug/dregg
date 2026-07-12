@@ -67,7 +67,7 @@ open Dregg2.Circuit.Emit.EffectVmEmit
 open Dregg2.Circuit.Emit.EffectVmEmitTransfer
   (eSB eSA ePrm eSub eSelNoop gNonce transitionAll boundaryFirstPins boundaryLastPins
    transferHashSites site0 site1 site2 site3 boundaryLast_pins
-   gate_modEq_iff not_modEq_zero_of_canon)
+   gate_modEq_iff not_modEq_zero_of_canon pPrimeInt)
 open Dregg2.Circuit.Emit.EffectVmEmitTransferSound
   (CellState absorbedCols transferDescriptor_commit_binds_state)
 open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
@@ -613,6 +613,217 @@ theorem burnDescriptor_classA (hash : List ℤ → ℤ) (env : VmRowEnv) (hrow :
     descriptor_agrees_with_executor hash env hrow s s' actor cell a amt post henc hgatesat hsat hexec
   exact ⟨hspec, hcommit, hLo, hHi, hF, hCap, hRes⟩
 
+/-! ## §8¾ — THE BURN AVAILABILITY WELD (the transfer §11.7 mirror, STAGED).
+
+The bare `burnVmDescriptor` range-checks only the AFTER balance limbs; the debit gate `gBalLoDebit`
+admits the underflow-wrap forgery (`before=1, amount=1006632961, after=1006632961`: `after − before +
+amount = p ≡ 0`, `after < 2^30`) that OVER-BURNS ~10^9 while passing the after-range — and (the audit's
+finding, `docs/FINDING-modp-wrap-forgery-audit.md` §2) burn's ledger frame credits the WELL `(a, a)`
+by the same forged amount, so burn-to-negative INFLATES WELL SUPPLY: mint-from-nothing into the well,
+STRICTLY WORSE than the transfer twin. The FIX mirrors `transferVmDescriptorAvail` exactly: decompose
+`before.bal_lo` / `after.bal_lo` / `amount` into 15-bit limbs with a borrow chain and a NO-FINAL-BORROW
+gate, so `before = after + amount` holds over ℤ and `before ≥ amount` (AVAILABILITY) is DERIVED, not
+assumed. Burn has NO credit direction (the row ALWAYS debits; there is no `DIRECTION` param), so the
+borrow gates are UNGATED — the whole debit surface is the forgery surface. Every borrow-gate residual
+is confined to `(−2^16, 2^16) ⊂ (−p, p)` by the 15-bit ranges, so no residual reaches `p` — no wrap.
+
+Witness columns live PAST the base width (`≥ EFFECT_VM_WIDTH = 188`), so they are DISTINCT from every
+base-layout column; the widened descriptor + its registry row + VK ride the ONE big-bang regen (STAGED,
+the transfer/vault status). -/
+
+/-- The burn availability-weld witness-column base (past the base trace width). -/
+def AVAIL_BASE : Nat := EFFECT_VM_WIDTH
+/-- `before.bal_lo` low/high 15-bit limbs. -/
+def cBEF0 : Nat := AVAIL_BASE
+def cBEF1 : Nat := AVAIL_BASE + 1
+/-- `after.bal_lo` low/high 15-bit limbs. -/
+def cAFT0 : Nat := AVAIL_BASE + 2
+def cAFT1 : Nat := AVAIL_BASE + 3
+/-- burn `amount` (`param.BURN_AMOUNT_LO`) low/high 15-bit limbs. -/
+def cAM0 : Nat := AVAIL_BASE + 4
+def cAM1 : Nat := AVAIL_BASE + 5
+/-- The two borrow bits (`cBRW1` = the final borrow; `= 0` ⟺ `before ≥ amount`). -/
+def cBRW0 : Nat := AVAIL_BASE + 6
+def cBRW1 : Nat := AVAIL_BASE + 7
+/-- The widened trace width (borrow-chain witness columns; burn has no credit twin, so 8 not 10). -/
+def AVAIL_WIDTH : Nat := AVAIL_BASE + 8
+
+/-- Operand assembly: `before.bal_lo = bef0 + 2^15·bef1` (pins the 30-bit operand to its 15-bit limbs). -/
+def gAsmBefore : EmittedExpr :=
+  eSub (eSB state.BALANCE_LO) (.add (.var cBEF0) (.mul (.const 32768) (.var cBEF1)))
+/-- Operand assembly: `after.bal_lo = aft0 + 2^15·aft1`. -/
+def gAsmAfter : EmittedExpr :=
+  eSub (eSA state.BALANCE_LO) (.add (.var cAFT0) (.mul (.const 32768) (.var cAFT1)))
+/-- Operand assembly: `amount = am0 + 2^15·am1` (the previously-UNRANGED burn amount, now decomposed). -/
+def gAsmAmount : EmittedExpr :=
+  eSub ePrmBurnAmt (.add (.var cAM0) (.mul (.const 32768) (.var cAM1)))
+/-- Borrow-bit booleanity: `bb0·(bb0 − 1)`. -/
+def gBrw0Bool : EmittedExpr := .mul (.var cBRW0) (.add (.var cBRW0) (.const (-1)))
+/-- Borrow-bit booleanity: `bb1·(bb1 − 1)`. -/
+def gBrw1Bool : EmittedExpr := .mul (.var cBRW1) (.add (.var cBRW1) (.const (-1)))
+/-- Debit borrow, limb 0 (UNGATED — a burn row is always a debit): `bef0 − am0 + bb0·2^15 − aft0`.
+This forces `bef0 − am0 = aft0 − bb0·2^15` — the low-limb borrow subtraction (the transfer
+`gBorrow0` with the `direction` factor dropped). -/
+def gBorrow0 : EmittedExpr :=
+  eSub (.add (eSub (.var cBEF0) (.var cAM0)) (.mul (.const 32768) (.var cBRW0))) (.var cAFT0)
+/-- Debit borrow, limb 1 (UNGATED): `bef1 − am1 − bb0 + bb1·2^15 − aft1`. -/
+def gBorrow1 : EmittedExpr :=
+  eSub (.add (eSub (eSub (.var cBEF1) (.var cAM1)) (.var cBRW0)) (.mul (.const 32768) (.var cBRW1)))
+    (.var cAFT1)
+/-- The NO-FINAL-BORROW gate (UNGATED): `bb1`. On a satisfying row `bb1 = 0`, i.e. `before ≥ amount`
+— AVAILABILITY, enforced in-circuit. -/
+def gNoBorrow : EmittedExpr := .var cBRW1
+
+/-- The burn availability-weld gates (assembly + borrow chain). Appended to the burn descriptor.
+UNGATED (a burn row is always a debit — the whole surface is the forgery surface). -/
+def burnAvailGates : List VmConstraint :=
+  [ .gate gAsmBefore, .gate gAsmAfter, .gate gAsmAmount
+  , .gate gBrw0Bool, .gate gBrw1Bool
+  , .gate gBorrow0, .gate gBorrow1, .gate gNoBorrow ]
+
+/-- The burn availability-weld range checks: the operand + amount 15-bit limbs (bounds every operand
+to `[0, 2^30) ⊂ [0, p)` and, crucially, RANGES the burn `amount`, closing the unranged-amount hole). -/
+def burnAvailRanges : List VmRange :=
+  [ ⟨cBEF0, 15⟩, ⟨cBEF1, 15⟩, ⟨cAFT0, 15⟩, ⟨cAFT1, 15⟩, ⟨cAM0, 15⟩, ⟨cAM1, 15⟩ ]
+
+/-- **`burnVmDescriptorAvail`** — the HARDENED burn descriptor: the bare `burnVmDescriptor` PLUS the
+availability-weld gates and the amount/operand limb range checks, trace widened to carry the witness
+columns. The borrow chain DERIVES debit availability (`before ≥ amount`, no underflow wrap;
+`burnAvail_derives_availability`) — with no `hcanonMove` — closing the well-supply-inflation forgery
+in-circuit. STAGED (rides the one big-bang VK regen with the transfer/vault welds). -/
+def burnVmDescriptorAvail : EffectVmDescriptor :=
+  { burnVmDescriptor with
+    name        := burnVmAirName ++ "-avail"
+    traceWidth  := AVAIL_WIDTH
+    constraints := burnVmDescriptor.constraints ++ burnAvailGates
+    ranges      := burnVmDescriptor.ranges ++ burnAvailRanges }
+
+/-- A weld gate is a member of the hardened descriptor's constraints. -/
+theorem availGate_mem (g : VmConstraint) (hg : g ∈ burnAvailGates) :
+    g ∈ burnVmDescriptorAvail.constraints :=
+  List.mem_append_right _ hg
+
+/-- A weld range is a member of the hardened descriptor's ranges. -/
+theorem availRange_mem (r : VmRange) (hr : r ∈ burnAvailRanges) :
+    r ∈ burnVmDescriptorAvail.ranges :=
+  List.mem_append_right _ hr
+
+/-- A residual congruent to `0 mod p` and confined to `(−p, p)` by the 15-bit limb/borrow range checks
+is EXACTLY `0` over ℤ (the vault's `modEqZeroBounded` — the soundness payoff of 15-bit limbs). -/
+private theorem availBounded {R : ℤ} (h : R ≡ 0 [ZMOD 2013265921])
+    (hlo : -2013265921 < R) (hhi : R < 2013265921) : R = 0 := by
+  rw [Int.modEq_zero_iff_dvd] at h; obtain ⟨k, hk⟩ := h; omega
+
+/-- Two CANONICAL (`[0, p)`) integers congruent mod `p` are EQUAL (the deployed range-check lift). -/
+private theorem availCanonEq {a b : ℤ} (h : a ≡ b [ZMOD 2013265921])
+    (ha0 : 0 ≤ a) (hap : a < 2013265921) (hb0 : 0 ≤ b) (hbp : b < 2013265921) : a = b := by
+  unfold Int.ModEq at h; rwa [Int.emod_eq_of_lt ha0 hap, Int.emod_eq_of_lt hb0 hbp] at h
+
+/-- **SOUNDNESS — BURN AVAILABILITY DERIVED IN-CIRCUIT.** A trace satisfying the hardened burn
+descriptor FORCES `amount ≤ before.bal_lo` AND the exact ℤ debit `after = before − amount` — with NO
+`hcanonMove` assumption. The only hypothesis is the DEPLOYED canonicality invariant `0 ≤ loc c < p`
+(each column a canonical field element — the SAME fact `burnVm_rejects_wrong_balance` uses, NOT
+availability laundered in). The borrow chain + 15-bit limb range checks make the subtraction exact
+over ℤ, so the underflow wrap (the well-supply-inflation forgery) is STRUCTURALLY impossible. -/
+theorem burnAvail_derives_availability (hash : List ℤ → ℤ) (env : VmRowEnv)
+    (hcanon : ∀ c, 0 ≤ env.loc c ∧ env.loc c < 2013265921)
+    (hsat : satisfiedVm hash burnVmDescriptorAvail env true false) :
+    env.loc (prmCol param.BURN_AMOUNT_LO) ≤ env.loc (sbCol state.BALANCE_LO)
+    ∧ env.loc (saCol state.BALANCE_LO)
+        = env.loc (sbCol state.BALANCE_LO) - env.loc (prmCol param.BURN_AMOUNT_LO) := by
+  obtain ⟨hcs, _hsites, hrs⟩ := hsat
+  -- range facts (each limb in [0, 2^15))
+  have hb0 := hrs _ (availRange_mem ⟨cBEF0, 15⟩ (by simp [burnAvailRanges]))
+  have hb1 := hrs _ (availRange_mem ⟨cBEF1, 15⟩ (by simp [burnAvailRanges]))
+  have ha0 := hrs _ (availRange_mem ⟨cAFT0, 15⟩ (by simp [burnAvailRanges]))
+  have ha1 := hrs _ (availRange_mem ⟨cAFT1, 15⟩ (by simp [burnAvailRanges]))
+  have hm0 := hrs _ (availRange_mem ⟨cAM0, 15⟩ (by simp [burnAvailRanges]))
+  have hm1 := hrs _ (availRange_mem ⟨cAM1, 15⟩ (by simp [burnAvailRanges]))
+  simp only [VmRange.holds] at hb0 hb1 ha0 ha1 hm0 hm1
+  norm_num at hb0 hb1 ha0 ha1 hm0 hm1
+  -- gate facts (bodies vanish mod p on the active row)
+  have gAsmB := hcs _ (availGate_mem (.gate gAsmBefore) (by simp [burnAvailGates]))
+  have gAsmA := hcs _ (availGate_mem (.gate gAsmAfter) (by simp [burnAvailGates]))
+  have gAsmM := hcs _ (availGate_mem (.gate gAsmAmount) (by simp [burnAvailGates]))
+  have gB0 := hcs _ (availGate_mem (.gate gBrw0Bool) (by simp [burnAvailGates]))
+  have gB1 := hcs _ (availGate_mem (.gate gBrw1Bool) (by simp [burnAvailGates]))
+  have gBor0 := hcs _ (availGate_mem (.gate gBorrow0) (by simp [burnAvailGates]))
+  have gBor1 := hcs _ (availGate_mem (.gate gBorrow1) (by simp [burnAvailGates]))
+  have gNoB := hcs _ (availGate_mem (.gate gNoBorrow) (by simp [burnAvailGates]))
+  simp only [holdsVm_gate_false, gAsmBefore, gAsmAfter, gAsmAmount, gBrw0Bool, gBrw1Bool,
+    gBorrow0, gBorrow1, gNoBorrow, ePrmBurnAmt, eSA, eSB, eSub,
+    EmittedExpr.eval] at gAsmB gAsmA gAsmM gB0 gB1 gBor0 gBor1 gNoB
+  -- borrow bits are boolean (mod-p booleanity + canonicality + p prime)
+  have brw0Bool : 0 ≤ env.loc cBRW0 ∧ env.loc cBRW0 ≤ 1 := by
+    rw [Int.modEq_zero_iff_dvd] at gB0
+    obtain ⟨z0, zp⟩ := hcanon cBRW0
+    rcases pPrimeInt.dvd_mul.mp gB0 with hd | hd
+    · obtain ⟨k, hk⟩ := hd; omega
+    · obtain ⟨k, hk⟩ := hd; omega
+  have brw1Bool : 0 ≤ env.loc cBRW1 ∧ env.loc cBRW1 ≤ 1 := by
+    rw [Int.modEq_zero_iff_dvd] at gB1
+    obtain ⟨z0, zp⟩ := hcanon cBRW1
+    rcases pPrimeInt.dvd_mul.mp gB1 with hd | hd
+    · obtain ⟨k, hk⟩ := hd; omega
+    · obtain ⟨k, hk⟩ := hd; omega
+  -- operand assemblies lift to exact ℤ (canonical operand, limb sum < 2^30 < p)
+  have eBef : env.loc (sbCol state.BALANCE_LO) = env.loc cBEF0 + 32768 * env.loc cBEF1 :=
+    availCanonEq ((gate_modEq_iff (by ring)).mp gAsmB) (hcanon _).1 (hcanon _).2 (by omega) (by omega)
+  have eAft : env.loc (saCol state.BALANCE_LO) = env.loc cAFT0 + 32768 * env.loc cAFT1 :=
+    availCanonEq ((gate_modEq_iff (by ring)).mp gAsmA) (hcanon _).1 (hcanon _).2 (by omega) (by omega)
+  have eAmt : env.loc (prmCol param.BURN_AMOUNT_LO) = env.loc cAM0 + 32768 * env.loc cAM1 :=
+    availCanonEq ((gate_modEq_iff (by ring)).mp gAsmM) (hcanon _).1 (hcanon _).2 (by omega) (by omega)
+  -- the borrow subtraction is exact over ℤ (each residual confined to (−p, p) by the 15-bit ranges)
+  have e0 : env.loc cBEF0 + -1 * env.loc cAM0 + 32768 * env.loc cBRW0 + -1 * env.loc cAFT0 = 0 :=
+    availBounded gBor0 (by omega) (by omega)
+  have e1 : env.loc cBEF1 + -1 * env.loc cAM1 + -1 * env.loc cBRW0
+      + 32768 * env.loc cBRW1 + -1 * env.loc cAFT1 = 0 :=
+    availBounded gBor1 (by omega) (by omega)
+  have eBB : env.loc cBRW1 = 0 := availBounded gNoB (by omega) (by omega)
+  -- availability + exact debit: purely linear now (no residual congruences left)
+  constructor
+  · omega
+  · omega
+
+/-- **THE BURN FORGERY IS UNSAT (the well-supply-inflation witness).** The audit's over-burn forgery
+witness (`before=1, amount=1006632961, after=1006632961`) — the one whose ledger frame would CREDIT
+the well by the forged 10^9 — CANNOT satisfy the hardened descriptor: its debit availability
+`amount ≤ before` (`1006632961 ≤ 1`) is false, so the borrow chain has no witness. The burn
+underflow-wrap value forgery is closed in-circuit. -/
+theorem burnAvail_forgery_unsat (hash : List ℤ → ℤ) (env : VmRowEnv)
+    (hcanon : ∀ c, 0 ≤ env.loc c ∧ env.loc c < 2013265921)
+    (hsat : satisfiedVm hash burnVmDescriptorAvail env true false)
+    (hbefore : env.loc (sbCol state.BALANCE_LO) = 1)
+    (hamount : env.loc (prmCol param.BURN_AMOUNT_LO) = 1006632961) : False := by
+  have h := (burnAvail_derives_availability hash env hcanon hsat).1
+  rw [hbefore, hamount] at h; omega
+
+/-! ### LIVENESS: an honest burn (`goodBurnRow` + its limb witnesses) satisfies the weld. -/
+
+/-- `goodBurnRow` (burn of 30 from bal_lo 100 → 70) extended with the availability-weld witness
+columns: `before = 100` limbs `(100, 0)`, `after = 70` limbs `(70, 0)`, `amount = 30` limbs `(30, 0)`,
+no borrows. -/
+def goodBurnAvailRow : VmRowEnv where
+  loc := fun v =>
+    if v = cBEF0 then 100 else if v = cAFT0 then 70 else if v = cAM0 then 30
+    else goodBurnRow.loc v
+  nxt := goodBurnRow.nxt
+  pub := goodBurnRow.pub
+
+/-- **LIVENESS.** Every availability-weld gate holds on the honest `goodBurnAvailRow` — no valid burn
+is rejected by the new gates (the borrow chain closes with zero borrows: `100 − 30 = 70`). -/
+theorem goodBurnAvailRow_gates_hold (c : VmConstraint) (hc : c ∈ burnAvailGates) :
+    c.holdsVm goodBurnAvailRow false false := by
+  have hb : ∃ b, c = .gate b ∧ b.eval goodBurnAvailRow.loc = 0 := by
+    fin_cases hc <;> exact ⟨_, rfl, by decide⟩
+  obtain ⟨b, rfl, hval⟩ := hb
+  rw [holdsVm_gate_false, hval]
+
+/-- **LIVENESS (ranges).** The honest limb witnesses satisfy the 15-bit range checks. -/
+theorem goodBurnAvailRow_ranges_hold (r : VmRange) (hr : r ∈ burnAvailRanges) :
+    r.holds goodBurnAvailRow := by
+  fin_cases hr <;> exact ⟨by decide, by decide⟩
+
 /-! ## §9 — Axiom-hygiene tripwires. -/
 
 #assert_axioms burnDescriptor_classA
@@ -620,6 +831,19 @@ theorem burnDescriptor_classA (hash : List ℤ → ℤ) (env : VmRowEnv) (hrow :
 #guard burnVmDescriptor.constraints.length == 13 + 14 + 4 + 3 + 1  -- gates(5+8) + transitions + 4 + 3 + selectorGate
 #guard burnVmDescriptor.hashSites.length == 4
 #guard burnVmDescriptor.traceWidth == 188
+
+-- The availability weld (the transfer §11.7 mirror): the hardened descriptor adds 8 gates (3
+-- assembly + 2 booleanity + 2 borrow + 1 no-borrow) + 6 ranges and 8 witness cols (2 operand limbs
+-- ×3, 2 borrow bits; no credit twin — burn is debit-only).
+#guard burnVmDescriptorAvail.constraints.length == (13 + 14 + 4 + 3 + 1) + 8
+#guard burnVmDescriptorAvail.ranges.length == 2 + 6
+#guard burnVmDescriptorAvail.traceWidth == 196
+-- LIVENESS witness (kernel-evaluated): every weld gate body is 0 on the honest burn row.
+#guard burnAvailGates.all (fun c => match c with | .gate b => b.eval goodBurnAvailRow.loc == 0 | _ => true)
+#assert_axioms burnAvail_derives_availability
+#assert_axioms burnAvail_forgery_unsat
+#assert_axioms goodBurnAvailRow_gates_hold
+#assert_axioms goodBurnAvailRow_ranges_hold
 
 #assert_axioms burnVm_faithful
 #assert_axioms burnVm_rejects_wrong_balance
