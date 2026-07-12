@@ -22,12 +22,17 @@ the ALLOWED floor, and the genuine residuals are named, not laundered.
     PROJECTION of the acceptance witness, hence reduces into the FRI extraction that produces the
     committed trace. It is NOT a genuine assumption beyond `{FRI-LDT}`.
 
-  * **`BusModelFamily` — the `balanced` conjunct EXTRACTED, residual named**
-    (`busModelOk_of_gates_and_floor`). `BusModelOk`'s `balanced` is DERIVED from the deployed cumsum
-    AIR gates via the proven `LogUpColumnLayout.busGates_force_balance` (gates in, balance out — NOT
-    re-assumed); the four remaining conjuncts (`polesA`/`polesB`/`nonexceptional`/`nodupA`/`fpFaithful`)
-    are the ALLOWED FS/SZ ε floor (the Schwartz–Zippel / Poseidon2 fingerprint side conditions). See
-    `busModelOk_not_from_membership` for why the SHARPER `Satisfied2 ⟹ BusModelOk` is NOT a theorem.
+  * **`BusModelFamily` — FULL DISCHARGE from `Satisfied2` + a 3-conjunct FS/SZ floor** (§3b:
+    `busModelOk_of_satisfied2_and_floor` / `busModelFamily_of_satisfied2_and_floor`; §2's
+    gate-shaped per-run form `busModelOk_of_gates_and_floor` is retained). `BusModelOk` is
+    EXISTENTIAL in the multiplicity column, and `Satisfied2` forces every looked-up tuple INTO the
+    committed table — so over the HONEST multiplicities (`honestMult`) the expanded table side is a
+    PERMUTATION of the extracted lookup side, `balanced` is LogUp COMPLETENESS (`logup_complete`),
+    transported to the deployed cumsum equal-close boundary by the ∀-d column-layout LAW
+    (`satisfied2_forces_cumsum_close`, via `logupColumnLayout_law`) and re-extracted through the
+    gate triple (`busGates_force_balance`); `polesB`/`nonexceptional` come FREE on the honest bus
+    (`busNum_self` — the exceptional set is EMPTY). The residual floor is EXACTLY
+    {`polesA`, `nodupA`, `fpFaithful`} — named FS/SZ ε events, nothing else re-assumed.
 
   * **the `WitnessDecodes` readout — the MEMBERSHIP half is a genuine consequence, the readout is
     BLOCKED at the chip-table floor** (`satisfied2_forces_declared_lookup_holds`). `Satisfied2` DOES
@@ -55,14 +60,17 @@ open Dregg2.Circuit.AirChecksSatisfied (isArith)
 open Dregg2.Circuit.FriVerifier (FriParams RecursionVk FriCore FieldArith)
 open Dregg2.Circuit.FriVerifierBridge (ProofView)
 open Dregg2.Circuit.CircuitSoundness (BatchPublicInputs BatchProof)
-open Dregg2.Circuit.AlgoStarkSoundGeneral (AcceptsFull)
+open Dregg2.Circuit.AlgoStarkSoundGeneral
+  (AcceptsFull BusModelFamily memLog_eq_nil_of_lookupShape mapLog_eq_nil_of_lookupShape)
 open Dregg2.Circuit.AlgoStarkSoundFanoutMemory (MapTableAssembly memOpsOf_eq_nil_of_mapShape)
 open Dregg2.Circuit.LogUpColumnLayout
   (BusModelOk busGates_force_balance busModel_forces_lookup_holds busColA busColB
-   logupA logupBM logupB logupChallenge lookedTuples runCol runCol_zero runCol_succ
-   logupColumnLayout_law)
-open Dregg2.Circuit.LogUpSoundness (exceptionalSet)
+   logupA logupBM logupB logupChallenge lookedTuples rowTuples mem_lookupsInto
+   runCol runCol_zero runCol_succ logupColumnLayout_law busBalance)
+open Dregg2.Circuit.LogUpSoundness
+  (exceptionalSet expand logup_complete exceptionalSet_perm_left busNum_self)
 open Dregg2.Exec.CircuitEmit (EmittedExpr)
+open Dregg2.Crypto
 
 set_option autoImplicit false
 
@@ -127,7 +135,9 @@ theorem mapTableAssembly_of_satisfied2Family
 cumsum column's equal-close boundary, which the proven `busGates_force_balance` turns into the bus
 balance (gates in, `busBalance` out — NOT re-assumed). The other five are the FS/SZ ε side conditions
 (pole-freeness, challenge non-exceptionality, distinct support, β-RLC fingerprint faithfulness) — the
-ALLOWED floor, the SAME epistemic class as `FriLdtExtract`'s own FS non-exceptionality. -/
+ALLOWED floor, the SAME epistemic class as `FriLdtExtract`'s own FS non-exceptionality. (§3b sharpens
+this further FROM `Satisfied2`: there `balanced`, `polesB` AND `nonexceptional` are all DERIVED over
+the honest multiplicity column, shrinking the floor to {`polesA`, `nodupA`, `fpFaithful`}.) -/
 
 /-- **`busModelOk_of_gates_and_floor` — `BusModelOk` from {cumsum AIR gates} + {FS/SZ ε floor}.** The
 `balanced` conjunct is DERIVED by `busGates_force_balance` from the deployed cumsum column gates
@@ -165,18 +175,22 @@ theorem busModelOk_of_gates_and_floor {F : Type*} [Field F] [DecidableEq F]
   nodupA := hnodupA
   fpFaithful := hfpFaithful
 
-/-! ### Why the SHARPER `Satisfied2 ⟹ BusModelOk` is NOT a theorem (a real finding, not debt).
+/-! ### Why BARE `Satisfied2 ⟹ BusModelOk` (no floor) is NOT a theorem — and what IS (§3b).
 
-`Satisfied2.rowConstraints` at a `.lookup l` yields ONLY the membership `Lookup.holdsAt` (the tuple is
-in the committed table). `BusModelOk` is STRICTLY STRONGER: it is the whole extracted LogUp bus
-(multiplicities, pole-freeness, the balance over `logupA`/`logupB`). The proven arrow runs
-`BusModelOk ⟹ Lookup.holdsAt` (`busModel_forces_lookup_holds`); the CONVERSE fails — membership does
-not reconstruct the bus. So `BusModelFamily` is genuinely UPSTREAM of `Satisfied2` (it is the input
-that FORCES the lookup arm of `Satisfied2`), and cannot be recovered from `Satisfied2` alone. The
-provable direction is `gates + floor ⟹ BusModelOk` above; the residual beyond acceptance is the
-per-descriptor cumsum column-layout binding (which arithmetic gate is the running-add, over which
-columns — a modeling artifact of the same class as the OOD `hood_of_oodColumnLayout`) plus the FS/SZ
-floor. `busModel_forces_lookup_holds` is re-exported here to make the one proven direction explicit. -/
+`Satisfied2.rowConstraints` at a `.lookup l` yields ONLY the membership `Lookup.holdsAt`. Three of
+`BusModelOk`'s conjuncts are NOT consequences of membership — `polesA`/`nodupA`/`fpFaithful` are
+genuine FS/SZ ε events about the challenge and the β-RLC fingerprint — so `Satisfied2` ALONE cannot
+produce `BusModelOk`. But the other three ARE recoverable, because `BusModelOk`'s multiplicity
+column is EXISTENTIAL: over the HONEST multiplicities the expanded table side is a PERMUTATION of
+the looked-up side, so `balanced` is LogUp completeness and `polesB`/`nonexceptional` ride the
+permutation (`busNum_self` — the honest bus's exceptional set is EMPTY). §3b proves exactly that
+(`busModelOk_of_satisfied2_and_floor`), reducing `BusModelFamily` into {the `Satisfied2` extraction}
++ {`polesA`, `nodupA`, `fpFaithful`}. The proven modeler arrow `BusModelOk ⟹ Lookup.holdsAt`
+(`busModel_forces_lookup_holds`, re-exported below) is the SOUNDNESS direction the general assembler
+consumes; in THAT position (the bus FORCING the lookup arm of `Satisfied2`) the balance is
+acceptance-side content of the deployed p3 bus columns — assembly AUX columns, NOT `VmConstraint2`s
+of any descriptor — and §3b's completeness-side discharge does not (and must not) substitute for
+it. -/
 theorem busModelOk_forces_membership {F : Type*} [Field F] [DecidableEq F]
     (fp : List ℤ → F) (embed : ℤ → F) (d : EffectVmDescriptor2) (t : VmTrace)
     (tid : Dregg2.Circuit.DescriptorIR2.TableId) (mult : List ℕ)
@@ -208,6 +222,249 @@ theorem satisfied2_forces_declared_lookup_holds
   intro i hi l hl
   have h := hsat.rowConstraints i hi (VmConstraint2.lookup l) hl
   simpa [VmConstraint2.holdsAt] using h
+
+/-! ## §3b — THE SHARPER BUS DISCHARGE: `Satisfied2 + {polesA, nodupA, fpFaithful} ⟹ BusModelOk`,
+through the HONEST MULTIPLICITY COLUMN + the CUMSUM COLUMN-LAYOUT LAW.
+
+`BusModelFamily` asks only `∃ mult, BusModelOk … mult` — the multiplicity column is the prover's
+witness, not an input. For the EXTRACTED accepting trace, `Satisfied2` forces every looked-up tuple
+INTO the committed table (§3's `satisfied2_forces_declared_lookup_holds`), so the HONEST
+multiplicity column — the FIRST occurrence of each table fingerprint carries its full looked-up
+count (`honestMult`) — makes the expanded B side a PERMUTATION of the extracted A side
+(`perm_expand_honestMult`, for ANY descriptor: no per-descriptor shape fact of any kind). Then:
+
+  * `balanced` is LogUp COMPLETENESS (`LogUpSoundness.logup_complete`) — derived, not assumed;
+  * via `logupColumnLayout_law` (mpr), that balance IS the modeled cumsum columns' equal-close
+    boundary — `satisfied2_forces_cumsum_close`, the CUMSUM COLUMN-LAYOUT BINDING as a ∀-d THEOREM
+    (the binding needs NO floor at all: completeness has no side conditions);
+  * `busGates_force_balance` re-extracts `balanced` from the gate triple + that close, so the
+    discharge runs THROUGH the deployed cumsum gate shape (first-row-zero / running-add /
+    equal-close), the same wire §2 extracts from;
+  * `polesB` and `nonexceptional` come FREE on the honest bus: every B-side fingerprint is an
+    A-side member (the permutation), and the honest bus's `busNum` SELF-CANCELS (`busNum_self`), so
+    its exceptional set is EMPTY.
+
+The residual floor is EXACTLY {`polesA`, `nodupA`, `fpFaithful`} — the named FS/SZ ε events
+(challenge off the looked-up poles, distinct looked-up support, β-RLC fingerprint faithfulness on
+the supports). NOTHING else: no `BusModelFamily` re-assumption, no balance assumption, no cumsum
+gate assumption.
+
+WHERE THE CUMSUM GATES ACTUALLY LIVE (the precise finding): the deployed LogUp bus's cumsum
+columns are p3-ASSEMBLY aux columns — they are NOT `VmConstraint2`s in any deployed descriptor
+(`d.constraints` declares the `.lookup`s; the Rust assembly builds the bus around them, the pinned
+Lean-model↔Rust correspondence `LogUpColumnLayout` names in its header). So there is NO
+per-descriptor rfl "cumsum shape" fact to consume and none is needed: the column-layout binding is
+the ∀-d `logupColumnLayout_law`, and the close is DERIVED here from `Satisfied2` via completeness.
+In the ASSEMBLER position (`algoStarkSound_of_memoryLegs`, where `BusModelOk` FORCES the lookup arm
+rather than being recovered from it), the balance remains acceptance-side content of the deployed
+bus argument — that direction is `busModel_forces_lookup_holds` and is untouched here. -/
+
+section HonestBus
+
+variable {F : Type*} [Field F] [DecidableEq F]
+
+/-- **The honest multiplicity column** over the table-fingerprint column `L` for the looked-up
+multiset `A`: the FIRST occurrence of each table value carries its full looked-up count; later
+duplicate rows carry `0`. This is the witness the existential multiplicity slot of `BusModelOk` is
+FOR — the column an honest prover commits. -/
+def honestMult : List F → List F → List ℕ
+  | _, [] => []
+  | A, v :: rest => A.count v :: honestMult (A.filter (· ≠ v)) rest
+
+omit [Field F] [DecidableEq F] in
+/-- `expand` peels one multiplicity pair into its replicate block. -/
+theorem expand_cons (v : F) (m : ℕ) (B : List (F × ℕ)) :
+    expand ((v, m) :: B) = List.replicate m v ++ expand B := by
+  simp [expand]
+
+omit [Field F] in
+/-- The multiplicity-expansion of the honest column has EXACTLY the looked-up counts: for any
+support-contained `A` (every looked-up fingerprint IS a table fingerprint — what `Satisfied2`'s
+memberships deliver), the expansion of `L.zip (honestMult A L)` counts every value as `A` does. -/
+theorem count_expand_honestMult (x : F) (L : List F) :
+    ∀ A : List F, (∀ a ∈ A, a ∈ L) →
+      (expand (L.zip (honestMult A L))).count x = A.count x := by
+  induction L with
+  | nil =>
+      intro A h
+      have hA : A = [] :=
+        List.eq_nil_iff_forall_not_mem.mpr fun a ha => by simpa using h a ha
+      subst hA; rfl
+  | cons v rest ih =>
+      intro A h
+      have hsub : ∀ a ∈ A.filter (· ≠ v), a ∈ rest := by
+        intro a ha
+        obtain ⟨haA, hav⟩ := List.mem_filter.mp ha
+        have hav' : a ≠ v := by simpa using hav
+        rcases List.mem_cons.mp (h a haA) with rfl | hm
+        · exact absurd rfl hav'
+        · exact hm
+      simp only [honestMult, List.zip_cons_cons]
+      rw [expand_cons, List.count_append, ih (A.filter (· ≠ v)) hsub]
+      by_cases hxv : x = v
+      · subst hxv
+        have h0 : (A.filter (· ≠ x)).count x = 0 := by
+          rw [List.count_eq_zero]
+          intro hmem
+          have := (List.mem_filter.mp hmem).2
+          simp at this
+        rw [List.count_replicate_self, h0, Nat.add_zero]
+      · have h0 : (List.replicate (A.count v) v).count x = 0 := by
+          rw [List.count_eq_zero]
+          intro hmem
+          exact hxv (List.eq_of_mem_replicate hmem)
+        rw [h0, Nat.zero_add, List.count_filter (by simpa using hxv)]
+
+omit [Field F] in
+/-- **The honest bus is a PERMUTATION of the lookups**: whenever every looked-up fingerprint is a
+table fingerprint, the honest multiplicity column's expansion is `A` up to reordering — the exact
+premise of `logup_complete`. -/
+theorem perm_expand_honestMult (L A : List F) (h : ∀ a ∈ A, a ∈ L) :
+    A.Perm (expand (L.zip (honestMult A L))) := by
+  rw [List.perm_iff_count]
+  intro x
+  exact (count_expand_honestMult x L A h).symm
+
+/-- **`Satisfied2` puts every looked-up tuple IN the committed table** (∀ d, ∀ tid): the
+`lookedTuples` multiset — the bus's A side before fingerprinting — is support-contained in
+`t.tf tid`. A pure projection of §3's forced memberships through the extraction. -/
+theorem satisfied2_lookedTuples_mem
+    (hash : List ℤ → ℤ) (d : EffectVmDescriptor2)
+    (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
+    (tid : Dregg2.Circuit.DescriptorIR2.TableId)
+    (hsat : Satisfied2 hash d minit mfin maddrs t) :
+    ∀ x ∈ lookedTuples d t tid, x ∈ t.tf tid := by
+  intro x hx
+  unfold lookedTuples at hx
+  obtain ⟨i, hi, hx⟩ := List.mem_flatMap.mp hx
+  rw [List.mem_range] at hi
+  unfold rowTuples at hx
+  obtain ⟨l, hl, rfl⟩ := List.mem_map.mp hx
+  obtain ⟨hcon, htid⟩ := mem_lookupsInto.mp hl
+  have h := satisfied2_forces_declared_lookup_holds hash d minit mfin maddrs t hsat i hi l hcon
+  unfold Lookup.holdsAt at h
+  rwa [htid] at h
+
+omit [Field F] in
+/-- The extracted A side rides the honest multiplicity column as a genuine LogUp permutation:
+`logupA` is a permutation of the expanded `logupBM` at `honestMult`. The single bridge between
+`Satisfied2`'s memberships and the bus algebra. -/
+theorem satisfied2_honest_bus_perm
+    (fp : List ℤ → F) (hash : List ℤ → ℤ) (d : EffectVmDescriptor2)
+    (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
+    (tid : Dregg2.Circuit.DescriptorIR2.TableId)
+    (hsat : Satisfied2 hash d minit mfin maddrs t) :
+    (logupA fp d t tid).Perm
+      (expand (logupBM fp t tid (honestMult (logupA fp d t tid) ((t.tf tid).map fp)))) := by
+  have hmemL : ∀ a ∈ logupA fp d t tid, a ∈ (t.tf tid).map fp := by
+    intro a ha
+    unfold logupA at ha
+    obtain ⟨x, hx, rfl⟩ := List.mem_map.mp ha
+    exact List.mem_map.mpr
+      ⟨x, satisfied2_lookedTuples_mem hash d minit mfin maddrs t tid hsat x hx, rfl⟩
+  show (logupA fp d t tid).Perm
+    (expand (((t.tf tid).map fp).zip (honestMult (logupA fp d t tid) ((t.tf tid).map fp))))
+  exact perm_expand_honestMult _ _ hmemL
+
+/-- **THE CUMSUM COLUMN-LAYOUT BINDING, DERIVED (∀ d, NO floor).** For the extracted accepting
+trace of ANY descriptor, the modeled cumsum/bus columns over the extracted A/B/α CLOSE EQUAL at
+the honest multiplicity column — the deployed equal-close boundary gate, produced from
+`Satisfied2` alone through `logup_complete` + `logupColumnLayout_law` (completeness needs no side
+conditions). This is the binding §2 named as the residual "which columns carry the running-add":
+it is a THEOREM for every `d`, not a per-descriptor shape fact. -/
+theorem satisfied2_forces_cumsum_close
+    (fp : List ℤ → F) (embed : ℤ → F)
+    (hash : List ℤ → ℤ) (d : EffectVmDescriptor2)
+    (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
+    (tid : Dregg2.Circuit.DescriptorIR2.TableId)
+    (hsat : Satisfied2 hash d minit mfin maddrs t) :
+    ∃ mult : List ℕ,
+      runCol (busColA fp (logupChallenge embed d t) d t tid)
+          (busColA fp (logupChallenge embed d t) d t tid).length
+        = runCol (busColB fp (logupChallenge embed d t) t tid mult)
+            (busColB fp (logupChallenge embed d t) t tid mult).length := by
+  refine ⟨honestMult (logupA fp d t tid) ((t.tf tid).map fp), ?_⟩
+  exact (logupColumnLayout_law fp (logupChallenge embed d t) d t tid _).mpr
+    (logup_complete _ (satisfied2_honest_bus_perm fp hash d minit mfin maddrs t tid hsat))
+
+/-- **THE SHARPER DISCHARGE (per accepting run): `Satisfied2` + the 3-conjunct FS/SZ floor ⟹
+`BusModelOk`.** The multiplicity witness is `honestMult`; `balanced` is routed THROUGH the deployed
+cumsum gate shape (`busGates_force_balance` on the `runCol` columns, whose equal-close is the
+derived binding above); `polesB` and `nonexceptional` are derived from the permutation
+(`busNum_self`: the honest bus's exceptional set is EMPTY). Only `polesA`/`nodupA`/`fpFaithful` —
+the named FS/SZ ε floor — remain as hypotheses. Nothing is re-assumed. -/
+theorem busModelOk_of_satisfied2_and_floor
+    (fp : List ℤ → F) (embed : ℤ → F)
+    (hash : List ℤ → ℤ) (d : EffectVmDescriptor2)
+    (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
+    (tid : Dregg2.Circuit.DescriptorIR2.TableId)
+    (hsat : Satisfied2 hash d minit mfin maddrs t)
+    -- the ALLOWED FS/SZ ε floor — everything else is DERIVED:
+    (hpolesA : ∀ a ∈ logupA fp d t tid, logupChallenge embed d t + a ≠ 0)
+    (hnodupA : (logupA fp d t tid).Nodup)
+    (hfpFaithful : ∀ x ∈ lookedTuples d t tid, ∀ y ∈ t.tf tid, fp x = fp y → x = y) :
+    ∃ mult : List ℕ, BusModelOk fp embed d t tid mult := by
+  refine ⟨honestMult (logupA fp d t tid) ((t.tf tid).map fp), ?_⟩
+  have hperm := satisfied2_honest_bus_perm fp hash d minit mfin maddrs t tid hsat
+  -- the balance = completeness over the honest multiplicities …
+  have hbal := logup_complete (logupChallenge embed d t) hperm
+  -- … equivalently (the column-layout LAW, mpr): the modeled cumsum columns close equal —
+  have hclose := (logupColumnLayout_law fp (logupChallenge embed d t) d t tid
+    (honestMult (logupA fp d t tid) ((t.tf tid).map fp))).mpr hbal
+  exact
+    { polesA := hpolesA
+      -- every B-side fingerprint is an A-side member (the permutation) — polesA covers it:
+      polesB := fun b hb => hpolesA b (hperm.mem_iff.mpr hb)
+      -- … and the gate triple re-extracts the balance from that close (`§2`'s wire, satisfied):
+      balanced := busGates_force_balance fp (logupChallenge embed d t) d t tid
+        (honestMult (logupA fp d t tid) ((t.tf tid).map fp))
+        (runCol (busColA fp (logupChallenge embed d t) d t tid))
+        (runCol (busColB fp (logupChallenge embed d t) t tid
+          (honestMult (logupA fp d t tid) ((t.tf tid).map fp))))
+        (runCol_zero _) (fun j h => runCol_succ _ j h)
+        (runCol_zero _) (fun j h => runCol_succ _ j h) hclose
+      nonexceptional := by
+        show logupChallenge embed d t
+          ∉ exceptionalSet (logupA fp d t tid)
+              (expand (logupBM fp t tid (honestMult (logupA fp d t tid) ((t.tf tid).map fp))))
+        rw [exceptionalSet_perm_left hperm, exceptionalSet, busNum_self,
+          Polynomial.roots_zero, Multiset.toFinset_zero]
+        exact Finset.notMem_empty _
+      nodupA := hnodupA
+      fpFaithful := hfpFaithful }
+
+/-- **THE DISCHARGE (family form): `BusModelFamily` from the `Satisfied2` extraction + the
+3-conjunct FS/SZ floor.** Given the extraction acceptance ALREADY delivers (per accepting batch, a
+`Satisfied2` witness for the extracted trace — the same deliverable
+`mapTableAssembly_of_satisfied2Family` consumes) plus the named per-lookup FS/SZ ε floor, the named
+premise `BusModelFamily` is DERIVED: no free-standing bus-family assumption remains. This is the
+honest reduction of `BusModelFamily` into {the FRI extraction, `polesA`/`nodupA`/`fpFaithful`}. -/
+theorem busModelFamily_of_satisfied2_and_floor
+    (hash : List ℤ → ℤ) (fp : List ℤ → F) (embed : ℤ → F)
+    (perm : List ℤ → List ℤ) (RATE : Nat) (toNat : ℤ → Nat)
+    (params : FriParams) (vk : RecursionVk ℤ) (core : FriCore ℤ) (A : FieldArith ℤ)
+    (initState : List ℤ) (logN : Nat) (view : ProofView)
+    (tr : BatchPublicInputs → BatchProof → VmTrace) (d : EffectVmDescriptor2)
+    (hSat : ∀ (pi : BatchPublicInputs) (π : BatchProof),
+      AcceptsFull perm RATE toNat params vk core A initState logN view pi π →
+      ∃ (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ),
+        Satisfied2 hash d minit mfin maddrs (tr pi π))
+    (hfloor : ∀ (pi : BatchPublicInputs) (π : BatchProof),
+      AcceptsFull perm RATE toNat params vk core A initState logN view pi π →
+      ∀ l : Lookup, VmConstraint2.lookup l ∈ d.constraints →
+        (∀ a ∈ logupA fp d (tr pi π) l.table,
+            logupChallenge embed d (tr pi π) + a ≠ 0) ∧
+        (logupA fp d (tr pi π) l.table).Nodup ∧
+        (∀ x ∈ lookedTuples d (tr pi π) l.table, ∀ y ∈ (tr pi π).tf l.table,
+            fp x = fp y → x = y)) :
+    BusModelFamily fp embed perm RATE toNat params vk core A initState logN view tr d := by
+  intro pi π hacc l hl
+  obtain ⟨minit, mfin, maddrs, hsat⟩ := hSat pi π hacc
+  obtain ⟨hpA, hnd, hfp⟩ := hfloor pi π hacc l hl
+  exact busModelOk_of_satisfied2_and_floor fp embed hash d minit mfin maddrs (tr pi π) l.table
+    hsat hpA hnd hfp
+
+end HonestBus
 
 /-! ## §4 — NON-VACUITY: the discharges FIRE on concrete descriptors (extraction, not assumption). -/
 
@@ -284,6 +541,85 @@ theorem busModelOk_fires :
     Dregg2.Circuit.LogUpColumnLayout.toyD Dregg2.Circuit.LogUpColumnLayout.toyT .range
     Dregg2.Circuit.LogUpColumnLayout.toyMult).mpr htoy.balanced
 
+/-! ### §4b — the SHARPER discharge fires END-TO-END FROM `Satisfied2` (the §3b teeth). A genuine
+`Satisfied2` witness is built for the deployed LogUp toy (`LogUpColumnLayout` §5 — a REAL range
+lookup at BabyBear), and `busModelOk_of_satisfied2_and_floor` runs on it: the honest-multiplicity
+bus is PRODUCED (balance through the cumsum gate triple), the derived cumsum close is PRODUCED, and
+the produced bus feeds the ∀-d soundness discharge back to the real membership. The floor conjuncts
+consumed are the toy's own PROVEN concrete facts (`toy_busModelOk`'s fields) — the whole chain is
+assumption-free. -/
+
+open Dregg2.Circuit.LogUpColumnLayout (toyD toyT toyTf toyLookup fp0 embed0 toy_busModelOk)
+
+/-- The toy's non-arith constraints are all lookups (its single constraint IS the range lookup). -/
+theorem toyD_shape : ∀ c ∈ toyD.constraints, ¬ isArith c →
+    ∃ l : Lookup, c = VmConstraint2.lookup l := by
+  intro c hc _
+  exact ⟨toyLookup, by simpa [toyD] using hc⟩
+
+/-- The toy's gathered memory log is empty (no memOps declared). -/
+theorem toy_memLog : memLog toyD toyT = [] :=
+  memLog_eq_nil_of_lookupShape toyD toyT toyD_shape
+
+/-- The toy's gathered map-ops log is empty (no mapOps declared). -/
+theorem toy_mapLog : mapLog toyD toyT = [] :=
+  mapLog_eq_nil_of_lookupShape toyD toyT toyD_shape
+
+set_option maxRecDepth 8000 in
+/-- **A GENUINE `Satisfied2` witness for the LogUp toy** (any `hash` — the toy declares no hash
+sites): the single range lookup HOLDS on the single row (`[3] ∈ rangeRows 2`, a concrete
+membership over ℤ), and all memory legs are the empty-log structurals. -/
+theorem toy_satisfied2 (hash : List ℤ → ℤ) :
+    Satisfied2 hash toyD (fun _ => 0) (fun _ => (0, 0)) [] toyT where
+  rowConstraints := by
+    intro i hi c hc
+    rw [show toyT.rows.length = 1 from rfl] at hi
+    obtain rfl : i = 0 := Nat.lt_one_iff.mp hi
+    obtain rfl : c = VmConstraint2.lookup toyLookup := by simpa [toyD] using hc
+    simp only [VmConstraint2.holdsAt]
+    unfold Lookup.holdsAt
+    decide
+  rowHashes := by intro i _; trivial
+  rowRanges := by intro i _ r hr; simp [toyD] at hr
+  memAddrsNodup := List.nodup_nil
+  memClosed := by intro op hop; rw [toy_memLog] at hop; simp at hop
+  memDisciplined := by rw [toy_memLog]; trivial
+  memBalanced := by
+    rw [toy_memLog]
+    simp [MemoryChecking.MemCheck, MemoryChecking.initSet, MemoryChecking.finalSet,
+      MemoryChecking.readSet, MemoryChecking.writeSetFrom, MemoryChecking.boundarySet]
+  memTableFaithful := by rw [toy_memLog]; rfl
+  mapTableFaithful := by rw [toy_mapLog]; rfl
+
+/-- **THE SHARPER DISCHARGE FIRES**: from the genuine `Satisfied2` witness + the toy's own proven
+FS/SZ floor facts, `busModelOk_of_satisfied2_and_floor` PRODUCES a sound bus model — `balanced`
+gate-extracted through the derived cumsum close, `polesB`/`nonexceptional` derived from the honest
+permutation. End-to-end from `Satisfied2`; nothing assumed. -/
+theorem busModelOk_fires_from_satisfied2 (hash : List ℤ → ℤ) :
+    ∃ mult : List ℕ, BusModelOk fp0 embed0 toyD toyT .range mult :=
+  busModelOk_of_satisfied2_and_floor fp0 embed0 hash toyD (fun _ => 0) (fun _ => (0, 0)) []
+    toyT .range (toy_satisfied2 hash)
+    toy_busModelOk.polesA toy_busModelOk.nodupA toy_busModelOk.fpFaithful
+
+/-- **The derived cumsum column-layout binding FIRES** (no floor at all): the toy's modeled
+cumsum/bus columns close equal, straight from `Satisfied2` through the law. -/
+theorem toy_cumsum_close_fires (hash : List ℤ → ℤ) :
+    ∃ mult : List ℕ,
+      runCol (busColA fp0 (logupChallenge embed0 toyD toyT) toyD toyT .range)
+          (busColA fp0 (logupChallenge embed0 toyD toyT) toyD toyT .range).length
+        = runCol (busColB fp0 (logupChallenge embed0 toyD toyT) toyT .range mult)
+            (busColB fp0 (logupChallenge embed0 toyD toyT) toyT .range mult).length :=
+  satisfied2_forces_cumsum_close fp0 embed0 hash toyD (fun _ => 0) (fun _ => (0, 0)) []
+    toyT .range (toy_satisfied2 hash)
+
+/-- …and the PRODUCED bus feeds the ∀-d soundness discharge back to the REAL membership: the
+whole loop `Satisfied2 ⟹ bus ⟹ Lookup.holdsAt` runs on the concrete toy. -/
+theorem toy_bus_discharge_end_to_end (hash : List ℤ → ℤ) :
+    Lookup.holdsAt toyT.tf (envAt toyT 0) toyLookup := by
+  obtain ⟨mult, hok⟩ := busModelOk_fires_from_satisfied2 hash
+  exact busModel_forces_lookup_holds fp0 embed0 toyD toyT .range mult hok 0 (by decide)
+    toyLookup (mem_lookupsInto.mpr ⟨List.mem_cons_self .., rfl⟩)
+
 end NonVacuity
 
 /-! ## Kernel-clean (0 sorries; axiom floor is Lean's own). -/
@@ -293,7 +629,17 @@ end NonVacuity
 #assert_axioms busModelOk_of_gates_and_floor
 #assert_axioms busModelOk_forces_membership
 #assert_axioms satisfied2_forces_declared_lookup_holds
+#assert_axioms perm_expand_honestMult
+#assert_axioms satisfied2_lookedTuples_mem
+#assert_axioms satisfied2_honest_bus_perm
+#assert_axioms satisfied2_forces_cumsum_close
+#assert_axioms busModelOk_of_satisfied2_and_floor
+#assert_axioms busModelFamily_of_satisfied2_and_floor
 #assert_axioms mapTableAssembly_fires
 #assert_axioms busModelOk_fires
+#assert_axioms toy_satisfied2
+#assert_axioms busModelOk_fires_from_satisfied2
+#assert_axioms toy_cumsum_close_fires
+#assert_axioms toy_bus_discharge_end_to_end
 
 end Dregg2.Circuit.AcceptanceDischarge
