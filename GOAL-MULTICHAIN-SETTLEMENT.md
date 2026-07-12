@@ -105,10 +105,19 @@ Op-note: use `git commit -F` for messages containing quotes (hit a nested-double
   the real 512-key committee 397/512 → real Electra finality/execution branch → real WETH eth_getProof →
   ConsensusProven). 8 reject tests on real data. 142 crate tests. The ETH light client (underpins ETH+Base) is now
   empirically validated end-to-end.
-- 07-12 ~3:40am: circuit-prove STILL churned (9 uncommitted; vk-epoch availability-weld commit aa282f8c0 35min ago;
-  stark-kill carrier flag-day). Wrap/fold stay blocked. Doing directed genuine progress: CWIA code-hash hardening
-  for the Base fault-proof anchor (reconstruct the game proxy code-hash from the AggregateVerifier impl + immutable
-  args vs the fixture constant; KAT bar = reproduce the LIVE game code-hash, else honest residual). Fable running.
+- 07-12 Base fault-proof R3 CLOSED: CWIA code-hash recomputation reproduces the LIVE game code-hash byte-exactly
+  (KAT-passed, verified myself); a look-alike game (same slot-0, non-CWIA bytecode) is refused. 145 crate tests.
+  The live-Base fault-proof anchor is hardened to the semantics-pin level.
+
+## ⚑⚑ MEANINGFUL UNBLOCKED SCOPE EXHAUSTED (07-12 ~3:55am).
+Everything achievable WITHOUT the wrap is shipped + verified to a high standard: thread 3 complete (binding TRILOGY,
+3-chain edges/wire/multi-network/narrowing), ETH light client validated E2E on REAL mainnet data, live-Base
+fault-proof anchor BUILT + R3-hardened, a real alloy-trie security finding, gnark MultiField (32.3×).
+ONLY high-value remaining = thread 1 (wrap shrink-layer) + thread 2 (rung-3 fold) — BLOCKED on circuit-prove
+(stark-kill carrier flag-day + vk-epoch weld, both persistently active ~2h). I can't unblock it (another terminal's
+work; collision risk). Marginal polish left (ADR-036 Cosmos wallet-native framing; legacy finalization-window) —
+NOT forcing it. PACING purely on the wrap: re-poll circuit-prove each wakeup, SEIZE it the instant it quiets.
+ember lever: coordinate/land stark-kill's flag-day to free circuit-prove, OR say to proceed despite churn (advise against).
 
 ## ⚑ PLATEAU NOTE (07-12 ~3am): unblocked multichain work is COMPREHENSIVELY done.
 Thread 3 + all its refinements shipped (edges, wire, multi-network, narrowing, binding TRILOGY, Base legacy +
