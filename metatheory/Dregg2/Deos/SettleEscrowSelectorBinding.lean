@@ -25,10 +25,12 @@ rigorous here:
 
   * **HALF B — the demand forces the selector ON, which forces the welded gate** (the descriptor's PI
     pin + the refinement keystone). The descriptor pins the selector column to PI `ESCROW_SEL_PI` on
-    the first row (`.piBinding .first ESCROW_SEL_COL ESCROW_SEL_PI`). A verifier that DEMANDS that PI
-    `= 1` (its obligation, the discipline below) forces the row-0 selector to `1` on any satisfying
-    trace; the refinement keystone `settleEscrowSatV3_forces_settle_gate` then forces the four
-    sealed-escrow conjuncts over the committed rotated field columns the ~124-bit wide commit absorbs.
+    the first row (`.piBinding .first ESCROW_SEL_COL ESCROW_SEL_PI`), a mod-`p` field congruence. A
+    verifier that DEMANDS that PI `= 1` (its obligation, the discipline below) forces the row-0
+    selector to `1` on any satisfying trace — the exact value recovered from the mod-`p` pin under the
+    deployed range-check canonicality; the refinement keystone `settleEscrowSatV3_forces_settle_gate`
+    then forces the four sealed-escrow conjuncts (as `≡ [ZMOD p]` congruences) over the committed
+    rotated field columns the ~124-bit wide commit absorbs.
 
 Composed (`escrow_selector_bound_to_declaration`): on a satisfying trace of the welded descriptor, a
 cell whose COMMITTED declaration requires the escrow tag has its settle FORCED through the gate over
@@ -68,6 +70,14 @@ open Dregg2.Deos.SettleEscrowSatDescriptor
    settleEscrowSatVmDescriptor2R24 settleEscrowSatV3_forces_settle_gate)
 
 set_option autoImplicit false
+
+/-- Field-faithful lift: two CANONICAL (`0 ≤ · < p`, the deployed range-check invariant) integers
+that are congruent mod `p` are EQUAL. Recovers an exact ℤ equality from a migrated `≡ [ZMOD p]`
+constraint. -/
+private theorem canonEq {a b : ℤ} (h : a ≡ b [ZMOD 2013265921])
+    (ha0 : 0 ≤ a) (hap : a < 2013265921) (hb0 : 0 ≤ b) (hbp : b < 2013265921) : a = b := by
+  unfold Int.ModEq at h
+  rwa [Int.emod_eq_of_lt ha0 hap, Int.emod_eq_of_lt hb0 hbp] at h
 
 /-! ## §1 — HALF A: the selector demand cannot be dodged by an alternate declaration.
 
@@ -113,26 +123,33 @@ theorem selPin_mem (legA legB : Nat) :
   simp only [List.mem_append, List.mem_singleton, or_true]
 
 /-- **HALF B (the PI pin).** On a satisfying trace, the welded descriptor's first-row PI pin equates
-the row-0 selector column with the public input at `ESCROW_SEL_PI`. -/
+the row-0 selector column with the public input at `ESCROW_SEL_PI` — as a field congruence
+(`≡ [ZMOD p]`), the migrated (mod-`p`) denotation of the `.piBinding` constraint. -/
 theorem selector_pinned_to_pi (hash : List ℤ → ℤ) (legA legB : Nat)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
     (hsat : Satisfied2 hash (settleEscrowSatVmDescriptor2R24 legA legB) minit mfin maddrs t)
     (hrows : 0 < t.rows.length) :
-    (envAt t 0).loc ESCROW_SEL_COL = (envAt t 0).pub ESCROW_SEL_PI := by
+    (envAt t 0).loc ESCROW_SEL_COL ≡ (envAt t 0).pub ESCROW_SEL_PI [ZMOD 2013265921] := by
   have hrow := hsat.rowConstraints 0 hrows
     (.base (.piBinding .first ESCROW_SEL_COL ESCROW_SEL_PI)) (selPin_mem legA legB)
   -- `holdsAt` for a `.base (.piBinding .first …)` on row 0 (isFirst = (0==0) = true) is the PI equality.
   simpa [VmConstraint2.holdsAt, VmConstraint.holdsVm] using hrow
 
 /-- **HALF B — THE DEMAND FORCES THE SELECTOR ON.** If the verifier demands the selector PI `= 1`,
-then the row-0 selector column is `1` on any satisfying trace. The forger cannot set `sel = 0`. -/
+then the row-0 selector column is EXACTLY `1` on any satisfying trace. The forger cannot set
+`sel = 0`. The PI pin is now a mod-`p` field congruence, so the exact selector value is recovered from
+it under the deployed range-check canonicality invariant (`hcanon`, `0 ≤ · < p` on every column —
+the selector range-check gadget's envelope) via `canonEq`. -/
 theorem demanded_selector_is_on (hash : List ℤ → ℤ) (legA legB : Nat)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
     (hsat : Satisfied2 hash (settleEscrowSatVmDescriptor2R24 legA legB) minit mfin maddrs t)
     (hrows : 0 < t.rows.length)
+    (hcanon : ∀ c, 0 ≤ (envAt t 0).loc c ∧ (envAt t 0).loc c < 2013265921)
     (hpi : (envAt t 0).pub ESCROW_SEL_PI = 1) :
     (envAt t 0).loc ESCROW_SEL_COL = 1 := by
-  rw [selector_pinned_to_pi hash legA legB hsat hrows]; exact hpi
+  have hpin := selector_pinned_to_pi hash legA legB hsat hrows
+  rw [hpi] at hpin
+  exact canonEq hpin (hcanon ESCROW_SEL_COL).1 (hcanon ESCROW_SEL_COL).2 (by norm_num) (by norm_num)
 
 /-! ## §3 — THE COMPOSED SELECTOR-BINDING KEYSTONE.
 
@@ -147,9 +164,12 @@ forger can dodge NEITHER by a hollow declaration (HALF A) NOR by `sel = 0` (HALF
     commitment,
   * the verifier's discipline `hverifier` — it pins the selector PI `= 1` whenever the re-derived
     required-tag floor demands the escrow selector (the obligation §6 item 2's realization must meet),
+  * the deployed range-check canonicality invariant `hcanon` (`0 ≤ · < p` on every column — the
+    envelope under which the mod-`p` selector pin recovers the exact selector value),
   * a satisfying trace of the welded descriptor whose first (settle) row is non-last,
 then both legs read `Deposited` in the committed BEFORE field columns and `Consumed` in the committed
-AFTER field columns — the sealed-escrow gate is forced over the committed state, UN-DODGEABLY. -/
+AFTER field columns — as field congruences (`≡ [ZMOD p]`, the migrated gate denotation) over the
+committed state — the sealed-escrow gate is forced, UN-DODGEABLY. -/
 theorem escrow_selector_bound_to_declaration {Decl C : Type}
     (declCommit : Decl → C) (requiredTags : Decl → List Tag)
     (hbinds : DeclCommitBinds declCommit requiredTags)
@@ -160,18 +180,20 @@ theorem escrow_selector_bound_to_declaration {Decl C : Type}
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
     (hsat : Satisfied2 hash (settleEscrowSatVmDescriptor2R24 legA legB) minit mfin maddrs t)
     (hrows : 1 < t.rows.length)
+    (hcanon : ∀ c, 0 ≤ (envAt t 0).loc c ∧ (envAt t 0).loc c < 2013265921)
     (hverifier : demandsEscrowSelector (requiredTags presented) →
       (envAt t 0).pub ESCROW_SEL_PI = 1) :
-    (envAt t 0).loc (beforeFieldCol legA) = stDeposited ∧
-    (envAt t 0).loc (beforeFieldCol legB) = stDeposited ∧
-    (envAt t 0).loc (afterFieldCol legA)  = stConsumed ∧
-    (envAt t 0).loc (afterFieldCol legB)  = stConsumed := by
+    (envAt t 0).loc (beforeFieldCol legA) ≡ stDeposited [ZMOD 2013265921] ∧
+    (envAt t 0).loc (beforeFieldCol legB) ≡ stDeposited [ZMOD 2013265921] ∧
+    (envAt t 0).loc (afterFieldCol legA)  ≡ stConsumed [ZMOD 2013265921] ∧
+    (envAt t 0).loc (afterFieldCol legB)  ≡ stConsumed [ZMOD 2013265921] := by
   -- HALF A: the demand cannot be dodged → the verifier pins the selector PI = 1.
   have hdemand := escrow_demand_undodgeable declCommit requiredTags hbinds committed presented
     hcommit hreq
   have hpi := hverifier hdemand
-  -- HALF B: the pinned PI forces the row-0 selector on.
-  have hsel := demanded_selector_is_on hash legA legB hsat (by omega) hpi
+  -- HALF B: the pinned PI forces the row-0 selector on (exact, recovered from the mod-`p` pin
+  -- under the range-check canonicality `hcanon`).
+  have hsel := demanded_selector_is_on hash legA legB hsat (by omega) hcanon hpi
   -- Row 0 is non-last (the trace has ≥ 2 rows), so the refinement keystone fires.
   have hnl : ((0 : Nat) + 1 == t.rows.length) = false := by
     simp only [Nat.zero_add, beq_eq_false_iff_ne]; omega
