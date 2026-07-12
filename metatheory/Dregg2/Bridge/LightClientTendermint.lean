@@ -29,13 +29,19 @@ TWO LAYERS, kept honest:
   * The rules layer (§2-§4) is PARAMETRIC over an arbitrary `CryptoLeaf` — for the real chain
     that leaf is ed25519 signature soundness (`sigSound`: a verifying commit signature means
     the validator genuinely signed those vote bytes — Ed25519 EUF-CMA, discharged by a
-    verified crypto library) and SHA-256 collision resistance (`hashCR` — the validator-set
-    hash binds one set). `tmNoForgery` is therefore literally "IF ed25519 + SHA-256 are sound
-    THEN an accepted header carries a genuine >2/3-stake commit of its committed validator
-    set" — the crypto assumptions are the `∀ L : CryptoLeaf` binder, minimal and visible,
-    never a laundered `def FooValid`.
-  * The demo instance (§5-§7) PROVES its leaf (like the foundation's toy), so the shipped
-    file is genuinely axiom-clean end to end and the discriminators run on concrete data.
+    verified crypto library) and the SHA-256 collision-resistance CARRIER (`hashCR : Prop`
+    + `noCollision` — the honest CR floor, NOT idealized injectivity, which is
+    pigeonhole-false for a real compressing hash). Every theorem that pins the validator-set
+    bytes takes `hcr : L.hashCR` as an EXPLICIT hypothesis and consumes `L.noCollision hcr`.
+    `tmNoForgery` is therefore literally "IF ed25519 is sound AND SHA-256 is
+    collision-resistant THEN an accepted header carries a genuine >2/3-stake commit of its
+    committed validator set, and that set binding is UNIQUE" — the crypto assumptions are
+    the `∀ L : CryptoLeaf` binder + the named `hcr` hypothesis, minimal and visible, never a
+    laundered `def FooValid`.
+  * The demo instance (§5-§7) PROVES its leaf INCLUDING the CR carrier (like the foundation's
+    toy: `demoLeaf_hashCR`), and a collapsing demo hash FALSIFIES the same carrier shape
+    (`demoCollapseLeaf_not_hashCR`) — both polarities witnessed, so the shipped file is
+    genuinely axiom-clean end to end and the discriminators run on concrete data.
 
 NON-VACUITY (the Nomad-law tooth, `tm_gate_discriminates`): under the SAME trusted state the
 gate ACCEPTS a genuine 3-of-3 commit and REJECTS: an exactly-2/3 sub-quorum commit (Tendermint
@@ -226,34 +232,48 @@ theorem tmVerify_eq_true_iff (ts : TmTrustedState L) (u : TmUpdate L) :
 
 /-! ## §4 — The three obligations, GENERIC in the crypto leaf.
 
-`tmNoForgery` below is the honest theorem shape: `∀ L : CryptoLeaf, …` — instantiate `L` with
-the real ed25519+SHA-256 leaf (whose `sigSound`/`hashCR` are the named verified-library
-assumptions) and it reads: IF ed25519 and SHA-256 are sound THEN an accepted header genuinely
-carries a >2/3-stake commit of its committed validator set. -/
+`tmNoForgery` below is the honest theorem shape: `∀ L : CryptoLeaf, L.hashCR → …` —
+instantiate `L` with the real ed25519+SHA-256 leaf (whose `sigSound` is the named
+verified-library unforgeability assumption and whose `hashCR` CARRIER is the named SHA-256
+collision-resistance assumption) and it reads: IF ed25519 is sound AND SHA-256 is
+collision-resistant THEN an accepted header genuinely carries a >2/3-stake commit of its
+committed validator set, and the 32-byte `validatorsHash` binds ONE set. The CR carrier is
+consumed via `L.noCollision hcr` — never unconditional injectivity. -/
 
 /-- **The foreign-chain validity predicate** — what Tendermint itself calls a valid header:
-the header's `validatorsHash` really commits its validator set, and there is a sub-list of
-that set which GENUINELY signed the header's sign-bytes (the `Signed` denotation, not a
-boolean) carrying strictly more than 2/3 of the total power. -/
+the header's `validatorsHash` really commits its validator set, that commitment BINDS (no
+other set encoding hashes to the header's `validatorsHash` — the conjunct the CR carrier
+buys via `noCollision`, mirroring the foundation's `toyForeignValid` binding leg), and there
+is a sub-list of that set which GENUINELY signed the header's sign-bytes (the `Signed`
+denotation, not a boolean) carrying strictly more than 2/3 of the total power. -/
 def TmForeignValid (u : TmUpdate L) : Prop :=
   L.hash (enc u.validators) = u.header.validatorsHash
+  ∧ (∀ vs' : List (TmValidator L.PubKey),
+      L.hash (enc vs') = u.header.validatorsHash → enc vs' = enc u.validators)
   ∧ ∃ S : List (TmValidator L.PubKey),
       S.Sublist u.validators
       ∧ (∀ v ∈ S, L.Signed v.pubkey (sb u.header))
       ∧ 2 * totalPower u.validators < 3 * totalPower S
 
-/-- **NO FORGERY.** An update `tmVerify` accepts is foreign-valid: the genuine-signer sub-list
-is `signers …`, its sublist-ness and power come from §2, and its GENUINENESS comes from the
-crypto leaf's `sigSound` (via `signers_signed`) — the ed25519 assumption is consumed exactly
-here, never assumed at the update level. -/
-theorem tmNoForgery : NoForgery (tmVerify L sb enc) (TmForeignValid L sb enc) := by
+/-- **NO FORGERY.** GIVEN the SHA-256 CR carrier (`hcr : L.hashCR` — the named hash floor,
+an explicit hypothesis), an update `tmVerify` accepts is foreign-valid: the genuine-signer
+sub-list is `signers …`, its sublist-ness and power come from §2, its GENUINENESS comes from
+the crypto leaf's `sigSound` (via `signers_signed`) — the ed25519 assumption consumed exactly
+there — and the set-binding conjunct is discharged by `L.noCollision hcr` — the CR carrier
+consumed exactly here, never assumed at the update level and never as unconditional
+injectivity. A chain whose hash collapses gets NO no-forgery conclusion. -/
+theorem tmNoForgery (hcr : L.hashCR) :
+    NoForgery (tmVerify L sb enc) (TmForeignValid L sb enc) := by
   intro ts u h
   obtain ⟨_, _, _, _, _, _, hbind, hq⟩ := (tmVerify_eq_true_iff L sb enc ts u).mp h
-  refine ⟨hbind, signers L (sb u.header) u.validators u.commit,
+  refine ⟨hbind, ?_, signers L (sb u.header) u.validators u.commit,
     signers_sublist L (sb u.header) u.validators u.commit,
     signers_signed L (sb u.header) u.validators u.commit, ?_⟩
-  rw [signers_power]
-  exact hq
+  · -- the CR carrier bites: any set encoding hashing to the header's commitment IS the set's
+    intro vs' h'
+    exact L.noCollision hcr _ _ (h'.trans hbind.symm)
+  · rw [signers_power]
+    exact hq
 
 /-- The empty / uninitialized update: zero header, NO validators, NO commit. -/
 def tmEmptyUpdate (d0 : L.Digest) : TmUpdate L :=
@@ -322,33 +342,40 @@ theorem tm_accept_binds_trust (ts : TmTrustedState L) (u : TmUpdate L)
   obtain ⟨h1, h2, _, _, _, h6, _, _⟩ := (tmVerify_eq_true_iff L sb enc ts u).mp h
   exact ⟨h1, h2, h6⟩
 
-/-- **THE HASH LEAF BITES (`hashCR`): the committed validator set is UNIQUE.** Any validator
-set whose encoding hashes to the trusted `nextValidatorsHash` has the SAME encoding as an
-accepted update's set — SHA-256 collision resistance is what makes the 32-byte epoch binding
-bind. Consumed exactly here, never assumed globally. -/
-theorem tm_committed_set_unique (ts : TmTrustedState L) (u : TmUpdate L)
+/-- **THE HASH LEAF BITES (the `hashCR` CARRIER): the committed validator set is UNIQUE.**
+GIVEN the CR carrier (`hcr : L.hashCR` — for the real chain the named SHA-256
+collision-resistance floor, an explicit hypothesis, NOT injectivity), any validator set whose
+encoding hashes to the trusted `nextValidatorsHash` has the SAME encoding as an accepted
+update's set — `L.noCollision hcr` is what makes the 32-byte epoch binding bind. The carrier
+is consumed exactly here, never assumed globally, and a collapsing hash refutes it
+(`demoCollapseLeaf_not_hashCR` below). -/
+theorem tm_committed_set_unique (hcr : L.hashCR) (ts : TmTrustedState L) (u : TmUpdate L)
     (h : tmVerify L sb enc ts u = true)
     (vs' : List (TmValidator L.PubKey))
     (h' : L.hash (enc vs') = ts.nextValidatorsHash) :
     enc vs' = enc u.validators := by
   obtain ⟨_, _, _, _, _, hepoch, _, _⟩ := (tmVerify_eq_true_iff L sb enc ts u).mp h
-  exact L.hashCR _ _ (h'.trans hepoch.symm)
+  exact L.noCollision hcr _ _ (h'.trans hepoch.symm)
 
 end Rules
 
 /-! ## §5 — The demo crypto leaf (the ed25519 + SHA-256 SLOT), proved like the foundation's toy.
 
 A real deployment replaces this with the ed25519 leaf whose `sigSound` is the named
-verified-library unforgeability assumption and the SHA-256 leaf whose `hashCR` is the named
-collision-resistance assumption (both VISIBLE as `CryptoLeaf` fields at the instance site —
-`#assert_axioms` cannot see hypothesis-carried assumptions, so they are documented here, not
-hidden). The demo PROVES both fields, keeping this file genuinely axiom-clean: registered keys
-are `pk < 100`, the toy MAC is `s = pk + m`, the hash is the identity. -/
+verified-library unforgeability assumption and the SHA-256 leaf whose `hashCR` CARRIER is the
+named collision-resistance assumption (both VISIBLE at the instance site — a structure field
+and a hypothesis are invisible to `#assert_axioms`, so they are documented here, not hidden).
+The demo PROVES both: `sigSound` outright and the CR carrier standalone (`demoLeaf_hashCR` —
+the `PortalFloor.Reference` pattern: the carrier is the genuine CR `Prop` over THIS leaf's own
+hash, NOT `True`), keeping this file genuinely axiom-clean: registered keys are `pk < 100`,
+the toy MAC is `s = pk + m`, the hash is the identity. A collapsing hash FALSIFIES the same
+carrier shape (`demoCollapseLeaf_not_hashCR`) — both polarities witnessed. -/
 
 /-- Demo signature verifier: `pk` is a registered key AND `s` is the toy MAC `pk + m`. -/
 def demoSigVerify (pk m s : Nat) : Bool := decide (pk < 100) && (s == pk + m)
 
-/-- Demo hash — the identity (the SHA-256 slot; `hashCR` is injectivity). -/
+/-- Demo hash — the identity (the SHA-256 slot; the `hashCR` CARRIER over it is genuine CR,
+provable here because the reference hash is collision-free). -/
 def demoHash (m : Nat) : Nat := m
 
 /-- Demo `Signed` denotation: a registered key (`pk < 100`) authorized the message. It
@@ -360,11 +387,10 @@ theorem demoSigSound (pk m s : Nat) (h : demoSigVerify pk m s = true) : demoSign
   simp only [demoSigVerify, Bool.and_eq_true, decide_eq_true_eq] at h
   exact h.1
 
-/-- The demo CR leaf, PROVED (the SHA-256 `hashCR` slot) — identity is injective. -/
-theorem demoHashCR (m₁ m₂ : Nat) (h : demoHash m₁ = demoHash m₂) : m₁ = m₂ := h
-
-/-- The demo `CryptoLeaf` — both soundness fields genuinely proved, so nothing below rests on
-an unproven crypto assumption; the real chain swaps in ed25519 + SHA-256 here. -/
+/-- The demo `CryptoLeaf` — `sigSound` genuinely proved and the `hashCR` CARRIER stated as the
+genuine CR `Prop` over `demoHash` (the SHA-256 CR slot; a real chain supplies the named
+SHA-256 collision-resistance assumption here), with `noCollision` its unpacking. Nothing below
+rests on an unproven crypto assumption; the real chain swaps in ed25519 + SHA-256 here. -/
 @[reducible] def demoLeaf : CryptoLeaf where
   PubKey := Nat
   Msg := Nat
@@ -374,7 +400,37 @@ an unproven crypto assumption; the real chain swaps in ed25519 + SHA-256 here. -
   hash := demoHash
   Signed := demoSigned
   sigSound := demoSigSound
-  hashCR := demoHashCR
+  hashCR := ∀ m₁ m₂, demoHash m₁ = demoHash m₂ → m₁ = m₂
+  noCollision := fun h => h
+
+/-- **The demo CR carrier HOLDS (positive polarity).** The reference identity hash is genuinely
+collision-free, so `demoLeaf.hashCR` is dischargeable — exactly as a real chain discharges it
+with a verified SHA-256 CR floor. Passed explicitly wherever the rules-layer theorems take
+`hcr : L.hashCR`. -/
+theorem demoLeaf_hashCR : demoLeaf.hashCR := fun _ _ h => h
+
+/-- A lawful demo leaf over a COLLAPSING hash (every message digests to `0`) — the same
+signature primitives and the same genuine-CR-Prop carrier SHAPE, stated over the collapsing
+hash. The interface admits it; only the carrier separates it from `demoLeaf`. -/
+@[reducible] def demoCollapseLeaf : CryptoLeaf where
+  PubKey := Nat
+  Msg := Nat
+  Sig := Nat
+  Digest := Nat
+  sigVerify := demoSigVerify
+  hash := fun _ => 0
+  Signed := demoSigned
+  sigSound := demoSigSound
+  hashCR := ∀ m₁ m₂ : Nat, (fun _ => (0 : Nat)) m₁ = (fun _ => (0 : Nat)) m₂ → m₁ = m₂
+  noCollision := fun h => h
+
+/-- **The collapsing demo leaf's CR carrier is FALSE (negative polarity — the badCompress
+falsifier).** `0 ≠ 1` yet their digests collide, so the carrier REFUTES a broken hash: it is a
+real discriminating hypothesis, not `True` in disguise. No `tmNoForgery` /
+`tm_committed_set_unique` conclusion is available over this leaf. -/
+theorem demoCollapseLeaf_not_hashCR : ¬ demoCollapseLeaf.hashCR := by
+  intro h
+  exact absurd (h 0 1 rfl) (by decide)
 
 instance : DecidableEq demoLeaf.Digest := inferInstanceAs (DecidableEq Nat)
 
@@ -491,10 +547,11 @@ theorem tm_gate_discriminates :
   refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩ <;> decide
 
 /-- **TRUE side of `TmForeignValid`.** The genuine update is foreign-valid: the full validator
-list is its own >2/3 genuine-signer witness (all keys registered). -/
+list is its own >2/3 genuine-signer witness (all keys registered), and the binding conjunct
+holds because the reference demo hash is collision-free. -/
 theorem tm_valid_holds :
     TmForeignValid demoLeaf demoSignBytes demoValSetEncode genuineUpdate :=
-  ⟨by decide, demoValidators, List.Sublist.refl _, by decide, by decide⟩
+  ⟨by decide, fun _vs' h => h, demoValidators, List.Sublist.refl _, by decide, by decide⟩
 
 /-- **FORGED-SIGNER DISCRIMINATOR on the validity predicate.** No update over the unregistered
 set (key 777) is foreign-valid: any sub-list with >2/3 of its power is non-empty, hence
@@ -502,7 +559,7 @@ contains key 777, and `Signed 777 _` (registered-key) is false. The crypto denot
 separates them. -/
 theorem tm_unregistered_signer_invalid :
     ¬ TmForeignValid demoLeaf demoSignBytes demoValSetEncode unregisteredUpdate := by
-  rintro ⟨_, S, hsub, hsigned, hq⟩
+  rintro ⟨_, _, S, hsub, hsigned, hq⟩
   cases S with
   | nil => simp [unregisteredUpdate, unregisteredValidators, totalPower] at hq
   | cons v S' =>
@@ -521,6 +578,18 @@ theorem tm_tampered_valhash_invalid :
   rintro ⟨hbind, _⟩
   exact absurd hbind (by decide)
 
+/-- **BINDING DISCRIMINATOR (the CR-carrier conjunct bites on its own).** The tampered
+header's claimed `validatorsHash` (999) also fails the UNIQUENESS conjunct independently: the
+foreign set `[⟨128, 6⟩]` encodes to exactly 999 (`1·97 + 128·7 + 6`) yet its encoding differs
+from `demoValidators`' — the conjunct `noCollision` discharges in `tmNoForgery` is not
+vacuously true. -/
+theorem tm_tampered_binding_fails :
+    ¬ (∀ vs' : List (TmValidator Nat),
+        demoHash (demoValSetEncode vs') = tamperedValHashHeader.validatorsHash →
+        demoValSetEncode vs' = demoValSetEncode demoValidators) := by
+  intro h
+  exact absurd (h [⟨128, 6⟩] (by decide)) (by decide)
+
 /-! ## §7 — The bundle + the `InterchainAdapter` composition: the finality hypothesis DISCHARGED.
 
 `tendermintClient` cannot exist without the three obligations — they are fields. `toAdapter`
@@ -531,8 +600,10 @@ PRODUCED, not assumed. The inclusion demo is the ICS-23 anchor: an app-state fac
 under a verified header. -/
 
 /-- **The Tendermint `ForeignLightClient`** — all three obligations discharged over the real
-rule set (§3-§4), instantiated at the demo leaf. `nonVacuous` is witnessed by the genuine
-3-of-3 update vs the exactly-2/3 sub-quorum update under the SAME trusted state. -/
+rule set (§3-§4), instantiated at the demo leaf. `noForgery` has the foundation's honest
+shape `leaf.hashCR → NoForgery …` — the CR carrier is the explicit hypothesis `tmNoForgery`
+consumes. `nonVacuous` is witnessed by the genuine 3-of-3 update vs the exactly-2/3
+sub-quorum update under the SAME trusted state. -/
 def tendermintClient : ForeignLightClient where
   leaf := demoLeaf
   Update := TmUpdate demoLeaf
@@ -556,14 +627,17 @@ def tmAdapter : Metatheory.Bridge.InterchainAdapter (TmUpdate demoLeaf) Nat :=
 
 /-- **END-TO-END DISCHARGE.** The adapter ACCEPTS the genuine app-state fact (4242 under the
 genuine verified header), and that acceptance ENTAILS a foreign-VALID update including it —
-the `InterchainAdapter` finality hypothesis is produced by the verified Tendermint rules. -/
+the `InterchainAdapter` finality hypothesis is produced by the verified Tendermint rules,
+with the CR carrier discharged by `demoLeaf_hashCR` (a real chain passes its named SHA-256
+CR floor here). -/
 theorem tm_adapter_accepts_and_discharges :
     tmAdapter.accepts 4242
     ∧ ∃ u, TmForeignValid demoLeaf demoSignBytes demoValSetEncode u ∧ tmIncl 4242 u := by
   have hacc : tmAdapter.accepts 4242 :=
     ⟨genuineUpdate,
       (by decide : tendermintClient.verify ts0 genuineUpdate = true), rfl⟩
-  exact ⟨hacc, toAdapter_accepts_entails_valid tendermintClient ts0 tmIncl 4242 hacc⟩
+  exact ⟨hacc,
+    toAdapter_accepts_entails_valid tendermintClient demoLeaf_hashCR ts0 tmIncl 4242 hacc⟩
 
 /-- **The empty update is rejected at the adapter boundary** — `FailClosed`, lifted. -/
 theorem tm_adapter_rejects_empty :
@@ -585,10 +659,14 @@ theorem tm_adapter_rejects_empty :
 #guard demoSigVerify 1 42 43 == true
 #guard demoSigVerify 777 42 819 == false
 
-/-! ## §8 — Axiom hygiene: every theorem kernel-clean. The demo leaf is PROVED, so nothing here
-rests on an unproven crypto assumption. A REAL deployment's `noForgery` rests on its VISIBLE,
-named `leaf.sigSound` (ed25519) / `leaf.hashCR` (SHA-256) fields — carried as hypotheses,
-which `#assert_axioms` cannot see, hence declared in this header, not hidden. -/
+/-! ## §8 — Axiom hygiene: every theorem kernel-clean. The demo leaf is PROVED — `sigSound`
+outright and the CR CARRIER standalone (`demoLeaf_hashCR`) — so nothing here rests on an
+unproven crypto assumption. A REAL deployment's `noForgery` rests on its VISIBLE, named
+`leaf.sigSound` (ed25519) field and takes `leaf.hashCR` (the named SHA-256
+collision-resistance floor) as its explicit CR hypothesis — a structure field and a
+hypothesis, which `#assert_axioms` cannot see, hence declared in this header, not hidden.
+The both-polarity pins (`demoLeaf_hashCR` / `demoCollapseLeaf_not_hashCR`) prove the carrier
+is a real discriminating hypothesis, not `True` in disguise. -/
 
 #assert_axioms signers_sublist
 #assert_axioms signers_signed
@@ -602,10 +680,13 @@ which `#assert_axioms` cannot see, hence declared in this header, not hidden. -/
 #assert_axioms tm_chain_mismatch_rejected
 #assert_axioms tm_accept_binds_trust
 #assert_axioms tm_committed_set_unique
+#assert_axioms demoLeaf_hashCR
+#assert_axioms demoCollapseLeaf_not_hashCR
 #assert_axioms tm_gate_discriminates
 #assert_axioms tm_valid_holds
 #assert_axioms tm_unregistered_signer_invalid
 #assert_axioms tm_tampered_valhash_invalid
+#assert_axioms tm_tampered_binding_fails
 #assert_axioms tendermintClient
 #assert_axioms tm_adapter_accepts_and_discharges
 #assert_axioms tm_adapter_rejects_empty

@@ -25,16 +25,24 @@ TWO LAYERS, kept honest:
 
   * RULES (this file, proven): the two-tier path walk, the hash-derived keys, the account→
     storageHash binding, the exact-value check, the zero floor, fail-closed on everything else.
-  * CRYPTO (ONE leaf): **keccak256 collision resistance** — `hashCR : hash m₁ = hash m₂ →
-    m₁ = m₂`, the foundation's `CryptoLeaf.hashCR` field. There is NO signature in this client
-    (the `state_root`'s finality is the UPSTREAM sync-committee client's job; this lane's
-    `CryptoLeaf.sigVerify` is the constant-`false` verifier, so its `sigSound` is vacuously
-    proven and carries nothing). Every general theorem below takes the hash `H` and (where
-    binding is needed) the CR fact `hCR` as EXPLICIT hypotheses — the assumption is visible at
-    every use site, never a global axiom, never a laundered `def`. The shipped instance plugs
-    `toyKeccak` (an injective model hash, injectivity PROVEN) so this file is genuinely
-    axiom-clean; a production instance swaps in EverCrypt-realized keccak256 with `hashCR` as
-    its single named library assumption, and ALL the theorems here apply unchanged.
+  * CRYPTO (ONE leaf): **keccak256 collision resistance as a CARRIER** — the foundation's
+    `CryptoLeaf.hashCR : Prop` (the named CR floor: MPT node hashing is keccak256) plus
+    `noCollision : hashCR → (hash m₁ = hash m₂ → m₁ = m₂)`, mirroring
+    `Dregg2.Crypto.PortalFloor.Blake3Kernel` (`Crypto/PortalFloor.lean:178-185`). NOT
+    unconditional injectivity — that is pigeonhole-FALSE for the real compressing keccak256
+    (collisions exist); injectivity here holds only RELATIVE to the carrier. There is NO
+    signature in this client (the `state_root`'s finality is the UPSTREAM sync-committee
+    client's job; this lane's `CryptoLeaf.sigVerify` is the constant-`false` verifier, so its
+    `sigSound` is vacuously proven and carries nothing). Every general theorem below takes the
+    hash `H` and (where binding is needed) the unpacked CR fact `hCR` — exactly what
+    `leaf.noCollision hcr` yields GIVEN the carrier — as EXPLICIT hypotheses: the assumption is
+    visible at every use site, never a global axiom, never a laundered `def`. The shipped
+    instance's carrier is the genuine CR `Prop` over `toyKeccak` (an injective model hash), so
+    the carrier is PROVED (`mptLeaf_hashCR`) and this file is genuinely axiom-clean; the
+    collapsing keccak FALSIFIES the same carrier shape (`mptCollapseLeaf_not_hashCR` — both
+    polarities witnessed). A production instance swaps in EverCrypt-realized keccak256 with the
+    carrier discharged by its single named keccak256-CR library assumption, and ALL the
+    theorems here apply unchanged.
 
 MODELING FIDELITY (stated, not hidden): bytes are `Nat`s and byte-strings `List Nat`; the RLP
 node/account encodings are modeled by `encodeNode`/`encAccount`, whose INJECTIVITY — RLP's
@@ -306,14 +314,19 @@ def mptVerify (H : List Nat → Nat) (ts : MptState) (u : MptUpdate) : Bool :=
 
 /-- **ForeignValid** — the chain's OWN validity notion for a claimed holding, stated in the
 DENOTATION (no proof chains mentioned): the balance is nonzero, the claimed account is
-genuinely committed at the token's hashed key under the carried state root, and the claimed
-balance is genuinely committed at the holder's derived slot under that account's storageHash.
-"A proven balance is genuinely committed under the state root at the right contract/slot." -/
+genuinely committed at the token's hashed key under the carried state root, the claimed
+balance is genuinely committed at the holder's derived slot under that account's storageHash,
+AND the slot BINDS — no other balance is committed at that slot. "A proven balance is THE
+balance committed under the state root at the right contract/slot." The binding conjunct is
+exactly what the keccak-CR carrier buys (`commits_binding`); it is where `noCollision hcr` is
+consumed in `mpt_noForgery` — the CR hypothesis is load-bearing, not decorative. -/
 def MptForeignValid (H : List Nat → Nat) (u : MptUpdate) : Prop :=
   u.claimedBalance ≠ 0
     ∧ Commits H u.stateRoot (accountPath H u.token) (encAccount u.account)
     ∧ Commits H u.account.storageHash (storagePath H u.holder u.mappingSlot)
         (encBalance u.claimedBalance)
+    ∧ (∀ b, Commits H u.account.storageHash (storagePath H u.holder u.mappingSlot)
+        (encBalance b) → b = u.claimedBalance)
 
 /-- The empty / uninitialized update — the Nomad-law fail-closed probe. -/
 def mptEmptyUpdate : MptUpdate :=
@@ -323,24 +336,32 @@ def mptEmptyUpdate : MptUpdate :=
 /-! ## §4 — The three obligations, DISCHARGED (parametric in the hash, so a real keccak
 instance reuses these proofs verbatim). -/
 
-/-- **NO FORGERY.** `mptVerify` accepts ⟹ the holding is genuinely committed: both tiers land
-in the `Commits` denotation via `verifyPath_sound`, and the zero floor transfers. -/
-theorem mpt_noForgery (H : List Nat → Nat) :
+/-- **NO FORGERY — GIVEN the CR floor.** `mptVerify` accepts ⟹ the holding is genuinely
+committed AND binding: both tiers land in the `Commits` denotation via `verifyPath_sound` (no
+crypto needed — each check establishes its own hash link), the zero floor transfers, and the
+slot-BINDING conjunct is discharged by `commits_binding`, CONSUMING `hCR` — the unpacked CR
+carrier (`leaf.noCollision hcr`), the explicit hypothesis that replaced the old unconditional
+injectivity. A chain whose hash collapses gets NO no-forgery guarantee: the honest shape. -/
+theorem mpt_noForgery (H : List Nat → Nat)
+    (hCR : ∀ m₁ m₂, H m₁ = H m₂ → m₁ = m₂) :
     NoForgery (mptVerify H) (MptForeignValid H) := by
   intro ts u h
   simp only [mptVerify, Bool.and_eq_true, bne_iff_ne] at h
   obtain ⟨⟨⟨⟨⟨hnz, _⟩, _⟩, _⟩, hacct⟩, hstor⟩ := h
-  exact ⟨hnz, verifyPath_sound H _ _ _ _ hacct, verifyPath_sound H _ _ _ _ hstor⟩
+  have hstorC := verifyPath_sound H _ _ _ _ hstor
+  exact ⟨hnz, verifyPath_sound H _ _ _ _ hacct, hstorC,
+    fun b hb => encBalance_injective (commits_binding H hCR hb hstorC rfl rfl)⟩
 
 /-- **NO FORGERY, ANCHORED.** Acceptance additionally pins the update's carried anchor to the
 TRUSTED state: the committed-under root IS `ts.stateRoot`, the contract IS `ts.token`, the
 slot IS `ts.mappingSlot` — the full "committed under the verified state root at the right
 contract/slot" statement. -/
-theorem mpt_noForgery_anchored (H : List Nat → Nat) (ts : MptState) (u : MptUpdate)
+theorem mpt_noForgery_anchored (H : List Nat → Nat)
+    (hCR : ∀ m₁ m₂, H m₁ = H m₂ → m₁ = m₂) (ts : MptState) (u : MptUpdate)
     (h : mptVerify H ts u = true) :
     u.stateRoot = ts.stateRoot ∧ u.token = ts.token ∧ u.mappingSlot = ts.mappingSlot
       ∧ MptForeignValid H u := by
-  have hv := mpt_noForgery H ts u h
+  have hv := mpt_noForgery H hCR ts u h
   simp only [mptVerify, Bool.and_eq_true, bne_iff_ne, beq_iff_eq] at h
   obtain ⟨⟨⟨⟨⟨_, hroot⟩, htok⟩, hslot⟩, _⟩, _⟩ := h
   exact ⟨hroot, htok, hslot, hv⟩
@@ -350,15 +371,17 @@ provable balance: two accepted updates for the same holder agree. The proof cons
 through both tiers — account binding pins the account (hence `storageHash`,
 `encAccount_injective`), then storage binding pins the balance. Forging a different balance
 for a committed holder REQUIRES a keccak collision. This is the honest form of the crypto
-leaf: an explicit hypothesis, discharged by collision resistance of the real keccak256. -/
+leaf: `hCR` is the UNPACKED CR CARRIER — a per-chain instance supplies it as
+`leaf.noCollision hcr` given `hcr : leaf.hashCR`, the named keccak256-CR floor assumption
+(see `mptLeaf_balance_binding` below), NEVER as unconditional injectivity. -/
 theorem mpt_balance_binding (H : List Nat → Nat)
     (hCR : ∀ m₁ m₂, H m₁ = H m₂ → m₁ = m₂)
     (ts : MptState) (u₁ u₂ : MptUpdate)
     (h₁ : mptVerify H ts u₁ = true) (h₂ : mptVerify H ts u₂ = true)
     (hholder : u₁.holder = u₂.holder) :
     u₁.claimedBalance = u₂.claimedBalance := by
-  obtain ⟨hr₁, ht₁, hs₁, _, hacct₁, hstor₁⟩ := mpt_noForgery_anchored H ts u₁ h₁
-  obtain ⟨hr₂, ht₂, hs₂, _, hacct₂, hstor₂⟩ := mpt_noForgery_anchored H ts u₂ h₂
+  obtain ⟨hr₁, ht₁, hs₁, _, hacct₁, hstor₁, _⟩ := mpt_noForgery_anchored H hCR ts u₁ h₁
+  obtain ⟨hr₂, ht₂, hs₂, _, hacct₂, hstor₂, _⟩ := mpt_noForgery_anchored H hCR ts u₂ h₂
   -- Tier 1: same root (both = ts.stateRoot), same account path (both tokens = ts.token)
   -- ⟹ the committed account values agree ⟹ the accounts agree (encoding injective).
   have hAccEnc : encAccount u₁.account = encAccount u₂.account :=
@@ -380,18 +403,22 @@ theorem mpt_failClosed (H : List Nat → Nat) :
   intro ts
   simp [mptVerify, mptEmptyUpdate]
 
-/-! ## §5 — The model keccak leaf (injectivity PROVEN ⇒ this file is axiom-clean), and the
-concrete two-tier example trie the discriminators run on. -/
+/-! ## §5 — The model keccak leaf (the CR CARRIER, PROVED ⇒ this file is axiom-clean), the
+collapsing-keccak FALSIFIER (both polarities), and the concrete two-tier example trie the
+discriminators run on. -/
 
 /-- The model keccak: an injective `List Nat → Nat` fold over `Nat.pair` (with `+1` separating
 every cons from `nil`). Kernel-computable, so the discriminators run by `decide`. A production
-instance replaces this with EverCrypt-realized keccak256, carrying `hashCR` as its ONE named
-assumption; every §4 theorem applies to it verbatim (they take `H`/`hCR` as hypotheses). -/
+instance replaces this with EverCrypt-realized keccak256, discharging the `hashCR` CARRIER by
+its ONE named CR assumption; every §4 theorem applies to it verbatim (they take `H` and the
+unpacked carrier `hCR` as hypotheses). -/
 def toyKeccak : List Nat → Nat
   | [] => 0
   | a :: rest => Nat.pair a (toyKeccak rest) + 1
 
-/-- **The CR leaf, PROVED for the model hash** — exactly the `CryptoLeaf.hashCR` shape. -/
+/-- The model hash is injective outright — which is exactly why it can DISCHARGE the CR
+carrier (`mptLeaf_hashCR` below). A real keccak256 cannot be injective (pigeonhole); it
+discharges the same carrier by the named CR floor instead. -/
 theorem toyKeccak_injective : ∀ m₁ m₂, toyKeccak m₁ = toyKeccak m₂ → m₁ = m₂ := by
   intro m₁
   induction m₁ with
@@ -408,8 +435,11 @@ theorem toyKeccak_injective : ∀ m₁ m₂, toyKeccak m₁ = toyKeccak m₂ →
 /-- **The `CryptoLeaf` for this lane** — keccak CR is the ONLY live crypto assumption. The
 signature slot is the constant-`false` verifier (an EVM inclusion proof carries NO signature;
 finality of the state root is the upstream sync-committee client's leaf), so `sigSound` is
-vacuously proven and can carry nothing. `hash`/`hashCR` are the model keccak and its PROVEN
-injectivity — the field a production instance swaps for keccak256 + its named CR assumption. -/
+vacuously proven and can carry nothing. The `hashCR` CARRIER is the genuine CR `Prop` over
+THIS leaf's own hash (the `PortalFloor.Reference` pattern) — NOT `True`; it is dischargeable
+here (`mptLeaf_hashCR`, the model keccak is injective) and the SAME shape is FALSE for a
+collapsing hash (`mptCollapseLeaf_not_hashCR`). A production instance swaps `hash` for
+keccak256 and discharges the carrier by the named keccak256-CR library assumption. -/
 def mptLeaf : CryptoLeaf where
   PubKey := Unit
   Msg := List Nat
@@ -419,7 +449,40 @@ def mptLeaf : CryptoLeaf where
   hash := toyKeccak
   Signed := fun _ _ => False
   sigSound := fun _ _ _ h => by simp at h
-  hashCR := fun m₁ m₂ h => toyKeccak_injective m₁ m₂ h
+  hashCR := ∀ m₁ m₂, toyKeccak m₁ = toyKeccak m₂ → m₁ = m₂
+  noCollision := fun h => h
+
+/-- **The CR carrier HOLDS for the model leaf (positive polarity).** This is THE DISCHARGE: a
+standalone proof of `mptLeaf.hashCR`, passed wherever the foundation demands the carrier
+(`noForgery`, the adapter discharge). A production instance's analogue is its named
+keccak256-CR floor assumption. -/
+theorem mptLeaf_hashCR : mptLeaf.hashCR := toyKeccak_injective
+
+/-- The collapsing keccak — every node encoding digests to `0` (the badCompress falsifier). -/
+def collapseKeccak (_ : List Nat) : Nat := 0
+
+/-- A lawful `CryptoLeaf` over the COLLAPSING hash: same signature primitives, same genuine-CR
+`Prop` carrier SHAPE, stated over `collapseKeccak`. The interface admits it — only the carrier
+separates it from the sound leaf. -/
+def mptCollapseLeaf : CryptoLeaf where
+  PubKey := Unit
+  Msg := List Nat
+  Sig := Unit
+  Digest := Nat
+  sigVerify := fun _ _ _ => false
+  hash := collapseKeccak
+  Signed := fun _ _ => False
+  sigSound := fun _ _ _ h => by simp at h
+  hashCR := ∀ m₁ m₂, collapseKeccak m₁ = collapseKeccak m₂ → m₁ = m₂
+  noCollision := fun h => h
+
+/-- **The collapsing leaf's carrier is FALSE (negative polarity).** `[] ≠ [0]` yet their
+digests collide, so NO binding/no-forgery conclusion is available over a collapsed MPT hash —
+the carrier is a real discriminating hypothesis, not `True` in disguise. Both polarities
+witnessed: `mptLeaf_hashCR` holds, this fails. -/
+theorem mptCollapseLeaf_not_hashCR : ¬ mptCollapseLeaf.hashCR := by
+  intro h
+  exact absurd (h [] [0] rfl) (by decide)
 
 -- The concrete two-tier example: token 1, holder 2, mapping slot 0, balance 5.
 -- Storage tier exercises a BRANCH step (the derived storage path starts with nibble 9).
@@ -498,8 +561,11 @@ theorem mpt_zero_balance_refused :
 /-! ## §7 — The bundled `ForeignLightClient` instance, and the InterchainAdapter discharge. -/
 
 /-- **The EVM-state-inclusion `ForeignLightClient`.** All three obligations are the §4/§5
-theorems; the leaf is `mptLeaf` (keccak CR the only live assumption, PROVEN for the model
-hash). A production instance changes exactly one thing: the hash + its named CR discharge. -/
+theorems; the leaf is `mptLeaf` (the keccak-CR CARRIER the only live assumption, PROVEN for
+the model hash). The `noForgery` field has the foundation's shape `leaf.hashCR → NoForgery …`:
+it UNPACKS the carrier — `mptLeaf.noCollision hcr` — and feeds it to `mpt_noForgery` exactly
+where the old unconditional injectivity used to sit. A production instance changes exactly one
+thing: the hash + the named CR discharge of its carrier. -/
 def mptClient : ForeignLightClient where
   leaf := mptLeaf
   Update := MptUpdate
@@ -507,9 +573,22 @@ def mptClient : ForeignLightClient where
   ForeignValid := MptForeignValid toyKeccak
   verify := mptVerify toyKeccak
   emptyUpdate := mptEmptyUpdate
-  noForgery := mpt_noForgery toyKeccak
+  noForgery := fun hcr => mpt_noForgery toyKeccak (mptLeaf.noCollision hcr)
   failClosed := mpt_failClosed toyKeccak
   nonVacuous := mpt_nonVacuous
+
+/-- **Balance binding, at the leaf (the carrier route, showcased).** The §4 binding theorem
+consumed `hCR` as a hypothesis; HERE is where a bundled instance discharges it: given the
+carrier `hcr : mptLeaf.hashCR` (proved for the model leaf by `mptLeaf_hashCR`; supplied as the
+named keccak256-CR floor in production), `mptLeaf.noCollision hcr` yields the unpacked CR fact
+and the two-tier binding follows. One trusted state, one holder, ONE balance — GIVEN the CR
+floor, never unconditionally. -/
+theorem mptLeaf_balance_binding (hcr : mptLeaf.hashCR)
+    (ts : MptState) (u₁ u₂ : MptUpdate)
+    (h₁ : mptVerify toyKeccak ts u₁ = true) (h₂ : mptVerify toyKeccak ts u₂ = true)
+    (hholder : u₁.holder = u₂.holder) :
+    u₁.claimedBalance = u₂.claimedBalance :=
+  mpt_balance_binding toyKeccak (mptLeaf.noCollision hcr) ts u₁ u₂ h₁ h₂ hholder
 
 /-- The inclusion relation for the adapter: the cross-chain EVENT "holder `ev.1` holds
 `ev.2`" is included in an update that claims exactly that. -/
@@ -524,13 +603,16 @@ def mptAdapter : Metatheory.Bridge.InterchainAdapter MptUpdate (Nat × Nat) :=
 
 /-- **END-TO-END DISCHARGE.** The adapter ACCEPTS the genuine holding event `(holder 2, 5)`,
 and that acceptance ENTAILS a foreign-VALID update including it (`NoForgery` through
-`toAdapter_accepts_entails_valid`) — proof-of-holding, discharged to the denotation. -/
+`toAdapter_accepts_entails_valid`, which now takes the CR CARRIER as its explicit second
+argument — discharged here by `mptLeaf_hashCR`) — proof-of-holding, discharged to the
+denotation GIVEN the keccak-CR floor. -/
 theorem mpt_adapter_accepts_and_discharges :
     mptAdapter.accepts (2, 5)
     ∧ ∃ u, MptForeignValid toyKeccak u ∧ mptIncl (2, 5) u := by
   have hacc : mptAdapter.accepts (2, 5) :=
     ⟨exUpdate, (by decide : mptVerify toyKeccak exState exUpdate = true), rfl, rfl⟩
-  exact ⟨hacc, toAdapter_accepts_entails_valid mptClient exState mptIncl (2, 5) hacc⟩
+  exact ⟨hacc,
+    toAdapter_accepts_entails_valid mptClient mptLeaf_hashCR exState mptIncl (2, 5) hacc⟩
 
 /-- **The empty update is rejected at the adapter boundary** — `FailClosed`, lifted. -/
 theorem mpt_adapter_rejects_empty : ¬ mptAdapter.foreignFinal mptClient.emptyUpdate :=
@@ -545,16 +627,19 @@ theorem mpt_adapter_rejects_empty : ¬ mptAdapter.foreignFinal mptClient.emptyUp
 #guard mptVerify toyKeccak exState mptEmptyUpdate == false
 #guard mptVerify toyKeccak exZeroState exZeroUpdate == false
 
-/-! ## §8 — Axiom hygiene: every theorem kernel-clean. The model leaf is PROVED
-(`toyKeccak_injective`), so nothing rests on an unproven crypto assumption; a production
-instance's `noForgery`/`binding` would rest on its VISIBLE, NAMED `hashCR` hypothesis —
-invisible to `#assert_axioms` by design, which is why it is an explicit structure field /
-theorem hypothesis an auditor reads at the instance site. -/
+/-! ## §8 — Axiom hygiene: every theorem kernel-clean. The model leaf's CR CARRIER is PROVED
+(`mptLeaf_hashCR`, via `toyKeccak_injective`), so nothing here rests on an unproven crypto
+assumption; a production instance's `noForgery`/`binding` would rest on its VISIBLE, NAMED
+keccak256-CR discharge of the carrier — a structure field / theorem hypothesis is invisible to
+`#assert_axioms` by design, which is why the carrier is an explicit `Prop` an auditor reads at
+the instance site. The both-polarity pins (`mptLeaf_hashCR` / `mptCollapseLeaf_not_hashCR`)
+prove the carrier is a real discriminating hypothesis, not `True` in disguise. -/
 
 #assert_all_clean [encOpt_injective, map_encOpt_injective, encodeNode_injective,
   verifyPath_sound, commits_binding, encAccount_injective, encBalance_injective,
   mpt_noForgery, mpt_noForgery_anchored, mpt_balance_binding, mpt_failClosed,
-  toyKeccak_injective, mpt_nonVacuous, mpt_gate_discriminates,
+  toyKeccak_injective, mptLeaf_hashCR, mptCollapseLeaf_not_hashCR, mptLeaf_balance_binding,
+  mpt_nonVacuous, mpt_gate_discriminates,
   mpt_wrong_contract_path_rejected, mpt_zero_balance_refused,
   mpt_adapter_accepts_and_discharges, mpt_adapter_rejects_empty]
 

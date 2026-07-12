@@ -41,17 +41,27 @@ TWO LAYERS, kept distinct + honest:
         NOT say "the update is valid". Discharged in production by `blst` (the audited
         library every ETH consensus client uses — `lib.rs:210-260`) / an EverCrypt-style
         verified realization.
-      - `hashPairCR` : SHA-256 collision resistance on the SSZ pair-hash
-        `hash(a ‖ b)` (`ssz.rs:16-26`) — equal digests pin equal children, which is what
-        makes a reconstructed Merkle branch BINDING (`finalized_header_binding` below).
-      - `uChunkInj` : injectivity of the SSZ little-endian `uint64` chunk encoding
-        (`ssz.rs:54-60`) — spec-level (true of any real encoding), needed so a header's
-        root pins its `slot`/`proposer_index` too.
+      - `hashPairCR` : the SHA-256 collision-resistance CARRIER (a `Prop`, mirroring
+        `Dregg2.Crypto.PortalFloor.Blake3Kernel.collisionHard`, `Crypto/PortalFloor.lean:178-185`)
+        on the SSZ pair-hash `hash(a ‖ b)` (`ssz.rs:16-26`), unpacked by `noPairCollision`:
+        GIVEN the CR floor, equal digests pin equal children — which is what makes a
+        reconstructed Merkle branch BINDING (`finalized_header_binding` below). NOT stated
+        as unconditional injectivity: that is pigeonhole-UNSATISFIABLE for the real
+        compressing `SHA-256 : 64 bytes → 32 bytes` (collisions EXIST; only a toy
+        injective hash could discharge it). Injectivity holds RELATIVE to the carrier.
+      - `uChunkInj` : the SSZ little-endian `uint64`-chunk-encoding injectivity CARRIER
+        (`ssz.rs:54-60`), unpacked by `noChunkCollision` — spec-level (true of the real
+        encoding on the `u64` domain), given the SAME carrier treatment so no
+        unconditional injectivity law over all of `Nat` is smuggled in; needed so a
+        header's root pins its `slot`/`proposer_index` too.
     All three are EXPLICIT VISIBLE STRUCTURE FIELDS supplied at the instance site — never
     a global `axiom`, never a laundered `def FooValid` hidden hypothesis. The `modelLeaf`
-    instance below PROVES all three (a perfectly-binding model realization), so this file
-    is genuinely axiom-clean end-to-end and the leaves demonstrably do not trivialize the
-    theorems (`eth_forged_committee_invalid` shows `SignedAll` discriminates).
+    instance below PROVES all three (a perfectly-binding model realization —
+    `modelLeaf_hashPairCR` / `modelLeaf_uChunkInj` discharge the carriers standalone), so
+    this file is genuinely axiom-clean end-to-end and the leaves demonstrably do not
+    trivialize the theorems (`eth_forged_committee_invalid` shows `SignedAll`
+    discriminates; `collapseEthLeaf_not_hashPairCR` / `collapseEthLeaf_not_uChunkInj` show
+    a collapsing hash/encoding REFUTES the carriers — both polarities witnessed).
 
 The DOMAIN (`compute_domain`, `lib.rs:182-188`: fork version + genesis validators root →
 a 32-byte domain) is trusted-CONFIG data, not adversary-controlled per-update input, so it
@@ -107,13 +117,24 @@ structure EthLeaf where
   blsSound : ∀ pks m s, blsAggVerify pks m s = true → SignedAll pks m
   /-- The SSZ pair hash `SHA-256(a ‖ b)` (`ssz.rs:16-26`). Opaque. -/
   hashPair : Digest → Digest → Digest
-  /-- **THE SHA-256 CR LEAF (named, minimal).** Equal pair-hashes pin equal children —
-  collision resistance, which makes Merkle reconstruction BINDING. -/
-  hashPairCR : ∀ {a b c d : Digest}, hashPair a b = hashPair c d → a = c ∧ b = d
+  /-- **CARRIER — THE SHA-256 CR LEAF (named, minimal).** A `Prop`, NOT idealized
+  injectivity (which is pigeonhole-false for the compressing SHA-256). Mirrors
+  `PortalFloor.Blake3Kernel.collisionHard` (`Crypto/PortalFloor.lean:181-182`): a
+  production instance supplies the named SHA-256 CR assumption here; the model PROVES it
+  (`modelLeaf_hashPairCR`); a collapsing hash REFUTES it (`collapseEthLeaf_not_hashPairCR`). -/
+  hashPairCR : Prop
+  /-- The CR carrier unpacked (mirrors `Blake3Kernel.noCollision`): GIVEN the CR floor,
+  equal pair-hashes pin equal children — which makes Merkle reconstruction BINDING. -/
+  noPairCollision : hashPairCR → ∀ a b c d : Digest, hashPair a b = hashPair c d → a = c ∧ b = d
   /-- The SSZ `uint64` chunk encoding (little-endian right-padded, `ssz.rs:54-60`). -/
   uChunk : Nat → Digest
-  /-- SSZ `uint64`-chunk injectivity (spec-level: any real encoding is injective). -/
-  uChunkInj : ∀ {a b : Nat}, uChunk a = uChunk b → a = b
+  /-- **CARRIER — SSZ `uint64`-chunk injectivity** (spec-level: true of the real encoding
+  on the `u64` domain — but a CARRIER all the same, so no unconditional injectivity law
+  over all of `Nat` is smuggled in; refutable by a collapsing encoding,
+  `collapseEthLeaf_not_uChunkInj`). -/
+  uChunkInj : Prop
+  /-- The chunk carrier unpacked: GIVEN the encoding floor, equal chunks pin equal values. -/
+  noChunkCollision : uChunkInj → ∀ a b : Nat, uChunk a = uChunk b → a = b
   /-- The all-zero 32-byte chunk (SSZ merkleize padding, `ssz.rs:33-52`). -/
   zeroChunk : Digest
   /-- The all-zero (uninitialized) signature — the fail-closed probe's signature slot. -/
@@ -128,11 +149,29 @@ theorem EthLeaf.beq_iff (L : EthLeaf) {a b : L.Digest} : L.beq a b = true ↔ a 
   unfold EthLeaf.beq
   exact decide_eq_true_iff
 
+/-- **`EthLeaf.pair_inj` (the floor theorem shape; mirrors `CryptoLeaf.hash_inj` /
+`blake3_floor_cr`).** GIVEN the SHA-256 CR carrier, a pair-hash equality pins both
+children. The carrier is an explicit hypothesis — visible at every use site, never
+smuggled. -/
+theorem EthLeaf.pair_inj (L : EthLeaf) (hcr : L.hashPairCR) {a b c d : L.Digest}
+    (h : L.hashPair a b = L.hashPair c d) : a = c ∧ b = d :=
+  L.noPairCollision hcr a b c d h
+
+/-- **`EthLeaf.chunk_inj`.** GIVEN the chunk-encoding carrier, equal `uint64` chunks pin
+equal values. -/
+theorem EthLeaf.chunk_inj (L : EthLeaf) (hinj : L.uChunkInj) {a b : Nat}
+    (h : L.uChunk a = L.uChunk b) : a = b :=
+  L.noChunkCollision hinj a b h
+
 /-- Package an `EthLeaf` as the foundation's `CryptoLeaf`: the signer set is the pubkey
 LIST, the signed `Msg` is the SSZ `SigningData` pair `(object_root, domain)`, and the
 leaf's `hash` of that pair IS the signing root (`lib.rs:192-201`) — so `sigVerify` is
-exactly "BLS-aggregate-verify over the signing root". `sigSound`/`hashCR` come straight
-from `blsSound`/`hashPairCR`: the foundation leaf is the SAME assumption, repackaged. -/
+exactly "BLS-aggregate-verify over the signing root". `sigSound` comes straight from
+`blsSound`, and the foundation's `hashCR` CARRIER is the conjunction of THIS chain's two
+hash-fact carriers (`hashPairCR ∧ uChunkInj` — the Ethereum hash floor as ONE named
+hypothesis, which is exactly what the foundation's `noForgery : leaf.hashCR → …`
+threads); `noCollision` consumes only the pair-CR half. The foundation leaf is the SAME
+assumption, repackaged. -/
 def EthLeaf.toCryptoLeaf (L : EthLeaf) : CryptoLeaf where
   PubKey := List L.PubKey
   Msg := L.Digest × L.Digest
@@ -142,8 +181,9 @@ def EthLeaf.toCryptoLeaf (L : EthLeaf) : CryptoLeaf where
   hash := fun m => L.hashPair m.1 m.2
   Signed := fun pks m => L.SignedAll pks (L.hashPair m.1 m.2)
   sigSound := fun pks m s h => L.blsSound pks (L.hashPair m.1 m.2) s h
-  hashCR := fun m₁ m₂ h => by
-    obtain ⟨h1, h2⟩ := L.hashPairCR h
+  hashCR := L.hashPairCR ∧ L.uChunkInj
+  noCollision := fun hcr m₁ m₂ h => by
+    obtain ⟨h1, h2⟩ := L.pair_inj hcr.1 h
     cases m₁; cases m₂; cases h1; cases h2; rfl
 
 /-! ## §2 — Spec constants (`lib.rs:43-60`, `finality.rs:36-45`, `execution.rs:26-31`). -/
@@ -378,12 +418,14 @@ trusted committee/domain `ts`:
   * `finalityDepth`/`finalityCommits` — the finality branch has a legal depth (6 | 7) and
     reconstructs the finalized beacon header's root into the attested `state_root` at
     subtree index 41 (the attested state COMMITS the finalized header);
+  * `finalityBinds` — the commitment is BINDING: NO other finalized header opens the
+    attested state root through a same-depth branch. This conjunct is exactly what the
+    SHA-256 CR carrier buys (`noPairCollision`/`noChunkCollision` consumed, via
+    `reconstruct_binding` + `htrHeader_inj`, in `eth_no_forgery`) — and exactly what a
+    collapsing hash LOSES (`collapse_finality_not_binding`);
   * `executionDepth`/`executionCommits` — the depth-4 execution branch reconstructs the
     execution payload root into the finalized `body_root` (the finalized header COMMITS
-    the EVM `state_root`).
-
-By `hashPairCR` these commitments are BINDING (`finalized_header_binding`): the attested
-root pins ONE finalized header, so acceptance cannot be equivocated to a different one. -/
+    the EVM `state_root`). -/
 structure EthValidAt (L : EthLeaf) (ts : EthState L) (u : LightClientUpdate L) : Prop where
   quorumSigned :
     ∃ ps : List L.PubKey,
@@ -396,6 +438,11 @@ structure EthValidAt (L : EthLeaf) (ts : EthState L) (u : LightClientUpdate L) :
   finalityCommits :
     reconstruct L (htrHeader L u.finalizedHeader.beacon) u.finalityBranch
       finalizedRootSubtreeIndex = u.attestedHeader.stateRoot
+  finalityBinds :
+    ∀ (f : BeaconBlockHeader L) (b : List L.Digest),
+      b.length = u.finalityBranch.length →
+      reconstruct L (htrHeader L f) b finalizedRootSubtreeIndex = u.attestedHeader.stateRoot →
+      f = u.finalizedHeader.beacon
   executionDepth :
     u.finalizedHeader.executionBranch.length = executionPayloadDepth
   executionCommits :
@@ -423,11 +470,13 @@ theorem mem_participants {α : Type} {x : α} :
         · exact List.mem_cons_of_mem _ (ih h2)
       · exact List.mem_cons_of_mem _ (ih h)
 
-/-- **Merkle reconstruction is BINDING** (via the SHA-256 CR leaf): two same-depth
+/-- **Merkle reconstruction is BINDING, GIVEN the SHA-256 CR carrier**: two same-depth
 branches at the same index reconstructing the SAME root carry the SAME leaf. This is what
 turns "the branch reconstructs" into "the root COMMITS the leaf" — a forger cannot open
-the attested state root to a different finalized header. -/
-theorem reconstruct_binding (L : EthLeaf) :
+the attested state root to a different finalized header. `hcr` is the explicit CR
+hypothesis; `noPairCollision hcr` (via `pair_inj`) is consumed at every fold step — a
+collapsing hash gets NO binding (`collapse_finality_not_binding`). -/
+theorem reconstruct_binding (L : EthLeaf) (hcr : L.hashPairCR) :
     ∀ (b₁ b₂ : List L.Digest) (idx : Nat) (l₁ l₂ : L.Digest),
       b₁.length = b₂.length →
       reconstruct L l₁ b₁ idx = reconstruct L l₂ b₂ idx → l₁ = l₂ := by
@@ -448,31 +497,35 @@ theorem reconstruct_binding (L : EthLeaf) :
       have hstep := ih rest₂ (idx / 2) _ _ hlen' h
       by_cases hp : idx % 2 = 1
       · rw [if_pos hp, if_pos hp] at hstep
-        exact (L.hashPairCR hstep).2
+        exact (L.pair_inj hcr hstep).2
       · rw [if_neg hp, if_neg hp] at hstep
-        exact (L.hashPairCR hstep).1
+        exact (L.pair_inj hcr hstep).1
 
-/-- **Header roots pin headers** (CR + `uint64`-chunk injectivity): equal
-`hash_tree_root`s entail equal `BeaconBlockHeader`s — including `slot` and
-`proposer_index` through the chunk encoding. -/
-theorem htrHeader_inj (L : EthLeaf) (h₁ h₂ : BeaconBlockHeader L)
+/-- **Header roots pin headers, GIVEN the carriers** (SHA-256 CR + `uint64`-chunk
+injectivity, both explicit hypotheses): equal `hash_tree_root`s entail equal
+`BeaconBlockHeader`s — including `slot` and `proposer_index` through the chunk
+encoding (`noChunkCollision hinj` consumed there). -/
+theorem htrHeader_inj (L : EthLeaf) (hcr : L.hashPairCR) (hinj : L.uChunkInj)
+    (h₁ h₂ : BeaconBlockHeader L)
     (h : htrHeader L h₁ = htrHeader L h₂) : h₁ = h₂ := by
   unfold htrHeader merk8 merk4 at h
-  obtain ⟨hl, hr⟩ := L.hashPairCR h
-  obtain ⟨hll, hlr⟩ := L.hashPairCR hl
-  obtain ⟨hslot, hpi⟩ := L.hashPairCR hll
-  obtain ⟨hparent, hstate⟩ := L.hashPairCR hlr
-  obtain ⟨hrl, _⟩ := L.hashPairCR hr
-  obtain ⟨hbody, _⟩ := L.hashPairCR hrl
+  obtain ⟨hl, hr⟩ := L.pair_inj hcr h
+  obtain ⟨hll, hlr⟩ := L.pair_inj hcr hl
+  obtain ⟨hslot, hpi⟩ := L.pair_inj hcr hll
+  obtain ⟨hparent, hstate⟩ := L.pair_inj hcr hlr
+  obtain ⟨hrl, _⟩ := L.pair_inj hcr hr
+  obtain ⟨hbody, _⟩ := L.pair_inj hcr hrl
   cases h₁; cases h₂
   simp only [BeaconBlockHeader.mk.injEq]
-  exact ⟨L.uChunkInj hslot, L.uChunkInj hpi, hparent, hstate, hbody⟩
+  exact ⟨L.chunk_inj hinj hslot, L.chunk_inj hinj hpi, hparent, hstate, hbody⟩
 
-/-- **NON-EQUIVOCATION.** Two finality branches of the same depth accepted against the
-SAME attested state root carry the SAME finalized header: the attested root COMMITS one
-finalized header. (The crypto content of `BadFinalityBranch` fail-closure: a forger cannot
-substitute a different finalized header under an honest attested root.) -/
-theorem finalized_header_binding (L : EthLeaf)
+/-- **NON-EQUIVOCATION, GIVEN the carriers.** Two finality branches of the same depth
+accepted against the SAME attested state root carry the SAME finalized header: the
+attested root COMMITS one finalized header. (The crypto content of `BadFinalityBranch`
+fail-closure: a forger cannot substitute a different finalized header under an honest
+attested root.) The CR carrier is the explicit hypothesis making this true — for the
+collapsing hash the conclusion is FALSE (`collapse_finality_not_binding`). -/
+theorem finalized_header_binding (L : EthLeaf) (hcr : L.hashPairCR) (hinj : L.uChunkInj)
     (f₁ f₂ : BeaconBlockHeader L) (b₁ b₂ : List L.Digest) (root : L.Digest)
     (h₁ : verifyFinalityBranch L f₁ b₁ root = true)
     (h₂ : verifyFinalityBranch L f₂ b₂ root = true)
@@ -481,19 +534,24 @@ theorem finalized_header_binding (L : EthLeaf)
   simp only [Bool.and_eq_true] at h₁ h₂
   have e₁ := L.beq_iff.mp h₁.2
   have e₂ := L.beq_iff.mp h₂.2
-  exact htrHeader_inj L f₁ f₂
-    (reconstruct_binding L b₁ b₂ finalizedRootSubtreeIndex _ _ hlen (e₁.trans e₂.symm))
+  exact htrHeader_inj L hcr hinj f₁ f₂
+    (reconstruct_binding L hcr b₁ b₂ finalizedRootSubtreeIndex _ _ hlen (e₁.trans e₂.symm))
 
 /-! ## §8 — THE THREE OBLIGATIONS: NoForgery, FailClosed (both generic over ANY leaf),
 NonVacuous (per-instance; discharged on `modelLeaf` in §9). -/
 
-/-- **NO FORGERY (the strong, ts-relative statement).** For EVERY leaf, trusted state and
-update: if the composed gate accepts, then the update is Ethereum-VALID relative to that
+/-- **NO FORGERY (the strong, ts-relative statement), GIVEN the hash carriers.** For
+EVERY leaf, trusted state and update: IF the SHA-256 CR carrier and the chunk-encoding
+carrier hold (`hcr`/`hinj` — the named crypto floor, an explicit hypothesis, NOT
+injectivity), then gate-acceptance entails the update is Ethereum-VALID relative to that
 trusted state — a ≥ 2/3 subset of the TRUSTED committee genuinely signed the attested
-header's signing root (via the BLS leaf), the attested state commits the finalized header,
-and the finalized body commits the execution payload. The proof CONSUMES `L.blsSound`:
-remove the BLS check from the rules and this theorem is unprovable. -/
-theorem eth_no_forgery (L : EthLeaf) :
+header's signing root (via the BLS leaf), the attested state commits AND BINDS the
+finalized header, and the finalized body commits the execution payload. The proof
+CONSUMES `L.blsSound` on the signature leg and `noPairCollision hcr` /
+`noChunkCollision hinj` (via `reconstruct_binding` + `htrHeader_inj`) on the
+`finalityBinds` leg: remove the BLS check from the rules, or drop a carrier, and this
+theorem is unprovable. -/
+theorem eth_no_forgery (L : EthLeaf) (hcr : L.hashPairCR) (hinj : L.uChunkInj) :
     ∀ (ts : EthState L) (u : LightClientUpdate L),
       verifyFinalizedUpdate L ts u = true → EthValidAt L ts u := by
   intro ts u h
@@ -508,20 +566,27 @@ theorem eth_no_forgery (L : EthLeaf) :
         L.blsSound _ _ _ hbls⟩
     finalityDepth := hfdepth
     finalityCommits := hfrec
+    finalityBinds := fun f b hlen hb =>
+      htrHeader_inj L hcr hinj f u.finalizedHeader.beacon
+        (reconstruct_binding L hcr b u.finalityBranch finalizedRootSubtreeIndex _ _ hlen
+          (hb.trans hfrec.symm))
     executionDepth := hedepth
     executionCommits := herec }
 
-/-- **FAIL CLOSED (the Nomad-law tooth).** The empty/uninitialized update is rejected
-under EVERY trusted state and EVERY leaf. Proof: were it accepted, `eth_no_forgery` would
-force its empty finality branch to have depth 6 or 7 — absurd. (Independently, its empty
-bitfield already fails the 512-bit and quorum checks.) -/
+/-- **FAIL CLOSED (the Nomad-law tooth) — UNCONDITIONAL.** The empty/uninitialized update
+is rejected under EVERY trusted state and EVERY leaf, with NO crypto hypothesis: rejection
+never leans on the hash floor (fail-closed must hold even for a broken hash). Proof:
+directly from the gate booleans — the empty finality branch has depth 0, neither 6 nor 7.
+(Independently, its empty bitfield already fails the 512-bit and quorum checks.) -/
 theorem eth_fail_closed (L : EthLeaf) :
     ∀ ts : EthState L, verifyFinalizedUpdate L ts (emptyUpdate L) = false := by
   intro ts
   rw [Bool.eq_false_iff]
   intro htrue
-  have hd := (eth_no_forgery L ts _ htrue).finalityDepth
-  simp [emptyUpdate, finalizedRootDepth, finalizedRootDepthElectra] at hd
+  unfold verifyFinalizedUpdate verifyFinalityBranch emptyUpdate at htrue
+  simp only [Bool.and_eq_true, Bool.or_eq_true, decide_eq_true_eq] at htrue
+  obtain ⟨⟨_, hdepth, _⟩, _⟩ := htrue
+  simp [finalizedRootDepth, finalizedRootDepthElectra] at hdepth
 
 /-! ## §9 — The `ForeignLightClient` bundle + the PROVED model leaf (axiom-clean instance).
 
@@ -541,19 +606,21 @@ def ethClient (L : EthLeaf)
   ForeignValid := fun u => ∃ ts, EthValidAt L ts u
   verify := verifyFinalizedUpdate L
   emptyUpdate := emptyUpdate L
-  noForgery := fun ts u h => ⟨ts, eth_no_forgery L ts u h⟩
+  noForgery := fun hcr ts u h => ⟨ts, eth_no_forgery L hcr.1 hcr.2 ts u h⟩
   failClosed := eth_fail_closed L
   nonVacuous := hnv
 
-/-- **The adapter discharge, STRONG form**: the `InterchainAdapter` a produced Ethereum
-client exposes at trusted state `ts` has its `foreignFinal` entail `EthValidAt L ts` —
-the finality hypothesis is discharged to the ts-RELATIVE validity, not just the ∃-form. -/
-theorem toAdapter_foreignFinal_eth (L : EthLeaf)
+/-- **The adapter discharge, STRONG form, GIVEN the carriers**: the `InterchainAdapter` a
+produced Ethereum client exposes at trusted state `ts` has its `foreignFinal` entail
+`EthValidAt L ts` — the finality hypothesis is discharged to the ts-RELATIVE validity,
+not just the ∃-form. The hash carriers are the explicit crypto hypotheses, exactly as in
+the foundation's `toAdapter_foreignFinal_discharged`. -/
+theorem toAdapter_foreignFinal_eth (L : EthLeaf) (hcr : L.hashPairCR) (hinj : L.uChunkInj)
     (hnv : NonVacuous (verifyFinalizedUpdate L)) (ts : EthState L)
     {Event : Type} (incl : Event → LightClientUpdate L → Prop)
     (u : LightClientUpdate L)
     (h : (toAdapter (ethClient L hnv) ts incl).foreignFinal u) : EthValidAt L ts u :=
-  eth_no_forgery L ts u h
+  eth_no_forgery L hcr hinj ts u h
 
 /-! ### The PROVED model leaf — a perfectly-binding realization, so the file is genuinely
 axiom-clean and the leaves are demonstrably non-laundering. A PRODUCTION instance replaces
@@ -584,8 +651,13 @@ theorem modelBlsSound : ∀ pks m s, modelAggVerify pks m s = true → ModelSign
   simp only [modelAggVerify, Bool.and_eq_true, List.all_eq_true, decide_eq_true_eq] at h
   exact h.1.1 pk hpk
 
-/-- The model leaf: all three soundness fields PROVED (constructor injectivity does the
-work of collision resistance), so every theorem below is kernel-axiom-clean.
+/-- The model leaf: the BLS soundness field PROVED, and the two hash-fact CARRIERS
+supplied as the GENUINE CR/injectivity `Prop`s over this leaf's own primitives (the
+`PortalFloor.Reference` pattern, `Crypto/PortalFloor.lean:362`) — NOT `True`. Both are
+inhabitable here (`modelLeaf_hashPairCR` / `modelLeaf_uChunkInj` below: pairing is a free
+constructor, so CR is constructor injectivity) and the SAME shapes are FALSE for the
+collapsing leaf (`collapseEthLeaf_not_hashPairCR` / `collapseEthLeaf_not_uChunkInj`), so
+every theorem below is kernel-axiom-clean AND the carriers demonstrably discriminate.
 (`@[reducible]` so numerals/decidability see through the projections.) -/
 @[reducible] def modelLeaf : EthLeaf where
   PubKey := Nat
@@ -596,11 +668,86 @@ work of collision resistance), so every theorem below is kernel-axiom-clean.
   SignedAll := ModelSignedAll
   blsSound := modelBlsSound
   hashPair := ModelDigest.pair
-  hashPairCR := fun h => by injection h with h1 h2; exact ⟨h1, h2⟩
+  hashPairCR := ∀ a b c d : ModelDigest,
+    ModelDigest.pair a b = ModelDigest.pair c d → a = c ∧ b = d
+  noPairCollision := fun h => h
   uChunk := ModelDigest.chunk
-  uChunkInj := fun h => by injection h
+  uChunkInj := ∀ a b : Nat, ModelDigest.chunk a = ModelDigest.chunk b → a = b
+  noChunkCollision := fun h => h
   zeroChunk := ModelDigest.chunk 0
   zeroSig := (ModelDigest.chunk 0, 0)
+
+/-- **The model CR carrier HOLDS (positive polarity).** Pairing is a free constructor, so
+collision resistance is constructor injectivity — the carrier is dischargeable, exactly
+as a production instance discharges it with the named SHA-256 CR floor. -/
+theorem modelLeaf_hashPairCR : modelLeaf.hashPairCR :=
+  fun _ _ _ _ h => by injection h with h1 h2; exact ⟨h1, h2⟩
+
+/-- **The model chunk carrier HOLDS (positive polarity).** -/
+theorem modelLeaf_uChunkInj : modelLeaf.uChunkInj :=
+  fun _ _ h => by injection h
+
+/-- The BUNDLED foundation carrier (`toCryptoLeaf.hashCR = hashPairCR ∧ uChunkInj`)
+discharged for the model — the argument the foundation's `noForgery`/adapter theorems
+consume. -/
+theorem modelCryptoLeaf_hashCR : modelLeaf.toCryptoLeaf.hashCR :=
+  ⟨modelLeaf_hashPairCR, modelLeaf_uChunkInj⟩
+
+/-! ### The badCompress-style FALSIFIER — the carriers are load-bearing, not `True` in
+disguise (the `PortalFloor` §9b / `VerifiedLightClient.collapseLeaf` pattern): a
+COLLAPSING pair hash / chunk encoding yields a lawful `EthLeaf` — the interface admits it
+— but its carriers are provably FALSE, so `eth_no_forgery` has no conclusion for it, and
+finality binding demonstrably FAILS (`collapse_finality_not_binding`): both polarities
+witnessed. -/
+
+/-- The collapsing pair hash: every pair digests to `chunk 0` (the badCompress). -/
+def collapseHashPair (_ _ : ModelDigest) : ModelDigest := ModelDigest.chunk 0
+
+/-- The collapsing chunk encoding: every value encodes to `chunk 0`. -/
+def collapseUChunk (_ : Nat) : ModelDigest := ModelDigest.chunk 0
+
+/-- A lawful `EthLeaf` over the COLLAPSING hash/encoding — same BLS primitives, same
+genuine-CR-Prop carrier SHAPES, stated over the collapsed functions. The interface admits
+it; only the carriers (below) separate it from the sound leaf. -/
+@[reducible] def collapseEthLeaf : EthLeaf :=
+  { modelLeaf with
+    hashPair := collapseHashPair
+    hashPairCR := ∀ a b c d : ModelDigest,
+      collapseHashPair a b = collapseHashPair c d → a = c ∧ b = d
+    noPairCollision := fun h => h
+    uChunk := collapseUChunk
+    uChunkInj := ∀ a b : Nat, collapseUChunk a = collapseUChunk b → a = b
+    noChunkCollision := fun h => h }
+
+/-- **The collapsing CR carrier is FALSE (negative polarity).** Distinct children collide
+— the carrier REFUTES a broken hash, so it is a real discriminating hypothesis:
+`modelLeaf.hashPairCR` holds, `collapseEthLeaf.hashPairCR` fails. -/
+theorem collapseEthLeaf_not_hashPairCR : ¬ collapseEthLeaf.hashPairCR := by
+  intro h
+  exact absurd (h (.chunk 0) (.chunk 0) (.chunk 1) (.chunk 0) rfl).1 (by decide)
+
+/-- **The collapsing chunk carrier is FALSE (negative polarity).** `0 ≠ 1` yet their
+chunks collide. -/
+theorem collapseEthLeaf_not_uChunkInj : ¬ collapseEthLeaf.uChunkInj := by
+  intro h
+  exact absurd (h 0 1 rfl) (by decide)
+
+/-- **Binding is LOST under the collapse (what the carrier buys, shown by its absence).**
+Two DIFFERENT finalized headers reconstruct the SAME root through same-depth branches —
+the `finalized_header_binding` / `finalityBinds` conclusion is FALSE for the collapsing
+leaf, so the CR carrier is exactly the hypothesis that separates commitment from
+equivocation. -/
+theorem collapse_finality_not_binding :
+    ∃ (f₁ f₂ : BeaconBlockHeader collapseEthLeaf) (b : List ModelDigest),
+      f₁ ≠ f₂
+      ∧ b.length = finalizedRootDepth
+      ∧ reconstruct collapseEthLeaf (htrHeader collapseEthLeaf f₁) b finalizedRootSubtreeIndex
+        = reconstruct collapseEthLeaf (htrHeader collapseEthLeaf f₂) b
+            finalizedRootSubtreeIndex := by
+  refine ⟨⟨0, 0, .chunk 0, .chunk 0, .chunk 0⟩, ⟨1, 0, .chunk 0, .chunk 0, .chunk 0⟩,
+    List.replicate finalizedRootDepth (.chunk 0), ?_, by decide, by decide⟩
+  intro h
+  exact absurd (congrArg BeaconBlockHeader.slot h) (by decide)
 
 /-! ### Concrete witnesses: a genuine 512-committee state and a self-consistent update
 (branches built with the constructive inverse of `is_valid_merkle_branch`, exactly like
@@ -742,14 +889,17 @@ theorem eth_forged_committee_rejected :
     verifyFinalizedUpdate modelLeaf forgedState goodUpdate = false := by decide
 
 /-- The TRUE side of the denotation: the genuine update IS Ethereum-valid at the genuine
-state (obtained THROUGH `eth_no_forgery`, so the pipeline is exercised end-to-end). -/
+state (obtained THROUGH `eth_no_forgery` — the model carriers `modelLeaf_hashPairCR` /
+`modelLeaf_uChunkInj` passed explicitly, so the pipeline is exercised end-to-end,
+carrier discharge included). -/
 theorem eth_valid_good : EthValidAt modelLeaf modelState goodUpdate :=
-  eth_no_forgery modelLeaf modelState goodUpdate (by decide)
+  eth_no_forgery modelLeaf modelLeaf_hashPairCR modelLeaf_uChunkInj
+    modelState goodUpdate (by decide)
 
 /-- The FALSE side: the tampered-finality-branch update is NOT Ethereum-valid — its
 branch does not commit the finalized header under the attested state root. -/
 theorem eth_invalid_bad_finality : ¬ EthValidAt modelLeaf modelState badFinalityUpdate := by
-  rintro ⟨_, _, hrec, _, _⟩
+  rintro ⟨_, _, hrec, _, _, _⟩
   exact absurd hrec (by decide)
 
 /-- **The BLS leaf discriminates (non-laundering witness).** At the FORGED state (an
@@ -758,7 +908,7 @@ is nonempty (2/3 of 512 > 0), its members must be committee keys (= 3) AND genui
 signed (= 7) — absurd. The `SignedAll` denotation is doing real work. -/
 theorem eth_forged_committee_invalid (u : LightClientUpdate modelLeaf) :
     ¬ EthValidAt modelLeaf forgedState u := by
-  rintro ⟨⟨ps, hsub, hlen, hsigned⟩, _, _, _, _⟩
+  rintro ⟨⟨ps, hsub, hlen, hsigned⟩, _, _, _, _, _⟩
   cases ps with
   | nil => exact absurd hlen (by decide)
   | cons pk rest =>
@@ -789,7 +939,8 @@ theorem eth_adapter_accepts_and_discharges :
   have hacc : modelAdapter.accepts modelExec.stateRoot :=
     ⟨goodUpdate,
       (by decide : verifyFinalizedUpdate modelLeaf modelState goodUpdate = true), rfl⟩
-  exact ⟨hacc, toAdapter_accepts_entails_valid modelEthClient modelState modelIncl _ hacc⟩
+  exact ⟨hacc, toAdapter_accepts_entails_valid modelEthClient modelCryptoLeaf_hashCR
+    modelState modelIncl _ hacc⟩
 
 /-- **The empty update is rejected at the adapter boundary** — `FailClosed` lifted. -/
 theorem eth_adapter_rejects_empty :
@@ -805,16 +956,24 @@ theorem eth_adapter_rejects_empty :
 #guard verifyFinalizedUpdate modelLeaf modelState (emptyUpdate modelLeaf) == false
 #guard verifyFinalizedUpdate modelLeaf forgedState goodUpdate == false
 
-/-! ## §12 — Axiom hygiene: every theorem kernel-clean. The model leaf is PROVED, so
-nothing rests on an unproven crypto assumption; a PRODUCTION instance's `eth_no_forgery`
-rests on its visible, named `blsSound`/`hashPairCR` leaf fields — invisible to
-`#assert_axioms` (which sees only `axiom`-keyword decls), which is exactly why they are
-STRUCTURE FIELDS an auditor reads at the instance site. -/
+/-! ## §12 — Axiom hygiene: every theorem kernel-clean. The model leaf is PROVED (BLS
+soundness AND both hash-fact carriers — `modelLeaf_hashPairCR` / `modelLeaf_uChunkInj`),
+so nothing here rests on an unproven crypto assumption; a PRODUCTION instance's
+`eth_no_forgery` rests on its visible, named `blsSound` leaf field and takes
+`hashPairCR`/`uChunkInj` as its explicit CR hypotheses — structure fields and hypotheses
+are invisible to `#assert_axioms` (which sees only `axiom`-keyword decls), which is
+exactly why they are VISIBLE fields/arguments an auditor reads at the instance/use site.
+The both-polarity pins (`modelLeaf_hashPairCR`/`modelLeaf_uChunkInj` vs
+`collapseEthLeaf_not_hashPairCR`/`collapseEthLeaf_not_uChunkInj`, plus
+`collapse_finality_not_binding`) prove the carriers are real discriminating hypotheses,
+not `True` in disguise. -/
 
 #assert_axioms finalizedRootSubtreeIndex_correct
 #assert_axioms executionPayloadSubtreeIndex_correct
 #assert_axioms quorum_boundary
 #assert_axioms mem_participants
+#assert_axioms EthLeaf.pair_inj
+#assert_axioms EthLeaf.chunk_inj
 #assert_axioms reconstruct_binding
 #assert_axioms htrHeader_inj
 #assert_axioms finalized_header_binding
@@ -822,6 +981,12 @@ STRUCTURE FIELDS an auditor reads at the instance site. -/
 #assert_axioms eth_fail_closed
 #assert_axioms toAdapter_foreignFinal_eth
 #assert_axioms modelBlsSound
+#assert_axioms modelLeaf_hashPairCR
+#assert_axioms modelLeaf_uChunkInj
+#assert_axioms modelCryptoLeaf_hashCR
+#assert_axioms collapseEthLeaf_not_hashPairCR
+#assert_axioms collapseEthLeaf_not_uChunkInj
+#assert_axioms collapse_finality_not_binding
 #assert_axioms model_non_vacuous
 #assert_axioms eth_gate_discriminates
 #assert_axioms eth_forged_committee_rejected
