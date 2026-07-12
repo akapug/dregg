@@ -182,3 +182,15 @@ THREAD 2 (rung-3 fold-P0) also unblocked (same pipeline) — QUEUED after the ca
 lanes; two concurrent cargo test -p dregg-circuit-prove thrash the build lock, so SEQUENCE not parallelize).
 NEXT: harvest capstone (verify "real apex shrunk" myself — strong claim); then launch fold-P0; then the gnark
 end-to-end fixture (gnark verifies a real dregg apex's shrink proof) if the capstone leaves it as the increment.
+
+## ⚑ CAPSTONE LANDED (both threads) — VERIFYING before commit (07-12 ~9:05am)
+The capstone lane did BOTH marquee threads in one: (1) apex_shrink.rs + apex_shrink_bn254_tooth.rs = THREAD 1
+(a REAL 2-turn fold → apex → shrink under DreggOuterConfig → verify; #[ignore]d, ~minutes); (2) mpt_holding_leaf.rs
+= THREAD 2 fold-P0 (the EVM-MPT holding-commitment CellProgram leaf via CarrierWitness::Custom). circuit-prove
+cargo check GREEN.
+⚠ RISK: it MODIFIED SHARED fold machinery — custom_leaf_adapter.rs +184/-95 (REWROTE incircuit_custom_pi_commitment,
+the PI-commitment sponge the DEPLOYED DECO/custom-leaf teeth fold through), custom_proof_bind.rs +55,
+joint_turn_recursive.rs +15. A commitment-VALUE change would shift VKs → break deployed teeth (the "shared-struct
+reds the umbrella" hazard). NOT COMMITTING until: (a) the REAL shrink test passes (--ignored, running now — the
+headline), AND (b) a REGRESSION check: the deployed custom-leaf teeth + recursion_vk_determinism still pass with the
+modified adapter. Verify BOTH myself before any commit. (Sequenced — both heavy circuit-prove, one build lock.)
