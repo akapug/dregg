@@ -35,6 +35,32 @@ trait Offering {
 each press is a ballot / a paid action (gate on `dregg-pay` credits) -> `Offering::advance` (a real turn) -> update
 the embed -> on completion, `Offering::verify` + archive the thread. One lifecycle, every offering.
 
+## Frontends — Discord is #0; Telegram, WeChat, web are the SAME offerings, different surfaces
+The offering/session/payment/verify/ballot CORE is **frontend-agnostic**. A `Frontend` renders an offering's `Surface`
+and collects `Action`s; the core resolves them on the substrate. So every surface reuses ONE core — only presentation
+differs (and the executor stays the sole source of truth on all of them).
+```
+trait Frontend {
+    fn identity(&self, user: PlatformUser) -> DreggIdentity;         // derive the user's dregg identity per platform
+    fn spin_session(&self, off: &dyn Offering, cfg: SessionConfig) -> SessionSurface; // a thread/group/chat per session
+    fn present(&self, s: &SessionSurface, surface: Surface);         // room/prose/state + the action controls
+    fn collect(&self, ev: PlatformEvent) -> Option<(SessionId, Action, DreggIdentity)>; // a press/command -> an action
+    fn teardown(&self, s: SessionSurface);                           // archive on completion
+}
+```
+- **Discord (#0, built):** threads/channels + buttons + `GUILDS`/`GUILD_MEMBERS` intents; identity from the user's
+  derived Ed25519 (`UserCipherclerk`).
+- **Telegram:** Bot API — groups/forum-topics, inline keyboards, per-chat sessions; identity from the Telegram user id
+  → derived dregg identity; payment via Telegram Payments OR the same on-chain deposit-address flow.
+- **WeChat:** Official Account (template/menu messages — no arbitrary buttons) for lightweight play, a **Mini-Program**
+  for rich surfaces; China-platform constraints (mp.weixin.qq.com, OA message API, WeChat Pay). The heaviest lift.
+- **Web:** the richest surface; the same offerings + `dregg-pay` credits.
+
+**The factoring this demands:** pull the offering/session/payment/verify/ballot logic OUT of `discord-bot/fiction.rs`
+into a **frontend-agnostic `dreggnet-offerings` crate**; the discord-bot becomes a thin `Frontend` impl; Telegram/
+WeChat/web are more `Frontend` impls. `dregg-pay` (payments), the verifiable substrate (WorldCell/receipts), and the
+collective are shared across all of them. Doing this NOW (while there is one frontend) is cheap; later it is a rewrite.
+
 ## Offerings
 - **#0 dungeon** — `RealSession` over `dungeon_on_dregg` WorldCell + the narrator + ballots. **Built + being migrated
   into `/dungeon` now.**
