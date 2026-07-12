@@ -196,6 +196,59 @@ impl ProvenForeignHolding {
         h.update(&self.asset);
         *h.finalize().as_bytes()
     }
+
+    /// Build a fact from a light-client EDGE's minimal fields — the cross-chain wire.
+    ///
+    /// The edge crates (`eth-lightclient`, `cosmos-lightclient`) are STANDALONE and
+    /// cannot depend on `dregg-governance`, so they emit plain-primitive
+    /// `ForeignHoldingFields { chain_tag: u8 (the FAMILY byte), holder, asset, amount,
+    /// snapshot, consensus_proven }`, and the relayer supplies the FULL [`ChainId`]
+    /// (which specific network the light client verified — the edge's family tag alone
+    /// cannot say `Evm(1)` vs `Evm(8453)`). This constructor pairs them, FAIL-CLOSED on a
+    /// family-tag mismatch — a defensive tooth against a relayer pairing the wrong
+    /// `ChainId` with an edge's fields (e.g. Cosmos fields with an `Evm` chain).
+    ///
+    /// Cross-crate tag agreement (pinned by test on BOTH sides): `Solana.tag() == 0`,
+    /// `Evm(_).tag() == 1 == eth_lightclient::evm::CHAIN_TAG_EVM`,
+    /// `Cosmos(_).tag() == 2 == cosmos_lightclient::bank::COSMOS_CHAIN_TAG`.
+    pub fn from_foreign_fields(
+        chain: ChainId,
+        chain_tag: u8,
+        holder: [u8; 32],
+        asset: [u8; 32],
+        amount: u128,
+        snapshot: u64,
+        consensus_proven: bool,
+    ) -> Result<Self, ForeignFieldsError> {
+        if chain.tag() != chain_tag {
+            return Err(ForeignFieldsError::ChainTagMismatch {
+                edge_tag: chain_tag,
+                chain_family: chain.tag(),
+            });
+        }
+        Ok(ProvenForeignHolding {
+            chain,
+            holder,
+            asset,
+            amount,
+            snapshot,
+            consensus_proven,
+        })
+    }
+}
+
+/// Why building a [`ProvenForeignHolding`] from an edge's fields was refused (fail closed).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ForeignFieldsError {
+    /// The relayer-supplied [`ChainId`]'s family tag does not match the edge-produced
+    /// `chain_tag` — a chain/edge pairing mistake. The holding is refused rather than
+    /// silently attributed to the wrong chain's nullifier space.
+    ChainTagMismatch {
+        /// The family tag the light-client edge produced.
+        edge_tag: u8,
+        /// The family tag of the [`ChainId`] the caller paired with it.
+        chain_family: u8,
+    },
 }
 
 /// The Solana edge lights up for free: the bridge's [`ProvenHolding`] IS already the
@@ -338,6 +391,83 @@ mod tests {
             panic!("cosmos() builds a Cosmos variant")
         };
         assert_eq!(&w[1..], &h);
+    }
+
+    #[test]
+    fn cross_crate_family_tags_are_pinned() {
+        // The edge crates hard-code these family bytes (eth_lightclient CHAIN_TAG_EVM=1,
+        // cosmos_lightclient COSMOS_CHAIN_TAG=2) because they cannot depend on this crate.
+        // This is the governance side of that agreement — a change here would desync a
+        // relayer wiring an edge's fields to the wrong nullifier space.
+        assert_eq!(ChainId::Solana.tag(), 0);
+        assert_eq!(
+            ChainId::ETHEREUM.tag(),
+            1,
+            "must equal eth_lightclient CHAIN_TAG_EVM"
+        );
+        assert_eq!(ChainId::BASE.tag(), 1);
+        assert_eq!(
+            ChainId::cosmos("cosmoshub-4").tag(),
+            2,
+            "must equal cosmos_lightclient COSMOS_CHAIN_TAG"
+        );
+    }
+
+    #[test]
+    fn from_foreign_fields_pairs_edge_fields_with_full_chainid() {
+        // An EVM edge produces family tag 1 + fields; the relayer supplies the full
+        // ChainId (which network). The result carries the FULL ChainId (Base, not just
+        // "an EVM chain") so Base and Ethereum stay distinct nullifiers.
+        let h = ProvenForeignHolding::from_foreign_fields(
+            ChainId::BASE,
+            1, // the edge's family tag
+            [7u8; 32],
+            [9u8; 32],
+            500,
+            123,
+            true,
+        )
+        .expect("matching family tag builds");
+        assert_eq!(h.chain, ChainId::BASE);
+        assert_eq!(h.holder, [7u8; 32]);
+        assert_eq!(h.amount, 500);
+        assert!(h.is_consensus_proven());
+        // A Cosmos edge (tag 2) + the matching full ChainId.
+        let c = ProvenForeignHolding::from_foreign_fields(
+            ChainId::cosmos("osmosis-1"),
+            2,
+            [1u8; 32],
+            [2u8; 32],
+            9,
+            88,
+            false,
+        )
+        .expect("matching cosmos tag builds");
+        assert!(
+            !c.is_consensus_proven(),
+            "the edge's consensus verdict is carried through"
+        );
+    }
+
+    #[test]
+    fn from_foreign_fields_refuses_a_chain_edge_mismatch() {
+        // The defensive tooth: Cosmos fields (edge tag 2) paired with an Evm ChainId
+        // (family 1) is a wiring bug — refuse, never attribute to the wrong chain's slot.
+        assert_eq!(
+            ProvenForeignHolding::from_foreign_fields(
+                ChainId::ETHEREUM, // family 1
+                2,                 // but the edge said Cosmos
+                [1u8; 32],
+                [2u8; 32],
+                9,
+                88,
+                true,
+            ),
+            Err(ForeignFieldsError::ChainTagMismatch {
+                edge_tag: 2,
+                chain_family: 1
+            }),
+        );
     }
 
     #[test]
