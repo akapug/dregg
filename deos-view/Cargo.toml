@@ -156,6 +156,9 @@ cap = ["dep:dregg-auth"]
 # discord — `ViewNode` → a serenity `CreateEmbed` + button components (gpui-free,
 # deos-js-free): serde + serenity's builder/model. The FOURTH backend over the one IR.
 discord = ["dep:serenity"]
+# telegram — `ViewNode` → Telegram message text (the `TelegramBackend`, gpui-free + deos-js-free:
+# only serde). The moved-in dreggnet-telegram text walker, over the one IR.
+telegram = []
 
 # THE WEB-PROJECTION BAKE — render the SAME counter card view-tree (the EXACT JSON the
 # SpiderMonkey engine produces) to a browser-loadable `.html`, gpui-free. Build + run:

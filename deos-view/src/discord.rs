@@ -40,12 +40,15 @@
 //! REAL cap-gated verified turn — the exact payload the native `Button` fires through
 //! `Applet::fire`. The button is the affordance, renderer-independent.
 
+use crate::affordance::AffordanceTransport;
+use crate::backend::SurfaceBackend;
 use crate::tree::ViewNode;
 use serenity::all::{ButtonStyle, CreateActionRow, CreateButton, CreateEmbed};
 
 /// The custom-id prefix carrying a [`ViewNode::Button`]'s affordance through Discord's
-/// component-id channel — the Discord analogue of the web renderer's `data-turn`.
-pub const TURN_PREFIX: &str = "deosturn";
+/// component-id channel — the Discord analogue of the web renderer's `data-turn`. Re-exported
+/// from the canonical [`crate::affordance`] codec (the ONE affordance-transport shape).
+pub use crate::affordance::TURN_PREFIX;
 
 /// A rendered card, ready to post: the [`CreateEmbed`] (title/description/fields) plus the
 /// button [`CreateActionRow`]s (the affordances). A bot may further chain `.color()`,
@@ -59,22 +62,39 @@ pub struct DiscordCard {
 }
 
 /// The custom-id a [`ViewNode::Button`] firing `turn` with `arg` carries
-/// (`deosturn:<turn>:<arg>`) — the affordance payload, routed back on press.
+/// (`deosturn:<turn>:<arg>`) — the affordance payload, routed back on press. The Discord binding
+/// of the ONE [`crate::affordance`] codec.
 pub fn affordance_custom_id(turn: &str, arg: i64) -> String {
-    format!("{TURN_PREFIX}:{turn}:{arg}")
+    crate::affordance::affordance_id(turn, arg, AffordanceTransport::Discord)
 }
 
 /// Decode a button-component custom-id minted by [`affordance_custom_id`] back into its
 /// `(turn, arg)` affordance — what a bot's component handler fires as a verified turn. A
-/// custom-id that is not one of ours returns `None` (the handler ignores it).
+/// custom-id that is not one of ours returns `None` (the handler ignores it). The Discord binding
+/// of the ONE [`crate::affordance`] codec.
 pub fn parse_affordance_id(custom_id: &str) -> Option<(String, i64)> {
-    let mut it = custom_id.splitn(3, ':');
-    if it.next()? != TURN_PREFIX {
-        return None;
+    crate::affordance::parse_affordance_id(custom_id, AffordanceTransport::Discord)
+}
+
+/// **The Discord [`SurfaceBackend`]** — the [`ViewNode`] IR → a [`DiscordCard`] (embed + button
+/// components). Holds the embed `title` the tree does not carry; [`render`](SurfaceBackend::render)
+/// walks the tree via [`render_card`], and [`decode`](SurfaceBackend::decode) uses the Discord
+/// affordance codec.
+pub struct DiscordBackend {
+    /// The embed title (headed onto the card; the tree carries structure, not the card title).
+    pub title: String,
+}
+
+impl SurfaceBackend for DiscordBackend {
+    type Rendered = DiscordCard;
+
+    fn transport(&self) -> AffordanceTransport {
+        AffordanceTransport::Discord
     }
-    let turn = it.next()?.to_string();
-    let arg = it.next()?.parse().ok()?;
-    Some((turn, arg))
+
+    fn render(&self, tree: &ViewNode, binds: &[u64]) -> DiscordCard {
+        render_card(&self.title, tree, binds)
+    }
 }
 
 /// The accumulator the tree-walk fills: an embed description, its fields, and the button

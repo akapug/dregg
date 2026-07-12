@@ -29,8 +29,9 @@ description = "The web Frontend over dreggnet-offerings: a WebFrontend affordanc
 dreggnet-offerings = { path = "../dreggnet-offerings" }
 # THE DEOS SURFACE — `ViewNode`/`MenuItem`, the view-tree a Surface wraps. The web
 # renderer WALKS this tree into HTML. `default-features = false` = the gpui-free
-# view-tree model only (no native/gpui/mozjs), matching dreggnet-offerings.
-deos-view = { path = "../deos-view", default-features = false }
+# view-tree model only (no native/gpui/mozjs), matching dreggnet-offerings; the `web`
+# feature adds the server-form `SessionFormBackend` this crate renders through.
+deos-view = { path = "../deos-view", default-features = false, features = ["web"] }
 # The HTTP surface — axum 0.8 (the workspace's version; matches node/api.rs +
 # discord-bot/http_server.rs). Default features carry the `Form`/`Query` extractors
 # + the `Html`/`Json` responses this surface uses.

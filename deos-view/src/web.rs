@@ -42,6 +42,8 @@
 //!   `CardWorld` upgrades that to a live turn. The loop is proven in
 //!   `wasm/tests/card_fires_a_verified_turn.rs`.
 
+use crate::affordance::AffordanceTransport;
+use crate::backend::SurfaceBackend;
 use crate::tree::ViewNode;
 
 /// The browser-side script for a card document: the shared [`fmt`](crate::fmt) JS mirror (so the
@@ -463,6 +465,158 @@ fn node(n: &ViewNode, binds: &BindValues, cursor: &mut usize, out: &mut String) 
             }
             out.push_str("</section>");
         }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE SERVER-FORM WEB BACKEND — a `<form method=post>` per affordance.
+// ─────────────────────────────────────────────────────────────────────────────
+// This is the moved-in `dreggnet-web::view_html` (the server-rendered affordance
+// surface: no client JS, the executor is the sole referee — a POST of a dimmed
+// control still lands a real refusal). It lived in the frontend crate as a SUBSET
+// walker that silently dropped `Host`/`Tabs`/`Grid`/rich leaves; here it covers the
+// containers those affordances hide inside, so a nested affordance is never lost.
+
+/// The 4-replacement HTML escape the server-form renderer uses (matches the shape the frontend
+/// crate rendered — `'` is left verbatim, unlike the client-JS renderer's [`escape`]).
+fn esc_form(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+/// One affordance POST-form control: `<form method=post action="/session/{sid}/act">` carrying the
+/// affordance's `{turn, arg}` as hidden inputs + a submit button. `cls`/`disabled` decorate a
+/// `!enabled` cap-tooth (dimmed + `disabled`) — a decoration only; the executor still refuses a
+/// crafted POST of it.
+fn session_form(sid: &str, turn: &str, arg: i64, label: &str, cls: &str, disabled: &str) -> String {
+    format!(
+        "<form class=\"{cls}\" method=\"post\" action=\"/session/{sid}/act\"><input type=\"hidden\" name=\"turn\" value=\"{turn}\"><input type=\"hidden\" name=\"arg\" value=\"{arg}\"><button type=\"submit\"{disabled}>{label}</button></form>",
+        cls = cls,
+        sid = esc_form(sid),
+        turn = esc_form(turn),
+        arg = arg,
+        disabled = disabled,
+        label = esc_form(label),
+    )
+}
+
+/// **Render a [`ViewNode`] surface into a server-rendered HTML fragment** — the affordance surface
+/// as `<form>`/`<button>` POST controls (no client JS). `session_id` names the session each
+/// affordance POSTs its `{turn, arg}` to (`/session/{session_id}/act`). Prose → `<p class=prose>`,
+/// a [`Section`](ViewNode::Section) → a titled `<section>`, a [`Menu`](ViewNode::Menu) row / a
+/// [`Button`](ViewNode::Button) → one POST form; containers (`VStack`/`Row`/`List`/`Table`/`Grid`/
+/// `Tabs`/`Host`/`Adept`) recurse so an affordance nested inside them is NOT dropped. This is the
+/// deos-view home of the frontend's former `view_html` — the web [`Frontend`] renders through it.
+pub fn render_session_forms(tree: &ViewNode, session_id: &str) -> String {
+    let mut out = String::new();
+    session_node(tree, session_id, &mut out);
+    out
+}
+
+fn session_node(node: &ViewNode, sid: &str, out: &mut String) {
+    match node {
+        ViewNode::Text(t) => {
+            if !t.trim().is_empty() {
+                out.push_str("<p class=\"prose\">");
+                out.push_str(&esc_form(t));
+                out.push_str("</p>");
+            }
+        }
+        ViewNode::Section {
+            title,
+            tag,
+            children,
+        } => {
+            out.push_str(&format!(
+                "<section class=\"deos-section tag-{}\"><h2>{}</h2>",
+                esc_form(tag),
+                esc_form(title)
+            ));
+            for c in children {
+                session_node(c, sid, out);
+            }
+            out.push_str("</section>");
+        }
+        ViewNode::Menu { items } => {
+            out.push_str("<div class=\"affordances\">");
+            for it in items {
+                let (disabled, cls) = if it.enabled {
+                    ("", "affordance")
+                } else {
+                    (" disabled", "affordance dimmed")
+                };
+                out.push_str(&session_form(
+                    sid, &it.turn, it.arg, &it.label, cls, disabled,
+                ));
+            }
+            out.push_str("</div>");
+        }
+        // Full node coverage (the subsetting cure): a standalone button is one POST-form control,
+        // and the container variants RECURSE so an affordance nested in a Host/Tabs/Grid/Adept is
+        // rendered rather than silently dropped.
+        ViewNode::Button { label, turn, arg } => {
+            out.push_str(&session_form(sid, turn, *arg, label, "affordance", ""));
+        }
+        ViewNode::VStack(cs) | ViewNode::Row(cs) | ViewNode::List(cs) | ViewNode::Table(cs) => {
+            for c in cs {
+                session_node(c, sid, out);
+            }
+        }
+        ViewNode::Grid { children, .. } => {
+            for c in children {
+                session_node(c, sid, out);
+            }
+        }
+        ViewNode::Tabs { panels, .. } => {
+            for p in panels {
+                session_node(p, sid, out);
+            }
+        }
+        ViewNode::Host { view: Some(v), .. } => session_node(v, sid, out),
+        ViewNode::Adept(inner) => session_node(inner, sid, out),
+        ViewNode::Divider => out.push_str("<hr>"),
+        // The live/bound rich leaves (bind/gauge/pill/slider/…) have no server-form actuation — the
+        // deos-js + web-cells live path renders those. An unresolved host / bound leaf is skipped.
+        _ => {}
+    }
+}
+
+/// **The client-JS web [`SurfaceBackend`]** — the [`ViewNode`] IR → an HTML fragment of
+/// `data-turn`/`data-slot` controls ([`render_html`]) that a wasm executor drives in-tab.
+pub struct WebBackend;
+
+impl SurfaceBackend for WebBackend {
+    type Rendered = String;
+
+    fn transport(&self) -> AffordanceTransport {
+        AffordanceTransport::Web
+    }
+
+    fn render(&self, tree: &ViewNode, binds: &[u64]) -> String {
+        render_html(tree, binds)
+    }
+}
+
+/// **The server-form web [`SurfaceBackend`]** — the [`ViewNode`] IR → a `<form method=post>`
+/// affordance surface ([`render_session_forms`]). Holds the session id each control POSTs to; binds
+/// are unused (a server-form surface has no in-tab live re-read). This is the backend the web
+/// [`Frontend`] renders through.
+pub struct SessionFormBackend {
+    /// The session id — each affordance POSTs `{turn, arg}` to `/session/{session_id}/act`.
+    pub session_id: String,
+}
+
+impl SurfaceBackend for SessionFormBackend {
+    type Rendered = String;
+
+    fn transport(&self) -> AffordanceTransport {
+        AffordanceTransport::Web
+    }
+
+    fn render(&self, tree: &ViewNode, _binds: &[u64]) -> String {
+        render_session_forms(tree, &self.session_id)
     }
 }
 

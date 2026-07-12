@@ -32,6 +32,13 @@
 
 // The view-tree MODEL is renderer-independent (gpui-free serializable DATA): it is
 // always compiled, under BOTH the `native` and `web` renderers.
+/// The ONE affordance-transport codec — encode/decode a `{turn, arg}` affordance for whatever
+/// channel a surface backend carries it on (Discord custom-id / Telegram callback / web). Always
+/// compiled (every backend decodes through it).
+pub mod affordance;
+/// The [`SurfaceBackend`](backend::SurfaceBackend) trait — the one seat every renderer of the
+/// [`ViewNode`] IR shares (`render(tree, binds)` + `decode(id)`). Always compiled.
+pub mod backend;
 pub mod console;
 pub mod fmt;
 /// The dregg-native forge's VISUAL surface — a repo / diff / pull-request /
@@ -50,6 +57,8 @@ pub mod grain_run_card;
 /// (`ConsoleModel::health` drives the page banner + panel gate + per-surface notes).
 pub mod source_health;
 pub mod tree;
+pub use affordance::{affordance_id, AffordanceTransport};
+pub use backend::SurfaceBackend;
 pub use console::{
     console_bind_values, console_card, console_slot_seeds, demo_console, ConsoleModel,
     HermesStatus, HermesView, LedgerView, MandateEdge, ReceiptRow, SpendLine, VatState, VatView,
@@ -120,8 +129,9 @@ pub mod web;
 pub use web::{
     render_card_document, render_card_live_document, render_doccollab_live_document,
     render_gallery_document, render_html, render_inspector_live_document,
-    render_kvstore_live_document, render_tally_live_document, render_trustless_cell_document,
-    GalleryCard, HeapSlotOpening, TrustlessAttestation,
+    render_kvstore_live_document, render_session_forms, render_tally_live_document,
+    render_trustless_cell_document, GalleryCard, HeapSlotOpening, SessionFormBackend,
+    TrustlessAttestation, WebBackend,
 };
 
 // ── The DISCORD renderer: the SAME `ViewNode` → a serenity `CreateEmbed` + button
@@ -131,5 +141,14 @@ pub use web::{
 pub mod discord;
 #[cfg(feature = "discord")]
 pub use discord::{
-    affordance_custom_id, parse_affordance_id, render_card, DiscordCard, TURN_PREFIX,
+    affordance_custom_id, parse_affordance_id, render_card, DiscordBackend, DiscordCard,
+    TURN_PREFIX,
 };
+
+// ── The TELEGRAM backend: the SAME `ViewNode` → Telegram message text (the non-affordance
+//    half; the affordance half becomes the frontend's inline keyboard). gpui-free + deos-js-free
+//    (serde only). The frontend crate renders through this instead of its own subset walker. ──
+#[cfg(feature = "telegram")]
+pub mod telegram;
+#[cfg(feature = "telegram")]
+pub use telegram::{render_text, TelegramBackend};

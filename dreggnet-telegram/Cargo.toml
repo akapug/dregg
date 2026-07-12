@@ -32,8 +32,9 @@ description = "A TelegramFrontend implementing dreggnet-offerings' Frontend trai
 dreggnet-offerings = { path = "../dreggnet-offerings" }
 # THE DEOS SURFACE — `ViewNode`, the serializable affordance view-tree an offering's
 # `render` produces. The Telegram renderer walks it into message text + an inline
-# keyboard. `default-features = false` = the gpui-free view-tree model only.
-deos-view = { path = "../deos-view", default-features = false }
+# keyboard. `default-features = false` = the gpui-free view-tree model only; the
+# `telegram` feature adds the `TelegramBackend` text walker this crate renders through.
+deos-view = { path = "../deos-view", default-features = false, features = ["telegram"] }
 # REAL DERIVED IDENTITY — `AgentCipherclerk::from_key_bytes` → a genuine Ed25519 signing
 # identity, mirroring `discord-bot/cipherclerk.rs`'s `UserCipherclerk::derive` (only the
 # BLAKE3 domain differs: `dregg-telegram-bot-v1` vs `-discord-bot-v1`). `default-features

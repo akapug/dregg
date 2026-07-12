@@ -15,30 +15,25 @@
 //! sole referee, so firing it lands a real [`dreggnet_offerings::Outcome::Refused`] (anti-ghost),
 //! exactly as on Discord.
 
+use deos_view::AffordanceTransport;
 use dreggnet_offerings::{Action, Surface};
 use serde::{Deserialize, Serialize};
 
 use crate::render::render_surface_text;
 
-/// The callback-data separator between an affordance's `turn` and `arg`. Telegram caps
-/// `callback_data` at 64 bytes; `"choose:1"` is tiny. `turn` never contains this byte (the
-/// dungeon uses `"choose"`), and we split on the LAST separator so an `arg` stays unambiguous.
-const CB_SEP: char = ':';
-
 /// Encode an affordance `{turn, arg}` into Telegram `callback_data` (`"<turn>:<arg>"`). The
 /// inverse of [`decode_callback`]. Deterministic and byte-bounded (≤ 64 bytes for any real
-/// affordance).
+/// affordance). The Telegram binding of the ONE `deos_view::affordance` codec.
 pub fn encode_callback(turn: &str, arg: i64) -> String {
-    format!("{turn}{CB_SEP}{arg}")
+    deos_view::affordance_id(turn, arg, AffordanceTransport::Telegram)
 }
 
 /// Decode Telegram `callback_data` back into `(turn, arg)` — the inverse of [`encode_callback`].
 /// Splits on the LAST separator so `turn` may (in principle) contain earlier ones. `None` if the
-/// data is malformed (no separator, or a non-integer arg) — a press the frontend never minted.
+/// data is malformed (no separator, or a non-integer arg) — a press the frontend never minted. The
+/// Telegram binding of the ONE `deos_view::affordance` codec.
 pub fn decode_callback(data: &str) -> Option<(String, i64)> {
-    let (turn, arg) = data.rsplit_once(CB_SEP)?;
-    let arg: i64 = arg.parse().ok()?;
-    Some((turn.to_string(), arg))
+    deos_view::affordance::parse_affordance_id(data, AffordanceTransport::Telegram)
 }
 
 /// The dim lock glyph prefixing a `!enabled` (ineligible) affordance's button label — the cap

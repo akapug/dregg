@@ -42,7 +42,7 @@ use axum::{
 };
 use serde::Deserialize;
 
-use deos_view::ViewNode;
+use deos_view::{SessionFormBackend, SurfaceBackend, ViewNode};
 use dreggnet_offerings::dungeon::{DungeonOffering, DungeonSession};
 use dreggnet_offerings::{
     Action, DreggIdentity, Frontend, Offering, Outcome, SessionConfig, SessionId, Surface,
@@ -122,9 +122,13 @@ impl WebFrontend {
     /// crafted POST of it). This is the HTML analogue of the native cockpit painting the SAME
     /// tree to gpui widgets / the Discord renderer painting it to an embed.
     pub fn render(&self, session: &SessionId, surface: &Surface) -> String {
-        let mut out = String::new();
-        view_html(surface.view(), session, &mut out);
-        out
+        // Render through the deos-view server-form backend (the moved-in `view_html`): one POST
+        // form per affordance, containers recursed so a nested affordance is never dropped. The
+        // frontend no longer maintains its own subset walker.
+        SessionFormBackend {
+            session_id: session.0.clone(),
+        }
+        .render(surface.view(), &[])
     }
 }
 
@@ -417,76 +421,6 @@ async fn get_verify(
 // ─────────────────────────────────────────────────────────────────────────────
 // Rendering — the deos ViewNode → HTML walk, and the page chrome.
 // ─────────────────────────────────────────────────────────────────────────────
-
-/// Walk a deos [`ViewNode`] into HTML, appending to `out`. Handles the shapes an offering's
-/// surface produces (prose, sections, the affordance menu) and recurses generic containers; a
-/// [`Menu`](ViewNode::Menu) row becomes a real POST form (the affordance control).
-fn view_html(node: &ViewNode, sid: &SessionId, out: &mut String) {
-    match node {
-        ViewNode::Text(t) => {
-            if !t.trim().is_empty() {
-                out.push_str("<p class=\"prose\">");
-                out.push_str(&esc(t));
-                out.push_str("</p>");
-            }
-        }
-        ViewNode::Section {
-            title,
-            tag,
-            children,
-        } => {
-            out.push_str(&format!(
-                "<section class=\"deos-section tag-{}\"><h2>{}</h2>",
-                esc(tag),
-                esc(title)
-            ));
-            for c in children {
-                view_html(c, sid, out);
-            }
-            out.push_str("</section>");
-        }
-        ViewNode::Menu { items } => {
-            out.push_str("<div class=\"affordances\">");
-            for it in items {
-                let (disabled, cls) = if it.enabled {
-                    ("", "affordance")
-                } else {
-                    (" disabled", "affordance dimmed")
-                };
-                // One <form> per affordance — a real POST of its {turn, arg} to the act route.
-                out.push_str(&format!(
-                    "<form class=\"{cls}\" method=\"post\" action=\"/session/{sid}/act\">\
-                     <input type=\"hidden\" name=\"turn\" value=\"{turn}\">\
-                     <input type=\"hidden\" name=\"arg\" value=\"{arg}\">\
-                     <button type=\"submit\"{disabled}>{label}</button>\
-                     </form>",
-                    cls = cls,
-                    sid = esc(&sid.0),
-                    turn = esc(&it.turn),
-                    arg = it.arg,
-                    disabled = disabled,
-                    label = esc(&it.label),
-                ));
-            }
-            out.push_str("</div>");
-        }
-        // Generic containers: recurse children in order.
-        ViewNode::VStack(cs) | ViewNode::Row(cs) | ViewNode::List(cs) | ViewNode::Table(cs) => {
-            for c in cs {
-                view_html(c, sid, out);
-            }
-        }
-        ViewNode::Grid { children, .. } => {
-            for c in children {
-                view_html(c, sid, out);
-            }
-        }
-        ViewNode::Divider => out.push_str("<hr>"),
-        // Any richer node an offering does not (yet) emit on this surface: the deos-js/web-cells
-        // path renders these live (bind/gauge/tabs/…). Skipped by this direct HTML renderer.
-        _ => {}
-    }
-}
 
 /// Wrap an HTML fragment in a full document with the notice banner + the live verify line.
 fn page(id: &SessionId, notice: Option<&str>, fragment: &str, verify: &VerifyReport) -> String {
