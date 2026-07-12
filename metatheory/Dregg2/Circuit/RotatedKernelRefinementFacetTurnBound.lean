@@ -356,6 +356,13 @@ def transferAuthoritySourceCanon_ofTB (hash : List ℤ → ℤ) (fcaps : FacetCa
     (hlen : 2 ≤ t.rows.length)
     (hanchor : TurnIdentityAnchored Dregg2.Circuit.RotatedKernelRefinement.transferV3
       "dregg-effectvm-transfer-v1-rot24-v3-capopen-eff" EFF_TRANSFER t 0 tr.src tr.actor tr.dst)
+    -- the FIRST-row canonicality envelope (cells range-checked `0 ≤ · < p`): supplies the `hcanon` field
+    -- AND the `hcellSrc` the `src` pin needs to lift the mod-`p` weld to the ℤ equality.
+    (hcanon : Dregg2.Circuit.Emit.CapOpenEmit.CapOpenRowCanon
+      (capOpenCols Dregg2.Circuit.RotatedKernelRefinement.transferV3.traceWidth)
+      (Dregg2.Circuit.DescriptorIR2.envAt t 0) EFF_TRANSFER)
+    -- the turn's `src` label is a canonical field element (`0 ≤ src < p`, the deployed Label range check).
+    (hsrcLt : (tr.src : ℤ) < 2013265921)
     (hedge : leafOf (capOpenCols Dregg2.Circuit.RotatedKernelRefinement.transferV3.traceWidth) (Dregg2.Circuit.DescriptorIR2.envAt t 0)
       = canonicalLeafAt fcaps tr.actor tr.src)
     (hipc : ∀ (actor src : Dregg2.Authority.Label) (c : Dregg2.Exec.FacetAuthority.FacetCap),
@@ -379,11 +386,13 @@ def transferAuthoritySourceCanon_ofTB (hash : List ℤ → ℤ) (fcaps : FacetCa
   i := 0
   hi := by omega
   hiNotLast := by omega
+  hcanon := hcanon
   -- THE DISCHARGE: `hsrc` on the first row is the `.piBinding .first` weld + the verifier anchor
-  -- (`= tr.src`) — the SAME row the membership opens, no cross-row transport.
+  -- (`= tr.src`), lifted from the mod-`p` pin to the ℤ equality by the first-row cell canonicality
+  -- (`hcanon.cells`) and the turn-src Label range (`hsrcLt`) — the SAME row the membership opens.
   hsrc := effCapOpenV3TB_hsrc Dregg2.Circuit.RotatedKernelRefinement.transferV3
     "dregg-effectvm-transfer-v1-rot24-v3-capopen-eff" EFF_TRANSFER hash minit mfin maddrs t hsat
-    0 (by omega) rfl tr.src tr.actor tr.dst hanchor
+    0 (by omega) rfl tr.src tr.actor tr.dst hanchor (hcanon.cells _) hsrcLt
   hedge := hedge
   hipc := hipc
   htier := htier
@@ -418,6 +427,12 @@ theorem transfer_descriptorRefines_facetTB_realized (hash : List ℤ → ℤ)
     (hanchor : TurnIdentityAnchored Dregg2.Circuit.RotatedKernelRefinement.transferV3
       "dregg-effectvm-transfer-v1-rot24-v3-capopen-eff" EFF_TRANSFER ct 0 pc.turn.src pc.turn.actor
       pc.turn.dst)
+    -- the cap-open FIRST-row canonicality envelope (cells range-checked) + the turn-src Label range —
+    -- what lifts the mod-`p` src pin to the ℤ equality (fed into `transferAuthoritySourceCanon_ofTB`).
+    (hccanon : Dregg2.Circuit.Emit.CapOpenEmit.CapOpenRowCanon
+      (capOpenCols Dregg2.Circuit.RotatedKernelRefinement.transferV3.traceWidth)
+      (Dregg2.Circuit.DescriptorIR2.envAt ct 0) EFF_TRANSFER)
+    (hsrcLt : (pc.turn.src : ℤ) < 2013265921)
     (hedge : leafOf (capOpenCols Dregg2.Circuit.RotatedKernelRefinement.transferV3.traceWidth) (Dregg2.Circuit.DescriptorIR2.envAt ct 0)
       = canonicalLeafAt fcaps pc.turn.actor pc.turn.src)
     (hipc : ∀ (actor src : Dregg2.Authority.Label) (c : Dregg2.Exec.FacetAuthority.FacetCap),
@@ -428,7 +443,7 @@ theorem transfer_descriptorRefines_facetTB_realized (hash : List ℤ → ℤ)
   -- build the slim canonical authority source with `hsrc` DERIVED from the in-circuit PI weld.
   have hauth : TransferAuthoritySourceCanon hash fcaps provided pre pc.turn :=
     transferAuthoritySourceCanon_ofTB hash fcaps provided pre pc.turn Sc8 vkOfTag cminit cmfin cmaddrs ct
-      hChip hcsat hclen hanchor hedge hipc htier
+      hChip hcsat hclen hanchor hccanon hsrcLt hedge hipc htier
   -- the VALUE leg over the witness turn `tr`, rewritten to `pc.turn` via the turn-identity binding.
   have hval : BalanceMovementSpec pre tr a post :=
     transfer_descriptorRefines hash hside hsat pre post tr a henc
