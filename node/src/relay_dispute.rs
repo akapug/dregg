@@ -25,16 +25,16 @@
 //!   * [`build_slash_turn`] drives the real [`build_slash_action`] and appends
 //!     the effects that dispose of the seized bond FROM the relay cell: a
 //!     bounded RESTITUTION [`Effect::Transfer`] to the wronged inbox owner
-//!     (their proven loss + a small bounty), and the REMAINDER is BURNED
-//!     ([`Effect::Burn`] — the balance is destroyed with no destination credit).
-//!     The bond leaves the operator in full (`restitution + burned == seized`),
-//!     but only `restitution` lands in another cell; the rest is provably
-//!     removed from supply. `build_slash_action` deliberately omits these (its
-//!     doc: "the accompanying `Effect::Transfer` … is the cclerk-side
-//!     composition"); this is that composition. Restitution makes the wronged
-//!     party whole; the burn is a deflationary deterrent — the fault destroys
-//!     value rather than handing a windfall to the disputer or accruing to any
-//!     global-owned entity. Supply after a slash drops by `seized - restitution`.
+//!     (their proven loss + a small bounty), and the REMAINDER as a conserving
+//!     [`Effect::Transfer`] to the configured remainder destination
+//!     ([`default_slash_treasury`] by default). The bond leaves the operator in
+//!     full (`restitution + remainder == seized`); nothing is destroyed.
+//!     `build_slash_action` deliberately omits these (its doc: "the accompanying
+//!     `Effect::Transfer` … is the cclerk-side composition"); this is that
+//!     composition. Restitution makes the wronged party whole; the remainder is a
+//!     public fault-beacon + funding flywheel at a deployment-chosen cell (an OSS
+//!     fund, a lottery among grain-owners, or a burn address) — never a windfall
+//!     to the disputer, never a protocol-governed entity.
 //!   * [`handle_dispute`] is the `POST /relay/dispute` intake: it gates on the
 //!     referee's own `well_formed`, reads the inbox cell (the content-addressed
 //!     delivered set is the service's `delivery_proofs` cache), runs the referee,
@@ -93,33 +93,38 @@ pub const DEFAULT_SLASH_PENALTY: u64 = 1_000;
 /// Default bounty added to the wronged party's proven fee when bounding
 /// restitution (computrons). Small — it compensates the cost of raising a
 /// well-formed dispute without turning restitution into a windfall; everything
-/// beyond `proven_fee + this` is burned.
+/// beyond `proven_fee + this` goes to the remainder destination (the treasury).
 pub const DEFAULT_RESTITUTION_BOUNTY: u64 = 100;
 
-/// The canonical cell-balance slot for [`Effect::Burn`]. Sentinel `0` names the
-/// cell's balance (per the executor's `state.balance()`); the burned remainder
-/// is debited from the relay cell's balance with no destination credit.
-const BURN_BALANCE_SLOT: u32 = 0;
+/// The default remainder destination — a derived treasury / OSS-fund cell. A slash
+/// remainder Transferred here is a public fault-beacon (a windfall appeared => a slash
+/// fired somewhere) and a funding flywheel. Deployments override `SlashPlan::remainder_dest`
+/// (a lottery among grain-owners, an OSS fund, or a burn address). NOT a protocol-governed
+/// entity — just the cell a deployment points slashes at.
+pub fn default_slash_treasury() -> CellId {
+    CellId::from_bytes(*blake3::hash(b"dregg-slash-treasury-v1").as_bytes())
+}
 
 // =============================================================================
-// The payout split: restitution to the wronged party, remainder BURNED
+// The payout split: restitution to the wronged party, remainder to the treasury
 // =============================================================================
 
 /// How a seizure is disposed. A conviction does NOT hand the whole bond to the
 /// disputer, nor does it accrue to any global-owned entity: the wronged party is
 /// made whole up to their proven loss (plus a small bounty), and everything
-/// beyond that is BURNED — provably removed from supply. Restitution is a
-/// conserving Transfer out of the relay cell; the burn destroys value. By
-/// construction `restitution + burned == seized`: the operator loses the full
+/// beyond that is Transferred to the configured remainder destination (a treasury
+/// by default). Both legs are CONSERVING Transfers out of the relay cell; nothing
+/// is destroyed. By
+/// construction `restitution + remainder == seized`: the operator loses the full
 /// seizure, the wronged party gains `restitution`, and `burned` leaves supply.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SlashPayout {
     /// Computrons restituted to the wronged inbox owner (their proven loss,
     /// bounded by the seizure).
     pub restitution: u64,
-    /// Computrons BURNED — the remainder of the seizure, destroyed (a
-    /// deflationary deterrent, credited to no cell).
-    pub burned: u64,
+    /// Computrons routed to the configured remainder destination (a treasury /
+    /// OSS-fund cell by default) — the remainder of the seizure after restitution.
+    pub remainder: u64,
 }
 
 impl SlashPayout {
@@ -133,14 +138,14 @@ impl SlashPayout {
         let restitution = seized.min(proven_fee.saturating_add(bounty));
         SlashPayout {
             restitution,
-            burned: seized - restitution,
+            remainder: seized - restitution,
         }
     }
 
     /// The total disposed — always equal to the seizure
     /// (`restitution + burned`).
     pub fn total(&self) -> u64 {
-        self.restitution + self.burned
+        self.restitution + self.remainder
     }
 }
 
@@ -155,16 +160,21 @@ impl SlashPayout {
 /// [`Action`] by [`build_slash_turn`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SlashPlan {
-    /// The bonded relay-operator cell being slashed (the `from` of the
-    /// restitution Transfer, the `target` of the burn, the target of the slash
+    /// The bonded relay-operator cell being slashed (the `from` of both the
+    /// restitution and remainder Transfers, and the target of the slash
     /// transition).
     pub relay_cell: CellId,
     /// The wronged inbox owner (`receipt.inbox_owner`) — the `to` of the
     /// conserving restitution Transfer.
     pub wronged_party: CellId,
-    /// How the seizure is split between restitution and the burn.
-    /// `payout.restitution + payout.burned == seized_amount`.
+    /// How the seizure is split between restitution and the remainder.
+    /// `payout.restitution + payout.remainder == seized_amount`.
     pub payout: SlashPayout,
+    /// Where the remainder (seizure minus restitution) is Transferred — a treasury /
+    /// OSS-fund cell by default (a public fault-beacon + funding flywheel); a deployment
+    /// may point it at a verifiable-random lottery among grain-owners, or a burn address.
+    /// A CONSERVING Transfer, not destruction.
+    pub remainder_dest: CellId,
     /// Computrons seized from the bond = `min(requested_penalty, bond - bond_min)`.
     /// May be `0` if the bond is already at its floor (the dispute is still
     /// recorded, but nothing is seizable).
@@ -215,6 +225,7 @@ pub fn plan_slash(
         relay_cell,
         wronged_party,
         payout,
+        remainder_dest: default_slash_treasury(),
         seized_amount: seized,
         new_bond_amount: bond_amount - seized,
         new_dispute_count: dispute_count.saturating_add(1),
@@ -293,11 +304,11 @@ pub fn build_slash_turn(cclerk: &AppCipherclerk, plan: &SlashPlan) -> Action {
     // Burn leg: the remainder of the seizure is destroyed — debited from the
     // relay cell's balance with no destination credit, so supply decreases by
     // `seized - restitution`. No global-owned entity receives it.
-    if plan.payout.burned > 0 {
-        action.effects.push(Effect::Burn {
-            target: plan.relay_cell,
-            slot: BURN_BALANCE_SLOT,
-            amount: plan.payout.burned,
+    if plan.payout.remainder > 0 {
+        action.effects.push(Effect::Transfer {
+            from: plan.relay_cell,
+            to: plan.remainder_dest,
+            amount: plan.payout.remainder,
         });
     }
     action
@@ -449,13 +460,13 @@ pub async fn handle_dispute(
         // One payout effect per non-zero leg of the split (restitution Transfer,
         // remainder Burn).
         let payout_effects =
-            usize::from(plan.payout.restitution > 0) + usize::from(plan.payout.burned > 0);
+            usize::from(plan.payout.restitution > 0) + usize::from(plan.payout.remainder > 0);
         return Ok(Json(DisputeResponse {
             verdict: "slash",
             slashed: true,
             seized_amount: plan.seized_amount,
             restitution_amount: plan.payout.restitution,
-            burned_amount: plan.payout.burned,
+            burned_amount: plan.payout.remainder,
             prior_bond_amount: prior_bond,
             new_bond_amount: plan.new_bond_amount,
             dispute_count: plan.new_dispute_count,
@@ -538,7 +549,7 @@ mod tests {
     }
 
     #[test]
-    fn proven_drop_restitutes_wronged_and_burns_remainder() {
+    fn proven_drop_restitutes_wronged_and_routes_remainder_to_treasury() {
         // A well-formed receipt + a dropped inbox (no delivered hash, no refund)
         // convicts. The seizure SPLITS: a bounded restitution to the wronged
         // owner + the remainder BURNED. The bond leaves the operator in full;
@@ -556,7 +567,7 @@ mod tests {
         assert_eq!(plan.seized_amount, 500);
         assert_eq!(plan.payout.restitution, 150, "proven loss + bounty");
         assert_eq!(
-            plan.payout.burned, 350,
+            plan.payout.remainder, 350,
             "the remainder is burned (deflationary deterrent)"
         );
         assert_eq!(
@@ -584,7 +595,9 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(transfers.len(), 1, "only the restitution leg is a Transfer");
+        // Two conserving Transfers: restitution to the wronged owner + the remainder
+        // to the treasury (default_slash_treasury). No burn — nothing destroyed.
+        assert_eq!(transfers.len(), 2, "restitution + remainder legs");
         assert_eq!(
             transfers[0].0, relay_cell,
             "restitution seized FROM the relay"
@@ -594,35 +607,32 @@ mod tests {
             "restitution TO the wronged owner"
         );
         assert_eq!(transfers[0].2, 150);
-
-        // Exactly one Burn of the remainder, debited from the relay cell — no
-        // destination credit, so supply drops by 350.
-        let burns: Vec<(CellId, u32, u64)> = action
-            .effects
-            .iter()
-            .filter_map(|e| match e {
-                Effect::Burn {
-                    target,
-                    slot,
-                    amount,
-                } => Some((*target, *slot, *amount)),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(burns.len(), 1, "the remainder is a single Burn");
-        assert_eq!(burns[0].0, relay_cell, "burned FROM the relay cell");
-        assert_eq!(burns[0].1, BURN_BALANCE_SLOT, "canonical balance slot");
-        assert_eq!(burns[0].2, 350, "supply drops by seized - restitution");
-
         assert_eq!(
-            transfers[0].2 + burns[0].2,
+            transfers[1].0, relay_cell,
+            "remainder seized FROM the relay"
+        );
+        assert_eq!(
+            transfers[1].1,
+            default_slash_treasury(),
+            "remainder TO the treasury"
+        );
+        assert_eq!(transfers[1].2, 350, "remainder = seized - restitution");
+        assert!(
+            !action
+                .effects
+                .iter()
+                .any(|e| matches!(e, Effect::Burn { .. })),
+            "no burn — the remainder is Transferred, conserving"
+        );
+        assert_eq!(
+            transfers[0].2 + transfers[1].2,
             plan.seized_amount,
-            "the whole seizure leaves the operator (restitution + burn)"
+            "the whole seizure leaves the operator (restitution + remainder), conserving"
         );
     }
 
     #[test]
-    fn whole_seizure_burned_when_no_proven_loss() {
+    fn whole_seizure_to_treasury_when_no_proven_loss() {
         // No proven fee and no bounty => the wronged party is owed nothing extra,
         // so the ENTIRE seizure is burned (a single Burn, no Transfer). Supply
         // drops by the whole seizure.
@@ -635,29 +645,38 @@ mod tests {
         assert!(slash);
         let plan = plan.unwrap();
         assert_eq!(plan.payout.restitution, 0, "nothing proven to restitute");
-        assert_eq!(plan.payout.burned, 500, "the whole seizure is burned");
+        assert_eq!(
+            plan.payout.remainder, 500,
+            "the whole seizure goes to the treasury"
+        );
         assert_eq!(plan.payout.total(), plan.seized_amount);
 
         let action = build_slash_turn(&test_cclerk(), &plan);
-        let transfers = action
-            .effects
-            .iter()
-            .filter(|e| matches!(e, Effect::Transfer { .. }))
-            .count();
-        assert_eq!(transfers, 0, "a zero restitution leg is omitted");
-        let burns: Vec<u64> = action
+        // Restitution 0 (omitted); the whole seizure is a single conserving Transfer of
+        // the remainder to the treasury — no burn.
+        let transfers: Vec<(CellId, CellId, u64)> = action
             .effects
             .iter()
             .filter_map(|e| match e {
-                Effect::Burn {
-                    target,
-                    slot,
-                    amount,
-                } if *target == relay_cell && *slot == BURN_BALANCE_SLOT => Some(*amount),
+                Effect::Transfer { from, to, amount } => Some((*from, *to, *amount)),
                 _ => None,
             })
             .collect();
-        assert_eq!(burns, vec![500], "a single Burn of the whole seizure");
+        assert_eq!(
+            transfers.len(),
+            1,
+            "one Transfer: the remainder to the treasury"
+        );
+        assert_eq!(transfers[0].0, relay_cell, "seized FROM the relay");
+        assert_eq!(transfers[0].1, default_slash_treasury(), "TO the treasury");
+        assert_eq!(transfers[0].2, 500, "the whole seizure");
+        assert!(
+            !action
+                .effects
+                .iter()
+                .any(|e| matches!(e, Effect::Burn { .. })),
+            "no burn"
+        );
     }
 
     #[test]
@@ -679,7 +698,7 @@ mod tests {
             plan.payout.restitution, 200,
             "restitution never exceeds the seizure"
         );
-        assert_eq!(plan.payout.burned, 0, "nothing left to burn");
+        assert_eq!(plan.payout.remainder, 0, "nothing left to burn");
         assert_eq!(plan.payout.total(), plan.seized_amount);
 
         let action = build_slash_turn(&test_cclerk(), &plan);
@@ -711,7 +730,7 @@ mod tests {
         ] {
             let p = SlashPayout::split(seized, fee, bounty);
             assert_eq!(
-                p.restitution + p.burned,
+                p.restitution + p.remainder,
                 seized,
                 "restitution + burned == seized"
             );
@@ -760,7 +779,7 @@ mod tests {
         assert_eq!(plan.new_bond_amount, 1_000, "never below bond_min");
         assert_eq!(plan.new_dispute_count, 4);
         assert_eq!(plan.payout.restitution, 200);
-        assert_eq!(plan.payout.burned, 0);
+        assert_eq!(plan.payout.remainder, 0);
         assert_eq!(plan.payout.total(), plan.seized_amount);
     }
 
