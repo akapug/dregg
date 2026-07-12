@@ -971,3 +971,16 @@ BUILD (mostly additive on dregg-pay, all devnet/mock-first, mainnet on ember's g
 - swap: a Jupiter route ($DREGG->SOL->USDC) on a passed vote (the sharpest real-funds edge — vote authorizes, ember signs).
 - OTC: a direct USDC<->$DREGG-pile flow at the 10% discount (no DEX).
 OPEN CALLS for ember: run price ($X USDC-equiv; $DREGG-per-run fixed or price-fed?); confirm Jupiter as the router.
+
+## Turn-hash-binding follow-up: DRIVEN, and codex's premise REFUTED (2026-07-11)
+Codex claimed verify_by_replay had a gap (the turn_hash is not bound, so a synthetic hash passes linkage+state).
+I implemented the binding (compare the re-derived choice-step turn_hash to the recorded one) and DROVE it on persvati:
+it fails TurnHashMismatch{step:0} UNIVERSALLY — even spween-dregg's OWN tests, where the record path IS the replay
+path (Driver::start+advance both times). So the turn_hash differs across two IDENTICAL runs => it is NON-DETERMINISTIC
+(a unique-id/nonce component), and thus CANNOT be reproduced/bound via replay. The committed-green verify_by_replay is
+already CORRECT: it binds the DETERMINISTIC state (reproduces exactly) + forged-choice refusal + state-hash linkage —
+which IS the security (a forger cannot reproduce the state or pass an illegal choice). Codex mis-diagnosed a non-
+deterministic unique-id as a content hash. Reverted the binding; verify.rs stays committed-green. (Separate open Q,
+NOT a verify bug: whether turn_hash SHOULD be a deterministic content hash is a turn-crate design question — but the
+replay security holds regardless.) The discipline earned its keep twice: caught codex's bad spween fix, then refuted
+its plausible-but-wrong finding by driving.
