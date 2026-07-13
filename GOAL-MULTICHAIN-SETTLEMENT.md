@@ -396,3 +396,10 @@ HONEST REMAINING (none clean-and-mine-trivial):
   in-repo governance anchor constants (update at deploy).
 The swarm drove the achievable clean-and-mine scope to completion; the remaining needs sibling coordination or ember's
 outward decisions.
+
+## ⚡ TESTNET-DEPLOY + DrEX-FRONTIER (07-13, live)
+- **TESTNET DEPLOY greenlit + funding in progress:** throwaway EVM key `0x8b251ADF19a78C6f9e9217E07CD3468C40F00343` (seed+key in session scratchpad, never committed). ember funding via Superchain/CDP faucet. On funds → `forge script chain/script/DeploySettlement.s.sol --rpc-url base_sepolia --broadcast` (fixture-genesis default → real Groth16 `settle()` in-tx = the whale-reply centerpiece: "a dregg proof settled on Base-Sepolia"). Balance-poll armed.
+- **B_IROOT FIXED** — scope issue, const back at trace_rotated.rs:303; dregg-circuit compiles; circuit side UNBLOCKED (real matcher / shielded weld / caveat-in-circuit all buildable).
+- **DrEX tower = 7 rungs** (1 fairness · 2 aggregation · 4 uniform-price optimality · 5 priced/partial/multi-pair · 6 never-insolvent liquidity · 7 cross-margin-via-mandate), all kernel-clean; LedgerRealization welds rung-1 + rung-5-full-fill to the REAL recKExec (kernel-real). Shielded-pool ABI `_refines_` PROVEN.
+- **DrEX CLICKABLE** (drex-web/): REAL extension-wasm wallet proving (PQ signed turn + conservation proof bound to order + tamper-reject) — verified. Matcher mirror being replaced with the REAL solver→verified_settle→recKExec pipeline.
+- Replyable distance ≈ one broadcast (funding) + host/record the demo. DrEX/OCIP buildout bar MET.
