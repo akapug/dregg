@@ -758,6 +758,7 @@ import Dregg2.Circuit.StarkSoundFriLdt
 import Dregg2.Circuit.FriColumnDecode
 import Dregg2.Circuit.StarkSoundColumnCfg
 import Dregg2.Circuit.LightClientDeployed
+import Dregg2.Circuit.LightClientDeployedGeneral
 import Dregg2.Circuit.TraceColumnInterp
 import Dregg2.Circuit.FieldIntegerLift
 import Dregg2.Circuit.FriExtractReal
@@ -1004,3 +1005,4 @@ import Dregg2.Verify.ContractG
 import Dregg2.Verify.FramesG
 import Dregg2.Verify.QueueFactoryProbe
 import Dregg2.Verify.TacticsG
+import Market -- DrEX (Dragon's Egg Exchange): the multilateral MARKET layer crossBid_needs_market demands — MarketClearing (fair + pool-Converts-balanced allocation over Intent books); clearing_conserves_per_asset (Σin=Σout per asset via KernelBridge.toBal) + exact_clears_iff (an exact book clears IFF pools balance) + ringClearing (the 3-party ring containing the bilaterally-stuck crossBid CLEARS) w/ teeth mint_refused (a Σ-violating book admits NO clearing) + unfair_refused (balanced-but-misrouted allocation refused); n=1 MarketClearing.ofFill recovers the bilateral settle. Market/Fairness adds the FAIRNESS half over Intent/Ring's cycles (conserve+atomic already proven THERE, composed not re-proved): clearing_respects_limits — every participant of a CycleValid cycle stays within its declaration BOTH sides (debited only offerAsset ≤ offerAmount [new] + credited wantAsset ≥ wantMin [Ring's cycle_individuallyRational]) w/ teeth overdebit_refused/wrongAsset_refused (a limit-breaching cycle never FORMS)

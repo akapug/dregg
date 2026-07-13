@@ -1,5 +1,5 @@
 name = "Dregg2"
-defaultTargets = ["Dregg2", "Metatheory", "Polis"]
+defaultTargets = ["Dregg2", "Metatheory", "Polis", "Market"]
 
 # Pin mathlib to the exact revision matching v4.30.0
 # (rev 1c2b90b13009c65b090d95a83c98e248deafb6f1). This is a PORTABLE `git`+`rev`
@@ -49,3 +49,10 @@ globs = ["Polis.+"]
 [[lean_exe]]
 name = "polis_governor"
 root = "PolisGovernor"
+
+# Market/* — DrEX (Dragon's Egg Exchange): the Lean-first proof-carrying exchange tower
+# (namespace `Market`, composing with Dregg2.Intent + Dregg2.Intent.Ring). Root module
+# `Market` (./Market.lean) aggregates Market/*; also imported from the Dregg2 root so the
+# whole-tree build covers it either way.
+[[lean_lib]]
+name = "Market"
