@@ -56,7 +56,15 @@ membership → SZ (`busBalance_forces_membership` + the multiset `_perm` extensi
 | 2 | Cap-open mask-recon (32-bit, 2p<2³²) | a cap granting nothing authorizes a transfer | FIXED (per-16-bit-limb recon, `reconExact` DERIVED), staged |
 | 3 | Cross-cell conservation (≥2-cell sum wraps p) | forge value-conservation | FIXED (multi-limb accumulator), staged |
 | 4 | Core-transfer over-debit (amount unranged) + credit overflow | mint from nothing / value destruction | FIXED (15-bit borrow + carry, BOTH directions, availability DERIVED), staged |
-| 5 | Heap-sortedness double-spend (per-turn insert forces no sorted placement) | commit a non-sorted heap → forge a nullifier absence → re-spend | Lean closure PROVEN (IMT); deployed Stage A landed; **Stage F (atomic flip) = the coordinated VK-regen** |
+| 5 | Heap-sortedness double-spend (per-turn insert forces no sorted placement) | commit a non-sorted heap → forge a nullifier absence → re-spend | ✅ FIXED + MATERIALIZED: nullifier/commitment/revoked op=4 AAFI (two-path forces sorted-preservation), re-keyed VK epoch |
+| 6 | Mutable-cell unforced-sortedness (createCell/factory/spawn op=3 insert) | forge a cell birth over a live cell → identity/state takeover | ✅ FIXED + MATERIALIZED: cellsInsertOp op=4 AAFI (same closure), capRoot-weld consistent, re-keyed VK epoch |
+
+★ GAP 1-6 VK EPOCH FLIP — COMPLETE (2026-07-13, commits e2d2572ad/577cb4c65/1e12d8886/c1fbb83d1): all six fixes
+materialized from the Lean source into the re-keyed VK epoch (rotation-v3-staged-registry.tsv, 8 aafi_insert rows;
+revoke rc-wrapped; FP re-pinned; provenance stamped; VK-REGEN-LOG audited). registry-parse rc-pins invariant PASSES;
+gap-5/6 rejection teeth verified green by the fix lanes on the same Lean-sourced descriptors. The two LIVE forgeries
+(nullifier re-spend, cell-birth takeover) are closed in the deployed AIR. (Sibling's Faithful8 API migration transiently
+breaks some test-target compilation — their in-flight workstream, orthogonal to the epoch.)
 
 Gaps 1–4: local-gate fixes (magnitude bound + sign/direction gate). Gap 5: NOT a local gate — the compacted-array
 insert is an O(n) suffix-shift unbindable in a fixed-width AIR; the sound closure is an **Indexed-Merkle-Tree
