@@ -376,11 +376,66 @@ theorem capOpen_satisfied2_strips_to_base (hash : List ℤ → ℤ) (s : Nat) (b
   effCapOpenV3_satisfied2_strips_to_base hash base name n minit mfin maddrs t
     (withSelectorGate_satisfied2 hash s (effCapOpenV3 base name n) minit mfin maddrs t h)
 
-/-- **`effCapOpenV3_membershipCore`** — a `Satisfied2` witness of `effCapOpenV3 base name n` rebuilds the
+/-- **`capOpenMem_membershipCore`** — MEMBERSHIP-PARAMETRIC (the wide-weld fusion): a `Satisfied2`
+witness of ANY descriptor `D` whose constraints CONTAIN the cap-open appendix at width `w` rebuilds the
 membership CORE (leaf/node absorbs + dir booleanity + the 8-lane root pin) on every active row, under CELL
 canonicality only (no effect-bit/recon carrier — what the write-forcing keystones consume). The lookups
 lift untouched; the gates lift from their mod-`p` field form through primality (`dirBool`) / the `(−p, p)`
 residual collapse (`rootPinned`). -/
+theorem capOpenMem_membershipCore (w n : Nat) (D : EffectVmDescriptor2)
+    (hmem : ∀ c ∈ capOpenConstraintsEff w n, c ∈ D.constraints)
+    (hash : List ℤ → ℤ) (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ)
+    (t : Dregg2.Circuit.DescriptorIR2.VmTrace)
+    (hsat : Satisfied2 hash D minit mfin maddrs t)
+    (i : Nat) (hi : i < t.rows.length) (hnotlast : i + 1 ≠ t.rows.length)
+    (hcells : ∀ col : Nat, 0 ≤ (Dregg2.Circuit.DescriptorIR2.envAt t i).loc col
+      ∧ (Dregg2.Circuit.DescriptorIR2.envAt t i).loc col < 2013265921) :
+    MembershipCore hash t.tf (capOpenCols w) (Dregg2.Circuit.DescriptorIR2.envAt t i) := by
+  have hrow := hsat.rowConstraints i hi
+  -- the cap-open `.gate` clauses bind under `when_transition()` — on this ACTIVE (non-last) row their
+  -- body vanishes mod `p`; `hlastf` reduces the row's `isLast` flag to `false`.
+  have hlastf : (i + 1 == t.rows.length) = false := by
+    simp only [beq_eq_false_iff_ne]; exact hnotlast
+  refine { leafHashed := ?_, nodeHashed := ?_, dirBool := ?_, rootPinned := ?_ }
+  · have hin : VmConstraint2.lookup (leafLookup (capOpenCols w)) ∈ capOpenConstraintsEff w n := by
+      simp [capOpenConstraintsEff]
+    have h := hrow _ (hmem _ hin)
+    simpa [VmConstraint2.holdsAt] using h
+  · intro lvl hlvl
+    have hin : VmConstraint2.lookup (nodeLookup (capOpenCols w) lvl) ∈ capOpenConstraintsEff w n := by
+      refine List.mem_cons_of_mem _ ?_
+      refine List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ ?_)))
+      exact List.mem_map.mpr ⟨lvl, List.mem_range.mpr hlvl, rfl⟩
+    have h := hrow _ (hmem _ hin)
+    simpa [VmConstraint2.holdsAt] using h
+  · intro lvl hlvl
+    have hin : VmConstraint2.base (.gate (dirBoolGate (capOpenCols w) lvl)) ∈ capOpenConstraintsEff w n := by
+      refine List.mem_cons_of_mem _ ?_
+      refine List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_right _ ?_)))
+      exact List.mem_map.mpr ⟨lvl, List.mem_range.mpr hlvl, rfl⟩
+    have h := hrow _ (hmem _ hin)
+    simp only [VmConstraint2.holdsAt, VmConstraint.holdsVm, hlastf] at h
+    have h' : (dirBoolGate (capOpenCols w) lvl).eval
+        (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ≡ 0 [ZMOD 2013265921] := by simpa using h
+    unfold dirBoolGate at h' ⊢
+    simp only [EmittedExpr.eval] at h' ⊢
+    exact boolGate_exact (hcells _) h'
+  · intro k
+    have hin : VmConstraint2.base (.gate (rootPinGate (capOpenCols w) k)) ∈ capOpenConstraintsEff w n := by
+      refine List.mem_cons_of_mem _ ?_
+      refine List.mem_append_left _ (List.mem_append_right _ ?_)
+      exact List.mem_map.mpr ⟨k, List.mem_finRange k, rfl⟩
+    have h := hrow _ (hmem _ hin)
+    simp only [VmConstraint2.holdsAt, VmConstraint.holdsVm, hlastf] at h
+    have h' : (rootPinGate (capOpenCols w) k).eval
+        (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ≡ 0 [ZMOD 2013265921] := by simpa using h
+    unfold rootPinGate at h' ⊢
+    simp only [EmittedExpr.eval] at h' ⊢
+    exact diffGate_exact (hcells _) (hcells _) h'
+
+
+/-- **`effCapOpenV3_membershipCore`** — the direct instantiation of `capOpenMem_membershipCore` at the
+cap-open member itself (`hmem := effCapOpenV3_constraints_mem`). -/
 theorem effCapOpenV3_membershipCore (base : EffectVmDescriptor2) (name : String) (n : Nat)
     (hash : List ℤ → ℤ) (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ)
     (t : Dregg2.Circuit.DescriptorIR2.VmTrace)
@@ -388,66 +443,27 @@ theorem effCapOpenV3_membershipCore (base : EffectVmDescriptor2) (name : String)
     (i : Nat) (hi : i < t.rows.length) (hnotlast : i + 1 ≠ t.rows.length)
     (hcells : ∀ col : Nat, 0 ≤ (Dregg2.Circuit.DescriptorIR2.envAt t i).loc col
       ∧ (Dregg2.Circuit.DescriptorIR2.envAt t i).loc col < 2013265921) :
-    MembershipCore hash t.tf (capOpenCols base.traceWidth) (Dregg2.Circuit.DescriptorIR2.envAt t i) := by
-  have hrow := hsat.rowConstraints i hi
-  have hmem := effCapOpenV3_constraints_mem base name n
-  -- the cap-open `.gate` clauses bind under `when_transition()` — on this ACTIVE (non-last) row their
-  -- body vanishes mod `p`; `hlastf` reduces the row's `isLast` flag to `false`.
-  have hlastf : (i + 1 == t.rows.length) = false := by
-    simp only [beq_eq_false_iff_ne]; exact hnotlast
-  refine { leafHashed := ?_, nodeHashed := ?_, dirBool := ?_, rootPinned := ?_ }
-  · have hin : VmConstraint2.lookup (leafLookup (capOpenCols base.traceWidth)) ∈ capOpenConstraintsEff base.traceWidth n := by
-      simp [capOpenConstraintsEff]
-    have h := hrow _ (hmem _ hin)
-    simpa [VmConstraint2.holdsAt] using h
-  · intro lvl hlvl
-    have hin : VmConstraint2.lookup (nodeLookup (capOpenCols base.traceWidth) lvl) ∈ capOpenConstraintsEff base.traceWidth n := by
-      refine List.mem_cons_of_mem _ ?_
-      refine List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ ?_)))
-      exact List.mem_map.mpr ⟨lvl, List.mem_range.mpr hlvl, rfl⟩
-    have h := hrow _ (hmem _ hin)
-    simpa [VmConstraint2.holdsAt] using h
-  · intro lvl hlvl
-    have hin : VmConstraint2.base (.gate (dirBoolGate (capOpenCols base.traceWidth) lvl)) ∈ capOpenConstraintsEff base.traceWidth n := by
-      refine List.mem_cons_of_mem _ ?_
-      refine List.mem_append_left _ (List.mem_append_left _ (List.mem_append_left _ (List.mem_append_right _ ?_)))
-      exact List.mem_map.mpr ⟨lvl, List.mem_range.mpr hlvl, rfl⟩
-    have h := hrow _ (hmem _ hin)
-    simp only [VmConstraint2.holdsAt, VmConstraint.holdsVm, hlastf] at h
-    have h' : (dirBoolGate (capOpenCols base.traceWidth) lvl).eval
-        (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ≡ 0 [ZMOD 2013265921] := by simpa using h
-    unfold dirBoolGate at h' ⊢
-    simp only [EmittedExpr.eval] at h' ⊢
-    exact boolGate_exact (hcells _) h'
-  · intro k
-    have hin : VmConstraint2.base (.gate (rootPinGate (capOpenCols base.traceWidth) k)) ∈ capOpenConstraintsEff base.traceWidth n := by
-      refine List.mem_cons_of_mem _ ?_
-      refine List.mem_append_left _ (List.mem_append_right _ ?_)
-      exact List.mem_map.mpr ⟨k, List.mem_finRange k, rfl⟩
-    have h := hrow _ (hmem _ hin)
-    simp only [VmConstraint2.holdsAt, VmConstraint.holdsVm, hlastf] at h
-    have h' : (rootPinGate (capOpenCols base.traceWidth) k).eval
-        (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ≡ 0 [ZMOD 2013265921] := by simpa using h
-    unfold rootPinGate at h' ⊢
-    simp only [EmittedExpr.eval] at h' ⊢
-    exact diffGate_exact (hcells _) (hcells _) h'
+    MembershipCore hash t.tf (capOpenCols base.traceWidth) (Dregg2.Circuit.DescriptorIR2.envAt t i) :=
+  capOpenMem_membershipCore base.traceWidth n (effCapOpenV3 base name n)
+    (effCapOpenV3_constraints_mem base name n) hash minit mfin maddrs t hsat i hi hnotlast hcells
 
-/-- **`effCapOpenV3_satisfiedEff`** — a `Satisfied2` witness of `effCapOpenV3 base name n` rebuilds
+/-- **`capOpenMem_satisfiedEff`** — MEMBERSHIP-PARAMETRIC: a `Satisfied2` witness of ANY descriptor
+`D` whose constraints CONTAIN the cap-open appendix at width `w` rebuilds
 `DeployedCapOpen.SatisfiedEff … n` on every row (the appendix constraints are satisfied regardless of the
 base — they read no base column). The fan-out analog of `transferCapOpenV3_satisfied`. Field-faithful: the
 gates arrive `≡ 0 [ZMOD p]` (`holdsVm`); the ℤ-level fields are recovered through the `CapOpenRowCanon`
 envelope (cell canonicality + effect-bit range). MASK-RECON-WRAP FIX: the two per-16-bit-limb recon gates
 (`maskReconLoGate`/`maskReconHiGate`) are pinned EXACTLY from their mod-`p` form because each limb sum is
 `< 2^16 < p` — a GENUINE range check derived in-proof (no assumed `reconExact`). -/
-theorem effCapOpenV3_satisfiedEff (base : EffectVmDescriptor2) (name : String) (n : Nat)
+theorem capOpenMem_satisfiedEff (w n : Nat) (D : EffectVmDescriptor2)
+    (hmem : ∀ c ∈ capOpenConstraintsEff w n, c ∈ D.constraints)
     (hash : List ℤ → ℤ) (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ)
     (t : Dregg2.Circuit.DescriptorIR2.VmTrace)
-    (hsat : Satisfied2 hash (effCapOpenV3 base name n) minit mfin maddrs t)
+    (hsat : Satisfied2 hash D minit mfin maddrs t)
     (i : Nat) (hi : i < t.rows.length) (hnotlast : i + 1 ≠ t.rows.length)
-    (hcanon : CapOpenRowCanon (capOpenCols base.traceWidth) (Dregg2.Circuit.DescriptorIR2.envAt t i) n) :
-    SatisfiedEff hash t.tf (capOpenCols base.traceWidth) (Dregg2.Circuit.DescriptorIR2.envAt t i) n := by
+    (hcanon : CapOpenRowCanon (capOpenCols w) (Dregg2.Circuit.DescriptorIR2.envAt t i) n) :
+    SatisfiedEff hash t.tf (capOpenCols w) (Dregg2.Circuit.DescriptorIR2.envAt t i) n := by
   have hrow := hsat.rowConstraints i hi
-  have hmem := effCapOpenV3_constraints_mem base name n
   -- the cap-open `.gate` clauses bind under `when_transition()` — on this ACTIVE (non-last) row their
   -- body vanishes mod `p`; `hlastf` reduces the row's `isLast` flag to `false`.
   have hlastf : (i + 1 == t.rows.length) = false := by
@@ -456,22 +472,22 @@ theorem effCapOpenV3_satisfiedEff (base : EffectVmDescriptor2) (name : String) (
   -- ℤ-exact (`hmaskbit`), hence each bit column is boolean (`hbool`) — the RANGE input the per-limb
   -- recon gates need to pin each limb `< 2^16 < p` (the MASK-RECON-WRAP FIX).
   have hmaskbit : ∀ j, j < MASK_BITS →
-      (maskBitBoolGate (capOpenCols base.traceWidth) j).eval (Dregg2.Circuit.DescriptorIR2.envAt t i).loc = 0 := by
+      (maskBitBoolGate (capOpenCols w) j).eval (Dregg2.Circuit.DescriptorIR2.envAt t i).loc = 0 := by
     intro j hj
-    have hin : VmConstraint2.base (.gate (maskBitBoolGate (capOpenCols base.traceWidth) j)) ∈ capOpenConstraintsEff base.traceWidth n := by
+    have hin : VmConstraint2.base (.gate (maskBitBoolGate (capOpenCols w) j)) ∈ capOpenConstraintsEff w n := by
       refine List.mem_cons_of_mem _ ?_
       refine List.mem_append_left _ (List.mem_append_left _ (List.mem_append_right _ ?_))
       exact List.mem_map.mpr ⟨j, List.mem_range.mpr hj, rfl⟩
     have h := hrow _ (hmem _ hin)
     simp only [VmConstraint2.holdsAt, VmConstraint.holdsVm, hlastf] at h
-    have h' : (maskBitBoolGate (capOpenCols base.traceWidth) j).eval
+    have h' : (maskBitBoolGate (capOpenCols w) j).eval
         (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ≡ 0 [ZMOD 2013265921] := by simpa using h
     unfold maskBitBoolGate at h' ⊢
     simp only [EmittedExpr.eval] at h' ⊢
     exact boolGate_exact (hcanon.cells _) h'
   have hbool : ∀ j, j < MASK_BITS →
-      (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ((capOpenCols base.traceWidth).bit j) = 0
-      ∨ (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ((capOpenCols base.traceWidth).bit j) = 1 := by
+      (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ((capOpenCols w).bit j) = 0
+      ∨ (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ((capOpenCols w).bit j) = 1 := by
     intro j hj
     have h := hmaskbit j hj
     unfold maskBitBoolGate at h
@@ -483,80 +499,93 @@ theorem effCapOpenV3_satisfiedEff (base : EffectVmDescriptor2) (name : String) (
   -- `< 2^16`, hence a canonical (`< p`) ℤ value — so `diffGate_exact` pins `mask_limb = Σ` EXACTLY.
   have limbExact : ∀ (off leafCol : Nat),
       (Dregg2.Circuit.DescriptorIR2.envAt t i).loc leafCol
-          + -1 * (reconLimbExpr (capOpenCols base.traceWidth) off MASK_LIMB_BITS).eval
+          + -1 * (reconLimbExpr (capOpenCols w) off MASK_LIMB_BITS).eval
               (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ≡ 0 [ZMOD 2013265921] →
       (∀ k, k < MASK_LIMB_BITS → off + k < MASK_BITS) →
       (Dregg2.Circuit.DescriptorIR2.envAt t i).loc leafCol
-          + -1 * (reconLimbExpr (capOpenCols base.traceWidth) off MASK_LIMB_BITS).eval
+          + -1 * (reconLimbExpr (capOpenCols w) off MASK_LIMB_BITS).eval
               (Dregg2.Circuit.DescriptorIR2.envAt t i).loc = 0 := by
     intro off leafCol hmodp hrange
     have hbitOff : ∀ k, k < MASK_LIMB_BITS →
-        (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ((capOpenCols base.traceWidth).bit (off + k)) = 0
-        ∨ (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ((capOpenCols base.traceWidth).bit (off + k)) = 1 :=
+        (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ((capOpenCols w).bit (off + k)) = 0
+        ∨ (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ((capOpenCols w).bit (off + k)) = 1 :=
       fun k hk => hbool (off + k) (hrange k hk)
-    have hval := reconLimbExpr_eval (capOpenCols base.traceWidth) (Dregg2.Circuit.DescriptorIR2.envAt t i)
+    have hval := reconLimbExpr_eval (capOpenCols w) (Dregg2.Circuit.DescriptorIR2.envAt t i)
       off MASK_LIMB_BITS hbitOff
-    have hlt := reconLimbN_lt (fun j => ((Dregg2.Circuit.DescriptorIR2.envAt t i).loc ((capOpenCols base.traceWidth).bit j)).toNat)
+    have hlt := reconLimbN_lt (fun j => ((Dregg2.Circuit.DescriptorIR2.envAt t i).loc ((capOpenCols w).bit j)).toNat)
       off MASK_LIMB_BITS (fun k hk => by rcases hbitOff k hk with h | h <;> simp [h])
-    have hltI : ((reconLimbN (fun j => ((Dregg2.Circuit.DescriptorIR2.envAt t i).loc ((capOpenCols base.traceWidth).bit j)).toNat) off MASK_LIMB_BITS : Nat) : ℤ) < 2013265921 := by
+    have hltI : ((reconLimbN (fun j => ((Dregg2.Circuit.DescriptorIR2.envAt t i).loc ((capOpenCols w).bit j)).toNat) off MASK_LIMB_BITS : Nat) : ℤ) < 2013265921 := by
       have h16 : (2 : Nat) ^ MASK_LIMB_BITS = 65536 := by norm_num [MASK_LIMB_BITS]
       rw [h16] at hlt
       exact_mod_cast Nat.lt_trans hlt (by norm_num)
     rw [hval] at hmodp ⊢
     exact diffGate_exact (hcanon.cells _) ⟨Int.natCast_nonneg _, hltI⟩ hmodp
   refine
-    { core := effCapOpenV3_membershipCore base name n hash minit mfin maddrs t hsat i hi hnotlast hcanon.cells
+    { core := capOpenMem_membershipCore w n D hmem hash minit mfin maddrs t hsat i hi hnotlast hcanon.cells
     , targetBound := ?_, effBitPinned := ?_
     , maskBitsBool := hmaskbit, maskReconLo := ?_, maskReconHi := ?_, facetEffBound := ?_ }
-  · have hin : VmConstraint2.base (.gate (targetBindGate (capOpenCols base.traceWidth))) ∈ capOpenConstraintsEff base.traceWidth n := by
+  · have hin : VmConstraint2.base (.gate (targetBindGate (capOpenCols w))) ∈ capOpenConstraintsEff w n := by
       simp [capOpenConstraintsEff]
     have h := hrow _ (hmem _ hin)
     simp only [VmConstraint2.holdsAt, VmConstraint.holdsVm, hlastf] at h
-    have h' : (targetBindGate (capOpenCols base.traceWidth)).eval
+    have h' : (targetBindGate (capOpenCols w)).eval
         (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ≡ 0 [ZMOD 2013265921] := by simpa using h
     unfold targetBindGate at h' ⊢
     simp only [EmittedExpr.eval] at h' ⊢
     exact diffGate_exact (hcanon.cells _) (hcanon.cells _) h'
-  · have hin : VmConstraint2.base (.gate (effBitGateFor (capOpenCols base.traceWidth) ((1 <<< n : Nat) : ℤ)))
-        ∈ capOpenConstraintsEff base.traceWidth n := by simp [capOpenConstraintsEff]
+  · have hin : VmConstraint2.base (.gate (effBitGateFor (capOpenCols w) ((1 <<< n : Nat) : ℤ)))
+        ∈ capOpenConstraintsEff w n := by simp [capOpenConstraintsEff]
     have h := hrow _ (hmem _ hin)
     simp only [VmConstraint2.holdsAt, VmConstraint.holdsVm, hlastf] at h
-    have h' : (effBitGateFor (capOpenCols base.traceWidth) ((1 <<< n : Nat) : ℤ)).eval
+    have h' : (effBitGateFor (capOpenCols w) ((1 <<< n : Nat) : ℤ)).eval
         (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ≡ 0 [ZMOD 2013265921] := by simpa using h
     unfold effBitGateFor at h' ⊢
     simp only [EmittedExpr.eval] at h' ⊢
     exact constPin_exact (hcanon.cells _) ⟨Int.natCast_nonneg _, hcanon.effLt⟩ h'
   · -- maskReconLo (FIX): the low 16 bits reconstruct `mask_lo` (leaf 3); sum `< 2^16 < p` pins it.
-    have hin : VmConstraint2.base (.gate (maskReconLoGate (capOpenCols base.traceWidth)))
-        ∈ capOpenConstraintsEff base.traceWidth n := by simp [capOpenConstraintsEff]
+    have hin : VmConstraint2.base (.gate (maskReconLoGate (capOpenCols w)))
+        ∈ capOpenConstraintsEff w n := by simp [capOpenConstraintsEff]
     have h := hrow _ (hmem _ hin)
     simp only [VmConstraint2.holdsAt, VmConstraint.holdsVm, hlastf] at h
-    have h' : (maskReconLoGate (capOpenCols base.traceWidth)).eval
+    have h' : (maskReconLoGate (capOpenCols w)).eval
         (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ≡ 0 [ZMOD 2013265921] := by simpa using h
     unfold maskReconLoGate at h' ⊢
     simp only [EmittedExpr.eval] at h' ⊢
-    exact limbExact 0 ((capOpenCols base.traceWidth).leaf 3) h'
+    exact limbExact 0 ((capOpenCols w).leaf 3) h'
       (fun k hk => by simp only [MASK_LIMB_BITS] at hk; simp only [MASK_BITS]; omega)
   · -- maskReconHi (FIX): the high 16 bits (columns 16..31) reconstruct `mask_hi` (leaf 4).
-    have hin : VmConstraint2.base (.gate (maskReconHiGate (capOpenCols base.traceWidth)))
-        ∈ capOpenConstraintsEff base.traceWidth n := by simp [capOpenConstraintsEff]
+    have hin : VmConstraint2.base (.gate (maskReconHiGate (capOpenCols w)))
+        ∈ capOpenConstraintsEff w n := by simp [capOpenConstraintsEff]
     have h := hrow _ (hmem _ hin)
     simp only [VmConstraint2.holdsAt, VmConstraint.holdsVm, hlastf] at h
-    have h' : (maskReconHiGate (capOpenCols base.traceWidth)).eval
+    have h' : (maskReconHiGate (capOpenCols w)).eval
         (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ≡ 0 [ZMOD 2013265921] := by simpa using h
     unfold maskReconHiGate at h' ⊢
     simp only [EmittedExpr.eval] at h' ⊢
-    exact limbExact MASK_LIMB_BITS ((capOpenCols base.traceWidth).leaf 4) h'
+    exact limbExact MASK_LIMB_BITS ((capOpenCols w).leaf 4) h'
       (fun k hk => by simp only [MASK_LIMB_BITS] at hk ⊢; simp only [MASK_BITS]; omega)
-  · have hin : VmConstraint2.base (.gate (selectedBitGate (capOpenCols base.traceWidth) n)) ∈ capOpenConstraintsEff base.traceWidth n := by
+  · have hin : VmConstraint2.base (.gate (selectedBitGate (capOpenCols w) n)) ∈ capOpenConstraintsEff w n := by
       simp [capOpenConstraintsEff]
     have h := hrow _ (hmem _ hin)
     simp only [VmConstraint2.holdsAt, VmConstraint.holdsVm, hlastf] at h
-    have h' : (selectedBitGate (capOpenCols base.traceWidth) n).eval
+    have h' : (selectedBitGate (capOpenCols w) n).eval
         (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ≡ 0 [ZMOD 2013265921] := by simpa using h
     unfold selectedBitGate at h' ⊢
     simp only [EmittedExpr.eval] at h' ⊢
     exact constPin_exact (hcanon.cells _) (by norm_num) h'
+
+
+/-- **`effCapOpenV3_satisfiedEff`** — the direct instantiation of `capOpenMem_satisfiedEff` at the
+cap-open member itself. -/
+theorem effCapOpenV3_satisfiedEff (base : EffectVmDescriptor2) (name : String) (n : Nat)
+    (hash : List ℤ → ℤ) (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ)
+    (t : Dregg2.Circuit.DescriptorIR2.VmTrace)
+    (hsat : Satisfied2 hash (effCapOpenV3 base name n) minit mfin maddrs t)
+    (i : Nat) (hi : i < t.rows.length) (hnotlast : i + 1 ≠ t.rows.length)
+    (hcanon : CapOpenRowCanon (capOpenCols base.traceWidth) (Dregg2.Circuit.DescriptorIR2.envAt t i) n) :
+    SatisfiedEff hash t.tf (capOpenCols base.traceWidth) (Dregg2.Circuit.DescriptorIR2.envAt t i) n :=
+  capOpenMem_satisfiedEff base.traceWidth n (effCapOpenV3 base name n)
+    (effCapOpenV3_constraints_mem base name n) hash minit mfin maddrs t hsat i hi hnotlast hcanon
 
 /-- **`effCapOpenV3_authorizes` — THE FAN-OUT AUTHORITY LEG (generic, live).** A `Satisfied2` witness of
 `effCapOpenV3 base name n` whose opened leaf IS the faithfulness contract's `(actor ⇒ src)` edge discharges
@@ -585,6 +614,25 @@ theorem effCapOpenV3_authorizes (base : EffectVmDescriptor2) (name : String) (n 
     (effCapOpenV3_satisfiedEff base name n hash minit mfin maddrs t hsat i hi hnotlast hcanon)
     caps leafAt hfaith actor src dst amt hsrc hedge htier
 
+/-- MEMBERSHIP-PARAMETRIC: any cap-open appendix `.base (.gate g)` constraint of an EMBEDDING
+descriptor FORCES `g.eval ≡ 0 [ZMOD p]` on an active
+(non-last) row — the field-faithful gate consequence (what the deployed AIR actually pins). -/
+theorem capOpenMem_gate_forces (w n : Nat) (D : EffectVmDescriptor2)
+    (hmem : ∀ c ∈ capOpenConstraintsEff w n, c ∈ D.constraints)
+    (hash : List ℤ → ℤ) (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ)
+    (t : Dregg2.Circuit.DescriptorIR2.VmTrace)
+    (hsat : Satisfied2 hash D minit mfin maddrs t)
+    (i : Nat) (hi : i < t.rows.length) (hnotlast : i + 1 ≠ t.rows.length)
+    (g : EmittedExpr) (hin : VmConstraint2.base (.gate g) ∈ capOpenConstraintsEff w n) :
+    g.eval (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ≡ 0 [ZMOD 2013265921] := by
+  have hrow := hsat.rowConstraints i hi
+  have hlastf : (i + 1 == t.rows.length) = false := by
+    simp only [beq_eq_false_iff_ne]; exact hnotlast
+  have h := hrow _ (hmem _ hin)
+  simp only [VmConstraint2.holdsAt, VmConstraint.holdsVm, hlastf] at h
+  simpa using h
+
+
 /-- Any cap-open appendix `.base (.gate g)` constraint FORCES `g.eval ≡ 0 [ZMOD p]` on an active
 (non-last) row — the field-faithful gate consequence (what the deployed AIR actually pins). -/
 theorem effCapOpenV3_gate_forces (base : EffectVmDescriptor2) (name : String) (n : Nat)
@@ -593,13 +641,9 @@ theorem effCapOpenV3_gate_forces (base : EffectVmDescriptor2) (name : String) (n
     (hsat : Satisfied2 hash (effCapOpenV3 base name n) minit mfin maddrs t)
     (i : Nat) (hi : i < t.rows.length) (hnotlast : i + 1 ≠ t.rows.length)
     (g : EmittedExpr) (hin : VmConstraint2.base (.gate g) ∈ capOpenConstraintsEff base.traceWidth n) :
-    g.eval (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ≡ 0 [ZMOD 2013265921] := by
-  have hrow := hsat.rowConstraints i hi
-  have hlastf : (i + 1 == t.rows.length) = false := by
-    simp only [beq_eq_false_iff_ne]; exact hnotlast
-  have h := hrow _ (effCapOpenV3_constraints_mem base name n _ hin)
-  simp only [VmConstraint2.holdsAt, VmConstraint.holdsVm, hlastf] at h
-  simpa using h
+    g.eval (Dregg2.Circuit.DescriptorIR2.envAt t i).loc ≡ 0 [ZMOD 2013265921] :=
+  capOpenMem_gate_forces base.traceWidth n (effCapOpenV3 base name n)
+    (effCapOpenV3_constraints_mem base name n) hash minit mfin maddrs t hsat i hi hnotlast g hin
 
 /-- **`effCapOpenV3_rejects_bit_clear` — the wrong-facet REJECTION core (field-faithful, NO envelope).**
 A row whose selected mask-bit carrier is CLEAR cannot satisfy the appendix: `selectedBitGate n`'s

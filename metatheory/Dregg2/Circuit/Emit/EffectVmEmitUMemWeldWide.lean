@@ -38,6 +38,7 @@ import Dregg2.Circuit.Emit.FieldsOpenEmit
 import Dregg2.Circuit.Emit.AccumulatorInsertEmit
 import Dregg2.Circuit.Emit.CarrierComposed
 import Dregg2.Circuit.Emit.AvailWideMembers
+import Dregg2.Circuit.Emit.AvailWideFeeMember
 import Dregg2.Circuit.RotatedKernelRefinementExercise
 
 namespace Dregg2.Circuit.Emit.EffectVmEmitUMemWeldWide
@@ -259,6 +260,24 @@ def crownWideHosts : List (String × EffectVmDescriptor2) :=
     -- forgery UNSAT on the welded leg).
     else if e.1 == "burnVmDescriptor2R24" then
       (e.1, Dregg2.Circuit.Emit.AvailWideMembers.burnV3AvailWide)
+    -- AVAILABILITY RETARGET, the WIDE-CAP-OPEN-EFF twin: the live cap-open EFF crown host
+    -- (position 42) is the selector-gated cap-open transfer REBUILT over the §11.7 borrow-weld
+    -- face (`AvailWideMembers.transferCapOpenEffAvailWide` — 46 + 16 PIs, width 1986 → 2946),
+    -- so the welded twin carries the availability forcing (`effAvailWide_row_v1` +
+    -- `transferAvail_derives_availability_row`) while the cap-open AUTHORITY appendix (the
+    -- depth-16 open + facet gates) rides verbatim (`capOpenAppendix_mem_effAvailWide`).
+    else if e.1 == "transferCapOpenEffVmDescriptor2R24" then
+      (e.1, Dregg2.Circuit.Emit.AvailWideMembers.transferCapOpenEffAvailWide)
+    -- AVAILABILITY RETARGET, the WIDE-FEE twin: the fee'd-transfer crown host (tail position
+    -- 44, the LIVE SOVEREIGN transfer's effect-vm leg) is the §11.8 MID-linked borrow/carry
+    -- face lifted `v3OfFrozenFeeWide` + rc pins, wide-appended at the FEE avail base 204
+    -- (`AvailWideFeeMember.transferFeeAvailWide` — the 67-PI layout UNCHANGED: 46 base + fee
+    -- pin 46 + rc 47..50 + 16 anchors; width 2607 → 2623), so the welded fee twin carries the
+    -- fee availability forcing through BOTH debit legs (`feeAvailWide_row_v1` via the
+    -- FEE-PINNED keystone `wideEmbeddedFee_sound_v1` +
+    -- `transferFeeAvail_derives_availability_row`).
+    else if e.1 == "transferFeeVmDescriptor2R24" then
+      (e.1, Dregg2.Circuit.Emit.AvailWideFeeMember.transferFeeAvailWide)
     else if e.1 == "makeSovereignVmDescriptor2R24" then
       (e.1, Dregg2.Circuit.Emit.CarrierComposed.makeSovereignV3DeployedWide)
     else e)
@@ -438,5 +457,29 @@ def weldedBurnAvailWide : EffectVmDescriptor2 :=
 -- The welded registry's burn entry is the avail twin (the retarget landed name-stable).
 #guard (weldedWideRegistry.filter (·.1 == "burnVmDescriptor2R24")).all
   (fun e => e.2.name.startsWith "dregg-effectvm-burn-v1-avail")
+
+/-! ## The named WELDED wide-avail cap-open EFF member (the exact wire object the welded registry
+emits for the `transferCapOpenEffVmDescriptor2R24` crown key post-retarget — the refinement
+discharge `RotatedKernelRefinementCapOpenAvailWide` is stated over THIS). -/
+
+/-- The WELDED avail cap-open EFF transfer (crown key — the cap-open EFF route is NOT a bare
+cohort route, so no capacity-floor refuse rides it: umem-only, exactly the `weldRefusedFirst`
+composition for a non-cohort key; transfer moves `Balance`, so
+`wideKeyUMemDomain "transferCapOpenEffVmDescriptor2R24" = heap`). -/
+def weldedTransferCapOpenEffAvailWide : EffectVmDescriptor2 :=
+  weldUMemIntoWide Dregg2.Circuit.Emit.AvailWideMembers.transferCapOpenEffAvailWide Domain.heap
+
+-- The welded EFF twin carries the weld marker, the +7 no-narrowing geometry, and the avail name
+-- key (the Rust `avail_pad_for_descriptor_name` prefix survives every wrapper).
+#guard weldedTransferCapOpenEffAvailWide.name.endsWith wideUMemWeldSuffix
+#guard weldedTransferCapOpenEffAvailWide.name.startsWith "dregg-effectvm-transfer-v1-avail"
+#guard weldedTransferCapOpenEffAvailWide.traceWidth
+  == Dregg2.Circuit.Emit.AvailWideMembers.transferCapOpenEffAvailWide.traceWidth + 7
+#guard weldedTransferCapOpenEffAvailWide.piCount
+  == Dregg2.Circuit.Emit.AvailWideMembers.transferCapOpenEffAvailWide.piCount
+#guard wideKeyUMemDomain "transferCapOpenEffVmDescriptor2R24" = Domain.heap
+-- The welded registry's cap-open EFF entry is the avail twin (the retarget landed name-stable).
+#guard (weldedWideRegistry.filter (·.1 == "transferCapOpenEffVmDescriptor2R24")).all
+  (fun e => e.2.name.startsWith "dregg-effectvm-transfer-v1-avail")
 
 end Dregg2.Circuit.Emit.EffectVmEmitUMemWeldWide

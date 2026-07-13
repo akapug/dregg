@@ -251,9 +251,9 @@ theorem satisfied2_of_gentianWideBareRefuse (hash : List ℤ → ℤ) (d : Effec
 
 section Witnesses
 
--- The wide refuse reads the SAME deployed caveat tag columns as V3 (643/650/657/664).
-#guard ebDep 0 == 643
-#guard ebDep 3 == 664
+-- The wide refuse reads the SAME deployed caveat tag columns as V3 (667/674/681/688).
+#guard ebDep 0 == 667
+#guard ebDep 3 == 688
 -- The three-block wide weld adds 3 × 13 = 39 gates (each block: 8 is-zero + 3 fold + 1 refuse = 13).
 #guard (wideRefuseGates 2493).length == 39
 -- The aux blocks ride PAST the wide member width (aux base = the member's own width; no carrier collision).

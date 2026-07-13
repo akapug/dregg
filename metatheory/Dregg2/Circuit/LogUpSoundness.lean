@@ -28,8 +28,9 @@ set of size `< |A| + |B|` (`logup_forged_lookup_sound`), instantiated at BabyBea
 (`logup_complete`). What is NOT closed here: the connection to `AirChecksSatisfied.hbus` needs the
 DEPLOYED bus's actual column layout (which trace columns carry `A`, the table `B`, the challenge column,
 the running cumulative-sum column) — that plumbing is UNMODELED and named as the residual, so `hbus` is
-NOT discharged, only reduced to it. The general multiplicity-exact multiset injectivity (repeated forged
-values) is the same residue argument at a higher-order pole; only the single-occurrence case is proved.
+NOT discharged, only reduced to it. The general multiplicity case (repeated looked-up values) is the same
+residue argument at a higher-order pole — DISCHARGED in `LogUpMultiset.lean`
+(`busBalance_forces_membership_multiset`); this file proves the single-occurrence/`Nodup` case.
 -/
 import Mathlib.Algebra.Polynomial.Derivative
 import Mathlib.Algebra.Polynomial.Roots
@@ -470,17 +471,18 @@ WHAT GENUINELY REMAINS (two honest residuals, precisely named — neither a fres
     column, (ii) the challenge column `α` and the running cumulative-sum column whose boundary-zero IS
     `logupSum α A = logupSumM α B`, (iii) the pole-avoidance side-condition. This plumbing is UNMODELED
     in `Dregg2/Circuit/` — the same unmodeled-layout residual `OodSoundnessGame` names for the OOD Λ-column.
-  * **Repeated-value multiplicity (a PROVABLE SZ extension, not irreducible).** The support-containment
-    theorem is proved per DISTINCT looked-up value (single-occurrence head). A value looked up `k > 1`
-    times and absent from `B` gives `busNum` a zero of order `k−1` at `−c` with a NONZERO residue
-    `(k · ∏…) ≠ 0` whenever `k` is below the field characteristic (`k ≪ 2·10⁹` always) — the same argument
-    at a higher-order pole. Proving it in Lean is the `rootMultiplicity` extension of `busNum_ne_zero_of_forged`;
-    it needs no new assumption, only more polynomial bookkeeping. NAMED, not laundered.
+  * **Repeated-value multiplicity — DISCHARGED (`LogUpMultiset.lean`).** Formerly the second residual:
+    the support-containment theorem here is proved per DISTINCT looked-up value (single-occurrence head).
+    `LogUpMultiset.busBalance_forces_membership_multiset` now proves it for ARBITRARY multiplicities —
+    `busNum` factors as `(X+C c)^(k−1) · G` with the NONZERO residue `G(−c) = k·∏(−c+aᵢ)·∏(−c+bⱼ)`
+    (root multiplicity EXACTLY `k−1`, `busNum_forged_rootMultiplicity`), needing only the no-wrap fact
+    `k <` char `F` (`k ≪ 2·10⁹` always; `…_of_charP` discharges it for any trace shorter than the field).
+    That theorem SUBSUMES `busBalance_forces_membership` (multiplicity-1 specialization). No longer open.
 
 This file therefore DISCHARGES the LogUp-SZ arrow of `hbus` for the distinct support (shared across ALL
-27 effects — the bus is one argument, not 27), reducing `hbus` to {chip/range table faithfulness (§2,
-structural for range / Poseidon2-floor for chip) + FS ε + the column-layout wire + the multiplicity
-extension}. -/
+27 effects — the bus is one argument, not 27), and `LogUpMultiset.lean` extends it to the full MULTISET
+support, reducing `hbus` to {chip/range table faithfulness (§2, structural for range / Poseidon2-floor
+for chip) + FS ε + the column-layout wire}. -/
 
 #check @busBalance_forces_membership
 #check @logup_forged_lookup_sound
