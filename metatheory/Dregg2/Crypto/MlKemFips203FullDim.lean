@@ -39,24 +39,42 @@ Kyber NTT, the CBD sampler, and both compression codecs.
 ## Wired to `MlKemDelta`'s `δ`
 
 `MlKemDelta.mlkem768_decapsFailure_le_delta_unconditional_tight` proves — unconditionally, in-kernel — that
-the modeled ML-KEM-768 `e_total` escapes the `(−832, 832)` window at some coefficient with probability
-`≤ 2⁻¹⁴⁸`. `roundtrip_fails_le_delta` transports it: for any key sampler whose byte-level decryption noise IS
-the modeled `e_total` (the NAMED bridge `hbridge`, below), the full-dimension encaps→decaps round trip fails
-with probability `≤ 2⁻¹⁴⁸`. That is `Fips203Correct`-except-`δ` at real ML-KEM-768 parameters.
+the modeled ML-KEM-768 `e_total` ENVELOPE `MlKemDelta.mlkemZ` escapes the `(−832, 832)` window at some
+coefficient with probability `≤ 2⁻¹⁴⁸`. `roundtrip_fails_le_delta` transports it by STOCHASTIC DOMINATION:
+for any key sampler whose true decaps-failure event is CONTAINED in the envelope's failure event (the NAMED
+domination `hdom`, below), the full-dimension encaps→decaps round trip fails with probability `≤ 2⁻¹⁴⁸`. That
+is `Fips203Correct`-except-`δ` at real ML-KEM-768 parameters.
 
-## ⚑ THE ONE NAMED RESIDUAL — `hbridge` (the byte-level algebraic cancellation)
+## ⚑ THE ONE NAMED RESIDUAL — `hdom` (the envelope's stochastic DOMINATION of the true noise)
 
-`hbridge` says the executable pipeline's noise `centered(w_c − m_c·1665)` IS the modeled
-`e_total = eᵀr − sᵀe1 + e2 + Δv − sᵀΔu` of `MlKemCorrect`/`MlKemDelta`. It is a HYPOTHESIS of
-`roundtrip_fails_le_delta` (never a `def …Hard` carrier, never an axiom, and `#assert_axioms` is blind to it —
-so it is stated here in the open). Its content is `MlKemCorrect.mlkem_decrypt_cancellation` (PROVED, over an
-abstract `[CommRing R]`, hence over the real `R_q`) INSTANTIATED at the executable `Array Nat` pipeline —
-i.e. the `Poly`-loops-to-`R_q` ring homomorphism. `MlKemNttFaithful` already supplies the hard half of that
-instantiation (`ntt_computes_negacyclic_mul` / `ntt_intt_id` as ∀-theorems, so the NTT fast path IS the
-negacyclic product); what remains is the `Poly ≃ R_q` transport of the K-PKE matrix–vector algebra. That is
-the precisely-named remaining step, and it is the ONLY one: nothing else in this file is assumed.
+**Why domination, not equality.** `MlKemDelta.mlkemZ` is NOT the literal executable noise: it is a
+conservative MGF-*envelope* surrogate — its `Δv` term is the `±104` EXTREME point `MlKemDelta.dvX` (not the
+literal rounding `Δv ∈ [−104,104]`), and its cross-terms `eᵀr, sᵀe1, sᵀΔu` are the `cbd²`-PRODUCT envelopes
+(`MlKemDelta.mlkemZ`'s header calls the step to the literal randomness an "MGF-DOMINATION step", §13). So the
+executable pipeline's noise `centered(w_c − m_c·1665)` does NOT *equal* `mlkemZ` coefficient-by-coefficient
+(the envelope over-bounds it) — an earlier draft asserted that equality as a hypothesis `hbridge`, which is
+FALSE, hence made the theorem vacuous. What genuinely holds is DOMINATION at the event level: the envelope's
+`Δv = ±104` and `cbd²` extreme points upper-bound the true per-term contributions, so whenever the TRUE noise
+escapes the decode window at some coefficient (⇒ decaps failure), the ENVELOPE model `mlkemZ` also registers a
+failure. Equivalently: `{envelope registers no failure} ⊆ {true noise in-window everywhere}`. That is exactly
+`hdom`, and it is what the envelope was BUILT to support.
 
-The unconditional facts here — 1, 2, 3 — do NOT use `hbridge`. `fullKemApi_fips203` is a genuine
+`hdom` is a HYPOTHESIS of `roundtrip_fails_le_delta` (never a `def …Hard` carrier, never an axiom, and
+`#assert_axioms` is blind to it — so it is stated here in the open). It is SATISFIABLE, not vacuous:
+`roundtrip_fails_le_delta_nonvacuous` (§7) discharges it for the constant sampler at the genuine `ml-kem`
+crate key, where the true noise is in-window everywhere (so `hdom` holds and δ transports).
+
+**Fully DISCHARGING `hdom` (rather than hypothesizing it)** is the remaining MGF-domination lane: it needs the
+byte-level algebraic cancellation `MlKemCorrect.mlkem_decrypt_cancellation` (PROVED, over abstract `[CommRing
+R]`, hence over the real `R_q`) INSTANTIATED at the executable `Array Nat` pipeline to exhibit the true noise
+as `MlKemCorrect.eTotal`, then the §13 byte-faithful grouped MGF-domination (`MlKemDelta.bf*`) applied to that
+literal noise. `MlKemNttFaithful` supplies the NTT leg (`ntt_computes_negacyclic_mul` / `ntt_intt_id` as
+∀-theorems, so the NTT fast path IS the negacyclic product); §8 below (`intt_addLinear`, `ntt_intt_rightInverse`)
+adds the reusable `intt`-linearity + `ntt∘intt = id` legs; the remaining named pieces are the `Poly → R_q`
+coefficient ring hom on the matrix–vector K-PKE algebra and the byte-codec / ExpandA / CBD sampler
+faithfulness (each named precisely in §8).
+
+The unconditional facts here — 1, 2, 3 — do NOT use `hdom`. `fullKemApi_fips203` is a genuine
 `Fips203Correct` at ML-KEM-768, kernel-clean.
 
 ## NON-VACUITY (the only `native_decide`s in this file, ISOLATED to concrete byte checks in §7)
@@ -433,8 +451,9 @@ theorem fullKemApi_agrees (m : List UInt8) (hm : m.length = 32)
 
 `MlKemDelta.mlkem768_decapsFailure_le_delta_unconditional_tight` bounds — unconditionally, in-kernel, by the
 exact-MGF Chernoff route over the real CBD noise — the probability that the modeled ML-KEM-768 `e_total`
-escapes the `(−832, 832)` window at ANY coefficient. Since `goodKey` is EXACTLY "in-window everywhere" (plus
-key well-formedness), a key sampler whose byte-level noise IS the modeled `e_total` inherits the bound. -/
+ENVELOPE `mlkemZ` escapes the `(−832, 832)` window at ANY coefficient. Since `goodKey` is EXACTLY "in-window
+everywhere" (plus key well-formedness), a key sampler whose true decaps-failure event is DOMINATED by the
+envelope's failure event inherits the bound — by `winProb` monotonicity. -/
 
 /-- `winProb` is monotone in the winning predicate (a bigger favorable set has bigger counting probability). -/
 theorem winProb_mono {Ω : Type*} [Fintype Ω] (p r : Ω → Bool) (h : ∀ ω, p ω = true → r ω = true) :
@@ -451,18 +470,22 @@ theorem winProb_mono {Ω : Type*} [Fintype Ω] (p r : Ω → Bool) (h : ∀ ω, 
   exact mul_le_mul_of_nonneg_right hc (by positivity)
 
 /-- **THE `δ`-WIRED FULL-DIMENSION CORRECTNESS.** For ANY sampler of well-formed ML-KEM-768 decapsulation keys
-whose byte-level decryption noise IS the modeled `e_total` (`hbridge` — the ONE named residual, see the header),
-the FULL-DIMENSION encaps→decaps round trip FAILS with probability `≤ 2⁻¹⁴⁸`. So `Fips203Correct` holds at real
-ML-KEM-768 parameters except with probability `≤ δ` — which is exactly what FIPS 203 correctness asserts.
+whose true decaps-failure event is DOMINATED by the envelope model's failure event (`hdom` — the ONE named
+residual, see the header: whenever the envelope `mlkemZ` registers NO failure at `ω`, the executable pipeline's
+noise is in-window at every coefficient), the FULL-DIMENSION encaps→decaps round trip FAILS with probability
+`≤ 2⁻¹⁴⁸`. So `Fips203Correct` holds at real ML-KEM-768 parameters except with probability `≤ δ` — which is
+exactly what FIPS 203 correctness asserts.
 
-The `δ` is `MlKemDelta.mlkem768_decapsFailure_le_delta_unconditional_tight`: UNCONDITIONAL, in-kernel, from the
-exact-MGF Chernoff bound on the real CBD noise — no distributional assumption. -/
+`hdom` is the honest replacement for the earlier (FALSE, hence vacuous) equality hypothesis `hbridge`:
+`mlkemZ` is a conservative MGF-envelope (`±104` `Δv`, `cbd²` products), so it DOMINATES rather than EQUALS the
+literal noise. `roundtrip_fails_le_delta_nonvacuous` (§7) exhibits a sampler satisfying `hdom`, so this is not
+vacuous. The `δ` is `MlKemDelta.mlkem768_decapsFailure_le_delta_unconditional_tight`: UNCONDITIONAL, in-kernel,
+from the exact-MGF Chernoff bound on the real CBD envelope — no distributional assumption. -/
 theorem roundtrip_fails_le_delta (m : List UInt8) (hm : m.length = 32)
     (key : MlKemDelta.mlkemΩ → List UInt8)
     (hwf : ∀ ω, wfDk (key ω) = true)
-    (hbridge : ∀ (ω : MlKemDelta.mlkemΩ) (i : Nat) (hi : i < 256),
-        noiseAt (kpkeW (dkPkeOf (key ω)) (ctOf (ekOfDk (key ω)) m)) (msgPoly m) i
-          = MlKemDelta.mlkemZ ⟨i, by omega⟩ ω) :
+    (hdom : ∀ ω, MlKemDelta.decapsFails MlKemDelta.mlkemZ ω = false →
+        noiseWindow (kpkeW (dkPkeOf (key ω)) (ctOf (ekOfDk (key ω)) m)) (msgPoly m) = true) :
     winProb (fun ω => decide (mlkemDecaps (key ω) (mlkemEncaps (ekOfDk (key ω)) m).1
         ≠ (mlkemEncaps (ekOfDk (key ω)) m).2))
       ≤ (2 : ℝ) ^ (-148 : ℤ) := by
@@ -470,27 +493,10 @@ theorem roundtrip_fails_le_delta (m : List UInt8) (hm : m.length = 32)
     MlKemDelta.mlkem768_decapsFailure_le_delta_unconditional_tight
   intro ω hfail
   by_contra hne
-  -- no coefficient of the MODEL escaped the window …
-  have hall : ∀ c : Fin 768, MlKemDelta.badCoeff MlKemDelta.mlkemZ c ω = false := by
-    intro c
-    by_contra hc
-    refine hne ?_
-    unfold MlKemDelta.decapsFails
-    rw [List.any_eq_true]
-    exact ⟨c, List.mem_finRange c, by simpa using hc⟩
-  -- … so, through the bridge, the EXECUTABLE pipeline's noise is in-window everywhere …
-  have hwin : noiseWindow (kpkeW (dkPkeOf (key ω)) (ctOf (ekOfDk (key ω)) m)) (msgPoly m) = true := by
-    unfold noiseWindow
-    rw [List.all_eq_true]
-    intro i hi
-    have hi' : i < 256 := List.mem_range.mp hi
-    have hb := hall ⟨i, by omega⟩
-    unfold MlKemDelta.badCoeff at hb
-    rw [decide_eq_false_iff_not, not_le] at hb
-    have habs := abs_lt.mp hb
-    simp only [decide_eq_true_eq]
-    rw [hbridge ω i hi']
-    exact habs
+  -- the envelope registered NO failure at `ω` …
+  have hfalse : MlKemDelta.decapsFails MlKemDelta.mlkemZ ω = false := Bool.not_eq_true _ |>.mp hne
+  -- … so, by DOMINATION, the executable pipeline's noise is in-window everywhere …
+  have hwin := hdom ω hfalse
   -- … so the round trip SUCCEEDS, contradicting the failure predicate.
   have hrt := mlkem_roundtrip_of_kpke (key ω) m (hwf ω)
     (kpkeDecrypt_recovers _ _ m hm hwin)
@@ -533,9 +539,158 @@ the `δ`-correct set: `goodKey` genuinely rejects (`wfDk` fails), so it is not `
 theorem zeroDk_not_good : goodKey MlKemEncaps.mFixed.toList (List.replicate 2400 (0 : UInt8)) = false := by
   native_decide
 
+/-- **NON-VACUITY of the `δ`-WIRED CORRECTNESS.** The domination hypothesis `hdom` of `roundtrip_fails_le_delta`
+is SATISFIABLE — the constant sampler at the genuine `ml-kem` crate key discharges it (there the true noise is
+in-window at every coefficient, so `hdom` holds vacuously in its antecedent and δ transports). This is the
+concrete improvement over the earlier (FALSE, hence unsatisfiable) equality hypothesis `hbridge`: the reformulated
+theorem is NOT vacuous. Carries the `native_decide` residual of `realDk_good`, so it is NOT in the clean list. -/
+theorem roundtrip_fails_le_delta_nonvacuous :
+    winProb (fun _ : MlKemDelta.mlkemΩ =>
+        decide (mlkemDecaps realDk.toList
+            (mlkemEncaps (ekOfDk realDk.toList) MlKemEncaps.mFixed.toList).1
+          ≠ (mlkemEncaps (ekOfDk realDk.toList) MlKemEncaps.mFixed.toList).2))
+      ≤ (2 : ℝ) ^ (-148 : ℤ) := by
+  have hgood := realDk_good
+  simp only [goodKey, Bool.and_eq_true] at hgood
+  exact roundtrip_fails_le_delta MlKemEncaps.mFixed.toList mFixed_len
+    (fun _ => realDk.toList) (fun _ => hgood.1) (fun _ _ => hgood.2)
+
+/-! ## §8 — REUSABLE CORE toward DISCHARGING `hdom`: `intt`-linearity + `ntt ∘ intt = id`, and the NAMED
+remaining faithfulness pieces.
+
+Fully discharging `hdom` (§6) — rather than hypothesizing it — means exhibiting the executable pipeline's noise
+`noiseAt (kpkeW dkPke c) (msgPoly m)` as `MlKemCorrect.eTotal` (so `MlKemCorrect.mlkem_decrypt_cancellation`
+applies), then running the §13 byte-faithful MGF-domination (`MlKemDelta.bf*`) on that literal noise. The
+cancellation is proved over an ABSTRACT `[CommRing R]`; transporting it to the executable `Array Nat` pipeline
+factors through the NTT algebra. The two REUSABLE legs are proved here:
+
+* `intt_addLinear` — `intt` is additive over `addPoly` (coefficient-wise in `ℤ_q`). Immediate from the
+  interpolation formula `MlKemNttFaithful.intt_interp_kem` (the `intt` coefficient is a `ℤ_q`-LINEAR functional
+  of the input coefficients) + `cast_addPoly`. This is what lets `intt` distribute over the K-PKE accumulator
+  `∑ᵢ pointwiseNtt(ŝᵢ, ntt uᵢ)`.
+* `ntt_intt_rightInverse` — `ntt ∘ intt = id` on canonical reduced polys, the OTHER direction of the proved
+  `MlKemNttFaithful.ntt_intt_id` (`intt ∘ ntt = id`). Derived by a FINITENESS/bijection argument: on the finite
+  set of canonical reduced polys, `intt ∘ ntt = id` makes `ntt` injective, hence (finite) bijective, hence its
+  left inverse `intt` is a two-sided inverse. This is what turns a stored NTT-domain secret `ŝᵢ` into
+  `ntt(intt ŝᵢ)`, so `ntt_computes_negacyclic_mul` applies to the accumulator terms.
+
+REMAINING (each named precisely; a deeper campaign, NOT discharged here):
+1. **`Poly → R_q` coefficient ring hom on the K-PKE matrix–vector algebra** — assemble `intt_addLinear` +
+   `ntt_intt_rightInverse` + `ntt_computes_negacyclic_mul` into `φ(kpkeW dkPke c) = wVal (φ-images)` matching
+   `MlKemCorrect.wVal`/`eTotal`, over `R = (ZMod q)[X]/(X²⁵⁶+1)` (the real negacyclic ring, a `CommRing`).
+2. **byte-codec faithfulness** — `ŝ = ByteDecode₁₂(dk_pke)`, `(u,v) = ctDecode c` after `Decompress_{du}`/
+   `Decompress_{dv}` really are the ring elements `s`, `u = Aᵀr+e1+Δu`, `v = tᵀr+e2+μ+Δv` of `MlKemCorrect`.
+3. **`ExpandA`** — the `SampleNTT`/`XOF` public-matrix expansion `A` matches the abstract `A : Fin k → Fin k → R`.
+4. **CBD samplers** — `SamplePolyCBD(η=2)` for `s,e,r,e1,e2` matches the CBD distribution `MlKemDelta` models. -/
+
+/-! ### §8.1 — `intt` preserves the canonical (size-256, reduced) shape (needed for the bijection). -/
+
+/-- `intt` keeps a canonical reduced poly size-256. Mirrors `nttLeftInverse_proven`'s size step. -/
+theorem intt_size (w : Poly) (hw : w.size = 256) (hwlt : ∀ (p : Nat), w[p]! < q) :
+    (intt w).size = 256 := by
+  have h7sz : (MlKemRing.kInttUpto 7 w).1.size = 256 :=
+    (MlKemRing.kInttStage_inv w hw hwlt 7 (by omega)).1
+  rw [MlKemRing.intt_eq_scale_stages, MlKemRing.kInttStages_eq]
+  exact MlKemRing.kInttScale_size _ h7sz
+
+/-- `intt` keeps a canonical reduced poly reduced (`< q` everywhere): the final `128⁻¹` scaling writes a
+`mulModQ`-reduced value to every coefficient. -/
+theorem intt_lt (w : Poly) (hw : w.size = 256) (hwlt : ∀ (p : Nat), w[p]! < q) :
+    ∀ (p : Nat), (intt w)[p]! < q := by
+  have h7sz : (MlKemRing.kInttUpto 7 w).1.size = 256 :=
+    (MlKemRing.kInttStage_inv w hw hwlt 7 (by omega)).1
+  have hisz : (intt w).size = 256 := intt_size w hw hwlt
+  intro p
+  by_cases hp : p < 256
+  · rw [MlKemRing.intt_eq_scale_stages, MlKemRing.kInttStages_eq,
+        MlKemRing.kInttScale_getElem _ h7sz p hp]
+    exact MlKemRing.mulModQ_lt _ _
+  · rw [MlKemRing.getElem!_ge (intt w) p (by rw [hisz]; omega)]
+    unfold MlKemRing.q; omega
+
+/-! ### §8.2 — `intt`-LINEARITY over `addPoly` (from the interpolation formula). -/
+
+/-- **`intt`-linearity at a pair index** `2i+r`: the `intt` coefficient of `addPoly a b` is the `ℤ_q`-sum of the
+`intt` coefficients of `a` and `b`. Direct from `intt_interp_kem` (the coefficient is a linear functional of the
+inputs) + `cast_addPoly`. -/
+theorem intt_addLinear_pair (a b : Poly) (ha : a.size = 256) (halt : ∀ (p : Nat), a[p]! < q)
+    (hb : b.size = 256) (hblt : ∀ (p : Nat), b[p]! < q) (i r : Nat) (hi : i < 128) (hr : r < 2) :
+    ((intt (addPoly a b))[2*i+r]! : ZMod q)
+      = ((intt a)[2*i+r]! : ZMod q) + ((intt b)[2*i+r]! : ZMod q) := by
+  have hab : (addPoly a b).size = 256 := MlKemRing.addPoly_size a b
+  have hablt : ∀ (p : Nat), (addPoly a b)[p]! < q := MlKemRing.addPoly_lt a b
+  rw [MlKemRing.intt_interp_kem (addPoly a b) hab hablt i r hi hr,
+      MlKemRing.intt_interp_kem a ha halt i r hi hr,
+      MlKemRing.intt_interp_kem b hb hblt i r hi hr]
+  rw [← mul_add]
+  congr 1
+  rw [← Finset.sum_add_distrib]
+  refine Finset.sum_congr rfl (fun u hu => ?_)
+  have hu256 : 2*u+r < 256 := by have := Finset.mem_range.mp hu; omega
+  rw [MlKemRing.cast_addPoly a b (2*u+r) hu256, add_mul]
+
+/-- **`intt`-LINEARITY (all coefficients)** — `φ(intt(addPoly a b)) = φ(intt a) + φ(intt b)` coefficient-wise in
+`ℤ_q`, for canonical reduced `a, b`. The reusable additivity that distributes `intt` over the K-PKE decryption
+accumulator. -/
+theorem intt_addLinear (a b : Poly) (ha : a.size = 256) (halt : ∀ (p : Nat), a[p]! < q)
+    (hb : b.size = 256) (hblt : ∀ (p : Nat), b[p]! < q) (p : Nat) (hp : p < 256) :
+    ((intt (addPoly a b))[p]! : ZMod q)
+      = ((intt a)[p]! : ZMod q) + ((intt b)[p]! : ZMod q) := by
+  rcases Nat.even_or_odd p with ⟨i, hpe⟩ | ⟨i, hpo⟩
+  · have hpi : p = 2*i+0 := by omega
+    rw [hpi]; exact intt_addLinear_pair a b ha halt hb hblt i 0 (by omega) (by norm_num)
+  · have hpi : p = 2*i+1 := by omega
+    rw [hpi]; exact intt_addLinear_pair a b ha halt hb hblt i 1 (by omega) (by norm_num)
+
+/-! ### §8.3 — `ntt ∘ intt = id` on canonical reduced polys (the finiteness/bijection dual of `ntt_intt_id`). -/
+
+/-- The canonical-poly predicate: size 256 and every coefficient reduced (`< q`). -/
+abbrev IsCanPoly (c : Poly) : Prop := c.size = 256 ∧ ∀ (p : Nat), c[p]! < q
+
+/-- The finite domain the incomplete NTT bijects: canonical (size-256) reduced (`< q`) polys. -/
+abbrev CanPoly : Type := { c : Poly // IsCanPoly c }
+
+/-- `CanPoly` is FINITE — the reduced coefficient reading `CanPoly ↪ (Fin 256 → Fin q)` is injective
+(`arrayExtAll` + reducedness), and the codomain is a `Fintype`. -/
+instance : Finite CanPoly :=
+  Finite.of_injective
+    (fun c : CanPoly => (fun i : Fin 256 => (⟨c.1[i.val]!, c.2.2 i.val⟩ : Fin q)))
+    (by
+      intro x y hxy
+      apply Subtype.ext
+      refine arrayExtAll x.1 y.1 (by rw [x.2.1, y.2.1]) ?_
+      intro j hj
+      have hj256 : j < 256 := by rw [x.2.1] at hj; exact hj
+      have hcong := congrFun hxy ⟨j, hj256⟩
+      exact congrArg Fin.val hcong)
+
+/-- `ntt` as an endofunction of `CanPoly` (`ntt_size`/`ntt_lt` keep the shape). -/
+def nttC (c : CanPoly) : CanPoly := ⟨ntt c.1, MlKemRing.ntt_size c.1 c.2.1, MlKemRing.ntt_lt c.1 c.2.2⟩
+
+/-- `intt` as an endofunction of `CanPoly` (§8.1). -/
+def inttC (c : CanPoly) : CanPoly := ⟨intt c.1, intt_size c.1 c.2.1 c.2.2, intt_lt c.1 c.2.1 c.2.2⟩
+
+/-- `intt ∘ ntt = id` on `CanPoly` (= `ntt_intt_id`/`nttLeftInverse_proven`, lifted to the subtype). -/
+theorem inttC_nttC (c : CanPoly) : inttC (nttC c) = c :=
+  Subtype.ext (MlKemRing.nttLeftInverse_proven c.1 c.2.1 c.2.2)
+
+/-- **`ntt ∘ intt = id` on canonical reduced polys** — the reverse direction of `ntt_intt_id`. On the FINITE set
+`CanPoly`, `inttC ∘ nttC = id` (`inttC_nttC`) makes `nttC` injective, hence bijective, hence its left inverse
+`inttC` is a two-sided inverse; reading off the `Array` value gives `ntt (intt d) = d`. This is the reusable leg
+that turns a stored NTT-domain secret `ŝ` into `ntt (intt ŝ)`, so `ntt_computes_negacyclic_mul` applies. -/
+theorem ntt_intt_rightInverse (d : Poly) (hd : d.size = 256) (hdlt : ∀ (p : Nat), d[p]! < q) :
+    ntt (intt d) = d := by
+  have hLI : Function.LeftInverse inttC nttC := inttC_nttC
+  have hInj : Function.Injective nttC := hLI.injective
+  have hSurj : Function.Surjective nttC := (Finite.injective_iff_surjective).mp hInj
+  obtain ⟨c, hc⟩ := hSurj ⟨d, hd, hdlt⟩
+  have hid : inttC ⟨d, hd, hdlt⟩ = c := by rw [← hc]; exact hLI c
+  have hR : nttC (inttC ⟨d, hd, hdlt⟩) = ⟨d, hd, hdlt⟩ := by rw [hid]; exact hc
+  exact congrArg Subtype.val hR
+
 /-! ## AXIOM HYGIENE — every ∀-theorem is kernel-clean (⊆ {propext, Classical.choice, Quot.sound}).
-`realDk_good` / `ekOfDk_realDk` / `emptyDk_not_good` (the concrete byte checks) are NOT in this list: they
-carry the `native_decide` residual, and NOTHING above depends on them. -/
+`realDk_good` / `ekOfDk_realDk` / `emptyDk_not_good` / `roundtrip_fails_le_delta_nonvacuous` (the concrete byte
+checks) are NOT in this list: they carry the `native_decide` residual, and NOTHING above depends on them. -/
 
 #assert_all_clean [
   byteEncode₁_byteDecode₁,
@@ -547,7 +702,13 @@ carry the `native_decide` residual, and NOTHING above depends on them. -/
   fullKemApi_x25519,
   fullKemApi_agrees,
   winProb_mono,
-  roundtrip_fails_le_delta
+  roundtrip_fails_le_delta,
+  intt_size,
+  intt_lt,
+  intt_addLinear_pair,
+  intt_addLinear,
+  inttC_nttC,
+  ntt_intt_rightInverse
 ]
 
 end Dregg2.Crypto.MlKemFips203FullDim

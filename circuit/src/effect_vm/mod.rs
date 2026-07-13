@@ -166,6 +166,14 @@
 // re-exports below (no path changes needed).
 
 pub mod columns;
+/// The rotated column layout, EXPORTED FROM LEAN (`metatheory/EmitLayoutManifest.lean`) and
+/// installed by the ack-gated emit pipeline. Lean defines this geometry and emits the constraint
+/// descriptors that READ these columns; the Rust producer WRITES them. Both now read one source.
+///
+/// Never hand-edit `layout_generated.rs`. Never re-declare one of its constants by hand: that is
+/// exactly how the perms/VK completion weld came to read limb 37 (`revoked_root` lane-0) while the
+/// producer wrote limb 38, silently making every honest setPermissions/setVerificationKey turn UNSAT.
+pub mod layout_generated;
 pub mod pi;
 
 mod air;

@@ -1,6 +1,6 @@
 THE SUNKEN VAULT — the AI narrates, the world resolves
 driven run · attested-dm /game contract · narratorKind: model:us.anthropic.claude-haiku-4-5-20251001-v1:0 (a REAL local model)
-served at http://127.0.0.1:51762/vault
+served at http://127.0.0.1:58434/vault
 ==========================================================================
 
 A local AI dungeon-master narrates every room and move, but its prose has NO

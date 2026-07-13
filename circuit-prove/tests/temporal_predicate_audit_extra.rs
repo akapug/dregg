@@ -53,17 +53,34 @@ fn make_row(value: u32, threshold: u32, step: usize, state_root: BabyBear) -> Ve
 fn honest_trace() -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
     let threshold = 50u32;
     let values = [100u32, 100, 100];
-    let state_roots = [BabyBear::new(1000), BabyBear::new(1001), BabyBear::new(1002)];
+    let state_roots = [
+        BabyBear::new(1000),
+        BabyBear::new(1001),
+        BabyBear::new(1002),
+    ];
     let num_steps = 3usize;
     let padded = 4usize;
     let final_root = state_roots[num_steps - 1];
     let mut trace = Vec::with_capacity(padded);
     for step in 0..padded {
-        let value = if step < num_steps { values[step] } else { values[num_steps - 1] };
-        let sr = if step < num_steps { state_roots[step] } else { final_root };
+        let value = if step < num_steps {
+            values[step]
+        } else {
+            values[num_steps - 1]
+        };
+        let sr = if step < num_steps {
+            state_roots[step]
+        } else {
+            final_root
+        };
         trace.push(make_row(value, threshold, step, sr));
     }
-    let pis = vec![BabyBear::new(padded as u32), BabyBear::new(threshold), state_roots[0], final_root];
+    let pis = vec![
+        BabyBear::new(padded as u32),
+        BabyBear::new(threshold),
+        state_roots[0],
+        final_root,
+    ];
     (trace, pis)
 }
 
@@ -85,7 +102,10 @@ fn rejects(desc: &EffectVmDescriptor2, trace: &[Vec<BabyBear>], pis: &[BabyBear]
 fn audit_forged_initial_state_root_pi_refuses() {
     let desc = parse_vm_descriptor2(GOLDEN_JSON).expect("decode");
     let (trace, mut pis) = honest_trace();
-    assert!(!rejects(&desc, &trace, &pis), "honest anchor must accept — else vacuous");
+    assert!(
+        !rejects(&desc, &trace, &pis),
+        "honest anchor must accept — else vacuous"
+    );
     pis[PI_INITIAL_STATE_ROOT] = BabyBear::new(88888); // real row-0 STATE_ROOT is 1000
     assert!(
         rejects(&desc, &trace, &pis),

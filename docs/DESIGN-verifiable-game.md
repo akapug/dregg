@@ -1,339 +1,382 @@
 # Verifiable Game Design
 
-## Status and design stance
+## Status and thesis
 
-`attested-dm` already has the correct authority boundary: the AI proposes narration, while `resolve_action(map, world, typed_action)` deterministically resolves a closed `GameAction` (`Move`, `Take`, `Use`, `Examine`, or `Attack`). Every landed move becomes a previous-hash-linked `LedgerEntry` binding the sequence number, prior entry, narration, effect, prompt and game bindings, and attestation. `DmCaps` gates grants, `.dungeon` provides a readable world format, and `GameSession::verify()` authenticates the recorded chain.
+`attested-dm` should become a game engine in which creative narration remains flexible, but every state-changing outcome is determined by explicit rules and can be independently checked. The AI proposes tone, description, and intent; the engine alone decides state transitions.
 
-The next design objective is stronger than tamper evidence: a verifier should be able to establish that every recorded transition was permitted by the bound rules, and that every random outcome came from an unbiased source neither participant could grind.
+The existing foundation is strong:
 
-Two trust statements must remain explicit:
+- `resolve_action(map, world, typed_action)` deterministically resolves a closed `GameAction` (`Move`, `Take`, `Use`, `Examine`, or `Attack`).
+- Every landed move creates a previous-entry-linked `LedgerEntry` binding sequence number, narration, effect, prompt and game identities, and an attestation.
+- `DmCaps` gates grants.
+- The `.dungeon` format is readable and has parsing and validation.
+- `GameSession::verify()` detects tampering with the recorded chain.
 
-- The current attestation's authenticity leg is an in-tree fixture. Chain verification proves that recorded history is untampered; it is not yet production identity or hardware-backed authenticity.
-- Dregg has real circuit, proving, folding, and WASM light-client machinery, but ultimate STARK soundness remains an assumption. The right claim is **verifiable under the deployed prover assumptions**, not “trustless from first principles.”
+Two boundaries must remain explicit:
 
-The product should expose these distinctions as verification levels rather than collapsing them into one green check.
+1. The current attestation's authenticity leg is an in-tree fixture. It is not production identity or hardware-backed authenticity.
+2. Current verification authenticates recorded history but does not replay `resolve_action`. It proves that history was not altered after recording, not that every recorded effect followed the rules.
 
-## Receipt model
+The target claim is therefore: **a session is verifiable under the deployed prover, cryptographic, and randomness-source assumptions**. It is not “trustless from first principles.” In particular, dregg has real circuit, circuit-proving, folding, and WASM light-client machinery, but ultimate STARK soundness remains an assumption rather than a discharged proof.
 
-The ledger should evolve from a narration-oriented log into a canonical transition receipt. Each transition should commit to at least:
+## Design laws
+
+The following laws should constrain every extension:
+
+1. **Narration cannot mutate the world.** It may describe only an engine-produced effect and public observations derived from the post-state.
+2. **Every transition has a canonical input.** The action, pre-state commitment, ruleset identity, randomness input, capability witness, and relevant persistent-state roots must be bound before resolution.
+3. **Randomness is explicit data, never ambient state.** No resolver path may read a clock, process RNG, thread scheduling, map iteration order, or uncommitted external input.
+4. **Verification is layered.** Cheap deterministic replay is the baseline; succinct proofs are an acceleration and privacy mechanism, not an excuse to omit an executable specification.
+5. **Rules are versioned content.** A game binds a canonical ruleset hash and `.dungeon` hash. Upgrades create a declared boundary rather than silently changing old sessions.
+6. **Capabilities authorize; they do not determine outcomes.** A valid `DmCaps` witness permits an attempted transition, while the resolver still enforces all rules.
+7. **Failure is a transition.** Rejected or ineffective actions receive canonical effects and enter the ledger, preventing selective omission.
+
+## Receipt and transition model
+
+The ledger should evolve from “attested narrative entry” into a transition receipt. Conceptually, each entry binds:
 
 ```text
 TransitionReceipt {
-    protocol_version,
     game_binding,
+    ruleset_hash,
     seq,
     prev_receipt_hash,
-
     pre_state_root,
-    action_bytes,
-    actor_binding,
-    capability_witness,
-
-    randomness_request,
-    randomness_evidence,
-
-    effect_bytes,
+    action_commitment,
+    capability_commitment,
+    randomness_context,
+    effect_commitment,
     post_state_root,
-    narration_hash,
-
-    resolver_version,
-    ruleset_root,
-    proof_or_attestation,
+    narration_commitment,
+    persistence_roots,
+    execution_evidence,
+    attestation,
 }
 ```
 
-Canonical serialization is consensus-critical. `action_bytes`, effects, state roots, randomness domains, and version identifiers must have one encoding with explicit domain separators. Narration remains bound to the move but outside the deterministic state transition: changing prose invalidates the receipt chain, while prose is never allowed to grant an item, alter hit points, choose randomness, or otherwise mutate the world.
+The canonical transition statement is:
 
-Verification should report independent claims:
+```text
+(post_state, effect) = resolve_action(
+    ruleset,
+    map,
+    pre_state,
+    typed_action,
+    authorized_caps,
+    randomness
+)
+```
 
-1. **Chain-valid:** hashes, sequence numbers, bindings, and attestations are internally valid.
-2. **Replay-valid:** a local resolver re-executed every bound action and reproduced every effect and post-state root.
-3. **Randomness-valid:** each random value has valid, correctly scoped evidence and was consumed exactly as specified.
-4. **Proof-valid:** a deployed proof verifies the claimed transition invariants under the selected prover assumptions.
-5. **Identity-valid:** the signer or execution environment is authenticated by a production trust root, when one exists.
+`execution_evidence` initially means “replayable inputs,” and later may additionally carry a folded proof. A verifier must reject an entry if any commitment, sequence link, authorization, randomness derivation, effect, or post-state root fails its selected verification tier.
 
-This avoids presenting a fixture attestation or a hash-chain-only check as full rule correctness.
+Narration should bind to the action and resolved effect, but it should not be part of the deterministic state transition. This preserves creative freedom without allowing prose changes to alter game state.
 
 ## Verifiable randomness
 
 ### Requirements
 
-Randomness must be:
+Game randomness must be:
 
-- unpredictable before all gameplay choices affecting it are irrevocably bound;
-- non-selectable after the outcome is known;
-- domain-separated by game, turn, event, and draw index;
-- reproducible by verifiers from compact evidence;
-- resistant to grinding by both server and player;
-- equipped with an explicit timeout and abort policy.
+- unpredictable before both sides are committed;
+- bound to exactly one game, sequence number, ruleset, pre-state, and action;
+- domain-separated by purpose, so combat, loot, and encounter rolls cannot influence one another;
+- non-reusable and replay-detectable;
+- publicly derivable or accompanied by compact verification evidence;
+- non-grindable by both server and player.
 
-Commit-reveal alone is insufficient as the final design. It prevents unilateral choice only when both sides reveal, and the last revealer can still abort selectively after learning an unfavorable result. Penalties can discourage that behavior but do not remove it.
+Plain server randomness fails because the server can reroll. Plain player randomness fails because the player can withhold or retry. Two-party commit-reveal improves this, but it still permits last-revealer aborts and creates awkward timeout policy. It is a useful fallback, not the preferred endpoint.
 
-### Recommended construction: VRF plus delayed public beacon
+### Options
 
-Use a hybrid source:
+#### Server VRF
 
-```text
-event_id = H("attested-dm/random-event/v1",
-             game_binding, seq, pre_state_root,
-             action_hash, event_kind, draw_count)
-
-server_output, vrf_proof = VRF_server(event_id)
-
-random_seed = H("attested-dm/random-seed/v1",
-                event_id, server_output,
-                beacon_round, beacon_output)
-```
-
-The action, pre-state, event kind, and number of draws are committed before the chosen beacon round becomes available. The server VRF makes the server's contribution unique and publicly verifiable; the future public beacon makes the result unavailable when the player commits the action and prevents a malicious player from searching actions against a known seed. Mixing both sources also avoids placing liveness and unpredictability entirely in one operator.
-
-This design is non-grindable only if the protocol closes several escape hatches:
-
-- **Server key selection:** bind the VRF public key into the genesis `game_binding`, not per turn.
-- **Beacon-round selection:** derive the round from a fixed schedule or the receipt sequence; do not let the server choose among published rounds.
-- **Action grinding:** bind the player's canonical action before the beacon deadline. Re-submission with cosmetic differences must not create a new eligible event identifier.
-- **Server grinding:** a VRF has one valid output per key and input. The server cannot try alternate nonces or keys.
-- **Selective abort:** specify the result of non-publication. After a deadline, anyone may finalize using the public beacon plus a deterministic `server-missed` marker, and the receipt records the fault. A server must not gain a reroll by withholding its VRF proof.
-- **Variable draw grinding:** bind `event_kind` and `draw_count` before the seed exists. Random consumers use an indexed XOF stream, so skipping or requesting extra draws is detectable.
-
-The player need not contribute a secret for ordinary online play; the already-bound player action is their non-malleable contribution to the event identity. For adversarial wagered games, an optional player VRF may be mixed in, but it needs the same timeout rule so withholding cannot buy a reroll.
-
-### Alternatives
-
-#### Server VRF only
-
-A server VRF is simple, low-latency, and has compact proofs. It proves that the published value is the unique output for a committed server key and event. It does **not** by itself prove the server did not predict favorable future outcomes and steer scheduling, content, or encounter creation around them. It is appropriate for low-stakes play or as one leg of the hybrid, not as the strongest fairness story.
-
-#### Public randomness beacon only
-
-A future beacon output is publicly auditable and removes server secret-key trust. It introduces latency, availability dependence, and careful round scheduling. A player who can submit after the output is known can grind actions; a server that can choose the round can grind scheduling. Therefore the action and round must both be bound beforehand.
-
-#### Randomness checked in-circuit
-
-The circuit should eventually verify the randomness transcript and its consumption: event-domain construction, beacon-round binding, seed derivation, draw indexing, and mapping to bounded outcomes. Verifying a heavyweight VRF or beacon signature inside a STARK circuit may be expensive. The pragmatic split is to verify cryptographic evidence outside the circuit initially, expose authenticated outputs as public inputs, and prove in-circuit that the resolver consumed those outputs correctly. Later, add a circuit-friendly VRF or recursive proof of the external verifier if its cost justifies the reduced trust surface.
-
-“In-circuit randomness” is not itself a source of entropy. A circuit can prove correct derivation and use; unpredictability still comes from a VRF, beacon, threshold protocol, or comparable external source.
-
-### Receipt-chain binding
-
-Each random event records its request before its result:
+A server VRF produces a deterministic pseudorandom output and proof from a secret key over a bound message:
 
 ```text
-RandomnessRequest {
-    event_id,
-    scheme_id,
-    vrf_public_key,
-    beacon_id,
-    beacon_round,
-    event_kind,
-    draw_count,
-}
-
-RandomnessEvidence {
-    server_vrf_output,
-    server_vrf_proof,
-    beacon_output,
-    beacon_proof,
-    final_seed_commitment,
-}
+vrf_message = H(
+    "attested-dm/randomness/v1",
+    game_binding,
+    ruleset_hash,
+    seq,
+    prev_receipt_hash,
+    pre_state_root,
+    action_commitment,
+    randomness_domain
+)
 ```
 
-For beacon latency, use two linked receipt stages: an action-accepted receipt binds the request, then a finalized transition receipt binds the evidence and effect. No later action may depend on an unfinalized state. This makes scheduling and withholding visible in the same history that commits the game result.
+The output is unique for the key and message, and anyone can verify its proof. This prevents the server from sampling many random values for the same finalized input. It does **not** alone prevent the server from choosing among keys, delaying service, or presenting players with multiple candidate game identities. Production use therefore requires a key registered before the session, a key epoch bound into `game_binding`, and an auditable rotation policy.
+
+Difficulty: low to medium. Verification is compact and practical; key lifecycle and abort accountability are the real work.
+
+#### Public randomness beacon
+
+A public beacon supplies a timestamped, independently produced value after the action is finalized. The receipt binds a beacon identity, round, value, and proof. Randomness is derived from the beacon output and the transition context.
+
+This removes unilateral server choice and is attractive for high-value events. Its costs are latency, availability dependence, reorganization/finality semantics, and the need to define exactly which future round applies. A malicious player must not be able to wait to see a beacon round before selecting an action, so the action receipt must fix a future round before that round becomes known.
+
+Difficulty: medium. The cryptography is straightforward; robust round selection, offline play, and availability policy are harder.
+
+#### In-circuit randomness verification
+
+The proof circuit can verify that a VRF proof or beacon signature is valid and that all random draws are derived correctly. This does not create randomness; it proves correct use of an external source. Hash-based expansion should derive an indexed stream:
+
+```text
+seed = H(source_output, transition_context)
+draw_i = H("attested-dm/draw/v1", seed, subsystem, i)
+```
+
+For bounded integers, the rules must use an unbiased construction such as rejection sampling with a circuit-friendly fixed bound or an explicitly analyzed mapping. A casual modulo reduction introduces bias.
+
+Difficulty: high. Signature/VRF verification and unbiased sampling can dominate constraint cost unless the chosen primitives are circuit-friendly.
+
+### Recommended construction: delayed beacon plus registered VRF
+
+Use a hybrid, with commit-reveal only as an offline fallback:
+
+1. The player signs or otherwise authenticates a canonical action commitment that binds the current pre-state and sequence number.
+2. The server acknowledges it and fixes a specific future beacon round according to a public rule.
+3. The server computes a VRF output over the finalized transition context using a session-registered key.
+4. After the beacon round finalizes, derive:
+
+   ```text
+   seed = H(
+       "attested-dm/hybrid-seed/v1",
+       beacon_id,
+       beacon_round,
+       beacon_output,
+       vrf_public_key,
+       vrf_output,
+       transition_context
+   )
+   ```
+
+5. The resolver consumes only domain-separated indexed draws from that seed.
+
+The beacon prevents the server from knowing the result when acknowledging the action; the VRF prevents a player from precomputing outcomes from public beacon values alone and binds the registered server identity. Neither party can vary its input after the action and round are fixed. Both can still abort, but cannot silently reroll. Aborts should be recorded as signed timeout receipts, and game policy should assign a deterministic consequence rather than permitting the transition to disappear.
+
+The receipt's `randomness_context` should include the source identifiers, beacon round and proof, VRF key/output/proof, derivation version, and a commitment to the exact draw transcript. Replay verification regenerates every draw; circuit verification proves the same derivation and use.
+
+For offline or private sessions, use two-party commit-reveal with deposits, counters, or deterministic timeout outcomes where appropriate. Be candid that it has last-revealer liveness risk. Never describe it as non-abortable randomness.
 
 ## Verifiable rule execution
 
-The present verifier authenticates what was recorded but does not establish that the resolver should have produced it. Close that gap in two complementary layers.
+Closing the execution gap requires two complementary tracks.
 
-### Layer A: re-execution light client
+### Track A: deterministic re-execution light client
 
-The first correctness verifier should be deliberately boring: ship the deterministic resolver as a small native/WASM library and replay the game from the bound genesis state.
+The first complete verifier should replay the game, not merely inspect hashes.
 
-For each receipt, the verifier:
+For each receipt, it should:
 
-1. checks chain linkage, canonical encoding, versions, and game binding;
-2. verifies the action actor and `DmCaps` witness;
-3. verifies randomness evidence and reconstructs the indexed draw stream;
-4. checks that its current state root equals `pre_state_root`;
-5. calls the exact versioned `resolve_action` over the reconstructed state and canonical typed action;
-6. compares the returned effect bytes and post-state root byte-for-byte with the receipt;
-7. advances only on equality.
+1. Verify the previous hash, sequence, game and ruleset bindings, and attestation policy.
+2. Load the exact canonical ruleset and `.dungeon` content committed by the game.
+3. Reconstruct the pre-state from the prior verified post-state or a verified checkpoint.
+4. Decode the closed typed action from its canonical bytes and reject unknown or non-canonical encodings.
+5. Verify `DmCaps` authorization and consumption rules.
+6. Verify randomness evidence and regenerate the indexed random transcript.
+7. Run the same deterministic `resolve_action` implementation.
+8. Compare the computed effect and post-state root with the receipt.
+9. Check that narration is bound to, but cannot substitute for, the resolved effect.
 
-The replay package must bind the resolver binary or code artifact, ruleset root, `.dungeon` content root, schema version, and deterministic execution profile. Avoid ambient time, locale, host floating point, unordered map iteration, filesystem reads, or network access. Integer arithmetic must define overflow behavior. Any rule upgrade starts a new resolver epoch committed in the chain; it cannot silently reinterpret old receipts.
+This verifier should be a library shared by native tools and the WASM light client. The resolver needs a narrow, portable, deterministic core: no filesystem, network, clock, floating point, platform-dependent iteration, hidden global state, or unstable serialization. Golden transition vectors should run against native and WASM builds.
 
-Replay is the highest-leverage correctness layer because it catches the whole class of “valid chain, invalid transition” failures without waiting for circuit coverage. Its limitation is verifier cost: a long session requires the verifier to possess the relevant world data and repeat all transitions. Checkpoints can reduce startup cost, but a checkpoint is trustworthy only when replayed from genesis or backed by a proof.
+Replay verification is the semantic reference. Even after succinct proofs exist, it remains necessary for debugging, proof-system migrations, and users who prefer direct execution over prover assumptions.
 
-The UI should never label chain-only verification as replay verification. A useful result looks like:
+Large sessions can use verified checkpoints. A checkpoint binds the full canonical state root and the receipt prefix root; a verifier either replays from genesis or trusts/verifies a checkpoint under an explicit policy. “Fast” must never silently mean “skipped history.”
 
-```text
-Chain: valid (842/842 receipts)
-Rules: replayed (842/842 transitions, resolver v3)
-Randomness: valid (37 events; 0 missed contributions)
-Proof: not present
-Identity: development fixture
-```
+### Track B: resolver invariants in dregg's fold machinery
 
-### Layer B: resolver invariants through dregg folding
-
-The proof lane should encode transition validity as a foldable state machine. Each step consumes a committed pre-state, canonical action, capability witness, and authenticated random inputs; it emits an effect and post-state. Dregg's fold machinery accumulates many step proofs into a compact session proof whose public inputs bind:
+The proof path should encode a transition relation and fold one proof step per receipt. The public statement should minimally bind:
 
 ```text
-(game_binding, resolver_version, ruleset_root,
- initial_state_root, final_state_root,
- first_seq, last_seq, receipt_chain_tip)
+(game_binding, ruleset_hash, seq, pre_state_root,
+ action_commitment, randomness_commitment,
+ effect_commitment, post_state_root)
 ```
 
-Do not begin by circuitizing the entire resolver or AI narration. Start with one small invariant whose inputs and state delta are easy to arithmetize, whose failure is economically meaningful, and whose proof composes across every action.
+Each folded step proves that the committed witness decodes canonically, authorization checks pass, randomness is correctly derived, the transition relation holds, and the resulting state root becomes the next step's pre-state root. The final folded proof attests to an entire prefix without exposing private state beyond the chosen public commitments.
 
-**Smallest invariant worth proving first: no item can be created or destroyed except by an explicitly authorized inventory-transfer effect.**
+Do not begin by circuitizing the whole engine. Start with a tiny invariant whose semantics are stable and whose failure is materially harmful.
 
-Concretely, commit to a multiset accumulator of item identities and quantities across room containers, characters, and authorized sinks/sources. For every step, prove either:
+**Smallest invariant worth proving first: a successful `Move` changes only the actor's position to a traversable adjacent destination and leaves all unrelated committed state unchanged.**
 
-- the accumulator is unchanged and ownership changes exactly match a typed transfer effect; or
-- a mint/burn delta is present, authorized by the required `DmCaps` grant and rule identifier, and included in the receipt.
+More precisely, prove:
 
-This is a better first proof than “the state hash changed correctly,” which is tautological without transition semantics, and smaller than full combat correctness. It immediately rules out a powerful cheating class—fabricated loot, duplicated keys, and vanished quest items—while exercising state commitments, capability gates, effect decoding, and recursive folding.
+- the actor exists and is authorized by the action/capability witness;
+- the destination is adjacent under the bound movement rule;
+- the map witness authenticates the destination tile against the bound map root;
+- that tile is traversable;
+- the post-state actor position equals the destination;
+- the remaining world commitment is unchanged.
 
-After inventory conservation, extend proof coverage in this order:
+This is better than proving only “the state hash links,” because it establishes the first real semantic rule. It is smaller than combat or inventory transfer, avoids randomness initially, exercises authenticated map/state reads, and forces a sound state-update gadget that later invariants can reuse.
 
-1. movement preserves identity and only traverses an enabled edge;
-2. bounded resources never underflow or exceed rule-defined maxima;
-3. combat effects match initiative, target eligibility, random draws, and damage rules;
-4. experience and level transitions follow the committed progression table;
-5. the complete effect and post-state are the unique result of the bound action.
+Suggested invariant sequence:
 
-Until the last stage, proofs establish named invariants—not “the whole game was correctly executed.” Proof metadata must enumerate the circuit and invariant set verified. All claims remain conditional on the deployed prover and STARK-soundness assumptions.
+1. Move locality and traversability.
+2. Take conserves item identity: one item moves from location to inventory, with no duplication.
+3. Use consumes or transforms exactly the specified resource and applies only an allowed effect.
+4. Attack verifies target legality, random draw derivation, damage bounds, and health saturation.
+5. Full transition equivalence between the executable resolver and circuit relation.
 
-### Replay and proofs are complementary
-
-Replay gives broad semantic coverage quickly but costs linear work and requires executable rule code. Circuit proofs give succinct verification and support cross-session state, but are expensive to design and only cover the constraints actually encoded. The product should use replay as the reference oracle, then differential-test each circuit against it. A proof is accepted only for the exact resolver and ruleset commitments named in its public inputs.
+The hard part is specification alignment. A circuit can faithfully prove the wrong rule. Maintain one canonical transition specification, differential vectors for executable and circuit implementations, versioned semantics, and explicit proof-system parameters. The honest external claim remains “verified under the deployed dregg/STARK assumptions.”
 
 ## Ambitious capabilities
 
 ### Overworld
 
-**What it is.** A large, possibly streamed graph of regions, points of interest, travel edges, clocks, weather, factions, and encounter tables. Local dungeons become subgraphs under a common world root.
+**What it is.** A large, possibly streamed world composed of regions, terrain, points of interest, encounter tables, travel costs, and visibility rules. Regions may be authored in `.dungeon`-like modules and connected by a committed world manifest.
 
-**World-resolved and verifiable.** The AI may propose destinations, describe travel, or surface choices. The world engine alone advances time, checks reachability, consumes travel resources, selects encounters, and updates faction/world state. Use a Merkleized sparse world state: a transition carries proofs only for the regions and global indices it reads or writes. Procedural regions are derived from a committed generator version, world seed, coordinates, and verified randomness; authored regions bind their `.dungeon` or successor DSL content hashes.
+**World-resolved and verifiable.** Bind a world root whose leaves are region manifests. A travel action supplies Merkle witnesses for the current and destination regions, plus any path segment needed by the movement rule. The resolver determines reachability, time/resource cost, discovery, and encounters. Unrevealed regions can remain committed and private until entered; reveal receipts prove that disclosed region content was fixed under the original world root. Random encounters use the receipt-bound random stream.
 
-Receipts must include read and write sets, so a verifier can establish that an unloaded region was not mutated invisibly. Global events use deterministic scheduling keyed by world tick and event identity, not wall-clock timing.
+**Difficulty.** Medium for a fully public static overworld; high for fog-of-war, procedural generation, or streamed private content. The major design risks are witness size, content availability, and preventing a server from selectively withholding unfavorable committed regions.
 
-**Difficulty: high.** State commitment and partial-state witnesses are tractable. The hard parts are deterministic content generation, global-event ordering, migrations, and preventing hidden reads from becoming an authority channel.
+Opinion: start with region-to-region movement over a sparse committed graph, not a giant tile circuit. Prove local edge validity and resource cost; keep pathfinding outside the circuit until the semantics stabilize.
 
 ### Turn-based combat engine
 
-**What it is.** A closed state machine for encounter creation, initiative, legal actions, targeting, resources, status effects, damage, defeat, retreat, and rewards.
+**What it is.** Initiative, legal targets, action economy, status effects, damage/healing, equipment modifiers, death/downed states, and a deterministic round/turn state machine.
 
-**World-resolved and verifiable.** Combat receives typed commands such as `Attack`, `Defend`, `UseAbility`, `UseItem`, and `Flee`. The engine computes legal targets, costs, cooldowns, hit and damage rolls, status transitions, and terminal outcomes. AI output is flavor text attached after the effect. Rules are data-driven but committed by a `combat_ruleset_root`; effect ordering and tie-breaking are explicit.
+**World-resolved and verifiable.** Combat state is a committed substate with an explicit phase and active actor. Every command is a typed combat action; the engine checks phase, capability, target, range, costs, cooldowns, and status modifiers. Random draws are indexed by semantic purpose, such as `(combat_id, round, turn, action_index, "hit")`, so adding a flavor roll cannot shift damage rolls. The receipt binds the combat pre/post roots and draw transcript. Folded proofs establish turn-order progression, legal state updates, and bounded arithmetic.
 
-Random draws are declared before finalization by event kind and maximum count, then consumed from the verified indexed stream. Avoid rejection sampling with data-dependent draw counts unless the transcript commits every draw; fixed-width unbiased mappings or predeclared bounded retries are easier to audit.
-
-Combat is an excellent circuit target after inventory conservation: its state is compact, turns are naturally foldable, and invariants—no action outside initiative, no negative resources, damage derived from committed stats and draws—are crisp.
-
-**Difficulty: medium-high.** A deterministic replayable engine is moderate. A balanced extensible rules language and efficient proof constraints are substantially harder.
+**Difficulty.** High. Interacting status effects and rule ordering cause more complexity than arithmetic. Define a strict effect queue and total ordering; avoid free-form scripting in the trusted transition core. A small first combat ruleset should have one attack, one defense, integer health, and no nested triggers.
 
 ### Character progression
 
-**What it is.** Persistent experience, levels, attributes, abilities, equipment constraints, quests, and respec rules.
+**What it is.** Experience, levels, attributes, skills, equipment eligibility, learned abilities, quests, and respec policy.
 
-**World-resolved and verifiable.** Narration may celebrate a level-up but cannot grant one. Rewards arise only from committed encounter, quest, or administrator-grant effects. Progression tables and ability prerequisites are versioned data under the ruleset root. A level-up transition proves that prior experience crosses a threshold, chosen upgrades are legal, derived stats recompute deterministically, and no points are duplicated.
+**World-resolved and verifiable.** Progression is a state machine driven only by verified receipts: defeated enemies, completed objectives, consumed training items, or explicit grants authorized by scoped `DmCaps`. Tables and formulas live in the versioned ruleset. Every grant names its source receipt, making rewards non-duplicable. Level-up choices are typed player actions. The resolver checks prerequisites and computes the new character commitment.
 
-Keep immutable character identity separate from mutable character state. Every progression receipt binds the identity, prior state root, source reward receipt, chosen typed upgrade, and new state root. Capabilities distinguish ordinary earned advancement from explicit administrative grants.
-
-**Difficulty: medium.** Replay is straightforward if the rules remain closed. Compatibility across ruleset versions, respecs, and user-authored content is the main complexity; circuitizing table lookups and derived-stat recomputation adds cost but is manageable.
+**Difficulty.** Medium if formulas and trees are static; high if AI-authored abilities or arbitrary mods can create executable rules. Prefer a bounded declarative effect language whose interpreter is deterministic and eventually circuitized. Do not let narration mint XP or items.
 
 ### Cross-session persistence with proofs
 
-**What it is.** A character or world state can leave one session and enter another without trusting the destination server to accept an invented history or the source server to rewrite it later.
+**What it is.** Characters, inventories, achievements, and world changes survive a session and can be imported into later games without trusting a database administrator.
 
-**World-resolved and verifiable.** End a session with a checkpoint certificate binding character identity, state root, inventory accumulator, progression state, world or campaign namespace, ruleset version, receipt-chain tip, and a folded proof or replay-verifiable history. A new session's genesis receipt consumes that certificate exactly once and records an import transition.
+**World-resolved and verifiable.** End a session with a finalized export receipt binding the terminal session root, character/object commitment, provenance, ruleset, and a nullifier or monotonic version. A new session imports it only after verifying the source chain or folded proof and checking compatibility policy. The new game's genesis receipt references the export. A global or account-scoped sparse Merkle root tracks the latest version and consumed one-shot exports. Updates require proofs of membership and valid transition; nullifiers prevent cloning an item into multiple descendant sessions.
 
-Preventing duplication requires more than a proof of valid state. A portable sword copied into three offline sessions is valid history three times unless there is a uniqueness mechanism. Choose explicitly between:
+Cross-ruleset transfers require an explicit, versioned migration function that produces a migration receipt. There is no safe implicit equivalence between items or stats from different rulesets.
 
-- **copyable branches:** forks are allowed and visibly derive distinct lineage identifiers;
-- **single-owner assets:** transfers consume a globally ordered nullifier in a shared registry or consensus-backed log;
-- **campaign-local uniqueness:** a campaign coordinator rejects reused import nullifiers, introducing a scoped availability/trust dependency.
+**Difficulty.** Very high. Cryptographic validity does not itself solve global double-spend, data availability, finality, account recovery, or concurrent offline forks. A practical first version should use a transparency log or sequencer for ordering while keeping transition correctness independently verifiable. Decentralizing ordering can come later; the trust assumption must be stated.
 
-For a first product, copyable branches with conspicuous provenance are honest and usable. Reserve global single-owner semantics for scarce or traded assets that justify a registry. Cross-ruleset imports require a typed, receipt-bound migration whose code and proof are independently versioned; never reinterpret an old state under new rules.
+## Verification tiers
 
-**Difficulty: very high.** Succinct state validity is achievable with folding. Double-spend resistance, finality, privacy, recovery, schema migration, and governance across independent operators are the genuinely hard parts.
+Expose verification as named tiers rather than one overloaded boolean:
+
+- **Integrity:** receipt hash chain, bindings, and configured attestation policy are valid.
+- **Replay:** integrity plus deterministic re-execution of every transition.
+- **Succinct:** a folded proof verifies for the committed session prefix under named dregg/prover parameters.
+- **Anchored:** succinct or replay verification plus required beacon, persistence-log, and finality checks.
+
+The UI and API should report the achieved tier, ruleset hash, verifier version, proof parameters, attestation mode, randomness source, and any trusted checkpoint. A fixture attestation must be visibly labeled as such.
 
 ## Phased roadmap
 
-### Phase 0 — canonical transition receipts
+### Phase 0 — Canonical transition envelope
 
-- Add canonical typed-action bytes, pre/post state roots, resolver version, and ruleset root to each ledger transition.
-- Split verification results into chain, replay, randomness, proof, and identity claims.
-- Specify deterministic serialization and domain separation as protocol fixtures.
+- Define canonical bytes for actions, effects, state roots, capabilities, ruleset identity, and randomness context.
+- Extend ledger entries with pre-state root, action commitment, ruleset hash, randomness context, and post-state root.
+- Record rejected actions as deterministic receipts.
+- Publish transition test vectors.
 
-Exit criterion: a receipt uniquely identifies the state, action, rules, claimed effect, and resulting state.
+Exit criterion: a receipt contains everything an independent implementation needs to attempt replay.
 
-### Phase 1 — replay correctness
+### Phase 1 — Replay verifier
 
-- Implement `verify_replay` in the native library and WASM light client.
-- Reconstruct genesis state, re-run `resolve_action`, and compare every effect and state root.
-- Add adversarial fixtures in which hashes and attestations are valid but an effect violates the resolver; chain verification must pass and replay verification must fail.
-- Publish resolver artifacts by version and bind their digest into `game_binding`.
+- Extract a deterministic, portable resolver core.
+- Make `GameSession::verify_replay()` walk receipts and re-run `resolve_action`.
+- Share the core with the WASM light client.
+- Differential-test native and WASM results over golden and generated sessions.
+- Preserve existing chain-only verification as the explicitly named integrity tier.
 
-Exit criterion: an independent client detects every tested rule-invalid but internally well-formed history.
+Exit criterion: mutating an effect or producing a rule-invalid but correctly rehashed transition is rejected.
 
-### Phase 2 — hybrid verifiable randomness
+### Phase 2 — Non-grindable randomness
 
-- Define random-event domains, fixed draw accounting, and two-stage receipts.
-- Bind a server VRF key at genesis and a future beacon round at action acceptance.
-- Implement timeout finalization so withholding cannot reroll outcomes.
-- Verify evidence in native and WASM clients; expose randomness status separately.
+- Register a per-session VRF key and bind its epoch into the game identity.
+- Define action finalization and future beacon-round selection.
+- Implement beacon and VRF verification, domain-separated draw expansion, timeout receipts, and deterministic abort consequences.
+- Add commit-reveal as a clearly labeled offline fallback.
 
-Exit criterion: neither party can choose among multiple valid outputs, and abort behavior yields no favorable reroll.
+Exit criterion: neither player nor server can obtain a different landed outcome without creating publicly detectable equivocation or abort evidence.
 
-### Phase 3 — first folded invariant
+### Phase 3 — First folded semantic proof
 
-- Commit inventory as a multiset accumulator within the state root.
-- Prove conservation or capability-authorized mint/burn for one transition.
-- Fold proofs across a session and bind the final proof to the ledger tip.
-- Differential-test circuit witnesses against replay results.
+- Specify the authenticated state/map layout.
+- Implement the successful-`Move` locality and traversability circuit.
+- Fold consecutive move proofs with dregg's existing machinery.
+- Bind proof parameters and public inputs into session verification.
+- Cross-check circuit witnesses against replay vectors.
 
-Exit criterion: a light client verifies a compact session proof for the named inventory invariant under the deployed prover assumptions.
+Exit criterion: the WASM light client verifies a session prefix proof establishing real movement semantics under the deployed prover assumptions.
 
-### Phase 4 — combat and progression
+### Phase 4 — Inventory and combat
 
-- Introduce the closed combat state machine and committed combat ruleset.
-- Add progression rewards and typed level-up transitions.
-- Expand folded constraints through movement, resources, combat, and advancement.
+- Add item-conservation proofs for `Take` and bounded transformations for `Use`.
+- Introduce the minimal combat state machine.
+- Prove turn legality, random derivation, and bounded damage before adding complex effects.
 
-Exit criterion: complete combat encounters and character upgrades are replay-verifiable, with explicit proof coverage for the implemented invariant set.
+Exit criterion: a complete small encounter is replay-verifiable and fold-verifiable.
 
-### Phase 5 — overworld and succinct checkpoints
+### Phase 5 — Overworld and progression
 
-- Merkleize region state and require transition read/write witnesses.
-- Add deterministic travel, time, encounters, and committed content generation.
-- Produce folded checkpoint proofs suitable for fast session startup.
+- Add region-rooted overworld content and reveal proofs.
+- Add receipt-sourced XP, level-up actions, and declarative abilities.
+- Define content-availability and ruleset-upgrade policies.
 
-Exit criterion: a client can verify a long-running world from a trusted genesis using compact checkpoints plus the recent receipt suffix.
+Exit criterion: travel, encounters, rewards, and level-ups compose without narration-controlled mutation.
 
-### Phase 6 — cross-session portability
+### Phase 6 — Cross-session persistence
 
-- Define export certificates, lineage identifiers, import transitions, and migrations.
-- Ship copyable, visibly forked character branches first.
-- Add a nullifier registry only for assets requiring single-owner semantics.
+- Define export/import and migration receipts.
+- Add version/nullifier tracking and a transparent ordering service.
+- Prove valid state evolution across session boundaries.
+- Specify recovery, forks, finality, and data-availability assumptions.
 
-Exit criterion: a destination session can verify provenance and rules validity without trusting the source operator, subject to explicit prover, identity, and finality assumptions.
+Exit criterion: a character can move between sessions with independently checkable provenance and without silent duplication.
 
 ## The one-day, highest-leverage first step
 
-**Add a replay-verification fixture that proves the current gap, then make it pass with one-action re-execution.**
+**Add a canonical `TransitionInput` to each new ledger entry and implement replay verification for `Move` only.**
 
-Concretely, extend a transition receipt with canonical `action_bytes`, `pre_state_root`, `post_state_root`, and `resolver_version`. Construct a one-move session whose chain and fixture attestation are valid but whose recorded effect or post-state is deliberately wrong. Preserve the existing expectation that `GameSession::verify()` reports the chain as valid, and add `verify_replay()` that re-runs `resolve_action` and rejects the forged transition with a precise mismatch.
+`TransitionInput` should bind:
 
-Scope the first implementation to a single deterministic `Move` fixture and one resolver version. Do not wait for WASM packaging, VRFs, or circuits. This small vertical slice establishes the receipt fields every later feature needs, makes the honest verification distinction executable rather than documentary, and creates the reference oracle against which randomness handling and dregg constraints can be tested.
+```text
+ruleset_hash
+pre_state_root
+canonical_typed_action
+capability_commitment
+randomness_context_or_none
+```
 
-## Security and product claims
+Then add `verify_replay_move()` (or an internal equivalent selected by action type) that reconstructs the prior world, runs `resolve_action` for `Move`, and compares the canonical effect and post-state root. Include one adversarial test that constructs a hash-valid chain with an impossible move and proves that integrity verification accepts it while replay verification rejects it.
 
-The verifier must describe evidence, not imply absolutes:
+This is buildable in a day because `Move` is deterministic and avoids the unresolved randomness design. It has unusually high leverage because it:
 
-- Today: “This session's recorded history is internally consistent and untampered under the fixture attestation.”
-- After replay: “This client re-executed the bound resolver and reproduced the recorded transitions.”
-- After randomness: “Random outcomes match the bound VRF/beacon transcript and draw schedule.”
-- After folding: “The named invariants verify under the deployed dregg prover and STARK-soundness assumptions.”
-- After production attestation: “The execution identity chains to the configured production trust root.”
+- turns the honest verification gap into an executable failing test;
+- forces the receipt to bind the action and pre-state required by every later verifier;
+- establishes the separation between integrity and replay tiers;
+- creates golden inputs for the first movement circuit;
+- reveals serialization and resolver-purity problems before proof engineering multiplies their cost.
 
-No single badge should silently merge those claims. A verifiable game earns trust by making the exact boundary of each proof leg as legible as the game itself.
+Do not start with a circuit or beacon integration. First make the rule-correct statement fully replayable and testable. Succinct proof work should compress a transition relation that already has a clear executable meaning.
+
+## Security and claim discipline
+
+Every release should publish a compact assumption manifest covering:
+
+- attestation mode and key provenance;
+- resolver and ruleset hashes;
+- canonical encoding version;
+- randomness sources, finality, key registration, and abort policy;
+- proof system and parameter identifiers;
+- checkpoint or persistence-log trust;
+- data-availability expectations;
+- verification tier actually achieved.
+
+Appropriate claim: “This history is untampered and its state transitions were replayed,” or, after the proof path lands, “This session prefix satisfies the committed resolver invariants under the deployed dregg prover assumptions.”
+
+Inappropriate claim: “The AI is trusted because it was attested,” “the chain proves the rules were followed” when only integrity was checked, or “the system is trustless from first principles.”
+
+The core product promise is narrower and stronger: **the AI may invent the story, but it cannot invent the outcome.**

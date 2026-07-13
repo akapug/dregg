@@ -48,6 +48,11 @@ description = "Discord bot for the dregg devnet — custodial AppCipherclerk han
 
 [dependencies]
 blake3 = "1"
+# Verified author identity for `/gallery publish`: the publisher's custodial cclerk
+# (an ed25519 key) signs the universe's content commitment, and `ugc-dregg` binds that
+# key into the content address. Same `ed25519-dalek` the SDK cclerk derives from, so the
+# cclerk's raw seed IS the signing key here.
+ed25519-dalek = { version = "2", features = ["std"] }
 base64 = { workspace = true }
 hex = "0.4"
 postcard = { version = "1", features = ["use-std"] }

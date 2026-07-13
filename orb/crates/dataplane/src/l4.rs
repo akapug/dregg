@@ -34,9 +34,9 @@
 
 use std::io::copy;
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream, UdpSocket};
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{Receiver, Sender};
-use std::sync::Arc;
 use std::time::Duration;
 
 use crate::pool::PooledBuf;
@@ -257,7 +257,7 @@ pub fn run_udp(listen_addr: &str, fleet: Arc<Fleet>, gw: ServeGateway) {
                 if e.kind() == std::io::ErrorKind::WouldBlock
                     || e.kind() == std::io::ErrorKind::TimedOut =>
             {
-                continue
+                continue;
             }
             Err(_) => continue,
         };

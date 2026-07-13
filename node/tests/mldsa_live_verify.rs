@@ -40,7 +40,7 @@
 //! routing cannot be demonstrated; the test then FAILS LOUDLY with the exact blocker rather than passing
 //! vacuously — a green here means the crate has actually left the node's verify TCB on this build.
 
-use dregg_node::{install_mldsa_verified_verify_core, MlDsaVerifyCoreInstall};
+use dregg_node::{MlDsaVerifyCoreInstall, install_mldsa_verified_verify_core};
 use fips204::ml_dsa_65;
 use fips204::traits::{KeyGen as _, SerDes as _, Signer as _};
 
@@ -113,7 +113,10 @@ fn deployed_ml_dsa_verify_routes_through_lean_core() {
     let accept_wire = real_verify_wire(&pk_bytes, msg, ctx, &sig);
     let lean_accept = lean_shadow_verdict(&accept_wire)
         .expect("the installed core must answer (archive exports the real verify)");
-    assert!(lean_accept, "the Lean core itself ACCEPTS the genuine signature");
+    assert!(
+        lean_accept,
+        "the Lean core itself ACCEPTS the genuine signature"
+    );
     assert_eq!(
         dregg_pq::ml_dsa_verify(&pk_bytes, ctx, msg, &sig),
         lean_accept,

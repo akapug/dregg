@@ -129,3 +129,26 @@ Touches `blocklace_sync.rs` (was a live-lane file — ember quiescing). Stay ato
 mechanical sweeps; independent clean build/test is the gate (lanes have false-claimed green repeatedly).
 The verified-Lean side (`NullifierAccumulator.lean` gate, the bs-vk `advanceRoot8Exec`/discharge proofs)
 is the spec these Rust changes must match — salvage it as the reference, not a merge.
+
+## COMMITMENTS-RUST executor-set design (night 07-10, for after the Lean dual lands)
+The commitments accumulator (note-CREATE set) mirrors the nullifier one but needs a NEW executor set (there
+is no note_commitments today — grep empty). Design (mirror TurnExecutor.note_nullifiers):
+- ADD `note_commitments: Mutex<CommitmentSet>` to TurnExecutor (turn/src/executor/mod.rs, beside
+  note_nullifiers:771). CommitmentSet = a (commitment→value) map over the deployed CanonicalHeapTree8, leaf
+  `HeapLeaf { addr: fold(commitment), value }` — EXACTLY mirroring NullifierSet::root8()'s circuit-faithful
+  encoding (reuse the same helpers split_u64/fold; commitment is a single BabyBear felt per
+  effect.rs:276 `NoteCreate { commitment: BabyBear, value: u64 }`, so addr = commitment.as_canonical()).
+- On apply_note_create (apply.rs:1549), after validating: `note_commitments.lock().insert(commitment,
+  value)` — GROW-ONLY (a commitment is created once; a duplicate is an error, mirroring the double-create
+  guard). No removal.
+- Feed limb 27 FAITHFULLY: node/turn_proving.rs + blocklace_sync feed `note_commitments.lock().root8()` into
+  V9RotationContext.commitments_root (change [u8;32]→Faithful8 like nullifier_root); cell/commitment.rs:1093
+  `pre[27]=hash_bytes(ctx.commitments_root)` → `commitments_root.write_lanes([27,74,75,76,77,78,79,80])`
+  (the circuit already binds commitmentsRootGroupCol at limb 27+completion lanes — same as nullifier at 26).
+- VERIFY like nullifier: a test commitments_root_faithful_8felt_and_cross_node_distinguishing (write
+  correctness limbs [27,74..80]==root lanes; non-vacuous; different commitment sets → different roots).
+- Persistence/reconstruction: same as nullifier (reconstruct from the persisted commitment set on catchup;
+  assert root8()==committed). NO VK regen (geometry already there, only witness values change).
+This is a bigger unit than the nullifier mirror (needs the new set + the note-create wiring), but purely
+mechanical against the nullifier precedent (commit 9e77654b5). BLOCKED on the Lean commitments-dual landing
+(so the Lean commitmentsRoot is the canonical spec the Rust mirrors).

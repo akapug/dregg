@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# hbuild — offload a CARGO build/test to hbox (where the discord-bot RUNS, and a
+# build host), in an ISOLATED per-lane dir so concurrent lanes don't fight one
+# target lock. Mirrors scripts/pbuild but targets hbox instead of persvati.
+#
+#   Usage:  scripts/hbuild <lane-name> <command...>   (compound commands: pass as ONE quoted arg)
+#   e.g.    scripts/hbuild bot-pay 'cd discord-bot && cargo test'
+#           scripts/hbuild bot 'cd discord-bot && cargo build --release'
+#
+# It rsyncs the LOCAL working tree (carrying uncommitted WIP) — gitignore-filtered
+# so target/ and .lake/ are NOT synced (hbox keeps its own warm per-lane caches).
+# Then runs the command there with the cargo toolchain env sourced. Use this for
+# discord-bot builds/tests and any CARGO work you want run where the bot lives.
+# Keep LEAN (lake) builds LOCAL (the local .lake/mathlib cache is warm).
+set -euo pipefail
+LANE="${1:?usage: hbuild <lane> <command...>}"; shift
+[ "$#" -ge 1 ] || { echo "hbuild: no command given" >&2; exit 2; }
+
+SRC="/Users/ember/dev/breadstuffs/"
+REMOTE="dregg-build/${LANE}"
+
+ssh hbox "mkdir -p '${REMOTE}'"
+rsync -az --delete --filter=':- .gitignore' --exclude='.git/' \
+  "$SRC" "hbox:${REMOTE}/"
+
+ssh hbox "set -e; source ~/.cargo/env 2>/dev/null || true; \
+  [ -f ~/.elan/env ] && source ~/.elan/env 2>/dev/null || true; \
+  export PATH=\"\$HOME/.cargo/bin:\$HOME/.elan/bin:\$PATH\"; \
+  cd '${REMOTE}' && $*"

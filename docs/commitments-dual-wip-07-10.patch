@@ -1,0 +1,3072 @@
+diff --git a/metatheory/Dregg2/Circuit/Argus/Effects/CreateCellFromFactory.lean b/metatheory/Dregg2/Circuit/Argus/Effects/CreateCellFromFactory.lean
+index 9ead0ae15..2ce617748 100644
+--- a/metatheory/Dregg2/Circuit/Argus/Effects/CreateCellFromFactory.lean
++++ b/metatheory/Dregg2/Circuit/Argus/Effects/CreateCellFromFactory.lean
+@@ -165,7 +165,8 @@ theorem recordKernelState_ext {k k' : RecordKernelState}
+     (hdelegationEpochAt : k.delegationEpochAt = k'.delegationEpochAt)
+     (hheaps : k.heaps = k'.heaps)
+     (hnullifierRoot : k.nullifierRoot = k'.nullifierRoot)
+-    (hrevokedRoot : k.revokedRoot = k'.revokedRoot) : k = k' := by
++    (hrevokedRoot : k.revokedRoot = k'.revokedRoot)
++    (hcommitmentsRoot : k.commitmentsRoot = k'.commitmentsRoot) : k = k' := by
+   cases k; cases k'; simp_all
+ 
+ /-- `factoryAdmit` is a conjunction of decidable propositions (a `0 ≤ vk`, a `findFactory` equality, two
+diff --git a/metatheory/Dregg2/Circuit/CircuitCompletenessLifecycle.lean b/metatheory/Dregg2/Circuit/CircuitCompletenessLifecycle.lean
+index 639759be3..151cf7daf 100644
+--- a/metatheory/Dregg2/Circuit/CircuitCompletenessLifecycle.lean
++++ b/metatheory/Dregg2/Circuit/CircuitCompletenessLifecycle.lean
+@@ -143,7 +143,8 @@ def cellSeal_cellSealGenuineEncodes_construct (compressN : List FieldElem → Fi
+   frDelegationEpochAt := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
+   frHeaps             := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
+   frNullifierRoot     := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
+-  frRevokedRoot       := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
++  frRevokedRoot       := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
++  frCommitmentsRoot := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
+ 
+ /-- **`cellSeal_descriptorComplete_genuine` — the constructed decode realizes the GENUINE seal.** From
+ `CellSealSpec`, the whole post lifecycle map IS `sealLifecycleMap pre.kernel cell` (the spec's lifecycle
+@@ -237,7 +238,8 @@ def cellUnseal_cellUnsealEncodes_construct (compressN : List FieldElem → Field
+   frDelegationEpochAt := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
+   frHeaps             := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
+   frNullifierRoot     := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
+-  frRevokedRoot       := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
++  frRevokedRoot       := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
++  frCommitmentsRoot := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
+ 
+ /-- **`cellUnseal_descriptorComplete_genuine` — the constructed decode realizes the GENUINE unseal.** From
+ `CellUnsealSpec`, the whole post lifecycle map IS `unsealLifecycleMap pre.kernel cell`, so the `cell`
+@@ -339,7 +341,8 @@ def cellDestroy_cellDestroyEncodes_construct (compressN : List FieldElem → Fie
+   frDelegationEpochAt := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
+   frHeaps             := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
+   frNullifierRoot     := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
+-  frRevokedRoot       := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
++  frRevokedRoot       := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.1
++  frCommitmentsRoot := hspec.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
+ 
+ /-- **`cellDestroy_descriptorComplete_genuine` — the constructed decode realizes the GENUINE destroy.**
+ From `CellDestroySpec`, the post lifecycle of `cell` reads back exactly `lcDestroyed` (the →Destroyed
+@@ -444,7 +447,8 @@ def audit_auditEncodes_construct (compressN : List FieldElem → FieldElem)
+     (frDelegationEpochAt : post.kernel.delegationEpochAt = pre.kernel.delegationEpochAt)
+     (frHeaps : post.kernel.heaps = pre.kernel.heaps)
+     (frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot)
+-    (frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot) :
++    (frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot)
++    (frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot) :
+     auditEncodes compressN pre post actor cell f where
+   postRoot := prover.postRoot
+   hpost := prover.hpost
+@@ -469,6 +473,7 @@ def audit_auditEncodes_construct (compressN : List FieldElem → FieldElem)
+   frHeaps := frHeaps
+   frNullifierRoot := frNullifierRoot
+   frRevokedRoot := frRevokedRoot
++  frCommitmentsRoot := frCommitmentsRoot
+ 
+ /-- **`refusal_auditEncodes_construct` — CONSTRUCT the refusal decode from `RefusalSpec`.** From
+ `RefusalSpec pre actor cell post` and the realizable `AuditRootProver` over `refusalField`, ASSEMBLE
+diff --git a/metatheory/Dregg2/Circuit/ClosureFloorReduce.lean b/metatheory/Dregg2/Circuit/ClosureFloorReduce.lean
+index d865e9d19..5a6c3bf89 100644
+--- a/metatheory/Dregg2/Circuit/ClosureFloorReduce.lean
++++ b/metatheory/Dregg2/Circuit/ClosureFloorReduce.lean
+@@ -116,6 +116,7 @@ structure TransferReadoutResidual (hash : List ℤ → ℤ) (t : VmTrace)
+   frHeaps : post.kernel.heaps = pre.kernel.heaps
+   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
+   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
++  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
+   logAdv : post.log = tr :: pre.log
+ 
+ /-! ## §2 — `transferTraceReadout_of_residual`: REBUILD the full readout, columns discharged.
+@@ -183,6 +184,7 @@ def transferTraceReadout_of_residual (hash : List ℤ → ℤ)
+   frHeaps := r.frHeaps
+   frNullifierRoot := r.frNullifierRoot
+   frRevokedRoot := r.frRevokedRoot
++  frCommitmentsRoot := r.frCommitmentsRoot
+   logAdv := r.logAdv
+ 
+ /-! ## §3 — axiom hygiene. -/
+diff --git a/metatheory/Dregg2/Circuit/ClosureTransfer.lean b/metatheory/Dregg2/Circuit/ClosureTransfer.lean
+index 926d2a8dd..0a81967f0 100644
+--- a/metatheory/Dregg2/Circuit/ClosureTransfer.lean
++++ b/metatheory/Dregg2/Circuit/ClosureTransfer.lean
+@@ -167,6 +167,7 @@ structure TransferTraceReadout (hash : List ℤ → ℤ)
+   frHeaps : post.kernel.heaps = pre.kernel.heaps
+   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
+   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
++  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
+   logAdv : post.log = tr :: pre.log
+ 
+ /-! ## §2 — `TransferAuthorityWitness`: the cap-open authority residual (the SOLE irreducible carry).
+@@ -258,6 +259,7 @@ def rotatedEncodes_of_floors (hash : List ℤ → ℤ) (S : CommitSurface)
+   frHeaps := rd.frHeaps
+   frNullifierRoot := rd.frNullifierRoot
+   frRevokedRoot := rd.frRevokedRoot
++  frCommitmentsRoot := rd.frCommitmentsRoot
+   logAdv := rd.logAdv
+ 
+ /-! ## §3a — the authority witness FORCES the deployed gate (the cap-open is not decorative). -/
+diff --git a/metatheory/Dregg2/Circuit/CommitmentCrossBind.lean b/metatheory/Dregg2/Circuit/CommitmentCrossBind.lean
+index f2e78e2b2..eda52074d 100644
+--- a/metatheory/Dregg2/Circuit/CommitmentCrossBind.lean
++++ b/metatheory/Dregg2/Circuit/CommitmentCrossBind.lean
+@@ -192,7 +192,7 @@ theorem stateCommit_binds_cells_and_rest
+           ∧ k'.delegationEpoch = k.delegationEpoch
+           ∧ k'.delegationEpochAt = k.delegationEpochAt
+           ∧ k'.heaps = k.heaps
+-          ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot) := by
++          ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot) := by
+   -- root split: cellDigest equal ∧ RH equal.
+   obtain ⟨hcd, hRHeq⟩ := recStateCommit_binds CH RH cmb compress compressN hCmb k k' t hroot
+   -- the 16 non-cell fields (needed FIRST: the accounts-frame makes the two cellDigest carriers match).
+@@ -235,7 +235,7 @@ theorem setFieldCommit_binds_all
+           ∧ k'.delegationEpoch = k.delegationEpoch
+           ∧ k'.delegationEpochAt = k.delegationEpochAt
+           ∧ k'.heaps = k.heaps
+-          ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++          ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
+       ∧ log = log' := by
+   unfold recSetFieldCommit at hroot
+   -- outer cmb split: cell-side equal ∧ (rest⊕log)-side equal.
+@@ -289,7 +289,7 @@ theorem crossbind_rest_agree (hRest : RestHashIffFrame RH)
+       ∧ k'.delegationEpoch = k.delegationEpoch
+       ∧ k'.delegationEpochAt = k.delegationEpochAt
+       ∧ k'.heaps = k.heaps
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot :=
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot :=
+   (hRest k k').mp hPI
+ 
+ /-- **`crossbind_cells_agree`.** If the circuit root's frame child and the executor root's
+@@ -324,7 +324,7 @@ theorem crossbind_circuit_exec_same_state
+           ∧ k'.delegationEpoch = k.delegationEpoch
+           ∧ k'.delegationEpochAt = k.delegationEpochAt
+           ∧ k'.heaps = k.heaps
+-          ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot) :=
++          ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot) :=
+   ⟨crossbind_cells_agree CH compressN hCompressN hLeaf k k' S hFramePI,
+    crossbind_rest_agree RH hRest k k' hRestPI⟩
+ 
+diff --git a/metatheory/Dregg2/Circuit/EffectCommit.lean b/metatheory/Dregg2/Circuit/EffectCommit.lean
+index cf6c798e2..13a9969f3 100644
+--- a/metatheory/Dregg2/Circuit/EffectCommit.lean
++++ b/metatheory/Dregg2/Circuit/EffectCommit.lean
+@@ -153,6 +153,7 @@ def kernelFrame (k k' : RecordKernelState) : Prop :=
+     ∧ k'.delegationEpochAt = k.delegationEpochAt
+     ∧ k'.heaps = k.heaps
+     ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot
++    ∧ k'.commitmentsRoot = k.commitmentsRoot
+ 
+ /-- **`touchedCellMap base T newLeaf`** — the generic post-`cell` map: cells in `T` take their
+ `newLeaf`, every other cell keeps the `base`. (For Transfer `T = {src,dst}` and `newLeaf = recTransfer
+diff --git a/metatheory/Dregg2/Circuit/EffectCommit2.lean b/metatheory/Dregg2/Circuit/EffectCommit2.lean
+index 953ba394c..ef7aff13c 100644
+--- a/metatheory/Dregg2/Circuit/EffectCommit2.lean
++++ b/metatheory/Dregg2/Circuit/EffectCommit2.lean
+@@ -91,7 +91,7 @@ def RestIffNoBal (RH : RecordKernelState → ℤ) : Prop :=
+       ∧ k'.delegationEpoch = k.delegationEpoch
+       ∧ k'.delegationEpochAt = k.delegationEpochAt
+       ∧ k'.heaps = k.heaps
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
+ 
+ /-- **`RestIffNoNullifiers RH`** — the rest hash binds the 15 non-`cell`-non-`nullifiers` components
+ (BIDIRECTIONAL), omitting `nullifiers` (the touched field of `noteSpendA`). -/
+@@ -105,7 +105,7 @@ def RestIffNoNullifiers (RH : RecordKernelState → ℤ) : Prop :=
+       ∧ k'.delegationEpoch = k.delegationEpoch
+       ∧ k'.delegationEpochAt = k.delegationEpochAt
+       ∧ k'.heaps = k.heaps
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
+ 
+ /-! ## §2 — the `ActiveComponent` interface + the two/three smart constructors.
+ 
+diff --git a/metatheory/Dregg2/Circuit/EffectCommit2Dual.lean b/metatheory/Dregg2/Circuit/EffectCommit2Dual.lean
+index 66a59fe2e..bd5fb6f59 100644
+--- a/metatheory/Dregg2/Circuit/EffectCommit2Dual.lean
++++ b/metatheory/Dregg2/Circuit/EffectCommit2Dual.lean
+@@ -47,7 +47,7 @@ def RestIffNoBalEscrows (RH : RecordKernelState → ℤ) : Prop :=
+       ∧ k'.delegationEpoch = k.delegationEpoch
+       ∧ k'.delegationEpochAt = k.delegationEpochAt
+       ∧ k'.heaps = k.heaps
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
+ 
+ /-! ## §1 — `EffectSpec2Dual` (two touched non-`cell` components). -/
+ 
+@@ -329,4 +329,4 @@ theorem emitEffect2DualFaithful {St Args : Type} (name : String) (E : EffectSpec
+ #assert_axioms effectCircuit2Dual_rejects_log_forge
+ #assert_axioms emitEffect2DualFaithful
+ 
+-end Dregg2.Circuit.EffectCommit2Dual
+\ No newline at end of file
++end Dregg2.Circuit.EffectCommit2Dual
+diff --git a/metatheory/Dregg2/Circuit/EffectInstances2.lean b/metatheory/Dregg2/Circuit/EffectInstances2.lean
+index d956ea03f..4ff4cecba 100644
+--- a/metatheory/Dregg2/Circuit/EffectInstances2.lean
++++ b/metatheory/Dregg2/Circuit/EffectInstances2.lean
+@@ -123,7 +123,7 @@ def mintE (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injective D)
+       ∧ k'.delegationEpoch = k.delegationEpoch
+       ∧ k'.delegationEpochAt = k.delegationEpochAt
+       ∧ k'.heaps = k.heaps
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
+   guardGates   := mintGuardGates
+   guardProp    := mintGuardProp
+   guardWidth   := 1
+@@ -305,7 +305,7 @@ def noteSpendE (LE : Nat → ℤ) (cN : List ℤ → ℤ)
+       ∧ k'.delegationEpoch = k.delegationEpoch
+       ∧ k'.delegationEpochAt = k.delegationEpochAt
+       ∧ k'.heaps = k.heaps
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
+   guardGates   := noteSpendGuardGates
+   guardProp    := noteSpendGuardProp
+   guardWidth   := 1
+diff --git a/metatheory/Dregg2/Circuit/Emit/EffectVmEmitEmitEvent.lean b/metatheory/Dregg2/Circuit/Emit/EffectVmEmitEmitEvent.lean
+index faeffef6c..176a7a715 100644
+--- a/metatheory/Dregg2/Circuit/Emit/EffectVmEmitEmitEvent.lean
++++ b/metatheory/Dregg2/Circuit/Emit/EffectVmEmitEmitEvent.lean
+@@ -404,9 +404,9 @@ theorem unify_emitEvent (s s' : RecChainedState) (actor cell c : CellId) (topic
+     (hspec : EmitEventSpec s actor cell topic data s') :
+     CellFreezeSpec (cellProjE s.kernel c) (cellProjE s'.kernel c) := by
+   obtain ⟨_, _, h1, h2, h3, h4, h5, h6, h7, h10, h11, h12, h13, h14, h15, h17, h18, h19,
+-    h20, h21⟩ := hspec
++    h20, h21, h22⟩ := hspec
+   have hk : s'.kernel = s.kernel :=
+-    recKernel_ext h1 h2 h3 h4 h5 h6 h7 h10 h11 h12 h13 h14 h15 h17 h18 h19 h20 h21
++    recKernel_ext h1 h2 h3 h4 h5 h6 h7 h10 h11 h12 h13 h14 h15 h17 h18 h19 h20 h21 h22
+   rw [hk]
+   exact ⟨rfl, rfl, rfl, fun _ => rfl, rfl, rfl⟩
+ 
+diff --git a/metatheory/Dregg2/Circuit/FinFrameHash.lean b/metatheory/Dregg2/Circuit/FinFrameHash.lean
+index 5a979a0cc..497736320 100644
+--- a/metatheory/Dregg2/Circuit/FinFrameHash.lean
++++ b/metatheory/Dregg2/Circuit/FinFrameHash.lean
+@@ -131,7 +131,8 @@ def serializeRestFin (f : FinKernelState) : List ℤ :=
+   -- The two accumulator roots (`Fin 8 → ℤ`, a FINITE domain) serialize as their 8-felt `List.ofFn`.
+   -- Binding them is what makes the root-clauses of `RestHashIffFrame` NON-vacuous.
+   , zcode (List.ofFn f.nullifierRoot)
+-  , zcode (List.ofFn f.revokedRoot) ]
++  , zcode (List.ofFn f.revokedRoot)
++  , zcode (List.ofFn f.commitmentsRoot) ]
+ 
+ /-- **`serializeFin f`** — the canonical serialization of the WHOLE finite kernel state: the `cell`
+ code, then the 15 non-`cell` codes. Fixed-length (16 entries), so position is the field tag and
+@@ -174,12 +175,12 @@ theorem restAgree_of_serializeRestFin {f f' : FinKernelState}
+       ∧ f.deathCert = f'.deathCert ∧ f.delegate = f'.delegate ∧ f.delegations = f'.delegations
+       ∧ f.delegationEpoch = f'.delegationEpoch ∧ f.delegationEpochAt = f'.delegationEpochAt
+       ∧ f.heaps = f'.heaps ∧ f.nullifierRoot = f'.nullifierRoot
+-      ∧ f.revokedRoot = f'.revokedRoot := by
++      ∧ f.revokedRoot = f'.revokedRoot ∧ f.commitmentsRoot = f'.commitmentsRoot := by
+   simp only [serializeRestFin, List.cons.injEq, and_true] at h
+   obtain ⟨hAcc, hCaps, hNul, hRev, hCom, hBal, hSlot, hFac, hLife, hDeath, hDel, hDels, hEp, hEpat,
+-    hHeaps, hNRoot, hRRoot⟩ := h
++    hHeaps, hNRoot, hRRoot, hCRoot⟩ := h
+   refine ⟨zcode_inj hAcc, ?_, zcode_inj hNul, zcode_inj hRev, zcode_inj hCom, ?_, ?_, zcode_inj hFac,
+-    ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
++    ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+   · exact CanonMap.eq_of_entries (zcode_inj hCaps)
+   · exact bal_eq_of_balData (zcode_inj hBal)
+   · exact CanonMap.eq_of_entries (zcode_inj hSlot)
+@@ -192,6 +193,7 @@ theorem restAgree_of_serializeRestFin {f f' : FinKernelState}
+   · exact CanonMap.eq_of_entries (zcode_inj hHeaps)
+   · exact List.ofFn_injective (zcode_inj hNRoot)
+   · exact List.ofFn_injective (zcode_inj hRRoot)
++  · exact List.ofFn_injective (zcode_inj hCRoot)
+ 
+ /-- **`serializeFin_injective` — PROVED.** Equal whole-state serializations force equal
+ `FinKernelState`s: the `cell` code fixes `cell` (`cell_eq_of_cellData`), the 15 rest codes fix the
+@@ -202,12 +204,12 @@ theorem serializeFin_injective {f f' : FinKernelState} (h : serializeFin f = ser
+   obtain ⟨hcell, hrest⟩ := h
+   have hc : f.cell = f'.cell := cell_eq_of_cellData (zcode_inj hcell)
+   obtain ⟨hAcc, hCaps, hNul, hRev, hCom, hBal, hSlot, hFac, hLife, hDeath, hDel, hDels, hEp, hEpat,
+-    hHeaps, hNRoot, hRRoot⟩ := restAgree_of_serializeRestFin hrest
++    hHeaps, hNRoot, hRRoot, hCRoot⟩ := restAgree_of_serializeRestFin hrest
+   ext1 <;>
+     first
+       | exact hAcc | exact hc | exact hCaps | exact hNul | exact hRev | exact hCom | exact hBal
+       | exact hSlot | exact hFac | exact hLife | exact hDeath | exact hDel | exact hDels
+-      | exact hEp | exact hEpat | exact hHeaps | exact hNRoot | exact hRRoot
++      | exact hEp | exact hEpat | exact hHeaps | exact hNRoot | exact hRRoot | exact hCRoot
+ 
+ /-! ## §5 — `frameHashFin` + the HEADLINE `restHashIffFrame_fin` (residual `Poseidon2SpongeCR`). -/
+ 
+@@ -259,18 +261,18 @@ theorem restBody_iff_restAgree (f f' : FinKernelState) :
+         ∧ (denote f').delegationEpochAt = (denote f).delegationEpochAt
+         ∧ (denote f').heaps = (denote f).heaps
+         ∧ (denote f').nullifierRoot = (denote f).nullifierRoot
+-        ∧ (denote f').revokedRoot = (denote f).revokedRoot)
++        ∧ (denote f').revokedRoot = (denote f).revokedRoot ∧ (denote f').commitmentsRoot = (denote f).commitmentsRoot)
+       ↔ (f'.accounts = f.accounts ∧ f'.caps = f.caps ∧ f'.nullifiers = f.nullifiers
+           ∧ f'.revoked = f.revoked ∧ f'.commitments = f.commitments ∧ f'.bal = f.bal
+           ∧ f'.slotCaveats = f.slotCaveats ∧ f'.factories = f.factories ∧ f'.lifecycle = f.lifecycle
+           ∧ f'.deathCert = f.deathCert ∧ f'.delegate = f.delegate ∧ f'.delegations = f.delegations
+           ∧ f'.delegationEpoch = f.delegationEpoch ∧ f'.delegationEpochAt = f.delegationEpochAt
+           ∧ f'.heaps = f.heaps ∧ f'.nullifierRoot = f.nullifierRoot
+-          ∧ f'.revokedRoot = f.revokedRoot) := by
++          ∧ f'.revokedRoot = f.revokedRoot ∧ f'.commitmentsRoot = f.commitmentsRoot) := by
+   constructor
+   · rintro ⟨hAcc, hCaps, hBal, hNul, hRev, hCom, hSlot, hFac, hLife, hDeath, hDel, hDels, hEp, hEpat,
+-      hHeaps, hNRoot, hRRoot⟩
+-    refine ⟨hAcc, ?_, hNul, hRev, hCom, ?_, ?_, hFac, ?_, ?_, ?_, ?_, ?_, ?_, ?_, hNRoot, hRRoot⟩
++      hHeaps, hNRoot, hRRoot, hCRoot⟩
++    refine ⟨hAcc, ?_, hNul, hRev, hCom, ?_, ?_, hFac, ?_, ?_, ?_, ?_, ?_, ?_, ?_, hNRoot, hRRoot, hCRoot⟩
+     · exact CanonMap.ext (fun l => congrFun hCaps l)
+     · exact CanonMap.ext (fun key => by obtain ⟨c, a⟩ := key; exact congrFun (congrFun hBal c) a)
+     · exact CanonMap.ext (fun c => congrFun hSlot c)
+@@ -282,8 +284,8 @@ theorem restBody_iff_restAgree (f f' : FinKernelState) :
+     · exact CanonMap.ext (fun c => congrFun hEpat c)
+     · exact CanonMap.ext (fun c => congrFun hHeaps c)
+   · rintro ⟨hAcc, hCaps, hNul, hRev, hCom, hBal, hSlot, hFac, hLife, hDeath, hDel, hDels, hEp, hEpat,
+-      hHeaps, hNRoot, hRRoot⟩
+-    refine ⟨hAcc, ?_, ?_, hNul, hRev, hCom, ?_, hFac, ?_, ?_, ?_, ?_, ?_, ?_, ?_, hNRoot, hRRoot⟩
++      hHeaps, hNRoot, hRRoot, hCRoot⟩
++    refine ⟨hAcc, ?_, ?_, hNul, hRev, hCom, ?_, hFac, ?_, ?_, ?_, ?_, ?_, ?_, ?_, hNRoot, hRRoot, hCRoot⟩
+     · simp only [denote]; rw [hCaps]
+     · simp only [denote]; rw [hBal]
+     · simp only [denote]; rw [hSlot]
+@@ -303,12 +305,12 @@ theorem serializeRestFin_of_restAgree {f f' : FinKernelState}
+       ∧ f'.deathCert = f.deathCert ∧ f'.delegate = f.delegate ∧ f'.delegations = f.delegations
+       ∧ f'.delegationEpoch = f.delegationEpoch ∧ f'.delegationEpochAt = f.delegationEpochAt
+       ∧ f'.heaps = f.heaps ∧ f'.nullifierRoot = f.nullifierRoot
+-      ∧ f'.revokedRoot = f.revokedRoot) :
++      ∧ f'.revokedRoot = f.revokedRoot ∧ f'.commitmentsRoot = f.commitmentsRoot) :
+     serializeRestFin f = serializeRestFin f' := by
+   obtain ⟨hAcc, hCaps, hNul, hRev, hCom, hBal, hSlot, hFac, hLife, hDeath, hDel, hDels, hEp, hEpat,
+-    hHeaps, hNRoot, hRRoot⟩ := h
++    hHeaps, hNRoot, hRRoot, hCRoot⟩ := h
+   simp only [serializeRestFin, balData, hAcc, hCaps, hNul, hRev, hCom, hBal, hSlot, hFac, hLife,
+-    hDeath, hDel, hDels, hEp, hEpat, hHeaps, hNRoot, hRRoot]
++    hDeath, hDel, hDels, hEp, hEpat, hHeaps, hNRoot, hRRoot, hCRoot]
+ 
+ /-- Flip the orientation of the 15-field rest-agreement conjunction. -/
+ private theorem restAgree_symm {f f' : FinKernelState}
+@@ -318,17 +320,17 @@ private theorem restAgree_symm {f f' : FinKernelState}
+       ∧ f.deathCert = f'.deathCert ∧ f.delegate = f'.delegate ∧ f.delegations = f'.delegations
+       ∧ f.delegationEpoch = f'.delegationEpoch ∧ f.delegationEpochAt = f'.delegationEpochAt
+       ∧ f.heaps = f'.heaps ∧ f.nullifierRoot = f'.nullifierRoot
+-      ∧ f.revokedRoot = f'.revokedRoot) :
++      ∧ f.revokedRoot = f'.revokedRoot ∧ f.commitmentsRoot = f'.commitmentsRoot) :
+     f'.accounts = f.accounts ∧ f'.caps = f.caps ∧ f'.nullifiers = f.nullifiers
+       ∧ f'.revoked = f.revoked ∧ f'.commitments = f.commitments ∧ f'.bal = f.bal
+       ∧ f'.slotCaveats = f.slotCaveats ∧ f'.factories = f.factories ∧ f'.lifecycle = f.lifecycle
+       ∧ f'.deathCert = f.deathCert ∧ f'.delegate = f.delegate ∧ f'.delegations = f.delegations
+       ∧ f'.delegationEpoch = f.delegationEpoch ∧ f'.delegationEpochAt = f.delegationEpochAt
+       ∧ f'.heaps = f.heaps ∧ f'.nullifierRoot = f.nullifierRoot
+-      ∧ f'.revokedRoot = f.revokedRoot := by
+-  obtain ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17⟩ := h
++      ∧ f'.revokedRoot = f.revokedRoot ∧ f'.commitmentsRoot = f.commitmentsRoot := by
++  obtain ⟨h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18⟩ := h
+   exact ⟨h1.symm, h2.symm, h3.symm, h4.symm, h5.symm, h6.symm, h7.symm, h8.symm, h9.symm, h10.symm,
+-    h11.symm, h12.symm, h13.symm, h14.symm, h15.symm, h16.symm, h17.symm⟩
++    h11.symm, h12.symm, h13.symm, h14.symm, h15.symm, h16.symm, h17.symm, h18.symm⟩
+ 
+ /-- **`restHashIffFrame_of_fin` — THE DISCHARGE-LIFT (honest scope: the DENOTE IMAGE).** For any two
+ reachable (`denote`-image) `RecordKernelState`s, `RH_fin sponge` satisfies the exact
+@@ -352,7 +354,7 @@ theorem restHashIffFrame_of_fin (sponge : List ℤ → ℤ) (hCR : Poseidon2Spon
+         ∧ (denote f').delegationEpochAt = (denote f).delegationEpochAt
+         ∧ (denote f').heaps = (denote f).heaps
+         ∧ (denote f').nullifierRoot = (denote f).nullifierRoot
+-        ∧ (denote f').revokedRoot = (denote f).revokedRoot) := by
++        ∧ (denote f').revokedRoot = (denote f).revokedRoot ∧ (denote f').commitmentsRoot = (denote f).commitmentsRoot) := by
+   rw [RH_fin_denote, RH_fin_denote, restBody_iff_restAgree]
+   constructor
+   · intro h
+@@ -372,7 +374,7 @@ theorem rest_body_matches (RH : RecordKernelState → ℤ) :
+           ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
+           ∧ k'.delegationEpoch = k.delegationEpoch ∧ k'.delegationEpochAt = k.delegationEpochAt
+           ∧ k'.heaps = k.heaps ∧ k'.nullifierRoot = k.nullifierRoot
+-          ∧ k'.revokedRoot = k.revokedRoot) := Iff.rfl
++          ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot) := Iff.rfl
+ 
+ /-- **`image_of_full`.** The full (unrealizable) carrier would imply the image discharge — recording
+ that `restHashIffFrame_of_fin` is the honestly-scoped shadow of `StateCommit.RestHashIffFrame`, and
+@@ -392,7 +394,7 @@ theorem image_of_full (RH : RecordKernelState → ℤ)
+         ∧ (denote f').delegationEpochAt = (denote f).delegationEpochAt
+         ∧ (denote f').heaps = (denote f).heaps
+         ∧ (denote f').nullifierRoot = (denote f).nullifierRoot
+-        ∧ (denote f').revokedRoot = (denote f).revokedRoot) :=
++        ∧ (denote f').revokedRoot = (denote f).revokedRoot ∧ (denote f').commitmentsRoot = (denote f).commitmentsRoot) :=
+   hFull (denote f) (denote f')
+ 
+ /-! ## §7 — TEETH (`#guard`, both polarities). -/
+diff --git a/metatheory/Dregg2/Circuit/FinKernelState.lean b/metatheory/Dregg2/Circuit/FinKernelState.lean
+index 441fc5768..b0ff16d50 100644
+--- a/metatheory/Dregg2/Circuit/FinKernelState.lean
++++ b/metatheory/Dregg2/Circuit/FinKernelState.lean
+@@ -321,9 +321,11 @@ abbrev BalKey : Type := CellId ×ₗ AssetId
+   domain (8 felts), so it is carried VERBATIM — no map refinement. Carrying it is what makes
+   `denote`'s root non-default, i.e. what makes `FinFrameHash`'s root-clauses NON-vacuous. -/
+   nullifierRoot : Fin 8 → ℤ := fun _ => 0
+-  /-- **The revoked-credential-nullifier accumulator root** (`RecordKernel.lean:442`). Finite, verbatim.
+-  (`commitmentsRoot` does NOT exist at HEAD — the dual never landed. Do not add it.) -/
++  /-- **The revoked-credential-nullifier accumulator root** (`RecordKernel.lean:442`). Finite, verbatim. -/
+   revokedRoot : Fin 8 → ℤ := fun _ => 0
++  /-- **The note-commitment accumulator root** (`RecordKernel.lean`, the grow-only dual). `Fin 8 → ℤ` is
++  a FINITE domain (8 felts), carried VERBATIM — no map refinement. -/
++  commitmentsRoot : Fin 8 → ℤ := fun _ => 0
+ 
+ /-! ## §4 — `denote`: the refinement `FinKernelState → RecordKernelState` (field-wise lookup-with-default). -/
+ 
+@@ -349,6 +351,7 @@ def denote (f : FinKernelState) : RecordKernelState where
+   heaps := fun c => f.heaps.get c
+   nullifierRoot := f.nullifierRoot
+   revokedRoot := f.revokedRoot
++  commitmentsRoot := f.commitmentsRoot
+ 
+ /-! ## §5 — `denote_injective`: THE LOAD-BEARING PROPERTY (hashing the finite state binds it, no loss). -/
+ 
+@@ -396,6 +399,7 @@ theorem denote_injective {f f' : FinKernelState} (h : denote f = denote f') : f
+   · exact CanonMap.ext hheaps
+   · exact congrArg RecordKernelState.nullifierRoot h
+   · exact congrArg RecordKernelState.revokedRoot h
++  · exact congrArg RecordKernelState.commitmentsRoot h
+ 
+ /-! ## §6 — the initial state + `denote_finInit`. -/
+ 
+diff --git a/metatheory/Dregg2/Circuit/Inst/attenuateA.lean b/metatheory/Dregg2/Circuit/Inst/attenuateA.lean
+index 61a0bc6fa..b0b89930f 100644
+--- a/metatheory/Dregg2/Circuit/Inst/attenuateA.lean
++++ b/metatheory/Dregg2/Circuit/Inst/attenuateA.lean
+@@ -85,7 +85,7 @@ def RestIffNoCaps (RH : RecordKernelState → ℤ) : Prop :=
+       ∧ k'.delegationEpoch = k.delegationEpoch
+       ∧ k'.delegationEpochAt = k.delegationEpochAt
+       ∧ k'.heaps = k.heaps
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
+ 
+ /-! ## §2 — the `attenuateA` instance (touched component = `caps`, a `funcComponent`). -/
+ 
+@@ -155,7 +155,7 @@ def attenuateE (D : Caps → ℤ) (hD : Function.Injective D) :
+       ∧ k'.delegationEpoch = k.delegationEpoch
+       ∧ k'.delegationEpochAt = k.delegationEpochAt
+       ∧ k'.heaps = k.heaps
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
+   guardGates   := attenuateGuardGates
+   guardProp    := attenuateGuardProp
+   guardWidth   := 1
+diff --git a/metatheory/Dregg2/Circuit/Inst/balanceA.lean b/metatheory/Dregg2/Circuit/Inst/balanceA.lean
+index 94898e593..aeac4726b 100644
+--- a/metatheory/Dregg2/Circuit/Inst/balanceA.lean
++++ b/metatheory/Dregg2/Circuit/Inst/balanceA.lean
+@@ -124,7 +124,7 @@ def balanceAE (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injectiv
+       ∧ k'.delegationEpoch = k.delegationEpoch
+       ∧ k'.delegationEpochAt = k.delegationEpochAt
+       ∧ k'.heaps = k.heaps
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
+   guardGates   := balanceGuardGates
+   guardProp    := balanceGuardProp
+   guardWidth   := 1
+diff --git a/metatheory/Dregg2/Circuit/Inst/bridgeMintA.lean b/metatheory/Dregg2/Circuit/Inst/bridgeMintA.lean
+index d35d417d3..f8704f72d 100644
+--- a/metatheory/Dregg2/Circuit/Inst/bridgeMintA.lean
++++ b/metatheory/Dregg2/Circuit/Inst/bridgeMintA.lean
+@@ -111,7 +111,7 @@ def bridgeMintE (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Inject
+       ∧ k'.delegationEpoch = k.delegationEpoch
+       ∧ k'.delegationEpochAt = k.delegationEpochAt
+       ∧ k'.heaps = k.heaps
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
+   guardGates   := bridgeMintGuardGates
+   guardProp    := bridgeMintGuardProp
+   guardWidth   := 1
+diff --git a/metatheory/Dregg2/Circuit/Inst/burnA.lean b/metatheory/Dregg2/Circuit/Inst/burnA.lean
+index 2b62cc5fe..1e3c773eb 100644
+--- a/metatheory/Dregg2/Circuit/Inst/burnA.lean
++++ b/metatheory/Dregg2/Circuit/Inst/burnA.lean
+@@ -121,7 +121,7 @@ def burnE (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injective D)
+       ∧ k'.delegationEpoch = k.delegationEpoch
+       ∧ k'.delegationEpochAt = k.delegationEpochAt
+       ∧ k'.heaps = k.heaps
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
+   guardGates   := burnGuardGates
+   guardProp    := burnGuardProp
+   guardWidth   := 1
+diff --git a/metatheory/Dregg2/Circuit/Inst/cellDestroyA.lean b/metatheory/Dregg2/Circuit/Inst/cellDestroyA.lean
+index c7c7752d1..6ad7eb84d 100644
+--- a/metatheory/Dregg2/Circuit/Inst/cellDestroyA.lean
++++ b/metatheory/Dregg2/Circuit/Inst/cellDestroyA.lean
+@@ -42,7 +42,7 @@ def RestIffNoLifecycleDeathCert (RH : RecordKernelState → ℤ) : Prop :=
+       ∧ k'.delegationEpoch = k.delegationEpoch
+       ∧ k'.delegationEpochAt = k.delegationEpochAt
+       ∧ k'.heaps = k.heaps
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
+ 
+ structure CellDestroyArgs where
+   actor    : CellId
+@@ -101,7 +101,7 @@ def cellDestroyE (DLif : (CellId → Nat) → ℤ) (hDLif : Function.Injective D
+       ∧ k'.delegationEpoch = k.delegationEpoch
+       ∧ k'.delegationEpochAt = k.delegationEpochAt
+       ∧ k'.heaps = k.heaps
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
+   guardGates   := cellDestroyGuardGates
+   guardProp    := cellDestroyGuardProp
+   guardWidth   := 1
+@@ -206,4 +206,4 @@ def cellDestroyAEmitted : EmittedDescriptor := emittedEffect2Dual cellDestroyAAi
+ #assert_axioms apex_iff_cellDestroySpec
+ #assert_axioms cellDestroyA_full_sound
+ 
+-end Dregg2.Circuit.Inst.CellDestroyA
+\ No newline at end of file
++end Dregg2.Circuit.Inst.CellDestroyA
+diff --git a/metatheory/Dregg2/Circuit/Inst/cellSealA.lean b/metatheory/Dregg2/Circuit/Inst/cellSealA.lean
+index d36677114..61b4f5366 100644
+--- a/metatheory/Dregg2/Circuit/Inst/cellSealA.lean
++++ b/metatheory/Dregg2/Circuit/Inst/cellSealA.lean
+@@ -40,7 +40,7 @@ def RestIffNoLifecycle (RH : RecordKernelState → ℤ) : Prop :=
+       ∧ k'.delegationEpoch = k.delegationEpoch
+       ∧ k'.delegationEpochAt = k.delegationEpochAt
+       ∧ k'.heaps = k.heaps
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
+ 
+ structure CellSealArgs where
+   actor : CellId
+@@ -91,7 +91,7 @@ def cellSealE (D : (CellId → Nat) → ℤ) (hD : Function.Injective D) :
+       ∧ k'.delegationEpoch = k.delegationEpoch
+       ∧ k'.delegationEpochAt = k.delegationEpochAt
+       ∧ k'.heaps = k.heaps
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
+   guardGates   := cellSealGuardGates
+   guardProp    := cellSealGuardProp
+   guardWidth   := 1
+@@ -183,4 +183,4 @@ def cellSealAEmitted : EmittedDescriptor := emittedEffect2 cellSealAAirName cell
+ #assert_axioms apex_iff_cellSealSpec
+ #assert_axioms cellSealA_full_sound
+ 
+-end Dregg2.Circuit.Inst.CellSealA
+\ No newline at end of file
++end Dregg2.Circuit.Inst.CellSealA
+diff --git a/metatheory/Dregg2/Circuit/Inst/cellUnsealA.lean b/metatheory/Dregg2/Circuit/Inst/cellUnsealA.lean
+index 79c410589..32a19b31b 100644
+--- a/metatheory/Dregg2/Circuit/Inst/cellUnsealA.lean
++++ b/metatheory/Dregg2/Circuit/Inst/cellUnsealA.lean
+@@ -40,7 +40,7 @@ def RestIffNoLifecycle (RH : RecordKernelState → ℤ) : Prop :=
+       ∧ k'.delegationEpoch = k.delegationEpoch
+       ∧ k'.delegationEpochAt = k.delegationEpochAt
+       ∧ k'.heaps = k.heaps
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
+ 
+ structure CellUnsealArgs where
+   actor : CellId
+@@ -91,7 +91,7 @@ def cellUnsealE (D : (CellId → Nat) → ℤ) (hD : Function.Injective D) :
+       ∧ k'.delegationEpoch = k.delegationEpoch
+       ∧ k'.delegationEpochAt = k.delegationEpochAt
+       ∧ k'.heaps = k.heaps
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
+   guardGates   := cellUnsealGuardGates
+   guardProp    := cellUnsealGuardProp
+   guardWidth   := 1
+@@ -183,4 +183,4 @@ def cellUnsealAEmitted : EmittedDescriptor := emittedEffect2 cellUnsealAAirName
+ #assert_axioms apex_iff_cellUnsealSpec
+ #assert_axioms cellUnsealA_full_sound
+ 
+-end Dregg2.Circuit.Inst.CellUnsealA
+\ No newline at end of file
++end Dregg2.Circuit.Inst.CellUnsealA
+diff --git a/metatheory/Dregg2/Circuit/Inst/createCellA.lean b/metatheory/Dregg2/Circuit/Inst/createCellA.lean
+index ed43083c8..b5f3f5619 100644
+--- a/metatheory/Dregg2/Circuit/Inst/createCellA.lean
++++ b/metatheory/Dregg2/Circuit/Inst/createCellA.lean
+@@ -51,7 +51,7 @@ def RestIffNoAccountsBalBorn (RH : RecordKernelState → ℤ) : Prop :=
+       ∧ k'.delegationEpoch = k.delegationEpoch
+       ∧ k'.delegationEpochAt = k.delegationEpochAt
+       ∧ k'.heaps = k.heaps
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
+ 
+ /-! ## §2 — the `createCellE` triple instance (`accounts` + `bal` + born-empty side). -/
+ 
+@@ -121,7 +121,7 @@ def createCellE (LE : CellId → ℤ) (cN : List ℤ → ℤ)
+       ∧ k'.delegationEpoch = k.delegationEpoch
+       ∧ k'.delegationEpochAt = k.delegationEpochAt
+       ∧ k'.heaps = k.heaps
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
+   guardGates   := createCellGuardGates
+   guardProp    := createCellGuardProp
+   guardWidth   := 1
+@@ -254,4 +254,4 @@ def createCellAEmitted : EmittedDescriptor := emittedEffect2Triple createCellAAi
+ #assert_axioms apex_iff_createCellSpec
+ #assert_axioms createCellA_full_sound
+ 
+-end Dregg2.Circuit.Inst.CreateCellA
+\ No newline at end of file
++end Dregg2.Circuit.Inst.CreateCellA
+diff --git a/metatheory/Dregg2/Circuit/Inst/createCellFromFactoryA.lean b/metatheory/Dregg2/Circuit/Inst/createCellFromFactoryA.lean
+index fccda1dba..d58abf051 100644
+--- a/metatheory/Dregg2/Circuit/Inst/createCellFromFactoryA.lean
++++ b/metatheory/Dregg2/Circuit/Inst/createCellFromFactoryA.lean
+@@ -53,7 +53,7 @@ def RestIffNoFactoryTouched (RH : RecordKernelState → ℤ) : Prop :=
+       ∧ k'.delegationEpoch = k.delegationEpoch
+       ∧ k'.delegationEpochAt = k.delegationEpochAt
+       ∧ k'.heaps = k.heaps
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
+ 
+ /-! ## §2 — the `createFromFactoryE` quint instance. -/
+ 
+@@ -176,7 +176,7 @@ def createFromFactoryE (LE : CellId → ℤ) (cN : List ℤ → ℤ)
+       ∧ k'.delegationEpoch = k.delegationEpoch
+       ∧ k'.delegationEpochAt = k.delegationEpochAt
+       ∧ k'.heaps = k.heaps
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
+   guardGates   := createFromFactoryGuardGates
+   guardProp    := createFromFactoryGuardProp
+   guardWidth   := 1
+@@ -261,6 +261,7 @@ def CreateFromFactoryCircuitSpec (st : RecChainedState) (actor newCell : CellId)
+     ∧ st'.kernel.delegationEpochAt = st.kernel.delegationEpochAt
+     ∧ st'.kernel.heaps = st.kernel.heaps
+     ∧ st'.kernel.nullifierRoot = st.kernel.nullifierRoot ∧ st'.kernel.revokedRoot = st.kernel.revokedRoot
++    ∧ st'.kernel.commitmentsRoot = st.kernel.commitmentsRoot
+ 
+ theorem CreateFromFactorySpec_implies_circuitSpec (st : RecChainedState) (actor newCell : CellId)
+     (vk : Int) (st' : RecChainedState) (h : CreateFromFactorySpec st actor newCell vk st') :
+@@ -371,4 +372,4 @@ def createCellFromFactoryAEmitted : EmittedDescriptor := emittedEffect2Quint cre
+ #assert_axioms apex_iff_createFromFactoryCircuitSpec
+ #assert_axioms createCellFromFactoryA_full_sound
+ 
+-end Dregg2.Circuit.Inst.CreateCellFromFactoryA
+\ No newline at end of file
++end Dregg2.Circuit.Inst.CreateCellFromFactoryA
+diff --git a/metatheory/Dregg2/Circuit/Inst/delegate.lean b/metatheory/Dregg2/Circuit/Inst/delegate.lean
+index 6a5f78c26..796ae1723 100644
+--- a/metatheory/Dregg2/Circuit/Inst/delegate.lean
++++ b/metatheory/Dregg2/Circuit/Inst/delegate.lean
+@@ -88,7 +88,7 @@ def RestIffNoCaps (RH : RecordKernelState → ℤ) : Prop :=
+       ∧ k'.delegationEpoch = k.delegationEpoch
+       ∧ k'.delegationEpochAt = k.delegationEpochAt
+       ∧ k'.heaps = k.heaps
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
+ 
+ /-! ## §2 — the `delegate` instance (touched component = `caps`). -/
+ 
+@@ -155,7 +155,7 @@ def delegateE (D : Caps → ℤ) (hD : Function.Injective D) :
+       ∧ k'.delegationEpoch = k.delegationEpoch
+       ∧ k'.delegationEpochAt = k.delegationEpochAt
+       ∧ k'.heaps = k.heaps
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
+   guardGates   := delegateGuardGates
+   guardProp    := delegateGuardProp
+   guardWidth   := 1
+diff --git a/metatheory/Dregg2/Circuit/Inst/delegateAttenA.lean b/metatheory/Dregg2/Circuit/Inst/delegateAttenA.lean
+index b28ea3184..b75c64122 100644
+--- a/metatheory/Dregg2/Circuit/Inst/delegateAttenA.lean
++++ b/metatheory/Dregg2/Circuit/Inst/delegateAttenA.lean
+@@ -88,7 +88,7 @@ def RestIffNoCaps (RH : RecordKernelState → ℤ) : Prop :=
+       ∧ k'.delegationEpoch = k.delegationEpoch
+       ∧ k'.delegationEpochAt = k.delegationEpochAt
+       ∧ k'.heaps = k.heaps
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
+ 
+ /-! ## §2 — the `delegateAttenA` instance (touched component = `caps`).
+ 
+@@ -159,7 +159,7 @@ def delegateAttenE (D : Caps → ℤ) (hD : Function.Injective D) :
+       ∧ k'.delegationEpoch = k.delegationEpoch
+       ∧ k'.delegationEpochAt = k.delegationEpochAt
+       ∧ k'.heaps = k.heaps
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
+   guardGates   := delAttenGuardGates
+   guardProp    := delAttenGuardProp
+   guardWidth   := 1
+diff --git a/metatheory/Dregg2/Circuit/Inst/exerciseA.lean b/metatheory/Dregg2/Circuit/Inst/exerciseA.lean
+index 3c82dae58..533a6c475 100644
+--- a/metatheory/Dregg2/Circuit/Inst/exerciseA.lean
++++ b/metatheory/Dregg2/Circuit/Inst/exerciseA.lean
+@@ -162,7 +162,8 @@ theorem recordKernel_eq_of_fields {k k' : RecordKernelState}
+     (hdelegationEpochAt : k.delegationEpochAt = k'.delegationEpochAt)
+     (hheaps : k.heaps = k'.heaps)
+     (hnullifierRoot : k.nullifierRoot = k'.nullifierRoot)
+-    (hrevokedRoot : k.revokedRoot = k'.revokedRoot) : k = k' := by
++    (hrevokedRoot : k.revokedRoot = k'.revokedRoot)
++    (hcommitmentsRoot : k.commitmentsRoot = k'.commitmentsRoot) : k = k' := by
+   cases k; cases k'; simp_all
+ 
+ /-- Chained-state extensionality from kernel + log agreement. -/
+@@ -322,4 +323,4 @@ def exerciseAEmitted : EmittedDescriptor := emittedEffect exerciseAAirName exerc
+ #assert_axioms exercise_circuit_refines_spec
+ #assert_axioms exercise_circuit_refines_exec
+ 
+-end Dregg2.Circuit.Inst.ExerciseA
+\ No newline at end of file
++end Dregg2.Circuit.Inst.ExerciseA
+diff --git a/metatheory/Dregg2/Circuit/Inst/heapWriteA.lean b/metatheory/Dregg2/Circuit/Inst/heapWriteA.lean
+index 47f2c4d0c..5c8f026a6 100644
+--- a/metatheory/Dregg2/Circuit/Inst/heapWriteA.lean
++++ b/metatheory/Dregg2/Circuit/Inst/heapWriteA.lean
+@@ -54,7 +54,7 @@ def RestIffNoCellHeaps (RH : RecordKernelState → ℤ) : Prop :=
+       ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
+       ∧ k'.delegationEpoch = k.delegationEpoch
+       ∧ k'.delegationEpochAt = k.delegationEpochAt
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
+ 
+ /-- The heap-write arguments: actor, target, and the wire-carried digests
+ (`addr = H[coll,key]`, value, post-root). -/
+@@ -126,7 +126,7 @@ def heapWriteE (DCell : (CellId → Value) → ℤ) (hDCell : Function.Injective
+       ∧ k'.delegate = k.delegate ∧ k'.delegations = k.delegations
+       ∧ k'.delegationEpoch = k.delegationEpoch
+       ∧ k'.delegationEpochAt = k.delegationEpochAt
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
+   guardGates   := heapWriteGuardGates
+   guardProp    := heapWriteGuardProp
+   guardWidth   := 1
+diff --git a/metatheory/Dregg2/Circuit/Inst/introduceA.lean b/metatheory/Dregg2/Circuit/Inst/introduceA.lean
+index 3b5265399..3f7bf8b9c 100644
+--- a/metatheory/Dregg2/Circuit/Inst/introduceA.lean
++++ b/metatheory/Dregg2/Circuit/Inst/introduceA.lean
+@@ -87,7 +87,7 @@ def RestIffNoCaps (RH : RecordKernelState → ℤ) : Prop :=
+       ∧ k'.delegationEpoch = k.delegationEpoch
+       ∧ k'.delegationEpochAt = k.delegationEpochAt
+       ∧ k'.heaps = k.heaps
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
+ 
+ /-! ## §2 — the `introduceE` instance (touched component = `caps`).
+ 
+@@ -159,7 +159,7 @@ def introduceE (D : Caps → ℤ) (hD : Function.Injective D) :
+       ∧ k'.delegationEpoch = k.delegationEpoch
+       ∧ k'.delegationEpochAt = k.delegationEpochAt
+       ∧ k'.heaps = k.heaps
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
+   guardGates   := introduceGuardGates
+   guardProp    := introduceGuardProp
+   guardWidth   := 1
+diff --git a/metatheory/Dregg2/Circuit/Inst/mintA.lean b/metatheory/Dregg2/Circuit/Inst/mintA.lean
+index c35b0ac02..51c173200 100644
+--- a/metatheory/Dregg2/Circuit/Inst/mintA.lean
++++ b/metatheory/Dregg2/Circuit/Inst/mintA.lean
+@@ -120,7 +120,7 @@ def mintE (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injective D)
+       ∧ k'.delegationEpoch = k.delegationEpoch
+       ∧ k'.delegationEpochAt = k.delegationEpochAt
+       ∧ k'.heaps = k.heaps
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
+   guardGates   := mintGuardGates
+   guardProp    := mintGuardProp
+   guardWidth   := 1
+diff --git a/metatheory/Dregg2/Circuit/Inst/noteCreateA.lean b/metatheory/Dregg2/Circuit/Inst/noteCreateA.lean
+index 641fb5df6..dd35988f3 100644
+--- a/metatheory/Dregg2/Circuit/Inst/noteCreateA.lean
++++ b/metatheory/Dregg2/Circuit/Inst/noteCreateA.lean
+@@ -81,7 +81,7 @@ def RestIffNoCommitments (RH : RecordKernelState → ℤ) : Prop :=
+       ∧ k'.delegationEpoch = k.delegationEpoch
+       ∧ k'.delegationEpochAt = k.delegationEpochAt
+       ∧ k'.heaps = k.heaps
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
+ 
+ /-! ## §2 — the `noteCreateA` instance (touched component = `commitments`). -/
+ 
+@@ -146,7 +146,7 @@ def noteCreateE (LE : Nat → ℤ) (cN : List ℤ → ℤ)
+       ∧ k'.delegationEpoch = k.delegationEpoch
+       ∧ k'.delegationEpochAt = k.delegationEpochAt
+       ∧ k'.heaps = k.heaps
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
+   guardGates   := noteCreateGuardGates
+   guardProp    := noteCreateGuardProp
+   guardWidth   := 1
+diff --git a/metatheory/Dregg2/Circuit/Inst/noteSpendA.lean b/metatheory/Dregg2/Circuit/Inst/noteSpendA.lean
+index 43dc106b0..183200dac 100644
+--- a/metatheory/Dregg2/Circuit/Inst/noteSpendA.lean
++++ b/metatheory/Dregg2/Circuit/Inst/noteSpendA.lean
+@@ -141,7 +141,7 @@ def noteSpendE (LE : Nat → ℤ) (cN : List ℤ → ℤ)
+       ∧ k'.delegationEpoch = k.delegationEpoch
+       ∧ k'.delegationEpochAt = k.delegationEpochAt
+       ∧ k'.heaps = k.heaps
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
+   guardGates   := noteSpendGuardGates
+   guardProp    := noteSpendGuardProp
+   guardWidth   := 1
+diff --git a/metatheory/Dregg2/Circuit/Inst/receiptArchiveLifecycleA.lean b/metatheory/Dregg2/Circuit/Inst/receiptArchiveLifecycleA.lean
+index e7f0f5c14..a645ec44e 100644
+--- a/metatheory/Dregg2/Circuit/Inst/receiptArchiveLifecycleA.lean
++++ b/metatheory/Dregg2/Circuit/Inst/receiptArchiveLifecycleA.lean
+@@ -47,7 +47,7 @@ def RestIffNoLifecycle (RH : RecordKernelState → ℤ) : Prop :=
+       ∧ k'.delegationEpoch = k.delegationEpoch
+       ∧ k'.delegationEpochAt = k.delegationEpochAt
+       ∧ k'.heaps = k.heaps
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
+ 
+ structure ReceiptArchiveArgs where
+   actor : CellId
+@@ -103,7 +103,7 @@ def receiptArchiveLifecycleE (D : (CellId → Nat) → ℤ) (hD : Function.Injec
+       ∧ k'.delegationEpoch = k.delegationEpoch
+       ∧ k'.delegationEpochAt = k.delegationEpochAt
+       ∧ k'.heaps = k.heaps
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
+   guardGates   := archiveGuardGates
+   guardProp    := archiveGuardProp
+   guardWidth   := 1
+diff --git a/metatheory/Dregg2/Circuit/Inst/refreshDelegationA.lean b/metatheory/Dregg2/Circuit/Inst/refreshDelegationA.lean
+index 8aeed874e..dcd1b02fd 100644
+--- a/metatheory/Dregg2/Circuit/Inst/refreshDelegationA.lean
++++ b/metatheory/Dregg2/Circuit/Inst/refreshDelegationA.lean
+@@ -40,7 +40,7 @@ def RestIffNoDelegations (RH : RecordKernelState → ℤ) : Prop :=
+       ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate
+       ∧ k'.delegationEpoch = k.delegationEpoch
+       ∧ k'.heaps = k.heaps
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
+ 
+ structure RefreshDelegationArgs where
+   actor : CellId
+@@ -104,7 +104,7 @@ def refreshDelegationE
+       ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate
+       ∧ k'.delegationEpoch = k.delegationEpoch
+       ∧ k'.heaps = k.heaps
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
+   guardGates   := refreshDelegationGuardGates
+   guardProp    := refreshDelegationGuardProp
+   guardWidth   := 1
+@@ -212,4 +212,4 @@ def refreshDelegationAEmitted : EmittedDescriptor := emittedEffect2 refreshDeleg
+ #assert_axioms apex_iff_refreshDelegationSpec
+ #assert_axioms refreshDelegationA_full_sound
+ 
+-end Dregg2.Circuit.Inst.RefreshDelegationA
+\ No newline at end of file
++end Dregg2.Circuit.Inst.RefreshDelegationA
+diff --git a/metatheory/Dregg2/Circuit/Inst/revoke.lean b/metatheory/Dregg2/Circuit/Inst/revoke.lean
+index bad17a233..a8190f96a 100644
+--- a/metatheory/Dregg2/Circuit/Inst/revoke.lean
++++ b/metatheory/Dregg2/Circuit/Inst/revoke.lean
+@@ -91,7 +91,7 @@ def RestIffNoCaps (RH : RecordKernelState → ℤ) : Prop :=
+       ∧ k'.delegationEpoch = k.delegationEpoch
+       ∧ k'.delegationEpochAt = k.delegationEpochAt
+       ∧ k'.heaps = k.heaps
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
+ 
+ /-! ## §2 — the `revoke` instance (touched component = `caps`).
+ 
+@@ -160,7 +160,7 @@ def revokeE (D : Caps → ℤ) (hD : Function.Injective D) :
+       ∧ k'.delegationEpoch = k.delegationEpoch
+       ∧ k'.delegationEpochAt = k.delegationEpochAt
+       ∧ k'.heaps = k.heaps
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
+   guardGates   := revokeGuardGates
+   guardProp    := revokeGuardProp
+   guardWidth   := 1
+diff --git a/metatheory/Dregg2/Circuit/Inst/revokeDelegationA.lean b/metatheory/Dregg2/Circuit/Inst/revokeDelegationA.lean
+index 18aad6d6e..9b6c37e5c 100644
+--- a/metatheory/Dregg2/Circuit/Inst/revokeDelegationA.lean
++++ b/metatheory/Dregg2/Circuit/Inst/revokeDelegationA.lean
+@@ -82,7 +82,7 @@ def RestIffNoCaps (RH : RecordKernelState → ℤ) : Prop :=
+       ∧ k'.delegationEpoch = k.delegationEpoch
+       ∧ k'.delegationEpochAt = k.delegationEpochAt
+       ∧ k'.heaps = k.heaps
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
+ 
+ /-! ## §2 — the `revokeDelegationE` instance (touched component = `caps`).
+ 
+@@ -149,7 +149,7 @@ def revokeDelegationE (D : Caps → ℤ) (hD : Function.Injective D) :
+       ∧ k'.delegationEpoch = k.delegationEpoch
+       ∧ k'.delegationEpochAt = k.delegationEpochAt
+       ∧ k'.heaps = k.heaps
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
+   guardGates   := revokeGuardGates
+   guardProp    := revokeGuardProp
+   guardWidth   := 1
+diff --git a/metatheory/Dregg2/Circuit/Inst/revokeDelegationFullA.lean b/metatheory/Dregg2/Circuit/Inst/revokeDelegationFullA.lean
+index 6639026d1..fd3b091ff 100644
+--- a/metatheory/Dregg2/Circuit/Inst/revokeDelegationFullA.lean
++++ b/metatheory/Dregg2/Circuit/Inst/revokeDelegationFullA.lean
+@@ -66,7 +66,7 @@ def RestIffNoCapsEpoch (RH : RecordKernelState → ℤ) : Prop :=
+       ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
+       ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate
+       ∧ k'.heaps = k.heaps
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
+ 
+ /-! ## §2 — the `revokeDelegationFullE` instance (touched components = `caps` + the epoch triple). -/
+ 
+@@ -154,7 +154,7 @@ def revokeDelegationFullE (D : Caps → ℤ) (hD : Function.Injective D)
+       ∧ k'.slotCaveats = k.slotCaveats ∧ k'.factories = k.factories ∧ k'.lifecycle = k.lifecycle
+       ∧ k'.deathCert = k.deathCert ∧ k'.delegate = k.delegate
+       ∧ k'.heaps = k.heaps
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
+   guardGates   := revokeGuardGates
+   guardProp    := revokeGuardProp
+   guardWidth   := 1
+diff --git a/metatheory/Dregg2/Circuit/Inst/spawnA.lean b/metatheory/Dregg2/Circuit/Inst/spawnA.lean
+index 8bd3592e1..d252c26aa 100644
+--- a/metatheory/Dregg2/Circuit/Inst/spawnA.lean
++++ b/metatheory/Dregg2/Circuit/Inst/spawnA.lean
+@@ -52,7 +52,7 @@ def RestIffNoSpawnTouched (RH : RecordKernelState → ℤ) : Prop :=
+       ∧ k'.factories = k.factories
+       ∧ k'.delegationEpoch = k.delegationEpoch
+       ∧ k'.heaps = k.heaps
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
+ 
+ /-! ## §2 — the `spawnE` quint instance. -/
+ 
+@@ -146,7 +146,7 @@ def spawnE (LE : CellId → ℤ) (cN : List ℤ → ℤ)
+       ∧ k'.factories = k.factories
+       ∧ k'.delegationEpoch = k.delegationEpoch
+       ∧ k'.heaps = k.heaps
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
+   guardGates   := spawnGuardGates
+   guardProp    := spawnGuardProp
+   guardWidth   := 1
+@@ -227,6 +227,7 @@ def SpawnCircuitSpec (st : RecChainedState) (actor child target : CellId) (st' :
+   ∧ st'.kernel.delegationEpoch = st.kernel.delegationEpoch
+   ∧ st'.kernel.heaps = st.kernel.heaps
+   ∧ st'.kernel.nullifierRoot = st.kernel.nullifierRoot ∧ st'.kernel.revokedRoot = st.kernel.revokedRoot
++  ∧ st'.kernel.commitmentsRoot = st.kernel.commitmentsRoot
+ 
+ theorem SpawnSpec_implies_circuitSpec (st : RecChainedState) (actor child target : CellId)
+     (st' : RecChainedState) (h : SpawnFullSpec st actor child target st') :
+@@ -362,4 +363,4 @@ def spawnAEmitted : EmittedDescriptor := emittedEffect2Quint spawnAAirName spawn
+ #assert_axioms apex_iff_spawnSpec
+ #assert_axioms spawnA_full_sound
+ 
+-end Dregg2.Circuit.Inst.SpawnA
+\ No newline at end of file
++end Dregg2.Circuit.Inst.SpawnA
+diff --git a/metatheory/Dregg2/Circuit/Inst/transfer.lean b/metatheory/Dregg2/Circuit/Inst/transfer.lean
+index 9e41d9053..90aaaea0a 100644
+--- a/metatheory/Dregg2/Circuit/Inst/transfer.lean
++++ b/metatheory/Dregg2/Circuit/Inst/transfer.lean
+@@ -133,7 +133,7 @@ def balanceE (D : (CellId → AssetId → ℤ) → ℤ) (hD : Function.Injective
+       ∧ k'.delegationEpoch = k.delegationEpoch
+       ∧ k'.delegationEpochAt = k.delegationEpochAt
+       ∧ k'.heaps = k.heaps
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot ∧ k'.commitmentsRoot = k.commitmentsRoot)
+   guardGates   := balanceGuardGates
+   guardProp    := balanceGuardProp
+   guardWidth   := 1
+diff --git a/metatheory/Dregg2/Circuit/RotatedKernelRefinement.lean b/metatheory/Dregg2/Circuit/RotatedKernelRefinement.lean
+index f6b334118..fb1441ee9 100644
+--- a/metatheory/Dregg2/Circuit/RotatedKernelRefinement.lean
++++ b/metatheory/Dregg2/Circuit/RotatedKernelRefinement.lean
+@@ -273,6 +273,7 @@ structure rotatedEncodes (hash : List ℤ → ℤ)
+   frHeaps : post.kernel.heaps = pre.kernel.heaps
+   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
+   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
++  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
+   logAdv : post.log = tr :: pre.log
+ 
+ /-! ## §3 — THE REFINEMENT: satisfying the live transfer descriptor FORCES the kernel step.
+@@ -413,6 +414,7 @@ theorem transfer_descriptorRefines (hash : List ℤ → ℤ)
+   · exact henc.frHeaps
+   · exact henc.frNullifierRoot
+   · exact henc.frRevokedRoot
++  · exact henc.frCommitmentsRoot
+ 
+ /-- **The refinement, stated against `fullActionStep` directly.** `BalanceMovementSpec` IS the
+ `.balanceA` arm of the kernel dispatcher, so a satisfying rotated transfer witness forces
+diff --git a/metatheory/Dregg2/Circuit/RotatedKernelRefinementAttenuate.lean b/metatheory/Dregg2/Circuit/RotatedKernelRefinementAttenuate.lean
+index 668a3ba53..4a635ae88 100644
+--- a/metatheory/Dregg2/Circuit/RotatedKernelRefinementAttenuate.lean
++++ b/metatheory/Dregg2/Circuit/RotatedKernelRefinementAttenuate.lean
+@@ -168,6 +168,7 @@ structure attenuateEncodes (env : VmRowEnv)
+   frHeaps : post.kernel.heaps = pre.kernel.heaps
+   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
+   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
++  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
+ 
+ /-! ## §2 — the IN-CIRCUIT NON-AMPLIFICATION tooth (the security crux, FORCED).
+ 
+@@ -253,7 +254,7 @@ theorem attenuate_descriptorRefines (env : VmRowEnv)
+    henc.frAccounts, henc.frCell, henc.frNullifiers, henc.frRevoked, henc.frCommitments,
+    henc.frBal, henc.frSlotCaveats, henc.frFactories, henc.frLifecycle, henc.frDeathCert,
+    henc.frDelegate, henc.frDelegations, henc.frDelegationEpoch, henc.frDelegationEpochAt,
+-   henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot⟩
++   henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot, henc.frCommitmentsRoot⟩
+ 
+ /-- **The refinement, stated against `fullActionStep` directly.** `AttenuateSpec` IS the `.attenuateA`
+ arm of the kernel dispatcher, so a genuine-non-amp attenuate witness forces `fullActionStep pre
+diff --git a/metatheory/Dregg2/Circuit/RotatedKernelRefinementBirth.lean b/metatheory/Dregg2/Circuit/RotatedKernelRefinementBirth.lean
+index 2d4fdcb1f..d22bd013b 100644
+--- a/metatheory/Dregg2/Circuit/RotatedKernelRefinementBirth.lean
++++ b/metatheory/Dregg2/Circuit/RotatedKernelRefinementBirth.lean
+@@ -220,6 +220,7 @@ structure createCellGenuineEncodes (compressN : List FieldElem → FieldElem)
+   frHeaps : post.kernel.heaps = pre.kernel.heaps
+   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
+   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
++  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
+ 
+ /-- **`createCell_accounts_forced` — the committed accounts growth is FIX-CIRCUIT-FORCED.** On the
+ decoded row the FIX accounts gate forces the post accounts to `insert newCell pre.accounts`. -/
+@@ -243,7 +244,7 @@ theorem createCell_descriptorRefines (compressN : List FieldElem → FieldElem)
+     CreateCellSpec pre actor newCell post := by
+   refine ⟨henc.guard, ?_, henc.born, henc.logAdv, henc.frNullifiers, henc.frRevoked,
+     henc.frCommitments, henc.frFactories, henc.frDelegationEpoch, henc.frDelegationEpochAt,
+-    henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot⟩
++    henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot, henc.frCommitmentsRoot⟩
+   exact createCell_accounts_forced compressN hN pre post actor newCell henc
+ 
+ /-- **The refinement, stated against `execFullA` directly.** `CreateCellSpec` IS the `.createCellA` arm
+@@ -310,6 +311,7 @@ structure createFromFactoryGenuineEncodes (compressN : List FieldElem → FieldE
+   frHeaps : post.kernel.heaps = pre.kernel.heaps
+   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
+   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
++  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
+ 
+ /-- **`createFromFactory_accounts_forced` — the committed accounts growth is FIX-CIRCUIT-FORCED.** -/
+ theorem createFromFactory_accounts_forced (compressN : List FieldElem → FieldElem)
+@@ -332,7 +334,7 @@ theorem createCellFromFactory_descriptorRefines (compressN : List FieldElem →
+   refine ⟨henc.e, henc.guard, ?_, henc.frBal, henc.frCell, henc.frSlotCaveats, henc.logAdv,
+     henc.frCaps, henc.frLifecycle, henc.frDeathCert, henc.frDelegate, henc.frDelegations,
+     henc.frNullifiers, henc.frRevoked, henc.frCommitments, henc.frFactories,
+-    henc.frDelegationEpoch, henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot⟩
++    henc.frDelegationEpoch, henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot, henc.frCommitmentsRoot⟩
+   exact createFromFactory_accounts_forced compressN hN pre post actor newCell vk henc
+ 
+ /-- **The refinement, stated against `execFullA` directly** (via `createCellFromFactoryChainA_iff_spec`
+@@ -405,6 +407,7 @@ structure spawnGenuineEncodes (compressN : List FieldElem → FieldElem)
+   frHeaps : post.kernel.heaps = pre.kernel.heaps
+   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
+   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
++  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
+ 
+ /-- **`spawn_accounts_forced` — the committed accounts growth is FIX-CIRCUIT-FORCED.** The child IS
+ inserted; a drop/reorder is rejected (the `accountsRoot` gate bites). This is the part of `SpawnSpec`
+@@ -430,7 +433,7 @@ theorem spawn_descriptorRefines (compressN : List FieldElem → FieldElem)
+   refine ⟨henc.guard, ?_, henc.frCell, henc.frSlotCaveats, henc.frLifecycle, henc.frDeathCert,
+     henc.frBal, henc.capHandoff, henc.delegateHandoff, henc.delegationsHandoff, henc.logAdv,
+     henc.frNullifiers, henc.frRevoked, henc.frCommitments, henc.frFactories,
+-    henc.frDelegationEpoch, henc.epochStampResidual, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot⟩
++    henc.frDelegationEpoch, henc.epochStampResidual, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot, henc.frCommitmentsRoot⟩
+   exact spawn_accounts_forced compressN hN pre post actor child target henc
+ 
+ /-- **The refinement, stated against `execFullA` directly** (via `spawnChainA_iff_spec` + the
+@@ -555,6 +558,7 @@ structure CreateCellTraceReadout (hash : List ℤ → ℤ)
+   frHeaps : post.kernel.heaps = pre.kernel.heaps
+   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
+   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
++  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
+ 
+ /-- **`createCell_forced_sat` — the accounts growth is FORCED by the DEPLOYED `createCellV3` (Class A).**
+ A `Satisfied2 hash createCellV3` witness plus the realizable `CreateCellTraceReadout` forces
+@@ -585,7 +589,7 @@ theorem createCell_descriptorRefines_sat (hash : List ℤ → ℤ)
+     CreateCellSpec pre actor newCell post := by
+   refine ⟨rd.guard, ?_, rd.born, rd.logAdv, rd.frNullifiers, rd.frRevoked,
+     rd.frCommitments, rd.frFactories, rd.frDelegationEpoch, rd.frDelegationEpochAt,
+-    rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot⟩
++    rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot, rd.frCommitmentsRoot⟩
+   exact createCell_forced_sat hash hsat pre post actor newCell rd
+ 
+ /-- **CLASS-A TOOTH — a forged wrong-accounts createCell witness is UNSAT.** A `CreateCellTraceReadout`
+@@ -634,6 +638,7 @@ structure CreateFromFactoryTraceReadout (hash : List ℤ → ℤ)
+   frHeaps : post.kernel.heaps = pre.kernel.heaps
+   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
+   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
++  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
+ 
+ /-- **`createFromFactory_forced_sat`** — the accounts growth FORCED by the DEPLOYED `factoryV3` (Class A). -/
+ theorem createFromFactory_forced_sat (hash : List ℤ → ℤ)
+@@ -655,7 +660,7 @@ theorem createCellFromFactory_descriptorRefines_sat (hash : List ℤ → ℤ)
+   refine ⟨rd.e, rd.guard, ?_, rd.frBal, rd.frCell, rd.frSlotCaveats, rd.logAdv,
+     rd.frCaps, rd.frLifecycle, rd.frDeathCert, rd.frDelegate, rd.frDelegations,
+     rd.frNullifiers, rd.frRevoked, rd.frCommitments, rd.frFactories,
+-    rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot⟩
++    rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot, rd.frCommitmentsRoot⟩
+   exact createFromFactory_forced_sat hash hsat pre post actor newCell vk rd
+ 
+ /-- **CLASS-A TOOTH** — a forged wrong-accounts factory witness is UNSAT. -/
+@@ -720,6 +725,7 @@ structure SpawnTraceReadout (S8 : Cap8Scheme) (hash : List ℤ → ℤ)
+   frHeaps : post.kernel.heaps = pre.kernel.heaps
+   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
+   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
++  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
+ 
+ /-- **`SpawnWriteAnchor` — the realizable INSERT carriers for the spawn cap handoff** (what the deployed
+ `CanonicalCapTree::insert_witness` computes — the readout-linked twin of
+@@ -766,7 +772,7 @@ theorem spawn_descriptorRefines_sat (S8 : Cap8Scheme) (hash : List ℤ → ℤ)
+   refine ⟨rd.guard, ?_, rd.frCell, rd.frSlotCaveats, rd.frLifecycle, rd.frDeathCert,
+     rd.frBal, rd.capHandoff, rd.delegateHandoff, rd.delegationsHandoff, rd.logAdv,
+     rd.frNullifiers, rd.frRevoked, rd.frCommitments, rd.frFactories,
+-    rd.frDelegationEpoch, rd.epochStampResidual, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot⟩
++    rd.frDelegationEpoch, rd.epochStampResidual, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot, rd.frCommitmentsRoot⟩
+   exact spawn_forced_sat S8 hash hsat pre post actor child target rd
+ 
+ /-- **CLASS-A TOOTH** — a spawn whose post accounts drop the child is UNSAT (the grow-gate bites). -/
+@@ -828,7 +834,7 @@ theorem spawnWrite_descriptorRefines_sat (S8 : Cap8Scheme) (hash : List ℤ →
+   refine ⟨rd.guard, ?_, rd.frCell, rd.frSlotCaveats, rd.frLifecycle, rd.frDeathCert,
+     rd.frBal, ?_, rd.delegateHandoff, rd.delegationsHandoff, rd.logAdv,
+     rd.frNullifiers, rd.frRevoked, rd.frCommitments, rd.frFactories,
+-    rd.frDelegationEpoch, rd.epochStampResidual, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot⟩
++    rd.frDelegationEpoch, rd.epochStampResidual, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot, rd.frCommitmentsRoot⟩
+   · -- accounts insert: forced by the cells grow-gate (still present on the stripped base).
+     have hbase : Satisfied2 hash spawnWriteV3 minit mfin maddrs t :=
+       Dregg2.Circuit.Emit.CapOpenEmit.effCapOpenV3_satisfied2_strips_to_base hash spawnWriteV3 name n
+diff --git a/metatheory/Dregg2/Circuit/RotatedKernelRefinementCapFamily.lean b/metatheory/Dregg2/Circuit/RotatedKernelRefinementCapFamily.lean
+index ad22362d6..7e227611c 100644
+--- a/metatheory/Dregg2/Circuit/RotatedKernelRefinementCapFamily.lean
++++ b/metatheory/Dregg2/Circuit/RotatedKernelRefinementCapFamily.lean
+@@ -144,6 +144,7 @@ structure KernelFrameExceptCaps (pre post : RecChainedState) : Prop where
+   frHeaps : post.kernel.heaps = pre.kernel.heaps
+   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
+   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
++  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
+ 
+ /-! ## §1 — INSERT effects: delegate / introduce / grantCap.
+ 
+@@ -198,7 +199,7 @@ theorem delegate_descriptorRefines (S8 : Cap8Scheme)
+    henc.frame.frCommitments, henc.frame.frBal, henc.frame.frSlotCaveats, henc.frame.frFactories,
+    henc.frame.frLifecycle, henc.frame.frDeathCert, henc.frame.frDelegate, henc.frame.frDelegations,
+    henc.frame.frDelegationEpoch, henc.frame.frDelegationEpochAt, henc.frame.frHeaps,
+-   henc.frame.frNullifierRoot, henc.frame.frRevokedRoot⟩
++   henc.frame.frNullifierRoot, henc.frame.frRevokedRoot, henc.frame.frCommitmentsRoot⟩
+ 
+ /-- **`delegate_execFullA` — the refinement against the executor arm.** `DelegateSpec` IS the
+ `.delegate` / `.introduceA` arm of `execFullA`, so the decode forces a genuine committed delegate
+@@ -286,7 +287,7 @@ theorem attenuate_descriptorRefines_exact (S8 : Cap8Scheme)
+    henc.frame.frCommitments, henc.frame.frBal, henc.frame.frSlotCaveats, henc.frame.frFactories,
+    henc.frame.frLifecycle, henc.frame.frDeathCert, henc.frame.frDelegate, henc.frame.frDelegations,
+    henc.frame.frDelegationEpoch, henc.frame.frDelegationEpochAt, henc.frame.frHeaps,
+-   henc.frame.frNullifierRoot, henc.frame.frRevokedRoot⟩
++   henc.frame.frNullifierRoot, henc.frame.frRevokedRoot, henc.frame.frCommitmentsRoot⟩
+ 
+ /-- **`attenuate_execFullA` — the refinement against the executor arm.** `AttenuateSpec` IS the
+ `.attenuateA` arm (TOTAL — always commits), so the decode forces `execFullA pre (.attenuateA actor idx
+@@ -435,7 +436,7 @@ theorem delegateAtten_descriptorRefines (S8 : Cap8Scheme)
+    henc.frame.frCommitments, henc.frame.frBal, henc.frame.frSlotCaveats, henc.frame.frFactories,
+    henc.frame.frLifecycle, henc.frame.frDeathCert, henc.frame.frDelegate, henc.frame.frDelegations,
+    henc.frame.frDelegationEpoch, henc.frame.frDelegationEpochAt, henc.frame.frHeaps,
+-   henc.frame.frNullifierRoot, henc.frame.frRevokedRoot⟩
++   henc.frame.frNullifierRoot, henc.frame.frRevokedRoot, henc.frame.frCommitmentsRoot⟩
+ 
+ /-- **`delegateAtten_non_amplifying` — the headline non-amp, read off the FORCED spec.** The granted
+ attenuated cap's REAL conferred rights are `⊆` the delegator's held cap (`is_attenuation`), holding of
+@@ -503,6 +504,7 @@ structure RefreshDelegationCapsTreeEncodes (S8 : Cap8Scheme)
+   frHeaps : post.kernel.heaps = pre.kernel.heaps
+   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
+   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
++  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
+ 
+ /-- **`refreshDelegation_forces_keyset_preserved` — the UPDATE-AT-KEY is FORCED (key set preserved).** -/
+ theorem refreshDelegation_forces_keyset_preserved (S8 : Cap8Scheme)
+@@ -522,7 +524,7 @@ theorem refreshDelegation_descriptorRefines (S8 : Cap8Scheme)
+    henc.frAccounts, henc.frCell, henc.frCaps, henc.frNullifiers, henc.frRevoked,
+    henc.frCommitments, henc.frBal, henc.frSlotCaveats, henc.frFactories, henc.frLifecycle,
+    henc.frDeathCert, henc.frDelegate, henc.frDelegationEpoch, henc.epochStampResidual, henc.frHeaps,
+-   henc.frNullifierRoot, henc.frRevokedRoot⟩
++   henc.frNullifierRoot, henc.frRevokedRoot, henc.frCommitmentsRoot⟩
+ 
+ /-- **`refreshDelegation_execFullA` — the refinement against the executor arm.** -/
+ theorem refreshDelegation_execFullA (S8 : Cap8Scheme)
+@@ -583,7 +585,7 @@ theorem revoke_descriptorRefines (S8 : Cap8Scheme)
+    henc.frame.frCommitments, henc.frame.frBal, henc.frame.frSlotCaveats, henc.frame.frFactories,
+    henc.frame.frLifecycle, henc.frame.frDeathCert, henc.frame.frDelegate, henc.frame.frDelegations,
+    henc.frame.frDelegationEpoch, henc.frame.frDelegationEpochAt, henc.frame.frHeaps,
+-   henc.frame.frNullifierRoot, henc.frame.frRevokedRoot⟩
++   henc.frame.frNullifierRoot, henc.frame.frRevokedRoot, henc.frame.frCommitmentsRoot⟩
+ 
+ /-- **`revoke_execFullA` — the refinement against the executor arm (`revoke`).** -/
+ theorem revoke_execFullA (S8 : Cap8Scheme)
+@@ -654,7 +656,7 @@ theorem revokeDelegation_descriptorRefines (S8 : Cap8Scheme)
+    henc.capRemove.frame.frRevoked, henc.capRemove.frame.frCommitments, henc.capRemove.frame.frBal,
+    henc.capRemove.frame.frSlotCaveats, henc.capRemove.frame.frFactories, henc.capRemove.frame.frLifecycle,
+    henc.capRemove.frame.frDeathCert, henc.capRemove.frame.frDelegate, henc.capRemove.frame.frHeaps,
+-   henc.capRemove.frame.frNullifierRoot, henc.capRemove.frame.frRevokedRoot,
++   henc.capRemove.frame.frNullifierRoot, henc.capRemove.frame.frRevokedRoot, henc.capRemove.frame.frCommitmentsRoot,
+    henc.epochStepParent, henc.epochStepChildSnapshot, henc.epochStepChildStamp⟩
+ 
+ /-- **`revokeDelegation_execFullA` — the refinement against the executor arm (`revokeDelegationA`).** The
+@@ -1465,7 +1467,7 @@ theorem revokeCapability_descriptorRefines_sat (S8 : Cap8Scheme) (hash : List 
+    rd.frame.frCommitments, rd.frame.frBal, rd.frame.frSlotCaveats, rd.frame.frFactories,
+    rd.frame.frLifecycle, rd.frame.frDeathCert, rd.frame.frDelegate, rd.frame.frDelegations,
+    rd.frame.frDelegationEpoch, rd.frame.frDelegationEpochAt, rd.frame.frHeaps,
+-   rd.frame.frNullifierRoot, rd.frame.frRevokedRoot⟩
++   rd.frame.frNullifierRoot, rd.frame.frRevokedRoot, rd.frame.frCommitmentsRoot⟩
+ 
+ /-- **`revokeCapability_execFullA_sat` — the Class-A refinement against the executor arm.** -/
+ theorem revokeCapability_execFullA_sat (S8 : Cap8Scheme) (hash : List ℤ → ℤ)
+diff --git a/metatheory/Dregg2/Circuit/RotatedKernelRefinementCellSeal.lean b/metatheory/Dregg2/Circuit/RotatedKernelRefinementCellSeal.lean
+index 06de96642..216603c1b 100644
+--- a/metatheory/Dregg2/Circuit/RotatedKernelRefinementCellSeal.lean
++++ b/metatheory/Dregg2/Circuit/RotatedKernelRefinementCellSeal.lean
+@@ -255,6 +255,7 @@ structure cellSealGenuineEncodes (compressN : List FieldElem → FieldElem)
+   frHeaps : post.kernel.heaps = pre.kernel.heaps
+   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
+   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
++  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
+ 
+ /-! ## §4 — the apex obligation: the FIX circuit FORCES the seal write.
+ 
+@@ -292,7 +293,7 @@ theorem cellSeal_descriptorRefines (compressN : List FieldElem → FieldElem)
+   refine ⟨henc.guard, ?_, henc.logAdv, henc.frAccounts, henc.frCell, henc.frCaps,
+     henc.frNullifiers, henc.frRevoked, henc.frCommitments, henc.frBal, henc.frSlotCaveats,
+     henc.frFactories, henc.frDeathCert, henc.frDelegate, henc.frDelegations,
+-    henc.frDelegationEpoch, henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot⟩
++    henc.frDelegationEpoch, henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot, henc.frCommitmentsRoot⟩
+   exact cellSeal_lifecycle_forced compressN hN pre post actor cell henc
+ 
+ /-- **The refinement, stated against `execFullA` directly.** `CellSealSpec` IS the `.cellSealA` arm of
+@@ -411,6 +412,7 @@ structure CellSealTraceReadout (hash : List ℤ → ℤ)
+   frHeaps : post.kernel.heaps = pre.kernel.heaps
+   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
+   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
++  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
+ 
+ /-- `rotateV3WithLifecyclePayloadGate SEL_CELLSEAL (some discLive) discSealed cellSealVmDescriptor` is
+ graduable (the appended disc + payload gates are CONSTRAINTS; graduation reads only sites/ranges). The
+@@ -492,7 +494,7 @@ theorem cellSeal_descriptorRefines_sat (hash : List ℤ → ℤ)
+   refine ⟨rd.guard, ?_, rd.logAdv, rd.frAccounts, rd.frCell, rd.frCaps,
+     rd.frNullifiers, rd.frRevoked, rd.frCommitments, rd.frBal, rd.frSlotCaveats,
+     rd.frFactories, rd.frDeathCert, rd.frDelegate, rd.frDelegations,
+-    rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot⟩
++    rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot, rd.frCommitmentsRoot⟩
+   exact cellSeal_forced_map hash hside hsat pre post actor cell rd
+ 
+ /-- **CLASS-A TOOTH — a forged un-sealed cellSeal witness is UNSAT.** A `CellSealTraceReadout` whose post
+diff --git a/metatheory/Dregg2/Circuit/RotatedKernelRefinementExercise.lean b/metatheory/Dregg2/Circuit/RotatedKernelRefinementExercise.lean
+index 652cbdf36..5500cc280 100644
+--- a/metatheory/Dregg2/Circuit/RotatedKernelRefinementExercise.lean
++++ b/metatheory/Dregg2/Circuit/RotatedKernelRefinementExercise.lean
+@@ -264,6 +264,7 @@ structure heapWriteEncodes (hash : List ℤ → ℤ) (pre post : RecChainedState
+   frDelegationEpochAt : post.kernel.delegationEpochAt = pre.kernel.delegationEpochAt
+   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
+   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
++  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
+ 
+ /-- **`heapWrite_newRoot_forced` — the carried `newRoot` IS the genuine recompute (FORCED, not free).**
+ The recompute-honest row pins its new-root register to the deterministic `heapWriteNewRoot` over the
+@@ -298,7 +299,7 @@ theorem heapWrite_descriptorRefines (hash : List ℤ → ℤ) (pre post : RecCha
+   ⟨henc.guard, henc.cellMapMove, henc.heapsSplice, henc.logAdv, henc.frAccounts, henc.frCaps,
+     henc.frNullifiers, henc.frRevoked, henc.frCommitments, henc.frBal, henc.frSlotCaveats,
+     henc.frFactories, henc.frLifecycle, henc.frDeathCert, henc.frDelegate, henc.frDelegations,
+-    henc.frDelegationEpoch, henc.frDelegationEpochAt, henc.frNullifierRoot, henc.frRevokedRoot⟩
++    henc.frDelegationEpoch, henc.frDelegationEpochAt, henc.frNullifierRoot, henc.frRevokedRoot, henc.frCommitmentsRoot⟩
+ 
+ /-- The heapWrite refinement against `execFullA` directly (via `execFullA_heapWriteA_iff_spec`). -/
+ theorem heapWrite_descriptorRefines_execFullA (hash : List ℤ → ℤ) (pre post : RecChainedState)
+@@ -498,6 +499,7 @@ structure HeapWriteTraceReadout (hash : List ℤ → ℤ)
+   frDelegationEpochAt : post.kernel.delegationEpochAt = pre.kernel.delegationEpochAt
+   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
+   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
++  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
+ 
+ /-- **`heapWrite_descriptorRefines_sat` — THE CLASS-A CIRCUIT→KERNEL REFINEMENT for heapWrite.** A
+ satisfying DEPLOYED `heapWriteV3` witness + the realizable `HeapWriteTraceReadout` forces
+@@ -516,7 +518,7 @@ theorem heapWrite_descriptorRefines_sat (hash : List ℤ → ℤ)
+   ⟨rd.guard, rd.cellMapMove, rd.heapsSplice, rd.logAdv, rd.frAccounts, rd.frCaps,
+     rd.frNullifiers, rd.frRevoked, rd.frCommitments, rd.frBal, rd.frSlotCaveats,
+     rd.frFactories, rd.frLifecycle, rd.frDeathCert, rd.frDelegate, rd.frDelegations,
+-    rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frNullifierRoot, rd.frRevokedRoot⟩
++    rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frNullifierRoot, rd.frRevokedRoot, rd.frCommitmentsRoot⟩
+ 
+ /-- **`heapWrite_newRoot_splice_forced` — THE PHASE-E DISCHARGE: the carried `newRoot` IS the genuine
+ sorted-Merkle SPLICE (content-bound, no longer free).** A satisfying `heapWriteV3` row + the readout
+diff --git a/metatheory/Dregg2/Circuit/RotatedKernelRefinementFacet.lean b/metatheory/Dregg2/Circuit/RotatedKernelRefinementFacet.lean
+index 6821779d0..b3ec6c997 100644
+--- a/metatheory/Dregg2/Circuit/RotatedKernelRefinementFacet.lean
++++ b/metatheory/Dregg2/Circuit/RotatedKernelRefinementFacet.lean
+@@ -202,6 +202,7 @@ def BalanceMovementSpecFacet (fcaps : FacetCaps) (provided : AuthProvided)
+   ∧ st'.kernel.heaps = st.kernel.heaps
+   ∧ st'.kernel.nullifierRoot = st.kernel.nullifierRoot
+   ∧ st'.kernel.revokedRoot = st.kernel.revokedRoot
++  ∧ st'.kernel.commitmentsRoot = st.kernel.commitmentsRoot
+ 
+ /-- **`BalanceMovementSpecFacet` ⟹ `BalanceMovementSpec` once authority is shown the toy way too.**
+ The faithful spec and the toy spec share EVERY conjunct except authority; so a faithful spec PLUS the
+diff --git a/metatheory/Dregg2/Circuit/RotatedKernelRefinementIncNonce.lean b/metatheory/Dregg2/Circuit/RotatedKernelRefinementIncNonce.lean
+index d47010ef3..8fa6efba9 100644
+--- a/metatheory/Dregg2/Circuit/RotatedKernelRefinementIncNonce.lean
++++ b/metatheory/Dregg2/Circuit/RotatedKernelRefinementIncNonce.lean
+@@ -191,6 +191,7 @@ structure rotatedEncodesIncNonce (hash : List ℤ → ℤ)
+   frHeaps : post.kernel.heaps = pre.kernel.heaps
+   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
+   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
++  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
+ 
+ /-! ## §3 — the apex obligation: the circuit FORCES the nonce tick.
+ 
+@@ -240,7 +241,7 @@ theorem incrementNonce_descriptorRefines (hash : List ℤ → ℤ)
+     henc.frAccounts, henc.frCaps, henc.frNullifiers, henc.frRevoked, henc.frCommitments,
+     henc.frBal, henc.frSlotCaveats, henc.frFactories, henc.frLifecycle, henc.frDeathCert,
+     henc.frDelegate, henc.frDelegations, henc.frDelegationEpoch, henc.frDelegationEpochAt,
+-    henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot⟩
++    henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot, henc.frCommitmentsRoot⟩
+ 
+ /-- **The refinement at the FORCED increment `n = old_nonce + 1`, made explicit.** The leaf spec's `n`
+ is free; the increment SEMANTICS instantiate it at the circuit-forced tick of the decoded pre-cell
+diff --git a/metatheory/Dregg2/Circuit/RotatedKernelRefinementLifecycle.lean b/metatheory/Dregg2/Circuit/RotatedKernelRefinementLifecycle.lean
+index c86823ac0..496014a6e 100644
+--- a/metatheory/Dregg2/Circuit/RotatedKernelRefinementLifecycle.lean
++++ b/metatheory/Dregg2/Circuit/RotatedKernelRefinementLifecycle.lean
+@@ -162,6 +162,7 @@ structure cellUnsealEncodes (compressN : List FieldElem → FieldElem)
+   frHeaps : post.kernel.heaps = pre.kernel.heaps
+   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
+   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
++  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
+ 
+ /-- **`cellUnseal_lifecycle_forced` — the committed lifecycle write is FIX-CIRCUIT-FORCED.** -/
+ theorem cellUnseal_lifecycle_forced (compressN : List FieldElem → FieldElem)
+@@ -181,7 +182,7 @@ theorem cellUnseal_descriptorRefines (compressN : List FieldElem → FieldElem)
+   refine ⟨henc.guard, ?_, henc.logAdv, henc.frAccounts, henc.frCell, henc.frCaps,
+     henc.frNullifiers, henc.frRevoked, henc.frCommitments, henc.frBal, henc.frSlotCaveats,
+     henc.frFactories, henc.frDeathCert, henc.frDelegate, henc.frDelegations,
+-    henc.frDelegationEpoch, henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot⟩
++    henc.frDelegationEpoch, henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot, henc.frCommitmentsRoot⟩
+   exact cellUnseal_lifecycle_forced compressN hN pre post actor cell henc
+ 
+ /-- The refinement against `execFullA` directly (via `cellUnseal_iff_spec`). -/
+@@ -293,6 +294,7 @@ structure cellDestroyEncodes (compressN : List FieldElem → FieldElem)
+   frHeaps : post.kernel.heaps = pre.kernel.heaps
+   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
+   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
++  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
+ 
+ /-- **`cellDestroy_lifecycle_forced` — the destroyed lifecycle MAP is FIX-CIRCUIT-FORCED.** -/
+ theorem cellDestroy_lifecycle_forced (compressN : List FieldElem → FieldElem)
+@@ -337,7 +339,7 @@ theorem cellDestroy_descriptorRefines (compressN : List FieldElem → FieldElem)
+   refine ⟨henc.guard, ?_, ?_, henc.logAdv, henc.frAccounts, henc.frCell, henc.frCaps,
+     henc.frNullifiers, henc.frRevoked, henc.frCommitments, henc.frBal, henc.frSlotCaveats,
+     henc.frFactories, henc.frDelegate, henc.frDelegations,
+-    henc.frDelegationEpoch, henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot⟩
++    henc.frDelegationEpoch, henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot, henc.frCommitmentsRoot⟩
+   · exact cellDestroy_lifecycle_forced compressN hN pre post actor cell certHash henc
+   · exact cellDestroy_deathCert_forced compressN hN pre post actor cell certHash henc
+ 
+@@ -457,6 +459,7 @@ structure auditEncodes (compressN : List FieldElem → FieldElem)
+   frHeaps : post.kernel.heaps = pre.kernel.heaps
+   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
+   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
++  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
+ 
+ /-- **`audit_slot_forced` — the committed audit slot is FIX-CIRCUIT-FORCED to `1`.** The WITNESS gate
+ pins the slot value to the one-shot flag; this is the rung the deployed circuit is missing. -/
+@@ -478,7 +481,7 @@ theorem refusal_descriptorRefines (compressN : List FieldElem → FieldElem)
+   ⟨henc.guard, henc.cellMapMove, henc.logAdv, henc.frAccounts, henc.frCaps,
+     henc.frNullifiers, henc.frRevoked, henc.frCommitments, henc.frBal, henc.frSlotCaveats,
+     henc.frFactories, henc.frLifecycle, henc.frDeathCert, henc.frDelegate, henc.frDelegations,
+-    henc.frDelegationEpoch, henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot⟩
++    henc.frDelegationEpoch, henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot, henc.frCommitmentsRoot⟩
+ 
+ /-- The refinement against `execFullA` directly (via `execFullA_refusalA_iff_spec`). -/
+ theorem refusal_descriptorRefines_execFullA (compressN : List FieldElem → FieldElem)
+@@ -501,7 +504,7 @@ theorem receiptArchive_descriptorRefines (compressN : List FieldElem → FieldEl
+   ⟨henc.guard, henc.cellMapMove, henc.logAdv, henc.frAccounts, henc.frCaps,
+     henc.frNullifiers, henc.frRevoked, henc.frCommitments, henc.frBal, henc.frSlotCaveats,
+     henc.frFactories, henc.frLifecycle, henc.frDeathCert, henc.frDelegate, henc.frDelegations,
+-    henc.frDelegationEpoch, henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot⟩
++    henc.frDelegationEpoch, henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot, henc.frCommitmentsRoot⟩
+ 
+ /-- The MODELLED record-slot refinement against the record-write `receiptArchiveRecordStep` (via
+ `receiptArchiveRecordStep_iff_spec`). Keyed off the record write, NOT the deployed `execFullA` arm
+@@ -592,6 +595,7 @@ structure CellUnsealTraceReadout (hash : List ℤ → ℤ)
+   frHeaps : post.kernel.heaps = pre.kernel.heaps
+   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
+   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
++  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
+ 
+ /-- `cellUnsealV3`'s underlying disc-gated descriptor is graduable (the cellSeal `_disc_graduable`
+ analog). -/
+@@ -659,7 +663,7 @@ theorem cellUnseal_descriptorRefines_sat (hash : List ℤ → ℤ)
+   refine ⟨rd.guard, ?_, rd.logAdv, rd.frAccounts, rd.frCell, rd.frCaps,
+     rd.frNullifiers, rd.frRevoked, rd.frCommitments, rd.frBal, rd.frSlotCaveats,
+     rd.frFactories, rd.frDeathCert, rd.frDelegate, rd.frDelegations,
+-    rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot⟩
++    rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot, rd.frCommitmentsRoot⟩
+   exact cellUnseal_forced_map hash hside hsat pre post actor cell rd
+ 
+ /-- **CLASS-A TOOTH — a forged un-revived cellUnseal witness is UNSAT.** A readout whose post `cell`
+@@ -731,6 +735,7 @@ structure CellDestroyTraceReadout (compressN : List FieldElem → FieldElem) (ha
+   frHeaps : post.kernel.heaps = pre.kernel.heaps
+   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
+   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
++  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
+ 
+ theorem cellDestroy_disc_graduable :
+     graduable (rotateV3WithLifecyclePayloadGate Dregg2.Circuit.Emit.EffectVmEmitCellDestroy.SEL_CELLDESTROY
+@@ -841,7 +846,7 @@ theorem cellDestroy_descriptorRefines_sat (compressN : List FieldElem → FieldE
+   refine ⟨rd.guard, ?_, ?_, rd.logAdv, rd.frAccounts, rd.frCell, rd.frCaps,
+     rd.frNullifiers, rd.frRevoked, rd.frCommitments, rd.frBal, rd.frSlotCaveats,
+     rd.frFactories, rd.frDelegate, rd.frDelegations,
+-    rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot⟩
++    rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot, rd.frCommitmentsRoot⟩
+   · -- the lifecycle MAP is `(destroyKernelMap …).lifecycle`.
+     have hcell : post.kernel.lifecycle cell = lcDestroyed :=
+       cellDestroy_lc_forced compressN hash hside hsat pre post actor cell certHash rd
+@@ -945,6 +950,7 @@ structure RefusalTraceReadout (compressN : List FieldElem → FieldElem) (hash :
+   frHeaps : post.kernel.heaps = pre.kernel.heaps
+   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
+   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
++  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
+ 
+ theorem refusal_rcp_graduable :
+     graduable (rotateV3WithRecordPin B_RECORD_DIGEST
+@@ -1001,7 +1007,7 @@ theorem refusal_descriptorRefines_sat (compressN : List FieldElem → FieldElem)
+   ⟨rd.guard, rd.cellMapMoveDecodes hwrite, rd.logAdv, rd.frAccounts, rd.frCaps,
+     rd.frNullifiers, rd.frRevoked, rd.frCommitments, rd.frBal, rd.frSlotCaveats,
+     rd.frFactories, rd.frLifecycle, rd.frDeathCert, rd.frDelegate, rd.frDelegations,
+-    rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot⟩
++    rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot, rd.frCommitmentsRoot⟩
+ 
+ /-- **CLASS-A TOOTH — a frozen-audit-slot refusal forgery is UNSAT.** A readout whose post `cell` refusal
+ slot is NOT `1` cannot ride a satisfying `refusalV3` witness — the deployed record pin bites. -/
+@@ -1085,6 +1091,7 @@ structure ReceiptArchiveTraceReadout (hash : List ℤ → ℤ)
+   frHeaps : post.kernel.heaps = pre.kernel.heaps
+   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
+   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
++  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
+ 
+ /-- `receiptArchiveV3`'s underlying payload-gated descriptor is graduable. -/
+ theorem receiptArchive_disc_graduable :
+@@ -1156,7 +1163,7 @@ theorem receiptArchive_descriptorRefines_sat (hash : List ℤ → ℤ)
+   refine ⟨rd.guard, ?_, rd.logAdv, rd.frAccounts, rd.frCell, rd.frCaps,
+     rd.frNullifiers, rd.frRevoked, rd.frCommitments, rd.frBal, rd.frSlotCaveats,
+     rd.frFactories, rd.frDeathCert, rd.frDelegate, rd.frDelegations,
+-    rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot⟩
++    rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot, rd.frCommitmentsRoot⟩
+   exact receiptArchive_forced_map hash hside hsat pre post actor cell rd
+ 
+ /-- **CLASS-A TOOTH — a wrong-after-disc receiptArchive forgery is UNSAT.** A readout whose post `cell`
+diff --git a/metatheory/Dregg2/Circuit/RotatedKernelRefinementMintBurn.lean b/metatheory/Dregg2/Circuit/RotatedKernelRefinementMintBurn.lean
+index 3077d1009..6bb2497ef 100644
+--- a/metatheory/Dregg2/Circuit/RotatedKernelRefinementMintBurn.lean
++++ b/metatheory/Dregg2/Circuit/RotatedKernelRefinementMintBurn.lean
+@@ -193,6 +193,7 @@ structure rotatedEncodesBurn (hash : List ℤ → ℤ)
+   frHeaps : post.kernel.heaps = pre.kernel.heaps
+   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
+   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
++  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
+   logAdv : post.log = Spec.SupplyDestruction.burnReceipt actor cell a amt :: pre.log
+ 
+ /-! ## §3 — BURN: the circuit FORCES the holder debit + availability. -/
+@@ -285,6 +286,7 @@ theorem burn_descriptorRefines (hash : List ℤ → ℤ)
+   · exact henc.frHeaps
+   · exact henc.frNullifierRoot
+   · exact henc.frRevokedRoot
++  · exact henc.frCommitmentsRoot
+ 
+ /-- **`burn_descriptorRefines_rejects_wrong_debit` — the conservation tooth (burn).** A decode claiming
+ a holder post-balance NOT the genuine debit `pre.bal cell a − amt` rides NO satisfying witness: the
+@@ -407,6 +409,7 @@ structure rotatedEncodesMint (hash : List ℤ → ℤ)
+   frHeaps : post.kernel.heaps = pre.kernel.heaps
+   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
+   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
++  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
+   logAdv : post.log = Spec.SupplyCreation.mintReceipt actor cell a amt :: pre.log
+ 
+ /-! ## §6 — MINT: the circuit FORCES the recipient credit. -/
+@@ -463,6 +466,7 @@ theorem mint_descriptorRefines (hash : List ℤ → ℤ)
+   · exact henc.frHeaps
+   · exact henc.frNullifierRoot
+   · exact henc.frRevokedRoot
++  · exact henc.frCommitmentsRoot
+ 
+ /-- **`mint_descriptorRefines_rejects_wrong_credit` — the conservation tooth (mint).** A decode claiming
+ a recipient post-balance NOT the genuine credit `pre.bal cell a + amt` rides NO satisfying witness: the
+diff --git a/metatheory/Dregg2/Circuit/RotatedKernelRefinementMisc.lean b/metatheory/Dregg2/Circuit/RotatedKernelRefinementMisc.lean
+index 31f14f195..e314a3afc 100644
+--- a/metatheory/Dregg2/Circuit/RotatedKernelRefinementMisc.lean
++++ b/metatheory/Dregg2/Circuit/RotatedKernelRefinementMisc.lean
+@@ -164,6 +164,7 @@ structure makeSovereignEncodes (compressN : List FieldElem → FieldElem)
+   frHeaps : post.kernel.heaps = pre.kernel.heaps
+   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
+   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
++  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
+ 
+ /-- **`makeSovereign_commit_forced` — the published commitment IS the genuine pre-value commitment.**
+ The FIX gate forces the committed sovereign-commit limb to `stateCommitment (pre.cell cell)`; the
+@@ -189,7 +190,7 @@ theorem makeSovereign_descriptorRefines (compressN : List FieldElem → FieldEle
+   ⟨henc.guard, henc.cellMapMove, henc.logAdv, henc.frAccounts, henc.frCaps,
+     henc.frNullifiers, henc.frRevoked, henc.frCommitments, henc.frBal, henc.frSlotCaveats,
+     henc.frFactories, henc.frLifecycle, henc.frDeathCert, henc.frDelegate, henc.frDelegations,
+-    henc.frDelegationEpoch, henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot⟩
++    henc.frDelegationEpoch, henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot, henc.frCommitmentsRoot⟩
+ 
+ /-- The refinement against `execFullA` directly (via `execFullA_makeSovereignA_iff_spec`). -/
+ theorem makeSovereign_descriptorRefines_execFullA (compressN : List FieldElem → FieldElem)
+@@ -281,6 +282,7 @@ structure setFieldDynEncodes (compressN : List FieldElem → FieldElem)
+   frHeaps : post.kernel.heaps = pre.kernel.heaps
+   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
+   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
++  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
+ 
+ /-- **`setFieldDyn_slot_forced` — the committed dynamic-slot value is FIX-CIRCUIT-FORCED to `v`.** -/
+ theorem setFieldDyn_slot_forced (compressN : List FieldElem → FieldElem)
+@@ -304,7 +306,7 @@ theorem setFieldDyn_descriptorRefines (compressN : List FieldElem → FieldElem)
+   ⟨hnr, henc.guard, henc.cellMapMove, henc.logAdv, henc.frAccounts, henc.frCaps,
+     henc.frNullifiers, henc.frRevoked, henc.frCommitments, henc.frBal, henc.frSlotCaveats,
+     henc.frFactories, henc.frLifecycle, henc.frDeathCert, henc.frDelegate, henc.frDelegations,
+-    henc.frDelegationEpoch, henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot⟩
++    henc.frDelegationEpoch, henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot, henc.frCommitmentsRoot⟩
+ 
+ /-- The refinement against `execFullA` directly (via `execFullA_setFieldA_iff_spec`). The dynamic
+ SetField is the developer write — its `reservedField f = false` precondition (`hnr`) is the
+@@ -406,6 +408,7 @@ structure MakeSovereignTraceReadout (hash : List ℤ → ℤ)
+   frHeaps : post.kernel.heaps = pre.kernel.heaps
+   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
+   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
++  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
+ 
+ /-- `rotateV3WithModeGate SEL_MAKE_SOVEREIGN_RT modeSovereign makeSovereignRuntimeVmDescriptor` is
+ graduable (the appended mode gate is a CONSTRAINT; graduation reads only sites/ranges). -/
+@@ -466,7 +469,7 @@ theorem makeSovereign_descriptorRefines_sat (hash : List ℤ → ℤ)
+    rd.logAdv, rd.frAccounts, rd.frCaps,
+    rd.frNullifiers, rd.frRevoked, rd.frCommitments, rd.frBal, rd.frSlotCaveats,
+    rd.frFactories, rd.frLifecycle, rd.frDeathCert, rd.frDelegate, rd.frDelegations,
+-   rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot⟩
++   rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot, rd.frCommitmentsRoot⟩
+ 
+ /-- **CLASS-A TOOTH — a forged un-promoted makeSovereign witness is UNSAT.** A `MakeSovereignTraceReadout`
+ whose post cell-map is NOT the sovereign rebind cannot ride a satisfying `makeSovereignV3` witness: the
+@@ -566,6 +569,7 @@ structure SetFieldDynTraceReadout (hash : List ℤ → ℤ)
+   frHeaps : post.kernel.heaps = pre.kernel.heaps
+   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
+   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
++  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
+ 
+ /-- **`setFieldDyn_forced_sat` — the dynamic field write is FORCED by the DEPLOYED `setFieldDynForcedV3`
+ (Class A).** A `Satisfied2 hash setFieldDynForcedV3` witness plus the realizable `SetFieldDynTraceReadout`
+@@ -614,7 +618,7 @@ theorem setFieldDyn_descriptorRefines_sat (hash : List ℤ → ℤ)
+   ⟨hnr, rd.guard, rd.cellMapMove, rd.logAdv, rd.frAccounts, rd.frCaps,
+    rd.frNullifiers, rd.frRevoked, rd.frCommitments, rd.frBal, rd.frSlotCaveats,
+    rd.frFactories, rd.frLifecycle, rd.frDeathCert, rd.frDelegate, rd.frDelegations,
+-   rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot⟩
++   rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot, rd.frCommitmentsRoot⟩
+ 
+ /-- **CLASS-A TOOTH — a forged dynamic-write witness is UNSAT.** A `SetFieldDynTraceReadout` whose post
+ `cell.f` slot is NOT `v` cannot ride a satisfying `setFieldDynForcedV3` witness: the DEPLOYED `fields_root`
+@@ -664,6 +668,7 @@ structure pipelinedSendEncodes (pre post : RecChainedState) (actor : CellId) : T
+   frHeaps : post.kernel.heaps = pre.kernel.heaps
+   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
+   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
++  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
+ 
+ /-- **`pipelinedSend_descriptorRefines` — THE CIRCUIT→KERNEL REFINEMENT for pipelinedSend, against the
+ LIVE descriptor.** A satisfying LIVE pipelinedSend witness (its kernel frame forced by the deployed
+@@ -677,7 +682,7 @@ theorem pipelinedSend_descriptorRefines
+   ⟨henc.logAdv, henc.frAccounts, henc.frCell, henc.frCaps,
+     henc.frNullifiers, henc.frRevoked, henc.frCommitments, henc.frBal, henc.frSlotCaveats,
+     henc.frFactories, henc.frLifecycle, henc.frDeathCert, henc.frDelegate, henc.frDelegations,
+-    henc.frDelegationEpoch, henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot⟩
++    henc.frDelegationEpoch, henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot, henc.frCommitmentsRoot⟩
+ 
+ /-- The refinement against `execFullA` directly (via `execFullA_pipelinedSend_iff_spec`). -/
+ theorem pipelinedSend_descriptorRefines_execFullA
+diff --git a/metatheory/Dregg2/Circuit/RotatedKernelRefinementNotes.lean b/metatheory/Dregg2/Circuit/RotatedKernelRefinementNotes.lean
+index e01b6ce30..a2dad5c7e 100644
+--- a/metatheory/Dregg2/Circuit/RotatedKernelRefinementNotes.lean
++++ b/metatheory/Dregg2/Circuit/RotatedKernelRefinementNotes.lean
+@@ -205,6 +205,7 @@ structure noteSpendGenuineEncodes (compressN : List FieldElem → FieldElem)
+   frHeaps : post.kernel.heaps = pre.kernel.heaps
+   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
+   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
++  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
+ 
+ /-- **`noteSpend_nullifiers_forced` — the committed nullifier set-insert is FIX-CIRCUIT-FORCED.** On the
+ decoded row the FIX nullifiers gate forces the post nullifiers to `nf :: pre.nullifiers`. -/
+@@ -230,7 +231,7 @@ theorem noteSpend_descriptorRefines (compressN : List FieldElem → FieldElem)
+   refine ⟨⟨henc.proof, henc.freshness⟩, ?_, henc.logAdv, henc.frAccounts, henc.frCell, henc.frCaps,
+     henc.frRevoked, henc.frCommitments, henc.frBal, henc.frSlotCaveats, henc.frFactories,
+     henc.frLifecycle, henc.frDeathCert, henc.frDelegate, henc.frDelegations, henc.frDelegationEpoch,
+-    henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot⟩
++    henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot, henc.frCommitmentsRoot⟩
+   exact noteSpend_nullifiers_forced compressN hN pre post nf actor spendProof henc
+ 
+ /-- **The refinement, stated against `execFullA` directly.** `NoteSpendSpec` IS the `.noteSpendA` arm
+@@ -307,6 +308,7 @@ structure noteCreateGenuineEncodes (compressN : List FieldElem → FieldElem)
+   frHeaps : post.kernel.heaps = pre.kernel.heaps
+   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
+   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
++  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
+ 
+ /-- **`noteCreate_commitments_forced` — the committed commitment set-insert is FIX-CIRCUIT-FORCED.** On
+ the decoded row the FIX commitments gate forces the post commitments to `cm :: pre.commitments`. -/
+@@ -331,7 +333,7 @@ theorem noteCreate_descriptorRefines (compressN : List FieldElem → FieldElem)
+   refine ⟨trivial, ?_, henc.logAdv, henc.frAccounts, henc.frCell, henc.frCaps, henc.frNullifiers,
+     henc.frRevoked, henc.frBal, henc.frSlotCaveats, henc.frFactories, henc.frLifecycle,
+     henc.frDeathCert, henc.frDelegate, henc.frDelegations, henc.frDelegationEpoch,
+-    henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot⟩
++    henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot, henc.frCommitmentsRoot⟩
+   exact noteCreate_commitments_forced compressN hN pre post cm actor henc
+ 
+ /-- **The refinement, stated against `execFullA` directly.** `NoteCreateASpec` IS the `.noteCreateA`
+@@ -453,6 +455,7 @@ structure NoteSpendTraceReadout (hash : List ℤ → ℤ)
+   frHeaps : post.kernel.heaps = pre.kernel.heaps
+   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
+   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
++  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
+ 
+ /-- **`noteSpend_forced_sat`** — the nullifier set-insert FORCED by the DEPLOYED `noteSpendV3` (Class A). -/
+ theorem noteSpend_forced_sat (hash : List ℤ → ℤ)
+@@ -476,7 +479,7 @@ theorem noteSpend_descriptorRefines_sat (hash : List ℤ → ℤ)
+   refine ⟨⟨rd.proof, rd.freshness⟩, ?_, rd.logAdv, rd.frAccounts, rd.frCell, rd.frCaps,
+     rd.frRevoked, rd.frCommitments, rd.frBal, rd.frSlotCaveats, rd.frFactories,
+     rd.frLifecycle, rd.frDeathCert, rd.frDelegate, rd.frDelegations, rd.frDelegationEpoch,
+-    rd.frDelegationEpochAt, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot⟩
++    rd.frDelegationEpochAt, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot, rd.frCommitmentsRoot⟩
+   exact noteSpend_forced_sat hash hsat pre post nf actor spendProof rd
+ 
+ /-- **CLASS-A TOOTH** — a forged wrong-nullifiers noteSpend witness is UNSAT (the grow-gate bites). -/
+@@ -521,6 +524,7 @@ structure NoteCreateTraceReadout (hash : List ℤ → ℤ)
+   frHeaps : post.kernel.heaps = pre.kernel.heaps
+   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
+   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
++  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
+ 
+ /-- **`noteCreate_forced_sat`** — the commitment set-insert FORCED by the DEPLOYED `noteCreateV3` (Class A;
+ the whole load-bearing content, no guard). -/
+@@ -543,7 +547,7 @@ theorem noteCreate_descriptorRefines_sat (hash : List ℤ → ℤ)
+   refine ⟨trivial, ?_, rd.logAdv, rd.frAccounts, rd.frCell, rd.frCaps, rd.frNullifiers,
+     rd.frRevoked, rd.frBal, rd.frSlotCaveats, rd.frFactories, rd.frLifecycle,
+     rd.frDeathCert, rd.frDelegate, rd.frDelegations, rd.frDelegationEpoch,
+-    rd.frDelegationEpochAt, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot⟩
++    rd.frDelegationEpochAt, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot, rd.frCommitmentsRoot⟩
+   exact noteCreate_forced_sat hash hsat pre post cm actor rd
+ 
+ /-- **CLASS-A TOOTH** — a forged wrong-commitments noteCreate witness is UNSAT (the grow-gate bites). -/
+diff --git a/metatheory/Dregg2/Circuit/RotatedKernelRefinementNotesFresh.lean b/metatheory/Dregg2/Circuit/RotatedKernelRefinementNotesFresh.lean
+index 0e42481f3..0eaf3f750 100644
+--- a/metatheory/Dregg2/Circuit/RotatedKernelRefinementNotesFresh.lean
++++ b/metatheory/Dregg2/Circuit/RotatedKernelRefinementNotesFresh.lean
+@@ -164,6 +164,7 @@ structure noteSpendFreshEncodes (S8 : Cap8Scheme)
+   frHeaps : post.kernel.heaps = pre.kernel.heaps
+   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
+   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
++  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
+ 
+ /-- **`noteSpendFresh_freshness` — the freshness is FORCED (not carried).** On the strengthened decode,
+ the non-membership open FORCES `nf ∉ pre.nullifiers` (via `freshness_forced`). This is exactly the
+@@ -208,6 +209,7 @@ def noteSpendFresh_to_base (S8 : Cap8Scheme)
+   frHeaps := henc.frHeaps
+   frNullifierRoot := henc.frNullifierRoot
+   frRevokedRoot := henc.frRevokedRoot
++  frCommitmentsRoot := henc.frCommitmentsRoot
+ 
+ /-- **`noteSpendFresh_descriptorRefines` — THE PHASE-D REFINEMENT for noteSpend (freshness FORCED).**
+ A satisfying STRENGTHENED noteSpend descriptor witness forces the KERNEL's spend step `NoteSpendSpec
+diff --git a/metatheory/Dregg2/Circuit/RotatedKernelRefinementPermsVK.lean b/metatheory/Dregg2/Circuit/RotatedKernelRefinementPermsVK.lean
+index 2b9bfd48c..4d7ad12a1 100644
+--- a/metatheory/Dregg2/Circuit/RotatedKernelRefinementPermsVK.lean
++++ b/metatheory/Dregg2/Circuit/RotatedKernelRefinementPermsVK.lean
+@@ -136,6 +136,7 @@ structure setPermissionsEncodes (compressN : List FieldElem → FieldElem)
+   frHeaps : post.kernel.heaps = pre.kernel.heaps
+   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
+   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
++  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
+ 
+ /-- **`setPermissions_slot_forced` — the committed permissions slot is FIX-CIRCUIT-FORCED to `p`.** -/
+ theorem setPermissions_slot_forced (compressN : List FieldElem → FieldElem)
+@@ -157,7 +158,7 @@ theorem setPermissions_descriptorRefines (compressN : List FieldElem → FieldEl
+   ⟨henc.guard, henc.cellMapMove, henc.logAdv, henc.frAccounts, henc.frCaps,
+     henc.frNullifiers, henc.frRevoked, henc.frCommitments, henc.frBal, henc.frSlotCaveats,
+     henc.frFactories, henc.frLifecycle, henc.frDeathCert, henc.frDelegate, henc.frDelegations,
+-    henc.frDelegationEpoch, henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot⟩
++    henc.frDelegationEpoch, henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot, henc.frCommitmentsRoot⟩
+ 
+ /-- The refinement against `execFullA` directly (via `execFullA_setPermissions_iff_spec`). -/
+ theorem setPermissions_descriptorRefines_execFullA (compressN : List FieldElem → FieldElem)
+@@ -217,6 +218,7 @@ structure setVKEncodes (compressN : List FieldElem → FieldElem)
+   frHeaps : post.kernel.heaps = pre.kernel.heaps
+   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
+   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
++  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
+ 
+ /-- **`setVK_slot_forced` — the committed verification_key slot is FIX-CIRCUIT-FORCED to `vk`.** -/
+ theorem setVK_slot_forced (compressN : List FieldElem → FieldElem)
+@@ -237,7 +239,7 @@ theorem setVK_descriptorRefines (compressN : List FieldElem → FieldElem)
+   ⟨henc.guard, henc.cellMapMove, henc.logAdv, henc.frAccounts, henc.frCaps,
+     henc.frNullifiers, henc.frRevoked, henc.frCommitments, henc.frBal, henc.frSlotCaveats,
+     henc.frFactories, henc.frLifecycle, henc.frDeathCert, henc.frDelegate, henc.frDelegations,
+-    henc.frDelegationEpoch, henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot⟩
++    henc.frDelegationEpoch, henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot, henc.frCommitmentsRoot⟩
+ 
+ /-- The refinement against `execFullA` directly (via `execFullA_setVK_iff_spec`). -/
+ theorem setVK_descriptorRefines_execFullA (compressN : List FieldElem → FieldElem)
+@@ -327,6 +329,7 @@ structure SetPermsTraceReadout (hash : List ℤ → ℤ)
+   frHeaps : post.kernel.heaps = pre.kernel.heaps
+   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
+   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
++  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
+ 
+ /-- **`setPermissions_forced_sat` — the perms slot is FORCED by the DEPLOYED `setPermsV3` (Class A).** -/
+ theorem setPermissions_forced_sat (hash : List ℤ → ℤ)
+@@ -372,7 +375,7 @@ theorem setPermissions_descriptorRefines_sat (hash : List ℤ → ℤ)
+   exact ⟨rd.guard, hcellMap, rd.logAdv, rd.frAccounts, rd.frCaps,
+     rd.frNullifiers, rd.frRevoked, rd.frCommitments, rd.frBal, rd.frSlotCaveats,
+     rd.frFactories, rd.frLifecycle, rd.frDeathCert, rd.frDelegate, rd.frDelegations,
+-    rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot⟩
++    rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot, rd.frCommitmentsRoot⟩
+ 
+ /-- **CLASS-A TOOTH — a forged setPermissions witness is UNSAT.** -/
+ theorem setPermissions_sat_rejects_wrong_value (hash : List ℤ → ℤ)
+@@ -423,6 +426,7 @@ structure SetVKTraceReadout (hash : List ℤ → ℤ)
+   frHeaps : post.kernel.heaps = pre.kernel.heaps
+   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
+   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
++  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
+ 
+ /-- **`setVK_forced_sat` — the vk slot is FORCED by the DEPLOYED `setVKV3` (Class A).** -/
+ theorem setVK_forced_sat (hash : List ℤ → ℤ)
+@@ -465,7 +469,7 @@ theorem setVK_descriptorRefines_sat (hash : List ℤ → ℤ)
+   exact ⟨rd.guard, hcellMap, rd.logAdv, rd.frAccounts, rd.frCaps,
+     rd.frNullifiers, rd.frRevoked, rd.frCommitments, rd.frBal, rd.frSlotCaveats,
+     rd.frFactories, rd.frLifecycle, rd.frDeathCert, rd.frDelegate, rd.frDelegations,
+-    rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot⟩
++    rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot, rd.frCommitmentsRoot⟩
+ 
+ /-- **CLASS-A TOOTH — a forged setVK witness is UNSAT.** -/
+ theorem setVK_sat_rejects_wrong_value (hash : List ℤ → ℤ)
+@@ -516,6 +520,7 @@ structure emitEventEncodes (pre post : RecChainedState) (actor cell : CellId) :
+   frHeaps : post.kernel.heaps = pre.kernel.heaps
+   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
+   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
++  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
+ 
+ /-- **`emitEvent_descriptorRefines` — THE CIRCUIT→KERNEL REFINEMENT for emitEvent, against the LIVE
+ descriptor.** A satisfying LIVE emitEvent witness (its kernel frame forced by the deployed
+@@ -529,7 +534,7 @@ theorem emitEvent_descriptorRefines
+   ⟨henc.guard, henc.logAdv, henc.frAccounts, henc.frCell, henc.frCaps,
+     henc.frNullifiers, henc.frRevoked, henc.frCommitments, henc.frBal, henc.frSlotCaveats,
+     henc.frFactories, henc.frLifecycle, henc.frDeathCert, henc.frDelegate, henc.frDelegations,
+-    henc.frDelegationEpoch, henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot⟩
++    henc.frDelegationEpoch, henc.frDelegationEpochAt, henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot, henc.frCommitmentsRoot⟩
+ 
+ /-- The refinement against `execFullA` directly (via `execFullA_emitEvent_iff_spec`). -/
+ theorem emitEvent_descriptorRefines_execFullA
+diff --git a/metatheory/Dregg2/Circuit/RotatedKernelRefinementProgram.lean b/metatheory/Dregg2/Circuit/RotatedKernelRefinementProgram.lean
+index dcac680fa..3a65ec388 100644
+--- a/metatheory/Dregg2/Circuit/RotatedKernelRefinementProgram.lean
++++ b/metatheory/Dregg2/Circuit/RotatedKernelRefinementProgram.lean
+@@ -102,6 +102,7 @@ structure SetProgramTraceReadout (compressN : List ℤ → ℤ) (hash : List ℤ
+   frHeaps : post.kernel.heaps = pre.kernel.heaps
+   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
+   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
++  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
+ 
+ /-- The DEPLOYED `setProgramV3` is graduable (the record-pin shape, REUSING the setVK v1 face). -/
+ theorem setProgram_rcp_graduable :
+@@ -152,7 +153,7 @@ theorem setProgram_descriptorRefines_sat (compressN : List ℤ → ℤ)
+   ⟨rd.guard, rd.cellMapMove, rd.logAdv, rd.frAccounts, rd.frCaps,
+     rd.frNullifiers, rd.frRevoked, rd.frCommitments, rd.frBal, rd.frSlotCaveats,
+     rd.frFactories, rd.frLifecycle, rd.frDeathCert, rd.frDelegate, rd.frDelegations,
+-    rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot⟩
++    rd.frDelegationEpoch, rd.frDelegationEpochAt, rd.frHeaps, rd.frNullifierRoot, rd.frRevokedRoot, rd.frCommitmentsRoot⟩
+ 
+ /-- **CLASS-A TOOTH — a frozen-program forgery is UNSAT.** A readout whose post `cell` program slot is
+ NOT the declared `prog` cannot ride a satisfying `setProgramV3` witness — the deployed record pin bites.
+diff --git a/metatheory/Dregg2/Circuit/RotatedKernelRefinementSetField.lean b/metatheory/Dregg2/Circuit/RotatedKernelRefinementSetField.lean
+index 23c9b0eaa..2b32f48bb 100644
+--- a/metatheory/Dregg2/Circuit/RotatedKernelRefinementSetField.lean
++++ b/metatheory/Dregg2/Circuit/RotatedKernelRefinementSetField.lean
+@@ -193,6 +193,7 @@ structure rotatedEncodesSF (slot : Fin 8) (hash : List ℤ → ℤ)
+   frHeaps : post.kernel.heaps = pre.kernel.heaps
+   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
+   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
++  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
+ 
+ /-! ## §3 — the apex obligation: the circuit FORCES the written value.
+ 
+@@ -248,7 +249,7 @@ theorem setField_descriptorRefines (slot : Fin 8) (hash : List ℤ → ℤ)
+     henc.frAccounts, henc.frCaps, henc.frNullifiers, henc.frRevoked, henc.frCommitments,
+     henc.frBal, henc.frSlotCaveats, henc.frFactories, henc.frLifecycle, henc.frDeathCert,
+     henc.frDelegate, henc.frDelegations, henc.frDelegationEpoch, henc.frDelegationEpochAt,
+-    henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot⟩
++    henc.frHeaps, henc.frNullifierRoot, henc.frRevokedRoot, henc.frCommitmentsRoot⟩
+ 
+ /-- **The refinement, stated against `fullActionStep` directly.** `SetFieldSpec` IS the `.setFieldA`
+ arm of the kernel dispatcher, so a satisfying rotated setField witness forces
+diff --git a/metatheory/Dregg2/Circuit/Spec/accountgrowth.lean b/metatheory/Dregg2/Circuit/Spec/accountgrowth.lean
+index 32a90c21f..a4f0e70de 100644
+--- a/metatheory/Dregg2/Circuit/Spec/accountgrowth.lean
++++ b/metatheory/Dregg2/Circuit/Spec/accountgrowth.lean
+@@ -80,7 +80,8 @@ private theorem recordKernel_eq_of_fields {k k' : RecordKernelState}
+     (hdelegationEpochAt : k.delegationEpochAt = k'.delegationEpochAt)
+     (hheaps : k.heaps = k'.heaps)
+     (hnullifierRoot : k.nullifierRoot = k'.nullifierRoot)
+-    (hrevokedRoot : k.revokedRoot = k'.revokedRoot) : k = k' := by
++    (hrevokedRoot : k.revokedRoot = k'.revokedRoot)
++    (hcommitmentsRoot : k.commitmentsRoot = k'.commitmentsRoot) : k = k' := by
+   cases k; cases k'; simp_all
+ 
+ /-! ## §1 — the admissibility guards, lifted from the CODE. -/
+@@ -191,6 +192,7 @@ def CreateCellSpec (st : RecChainedState) (actor newCell : CellId) (st' : RecCha
+   ∧ st'.kernel.heaps = st.kernel.heaps
+   ∧ st'.kernel.nullifierRoot = st.kernel.nullifierRoot
+   ∧ st'.kernel.revokedRoot = st.kernel.revokedRoot
++  ∧ st'.kernel.commitmentsRoot = st.kernel.commitmentsRoot
+ 
+ /-- **`createCellChainA_iff_spec` — CHAINED EXECUTOR ⟺ SPEC (FULL state, both directions).** The
+ chained record kernel commits a `createCellA` into `st'` IFF `st'` is EXACTLY the spec'd full
+@@ -209,17 +211,17 @@ theorem createCellChainA_iff_spec (st : RecChainedState) (actor newCell : CellId
+     · intro h
+       simp only [Option.some.injEq] at h
+       subst h
+-      refine ⟨hg, rfl, ?_, ?_, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
++      refine ⟨hg, rfl, ?_, ?_, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+       · dsimp only [bornEmptyAt]
+         refine ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+       · simp only [createReceipt]
+-    · rintro ⟨_, hacc, hborn, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9⟩
++    · rintro ⟨_, hacc, hborn, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10⟩
+       obtain ⟨k', lg'⟩ := st'
+-      obtain ⟨acc, cl, cp, nl, rv, cm, bl, sc, fc, lc, dc, dl, dn, dge, dgea, hp, nr, rr⟩ := k'
++      obtain ⟨acc, cl, cp, nl, rv, cm, bl, sc, fc, lc, dc, dl, dn, dge, dgea, hp, nr, rr, cr⟩ := k'
+       dsimp only [bornEmptyAt] at hborn
+       obtain ⟨hcl, hcp, hdel, hdgs, hsc, hlif, hdc, hbal⟩ := hborn
+-      simp only at hacc hcl hcp hdel hdgs hsc hlif hdc hbal hlog h1 h2 h3 h4 h5 h6 h7 h8 h9
+-      subst hacc hcl hcp hdel hdgs hsc hlif hdc hbal hlog h1 h2 h3 h4 h5 h6 h7 h8 h9
++      simp only at hacc hcl hcp hdel hdgs hsc hlif hdc hbal hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10
++      subst hacc hcl hcp hdel hdgs hsc hlif hdc hbal hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10
+       rfl
+   · rw [if_neg hg]
+     constructor
+@@ -395,6 +397,7 @@ def SpawnSpec (st : RecChainedState) (actor child target : CellId) (st' : RecCha
+   ∧ st'.kernel.heaps = st.kernel.heaps
+   ∧ st'.kernel.nullifierRoot = st.kernel.nullifierRoot
+   ∧ st'.kernel.revokedRoot = st.kernel.revokedRoot
++  ∧ st'.kernel.commitmentsRoot = st.kernel.commitmentsRoot
+ 
+ /-- The post `delegationEpochAt` stamp map a committed `spawnA` produces: the child is stamped with the
+ spawner-parent's CURRENT `delegationEpoch` (so the freshly-born child is NOT stale even under a nonzero
+@@ -429,6 +432,7 @@ def SpawnFullSpec (st : RecChainedState) (actor child target : CellId) (st' : Re
+   ∧ st'.kernel.heaps = st.kernel.heaps
+   ∧ st'.kernel.nullifierRoot = st.kernel.nullifierRoot
+   ∧ st'.kernel.revokedRoot = st.kernel.revokedRoot
++  ∧ st'.kernel.commitmentsRoot = st.kernel.commitmentsRoot
+ 
+ /-- **`SpawnFullSpec_implies_SpawnSpec` — the strengthened spec REFINES the frozen face.** Every clause of
+ `SpawnSpec` (the deployed descriptor's spec) holds of a `SpawnFullSpec` post EXCEPT the `delegationEpochAt`
+@@ -455,7 +459,7 @@ theorem SpawnFullSpec_dropEpochAt (st : RecChainedState) (actor child target : C
+     ∧ st'.kernel.delegationEpoch = st.kernel.delegationEpoch
+     ∧ st'.kernel.heaps = st.kernel.heaps
+     ∧ st'.kernel.nullifierRoot = st.kernel.nullifierRoot
+-    ∧ st'.kernel.revokedRoot = st.kernel.revokedRoot := by
++    ∧ st'.kernel.revokedRoot = st.kernel.revokedRoot ∧ st'.kernel.commitmentsRoot = st.kernel.commitmentsRoot := by
+   obtain ⟨hg, hacc, hcl, hsc, hlif, hdc, hbal, hcaps, hdel, hdgs, hlog, h2, h3, h4, h5,
+          hde, _hdea, hhp, hnr, hrr⟩ := h
+   exact ⟨hg, hacc, hcl, hsc, hlif, hdc, hbal, hcaps, hdel, hdgs, hlog, h2, h3, h4, h5, hde, hhp,
+@@ -482,7 +486,7 @@ theorem spawnChainA_iff_spec (st : RecChainedState) (actor child target : CellId
+         simp only [Option.some.injEq] at h
+         subst h
+         refine ⟨⟨hg.1, hg.2, hc⟩, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, rfl, rfl, rfl, rfl,
+-               rfl, ?_, rfl, rfl, rfl⟩
++               rfl, ?_, rfl, rfl, rfl, rfl⟩
+         · funext c; by_cases hc' : c = child <;> simp [hc']
+         · funext c; by_cases hc' : c = child <;> simp [hc']
+         · funext c; by_cases hc' : c = child <;> simp [hc']
+@@ -494,12 +498,12 @@ theorem spawnChainA_iff_spec (st : RecChainedState) (actor child target : CellId
+         · simp only [createReceipt]
+         · funext c; by_cases hc' : c = child <;> simp [hc']
+       · rintro ⟨⟨he, ht, hca⟩, hacc, hcl, hsc, hlif, hdc, hbal, hcaps, hdel, hdgs, hlog, h2,
+-                h3, h4, h5, hde, hdea, hhp, hnr, hrr⟩
++                h3, h4, h5, hde, hdea, hhp, hnr, hrr, hcr⟩
+         simp only [Option.some.injEq]
+         obtain ⟨k', lg'⟩ := st'
+-        obtain ⟨acc, cl, cp, nl, rv, cm, bl, sc, fc, lc, dc, dl, dn, dge, dgea, hp, nr, rr⟩ := k'
+-        simp only at hacc hcl hsc hlif hdc hbal hcaps hdel hdgs hlog h2 h3 h4 h5 hde hdea hhp hnr hrr
+-        subst hacc hcl hsc hlif hdc hbal hcaps hdel hdgs hlog h2 h3 h4 h5 hde hdea hhp hnr hrr
++        obtain ⟨acc, cl, cp, nl, rv, cm, bl, sc, fc, lc, dc, dl, dn, dge, dgea, hp, nr, rr, cr⟩ := k'
++        simp only at hacc hcl hsc hlif hdc hbal hcaps hdel hdgs hlog h2 h3 h4 h5 hde hdea hhp hnr hrr hcr
++        subst hacc hcl hsc hlif hdc hbal hcaps hdel hdgs hlog h2 h3 h4 h5 hde hdea hhp hnr hrr hcr
+         rfl
+     · rw [if_neg hc]
+       constructor
+diff --git a/metatheory/Dregg2/Circuit/Spec/authorityattenuation.lean b/metatheory/Dregg2/Circuit/Spec/authorityattenuation.lean
+index 56a1d4132..87a1a58b9 100644
+--- a/metatheory/Dregg2/Circuit/Spec/authorityattenuation.lean
++++ b/metatheory/Dregg2/Circuit/Spec/authorityattenuation.lean
+@@ -107,6 +107,7 @@ def DelegateAttenSpec (s : RecChainedState) (del rec t : CellId) (keep : List Au
+   ∧ s'.kernel.heaps = s.kernel.heaps
+   ∧ s'.kernel.nullifierRoot = s.kernel.nullifierRoot
+   ∧ s'.kernel.revokedRoot = s.kernel.revokedRoot
++  ∧ s'.kernel.commitmentsRoot = s.kernel.commitmentsRoot
+ 
+ /-- **`delegateAtten_iff_spec` — EXECUTOR ⟺ SPEC (FULL state, both directions).** The full executor
+ `execFullA` commits a `delegateAttenA del rec t keep` into `s'` IFF `s'` is EXACTLY the spec'd full
+@@ -126,15 +127,15 @@ theorem delegateAtten_iff_spec (s : RecChainedState) (del rec t : CellId) (keep
+       simp only [Option.some.injEq] at h
+       subst h
+       exact ⟨hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
+-        rfl, rfl⟩
++        rfl, rfl, rfl⟩
+     · rintro ⟨_, hcaps, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16,
+-              h17⟩
++              h17, h18⟩
+       -- reconstruct `s'` from its (kernel field-by-field) + log spec.
+       obtain ⟨k', log'⟩ := s'
+-      obtain ⟨acc, cell, caps, nul, rev, com, bal, sc, fac, lc, dc, dg, dgs, dge, dgea, hp, nr, rr⟩
++      obtain ⟨acc, cell, caps, nul, rev, com, bal, sc, fac, lc, dc, dg, dgs, dge, dgea, hp, nr, rr, cr⟩
+         := k'
+-      simp only at hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
+-      subst hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
++      simp only at hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
++      subst hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+       rfl
+   · rw [if_neg hg]
+     constructor
+@@ -194,6 +195,7 @@ def AttenuateSpec (s : RecChainedState) (actor : CellId) (idx : Nat) (keep : Lis
+   ∧ s'.kernel.heaps = s.kernel.heaps
+   ∧ s'.kernel.nullifierRoot = s.kernel.nullifierRoot
+   ∧ s'.kernel.revokedRoot = s.kernel.revokedRoot
++  ∧ s'.kernel.commitmentsRoot = s.kernel.commitmentsRoot
+ 
+ /-- **`attenuate_iff_spec` — EXECUTOR ⟺ SPEC (FULL state, both directions).** `execFullA` commits an
+ `attenuateA actor idx keep` (always — it is a TOTAL `some …` arm) into `s'` IFF `s'` is EXACTLY the
+@@ -213,14 +215,14 @@ theorem attenuate_iff_spec (s : RecChainedState) (actor : CellId) (idx : Nat) (k
+     · intro h
+       subst h
+       exact ⟨hb, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
+-        rfl, rfl⟩
++        rfl, rfl, rfl⟩
+     · rintro ⟨_, hcaps, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16,
+-              h17⟩
++              h17, h18⟩
+       obtain ⟨k', log'⟩ := s'
+-      obtain ⟨acc, cell, caps, nul, rev, com, bal, sc, fac, lc, dc, dg, dgs, dge, dgea, hp, nr, rr⟩
++      obtain ⟨acc, cell, caps, nul, rev, com, bal, sc, fac, lc, dc, dg, dgs, dge, dgea, hp, nr, rr, cr⟩
+         := k'
+-      simp only at hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
+-      subst hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
++      simp only at hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
++      subst hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+       rfl
+   · rw [if_neg hb]
+     constructor
+diff --git a/metatheory/Dregg2/Circuit/Spec/authorityrevocation.lean b/metatheory/Dregg2/Circuit/Spec/authorityrevocation.lean
+index 4691ce465..001b1f2a4 100644
+--- a/metatheory/Dregg2/Circuit/Spec/authorityrevocation.lean
++++ b/metatheory/Dregg2/Circuit/Spec/authorityrevocation.lean
+@@ -141,6 +141,7 @@ def RevokeSpec (st : RecChainedState) (holder t : CellId) (st' : RecChainedState
+   ∧ st'.kernel.heaps = st.kernel.heaps
+   ∧ st'.kernel.nullifierRoot = st.kernel.nullifierRoot
+   ∧ st'.kernel.revokedRoot = st.kernel.revokedRoot
++  ∧ st'.kernel.commitmentsRoot = st.kernel.commitmentsRoot
+ 
+ /-! ## §3 — The executor ⟺ spec equivalence, shared core then per-variant. -/
+ 
+@@ -156,20 +157,20 @@ theorem recCRevoke_iff_spec (st : RecChainedState) (holder t : CellId) (st' : Re
+   constructor
+   · intro h; subst h
+     refine ⟨trivial, ?_, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
+-      rfl, rfl⟩
++      rfl, rfl, rfl⟩
+     exact removeEdgeCaps_correct st.kernel holder t
+   · rintro ⟨_, hcaps, hlog, hacc, hcell, hnull, hrev, hcom, hbal, hsc, hfac, hlif,
+-           hdc, hdel, hdels, hde, hdea, hhp, hnr, hrr⟩
++           hdc, hdel, hdels, hde, hdea, hhp, hnr, hrr, hcr⟩
+     -- `st'` is the spec'd full post-state: rebuild the committed `RecChainedState` field-by-field.
+     -- The `caps` post (`removeEdgeCaps`) is the executor's `recKRevokeTarget` post (§1), so
+     -- `recCRevoke st holder t` has EXACTLY `st'`'s fields. Destructure `st'` so each spec field hyp
+     -- has a fresh field VAR to `subst`.
+     obtain ⟨k', log'⟩ := st'
+     obtain ⟨acc', cell', caps', null', rev', com', bal', sc', fac', lif', dc', del',
+-            dels', de', dea', hp', nr', rr'⟩ := k'
++            dels', de', dea', hp', nr', rr', cr'⟩ := k'
+     rw [← removeEdgeCaps_correct st.kernel holder t] at hcaps
+     subst hacc hcell hcaps hnull hrev hcom hbal hsc hfac hlif hdc hdel hdels hlog
+-      hde hdea hhp hnr hrr
++      hde hdea hhp hnr hrr hcr
+     rfl
+ 
+ /-- **`execFullA_revoke_iff_spec` — EXECUTOR ⟺ SPEC for the `revoke` arm (FULL state, both
+@@ -218,6 +219,7 @@ def RevokeDelegationFullSpec (st : RecChainedState) (parent child : CellId)
+   ∧ st'.kernel.heaps = st.kernel.heaps
+   ∧ st'.kernel.nullifierRoot = st.kernel.nullifierRoot
+   ∧ st'.kernel.revokedRoot = st.kernel.revokedRoot
++  ∧ st'.kernel.commitmentsRoot = st.kernel.commitmentsRoot
+   -- THE EPOCH STEP (legs 2+3), no longer framed-unchanged:
+   ∧ st'.kernel.delegationEpoch
+       = (fun c => if c = parent then st.kernel.delegationEpoch c + 1 else st.kernel.delegationEpoch c)
+@@ -239,7 +241,7 @@ theorem recCRevokeDelegationFull_iff_spec (st : RecChainedState) (parent child :
+   constructor
+   · intro h; subst h
+     refine ⟨trivial, ?_, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
+-            rfl, rfl, rfl, rfl, rfl⟩
++            rfl, rfl, rfl, rfl, rfl, rfl⟩
+     -- the `caps` post is the shared `recKRevokeTarget` post = `removeEdgeCaps` (the epoch legs touch
+     -- no `caps`, so `recKRevokeDelegationFull_caps` carries the §1 equality verbatim).
+     exact removeEdgeCaps_correct st.kernel parent child
+@@ -247,7 +249,7 @@ theorem recCRevokeDelegationFull_iff_spec (st : RecChainedState) (parent child :
+            hdc, hdel, hhp, hnr, hrr, hde, hdels, hdea⟩
+     obtain ⟨k', log'⟩ := st'
+     obtain ⟨acc', cell', caps', null', rev', com', bal', sc', fac', lif', dc', del',
+-            dels', de', dea', hp', nr', rr'⟩ := k'
++            dels', de', dea', hp', nr', rr', cr'⟩ := k'
+     rw [← removeEdgeCaps_correct st.kernel parent child] at hcaps
+     subst hacc hcell hcaps hnull hrev hcom hbal hsc hfac hlif hdc hdel hhp hnr hrr hde hdels hdea
+       hlog
+diff --git a/metatheory/Dregg2/Circuit/Spec/authorityunattenuated.lean b/metatheory/Dregg2/Circuit/Spec/authorityunattenuated.lean
+index d60117e18..dbb6b21a9 100644
+--- a/metatheory/Dregg2/Circuit/Spec/authorityunattenuated.lean
++++ b/metatheory/Dregg2/Circuit/Spec/authorityunattenuated.lean
+@@ -129,6 +129,7 @@ def DelegateSpec (s : RecChainedState) (del rec t : CellId) (s' : RecChainedStat
+   ∧ s'.kernel.heaps = s.kernel.heaps
+   ∧ s'.kernel.nullifierRoot = s.kernel.nullifierRoot
+   ∧ s'.kernel.revokedRoot = s.kernel.revokedRoot
++  ∧ s'.kernel.commitmentsRoot = s.kernel.commitmentsRoot
+ 
+ /-! ## §4 — EXECUTOR ⟺ SPEC (FULL state, both directions).
+ 
+@@ -150,14 +151,14 @@ theorem recCDelegate_iff_spec (s : RecChainedState) (del rec t : CellId) (s' : R
+       simp only [Option.some.injEq] at h
+       subst h
+       exact ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
+-        rfl, rfl⟩
++        rfl, rfl, rfl⟩
+     · rintro ⟨hcaps, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16,
+-              h17⟩
++              h17, h18⟩
+       -- reconstruct `s'` from its 20 components.
+       obtain ⟨k', log'⟩ := s'
+-      obtain ⟨acc, cl, cp, nul, rev, com, bl, slc, fac, lc, dc, dg, dgs, dge, dgea, hp, nr, rr⟩ := k'
+-      simp only at hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
+-      subst hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
++      obtain ⟨acc, cl, cp, nul, rev, com, bl, slc, fac, lc, dc, dg, dgs, dge, dgea, hp, nr, rr, cr⟩ := k'
++      simp only at hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
++      subst hcaps hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+       rfl
+   · rw [if_neg hg]
+     constructor
+diff --git a/metatheory/Dregg2/Circuit/Spec/balancemovement.lean b/metatheory/Dregg2/Circuit/Spec/balancemovement.lean
+index 3ea60509e..21d4cfe83 100644
+--- a/metatheory/Dregg2/Circuit/Spec/balancemovement.lean
++++ b/metatheory/Dregg2/Circuit/Spec/balancemovement.lean
+@@ -140,6 +140,7 @@ def BalanceMovementSpec (st : RecChainedState) (t : Turn) (a : AssetId) (st' : R
+   ∧ st'.kernel.heaps = st.kernel.heaps
+   ∧ st'.kernel.nullifierRoot = st.kernel.nullifierRoot
+   ∧ st'.kernel.revokedRoot = st.kernel.revokedRoot
++  ∧ st'.kernel.commitmentsRoot = st.kernel.commitmentsRoot
+ 
+ /-- **`recCexecAsset_iff_spec` — EXECUTOR ⟺ SPEC (FULL state, both directions)** on the chained
+ per-asset executor. `recCexecAsset` commits a movement into `st'` IFF `st'` is EXACTLY the spec'd full
+@@ -161,14 +162,14 @@ theorem recCexecAsset_iff_spec (st : RecChainedState) (t : Turn) (a : AssetId) (
+         subst h
+         rcases hg with ⟨ha, hnn, havail, hne, hsrc, hdst, hsrclive⟩
+         exact ⟨⟨ha, hnn, havail, hne, hsrc, hdst, hsrclive, hadm⟩, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
+-               rfl, rfl, rfl, rfl, rfl⟩
++               rfl, rfl, rfl, rfl, rfl, rfl⟩
+       · rintro ⟨hguard, hbal, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15,
+-                h16, h17⟩
++                h16, h17, h18⟩
+         obtain ⟨k', l'⟩ := st'
+-        obtain ⟨acc, cell, caps, nul, rev, com, bal, sc, fac, lc, dc, dg, dgs, dge, dgea, hp, nr, rr⟩
++        obtain ⟨acc, cell, caps, nul, rev, com, bal, sc, fac, lc, dc, dg, dgs, dge, dgea, hp, nr, rr, cr⟩
+           := k'
+-        simp only at hbal hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
+-        subst hbal hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
++        simp only at hbal hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
++        subst hbal hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+         rfl
+     · rw [if_pos hadm, if_neg hg]
+       constructor
+diff --git a/metatheory/Dregg2/Circuit/Spec/bridgeinboundmint.lean b/metatheory/Dregg2/Circuit/Spec/bridgeinboundmint.lean
+index 8ebc94f62..b1f6100f4 100644
+--- a/metatheory/Dregg2/Circuit/Spec/bridgeinboundmint.lean
++++ b/metatheory/Dregg2/Circuit/Spec/bridgeinboundmint.lean
+@@ -148,6 +148,7 @@ def InboundMintSpec (st : RecChainedState) (actor cell : CellId) (a : AssetId) (
+   ∧ st'.kernel.heaps = st.kernel.heaps
+   ∧ st'.kernel.nullifierRoot = st.kernel.nullifierRoot
+   ∧ st'.kernel.revokedRoot = st.kernel.revokedRoot
++  ∧ st'.kernel.commitmentsRoot = st.kernel.commitmentsRoot
+ 
+ /-- **`recCMintAsset_iff_inboundSpec` — CHAINED EXECUTOR ⟺ SPEC (FULL state, both directions).** The
+ chained record kernel commits a `bridgeMintA` (via `recCMintAsset`) into `st'` IFF `st'` is EXACTLY
+@@ -167,14 +168,14 @@ theorem recCMintAsset_iff_inboundSpec (st : RecChainedState) (actor cell : CellI
+       simp only [Option.some.injEq] at h
+       subst h
+       exact ⟨hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
+-        rfl, rfl⟩
++        rfl, rfl, rfl⟩
+     · rintro ⟨_, hbal, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16,
+-              h17⟩
++              h17, h18⟩
+       -- reconstruct st' from the spec: split both records and substitute every field.
+       obtain ⟨k', lg'⟩ := st'
+-      obtain ⟨acc, cl, cp, nl, rv, cm, bl, sc, fc, lc, dc, dl, dn, dge, dgea, hp, nr, rr⟩ := k'
+-      simp only at hbal hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
+-      subst hbal hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
++      obtain ⟨acc, cl, cp, nl, rv, cm, bl, sc, fc, lc, dc, dl, dn, dge, dgea, hp, nr, rr, cr⟩ := k'
++      simp only at hbal hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
++      subst hbal hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+       rfl
+   · rw [if_neg hg]
+     constructor
+diff --git a/metatheory/Dregg2/Circuit/Spec/celllifecycle.lean b/metatheory/Dregg2/Circuit/Spec/celllifecycle.lean
+index 11c456da3..0d35999e7 100644
+--- a/metatheory/Dregg2/Circuit/Spec/celllifecycle.lean
++++ b/metatheory/Dregg2/Circuit/Spec/celllifecycle.lean
+@@ -31,11 +31,11 @@ theorem recKernel_ext {k k' : RecordKernelState}
+     (h15 : k'.delegations = k.delegations)
+     (h17 : k'.delegationEpoch = k.delegationEpoch) (h18 : k'.delegationEpochAt = k.delegationEpochAt)
+     (h19 : k'.heaps = k.heaps)
+-    (h20 : k'.nullifierRoot = k.nullifierRoot) (h21 : k'.revokedRoot = k.revokedRoot) :
++    (h20 : k'.nullifierRoot = k.nullifierRoot) (h21 : k'.revokedRoot = k.revokedRoot) (h22 : k'.commitmentsRoot = k.commitmentsRoot) :
+     k' = k := by
+   cases k; cases k'
+-  simp only at h1 h2 h3 h4 h5 h6 h7 h10 h11 h12 h13 h14 h15 h17 h18 h19 h20 h21
+-  subst h1 h2 h3 h4 h5 h6 h7 h10 h11 h12 h13 h14 h15 h17 h18 h19 h20 h21
++  simp only at h1 h2 h3 h4 h5 h6 h7 h10 h11 h12 h13 h14 h15 h17 h18 h19 h20 h21 h22
++  subst h1 h2 h3 h4 h5 h6 h7 h10 h11 h12 h13 h14 h15 h17 h18 h19 h20 h21 h22
+   rfl
+ 
+ /-! ## §1 — `cellSealA`: Live → Sealed. -/
+@@ -66,6 +66,7 @@ def CellSealSpec (s : RecChainedState) (actor cell : CellId) (s' : RecChainedSta
+   ∧ s'.kernel.heaps = s.kernel.heaps
+   ∧ s'.kernel.nullifierRoot = s.kernel.nullifierRoot
+   ∧ s'.kernel.revokedRoot = s.kernel.revokedRoot
++  ∧ s'.kernel.commitmentsRoot = s.kernel.commitmentsRoot
+ 
+ /-- **`cellSeal_iff_spec` — EXECUTOR ⟺ SPEC (FULL state, both directions).** -/
+ theorem cellSeal_iff_spec (s : RecChainedState) (actor cell : CellId) (s' : RecChainedState) :
+@@ -79,14 +80,14 @@ theorem cellSeal_iff_spec (s : RecChainedState) (actor cell : CellId) (s' : RecC
+       simp only [Option.some.injEq] at h
+       subst h
+       exact ⟨hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
+-        rfl, rfl⟩
++        rfl, rfl, rfl⟩
+     · rintro ⟨_, hlif, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16,
+-              h17⟩
++              h17, h18⟩
+       obtain ⟨k', lg'⟩ := s'
+-      obtain ⟨acc, cellm, caps, nul, rev, com, bal, sc, fac, lc, dc, dg, dgs, dge, dgea, hp, nr, rr⟩
++      obtain ⟨acc, cellm, caps, nul, rev, com, bal, sc, fac, lc, dc, dg, dgs, dge, dgea, hp, nr, rr, cr⟩
+         := k'
+-      simp only at hlif hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
+-      subst hlif hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
++      simp only at hlif hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
++      subst hlif hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+       rfl
+   · rw [if_neg hg]
+     constructor
+@@ -120,6 +121,7 @@ def CellUnsealSpec (s : RecChainedState) (actor cell : CellId) (s' : RecChainedS
+   ∧ s'.kernel.heaps = s.kernel.heaps
+   ∧ s'.kernel.nullifierRoot = s.kernel.nullifierRoot
+   ∧ s'.kernel.revokedRoot = s.kernel.revokedRoot
++  ∧ s'.kernel.commitmentsRoot = s.kernel.commitmentsRoot
+ 
+ /-- **`cellUnseal_iff_spec` — EXECUTOR ⟺ SPEC (FULL state, both directions).** -/
+ theorem cellUnseal_iff_spec (s : RecChainedState) (actor cell : CellId) (s' : RecChainedState) :
+@@ -133,14 +135,14 @@ theorem cellUnseal_iff_spec (s : RecChainedState) (actor cell : CellId) (s' : Re
+       simp only [Option.some.injEq] at h
+       subst h
+       exact ⟨hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
+-        rfl, rfl⟩
++        rfl, rfl, rfl⟩
+     · rintro ⟨_, hlif, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16,
+-              h17⟩
++              h17, h18⟩
+       obtain ⟨k', lg'⟩ := s'
+-      obtain ⟨acc, cellm, caps, nul, rev, com, bal, sc, fac, lc, dc, dg, dgs, dge, dgea, hp, nr, rr⟩
++      obtain ⟨acc, cellm, caps, nul, rev, com, bal, sc, fac, lc, dc, dg, dgs, dge, dgea, hp, nr, rr, cr⟩
+         := k'
+-      simp only at hlif hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
+-      subst hlif hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
++      simp only at hlif hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
++      subst hlif hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+       rfl
+   · rw [if_neg hg]
+     constructor
+@@ -180,6 +182,7 @@ def CellDestroySpec (s : RecChainedState) (actor cell : CellId) (certHash : Nat)
+   ∧ s'.kernel.heaps = s.kernel.heaps
+   ∧ s'.kernel.nullifierRoot = s.kernel.nullifierRoot
+   ∧ s'.kernel.revokedRoot = s.kernel.revokedRoot
++  ∧ s'.kernel.commitmentsRoot = s.kernel.commitmentsRoot
+ 
+ /-- **`cellDestroy_iff_spec` — EXECUTOR ⟺ SPEC (FULL state, both directions).** -/
+ theorem cellDestroy_iff_spec (s : RecChainedState) (actor cell : CellId) (certHash : Nat)
+@@ -195,14 +198,14 @@ theorem cellDestroy_iff_spec (s : RecChainedState) (actor cell : CellId) (certHa
+       simp only [Option.some.injEq] at h
+       subst h
+       exact ⟨hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
+-        rfl, rfl⟩
++        rfl, rfl, rfl⟩
+     · rintro ⟨_, hlif, hdc, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15,
+-              h16⟩
++              h16, h17⟩
+       obtain ⟨k', lg'⟩ := s'
+-      obtain ⟨acc, cellm, caps, nul, rev, com, bal, sc, fac, lc, dc, dg, dgs, dge, dgea, hp, nr, rr⟩
++      obtain ⟨acc, cellm, caps, nul, rev, com, bal, sc, fac, lc, dc, dg, dgs, dge, dgea, hp, nr, rr, cr⟩
+         := k'
+-      simp only at hlif hdc hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16
+-      subst hlif hdc hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16
++      simp only at hlif hdc hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
++      subst hlif hdc hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
+       rfl
+   · rw [if_neg hg]
+     constructor
+@@ -215,4 +218,4 @@ theorem cellDestroy_iff_spec (s : RecChainedState) (actor cell : CellId) (certHa
+ #assert_axioms cellUnseal_iff_spec
+ #assert_axioms cellDestroy_iff_spec
+ 
+-end Dregg2.Circuit.Spec.CellLifecycle
+\ No newline at end of file
++end Dregg2.Circuit.Spec.CellLifecycle
+diff --git a/metatheory/Dregg2/Circuit/Spec/cellstateaudit.lean b/metatheory/Dregg2/Circuit/Spec/cellstateaudit.lean
+index 4495f253b..740fb7356 100644
+--- a/metatheory/Dregg2/Circuit/Spec/cellstateaudit.lean
++++ b/metatheory/Dregg2/Circuit/Spec/cellstateaudit.lean
+@@ -152,7 +152,7 @@ theorem auditStateStep_iff_spec (s : RecChainedState) (f : FieldName) (actor cel
+         ∧ s'.kernel.delegationEpochAt = s.kernel.delegationEpochAt
+         ∧ s'.kernel.heaps = s.kernel.heaps
+         ∧ s'.kernel.nullifierRoot = s.kernel.nullifierRoot
+-        ∧ s'.kernel.revokedRoot = s.kernel.revokedRoot ) := by
++        ∧ s'.kernel.revokedRoot = s.kernel.revokedRoot ∧ s'.kernel.commitmentsRoot = s.kernel.commitmentsRoot ) := by
+   unfold stateStep
+   by_cases hg : stateAuthB s.kernel.caps actor cell = true ∧ cell ∈ s.kernel.accounts
+       ∧ cellLive s.kernel cell = true
+@@ -161,13 +161,13 @@ theorem auditStateStep_iff_spec (s : RecChainedState) (f : FieldName) (actor cel
+     · intro h
+       simp only [Option.some.injEq] at h; subst h
+       refine ⟨hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
+-        rfl, rfl⟩
++        rfl, rfl, rfl⟩
+     · rintro ⟨_, hcell, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16,
+-              h17⟩
++              h17, h18⟩
+       obtain ⟨k', l'⟩ := s'
+-      obtain ⟨a, ce, ca, nu, re, co, ba, sl, fa, li, dc, de, dg, dge, dgea, hp, nr, rr⟩ := k'
+-      simp only at hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
+-      subst hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
++      obtain ⟨a, ce, ca, nu, re, co, ba, sl, fa, li, dc, de, dg, dge, dgea, hp, nr, rr, cr⟩ := k'
++      simp only at hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
++      subst hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+       rfl
+   · rw [if_neg hg]
+     constructor
+@@ -205,6 +205,7 @@ def RefusalSpec (s : RecChainedState) (actor cell : CellId) (s' : RecChainedStat
+   ∧ s'.kernel.heaps = s.kernel.heaps
+   ∧ s'.kernel.nullifierRoot = s.kernel.nullifierRoot
+   ∧ s'.kernel.revokedRoot = s.kernel.revokedRoot
++  ∧ s'.kernel.commitmentsRoot = s.kernel.commitmentsRoot
+ 
+ /-- The `.refusalA` arm of `execFullA` is DEFINITIONALLY the bare authority-gated refusal-slot write
+ — the seam the whole bridge sits on. -/
+@@ -269,6 +270,7 @@ def ReceiptArchiveLifecycleSpec (s : RecChainedState) (actor cell : CellId)
+   ∧ s'.kernel.heaps = s.kernel.heaps
+   ∧ s'.kernel.nullifierRoot = s.kernel.nullifierRoot
+   ∧ s'.kernel.revokedRoot = s.kernel.revokedRoot
++  ∧ s'.kernel.commitmentsRoot = s.kernel.commitmentsRoot
+ 
+ /-- The `.receiptArchiveA` arm of `execFullA` is DEFINITIONALLY the DEPLOYED `receiptArchiveChainA`
+ (the `lifecycle := Archived` side-table move). -/
+@@ -290,13 +292,13 @@ theorem execFullA_receiptArchiveA_iff_lifecycleSpec (s : RecChainedState) (actor
+     · intro h
+       simp only [Option.some.injEq] at h; subst h
+       refine ⟨hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
+-        rfl, rfl⟩
++        rfl, rfl, rfl⟩
+     · rintro ⟨_, hlif, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16,
+-              h17⟩
++              h17, h18⟩
+       obtain ⟨k', l'⟩ := s'
+-      obtain ⟨a, ce, ca, nu, re, co, ba, sl, fa, li, dc, de, dg, dge, dgea, hp, nr, rr⟩ := k'
+-      simp only at hlif hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
+-      subst hlif hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
++      obtain ⟨a, ce, ca, nu, re, co, ba, sl, fa, li, dc, de, dg, dge, dgea, hp, nr, rr, cr⟩ := k'
++      simp only at hlif hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
++      subst hlif hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+       rfl
+   · rw [if_neg hg]
+     constructor
+@@ -325,6 +327,7 @@ def ReceiptArchiveSpec (s : RecChainedState) (actor cell : CellId) (s' : RecChai
+   ∧ s'.kernel.heaps = s.kernel.heaps
+   ∧ s'.kernel.nullifierRoot = s.kernel.nullifierRoot
+   ∧ s'.kernel.revokedRoot = s.kernel.revokedRoot
++  ∧ s'.kernel.commitmentsRoot = s.kernel.commitmentsRoot
+ 
+ /-- **`receiptArchiveRecordStep`** — the MODELLED record-slot write (the bare authority-gated
+ `"lifecycle"` RECORD-slot set-to-`1`). The semantics the `receiptArchiveE` arithmetization universe
+diff --git a/metatheory/Dregg2/Circuit/Spec/cellstatefield.lean b/metatheory/Dregg2/Circuit/Spec/cellstatefield.lean
+index 92e33ea98..f4879580b 100644
+--- a/metatheory/Dregg2/Circuit/Spec/cellstatefield.lean
++++ b/metatheory/Dregg2/Circuit/Spec/cellstatefield.lean
+@@ -142,6 +142,7 @@ def SetFieldSpec (s : RecChainedState) (actor cell : CellId) (f : FieldName) (v
+   ∧ s'.kernel.heaps = s.kernel.heaps
+   ∧ s'.kernel.nullifierRoot = s.kernel.nullifierRoot
+   ∧ s'.kernel.revokedRoot = s.kernel.revokedRoot
++  ∧ s'.kernel.commitmentsRoot = s.kernel.commitmentsRoot
+ 
+ /-! ## §4 — executor ⟺ spec (FULL state, both directions). -/
+ 
+@@ -224,17 +225,17 @@ theorem execFullA_setFieldA_iff_spec
+   constructor
+   · rintro ⟨hnr, hg, hs'⟩
+     subst hs'
+-    refine ⟨hnr, hg, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
++    refine ⟨hnr, hg, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+     · exact (setFieldCellMap_eq_writeField s.kernel cell f v).symm
+     all_goals rfl
+   · rintro ⟨hnr, hg, hcell, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15,
+-            h16, h17⟩
++            h16, h17, h18⟩
+     refine ⟨hnr, hg, ?_⟩
+     -- rebuild s' field-by-field: the touched cell map, the log, and the 18 frame fields, then η.
+     obtain ⟨k', lg'⟩ := s'
+-    obtain ⟨acc, cl, cps, nul, rev, cmt, bl, sc, fac, lc, dc, dg, dgs, dge, dgea, hp, nr, rr⟩ := k'
+-    simp only at hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
+-    subst hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
++    obtain ⟨acc, cl, cps, nul, rev, cmt, bl, sc, fac, lc, dc, dg, dgs, dge, dgea, hp, nr, rr, cr⟩ := k'
++    simp only at hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
++    subst hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+     -- the touched cell map: rewrite the declarative map to the executor's writeField form.
+     rw [setFieldCellMap_eq_writeField] at hcell
+     subst hcell
+diff --git a/metatheory/Dregg2/Circuit/Spec/cellstatelog.lean b/metatheory/Dregg2/Circuit/Spec/cellstatelog.lean
+index e7a285f39..9e9a9a516 100644
+--- a/metatheory/Dregg2/Circuit/Spec/cellstatelog.lean
++++ b/metatheory/Dregg2/Circuit/Spec/cellstatelog.lean
+@@ -97,11 +97,11 @@ theorem recKernel_ext {k k' : RecordKernelState}
+     (h15 : k'.delegations = k.delegations)
+     (h17 : k'.delegationEpoch = k.delegationEpoch) (h18 : k'.delegationEpochAt = k.delegationEpochAt)
+     (h19 : k'.heaps = k.heaps)
+-    (h20 : k'.nullifierRoot = k.nullifierRoot) (h21 : k'.revokedRoot = k.revokedRoot) :
++    (h20 : k'.nullifierRoot = k.nullifierRoot) (h21 : k'.revokedRoot = k.revokedRoot) (h22 : k'.commitmentsRoot = k.commitmentsRoot) :
+     k' = k := by
+   cases k; cases k'
+-  simp only at h1 h2 h3 h4 h5 h6 h7 h10 h11 h12 h13 h14 h15 h17 h18 h19 h20 h21
+-  subst h1 h2 h3 h4 h5 h6 h7 h10 h11 h12 h13 h14 h15 h17 h18 h19 h20 h21
++  simp only at h1 h2 h3 h4 h5 h6 h7 h10 h11 h12 h13 h14 h15 h17 h18 h19 h20 h21 h22
++  subst h1 h2 h3 h4 h5 h6 h7 h10 h11 h12 h13 h14 h15 h17 h18 h19 h20 h21 h22
+   rfl
+ 
+ /-! ## §4 — the FULL-STATE declarative spec of a committed `emitEventA` (the INDEPENDENT reference).
+@@ -134,6 +134,7 @@ def EmitEventSpec (st : RecChainedState) (actor cell : CellId) (topic data : Int
+   ∧ st'.kernel.heaps = st.kernel.heaps
+   ∧ st'.kernel.nullifierRoot = st.kernel.nullifierRoot
+   ∧ st'.kernel.revokedRoot = st.kernel.revokedRoot
++  ∧ st'.kernel.commitmentsRoot = st.kernel.commitmentsRoot
+ 
+ /-! ## §5 — `execFullA_emitEvent_iff_spec` — EXECUTOR ⟺ SPEC (FULL state, both directions). -/
+ 
+@@ -157,13 +158,13 @@ theorem execFullA_emitEvent_iff_spec (st : RecChainedState) (actor cell : CellId
+       subst h
+       -- the committed post-state is `emitStep …`; read its log + every kernel field off `emitStep`.
+       refine ⟨hlive, ?_, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
+-        rfl, rfl⟩
++        rfl, rfl, rfl⟩
+       simp only [emitStep, emitReceipt]
+     · rintro ⟨_, hlog, h1, h2, h3, h4, h5, h6, h7, h10, h11, h12, h13, h14, h15, h17, h18, h19, h20,
+-              h21⟩
++              h21, h22⟩
+       -- rebuild `st'` from the log post-image + the 20 kernel-field equalities.
+       have hk : st'.kernel = st.kernel :=
+-        recKernel_ext h1 h2 h3 h4 h5 h6 h7 h10 h11 h12 h13 h14 h15 h17 h18 h19 h20 h21
++        recKernel_ext h1 h2 h3 h4 h5 h6 h7 h10 h11 h12 h13 h14 h15 h17 h18 h19 h20 h21 h22
+       cases st' with
+       | mk k' lg' =>
+         simp only at hk hlog
+@@ -193,9 +194,9 @@ theorem execFullA_emitEvent_kernel {st st' : RecChainedState} {actor cell : Cell
+     {topic data : Int}
+     (h : execFullA st (.emitEventA actor cell topic data) = some st') :
+     st'.kernel = st.kernel := by
+-  obtain ⟨_, _, h1, h2, h3, h4, h5, h6, h7, h10, h11, h12, h13, h14, h15, h17, h18, h19, h20, h21⟩ :=
++  obtain ⟨_, _, h1, h2, h3, h4, h5, h6, h7, h10, h11, h12, h13, h14, h15, h17, h18, h19, h20, h21, h22⟩ :=
+     (execFullA_emitEvent_iff_spec st actor cell topic data st').mp h
+-  exact recKernel_ext h1 h2 h3 h4 h5 h6 h7 h10 h11 h12 h13 h14 h15 h17 h18 h19 h20 h21
++  exact recKernel_ext h1 h2 h3 h4 h5 h6 h7 h10 h11 h12 h13 h14 h15 h17 h18 h19 h20 h21 h22
+ 
+ /-- The executor COMMITS an `emitEventA` IFF the cell is live (the guard projection of the spec ↔). -/
+ theorem execFullA_emitEvent_commits_iff (st : RecChainedState) (actor cell : CellId)
+diff --git a/metatheory/Dregg2/Circuit/Spec/cellstatemonotone.lean b/metatheory/Dregg2/Circuit/Spec/cellstatemonotone.lean
+index 0e7639049..aedf6acaa 100644
+--- a/metatheory/Dregg2/Circuit/Spec/cellstatemonotone.lean
++++ b/metatheory/Dregg2/Circuit/Spec/cellstatemonotone.lean
+@@ -138,6 +138,7 @@ def IncrementNonceSpec (s : RecChainedState) (actor cell : CellId) (n : Int)
+   ∧ s'.kernel.heaps = s.kernel.heaps
+   ∧ s'.kernel.nullifierRoot = s.kernel.nullifierRoot
+   ∧ s'.kernel.revokedRoot = s.kernel.revokedRoot
++  ∧ s'.kernel.commitmentsRoot = s.kernel.commitmentsRoot
+ 
+ /-- **`stateStep_iff_spec` — the GENERIC `stateStep` characterization (executor⟺spec, full state).**
+ The bare `stateStep` (the shared engine of the whole cell-state-monotone family —
+@@ -166,7 +167,7 @@ theorem stateStep_iff_spec (s : RecChainedState) (f : FieldName) (actor cell : C
+         ∧ s'.kernel.delegationEpochAt = s.kernel.delegationEpochAt
+         ∧ s'.kernel.heaps = s.kernel.heaps
+         ∧ s'.kernel.nullifierRoot = s.kernel.nullifierRoot
+-        ∧ s'.kernel.revokedRoot = s.kernel.revokedRoot ) := by
++        ∧ s'.kernel.revokedRoot = s.kernel.revokedRoot ∧ s'.kernel.commitmentsRoot = s.kernel.commitmentsRoot ) := by
+   unfold stateStep
+   by_cases hg : stateAuthB s.kernel.caps actor cell = true ∧ cell ∈ s.kernel.accounts
+       ∧ cellLive s.kernel cell = true
+@@ -175,13 +176,13 @@ theorem stateStep_iff_spec (s : RecChainedState) (f : FieldName) (actor cell : C
+     · intro h
+       simp only [Option.some.injEq] at h; subst h
+       refine ⟨hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
+-        rfl, rfl, rfl⟩
++        rfl, rfl, rfl, rfl⟩
+     · rintro ⟨_, hcell, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16,
+-              h17⟩
++              h17, h18⟩
+       obtain ⟨k', l'⟩ := s'
+-      obtain ⟨a, ce, ca, nu, re, co, ba, sl, fa, li, dc, de, dg, dge, dgea, hp, nr, rr⟩ := k'
+-      simp only at hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
+-      subst hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
++      obtain ⟨a, ce, ca, nu, re, co, ba, sl, fa, li, dc, de, dg, dge, dgea, hp, nr, rr, cr⟩ := k'
++      simp only at hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
++      subst hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+       rfl
+   · rw [if_neg hg]
+     constructor
+diff --git a/metatheory/Dregg2/Circuit/Spec/cellstatepermissions.lean b/metatheory/Dregg2/Circuit/Spec/cellstatepermissions.lean
+index bf6a80ca4..ab42ca4ac 100644
+--- a/metatheory/Dregg2/Circuit/Spec/cellstatepermissions.lean
++++ b/metatheory/Dregg2/Circuit/Spec/cellstatepermissions.lean
+@@ -141,6 +141,7 @@ def SetPermissionsSpec (s : RecChainedState) (actor cell : CellId) (p : Int)
+   ∧ s'.kernel.heaps = s.kernel.heaps
+   ∧ s'.kernel.nullifierRoot = s.kernel.nullifierRoot
+   ∧ s'.kernel.revokedRoot = s.kernel.revokedRoot
++  ∧ s'.kernel.commitmentsRoot = s.kernel.commitmentsRoot
+ 
+ /-- **`stateStep_iff_spec` — the GENERIC `stateStep` characterization (executor⟺spec, full state).**
+ The bare `stateStep` (the shared engine of the cell-state-permissions/monotone families) commits a
+@@ -169,7 +170,7 @@ theorem stateStep_iff_spec (s : RecChainedState) (f : FieldName) (actor cell : C
+         ∧ s'.kernel.delegationEpochAt = s.kernel.delegationEpochAt
+         ∧ s'.kernel.heaps = s.kernel.heaps
+         ∧ s'.kernel.nullifierRoot = s.kernel.nullifierRoot
+-        ∧ s'.kernel.revokedRoot = s.kernel.revokedRoot ) := by
++        ∧ s'.kernel.revokedRoot = s.kernel.revokedRoot ∧ s'.kernel.commitmentsRoot = s.kernel.commitmentsRoot ) := by
+   unfold stateStep
+   by_cases hg : stateAuthB s.kernel.caps actor cell = true ∧ cell ∈ s.kernel.accounts
+       ∧ cellLive s.kernel cell = true
+@@ -178,13 +179,13 @@ theorem stateStep_iff_spec (s : RecChainedState) (f : FieldName) (actor cell : C
+     · intro h
+       simp only [Option.some.injEq] at h; subst h
+       refine ⟨hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
+-        rfl, rfl⟩
++        rfl, rfl, rfl⟩
+     · rintro ⟨_, hcell, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16,
+-              h17⟩
++              h17, h18⟩
+       obtain ⟨k', l'⟩ := s'
+-      obtain ⟨a, ce, ca, nu, re, co, ba, sl, fa, li, dc, de, dg, dge, dgea, hp, nr, rr⟩ := k'
+-      simp only at hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
+-      subst hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
++      obtain ⟨a, ce, ca, nu, re, co, ba, sl, fa, li, dc, de, dg, dge, dgea, hp, nr, rr, cr⟩ := k'
++      simp only at hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
++      subst hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+       rfl
+   · rw [if_neg hg]
+     constructor
+diff --git a/metatheory/Dregg2/Circuit/Spec/cellstateprogram.lean b/metatheory/Dregg2/Circuit/Spec/cellstateprogram.lean
+index 8adaf78bb..40860157a 100644
+--- a/metatheory/Dregg2/Circuit/Spec/cellstateprogram.lean
++++ b/metatheory/Dregg2/Circuit/Spec/cellstateprogram.lean
+@@ -114,6 +114,7 @@ def SetProgramSpec (s : RecChainedState) (actor cell : CellId) (prog : Int)
+   ∧ s'.kernel.heaps = s.kernel.heaps
+   ∧ s'.kernel.nullifierRoot = s.kernel.nullifierRoot
+   ∧ s'.kernel.revokedRoot = s.kernel.revokedRoot
++  ∧ s'.kernel.commitmentsRoot = s.kernel.commitmentsRoot
+ 
+ /-- **`programStateStep_iff_spec` — the GENERIC `stateStep` characterization (executor⟺spec, full
+ state), re-derived LOCALLY.** The bare `stateStep` (the engine a protocol-managed slot write runs)
+@@ -139,7 +140,7 @@ theorem programStateStep_iff_spec (s : RecChainedState) (f : FieldName) (actor c
+         ∧ s'.kernel.delegationEpochAt = s.kernel.delegationEpochAt
+         ∧ s'.kernel.heaps = s.kernel.heaps
+         ∧ s'.kernel.nullifierRoot = s.kernel.nullifierRoot
+-        ∧ s'.kernel.revokedRoot = s.kernel.revokedRoot ) := by
++        ∧ s'.kernel.revokedRoot = s.kernel.revokedRoot ∧ s'.kernel.commitmentsRoot = s.kernel.commitmentsRoot ) := by
+   unfold stateStep
+   by_cases hg : stateAuthB s.kernel.caps actor cell = true ∧ cell ∈ s.kernel.accounts
+       ∧ cellLive s.kernel cell = true
+@@ -148,12 +149,12 @@ theorem programStateStep_iff_spec (s : RecChainedState) (f : FieldName) (actor c
+     · intro h
+       simp only [Option.some.injEq] at h; subst h
+       refine ⟨hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
+-        rfl, rfl⟩
+-    · rintro ⟨_, hcell, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17⟩
++        rfl, rfl, rfl⟩
++    · rintro ⟨_, hcell, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18⟩
+       obtain ⟨k', l'⟩ := s'
+-      obtain ⟨a, ce, ca, nu, re, co, ba, sl, fa, li, dc, de, dg, dge, dgea, hp, nr, rr⟩ := k'
+-      simp only at hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
+-      subst hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
++      obtain ⟨a, ce, ca, nu, re, co, ba, sl, fa, li, dc, de, dg, dge, dgea, hp, nr, rr, cr⟩ := k'
++      simp only at hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
++      subst hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+       rfl
+   · rw [if_neg hg]
+     constructor
+diff --git a/metatheory/Dregg2/Circuit/Spec/cellstatevk.lean b/metatheory/Dregg2/Circuit/Spec/cellstatevk.lean
+index 28059e72c..9cd3833a6 100644
+--- a/metatheory/Dregg2/Circuit/Spec/cellstatevk.lean
++++ b/metatheory/Dregg2/Circuit/Spec/cellstatevk.lean
+@@ -140,6 +140,7 @@ def SetVKSpec (s : RecChainedState) (actor cell : CellId) (vk : Int)
+   ∧ s'.kernel.heaps = s.kernel.heaps
+   ∧ s'.kernel.nullifierRoot = s.kernel.nullifierRoot
+   ∧ s'.kernel.revokedRoot = s.kernel.revokedRoot
++  ∧ s'.kernel.commitmentsRoot = s.kernel.commitmentsRoot
+ 
+ /-- **`vkStateStep_iff_spec` — the GENERIC `stateStep` characterization (executor⟺spec, full state),
+ re-derived LOCALLY.** The bare `stateStep` (the engine the `.setVKA` arm runs) commits a write of
+@@ -168,7 +169,7 @@ theorem vkStateStep_iff_spec (s : RecChainedState) (f : FieldName) (actor cell :
+         ∧ s'.kernel.delegationEpochAt = s.kernel.delegationEpochAt
+         ∧ s'.kernel.heaps = s.kernel.heaps
+         ∧ s'.kernel.nullifierRoot = s.kernel.nullifierRoot
+-        ∧ s'.kernel.revokedRoot = s.kernel.revokedRoot ) := by
++        ∧ s'.kernel.revokedRoot = s.kernel.revokedRoot ∧ s'.kernel.commitmentsRoot = s.kernel.commitmentsRoot ) := by
+   unfold stateStep
+   by_cases hg : stateAuthB s.kernel.caps actor cell = true ∧ cell ∈ s.kernel.accounts
+       ∧ cellLive s.kernel cell = true
+@@ -177,12 +178,12 @@ theorem vkStateStep_iff_spec (s : RecChainedState) (f : FieldName) (actor cell :
+     · intro h
+       simp only [Option.some.injEq] at h; subst h
+       refine ⟨hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
+-        rfl, rfl⟩
+-    · rintro ⟨_, hcell, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17⟩
++        rfl, rfl, rfl⟩
++    · rintro ⟨_, hcell, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18⟩
+       obtain ⟨k', l'⟩ := s'
+-      obtain ⟨a, ce, ca, nu, re, co, ba, sl, fa, li, dc, de, dg, dge, dgea, hp, nr, rr⟩ := k'
+-      simp only at hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
+-      subst hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
++      obtain ⟨a, ce, ca, nu, re, co, ba, sl, fa, li, dc, de, dg, dge, dgea, hp, nr, rr, cr⟩ := k'
++      simp only at hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
++      subst hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+       rfl
+   · rw [if_neg hg]
+     constructor
+diff --git a/metatheory/Dregg2/Circuit/Spec/factorycreation.lean b/metatheory/Dregg2/Circuit/Spec/factorycreation.lean
+index d23ddc51f..0cbe98cca 100644
+--- a/metatheory/Dregg2/Circuit/Spec/factorycreation.lean
++++ b/metatheory/Dregg2/Circuit/Spec/factorycreation.lean
+@@ -67,7 +67,8 @@ private theorem recordKernel_eq_of_fields {k k' : RecordKernelState}
+     (hdelegationEpochAt : k.delegationEpochAt = k'.delegationEpochAt)
+     (hheaps : k.heaps = k'.heaps)
+     (hnullifierRoot : k.nullifierRoot = k'.nullifierRoot)
+-    (hrevokedRoot : k.revokedRoot = k'.revokedRoot) : k = k' := by
++    (hrevokedRoot : k.revokedRoot = k'.revokedRoot)
++    (hcommitmentsRoot : k.commitmentsRoot = k'.commitmentsRoot) : k = k' := by
+   cases k; cases k'; simp_all
+ 
+ /-! ## §1 — the admissibility guard, lifted from the CODE.
+@@ -200,6 +201,7 @@ def CreateFromFactorySpec (st : RecChainedState) (actor newCell : CellId) (vk :
+     ∧ st'.kernel.heaps = st.kernel.heaps
+     ∧ st'.kernel.nullifierRoot = st.kernel.nullifierRoot
+     ∧ st'.kernel.revokedRoot = st.kernel.revokedRoot
++    ∧ st'.kernel.commitmentsRoot = st.kernel.commitmentsRoot
+ 
+ /-! ### The post-state the executor actually produces, pinned field-by-field.
+ 
+@@ -233,7 +235,7 @@ theorem createCellFromFactoryChainA_components {s s' : RecChainedState} {actor n
+       ∧ s'.kernel.delegationEpochAt = s.kernel.delegationEpochAt
+       ∧ s'.kernel.heaps = s.kernel.heaps
+       ∧ s'.kernel.nullifierRoot = s.kernel.nullifierRoot
+-      ∧ s'.kernel.revokedRoot = s.kernel.revokedRoot := by
++      ∧ s'.kernel.revokedRoot = s.kernel.revokedRoot ∧ s'.kernel.commitmentsRoot = s.kernel.commitmentsRoot := by
+   obtain ⟨e, s1, hfind, hconf, hc, hs'⟩ := createCellFromFactoryChainA_factors h
+   -- recover the underlying createCell gate conjuncts + the s1 shape:
+   obtain ⟨hauth, hfresh, hs1⟩ := createCellChainA_factors hc
+@@ -245,7 +247,7 @@ theorem createCellFromFactoryChainA_components {s s' : RecChainedState} {actor n
+   refine ⟨e, ⟨hvk, hfind, hconf, hauth, hfresh⟩, ?_⟩
+   -- substitute s' = factory-install over s1, and s1 = createCellChainA's output over s.
+   subst hs' hs1
+-  refine ⟨rfl, rfl, rfl, rfl, rfl, ?_, ?_, ?_, ?_, ?_, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
++  refine ⟨rfl, rfl, rfl, rfl, rfl, ?_, ?_, ?_, ?_, ?_, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+   · funext l; by_cases hl : l = newCell <;> simp [hl, createCellIntoAsset, bornEmptyCellSlots]
+   · funext c; by_cases hc' : c = newCell <;> simp [hc', createCellIntoAsset, bornEmptyCellSlots]
+   · funext c; by_cases hc' : c = newCell <;> simp [hc', createCellIntoAsset, bornEmptyCellSlots]
+@@ -270,7 +272,7 @@ theorem createCellFromFactoryChainA_iff_spec (st : RecChainedState) (actor newCe
+     -- explicit committed output, then prove that output equals `st'` from the 18 spec equations.
+     rintro ⟨e, ⟨hvk, hfind, hconf, hauth, hfresh⟩,
+             hacc, hbal, hcell, hcav, hlog,
+-            hcaps, hlc, hdc, hdel, hdn, hnull, hrev, hcom, hfac, hde, hdea, hhp, hnr, hrr⟩
++            hcaps, hlc, hdc, hdel, hdn, hnull, hrev, hcom, hfac, hde, hdea, hhp, hnr, hrr, hcr⟩
+     -- the underlying createCell commits (its gate is the last two guard conjuncts):
+     have hc : createCellChainA st actor newCell = some
+         { kernel := createCellIntoAsset st.kernel newCell
+@@ -297,9 +299,9 @@ theorem createCellFromFactoryChainA_iff_spec (st : RecChainedState) (actor newCe
+     -- after substituting `hcell`/`hcav` closes those.
+     rw [hex]
+     obtain ⟨k', lg'⟩ := st'
+-    obtain ⟨acc, cl, cp, nl, rv, cm, bl, sc, fc, lc, dc, dl, dn, dge, dgea, hp, nr, rr⟩ := k'
+-    simp only at hacc hbal hcell hcav hlog hcaps hlc hdc hdel hdn hnull hrev hcom hfac hde hdea hhp hnr hrr
+-    subst hacc hbal hcell hcav hlog hcaps hlc hdc hdel hdn hnull hrev hcom hfac hde hdea hhp hnr hrr
++    obtain ⟨acc, cl, cp, nl, rv, cm, bl, sc, fc, lc, dc, dl, dn, dge, dgea, hp, nr, rr, cr⟩ := k'
++    simp only at hacc hbal hcell hcav hlog hcaps hlc hdc hdel hdn hnull hrev hcom hfac hde hdea hhp hnr hrr hcr
++    subst hacc hbal hcell hcav hlog hcaps hlc hdc hdel hdn hnull hrev hcom hfac hde hdea hhp hnr hrr hcr
+     rfl
+ 
+ /-- **`execCreateFromFactoryA_iff_spec` — THE DELIVERABLE: `execFullA`-LEVEL EXECUTOR ⟺ SPEC (FULL
+diff --git a/metatheory/Dregg2/Circuit/Spec/heapwrite.lean b/metatheory/Dregg2/Circuit/Spec/heapwrite.lean
+index b6ab41c23..229d0e5e3 100644
+--- a/metatheory/Dregg2/Circuit/Spec/heapwrite.lean
++++ b/metatheory/Dregg2/Circuit/Spec/heapwrite.lean
+@@ -79,6 +79,7 @@ def HeapWriteSpec (s : RecChainedState) (actor target : CellId) (addr v newRoot
+   ∧ s'.kernel.delegationEpochAt = s.kernel.delegationEpochAt
+   ∧ s'.kernel.nullifierRoot = s.kernel.nullifierRoot
+   ∧ s'.kernel.revokedRoot = s.kernel.revokedRoot
++  ∧ s'.kernel.commitmentsRoot = s.kernel.commitmentsRoot
+ 
+ /-! ## §3 — executor ⟺ spec (FULL state, both directions). -/
+ 
+diff --git a/metatheory/Dregg2/Circuit/Spec/notecommitment.lean b/metatheory/Dregg2/Circuit/Spec/notecommitment.lean
+index 3c3634b0e..8e4fac066 100644
+--- a/metatheory/Dregg2/Circuit/Spec/notecommitment.lean
++++ b/metatheory/Dregg2/Circuit/Spec/notecommitment.lean
+@@ -130,6 +130,7 @@ def NoteCreateASpec (st : RecChainedState) (cm : Nat) (actor : CellId)
+   ∧ st'.kernel.heaps = st.kernel.heaps
+   ∧ st'.kernel.nullifierRoot = st.kernel.nullifierRoot
+   ∧ st'.kernel.revokedRoot = st.kernel.revokedRoot
++  ∧ st'.kernel.commitmentsRoot = st.kernel.commitmentsRoot
+ 
+ /-- **`noteCreateChainA_iff_spec` — CHAINED EXECUTOR ⟺ SPEC (FULL state, both directions).** The
+ chained note-create commits into `st'` IFF `st'` is EXACTLY the spec'd full post-state. The `→`
+@@ -146,13 +147,13 @@ theorem noteCreateChainA_iff_spec (st : RecChainedState) (cm : Nat) (actor : Cel
+     simp only [Option.some.injEq] at h
+     subst h
+     exact ⟨trivial, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
+-      rfl, rfl⟩
+-  · rintro ⟨_, hcm, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17⟩
++      rfl, rfl, rfl⟩
++  · rintro ⟨_, hcm, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18⟩
+     -- reconstruct st' from the spec: split both records and substitute every field.
+     obtain ⟨k', lg'⟩ := st'
+-    obtain ⟨acc, cl, cp, nl, rv, cm', bl, sc, fc, lc, dc, dl, dn, dge, dgea, hp, nr, rr⟩ := k'
+-    simp only at hcm hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
+-    subst hcm hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
++    obtain ⟨acc, cl, cp, nl, rv, cm', bl, sc, fc, lc, dc, dl, dn, dge, dgea, hp, nr, rr, cr⟩ := k'
++    simp only at hcm hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
++    subst hcm hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+     rfl
+ 
+ /-- **`execNoteCreateA_iff_spec` — THE DELIVERABLE: `execFullA`-LEVEL EXECUTOR ⟺ SPEC (FULL state,
+diff --git a/metatheory/Dregg2/Circuit/Spec/notenullifier.lean b/metatheory/Dregg2/Circuit/Spec/notenullifier.lean
+index 6e484a813..060148bd6 100644
+--- a/metatheory/Dregg2/Circuit/Spec/notenullifier.lean
++++ b/metatheory/Dregg2/Circuit/Spec/notenullifier.lean
+@@ -95,11 +95,11 @@ theorem recKernel_ext {k k' : RecordKernelState}
+     (h15 : k'.delegations = k.delegations)
+     (h17 : k'.delegationEpoch = k.delegationEpoch) (h18 : k'.delegationEpochAt = k.delegationEpochAt)
+     (h19 : k'.heaps = k.heaps)
+-    (h20 : k'.nullifierRoot = k.nullifierRoot) (h21 : k'.revokedRoot = k.revokedRoot) :
++    (h20 : k'.nullifierRoot = k.nullifierRoot) (h21 : k'.revokedRoot = k.revokedRoot) (h22 : k'.commitmentsRoot = k.commitmentsRoot) :
+     k' = k := by
+   cases k; cases k'
+-  simp only at h1 h2 h3 h4 h5 h6 h7 h10 h11 h12 h13 h14 h15 h17 h18 h19 h20 h21
+-  subst h1 h2 h3 h4 h5 h6 h7 h10 h11 h12 h13 h14 h15 h17 h18 h19 h20 h21
++  simp only at h1 h2 h3 h4 h5 h6 h7 h10 h11 h12 h13 h14 h15 h17 h18 h19 h20 h21 h22
++  subst h1 h2 h3 h4 h5 h6 h7 h10 h11 h12 h13 h14 h15 h17 h18 h19 h20 h21 h22
+   rfl
+ 
+ /-! ## §4 — `noteSpendChainA_correct` — the post-state helper validated DECLARATIVELY.
+@@ -166,6 +166,7 @@ def NoteSpendSpec (st : RecChainedState) (nf : Nat) (actor : CellId) (spendProof
+   ∧ st'.kernel.heaps = st.kernel.heaps
+   ∧ st'.kernel.nullifierRoot = st.kernel.nullifierRoot
+   ∧ st'.kernel.revokedRoot = st.kernel.revokedRoot
++  ∧ st'.kernel.commitmentsRoot = st.kernel.commitmentsRoot
+ 
+ /-! ## §6 — `execFullA_noteSpend_iff_spec` — EXECUTOR ⟺ SPEC (FULL state, both directions). -/
+ 
+@@ -198,9 +199,9 @@ theorem execFullA_noteSpend_iff_spec (st : RecChainedState) (nf : Nat) (actor :
+         simp only [Option.some.injEq] at h
+         subst h
+         exact ⟨⟨hproof, hfresh⟩, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
+-          rfl, rfl, rfl, rfl, rfl, rfl⟩
++          rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+       · rintro ⟨_, hnull, hlog, h1, h2, h3, h6, h7, h9, h10, h11, h12, h13, h14, h15, h17, h18,
+-          h19, h20, h21⟩
++          h19, h20, h21, h22⟩
+         -- rebuild `st'` from the nullifier post-image + log post-image + the 14 frame equalities.
+         have hk : st'.kernel = { st.kernel with nullifiers := nf :: st.kernel.nullifiers } := by
+           apply recKernel_ext
+@@ -222,6 +223,7 @@ theorem execFullA_noteSpend_iff_spec (st : RecChainedState) (nf : Nat) (actor :
+           · simpa using h19
+           · simpa using h20
+           · simpa using h21
++          · simpa using h22
+         cases st' with
+         | mk k' lg' =>
+           simp only at hk hlog
+diff --git a/metatheory/Dregg2/Circuit/Spec/queuepipelinedsend.lean b/metatheory/Dregg2/Circuit/Spec/queuepipelinedsend.lean
+index fd2bbfb44..2d5e042b9 100644
+--- a/metatheory/Dregg2/Circuit/Spec/queuepipelinedsend.lean
++++ b/metatheory/Dregg2/Circuit/Spec/queuepipelinedsend.lean
+@@ -105,11 +105,11 @@ theorem recKernel_ext {k k' : RecordKernelState}
+     (h15 : k'.delegations = k.delegations)
+     (h17 : k'.delegationEpoch = k.delegationEpoch) (h18 : k'.delegationEpochAt = k.delegationEpochAt)
+     (h19 : k'.heaps = k.heaps)
+-    (h20 : k'.nullifierRoot = k.nullifierRoot) (h21 : k'.revokedRoot = k.revokedRoot) :
++    (h20 : k'.nullifierRoot = k.nullifierRoot) (h21 : k'.revokedRoot = k.revokedRoot) (h22 : k'.commitmentsRoot = k.commitmentsRoot) :
+     k' = k := by
+   cases k; cases k'
+-  simp only at h1 h2 h3 h4 h5 h6 h7 h10 h11 h12 h13 h14 h15 h17 h18 h19 h20 h21
+-  subst h1 h2 h3 h4 h5 h6 h7 h10 h11 h12 h13 h14 h15 h17 h18 h19 h20 h21
++  simp only at h1 h2 h3 h4 h5 h6 h7 h10 h11 h12 h13 h14 h15 h17 h18 h19 h20 h21 h22
++  subst h1 h2 h3 h4 h5 h6 h7 h10 h11 h12 h13 h14 h15 h17 h18 h19 h20 h21 h22
+   rfl
+ 
+ /-! ## §3 — the FULL-STATE declarative spec of a committed `pipelinedSendA` (the INDEPENDENT reference).
+@@ -145,6 +145,7 @@ def PipelinedSendSpec (st : RecChainedState) (actor : CellId) (st' : RecChainedS
+   ∧ st'.kernel.heaps = st.kernel.heaps
+   ∧ st'.kernel.nullifierRoot = st.kernel.nullifierRoot
+   ∧ st'.kernel.revokedRoot = st.kernel.revokedRoot
++  ∧ st'.kernel.commitmentsRoot = st.kernel.commitmentsRoot
+ 
+ /-! ## §4 — `execFullA_pipelinedSend_iff_spec` — EXECUTOR ⟺ SPEC (FULL state, both directions). -/
+ 
+@@ -169,12 +170,12 @@ theorem execFullA_pipelinedSend_iff_spec (st : RecChainedState) (actor : CellId)
+     -- the committed post-state is `{ kernel := st.kernel, log := escrowReceiptA actor :: st.log }`;
+     -- read its log + every kernel field off that literal. The log clause uses the receipt eq.
+     refine ⟨?_, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
+-      rfl, rfl⟩
++      rfl, rfl, rfl⟩
+     simp only [pipelinedSendReceipt, escrowReceiptA]
+-  · rintro ⟨hlog, h1, h2, h3, h4, h5, h6, h7, h10, h11, h12, h13, h14, h15, h17, h18, h19, h20, h21⟩
++  · rintro ⟨hlog, h1, h2, h3, h4, h5, h6, h7, h10, h11, h12, h13, h14, h15, h17, h18, h19, h20, h21, h22⟩
+     -- rebuild `st'` from the log post-image + the 20 kernel-field equalities.
+     have hk : st'.kernel = st.kernel :=
+-      recKernel_ext h1 h2 h3 h4 h5 h6 h7 h10 h11 h12 h13 h14 h15 h17 h18 h19 h20 h21
++      recKernel_ext h1 h2 h3 h4 h5 h6 h7 h10 h11 h12 h13 h14 h15 h17 h18 h19 h20 h21 h22
+     cases st' with
+     | mk k' lg' =>
+       simp only at hk hlog
+@@ -202,8 +203,8 @@ NEUTRAL — no ledger move, no side-table touched. -/
+ theorem execFullA_pipelinedSend_kernel {st st' : RecChainedState} {actor : CellId}
+     (h : execFullA st (.pipelinedSendA actor) = some st') :
+     st'.kernel = st.kernel := by
+-  obtain ⟨_, h1, h2, h3, h4, h5, h6, h7, h10, h11, h12, h13, h14, h15, h17, h18, h19, h20, h21⟩ := (execFullA_pipelinedSend_iff_spec st actor st').mp h
+-  exact recKernel_ext h1 h2 h3 h4 h5 h6 h7 h10 h11 h12 h13 h14 h15 h17 h18 h19 h20 h21
++  obtain ⟨_, h1, h2, h3, h4, h5, h6, h7, h10, h11, h12, h13, h14, h15, h17, h18, h19, h20, h21, h22⟩ := (execFullA_pipelinedSend_iff_spec st actor st').mp h
++  exact recKernel_ext h1 h2 h3 h4 h5 h6 h7 h10 h11 h12 h13 h14 h15 h17 h18 h19 h20 h21 h22
+ 
+ /-- The executor ALWAYS COMMITS a `pipelinedSendA` (the TOTALITY of the effect — there is no
+ fail-closed gate at apply time). The dual of `emitEventA`'s `commits_iff` with a `True` guard:
+diff --git a/metatheory/Dregg2/Circuit/Spec/refreshdelegation.lean b/metatheory/Dregg2/Circuit/Spec/refreshdelegation.lean
+index 31c3b4c34..da83f9ac8 100644
+--- a/metatheory/Dregg2/Circuit/Spec/refreshdelegation.lean
++++ b/metatheory/Dregg2/Circuit/Spec/refreshdelegation.lean
+@@ -53,6 +53,7 @@ def RefreshDelegationSpec (s : RecChainedState) (actor child : CellId) (s' : Rec
+   ∧ s'.kernel.heaps = s.kernel.heaps
+   ∧ s'.kernel.nullifierRoot = s.kernel.nullifierRoot
+   ∧ s'.kernel.revokedRoot = s.kernel.revokedRoot
++  ∧ s'.kernel.commitmentsRoot = s.kernel.commitmentsRoot
+ 
+ /-- **The STRENGTHENED full-state spec of a committed `refreshDelegationA`** — the EXECUTOR's faithful
+ face. Identical to `RefreshDelegationSpec` EXCEPT the `delegationEpochAt` clause is no longer framed
+@@ -76,6 +77,7 @@ def RefreshDelegationFullSpec (s : RecChainedState) (actor child : CellId) (s' :
+   ∧ s'.kernel.heaps = s.kernel.heaps
+   ∧ s'.kernel.nullifierRoot = s.kernel.nullifierRoot
+   ∧ s'.kernel.revokedRoot = s.kernel.revokedRoot
++  ∧ s'.kernel.commitmentsRoot = s.kernel.commitmentsRoot
+ 
+ /-! ## §2 — executor ⟺ spec. -/
+ 
+@@ -93,12 +95,12 @@ theorem refreshDelegation_iff_spec (s : RecChainedState) (actor child : CellId)
+       simp only [Option.some.injEq] at h
+       subst h
+       exact ⟨hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
+-        rfl, rfl⟩
+-    · rintro ⟨_, hdgs, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17⟩
++        rfl, rfl, rfl⟩
++    · rintro ⟨_, hdgs, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18⟩
+       obtain ⟨k', lg'⟩ := s'
+-      obtain ⟨acc, cellm, caps, nul, rev, com, bal, sc, fac, lc, dc, dg, dgs, dge, dgea, hp, nr, rr⟩ := k'
+-      simp only at hdgs hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
+-      subst hdgs hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
++      obtain ⟨acc, cellm, caps, nul, rev, com, bal, sc, fac, lc, dc, dg, dgs, dge, dgea, hp, nr, rr, cr⟩ := k'
++      simp only at hdgs hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
++      subst hdgs hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+       rfl
+   · rw [if_neg hg]
+     constructor
+@@ -109,4 +111,4 @@ theorem refreshDelegation_iff_spec (s : RecChainedState) (actor child : CellId)
+ 
+ #assert_axioms refreshDelegation_iff_spec
+ 
+-end Dregg2.Circuit.Spec.RefreshDelegation
+\ No newline at end of file
++end Dregg2.Circuit.Spec.RefreshDelegation
+diff --git a/metatheory/Dregg2/Circuit/Spec/sovereigncommitment.lean b/metatheory/Dregg2/Circuit/Spec/sovereigncommitment.lean
+index 3b04758ae..6aef6525b 100644
+--- a/metatheory/Dregg2/Circuit/Spec/sovereigncommitment.lean
++++ b/metatheory/Dregg2/Circuit/Spec/sovereigncommitment.lean
+@@ -137,6 +137,7 @@ def MakeSovereignSpec (s : RecChainedState) (actor cell : CellId) (s' : RecChain
+   ∧ s'.kernel.heaps = s.kernel.heaps
+   ∧ s'.kernel.nullifierRoot = s.kernel.nullifierRoot
+   ∧ s'.kernel.revokedRoot = s.kernel.revokedRoot
++  ∧ s'.kernel.commitmentsRoot = s.kernel.commitmentsRoot
+ 
+ /-! ## §4 — executor ⟺ spec (FULL state, both directions). -/
+ 
+@@ -179,16 +180,16 @@ theorem execFullA_makeSovereignA_iff_spec
+   constructor
+   · rintro ⟨hg, hs'⟩
+     subst hs'
+-    refine ⟨hg, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
++    refine ⟨hg, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+     · exact (sovereignRebind_eq_makeSovereignKernel s.kernel cell).symm
+     all_goals rfl
+-  · rintro ⟨hg, hcell, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17⟩
++  · rintro ⟨hg, hcell, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18⟩
+     refine ⟨hg, ?_⟩
+     -- rebuild s' field-by-field: the touched cell map, the log, and the 16 frame fields, then η.
+     obtain ⟨k', lg'⟩ := s'
+-    obtain ⟨acc, cl, cps, nul, rev, cmt, bl, sc, fac, lc, dc, dg, dgs, dge, dgea, hp, nr, rr⟩ := k'
+-    simp only at hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
+-    subst hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
++    obtain ⟨acc, cl, cps, nul, rev, cmt, bl, sc, fac, lc, dc, dg, dgs, dge, dgea, hp, nr, rr, cr⟩ := k'
++    simp only at hcell hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
++    subst hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+     -- the touched cell map: rewrite the declarative map to the executor's makeSovereignKernel form.
+     rw [sovereignRebind_eq_makeSovereignKernel] at hcell
+     subst hcell
+diff --git a/metatheory/Dregg2/Circuit/Spec/supplycreation.lean b/metatheory/Dregg2/Circuit/Spec/supplycreation.lean
+index af939f1e9..08f50c9c1 100644
+--- a/metatheory/Dregg2/Circuit/Spec/supplycreation.lean
++++ b/metatheory/Dregg2/Circuit/Spec/supplycreation.lean
+@@ -136,6 +136,7 @@ def MintASpec (st : RecChainedState) (actor cell : CellId) (a : AssetId) (amt :
+   ∧ st'.kernel.heaps = st.kernel.heaps
+   ∧ st'.kernel.nullifierRoot = st.kernel.nullifierRoot
+   ∧ st'.kernel.revokedRoot = st.kernel.revokedRoot
++  ∧ st'.kernel.commitmentsRoot = st.kernel.commitmentsRoot
+ 
+ /-- **`recCMintAsset_iff_spec` — CHAINED EXECUTOR ⟺ SPEC (FULL state, both directions).** The
+ chained record kernel commits a `mintA` into `st'` IFF `st'` is EXACTLY the spec'd full post-state.
+@@ -155,13 +156,13 @@ theorem recCMintAsset_iff_spec (st : RecChainedState) (actor cell : CellId) (a :
+       simp only [Option.some.injEq] at h
+       subst h
+       exact ⟨hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
+-        rfl, rfl⟩
+-    · rintro ⟨_, hbal, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17⟩
++        rfl, rfl, rfl⟩
++    · rintro ⟨_, hbal, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18⟩
+       -- reconstruct st' from the spec: split both records and substitute every field.
+       obtain ⟨k', lg'⟩ := st'
+-      obtain ⟨acc, cl, cp, nl, rv, cm, bl, sc, fc, lc, dc, dl, dn, dge, dgea, hp, nr, rr⟩ := k'
+-      simp only at hbal hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
+-      subst hbal hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
++      obtain ⟨acc, cl, cp, nl, rv, cm, bl, sc, fc, lc, dc, dl, dn, dge, dgea, hp, nr, rr, cr⟩ := k'
++      simp only at hbal hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
++      subst hbal hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+       rfl
+   · rw [if_neg hg]
+     constructor
+diff --git a/metatheory/Dregg2/Circuit/Spec/supplydestruction.lean b/metatheory/Dregg2/Circuit/Spec/supplydestruction.lean
+index 7bbbfeb54..26e225908 100644
+--- a/metatheory/Dregg2/Circuit/Spec/supplydestruction.lean
++++ b/metatheory/Dregg2/Circuit/Spec/supplydestruction.lean
+@@ -142,6 +142,7 @@ def BurnSpec (s : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : 
+   ∧ s'.kernel.heaps = s.kernel.heaps
+   ∧ s'.kernel.nullifierRoot = s.kernel.nullifierRoot
+   ∧ s'.kernel.revokedRoot = s.kernel.revokedRoot
++  ∧ s'.kernel.commitmentsRoot = s.kernel.commitmentsRoot
+ 
+ /-- **`recCBurnAsset_iff_spec` — EXECUTOR ⟺ SPEC (FULL state, both directions).** The chained record
+ executor commits a per-asset burn into `s'` IFF `s'` is EXACTLY the spec'd full post-state. The `→`
+@@ -165,13 +166,13 @@ theorem recCBurnAsset_iff_spec (s : RecChainedState) (actor cell : CellId) (a :
+       simp only [Option.some.injEq] at h
+       subst h
+       exact ⟨hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl,
+-        rfl, rfl⟩
+-    · rintro ⟨_, hbal, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17⟩
++        rfl, rfl, rfl⟩
++    · rintro ⟨_, hbal, hlog, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18⟩
+       -- rebuild `s'` field-by-field from the spec; destruct both records to expose components
+       obtain ⟨k', log'⟩ := s'
+-      obtain ⟨acc, cl, cps, nul, rev, com, bl, sc, fac, lc, dc, dlg, dlgs, dge, dgea, hp, nr, rr⟩ := k'
+-      simp only at hbal hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
+-      subst hbal hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
++      obtain ⟨acc, cl, cps, nul, rev, com, bl, sc, fac, lc, dc, dlg, dlgs, dge, dgea, hp, nr, rr, cr⟩ := k'
++      simp only at hbal hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
++      subst hbal hlog h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+       rfl
+   · rw [if_neg hg]
+     simp only [BurnGuard]
+diff --git a/metatheory/Dregg2/Circuit/StateCommit.lean b/metatheory/Dregg2/Circuit/StateCommit.lean
+index 419874b3c..1ce479d62 100644
+--- a/metatheory/Dregg2/Circuit/StateCommit.lean
++++ b/metatheory/Dregg2/Circuit/StateCommit.lean
+@@ -240,7 +240,8 @@ def RestHashIffFrame : Prop :=
+       ∧ k'.delegationEpoch = k.delegationEpoch
+       ∧ k'.delegationEpochAt = k.delegationEpochAt
+       ∧ k'.heaps = k.heaps
+-      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot)
++      ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot
++      ∧ k'.commitmentsRoot = k.commitmentsRoot)
+ 
+ /-- **LEMMA `MovedDigestBindsCells` (from `compressInjective compress` + `cellLeafInjective`).**
+ Equal moved (2-leaf) node hashes force WHOLE-`Value` equality of BOTH `src` and `dst` leaves. The old
+@@ -488,7 +489,7 @@ theorem transfer_circuit_full_sound
+   have hRHeq : RH k = RH k' := (srestframe_iff CH RH cmb compress compressN k t k').mp hrestgate
+   have hframe16 := (hRest k k').mp hRHeq
+   obtain ⟨hAcc, hCaps, hBal, hNul, hRev, hCom, hSC, hFac, hLif, hDC, hDel, hDgs,
+-    hDE, hDEA, hHeaps, hNR, hRR⟩ := hframe16
++    hDE, hDEA, hHeaps, hNR, hRR, hCR⟩ := hframe16
+   -- frame digests equal ⇒ untouched cells equal (FrameDigestBindsCells).
+   have hfdeq : frameDigest CH compressN k (frameCarrier k t)
+       = frameDigest CH compressN k' (frameCarrier k t) :=
+@@ -524,7 +525,8 @@ theorem transfer_circuit_full_sound
+           exact (hwf c hcacc).symm
+   -- assemble TransferSpec (admitGuard ∧ cell map ∧ the frame clauses, `heaps` included).
+   exact ⟨⟨hauth, hnn, hav, hne, hsrc, hdst⟩, hcellmap,
+-    hAcc, hCaps, hBal, hNul, hRev, hCom, hSC, hFac, hLif, hDC, hDel, hDgs, hDE, hDEA, hHeaps, hNR, hRR⟩
++    hAcc, hCaps, hBal, hNul, hRev, hCom, hSC, hFac, hLif, hDC, hDel, hDgs, hDE, hDEA, hHeaps, hNR, hRR,
++    hCR⟩
+ 
+ #assert_axioms transfer_circuit_full_sound
+ 
+@@ -619,7 +621,7 @@ theorem recStateCommit_binds_kernel
+   obtain ⟨hcd, hRHeq⟩ := recStateCommit_binds CH RH cmb compress compressN hCmb k k' t hroot
+   -- the 15 non-cell fields from RH (RestHashIffFrame is `RH k = RH k' ↔ (k'.* = k.*)`).
+   obtain ⟨hAcc, hCaps, hBal, hNul, hRev, hCom, hSC, hFac, hLif, hDC, hDel, hDgs, hDE, hDEA, hHeaps,
+-    hNR, hRR⟩ := (hRest k k').mp hRHeq
++    hNR, hRR, hCR⟩ := (hRest k k').mp hRHeq
+   -- the cell map from the cell-digest (needs equal `accounts` for matching carriers).
+   have hcell : k.cell = k'.cell :=
+     cellDigest_binds_cells CH compress compressN hCompress hCompressN hLeaf k k' t hwf hwf'
+@@ -644,7 +646,7 @@ theorem transfer_circuit_full_complete
+     satisfiedS cmb compress (encodeS CH RH cmb compress compressN k t k') := by
+   have hexec : recKExec k t = some k' := (recKExec_iff_spec k t k').mpr hspec
+   obtain ⟨hg, hcell, hAcc, hCaps, hBal, hNul, hRev, hCom, hSC, hFac, hLif, hDC, hDel,
+-    hDgs, hDE, hDEA, hHeaps, hNR, hRR⟩ := hspec
++    hDgs, hDE, hDEA, hHeaps, hNR, hRR, hCR⟩ := hspec
+   obtain ⟨_, _, _, hne, hsrc, hdst⟩ := hg
+   -- the 9 transfer gates hold under encodeT (Transfer's completeness), transport to encodeS.
+   have htsat : satisfied transferCircuit (encodeT k t k') := transfer_circuit_complete hexec
+@@ -661,7 +663,8 @@ theorem transfer_circuit_full_complete
+   have e10 := encodeS_agrees_encodeT CH RH cmb compress compressN k t k' vTDstLive  (by decide)
+   -- frame-gate facts.
+   have hRHeq : RH k = RH k' := (hRest k k').mpr
+-    ⟨hAcc, hCaps, hBal, hNul, hRev, hCom, hSC, hFac, hLif, hDC, hDel, hDgs, hDE, hDEA, hHeaps, hNR, hRR⟩
++    ⟨hAcc, hCaps, hBal, hNul, hRev, hCom, hSC, hFac, hLif, hDC, hDel, hDgs, hDE, hDEA, hHeaps, hNR, hRR,
++      hCR⟩
+   have hcellc : ∀ c ∈ frameCarrier k t, CH c (k.cell c) = CH c (k'.cell c) := by
+     intro c hc
+     unfold frameCarrier at hc
+diff --git a/metatheory/Dregg2/Circuit/Transfer.lean b/metatheory/Dregg2/Circuit/Transfer.lean
+index 8f951a0be..31aafcc56 100644
+--- a/metatheory/Dregg2/Circuit/Transfer.lean
++++ b/metatheory/Dregg2/Circuit/Transfer.lean
+@@ -368,6 +368,7 @@ def TransferSpec (k : RecordKernelState) (t : Turn) (k' : RecordKernelState) : P
+   ∧ k'.delegationEpoch = k.delegationEpoch ∧ k'.delegationEpochAt = k.delegationEpochAt
+   ∧ k'.heaps = k.heaps
+   ∧ k'.nullifierRoot = k.nullifierRoot ∧ k'.revokedRoot = k.revokedRoot
++  ∧ k'.commitmentsRoot = k.commitmentsRoot
+ 
+ /-- **`recKExec_iff_spec` — EXECUTOR ⟺ SPEC (FULL state, both directions).** The executable record
+ kernel commits a transfer into `k'` IFF `k'` is EXACTLY the spec'd full post-state. The `→`
+@@ -384,10 +385,10 @@ theorem recKExec_iff_spec (k : RecordKernelState) (t : Turn) (k' : RecordKernelS
+     constructor
+     · intro h
+       simp only [Option.some.injEq] at h; subst h
+-      exact ⟨hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
+-    · rintro ⟨_, hcell, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17⟩
++      exact ⟨hg, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
++    · rintro ⟨_, hcell, h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18⟩
+       cases k'
+-      subst hcell h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17
++      subst hcell h1 h2 h3 h4 h5 h6 h7 h8 h9 h10 h11 h12 h13 h14 h15 h16 h17 h18
+       rfl
+   · rw [if_neg hg]
+     constructor
+diff --git a/metatheory/Dregg2/Circuit/TransferDecodeBridge.lean b/metatheory/Dregg2/Circuit/TransferDecodeBridge.lean
+index 7e98fdb26..26c3f47dd 100644
+--- a/metatheory/Dregg2/Circuit/TransferDecodeBridge.lean
++++ b/metatheory/Dregg2/Circuit/TransferDecodeBridge.lean
+@@ -177,6 +177,7 @@ structure TransferEncodeResidual (hash : List ℤ → ℤ)
+   frHeaps : post.kernel.heaps = pre.kernel.heaps
+   frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
+   frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
++  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
+   logAdv : post.log = tr :: pre.log
+ 
+ /-! ## §3 — `transfer_decodeBridge`: `StateDecode` ⟹ `rotatedEncodes` (ledger part discharged).
+@@ -255,6 +256,7 @@ def transfer_decodeBridge (hash : List ℤ → ℤ) (S : CommitSurface)
+   frHeaps := res.frHeaps
+   frNullifierRoot := res.frNullifierRoot
+   frRevokedRoot := res.frRevokedRoot
++  frCommitmentsRoot := res.frCommitmentsRoot
+   logAdv := res.logAdv
+ 
+ /-! ## §4 — compose with `transfer_descriptorRefines`: the `EffectDecodeBridge`-shaped discharge.
+diff --git a/metatheory/Dregg2/Exec/NullifierAccumulatorKernelBridge.lean b/metatheory/Dregg2/Exec/NullifierAccumulatorKernelBridge.lean
+index a356e6740..75e590054 100644
+--- a/metatheory/Dregg2/Exec/NullifierAccumulatorKernelBridge.lean
++++ b/metatheory/Dregg2/Exec/NullifierAccumulatorKernelBridge.lean
+@@ -88,4 +88,52 @@ theorem kernel_revoked_gate_fails {S8 : Heap8Scheme} (k : RecordKernelState) (cr
+ #assert_axioms noteSpendNullifierAcc_no_double_spend
+ #assert_axioms kernel_revoked_gate_fails
+ 
++/-! ## The COMMITMENT accumulator dual — GROW-ONLY (no double-spend gate).
++
++The commitment set is the grow-only dual of the nullifier set: a note-create INSERTS a fresh
++commitment, and — unlike a spend — there is NO rejection (a fresh commitment always admits a witness,
++there is no double-spend polarity). The sole obligation is the `create_inserts_root` tooth: after a
++committed create, the commitment is provably PRESENT in the advanced `commitmentsRoot`. It reduces to
++the SAME banked `spend_inserts_root` (the `y = nf` disjunct of `update_sound8`) through a projection
++that reads `commitmentsRoot` as the accumulator's active root. No `present_no_witness` obligation:
++grow-only carries no fail-closed leg. -/
++
++/-- Project the kernel's `commitmentsRoot` into the standalone `NfAccState`'s active root, so the
++proven insert-is-faithful gate operates over it. Definitional. -/
++def RecordKernelState.toCmAccState (k : RecordKernelState) : NfAccState :=
++  { nullifierRoot := k.commitmentsRoot }
++
++@[simp] theorem toCmAccState_nullifierRoot (k : RecordKernelState) :
++    k.toCmAccState.nullifierRoot = k.commitmentsRoot := rfl
++
++/-- **`noteCreateCommitmentAcc` — the accumulator-backed note-create over the kernel.** Given a valid
++client-supplied `NfAccWitness` against the committed `commitmentsRoot`, advance the root to the
++witness after-root and keep the migration `List` in sync. GROW-ONLY: a fresh commitment always has a
++witness, there is no rejection — the dual of `noteSpendNullifierAcc` WITHOUT the double-spend gate. -/
++def noteCreateCommitmentAcc {S8 : Heap8Scheme} (k : RecordKernelState) (cm : Nat)
++    (w : NfAccWitness S8 k.commitmentsRoot (cm : ℤ)) : RecordKernelState :=
++  { k with commitmentsRoot := w.newRoot, commitments := cm :: k.commitments }
++
++@[simp] theorem noteCreateCommitmentAcc_commitmentsRoot {S8 : Heap8Scheme} (k : RecordKernelState)
++    (cm : Nat) (w : NfAccWitness S8 k.commitmentsRoot (cm : ℤ)) :
++    (noteCreateCommitmentAcc k cm w).commitmentsRoot = w.newRoot := rfl
++
++theorem noteCreateCommitmentAcc_commitments {S8 : Heap8Scheme} (k : RecordKernelState)
++    (cm : Nat) (w : NfAccWitness S8 k.commitmentsRoot (cm : ℤ)) :
++    (noteCreateCommitmentAcc k cm w).commitments = cm :: k.commitments := rfl
++
++/-- **THE INSERT IS FAITHFUL (kernel terms, GROW-ONLY tooth).** After a committed acc-create, `cm` is
++PRESENT in the new committed `commitmentsRoot` — the `create_inserts_root` analog of the nullifier
++`spend_inserts_root`, reducing to it through the `toCmAccState` projection. Non-vacuous: the witness
++type is genuinely inhabitable (`witness_inhabited_of_bindings`), so this is a real membership over an
++occupied domain, not a claim over an empty hypothesis. -/
++theorem noteCreateCommitmentAcc_present {S8 : Heap8Scheme} (k : RecordKernelState) (cm : Nat)
++    (w : NfAccWitness S8 k.commitmentsRoot (cm : ℤ)) :
++    (cm : ℤ) ∈ keysOf8 S8 (noteCreateCommitmentAcc k cm w).commitmentsRoot := by
++  simpa [noteCreateCommitmentAcc, spendNullifierRoot] using
++    spend_inserts_root k.toCmAccState (cm : ℤ) w
++
++#assert_axioms noteCreateCommitmentAcc_present
++#assert_axioms noteCreateCommitmentAcc_commitments
++
+ end Dregg2.Exec
+diff --git a/metatheory/Dregg2/Exec/RecordKernel.lean b/metatheory/Dregg2/Exec/RecordKernel.lean
+index 3b141a17c..2db583671 100644
+--- a/metatheory/Dregg2/Exec/RecordKernel.lean
++++ b/metatheory/Dregg2/Exec/RecordKernel.lean
+@@ -440,6 +440,16 @@ structure RecordKernelState where
+   `nullifierRoot`. Balance-NEUTRAL. DEFAULTS the empty-tree root (`fun _ => 0`), the additive
+   extension. Absorbed by the frame apex (`RestHashIffFrame`) alongside `nullifierRoot`. -/
+   revokedRoot   : Fin 8 → ℤ := fun _ => 0
++  /-- **THE COMMITMENT ACCUMULATOR ROOT** (VK-epoch flip; the GROW-ONLY dual of `nullifierRoot` — the
++  note-commitment frontier). The Poseidon2 sorted-tree root of the note-commitment SET: the `Digest8`
++  (`= Fin 8 → ℤ`) twin that binds every note commitment ever created. UNLIKE the nullifier root there
++  is NO double-spend gate — commitments are grow-only, always fresh, always admitted; the ONLY
++  obligation is that a committed create INSERTS the commitment so it is provably PRESENT
++  (`noteCreateCommitmentAcc_present`, the `create_inserts_root` analog of `spend_inserts_root`). Carries
++  ONLY the commitment; the whole commitment set never crosses the wire. Same `Fin 8 → ℤ` literal typing
++  as `nullifierRoot`. Balance-NEUTRAL. DEFAULTS the empty-tree root (`fun _ => 0`), the additive
++  extension. Absorbed by the frame apex (`RestHashIffFrame`) alongside `nullifierRoot`/`revokedRoot`. -/
++  commitmentsRoot : Fin 8 → ℤ := fun _ => 0
+ 
+ /-- **The `balance`-domain measure** over the record cell-state: the total `balance` field across
+ the live accounts. This is the conserved quantity — a domain measure over the named `balance`

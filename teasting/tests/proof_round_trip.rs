@@ -2,175 +2,86 @@
 //!
 //! Tests that proofs survive serialization boundaries — this catches wire protocol
 //! binding mismatches and format disagreements between prover and verifier.
+//!
+//! stark-kill (f04b2dd1e) deleted the hand-STARK engine and with it the legacy
+//! `PredicateProof` (+ `prove_predicate`/`verify_predicate`) and
+//! `stark::{proof_to_bytes, proof_from_bytes, verify}` these round-trips used to
+//! ride. Dispositions:
+//! - the predicate-proof postcard round-trips (GTE/LTE/GT/LT/NEQ) and the
+//!   predicate proof-size bound died with the `PredicateProof` type — the
+//!   descriptor-world predicate proofs live behind `dregg-circuit-prove`
+//!   (not a dep of this crate) and their wire shape is exercised by the
+//!   presentation-wire round-trip below plus the circuit-prove emit gates;
+//! - the raw STARK bytes round-trip is ported onto the surviving Plonky3
+//!   Merkle prover (same tooth: a serialized proof must deserialize and the
+//!   DESERIALIZED proof must verify);
+//! - the presentation-proof wire round-trip survives unchanged (its inner
+//!   membership proof now rides the descriptor `DescriptorProofWire` path).
 
 use dregg_circuit::BabyBear;
-use dregg_circuit::poseidon2::hash_fact;
-use dregg_circuit::predicate_air::{
-    PredicateProof, PredicateType, PredicateWitness, compute_fact_commitment, prove_predicate,
-    verify_predicate,
-};
-use dregg_circuit::stark::{proof_from_bytes, proof_to_bytes};
 use dregg_sdk::AuthRequest;
 use dregg_teasting::agent::{SimAgent, shared_root_key};
 
-/// Predicate proof: generate → serialize (postcard) → deserialize → verify.
-#[test]
-fn test_predicate_proof_serialization_round_trip() {
-    // Build a predicate witness: value=25, threshold=18, GTE.
-    let fact_hash = hash_fact(
-        BabyBear::new(42),
-        &[BabyBear::new(25), BabyBear::ZERO, BabyBear::ZERO],
-    );
-    let state_root = BabyBear::new(99999);
-    let fact_commitment = compute_fact_commitment(fact_hash, state_root);
-
-    let witness = PredicateWitness {
-        private_value: BabyBear::new(25),
-        threshold: BabyBear::new(18),
-        predicate_type: PredicateType::Gte,
-        fact_commitment,
-        blinding: None,
-        fact_hash: None,
-        state_root: None,
-    };
-
-    // Generate the proof.
-    let proof = prove_predicate(witness).expect("honest predicate should prove");
-
-    // Serialize to bytes (simulates wire transmission).
-    let bytes = postcard::to_allocvec(&proof).expect("proof serializes");
-
-    // Deserialize (simulates receiver parsing).
-    let recovered: PredicateProof = postcard::from_bytes(&bytes).expect("proof deserializes");
-
-    // Verify the recovered proof.
-    assert!(
-        verify_predicate(&recovered, BabyBear::new(18), fact_commitment).is_ok(),
-        "Deserialized predicate proof should verify"
-    );
-}
-
-/// Predicate proof: different predicate types all round-trip correctly.
-#[test]
-fn test_all_predicate_types_round_trip() {
-    let fact_hash = hash_fact(
-        BabyBear::new(1),
-        &[BabyBear::new(50), BabyBear::ZERO, BabyBear::ZERO],
-    );
-    let state_root = BabyBear::new(77777);
-    let fc = compute_fact_commitment(fact_hash, state_root);
-
-    let cases: Vec<(PredicateType, u32, u32)> = vec![
-        (PredicateType::Gte, 50, 30), // 50 >= 30
-        (PredicateType::Lte, 50, 80), // 50 <= 80
-        (PredicateType::Gt, 50, 30),  // 50 > 30
-        (PredicateType::Lt, 50, 80),  // 50 < 80
-        (PredicateType::Neq, 50, 30), // 50 != 30
-    ];
-
-    for (pred_type, value, threshold) in cases {
-        let witness = PredicateWitness {
-            private_value: BabyBear::new(value),
-            threshold: BabyBear::new(threshold),
-            predicate_type: pred_type,
-            fact_commitment: fc,
-            blinding: None,
-            fact_hash: None,
-            state_root: None,
-        };
-
-        let proof = prove_predicate(witness).unwrap_or_else(|| {
-            panic!(
-                "{:?}({}, {}) should be provable",
-                pred_type, value, threshold
-            )
-        });
-
-        let bytes = postcard::to_allocvec(&proof).unwrap();
-        let recovered: PredicateProof = postcard::from_bytes(&bytes).unwrap();
-
-        assert!(
-            verify_predicate(&recovered, BabyBear::new(threshold), fc).is_ok(),
-            "{:?} proof failed verification after round-trip",
-            pred_type,
-        );
-    }
-}
-
-/// STARK proof bytes: prove → to_bytes → from_bytes → verify.
+/// STARK proof bytes: prove → postcard bytes → deserialize → verify.
 ///
-/// Builds a Poseidon2-compatible Merkle witness (real hashing), generates a STARK proof,
-/// serializes/deserializes it, then verifies the deserialized proof.
+/// Builds a Poseidon2-compatible Merkle witness (real hashing), generates a real
+/// Plonky3 STARK proof, serializes/deserializes it, then verifies the
+/// deserialized proof (and that it still rejects wrong public inputs).
 #[test]
 fn test_stark_proof_bytes_round_trip() {
-    use dregg_circuit::merkle_air::{MerkleLevelWitness, MerkleWitness};
-    use dregg_circuit::poseidon2;
-    use dregg_circuit::presentation::generate_merkle_poseidon2_stark_proof;
-    use dregg_circuit::stark::verify;
-    use dregg_dsl_runtime::descriptors::merkle_poseidon2_circuit;
+    use dregg_circuit::plonky3_prover::{
+        DreggProof, generate_sound_merkle_trace, prove_plonky3, verify_plonky3,
+    };
 
-    // Build a Poseidon2-compatible Merkle witness (depth 4).
+    // Build a Poseidon2-compatible Merkle path (depth 4).
     let leaf_hash = BabyBear::new(12345);
     let depth = 4;
-    let mut current = leaf_hash;
-    let mut levels = Vec::with_capacity(depth);
-
+    let mut siblings = Vec::with_capacity(depth);
+    let mut positions = Vec::with_capacity(depth);
     for i in 0..depth {
-        let position = (i % 4) as u8;
-        let siblings = [
+        positions.push((i % 4) as u8);
+        siblings.push([
             BabyBear::new((i * 7 + 100) as u32),
             BabyBear::new((i * 7 + 200) as u32),
             BabyBear::new((i * 7 + 300) as u32),
-        ];
-
-        // Place current node at its position, siblings elsewhere (Poseidon2 hashing).
-        let mut children = [BabyBear::ZERO; 4];
-        let mut sib_idx = 0;
-        for j in 0..4u8 {
-            if j == position {
-                children[j as usize] = current;
-            } else {
-                children[j as usize] = siblings[sib_idx];
-                sib_idx += 1;
-            }
-        }
-        let parent = poseidon2::hash_4_to_1(&children);
-        levels.push(MerkleLevelWitness { position, siblings });
-        current = parent;
+        ]);
     }
 
-    let witness = MerkleWitness {
-        leaf_hash,
-        levels,
-        expected_root: current,
-    };
+    // Generate the trace; public inputs are [leaf, root].
+    let (trace, public_inputs) = generate_sound_merkle_trace(leaf_hash, &siblings, &positions);
+    assert_eq!(public_inputs[0], leaf_hash);
 
-    // Generate a STARK proof.
-    let proof = generate_merkle_poseidon2_stark_proof(&witness)
-        .expect("STARK proof generation should succeed with Poseidon2-compatible witness");
+    // Generate a real STARK proof.
+    let proof = prove_plonky3(&trace, &public_inputs);
 
-    // Serialize to bytes.
-    let bytes = proof_to_bytes(&proof);
+    // Serialize to bytes (simulates wire transmission).
+    let bytes = postcard::to_allocvec(&proof).expect("STARK proof should serialize");
     assert!(!bytes.is_empty(), "Serialized proof should be non-empty");
 
     // Deserialize from bytes.
-    let recovered = proof_from_bytes(&bytes).expect("STARK proof should deserialize");
+    let recovered: DreggProof =
+        postcard::from_bytes(&bytes).expect("STARK proof should deserialize");
 
     // Verify the recovered proof using the same public inputs.
-    let public_inputs = vec![witness.leaf_hash, witness.expected_root];
-    let circuit = merkle_poseidon2_circuit();
-    let result = verify(&circuit, &recovered, &public_inputs);
+    let result = verify_plonky3(&recovered, &public_inputs);
     assert!(
         result.is_ok(),
         "Deserialized STARK proof should verify: {:?}",
         result.err()
+    );
+
+    // The deserialized proof must still bind its public inputs: wrong root fails.
+    let wrong_pis = vec![public_inputs[0], BabyBear::new(0xBAD)];
+    assert!(
+        verify_plonky3(&recovered, &wrong_pis).is_err(),
+        "Deserialized proof must reject wrong public inputs"
     );
 }
 
 /// Presentation proof: full bridge proof survives postcard serialization.
 ///
 /// NOTE: This test documents a known serialization gap: the WirePresentationProof
-/// may fail to round-trip via postcard due to nested StarkProof field layout.
+/// may fail to round-trip via postcard due to nested proof field layout.
 /// If this test fails with DeserializeUnexpectedEnd, that's a real wire protocol bug
 /// that needs fixing (the prover and verifier disagree on the binary format).
 #[test]
@@ -208,39 +119,5 @@ fn test_presentation_proof_round_trip() {
         real_stark.verify(),
         dregg_circuit::PresentationVerification::Valid,
         "Recovered STARK proof should verify after round-trip"
-    );
-}
-
-/// Test that proof size is bounded (no accidental blowup from serialization).
-#[test]
-fn test_proof_size_bounded() {
-    let fact_hash = hash_fact(
-        BabyBear::new(1),
-        &[BabyBear::new(100), BabyBear::ZERO, BabyBear::ZERO],
-    );
-    let state_root = BabyBear::new(55555);
-    let fc = compute_fact_commitment(fact_hash, state_root);
-
-    let witness = PredicateWitness {
-        private_value: BabyBear::new(100),
-        threshold: BabyBear::new(50),
-        predicate_type: PredicateType::Gte,
-        fact_commitment: fc,
-        blinding: None,
-        fact_hash: None,
-        state_root: None,
-    };
-
-    let proof = prove_predicate(witness).unwrap();
-    let bytes = postcard::to_allocvec(&proof).unwrap();
-
-    // The constraint prover stores the full trace (35 columns * ~1024 rows * 4 bytes each),
-    // so a single predicate proof is ~50KB in the mock/constraint prover mode.
-    // In production (real STARK), this would be ~24KB. Either way, verify it's bounded
-    // to prevent accidental blowup from serialization (e.g., < 100KB).
-    assert!(
-        bytes.len() < 100_000,
-        "Predicate proof is {} bytes, expected < 100KB",
-        bytes.len()
     );
 }

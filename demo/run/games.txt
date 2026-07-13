@@ -1,6 +1,6 @@
 THE ATTESTED DUNGEONS — game selection over HTTP · the AI narrates, the world resolves
 driven run · attested-dm /game contract · narratorKind: model:gemma2:2b (a REAL local model)
-served at http://127.0.0.1:56163/vault
+served at http://127.0.0.1:51121/vault
 ==============================================================================
 
 A · THE REGISTRY  (GET /game/list)
@@ -17,13 +17,16 @@ A · THE REGISTRY  (GET /game/list)
   • deepdark-mine  The Deepdark Mine
       A race against the dark: your lamp burns one oil per step, eleven pitch-black levels stand between you and the Deepheart, and you must gather the oil caches to climb back to daylight before the flame dies.
       ★ Carry the deepheart to the Pithead.
+  • venom-deep     The Venomous Deep
+      A drowned wyrm-crypt of consumables and creeping venom: drink the bile to ford the poison-marsh, ward yourself with the shield-draught to endure the Bone Wyrm, and time the antidote to bear the Venom Heart back to the surface before the poison takes you.
+      ★ Carry the venom heart to the The Surface.
 
 ------------------------------------------------------------------------------
 B · THE SUNKEN VAULT  (reset world=sunken-vault; a couple of landing moves)
 ------------------------------------------------------------------------------
 
   » go north   (into the salt antechamber)
-    gemma2: The archway groans under your weight as you step through, a chill wind whipping salt spray into your face. The sound of waves crashing against the cliff is almost deafening.
+    gemma2: Lantern-shadows swaying, you leave the tide-worn shore and press on toward the north.
     world : LANDED → room antechamber · receipt rail #1 · world sunken-vault
 
   » take lantern   (a light against the dark)

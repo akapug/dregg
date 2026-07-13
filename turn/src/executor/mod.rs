@@ -446,6 +446,15 @@ pub fn project_slot_caveat_manifest(
             // per-slot AIR projection — deferred like the other record-level
             // relational atoms above.
             | dregg_cell::StateConstraint::FieldLteOther { .. }
+            // The HEAP analog of `FieldLteOther` (cross-KEY `heap[key] <=
+            // heap[other_key] + delta`). Same rung, and the boundary is named
+            // rather than silent: there is no `SLOT_CAVEAT_TAG_HEAP_*` — the
+            // slot-caveat PI vector cannot express a heap relation at all — so
+            // this atom is HOST-EVALUATED ONLY (`cell::program::eval`, which
+            // fails closed when either key is absent post-state) and carries NO
+            // in-circuit teeth. It must not be read as executor-enforced until a
+            // heap-relational AIR exists.
+            | dregg_cell::StateConstraint::HeapFieldLteOther { .. }
             | dregg_cell::StateConstraint::BoundedBy { .. }
             | dregg_cell::StateConstraint::FieldDeltaInRange { .. }
             | dregg_cell::StateConstraint::FieldGteHeight { .. }

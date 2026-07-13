@@ -188,7 +188,9 @@ pub fn reload_now(gw: &ServeGateway, origin: &str) -> ReloadOutcome {
             );
         }
         ReloadOutcome::NoConfig => {
-            eprintln!("dataplane: {origin} reconfig requested but DRORB_CONFIG is unset — nothing to reload");
+            eprintln!(
+                "dataplane: {origin} reconfig requested but DRORB_CONFIG is unset — nothing to reload"
+            );
         }
     }
     DRAINING.store(false, Ordering::SeqCst);

@@ -53,7 +53,11 @@ fn range_boundary_is_exactly_2_pow_29() {
 
     // max in-range diff accepts (non-vacuity: the range genuinely admits large-but-in-range diffs)
     assert!(
-        !rejects(&desc, &consistent_trace(two29 - 1, 40, 12345), &pis(40, 12345)),
+        !rejects(
+            &desc,
+            &consistent_trace(two29 - 1, 40, 12345),
+            &pis(40, 12345)
+        ),
         "diff = 2^29 - 1 (max in-range, C3/C5 consistent) must be ACCEPTED"
     );
 

@@ -226,8 +226,9 @@ fn t2_no_authorization_unchecked_in_production_paths() {
     let verify_call =
         "self.verify_authorization(action, target_cell, ledger, parent_cell, &path, turn_nonce)?;";
     let balance_mutation = "if let Some(delta) = action.balance_change";
-    let effect_mutation =
-        "self.apply_effect(effect, ledger, &path, &action.target, parent_cell, journal)?;";
+    // The effect-mutation call was widened to multiline when `created_by_turn`
+    // (provenance threading) was added; match its stable head.
+    let effect_mutation = "self.apply_effect(\n                effect,\n                ledger,";
 
     let verify_idx = execute_tree
         .find(verify_call)

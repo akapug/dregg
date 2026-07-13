@@ -48,7 +48,11 @@ fn honest_witness(start: u32, sym0: u32, seed: BabyBear) -> (Vec<Vec<BabyBear>>,
         row[NEXT] = BabyBear::new(nxt);
         row[ENTRY_HASH] = entry;
         row[RUNNING_HASH] = running;
-        row[IS_FIRST] = if i == 0 { BabyBear::ONE } else { BabyBear::ZERO };
+        row[IS_FIRST] = if i == 0 {
+            BabyBear::ONE
+        } else {
+            BabyBear::ZERO
+        };
         row[ACC] = acc;
         rows.push(row);
         cur = nxt;

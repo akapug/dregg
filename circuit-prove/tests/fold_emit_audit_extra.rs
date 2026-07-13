@@ -39,8 +39,14 @@ const TRANSITION_HASH: u32 = 909_090;
 
 fn facts() -> [(BabyBear, [BabyBear; 3]); 2] {
     [
-        (BabyBear::new(10), [BabyBear::new(20), BabyBear::new(30), BabyBear::ZERO]),
-        (BabyBear::new(110), [BabyBear::new(120), BabyBear::new(130), BabyBear::ZERO]),
+        (
+            BabyBear::new(10),
+            [BabyBear::new(20), BabyBear::new(30), BabyBear::ZERO],
+        ),
+        (
+            BabyBear::new(110),
+            [BabyBear::new(120), BabyBear::new(130), BabyBear::ZERO],
+        ),
     ]
 }
 
@@ -50,7 +56,10 @@ fn honest_trace() -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
     let old_root = BabyBear::new(OLD_ROOT_V);
     let new_root = BabyBear::new(NEW_ROOT_V);
     let t = BabyBear::new(TRANSITION_HASH);
-    let zero_fact_hash = hash_fact(BabyBear::ZERO, &[BabyBear::ZERO, BabyBear::ZERO, BabyBear::ZERO]);
+    let zero_fact_hash = hash_fact(
+        BabyBear::ZERO,
+        &[BabyBear::ZERO, BabyBear::ZERO, BabyBear::ZERO],
+    );
 
     let mut trace: Vec<Vec<BabyBear>> = Vec::new();
     for (i, (pred, terms)) in facts.iter().enumerate() {
@@ -68,8 +77,11 @@ fn honest_trace() -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
         row[FACT_TERM2] = terms[2];
         row[HASH_VALID] = BabyBear::ONE;
         let is_last_removal = (i + 1) as u32 == n;
-        row[REMOVAL_COUNT_PLUS_ONE] =
-            if is_last_removal { BabyBear::new(n) } else { BabyBear::new((i + 2) as u32) };
+        row[REMOVAL_COUNT_PLUS_ONE] = if is_last_removal {
+            BabyBear::new(n)
+        } else {
+            BabyBear::new((i + 2) as u32)
+        };
         row[PI4_CARRIER] = t;
         trace.push(row);
     }
@@ -119,10 +131,16 @@ fn rejects(desc: &EffectVmDescriptor2, trace: &[Vec<BabyBear>], pis: &[BabyBear]
 fn audit_forged_new_root_constancy_refuses() {
     let desc = parse_vm_descriptor2(GOLDEN_JSON).expect("decode");
     let (trace, pis) = honest_trace();
-    assert!(!rejects(&desc, &trace, &pis), "honest must be accepted — else vacuous");
+    assert!(
+        !rejects(&desc, &trace, &pis),
+        "honest must be accepted — else vacuous"
+    );
     let mut bad = trace.clone();
     bad[1][NEW_ROOT] += BabyBear::ONE;
-    assert!(rejects(&desc, &bad, &pis), "a non-constant NEW_ROOT must be REJECTED");
+    assert!(
+        rejects(&desc, &bad, &pis),
+        "a non-constant NEW_ROOT must be REJECTED"
+    );
 }
 
 /// AUDIT-B — the last-row `REMOVAL_COUNT == pi[2]` boundary (untouched by the shipped 6). Honest
@@ -131,8 +149,14 @@ fn audit_forged_new_root_constancy_refuses() {
 fn audit_forged_removal_count_pi_refuses() {
     let desc = parse_vm_descriptor2(GOLDEN_JSON).expect("decode");
     let (trace, pis) = honest_trace();
-    assert!(!rejects(&desc, &trace, &pis), "honest must be accepted — else vacuous");
+    assert!(
+        !rejects(&desc, &trace, &pis),
+        "honest must be accepted — else vacuous"
+    );
     let mut forged = pis.clone();
     forged[2] += BabyBear::ONE;
-    assert!(rejects(&desc, &trace, &forged), "a mismatched removal-count pi must be REJECTED");
+    assert!(
+        rejects(&desc, &trace, &forged),
+        "a mismatched removal-count pi must be REJECTED"
+    );
 }

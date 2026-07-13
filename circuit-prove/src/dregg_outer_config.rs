@@ -213,7 +213,7 @@ impl StarkGenericConfig for DreggOuterConfig {
 // pins constants, S-box, layer order, and both linear layers simultaneously
 // on both sides.
 
-const RC3_EXT_INITIAL: [[&str; 3]; 4] = [
+pub(crate) const RC3_EXT_INITIAL: [[&str; 3]; 4] = [
     [
         "0x1d066a255517b7fd8bddd3a93f7804ef7f8fcde48bb4c37a59a09a1a97052816",
         "0x29daefb55f6f2dc6ac3f089cebcc6120b7c6fef31367b68eb7238547d32c1610",
@@ -236,7 +236,7 @@ const RC3_EXT_INITIAL: [[&str; 3]; 4] = [
     ],
 ];
 
-const RC3_INTERNAL: [&str; 56] = [
+pub(crate) const RC3_INTERNAL: [&str; 56] = [
     "0x1a1d063e54b1e764b63e1855bff015b8cedd192f47308731499573f23597d4b5",
     "0x26abc66f3fdf8e68839d10956259063708235dccc1aa3793b91b002c5b257c37",
     "0x0c7c64a9d887385381a578cfed5aed370754427aabca92a70b3c2b12ff4d7be8",
@@ -295,7 +295,7 @@ const RC3_INTERNAL: [&str; 56] = [
     "0x268076b0054fb73f67cee9ea0e51e3ad50f27a6434b5dceb5bdde2299910a4c9",
 ];
 
-const RC3_EXT_TERMINAL: [[&str; 3]; 4] = [
+pub(crate) const RC3_EXT_TERMINAL: [[&str; 3]; 4] = [
     [
         "0x1acd63c67fbc9ab1626ed93491bda32e5da18ea9d8e4f10178d04aa6f8747ad0",
         "0x19f8a5d670e8ab66c4e3144be58ef6901bf93375e2323ec3ca8c86cd2a28b5a5",

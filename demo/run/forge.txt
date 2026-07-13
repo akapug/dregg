@@ -1,6 +1,6 @@
 THE FORGE — write a .dungeon world, play it, verify it
 driven run · attested-dm /game/author contract · narratorKind: model:us.anthropic.claude-haiku-4-5-20251001-v1:0 (a REAL local model)
-served at http://127.0.0.1:52071/forge
+served at http://127.0.0.1:57933/forge
 ============================================================================
 
 Write a .dungeon world in text; hit ▶ Play and it becomes a real attested AI dungeon:

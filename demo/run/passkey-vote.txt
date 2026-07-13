@@ -1,6 +1,6 @@
 THE COMMONS — the extension-less passkey voter
 driven run · CDP WebAuthn virtual authenticator (PRF) · real wasm StoryWorld
-served at http://127.0.0.1:51445
+served at http://127.0.0.1:59775
 ==================================================================
 
 ENROLL (no extension)

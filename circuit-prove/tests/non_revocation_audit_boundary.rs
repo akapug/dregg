@@ -145,7 +145,10 @@ fn x_above_R_not_bracketed() {
     );
     let rejected = rejects(&desc, &trace_of(&row), &[root, x]);
     eprintln!("x>R rejected? {rejected}");
-    assert!(rejected, "SOUNDNESS: an item above R (not bracketed) claimed fresh MUST be rejected");
+    assert!(
+        rejected,
+        "SOUNDNESS: an item above R (not bracketed) claimed fresh MUST be rejected"
+    );
 }
 
 /// CONTINUITY-GATE isolation (the emit-gate suite never tests it): break CUR1 != PAR0, recompute the
@@ -180,7 +183,10 @@ fn continuity_gate_isolated_bite() {
     row[PAR1] = root;
     let rejected = rejects(&desc, &trace_of(&row), &[root, x]);
     eprintln!("continuity-break rejected? {rejected}");
-    assert!(rejected, "the continuity gate (CUR1 == PAR0) must bite when broken");
+    assert!(
+        rejected,
+        "the continuity gate (CUR1 == PAR0) must bite when broken"
+    );
 }
 
 /// SANITY: the honest witness (x=200 strictly bracketed) proves+verifies, so a rejection above is
@@ -191,5 +197,8 @@ fn honest_still_accepts_sanity() {
     let l = BabyBear::new(100);
     let r = BabyBear::new(300);
     let (row, root) = consistent_row(BabyBear::new(200), l, r, 0, 1, BabyBear::new(777_777));
-    assert!(!rejects(&desc, &trace_of(&row), &[root, row[X]]), "honest witness must accept");
+    assert!(
+        !rejects(&desc, &trace_of(&row), &[root, row[X]]),
+        "honest witness must accept"
+    );
 }

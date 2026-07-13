@@ -37,7 +37,10 @@ fn chain_row(prev: BabyBear, derived: BabyBear) -> Vec<BabyBear> {
 }
 
 /// A genuine chain; every link honestly chains. Returns (trace, initial, final).
-fn honest_chain(prev0: BabyBear, deriveds: &[BabyBear]) -> (Vec<Vec<BabyBear>>, BabyBear, BabyBear) {
+fn honest_chain(
+    prev0: BabyBear,
+    deriveds: &[BabyBear],
+) -> (Vec<Vec<BabyBear>>, BabyBear, BabyBear) {
     let mut trace = Vec::new();
     let mut prev = prev0;
     for &d in deriveds {
@@ -98,11 +101,17 @@ fn broken_later_link_refuses() {
     let desc = parse_vm_descriptor2(GOLDEN_JSON).expect("decode");
     let (prev0, deriveds) = fixture();
     let (honest, hi, hf) = honest_chain(prev0, &deriveds);
-    assert!(!rejects(&desc, &honest, &[hi, hf]), "honest chain must accept");
+    assert!(
+        !rejects(&desc, &honest, &[hi, hf]),
+        "honest chain must accept"
+    );
     let acc2 = honest[2][ACC];
     let bogus = acc2 + BabyBear::ONE;
     let (bad, bi, bf) = broken_link_at(prev0, &deriveds, 3, bogus);
-    assert_ne!(bad[3][PREV], acc2, "the link into step 3 is genuinely broken");
+    assert_ne!(
+        bad[3][PREV], acc2,
+        "the link into step 3 is genuinely broken"
+    );
     // pins are self-consistent (bi = prev0, bf = recomputed acc_last); MS1 holds every row.
     assert!(
         rejects(&desc, &bad, &[bi, bf]),

@@ -49,6 +49,17 @@ rand = { version = "0.10" }
 rmp-serde = { version = "1.2" }
 getrandom = { workspace = true }
 
+# GPU prover backend (gpu_backend.rs): portable wgpu kernels behind the Plonky3
+# trait seams (TwoAdicSubgroupDft + a GPU Mmcs). Runtime-dispatched: no adapter
+# or non-GPU-able shapes fall back to the CPU path (no feature gate).
+wgpu = "24"
+pollster = "0.4"
+bytemuck = "1"
+rayon = "1"
+# Montgomery-constant derivation for the BN254 WGSL codegen (already in the
+# dependency graph via p3-bn254).
+num-bigint = "0.4"
+
 [dev-dependencies]
 dregg-cell = { path = "../cell" }
 dregg-cell-crypto = { path = "../cell-crypto" }
@@ -59,6 +70,7 @@ curve25519-dalek = { version = "4", features = ["alloc"] }
 getrandom = { workspace = true }
 serde_json = { workspace = true }
 blake3 = "1"
+tracing-subscriber = "0.3"
 
 [lints]
 workspace = true

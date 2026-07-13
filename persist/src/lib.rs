@@ -76,6 +76,16 @@ pub use snapshot::{Snapshot, SnapshotHead};
 /// exactly), so the construction (domain key, sort order, length prefix, whole-cell
 /// postcard leaves) is fixed; do not alter it without a domain bump.
 pub fn canonical_ledger_root(ledger: &dregg_cell::Ledger) -> [u8; 32] {
+    canonical_ledger_root_from_leaves(&canonical_ledger_leaves(ledger))
+}
+
+/// The sorted leaf set underlying [`canonical_ledger_root`]: `(cell_id,
+/// BLAKE3(postcard(cell)))` for every cell, sorted by id. Exposed so an
+/// inclusion-proof endpoint can hand a verifier the FULL leaf set to recompute the
+/// root from (the flat root has no O(log n) opening). The construction MUST stay
+/// byte-identical to `canonical_ledger_root` — both fold through
+/// [`canonical_ledger_root_from_leaves`].
+pub fn canonical_ledger_leaves(ledger: &dregg_cell::Ledger) -> Vec<([u8; 32], [u8; 32])> {
     let mut entries: Vec<([u8; 32], [u8; 32])> = ledger
         .iter()
         .map(|(id, cell)| {
@@ -84,9 +94,17 @@ pub fn canonical_ledger_root(ledger: &dregg_cell::Ledger) -> [u8; 32] {
         })
         .collect();
     entries.sort_by_key(|a| a.0);
+    entries
+}
+
+/// Fold the domain-separated flat root over an ALREADY-SORTED leaf set. Callers that
+/// already hold the leaves (an inclusion-proof verifier) reuse this instead of
+/// re-hashing cells; the fold order (len prefix, then id then leaf-hash per entry)
+/// is fixed and load-bearing.
+pub fn canonical_ledger_root_from_leaves(entries: &[([u8; 32], [u8; 32])]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new_derive_key("dregg-ledger-root-v2");
     hasher.update(&(entries.len() as u64).to_le_bytes());
-    for (id, h) in &entries {
+    for (id, h) in entries {
         hasher.update(id);
         hasher.update(h);
     }

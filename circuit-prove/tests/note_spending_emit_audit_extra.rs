@@ -15,7 +15,7 @@ use dregg_circuit::descriptor_ir2::{
 use dregg_circuit::dsl::note_spending::generate_note_spending_trace;
 use dregg_circuit::field::BabyBear;
 use dregg_circuit::note_spending_air::{
-    NOTE_SPENDING_WIDTH, NoteSpendingWitness, pi, limb_col, test_spending_key,
+    NOTE_SPENDING_WIDTH, NoteSpendingWitness, limb_col, pi, test_spending_key,
 };
 use dregg_circuit::poseidon2::{hash_fact, hash_many};
 use dregg_circuit_prove::note_spend_leaf_adapter::{
@@ -41,7 +41,14 @@ fn make_witness(tag: u8) -> NoteSpendingWitness {
         positions.push((i % 4) as u8);
     }
     NoteSpendingWitness::from_note_limbs(
-        &owner, 0xDEAD_BEEF_CAFE, 3, &nonce, &rand, key, siblings, positions,
+        &owner,
+        0xDEAD_BEEF_CAFE,
+        3,
+        &nonce,
+        &rand,
+        key,
+        siblings,
+        positions,
     )
 }
 

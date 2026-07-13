@@ -20311,6 +20311,7 @@ name = "starbridge-web-surface"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "dregg-app-framework",
  "dregg-cell",
  "dregg-cell-crypto",
  "dregg-firmament",

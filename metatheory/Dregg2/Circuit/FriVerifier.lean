@@ -399,6 +399,11 @@ structure BatchProofData (F : Type) where
   /-- The grinding proof-of-work witness output (a singleton when present): its low
   `query_proof_of_work_bits` bits must be zero. Empty ⇒ missing PoW ⇒ REJECT. -/
   powWitness : List F := []
+  /-- The quotient-chunks Merkle commitment — observed BETWEEN the `α` RLC-challenge squeeze and the
+  `ζ` OOD-point squeeze in the deployed p3 transcript (`uni-stark/src/verifier.rs:380`). Carried so
+  `FriTranscriptBind.deriveOod` can replicate the EXACT deployed ζ-squeeze point (making the deployed
+  `verifyBatch → verifyAlgoTB` swap faithful, not just additive). Empty ⇒ the abstract/legacy shape. -/
+  quotientCommit : List F := []
 
 /-- The public inputs the wrap carries: `[genesis_root, final_root, num_turns,
 chain_digest…]` (`ivc_turn_chain.rs:1296–1304`). Tooth 3 is `exposedSegment = this`. -/

@@ -9,7 +9,8 @@ use dregg_circuit::descriptor_ir2::{
 };
 use dregg_circuit::field::BabyBear;
 
-const GOLDEN_JSON: &str = include_str!("../../circuit/descriptors/dregg-bilateral-aggregation-v2.json");
+const GOLDEN_JSON: &str =
+    include_str!("../../circuit/descriptors/dregg-bilateral-aggregation-v2.json");
 
 const AGG_WIDTH: usize = 87;
 const COUNTS_BASE: usize = 13;
@@ -53,7 +54,12 @@ fn padding_row(cum: u32, n: u32) -> Vec<BabyBear> {
     r
 }
 fn honest() -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
-    let trace = vec![active_row(1, 1, 1), padding_row(1, 1), padding_row(1, 1), padding_row(1, 1)];
+    let trace = vec![
+        active_row(1, 1, 1),
+        padding_row(1, 1),
+        padding_row(1, 1),
+        padding_row(1, 1),
+    ];
     let mut pi = vec![BabyBear::ZERO; OUTER_PI_COUNT];
     for i in 0..13 {
         pi[i] = BabyBear::new(100 + i as u32);
@@ -80,10 +86,16 @@ fn rejects(desc: &EffectVmDescriptor2, trace: &[Vec<BabyBear>], pis: &[BabyBear]
 fn root_replay_mismatch_refuses() {
     let desc = parse_vm_descriptor2(GOLDEN_JSON).expect("decode");
     let (trace, pi) = honest();
-    assert!(!rejects(&desc, &trace, &pi), "honest must accept (non-vacuous)");
+    assert!(
+        !rejects(&desc, &trace, &pi),
+        "honest must accept (non-vacuous)"
+    );
     let mut bad = trace.clone();
     bad[0][ROOTS_BASE] = bad[0][ROOTS_BASE] + BabyBear::ONE;
-    assert!(rejects(&desc, &bad, &pi), "root replay mismatch must be REJECTED (CG-3 roots)");
+    assert!(
+        rejects(&desc, &bad, &pi),
+        "root replay mismatch must be REJECTED (CG-3 roots)"
+    );
 }
 
 /// NEW TAMPER 2 — the last-row n == pi[N_CELLS] pi_binding IN ISOLATION. Forge only pi[21] (leave the
@@ -95,7 +107,10 @@ fn last_row_n_pi_binding_refuses() {
     assert!(!rejects(&desc, &trace, &pi), "honest must accept");
     let mut forged = pi.clone();
     forged[PI_N_CELLS] = BabyBear::new(9); // trace last-row n stays 1
-    assert!(rejects(&desc, &trace, &forged), "n != pi[21] must be REJECTED (last-row pi_binding)");
+    assert!(
+        rejects(&desc, &trace, &forged),
+        "n != pi[21] must be REJECTED (last-row pi_binding)"
+    );
 }
 
 /// NEW TAMPER 3 — the firstNSeed boundary (n - consistent == 0 at row 0), which NO canary isolates.
@@ -109,7 +124,10 @@ fn first_n_seed_boundary_refuses() {
     assert!(!rejects(&desc, &trace, &pi), "honest must accept");
     let mut bad = trace.clone();
     bad[0][N_CELLS_ACTIVE_COL] = BabyBear::new(5); // row0 n=5, consistent=1 -> firstNSeed 5-1 != 0
-    assert!(rejects(&desc, &bad, &pi), "row-0 n != consistent must be REJECTED (firstNSeed boundary)");
+    assert!(
+        rejects(&desc, &bad, &pi),
+        "row-0 n != consistent must be REJECTED (firstNSeed boundary)"
+    );
 }
 
 /// DISCLOSURE CHECK — the dossier/impl DISCLOSE that BILATERAL_CONSISTENT (pi[22]==1) is an
@@ -124,5 +142,8 @@ fn bilateral_consistent_flag_is_honestly_off_descriptor() {
     let (trace, mut pi) = honest();
     pi[PI_BILATERAL_CONSISTENT] = BabyBear::ZERO;
     // Descriptor does NOT constrain pi[22] -> still accepts. Confirms the named-gate disclosure.
-    assert!(!rejects(&desc, &trace, &pi), "pi[22] is off-descriptor by design (named-gate posture)");
+    assert!(
+        !rejects(&desc, &trace, &pi),
+        "pi[22] is off-descriptor by design (named-gate posture)"
+    );
 }

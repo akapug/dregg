@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Deploy Gate — dregg</title>
+<style>
+  :root {
+    --ground:      #EFF2F5;
+    --panel:       #FFFFFF;
+    --ink:         #0F1519;
+    --ink-soft:    #47565F;
+    --slate:       #7C8C97;
+    --rule:        #D2DAE0;
+    --amber:       #B76E1B;
+    --amber-soft:  rgba(183, 110, 27, 0.10);
+    --verd:        #26766B;
+    --verd-soft:   rgba(38, 118, 107, 0.10);
+    --shadow:      0 1px 2px rgba(15,21,25,.05), 0 8px 24px -16px rgba(15,21,25,.25);
+
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ground:     #0C1114;
+      --panel:      #131A1F;
+      --ink:        #E4EAEE;
+      --ink-soft:   #9DAEB8;
+      --slate:      #6C7D88;
+      --rule:       #26313A;
+      --amber:      #E0983F;
+      --amber-soft: rgba(224, 152, 63, 0.12);
+      --verd:       #4FA99C;
+      --verd-soft:  rgba(79, 169, 156, 0.12);
+      --shadow:     0 1px 2px rgba(0,0,0,.3), 0 8px 24px -16px rgba(0,0,0,.8);
+    }
+  }
+  :root[data-theme="light"] {
+    --ground: #EFF2F5; --panel: #FFFFFF; --ink: #0F1519; --ink-soft: #47565F;
+    --slate: #7C8C97; --rule: #D2DAE0; --amber: #B76E1B; --amber-soft: rgba(183,110,27,.10);
+    --verd: #26766B; --verd-soft: rgba(38,118,107,.10);
+    --shadow: 0 1px 2px rgba(15,21,25,.05), 0 8px 24px -16px rgba(15,21,25,.25);
+  }
+  :root[data-theme="dark"] {
+    --ground: #0C1114; --panel: #131A1F; --ink: #E4EAEE; --ink-soft: #9DAEB8;
+    --slate: #6C7D88; --rule: #26313A; --amber: #E0983F; --amber-soft: rgba(224,152,63,.12);
+    --verd: #4FA99C; --verd-soft: rgba(79,169,156,.12);
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px -16px rgba(0,0,0,.8);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 17px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 0 28px; }
+  .stack { display: flex; flex-direction: column; }
+
+  /* ── masthead ─────────────────────────────────────────── */
+  header { padding: 72px 0 0; }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--slate);
+    display: flex; gap: 10px; align-items: center;
+  }
+  .eyebrow .dot { width: 5px; height: 5px; background: var(--amber); border-radius: 50%; }
+  h1 {
+    font-size: clamp(38px, 6.2vw, 60px);
+    line-height: 1.02;
+    letter-spacing: -.035em;
+    font-weight: 700;
+    text-wrap: balance;
+    margin: 22px 0 0;
+  }
+  h1 em { font-style: normal; color: var(--amber); }
+  .deck {
+    margin: 22px 0 0;
+    font-size: 20px;
+    line-height: 1.55;
+    color: var(--ink-soft);
+    max-width: 60ch;
+    text-wrap: pretty;
+  }
+
+  /* ── sections ─────────────────────────────────────────── */
+  section { padding: 54px 0 0; }
+  h2 {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--amber);
+    font-weight: 600;
+    margin: 0 0 14px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--rule);
+  }
+  h3 {
+    font-size: 21px; letter-spacing: -.015em; margin: 0 0 6px; font-weight: 650;
+    text-wrap: balance;
+  }
+  p { margin: 0 0 16px; max-width: 65ch; text-wrap: pretty; }
+  p:last-child { margin-bottom: 0; }
+  strong { font-weight: 650; }
+  .lede { font-size: 18px; }
+  code {
+    font-family: var(--mono); font-size: .875em;
+    background: var(--amber-soft); color: var(--amber);
+    padding: .1em .35em; border-radius: 3px;
+  }
+
+  /* ── the pipeline readout ─────────────────────────────── */
+  .pipe {
+    font-family: var(--mono); font-size: 13.5px; line-height: 1.9;
+    background: var(--panel); border: 1px solid var(--rule); border-radius: 8px;
+    padding: 20px 22px; margin: 22px 0 0; overflow-x: auto;
+    box-shadow: var(--shadow);
+  }
+  .pipe .arrow { color: var(--slate); }
+  .pipe .no  { color: var(--amber); font-weight: 700; }
+  .pipe .yes { color: var(--verd); font-weight: 700; }
+  .pipe .dim { color: var(--slate); }
+
+  /* ── the checks ───────────────────────────────────────── */
+  .checks { display: grid; gap: 1px; background: var(--rule);
+            border: 1px solid var(--rule); border-radius: 8px; overflow: hidden;
+            margin-top: 22px; }
+  .check { background: var(--panel); padding: 18px 20px; display: grid;
+           grid-template-columns: auto 1fr; gap: 14px; align-items: start; }
+  .tick {
+    font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: .06em;
+    color: var(--verd); background: var(--verd-soft);
+    padding: 3px 7px; border-radius: 4px; white-space: nowrap; margin-top: 2px;
+  }
+  .check p { margin: 4px 0 0; font-size: 15.5px; color: var(--ink-soft); max-width: none; }
+  .check h3 { font-size: 16.5px; }
+
+  /* ── THE BOUNDARY (the honest heart) ──────────────────── */
+  .boundary { margin: 62px 0 0; }
+  .bline {
+    position: relative; height: 1px; background: var(--amber);
+    margin: 0 0 0; opacity: .55;
+  }
+  .bline::before, .bline::after {
+    content: ""; position: absolute; top: -3px; width: 7px; height: 7px;
+    background: var(--amber); border-radius: 50%;
+  }
+  .bline::before { left: 0; } .bline::after { right: 0; }
+  .blabel {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .16em;
+    text-transform: uppercase; color: var(--amber); text-align: center;
+    margin: 0 0 10px; font-weight: 600;
+  }
+  .bside { padding: 20px 0 0; }
+  .bside .tag {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--slate); margin-bottom: 8px;
+  }
+  .bside ul { margin: 0; padding-left: 18px; color: var(--ink-soft); font-size: 15.5px; }
+  .bside li { margin-bottom: 4px; }
+  .bgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 34px; }
+
+  /* ── tiers ────────────────────────────────────────────── */
+  .tiers { display: flex; flex-direction: column; gap: 14px; margin-top: 22px; }
+  .tier {
+    background: var(--panel); border: 1px solid var(--rule); border-radius: 8px;
+    padding: 20px 22px; box-shadow: var(--shadow);
+    border-left: 3px solid var(--rule);
+  }
+  .tier.t1 { border-left-color: var(--verd); }
+  .tier.t2 { border-left-color: var(--amber); }
+  .tier.t3 { border-left-color: var(--slate); }
+  .tier-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .chip {
+    font-family: var(--mono); font-size: 10.5px; font-weight: 700;
+    letter-spacing: .08em; text-transform: uppercase;
+    padding: 3px 8px; border-radius: 4px; white-space: nowrap;
+  }
+  .chip.proven    { color: var(--verd);  background: var(--verd-soft); }
+  .chip.partial   { color: var(--amber); background: var(--amber-soft); }
+  .chip.governed  { color: var(--slate); background: color-mix(in srgb, var(--slate) 12%, transparent); }
+  .tier p { margin: 10px 0 0; font-size: 15.5px; color: var(--ink-soft); }
+
+  /* ── the disclaimer (credibility) ─────────────────────── */
+  .nope {
+    margin-top: 22px; padding: 22px 24px; border-radius: 8px;
+    background: var(--amber-soft); border: 1px solid color-mix(in srgb, var(--amber) 30%, transparent);
+  }
+  .nope h3 { color: var(--amber); }
+  .nope p { color: var(--ink); }
+
+  footer {
+    margin-top: 66px; padding: 26px 0 74px; border-top: 1px solid var(--rule);
+    font-family: var(--mono); font-size: 12.5px; color: var(--slate);
+    display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+  }
+  footer .em { color: var(--amber); }
+
+  @media (max-width: 620px) {
+    .bgrid { grid-template-columns: 1fr; gap: 22px; }
+    body { font-size: 16px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <header>
+    <div class="eyebrow"><span class="dot"></span> dregg · the deploy gate</div>
+    <h1>Don't detect scams.<br><em>Refuse them.</em></h1>
+    <p class="deck">Every contract scanner asks the same impossible question — <em>is this code evil?</em> — then asks you to trust its answer. A deploy gate can do something stronger: refuse a whole class of rug before any gas is spent, and hand the chain a proof of why.</p>
+  </header>
+
+  <section>
+    <h2>The problem with scanning</h2>
+    <p class="lede">"Is this contract malicious" is <strong>not a decidable question.</strong> Any non-trivial property of a program is undecidable in general — so no scanner can catch every scam and clear every honest contract. Attackers adapt to whatever filter you ship.</p>
+    <p>And every scanner in the space today is a <strong>trusted oracle.</strong> It hands down a verdict; you believe it, or you don't. There is nothing to check.</p>
+  </section>
+
+  <section>
+    <h2>The move: refuse before gas</h2>
+    <p>dregg already deploys its own systems through a <strong>checkable spec</strong> — a declarative capability layout, in one file. Before a single turn is produced, the whole declared authority structure is checked. A spec that amplifies authority, or creates value from nothing, is <strong>refused</strong>. Not warned about. Refused.</p>
+    <div class="pipe">
+      <span class="dim">spec.toml</span> <span class="arrow">──▶</span> lower <span class="arrow">──▶</span> static checks <span class="arrow">──┬─▶</span> <span class="no">REFUSED</span> <span class="dim">— non-amplification, node 2/0, cap "mint"</span><br>
+      <span class="dim">&nbsp;                              &nbsp;             &nbsp;   &nbsp;    └─▶</span> <span class="yes">APPLIED</span> <span class="dim">— receipt-chained, zero gas spent on a bad spec</span>
+    </div>
+  </section>
+
+  <section>
+    <h2>What the gate checks today</h2>
+    <div class="checks">
+      <div class="check">
+        <span class="tick">STATIC</span>
+        <div>
+          <h3>No hidden authority</h3>
+          <p>A granted capability must be an <em>attenuation</em> of one the granter actually holds. An undeclared super-admin, a mint power that exceeds what was handed down — refused at the edge. (This leg is grounded in a line-for-line transcription of seL4's own capability spec.)</p>
+        </div>
+      </div>
+      <div class="check">
+        <span class="tick">STATIC</span>
+        <div>
+          <h3>No value from nothing</h3>
+          <p>Per asset, every move in the deployment sums to exactly zero. A spec that mints supply out of thin air doesn't reach the chain.</p>
+        </div>
+      </div>
+      <div class="check">
+        <span class="tick">STATIC</span>
+        <div>
+          <h3>The whole authority structure, off one file</h3>
+          <p>Not "we scanned it and it looked fine" — the complete capability graph, declared and checked. Dangerous power that <em>is</em> declared becomes plainly visible, and gate policy can refuse it.</p>
+        </div>
+      </div>
+      <div class="check">
+        <span class="tick">STATIC</span>
+        <div>
+          <h3>Structural integrity</h3>
+          <p>No unchecked authorizations, no dangling references, no malformed action. The precise offending site is named — which root, which node, which effect.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="boundary">
+    <p class="blabel">the line we will not pretend to cross</p>
+    <div class="bline"></div>
+    <div class="bgrid">
+      <div class="bside">
+        <div class="tag">Above — decidable from the spec</div>
+        <ul>
+          <li>Per-asset conservation</li>
+          <li>Authority non-amplification</li>
+          <li>Attenuation along every grant</li>
+          <li>Structural well-formedness</li>
+        </ul>
+      </div>
+      <div class="bside">
+        <div class="tag">Below — needs the live executor</div>
+        <ul>
+          <li>Did the signer really hold that cap</li>
+          <li>Are the balances actually there</li>
+          <li>Credential and signature validity</li>
+          <li>The whole-state proof</li>
+        </ul>
+      </div>
+    </div>
+    <p style="margin-top:26px; color:var(--ink-soft);">This boundary isn't a footnote we bury. It's a module in the codebase. The static checks are <strong>necessary, not sufficient</strong> — they say so themselves, and they name exactly what they cannot see. A gate that hides its limits is a gate you can't trust.</p>
+  </section>
+
+  <section>
+    <h2>Three honest tiers</h2>
+    <div class="tiers">
+      <div class="tier t1">
+        <div class="tier-head">
+          <h3>Deployed as a dregg capability layout</h3>
+          <span class="chip proven">provable</span>
+        </div>
+        <p>Whole rug-classes are structurally refused or made plainly visible, before gas. This is the strong tier, and it exists today.</p>
+      </div>
+      <div class="tier t2">
+        <div class="tier-head

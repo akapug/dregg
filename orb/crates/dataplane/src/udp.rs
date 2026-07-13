@@ -53,7 +53,7 @@ pub fn run(addr: &str, gw: ServeGateway) {
                 if e.kind() == std::io::ErrorKind::WouldBlock
                     || e.kind() == std::io::ErrorKind::TimedOut =>
             {
-                continue
+                continue;
             }
             Err(_) => continue,
         };
