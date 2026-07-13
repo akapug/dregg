@@ -158,7 +158,13 @@ def babyBearD4W16 : Poseidon2RealParams :=
 
 /-! ## §1 — the single named cryptographic assumption: Poseidon2 sponge collision-resistance. -/
 
-/-- **`Poseidon2SpongeCR sponge`** — the SOLE crypto assumption: the Poseidon2 sponge
+/-- **`Poseidon2SpongeCR sponge`** — ⚠ **BROKEN / VACUOUS AT REAL PARAMS.** This is stated as
+INJECTIVITY, which is FALSE for any real (range-bounded) sponge — collisions EXIST by cardinality, they
+are merely hard to FIND. `HashFloorHonesty.poseidon2SpongeCR_false_babyBear` PROVES this floor false at
+the deployed BabyBear parameters, so every theorem conditioned on it is vacuously true. KEPT for the
+record; the honest computational replacement is `HashFloorHonesty.CollisionResistant`.
+
+The SOLE crypto assumption (as originally intended): the Poseidon2 sponge
 `sponge : List ℤ → ℤ` is collision-resistant, i.e. injective on the idealized hash domain. This is
 the `Crypto.PortalFloor.Blake3Kernel.noCollision`/`Poseidon2Kernel.noCollision` shape (CR stated as
 injectivity), specialized to the `ℤ`-valued sponge `StateCommit`/`Poseidon2Emit` use. REALIZABLE by

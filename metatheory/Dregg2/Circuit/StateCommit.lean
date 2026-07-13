@@ -205,12 +205,22 @@ def recStateCommit (k : RecordKernelState) (t : Turn) : ℤ :=
 The carried set is the standard Poseidon CR (each REALIZABLE injectivity of a genuine hash). The
 per-digest binding facts the soundness `funext` consumes are PROVED from it, not carried. -/
 
-/-- **CR carrier `compressInjective h`** — the 2-to-1 hash `h` is injective: `h a b = h c d ⇒ a=c ∧
+/-- **CR carrier `compressInjective h`** — ⚠ **BROKEN / VACUOUS FOR A RANGE-BOUNDED COMPRESSION.**
+Stated as injectivity of a 2-to-1 map into one field element, which is FALSE by cardinality
+(`HashFloorHonesty.compressInjective_false_of_finite_range`) — two field elements do not fit in one.
+KEPT for the record; honest replacement `HashFloorHonesty.CollisionResistant`.
+
+As originally intended: the 2-to-1 hash `h` is injective: `h a b = h c d ⇒ a=c ∧
 b=d`. The standard collision-resistance of a Poseidon 4-to-1/node compress (REALIZABLE — unlike the
 injectivity of a `+`-fold, which is FALSE). Used at both `cmb` and `compress`. -/
 def compressInjective (h : ℤ → ℤ → ℤ) : Prop := ∀ a b c d : ℤ, h a b = h c d → a = c ∧ b = d
 
-/-- **CR carrier `compressNInjective h`** — the sponge `h` over a list of leaves is injective:
+/-- **CR carrier `compressNInjective h`** — ⚠ **BROKEN / VACUOUS AT REAL PARAMS** (same predicate as
+`Poseidon2SpongeCR`): injectivity of a `List ℤ → ℤ` sponge is FALSE for any bounded-range sponge
+(`HashFloorHonesty.compressNInjective_false_of_finite_range`). KEPT for the record; honest replacement
+`HashFloorHonesty.CollisionResistant`.
+
+As originally intended: the sponge `h` over a list of leaves is injective:
 `h xs = h ys ⇒ xs = ys`. The standard collision-resistance of a Poseidon sponge (REALIZABLE). -/
 def compressNInjective (h : List ℤ → ℤ) : Prop := ∀ xs ys : List ℤ, h xs = h ys → xs = ys
 

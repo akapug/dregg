@@ -340,10 +340,17 @@ def CommitReveal.commit {Idx W C : Type*} (cr : CommitReveal Idx W C) (i : Idx) 
 def CommitReveal.opens {Idx W C : Type*} (cr : CommitReveal Idx W C) (cm : C) (i : Idx) (w : W) : Prop :=
   cr.commit i w = cm
 
-/-- **`HashCR`** — the named collision-resistance carrier: `H` is injective on the committed domain (for
-each fixed index, distinct `w` hash to distinct commitments). Modeled as the abstract injectivity a
-collision-resistant hash provides on the committed domain; assumed at the boundary, never proved (the
-Poseidon2/hash floor `Dregg2` already carries). -/
+/-- **`HashCR`** — ⚠ **BROKEN / VACUOUS FOR A COMPRESSING COMMITMENT.** Stated as INJECTIVITY, which is
+FALSE whenever `|C| < |W|` (the defining property of a commitment): pigeonhole forces two reveals to one
+commitment. `HashFloorHonesty.hashCR_false_of_compressing` PROVES this floor false for a compressing
+commit-reveal, so consumers conditioned on it are vacuously true. KEPT for the record; the honest
+computational replacement is `HashFloorHonesty.CollisionResistant` (advantage-bounded binding via
+`HashFloorHonesty.equivocation_advantage_negligible`).
+
+The named collision-resistance carrier (as originally intended): `H` is injective on the committed
+domain (for each fixed index, distinct `w` hash to distinct commitments). Modeled as the abstract
+injectivity a collision-resistant hash provides on the committed domain; assumed at the boundary, never
+proved (the Poseidon2/hash floor `Dregg2` already carries). -/
 def HashCR {Idx W C : Type*} (cr : CommitReveal Idx W C) : Prop :=
   ∀ (i : Idx) (w w' : W), cr.H i w = cr.H i w' → w = w'
 
