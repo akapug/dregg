@@ -389,6 +389,7 @@ turns the proven exact-book core into a real exchange.
 ---
 
 ## See also
+`DREX-ROUTING.md` (the cross-chain trade-routing design: the three custody modes, the ring-of-locks that dissolves the LP problem, and the atomicity/liveness escrow that is §6's open rung made concrete) ·
 `DREGGFI-VISION.md` · `DREGGFI-AMBITION.md` (the substrate frame + the moat) ·
 `metatheory/Market/{Clearing,Fairness,Aggregation}.lean` (rungs 1–2, PROVED; rung 1 ledger-realized) ·
 `metatheory/Market/{Priced,Optimality,Liquidity}.lean` (rungs 5/4/6, PROVED at model scope — priced `Fill`/reserve model, not yet `settleRing`-realized) ·

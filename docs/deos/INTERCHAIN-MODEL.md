@@ -48,6 +48,19 @@ It does **not** mean:
 The non-custodial guarantee is the same both ways: **you never move tokens into a bridge
 wallet.** You prove, you don't lock.
 
+> **Scope of "prove, don't lock" — it is the HOLDINGS/GOVERNANCE model, not the TRADING one.**
+> Everything above is about *referencing* a holding for a vote, an eligibility gate, or collateral —
+> a **read-only weight** that moves nothing and keeps custody in your wallet. **Trading a foreign
+> asset is different**: to make an off-chain asset spendable inside dregg you **lock it into a
+> proof-gated vault and mint a native mirror** (the lock is what prevents the double-spend), trade the
+> mirror, then burn-and-release on exit (`docs/deos/TOKEN-MIRROR-BRIDGE.md`,
+> `chain/contracts/DreggVault.sol`). That is real custody — surrendered to a *contract that releases
+> only on a proof*, never to a custodian or a validator set, but custody nonetheless. So the three
+> modes are: **(a)** native dregg assets — self-custody, trade freely; **(b)** foreign assets for
+> trading — lock→mirror→trade→release (proof-gated custody); **(c)** holdings for governance —
+> prove, don't lock (this section). Do NOT let "prove, don't lock" read as the trading model; the
+> cross-chain trade-routing design is `docs/deos/DREX-ROUTING.md`.
+
 ## Per-chain maturity (honest — this is the load-bearing table)
 
 | chain | inbound (prove holdings → govern) | outbound (chain verifies a dregg proof) |
