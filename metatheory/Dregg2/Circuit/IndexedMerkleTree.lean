@@ -500,7 +500,130 @@ theorem demo_present_not_absent : ¬ ImtAbsent demoChain 20 := by
 
 end Teeth
 
-/-! ## §10 — AXIOM HYGIENE. -/
+/-! ## §10 — ★ THE AAFI BRIDGE: the deployed AAFI gates' law (A2) DERIVES sorted-chain preservation
+and `CanonicalHeapExtract`, closing the gap-#5 residual into `{Poseidon2SpongeCR, FRI-LDT}`.
+
+`MapOpsColumnLayout.aafiInsert_forces_imtInsert` (A2, PROVEN) delivers — from an accepting AAFI row —
+the DIGEST-VECTOR FACE of the two-point update PLUS the pointer bracket `low.addr < k < low.next`
+(the `ImtAbsent` witness, forced by the deployed range gate, NOT a free witness). A2 could not name
+`imtInsert`/`imtInsert_preserves` (`IndexedMerkleTree` IMPORTS `MapOpsColumnLayout`, not the reverse),
+so the one-lemma follow-up lives HERE, where both A2's law and `imtInsert_preserves` are in scope.
+
+⚠ NAMED SHAPE SEAM (per `feedback-named-seam-is-not-a-hole.md`): A2's conclusion lives on the FLAT
+committed digest vector `xs : List ℤ` (length `2^dep`, positions `p1/p2`); `imtInsert` lives on the
+SORTED chain `c : List ImtLeaf`. The one fact connecting the two representations — that the low leaf
+the AAFI row OPENS (bound into `xs` at `p1` by `pathRecompute_binds_updates` under CR) is the SAME
+leaf sitting in the sorted chain `c` — is the chain↔vector commitment correspondence, maintained by
+the `heap_root.rs` producer and modeled in NEITHER Lean file. The bridge takes it as the explicit
+`(⟨lowAddr, lowValue, lowNext⟩ : ImtLeaf) ∈ c` hypothesis (a MEMBERSHIP fact — NOT `ImtSorted`, NOT
+`CanonicalHeapExtract`; nothing re-assumed). Given it, A2's forced bracket IS an `ImtAbsent c k`
+witness, and `imtInsert_preserves` fires. This is the maximal bridge below the (unmodeled)
+representation map. -/
+
+section AafiBridge
+
+open Dregg2.Circuit.Poseidon2Binding.Reference (refSponge refSponge_CR)
+
+/-- **`aafiGates_force_imtAbsent` — the deployed range gate FORCES the `ImtAbsent` witness.** An
+accepting AAFI row (`AafiGatesAt`) whose opened low leaf `⟨lowAddr, lowValue, lowNext⟩` is a member of
+the sorted chain `c` FORCES `k` pointer-bracket-absent from `c`: A2's law surfaces the bracket
+`lowAddr < k < lowNext` (forced by the deployed range gate through `pathRecompute_binds_updates`), and
+the membership completes the `∃ low ∈ c, …` witness. NO re-assumption — the bracket is gate-forced. -/
+theorem aafiGates_force_imtAbsent (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash) (dep : Nat)
+    {c : List ImtLeaf} {oldRoot newRoot k v lowAddr lowValue lowNext freeEmpty : ℤ}
+    (hg : MapOpsColumnLayout.AafiGatesAt hash dep
+      oldRoot newRoot k v lowAddr lowValue lowNext freeEmpty)
+    (hlow : (⟨lowAddr, lowValue, lowNext⟩ : ImtLeaf) ∈ c) :
+    ImtAbsent c k := by
+  obtain ⟨_, _, _, _, _, _, _, _, _, hlk, hkn⟩ :=
+    MapOpsColumnLayout.aafiInsert_forces_imtInsert hash hCR dep hg
+  exact ⟨⟨lowAddr, lowValue, lowNext⟩, hlow, hlk, hkn⟩
+
+/-- **`aafiGates_force_sortedKeys` — the deployed AAFI gates DERIVE sorted-chain preservation.** On an
+`ImtSorted` pre-chain, an accepting AAFI row whose opened low leaf is in the chain yields (i) an
+`ImtSorted` POST-chain (`imtInsert_preserves`, applicable because A2's bracket is the `ImtAbsent`
+bracket) and (ii) its projected felt heap is `Heap.SortedKeys` (`imtSorted_sortedKeys`). So the
+deployed gates FORCE the sortedness `CanonicalHeapExtract` carries — not a trusted producer. -/
+theorem aafiGates_force_sortedKeys (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash) (dep : Nat)
+    {c : List ImtLeaf} {oldRoot newRoot k v lowAddr lowValue lowNext freeEmpty : ℤ}
+    (hs : ImtSorted c)
+    (hg : MapOpsColumnLayout.AafiGatesAt hash dep
+      oldRoot newRoot k v lowAddr lowValue lowNext freeEmpty)
+    (hlow : (⟨lowAddr, lowValue, lowNext⟩ : ImtLeaf) ∈ c) :
+    ImtSorted (imtInsert c k v) ∧ Heap.SortedKeys (imtToHeap (imtInsert c k v)) := by
+  have hpost : ImtSorted (imtInsert c k v) :=
+    imtInsert_preserves hs (aafiGates_force_imtAbsent hash hCR dep hg hlow)
+  exact ⟨hpost, imtSorted_sortedKeys hpost⟩
+
+/-- **`AafiReachable`** — the chains the DEPLOYED AAFI-routed turn stream reaches: the genesis
+sentinel chain, or one accepting AAFI ROW (`AafiGatesAt` + the opened low leaf in the current chain)
+from a reachable chain. The `Reachable` twin whose step is an actual GATE acceptance rather than an
+abstract `ImtAbsent` — the bridge derives the `ImtAbsent` the step needs from the gate. -/
+inductive AafiReachable (hash : List ℤ → ℤ) (dep : Nat) (lo hi : ℤ) : List ImtLeaf → Prop where
+  | genesis : AafiReachable hash dep lo hi (genesis lo hi)
+  | step {c k v oldRoot newRoot lowAddr lowValue lowNext freeEmpty} :
+      AafiReachable hash dep lo hi c →
+      MapOpsColumnLayout.AafiGatesAt hash dep
+        oldRoot newRoot k v lowAddr lowValue lowNext freeEmpty →
+      (⟨lowAddr, lowValue, lowNext⟩ : ImtLeaf) ∈ c →
+      AafiReachable hash dep lo hi (imtInsert c k v)
+
+/-- **`aafiReachable_sorted` — THE AAFI CHAIN INVARIANT.** Every chain the deployed AAFI-routed stream
+reaches is `ImtSorted`: genesis is sorted, and each accepting AAFI row's gate-forced bracket (via the
+bridge) drives `imtInsert_preserves`. The sorted-chain induction is DISCHARGED by the deployed gates,
+not assumed. -/
+theorem aafiReachable_sorted (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash) (dep : Nat)
+    {lo hi : ℤ} (hlohi : lo < hi) {c : List ImtLeaf}
+    (h : AafiReachable hash dep lo hi c) : ImtSorted c := by
+  induction h with
+  | genesis => exact genesis_sorted hlohi
+  | step _ hg hlow ih => exact imtInsert_preserves ih (aafiGates_force_imtAbsent hash hCR dep hg hlow)
+
+/-- **`aafiChain_canonicalHeapExtract` — CanonicalHeapExtract DERIVED for the AAFI accumulators.** Every
+root the deployed AAFI-routed stream reaches from the sorted genesis projects to a `Heap.SortedKeys`
+felt heap — the `SortedKeys h` premise the 7 mapOp effects carry inside `MapReconcileFamily` is, for
+the AAFI path, a THEOREM forced by the gates (`aafiReachable_sorted` + `imtSorted_sortedKeys`). The
+leaf/root binding is `imtLeafHash_injective` + the reused `pathRecompute_binds_updates` (twice, inside
+A2); the residual is EXACTLY `{Poseidon2SpongeCR, FRI-LDT}` — no separate heap-sortedness assumption. -/
+theorem aafiChain_canonicalHeapExtract (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR hash) (dep : Nat)
+    {lo hi : ℤ} (hlohi : lo < hi) {c : List ImtLeaf}
+    (h : AafiReachable hash dep lo hi c) : Heap.SortedKeys (imtToHeap c) :=
+  imtSorted_sortedKeys (aafiReachable_sorted hash hCR dep hlohi h)
+
+/-! ### §10a — NON-VACUITY TEETH: a concrete accepting AAFI row FIRES the derivation; a forged
+(out-of-gap) row admits NO gate, so it cannot reach it. On the CR-proved reference sponge, at the
+2-level toy heap (heap-safe: depth-generic law applied symbolically, no `2^16` object, no field
+`decide`); reuses A2's `aafi_toy_gates` / `aafi_toy_out_of_gap_bites`. -/
+
+/-- **★ RESPECTING TOOTH — the AAFI row FIRES the derivation.** The honest gate data inserting
+`50 ↦ 7` in the genesis `(0 → 100)` gap (A2's `aafi_toy_gates`, low leaf `⟨0,0,100⟩ ∈ genesis 0 100`)
+steps `AafiReachable`: the deployed gate DERIVES a reachable post-chain. -/
+theorem aafi_genesis_reachable :
+    AafiReachable refSponge 2 (0 : ℤ) 100 (imtInsert (genesis 0 100) 50 7) :=
+  AafiReachable.step AafiReachable.genesis
+    (MapOpsColumnLayout.aafi_toy_gates refSponge) (by simp [genesis])
+
+/-- **★ …and it PROJECTS to `Heap.SortedKeys`** — `CanonicalHeapExtract` fired end-to-end from the
+deployed AAFI gate acceptance, through the bridge, to the sortedness conjunct. Non-vacuous: a real
+accepting row produces a real `SortedKeys` heap. -/
+theorem aafi_genesis_sortedKeys :
+    Heap.SortedKeys (imtToHeap (imtInsert (genesis 0 100) 50 7)) :=
+  aafiChain_canonicalHeapExtract refSponge refSponge_CR 2 (by norm_num) aafi_genesis_reachable
+
+/-- **REJECT TOOTH — a FORGED (out-of-gap) row admits NO gate.** A key `150` outside the `(0, 100)`
+pointer gap has no accepting AAFI gate data (A2's `aafi_toy_out_of_gap_bites`: the range gate demands
+`150 < 100`, false), so NO `AafiReachable.step` can be built from it — the derivation fires only on
+genuinely bracketed inserts, never on the out-of-gap (double-spend-shape) forge. -/
+theorem aafi_forged_no_gate :
+    ¬ MapOpsColumnLayout.AafiGatesAt refSponge 2
+        (MapOpsColumnLayout.aafiOldRootToy refSponge)
+        (MapOpsColumnLayout.aafiNewRootToy refSponge) 150 7 0 0 100
+        (MapOpsColumnLayout.aafiEmpty refSponge) :=
+  MapOpsColumnLayout.aafi_toy_out_of_gap_bites refSponge
+
+end AafiBridge
+
+/-! ## §11 — AXIOM HYGIENE. -/
 
 #assert_axioms imtLeafHash_injective
 #assert_axioms imtSorted_addrs_sorted
@@ -517,5 +640,12 @@ end Teeth
 #assert_axioms demoChain_reachable
 #assert_axioms demo_25_excluded
 #assert_axioms demo_present_not_absent
+#assert_axioms aafiGates_force_imtAbsent
+#assert_axioms aafiGates_force_sortedKeys
+#assert_axioms aafiReachable_sorted
+#assert_axioms aafiChain_canonicalHeapExtract
+#assert_axioms aafi_genesis_reachable
+#assert_axioms aafi_genesis_sortedKeys
+#assert_axioms aafi_forged_no_gate
 
 end Dregg2.Circuit.IndexedMerkleTree
