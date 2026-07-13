@@ -25,6 +25,7 @@ import Market.Priced
 import Market.Optimality
 import Market.Liquidity
 import Market.LedgerRealization
+import Market.LedgerRealizationExt
 import Market.CrossMargin
 import Market.Lending
 import Market.OracleWeld
