@@ -974,6 +974,253 @@ impl MirrorState {
     }
 }
 
+/// **Anchored proof-of-lock fixture builders — TEST/DEV ONLY.**
+///
+/// Assemble a full bank-state-provenance [`SolanaLockProof`] (the bridge vault
+/// account carrying the lock record + consensus evidence + [`StakeProvenance`])
+/// whose stake table derives from proven stake/vote accounts — the exact shape
+/// [`verify_lock_proof_consensus_anchored`] (the production, trustless entry)
+/// verifies. This is the LOCK analogue of
+/// [`crate::solana_holdings::fixtures::anchored_holding_with_cluster`]: the SAME
+/// ≥2/3-stake + accounts-inclusion + pinned-anchor machinery the holdings proof
+/// uses, pointed at the bridge's *vault* account (with a lock record) instead of
+/// the holder's own token account. Compiled only under `cfg(test)` / the dev-only
+/// `test-utils` feature; never in a shipped build.
+#[cfg(any(test, feature = "test-utils"))]
+pub mod fixtures {
+    use super::*;
+    use crate::solana_consensus::{BankHashComponents, PohSegment};
+    use crate::solana_provenance::fixtures as prov;
+    use crate::solana_provenance::{
+        STAKE_HISTORY_SYSVAR_ID, STAKE_PROGRAM_ID, SYSVAR_OWNER_ID, derive_stake_table,
+        vote_program_id,
+    };
+    use crate::solana_wire::{encode_lock_record, solana_account_hash};
+
+    /// A fully **bank-state-provenance** lock proof over the cluster described by
+    /// `validators` (`(key_seed, stake)` pairs): the stake table + authorized
+    /// voters derive from proven stake/vote accounts, the votes are real signed
+    /// TowerSync transactions by the on-chain authorized voters, and the bridge
+    /// vault account (carrying the lock record) + all provenance accounts root
+    /// into ONE accounts hash that the bank hash commits to and the
+    /// super-majority voted. Returns `(proof, anchor, poh_policy)` where `anchor`
+    /// pins THIS cluster's genuine derived distribution — a verifier pinning a
+    /// DIFFERENT anchor refuses the proof with
+    /// [`crate::solana_provenance::ProvenanceError::AnchorRootMismatch`].
+    ///
+    /// The vault account is owned by `lock_program`, so the produced proof also
+    /// satisfies [`SolanaLockProof::binds_bridge_vault`] for a mirror configured
+    /// with `(vault_account, lock_program)` — i.e. it drives the value-bearing
+    /// [`MirrorState::mint_against_lock_proof_anchored`] end-to-end, not merely the
+    /// verifier.
+    #[allow(clippy::too_many_arguments)]
+    pub fn anchored_lock_with_cluster(
+        spl_mint: &[u8; 32],
+        lock_program: &[u8; 32],
+        vault_account: [u8; 32],
+        recipient: CellId,
+        amount: u64,
+        lock_id: u8,
+        validators: &[(u8, u64)],
+    ) -> (SolanaLockProof, WeakSubjectivityAnchor, PohAnchorPolicy) {
+        assert!(
+            !validators.is_empty() && validators.len() <= 7,
+            "1..=7 validators fit the single-chunk fixture"
+        );
+        let epoch = 42u64;
+        let slot = 7_000u64;
+        let lid = [lock_id; 32];
+
+        let vote_program = vote_program_id();
+        let stake_program = STAKE_PROGRAM_ID;
+        let sysvar_owner = SYSVAR_OWNER_ID;
+
+        // Per-validator identities + account data.
+        let auths: Vec<_> = validators.iter().map(|(seed, _)| prov::sk(*seed)).collect();
+        let vas: Vec<[u8; 32]> = validators
+            .iter()
+            .map(|(seed, _)| [*seed ^ 0xA5; 32])
+            .collect();
+        let sas: Vec<[u8; 32]> = validators
+            .iter()
+            .map(|(seed, _)| [*seed ^ 0x5A; 32])
+            .collect();
+        let vds: Vec<Vec<u8>> = auths
+            .iter()
+            .map(|a| {
+                prov::build_vote_account_data(&[0x01u8; 32], &a.verifying_key().to_bytes(), epoch)
+            })
+            .collect();
+        let sds: Vec<Vec<u8>> = validators
+            .iter()
+            .zip(&vas)
+            .map(|((_, stake), va)| prov::build_stake_account_data(va, *stake, 0, u64::MAX))
+            .collect();
+        let shd = prov::encode_stake_history_data(&[]); // empty → epoch-0 stake fully warmed
+
+        // The bridge's vault account, carrying the lock record.
+        let vault_data = encode_lock_record(&lid, &recipient, amount);
+        let vault_lamports = 2_000_000u64;
+        let vault_rent_epoch = 5u64;
+
+        // One 16-ary chunk: [vault, votes…, stakes…, stake_history].
+        let mut leaves = vec![solana_account_hash(
+            vault_lamports,
+            lock_program,
+            false,
+            vault_rent_epoch,
+            &vault_data,
+            &vault_account,
+        )];
+        for (va, vd) in vas.iter().zip(&vds) {
+            leaves.push(solana_account_hash(
+                1_000_000,
+                &vote_program,
+                false,
+                0,
+                vd,
+                va,
+            ));
+        }
+        for (sa, sd) in sas.iter().zip(&sds) {
+            leaves.push(solana_account_hash(
+                1_000_000,
+                &stake_program,
+                false,
+                0,
+                sd,
+                sa,
+            ));
+        }
+        leaves.push(solana_account_hash(
+            1_000_000,
+            &sysvar_owner,
+            false,
+            0,
+            &shd,
+            &STAKE_HISTORY_SYSVAR_ID,
+        ));
+        let (accounts_hash, proofs) = prov::single_chunk(&leaves);
+        let n = validators.len();
+        // The truthful claimed-tally hints (every validator votes): the anchored
+        // path IGNORES these and recomputes from bank state, but the structure-only
+        // [`verify_lock_proof`] reads them, so a faithful fixture populates them.
+        let total_stake: u64 = validators.iter().map(|(_, s)| *s).sum();
+
+        // PoH: a short real tick chain from a known anchor blockhash.
+        use sha2::{Digest, Sha256};
+        let poh_anchor = [0x55u8; 32];
+        let mut tail = poh_anchor;
+        for _ in 0..256u64 {
+            let mut h = Sha256::new();
+            h.update(tail);
+            tail = h.finalize().into();
+        }
+
+        let bank_components = BankHashComponents {
+            parent_bank_hash: [0x01; 32],
+            accounts_hash,
+            signature_count: 3,
+            last_blockhash: tail,
+        };
+        let bank_hash = bank_components.compute();
+
+        // REAL signed vote transactions by the on-chain authorized voters.
+        let votes = auths
+            .iter()
+            .zip(&vas)
+            .map(|(a, va)| prov::tower_sync_tx(a, va, slot, bank_hash))
+            .collect();
+
+        // Bank-state provenance accounts (proofs: 0 = vault, 1..=n votes,
+        // n+1..=2n stakes, 2n+1 stake history).
+        let vote_accounts: Vec<_> = vas
+            .iter()
+            .zip(vds)
+            .enumerate()
+            .map(|(i, (va, vd))| prov::proven_account(*va, vote_program, vd, proofs[1 + i].clone()))
+            .collect();
+        let stake_accounts: Vec<_> = sas
+            .iter()
+            .zip(sds)
+            .enumerate()
+            .map(|(i, (sa, sd))| {
+                prov::proven_account(*sa, stake_program, sd, proofs[1 + n + i].clone())
+            })
+            .collect();
+        let stake_history_account = prov::proven_account(
+            STAKE_HISTORY_SYSVAR_ID,
+            sysvar_owner,
+            shd,
+            proofs[1 + 2 * n].clone(),
+        );
+
+        // The anchor pins the GENUINE derived distribution at this epoch.
+        let derived = derive_stake_table(
+            epoch,
+            &accounts_hash,
+            &stake_accounts,
+            &vote_accounts,
+            &stake_history_account,
+            None,
+        )
+        .expect("derive anchor table");
+        let anchor = WeakSubjectivityAnchor::from_table(&derived.table);
+
+        let proof = SolanaLockProof {
+            lock_id: lid,
+            spl_mint: *spl_mint,
+            amount,
+            dregg_recipient: recipient,
+            consensus: ConsensusEvidence {
+                slot,
+                bank_hash,
+                epoch,
+                // Truthful hints (every validator votes) — the anchored path
+                // ignores them and recomputes; the structure-only path reads them.
+                voted_stake: total_stake as u128,
+                total_stake: total_stake as u128,
+                votes,
+                bank_components,
+                poh: Some(PohSegment {
+                    anchor_hash: poh_anchor,
+                    num_hashes: 256,
+                    tail_hash: tail,
+                }),
+            },
+            inclusion: AccountInclusionProof {
+                vault_account,
+                recorded_amount: amount,
+                recorded_recipient: recipient,
+                recorded_lock_id: lid,
+                accounts_hash,
+                merkle_path: vec![],
+                mainnet: Some(MainnetAccountInclusion {
+                    lamports: vault_lamports,
+                    owner: *lock_program,
+                    executable: false,
+                    rent_epoch: vault_rent_epoch,
+                    data: vault_data,
+                    proof: proofs[0].clone(),
+                }),
+            },
+            stake_provenance: Some(StakeProvenance {
+                anchor_accounts_hash: accounts_hash,
+                anchor_stake_accounts: stake_accounts,
+                anchor_vote_accounts: vote_accounts,
+                anchor_stake_history_account: stake_history_account,
+                new_rate_activation_epoch: None,
+                rotation: vec![],
+            }),
+        };
+        let policy = PohAnchorPolicy {
+            anchor_blockhash: poh_anchor,
+            max_hashes: 1024,
+        };
+        (proof, anchor, policy)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
