@@ -45,6 +45,14 @@
 //! axum, DRIVEN — affordances → HTML controls, a POST → an `Action` → one real turn, a session
 //! playing through, executor-refereed, `verify` holding.
 
+/// THE SPECTATOR / PROVENANCE surface for *The Descent* (the flagship's growth artifact): a
+/// stranger opens a URL and INDEPENDENTLY re-verifies a run — a re-verified no-cheat leaderboard
+/// (`GET /descent/leaderboard`) + a run-card that re-executes the recorded run to PASS/FAIL
+/// (`GET /descent/run/{id}`). Additive; see [`descent::descent_router`].
+pub mod descent;
+
+pub use descent::{DescentState, descent_router, run_share_path};
+
 use std::collections::HashMap;
 use std::sync::mpsc::{SyncSender, sync_channel};
 use std::sync::{Arc, Mutex};
@@ -561,6 +569,10 @@ body{font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;background:#0b
 .crumb{max-width:44rem;margin:0 auto 1rem;font-size:.85rem}\
 .crumb a{color:#7fd}\
 .affordance input.arg{width:100%;margin-bottom:.35rem;padding:.4rem .6rem;border-radius:6px;border:1px solid #2a5;background:#0d1526;color:#cfe;font-size:.95rem}\
+table.board{width:100%;border-collapse:collapse;margin:1rem 0}\
+table.board th,table.board td{text-align:left;padding:.5rem .6rem;border-bottom:1px solid #244}\
+table.board th{color:#7fd;font-size:.85rem;text-transform:uppercase;letter-spacing:.04em}\
+table.board td a{color:#5f8;text-decoration:none}table.board td a:hover{text-decoration:underline}\
 </style>";
 
 // ═════════════════════════════════════════════════════════════════════════════════════════

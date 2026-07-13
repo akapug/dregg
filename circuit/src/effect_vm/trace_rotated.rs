@@ -5919,19 +5919,24 @@ pub fn generate_rotated_effect_vm_descriptor_and_trace_wide(
             desc.name, desc.trace_width, row_width
         )
     })?;
-    // THE GENTIAN REFUSE-WELD EXCLUSION. The flag-day welds `3·REFUSE_STRIDE` gate-internal aux
-    // columns (the per-tag floor-refuse decode witnesses: bit/inv/OR/floor) onto every deployed BARE
-    // cohort member's `trace_width`. Those columns are NOT producer-emitted exposure teeth — they
-    // carry no claim PI, they are the floor-refuse GATE, filled from the zero-resized headroom by
+    // THE GENTIAN REFUSE-WELD EXCLUSION. The flag-day welds `REFUSE_WELD_WIDEN` (= 45) gate-internal
+    // aux columns (the per-tag floor-refuse decode witnesses: bit/inv/OR/floor) onto every deployed
+    // BARE cohort member's `trace_width`. Those columns are NOT producer-emitted exposure teeth —
+    // they carry no claim PI, they are the floor-refuse GATE, filled from the zero-resized headroom by
     // `bare_floor_refuse_weld::fill_refuse_aux` at prove time (`descriptor_ir2` build, after
     // `fill_chip_lanes`). So they must NOT enter the exposure 1:1 pairing: subtract them from the
     // teeth-column tail before matching it against the claim-PI tail. (Without this the honest wide
-    // full-turn fails to prove — 2 claim PIs vs 50 teeth cols — while the narrow decode still bites.)
+    // full-turn fails to prove — 2 claim PIs vs 47 teeth cols — while the narrow decode still bites.)
+    // The subtracted count is the WELD FOOTPRINT (`floor_col(last)+1 − base` = 45), NOT the naive
+    // `3·REFUSE_STRIDE` (= 48): the last block's stride tail (3 cols past its floor) is never
+    // allocated. The heterogeneous rework (`5e84c5dd4`) moved the widening from 48 to `base+45` per
+    // member but left this exclusion at the stale 48 — `raw_col_tail` (47) then underflowed 48 and
+    // blocked every wide mint; 45 restores `col_tail = 2 = pi_tail` (the membership teeth pair).
     let refuse_aux_cols = if desc
         .name
         .contains(bare_floor_refuse_weld::REFUSE_WELD_SUFFIX)
     {
-        bare_floor_refuse_weld::CAPACITY_TAGS.len() * bare_floor_refuse_weld::REFUSE_STRIDE
+        bare_floor_refuse_weld::REFUSE_WELD_WIDEN
     } else {
         0
     };

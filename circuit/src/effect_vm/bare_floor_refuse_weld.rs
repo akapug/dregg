@@ -69,6 +69,17 @@ pub const CAPACITY_TAGS: [u32; 3] = [
 /// `GRAD_ROT_WIDTH + b·STRIDE + …`, DISJOINT so the three blocks coexist on one bare member.
 pub const REFUSE_STRIDE: usize = 16;
 
+/// **THE WELD FOOTPRINT** — the number of aux columns the refuse weld ADDS to a member's
+/// `trace_width`. The three disjoint decode+refuse blocks span `aux_base .. aux_base +
+/// (CAPACITY_TAGS-1)·REFUSE_STRIDE + 3·MAX_CAVEATS + 1`, the vault (last) block's `floor_col` at the
+/// top (`= floor_col(CAPACITY_TAGS.len()-1) + 1 − aux_base`). Equals **45** at the deployed geometry
+/// (`2·16 + 12 + 1`). This is NOT `CAPACITY_TAGS.len()·REFUSE_STRIDE` (= 48): the last block's stride
+/// tail — the three columns past its floor — is never allocated, so the weld widens by 45, not 48.
+/// The heterogeneous rework (`5e84c5dd4`) widens each member to `fcDep base 2 + 1 = base + 45`; the
+/// deployed-bytes test below asserts `trace_width = base + 45` on every committed cohort row.
+pub const REFUSE_WELD_WIDEN: usize =
+    (CAPACITY_TAGS.len() - 1) * REFUSE_STRIDE + 3 * cav::MAX_CAVEATS + 1;
+
 /// The per-slot is-zero boolean aux column for tag block `b`, caveat slot `k`.
 pub const fn bit_col(b: usize, k: usize) -> usize {
     GRAD_ROT_WIDTH + b * REFUSE_STRIDE + k
@@ -563,8 +574,10 @@ mod tests {
         // The refuse floor gate the Lean/Rust deployed alignment welds (compact-JSON serialized).
         let refuse_gate =
             |col: usize| format!("{{\"t\":\"gate\",\"body\":{{\"t\":\"var\",\"v\":{col}}}}}");
-        // Per-member widening span: the weld widens to `fcDep base 2 + 1 = base + 45`.
-        const REFUSE_SPAN: usize = 2 * REFUSE_STRIDE + 13; // = 45
+        // Per-member widening span: the weld widens to `fcDep base 2 + 1 = base + 45`. Single
+        // source of truth = the public weld footprint (kept in lock-step with the trace_rotated
+        // exclusion, which subtracts the SAME count from the wide teeth-column tail).
+        const REFUSE_SPAN: usize = REFUSE_WELD_WIDEN; // = 45
         // The refuse block rides the member's OWN base; floor col b = base + b·REFUSE_STRIDE + 12.
         let member_floor_col =
             |base: usize, b: usize| base + b * REFUSE_STRIDE + 3 * cav::MAX_CAVEATS;

@@ -287,7 +287,10 @@ fn cap_open_eff_member_roundtrips_live() {
         CAP_OPEN_WIDTH + pad,
         "eff width = bare cap-open width + avail pad"
     );
-    assert_eq!(desc.public_input_count, 46, "eff carries the rotated 46 PIs");
+    assert_eq!(
+        desc.public_input_count, 46,
+        "eff carries the rotated 46 PIs"
+    );
 
     let (mut trace, base_pis) = build_transfer_base_avail(pad);
     let w = cap_open_witness();

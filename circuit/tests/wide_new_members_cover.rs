@@ -388,6 +388,101 @@ fn wide_transfer_cap_open_tb_proves_and_verifies() {
     );
 }
 
+/// **THE GENTIAN REFUSE-WELD MINT TOOTH.** The fold participant leg mints a plain `Transfer`
+/// through the FULL wide dispatcher onto the deployed availability-hardened, refuse-welded
+/// `transferVmDescriptor2R24` (`…-v3-staged-gentian-deployed-bare-refuse`, trace_width 2664,
+/// public_input_count 68 — the `pi_tail == 2` membership-teeth arm). The dispatcher's teeth-column
+/// exclusion subtracts the WELD FOOTPRINT (`REFUSE_WELD_WIDEN = 45`) from the teeth-column tail
+/// before the 1:1 exposure pairing; with the stale `3·REFUSE_STRIDE = 48` the tail (47 = 45 refuse +
+/// 2 membership teeth) underflowed and the mint REFUSED — blocking every wide/fold proof regen. This
+/// pins the mint SUCCEEDING with the correct geometry: `raw_col_tail 47 − 45 = 2 = pi_tail`.
+#[test]
+fn wide_transfer_membership_leg_mints_through_refuse_weld() {
+    let before_balance: i64 = 100_000;
+    let amount: u64 = 50;
+    let st = CellState::new(before_balance as u64, 0);
+    let effects = vec![Effect::Transfer {
+        amount,
+        direction: 1,
+    }];
+    let mut ledger = Ledger::new();
+    let before_cell = producer_cell(before_balance, 0);
+    let after_cell = producer_cell(before_balance - amount as i64, 1);
+    ledger.insert_cell(after_cell.clone()).unwrap();
+    let nullifier_root = dregg_circuit::heap_root::empty_heap_root_8();
+    let commitments_root = dregg_circuit::heap_root::empty_heap_root_8();
+    let receipt_log: Vec<[u8; 32]> = vec![[5u8; 32], [6u8; 32]];
+    let before_w = rw::produce(
+        &before_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
+        &receipt_log,
+        &Default::default(),
+    );
+    let after_w = rw::produce(
+        &after_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
+        &receipt_log,
+        &Default::default(),
+    );
+
+    // The producer-honest membership-teeth pair (any felts — the geometry check that was refusing is
+    // independent of the teeth VALUES; it pairs the 2 teeth columns 1:1 with the 2 claim PIs).
+    let membership_teeth = (BabyBear::new(0xA11CE), BabyBear::new(0xF00D));
+
+    // THE FULL WIDE DISPATCH — the exact call `mint_rotated_participant_leg` makes for a transfer.
+    let (desc, trace, dpis, _map_heaps, _mb) = generate_rotated_effect_vm_descriptor_and_trace_wide(
+        &st,
+        &effects,
+        &bridge(&before_w),
+        &bridge(&after_w),
+        &transfer_caveat_manifest(),
+        None,
+        None,
+        None,
+        Some(membership_teeth),
+    )
+    .expect(
+        "the refuse-welded wide transfer leg MUST mint (no refuse) — the teeth-column exclusion \
+         subtracts the 45-column weld footprint, not 48, so raw_col_tail 47 − 45 = 2 = pi_tail",
+    );
+
+    assert!(
+        desc.name.contains("-gentian-deployed-bare-refuse"),
+        "the wide transfer dispatch resolves the deployed refuse-welded member ({})",
+        desc.name
+    );
+    assert_eq!(
+        desc.trace_width, 2664,
+        "deployed avail-hardened refuse-welded transfer wide width"
+    );
+    assert_eq!(
+        desc.public_input_count, 68,
+        "66 producer PIs + 2 spliced membership claim PIs"
+    );
+    assert_eq!(
+        dpis.len(),
+        desc.public_input_count,
+        "PIs mint to the descriptor count"
+    );
+    // raw_col_tail (trace_width − producer row) = 45 refuse-weld cols + 2 membership teeth = 47.
+    let raw_col_tail = desc.trace_width - trace[0].len();
+    assert_eq!(
+        raw_col_tail, 47,
+        "45-column refuse-weld footprint + 2 membership teeth past the wide producer's shape"
+    );
+    // The 2 spliced teeth carry the honest pair (the exclusion's 1:1 pairing held).
+    assert!(
+        dpis.contains(&membership_teeth.0) && dpis.contains(&membership_teeth.1),
+        "the membership teeth pair was spliced into the claim PIs"
+    );
+}
+
 /// **THE GEOMETRY VERSION BOUNDARY, POSITIVE ARM** — every committed wide member (the bare
 /// wide registry AND the welded registry) rides the LIVE v2 wide-carrier geometry: the
 /// structural detector measures its BEFORE→AFTER commit-carrier block span as 480 (60

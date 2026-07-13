@@ -50,6 +50,17 @@ serde_json = "1"
 # a stable DreggIdentity via blake3) + a deterministic session seed from a session id.
 blake3 = "1"
 
+# THE DESCENT spectator/provenance surface (`descent.rs`) consumes these AS-IS to
+# INDEPENDENTLY re-verify a run on render — it modifies none of them:
+#  - ugc-dregg: the no-cheat verifier (`verify_completion`) + `Universe`/`Completion`
+#    (the leaderboard re-verification target — the same tooth `Registry::submit` runs);
+#  - spween-dregg: the audited replay re-verifier (`verify`) + the compiled var→slot map
+#    (read a committed var off a re-verified state) + `WorldCell`/`Scene`;
+#  - procgen-dregg: `CommittedSeed` / `daily_seed` (the day's reproducible seed).
+ugc-dregg = { path = "../ugc-dregg" }
+spween-dregg = { path = "../spween-dregg" }
+procgen-dregg = { path = "../procgen-dregg" }
+
 [dev-dependencies]
 # Drive the axum handlers with no real network — `ServiceExt::oneshot`.
 tower = { version = "0.5", features = ["util"] }
