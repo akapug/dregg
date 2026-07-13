@@ -202,14 +202,8 @@ fn make_welded_cap_open_attenuate() -> (
     // The attenuate Update reads the held key (chosen[0]) and writes KEEP_MASK; set the anchor's held
     // mask to KEEP_MASK so the narrowing submask is reflexive (KEEP ⊑ held) for ANY bridged KEEP_MASK.
     let clist_leaves = vec![
-        HeapLeaf {
-            addr: chosen[0],
-            value: keep_mask,
-        },
-        HeapLeaf {
-            addr: other[0],
-            value: other[3],
-        },
+        HeapLeaf::entry(chosen[0], keep_mask),
+        HeapLeaf::entry(other[0], other[3]),
     ];
     let cap = CapMembershipWitness {
         leaf: CapLeaf {

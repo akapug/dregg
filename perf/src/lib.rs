@@ -528,14 +528,8 @@ pub fn cohort_transfer() -> Cohort {
 /// the memory-op cohorts.
 fn probe_heap() -> (Vec<HeapLeaf>, [BabyBear; HEAP_DIGEST_W]) {
     let heap = vec![
-        HeapLeaf {
-            addr: BabyBear::new(100),
-            value: BabyBear::new(77),
-        },
-        HeapLeaf {
-            addr: BabyBear::new(200),
-            value: BabyBear::new(88),
-        },
+        HeapLeaf::entry(BabyBear::new(100), BabyBear::new(77)),
+        HeapLeaf::entry(BabyBear::new(200), BabyBear::new(88)),
     ];
     let root8 = CanonicalHeapTree8::new(heap.clone(), HEAP_TREE_DEPTH)
         .root8()
@@ -549,10 +543,7 @@ pub fn cohort_map_write() -> Cohort {
     let (heap, root8) = probe_heap();
     let tree = CanonicalHeapTree8::new(heap.clone(), HEAP_TREE_DEPTH);
     let w = tree
-        .update_witness(HeapLeaf {
-            addr: BabyBear::new(100),
-            value: BabyBear::new(99),
-        })
+        .update_witness(HeapLeaf::entry(BabyBear::new(100), BabyBear::new(99)))
         .expect("key present");
     // Column layout (width 19, the Phase H-HEAP-8 8-lane root groups —
     // `effect_vm_ir2_size_measure.rs`'s probe shape): root8 [0..8), key 8,

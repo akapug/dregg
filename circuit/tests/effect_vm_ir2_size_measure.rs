@@ -166,14 +166,8 @@ fn ir2_umem_vs_map_size_probe() {
     use dregg_circuit::lean_descriptor_air::LeanExpr;
 
     let heap = vec![
-        HeapLeaf {
-            addr: BabyBear::new(100),
-            value: BabyBear::new(77),
-        },
-        HeapLeaf {
-            addr: BabyBear::new(200),
-            value: BabyBear::new(88),
-        },
+        HeapLeaf::entry(BabyBear::new(100), BabyBear::new(77)),
+        HeapLeaf::entry(BabyBear::new(200), BabyBear::new(88)),
     ];
     let tree = CanonicalHeapTree8::new(heap.clone(), HEAP_TREE_DEPTH);
     let root = tree.root8();
@@ -181,10 +175,7 @@ fn ir2_umem_vs_map_size_probe() {
     // ---- (a) the map-write shape: one in-place sorted write. ----
     // Column layout (width 19): root8 [0..8), key 8, value 9, new_root8 [10..18), guard 18.
     let w = tree
-        .update_witness(HeapLeaf {
-            addr: BabyBear::new(100),
-            value: BabyBear::new(99),
-        })
+        .update_witness(HeapLeaf::entry(BabyBear::new(100), BabyBear::new(99)))
         .expect("key present");
     let map_desc = EffectVmDescriptor2 {
         name: "probe-map-write".to_string(),
@@ -599,22 +590,13 @@ fn ir2_mapop_interior_to_umem_chip_drop() {
 
     // A 2-entry sorted c-list (the deployed bookkeeping shape: read membership, write update).
     let heap = vec![
-        HeapLeaf {
-            addr: BabyBear::new(100),
-            value: BabyBear::new(77),
-        },
-        HeapLeaf {
-            addr: BabyBear::new(200),
-            value: BabyBear::new(88),
-        },
+        HeapLeaf::entry(BabyBear::new(100), BabyBear::new(77)),
+        HeapLeaf::entry(BabyBear::new(200), BabyBear::new(88)),
     ];
     let tree = CanonicalHeapTree8::new(heap.clone(), HEAP_TREE_DEPTH);
     let root = tree.root8();
     let upd = tree
-        .update_witness(HeapLeaf {
-            addr: BabyBear::new(100),
-            value: BabyBear::new(99),
-        })
+        .update_witness(HeapLeaf::entry(BabyBear::new(100), BabyBear::new(99)))
         .expect("key present");
 
     // ==== (a) map_op interior: a READ (membership) + WRITE (update) — chip-bearing ====

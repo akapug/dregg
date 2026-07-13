@@ -839,10 +839,10 @@ fn verify_slot_opening_core(
     if siblings.len() != HEAP_TREE_DEPTH || directions.len() != HEAP_TREE_DEPTH {
         return false;
     }
-    let leaf = HeapLeaf {
-        addr: heap_addr(BabyBear::new(coll), BabyBear::new(key)),
-        value: BabyBear::new(value),
-    };
+    let leaf = HeapLeaf::entry(
+        heap_addr(BabyBear::new(coll), BabyBear::new(key)),
+        BabyBear::new(value),
+    );
     let mut cur = leaf.digest();
     for level in 0..HEAP_TREE_DEPTH {
         let sib = BabyBear::new(siblings[level]);
@@ -1135,9 +1135,11 @@ mod tests {
         let entries: [((u32, u32), u32); 3] = [((1, 1), 10), ((1, 2), 77), ((2, 1), 30)];
         let leaves: Vec<HeapLeaf> = entries
             .iter()
-            .map(|((c, k), v)| HeapLeaf {
-                addr: heap_addr(BabyBear::new(*c), BabyBear::new(*k)),
-                value: BabyBear::new(*v),
+            .map(|((c, k), v)| {
+                HeapLeaf::entry(
+                    heap_addr(BabyBear::new(*c), BabyBear::new(*k)),
+                    BabyBear::new(*v),
+                )
             })
             .collect();
         let tree = CanonicalHeapTree::new(leaves, HEAP_TREE_DEPTH);

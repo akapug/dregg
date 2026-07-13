@@ -170,14 +170,8 @@ fn honest_heap_write() -> (Vec<Vec<BabyBear>>, Vec<BabyBear>, Vec<Vec<HeapLeaf>>
     absorb_in[1] = key;
     let addr = chip_absorb_all_lanes(2, &absorb_in)[0];
     let heap = vec![
-        HeapLeaf {
-            addr,
-            value: BabyBear::new(9),
-        },
-        HeapLeaf {
-            addr: BabyBear::new(999_983),
-            value: BabyBear::new(1),
-        },
+        HeapLeaf::entry(addr, BabyBear::new(9)),
+        HeapLeaf::entry(BabyBear::new(999_983), BabyBear::new(1)),
     ];
 
     let (trace, dpis, map_heaps) = generate_rotated_heap_write_wide(

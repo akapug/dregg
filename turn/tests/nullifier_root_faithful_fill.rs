@@ -27,10 +27,10 @@ use dregg_turn::rotation_witness::{
 fn nullifier_root_fills_all_8_lanes_and_twins_agree() {
     // A non-empty accumulator root (one spent nullifier leaf) — a genuine node8 tree root, the SAME
     // representation `NullifierSet::root8` yields for a live (nf, value) map.
-    let nf_root = compute_canonical_heap_root_8(vec![HeapLeaf {
-        addr: BabyBear::new(1_500_000_000),
-        value: BabyBear::new(1),
-    }]);
+    let nf_root = compute_canonical_heap_root_8(vec![HeapLeaf::entry(
+        BabyBear::new(1_500_000_000),
+        BabyBear::new(1),
+    )]);
     assert!(
         nf_root.limbs()[1..8].iter().any(|f| *f != BabyBear::ZERO),
         "the test fixture must be a NON-empty (non-zero-completion) accumulator root"

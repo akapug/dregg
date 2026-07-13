@@ -136,9 +136,11 @@ fn heap_membership_is_subquadratic_in_leaf_count() {
     let mut times = Vec::new();
     for &n in &sizes {
         let leaves: Vec<HeapLeaf> = (0..n)
-            .map(|i| HeapLeaf {
-                addr: BabyBear::new((i as u32 + 1) * 2),
-                value: BabyBear::new(i as u32 + 7),
+            .map(|i| {
+                HeapLeaf::entry(
+                    BabyBear::new((i as u32 + 1) * 2),
+                    BabyBear::new(i as u32 + 7),
+                )
             })
             .collect();
         let tree = CanonicalHeapTree8::new(leaves.clone(), HEAP_TREE_DEPTH);

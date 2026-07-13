@@ -478,10 +478,11 @@ fn peer_field_heap(peer: &Cell) -> (Vec<HeapLeaf>, [BabyBear; HEAP_DIGEST_W]) {
         // simple deterministic presence rule for this leg — every present cell opens).
         let v = u32::from_le_bytes([f[0], f[1], f[2], f[3]]);
         if v != 0 {
-            leaves.push(HeapLeaf {
-                addr: BabyBear::new(slot as u32 + 1), // +1: keep addr 0 out of the sentinel range
-                value: BabyBear::new(v),
-            });
+            // +1: keep addr 0 out of the sentinel range
+            leaves.push(HeapLeaf::entry(
+                BabyBear::new(slot as u32 + 1),
+                BabyBear::new(v),
+            ));
         }
     }
     let tree = CanonicalHeapTree8::new(leaves.clone(), HEAP_TREE_DEPTH);
@@ -845,10 +846,8 @@ fn cross_cell_read_whole_image_smuggled_start_root_refuses() {
 
     // A NON-empty smuggled start root (e.g. a one-cell heap hiding an undeclared cell) in PI 0
     // must be refused by the pin, independent of any proof.
-    let smuggled_start = whole_boundary_fold(&[HeapLeaf {
-        addr: BabyBear::new(99),
-        value: BabyBear::new(42),
-    }]);
+    let smuggled_start =
+        whole_boundary_fold(&[HeapLeaf::entry(BabyBear::new(99), BabyBear::new(42))]);
     assert_ne!(
         smuggled_start,
         dregg_circuit::heap_root::empty_heap_root_8(),
@@ -995,10 +994,8 @@ fn whole_image_fold_bound_smuggled_start_root_refuses() {
         .expect("the honest empty-root-start bound fold verifies");
 
     // A non-empty smuggled start root in PI 0 is refused by the pin.
-    let smuggled_start = whole_boundary_fold(&[HeapLeaf {
-        addr: BabyBear::new(99),
-        value: BabyBear::new(42),
-    }]);
+    let smuggled_start =
+        whole_boundary_fold(&[HeapLeaf::entry(BabyBear::new(99), BabyBear::new(42))]);
     let mut smuggled_pis = smuggled_start.to_vec();
     smuggled_pis.extend_from_slice(&published);
     let refused = verify_whole_image_fold_bound(&proof, &smuggled_pis, FIELD_DOMAIN);
@@ -1035,10 +1032,7 @@ use dregg_circuit::whole_image_fold::{
 fn flat_fields(addr_values: &[(u32, u32)]) -> Vec<HeapLeaf> {
     addr_values
         .iter()
-        .map(|&(a, v)| HeapLeaf {
-            addr: BabyBear::new(a),
-            value: BabyBear::new(v),
-        })
+        .map(|&(a, v)| HeapLeaf::entry(BabyBear::new(a), BabyBear::new(v)))
         .collect()
 }
 
@@ -1146,10 +1140,8 @@ fn whole_image_fold_bound_mem_smuggled_start_root_refuses() {
         .expect("the honest empty-root-start flat bound fold verifies");
 
     // A non-empty smuggled start root in PI 0 is refused by the pin.
-    let smuggled_start = whole_boundary_fold(&[HeapLeaf {
-        addr: BabyBear::new(99),
-        value: BabyBear::new(42),
-    }]);
+    let smuggled_start =
+        whole_boundary_fold(&[HeapLeaf::entry(BabyBear::new(99), BabyBear::new(42))]);
     let mut smuggled_pis = smuggled_start.to_vec();
     smuggled_pis.extend_from_slice(&published);
     let refused = verify_whole_image_fold_bound_mem(&proof, &smuggled_pis);

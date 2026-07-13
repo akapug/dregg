@@ -272,14 +272,8 @@ fn build_chain(bundle: FactoryWitnessBundle) -> Vec<FinalizedTurn> {
     let balance = 1000i64;
     let m = material();
     let base_accounts = vec![
-        HeapLeaf {
-            addr: BabyBear::new(0xAA01),
-            value: BabyBear::new(0xAA01),
-        },
-        HeapLeaf {
-            addr: BabyBear::new(0xAA02),
-            value: BabyBear::new(0xAA02),
-        },
+        HeapLeaf::entry(BabyBear::new(0xAA01), BabyBear::new(0xAA01)),
+        HeapLeaf::entry(BabyBear::new(0xAA02), BabyBear::new(0xAA02)),
     ];
     let child0 = BabyBear::new(0xCE11);
     let t0_leg = mint_factory_leg(
@@ -294,10 +288,7 @@ fn build_chain(bundle: FactoryWitnessBundle) -> Vec<FinalizedTurn> {
     let t0 = FinalizedTurn::new(DescriptorParticipant::rotated(t0_leg));
     // t1's BEFORE accounts tree = t0's AFTER tree (base + child0), the temporal link.
     let mut grown_accounts = base_accounts.clone();
-    grown_accounts.push(HeapLeaf {
-        addr: child0,
-        value: child0,
-    });
+    grown_accounts.push(HeapLeaf::entry(child0, child0));
     let t1_leg = mint_factory_leg(
         balance,
         1,

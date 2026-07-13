@@ -69,9 +69,11 @@ fn entries_demo() -> Vec<((u32, u32), u32)> {
 fn to_leaves(entries: &[((u32, u32), u32)]) -> Vec<HeapLeaf> {
     entries
         .iter()
-        .map(|((coll, key), value)| HeapLeaf {
-            addr: heap_addr(BabyBear::new(*coll), BabyBear::new(*key)),
-            value: BabyBear::new(*value),
+        .map(|((coll, key), value)| {
+            HeapLeaf::entry(
+                heap_addr(BabyBear::new(*coll), BabyBear::new(*key)),
+                BabyBear::new(*value),
+            )
         })
         .collect()
 }
@@ -105,10 +107,11 @@ fn scheme_equals_independent_reference() {
     );
 }
 
-/// (2) The address and leaf images are the EXACT arity-2 `hash_many` images
+/// (2) The address and leaf images are the EXACT `hash_many` images
 /// the Lean gadget's in-row hash sites recompute (`siteHeapAddr` inputs
-/// `[coll, key]`; `siteHeapLeaf` inputs `[addr, value]`). A domain tag or an
-/// arity change on either side breaks this — the cell≡circuit value pin.
+/// `[coll, key]`, arity 2; `siteHeapLeaf` inputs `[addr, value, next_addr]`,
+/// arity 3 — the IMT leaf). A domain tag or an arity change on either side
+/// breaks this — the cell≡circuit value pin.
 #[test]
 fn addr_and_leaf_match_lean_gadget_images() {
     let coll = BabyBear::new(3);
@@ -120,11 +123,11 @@ fn addr_and_leaf_match_lean_gadget_images() {
         hash_many(&[coll, key]),
         "addr = hash[coll, key], untagged arity-2"
     );
-    let leaf = HeapLeaf { addr, value };
+    let leaf = HeapLeaf::entry(addr, value);
     assert_eq!(
         leaf.digest(),
-        hash_many(&[addr, value]),
-        "leaf = hash[addr, value], untagged arity-2"
+        hash_many(&[addr, value, leaf.next_addr]),
+        "leaf = hash[addr, value, next_addr], untagged arity-3 (IMT leaf)"
     );
 }
 
@@ -164,10 +167,10 @@ fn tampering_moves_root() {
 #[test]
 fn update_witness_agrees_with_rebuild() {
     let tree = CanonicalHeapTree::new(to_leaves(&entries_demo()), HEAP_TREE_DEPTH);
-    let new_leaf = HeapLeaf {
-        addr: heap_addr(BabyBear::new(7), BabyBear::new(99)),
-        value: BabyBear::new(7777),
-    };
+    let new_leaf = HeapLeaf::entry(
+        heap_addr(BabyBear::new(7), BabyBear::new(99)),
+        BabyBear::new(7777),
+    );
     let w = tree.update_witness(new_leaf).expect("addr present");
     let rebuilt = compute_heap_root(to_leaves(&[
         ((1, 1), 10),

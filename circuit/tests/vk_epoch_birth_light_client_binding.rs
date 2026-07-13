@@ -193,14 +193,8 @@ fn assert_birth_forced_on_wire(effect: Effect, name: &str, key_col: usize, label
 
     // A non-empty BEFORE accounts set (distinct from the new-cell key — the `.absent` precondition).
     let before_accounts = vec![
-        HeapLeaf {
-            addr: BabyBear::new(0xAA01),
-            value: BabyBear::new(0xAA01),
-        },
-        HeapLeaf {
-            addr: BabyBear::new(0xAA02),
-            value: BabyBear::new(0xAA02),
-        },
+        HeapLeaf::entry(BabyBear::new(0xAA01), BabyBear::new(0xAA01)),
+        HeapLeaf::entry(BabyBear::new(0xAA02), BabyBear::new(0xAA02)),
     ];
     let (trace, dpis, map_heaps) = generate_rotated_create_cell_trace_with_accounts_tree(
         &st,

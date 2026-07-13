@@ -190,21 +190,12 @@ fn build_fixture() -> Fixture {
     );
 
     let before_commitments = vec![
-        HeapLeaf {
-            addr: BabyBear::new(0x111),
-            value: BabyBear::new(1),
-        },
-        HeapLeaf {
-            addr: BabyBear::new(0x222),
-            value: BabyBear::new(1),
-        },
+        HeapLeaf::entry(BabyBear::new(0x111), BabyBear::new(1)),
+        HeapLeaf::entry(BabyBear::new(0x222), BabyBear::new(1)),
     ];
     // The genuine post-insert root: the fresh commitment (param0 = cm, value = 250) appended.
     let mut honest_after_leaves = before_commitments.clone();
-    honest_after_leaves.push(HeapLeaf {
-        addr: cm,
-        value: BabyBear::new(value as u32),
-    });
+    honest_after_leaves.push(HeapLeaf::entry(cm, BabyBear::new(value as u32)));
     let after_root8 = CanonicalHeapTree8::new(honest_after_leaves, HEAP_TREE_DEPTH).root8();
     let after_root8: [BabyBear; 8] = std::array::from_fn(|i| after_root8[i]);
 

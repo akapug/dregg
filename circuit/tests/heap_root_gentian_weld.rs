@@ -31,10 +31,10 @@ fn heap_root_8(key_salt: u32) -> [BabyBear; 8] {
 }
 
 fn one_entry(key_salt: u32) -> HeapLeaf {
-    HeapLeaf {
-        addr: heap_addr(BabyBear::new(1), BabyBear::new(key_salt)),
-        value: BabyBear::new(42),
-    }
+    HeapLeaf::entry(
+        heap_addr(BabyBear::new(1), BabyBear::new(key_salt)),
+        BabyBear::new(42),
+    )
 }
 
 // ── The pinned colliding pair (found by `search_heap_lane0_collision` below). ─────────────────────

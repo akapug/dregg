@@ -1128,10 +1128,7 @@ pub fn cap_write_clist_leaves(cell: &dregg_cell::Cell) -> Vec<dregg_circuit::hea
         .iter()
         .map(|cap| {
             let leaf = dregg_cell::cap_ref_to_leaf(cap);
-            dregg_circuit::heap_root::HeapLeaf {
-                addr: leaf.slot_hash,
-                value: leaf.target,
-            }
+            dregg_circuit::heap_root::HeapLeaf::entry(leaf.slot_hash, leaf.target)
         })
         .collect()
 }

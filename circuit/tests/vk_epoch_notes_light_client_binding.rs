@@ -198,14 +198,8 @@ fn notespend_forced_on_wire_rejects_forged_nullifier_root_anchor_disabled() {
     // A non-empty BEFORE nullifier set (distinct from the spent nullifier `0xBEEF`) — the openable
     // sorted-Poseidon2 accumulator the grow-gate forces against.
     let before_nullifiers = vec![
-        HeapLeaf {
-            addr: BabyBear::new(0x1111),
-            value: BabyBear::new(1),
-        },
-        HeapLeaf {
-            addr: BabyBear::new(0x2222),
-            value: BabyBear::new(1),
-        },
+        HeapLeaf::entry(BabyBear::new(0x1111), BabyBear::new(1)),
+        HeapLeaf::entry(BabyBear::new(0x2222), BabyBear::new(1)),
     ];
     let (trace, dpis, map_heaps) = generate_rotated_note_spend_trace_with_nullifier_tree(
         &st,
@@ -229,10 +223,7 @@ fn notespend_forced_on_wire_rejects_forged_nullifier_root_anchor_disabled() {
     let nf_key = trace[0][PARAM_BASE + param::NULLIFIER];
     let nf_value = trace[0][PARAM_BASE + param::NOTE_VALUE_LO];
     let mut honest_after_leaves = before_nullifiers.clone();
-    honest_after_leaves.push(HeapLeaf {
-        addr: nf_key,
-        value: nf_value,
-    });
+    honest_after_leaves.push(HeapLeaf::entry(nf_key, nf_value));
     let honest_after_root =
         CanonicalHeapTree8::new(honest_after_leaves, HEAP_TREE_DEPTH).root8()[0];
     assert_eq!(
@@ -365,14 +356,8 @@ fn notecreate_forced_on_wire_rejects_forged_commitments_root_anchor_disabled() {
 
     // A non-empty BEFORE commitments set (distinct from the published commitment).
     let before_commitments = vec![
-        HeapLeaf {
-            addr: BabyBear::new(0x111),
-            value: BabyBear::new(1),
-        },
-        HeapLeaf {
-            addr: BabyBear::new(0x222),
-            value: BabyBear::new(1),
-        },
+        HeapLeaf::entry(BabyBear::new(0x111), BabyBear::new(1)),
+        HeapLeaf::entry(BabyBear::new(0x222), BabyBear::new(1)),
     ];
     let (trace, dpis, map_heaps) = generate_rotated_note_create_trace_with_commitments_tree(
         &st,
@@ -395,10 +380,7 @@ fn notecreate_forced_on_wire_rejects_forged_commitments_root_anchor_disabled() {
     let cm_key = trace[0][PARAM_BASE + param::NULLIFIER]; // param0 (the commitment rides param slot 0)
     let cm_value = trace[0][PARAM_BASE + param::NOTE_VALUE_LO];
     let mut honest_after_leaves = before_commitments.clone();
-    honest_after_leaves.push(HeapLeaf {
-        addr: cm_key,
-        value: cm_value,
-    });
+    honest_after_leaves.push(HeapLeaf::entry(cm_key, cm_value));
     let honest_after_root =
         CanonicalHeapTree8::new(honest_after_leaves, HEAP_TREE_DEPTH).root8()[0];
     assert_eq!(
@@ -553,14 +535,8 @@ fn notecreate_forced_on_wire_through_live_wide_producer() {
     let mem_boundary = MemBoundaryWitness::default();
 
     let before_commitments = vec![
-        HeapLeaf {
-            addr: BabyBear::new(0x111),
-            value: BabyBear::new(1),
-        },
-        HeapLeaf {
-            addr: BabyBear::new(0x222),
-            value: BabyBear::new(1),
-        },
+        HeapLeaf::entry(BabyBear::new(0x111), BabyBear::new(1)),
+        HeapLeaf::entry(BabyBear::new(0x222), BabyBear::new(1)),
     ];
 
     // THE LIVE WIDE PRODUCER (the exact function `full_turn_proof`/`cipherclerk`/`proof_verify` now

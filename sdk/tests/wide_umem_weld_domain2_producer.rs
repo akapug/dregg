@@ -88,14 +88,8 @@ fn attenuate_fixture() -> (
     let open = CapOpenWitness::build(&[other, chosen], 1).expect("cap-open witness builds");
     let held_mask = BabyBear::new(0xFF);
     let clist_leaves = vec![
-        HeapLeaf {
-            addr: chosen[0],
-            value: held_mask,
-        },
-        HeapLeaf {
-            addr: other[0],
-            value: other[3],
-        },
+        HeapLeaf::entry(chosen[0], held_mask),
+        HeapLeaf::entry(other[0], other[3]),
     ];
     let cap = CapMembershipWitness {
         leaf: CapLeaf {

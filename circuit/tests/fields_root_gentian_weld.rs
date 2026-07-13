@@ -29,16 +29,10 @@ use dregg_circuit::openable_fields_root::{REFUSAL_AUDIT_EXT_KEY, field_key_hash}
 /// reserved value-ZERO refusal-audit slot included) so the tooth exercises the deployed tree over the
 /// SAME leaf discipline `compute_canonical_fields_root_8` folds.
 fn fields_leaves(key: u64) -> Vec<HeapLeaf> {
-    let mut leaves = vec![HeapLeaf {
-        addr: field_key_hash(key),
-        value: BabyBear::new(42),
-    }];
+    let mut leaves = vec![HeapLeaf::entry(field_key_hash(key), BabyBear::new(42))];
     let audit_addr = field_key_hash(REFUSAL_AUDIT_EXT_KEY);
     if !leaves.iter().any(|l| l.addr == audit_addr) {
-        leaves.push(HeapLeaf {
-            addr: audit_addr,
-            value: BabyBear::ZERO,
-        });
+        leaves.push(HeapLeaf::entry(audit_addr, BabyBear::ZERO));
     }
     leaves
 }

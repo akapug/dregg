@@ -254,14 +254,8 @@ fn build_chain(bundle: HatcheryWitnessBundle) -> Vec<FinalizedTurn> {
     let balance = 1000i64;
     let m = material();
     let base_accounts = vec![
-        HeapLeaf {
-            addr: BabyBear::new(0xAA01),
-            value: BabyBear::new(0xAA01),
-        },
-        HeapLeaf {
-            addr: BabyBear::new(0xAA02),
-            value: BabyBear::new(0xAA02),
-        },
+        HeapLeaf::entry(BabyBear::new(0xAA01), BabyBear::new(0xAA01)),
+        HeapLeaf::entry(BabyBear::new(0xAA02), BabyBear::new(0xAA02)),
     ];
     let child0 = BabyBear::new(0xCE11);
     let t0_leg = mint_hatchery_leg(
@@ -277,10 +271,7 @@ fn build_chain(bundle: HatcheryWitnessBundle) -> Vec<FinalizedTurn> {
     // t1's BEFORE accounts tree = t0's AFTER tree (base + child0), the temporal link; t1 births
     // a DIFFERENT child (the `.absent` no-collision gate refuses a re-creation).
     let mut grown_accounts = base_accounts.clone();
-    grown_accounts.push(HeapLeaf {
-        addr: child0,
-        value: child0,
-    });
+    grown_accounts.push(HeapLeaf::entry(child0, child0));
     let t1_leg = mint_hatchery_leg(
         balance,
         1,

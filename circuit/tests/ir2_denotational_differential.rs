@@ -2856,16 +2856,7 @@ fn bus_corpus() -> Vec<BusCase> {
         let d = real_map_desc(RealMapKind::Read);
         let key = bb(100);
         let val = bb(77);
-        let leaves = vec![
-            HeapLeaf {
-                addr: key,
-                value: val,
-            },
-            HeapLeaf {
-                addr: bb(200),
-                value: bb(88),
-            },
-        ];
+        let leaves = vec![HeapLeaf::entry(key, val), HeapLeaf::entry(bb(200), bb(88))];
         let tree = CanonicalHeapTree8::new(leaves.clone(), HEAP_TREE_DEPTH);
         let root = tree.root8();
         // accept: [root8, key, genuine value, root8].
@@ -2895,22 +2886,13 @@ fn bus_corpus() -> Vec<BusCase> {
         let old_val = bb(77);
         let new_val = bb(123);
         let leaves = vec![
-            HeapLeaf {
-                addr: key,
-                value: old_val,
-            },
-            HeapLeaf {
-                addr: bb(200),
-                value: bb(88),
-            },
+            HeapLeaf::entry(key, old_val),
+            HeapLeaf::entry(bb(200), bb(88)),
         ];
         let tree = CanonicalHeapTree8::new(leaves.clone(), HEAP_TREE_DEPTH);
         let root = tree.root8();
         let w = tree
-            .update_witness(HeapLeaf {
-                addr: key,
-                value: new_val,
-            })
+            .update_witness(HeapLeaf::entry(key, new_val))
             .expect("present key has an update witness");
         let new_root = w.new_root;
         let mut forged_new_root = new_root;
@@ -2941,14 +2923,8 @@ fn bus_corpus() -> Vec<BusCase> {
         let present_key = bb(100);
         let absent_key = bb(150); // between 100 and 200 — bracketed by the two real leaves.
         let leaves = vec![
-            HeapLeaf {
-                addr: present_key,
-                value: bb(77),
-            },
-            HeapLeaf {
-                addr: bb(200),
-                value: bb(88),
-            },
+            HeapLeaf::entry(present_key, bb(77)),
+            HeapLeaf::entry(bb(200), bb(88)),
         ];
         let tree = CanonicalHeapTree8::new(leaves.clone(), HEAP_TREE_DEPTH);
         let root = tree.root8();
@@ -3873,22 +3849,13 @@ fn real_assembly_map_insert_and_wide_lane_differential() {
     // -- INSERT: leaves {100→77, 200→88}, insert 150→55 (bracketed fresh key). --
     let d_ins = real_map_desc(RealMapKind::Insert);
     let leaves = vec![
-        HeapLeaf {
-            addr: bb(100),
-            value: bb(77),
-        },
-        HeapLeaf {
-            addr: bb(200),
-            value: bb(88),
-        },
+        HeapLeaf::entry(bb(100), bb(77)),
+        HeapLeaf::entry(bb(200), bb(88)),
     ];
     let tree = CanonicalHeapTree8::new(leaves.clone(), HEAP_TREE_DEPTH);
     let root = tree.root8();
     let w = tree
-        .insert_witness(HeapLeaf {
-            addr: bb(150),
-            value: bb(55),
-        })
+        .insert_witness(HeapLeaf::entry(bb(150), bb(55)))
         .expect("fresh bracketed key has an insert witness");
 
     // the ℤ twin (scalar lane-0 shadow, per the Lean `MapOp.holdsAt` insert arm =

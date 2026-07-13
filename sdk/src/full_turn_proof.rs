@@ -6367,14 +6367,8 @@ mod tests {
         // (`0x52 ⊑ 0xFF`). A wrong/absent key fails closed.
         let held_mask = BabyBear::new(0xFF);
         let clist_leaves = vec![
-            dregg_circuit::heap_root::HeapLeaf {
-                addr: chosen[0],
-                value: held_mask,
-            }, // held key → broad held mask
-            dregg_circuit::heap_root::HeapLeaf {
-                addr: other[0],
-                value: other[3],
-            },
+            dregg_circuit::heap_root::HeapLeaf::entry(chosen[0], held_mask), // held key → broad held mask
+            dregg_circuit::heap_root::HeapLeaf::entry(other[0], other[3]),
         ];
         let cap = CapMembershipWitness {
             leaf: CapLeaf {
@@ -6522,14 +6516,8 @@ mod tests {
         let open = CapOpenWitness::build(&[other, chosen], 1).expect("cap-open witness builds");
         let held_mask = BabyBear::new(0xFF);
         let clist_leaves = vec![
-            dregg_circuit::heap_root::HeapLeaf {
-                addr: chosen[0],
-                value: held_mask,
-            },
-            dregg_circuit::heap_root::HeapLeaf {
-                addr: other[0],
-                value: other[3],
-            },
+            dregg_circuit::heap_root::HeapLeaf::entry(chosen[0], held_mask),
+            dregg_circuit::heap_root::HeapLeaf::entry(other[0], other[3]),
         ];
         let cap = CapMembershipWitness {
             leaf: CapLeaf {
@@ -7346,14 +7334,9 @@ mod tests {
             .expect("cap-open path builds");
         // THE GENUINE c-list — the narrowed key IS present (the UPDATE has a membership witness).
         let clist_leaves = vec![
-            HeapLeaf {
-                addr: chosen[0],
-                value: chosen[3], // the held mask felt (the submask RHS the producer reads)
-            },
-            HeapLeaf {
-                addr: other[0],
-                value: other[3],
-            },
+            // value = chosen[3], the held mask felt (the submask RHS the producer reads)
+            HeapLeaf::entry(chosen[0], chosen[3]),
+            HeapLeaf::entry(other[0], other[3]),
         ];
         let cap = CapMembershipWitness {
             leaf: leaf_cl(&chosen),
@@ -7460,10 +7443,7 @@ mod tests {
             leaf: leaf_cl(&chosen),
             siblings: built.siblings.to_vec(),
             directions: built.directions.to_vec(),
-            clist_leaves: vec![HeapLeaf {
-                addr: other[0],
-                value: other[3],
-            }],
+            clist_leaves: vec![HeapLeaf::entry(other[0], other[3])],
             cap_leaves: Vec::new(),
             cap_tombstones: Vec::new(),
         };
@@ -7604,14 +7584,8 @@ mod tests {
         let revoked_key = BabyBear::new(0xDE16A);
         let revoked_value = BabyBear::new(7_777);
         let clist_leaves = vec![
-            HeapLeaf {
-                addr: revoked_key,
-                value: revoked_value,
-            },
-            HeapLeaf {
-                addr: BabyBear::new(0xBEEF),
-                value: BabyBear::new(123),
-            },
+            HeapLeaf::entry(revoked_key, revoked_value),
+            HeapLeaf::entry(BabyBear::new(0xBEEF), BabyBear::new(123)),
         ];
         let initial = CellState::new(100_000, 0);
         let effects = vec![VmEffect::RevokeDelegation {
@@ -7685,10 +7659,7 @@ mod tests {
         );
 
         // A c-list MISSING the revoked key fails closed (the guardrail — no fabricated post-root).
-        let absent = vec![HeapLeaf {
-            addr: BabyBear::new(0xBEEF),
-            value: BabyBear::new(123),
-        }];
+        let absent = vec![HeapLeaf::entry(BabyBear::new(0xBEEF), BabyBear::new(123))];
         let (mut t2, mut d2) =
             dregg_circuit::effect_vm::trace_rotated::generate_rotated_effect_vm_trace(
                 &initial, &effects, &before, &after, &caveat,
@@ -7776,14 +7747,8 @@ mod tests {
         // value = target (the shape `turn_proving::cap_write_clist_leaves` produces from the real ledger).
         // The revoked cap's slot_hash (0xDE16A) IS present — the REMOVE has a membership witness.
         let clist_leaves = vec![
-            HeapLeaf {
-                addr: chosen[0],
-                value: chosen[1],
-            },
-            HeapLeaf {
-                addr: other[0],
-                value: other[1],
-            },
+            HeapLeaf::entry(chosen[0], chosen[1]),
+            HeapLeaf::entry(other[0], other[1]),
         ];
         let cap = CapMembershipWitness {
             leaf: leaf_cl(&chosen),
@@ -7994,10 +7959,7 @@ mod tests {
         // wrapper's map_op REMOVE has no membership witness for the key → the prover FAILS CLOSED. A wrong
         // post-cap-root CANNOT be proven (no silent forge).
         let forged_clist = vec![
-            HeapLeaf {
-                addr: other[0],
-                value: other[1],
-            }, // only the OTHER cap; the revoked key is ABSENT
+            HeapLeaf::entry(other[0], other[1]), // only the OTHER cap; the revoked key is ABSENT
         ];
         let cap_forged = CapMembershipWitness {
             leaf: leaf_cl(&chosen),
@@ -8127,14 +8089,8 @@ mod tests {
 
         // THE GENUINE c-list — the revoked cap's slot_hash (0xCA9) IS present (the REMOVE has a witness).
         let clist_leaves = vec![
-            HeapLeaf {
-                addr: chosen[0],
-                value: chosen[1],
-            },
-            HeapLeaf {
-                addr: other[0],
-                value: other[1],
-            },
+            HeapLeaf::entry(chosen[0], chosen[1]),
+            HeapLeaf::entry(other[0], other[1]),
         ];
         let cap = CapMembershipWitness {
             leaf: leaf_cl(&chosen),
@@ -8225,10 +8181,7 @@ mod tests {
         // wrapper's map_op REMOVE has no membership witness → the prover FAILS CLOSED. A wrong
         // post-cap-root CANNOT be proven (no silent forge — the route-forge antibody).
         let forged_clist = vec![
-            HeapLeaf {
-                addr: other[0],
-                value: other[1],
-            }, // only the OTHER cap; the revoked key is ABSENT
+            HeapLeaf::entry(other[0], other[1]), // only the OTHER cap; the revoked key is ABSENT
         ];
         let cap_forged = CapMembershipWitness {
             leaf: leaf_cl(&chosen),
@@ -8363,14 +8316,8 @@ mod tests {
         // THE GENUINE delegations leaf-set — the re-armed child key (0xDE16) IS present (the UPDATE has a
         // membership witness; refresh is an update-at-key, so the key stays present).
         let clist_leaves = vec![
-            HeapLeaf {
-                addr: chosen[0],
-                value: chosen[1],
-            },
-            HeapLeaf {
-                addr: other[0],
-                value: other[1],
-            },
+            HeapLeaf::entry(chosen[0], chosen[1]),
+            HeapLeaf::entry(other[0], other[1]),
         ];
         let cap = CapMembershipWitness {
             leaf: leaf_cl(&chosen),
@@ -8530,10 +8477,7 @@ mod tests {
         // wrapper's `Update` map_op has no membership witness → the prover FAILS CLOSED. A wrong
         // post-DELEG-root CANNOT be proven (no silent forge — the DELEG-forge antibody).
         let forged_clist = vec![
-            HeapLeaf {
-                addr: other[0],
-                value: other[1],
-            }, // only the OTHER edge; the re-armed key is ABSENT
+            HeapLeaf::entry(other[0], other[1]), // only the OTHER edge; the re-armed key is ABSENT
         ];
         let cap_forged = CapMembershipWitness {
             leaf: leaf_cl(&chosen),
@@ -8682,14 +8626,8 @@ mod tests {
             .membership_witness(anchor.slot_hash)
             .expect("the anchor is a member of the BEFORE tree");
         let clist_leaves = vec![
-            HeapLeaf {
-                addr: anchor.slot_hash,
-                value: anchor.target,
-            },
-            HeapLeaf {
-                addr: other.slot_hash,
-                value: other.target,
-            },
+            HeapLeaf::entry(anchor.slot_hash, anchor.target),
+            HeapLeaf::entry(other.slot_hash, other.target),
         ];
         let cap = CapMembershipWitness {
             leaf: mw.leaf,
@@ -8893,14 +8831,8 @@ mod tests {
             .expect("the anchor is a member of the BEFORE tree");
         let (fresh_key, fresh_value) = fresh_edge;
         let clist_leaves = vec![
-            HeapLeaf {
-                addr: anchor.slot_hash,
-                value: anchor.target,
-            },
-            HeapLeaf {
-                addr: other.slot_hash,
-                value: other.target,
-            },
+            HeapLeaf::entry(anchor.slot_hash, anchor.target),
+            HeapLeaf::entry(other.slot_hash, other.target),
         ];
         let cap = CapMembershipWitness {
             leaf: mw.leaf,
@@ -9317,14 +9249,8 @@ mod tests {
             .membership_witness(anchor_deleg[0])
             .expect("the anchor is a member of the BEFORE tree");
         let clist_leaves = vec![
-            HeapLeaf {
-                addr: anchor_deleg[0],
-                value: anchor_deleg[1],
-            },
-            HeapLeaf {
-                addr: other_deleg[0],
-                value: other_deleg[1],
-            },
+            HeapLeaf::entry(anchor_deleg[0], anchor_deleg[1]),
+            HeapLeaf::entry(other_deleg[0], other_deleg[1]),
         ];
         let cap = CapMembershipWitness {
             leaf: leaf_cl(&anchor_deleg),
@@ -9368,10 +9294,7 @@ mod tests {
         // ── ARM (2): FORGE. A 7-field c-list MISSING the anchor — it rebuilds a DIFFERENT tree than
         // the membership path opens, so the keystone producer FAILS CLOSED (the c-list is not the
         // holder's genuine pre-state). A fabricated post-cap-root is NOT provable.
-        let forged_clist = vec![HeapLeaf {
-            addr: other_deleg[0],
-            value: other_deleg[1],
-        }];
+        let forged_clist = vec![HeapLeaf::entry(other_deleg[0], other_deleg[1])];
         let cap_forged = CapMembershipWitness {
             leaf: leaf_cl(&anchor_deleg),
             siblings: mw_deleg.siblings.clone(),
@@ -9814,14 +9737,8 @@ mod tests {
         assert_ne!(fresh_key, anchor.slot_hash);
         assert_ne!(fresh_key, other.slot_hash);
         let clist_leaves = vec![
-            HeapLeaf {
-                addr: anchor.slot_hash,
-                value: held_mask,
-            },
-            HeapLeaf {
-                addr: other.slot_hash,
-                value: other.target,
-            },
+            HeapLeaf::entry(anchor.slot_hash, held_mask),
+            HeapLeaf::entry(other.slot_hash, other.target),
         ];
         let cap = CapMembershipWitness {
             leaf: anchor,

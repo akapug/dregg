@@ -74,10 +74,7 @@ fn cap_cells() -> (dregg_cell::Cell, dregg_cell::Cell) {
 }
 
 fn leaf(addr: u32, value: u32) -> HeapLeaf {
-    HeapLeaf {
-        addr: BabyBear::new(addr),
-        value: BabyBear::new(value),
-    }
+    HeapLeaf::entry(BabyBear::new(addr), BabyBear::new(value))
 }
 
 /// A cell at nonce `nonce` carrying TWO granted caps with `revoke_slots` revoked — a chain link. The

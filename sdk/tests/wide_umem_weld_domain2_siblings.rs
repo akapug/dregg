@@ -191,14 +191,8 @@ fn broad_cap_witness() -> CapMembershipWitness {
         cap_leaves: vec![chosen, other],
         cap_tombstones: Vec::new(),
         clist_leaves: vec![
-            HeapLeaf {
-                addr: chosen.slot_hash,
-                value: BabyBear::new(0xFFFF),
-            },
-            HeapLeaf {
-                addr: other.slot_hash,
-                value: other.mask_lo,
-            },
+            HeapLeaf::entry(chosen.slot_hash, BabyBear::new(0xFFFF)),
+            HeapLeaf::entry(other.slot_hash, other.mask_lo),
         ],
     }
 }

@@ -143,14 +143,8 @@ fn attenuate_fixture() -> (
     // BROAD enough that the narrowed KEEP_MASK (0x52) is a submask (0x52 ⊑ 0xFF).
     let held_mask = BabyBear::new(0xFF);
     let clist_leaves = vec![
-        HeapLeaf {
-            addr: chosen[0],
-            value: held_mask,
-        },
-        HeapLeaf {
-            addr: other[0],
-            value: other[3],
-        },
+        HeapLeaf::entry(chosen[0], held_mask),
+        HeapLeaf::entry(other[0], other[3]),
     ];
     let cap = CapMembershipWitness {
         leaf: CapLeaf {
