@@ -349,3 +349,19 @@ Closing it is a DEEPER cross-layer feature: the turn/apex must compute the outbo
 (as a 26th lane OR folded into chain_digest — a design decision), touching the recursion/turn layer (possibly shared/
 stark-kill territory). Deferred with honest scope, NOT pretended-next. NEXT quality: RecursionVk-derive harvest +
 combined commit → Groth16-regen for the pinned circuit → a comprehensive 4th settlement-soundness critic.
+
+## ⚡ SWARM MODE (07-12, ember: "none of this needs gating, swarm over ALL of it") — un-parked, un-gated
+Correcting the recent timidity. LIVE PARALLEL LANES:
+- GPU PROVER WIRING (a21064dd4b9b88d29) — UNPARKED: real wgpu DFT + Poseidon2/BN254 MMCS behind DreggOuterConfig's
+  traits, measure REAL end-to-end shrink prove GPU-vs-CPU (M2 unified memory). The real prover-accel, not a park.
+- MESSAGE→ROOT 26th-PI (a38b37ec8c55d5799) — the last operator-trust gap: turn/apex computes+exposes an outbound-
+  message commitment → SettlementCircuit binds → contract drops the operator attestation. Assess+build (deep, cross-layer).
+- 4th COMPREHENSIVE CRITIC (a5b2e7ae22adae2a6, opus) — audit the WHOLE completed path for a residual forgery /
+  a composition seam between the 3 fixes / whether the RecursionVk anchor is authoritative-or-circular / on-chain staleness.
+- GROTH16-REGEN (abb099a6c93b15d61) — mid-setup for the PINNED circuit (R1CS 12.87M, 25 public, ClaimLen 33). Closes on-chain staleness.
+TRUSTED-SETUP ANSWER (ember's Q — why re-run each time?): Groth16 setup is PER-CIRCUIT; the re-runs were because the
+CIRCUIT kept changing (binding → apex-pin → ClaimLen 25→33), NOT fresh-randomness-for-its-own-sake. FIX (next, after
+regen): FREEZE the circuit + cache the params keyed by circuit-hash — save the pk locally (huge, gitignored) + commit
+the vk (small, it's in the verifier contract) + SKIP setup when the circuit hash is unchanged → dev proving REUSES the
+params, no re-ceremony. Toxic-waste caveat only bites PRODUCTION (an MPC). NEXT after regen: trusted-setup param-cache
++ Lean-tie differential (chain/gnark frees). NOT gating build work on ember; only deploy/MPC/alloy-trie go outward.
