@@ -12,6 +12,12 @@ fs_permissions = [{ access = "read", path = "./test/fixtures" }]
 
 [rpc_endpoints]
 base_sepolia = "${BASE_SEPOLIA_RPC_URL}"
+# Robinhood Chain testnet — Arbitrum-Orbit EVM L2 (chainId 46630, ETH gas).
+# Permissionless deploy; the DeploySettlement stack deploys identically here.
+# Override via ROBINHOOD_TESTNET_RPC_URL for a private/Alchemy endpoint.
+robinhood_testnet = "https://rpc.testnet.chain.robinhood.com"
 
 [etherscan]
 base_sepolia = { key = "${ETHERSCAN_API_KEY}", url = "https://api-sepolia.basescan.org/api" }
+# Blockscout-style verify: forge script ... --verify \
+#   --verifier blockscout --verifier-url https://explorer.testnet.chain.robinhood.com/api/
