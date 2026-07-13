@@ -764,6 +764,7 @@ import Dregg2.Circuit.FriColumnDecode
 import Dregg2.Circuit.StarkSoundColumnCfg
 import Dregg2.Circuit.LightClientDeployed
 import Dregg2.Circuit.LightClientDeployedGeneral
+import Dregg2.Circuit.MerkleAcceptForces
 import Dregg2.Circuit.TraceColumnInterp
 import Dregg2.Circuit.FieldIntegerLift
 import Dregg2.Circuit.FriExtractReal
