@@ -76,7 +76,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use num_bigint::BigUint;
-use p3_baby_bear::BabyBear;
+use p3_baby_bear::{
+    BABYBEAR_POSEIDON2_RC_16_EXTERNAL_FINAL, BABYBEAR_POSEIDON2_RC_16_EXTERNAL_INITIAL,
+    BABYBEAR_POSEIDON2_RC_16_INTERNAL, BabyBear, Poseidon2BabyBear, default_babybear_poseidon2_16,
+};
 use p3_batch_stark::ProverData;
 use p3_bn254::Bn254;
 use p3_circuit_prover::{
@@ -88,19 +91,19 @@ use p3_circuit_prover::{
 use p3_commit::{BatchOpening, BatchOpeningRef, ExtensionMmcs, Mmcs};
 use p3_dft::{Radix2DitParallel, TwoAdicSubgroupDft};
 use p3_field::extension::BinomialExtensionField;
-use p3_field::{PrimeCharacteristicRing, PrimeField32, TwoAdicField};
+use p3_field::{Field, PrimeCharacteristicRing, PrimeField32, TwoAdicField};
 use p3_fri::{FriParameters, TwoAdicFriPcs};
 use p3_lookup::logup::LogUpGadget;
 use p3_matrix::Matrix;
 use p3_matrix::bitrev::{BitReversedMatrixView, BitReversibleMatrix};
 use p3_matrix::dense::RowMajorMatrix;
-use p3_merkle_tree::MerkleTreeError;
+use p3_merkle_tree::{MerkleTreeError, MerkleTreeMmcs};
 use p3_recursion::traits::RecursiveAir;
 use p3_recursion::{
     BatchOnly, PcsRecursionBackend, ProveNextLayerParams, RecursionInput, RecursionOutput,
     VerifierCircuitResult, build_next_layer_circuit, ops::Poseidon2Config,
 };
-use p3_symmetric::MerkleCap;
+use p3_symmetric::{MerkleCap, PaddingFreeSponge, TruncatedPermutation};
 use p3_uni_stark::{StarkConfig, StarkGenericConfig};
 use rayon::prelude::*;
 
@@ -2048,6 +2051,764 @@ impl Mmcs<BabyBear> for GpuBn254Mmcs {
     ) -> Result<(), Self::Error> {
         // DELEGATE to the untouched CPU MerkleTreeMmcs verifier (identical
         // Commitment/Proof types) — the verify path never depends on the GPU.
+        let (opened_values, opening_proof) = batch_proof.unpack();
+        self.cpu.verify_batch(
+            commit,
+            dimensions,
+            index,
+            BatchOpeningRef::new(opened_values, opening_proof),
+        )
+    }
+}
+
+// ============================================================================
+// SEAM 3 — GpuBabyBearMmcs: the all-BabyBear inner (apex-fold) GPU Merkle MMCS
+//
+// The FOLD (`prove_turn_chain_recursive` → `DreggRecursionConfig`) commits under
+// `MerkleTreeMmcs<Packing, Packing, PaddingFreeSponge<Poseidon2BabyBear<16>,16,8,8>,
+// TruncatedPermutation<Poseidon2BabyBear<16>,2,8,16>, 2, 8>` — the SAME two PCS
+// seams as the shrink (DFT + MMCS tree build) but the hash is Poseidon2-BabyBear-
+// W16, NOT BN254. `GpuDft` already serves the BabyBear DFT (it is native BabyBear).
+// This is the BabyBear analog of `GpuBn254Mmcs`: an `Mmcs<BabyBear>` whose
+// `commit` builds the digest layers with batched GPU Poseidon2-BabyBear-W16
+// permutation kernels, bit-exact vs the CPU `MerkleTreeMmcs`, and whose
+// `verify_batch` DELEGATES to the untouched CPU verifier.
+//
+// The permutation kernels are the KAT-proven codegen lifted from the sketch
+// `circuit-prove/sketches/poseidon2-merkle-bench` (parity-verified there against
+// the pinned `default_babybear_poseidon2_16` + the exact `PaddingFreeSponge` /
+// `TruncatedPermutation` pair). Digests stay in 32-bit Montgomery form on-device
+// end-to-end (BabyBear is `repr(transparent)` over its Montgomery u32, so a
+// device digest word IS the BabyBear value — no canonicalization round-trip),
+// re-gated by root parity vs the CPU tree in `tests` below.
+// ============================================================================
+
+/// The fold's Poseidon2-BabyBear-W16 permutation.
+type BbPerm = Poseidon2BabyBear<16>;
+/// The fold's leaf hash: `PaddingFreeSponge<Perm, WIDTH=16, RATE=8, OUT=8>`.
+type BbHash = PaddingFreeSponge<BbPerm, 16, 8, 8>;
+/// The fold's node compression: `TruncatedPermutation<Perm, N=2, CHUNK=8, WIDTH=16>`.
+type BbCompress = TruncatedPermutation<BbPerm, 2, 8, 16>;
+/// The fold's value MMCS — the exact type the inner recursion config commits under
+/// (`plonky3_recursion_impl.rs`: `MyMmcs`).
+pub type BbValMmcs = MerkleTreeMmcs<
+    <BabyBear as Field>::Packing,
+    <BabyBear as Field>::Packing,
+    BbHash,
+    BbCompress,
+    2,
+    8,
+>;
+
+// ---- WGSL codegen (ported verbatim from the KAT-proven sketch) --------------
+// Emits ONLY assignments over predeclared u32 vars (s0..s15, t0..t6, m0..m3,
+// sum, fsum) using mmul/addp/subp/halve — the identical straight-line body the
+// sketch proved bit-exact vs p3.
+
+/// x -> x^7 (4 mmuls), in place on `v`; t5/t6 scratch.
+fn bb_sbox(v: &str) -> String {
+    format!("t5 = mmul({v}, {v});\nt6 = mmul(t5, {v});\nt5 = mmul(t6, t6);\n{v} = mmul(t5, {v});\n")
+}
+
+/// The fast 4x4 MDS ([[2,3,1,1],[1,2,3,1],[1,1,2,3],[3,1,1,2]]; p3 apply_mat4).
+fn bb_mat4(a: &str, b: &str, c: &str, d: &str) -> String {
+    format!(
+        "t0 = addp({a}, {b});\nt1 = addp({c}, {d});\nt2 = addp(t0, t1);\n\
+         t3 = addp(t2, {b});\nt4 = addp(t2, {d});\n\
+         {d} = addp(t4, addp({a}, {a}));\n{b} = addp(t3, addp({c}, {c}));\n\
+         {a} = addp(t3, t0);\n{c} = addp(t4, t1);\n"
+    )
+}
+
+/// External linear layer (p3 mds_light_permutation with MDSMat4, WIDTH=16).
+fn bb_mds_light() -> String {
+    let mut s = String::new();
+    for ch in 0..4 {
+        let i = 4 * ch;
+        let v: Vec<String> = (i..i + 4).map(|k| format!("s{k}")).collect();
+        s += &bb_mat4(&v[0], &v[1], &v[2], &v[3]);
+    }
+    for k in 0..4 {
+        s += &format!(
+            "m{k} = addp(addp(s{}, s{}), addp(s{}, s{}));\n",
+            k,
+            k + 4,
+            k + 8,
+            k + 12
+        );
+    }
+    for i in 0..16 {
+        s += &format!("s{i} = addp(s{i}, m{});\n", i % 4);
+    }
+    s
+}
+
+/// One external round: rc (Montgomery), x^7 each lane, external linear layer.
+fn bb_ext_round(rc_mont: &[u32; 16]) -> String {
+    let mut s = String::new();
+    for i in 0..16 {
+        s += &format!("s{i} = addp(s{i}, {}u);\n", rc_mont[i]);
+        s += &bb_sbox(&format!("s{i}"));
+    }
+    s += &bb_mds_light();
+    s
+}
+
+/// One internal round: rc + x^7 on lane 0, then 1 + Diag(V) (division by 2^k =
+/// Montgomery-mul by 2^(32-k) mod P — exact).
+fn bb_int_round(rc_mont: u32) -> String {
+    let inv2_8 = 1u32 << 24;
+    let inv2_2 = 1u32 << 30;
+    let inv2_3 = 1u32 << 29;
+    let inv2_4 = 1u32 << 28;
+    let inv2_27 = 1u32 << 5;
+    let mut s = format!("s0 = addp(s0, {rc_mont}u);\n");
+    s += &bb_sbox("s0");
+    s += "sum = addp(addp(addp(addp(s1, s2), addp(s3, s4)), addp(addp(s5, s6), addp(s7, s8))), addp(addp(addp(s9, s10), addp(s11, s12)), addp(addp(s13, s14), s15)));\n";
+    s += "fsum = addp(sum, s0);\n";
+    s += "s0 = subp(sum, s0);\n";
+    s += "s1 = addp(s1, fsum);\n";
+    s += "s2 = addp(addp(s2, s2), fsum);\n";
+    s += "s3 = addp(halve(s3), fsum);\n";
+    s += "t0 = addp(s4, s4);\ns4 = addp(fsum, addp(t0, s4));\n";
+    s += "t0 = addp(s5, s5);\ns5 = addp(fsum, addp(t0, t0));\n";
+    s += "s6 = subp(fsum, halve(s6));\n";
+    s += "t0 = addp(s7, s7);\ns7 = subp(fsum, addp(t0, s7));\n";
+    s += "t0 = addp(s8, s8);\ns8 = subp(fsum, addp(t0, t0));\n";
+    s += &format!("s9 = addp(mmul(s9, {inv2_8}u), fsum);\n");
+    s += &format!("s10 = addp(mmul(s10, {inv2_2}u), fsum);\n");
+    s += &format!("s11 = addp(mmul(s11, {inv2_3}u), fsum);\n");
+    s += &format!("s12 = addp(mmul(s12, {inv2_27}u), fsum);\n");
+    s += &format!("s13 = subp(fsum, mmul(s13, {inv2_8}u));\n");
+    s += &format!("s14 = subp(fsum, mmul(s14, {inv2_4}u));\n");
+    s += &format!("s15 = subp(fsum, mmul(s15, {inv2_27}u));\n");
+    s
+}
+
+/// The full width-16 permutation body (initial mds_light, 4 external, 13
+/// internal, 4 external — p3 permute_mut order), RC in Montgomery form.
+fn bb_perm_body() -> String {
+    let rc_ei: [[u32; 16]; 4] = BABYBEAR_POSEIDON2_RC_16_EXTERNAL_INITIAL
+        .map(|row| row.map(|x| bb_to_mont(x.as_canonical_u32())));
+    let rc_ef: [[u32; 16]; 4] = BABYBEAR_POSEIDON2_RC_16_EXTERNAL_FINAL
+        .map(|row| row.map(|x| bb_to_mont(x.as_canonical_u32())));
+    let rc_int: [u32; 13] =
+        BABYBEAR_POSEIDON2_RC_16_INTERNAL.map(|x| bb_to_mont(x.as_canonical_u32()));
+    let mut s = bb_mds_light();
+    for rc in &rc_ei {
+        s += &bb_ext_round(rc);
+    }
+    for &rc in &rc_int {
+        s += &bb_int_round(rc);
+    }
+    for rc in &rc_ef {
+        s += &bb_ext_round(rc);
+    }
+    s
+}
+
+/// The static WGSL for the BabyBear hash engine: the prelude (BabyBear
+/// Montgomery mmul/addp/subp/halve via the 16-bit split), the W16 permutation
+/// wrapped as `permute16(ptr)`, and the three tree kernels (leaf sponge /
+/// pair compress / inject combine) over 8-u32 Montgomery digests.
+const BB_HASH_WGSL: &str = r#"
+const P: u32 = 0x78000001u;
+const MU: u32 = 0x88000001u;
+
+fn mul64(a: u32, b: u32) -> vec2<u32> {
+    let a0 = a & 0xffffu; let a1 = a >> 16u;
+    let b0 = b & 0xffffu; let b1 = b >> 16u;
+    let p00 = a0 * b0;
+    let p01 = a0 * b1;
+    let p10 = a1 * b0;
+    let p11 = a1 * b1;
+    let mid = p01 + p10;
+    let carry_mid = select(0u, 0x10000u, mid < p01);
+    let mid_lo = mid << 16u;
+    let lo = p00 + mid_lo;
+    let carry_lo = select(0u, 1u, lo < p00);
+    let hi = p11 + (mid >> 16u) + carry_mid + carry_lo;
+    return vec2<u32>(lo, hi);
+}
+
+fn mmul(a: u32, b: u32) -> u32 {
+    let ab = mul64(a, b);
+    let t = ab.x * MU;
+    let tp = mul64(t, P);
+    var r: u32 = ab.y - tp.y;
+    if (ab.y < tp.y) { r += P; }
+    return r;
+}
+
+fn addp(a: u32, b: u32) -> u32 {
+    let s = a + b;
+    return select(s, s - P, s >= P);
+}
+
+fn subp(a: u32, b: u32) -> u32 {
+    var r = a - b;
+    if (a < b) { r += P; }
+    return r;
+}
+
+fn halve(a: u32) -> u32 {
+    return select(a >> 1u, (a >> 1u) + 0x3C000001u, (a & 1u) != 0u);
+}
+
+// The Poseidon2-BabyBear-W16 permutation over a function-scoped 16-lane state
+// (Montgomery form in, Montgomery form out).
+fn permute16(st: ptr<function, array<u32, 16>>) {
+    var s0 = (*st)[0]; var s1 = (*st)[1]; var s2 = (*st)[2]; var s3 = (*st)[3];
+    var s4 = (*st)[4]; var s5 = (*st)[5]; var s6 = (*st)[6]; var s7 = (*st)[7];
+    var s8 = (*st)[8]; var s9 = (*st)[9]; var s10 = (*st)[10]; var s11 = (*st)[11];
+    var s12 = (*st)[12]; var s13 = (*st)[13]; var s14 = (*st)[14]; var s15 = (*st)[15];
+    var t0 = 0u; var t1 = 0u; var t2 = 0u; var t3 = 0u; var t4 = 0u; var t5 = 0u; var t6 = 0u;
+    var m0 = 0u; var m1 = 0u; var m2 = 0u; var m3 = 0u; var sum = 0u; var fsum = 0u;
+@PERM_BODY@
+    (*st)[0] = s0; (*st)[1] = s1; (*st)[2] = s2; (*st)[3] = s3;
+    (*st)[4] = s4; (*st)[5] = s5; (*st)[6] = s6; (*st)[7] = s7;
+    (*st)[8] = s8; (*st)[9] = s9; (*st)[10] = s10; (*st)[11] = s11;
+    (*st)[12] = s12; (*st)[13] = s13; (*st)[14] = s14; (*st)[15] = s15;
+}
+
+// b0: matrices arena / prev-layer digests / inject digests (Montgomery u32).
+// b1: descriptor words. b2: output digests (8 Montgomery u32 each).
+@group(0) @binding(0) var<storage, read> src: array<u32>;
+@group(0) @binding(1) var<storage, read> desc: array<u32>;
+@group(0) @binding(2) var<storage, read_write> outd: array<u32>;
+
+// desc = [n_mats, base_row, n_rows, _, (off, w) * n_mats]
+// One thread = one leaf row: PaddingFreeSponge<Perm,16,8,8> over the row's
+// concatenation across all matrices in the height group. Overwrite-mode absorb:
+// rate lanes [0,8) overwritten one element at a time, permute after every 8;
+// a partial final block permutes iff it absorbed >=1 element (p3 hash_iter);
+// capacity lanes [8,16) persist across permutes. Digest = state[0..8].
+@compute @workgroup_size(@WG@)
+fn leaf_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i = gid.x;
+    let n_rows = desc[2];
+    if (i >= n_rows) { return; }
+    let row = desc[1] + i;
+    let n_mats = desc[0];
+
+    var s: array<u32, 16>;
+    for (var k = 0u; k < 16u; k++) { s[k] = 0u; }
+    var pos = 0u;
+    for (var m = 0u; m < n_mats; m++) {
+        let off = desc[4u + 2u * m];
+        let w = desc[5u + 2u * m];
+        let rbase = off + row * w;
+        for (var c = 0u; c < w; c++) {
+            s[pos] = src[rbase + c];
+            pos += 1u;
+            if (pos == 8u) {
+                permute16(&s);
+                pos = 0u;
+            }
+        }
+    }
+    if (pos != 0u) {
+        permute16(&s);
+    }
+    for (var k = 0u; k < 8u; k++) { outd[row * 8u + k] = s[k]; }
+}
+
+// desc = [n_out, base, _, _]; src = prev-layer digests (Montgomery u32x8);
+// outd[i] = TruncatedPermutation compress = permute([left8 ++ right8])[0..8].
+@compute @workgroup_size(@WG@)
+fn compress_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i0 = gid.x;
+    let n_out = desc[0];
+    if (i0 >= n_out) { return; }
+    let i = desc[1] + i0;
+    var s: array<u32, 16>;
+    for (var k = 0u; k < 8u; k++) {
+        s[k] = src[(2u * i) * 8u + k];
+        s[8u + k] = src[(2u * i + 1u) * 8u + k];
+    }
+    permute16(&s);
+    for (var k = 0u; k < 8u; k++) { outd[i * 8u + k] = s[k]; }
+}
+
+// desc = [n, base, _, _]; outd[i] = compress(outd[i], src[i]) — the
+// matrix-injection combine (compress_and_inject: [current_node, injected_leaf]).
+@compute @workgroup_size(@WG@)
+fn combine_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let i0 = gid.x;
+    let n = desc[0];
+    if (i0 >= n) { return; }
+    let i = desc[1] + i0;
+    var s: array<u32, 16>;
+    for (var k = 0u; k < 8u; k++) {
+        s[k] = outd[i * 8u + k];
+        s[8u + k] = src[i * 8u + k];
+    }
+    permute16(&s);
+    for (var k = 0u; k < 8u; k++) { outd[i * 8u + k] = s[k]; }
+}
+"#;
+
+fn bb_hash_shader_source(wg: u32) -> String {
+    BB_HASH_WGSL
+        .replace("@PERM_BODY@", &bb_perm_body())
+        .replace("@WG@", &wg.to_string())
+}
+
+/// Workgroup size for the BabyBear hash kernels. The W16 permutation keeps a
+/// 16-lane register state — modest pressure; 64 mirrors the BN254 engine.
+const BB_HASH_WG: u32 = 64;
+
+struct BbHashCtx {
+    bgl: wgpu::BindGroupLayout,
+    leaf_pipe: wgpu::ComputePipeline,
+    compress_pipe: wgpu::ComputePipeline,
+    combine_pipe: wgpu::ComputePipeline,
+    max_binding_u32s: usize,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+}
+
+impl BbHashCtx {
+    fn new() -> Option<Self> {
+        let shared = shared_gpu()?;
+        let device = shared.device.clone();
+        let queue = shared.queue.clone();
+        let ro = |binding: u32, read_only: bool| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
+        let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("bb_hash_bgl"),
+            entries: &[ro(0, true), ro(1, true), ro(2, false)],
+        });
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            bind_group_layouts: &[&bgl],
+            push_constant_ranges: &[],
+        });
+        let src = bb_hash_shader_source(BB_HASH_WG);
+        // Trusted module + unchecked (indices are audited, all constant-indexed
+        // in the perm; every tile slot written before read; parity re-gated).
+        let module = unsafe {
+            device.create_shader_module_trusted(
+                wgpu::ShaderModuleDescriptor {
+                    label: Some("poseidon2_babybear_w16_tree"),
+                    source: wgpu::ShaderSource::Wgsl(src.into()),
+                },
+                wgpu::ShaderRuntimeChecks::unchecked(),
+            )
+        };
+        let mk_pipe = |entry: &str| {
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some(entry),
+                layout: Some(&layout),
+                module: &module,
+                entry_point: Some(entry),
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    zero_initialize_workgroup_memory: false,
+                    ..Default::default()
+                },
+                cache: None,
+            })
+        };
+        Some(BbHashCtx {
+            leaf_pipe: mk_pipe("leaf_main"),
+            compress_pipe: mk_pipe("compress_main"),
+            combine_pipe: mk_pipe("combine_main"),
+            bgl,
+            max_binding_u32s: shared.max_buf_u32s,
+            device,
+            queue,
+        })
+    }
+
+    fn bind(&self, src: &wgpu::Buffer, desc: &wgpu::Buffer, out: &wgpu::Buffer) -> wgpu::BindGroup {
+        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &self.bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: src.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: desc.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: out.as_entire_binding(),
+                },
+            ],
+        })
+    }
+
+    fn storage_buffer(&self, label: &str, u32s: usize, dst: bool) -> wgpu::Buffer {
+        let mut usage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC;
+        if dst {
+            usage |= wgpu::BufferUsages::COPY_DST;
+        }
+        self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size: (u32s.max(4) * 4) as u64,
+            usage,
+            mapped_at_creation: false,
+        })
+    }
+
+    /// Dispatch the leaf sponge over `n_rows` rows in watchdog-safe chunks.
+    fn dispatch_leaf(
+        &self,
+        arena: &wgpu::Buffer,
+        desc_buf: &wgpu::Buffer,
+        out: &wgpu::Buffer,
+        n_mats: u32,
+        mat_descs: &[u32],
+        n_rows: usize,
+        perms_per_row: usize,
+    ) {
+        let rows_per_chunk = (HASH_MAX_PERMS_PER_DISPATCH / perms_per_row.max(1))
+            .max(BB_HASH_WG as usize)
+            .next_multiple_of(BB_HASH_WG as usize);
+        let bindg = self.bind(arena, desc_buf, out);
+        let mut base = 0usize;
+        while base < n_rows {
+            let rows = rows_per_chunk.min(n_rows - base);
+            let mut desc = vec![n_mats, base as u32, rows as u32, 0];
+            desc.extend_from_slice(mat_descs);
+            self.queue
+                .write_buffer(desc_buf, 0, bytemuck::cast_slice(&desc));
+            let mut enc = self.device.create_command_encoder(&Default::default());
+            {
+                let mut pass = enc.begin_compute_pass(&Default::default());
+                pass.set_pipeline(&self.leaf_pipe);
+                pass.set_bind_group(0, &bindg, &[]);
+                pass.dispatch_workgroups((rows as u32).div_ceil(BB_HASH_WG), 1, 1);
+            }
+            self.queue.submit([enc.finish()]);
+            base += rows;
+        }
+    }
+
+    /// One compress or combine level (single dispatch per watchdog chunk).
+    fn dispatch_level(
+        &self,
+        pipe: &wgpu::ComputePipeline,
+        src: &wgpu::Buffer,
+        desc_buf: &wgpu::Buffer,
+        out: &wgpu::Buffer,
+        n: usize,
+    ) {
+        let mut base = 0usize;
+        let bindg = self.bind(src, desc_buf, out);
+        while base < n {
+            let cnt = HASH_MAX_PERMS_PER_DISPATCH.min(n - base);
+            let desc = [cnt as u32, base as u32, 0u32, 0u32];
+            self.queue
+                .write_buffer(desc_buf, 0, bytemuck::cast_slice(&desc));
+            let mut enc = self.device.create_command_encoder(&Default::default());
+            {
+                let mut pass = enc.begin_compute_pass(&Default::default());
+                pass.set_pipeline(pipe);
+                pass.set_bind_group(0, &bindg, &[]);
+                pass.dispatch_workgroups((cnt as u32).div_ceil(BB_HASH_WG), 1, 1);
+            }
+            self.queue.submit([enc.finish()]);
+            base += cnt;
+        }
+    }
+
+    /// Read `n_digests` Montgomery digests (8 u32 each) back from `buf`.
+    fn read_digests(&self, buf: &wgpu::Buffer, n_digests: usize) -> Vec<[u32; 8]> {
+        let bytes = (n_digests * 32) as u64;
+        let read = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("bb_dig_read"),
+            size: bytes.max(32),
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut enc = self.device.create_command_encoder(&Default::default());
+        enc.copy_buffer_to_buffer(buf, 0, &read, 0, bytes);
+        self.queue.submit([enc.finish()]);
+        let slice = read.slice(..bytes);
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        self.device.poll(wgpu::Maintain::Wait);
+        let out: Vec<[u32; 8]> = {
+            let mapped = slice.get_mapped_range();
+            let words: &[u32] = bytemuck::cast_slice(&mapped);
+            words
+                .chunks_exact(8)
+                .map(|c| c.try_into().unwrap())
+                .collect()
+        };
+        read.unmap();
+        out
+    }
+}
+
+/// The GPU-built BabyBear Merkle tree: original matrices + all digest layers
+/// (Montgomery u32x8; reinterpreted to `[BabyBear; 8]` at root/open time).
+pub struct GpuBbMerkleTree<M> {
+    leaves: Vec<M>,
+    digest_layers: Vec<Vec<[u32; 8]>>,
+}
+
+/// ProverData: GPU tree or the CPU `MerkleTree` (fallback keeps exact upstream
+/// semantics by construction).
+pub enum GpuBbMmcsProverData<M> {
+    Gpu(GpuBbMerkleTree<M>),
+    Cpu(<BbValMmcs as Mmcs<BabyBear>>::ProverData<M>),
+}
+
+/// Reinterpret 8 Montgomery u32 words as `[BabyBear; 8]` (BabyBear is
+/// `repr(transparent)` over its Montgomery u32 — the device word IS the value).
+fn bb8_from_monty(d: &[u32; 8]) -> [BabyBear; 8] {
+    core::array::from_fn(|k| u32s_into_bb(vec![d[k]])[0])
+}
+
+/// The GPU all-BabyBear MMCS. Same `Commitment`/`Proof` types as the CPU
+/// `BbValMmcs`; `verify_batch` delegates to it (untouched upstream verifier).
+#[derive(Clone)]
+pub struct GpuBabyBearMmcs {
+    cpu: BbValMmcs,
+    cap_height: usize,
+    ctx: Arc<OnceLock<Option<Mutex<BbHashCtx>>>>,
+}
+
+impl GpuBabyBearMmcs {
+    /// Build with the pinned `default_babybear_poseidon2_16` permutation.
+    pub fn new(cap_height: usize) -> Self {
+        let perm = default_babybear_poseidon2_16();
+        let hash = BbHash::new(perm.clone());
+        let compress = BbCompress::new(perm);
+        Self {
+            cpu: BbValMmcs::new(hash, compress, cap_height),
+            cap_height,
+            ctx: Arc::new(OnceLock::new()),
+        }
+    }
+
+    fn gpu(&self) -> Option<&Mutex<BbHashCtx>> {
+        self.ctx
+            .get_or_init(|| BbHashCtx::new().map(Mutex::new))
+            .as_ref()
+    }
+
+    /// Whether a GPU adapter is available (None = permanent CPU fallback).
+    pub fn adapter_available(&self) -> bool {
+        self.gpu().is_some()
+    }
+
+    /// Estimated total permutations for a batch (leaf sponges + compresses).
+    fn estimate_perms(heights_widths: &[(usize, usize)]) -> usize {
+        let mut by_height: HashMap<usize, usize> = HashMap::new();
+        for &(h, w) in heights_widths {
+            *by_height.entry(h).or_default() += w;
+        }
+        let mut perms = 0usize;
+        for (&h, &w_total) in &by_height {
+            // One leaf permute per full rate-8 block, +1 for a partial block.
+            perms += h * w_total.div_ceil(8).max(1);
+        }
+        let max_h = heights_widths.iter().map(|&(h, _)| h).max().unwrap_or(0);
+        perms + 2 * max_h
+    }
+
+    /// The GPU tree build (mirror of `GpuBn254Mmcs::build_gpu_tree`; the leaf
+    /// sponge is the BabyBear rate-8 overwrite sponge, digests are 8-u32
+    /// Montgomery). Preconditions (checked by the caller): all heights powers
+    /// of two, at least one matrix, cap_height == 0, GPU available.
+    fn build_gpu_tree<M: Matrix<BabyBear>>(
+        &self,
+        ctx: &BbHashCtx,
+        leaves: Vec<M>,
+    ) -> GpuBbMerkleTree<M> {
+        let mut order: Vec<usize> = (0..leaves.len()).collect();
+        order.sort_by_key(|&i| std::cmp::Reverse(leaves[i].height()));
+        let mut groups: Vec<(usize, Vec<usize>)> = Vec::new();
+        for i in order {
+            let h = leaves[i].height();
+            match groups.last_mut() {
+                Some((gh, idxs)) if *gh == h => idxs.push(i),
+                _ => groups.push((h, vec![i])),
+            }
+        }
+        let max_h = groups[0].0;
+
+        let hash_group = |group: &[usize],
+                          h: usize,
+                          out: &wgpu::Buffer,
+                          desc_buf: &wgpu::Buffer| {
+            let total_w: usize = group.iter().map(|&i| leaves[i].width()).sum();
+            let arena_u32s: usize = h * total_w;
+            let arena = ctx.storage_buffer("bb_leaf_arena", arena_u32s, true);
+            let mut mat_descs: Vec<u32> = Vec::with_capacity(group.len() * 2);
+            let mut off = 0usize;
+            for &i in group {
+                let m = &leaves[i];
+                let w = m.width();
+                let mut staging = vec![0u32; h * w];
+                staging.par_chunks_mut(w).enumerate().for_each(|(r, dst)| {
+                    let row = m.row_slice(r).expect("row in range");
+                    dst.copy_from_slice(bb_as_u32s(&row));
+                });
+                ctx.queue
+                    .write_buffer(&arena, (off * 4) as u64, bytemuck::cast_slice(&staging));
+                mat_descs.push(off as u32);
+                mat_descs.push(w as u32);
+                off += h * w;
+            }
+            let perms_per_row = total_w.div_ceil(8).max(1);
+            ctx.dispatch_leaf(
+                &arena,
+                desc_buf,
+                out,
+                group.len() as u32,
+                &mat_descs,
+                h,
+                perms_per_row,
+            );
+        };
+
+        let desc_buf = ctx.storage_buffer("bb_desc", 4 + 2 * leaves.len().max(2), true);
+        let dig_a = ctx.storage_buffer("bb_dig_a", max_h * 8, true);
+        let dig_b = ctx.storage_buffer("bb_dig_b", max_h * 8, true);
+        let inj = ctx.storage_buffer("bb_dig_inj", (max_h / 2).max(1) * 8, true);
+
+        hash_group(&groups[0].1, max_h, &dig_a, &desc_buf);
+        let mut digest_layers: Vec<Vec<[u32; 8]>> = vec![ctx.read_digests(&dig_a, max_h)];
+
+        let mut next_group = 1usize;
+        let mut cur_len = max_h;
+        let mut cur_is_a = true;
+        while cur_len > 1 {
+            let next_len = cur_len / 2;
+            let (src, dst) = if cur_is_a {
+                (&dig_a, &dig_b)
+            } else {
+                (&dig_b, &dig_a)
+            };
+            ctx.dispatch_level(&ctx.compress_pipe, src, &desc_buf, dst, next_len);
+            if next_group < groups.len() && groups[next_group].0 == next_len {
+                hash_group(&groups[next_group].1, next_len, &inj, &desc_buf);
+                ctx.dispatch_level(&ctx.combine_pipe, &inj, &desc_buf, dst, next_len);
+                next_group += 1;
+            }
+            digest_layers.push(ctx.read_digests(dst, next_len));
+            cur_len = next_len;
+            cur_is_a = !cur_is_a;
+        }
+        assert_eq!(next_group, groups.len(), "all height groups consumed");
+
+        GpuBbMerkleTree {
+            leaves,
+            digest_layers,
+        }
+    }
+}
+
+impl Mmcs<BabyBear> for GpuBabyBearMmcs {
+    type ProverData<M> = GpuBbMmcsProverData<M>;
+    type Commitment = <BbValMmcs as Mmcs<BabyBear>>::Commitment;
+    type Proof = <BbValMmcs as Mmcs<BabyBear>>::Proof;
+    type Error = MerkleTreeError;
+
+    fn commit<M: Matrix<BabyBear>>(
+        &self,
+        inputs: Vec<M>,
+    ) -> (Self::Commitment, Self::ProverData<M>) {
+        let shapes: Vec<(usize, usize)> = inputs.iter().map(|m| (m.height(), m.width())).collect();
+        let gpu_able = self.cap_height == 0
+            && !inputs.is_empty()
+            && shapes
+                .iter()
+                .all(|&(h, w)| h.is_power_of_two() && h > 0 && w > 0)
+            && Self::estimate_perms(&shapes) >= MIN_GPU_MMCS_PERMS;
+        if gpu_able && let Some(gm) = self.gpu() {
+            let ctx = gm.lock().unwrap();
+            let mut group_arena: HashMap<usize, usize> = HashMap::new();
+            for &(h, w) in &shapes {
+                *group_arena.entry(h).or_default() += h * w;
+            }
+            if group_arena.values().all(|&u| u <= ctx.max_binding_u32s) {
+                let tree = self.build_gpu_tree(&ctx, inputs);
+                let root = tree.digest_layers.last().expect("non-empty tree")[0];
+                let commitment = MerkleCap::new(vec![bb8_from_monty(&root)]);
+                return (commitment, GpuBbMmcsProverData::Gpu(tree));
+            }
+        }
+        let (c, d) = self.cpu.commit(inputs);
+        (c, GpuBbMmcsProverData::Cpu(d))
+    }
+
+    fn open_batch<M: Matrix<BabyBear>>(
+        &self,
+        index: usize,
+        prover_data: &Self::ProverData<M>,
+    ) -> BatchOpening<BabyBear, Self> {
+        match prover_data {
+            GpuBbMmcsProverData::Cpu(tree) => {
+                let (opened_values, opening_proof) = self.cpu.open_batch(index, tree).unpack();
+                BatchOpening::new(opened_values, opening_proof)
+            }
+            GpuBbMmcsProverData::Gpu(tree) => {
+                let max_h = tree
+                    .leaves
+                    .iter()
+                    .map(|m| m.height())
+                    .max()
+                    .expect("non-empty batch");
+                assert!(
+                    index < max_h,
+                    "index {index} out of bounds for height {max_h}"
+                );
+                let log_max = max_h.trailing_zeros() as usize;
+                let opened_values: Vec<Vec<BabyBear>> = tree
+                    .leaves
+                    .iter()
+                    .map(|m| {
+                        let bits_reduced = log_max - m.height().trailing_zeros() as usize;
+                        m.row(index >> bits_reduced)
+                            .expect("reduced index in range")
+                            .into_iter()
+                            .collect()
+                    })
+                    .collect();
+                let proof_levels = tree.digest_layers.len() - 1;
+                let mut proof = Vec::with_capacity(proof_levels);
+                let mut idx = index;
+                for layer in &tree.digest_layers[..proof_levels] {
+                    proof.push(bb8_from_monty(&layer[idx ^ 1]));
+                    idx >>= 1;
+                }
+                BatchOpening::new(opened_values, proof)
+            }
+        }
+    }
+
+    fn get_matrices<'a, M: Matrix<BabyBear>>(
+        &self,
+        prover_data: &'a Self::ProverData<M>,
+    ) -> Vec<&'a M> {
+        match prover_data {
+            GpuBbMmcsProverData::Cpu(tree) => self.cpu.get_matrices(tree),
+            GpuBbMmcsProverData::Gpu(tree) => tree.leaves.iter().collect(),
+        }
+    }
+
+    fn verify_batch(
+        &self,
+        commit: &Self::Commitment,
+        dimensions: &[p3_matrix::Dimensions],
+        index: usize,
+        batch_proof: BatchOpeningRef<'_, BabyBear, Self>,
+    ) -> Result<(), Self::Error> {
         let (opened_values, opening_proof) = batch_proof.unpack();
         self.cpu.verify_batch(
             commit,
