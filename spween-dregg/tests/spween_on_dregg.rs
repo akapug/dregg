@@ -641,12 +641,9 @@ fn untouched_slot_gate_still_bites() {
 /// The re-entry fix, DRIVEN through the stock runtime: `road` seeds the purse on entry.
 /// Buy the charm (100 → 50), step back out to `road` (a RE-ENTRY), then back into the
 /// shop. The `~ gold = 100` seed must NOT re-run — the purse stays 50, not refilled.
-// BUG 2 (the passage re-entry re-run) is fixed in the EXTERNAL spween runtime
-// (~/dev/spween: `effects_executed: HashSet`). It lands in breadstuffs only when
-// emberian/spween is committed + pushed + the rev bumped in spween-dregg/Cargo.toml.
-// Ignored until that rev-bump so the currently-pinned spween (afb5b1f) stays green.
+// BUG 2 (passage re-entry re-run) — fixed in the spween runtime (effects_executed
+// HashSet, fire-once-per-passage) and wired here via the rev-bump to spween 95980f7.
 #[test]
-#[ignore = "needs the spween runtime re-entry fix wired via a spween rev-bump (BUG 2)"]
 fn retreat_into_seed_room_does_not_reseed() {
     let s = bazaar_mini();
     let world = WorldCell::deploy(&s, 26).expect("deploy");

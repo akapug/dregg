@@ -31,7 +31,7 @@ spween-dregg = { path = "../spween-dregg" }
 # The narrative DSL spween-dregg is built on — needed to name a `Choice`/
 # `PassageContent` when driving a move directly at the executor (`apply_choice`).
 # Same git rev spween-dregg pins.
-spween = { git = "https://github.com/emberian/spween", rev = "afb5b1fce8c9dd3b787e197bddf105adca20e08a" }
+spween = { git = "https://github.com/emberian/spween", rev = "95980f7d1e109138496849a444f28c4b9076a4e2" }
 # The real framework types — `CellProgram`, `StateConstraint`, `TransitionCase`,
 # `TransitionGuard` (re-exports of the `dregg-cell`/`dregg-turn` types) — so the
 # demo can INTROSPECT the installed program and print the actual `FieldGte` gate

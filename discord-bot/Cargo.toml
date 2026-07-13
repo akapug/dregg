@@ -145,7 +145,7 @@ chacha20poly1305 = "0.10"
 # against the root manifest) + the spween git rev `dungeon-on-dregg` already pins.
 dungeon-on-dregg = { path = "../dungeon-on-dregg", default-features = false }
 spween-dregg = { path = "../spween-dregg" }
-spween = { git = "https://github.com/emberian/spween", rev = "afb5b1fce8c9dd3b787e197bddf105adca20e08a" }
+spween = { git = "https://github.com/emberian/spween", rev = "95980f7d1e109138496849a444f28c4b9076a4e2" }
 # THE OFFERING CORE behind `/dungeon` — the frontend-agnostic `Offering` trait
 # (open/actions/advance/verify/render/price) + its `DungeonOffering` (offering #0)
 # over the SAME `spween-dregg` WorldCell this bot used to drive inline. `/dungeon`

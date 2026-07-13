@@ -42,7 +42,7 @@ dungeon-on-dregg = { path = "../../dungeon-on-dregg" }
 spween-dregg = { path = "../../spween-dregg" }
 # The narrative DSL — to name a `Choice`/`PassageContent` when enumerating a room's legal moves
 # and driving one at the executor. Same git rev `spween-dregg` + `dungeon-on-dregg` pin.
-spween = { git = "https://github.com/emberian/spween", rev = "afb5b1fce8c9dd3b787e197bddf105adca20e08a" }
+spween = { git = "https://github.com/emberian/spween", rev = "95980f7d1e109138496849a444f28c4b9076a4e2" }
 # The framework types — `TurnReceipt` (the receipt a move returns) for the verify-record genesis
 # placeholder. Same `dregg-turn` type the executor mints.
 dregg-app-framework = { path = "../../app-framework", default-features = false }
