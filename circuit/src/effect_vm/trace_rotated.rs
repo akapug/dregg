@@ -1452,10 +1452,22 @@ pub fn generate_rotated_note_spend_trace_with_nullifier_tree(
         );
     }
     let before_root8 = before_tree.root8();
-    let mut after_leaves = before_nullifiers.to_vec();
-    after_leaves.push(HeapLeaf::entry(nf_key, nf_value));
-    // The after-tree is built only to read its root8; move `after_leaves` in (no clone).
-    let after_root8 = CanonicalHeapTree8::new(after_leaves, HEAP_TREE_DEPTH).root8();
+    // GAP #5 AAFI FLIP (F1): the committed AFTER nullifier root is now the append-at-free-index
+    // fold (`insert_witness_aafi`), NOT the sorted-compacted rebuild — so it EXACTLY equals the
+    // `new_root` the deployed `nullifierInsertOp` (now `MapKind::AafiInsert`, op=4) fill recomputes
+    // from the SAME before tree. The two-path AAFI gate (low-update → R1, append-at-empty-slot →
+    // new_root, + the pointer-bracket range gate) forces sorted-preservation at STABLE positions,
+    // closing the double-spend the op=3 single-shared-path insert could not bind. A present /
+    // out-of-gap nullifier has no bracketing low leaf ⇒ `insert_witness_aafi` returns `None` ⇒ the
+    // turn is UNSAT (the deployed effect-level double-spend refusal).
+    let aafi = before_tree
+        .insert_witness_aafi(HeapLeaf::entry(nf_key, nf_value))
+        .ok_or_else(|| {
+            "double-spend / out-of-gap nullifier: the AAFI insert has no bracketing low leaf — the \
+             in-circuit two-path (`aafi_insert`) gate refuses the turn"
+                .to_string()
+        })?;
+    let after_root8 = aafi.new_root;
 
     // Mirror of `EffectVmEmitRotationV3.nullifierRootGroupCol`: lane 0 = limb `B_NULLIFIER_ROOT` (26);
     // the seven DEDICATED completion limbs 67..73 for lanes 1..7.
@@ -1626,10 +1638,20 @@ pub fn generate_rotated_note_create_trace_with_commitments_tree(
     // is append-only — no `.absent` freshness precondition.
     let before_tree = CanonicalHeapTree8::new(before_commitments.to_vec(), HEAP_TREE_DEPTH);
     let before_root8 = before_tree.root8();
-    let mut after_leaves = before_commitments.to_vec();
-    after_leaves.push(HeapLeaf::entry(cm_key, cm_value));
-    // The after-tree is built only to read its root8; move `after_leaves` in (no clone).
-    let after_root8 = CanonicalHeapTree8::new(after_leaves, HEAP_TREE_DEPTH).root8();
+    // GAP #5 AAFI FLIP (F1): the committed AFTER commitments root is the append-at-free-index fold
+    // (`insert_witness_aafi`), matching the `new_root` the deployed `commitmentsInsertOp` (now
+    // `MapKind::AafiInsert`, op=4) fill recomputes from the SAME before tree. Routing the
+    // grow-only commitment set to AAFI tightens it to a proper SET-insert of a FRESH commitment
+    // (the two-path gate binds sorted-preservation at stable positions); a re-published commitment
+    // already present has no bracketing low leaf ⇒ `insert_witness_aafi` returns `None` ⇒ UNSAT.
+    let aafi = before_tree
+        .insert_witness_aafi(HeapLeaf::entry(cm_key, cm_value))
+        .ok_or_else(|| {
+            "note-create commitment is already present / out-of-gap: the AAFI insert has no \
+             bracketing low leaf — the in-circuit two-path (`aafi_insert`) gate refuses the turn"
+                .to_string()
+        })?;
+    let after_root8 = aafi.new_root;
 
     // Mirror of `EffectVmEmitRotationV3.commitmentsRootGroupCol`: lane 0 = limb `B_COMMITMENTS_ROOT`
     // (27); the seven DEDICATED completion limbs 74..80 for lanes 1..7.
