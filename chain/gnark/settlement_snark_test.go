@@ -38,6 +38,7 @@ import (
 const (
 	generatedVerifierPath = "../contracts/DreggGroth16Verifier25.sol"
 	foundryFixturePath    = "../test/fixtures/settlement_groth16.json"
+	committedVkPath       = "fixtures/settlement_groth16.vk"
 )
 
 func memMB() (heap, sys uint64) {
@@ -94,13 +95,32 @@ func TestSettlementGroth16EndToEnd(t *testing.T) {
 		t.Fatalf("public variables = %d, want %d (the pinned 25 lanes + ONE wire)", got, want)
 	}
 
-	// ---- 2. Groth16 setup (DEV/UNSAFE single-party ceremony — see file doc).
+	// ---- 2. Groth16 setup (DEV/UNSAFE single-party ceremony — see file doc),
+	// through the LOCAL param cache (groth16_cache.go): an unchanged circuit
+	// reuses the cached dev params and skips the minutes-long Setup entirely.
 	t1 := time.Now()
-	pk, vk, err := groth16.Setup(ccs)
+	pk, vk, cacheHit, err := groth16LoadOrSetup(ccs, ecc.BN254, t.Logf)
 	if err != nil {
-		t.Fatalf("groth16.Setup: %v", err)
+		t.Fatalf("groth16 params: %v", err)
 	}
-	logPhase(t, "setup (UNSAFE dev)", t1)
+	if cacheHit {
+		logPhase(t, "setup (CACHE HIT)", t1)
+	} else {
+		logPhase(t, "setup (UNSAFE dev)", t1)
+	}
+	// The vk is small and embedded in the exported Solidity verifier anyway —
+	// keep a committed copy beside the other fixtures for reproducibility.
+	vkf, err := os.Create(committedVkPath)
+	if err != nil {
+		t.Fatalf("create vk file: %v", err)
+	}
+	if _, err := vk.WriteRawTo(vkf); err != nil {
+		t.Fatalf("write vk: %v", err)
+	}
+	if err := vkf.Close(); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("wrote %s", committedVkPath)
 
 	// ---- 3. Prove the REAL witness.
 	t2 := time.Now()

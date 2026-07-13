@@ -1,0 +1,5 @@
+# Local Groth16 trusted-setup param cache (DEV single-party ceremony params,
+# keyed by circuit content hash — see groth16_cache.go). The pk is gigabytes;
+# the vk is committed separately as fixtures/settlement_groth16.vk and is
+# embedded in the exported Solidity verifier anyway.
+.groth16-cache/
