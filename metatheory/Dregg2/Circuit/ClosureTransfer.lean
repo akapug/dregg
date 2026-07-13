@@ -50,7 +50,7 @@ each AS FAR AS it honestly goes, leaving ONLY the cap-open authority witness car
 
 ## What `closedLogExtract_transfer_closed` carries
 
-EXACTLY ⊆ {the four realizable crypto floors + `TransferAuthorityWitness`}:
+EXACTLY ⊆ {the four realizable crypto floors + `TransferAuthorityWitness` + `availOf`}:
 
   * `StarkSound` / `Poseidon2SpongeCR` + the `S_live` CR fields / `logHashInjective LH` — the standard
     floors (the §B `closedLog` rung + the `S_live` surface already consume these).
@@ -58,11 +58,34 @@ EXACTLY ⊆ {the four realizable crypto floors + `TransferAuthorityWitness`}:
     realizable limb-level decode the LEDGER root cannot certify).
   * `LedgerSurfaceReadout` — the named realizable `wireCommit ↔ recStateCommit` seam (the ledger half,
     under the CR floor).
-  * `TransferAuthorityWitness` — the realizable cap-open prover-witness (the SOLE irreducible residual).
+  * `TransferAuthorityWitness` — the realizable cap-open prover-witness (the irreducible authority
+    residual: the authority rides a SEPARATE descriptor).
+  * `availOf` — availability (`tr.amt ≤ pre.kernel.bal tr.src a`), carried ONLY because THIS slot is
+    stated at `Rfix 0` = the BARE `transferV3Membership`, whose mod-`p` gate does not force the order.
+    ⚑ NOT an open gap: on the DEPLOYED descriptor it is a THEOREM. See below.
 
 NO carried `extract`/raw-`rotatedEncodes`/per-effect-decode residual beyond these. This is the
 asymptotic shape the other 35 effects replicate (column reads from the trace, ledger/frame from the
 surface decode, authority from the per-effect cap-open).
+
+## ⚑ The `availOf` residual is a REGISTRY-LAG artifact, not an open forgery
+
+The availability wrap-forgery class is CLOSED IN THE DEPLOYED CIRCUIT: the wire registries route the
+transfer keys to the hardened `*Avail` faces (borrow-limb decomposition + range teeth + no-final-borrow
+gate; VK epoch `887b95e76`), and `RotatedKernelRefinementAvailWide.availability_and_exact_move_forced_
+weldedWide` PROVES that a satisfying witness of the deployed member forces `tr.amt ≤ pre.kernel.bal
+tr.src a` (and the EXACT ℤ debit).
+
+`availOf` survives HERE only because the Lean apex registry (`CircuitSoundnessAssembled.Rfix`, over
+`v3RegistryHeap`) still points tag 0 at the BARE `transferV3Membership` — the Lean-side registry LAGS the
+wire. At the bare descriptor the residual is CORRECT (availability genuinely is not forced there), so it
+must not be deleted; it is discharged by RETARGETING the slot.
+`ClosureTransferAvail.closedLogExtract_transfer_closed_avail` is that slot: the same
+`ClosedLogExtract … 0`, stated over a registry whose transfer entry IS the deployed hardened member —
+identical floors MINUS `availOf`, availability supplied by the theorem. `ClosureTransferAvail.RfixAvail`
+is `Rfix` with the two debiting tags (transfer 0, burn 4) flipped to the deployed hardened members. The
+remaining step is the `v3RegistryHeap` flip itself (a registry flag-day: `Rfix 0` re-pointed, and the
+35 sibling rungs re-checked), after which THIS theorem is superseded by the hardened one.
 
 ## Axiom hygiene
 
@@ -207,10 +230,12 @@ def rotatedEncodes_of_floors (hash : List ℤ → ℤ) (S : CommitSurface)
     (rdo : LedgerSurfaceReadout S pre post tr a
             rd.srcPre.balLo rd.srcPost.balLo rd.dstPre.balLo rd.dstPost.balLo)
     (htoyAuth : authorizedB pre.kernel.caps tr = true)
-    -- ⚠⚠ AVAILABILITY — an EXPLICIT residual hypothesis (NOT read off the trace). The mod-p balance gate
-    -- + 30-bit range check do NOT force `amt ≤ bal` (wrap-class gap, RotatedKernelRefinement §3), so the
-    -- soundness assembly correctly REQUIRES availability as a named residual, threaded here beside the
-    -- authority `htoyAuth` — exposing the real dependency, not laundering a circuit-forced proof.
+    -- ⚠ AVAILABILITY — an EXPLICIT hypothesis on the BARE face: the mod-p balance gate + 30-bit range
+    -- check do NOT force `amt ≤ bal` there (wrap-class gap, RotatedKernelRefinement §3), so this
+    -- assembly correctly REQUIRES availability rather than laundering a proof it does not have.
+    -- ⚑ On the DEPLOYED (hardened `*Avail`) face this argument DOES NOT EXIST: the borrow gates force
+    -- the order. See `ClosureTransferAvail.rotatedEncodesAvail_of_floors` — the same assembly, no
+    -- `havail`. The residual is a registry-lag artifact of `Rfix 0`, not an open forgery.
     (havail : tr.amt ≤ pre.kernel.bal tr.src a) :
     rotatedEncodes hash minit mfin maddrs t pre post tr a where
   di := rd.di
@@ -345,10 +370,15 @@ theorem closedLogExtract_transfer_closed
     (toyAuthOf : ∀ (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
       (pre post : RecChainedState) (hsat : Satisfied2 hash transferV3 minit mfin maddrs t),
       Dregg2.Exec.authorizedB pre.kernel.caps (readout minit mfin maddrs t pre post hsat).1 = true)
-    -- ⚠⚠ AVAILABILITY — the NAMED per-witness residual the mod-p migration exposed (NOT circuit-forced;
-    -- wrap-class gap, RotatedKernelRefinement §3). Threaded per-witness beside `toyAuthOf`: the closure
-    -- now correctly DEPENDS on availability as an explicit assumption pending the EMBER-GATED denotation
-    -- fix (amount range-check / borrow bit / wider field), not a laundered circuit-forced proof.
+    -- ⚠ AVAILABILITY — the NAMED per-witness hypothesis the mod-p migration exposed on the BARE face
+    -- (not forced there; wrap-class gap, RotatedKernelRefinement §3). It is carried because THIS slot is
+    -- stated at `Rfix 0` = `transferV3Membership` (bare), NOT because the fix is missing: the denotation
+    -- fix LANDED and is DEPLOYED (hardened `*Avail` descriptors, VK epoch `887b95e76`), and on the
+    -- deployed member availability is a THEOREM (`availability_and_exact_move_forced_weldedWide`).
+    -- ⚑ THE DISCHARGED SLOT: `ClosureTransferAvail.closedLogExtract_transfer_closed_avail` — the same
+    -- `ClosedLogExtract … 0` over a registry whose transfer entry is the deployed hardened member, with
+    -- THIS argument absent. Retiring `availOf` here = flipping `v3RegistryHeap`'s transfer entry so
+    -- `Rfix 0` IS the descriptor the light client verifies (a registry flag-day, not a proof gap).
     (availOf : ∀ (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
       (pre post : RecChainedState) (hsat : Satisfied2 hash transferV3 minit mfin maddrs t),
       (readout minit mfin maddrs t pre post hsat).1.amt

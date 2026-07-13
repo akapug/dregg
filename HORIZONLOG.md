@@ -8194,3 +8194,25 @@ NAMED FOLLOW-UPS:
 - THE REMAINING RESIDUAL IS REJECTION-TERMINATION, and it is where it belongs: `HonestKey` bundles the
   four gates FIPS 204 Alg. 7's loop evaluates. It is probabilistic (~4.25 expected iterations), not a
   theorem. Do NOT "close" it by weakening `Fips204Correct`.
+
+## 2026-07-13 — closure `availOf` DISCHARGED on the hardened path (`ClosureTransferAvail`)
+
+The transfer/burn closure slots now have hardened twins over the DEPLOYED `*Avail` members
+(`Dregg2/Circuit/ClosureTransferAvail.lean`): `closedLogExtract_transfer_closed_avail` (`ClosedLogExtract
+… 0` with NO `availOf`) and `closedLogExtract_burn_closed_avail` (readout floor supplies
+`rotatedEncodesBurnAvail`, which has no `guardAvail`), availability supplied by
+`availability_forced_weldedWide` / `wideBurn_availability_forced`. Teeth: over-debit/over-burn UNSAT at
+the closure slot. Axiom-clean.
+
+NAMED FOLLOW-UP (the one thing left):
+- **THE `Rfix` REGISTRY FLIP.** `CircuitSoundnessAssembled.v3RegistryHeap` still points the transfer tag
+  at the BARE `CarrierComposed.transferV3Membership` (and burn at its bare refused member), while the WIRE
+  (`WIDE_REGISTRY_STAGED_TSV` / `WIDE_UMEM_WELD_REGISTRY_TSV`, VK epoch `887b95e76`) routes the hardened
+  `*Avail` faces. So the Lean apex registry LAGS the deployed circuit, and
+  `ClosureTransfer.closedLogExtract_transfer_closed` must still carry `availOf` — correctly, since at the
+  bare descriptor availability genuinely is NOT forced. `ClosureTransferAvail.RfixAvail` is the flipped
+  registry (tags 0 + 4 → `weldedTransferAvailWide` / `weldedBurnAvailWide`, every other tag `Rfix`
+  verbatim) and the slots over it need no availability hypothesis. Closing this = re-pointing
+  `v3RegistryHeap`'s transfer/burn entries (the apex then quantifies over what the light client actually
+  verifies), re-checking the 34 sibling rungs (they consume `Rfix e` unchanged) and the `Rfix_transfer` /
+  completeness-dual consumers. A registry flag-day, NOT a proof gap.
