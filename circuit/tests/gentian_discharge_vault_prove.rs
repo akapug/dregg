@@ -229,7 +229,7 @@ fn vault_descriptor() -> EffectVmDescriptor2 {
     );
     assert_eq!(
         desc.trace_width,
-        GRAD_ROT_WIDTH + 16 + 34 + 24 * LIMB_BITS + 4 * CARRY_BITS,
+        GRAD_ROT_WIDTH + 16 + 42 + 28 * LIMB_BITS + 4 * CARRY_BITS,
         "the Lean-emitted width matches the Rust v12 aux-column derivation (canonical constants)"
     );
     desc.name = format!("{}-gentian-demo", desc.name);
@@ -338,8 +338,8 @@ fn lean_emitted_vault_descriptor_matches_rust_builders() {
     let built_bodies = sel_gated_bodies(&built);
     assert_eq!(
         built_bodies.len(),
-        6 + 8 + 9 + (24 * LIMB_BITS + 4 * CARRY_BITS) + 28,
-        "6 core + 8 product + 9 borrow + one bool per bit + one assembly per spec"
+        6 + 12 + 8 + 9 + (28 * LIMB_BITS + 4 * CARRY_BITS) + 32,
+        "6 core + 12 sign + 8 product + 9 borrow + one bool per bit + one assembly per spec"
     );
     assert_eq!(
         emitted, built_bodies,
