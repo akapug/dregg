@@ -39,3 +39,9 @@ dregg-turn = { path = "../turn" }
 # THE DEOS SURFACE — the gpui-free serializable affordance view-tree an offering's
 # `render` produces. `default-features = false` takes only the view-tree model.
 deos-view = { path = "../deos-view", default-features = false }
+
+[dev-dependencies]
+# The driven gauntlet derives the executor's verifying key from `RECEIPT_SIGNING_SEED`
+# to check that each collaborator's per-agent chain carries a genuine, verifiable
+# executor signature (the same 2.x already in the substrate dep tree).
+ed25519-dalek = "2"

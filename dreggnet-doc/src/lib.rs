@@ -7,8 +7,8 @@
 //!    `dregg_cell::Cell`, committed over its `fields_root`).
 //! 2. **Real verifiable turns** — an EDIT is one real
 //!    [`dregg_turn::TurnExecutor::execute`] turn through the document substrate's
-//!    sole executor entry ([`dregg_doc::ExecutorDrivenDoc::edit`]), landing a
-//!    genuine finalized [`TurnReceipt`].
+//!    executor entry ([`dregg_doc::MultiEditorDoc::edit`]), landing a genuine
+//!    finalized [`TurnReceipt`] on the editing collaborator's own per-agent chain.
 //! 3. **The referee is the executor + the document soundness core, never prose** —
 //!    an *unauthorized* edit (an actor without the region's edit cap) is refused
 //!    **in-band by the executor** (`TurnError::CapabilityNotHeld`); a *conflicting*
@@ -28,67 +28,76 @@
 //! (`merge` = the pushout as a total graph union), the conflict model
 //! (`content`'s first-class antichain / field-clash [`ConflictRegion`]s + the
 //! two-regime [`Regime`] classifier), provenance/blame, and the executor-drive
-//! seam ([`ExecutorDrivenDoc`], where a per-region edit cap is a c-list capability
+//! seam ([`MultiEditorDoc`], where a per-region edit cap is a c-list capability
 //! the executor's `check_cross_cell_permission` gate enforces). This crate adds
 //! **no CRDT, no merge rule, no conflict rule** of its own: it is the *session +
 //! affordance + verification* layer that presents the substrate as an
 //! [`Offering`].
 //!
-//! ## The session model (and the honest gaps)
+//! ## The session model (the deep model — N real per-agent chains over ONE ledger)
 //!
-//! A [`DocSession`] holds the document's [`History`] (the patch chain — the
-//! document IS its history), the current fold, an ordered roster of collaborators
-//! (each with a [`Role`], which decides whether their editor cell holds the
-//! region's edit capability), and the [`CommittedEdit`] log — one entry per landed
-//! turn, binding the turn's deterministic core (`turn_hash` / `effects_hash` /
-//! pre- and post-state roots) and the document's commitment after it.
+//! A [`DocSession`] holds **one** [`dregg_doc::MultiEditorDoc`] — N distinct editor
+//! cells (distinct agents), each optionally holding the shared region cell's edit
+//! cap, all driving turns through **one** `TurnExecutor` over **one** `Ledger`.
+//! Because the executor keys the receipt-chain head (`previous_receipt_hash`) and
+//! the agent nonce by *cell id*, each collaborator keeps their **real cross-edit
+//! per-agent chain**: collaborator A's second edit chains off A's own first, with
+//! A's nonce monotone, even when B edited in between. The session no longer
+//! re-bases a fresh single-editor document per edit (which restarted every actor at
+//! nonce 0 with no `previous_receipt_hash`); the per-agent chain is now the genuine
+//! executor chain, not a document-commitment shadow of it.
 //!
-//! - **One editor cell per document instance.** [`ExecutorDrivenDoc`] binds a
-//!   SINGLE editor cell at construction, so a session cannot hold one long-lived
-//!   ledger with N editor cells. Each edit therefore **re-bases** a per-actor
-//!   executor-driven document at the session's current fold
-//!   ([`ExecutorDrivenDoc::new_at`]) and drives that actor's turn on it. Each edit
-//!   is still a genuine cap-gated, journaled, `Finality::Final` executor turn; what
-//!   is lost is the executor's own cross-edit per-agent nonce / receipt chain (each
-//!   turn starts at nonce 0 with no `previous_receipt_hash`, and the region cell's
-//!   nonce reads 1 at every committed edit rather than counting up across the
-//!   session). The session's chain is instead the **document-commitment chain**
-//!   every turn's pre/post state roots bind, which [`Offering::verify`] re-derives
-//!   edit by edit. Closing this properly is a multi-editor constructor in
-//!   `dregg-doc` (a NAMED gap — this crate does not modify the substrate).
+//! The session also holds the document's [`History`] (the patch chain — the document
+//! IS its history), an ordered roster of collaborators (each with a [`Role`], which
+//! decides whether their editor cell holds the region's edit capability), and the
+//! [`CommittedEdit`] log — one entry per landed turn, binding the turn's
+//! deterministic core (`turn_hash` / `effects_hash` / pre- and post-state roots) and
+//! the document's commitment after it. The `turn_hash` transitively binds the
+//! editor's prior receipt hash (via `Turn::previous_receipt_hash`), so a
+//! spliced/reordered chain moves the turn hash and breaks replay.
+//!
+//! Two workarounds the earlier single-editor model carried are now **retired**:
+//! - **The per-agent chain is real** (was: re-based per edit). The session drives
+//!   [`MultiEditorDoc::edit`] with the editing collaborator's slot, so their nonce
+//!   and receipt chain advance across the session — [`DocSession::editor_chain`]
+//!   exposes it, and replay reconstructs it identically (the executor's default
+//!   timestamp is `0`, so every receipt hash is deterministic and reproducible).
+//! - **An edit's prose rides [`Action::text`]** (was: on [`Action::label`]). A
+//!   document edit's inserted text / a title's new value is a first-class string
+//!   payload on the affordance, round-tripped losslessly through a [`Frontend`]'s
+//!   present/collect — the affordance's `label` is now purely the human prompt.
+//!
 //! - **The conflict gate is the fold, not `PullRequest::merge`.** A live session is
-//!   the *fast-forward* case (the new history is the old history plus one patch).
-//!   `PullRequest`'s pushout is `merge(base_fold, head_fold)`, and the field union
-//!   re-introduces a base assignment a *superseding* `SetField` just collapsed — so
-//!   a resolution can never land through the PR path on a fast-forward (dregg-doc's
-//!   own `DriveDivergedFromPushout` flags exactly this order-sensitivity). The
-//!   session therefore gates on the fold of the new history with dregg-doc's own
-//!   detector ([`content`] + [`Regime`]) — the same detector `PullRequest::conflicts`
-//!   reads — and applies the forge's rule (refuse to land an edit that leaves an
-//!   unresolved conflict). The `PullRequest` path stays the right thing for a
-//!   genuine *fork* (a review branch); `tests/driven.rs` pins the fast-forward
-//!   limitation as a live falsifier.
-//! - **The affordance wire carries no free text.** A deos affordance is
-//!   `{turn, arg: i64}`. A document edit needs a *string* payload, so an edit's text
-//!   rides the [`Action::label`] (which round-trips through a [`Frontend`]'s
-//!   present/collect exactly as the button text does). A string-carrying affordance
-//!   arg is the NAMED gap for a real editor surface.
+//!   the *fast-forward* case (the new history is the old history plus one patch), so
+//!   the session gates each 1-patch edit on the FOLD of the new history with
+//!   dregg-doc's own detector ([`content`] + [`Regime`]) — the same detector
+//!   `PullRequest::conflicts` reads. dregg-doc's `three_way` now honors its base, so
+//!   `PullRequest`'s pushout also lands a superseding resolution on a fast-forward
+//!   (`tests/driven.rs` pins it); the `PullRequest` path stays the right thing for a
+//!   genuine *fork* (a review branch).
 //!
-//! ## What a fuller collaborative document adds
+//! ## What a fuller collaborative document still adds (named honestly)
 //!
-//! Rich inline marks (bold/comment ranges — `dregg_doc::marks` exists and merges
-//! independently of the text; unwired here), review threads (`dregg_doc::review` —
-//! comments + approvals as receipted atoms, which need a `PullRequest`), presence /
-//! cursors (ephemeral, uncommitted, no substrate analogue yet), and character-level
-//! granularity via `Doc::edit`'s token LCS (this offering's edits are span-level
-//! `Add`/`Delete`, which is the substrate's own atom granularity).
+//! - **Concurrent divergent replicas.** Here edits are *sequenced* through one
+//!   executor (one node, one linear ledger fold). True concurrent authoring (two
+//!   editors composing on divergent replicas, then a branch-and-stitch merge) is the
+//!   patch algebra's job (`dregg_doc::merge` / the two-device-sync path), layered
+//!   ABOVE this — each replica a `MultiEditorDoc`, the stitch a further turn.
+//! - **The review-branch PR path as an offering surface.** `three_way` is fixed and
+//!   a fork's merge lands; wiring `dregg_doc::review` (threaded comments + approvals
+//!   as receipted atoms) and `PullRequest` into a *review* affordance surface is the
+//!   next offering, not this one.
+//! - **Rich inline marks** (`dregg_doc::marks`), **presence / cursors** (ephemeral,
+//!   no substrate analogue), and **character-level granularity** (`Doc::edit`'s token
+//!   LCS; this offering's edits are span-level `Add`/`Delete`, the substrate's own
+//!   atom granularity) round out the surface.
 
 use std::collections::BTreeMap;
 
 use deos_view::{MenuItem, ViewNode};
 use dregg_doc::{
-    AtomId, Author, ConflictRegion, DocGraph, ExecutorDrivenDoc, History, Op, Patch, Regime,
-    Rendered, content, walk_atoms,
+    AtomId, Author, ConflictRegion, DocGraph, History, MultiEditorDoc, Op, Patch, Regime, Rendered,
+    content, walk_atoms,
 };
 use dregg_turn::{TurnError, TurnReceipt};
 use dreggnet_offerings::{
@@ -96,24 +105,32 @@ use dreggnet_offerings::{
     Surface, VerifyReport,
 };
 
+/// The deterministic Ed25519 signing seed the session equips its shared executor
+/// with: every committed edit (from any collaborator) carries a genuine
+/// `executor_signature`, so each editor's per-agent chain is a chain of
+/// NON-FABRICABLE witnesses (verifiable via
+/// [`dregg_turn::verify_receipt_signature_with_keys`] against the verifying key
+/// this seed derives). It is a fixed constant so replay re-derives the same
+/// signatures — the seam stays deterministic.
+pub const RECEIPT_SIGNING_SEED: [u8; 32] = [0x5c; 32];
+
 /// Insert a text span into the document, ordered after the anchor named by
 /// [`Action::arg`] (see [`DocSession::anchors`]). The span's TEXT is the action's
-/// [`Action::label`] (the affordance wire carries no string payload — see the crate
-/// docs). Desugars to `dregg_doc::Op::Add`.
+/// first-class [`Action::text`] payload. Desugars to `dregg_doc::Op::Add`.
 pub const TURN_INSERT: &str = "insert";
 /// Tombstone the live cell named by [`Action::arg`] (1-based over
 /// [`DocSession::cells`]). Desugars to `dregg_doc::Op::Delete` — a monotone
 /// tombstone, never a physical removal (the atom survives for provenance).
 pub const TURN_DELETE: &str = "delete";
 /// Assign the document's single-valued `title` field (the non-monotone fragment).
-/// The VALUE is the action's [`Action::label`]. Desugars to a **non-superseding**
-/// `dregg_doc::Op::SetField` — a second, differing assignment is a real
-/// [`Regime::Field`] clash, and is refused.
+/// The VALUE is the action's [`Action::text`] payload. Desugars to a
+/// **non-superseding** `dregg_doc::Op::SetField` — a second, differing assignment is
+/// a real [`Regime::Field`] clash, and is refused.
 pub const TURN_SET_TITLE: &str = "set_title";
 /// **Resolve** a `title` clash by settling it: a **superseding**
 /// `dregg_doc::Op::SetField` that collapses the whole assignment set to the chosen
-/// value ([`Action::label`]). This is the "a conflict is a first-class state a
-/// later patch resolves" face — and it is always [`RunCost::free`].
+/// value ([`Action::text`]). This is the "a conflict is a first-class state a later
+/// patch resolves" face — and it is always [`RunCost::free`].
 pub const TURN_RESOLVE_TITLE: &str = "resolve_title";
 /// **Resolve** a prose antichain by ORDERING it: `Connect(a, b)` — "a comes before
 /// b" — collapsing the antichain into a chain. [`Action::arg`] is the index of the
@@ -174,17 +191,20 @@ pub struct Collaborator {
 
 /// The seed an actor who is NOT on the roster gets: a real editor cell, with **no**
 /// region capability — so an outsider's edit reaches the executor and is refused
-/// there (not pre-filtered by us).
+/// there (not pre-filtered by us). One shared outsider slot serves every outsider:
+/// an outsider never holds the cap, so their edit never commits and no per-agent
+/// chain state accumulates on the slot.
 const OUTSIDER_SEED: u8 = 200;
 
 /// **One landed edit** — the record of a real committed turn.
 ///
 /// It binds the *deterministic core* of the executor's receipt: the `turn_hash`
-/// (the turn the executor admitted), the `effects_hash` (the `SetField` writes it
-/// applied), and the pre/post ledger state roots. It deliberately does NOT bind
-/// `TurnReceipt::receipt_hash()`, which absorbs the receipt's wall-clock
-/// `timestamp` and so is not replay-reproducible — an honest boundary, not a
-/// weaker one: the turn, its effects, and the state it moved are all pinned.
+/// (the turn the executor admitted — which transitively binds the editor's prior
+/// receipt hash via `previous_receipt_hash`), the `effects_hash` (the `SetField`
+/// writes it applied), and the pre/post ledger state roots. It deliberately does
+/// NOT bind `TurnReceipt::receipt_hash()` directly: the receipt hash is
+/// reproducible here (the executor's timestamp defaults to `0`), and the chain
+/// linkage it carries is already pinned through `turn_hash`.
 #[derive(Debug, Clone)]
 pub struct CommittedEdit {
     /// Who made the edit.
@@ -220,20 +240,27 @@ pub struct DocRecord {
 /// **A live collaborative document session** over the real `dregg-doc` substrate.
 ///
 /// The document IS its patch history ([`History`]); the current content is the fold
-/// ([`History::replay`]). Every landed edit is one real executor turn; the
-/// [`CommittedEdit`] log is the chain [`Offering::verify`] re-drives.
+/// ([`MultiEditorDoc::graph`]). Every landed edit is one real executor turn on the
+/// editing collaborator's own per-agent chain; the [`CommittedEdit`] log is the
+/// chain [`Offering::verify`] re-drives.
 pub struct DocSession {
     /// The document (region) cell's deterministic seed — the session's private
     /// world identity. A verifier re-derives the SAME region cell from it, so a
     /// forged record cannot re-target another document.
     region_seed: u8,
     /// The collaborators, in invitation order (the index fixes each one's editor
-    /// cell seed, so replay reproduces the same agents).
+    /// slot in `doc` + its cell seed, so replay reproduces the same agents).
     roster: Vec<Collaborator>,
+    /// The conflict policy (copied from the offering at `open`), so the session can
+    /// re-drive its own edits on a roster change without the offering in hand.
+    policy: ConflictPolicy,
+    /// **The one shared collaborative document** — N editor cells (roster + a shared
+    /// outsider slot) over one region ledger. Each committed edit advances its
+    /// editing collaborator's per-agent nonce + receipt chain; the others are
+    /// untouched.
+    doc: MultiEditorDoc,
     /// The document's patch history — the document, as its edits.
     history: History,
-    /// The fold of `history` (kept in lockstep; every landed edit advances both).
-    graph: DocGraph,
     /// One entry per landed turn.
     edits: Vec<CommittedEdit>,
 }
@@ -243,14 +270,17 @@ impl DocSession {
     /// A [`Role::Editor`] is granted the document region's edit capability (their
     /// turns commit); a [`Role::Commenter`] is not (the executor refuses their
     /// edits). Re-inviting an existing collaborator UPDATES their role and keeps
-    /// their cell.
+    /// their cell. The shared document is rebuilt so the new editor slot (and its
+    /// cap) is live; any already-committed edits are re-driven onto the fresh
+    /// ledger (deterministically reproducing each collaborator's chain).
     pub fn invite(&mut self, who: DreggIdentity, role: Role) {
         if let Some(existing) = self.roster.iter_mut().find(|c| c.who == who) {
             existing.role = role;
-            return;
+        } else {
+            let seed = (self.roster.len() as u8).saturating_add(1);
+            self.roster.push(Collaborator { who, role, seed });
         }
-        let seed = (self.roster.len() as u8).saturating_add(1);
-        self.roster.push(Collaborator { who, role, seed });
+        self.rebuild();
     }
 
     /// The roster, in invitation order.
@@ -263,14 +293,75 @@ impl DocSession {
         self.roster.iter().find(|c| c.who == *who).map(|c| c.role)
     }
 
-    /// The (editor-cell seed, holds-the-region-edit-cap) pair the executor drives
-    /// `who`'s turn with. An outsider gets a real cell with NO cap — their edit
-    /// still reaches the executor, and is refused there.
-    fn actor_cell(&self, who: &DreggIdentity) -> (u8, bool) {
-        match self.roster.iter().find(|c| c.who == *who) {
-            Some(c) => (c.seed, c.role.holds_edit_cap()),
-            None => (OUTSIDER_SEED, false),
+    /// The editor-slot indices used to construct `doc`: roster order, then one
+    /// shared outsider slot at the end. Slot `i` (`i < roster.len()`) is
+    /// `roster[i]`; slot `roster.len()` is the outsider.
+    fn slots(&self) -> Vec<(u8, bool)> {
+        let mut out: Vec<(u8, bool)> = self
+            .roster
+            .iter()
+            .map(|c| (c.seed, c.role.holds_edit_cap()))
+            .collect();
+        out.push((OUTSIDER_SEED, false));
+        out
+    }
+
+    /// The `doc` editor-slot index `who` drives their turn with. A roster member's
+    /// slot is their invitation index; an outsider drives the shared outsider slot
+    /// (no cap — their edit reaches the executor and is refused there).
+    fn slot_of(&self, who: &DreggIdentity) -> usize {
+        self.roster
+            .iter()
+            .position(|c| c.who == *who)
+            .unwrap_or(self.roster.len())
+    }
+
+    /// The editor-cell seed `who`'s patch is authored from (the `Author` label).
+    fn seed_of(&self, who: &DreggIdentity) -> u8 {
+        self.roster
+            .iter()
+            .find(|c| c.who == *who)
+            .map(|c| c.seed)
+            .unwrap_or(OUTSIDER_SEED)
+    }
+
+    /// Build a fresh signed [`MultiEditorDoc`] for the current roster.
+    fn fresh_doc(&self) -> MultiEditorDoc {
+        let mut doc = MultiEditorDoc::new(self.region_seed, &self.slots());
+        doc.set_receipt_signing_key(RECEIPT_SIGNING_SEED);
+        doc
+    }
+
+    /// Rebuild the shared document for the current roster, re-driving every
+    /// already-committed edit onto the fresh ledger. Driving is deterministic, so
+    /// each collaborator's per-agent chain is reproduced identically; the
+    /// [`CommittedEdit`] log's state roots are regenerated to the (possibly wider)
+    /// editor set so the record stays self-consistent with what [`Offering::verify`]
+    /// re-drives. An edit that no longer re-drives (e.g. an editor downgraded to a
+    /// commenter after they edited) is dropped — it genuinely no longer commits.
+    fn rebuild(&mut self) {
+        let mut doc = self.fresh_doc();
+        let prior = std::mem::take(&mut self.edits);
+        let mut history = History::new();
+        let mut edits = Vec::new();
+        for e in prior {
+            let slot = self.slot_of(&e.actor);
+            if let Ok(landed) = drive_on(&mut doc, slot, &e.patch, self.policy) {
+                history.commit(e.patch.clone());
+                edits.push(CommittedEdit {
+                    actor: e.actor,
+                    patch: e.patch,
+                    turn_hash: landed.receipt.turn_hash,
+                    effects_hash: landed.receipt.effects_hash,
+                    pre_state_hash: landed.receipt.pre_state_hash,
+                    post_state_hash: landed.receipt.post_state_hash,
+                    doc_commitment: landed.doc_commitment,
+                });
+            }
         }
+        self.doc = doc;
+        self.history = history;
+        self.edits = edits;
     }
 
     /// The document's patch history (the document, as its edits).
@@ -278,9 +369,9 @@ impl DocSession {
         &self.history
     }
 
-    /// The current fold — the live document graph.
+    /// The current fold — the live shared document graph.
     pub fn graph(&self) -> &DocGraph {
-        &self.graph
+        self.doc.graph()
     }
 
     /// The landed-edit log (one entry per committed turn).
@@ -288,10 +379,27 @@ impl DocSession {
         &self.edits
     }
 
+    /// `who`'s **real per-agent receipt chain** over this session — the genuine
+    /// executor chain that collaborator authored, in order (hash-linked by
+    /// `previous_receipt_hash`, nonce-monotone from 0, each receipt carrying a
+    /// verifiable executor signature). Empty for an actor who never committed (a
+    /// commenter, an outsider). This is the guarantee the deep model buys: an
+    /// editor's second edit chains off their OWN first even across another editor's
+    /// interleaved edit.
+    pub fn editor_chain(&self, who: &DreggIdentity) -> &[TurnReceipt] {
+        self.doc.editor_chain(self.slot_of(who))
+    }
+
+    /// `who`'s next per-agent nonce (== the count of edits that collaborator has
+    /// committed — the executor advanced it once per commit).
+    pub fn editor_nonce(&self, who: &DreggIdentity) -> u64 {
+        self.doc.editor_nonce(self.slot_of(who))
+    }
+
     /// The document's rendered content — clean runs plus any first-class conflict
     /// regions (dregg-doc's own fold).
     pub fn rendered(&self) -> Rendered {
-        content(&self.graph)
+        content(self.doc.graph())
     }
 
     /// The document's text (conflicts rendered legibly between markers).
@@ -308,13 +416,14 @@ impl DocSession {
 
     /// The document's live cells (atoms) in document order — the editable units.
     pub fn cells(&self) -> Vec<(AtomId, String)> {
-        walk_atoms(&self.graph)
+        walk_atoms(self.doc.graph())
     }
 
     /// The single-valued `title` field's live assignments. Two-or-more is a real
     /// [`Regime::Field`] clash.
     pub fn title(&self) -> Vec<String> {
-        self.graph
+        self.doc
+            .graph()
             .field(FIELD_TITLE)
             .iter()
             .map(|a| a.value.clone())
@@ -354,24 +463,11 @@ impl DocSession {
         self.edits.len()
     }
 
-    /// The document's CURRENT commitment — the region cell's real canonical state
-    /// commitment, **as the executor wrote it** on the last committed edit (the
-    /// value a light client trusts). An untouched document's commitment is its
-    /// genesis cell's.
-    ///
-    /// It is deliberately NOT recomputed by re-seeding a cell at the current fold:
-    /// the canonical state commitment absorbs the region cell's `nonce` as well as
-    /// its `fields_root`, and the executor ADVANCES that nonce on the turn it
-    /// commits. (Measured: a written cell and a re-seeded cell at the same fold have
-    /// byte-identical `fields_map` — the document projection — and differ only in the
-    /// nonce.) So the commitment binds "the document, as edited", not merely the
-    /// fold; taking it from the committed chain keeps it the executor's value rather
-    /// than a reconstruction of it.
+    /// The document's CURRENT commitment — the shared region cell's real canonical
+    /// state commitment, **as the executor wrote it** (the value a light client
+    /// trusts). An untouched document's commitment is its genesis cell's.
     pub fn commitment(&self) -> [u8; 32] {
-        match self.edits.last() {
-            Some(last) => last.doc_commitment,
-            None => genesis_commitment(self.region_seed),
-        }
+        self.doc.state_commitment()
     }
 
     /// The public, transmissible session record (the [`RecordVerify`] input).
@@ -386,7 +482,7 @@ impl DocSession {
     /// fold — attribution that does NOT move when the surrounding text does,
     /// because atom ids are content-addressed).
     pub fn contributions(&self) -> BTreeMap<u64, usize> {
-        dregg_doc::blame_summary(&self.graph)
+        dregg_doc::blame_summary(self.doc.graph())
             .into_iter()
             .map(|(a, n)| (a.0, n))
             .collect()
@@ -401,14 +497,6 @@ impl DocSession {
             .map(|c| c.who.as_str().to_string())
             .unwrap_or_else(|| format!("author {}", author.0))
     }
-}
-
-/// The commitment of an UNEDITED document: the genesis region cell at the session's
-/// private seed (an empty fold, nonce 0), read through the real
-/// `compute_canonical_state_commitment`. Nothing is driven, so no cap is needed.
-fn genesis_commitment(region_seed: u8) -> [u8; 32] {
-    ExecutorDrivenDoc::new_at(&DocGraph::new(), OUTSIDER_SEED, region_seed, false)
-        .state_commitment()
 }
 
 /// **What the session does with an edit that would leave a conflict standing** —
@@ -489,6 +577,11 @@ impl DocOffering {
     /// decoration: firing a dimmed affordance still lands a real executor
     /// [`Outcome::Refused`] (the executor is the sole referee). With `actor = None`
     /// the affordances are the session's own (enabled where the position is legal).
+    ///
+    /// The text-bearing affordances (insert / set-title / resolve-title) are
+    /// **templates**: their `label` is the human prompt, and the collaborator's prose
+    /// is attached to [`Action::text`] by the frontend on actuation (present ->
+    /// collect). Index-only affordances (delete / order-conflict) carry no text.
     pub fn actions_for(&self, session: &DocSession, actor: Option<&DreggIdentity>) -> Vec<Action> {
         let may_edit = match actor {
             Some(a) => session
@@ -568,7 +661,8 @@ impl DocOffering {
             .enumerate()
             .map(|(i, (id, text))| {
                 let who = session
-                    .graph
+                    .doc
+                    .graph()
                     .atom(*id)
                     .map(|a| session.author_name(a.provenance.author))
                     .unwrap_or_else(|| "?".to_string());
@@ -679,13 +773,14 @@ impl Default for DocOffering {
 
 /// Build the real `dregg_doc::Patch` an [`Action`] denotes, at the session's current
 /// fold, authored by the actor's editor cell. `None` for an ill-formed affordance
-/// (an unknown verb, an out-of-range anchor, an empty span) — which is refused
-/// without ever reaching the executor (no turn, nothing committed).
+/// (an unknown verb, an out-of-range anchor, a missing/empty text payload) — which
+/// is refused without ever reaching the executor (no turn, nothing committed).
 ///
 /// The atom seed is derived from the edit's INDEX in the chain plus the author's
 /// cell seed, so it is deterministic under replay (the verifier re-derives the same
 /// atom ids — hence the same patch, the same effects, the same `turn_hash`) while
-/// still keeping two actors' identical text distinct.
+/// still keeping two actors' identical text distinct. A text-bearing edit's prose
+/// is read from [`Action::text`] (the first-class payload), never the label.
 fn build_patch(session: &DocSession, input: &Action, seed: u8) -> Option<Patch> {
     let author = Author(seed as u64);
     let atom_seed = (session.edits.len() as u64)
@@ -693,43 +788,43 @@ fn build_patch(session: &DocSession, input: &Action, seed: u8) -> Option<Patch> 
         .wrapping_add(seed as u64)
         .wrapping_add(1);
 
+    // The free-text payload (insert prose, title value) rides `Action::text`.
+    let text = input.text.as_deref().unwrap_or("");
+
     match input.turn.as_str() {
         TURN_INSERT => {
-            if input.label.trim().is_empty() {
+            if text.trim().is_empty() {
                 return None;
             }
             let anchor = session.anchor_at(input.arg)?;
-            Some(Patch::by(
-                author,
-                [Patch::add(atom_seed, &input.label, anchor).1],
-            ))
+            Some(Patch::by(author, [Patch::add(atom_seed, text, anchor).1]))
         }
         TURN_DELETE => {
             let id = session.cell_at(input.arg)?;
             Some(Patch::by(author, [Op::Delete { id }]))
         }
         TURN_SET_TITLE => {
-            if input.label.trim().is_empty() {
+            if text.trim().is_empty() {
                 return None;
             }
             Some(Patch::by(
                 author,
                 [Op::SetField {
                     name: FIELD_TITLE.to_string(),
-                    value: input.label.clone(),
+                    value: text.to_string(),
                     superseding: false,
                 }],
             ))
         }
         TURN_RESOLVE_TITLE => {
-            if input.label.trim().is_empty() {
+            if text.trim().is_empty() {
                 return None;
             }
             Some(Patch::by(
                 author,
                 [Op::SetField {
                     name: FIELD_TITLE.to_string(),
-                    value: input.label.clone(),
+                    value: text.to_string(),
                     // SUPERSEDING: collapses the whole clashing assignment set to
                     // this value (dregg-doc's `supersede_field`) — the resolution.
                     superseding: true,
@@ -768,39 +863,37 @@ struct Refusal(String);
 /// The landing result of one driven edit.
 struct Landed {
     receipt: TurnReceipt,
-    graph: DocGraph,
     doc_commitment: [u8; 32],
 }
 
-/// **Drive ONE edit** at `base_graph`, as `seed`'s editor cell, on the region cell
-/// `region_seed`. Two gates, in dregg-doc's own order (`PullRequest::land_checked`
-/// gates conflicts → … → the executor's cap, in-band, per driven turn):
+/// **Drive ONE edit** by editor slot `slot` on the shared [`MultiEditorDoc`], through
+/// two gates in dregg-doc's own order:
 ///
 /// 1. **Document soundness** — the fold of the new history must not leave an
 ///    unresolved conflict standing, as `policy` reads it. The DETECTION is entirely
 ///    dregg-doc's ([`content`]'s first-class antichain / field-clash regions + the
 ///    two-regime [`Regime`] classifier); the POLICY is the forge's landing rule.
-///    A refused edit is refused BEFORE any turn is built: the executor never sees
-///    an unsound document.
-/// 2. **Authority** — the edit is driven through
-///    [`ExecutorDrivenDoc::edit`], the substrate's SOLE `TurnExecutor::execute`
-///    entry. An editor cell without the region's c-list capability is refused
-///    IN-BAND by `check_cross_cell_permission` (`TurnError::CapabilityNotHeld`);
-///    the executor rolls the ledger back and nothing commits.
+///    A refused edit is refused BEFORE any turn is built: the executor never sees an
+///    unsound document, and the shared `doc` is never touched.
+/// 2. **Authority** — the edit is driven through [`MultiEditorDoc::edit`] as the
+///    given editor slot's agent, carrying THAT collaborator's nonce + receipt-chain
+///    head. An editor without the region's c-list capability is refused IN-BAND by
+///    `check_cross_cell_permission` (`TurnError::CapabilityNotHeld`); the executor
+///    rolls the ledger back and nothing commits.
 ///
-/// A refusal is total: the caller's session is never touched (this function works
-/// on clones and returns before any session mutation).
-fn drive_edit(
-    base_graph: &DocGraph,
+/// A refusal is total: on any refusal the shared `doc` is byte-identical (gate 1
+/// returns before touching it; gate 2's refusal rolls the executor's ledger back and
+/// leaves the witness graph un-advanced), and no collaborator's chain moved.
+fn drive_on(
+    doc: &mut MultiEditorDoc,
+    slot: usize,
     patch: &Patch,
-    seed: u8,
-    holds_cap: bool,
-    region_seed: u8,
     policy: ConflictPolicy,
 ) -> Result<Landed, Refusal> {
-    // GATE 1 — DOCUMENT SOUNDNESS (dregg-doc's own conflict semantics).
-    let next = patch.apply_to(base_graph);
-    let before = content(base_graph);
+    // GATE 1 — DOCUMENT SOUNDNESS (dregg-doc's own conflict semantics), evaluated
+    // on the current shared fold BEFORE any turn is driven.
+    let next = patch.apply_to(doc.graph());
+    let before = content(doc.graph());
     let after = content(&next);
     // The conflict region this edit would INTRODUCE (one that does not already
     // stand). A resolution introduces none — it removes one.
@@ -820,9 +913,9 @@ fn drive_edit(
         }
     }
 
-    // GATE 2 — AUTHORITY: the REAL executor (the cap gate lives inside).
-    let mut doc = ExecutorDrivenDoc::new_at(base_graph, seed, region_seed, holds_cap);
-    match doc.edit(patch.clone()) {
+    // GATE 2 — AUTHORITY: the REAL executor (the cap gate lives inside), driving the
+    // editing collaborator's own per-agent turn on the shared ledger.
+    match doc.edit(slot, patch.clone()) {
         Ok(receipt) => {
             if !doc.commitment_matches_projection() {
                 return Err(Refusal(
@@ -831,7 +924,6 @@ fn drive_edit(
             }
             Ok(Landed {
                 receipt,
-                graph: doc.graph().clone(),
                 doc_commitment: doc.state_commitment(),
             })
         }
@@ -876,16 +968,21 @@ impl Offering for DocOffering {
     /// Open a fresh shared document: an empty patch history under a deterministic
     /// region identity (the config seed pins the region cell, so a verifier
     /// re-derives the same document cell and a forged record cannot re-target
-    /// another one). Collaborators are invited with [`DocSession::invite`].
+    /// another one). The shared [`MultiEditorDoc`] starts with just the outsider
+    /// slot; collaborators are invited with [`DocSession::invite`].
     fn open(&self, cfg: SessionConfig) -> Result<DocSession, OfferingError> {
         let region_seed = ((cfg.seed.unwrap_or(1) % 251) + 1) as u8;
-        Ok(DocSession {
+        let mut session = DocSession {
             region_seed,
             roster: Vec::new(),
+            policy: self.policy,
+            // Placeholder — `rebuild` installs the real (signed) doc for the roster.
+            doc: MultiEditorDoc::new(region_seed, &[(OUTSIDER_SEED, false)]),
             history: History::new(),
-            graph: DocGraph::new(),
             edits: Vec::new(),
-        })
+        };
+        session.rebuild();
+        Ok(session)
     }
 
     /// The document's edit affordances (session-level; [`DocOffering::actions_for`]
@@ -894,23 +991,26 @@ impl Offering for DocOffering {
         self.actions_for(session, None)
     }
 
-    /// **An EDIT is ONE real turn.** The typed [`Action`] is desugared into a real
-    /// `dregg_doc::Patch` and driven through the substrate's sole executor entry:
+    /// **An EDIT is ONE real turn on the actor's per-agent chain.** The typed
+    /// [`Action`] is desugared into a real `dregg_doc::Patch` (its prose read from
+    /// [`Action::text`]) and driven through the shared [`MultiEditorDoc`] as the
+    /// actor's editor slot:
     ///
     /// - a legal, authorized edit lands a genuine finalized [`TurnReceipt`]
-    ///   ([`Outcome::Landed`]) and advances the document's history + fold;
+    ///   ([`Outcome::Landed`]) on that collaborator's own chain and advances the
+    ///   document's history + fold;
     /// - an edit by an actor without the region's edit cap is a real **executor**
     ///   refusal ([`TurnError::CapabilityNotHeld`]) — [`Outcome::Refused`], nothing
     ///   committed;
-    /// - an edit that would leave the document carrying an unresolved conflict (a
-    ///   concurrent insert at a stale anchor → an antichain; a second differing
-    ///   `title` assignment → a field clash) is refused by dregg-doc's own conflict
-    ///   semantics — [`Outcome::Refused`], nothing committed.
+    /// - an edit that would leave the document carrying an unresolved conflict is
+    ///   refused by dregg-doc's own conflict semantics — [`Outcome::Refused`],
+    ///   nothing committed.
     ///
     /// The anti-ghost tooth: on ANY refusal the session is byte-untouched (no
-    /// patch, no receipt, no commitment move).
+    /// patch, no receipt, no commitment move, no chain advance).
     fn advance(&self, session: &mut DocSession, input: Action, actor: DreggIdentity) -> Outcome {
-        let (seed, holds_cap) = session.actor_cell(&actor);
+        let seed = session.seed_of(&actor);
+        let slot = session.slot_of(&actor);
 
         let Some(patch) = build_patch(session, &input, seed) else {
             return Outcome::Refused(format!(
@@ -919,14 +1019,7 @@ impl Offering for DocOffering {
             ));
         };
 
-        match drive_edit(
-            &session.graph,
-            &patch,
-            seed,
-            holds_cap,
-            session.region_seed,
-            self.policy,
-        ) {
+        match drive_on(&mut session.doc, slot, &patch, self.policy) {
             Ok(landed) => {
                 let edit = CommittedEdit {
                     actor,
@@ -938,7 +1031,6 @@ impl Offering for DocOffering {
                     doc_commitment: landed.doc_commitment,
                 };
                 session.history.commit(patch);
-                session.graph = landed.graph;
                 session.edits.push(edit);
                 Outcome::Landed {
                     receipt: landed.receipt,
@@ -993,33 +1085,37 @@ impl RecordVerify for DocOffering {
 
     /// **Re-drive the recorded chain from genesis through the REAL executor.**
     ///
-    /// Starting from an empty document under the session's authentic region seed,
-    /// each recorded edit is re-driven as its recorded actor (the roster — NOT the
-    /// record — decides whether that actor's cell holds the edit cap, so a forger
-    /// cannot promote themselves), through the SAME two gates a live edit passes.
-    /// The re-drive must reproduce, at every step:
+    /// Starting from an empty document under the session's authentic region seed and
+    /// its editor roster (a fresh [`MultiEditorDoc`]), each recorded edit is
+    /// re-driven as its recorded actor's editor slot (the roster — NOT the record —
+    /// decides whether that actor's cell holds the edit cap, so a forger cannot
+    /// promote themselves), through the SAME two gates a live edit passes. The
+    /// re-drive must reproduce, at every step:
     ///
     /// - that the edit still LANDS (a recorded edit that no longer lands — an
     ///   unauthorized actor, a conflicting patch, a spliced/reordered edit — breaks);
-    /// - the turn's deterministic core: `turn_hash`, `effects_hash`, and the pre/post
-    ///   ledger state roots (a forged patch changes the atom ids → the effects → the
-    ///   turn);
+    /// - the turn's deterministic core: `turn_hash` (which binds the editor's prior
+    ///   receipt hash) and `effects_hash`;
     /// - the DOCUMENT's commitment after the edit (the real region-cell state
-    ///   commitment);
+    ///   commitment) — the full ledger state roots are recorded provenance but NOT
+    ///   re-compared (see the note at the comparison site: a refused turn consumes
+    ///   its nonce on the shared ledger, so the full root is node-level, not a
+    ///   function of the committed document chain);
     ///
     /// and finally the whole document must reproduce (the fold of the re-driven
     /// history equals the record's final commitment). The document reproduces from
     /// its edits, or the report is broken.
     fn verify_record(&self, session: &DocSession, record: &DocRecord) -> VerifyReport {
         let n = record.edits.len();
-        let mut graph = DocGraph::new();
-        // The commitment the chain stands at: genesis, then each edit's own
-        // executor-WRITTEN commitment as it is re-driven.
-        let mut commitment = genesis_commitment(session.region_seed);
+        let mut doc = session.fresh_doc();
+        // The commitment the chain stands at: genesis (the fresh region cell), then
+        // each edit's own executor-WRITTEN commitment as it is re-driven.
+        let mut commitment = doc.state_commitment();
 
         for (i, edit) in record.edits.iter().enumerate() {
-            // The AUTHENTIC identity: the session's roster decides the cell + cap.
-            let (seed, holds_cap) = session.actor_cell(&edit.actor);
+            // The AUTHENTIC identity: the session's roster decides the slot + cap.
+            let seed = session.seed_of(&edit.actor);
+            let slot = session.slot_of(&edit.actor);
             // The patch's author must be the actor's own editor cell — a patch
             // attributed to someone else's cell is a forged provenance.
             if edit.patch.author != Author(seed as u64) {
@@ -1032,14 +1128,7 @@ impl RecordVerify for DocOffering {
                     ),
                 );
             }
-            match drive_edit(
-                &graph,
-                &edit.patch,
-                seed,
-                holds_cap,
-                session.region_seed,
-                self.policy,
-            ) {
+            match drive_on(&mut doc, slot, &edit.patch, self.policy) {
                 Ok(landed) => {
                     if landed.receipt.turn_hash != edit.turn_hash {
                         return VerifyReport::broken(
@@ -1053,14 +1142,18 @@ impl RecordVerify for DocOffering {
                             format!("edit #{i}: the re-driven effects hash does not match"),
                         );
                     }
-                    if landed.receipt.pre_state_hash != edit.pre_state_hash
-                        || landed.receipt.post_state_hash != edit.post_state_hash
-                    {
-                        return VerifyReport::broken(
-                            i,
-                            format!("edit #{i}: the re-driven state roots do not match"),
-                        );
-                    }
+                    // NOTE: the full LEDGER state roots (`pre/post_state_hash`) are
+                    // deliberately NOT re-compared. In the shared-ledger multi-editor
+                    // model a *refused* turn still consumes the failing agent's nonce
+                    // (execute.rs "PHASE 1: Commit fee + nonce — NEVER rolled back"),
+                    // so the full ledger root legitimately absorbs concurrent refused
+                    // attempts that are not part of the committed document record —
+                    // it is a node-level quantity, not reproducible from the document
+                    // chain alone. The document-meaningful chain is bound instead by
+                    // `turn_hash` (which chains the editor's prior receipt), the
+                    // `effects_hash`, and the region `doc_commitment` below — each a
+                    // function of the committed chain alone. (An honest boundary,
+                    // analogous to why `receipt_hash` is not the recorded chain.)
                     if landed.doc_commitment != edit.doc_commitment {
                         return VerifyReport::broken(
                             i,
@@ -1070,7 +1163,6 @@ impl RecordVerify for DocOffering {
                             ),
                         );
                     }
-                    graph = landed.graph;
                     commitment = landed.doc_commitment;
                 }
                 Err(Refusal(why)) => {
@@ -1080,7 +1172,7 @@ impl RecordVerify for DocOffering {
         }
 
         if commitment != record.commitment {
-            let text: String = content(&graph)
+            let text: String = content(doc.graph())
                 .to_marked_string()
                 .chars()
                 .take(60)

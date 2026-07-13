@@ -10,10 +10,10 @@
 //! conflict semantics.
 
 use dregg_doc::{AtomId, Author, History, Op, Patch, PullRequest, Regime};
-use dregg_turn::Finality;
+use dregg_turn::{Finality, verify_receipt_signature_with_keys};
 use dreggnet_doc::{
-    DocOffering, DocSession, FIELD_TITLE, Role, TURN_DELETE, TURN_INSERT, TURN_ORDER_CONFLICT,
-    TURN_RESOLVE_TITLE, TURN_SET_TITLE,
+    DocOffering, DocSession, FIELD_TITLE, RECEIPT_SIGNING_SEED, Role, TURN_DELETE, TURN_INSERT,
+    TURN_ORDER_CONFLICT, TURN_RESOLVE_TITLE, TURN_SET_TITLE,
 };
 use dreggnet_offerings::mock::{MockEvent, MockFrontend};
 use dreggnet_offerings::{
@@ -38,8 +38,28 @@ fn open_crew(off: &DocOffering) -> (DocSession, DreggIdentity, DreggIdentity, Dr
     (s, ann, bo, cyd)
 }
 
+/// An insert affordance whose PROSE rides the first-class [`Action::text`] payload
+/// (the label is the human prompt, not the content) — the retired label-riding
+/// workaround.
 fn insert(text: &str, anchor: i64) -> Action {
-    Action::new(text, TURN_INSERT, anchor, true)
+    Action::new("…insert", TURN_INSERT, anchor, true).with_text(text)
+}
+
+/// A set-title affordance whose value rides [`Action::text`].
+fn set_title(value: &str) -> Action {
+    Action::new("set the title", TURN_SET_TITLE, 0, true).with_text(value)
+}
+
+/// A resolve-title affordance whose settling value rides [`Action::text`].
+fn resolve_title(value: &str) -> Action {
+    Action::new("settle the title", TURN_RESOLVE_TITLE, 0, true).with_text(value)
+}
+
+/// The executor verifying key the session signs each committed receipt with.
+fn exec_pubkey() -> [u8; 32] {
+    ed25519_dalek::SigningKey::from_bytes(&RECEIPT_SIGNING_SEED)
+        .verifying_key()
+        .to_bytes()
 }
 
 fn landed(out: &Outcome) -> &dregg_turn::TurnReceipt {
@@ -88,11 +108,7 @@ fn several_actors_edit_one_document_and_each_edit_is_a_real_finalized_turn() {
     assert_eq!(rec2.finality, Finality::Final);
 
     // ANN titles it (the single-valued field — the non-monotone fragment).
-    let r3 = off.advance(
-        &mut s,
-        Action::new("Charter", TURN_SET_TITLE, 0, true),
-        ann.clone(),
-    );
+    let r3 = off.advance(&mut s, set_title("Charter"), ann.clone());
     assert_eq!(landed(&r3).finality, Finality::Final);
 
     // THE DOCUMENT REFLECTS THEM.
@@ -262,23 +278,15 @@ fn a_second_differing_title_is_refused_as_a_field_authority_clash() {
             .landed()
     );
     assert!(
-        off.advance(
-            &mut s,
-            Action::new("Charter", TURN_SET_TITLE, 0, true),
-            ann.clone()
-        )
-        .landed()
+        off.advance(&mut s, set_title("Charter"), ann.clone())
+            .landed()
     );
     let before_commit = s.commitment();
 
     // BO assigns the SAME single-valued field a different value: not a benign
     // antichain but a CONSERVATION / AUTHORITY clash — the non-monotone boundary
     // dregg-doc's two-regime classifier says needs consensus. REFUSED.
-    let refused = off.advance(
-        &mut s,
-        Action::new("Manifesto", TURN_SET_TITLE, 0, true),
-        bo.clone(),
-    );
+    let refused = off.advance(&mut s, set_title("Manifesto"), bo.clone());
     let why = refusal(&refused);
     assert!(
         why.contains("FIELD") && why.contains(FIELD_TITLE),
@@ -291,11 +299,7 @@ fn a_second_differing_title_is_refused_as_a_field_authority_clash() {
     // NON-VACUOUS: a SUPERSEDING resolution (the settle-the-field patch) collapses
     // the assignment set and LANDS as a real turn — a conflict is settled by a
     // later patch, not by a merge failure.
-    let out = off.advance(
-        &mut s,
-        Action::new("Manifesto", TURN_RESOLVE_TITLE, 0, true),
-        bo.clone(),
-    );
+    let out = off.advance(&mut s, resolve_title("Manifesto"), bo.clone());
     assert_eq!(landed(&out).finality, Finality::Final);
     assert_eq!(s.title(), vec!["Manifesto".to_string()]);
     assert_ne!(s.commitment(), before_commit);
@@ -382,12 +386,8 @@ fn verify_re_drives_the_whole_edit_chain_and_a_forged_edit_fails() {
             .landed()
     );
     assert!(
-        off.advance(
-            &mut s,
-            Action::new("Charter", TURN_SET_TITLE, 0, true),
-            ann.clone()
-        )
-        .landed()
+        off.advance(&mut s, set_title("Charter"), ann.clone())
+            .landed()
     );
 
     // The authentic record re-verifies (the document reproduces from its edits).
@@ -646,4 +646,148 @@ fn a_superseding_resolution_now_lands_through_the_pr_pushout_on_a_fast_forward()
             e
         ),
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 8. THE DEEP MODEL — one MultiEditorDoc: distinct per-agent chains + real text.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// TWO editors, both authorized, over ONE shared document. They INTERLEAVE their
+/// edits (ANN, BO, ANN, BO). The session holds a single `MultiEditorDoc`, so each
+/// collaborator keeps their real cross-edit per-agent chain — ANN's second turn
+/// chains off ANN's OWN first even though BO edited in between (NOT re-based to
+/// genesis per edit, which the old single-editor model did). Each chain is a
+/// distinct agent, nonce-monotone, and every receipt carries a verifiable executor
+/// signature. The whole interleaved chain re-verifies by replay.
+#[test]
+fn a_multi_editor_session_keeps_each_editors_distinct_per_agent_chain() {
+    let off = DocOffering::new();
+    let (mut s, ann, bo, _cyd) = open_crew(&off);
+
+    // ANN opens; BO continues at the tip; ANN continues at the tip (ANN's 2nd);
+    // BO continues at the tip (BO's 2nd). Every anchor is the tip → clean.
+    assert!(off.advance(&mut s, insert("A1 ", 0), ann.clone()).landed());
+    assert!(off.advance(&mut s, insert("B1 ", 1), bo.clone()).landed());
+    assert!(off.advance(&mut s, insert("A2 ", 2), ann.clone()).landed());
+    assert!(off.advance(&mut s, insert("B2", 3), bo.clone()).landed());
+    assert_eq!(s.text(), "A1 B1 A2 B2");
+
+    // Each collaborator authored a real per-agent chain of length 2.
+    let ann_chain = s.editor_chain(&ann);
+    let bo_chain = s.editor_chain(&bo);
+    assert_eq!(ann_chain.len(), 2, "ANN committed two turns");
+    assert_eq!(bo_chain.len(), 2, "BO committed two turns");
+
+    // THE POINT: ANN's second turn chains off ANN's FIRST — not genesis, not BO's
+    // intervening receipt — even though BO edited in between.
+    assert_eq!(
+        ann_chain[1].previous_receipt_hash,
+        Some(ann_chain[0].receipt_hash()),
+        "ANN's chain is preserved across BO's interleaved edit (not re-based)"
+    );
+    assert_eq!(
+        bo_chain[1].previous_receipt_hash,
+        Some(bo_chain[0].receipt_hash()),
+        "BO's chain is preserved across ANN's interleaved edit"
+    );
+    // ANN's first turn is genesis for ANN's agent (no previous receipt).
+    assert_eq!(ann_chain[0].previous_receipt_hash, None);
+    assert_eq!(bo_chain[0].previous_receipt_hash, None);
+
+    // The two chains are DISTINCT agents; each is nonce-monotone (two commits ⇒
+    // next nonce 2), and every receipt carries a verifiable executor signature.
+    assert_ne!(ann_chain[0].agent, bo_chain[0].agent);
+    assert_eq!(s.editor_nonce(&ann), 2);
+    assert_eq!(s.editor_nonce(&bo), 2);
+    let pk = exec_pubkey();
+    for r in ann_chain.iter().chain(bo_chain.iter()) {
+        assert_eq!(r.finality, Finality::Final);
+        assert!(
+            verify_receipt_signature_with_keys(r, &[pk]).is_ok(),
+            "each committed receipt carries a genuine, verifiable executor signature"
+        );
+    }
+
+    // A commenter / outsider has no chain (they never committed).
+    let cyd = who("cyd");
+    assert!(s.editor_chain(&cyd).is_empty());
+    assert!(s.editor_chain(&who("mallory")).is_empty());
+
+    // The whole interleaved chain re-verifies by replay (the per-agent chains, and
+    // hence the turn hashes that bind them, reproduce deterministically).
+    let report = off.verify(&s);
+    assert!(report.verified, "the chain re-verifies: {}", report.detail);
+    assert_eq!(report.turns, 4);
+}
+
+/// An edit's real prose rides [`Action::text`] — the first-class payload, NOT the
+/// label. A frontend presents the insert affordance TEMPLATE (its label is the human
+/// prompt), the presser supplies the prose as free text, and `collect` reproduces
+/// that string on `Action::text`. The core reads the text (not the label) to build
+/// the patch, so the document carries the presser's prose.
+#[test]
+fn an_edits_prose_rides_action_text_through_present_and_collect() {
+    let off = DocOffering::new();
+    let mut fe = MockFrontend::new();
+    let slot = SessionId::new("doc-thread-text");
+
+    let mut s = off
+        .open(SessionConfig::with_seed(13))
+        .expect("the doc opens");
+    let ann = fe.identity("ann".to_string());
+    s.invite(ann.clone(), Role::Editor);
+
+    // Present the offering's surface + affordance templates (the insert template's
+    // label is the prompt, and it carries NO text of its own).
+    fe.spin_session(slot.clone());
+    fe.present(
+        &slot,
+        &off.render_for(&s, Some(&ann)),
+        &off.actions_for(&s, Some(&ann)),
+    );
+    let template = fe
+        .presented_actions(&slot)
+        .iter()
+        .find(|a| a.turn == TURN_INSERT && a.arg == 0)
+        .cloned()
+        .expect("an insert-at-start affordance was presented");
+    assert_eq!(
+        template.text, None,
+        "the presented affordance is a template — no content on it yet"
+    );
+    assert_ne!(
+        template.label, "the dragon's hoard glittered",
+        "the label is the human prompt, not the prose"
+    );
+
+    // A TEXT-BEARING press: the user typed the prose into the modal/textarea. collect
+    // reproduces it on Action::text (the label is untouched).
+    let prose = "the dragon's hoard glittered";
+    let ev = MockEvent::press_text(&slot, "ann", TURN_INSERT, 0, prose);
+    let (session_id, action, actor) = fe.collect(ev).expect("the affordance was presented");
+    assert_eq!(session_id, slot);
+    assert_eq!(actor, ann);
+    assert_eq!(
+        action.text.as_deref(),
+        Some(prose),
+        "collect reproduced the presser's prose on Action::text"
+    );
+
+    // The core reads the TEXT to build the patch: the document carries the prose.
+    let out = off.advance(&mut s, action, actor);
+    assert_eq!(landed(&out).finality, Finality::Final);
+    assert_eq!(
+        s.text(),
+        prose,
+        "the document carries the text payload, not a label"
+    );
+    assert!(off.verify(&s).verified);
+
+    // NON-VACUOUS: a text-free insert (no payload) is ill-formed — refused before the
+    // executor (the prose is genuinely load-bearing, not decorative).
+    let empty = Action::new("…insert", TURN_INSERT, 0, true);
+    assert!(matches!(
+        off.advance(&mut s, empty, ann.clone()),
+        Outcome::Refused(_)
+    ));
 }
