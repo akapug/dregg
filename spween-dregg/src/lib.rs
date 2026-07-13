@@ -46,8 +46,8 @@ mod world;
 
 pub use collective::{Ballot, CollectiveError, CollectiveRound, PollContext, run_collective};
 pub use compiler::{
-    CompileError, CompiledStory, GENESIS_METHOD, PASSAGE_ENDED, PASSAGE_SLOT, choice_method,
-    compile_scene, value_to_field,
+    CompileError, CompiledStory, GENESIS_METHOD, HEAP_HATCH_METHOD, PASSAGE_ENDED, PASSAGE_SLOT,
+    STATE_SLOTS, choice_method, compile_scene, value_to_field,
 };
 pub use encoding::{field_to_u64, value_to_u64};
 pub use real_engine::CollectiveChoiceEngine;

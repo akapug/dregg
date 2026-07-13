@@ -69,7 +69,8 @@ pub const PASSAGE_SLOT: usize = 0;
 pub const PASSAGE_ENDED: u64 = 0xFFFF_FFFF;
 
 /// The number of cell state slots available (mirrors `dregg_cell::state::STATE_SLOTS`).
-const STATE_SLOTS: usize = 16;
+/// A heap-keyed write ([`WorldCell::apply_raw`]) targets an index `>= STATE_SLOTS`.
+pub const STATE_SLOTS: usize = 16;
 
 /// The dispatch method a choice's turn presents — the key its executor-enforced
 /// gate case is guarded by. Used by BOTH the compiler (to name the case) and the
@@ -81,6 +82,33 @@ pub fn choice_method(passage: &str, choice_index: usize) -> String {
 /// The dispatch method the genesis turn (the intro passage's entry effects +
 /// initial passage-slot bind) presents.
 pub const GENESIS_METHOD: &str = "genesis";
+
+/// The reserved dispatch method a raw HEAP-hatch turn ([`WorldCell::apply_raw`] with
+/// heap-keyed effects) presents.
+///
+/// ## Why a reserved method, not an `Always` catch-all
+///
+/// The executor's `CellProgram::Cases` dispatch is **method-default-deny**: once a
+/// program has ANY method-binding (`MethodIs`) case, an action whose method matches
+/// none of them is `NoTransitionCaseMatched` — *even if a separate `Always`-guarded
+/// case still matches* (`TransitionGuard::is_method_dispatching` returns `false` for
+/// `Always`, so an `Always` case never satisfies the "some dispatch case matched"
+/// requirement). So a plain `Always` catch-all does **not** revive the hatch: a raw
+/// heap turn under a novel method is still refused. Nor can the catch-all key on the
+/// effect *kind* (`EffectKindIs { SetField }`), because a choice-turn is *also* a
+/// `SetField` — an effect-kind catch-all would either absorb forged choice methods
+/// (a dispatch hole) or, if it carried register-slot teeth, refuse the real choices
+/// it AND-matches. The heap-vs-slot distinction the hatch needs (write target
+/// `index >= STATE_SLOTS`) is not exposed to any dispatch guard.
+///
+/// So the hatch gets its own reserved `MethodIs { HEAP_HATCH_METHOD }` case whose
+/// teeth freeze every register slot (`Immutable`), CONFINING the turn to the heap: a
+/// legal heap-keyed write DISPATCHES (admitted iff the heap teeth pass), a forged
+/// hatch turn that overwrites a register slot (e.g. `PASSAGE_SLOT` to teleport) is
+/// REFUSED by the confinement teeth, and any UNKNOWN method (not a choice, not
+/// genesis, not this) is still refused by its own case's absence — the dispatch
+/// default-deny is not weakened.
+pub const HEAP_HATCH_METHOD: &str = "spween/heap";
 
 /// A story lowered to a world-cell descriptor: the slot layout, the passage index,
 /// and the installed [`CellProgram`].
@@ -231,6 +259,21 @@ pub fn compile_scene(scene: &Scene) -> Result<CompiledStory, CompileError> {
             choice_idx += 1;
         }
     }
+
+    // The heap escape hatch ([`WorldCell::apply_raw`]): a reserved method-binding case
+    // so a raw HEAP-keyed turn DISPATCHES (satisfying the executor's method
+    // default-deny) instead of refusing as `NoTransitionCaseMatched`. Its teeth freeze
+    // every register slot, confining the hatch to the committed heap (keys
+    // `>= STATE_SLOTS`); see [`HEAP_HATCH_METHOD`] for why this is a reserved `MethodIs`
+    // case and not an `Always` / `EffectKindIs` catch-all.
+    cases.push(TransitionCase {
+        guard: TransitionGuard::MethodIs {
+            method: symbol(HEAP_HATCH_METHOD),
+        },
+        constraints: (0..STATE_SLOTS)
+            .map(|index| StateConstraint::Immutable { index: index as u8 })
+            .collect(),
+    });
 
     Ok(CompiledStory {
         scene_id: scene.meta.id.to_string(),
