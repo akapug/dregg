@@ -507,6 +507,30 @@ pub const SLOT_CAVEAT_TAG_DISCHARGE_OBLIGATION: u32 = 18;
 /// standing-obligation tag 18); an old verifier rejects this tag as `unknown
 /// type_tag` (the lockstep share-vault verifier epoch), NOT a proving-key rotation.
 pub const SLOT_CAVEAT_TAG_VAULT_DEPOSIT: u32 = 19;
+/// The `|Δ| ≤ d` BOUNDED-delta atom's fresh wire home (`HeapAtom::DeltaBounded`,
+/// the Lean `tagHeapAtom` tag 20). Distinct from `FIELD_DELTA` (tag 8), whose live
+/// re-eval is the EXACT `new == old + p0` (`verify.rs` `SLOT_CAVEAT_TAG_FIELD_DELTA`
+/// = the `HeapAtom::DeltaEquals` semantics). The tag-8 alignment was corrected in the
+/// Lean twin (`metatheory/Dregg2/Circuit/Emit/EffectVmEmitRotationCaveat.lean` §5,
+/// `heapAdmits_deltaEquals_iff`); this const gives the displaced bounded twin its own
+/// number so BOTH the exact and the bounded delta stay heap-expressible. STAGED
+/// (heap-plane `RotCaveatEntry`, host/scalar re-evaluated — the AIR constraint
+/// polynomials / VK bytes are UNCHANGED); an un-upgraded verifier rejects this tag as
+/// `unknown type_tag` (epoch-lockstep), NOT a proving-key rotation.
+pub const SLOT_CAVEAT_TAG_FIELD_DELTA_BOUNDED: u32 = 20;
+/// The CROSS-KEY heap relation `new[heap key] ≤ new[heap other_key] + delta`
+/// (`StateConstraint::HeapFieldLteOther`, the Lean `RelationalCaveat.heapFieldLteOther`
+/// in `metatheory/Dregg2/Exec/RelationalCaveat.lean` §8, characterized by
+/// `evalHeapRel_fieldLteOther_iff`; the staged wire bridge is
+/// `EffectVmEmitRotationCaveat.lean` §5b `RotCaveatEntry.relCaveat?`). A single
+/// heap-domain entry that reads TWO heap keys — inexpressible by the per-key `HeapAtom`
+/// vocabulary (each atom reads only its own key) — encoding `key` = the entry key, `p0`
+/// = the other key, `p1` = the signed delta. Lets a Bazaar purse keep BOTH capacity
+/// operands in the openable heap instead of hoisting the pair into fixed register slots.
+/// STAGED: the manifest is PI off-AIR re-evaluation, so the AIR constraint polynomials
+/// (the VK bytes) are UNCHANGED; an un-upgraded verifier rejects this tag as `unknown
+/// type_tag` (the lockstep cross-key-heap verifier epoch), NOT a proving-key rotation.
+pub const SLOT_CAVEAT_TAG_HEAP_FIELD_LTE_OTHER: u32 = 21;
 
 // ---- Cross-effect within-turn chain pinning (Proof-to-Action Binding §3.3) ----
 //

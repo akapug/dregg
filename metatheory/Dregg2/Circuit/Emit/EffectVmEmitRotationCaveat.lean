@@ -50,6 +50,7 @@ Rust consumers are the recursion-gated IR-v2 tests + the drift guards.
 -/
 import Dregg2.Circuit.Emit.EffectVmEmitRotationR
 import Dregg2.Exec.Program
+import Dregg2.Exec.RelationalCaveat
 
 namespace Dregg2.Circuit.Emit.EffectVmEmitRotationCaveat
 
@@ -62,11 +63,15 @@ open Dregg2.Circuit.Emit.EffectVmEmitRotationR
 open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
 open Dregg2.Crypto
 open Dregg2.Substrate.Heap (refSponge)
-open Dregg2.Exec (HeapAtom evalHeap heapKey Value evalHeap_strictMono_iff)
+open Dregg2.Exec (HeapAtom evalHeap heapKey Value evalHeap_strictMono_iff
+  evalHeap_deltaEquals_iff evalHeap_deltaBounded_iff)
+open Dregg2.Exec.EffectsState (fieldOf)
+open Dregg2.Exec.RelationalCaveat (RelCaveat heapFieldLteOther evalHeapRel_fieldLteOther_iff heapName)
 
 set_option autoImplicit false
 
 deriving instance BEq for Dregg2.Exec.HeapAtom
+deriving instance BEq for Dregg2.Exec.RelationalCaveat.RelCaveat
 
 /-! ## §1 — the widened operand: `(domain, key)`, domain-separated by theorem.
 
@@ -517,10 +522,16 @@ does not yet DISCHARGE heap-keyed caveats at run time (the slot manifest's
 
 /-- Decode a wire type tag (+ first param) into the landed `HeapAtom` vocabulary. Tags are
 the live `pi::SLOT_CAVEAT_TAG_*` numbers (FIELD_EQUALS 1 · FIELD_GTE 2 · FIELD_LTE 3 ·
-WRITE_ONCE 4 · IMMUTABLE 5 · MONOTONIC 6 · STRICT_MONOTONIC 7 · FIELD_DELTA 8). Tags 9..12
-(monotonic-sequence, temporal-gate, sender-authorized, allowed-transitions) are slot-shaped
-or multi-input and are NOT heap-liftable single-key atoms — they decode `none` on the heap
-plane, matching the landed single-key lift (`5e0558fdc`'s named tail). FAIL CLOSED. -/
+WRITE_ONCE 4 · IMMUTABLE 5 · MONOTONIC 6 · STRICT_MONOTONIC 7 · FIELD_DELTA 8 ·
+FIELD_DELTA_BOUNDED 20). **Tag 8 (FIELD_DELTA) decodes to the EXACT `deltaEquals`** — the live
+Rust re-eval is `new == old + p0` (`verify.rs` `SLOT_CAVEAT_TAG_FIELD_DELTA`, an EXACT signed
+delta, not a `|Δ| ≤ p0` bound), which is exactly what `HeapAtom.deltaEquals` lifts to
+(`.fieldDelta`, `Exec/Program.lean`). The prior decode named `.deltaBounded`, a SEMANTIC
+MISMATCH with the tag's runtime meaning; it is corrected here. The `|Δ| ≤ p0` bounded twin
+(`deltaBounded`) takes its own fresh tag FIELD_DELTA_BOUNDED 20 (`pi::SLOT_CAVEAT_TAG_FIELD_DELTA_BOUNDED`).
+Tags 9..12 (monotonic-sequence, temporal-gate, sender-authorized, allowed-transitions) are
+slot-shaped or multi-input and are NOT heap-liftable single-key atoms — they decode `none` on
+the heap plane, matching the landed single-key lift (`5e0558fdc`'s named tail). FAIL CLOSED. -/
 def tagHeapAtom (tag p0 : ℤ) : Option HeapAtom :=
   if tag = 1 then some (.equals p0)
   else if tag = 2 then some (.ge p0)
@@ -529,7 +540,8 @@ def tagHeapAtom (tag p0 : ℤ) : Option HeapAtom :=
   else if tag = 5 then some .immutable
   else if tag = 6 then some .monotonic
   else if tag = 7 then some .strictMono
-  else if tag = 8 then some (.deltaBounded p0)
+  else if tag = 8 then some (.deltaEquals p0)
+  else if tag = 20 then some (.deltaBounded p0)
   else none
 
 /-- **The runtime meaning of a heap-domain entry**: every atom its tag decodes to admits
@@ -553,6 +565,39 @@ theorem heapAdmits_strictMono_iff (k : Nat) (key p1 p2 p3 : ℤ) (o n : Value) :
     have ha' : HeapAtom.strictMono = a := Option.some.inj ha
     cases ha'
     exact (evalHeap_strictMono_iff k o n).mpr h
+
+/-- The tag-8 (FIELD_DELTA) decode meets the landed EXACT-delta characterization: a heap-domain
+FIELD_DELTA entry admits exactly when both sides are PRESENT at `heapKey k` and `new = old + d`
+(`evalHeap_deltaEquals_iff`, transported verbatim). THIS is the corrected meaning — the tag's
+live Rust re-eval is the exact `new == old + p0`, so the heap-plane decode is `deltaEquals`,
+NOT the `|Δ| ≤ d` bounded twin. -/
+theorem heapAdmits_deltaEquals_iff (k : Nat) (key d p1 p2 p3 : ℤ) (o n : Value) :
+    (RotCaveatEntry.mk 8 (domainCode .heap) key d p1 p2 p3).heapAdmits k o n ↔
+      ∃ a b, o.scalar (heapKey k) = some a ∧ n.scalar (heapKey k) = some b ∧ b = a + d := by
+  constructor
+  · intro h
+    exact (evalHeap_deltaEquals_iff k d o n).mp (h (.deltaEquals d) rfl)
+  · intro h a ha
+    have ha' : HeapAtom.deltaEquals d = a := Option.some.inj ha
+    cases ha'
+    exact (evalHeap_deltaEquals_iff k d o n).mpr h
+
+/-- The fresh tag-20 (FIELD_DELTA_BOUNDED) decode meets the landed BOUNDED-delta characterization:
+a heap-domain FIELD_DELTA_BOUNDED entry admits exactly when both sides are present and
+`-d ≤ new − old ≤ d` (`evalHeap_deltaBounded_iff`, transported verbatim). The `|Δ| ≤ d` twin the
+tag-8 correction displaced now has its own wire home (`pi::SLOT_CAVEAT_TAG_FIELD_DELTA_BOUNDED`),
+so BOTH the exact and the bounded delta remain heap-expressible — no atom is lost. -/
+theorem heapAdmits_deltaBounded_iff (k : Nat) (key d p1 p2 p3 : ℤ) (o n : Value) :
+    (RotCaveatEntry.mk 20 (domainCode .heap) key d p1 p2 p3).heapAdmits k o n ↔
+      ∃ a b, o.scalar (heapKey k) = some a ∧ n.scalar (heapKey k) = some b ∧
+        -d ≤ b - a ∧ b - a ≤ d := by
+  constructor
+  · intro h
+    exact (evalHeap_deltaBounded_iff k d o n).mp (h (.deltaBounded d) rfl)
+  · intro h a ha
+    have ha' : HeapAtom.deltaBounded d = a := Option.some.inj ha
+    cases ha'
+    exact (evalHeap_deltaBounded_iff k d o n).mpr h
 
 /-- **NAMED PREMISE — `HeapCaveatRuntimeDischarge` (the executor leg DOES NOT exist yet).**
 An executor admission relation `admitsTurn` discharges heap-keyed caveats iff every
@@ -584,14 +629,102 @@ theorem staged_heap_caveat_bridge
   hdis m o n h i k hd hk
 
 #assert_axioms heapAdmits_strictMono_iff
+#assert_axioms heapAdmits_deltaEquals_iff
+#assert_axioms heapAdmits_deltaBounded_iff
 #assert_axioms staged_heap_caveat_bridge
 
 -- The decode-tag alignment, executable (the Rust `SLOT_CAVEAT_TAG_*` numbers).
 #guard tagHeapAtom 6 0 == some .monotonic
 #guard tagHeapAtom 2 50 == some (.ge 50)
+#guard tagHeapAtom 8 4 == some (.deltaEquals 4)   -- FIELD_DELTA 8 = EXACT delta (the tag-8 fix)
+#guard tagHeapAtom 20 5 == some (.deltaBounded 5) -- FIELD_DELTA_BOUNDED 20 = the |Δ| ≤ d twin
 #guard tagHeapAtom 0 0 == none      -- "no caveat" decodes to nothing
 #guard tagHeapAtom 10 0 == none     -- TEMPORAL_GATE is not a single-key heap atom
 #guard tagHeapAtom 12 0 == none     -- ALLOWED_TRANSITIONS is not a single-key heap atom
+
+/-! ## §5b — the CROSS-KEY heap relation bridge (a `RelCaveat`, NOT a single-key `HeapAtom`).
+
+The per-key `HeapAtom` vocabulary above reads ONE key; the cross-key relation
+`record[heap key] ≤ record[heap other_key] + delta` cannot be a `HeapAtom` (each atom reads only
+ITS own key). It is the landed `RelationalCaveat.heapFieldLteOther` (`Exec/RelationalCaveat.lean`
+§8, `evalHeapRel_fieldLteOther_iff`), the atom that lets a Bazaar purse keep BOTH operands in the
+openable heap. Its wire tag is the live `pi::SLOT_CAVEAT_TAG_HEAP_FIELD_LTE_OTHER` number (21); a
+heap-domain entry carrying it packs `key = key`, `p0 = other_key`, `p1 = delta`. SAME posture as
+the per-key bridge: the decode is well-defined and meets the landed admit-char; the runtime
+discharge is the NAMED premise `HeapRelCaveatRuntimeDischarge` (host/scalar-evaluated, exactly like
+the per-key heap caveats — the executor leg is the HORIZONLOG'd follow-up). -/
+
+/-- Decode a heap-domain entry carrying the cross-key tag (21 = `HEAP_FIELD_LTE_OTHER`) into the
+landed `RelationalCaveat.heapFieldLteOther` vocabulary: `key = e.key`, `other_key = e.p0`,
+`delta = e.p1`. Any other tag decodes `none` (this is the cross-key plane; the single-key atoms
+live in `tagHeapAtom`). FAIL CLOSED. Heap keys are `Nat` names (`heapName`); the wire felts are
+cast via `Int.toNat` (caveat heap keys are non-negative indices). -/
+def RotCaveatEntry.relCaveat? (e : RotCaveatEntry) : Option RelCaveat :=
+  if e.typeTag = 21 then some (heapFieldLteOther e.key.toNat e.p0.toNat e.p1)
+  else none
+
+/-- **The runtime meaning of a cross-key heap-domain entry**: the decoded cross-key relation admits
+the post-write `record` — `RelCaveat.eval` at the entry's two heap-key names (the landed
+`heapFieldLteOther`). This is what the executor's heap-caveat discharge must establish for the
+cross-key plane (the `RelCaveat` analog of `heapAdmits`). -/
+def RotCaveatEntry.heapRelAdmits (e : RotCaveatEntry) (rec : Value) : Prop :=
+  ∀ c, e.relCaveat? = some c → c.eval rec = true
+
+/-- PROVEN — the cross-key decode meets the landed characterization: a heap-domain
+HEAP_FIELD_LTE_OTHER entry (tag 21) admits exactly when `record[heap key] ≤ record[heap other_key]
++ delta` (`evalHeapRel_fieldLteOther_iff`, transported verbatim). The wire tag, the landed
+cross-key atom, and the record substrate's `fieldOf` semantics meet in one statement. -/
+theorem heapRelAdmits_fieldLteOther_iff (key other delta p2 p3 : ℤ) (rec : Value) :
+    (RotCaveatEntry.mk 21 (domainCode .heap) key other delta p2 p3).heapRelAdmits rec ↔
+      fieldOf (heapName key.toNat) rec ≤ fieldOf (heapName other.toNat) rec + delta := by
+  constructor
+  · intro h
+    exact (evalHeapRel_fieldLteOther_iff key.toNat other.toNat delta rec).mp (h _ rfl)
+  · intro h c hc
+    have hc' : heapFieldLteOther key.toNat other.toNat delta = c := Option.some.inj hc
+    cases hc'
+    exact (evalHeapRel_fieldLteOther_iff key.toNat other.toNat delta rec).mpr h
+
+/-- **NAMED PREMISE — `HeapRelCaveatRuntimeDischarge`** (the cross-key executor leg does not exist
+yet, the SAME honest boundary as `HeapCaveatRuntimeDischarge`). An executor admission relation
+`admitsTurn` discharges cross-key heap caveats iff every admitted `(manifest, record)` satisfies
+each heap-domain entry's decoded cross-key relation on the post-write `record`. Host/scalar-
+evaluated, like the per-key heap caveats; the HEAP cross-key leg is the HORIZONLOG'd follow-up —
+until it lands, this `Prop` is the honest boundary. -/
+def HeapRelCaveatRuntimeDischarge
+    (admitsTurn : RotCaveatManifest → Value → Prop) : Prop :=
+  ∀ (m : RotCaveatManifest) (rec : Value), admitsTurn m rec →
+    ∀ (i : Fin MAX_CAVEATS),
+      (m.entry i).domainTag = domainCode .heap →
+      (m.entry i).heapRelAdmits rec
+
+/-- The cross-key bridge, assembled: under the named discharge premise, a wire-bound heap-domain
+entry's cross-key relation really was enforced on the admitted post-write record — the staged
+operand's (domain, key, other_key, delta) and the heap cross-key `StateConstraint` semantics
+connect end-to-end the moment the executor leg lands. -/
+theorem staged_heap_rel_caveat_bridge
+    (admitsTurn : RotCaveatManifest → Value → Prop)
+    (hdis : HeapRelCaveatRuntimeDischarge admitsTurn)
+    {m : RotCaveatManifest} {rec : Value} (h : admitsTurn m rec)
+    (i : Fin MAX_CAVEATS)
+    (hd : (m.entry i).domainTag = domainCode .heap) :
+    (m.entry i).heapRelAdmits rec :=
+  hdis m rec h i hd
+
+#assert_axioms heapRelAdmits_fieldLteOther_iff
+#assert_axioms staged_heap_rel_caveat_bridge
+
+-- The cross-key decode-tag alignment (Rust `SLOT_CAVEAT_TAG_HEAP_FIELD_LTE_OTHER` = 21).
+#guard (RotCaveatEntry.mk 21 (domainCode .heap) 130 131 2 0 0).relCaveat?
+  == some (heapFieldLteOther 130 131 2)
+#guard (RotCaveatEntry.mk 3 (domainCode .heap) 130 131 2 0 0).relCaveat? == none -- a single-key tag: no cross-key decode
+-- Both polarities on a concrete record (mirror of `RelationalCaveat.lean` §8):
+-- capacity `new[130] ≤ new[131] + 2`: 5 ≤ 3+2 ADMITS, 6 ≤ 3+2 REFUSES.
+#guard ((heapFieldLteOther 130 131 2).eval (.record [(heapName 130, .int 5), (heapName 131, .int 3)]))
+#guard ((heapFieldLteOther 130 131 2).eval (.record [(heapName 130, .int 6), (heapName 131, .int 3)])) == false
+-- no-underflow `new[130] ≤ new[131]` (delta 0): equal ADMITS, over REFUSES.
+#guard ((heapFieldLteOther 130 131 0).eval (.record [(heapName 130, .int 4), (heapName 131, .int 4)]))
+#guard ((heapFieldLteOther 130 131 0).eval (.record [(heapName 130, .int 5), (heapName 131, .int 4)])) == false
 
 /-! ## §6 — the staged wire artifacts (manifest + probe JSON). -/
 
