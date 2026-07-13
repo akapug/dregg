@@ -8,6 +8,20 @@ lot: per WE-DO-NOT-NAME-WE-SHIP, anything that sits here across many sessions
 should be either scheduled or explicitly demoted to the Research tier with a
 reason.)*
 
+## state-field 32-byte residual — v13 wire+kernel widening (named 2026-07-13, `docs/FINDING-state-field-truncation.md`)
+The acute truncation bug (unrelated turn shreds a pinned 32-byte field) is FIXED
+(`76f7a6603`) and now GUARDED by `exec-lean/tests/state_field_truncation_regression.rs`.
+The RESIDUAL stays open by design: a genuine `Effect::SetField` of a NEW 32-byte value
+into a scalar slot loses its high 24 bytes at the wire (`lean_shadow::field_to_i128`
+= low-8 projection; even `WireValue::Dig` is a `u64`). Reachable in the operated app
+layer (`supply-chain-provenance` TIP_SLOT, `collective-choice` ELECTORATE_ROOT_SLOT,
+`execution-lease` PROVIDER/STATE_DIGEST SetField builder). Closure shape = the v13
+faithful-fields epoch (widen the Lean `setField` value `Int`→32-byte + the wire +
+retire the `fields[0..7]` `from_lossy_31bit_DANGER` fold), OR the design correction
+(relocate 32-byte identities into a `field_limbs8` digest side-table, not a raw scalar
+slot). NOT a local extractor fix — the high bytes are gone at the wire projection.
+Do NOT fire the kernel widening from thin context; sequence WITH the v13 epoch.
+
 ## vk-epoch-nullifier STAGE-E WIRE-CODEC re-applied onto main (2026-07-13, semantic port from `~/dev/bs-vk`)
 The `bs-vk` (vk-epoch-nullifier, 37 commits off a 1231-old fork) deployment wiring is now ON MAIN,
 adapted to main's current APIs — NOT a merge/cherry-pick. Landed (builds + `nullifier` tests green on

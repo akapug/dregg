@@ -103,3 +103,33 @@ relocating 32-byte identities OUT of raw scalar slots — a full cell id belongs
 `circuit/src/effect_vm/helpers.rs:122`), not `PROVIDER_SLOT`. That is the real
 design correction, and any true wire+kernel widening should be sequenced WITH the
 v13 epoch, not ahead of it.
+
+## Status 2026-07-13 — acute fix CONFIRMED in-tree; regression + residual PINNED
+
+A 2026-07-13 re-verification confirmed the acute fix (`76f7a6603`) is live in
+`exec-lean/src/lean_apply.rs::wire_state_to_ledger` (install the produced lane only
+when it differs from the template's low-8 lane) and added the regression guard the
+fix had lacked: `exec-lean/tests/state_field_truncation_regression.rs`. Two PURE
+`wire_state_to_ledger` tests (no Lean FFI, so no `lean_available()` self-skip):
+
+* `pinned_32byte_field_survives_a_touching_turn` — the FINDING's exact scenario
+  (a 32-byte id pinned in `PROVIDER_SLOT`, a turn that bumps the nonce). PASSES
+  now; FAILS on the pre-fix code (the diff of `76f7a6603` shows the pre-fix write
+  was `set_field(idx, i128_to_field(*i))` UNCONDITIONAL).
+* `genuine_setfield_to_a_new_32byte_value_truncates_the_residual` — pins the
+  residual boundary so a future wire widening cannot land silently.
+
+**Residual reachability, sharpened.** The residual is NOT only "nothing in the
+operated trace does it": several apps DO update a 32-byte digest via a genuine
+`Effect::SetField` into a scalar slot — `supply-chain-provenance` `TIP_SLOT ← link`
+(re-pointed on every custody append), `collective-choice` `ELECTORATE_ROOT_SLOT`,
+`execution-lease`'s `SetField` builder for `PROVIDER_SLOT`/`STATE_DIGEST_SLOT`. On a
+node running the default-on Lean producer these lose their high 24 bytes on the
+executing node only (the FINDING's replica-divergence signature). The committed
+`.root()` does NOT catch it because `fields[0..7]` is itself a
+`from_lossy_31bit_DANGER` fold (its own v13 debt), so both producers agree on the
+lossy image — the loss is silent. This is a data-integrity/correctness bug on any
+app that carries a 32-byte root/digest in a raw scalar slot mutated by `SetField`;
+the full fix is the v13 wire+kernel widening (or the design correction: relocate to
+a `field_limbs8` digest side-table), NOT a local extractor change — the high bytes
+are already gone at the wire projection (`lean_shadow::field_to_i128`).
