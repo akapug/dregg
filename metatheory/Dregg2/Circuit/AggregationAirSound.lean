@@ -44,7 +44,7 @@ Non-vacuity BOTH ways: an honest hashed chain satisfies (`honest_satHashed`) and
 (`broken_continuity_unsat`, `forged_final_unsat`).
 
 `#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}); `Poseidon2SpongeCR` is a Prop
-HYPOTHESIS where used, never an `axiom`. New module; not wired into `Dregg2.lean`.
+HYPOTHESIS where used, never an `axiom`. Imported into `Dregg2.lean` (in the trusted, axiom-audited closure).
 -/
 import Dregg2.Circuit.Poseidon2Binding
 

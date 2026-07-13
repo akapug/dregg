@@ -23,7 +23,7 @@ theorem (`§5`: the degenerate floor extracts a "verifying" child for EVERY `(c,
 ones, whereas the real floor cannot — `real_extract_not_total`).
 
 Imports the committed FRI machinery PROVED; adds no `axiom`, no `sorry`, no `def …Hard`, re-assumes no
-hypothesis. New module; NOT wired into `Dregg2.lean` (built directly).
+hypothesis. Imported into `Dregg2.lean` (in the trusted closure).
 -/
 
 namespace Dregg2.Circuit.FriExtractReal

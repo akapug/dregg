@@ -614,21 +614,24 @@ limb 30 = `delegation_epoch & 0x7FFF_FFFF`) and the cleared child snapshot IS bo
 `commitment.rs:805-813`, the limb-24 authority residue). So both legs ARE bindable in the deployed
 commitment.
 
-What is NOT yet circuit-FORCED is the GATE that the descriptor binds the epoch WRITE: revokeDelegation's v1
-face FREEZES `cap_root` on-row (`gCapPass`, see §3.5), and its deployed `revokeDelegationWriteV3` map-op
-forces the cap-tree REMOVE but does NOT yet carry a `writesTo delegation_epoch_before (parent_epoch+1)
-delegation_epoch_after` map-op — so the epoch bump is, at HEAD, a NAMED decode residual (the
-`epochStep` clauses below), carried as data, not yet forced from a deployed write op. This mirrors §3.5's
-named moving-face residual for the frozen-face slots; closing it is the SAME V3-base-on-a-moving-face
-descriptor cutover (a separate VK change), reported as the precise obstruction. The kernel + executor
-+ iff-spec FAITHFULLY execute the epoch step (the child stales) NOW; the descriptor gate for the epoch
-write is the named residual. -/
+The epoch WRITE gate is now FORCED (Census D3, WIRED) — the V3-base cutover this note once named as the
+"not-yet" obstruction has LANDED. Two ways: (i) the deployed `revokeDelegationWriteV3` map-op now carries
+`epochBumpGate` (selector-gated on `sel.REVOKE_DELEGATION`), forcing the committed AFTER epoch limb
+(`B_EPOCH = 30`) = committed BEFORE + 1 — `revokeDelegationWriteV3_forces_epoch_bump`, with the deployed
+forge-rejection `revokeDelegationWriteV3_rejects_wrong_epoch` (`Emit/EffectVmEmitRotationV3.lean`); and
+(ii) the dedicated DUAL descriptor `revokeDelegationFullE` (`Inst/revokeDelegationFullA.lean`) binds the
+whole epoch step as a FORCED second component, so `EffectRefinement.revokeDelegation_circuit_refines_spec`
+(§14.EPOCH) delivers the FAITHFUL `RevokeDelegationFullSpec` with NO carried residual. The `epochStep`
+clauses in this file's `RevokeDelegationFullEncodes` survive only as the LEGACY v1-frozen-face carrier
+(documentation of what the force delivers); they are no longer the load-bearing gap. The kernel + executor
++ iff-spec FAITHFULLY execute the epoch step (the child stales) NOW. -/
 
 /-- **`RevokeDelegationFullEncodes` — the cap-tree REMOVE decode + the epoch-step residual.** Bundles the
 shared `RevokeCapsTreeEncodes` (the cap-edge remove, decode-forced) PLUS the epoch-step residual: the
 post-state's three delegation registries carry the dregg1 `apply_revoke_delegation` legs (parent epoch
-bumped `+1`, child snapshot cleared, child stamp reset). These three `epochStep*` clauses are the NAMED
-residual (deployed-commitment-BOUND — limbs 30 + 24 — but the write GATE is the v1-frozen-face cutover, §3.EPOCH).
+bumped `+1`, child snapshot cleared, child stamp reset). These three `epochStep*` clauses are the LEGACY
+v1-frozen-face carrier (deployed-commitment-BOUND — limbs 30 + 24; the write GATE now FORCES them on the
+successor descriptors — `revokeDelegationWriteV3`'s `epochBumpGate` / the dual `revokeDelegationFullE`, §3.EPOCH).
 DATA-bearing. -/
 structure RevokeDelegationFullEncodes (S8 : Cap8Scheme)
     (pre post : RecChainedState) (parent child : CellId) : Type where

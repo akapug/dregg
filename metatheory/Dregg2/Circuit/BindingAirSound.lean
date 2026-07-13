@@ -31,7 +31,7 @@ keystone fires on a real chain step (`keystone_fires`); a reordered trace whose 
 does NOT satisfy (`reordered_not_satisfies`), so the constraints are genuinely falsifiable.
 
 `#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}); `Poseidon2SpongeCR` is a Prop
-HYPOTHESIS where used, never an `axiom`. New module; not wired into `Dregg2.lean` here.
+HYPOTHESIS where used, never an `axiom`. Imported into `Dregg2.lean` (in the trusted, axiom-audited closure).
 -/
 import Dregg2.Distributed.HistoryAggregation
 import Dregg2.Circuit.Poseidon2Binding

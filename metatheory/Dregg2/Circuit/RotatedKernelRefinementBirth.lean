@@ -357,16 +357,19 @@ theorem createCellFromFactory_descriptorRefines_rejects_wrong_accounts
     False :=
   hwrong (createFromFactory_accounts_forced compressN hN pre post actor newCell vk henc)
 
-/-! ## §4 — spawn: VALUE_PARTIAL. The accounts insert is FORCED; the cap handoff is the PHASE-D residual.
+/-! ## §4 — spawn (LEGACY `spawnV3` rung): the accounts insert is FORCED; the cap handoff is carried
+because THIS rung freezes `cap_root`. (The `caps` edge IS forced on the successor rung — see §3/§5b.)
 
 `SpawnSpec` = createCell-of-child growth (FORCED via `accountsRoot`) PLUS the parent→child CAPABILITY
-HANDOFF (`spawnCapsMap`/`spawnDelegateMap`/`spawnDelegationsMap`). The live descriptor pins `cap_root`
-FROZEN (`gCapPass`); the cap-tree UPDATE the handoff performs cannot be witnessed by the frozen-root
-gate. Forcing it needs the OPENABLE sorted cap-tree update (cap-reshape PHASE-D), NOT yet available.
+HANDOFF (`spawnCapsMap`/`spawnDelegateMap`/`spawnDelegationsMap`). The live `spawnV3` descriptor pins
+`cap_root` FROZEN (`gCapPass`); the cap-tree UPDATE the handoff performs cannot be witnessed by the
+frozen-root gate. Forcing it needs the OPENABLE sorted cap-tree update (cap-reshape PHASE-D) — which now
+EXISTS (`CapTreeUpdate.capInsert_sound` / `SortedTreeNonMembership`) and IS used by §5b `spawnWriteV3`
+(`spawn_caps_forced_sat`) to FORCE the `caps` edge. This LEGACY frozen-root rung does not rebase onto it.
 
-So the handoff (caps/delegate/delegations at `child`) is carried as the NAMED `capHandoff` decode
-residual — stated precisely as the spec's three handoff equations — NOT claimed bound. The accounts
-insert + born-empty growth IS forced. -/
+So on THIS rung the handoff (caps/delegate/delegations at `child`) is carried as the NAMED `capHandoff`
+decode residual — stated precisely as the spec's three handoff equations — NOT claimed bound. The
+accounts insert + born-empty growth IS forced. -/
 
 /-- The decode relating a satisfying FIX spawn witness's row to a kernel `pre → post` spawn. The
 accounts-root columns + the FIX gate (the FORCED leg); the spawn guard; the born-empty create-leg
@@ -386,8 +389,10 @@ structure spawnGenuineEncodes (compressN : List FieldElem → FieldElem)
   frLifecycle : post.kernel.lifecycle = fun c => if c = child then 0 else pre.kernel.lifecycle c
   frDeathCert : post.kernel.deathCert = fun c => if c = child then 0 else pre.kernel.deathCert c
   frBal : post.kernel.bal = fun c a => if c = child then 0 else pre.kernel.bal c a
-  -- ⚑ THE PHASE-D RESIDUAL: the parent→child capability handoff. The live `cap_root` is FROZEN
-  -- (`gCapPass`), so these THREE cap-tree updates are NOT circuit-forced — carried, named, here.
+  -- ⚑ THE HANDOFF RESIDUAL (this LEGACY `spawnV3` rung): the parent→child capability handoff. The
+  -- live `cap_root` is FROZEN (`gCapPass`), so these THREE cap-tree updates are NOT circuit-forced on
+  -- THIS rung — carried, named, here. (§5b `spawnWriteV3` FORCES the `caps` edge via the cap-write
+  -- rotation + `effCapInsertV3`; the `delegate`/`delegations` pointer moves stay named there.)
   capHandoff : post.kernel.caps = spawnCapsMap pre.kernel actor child target
   delegateHandoff : post.kernel.delegate = spawnDelegateMap pre.kernel actor child
   delegationsHandoff : post.kernel.delegations = spawnDelegationsMap pre.kernel actor child

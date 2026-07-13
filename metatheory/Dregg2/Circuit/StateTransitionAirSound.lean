@@ -42,7 +42,7 @@ Non-vacuity BOTH ways: an honest 2-step chain satisfies (`honest_satisfies`) and
 satisfy (`broken_continuity_unsat`, `wrong_step_init_unsat`, `forged_digest_unsat`).
 
 `#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}); `Poseidon2SpongeCR` is a Prop
-HYPOTHESIS where used, never an `axiom`. New module; not wired into `Dregg2.lean`.
+HYPOTHESIS where used, never an `axiom`. Imported into `Dregg2.lean` (in the trusted, axiom-audited closure).
 -/
 import Dregg2.Circuit.Poseidon2Binding
 

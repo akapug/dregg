@@ -43,7 +43,7 @@ CR-discharged) an honest opening BINDS (`honest_opening_binds`); on a NON-inject
 IS a witnessed collision (`constant_sponge_equivocates` — the CR floor is load-bearing, not vacuous).
 
 `#assert_axioms`-clean (⊆ {propext, Classical.choice, Quot.sound}); `Poseidon2SpongeCR` is a Prop
-hypothesis where used, never an `axiom`. New module; not wired into `Dregg2.lean` here.
+hypothesis where used, never an `axiom`. Imported into `Dregg2.lean` (transitively, via `StarkSoundFriLdt`/`AlgoStarkSoundTransferV3`, which CONSUME `commitmentOpening_binds_of_poseidon2CR` on the deployed soundness path).
 
 ## Remaining wire to `OodInterpF.hood`
 
