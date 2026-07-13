@@ -433,3 +433,82 @@ deferred to the coordinated flag-day. **Do not fire it piecemeal.**
 - Descriptor swap the `AccumulatorOpenEmit` header calls out (inline map-op lane → after-spine) for
   `nullifier_root` @ limb 26 (+ a `revoked_root` instantiation); VK regeneration; land in the SAME
   flag-day as the parked umem VK epoch (design §6 — one flag-day, not piecemeal).
+
+## 11. Stage E grounded — the runtime verifiers ALREADY EXIST (integration, not new crypto)
+
+The Lean half is LANDED green + axiom-clean (§9 gate + the apex/cascade + the kernel gate-bridge
+`Exec/NullifierAccumulatorKernelBridge.lean`: `noteSpendNullifierAcc` advances the committed
+`nullifierRoot` via the proven `spendNullifierRoot`; the double-spend/anti-replay/revocation teeth
+reduce to the banked lemmas through `toNfAccState`). The roots are FROZEN — no effect advances them
+at runtime yet. Stage E makes them LIVE. Ground truth of the deployed pieces:
+
+- `circuit/src/heap_root.rs:375` **`insert_witness(new_leaf) -> Option<HeapInsertWitness>`** — the
+  deployed sorted-Merkle-heap insert: returns `None` for a present key (the fail-closed leg) or a
+  witness carrying `{new_leaf, siblings, directions, old_root, new_root}`. THIS is the runtime twin of
+  the Lean `NfAccWitness` (GapOpen8 non-membership + fresh-key insert); `compute_heap_root` /
+  `compute_canonical_heap_root_8` is the root function `RestHashIffFrame` binds.
+- `circuit/src/non_membership.rs` — `verify_accumulator_non_membership` / `prove_…` (the STARK
+  RSA-accumulator flavor with an alpha challenge; the OTHER accumulator — used by revocation/suspension
+  DSL, not the sorted-heap nullifier root). The nullifier root is the sorted-heap flavor.
+- `cell/src/nullifier_set.rs` — the sorted-set `prove_non_membership` (binary-search neighbors) B18
+  flags for incrementalization; the same sorted discipline the tree commits.
+
+### TWO models — recommend MODEL 1 first (sound, kills the perf bomb, no wire-witness)
+
+**Model 1 — executor-maintained sorted tree (the first cutover, RECOMMENDED).** The executor already
+maintains the nullifier SET (today the `List`); swap it for the deployed `CanonicalHeapTree8` and on a
+noteSpend call `insert_witness` → advance the kernel `nullifierRoot` to `witness.new_root` (fail-closed
+when it returns `None` = present key). State stays executor-authoritative (O(n) memory) but per-op is
+O(log n) — this KILLS the O(all-history) List scan (audit bomb #1/#2) AND makes the root live +
+committed. NO wire-witness, NO effect-payload/NodeAuthC signature ripple. The Lean spec it matches is
+`noteSpendNullifierAcc` (root advances) + `noteSpendNullifierAcc_no_double_spend` (present key ⇒ no
+witness ⇒ `insert_witness` returns `None`). Cutover cost: `lean_apply.rs` noteSpend arm + a differential
+test `advanced_root == compute_heap_root(set ∪ {nf})` at every step + Lean seed rebuild (executor binary
+changes). This is the honest "make it live" minimal step.
+
+**Model 2 — client-witnessed O(1) state (the follow-on refinement).** Retire the executor-side set;
+the client carries the `HeapInsertWitness` on the wire (`UMemCodec.lean` + `lean_apply.rs` + the
+NodeAuthC payload — the wide signature ripple), the executor VERIFIES it against the committed root and
+advances. True O(1) state, set never crosses the wire — the original design intent (ember: "client-side
+seems fine"). Soundness: a valid witness ⟹ `NfAccWitness` (so `present_no_witness` gives fail-closed);
+the runtime verifier must be proven to match the Lean `NfAccWitness` acceptance (the E1 obligation).
+Do AFTER Model 1 is deployed + stable — it is a strictly harder, wider change on the same committed root.
+
+### Stage E work split (Model 1 first)
+- **E1 (Lean, pure — green-checkable, no deploy risk):** if `noteSpendStmt`'s executor meaning is to
+  advance the root, extend it (or add `noteSpendStmtAcc`) and prove the advance equals
+  `noteSpendNullifierAcc`'s — reusing the bridge. Optional for Model 1 (the Rust executor is the
+  authority; the Lean spec `noteSpendNullifierAcc` already exists) — needed for the in-circuit teeth.
+- **E2 (Rust, deploy-affecting):** `lean_apply.rs` noteSpend arm maintains the `CanonicalHeapTree8`,
+  advances `nullifierRoot`; differential test `advanced == compute_heap_root(set')`; retire the
+  List-on-wire at cutover; rebuild the Lean seed on hbox; spot-check a gate-ON spend finalizes + the
+  cross-platform executor differential re-agrees.
+- **F (circuit/VK):** descriptor swap + VK regen (unchanged from §10.F).
+
+## 12. Stage E RECON FINDING (B) — no executable Lean heap-root; the root is a trust-boundary fork
+
+Grounded recon (isolated branch): the nullifier-accumulator model is purely ABSTRACT.
+- `Heap8Scheme` (`DeployedHeapTree.lean:36`) is a hypothesis carrier: opaque field `chipAbsorb8 :
+  List ℤ → Digest8` + CR hypothesis `chip8CR`. NO concrete instance exists in-tree (only mocks
+  `refChipAbsorb8`/`badChipAbsorb8` for the cap non-vacuity lane).
+- `Digest8 = Fin 8 → ℤ`; `NfAccWitness.newRoot` is a client-supplied FIELD; `spendNullifierRoot` is
+  `{s with nullifierRoot := w.newRoot}` — it ASSIGNS the supplied root, never computes it. The bridge
+  theorems (`noteSpendNullifierAcc_no_double_spend`, …) are sound but about the ABSTRACT witness
+  relation; they do not constrain what a runtime root-computer emits.
+- The ONLY executable root fold is RUST: `circuit/src/heap_root.rs` `compute_canonical_heap_root_8`
+  (:529) + `CanonicalHeapTree8::insert_witness` (:763, `None` for a present key = fail-closed).
+
+### The fork (ember's call — a trust-boundary, not a wiring, decision)
+- **Path B (§11 Model-1 as written):** the trusted Rust root-computer in `lean_apply.rs` advances
+  `nullifierRoot ← insert_witness.new_root`. Faster, deploy-affecting, BUT the committed root is
+  produced by trusted Rust OUTSIDE the Lean-verified executor core (stage F's circuit re-verifies
+  in-STARK, but the executor path does not). Erodes the verified-executor thesis.
+- **Path A (RECOMMENDED — keeps the root in the verified core):** build the executable Lean heap-root
+  via the ALREADY-ACCEPTED storage-in-lean `@[extern]`/`@[export]` precedent (`Dregg2/Storage/
+  Deployed.lean`: `@[extern "dregg_poseidon2_2to1"] poseidon2Hash`, verified Lean logic over the real
+  Rust Poseidon2 primitive, `@[export]` for Rust callback). Concrete `Heap8Scheme` calling the extern
+  chip + an executable `CanonicalHeapTree8` Lean twin (sorted insert) + a refinement proof that the
+  executable fold matches the abstract-scheme ops the banked lemmas use ⇒ the verified Lean `interp`
+  itself advances the root. Same extern-Poseidon2-in-verified-core trust boundary the storage epoch
+  ALREADY embraced (NOT a new TCB assumption) — coherent with the storage-in-lean north star. Larger
+  greenfield; Lean-green + refinement-proved before any deploy.

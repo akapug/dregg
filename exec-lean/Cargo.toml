@@ -28,6 +28,11 @@ dregg-coord = { path = "../coord" }
 dregg-captp = { path = "../captp" }
 dregg-federation = { path = "../federation", default-features = false }
 dregg-intent = { path = "../intent" }
+# RUNTIME (VK-epoch stage E2, Path B): the deployed `heap_root::{CanonicalHeapTree8,
+# recompose_membership_8, insert_witness}` are the FAST O(depth) nullifier-root advance the shadow
+# executor runs in production (`nullifier.rs`), NOT just a test dependency. The verified Lean
+# `advanceRoot8Exec` is the proven spec + the offline KAT differential (`dregg-lean-ffi`, gated tail).
+dregg-circuit = { path = "../circuit" }
 blake3 = "1"
 postcard = { version = "1", features = ["alloc"] }
 serde = { workspace = true }
@@ -37,8 +42,6 @@ ed25519-dalek = { version = "2", features = ["hazmat"] }
 
 [dev-dependencies]
 dregg-cell = { path = "../cell", features = ["test-stubs"] }
-# The denotational-census differential names the full `dregg_circuit::effect_vm::Effect` universe.
-dregg-circuit = { path = "../circuit" }
 
 [lints]
 workspace = true

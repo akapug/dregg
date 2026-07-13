@@ -8,6 +8,25 @@ lot: per WE-DO-NOT-NAME-WE-SHIP, anything that sits here across many sessions
 should be either scheduled or explicitly demoted to the Research tier with a
 reason.)*
 
+## vk-epoch-nullifier STAGE-E WIRE-CODEC re-applied onto main (2026-07-13, semantic port from `~/dev/bs-vk`)
+The `bs-vk` (vk-epoch-nullifier, 37 commits off a 1231-old fork) deployment wiring is now ON MAIN,
+adapted to main's current APIs — NOT a merge/cherry-pick. Landed (builds + `nullifier` tests green on
+hbox): `exec-lean/src/nullifier.rs` (the `ShadowNullifierAccumulator` — the live O(depth) Rust
+nullifier-root advance over the DEPLOYED `heap_root::CanonicalHeapTree8::insert_witness`, fail-closed
+on a present key = the `present_no_witness` face); `exec-lean/src/lib.rs` (`LeanShadowObserver` holds
+the durable frontier `Arc<Mutex<…>>`, advances it on every committed `NoteSpend`, exposes
+`nullifier_root()`/`nullifier_root_faithful()` — the seam the item-3 wire feed plugs into);
+`exec-lean/Cargo.toml` (dregg-circuit → runtime dep); `docs/NULLIFIER-ACCUMULATOR-DESIGN.md` (the map).
+ADAPTATION: main's `HeapLeaf` is the arity-3 IMT leaf (`next_addr` pointer) vs bs-vk's arity-2 → use
+`HeapLeaf::entry(addr,value)` + recompose from the witness's LINKED `new_leaf.digest8()`. Composes with
+the ALREADY-ON-MAIN Lean proof (`Exec/NullifierAccumulator.lean`, `NullifierAccumulatorKernelBridge`,
+`Circuit/SortedTreeNonMembershipHeap8`). GATED TAIL (ember stage-F flip, NOT ported — coupled to a Lean
+seed rebuild, would break the JSON round-trip + fail to link on main): the `WireState.nullifier_root`
+field + the FFI marshal/`lean_direct` 13th-field codec (main's Lean `FFI.lean`/`FFIDirect.lean` WState
+has no `nullifierRoot`, no `dregg_d_st_nullifier_root` export), the `lean_shadow` wire feed, and the
+`dregg_nullifier_advance` FFI bridge (needs the absent `Dregg2.Circuit.DeployedHeapRootFFI` Lean module).
+Per design §10: the wire field-add IS the VK-epoch flip, coordinate with the parked umem VK epoch.
+
 ## GAP #4 availability wrap-forgery class CLOSED + DEPLOYED (2026-07-13, VK-regen capstone `887b95e76`)
 The whole transfer-shaped cohort is now hardened IN THE DEPLOYED CIRCUIT: all 10 members (5 narrow +
 5 wide — transfer, cap-open eff/TB, fee, and their wide twins) route to their `*Avail` descriptors
