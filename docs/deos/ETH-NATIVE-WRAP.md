@@ -1,5 +1,20 @@
 # ETH Native Wrap: a fast native-circuit proof bridge (retiring the SP1 path)
 
+> ⚑ **STATUS (2026-07-12) — this plan is now largely EXECUTED, via the shrink
+> architecture.** The wrap exists: real apex → BN254-native shrink
+> (`DreggOuterConfig`) → gnark full native STARK verify → **real Groth16
+> (12.2M R1CS; setup 13m11s, prove 39 s, verify 2 ms) settling in Foundry
+> against the gnark-generated Solidity verifier**
+> (`chain/contracts/DreggGroth16Verifier25.sol`), with the 25-lane statement
+> bound through the shrink's `expose_claim` channel and BOTH shrink + apex VKs
+> pinned in-circuit. Measured settle gas: **626k** (the 384-byte proof blob with
+> commitments + PoK — higher than this doc's ~250–300k plain-Groth16 estimate).
+> NAMED RESIDUALS: the trusted setup is a single-party DEV ceremony (prod needs
+> MPC); the apex-pin constant is fixture-lifted (RecursionVk-derive pending);
+> `bridge/src/ethereum.rs`'s submitter still assumes the 256-byte blob;
+> `outboundMessageRoot` stays operator-attested; FRI low-degree soundness is
+> assumed. Current-state detail: `WRAP-NATIVE-HASH-DECISION.md` §CURRENT STATE.
+
 > ⚠ **CORRECTION (2026-07-11) — see `WRAP-NATIVE-HASH-DECISION.md`.** This doc's
 > efficiency premise (proving cost ∝ constraint count ≈ the verifier's field ops,
 > implying seconds) is INCOMPLETE: it planned the gnark circuit around **BabyBear**

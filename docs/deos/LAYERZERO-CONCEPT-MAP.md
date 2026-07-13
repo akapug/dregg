@@ -28,10 +28,16 @@ hidden.
 ## Where dregg still has a committee (the honest rows)
 
 - **Asset mirroring (pump.fun $DREGG → the shielded pool):** the Solana-side
-  lock is observed by an **oracle/validator-set threshold attestation** —
-  functionally an X-of-Y DVN, and the Solana lock program is *named, not
-  built*. `bridge/` (`TOKEN-MIRROR-BRIDGE.md`); trustless upgrade path in
-  `TRUSTLESS-SOLANA-BRIDGE.md` / `SOLANA-SUCCINCT-WRAPPER.md`.
+  lock *settle* is observed by an **oracle/validator-set threshold
+  attestation** — functionally an X-of-Y DVN (the lock program itself is built:
+  `solana-lock/`). The trustless consensus-verified read path is built and
+  anchored (governance-pinned `WeakSubjectivityAnchor`, no caller-supplied
+  stake table) — `bridge/` (`TOKEN-MIRROR-BRIDGE.md`,
+  `TRUSTLESS-SOLANA-BRIDGE.md` / `SOLANA-SUCCINCT-WRAPPER.md`).
+- **The EVM `outboundMessageRoot` leg:** the settlement contract's message root
+  is **operator-attested**, not proof-bound (the named 26th-public-input
+  obligation) — a real committee-of-one residual on the message leg, distinct
+  from the proof-carried state roots.
 - **Midnight:** native proof-carrying is foreclosed by Midnight's architecture
   (fixed-VK per entry point, no general verification primitive), so the bridge
   there is optimistic + a **1-of-N watchtower fraud proof** — strictly stronger
@@ -45,8 +51,11 @@ hidden.
 ## What LayerZero has that dregg does not
 
 - **Deployed ubiquity.** Endpoints on 100+ chains, live DVN/executor markets.
-  dregg's EVM settlement is a testnet-ready contract set with the wrap prover
-  pending (`docs/deos/ETH-NATIVE-WRAP.md`).
+  dregg's EVM settlement is a contract set + a real Groth16 wrap prover — a
+  real proof settles against the gnark-generated Solidity verifier in Foundry —
+  but with a dev-ceremony trusted setup and no public-chain deployment yet
+  (`docs/deos/ETH-NATIVE-WRAP.md`, residuals in
+  `WRAP-NATIVE-HASH-DECISION.md` §CURRENT STATE).
 - **Arbitrary app-to-app messaging (OApp).** LayerZero moves any payload
   between contracts; dregg's cross-chain surface is purposive — settlement,
   value, credentials. (Anything expressible as a dregg turn is provable, but
@@ -57,8 +66,9 @@ hidden.
 A LayerZero-style token bridge exists because chain A cannot check what
 happened on chain B, so a committee escrows-and-attests. dregg's settlement
 object is a *proof of everything that happened* — any chain with a pairing
-precompile can verify dregg state transitions directly (one ~250–300k-gas
-Groth16 check), and dregg-side assets stay in the holder's custody under the
+precompile can verify dregg state transitions directly (one Groth16-class
+check; measured 626k gas for the 25-lane commitment-extended settle), and
+dregg-side assets stay in the holder's custody under the
 shielded pool rather than moving into a bridge wallet. The remaining genuine
 committee (the SPL mirror's lock oracle) is scoped to *inbound value*, and has
 a designed trustless replacement.

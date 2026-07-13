@@ -23,25 +23,36 @@ front door.
 
 ## The three moves
 
-**Prove it.** `bridge/src/solana_holdings.rs::prove_holding_consensus` takes a
-`HoldingProof` — the holder's own SPL token account plus the Tower-BFT consensus
-evidence for its finalized slot — and returns a `ProvenHolding` at
-`LockProofTrust::ConsensusVerified`. It verifies, fail-closed (any failure is an
-`Err`, never a trusted holding):
+**Prove it.** `bridge/src/solana_holdings.rs::prove_holding_consensus_anchored`
+— the production entry — takes a `HoldingProof` (the holder's own SPL token
+account plus the Tower-BFT consensus evidence for its finalized slot), a
+governance-pinned `WeakSubjectivityAnchor`, and the proof's `StakeProvenance`,
+and returns a `ProvenHolding` at `LockProofTrust::ConsensusVerified`. It
+verifies, fail-closed (any failure is an `Err`, never a trusted holding):
 
 1. the account is owned by the **SPL Token program** (`owner_program`), or its
-   165-byte `data` is not an authoritative balance — the load-bearing forgery check
+   165-byte `data` is not an authoritative balance — a load-bearing forgery check
    (below);
 2. the `data` decodes as an SPL token `Account` (`decode_spl_token_account`:
    `mint(32) ‖ owner(32) ‖ amount_le(8)`) and the mint is the configured `$DREGG` mint;
-3. the evidence epoch matches the tracked `EpochStakeTable.epoch`;
+3. the `EpochStakeTable` + authorized voters are **derived from Solana's own bank
+   state** and admitted only against the pinned anchor (`from_anchor` +
+   `tally_authorized`) — never supplied by the caller (the other load-bearing
+   forgery check, below);
 4. ≥ 2/3 of the epoch's active stake validly voted `(slot, bank_hash)` — real per-vote
    Ed25519 + stake-weighted sum (`solana_consensus::verify_supermajority`);
 5. the `bank_hash` recomputes from its committed components (binding the accounts hash);
 6. the holder account's per-account hash includes into that accounts hash via the SAME
    16-ary fan-out the `$DREGG` mint path proves the vault with
    (`solana_wire::verify_account_inclusion_16ary`);
-7. if a PoH segment is present (or required), its tick chain links the slot's blockhash.
+7. if a PoH segment is required, its tick chain links from the anchored checkpoint
+   blockhash under the bounded `PohAnchorPolicy`.
+
+So the claim is precise: the holding proof is trustless **over a
+governance-pinned weak-subjectivity anchor** — the standard light-client trust
+model — not trustless from nothing. The deployed configuration must pin the
+real governance-chosen `(epoch, stake_table_root)`; the path fails closed
+without one.
 
 **Keep it.** Nothing in that path moves a lamport. The account observed is the
 holder's own — `HoldingAccount`, never a vault. The Lean model makes this a theorem,
@@ -100,6 +111,21 @@ and the holder still controls it via the SPL `Account.owner` field (that owner i
 wallet that gets the weight). Dropping the check reintroduces the exact forgery the
 vault path defends against; `NotSplTokenProgram` refuses it.
 
+### The second load-bearing forgery check: no caller-supplied stake table
+
+An adversarial audit (2026-07-12) found that the originally shipped path —
+`prove_holding_consensus` over a caller-supplied `EpochStakeTable` — was itself
+a **forgery**: "≥ 2/3 of stake" over a table the attacker wrote is vacuous (a
+1-key attacker table plus one self-signed vote clears its own supermajority,
+yielding a `ConsensusVerified` holding of `u64::MAX` — and the owner-program
+check is vacuous under a forged table too). The fix routes every production
+`ConsensusVerified` through the anchored provenance path (step 3 above); the
+bare-table entries are `#[cfg(test)]`/`test-utils`-gated. Verified: the
+attacker's 1-key stake table rejects (`AnchorRootMismatch`) on both the bridge
+path and the production watcher (`dregg-pay/src/watcher.rs::verify_consensus`,
+which calls `prove_holding_consensus_anchored`), and a plain build has no
+bare-table→`ConsensusVerified` path.
+
 ## The decision is the verified Lean object (Lean-first, `@[export]`)
 
 The weight VERDICT is not decided by Rust. The ed25519 binding verify, the
@@ -133,8 +159,10 @@ decision is the Lean-proven object or it is not made.
 
 **Real and tested (default gate, both polarities):**
 
-- The non-custodial verifier: `prove_holding_consensus` and the forgery/mint/decode
-  refusals. `bridge/tests/solana_holdings.rs` runs, by default, a holder's own 165-byte
+- The non-custodial verifier: `prove_holding_consensus_anchored` (production;
+  the bare-table `prove_holding_consensus` is test-gated) and the
+  forgery/mint/decode refusals, including the forged-stake-table reject.
+  `bridge/tests/solana_holdings.rs` runs, by default, a holder's own 165-byte
   SPL account included under an 80%-stake finalized bank hash proving a
   `ConsensusVerified` holding (a); the SAME account over RPC yielding only
   `StructureOnly` (b); a 40% sub-super-majority refused (c); wrong-mint (d), too-short
@@ -158,12 +186,14 @@ decision is the Lean-proven object or it is not made.
 
 **Residual (named, not yet closed):**
 
-- **Live-feed ingestion.** The consensus fixtures are constructed in-test. Wiring a
-  real Solana feed (parsing live vote `Transaction`s into `ValidatorVote`s, sourcing and
-  rotating the `EpochStakeTable` from the stake program, the exact mainnet
-  accounts-hash preimage/fan-out, a bounded/recursive PoH anchor policy) is the mainnet
-  wire-format adapter layer — the same residual `TOKEN-MIRROR-BRIDGE.md` names for the
-  lock path.
+- **Live-feed ingestion.** The consensus fixtures are constructed in-test. The
+  *machinery* is built (real vote-`Transaction` parsing, bank-state-derived
+  stake tables + rotation, the real 16-ary accounts-hash format, the anchored
+  PoH policy — `solana_wire.rs` / `solana_provenance.rs`); the residual is
+  wiring a live Solana feed into it (a geyser/snapshot source for the
+  accounts-hash inclusion proofs and harvested vote transactions —
+  `SOLANA-DEVNET.md` names what RPC hides), plus the operator pinning the real
+  governance-chosen anchor.
 - **In-circuit fold.** The consensus verify is real but *off-circuit* —
   re-executing-validator grade, not yet folded into an AIR so a succinct dregg light
   client (rather than a re-executor) attests it. That is the succinct wrapper

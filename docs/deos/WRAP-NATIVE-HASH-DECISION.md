@@ -134,14 +134,12 @@ both matter.
    (b) **GKR-batch the reduced openings** (one sumcheck replaces ~14,300 per-column
    ExtMuls → the ~3.2M residual toward ~0.3M). Full stack → **~1.5–2M**.
 
-**⚠ FLAG — the rotated-proof pipeline is BROKEN at HEAD on `mldsa-sign-route`:**
-`generate_rotated_effect_vm_trace` panics (wide-commit carrier count 59≠56,
-out-of-bounds at `circuit/src/effect_vm/trace_rotated.rs:3650/3663`, debug+release),
-so `k_fold_turn_chain_proves_and_verifies` and the `*_deployed_tooth` tests fail
-before proving. Exp 1's apex perm count is therefore *extrapolated* (m_apex 16–19,
-the dominant remaining uncertainty), not from a real apex proof. This regression
-(likely from in-flight DEBT-A wide-commit carrier work) blocks end-to-end wrap
-validation and should be fixed.
+**⚠ FLAG — RESOLVED (2026-07-12).** At the time of the experiments the
+rotated-proof pipeline was broken at HEAD (`generate_rotated_effect_vm_trace`
+panicked on a 59≠56 wide-commit carrier count), so Exp 1's apex perm count was
+*extrapolated*, not from a real apex proof. The carrier flag-day landed the same
+day; real apexes prove again, and everything in the sections below runs on a
+REAL apex's shrink proof.
 
 ## ⚑ MEASURED (2026-07-12): native-hash VerifyFri assembled + the hashing bet CONFIRMED
 
@@ -163,9 +161,9 @@ shared fold path). Emulated ~40.9M lands in the ~30-70M band; native ~1.0M in th
 **Honest scope of this measurement:** the synthetic instance is SINGLE-MATRIX — it exercises
 the FRI-core hashing + one fold chain, NOT the batch-STARK reduced-opening residual (the ~3.2M
 term above from ~752 opened columns × 19 queries). So it validates the DOMINANT HASHING term
-directly and strongly; the full ~5.2M native total awaits the reduced-opening assembly + the
-Rust shrink layer (`DreggOuterConfig`). It verifies a synthetic native-hash FRI, not a real
-dregg apex (that needs the shrink layer). Verification boundary: the gadget + canaries +
+directly and strongly. (At the time of this measurement, the full native total still awaited
+the reduced-opening assembly + the Rust shrink layer — both landed the same day; see the
+current-state section below.) Verification boundary: the gadget + canaries +
 challenger 61.9× were re-confirmed independently; the 40M-compile total is the committed
 measurement test's figure (reproducible).
 
@@ -187,3 +185,46 @@ Then: prototype the Rust shrink layer (`DreggOuterConfig` = `Poseidon2Bn254` MMC
 Resolve the gnark version gap: dregg is on gnark v0.11.0 (no native Poseidon2 std);
 bump to v0.15+ (ships `std/permutation/poseidon2`, 187 R1CS measured) or hand-roll a
 ~187-constraint native BN254 Poseidon2.
+
+## ⚑ CURRENT STATE (2026-07-12) — the wrap exists end-to-end; scope and residuals
+
+Everything above is the decision + measurement record. The state as of 2026-07-12,
+after three adversarial critics forced scope corrections (HORIZONLOG.md, "SCOPE
+CORRECTION" / "EVM SETTLEMENT REAL END-TO-END" / "APEX-VK PIN" entries):
+
+- **The full pipeline runs on real data:** a real 2-turn dregg apex folds
+  (~4–6 min) → shrinks BN254-native under `DreggOuterConfig` (blowup 8, ~95 s)
+  → gnark does the FULL native STARK verify on the real shrink proof (transcript
+  + FRI core + commitment-bound openings + symbolic constraint-eval + 5 quotient
+  identities + LogUp balance) → **a real Groth16 proof settles on-chain in
+  Foundry against the gnark-generated Solidity verifier**
+  (`chain/contracts/DreggGroth16Verifier25.sol`, `DreggSettlementRealProof.t.sol`;
+  626k gas measured). Wrong-root / tampered-proof canaries reject via the real
+  pairing.
+- **The real circuit size:** 12,207,321 R1CS (larger than the ~5.2M estimated
+  above — the full batch-STARK verify with symbolic constraint-eval costs more
+  than the FRI-core extrapolation). Still feasible: Groth16 setup 13m11s/23 GB,
+  prove 39 s, verify 2 ms (M2 Max).
+- **Statement binding:** the 25-lane apex claim (genesis/final root, numTurns,
+  chainDigest) is re-exposed through the shrink proof's own `expose_claim` table
+  (transcript-absorbed + AIR-constrained) and bound to the 25 gnark public
+  inputs. BOTH the shrink VK and the deployed apex's VK-core are pinned as
+  circuit constants (mismatches reject; the pins are measured load-bearing).
+
+**Named residuals (each real, none silently absorbed):**
+1. **Dev trusted setup** — the Groth16 ceremony is single-party (toxic waste
+   known to the runner). Production needs an MPC/PoT ceremony before any
+   real-value deployment.
+2. **Apex-pin constant is fixture-lifted** (trust-on-compile from the real
+   fixture); strengthening = derive it independently from `RecursionVk`
+   (`accumulator.rs`).
+3. **Bridge submitter blob** — `settle()` now takes the 384-byte proof blob
+   (commitments + PoK); `bridge/src/ethereum.rs`'s `EthSettlementProof` /
+   `Groth16Calldata` still assume 256 bytes.
+4. **`outboundMessageRoot` is operator-attested**, not proof-bound (the 26th
+   public-input obligation).
+5. **FRI low-degree soundness is assumed** (the `StarkSound` half (i) — the
+   standard FRI conjecture, not discharged).
+6. The "gnark == Lean `AirChecksSatisfied`" tie is an ANALOGY, not a mechanized
+   refinement (the `GnarkRefines` obligation in
+   `docs/deos/FRI-VERIFIER-PROOF-ENGINEERING.md` remains open).

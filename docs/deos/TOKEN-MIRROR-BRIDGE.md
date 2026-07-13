@@ -103,36 +103,50 @@ aggregated to one epoch key), reused here directly. An optional **watchtower**
 "trust the quorum" into "trust the quorum *unless* anyone proves fraud", but it
 still rests on at least one honest watching party and an on-Solana fraud oracle.
 
-**The trustless path (BUILT to `ConsensusVerified`):** a real trustless mirror
-needs dregg to *verify the Solana lock itself*, not trust an attestation. This
-is now the **Solana light client** route, and its cryptography + consensus
-arithmetic are real (no longer a stub): `verify_lock_proof_consensus`
-(`bridge/src/solana_trustless.rs`) reaches `LockProofTrust::ConsensusVerified` by
-checking, against a tracked per-epoch `EpochStakeTable`, that ≥ 2/3 of active
-stake validly voted the claimed `bank_hash` (real per-vote Ed25519 +
-stake-weighted sum + duplicate collapse via `verify_supermajority`), that the
-`bank_hash` recomputes from its committed components (`BankHashComponents::compute`,
-binding the accounts hash + PoH tail), that the vault account's lock record is
-included in that accounts hash (`verify_accounts_inclusion`, domain-separated
-sorted Merkle), and — when present — that the PoH tick chain links the slot's
-blockhash to a verified anchor (`verify_poh_segment` / `verify_poh_anchored`).
-It routes through the SAME `credit_lock` conservation accounting as the trusted
-path. Full design (Option A vs B, the migration): `docs/deos/TRUSTLESS-SOLANA-BRIDGE.md`.
+**The trustless path (BUILT to `ConsensusVerified` — anchored only):** a real
+trustless mirror needs dregg to *verify the Solana lock itself*, not trust an
+attestation. This is now the **Solana light client** route, and its
+cryptography + consensus arithmetic are real (no longer a stub). The trustless
+production entry is `verify_lock_proof_consensus_anchored`
+(`bridge/src/solana_trustless.rs`): it takes **no caller-supplied stake table**
+— the `EpochStakeTable` + authorized voters are *derived from Solana's own bank
+state* and admitted only against a governance-pinned `WeakSubjectivityAnchor`.
+It then checks that ≥ 2/3 of effective stake validly voted the claimed
+`bank_hash` (real per-vote Ed25519 + stake-weighted sum + duplicate collapse),
+that the `bank_hash` recomputes from its committed components (binding the
+accounts hash + PoH tail), that the vault account's lock record is included in
+that accounts hash, and — when required — that the PoH tick chain links to the
+anchored checkpoint. It routes through the SAME `credit_lock` conservation
+accounting as the trusted path.
+
+⚠ **The anchor requirement is load-bearing, not decoration** (adversarial
+audit, fixed 2026-07-12): `ConsensusVerified` over a *caller-supplied* stake
+table was a forgery (an attacker's 1-key table clears its own "≥ 2/3");
+the bare-table entries are now `#[cfg(test)]`/`test-utils`-gated and every
+production path is anchored. "Trustless" here means the standard light-client
+trust model: trustless over a pinned recent checkpoint the operator must
+configure. Full design + the honest residuals:
+`docs/deos/TRUSTLESS-SOLANA-BRIDGE.md`.
 
 The **zk proof of the lock** (a SNARK/STARK attesting "account X held ≥ N $DREGG
 locked at slot S under program P") is the *other* route and remains distinct: the
 **Ethereum** side of this repo already has the STARK→SNARK→EVM *settlement*
-pattern (`bridge/src/ethereum.rs`, gap = the gnark Groth16 STARK-verifier
-circuit), but the *inbound* zk-proof-of-lock for Solana is **not** reusable from
-the ETH settlement path.
+pattern (`bridge/src/ethereum.rs` + the `chain/gnark` Groth16 wrap — real, with
+a dev-ceremony trusted setup; residuals in `WRAP-NATIVE-HASH-DECISION.md`
+§CURRENT STATE), but the *inbound* zk-proof-of-lock for Solana is **not**
+reusable from the ETH settlement path.
 
-**The honest gap that remains** is narrowed to the **mainnet wire-format
-adapter layer** (`solana_trustless.rs` calls it out explicitly): parsing real
-vote `Transaction`s into `ValidatorVote`s, sourcing/rotating the
-`EpochStakeTable` from Solana's stake program, the exact accounts-hash
-fan-out/preimage, and a bounded/recursive PoH anchor policy. The `LockProofTrust`
-dial tells the caller exactly which level a verification achieved, so the
-structural check (`StructureOnly`) can never be mistaken for the consensus check.
+**The honest gaps that remain** (the wire-format adapter layer this paragraph
+used to name is now built — real vote-`Transaction` parsing, bank-state-derived
+stake tables with rotation, the real 16-ary accounts-hash format, the anchored
+PoH policy; `bridge/src/solana_wire.rs` + `solana_provenance.rs`): the
+governance-pinned anchor itself is the irreducible operator-configured trust
+root; the lock-record account layout is a deploy-time choice; bank-hash
+version extras (EAH slots, lt-hash) are unmodeled; and the Option-B succinct
+wrapper (O(1) on-dregg verify) remains the named optimization. The
+`LockProofTrust` dial tells the caller exactly which level a verification
+achieved, so the structural check (`StructureOnly`) can never be mistaken for
+the consensus check.
 
 ## The payment path (end-to-end, real rails)
 
@@ -171,17 +185,20 @@ flows through the one verified value rail.
 - **Real (trustless successor):** the Solana-consensus verification —
   stake-weighted Ed25519 vote check, bank-hash recompute/binding, sorted-Merkle
   accounts inclusion, PoH tick-chain linking — reaching
-  `LockProofTrust::ConsensusVerified` (`bridge/src/solana_trustless.rs`,
+  `LockProofTrust::ConsensusVerified` **only via the anchored path** (a
+  governance-pinned `WeakSubjectivityAnchor`; caller-supplied stake tables are
+  test-gated — see the ⚠ note above) (`bridge/src/solana_trustless.rs`,
   `bridge/src/solana_consensus.rs`; design `docs/deos/TRUSTLESS-SOLANA-BRIDGE.md`).
 - **Now built (was a named gap):** the Solana-side lock-vault SPL program —
   `solana-lock/` (`dregg-solana-lock`: `processor.rs`, `state.rs`, `instruction.rs`,
   `attestation.rs`, `record.rs`, with `tests/lock_flow.rs` / `tests/unlock_flow.rs`).
   Earlier drafts of this doc listed it as named-not-built; it is a real program now.
-- **Not built (named gaps):** the
-  mainnet **wire-format adapter layer** for the trustless path (real vote
-  `Transaction` parsing, `EpochStakeTable` sourcing/rotation, exact
-  accounts-hash preimage, PoH anchor policy); the inbound zk-proof-of-lock
-  route; the executor wiring that grants the mirror cell `EFFECT_MINT` authority
+- **Not built (named gaps):** the Option-B succinct zk-proof-of-lock route
+  (the relayer consensus AIR — the wire-format adapter layer this bullet used
+  to name is now built: `solana_wire.rs` real vote-`Transaction` parsing,
+  `solana_provenance.rs` bank-state-derived stake tables + rotation, the real
+  16-ary accounts-hash format, the anchored PoH policy);
+  the executor wiring that grants the mirror cell `EFFECT_MINT` authority
   over its own issuer well in a live `World` (the effect is produced here;
   minting it requires the mirror cell to hold mint authority — see
   `turn/src/executor/apply.rs`, `holds_mint_authority`).

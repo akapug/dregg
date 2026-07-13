@@ -1,5 +1,12 @@
 # Finding: the legacy census — EVM contracts, bridge trust models, and chain-agnostic participation (2026-07-11)
 
+> ⚑ **Dated finding — §1's gaps have since been closed (2026-07-12).** The
+> 25-lane statement is now bound end-to-end: `DreggSettlement.sol` +
+> `DreggGroth16Verifier25.sol` exist and a real Groth16 proof settles in
+> Foundry (dev trusted setup; residuals in `docs/deos/WRAP-NATIVE-HASH-DECISION.md`
+> §CURRENT STATE). The findings below record the pre-close state that drove
+> that work.
+
 Three parallel file:line-grounded sweeps (contracts vs proving stack; governance/voting/passkeys;
 bridge trust models) answering: what is legacy, what needs vast upgrading, and what is missing for
 (a) no-wrap multi-chain, (b) non-custodial voting, (c) governance anyone can join from any chain.

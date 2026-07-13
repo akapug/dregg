@@ -18,9 +18,10 @@ The shrink measurement context (HORIZONLOG.md:7725-7746): log_blowup 6
 (blowup **64**), degree_bits `[9,9,15,14,15]` (2^15-row tables), 19 FRI
 queries + 16 PoW bits (`dregg_outer_config.rs:120-124`), CPU-only Plonky3,
 12 cores. The already-ranked lever list there puts **blowup rebalance first**
-(config-only via `create_outer_config_with_fri`, plausibly 18 min → 1–3 min)
-and GPU third. This doc is the GPU lever, planned so it *compounds* with the
-rebalance instead of racing it.
+(config-only via `create_outer_config_with_fri`) and GPU third. The rebalance
+has since LANDED and was measured: blowup 64→8 cut the shrink prove **760 s →
+95 s (8×)** on a real apex (130-bit held). This doc is the GPU lever, planned
+so it *compounds* with the rebalance instead of racing it.
 
 ### The hot loops (both provers, same three)
 
@@ -265,9 +266,10 @@ streams row-chunks.
   wgpu beat the RISC0-Metal reference architecture on this machine; no native
   escalation needed for the NTT.** (Remaining P2 tail: inverse/coset wiring
   behind `GpuDft` + the in-prover run.)
-- **P3 — the shrink (BN254) decision, post-rebalance:** first land the
-  HORIZONLOG lever #1 blowup rebalance (config-only, 18 min → est. 1–3 min,
-  compounds with everything here). Only if the rebalanced shrink still binds:
+- **P3 — the shrink (BN254) decision, post-rebalance:** the HORIZONLOG lever
+  #1 blowup rebalance is LANDED + measured (blowup 64→8: shrink prove 760 s →
+  95 s on a real apex; compounds with everything here). Only if the rebalanced
+  shrink still binds:
   BN254 Poseidon2-t3 limb kernels (WGSL per ZPrize precedent, or Futhark/HIP
   on hbox, or ICICLE-CUDA on a rented 4090-class box — 24 GB VRAM suffices per
   §5). Until then the shrink stays a CPU/server cost, which its
@@ -303,8 +305,10 @@ accelerator. One kernel suite, both halves of the thesis.
   any CUDA plan.
 - **Expected band:** microprobe-measured ~10-35× field-arithmetic headroom on
   M2 Max; end-to-end prover **unmeasured** (P2 produces the honest number).
-  The 18-min shrink is expected to fall to low minutes via the *rebalance*
-  (config-only) before GPU BN254 work is even evaluated.
+  The 18-min shrink DID fall via the *rebalance* (config-only, measured ~95 s
+  at blowup 8) before GPU BN254 work was evaluated; the GPU MMCS wiring on top
+  is Amdahl-capped ~2-2.5× (GPU-PROVER-WIRING-PLAN.md §6 — kernel-level 38-64×
+  offload numbers do NOT translate to whole-prover speedups).
 - **Validated this session:** platform probes (hbox/persvati GPUs); WGSL
   BabyBear Montgomery parity + throughput on Metal; ICICLE's Plonky3/Metal/AMD
   gaps (cited). **Not validated:** any NTT/Poseidon2/Merkle GPU kernel,

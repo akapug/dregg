@@ -52,7 +52,10 @@ Set these in the operator's secured env (`/etc/dregg/pay.env`, mode 0600 — see
 2. **Watch-only dry run.** `DREGG_PAY_NETWORK=mainnet`, real `DREGG_PAY_RPC`, **no
    sweeper key loaded.** Confirm the `SolanaWatcher` (reusing `bridge/src/
    solana_holdings.rs`'s consensus-verified SPL decode) *sees* a real deposit to a
-   derived address and credits the right user. No spending yet.
+   derived address and credits the right user. No spending yet. For the
+   consensus-verified (not RPC-trusting) read the watcher requires a pinned
+   `WeakSubjectivityAnchor` — configure the real governance-chosen
+   `(epoch, stake_table_root)`; the anchored path fails closed without it.
 3. **One small real payment**, end-to-end: send a few `$DREGG` to a user's derived
    deposit address → the watcher credits → a paid `/dungeon` run executes on real
    Bedrock under the per-user cap → the **MPC-TLS attestation** is handed back

@@ -24,9 +24,9 @@ This document specifies the trustless upgrade: replace "trust the oracle's word
 that the lock happened" with "verify a proof that the lock happened, anchored in
 Solana's own consensus."
 
-The existing **outbound** zk pattern (`bridge/src/ethereum.rs`, `chain/`'s SP1
-guest) is the *wrong direction* for this: it wraps a dregg STARK so an EVM
-contract can verify dregg's finality. Inbound proof-of-lock is the dual problem
+The existing **outbound** zk pattern (`bridge/src/ethereum.rs`, the
+`chain/gnark` Groth16 wrap) is the *wrong direction* for this: it wraps a dregg
+STARK so an EVM contract can verify dregg's finality. Inbound proof-of-lock is the dual problem
 — verify *Solana's* finality inside dregg — and shares no machinery with it.
 
 ## Why Solana is materially harder than Ethereum (be honest)
@@ -285,10 +285,22 @@ from an irreducible weak-subjectivity anchor.
 The trustless entry point is `verify_lock_proof_consensus_anchored(proof,
 spl_mint, min, max, anchor, require_poh, poh_policy)` (and
 `MirrorState::mint_against_lock_proof_anchored`): it takes **no trusted stake
-table** — only the anchor + the proof's `StakeProvenance`. The older
-`verify_lock_proof_consensus(…, stake_table, …)` remains as the lower-level
-consensus primitive (the supermajority arithmetic over an already-obtained
-table).
+table** — only the anchor + the proof's `StakeProvenance`.
+
+**⚠ The bare-table entry is NOT a production path (fixed 2026-07-12).** An
+adversarial audit found that shipping `verify_lock_proof_consensus(…,
+stake_table, …)` (and the holdings twin `prove_holding_consensus`) as callable
+production entries was a **forgery**: `ConsensusVerified` off a caller-supplied
+`EpochStakeTable` means "≥2/3 of a table the attacker wrote" — a 1-key attacker
+table trivially clears its own supermajority. The fix routes **every**
+production `ConsensusVerified` through the anchored provenance path
+(`from_anchor` + `tally_authorized` against a governance-pinned
+`WeakSubjectivityAnchor`); the bare-table functions are now
+`#[cfg(test)]`/`test-utils`-gated (the supermajority arithmetic they exercise
+is still the real primitive underneath the anchored path). Verified: the
+attacker's 1-key stake table rejects (`AnchorRootMismatch`) on both the bridge
+path and the production watcher (`dregg-pay`), and a plain build has no
+bare-table→`ConsensusVerified` path.
 
 ### Warmup/cooldown effective stake — pass 4 (`bridge/src/solana_provenance.rs`)
 
@@ -319,7 +331,10 @@ window.
 1. **The weak-subjectivity anchor itself** is trusted. This is irreducible: a
    from-genesis-trustless Solana light client would replay all history. Every
    deployed light client (ETH included) trusts a recent finalized checkpoint;
-   `WeakSubjectivityAnchor` is dregg's, named as such.
+   `WeakSubjectivityAnchor` is dregg's, named as such. **Operator residual:**
+   the deployed configuration must pin the real governance-chosen
+   `(epoch, stake_table_root)` — the anchored path fails closed without one,
+   and "trustless" holds only over the pinned anchor.
 2. **The two-epoch leader-schedule snapshot offset.** The warmup/cooldown curve
    (the *magnitude* of each validator's stake) is now exact; *which* epoch index
    the consensus stake-weight snapshot is taken at (Solana's leader schedule is the

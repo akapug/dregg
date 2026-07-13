@@ -1,5 +1,15 @@
 # Native Proof Bridges: Ethereum (wrap) and Midnight (foreclosed)
 
+> ⚑ **STATUS (2026-07-12):** this survey's ETH milestone 2 (an SP1/RISC0 zkVM
+> guest) was superseded by the **native gnark circuit** path
+> (`ETH-NATIVE-WRAP.md` → `WRAP-NATIVE-HASH-DECISION.md`), which is now built:
+> a real Groth16 wrap (12.2M R1CS, dev trusted setup) settles a real proof in
+> Foundry against the gnark-generated Solidity verifier, 25-lane statement
+> bound, shrink + apex VKs pinned. Residuals (dev ceremony, fixture-lifted apex
+> constant, 384-byte submitter blob, operator-attested `outboundMessageRoot`,
+> assumed FRI low-degree) are listed in `WRAP-NATIVE-HASH-DECISION.md`
+> §CURRENT STATE. The survey below stands as the feasibility record.
+
 What it would take to settle a dregg whole-history proof *natively* — by proof,
 not by federation attestation — onto an external chain. Grounded in the actual
 proving stack at HEAD, not general ZK lore.

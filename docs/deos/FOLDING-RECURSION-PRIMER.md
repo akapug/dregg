@@ -4,8 +4,9 @@
 The honest headline: folding is the prover-speed frontier for IVC, but for dregg it
 collides with TWO things dregg deliberately chose — post-quantum safety and the small
 (BabyBear) field. So folding is the architecture to **watch and evaluate as PQ-folding
-matures**, not a now-move. Meanwhile the hash-based wrap we just proved end-to-end
-(native-hash + blowup-rebalance + GPU) is the PQ-preserving path.*
+matures**, not a now-move. Meanwhile the hash-based wrap that now runs end-to-end
+(native-hash + blowup-rebalance; GPU wiring measured, Amdahl-capped ~2-2.5×) is
+the PQ-preserving path.*
 
 ## 1. The problem folding solves: recursion is expensive
 
@@ -128,9 +129,9 @@ isn't PQ) and the **BabyBear small field** (folding wants a big commitment field
 the emulation tax we just escaped, or rewrite the AIRs).
 
 So the dregg-honest path:
-1. **Now**: keep optimizing the hash-based wrap — native-hash (done, proven end-to-end),
-   blowup-rebalance (sweeping), GPU/ICICLE (prototyping), AIR-trace reduction. This preserves
-   PQ + BabyBear speed and directly attacks the ~18-min shrink.
+1. **Now**: keep optimizing the hash-based wrap — native-hash (done, runs end-to-end on a
+   real apex), blowup-rebalance (landed, measured 8×: shrink ~95 s), GPU wiring (measured,
+   Amdahl-capped ~2-2.5×), AIR-trace reduction. This preserves PQ + BabyBear speed.
 2. **Watch**: **LatticeFold / PQ folding** as it matures — it is the only folding path that
    keeps dregg's PQ guarantee. If it becomes practical, *that* is dregg's folding future.
 3. **Prototype-when-worth-it**: a Sonobe/HyperNova spike would teach us the real numbers, but
