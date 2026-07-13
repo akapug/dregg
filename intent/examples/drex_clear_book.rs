@@ -264,21 +264,16 @@ fn main() {
         Authorization::Signature([0u8; 32], [0u8; 32]),
     );
 
-    if dregg_intent::verified_gate::gate().is_some() {
-        println!("verified executor: a Lean `dregg_record_kernel_step` gate IS registered —");
-        println!("  every leg is cross-checked against the REAL FFI export; drift fails closed.");
-    } else {
-        println!("verified executor: FFI-free target — no Lean gate registered here, so each leg");
-        println!(
-            "  runs the IN-PROCESS proved transition (`recKExecAsset`, the SAME gate the Lean"
-        );
-        println!(
-            "  `RingFFI.ffi_export_realises_settleRing_leg` proves the export realises). On a"
-        );
-        println!(
-            "  native node the `dregg-exec-lean` gate additionally cross-checks the real export."
-        );
-    }
+    // This example is an FFI-free target: it registers no `IntentVerifiedGate`, so each leg runs
+    // the IN-PROCESS proved transition (`recKExecAsset`, the SAME gate the Lean
+    // `RingFFI.ffi_export_realises_settleRing_leg` proves the export realises). On a native node the
+    // installed `dregg-exec-lean` gate ADDITIONALLY cross-checks each leg against the real
+    // `dregg_record_kernel_step` export and fails closed on any drift.
+    println!("verified executor: FFI-free target — no Lean gate registered here, so each leg runs");
+    println!("  the IN-PROCESS proved transition (`recKExecAsset`); a native node additionally");
+    println!(
+        "  cross-checks the REAL `dregg_record_kernel_step` export and fails closed on drift."
+    );
 
     let (pre, post) =
         settle_fulfillment_verified(&sealed, &ring.settlements).expect("the ring settles");
