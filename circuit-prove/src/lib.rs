@@ -48,5 +48,6 @@ pub mod presentation_leaf_adapter;
 pub mod recursive_witness_bundle;
 pub mod shielded;
 pub mod shielded_spend_leaf_adapter;
+pub mod solvency_leaf_adapter;
 pub mod sovereign_leaf_adapter;
 pub mod zkoracle_leaf_adapter;
