@@ -403,3 +403,12 @@ outward decisions.
 - **DrEX tower = 7 rungs** (1 fairness · 2 aggregation · 4 uniform-price optimality · 5 priced/partial/multi-pair · 6 never-insolvent liquidity · 7 cross-margin-via-mandate), all kernel-clean; LedgerRealization welds rung-1 + rung-5-full-fill to the REAL recKExec (kernel-real). Shielded-pool ABI `_refines_` PROVEN.
 - **DrEX CLICKABLE** (drex-web/): REAL extension-wasm wallet proving (PQ signed turn + conservation proof bound to order + tamper-reject) — verified. Matcher mirror being replaced with the REAL solver→verified_settle→recKExec pipeline.
 - Replyable distance ≈ one broadcast (funding) + host/record the demo. DrEX/OCIP buildout bar MET.
+
+## ⚡ REPLY-GATE CLEARED + WHALE REPLY POSTED (07-13, late)
+- **All 3 reply-gate welds DONE + verified:** shielded-pool circuit weld (e020e717e, 6/6 teeth, forged→UNSAT); caveat-in-circuit BIGNUM-hardened (6b3f9e64d — 130-bit u128-safe, CaveatBignumCompare Lean-proven borrowSub_iff, real-scale); real DrEX matcher (2045770ec — mirror DELETED, real solver.rs→verified_settle→recKExec via POST /clear, verified fixture-only clearside).
+- **The moat** (41c25eb1c): solvency leaf + {note-spend ⊕ solvency} structured-product fold, 7/7, reusable-as-a-leaf.
+- **bs-vk wire-codec RECOVERED onto main** (7b1343314): the vk-epoch-nullifier stage-E shadow-executor nullifier-root ADVANCE (insert_witness_aafi — MORE faithful than bs-vk's raw insert), 5/5. NOT a merge. Stage-F VK-regen = ember-gated tail.
+- **Nullifier freshness IS proven in-circuit** (main): RotatedKernelRefinementNotesFresh + SortedTreeNonMembership + NullifierAccumulator bridge — the 'PHASE-D not available' comments were STALE, REWRITTEN true. Stale-comment sweep (e548ac087): 8 fixed, 5+ open left accurate.
+- **WHALE REPLY POSTED by ember** — honest, graded, points at the live Base-Sepolia tx + real-matcher clickable DrEX + shielded/mandate proofs + Robinhood TSLA inbound.
+- **NOW SWARMING:** launchpad MVP for Robinhood Chain (NOXA down = the gap; fair-by-theorem differentiator); GPU-fold (re-dispatch, local Metal, contention down); DrEX rung-3 private matching (ring over shielded notes — unblocked by the shielded weld); provably-solvent lending (undercollateralization-impossible).
+- Robinhood: inbound REAL (TSLA proven in, weak-subjectivity); launchpad MVP building; deploy key funded, held on ember. Base-Sepolia settlement LIVE (tx 0xbd2cac6a…).
