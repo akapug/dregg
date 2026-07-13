@@ -757,6 +757,7 @@ import Dregg2.Circuit.StarkSoundAssembled
 import Dregg2.Circuit.StarkSoundFriLdt
 import Dregg2.Circuit.FriColumnDecode
 import Dregg2.Circuit.StarkSoundColumnCfg
+import Dregg2.Circuit.LightClientDeployed
 import Dregg2.Circuit.TraceColumnInterp
 import Dregg2.Circuit.FieldIntegerLift
 import Dregg2.Circuit.FriExtractReal
