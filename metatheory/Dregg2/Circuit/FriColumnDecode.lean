@@ -142,7 +142,7 @@ end GenericField
 prime (`Int.cast` is the canonical ring map `ℤ → ZMod p`) and indexed over the `Fin 16`
 Reed–Solomon domain (leaf `i` ↦ domain point `ω₁₆^i`). Out-of-range reads default to `0`
 (the bridge quantifies over what the column IS, so padding carries no soundness weight). -/
-def decodeColumn (col : List Int) : Fin 16 → BabyBear :=
+noncomputable def decodeColumn (col : List Int) : Fin 16 → BabyBear :=
   fun i => ((col.getD (i : ℕ) 0 : Int) : BabyBear)
 
 /-- **The Int→field fold transport**: if the committed integers satisfy the division-free
@@ -375,7 +375,7 @@ theorem friColumnIdentification_of_columnDecode
 /-- **The shrunk residual assembled**: a `ColumnDecodeBridge` plus the OOD/leg codeword
 decode yields the full `DeployedTraceDecode` — `accept_folds` is now CONSTRUCTED from the
 verifier-vocabulary residual (proximity untouched, still load-bearing downstream). -/
-def deployedTraceDecode_of_columnDecode
+noncomputable def deployedTraceDecode_of_columnDecode
     (hash : List Int → Int) (R : Registry)
     (perm : List Int → List Int) (RATE : Nat) (toNat : Int → Nat)
     (params : FriParams) (vk : RecursionVk Int) (checks : FriChecks Int)
