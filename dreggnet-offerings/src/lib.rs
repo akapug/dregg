@@ -34,6 +34,7 @@
 //! core resolves that action on the substrate; the executor stays the sole referee on every
 //! surface. [`mock::MockFrontend`] is the reference renderer the tests drive.
 
+pub mod character;
 pub mod dungeon;
 pub mod host;
 pub mod mock;
