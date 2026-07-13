@@ -8053,3 +8053,25 @@ proof), NOT FORGERY-resistance (can't MINT a malicious-apex proof) — Finding 2
 deployed dregg apex's preprocessed commitment (the RecursionVk fingerprint, accumulator.rs) as a constant in
 SettlementCircuit + assert the apex-preprocessed-commitment public input == it (same pattern as the working shrink-VK
 pin). Then a same-shape malicious apex REJECTS. Launching. (3rd critic, 3rd real hole/overclaim found — the discipline holds.)
+
+## ⚑ 4th CRITIC (opus, whole-settlement audit) — composition SOUND; 2 honesty corrections + 1 caveat (2026-07-13)
+GOOD: the 3 fixes COMPOSE soundly (Finding 4 — no apex-A/apex-B seam: statement lanes 0..25 + apex-VK lanes 25..33
+are ONE expose_claim instance, one in-circuit apex, same commitment pinned into verify AND re-exposed lanes; both
+reject directions + unpinned-control pass). open_input/FRI sound (Finding 5; FRI-low-degree the standard assumed half).
+NO new runtime forgery.
+CORRECTIONS (the "complete" claim overreached):
+1. [Finding 1] ON-CHAIN STALE: DreggGroth16Verifier25.sol + settlement_groth16.json (commit c8b08bf46, pre-pin) were
+   NOT regenerated after the apex-pin commits (5a132f875, 4db61bd6f) → the DEPLOYED verifier embeds the PRE-PIN VK →
+   the same-shape-apex forgery is closed in the CIRCUIT but LIVE in the committed on-chain artifact. "Both VKs pinned"
+   = true of the gnark circuit, FALSE of the deployed verifier at HEAD. FIX: the Groth16-regen (running) — verify when it lands.
+2. [Finding 2] RecursionVk ANCHOR is DECORATIVE — recursion_vk_hex is validated only as 32-byte hex + used in error
+   msgs/println; NOTHING asserts the fingerprint against an authoritative pinned value. The pin's real authority =
+   source-integrity of the apex circuit at HEAD (the fresh-fold breaks fixture-self-certification — a real improvement),
+   NOT a checked cryptographic light-client anchor. DOWNGRADE the code/doc language "light-client trust anchor /
+   deployed-circuit-authoritative" → "trust-the-deployed-circuit-source". STRENGTHENING (real): bake a GOVERNANCE-PINNED
+   RecursionVk constant + ASSERT the derived fingerprint == it (weak-subjectivity, like the Solana anchor fix) → makes
+   the anchor actually-checked, not decorative. [sequence after the regen frees chain/gnark]
+3. [Finding 3] SCOPE CAVEAT: the whole pipeline has only run on an IncrementNonce apex, NEVER a Transfer (the Transfer
+   body fails host admission on the sibling wide-registry flag-day). The "settles a real state root" demo is on an
+   economically-trivial effect; the value-bearing Transfer path has never traversed the full wrap. Awaits the sibling registry.
+4th critic found NO new forgery (unlike critics 1-3) — the fixes hold; the corrections are honesty + on-chain freshness.
