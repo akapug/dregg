@@ -7986,3 +7986,42 @@ CORRECTED CLAIM: Solana holdings = trustless-ARITHMETIC over a TRUSTED stake tab
 FIX (the closure EXISTS, it's a WIRING fix): route holdings through from_anchor + tally_authorized against a
 governance-PINNED WeakSubjectivityAnchor (like verify_lock_proof_consensus_anchored + check_pinned_anchor); stop
 passing a bare EpochStakeTable into any production entry; add the forged-table REJECT test. Launching.
+
+## EVM SETTLEMENT: statement-binding + real Groth16 LANDED — named follow-ups (2026-07-12)
+Audit gaps CLOSED this session: (1) the shrink layer now RE-EXPOSES the apex's 25-lane claim through its own
+expose_claim table (shrink_apex_to_outer_exposed, apex_shrink_gnark_export.rs) and chain/gnark's SettlementCircuit
+binds the 25 gnark PUBLIC inputs to that transcript-absorbed + AIR-constrained channel (wrong-root canaries reject at
+3 escalation levels, incl. a fully re-derived forged transcript); (2) REAL Groth16 over the 12,207,321-constraint
+R1CS — setup 13m11s / prove 39s / verify 2ms on M2 Max — with the gnark-generated Solidity verifier
+(chain/contracts/DreggGroth16Verifier25.sol) and a REAL proof settling in Foundry (DreggSettlementRealProof.t.sol,
+7/7; whole suite 92/92); (3) the vacuous sym==nil "hand" verify mode (witnessed Alu/Poseidon2 folded values) REMOVED.
+NAMED FOLLOW-UPS (each a real lane, none load-bearing for the above claims):
+- TRUSTED SETUP is the single-party DEV ceremony (toxic waste known to the runner). Production needs an MPC/PoT
+  ceremony before any real-value deployment. The generated verifier itself is real.
+- APEX-VK PIN: the shrink proof's OWN preprocessed digest is pinned as a circuit constant (shrink-VK core), but the
+  APEX's preprocessed commitment rides as shrink-circuit public inputs (Public-table rows) and is NOT yet
+  independently pinned in-circuit; chain-level apex anchoring remains the RecursionVk fingerprint discipline.
+  Closing it likely means exposing those common-data lanes through the same expose_claim channel (or
+  into_recursion_input_pinned) — a shrink-circuit + emitter + gnark lane.
+- BRIDGE HOST SUBMITTER: settle() gained (commitments[2], commitmentPok[2]) — the Groth16 proof blob is now 384
+  bytes, not 256. bridge/src/ethereum.rs's V2 ABI mirror is updated, but EthSettlementProof/Groth16Calldata still
+  assume the 256-byte blob; the live submitter needs the 12-word layout when it targets the new contract.
+- outboundMessageRoot stays operator-attested (pre-existing named residual, unchanged).
+- plonky3-recursion (emberian fork): emit_shrink_symbolic.rs extended (+expose_claim instance, num_public_values,
+  v2 JSON) — uncommitted in that repo, alongside that repo's pre-existing in-flight changes.
+
+## ⚑⚑⚑ EVM SETTLEMENT REAL END-TO-END (2026-07-12) — critic's holes CLOSED, verified myself
+The audit's two chasms are closed + a real Groth16 proof settles on-chain. VERIFIED MYSELF (ran the tests):
+- STATEMENT BINDING (sound): the 25-lane apex claim is re-exposed through the SHRINK proof's OWN expose_claim table
+  (transcript-observed + ExposeClaimAir-constrained via the quotient identity), NOT the forgeable naive single-eval
+  binding (correctly rejected). SettlementCircuit exposes 25 gnark:",public" lanes == the transcript-bound channel.
+  Circuit-level wrong-root canaries reject (3 escalation levels incl. re-prove-or-fail).
+- REAL SNARK: R1CS 12.2M; Setup 13m11s/23GB (UNSAFE dev ceremony); Prove 39s; Verify 2ms. Generated Solidity verifier.
+  FOUNDRY 7/7 with the REAL verifier (I ran it): real proof SETTLES on-chain (626k gas); wrong genesis/final root +
+  tampered commitment/proof-point REJECT via the real pairing. (Fixed a real commit-based-range-checker Solidity quirk.)
+- VACUOUS HAND MODE REMOVED (sym==nil gone; Alu/Poseidon2 trace tampers now reject).
+RESIDUALS (named): dev trusted setup (→prod MPC); apex-preprocessed-commitment unpinned (chain RecursionVk discipline);
+bridge submitter needs the 12-word blob layout; outboundMessageRoot operator-attested. SENDING A 3rd CRITIC on the
+binding soundness (is the expose_claim channel forgery-free / the wrong-root reject non-vacuous?) — 2/2 critics found
+real holes, this fresh claim gets the same treatment.
+SCORECARD: 3 critics dispatched; EVM (no-SNARK/no-binding/mock) → CLOSED+verified; Solana (trusted table) → CLOSED+verified.
