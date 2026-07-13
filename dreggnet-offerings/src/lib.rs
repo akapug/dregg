@@ -35,7 +35,10 @@
 //! surface. [`mock::MockFrontend`] is the reference renderer the tests drive.
 
 pub mod dungeon;
+pub mod host;
 pub mod mock;
+
+pub use host::{HostError, OfferingHost, OfferingInfo};
 
 use dregg_app_framework::TurnReceipt;
 

@@ -21,6 +21,21 @@
 //! decoration — a crafted POST of a dimmed affordance still lands as a real
 //! [`Outcome::Refused`](dreggnet_offerings::Outcome::Refused) on the substrate.
 //!
+//! ## The multi-offering catalog — all offerings, any surface
+//!
+//! [`WebState`] above hosts offering #0 alone. [`CatalogState`] + [`catalog_router`] make the web a
+//! **multi-offering catalog** over the frontend-agnostic [`OfferingHost`]: browse the registered
+//! offerings and play ANY of them in the browser through the SAME verbs, the `Session` type erased.
+//! - `GET  /offerings`                           — the catalog (a card + "play" link per offering);
+//! - `GET  /offerings/{key}/session/{id}`        — open (lazily) + render an offering session;
+//! - `POST /offerings/{key}/session/{id}/act`    — advance ONE real turn on that offering + re-render;
+//! - `GET  /offerings/{key}/session/{id}/verify` — re-verify that offering's committed chain.
+//!
+//! [`catalog_default_host`] registers three heterogeneous offerings — a dungeon (game), a council
+//! (governance), a market (commerce). Because some sessions are `!Send`, the host runs on ONE owning
+//! thread behind a `Send + Sync` [`HostThread`] handle (the discord-bot `Store` pattern generalised
+//! to a whole registry) — the SAME host a Telegram / WeChat frontend adopts unchanged.
+//!
 //! ## Honest scope
 //! This renders the affordance [`Surface`] as HTML **directly** (server-rendered forms). The
 //! fuller path — `deos-js` + `deos-web-cells` (the live signal-bound web cell rendering, where
@@ -31,6 +46,7 @@
 //! playing through, executor-refereed, `verify` holding.
 
 use std::collections::HashMap;
+use std::sync::mpsc::{SyncSender, sync_channel};
 use std::sync::{Arc, Mutex};
 
 use axum::{
@@ -42,11 +58,13 @@ use axum::{
 };
 use serde::Deserialize;
 
-use deos_view::{SessionFormBackend, SurfaceBackend, ViewNode};
+use deos_view::{MenuItem, SessionFormBackend, SurfaceBackend, ViewNode};
+use dreggnet_council::{CandidateProposal, CouncilOffering};
+use dreggnet_market::MarketOffering;
 use dreggnet_offerings::dungeon::{DungeonOffering, DungeonSession};
 use dreggnet_offerings::{
-    Action, DreggIdentity, Frontend, Offering, Outcome, SessionConfig, SessionId, Surface,
-    VerifyReport,
+    Action, DreggIdentity, Frontend, HostError, Offering, OfferingHost, OfferingInfo, Outcome,
+    SessionConfig, SessionId, Surface, VerifyReport,
 };
 
 /// What the web frontend last presented for a session — the deos [`Surface`] and the cap-gated
@@ -140,7 +158,7 @@ impl Frontend for WebFrontend {
     /// always maps to the SAME identity (mirroring the Discord `UserCipherclerk::derive(...)
     /// .public_key_hex()` derivation *shape*).
     fn identity(&self, user: String) -> DreggIdentity {
-        DreggIdentity(blake3::hash(user.as_bytes()).to_hex().to_string())
+        web_identity(&user)
     }
 
     /// Open an (empty) surface slot for `session`.
@@ -490,6 +508,16 @@ fn web_user(headers: &HeaderMap, query: &WebQuery) -> String {
     "anon".to_string()
 }
 
+/// **Derive a web user's frontend-agnostic [`DreggIdentity`]** — `blake3(user)` hex. Deterministic
+/// (the SAME user → the SAME identity), mirroring the Discord `UserCipherclerk::derive(...)
+/// .public_key_hex()` derivation *shape*. Shared by [`WebFrontend::identity`] and the multi-offering
+/// catalog's POST handler so both attribute a turn to the same identity — and so a council registers
+/// its members from the SAME derivation (`blake3(user)` bytes as the member pubkey; see
+/// [`catalog_default_host`]).
+pub fn web_identity(user: &str) -> DreggIdentity {
+    DreggIdentity(blake3::hash(user.as_bytes()).to_hex().to_string())
+}
+
 /// A deterministic session seed from a session id (so a re-open of the same id is the SAME
 /// replay-verifiable world). blake3(id) → the low 8 bytes as a `u64`.
 fn seed_from_id(id: &str) -> u64 {
@@ -524,4 +552,535 @@ body{font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;background:#0b
 .notice.refused{background:#2a1414;color:#f99;border:1px solid #833}\
 .verify{margin-top:1rem;font-size:.85rem;color:#89a}\
 .verify.ok strong{color:#5f8}.verify.refused strong{color:#f77}\
+.catalog{max-width:44rem;margin:0 auto}\
+.catalog h1{font-size:1.4rem;color:#7fd}\
+.offering-card{border:1px solid #244;border-radius:8px;padding:1rem 1.25rem;margin:1rem 0;background:#111a2e}\
+.offering-card h2{margin:0 0 .35rem;font-size:1.1rem;color:#00b4d8}\
+.offering-card a.play{display:inline-block;margin-top:.5rem;padding:.5rem .9rem;border-radius:6px;border:1px solid #2a5;background:#123;color:#cfe;text-decoration:none}\
+.offering-card a.play:hover{background:#1a3a2a}\
+.crumb{max-width:44rem;margin:0 auto 1rem;font-size:.85rem}\
+.crumb a{color:#7fd}\
+.affordance input.arg{width:100%;margin-bottom:.35rem;padding:.4rem .6rem;border-radius:6px;border:1px solid #2a5;background:#0d1526;color:#cfe;font-size:.95rem}\
 </style>";
+
+// ═════════════════════════════════════════════════════════════════════════════════════════
+// THE MULTI-OFFERING WEB CATALOG — the generic offering router lifted to the core.
+//
+// The single-DungeonOffering surface above is offering #0 on the web. This section makes
+// dreggnet-web a MULTI-OFFERING catalog over the frontend-agnostic `OfferingHost`: browse the
+// registered offerings, then open + play ANY of them (a dungeon, a council, a market) in the
+// browser — the SAME `open/advance/render/verify` verbs, one registry, the Session type erased.
+//
+// Routes (additive to `router` above; a separate `catalog_router`):
+//   GET  /offerings                              — the catalog (a card + "play" link per offering)
+//   GET  /offerings/{key}/session/{id}           — open (lazily) + render an offering session
+//   POST /offerings/{key}/session/{id}/act       — advance ONE real turn + re-render
+//   GET  /offerings/{key}/session/{id}/verify    — re-verify the committed chain (JSON)
+// ═════════════════════════════════════════════════════════════════════════════════════════
+
+/// A unit of work run ON the host's owning thread, against the live [`OfferingHost`].
+type HostJob = Box<dyn FnOnce(&mut OfferingHost) + Send + 'static>;
+
+/// **A thread-confined [`OfferingHost`] handle.** The host owns heterogeneous offering sessions,
+/// some of which are `!Send` (a [`CouncilOffering`] session holds `Rc`-backed ballot caps — the
+/// same reason the discord-bot's per-offering `Store` uses a dedicated thread). So the host cannot
+/// be a `Mutex<OfferingHost>` in an axum `State` (that needs `Send`). Instead the host lives on ONE
+/// owning thread and every access is a job shipped to it; only the job's plain-data result
+/// (a [`Surface`], an [`Outcome`], a [`VerifyReport`], a `Vec<OfferingInfo>` — all `Send`) crosses
+/// back. The handle itself is just a channel sender, so it is `Send + Sync` and drops straight into
+/// an axum `State`. This is the discord-bot `Store` generalised to a whole registry — the pattern a
+/// Telegram / WeChat frontend reuses unchanged.
+pub struct HostThread {
+    jobs: SyncSender<HostJob>,
+}
+
+impl HostThread {
+    /// Spawn the owning thread and BUILD the host on it (`build` runs on the thread, so the
+    /// registered offerings + their sessions are born there and never cross a thread boundary).
+    pub fn spawn(build: impl FnOnce() -> OfferingHost + Send + 'static) -> HostThread {
+        let (jobs, rx) = sync_channel::<HostJob>(64);
+        std::thread::Builder::new()
+            .name("offering-host".to_string())
+            .spawn(move || {
+                let mut host = build();
+                while let Ok(job) = rx.recv() {
+                    job(&mut host);
+                }
+            })
+            .expect("spawn the offering host thread");
+        HostThread { jobs }
+    }
+
+    /// Run `f` against the host on the owning thread and hand back its (`Send`) result. Blocks the
+    /// caller until the job returns — one short, CPU-bound offering turn, same cost profile as the
+    /// single-offering surface's `Mutex` critical section.
+    pub fn run<R: Send + 'static>(
+        &self,
+        f: impl FnOnce(&mut OfferingHost) -> R + Send + 'static,
+    ) -> R {
+        let (tx, rx) = sync_channel::<R>(1);
+        self.jobs
+            .send(Box::new(move |host| {
+                let _ = tx.send(f(host));
+            }))
+            .expect("the offering host thread is alive");
+        rx.recv().expect("the offering host thread answered")
+    }
+}
+
+/// **The axum state for the multi-offering catalog** — a thread-confined [`OfferingHost`] behind a
+/// `Send + Sync` handle. Shared behind an `Arc` as the handler `State`.
+pub struct CatalogState {
+    /// The host handle (the registry of offerings + their live sessions, on its owning thread).
+    host: HostThread,
+}
+
+impl CatalogState {
+    /// A fresh catalog over the DEFAULT offerings (dungeon + council + market) — see
+    /// [`catalog_default_host`].
+    pub fn new() -> Self {
+        CatalogState {
+            host: HostThread::spawn(catalog_default_host),
+        }
+    }
+
+    /// A catalog over a caller-built host (the offerings are registered inside `build`, which runs
+    /// on the owning thread). Lets a deployment register its own offering set.
+    pub fn with_host(build: impl FnOnce() -> OfferingHost + Send + 'static) -> Self {
+        CatalogState {
+            host: HostThread::spawn(build),
+        }
+    }
+
+    /// The registered offerings (the catalog listing).
+    pub fn list_offerings(&self) -> Vec<OfferingInfo> {
+        self.host.run(|h| h.list_offerings())
+    }
+
+    /// Re-verify session `(key, id)`'s committed chain (`None` if absent) — the offering's own proof.
+    pub fn verify(&self, key: &str, id: &SessionId) -> Option<VerifyReport> {
+        let key = key.to_string();
+        let id = id.clone();
+        self.host.run(move |h| h.verify(&key, &id))
+    }
+
+    /// Whether session `(key, id)` is live.
+    pub fn is_open(&self, key: &str, id: &SessionId) -> bool {
+        let key = key.to_string();
+        let id = id.clone();
+        self.host.run(move |h| h.is_open(&key, &id))
+    }
+}
+
+impl Default for CatalogState {
+    fn default() -> Self {
+        CatalogState::new()
+    }
+}
+
+/// **The default catalog host** — registers the three heterogeneous offerings the web catalog
+/// plays: the dungeon (a game), the council (governance), and the market (commerce). Built on the
+/// host's owning thread ([`HostThread::spawn`]), so each offering's `!Send` internals stay confined.
+///
+/// The council's electorate is derived from web usernames so a browser user can really vote: a web
+/// user's [`DreggIdentity`] is `blake3(user)` hex, and a council member's identity is the hex of its
+/// pubkey — so setting a member's pubkey to `blake3(user)`'s bytes makes that web user a council
+/// member (`alice` and `bob` here). Quorum is 2, so a proposal enacts only once BOTH approve — a
+/// real vote, drivable through the browser.
+pub fn catalog_default_host() -> OfferingHost {
+    let mut host = OfferingHost::new();
+    host.register(
+        "dungeon",
+        "The Warden's Keep — a verifiable dungeon (offering #0)",
+        DungeonOffering::new(),
+    );
+
+    // The council electorate: the web users who can vote (member pubkey = blake3(user) bytes).
+    let members: Vec<[u8; 32]> = ["alice", "bob"]
+        .iter()
+        .map(|u| *blake3::hash(u.as_bytes()).as_bytes())
+        .collect();
+    host.register(
+        "council",
+        "DreggNet Council — propose · vote · enact",
+        CouncilOffering::new(
+            members,
+            vec![
+                CandidateProposal::new("Fund the archive", 42),
+                CandidateProposal::new("Ratify the charter", 7),
+            ],
+            2, // quorum M = 2 (both members must approve)
+        ),
+    );
+
+    host.register(
+        "market",
+        "DreggNet Market — a sealed-bid auction (list · bid · settle)",
+        MarketOffering::new(),
+    );
+    host
+}
+
+/// **Build the multi-offering catalog router** over a shared [`CatalogState`]. Additive to
+/// [`router`] — mount both on one axum app (or serve the catalog alone).
+pub fn catalog_router(state: Arc<CatalogState>) -> Router {
+    Router::new()
+        .route("/offerings", get(get_catalog))
+        .route("/offerings/{key}/session/{id}", get(get_offering_session))
+        .route("/offerings/{key}/session/{id}/act", post(post_offering_act))
+        .route(
+            "/offerings/{key}/session/{id}/verify",
+            get(get_offering_verify),
+        )
+        .with_state(state)
+}
+
+/// `GET /offerings` — the catalog page: a card per registered offering (title + live-session count)
+/// with a "play" link opening a browser session of it.
+async fn get_catalog(State(state): State<Arc<CatalogState>>) -> Html<String> {
+    let offerings = state.list_offerings();
+    Html(catalog_page(&offerings))
+}
+
+/// `GET /offerings/{key}/session/{id}` — open the offering session (lazily, seeded from the id) and
+/// render its current [`Surface`] as an HTML page (prose/state + a POST form per cap-gated affordance).
+async fn get_offering_session(
+    State(state): State<Arc<CatalogState>>,
+    Path((key, id)): Path<(String, String)>,
+) -> Html<String> {
+    let sid = SessionId::new(id);
+    // Ensure the session is open (deploy on first touch), then render.
+    let opened = {
+        let key = key.clone();
+        let sid = sid.clone();
+        state.host.run(move |h| h.ensure_open(&key, &sid))
+    };
+    if let Err(HostError::UnknownOffering(_)) = opened {
+        return Html(catalog_missing_offering(&key));
+    }
+    Html(render_offering_page(&state, &key, &sid, None))
+}
+
+/// The `{turn, arg}` POST body of `POST /offerings/{key}/session/{id}/act`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct OfferingActForm {
+    /// The affordance verb (the offering's turn — `"choose"`, `"propose"`, `"approve"`, `"bid"`, …).
+    pub turn: String,
+    /// The affordance argument (a choice/proposal index, or a value-taking turn's value).
+    #[serde(default)]
+    pub arg: i64,
+}
+
+/// The result of collecting + resolving a catalog POST.
+enum CatalogAct {
+    /// The affordance was offered and resolved on the substrate (a real landed receipt / refusal).
+    Advanced(Outcome),
+    /// The turn is not on the current surface — an honest frontend-level refusal, before the substrate.
+    NotOffered,
+    /// The offering or session is absent (a routing miss).
+    Missing,
+}
+
+/// `POST /offerings/{key}/session/{id}/act` — the real-turn seam for ANY offering. Reads the web
+/// identity, PRESENTS the current surface (the offering's live [`Offering::actions`]), COLLECTS the
+/// posted `{turn, arg}` against it (a turn the surface does not offer is refused before the
+/// substrate), and [`OfferingHost::advance`]s ONE real turn. A legal move lands a real receipt; an
+/// illegal / crafted one is a real executor [`Outcome::Refused`] (anti-ghost). Re-renders.
+async fn post_offering_act(
+    State(state): State<Arc<CatalogState>>,
+    Path((key, id)): Path<(String, String)>,
+    headers: HeaderMap,
+    Query(query): Query<WebQuery>,
+    Form(form): Form<OfferingActForm>,
+) -> Html<String> {
+    let sid = SessionId::new(id);
+    // Ensure open first (so a POST to a fresh session still resolves against a live offering).
+    let opened = {
+        let key = key.clone();
+        let sid = sid.clone();
+        state.host.run(move |h| h.ensure_open(&key, &sid))
+    };
+    if let Err(HostError::UnknownOffering(_)) = opened {
+        return Html(catalog_missing_offering(&key));
+    }
+
+    let actor = web_identity(&web_user(&headers, &query));
+
+    // PRESENT the current surface + COLLECT the posted affordance + ADVANCE, atomically on the
+    // host thread: the turn must be among the offering's current affordances (offered), then the
+    // executor is the sole referee of the {turn, arg} on the substrate.
+    let acted = {
+        let key = key.clone();
+        let sid = sid.clone();
+        let turn = form.turn.clone();
+        let arg = form.arg;
+        state.host.run(move |h| {
+            let Some(actions) = h.actions(&key, &sid) else {
+                return CatalogAct::Missing;
+            };
+            if !actions.iter().any(|a| a.turn == turn) {
+                return CatalogAct::NotOffered;
+            }
+            // The label + enabled are decoration; the executor resolves the TYPED (turn, arg).
+            let action = Action::new(turn.clone(), turn, arg, true);
+            match h.advance(&key, &sid, action, actor) {
+                Some(o) => CatalogAct::Advanced(o),
+                None => CatalogAct::Missing,
+            }
+        })
+    };
+
+    let notice = match acted {
+        CatalogAct::Advanced(Outcome::Landed { ended, .. }) => {
+            if ended {
+                "Turn committed — the session reached its objective, one real turn at a time."
+                    .to_string()
+            } else {
+                "Turn committed — a real verified receipt landed.".to_string()
+            }
+        }
+        CatalogAct::Advanced(Outcome::Refused(why)) => {
+            format!("Refused: {why} (nothing committed — anti-ghost).")
+        }
+        CatalogAct::NotOffered => {
+            "Refused: that affordance is not on the current surface.".to_string()
+        }
+        CatalogAct::Missing => "Refused: no such offering session.".to_string(),
+    };
+
+    Html(render_offering_page(&state, &key, &sid, Some(&notice)))
+}
+
+/// `GET /offerings/{key}/session/{id}/verify` — re-verify the committed chain by the offering's own
+/// proof, exposed over HTTP as JSON.
+async fn get_offering_verify(
+    State(state): State<Arc<CatalogState>>,
+    Path((key, id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let sid = SessionId::new(id);
+    match state.verify(&key, &sid) {
+        Some(report) => Json(serde_json::json!({
+            "verified": report.verified,
+            "turns": report.turns,
+            "detail": report.detail,
+        })),
+        None => Json(serde_json::json!({
+            "verified": false,
+            "turns": 0,
+            "detail": "no such offering session",
+        })),
+    }
+}
+
+/// Render an offering session as a full HTML page: its [`Surface`] as POST forms + the live verify
+/// line + an optional notice banner. Fetches the surface + verify report from the host thread.
+fn render_offering_page(
+    state: &CatalogState,
+    key: &str,
+    id: &SessionId,
+    notice: Option<&str>,
+) -> String {
+    let rendered = {
+        let key = key.to_string();
+        let id = id.clone();
+        state
+            .host
+            .run(move |h| h.render(&key, &id).zip(h.verify(&key, &id)))
+    };
+    let Some((surface, verify)) = rendered else {
+        return page_missing(id);
+    };
+    let title = state
+        .host
+        .run({
+            let key = key.to_string();
+            move |h| h.title(&key).map(|t| t.to_string())
+        })
+        .unwrap_or_else(|| key.to_string());
+    let fragment = render_catalog_forms(surface.view(), key, &id.0);
+    offering_page(&title, id, notice, &fragment, &verify)
+}
+
+/// **Render an offering's [`ViewNode`] surface into POST-form controls** — the multi-offering
+/// analogue of deos-view's `render_session_forms`, but each affordance POSTs to
+/// `/offerings/{key}/session/{id}/act` (carrying the offering key + session in the route). Prose →
+/// `<p>`, a [`Section`](ViewNode::Section) → a titled `<section>`, a [`Menu`](ViewNode::Menu) row /
+/// a [`Button`](ViewNode::Button) → one POST form; containers recurse. A `!enabled` affordance is
+/// rendered `disabled` + dimmed (the cap tooth SHOWN, not hidden — a decoration; the executor still
+/// refuses a crafted POST of it). A value-taking turn's `arg` is an editable number input (so a
+/// market bid's value can be typed); a fixed-choice affordance defaults it to the presented arg.
+fn render_catalog_forms(node: &ViewNode, key: &str, id: &str) -> String {
+    let mut out = String::new();
+    catalog_node(node, key, id, &mut out);
+    out
+}
+
+fn catalog_node(node: &ViewNode, key: &str, id: &str, out: &mut String) {
+    match node {
+        ViewNode::Text(t) => {
+            if !t.trim().is_empty() {
+                out.push_str("<p class=\"prose\">");
+                out.push_str(&esc(t));
+                out.push_str("</p>");
+            }
+        }
+        ViewNode::Section {
+            title,
+            tag,
+            children,
+        } => {
+            out.push_str(&format!(
+                "<section class=\"deos-section tag-{}\"><h2>{}</h2>",
+                esc(tag),
+                esc(title)
+            ));
+            for c in children {
+                catalog_node(c, key, id, out);
+            }
+            out.push_str("</section>");
+        }
+        ViewNode::Menu { items } => {
+            out.push_str("<div class=\"affordances\">");
+            for it in items {
+                out.push_str(&catalog_form(key, id, it));
+            }
+            out.push_str("</div>");
+        }
+        ViewNode::Button { label, turn, arg } => {
+            let it = MenuItem {
+                label: label.clone(),
+                turn: turn.clone(),
+                arg: *arg,
+                enabled: true,
+            };
+            out.push_str(&catalog_form(key, id, &it));
+        }
+        ViewNode::VStack(cs) | ViewNode::Row(cs) | ViewNode::List(cs) | ViewNode::Table(cs) => {
+            for c in cs {
+                catalog_node(c, key, id, out);
+            }
+        }
+        ViewNode::Grid { children, .. } => {
+            for c in children {
+                catalog_node(c, key, id, out);
+            }
+        }
+        ViewNode::Tabs { panels, .. } => {
+            for p in panels {
+                catalog_node(p, key, id, out);
+            }
+        }
+        ViewNode::Host { view: Some(v), .. } => catalog_node(v, key, id, out),
+        ViewNode::Adept(inner) => catalog_node(inner, key, id, out),
+        ViewNode::Divider => out.push_str("<hr>"),
+        _ => {}
+    }
+}
+
+/// One affordance POST-form control for the catalog: `<form method=post
+/// action="/offerings/{key}/session/{id}/act">` carrying the affordance's `{turn, arg}` — `turn` as
+/// a hidden input, `arg` as an EDITABLE number input defaulting to the presented value (so a
+/// value-taking turn, a market bid, takes a typed value while a fixed-choice affordance just
+/// submits its default). A `!enabled` row is dimmed + `disabled` (a decoration; the executor is the
+/// referee).
+fn catalog_form(key: &str, id: &str, it: &MenuItem) -> String {
+    let (disabled, cls) = if it.enabled {
+        ("", "affordance")
+    } else {
+        (" disabled", "affordance dimmed")
+    };
+    format!(
+        "<form class=\"{cls}\" method=\"post\" action=\"/offerings/{key}/session/{id}/act\">\
+         <input type=\"hidden\" name=\"turn\" value=\"{turn}\">\
+         <input class=\"arg\" type=\"number\" name=\"arg\" value=\"{arg}\">\
+         <button type=\"submit\"{disabled}>{label}</button></form>",
+        cls = cls,
+        key = esc(key),
+        id = esc(id),
+        turn = esc(&it.turn),
+        arg = it.arg,
+        disabled = disabled,
+        label = esc(&it.label),
+    )
+}
+
+/// The `GET /offerings` catalog page — a card + "play" link per registered offering.
+fn catalog_page(offerings: &[OfferingInfo]) -> String {
+    let mut cards = String::new();
+    for o in offerings {
+        cards.push_str(&format!(
+            "<div class=\"offering-card\"><h2>{title}</h2>\
+             <p class=\"prose\">key <code>{key}</code> · {n} open session(s)</p>\
+             <a class=\"play\" href=\"/offerings/{key}/session/{key}-web\">▶ Play {key}</a></div>",
+            title = esc(&o.title),
+            key = esc(&o.key),
+            n = o.open_sessions,
+        ));
+    }
+    format!(
+        "<!doctype html><html lang=en><head><meta charset=utf-8>\
+         <meta name=viewport content=\"width=device-width, initial-scale=1\">\
+         <title>DreggNet Cloud — offerings</title>{style}</head><body>\
+         <main class=\"catalog\"><h1>DreggNet Cloud — all offerings, any surface</h1>\
+         <p class=\"prose\">Every offering is a confined, verifiable, per-session thing on the real \
+         dregg substrate. Pick one to play it in the browser — each move is a real executor turn.</p>\
+         {cards}</main></body></html>",
+        style = STYLE,
+        cards = cards,
+    )
+}
+
+/// Wrap an offering session's fragment in a full HTML page (breadcrumb + notice + verify line).
+fn offering_page(
+    title: &str,
+    id: &SessionId,
+    notice: Option<&str>,
+    fragment: &str,
+    verify: &VerifyReport,
+) -> String {
+    let notice_html = notice
+        .map(|n| {
+            let cls = if n.starts_with("Refused") {
+                "notice refused"
+            } else {
+                "notice ok"
+            };
+            format!("<div class=\"{cls}\">{}</div>", esc(n))
+        })
+        .unwrap_or_default();
+    let verify_cls = if verify.verified { "ok" } else { "refused" };
+    let verify_html = format!(
+        "<div class=\"verify {cls}\">chain re-verified: <strong>{v}</strong> \
+         ({turns} verified turns) — {detail}</div>",
+        cls = verify_cls,
+        v = if verify.verified { "yes" } else { "NO" },
+        turns = verify.turns,
+        detail = esc(&verify.detail),
+    );
+    format!(
+        "<!doctype html><html lang=en><head><meta charset=utf-8>\
+         <meta name=viewport content=\"width=device-width, initial-scale=1\">\
+         <title>DreggNet Cloud — {title}</title>{style}</head><body>\
+         <div class=\"crumb\"><a href=\"/offerings\">← all offerings</a> · \
+         <strong>{title}</strong> · session {id}</div>\
+         <main class=\"session\">{notice}{fragment}{verify}</main></body></html>",
+        title = esc(title),
+        id = esc(&id.0),
+        style = STYLE,
+        notice = notice_html,
+        fragment = fragment,
+        verify = verify_html,
+    )
+}
+
+/// The page shown for a `GET`/`POST` against an unregistered offering key.
+fn catalog_missing_offering(key: &str) -> String {
+    format!(
+        "<!doctype html><html lang=en><head><meta charset=utf-8>\
+         <title>DreggNet Cloud — unknown offering</title>{style}</head><body>\
+         <main class=\"session\"><div class=\"notice refused\">No offering registered under \
+         <code>{key}</code>. <a href=\"/offerings\">Browse the catalog.</a></div></main></body></html>",
+        key = esc(key),
+        style = STYLE,
+    )
+}

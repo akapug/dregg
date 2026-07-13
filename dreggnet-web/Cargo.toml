@@ -23,10 +23,16 @@ edition = "2024"
 description = "The web Frontend over dreggnet-offerings: a WebFrontend affordance-renderer (deos Surface -> HTML fragment) + an axum session surface (GET renders, POST advances one real turn), the third surface over the ONE offering core."
 
 [dependencies]
-# THE OFFERING CORE — the frontend-agnostic Offering/Frontend traits, DungeonOffering
-# (offering #0), Surface/Action/Outcome. This crate is a `Frontend` impl OVER it; it
-# does NOT modify it.
+# THE OFFERING CORE — the frontend-agnostic Offering/Frontend traits + the multi-offering
+# `OfferingHost` (the registry the web catalog drives), DungeonOffering (offering #0),
+# Surface/Action/Outcome. This crate is a `Frontend` impl OVER it; it does NOT modify it.
 dreggnet-offerings = { path = "../dreggnet-offerings" }
+# THREE HETEROGENEOUS OFFERINGS registered in the web catalog beside the dungeon: the
+# collective-governance council (propose → vote → enact) and the sealed-bid market
+# (list → bid → settle). The web catalog drives all three through the ONE `OfferingHost`
+# — the same offerings the Discord bot's generic adapter serves, now on the web surface.
+dreggnet-council = { path = "../dreggnet-council" }
+dreggnet-market = { path = "../dreggnet-market" }
 # THE DEOS SURFACE — `ViewNode`/`MenuItem`, the view-tree a Surface wraps. The web
 # renderer WALKS this tree into HTML. `default-features = false` = the gpui-free
 # view-tree model only (no native/gpui/mozjs), matching dreggnet-offerings; the `web`
