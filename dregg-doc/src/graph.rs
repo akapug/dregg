@@ -366,4 +366,76 @@ impl DocGraph {
             }
         }
     }
+
+    // ── Three-way merge (diff3) over the non-monotone field store ────────────
+
+    /// The three-way MERGE of `ours` and `theirs` against their common ancestor
+    /// `base` (diff3 semantics).
+    ///
+    /// The **prose fragment** (atoms + order-edges) is the additive PUSHOUT — the
+    /// plain union of `ours` and `theirs`, exactly what [`crate::merge`] takes.
+    /// It is base-independent because every graph primitive is monotone: the
+    /// missing order becomes a representable antichain, never a lost edit.
+    ///
+    /// The **single-valued field store is NOT monotone**, so its merge genuinely
+    /// needs the ancestor. A two-way union re-introduces a base assignment that a
+    /// *superseding* write on one side already collapsed, manufacturing a phantom
+    /// clash — the wart that stops a superseding resolution landing on a
+    /// fast-forward. The base is exactly what tells a SUPERSEDED assignment
+    /// (present in the ancestor, changed on one side only) apart from a
+    /// CONCURRENT one (changed on both), so we read it per field:
+    ///
+    /// - if exactly one side left the field at the base value and the other
+    ///   CHANGED it, the changed side is authoritative — a superseding resolution
+    ///   lands, and a fast-forward (where one side *is* the base) yields the other
+    ///   side cleanly;
+    /// - if BOTH sides changed the field away from the base, the assignments union
+    ///   — a genuine concurrent divergence stays a first-class clash (real
+    ///   conflict detection is NOT weakened; two sides that changed it to the
+    ///   *same* value agree I-confluently, as a single-value union).
+    ///
+    /// This is the base-honouring counterpart to [`crate::merge`]'s two-way
+    /// pushout, and the graph the [`crate::threeway::three_way`] view is built on.
+    pub(crate) fn merge_three_way(base: &DocGraph, ours: &DocGraph, theirs: &DocGraph) -> DocGraph {
+        // Prose fragment: the additive pushout (atoms/edges/status join). This
+        // also seeds the field store with the two-way union, which the loop below
+        // corrects wherever the base shows one side merely SUPERSEDED the other.
+        let mut out = ours.clone();
+        out.union_in_place(theirs);
+
+        let value_set = |g: &DocGraph, name: &str| -> BTreeSet<String> {
+            g.field(name).iter().map(|a| a.value.clone()).collect()
+        };
+        let names: BTreeSet<String> = base
+            .fields
+            .keys()
+            .chain(ours.fields.keys())
+            .chain(theirs.fields.keys())
+            .cloned()
+            .collect();
+        for name in names {
+            let b = value_set(base, &name);
+            let o = value_set(ours, &name);
+            let t = value_set(theirs, &name);
+            // Exactly one side unchanged from the ancestor => the other side's
+            // assignment superseded/added and is authoritative. Both unchanged, or
+            // both changed, keep the two-way union already in `out` (a genuine
+            // concurrent clash, or — when equal — an I-confluent agreement).
+            let chosen: Option<Vec<FieldAssign>> = if o == b && t != b {
+                Some(theirs.field(&name).to_vec())
+            } else if t == b && o != b {
+                Some(ours.field(&name).to_vec())
+            } else {
+                None
+            };
+            if let Some(assigns) = chosen {
+                if assigns.is_empty() {
+                    out.fields.remove(&name);
+                } else {
+                    out.fields.insert(name, assigns);
+                }
+            }
+        }
+        out
+    }
 }

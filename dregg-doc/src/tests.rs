@@ -751,6 +751,139 @@ fn render_three_way_clean_merge_yields_no_conflicts() {
     assert!(render_three_way(&merged, &base.replay()).is_empty());
 }
 
+// ── the FIELD three-way: base tells SUPERSEDED from CONCURRENT ────────────────
+//
+// The single-valued field store is the non-monotone fragment, and a two-way
+// pushout of two folds cannot tell "one side superseded the ancestor value" from
+// "both sides concurrently diverged" — it unions, re-introducing the base value a
+// superseding write already collapsed. `three_way` reads the ancestor to draw
+// that line. These pin BOTH poles: a superseding resolution LANDS, and a genuine
+// concurrent divergence STILL clashes (real conflict detection is not weakened).
+
+/// A base doc carrying a single-valued title, as a replayable history.
+fn titled_base(value: &str) -> History {
+    let mut base = History::new();
+    base.commit(Patch::by(
+        Author(1),
+        [Patch::add(1, "a doc", AtomId::ROOT).1],
+    ));
+    base.commit(Patch::by(
+        Author(1),
+        [Op::SetField {
+            name: "title".into(),
+            value: value.into(),
+            superseding: false,
+        }],
+    ));
+    base
+}
+
+fn supersede_title(value: &str, author: u64) -> Patch {
+    Patch::by(
+        Author(author),
+        [Op::SetField {
+            name: "title".into(),
+            value: value.into(),
+            superseding: true,
+        }],
+    )
+}
+
+fn title_values(g: &DocGraph) -> Vec<String> {
+    g.field("title").iter().map(|a| a.value.clone()).collect()
+}
+
+#[test]
+fn three_way_lands_a_superseding_resolution_on_a_fast_forward() {
+    // base: title = "Charter". OURS leaves it untouched; THEIRS supersedes it to
+    // "Manifesto" (a strict fast-forward — the head is base plus one resolution).
+    let base = titled_base("Charter");
+    let ours = base.branch();
+    let mut theirs = base.branch();
+    theirs.commit(supersede_title("Manifesto", 2));
+
+    // The two-way union WOULD re-introduce "Charter" beside "Manifesto" — a
+    // phantom clash. The base-honouring three-way takes the changed side.
+    let merged = three_way(&base, &ours, &theirs);
+    assert_eq!(
+        title_values(&merged),
+        vec!["Manifesto".to_string()],
+        "the superseding side is authoritative — the base value is not re-unioned"
+    );
+    assert!(
+        !content(&merged).has_conflict(),
+        "a superseding resolution lands clean on a fast-forward"
+    );
+
+    // Symmetric: with the roles swapped (OURS supersedes, THEIRS unchanged) the
+    // merge is order-independent and lands the same single value.
+    let mut ours2 = base.branch();
+    ours2.commit(supersede_title("Manifesto", 2));
+    let theirs2 = base.branch();
+    let merged2 = three_way(&base, &ours2, &theirs2);
+    assert_eq!(title_values(&merged2), vec!["Manifesto".to_string()]);
+    assert!(!content(&merged2).has_conflict());
+}
+
+#[test]
+fn three_way_keeps_a_genuine_concurrent_field_divergence_as_a_clash() {
+    // base: title = "Charter". BOTH sides supersede it, to DIFFERENT values — a
+    // real concurrent clash the ancestor cannot resolve. It must STILL conflict.
+    let base = titled_base("Charter");
+    let mut ours = base.branch();
+    ours.commit(supersede_title("Manifesto", 1));
+    let mut theirs = base.branch();
+    theirs.commit(supersede_title("Charter II", 2));
+
+    let merged = three_way(&base, &ours, &theirs);
+    let mut vals = title_values(&merged);
+    vals.sort();
+    assert_eq!(
+        vals,
+        vec!["Charter II".to_string(), "Manifesto".to_string()],
+        "both concurrent assignments survive — the clash is NOT weakened"
+    );
+    assert!(
+        content(&merged).has_conflict(),
+        "a genuine concurrent field divergence is still a first-class conflict"
+    );
+    assert_eq!(
+        content(&merged)
+            .field_conflicts()
+            .next()
+            .expect("a field conflict")
+            .regime,
+        Regime::Field
+    );
+}
+
+#[test]
+fn three_way_two_sides_that_supersede_to_the_same_value_agree() {
+    // The I-confluent case at the non-monotone boundary: both sides supersede the
+    // base to the SAME value — a single-value union, no clash.
+    let base = titled_base("Charter");
+    let mut ours = base.branch();
+    ours.commit(supersede_title("Agreed", 1));
+    let mut theirs = base.branch();
+    theirs.commit(supersede_title("Agreed", 2));
+
+    let merged = three_way(&base, &ours, &theirs);
+    assert_eq!(title_values(&merged), vec!["Agreed".to_string()]);
+    assert!(!content(&merged).has_conflict());
+}
+
+#[test]
+fn three_way_fast_forward_with_no_field_change_is_clean() {
+    // base == theirs (head carries no field write); ours == base. The merge is
+    // exactly the base fold — trivially clean.
+    let base = titled_base("Charter");
+    let ours = base.branch();
+    let theirs = base.branch();
+    let merged = three_way(&base, &ours, &theirs);
+    assert_eq!(title_values(&merged), vec!["Charter".to_string()]);
+    assert!(!content(&merged).has_conflict());
+}
+
 // ── the TYPED ATOM re-foundation (DREGG-DOCUMENT-DESIGN §2) ───────────────────
 //
 // `AtomContent = Text(Run) | Element{tag, attrs, children}` — DOM-shaped and

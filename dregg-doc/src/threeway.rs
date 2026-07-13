@@ -19,7 +19,6 @@ use crate::atom::{AtomId, Author, PatchId};
 use crate::content::{Segment, content};
 use crate::graph::DocGraph;
 use crate::history::History;
-use crate::merge::merge;
 use std::collections::BTreeSet;
 
 /// One side of a three-way conflict: an alternative with its authorship.
@@ -63,11 +62,20 @@ pub fn merge_base(a: &History, b: &History) -> History {
     base
 }
 
-/// Merge two branches that forked from a common `base` (their merge base). This
-/// is just [`merge`] of the two replayed folds — the value is the *render*
-/// ([`render_three_way`]), which recovers the BASE column from the ancestor.
-pub fn three_way(_base: &History, ours: &History, theirs: &History) -> DocGraph {
-    merge(&ours.replay(), &theirs.replay())
+/// Merge two branches that forked from a common `base` (their merge base) —
+/// the diff3 merge, [`DocGraph::merge_three_way`].
+///
+/// The prose fragment is the additive PUSHOUT (base-independent), so on prose
+/// this is exactly [`merge`] of the two folds. The **single-valued field store**
+/// is where the ancestor is load-bearing: a two-way union re-introduces a base
+/// assignment that a *superseding* write on one side collapsed, manufacturing a
+/// phantom clash. Reading `base` per field tells a SUPERSEDED assignment (base
+/// value, changed on one side) from a CONCURRENT one (changed on both) — the
+/// former takes the changed side (a superseding resolution lands / a
+/// fast-forward yields the other side cleanly), the latter stays a real clash.
+/// The *render* ([`render_three_way`]) then recovers the BASE column for display.
+pub fn three_way(base: &History, ours: &History, theirs: &History) -> DocGraph {
+    DocGraph::merge_three_way(&base.replay(), &ours.replay(), &theirs.replay())
 }
 
 /// Render every conflict region in `merged` as a three-way view, recovering the

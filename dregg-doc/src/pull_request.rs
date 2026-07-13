@@ -685,6 +685,108 @@ mod tests {
         assert_eq!(pr.resolutions().len(), 1);
     }
 
+    // ── POLE 3 (the field non-monotone boundary): the pushout HONOURS the base ──
+    //
+    // The wart the dreggnet-doc driven gauntlet pinned: a superseding SetField in
+    // the head suffix collapses the assignment set in the FOLD, but the PR's
+    // pushout used to union the base assignment back in, manufacturing a phantom
+    // clash — so a superseding resolution could NEVER land through the PR path on a
+    // fast-forward. `three_way` now reads the merge base, so the resolution lands;
+    // a GENUINE concurrent field divergence still refuses (real detection intact).
+
+    /// base: "a doc" + title "Charter", as a replayable history.
+    fn titled_base() -> History {
+        let mut base = History::new();
+        base.commit(Patch::by(
+            Author(1),
+            [Patch::add(1, "a doc", AtomId::ROOT).1],
+        ));
+        base.commit(Patch::by(
+            Author(1),
+            [Op::SetField {
+                name: "title".into(),
+                value: "Charter".into(),
+                superseding: false,
+            }],
+        ));
+        base
+    }
+
+    fn supersede_title(value: &str, author: u64) -> Patch {
+        Patch::by(
+            Author(author),
+            [Op::SetField {
+                name: "title".into(),
+                value: value.into(),
+                superseding: true,
+            }],
+        )
+    }
+
+    #[test]
+    fn a_superseding_resolution_lands_on_a_fast_forward_pr() {
+        let base = titled_base();
+        // The head is the base plus ONE superseding resolution (a strict
+        // fast-forward). Its FOLD is a single value — the supersede collapsed it.
+        let mut head = base.branch();
+        head.commit(supersede_title("Manifesto", 2));
+        assert_eq!(
+            head.replay()
+                .field("title")
+                .iter()
+                .map(|a| a.value.clone())
+                .collect::<Vec<_>>(),
+            vec!["Manifesto".to_string()],
+        );
+
+        // The PR's pushout no longer re-unions "Charter": the superseding
+        // fast-forward LANDS as a clean merge to the single collapsed value.
+        let pr = PullRequest::open(base, head);
+        assert!(pr.is_clean(), "the superseding fast-forward is clean");
+        let outcome = pr.merge().expect("the superseding fast-forward now lands");
+        assert_eq!(
+            outcome
+                .graph
+                .field("title")
+                .iter()
+                .map(|a| a.value.clone())
+                .collect::<Vec<_>>(),
+            vec!["Manifesto".to_string()],
+            "the pushout keeps the superseded value, not the re-unioned base clash"
+        );
+        assert!(!content(&outcome.graph).has_conflict());
+        // The landing set is the head suffix (the one resolution patch).
+        assert_eq!(outcome.patches.len(), 1);
+    }
+
+    #[test]
+    fn a_genuine_concurrent_field_divergence_in_a_pr_still_refuses() {
+        // Both sides supersede the ancestor's "Charter" to DIFFERENT values — a
+        // real concurrent clash. The base cannot resolve it; the PR must refuse.
+        let ancestor = titled_base();
+        let mut base = ancestor.branch();
+        base.commit(supersede_title("Charter II", 1));
+        let mut head = ancestor.branch();
+        head.commit(supersede_title("Manifesto", 2));
+
+        let pr = PullRequest::open(base, head);
+        assert!(!pr.is_clean(), "a concurrent field clash is not clean");
+        match pr.merge() {
+            Err(PullRequestError::UnresolvedConflict(cs)) => {
+                assert!(!cs.is_empty(), "the concurrent clash stands");
+                assert!(
+                    cs.iter()
+                        .any(|c| c.sides.iter().any(|s| s.text == "Charter II"))
+                );
+                assert!(
+                    cs.iter()
+                        .any(|c| c.sides.iter().any(|s| s.text == "Manifesto"))
+                );
+            }
+            other => panic!("expected a concurrent field clash to refuse, got {other:?}"),
+        }
+    }
+
     #[test]
     fn a_keep_resolution_also_settles_the_pr() {
         let mut pr = conflicting_pr();
