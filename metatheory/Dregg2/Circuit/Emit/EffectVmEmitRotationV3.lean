@@ -2707,7 +2707,7 @@ def cellsInsertOp (sel keyCol : Nat) : MapOp :=
   , key     := .var keyCol
   , value   := .var keyCol
   , newRoot := afterCellsRootGroup
-  , op      := .insert }
+  , op      := .aafiInsert }  -- gap-#6 AAFI (op=4, matches the deployed TSV; two-path forces sorted-preservation — installs the ImtSorted invariant cellsFreshOp presupposes)
 
 /-- The factory's new-cell key column (`param1`, the derived child VK — `CHILD_VK_DERIVED`); factory's
 `param0` carries the factory VK, so the child id is `param1`. -/
@@ -3885,14 +3885,21 @@ def afterVKCol (w : Nat) : Nat := w + AFTER_BLOCK_OFF + B_VK
 `effects_hash`. -/
 def declaredParamCol : Nat := prmCol 0
 
-/-- **v10** (post REVOKED-ROOT flag day, +1 shift of every limb ≥ 37): the FIRST faithful-8-felt
-completion column for the perms digest in the AFTER block (pre-iroot limb 38, carrying `permsHash[1]`;
-felts 2..7 follow at +1..+6, limbs 39..=44). Matches the producer's `write_lanes([33, 38..=44])`. -/
-def afterPermsExtraCol (w : Nat) : Nat := w + AFTER_BLOCK_OFF + 38
-/-- **v10** (post REVOKED-ROOT flag day): the FIRST faithful-8-felt completion column for the vk digest
-(pre-iroot limb 45, carrying `vkHash[1]`; felts 2..7 at +1..+6, limbs 46..=51). Matches the producer's
-`write_lanes([34, 45..=51])`. -/
-def afterVKExtraCol (w : Nat) : Nat := w + AFTER_BLOCK_OFF + 45
+/-- The FIRST perms-digest COMPLETION limb (post REVOKED-ROOT flag day: `revoked_root` took base limb
+37, shifting every limb ≥ 37 by +1). The 7 faithful completion felts `permsHash[1..7]` ride limbs
+38..=44; the committed lane-0 stays at `B_PERMS`. THE SINGLE SOURCE for this offset — the producer
+(`turn::rotation_witness`, `write_lanes([B_PERMS, 38..=44])`) reads it from the generated layout, so
+the constraint and the witness CANNOT disagree. They did once: this weld sat at 37 (i.e. ON
+`revoked_root` lane-0) while the producer wrote at 38, and every honest setPermissions turn was UNSAT. -/
+def B_PERMS_COMPLETION : Nat := 38
+/-- The FIRST vk-digest COMPLETION limb; the 7 felts `vkHash[1..7]` ride limbs 45..=51 (committed lane-0
+stays at `B_VK`). Same single-source contract as `B_PERMS_COMPLETION`. -/
+def B_VK_COMPLETION : Nat := 45
+
+/-- **v10**: the FIRST faithful-8-felt completion COLUMN for the perms digest in the AFTER block. -/
+def afterPermsExtraCol (w : Nat) : Nat := w + AFTER_BLOCK_OFF + B_PERMS_COMPLETION
+/-- **v10**: the FIRST faithful-8-felt completion COLUMN for the vk digest in the AFTER block. -/
+def afterVKExtraCol (w : Nat) : Nat := w + AFTER_BLOCK_OFF + B_VK_COMPLETION
 
 /-- **`rotateV3WithPermsVKGate sel afterCol d`** — `rotateV3WithRecordPin B_RECORD_DIGEST d` PLUS the
 LIVE perms/VK weld: the AFTER authority sub-limb `afterCol` (perms-digest for setPerms, vk-digest for

@@ -10,7 +10,21 @@ placement → forge-absence → double-spend, and closed it by flipping those th
 MUTABLE accounts/cell path (`createCell`/`CreateCellFromFactory`/`Spawn` + the heap value-writes)
 DELIBERATELY stayed op=3. Question: does op=3 on the cell tree have the SAME gap?
 
-## VERDICT: ⚠ GAP #6 — SAME CLASS AS #5, DEPLOYED, UNFIXED (forged cell creation / cell takeover)
+## VERDICT: ✅ GAP #6 — SAME CLASS AS #5, DEPLOYED, **NOW CLOSED** (forged cell creation / cell takeover)
+
+**CLOSURE (2026-07-13):** `cellsInsertOp` flipped from `.insert` (op=3) to `.aafiInsert` (op=4) in
+`EffectVmEmitRotationV3.lean:2704` — so createCell/factory/spawn (and the cap-open spawn variants
+`spawnCapOpen`/`spawnWriteCapOpen`, which all route through the one `cellsInsertOp` def) now force the
+two-path `imtInsert` gate that installs the `ImtSorted` well-linked invariant `cellsFreshOp`'s
+pointer-bracket presupposes. Rust producers flipped to the append-at-free-index AAFI fold: the narrow
+`generate_rotated_create_cell_trace_with_accounts_tree` commits `insert_witness_aafi(entry(key,key))
+.new_root`, and the wide `generate_rotated_create_cell_wide` lays `lay_accum_insert_read_appendix(…,
+aafi=true)` (wide == narrow == the §J′ capRoot-column read input, all the AAFI root). The deployed
+descriptor artifacts (`rotation-v3-staged-registry.tsv` + the two wide registries) carry the cell
+inserts at `aafi_insert`. Soundness/liveness teeth land in `rotated_create_cell_pins_accounts_and_refuses_tamper`
+(forged-cell-birth over a present addr is UNSAT; honest createCell proves+verifies). Rides the same
+VK regen as gaps 1-5 (the accounts-root lineage changed sorted→AAFI). Value-updates (op=1 `.write`)
+were untouched (already position-stable/sound).
 
 The mutable accounts tree is the **same `CanonicalHeapTree8`**, opened through the **same shared
 `Ir2Air::MapOps` / `Ir2Air::MapAbsent` AIRs**, but its insert emitter was **left at op=3 while the

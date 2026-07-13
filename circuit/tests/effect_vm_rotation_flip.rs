@@ -1036,10 +1036,10 @@ fn group_after_producer(lane: usize) -> usize {
 /// **THE DEPLOYMENT-REAL createCell ACCOUNTS-SET grow-gate (the cells_root sibling of the noteSpend
 /// tooth).** The live `createCellVmDescriptor2R24` now carries two map-ops gated by the createCell
 /// selector — `cellsFreshOp` (`.absent`: the new-cell key is a NON-MEMBER of the BEFORE accounts tree
-/// — no id collision) and `cellsInsertOp` (`.insert`: the AFTER `cells_root` IS the genuine sorted
-/// insert of the new-cell key). These open the rotated `cells_root` limb (limb 0). This test proves
-/// the set-insert is FORCED, and that a forged/frozen `cells_root` (a turn that claims a cell was
-/// created but whose after-block accounts root is NOT the genuine insert) is REJECTED — exactly the
+/// — no id collision) and `cellsInsertOp` (`.aafiInsert`, op=4: the AFTER `cells_root` IS the genuine
+/// AAFI two-path insert of the new-cell key, forcing sorted-preservation — gap #6). These open the
+/// rotated `cells_root` limb (limb 0). This test proves the set-insert is FORCED, that a forged/frozen
+/// `cells_root` is REJECTED, and that a FORGED CELL BIRTH over a present addr is UNSAT — exactly the
 /// gap `kernel_set_insert_is_not_forced_by_the_live_descriptor` documented for createCell, now closed.
 /// factory/spawn follow the identical pattern (selectors 13/32; spawn's cap-handoff is orthogonal —
 /// the named spawn residual).
@@ -1133,7 +1133,28 @@ fn rotated_create_cell_pins_accounts_and_refuses_tamper() {
         "PI 46 = the create row's new-cell key (param0)"
     );
 
-    // PROVE + VERIFY the whole rotated createCell end-to-end — the set-insert FORCED.
+    // GAP #6: the committed AFTER cells root is FORCED by the AAFI insert (op=4) — NOT a
+    // producer-supplied sorted-compacted rebuild. Confirm it equals `insert_witness_aafi(...).new_root`
+    // over the BEFORE accounts tree, so the `.aafiInsert` two-path gate installs the ImtSorted
+    // well-linked invariant `cellsFreshOp`'s pointer-bracket presupposes (closing forged-cell-birth).
+    {
+        use dregg_circuit::heap_root::{CanonicalHeapTree8, HEAP_TREE_DEPTH};
+        let before_tree8 = CanonicalHeapTree8::new(before_accounts.clone(), HEAP_TREE_DEPTH);
+        let forced = before_tree8
+            .insert_witness_aafi(HeapLeaf::entry(new_cell_id, new_cell_id))
+            .expect("honest createCell AAFI insert has a bracketing low leaf")
+            .new_root;
+        use dregg_circuit::effect_vm::trace_rotated::AFTER_BASE as AB;
+        for lane in 0..8 {
+            let col = AB + if lane == 0 { 0 } else { 168 + lane };
+            assert_eq!(
+                trace[0][col], forced[lane],
+                "after cells_root lane {lane} FORCED by the AAFI insert (op=4)"
+            );
+        }
+    }
+
+    // PROVE + VERIFY the whole rotated createCell end-to-end — the set-insert FORCED (op=4 AAFI).
     let proof = prove_vm_descriptor2(&desc, &trace, &dpis, &mem_boundary, &map_heaps)
         .expect("rotated createCell (set-insert FORCED) must prove end-to-end");
     verify_vm_descriptor2(&desc, &proof, &dpis)
@@ -1200,6 +1221,31 @@ fn rotated_create_cell_pins_accounts_and_refuses_tamper() {
         assert!(
             refused(&trace, &p, &map_heaps),
             "a published PI[46] differing from the create row's new-cell key MUST be UNSAT"
+        );
+    }
+
+    // -- GAP #6 — THE FORGED-CELL-BIRTH TOOTH (in-circuit): a new-cell key ALREADY present in the
+    //    BEFORE accounts tree has NO `.absent` bracketing witness — no pointer gap brackets a present
+    //    addr (`imtAbsent` fails) — so `insert_witness_aafi` returns `None` and the accounts-tree wiring
+    //    REFUSES the turn before proving. Under the OLD op=3 insert this shape was ACCEPTED (a forged
+    //    next_addr bracket over a present addr → forged cell birth / identity takeover); the op=4 AAFI
+    //    two-path gate forces sorted-preservation, so a createCell over a live cell is UNSAT. --
+    {
+        let mut present = before_accounts.clone();
+        present.push(HeapLeaf::entry(new_cell_id, new_cell_id)); // the target addr is ALREADY a live cell
+        let forged_birth = generate_rotated_create_cell_trace_with_accounts_tree(
+            &st,
+            &effects,
+            &bridge(&before_w),
+            &bridge(&after_w),
+            &caveat,
+            &present,
+        );
+        assert!(
+            forged_birth.is_err(),
+            "a FORGED CELL BIRTH (createCell over an addr already present in the BEFORE accounts tree) \
+             MUST be refused by the in-circuit no-collision (`.absent`) + AAFI-insert (op=4) gate — the \
+             forged-cell-birth / identity-takeover hole (gap #6) is CLOSED"
         );
     }
 }

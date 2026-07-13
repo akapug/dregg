@@ -301,6 +301,54 @@ pub const B_CONTRACT_HASH_OCTET: usize = 97;
 pub const B_PUBKEY_OCTET: usize = 105;
 /// In-block offset of the iroot carrier (absorbed last, limb 178 in the REVOKED-ROOT+cells geometry).
 pub const B_IROOT: usize = 178;
+
+// ── THE CANONICAL FAITHFUL-8-FELT GROUP TABLE — the ONE Rust source ───────────────────────────────
+//
+// `[lane0, completion×7]` for each faithful-8-felt root: lane 0 is the committed scalar limb (a `B_*`
+// constant), lanes 1..7 are the faithful completion felts. The PRODUCER
+// (`turn::rotation_witness::compute_rotated_pre_limbs`, which `write_lanes`-writes these exact rows)
+// and the circuit's `*_group_col` twins address the SAME columns — so a committed 8-felt digest and
+// its in-circuit weld can never read different lanes. That equivalence is not decorative: the
+// perms/VK completion weld once read limb 37 (`revoked_root` lane-0) while the producer wrote limb 38,
+// and every honest setPermissions/setVerificationKey turn was UNSAT. The values here are the deployed
+// rotated pre-limb layout; the mirror tooth in `tests` cross-checks lane 0 against the `B_*` constants
+// and the perms/VK completion starts against the Lean export (`effect_vm::layout_generated`). Wiring
+// the producer's inline `write_lanes` arrays to READ this table is the consolidation it enables.
+
+/// `[lane0, completion×7]` for one faithful-8-felt root (lane 0 committed, lanes 1..7 completion).
+pub type Felt8Group = [usize; 8];
+
+/// Authority / record-digest 8-felt group (lane 0 = [`B_RECORD_DIGEST`]).
+pub const AUTHORITY_DIGEST_GROUP: Felt8Group = [B_RECORD_DIGEST, 12, 13, 14, 15, 16, 17, 18];
+/// Capability-root 8-felt group (lane 0 = [`B_CAP_ROOT`]).
+pub const CAP_ROOT_GROUP: Felt8Group = [B_CAP_ROOT, 52, 53, 54, 55, 56, 57, 58];
+/// Heap-root 8-felt group (lane 0 = [`B_HEAP_ROOT`]).
+pub const HEAP_ROOT_GROUP: Felt8Group = [B_HEAP_ROOT, 59, 60, 61, 62, 63, 64, 65];
+/// Nullifier-root 8-felt group (lane 0 = [`B_NULLIFIER_ROOT`]).
+pub const NULLIFIER_ROOT_GROUP: Felt8Group = [B_NULLIFIER_ROOT, 68, 69, 70, 71, 72, 73, 74];
+/// Commitments-root 8-felt group (lane 0 = [`B_COMMITMENTS_ROOT`]).
+pub const COMMITMENTS_ROOT_GROUP: Felt8Group = [B_COMMITMENTS_ROOT, 75, 76, 77, 78, 79, 80, 81];
+/// Permissions-digest 8-felt group (lane 0 = [`B_PERMS`]; completion opens PAST `revoked_root`).
+pub const PERMS_GROUP: Felt8Group = [B_PERMS, 38, 39, 40, 41, 42, 43, 44];
+/// Verification-key-digest 8-felt group (lane 0 = [`B_VK`]).
+pub const VK_GROUP: Felt8Group = [B_VK, 45, 46, 47, 48, 49, 50, 51];
+/// Fields-root 8-felt group (lane 0 = [`B_FIELDS_ROOT`]; completion is non-contiguous by layout).
+pub const FIELDS_ROOT_GROUP: Felt8Group = [B_FIELDS_ROOT, 66, 67, 19, 20, 21, 22, 23];
+/// Revoked-root 8-felt group (lane 0 = [`B_REVOKED_ROOT`]; the completion felts the base widen freed).
+pub const REVOKED_ROOT_GROUP: Felt8Group = [B_REVOKED_ROOT, 82, 83, 84, 85, 86, 87, 88];
+
+/// Every faithful-8-felt group, for the disjointness / coverage tooth.
+pub const ALL_FELT8_GROUPS: [Felt8Group; 9] = [
+    AUTHORITY_DIGEST_GROUP,
+    CAP_ROOT_GROUP,
+    HEAP_ROOT_GROUP,
+    NULLIFIER_ROOT_GROUP,
+    COMMITMENTS_ROOT_GROUP,
+    PERMS_GROUP,
+    VK_GROUP,
+    FIELDS_ROOT_GROUP,
+    REVOKED_ROOT_GROUP,
+];
 /// In-block offset of the `state_commit` carrier (the chain's final digest, `= hash(carrier238, iroot)`).
 pub const B_STATE_COMMIT: usize = 179;
 /// In-block base of the chained-absorption intermediate carriers (59 sites at 180..=238).
@@ -1558,11 +1606,24 @@ pub fn generate_rotated_create_cell_trace_with_accounts_tree(
         );
     }
     let before_root8 = before_tree.root8();
-    let mut after_leaves = before_accounts.to_vec();
-    // the born-empty cell rides its own key as its leaf value (tree relinks next_addr).
-    after_leaves.push(HeapLeaf::entry(cell_key, cell_key));
-    // The after-tree is built only to read its root8; move `after_leaves` in (no clone).
-    let after_root8 = CanonicalHeapTree8::new(after_leaves, HEAP_TREE_DEPTH).root8();
+    // GAP #6 AAFI FLIP: the committed AFTER accounts root is now the append-at-free-index fold
+    // (`insert_witness_aafi`), NOT the sorted-compacted rebuild — so it EXACTLY equals the `new_root`
+    // the deployed `cellsInsertOp` (now `MapKind::AafiInsert`, op=4) fill recomputes from the SAME
+    // before tree. The two-path AAFI gate (low-update → R1, append-at-empty-slot → new_root, + the
+    // pointer-bracket range gate) forces sorted-preservation at STABLE positions, installing the
+    // ImtSorted well-linked invariant `cellsFreshOp`'s pointer-bracket presupposes — closing the
+    // forged-cell-birth / identity-takeover the op=3 single-shared-path insert could not bind. A
+    // present / out-of-gap new-cell key has no bracketing low leaf ⇒ `insert_witness_aafi` returns
+    // `None` ⇒ the turn is UNSAT (the deployed effect-level forged-cell-birth refusal).
+    // The born-empty cell rides its own key as its leaf value (tree relinks next_addr).
+    let aafi = before_tree
+        .insert_witness_aafi(HeapLeaf::entry(cell_key, cell_key))
+        .ok_or_else(|| {
+            "forged-cell-birth / out-of-gap new-cell key: the AAFI insert has no bracketing low leaf \
+             — the in-circuit two-path (`aafi_insert`) gate refuses the turn"
+                .to_string()
+        })?;
+    let after_root8 = aafi.new_root;
 
     // Mirror of `EffectVmEmitRotationV3.cellsRootGroupCol`: lane 0 = limb 0 (accounts root); the seven
     // DEDICATED completion limbs 169..175 for lanes 1..7. RELOCATED off `revoked_root`'s committed group
@@ -5068,7 +5129,7 @@ pub fn generate_rotated_create_cell_wide(
         PARAM_BASE + param::NULLIFIER,
         PARAM_BASE + param::NULLIFIER,
         false, // unconditional bind: createCell births an empty cell (valueCol = keyCol), consistent off-row
-        false, // SORTED: the accounts narrow producer (limb 0) still commits insert_witness (op=3), NOT AAFI
+        true, // AAFI: gap-#6 flipped the accounts narrow producer (limb 0) to insert_witness_aafi (op=4)
     )?;
     let dpis = append_wide_carriers(&mut trace, base_pis, ACCUM_INSERT_HOST_WIDTH);
     Ok((trace, dpis, map_heaps))
@@ -6273,5 +6334,131 @@ mod tests {
             occ, expected,
             "rotated pre-iroot layout must be a complete disjoint tiling of 0..{NUM_PRE_LIMBS} (matches Lean rotated178_legal + rotated178_complete)"
         );
+    }
+
+    /// THE MIRROR TOOTH: every hand-declared layout constant in this module must equal the value
+    /// Lean EXPORTS for it (`effect_vm::layout_generated`, emitted by
+    /// `metatheory/EmitLayoutManifest.lean`).
+    ///
+    /// Lean owns this geometry: it defines the limb layout AND emits the constraint descriptors that
+    /// read those columns. This module's producer writes the same columns. When the two disagree the
+    /// failure is not cosmetic — it is a soundness bug that still PROVES on every member you did not
+    /// happen to exercise. That is precisely what happened: the REVOKED-ROOT flag day shifted every
+    /// limb >= 37 by +1, the producer moved to limb 38, the in-circuit perms/VK completion weld stayed
+    /// on 37 (`revoked_root` lane-0), and every honest setPermissions / setVerificationKey turn was
+    /// UNSAT until someone noticed.
+    ///
+    /// This test is the cheap standing guard against that whole class. It is intentionally a
+    /// CONSTANT-BY-CONSTANT comparison and not a fingerprint: when it fails it must say WHICH number
+    /// drifted and to what.
+    #[test]
+    fn hand_written_layout_mirrors_the_lean_export() {
+        use crate::effect_vm::layout_generated as lean;
+
+        // the spine
+        assert_eq!(
+            V1_WIDTH,
+            lean::EFFECT_VM_WIDTH,
+            "V1_WIDTH vs Lean EFFECT_VM_WIDTH"
+        );
+        assert_eq!(B_SPAN, lean::B_SPAN, "B_SPAN");
+        assert_eq!(C_SPAN, lean::C_SPAN, "C_SPAN");
+        assert_eq!(
+            APPENDIX,
+            lean::APPENDIX_SPAN,
+            "APPENDIX vs Lean APPENDIX_SPAN"
+        );
+        assert_eq!(
+            C_CAVEAT_COMMIT,
+            lean::C_COMMIT,
+            "C_CAVEAT_COMMIT vs Lean C_COMMIT"
+        );
+        assert_eq!(
+            C_DFA_RC_OFF,
+            lean::C_RC_OFF,
+            "C_DFA_RC_OFF vs Lean C_RC_OFF"
+        );
+
+        // the committed base limbs
+        assert_eq!(B_RECORD_DIGEST, lean::B_RECORD_DIGEST, "B_RECORD_DIGEST");
+        assert_eq!(B_CAP_ROOT, lean::B_CAP_ROOT, "B_CAP_ROOT");
+        assert_eq!(
+            B_NULLIFIER_ROOT,
+            lean::B_NULLIFIER_ROOT_OFF,
+            "B_NULLIFIER_ROOT"
+        );
+        assert_eq!(
+            B_COMMITMENTS_ROOT,
+            lean::B_COMMITMENTS_ROOT,
+            "B_COMMITMENTS_ROOT"
+        );
+        assert_eq!(B_HEAP_ROOT, lean::B_HEAP_ROOT, "B_HEAP_ROOT");
+        assert_eq!(B_LIFECYCLE, lean::B_LIFECYCLE, "B_LIFECYCLE");
+        assert_eq!(
+            B_COMMITTED_HEIGHT,
+            lean::B_COMMITTED_HEIGHT,
+            "B_COMMITTED_HEIGHT"
+        );
+        assert_eq!(B_DISC, lean::B_DISC, "B_DISC");
+        assert_eq!(B_PERMS, lean::B_PERMS, "B_PERMS");
+        assert_eq!(B_VK, lean::B_VK, "B_VK");
+        assert_eq!(B_MODE, lean::B_MODE, "B_MODE");
+        assert_eq!(B_FIELDS_ROOT, lean::B_FIELDS_ROOT, "B_FIELDS_ROOT");
+        assert_eq!(B_REVOKED_ROOT, lean::B_REVOKED_ROOT, "B_REVOKED_ROOT");
+        assert_eq!(B_IROOT, lean::B_IROOT, "B_IROOT");
+        assert_eq!(B_STATE_COMMIT, lean::B_STATE_COMMIT, "B_STATE_COMMIT");
+
+        // THE WELD OFFSETS — the numbers the setPerms/setVK bug lived in. The producer writes the
+        // perms 8-felt group to lanes [B_PERMS, B_PERMS_COMPLETION ..= +6] and the vk group to
+        // [B_VK, B_VK_COMPLETION ..= +6]; the in-circuit weld reads exactly those columns.
+        assert_eq!(
+            lean::B_PERMS_COMPLETION,
+            B_REVOKED_ROOT + 1,
+            "the perms completion group must start immediately PAST revoked_root — if this ever \
+             collides with B_REVOKED_ROOT again, every honest setPermissions turn goes UNSAT"
+        );
+        assert_eq!(
+            lean::B_VK_COMPLETION,
+            lean::B_PERMS_COMPLETION + 7,
+            "the vk completion group follows the 7 perms completion felts"
+        );
+
+        // The canonical faithful-8-felt group table agrees with the constants and the Lean export.
+        assert_eq!(PERMS_GROUP[0], B_PERMS, "PERMS_GROUP lane 0 vs B_PERMS");
+        assert_eq!(VK_GROUP[0], B_VK, "VK_GROUP lane 0 vs B_VK");
+        assert_eq!(
+            REVOKED_ROOT_GROUP[0], B_REVOKED_ROOT,
+            "REVOKED_ROOT_GROUP lane 0 vs B_REVOKED_ROOT"
+        );
+        assert_eq!(
+            PERMS_GROUP[1],
+            lean::B_PERMS_COMPLETION,
+            "the perms group's first completion felt must be the Lean-exported B_PERMS_COMPLETION — \
+             this is the exact lane the setPermissions UNSAT bug lived in"
+        );
+        assert_eq!(
+            VK_GROUP[1],
+            lean::B_VK_COMPLETION,
+            "the vk group's first completion felt must be the Lean-exported B_VK_COMPLETION"
+        );
+    }
+
+    /// THE GROUP-TABLE DISJOINTNESS TOOTH: no two faithful-8-felt roots may share a column. Two
+    /// groups overlapping means one committed digest's felt IS another's, so forging one forges the
+    /// other — the completion felts are precisely the reused-slot region the base widens opened, so
+    /// this is the standing guard that a future re-lay does not collide them.
+    #[test]
+    fn faithful8_groups_are_pairwise_disjoint() {
+        let mut seen = std::collections::HashMap::<usize, usize>::new();
+        for (gi, group) in ALL_FELT8_GROUPS.iter().enumerate() {
+            for &col in group.iter() {
+                if let Some(prev) = seen.insert(col, gi) {
+                    panic!(
+                        "faithful-8-felt column {col} is shared by group {prev} and group {gi} — \
+                         two committed roots would alias the same felt"
+                    );
+                }
+            }
+        }
     }
 }
