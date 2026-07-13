@@ -3885,12 +3885,14 @@ def afterVKCol (w : Nat) : Nat := w + AFTER_BLOCK_OFF + B_VK
 `effects_hash`. -/
 def declaredParamCol : Nat := prmCol 0
 
-/-- **v10**: the FIRST faithful-8-felt completion column for the perms digest in the AFTER block (the
-new pre-iroot limb 37, carrying `permsHash[1]`; the felts 2..7 follow at +1..+6, limbs 38..=43). -/
-def afterPermsExtraCol (w : Nat) : Nat := w + AFTER_BLOCK_OFF + 37
-/-- **v10**: the FIRST faithful-8-felt completion column for the vk digest (pre-iroot limb 44, carrying
-`vkHash[1]`; felts 2..7 at +1..+6, limbs 45..=50). -/
-def afterVKExtraCol (w : Nat) : Nat := w + AFTER_BLOCK_OFF + 44
+/-- **v10** (post REVOKED-ROOT flag day, +1 shift of every limb ≥ 37): the FIRST faithful-8-felt
+completion column for the perms digest in the AFTER block (pre-iroot limb 38, carrying `permsHash[1]`;
+felts 2..7 follow at +1..+6, limbs 39..=44). Matches the producer's `write_lanes([33, 38..=44])`. -/
+def afterPermsExtraCol (w : Nat) : Nat := w + AFTER_BLOCK_OFF + 38
+/-- **v10** (post REVOKED-ROOT flag day): the FIRST faithful-8-felt completion column for the vk digest
+(pre-iroot limb 45, carrying `vkHash[1]`; felts 2..7 at +1..+6, limbs 46..=51). Matches the producer's
+`write_lanes([34, 45..=51])`. -/
+def afterVKExtraCol (w : Nat) : Nat := w + AFTER_BLOCK_OFF + 45
 
 /-- **`rotateV3WithPermsVKGate sel afterCol d`** — `rotateV3WithRecordPin B_RECORD_DIGEST d` PLUS the
 LIVE perms/VK weld: the AFTER authority sub-limb `afterCol` (perms-digest for setPerms, vk-digest for
@@ -4654,7 +4656,7 @@ def setVKV3 : EffectVmDescriptor2 :=
 
 /-- **FORCE-LEMMA #1 (perms) — `setPermsV3_forces8_extras`.** On an ACTIVE TRANSITION setPermissions row
 of a `Satisfied2 hash setPermsV3` witness, EACH of the 7 committed AFTER perms COMPLETION limbs
-(`afterPermsExtraCol … + i` = limb 37..=43, the faithful `permsHash[1..7]`) EQUALS its declared param
+(`afterPermsExtraCol … + i` = limb 38..=44, the faithful `permsHash[1..7]`) EQUALS its declared param
 `prmCol (i + 1)`. With the limb-0 weld (`setPermissions_forced_sat`) this is the full 8-felt close: a
 forge with the wrong faithful 8-felt is UNSAT. -/
 theorem setPermsV3_forces8_extras (hash : List ℤ → ℤ)
@@ -4670,7 +4672,7 @@ theorem setPermsV3_forces8_extras (hash : List ℤ → ℤ)
 
 /-- **FORCE-LEMMA #2 (vk) — `setVKV3_forces8_extras`.** On an ACTIVE TRANSITION setVK row of a
 `Satisfied2 hash setVKV3` witness, EACH of the 7 committed AFTER vk COMPLETION limbs
-(`afterVKExtraCol … + i` = limb 44..=50, the faithful `vkHash[1..7]`) EQUALS its declared param
+(`afterVKExtraCol … + i` = limb 45..=51, the faithful `vkHash[1..7]`) EQUALS its declared param
 `prmCol (i + 1)` — the full 8-felt close for setVK. -/
 theorem setVKV3_forces8_extras (hash : List ℤ → ℤ)
     {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}

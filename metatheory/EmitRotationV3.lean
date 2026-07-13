@@ -49,6 +49,12 @@ import Dregg2.Deos.VaultSatDescriptor
 -- capacity-floor-refuse + rc wrappers, at the avail-shifted geometry). Bare defs stay for the
 -- bare-path proofs; the WIRE carries the hardened members. See AvailWireMembers.
 import Dregg2.Circuit.Emit.AvailWireMembers
+-- THE CAP-OPEN AVAILABILITY FLIP (the cap-open member of the same wrap class): the LIVE transfer
+-- cap-open keys (`transferCapOpenEffVmDescriptor2R24` + the TB twin) route the HARDENED members —
+-- the cap-open appendix / turn-identity weld re-hosted on `transferV3Avail` (the borrow-weld
+-- rotated base), authority keystones re-established, availability circuit-forced. See
+-- RotatedKernelRefinementCapOpenAvail.
+import Dregg2.Circuit.RotatedKernelRefinementCapOpenAvail
 
 open Dregg2.Circuit.DescriptorIR2 (emitVmJson2)
 open Dregg2.Circuit.Emit.EffectVmEmitRotation
@@ -84,6 +90,9 @@ def main : IO Unit := do
   -- THE AVAILABILITY FLIP: override the two flipped cohort keys with the hardened wire members
   -- (the availability weld gates + 15-bit range teeth + the SAME refuse/rc wrappers). Every other
   -- member emits its committed bare bytes unchanged.
+  -- The cap-open transfer key rides the SAME flip: the LIVE `transferCapOpenEffVmDescriptor2R24`
+  -- routes the hardened cap-open member (the appendix re-hosted on the borrow-weld base — same
+  -- wrap class, cap-authorized route; RotatedKernelRefinementCapOpenAvail).
   -- The FEE'D transfer key (tail position 44, the live sovereign transfer's effect-vm leg) rides
   -- the flip too: `transferFeeV3AvailWire` — the §11.8 fee availability weld (MID-linked
   -- borrow/carry chains closing the wrap through BOTH debit legs, amount AND fee) under the same
@@ -91,8 +100,15 @@ def main : IO Unit := do
   let availOverride : List (String × Dregg2.Circuit.DescriptorIR2.EffectVmDescriptor2) :=
     [ ("transferVmDescriptor2R24", Dregg2.Circuit.Emit.AvailWireMembers.transferV3AvailWire)
     , ("burnVmDescriptor2R24", Dregg2.Circuit.Emit.AvailWireMembers.burnV3AvailWire)
+    , ("transferCapOpenEffVmDescriptor2R24",
+       Dregg2.Circuit.RotatedKernelRefinementCapOpenAvail.transferCapOpenEffV3Avail)
     , ("transferFeeVmDescriptor2R24",
-       Dregg2.Circuit.Emit.AvailWireMembers.transferFeeV3AvailWire) ]
+       Dregg2.Circuit.Emit.AvailWireMembers.transferFeeV3AvailWire)
+      -- gap-#5 AAFI: route the plain revoke to revokeV3 (aafiInsert op=4 on B_REVOKED_ROOT=37 —
+      -- the sibling's v10 flag-day limb; forces the revoked root, hole #3 closed). Re-pushed after a
+      -- flag-day revert overrode the base routing with the bare-refuse deployed-default.
+    , ("revokeVmDescriptor2R24",
+       Dregg2.Circuit.Emit.EffectVmEmitRotationV3.revokeV3) ]
   for (key, d0) in v3RegistryCapOpenDep do
     let d := (availOverride.lookup key).getD d0
     IO.println s!"v3rot\t{key}\t{d.name}\t{emitVmJson2 d}"
@@ -102,10 +118,11 @@ def main : IO Unit := do
   -- PROVEN turn-pinned descriptor rides the wire and the drift gate covers it. The cutover routing the
   -- live transfer cap-open through THIS (the prover's column-fill + the verifier's turn-identity PI
   -- anchor) is the named remaining integration — see CapOpenTurnPins / proof_verify.
+  -- THE CAP-OPEN AVAILABILITY FLIP (TB): the TB key now mints the HARDENED twin — the same
+  -- `effCapOpenV3TB` weld re-hosted on `transferV3Avail` (borrow chain + 15-bit teeth under the
+  -- turn-identity pins; RotatedKernelRefinementCapOpenAvail.transferCapOpenEffV3TBAvail).
   let transferCapOpenTB : Dregg2.Circuit.DescriptorIR2.EffectVmDescriptor2 :=
-    Dregg2.Circuit.Emit.CapOpenTurnPins.effCapOpenV3TB
-      Dregg2.Circuit.Emit.CapOpenEmit.transferV3
-      "dregg-effectvm-transfer-v1-rot24-v3-capopen-eff-tb" Dregg2.Circuit.Emit.CapOpenEmit.EFF_TRANSFER
+    Dregg2.Circuit.RotatedKernelRefinementCapOpenAvail.transferCapOpenEffV3TBAvail
   IO.println s!"v3rot\ttransferCapOpenTBVmDescriptor2R24\t{transferCapOpenTB.name}\t{emitVmJson2 transferCapOpenTB}"
   -- THE WRITE-BEARING TAIL (`v3RegistryHeap` positions 45..50): the apex-proven, registry-deployed
   -- descriptors that FORCE guarantee A (the cap-tree / heap-root / DELEG-tree WRITE), now on the wire so the

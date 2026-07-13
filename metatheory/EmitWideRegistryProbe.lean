@@ -36,6 +36,7 @@ import Dregg2.Circuit.Emit.FieldsOpenEmit
 import Dregg2.Circuit.Emit.AccumulatorInsertEmit
 import Dregg2.Circuit.Emit.CarrierComposed
 import Dregg2.Circuit.Emit.AvailWideMembers
+import Dregg2.Circuit.Emit.AvailWideFeeMember
 import Dregg2.Circuit.RotatedKernelRefinementExercise
 -- THE GENTIAN DEPLOYED-DEFAULT FLIP: the capacity-floor refuse, lifted to ride the WIDE bare cohort
 -- (aux blocks PAST the wide member width — past the two 13×8 wide carriers). Welded onto exactly the
@@ -168,6 +169,30 @@ def main : IO Unit := do
       -- `declared_*_unsat_burnAvailWideRefused`).
       let buWide := Dregg2.Circuit.Emit.AvailWideMembers.burnAvailWideRefused
       IO.println s!"{key}\t{buWide.name}\t{emitVmJson2 buWide}"
+    else if key == "transferCapOpenEffVmDescriptor2R24" then
+      -- AVAILABILITY RETARGET, the WIDE-CAP-OPEN-EFF twin: the live cap-open EFF crown host
+      -- (position 42) rebuilt over the §11.7 borrow-weld face
+      -- (`AvailWideMembers.transferCapOpenEffAvailWide` = the already-flipped narrow
+      -- `transferCapOpenEffV3Avail` wide-appended at the AVAIL face base 198; width 1986 → 2946,
+      -- 46 + 16 PIs). NOT a bare cohort route, so no capacity-floor refuse (`weldWide` is the
+      -- identity on this key). Availability discharge + authority-intact keystones proven
+      -- (`RotatedKernelRefinementCapOpenAvailWide`,
+      -- `wideCapOpenEff_availability_and_exact_move_forced` / `wideCapOpenEffAvail_authorizes`).
+      let ceWide := Dregg2.Circuit.Emit.AvailWideMembers.transferCapOpenEffAvailWide
+      IO.println s!"{key}\t{ceWide.name}\t{emitVmJson2 ceWide}"
+    else if key == "transferFeeVmDescriptor2R24" then
+      -- AVAILABILITY RETARGET, the WIDE-FEE twin: the fee'd-transfer crown host (tail position
+      -- 44, the LIVE SOVEREIGN transfer's effect-vm leg) rebuilt over the §11.8 fee availability
+      -- face (`AvailWideFeeMember.transferFeeAvailWide` = the already-flipped narrow
+      -- `transferFeeV3AvailWire` — v3OfFrozenFeeWide + rc pins, the deployed fee member's
+      -- wrapper shape — wide-appended at the FEE avail face base 204; width 2607 → 2623, the
+      -- 67-PI layout UNCHANGED: 46 base + fee pin 46 + rc 47..50 + 16 anchors). NOT a bare
+      -- cohort route, so no capacity-floor refuse (`weldWide` is the identity on this key).
+      -- The fee availability discharge (BOTH debit legs) + wrap-forgery teeth are proven
+      -- (`RotatedKernelRefinementFeeAvailWide`, `wideFee_availability_and_exact_move_forced` /
+      -- `wideFee_{fee,amount}_forgery_unsat`).
+      let feeWide := Dregg2.Circuit.Emit.AvailWideFeeMember.transferFeeAvailWide
+      IO.println s!"{key}\t{feeWide.name}\t{emitVmJson2 feeWide}"
     else
       IO.println s!"{key}\t{(weldWide key d).name}\t{emitVmJson2 (weldWide key d)}"
   -- position 45: `transferCapOpenTB` made 8-felt-wide, RETARGETED to the AVAIL base (the
