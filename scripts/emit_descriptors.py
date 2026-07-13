@@ -93,6 +93,7 @@ EMITTERS = [
     "EmitUMemCohort.lean",                   # ADDITIVE/STAGED: the umem-form per-effect cohort registry
     "EmitUMemCohortMulti.lean",              # ADDITIVE/STAGED: the MULTI-DOMAIN umem-form cohort registry
     "EmitWideUMemWeldRegistryProbe.lean",    # ADDITIVE/STAGED: the WIDE+umem welded registry (covers wide V3)
+    "EmitLayoutManifest.lean",               # the rotated COLUMN LAYOUT, exported from Lean AS RUST
 ]
 
 
@@ -140,6 +141,28 @@ def ir2_defname_to_file(rust_text: str, c2f: dict[str, str]) -> dict[str, str]:
         if cj in c2f:
             out[dn] = c2f[cj]
     return out
+
+
+# ---- Lean-authored Rust modules ---------------------------------------------
+# Unlike the FP constants (which are REWRITTEN in place inside hand-written .rs files), these are
+# WHOLE modules whose every byte comes from Lean. The layout module is the single source for the
+# rotated column geometry that the producer writes, the descriptors read, and the gates audit.
+
+LAYOUT_RS = ROOT / "circuit" / "src" / "effect_vm" / "layout_generated.rs"
+
+GENERATED_RS: dict[Path, str] = {}
+
+
+def split_layout(stdout: str, _written):
+    """The layout emitter prints a COMPLETE Rust module on stdout. Route it verbatim (it is the
+    file's exact bytes). Sanity-gate the shape so a broken emit cannot silently install an empty
+    or non-Rust layout module — this file is load-bearing for soundness, not decoration."""
+    if "@generated" not in stdout or "pub const EFFECT_VM_WIDTH" not in stdout:
+        sys.exit(
+            "emit_descriptors: layout emitter output does not look like the generated Rust layout "
+            "module (missing @generated header or EFFECT_VM_WIDTH)"
+        )
+    GENERATED_RS[LAYOUT_RS] = stdout if stdout.endswith("\n") else stdout + "\n"
 
 
 def write_file(name: str, content: str, written: dict[str, str]):
@@ -576,7 +599,15 @@ def install_and_stamp(written: dict[str, str]) -> None:
         name for name, content in written.items()
         if not (DESC / name).exists() or (DESC / name).read_text() != content
     )
-    changed = changed_desc + sorted(str(p.relative_to(ROOT)) for p in fp_changes)
+    changed_gen = {
+        p: content for p, content in GENERATED_RS.items()
+        if not p.exists() or p.read_text() != content
+    }
+    changed = (
+        changed_desc
+        + sorted(str(p.relative_to(ROOT)) for p in fp_changes)
+        + sorted(str(p.relative_to(ROOT)) for p in changed_gen)
+    )
 
     if not changed:
         print(
@@ -591,6 +622,9 @@ def install_and_stamp(written: dict[str, str]) -> None:
         (DESC / name).write_text(written[name])
     for p, new_text in fp_changes.items():
         p.write_text(new_text)
+    for p, content in changed_gen.items():
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content)
 
     desc_hashes = {name: sha256_hex(content.encode()) for name, content in written.items()}
     fp_hashes = {
@@ -643,6 +677,8 @@ def main():
             split_wide_registry(out, written)
         elif lean.endswith("EmitBilateralLegs.lean"):
             split_bilateral(out, written)
+        elif lean.endswith("EmitLayoutManifest.lean"):
+            split_layout(out, written)
         elif lean.endswith("EmitCrossCellConservation.lean"):
             split_cross_cell_conservation(out, written)
         elif lean.endswith("EmitUMemCohortMulti.lean"):
