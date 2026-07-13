@@ -55,6 +55,26 @@
 // circuit cannot satisfy this circuit (its exposed VK-core lanes differ, and
 // they are transcript-absorbed + ExposeClaimAir-bound, so they cannot be
 // swapped without re-proving).
+//
+// WHERE THE PINNED VALUE COMES FROM (the pin's VALUE authority): the baked
+// constant is NOT read from the proof fixture. It is loaded from the DERIVED
+// identity artifact fixtures/apex_vk_identity.json, which the Rust derivation
+// lane (circuit-prove/tests/apex_shrink_gnark_fixture.rs
+// derive_deployed_apex_vk_identity_and_check_fixture) mints from a FRESH fold
+// of the apex circuit at HEAD — VK material is content-independent and
+// depth-invariant, so the derivation depends only on the deployed circuit
+// definition — together with the apex's RecursionVk fingerprint (the
+// light-client trust anchor, which hashes the preprocessed commitment as a
+// labeled component, making the (fingerprint, lanes) pair self-binding). The
+// same Rust lane plus TestApexPinFixtureMatchesDerivedDeployedIdentity assert
+// the proof fixture's apex VK-core equals this derived value (a same-shape
+// non-deployed apex would mint a SELF-consistent fixture; the cross-artifact
+// differential is what catches it). HONEST RESIDUAL: there is no proof-free
+// preprocessed-commitment computation (the commitment is produced by the
+// prover's preprocessed-trace commit; a keygen-only path does not exist in
+// p3-circuit-prover), so "derived from the deployed circuit" means "derived
+// by running the HEAD circuit once and recording the fingerprint-bound
+// result" — re-checkable by anyone via the Rust derivation test.
 package friverifier
 
 import (
@@ -128,7 +148,10 @@ type SettlementCircuit struct {
 	// apexPreprocessedCommit, when non-nil, pins the APEX's preprocessed
 	// commitment (the deployed dregg apex's VK-identity core, ApexVkLanes
 	// BabyBear lanes) as circuit constants against the claim channel's
-	// re-exposed VK-core lanes — the apex-VK pin (tooth 2).
+	// re-exposed VK-core lanes — the apex-VK pin (tooth 2). The value is the
+	// DERIVED deployed identity (fixtures/apex_vk_identity.json, minted from
+	// the apex circuit at HEAD and RecursionVk-fingerprint-bound), not a
+	// fixture-read constant — see the package doc's VALUE-authority note.
 	apexPreprocessedCommit []*big.Int
 
 	PrefixObs     []frontend.Variable

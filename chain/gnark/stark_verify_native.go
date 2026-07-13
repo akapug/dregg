@@ -442,6 +442,14 @@ type witnessBusSpec struct {
 // ExposeClaim.
 const ShrinkNumInstances = 6
 
+// ApexVkLanes is the pinned apex VK-core lane count: the apex's preprocessed
+// commitment (its VK-identity core, one BabyBear Poseidon2-W16 Merkle root =
+// 8 felts) rides as lanes 25..33 of the shrink proof's expose_claim channel
+// (shrink_apex_to_outer_exposed: in-circuit `pin_preprocessed_commit` +
+// re-exposure). The SettlementCircuit pins these lanes to the DEPLOYED dregg
+// apex's commitment as baked constants (the apex-VK pin, tooth 2).
+const ApexVkLanes = 8
+
 // ShrinkVkShape is the pinned VK-side shape of the 6-instance EXPOSED shrink
 // proof (batch_stark_prover.rs:276 NUM_PRIMITIVE_TABLES = 3: Const, Public,
 // Alu (circuit/src/ops/op.rs:233-238); non-primitives registered Poseidon2,
@@ -452,7 +460,8 @@ const ShrinkNumInstances = 6
 // 4·16+12 = 76, preprocessed 4·13+7 = 59 pin those knobs); Poseidon2
 // WIDTH_EXT + RATE_EXT + 1 = 7 (poseidon2-circuit-air/src/air.rs:1484-1532
 // at WIDTH_EXT=4, RATE_EXT=2); ExposeClaim ONE WitnessChecks receive per
-// claim lane = 25 (expose_claim_air.rs). Instances with an eval that reads
+// lane = 33 (expose_claim_air.rs: the 25 claim lanes ++ the 8 apex VK-core
+// lanes). Instances with an eval that reads
 // next rows open trace_next / preprocessed_next (BaseAir defaults;
 // Const/Public/Recompose/ExposeClaim override to none).
 type ShrinkVkShape struct {
@@ -466,14 +475,15 @@ type ShrinkVkShape struct {
 	// symbolic interpreter, always).
 	SimpleSpecs map[int]witnessBusSpec
 	// ClaimInstance is the expose_claim instance (the settlement claim
-	// channel); ClaimLen its pinned public-value count = the 25 lanes.
+	// channel); ClaimLen its pinned public-value count = the 25 claim lanes
+	// ++ the 8 apex VK-core lanes.
 	ClaimInstance, ClaimLen int
 }
 
 // ShrinkVk is THE pinned shape for the current (exposed) shrink circuit.
 var ShrinkVk = ShrinkVkShape{
-	NumLookups:      [ShrinkNumInstances]int{1, 1, 18, 7, 1, 25},
-	NumPublicValues: [ShrinkNumInstances]int{0, 0, 0, 0, 0, 25},
+	NumLookups:      [ShrinkNumInstances]int{1, 1, 18, 7, 1, 33},
+	NumPublicValues: [ShrinkNumInstances]int{0, 0, 0, 0, 0, 33},
 	TraceNext:       [ShrinkNumInstances]bool{false, false, true, true, false, false},
 	PreNext:         [ShrinkNumInstances]bool{false, false, true, true, false, false},
 	SimpleSpecs: map[int]witnessBusSpec{
@@ -482,7 +492,8 @@ var ShrinkVk = ShrinkVkShape{
 		4: {multPreCol: 1, idxPreCol: 0}, // Recompose (RecomposePrepLaneCols)
 	},
 	ClaimInstance: 5,
-	ClaimLen:      NumPublicInputs, // 25 — the pinned settlement statement
+	// 25 settlement lanes + 8 apex VK-core lanes.
+	ClaimLen: NumPublicInputs + ApexVkLanes,
 }
 
 // ShrinkStarkChallenges are the transcript challenges the algebra layer

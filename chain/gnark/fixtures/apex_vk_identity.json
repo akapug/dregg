@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "recursion_vk_hex": "3ad1c9c601686a0983ed8df43a4a145e729d985194386ec22156029b92fc5503",
+  "apex_preprocessed_commit": [
+    268067513,
+    683892485,
+    843780348,
+    1680901520,
+    261608891,
+    103688439,
+    1361835212,
+    1543334732
+  ],
+  "description": "The deployed dregg apex's VK identity: recursion_vk_hex is the blake3-32 RecursionVk fingerprint (the light-client trust anchor); apex_preprocessed_commit is the flattened preprocessed commitment the fingerprint hashes (the ApexVkLanes value the gnark SettlementCircuit bakes as its apex-VK pin). Regenerate + differential-check against the proof fixture: cargo test -p dregg-circuit-prove --release --test apex_shrink_gnark_fixture derive_deployed -- --ignored --nocapture"
+}

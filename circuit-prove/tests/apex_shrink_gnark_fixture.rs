@@ -109,15 +109,21 @@ fn repo_root() -> PathBuf {
         .to_path_buf()
 }
 
-/// Cache v2: the EXPOSED-claim shrink proof (shrink_apex_to_outer_exposed)
-/// plus the chain's expected 25-lane claim, so cache-hit runs can still assert
-/// the claim binding without re-folding the apex.
+/// Cache v3: the EXPOSED-claim shrink proof (shrink_apex_to_outer_exposed,
+/// now WITH the apex-VK pin + 8 re-exposed VK-core lanes) plus the chain's
+/// expected 33-lane channel, so cache-hit runs can still assert the binding
+/// without re-folding the apex. (v2 cached the 25-lane pre-pin proof — the
+/// filename bump retires it.)
 fn cache_path() -> PathBuf {
-    repo_root().join("target/apex_shrink_exposed_proof_cache_v2.postcard")
+    repo_root().join("target/apex_shrink_exposed_proof_cache_v3.postcard")
 }
 
 fn fixture_path() -> PathBuf {
     repo_root().join("chain/gnark/fixtures/apex_shrink_fri_real.json")
+}
+
+fn apex_vk_identity_path() -> PathBuf {
+    repo_root().join("chain/gnark/fixtures/apex_vk_identity.json")
 }
 
 type CachedShrink = (Vec<u8>, Vec<u32>); // (postcard proof bytes, expected 25-lane claim)
@@ -171,12 +177,25 @@ fn real_shrink_proof(outer_config: &DreggOuterConfig) -> BatchStarkProof<DreggOu
         .expect("the real apex verifies under ir2_leaf_wrap_config");
 
     // The chain's expected 25-lane settlement claim, in the pinned order
-    // genesis_root8 ++ final_root8 ++ num_turns ++ chain_digest8.
-    let mut expected_claim: Vec<u32> = Vec::with_capacity(25);
+    // genesis_root8 ++ final_root8 ++ num_turns ++ chain_digest8 — FOLLOWED BY
+    // the 8 apex VK-core lanes (the REAL apex's preprocessed commitment, the
+    // RecursionVk-fingerprinted value the shrink pins + re-exposes).
+    let mut expected_claim: Vec<u32> = Vec::with_capacity(33);
     expected_claim.extend(whole.genesis_root.iter().map(|v| v.0));
     expected_claim.extend(whole.final_root.iter().map(|v| v.0));
     expected_claim.push(whole.num_turns as u32);
     expected_claim.extend(whole.chain_digest.iter().map(|v| v.0));
+    let apex_vk: Vec<u32> = whole
+        .root
+        .running_preprocessed_commit()
+        .expect("the real apex carries a preprocessed commitment (its VK core)")
+        .roots()
+        .iter()
+        .flat_map(|r| r.iter().map(|v| v.as_canonical_u32()))
+        .collect();
+    assert_eq!(apex_vk.len(), 8, "apex VK core is one 8-felt W16 root");
+    println!("apex VK-core lanes : {apex_vk:?}");
+    expected_claim.extend(&apex_vk);
 
     let t1 = Instant::now();
     let shrink = shrink_apex_to_outer_exposed(&whole.root, &inner_config, outer_config)
@@ -187,11 +206,11 @@ fn real_shrink_proof(outer_config: &DreggOuterConfig) -> BatchStarkProof<DreggOu
         .expect("the BN254-native exposed shrink proof verifies");
 
     // THE CLAIM TOOTH: the shrink proof's own expose_claim public values ARE
-    // the chain's 25-lane claim, lane for lane.
+    // the chain's 25-lane claim ++ the apex's 8 VK-core lanes, lane for lane.
     assert_eq!(
         proof_claim_lanes(&shrink.proof),
         expected_claim,
-        "re-exposed shrink claim != the chain's 25-lane settlement claim"
+        "re-exposed shrink lanes != the chain's 25-lane claim ++ apex VK core"
     );
 
     let proof_bytes =
@@ -208,6 +227,111 @@ fn real_shrink_proof(outer_config: &DreggOuterConfig) -> BatchStarkProof<DreggOu
         cache.display()
     );
     shrink.proof
+}
+
+/// THE DEPLOYED-IDENTITY DERIVATION + DIFFERENTIAL (the apex-VK pin's VALUE
+/// authority): derive the deployed dregg apex's VK identity — its
+/// `RecursionVk` fingerprint (the light-client trust anchor) plus the
+/// `ApexVkLanes` preprocessed-commitment lanes that fingerprint hashes — from
+/// a FRESH fold of the apex circuit at HEAD, WITHOUT reading the proof
+/// fixture. Then:
+///
+///  1. DIFFERENTIAL: assert the gnark proof fixture's baked apex VK-core
+///     (`apex_shrink_fri_real.json` `apex_preprocessed_commit`) equals the
+///     HEAD-derived deployed value — proving the fixture was minted over the
+///     REAL deployed apex, so the SettlementCircuit's baked pin does not rest
+///     on trusting whoever compiled the fixture;
+///  2. emit `chain/gnark/fixtures/apex_vk_identity.json` — the derived
+///     identity artifact the gnark side bakes its `apexPreprocessedCommit`
+///     constant from (fingerprint-bound: the JSON carries the RecursionVk hex
+///     the lanes hash into, so the pair is checkable against the deployed
+///     anchor; see `ApexVkIdentity`).
+///
+/// VK material is content-independent and (WRAP on) depth-invariant, so the
+/// fixed 2-turn chain's fresh fold carries the deployed circuit's identity —
+/// the derivation depends only on the circuit definition at HEAD.
+#[test]
+#[ignore = "SLOW (one real 2-turn fold, ~4 min): derives the deployed apex VK identity at HEAD, \
+            asserts the gnark fixture matches it, and (re)writes \
+            chain/gnark/fixtures/apex_vk_identity.json"]
+fn derive_deployed_apex_vk_identity_and_check_fixture() {
+    use dregg_circuit_prove::apex_shrink_gnark_export::{APEX_VK_LANES, derive_apex_vk_identity};
+
+    // The deployed apex circuit at HEAD: a fresh fold (NOT the cached shrink,
+    // NOT the fixture). Verified before the identity is read off it.
+    let inner_config = ir2_leaf_wrap_config();
+    let whole = prove_turn_chain_recursive(&the_chain()).expect("the fixed 2-turn chain folds");
+    verify_recursive_batch_proof_with_config(&whole.root.0, &inner_config)
+        .expect("the fresh apex verifies under ir2_leaf_wrap_config");
+
+    let id = derive_apex_vk_identity(&whole.root).expect("the real apex yields a VK identity");
+    assert_eq!(id.apex_preprocessed_commit.len(), APEX_VK_LANES);
+    println!("recursion_vk (deployed anchor) : {}", id.recursion_vk_hex);
+    println!(
+        "apex VK-core lanes (derived)   : {:?}",
+        id.apex_preprocessed_commit
+    );
+
+    // (1) THE DIFFERENTIAL: the proof fixture's baked apex VK-core equals the
+    // independently HEAD-derived deployed value.
+    let raw = std::fs::read_to_string(fixture_path())
+        .expect("the gnark proof fixture exists (export_real_shrink_fri_fixture_for_gnark)");
+    let fx: serde_json::Value = serde_json::from_str(&raw).expect("fixture JSON parses");
+    let fixture_lanes: Vec<u32> = fx["apex_preprocessed_commit"]
+        .as_array()
+        .expect("fixture carries apex_preprocessed_commit")
+        .iter()
+        .map(|v| u32::try_from(v.as_u64().expect("lane is a u64")).expect("lane fits u32"))
+        .collect();
+    assert_eq!(
+        fixture_lanes, id.apex_preprocessed_commit,
+        "the gnark fixture's apex VK-core does NOT equal the deployed apex derived at HEAD — \
+         either the apex circuit changed since the fixture was minted (re-export the fixture) \
+         or the fixture was minted over a NON-deployed apex (the forgery the pin exists to block)"
+    );
+
+    // (2) Emit the derived identity artifact (the gnark bake source).
+    let json = serde_json::to_string_pretty(&id).expect("identity serializes");
+    std::fs::write(apex_vk_identity_path(), &json).expect("write apex VK identity");
+    println!("wrote {}", apex_vk_identity_path().display());
+}
+
+/// THE APEX-VK-PIN REJECT CANARY (Rust half — the gnark half is
+/// `TestSettlementCircuitPinsApexPreprocessedCommitment`): a shrink pinned to
+/// a DIFFERENT apex preprocessed commitment than the apex actually proved
+/// must FAIL — this is what a same-shape malicious apex looks like to the
+/// pinned shrink circuit (`pin_preprocessed_commit` connects the apex
+/// verification's preprocessed-commitment inputs to baked constants; a value
+/// mismatch is unsatisfiable). The ACCEPT half (honest pin proves) is the
+/// exporter test above, which mints the fixture through the same
+/// `shrink_apex_to_outer_exposed_pinned_to(honest)` path.
+#[test]
+#[ignore = "SLOW (one real 2-turn fold, ~4 min): run with --ignored — the apex-VK-pin REJECT canary"]
+fn shrink_pinned_to_foreign_apex_vk_rejects() {
+    use dregg_circuit_prove::apex_shrink_gnark_export::{
+        ApexVkCommit, shrink_apex_to_outer_exposed_pinned_to,
+    };
+    use p3_field::PrimeCharacteristicRing;
+
+    let outer_config = create_outer_config();
+    let inner_config = ir2_leaf_wrap_config();
+    let whole = prove_turn_chain_recursive(&the_chain()).expect("the fixed 2-turn chain folds");
+    let honest = whole
+        .root
+        .running_preprocessed_commit()
+        .expect("the real apex carries a preprocessed commitment");
+
+    // Doctor ONE felt of the expected commitment — the deployed-apex pin a
+    // settlement service would hold when handed a same-shape FOREIGN apex.
+    let mut roots = honest.roots().to_vec();
+    roots[0][0] += p3_baby_bear::BabyBear::ONE;
+    let foreign = ApexVkCommit::from(roots);
+
+    match shrink_apex_to_outer_exposed_pinned_to(&whole.root, &inner_config, &outer_config, foreign)
+    {
+        Ok(_) => panic!("a shrink pinned to a foreign apex VK-core must NOT witness/prove"),
+        Err(err) => println!("apex-VK pin mismatch rejected: {err}"),
+    }
 }
 
 #[test]
@@ -247,12 +371,24 @@ fn export_real_shrink_fri_fixture_for_gnark() {
         fixture.table_publics[fixture.claim_instance]
     );
 
-    // The fixture's claim channel is the proof's re-exposed 25-lane claim.
-    assert_eq!(fixture.table_publics[fixture.claim_instance].len(), 25);
+    // The fixture's claim channel is the proof's re-exposed 25-lane claim ++
+    // the 8 apex VK-core lanes, and the labeled apex_preprocessed_commit copy
+    // matches the channel tail.
+    assert_eq!(fixture.table_publics[fixture.claim_instance].len(), 33);
     assert_eq!(
         fixture.table_publics[fixture.claim_instance],
         proof_claim_lanes(&proof),
         "fixture claim lanes drifted from the proof's expose_claim public values"
+    );
+    assert_eq!(fixture.apex_preprocessed_commit.len(), 8);
+    assert_eq!(
+        fixture.apex_preprocessed_commit[..],
+        fixture.table_publics[fixture.claim_instance][25..],
+        "labeled apex VK-core copy drifted from the claim-channel tail"
+    );
+    println!(
+        "apex_preprocessed_commit: {:?}",
+        fixture.apex_preprocessed_commit
     );
 
     // Shape sanity the gnark loader will re-assert.

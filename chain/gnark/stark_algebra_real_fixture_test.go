@@ -27,8 +27,11 @@
 package friverifier
 
 import (
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"math/big"
+	"os"
 	"testing"
 
 	"github.com/consensys/gnark-crypto/ecc"
@@ -666,7 +669,7 @@ func allocSettlementCircuit(t *testing.T, fx *shrinkRealFixture, ex *shrinkStark
 		inputRounds:            shrinkInputRoundsFromFixture(t, fx, ex.shapes),
 		claimInstance:          fx.ClaimInstance,
 		vkPreprocessedRoot:     shrinkPreprocessedRoot(t, fx, ex.loc),
-		apexPreprocessedCommit: apexPreprocessedCommitConstants(fx),
+		apexPreprocessedCommit: apexPreprocessedCommitConstants(t),
 		PrefixObs:              inner.PrefixObs,
 		PrefixDigests:          inner.PrefixDigests,
 		PrefixSamples:          inner.PrefixSamples,
@@ -694,7 +697,7 @@ func assignSettlementCircuit(t *testing.T, fx *shrinkRealFixture, ex *shrinkStar
 		inputRounds:            shrinkInputRoundsFromFixture(t, fx, ex.shapes),
 		claimInstance:          fx.ClaimInstance,
 		vkPreprocessedRoot:     shrinkPreprocessedRoot(t, fx, ex.loc),
-		apexPreprocessedCommit: apexPreprocessedCommitConstants(fx),
+		apexPreprocessedCommit: apexPreprocessedCommitConstants(t),
 		PrefixObs:              inner.PrefixObs,
 		PrefixDigests:          inner.PrefixDigests,
 		PrefixSamples:          inner.PrefixSamples,
@@ -708,15 +711,94 @@ func assignSettlementCircuit(t *testing.T, fx *shrinkRealFixture, ex *shrinkStar
 	return c
 }
 
-// apexPreprocessedCommitConstants lifts the fixture's apex VK-core lanes (the
-// deployed dregg apex's preprocessed commitment — loader-verified to equal
-// the claim channel's tail) to the baked circuit constants of the apex-VK pin.
-func apexPreprocessedCommitConstants(fx *shrinkRealFixture) []*big.Int {
-	out := make([]*big.Int, len(fx.ApexPreprocessedCommit))
-	for i, v := range fx.ApexPreprocessedCommit {
+// apexVkIdentity is the DERIVED deployed-apex VK identity artifact
+// (fixtures/apex_vk_identity.json), minted by the Rust derivation lane —
+// apex_shrink_gnark_fixture.rs derive_deployed_apex_vk_identity_and_check_fixture
+// — from a FRESH fold of the apex circuit at HEAD, NOT from the proof
+// fixture. RecursionVkHex is the blake3-32 RecursionVk fingerprint (the
+// light-client trust anchor, which hashes the preprocessed commitment as a
+// labeled component), so the (fingerprint, lanes) pair is self-binding:
+// anyone holding the deployed anchor can check the lanes belong to the
+// deployed apex (circuit-prove/src/apex_shrink_gnark_export.rs
+// ApexVkIdentity documents the collision-resistance argument).
+type apexVkIdentity struct {
+	Version                int      `json:"version"`
+	RecursionVkHex         string   `json:"recursion_vk_hex"`
+	ApexPreprocessedCommit []uint32 `json:"apex_preprocessed_commit"`
+	Description            string   `json:"description"`
+}
+
+const apexVkIdentityPath = "fixtures/apex_vk_identity.json"
+
+func loadApexVkIdentity(t *testing.T) *apexVkIdentity {
+	t.Helper()
+	raw, err := os.ReadFile(apexVkIdentityPath)
+	if err != nil {
+		t.Fatalf("derived apex VK identity must exist (Rust lane emits it via "+
+			"apex_shrink_gnark_fixture.rs derive_deployed_apex_vk_identity_and_check_fixture): %v", err)
+	}
+	id := &apexVkIdentity{}
+	if err := json.Unmarshal(raw, id); err != nil {
+		t.Fatalf("apex VK identity JSON: %v", err)
+	}
+	if id.Version != 1 {
+		t.Fatalf("apex VK identity version %d (want 1)", id.Version)
+	}
+	if b, err := hex.DecodeString(id.RecursionVkHex); err != nil || len(b) != 32 {
+		t.Fatalf("recursion_vk_hex %q is not a 32-byte hex fingerprint", id.RecursionVkHex)
+	}
+	if len(id.ApexPreprocessedCommit) != ApexVkLanes {
+		t.Fatalf("derived apex VK-core has %d lanes (want %d)",
+			len(id.ApexPreprocessedCommit), ApexVkLanes)
+	}
+	for _, v := range id.ApexPreprocessedCommit {
+		requireCanonicalBB(t, v, "derived apex VK-core lane")
+	}
+	return id
+}
+
+// apexPreprocessedCommitConstants bakes the settlement circuit's apex-VK pin
+// from the DERIVED deployed identity (loadApexVkIdentity) — the value
+// re-derived from the apex circuit definition at HEAD and carried with its
+// RecursionVk fingerprint — NOT from the proof fixture. The fixture's own
+// apex VK-core lanes are separately asserted equal to this derived value
+// (TestApexPinFixtureMatchesDerivedDeployedIdentity), and the accept test
+// closes the loop end-to-end (a fixture minted over any other apex fails the
+// pin these constants bake).
+func apexPreprocessedCommitConstants(t *testing.T) []*big.Int {
+	id := loadApexVkIdentity(t)
+	out := make([]*big.Int, len(id.ApexPreprocessedCommit))
+	for i, v := range id.ApexPreprocessedCommit {
 		out[i] = new(big.Int).SetUint64(uint64(v))
 	}
 	return out
+}
+
+// THE FIXTURE↔DEPLOYED DIFFERENTIAL (gnark half; the Rust half re-derives the
+// deployed value from a fresh fold at HEAD): the proof fixture's apex VK-core
+// — the claim channel's tail lanes, loader-verified against the labeled copy
+// — equals the independently derived deployed identity the settlement
+// circuit bakes. A proof fixture minted over a same-shape NON-deployed apex
+// is self-consistent (its own claim tail matches its own apex), so THIS
+// cross-artifact check, not fixture-internal consistency, is what ties the
+// baked pin's value to the deployed apex.
+func TestApexPinFixtureMatchesDerivedDeployedIdentity(t *testing.T) {
+	fx := loadShrinkRealFixture(t)
+	id := loadApexVkIdentity(t)
+	if len(fx.ApexPreprocessedCommit) != len(id.ApexPreprocessedCommit) {
+		t.Fatalf("fixture apex VK-core has %d lanes, derived deployed identity %d",
+			len(fx.ApexPreprocessedCommit), len(id.ApexPreprocessedCommit))
+	}
+	for i, want := range id.ApexPreprocessedCommit {
+		if got := fx.ApexPreprocessedCommit[i]; got != want {
+			t.Fatalf("fixture apex VK-core lane %d = %d != derived deployed lane %d "+
+				"(recursion_vk %s) — the proof fixture was NOT minted over the deployed apex, "+
+				"or one artifact is stale; regenerate both via the Rust lanes "+
+				"(derive_deployed_apex_vk_identity_and_check_fixture + "+
+				"export_real_shrink_fri_fixture_for_gnark)",
+				i, got, want, id.RecursionVkHex)
+		}
+	}
 }
 
 // shrinkDigestWordAt returns the flat digest-stream word at `off` (the same

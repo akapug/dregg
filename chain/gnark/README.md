@@ -31,7 +31,13 @@ shrink_apex_to_outer_exposed`, fixture `fixtures/apex_shrink_fri_real.json`):
    values — transcript-absorbed AND AIR-constrained, so the circuit cannot be
    satisfied for a root the proof does not attest; and
 6. pins the shrink proof's preprocessed (op-list) commitment as a circuit
-   constant (the shrink-VK core).
+   constant (the shrink-VK core); and
+7. **pins the APEX's VK identity** (the apex-VK pin): the apex's preprocessed
+   commitment — in-circuit constrained by the Rust shrink
+   (`pin_preprocessed_commit`) and re-exposed as `expose_claim` lanes 25..33 —
+   is asserted equal to the DEPLOYED dregg apex's commitment as baked
+   constants, so a same-shape malicious apex (doctored preprocessed columns,
+   arbitrary false claim) cannot settle.
 
 Compiled: **~12.2M R1CS** over BN254. `settlement_snark_test.go`
 (`DREGG_SNARK=1`) runs the full Groth16 flow — compile, (dev/unsafe) setup,
@@ -42,10 +48,7 @@ settles a REAL proof against the REAL generated verifier (no mock on the
 accept path).
 
 NAMED RESIDUALS (honest scope): the Groth16 setup is a single-party DEV
-ceremony (a production VK needs an MPC); the APEX's own VK identity rides as
-shrink-circuit public inputs (Public-table rows) and is not yet independently
-pinned in-circuit — chain-level apex-VK anchoring is the RecursionVk
-fingerprint discipline.
+ceremony (a production VK needs an MPC).
 
 ## Why native, not zkVM
 

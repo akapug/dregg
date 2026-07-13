@@ -100,7 +100,9 @@ use crate::dregg_outer_config::{
     OUTER_FRI_QUERY_POW_BITS, OuterChallengeMmcs, OuterChallenger, OuterCompress, OuterHash,
     OuterValMmcs, dregg_poseidon2_bn254,
 };
-use crate::plonky3_recursion_impl::recursive::{DreggRecursionConfig, create_recursion_backend};
+use crate::plonky3_recursion_impl::recursive::{
+    DreggRecursionConfig, RecursionVk, create_recursion_backend, recursion_vk_fingerprint,
+};
 
 const D: usize = 4;
 type EF = BinomialExtensionField<BabyBear, D>;
@@ -132,6 +134,91 @@ pub const SETTLEMENT_CLAIM_LANES: usize = 25;
 /// These ride as lanes `25..33` of the shrink proof's `expose_claim` table
 /// (see [`shrink_apex_to_outer_exposed`]).
 pub const APEX_VK_LANES: usize = 8;
+
+// ============================================================================
+// THE DEPLOYED APEX VK-IDENTITY (RecursionVk → ApexVkLanes)
+// ============================================================================
+
+/// The deployed dregg apex's VK identity — the canonical `RecursionVk →
+/// ApexVkLanes` derivation record, serialized to
+/// `chain/gnark/fixtures/apex_vk_identity.json` for the gnark settlement
+/// circuit to bake its apex-VK pin from.
+///
+/// ## Why the pair is BOUND, not two independent claims
+///
+/// [`recursion_vk_fingerprint`] (the light-client trust anchor — a blake3-32
+/// over the apex's verifier-reconstruction material) hashes the apex's
+/// preprocessed commitment `gp.commitment` as a labeled component
+/// (`"preprocessed_commitment"`), and `apex_preprocessed_commit` here is the
+/// flattened canonical-`u32` felts of the SAME `gp.commitment` object
+/// ([`p3_recursion::RecursionOutput::running_preprocessed_commit`] returns
+/// exactly the value the fingerprint serializes). By blake3 collision
+/// resistance, VK material that fingerprints to a given `recursion_vk_hex`
+/// cannot carry different lanes — so anyone holding the deployed
+/// [`RecursionVk`] anchor can check that a claimed `ApexVkLanes` value is the
+/// deployed apex's, without trusting whoever compiled a proof fixture.
+///
+/// VK material is content-independent (two proofs of the same circuit over
+/// different data carry identical material) and — with the accumulator's WRAP
+/// step ON — depth-invariant, so a fresh fold of ANY chain at HEAD derives
+/// the deployed circuit's identity. `derive_deployed_apex_vk_identity_and_check_fixture`
+/// (tests/apex_shrink_gnark_fixture.rs) is the minting + differential gate.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApexVkIdentity {
+    /// Artifact schema version.
+    pub version: u32,
+    /// Hex of the apex's [`RecursionVk`] fingerprint — the SAME 32-byte
+    /// blake3 anchor a light client pins ([`recursion_vk_fingerprint`]).
+    pub recursion_vk_hex: String,
+    /// The apex's preprocessed commitment (its VK-identity core) as
+    /// [`APEX_VK_LANES`] canonical BabyBear `u32` lanes — the value
+    /// `chain/gnark`'s `SettlementCircuit` bakes as `apexPreprocessedCommit`.
+    pub apex_preprocessed_commit: Vec<u32>,
+    /// Human-readable provenance note (how to regenerate/re-check).
+    pub description: String,
+}
+
+/// Derive the apex's VK identity — its [`RecursionVk`] fingerprint together
+/// with the [`APEX_VK_LANES`] preprocessed-commitment lanes that fingerprint
+/// hashes — from an apex proof's verifier-reconstruction material.
+///
+/// The proof argument is a CARRIER of the circuit's VK material, not a trust
+/// root: the material is content-independent, and the returned pair is
+/// self-binding (see [`ApexVkIdentity`]) — check `recursion_vk_hex` against
+/// the deployed anchor and the lanes are the deployed apex's.
+pub fn derive_apex_vk_identity(
+    apex: &RecursionOutput<DreggRecursionConfig>,
+) -> Result<ApexVkIdentity, String> {
+    let commit = apex
+        .running_preprocessed_commit()
+        .ok_or("apex proof carries no preprocessed commitment (no VK core)")?;
+    let lanes: Vec<u32> = commit
+        .roots()
+        .iter()
+        .flat_map(|r| r.iter().map(|v| v.as_canonical_u32()))
+        .collect();
+    if lanes.len() != APEX_VK_LANES {
+        return Err(format!(
+            "apex preprocessed commitment has {} felts, the pinned VK-core shape is {APEX_VK_LANES} \
+             (cap height drifted — refusing to derive an unexpected shape)",
+            lanes.len(),
+        ));
+    }
+    let vk: RecursionVk = recursion_vk_fingerprint(&apex.0);
+    Ok(ApexVkIdentity {
+        version: 1,
+        recursion_vk_hex: vk.to_hex(),
+        apex_preprocessed_commit: lanes,
+        description: "The deployed dregg apex's VK identity: recursion_vk_hex is the blake3-32 \
+                      RecursionVk fingerprint (the light-client trust anchor); \
+                      apex_preprocessed_commit is the flattened preprocessed commitment the \
+                      fingerprint hashes (the ApexVkLanes value the gnark SettlementCircuit bakes \
+                      as its apex-VK pin). Regenerate + differential-check against the proof \
+                      fixture: cargo test -p dregg-circuit-prove --release --test \
+                      apex_shrink_gnark_fixture derive_deployed -- --ignored --nocapture"
+            .to_string(),
+    })
+}
 
 /// Shrink a REAL apex into a BN254-native-hash proof **with the apex's exposed
 /// 25-lane chain claim RE-EXPOSED through the shrink proof's OWN
@@ -209,6 +296,40 @@ pub fn shrink_apex_to_outer_exposed(
     inner_config: &DreggRecursionConfig,
     outer_config: &DreggOuterConfig,
 ) -> Result<ApexShrinkProof, String> {
+    // Pin to the apex's own preprocessed commitment (the fixture-mint path:
+    // the apex IS the deployed dregg apex, so its commitment IS the deployed
+    // value — the derivation test `derive_deployed_apex_vk_identity_and_check_fixture`
+    // re-derives that value from a FRESH fold at HEAD via
+    // [`derive_apex_vk_identity`] and asserts the fixture matches). A
+    // settlement SERVICE receiving untrusted apexes should call
+    // [`shrink_apex_to_outer_exposed_pinned_to`] with the deployed constant
+    // (an anchor-checked [`ApexVkIdentity`]) instead.
+    let apex_pre_commit = apex
+        .running_preprocessed_commit()
+        .ok_or("apex proof carries no preprocessed commitment (no VK core to pin)")?;
+    shrink_apex_to_outer_exposed_pinned_to(apex, inner_config, outer_config, apex_pre_commit)
+}
+
+/// The runtime preprocessed-commitment value type of the inner (apex) config —
+/// the apex's VK-identity core (a Merkle cap of one Poseidon2-W16 root).
+pub type ApexVkCommit = <<DreggRecursionConfig as StarkGenericConfig>::Pcs as Pcs<
+    <DreggRecursionConfig as StarkGenericConfig>::Challenge,
+    <DreggRecursionConfig as StarkGenericConfig>::Challenger,
+>>::Commitment;
+
+/// [`shrink_apex_to_outer_exposed`] with the apex-VK pin supplied by the
+/// CALLER: the shrink circuit is pinned to `expected_apex_pre_commit` (baked
+/// constants `connect`ed to the apex-verification's preprocessed-commitment
+/// inputs, and re-exposed as claim lanes 25..33). An apex whose preprocessed
+/// commitment differs — a same-shape malicious apex — fails witness
+/// generation/proving (the pin canary in `tests/apex_shrink_gnark_fixture.rs`
+/// exercises exactly this).
+pub fn shrink_apex_to_outer_exposed_pinned_to(
+    apex: &RecursionOutput<DreggRecursionConfig>,
+    inner_config: &DreggRecursionConfig,
+    outer_config: &DreggOuterConfig,
+    apex_pre_commit: ApexVkCommit,
+) -> Result<ApexShrinkProof, String> {
     // Locate the apex's expose_claim instance (its 25-lane claim channel).
     let claim_pos = apex
         .0
@@ -221,12 +342,6 @@ pub fn shrink_apex_to_outer_exposed(
     if claim_len == 0 {
         return Err("apex expose_claim table carries no public values".into());
     }
-
-    // The apex's preprocessed commitment — the VK-identity core to pin+expose
-    // (see the module doc: THE APEX-VK PIN).
-    let apex_pre_commit = apex
-        .running_preprocessed_commit()
-        .ok_or("apex proof carries no preprocessed commitment (no VK core to pin)")?;
     let apex_vk_felts: Vec<BabyBear> = apex_pre_commit
         .roots()
         .iter()

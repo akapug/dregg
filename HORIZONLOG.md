@@ -8,6 +8,20 @@ lot: per WE-DO-NOT-NAME-WE-SHIP, anything that sits here across many sessions
 should be either scheduled or explicitly demoted to the Research tier with a
 reason.)*
 
+## Apex-VK pin landed — Groth16 artifacts need one re-mint (2026-07-13, apex-VK-pin lane, named in `chain/gnark/settlement_circuit.go` tooth 2)
+
+**The same-shape-apex forgery is CLOSED at the circuit level** (shrink pins the apex's
+preprocessed commitment in-circuit via `pin_preprocessed_commit` + re-exposes it as
+expose_claim lanes 25..33; SettlementCircuit bakes the deployed apex's 8 lanes and asserts —
+`TestSettlementCircuitPinsApexPreprocessedCommitment` rejects both directions, full gnark
+suite green on the regenerated v4 fixture). REMAINING (mechanical re-mint, ~15 min + tens of
+GB): the SettlementCircuit R1CS changed, so the `DREGG_SNARK=1` Groth16 end-to-end must be
+re-run to regenerate `chain/contracts/DreggGroth16Verifier25.sol` + the
+`chain/test/fixtures/settlement_groth16.json` calldata fixture (both now STALE — minted from
+the pre-pin circuit; the Foundry real-proof settle test replays them). Closure shape:
+`cd chain/gnark && DREGG_SNARK=1 go test -run TestSettlementGroth16EndToEnd -v -timeout 240m`,
+then `forge test`.
+
 ## Transfer availability — hardened-path deployment flip (2026-07-12, Fable avail-wide lane, named in `1547493e1` + `RotatedKernelRefinementAvail.lean`)
 
 **The Lean proof that availability is circuit-forced on the hardened graduable-wide path is LANDED**
