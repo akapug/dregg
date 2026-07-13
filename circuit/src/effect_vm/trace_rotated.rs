@@ -6226,4 +6226,52 @@ mod tests {
             Some("revokeCapabilityVmDescriptor2R24")
         );
     }
+
+    /// The Rust-side `Legal` guard, mirroring the Lean-verified `rotated178` (`Dregg2.Circuit.Emit.
+    /// RotatedLayout`, proven `Legal` + complete-tiling). The producer (`compute_rotated_pre_limbs`)
+    /// and the circuit group_col fns are independent copies of these positions; this asserts they form
+    /// a COMPLETE DISJOINT TILING of `0..NUM_PRE_LIMBS`, catching the position-overlap/gap drift the
+    /// Lean allocator makes unconstructable (the cells/revoked overlap class that cost the 178 flag-day).
+    /// Lane-0 columns are bound to the circuit's own `B_*` constants; the completion positions are
+    /// grounded lane-for-lane in `cell::commitment::compute_rotated_pre_limbs`.
+    #[test]
+    fn rotated_layout_is_a_complete_disjoint_tiling() {
+        let mut occ: Vec<usize> = Vec::new();
+        // singles (scalars, no completion group): r0/r1/r2, fields[0..7] lane-0, lifecycle/epoch/height/disc/mode
+        occ.extend([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 29, 30, 31, 32, 35]);
+        // the 10 faithful-8-felt groups (lane0 + 7 completion)
+        let groups: [[usize; 8]; 10] = [
+            [24, 12, 13, 14, 15, 16, 17, 18], // authority_digest
+            [B_CAP_ROOT, 52, 53, 54, 55, 56, 57, 58],
+            [B_NULLIFIER_ROOT, 68, 69, 70, 71, 72, 73, 74],
+            [B_COMMITMENTS_ROOT, 75, 76, 77, 78, 79, 80, 81],
+            [B_HEAP_ROOT, 59, 60, 61, 62, 63, 64, 65],
+            [33, 38, 39, 40, 41, 42, 43, 44], // perms_digest
+            [34, 45, 46, 47, 48, 49, 50, 51], // vk_digest
+            [B_FIELDS_ROOT, 66, 67, 19, 20, 21, 22, 23], // non-contiguous (reuses headroom 19..23)
+            [B_REVOKED_ROOT, 82, 83, 84, 85, 86, 87, 88],
+            [B_CELLS_ROOT, 169, 170, 171, 172, 173, 174, 175], // completion circuit-only, producer-zero
+        ];
+        for g in groups {
+            occ.extend(g);
+        }
+        // carrier-material octets (each base .. base+8)
+        for base in [B_CHILD_VK_OCTET, B_CONTRACT_HASH_OCTET, B_PUBKEY_OCTET] {
+            for k in 0..8 {
+                occ.push(base + k);
+            }
+        }
+        // fields[0..7] completion octet (113..168)
+        for k in 0..56 {
+            occ.push(113 + k);
+        }
+        // pads
+        occ.extend([176, 177]);
+        occ.sort_unstable();
+        let expected: Vec<usize> = (0..NUM_PRE_LIMBS).collect();
+        assert_eq!(
+            occ, expected,
+            "rotated pre-iroot layout must be a complete disjoint tiling of 0..{NUM_PRE_LIMBS} (matches Lean rotated178_legal + rotated178_complete)"
+        );
+    }
 }
