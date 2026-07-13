@@ -71,3 +71,12 @@ the metatheory/circuit terminal.
   never dispatches a novel method; EffectKindIs would open a choice hole). Correct fix: a reserved HEAP_HATCH_METHOD
   MethodIs case with Immutable teeth on all register slots (the hatch dispatches but reaches ONLY the heap). Driven 118/0.
   Honest boundary: the hatch is method-specific, not arbitrary-method.
+
+## K1 LANDED (Rust+Lean), 2 follow-ups (2026-07-12)
+- HeapAtom::DeltaEquals + outer HeapFieldLteOther — Rust (cell/program) + Lean twin, proven + #assert_axioms-clean,
+  driven (dregg-cell 702/0). Append-only. Retires the Bazaar's fixed-slot-purse workaround.
+- FOLLOW-UP A (AIR): a new SLOT_CAVEAT_TAG_DELTA_EQUALS + a cross-key tag + the RotCaveatEntry heap-plane AIR enforcement
+  (circuit/effect_vm/pi.rs:461 + trace.rs:255-332). Coordinate with the IMT/circuit terminal (hot). Nothing regresses —
+  heap atoms are executor-replay-only today.
+- FOLLOW-UP B (Lean fidelity): an EXACT heap-absent-fail-closed Lean lemma for HeapFieldLteOther (the current reuse of
+  RelCaveat.fieldLteOther reads absent-as-0; the Rust fails closed — sound-by-tightening but not exactly modeled).
