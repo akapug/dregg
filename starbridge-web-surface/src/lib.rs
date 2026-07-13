@@ -152,6 +152,7 @@
 pub mod affordance;
 pub mod delegate;
 pub mod game;
+pub mod indexer;
 pub mod receipt_stream;
 pub mod rehydrate;
 pub mod transclusion;
@@ -222,6 +223,15 @@ pub use world::{
 pub use receipt_stream::ReceiptStreamPoll;
 pub use receipt_stream::{
     Admitted, Cursor, IngestError, ReceiptEnvelope, ReceiptStream, StreamedReceipt,
+};
+// The reactive-read INDEXER — the missing middle. Folds the VERIFIED
+// [`ReceiptStream`] into a materialized per-cell view + the [`dregg_query`] EDB,
+// exposes reactive subscriptions (a client query fires on a matching state
+// change), local tx simulation (optimistic render for the next dense position),
+// and whole-log non-omission certificates (a client proves the indexer hid no
+// state change). The Torii/MUD shape, welded from the two halves that exist.
+pub use indexer::{
+    CellView, Indexer, IngestOutcome, MaterializedView, SimulatedTurn, SubId, SubscriptionEvent,
 };
 pub use vision_predicate::{
     register_vision_verifier, verify_vision_proof, FogVisionProducer, FogVisionVerifier,

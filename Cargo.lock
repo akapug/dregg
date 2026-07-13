@@ -4374,6 +4374,7 @@ dependencies = [
  "dregg-cell",
  "dregg-doc",
  "dregg-firmament",
+ "dregg-narrator",
  "dregg-sdk",
  "dregg-sdk-net",
  "dregg-tee-verify",
@@ -6103,6 +6104,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dregg-schema"
+version = "0.1.0"
+dependencies = [
+ "dregg-app-framework",
+ "dregg-cell",
+ "spween-dregg",
+]
+
+[[package]]
 name = "dregg-sdk"
 version = "0.1.0"
 dependencies = [
@@ -6643,9 +6653,13 @@ dependencies = [
  "blake3",
  "deos-view",
  "dregg-app-framework",
+ "dregg-pay",
  "dungeon-on-dregg",
+ "hex",
+ "procgen-dregg",
  "spween",
  "spween-dregg",
+ "ugc-dregg",
 ]
 
 [[package]]
@@ -15062,6 +15076,7 @@ dependencies = [
  "attested-dm",
  "blake3",
  "dregg-dice",
+ "hex",
 ]
 
 [[package]]
