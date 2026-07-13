@@ -23,9 +23,11 @@ use solana_program::{
 use crate::error::SettlementError;
 use crate::groth16::{self, Proof};
 use crate::instruction::SettlementInstruction;
-use crate::state::{is_canonical_lane, SettlementState, STATE_LEN};
+use crate::state::{
+    is_canonical_lane, packed_root, ProvenRootMarker, SettlementState, MARKER_LEN, STATE_LEN,
+};
 use crate::vk::NUM_PUBLIC_INPUTS;
-use crate::SEED_SETTLEMENT;
+use crate::{SEED_PROVEN_ROOT, SEED_SETTLEMENT};
 
 pub fn process(
     program_id: &Pubkey,
@@ -56,6 +58,9 @@ pub fn process(
             },
             &inputs,
         ),
+        SettlementInstruction::AssertProvenRoot { root } => {
+            assert_proven_root(program_id, accounts, root)
+        }
     }
 }
 
@@ -68,14 +73,63 @@ fn expect_settlement_pda(program_id: &Pubkey, key: &Pubkey) -> Result<u8, Settle
     Ok(bump)
 }
 
+/// Derive the proven-root marker PDA for `packed` (a `packLanes` key).
+fn proven_root_pda(program_id: &Pubkey, packed: &[u8; 32]) -> (Pubkey, u8) {
+    Pubkey::find_program_address(&[SEED_PROVEN_ROOT, packed], program_id)
+}
+
+/// Record a proven root in the registry: create its marker PDA (program-owned)
+/// carrying `height`. Idempotent -- if the marker already exists (a root recurred,
+/// e.g. a cycle), it is left as-is. The marker's existence is the Solana
+/// `isProvenRoot`. `packed` is never `packLanes([0;8])` on a real path (a settle
+/// records `final_root`, an init records the pinned genesis; the Nomad-law zero
+/// root has no marker).
+fn record_proven_root<'a>(
+    program_id: &Pubkey,
+    payer: &AccountInfo<'a>,
+    marker_ai: &AccountInfo<'a>,
+    system_program: &AccountInfo<'a>,
+    packed: &[u8; 32],
+    height: u64,
+) -> ProgramResult {
+    let (pda, bump) = proven_root_pda(program_id, packed);
+    if &pda != marker_ai.key {
+        return Err(SettlementError::UnprovenRoot.into());
+    }
+    // Idempotent: an already-recorded root stays recorded.
+    if !marker_ai.data_is_empty() {
+        return Ok(());
+    }
+    if system_program.key != &solana_program::system_program::id() {
+        return Err(SettlementError::AccountState.into());
+    }
+    let rent = Rent::get()?;
+    let lamports = rent.minimum_balance(MARKER_LEN);
+    let ix = system_instruction::create_account(
+        payer.key,
+        marker_ai.key,
+        lamports,
+        MARKER_LEN as u64,
+        program_id,
+    );
+    invoke_signed(
+        &ix,
+        &[payer.clone(), marker_ai.clone(), system_program.clone()],
+        &[&[SEED_PROVEN_ROOT, packed, &[bump]]],
+    )?;
+    ProvenRootMarker { height }.pack_into(&mut marker_ai.data.borrow_mut())?;
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // InitSettlement
 // ---------------------------------------------------------------------------
 
 /// Accounts (in order):
-///   0. `[signer, writable]` payer (funds the created account)
+///   0. `[signer, writable]` payer (funds the created accounts)
 ///   1. `[writable]`         settlement state PDA `[b"settlement"]` (created, program-owned)
-///   2. `[]`                 System program
+///   2. `[writable]`         genesis proven-root marker PDA `[b"proven_root", packLanes(genesis)]`
+///   3. `[]`                 System program
 fn init(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
@@ -85,6 +139,7 @@ fn init(
     let ai = &mut accounts.iter();
     let payer = next_account_info(ai)?;
     let state_ai = next_account_info(ai)?;
+    let genesis_marker_ai = next_account_info(ai)?;
     let system_program = next_account_info(ai)?;
 
     if !payer.is_signer {
@@ -136,6 +191,17 @@ fn init(
         vk_hash,
     };
     state.pack_into(&mut state_ai.data.borrow_mut())?;
+
+    // Record the genesis anchor in the proven-root registry (height 0), so the
+    // first span's `genesisRoot` is `isProvenRoot` exactly like every later root.
+    record_proven_root(
+        program_id,
+        payer,
+        genesis_marker_ai,
+        system_program,
+        &packed_root(&genesis_root),
+        0,
+    )?;
     Ok(())
 }
 
@@ -144,7 +210,10 @@ fn init(
 // ---------------------------------------------------------------------------
 
 /// Accounts (in order):
-///   0. `[writable]` settlement state PDA `[b"settlement"]` (program-owned)
+///   0. `[writable]`         settlement state PDA `[b"settlement"]` (program-owned)
+///   1. `[signer, writable]` payer (funds the new proven-root marker)
+///   2. `[writable]`         final proven-root marker PDA `[b"proven_root", packLanes(final)]`
+///   3. `[]`                 System program
 fn settle(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
@@ -153,7 +222,13 @@ fn settle(
 ) -> ProgramResult {
     let ai = &mut accounts.iter();
     let state_ai = next_account_info(ai)?;
+    let payer = next_account_info(ai)?;
+    let final_marker_ai = next_account_info(ai)?;
+    let system_program = next_account_info(ai)?;
 
+    if !payer.is_signer {
+        return Err(SettlementError::MissingSigner.into());
+    }
     expect_settlement_pda(program_id, state_ai.key)?;
     if state_ai.owner != program_id {
         return Err(SettlementError::AccountState.into());
@@ -191,6 +266,47 @@ fn settle(
     state.proven_root = final_lanes;
     state.proven_height = state.proven_height.saturating_add(num_turns as u64);
     state.pack_into(&mut state_ai.data.borrow_mut())?;
+
+    // (6) Record the new proven root in the registry so a fact proven under it
+    //     stays queryable (`isProvenRoot`) even after a later span supersedes it
+    //     -- the Solana twin of the EVM `_provenRoots` mapping.
+    record_proven_root(
+        program_id,
+        payer,
+        final_marker_ai,
+        system_program,
+        &packed_root(&final_lanes),
+        state.proven_height,
+    )?;
+    Ok(())
+}
+
+/// **AssertProvenRoot** -- the CPI-able Solana `isProvenRoot` gate (the
+/// `DreggProofISM` analog). Succeeds iff `root` (a `packLanes` key) was recorded
+/// by a settlement: the passed marker account must be the registry PDA for
+/// `root`, program-owned, and carry a valid marker. Reverts otherwise -- THE
+/// NOMAD LAW: a zero/default/unrecorded root has no marker PDA and is refused, so
+/// a consumer that CPIs this and proceeds only on success can never act on an
+/// unproven root.
+///
+/// Accounts (in order):
+///   0. `[]` the proven-root marker PDA `[b"proven_root", root]`
+fn assert_proven_root(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    root: [u8; 32],
+) -> ProgramResult {
+    let ai = &mut accounts.iter();
+    let marker_ai = next_account_info(ai)?;
+
+    // The marker must be THE registry PDA for this exact root (binds the claimed
+    // root to the account), program-owned (only a settlement writes it), and a
+    // valid marker (rejects an all-zero / foreign account).
+    let (pda, _bump) = proven_root_pda(program_id, &root);
+    if &pda != marker_ai.key || marker_ai.owner != program_id || marker_ai.data_is_empty() {
+        return Err(SettlementError::UnprovenRoot.into());
+    }
+    ProvenRootMarker::unpack(&marker_ai.data.borrow())?;
     Ok(())
 }
 

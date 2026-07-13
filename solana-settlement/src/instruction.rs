@@ -19,6 +19,7 @@ use crate::vk::NUM_PUBLIC_INPUTS;
 /// 1-byte instruction tags.
 pub const TAG_INIT: u8 = 0;
 pub const TAG_SETTLE: u8 = 1;
+pub const TAG_ASSERT_PROVEN_ROOT: u8 = 2;
 
 const SETTLE_LEN: usize = 64 + 128 + 64 + 64 + 64 + NUM_PUBLIC_INPUTS * 32;
 const INIT_LEN: usize = 8 * 4 + 32;
@@ -43,6 +44,14 @@ pub enum SettlementInstruction {
         commitment_pok: [u8; 64],
         inputs: [[u8; 32]; NUM_PUBLIC_INPUTS],
     },
+    /// Assert `root` (a `packLanes` key) is a dregg-proven root -- the CPI-able
+    /// Solana `isProvenRoot` gate (the `DreggProofISM` analog). Succeeds iff the
+    /// passed marker account is the registry PDA for `root`, is program-owned, and
+    /// carries a valid marker; reverts otherwise (THE NOMAD LAW: a zero/default/
+    /// unrecorded root has no marker and is refused). A consumer program CPIs this
+    /// and proceeds only if it succeeds -- gating a Solana action on a dregg-proven
+    /// fact with no trusted relayer.
+    AssertProvenRoot { root: [u8; 32] },
 }
 
 fn take<const N: usize>(src: &[u8], off: &mut usize) -> [u8; N] {
@@ -96,6 +105,14 @@ impl SettlementInstruction {
                     inputs,
                 })
             }
+            TAG_ASSERT_PROVEN_ROOT => {
+                if rest.len() != 32 {
+                    return Err(SettlementError::InvalidInstruction);
+                }
+                let mut root = [0u8; 32];
+                root.copy_from_slice(rest);
+                Ok(Self::AssertProvenRoot { root })
+            }
             _ => Err(SettlementError::InvalidInstruction),
         }
     }
@@ -133,6 +150,12 @@ impl SettlementInstruction {
                 for s in inputs {
                     d.extend_from_slice(s);
                 }
+                d
+            }
+            Self::AssertProvenRoot { root } => {
+                let mut d = Vec::with_capacity(1 + 32);
+                d.push(TAG_ASSERT_PROVEN_ROOT);
+                d.extend_from_slice(root);
                 d
             }
         }

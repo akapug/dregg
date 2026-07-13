@@ -11,14 +11,16 @@
 //! compiles to SBF via `cargo build-sbf` for on-chain execution.
 
 use dregg_solana_settlement::instruction::SettlementInstruction;
-use dregg_solana_settlement::state::SettlementState;
-use dregg_solana_settlement::{dev_ceremony_vk_hash, process_instruction, SEED_SETTLEMENT};
+use dregg_solana_settlement::state::{packed_root, ProvenRootMarker, SettlementState};
+use dregg_solana_settlement::{
+    dev_ceremony_vk_hash, process_instruction, SEED_PROVEN_ROOT, SEED_SETTLEMENT,
+};
 
 use solana_program_test::{processor, ProgramTest};
 use solana_sdk::{
     instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
-    signature::{Keypair, Signer},
+    signature::Signer,
     system_program,
     transaction::Transaction,
 };
@@ -139,6 +141,10 @@ fn state_pda() -> Pubkey {
     Pubkey::find_program_address(&[SEED_SETTLEMENT], &program_id()).0
 }
 
+fn marker_pda(lanes: &[u32; 8]) -> Pubkey {
+    Pubkey::find_program_address(&[SEED_PROVEN_ROOT, &packed_root(lanes)], &program_id()).0
+}
+
 fn init_ix(payer: &Pubkey, genesis_root: [u32; 8]) -> Instruction {
     let data = SettlementInstruction::InitSettlement {
         genesis_root,
@@ -150,13 +156,21 @@ fn init_ix(payer: &Pubkey, genesis_root: [u32; 8]) -> Instruction {
         accounts: vec![
             AccountMeta::new(*payer, true),
             AccountMeta::new(state_pda(), false),
+            AccountMeta::new(marker_pda(&genesis_root), false),
             AccountMeta::new_readonly(system_program::id(), false),
         ],
         data,
     }
 }
 
-fn settle_ix(fx: &Fixture, inputs: [[u8; 32]; 25], a: [u8; 64]) -> Instruction {
+fn settle_ix(fx: &Fixture, inputs: [[u8; 32]; 25], a: [u8; 64], payer: &Pubkey) -> Instruction {
+    // The final-root marker is derived from the STATEMENT's final lanes (inputs
+    // 8..16), so a forged statement points at a different (never-created) marker.
+    let mut final_lanes = [0u32; 8];
+    for i in 0..8 {
+        let b = inputs[8 + i];
+        final_lanes[i] = u32::from_be_bytes([b[28], b[29], b[30], b[31]]);
+    }
     let data = SettlementInstruction::Settle {
         a,
         b: fx.b,
@@ -168,8 +182,24 @@ fn settle_ix(fx: &Fixture, inputs: [[u8; 32]; 25], a: [u8; 64]) -> Instruction {
     .pack();
     Instruction {
         program_id: program_id(),
-        accounts: vec![AccountMeta::new(state_pda(), false)],
+        accounts: vec![
+            AccountMeta::new(state_pda(), false),
+            AccountMeta::new(*payer, true),
+            AccountMeta::new(marker_pda(&final_lanes), false),
+            AccountMeta::new_readonly(system_program::id(), false),
+        ],
         data,
+    }
+}
+
+fn assert_proven_ix(lanes: &[u32; 8]) -> Instruction {
+    Instruction {
+        program_id: program_id(),
+        accounts: vec![AccountMeta::new_readonly(marker_pda(lanes), false)],
+        data: SettlementInstruction::AssertProvenRoot {
+            root: packed_root(lanes),
+        }
+        .pack(),
     }
 }
 
@@ -192,8 +222,10 @@ async fn real_proof_settles_and_advances_root() {
     banks.process_transaction(tx).await.expect("init");
 
     // settle with the REAL proof + REAL 25 inputs.
-    let mut tx =
-        Transaction::new_with_payer(&[settle_ix(&fx, fx.inputs, fx.a)], Some(&payer.pubkey()));
+    let mut tx = Transaction::new_with_payer(
+        &[settle_ix(&fx, fx.inputs, fx.a, &payer.pubkey())],
+        Some(&payer.pubkey()),
+    );
     tx.sign(&[&payer], blockhash);
     banks
         .process_transaction(tx)
@@ -209,6 +241,46 @@ async fn real_proof_settles_and_advances_root() {
     );
     assert_eq!(state.proven_height, 2, "height accumulated num_turns");
     assert_eq!(state.genesis_root, fx.genesis_root);
+
+    // REGISTRY: the final root is now recorded (`isProvenRoot`) -- a marker PDA
+    // exists, program-owned, carrying the height. The genesis anchor too.
+    let final_marker = banks
+        .get_account(marker_pda(&fx.final_root))
+        .await
+        .unwrap()
+        .expect("final root recorded in registry");
+    assert_eq!(final_marker.owner, program_id());
+    assert_eq!(
+        ProvenRootMarker::unpack(&final_marker.data).unwrap().height,
+        2
+    );
+    assert!(
+        banks
+            .get_account(marker_pda(&fx.genesis_root))
+            .await
+            .unwrap()
+            .is_some(),
+        "genesis anchor recorded at init"
+    );
+
+    // GATE: AssertProvenRoot succeeds for the proven final root (the CPI-able
+    // `isProvenRoot` a consumer program gates on)...
+    let mut tx =
+        Transaction::new_with_payer(&[assert_proven_ix(&fx.final_root)], Some(&payer.pubkey()));
+    tx.sign(&[&payer], blockhash);
+    banks
+        .process_transaction(tx)
+        .await
+        .expect("AssertProvenRoot must accept a proven root");
+
+    // ...and REJECTS an unproven root (THE NOMAD LAW): no marker PDA exists.
+    let unproven = [999u32, 0, 0, 0, 0, 0, 0, 0];
+    let mut tx = Transaction::new_with_payer(&[assert_proven_ix(&unproven)], Some(&payer.pubkey()));
+    tx.sign(&[&payer], blockhash);
+    assert!(
+        banks.process_transaction(tx).await.is_err(),
+        "AssertProvenRoot must reject an unproven root"
+    );
 }
 
 #[tokio::test]
@@ -239,7 +311,7 @@ async fn forged_proof_rejected_root_unchanged() {
         b
     };
     let mut tx = Transaction::new_with_payer(
-        &[settle_ix(&fx, forged_inputs, fx.a)],
+        &[settle_ix(&fx, forged_inputs, fx.a, &payer.pubkey())],
         Some(&payer.pubkey()),
     );
     tx.sign(&[&payer], blockhash);
@@ -252,7 +324,7 @@ async fn forged_proof_rejected_root_unchanged() {
     let mut forged_a = fx.a;
     forged_a[0] ^= 0x01;
     let mut tx = Transaction::new_with_payer(
-        &[settle_ix(&fx, fx.inputs, forged_a)],
+        &[settle_ix(&fx, fx.inputs, forged_a, &payer.pubkey())],
         Some(&payer.pubkey()),
     );
     tx.sign(&[&payer], blockhash);

@@ -31,6 +31,13 @@ pub enum SettlementError {
     ProofRejected = 7,
     /// A required signer did not sign (the payer on init).
     MissingSigner = 8,
+    /// A passed proven-root marker PDA does not match the claimed root, is not
+    /// program-owned, or does not exist -- the root was never proven by a
+    /// settlement (THE NOMAD LAW: a zero/default/unrecorded root is refused).
+    UnprovenRoot = 9,
+    /// A positional-keccak Merkle inclusion proof did not reconstruct the claimed
+    /// root from the leaf (wrong leaf, sibling, index, or depth).
+    InclusionInvalid = 10,
 }
 
 impl From<SettlementError> for ProgramError {

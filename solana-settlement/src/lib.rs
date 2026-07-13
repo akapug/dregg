@@ -37,6 +37,7 @@
 pub mod error;
 pub mod groth16;
 pub mod instruction;
+pub mod merkle;
 pub mod processor;
 pub mod state;
 pub mod vk;
@@ -45,6 +46,11 @@ use solana_program::{account_info::AccountInfo, entrypoint::ProgramResult, pubke
 
 /// PDA seed for the singleton settlement state account.
 pub const SEED_SETTLEMENT: &[u8] = b"settlement";
+
+/// PDA seed prefix for a per-root registry marker (`isProvenRoot`). The full
+/// seeds are `[SEED_PROVEN_ROOT, packLanes(root)]`; the marker's existence
+/// (program-owned) is the on-chain proof that a settlement recorded that root.
+pub const SEED_PROVEN_ROOT: &[u8] = b"proven_root";
 
 /// The dev-ceremony verifying-key hash pinned by the live EVM deployment
 /// (`chain/script/DeploySettlement.s.sol`: `keccak256("dregg-settlement-vk-dev-setup")`).

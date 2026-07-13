@@ -9,11 +9,68 @@
 //! valid state. [`SettlementState::pack_into`] refuses to write a state with a
 //! non-canonical lane or a zero VK hash.
 
+use solana_program::keccak;
+
 use crate::error::SettlementError;
 
 /// BabyBear prime p = 2^31 - 2^27 + 1. Every settlement lane must be `< p`
 /// (the EVM `BABYBEAR_P`).
 pub const BABYBEAR_P: u32 = 2013265921;
+
+/// keccak256 over the tight 32-byte big-endian packing of the 8 lanes (lane i at
+/// bytes [4i, 4i+4)) -- the on-chain twin of `DreggSettlement.packLanes`. This is
+/// the packed-root KEY that identifies a proven root in the registry (and seeds
+/// its marker PDA). `packed_root([0;8])` is never recorded (the Nomad-law default
+/// is refused before any settle records a root).
+pub fn packed_root(lanes: &[u32; 8]) -> [u8; 32] {
+    let mut buf = [0u8; 32];
+    for (i, l) in lanes.iter().enumerate() {
+        buf[i * 4..i * 4 + 4].copy_from_slice(&l.to_be_bytes());
+    }
+    keccak::hashv(&[&buf]).0
+}
+
+/// One-byte schema tag for a proven-root marker account.
+pub const MARKER_MAGIC: u8 = 0xD6;
+/// Marker schema version.
+pub const MARKER_VERSION: u8 = 1;
+/// Serialized size of a [`ProvenRootMarker`]: magic(1) || version(1) || height(8).
+pub const MARKER_LEN: usize = 1 + 1 + 8;
+
+/// A per-root registry marker -- its very EXISTENCE (program-owned, valid magic)
+/// is the Solana `isProvenRoot`: a settlement recorded this root. It also carries
+/// the cumulative proven height at which the root was reached (for indexing).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProvenRootMarker {
+    /// Cumulative proven height when this root was recorded (0 for the genesis
+    /// anchor, which is recorded at init).
+    pub height: u64,
+}
+
+impl ProvenRootMarker {
+    pub fn pack_into(&self, dst: &mut [u8]) -> Result<(), SettlementError> {
+        if dst.len() != MARKER_LEN {
+            return Err(SettlementError::AccountState);
+        }
+        dst[0] = MARKER_MAGIC;
+        dst[1] = MARKER_VERSION;
+        dst[2..10].copy_from_slice(&self.height.to_le_bytes());
+        Ok(())
+    }
+
+    /// Read + validate a marker. A wrong size/magic/version is rejected, so an
+    /// uninitialized (all-zero) or foreign account can never read as "proven".
+    pub fn unpack(src: &[u8]) -> Result<Self, SettlementError> {
+        if src.len() != MARKER_LEN || src[0] != MARKER_MAGIC || src[1] != MARKER_VERSION {
+            return Err(SettlementError::UnprovenRoot);
+        }
+        let mut h = [0u8; 8];
+        h.copy_from_slice(&src[2..10]);
+        Ok(Self {
+            height: u64::from_le_bytes(h),
+        })
+    }
+}
 
 /// One-byte schema tag so an uninitialized/foreign account is not mistaken for
 /// valid settlement state.
