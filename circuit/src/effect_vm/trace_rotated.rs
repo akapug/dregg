@@ -1682,6 +1682,109 @@ pub fn generate_rotated_note_create_trace_with_commitments_tree(
     Ok((trace, dpis, vec![before_commitments.to_vec()]))
 }
 
+/// **THE DEPLOYMENT-REAL revokeDelegation revoked-set INSERT wiring (the revoked set-insert
+/// grow-gate's witness; hole #3 close).** The clone of
+/// [`generate_rotated_note_spend_trace_with_nullifier_tree`] for the `revoked_root` limb (limb 37 =
+/// [`B_REVOKED_ROOT`]): it makes limb 37 the openable revoked-set accumulator for a RevokeDelegation
+/// turn, FORCING the AFTER root from the AAFI two-path insert of the revoked id — never a
+/// producer-supplied witness limb.
+///   * `before_revoked` are the existing revoked-set leaves in the revoked store's APPEND ORDER (the
+///     revoked id MUST be absent — the no-double-revoke precondition the `revokedFreshOp .absent` op
+///     enforces);
+///   * limb 37 of every before-block is overwritten with the BEFORE tree's root, and limb 37 of every
+///     after-block with the `insert_witness_aafi(...).new_root` of BEFORE + the revoked id (the
+///     AAFI-native set-insert the `revokedInsertOp .aafiInsert` op=4 forces);
+///   * the affected `wireCommitR` chain + `STATE_COMMIT` carriers are recomputed in place, and the
+///     OLD/NEW rotated commit PIs are re-derived so the published commitment binds the grown set;
+///   * the BEFORE tree's leaves are returned as the single `map_heaps` entry the prover threads.
+///
+/// The revoked key is the revoke row's `param0` (`PARAM_BASE + param::NULLIFIER` — the `child_hash[0]`
+/// the runtime parks per `trace.rs`), mirroring `NULLIFIER_PARAM_COL`; the revoked set is a pure
+/// MEMBERSHIP set, so the inserted leaf value is `0` (Lean `revokedInsertOp.value = .const 0`). A
+/// double-revoke / out-of-gap id has no bracketing low leaf ⇒ `insert_witness_aafi` returns `None` ⇒
+/// the turn is UNSAT (the deployed no-double-revoke refusal). Returns `(trace, dpis, map_heaps)`.
+pub fn generate_rotated_revoke_trace_with_revoked_tree(
+    initial_state: &CellState,
+    effects: &[Effect],
+    before_w: &RotatedBlockWitness,
+    after_w: &RotatedBlockWitness,
+    caveat: &RotatedCaveatManifest,
+    before_revoked: &[crate::heap_root::HeapLeaf],
+) -> RotatedTraceWithHeaps {
+    use super::columns::{PARAM_BASE, param};
+    use crate::heap_root::{CanonicalHeapTree8, HEAP_DIGEST_W, HEAP_TREE_DEPTH, HeapLeaf};
+
+    if !matches!(effects.first(), Some(Effect::RevokeDelegation { .. })) {
+        return Err("revoked-tree wiring is only for a RevokeDelegation lead effect".into());
+    }
+
+    // The base rotated trace (carries the welds, the v1 economic block, the revoked-id param0).
+    let (mut trace, mut dpis) =
+        generate_rotated_effect_vm_trace(initial_state, effects, before_w, after_w, caveat)?;
+
+    // The revoked child-capability id, read from the revoke row (row 0): `param0` = `child_hash[0]`.
+    // The revoked set is a pure membership set — the leaf value is `0` (Lean `revokedInsertOp.value`).
+    let revoked_key = trace[0][PARAM_BASE + param::NULLIFIER];
+    let revoked_value = BabyBear::ZERO;
+
+    // The BEFORE revoked tree (the deployed accumulator before the revoke) built from the revoked
+    // store's APPEND ORDER at NATIVE 8-FELT width. The revoked id MUST be absent from BEFORE (the
+    // `revokedFreshOp .absent` no-double-revoke precondition); an already-revoked id has no bracketing
+    // witness and the prover REFUSES it before proving.
+    let before_tree = CanonicalHeapTree8::new(before_revoked.to_vec(), HEAP_TREE_DEPTH);
+    if before_tree.position_of(revoked_key).is_some() {
+        return Err(
+            "double-revoke: the revoked id is already in the BEFORE revoked tree — the in-circuit \
+             no-double-revoke (`.absent`) op has no bracketing witness and refuses the turn"
+                .into(),
+        );
+    }
+    let before_root8 = before_tree.root8();
+    // HOLE #3 CLOSE: the committed AFTER revoked root is the append-at-free-index fold
+    // (`insert_witness_aafi`), FORCED — it EXACTLY equals the `new_root` the deployed `revokedInsertOp`
+    // (`MapKind::AafiInsert`, op=4) fill recomputes from the SAME before tree. The two-path AAFI gate
+    // (low-update → R1, append-at-empty-slot → new_root, + the pointer-bracket range gate) forces
+    // sorted-preservation at STABLE positions. A present / out-of-gap revoked id has no bracketing low
+    // leaf ⇒ `insert_witness_aafi` returns `None` ⇒ the turn is UNSAT.
+    let aafi = before_tree
+        .insert_witness_aafi(HeapLeaf::entry(revoked_key, revoked_value))
+        .ok_or_else(|| {
+            "double-revoke / out-of-gap revoked id: the AAFI insert has no bracketing low leaf — the \
+             in-circuit two-path (`aafi_insert`) gate refuses the turn"
+                .to_string()
+        })?;
+    let after_root8 = aafi.new_root;
+
+    // Mirror of `EffectVmEmitRotationV3.revokedRootGroupCol`: lane 0 = limb `B_REVOKED_ROOT` (37); the
+    // seven DEDICATED completion limbs 82..88 for lanes 1..7 (the `revoked_root` 8-felt group).
+    let revoked_group_col = |block_base: usize, lane: usize| -> usize {
+        block_base
+            + match lane {
+                0 => B_REVOKED_ROOT,
+                _ => 81 + lane, // lanes 1..7 → limbs 82..88
+            }
+    };
+
+    // Write the FAITHFUL 8-felt before/after revoked-root GROUP into BOTH rotated blocks (lane 0 the
+    // scalar limb 37, lanes 1..7 the dedicated completion limbs 82..88 — the map-op `.absent`/`.aafiInsert`
+    // root/newRoot groups the deployed AIR binds all eight lanes of), NEVER the lane-0 squeeze. Then
+    // recompute the dependent chained commitments so the published `STATE_COMMIT` binds the grown set.
+    for row in trace.iter_mut() {
+        for lane in 0..HEAP_DIGEST_W {
+            row[revoked_group_col(BEFORE_BASE, lane)] = before_root8[lane];
+            row[revoked_group_col(AFTER_BASE, lane)] = after_root8[lane];
+        }
+        recompute_block_commit(row, BEFORE_BASE);
+        recompute_block_commit(row, AFTER_BASE);
+    }
+
+    // Re-derive the OLD/NEW rotated commit PIs (the limb-37 override moved the commitments).
+    dpis[V1_PI_COUNT] = trace[0][BEFORE_BASE + B_STATE_COMMIT]; // PI 34: rotated OLD commit
+    dpis[V1_PI_COUNT + 1] = trace[trace.len() - 1][AFTER_BASE + B_STATE_COMMIT]; // PI 35: NEW commit
+
+    Ok((trace, dpis, vec![before_revoked.to_vec()]))
+}
+
 /// The declared-param column the refusal row carries the audit FELT in (`prmCol 2 = PARAM_BASE + 2`).
 /// The deployed refusal row uses only `param0 = REFUSAL_TARGET` and `param1 = REFUSAL_REASON_HASH`;
 /// this previously-spare `param2` now carries the in-circuit map-op's inserted value (the audit felt),

@@ -811,6 +811,228 @@ fn rotated_note_spend_pins_nullifier_and_refuses_tamper() {
     }
 }
 
+/// **THE DEPLOYMENT-REAL revokeDelegation REVOKED-SET grow-gate (hole #3, the `revoked_root` sibling
+/// of the noteSpend nullifier tooth).** The AAFI-native revoke descriptor (`revokeV3`, Lean landed at
+/// 339a97beb) carries two map-ops gated by the revoke selector (`sel::REVOKE_DELEGATION = 30`) —
+/// `revokedFreshOp` (`.absent`: the revoked id is a NON-MEMBER of the BEFORE revoked tree — no double
+/// revoke) and `revokedInsertOp` (`.aafiInsert`, op=4: the AFTER `revoked_root` (limb 37) IS the
+/// genuine AAFI two-path insert of the revoked id). The bare `revokeVmDescriptor2R24` row in the
+/// committed TSV predates the F2 regen, so this test reconstructs the two live map-ops onto the parsed
+/// bare descriptor at the `revoked_root` group columns (the SHAPE the F2 regen-from-Lean will bake in)
+/// and proves: (1) `generate_rotated_revoke_trace_with_revoked_tree` produces a trace whose FORCED
+/// AAFI after-root satisfies op=4 (proves + verifies); (2) a FORGED/frozen after `revoked_root` is
+/// REJECTED (the gate bites — non-vacuous); (3) a DOUBLE-REVOKE (id already in the BEFORE tree) is
+/// refused by the producer before proving (`insert_witness_aafi` → `None`). Hole #3 closed: the
+/// revoked root is FORCED by the AAFI insert, never a producer-supplied witness limb.
+#[test]
+fn rotated_revoke_forces_revoked_set_insert_and_refuses_double_revoke() {
+    use dregg_circuit::descriptor_ir2::{MapKind, MapOpSpec, VmConstraint2};
+    use dregg_circuit::effect_vm::columns::{PARAM_BASE, param};
+    use dregg_circuit::effect_vm::trace_rotated::{
+        B_REVOKED_ROOT, B_STATE_COMMIT as BSC, generate_rotated_revoke_trace_with_revoked_tree,
+    };
+    use dregg_circuit::heap_root::HeapLeaf;
+    use dregg_circuit::lean_descriptor_air::LeanExpr;
+
+    // The rotated revoked-block group columns in DESCRIPTOR space (the F2-regen shape): the rotated
+    // before-block base is `EFFECT_VM_WIDTH` (188), the after-block rides `+239` (mirrors the deployed
+    // noteSpend map-op columns 214/453). Lane 0 = limb 37 (`B_REVOKED_ROOT`); the seven completion
+    // lanes 1..7 = limbs 82..88 (`revokedRootGroupCol`).
+    const ROT_BB: usize = 188; // EFFECT_VM_WIDTH — rotated BEFORE block base (descriptor space)
+    const ROT_AFTER_DELTA: usize = 239; // rotated AFTER block base = ROT_BB + 239
+    let group = |base: usize, lane: usize| -> usize {
+        base + if lane == 0 { B_REVOKED_ROOT } else { 81 + lane }
+    };
+    let before_group: Vec<LeanExpr> = (0..8).map(|l| LeanExpr::Var(group(ROT_BB, l))).collect();
+    let after_group: Vec<LeanExpr> = (0..8)
+        .map(|l| LeanExpr::Var(group(ROT_BB + ROT_AFTER_DELTA, l)))
+        .collect();
+    // param0 (the revoked id / `child_hash[0]`) rides descriptor var 68 (= PARAM_BASE fold slot 0,
+    // identical to the deployed noteSpend key column). The revoked set is a membership set: value 0.
+    let key_col = LeanExpr::Var(68);
+    let sel_guard = LeanExpr::Var(dregg_circuit::effect_vm::columns::sel::REVOKE_DELEGATION);
+
+    // Parse the committed BARE revoke descriptor and append the two live map-ops (the op=4 grow-gate).
+    let mut desc = parse_vm_descriptor2(rotated_descriptor_json("revokeVmDescriptor2R24"))
+        .expect("bare revoke descriptor parses");
+    desc.constraints.push(VmConstraint2::MapOp(MapOpSpec {
+        // revokedFreshOp — `.absent`: the revoked id is a NON-MEMBER of the BEFORE revoked tree.
+        guard: sel_guard.clone(),
+        root: before_group.clone(),
+        key: key_col.clone(),
+        value: LeanExpr::Const(0),
+        new_root: before_group.clone(), // absent read leaves the root unchanged
+        op: MapKind::Absent,
+    }));
+    desc.constraints.push(VmConstraint2::MapOp(MapOpSpec {
+        // revokedInsertOp — `.aafiInsert` (op=4): the AFTER revoked root IS the AAFI insert of param0.
+        guard: sel_guard,
+        root: before_group,
+        key: key_col,
+        value: LeanExpr::Const(0),
+        new_root: after_group,
+        op: MapKind::AafiInsert,
+    }));
+
+    // A real revoke turn: RevokeDelegation is a STATE-PASSTHROUGH row (nonce ticks); before == after
+    // balance/state, the revoked id rides param0.
+    let revoked_id = BabyBear::new(0xDEAD_BEEF);
+    let balance: i64 = 42_000;
+    let st = CellState::new(balance as u64, 0);
+    let effects = vec![Effect::RevokeDelegation {
+        child_hash: [
+            revoked_id,
+            BabyBear::new(2),
+            BabyBear::new(3),
+            BabyBear::new(4),
+            BabyBear::new(5),
+            BabyBear::new(6),
+            BabyBear::new(7),
+            BabyBear::new(8),
+        ],
+    }];
+
+    let mut ledger = Ledger::new();
+    let before_cell = producer_cell(balance, 0);
+    let after_cell = producer_cell(balance, 1); // passthrough: only the nonce ticks
+    ledger.insert_cell(after_cell.clone()).unwrap();
+    let nullifier_root = dregg_circuit::heap_root::empty_heap_root_8();
+    let commitments_root = dregg_circuit::heap_root::empty_heap_root_8();
+    let receipt_log: Vec<[u8; 32]> = vec![[9u8; 32]];
+    let before_w = rw::produce(
+        &before_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
+        &receipt_log,
+        &Default::default(),
+    );
+    let after_w = rw::produce(
+        &after_cell,
+        &ledger,
+        &nullifier_root,
+        &commitments_root,
+        &dregg_turn::rotation_witness::empty_revoked_root_8(),
+        &receipt_log,
+        &Default::default(),
+    );
+
+    // A non-empty BEFORE revoked set in the store's append order (distinct from the revoked id).
+    let before_revoked = vec![
+        HeapLeaf::entry(BabyBear::new(0x0100), BabyBear::ZERO),
+        HeapLeaf::entry(BabyBear::new(0x0200), BabyBear::ZERO),
+    ];
+    let (trace, dpis, map_heaps) = generate_rotated_revoke_trace_with_revoked_tree(
+        &st,
+        &effects,
+        &bridge(&before_w),
+        &bridge(&after_w),
+        &empty_caveat_manifest(),
+        &before_revoked,
+    )
+    .expect("revoked-tree wiring must produce a deployment-real revoke trace");
+    let r0 = &trace[0];
+    assert_eq!(
+        r0[PARAM_BASE + param::NULLIFIER],
+        revoked_id,
+        "the revoked id (child_hash[0]) rides param0"
+    );
+
+    // HOLE #3: the committed AFTER revoked root is FORCED by the AAFI insert — NOT producer-supplied.
+    // Confirm it equals `insert_witness_aafi(...).new_root`, differs from the BEFORE root, and differs
+    // from the EMPTY revoked root the witnesses threaded (so it is genuinely GROWN, not passed through).
+    let before_tree = dregg_circuit::heap_root::CanonicalHeapTree8::new(
+        before_revoked.clone(),
+        dregg_circuit::heap_root::HEAP_TREE_DEPTH,
+    );
+    let forced = before_tree
+        .insert_witness_aafi(HeapLeaf::entry(revoked_id, BabyBear::ZERO))
+        .expect("honest AAFI insert has a bracketing low leaf")
+        .new_root;
+    let empty8 = dregg_circuit::heap_root::empty_heap_root_8();
+    let before8 = before_tree.root8();
+    for row in &trace {
+        for lane in 0..8 {
+            let col = group_after_producer(lane);
+            assert_eq!(
+                row[col], forced[lane],
+                "after revoked root lane {lane} FORCED by AAFI"
+            );
+        }
+    }
+    assert!(
+        (0..8).any(|l| forced[l] != before8[l]),
+        "AAFI grew the revoked set (after ≠ before)"
+    );
+    assert!(
+        (0..8).any(|l| forced[l] != empty8[l]),
+        "the forced root is NOT the empty/producer-supplied root"
+    );
+
+    // (1) PROVE + VERIFY the whole rotated revoke end-to-end — the revoked set-insert FORCED (op=4).
+    let mem_boundary = MemBoundaryWitness::default();
+    let proof = prove_vm_descriptor2(&desc, &trace, &dpis, &mem_boundary, &map_heaps)
+        .expect("rotated revoke (revoked set-insert FORCED, op=4) must prove end-to-end");
+    verify_vm_descriptor2(&desc, &proof, &dpis)
+        .expect("rotated revoke proof must verify independently");
+
+    // (2) THE SET-INSERT TOOTH (non-vacuity): FORGE the AFTER revoked root (limb 37 group of every
+    // after block) to a frozen value the kernel never grew, re-fill the dependent chain, and re-derive
+    // the NEW commit PI. The `.aafiInsert` op pins the after-root to the GENUINE AAFI insert, so the
+    // forged root has no witness and the prover REFUSES it.
+    {
+        let bump = BabyBear::new(0x7777);
+        let rejected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut t = trace.clone();
+            for row in t.iter_mut() {
+                row[AFTER_BASE + B_REVOKED_ROOT] = row[AFTER_BASE + B_REVOKED_ROOT] + bump;
+            }
+            dregg_circuit::effect_vm::trace_rotated::recompute_after_blocks_for_test(&mut t);
+            let mut p = dpis.clone();
+            p[43] = t[t.len() - 1][AFTER_BASE + BSC]; // PI 43 = V1_PI_COUNT+1 = rotated NEW commit
+            prove_vm_descriptor2(&desc, &t, &p, &mem_boundary, &map_heaps)
+                .and_then(|proof| verify_vm_descriptor2(&desc, &proof, &p))
+        }));
+        let rejected = match rejected {
+            Err(_) => true,
+            Ok(res) => res.is_err(),
+        };
+        assert!(
+            rejected,
+            "a FORGED after revoked_root (a set the kernel never grew) MUST be REJECTED by the revoke \
+             grow-gate (the `.aafiInsert` op pins the after-root to the genuine AAFI insert) — hole #3 \
+             is CLOSED for revokeDelegation"
+        );
+    }
+
+    // (3) THE DOUBLE-REVOKE TOOTH (in-circuit): a revoked id ALREADY in the BEFORE tree has no
+    // `.absent` bracketing witness, so `insert_witness_aafi` returns `None` and the wiring REFUSES it
+    // before proving — the in-circuit no-double-revoke gate bites.
+    {
+        let already = vec![HeapLeaf::entry(revoked_id, BabyBear::ZERO)];
+        let double = generate_rotated_revoke_trace_with_revoked_tree(
+            &st,
+            &effects,
+            &bridge(&before_w),
+            &bridge(&after_w),
+            &empty_caveat_manifest(),
+            &already,
+        );
+        assert!(
+            double.is_err(),
+            "a DOUBLE-REVOKE (id already in the BEFORE revoked tree) MUST be refused by the in-circuit \
+             no-double-revoke (`.absent`) op — the double-revoke hole is closed"
+        );
+    }
+}
+
+/// The producer-space after-block revoked-root group column (lane 0 = limb 37; lanes 1..7 = 82..88).
+fn group_after_producer(lane: usize) -> usize {
+    use dregg_circuit::effect_vm::trace_rotated::{AFTER_BASE, B_REVOKED_ROOT};
+    AFTER_BASE + if lane == 0 { B_REVOKED_ROOT } else { 81 + lane }
+}
+
 /// **THE DEPLOYMENT-REAL createCell ACCOUNTS-SET grow-gate (the cells_root sibling of the noteSpend
 /// tooth).** The live `createCellVmDescriptor2R24` now carries two map-ops gated by the createCell
 /// selector — `cellsFreshOp` (`.absent`: the new-cell key is a NON-MEMBER of the BEFORE accounts tree
