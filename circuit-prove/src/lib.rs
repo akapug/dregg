@@ -19,6 +19,7 @@
 
 pub mod accumulator;
 pub mod apex_shrink;
+pub mod apex_shrink_gnark_export;
 pub mod blinded_membership_leaf_adapter;
 pub mod bridge_leaf_adapter;
 pub mod carrier_pin_twin;
@@ -31,6 +32,7 @@ pub mod effect_vm_p3_air;
 pub mod factory_leaf_adapter;
 pub mod gnark_witness_export;
 pub use gnark_witness_export::export_gnark_witness_json;
+pub mod gpu_backend;
 pub mod hatchery_leaf_adapter;
 pub mod ivc_turn_chain;
 pub mod joint_turn_aggregation;
