@@ -762,7 +762,6 @@ import Dregg2.Circuit.StarkSoundAssembled
 import Dregg2.Circuit.StarkSoundFriLdt
 import Dregg2.Circuit.FriColumnDecode
 import Dregg2.Circuit.StarkSoundColumnCfg
-import Dregg2.Circuit.LightClientDeployed
 import Dregg2.Circuit.LightClientDeployedGeneral
 import Dregg2.Circuit.MerkleAcceptForces
 import Dregg2.Circuit.FriTranscriptBind

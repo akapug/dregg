@@ -4,7 +4,8 @@
 `AlgoStarkSoundTransferV3` rests its Merkle/commitment-opening step on `Poseidon2SpongeCR sponge` —
 full sponge injectivity, PROVEN FALSE at any real compressing hash — so at deployment the chain
 `hood_of_reductions → mainAirAcceptF_of_floor → algoStarkSound_transferV3 →
-lightclient_unfoolable_deployed_transferV3` fires only under an unsatisfiable premise. This module
+lightclient_unfoolable_deployed apex` fired only under an unsatisfiable premise (that apex is now
+deleted; this module is its replacement). This module
 builds the reduction-form (`OrBreak`) twins of that whole chain, DROPPING `Poseidon2SpongeCR sponge`
 everywhere and threading the single sponge-CR appeal (the commitment-opening binding on the two
 Merkle-recompute clauses) through the unconditional dichotomy
@@ -34,7 +35,7 @@ step relation, any inhabitant of the twin's conclusion IS a collision in one of 
 import Dregg2.Circuit.CollisionReduce
 import Dregg2.Circuit.AlgoStarkSoundTransferV3
 import Dregg2.Circuit.DescriptorRefinesReduce
-import Dregg2.Circuit.LightClientDeployed
+import Dregg2.Circuit.StarkSoundDischarge
 
 namespace Dregg2.Circuit.StarkSoundReduce
 
@@ -243,7 +244,7 @@ The sponge side (§3, the trace-commitment Merkle openings inside `verifyAlgo`) 
 side (`DescriptorRefinesReduce.descriptorRefinesR`, the per-effect published-PI↔limb binding) via
 `OrBreak.weaken` into the joint break `SpongeCollision sponge ∨ SpongeCollision hash`. NO
 `Poseidon2SpongeCR` premise anywhere; the conclusion's good branch is VERBATIM the
-`lightclient_unfoolable_deployed_transferV3` conclusion. -/
+the deployed light-client apex (its vacuous form now deleted; this is the replacement) conclusion. -/
 
 /-- **`lightclient_unfoolable_deployedR_transferV3`** — the deployed apex, de-vacuated: a batch the
 reduced `verifyBatch` accepts pins the pre/post kernel state (`StateDecode` + `kstep` + the
@@ -289,7 +290,7 @@ theorem lightclient_unfoolable_deployedR_transferV3
   · simpa using hdecode.postBinds
 
 /-- **Recovery / subsumption of the deployed apex**: no collision in EITHER hash resolves the twin
-to VERBATIM the `lightclient_unfoolable_deployed_transferV3` conclusion — with the original's two
+to VERBATIM the the deployed light-client apex (its vacuous form now deleted; this is the replacement) conclusion — with the original's two
 `Poseidon2SpongeCR` premises replaced by the (strictly weaker) no-collision facts. -/
 theorem lightclient_unfoolable_deployed_of_no_collisions
     (sponge : List ℤ → ℤ) (hNoS : ¬ SpongeCollision sponge)
