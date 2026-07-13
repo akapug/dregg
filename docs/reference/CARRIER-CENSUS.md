@@ -650,3 +650,20 @@ differential-test rebuild. The AIR side (2nd sibling path + the range gate via e
 and NOT the blocker; the blocker is the deployed commitment/producer layout. Recommend surfacing to ember. Aligns with
 the sorted-Merkle-accumulator unification direction — IMT-over-sparse-by-addr is likely the convergence (order-indep +
 forceable insert), at the cost of depth.
+
+## ⚠⚠ GAP #6 CONFIRMED — MUTABLE-CELL unforced-sortedness → forged cell birth (identity takeover), 2026-07-13
+The gap-#5 mechanism applies UNCHANGED to the mutable cell/heap map (`MUTABLE-MAP-SORTEDNESS-INVESTIGATION.md`).
+`cellsInsertOp` (createCell/CreateCellFromFactory/Spawn, `EffectVmEmitRotationV3.lean:2704`) stayed op=3 `.insert`
+(the unforced compacted-array insert — at op=3 the pre-root bind + old-chain fold are gated OFF, `descriptor_ir2.rs
+:2928/2929/3035; only the new-leaf chain fires :3049; no sorted-splice, no next_addr relink, no dedup). `cellsFreshOp`
+(op=.absent, the IMT pointer-bracket :3196-3313) PRESUPPOSES the ImtSorted invariant ("sound relative to the maintained
+well-linked ImtSorted invariant the insert-preservation gate installs") — but that gate only exists for the 3
+append-only sets now on op=4; cells alone have no gate installing it.
+EXPLOIT: adversary commits an accounts tree with forged next_addr links bracketing a PRESENT addr X → cellsFreshOp
+accepts "X fresh" → createCell/factory/spawn forges a birth OVER the existing cell (identity/state takeover). Companion:
+unforced dedup → duplicate addr → wrong cell read. Same class as #5.
+TREE: same TYPE (CanonicalHeapTree8, shared MapOps/MapAbsent AIRs), separate INSTANCE (cells = limb 0). The op=4 AAFI
+flip was applied per-emitter and just not routed to cellsInsertOp.
+FIX: SAME as #5 — extend the AAFI op=4 flip to cellsInsertOp (+ the cell producer to insert_witness_aafi + the wide
+createCell producer aafi=true + the capRoot-weld consistency). Value-updates (.write, op=1) are ALREADY sound
+(position-stable). Rides the same VK epoch as gaps 1-5. Fix in flight.
