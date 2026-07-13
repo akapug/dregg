@@ -97,6 +97,14 @@ pub mod combat;
 pub mod progression;
 pub mod skills;
 pub mod spells;
+
+/// THE OVERWORLD — the connective layer above the universes. A [`overworld::RegionMap`] of named
+/// locations (each a universe) joined by travel edges, played on a real dregg
+/// [`overworld::RegionCell`]: travel to a dungeon is a real executor turn REFUSED unless its
+/// prerequisite is verified-cleared (a `FieldGte` on a WriteOnce cleared flag), and clearing a
+/// dungeon (a genuine, replay-verified WIN) unlocks the next on a real committed turn. The salvage
+/// of `attested-dm`'s proven overworld design, re-homed off the toy ledger onto the real substrate.
+pub mod overworld;
 use dregg_cell::program::HeapAtom;
 use spween::{Choice, PassageContent, Scene};
 use spween_dregg::{CompiledStory, WorldCell, choice_method, compile_scene, parse};

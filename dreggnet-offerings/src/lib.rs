@@ -38,6 +38,12 @@ pub mod character;
 pub mod dungeon;
 pub mod host;
 pub mod mock;
+/// THE OVERWORLD OFFERING — a player traverses a REGION of universes, the map opening as they
+/// honestly clear each dungeon. Travel to a dungeon is a real region-cell turn REFUSED unless its
+/// prerequisite is verified-cleared; clearing a dungeon (a genuine, replay-verified WIN) unlocks the
+/// next on a real committed turn. Re-homes `attested-dm`'s proven overworld design onto the real
+/// executor. See [`overworld::OverworldOffering`].
+pub mod overworld;
 
 pub use host::{HostError, OfferingHost, OfferingInfo};
 
