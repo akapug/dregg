@@ -1126,6 +1126,58 @@ fn fold_append_order_8(leaves: &[HeapLeaf], depth: usize) -> [BabyBear; HEAP_DIG
     cur[0]
 }
 
+/// The 8-felt membership path `(siblings, directions)` of `position` in the
+/// APPEND-ORDERED fold [`fold_append_order_8`] commits (physical positions =
+/// vector indices, NOT re-sorted). Retains the per-level digests and reads the
+/// sibling at each level, so
+/// `recompose_membership_8(leaves[position].digest8(), &siblings, &directions)`
+/// equals `fold_append_order_8(leaves, depth)`. Padding siblings beyond the
+/// stored prefix are the level's [`heap_empty_subtree_root_8`]. The AAFI insert
+/// witness ([`AafiInsertWitness8::new_leaf_membership`]) drives this to open the
+/// appended new leaf at its `free_index` against the append-ordered `new_root`.
+/// O(n·depth) fold, O(depth) path.
+fn fold_append_order_membership_8(
+    leaves: &[HeapLeaf],
+    position: usize,
+    depth: usize,
+) -> (Vec<[BabyBear; HEAP_DIGEST_W]>, Vec<u8>) {
+    // Build the append-ordered levels (same sparse `node8` fold as
+    // `fold_append_order_8` / `CanonicalHeapTree8::new`, but positions are the
+    // vector indices — no re-sort).
+    let mut levels: Vec<Vec<[BabyBear; HEAP_DIGEST_W]>> = Vec::with_capacity(depth + 1);
+    levels.push(leaves.iter().map(HeapLeaf::digest8).collect());
+    for level in 0..depth {
+        let prev = levels.last().unwrap();
+        let prev_len = prev.len();
+        let next_len = prev_len.div_ceil(2);
+        let mut next_level = Vec::with_capacity(next_len);
+        for i in 0..next_len {
+            let l = prev[2 * i];
+            let r = prev
+                .get(2 * i + 1)
+                .copied()
+                .unwrap_or_else(|| heap_empty_subtree_root_8(level));
+            next_level.push(heap_node8(l, r));
+        }
+        levels.push(next_level);
+    }
+    let node8 = |level: usize, idx: usize| -> [BabyBear; HEAP_DIGEST_W] {
+        levels[level]
+            .get(idx)
+            .copied()
+            .unwrap_or_else(|| heap_empty_subtree_root_8(level))
+    };
+    let mut siblings = Vec::with_capacity(depth);
+    let mut directions = Vec::with_capacity(depth);
+    let mut idx = position;
+    for level in 0..depth {
+        siblings.push(node8(level, idx ^ 1));
+        directions.push((idx & 1) as u8);
+        idx >>= 1;
+    }
+    (siblings, directions)
+}
+
 /// **`AafiInsertWitness8`** — the gap-#5 AAFI (append-at-free-index) insert
 /// witness produced by [`CanonicalHeapTree8::insert_witness_aafi`]. The storage
 /// mirror of the proven Lean `imtInsert`: the low-leaf pointer update
@@ -1188,6 +1240,20 @@ impl AafiInsertWitness8 {
             cur = by_addr.get(&next).copied()?;
         }
         Some(out)
+    }
+
+    /// The appended new leaf's 8-felt membership path against the append-ordered
+    /// `new_root`. The new leaf sits at `free_index` in `append_order_after`, and
+    /// `new_root == fold_append_order_8(append_order_after, depth)`; this returns
+    /// `(siblings, directions)` such that
+    /// `recompose_membership_8(self.new_leaf.digest8(), &siblings, &directions)`
+    /// equals `self.new_root`. This is the PATH2 free-slot opening the wide
+    /// `effAccumInsertV3` READ appendix needs to open the spliced leaf against the
+    /// deployed AAFI root (limbs 26/27) — the sorted-splice `insert_witness` path
+    /// does NOT reach this append-ordered root. ADDITIVE: derived from the stored
+    /// `append_order_after` / `free_index`, no field or signature change.
+    pub fn new_leaf_membership(&self, depth: usize) -> (Vec<[BabyBear; HEAP_DIGEST_W]>, Vec<u8>) {
+        fold_append_order_membership_8(&self.append_order_after, self.free_index, depth)
     }
 }
 
@@ -1849,5 +1915,32 @@ mod tests {
             "AAFI new_root is the append-order fold"
         );
         assert_eq!(w.old_root, root_before, "old_root == sorted-compacted root");
+    }
+
+    /// The wide `effAccumInsertV3` READ appendix opens the appended leaf against
+    /// the append-ordered `new_root` over `new_leaf_membership`. GATE: the
+    /// appended leaf's digest recomposed over that PATH2 free-slot membership must
+    /// EQUAL the AAFI `new_root` (the root the narrow producer commits into limbs
+    /// 26/27) — so the wide read appendix and the narrow producer AGREE on the
+    /// AAFI root. Checked across several in-gap inserts (varying `free_index`).
+    #[test]
+    fn aafi_new_leaf_membership_folds_to_new_root() {
+        let inserts = [(15u32, 9u32), (25, 3), (5, 1), (40, 7), (33, 2)];
+        let mut set: Vec<HeapLeaf> = vec![raw(10, 1), raw(20, 2), raw(30, 4)];
+        for &(a, v) in &inserts {
+            let tree = CanonicalHeapTree8::new(set.clone(), HEAP_TREE_DEPTH);
+            let w = tree
+                .insert_witness_aafi(raw(a, v))
+                .expect("fresh in-gap insert has a witness");
+            let (siblings, directions) = w.new_leaf_membership(HEAP_TREE_DEPTH);
+            assert_eq!(siblings.len(), HEAP_TREE_DEPTH);
+            assert_eq!(directions.len(), HEAP_TREE_DEPTH);
+            let recomposed = recompose_membership_8(w.new_leaf.digest8(), &siblings, &directions);
+            assert_eq!(
+                recomposed, w.new_root,
+                "appended leaf over PATH2 membership must fold to the AAFI new_root (key {a})"
+            );
+            set.push(raw(a, v));
+        }
     }
 }

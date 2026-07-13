@@ -4725,22 +4725,31 @@ pub const ACCUM_INSERT_HOST_WIDTH: usize = GRAD_ROT_WIDTH + CAP_OPEN_SPAN;
 
 /// **`lay_accum_insert_read_appendix`** — lay the §J′ `effAccumInsertV3` heap-open READ appendix on every
 /// row of a grow-gate wide trace. Opens the spliced `(key, value)` leaf against the AFTER accumulator
-/// root over the `CanonicalHeapTree8::insert_witness` after-membership path (`siblings`/`directions`/
-/// `new_root` — the spliced leaf's membership in the REBUILT tree), so a `Satisfied2` of the deployed
-/// insert descriptor TRACE-FORCES `MembersAt8 afterRoot (key, value)`. The read's `capRoot` group lands
-/// `= new_root`, which the descriptor's `afterGroupWeldsI` gates weld to the AFTER accumulator block the
-/// tree generator already laid; the read leaf's `(addr, value)` IS `(key, value)`, satisfying the KEY /
-/// VALUE bind gates. `before_leaves` is the BEFORE accumulator leaf-set (the SAME set threaded into the
-/// tree generator, so `new_root` matches the AFTER block). The key MUST be FRESH (else `insert_witness`
-/// refuses — fail closed, no fabricated post-root). Grows each row to [`ACCUM_INSERT_HOST_WIDTH`].
+/// root over the after-membership path, so a `Satisfied2` of the deployed insert descriptor TRACE-FORCES
+/// `MembersAt8 afterRoot (key, value)`. The read's `capRoot` group lands `= new_root`, which the
+/// descriptor's `afterGroupWeldsI` gates weld to the AFTER accumulator block the tree generator already
+/// laid; the read leaf's `(addr, value)` IS `(key, value)`, satisfying the KEY / VALUE bind gates.
+///
+/// `aafi` selects the AFTER-root lineage to MATCH what the narrow tree generator committed:
+///   * `aafi = true` (noteSpend limb 26 / noteCreate limb 27, F1-flipped, op=4): open the appended leaf
+///     at its `free_index` over the PATH2 free-slot membership (`AafiInsertWitness8::new_leaf_membership`)
+///     against the APPEND-AT-FREE-INDEX `insert_witness_aafi().new_root`.
+///   * `aafi = false` (createCell accounts limb 0, op=3): open the sorted spliced leaf over the sorted
+///     `insert_witness` after-membership path against the SORTED-compacted rebuilt root (the accounts
+///     narrow producer has NOT been flipped to AAFI — a separate lane).
+///
+/// `before_leaves` is the BEFORE accumulator leaf-set (the SAME set threaded into the tree generator, so
+/// `new_root` matches the AFTER block). The key MUST be FRESH (and in-gap for AAFI) — else the witness
+/// refuses (fail closed, no fabricated post-root). Grows each row to [`ACCUM_INSERT_HOST_WIDTH`].
 fn lay_accum_insert_read_appendix(
     trace: &mut [Vec<BabyBear>],
     before_leaves: &[crate::heap_root::HeapLeaf],
     key_col: usize,
     value_col: usize,
     gated: bool,
+    aafi: bool,
 ) -> Result<(), String> {
-    use crate::heap_root::{CanonicalHeapTree8, HEAP_TREE_DEPTH, HeapLeaf};
+    use crate::heap_root::{CanonicalHeapTree8, HEAP_DIGEST_W, HEAP_TREE_DEPTH, HeapLeaf};
     // The spliced leaf's `(key, value)` are read from the descriptor's KEY / VALUE param columns on the
     // active spend row (row 0). The read appendix's `(addr, value)` IS `(key, value)`, so the KEY/VALUE
     // bind gates hold on the active row. Two regimes:
@@ -4758,26 +4767,57 @@ fn lay_accum_insert_read_appendix(
     let key = trace[0][key_col];
     let value = trace[0][value_col];
     let before_tree = CanonicalHeapTree8::new(before_leaves.to_vec(), HEAP_TREE_DEPTH);
-    let w = before_tree
-        .insert_witness(HeapLeaf::entry(key, value))
-        .ok_or_else(|| {
-            format!(
-                "accum insert wide: 8-felt insert_witness for the fresh key {} failed (key already \
-                 present in the BEFORE accumulator, or a sentinel) — the sorted insert refuses (fail \
-                 closed, no fabricated post-root)",
-                key.as_u32()
-            )
-        })?;
-    if w.siblings.len() != HEAP_TREE_DEPTH || w.directions.len() != HEAP_TREE_DEPTH {
+    // The read appendix must open the spliced leaf against the SAME AFTER accumulator root the narrow
+    // tree generator committed into the rotated block — otherwise the descriptor's `afterGroupWeldsI`
+    // gate (capRoot == committed AFTER limb) fights the trace. Two lineages, keyed by `aafi`:
+    //   * `aafi = true`  (noteSpend limb 26 / noteCreate limb 27): F1 flipped these narrow producers to
+    //     commit `insert_witness_aafi().new_root` (the APPEND-AT-FREE-INDEX fold, op=4). The appended
+    //     leaf opens at its `free_index` over the PATH2 free-slot membership against that AAFI root.
+    //   * `aafi = false` (createCell accounts limb 0): the accounts narrow producer still commits the
+    //     SORTED-compacted `insert_witness().new_root` (op=3), so the read appendix opens the sorted
+    //     spliced leaf against the sorted rebuilt root. (Flipping accounts to AAFI is a SEPARATE lane —
+    //     its narrow producer has not been flipped, so forcing AAFI here would break the weld.)
+    // A present / out-of-gap key has NO witness on either lineage ⇒ fail closed, no fabricated post-root.
+    let (read_leaf, siblings, directions, new_root): (
+        HeapLeaf,
+        Vec<[BabyBear; HEAP_DIGEST_W]>,
+        Vec<u8>,
+        [BabyBear; HEAP_DIGEST_W],
+    ) = if aafi {
+        let w = before_tree
+            .insert_witness_aafi(HeapLeaf::entry(key, value))
+            .ok_or_else(|| {
+                format!(
+                    "accum insert wide: 8-felt insert_witness_aafi for the fresh key {} failed (key \
+                     already present in the BEFORE accumulator, a sentinel, or out of the bracketing \
+                     low leaf's pointer gap) — the AAFI insert refuses (fail closed, no fabricated \
+                     post-root)",
+                    key.as_u32()
+                )
+            })?;
+        // The appended leaf's PATH2 free-slot membership against the append-ordered AAFI `new_root`.
+        let (siblings, directions) = w.new_leaf_membership(HEAP_TREE_DEPTH);
+        (w.new_leaf, siblings, directions, w.new_root)
+    } else {
+        let w = before_tree
+            .insert_witness(HeapLeaf::entry(key, value))
+            .ok_or_else(|| {
+                format!(
+                    "accum insert wide: 8-felt insert_witness for the fresh key {} failed (key \
+                     already present in the BEFORE accumulator, or a sentinel) — the sorted insert \
+                     refuses (fail closed, no fabricated post-root)",
+                    key.as_u32()
+                )
+            })?;
+        (w.new_leaf, w.siblings, w.directions, w.new_root)
+    };
+    if siblings.len() != HEAP_TREE_DEPTH || directions.len() != HEAP_TREE_DEPTH {
         return Err(format!(
             "accum insert wide: after-membership path length {}/{} != depth {HEAP_TREE_DEPTH}",
-            w.siblings.len(),
-            w.directions.len()
+            siblings.len(),
+            directions.len()
         ));
     }
-    // The spliced (LINKED) new leaf — its arity-3 IMT digest8 (with next_addr = the sorted
-    // successor's addr) opens against the AFTER root8 over the insert-witness path.
-    let read_leaf = w.new_leaf;
     for row in trace.iter_mut() {
         // Ungated families pin the key/value columns constant on every row; the selector-gated
         // noteSpend leaves them as the base generator laid them (real on the active row, 0 on padding),
@@ -4791,9 +4831,9 @@ fn lay_accum_insert_read_appendix(
             row,
             ACCUM_INSERT_READ_BASE,
             read_leaf,
-            &w.siblings,
-            &w.directions,
-            w.new_root,
+            &siblings,
+            &directions,
+            new_root,
         );
     }
     Ok(())
@@ -4830,6 +4870,7 @@ pub fn generate_rotated_note_spend_wide(
         PARAM_BASE + param::NULLIFIER,
         PARAM_BASE + param::NOTE_VALUE_LO,
         true, // selector-gated: base noteSpend forces NOTE_VALUE_LO=0 off-row; gate the value bind
+        true, // AAFI: F1 flipped the nullifier narrow producer (limb 26) to insert_witness_aafi (op=4)
     )?;
     let dpis = append_wide_carriers(&mut trace, base_pis, ACCUM_INSERT_HOST_WIDTH);
     Ok((trace, dpis, map_heaps))
@@ -4863,6 +4904,7 @@ pub fn generate_rotated_note_create_wide(
         PARAM_BASE + param::NULLIFIER,
         PARAM_BASE + param::NOTE_VALUE_LO,
         false, // unconditional bind: noteCreate economics do not force the value column to 0 off-row
+        true, // AAFI: F1 flipped the commitments narrow producer (limb 27) to insert_witness_aafi (op=4)
     )?;
     let dpis = append_wide_carriers(&mut trace, base_pis, ACCUM_INSERT_HOST_WIDTH);
     Ok((trace, dpis, map_heaps))
@@ -4923,6 +4965,7 @@ pub fn generate_rotated_create_cell_wide(
         PARAM_BASE + param::NULLIFIER,
         PARAM_BASE + param::NULLIFIER,
         false, // unconditional bind: createCell births an empty cell (valueCol = keyCol), consistent off-row
+        false, // SORTED: the accounts narrow producer (limb 0) still commits insert_witness (op=3), NOT AAFI
     )?;
     let dpis = append_wide_carriers(&mut trace, base_pis, ACCUM_INSERT_HOST_WIDTH);
     Ok((trace, dpis, map_heaps))
