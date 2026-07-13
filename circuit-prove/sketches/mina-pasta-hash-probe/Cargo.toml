@@ -1,0 +1,23 @@
+[package]
+name = "mina-pasta-hash-probe"
+version = "0.1.0"
+edition = "2021"
+
+# Standalone probe crate — deliberately NOT a workspace member (empty [workspace]
+# opts out of the breadstuffs root workspace). Run with `cargo test` / `cargo run`.
+#
+# GO/NO-GO probe for proof-carrying Mina settlement (Path 1): can a
+# Pasta-instantiated DreggOuterConfig hash its FRI MMCS with Mina-Poseidon so an
+# o1js/Kimchi verifier hashes natively? Part A = the gold KAT (Rust mina-poseidon
+# == o1js Poseidon.hash, bit-exact — the Pasta analogue of the Poseidon2Bn254
+# gold KAT in circuit-prove/src/dregg_outer_config.rs).
+
+[workspace]
+
+[dependencies]
+# The maintained Mina-Poseidon: o1-labs/proof-systems `mina-poseidon` (the same
+# repo+rev storage/Cargo.toml already pins for poly-commitment — kimchi's own
+# sponge, NOT hand-rolled).
+mina-poseidon = { git = "https://github.com/o1-labs/proof-systems", rev = "36a8b510", default-features = false, features = ["std"] }
+mina-curves = { git = "https://github.com/o1-labs/proof-systems", rev = "36a8b510", default-features = false }
+ark-ff = { version = "0.5", default-features = false, features = ["std"] }
