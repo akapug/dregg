@@ -740,6 +740,21 @@ import Dregg2.Circuit.FriBridgeDeployedArity
 import Dregg2.Circuit.FriQuerySoundness
 import Dregg2.Circuit.AlgoStarkSoundInstance
 import Dregg2.Circuit.OodQuotientConsistency
+-- StarkSound endgame (2026-07-13): K′ bridge, extraction decoder (link D), proximity (link A),
+-- verifyBatch reduction (E), and the carrier-free StarkSound capstones. All lake-verified,
+-- #assert_axioms-clean; wired into the root so the whole tree (not just per-file) build guards them.
+import Dregg2.Circuit.RlcSoundnessBound
+import Dregg2.Circuit.KprimeCompose
+import Dregg2.Circuit.LowDegreeUniqueness
+import Dregg2.Circuit.RsUniqueDecoding
+import Dregg2.Circuit.DeployedUdrRegime
+import Dregg2.Circuit.LagrangeExistence
+import Dregg2.Circuit.DeployedProximitySoundness
+import Dregg2.Circuit.NearDecodesWitness
+import Dregg2.Circuit.DecodeAgreesOpenings
+import Dregg2.Circuit.StarkSoundDischarge
+import Dregg2.Circuit.StarkSoundAssembled
+import Dregg2.Circuit.StarkSoundFriLdt
 import Dregg2.Circuit.TraceColumnInterp
 import Dregg2.Circuit.FieldIntegerLift
 import Dregg2.Circuit.FriExtractReal

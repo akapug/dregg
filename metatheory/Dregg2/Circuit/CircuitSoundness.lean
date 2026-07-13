@@ -381,6 +381,12 @@ instance : Inhabited (FriVerifier.BatchProofData ℤ) :=
 instance : Inhabited (FriVerifier.WrapPublics ℤ) :=
   ⟨{ segment := [] }⟩
 
+instance : Inhabited (FriVerifier.FriCore ℤ) :=
+  ⟨{ compress := fun _ _ => [], foldCombine := fun _ _ _ _ => 0 }⟩
+
+instance : Inhabited (FriVerifier.FieldArith ℤ) :=
+  ⟨{ add := fun _ _ => 0, mul := fun _ _ => 0, pow := fun _ _ => 0, zero := 0, one := 0 }⟩
+
 /-- Deployed config: the Poseidon2 permutation the challenger sponges with. KAT-validated. -/
 opaque cfgPerm : List ℤ → List ℤ
 /-- Deployed config: the sponge rate. KAT-validated. -/
@@ -391,8 +397,14 @@ opaque cfgToNat : ℤ → Nat
 opaque cfgParams : FriVerifier.FriParams
 /-- Deployed config: the baked recursion-VK shape pin. KAT-validated. -/
 opaque cfgVk : FriVerifier.RecursionVk ℤ
-/-- Deployed config: the arithmetic per-query check bundle. KAT-validated. -/
-opaque cfgChecks : FriVerifier.FriChecks ℤ
+/-- Deployed config: the FRI-core ops (Poseidon2 compress + arity-2 fold combine). KAT-validated. -/
+opaque cfgCore : FriVerifier.FriCore Int
+/-- Deployed config: the field-arithmetic op bundle the batch-table check runs over. KAT-validated. -/
+opaque cfgA : FriVerifier.FieldArith Int
+/-- Deployed config: the arithmetic per-query check bundle — the SPECIFIED `fullChecks` at the
+opaque deployed core/arith ops (no longer an opaque record itself). KAT-validated at the leaves. -/
+@[reducible] def cfgChecks : FriVerifier.FriChecks Int :=
+  FriVerifier.fullChecks cfgCore cfgA cfgToNat cfgParams.powBits
 /-- Deployed config: the challenger's initial sponge state. KAT-validated. -/
 opaque cfgInitState : List ℤ
 /-- Deployed config: the proof's log-domain size (from the VK shape / degree bits). KAT-validated. -/
