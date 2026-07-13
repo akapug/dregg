@@ -1,0 +1,32 @@
+# `dregg-schema` — the platform keystone: a typed component schema + a verified
+# allocator (translation-validation style). An author declares typed COMPONENTS;
+# the allocator emits a Legal slot/heap LAYOUT (mirroring the LANDED
+# `metatheory/Dregg2/Circuit/Emit/RotatedLayout.lean` Legal discipline — an
+# ill-aligned layout is UNCONSTRUCTABLE), a `CellProgram::Cases` with the archetype
+# teeth, and a typed get/set API — deployed on the REAL `spween-dregg::WorldCell`
+# (the real `EmbeddedExecutor` re-checks the teeth on every turn).
+#
+# Additive workspace member. Consumes cell/program + spween-dregg's WorldCell; imports
+# the RotatedLayout Legal pattern (does not edit the circuit / metatheory / game-turn-slice).
+[package]
+name = "dregg-schema"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "The platform keystone: a typed component schema + a translation-validation verified allocator. An author declares typed components (stat/resource/identity/invariant/collection); the allocator emits a Legal (disjoint+in-bounds, RotatedLayout-discipline) slot/heap layout, a CellProgram::Cases of archetype teeth, and a typed API — deployed on a real WorldCell where the verified executor admits exactly the declared moves."
+
+[dependencies]
+# The tooth vocabulary (StateConstraint / CellProgram / TransitionCase / TransitionGuard /
+# Effect / symbol / field_from_u64 / CellId / FieldElement / TurnReceipt) — the ISA a
+# component archetype compiles to.
+dregg-app-framework = { path = "../app-framework", default-features = false }
+# The cell program's heap-atom vocabulary (`HeapAtom`) for the collection archetype.
+dregg-cell = { path = "../cell" }
+# THE REAL WorldCell — the deployed executor + ledger binding the schema deploys onto
+# (`WorldCell::deploy_compiled` installs the emitted program; `apply_raw` drives a
+# verified turn the real executor admits IFF the archetype teeth pass).
+spween-dregg = { path = "../spween-dregg" }
