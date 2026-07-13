@@ -8093,3 +8093,27 @@ binds the lanes (new Groth16 VK, IGroth16Verifier25→N), (4) contract checks `o
 lanes before recording. PLUS the hash-family decision (adapters need keccak; circuit is Poseidon2 — keccak-in-circuit
 vs Poseidon message root vs wrap-level fold; see INTERCHAIN-ADAPTERS-DESIGN.md). Deferred: apex/fold territory is the
 sibling flag-day's (descriptor/effect-vm churn) and a full VK regen flag-day.
+
+## ⚑ SETTLEMENT R1CS SHRINK: 12.87M → 4.98M (−61.3%), profiled + verification-preserving (2026-07-13)
+MEASURED breakdown FIRST (settlement_profile_test.go, phase-stripped compiles with a drift canary pinning the full
+variant == the real SettlementCircuit compile — 12,866,746 before): transcript+pins 182,306 (1.4%) | STARK algebra
+472,860 (3.7% — per-instance DAG eval: poseidon2 305k, alu 96k, expose_claim 71k, 3 simple ~2k) | FRI core 1,857,611
+(14.4%) | open_input 10,353,969 (80.5% — THE WHALE: the per-query per-column alpha-combination Horner, ~1670 column
+terms × ~172 R1CS × 38 queries; ExtMul=92/ExtAdd=64/reduce≈16-19/Poseidon2Bn254=240 measured marginals).
+THE CUT (stark_open_input.go, algebraic identity — NOT a hand-transcribed gadget; the emitted constraint DAGs are
+untouched): split Σαᵏ(p(z)ₖ−p(x)ₖ) = S_z − S_x; S_z (opened-at-zeta half) is query-independent → computed ONCE in
+NewOpenInputPrecomp and HOISTED out of the 38-query loop; S_x has BASE-field p(x)ₖ → precomputed αᵏ ladder + 4 raw
+products/column accumulated as bound-tracked linear combinations (ReduceBounded(71/77) once per block, babybear.go
+discipline). Same class as the file's existing pinned-form Horner rewrite; host reference twin KEEPS the pinned
+per-column form so parity crosses the two evaluation orders on the real proof. AFTER: 4,980,767 total; open_input
+2,467,990 (49.6%). PARITY HELD: open_input ref+gadget accept + reject-tamper canaries, assembled SettlementCircuit
+accepts real proof + rejects forged statement/tampered openings/wrong VK pins — all green post-change.
+NAMED FOLLOW-UPS:
+- GROTH16 REGEN FLAG-DAY (the circuit changed → new VK): re-run DREGG_SNARK=1 e2e → re-mint
+  DreggGroth16Verifier25.sol + settlement_groth16.json → re-pin bridge/src/ethereum.rs calldata keccak (it was
+  re-pinned 2026-07-13 to the CURRENT pre-shrink fixture and is green; it changes again at regen). Setup/prove cost
+  should drop roughly with the R1CS (~16min → est ~6min setup).
+- NEXT LEVER (measured): Poseidon2Bn254 permutations are now the mass — ~290 perms/query (FRI 165 + open_input ~125)
+  × 38 + transcript ≈ ~2.7M of the remaining 4.98M. Protocol-level lever = GKR-batched Poseidon2 (gnark std/gkr
+  direction); est up to −2.5M more (floor ≈ 2.5M). GKR-batching the alpha-combination itself is now MARGINAL (S_x
+  arithmetic ≈ 0.32M total) — the algebraic hoist obsoleted most of that ask.

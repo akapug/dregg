@@ -292,14 +292,14 @@ func (c *shrinkOpenInputCircuit) Define(api frontend.API) error {
 	for i := range c.OpenedEF {
 		bb.ExtAssertIsCanonical(c.OpenedEF[i])
 	}
-	pre := NewOpenInputPrecomp(bb, c.rounds, c.Zeta, c.Alpha, c.logMax)
+	pre := NewOpenInputPrecomp(bb, c.rounds, c.Zeta, c.Alpha, c.OpenedEF, c.logMax)
 	for qi := range c.IdxBits {
 		bb.ExtAssertIsCanonical(c.InitialEvals[qi])
 		for j := range c.RollIns[qi] {
 			bb.ExtAssertIsCanonical(c.RollIns[qi][j])
 		}
 		BindOpenInputToFriSeedsNative(bb, c.rounds, pre, c.IdxBits[qi], c.Roots,
-			c.InputOpenings[qi], c.OpenedEF,
+			c.InputOpenings[qi],
 			FriNativeQueryOpening{InitialEval: c.InitialEvals[qi], RollIns: c.RollIns[qi]},
 			c.rollInRounds)
 	}

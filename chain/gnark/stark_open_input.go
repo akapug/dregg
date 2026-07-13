@@ -39,12 +39,26 @@
 // pinned loop multiplies alpha_pow into every column term; here each
 // (matrix, point) block is evaluated as
 //
-//	alpha_pow · qinv · Σ_k alpha^k·(p(z)_k − p(x)_k)   [Horner in alpha]
+//	alpha_pow · qinv · (S_z − S_x)
+//	S_z = Σ_k alpha^k·p(z)_k        S_x = Σ_k alpha^k·p(x)_k
 //
-// followed by alpha_pow *= alpha^width — the same sum with one ExtMul per
-// column instead of three. The host reference twin (stark_open_input_ref.go)
-// implements the pinned per-column form, so the parity tests cross the two
-// evaluation orders on real data.
+// followed by alpha_pow *= alpha^width — the split of the pinned difference
+// sum Σ_k alpha^k·(p(z)_k − p(x)_k) into its two halves. The split is THE
+// R1CS lever of the whole settlement wrap (measured: open_input was 10.35M of
+// the 12.87M total, ~80%, dominated by the per-query per-column Horner):
+//
+//	S_z depends only on the transcript-bound opened-at-zeta values, so it is
+//	computed ONCE per (matrix, point) in NewOpenInputPrecomp and HOISTED out
+//	of the 38-query loop entirely;
+//	S_x has BASE-field p(x)_k (the Merkle-opened rows), so with the alpha
+//	powers precomputed it is 4 raw products per column accumulated as
+//	bound-tracked linear combinations (babybear.go ReduceBounded discipline)
+//	with ONE reduction per block — not a full ExtMul + ExtAdd chain per
+//	column.
+//
+// The host reference twin (stark_open_input_ref.go) implements the pinned
+// per-column form, so the parity tests cross the two evaluation orders on
+// real data (accept + reject canaries, apex_shrink_open_input_test.go).
 package friverifier
 
 import (
@@ -170,41 +184,47 @@ func openInputLogHeights(rounds []OpenInputRoundShape) []int {
 // ============================================================================
 
 // openInputPrecomp carries the query-independent derived values: zeta_next
-// per generator-bits (zeta · g_bits, an ext × base-constant product) and
-// alpha^width per distinct width (the per-(matrix,point) alpha_pow advance).
+// per generator-bits (zeta · g_bits, an ext × base-constant product),
+// alpha^width per distinct width (the per-(matrix,point) alpha_pow advance),
+// the alpha-power ladder alpha^0..alpha^maxWidth, and — the hoisted half of
+// the alpha-combination — S_z = Σ_k alpha^k·p(z)_k per (round, matrix,
+// point), computed ONCE over the transcript-bound opened-at-zeta stream.
 type openInputPrecomp struct {
 	zeta, alpha        BBExt
 	zetaNext           map[int]BBExt
 	alphaPowW          map[int]BBExt
+	alphaPows          []BBExt     // alpha^k, k = 0..maxWidth
+	sz                 [][][]BBExt // [round][matrix][point]
 	logGlobalMaxHeight int
 }
 
-// extPowConst returns a^e for a variable ext element and a fixed exponent
-// (square-and-multiply; e ≥ 1).
-func extPowConst(bb *BBApi, a BBExt, e int) BBExt {
-	if e < 1 {
-		panic("extPowConst: exponent must be >= 1")
-	}
-	// Highest bit first.
-	top := 0
-	for 1<<(top+1) <= e {
-		top++
-	}
-	r := a
-	for i := top - 1; i >= 0; i-- {
-		r = bb.ExtMul(r, r)
-		if e&(1<<i) != 0 {
-			r = bb.ExtMul(r, a)
+// extMulRawInto accumulates the schoolbook product a·b (BabyBear[X]/(X^4−11))
+// into acc as RAW, UNREDUCED linear combinations — no per-column reduction.
+// BOUND OBLIGATION (babybear.go ReduceBounded discipline): with canonical
+// inputs each accumulated term is < 34·2^62 < 2^68, so n accumulations stay
+// < n·2^68; every caller documents its n and reduces with the matching bound.
+func extMulRawInto(api frontend.API, acc *[4]frontend.Variable, a, b BBExt) {
+	var p [4][4]frontend.Variable
+	for i := 0; i < 4; i++ {
+		for j := 0; j < 4; j++ {
+			p[i][j] = api.Mul(a[i], b[j])
 		}
 	}
-	return r
+	acc[0] = api.Add(acc[0], p[0][0], api.Mul(BBExtW, api.Add(p[1][3], p[2][2], p[3][1])))
+	acc[1] = api.Add(acc[1], p[0][1], p[1][0], api.Mul(BBExtW, api.Add(p[2][3], p[3][2])))
+	acc[2] = api.Add(acc[2], p[0][2], p[1][1], p[2][0], api.Mul(BBExtW, p[3][3]))
+	acc[3] = api.Add(acc[3], p[0][3], p[1][2], p[2][1], p[3][0])
 }
 
 // NewOpenInputPrecomp builds the shared derivation context. zeta and alpha
 // are the transcript challenges (the OOD point and the FRI batch-combination
-// alpha); the caller binds them to the live Fiat-Shamir replay.
+// alpha); openedAtZ is the transcript-bound opened-values-at-zeta stream
+// (already canonicity-bound by the caller), consumed EXACTLY in round/matrix/
+// point/column order — the same flattening the observe stream pins. The
+// caller binds all three to the live Fiat-Shamir replay.
 func NewOpenInputPrecomp(
-	bb *BBApi, rounds []OpenInputRoundShape, zeta, alpha BBExt, logGlobalMaxHeight int,
+	bb *BBApi, rounds []OpenInputRoundShape, zeta, alpha BBExt, openedAtZ []BBExt,
+	logGlobalMaxHeight int,
 ) *openInputPrecomp {
 	p := &openInputPrecomp{
 		zeta:               zeta,
@@ -213,6 +233,7 @@ func NewOpenInputPrecomp(
 		alphaPowW:          map[int]BBExt{},
 		logGlobalMaxHeight: logGlobalMaxHeight,
 	}
+	maxWidth := 0
 	for _, r := range rounds {
 		for _, m := range r.Matrices {
 			if m.LogHeight <= 0 || m.LogHeight > logGlobalMaxHeight {
@@ -227,10 +248,57 @@ func NewOpenInputPrecomp(
 					p.zetaNext[m.NextPointBits] = bb.ExtMulBaseConst(g, zeta)
 				}
 			}
-			if _, ok := p.alphaPowW[m.Width]; !ok {
-				p.alphaPowW[m.Width] = extPowConst(bb, alpha, m.Width)
+			if m.Width > maxWidth {
+				maxWidth = m.Width
 			}
 		}
+	}
+
+	// The alpha-power ladder: alpha^0 = 1 (a constant), alpha^k = alpha^(k-1)·alpha.
+	// alpha^width for the per-block alpha_pow advance reads the same ladder.
+	p.alphaPows = make([]BBExt, maxWidth+1)
+	p.alphaPows[0] = BBExt{1, 0, 0, 0}
+	for k := 1; k <= maxWidth; k++ {
+		p.alphaPows[k] = bb.ExtMul(p.alphaPows[k-1], alpha)
+	}
+	for _, r := range rounds {
+		for _, m := range r.Matrices {
+			p.alphaPowW[m.Width] = p.alphaPows[m.Width]
+		}
+	}
+
+	// S_z per (round, matrix, point): Σ_k alpha^k·p(z)_k over the opened-at-
+	// zeta stream — query-independent, computed ONCE, hoisted out of the query
+	// loop. Raw ext×ext accumulation: each column adds terms < 34·2^62 < 2^68
+	// per coordinate; widths are ≤ maxWidth ≤ 512, so the accumulator stays
+	// < 512·2^68 = 2^77 — ONE ReduceBounded(77) per coordinate per block.
+	if maxWidth > 512 {
+		panic("NewOpenInputPrecomp: width exceeds the documented 2^77 accumulation bound")
+	}
+	pos := 0
+	p.sz = make([][][]BBExt, len(rounds))
+	for ri, r := range rounds {
+		p.sz[ri] = make([][]BBExt, len(r.Matrices))
+		for mi, m := range r.Matrices {
+			p.sz[ri][mi] = make([]BBExt, m.NumPoints)
+			for pt := 0; pt < m.NumPoints; pt++ {
+				pz := openedAtZ[pos : pos+m.Width]
+				pos += m.Width
+				acc := [4]frontend.Variable{0, 0, 0, 0}
+				for k := 0; k < m.Width; k++ {
+					extMulRawInto(bb.API(), &acc, p.alphaPows[k], pz[k])
+				}
+				p.sz[ri][mi][pt] = BBExt{
+					bb.ReduceBounded(acc[0], 77),
+					bb.ReduceBounded(acc[1], 77),
+					bb.ReduceBounded(acc[2], 77),
+					bb.ReduceBounded(acc[3], 77),
+				}
+			}
+		}
+	}
+	if pos != len(openedAtZ) {
+		panic("NewOpenInputPrecomp: opened-values stream not consumed exactly")
 	}
 	return p
 }
@@ -323,10 +391,13 @@ func verifyOpenInputBatchNative(
 }
 
 // deriveOpenInputReducedNative computes the per-height reduced openings from
-// the (Merkle-verified) opened rows and the transcript-bound opened values at
-// zeta — the alpha-combination of verifier.rs:600-616. openedAtZ is consumed
-// SEQUENTIALLY in round/matrix/point/column order (the exact flattening of
-// the opened-values observe stream) and must be consumed exactly.
+// the (Merkle-verified) opened rows and the precomputed S_z halves — the
+// alpha-combination of verifier.rs:600-616 in the split form
+// alpha_pow·qinv·(S_z − S_x). The opened-at-zeta stream was consumed by
+// NewOpenInputPrecomp (S_z); here only the query-dependent S_x is evaluated:
+// base-field opened rows against the alpha-power ladder, accumulated raw
+// (each term < 2^62, width ≤ 512 ⇒ < 2^71) with one ReduceBounded(71) per
+// coordinate per block.
 //
 // Returns the reduced openings aligned with openInputLogHeights(rounds)
 // (descending log height).
@@ -336,7 +407,6 @@ func deriveOpenInputReducedNative(
 	pre *openInputPrecomp,
 	idxBits []frontend.Variable,
 	openings []OpenInputBatchOpening,
-	openedAtZ []BBExt,
 ) []BBExt {
 	if len(openings) != len(rounds) {
 		panic("deriveOpenInputReducedNative: opening count does not match the round count")
@@ -362,7 +432,6 @@ func deriveOpenInputReducedNative(
 	type qinvKey struct{ lh, zid int }
 	qinvAt := map[qinvKey]BBExt{}
 
-	pos := 0
 	for ri, round := range rounds {
 		for mi, m := range round.Matrices {
 			x, ok := xAt[m.LogHeight]
@@ -371,6 +440,30 @@ func deriveOpenInputReducedNative(
 				xAt[m.LogHeight] = x
 			}
 			hi := hIdx[m.LogHeight]
+
+			// S_x = Σ_k α^k·p(x)_k, shared by both opening points of this
+			// matrix (p(x) is the single Merkle-opened row). p(x)_k is BASE
+			// field and canonical (verifyOpenInputBatchNative asserted it),
+			// α^k coordinates canonical: each product < 2^62; width ≤ 512 ⇒
+			// accumulator < 512·2^62 = 2^71 — ReduceBounded(71) per coord.
+			px := openings[ri].Rows[mi]
+			if m.Width > 512 {
+				panic("deriveOpenInputReducedNative: width exceeds the documented 2^71 accumulation bound")
+			}
+			accX := [4]frontend.Variable{0, 0, 0, 0}
+			for k := 0; k < m.Width; k++ {
+				a := pre.alphaPows[k]
+				for j := 0; j < 4; j++ {
+					accX[j] = bb.api.Add(accX[j], bb.api.Mul(px[k], a[j]))
+				}
+			}
+			sx := BBExt{
+				bb.ReduceBounded(accX[0], 71),
+				bb.ReduceBounded(accX[1], 71),
+				bb.ReduceBounded(accX[2], 71),
+				bb.ReduceBounded(accX[3], 71),
+			}
+
 			for pt := 0; pt < m.NumPoints; pt++ {
 				z, zid := pre.zeta, -1
 				if pt == 1 {
@@ -382,26 +475,12 @@ func deriveOpenInputReducedNative(
 					qinv = bb.ExtInv(BBExt{bb.Sub(z[0], x), z[1], z[2], z[3]})
 					qinvAt[qinvKey{m.LogHeight, zid}] = qinv
 				}
-				// Horner in alpha over the columns: Σ_k α^k (p(z)_k − p(x)_k).
-				pz := openedAtZ[pos : pos+m.Width]
-				pos += m.Width
-				px := openings[ri].Rows[mi]
-				var horner BBExt
-				for k := m.Width - 1; k >= 0; k-- {
-					d := BBExt{bb.Sub(pz[k][0], px[k]), pz[k][1], pz[k][2], pz[k][3]}
-					if k == m.Width-1 {
-						horner = d
-					} else {
-						horner = bb.ExtAdd(bb.ExtMul(horner, pre.alpha), d)
-					}
-				}
-				ro[hi] = bb.ExtAdd(ro[hi], bb.ExtMul(alphaPow[hi], bb.ExtMul(qinv, horner)))
+				// alpha_pow·qinv·(S_z − S_x) — S_z hoisted (precomp).
+				d := bb.ExtSub(pre.sz[ri][mi][pt], sx)
+				ro[hi] = bb.ExtAdd(ro[hi], bb.ExtMul(alphaPow[hi], bb.ExtMul(qinv, d)))
 				alphaPow[hi] = bb.ExtMul(alphaPow[hi], pre.alphaPowW[m.Width])
 			}
 		}
-	}
-	if pos != len(openedAtZ) {
-		panic("deriveOpenInputReducedNative: opened-values stream not consumed exactly")
 	}
 	return ro
 }
@@ -423,7 +502,6 @@ func BindOpenInputToFriSeedsNative(
 	idxBits []frontend.Variable,
 	roots []frontend.Variable,
 	openings []OpenInputBatchOpening,
-	openedAtZ []BBExt,
 	q FriNativeQueryOpening,
 	rollInAfterRound []int,
 ) {
@@ -434,7 +512,7 @@ func BindOpenInputToFriSeedsNative(
 	for ri, round := range rounds {
 		verifyOpenInputBatchNative(bb, round, openings[ri], idxBits, logMax, roots[ri])
 	}
-	derived := deriveOpenInputReducedNative(bb, rounds, pre, idxBits, openings, openedAtZ)
+	derived := deriveOpenInputReducedNative(bb, rounds, pre, idxBits, openings)
 
 	// The derived height set must BE {logMax} ∪ {logMax−r−1 : roll-ins} —
 	// the structural agreement between the input heights and the roll-in

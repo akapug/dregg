@@ -289,10 +289,10 @@ func (c *SettlementCircuit) Define(api frontend.API) error {
 		roots[i] = c.PrefixDigests[off]
 	}
 	pre := NewOpenInputPrecomp(bb, c.inputRounds, zeta, sampleExt(c.loc.friAlphaOff),
-		c.r+c.cfg.LogBlowup+c.cfg.LogFinalPolyLen)
+		openedEF, c.r+c.cfg.LogBlowup+c.cfg.LogFinalPolyLen)
 	for qi := range c.Queries {
 		BindOpenInputToFriSeedsNative(bb, c.inputRounds, pre, queryBits[qi], roots,
-			c.InputOpenings[qi], openedEF, c.Queries[qi], c.rollInAfterRound)
+			c.InputOpenings[qi], c.Queries[qi], c.rollInAfterRound)
 	}
 	return nil
 }
