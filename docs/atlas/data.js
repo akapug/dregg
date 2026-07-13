@@ -141,7 +141,7 @@ const ATLAS = {
     },
     {
       id: "circuit", layer: "substrate", title: "Descriptor circuit & light-client unfoolability",
-      what: "Each turn carries a STARK proving it was a valid kernel transition. Turns fold into a constant-size recursive whole-chain aggregate. A light client holds no secrets, re-runs no cell, and — checking only a succinct root — learns the whole history is genuine. The apex theorem and the five guarantees are axiom-clean; the only genuine open items are the STANDARD crypto carriers (FRI/STARK soundness, Poseidon2 collision-resistance, deployed-tree faithfulness).",
+      what: "Each turn carries a STARK proving it was a valid kernel transition. Turns fold into a constant-size recursive whole-chain aggregate. A light client holds no secrets, re-runs no cell, and — checking only a succinct root — learns the whole history is genuine. The apex theorem and the five guarantees are axiom-clean; the crypto floor has been reduced — StarkSound and deployed-tree faithfulness are now discharged in-tree, so the only genuine open items are Poseidon2 collision-resistance and the single named deployed FRI list-decoding bound (FriLdtDeployedBound).",
       components: [
         { name: "lightclient_unfoolable — the apex", status: "PROVEN", what: "verifyBatch accepts ⟹ ∃ a genuine kernel transition s⟶s′ with commitments binding pre/post. Single-transition; lifted to whole-turn and whole-history. #assert_axioms-clean.",
           files: [f("metatheory/Dregg2/Circuit/CircuitSoundness.lean", 453), f("docs/reference/lean-circuit.md")] },
@@ -149,8 +149,8 @@ const ATLAS = {
           files: [f("metatheory/Dregg2/Circuit/RecursiveAggregation.lean", 200)] },
         { name: "The five guarantee apexes", status: "PROVEN", what: "Authority · Conservation · Integrity · Freshness · Unfoolability — each a genuine conjunction of content-carrying keystones (no True anchors); #assert_axioms on each.",
           files: [f("metatheory/Dregg2/AssuranceCase.lean", 166), f("docs/reference/lean-assurance.md")] },
-        { name: "The standard crypto carriers (the only open floor)", status: "DESIGN", what: "StarkSound (FRI/STARK soundness extraction) · Poseidon2SpongeCR (collision-resistance) · DeployedFaithful (deployed-tree). Carried as typeclass hypotheses, never as Lean axioms — the audited crypto foundation, by design terminal.",
-          files: [f("metatheory/Dregg2/Circuit/CircuitSoundness.lean", 382)] },
+        { name: "The crypto floor — reduced to one named FRI bound", status: "DESIGN", what: "StarkSound is DISCHARGED — no longer terminal: starkSound_of_verifyAlgo makes it a THEOREM over the specified verifyAlgo (AlgoStarkSound + DeployedRefines), and the BBHR18/BCIKS20 proximity algebra is PROVED on HashCR (friProximityK8_discharge). DeployedFaithful is likewise PROVEN in-tree for the canonical leaf (deployedFaithfulEff_canonical), not carried. What remains: Poseidon2SpongeCR (standard collision-resistance) and the single deployed Johnson-radius bound FriLdtDeployedBound — a Prop, not an axiom, shown load-bearing (ldt_bound_is_load_bearing), the one research assumption.",
+          files: [f("metatheory/Dregg2/Circuit/FriVerifierBridge.lean", 106), f("metatheory/Dregg2/Circuit/BabyBearFriDeployedInstance.lean", 209), f("docs/audit/TRUST-BASE-CENSUS.md", 91)] },
         { name: "Circuit subsystem reference", status: "REAL", what: "The descriptor circuit, batch STARK, recursive fold — the running prover/verifier.",
           files: [f("docs/reference/circuit.md"), f("circuit/")] },
       ],
