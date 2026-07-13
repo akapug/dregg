@@ -61,11 +61,14 @@ hardness is FINDING a short nonzero element — captured by `MSISHard`.) -/
 def IsMSISSolution (A : M →ₗ[Rq] N) (β : ℕ) (z : M) : Prop :=
   z ≠ 0 ∧ nrm z ≤ β ∧ A z = 0
 
-/-- **THE IRREDUCIBLE ASSUMPTION (MSIS).** Module-SIS is hard for `(A, β)`: no short nonzero kernel
-vector is findable. Stated as a predicate and ASSUMED where a reduction bottoms out — never proved,
-because no formal proof discharges lattice hardness (the shared floor of all PQ lattice crypto). A
-`Dregg2.Crypto.HermineMSIS` reduction shows a forgery would produce an `IsMSISSolution`, contradicting
-this. -/
+/-- ⚠ **BROKEN / VACUOUS AT DEPLOYMENT — an EXISTENCE-REFUTATION, not a hardness statement.** This says no
+short nonzero kernel vector EXISTS, but at a COMPRESSING `A` (real parameters) one always does — by
+pigeonhole — which is precisely why MSIS is a hard SEARCH problem. So `MSISHard A β` is FALSE at deployment,
+and every theorem conditioned on it is VACUOUSLY true there; `#assert_axioms` is blind to it (a hypothesis is
+never an axiom). The FALSIFIABILITY TOOTH `CryptoFloorTeeth.not_msisHard_of_short_ball` proves it FALSE
+whenever the short ball outnumbers the codomain (fires on the deployed `[id | 1]` over `ZMod 5`). The PROPER
+floor quantifies over BOUNDED ADVERSARIES with a λ-decaying advantage ENSEMBLE, not the mere existence of a
+solution — see `CryptoFloorTeeth` §5–§6 (kept here, doc-marked, for the record). -/
 def MSISHard (A : M →ₗ[Rq] N) (β : ℕ) : Prop :=
   ¬ ∃ z, IsMSISSolution A β z
 
@@ -74,10 +77,12 @@ def MSISHard (A : M →ₗ[Rq] N) (β : ℕ) : Prop :=
 def IsMLWESample [ShortNorm N] (A : M →ₗ[Rq] N) (β : ℕ) (t : N) : Prop :=
   ∃ s : M, ∃ e : N, nrm s ≤ β ∧ nrm e ≤ β ∧ t = A s + e
 
-/-- **THE IRREDUCIBLE ASSUMPTION (MLWE, search form).** Module-LWE is hard: the short secret `s`
-underlying a sample `t = A·s + e` is not recoverable. This is the assumption that HIDES the signing
-key — the leg that rules out the trivial (`u = 0`) case in the MSIS forgery reduction. Assumed, never
-proved. -/
+/-- ⚠ **BROKEN / VACUOUS AT DEPLOYMENT — an EXISTENCE-REFUTATION, not a hardness statement.** This says the
+short `(s, e)` underlying `t = A·s + e` do NOT exist — but for a genuine public key they exist BY
+CONSTRUCTION: they ARE the secret key. So `MLWESearchHard A β t` is FALSE at every real `t`, and any theorem
+conditioned on it is vacuous there. The FALSIFIABILITY TOOTH `CryptoFloorTeeth.not_mlweSearchHard_of_sample`
+refutes it for any `t` that IS an MLWE sample. Real MLWE hardness is the INEFFICIENCY of RECOVERING `s`,
+never its non-existence — see the proper adversary-indexed floor in `CryptoFloorTeeth`. -/
 def MLWESearchHard [ShortNorm N] (A : M →ₗ[Rq] N) (β : ℕ) (t : N) : Prop :=
   ¬ ∃ s : M, nrm s ≤ β ∧ ∃ e : N, nrm e ≤ β ∧ t = A s + e
 

@@ -408,9 +408,15 @@ point, i.e. for every secret `sk`, given `sk·G` it returns `sk`. Its EXISTENCE 
 def DLSolver (C : CurveGroup) (G : C.Pt) : Prop :=
   ∃ solve : C.Pt → ℕ, ∀ sk : ℕ, solve (C.smul sk G) = sk
 
-/-- **`SchnorrDLHard C G`** — THE IRREDUCIBLE PRIMITIVE: discrete log on this curve is hard, i.e. no
-`DLSolver` exists. Named; never a Lean law, never `:= True`. The bottom of the confidential-value
-soundness stack, beneath the structure proved in §1–§3. -/
+/-- ⚠ **DEGENERATE AT FINITE PARAMETERS — an EXISTENCE-REFUTATION whose truth tracks a modelling artifact,
+not hardness.** `DLSolver` demands a `solve` with `solve (sk·G) = sk` for ALL `sk : ℕ`. On any FINITE point
+group `sk ↦ sk·G` is non-injective, so no such `solve` can exist and `SchnorrDLHard` is TRIVIALLY TRUE —
+satisfied by the addition group, by a broken curve, by anything finite, with ZERO cryptographic content. The
+FALSIFIABILITY TOOTH `CryptoFloorTeeth.schnorrDLHard_of_smul_collision` proves it holds from ANY `sk`-collision
+(fires on the finite `ZMod 5` toy). The opposite pole `toy_dl_not_hard` REFUTES it on the INFINITE toy, where
+`sk ↦ sk` is injective — so this predicate discriminates on injectivity-over-`ℕ`, not on DL hardness. The
+proper floor is the advantage-based `SchnorrEufCma.SchnorrDLHardF` / `ProbSchnorrFamily` (a noticeable-advantage
+adversary), never this existence check — see `CryptoFloorTeeth`. -/
 def SchnorrDLHard (C : CurveGroup) (G : C.Pt) : Prop :=
   ¬ DLSolver C G
 
