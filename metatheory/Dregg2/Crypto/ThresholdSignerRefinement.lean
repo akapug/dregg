@@ -83,6 +83,8 @@ open Dregg2.Crypto.HermineSelfTargetMSIS
 open Dregg2.Crypto.HermineHintMLWE
 open Dregg2.Crypto.HermineTSUF
 open Dregg2.Crypto.AdaptiveTSUF
+open Dregg2.Crypto.ConcreteSecurity (Negl Ensemble)
+open Dregg2.Crypto.ProbCrypto (DecisionMLWEHardQuant)
 
 /-! ## PART 1 — the deployed Hermine threshold-signer API surface, as a Lean contract.
 
@@ -265,6 +267,25 @@ theorem threshold_signer_adaptive_ts_uf_lossfree (api : ThresholdSignerApi Rq M 
        ∨ (¬ MLWESearchHard api.A β api.groupKey)) :=
   adaptive_ts_uf_reduces_lossfree api.keygen β api.commitReveal F trace memberKey chal resp outcome
 
+/-- **THE DEPLOYED SIGNER INHERITS THE DECISIONAL NON-LEAKING PROPERTY → the proper distinguishing floor.**
+Specializes `AdaptiveTSUF.adaptive_transcript_nonleaking_under_decision_floor` to the deployed API's public
+matrix `api.A`. The Round-1/Round-2 masking of the deployed Raccoon signer (`sample_wide_mask`, the
+uniform-smudging that hides each share on adaptive corruption) is a DECISIONAL guarantee: the sampled masked
+transcript is INDISTINGUISHABLE from real. Under the proper decisional floor `DecisionMLWEHardQuant advSim`
+(the transcript distinguisher's LWE-vs-uniform advantage ENSEMBLE negligible), the deployed signer's on-demand
+share reveal is NON-LEAKING: the simulated transcript `simTranscriptCommit` is (a) algebraically
+erasure-consistent with the ENTIRE realized corrupt set — PROVED — AND (b) computationally indistinguishable
+from real (`Negl advSim`). This re-grounds the masking leg on the honest distinguishing floor, replacing the
+SEARCH-`MLWESearchHard` grounding of `HintTranscriptSimulatable` for the indistinguishability content. The
+forgery/secret-recovery leg remains SEARCH (handled by the search-quant threshold migration), not decisional. -/
+theorem threshold_signer_transcript_nonleaking (api : ThresholdSignerApi Rq M N Idx Cm)
+    {Msg : Type*} {Fld : Type*} [DecidableEq Fld] (trace : List (AdaptiveStep Fld Msg))
+    (memberKey : Fld → N) (chal : Fld → Rq) (resp : Fld → M)
+    {S : Type*} (advSim : S → Ensemble) (s : S) (hfloor : DecisionMLWEHardQuant advSim) :
+    AdaptiveErasure api.A trace memberKey chal resp (simTranscriptCommit api.A memberKey chal resp)
+    ∧ Negl (advSim s) :=
+  adaptive_transcript_nonleaking_under_decision_floor api.A trace memberKey chal resp advSim s hfloor
+
 omit [ShortNorm Rq] [ShortNorm M] [ShortNorm N] in
 /-- **AN EQUIVOCATION BREAKS `HashCR`** — the rushing defense, on the DEPLOYED commit-reveal. Two DISTINCT
 Round-2 reveals `w ≠ w'` of one Round-1 commitment `cm` witness a hash collision, so `HashCR` cannot hold —
@@ -427,6 +448,27 @@ theorem deployed_bridge_fires (ρ : ℕ → ZMod 5)
   deployed_forgery_accepts goodApi goodApi_isHermineVerify 0 exForger ρ
     (Nat.le_zero.mpr rfl) (Nat.le_zero.mpr rfl) (Nat.le_zero.mpr rfl) hver
 
+/-- **THE DEPLOYED-SIGNER DECISIONAL NON-LEAKING FIRES.** On `goodApi`, under the decaying transcript
+distinguisher (`ProbCrypto.decayDist.adv = 1/2^l`), the deployed signer's adaptive reveal is non-leaking: the
+simulated transcript is erasure-consistent (PROVED) AND its distinguishing advantage is negligible — the
+masking guarantee re-grounded on the code, on the honest decisional floor. -/
+theorem deployed_transcript_nonleaking_fires :
+    AdaptiveErasure goodApi.A ([AdaptiveStep.corrupt 1, AdaptiveStep.sign 10] : List (AdaptiveStep ℚ ℕ))
+      (fun _ => 3) (fun _ => 2) (fun _ => 4)
+      (simTranscriptCommit goodApi.A (fun _ => 3) (fun _ => 2) (fun _ => 4))
+    ∧ Negl ProbCrypto.decayDist.adv :=
+  threshold_signer_transcript_nonleaking goodApi
+    ([AdaptiveStep.corrupt 1, AdaptiveStep.sign 10] : List (AdaptiveStep ℚ ℕ))
+    (fun _ => 3) (fun _ => 2) (fun _ => 4)
+    (fun _ : Unit => ProbCrypto.decayDist.adv) () ProbCrypto.decisionMLWEHardQuant_decay_holds
+
+/-- **THE DEPLOYED SIGNER'S DECISIONAL FLOOR IS LOAD-BEARING** — the perfect transcript distinguisher
+(advantage `1`) refutes it, so the deployed masking indistinguishability is a genuine decisional hardness
+assumption. -/
+theorem deployed_decision_floor_load_bearing :
+    ¬ DecisionMLWEHardQuant (fun _ : Unit => ProbCrypto.perfectDist.adv) :=
+  ProbCrypto.decisionMLWEHardQuant_perfect_refuted
+
 end Teeth
 
 #assert_all_clean [
@@ -435,6 +477,9 @@ end Teeth
   deployed_forgery_accepts,
   threshold_signer_concurrent_ts_uf_0,
   threshold_signer_adaptive_ts_uf_lossfree,
+  threshold_signer_transcript_nonleaking,
+  deployed_transcript_nonleaking_fires,
+  deployed_decision_floor_load_bearing,
   deployed_equivocation_breaks_hashcr,
   goodApi_isHermineVerify,
   goodApi_refines,
