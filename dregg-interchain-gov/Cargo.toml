@@ -1,0 +1,86 @@
+# dregg-interchain-gov — THE JOINING CRATE for cross-chain non-custodial governance.
+#
+# The problem it closes: `eth-lightclient` and `cosmos-lightclient` are STANDALONE
+# workspaces (root Cargo.toml `exclude` — blst / tendermint-rs dependency isolation),
+# so until this crate existed their `ForeignHoldingFields` outputs and
+# `dregg-governance::ProvenForeignHolding::from_foreign_fields` agreed only by
+# hand-pinned constants (CHAIN_TAG_EVM = 1, COSMOS_CHAIN_TAG = 2) — a doc contract.
+# This crate path-depends on ALL THREE at once, so the light-client → governance
+# join is a COMPILED, TESTED path: a tag drift is a build/test failure here, not a
+# silent nullifier-space corruption in a relayer.
+#
+# STANDALONE WORKSPACE (the `dregg-tui` pattern): deliberately NOT a member of the
+# repo-root workspace, because it must merge the excluded light-client graphs
+# (blst, alloy-trie, tendermint-rs, ics23) with the dregg-governance graph in one
+# resolution. Its path-deps that ARE root-workspace members (dregg-governance,
+# dregg-bridge, …) resolve their `workspace = true` inheritance against the ROOT
+# workspace, exactly as dregg-tui's do. `[patch.*]` replicates only the root
+# patches this graph consumes: the ark-serialize serde-integration fork and the
+# local plonky3-recursion checkout (both reached via dregg-governance →
+# collective-choice → the executor/circuit tree).
+#
+# Build / test standalone:  cd dregg-interchain-gov && cargo test
+# Narrative demo:           cargo run --example cross_chain_vote
+[workspace]
+members = ["."]
+resolver = "2"
+
+[patch."https://github.com/emberian/plonky3-recursion"]
+p3-recursion = { path = "../../plonky3-recursion/recursion" }
+p3-circuit = { path = "../../plonky3-recursion/circuit" }
+p3-circuit-prover = { path = "../../plonky3-recursion/circuit-prover" }
+p3-poseidon2-circuit-air = { path = "../../plonky3-recursion/poseidon2-circuit-air" }
+
+[patch.crates-io]
+ark-serialize = { git = "https://github.com/emberian/algebra", branch = "serde-integration" }
+ark-serialize-derive = { git = "https://github.com/emberian/algebra", branch = "serde-integration" }
+
+[package]
+name = "dregg-interchain-gov"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+publish = false
+description = "The compiled join between dregg's foreign-chain light clients (eth-lightclient, cosmos-lightclient) and dregg-governance's chain-agnostic holding-weight path: proven EVM/Cosmos/Solana holdings → owner→voter bindings → weighted votes → one cross-chain tally, non-custodially."
+
+[dependencies]
+# The governance side of the join: ProvenForeignHolding::from_foreign_fields,
+# ChainId, the binding trilogy, HoldingWeightRegistry, CollectiveChoice.
+dregg-governance = { path = "../dregg-governance" }
+# The Solana proven-holding fact (ProvenHolding) — governance already Froms it;
+# re-exposed here so all three chains join through one crate.
+dregg-bridge = { path = "../bridge" }
+# The EVM edge: ProvenErc20Holding::to_foreign_fields → ForeignHoldingFields
+# (CHAIN_TAG_EVM). Standalone workspace, joined here.
+eth-lightclient = { path = "../eth-lightclient" }
+# The Cosmos edge: ProvenCosmosFact → foreign_holding_fields → ForeignHoldingFields
+# (COSMOS_CHAIN_TAG). Standalone workspace, joined here.
+cosmos-lightclient = { path = "../cosmos-lightclient" }
+
+[dev-dependencies]
+# The Solana anchored-cluster fixture (`anchored_holding_with_cluster`): a
+# synthesized 2-validator cluster driven through the REAL
+# `prove_holding_consensus_anchored` verifier (stake provenance, signed
+# TowerSync votes, bank-hash binding, PoH) — the only route to ConsensusVerified.
+dregg-bridge = { path = "../bridge", features = ["test-utils"] }
+# Probe whether the Lean-proven weight-verdict core is in the linked archive
+# (the same skip-guard dregg-governance's own positive-path tests use).
+dregg-lean-ffi = { path = "../dregg-lean-ffi" }
+# Alice's Solana wallet key (the Ed25519 owner→voter binding).
+ed25519-dalek = "2"
+# Alice's EVM + Cosmos wallet keys (secp256k1 bindings; same crate/version
+# dregg-governance verifies with).
+k256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
+# Synthesize a REAL Merkle-Patricia token state for a holder we hold the key to
+# (same pinned trie/RLP stack the eth-lightclient verifier itself uses — the
+# verification is the real code path; only the STATE is a local fixture).
+alloy-trie = { version = "=0.9.5", features = ["ethereum"] }
+alloy-primitives = "=1.3.0"
+alloy-rlp = "=0.3.12"
+# Load the genuine cosmoshub-4 fixtures from ../cosmos-lightclient/tests/fixtures
+# (real mainnet SignedHeaders, 180-validator set, ICS-23 bank-balance proof).
+serde_json = "1"
+base64 = "0.22"
+hex = "0.4"
+tendermint = { version = "=0.40.4", default-features = false, features = ["rust-crypto"] }
+tendermint-light-client-verifier = "=0.40.4"
