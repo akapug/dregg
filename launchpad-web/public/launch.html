@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bid · dregg launchpad</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<header>
+  <h1>◈ dregg launchpad <small>sealed-bid raise</small></h1>
+  <nav><a href="/">discover</a><a href="/create.html">create</a></nav>
+  <span class="grow"></span>
+  <span class="pill" id="walletPill">connect wallet</span>
+</header>
+
+<main>
+  <div class="split">
+    <div>
+      <h2 id="title">launch —</h2>
+      <div class="card">
+        <div class="kv">
+          <span class="k">phase</span><span class="v" id="phase">—</span>
+          <span class="k">commit ends</span><span class="v mono" id="commitEnd">—</span>
+          <span class="k">reveal ends</span><span class="v mono" id="revealEnd">—</span>
+          <span class="k">sale supply</span><span class="v mono" id="sale">—</span>
+          <span class="k">reserve</span><span class="v mono" id="reserve">—</span>
+          <span class="k">clearing</span><span class="v mono" id="clearing">—</span>
+        </div>
+      </div>
+
+      <h3>Act on this launch</h3>
+      <div class="card">
+        <div class="row3">
+          <div><label>Actor (local dev)</label>
+            <select id="actor"><option value="1">bidder 1</option><option value="2">bidder 2</option>
+            <option value="3">bidder 3</option><option value="4">bidder 4</option>
+            <option value="0">creator</option></select></div>
+          <div><label>Price (gwei/token)</label><input id="price" value="5"></div>
+          <div><label>Quantity</label><input id="qty" value="400"></div>
+        </div>
+        <div class="note">Escrow = price × qty (covers your max payment). Your salt is stored locally so
+          you can reveal; lose it and you cannot reveal (fail-closed).</div>
+        <div class="row2">
+          <button class="primary" id="commitBtn">1 · commit sealed bid</button>
+          <button class="ghost" id="revealBtn">2 · reveal</button>
+        </div>
+        <div class="row2">
+          <button class="ghost" id="clearBtn">3 · finalize uniform clearing</button>
+          <button class="ghost" id="settleBtn">4 · settle all winners</button>
+        </div>
+      </div>
+
+      <h3>Flow — what actually runs on-chain</h3>
+      <div id="flow"></div>
+    </div>
+
+    <div>
+      <h3>Why it's fair — every claim graded</h3>
+      <div class="note" style="margin-bottom:8px">
+        <span class="chip PROVED">PROVED</span>Lean theorem
+        <span class="chip BUILT">BUILT</span>on-chain-enforced
+        <span class="chip REPLAYABLE">REPLAYABLE</span>recomputed here
+      </div>
+      <div class="fair">
+        <div class="lab">Sealed — no peek, no snipe</div>
+        <div class="det">during commit only H(price‖qty‖salt‖bidder) is public; there is no observable
+          bid and no earliest-block edge to win.</div>
+        <div class="cite">PROVED SealedAuction.reveal_binds_committed:248 · uncommitted_cannot_win:415 ·
+          BUILT DreggLaunchpad.commitBid</div>
+      </div>
+      <div class="fair">
+        <div class="lab">No late-switch</div>
+        <div class="det">a reveal must open the exact committed seal, only in the reveal window
+          (BidMismatch / NotRevealPhase otherwise).</div>
+        <div class="cite">PROVED reveal_requires_reveal_phase:216 · BUILT DreggLaunchpad.revealBid:245</div>
+      </div>
+      <div class="fair">
+        <div class="lab">Uniform price — no arbitrage, envy-free</div>
+        <div class="det">the whole revealed book clears at ONE price (the marginal winning price);
+          every winner pays the same. The order is a permutation-checked descending sort
+          (no-drop / no-insert) — no hidden allocation can be inserted.</div>
+        <div class="cite">PROVED uniform_price_no_arbitrage:130 · uniform_price_envy_free ·
+          Market/Aggregation no_insert · BUILT _runClearing / _assertPermutation</div>
+      </div>
+      <div class="fair">
+        <div class="lab">Disclosed supply</div>
+        <div class="det">every token in play came from the single disclosed mint; a hidden supply is
+          not expressible.</div>
+        <div class="cite">PROVED execMintA_iff_spec · BUILT DreggLaunchToken one-shot mint</div>
+      </div>
+      <div class="fair">
+        <div class="lab">Rung 2 — a real clearing proof (named weld)</div>
+        <div class="det">pin an IClearingAttestor and finalizeClearing requires a genuine dregg Groth16
+          clearing proof. Unpinned launches run rung 1 (REPLAYABLE); the proving pipeline is the weld.</div>
+        <div class="cite">IClearingAttestor.attestClearing · §2.2 MarketRefinement weld</div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script type="module">
+import { connect, state, mountWalletPill, fmtGwei, phaseBadge, nowSec } from '/js/app.js';
+import { commit, reveal, finalize, settle, freshSalt, clearingOrder, fetchLaunch } from '/js/launchpad.js';
+await import('/vendor/ethers.js');
+
+const id = new URLSearchParams(location.search).get('id');
+const $ = (i) => document.getElementById(i);
+const flow = $('flow');
+function step(cls, h, d) { const e = document.createElement('div'); e.className = 'step ' + cls;
+  e.innerHTML = `<div class="h">${h}</div>${d ? `<div class="d">${d}</div>` : ''}`; flow.prepend(e); }
+const saltKey = (actor) => `salt:${id}:${actor}`;
+
+let L = null;
+async function refresh() {
+  L = await fetchLaunch(id);
+  if (!L) { $('title').textContent = 'no such launch'; return; }
+  $('title').innerHTML = `${L.name || 'launch'} <span class="tick">$${L.symbol || ''}</span> · #${L.id}`;
+  $('phase').innerHTML = phaseBadge(L.phase);
+  $('commitEnd').textContent = new Date(L.commitEnd*1000).toLocaleTimeString() + ` (${L.commitEnd - nowSec()}s)`;
+  $('revealEnd').textContent = new Date(L.revealEnd*1000).toLocaleTimeString() + ` (${L.revealEnd - nowSec()}s)`;
+  $('sale').textContent = L.disclosure ? L.disclosure.saleSupply : '—';
+  $('reserve').textContent = L.disclosure ? fmtGwei(L.disclosure.reservePrice) + ' gwei' : '—';
+  $('clearing').textContent = L.clearingPrice !== '0'
+    ? `${fmtGwei(L.clearingPrice)} gwei · sold ${L.soldQty}` + (L.clearingAttested ? ' · attested' : '')
+    : '—';
+}
+await mountWalletPill();
+await refresh(); setInterval(refresh, 3000);
+
+const G = 10n ** 9n;
+const priceWei = () => (BigInt(+$('price').value) * G).toString();
+
+$('commitBtn').onclick = async () => {
+  try {
+    const actor = +$('actor').value; await connect(actor);
+    const salt = freshSalt(); localStorage.setItem(saltKey(actor), JSON.stringify({ salt, price: priceWei(), qty: +$('qty').value }));
+    step('active', 'committing sealed bid…', `price ${$('price').value} gwei × ${$('qty').value}`);
+    const r = await commit({ launchId: id, priceWei: priceWei(), qty: +$('qty').value, salt });
+    step('done', `✓ committed · seal ${r.sealedHash.slice(0,14)}…`, `escrow ${r.deposit} wei · tx ${r.txHash.slice(0,12)}…`);
+  } catch (e) { step('fail', 'commit failed', e.shortMessage || e.message); }
+};
+
+$('revealBtn').onclick = async () => {
+  try {
+    const actor = +$('actor').value; await connect(actor);
+    const saved = JSON.parse(localStorage.getItem(saltKey(actor)) || 'null');
+    if (!saved) return step('fail', 'no saved bid to reveal', 'commit with this actor first');
+    step('active', 'revealing…', `opens the committed seal exactly`);
+    const r = await reveal({ launchId: id, priceWei: saved.price, qty: saved.qty, salt: saved.salt });
+    step('done', '✓ revealed', `tx ${r.txHash.slice(0,12)}…`);
+  } catch (e) { step('fail', 'reveal failed', e.shortMessage || e.message); }
+};
+
+$('clearBtn').onclick = async () => {
+  try {
+    await connect(0);
+    const d = await fetchLaunch(id);
+    const { order } = clearingOrder(d.bids);
+    step('active', 'finalizing uniform clearing…', `order (desc by price): [${order.join(',')}]`);
+    const r = await finalize({ launchId: id, order });
+    await refresh();
+    step('done', `✓ cleared at ${fmtGwei(L.clearingPrice)} gwei`, `sold ${L.soldQty} · every winner pays the SAME price · tx ${r.txHash.slice(0,12)}…`);
+  } catch (e) { step('fail', 'clearing failed', e.shortMessage || e.message); }
+};
+
+$('settleBtn').onclick = async () => {
+  try {
+    await connect(0);
+    const d = await fetchLaunch(id);
+    for (const b of d.bids.filter((x) => x.revealed && !x.settled)) {
+      step('active', `settling ${b.bidder.slice(0,8)}…`, '');
+      try { const r = await settle({ launchId: id, bidder: b.bidder });
+        step('done', `✓ settled ${b.bidder.slice(0,8)} · filled ${b.filled}`, `tx ${r.txHash.slice(0,10)}…`); }
+      catch (e) { step('fail', `settle ${b.bidder.slice(0,8)} failed`, e.shortMessage || e.message); }
+    }
+    await refresh();
+  } catch (e) { step('fail', 'settle failed', e.shortMessage || e.message); }
+};
+</script>
+</body>
+</html>

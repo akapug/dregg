@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>create a fair launch · dregg launchpad</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<header>
+  <h1>◈ dregg launchpad <small>create a launch</small></h1>
+  <nav><a href="/">discover</a><a href="/create.html">create</a></nav>
+  <span class="grow"></span>
+  <span class="pill" id="walletPill">connect wallet</span>
+</header>
+
+<main>
+  <div class="split">
+    <div>
+      <h2>Register a launch — a disclosed-supply creation turn</h2>
+      <div class="banner">
+        The supply MUST close: <b>sale + creator = total</b>. A schedule that hides supply does not
+        close and the contract reverts (<span class="mono">SupplyDoesNotClose</span>). The token is a
+        hard-capped ERC-20 minted <b>exactly once</b> for the whole disclosed supply — no second mint door.
+      </div>
+      <div class="card">
+        <div class="row2">
+          <div><label>Token name</label><input id="name" value="Aurora"></div>
+          <div><label>Ticker</label><input id="symbol" value="AUR"></div>
+        </div>
+        <div class="row3">
+          <div><label>Total supply</label><input id="total" value="1200"></div>
+          <div><label>Sale supply</label><input id="sale" value="1000"></div>
+          <div><label>Creator alloc</label><input id="alloc" value="200"></div>
+        </div>
+        <div class="row3">
+          <div><label>Reserve (gwei/token)</label><input id="reserve" value="1"></div>
+          <div><label>Creator lock (days)</label><input id="lockDays" value="30"></div>
+          <div><label></label><div class="note" id="closeHint"></div></div>
+        </div>
+        <div class="row2">
+          <div><label>Commit window (sec)</label><input id="commitDur" value="60"></div>
+          <div><label>Reveal window (sec)</label><input id="revealDur" value="60"></div>
+        </div>
+        <label>Description (metadata)</label>
+        <textarea id="desc" rows="2">A fairly-launched token — sealed-bid, uniform-price, disclosed supply.</textarea>
+        <button class="primary" id="go">Register launch →</button>
+      </div>
+      <div id="result"></div>
+    </div>
+
+    <div>
+      <h3>The disclosed-schedule card</h3>
+      <div class="card" id="scheduleCard"></div>
+      <h3>Why this proves no hidden supply</h3>
+      <div class="fair">
+        <div class="lab">Supply closes by construction</div>
+        <div class="det">registerLaunch reverts unless sale + creator = total; there is no undisclosed slice.</div>
+        <div class="cite">chain/contracts/launchpad/DreggLaunchpad.sol:161 · SupplyDoesNotClose</div>
+      </div>
+      <div class="fair">
+        <div class="lab">One-shot mint, hard cap</div>
+        <div class="det">the token mints exactly once for the whole cap; no second mint path exists.</div>
+        <div class="cite">DreggLaunchToken.sol:65 mint · one-shot latch · §2.1 execMintA_iff_spec</div>
+      </div>
+      <div class="fair">
+        <div class="lab">Publicly re-derivable</div>
+        <div class="det">the schedule is committed as keccak(abi.encode(Schedule)); anyone recomputes it
+          and calls checkSchedule to confirm the numbers you see are exactly what was committed.</div>
+        <div class="cite">checkSchedule · verified server-side after register</div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script type="module">
+import { connect, state, mountWalletPill, short } from '/js/app.js';
+import { register, submitDisclosure } from '/js/launchpad.js';
+await import('/vendor/ethers.js');
+await mountWalletPill();
+
+const $ = (id) => document.getElementById(id);
+function renderCard() {
+  const total = +$('total').value, sale = +$('sale').value, alloc = +$('alloc').value;
+  const closes = sale + alloc === total && total > 0;
+  $('closeHint').innerHTML = closes ? '<span class="badge ok">closes ✓</span>'
+    : `<span class="badge no">${sale}+${alloc}≠${total}</span>`;
+  $('scheduleCard').innerHTML = `
+    <h4>${$('name').value} <span class="tick">$${$('symbol').value}</span></h4>
+    <div class="kv" style="margin-top:8px">
+      <span class="k">total supply</span><span class="v mono">${total}</span>
+      <span class="k">— sale (raise)</span><span class="v mono">${sale}</span>
+      <span class="k">— creator alloc</span><span class="v mono">${alloc} (locked ${$('lockDays').value}d)</span>
+      <span class="k">reserve price</span><span class="v mono">${$('reserve').value} gwei/token</span>
+      <span class="k">accounting</span><span class="v">${closes
+        ? '<span class="badge ok">sale + creator = total</span>'
+        : '<span class="badge no">does not close</span>'}</span>
+    </div>`;
+}
+['name','symbol','total','sale','alloc','reserve','lockDays'].forEach((id) => $(id).oninput = renderCard);
+renderCard();
+
+$('go').onclick = async () => {
+  const res = $('result'); res.innerHTML = '<div class="note">connecting wallet…</div>';
+  try {
+    await connect(0);
+    const G = 10n ** 9n;
+    const lockUntil = Math.floor(Date.now()/1000) + (+$('lockDays').value)*86400;
+    res.innerHTML = '<div class="note">registering (disclosed mint turn)…</div>';
+    const r = await register({
+      name: $('name').value, symbol: $('symbol').value,
+      totalSupply: +$('total').value, saleSupply: +$('sale').value, creatorAllocation: +$('alloc').value,
+      creatorLockUntil: lockUntil, reservePriceWei: (BigInt(+$('reserve').value) * G).toString(),
+      commitDuration: +$('commitDur').value, revealDuration: +$('revealDur').value,
+    });
+    // submit the raw disclosed schedule + metadata; server verifies vs the commitment.
+    const disc = await submitDisclosure(r.launchId, r.schedule,
+      { name: $('name').value, symbol: $('symbol').value, description: $('desc').value, creator: state.account });
+    res.innerHTML = `<div class="card">
+      <div class="lab">✓ launch #${r.launchId} registered</div>
+      <div class="kv" style="margin-top:8px">
+        <span class="k">token</span><span class="v mono">${short(r.token)}</span>
+        <span class="k">tx</span><span class="v mono">${short(r.txHash)}</span>
+        <span class="k">disclosure</span><span class="v">${disc.verified
+          ? '<span class="badge ok">verified vs on-chain commitment</span>'
+          : '<span class="badge no">mismatch</span>'}</span>
+      </div>
+      <a href="/launch.html?id=${r.launchId}">→ open the sale/bid page</a> ·
+      <a href="/token.html?id=${r.launchId}">token page</a>
+    </div>`;
+  } catch (e) { res.innerHTML = `<div class="banner">register failed: ${e.shortMessage || e.message}</div>`; }
+};
+</script>
+</body>
+</html>

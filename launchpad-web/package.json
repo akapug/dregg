@@ -1,0 +1,14 @@
+{
+  "name": "launchpad-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "The dregg launchpad product layer — create / bid / token-page / backend over the fair-launch engine (chain/contracts/launchpad).",
+  "scripts": {
+    "serve": "node server.mjs",
+    "gate": "bash gate/run-gate.sh"
+  },
+  "dependencies": {
+    "ethers": "^6.13.0"
+  }
+}

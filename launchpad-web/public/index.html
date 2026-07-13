@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dregg launchpad · fair launches</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<header>
+  <h1>◈ dregg launchpad <small>where fairness is a theorem</small></h1>
+  <nav>
+    <a href="/">discover</a>
+    <a href="/create.html">create</a>
+  </nav>
+  <span class="grow"></span>
+  <span class="pill" id="walletPill">connect wallet</span>
+</header>
+
+<main>
+  <div class="banner">
+    Sealed-bid → uniform-price fair launches. No bonding curve, no snipe path, no hidden supply.
+    Discovery is ranked by a <b>REPLAYABLE</b> function over public on-chain data — <b>no paid placement</b>.
+  </div>
+
+  <h2>Trending — replayable rank (no boosts)</h2>
+  <div id="trending" class="grid"><div class="note">loading launches…</div></div>
+
+  <h2>How the rank is computed</h2>
+  <div class="card">
+    <div class="note">
+      A pure, deterministic score over public fields only — re-derivable by anyone from the same chain
+      state (the OCIP anti-pay-to-rank spine, <span class="mono">docs/deos/DREGGFI-VISION.md §1</span>).
+      There is no boost/promote input anywhere in the code path.
+    </div>
+    <div class="kv" style="margin-top:10px">
+      <span class="k">0.30</span><span class="v">fill — demand met (soldQty / disclosed saleSupply)</span>
+      <span class="k">0.20</span><span class="v">participation — breadth of revealed bidders</span>
+      <span class="k">0.20</span><span class="v">cleared — the raise reached a uniform clearing</span>
+      <span class="k">0.15</span><span class="v">disclosed — schedule verified against the on-chain commitment (no hidden supply)</span>
+      <span class="k">0.10</span><span class="v">recency — decays over ~a day</span>
+      <span class="k">0.05</span><span class="v">attested — a rung-2 dregg clearing proof is present</span>
+    </div>
+    <div class="note">Named-not-built: composing the OCIP attested screener (wallet-cluster + Benford
+      anomaly over public state) is the next discovery layer — this is the replayable base.</div>
+  </div>
+</main>
+
+<script type="module">
+import { mountWalletPill, phaseBadge, fmtGwei, short, chip } from '/js/app.js';
+import { fetchLaunches } from '/js/launchpad.js';
+
+await import('/vendor/ethers.js');
+await mountWalletPill();
+
+function card(L) {
+  const disc = L.disclosure;
+  const disclosed = disc && disc.verified;
+  const price = L.clearingPrice !== '0' ? `${fmtGwei(L.clearingPrice)} gwei uniform` : '—';
+  return `<div class="card link" onclick="location.href='/token.html?id=${L.id}'">
+    <h4>${L.name || 'launch #' + L.id} <span class="tick">$${L.symbol || '???'}</span></h4>
+    <div class="sub">launch #${L.id} · creator ${short(L.creator)}</div>
+    <div class="kv" style="margin-top:9px">
+      <span class="k">phase</span><span class="v">${phaseBadge(L.phase)}</span>
+      <span class="k">clearing</span><span class="v mono">${price}</span>
+      <span class="k">bidders revealed</span><span class="v mono">${L.revealedCount}</span>
+      <span class="k">disclosed supply</span><span class="v">${disclosed
+        ? `<span class="badge ok">verified · no hidden supply</span>`
+        : `<span class="badge">unsubmitted</span>`}</span>
+      <span class="k">rank</span><span class="v mono">${L.rank.toFixed(3)}</span>
+    </div>
+    <div class="note">${chip('REPLAYABLE')} rank re-derivable · ${chip(L.clearingAttested ? 'PROVED' : 'BUILT')} clearing</div>
+  </div>`;
+}
+
+async function render() {
+  const el = document.getElementById('trending');
+  try {
+    const launches = await fetchLaunches();
+    el.innerHTML = launches.length ? launches.map(card).join('')
+      : '<div class="note">no launches yet — <a href="/create.html">create the first fair launch →</a></div>';
+  } catch (e) { el.innerHTML = `<div class="note">backend not ready: ${e.message}</div>`; }
+}
+render();
+setInterval(render, 4000);
+</script>
+</body>
+</html>

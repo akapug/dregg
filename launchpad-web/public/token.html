@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>token · dregg launchpad</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<header>
+  <h1>◈ dregg launchpad <small>token page</small></h1>
+  <nav><a href="/">discover</a><a href="/create.html">create</a></nav>
+  <span class="grow"></span>
+  <span class="pill" id="walletPill">connect wallet</span>
+</header>
+
+<main>
+  <div class="banner">
+    The honest token page: <b>every number here is checkable on-chain</b>. Disclosed supply is verified
+    against the commitment; the clearing price is the one price everyone paid; the holder distribution is
+    read from Transfer logs. No pay-to-rank, no market-cap theater.
+  </div>
+
+  <h2 id="title">token —</h2>
+  <div class="split">
+    <div>
+      <h3>Clearing result — the one price everyone paid</h3>
+      <div class="card" id="clearing"></div>
+
+      <h3>Price (chart placeholder)</h3>
+      <div class="chart">candlestick chart — named-not-built (graduation to a liquid market is the next layer)</div>
+
+      <h3>Holder distribution — from Transfer logs</h3>
+      <div class="card" id="holders"></div>
+    </div>
+
+    <div>
+      <h3>Disclosed supply & vesting — checkable</h3>
+      <div class="card" id="schedule"></div>
+      <h3>Bids (revealed book)</h3>
+      <div class="card" id="bids"></div>
+      <div class="fair" style="margin-top:12px">
+        <div class="lab">What is proven vs a bet</div>
+        <div class="det">dregg guarantees the <b>distribution and disclosure</b> are fair (theorems).
+          It makes no claim about the token's value — a fairly-launched token can still go to zero.</div>
+        <div class="cite">DREGG-LAUNCHPAD-DESIGN.md §5.3 · a bad token is still a bad token</div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script type="module">
+import { mountWalletPill, fmtGwei, fmtWhole, short, phaseBadge, chip } from '/js/app.js';
+import { fetchLaunch } from '/js/launchpad.js';
+await import('/vendor/ethers.js');
+await mountWalletPill();
+
+const id = new URLSearchParams(location.search).get('id');
+const $ = (i) => document.getElementById(i);
+
+async function render() {
+  const L = await fetchLaunch(id);
+  if (!L) { $('title').textContent = 'no such launch'; return; }
+  $('title').innerHTML = `${L.name || 'launch'} <span class="tick">$${L.symbol || ''}</span> · #${L.id} ${phaseBadge(L.phase)}`;
+
+  // clearing
+  const cleared = L.clearingPrice !== '0';
+  $('clearing').innerHTML = cleared ? `
+    <div class="big">${fmtGwei(L.clearingPrice)} gwei / token</div>
+    <div class="kv" style="margin-top:8px">
+      <span class="k">tokens sold</span><span class="v mono">${L.soldQty}</span>
+      <span class="k">bidders revealed</span><span class="v mono">${L.revealedCount}</span>
+      <span class="k">clearing proof</span><span class="v">${L.clearingAttested
+        ? chip('PROVED') + 'rung-2 attested' : chip('REPLAYABLE') + 'rung-1 re-derivable'}</span>
+    </div>
+    <div class="note">Every winner paid this same uniform price (uniform_price_envy_free).</div>`
+    : `<div class="note">not cleared yet — phase ${L.phase}. <a href="/launch.html?id=${id}">go bid →</a></div>`;
+
+  // disclosed schedule
+  const d = L.disclosure;
+  $('schedule').innerHTML = d ? `
+    <div class="kv">
+      <span class="k">total supply</span><span class="v mono">${d.totalSupply}</span>
+      <span class="k">— sale (raise)</span><span class="v mono">${d.saleSupply}</span>
+      <span class="k">— creator alloc</span><span class="v mono">${d.creatorAllocation}</span>
+      <span class="k">creator lock until</span><span class="v mono">${new Date(+d.creatorLockUntil*1000).toLocaleDateString()}</span>
+      <span class="k">reserve price</span><span class="v mono">${fmtGwei(d.reservePrice)} gwei</span>
+      <span class="k">on-chain totalSupply</span><span class="v mono">${fmtWhole(L.totalSupplyBase)}</span>
+      <span class="k">accounting</span><span class="v">${d.verified
+        ? '<span class="badge ok">verified vs commitment · no hidden supply</span>'
+        : '<span class="badge no">unverified</span>'}</span>
+    </div>
+    <div class="note">${chip('BUILT')} disclosure checked server-side via checkSchedule; recompute
+      keccak(abi.encode(schedule)) and compare to ${short(L.scheduleCommit)} yourself.</div>`
+    : '<div class="note">no disclosed schedule submitted for this launch.</div>';
+
+  // holders
+  const hs = L.holders || [];
+  const total = hs.reduce((s, h) => s + BigInt(h.balanceBase), 0n) || 1n;
+  $('holders').innerHTML = hs.length ? hs.map((h) => {
+    const pct = Number(BigInt(h.balanceBase) * 10000n / total) / 100;
+    return `<div class="alloc">
+      <span class="who">${short(h.address)}</span>
+      <span class="mono">${fmtWhole(h.balanceBase)}</span>
+      <span class="mono">${pct.toFixed(1)}%</span>
+      </div><div class="bar"><span style="width:${Math.min(100,pct)}%;background:var(--dragon)"></span></div>`;
+  }).join('') : '<div class="note">no holders yet (settle winners to distribute).</div>';
+
+  // bids
+  const bids = (L.bids || []).filter((b) => b.revealed);
+  $('bids').innerHTML = bids.length ? bids.map((b) => `
+    <div class="alloc">
+      <span class="who">${short(b.bidder)}</span>
+      <span class="mono">${fmtGwei(b.price)} gw × ${b.qty}</span>
+      <span class="${b.filled !== '0' ? 'win' : 'lose'}">${b.filled !== '0' ? 'won ' + b.filled : 'no fill'}</span>
+    </div>`).join('') : '<div class="note">no revealed bids yet.</div>';
+}
+render();
+setInterval(render, 4000);
+</script>
+</body>
+</html>
