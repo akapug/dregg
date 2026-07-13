@@ -45,6 +45,18 @@ the price as a ZK/attested input, §2/§7 "force it in-circuit at settlement") i
 is NOT claimed closed here. What IS proved: given the mark, the bad-debt state is unconstructable, the
 pool is solvent forever, and liquidation is always available when the ratio breaks.
 
+A SECOND scope edge, stated plainly so `no_bad_debt` is not over-read: the `Position`/`Mark` types here
+are a FRESH economic MODEL (`collateral`/`debt`/`price : Rat`), NOT welded to `RecordKernelState`/the
+executor ledger; and `no_bad_debt` holds because `Liquidatable` is DEFINED as a pure function of the mark
+(`liquidatable_iff_underwater`: `Liquidatable` = `Underwater` by construction). So the theorem's content
+is that a design in which eligibility is a pure function of the mark — NO stored, laggable flag — cannot
+express the bad state; it is a faithful encoding of that design PRINCIPLE, NOT an operational proof that
+an executor carrying a stored flag cannot desync from an oracle. It is non-vacuous (the `Underwater`
+domain is inhabited: `demo_bad_debt_needs_only_unliquidatable` pins 2/3 conjuncts holding at the crash),
+but "no constructor" is a modeling consequence of the pure-function choice, not an executor-welded
+impossibility. The SOLVENCY half (`lending_pool_solvent_forever`) IS the rung-6 grounded-`Pool` model
+reused; `lending_sound` conjoins the two (they share no state).
+
 NON-VACUITY both polarities: a healthy position across an adversarial PRICE CRASH stays no-bad-debt and
 the pool stays solvent (`demo_no_bad_debt_across_crash`, `lending_demo_solvent`; the values/marks are
 `#guard`/theorem-pinned) — and the position goes healthy→liquidatable but liquidation is always available

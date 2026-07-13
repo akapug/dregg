@@ -88,6 +88,23 @@ DrEX is a Lean-first proof-carrying exchange: the exchange's *rules* are proven 
 > `RingFFI`). What remains genuinely open above the model rungs: **full k-coalition TTC-core** stability,
 > the **on-ledger delta readback** for the priced layer (the `RecordKernelState.bal`-after-`settleRing`
 > weld rung 5's design named), and the constant-function AMM curve above rung 6's solvency floor.
+>
+> **Rungs 3/7/8 have since landed as Lean SPEC-level theorems** (grade below the model rungs, stated
+> honestly). Rung 3 (`Market/ShieldedClearing.lean`, `shielded_ring_clears`): the shielded-spend CUSTODY
+> layer — nullifier double-spend, pool-undrainability, value-binding (`Dregg2/Exec/ShieldedValue.lean`,
+> `Dregg2/Shielded/ClaimRefinement.lean`) — is REAL over the `RecordKernelState` kernel; but the
+> ledger-settlement clause (rung-1 `settleRing`) and the shielded-spend clause run over DECOUPLED state
+> (the `MatchNode` offer/want are plain `Nat`s, not fused to the note asset/value — the file header names
+> this "two layers composed, not yet fused"), and the value-commitment (`refVC`, additive `(v+r).toNat`)
+> and Merkle root (`refTreeRoot`, a rolling hash) are declared TOY stand-ins, NOT Pedersen/Poseidon2 —
+> so "matching over hidden commitments" is the SPEC; the in-AIR value binding + the ring-clearing circuit
+> are the open weld. Rung 7 (`Market/CrossMargin.lean`, `crossMargin_position_sound`): the mandate half
+> (`Dregg2/Agent/Mandate.lean` — `subtree_budget_le_root`/`children_no_oversubscribe`) is REAL; solvency
+> + fairness are the rung-5/6 models; the caveat-in-circuit admission stays the named open weld. Rung 8
+> (`Market/Lending.lean`, `no_bad_debt`) is a fresh `Position`/`Mark` MODEL whose no-bad-debt core is
+> definitionally true (liquidatability DEFINED as a pure function of the mark — a design encoding, not an
+> executor-welded impossibility); its solvency half reuses rung 6. None of these three carry the executor
+> tie; all are non-vacuous (biting teeth + demos).
 
 **Rung 1 — execution soundness + fairness** (`Market/Clearing.lean`, `Market/Fairness.lean`,
 composing `Dregg2/Intent/Ring.lean`). PROVED:
