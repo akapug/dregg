@@ -255,13 +255,16 @@ update at an EXISTING key) write, or a (sorted insert at a FRESH key) insert. Th
 old leaf's path; a fresh insert opens against the NEW tree). Freshness for `insert` is established
 SEPARATELY by a paired `absent` op against the same pre-root (the noteSpend double-spend tooth). -/
 inductive MapOpKind where
-  | read | write | absent | insert
+  | read | write | absent | insert | aafiInsert
   deriving Repr, DecidableEq, BEq
 
 /-- The wire code of a map-op kind (the map-ops table's `op` column value; matches the Rust
-`MapKind::code`). -/
+`MapKind::code`). `.aafiInsert` (code 4) is the append-only-set AAFI two-path insert — its SCALAR
+per-row denotation is the same `writesTo` as `.insert` (after-root = genuine insert of key), the
+deployed AIR additionally forcing the sorted append-order / no-shift via the two-path opening +
+pointer-bracket range gate (`MapOpsColumnLayout.aafiInsert_forces_imtInsert`). -/
 def MapOpKind.code : MapOpKind → ℤ
-  | .read => 0 | .write => 1 | .absent => 2 | .insert => 3
+  | .read => 0 | .write => 1 | .absent => 2 | .insert => 3 | .aafiInsert => 4
 
 /-- A boundary reconciliation `(root, key, value, op) → new_root`, as column expressions over the
 emitting main row. `guard` gates the contribution. -/
@@ -519,6 +522,8 @@ def MapOp.holdsAt (hash : List ℤ → ℤ) (env : VmRowEnv) (m : MapOp) : Prop 
     | .write  => writesTo hash ((m.root 0).eval env.loc) (m.key.eval env.loc)
                    (m.value.eval env.loc) ((m.newRoot 0).eval env.loc)
     | .insert => writesTo hash ((m.root 0).eval env.loc) (m.key.eval env.loc)
+                   (m.value.eval env.loc) ((m.newRoot 0).eval env.loc)
+    | .aafiInsert => writesTo hash ((m.root 0).eval env.loc) (m.key.eval env.loc)
                    (m.value.eval env.loc) ((m.newRoot 0).eval env.loc)
 
 /-! ## §5 — Memory-op semantics: the read/write multiset, WELDED to the proved Blum theorem.
@@ -1440,6 +1445,7 @@ def TableDef.toJson (td : TableDef) : String :=
 /-- The map-op kind wire strings. -/
 def MapOpKind.tag : MapOpKind → String
   | .read => "read" | .write => "write" | .absent => "absent" | .insert => "insert"
+  | .aafiInsert => "aafi_insert"
 
 /-- Render one lookup. -/
 def Lookup.toJson (l : Lookup) : String :=

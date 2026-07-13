@@ -2526,6 +2526,109 @@ theorem noteCreateV3_grow_gate_forces_set_insert (hash : List ℤ → ℤ)
 #guard beforeCommitmentsRootCol EFFECT_VM_WIDTH == EFFECT_VM_WIDTH + 27
 #guard afterCommitmentsRootCol EFFECT_VM_WIDTH == EFFECT_VM_WIDTH + 239 + 27
 
+/-! ## §5.RV — the revoke REVOKED-SET GROW-GATE (the deployment-real revoked set-insert; hole #3).
+
+`docs/reference/GAP5-AAFI-CUTOVER-PLAN.md` §1.4: the deployed `revokeVmDescriptor` (the Stage-3
+runtime passthrough row + nonce TICK) carried `revoked_root` (limb 37, `B_REVOKED_ROOT`) as a
+PRODUCER-SUPPLIED committed limb with NO gate forcing it — Lean hole #3/#139: "a node can supply an
+empty root and the commitment faithfully records the lie; a light client cannot detect it". There
+was NO deployed insert gate to flip, so this lands the revoked insert DIRECTLY as AAFI-native.
+
+These two `MapOp`s CLONE the noteSpend grow-gate onto limb 37, guarded by the revoke selector
+(`SEL_REVOKE_DELEGATION = 30`). The inserted KEY is the revoked child-capability hash the runtime
+parks in `param0` (`trace.rs:604` — "the trace arm parks `child_hash[0]` into `params[0]`"), so the
+gate's key IS the revoked credential id:
+
+  * **`revokedFreshOp`** (`.absent`) — the NO-DOUBLE-REVOKE tooth: the revoked id (`param0`) is a
+    NON-MEMBER of the BEFORE revoked tree (limb 37); the root is unchanged by an absent read. Under
+    CR (`opensTo_none_of_gap` / the pointer bracket) an already-revoked id has no bracketing witness
+    and is UNSAT.
+  * **`revokedInsertOp`** (`.aafiInsert`, op=4) — the AAFI-NATIVE SET-INSERT: the AFTER revoked root
+    (limb 37 of the after block) IS the genuine two-path AAFI insert of `param0` into the BEFORE
+    root. The scalar denotation is `writesTo` (after-root FORCED, no longer producer-supplied — hole
+    #3 CLOSED); the deployed op=4 AIR additionally forces the sorted append-order / no-shift via the
+    two-path opening + pointer-bracket range gate (`MapOpsColumnLayout.aafiInsert_forces_imtInsert`),
+    so a frozen / forged / empty revoked root cannot satisfy the descriptor. -/
+
+/-- The revoked child-capability key parameter column (`param0`, `prmCol 0`) — the revoke row's
+revoked credential id (`child_hash[0]`). Mirrors `NULLIFIER_PARAM_COL`. -/
+def REVOKED_KEY_PARAM_COL : Nat := prmCol 0
+
+/-- The rotated BEFORE-block `revoked_root` scalar limb column (limb 37 of the before block). -/
+def beforeRevokedRootCol (w : Nat) : Nat := w + B_REVOKED_ROOT
+
+/-- The rotated AFTER-block `revoked_root` scalar limb column (limb 37 of the after block) — the
+grow-gate's forced `newRoot` (hole #3: no longer a free producer witness). -/
+def afterRevokedRootCol (w : Nat) : Nat := w + 239 + B_REVOKED_ROOT
+
+/-- The NO-DOUBLE-REVOKE tooth: the revoked id (`param0`) is a NON-MEMBER of the BEFORE revoked tree
+(limb 37); an absent read leaves the root unchanged. -/
+def revokedFreshOp : MapOp :=
+  { guard   := .var EffectVmEmitRevokeDelegation.SEL_REVOKE_DELEGATION
+  , root    := beforeRevokedRootGroup
+  , key     := .var REVOKED_KEY_PARAM_COL
+  , value   := .const 0
+  , newRoot := beforeRevokedRootGroup
+  , op      := .absent }
+
+/-- The AAFI-NATIVE SET-INSERT (op=4): the AFTER revoked root (limb 37 of the after block) IS the
+genuine AAFI two-path insert of `param0` into the BEFORE root. The revoked set is a pure membership
+set, so the leaf value is `0`. Guarded by the revoke selector. -/
+def revokedInsertOp : MapOp :=
+  { guard   := .var EffectVmEmitRevokeDelegation.SEL_REVOKE_DELEGATION
+  , root    := beforeRevokedRootGroup
+  , key     := .var REVOKED_KEY_PARAM_COL
+  , value   := .const 0
+  , newRoot := afterRevokedRootGroup
+  , op      := .aafiInsert }
+
+/-- **`revokeV3`** — the rotated revoke WITH the REVOKED-SET GROW-GATE (the deployment-real revoked
+set-insert). Past the graduated `v3Of` revoke descriptor it appends the two map-ops that FORCE the
+revoked set-insert on the live wire — repointing limb 37 from a producer-supplied witness limb into
+a FORCED, grown, fresh revoked root (hole #3 closed). Mirrors `noteSpendV3` (`.absent` fresh tooth +
+the AAFI-native insert). -/
+def revokeV3 : EffectVmDescriptor2 :=
+  let base := v3Of EffectVmEmitRevokeDelegation.revokeVmDescriptor
+  { base with
+    constraints := base.constraints ++ [.mapOp revokedFreshOp, .mapOp revokedInsertOp] }
+
+/-- **`revokeV3_grow_gate_forces_set_insert` — the live descriptor FORCES the revoked set-insert +
+no-double-revoke (hole #3 closed).** On a satisfying `revokeV3` witness whose revoke selector fires,
+the two appended map-ops hold: (1) the revoked id (`param0`) is ABSENT from the BEFORE revoked tree
+(limb 37) — the no-double-revoke tooth; and (2) the AFTER revoked root IS the genuine insert of that
+id into the BEFORE root (`writesTo`). Under CR these are FUNCTIONAL, so a frozen or forged after-root
+(the producer-supplied lie hole #3 documented), or an already-revoked id, cannot satisfy the
+descriptor. -/
+theorem revokeV3_grow_gate_forces_set_insert (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    (hsat : Satisfied2 hash revokeV3 minit mfin maddrs t)
+    (i : Nat) (hi : i < t.rows.length)
+    (hrevoke : (envAt t i).loc EffectVmEmitRevokeDelegation.SEL_REVOKE_DELEGATION = 1) :
+    (opensTo hash ((envAt t i).loc (beforeRevokedRootCol EFFECT_VM_WIDTH))
+        ((envAt t i).loc REVOKED_KEY_PARAM_COL) none)
+    ∧ writesTo hash ((envAt t i).loc (beforeRevokedRootCol EFFECT_VM_WIDTH))
+        ((envAt t i).loc REVOKED_KEY_PARAM_COL) 0
+        ((envAt t i).loc (afterRevokedRootCol EFFECT_VM_WIDTH)) := by
+  have hrowc := hsat.rowConstraints i hi
+  have hfresh := hrowc (.mapOp revokedFreshOp) (by simp [revokeV3])
+  have hins := hrowc (.mapOp revokedInsertOp) (by simp [revokeV3])
+  have ha := hfresh hrevoke
+  have hw := hins hrevoke
+  exact ⟨ha.1, hw⟩
+
+#assert_axioms revokeV3_grow_gate_forces_set_insert
+
+-- The revoke grow-gate carries the two map-ops on the revoked_root limb (37); the AAFI insert emits
+-- op=4 (`aafi_insert`), the fresh tooth op=2 (`absent`).
+#guard (mapOpsOf revokeV3).length == 2
+#guard revokedInsertOp.op.code == 4
+#guard revokedFreshOp.op.code == 2
+#guard REVOKED_KEY_PARAM_COL == 68
+#guard beforeRevokedRootCol EFFECT_VM_WIDTH == EFFECT_VM_WIDTH + 37
+#guard afterRevokedRootCol EFFECT_VM_WIDTH == EFFECT_VM_WIDTH + 239 + 37
+-- Lane 0 of the revoked root group IS the scalar limb 37 (the projection the scalar writesTo forces).
+#guard revokedRootGroupCol EFFECT_VM_WIDTH 0 == EFFECT_VM_WIDTH + 37
+
 /-! ## §5.C — the createCell / factory / spawn KERNEL-SET GROW-GATE (the deployment-real
 ACCOUNTS set-insert).
 
@@ -5517,7 +5620,7 @@ def v3RegistryBare : List (String × EffectVmDescriptor2) :=
   , ("refreshVmDescriptor2R24", v3Of EffectVmEmitRefreshDelegation.refreshVmDescriptor)
   , ("incrementNonceVmDescriptor2R24",
       v3OfFrozen EffectVmEmitIncrementNonce.incrementNonceVmDescriptor)
-  , ("revokeVmDescriptor2R24", v3Of EffectVmEmitRevokeDelegation.revokeVmDescriptor)
+  , ("revokeVmDescriptor2R24", revokeV3)
   , ("introduceVmDescriptor2R24", v3Of EffectVmEmitIntroduce.introduceVmDescriptor)
   , ("attenuateVmDescriptor2R24", withSelectorGate sel.ATTENUATE_CAPABILITY attenuateV3)
   , ("revokeCapabilityVmDescriptor2R24", withSelectorGate sel.REVOKE_CAPABILITY revokeCapabilityV3)

@@ -137,6 +137,8 @@ def mapDecMerkle (hash : List ℤ → ℤ) (wit : WitnessSupply) (env : VmRowEnv
                    (m.value.eval env.loc) ((m.newRoot 0).eval env.loc)
     | .insert => decWritesTo hash (wit env m) ((m.root 0).eval env.loc) (m.key.eval env.loc)
                    (m.value.eval env.loc) ((m.newRoot 0).eval env.loc)
+    | .aafiInsert => decWritesTo hash (wit env m) ((m.root 0).eval env.loc) (m.key.eval env.loc)
+                   (m.value.eval env.loc) ((m.newRoot 0).eval env.loc)
   else true
 
 /-! ## §4 — soundness of the concrete decider (`mapDecMerkle = true → holdsAt`), UNCONDITIONAL.
@@ -171,6 +173,10 @@ theorem mapDecMerkle_sound (hash : List ℤ → ℤ) (wit : WitnessSupply) (env 
     rw [decWritesTo_iff] at hdec
     exact ⟨wit env m, hdec.1, hdec.2.1, hdec.2.2.1, hdec.2.2.2.1, hdec.2.2.2.2⟩
   | insert =>
+    rw [hop] at hdec
+    rw [decWritesTo_iff] at hdec
+    exact ⟨wit env m, hdec.1, hdec.2.1, hdec.2.2.1, hdec.2.2.2.1, hdec.2.2.2.2⟩
+  | aafiInsert =>
     rw [hop] at hdec
     rw [decWritesTo_iff] at hdec
     exact ⟨wit env m, hdec.1, hdec.2.1, hdec.2.2.1, hdec.2.2.2.1, hdec.2.2.2.2⟩
@@ -232,6 +238,16 @@ theorem mapDecMerkle_complete (hash : List ℤ → ℤ) (hCR : Poseidon2SpongeCR
       · rw [heq]; exact hsl'
       · rw [heq]; exact hnr'
     | insert =>
+      rw [hop] at hh
+      obtain ⟨h', hs', hl', hsl', hr', hnr'⟩ := hh
+      have heq : wit env m = h' :=
+        mapRoot_injective hash hCR HEAP_TREE_DEPTH hwl hl' (hwr.trans hr'.symm)
+      show decWritesTo hash (wit env m) _ _ _ _ = true
+      rw [decWritesTo_iff]
+      refine ⟨hws, hwl, ?_, hwr, ?_⟩
+      · rw [heq]; exact hsl'
+      · rw [heq]; exact hnr'
+    | aafiInsert =>
       rw [hop] at hh
       obtain ⟨h', hs', hl', hsl', hr', hnr'⟩ := hh
       have heq : wit env m = h' :=

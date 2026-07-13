@@ -87,7 +87,7 @@ def mapDecOf
     match m.op with
     | .read           => members.contains (r, k, v) && nr == r
     | .absent         => absents.contains (r, k) && nr == r
-    | .write | .insert => writes.contains (r, k, v, nr)
+    | .write | .insert | .aafiInsert => writes.contains (r, k, v, nr)
   else
     true
 

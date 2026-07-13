@@ -604,6 +604,12 @@ def ReconcileGatesAt (hash : List ℤ → ℤ) (dep : Nat) (a : Assignment) (m :
             = (m.root 0).eval a ∧
           pathRecompute hash (Heap.leafOf hash (m.key.eval a, m.value.eval a)) steps
             = (m.newRoot 0).eval a
+    | .aafiInsert =>
+        ∃ (steps : List (Bool × ℤ)) (vOld : ℤ), steps.length = dep ∧
+          pathRecompute hash (Heap.leafOf hash (m.key.eval a, vOld)) steps
+            = (m.root 0).eval a ∧
+          pathRecompute hash (Heap.leafOf hash (m.key.eval a, m.value.eval a)) steps
+            = (m.newRoot 0).eval a
 
 /-- **The gates force the opening (depth-generic core).** For every op kind, accepted
 map-reconcile gate data yields the exact `opensToMerkle`/`writesToMerkle` denotation of the
@@ -621,6 +627,9 @@ theorem reconcileGates_force_opening (hash : List ℤ → ℤ) (hCR : Poseidon2S
         writesToMerkle hash dep ((m.root 0).eval a) (m.key.eval a) (m.value.eval a)
           ((m.newRoot 0).eval a)
      | .insert =>
+        writesToMerkle hash dep ((m.root 0).eval a) (m.key.eval a) (m.value.eval a)
+          ((m.newRoot 0).eval a)
+     | .aafiInsert =>
         writesToMerkle hash dep ((m.root 0).eval a) (m.key.eval a) (m.value.eval a)
           ((m.newRoot 0).eval a)) := by
   obtain ⟨h, hs, hlen, hroot, hgates⟩ := hg
@@ -640,6 +649,10 @@ theorem reconcileGates_force_opening (hash : List ℤ → ℤ) (hCR : Poseidon2S
     obtain ⟨steps, vOld, hsl, hpOld, hpNew⟩ := hgates
     exact writesToMerkle_of_path hash hCR dep h hs hlen hroot steps vOld hsl hpOld hpNew
   | insert =>
+    rw [hop] at hgates
+    obtain ⟨steps, vOld, hsl, hpOld, hpNew⟩ := hgates
+    exact writesToMerkle_of_path hash hCR dep h hs hlen hroot steps vOld hsl hpOld hpNew
+  | aafiInsert =>
     rw [hop] at hgates
     obtain ⟨steps, vOld, hsl, hpOld, hpNew⟩ := hgates
     exact writesToMerkle_of_path hash hCR dep h hs hlen hroot steps vOld hsl hpOld hpNew
