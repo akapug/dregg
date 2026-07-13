@@ -22,8 +22,18 @@ genuinely: `algoStarkSound_kernel` (STARK) → `StarkSound hash Rfix` + `closedL
 - **`Poseidon2SpongeCR`** — hash collision-resistance (Merkle/commitment binding).
 - **`Poseidon2ChipArithSound`** — the Poseidon2 chip round-gate output-correctness. `arithSound_not_CR` proves it is
   DISTINCT from CR (the all-zero perm is arith-sound-as-a-table yet violates CR) — a sibling Poseidon2 primitive.
-- **`FRI-LDT@deployed`** — the list-decoding soundness bound every STARK shares (proved algebra in `FriSoundness`,
-  instantiated toy `δ=0`; deployed-param binding owed).
+- **`FRI-LDT@deployed`** — the list-decoding soundness bound every STARK shares. The proved BBHR18 algebra
+  (`FriSoundness.fold_close_of_two_alpha` / `friProximity_discharge`) is now INSTANTIATED at the deployed
+  parameters, no toy `δ=0` stand-in: over `F := BabyBear` at the deployed WRAP rate `1/64` (`|L|=128` coset,
+  `numQueries=19`, `BabyBearFriDeployedInstance.friSetupWrapRate` / `wrapRate_friProximity`), plus the `2^27`
+  2-adicity-cap domain (`BabyBearFriDeployed.friSetupMaxDomain`) and the prover rate `1/8`
+  (`friSetupDeployedRate`). The query-reject teeth are DISCHARGED (unconditional counting) at `numQueries=19`
+  (`wrap_far_word_rarely_accepted` ≤ `(65/128)^19`, fired on the committed far word `fSq`). HONEST residual:
+  at `19` queries the unique-decoding radius gives only `(65/128)^19 ≈ 2^-18.6` (`wrap_ud_error_not_lt_2e31` —
+  NOT `< 2^-31`), so deployed wrap security rests on the JOHNSON list-decoding radius `δ_J=1-√ρ=7/8` (BCIKS20),
+  named `FriLdtDeployedBound` (a `Prop`, not proved — the one research assumption) and shown load-bearing
+  (`ldt_bound_is_load_bearing`: it delivers `(1/8)^19 = 2^-57`). The prover config (rate `1/8`, `38` queries)
+  is separately DISCHARGED in the unique-decoding regime (`DeployedProximitySoundness`, `< 2^-31`).
 - **FS-SZ ε** — Fiat-Shamir non-exceptionality, `ε ≤ deg/|F|` (a game in `ProbCrypto.winProb`, not an axiom).
 - structural range tables (PROVEN, not a floor: `rangeTable bits = [0,2^bits)` symbolically, never enumerated).
 

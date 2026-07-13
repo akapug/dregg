@@ -17,9 +17,13 @@ new theory. This file makes that concrete:
   subgroups FRI folds over (and no more — the smoothness is precisely 2²⁷, the deployed FRI domain cap).
 
 SCOPE (honest): this establishes BabyBear as a FIELD that meets the FRI lemmas' typeclass requirements — the
-field-swap the census flagged as missing. It does NOT yet construct the BabyBear `FriGeom`/`FriSetup` (the
-evaluation domain from the 2²⁷ subgroup) nor bind `friProximity_discharge` to the deployed `verifyBatch` FRI
-config — those are DEBT-A bricks 2–3. Residual so far: none (this brick is `norm_num`/typeclass facts only).
+field-swap the census flagged as missing. The downstream bricks are now DONE: `BabyBearFriSetup.lean` (brick 2)
+constructs the BabyBear `FriGeom`/`FriSetup` and `BabyBearFriDeployed.lean` (brick 3) parameterizes it over the
+size-`2^(m+1)` domain, instantiating at the deployed rate `1/8` (`m=3`) and the full `2²⁷` 2-adicity cap
+(`m=26`). `BabyBearFriDeployedInstance.lean` binds the floor at the deployed WRAP config (rate `1/64`,
+`numQueries=19`): the setup, the payoff lemmas, the `19`-query reject teeth (DISCHARGED), and the honest
+residual `FriLdtDeployedBound` (the BCIKS20 Johnson-radius list-decoding assumption, NAMED not faked — the one
+research-grade floor). Residual so far in THIS brick: none (`norm_num`/typeclass facts only).
 -/
 
 namespace Dregg2.Circuit.BabyBearFriField
