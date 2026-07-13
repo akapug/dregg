@@ -63,3 +63,11 @@ STILL TODO (app-level, cheap):
   shape as #5 — apply the CountGe fix there too (the quorum lane flagged it).
 HELD (coordinated kernel pass): K1 (HeapAtom::DeltaEquals + a cross-key relational atom) — Rust + Lean twin + AIR, with
 the metatheory/circuit terminal.
+
+## CORRECTION (2026-07-12): #4 fix-shape was wrong; #3-runtime + BUG2 landed
+- #3-runtime (BUG 2) — LANDED: spween pushed (emberian/spween 95980f7) + rev-bumped across all 6 consumers; the re-entry
+  test passes. (Two spween::Value versions during a partial bump was the pitfall — bump all pinners together.)
+- #4 (dead heap hatch) — FIXED, but the proposed `Always`-catch-all was DISPROVEN (Always isn't a dispatch guard, so it
+  never dispatches a novel method; EffectKindIs would open a choice hole). Correct fix: a reserved HEAP_HATCH_METHOD
+  MethodIs case with Immutable teeth on all register slots (the hatch dispatches but reaches ONLY the heap). Driven 118/0.
+  Honest boundary: the hatch is method-specific, not arbitrary-method.
