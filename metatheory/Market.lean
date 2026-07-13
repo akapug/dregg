@@ -16,3 +16,4 @@ import Market.Priced
 import Market.Optimality
 import Market.Liquidity
 import Market.LedgerRealization
+import Market.CrossMargin
