@@ -74,6 +74,12 @@ pub struct CharacterSheet {
     pub class: u64,
     /// The class-ability counter (the `abilities_used` slot).
     pub abilities_used: u64,
+    /// The HARDCORE death flag (the `dead` slot): `1` once the character has perished.
+    /// `WriteOnce`-final on the cell, so a saved `dead` character LOADS dead and stays
+    /// dead across runs (a resurrection is refused) — the no-death-streak / survived
+    /// leaderboard leans on this un-forgeable, un-undoable fact. A non-hardcore character
+    /// never sets it (stays `0`).
+    pub dead: u64,
 }
 
 impl CharacterSheet {
@@ -166,8 +172,13 @@ impl Character {
             world.seed_var("class", Value::Int(sheet.class as i64));
         }
         world.seed_var("abilities_used", Value::Int(sheet.abilities_used as i64));
+        // Carry the HARDCORE death flag: a saved-dead character LOADS dead (and stays dead).
+        if sheet.dead != 0 {
+            world.seed_var("dead", Value::Int(sheet.dead as i64));
+        }
 
         // A fresh adventurer begins at level 1 — a REAL free level-up turn (threshold(1) == 0).
+        // (A carried-dead character keeps its level; the level-up case is alive-gated anyway.)
         if world.read_var("level") == 0 {
             let _ = progression::level_up(&world);
         }
@@ -193,6 +204,7 @@ impl Character {
             level: self.world.read_var("level"),
             class: self.world.read_var("class"),
             abilities_used: self.world.read_var("abilities_used"),
+            dead: self.world.read_var("dead"),
         }
     }
 
@@ -231,6 +243,25 @@ impl Character {
     /// only in the matching class; a returning character's carried class unlocks its ability).
     pub fn use_ability(&self, class_id: u64) -> Result<TurnReceipt, WorldError> {
         progression::use_ability(&self.world, class_id)
+    }
+
+    /// **HARDCORE death** — a real committed turn setting the `WriteOnce`-final `dead` flag.
+    /// A hardcore run that ends in defeat (e.g. downed in [`dungeon_on_dregg::bloodgate`])
+    /// fires this. Once dead the character earns nothing and cannot be resurrected — the
+    /// no-cheat leaderboard's un-forgeable "survived / no-death streak" fact.
+    pub fn perish(&self) -> Result<TurnReceipt, WorldError> {
+        progression::perish(&self.world)
+    }
+
+    /// Whether the character is (hardcore-)dead — the committed `dead` flag is set.
+    pub fn is_dead(&self) -> bool {
+        progression::is_dead(&self.world)
+    }
+
+    /// **Attempt a resurrection** — refused on a dead character (the `WriteOnce(dead)` tooth
+    /// bars the 1→0 change). The non-vacuous proof that hardcore death is FINAL.
+    pub fn attempt_resurrect(&self) -> Result<TurnReceipt, WorldError> {
+        progression::attempt_resurrect(&self.world)
     }
 }
 
@@ -647,6 +678,69 @@ mod tests {
             assert_eq!(s.character().level(), 1, "a different identity is fresh");
             assert_eq!(s.character().xp(), 0);
             assert_eq!(s.character().class(), 0);
+        }
+    }
+
+    /// HARDCORE MODE: a character's death is WriteOnce-FINAL and PERSISTS across the run
+    /// boundary. A hardcore run that ends in defeat perishes the character (a real
+    /// committed death); a resurrection is refused; a dead character earns nothing; and a
+    /// save/load carries the death forward — a re-opened dead character LOADS dead and
+    /// stays dead. This is the un-forgeable fact a no-death-streak leaderboard proves.
+    #[test]
+    fn hardcore_death_is_writeonce_final_and_persists_across_runs() {
+        let mut off = AdventurerOffering::new(InMemoryCharacterStore::new());
+        let who = DreggIdentity("player-hardcore-key".to_string());
+
+        // ── Run 1: earn, then die in defeat; the death is final within the run. ──
+        {
+            let mut s = off
+                .open(who.clone(), SessionConfig::with_seed(3))
+                .expect("open");
+            off.choose_class(&s, WARRIOR).expect("class");
+            assert!(off.advance(&mut s, choose(KP_TRADE_BLOWS)).landed()); // earn 40 XP
+            assert_eq!(s.character().xp(), XP_BLOODY_WARDEN);
+            assert!(!s.character().is_dead(), "alive so far");
+
+            // The hardcore run is LOST → the character perishes (a real committed death).
+            s.character().perish().expect("the death turn commits");
+            assert!(s.character().is_dead(), "the character is dead");
+
+            // Resurrection refused; a dead character earns nothing.
+            assert!(
+                matches!(
+                    s.character().attempt_resurrect(),
+                    Err(WorldError::Refused(_))
+                ),
+                "resurrecting a dead hardcore character is refused"
+            );
+            assert!(
+                matches!(s.character().grant_xp(1000), Err(WorldError::Refused(_))),
+                "a dead character earns no XP"
+            );
+            assert_eq!(s.character().xp(), XP_BLOODY_WARDEN, "XP frozen at death");
+            off.save(&s); // persist the death.
+        }
+
+        // ── Run 2: the SAME identity LOADS dead — the death carried across the boundary. ──
+        {
+            let s = off
+                .open(who.clone(), SessionConfig::with_seed(9))
+                .expect("reopen");
+            assert!(
+                s.character().is_dead(),
+                "a saved-dead hardcore character loads dead — the no-death streak is broken forever"
+            );
+            assert!(
+                matches!(
+                    s.character().attempt_resurrect(),
+                    Err(WorldError::Refused(_))
+                ),
+                "still un-resurrectable after the run boundary"
+            );
+            assert!(
+                matches!(s.character().grant_xp(50), Err(WorldError::Refused(_))),
+                "a carried-dead character still earns nothing"
+            );
         }
     }
 

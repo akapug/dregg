@@ -81,6 +81,14 @@ pub const LEVEL_SLOT: u8 = 2;
 pub const CLASS_SLOT: u8 = 3;
 /// `abilities_used` — a real counter a class ability advances ([`StrictMonotonic`]).
 pub const ABILITY_SLOT: u8 = 4;
+/// `dead` — the HARDCORE death flag (`0` alive, `1` dead). Globally
+/// [`WriteOnce`](StateConstraint::WriteOnce): a hardcore death is FINAL — once set it can
+/// never be un-set (a resurrection is a real executor refusal), and while set the earn /
+/// level-up cases are gated shut (`FieldEquals(dead, 0)`), so a dead character's run is
+/// over on the ledger. A non-hardcore character simply never sets it (it stays `0`, the
+/// WriteOnce passes idempotently). This is what lets a no-cheat leaderboard PROVE
+/// "survived / deepest depth / no-death streak".
+pub const DEAD_SLOT: u8 = 5;
 
 // ── Class ids ────────────────────────────────────────────────────────────────────
 
@@ -115,6 +123,13 @@ pub fn xp_threshold(level: u64) -> u64 {
 pub const GAIN_XP_METHOD: &str = "hero/gain_xp";
 /// The method a [`choose_class`] turn presents (the class-setting creation move).
 pub const CHOOSE_CLASS_METHOD: &str = "hero/choose_class";
+/// The method a HARDCORE death presents ([`perish`]): sets `dead = 1` under the global
+/// `WriteOnce(dead)` — a first death (0→1) commits, and it can never be undone.
+pub const HARDCORE_PERISH_METHOD: &str = "hero/perish";
+/// The method a resurrection ATTEMPT presents ([`attempt_resurrect`]): tries to write
+/// `dead = 0`. On a dead character this is a real executor refusal (the global
+/// `WriteOnce(dead)` bars the 1→0 change) — hardcore death is final.
+pub const HARDCORE_RESURRECT_METHOD: &str = "hero/resurrect";
 
 /// The method a level-up-to-`level` turn presents. The case guarded by this method
 /// carries the `FieldGte(xp, xp_threshold(level))` gate.
@@ -169,15 +184,26 @@ pub fn hero_story() -> CompiledStory {
             StateConstraint::Monotonic { index: XP_SLOT },
             StateConstraint::Monotonic { index: LEVEL_SLOT },
             StateConstraint::WriteOnce { index: CLASS_SLOT },
+            // HARDCORE: death is WriteOnce-final. A non-hardcore character never sets
+            // `dead`, so this passes idempotently (0→0); a hardcore death (0→1) commits
+            // once and can never be undone (a 1→0 resurrection is refused).
+            StateConstraint::WriteOnce { index: DEAD_SLOT },
         ],
     });
 
-    // 2. gain_xp — a real, strictly-positive XP gain.
+    // 2. gain_xp — a real, strictly-positive XP gain, and ONLY while alive (a dead
+    //    hardcore character earns nothing — the run is over on the ledger).
     cases.push(TransitionCase {
         guard: TransitionGuard::MethodIs {
             method: symbol(GAIN_XP_METHOD),
         },
-        constraints: vec![StateConstraint::StrictMonotonic { index: XP_SLOT }],
+        constraints: vec![
+            StateConstraint::StrictMonotonic { index: XP_SLOT },
+            StateConstraint::FieldEquals {
+                index: DEAD_SLOT,
+                value: field_from_u64(0),
+            },
+        ],
     });
 
     // 3. choose_class — the class must be a valid id; global WriteOnce makes it once.
@@ -227,6 +253,11 @@ pub fn hero_story() -> CompiledStory {
                     index: LEVEL_SLOT,
                     delta: field_from_u64(1),
                 },
+                // ...and only while alive (a dead hardcore character cannot level).
+                StateConstraint::FieldEquals {
+                    index: DEAD_SLOT,
+                    value: field_from_u64(0),
+                },
             ],
         });
     }
@@ -249,6 +280,28 @@ pub fn hero_story() -> CompiledStory {
         });
     }
 
+    // 6. HARDCORE death (perish) — sets `dead = 1`; the global `WriteOnce(dead)` makes it
+    //    a one-time, un-undoable write. 7. resurrect ATTEMPT — writes `dead = 0`; on a
+    //    dead character the global WriteOnce bars the 1→0 change (a real refusal).
+    cases.push(TransitionCase {
+        guard: TransitionGuard::MethodIs {
+            method: symbol(HARDCORE_PERISH_METHOD),
+        },
+        constraints: vec![StateConstraint::FieldEquals {
+            index: DEAD_SLOT,
+            value: field_from_u64(1),
+        }],
+    });
+    cases.push(TransitionCase {
+        guard: TransitionGuard::MethodIs {
+            method: symbol(HARDCORE_RESURRECT_METHOD),
+        },
+        constraints: vec![StateConstraint::FieldEquals {
+            index: DEAD_SLOT,
+            value: field_from_u64(0),
+        }],
+    });
+
     CompiledStory {
         scene_id: HERO_SCENE_ID.to_string(),
         var_slots: [
@@ -256,6 +309,7 @@ pub fn hero_story() -> CompiledStory {
             ("level".to_string(), LEVEL_SLOT as usize),
             ("class".to_string(), CLASS_SLOT as usize),
             ("abilities_used".to_string(), ABILITY_SLOT as usize),
+            ("dead".to_string(), DEAD_SLOT as usize),
         ]
         .into_iter()
         .collect(),
@@ -341,6 +395,43 @@ pub fn use_ability(world: &WorldCell, class_id: u64) -> Result<TurnReceipt, Worl
             value: field_from_u64(next),
         }],
     )
+}
+
+/// **Kill the character (HARDCORE) — a real committed DEATH turn.** Writes `dead = 1`
+/// under [`HARDCORE_PERISH_METHOD`]; the global [`WriteOnce`](StateConstraint::WriteOnce)
+/// on the `dead` slot makes this a one-time write. A hardcore run that ends in defeat
+/// fires this, recording an un-forgeable, un-undoable death on the character's ledger.
+pub fn perish(world: &WorldCell) -> Result<TurnReceipt, WorldError> {
+    let cell = world.cell_id();
+    world.apply_raw(
+        HARDCORE_PERISH_METHOD,
+        vec![Effect::SetField {
+            cell,
+            index: DEAD_SLOT as usize,
+            value: field_from_u64(1),
+        }],
+    )
+}
+
+/// **Attempt a resurrection** — a real turn under [`HARDCORE_RESURRECT_METHOD`] writing
+/// `dead = 0`. On a DEAD character the global `WriteOnce(dead)` bars the 1→0 change and
+/// the executor REFUSES it (nothing commits): hardcore death is FINAL. (On a live
+/// character the write is a 0→0 no-op that commits — there is nothing to resurrect.)
+pub fn attempt_resurrect(world: &WorldCell) -> Result<TurnReceipt, WorldError> {
+    let cell = world.cell_id();
+    world.apply_raw(
+        HARDCORE_RESURRECT_METHOD,
+        vec![Effect::SetField {
+            cell,
+            index: DEAD_SLOT as usize,
+            value: field_from_u64(0),
+        }],
+    )
+}
+
+/// Whether the character is (hardcore-)dead — the committed `dead` flag is set.
+pub fn is_dead(world: &WorldCell) -> bool {
+    world.read_var("dead") != 0
 }
 
 /// Introspect the executor-enforced constraints installed on the case guarded by
@@ -541,6 +632,45 @@ mod tests {
         let r = use_ability(&warrior, WARRIOR).expect("a Warrior may shield-bash");
         assert_eq!(warrior.read_var("abilities_used"), 1);
         assert_ne!(r.turn_hash, [0u8; 32]);
+    }
+
+    /// HARDCORE death is WriteOnce-FINAL (non-vacuous). A living character earns and
+    /// commits; a real `perish` turn sets `dead = 1`; then a resurrection is a REAL
+    /// executor refusal (WriteOnce bars 1→0) AND a dead character earns nothing (the
+    /// earn case is gated `FieldEquals(dead, 0)`). The death is an un-forgeable,
+    /// un-undoable committed fact — the leaderboard's no-death proof.
+    #[test]
+    fn hardcore_death_is_writeonce_final() {
+        let world = deploy_hero(20);
+        choose_class(&world, WARRIOR).expect("class");
+        gain_xp(&world, 40).expect("a living character earns");
+        assert_eq!(world.read_var("xp"), 40);
+        assert!(!is_dead(&world), "alive so far");
+
+        // The hardcore death — a real committed turn (0→1).
+        let d = perish(&world).expect("the death turn commits");
+        assert_ne!(d.turn_hash, [0u8; 32]);
+        assert!(is_dead(&world), "the character is dead");
+
+        // A resurrection is REFUSED (WriteOnce bars the 1→0 change) — death is final.
+        let res = attempt_resurrect(&world);
+        assert!(
+            matches!(res, Err(WorldError::Refused(_))),
+            "resurrecting a dead character is refused (WriteOnce), got {res:?}"
+        );
+        assert!(is_dead(&world), "anti-ghost: still dead");
+
+        // A dead character earns NOTHING — the earn case is gated on being alive.
+        let earn = gain_xp(&world, 100);
+        assert!(
+            matches!(earn, Err(WorldError::Refused(_))),
+            "a dead character cannot earn XP, got {earn:?}"
+        );
+        assert_eq!(world.read_var("xp"), 40, "anti-ghost: XP frozen at death");
+
+        // A SECOND perish is idempotent (1→1, WriteOnce admits an unchanged write).
+        perish(&world).expect("a re-perish is an idempotent no-op");
+        assert!(is_dead(&world));
     }
 
     /// A full progression arc is a real receipt chain: choose class → earn XP → level up

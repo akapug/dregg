@@ -87,6 +87,7 @@ pub mod mud;
 /// non-grindable `ServerVrf`/`Hybrid` sources are a named `dregg-dice` follow-up.
 pub mod dice_combat;
 
+pub mod bloodgate;
 pub mod combat;
 /// RPG CHARACTER PROGRESSION on the real substrate. XP, LEVEL and CLASS are real
 /// character-cell state; a level-up is a real turn the executor GATES on earned XP
