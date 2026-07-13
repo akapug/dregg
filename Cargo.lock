@@ -6323,7 +6323,9 @@ dependencies = [
  "dregg-cell",
  "hex",
  "p384",
+ "rand 0.8.6",
  "rcgen",
+ "rsa",
  "serde",
  "serde_bytes",
  "sha2 0.10.9",
@@ -6542,6 +6544,18 @@ dependencies = [
  "tlsn-server-fixture-certs",
  "tokio",
  "tokio-util",
+]
+
+[[package]]
+name = "dreggnet-compute"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "deos-view",
+ "dregg-app-framework",
+ "dregg-types",
+ "dreggnet-offerings",
+ "starbridge-compute-exchange",
 ]
 
 [[package]]

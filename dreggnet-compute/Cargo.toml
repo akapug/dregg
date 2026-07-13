@@ -1,0 +1,32 @@
+[package]
+name = "dreggnet-compute"
+version = "0.1.0"
+edition = "2024"
+description = "DreggNet offering #compute — a COMPUTE EXCHANGE (post a job with a budget → a worker claims it → the worker submits a result and the escrow settles conserved to the worker) as a `dreggnet_offerings::Offering`, the 8th offering. Wraps the REAL compute-exchange substrate (`starbridge-compute-exchange`): POST is a real verified turn that escrows the budget (`WriteOnce(BUDGET)`); CLAIM is the substrate's cap-gated `bid` (a worker claims a price ≤ budget, `StrictMonotonic(STATE)` POSTED→BID — a double-claim is a real refusal, an over-budget claim is a real `FieldLteField` refusal); SETTLE is the substrate's `settle` (PAID := claim, REFUNDED := budget − claim, the FLASHWELL `AffineEq(PAID + REFUNDED == BUDGET)` conserving the escrow to the worker, Σδ = 0). The executor is the sole referee — a settle without a valid claim/result, or a below-floor job, does NOT settle."
+
+[dependencies]
+# THE OFFERING CORE — the frontend-agnostic `Offering` trait (open/actions/advance/
+# verify/render/price), `Action`/`Outcome`/`Surface`/`DreggIdentity`/`TurnReceipt`.
+# A `ComputeOffering` is one more instance of the SAME abstraction the dungeon/market use.
+dreggnet-offerings = { path = "../dreggnet-offerings" }
+# THE COMPUTE SUBSTRATE — the job lifecycle (post/bid/settle) as a factory-born cell whose
+# installed `CellProgram` IS the rules: BUDGET `FieldLteField(BID <= BUDGET)`, ACCEPTED
+# `WriteOnce(BID)`, FLASHWELL `AffineEq(PAID + REFUNDED == BUDGET)`, LIFECYCLE
+# `StrictMonotonic(STATE)`. We consume its `job_program` / `seed_job` / `job_app` /
+# `fire_bid` / `fire_settle` / `build_post_action` / `bid_effects` / `settle_effects` and
+# slot constants. The job lifecycle + settlement are NOT re-implemented.
+starbridge-compute-exchange = { path = "../starbridge-apps/compute-exchange" }
+# The executor seam — `AppCipherclerk`/`AgentCipherclerk`/`EmbeddedExecutor` (the real embedded
+# verified executor a turn is refereed by), `TurnReceipt`, `AuthRequired`, `field_from_u64`,
+# `field_from_bytes`, `FireExecuteError`. `default-features = false` takes the executor/turn
+# core (no gpui), matching dreggnet-offerings.
+dregg-app-framework = { path = "../app-framework", default-features = false }
+# `CellId` — the job cell's id (the requester's own cell; the job's on-ledger handle).
+dregg-types = { path = "../types" }
+# The deos affordance view-tree an offering's `render` produces (`Section`/`Menu`/`Text`).
+deos-view = { path = "../deos-view", default-features = false }
+# Deterministic federation id + spec payload derivation from a session seed.
+blake3 = "1"
+
+[lints]
+workspace = true
