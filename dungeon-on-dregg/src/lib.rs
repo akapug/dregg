@@ -2060,3 +2060,1096 @@ mod hold_tests {
         verify(deploy_hold(41), &s, &play).expect("the honest hold playthrough re-verifies");
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// A FOURTH UNIVERSE — "The Merchant's Bazaar": an ECONOMY (buy / sell) + QUANTITIES
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// The Keep proved rules-as-teeth; the Sunken Vault proved item pickup/use; the
+// Tidewrack Hold proved an unbounded heap-keyed inventory. The Bazaar deepens all
+// three with the mechanic they all lacked: **an economy** — a shop where a purse of
+// gold BUYS goods and goods SELL back for gold, and where an item is held in a real
+// QUANTITY that a use DECREMENTS to zero. Every rule below is a real
+// [`StateConstraint`] the verified [`EmbeddedExecutor`](dregg_app_framework::EmbeddedExecutor)
+// re-checks on the turn's post-state — never app bookkeeping, identical enforcement
+// to the three worlds before it.
+//
+// ── THE PROBLEM AN ECONOMY POSES (and why the obvious gate is VACUOUS) ────────────
+//
+// The natural shop rule is "you cannot buy what you cannot afford" — pre-state
+// `gold >= price`. But every tooth here is a POST-state predicate, and the compiler
+// lifts a pre-condition through the move's own net delta
+// (`compare_constraint`: `pre >= base` ⟺ `post >= base + d`). A purchase's delta is
+// exactly `−price`, so `{ gold >= 50 } ~ gold -= 50` lifts to `FieldGte(gold, 0)` —
+// **VACUOUS**: an unsigned slot is always `>= 0`. Worse, [`WorldCell::apply_choice`]
+// CLAMPS a Modify at zero (`(cur + delta).max(0)`), so a broke player's purchase would
+// commit with the purse silently clamped to 0 and the goods delivered. A `FieldGte`
+// gold gate on the paying move itself is NOT a balance tooth; it is a no-op.
+//
+// ── THE REAL BALANCE TOOTH: `StateConstraint::FieldDelta` (EXACT PAYMENT) ─────────
+//
+// The atom that bites is the exact-delta transition predicate
+// [`StateConstraint::FieldDelta`] — `new[gold] == old[gold] + delta` over the u64
+// lane (`field_add`, wrapping). Install `FieldDelta { gold, −price }` on the buy case:
+//
+//   * AFFORDABLE (`gold = 120`, price 50): the driver writes `120 − 50 = 70`; the tooth
+//     recomputes `120 + (2^64 − 50) mod 2^64 = 70` — ADMITTED, and the item lands on
+//     the SAME turn (one action, all-or-nothing).
+//   * BROKE (`gold = 30`, price 50): the clamp writes `0`; the tooth recomputes
+//     `30 − 50 mod 2^64` (a huge value) `≠ 0` — **REFUSED**. Nothing commits: no goods,
+//     no gold movement (anti-ghost). The underflow the clamp would have swallowed is
+//     exactly what the kernel predicate catches.
+//   * FORGED (a raw turn paying less, or a sale minting `gold = 9999`): the post-state
+//     is not `old ± price` — REFUSED. The price schedule is the kernel's, not the
+//     client's: no underpaying, no ghost-minting.
+//
+// Boundary: spending your LAST coin (`gold == price`) commits exactly (`new == 0 ==
+// old − price`) — the tooth is exact, not a "keep one coin" hack.
+//
+// ── QUANTITIES (a held-count a use DECREMENTS, and the floor at zero) ─────────────
+//
+// The same atom is the sound DECREMENT gate. A held count lives in a register slot;
+// a use writes `held − 1` under `FieldDelta { held, −1 }`. With `held == 0` the clamp
+// writes `0`, the tooth expects `0 − 1 mod 2^64` — REFUSED. So a quantity walks
+// `3 → 2 → 1 → 0` on real committed turns and the next use is a REAL executor refusal:
+// "the count hits zero and the stack is spent." The Hold's `Gte(1)`/`Lte(cap)` heap
+// pair models a use-TALLY against a compile-time cap; `FieldDelta` models the LIVE
+// held count itself — the two are complementary, and the Bazaar drives both shapes
+// (`FieldLte` caps the merchant's STOCK; `FieldDelta` decrements the player's STACK).
+//
+// ── THE FULL TOOTH TABLE (every rule a kernel predicate) ─────────────────────────
+//
+// | move (method)              | executor teeth                                                              |
+// |----------------------------|-----------------------------------------------------------------------------|
+// | buy potion (50g)           | `FieldDelta{gold,−50}` + `FieldDelta{potions,+1}` + `FieldLte{potions_bought,2}` (merchant STOCK) + `Monotonic{potions_bought}` (no forged restock) |
+// | buy torch bundle (30g, ×3) | `FieldDelta{gold,−30}` + `FieldDelta{torches,+3}` (exact bundle)             |
+// | sell amulet (+120g)        | `FieldDelta{amulet,−1}` (must HOLD it: 0 ⇒ refused) + `FieldDelta{gold,+120}` (exact price, no mint) |
+// | enter the counting room    | `FieldGte{gold,100}` (compiler-emitted; the move does NOT touch gold, so the threshold stands — a genuine solvency gate) |
+// | rob the niche              | `FieldLte{niches_robbed,1}` (the niche holds ONE amulet) + `Monotonic{niches_robbed}` + `FieldDelta{amulet,+1}` |
+// | drink a potion             | `FieldDelta{potions,−1}` (quantity decrement; 0 ⇒ refused) + `FieldDelta{hp,+25}` (exact heal) |
+// | light a torch              | `FieldDelta{torches,−1}` (quantity decrement) + `Monotonic{wards_lit}`       |
+// | trade a blow               | `FieldGte{hp,1}` (compiler-emitted HP floor — a killing blow is refused)     |
+// | seize the takings          | `FieldDelta{gold,+500}` (exact hoard)                                        |
+//
+// ── HONEST SCOPE — gold is a COUNTER, not a conserved `Effect::Transfer` ──────────
+//
+// dregg HAS a conserved value move — [`dregg_app_framework::Effect::Transfer`], which
+// debits `from` and credits `to` atomically and REFUSES a source that would go below
+// zero (`TurnError::InsufficientBalance`, `turn/src/executor/apply.rs`). It is NOT
+// usable as this game's gold, and the reason is DRIVEN, not asserted, in
+// [`bazaar_tests::conserved_transfer_is_out_of_reach_gold_is_a_counter`]:
+//
+//   * the value it moves is **computrons** — the substrate's fee/resource currency
+//     (every turn burns `fee = 10_000` from the agent cell), so game gold would be
+//     spent by the act of playing;
+//   * the world-cell is born with **balance 0** and `Effect::CreateCell` REFUSES a
+//     nonzero balance (`CreateCellNonZeroBalance` — no minting), so a Transfer out of
+//     the world-cell is refused for insufficient balance (the test drives exactly this);
+//   * `spween-dregg` exposes cell FIELDS ([`WorldCell::seed_var`]), not cell BALANCES —
+//     nothing in this crate's reach can fund a purse of computrons;
+//   * and a real merchant would be a SECOND cell — the multi-cell ceiling this crate
+//     already names (one cell is one serial writer).
+//
+// So the Bazaar's gold is a **counter with an exact-delta kernel tooth**: sound against
+// underflow, underpayment and minting WITHIN this cell's serialized history, but not
+// globally conserved (the niche's amulet and the counting-room hoard are created; the
+// merchant's payments are not debited from a merchant's purse). A conserved-Transfer
+// economy is a real, reachable NEXT rung — it needs a merchant CELL funded through the
+// substrate's issuance path plus the cross-cell `Send` permission, i.e. the multi-cell
+// universe, not this one.
+//
+// What a FULLER economy adds beyond this slice:
+//   * **multi-item baskets** — one turn buying N distinct goods at once. Reachable
+//     TODAY (a case's constraints are a conjunction: one `FieldDelta` per good + one
+//     for the summed price), but the v0 scene compiler has no basket syntax; it would
+//     be an augmented raw-turn method like the Hold's `hold_pickup`.
+//   * **dynamic pricing** (supply/demand, haggling) — `FieldDelta` pins ONE price per
+//     case, so a price that MOVES needs either a case per price point or a cross-slot
+//     "pay at least the posted price" atom. The vocabulary's [`StateConstraint::FieldLteOther`]
+//     (`new[a] <= new[b] + delta`) can express "the purse fell by at least the posted
+//     price slot" — a real closure lane, not a hole.
+//   * **cross-player trade** — two purses on two cells: cross-cell, hence the
+//     `Witnessed`/`ObservedFieldEquals` machinery the [`multicell`] module already
+//     wires, or a conserved `Effect::Transfer` between player cells.
+//
+// ── NAMED ATOM GAP (nothing added to the core; designed around) ───────────────────
+//
+// The heap vocabulary ([`HeapAtom`]) has NO exact-delta twin (`Equals`/`Gte`/`Lte`/
+// `WriteOnce`/`Monotonic`/`StrictMonotonic`/`MemberOf`/`InRangeTwoSided`/`DeltaBounded`
+// — `DeltaBounded` bounds |Δ| but does not PIN it, so it cannot refuse a broke
+// purchase's clamped write). A heap-keyed quantity therefore CANNOT carry the
+// exact-payment/exact-decrement tooth that makes this economy sound; the Bazaar's
+// purse and stacks live in REGISTER slots for exactly that reason (8 of the 15 usable
+// slots). The gap is `HeapAtom::Delta { d: i64 }` (the heap twin of
+// `StateConstraint::FieldDelta`) — plus a heap cross-key `Lte` for a live
+// `consumed <= held` bound, which the Hold already named. Both belong in
+// `cell/src/program/` (+ the Lean twin + the AIR), which is OUT OF SCOPE here; the
+// Bazaar is built entirely from atoms that already exist.
+
+/// The fourth dungeon — "The Merchant's Bazaar" — in the spween DSL. Three rooms: the
+/// `bazaar` (the shop: buy potions/torches, sell the amulet, pay into the counting
+/// room), the `ossuary` (rob the niche, fight the warden, and SPEND the goods —
+/// quantities decrementing to zero), and the `counting_room` (the takings). The
+/// economy RULES lower to real executor teeth (see [`bazaar_compiled`]).
+pub const BAZAAR: &str = r#"---
+id: merchants-bazaar
+title: The Merchant's Bazaar
+weight: 1
+---
+
+=== coast_road
+
+~ gold = 120
+~ hp = 40
+
+The coast road at low tide, a purse of a hundred and twenty on your hip. Ahead, the
+awnings of the bazaar snap in the wind.
+
+* [Step under the awnings]
+  -> bazaar
+
+=== bazaar
+
+An awning of salt-stiff canvas, a merchant with a ledger, and a locked counting room
+where the season's takings are stacked. The prices are posted. The merchant does not
+haggle, does not extend credit, and does not open the counting room to a pauper.
+
+* [Buy a healing potion for 50 gold]
+  ~ gold -= 50
+  ~ potions += 1
+  ~ potions_bought += 1
+  -> bazaar
+
+* [Buy a bundle of three pitch torches for 30 gold]
+  ~ gold -= 30
+  ~ torches += 3
+  -> bazaar
+
+* [Sell the amber amulet for 120 gold]
+  ~ amulet -= 1
+  ~ gold += 120
+  -> bazaar
+
+* [Pay your way into the counting room] { gold >= 100 }
+  -> counting_room
+
+* [Take the stair down to the ossuary]
+  -> ossuary
+
+=== ossuary
+
+Bone-dust and cold. An ossuary warden turns its head. In a niche in the far wall an
+amulet of black amber waits — and a niche is robbed only once.
+
+* [Rob the niche of its amber amulet]
+  ~ niches_robbed += 1
+  ~ amulet += 1
+  -> ossuary
+
+* [Trade a blow with the ossuary warden] { hp >= 16 }
+  ~ hp -= 15
+  -> ossuary
+
+* [Drink a healing potion]
+  ~ potions -= 1
+  ~ hp += 25
+  -> ossuary
+
+* [Light a pitch torch]
+  ~ torches -= 1
+  ~ wards_lit += 1
+  -> ossuary
+
+* [Climb back to the bazaar]
+  -> bazaar
+
+=== counting_room
+
+The counting room. The season's takings, stacked and unguarded.
+
+* [Seize the season's takings]
+  ~ gold += 500
+  -> END
+"#;
+
+// ── Bazaar room / choice coordinates + the posted price schedule ─────────────────
+//
+// NOTE (a real behaviour, found by DRIVING): the opening purse is seeded by the INTRO
+// passage's entry effects, and a spween passage RE-RUNS its entry effects when it is
+// re-entered by navigation. If the shop itself were the intro room, walking back into
+// it from the ossuary would RE-SEED the purse (`gold = 120` again) — a refill glitch,
+// riding an untoothed move (the return walk carries no economy tooth to refuse it).
+// So the economy's seed lives in `coast_road`, a room the story never returns to.
+
+/// The opening room (never re-entered): seeds the purse + HP as genesis entry effects.
+pub const ROOM_COAST_ROAD: &str = "coast_road";
+/// The shop room: buy, sell, and the gold-gated counting-room door.
+pub const ROOM_BAZAAR: &str = "bazaar";
+/// The ossuary: the niche (the sellable amulet), the warden, and where goods are SPENT.
+pub const ROOM_OSSUARY: &str = "ossuary";
+/// The counting room (terminal): the season's takings.
+pub const ROOM_COUNTING_ROOM: &str = "counting_room";
+
+/// `coast_road`: step under the awnings into the bazaar (ungated).
+pub const BAZ_ENTER: usize = 0;
+/// `bazaar`: BUY one healing potion — pays [`POTION_PRICE`], receives 1 potion.
+pub const BAZ_BUY_POTION: usize = 0;
+/// `bazaar`: BUY a bundle of [`TORCH_BUNDLE`] pitch torches — pays [`TORCH_BUNDLE_PRICE`].
+pub const BAZ_BUY_TORCHES: usize = 1;
+/// `bazaar`: SELL the amber amulet — gives up 1 amulet, receives [`AMULET_PRICE`].
+pub const BAZ_SELL_AMULET: usize = 2;
+/// `bazaar`: pay into the counting room — refused below [`COUNTING_ROOM_TOLL`] gold.
+pub const BAZ_COUNTING_ROOM: usize = 3;
+/// `bazaar`: take the stair down to the ossuary (ungated).
+pub const BAZ_TO_OSSUARY: usize = 4;
+/// `ossuary`: rob the niche (+1 amulet) — the niche holds exactly one.
+pub const BAZ_ROB_NICHE: usize = 0;
+/// `ossuary`: trade a blow with the warden (−15 HP, HP-floor gated).
+pub const BAZ_TRADE_BLOW: usize = 1;
+/// `ossuary`: drink a potion (quantity −1, +[`POTION_HEAL`] HP) — refused at zero held.
+pub const BAZ_DRINK: usize = 2;
+/// `ossuary`: light a torch (quantity −1) — refused at zero held.
+pub const BAZ_LIGHT_TORCH: usize = 3;
+/// `ossuary`: climb back to the bazaar (ungated).
+pub const BAZ_CLIMB_BACK: usize = 4;
+/// `counting_room`: seize the takings (ends the story).
+pub const BAZ_SEIZE: usize = 0;
+
+/// The posted price of one healing potion (gold).
+pub const POTION_PRICE: u64 = 50;
+/// The posted price of one bundle of pitch torches (gold).
+pub const TORCH_BUNDLE_PRICE: u64 = 30;
+/// How many torches a bundle contains (the QUANTITY a single purchase delivers).
+pub const TORCH_BUNDLE: u64 = 3;
+/// What the merchant pays for the amber amulet (gold).
+pub const AMULET_PRICE: u64 = 120;
+/// The merchant's STOCK: how many potions exist to be sold, ever (a `FieldLte` cap on
+/// the purchase tally — the (n+1)-th purchase is refused even with gold in hand).
+pub const POTION_STOCK: u64 = 2;
+/// What the counting-room door demands you can show (gold) — a real `FieldGte` tooth.
+pub const COUNTING_ROOM_TOLL: u64 = 100;
+/// What one potion heals.
+pub const POTION_HEAL: u64 = 25;
+/// The season's takings, seized in the counting room.
+pub const COUNTING_ROOM_TAKINGS: u64 = 500;
+/// The purse the story opens with (a genesis entry effect).
+pub const OPENING_PURSE: u64 = 120;
+
+/// The field element for a NEGATIVE u64 delta — the additive inverse of `n` in the
+/// executor's u64 lane (`field_add` wraps: `old + neg(n) == old − n mod 2^64`). The
+/// encoding [`StateConstraint::FieldDelta`]'s doc names for a decrement.
+fn field_neg_u64(n: u64) -> dregg_app_framework::FieldElement {
+    field_from_u64(0u64.wrapping_sub(n))
+}
+
+/// An EXACT-payment / exact-delivery / exact-decrement tooth on `slot`: the post-state
+/// slot must be `old + delta` on the nose. A clamped underflow (a purchase you cannot
+/// afford, a use with nothing held) lands a value that is NOT `old + delta` and is
+/// REFUSED by the real executor.
+fn exact_delta(slot: u8, delta: i64) -> StateConstraint {
+    StateConstraint::FieldDelta {
+        index: slot,
+        delta: if delta >= 0 {
+            field_from_u64(delta as u64)
+        } else {
+            field_neg_u64(delta.unsigned_abs())
+        },
+    }
+}
+
+/// Parse the Merchant's Bazaar scene.
+pub fn bazaar_scene() -> Scene {
+    parse(BAZAAR, "merchants-bazaar.scene").expect("the bazaar scene parses")
+}
+
+/// **Compile the Bazaar AND augment its program with the economy + quantity teeth.**
+/// The HP floor (`FieldGte(hp, 1)`) and the counting-room solvency gate
+/// (`FieldGte(gold, 100)`) are compiler-emitted from the scene's conditions; this adds
+/// the shapes the v0 compiler cannot express — the exact-delta payment/delivery/
+/// decrement teeth ([`StateConstraint::FieldDelta`]), the merchant's stock cap
+/// (`FieldLte`) and the anti-restock / anti-rewind ratchets (`Monotonic`) — as real
+/// `CellProgram` cases the executor re-checks move-for-move.
+pub fn bazaar_compiled() -> CompiledStory {
+    let mut story = compile_scene(&bazaar_scene()).expect("the bazaar compiles");
+
+    let gold = keep_slot(&story, "gold");
+    let hp = keep_slot(&story, "hp");
+    let potions = keep_slot(&story, "potions");
+    let potions_bought = keep_slot(&story, "potions_bought");
+    let torches = keep_slot(&story, "torches");
+    let amulet = keep_slot(&story, "amulet");
+    let niches_robbed = keep_slot(&story, "niches_robbed");
+    let wards_lit = keep_slot(&story, "wards_lit");
+
+    // BUY a potion — the purse falls by EXACTLY the price (a purchase you cannot
+    // afford clamps to 0 ≠ old − price and is REFUSED: the real balance tooth), the
+    // potion lands on the SAME turn (so goods NEVER arrive without payment), the
+    // merchant's stock caps the purchase tally, and the tally cannot be rewound
+    // (a forged restock is refused).
+    augment_case(
+        &mut story.program,
+        &choice_method(ROOM_BAZAAR, BAZ_BUY_POTION),
+        vec![
+            exact_delta(gold, -(POTION_PRICE as i64)),
+            exact_delta(potions, 1),
+            StateConstraint::FieldLte {
+                index: potions_bought,
+                value: field_from_u64(POTION_STOCK),
+            },
+            StateConstraint::Monotonic {
+                index: potions_bought,
+            },
+        ],
+    );
+
+    // BUY a torch bundle — exact payment, and the bundle delivers EXACTLY three
+    // torches (a QUANTITY landing in one turn).
+    augment_case(
+        &mut story.program,
+        &choice_method(ROOM_BAZAAR, BAZ_BUY_TORCHES),
+        vec![
+            exact_delta(gold, -(TORCH_BUNDLE_PRICE as i64)),
+            exact_delta(torches, TORCH_BUNDLE as i64),
+        ],
+    );
+
+    // SELL the amulet — you must HOLD one (`amulet: 0` clamps to 0 ≠ −1 ⇒ REFUSED),
+    // and the merchant pays EXACTLY the posted price (a forged sale minting more gold
+    // is refused: the price schedule is the kernel's).
+    augment_case(
+        &mut story.program,
+        &choice_method(ROOM_BAZAAR, BAZ_SELL_AMULET),
+        vec![
+            exact_delta(amulet, -1),
+            exact_delta(gold, AMULET_PRICE as i64),
+        ],
+    );
+
+    // ROB the niche — it holds exactly ONE amulet (`FieldLte(1)` on the robbery tally),
+    // the tally ratchets (no forged re-robbery by rewinding it), and the amulet lands
+    // exactly once per robbery.
+    augment_case(
+        &mut story.program,
+        &choice_method(ROOM_OSSUARY, BAZ_ROB_NICHE),
+        vec![
+            StateConstraint::FieldLte {
+                index: niches_robbed,
+                value: field_from_u64(1),
+            },
+            StateConstraint::Monotonic {
+                index: niches_robbed,
+            },
+            exact_delta(amulet, 1),
+        ],
+    );
+
+    // DRINK a potion — the held QUANTITY decrements by exactly one (drinking with none
+    // held is REFUSED), and the heal is exactly what a potion heals (no ghost-heal).
+    augment_case(
+        &mut story.program,
+        &choice_method(ROOM_OSSUARY, BAZ_DRINK),
+        vec![
+            exact_delta(potions, -1),
+            exact_delta(hp, POTION_HEAL as i64),
+        ],
+    );
+
+    // LIGHT a torch — the held QUANTITY decrements by exactly one (the stack walks
+    // 3 → 2 → 1 → 0 and the next light is REFUSED), and the lit-ward tally ratchets.
+    augment_case(
+        &mut story.program,
+        &choice_method(ROOM_OSSUARY, BAZ_LIGHT_TORCH),
+        vec![
+            exact_delta(torches, -1),
+            StateConstraint::Monotonic { index: wards_lit },
+        ],
+    );
+
+    // SEIZE the takings — exactly the season's takings, no more (no ghost-minting on
+    // the terminal move either).
+    augment_case(
+        &mut story.program,
+        &choice_method(ROOM_COUNTING_ROOM, BAZ_SEIZE),
+        vec![exact_delta(gold, COUNTING_ROOM_TAKINGS as i64)],
+    );
+
+    story
+}
+
+/// Deploy the augmented Bazaar as a real world-cell (the economy + quantity teeth
+/// installed as executor predicates). Deterministic in `seed` (a re-deploy reproduces
+/// the same cell identity + state hashes — what the replay verifier leans on).
+pub fn deploy_bazaar(seed: u8) -> WorldCell {
+    WorldCell::deploy_compiled(Arc::new(bazaar_compiled()), seed).expect("the bazaar deploys")
+}
+
+#[cfg(test)]
+mod bazaar_tests {
+    //! The economy, DRIVEN on the real `WorldCell`: a buy with gold enough COMMITS
+    //! (gold down, goods up); a buy you cannot afford is a REAL executor refusal that
+    //! commits NOTHING (no goods, no gold movement); a sale requires holding the item;
+    //! a quantity DECREMENTS on use and, at zero, the next use is refused. Plus the
+    //! forged-turn teeth (underpay / mint / restock) and the honest-scope probe that
+    //! DRIVES why gold is a counter and not a conserved `Effect::Transfer`.
+    use super::*;
+    use dregg_app_framework::CellId;
+    use spween_dregg::{
+        Driver, StepPos, Value, VerifyBreak, WorldError, verify, verify_by_replay,
+        verify_chain_linkage,
+    };
+
+    /// Seed a bazaar at the executor level (the direct-executor tests bypass genesis so
+    /// the executor is the SOLE referee — the same pattern the Keep/Vault tests use).
+    fn seeded(seed: u8, gold: u64) -> WorldCell {
+        let mut world = deploy_bazaar(seed);
+        world.seed_var("gold", Value::Int(gold as i64));
+        world.seed_var("hp", Value::Int(40));
+        world
+    }
+
+    /// A raw `SetField` on a REGISTER slot of the bazaar cell (the forged-turn tests
+    /// drive these directly at the executor, bypassing the honest driver arithmetic).
+    fn raw_set(cell: CellId, slot: u8, value: u64) -> Effect {
+        stash_effect(cell, slot as u64, value)
+    }
+
+    /// The executor's VERBATIM refusal reason (panics if the turn was not refused).
+    /// The refusal tests below check the reason against the SPECIFIC tooth that bit —
+    /// so a test cannot pass on an incidental error that merely happens to refuse.
+    fn why<T: std::fmt::Debug>(out: Result<T, WorldError>) -> String {
+        match out {
+            Err(WorldError::Refused(reason)) => reason,
+            other => panic!("expected a REAL executor refusal, got {other:?}"),
+        }
+    }
+
+    /// How the executor reports an exact-delta (`FieldDelta`) violation on a slot.
+    fn delta_violation(slot: u8) -> String {
+        format!("field[{slot}] != old + delta")
+    }
+
+    /// The slot of a named bazaar var (the refusal reasons name slots, not var names).
+    fn slot_of(name: &str) -> u8 {
+        keep_slot(&bazaar_compiled(), name)
+    }
+
+    /// Every economy rule is a REAL kernel predicate: introspect the installed program
+    /// and read back the exact-payment / exact-delivery / stock / solvency / decrement
+    /// teeth. (Not a name: the constraint VALUES are checked against the posted prices.)
+    #[test]
+    fn bazaar_economy_teeth_are_real_kernel_predicates() {
+        let story = bazaar_compiled();
+        let gold = keep_slot(&story, "gold");
+        let potions = keep_slot(&story, "potions");
+        let potions_bought = keep_slot(&story, "potions_bought");
+        let torches = keep_slot(&story, "torches");
+        let amulet = keep_slot(&story, "amulet");
+        let hp = keep_slot(&story, "hp");
+
+        // BUY: the purse falls by EXACTLY the posted price, and exactly one potion lands.
+        let buy = case_constraints(&story, &choice_method(ROOM_BAZAAR, BAZ_BUY_POTION));
+        assert!(
+            buy.contains(&exact_delta(gold, -(POTION_PRICE as i64))),
+            "buy pays EXACTLY {POTION_PRICE} (FieldDelta on gold); got {buy:?}"
+        );
+        assert!(
+            buy.contains(&exact_delta(potions, 1)),
+            "buy delivers EXACTLY one potion (FieldDelta); got {buy:?}"
+        );
+        // ...and the merchant's stock caps the purchase tally (a real FieldLte).
+        assert!(
+            buy.iter().any(|c| matches!(
+                c,
+                StateConstraint::FieldLte { index, value }
+                    if *index == potions_bought && *value == field_from_u64(POTION_STOCK)
+            )),
+            "the merchant's stock is FieldLte(potions_bought, {POTION_STOCK}); got {buy:?}"
+        );
+        assert!(
+            buy.iter().any(
+                |c| matches!(c, StateConstraint::Monotonic { index } if *index == potions_bought)
+            ),
+            "the purchase tally ratchets (no forged restock); got {buy:?}"
+        );
+
+        // BUNDLE: one purchase delivers a QUANTITY of three.
+        let torch = case_constraints(&story, &choice_method(ROOM_BAZAAR, BAZ_BUY_TORCHES));
+        assert!(
+            torch.contains(&exact_delta(torches, TORCH_BUNDLE as i64)),
+            "the bundle delivers EXACTLY {TORCH_BUNDLE} torches; got {torch:?}"
+        );
+
+        // SELL: give up exactly one amulet, receive exactly the posted price.
+        let sell = case_constraints(&story, &choice_method(ROOM_BAZAAR, BAZ_SELL_AMULET));
+        assert!(
+            sell.contains(&exact_delta(amulet, -1)),
+            "a sale gives up EXACTLY one amulet (and 0-held ⇒ refused); got {sell:?}"
+        );
+        assert!(
+            sell.contains(&exact_delta(gold, AMULET_PRICE as i64)),
+            "a sale pays EXACTLY {AMULET_PRICE} (no minting); got {sell:?}"
+        );
+
+        // The counting-room door is a real compiler-emitted SOLVENCY gate on gold — and
+        // it is fully executor-enforced (the move does not touch gold, so the threshold
+        // survives the net-delta lift: a genuine FieldGte, not a vacuous `>= 0`).
+        let m_door = choice_method(ROOM_BAZAAR, BAZ_COUNTING_ROOM);
+        assert_eq!(
+            story.fully_gated.get(&m_door),
+            Some(&true),
+            "the counting-room door is fully executor-enforced"
+        );
+        let door = case_constraints(&story, &m_door);
+        assert!(
+            door.iter().any(|c| matches!(
+                c,
+                StateConstraint::FieldGte { index, value }
+                    if *index == gold && *value == field_from_u64(COUNTING_ROOM_TOLL)
+            )),
+            "the door is FieldGte(gold, {COUNTING_ROOM_TOLL}); got {door:?}"
+        );
+
+        // QUANTITY decrements: drinking and lighting each take exactly one off the stack.
+        let drink = case_constraints(&story, &choice_method(ROOM_OSSUARY, BAZ_DRINK));
+        assert!(
+            drink.contains(&exact_delta(potions, -1)),
+            "a drink decrements the held potion count by EXACTLY one; got {drink:?}"
+        );
+        assert!(
+            drink.contains(&exact_delta(hp, POTION_HEAL as i64)),
+            "a drink heals EXACTLY {POTION_HEAL} (no ghost-heal); got {drink:?}"
+        );
+        let light = case_constraints(&story, &choice_method(ROOM_OSSUARY, BAZ_LIGHT_TORCH));
+        assert!(
+            light.contains(&exact_delta(torches, -1)),
+            "lighting decrements the held torch count by EXACTLY one; got {light:?}"
+        );
+
+        // The HP floor still bites (the compiler's FieldGte(hp, 1) on the blow).
+        let blow = case_constraints(&story, &choice_method(ROOM_OSSUARY, BAZ_TRADE_BLOW));
+        assert!(
+            blow.iter().any(|c| matches!(
+                c,
+                StateConstraint::FieldGte { index, value }
+                    if *index == hp && *value == field_from_u64(1)
+            )),
+            "the warden's blow is FieldGte(hp, 1); got {blow:?}"
+        );
+    }
+
+    /// BUY WITH ENOUGH GOLD — DRIVEN. The purchase COMMITS as a real `TurnReceipt`:
+    /// the purse falls by exactly the price, the potion lands, the merchant's tally
+    /// bumps. And spending your LAST coin (gold == price) commits exactly.
+    #[test]
+    fn buy_with_enough_gold_commits_gold_down_item_up() {
+        let s = bazaar_scene();
+        let world = seeded(50, OPENING_PURSE);
+        let buy = choice_at(&s, ROOM_BAZAAR, BAZ_BUY_POTION);
+
+        let r = world
+            .apply_choice(ROOM_BAZAAR, BAZ_BUY_POTION, &buy)
+            .expect("a purchase you can afford commits");
+        assert_eq!(
+            world.read_var("gold"),
+            OPENING_PURSE - POTION_PRICE,
+            "the purse fell by exactly the posted price"
+        );
+        assert_eq!(world.read_var("potions"), 1, "the potion landed");
+        assert_eq!(world.read_var("potions_bought"), 1, "the tally bumped");
+        assert_ne!(r.turn_hash, [0u8; 32], "a genuine committed turn");
+
+        // The BOUNDARY: a purse of exactly the price buys exactly once, to zero.
+        let broke = seeded(51, POTION_PRICE);
+        broke
+            .apply_choice(ROOM_BAZAAR, BAZ_BUY_POTION, &buy)
+            .expect("spending your last coin commits (new == 0 == old − price)");
+        assert_eq!(broke.read_var("gold"), 0, "the purse is empty");
+        assert_eq!(broke.read_var("potions"), 1, "and the potion landed");
+
+        // ...and the NEXT purchase, now broke, is refused (see the refusal test).
+        assert!(matches!(
+            broke.apply_choice(ROOM_BAZAAR, BAZ_BUY_POTION, &buy),
+            Err(WorldError::Refused(_))
+        ));
+    }
+
+    /// BUY WITH TOO LITTLE GOLD — DRIVEN. The REAL executor REFUSES the purchase (the
+    /// clamped underflow is not `old − price`, so the exact-payment `FieldDelta` fails)
+    /// and NOTHING commits: no potion, no gold movement, no tally bump (anti-ghost).
+    /// This is the tooth the vacuous `FieldGte(gold, 0)` lift would have missed.
+    #[test]
+    fn buy_with_insufficient_gold_refused_no_item_gold_unchanged() {
+        let s = bazaar_scene();
+        let world = seeded(52, 30); // 30 gold; a potion costs 50.
+        let buy = choice_at(&s, ROOM_BAZAAR, BAZ_BUY_POTION);
+
+        let reason = why(world.apply_choice(ROOM_BAZAAR, BAZ_BUY_POTION, &buy));
+        assert!(
+            reason.contains(&delta_violation(slot_of("gold"))),
+            "the purchase is refused by the EXACT-PAYMENT tooth on gold (the clamped \
+             underflow is not `old − price`); got: {reason}"
+        );
+        assert_eq!(
+            world.read_var("gold"),
+            30,
+            "anti-ghost: the purse is intact"
+        );
+        assert_eq!(world.read_var("potions"), 0, "anti-ghost: no potion landed");
+        assert_eq!(
+            world.read_var("potions_bought"),
+            0,
+            "anti-ghost: the merchant's tally did not move"
+        );
+
+        // The goods NEVER arrive without payment: a FORGED raw turn that takes the
+        // potion while underpaying (or not paying at all) fails the same tooth.
+        let cell = world.cell_id();
+        let story = bazaar_compiled();
+        let gold = keep_slot(&story, "gold");
+        let potions = keep_slot(&story, "potions");
+        let shoplift = why(world.apply_raw(
+            &choice_method(ROOM_BAZAAR, BAZ_BUY_POTION),
+            vec![raw_set(cell, gold, 30), raw_set(cell, potions, 1)],
+        ));
+        assert!(
+            shoplift.contains(&delta_violation(gold)),
+            "taking the potion without paying is refused by the exact-payment tooth; \
+             got: {shoplift}"
+        );
+        assert_eq!(
+            world.read_var("potions"),
+            0,
+            "anti-ghost: nothing shoplifted"
+        );
+    }
+
+    /// SELL REQUIRES HOLDING — DRIVEN. Selling an amulet you do not hold is a REAL
+    /// executor refusal (the exact `−1` decrement cannot land from zero) and mints no
+    /// gold. After robbing the niche the SAME move commits: the amulet leaves, the gold
+    /// arrives — and a second sale is refused again (you sold the only one you had).
+    #[test]
+    fn sell_requires_holding_the_item() {
+        let s = bazaar_scene();
+        let world = seeded(53, 0);
+        let sell = choice_at(&s, ROOM_BAZAAR, BAZ_SELL_AMULET);
+        let rob = choice_at(&s, ROOM_OSSUARY, BAZ_ROB_NICHE);
+
+        // Sell with nothing held: refused, and no gold is minted.
+        let reason = why(world.apply_choice(ROOM_BAZAAR, BAZ_SELL_AMULET, &sell));
+        assert!(
+            reason.contains(&delta_violation(slot_of("amulet"))),
+            "selling an item you do not hold is refused by the `−1` decrement tooth on \
+             the amulet (it cannot land from zero); got: {reason}"
+        );
+        assert_eq!(world.read_var("gold"), 0, "anti-ghost: no gold was minted");
+        assert_eq!(
+            world.read_var("amulet"),
+            0,
+            "anti-ghost: no amulet appeared"
+        );
+
+        // Rob the niche, then the same sale commits: item out, gold in.
+        world
+            .apply_choice(ROOM_OSSUARY, BAZ_ROB_NICHE, &rob)
+            .expect("robbing the niche commits");
+        assert_eq!(world.read_var("amulet"), 1, "the amulet is held");
+
+        let r = world
+            .apply_choice(ROOM_BAZAAR, BAZ_SELL_AMULET, &sell)
+            .expect("selling an amulet you HOLD commits");
+        assert_eq!(world.read_var("amulet"), 0, "the amulet left the pack");
+        assert_eq!(
+            world.read_var("gold"),
+            AMULET_PRICE,
+            "the merchant paid the posted price"
+        );
+        assert_ne!(r.turn_hash, [0u8; 32]);
+
+        // A second sale of the one amulet you had: refused (nothing left to give).
+        let again = world.apply_choice(ROOM_BAZAAR, BAZ_SELL_AMULET, &sell);
+        assert!(
+            matches!(again, Err(WorldError::Refused(_))),
+            "selling the amulet twice is refused, got {again:?}"
+        );
+        assert_eq!(
+            world.read_var("gold"),
+            AMULET_PRICE,
+            "anti-ghost: the double sale minted nothing"
+        );
+
+        // And the niche is not a money press: robbing it a SECOND time is refused
+        // (FieldLte(niches_robbed, 1)) — so the amulet cannot be farmed for gold.
+        let reprise = world.apply_choice(ROOM_OSSUARY, BAZ_ROB_NICHE, &rob);
+        assert!(
+            matches!(reprise, Err(WorldError::Refused(_))),
+            "the niche holds exactly one amulet; a second robbery is refused, got {reprise:?}"
+        );
+        assert_eq!(world.read_var("amulet"), 0, "anti-ghost: no second amulet");
+    }
+
+    /// A FORGED SALE cannot mint gold: a raw turn dispatching the sell method while
+    /// writing an inflated purse fails the exact-price `FieldDelta`. The price schedule
+    /// is the kernel's, not the client's.
+    #[test]
+    fn forged_sale_cannot_mint_gold() {
+        let s = bazaar_scene();
+        let world = seeded(54, 0);
+        let cell = world.cell_id();
+        let story = bazaar_compiled();
+        let gold = keep_slot(&story, "gold");
+        let amulet = keep_slot(&story, "amulet");
+
+        world
+            .apply_choice(
+                ROOM_OSSUARY,
+                BAZ_ROB_NICHE,
+                &choice_at(&s, ROOM_OSSUARY, BAZ_ROB_NICHE),
+            )
+            .expect("rob the niche");
+
+        // The honest sale would write gold = 120. Forge 9_999 instead.
+        let minted = why(world.apply_raw(
+            &choice_method(ROOM_BAZAAR, BAZ_SELL_AMULET),
+            vec![raw_set(cell, amulet, 0), raw_set(cell, gold, 9_999)],
+        ));
+        assert!(
+            minted.contains(&delta_violation(gold)),
+            "a forged over-payment is refused by the exact-price tooth on gold; got: {minted}"
+        );
+        assert_eq!(world.read_var("gold"), 0, "anti-ghost: no gold was minted");
+        assert_eq!(
+            world.read_var("amulet"),
+            1,
+            "anti-ghost: the amulet is still held"
+        );
+    }
+
+    /// QUANTITIES — DRIVEN. One purchase delivers a STACK of three torches; each use
+    /// decrements the held count by exactly one on a real committed turn (3 → 2 → 1 → 0);
+    /// and the FOURTH use — the stack now empty — is a REAL executor refusal.
+    #[test]
+    fn quantity_decrements_on_use_and_hits_zero() {
+        let s = bazaar_scene();
+        let world = seeded(55, TORCH_BUNDLE_PRICE);
+        let buy = choice_at(&s, ROOM_BAZAAR, BAZ_BUY_TORCHES);
+        let light = choice_at(&s, ROOM_OSSUARY, BAZ_LIGHT_TORCH);
+
+        // A use BEFORE the purchase: nothing held ⇒ refused.
+        let empty = world.apply_choice(ROOM_OSSUARY, BAZ_LIGHT_TORCH, &light);
+        assert!(
+            matches!(empty, Err(WorldError::Refused(_))),
+            "lighting a torch you do not hold is refused, got {empty:?}"
+        );
+        assert_eq!(
+            world.read_var("wards_lit"),
+            0,
+            "anti-ghost: no ward was lit"
+        );
+
+        // Buy the bundle: one turn, a QUANTITY of three lands.
+        world
+            .apply_choice(ROOM_BAZAAR, BAZ_BUY_TORCHES, &buy)
+            .expect("the bundle purchase commits");
+        assert_eq!(
+            world.read_var("torches"),
+            TORCH_BUNDLE,
+            "three torches held"
+        );
+        assert_eq!(world.read_var("gold"), 0, "paid exactly for the bundle");
+
+        // Spend the stack: 3 → 2 → 1 → 0, each a real committed turn.
+        for expect_left in (0..TORCH_BUNDLE).rev() {
+            let r = world
+                .apply_choice(ROOM_OSSUARY, BAZ_LIGHT_TORCH, &light)
+                .expect("lighting a held torch commits");
+            assert_ne!(r.turn_hash, [0u8; 32]);
+            assert_eq!(
+                world.read_var("torches"),
+                expect_left,
+                "the held count decremented by exactly one"
+            );
+        }
+        assert_eq!(world.read_var("torches"), 0, "the stack is spent");
+        assert_eq!(world.read_var("wards_lit"), TORCH_BUNDLE, "three wards lit");
+
+        // The stack is EMPTY: the next use is a real executor refusal (anti-ghost).
+        let spent = why(world.apply_choice(ROOM_OSSUARY, BAZ_LIGHT_TORCH, &light));
+        assert!(
+            spent.contains(&delta_violation(slot_of("torches"))),
+            "using a spent stack is refused by the `−1` decrement tooth on the held count \
+             (it cannot go below zero); got: {spent}"
+        );
+        assert_eq!(
+            world.read_var("wards_lit"),
+            TORCH_BUNDLE,
+            "anti-ghost: no fourth ward was lit"
+        );
+    }
+
+    /// The MERCHANT'S STOCK — DRIVEN. Two potions exist to be sold. With gold in hand
+    /// the first two purchases commit; the THIRD is a REAL executor refusal (`FieldLte`
+    /// on the purchase tally) even though the purse can afford it — and a forged
+    /// "restock" (rewinding the tally in a raw turn) is refused by the `Monotonic`
+    /// ratchet.
+    #[test]
+    fn merchant_stock_caps_purchases_and_a_forged_restock_is_refused() {
+        let s = bazaar_scene();
+        let world = seeded(56, 500); // plenty of gold — stock, not money, is the bound.
+        let buy = choice_at(&s, ROOM_BAZAAR, BAZ_BUY_POTION);
+
+        for n in 1..=POTION_STOCK {
+            world
+                .apply_choice(ROOM_BAZAAR, BAZ_BUY_POTION, &buy)
+                .unwrap_or_else(|e| panic!("purchase {n} (within stock) commits: {e}"));
+        }
+        assert_eq!(world.read_var("potions_bought"), POTION_STOCK);
+        assert_eq!(world.read_var("potions"), POTION_STOCK);
+
+        // The stock is exhausted: the next purchase is refused, gold in hand or not —
+        // and it is the STOCK CAP that bites (the purse could afford it).
+        let gold_before = world.read_var("gold");
+        let sold_out = why(world.apply_choice(ROOM_BAZAAR, BAZ_BUY_POTION, &buy));
+        assert!(
+            sold_out.contains(&format!("field[{}] > maximum", slot_of("potions_bought"))),
+            "buying past the merchant's stock is refused by the FieldLte stock cap on the \
+             purchase tally (not by the purse); got: {sold_out}"
+        );
+        assert_eq!(
+            world.read_var("gold"),
+            gold_before,
+            "anti-ghost: nothing paid"
+        );
+        assert_eq!(
+            world.read_var("potions"),
+            POTION_STOCK,
+            "anti-ghost: no potion beyond the stock"
+        );
+
+        // A FORGED restock — a raw buy-turn that pays honestly but rewinds the tally to
+        // 0 to slip under the cap — is refused by the Monotonic ratchet.
+        let cell = world.cell_id();
+        let story = bazaar_compiled();
+        let gold = keep_slot(&story, "gold");
+        let potions = keep_slot(&story, "potions");
+        let bought = keep_slot(&story, "potions_bought");
+        let restock = why(world.apply_raw(
+            &choice_method(ROOM_BAZAAR, BAZ_BUY_POTION),
+            vec![
+                raw_set(cell, gold, gold_before - POTION_PRICE),
+                raw_set(cell, potions, POTION_STOCK + 1),
+                raw_set(cell, bought, 0),
+            ],
+        ));
+        assert!(
+            restock.contains(&format!("field[{bought}] decreased")),
+            "a forged restock (rewinding the merchant's tally) is refused by the Monotonic \
+             ratchet; got: {restock}"
+        );
+        assert_eq!(
+            world.read_var("potions_bought"),
+            POTION_STOCK,
+            "anti-ghost: the merchant's tally is intact"
+        );
+    }
+
+    /// The SOLVENCY gate — DRIVEN. The counting-room door demands you can SHOW 100 gold
+    /// (a real compiler-emitted `FieldGte(gold, 100)`, non-vacuous because the move does
+    /// not touch gold). Broke, you are refused at the door; after selling the amulet the
+    /// same move commits and carries you through.
+    #[test]
+    fn counting_room_door_is_a_real_solvency_gate() {
+        let s = bazaar_scene();
+        let world = seeded(57, 40); // 40 gold; the door wants 100.
+        let door = choice_at(&s, ROOM_BAZAAR, BAZ_COUNTING_ROOM);
+
+        let counting_room = *bazaar_compiled()
+            .passage_index
+            .get(ROOM_COUNTING_ROOM)
+            .expect("the counting room is a passage");
+
+        let refused = world.apply_choice(ROOM_BAZAAR, BAZ_COUNTING_ROOM, &door);
+        assert!(
+            matches!(refused, Err(WorldError::Refused(_))),
+            "a pauper is refused at the counting-room door, got {refused:?}"
+        );
+        assert_ne!(
+            world.read_passage(),
+            Some(counting_room),
+            "anti-ghost: the door did not open"
+        );
+
+        // Rob the niche, sell the amulet (40 + 120 = 160), and the door opens.
+        world
+            .apply_choice(
+                ROOM_OSSUARY,
+                BAZ_ROB_NICHE,
+                &choice_at(&s, ROOM_OSSUARY, BAZ_ROB_NICHE),
+            )
+            .expect("rob the niche");
+        world
+            .apply_choice(
+                ROOM_BAZAAR,
+                BAZ_SELL_AMULET,
+                &choice_at(&s, ROOM_BAZAAR, BAZ_SELL_AMULET),
+            )
+            .expect("sell the amulet");
+        assert_eq!(world.read_var("gold"), 40 + AMULET_PRICE);
+
+        world
+            .apply_choice(ROOM_BAZAAR, BAZ_COUNTING_ROOM, &door)
+            .expect("solvent, the door opens and the move commits");
+        assert_eq!(
+            world.read_passage(),
+            Some(counting_room),
+            "into the counting room"
+        );
+    }
+
+    /// A FULL SHOPPING PLAYTHROUGH over the stock runtime — buy, spend the goods, rob,
+    /// sell, pay in, seize — commits a real receipt chain through every economy tooth
+    /// and RE-VERIFIES by replay against a fresh, identically-seeded, identically-
+    /// augmented Bazaar.
+    #[test]
+    fn full_bazaar_playthrough_reverifies() {
+        let s = bazaar_scene();
+        let mut driver = Driver::start(deploy_bazaar(58), &s).expect("start the bazaar");
+
+        // The purse opens at 120 (a genesis entry effect on the coast road).
+        assert_eq!(driver.world().read_var("gold"), OPENING_PURSE);
+
+        driver.advance(BAZ_ENTER).expect("under the awnings");
+        driver.advance(BAZ_BUY_POTION).expect("buy a potion"); // gold 120→70, potions 1
+        driver.advance(BAZ_BUY_TORCHES).expect("buy torches"); // gold 70→40, torches 3
+        driver.advance(BAZ_TO_OSSUARY).expect("down to the ossuary");
+        driver.advance(BAZ_ROB_NICHE).expect("rob the niche"); // amulet 1
+        driver.advance(BAZ_TRADE_BLOW).expect("trade a blow"); // hp 40→25 (FieldGte)
+        driver.advance(BAZ_DRINK).expect("drink the potion"); // potions 1→0, hp 25→50
+        driver.advance(BAZ_LIGHT_TORCH).expect("light a torch"); // torches 3→2
+        driver.advance(BAZ_CLIMB_BACK).expect("back to the bazaar");
+        driver.advance(BAZ_SELL_AMULET).expect("sell the amulet"); // gold 40→160, amulet 0
+        driver
+            .advance(BAZ_COUNTING_ROOM)
+            .expect("pay into the counting room"); // gold ≥ 100
+        driver.advance(BAZ_SEIZE).expect("seize the takings"); // gold 160→660
+
+        assert!(driver.is_ended(), "the bazaar is cleared");
+        let w = driver.world();
+        assert_eq!(
+            w.read_var("gold"),
+            OPENING_PURSE - POTION_PRICE - TORCH_BUNDLE_PRICE
+                + AMULET_PRICE
+                + COUNTING_ROOM_TAKINGS,
+            "the purse balances: 120 − 50 − 30 + 120 + 500"
+        );
+        assert_eq!(w.read_var("potions"), 0, "the potion was drunk");
+        assert_eq!(w.read_var("potions_bought"), 1, "one potion off the stock");
+        assert_eq!(w.read_var("torches"), TORCH_BUNDLE - 1, "one torch burned");
+        assert_eq!(w.read_var("amulet"), 0, "the amulet was sold");
+        assert_eq!(w.read_var("niches_robbed"), 1);
+        assert_eq!(w.read_var("wards_lit"), 1);
+        assert_eq!(w.read_var("hp"), 40 - 15 + POTION_HEAL, "blow then potion");
+
+        let play = driver.playthrough();
+        assert_eq!(play.receipts().len(), 13, "genesis + 12 moves");
+        verify_chain_linkage(&play).expect("the bazaar receipt chain links");
+        verify(deploy_bazaar(58), &s, &play).expect("the honest shopping playthrough re-verifies");
+    }
+
+    /// A RETCONNED shopping record FAILS replay: forge the history so the amulet is SOLD
+    /// before it was ever robbed. The real executor REFUSES the phantom sale on replay
+    /// (or the reproduced state/passage order diverges first) — a forged economy cannot
+    /// pass verification.
+    #[test]
+    fn retconned_shopping_record_fails_replay() {
+        let s = bazaar_scene();
+        let mut driver = Driver::start(deploy_bazaar(59), &s).expect("start the bazaar");
+        driver.advance(BAZ_ENTER).expect("under the awnings");
+        driver.advance(BAZ_TO_OSSUARY).expect("down to the ossuary");
+        driver.advance(BAZ_ROB_NICHE).expect("rob the niche");
+        driver.advance(BAZ_CLIMB_BACK).expect("back to the bazaar");
+        driver.advance(BAZ_SELL_AMULET).expect("sell the amulet");
+        driver
+            .advance(BAZ_COUNTING_ROOM)
+            .expect("pay in (gold 240)");
+        driver.advance(BAZ_SEIZE).expect("seize the takings");
+
+        let play = driver.playthrough();
+        verify(deploy_bazaar(59), &s, &play).expect("the honest record re-verifies");
+
+        // Forge step 2: don't rob the niche — trade a blow instead. The later sale is
+        // now a sale of an amulet that was never held: REFUSED on replay.
+        let mut forged = play.clone();
+        forged.steps[2].choice_index = BAZ_TRADE_BLOW;
+        let out = verify_by_replay(deploy_bazaar(59), &s, &forged);
+        assert!(
+            matches!(
+                out,
+                Err(VerifyBreak::RefusedOnReplay { .. })
+                    | Err(VerifyBreak::PassageOutOfOrder { .. })
+                    | Err(VerifyBreak::StateMismatch {
+                        step: StepPos::Step(_)
+                    })
+            ),
+            "a forged sale (of an unrobbed amulet) fails replay, got {out:?}"
+        );
+    }
+
+    /// HONEST SCOPE, DRIVEN (not asserted): the Bazaar's gold is a COUNTER with an
+    /// exact-delta kernel tooth, NOT a conserved [`Effect::Transfer`] of computrons.
+    /// The substrate HAS the conserved move — and this test drives it to show exactly
+    /// why it is out of reach here: the world-cell is born with **balance 0**, nothing
+    /// in this crate's reach can fund it (`spween-dregg` seeds cell FIELDS, not
+    /// balances), and `Effect::CreateCell` refuses a nonzero balance (no minting) — so
+    /// the conserved move is REFUSED for insufficient balance. A conserved economy needs
+    /// a funded merchant CELL (the multi-cell rung), not this single-cell universe.
+    #[test]
+    fn conserved_transfer_is_out_of_reach_gold_is_a_counter() {
+        // A bazaar with ONE extra, deliberately unconstrained case, so that the ONLY
+        // thing that can refuse the transfer is the KERNEL's balance arithmetic — not a
+        // missing program case (unknown methods are default-denied).
+        const PROBE: &str = "transfer_probe";
+        let mut story = bazaar_compiled();
+        add_case(&mut story.program, PROBE, vec![]);
+        let world = WorldCell::deploy_compiled(Arc::new(story), 60).expect("the probe deploys");
+        let cell = world.cell_id();
+
+        // Birth a merchant cell (balance 0 — the kernel refuses any other), then try to
+        // pay it 50 computrons out of the world-cell's purse.
+        let merchant = CellId::derive_raw(&[0xBA; 32], &[0x2A; 32]);
+        let out = world.apply_raw(
+            PROBE,
+            vec![
+                Effect::CreateCell {
+                    public_key: [0xBA; 32],
+                    token_id: [0x2A; 32],
+                    balance: 0,
+                },
+                Effect::Transfer {
+                    from: cell,
+                    to: merchant,
+                    amount: 50,
+                },
+            ],
+        );
+        let WorldError::Refused(why) = out.expect_err("the conserved transfer cannot commit")
+        else {
+            panic!("expected a real executor refusal");
+        };
+        assert!(
+            why.to_lowercase().contains("insufficient balance"),
+            "the world-cell holds 0 computrons: the conserved move is refused for \
+             insufficient balance (this is WHY gold is a counter here), got: {why}"
+        );
+
+        // Meanwhile the COUNTER economy is fully executor-refereed on the same cell.
+        let s = bazaar_scene();
+        let shop = seeded(61, OPENING_PURSE);
+        shop.apply_choice(
+            ROOM_BAZAAR,
+            BAZ_BUY_POTION,
+            &choice_at(&s, ROOM_BAZAAR, BAZ_BUY_POTION),
+        )
+        .expect("the counter economy's buy commits under its exact-payment tooth");
+        assert_eq!(shop.read_var("gold"), OPENING_PURSE - POTION_PRICE);
+    }
+}
