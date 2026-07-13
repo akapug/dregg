@@ -43,6 +43,7 @@ decode fields come from the discharge lemmas (`rfl` columns + the named publish 
 import Dregg2.Circuit.ClosureDesignationDischarge
 import Dregg2.Circuit.RotatedKernelRefinementIncNonce
 import Dregg2.Circuit.RotatedKernelRefinementMintBurn
+import Dregg2.Circuit.RotatedKernelRefinementSetField
 
 namespace Dregg2.Circuit.ClosureFloorReduceFanout
 
@@ -51,7 +52,10 @@ open Dregg2.Circuit.ClosureColumnDischarge (decodeCellPre decodeCellPost)
 open Dregg2.Circuit.Emit.EffectVmEmit
 open Dregg2.Circuit.Emit.EffectVmEmitTransferSound (CellState)
 open Dregg2.Circuit.RotatedKernelRefinementIncNonce (rotatedEncodesIncNonce)
-open Dregg2.Circuit.RotatedKernelRefinementMintBurn (rotatedEncodesMint)
+open Dregg2.Circuit.RotatedKernelRefinementMintBurn (rotatedEncodesMint rotatedEncodesBurn)
+open Dregg2.Circuit.RotatedKernelRefinementSetField (rotatedEncodesSF)
+open Dregg2.Circuit.Emit.EffectVmEmitSetField (IsSetFieldRow SetFieldRowCanon RowEncodesSF slotName)
+open Dregg2.Circuit.Spec.CellStateField (SetFieldGuard setFieldCellMap)
 open Dregg2.Exec
 open Dregg2.Exec.TurnExecutorFull
 
@@ -236,9 +240,206 @@ def rotatedEncodesMint_of_residual (hash : List ℤ → ℤ)
   frCommitmentsRoot := r.frCommitmentsRoot
   logAdv := r.logAdv
 
-/-! ## §3 — axiom hygiene. -/
+/-! ## §3 — burn (value-carrying, the mint twin): the column-free residual + the rebuild.
+
+Burn's `rotatedEncodesBurn` is the value-carrying twin of `rotatedEncodesMint` — it carries `holderPre`/
+`holderPost` (decoded `CellState`s) + `hdiEnc : EffectVmEmitBurn.RowEncodes (envAt t di) holderPre amt
+holderPost`, the mechanical column decode. The reduction is IDENTICAL to mint, only the value column is
+burn's `param.BURN_AMOUNT_LO` (not mint's `VALUE_LO`) and the ledger frame is the debit-to-well image. -/
+
+/-- **`BurnReadoutResidual` — the column-free carry of `rotatedEncodesBurn`.** The designation `di` (+
+its ACTIVE/not-last flag), the row shape, the two publish ties + the value-column tie, and the GENUINE
+ledger residual (the limb ties — the surface seam — the ledger frame, the `BurnGuard` legs incl. the
+NAMED availability residual, the 18 frame fields, the log advance). NO `holderPre`/`holderPost` records,
+NO `RowEncodes` decode. -/
+structure BurnReadoutResidual (hash : List ℤ → ℤ)
+    (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
+    (pre post : RecChainedState) (actor cell : CellId) (a : AssetId) (amt : ℤ) : Type where
+  di : Nat
+  hdi : di < t.rows.length
+  hdiNotLast : di + 1 ≠ t.rows.length
+  hdiRow : Dregg2.Circuit.Emit.EffectVmEmitBurn.IsBurnRow (envAt t di)
+  -- the two publish ties + the value-column tie that reconstruct the `RowEncodes` decode.
+  hdiOld : (envAt t di).pub pi.OLD_COMMIT = (envAt t di).loc (sbCol state.STATE_COMMIT)
+  hdiNew : (envAt t di).pub pi.NEW_COMMIT = (envAt t di).loc (saCol state.STATE_COMMIT)
+  hAmt : (envAt t di).loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitBurn.param.BURN_AMOUNT_LO) = amt
+  -- the decoded holder limbs ARE the kernel ledger at the burned coordinate (the surface seam).
+  hholderPre  : (decodeCellPre (envAt t di)).balLo  = pre.kernel.bal cell a
+  hholderPost : (decodeCellPost (envAt t di)).balLo = post.kernel.bal cell a
+  hledgerFrame : post.kernel.bal = recTransferBal pre.kernel.bal cell a a amt
+  guardAuth : actor = cell ∨ mintAuthorizedB pre.kernel.caps actor a = true
+  guardNonNeg : 0 ≤ amt
+  guardAvail : amt ≤ pre.kernel.bal cell a
+  guardLiveCell : cell ∈ pre.kernel.accounts
+  guardLiveWell : a ∈ pre.kernel.accounts
+  guardDistinct : cell ≠ a
+  guardLifecycleLive : cellLifecycleLive pre.kernel a = true
+  frAccounts : post.kernel.accounts = pre.kernel.accounts
+  frCell : post.kernel.cell = pre.kernel.cell
+  frCaps : post.kernel.caps = pre.kernel.caps
+  frNullifiers : post.kernel.nullifiers = pre.kernel.nullifiers
+  frRevoked : post.kernel.revoked = pre.kernel.revoked
+  frCommitments : post.kernel.commitments = pre.kernel.commitments
+  frSlotCaveats : post.kernel.slotCaveats = pre.kernel.slotCaveats
+  frFactories : post.kernel.factories = pre.kernel.factories
+  frLifecycle : post.kernel.lifecycle = pre.kernel.lifecycle
+  frDeathCert : post.kernel.deathCert = pre.kernel.deathCert
+  frDelegate : post.kernel.delegate = pre.kernel.delegate
+  frDelegations : post.kernel.delegations = pre.kernel.delegations
+  frDelegationEpoch : post.kernel.delegationEpoch = pre.kernel.delegationEpoch
+  frDelegationEpochAt : post.kernel.delegationEpochAt = pre.kernel.delegationEpochAt
+  frHeaps : post.kernel.heaps = pre.kernel.heaps
+  frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
+  frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
+  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
+  logAdv : post.log = Dregg2.Circuit.Spec.SupplyDestruction.burnReceipt actor cell a amt :: pre.log
+
+/-- **`rotatedEncodesBurn_of_residual` — the decode column reads DISCHARGED.** The decode is
+`burn_rowEncodes_of_designation` (17 column reads `rfl`, 2 publish ties), its value slot rewritten from
+`(envAt t di).loc (prmCol param.BURN_AMOUNT_LO)` to `amt` by the residual's value-column tie `hAmt`. -/
+def rotatedEncodesBurn_of_residual (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    {pre post : RecChainedState} {actor cell : CellId} {a : AssetId} {amt : ℤ}
+    (r : BurnReadoutResidual hash minit mfin maddrs t pre post actor cell a amt) :
+    rotatedEncodesBurn hash minit mfin maddrs t pre post actor cell a amt where
+  di := r.di
+  hdi := r.hdi
+  hdiNotLast := r.hdiNotLast
+  holderPre := decodeCellPre (envAt t r.di)
+  holderPost := decodeCellPost (envAt t r.di)
+  hdiRow := r.hdiRow
+  hdiEnc := by
+    have h := Dregg2.Circuit.ClosureDesignationDischarge.burn_rowEncodes_of_designation
+      (envAt t r.di) r.hdiOld r.hdiNew
+    rw [r.hAmt] at h
+    exact h
+  hholderPre := r.hholderPre
+  hholderPost := r.hholderPost
+  hledgerFrame := r.hledgerFrame
+  guardAuth := r.guardAuth
+  guardNonNeg := r.guardNonNeg
+  guardAvail := r.guardAvail
+  guardLiveCell := r.guardLiveCell
+  guardLiveWell := r.guardLiveWell
+  guardDistinct := r.guardDistinct
+  guardLifecycleLive := r.guardLifecycleLive
+  frAccounts := r.frAccounts
+  frCell := r.frCell
+  frCaps := r.frCaps
+  frNullifiers := r.frNullifiers
+  frRevoked := r.frRevoked
+  frCommitments := r.frCommitments
+  frSlotCaveats := r.frSlotCaveats
+  frFactories := r.frFactories
+  frLifecycle := r.frLifecycle
+  frDeathCert := r.frDeathCert
+  frDelegate := r.frDelegate
+  frDelegations := r.frDelegations
+  frDelegationEpoch := r.frDelegationEpoch
+  frDelegationEpochAt := r.frDelegationEpochAt
+  frHeaps := r.frHeaps
+  frNullifierRoot := r.frNullifierRoot
+  frRevokedRoot := r.frRevokedRoot
+  frCommitmentsRoot := r.frCommitmentsRoot
+  logAdv := r.logAdv
+
+/-! ## §4 — setField (pre-post + slot + written-value tie): the column-free residual + the rebuild.
+
+`rotatedEncodesSF` carries `cellPre`/`cellPost` + `hwiEnc : RowEncodesSF slot (envAt t wi) cellPre
+cellPost`. The rebuild is `setField_rowEncodes_of_designation` (the HAND variant: the leading `slot :
+Fin 8` binder + the written-value tie `hVal : env.loc (prmCol VALUE) = env.loc (saCol (FIELD_BASE +
+slot))` — the runtime `new_value = param1` write — joins the two publish ties). No `▸`/`rw` on the value
+slot is needed: the discharge concludes `RowEncodesSF slot env (decodeCellPre env) (decodeCellPost env)`
+directly. The kernel write tie `hwval` (`env.loc (prmCol VALUE) = v`), the canonicality envelope, the
+whole-cell move, the guard, and the 18 frame fields are the GENUINE residual — kept. -/
+
+/-- **`SetFieldReadoutResidual` — the column-free carry of `rotatedEncodesSF slot`.** Drops `cellPre`/
+`cellPost` + `hwiEnc`; adds the two publish ties `hwiOld`/`hwiNew` + the discharge's written-value tie
+`hVal`; keeps the designation `wi` (+ ACTIVE/not-last flag), the row shape, the canonicality envelope
+`hwiCanon`, the kernel-write tie `hwval`, the whole-cell move, the guard, the log, and the 18 frame
+fields. -/
+structure SetFieldReadoutResidual (slot : Fin 8) (hash : List ℤ → ℤ)
+    (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
+    (pre post : RecChainedState) (actor cell : CellId) (v : Int) : Type where
+  wi : Nat
+  hwi : wi < t.rows.length
+  hwiNotLast : wi + 1 ≠ t.rows.length
+  hwiRow : IsSetFieldRow (envAt t wi)
+  hwiCanon : SetFieldRowCanon (envAt t wi)
+  -- the two publish ties + the discharge's written-value tie (`param1 = fields[slot]_after`).
+  hwiOld : (envAt t wi).pub pi.OLD_COMMIT = (envAt t wi).loc (sbCol state.STATE_COMMIT)
+  hwiNew : (envAt t wi).pub pi.NEW_COMMIT = (envAt t wi).loc (saCol state.STATE_COMMIT)
+  hVal : (envAt t wi).loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitSetField.VALUE)
+    = (envAt t wi).loc (saCol (state.FIELD_BASE + slot.val))
+  -- the kernel write value tie (`param1 = v`) — the boundary seam to the kernel write.
+  hwval : (envAt t wi).loc (prmCol Dregg2.Circuit.Emit.EffectVmEmitSetField.VALUE) = v
+  hcellMove : post.kernel.cell = setFieldCellMap pre.kernel.cell cell (slotName slot) v
+  logAdv : post.log = { actor := actor, src := cell, dst := cell, amt := 0 } :: pre.log
+  guard : SetFieldGuard pre actor cell (slotName slot) v
+  frAccounts : post.kernel.accounts = pre.kernel.accounts
+  frCaps : post.kernel.caps = pre.kernel.caps
+  frNullifiers : post.kernel.nullifiers = pre.kernel.nullifiers
+  frRevoked : post.kernel.revoked = pre.kernel.revoked
+  frCommitments : post.kernel.commitments = pre.kernel.commitments
+  frBal : post.kernel.bal = pre.kernel.bal
+  frSlotCaveats : post.kernel.slotCaveats = pre.kernel.slotCaveats
+  frFactories : post.kernel.factories = pre.kernel.factories
+  frLifecycle : post.kernel.lifecycle = pre.kernel.lifecycle
+  frDeathCert : post.kernel.deathCert = pre.kernel.deathCert
+  frDelegate : post.kernel.delegate = pre.kernel.delegate
+  frDelegations : post.kernel.delegations = pre.kernel.delegations
+  frDelegationEpoch : post.kernel.delegationEpoch = pre.kernel.delegationEpoch
+  frDelegationEpochAt : post.kernel.delegationEpochAt = pre.kernel.delegationEpochAt
+  frHeaps : post.kernel.heaps = pre.kernel.heaps
+  frNullifierRoot : post.kernel.nullifierRoot = pre.kernel.nullifierRoot
+  frRevokedRoot : post.kernel.revokedRoot = pre.kernel.revokedRoot
+  frCommitmentsRoot : post.kernel.commitmentsRoot = pre.kernel.commitmentsRoot
+
+/-- **`rotatedEncodesSF_of_residual` — the decode column reads DISCHARGED.** `cellPre`/`cellPost` are the
+canonical decoders, and `hwiEnc` is `setField_rowEncodes_of_designation slot` (the 17 column reads + the
+`param1 = fields[slot]` write-tie `rfl`/`hVal`, the 2 publish ties). -/
+def rotatedEncodesSF_of_residual (slot : Fin 8) (hash : List ℤ → ℤ)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    {pre post : RecChainedState} {actor cell : CellId} {v : Int}
+    (r : SetFieldReadoutResidual slot hash minit mfin maddrs t pre post actor cell v) :
+    rotatedEncodesSF slot hash minit mfin maddrs t pre post actor cell v where
+  wi := r.wi
+  hwi := r.hwi
+  hwiNotLast := r.hwiNotLast
+  cellPre := decodeCellPre (envAt t r.wi)
+  cellPost := decodeCellPost (envAt t r.wi)
+  hwiRow := r.hwiRow
+  hwiEnc := Dregg2.Circuit.ClosureDesignationDischarge.setField_rowEncodes_of_designation
+    slot (envAt t r.wi) r.hwiOld r.hwiNew r.hVal
+  hwiCanon := r.hwiCanon
+  hwval := r.hwval
+  hcellMove := r.hcellMove
+  logAdv := r.logAdv
+  guard := r.guard
+  frAccounts := r.frAccounts
+  frCaps := r.frCaps
+  frNullifiers := r.frNullifiers
+  frRevoked := r.frRevoked
+  frCommitments := r.frCommitments
+  frBal := r.frBal
+  frSlotCaveats := r.frSlotCaveats
+  frFactories := r.frFactories
+  frLifecycle := r.frLifecycle
+  frDeathCert := r.frDeathCert
+  frDelegate := r.frDelegate
+  frDelegations := r.frDelegations
+  frDelegationEpoch := r.frDelegationEpoch
+  frDelegationEpochAt := r.frDelegationEpochAt
+  frHeaps := r.frHeaps
+  frNullifierRoot := r.frNullifierRoot
+  frRevokedRoot := r.frRevokedRoot
+  frCommitmentsRoot := r.frCommitmentsRoot
+
+/-! ## §5 — axiom hygiene. -/
 
 #assert_axioms rotatedEncodesIncNonce_of_residual
 #assert_axioms rotatedEncodesMint_of_residual
+#assert_axioms rotatedEncodesBurn_of_residual
+#assert_axioms rotatedEncodesSF_of_residual
 
 end Dregg2.Circuit.ClosureFloorReduceFanout
