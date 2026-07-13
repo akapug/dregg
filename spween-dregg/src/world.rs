@@ -411,7 +411,22 @@ impl CellHandler {
 
 impl EffectHandler for CellHandler {
     fn get_var(&self, name: &str) -> Value {
-        self.overlay.get(name).cloned().unwrap_or(Value::Null)
+        // A full-fidelity mirror of the CELL must match what the executor reads. A var
+        // the compiler gave a numeric slot reads as that slot's field value, and an
+        // unwritten slot is field-ZERO — so an unseeded compiled var is `Int(0)`, the
+        // exact value the executor's post-state gate compares against. Defaulting to
+        // `Null` instead DIVERGES the stock runtime from the executor: an ordered
+        // compare on `Null` is `false` in spween (`value_cmp` returns `None`), so a gate
+        // like `{ heals_used <= 0 }` on a never-initialized var reads UNAVAILABLE on the
+        // replay driver while the executor's lifted tooth (`FieldLte(heals_used, 1)`)
+        // admits it on the live turn — a play-vs-replay split that refuses an honest run
+        // on `verify_by_replay`. A var with NO compiled slot (never touched by any
+        // condition/effect) stays `Null`, as the stock in-memory handler would read it.
+        match self.overlay.get(name) {
+            Some(v) => v.clone(),
+            None if self.story.var_slots.contains_key(name) => Value::Int(0),
+            None => Value::Null,
+        }
     }
 
     fn set_var(&mut self, name: &str, value: Value) {

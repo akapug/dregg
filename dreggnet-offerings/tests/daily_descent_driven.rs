@@ -102,6 +102,128 @@ fn drive_loss<S: dreggnet_offerings::character::CharacterStore>(
     assert!(off.advance(run, 0).landed(), "the defeat passage ends");
 }
 
+/// Find a daily seed whose beacon draw gave a TOUGH warden (HP 60) — the day where the one
+/// field-dressing is REQUIRED to win (measured blows alone strand you below the `{ hp >= 16 }`
+/// floor before the warden falls). Scans `daily_seed` inputs deterministically.
+fn warden_60_seed() -> procgen_dregg::CommittedSeed {
+    for n in 0u32..4096 {
+        let mut input = [0u8; 32];
+        input[..4].copy_from_slice(&n.to_le_bytes());
+        let seed = procgen_dregg::daily_seed(&input);
+        if daily_scene(&seed).warden_hp == 60 {
+            return seed;
+        }
+    }
+    panic!("no warden-HP-60 day found in the scanned seed space");
+}
+
+#[test]
+fn a_warden_60_day_is_won_by_healing_and_re_verifies_and_ranks() {
+    // THE LATENT REPLAY-SOUNDNESS BUG (root cause): the heal's gate `{ heals_used <= 0 }` is on a
+    // var NO entry effect initializes. The live turn (`apply_choice`) never evaluates the spween
+    // condition — the executor checks the lifted tooth `FieldLte(heals_used, 1)` on the slot, which
+    // reads 0 → passes. But replay drives the STOCK spween runtime, which read the unseeded var as
+    // `Null`; `Null <= 0` is `false` → the heal was refused on replay ("choice condition not met"),
+    // excluding a legitimately-healing winner from the no-cheat board. The fix makes the driver's
+    // read model mirror the cell (an unseeded compiled var reads `Int(0)`, as the executor sees it).
+    let off = DailyDescentOffering::new(InMemoryCharacterStore::new());
+    let seed = warden_60_seed();
+    let mut run = off
+        .open_from_seed(player("healer-winner"), seed)
+        .expect("open the tough day");
+    assert_eq!(run.read_var("warden_hp"), 60, "a warden-HP-60 day");
+    off.choose_class(&run, WARRIOR).expect("choose a class");
+
+    // Drive the honest healing win: measured blows down to the HP floor, ONE heal, finish.
+    drive_win(&off, &mut run);
+    assert!(run.is_won(), "the healing line reached the hoard — a win");
+    assert_eq!(run.read_var("gold"), 500, "the hoard is seized");
+    assert_eq!(
+        run.read_var("heals_used"),
+        1,
+        "the win USED the field-dressing"
+    );
+    assert!(!run.is_dead(), "a winner did not perish");
+
+    // The previously-refused heal step now replays cleanly.
+    let report = off.verify(&run);
+    assert!(
+        report.verified,
+        "the legitimately-healing win re-verifies by replay, got: {report:?}"
+    );
+
+    // And it ranks on the no-cheat board.
+    let mut registry = Registry::new();
+    let uid = registry.publish(run.day().universe("the-descent").expect("publish"));
+    let completion = off
+        .completion(&run, "the-descent", "healer-winner")
+        .expect("build the completion");
+    assert_eq!(completion.universe, uid);
+    let accepted = registry
+        .submit(completion)
+        .expect("the verified healing win is accepted + ranked");
+    assert_eq!(accepted.rank, 1, "the healing win ranks #1");
+    registry
+        .reverify_entry(uid, &accepted.completion_id)
+        .expect("the ranked healing entry independently re-verifies");
+}
+
+#[test]
+fn a_forged_double_heal_still_fails_replay_on_a_warden_60_day() {
+    // Non-vacuous: the fix restores a valid replay, it does NOT blind the verifier. A run that
+    // FORGES a second field-dressing (heal twice) must still fail replay — the second heal's gate
+    // `{ heals_used <= 0 }` reads `heals_used == 1` on replay → refused, exactly as the live
+    // executor's `FieldLte(heals_used, 1)` refuses a post-state `heals_used == 2`.
+    let off = DailyDescentOffering::new(InMemoryCharacterStore::new());
+    let seed = warden_60_seed();
+    let mut win = off
+        .open_from_seed(player("honest-healer"), seed)
+        .expect("open");
+    drive_win(&off, &mut win);
+    assert!(win.is_won() && win.read_var("heals_used") == 1);
+    assert!(off.verify(&win).verified, "the honest healing win verifies");
+
+    // FORGE: splice a SECOND heal step in place of a genuine committed step. Reuse the recorded
+    // heal step's receipt/state but re-point another step at the heal choice — the recorded chain
+    // now claims two heals, which the real executor never could have admitted.
+    let honest = off
+        .completion(&win, "the-descent", "honest-healer")
+        .expect("completion");
+    // Locate the honest heal step and forge a second one right after it (same passage `gate`).
+    let heal_pos = honest
+        .play
+        .steps
+        .iter()
+        .position(|s| s.passage == "gate" && s.choice_index == GATE_HEAL)
+        .expect("the honest win has a heal step");
+    let mut forged = honest.clone();
+    // Turn the measured-blow step that FOLLOWS the heal into a second heal (still passage `gate`).
+    let next = &mut forged.play.steps[heal_pos + 1];
+    assert_eq!(
+        next.passage, "gate",
+        "the step after the heal is another gate turn"
+    );
+    next.choice_index = GATE_HEAL;
+    forged.player = "double-healer".to_string();
+
+    let mut registry = Registry::new();
+    let uid = registry.publish(win.day().universe("the-descent").expect("publish"));
+    assert_eq!(forged.universe, uid);
+    let out = registry.submit(forged);
+    assert!(
+        matches!(
+            out,
+            Err(RejectReason::FailedVerification(_)) | Err(RejectReason::DidNotWin)
+        ),
+        "a forged double-heal must still FAIL replay (the verifier still bites), got {out:?}"
+    );
+    // Non-vacuous: the honest single-heal win is accepted on the same board.
+    assert!(
+        registry.submit(honest).is_ok(),
+        "the honest healing win is accepted"
+    );
+}
+
 #[test]
 fn a_forged_beacon_cannot_open_a_day() {
     let off = DailyDescentOffering::new(InMemoryCharacterStore::new());
