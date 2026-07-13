@@ -767,6 +767,9 @@ import Dregg2.Circuit.LightClientDeployedGeneral
 import Dregg2.Circuit.MerkleAcceptForces
 import Dregg2.Circuit.CommitmentReduction
 import Dregg2.Circuit.CollisionReduce
+import Dregg2.Circuit.StateCommitReduce
+import Dregg2.Circuit.Blake3FloorReduce
+import Dregg2.Circuit.DescriptorRefinesReduce
 import Dregg2.Circuit.TraceColumnInterp
 import Dregg2.Circuit.FieldIntegerLift
 import Dregg2.Circuit.FriExtractReal
