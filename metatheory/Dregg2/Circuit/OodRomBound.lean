@@ -219,7 +219,7 @@ theorem ood_nonexceptionality_is_bounded {Ω F : Type} [Fintype Ω] [Fintype F] 
     (perm : List F → List F) (RATE : Nat) (toNat : F → Nat) (params : FriParams)
     (vk : RecursionVk F) (checks : FriChecks F) (initState : List F) (logN : Nat)
     (pub : WrapPublics F) (enc : Ω → List F) (proofOf : Ω → BatchProofData F)
-    (hcommit : ∀ ω, (proofOf ω).traceCommit = enc ω)
+    (hcommit : ∀ ω, (proofOf ω).traceCommit ++ pub.segment = enc ω)
     (hrom : RomUniformDerive perm RATE initState enc) (R : Polynomial F) :
     winProb (fun ω =>
         verifyAlgoTB perm RATE toNat params vk checks initState logN (proofOf ω) pub
@@ -271,7 +271,7 @@ theorem hnonexc_clause_bounded_babybear {Ω : Type} [Fintype Ω]
     (params : FriParams) (vk : RecursionVk BabyBear) (checks : FriChecks BabyBear)
     (initState : List BabyBear) (logN : Nat) (pub : WrapPublics BabyBear)
     (enc : Ω → List BabyBear) (proofOf : Ω → BatchProofData BabyBear)
-    (hcommit : ∀ ω, (proofOf ω).traceCommit = enc ω)
+    (hcommit : ∀ ω, (proofOf ω).traceCommit ++ pub.segment = enc ω)
     (hrom : RomUniformDerive perm RATE initState enc)
     (d : EffectVmDescriptor2) (t : VmTrace)
     (qp : VmConstraint2 → Polynomial BabyBear) (c : VmConstraint2) :
