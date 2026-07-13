@@ -1,0 +1,41 @@
+# `dreggnet-doc` — DreggNet Cloud offering: THE COLLABORATIVE DOCUMENT.
+#
+# The dungeon is offering #0 (a confined narrative world); the council and the
+# market are the deliberation/commerce offerings. This is the PRODUCTIVITY one:
+# a shared document N actors open, edit, and verify — each edit a real
+# executor-refereed turn, a conflicting or unauthorized edit a real refusal, and
+# `verify()` a full re-drive of the edit chain from genesis.
+#
+# It CONSUMES the real document substrate (`dregg-doc`): the patch theory
+# (`DocGraph`/`Patch`/`History`), the conflict semantics (`content`'s antichain +
+# the `Regime` classifier), and the executor-drive seam (`ExecutorDrivenDoc` — the
+# crate's SOLE `TurnExecutor::execute` entry, where the per-region edit cap is
+# enforced). It re-implements NO document semantics.
+#
+# A breadstuffs workspace MEMBER (registered in `members`, not `default-members`
+# — like `dreggnet-offerings`, it is a narrative-adjacent offering crate). Build/test:
+#   cargo test -p dreggnet-doc
+[package]
+name = "dreggnet-doc"
+version = "0.1.0"
+edition = "2024"
+description = "The collaborative-document DreggNet offering: a DocOffering over the real dregg-doc substrate — open a shared doc, edit it (each edit one cap-gated finalized executor turn), and re-verify the whole edit chain by replay."
+
+[dependencies]
+# THE OFFERING CORE — `Offering`/`Action`/`Outcome`/`Surface`/`VerifyReport`/
+# `RecordVerify`/`DreggIdentity`. Unmodified: this crate is a new INSTANCE of the
+# abstraction, not a change to it.
+dreggnet-offerings = { path = "../dreggnet-offerings" }
+# THE DOCUMENT SUBSTRATE — the Pijul-shaped patch theory + the executor-drive seam.
+# `features = ["substrate"]` is what turns a document into a real `dregg_cell::Cell`
+# and an edit into a real `dregg_turn::Turn` through the genuine `TurnExecutor`
+# (cap-gated, finalized, journaled). Same feature `forge-ci-runner` rides.
+dregg-doc = { path = "../dregg-doc", features = ["substrate"] }
+# `TurnReceipt` / `TurnError` — named in this crate's public API. The SAME crate
+# dregg-doc rides and the SAME `TurnReceipt` `dregg-app-framework` (hence
+# `Outcome::Landed`) re-exports, so the receipt an edit lands IS the receipt the
+# offering core carries — no conversion at the seam.
+dregg-turn = { path = "../turn" }
+# THE DEOS SURFACE — the gpui-free serializable affordance view-tree an offering's
+# `render` produces. `default-features = false` takes only the view-tree model.
+deos-view = { path = "../deos-view", default-features = false }
