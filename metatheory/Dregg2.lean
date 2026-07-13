@@ -770,6 +770,9 @@ import Dregg2.Circuit.CollisionReduce
 import Dregg2.Circuit.StateCommitReduce
 import Dregg2.Circuit.Blake3FloorReduce
 import Dregg2.Circuit.DescriptorRefinesReduce
+import Dregg2.Circuit.StarkSoundReduce
+import Dregg2.Circuit.ChainStepNonTautology
+import Dregg2.Circuit.ClosureReadoutsRealizable
 import Dregg2.Circuit.TraceColumnInterp
 import Dregg2.Circuit.FieldIntegerLift
 import Dregg2.Circuit.FriExtractReal
