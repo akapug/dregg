@@ -659,11 +659,19 @@ impl Database {
                 level          INTEGER NOT NULL DEFAULT 0,
                 class          INTEGER NOT NULL DEFAULT 0,
                 abilities_used INTEGER NOT NULL DEFAULT 0,
+                dead           INTEGER NOT NULL DEFAULT 0,
                 updated_at     INTEGER NOT NULL DEFAULT 0
             )",
         )
         .execute(&pool)
         .await?;
+
+        // Additive column for a pre-existing DB: the HARDCORE death flag (a `/descent` permadeath
+        // character's `WriteOnce`-final death must carry across restart). `ADD COLUMN` errors if
+        // the column already exists, so it is best-effort — ignore the duplicate-column error.
+        let _ = sqlx::query("ALTER TABLE characters ADD COLUMN dead INTEGER NOT NULL DEFAULT 0")
+            .execute(&pool)
+            .await;
 
         Ok(Self { pool })
     }
@@ -720,31 +728,36 @@ impl Database {
 
     // ─── Persistent leveling characters (character::CharacterStore backing) ──────
 
-    /// Load a player's persisted character slots `(xp, level, class, abilities_used)` by their
-    /// dregg identity hex, or `None` if no row exists (a new player). The well-formedness /
-    /// fail-safe check lives in `crate::character_store::SqliteCharacterStore::load`.
+    /// Load a player's persisted character slots `(xp, level, class, abilities_used, dead)` by
+    /// their dregg identity hex, or `None` if no row exists (a new player). The `dead` slot is the
+    /// HARDCORE death flag (`1` once perished — a `/descent` permadeath death that carries across
+    /// restart). The well-formedness / fail-safe check lives in
+    /// `crate::character_store::SqliteCharacterStore::load`.
     pub async fn character_load(
         &self,
         identity_hex: &str,
-    ) -> Result<Option<(u64, u64, u64, u64)>, sqlx::Error> {
-        let row: Option<(i64, i64, i64, i64)> = sqlx::query_as(
-            "SELECT xp, level, class, abilities_used FROM characters WHERE identity_hex = ?",
+    ) -> Result<Option<(u64, u64, u64, u64, u64)>, sqlx::Error> {
+        let row: Option<(i64, i64, i64, i64, i64)> = sqlx::query_as(
+            "SELECT xp, level, class, abilities_used, dead FROM characters WHERE identity_hex = ?",
         )
         .bind(identity_hex)
         .fetch_optional(&self.pool)
         .await?;
-        Ok(row.map(|(xp, level, class, abilities)| {
+        Ok(row.map(|(xp, level, class, abilities, dead)| {
             (
                 xp.max(0) as u64,
                 level.max(0) as u64,
                 class.max(0) as u64,
                 abilities.max(0) as u64,
+                dead.max(0) as u64,
             )
         }))
     }
 
-    /// Persist a player's character sheet by their dregg identity hex (upsert). The carried
-    /// state a later [`character_load`](Self::character_load) returns.
+    /// Persist a player's character sheet by their dregg identity hex (upsert), including the
+    /// HARDCORE `dead` flag. The carried state a later [`character_load`](Self::character_load)
+    /// returns.
+    #[allow(clippy::too_many_arguments)]
     pub async fn character_save(
         &self,
         identity_hex: &str,
@@ -752,16 +765,18 @@ impl Database {
         level: u64,
         class: u64,
         abilities_used: u64,
+        dead: u64,
         updated_at: i64,
     ) -> Result<(), sqlx::Error> {
         sqlx::query(
-            "INSERT INTO characters (identity_hex, xp, level, class, abilities_used, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?)
+            "INSERT INTO characters (identity_hex, xp, level, class, abilities_used, dead, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(identity_hex) DO UPDATE SET
                  xp = excluded.xp,
                  level = excluded.level,
                  class = excluded.class,
                  abilities_used = excluded.abilities_used,
+                 dead = excluded.dead,
                  updated_at = excluded.updated_at",
         )
         .bind(identity_hex)
@@ -769,6 +784,7 @@ impl Database {
         .bind(level as i64)
         .bind(class as i64)
         .bind(abilities_used as i64)
+        .bind(dead as i64)
         .bind(updated_at)
         .execute(&self.pool)
         .await?;

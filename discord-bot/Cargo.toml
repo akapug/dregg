@@ -199,6 +199,11 @@ dreggnet-doc = { path = "../dreggnet-doc" }
 # the closure — its deps (spween-dregg, dungeon-on-dregg, blake3) are already here, plus
 # procgen-dregg (the committed verifiable-seed pipeline).
 ugc-dregg = { path = "../ugc-dregg" }
+# THE DAILY BEACON behind `/descent` — the committed verifiable-seed pipeline. `procgen-dregg`
+# supplies today's `DailyBeacon` (a BLS-pairing-verified drand `quicknet` reveal) and `daily_seed`
+# (the fold from beacon output → `CommittedSeed`), so `/descent` plays a real beacon-seeded day.
+# Already in the closure via ugc-dregg; named directly for `beacon::DailyBeacon` / `daily_seed`.
+procgen-dregg = { path = "../procgen-dregg" }
 
 [dev-dependencies]
 # `ServiceExt::oneshot` drives the admin webportal router in tests without

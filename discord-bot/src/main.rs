@@ -175,6 +175,8 @@ const REGISTERED_COMMAND_NAMES: &[&str] = &[
     "key",
     // ─── shared AI-narrated on-chain dungeon (buttons are write-once ballots) ─────
     "dungeon",
+    // ─── THE DESCENT: today's beacon-seeded permadeath roguelite (character carries) ─
+    "descent",
     // ─── DreggNet Cloud offerings through the GENERIC offering→Discord adapter
     //     (`commands::offering`): the offering's cap-gated affordances ARE the
     //     buttons, a press is ONE real `Offering::advance` attributed to the
@@ -319,6 +321,8 @@ impl EventHandler for Handler {
             commands::key::register(),
             // ─── shared AI-narrated on-chain dungeon ─────────────────────────
             commands::fiction::register(),
+            // ─── THE DESCENT: today's beacon-seeded permadeath roguelite ─────
+            commands::descent::register(),
             // ─── DreggNet Cloud offerings (the generic offering→Discord adapter) ─
             commands::council::register(),
             commands::market::register(),
@@ -466,6 +470,7 @@ impl EventHandler for Handler {
                 "channel" => commands::channel::handle(&ctx, &command, &self.state).await,
                 "key" => commands::key::handle(&ctx, &command, &self.state).await,
                 "dungeon" => commands::fiction::handle(&ctx, &command, &self.state).await,
+                "descent" => commands::descent::handle(&ctx, &command, &self.state).await,
                 // The DreggNet Cloud offerings, both served by the ONE generic
                 // offering→Discord adapter (`commands::offering`).
                 "council" => commands::council::handle(&ctx, &command, &self.state).await,
@@ -500,6 +505,10 @@ impl EventHandler for Handler {
                 // A `/dungeon` ballot button — a write-once vote attributed to the presser's
                 // derived dregg identity (`commands::fiction`).
                 commands::fiction::handle_component(&ctx, &component, &self.state).await;
+            } else if custom_id.starts_with("descent:") {
+                // A `/descent` move button — advances the presser's OWN permadeath run by one real
+                // executor turn (`commands::descent`).
+                commands::descent::handle_component(&ctx, &component, &self.state).await;
             } else if custom_id.starts_with("offering:") {
                 // A DreggNet-offering affordance (`offering:fire:<key>:<turn>:<arg>` /
                 // `offering:ask:<key>:<turn>`): the generic adapter fires it as ONE real

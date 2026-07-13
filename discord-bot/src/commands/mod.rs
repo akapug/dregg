@@ -49,6 +49,13 @@ pub mod federation;
 // resolves through the attested `GameSession`, and `/dungeon verify` re-checks the hash chain.
 // See `crate::commands::fiction` (consumes the committed `attested-dm` engine).
 pub mod fiction;
+// `/descent` — THE DESCENT played LIVE: today's beacon-seeded, permadeath procgen roguelite over
+// the committed `dreggnet_offerings::daily_descent::DailyDescentOffering`. A real permadeath run on
+// the dregg executor (a lethal blow ends it; a hardcore character carries level/class/scars across
+// days via the durable character store), an AI narrator (the same $DREGG credit gate `/dungeon`
+// uses), a beacon-verified daily reveal, and a no-cheat leaderboard a WON run posts to. Additive —
+// `/dungeon` (`fiction`) is untouched. See `crate::commands::descent`.
+pub mod descent;
 // The gov-* / name-* / queue-* slash families are retired (→ `/dregg` dashboard
 // Governance / Names / Subscription panels, which build the same actions). The
 // handlers are kept so the capability can be re-exposed without re-implementing.

@@ -71,12 +71,13 @@ impl CharacterStore for SqliteCharacterStore {
     fn load(&self, who: &DreggIdentity) -> CharacterSheet {
         let raw = self.block(self.db.character_load(&who.0)).ok().flatten();
         match raw {
-            Some((xp, level, class, abilities_used)) => {
+            Some((xp, level, class, abilities_used, dead)) => {
                 let sheet = CharacterSheet {
                     xp,
                     level,
                     class,
                     abilities_used,
+                    dead,
                 };
                 // FAIL-SAFE: a row that does not sit on the real progression curve (a forged
                 // level its XP never earned, an unknown class, a level past the ceiling) loads
@@ -98,6 +99,7 @@ impl CharacterStore for SqliteCharacterStore {
             sheet.level,
             sheet.class,
             sheet.abilities_used,
+            sheet.dead,
             now_secs(),
         ));
     }
@@ -112,7 +114,9 @@ fn sheet_is_wellformed(sheet: &CharacterSheet) -> bool {
     let class_ok = matches!(sheet.class, 0 | WARRIOR | MAGE | ROGUE);
     let level_ok = sheet.level <= MAX_LEVEL;
     let xp_ok = sheet.xp >= xp_threshold(sheet.level);
-    class_ok && level_ok && xp_ok
+    // The hardcore death flag is a boolean; anything else is a tampered row.
+    let dead_ok = sheet.dead <= 1;
+    class_ok && level_ok && xp_ok && dead_ok
 }
 
 // ── The XP reward binding (collective outcome → earned XP), mirroring character.rs ──────────
@@ -210,6 +214,7 @@ mod tests {
             level: 2,
             class: MAGE,
             abilities_used: 3,
+            dead: 0,
         };
         store.save(&who, sheet);
         let got = store.load(&who);
@@ -231,6 +236,7 @@ mod tests {
             level: 3,
             class: WARRIOR,
             abilities_used: 1,
+            dead: 0,
         };
         {
             let mut store =
@@ -248,6 +254,53 @@ mod tests {
             "the character survived a fresh sqlite open (persistence across restart)"
         );
         println!("[restart] reopened db → resumed {resumed:?} (survives restart)");
+    }
+
+    /// HARDCORE: a `/descent` permadeath death (the `dead` flag) SURVIVES a restart — a
+    /// saved-dead character loads dead on a fresh sqlite open, so the no-death streak stays broken
+    /// across process boundaries. Non-vacuous: a living character loads alive.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_hardcore_death_survives_restart() {
+        let (_tmp, url, db) = temp_db().await;
+        let dead_hero = ident("ghost");
+        let live_hero = ident("quick");
+        let dead_sheet = CharacterSheet {
+            xp: 40,
+            level: 1,
+            class: WARRIOR,
+            abilities_used: 0,
+            dead: 1,
+        };
+        {
+            let mut store =
+                SqliteCharacterStore::new(db.clone(), tokio::runtime::Handle::current());
+            store.save(&dead_hero, dead_sheet);
+            store.save(
+                &live_hero,
+                CharacterSheet {
+                    xp: 40,
+                    level: 1,
+                    class: WARRIOR,
+                    abilities_used: 0,
+                    dead: 0,
+                },
+            );
+        }
+        drop(db); // a "restart".
+
+        let db2 = Database::connect(&url).await.unwrap();
+        let store2 = SqliteCharacterStore::new(db2, tokio::runtime::Handle::current());
+        assert_eq!(
+            store2.load(&dead_hero).dead,
+            1,
+            "a hardcore death survived the restart — the character loads dead"
+        );
+        assert_eq!(
+            store2.load(&live_hero).dead,
+            0,
+            "a living character loads alive (non-vacuous)"
+        );
+        println!("[hardcore] dead flag survives restart: ghost loads dead, quick loads alive");
     }
 
     /// A FRESH identity loads a default (level-0) sheet — a new player, not an error.
@@ -271,7 +324,7 @@ mod tests {
         let (_tmp, _url, db) = temp_db().await;
         let who = ident("cheater");
         // Forge: level 5 with 0 XP (level 5 needs 700 XP), plus a bogus class id.
-        db.character_save(&who.0, 0, 5, 99, 0, 0).await.unwrap();
+        db.character_save(&who.0, 0, 5, 99, 0, 0, 0).await.unwrap();
 
         let store = SqliteCharacterStore::new(db, tokio::runtime::Handle::current());
         let got = store.load(&who);
@@ -288,6 +341,7 @@ mod tests {
             level: 5,
             class: WARRIOR,
             abilities_used: 0,
+            dead: 0,
         };
         let mut store2 = store.clone();
         store2.save(&who, honest);
