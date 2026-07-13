@@ -1,32 +1,38 @@
 // THE WRAP END-TO-END (STARK-algebra layer): gnark verifies the batch-STARK
 // algebra of the REAL shrink proof — quotient identities at zeta with FULL
-// in-circuit constraint evaluation for all 5 instances (via the emitted
-// symbolic AIR DAGs; the 3 simple instances also by an independent
-// hand-derived path), plus the global LogUp balance — on top of the SAME
-// transcript replay + FRI core the existing real-fixture test drives.
+// in-circuit constraint evaluation for all 6 instances (via the emitted
+// symbolic AIR DAGs) — on top of the SAME transcript replay + FRI core the
+// existing real-fixture test drives, and — since the EXPOSED shrink — the
+// 25-lane settlement claim binding (the expose_claim instance's public
+// values, absorbed into the transcript AND constrained by its AIR).
 //
-// The fixture (fixtures/apex_shrink_fri_real.json) ALREADY carries the whole
-// STARK-algebra input: the pre-FRI transcript prefix contains the opened
-// values at zeta (pcs.verify observes every opened value before sampling the
-// FRI alpha — two_adic_pcs.rs:687-694, mirrored by the exporter at
-// apex_shrink_gnark_export.rs:571-580) and every sampled challenge
-// (perm alpha/beta, the constraint-folding alpha, zeta). This file locates
-// them by the ANCHORED tail structure of the event stream and slices them by
-// the pinned 5-instance shape (see stark_verify_native.go ShrinkVk).
+// The fixture (fixtures/apex_shrink_fri_real.json, v3) carries the whole
+// STARK-algebra input: the pre-FRI transcript prefix contains the observed
+// per-instance public values (verify_batch observes them right after the
+// main commitment), the opened values at zeta (pcs.verify observes every
+// opened value before sampling the FRI alpha — two_adic_pcs.rs:687-694,
+// mirrored by the exporter at apex_shrink_gnark_export.rs) and every sampled
+// challenge (perm alpha/beta, the constraint-folding alpha, zeta). This file
+// locates them by the ANCHORED head+tail structure of the event stream and
+// slices them by the pinned 6-instance shape (see stark_verify_native.go
+// ShrinkVk).
 //
 // HONEST SCOPE: see stark_verify_native.go — the constraint evaluation and
-// quotient identity are REAL checks for all 5 instances, and the open_input
-// seam is CLOSED: the assembled circuit below Merkle-opens the input batches
-// against the transcript-observed commitments and re-derives the FRI reduced
-// openings from the opened columns (stark_open_input.go), binding the fold
-// seeds to the committed trace.
+// quotient identity are REAL checks for all 6 instances (the former hand
+// mode, whose heavy instances were witnessed and vacuously satisfied, was
+// REMOVED), and the open_input seam is CLOSED: the assembled circuit below
+// Merkle-opens the input batches against the transcript-observed commitments
+// and re-derives the FRI reduced openings from the opened columns
+// (stark_open_input.go), binding the fold seeds to the committed trace.
 package friverifier
 
 import (
 	"fmt"
+	"math/big"
 	"testing"
 
 	"github.com/consensys/gnark-crypto/ecc"
+	"github.com/consensys/gnark-crypto/ecc/bn254/fr"
 	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/test"
 )
@@ -35,34 +41,20 @@ import (
 // Anchored prefix location + shape decoding
 // ----------------------------------------------------------------------------
 
-// shrinkStarkPrefixLoc holds flat offsets into the prefix observe/sample
-// streams for the STARK-algebra inputs, plus (for the open_input seam) the
-// FRI batch-combination alpha and the four input-round commitment digests'
-// offsets into the flat digest-word stream.
-type shrinkStarkPrefixLoc struct {
-	permChSampleOff int // 8 values: perm alpha then perm beta coords
-	alphaSampleOff  int // 4 values
-	zetaSampleOff   int // 4 values
-	friAlphaOff     int // 4 values: the FRI batch-combination alpha
-	openedObsOff    int // 4*totalEF values
-	openedObsLen    int
-	cumObsOff       int // 4*numGlobalLookups values
-	cumObsLen       int
-	// Digest-word offsets of the input-round commitments, in PCS ROUND order
-	// (trace=main, quotient, preprocessed, permutation) — the roots the
-	// open_input Merkle checks bind against.
-	inputRootDigOff [4]int
-}
-
 // locateShrinkStarkPrefix walks the fixture's event stream and anchors the
-// STARK-algebra events by the tail structure of verify_batch's transcript
+// STARK-algebra events by the HEAD structure (binding block, main commitment,
+// publics+widths block) and the TAIL structure of verify_batch's transcript
 // (batch-stark verifier/mod.rs:288-300 + pcs.verify observes + FRI alpha):
 //
+//	observe_bb(binding block), observe_digest(main cap),
+//	observe_bb(per-instance PUBLIC VALUES ++ preprocessed widths),
+//	observe_digest(preprocessed cap),
 //	..., sample(perm challenges), observe_digest(perm cap),
 //	observe_bb(cumulative sums), sample(alpha), observe_digest(quotient cap),
 //	sample(zeta), observe_bb(opened values), sample(FRI alpha)
 //
-// Fail-closed on any kind/length mismatch.
+// Fail-closed on any kind/length mismatch, including the publics block not
+// matching the fixture's table_publics values byte-for-byte.
 func locateShrinkStarkPrefix(fx *shrinkRealFixture) (shrinkStarkPrefixLoc, error) {
 	evs := fx.PrefixEvents
 	n := len(evs)
@@ -115,6 +107,41 @@ func locateShrinkStarkPrefix(fx *shrinkRealFixture) (shrinkStarkPrefixLoc, error
 	if len(evs[n-2].Values)%4 != 0 || len(evs[n-6].Values)%4 != 0 {
 		return shrinkStarkPrefixLoc{}, fmt.Errorf("opened/cum streams not EF-aligned")
 	}
+	// HEAD anchoring: binding block, main cap, publics ++ widths.
+	nInst := len(fx.DegreeBits)
+	totalPv := 0
+	pubLens := make([]int, nInst)
+	if len(fx.TablePublics) != nInst {
+		return shrinkStarkPrefixLoc{}, fmt.Errorf("table_publics has %d instances, want %d",
+			len(fx.TablePublics), nInst)
+	}
+	for i, pv := range fx.TablePublics {
+		pubLens[i] = len(pv)
+		totalPv += len(pv)
+	}
+	for _, e := range []error{
+		check(0, "observe_bb", 4+16*nInst), // instance count + per-instance binding
+		check(1, "observe_digest", 0),      // main commitment
+		check(2, "observe_bb", totalPv+4*nInst),
+	} {
+		if e != nil {
+			return shrinkStarkPrefixLoc{}, e
+		}
+	}
+	// The publics block IS the fixture's table_publics, flattened in instance
+	// order (fail-closed cross-check: the claim channel the circuit binds is
+	// the one the transcript absorbed).
+	flat := evs[2].Values[:totalPv]
+	k := 0
+	for i, pv := range fx.TablePublics {
+		for _, v := range pv {
+			if flat[k] != v {
+				return shrinkStarkPrefixLoc{}, fmt.Errorf(
+					"instance %d publics diverge between transcript and table_publics", i)
+			}
+			k++
+		}
+	}
 	// The four commitment digests, in OBSERVE order main, preprocessed,
 	// permutation, quotient (verify_batch's transcript); the permutation and
 	// quotient anchors were already pinned above. Each cap is one root
@@ -122,8 +149,8 @@ func locateShrinkStarkPrefix(fx *shrinkRealFixture) (shrinkStarkPrefixLoc, error
 	if len(digEvents) != 4 {
 		return shrinkStarkPrefixLoc{}, fmt.Errorf("%d digest events (want 4 commitment caps)", len(digEvents))
 	}
-	if digEvents[2] != n-7 || digEvents[3] != n-4 {
-		return shrinkStarkPrefixLoc{}, fmt.Errorf("digest events %v do not anchor perm/quotient", digEvents)
+	if digEvents[0] != 1 || digEvents[2] != n-7 || digEvents[3] != n-4 {
+		return shrinkStarkPrefixLoc{}, fmt.Errorf("digest events %v do not anchor main/perm/quotient", digEvents)
 	}
 	for _, i := range digEvents {
 		if len(evs[i].Words) != 1 {
@@ -144,18 +171,22 @@ func locateShrinkStarkPrefix(fx *shrinkRealFixture) (shrinkStarkPrefixLoc, error
 			digOff[digEvents[0]], digOff[digEvents[3]],
 			digOff[digEvents[1]], digOff[digEvents[2]],
 		},
+		pubObsOff: obsOff[2],
+		pubLens:   pubLens,
+		preDigOff: digOff[digEvents[1]],
 	}, nil
 }
 
 // shrinkShapesFromFixture decodes the transcript-bound binding block
 // (event 0: instance count + per-instance ext_db/base_db/width/n_chunks,
-// each usize-lifted to [v,0,0,0]) and the preprocessed widths (event 2 tail)
-// and merges them with the pinned VK flags. Fail-closed on any drift.
+// each usize-lifted to [v,0,0,0]) and the preprocessed widths (event 2, after
+// the publics block) and merges them with the pinned VK flags. Fail-closed on
+// any drift.
 func shrinkShapesFromFixture(t *testing.T, fx *shrinkRealFixture) []StarkInstanceShape {
 	t.Helper()
 	evs := fx.PrefixEvents
 	if len(evs) < 3 || evs[0].Kind != "observe_bb" || evs[2].Kind != "observe_bb" {
-		t.Fatal("prefix head structure drifted (binding block / widths block)")
+		t.Fatal("prefix head structure drifted (binding block / publics+widths block)")
 	}
 	e0 := evs[0].Values
 	lift := func(off int, what string) int {
@@ -168,13 +199,25 @@ func shrinkShapesFromFixture(t *testing.T, fx *shrinkRealFixture) []StarkInstanc
 		return int(e0[off])
 	}
 	nInst := lift(0, "instance count")
-	if nInst != 5 || len(e0) != 4+16*nInst {
-		t.Fatalf("binding block: %d instances / %d values (want 5 / 84)", nInst, len(e0))
+	if nInst != ShrinkNumInstances || len(e0) != 4+16*nInst {
+		t.Fatalf("binding block: %d instances / %d values (want %d / %d)",
+			nInst, len(e0), ShrinkNumInstances, 4+16*ShrinkNumInstances)
+	}
+	totalPv := 0
+	for _, pv := range fx.TablePublics {
+		totalPv += len(pv)
 	}
 	e2 := evs[2].Values
-	if len(e2) != 4*nInst {
-		t.Fatalf("widths block has %d values (want %d: no public values in the shrink scope)",
-			len(e2), 4*nInst)
+	if len(e2) != totalPv+4*nInst {
+		t.Fatalf("publics+widths block has %d values (want %d publics + %d widths)",
+			len(e2), totalPv, 4*nInst)
+	}
+	widths := e2[totalPv:]
+	if fx.ClaimInstance != ShrinkVk.ClaimInstance ||
+		len(fx.TablePublics[fx.ClaimInstance]) != ShrinkVk.ClaimLen {
+		t.Fatalf("claim channel drifted from the pinned VK (instance %d/%d, %d lanes/%d)",
+			fx.ClaimInstance, ShrinkVk.ClaimInstance,
+			len(fx.TablePublics[fx.ClaimInstance]), ShrinkVk.ClaimLen)
 	}
 	shapes := make([]StarkInstanceShape, nInst)
 	for i := 0; i < nInst; i++ {
@@ -186,16 +229,21 @@ func shrinkShapesFromFixture(t *testing.T, fx *shrinkRealFixture) []StarkInstanc
 			t.Fatalf("instance %d: degree bits %d/%d vs fixture %d",
 				i, extDb, baseDb, fx.DegreeBits[i])
 		}
-		if e2[4*i+1] != 0 || e2[4*i+2] != 0 || e2[4*i+3] != 0 {
+		if widths[4*i+1] != 0 || widths[4*i+2] != 0 || widths[4*i+3] != 0 {
 			t.Fatalf("preprocessed width %d is not a usize lift", i)
+		}
+		if len(fx.TablePublics[i]) != ShrinkVk.NumPublicValues[i] {
+			t.Fatalf("instance %d: %d public values vs pinned VK %d",
+				i, len(fx.TablePublics[i]), ShrinkVk.NumPublicValues[i])
 		}
 		shapes[i] = StarkInstanceShape{
 			DegreeBits:        extDb,
 			Width:             width,
-			PreWidth:          int(e2[4*i]),
+			PreWidth:          int(widths[4*i]),
 			NumQuotientChunks: nChunks,
 			NumLookups:        ShrinkVk.NumLookups[i],
 			NumGlobalLookups:  ShrinkVk.NumLookups[i],
+			NumPublicValues:   ShrinkVk.NumPublicValues[i],
 			HasTraceNext:      ShrinkVk.TraceNext[i],
 			HasPreNext:        ShrinkVk.PreNext[i],
 		}
@@ -209,7 +257,8 @@ type shrinkStarkExtract struct {
 	loc      shrinkStarkPrefixLoc
 	openedEF []bbExtRef
 	cumSums  []bbExtRef
-	friAlpha bbExtRef // the FRI batch-combination alpha (open_input)
+	pubVals  [][]uint32 // per-instance public values (the claim channel)
+	friAlpha bbExtRef   // the FRI batch-combination alpha (open_input)
 	ch       shrinkStarkChallengesRef
 }
 
@@ -223,7 +272,7 @@ func extractShrinkStark(t *testing.T, fx *shrinkRealFixture) *shrinkStarkExtract
 	_, totalEF := buildStarkOpenedSpans(shapes)
 	if loc.openedObsLen != 4*totalEF {
 		t.Fatalf("opened-values stream: %d values, pinned shape requires %d "+
-			"(the 5-instance shape accounting must be EXACT)", loc.openedObsLen, 4*totalEF)
+			"(the 6-instance shape accounting must be EXACT)", loc.openedObsLen, 4*totalEF)
 	}
 	if want := 4 * totalGlobalLookups(shapes); loc.cumObsLen != want {
 		t.Fatalf("cumulative-sums stream: %d values, want %d", loc.cumObsLen, want)
@@ -251,11 +300,17 @@ func extractShrinkStark(t *testing.T, fx *shrinkRealFixture) *shrinkStarkExtract
 		copy(e[:], samp[off:off+4])
 		return e
 	}
+	pubVals := make([][]uint32, len(shapes))
+	for i := range shapes {
+		off := loc.pubObsOffOf(i)
+		pubVals[i] = append([]uint32(nil), obs[off:off+loc.pubLens[i]]...)
+	}
 	return &shrinkStarkExtract{
 		shapes:   shapes,
 		loc:      loc,
 		openedEF: groupEF(obs[loc.openedObsOff : loc.openedObsOff+loc.openedObsLen]),
 		cumSums:  groupEF(obs[loc.cumObsOff : loc.cumObsOff+loc.cumObsLen]),
+		pubVals:  pubVals,
 		friAlpha: ext(loc.friAlphaOff),
 		ch: shrinkStarkChallengesRef{
 			permAlpha: ext(loc.permChSampleOff),
@@ -270,27 +325,43 @@ func extractShrinkStark(t *testing.T, fx *shrinkRealFixture) *shrinkStarkExtract
 // Host-reference checks on the REAL proof
 // ----------------------------------------------------------------------------
 
-// ACCEPT: the reference algebra layer accepts the real shrink proof — the
-// quotient identity HOLDS on the real openings for the three fully-evaluated
-// instances, and the global WitnessChecks sums balance.
+const shrinkSymbolicConstraintsPath = "fixtures/shrink_symbolic_constraints.json"
+
+func loadShrinkSymbolicConstraints(t *testing.T) *SymbolicConstraints {
+	t.Helper()
+	sym, err := LoadSymbolicConstraints(shrinkSymbolicConstraintsPath)
+	if err != nil {
+		t.Fatalf("emitted symbolic constraints must load (emit via "+
+			"plonky3-recursion/circuit-prover/tests/emit_shrink_symbolic.rs): %v", err)
+	}
+	return sym
+}
+
+// ACCEPT: with the interpreted (emitted, not hand-coded) constraints, the
+// quotient identity holds on the REAL shrink proof for ALL SIX instances —
+// including Alu (146 constraints), Poseidon2 (337) and ExposeClaim (100, the
+// claim channel with its pv == v_0 binding), and the global WitnessChecks
+// sums balance. A wrong emitted tree, wrong AIR knob, or wrong interpreter
+// semantics cannot pass this (~124-bit equation per instance on real data).
 func TestApexShrinkRealFixtureStarkAlgebraRefAccepts(t *testing.T) {
 	fx := loadShrinkRealFixture(t)
 	ex := extractShrinkStark(t, fx)
-	heavy, err := verifyShrinkStarkAlgebraRef(ex.shapes, ex.openedEF, ex.cumSums, ex.ch, nil)
-	if err != nil {
+	sym := loadShrinkSymbolicConstraints(t)
+	if err := verifyShrinkStarkAlgebraRef(ex.shapes, ex.openedEF, ex.cumSums, ex.pubVals, ex.ch, sym); err != nil {
 		t.Fatalf("reference STARK algebra REJECTED the real shrink proof: %v", err)
-	}
-	if len(heavy) != 2 {
-		t.Fatalf("expected 2 heavy instances (Alu, Poseidon2), got %d", len(heavy))
 	}
 }
 
-// REJECT canaries, reference side: single tampers of the real openings must
-// fail the identity or the balance (the accept above is not vacuous).
+// REJECT canaries, reference side: single tampers of the real openings (and
+// of the CLAIM lanes) must fail the identity or the balance (the accept above
+// is not vacuous). The heavy-instance tampers are the audit tooth: before the
+// hand-mode removal, an Alu/Poseidon2 trace tamper PASSED the sym==nil path.
 func TestApexShrinkRealFixtureStarkAlgebraRefRejectsTampers(t *testing.T) {
 	fx := loadShrinkRealFixture(t)
 	base := extractShrinkStark(t, fx)
+	sym := loadShrinkSymbolicConstraints(t)
 	spans, _ := buildStarkOpenedSpans(base.shapes)
+	claimInst := ShrinkVk.ClaimInstance
 
 	cases := []struct {
 		name   string
@@ -316,11 +387,33 @@ func TestApexShrinkRealFixtureStarkAlgebraRefRejectsTampers(t *testing.T) {
 			ex.cumSums[spans[0].cumSums.off][0] =
 				bbAddRef(ex.cumSums[spans[0].cumSums.off][0], 1)
 		}},
-		{"tampered-alu-cum-sum-balance", func(ex *shrinkStarkExtract) {
-			// Alu's identity is witness-derived (not a ref check), so this
-			// canary isolates the GLOBAL BALANCE tooth.
-			ex.cumSums[spans[2].cumSums.off][0] =
-				bbAddRef(ex.cumSums[spans[2].cumSums.off][0], 1)
+		{"tampered-alu-trace-value", func(ex *shrinkStarkExtract) {
+			ex.openedEF[spans[2].traceLocal.off+10][0] =
+				bbAddRef(ex.openedEF[spans[2].traceLocal.off+10][0], 1)
+		}},
+		{"tampered-alu-trace-next", func(ex *shrinkStarkExtract) {
+			ex.openedEF[spans[2].traceNext.off+3][2] =
+				bbAddRef(ex.openedEF[spans[2].traceNext.off+3][2], 1)
+		}},
+		{"tampered-alu-preprocessed", func(ex *shrinkStarkExtract) {
+			ex.openedEF[spans[2].preLocal.off+5][1] =
+				bbAddRef(ex.openedEF[spans[2].preLocal.off+5][1], 1)
+		}},
+		{"tampered-alu-cum-sum", func(ex *shrinkStarkExtract) {
+			ex.cumSums[spans[2].cumSums.off+4][0] =
+				bbAddRef(ex.cumSums[spans[2].cumSums.off+4][0], 1)
+		}},
+		{"tampered-poseidon2-trace-value", func(ex *shrinkStarkExtract) {
+			ex.openedEF[spans[3].traceLocal.off+123][0] =
+				bbAddRef(ex.openedEF[spans[3].traceLocal.off+123][0], 1)
+		}},
+		{"tampered-poseidon2-perm-column", func(ex *shrinkStarkExtract) {
+			ex.openedEF[spans[3].permLocal.off+8][3] =
+				bbAddRef(ex.openedEF[spans[3].permLocal.off+8][3], 1)
+		}},
+		{"tampered-poseidon2-quotient-chunk", func(ex *shrinkStarkExtract) {
+			ex.openedEF[spans[3].quotientChunks[1].off][1] =
+				bbAddRef(ex.openedEF[spans[3].quotientChunks[1].off][1], 1)
 		}},
 		{"tampered-zeta", func(ex *shrinkStarkExtract) {
 			ex.ch.zeta[0] = bbAddRef(ex.ch.zeta[0], 1)
@@ -328,374 +421,42 @@ func TestApexShrinkRealFixtureStarkAlgebraRefRejectsTampers(t *testing.T) {
 		{"tampered-perm-beta", func(ex *shrinkStarkExtract) {
 			ex.ch.permBeta[3] = bbAddRef(ex.ch.permBeta[3], 1)
 		}},
+		// THE CLAIM TEETH: a forged claim lane must fail the ExposeClaimAir
+		// pv == v_0 identity against the committed expose_claim trace.
+		{"tampered-claim-genesis-lane", func(ex *shrinkStarkExtract) {
+			ex.pubVals[claimInst][0] = bbAddRef(ex.pubVals[claimInst][0], 1)
+		}},
+		{"tampered-claim-final-root-lane", func(ex *shrinkStarkExtract) {
+			ex.pubVals[claimInst][8] = bbAddRef(ex.pubVals[claimInst][8], 1)
+		}},
+		{"tampered-claim-num-turns", func(ex *shrinkStarkExtract) {
+			ex.pubVals[claimInst][16] = bbAddRef(ex.pubVals[claimInst][16], 1)
+		}},
+		{"tampered-expose-claim-trace-value", func(ex *shrinkStarkExtract) {
+			ex.openedEF[spans[claimInst].traceLocal.off][0] =
+				bbAddRef(ex.openedEF[spans[claimInst].traceLocal.off][0], 1)
+		}},
+		{"tampered-expose-claim-cum-sum", func(ex *shrinkStarkExtract) {
+			ex.cumSums[spans[claimInst].cumSums.off][0] =
+				bbAddRef(ex.cumSums[spans[claimInst].cumSums.off][0], 1)
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			ex := extractShrinkStark(t, fx)
 			tc.tamper(ex)
-			if _, err := verifyShrinkStarkAlgebraRef(ex.shapes, ex.openedEF, ex.cumSums, ex.ch, nil); err == nil {
+			if err := verifyShrinkStarkAlgebraRef(ex.shapes, ex.openedEF, ex.cumSums, ex.pubVals, ex.ch, sym); err == nil {
 				t.Fatalf("%s: reference ACCEPTED tampered real openings", tc.name)
 			}
 		})
 	}
 }
 
-// ----------------------------------------------------------------------------
-// The gnark gadget, algebra layer in isolation (raw witnesses)
-// ----------------------------------------------------------------------------
-
-// shrinkStarkAlgebraCircuit feeds VerifyShrinkStarkAlgebra from raw witness
-// arrays (canonicity asserted at ingestion), isolating the algebra teeth
-// from the transcript binding (which the integration circuit below covers).
-type shrinkStarkAlgebraCircuit struct {
-	shapes []StarkInstanceShape // structural
-	sym    *SymbolicConstraints // structural; nil = hand mode
-
-	OpenedEF             []BBExt
-	CumSums              []BBExt
-	PermAlpha            BBExt
-	PermBeta             BBExt
-	Alpha                BBExt
-	Zeta                 BBExt
-	HeavyFoldedAlu       BBExt
-	HeavyFoldedPoseidon2 BBExt
-}
-
-func (c *shrinkStarkAlgebraCircuit) Define(api frontend.API) error {
-	bb := NewBBApi(api)
-	for i := range c.OpenedEF {
-		bb.ExtAssertIsCanonical(c.OpenedEF[i])
-	}
-	for i := range c.CumSums {
-		bb.ExtAssertIsCanonical(c.CumSums[i])
-	}
-	for _, e := range []BBExt{c.PermAlpha, c.PermBeta, c.Alpha, c.Zeta} {
-		bb.ExtAssertIsCanonical(e)
-	}
-	VerifyShrinkStarkAlgebra(bb, c.shapes, c.OpenedEF, c.CumSums,
-		ShrinkStarkChallenges{
-			PermAlpha: c.PermAlpha, PermBeta: c.PermBeta,
-			Alpha: c.Alpha, Zeta: c.Zeta,
-		},
-		c.sym,
-		map[int]BBExt{2: c.HeavyFoldedAlu, 3: c.HeavyFoldedPoseidon2})
-	return nil
-}
-
-func allocShrinkStarkAlgebraCircuit(ex *shrinkStarkExtract) *shrinkStarkAlgebraCircuit {
-	return allocShrinkStarkAlgebraCircuitSym(ex, nil)
-}
-
-func allocShrinkStarkAlgebraCircuitSym(ex *shrinkStarkExtract, sym *SymbolicConstraints) *shrinkStarkAlgebraCircuit {
-	return &shrinkStarkAlgebraCircuit{
-		shapes:   ex.shapes,
-		sym:      sym,
-		OpenedEF: make([]BBExt, len(ex.openedEF)),
-		CumSums:  make([]BBExt, len(ex.cumSums)),
-	}
-}
-
-func assignShrinkStarkAlgebraCircuit(t *testing.T, ex *shrinkStarkExtract) *shrinkStarkAlgebraCircuit {
-	return assignShrinkStarkAlgebraCircuitSym(t, ex, nil)
-}
-
-func assignShrinkStarkAlgebraCircuitSym(t *testing.T, ex *shrinkStarkExtract, sym *SymbolicConstraints) *shrinkStarkAlgebraCircuit {
-	t.Helper()
-	heavy, err := verifyShrinkStarkAlgebraRef(ex.shapes, ex.openedEF, ex.cumSums, ex.ch, nil)
-	if err != nil {
-		t.Fatalf("host reference must accept before circuit assignment: %v", err)
-	}
-	c := allocShrinkStarkAlgebraCircuitSym(ex, sym)
-	for i, e := range ex.openedEF {
-		c.OpenedEF[i] = extToVars(e)
-	}
-	for i, e := range ex.cumSums {
-		c.CumSums[i] = extToVars(e)
-	}
-	c.PermAlpha = extToVars(ex.ch.permAlpha)
-	c.PermBeta = extToVars(ex.ch.permBeta)
-	c.Alpha = extToVars(ex.ch.alpha)
-	c.Zeta = extToVars(ex.ch.zeta)
-	c.HeavyFoldedAlu = extToVars(heavy[2])
-	c.HeavyFoldedPoseidon2 = extToVars(heavy[3])
-	return c
-}
-
-// ACCEPT: the gadget verifies the real proof's STARK algebra.
-func TestApexShrinkRealFixtureStarkAlgebraGadgetAccepts(t *testing.T) {
-	fx := loadShrinkRealFixture(t)
-	ex := extractShrinkStark(t, fx)
-	if err := test.IsSolved(allocShrinkStarkAlgebraCircuit(ex),
-		assignShrinkStarkAlgebraCircuit(t, ex), ecc.BN254.ScalarField()); err != nil {
-		t.Fatalf("gadget rejected the REAL shrink proof's STARK algebra: %v", err)
-	}
-}
-
-// REJECT canaries, gadget side.
-func TestApexShrinkRealFixtureStarkAlgebraGadgetRejectsTampers(t *testing.T) {
-	fx := loadShrinkRealFixture(t)
-	field := ecc.BN254.ScalarField()
-	baseEx := extractShrinkStark(t, fx)
-	spans, _ := buildStarkOpenedSpans(baseEx.shapes)
-
-	cases := []struct {
-		name   string
-		tamper func(c *shrinkStarkAlgebraCircuit)
-	}{
-		{"tampered-const-quotient-chunk", func(c *shrinkStarkAlgebraCircuit) {
-			c.OpenedEF[spans[0].quotientChunks[0].off][0] =
-				bbAddRef(baseEx.openedEF[spans[0].quotientChunks[0].off][0], 1)
-		}},
-		{"tampered-public-perm-column", func(c *shrinkStarkAlgebraCircuit) {
-			c.OpenedEF[spans[1].permLocal.off][2] =
-				bbAddRef(baseEx.openedEF[spans[1].permLocal.off][2], 1)
-		}},
-		{"tampered-recompose-trace-value", func(c *shrinkStarkAlgebraCircuit) {
-			c.OpenedEF[spans[4].traceLocal.off][0] =
-				bbAddRef(baseEx.openedEF[spans[4].traceLocal.off][0], 1)
-		}},
-		{"tampered-alu-cum-sum-balance", func(c *shrinkStarkAlgebraCircuit) {
-			c.CumSums[spans[2].cumSums.off][0] =
-				bbAddRef(baseEx.cumSums[spans[2].cumSums.off][0], 1)
-		}},
-		{"tampered-heavy-folded-witness", func(c *shrinkStarkAlgebraCircuit) {
-			var e bbExtRef
-			for i := range e {
-				e[i] = 0
-			}
-			// A wrong witnessed folded value must fail its (consistency)
-			// identity against the real quotient openings.
-			c.HeavyFoldedAlu = extToVars(bbExtRef{1, 2, 3, 4})
-			_ = e
-		}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			ex := extractShrinkStark(t, fx)
-			w := assignShrinkStarkAlgebraCircuit(t, ex)
-			tc.tamper(w)
-			if err := test.IsSolved(allocShrinkStarkAlgebraCircuit(ex), w, field); err == nil {
-				t.Fatalf("%s: gadget ACCEPTED tampered real openings", tc.name)
-			}
-		})
-	}
-}
-
-// ----------------------------------------------------------------------------
-// The assembled native verify: transcript replay + STARK algebra + FRI core
-// ----------------------------------------------------------------------------
-
-// apexShrinkFullVerifyCircuit is the ASSEMBLED native verify: ONE Define that
-// replays the real pre-FRI transcript (pinning every challenge), runs the
-// STARK-algebra layer over the SAME transcript-bound opened values, verifies
-// the FRI core, and — the open_input seam closure — Merkle-opens the input
-// batches against the transcript-observed commitments and re-derives the FRI
-// reduced openings from the opened columns, binding them to the fold seeds:
-//
-//	commitments → (Merkle open + α-reduce) → FRI low-degree
-//	           ↘ opened-at-zeta → constraint/quotient identity → accept
-type apexShrinkFullVerifyCircuit struct {
-	script           []shrinkPrefixOp
-	cfg              FriConfig
-	r                int
-	rollInAfterRound []int
-	shapes           []StarkInstanceShape
-	loc              shrinkStarkPrefixLoc
-	sym              *SymbolicConstraints  // structural: FULL constraint eval
-	inputRounds      []OpenInputRoundShape // structural: open_input shapes
-
-	PrefixObs     []frontend.Variable
-	PrefixDigests []frontend.Variable
-	PrefixSamples []frontend.Variable
-	CommitRoots   []frontend.Variable
-	FinalPoly     []BBExt
-	PowWitness    frontend.Variable
-	Queries       []FriNativeQueryOpening
-	InputOpenings [][]OpenInputBatchOpening // [query][input round]
-}
-
-func (c *apexShrinkFullVerifyCircuit) Define(api frontend.API) error {
-	bb := NewBBApi(api)
-	ch := NewMultiFieldChallenger(bb)
-
-	// Transcript replay — every observed value canonicity-bound by the
-	// challenger, every sampled challenge pinned to the Rust value.
-	io, id, is := 0, 0, 0
-	for _, op := range c.script {
-		switch op.kind {
-		case "observe_bb":
-			ch.ObserveBabyBearSlice(c.PrefixObs[io : io+op.n])
-			io += op.n
-		case "observe_digest":
-			ch.ObserveBn254Digest(c.PrefixDigests[id : id+op.n])
-			id += op.n
-		case "sample_bb":
-			for k := 0; k < op.n; k++ {
-				api.AssertIsEqual(ch.SampleBabyBear(), c.PrefixSamples[is])
-				is++
-			}
-		}
-	}
-
-	// STARK-algebra layer over the transcript-bound opened values.
-	groupEF := func(vars []frontend.Variable) []BBExt {
-		out := make([]BBExt, len(vars)/4)
-		for i := range out {
-			copy(out[i][:], vars[4*i:4*i+4])
-		}
-		return out
-	}
-	sampleExt := func(off int) BBExt {
-		var e BBExt
-		copy(e[:], c.PrefixSamples[off:off+4])
-		return e
-	}
-	openedEF := groupEF(c.PrefixObs[c.loc.openedObsOff : c.loc.openedObsOff+c.loc.openedObsLen])
-	zeta := sampleExt(c.loc.zetaSampleOff)
-	VerifyShrinkStarkAlgebra(bb, c.shapes,
-		openedEF,
-		groupEF(c.PrefixObs[c.loc.cumObsOff:c.loc.cumObsOff+c.loc.cumObsLen]),
-		ShrinkStarkChallenges{
-			PermAlpha: sampleExt(c.loc.permChSampleOff),
-			PermBeta:  sampleExt(c.loc.permChSampleOff + 4),
-			Alpha:     sampleExt(c.loc.alphaSampleOff),
-			Zeta:      zeta,
-		},
-		c.sym, nil)
-
-	// FRI core, drawing betas and query indices live from the same
-	// transcript.
-	queryBits := VerifyFriNative(bb, c.cfg, c.r, c.CommitRoots, c.FinalPoly, c.PowWitness,
-		c.Queries, c.rollInAfterRound, ch)
-
-	// open_input: bind the fold seeds to the COMMITTED columns. Roots are the
-	// transcript-observed commitment digests; zeta / the FRI alpha are the
-	// pinned transcript challenges; the opened-at-zeta values are the same
-	// variables the algebra layer consumed; the index bits are the same the
-	// fold walked.
-	roots := make([]frontend.Variable, len(c.loc.inputRootDigOff))
-	for i, off := range c.loc.inputRootDigOff {
-		roots[i] = c.PrefixDigests[off]
-	}
-	pre := NewOpenInputPrecomp(bb, c.inputRounds, zeta, sampleExt(c.loc.friAlphaOff),
-		c.r+c.cfg.LogBlowup+c.cfg.LogFinalPolyLen)
-	for qi := range c.Queries {
-		BindOpenInputToFriSeedsNative(bb, c.inputRounds, pre, queryBits[qi], roots,
-			c.InputOpenings[qi], openedEF, c.Queries[qi], c.rollInAfterRound)
-	}
-	return nil
-}
-
-func allocApexShrinkFullVerifyCircuit(t *testing.T, fx *shrinkRealFixture, ex *shrinkStarkExtract, sym *SymbolicConstraints) *apexShrinkFullVerifyCircuit {
-	t.Helper()
-	inner := allocApexShrinkRealCircuit(fx)
-	return &apexShrinkFullVerifyCircuit{
-		script:           inner.script,
-		cfg:              inner.cfg,
-		r:                inner.r,
-		rollInAfterRound: inner.rollInAfterRound,
-		shapes:           ex.shapes,
-		loc:              ex.loc,
-		sym:              sym,
-		inputRounds:      shrinkInputRoundsFromFixture(t, fx, ex.shapes),
-		PrefixObs:        inner.PrefixObs,
-		PrefixDigests:    inner.PrefixDigests,
-		PrefixSamples:    inner.PrefixSamples,
-		CommitRoots:      inner.CommitRoots,
-		FinalPoly:        inner.FinalPoly,
-		Queries:          inner.Queries,
-		InputOpenings:    allocShrinkInputOpenings(fx),
-	}
-}
-
-func assignApexShrinkFullVerifyCircuit(t *testing.T, fx *shrinkRealFixture, ex *shrinkStarkExtract, sym *SymbolicConstraints) *apexShrinkFullVerifyCircuit {
-	t.Helper()
-	if _, err := verifyShrinkStarkAlgebraRef(ex.shapes, ex.openedEF, ex.cumSums, ex.ch, sym); err != nil {
-		t.Fatalf("host reference must accept before circuit assignment: %v", err)
-	}
-	inner := assignApexShrinkRealCircuit(t, fx)
-	return &apexShrinkFullVerifyCircuit{
-		script:           inner.script,
-		cfg:              inner.cfg,
-		r:                inner.r,
-		rollInAfterRound: inner.rollInAfterRound,
-		shapes:           ex.shapes,
-		loc:              ex.loc,
-		sym:              sym,
-		inputRounds:      shrinkInputRoundsFromFixture(t, fx, ex.shapes),
-		PrefixObs:        inner.PrefixObs,
-		PrefixDigests:    inner.PrefixDigests,
-		PrefixSamples:    inner.PrefixSamples,
-		CommitRoots:      inner.CommitRoots,
-		FinalPoly:        inner.FinalPoly,
-		PowWitness:       inner.PowWitness,
-		Queries:          inner.Queries,
-		InputOpenings:    assignShrinkInputOpenings(t, fx),
-	}
-}
-
-// ACCEPT: the assembled circuit (replay + STARK algebra + FRI core) verifies
-// the REAL shrink proof end to end.
-func TestApexShrinkRealFixtureFullVerifyGadgetAccepts(t *testing.T) {
-	fx := loadShrinkRealFixture(t)
-	ex := extractShrinkStark(t, fx)
-	sym := loadShrinkSymbolicConstraints(t)
-	if err := test.IsSolved(allocApexShrinkFullVerifyCircuit(t, fx, ex, sym),
-		assignApexShrinkFullVerifyCircuit(t, fx, ex, sym), ecc.BN254.ScalarField()); err != nil {
-		t.Fatalf("assembled circuit rejected the REAL shrink proof: %v", err)
-	}
-}
-
-// BINDING canary: tampering an opened trace value INSIDE the transcript
-// stream must fail — the algebra layer consumes the same variables the
-// challenger absorbed, so the transcript pin catches in-stream tampering.
-func TestApexShrinkRealFixtureFullVerifyGadgetBindsOpenings(t *testing.T) {
-	fx := loadShrinkRealFixture(t)
-	ex := extractShrinkStark(t, fx)
-	sym := loadShrinkSymbolicConstraints(t)
-	w := assignApexShrinkFullVerifyCircuit(t, fx, ex, sym)
-	tampered := ex.loc.openedObsOff // first coordinate of the first opened value
-	w.PrefixObs[tampered] = bbAddRef(ex.openedEF[0][0], 1)
-	if err := test.IsSolved(allocApexShrinkFullVerifyCircuit(t, fx, ex, sym), w,
-		ecc.BN254.ScalarField()); err == nil {
-		t.Fatal("assembled circuit ACCEPTED a tampered in-transcript opened value")
-	}
-}
-
-// ----------------------------------------------------------------------------
-// FULL constraint evaluation via the emitted symbolic AIR DAGs
-// ----------------------------------------------------------------------------
-
-const shrinkSymbolicConstraintsPath = "fixtures/shrink_symbolic_constraints.json"
-
-func loadShrinkSymbolicConstraints(t *testing.T) *SymbolicConstraints {
-	t.Helper()
-	sym, err := LoadSymbolicConstraints(shrinkSymbolicConstraintsPath)
-	if err != nil {
-		t.Fatalf("emitted symbolic constraints must load (emit via "+
-			"plonky3-recursion/circuit-prover/tests/emit_shrink_symbolic.rs): %v", err)
-	}
-	return sym
-}
-
-// THE CLOSURE CHECK: with the interpreted (emitted, not hand-coded)
-// constraints, the quotient identity holds on the REAL shrink proof for ALL
-// FIVE instances — including Alu (146 constraints) and Poseidon2 (337
-// constraints). A wrong emitted tree, wrong AIR knob, or wrong interpreter
-// semantics cannot pass this (~124-bit equation per instance on real data).
-func TestApexShrinkRealFixtureSymbolicConstraintsRefAccepts(t *testing.T) {
-	fx := loadShrinkRealFixture(t)
-	ex := extractShrinkStark(t, fx)
-	sym := loadShrinkSymbolicConstraints(t)
-	if _, err := verifyShrinkStarkAlgebraRef(ex.shapes, ex.openedEF, ex.cumSums, ex.ch, sym); err != nil {
-		t.Fatalf("interpreted constraints REJECTED the real shrink proof: %v", err)
-	}
-}
-
 // DIFFERENTIAL: for the three simple instances the interpreted folded value
 // must equal the INDEPENDENT hand-derived LogUp evaluation — two disjoint
 // paths (emitted-DAG interpreter vs hand-ported logup.rs algebra) agreeing
-// on real data.
+// on real data. (The hand path is host-side cross-check ONLY; the circuit
+// path is always the interpreter.)
 func TestApexShrinkRealFixtureSymbolicVsHandFolded(t *testing.T) {
 	fx := loadShrinkRealFixture(t)
 	ex := extractShrinkStark(t, fx)
@@ -722,7 +483,7 @@ func TestApexShrinkRealFixtureSymbolicVsHandFolded(t *testing.T) {
 			ex.cumSums[sp.cumSums.off],
 		)
 		interp, err := evalSymbolicFoldedRef(&sym.Instances[i],
-			shrinkSymInputsRef(sh, sp, slice, ex.cumSums, ex.ch, sel), ex.ch.alpha)
+			shrinkSymInputsRef(sh, sp, slice, ex.cumSums, ex.pubVals[i], ex.ch, sel), ex.ch.alpha)
 		if err != nil {
 			t.Fatalf("instance %d: %v", i, err)
 		}
@@ -733,99 +494,403 @@ func TestApexShrinkRealFixtureSymbolicVsHandFolded(t *testing.T) {
 	}
 }
 
-// REJECT canaries with the interpreted constraints: tampering the HEAVY
-// instances' openings must now fail (these values were unchecked witnesses
-// before the symbolic closure).
-func TestApexShrinkRealFixtureSymbolicConstraintsRefRejectsTampers(t *testing.T) {
-	fx := loadShrinkRealFixture(t)
-	base := extractShrinkStark(t, fx)
-	sym := loadShrinkSymbolicConstraints(t)
-	spans, _ := buildStarkOpenedSpans(base.shapes)
+// ----------------------------------------------------------------------------
+// The gnark gadget, algebra layer in isolation (raw witnesses)
+// ----------------------------------------------------------------------------
 
-	cases := []struct {
-		name   string
-		tamper func(ex *shrinkStarkExtract)
-	}{
-		{"tampered-alu-trace-value", func(ex *shrinkStarkExtract) {
-			ex.openedEF[spans[2].traceLocal.off+10][0] =
-				bbAddRef(ex.openedEF[spans[2].traceLocal.off+10][0], 1)
-		}},
-		{"tampered-alu-trace-next", func(ex *shrinkStarkExtract) {
-			ex.openedEF[spans[2].traceNext.off+3][2] =
-				bbAddRef(ex.openedEF[spans[2].traceNext.off+3][2], 1)
-		}},
-		{"tampered-alu-preprocessed", func(ex *shrinkStarkExtract) {
-			ex.openedEF[spans[2].preLocal.off+5][1] =
-				bbAddRef(ex.openedEF[spans[2].preLocal.off+5][1], 1)
-		}},
-		{"tampered-poseidon2-trace-value", func(ex *shrinkStarkExtract) {
-			ex.openedEF[spans[3].traceLocal.off+123][0] =
-				bbAddRef(ex.openedEF[spans[3].traceLocal.off+123][0], 1)
-		}},
-		{"tampered-poseidon2-perm-column", func(ex *shrinkStarkExtract) {
-			ex.openedEF[spans[3].permLocal.off+8][3] =
-				bbAddRef(ex.openedEF[spans[3].permLocal.off+8][3], 1)
-		}},
-		{"tampered-poseidon2-quotient-chunk", func(ex *shrinkStarkExtract) {
-			ex.openedEF[spans[3].quotientChunks[1].off][1] =
-				bbAddRef(ex.openedEF[spans[3].quotientChunks[1].off][1], 1)
-		}},
-		{"tampered-alu-cum-sum", func(ex *shrinkStarkExtract) {
-			ex.cumSums[spans[2].cumSums.off+4][0] =
-				bbAddRef(ex.cumSums[spans[2].cumSums.off+4][0], 1)
-		}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			ex := extractShrinkStark(t, fx)
-			tc.tamper(ex)
-			if _, err := verifyShrinkStarkAlgebraRef(ex.shapes, ex.openedEF, ex.cumSums, ex.ch, sym); err == nil {
-				t.Fatalf("%s: interpreted constraints ACCEPTED tampered real openings", tc.name)
-			}
-		})
-	}
+// shrinkStarkAlgebraCircuit feeds VerifyShrinkStarkAlgebra from raw witness
+// arrays (canonicity asserted at ingestion), isolating the algebra teeth
+// from the transcript binding (which the SettlementCircuit covers).
+type shrinkStarkAlgebraCircuit struct {
+	shapes []StarkInstanceShape // structural
+	sym    *SymbolicConstraints // structural (required)
+
+	OpenedEF  []BBExt
+	CumSums   []BBExt
+	PubVals   [][]frontend.Variable
+	PermAlpha BBExt
+	PermBeta  BBExt
+	Alpha     BBExt
+	Zeta      BBExt
 }
 
-// ACCEPT + REJECT, gadget side, full symbolic mode: the in-circuit
-// interpreter evaluates ALL FIVE instances' constraints on the real proof.
-func TestApexShrinkRealFixtureSymbolicGadgetAccepts(t *testing.T) {
+func (c *shrinkStarkAlgebraCircuit) Define(api frontend.API) error {
+	bb := NewBBApi(api)
+	for i := range c.OpenedEF {
+		bb.ExtAssertIsCanonical(c.OpenedEF[i])
+	}
+	for i := range c.CumSums {
+		bb.ExtAssertIsCanonical(c.CumSums[i])
+	}
+	for i := range c.PubVals {
+		for _, v := range c.PubVals[i] {
+			bb.AssertIsCanonical(v)
+		}
+	}
+	for _, e := range []BBExt{c.PermAlpha, c.PermBeta, c.Alpha, c.Zeta} {
+		bb.ExtAssertIsCanonical(e)
+	}
+	VerifyShrinkStarkAlgebra(bb, c.shapes, c.OpenedEF, c.CumSums, c.PubVals,
+		ShrinkStarkChallenges{
+			PermAlpha: c.PermAlpha, PermBeta: c.PermBeta,
+			Alpha: c.Alpha, Zeta: c.Zeta,
+		},
+		c.sym)
+	return nil
+}
+
+func allocShrinkStarkAlgebraCircuit(ex *shrinkStarkExtract, sym *SymbolicConstraints) *shrinkStarkAlgebraCircuit {
+	c := &shrinkStarkAlgebraCircuit{
+		shapes:   ex.shapes,
+		sym:      sym,
+		OpenedEF: make([]BBExt, len(ex.openedEF)),
+		CumSums:  make([]BBExt, len(ex.cumSums)),
+		PubVals:  make([][]frontend.Variable, len(ex.pubVals)),
+	}
+	for i := range ex.pubVals {
+		c.PubVals[i] = make([]frontend.Variable, len(ex.pubVals[i]))
+	}
+	return c
+}
+
+func assignShrinkStarkAlgebraCircuit(t *testing.T, ex *shrinkStarkExtract, sym *SymbolicConstraints) *shrinkStarkAlgebraCircuit {
+	t.Helper()
+	if err := verifyShrinkStarkAlgebraRef(ex.shapes, ex.openedEF, ex.cumSums, ex.pubVals, ex.ch, sym); err != nil {
+		t.Fatalf("host reference must accept before circuit assignment: %v", err)
+	}
+	c := allocShrinkStarkAlgebraCircuit(ex, sym)
+	for i, e := range ex.openedEF {
+		c.OpenedEF[i] = extToVars(e)
+	}
+	for i, e := range ex.cumSums {
+		c.CumSums[i] = extToVars(e)
+	}
+	for i := range ex.pubVals {
+		for k, v := range ex.pubVals[i] {
+			c.PubVals[i][k] = v
+		}
+	}
+	c.PermAlpha = extToVars(ex.ch.permAlpha)
+	c.PermBeta = extToVars(ex.ch.permBeta)
+	c.Alpha = extToVars(ex.ch.alpha)
+	c.Zeta = extToVars(ex.ch.zeta)
+	return c
+}
+
+// ACCEPT: the in-circuit interpreter evaluates ALL SIX instances' constraints
+// on the real proof (claim lanes included).
+func TestApexShrinkRealFixtureStarkAlgebraGadgetAccepts(t *testing.T) {
 	fx := loadShrinkRealFixture(t)
 	ex := extractShrinkStark(t, fx)
 	sym := loadShrinkSymbolicConstraints(t)
-	if err := test.IsSolved(allocShrinkStarkAlgebraCircuitSym(ex, sym),
-		assignShrinkStarkAlgebraCircuitSym(t, ex, sym), ecc.BN254.ScalarField()); err != nil {
-		t.Fatalf("in-circuit interpreted constraints rejected the REAL proof: %v", err)
+	if err := test.IsSolved(allocShrinkStarkAlgebraCircuit(ex, sym),
+		assignShrinkStarkAlgebraCircuit(t, ex, sym), ecc.BN254.ScalarField()); err != nil {
+		t.Fatalf("gadget rejected the REAL shrink proof's STARK algebra: %v", err)
 	}
 }
 
-func TestApexShrinkRealFixtureSymbolicGadgetRejectsTampers(t *testing.T) {
+// REJECT canaries, gadget side (heavy instances AND claim lanes included —
+// exactly the tampers the removed hand mode let through).
+func TestApexShrinkRealFixtureStarkAlgebraGadgetRejectsTampers(t *testing.T) {
 	fx := loadShrinkRealFixture(t)
 	field := ecc.BN254.ScalarField()
 	baseEx := extractShrinkStark(t, fx)
 	sym := loadShrinkSymbolicConstraints(t)
 	spans, _ := buildStarkOpenedSpans(baseEx.shapes)
+	claimInst := ShrinkVk.ClaimInstance
 
 	cases := []struct {
 		name   string
 		tamper func(c *shrinkStarkAlgebraCircuit)
 	}{
+		{"tampered-const-quotient-chunk", func(c *shrinkStarkAlgebraCircuit) {
+			c.OpenedEF[spans[0].quotientChunks[0].off][0] =
+				bbAddRef(baseEx.openedEF[spans[0].quotientChunks[0].off][0], 1)
+		}},
+		{"tampered-public-perm-column", func(c *shrinkStarkAlgebraCircuit) {
+			c.OpenedEF[spans[1].permLocal.off][2] =
+				bbAddRef(baseEx.openedEF[spans[1].permLocal.off][2], 1)
+		}},
+		{"tampered-recompose-trace-value", func(c *shrinkStarkAlgebraCircuit) {
+			c.OpenedEF[spans[4].traceLocal.off][0] =
+				bbAddRef(baseEx.openedEF[spans[4].traceLocal.off][0], 1)
+		}},
 		{"tampered-alu-trace-value", func(c *shrinkStarkAlgebraCircuit) {
 			c.OpenedEF[spans[2].traceLocal.off+10][0] =
 				bbAddRef(baseEx.openedEF[spans[2].traceLocal.off+10][0], 1)
+		}},
+		{"tampered-alu-cum-sum-balance", func(c *shrinkStarkAlgebraCircuit) {
+			c.CumSums[spans[2].cumSums.off][0] =
+				bbAddRef(baseEx.cumSums[spans[2].cumSums.off][0], 1)
 		}},
 		{"tampered-poseidon2-perm-column", func(c *shrinkStarkAlgebraCircuit) {
 			c.OpenedEF[spans[3].permLocal.off+8][3] =
 				bbAddRef(baseEx.openedEF[spans[3].permLocal.off+8][3], 1)
 		}},
+		{"tampered-claim-lane", func(c *shrinkStarkAlgebraCircuit) {
+			c.PubVals[claimInst][0] = bbAddRef(baseEx.pubVals[claimInst][0], 1)
+		}},
+		{"tampered-expose-claim-trace-value", func(c *shrinkStarkAlgebraCircuit) {
+			c.OpenedEF[spans[claimInst].traceLocal.off][0] =
+				bbAddRef(baseEx.openedEF[spans[claimInst].traceLocal.off][0], 1)
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			ex := extractShrinkStark(t, fx)
-			w := assignShrinkStarkAlgebraCircuitSym(t, ex, sym)
+			w := assignShrinkStarkAlgebraCircuit(t, ex, sym)
 			tc.tamper(w)
-			if err := test.IsSolved(allocShrinkStarkAlgebraCircuitSym(ex, sym), w, field); err == nil {
+			if err := test.IsSolved(allocShrinkStarkAlgebraCircuit(ex, sym), w, field); err == nil {
 				t.Fatalf("%s: gadget ACCEPTED tampered real openings", tc.name)
 			}
 		})
+	}
+}
+
+// ----------------------------------------------------------------------------
+// The assembled SettlementCircuit: transcript replay + STARK algebra + FRI
+// core + open_input + THE 25-LANE PUBLIC STATEMENT BINDING
+// ----------------------------------------------------------------------------
+
+func allocSettlementCircuit(t *testing.T, fx *shrinkRealFixture, ex *shrinkStarkExtract, sym *SymbolicConstraints) *SettlementCircuit {
+	t.Helper()
+	inner := allocApexShrinkRealCircuit(fx)
+	return &SettlementCircuit{
+		script:             inner.script,
+		cfg:                inner.cfg,
+		r:                  inner.r,
+		rollInAfterRound:   inner.rollInAfterRound,
+		shapes:             ex.shapes,
+		loc:                ex.loc,
+		sym:                sym,
+		inputRounds:        shrinkInputRoundsFromFixture(t, fx, ex.shapes),
+		claimInstance:      fx.ClaimInstance,
+		vkPreprocessedRoot: shrinkPreprocessedRoot(t, fx, ex.loc),
+		PrefixObs:          inner.PrefixObs,
+		PrefixDigests:      inner.PrefixDigests,
+		PrefixSamples:      inner.PrefixSamples,
+		CommitRoots:        inner.CommitRoots,
+		FinalPoly:          inner.FinalPoly,
+		Queries:            inner.Queries,
+		InputOpenings:      allocShrinkInputOpenings(fx),
+	}
+}
+
+func assignSettlementCircuit(t *testing.T, fx *shrinkRealFixture, ex *shrinkStarkExtract, sym *SymbolicConstraints) *SettlementCircuit {
+	t.Helper()
+	if err := verifyShrinkStarkAlgebraRef(ex.shapes, ex.openedEF, ex.cumSums, ex.pubVals, ex.ch, sym); err != nil {
+		t.Fatalf("host reference must accept before circuit assignment: %v", err)
+	}
+	inner := assignApexShrinkRealCircuit(t, fx)
+	c := &SettlementCircuit{
+		script:             inner.script,
+		cfg:                inner.cfg,
+		r:                  inner.r,
+		rollInAfterRound:   inner.rollInAfterRound,
+		shapes:             ex.shapes,
+		loc:                ex.loc,
+		sym:                sym,
+		inputRounds:        shrinkInputRoundsFromFixture(t, fx, ex.shapes),
+		claimInstance:      fx.ClaimInstance,
+		vkPreprocessedRoot: shrinkPreprocessedRoot(t, fx, ex.loc),
+		PrefixObs:          inner.PrefixObs,
+		PrefixDigests:      inner.PrefixDigests,
+		PrefixSamples:      inner.PrefixSamples,
+		CommitRoots:        inner.CommitRoots,
+		FinalPoly:          inner.FinalPoly,
+		PowWitness:         inner.PowWitness,
+		Queries:            inner.Queries,
+		InputOpenings:      assignShrinkInputOpenings(t, fx),
+	}
+	assignSettlementPublics(c, fx.TablePublics[fx.ClaimInstance])
+	return c
+}
+
+// shrinkDigestWordAt returns the flat digest-stream word at `off` (the same
+// flattening the loc offsets index).
+func shrinkDigestWordAt(t *testing.T, fx *shrinkRealFixture, off int) fr.Element {
+	t.Helper()
+	var words []fr.Element
+	for _, ev := range fx.PrefixEvents {
+		if ev.Kind == "observe_digest" {
+			for _, w := range ev.Words {
+				words = append(words, parseBn254Hex(t, w))
+			}
+		}
+	}
+	if off < 0 || off >= len(words) {
+		t.Fatalf("digest word offset %d out of range (%d words)", off, len(words))
+	}
+	return words[off]
+}
+
+// shrinkPreprocessedRoot extracts the preprocessed (VK-core) commitment
+// digest from the transcript prefix — the constant the settlement circuit
+// pins (the shrink-VK pin).
+func shrinkPreprocessedRoot(t *testing.T, fx *shrinkRealFixture, loc shrinkStarkPrefixLoc) *big.Int {
+	t.Helper()
+	e := shrinkDigestWordAt(t, fx, loc.preDigOff)
+	return frToBig(e)
+}
+
+// assignSettlementPublics fills the 25 public lanes in the pinned order
+// genesis8 ++ final8 ++ numTurns ++ chainDigest8.
+func assignSettlementPublics(c *SettlementCircuit, claim []uint32) {
+	k := 0
+	for i := 0; i < DigestWidth; i++ {
+		c.GenesisRoot[i] = claim[k]
+		k++
+	}
+	for i := 0; i < DigestWidth; i++ {
+		c.FinalRoot[i] = claim[k]
+		k++
+	}
+	c.NumTurns = claim[k]
+	k++
+	for i := 0; i < DigestWidth; i++ {
+		c.ChainDigest[i] = claim[k]
+		k++
+	}
+}
+
+// ACCEPT: the assembled circuit verifies the REAL shrink proof end to end
+// WITH the correct 25-lane public statement.
+func TestSettlementCircuitAcceptsRealProofWithCorrectStatement(t *testing.T) {
+	fx := loadShrinkRealFixture(t)
+	ex := extractShrinkStark(t, fx)
+	sym := loadShrinkSymbolicConstraints(t)
+	if err := test.IsSolved(allocSettlementCircuit(t, fx, ex, sym),
+		assignSettlementCircuit(t, fx, ex, sym), ecc.BN254.ScalarField()); err != nil {
+		t.Fatalf("assembled circuit rejected the REAL shrink proof + correct statement: %v", err)
+	}
+}
+
+// THE DECISIVE CANARY: a WRONG public root lane must FAIL — a proof must not
+// settle a root it doesn't attest. Three escalation levels:
+//
+//  1. wrong public input, honest transcript — the claim equality tooth fires;
+//  2. wrong public input + matching tampered transcript pv lane — the
+//     Fiat-Shamir sample pins fire (the absorbed claim seeds every challenge);
+//  3. wrong public input + tampered pv lane + ALL samples re-derived through
+//     the reference challenger (a fully self-consistent forged transcript) —
+//     the proof data itself (Merkle openings, fold chains, quotient
+//     identities) no longer verifies against the forged challenges. This is
+//     the "re-prove or fail" floor: only a genuine proof FOR the forged
+//     statement could pass, and the prover doesn't have one.
+func TestSettlementCircuitRejectsWrongStatement(t *testing.T) {
+	fx := loadShrinkRealFixture(t)
+	ex := extractShrinkStark(t, fx)
+	sym := loadShrinkSymbolicConstraints(t)
+	field := ecc.BN254.ScalarField()
+	claim := fx.TablePublics[fx.ClaimInstance]
+	claimObsOff := ex.loc.pubObsOffOf(fx.ClaimInstance)
+
+	t.Run("wrong-genesis-lane-public-only", func(t *testing.T) {
+		w := assignSettlementCircuit(t, fx, ex, sym)
+		w.GenesisRoot[0] = bbAddRef(claim[0], 1)
+		if err := test.IsSolved(allocSettlementCircuit(t, fx, ex, sym), w, field); err == nil {
+			t.Fatal("circuit ACCEPTED a genesis root the proof does not attest")
+		}
+	})
+	t.Run("wrong-final-root-lane-public-only", func(t *testing.T) {
+		w := assignSettlementCircuit(t, fx, ex, sym)
+		w.FinalRoot[3] = bbAddRef(claim[8+3], 1)
+		if err := test.IsSolved(allocSettlementCircuit(t, fx, ex, sym), w, field); err == nil {
+			t.Fatal("circuit ACCEPTED a final root the proof does not attest")
+		}
+	})
+	t.Run("wrong-num-turns-public-only", func(t *testing.T) {
+		w := assignSettlementCircuit(t, fx, ex, sym)
+		w.NumTurns = bbAddRef(claim[16], 1)
+		if err := test.IsSolved(allocSettlementCircuit(t, fx, ex, sym), w, field); err == nil {
+			t.Fatal("circuit ACCEPTED a turn count the proof does not attest")
+		}
+	})
+
+	t.Run("wrong-root-with-matching-transcript-lane", func(t *testing.T) {
+		w := assignSettlementCircuit(t, fx, ex, sym)
+		forged := bbAddRef(claim[0], 1)
+		w.GenesisRoot[0] = forged
+		w.PrefixObs[claimObsOff] = forged // consistent absorb — FS pins fire
+		if err := test.IsSolved(allocSettlementCircuit(t, fx, ex, sym), w, field); err == nil {
+			t.Fatal("circuit ACCEPTED a forged claim with a matching transcript lane")
+		}
+	})
+
+	t.Run("wrong-root-with-fully-rederived-transcript", func(t *testing.T) {
+		w := assignSettlementCircuit(t, fx, ex, sym)
+		forged := bbAddRef(claim[0], 1)
+		w.GenesisRoot[0] = forged
+		w.PrefixObs[claimObsOff] = forged
+		// Re-derive EVERY sampled challenge through the reference challenger
+		// over the forged observe stream, so the transcript replay is fully
+		// self-consistent — the residual inconsistency is the PROOF DATA
+		// itself (commitments, openings, fold chains, identities).
+		c := newMultiFieldChallengerRef()
+		io, is := 0, 0
+		for _, ev := range fx.PrefixEvents {
+			switch ev.Kind {
+			case "observe_bb":
+				vals := make([]uint32, len(ev.Values))
+				for k := range ev.Values {
+					v, ok := w.PrefixObs[io+k].(uint32)
+					if !ok {
+						t.Fatalf("prefix obs %d is not a uint32 witness", io+k)
+					}
+					vals[k] = v
+				}
+				c.observeBabyBearSlice(vals)
+				io += len(ev.Values)
+			case "observe_digest":
+				words := make([]fr.Element, len(ev.Words))
+				for k, wd := range ev.Words {
+					words[k] = parseBn254Hex(t, wd)
+				}
+				c.observeBn254Digest(words)
+			case "sample_bb":
+				for range ev.Values {
+					w.PrefixSamples[is] = c.sampleBabyBear()
+					is++
+				}
+			}
+		}
+		if err := test.IsSolved(allocSettlementCircuit(t, fx, ex, sym), w, field); err == nil {
+			t.Fatal("circuit ACCEPTED a forged claim with a fully re-derived transcript " +
+				"(the proof data should not verify against forged challenges)")
+		}
+	})
+}
+
+// BINDING canary: tampering an opened trace value INSIDE the transcript
+// stream must fail — the algebra layer consumes the same variables the
+// challenger absorbed, so the transcript pin catches in-stream tampering.
+func TestSettlementCircuitBindsOpenings(t *testing.T) {
+	fx := loadShrinkRealFixture(t)
+	ex := extractShrinkStark(t, fx)
+	sym := loadShrinkSymbolicConstraints(t)
+	w := assignSettlementCircuit(t, fx, ex, sym)
+	tampered := ex.loc.openedObsOff // first coordinate of the first opened value
+	w.PrefixObs[tampered] = bbAddRef(ex.openedEF[0][0], 1)
+	if err := test.IsSolved(allocSettlementCircuit(t, fx, ex, sym), w,
+		ecc.BN254.ScalarField()); err == nil {
+		t.Fatal("assembled circuit ACCEPTED a tampered in-transcript opened value")
+	}
+}
+
+// VK-pin canary: a witness carrying a DIFFERENT preprocessed (VK-core)
+// commitment digest must fail the baked constant pin.
+func TestSettlementCircuitPinsShrinkVkPreprocessedRoot(t *testing.T) {
+	fx := loadShrinkRealFixture(t)
+	ex := extractShrinkStark(t, fx)
+	sym := loadShrinkSymbolicConstraints(t)
+	w := assignSettlementCircuit(t, fx, ex, sym)
+	// The preprocessed digest is PrefixDigests[loc.preDigOff].
+	e := shrinkDigestWordAt(t, fx, ex.loc.preDigOff)
+	one := fr.One()
+	e.Add(&e, &one)
+	w.PrefixDigests[ex.loc.preDigOff] = frToBig(e)
+	if err := test.IsSolved(allocSettlementCircuit(t, fx, ex, sym), w,
+		ecc.BN254.ScalarField()); err == nil {
+		t.Fatal("assembled circuit ACCEPTED a proof under a different shrink VK core")
 	}
 }

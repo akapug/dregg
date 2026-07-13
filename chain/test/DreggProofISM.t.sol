@@ -17,6 +17,8 @@ contract AcceptingVerifier25 is IGroth16Verifier25 {
         uint256[2] calldata,
         uint256[2][2] calldata,
         uint256[2] calldata,
+        uint256[2] calldata,
+        uint256[2] calldata,
         uint256[25] calldata
     ) external pure returns (bool) {
         return true;
@@ -55,6 +57,8 @@ contract DreggProofISMTest is Test {
             [uint256(1), uint256(2)],
             [[uint256(3), uint256(4)], [uint256(5), uint256(6)]],
             [uint256(7), uint256(8)],
+            [uint256(9), uint256(10)],
+            [uint256(11), uint256(12)],
             mkLanes(1), mkLanes(2), 7, mkLanes(3),
             msgRoot
         );

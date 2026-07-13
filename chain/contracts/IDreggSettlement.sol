@@ -130,6 +130,11 @@ interface IDreggSettlement {
     /// @param a,b,c       Groth16 proof points (BN254): a in G1, b in G2,
     ///                    c in G1. Word order matches EIP-197 (B's imaginary
     ///                    coord first).
+    /// @param commitments,commitmentPok The proof's Pedersen commitment (2
+    ///                    words) + its proof of knowledge (2 words) — gnark
+    ///                    MarshalSolidity words [8..12). Part of the PROOF
+    ///                    (the wrap circuit's commit-based range checker),
+    ///                    not of the settlement statement.
     /// @param genesisRoot The 8 anchor lanes the proof starts from. First
     ///                    settle: establishes the genesis anchor. Later
     ///                    settles: must equal the current proven root lanes.
@@ -148,6 +153,8 @@ interface IDreggSettlement {
         uint256[2] calldata a,
         uint256[2][2] calldata b,
         uint256[2] calldata c,
+        uint256[2] calldata commitments,
+        uint256[2] calldata commitmentPok,
         uint32[8] calldata genesisRoot,
         uint32[8] calldata finalRoot,
         uint32 numTurns,

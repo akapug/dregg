@@ -41,16 +41,19 @@
 // remains (the named residual before the full verify -> Groth16 wrap):
 //
 //	VERIFIED IN-CIRCUIT on real data (stark_algebra_real_fixture_test.go):
-//	the quotient recomposition + quotient identity for ALL 5 instances with
-//	the FULL constraint evaluation (AIR + LogUp at zeta) — the three simple
-//	instances (Const, Public, Recompose: zero AIR constraints, one
-//	WitnessChecks lookup each) by an independent hand-derived LogUp path,
-//	and ALL FIVE (including Alu: 146 constraints, Poseidon2: 337) by the
-//	GENERIC symbolic interpreter (stark_constraint_interp.go) over the
-//	constraint DAGs emitted from the AIRs themselves
+//	the quotient recomposition + quotient identity for ALL 6 instances
+//	(Const, Public, Alu: 146 constraints, Poseidon2: 337, Recompose,
+//	ExposeClaim: 100) with the FULL constraint evaluation (AIR + LogUp at
+//	zeta) by the GENERIC symbolic interpreter (stark_constraint_interp.go)
+//	over the constraint DAGs emitted from the AIRs themselves
 //	(plonky3-recursion/circuit-prover/tests/emit_shrink_symbolic.rs — no
-//	hand-encoding); plus the global WitnessChecks cumulative-sum balance
-//	across all 28 lookups.
+//	hand-encoding); the ExposeClaim instance additionally binds the shrink
+//	proof's 25 PUBLIC claim lanes (pv == v_0, bus-bound) — the settlement
+//	statement channel; plus the global WitnessChecks cumulative-sum balance
+//	across all 53 lookups. The three simple instances are cross-checked
+//	host-side against an independent hand-derived LogUp path (differential
+//	only — the former in-circuit hand MODE, whose heavy instances were
+//	witnessed and therefore vacuously satisfied, was REMOVED).
 //
 //	SEAM CLOSED (stark_open_input.go, verified on the real proof in
 //	apex_shrink_open_input_test.go): the OPENED VALUES this layer consumes
@@ -59,7 +62,7 @@
 //	permutation commitments, derives the FRI reduced openings from those
 //	opened columns (the alpha-combination, verifier.rs:524 at the pinned
 //	rev), and asserts them equal to the fold seeds VerifyFriNative walks.
-//	The assembled circuit (apexShrinkFullVerifyCircuit) is therefore
+//	The assembled circuit (SettlementCircuit) is therefore
 //	commitments → (Merkle open + α-reduce) → FRI low-degree, with the same
 //	opened-at-zeta values feeding the constraint/quotient identity here.
 //
@@ -221,6 +224,9 @@ type StarkInstanceShape struct {
 	// Number of GLOBAL lookups (== NumLookups in the shrink scope: every
 	// lookup rides the WitnessChecks bus; no locals).
 	NumGlobalLookups int
+	// Number of table PUBLIC VALUES (base-field lanes). Zero for every shrink
+	// table except expose_claim (the 25-lane settlement claim channel).
+	NumPublicValues int
 	// Whether trace_next / preprocessed_next are opened
 	// (main_next_row_columns / preprocessed_next_row_columns nonempty).
 	HasTraceNext bool
@@ -413,43 +419,11 @@ func recomposeQuotientNative(
 	return quotient
 }
 
-// evalWitnessBusFoldedNative evaluates the FULL folded constraint value at
-// zeta for an instance whose AIR has ZERO constraints and exactly ONE global
-// WitnessChecks lookup with a single element tuple (Const, Public, Recompose
-// — const_air.rs:172-188, public_air.rs:195-222 at 1 lane,
-// recompose_air.rs:150-194 at 1 lane / no coeff lookups). The three LogUp
-// constraints (logup.rs:226,245,250), folded with acc = acc*alpha + C:
-//
-//	folded = alpha²·(is_first·s_local)
-//	       + alpha ·(is_transition·((s_next-s_local)·denom - mult))
-//	       +        (is_last     ·((cum   -s_local)·denom - mult))
-//
-// with denom = alpha_ch - Horner_beta(elems) (logup.rs:88: acc = e + acc·β).
-func evalWitnessBusFoldedNative(
-	bb *BBApi,
-	sel starkSelectorsNative,
-	alphaFold, alphaCh, betaCh BBExt,
-	elems []BBExt, // the lookup tuple, index expression first
-	mult BBExt,
-	sLocal, sNext, cum BBExt,
-) BBExt {
-	combined := elems[0]
-	for k := 1; k < len(elems); k++ {
-		combined = bb.ExtAdd(elems[k], bb.ExtMul(combined, betaCh))
-	}
-	denom := bb.ExtSub(alphaCh, combined)
-
-	c1 := bb.ExtMul(sel.isFirstRow, sLocal)
-	c2 := bb.ExtMul(sel.isTransition,
-		bb.ExtSub(bb.ExtMul(bb.ExtSub(sNext, sLocal), denom), mult))
-	c3 := bb.ExtMul(sel.isLastRow,
-		bb.ExtSub(bb.ExtMul(bb.ExtSub(cum, sLocal), denom), mult))
-
-	folded := c1
-	folded = bb.ExtAdd(bb.ExtMul(folded, alphaFold), c2)
-	folded = bb.ExtAdd(bb.ExtMul(folded, alphaFold), c3)
-	return folded
-}
+// NOTE: the former in-circuit hand-derived LogUp evaluator
+// (evalWitnessBusFoldedNative) was REMOVED together with the `sym == nil`
+// verification mode — see the VerifyShrinkStarkAlgebra doc. Its host twin
+// (evalWitnessBusFoldedRef, stark_verify_native_ref.go) survives as a pure
+// DIFFERENTIAL cross-check against the symbolic interpreter.
 
 // ============================================================================
 // The shrink-shape orchestrator
@@ -463,37 +437,52 @@ type witnessBusSpec struct {
 	multPreCol, idxPreCol int
 }
 
-// ShrinkVkShape is the pinned VK-side shape of the 5-instance shrink proof
-// (batch_stark_prover.rs:276 NUM_PRIMITIVE_TABLES = 3: Const, Public, Alu
-// (circuit/src/ops/op.rs:233-238); non-primitives registered Poseidon2 then
-// Recompose, apex_shrink.rs:222-232). Lookup counts from the AIR sources:
-// Const/Public/Recompose 1 each; Alu 4 lanes·4 + 2·(k_max-1) = 18 at
-// lanes=4, k_max=2 (alu_air.rs:294-299 total_width 4·16+12 = 76,
-// preprocessed 4·13+7 = 59 pin those knobs); Poseidon2 WIDTH_EXT + RATE_EXT
-// + 1 = 7 (poseidon2-circuit-air/src/air.rs:1484-1532 at WIDTH_EXT=4,
-// RATE_EXT=2). Instances with an eval that reads next rows open trace_next /
-// preprocessed_next (BaseAir defaults; Const/Public/Recompose override to
-// none). Total opened-EF accounting against the real fixture pins this shape
-// uniquely: 764 + 40 + 172 + 224 = 1200.
+// ShrinkNumInstances is the pinned instance count of the EXPOSED shrink proof
+// (shrink_apex_to_outer_exposed): 3 primitives + Poseidon2-W16 + Recompose +
+// ExposeClaim.
+const ShrinkNumInstances = 6
+
+// ShrinkVkShape is the pinned VK-side shape of the 6-instance EXPOSED shrink
+// proof (batch_stark_prover.rs:276 NUM_PRIMITIVE_TABLES = 3: Const, Public,
+// Alu (circuit/src/ops/op.rs:233-238); non-primitives registered Poseidon2,
+// Recompose, ExposeClaim — apex_shrink.rs:222-232 + the exposed-claim hook of
+// apex_shrink_gnark_export.rs shrink_apex_to_outer_exposed). Lookup counts
+// from the AIR sources: Const/Public/Recompose 1 each; Alu 4 lanes·4 +
+// 2·(k_max-1) = 18 at lanes=4, k_max=2 (alu_air.rs:294-299 total_width
+// 4·16+12 = 76, preprocessed 4·13+7 = 59 pin those knobs); Poseidon2
+// WIDTH_EXT + RATE_EXT + 1 = 7 (poseidon2-circuit-air/src/air.rs:1484-1532
+// at WIDTH_EXT=4, RATE_EXT=2); ExposeClaim ONE WitnessChecks receive per
+// claim lane = 25 (expose_claim_air.rs). Instances with an eval that reads
+// next rows open trace_next / preprocessed_next (BaseAir defaults;
+// Const/Public/Recompose/ExposeClaim override to none).
 type ShrinkVkShape struct {
-	NumLookups [5]int
-	TraceNext  [5]bool
-	PreNext    [5]bool
+	NumLookups      [ShrinkNumInstances]int
+	NumPublicValues [ShrinkNumInstances]int
+	TraceNext       [ShrinkNumInstances]bool
+	PreNext         [ShrinkNumInstances]bool
 	// SimpleSpecs maps the fully-encoded instances (zero AIR constraints,
-	// one WitnessChecks lookup) to their preprocessed column spec.
+	// one WitnessChecks lookup) to their preprocessed column spec — used by
+	// the host-side DIFFERENTIAL cross-check only (the circuit path is the
+	// symbolic interpreter, always).
 	SimpleSpecs map[int]witnessBusSpec
+	// ClaimInstance is the expose_claim instance (the settlement claim
+	// channel); ClaimLen its pinned public-value count = the 25 lanes.
+	ClaimInstance, ClaimLen int
 }
 
-// ShrinkVk is THE pinned shape for the current shrink circuit.
+// ShrinkVk is THE pinned shape for the current (exposed) shrink circuit.
 var ShrinkVk = ShrinkVkShape{
-	NumLookups: [5]int{1, 1, 18, 7, 1},
-	TraceNext:  [5]bool{false, false, true, true, false},
-	PreNext:    [5]bool{false, false, true, true, false},
+	NumLookups:      [ShrinkNumInstances]int{1, 1, 18, 7, 1, 25},
+	NumPublicValues: [ShrinkNumInstances]int{0, 0, 0, 0, 0, 25},
+	TraceNext:       [ShrinkNumInstances]bool{false, false, true, true, false, false},
+	PreNext:         [ShrinkNumInstances]bool{false, false, true, true, false, false},
 	SimpleSpecs: map[int]witnessBusSpec{
 		0: {multPreCol: 0, idxPreCol: 1}, // Const  (WitnessLookupPrepCols)
 		1: {multPreCol: 0, idxPreCol: 1}, // Public (WitnessLookupPrepCols)
 		4: {multPreCol: 1, idxPreCol: 0}, // Recompose (RecomposePrepLaneCols)
 	},
+	ClaimInstance: 5,
+	ClaimLen:      NumPublicInputs, // 25 — the pinned settlement statement
 }
 
 // ShrinkStarkChallenges are the transcript challenges the algebra layer
@@ -507,44 +496,52 @@ type ShrinkStarkChallenges struct {
 
 // VerifyShrinkStarkAlgebra constrains the batch-STARK algebra layer of the
 // shrink proof over the FLAT opened-values-at-zeta stream (the exact values
-// pcs.verify observes into the transcript, in observation order) and the
-// flat cumulative-sums stream:
+// pcs.verify observes into the transcript, in observation order), the flat
+// cumulative-sums stream, and the per-instance table PUBLIC VALUES (the
+// expose_claim settlement claim channel):
 //
 //  1. slices the streams per instance by the pinned shape;
-//  2. per instance: recomposes quotient(zeta) from the opened chunks and
-//     asserts the quotient identity  folded == quotient · Z_H(zeta);
+//  2. per instance: recomposes quotient(zeta) from the opened chunks,
+//     evaluates ALL its constraints IN-CIRCUIT by the generic symbolic
+//     interpreter over the emitted AIR DAGs (stark_constraint_interp.go) —
+//     with the instance's public values substituted into the DAG's `pub`
+//     leaves (the ExposeClaimAir pv == v_0 binding rides here) — and asserts
+//     the quotient identity  folded == quotient · Z_H(zeta);
 //  3. asserts the global WitnessChecks cumulative-sum balance
-//     (sum of all 28 sums == 0, mod.rs:623-643).
+//     (sum of all sums == 0, mod.rs:623-643).
 //
-// The folded-constraint value per instance comes from ONE of two modes:
+// The symbolic interpreter is the ONLY constraint-evaluation mode. The former
+// `sym == nil` "hand" mode was REMOVED: it evaluated only the three simple
+// instances and took the heavy instances' (Alu, Poseidon2) folded values as
+// WITNESSES, making the identity for those two hold by construction — a
+// vacuous check an audit flagged as a trap ("5/5 instances" that a trace
+// tamper passes). The hand-derived LogUp evaluation survives host-side as a
+// DIFFERENTIAL cross-check only (evalWitnessBusFoldedRef).
 //
-//   - sym != nil (the FULL mode): every instance's constraints are evaluated
-//     IN-CIRCUIT by the generic symbolic interpreter over the emitted AIR
-//     DAGs (stark_constraint_interp.go) — the complete constraint eval for
-//     all 5 instances; heavyFolded is ignored.
-//   - sym == nil (the hand mode, kept as an independent cross-check): the
-//     three simple instances (Const, Public, Recompose) are evaluated by the
-//     hand-derived LogUp path; Alu and Poseidon2 take WITNESSED values from
-//     heavyFolded (consistency-only for those two — see HONEST SCOPE).
-//
-// Precondition: openedEF and cumSums coordinates are already
+// Precondition: openedEF, cumSums and pubVals coordinates are already
 // canonicity-bound (they are when they flow through the challenger replay —
-// ObserveBabyBear asserts canonicity). heavyFolded is canonicity-asserted
-// here.
+// ObserveBabyBear asserts canonicity).
 func VerifyShrinkStarkAlgebra(
 	bb *BBApi,
 	shapes []StarkInstanceShape,
 	openedEF []BBExt,
 	cumSums []BBExt,
+	pubVals [][]frontend.Variable,
 	ch ShrinkStarkChallenges,
 	sym *SymbolicConstraints,
-	heavyFolded map[int]BBExt,
 ) {
-	if len(shapes) != 5 {
-		panic("VerifyShrinkStarkAlgebra: shrink scope is exactly 5 instances")
+	if len(shapes) != ShrinkNumInstances {
+		panic("VerifyShrinkStarkAlgebra: shrink scope is exactly 6 instances")
 	}
-	if sym != nil && len(sym.Instances) != len(shapes) {
+	if sym == nil {
+		panic("VerifyShrinkStarkAlgebra: the emitted symbolic constraints are REQUIRED " +
+			"(no witnessed-folded fallback exists)")
+	}
+	if len(sym.Instances) != len(shapes) {
 		panic("VerifyShrinkStarkAlgebra: symbolic constraint file instance count mismatch")
+	}
+	if len(pubVals) != len(shapes) {
+		panic("VerifyShrinkStarkAlgebra: public-value stream instance count mismatch")
 	}
 	spans, totalEF := buildStarkOpenedSpans(shapes)
 	if len(openedEF) != totalEF {
@@ -568,43 +565,18 @@ func VerifyShrinkStarkAlgebra(
 		quotient := recomposeQuotientNative(bb, sel.zetaPow2Db, chunks,
 			shrinkQuotientDomainConsts(sh.DegreeBits, sh.NumQuotientChunks))
 
-		// Folded constraints at zeta.
-		var folded BBExt
-		switch {
-		case sym != nil:
-			inst := &sym.Instances[i]
-			if inst.Width != sh.Width || inst.PreWidth != sh.PreWidth ||
-				inst.NumLookups != sh.NumLookups {
-				panic("VerifyShrinkStarkAlgebra: emitted constraint shape drifted from the proof shape")
-			}
-			folded = evalSymbolicFoldedNative(bb, inst,
-				shrinkSymInputsNative(bb, sh, sp, slice, cumSums, ch, sel), ch.Alpha)
-		default:
-			if spec, ok := ShrinkVk.SimpleSpecs[i]; ok {
-				if sh.NumLookups != 1 || sh.NumGlobalLookups != 1 || sh.Width != 4 {
-					panic("VerifyShrinkStarkAlgebra: simple-instance shape drifted from the pinned VK")
-				}
-				pre := slice(sp.preLocal)
-				trace := slice(sp.traceLocal)
-				perm := slice(sp.permLocal)
-				permNext := slice(sp.permNext)
-				elems := append([]BBExt{pre[spec.idxPreCol]}, trace...)
-				folded = evalWitnessBusFoldedNative(
-					bb, sel, ch.Alpha, ch.PermAlpha, ch.PermBeta,
-					elems, pre[spec.multPreCol],
-					bb.ExtFromBasisCoefficients([4]BBExt(perm[0:4])),
-					bb.ExtFromBasisCoefficients([4]BBExt(permNext[0:4])),
-					cumSums[sp.cumSums.off],
-				)
-			} else {
-				hf, ok := heavyFolded[i]
-				if !ok {
-					panic("VerifyShrinkStarkAlgebra: missing witnessed folded value for a heavy instance")
-				}
-				bb.ExtAssertIsCanonical(hf)
-				folded = hf
-			}
+		// Folded constraints at zeta — the symbolic interpreter over the
+		// emitted DAG, public values substituted.
+		inst := &sym.Instances[i]
+		if inst.Width != sh.Width || inst.PreWidth != sh.PreWidth ||
+			inst.NumLookups != sh.NumLookups || inst.NumPublicValues != sh.NumPublicValues {
+			panic("VerifyShrinkStarkAlgebra: emitted constraint shape drifted from the proof shape")
 		}
+		if len(pubVals[i]) != sh.NumPublicValues {
+			panic("VerifyShrinkStarkAlgebra: public-value lane count drifted from the pinned shape")
+		}
+		folded := evalSymbolicFoldedNative(bb, inst,
+			shrinkSymInputsNative(bb, sh, sp, slice, cumSums, pubVals[i], ch, sel), ch.Alpha)
 
 		// The quotient identity (data.rs:100, multiplied through by Z_H):
 		// folded == quotient(zeta) · Z_H(zeta).
@@ -630,6 +602,7 @@ func shrinkSymInputsNative(
 	sp starkInstanceSpans,
 	slice func(efSpan) []BBExt,
 	cumSums []BBExt,
+	pubVals []frontend.Variable,
 	ch ShrinkStarkChallenges,
 	sel starkSelectorsNative,
 ) symEvalInputsNative {
@@ -647,6 +620,13 @@ func shrinkSymInputsNative(
 		PermNext:   recompose(slice(sp.permNext)),
 		PermValues: cumSums[sp.cumSums.off : sp.cumSums.off+sp.cumSums.len],
 		Sel:        sel,
+	}
+	if sh.NumPublicValues > 0 {
+		in.PublicValues = make([]BBExt, len(pubVals))
+		for k, v := range pubVals {
+			// Base-field public value lifted to the extension: [v, 0, 0, 0].
+			in.PublicValues[k] = BBExt{v, 0, 0, 0}
+		}
 	}
 	if sh.HasTraceNext {
 		in.TraceNext = slice(sp.traceNext)

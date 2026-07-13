@@ -1,0 +1,242 @@
+// THE SETTLEMENT CIRCUIT — the assembled native shrink-proof verifier WITH
+// the pinned 25-lane public settlement statement attached.
+//
+// This is the circuit Groth16-wrapped for IDreggSettlement.settle: ONE Define
+// that
+//
+//  1. replays the shrink proof's pre-FRI Fiat–Shamir transcript (pinning
+//     every sampled challenge to the in-circuit MultiField challenger),
+//  2. runs the full batch-STARK algebra layer (constraint evaluation at zeta
+//     for all 6 instances via the emitted symbolic DAGs + quotient identity +
+//     global LogUp balance — stark_verify_native.go),
+//  3. verifies the FRI core (fri_verify_native.go), and
+//  4. closes the open_input seam (stark_open_input.go): Merkle-opens the
+//     input batches against the transcript-observed commitments and binds
+//     the derived reduced openings to the FRI fold seeds,
+//
+// and — THE SETTLEMENT BINDING — asserts its 25 gnark PUBLIC inputs
+// (genesis_root[8] ++ final_root[8] ++ num_turns ++ chain_digest[8], the
+// pinned `Publics` order shared with DreggSettlement.sol) equal the shrink
+// proof's expose_claim table public values, lane for lane.
+//
+// WHY THAT EQUALITY IS A BINDING AND NOT A LABEL: the claim lanes the circuit
+// equates against are the SAME variables the transcript replay absorbed
+// (verify_batch observes per-instance public values right after the main
+// commitment — so they seed every downstream challenge), AND they feed the
+// ExposeClaimAir constraint evaluation (`public_value[lane] == v_0` of the
+// bus-bound read, enforced through the quotient identity at zeta over the
+// COMMITTED expose_claim trace). The bus binds that trace cell to the very
+// circuit witnesses the in-circuit apex verification consumed as the apex's
+// public values — i.e. the apex's genuine 25-lane exposed claim
+// (circuit-prove/src/apex_shrink_gnark_export.rs shrink_apex_to_outer_exposed
+// documents the full chain). A prover cannot satisfy this circuit with public
+// inputs the verified proof does not attest: swapping the claim changes the
+// absorbed transcript (all challenges move — the fixed Merkle/fold data no
+// longer verifies) and breaks the ExposeClaimAir identity for the committed
+// trace.
+//
+// VK PIN (tooth 1, the shrink half): `vkPreprocessedRoot`, when set, bakes
+// the shrink proof's preprocessed (op-list) commitment digest as a circuit
+// CONSTANT — the shrink circuit's VK core. NAMED RESIDUAL (honest scope): the
+// APEX's own VK identity (its preprocessed commitment) rides as shrink-circuit
+// public inputs in the Public table and is NOT yet independently pinned here;
+// chain-level apex-VK anchoring is the same fingerprint discipline the
+// BabyBear tree uses (RecursionVk). See the audit notes in
+// settlement_snark_test.go.
+package friverifier
+
+import (
+	"math/big"
+
+	"github.com/consensys/gnark/frontend"
+)
+
+// shrinkPrefixOp is the structural script for replaying the pre-FRI
+// transcript prefix in-circuit.
+type shrinkPrefixOp struct {
+	kind string // observe_bb | observe_digest | sample_bb
+	n    int
+}
+
+// shrinkStarkPrefixLoc holds flat offsets into the prefix observe/sample/
+// digest streams for the STARK-algebra inputs, the table-publics block (the
+// settlement claim channel), and the anchored commitment digests.
+type shrinkStarkPrefixLoc struct {
+	permChSampleOff int // 8 values: perm alpha then perm beta coords
+	alphaSampleOff  int // 4 values
+	zetaSampleOff   int // 4 values
+	friAlphaOff     int // 4 values: the FRI batch-combination alpha
+	openedObsOff    int // 4*totalEF values
+	openedObsLen    int
+	cumObsOff       int // 4*numGlobalLookups values
+	cumObsLen       int
+	// Digest-word offsets of the input-round commitments, in PCS ROUND order
+	// (trace=main, quotient, preprocessed, permutation) — the roots the
+	// open_input Merkle checks bind against.
+	inputRootDigOff [4]int
+	// The per-instance table PUBLIC VALUES block (flattened, instance order),
+	// observed right after the main commitment (verify_batch's transcript):
+	// flat offset into the observe stream + per-instance lane counts.
+	pubObsOff int
+	pubLens   []int
+	// Digest-word offset of the preprocessed (VK-core) commitment.
+	preDigOff int
+}
+
+// pubObsOffOf returns the flat observe-stream offset of instance i's public
+// values within the publics block.
+func (l *shrinkStarkPrefixLoc) pubObsOffOf(i int) int {
+	off := l.pubObsOff
+	for j := 0; j < i; j++ {
+		off += l.pubLens[j]
+	}
+	return off
+}
+
+// SettlementCircuit is the assembled native verify with the pinned 25-lane
+// public statement. gnark exposes public inputs in struct field order, so
+// `Publics` (fri_verifier.go — genesis_root[8] ++ final_root[8] ++ num_turns
+// ++ chain_digest[8]) comes FIRST, matching the Solidity side's input vector.
+type SettlementCircuit struct {
+	Publics
+
+	// Structural (unexported: ignored by the gnark schema walker).
+	script           []shrinkPrefixOp
+	cfg              FriConfig
+	r                int
+	rollInAfterRound []int
+	shapes           []StarkInstanceShape
+	loc              shrinkStarkPrefixLoc
+	sym              *SymbolicConstraints  // the emitted constraint DAGs (required)
+	inputRounds      []OpenInputRoundShape // open_input structural shapes
+	claimInstance    int                   // the expose_claim instance index
+	// vkPreprocessedRoot, when non-nil, pins the shrink proof's preprocessed
+	// (op-list) commitment digest as a circuit constant — the shrink-VK core.
+	vkPreprocessedRoot *big.Int
+
+	PrefixObs     []frontend.Variable
+	PrefixDigests []frontend.Variable
+	PrefixSamples []frontend.Variable
+	CommitRoots   []frontend.Variable
+	FinalPoly     []BBExt
+	PowWitness    frontend.Variable
+	Queries       []FriNativeQueryOpening
+	InputOpenings [][]OpenInputBatchOpening // [query][input round]
+}
+
+func (c *SettlementCircuit) Define(api frontend.API) error {
+	bb := NewBBApi(api)
+	ch := NewMultiFieldChallenger(bb)
+
+	if c.sym == nil {
+		panic("SettlementCircuit: emitted symbolic constraints are required")
+	}
+
+	// ---- Public-statement hygiene: every lane a canonical BabyBear residue
+	// (fail-closed; mirrors DreggSettlement.sol's _requireCanonical).
+	for i := 0; i < DigestWidth; i++ {
+		bb.AssertIsCanonical(c.GenesisRoot[i])
+		bb.AssertIsCanonical(c.FinalRoot[i])
+		bb.AssertIsCanonical(c.ChainDigest[i])
+	}
+	bb.AssertIsCanonical(c.NumTurns)
+
+	// ---- Transcript replay — every observed value canonicity-bound by the
+	// challenger, every sampled challenge pinned.
+	io, id, is := 0, 0, 0
+	for _, op := range c.script {
+		switch op.kind {
+		case "observe_bb":
+			ch.ObserveBabyBearSlice(c.PrefixObs[io : io+op.n])
+			io += op.n
+		case "observe_digest":
+			ch.ObserveBn254Digest(c.PrefixDigests[id : id+op.n])
+			id += op.n
+		case "sample_bb":
+			for k := 0; k < op.n; k++ {
+				api.AssertIsEqual(ch.SampleBabyBear(), c.PrefixSamples[is])
+				is++
+			}
+		}
+	}
+
+	// ---- THE SETTLEMENT BINDING: the 25 public lanes ARE the shrink proof's
+	// expose_claim public values (the transcript-absorbed, AIR-constrained
+	// claim channel), in the pinned order.
+	claim := c.PrefixObs[c.loc.pubObsOffOf(c.claimInstance) : c.loc.pubObsOffOf(c.claimInstance)+
+		c.loc.pubLens[c.claimInstance]]
+	if len(claim) != NumPublicInputs {
+		panic("SettlementCircuit: claim channel is not the pinned 25-lane statement")
+	}
+	k := 0
+	for i := 0; i < DigestWidth; i++ {
+		api.AssertIsEqual(claim[k], c.GenesisRoot[i])
+		k++
+	}
+	for i := 0; i < DigestWidth; i++ {
+		api.AssertIsEqual(claim[k], c.FinalRoot[i])
+		k++
+	}
+	api.AssertIsEqual(claim[k], c.NumTurns)
+	k++
+	for i := 0; i < DigestWidth; i++ {
+		api.AssertIsEqual(claim[k], c.ChainDigest[i])
+		k++
+	}
+
+	// ---- VK pin (shrink half): the preprocessed (op-list) commitment digest
+	// is a constant of the circuit.
+	if c.vkPreprocessedRoot != nil {
+		api.AssertIsEqual(c.PrefixDigests[c.loc.preDigOff], c.vkPreprocessedRoot)
+	}
+
+	// ---- STARK-algebra layer over the transcript-bound opened values.
+	groupEF := func(vars []frontend.Variable) []BBExt {
+		out := make([]BBExt, len(vars)/4)
+		for i := range out {
+			copy(out[i][:], vars[4*i:4*i+4])
+		}
+		return out
+	}
+	sampleExt := func(off int) BBExt {
+		var e BBExt
+		copy(e[:], c.PrefixSamples[off:off+4])
+		return e
+	}
+	openedEF := groupEF(c.PrefixObs[c.loc.openedObsOff : c.loc.openedObsOff+c.loc.openedObsLen])
+	zeta := sampleExt(c.loc.zetaSampleOff)
+	pubVals := make([][]frontend.Variable, len(c.shapes))
+	for i := range c.shapes {
+		off := c.loc.pubObsOffOf(i)
+		pubVals[i] = c.PrefixObs[off : off+c.loc.pubLens[i]]
+	}
+	VerifyShrinkStarkAlgebra(bb, c.shapes,
+		openedEF,
+		groupEF(c.PrefixObs[c.loc.cumObsOff:c.loc.cumObsOff+c.loc.cumObsLen]),
+		pubVals,
+		ShrinkStarkChallenges{
+			PermAlpha: sampleExt(c.loc.permChSampleOff),
+			PermBeta:  sampleExt(c.loc.permChSampleOff + 4),
+			Alpha:     sampleExt(c.loc.alphaSampleOff),
+			Zeta:      zeta,
+		},
+		c.sym)
+
+	// ---- FRI core, drawing betas and query indices live from the same
+	// transcript.
+	queryBits := VerifyFriNative(bb, c.cfg, c.r, c.CommitRoots, c.FinalPoly, c.PowWitness,
+		c.Queries, c.rollInAfterRound, ch)
+
+	// ---- open_input: bind the fold seeds to the COMMITTED columns.
+	roots := make([]frontend.Variable, len(c.loc.inputRootDigOff))
+	for i, off := range c.loc.inputRootDigOff {
+		roots[i] = c.PrefixDigests[off]
+	}
+	pre := NewOpenInputPrecomp(bb, c.inputRounds, zeta, sampleExt(c.loc.friAlphaOff),
+		c.r+c.cfg.LogBlowup+c.cfg.LogFinalPolyLen)
+	for qi := range c.Queries {
+		BindOpenInputToFriSeedsNative(bb, c.inputRounds, pre, queryBits[qi], roots,
+			c.InputOpenings[qi], openedEF, c.Queries[qi], c.rollInAfterRound)
+	}
+	return nil
+}

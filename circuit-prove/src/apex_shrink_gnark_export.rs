@@ -65,11 +65,18 @@
 //! constants and size the wrap (see `chain/gnark/stark_verify_native.go`).
 
 use std::collections::{BTreeMap, HashMap};
+use std::rc::Rc;
 
 use p3_baby_bear::BabyBear;
+use p3_batch_stark::ProverData;
 use p3_bn254::Bn254;
 use p3_challenger::{CanObserve, CanSampleBits, FieldChallenger, GrindingChallenger};
-use p3_circuit_prover::{BatchStarkProof, NUM_PRIMITIVE_TABLES};
+use p3_circuit_prover::{
+    AirVariant, BatchStarkProof, CircuitProverData, ConstraintProfile, NUM_PRIMITIVE_TABLES,
+    common::{NpoAirBuilder, NpoPreprocessor, get_airs_and_degrees_with_prep},
+    expose_claim_air_builders, expose_claim_preprocessor, poseidon2_air_builders,
+    poseidon2_preprocessor, recompose_air_builders, recompose_preprocessor,
+};
 use p3_commit::{BatchOpening, BatchOpeningRef, Mmcs, Pcs, PolynomialSpace};
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{
@@ -79,16 +86,21 @@ use p3_fri::{FriFoldingStrategy, TwoAdicFriFolding};
 use p3_lookup::logup::LogUpGadget;
 use p3_lookup::{Kind, LookupProtocol};
 use p3_matrix::Dimensions;
+use p3_recursion::{
+    BatchOnly, PcsRecursionBackend, ProveNextLayerParams, RecursionOutput, VerifierCircuitResult,
+    build_next_layer_circuit_with_expose,
+};
 use p3_symmetric::{Hash, MerkleCap};
 use p3_uni_stark::StarkGenericConfig;
 use serde::{Deserialize, Serialize};
 
-use crate::apex_shrink::outer_shrink_prover;
+use crate::apex_shrink::{ApexShrinkProof, outer_shrink_prover};
 use crate::dregg_outer_config::{
     DreggOuterConfig, OUTER_DIGEST_ELEMS, OUTER_FRI_LOG_BLOWUP, OUTER_FRI_NUM_QUERIES,
     OUTER_FRI_QUERY_POW_BITS, OuterChallengeMmcs, OuterChallenger, OuterCompress, OuterHash,
     OuterValMmcs, dregg_poseidon2_bn254,
 };
+use crate::plonky3_recursion_impl::recursive::{DreggRecursionConfig, create_recursion_backend};
 
 const D: usize = 4;
 type EF = BinomialExtensionField<BabyBear, D>;
@@ -105,6 +117,182 @@ type ComRound = (OuterCap, Vec<(OuterDomain, Vec<(EF, Vec<EF>)>)>);
 /// `Pcs` is otherwise free and inference stalls).
 fn outer_domain(pcs: &OuterPcsT, degree: usize) -> OuterDomain {
     <OuterPcsT as Pcs<EF, OuterChallenger>>::natural_domain_for_degree(pcs, degree)
+}
+
+// ============================================================================
+// THE EXPOSED-CLAIM SHRINK (the settlement-statement binding seam)
+// ============================================================================
+
+/// Shrink a REAL apex into a BN254-native-hash proof **with the apex's exposed
+/// 25-lane chain claim RE-EXPOSED through the shrink proof's OWN
+/// `expose_claim` table** — the seam that makes the settlement statement
+/// externally bound.
+///
+/// ## Why [`crate::apex_shrink::shrink_apex_to_outer`] is NOT enough for settlement
+///
+/// The plain shrink verifies the apex in-circuit, and the apex's 25-lane claim
+/// (`[genesis_root8, final_root8, num_turns, chain_digest8]`, the apex's
+/// `expose_claim` public values) enters the shrink circuit as PUBLIC INPUTS —
+/// which land in the shrink proof's **Public table trace**. That trace is
+/// committed and opened only at zeta (plus random FRI query points), so an
+/// EXTERNAL verifier (the gnark wrap) has **no sound way to read the claim
+/// back out**: binding witnessed rows to the single opened evaluation at zeta
+/// is forgeable (any vector agreeing with the real one at zeta passes — the
+/// prover knows zeta when it picks the witness, so Schwartz–Zippel gives
+/// nothing; the kernel of "evaluate at zeta" has dimension ≥ height − 4 per
+/// column).
+///
+/// ## What this entrypoint changes
+///
+/// The apex-verifier circuit is built with
+/// [`build_next_layer_circuit_with_expose`]: after the verifier constraints
+/// are emitted, the hook re-exposes the apex `expose_claim` instance's
+/// public-input targets through the SHRINK circuit's own `expose_claim`
+/// table. The shrink proof then carries the 25 claim lanes as
+/// `non_primitives[expose_claim].public_values`, where they are
+///
+///   1. observed into the shrink proof's Fiat–Shamir transcript (verify_batch
+///      observes per-instance public values right after the main commitment),
+///      and
+///   2. constrained by the `ExposeClaimAir` AIR — `public_value[lane] == v_0`
+///      of the cell read off the `WitnessChecks` bus, which is bus-bound to
+///      the SAME circuit witnesses the in-circuit apex verification consumed
+///      as the apex's public values — via the quotient identity at zeta, i.e.
+///      by the full vanishing argument, not a prover-chosen evaluation.
+///
+/// So "this shrink proof verifies with public values X" now MEANS "the
+/// verified apex exposes claim X". The gnark wrap equates X with its 25
+/// Groth16 public inputs (see `chain/gnark/settlement_circuit.go`).
+///
+/// Same split-config five steps as
+/// [`crate::apex_shrink::shrink_recursion_input_to_outer_with_packing`], at
+/// [`crate::apex_shrink::default_shrink_packing`].
+pub fn shrink_apex_to_outer_exposed(
+    apex: &RecursionOutput<DreggRecursionConfig>,
+    inner_config: &DreggRecursionConfig,
+    outer_config: &DreggOuterConfig,
+) -> Result<ApexShrinkProof, String> {
+    // Locate the apex's expose_claim instance (its 25-lane claim channel).
+    let claim_pos = apex
+        .0
+        .non_primitives
+        .iter()
+        .position(|e| e.op_type.as_str() == "expose_claim")
+        .ok_or("apex proof carries no expose_claim table (no claim to re-expose)")?;
+    let claim_idx = NUM_PRIMITIVE_TABLES + claim_pos;
+    let claim_len = apex.0.non_primitives[claim_pos].public_values.len();
+    if claim_len == 0 {
+        return Err("apex expose_claim table carries no public values".into());
+    }
+
+    let input = apex.into_recursion_input::<BatchOnly>();
+    let backend = create_recursion_backend();
+
+    // (1) The apex-verifier circuit + the claim re-exposure hook.
+    let expose = move |cb: &mut p3_circuit::CircuitBuilder<EF>,
+                       apt: &[Vec<p3_recursion::Target>]| {
+        let claim = &apt[claim_idx];
+        assert_eq!(
+            claim.len(),
+            claim_len,
+            "apex claim target count drifted from the proof's public values"
+        );
+        cb.expose_as_public_output(claim);
+    };
+    let (circuit, verifier_result) = build_next_layer_circuit_with_expose::<
+        DreggRecursionConfig,
+        BatchOnly,
+        _,
+        D,
+    >(&input, inner_config, &backend, Some(&expose))
+    .map_err(|e| format!("apex-verifier circuit build (with exposed claim) failed: {e:?}"))?;
+
+    // Steps (2)-(5): identical to the plain shrink (apex_shrink.rs), at the
+    // default packing + Standard constraint profile.
+    let packing = crate::apex_shrink::default_shrink_packing();
+    let constraint_profile = ProveNextLayerParams::default().constraint_profile;
+
+    let preprocessors: Vec<Box<dyn NpoPreprocessor<BabyBear>>> = vec![
+        poseidon2_preprocessor::<BabyBear>(),
+        recompose_preprocessor::<BabyBear>(false),
+        expose_claim_preprocessor::<BabyBear>(),
+    ];
+    let air_builders: Vec<Box<dyn NpoAirBuilder<DreggOuterConfig, D>>> = {
+        let mut builders = poseidon2_air_builders::<DreggOuterConfig, D>();
+        builders.extend(recompose_air_builders::<DreggOuterConfig, D>(1, false));
+        builders.extend(expose_claim_air_builders::<DreggOuterConfig, D>());
+        builders
+    };
+    let (airs_degrees, primitive_columns, non_primitive_columns) =
+        get_airs_and_degrees_with_prep::<DreggOuterConfig, EF, D>(
+            &circuit,
+            &packing,
+            &preprocessors,
+            &air_builders,
+            constraint_profile,
+        )
+        .map_err(|e| format!("outer-config table-AIR extraction failed: {e:?}"))?;
+    let (airs, degrees): (Vec<_>, Vec<_>) = airs_degrees.into_iter().unzip();
+    let ext_degrees: Vec<usize> = degrees.iter().map(|&d| d + outer_config.is_zk()).collect();
+
+    // (3) Witness generation over the real apex.
+    let traces = {
+        let public_inputs = verifier_result
+            .pack_public_inputs(&input)
+            .map_err(|e| format!("shrink public-input packing failed: {e:?}"))?;
+        let private_inputs = verifier_result
+            .pack_private_inputs(&input)
+            .map_err(|e| format!("shrink private-input packing failed: {e:?}"))?;
+        let mut runner = circuit.runner();
+        runner
+            .set_public_inputs(&public_inputs)
+            .map_err(|e| format!("shrink runner public inputs: {e:?}"))?;
+        runner
+            .set_private_inputs(&private_inputs)
+            .map_err(|e| format!("shrink runner private inputs: {e:?}"))?;
+        let op_ids =
+            <_ as VerifierCircuitResult<DreggRecursionConfig, BatchOnly>>::op_ids(&verifier_result);
+        backend
+            .set_private_data(inner_config, &mut runner, op_ids, &input)
+            .map_err(|e| format!("shrink FRI private data: {e}"))?;
+        runner
+            .run()
+            .map_err(|e| format!("apex-verifier witness generation failed: {e:?}"))?
+    };
+
+    // (4)+(5) Commit + prove under the outer config.
+    let prover_data = ProverData::from_airs_and_degrees(outer_config, &airs, &ext_degrees);
+    let circuit_prover_data =
+        CircuitProverData::new(prover_data, primitive_columns, non_primitive_columns);
+    let alu_variant = match constraint_profile {
+        ConstraintProfile::Standard => AirVariant::Baseline,
+        ConstraintProfile::RecursionOptimized => AirVariant::Optimized,
+    };
+    let prover = outer_shrink_prover(outer_config)
+        .with_table_packing(packing.clone())
+        .with_alu_variant(alu_variant);
+    let proof = prover
+        .prove_all_tables(&traces, &circuit_prover_data)
+        .map_err(|e| format!("outer-config exposed-shrink proving failed: {e}"))?;
+
+    // Self-check: the shrink proof's OWN expose_claim public values equal the
+    // apex's claim, lane for lane (the re-exposure is faithful).
+    let shrunk_claim = proof
+        .non_primitives
+        .iter()
+        .find(|e| e.op_type.as_str() == "expose_claim")
+        .ok_or("exposed shrink proof carries no expose_claim table")?;
+    if shrunk_claim.public_values != apex.0.non_primitives[claim_pos].public_values {
+        return Err(format!(
+            "re-exposed claim {:?} != apex claim {:?}",
+            shrunk_claim.public_values, apex.0.non_primitives[claim_pos].public_values
+        ));
+    }
+
+    Ok(ApexShrinkProof {
+        proof,
+        prover_data: Rc::new(circuit_prover_data),
+    })
 }
 
 // ============================================================================
@@ -212,6 +400,16 @@ pub struct RealShrinkFriFixture {
     pub description: String,
     /// Per-instance `log2(extended trace domain)` of the shrink proof.
     pub degree_bits: Vec<usize>,
+    /// Per-instance table PUBLIC VALUES (canonical BabyBear lanes), in
+    /// instance order — primitive tables carry none; the `expose_claim`
+    /// instance carries the re-exposed 25-lane chain claim. These are the
+    /// exact values `verify_batch` observes into the transcript right after
+    /// the main commitment, and the `ExposeClaimAir` constraints bind them to
+    /// the committed trace (see [`shrink_apex_to_outer_exposed`]).
+    pub table_publics: Vec<Vec<u32>>,
+    /// Instance index of the shrink proof's own `expose_claim` table (the
+    /// settlement claim channel).
+    pub claim_instance: usize,
     pub fri: FixtureFriShape,
     /// The pre-FRI transcript, `initialise_challenger()` through the FRI
     /// batch-combination alpha sample (inclusive).
@@ -449,6 +647,22 @@ pub fn export_real_shrink_fri_fixture(
     // tables carry theirs in the proof (rebuild_airs_pvs_common's order).
     let mut publics: Vec<Vec<BabyBear>> = vec![Vec::new(); NUM_PRIMITIVE_TABLES];
     publics.extend(proof.non_primitives.iter().map(|e| e.public_values.clone()));
+
+    // The settlement claim channel: the shrink proof's OWN expose_claim table
+    // (fixture v3 REQUIRES it — a claimless shrink cannot bind a settlement
+    // statement; mint via `shrink_apex_to_outer_exposed`).
+    let claim_instance = NUM_PRIMITIVE_TABLES
+        + proof
+            .non_primitives
+            .iter()
+            .position(|e| e.op_type.as_str() == "expose_claim")
+            .ok_or(
+                "shrink proof carries no expose_claim table — the settlement claim is unbound \
+                 (mint with shrink_apex_to_outer_exposed, not the plain shrink)",
+            )?;
+    if publics[claim_instance].is_empty() {
+        return Err("shrink expose_claim table carries no public values".into());
+    }
 
     // Lookup contexts + preprocessed binding, rebuilt exactly as the verifier
     // rebuilds them (public fork API).
@@ -910,14 +1124,20 @@ pub fn export_real_shrink_fri_fixture(
     }
 
     Ok(RealShrinkFriFixture {
-        version: 2,
+        version: 3,
         description: "REAL dregg apex shrink proof (BatchStarkProof<DreggOuterConfig> over a real \
-                      ir2_leaf_wrap apex): pre-FRI transcript events + FRI commit-phase data + \
-                      per-query INPUT-BATCH openings (open_input) for the chain/gnark native \
-                      verifier — the reduced openings are re-derived in-circuit from the \
-                      committed columns (see apex_shrink_gnark_export.rs HONEST SCOPE)."
+                      ir2_leaf_wrap apex) WITH the 25-lane chain claim re-exposed through the \
+                      shrink proof's own expose_claim table (shrink_apex_to_outer_exposed): \
+                      pre-FRI transcript events + per-instance table public values + FRI \
+                      commit-phase data + per-query INPUT-BATCH openings (open_input) for the \
+                      chain/gnark native verifier."
             .into(),
         degree_bits: p.degree_bits.clone(),
+        table_publics: publics
+            .iter()
+            .map(|pv| pv.iter().map(bb_u32).collect())
+            .collect(),
+        claim_instance,
         fri: FixtureFriShape {
             log_blowup: OUTER_FRI_LOG_BLOWUP,
             log_final_poly_len: 0,

@@ -27,8 +27,10 @@ import (
 
 // SymNode is one DAG node. Ops:
 //
-//	var(sp: main|pre|pub, row, col) — opened column value at zeta (row 0)
+//	var(sp: main|pre, row, col)     — opened column value at zeta (row 0)
 //	                                  or zeta_next (row 1)
+//	var(sp: pub, row=0, col)        — table PUBLIC VALUE lane (base-field;
+//	                                  the expose_claim claim channel)
 //	sel(k: first|last|trans)        — Lagrange selector at zeta
 //	c(v)                            — base-field constant
 //	ec(v: [4]u32)                   — extension-field constant
@@ -55,12 +57,13 @@ type SymConstraint struct {
 
 // SymInstance is one table's emitted constraint set.
 type SymInstance struct {
-	Name        string          `json:"name"`
-	Width       int             `json:"width"`
-	PreWidth    int             `json:"pre_width"`
-	NumLookups  int             `json:"num_lookups"`
-	Nodes       []SymNode       `json:"nodes"`
-	Constraints []SymConstraint `json:"constraints"`
+	Name            string          `json:"name"`
+	Width           int             `json:"width"`
+	PreWidth        int             `json:"pre_width"`
+	NumLookups      int             `json:"num_lookups"`
+	NumPublicValues int             `json:"num_public_values"`
+	Nodes           []SymNode       `json:"nodes"`
+	Constraints     []SymConstraint `json:"constraints"`
 }
 
 // SymbolicConstraints is the emitted file: one instance per shrink table, in
@@ -82,8 +85,8 @@ func LoadSymbolicConstraints(path string) (*SymbolicConstraints, error) {
 	if err := json.Unmarshal(raw, sc); err != nil {
 		return nil, err
 	}
-	if sc.Version != 1 {
-		return nil, fmt.Errorf("symbolic constraints version %d (want 1)", sc.Version)
+	if sc.Version != 2 {
+		return nil, fmt.Errorf("symbolic constraints version %d (want 2: public-value support)", sc.Version)
 	}
 	for ii := range sc.Instances {
 		inst := &sc.Instances[ii]
@@ -98,8 +101,8 @@ func LoadSymbolicConstraints(path string) (*SymbolicConstraints, error) {
 					return nil, fmt.Errorf("%s node %d: child not topologically ordered", inst.Name, i)
 				}
 			case "var":
-				lim := map[string]int{"main": inst.Width, "pre": inst.PreWidth, "pub": 0}[n.Sp]
-				if n.Col >= lim || n.Row > 1 {
+				lim := map[string]int{"main": inst.Width, "pre": inst.PreWidth, "pub": inst.NumPublicValues}[n.Sp]
+				if n.Col >= lim || n.Row > 1 || (n.Sp == "pub" && n.Row != 0) {
 					return nil, fmt.Errorf("%s node %d: var %s[%d][%d] out of range", inst.Name, i, n.Sp, n.Row, n.Col)
 				}
 			case "permvar":
@@ -167,6 +170,7 @@ type symEvalInputsNative struct {
 	PermLocal, PermNext   []BBExt // recomposed EF, one per aux column
 	Challenges            []BBExt // 2 per lookup (bus pair, repeated)
 	PermValues            []BBExt // global cumulative sums, lookup order
+	PublicValues          []BBExt // table public values (base lifted), lane order
 	Sel                   starkSelectorsNative
 }
 
@@ -193,8 +197,13 @@ func evalSymbolicFoldedNative(bb *BBApi, inst *SymInstance, in symEvalInputsNati
 				} else {
 					src = in.PreNext
 				}
+			case "pub":
+				if in.PublicValues == nil {
+					panic("symbolic eval: instance references public values but none were wired")
+				}
+				src = in.PublicValues
 			default:
-				panic("symbolic eval: public values are out of the shrink scope")
+				panic("symbolic eval: unknown var space " + n.Sp)
 			}
 			if src == nil {
 				vals[i] = zero // verifier's zero substitution for unopened rows
@@ -256,6 +265,7 @@ type symEvalInputsRef struct {
 	PermLocal, PermNext   []bbExtRef
 	Challenges            []bbExtRef
 	PermValues            []bbExtRef
+	PublicValues          []bbExtRef
 	Sel                   starkSelectorsRef
 }
 
@@ -279,8 +289,13 @@ func evalSymbolicFoldedRef(inst *SymInstance, in symEvalInputsRef, alphaFold bbE
 				} else {
 					src = in.PreNext
 				}
+			case "pub":
+				if in.PublicValues == nil {
+					return zero, fmt.Errorf("instance references public values but none were wired")
+				}
+				src = in.PublicValues
 			default:
-				return zero, fmt.Errorf("public values out of scope")
+				return zero, fmt.Errorf("unknown var space %q", n.Sp)
 			}
 			if src == nil {
 				vals[i] = zero

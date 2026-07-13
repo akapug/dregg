@@ -148,6 +148,8 @@ contract DreggSettlement is IDreggSettlement {
         uint256[2] calldata a,
         uint256[2][2] calldata b,
         uint256[2] calldata c,
+        uint256[2] calldata commitments,
+        uint256[2] calldata commitmentPok,
         uint32[8] calldata genesisRoot,
         uint32[8] calldata finalRoot,
         uint32 numTurns,
@@ -195,7 +197,9 @@ contract DreggSettlement is IDreggSettlement {
 
         // 4. The pairing check. Typed interface call: a false return OR a
         //    revert OR a codeless verifier all reject (fail closed).
-        if (!verifier.verifyProof(a, b, c, inputs)) revert ProofRejected();
+        if (!verifier.verifyProof(a, b, c, commitments, commitmentPok, inputs)) {
+            revert ProofRejected();
+        }
 
         // 5. Effects.
         _provenLanes = finalRoot;

@@ -24,8 +24,10 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use dregg_circuit::effect_vm::{CellState, Effect};
-use dregg_circuit_prove::apex_shrink::{shrink_apex_to_outer, verify_shrink_proof};
-use dregg_circuit_prove::apex_shrink_gnark_export::export_real_shrink_fri_fixture;
+use dregg_circuit_prove::apex_shrink::verify_shrink_proof;
+use dregg_circuit_prove::apex_shrink_gnark_export::{
+    export_real_shrink_fri_fixture, shrink_apex_to_outer_exposed,
+};
 use dregg_circuit_prove::dregg_outer_config::{DreggOuterConfig, create_outer_config};
 use dregg_circuit_prove::ivc_turn_chain::{
     FinalizedTurn, ir2_leaf_wrap_config, prove_turn_chain_recursive,
@@ -34,6 +36,7 @@ use dregg_circuit_prove::joint_turn_aggregation::DescriptorParticipant;
 use dregg_circuit_prove::plonky3_recursion_impl::recursive::verify_recursive_batch_proof_with_config;
 use dregg_turn::rotation_witness::mint_rotated_participant_leg;
 use p3_circuit_prover::BatchStarkProof;
+use p3_field::PrimeField32;
 
 /// OPEN permissions (the audited Bucket-F mint fixture, as in the tooth).
 fn open_permissions() -> dregg_cell::Permissions {
@@ -106,27 +109,55 @@ fn repo_root() -> PathBuf {
         .to_path_buf()
 }
 
+/// Cache v2: the EXPOSED-claim shrink proof (shrink_apex_to_outer_exposed)
+/// plus the chain's expected 25-lane claim, so cache-hit runs can still assert
+/// the claim binding without re-folding the apex.
 fn cache_path() -> PathBuf {
-    repo_root().join("target/apex_shrink_proof_cache.postcard")
+    repo_root().join("target/apex_shrink_exposed_proof_cache_v2.postcard")
 }
 
 fn fixture_path() -> PathBuf {
     repo_root().join("chain/gnark/fixtures/apex_shrink_fri_real.json")
 }
 
-/// Load a cached shrink proof if present AND it still verifies; otherwise
-/// regenerate from the real 2-turn chain and cache it.
+type CachedShrink = (Vec<u8>, Vec<u32>); // (postcard proof bytes, expected 25-lane claim)
+
+/// The proof's own re-exposed claim lanes (canonical u32), from its
+/// expose_claim table.
+fn proof_claim_lanes(proof: &BatchStarkProof<DreggOuterConfig>) -> Vec<u32> {
+    proof
+        .non_primitives
+        .iter()
+        .find(|e| e.op_type.as_str() == "expose_claim")
+        .expect("exposed shrink proof carries an expose_claim table")
+        .public_values
+        .iter()
+        .map(|v| v.as_canonical_u32())
+        .collect()
+}
+
+/// Load a cached exposed shrink proof if present AND it still verifies AND its
+/// re-exposed claim matches the cached expectation; otherwise regenerate from
+/// the real 2-turn chain and cache it.
 fn real_shrink_proof(outer_config: &DreggOuterConfig) -> BatchStarkProof<DreggOuterConfig> {
     let cache = cache_path();
     if let Ok(bytes) = std::fs::read(&cache) {
-        if let Ok(proof) = postcard::from_bytes::<BatchStarkProof<DreggOuterConfig>>(&bytes) {
-            if verify_shrink_proof(&proof, outer_config).is_ok() {
-                println!("using cached shrink proof: {}", cache.display());
-                return proof;
+        if let Ok((proof_bytes, expected_claim)) = postcard::from_bytes::<CachedShrink>(&bytes) {
+            if let Ok(proof) =
+                postcard::from_bytes::<BatchStarkProof<DreggOuterConfig>>(&proof_bytes)
+            {
+                if verify_shrink_proof(&proof, outer_config).is_ok()
+                    && proof_claim_lanes(&proof) == expected_claim
+                {
+                    println!("using cached exposed shrink proof: {}", cache.display());
+                    return proof;
+                }
+                println!("cached shrink proof no longer verifies/matches — regenerating");
+            } else {
+                println!("cached shrink proof no longer deserializes — regenerating");
             }
-            println!("cached shrink proof no longer verifies — regenerating");
         } else {
-            println!("cached shrink proof no longer deserializes — regenerating");
+            println!("cache envelope no longer deserializes — regenerating");
         }
     }
 
@@ -139,21 +170,40 @@ fn real_shrink_proof(outer_config: &DreggOuterConfig) -> BatchStarkProof<DreggOu
     verify_recursive_batch_proof_with_config(&whole.root.0, &inner_config)
         .expect("the real apex verifies under ir2_leaf_wrap_config");
 
+    // The chain's expected 25-lane settlement claim, in the pinned order
+    // genesis_root8 ++ final_root8 ++ num_turns ++ chain_digest8.
+    let mut expected_claim: Vec<u32> = Vec::with_capacity(25);
+    expected_claim.extend(whole.genesis_root.iter().map(|v| v.0));
+    expected_claim.extend(whole.final_root.iter().map(|v| v.0));
+    expected_claim.push(whole.num_turns as u32);
+    expected_claim.extend(whole.chain_digest.iter().map(|v| v.0));
+
     let t1 = Instant::now();
-    let shrink = shrink_apex_to_outer(&whole.root, &inner_config, outer_config)
-        .expect("the real apex shrinks under DreggOuterConfig");
+    let shrink = shrink_apex_to_outer_exposed(&whole.root, &inner_config, outer_config)
+        .expect("the real apex shrinks (with exposed claim) under DreggOuterConfig");
     println!("shrink prove time  : {:?}", t1.elapsed());
 
     verify_shrink_proof(&shrink.proof, outer_config)
-        .expect("the BN254-native shrink proof verifies");
+        .expect("the BN254-native exposed shrink proof verifies");
 
-    let bytes = postcard::to_allocvec(&shrink.proof).expect("shrink proof postcard-serializes");
+    // THE CLAIM TOOTH: the shrink proof's own expose_claim public values ARE
+    // the chain's 25-lane claim, lane for lane.
+    assert_eq!(
+        proof_claim_lanes(&shrink.proof),
+        expected_claim,
+        "re-exposed shrink claim != the chain's 25-lane settlement claim"
+    );
+
+    let proof_bytes =
+        postcard::to_allocvec(&shrink.proof).expect("shrink proof postcard-serializes");
+    let bytes =
+        postcard::to_allocvec(&(proof_bytes, expected_claim)).expect("cache envelope serializes");
     if let Some(dir) = cache.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
     std::fs::write(&cache, &bytes).expect("write shrink proof cache");
     println!(
-        "cached shrink proof ({} bytes): {}",
+        "cached exposed shrink proof ({} bytes): {}",
         bytes.len(),
         cache.display()
     );
@@ -191,6 +241,19 @@ fn export_real_shrink_fri_fixture_for_gnark() {
     println!("log_max_height     : {}", fixture.fri.log_global_max_height);
     println!("roll_in_rounds     : {:?}", fixture.roll_in_rounds);
     println!("prefix events      : {}", fixture.prefix_events.len());
+    println!("claim_instance     : {}", fixture.claim_instance);
+    println!(
+        "claim lanes        : {:?}",
+        fixture.table_publics[fixture.claim_instance]
+    );
+
+    // The fixture's claim channel is the proof's re-exposed 25-lane claim.
+    assert_eq!(fixture.table_publics[fixture.claim_instance].len(), 25);
+    assert_eq!(
+        fixture.table_publics[fixture.claim_instance],
+        proof_claim_lanes(&proof),
+        "fixture claim lanes drifted from the proof's expose_claim public values"
+    );
 
     // Shape sanity the gnark loader will re-assert.
     assert_eq!(fixture.fri.rounds, fixture.commit_roots.len());

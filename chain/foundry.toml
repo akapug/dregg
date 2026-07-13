@@ -6,6 +6,9 @@ solc = "0.8.20"
 optimizer = true
 optimizer_runs = 200
 evm_version = "paris"
+# The real-Groth16 settlement test replays the proof fixture emitted by
+# chain/gnark/settlement_snark_test.go (TestSettlementGroth16EndToEnd).
+fs_permissions = [{ access = "read", path = "./test/fixtures" }]
 
 [rpc_endpoints]
 base_sepolia = "${BASE_SEPOLIA_RPC_URL}"

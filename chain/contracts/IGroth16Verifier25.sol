@@ -21,10 +21,19 @@ interface IGroth16Verifier25 {
     /// Run the BN254 pairing check for proof (a, b, c) against the 25-lane
     /// public-input vector. Word order for `b` matches EIP-197 (the imaginary
     /// coordinate first). Returns true iff the proof verifies.
+    ///
+    /// `commitments`/`commitmentPok`: the wrap circuit (chain/gnark
+    /// SettlementCircuit) uses gnark's commit-based range checker, so every
+    /// proof carries ONE Pedersen commitment (2 words) plus its proof of
+    /// knowledge (2 words) — gnark `MarshalSolidity` words [8..10) and
+    /// [10..12) after the 8 proof words. They are part of the proof, not the
+    /// statement.
     function verifyProof(
         uint256[2] calldata a,
         uint256[2][2] calldata b,
         uint256[2] calldata c,
+        uint256[2] calldata commitments,
+        uint256[2] calldata commitmentPok,
         uint256[25] calldata publicInputs
     ) external view returns (bool);
 }

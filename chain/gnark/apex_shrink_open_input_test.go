@@ -437,9 +437,9 @@ func TestApexShrinkRealFixtureFullVerifyRejectsTamperedInputOpening(t *testing.T
 	fx := loadShrinkRealFixture(t)
 	ex := extractShrinkStark(t, fx)
 	sym := loadShrinkSymbolicConstraints(t)
-	w := assignApexShrinkFullVerifyCircuit(t, fx, ex, sym)
+	w := assignSettlementCircuit(t, fx, ex, sym)
 	w.InputOpenings[0][0].Rows[2][0] = bbAddRef(fx.Queries[0].InputOpenings[0].Rows[2][0], 1)
-	if err := test.IsSolved(allocApexShrinkFullVerifyCircuit(t, fx, ex, sym), w,
+	if err := test.IsSolved(allocSettlementCircuit(t, fx, ex, sym), w,
 		ecc.BN254.ScalarField()); err == nil {
 		t.Fatal("assembled circuit ACCEPTED a tampered input-batch opening")
 	}

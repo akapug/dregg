@@ -21,12 +21,12 @@
 //     fixture — the Rust side owns that rebalance — and must clear the
 //     130-conjectured-bit bar.)
 //
-// HONEST SCOPE (same statement as fri_verify_native.go): this verifies the
-// FRI CORE of the real shrink proof — the transcript, commitments, fold and
-// grinding. The per-query reduced openings (InitialEval + RollIns) are
-// host-computed witnesses; deriving them in-circuit (input batch openings +
-// alpha reduction) plus constraint-eval-at-zeta + quotient recomposition is
-// the NAMED residual before the Groth16 wrap.
+// HONEST SCOPE (same statement as fri_verify_native.go): this FILE verifies
+// the FRI CORE of the real shrink proof — the transcript, commitments, fold
+// and grinding — with the reduced openings as fold-seed witnesses. Their
+// commitment binding (the open_input derivation) is closed by
+// stark_open_input.go and verified in apex_shrink_open_input_test.go; the
+// assembled circuit in stark_algebra_real_fixture_test.go wires all layers.
 package friverifier
 
 import (
@@ -63,26 +63,48 @@ type shrinkFriShape struct {
 	LogGlobalMaxHeight  int `json:"log_global_max_height"`
 }
 
+type shrinkFixtureInputMatrix struct {
+	LogHeight     int `json:"log_height"`
+	Width         int `json:"width"`
+	NumPoints     int `json:"num_points"`
+	NextPointBits int `json:"next_point_bits"`
+}
+
+type shrinkFixtureInputRound struct {
+	Matrices []shrinkFixtureInputMatrix `json:"matrices"`
+}
+
+type shrinkFixtureInputBatch struct {
+	Rows [][]uint32 `json:"rows"`
+	Path []string   `json:"path"`
+}
+
 type shrinkFixtureQuery struct {
-	ExpectedIndex uint64      `json:"expected_index"`
-	InitialEval   [4]uint32   `json:"initial_eval"`
-	RollIns       [][4]uint32 `json:"roll_ins"`
-	Siblings      [][4]uint32 `json:"siblings"`
-	MerklePaths   [][]string  `json:"merkle_paths"`
+	ExpectedIndex uint64                    `json:"expected_index"`
+	InitialEval   [4]uint32                 `json:"initial_eval"`
+	RollIns       [][4]uint32               `json:"roll_ins"`
+	Siblings      [][4]uint32               `json:"siblings"`
+	MerklePaths   [][]string                `json:"merkle_paths"`
+	InputOpenings []shrinkFixtureInputBatch `json:"input_openings"`
 }
 
 type shrinkRealFixture struct {
-	Version         int                  `json:"version"`
-	Description     string               `json:"description"`
-	DegreeBits      []int                `json:"degree_bits"`
-	Fri             shrinkFriShape       `json:"fri"`
-	PrefixEvents    []shrinkFixtureEvent `json:"prefix_events"`
-	CommitRoots     []string             `json:"commit_roots"`
-	ExpectedBetas   [][4]uint32          `json:"expected_betas"`
-	FinalPoly       [][4]uint32          `json:"final_poly"`
-	QueryPowWitness uint32               `json:"query_pow_witness"`
-	RollInRounds    []int                `json:"roll_in_rounds"`
-	Queries         []shrinkFixtureQuery `json:"queries"`
+	Version     int    `json:"version"`
+	Description string `json:"description"`
+	DegreeBits  []int  `json:"degree_bits"`
+	// Per-instance table public values (the expose_claim instance carries the
+	// re-exposed 25-lane settlement claim; every other instance is empty).
+	TablePublics  [][]uint32     `json:"table_publics"`
+	ClaimInstance int            `json:"claim_instance"`
+	Fri           shrinkFriShape `json:"fri"`
+	PrefixEvents    []shrinkFixtureEvent      `json:"prefix_events"`
+	CommitRoots     []string                  `json:"commit_roots"`
+	ExpectedBetas   [][4]uint32               `json:"expected_betas"`
+	FinalPoly       [][4]uint32               `json:"final_poly"`
+	QueryPowWitness uint32                    `json:"query_pow_witness"`
+	RollInRounds    []int                     `json:"roll_in_rounds"`
+	InputRounds     []shrinkFixtureInputRound `json:"input_rounds"`
+	Queries         []shrinkFixtureQuery      `json:"queries"`
 }
 
 // --- fail-closed loader ------------------------------------------------------
@@ -116,8 +138,30 @@ func loadShrinkRealFixture(t *testing.T) *shrinkRealFixture {
 	if err := json.Unmarshal(raw, fx); err != nil {
 		t.Fatalf("fixture JSON: %v", err)
 	}
-	if fx.Version != 1 {
-		t.Fatalf("fixture version %d (want 1)", fx.Version)
+	if fx.Version != 3 {
+		t.Fatalf("fixture version %d (want 3: exposed 25-lane claim + table publics)", fx.Version)
+	}
+	// The settlement claim channel: the expose_claim instance's 25 canonical
+	// lanes, in the pinned genesis8 ++ final8 ++ numTurns ++ chainDigest8
+	// order (fri_verifier.go Publics).
+	if len(fx.TablePublics) != len(fx.DegreeBits) {
+		t.Fatalf("table_publics has %d instances, degree_bits %d",
+			len(fx.TablePublics), len(fx.DegreeBits))
+	}
+	if fx.ClaimInstance < 0 || fx.ClaimInstance >= len(fx.TablePublics) {
+		t.Fatalf("claim_instance %d out of range", fx.ClaimInstance)
+	}
+	if len(fx.TablePublics[fx.ClaimInstance]) != NumPublicInputs {
+		t.Fatalf("claim instance carries %d lanes (want the pinned %d)",
+			len(fx.TablePublics[fx.ClaimInstance]), NumPublicInputs)
+	}
+	for i, pv := range fx.TablePublics {
+		for _, v := range pv {
+			requireCanonicalBB(t, v, "table public value")
+		}
+		if i != fx.ClaimInstance && len(pv) != 0 {
+			t.Fatalf("instance %d carries unexpected public values (only the claim channel may)", i)
+		}
 	}
 	f := fx.Fri
 	// The DreggOuterConfig invariants. The blowup/query split is read from the
@@ -189,6 +233,62 @@ func loadShrinkRealFixture(t *testing.T) *shrinkRealFixture {
 	for _, b := range fx.ExpectedBetas {
 		for _, v := range b {
 			requireCanonicalBB(t, v, "beta")
+		}
+	}
+	// Input-batch openings (fixture v2, the open_input seam).
+	if len(fx.InputRounds) != 4 {
+		t.Fatalf("input rounds: %d (want 4: trace, quotient, preprocessed, permutation)",
+			len(fx.InputRounds))
+	}
+	for ri, r := range fx.InputRounds {
+		if len(r.Matrices) == 0 {
+			t.Fatalf("input round %d has no matrices", ri)
+		}
+		for mi, m := range r.Matrices {
+			if m.LogHeight <= 0 || m.LogHeight > f.LogGlobalMaxHeight {
+				t.Fatalf("input round %d matrix %d: log height %d outside (0, %d]",
+					ri, mi, m.LogHeight, f.LogGlobalMaxHeight)
+			}
+			if m.Width <= 0 || (m.NumPoints != 1 && m.NumPoints != 2) {
+				t.Fatalf("input round %d matrix %d: width %d / points %d malformed",
+					ri, mi, m.Width, m.NumPoints)
+			}
+			// NextPointBits == 0 is legitimate for a height-1 trace (the
+			// expose_claim table: two_adic_generator(0) = 1, zeta_next = zeta).
+			if m.NumPoints == 2 && (m.NextPointBits < 0 || m.NextPointBits >= 28) {
+				t.Fatalf("input round %d matrix %d: next-point bits %d outside BabyBear two-adicity",
+					ri, mi, m.NextPointBits)
+			}
+		}
+	}
+	for qi, q := range fx.Queries {
+		if len(q.InputOpenings) != len(fx.InputRounds) {
+			t.Fatalf("query %d: %d input openings for %d rounds",
+				qi, len(q.InputOpenings), len(fx.InputRounds))
+		}
+		for ri, b := range q.InputOpenings {
+			mats := fx.InputRounds[ri].Matrices
+			if len(b.Rows) != len(mats) {
+				t.Fatalf("query %d input round %d: %d rows for %d matrices",
+					qi, ri, len(b.Rows), len(mats))
+			}
+			maxLh := 0
+			for mi, row := range b.Rows {
+				if len(row) != mats[mi].Width {
+					t.Fatalf("query %d input round %d matrix %d: row width %d != %d",
+						qi, ri, mi, len(row), mats[mi].Width)
+				}
+				for _, v := range row {
+					requireCanonicalBB(t, v, "input row")
+				}
+				if mats[mi].LogHeight > maxLh {
+					maxLh = mats[mi].LogHeight
+				}
+			}
+			if len(b.Path) != maxLh {
+				t.Fatalf("query %d input round %d: path depth %d != tree height %d",
+					qi, ri, len(b.Path), maxLh)
+			}
 		}
 	}
 	return fx
@@ -361,11 +461,8 @@ func TestApexShrinkRealFixtureRefRejectsTampers(t *testing.T) {
 
 // --- the gnark circuit ---------------------------------------------------------
 
-// shrinkPrefixOp is the structural script for replaying the prefix in-circuit.
-type shrinkPrefixOp struct {
-	kind string // observe_bb | observe_digest | sample_bb
-	n    int
-}
+// (shrinkPrefixOp lives in settlement_circuit.go, shared with the assembled
+// SettlementCircuit.)
 
 // apexShrinkRealCircuit replays the real pre-FRI transcript through the
 // MultiFieldChallenger gadget (pinning every sampled challenge) and then runs

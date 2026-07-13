@@ -804,6 +804,12 @@ interface IDreggSettlementV2 {
 
     /// Submit a settlement.
     /// @param a,b,c       Groth16 proof points (BN254): a in G1, b in G2, c in G1.
+    /// @param commitments,commitmentPok The proof's Pedersen commitment (2
+    ///                    words) + its proof of knowledge (2 words) — the wrap
+    ///                    circuit uses gnark's commit-based range checker, so
+    ///                    the Groth16 proof blob is 384 bytes (12 words), not
+    ///                    256: gnark MarshalSolidity words [8..12) after the
+    ///                    8 proof words. Part of the PROOF, not the statement.
     /// @param genesisRoot 8-lane genesis anchor; its packed keccak must equal
     ///                    the current provenRootKey (continuity).
     /// @param finalRoot   8-lane final anchor; its packed keccak becomes the
@@ -821,6 +827,8 @@ interface IDreggSettlementV2 {
         uint256[2] calldata a,
         uint256[2][2] calldata b,
         uint256[2] calldata c,
+        uint256[2] calldata commitments,
+        uint256[2] calldata commitmentPok,
         uint32[8] calldata genesisRoot,
         uint32[8] calldata finalRoot,
         uint32 numTurns,

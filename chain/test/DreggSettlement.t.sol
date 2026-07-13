@@ -27,6 +27,8 @@ contract MockGroth16Verifier25 is IGroth16Verifier25 {
         uint256[2] calldata,
         uint256[2][2] calldata,
         uint256[2] calldata,
+        uint256[2] calldata,
+        uint256[2] calldata,
         uint256[25] calldata publicInputs
     ) external view returns (bool) {
         if (strict) {
@@ -43,6 +45,8 @@ contract RevertingVerifier25 is IGroth16Verifier25 {
     function verifyProof(
         uint256[2] calldata,
         uint256[2][2] calldata,
+        uint256[2] calldata,
+        uint256[2] calldata,
         uint256[2] calldata,
         uint256[25] calldata
     ) external pure returns (bool) {
@@ -114,10 +118,14 @@ contract DreggSettlementTest is Test {
         uint32[8] memory d,
         bytes32 msgRoot
     ) internal {
-        uint256[2] memory a = [uint256(1), uint256(2)];
-        uint256[2][2] memory b = [[uint256(3), uint256(4)], [uint256(5), uint256(6)]];
-        uint256[2] memory c = [uint256(7), uint256(8)];
-        settlement.settle(a, b, c, g, f, n, d, msgRoot);
+        settlement.settle(
+            [uint256(1), uint256(2)],
+            [[uint256(3), uint256(4)], [uint256(5), uint256(6)]],
+            [uint256(7), uint256(8)],
+            [uint256(9), uint256(10)],
+            [uint256(11), uint256(12)],
+            g, f, n, d, msgRoot
+        );
     }
 
     function assertLanesEq(uint32[8] memory got, uint32[8] memory want) internal pure {
@@ -291,11 +299,15 @@ contract DreggSettlementTest is Test {
     function test_Reject_RevertingVerifier() public {
         RevertingVerifier25 rv = new RevertingVerifier25();
         DreggSettlement s = new DreggSettlement(rv, VK_HASH, mkLanes(1));
-        uint256[2] memory a = [uint256(1), uint256(2)];
-        uint256[2][2] memory b = [[uint256(3), uint256(4)], [uint256(5), uint256(6)]];
-        uint256[2] memory c = [uint256(7), uint256(8)];
         vm.expectRevert(bytes("verifier: boom"));
-        s.settle(a, b, c, mkLanes(1), mkLanes(2), 1, mkLanes(3), bytes32(0));
+        s.settle(
+            [uint256(1), uint256(2)],
+            [[uint256(3), uint256(4)], [uint256(5), uint256(6)]],
+            [uint256(7), uint256(8)],
+            [uint256(9), uint256(10)],
+            [uint256(11), uint256(12)],
+            mkLanes(1), mkLanes(2), 1, mkLanes(3), bytes32(0)
+        );
     }
 
     // ------------------------------------------------------------------
