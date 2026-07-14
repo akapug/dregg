@@ -21,8 +21,9 @@ use dregg_circuit::descriptor_ir2::{
 };
 use dregg_circuit::effect_vm::Effect;
 use dregg_circuit::effect_vm::trace_rotated::{
-    C_DFA_RC_OFF, CAVEAT_BASE, DFA_RC_LEN, ROT_PI_COUNT, RotatedBlockWitness, dfa_route_commitment,
-    generate_rotated_effect_vm_trace, transfer_caveat_manifest,
+    C_DFA_RC_OFF, CAVEAT_BASE, DFA_RC_LEN, ROT_PI_COUNT, RotatedBlockWitness,
+    avail_pad_for_descriptor_name, dfa_route_commitment, generate_rotated_effect_vm_trace_avail,
+    transfer_caveat_manifest,
 };
 use dregg_circuit::effect_vm_descriptors::V3_STAGED_REGISTRY_TSV;
 use dregg_circuit::field::BabyBear;
@@ -66,7 +67,15 @@ fn transfer_desc_json() -> &'static str {
 }
 
 /// Build one honest rotated transfer (the flip file's recipe) with the given caveat manifest.
+///
+/// The deployed `transferVmDescriptor2R24` is the AVAILABILITY-HARDENED member
+/// (`dregg-effectvm-transfer-v1-avail-…`, pad 10): the 15-bit weld-witness columns ride
+/// `[V1_WIDTH, V1_WIDTH + pad)` (wire 188 = `BEF0`, the low 15-bit limb of `before.bal_lo`) and every
+/// rotated appendix base shifts up by the pad. The producer MUST match — derive the pad from the
+/// descriptor name (`avail_pad_for_descriptor_name`) and use the avail-aware generator, or the bare
+/// producer lays a ~30-bit block limb at wire 188 and the descriptor's 15-bit range refuses it.
 fn honest_transfer(
+    pad: usize,
     caveat: &dregg_circuit::effect_vm::trace_rotated::RotatedCaveatManifest,
 ) -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
     let before_balance: i64 = 100_000;
@@ -102,13 +111,30 @@ fn honest_transfer(
     let bridge = |w: &rw::RotationWitness| {
         RotatedBlockWitness::new(w.pre_limbs.clone(), w.iroot).expect("pre-iroot limbs")
     };
-    generate_rotated_effect_vm_trace(&st, &effects, &bridge(&before_w), &bridge(&after_w), caveat)
-        .expect("live rotated generator")
+    generate_rotated_effect_vm_trace_avail(
+        pad,
+        &st,
+        &effects,
+        &bridge(&before_w),
+        &bridge(&after_w),
+        caveat,
+    )
+    .expect("live rotated generator (avail-aware)")
 }
 
 #[test]
 fn dsl_rc_pins_prove_with_and_without_a_dfa_caveat_and_the_tooth_bites() {
     let desc = parse_vm_descriptor2(transfer_desc_json()).expect("rotated transfer parses");
+    // The deployed transfer member is AVAILABILITY-HARDENED (`…-v1-avail`, pad 10): derive the
+    // producer's weld pad from the descriptor name so the trace geometry matches the 15-bit range
+    // on wire 188 (`BEF0`) + the pad-shifted appendix bases.
+    let pad = avail_pad_for_descriptor_name(&desc.name);
+    assert!(
+        pad > 0,
+        "the deployed transfer member is the hardened `-v1-avail` face (nonzero pad); got {pad} \
+         from name {}",
+        desc.name
+    );
     // The deployed member is the `withDfaRcPins` wrap: 42 v1 + 4 rotated + 4 dsl rc.
     assert_eq!(
         desc.public_input_count,
@@ -122,7 +148,7 @@ fn dsl_rc_pins_prove_with_and_without_a_dfa_caveat_and_the_tooth_bites() {
 
     // ── 1. WITHOUT a Dfa caveat: the ZERO sentinel proves (the live fleet keeps proving). ──
     let caveat = transfer_caveat_manifest();
-    let (trace, dpis) = honest_transfer(&caveat);
+    let (trace, dpis) = honest_transfer(pad, &caveat);
     assert_eq!(dpis.len(), ROT_PI_COUNT + DFA_RC_LEN);
     for k in 0..DFA_RC_LEN {
         assert_eq!(
@@ -146,7 +172,7 @@ fn dsl_rc_pins_prove_with_and_without_a_dfa_caveat_and_the_tooth_bites() {
     assert_ne!(rc, [BabyBear::ZERO; DFA_RC_LEN], "a real rc is non-zero");
     let mut caveat_dfa = transfer_caveat_manifest();
     caveat_dfa.dfa_rc = rc;
-    let (trace_dfa, dpis_dfa) = honest_transfer(&caveat_dfa);
+    let (trace_dfa, dpis_dfa) = honest_transfer(pad, &caveat_dfa);
     for k in 0..DFA_RC_LEN {
         assert_eq!(
             dpis_dfa[ROT_PI_COUNT + k],
@@ -154,7 +180,7 @@ fn dsl_rc_pins_prove_with_and_without_a_dfa_caveat_and_the_tooth_bites() {
             "the Dfa-gated turn publishes rc[{k}] at its tail slot"
         );
         assert_eq!(
-            trace_dfa[0][CAVEAT_BASE + C_DFA_RC_OFF + k],
+            trace_dfa[0][CAVEAT_BASE + pad + C_DFA_RC_OFF + k],
             rc[k],
             "the carrier column holds rc[{k}] (uniform fill)"
         );
@@ -175,7 +201,7 @@ fn dsl_rc_pins_prove_with_and_without_a_dfa_caveat_and_the_tooth_bites() {
     //     (the pin gate is UNSAT — the prover cannot claim a different predicate than it ran).
     let mut forged_trace = trace_dfa.clone();
     for row in forged_trace.iter_mut() {
-        row[CAVEAT_BASE + C_DFA_RC_OFF] += BabyBear::ONE;
+        row[CAVEAT_BASE + pad + C_DFA_RC_OFF] += BabyBear::ONE;
     }
     // The rc pin-gate mismatch is caught at VERIFY (the light-client op), not necessarily at prove.
     let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -188,6 +214,20 @@ fn dsl_rc_pins_prove_with_and_without_a_dfa_caveat_and_the_tooth_bites() {
             Ok(res) => res.is_err(),
         },
         "a carrier/claim mismatch must not prove"
+    );
+
+    // ── 4. THE AVAIL-WELD RANGE STILL BITES: wire 188 (`BEF0`) carries the 15-bit range lookup that
+    //     closes the GAP #4 over-debit forgery. An over-15-bit value there (the forgery shape: a
+    //     ~30-bit felt masquerading as the low limb) is REFUSED — the geometry fix did not weaken
+    //     the check, it aligned the honest producer to it. ──
+    use dregg_circuit::effect_vm::EFFECT_VM_WIDTH; // wire 188 = AVAIL_BASE = BEF0
+    let mut over_range = trace.clone();
+    for row in over_range.iter_mut() {
+        row[EFFECT_VM_WIDTH] = BabyBear::new(40_000); // ≥ 2^15 = 32768
+    }
+    assert!(
+        prove_vm_descriptor2(&desc, &over_range, &dpis, &mem_boundary, &map_heaps).is_err(),
+        "an over-15-bit value at wire 188 (BEF0) must be refused — the avail-weld range still bites"
     );
 
     // The slot contract for the fold lane: rc = the LAST 4 member PIs, i.e.
