@@ -2106,8 +2106,10 @@ theorem mlkem768_decapsFailure_le_delta_exactMgf_tight {Ω : Type*} [Fintype Ω]
 /-- **THE TIGHTENED UNCONDITIONAL δ-BOUND — `Pr_r[¬noiseBoundHolds] ≤ 2⁻¹⁴⁸` for the real ML-KEM-768 `e_total`.**
 The PROVED `CoeffIsExactMgfSum` witness (`mlkem_exactMgfSum`, §12.6) fed the tightened exact-MGF arithmetic. `8`
 bits below `mlkem768_decapsFailure_le_delta_unconditional`, assumption-free, kernel-clean. This is near the honest
-assumption-free ceiling of the exact-MGF Chernoff route (`≈ 2⁻¹⁵⁰`); FIPS `2⁻¹⁶⁴` is out of band FOR THIS METHOD
-(the union-bound wall documented above). -/
+assumption-free ceiling of the exact-MGF Chernoff route WITH THE `±104` `dvX` ENVELOPE; §18 refines `Δv` to the
+TRUE near-uniform compression error (`≈ e^{27.37}` vs `dvX`'s `≈ e^{31.2}`) and tightens this to `2⁻¹⁵³`
+(`rZ_decapsFailure_le_delta153`). FIPS `2⁻¹⁶⁴` remains out of band FOR THIS METHOD even with the true law — the
+per-coefficient tail reaches `2⁻¹⁶³` but the `768`-union wall (documented above) caps the assembled bound at `2⁻¹⁵³`. -/
 theorem mlkem768_decapsFailure_le_delta_unconditional_tight :
     winProb (decapsFails mlkemZ) ≤ (2 : ℝ) ^ (-148 : ℤ) :=
   mlkem768_decapsFailure_le_delta_exactMgf_tight mlkemZ
@@ -2673,6 +2675,507 @@ theorem coeffTailAtom_refutable :
     exact zpow_lt_zpow_right₀ (by norm_num) (by norm_num)
   linarith
 
+/-! ## §18 — THE TRUE NEAR-UNIFORM `Δv` REFINEMENT: `2⁻¹⁴⁸ → 2⁻¹⁵³` (refining the MODEL, not the method).
+
+§12–§15 modeled the `d_v=4` compression term `Δv` by the `±104` extreme-point surrogate `dvX`
+(MGF `cosh(104s)`, `≈ e^{31.2}` at `s = 3/10`). That envelope DOMINATES any centered `Δv ∈ [−104,104]` but is
+FAR heavier than the real compression error — as §15's "measured FIPS wall" and §16's residual **R2** named. This
+section replaces `dvX` by the ACTUAL `d_v=4` compression rounding error and re-runs the exact-MGF Chernoff, closing
+the honest assumption-free ceiling of the Chernoff route further, to `2⁻¹⁵³` assembled (`2⁻¹⁶³` per coefficient).
+
+### The TRUE `Δv` law (the ACTUAL rounding error, not an assumed shape).
+
+`cErr x = mod±_q (Decompress_{d_v}(Compress_{d_v}(x)) − x)` — built on the LITERAL `MlKemCodec.compress`/
+`MlKemCodec.decompress` (FIPS 203 §4.2.1, round-half-up), `q = 3329`, over `x` uniform on `ℤ_q`. Two ground facts,
+both PROVED here, characterize its law and pin its MGF WITHOUT assuming uniformity:
+
+* **`cErr_bound`** — the support is EXACTLY `[−104,104]` (`|cErr x| ≤ 104` for every `x < 3329`), by kernel
+  `decide` over the `3329`-point domain (NO `native_decide`; the reduction is exact `Nat`/`Int` arithmetic on the
+  real round functions — axiom-free).
+* **`cErrFiber_le_16`** — every error value is hit by AT MOST `16` inputs (`#{x : cErr x = k} ≤ 16`), by
+  INJECTIVITY of `x ↦ Compress_{d_v}(x)` on each fiber (`cErr_inj`, pure modular arithmetic via `omega`): the
+  ciphertext value + the error determine `x`, so the fiber injects into the `16`-element ciphertext alphabet. This
+  is the genuine near-uniformity: the `16` ciphertext bins each contribute each error value at most once.
+
+### The exact MGF bound (a geometric sum of exponentials, both signs).
+
+From `cErr_bound` + `cErrFiber_le_16`, `∑_x e^{t·cErr x} = ∑_{k=−104}^{104} c_k e^{tk} ≤ 16 ∑_{k=−104}^{104} e^{tk}`,
+a finite GEOMETRIC series (`sumFiber_geom_le`, `geom_sum_eq`). Bounded by `exp(s)−1 ≥ s` (`add_one_le_exp`), the
+per-coefficient true-`Δv` MGF is `mgf ≤ dvTrueBound = (160/9987)·e^{63/2} ≈ e^{27.37}` at BOTH `s = ±3/10` — the
+support is symmetric so the same geometric envelope bounds both tails (the exact law is NOT symmetric —
+`cErr = 104` has count `9`, `cErr = −104` count `8` — so this uses the SIGN-SEPARATED Chernoff engine
+`winProb_abs_exactMgf_bound_le`, not the exact-MGF-symmetry engine `winProb_abs_exactMgf_le` of §12.1). This
+`≈ e^{27.37}` replaces `dvX`'s `≈ e^{31.2}` — the `≈ 3.8`-nat gap the extreme-point envelope discarded.
+
+### The assembled δ and the MEASURED cap.
+
+Feeding the true-`Δv` MGF (`dvTrueBound`) into the assembled envelope over a fresh, fully-independent product model
+`rΩ` (`2304` product cross-terms + `e2` + the TRUE `Δv` coordinate `Fin 3329`, `iIndepFun` via `iIndepFun_pi`)
+closes the exact-MGF Chernoff at `2⁻¹⁶³` per coefficient — `5` bits below §15's `2⁻¹⁵⁸`. The `768`-fold union then
+gives `2⁻¹⁵³` assembled (`rZ_decapsFailure_le_delta153`), `5` bits below `mlkem768_decapsFailure_le_delta_unconditional_tight`.
+
+**FIPS `2⁻¹⁶⁴` is STILL out of band for this method** — and now the reason is sharp: the true-`Δv` per-coefficient
+tail `2⁻¹⁶³` is ITSELF near FIPS δ, but the `768`-fold union costs `≈ 10` bits, capping the ASSEMBLED bound at
+`≈ 2⁻¹⁵³`. Refining `Δv` tightened the per-coefficient Chernoff by exactly the `≈ 3.8` nats the `±104` envelope
+overspent (§16 **R2** is now DISCHARGED in MGF-space at deployed params), but it does NOT beat the union-bound wall
+(§15). Reaching FIPS `2⁻¹⁶⁴` still requires the exact convolved-distribution tail (§16, now on this LIGHTER true
+model) — the union-free per-coefficient tail `≈ 2⁻¹⁸⁰` — a Bahadur–Rao / exact-PMF step, NOT a better `Δv` MGF or a
+better `s`. So `2⁻¹⁵³` is the refined honest ceiling of the exact-MGF Chernoff route with the TRUE compression law. -/
+
+def cErr (x : ℕ) : ℤ := ((MlKemCodec.decompress 4 (MlKemCodec.compress 4 x) : ℤ) - (x : ℤ) + 1664) % 3329 - 1664
+
+-- (copied from validated scratch)
+theorem sumFiber_geom_le (N : ℕ) (c : Fin N → ℕ) (hc : ∀ x, c x < 209)
+    (hcard : ∀ j : ℕ, (Finset.univ.filter (fun x : Fin N => c x = j)).card ≤ 16)
+    (r : ℝ) (hr : 1 < r) :
+    (∑ x : Fin N, r ^ (c x)) ≤ 16 * r ^ 209 / (r - 1) := by
+  have hmaps : ∀ x ∈ (Finset.univ : Finset (Fin N)), c x ∈ Finset.range 209 :=
+    fun x _ => Finset.mem_range.mpr (hc x)
+  rw [← Finset.sum_fiberwise_of_maps_to hmaps]
+  have hstep : ∀ j ∈ Finset.range 209,
+      (∑ x ∈ Finset.univ.filter (fun x : Fin N => c x = j), r ^ (c x)) ≤ 16 * r ^ j := by
+    intro j hj
+    have : (∑ x ∈ Finset.univ.filter (fun x : Fin N => c x = j), r ^ (c x))
+        = (Finset.univ.filter (fun x : Fin N => c x = j)).card * r ^ j := by
+      rw [Finset.sum_congr rfl (fun x hx => by rw [(Finset.mem_filter.mp hx).2])]
+      rw [Finset.sum_const, nsmul_eq_mul]
+    rw [this]
+    have hrj : (0:ℝ) ≤ r ^ j := by positivity
+    have := hcard j
+    calc ((Finset.univ.filter (fun x : Fin N => c x = j)).card : ℝ) * r ^ j
+        ≤ (16:ℝ) * r ^ j := by
+          apply mul_le_mul_of_nonneg_right _ hrj; exact_mod_cast this
+      _ = 16 * r ^ j := rfl
+  refine le_trans (Finset.sum_le_sum hstep) ?_
+  rw [← Finset.mul_sum]
+  have hrne : r ≠ 1 := ne_of_gt hr
+  have hgeom : (∑ j ∈ Finset.range 209, r ^ j) = (r ^ 209 - 1) / (r - 1) := by
+    rw [geom_sum_eq hrne 209]
+  rw [hgeom]
+  have hrm1 : 0 < r - 1 := by linarith
+  rw [mul_div_assoc]; gcongr; linarith
+
+theorem compress4_lt16 (x : ℕ) : MlKemCodec.compress 4 x < 16 := by
+  unfold MlKemCodec.compress; simp only; exact Nat.mod_lt _ (by norm_num)
+
+theorem cErr_inj (k : ℤ) : Set.InjOn (fun x : Fin 3329 => MlKemCodec.compress 4 x.val)
+    ↑(Finset.univ.filter (fun x : Fin 3329 => cErr x.val = k)) := by
+  intro x1 hx1 x2 hx2 hcomp
+  simp only [Finset.coe_filter, Set.mem_setOf_eq, Finset.mem_univ, true_and] at hx1 hx2
+  simp only at hcomp
+  have hdec : MlKemCodec.decompress 4 (MlKemCodec.compress 4 x2.val) = MlKemCodec.decompress 4 (MlKemCodec.compress 4 x1.val) := by rw [hcomp]
+  have he1 : cErr x1.val = k := hx1
+  have he2 : cErr x2.val = k := hx2
+  unfold cErr at he1 he2; rw [hdec] at he2
+  exact Fin.ext (by have := x1.isLt; have := x2.isLt; omega)
+
+theorem cErrFiber_le_16 (k : ℤ) :
+    (Finset.univ.filter (fun x : Fin 3329 => cErr x.val = k)).card ≤ 16 := by
+  have hmaps : ∀ x ∈ Finset.univ.filter (fun x : Fin 3329 => cErr x.val = k),
+      (fun x : Fin 3329 => MlKemCodec.compress 4 x.val) x ∈ Finset.range 16 :=
+    fun x _ => Finset.mem_range.mpr (compress4_lt16 x.val)
+  simpa using Finset.card_le_card_of_injOn (fun x : Fin 3329 => MlKemCodec.compress 4 x.val) hmaps (cErr_inj k)
+
+set_option maxRecDepth 20000 in
+theorem cErr_bound : ∀ x : Fin 3329, -104 ≤ cErr x.val ∧ cErr x.val ≤ 104 := by decide
+
+noncomputable def dvTrueX : Fin 3329 → ℝ := fun x => (cErr x.val : ℝ)
+
+-- MGF as raw sum
+theorem mgf_dvTrue_sum (t : ℝ) :
+    mgf dvTrueX (unifMeasure (Fin 3329)) t
+      = ∑ x : Fin 3329, (1/3329 : ℝ) * Real.exp (t * (cErr x.val : ℝ)) := by
+  rw [mgf, unifMeasure, PMF.integral_eq_sum]
+  apply Finset.sum_congr rfl
+  intro x _
+  rw [PMF.uniformOfFintype_apply]
+  simp only [Fintype.card_fin, smul_eq_mul, dvTrueX, ENNReal.toReal_inv, ENNReal.toReal_natCast]
+  norm_num
+
+-- gj for positive sign
+noncomputable def gjp : Fin 3329 → ℕ := fun x => (cErr x.val + 104).toNat
+-- gj for negative sign
+noncomputable def gjn : Fin 3329 → ℕ := fun x => (104 - cErr x.val).toNat
+
+theorem gjp_lt (x : Fin 3329) : gjp x < 209 := by
+  have := (cErr_bound x).2; unfold gjp; omega
+theorem gjn_lt (x : Fin 3329) : gjn x < 209 := by
+  have := (cErr_bound x).1; unfold gjn; omega
+
+theorem gjp_card (j : ℕ) : (Finset.univ.filter (fun x : Fin 3329 => gjp x = j)).card ≤ 16 := by
+  have hcongr : (Finset.univ.filter (fun x : Fin 3329 => gjp x = j))
+      = (Finset.univ.filter (fun x : Fin 3329 => cErr x.val = (j:ℤ) - 104)) := by
+    apply Finset.filter_congr; intro x _
+    have hb := (cErr_bound x).1
+    unfold gjp
+    constructor <;> intro h <;> omega
+  rw [hcongr]; exact cErrFiber_le_16 _
+theorem gjn_card (j : ℕ) : (Finset.univ.filter (fun x : Fin 3329 => gjn x = j)).card ≤ 16 := by
+  have hcongr : (Finset.univ.filter (fun x : Fin 3329 => gjn x = j))
+      = (Finset.univ.filter (fun x : Fin 3329 => cErr x.val = 104 - (j:ℤ))) := by
+    apply Finset.filter_congr; intro x _
+    have hb := (cErr_bound x).2
+    unfold gjn
+    constructor <;> intro h <;> omega
+  rw [hcongr]; exact cErrFiber_le_16 _
+
+noncomputable def dvTrueBound : ℝ := (160/9987) * Real.exp (63/2)
+
+-- positive-sign sum bound
+theorem dvTrue_sum_pos :
+    (∑ x : Fin 3329, Real.exp ((3/10) * (cErr x.val : ℝ)))
+      ≤ 16 * Real.exp (63/2) / (Real.exp (3/10) - 1) := by
+  have hr1 : (1:ℝ) < Real.exp (3/10) := by
+    have := Real.add_one_le_exp (3/10 : ℝ); linarith
+  have hx_eq : ∀ x : Fin 3329, Real.exp ((3/10) * (cErr x.val:ℝ))
+      = Real.exp (-104 * (3/10)) * (Real.exp (3/10))^(gjp x) := by
+    intro x
+    have hb := (cErr_bound x).1
+    have hcast : ((gjp x : ℤ)) = cErr x.val + 104 := by
+      unfold gjp; rw [Int.toNat_of_nonneg (by omega)]
+    have hcastR : (gjp x : ℝ) = (cErr x.val : ℝ) + 104 := by exact_mod_cast hcast
+    rw [show (3/10)*(cErr x.val:ℝ) = (gjp x:ℝ)*(3/10) + (-104*(3/10)) from by rw [hcastR]; ring,
+        Real.exp_add, Real.exp_nat_mul]
+    ring
+  rw [Finset.sum_congr rfl (fun x _ => hx_eq x), ← Finset.mul_sum]
+  have hgeom := sumFiber_geom_le 3329 gjp gjp_lt gjp_card (Real.exp (3/10)) hr1
+  have hpow : Real.exp (-104 * (3/10)) * (16 * (Real.exp (3/10))^209 / (Real.exp (3/10) - 1))
+      = 16 * Real.exp (63/2) / (Real.exp (3/10) - 1) := by
+    rw [← Real.exp_nat_mul]
+    rw [show Real.exp (-104 * (3/10)) * (16 * Real.exp ((209:ℕ) * (3/10)) / (Real.exp (3/10) - 1))
+        = 16 * (Real.exp (-104 * (3/10)) * Real.exp ((209:ℕ) * (3/10))) / (Real.exp (3/10) - 1) from by ring,
+        ← Real.exp_add]
+    norm_num
+  calc Real.exp (-104 * (3/10)) * (∑ x : Fin 3329, (Real.exp (3/10))^(gjp x))
+      ≤ Real.exp (-104 * (3/10)) * (16 * (Real.exp (3/10))^209 / (Real.exp (3/10) - 1)) := by
+        apply mul_le_mul_of_nonneg_left hgeom (le_of_lt (Real.exp_pos _))
+    _ = 16 * Real.exp (63/2) / (Real.exp (3/10) - 1) := hpow
+
+theorem dvTrue_sum_neg :
+    (∑ x : Fin 3329, Real.exp ((-(3/10)) * (cErr x.val : ℝ)))
+      ≤ 16 * Real.exp (63/2) / (Real.exp (3/10) - 1) := by
+  have hr1 : (1:ℝ) < Real.exp (3/10) := by
+    have := Real.add_one_le_exp (3/10 : ℝ); linarith
+  have hx_eq : ∀ x : Fin 3329, Real.exp ((-(3/10)) * (cErr x.val:ℝ))
+      = Real.exp (-(3/10) * 104) * (Real.exp (3/10))^(gjn x) := by
+    intro x
+    have hb := (cErr_bound x).2
+    have hcast : ((gjn x : ℤ)) = 104 - cErr x.val := by
+      unfold gjn; rw [Int.toNat_of_nonneg (by omega)]
+    have hcastR : (gjn x : ℝ) = 104 - (cErr x.val : ℝ) := by exact_mod_cast hcast
+    rw [show (-(3/10))*(cErr x.val:ℝ) = (gjn x:ℝ)*(3/10) + (-(3/10)*104) from by rw [hcastR]; ring,
+        Real.exp_add, Real.exp_nat_mul]
+    ring
+  rw [Finset.sum_congr rfl (fun x _ => hx_eq x), ← Finset.mul_sum]
+  have hgeom := sumFiber_geom_le 3329 gjn gjn_lt gjn_card (Real.exp (3/10)) hr1
+  have hpow : Real.exp (-(3/10) * 104) * (16 * (Real.exp (3/10))^209 / (Real.exp (3/10) - 1))
+      = 16 * Real.exp (63/2) / (Real.exp (3/10) - 1) := by
+    rw [← Real.exp_nat_mul]
+    rw [show Real.exp (-(3/10) * 104) * (16 * Real.exp ((209:ℕ) * (3/10)) / (Real.exp (3/10) - 1))
+        = 16 * (Real.exp (-(3/10) * 104) * Real.exp ((209:ℕ) * (3/10))) / (Real.exp (3/10) - 1) from by ring,
+        ← Real.exp_add]
+    norm_num
+  calc Real.exp (-(3/10) * 104) * (∑ x : Fin 3329, (Real.exp (3/10))^(gjn x))
+      ≤ Real.exp (-(3/10) * 104) * (16 * (Real.exp (3/10))^209 / (Real.exp (3/10) - 1)) := by
+        apply mul_le_mul_of_nonneg_left hgeom (le_of_lt (Real.exp_pos _))
+    _ = 16 * Real.exp (63/2) / (Real.exp (3/10) - 1) := hpow
+
+theorem dvTrueBound_pos : 0 < dvTrueBound := by
+  unfold dvTrueBound; positivity
+
+theorem dvTrue_key (E : ℝ) (hE : 0 ≤ E) :
+    (1/3329:ℝ) * (16 * E / (Real.exp (3/10) - 1)) ≤ (160/9987) * E := by
+  have hD : (3/10:ℝ) ≤ Real.exp (3/10) - 1 := by have := Real.add_one_le_exp (3/10:ℝ); linarith
+  have hDpos : (0:ℝ) < Real.exp (3/10) - 1 := by linarith
+  rw [← mul_div_assoc, div_le_iff₀ hDpos]
+  nlinarith [hD, hE, mul_le_mul_of_nonneg_left hD hE]
+
+theorem mgf_dvTrue_pos_le : mgf dvTrueX (unifMeasure (Fin 3329)) (3/10) ≤ dvTrueBound := by
+  rw [mgf_dvTrue_sum, ← Finset.mul_sum]
+  refine le_trans (mul_le_mul_of_nonneg_left dvTrue_sum_pos (by norm_num)) ?_
+  exact dvTrue_key _ (le_of_lt (Real.exp_pos _))
+
+theorem mgf_dvTrue_neg_le : mgf dvTrueX (unifMeasure (Fin 3329)) (-(3/10)) ≤ dvTrueBound := by
+  rw [mgf_dvTrue_sum, ← Finset.mul_sum]
+  refine le_trans (mul_le_mul_of_nonneg_left dvTrue_sum_neg (by norm_num)) ?_
+  exact dvTrue_key _ (le_of_lt (Real.exp_pos _))
+
+
+-- ===== BOUND-BASED EXACT-MGF CHERNOFF ENGINE (no symmetry needed) =====
+theorem winProb_abs_exactMgf_bound_le {Ω : Type*} [Fintype Ω] [Nonempty Ω] [MeasurableSpace Ω]
+    [MeasurableSingletonClass Ω] {m : ℕ} (T : Fin m → Ω → ℝ) (s : ℝ) (hs : 0 ≤ s)
+    (hindep : iIndepFun T (unifMeasure Ω)) (hmeas : ∀ i, Measurable (T i))
+    (B : Fin m → ℝ)
+    (hpos : ∀ i, mgf (T i) (unifMeasure Ω) s ≤ B i)
+    (hneg : ∀ i, mgf (T i) (unifMeasure Ω) (-s) ≤ B i)
+    {ε : ℝ} :
+    winProb (fun ω => decide (ε ≤ |∑ i, T i ω|))
+      ≤ 2 * Real.exp (-s * ε) * ∏ i, B i := by
+  classical
+  set μ := unifMeasure Ω with hμ
+  set Z : Ω → ℝ := fun ω => ∑ i, T i ω with hZ
+  have hZsum : Z = ∑ i, T i := by funext ω; simp [hZ, Finset.sum_apply]
+  have hmgfZ : mgf Z μ s = ∏ i, mgf (T i) μ s := by
+    rw [hZsum]; exact hindep.mgf_sum hmeas Finset.univ
+  have hmgfnegZ : mgf (fun ω => -(Z ω)) μ s = ∏ i, mgf (T i) μ (-s) := by
+    have h1 : mgf (fun ω => -(Z ω)) μ s = mgf Z μ (-s) := by
+      have := mgf_neg (X := Z) (μ := μ) (t := s); simpa [Pi.neg_def] using this
+    rw [h1, hZsum, hindep.mgf_sum hmeas Finset.univ]
+  have hprodpos : (∏ i, mgf (T i) μ s) ≤ ∏ i, B i :=
+    Finset.prod_le_prod (fun i _ => mgf_nonneg) (fun i _ => hpos i)
+  have hprodneg : (∏ i, mgf (T i) μ (-s)) ≤ ∏ i, B i :=
+    Finset.prod_le_prod (fun i _ => mgf_nonneg) (fun i _ => hneg i)
+  have hexp : (0:ℝ) ≤ Real.exp (-s * ε) := le_of_lt (Real.exp_pos _)
+  have hintR : Integrable (fun ω => Real.exp (s * Z ω)) μ := Integrable.of_finite
+  have hR : μ.real {ω | ε ≤ Z ω} ≤ Real.exp (-s * ε) * ∏ i, B i := by
+    have h := measure_ge_le_exp_mul_mgf (μ := μ) (X := Z) (t := s) ε hs hintR
+    rw [hmgfZ] at h
+    exact le_trans h (by apply mul_le_mul_of_nonneg_left hprodpos hexp)
+  have hintL : Integrable (fun ω => Real.exp (s * (fun ω => -(Z ω)) ω)) μ := Integrable.of_finite
+  have hL : μ.real {ω | Z ω ≤ -ε} ≤ Real.exp (-s * ε) * ∏ i, B i := by
+    have h := measure_ge_le_exp_mul_mgf (μ := μ) (X := fun ω => -(Z ω)) (t := s) ε hs hintL
+    rw [hmgfnegZ] at h
+    have hset : {ω | ε ≤ -(Z ω)} = {ω | Z ω ≤ -ε} := by
+      ext ω; simp only [Set.mem_setOf_eq]; constructor <;> intro hh <;> linarith
+    rw [hset] at h
+    exact le_trans h (by apply mul_le_mul_of_nonneg_left hprodneg hexp)
+  have hsubset : {ω | ε ≤ |Z ω|} ⊆ {ω | ε ≤ Z ω} ∪ {ω | Z ω ≤ -ε} := by
+    intro ω hω
+    simp only [Set.mem_setOf_eq, Set.mem_union] at hω ⊢
+    rcases le_total 0 (Z ω) with hp | hn
+    · exact Or.inl (by rwa [abs_of_nonneg hp] at hω)
+    · exact Or.inr (by rw [abs_of_nonpos hn] at hω; linarith)
+  have hunion : μ.real {ω | ε ≤ |Z ω|} ≤ 2 * Real.exp (-s * ε) * ∏ i, B i := by
+    calc μ.real {ω | ε ≤ |Z ω|}
+        ≤ μ.real ({ω | ε ≤ Z ω} ∪ {ω | Z ω ≤ -ε}) := measureReal_mono hsubset
+      _ ≤ μ.real {ω | ε ≤ Z ω} + μ.real {ω | Z ω ≤ -ε} := measureReal_union_le _ _
+      _ ≤ 2 * Real.exp (-s * ε) * ∏ i, B i := by linarith [hR, hL]
+  rw [winProb_eq_measureReal]
+  have hset : {ω : Ω | (fun ω => decide (ε ≤ |∑ i, T i ω|)) ω = true} = {ω | ε ≤ |Z ω|} := by
+    ext ω; simp [decide_eq_true_eq, hZ]
+  rw [hset]; exact hunion
+
+-- ===== REFINED PRODUCT SPACE RC = (CbdΩ×CbdΩ) × Fin 3329 =====
+abbrev RC : Type := (CbdΩ × CbdΩ) × Fin 3329
+abbrev rΩ : Type := Fin 2306 → RC
+noncomputable instance : DecidableEq rΩ := Classical.decEq _
+
+theorem runifMeasure_pi_eq :
+    unifMeasure rΩ = Measure.pi (fun _ : Fin 2306 => unifMeasure RC) := by
+  refine Measure.ext_of_singleton (fun f => ?_)
+  rw [Measure.pi_singleton]
+  have hL : unifMeasure rΩ {f} = (Fintype.card rΩ : ℝ≥0∞)⁻¹ := by
+    rw [unifMeasure, PMF.toMeasure_apply_singleton _ _ (measurableSet_singleton f),
+      PMF.uniformOfFintype_apply]
+  have hR : ∀ i : Fin 2306, unifMeasure RC {f i} = (Fintype.card RC : ℝ≥0∞)⁻¹ := by
+    intro i
+    rw [unifMeasure, PMF.toMeasure_apply_singleton _ _ (measurableSet_singleton _),
+      PMF.uniformOfFintype_apply]
+  rw [hL]; simp_rw [hR]
+  rw [Finset.prod_const, Finset.card_univ, Fintype.card_fun, Nat.cast_pow, ENNReal.inv_pow]
+
+theorem rmgf_coord (i : Fin 2306) (X : RC → ℝ) (s : ℝ) :
+    mgf (fun ω : rΩ => X (ω i)) (unifMeasure rΩ) s = mgf X (unifMeasure RC) s := by
+  rw [runifMeasure_pi_eq]
+  have hmap : (Measure.pi (fun _ : Fin 2306 => unifMeasure RC)).map (fun f : rΩ => f i)
+      = unifMeasure RC :=
+    (measurePreserving_eval (fun _ : Fin 2306 => unifMeasure RC) i).map_eq
+  have hm := mgf_map (X := X) (Y := fun f : rΩ => f i)
+      (μ := Measure.pi (fun _ : Fin 2306 => unifMeasure RC)) (t := s)
+      (measurable_pi_apply i).aemeasurable
+      (measurable_of_finite (fun ω : RC => Real.exp (s * X ω))).aestronglyMeasurable
+  rw [hmap] at hm; exact hm.symm
+
+theorem mgf_fst_RC (f : (CbdΩ × CbdΩ) → ℝ) (s : ℝ) :
+    mgf (fun p : RC => f p.1) (unifMeasure RC) s = mgf f (unifMeasure (CbdΩ × CbdΩ)) s := by
+  rw [mgf, mgf, unifMeasure, unifMeasure, PMF.integral_eq_sum, PMF.integral_eq_sum,
+    Fintype.sum_prod_type]
+  apply Finset.sum_congr rfl
+  intro a _
+  have hin : ∀ y : Fin 3329, ((PMF.uniformOfFintype RC) (a, y)).toReal • Real.exp (s * f (a, y).1)
+       = ((Fintype.card RC : ℝ≥0∞)⁻¹).toReal * Real.exp (s * f a) := by
+    intro y; rw [PMF.uniformOfFintype_apply]; simp [smul_eq_mul]
+  rw [Finset.sum_congr rfl (fun y _ => hin y), Finset.sum_const, Finset.card_univ,
+    PMF.uniformOfFintype_apply]
+  simp only [Fintype.card_prod, Fintype.card_fin, Fintype.card_bool, ENNReal.toReal_inv,
+    ENNReal.toReal_natCast, smul_eq_mul, nsmul_eq_mul]
+  push_cast; ring
+
+theorem mgf_snd_RC (g : Fin 3329 → ℝ) (s : ℝ) :
+    mgf (fun p : RC => g p.2) (unifMeasure RC) s = mgf g (unifMeasure (Fin 3329)) s := by
+  rw [mgf, mgf, unifMeasure, unifMeasure, PMF.integral_eq_sum, PMF.integral_eq_sum,
+    Fintype.sum_prod_type, Finset.sum_comm]
+  apply Finset.sum_congr rfl
+  intro b _
+  have hin : ∀ a : CbdΩ × CbdΩ, ((PMF.uniformOfFintype RC) (a, b)).toReal • Real.exp (s * g (a, b).2)
+       = ((Fintype.card RC : ℝ≥0∞)⁻¹).toReal * Real.exp (s * g b) := by
+    intro a; rw [PMF.uniformOfFintype_apply]; simp [smul_eq_mul]
+  rw [Finset.sum_congr rfl (fun a _ => hin a), Finset.sum_const, Finset.card_univ,
+    PMF.uniformOfFintype_apply]
+  simp only [Fintype.card_prod, Fintype.card_fin, Fintype.card_bool, ENNReal.toReal_inv,
+    ENNReal.toReal_natCast, smul_eq_mul, nsmul_eq_mul]
+  push_cast; ring
+
+theorem mgf_e2_RC (s : ℝ) :
+    mgf (fun p : RC => cbd2X p.1.1) (unifMeasure RC) s = mgf cbd2X (unifMeasure CbdΩ) s :=
+  (mgf_fst_RC (fun q : CbdΩ × CbdΩ => cbd2X q.1) s).trans (mgf_cbd2_fst s)
+
+-- ===== THE REFINED TERM FAMILY =====
+noncomputable def rTermR (i : Fin 2306) : RC → ℝ :=
+  fun p => if i.val < 2304 then cbd2ProdX p.1 else if i.val = 2304 then cbd2X p.1.1 else dvTrueX p.2
+def rTermZ (i : Fin 2306) : RC → ℤ :=
+  fun p => if i.val < 2304 then cbd2Ez 0 p.1.1 * cbd2Ez 0 p.1.2
+           else if i.val = 2304 then cbd2Ez 0 p.1.1 else cErr p.2.val
+theorem rTermZR (i : Fin 2306) (p : RC) : ((rTermZ i p : ℤ) : ℝ) = rTermR i p := by
+  unfold rTermZ rTermR
+  split_ifs with h1 h2
+  · rw [Int.cast_mul, cbd2Ez_cast, cbd2Ez_cast]; rfl
+  · rw [cbd2Ez_cast]
+  · rfl
+noncomputable def rT (i : Fin 2306) : rΩ → ℝ := fun ω => rTermR i (ω i)
+def rZ : Fin 768 → rΩ → ℤ := fun _ ω => ∑ i, rTermZ i (ω i)
+
+theorem rTermR_prod (i : Fin 2306) (h : i.val < 2304) : rTermR i = (fun p : RC => cbd2ProdX p.1) := by
+  funext p; unfold rTermR; rw [if_pos h]
+theorem rTermR_e2 (i : Fin 2306) (h : i.val = 2304) : rTermR i = (fun p : RC => cbd2X p.1.1) := by
+  funext p; unfold rTermR; rw [if_neg (by omega), if_pos h]
+theorem rTermR_dv (i : Fin 2306) (h : ¬ i.val < 2304) (h2 : i.val ≠ 2304) :
+    rTermR i = (fun p : RC => dvTrueX p.2) := by
+  funext p; unfold rTermR; rw [if_neg h, if_neg h2]
+
+theorem rindep : iIndepFun rT (unifMeasure rΩ) := by
+  rw [runifMeasure_pi_eq]
+  exact iIndepFun_pi (fun i => (measurable_of_finite (rTermR i)).aemeasurable)
+theorem rmeas (i : Fin 2306) : Measurable (rT i) := measurable_of_finite _
+
+noncomputable def rBoundOf (i : Fin 2306) : ℝ :=
+  if i.val < 2304 then mlkemProdMgfBound else if i.val = 2304 then Real.exp (9/200) else dvTrueBound
+noncomputable def mlkemRefinedMgfBound : ℝ :=
+  mlkemProdMgfBound ^ 2304 * Real.exp (9/200) * dvTrueBound
+
+theorem rBoundOf_nn (i : Fin 2306) : 0 ≤ rBoundOf i := by
+  unfold rBoundOf; split_ifs
+  · unfold mlkemProdMgfBound; positivity
+  · positivity
+  · exact le_of_lt dvTrueBound_pos
+
+-- product cross-term MGF is even (needed for the -3/10 direction)
+theorem mgf_cbd2prod_even (t : ℝ) :
+    mgf cbd2ProdX (unifMeasure (CbdΩ × CbdΩ)) (-t) = mgf cbd2ProdX (unifMeasure (CbdΩ × CbdΩ)) t := by
+  rw [mgf_cbd2prod_factored, mgf_cbd2prod_factored]
+  apply Finset.sum_congr rfl; intro a _; congr 2
+  rw [show -t * cbd2X a / 2 = -(t * cbd2X a / 2) from by ring, Real.cosh_neg]
+
+theorem rterm_pos_le (i : Fin 2306) : mgf (rT i) (unifMeasure rΩ) (3/10) ≤ rBoundOf i := by
+  unfold rT; rw [rmgf_coord]
+  rcases lt_trichotomy i.val 2304 with h | h | h
+  · rw [rTermR_prod i h, mgf_fst_RC, show rBoundOf i = mlkemProdMgfBound from by unfold rBoundOf; rw [if_pos h]]
+    refine le_trans (mgf_cbd2prod_le (3/10)) (le_of_eq ?_)
+    unfold mlkemProdMgfBound
+    rw [show (2:ℝ)*(3/10)^2 = 9/50 from by norm_num, show ((3/10:ℝ))^2/2 = 9/200 from by norm_num]
+  · rw [rTermR_e2 i h, mgf_e2_RC,
+        show rBoundOf i = Real.exp (9/200) from by unfold rBoundOf; rw [if_neg (by omega), if_pos h]]
+    refine le_trans (mgf_cbd2_le_exp (3/10)) (Real.exp_le_exp.mpr ?_); norm_num
+  · rw [rTermR_dv i (by omega) (by omega), mgf_snd_RC,
+        show rBoundOf i = dvTrueBound from by unfold rBoundOf; rw [if_neg (by omega), if_neg (by omega)]]
+    exact mgf_dvTrue_pos_le
+
+theorem rterm_neg_le (i : Fin 2306) : mgf (rT i) (unifMeasure rΩ) (-(3/10)) ≤ rBoundOf i := by
+  unfold rT; rw [rmgf_coord]
+  rcases lt_trichotomy i.val 2304 with h | h | h
+  · rw [rTermR_prod i h, mgf_fst_RC, mgf_cbd2prod_even,
+        show rBoundOf i = mlkemProdMgfBound from by unfold rBoundOf; rw [if_pos h]]
+    refine le_trans (mgf_cbd2prod_le (3/10)) (le_of_eq ?_)
+    unfold mlkemProdMgfBound
+    rw [show (2:ℝ)*(3/10)^2 = 9/50 from by norm_num, show ((3/10:ℝ))^2/2 = 9/200 from by norm_num]
+  · rw [rTermR_e2 i h, mgf_e2_RC,
+        show rBoundOf i = Real.exp (9/200) from by unfold rBoundOf; rw [if_neg (by omega), if_pos h]]
+    refine le_trans (mgf_cbd2_le_exp (-(3/10))) (Real.exp_le_exp.mpr ?_); norm_num
+  · rw [rTermR_dv i (by omega) (by omega), mgf_snd_RC,
+        show rBoundOf i = dvTrueBound from by unfold rBoundOf; rw [if_neg (by omega), if_neg (by omega)]]
+    exact mgf_dvTrue_neg_le
+
+theorem prod_rBoundOf : (∏ i, rBoundOf i) = mlkemRefinedMgfBound := by
+  unfold mlkemRefinedMgfBound
+  rw [Fin.prod_univ_castSucc, Fin.prod_univ_castSucc]
+  have hlast : rBoundOf (Fin.last 2305) = dvTrueBound := by
+    unfold rBoundOf; rw [if_neg (by rw [Fin.val_last]; omega), if_neg (by rw [Fin.val_last]; omega)]
+  have hpen : rBoundOf (Fin.castSucc (Fin.last 2304)) = Real.exp (9/200) := by
+    unfold rBoundOf; rw [if_neg (by rw [Fin.val_castSucc, Fin.val_last]; omega), if_pos (by rw [Fin.val_castSucc, Fin.val_last])]
+  have hconst : ∀ i : Fin 2304, rBoundOf (Fin.castSucc (Fin.castSucc i)) = mlkemProdMgfBound := by
+    intro i; unfold rBoundOf; rw [if_pos (by rw [Fin.val_castSucc, Fin.val_castSucc]; exact i.isLt)]
+  rw [hlast, hpen, Finset.prod_congr rfl (fun i _ => hconst i), Finset.prod_const,
+      Finset.card_univ, Fintype.card_fin]
+
+-- ===== THE REFINED δ ARITHMETIC =====
+theorem refinedMgf_delta_arith :
+    2 * Real.exp (-(3/10)*832) * mlkemRefinedMgfBound ≤ (2:ℝ)^(-163:ℤ) := by
+  have hprodpos : (0:ℝ) ≤ mlkemProdMgfBound := by unfold mlkemProdMgfBound; positivity
+  have hpow : mlkemProdMgfBound ^ 2304 ≤ Real.exp ((467/10000) * 2304) := by
+    calc mlkemProdMgfBound ^ 2304
+        ≤ (Real.exp (467/10000)) ^ 2304 := pow_le_pow_left₀ hprodpos mlkemProdMgfBound_le_exp 2304
+      _ = Real.exp ((467/10000) * 2304) := by rw [← Real.exp_nat_mul]; congr 1; push_cast; ring
+  have hC : (0:ℝ) ≤ dvTrueBound := dvTrueBound_pos.le
+  have h1 : mlkemRefinedMgfBound ≤ Real.exp ((467/10000)*2304) * Real.exp (9/200) * dvTrueBound := by
+    unfold mlkemRefinedMgfBound
+    apply mul_le_mul_of_nonneg_right _ hC
+    apply mul_le_mul_of_nonneg_right hpow (le_of_lt (Real.exp_pos _))
+  have h2 : Real.exp ((467/10000)*2304) * Real.exp (9/200) * dvTrueBound
+      = (160/9987) * Real.exp ((467/10000)*2304 + 9/200 + 63/2) := by
+    unfold dvTrueBound
+    rw [show Real.exp ((467/10000)*2304) * Real.exp (9/200) * ((160/9987) * Real.exp (63/2))
+         = (160/9987) * (Real.exp ((467/10000)*2304) * Real.exp (9/200) * Real.exp (63/2)) from by ring,
+       ← Real.exp_add, ← Real.exp_add]
+  have hmul : 2 * Real.exp (-(3/10)*832) * mlkemRefinedMgfBound
+      ≤ 2 * Real.exp (-(3/10)*832) * ((160/9987) * Real.exp ((467/10000)*2304 + 9/200 + 63/2)) := by
+    apply mul_le_mul_of_nonneg_left (le_trans h1 (le_of_eq h2)) (by positivity)
+  refine le_trans hmul ?_
+  have heq : 2 * Real.exp (-(3/10)*832) * ((160/9987) * Real.exp ((467/10000)*2304 + 9/200 + 63/2))
+        = (320/9987) * Real.exp (-(3/10)*832 + ((467/10000)*2304 + 9/200 + 63/2)) := by
+    rw [show 2 * Real.exp (-(3/10)*832) * ((160/9987) * Real.exp ((467/10000)*2304 + 9/200 + 63/2))
+          = (320/9987) * (Real.exp (-(3/10)*832) * Real.exp ((467/10000)*2304 + 9/200 + 63/2)) from by ring,
+       ← Real.exp_add]
+  rw [heq]
+  have hexppos : (0:ℝ) ≤ Real.exp (-(3/10)*832 + ((467/10000)*2304 + 9/200 + 63/2)) := (Real.exp_pos _).le
+  calc (320/9987 : ℝ) * Real.exp (-(3/10)*832 + ((467/10000)*2304 + 9/200 + 63/2))
+      ≤ (1/16) * Real.exp (-(3/10)*832 + ((467/10000)*2304 + 9/200 + 63/2)) := by
+        apply mul_le_mul_of_nonneg_right (by norm_num) hexppos
+    _ ≤ (2:ℝ)^(-163:ℤ) := by
+        rw [show (2:ℝ)^(-163:ℤ) = (1/16) * (2:ℝ)^(-159:ℤ) from by
+              rw [show (-163:ℤ) = -159 + (-4) from by ring, zpow_add₀ (by norm_num:(2:ℝ)≠0)]; norm_num]
+        gcongr
+        rw [show (2:ℝ)^(-159:ℤ) = Real.exp (-159 * Real.log 2) from by
+              rw [← Real.exp_log (show (0:ℝ) < (2:ℝ)^(-159:ℤ) by positivity), Real.log_zpow]
+              congr 1; push_cast; ring]
+        apply Real.exp_le_exp.mpr
+        nlinarith [Real.log_two_lt_d9]
+
+theorem rZ_perCoeffTail : PerCoeffHoeffdingTail rZ ((2:ℝ)^(-163:ℤ)) := by
+  intro c
+  have hbadeq : badCoeff rZ c = fun ω => decide ((832:ℝ) ≤ |∑ i, rT i ω|) := by
+    funext ω
+    have hZ : (rZ c ω : ℝ) = ∑ i, rT i ω := by
+      show ((∑ i, rTermZ i (ω i) : ℤ):ℝ) = ∑ i, rT i ω
+      push_cast; exact Finset.sum_congr rfl (fun i _ => rTermZR i (ω i))
+    have hiff : ((832:ℤ) ≤ |rZ c ω|) ↔ ((832:ℝ) ≤ |∑ i, rT i ω|) := by
+      rw [← hZ, ← Int.cast_abs]; exact_mod_cast Iff.rfl
+    simp only [badCoeff, hiff]
+  rw [hbadeq]
+  refine le_trans (winProb_abs_exactMgf_bound_le rT (3/10) (by norm_num) rindep rmeas
+    rBoundOf rterm_pos_le rterm_neg_le) ?_
+  rw [prod_rBoundOf]
+  exact refinedMgf_delta_arith
+
+theorem rZ_decapsFailure_le_delta153 :
+    winProb (decapsFails rZ) ≤ (2:ℝ)^(-153:ℤ) := by
+  refine le_trans (mlkem_decapsFail_le rZ _ rZ_perCoeffTail) ?_
+  have h768 : (768:ℝ) ≤ (2:ℝ)^(10:ℤ) := by norm_num
+  have hpos : (0:ℝ) ≤ (2:ℝ)^(-163:ℤ) := by positivity
+  calc (768:ℝ) * (2:ℝ)^(-163:ℤ)
+      ≤ (2:ℝ)^(10:ℤ) * (2:ℝ)^(-163:ℤ) := by gcongr
+    _ = (2:ℝ)^((10:ℤ)+(-163:ℤ)) := by rw [← zpow_add₀ (by norm_num:(2:ℝ)≠0)]
+    _ = (2:ℝ)^(-153:ℤ) := by norm_num
+
 /-! ## AXIOM HYGIENE — every probabilistic theorem is kernel-clean (⊆ {propext, Classical.choice, Quot.sound}). -/
 
 #assert_all_clean [
@@ -2806,7 +3309,43 @@ theorem coeffTailAtom_refutable :
   coeffBR_prefactor_of_tailAtom,
   mlkem768_decapsFailure_le_delta_bahadurRao_real_tailAtom,
   coeffTailAtom_satisfiable,
-  coeffTailAtom_refutable
+  coeffTailAtom_refutable,
+  sumFiber_geom_le,
+  compress4_lt16,
+  cErr_inj,
+  cErrFiber_le_16,
+  cErr_bound,
+  mgf_dvTrue_sum,
+  gjp_lt,
+  gjn_lt,
+  gjp_card,
+  gjn_card,
+  dvTrue_sum_pos,
+  dvTrue_sum_neg,
+  dvTrueBound_pos,
+  dvTrue_key,
+  mgf_dvTrue_pos_le,
+  mgf_dvTrue_neg_le,
+  winProb_abs_exactMgf_bound_le,
+  runifMeasure_pi_eq,
+  rmgf_coord,
+  mgf_fst_RC,
+  mgf_snd_RC,
+  mgf_e2_RC,
+  rTermZR,
+  rTermR_prod,
+  rTermR_e2,
+  rTermR_dv,
+  rindep,
+  rmeas,
+  rBoundOf_nn,
+  mgf_cbd2prod_even,
+  rterm_pos_le,
+  rterm_neg_le,
+  prod_rBoundOf,
+  refinedMgf_delta_arith,
+  rZ_perCoeffTail,
+  rZ_decapsFailure_le_delta153
 ]
 
 end Dregg2.Crypto.MlKemDelta
