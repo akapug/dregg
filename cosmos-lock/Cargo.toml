@@ -1,0 +1,50 @@
+# Standalone workspace: keeps the CosmWasm dependency tree out of the main dregg
+# workspace (like `chain/`, `cosmos-settlement/`, `solana-lock/`). This crate is the
+# Cosmos-side CUSTODY contract — the timeout/refund ESCROW that makes locking a
+# foreign asset into a DrEX trade SAFE. It is the Cosmos twin of the EVM
+# `chain/contracts/DreggVault.sol` escrow surface and the `solana-lock` escrow: a
+# locked deposit reaches EXACTLY ONE terminal state (released-to-the-ring-matched-
+# recipient XOR refunded-to-the-depositor), never both, never stuck.
+#
+# Where `cosmos-settlement` is the proof-VERIFIER half (it answers "is this clearing
+# root proven?"), THIS is the custody half that gates a release on that answer.
+#
+# Build / test standalone:  cd cosmos-lock && cargo test
+[workspace]
+
+[package]
+name = "cosmos-lock"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "Cosmos-side dregg custody escrow: a CosmWasm contract that locks a native asset into a timed escrow and releases it to the ring-matched recipient on a proven DrEX clearing (settlement IsProvenRoot + M-of-N oracle attestation) XOR refunds the depositor on timeout — the Cosmos twin of the DreggVault / solana-lock escrow"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+cosmwasm-std = { version = "2.2", features = ["staking"] }
+cosmwasm-schema = "2.2"
+cw-storage-plus = "2.0"
+thiserror = "1"
+hex = "0.4"
+# keccak256 for the canonical release-attestation digest (Ethereum keccak, matching
+# the rest of the dregg cross-chain surface).
+sha3 = { version = "0.10", default-features = false }
+
+[dev-dependencies]
+# The Cosmos multi-contract test harness — routes instantiate/execute/query through
+# a full App (blocks, block-time, addressing, bank balances, cross-contract queries),
+# so the escrow + a companion settlement contract run exactly as on an x/wasm chain.
+cw-multi-test = "2.3"
+# Produces the real ed25519 oracle signatures the on-chain `ed25519_verify` checks.
+ed25519-dalek = "2"
+serde_json = "1"
+cosmwasm-schema = "2.2"
+# cw-multi-test surfaces contract errors as anyhow::Error; we downcast to assert the
+# exact ContractError variant.
+anyhow = "1"
+
+[profile.release]
+opt-level = "s"
+overflow-checks = true
