@@ -2,6 +2,7 @@ import Mathlib.Tactic
 import Mathlib.Algebra.Polynomial.BigOperators
 import Mathlib.Algebra.Polynomial.Roots
 import Dregg2.Circuit.FriProximityGapWitness
+import Dregg2.ForMathlib.GuruswamiSudan
 
 /-!
 # `WrapCorrelatedAgreementSharp` — the δ-PRESERVING (Johnson-radius) residual, REDUCED to the
@@ -812,6 +813,61 @@ theorem wrap_interior_witness_fires_proved :
         ⊆ {α : BabyBear | P.eval α = 0} :=
   wrap_badChallengePoly_interior_proved fSqWrap_far
 
+/-! ## §7. THE IDEAL `128 = 2·|κ|` AND THE GURUSWAMI–SUDAN ROUTE — what closes, and the precise wall.
+
+`GuruswamiSudanLineListBound friSetupWrapRate 52` unfolds (with `wrap_meets_gs_line_radius` supplying
+its now-TRUE hypothesis `144 > 128`) to `CorrelatedAgreementLine friSetupWrapRate 52 128` — the ideal
+LINEAR list `2·|κ|`. That is a genuine STRENGTHENING of the proved `wrap_correlatedAgreementLine_interior`
+(`… 52 186`), NOT a weakening: `CorrelatedAgreementLineAt` is ANTI-monotone in `L` (a larger `L` is a
+WEAKER hypothesis `L < Good.card`), so `186` does not yield `128`. The ideal has to be EARNED by the
+Guruswami–Sudan weighted-interpolation method, whose two halves are stated generally in
+`Dregg2/ForMathlib/GuruswamiSudan.lean`:
+* the **list-size half** (`card_le_yDegree_of_dvd` : `#messages ≤ deg_Y Q`) is PROVED there, general
+  over any field — the real upstreamable GS core Mathlib lacks (it is `card_roots'` over `F[X]`);
+* the **interpolation half** (`GSWitness` : existence of the vanishing bivariate `Q`) is the NAMED
+  upstream target (multiplicity/Hasse-derivative vanishing + a dimension count).
+
+The honest finding at the deployed radius: **the interpolation half is OBSTRUCTED at the very point
+multiplicities the constant-code fold produces**, so GS does NOT deliver `128` here. Reducing as in
+`§3b`, `Φ = (E f, O f) : κ → F²` is a MULTISET of `|κ| = 64` plane points; a good challenge `α` is a
+non-vertical line covering `≥ |κ| − 52 = 12` fibres, and under no-rich-point every plane point carries
+`≤ 11` fibres. Such a line can be supported on as few as `2` distinct points (the `11 + 1` split). At
+that multiplicity the GS interpolation window is EMPTY — no degree `D` meets both existence and
+divisibility — so the polynomial method certifies NO bound, least of all `128`. This is the `dIn = 52`
+face of the recurring `FriCorrelatedAgreementSharp` theme: the fold's point multiplicities break the
+distinct-point GS analysis that `t² > 2·|κ|` (`wrap_meets_gs_line_radius`) would otherwise unlock.
+
+`128` is therefore NEITHER discharged here (no GS route reaches it) NOR refuted (the honest proved
+upper bound is `186`; the ordered-pair pencil constructions of `§5` reach only `~100` at this radius,
+so the true list sits in `[~100, 186]` and `128` is genuinely open). The deployed composition stays
+`wrap_friProximityGap_interior_proved` (`186`); `128` remains the named GS target. Two proved
+certificates pin the wall. -/
+
+/-- **The Koetter–Vardy (weighted-GS) denominator is NEGATIVE at the deployed max multiplicity.**
+`t = |κ| − 52 = 12`, `t² = 144`, and the heaviest admissible plane point carries `m = 11` fibres
+(no-rich-point), so `t² − m·|κ| = 144 − 11·64 = 144 − 704 < 0`. Weighting the interpolation by fibre
+multiplicity (the only way to credit a heavy point its `≥ t` agreement) drives the existence degree
+above the divisibility degree — no valid weighted-GS window. This is `§5`/`§6`'s named negative
+denominator (`t² − m·n < 0`), made a theorem: the reason `t² > 2·|κ|` alone does not deliver `128`. -/
+theorem wrap_gs_weighted_denominator_negative :
+    (Fintype.card (Fin (2 ^ 6)) - 52) ^ 2 < 11 * Fintype.card (Fin (2 ^ 6)) := by
+  have h : Fintype.card (Fin (2 ^ 6)) = 64 := by simp
+  rw [h]; norm_num
+
+/-- **The UNWEIGHTED GS interpolation window is EMPTY at a support-`2` good line.** A good `α` may fold
+`f` to a constant on `≥ 12` fibres carried by only `2` distinct `Φ`-points (the `11 + 1` split), so its
+line is supported on `s = 2` points. GS then needs divisibility `s·m > D` (i.e. `D < 2m`), while a
+nonzero multiplicity-`m` interpolant over the `≤ |κ| = 64` distinct plane points needs
+`(D+1)(D+2) > 64·m(m+1)` (coefficients over vanishing constraints) — incompatible for EVERY `m ≥ 1, D`,
+via the general `ForMathlib.GuruswamiSudan.gs_interp_window_empty` at `n = |κ| = 64`. So the polynomial
+method certifies no list bound at the deployed multiplicity regime; in particular it does not reach
+`128`. -/
+theorem wrap_gs_interior_window_empty (m D : ℕ) (hm : 1 ≤ m) (hdiv : D < 2 * m) :
+    ¬ ((D + 1) * (D + 2) > Fintype.card (Fin (2 ^ 6)) * (m * (m + 1))) := by
+  have h : Fintype.card (Fin (2 ^ 6)) = 64 := by simp
+  rw [h]
+  exact Dregg2.ForMathlib.GuruswamiSudan.gs_interp_window_empty 64 m D (by norm_num) hm hdiv
+
 /-! ## §4. Axiom hygiene. -/
 
 #assert_axioms correlatedAgreementLine_twoPoint
@@ -833,5 +889,7 @@ theorem wrap_interior_witness_fires_proved :
 #assert_axioms wrap_badChallengePoly_interior_proved
 #assert_axioms wrap_friProximityGap_interior_proved
 #assert_axioms wrap_interior_witness_fires_proved
+#assert_axioms wrap_gs_weighted_denominator_negative
+#assert_axioms wrap_gs_interior_window_empty
 
 end Dregg2.Circuit.FriCorrelatedAgreementSharp
