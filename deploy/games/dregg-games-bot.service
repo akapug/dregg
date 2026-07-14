@@ -1,0 +1,54 @@
+# dregg games Discord bot — the Descent daily + slash commands on hbox.
+#
+# Runs `dregg-discord-bot` (package `dregg-discord-bot`): the daily-reveal cron
+# (live drand quicknet, BLS-verified), `/descent`, the semi-private channels, the
+# no-cheat board. STANDALONE — the games bot does NOT require the dregg node (the
+# demo verifies by replay, not by a node). Contrast deploy/aws/dregg-discord-bot.service,
+# which `Requires=dregg-gateway.service`; here there is no node dependency.
+#
+# hbox discipline (deploy/hbox/RUNBOOK.md): USER unit, `%h` paths,
+# `loginctl enable-linger hbox`, WantedBy=default.target. Mirrors the existing
+# deploy/hbox/dregg-discord-bot.service, extended with the games env + hardening.
+#
+# ⚠ DOUBLE-FIRE HAZARD: two bots on ONE Discord token fire every command twice.
+# STOP the old bot FIRST (graviton's dregg-discord-bot per deploy/aws, or a prior
+# hbox run) before this one starts. See deploy/games/RUNBOOK.md step (c) — ember-gated.
+[Unit]
+Description=dregg games Discord bot (Descent daily, hbox, standalone)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=600
+StartLimitBurst=10
+
+[Service]
+Type=simple
+# EnvironmentFile carries DISCORD_TOKEN / DISCORD_APP_ID / BOT_SECRET (required),
+# plus DEVNET_URL, DATABASE_URL, DESCENT_ANNOUNCE_CHANNEL_ID, DRAND_API_BASE.
+# Placed by ember, chmod 600. Same file as the web unit; the web-only vars are ignored.
+EnvironmentFile=%h/.config/dregg/games.env
+Environment=RUST_LOG=info
+# discord-bot is a STANDALONE cargo workspace (EXCLUDED from the root workspace —
+# sqlx/libsqlite3-sys links-conflict; see discord-bot/Cargo.toml + root Cargo.toml
+# exclude=). It therefore builds in its OWN target/ dir, NOT the root target/.
+WorkingDirectory=%h/dev/breadstuffs/discord-bot
+ExecStart=%h/dev/breadstuffs/discord-bot/target/release/dregg-discord-bot
+Restart=always
+RestartSec=5
+
+# Security hardening (user-unit-safe subset).
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=%h/.local/state/dregg-games
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+# Resource limits — a thin Discord client; bound well below hbox capacity.
+LimitNOFILE=65536
+MemoryHigh=768M
+MemoryMax=1G
+TasksMax=512
+
+[Install]
+WantedBy=default.target

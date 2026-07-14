@@ -1,0 +1,59 @@
+# dregg games web demo — the standalone dreggnet-web public-demo server.
+#
+# Runs `dreggnet-web-server` (package `dreggnet-web`): all 5 games + the do-once
+# feature-surface catalog + the no-cheat-by-REPLAY Descent leaderboard, ALL
+# in-process — no node, no testnet, no 45-min prover. A stranger opens the URL,
+# plays a game they cannot cheat at, and independently re-verifies the board by
+# replay (see docs/DEPLOY-PLAN.md Phase 0).
+#
+# hbox discipline (deploy/hbox/RUNBOOK.md): a USER unit under
+# ~/.config/systemd/user/ , `loginctl enable-linger hbox` so it survives logout,
+# `%h`-relative paths, WantedBy=default.target. (A system unit is the alternative
+# — set User=hbox and absolute paths; see deploy/games/RUNBOOK.md.)
+#
+# BIND: 127.0.0.1 ONLY — the fronting Caddy (deploy/games/caddy/Caddyfile.games)
+# is the sole public surface; the server is NEVER reachable except via Caddy.
+# The default port 8787 is already taken on hbox (OPS-RUNBOOK :8787), so the games
+# server uses 8790; override with DREGGNET_WEB_BIND in the env file.
+[Unit]
+Description=dregg games web demo (dreggnet-web-server, no-cheat-by-replay)
+After=network-online.target
+Wants=network-online.target
+# Restart-storm brake (same discipline as deploy/aws/dregg-gateway.service): a hard
+# crash loop stops the unit instead of pegging the box. `systemctl --user reset-failed
+# dregg-web-games` re-arms it after a fix.
+StartLimitIntervalSec=600
+StartLimitBurst=10
+
+[Service]
+Type=simple
+# One env file for the whole games stack (DREGGNET_WEB_BIND, DATABASE_URL); the bot
+# vars in the same file are simply ignored by this process. Placed by ember, chmod 600.
+EnvironmentFile=%h/.config/dregg/games.env
+Environment=RUST_LOG=info
+# Fallback bind if the env file omits DREGGNET_WEB_BIND (localhost, never 0.0.0.0).
+Environment=DREGGNET_WEB_BIND=127.0.0.1:8790
+WorkingDirectory=%h/dev/breadstuffs
+ExecStart=%h/dev/breadstuffs/target/release/dreggnet-web-server
+Restart=always
+RestartSec=5
+
+# Security hardening (user-unit-safe subset — no ProtectHome, the binary + sqlite
+# db both live under $HOME).
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=%h/.local/state/dregg-games
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+# Resource limits — the games server is a thin in-process web app; bound it well
+# below hbox's capacity so it can never starve a co-resident build/node.
+LimitNOFILE=65536
+MemoryHigh=1G
+MemoryMax=2G
+TasksMax=1024
+
+[Install]
+WantedBy=default.target
