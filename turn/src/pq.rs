@@ -72,10 +72,21 @@ impl MlDsaTurnKey {
         self.0.public_bytes()
     }
 
-    /// Sign `message` under [`HYBRID_TURN_PQ_CTX`] (hedged from OS entropy).
-    /// `None` only on the vanishingly rare internal RNG failure.
+    /// Sign `message` under [`HYBRID_TURN_PQ_CTX`], DETERMINISTICALLY (the FIPS
+    /// 204 `rnd = {0}^32` variant). `None` only on the vanishingly rare internal
+    /// failure.
+    ///
+    /// Determinism is REQUIRED here: the ML-DSA half is bound into
+    /// [`crate::action::Action::hash`] (discriminant 10, the anti-strip binding),
+    /// which flows into `Turn::hash`. A hedged/randomized signature would make the
+    /// SAME logical turn hash DIFFERENTLY on each signing — breaking turn identity
+    /// (receipt matching, dedup, exactly-once). The deterministic variant keeps the
+    /// turn hash STABLE while the signature stays bound byte-for-byte, so the
+    /// anti-strip guarantee is preserved. It also matches the already-deterministic
+    /// Lean-verified real sign core, so the turn hash does not depend on which
+    /// signing backend is installed.
     pub fn sign(&self, message: &[u8]) -> Option<Vec<u8>> {
-        self.0.try_sign(HYBRID_TURN_PQ_CTX, message)
+        self.0.try_sign_deterministic(HYBRID_TURN_PQ_CTX, message)
     }
 }
 
@@ -108,6 +119,24 @@ mod tests {
         let msg = b"the same canonical signing message both halves cover";
         let sig = key.sign(msg).expect("ml-dsa sign");
         assert!(ml_dsa_verify(&key.public_bytes(), msg, &sig));
+    }
+
+    #[test]
+    fn turn_sign_is_deterministic() {
+        // The turn perimeter signs DETERMINISTICALLY: the same key over the same
+        // message produces IDENTICAL signature bytes. This is what keeps the
+        // ML-DSA half bound into `Action::hash` stable across signings, so the
+        // turn hash (turn identity) is deterministic.
+        let key = MlDsaTurnKey::from_ed25519_seed(&[13u8; 32]);
+        let msg = b"the canonical signing message both halves cover";
+        let a = key.sign(msg).expect("turn sign a");
+        let b = key.sign(msg).expect("turn sign b");
+        assert_eq!(
+            a, b,
+            "MlDsaTurnKey::sign must be deterministic (turn identity depends on it)"
+        );
+        // And it still verifies fail-closed under the turn ctx.
+        assert!(ml_dsa_verify(&key.public_bytes(), msg, &a));
     }
 
     #[test]
