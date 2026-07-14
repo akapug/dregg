@@ -12,7 +12,7 @@ edition = "2021"
 [workspace]
 
 [dependencies]
-wgpu = "24"
+wgpu = { version = "24", features = ["spirv"] }
 pollster = "0.4"
 bytemuck = "1"
 rand = "0.8"

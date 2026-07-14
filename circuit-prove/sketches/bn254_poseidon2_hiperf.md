@@ -7,6 +7,14 @@ whole Merkle tree needs a device-wide barrier between levels, which WebGPU
 does not provide inside one dispatch. The Rust `bn254_merkle_root` method is
 the host-side orchestration of these entries.
 
+**AMD native-Vulkan status (2026-07-14):** this WGSL is parity-correct but its
+emulated-wide-integer IR SIGSEGVs RADV 24.2.8, RADV 26.1.4, and AMDVLK
+2025.Q2.1 at pipeline creation. The hardware-green native path is
+[`bn254_poseidon2_int64.comp`](./bn254_poseidon2_int64.comp), passed directly
+as validated SPIR-V with Vulkan `shaderInt64`; see the
+[`runbook and evidence`](./bn254_poseidon2_gpu_runbook.md). Keep this WGSL for
+the browser/Metal contract and as the deliberate compiler-wall repro.
+
 ## Parity contract
 
 The shader uses exactly the existing outer-MMCS construction:

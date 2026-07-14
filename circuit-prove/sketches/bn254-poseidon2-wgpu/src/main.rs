@@ -31,6 +31,8 @@ use p3_symmetric::Permutation;
 use rand::Rng;
 use wgpu::util::DeviceExt;
 
+mod direct_spirv;
+
 // ============================================================================
 // Round constants — HorizenLabs zkhash RC3, the exact table plonky3 pins and
 // gnark splices (chain/gnark/poseidon2_bn254_constants.go rc3ExtInitial /
@@ -470,7 +472,7 @@ struct Gpu {
 }
 
 impl Gpu {
-    fn new() -> Self {
+    fn new(direct_spirv: bool) -> Self {
         let instance = wgpu::Instance::default();
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
@@ -479,9 +481,22 @@ impl Gpu {
         .expect("no adapter");
         let info = adapter.get_info();
         println!("adapter: {} ({:?})", info.name, info.backend);
+        let required_features = if direct_spirv {
+            wgpu::Features::SHADER_INT64 | wgpu::Features::SPIRV_SHADER_PASSTHROUGH
+        } else {
+            wgpu::Features::empty()
+        };
+        assert!(
+            adapter.features().contains(required_features),
+            "adapter lacks direct-SPIR-V requirements: {:?}",
+            required_features - adapter.features()
+        );
+        let descriptor = wgpu::DeviceDescriptor {
+            required_features,
+            ..Default::default()
+        };
         let (device, queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default(), None))
-                .expect("no device");
+            pollster::block_on(adapter.request_device(&descriptor, None)).expect("no device");
         Self { device, queue }
     }
 
@@ -498,6 +513,62 @@ impl Gpu {
                 layout: None,
                 module: &module,
                 entry_point: Some(entry),
+                compilation_options: Default::default(),
+                cache: None,
+            })
+    }
+
+    fn pipeline_spirv(&self, bytes: &[u8]) -> wgpu::ComputePipeline {
+        let module = unsafe {
+            self.device
+                .create_shader_module_spirv(&wgpu::ShaderModuleDescriptorSpirV {
+                    label: Some("bn254-poseidon2-int64"),
+                    source: wgpu::util::make_spirv_raw(bytes),
+                })
+        };
+        // Raw SPIR-V bypasses Naga reflection, so an automatic pipeline layout
+        // would be empty.  Supplying the two SSBO bindings explicitly is
+        // mandatory (and avoids a driver crash in descriptor lowering).
+        let bind_group_layout =
+            self.device
+                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("bn254-poseidon2-int64-bindings"),
+                    entries: &[
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 0,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 1,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Storage { read_only: false },
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                    ],
+                });
+        let pipeline_layout = self
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("bn254-poseidon2-int64-layout"),
+                bind_group_layouts: &[&bind_group_layout],
+                push_constant_ranges: &[],
+            });
+        self.device
+            .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("bn254-poseidon2-int64"),
+                layout: Some(&pipeline_layout),
+                module: &module,
+                entry_point: Some("main"),
                 compilation_options: Default::default(),
                 cache: None,
             })
@@ -586,6 +657,20 @@ fn queue_submit_wait(device: &wgpu::Device, queue: &wgpu::Queue, enc: wgpu::Comm
 // ============================================================================
 
 fn main() {
+    // Linux/Vulkan defaults to the path that actually survives AMD shader
+    // compilation.  Keep the old WGSL path as an explicit crash-repro and as
+    // the portable source-of-truth while the WebGPU split-dispatch variant is
+    // developed.
+    let direct_spirv =
+        cfg!(target_os = "linux") && std::env::var_os("DREGG_BN254_FORCE_WGSL").is_none();
+    println!(
+        "shader path: {}",
+        if direct_spirv {
+            "direct SPIR-V + Vulkan shaderInt64"
+        } else {
+            "portable WGSL + emulated 32x32->64"
+        }
+    );
     let p = biguint_from_hex(P_HEX);
     let one = BigUint::from(1u32);
     let r = (&one << 256u32) % &p; // Montgomery R
@@ -623,8 +708,37 @@ fn main() {
     }
     println!("CPU oracle: pinned p3 Poseidon2Bn254<3> == gnark gold KAT (bn254KATOutHex) OK");
 
-    let gpu = Gpu::new();
+    let gpu = Gpu::new(direct_spirv);
     let source = shader_source(256, &p, &r, &r2, n0inv);
+
+    if std::env::var_os("DREGG_BN254_SINGLE_MONT").is_some() {
+        assert!(
+            direct_spirv,
+            "single-Montgomery diagnostic needs direct SPIR-V"
+        );
+        let mut rng = rand::thread_rng();
+        let mut input = Vec::with_capacity(1024 * 16);
+        let mut expected = Vec::with_capacity(1024);
+        for _ in 0..1024 {
+            let raw: Vec<u32> = (0..8).map(|_| rng.gen::<u32>()).collect();
+            let a = limbs_to_biguint(&raw) % &p;
+            input.extend_from_slice(&limbs8(&a));
+            input.extend_from_slice(&limbs8(&r2));
+            expected.push((&a * &r) % &p);
+        }
+        let spirv = direct_spirv::compile_shader("single", 64, &p, &r, &r2, n0inv);
+        let pipeline = gpu.pipeline_spirv(&spirv);
+        let (output, _) = gpu.run(&pipeline, &input, expected.len() * 8, 16);
+        for (i, want) in expected.iter().enumerate() {
+            assert_eq!(
+                limbs_to_biguint(&output[i * 8..i * 8 + 8]),
+                *want,
+                "single Montgomery product {i}"
+            );
+        }
+        println!("single Montgomery pipeline: 1024 products bit-exact OK");
+        return;
+    }
 
     // --- Stage A: field mul/add KAT vs num-bigint ---
     let mut rng = rand::thread_rng();
@@ -647,7 +761,12 @@ fn main() {
         kat_in.extend_from_slice(&limbs8(a));
         kat_in.extend_from_slice(&limbs8(b));
     }
-    let mul_pipe = gpu.pipeline(&source, "mul_kat");
+    let mul_spirv =
+        direct_spirv.then(|| direct_spirv::compile_shader("mul", 64, &p, &r, &r2, n0inv));
+    let mul_pipe = match &mul_spirv {
+        Some(bytes) => gpu.pipeline_spirv(bytes),
+        None => gpu.pipeline(&source, "mul_kat"),
+    };
     let (kat_out, _) = gpu.run(
         &mul_pipe,
         &kat_in,
@@ -697,7 +816,12 @@ fn main() {
             par_in.extend_from_slice(&limbs8(l));
         }
     }
-    let perm_pipe = gpu.pipeline(&source, "perm_main");
+    let perm_spirv =
+        direct_spirv.then(|| direct_spirv::compile_shader("perm", 256, &p, &r, &r2, n0inv));
+    let perm_pipe = match &perm_spirv {
+        Some(bytes) => gpu.pipeline_spirv(bytes),
+        None => gpu.pipeline(&source, "perm_main"),
+    };
     let (par_out, cal_dt) = gpu.run(
         &perm_pipe,
         &par_in,
@@ -771,8 +895,13 @@ fn main() {
     let mut best_overall = 0.0f64;
     let mut best_wg = 0u32;
     for wg in [64u32, 128, 256] {
-        let src = shader_source(wg, &p, &r, &r2, n0inv);
-        let pipe = gpu.pipeline(&src, "perm_main");
+        let pipe = if direct_spirv {
+            let spirv = direct_spirv::compile_shader("perm", wg, &p, &r, &r2, n0inv);
+            gpu.pipeline_spirv(&spirv)
+        } else {
+            let src = shader_source(wg, &p, &r, &r2, n0inv);
+            gpu.pipeline(&src, "perm_main")
+        };
         let buf_in = gpu
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -824,7 +953,14 @@ fn main() {
     let ratio = best_overall / cpu_stack;
     let ratio_lo = best_overall / cpu_stack_lo;
     let amdahl = |s: f64| 1.0 / (0.60 / s + 0.40);
-    println!("\n=== RESULT (BN254 t=3 Poseidon2, wgpu/WGSL, one thread/perm) ===");
+    println!(
+        "\n=== RESULT (BN254 t=3 Poseidon2, {}, one thread/perm) ===",
+        if direct_spirv {
+            "wgpu/direct-SPIR-V shaderInt64"
+        } else {
+            "wgpu/WGSL emulated-u64"
+        }
+    );
     println!(
         "GPU best: {best_overall:.3} Mperm/s (wg={best_wg}, batch {n_perf}); \
          CPU 1-thread raw perm {cpu_1t_mperm:.3} Mperm/s"

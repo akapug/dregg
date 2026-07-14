@@ -13,7 +13,7 @@ not production code. The synthesized findings + the backend decision live in
 | `wgpu-babybear-ntt/` | wgpu/WGSL BabyBear NTT (fused/hybrid plans + split-twiddle) | **55–97% of bandwidth ceiling** — native-class; the two naga gotchas fixed |
 | `metal-babybear-ntt/` | hand-tuned **native Metal (MSL)** BabyBear NTT | native ≈ wgpu (±15%, trade blows by shape) → **stay portable, no native seam** |
 | `poseidon2-merkle-bench/` | Poseidon2-W16 perm + Merkle-commit, native-Metal vs wgpu | native only **1.2–1.35×** (compute-bound, but ½ add/sub) → confirms portable |
-| `bn254-poseidon2-wgpu/` | wgpu/WGSL BN254 t=3 Poseidon2 (the shrink's dominant hash) | **~5–6× CPU** (no collapse) → shrink GPU-wiring ~2× (Amdahl-capped) |
+| `bn254-poseidon2-wgpu/` | BN254 t=3 Poseidon2 (the shrink's dominant hash), portable WGSL + direct-SPIR-V escape hatch | **5.314 Mperm/s on AMDVLK, 29.5× the 12-core MMCS stack**, KAT + 65,536 p3 parity green; WGSL compiler wall bypassed with Vulkan `shaderInt64` |
 | `gpu-dft-plonky3/` | wgpu DFT wired behind Plonky3's `TwoAdicSubgroupDft` trait | 4–20× vs 12-core rayon **in the trait**; corrects the "40×→seconds" overclaim |
 | `gpu_dft_prototype.rs` | illustrative (non-compiled) sketch of the DFT-trait + MMCS wiring shape | design sketch only |
 
@@ -22,3 +22,7 @@ backend, auto-tuned per device — native Metal buys ≤1.27× whole-prover and 
 the AMD RX 6750 XT wins the wide NTT shapes (Infinity Cache) and the tall shapes were recovered 22%→99% via
 the split-twiddle fix. The real prize is **GPU-vs-CPU (~4–10× vs rayon)**, Amdahl-capped to ~2–2.5× on the
 hash-dominated shrink — a wiring project, not a native-kernel one.
+
+BN254 on Linux is the one intentional portability exception: use
+[`bn254_poseidon2_int64.comp`](./bn254_poseidon2_int64.comp) through direct SPIR-V. See the
+[`driver/run record`](./bn254_poseidon2_gpu_runbook.md). Browser WebGPU retains the WGSL source.
