@@ -5352,6 +5352,148 @@ theorem withAfterOctetPins_publishes (hash : List ℤ → ℤ) (g : EffectVmDesc
 #assert_axioms satisfied2_of_withAfterOctetPins
 #assert_axioms withAfterOctetPins_publishes
 
+/-! ### §VALUE8 — THE setField WRITTEN-SLOT COMPLETION-LANE PINS (`withSetFieldCompletionPins`).
+
+The deployed setField members ride `v3OfFrozen (setFieldTickFace slot)` (freeze-ALL): every one of the
+56 fields completion lanes is frozen BEFORE↔AFTER, so an honest LARGE-value write (`FieldElement =
+[u8;32]` with nonzero high bytes) is REJECTED — the R1 completeness seam
+(`setfield_completion_lane_forge::honest_large_value_setfield_fails_the_deployed_freeze`), and the
+written slot's high 224 bits are left UNBOUND by the light-client view (the ORPHAN-SWEEP §5.2 residual;
+`keystone_descriptor_deployment_gate.rs:62/69`, reason "deploy: VALUE8 setField weld").
+
+The FIX — freeze-EXCEPT + VALUE8. `setFieldV3 slot = v3OfFrozenSetField slot (setFieldTickFace slot)`
+freezes the OTHER seven slots (49 lanes) but FREES the written slot's 7 completion lanes (in-block
+offsets `113 + 7·slot .. +6`), so an honest large write is no longer over-frozen. `withSetFieldCompletionPins`
+then PUBLISHES those exact seven freed lanes (`EFFECT_VM_WIDTH + AFTER_BLOCK_OFF + (113 + 7·slot + k)`,
+`k < 7`) as seven TAIL PIs — binding them to the declared value8 the executor derives, so (a) the high
+224 bits are no longer an unconstrained free felt (a forge that moves them off the published value is
+UNSAT — the `_rejects_forged_pi` tooth), and (b) a slot-i proof publishes slot-i's completion value at
+these PIs, so it verifies UNIQUELY under descriptor-i (a slot-j descriptor pins slot-j's frozen
+completion lanes to the SAME PI slots, which the slot-i trace violates). Structurally identical to
+`withAfterOctetPins` (7-lane variant) — additive, no site / range / mem-op / map-op touched, so every
+existing setField forcing keystone lifts by `List.mem_append_left` (the peel below). NON-DESTRUCTIVE:
+this is a NEW staged registry (`v3RegistrySetFieldValue8`); the live `v3RegistryBare` setField members
+are byte-untouched, so the deployed VK is unchanged (adoption is a controlled epoch re-point). -/
+
+/-- In-block base of the written slot's first freed completion lane (the `fieldsCompletionFreezesExcept`
+un-frozen range `113 + 7·slot .. 119 + 7·slot`). -/
+def setFieldCompletionBase (slot : Fin 8) : Nat := 113 + 7 * slot.val
+
+/-- **`withSetFieldCompletionPins slot g`** — APPEND 7 `.piBinding .last` pins publishing the written
+slot's freed AFTER-block completion lanes (`EFFECT_VM_WIDTH + AFTER_BLOCK_OFF + (setFieldCompletionBase
+slot + k)`, `k < 7`) as 7 TAIL PIs (`g.piCount + k`), bumping `piCount` by 7. The 7-lane mirror of
+`withAfterOctetPins`. -/
+def withSetFieldCompletionPins (slot : Fin 8) (g : EffectVmDescriptor2) : EffectVmDescriptor2 :=
+  { g with
+    piCount := g.piCount + 7
+    constraints := g.constraints ++ (List.range 7).map (fun k =>
+      VmConstraint2.base (.piBinding .last
+        (EFFECT_VM_WIDTH + AFTER_BLOCK_OFF + (setFieldCompletionBase slot + k)) (g.piCount + k))) }
+
+/-- The 7 completion pins are the ONLY constraints past the inner descriptor's (single `++`). -/
+theorem withSetFieldCompletionPins_constraints (slot : Fin 8) (g : EffectVmDescriptor2) :
+    (withSetFieldCompletionPins slot g).constraints
+      = g.constraints ++ (List.range 7).map (fun k =>
+          VmConstraint2.base (.piBinding .last
+            (EFFECT_VM_WIDTH + AFTER_BLOCK_OFF + (setFieldCompletionBase slot + k)) (g.piCount + k))) := rfl
+
+/-- The completion pins are `.piBinding`s, so they contribute NO mem-op (the mem log is unchanged). -/
+theorem memOpsOf_withSetFieldCompletionPins (slot : Fin 8) (g : EffectVmDescriptor2) :
+    memOpsOf (withSetFieldCompletionPins slot g) = memOpsOf g := by
+  simp [memOpsOf, withSetFieldCompletionPins, List.filterMap_append, List.filterMap_map]
+
+/-- The completion pins contribute NO map-op (the map log is unchanged). -/
+theorem mapOpsOf_withSetFieldCompletionPins (slot : Fin 8) (g : EffectVmDescriptor2) :
+    mapOpsOf (withSetFieldCompletionPins slot g) = mapOpsOf g := by
+  simp [mapOpsOf, withSetFieldCompletionPins, List.filterMap_append, List.filterMap_map]
+
+/-- **THE PEEL** — `Satisfied2 (withSetFieldCompletionPins slot g) ⟹ Satisfied2 g`. The wrap only
+APPENDS `.piBinding` constraints (and bumps `piCount`): the inner constraints stay members
+(`List.mem_append_left`), sites / ranges / mem / map logs are unchanged, so every existing setField
+soundness lemma lifts to the wrapped descriptor by peeling the wrap first. Mirrors
+`satisfied2_of_withAfterOctetPins`. -/
+theorem satisfied2_of_withSetFieldCompletionPins (hash : List ℤ → ℤ) (slot : Fin 8)
+    (g : EffectVmDescriptor2)
+    {minit : ℤ → ℤ} {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
+    (h : Satisfied2 hash (withSetFieldCompletionPins slot g) minit mfin maddrs t) :
+    Satisfied2 hash g minit mfin maddrs t := by
+  have hmem : memLog (withSetFieldCompletionPins slot g) t = memLog g t := by
+    simp [memLog, memOpsOf_withSetFieldCompletionPins]
+  have hmap : mapLog (withSetFieldCompletionPins slot g) t = mapLog g t := by
+    simp [mapLog, mapOpsOf_withSetFieldCompletionPins]
+  exact
+    { rowConstraints := fun i hi c hc => h.rowConstraints i hi c (by
+        rw [withSetFieldCompletionPins_constraints]; exact List.mem_append_left _ hc)
+    , rowHashes := h.rowHashes
+    , rowRanges := h.rowRanges
+    , memAddrsNodup := h.memAddrsNodup
+    , memClosed := fun op hop => h.memClosed op (by rw [hmem]; exact hop)
+    , memDisciplined := by rw [← hmem]; exact h.memDisciplined
+    , memBalanced := by rw [← hmem]; exact h.memBalanced
+    , memTableFaithful := by rw [← hmem]; exact h.memTableFaithful
+    , mapTableFaithful := by rw [← hmap]; exact h.mapTableFaithful }
+
+/-- **`withSetFieldCompletionPins_publishes`.** On any LAST row of a `Satisfied2` witness, each of the 7
+published TAIL PIs (`g.piCount + k`) EQUALS its committed AFTER-block completion lane — so the light
+client reads the written slot's high 224 bits off the PI vector, and a forged completion lane (a
+laundered high-byte field) is UNSAT (it would break both the pin and the committed `state_commit`). -/
+theorem withSetFieldCompletionPins_publishes (hash : List ℤ → ℤ) (slot : Fin 8)
+    (g : EffectVmDescriptor2)
+    (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
+    (hsat : Satisfied2 hash (withSetFieldCompletionPins slot g) minit mfin maddrs t)
+    (i : Nat) (hi : i < t.rows.length) (hlast : i + 1 = t.rows.length) :
+    ∀ k : Fin 7, (envAt t i).loc (EFFECT_VM_WIDTH + AFTER_BLOCK_OFF + (setFieldCompletionBase slot + k.val))
+      ≡ (envAt t i).pub (g.piCount + k.val) [ZMOD 2013265921] := by
+  intro k
+  have hlastt : (i + 1 == t.rows.length) = true := by simp [hlast]
+  have hin : VmConstraint2.base
+      (.piBinding .last (EFFECT_VM_WIDTH + AFTER_BLOCK_OFF + (setFieldCompletionBase slot + k.val))
+        (g.piCount + k.val)) ∈ (withSetFieldCompletionPins slot g).constraints := by
+    rw [withSetFieldCompletionPins_constraints]
+    exact List.mem_append_right _ (List.mem_map.mpr ⟨k.val, List.mem_range.mpr k.isLt, rfl⟩)
+  have h := hsat.rowConstraints i hi _ hin
+  simp only [VmConstraint2.holdsAt, hlastt, holdsVm_piLast_true] at h
+  exact h
+
+/-- **TOOTH (completion-lane forge ⇒ UNSAT)** — a written-slot completion lane that DIFFERS from its
+published PI (a forged high-byte value smuggled into NEW_COMMIT) does NOT satisfy the wrap. The
+light-client bite for the setField VALUE8 half: `verify_vm_descriptor2` alone rejects it. -/
+theorem withSetFieldCompletionPins_rejects_forged_pi (hash : List ℤ → ℤ) (slot : Fin 8)
+    (g : EffectVmDescriptor2) (minit : ℤ → ℤ) (mfin : ℤ → ℤ × Nat) (maddrs : List ℤ) (t : VmTrace)
+    (i : Nat) (hi : i < t.rows.length) (hlast : i + 1 = t.rows.length) (k : Fin 7)
+    (hcanonLoc : 0 ≤ (envAt t i).loc (EFFECT_VM_WIDTH + AFTER_BLOCK_OFF + (setFieldCompletionBase slot + k.val))
+      ∧ (envAt t i).loc (EFFECT_VM_WIDTH + AFTER_BLOCK_OFF + (setFieldCompletionBase slot + k.val)) < 2013265921)
+    (hcanonPI : 0 ≤ (envAt t i).pub (g.piCount + k.val)
+      ∧ (envAt t i).pub (g.piCount + k.val) < 2013265921)
+    (hforged : (envAt t i).loc (EFFECT_VM_WIDTH + AFTER_BLOCK_OFF + (setFieldCompletionBase slot + k.val))
+      ≠ (envAt t i).pub (g.piCount + k.val)) :
+    ¬ Satisfied2 hash (withSetFieldCompletionPins slot g) minit mfin maddrs t :=
+  fun hsat => hforged (canon_eq_of_modEq hcanonLoc hcanonPI
+    (withSetFieldCompletionPins_publishes hash slot g minit mfin maddrs t hsat i hi hlast k))
+
+#assert_axioms satisfied2_of_withSetFieldCompletionPins
+#assert_axioms withSetFieldCompletionPins_publishes
+#assert_axioms withSetFieldCompletionPins_rejects_forged_pi
+
+/-- **`setFieldValue8V3 slot`** — the freeze-EXCEPT setField (`setFieldV3 slot`) WITH the 7 written-slot
+completion-lane PIs. Closes the R1 completeness seam (an honest large-value write proves — its high
+bytes ride the freed lanes) AND binds them into the light-client PI view (the VALUE8 weld). -/
+def setFieldValue8V3 (slot : Fin 8) : EffectVmDescriptor2 :=
+  withSetFieldCompletionPins slot (setFieldV3 slot)
+
+-- The freeze-EXCEPT setField carries the same 46-PI rotated prefix as the deployed freeze-ALL member;
+-- the VALUE8 weld appends 7, so the bare value8 member is 53 PIs (57 after the uniform rc wrap).
+#guard (setFieldV3 0).piCount == 46
+#guard (setFieldValue8V3 0).piCount == 53
+#guard (setFieldValue8V3 7).piCount == 53
+-- Additive: width / tables / sites / ranges are the freeze-EXCEPT member's (the pins add no column).
+#guard (setFieldValue8V3 3).traceWidth == (setFieldV3 3).traceWidth
+#guard (setFieldValue8V3 3).tables.length == (setFieldV3 3).tables.length
+#guard (setFieldValue8V3 3).hashSites.length == 0 && (setFieldValue8V3 3).ranges.length == 0
+-- The pins are `.piBinding`s: no mem-op / map-op is added past the freeze-EXCEPT member's.
+#guard (memOpsOf (setFieldValue8V3 5)).length == (memOpsOf (setFieldV3 5)).length
+#guard (mapOpsOf (setFieldValue8V3 5)).length == (mapOpsOf (setFieldV3 5)).length
+
 /-! ### The DSL rc-EMIT (`withDfaRcPins`) — the `Witnessed{Dfa}` route-commitment PI exposure.
 
 A `Witnessed{Dfa}` caveat (a DSL `CellProgram` predicate — e.g. the relay router

@@ -1238,6 +1238,36 @@ pub const WIDE_UMEM_WELD_REGISTRY_TSV: &str =
 pub const WIDE_UMEM_WELD_REGISTRY_FP: &str =
     "d17064a2435fe41e68202995201f2661ba98b8e81365cda09be8ce8b9834dcde";
 
+/// **THE LEAN-EMITTED setField VALUE8 EPOCH (STAGED, VK-AFFECTING BUT NON-DESTRUCTIVE).** The 8
+/// written-slot value8 members (`setFieldValue8VmDescriptor2-{slot}R24`) that swap the deployed
+/// setField's freeze-ALL wrap for freeze-EXCEPT + the VALUE8 completion-lane pins, emitted from the
+/// verified Lean `EffectVmEmitRotationV3Refused.v3RegistrySetFieldValue8` (driver
+/// `metatheory/EmitRotationV3SetFieldValue8.lean`). Each member is `withDfaRcPins
+/// (withSetFieldCompletionPins slot (gentianDeployedBareRefuse (withSelectorGate SEL_SET_FIELD
+/// (setFieldV3 slot))))` — DROP-IN geometry with the deployed `setFieldVmDescriptor2-{slot}R24`
+/// (`trace_width = 1692`; the live fixed-width setField trace verifies against it unchanged), with 7
+/// EXTRA PIs (`piCount = 57` vs the deployed 50): the written slot's 7 freed completion lanes (in-block
+/// after offsets `113 + 7·slot .. +6`, absolute cols `540 + 7·slot .. +6`) published as TAIL PIs 46..52,
+/// rc riding 53..56. Each descriptor-i pins a DISJOINT column set (`540 + 7·i`), so a slot-i proof binds
+/// UNIQUELY under descriptor-i (a slot-j descriptor pins slot-j's frozen completion lanes to the same PI
+/// slots, which the slot-i trace violates → rejected).
+///
+/// This CLOSES the R1 large-value completeness seam (`setfield_completion_lane_forge::
+/// honest_large_value_setfield_fails_the_deployed_freeze`: an honest `FieldElement = [u8;32]` with
+/// nonzero high bytes now PROVES — its high 224 bits ride the freed lanes) AND binds them into the
+/// light-client PI view (the ORPHAN-SWEEP §5.2 VALUE8 residual; `keystone_descriptor_deployment_gate.rs`).
+/// SOUNDNESS PRESERVED: the completion lanes are no longer an unconstrained free felt — a forge that
+/// moves them off the published PI is UNSAT (Lean `withSetFieldCompletionPins_rejects_forged_pi`).
+///
+/// STAGED / ADDITIVE: a NEW set BESIDE the deployed [`V3_STAGED_REGISTRY_TSV`]; the live registry / FP /
+/// VK are byte-untouched, and this TSV is NOT in the SDK live-verifier collect set. Adoption is a
+/// controlled epoch re-point (the on-chain `DreggGroth16VerifierUpgradeable` gains the new epoch VK,
+/// old epochs stay verifiable; producers re-point setField routing to these keys).
+pub const V3_SETFIELD_VALUE8_STAGED_REGISTRY_TSV: &str =
+    include_str!("../descriptors/rotation-v3-setfield-value8-staged-registry.tsv");
+pub const V3_SETFIELD_VALUE8_STAGED_REGISTRY_FP: &str =
+    "2bd6bb0bcd646a50f665f0fd738ba36de208ba718b22926261431d03a62ac322";
+
 // ============================================================================
 // THE WIDE-CARRIER GEOMETRY VERSION BOUNDARY (the flag-day rotation, v2).
 //
@@ -3254,6 +3284,42 @@ mod tests {
             WIDE_UMEM_WELD_REGISTRY_FP,
             "the welded-wide registry TSV drifted from its committed fingerprint — regenerate via \
              `lake env lean --run EmitWideUMemWeldRegistryProbe.lean` and update WIDE_UMEM_WELD_REGISTRY_FP"
+        );
+    }
+
+    /// The setField VALUE8 staged epoch is 8 written-slot members (drop-in geometry with the deployed
+    /// setField: `trace_width == 1692`, `piCount == 57` = deployed 50 + the 7 value8 completion pins),
+    /// name-distinct from the live `setFieldVmDescriptor2-*`, and byte-pinned to its committed FP.
+    #[test]
+    fn setfield_value8_staged_epoch_is_drop_in_and_byte_pinned() {
+        let mut n = 0usize;
+        for line in V3_SETFIELD_VALUE8_STAGED_REGISTRY_TSV.lines() {
+            let mut it = line.splitn(3, '\t');
+            let key = it.next().unwrap();
+            let _name = it.next().unwrap();
+            let json = it.next().unwrap();
+            assert!(
+                key.starts_with("setFieldValue8VmDescriptor2-"),
+                "value8 keys are name-distinct from the live setField members: {key}"
+            );
+            let d = crate::descriptor_ir2::parse_vm_descriptor2(json).expect("value8 parses");
+            assert_eq!(
+                d.trace_width, 1692,
+                "{key}: DROP-IN geometry with the deployed setField"
+            );
+            assert_eq!(
+                d.public_input_count, 57,
+                "{key}: 46 prefix + 7 value8 + 4 rc"
+            );
+            n += 1;
+        }
+        assert_eq!(n, 8, "the value8 epoch is the 8 written slots");
+        assert_eq!(
+            sha256_hex(V3_SETFIELD_VALUE8_STAGED_REGISTRY_TSV.as_bytes()),
+            V3_SETFIELD_VALUE8_STAGED_REGISTRY_FP,
+            "the setField VALUE8 staged TSV drifted from its committed fingerprint — regenerate via \
+             `lake env lean --run EmitRotationV3SetFieldValue8.lean` and update \
+             V3_SETFIELD_VALUE8_STAGED_REGISTRY_FP"
         );
     }
 

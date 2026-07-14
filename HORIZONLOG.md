@@ -1,5 +1,24 @@
 # HORIZONLOG — the named-follow-up burn-down
 
+## setField VALUE8 epoch STAGED → the controlled adoption re-point (named 2026-07-14, `circuit/descriptors/rotation-v3-setfield-value8-staged-registry.tsv`)
+The faithful per-trader setField weld is BUILT + verified but STAGED (live wire untouched). Lean
+`EffectVmEmitRotationV3Refused.v3RegistrySetFieldValue8` (8 `setFieldValue8VmDescriptor2-{slot}R24`
+members) swaps the deployed setField freeze-ALL for freeze-EXCEPT + the VALUE8 completion-lane pins
+(`withSetFieldCompletionPins` — 7 `.piBinding .last` on the written slot's freed lanes, cols `540+7·slot`),
+lake-green + `#assert_axioms`-clean; DROP-IN geometry (`trace_width 1692`, `piCount 57`). `--release`
+teeth PASS (`circuit/tests/setfield_value8_epoch_flip.rs`): honest large-value setField PROVES (R1
+completeness seam CLOSED), the deployed freeze-ALL still rejects it (live path intact), a completion-lane
+forge off the published PI is UNSAT (soundness preserved), and a slot-i proof binds UNIQUELY to
+descriptor-i. NAMED adoption steps (deliberately NOT done — do not disrupt the live 8420 producer):
+(1) wire `V3_SETFIELD_VALUE8_STAGED_REGISTRY_TSV` into the SDK live collect (`sdk/src/full_turn_proof.rs`
+`collect_bound`), swapping the setField cohort from the freeze-ALL keys — the full-turn uniqueness gate then
+accepts the value8 members; (2) add the new epoch VK to the on-chain `DreggGroth16VerifierUpgradeable`
+registry (one-tx, non-destructive — old epochs stay verifiable); (3) re-point producer setField routing
+(`rotated_descriptor_name_for_effect`) to the value8 keys + extend the producer dpi fill to the 57-PI
+layout; (4) wire drex-web `/settle` to allocate each trader's cleared amount as a value8 setField. Closure
+shape: the controlled epoch re-point (registry add first, then flip producers) once ember approves.
+
+
 *(Standing rule: when a lane/commit NAMES a follow-up, residue, or closure lane,
 it gets a line HERE in the same breath — "named in a report" is not durable.
 Each line: what · where it was named · the closure shape. Remove lines when

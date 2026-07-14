@@ -24,7 +24,8 @@ import Dregg2.Deos.BareCohortFloorRefuseDeployed
 namespace Dregg2.Circuit.Emit.EffectVmEmitRotationV3Refused
 
 open Dregg2.Circuit.DescriptorIR2
-open Dregg2.Circuit.Emit.EffectVmEmitRotationV3 (v3RegistryBare withDfaRcPins)
+open Dregg2.Circuit.Emit.EffectVmEmitRotationV3
+  (v3RegistryBare withDfaRcPins withSelectorGate setFieldV3 withSetFieldCompletionPins)
 open Dregg2.Deos.BareCohortFloorRefuseDeployed
   (gentianDeployedBareRefuse satisfied2_of_gentianDeployedBareRefuse)
 
@@ -67,6 +68,48 @@ section Witnesses
   w.constraints.length == b.constraints.length + 39 + 4
 
 end Witnesses
+
+/-! ## §VALUE8 — THE STAGED setField VALUE8 EPOCH (`v3RegistrySetFieldValue8`).
+
+The deployed setField members ride `withDfaRcPins (gentianDeployedBareRefuse (withSelectorGate SEL_SET_FIELD
+(v3OfFrozen (setFieldTickFace slot))))` — the freeze-ALL wrap, which REJECTS an honest large-value write
+(the R1 completeness seam) and leaves the written slot's high 224 bits unbound in the light-client view.
+
+The VALUE8 epoch swaps the inner freeze-ALL for freeze-EXCEPT (`setFieldV3 slot = v3OfFrozenSetField slot
+(setFieldTickFace slot)`) — freeing the written slot's 7 completion lanes so a large write is no longer
+over-frozen — and rides `withSetFieldCompletionPins slot` ON THE gentian-WIDENED face (the after-block
+completion columns `EFFECT_VM_WIDTH + AFTER_BLOCK_OFF + (113 + 7·slot + k)` are BELOW the caveat region
+gentian widens, so they are byte-stable through the weld), pinning those 7 freed lanes to 7 TAIL PIs
+(the declared value8). rc rides OUTERMOST exactly as the deployed member. Result: `traceWidth = 1692`
+(drop-in with the deployed setField member) and `piCount = 57` (46 rotated prefix + 7 value8 + 4 rc).
+
+ADDITIVE / STAGED: a NEW set BESIDE `v3RegistryRefused`; the live `rotation-v3-staged-registry.tsv` / VK
+are byte-untouched. Adoption is a controlled epoch re-point (one-tx, non-destructive — old epochs stay
+verifiable). The per-effect setField soundness rungs peel this weld exactly as `satisfied2_of_v3RefusedMember`
+plus `satisfied2_of_withSetFieldCompletionPins` (an appended `.piBinding` cohort). -/
+def v3RegistrySetFieldValue8 : List (String × EffectVmDescriptor2) :=
+  (List.finRange 8).map fun slot =>
+    (s!"setFieldValue8VmDescriptor2-{slot.val}R24",
+      withDfaRcPins (withSetFieldCompletionPins slot
+        (gentianDeployedBareRefuse
+          (withSelectorGate EffectVmEmitSetField.SEL_SET_FIELD (setFieldV3 slot)))))
+
+section Value8Witnesses
+
+-- The staged epoch is the 8 written-slot members, distinct-named from the live `setFieldVmDescriptor2-*`.
+#guard v3RegistrySetFieldValue8.length == 8
+-- DROP-IN WIDTH: each value8 member is 1692 wide — byte-identical geometry to the deployed setField
+-- member (`v3RegistryRefused`'s setField, `1647 + 45` gentian weld), so the live trace generator's
+-- fixed-width setField trace verifies against it unchanged.
+#guard v3RegistrySetFieldValue8.all fun (_, d) => d.traceWidth == 1692
+-- PI LAYOUT: 46 rotated prefix + 7 value8 completion pins (46..52) + 4 rc pins (53..56) = 57.
+#guard v3RegistrySetFieldValue8.all fun (k, d) =>
+  d.piCount == 57 && !d.name.isEmpty && !d.constraints.isEmpty && k.startsWith "setFieldValue8"
+-- vs the deployed setField member: SAME width, +7 PIs (the value8 completion pins) and +7 constraints.
+#guard (v3RegistrySetFieldValue8.zip (v3RegistryRefused.filter (·.1.startsWith "setFieldVmDescriptor2-"))).all
+  fun ((_, w), (_, dep)) => w.traceWidth == dep.traceWidth && w.piCount == dep.piCount + 7
+
+end Value8Witnesses
 
 #assert_axioms satisfied2_of_v3RefusedMember
 
