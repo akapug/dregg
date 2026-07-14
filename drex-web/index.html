@@ -149,6 +149,14 @@
         <div id="cleared" class="empty">No batch cleared yet — seal an order, then clear the batch at one fair price.</div>
       </section>
 
+      <!-- ── the single-phase SHIELDED clearing, through the REAL fhEgg engine ── -->
+      <section class="card" aria-labelledby="shieldedH">
+        <h2 id="shieldedH">Single-phase shielded clear <span class="pill">fhEgg</span></h2>
+        <p class="hint">The same revealed batch, cleared through the <b>real fhEgg engine</b> — a convex trade-circulation clear with a <span class="mono">Cert-F</span> primal-dual certificate the verified AIR gate checks. No TTC reveal round: one fair batch, one certificate. This runs the actual <span class="mono">fhegg-solver</span> (PDHG + Cert-F), not a mirror.</p>
+        <button class="primary" id="shieldedBtn" type="button">Clear this batch through fhEgg (shielded engine) →</button>
+        <div id="shieldedCleared" class="empty">The fair-batch + certificate clearing appears here. The STARK-ZK wrap that hides the certificate (the reveal-nothing floor) is <b>named, not run</b> in this demo — see the panel.</div>
+      </section>
+
       <section class="card" aria-labelledby="fairH">
         <h2 id="fairH">Why it's fair</h2>
         <p class="legend">Every claim is graded, honestly:

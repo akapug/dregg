@@ -381,6 +381,83 @@ function renderClearedReal(res) {
   $('cleared').innerHTML = html;
 }
 
+// ── the single-phase SHIELDED clear through the REAL fhEgg engine (POST /clear-shielded) ──
+// The same batch, cleared through fhegg-solver (PDHG circulation + Cert-F certificate + the
+// verified AIR gate). The clearing + certificate are REAL; the STARK-ZK wrap that hides the
+// certificate (the reveal-nothing floor) is NAMED in the result, not run in this demo.
+async function shieldedClear() {
+  const btn = $('shieldedBtn');
+  btn.disabled = true;
+  const orders = book.map(o => ({
+    trader: o.trader, offerAsset: o.offerAsset, offerAmount: o.offerAmount,
+    wantAsset: o.wantAsset, wantMin: o.wantMin, priority: o.priority,
+  }));
+  const el = $('shieldedCleared');
+  el.classList.remove('empty');
+  el.innerHTML = '<div class="fade">running the real fhEgg engine (PDHG + Cert-F)…</div>';
+  let res;
+  try {
+    res = await fetch('/clear-shielded', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(orders),
+    }).then(r => r.json());
+  } catch (e) {
+    el.innerHTML = '<div class="no">fhEgg engine unreachable: ' + e.message + ' — run via serve.mjs</div>';
+    btn.disabled = false;
+    return;
+  }
+  if (res.error) {
+    el.innerHTML = '<div class="no">' + res.error + '</div>' + (res.stderr ? '<div class="fade mono">' + res.stderr + '</div>' : '');
+    btn.disabled = false;
+    return;
+  }
+  renderShieldedCleared(res);
+  btn.disabled = false;
+}
+
+// Render the REAL fhEgg shielded clearing (JSON from POST /clear-shielded → fhegg_clear).
+function renderShieldedCleared(res) {
+  const c = res.certificate || {};
+  const air = res.air || {};
+  const t = res.tamper || {};
+  const st = res.starkStage || {};
+  const esc = (s) => String(s).replace(/[&<>]/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[m]));
+
+  let html = '<div class="card">';
+  html += `<div class="fade" style="font-size:11px;margin-bottom:6px">${esc(res.mechanism || '')}  ·  ${res.nodes} assets, ${res.edges} orders, T=${res.iters} iters</div>`;
+  html += (res.orders || []).map(o => {
+    const mine = o.trader === 'Ada';
+    return `<div class="alloc ${mine ? 'mine' : ''}">
+      <span class="who">${esc(o.trader)}${mine ? ' · you' : ''}</span>
+      <span class="leg">${o.offerAsset}→${o.wantAsset}: cleared <b>${o.clearedFlow}</b> of ${o.offerAmount} (want ≥${o.wantMin})</span>
+      <span class="${o.filled ? 'ok' : 'fade'}">${o.filled ? '✔' : '·'}</span>
+    </div>`;
+  }).join('');
+  html += '</div>';
+
+  // The Cert-F certificate — the fair-batch gate.
+  html += '<div class="barwrap card"><div class="fade" style="font-size:11px;margin-bottom:6px">Cert-F primal-dual certificate — the fair-batch gate the verified AIR checks</div>';
+  html += `<div class="leg">cleared weighted volume wᵀf = <b>${c.clearedVolume}</b> · dual cᵀs = ${c.dualObjective} · duality gap = ${c.dualityGap}</div>`;
+  html += `<div class="leg">per-asset conservation ‖Af‖∞ = ${c.conservationResidual} <span class="${c.conserves ? 'ok' : 'no'}">${c.conserves ? '✔ conserves' : '✗'}</span></div>`;
+  html += `<div class="leg">certificate valid (conserves · boxed · s≥0 · dual-feasible · gap≤ε): <span class="${c.valid ? 'ok' : 'no'}">${c.valid ? '✔ PROVED-sound checks pass' : '✗'}</span></div>`;
+  html += '</div>';
+
+  // The AIR accept + the tamper reject — soundness in code.
+  html += '<div class="barwrap card"><div class="fade" style="font-size:11px;margin-bottom:6px">the verified AIR gate (the exact n+4m+1 rows Market/CertF.lean proves sound)</div>';
+  html += `<div class="leg">honest certificate → AIR <span class="${air.accept ? 'ok' : 'no'}">${air.accept ? '✔ ACCEPT' : '✗ reject'}</span> (${air.constraints} constraints, ${air.terms} terms, ${air.witnessCells} witness cells)</div>`;
+  html += `<div class="leg">tampered (${esc(t.what || '')}) → AIR <span class="${!t.accept ? 'ok' : 'no'}">${!t.accept ? '✔ REJECT' : '✗ accepted (BUG)'}</span> [${(t.violated || []).join(', ')}]</div>`;
+  html += '</div>';
+
+  // The two tiers + the NAMED STARK stage (honest scope).
+  html += '<div class="barwrap card"><div class="fade" style="font-size:11px;margin-bottom:6px">who sees what — the shielded tiers</div>';
+  html += (res.tiers || []).map(x => `<div class="leg"><b>${esc(x.tier)}</b>: ${esc(x.sees)}</div>`).join('');
+  html += `<div class="leg" style="margin-top:8px"><span class="chip NOTBATCH">STARK-ZK: ${esc(st.status || 'named')}</span></div>`;
+  html += `<div class="det">${esc(st.revealNothingFloor || '')}. Hides: ${(st.hides || []).map(esc).join(', ')}. Wire entry point: <span class="mono">${esc(st.wireEntryPoint || '')}</span>.</div>`;
+  html += '</div>';
+
+  $('shieldedCleared').innerHTML = html;
+}
+
 function renderFairness() {
   $('fair').innerHTML = fairnessLedger().map(f => {
     const chips = f.grades.map(g => `<span class="chip ${g === 'NOT-IN-THIS-BATCH' ? 'NOTBATCH' : g}">${g}</span>`).join('');
@@ -401,6 +478,7 @@ const tick = () => new Promise(r => setTimeout(r, 30));
   renderFairness();
   setStepper(0);
   $('placeBtn').onclick = place;
+  $('shieldedBtn').onclick = shieldedClear;
   // probe the live node so the header shows whether settlement will land on-chain
   fetch('/node/status').then((r) => r.json()).then((s) => {
     if (s.up) { $('nodePill').className = 'pill live'; $('nodePill').textContent = 'node: live @ ' + (s.node || '').replace(/^https?:\/\//, ''); }

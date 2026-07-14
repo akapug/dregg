@@ -37,6 +37,10 @@ path = "src/bin/e2e.rs"
 name = "pricecert-bench"
 path = "src/bin/pricecert_bench.rs"
 
+[[bin]]
+name = "fhegg_clear"
+path = "src/bin/fhegg_clear.rs"
+
 [profile.release]
 opt-level = 3
 lto = "thin"

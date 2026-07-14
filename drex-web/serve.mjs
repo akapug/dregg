@@ -277,6 +277,47 @@ function runClear(ordersJson) {
   });
 }
 
+// How to invoke the REAL fhEgg single-phase SHIELDED clearing engine
+// (fhegg-solver/src/bin/fhegg_clear.rs). fhegg-solver is a STANDALONE crate
+// (opted out of the workspace), so its binary lands in its OWN target dir. The
+// same revealed orders that /clear runs through the TTC ring matcher, /clear-shielded
+// runs through the convex-clearing + Cert-F certificate route (the fair-batch gate).
+// LOCAL only — if the binary is not built, we say so rather than touch anything remote.
+function fheggClearCmd() {
+  for (const prof of ['release', 'debug']) {
+    const p = path.join(REPO, 'fhegg-solver', 'target', prof, 'fhegg_clear');
+    if (fs.existsSync(p)) return { cmd: p, args: [], where: 'local fhegg-solver/target/' + prof };
+  }
+  return { cmd: null, args: [], where: '(not built)' };
+}
+
+// Run the REAL fhEgg single-phase shielded clearing over the posted revealed orders.
+function runShieldedClear(ordersJson) {
+  return new Promise((resolve) => {
+    const { cmd, args } = fheggClearCmd();
+    if (!cmd) {
+      return resolve({
+        ok: false,
+        error: 'fhegg_clear not built — run: cargo build -p fhegg-solver --bin fhegg_clear  (in fhegg-solver/)',
+      });
+    }
+    const child = spawn(cmd, args, { cwd: REPO });
+    let out = '', err = '';
+    child.stdout.on('data', (d) => (out += d));
+    child.stderr.on('data', (d) => (err += d));
+    child.on('error', (e) => resolve({ ok: false, error: 'spawn failed: ' + e.message }));
+    child.on('close', (code) => {
+      const line = out.trim().split('\n').filter(Boolean).pop() || '';
+      try {
+        resolve(JSON.parse(line));
+      } catch (_e) {
+        resolve({ ok: false, error: 'fhegg_clear produced no JSON (exit ' + code + ')', stderr: err.slice(-400), raw: out.slice(-400) });
+      }
+    });
+    child.stdin.end(ordersJson);
+  });
+}
+
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -303,6 +344,18 @@ http.createServer(async (req, res) => {
     req.on('data', (c) => { body += c; if (body.length > 1 << 20) req.destroy(); });
     req.on('end', async () => {
       const result = await runClear(body);
+      send(res, result.error ? 502 : 200, JSON.stringify(result), MIME['.json']);
+    });
+    return;
+  }
+
+  // ── POST /clear-shielded — the REAL fhEgg single-phase shielded clearing ──
+  // (fhegg-solver: PDHG circulation + Cert-F certificate + the verified AIR gate).
+  if (req.method === 'POST' && url === '/clear-shielded') {
+    let body = '';
+    req.on('data', (c) => { body += c; if (body.length > 1 << 20) req.destroy(); });
+    req.on('end', async () => {
+      const result = await runShieldedClear(body);
       send(res, result.error ? 502 : 200, JSON.stringify(result), MIME['.json']);
     });
     return;
@@ -357,6 +410,7 @@ http.createServer(async (req, res) => {
   console.log('  wallet wasm mounted from ' + EXT + '  (/wasm/dregg_wasm.js)');
   const { where } = drexClearCmd();
   console.log('  REAL matcher   POST /clear  → drex_clear @ ' + where + '  (solver.rs + verified_settle.rs)');
+  console.log('  SHIELDED clear POST /clear-shielded → fhegg_clear @ ' + fheggClearCmd().where + '  (PDHG circulation + Cert-F + verified AIR gate)');
   console.log('  LIVE node      POST /settle → ' + NODE + '  (/turn/submit → effect-VM → prove_pool)');
   console.log('                 GET  /node/status probes it; start one with:');
   console.log('                 dregg-node run --port 8420 --enable-faucet --prove-turns');
