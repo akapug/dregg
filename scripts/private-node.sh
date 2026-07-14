@@ -120,29 +120,34 @@ cmd_check() {
   echo "$cell" | grep -q '"balance":1000' \
     && say "EXECUTED: recipient balance = 1000 (state changed on the effect-VM)." \
     || die "recipient balance is not 1000 — execution did not land."
-  say "polling GET $BASE/api/turn/$th/proof — full-turn STARK proof (prove path)"
-  local proof=""
-  for _ in $(seq 1 45); do
-    proof="$(curl -fsS "$BASE/api/turn/$th/proof" 2>/dev/null || true)"
-    [ -n "$proof" ] && echo "$proof" | grep -q '"proof_len"' && break
+  # The full-turn STARK proof attaches ASYNCHRONOUSLY (prove_pool, off the commit
+  # lock): the committed receipt flips has_proof/has_witness true once the pool's
+  # prove_and_verify_finalized_turn generates AND self-verifies the composed
+  # FullTurnProof (verify_full_turn gates the attach — an unverified proof is
+  # NEVER attached). We poll the receipt row for that flip. (The separate
+  # /api/turn/<hash>/proof endpoint serves the COMMIT-PATH-persisted proof, which
+  # in solo mode is preempted by a faucet nonce-replay on re-execution — a
+  # different persistence leg, not the attestation the light-client consumes.)
+  say "polling GET $BASE/api/starbridge/receipts?turn_hash=$th — full-turn STARK proof (async prove pool)"
+  local row="" attached=""
+  for _ in $(seq 1 60); do
+    row="$(curl -fsS "$BASE/api/starbridge/receipts?turn_hash=$th" 2>/dev/null || true)"
+    if echo "$row" | grep -q '"has_proof":true'; then attached=1; break; fi
     sleep 1
   done
-  if echo "$proof" | grep -q '"proof_len"'; then
-    echo "    $proof"
-    say "PROVEN: a real full-turn STARK proof was generated for the committed turn."
-    say "REAL NODE CONFIRMED: turn executed on the verified effect-VM AND proven."
+  if [ -n "$attached" ]; then
+    echo "    $row"
+    say "PROVEN: a real full-turn STARK proof was generated, self-verified, and attached ($(echo "$row" | grep -o '"witness_count":[0-9]*'))."
+    say "REAL NODE CONFIRMED: turn executed on the verified effect-VM AND STARK-proven."
   else
     # HONEST STATUS: the prove PIPELINE is real and runs (the prover builds the
     # trace and fails CLOSED at a named constraint) — it does not fake a proof.
-    # At this HEAD the wide rotated IR-v2 leg a cohort turn (Transfer/SetField)
-    # routes through cannot yet realize the 15-bit range table (wire id 84) in
-    # the layout resolver ("custom-table contents manifest — the named IR
-    # follow-up"; descriptor_ir2.rs). Look for the real prover error in the log.
-    say "EXECUTED (verified) — PROOF PENDING: the running prover hit the HEAD rotated-IR seam."
-    echo "    (real prover error from the log:)"
+    # If has_proof never flips, read the real prover error from the log.
+    say "EXECUTED (verified) — PROOF PENDING: has_proof did not flip within the poll window."
+    echo "    (real prover error from the log, if any:)"
     grep -iE "async proof generation failed|no realized relation" "$LOG" | tail -1 | sed 's/^/    /'
-    echo "    → the effect-VM execution is the verified Lean producer; full-turn PROOF of a"
-    echo "      cohort turn is blocked by the in-flight IR-v2 15-bit-range-table realization."
+    echo "    → the effect-VM execution is the verified Lean producer; inspect $LOG for the"
+    echo "      prove-pool outcome (ENQUEUED / attached / generation failed)."
   fi
 }
 

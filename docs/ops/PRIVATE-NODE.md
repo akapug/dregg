@@ -32,11 +32,17 @@ Manage it with [`scripts/private-node.sh`](../../scripts/private-node.sh).
    "state_producer":"lean","lean_producer":true,"full_turn_proving":true,
    "producer_covered_effects":21, ...}
   ```
-- **A real turn executes on the verified effect-VM.** `POST /api/faucet`
-  (amount 1000) builds a real faucet-signed `Transfer` turn, runs it through the
-  **Lean producer** (`state_producer:"lean"`), and commits: `GET /api/cell/<id>`
-  then returns `"found":true,"balance":1000`. The ledger state changed — this is
-  the real effect-VM, not a mock.
+- **A real turn executes on the verified effect-VM AND is STARK-proven.**
+  `POST /api/faucet` (amount 1000) builds a real faucet-signed `Transfer` turn,
+  runs it through the **Lean producer** (`state_producer:"lean"`), and commits:
+  `GET /api/cell/<id>` then returns `"found":true,"balance":1000`. The ledger
+  state changed — this is the real effect-VM, not a mock. Within a few seconds
+  the async prove pool attaches a **full-turn STARK proof** to the committed
+  receipt: `GET /api/starbridge/receipts?turn_hash=<hash>` then shows
+  `"has_proof":true,"has_witness":true,"witness_count":1`. The proof is
+  generated AND self-verified (`prove_and_verify_finalized_turn` gates the attach
+  on `verify_full_turn` — an unverified proof is never attached), so the node is
+  proving, not just executor-signing.
 
 ### The private-access model (not public)
 
@@ -124,33 +130,56 @@ public surface, no real value, no mainnet.
   lane (`chain/`, `bridge/`); nothing here broadcasts to any chain.
 - **The demos** — DrEX / launchpad hosting is the `OPS-RUNBOOK.md` lane.
 
-### Known open at this HEAD: full-turn PROVING of a cohort turn
+### STARK-proving verified (closed at HEAD `11ab66634`, fold reconcile `764225f0c`)
 
-The node runs with `--prove-turns` and spawns the async STARK prove pool, and the
-**prover pipeline is real and runs** (it builds the trace and fails *closed* — it
-never fakes a proof). But at the **current working-tree HEAD** a value-bearing
-cohort turn (a `Transfer` / `SetField`) routes through the **wide rotated IR-v2**
-proving leg, and that leg cannot yet realize the **15-bit range table** (wire id
-`84 = 64 + 15 + 5`) in its layout resolver:
+The node runs with `--prove-turns`, spawns the async STARK prove pool, and now
+**attaches a real, self-verified full-turn STARK proof to every committed cohort
+turn**. A faucet `Transfer` submitted at this HEAD flips `has_proof:true` on its
+receipt within ~4 s (`witness_count:1`), and the node log shows the clean
+prove-pool lifecycle with **zero** prove failures:
 
 ```
-async full-turn proof generation failed: ... wide rotated IR-v2 proof:
-constraint 294: custom table id 84 has no realized relation
-(only the submask table, id 5, is bound; the custom-table contents manifest
- is the named IR follow-up)
+INFO dregg_node::prove_pool: async prove job ENQUEUED  turn_hash=35e3af92…
+INFO dregg_node::prove_pool: async proof attached to committed receipt
+     (has_proof flips true)  worker_id=0 turn_hash=35e3af92… elapsed_ms=3833
 ```
 
-This is a genuine **in-flight circuit seam**, not a build/seed/env problem: the
-error is pure Rust circuit logic (`circuit/src/descriptor_ir2.rs`), the 15-bit
-range-table **emission** landed (`AVAILABILITY WELD LIVE … 15-bit IR-2 range
-tables`) but its **realized relation** in the wide layout resolver is the owed
-follow-up (corroborated by the active optimizer work — `BUS_P2_1` narrow chip,
-the untracked WIP `metatheory/Dregg2/Circuit/NarrowChip.lean`). Both proof legs
-route cohort turns here: the async pool hits the seam directly, and the finalized
-commit-path proof (which would populate `GET /api/turn/<hash>/proof`) is
-additionally preempted in solo mode by a faucet nonce-replay on re-execution.
+Verify it yourself:
 
-So today the foundation node **executes real turns on the verified effect-VM**;
-**full-turn proof attestation of a cohort turn is the named next thing to close**
-(realize the 15-bit range table in `resolve_main_layout`, then re-run
-`scripts/private-node.sh check` — it will fetch a real proof and flip to PROVEN).
+```bash
+th=<turn_hash from /api/faucet>
+curl -s "http://127.0.0.1:8420/api/starbridge/receipts?turn_hash=$th" \
+  | grep -o '"has_proof":true'   # → present; witness_count:1
+```
+
+**What was blocking it (now fixed).** A value-bearing cohort turn (`Transfer` /
+`SetField`) proves through the **wide rotated IR-v2** leg. Before the VK-epoch
+flip was reconciled, that leg failed *closed* at `custom table id 84 has no
+realized relation` (the 15-bit borrow-limb range table looked up without a
+`tables[]` declaration) and, for teeth-less members like `IncrementNonce`, at a
+`tail mismatch` from a stale fixed `REFUSE_WELD_WIDEN`. Commit `764225f0c`
+reconciled the **wide rotated producer + the IR-v2 realizer** to the regenerated
+deployed descriptors — two pure-Rust circuit fixes:
+
+1. **Per-member refuse-weld widen** (`circuit/src/effect_vm/bare_floor_refuse_weld.rs`):
+   the teeth-column exclusion is now derived **per member** from the descriptor's
+   own committed floor-refuse gates (48 for `IncrementNonce`, 45 for the
+   avail-hardened `Transfer`/`Burn`), instead of a fixed constant that underflowed
+   the tail.
+2. **Realize custom range table 84** (`circuit/src/descriptor_ir2.rs`):
+   `range_bits_for` now decodes the width from the committed tid (the inverse of
+   the Lean `rangeTidW` convention) and realizes the range relation, so the
+   avail-weld descriptors' 15-bit lookup binds.
+
+The prover was never faked: the pre-fix node failed *closed* (no proof attached,
+`witness_count:0`); the post-fix node generates the proof, **self-verifies it**
+via `verify_full_turn`, and only then attaches it. This is the tangible
+milestone — the node now **STARK-proves** real turns, not merely executor-signs
+them.
+
+> The separate `GET /api/turn/<hash>/proof` endpoint serves the
+> **commit-path-persisted** proof, a distinct persistence leg that in **solo**
+> mode is preempted by a faucet nonce-replay on re-execution. The attestation a
+> light-client / cross-trust peer consumes is the async-pool proof surfaced on
+> the receipt (`has_proof`/`witness_count`) — that is the load-bearing flip, and
+> `scripts/private-node.sh check` polls it.
