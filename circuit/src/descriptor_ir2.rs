@@ -329,6 +329,9 @@ const MIN_TABLE_HEIGHT: usize = 8;
 
 // The shared bus names (namespaced so sibling modules' buses never collide).
 const BUS_P2: &str = "ir2_p2";
+/// The NARROW absorb bus (tuple-narrowing pass): single-output sites look up `[arity, ins, out0]`
+/// (18-wide, NO lanes) here instead of the 25-wide `BUS_P2` — the chip serves both from the same rows.
+const BUS_P2_1: &str = "ir2_p2_narrow";
 const BUS_BYTE: &str = "ir2_byte";
 const BUS_MEM_LOG: &str = "ir2_mem_log";
 const BUS_MEM_CHECK: &str = "ir2_mem_check";
@@ -2029,7 +2032,12 @@ const CHIP_WIDE: usize = CHIP_S6 + 1;
 /// second 8-felt child genuinely seeds lanes 11..15.
 const CHIP_NODE8: usize = CHIP_WIDE + 1;
 const CHIP_AUX0: usize = CHIP_NODE8 + 1;
-const CHIP_WIDTH: usize = CHIP_AUX0 + POSEIDON2_PERM_AUX_COLS;
+/// Narrow-bus multiplicity (tuple-narrowing pass): how many single-output (18-wide, out0-only) lookups
+/// this permutation serves on `BUS_P2_1`. APPENDED after the aux block so no existing chip column shifts
+/// (the permutation constraints read `CHIP_AUX0..CHIP_AUX0+PERM_AUX` — untouched). Zero until sites are
+/// routed to the narrow bus; the narrow entry then balances at 0 for the deployed (wide-only) path.
+const CHIP_MULT_NARROW: usize = CHIP_AUX0 + POSEIDON2_PERM_AUX_COLS;
+const CHIP_WIDTH: usize = CHIP_MULT_NARROW + 1;
 
 /// The five-table interpreter AIR. One Rust type covering every instance of the batch
 /// (the batch prover is monomorphic in the AIR type), entirely descriptor-driven.
@@ -2729,6 +2737,24 @@ where
                     builder,
                     tuple,
                     local[CHIP_MULT].into() * (AB::Expr::ONE - is_fact.clone()),
+                );
+                // NARROW receive (tuple-narrowing pass): the SAME row also serves single-output sites
+                // via an 18-wide tuple `[arity, ins, out0]` — no output lanes. out0 is the same bound
+                // digest column as the wide entry, so a narrow lookup is 1-felt-sound at the head
+                // (Lean `chip_lookup_sound_narrow`). Consumed `CHIP_MULT_NARROW` times; ZERO for the
+                // deployed wide-only descriptors, so the narrow bus balances at 0 and the wide path and
+                // chip permutation constraints are byte-for-byte unchanged.
+                let bus1 = LookupBus::new(BUS_P2_1);
+                let mut ntuple: Vec<AB::Expr> = Vec::with_capacity(1 + CHIP_RATE + 1);
+                ntuple.push(local[CHIP_ARITY].into());
+                for i in 0..CHIP_RATE {
+                    ntuple.push(local[CHIP_IN0 + i].into());
+                }
+                ntuple.push(local[CHIP_OUT].into());
+                bus1.table_entry(
+                    builder,
+                    ntuple,
+                    local[CHIP_MULT_NARROW].into() * (AB::Expr::ONE - is_fact.clone()),
                 );
                 // Provide (l, r, out) on the fact bus for fact rows only.
                 let fact_bus = LookupBus::new(BUS_FACT);
@@ -5178,6 +5204,7 @@ fn build_traces(
             row[CHIP_OUT..CHIP_OUT + CHIP_OUT_LANES].copy_from_slice(&lanes[..CHIP_OUT_LANES]);
             let (aux, _digest) = perm_aux(st);
             row.extend(aux);
+            row.push(BabyBear::ZERO); // CHIP_MULT_NARROW = 0 (wide-only deployed path; narrow bus inert)
             chip_rows.push(row);
         }
         for (&(l, r, out), mult) in &fact_hist {
@@ -5201,6 +5228,7 @@ fn build_traces(
             debug_assert_eq!(row[CHIP_OUT], BabyBear::new(out));
             let (aux, _digest) = perm_aux(fst);
             row.extend(aux);
+            row.push(BabyBear::ZERO); // CHIP_MULT_NARROW = 0 (wide-only deployed path; narrow bus inert)
             chip_rows.push(row);
         }
         // Pad: genuine arity-0 absorb permutation rows with multiplicity 0.
@@ -5210,6 +5238,7 @@ fn build_traces(
         debug_assert_eq!(pad_lanes[0], digest);
         pad[CHIP_OUT..CHIP_OUT + CHIP_OUT_LANES].copy_from_slice(&pad_lanes[..CHIP_OUT_LANES]);
         pad.extend(aux);
+        pad.push(BabyBear::ZERO); // CHIP_MULT_NARROW = 0
         let target = next_pow2(chip_rows.len());
         while chip_rows.len() < target {
             chip_rows.push(pad.clone());
