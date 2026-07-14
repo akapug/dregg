@@ -83,6 +83,22 @@ mod integration_tests {
                 Tier::Shielded,
                 CertKind::CertQp,
             ),
+            // The mechanism FAMILY: three more clearings, same engine.
+            (
+                products::discriminatory_clearing(),
+                Tier::Dark,
+                CertKind::CertF,
+            ),
+            (
+                products::welfare_max_fisher(),
+                Tier::Shielded,
+                CertKind::CertEq,
+            ),
+            (
+                products::cfmm_routing(),
+                Tier::Shielded,
+                CertKind::CertRoute,
+            ),
         ];
         for (product, tier, cert) in cases {
             let name = product.name.clone();
@@ -104,5 +120,6 @@ mod integration_tests {
     fn rejections_are_precise() {
         assert!(compile(&products::portfolio_qp_private_claiming_dark()).is_err());
         assert!(compile(&products::all_or_none_claiming_shielded()).is_err());
+        assert!(compile(&products::welfare_max_claiming_dark()).is_err());
     }
 }

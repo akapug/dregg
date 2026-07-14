@@ -141,6 +141,15 @@ pub enum ProgramKind {
     Qp,
     /// State-price LP for derivative pricing (Price-Cert superhedging LP).
     StatePriceLp,
+    /// Discriminatory / pay-as-bid clearing — the gains-from-trade flow-LP
+    /// winner-determination (linear, same Cert-F engine) + a pay-as-bid payment.
+    Discriminatory,
+    /// Welfare-max / Fisher-market equilibrium — the Eisenberg–Gale convex
+    /// program `max Σ bᵢ log Uᵢ s.t. supply` (concave, entropic prox).
+    WelfareMax,
+    /// CFMM optimal routing — `max Σ gᵢ(δᵢ) s.t. Σδ≤Δ` over public pool curves
+    /// (concave, water-filling on the marginal price).
+    CfmmRouting,
 }
 
 /// The certificate a product compiles to (`FHEGG-PRODUCT-ORDER-FRONTIER.md`
@@ -160,6 +169,13 @@ pub enum CertKind {
     /// The state-price / superhedging LP certificate (Price-Cert). Its shape is
     /// typed in fhIR-0; a dedicated runner is the fhIR-1 lane.
     PriceCert,
+    /// The Fisher-market competitive-equilibrium certificate `(x, p)` — the
+    /// Eisenberg–Gale KKT witness (`fhegg_solver::fisher::CertEq`). Bilinear in
+    /// the witness (`βᵢuᵢⱼ`, `xᵢⱼpⱼ`), `O(n·g)`.
+    CertEq,
+    /// The CFMM routing certificate `(δ, λ)` — the water-filling KKT witness
+    /// (`fhegg_solver::cfmm::CertRoute`). Nonlinear in the witness (`gᵢ'`), `O(N)`.
+    CertRoute,
 }
 
 /// The extracted convex-program TYPE — what the tier judgment reads. This is the
@@ -216,8 +232,14 @@ impl ProgramType {
     fn within_dark_envelope(&self) -> bool {
         match self.kind {
             ProgramKind::Aggregation => self.size <= DARK_AGGREGATION_ENVELOPE,
-            ProgramKind::FlowLp | ProgramKind::StatePriceLp => self.size <= DARK_LP_ENVELOPE,
+            ProgramKind::FlowLp | ProgramKind::StatePriceLp | ProgramKind::Discriminatory => {
+                self.size <= DARK_LP_ENVELOPE
+            }
             ProgramKind::Qp => false,
+            // WelfareMax / CfmmRouting have a Concave (log / rational) objective,
+            // so the curvature check rejects them at Dark before this is reached;
+            // the bound is moot but kept exhaustive.
+            ProgramKind::WelfareMax | ProgramKind::CfmmRouting => self.size <= DARK_LP_ENVELOPE,
         }
     }
 
@@ -265,6 +287,9 @@ impl ProgramType {
                 if self.curvature == Curvature::Convex {
                     return Err(TypeError::QuadraticObjective { tier });
                 }
+                if self.curvature == Curvature::Concave {
+                    return Err(TypeError::EntropicObjective { tier });
+                }
                 if !self.within_dark_envelope() {
                     return Err(TypeError::SizeExceedsEnvelope {
                         size: self.size,
@@ -291,6 +316,10 @@ pub enum TypeError {
     /// The objective is a convex quadratic → PSD/quadratic prox is outside the
     /// FHE v0 aggregation core → not Dark-admissible.
     QuadraticObjective { tier: Tier },
+    /// The objective is concave-nonlinear (`log` welfare / rational CFMM output)
+    /// → the entropic/mirror-descent prox is outside the FHE v0 aggregation core
+    /// (exp/log/reciprocal) → not Dark-admissible (Shielded is fine).
+    EntropicObjective { tier: Tier },
     /// An unapproved cone (SOC/PSD/exp) → outside fhIR-0's cone library.
     UnapprovedCone { cone: Cone, tier: Tier },
     /// An integer/disjunctive feature → breaks the continuous oblivious regime →
@@ -322,6 +351,11 @@ impl fmt::Display for TypeError {
             TypeError::QuadraticObjective { tier } => write!(
                 f,
                 "convex-quadratic objective (PSD/quadratic prox) is outside the FHE v0 aggregation core → not {}-admissible",
+                tier.short(),
+            ),
+            TypeError::EntropicObjective { tier } => write!(
+                f,
+                "concave-nonlinear objective (log-welfare / rational CFMM output; entropic/mirror-descent prox = exp/log/reciprocal) is outside the FHE v0 aggregation core → not {}-admissible",
                 tier.short(),
             ),
             TypeError::UnapprovedCone { cone, tier } => write!(

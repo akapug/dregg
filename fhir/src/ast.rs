@@ -76,6 +76,44 @@ pub enum ProductBody {
         /// The new product's scenario payoff `h` (M).
         payoff: Vec<f64>,
     },
+
+    /// A **discriminatory / pay-as-bid** call auction over a PUBLIC `k`-level price
+    /// grid — a DIFFERENT clearing on the same book form as [`ProductBody::
+    /// UniformPrice`]. The efficient fill is a gains-from-trade flow-LP (linear
+    /// Cert-F winner-determination); each winner then settles at its OWN limit.
+    Discriminatory { orders: Vec<OrderSpec>, k: usize },
+
+    /// A **welfare-max / Fisher-market** clearing — the Eisenberg–Gale convex
+    /// program `max Σ bᵢ log Uᵢ s.t. supply`, the general competitive equilibrium
+    /// of which uniform-price is the linear-utility special case. The utility
+    /// matrix visibility is the type-level fact (public ⇒ everyone sees the
+    /// valuations; private ⇒ the solver sees plaintext). The `log` objective is
+    /// concave, so the honest tier is Shielded, not the FHE-affine Dark core.
+    WelfareMax {
+        n_buyers: usize,
+        n_goods: usize,
+        budgets: Vec<f64>,
+        supplies: Vec<f64>,
+        /// Utilities `uᵢⱼ`, row-major `n_buyers × n_goods`.
+        util: MatrixData,
+    },
+
+    /// A **CFMM optimal-routing** clearing — split a fixed private input `budget`
+    /// across PUBLIC constant-product pool curves to maximise output
+    /// (`max Σ gᵢ(δᵢ) s.t. Σδ≤Δ`). The pool curves are public; the routing is
+    /// private. The rational-concave output is a nonlinear objective ⇒ Shielded.
+    CfmmRouting { pools: Vec<PoolSpec>, budget: f64 },
+}
+
+/// One constant-product pool for a [`ProductBody::CfmmRouting`] — a PUBLIC curve.
+#[derive(Clone, Copy, Debug)]
+pub struct PoolSpec {
+    /// Reserve of the input token `Rᵢ`.
+    pub reserve_in: f64,
+    /// Reserve of the output token `Qᵢ`.
+    pub reserve_out: f64,
+    /// Fee factor `γ ∈ (0,1]`.
+    pub fee: f64,
 }
 
 /// One limit order in a uniform-price auction.

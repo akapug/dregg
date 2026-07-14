@@ -23,7 +23,10 @@ use crate::types::{
     TypeError, Visibility,
 };
 
+use crate::ast::PoolSpec;
+use fhegg_solver::cfmm::{Pool, RoutingProblem};
 use fhegg_solver::clearing::{Order as EngineOrder, Side as EngineSide};
+use fhegg_solver::fisher::FisherMarket;
 use fhegg_solver::pdhg::FlowLp;
 use fhegg_solver::qp::{markowitz, QpProblem};
 
@@ -44,6 +47,16 @@ pub enum ConvexProgram {
         n_scenarios: usize,
         n_instruments: usize,
     },
+    /// A discriminatory / pay-as-bid clearing: the input book + the public price
+    /// grid. Runs the gains-from-trade flow-LP (Cert-F) + the pay-as-bid payment.
+    Discriminatory {
+        orders: Vec<EngineOrder>,
+        prices: Vec<f64>,
+    },
+    /// A welfare-max / Fisher-market equilibrium (Eisenberg–Gale).
+    WelfareMax(FisherMarket),
+    /// A CFMM optimal-routing program over public pool curves.
+    CfmmRouting(RoutingProblem),
 }
 
 /// A successfully-compiled product: its program, its most-private honest tier,
@@ -121,6 +134,15 @@ fn lower(p: &Product) -> Lowered {
             marks,
             payoff,
         } => lower_derivative(instruments, marks, payoff),
+        ProductBody::Discriminatory { orders, k } => lower_discriminatory(orders, *k),
+        ProductBody::WelfareMax {
+            n_buyers,
+            n_goods,
+            budgets,
+            supplies,
+            util,
+        } => lower_welfare_max(*n_buyers, *n_goods, budgets, supplies, util),
+        ProductBody::CfmmRouting { pools, budget } => lower_cfmm(pools, *budget),
     }
 }
 
@@ -251,6 +273,121 @@ fn lower_derivative(instruments: &MatrixData, marks: &[f64], payoff: &[f64]) -> 
     }
 }
 
+fn lower_discriminatory(orders: &[OrderSpec], k: usize) -> Lowered {
+    let engine_orders: Vec<EngineOrder> = orders
+        .iter()
+        .map(|o| EngineOrder {
+            side: match o.side {
+                OrderSide::Bid => EngineSide::Bid,
+                OrderSide::Ask => EngineSide::Ask,
+            },
+            qty: o.qty,
+            limit: o.limit,
+        })
+        .collect();
+    // The public price grid: level j ↦ price j.
+    let prices: Vec<f64> = (0..k).map(|j| j as f64).collect();
+
+    // All-or-none lifts the whole batch out of the continuous regime (as for
+    // uniform-price) — the winner-determination stops being an LP.
+    let integer_features: Vec<IntegerFeature> = orders
+        .iter()
+        .filter(|o| o.fill == FillType::AllOrNone)
+        .map(|_| IntegerFeature::AllOrNone)
+        .take(1)
+        .collect();
+
+    let shape = ProgramType {
+        kind: ProgramKind::Discriminatory,
+        curvature: Curvature::Affine, // gains-from-trade is linear: max wᵀf
+        // The two-node gains-from-trade incidence is PUBLIC topology.
+        matrices: vec![MatrixFlag {
+            role: MatrixRole::Constraint,
+            visibility: Visibility::Public,
+        }],
+        cones: vec![Cone::Zero, Cone::Box], // Af=0, 0≤f≤c
+        integer_features,
+        size: orders.len(),
+        cert: CertKind::CertF,
+    };
+    Lowered {
+        shape,
+        program: ConvexProgram::Discriminatory {
+            orders: engine_orders,
+            prices,
+        },
+    }
+}
+
+fn lower_welfare_max(
+    n_buyers: usize,
+    n_goods: usize,
+    budgets: &[f64],
+    supplies: &[f64],
+    util: &MatrixData,
+) -> Lowered {
+    let market = FisherMarket {
+        n_buyers,
+        n_goods,
+        budgets: budgets.to_vec(),
+        supplies: supplies.to_vec(),
+        util: util.data.clone(),
+    };
+    let shape = ProgramType {
+        kind: ProgramKind::WelfareMax,
+        // Σ bᵢ log Uᵢ is CONCAVE — the entropic/mirror-descent prox, outside the
+        // FHE v0 affine core (so Dark rejects; Shielded is the honest tier).
+        curvature: Curvature::Concave,
+        matrices: vec![MatrixFlag {
+            // The utility matrix carries the valuations — its visibility is the
+            // cheap-regime boundary (public ⇒ everyone sees; private ⇒ solver-only).
+            role: MatrixRole::Objective,
+            visibility: util.visibility,
+        }],
+        cones: vec![Cone::NonNeg], // x ≥ 0, Σx ≤ s (nonneg orthant)
+        integer_features: vec![],
+        size: n_buyers * n_goods,
+        cert: CertKind::CertEq,
+    };
+    Lowered {
+        shape,
+        program: ConvexProgram::WelfareMax(market),
+    }
+}
+
+fn lower_cfmm(pools: &[PoolSpec], budget: f64) -> Lowered {
+    let engine_pools: Vec<Pool> = pools
+        .iter()
+        .map(|p| Pool {
+            reserve_in: p.reserve_in,
+            reserve_out: p.reserve_out,
+            fee: p.fee,
+        })
+        .collect();
+    let shape = ProgramType {
+        kind: ProgramKind::CfmmRouting,
+        // Σ gᵢ(δᵢ) is CONCAVE (rational per-pool output) — nonlinear objective ⇒
+        // Shielded, not the affine Dark core.
+        curvature: Curvature::Concave,
+        matrices: vec![MatrixFlag {
+            // The pool curves (reserves) are PUBLIC; only the routing is private.
+            role: MatrixRole::Constraint,
+            visibility: Visibility::Public,
+        }],
+        cones: vec![Cone::NonNeg, Cone::Box], // δ ≥ 0, Σδ ≤ Δ
+        integer_features: vec![],
+        size: pools.len(),
+        cert: CertKind::CertRoute,
+    };
+    Lowered {
+        shape,
+        program: ConvexProgram::CfmmRouting(RoutingProblem {
+            pools: engine_pools,
+            budget,
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -339,5 +476,52 @@ mod tests {
         // Small public scenario grid → Dark; the shape typechecks even though the
         // runner is the fhIR-1 lane.
         assert_eq!(c.tier, Tier::Dark);
+    }
+
+    // --- the mechanism family: three more clearings on the one engine ---
+
+    #[test]
+    fn discriminatory_small_is_dark_certf() {
+        // Pay-as-bid winner-determination is a linear flow-LP → Cert-F; small book
+        // ⇒ Dark. Same certificate as uniform-price's neighbour, different rule.
+        let c = compile(&products::discriminatory_clearing()).unwrap();
+        assert_eq!(c.tier, Tier::Dark);
+        assert_eq!(c.cert, CertKind::CertF);
+        assert!(matches!(c.program, ConvexProgram::Discriminatory { .. }));
+    }
+
+    #[test]
+    fn welfare_max_is_shielded_certeq() {
+        // The Eisenberg–Gale log objective is concave ⇒ not Dark ⇒ Shielded.
+        let c = compile(&products::welfare_max_fisher()).unwrap();
+        assert_eq!(c.tier, Tier::Shielded);
+        assert_eq!(c.cert, CertKind::CertEq);
+        assert!(matches!(c.program, ConvexProgram::WelfareMax(_)));
+    }
+
+    #[test]
+    fn cfmm_routing_is_shielded_certroute() {
+        // Rational-concave CFMM output ⇒ not Dark ⇒ Shielded, CertRoute.
+        let c = compile(&products::cfmm_routing()).unwrap();
+        assert_eq!(c.tier, Tier::Shielded);
+        assert_eq!(c.cert, CertKind::CertRoute);
+        assert!(matches!(c.program, ConvexProgram::CfmmRouting(_)));
+    }
+
+    #[test]
+    fn welfare_max_claiming_dark_is_rejected() {
+        let err = compile(&products::welfare_max_claiming_dark()).unwrap_err();
+        match err {
+            TypeError::OverClaimsTier {
+                claimed,
+                honest,
+                because,
+            } => {
+                assert_eq!(claimed, Tier::Dark);
+                assert_eq!(honest, Tier::Shielded);
+                assert!(matches!(*because, TypeError::EntropicObjective { .. }));
+            }
+            other => panic!("expected over-claim/entropic-objective, got {other:?}"),
+        }
     }
 }

@@ -10,7 +10,10 @@
 
 use crate::compile::{Compiled, ConvexProgram};
 use fhegg_solver::cert::{CertF, CertReport};
+use fhegg_solver::cfmm::{solve_waterfill, CertRoute, CertRouteReport};
 use fhegg_solver::clearing::{allocate, clear, Allocation, Clearing};
+use fhegg_solver::discriminatory::{clear_discriminatory, DiscriminatoryClearing};
+use fhegg_solver::fisher::{solve_proportional_response, CertEq, CertEqReport};
 use fhegg_solver::pdhg::solve_cpu;
 use fhegg_solver::qp::{solve_admm, CertQp, CertQpReport};
 
@@ -28,6 +31,20 @@ pub enum RunOutcome {
     CertF { cert: CertF, report: CertReport },
     /// QP: the CertQp KKT-residual certificate + its check report.
     CertQp { cert: CertQp, report: CertQpReport },
+    /// Discriminatory / pay-as-bid: the winner-determination Cert-F certificate +
+    /// the clearing (fills + both settlement schemes).
+    Discriminatory {
+        cert: CertF,
+        report: CertReport,
+        clearing: DiscriminatoryClearing,
+    },
+    /// Welfare-max / Fisher: the equilibrium CertEq certificate + its report.
+    CertEq { cert: CertEq, report: CertEqReport },
+    /// CFMM routing: the CertRoute certificate + its report.
+    CertRoute {
+        cert: CertRoute,
+        report: CertRouteReport,
+    },
     /// The program's runner is the fhIR-1 lane (Price-Cert). The shape compiled;
     /// the engine builder is future work — stated plainly, not faked.
     NotWired { reason: &'static str },
@@ -42,6 +59,9 @@ impl RunOutcome {
             RunOutcome::Aggregation { allocation, .. } => Some(allocation.conserves()),
             RunOutcome::CertF { report, .. } => Some(report.valid),
             RunOutcome::CertQp { report, .. } => Some(report.valid),
+            RunOutcome::Discriminatory { report, .. } => Some(report.valid),
+            RunOutcome::CertEq { report, .. } => Some(report.valid),
+            RunOutcome::CertRoute { report, .. } => Some(report.valid),
             RunOutcome::NotWired { .. } => None,
         }
     }
@@ -68,6 +88,36 @@ impl RunOutcome {
             RunOutcome::CertQp { report, cert } => format!(
                 "CertQp: valid={} prim_res={:.3e} dual_res={:.3e} (ε={:.1e}) objective={:.4}",
                 report.valid, report.prim_res, report.dual_res, cert.epsilon, cert.objective,
+            ),
+            RunOutcome::Discriminatory {
+                report, clearing, ..
+            } => format!(
+                "pay-as-bid: valid={} V*={:.2} marginal_p*={:.3} | pay-as-bid buyer_pays={:.2} surplus={:.2} vs uniform buyer_pays={:.2} surplus=0",
+                report.valid,
+                clearing.volume,
+                clearing.marginal_price,
+                clearing.payg_buyer_pays,
+                clearing.discriminatory_surplus,
+                clearing.uniform_buyer_pays,
+            ),
+            RunOutcome::CertEq { report, cert } => format!(
+                "Fisher-eq: valid={} stationary={} buyer_cs={:.3e} clearing_cs={:.3e} EG_obj={:.4} (n={} buyers, {} goods)",
+                report.valid,
+                report.stationary,
+                report.buyer_cs,
+                report.clearing_cs,
+                cert.eg_objective,
+                cert.n_buyers,
+                cert.n_goods,
+            ),
+            RunOutcome::CertRoute { report, cert } => format!(
+                "CFMM-route: valid={} routing_cs={:.3e} budget_cs={:.3e} λ={:.4} output={:.4} (N={} pools)",
+                report.valid,
+                report.routing_cs,
+                report.budget_cs,
+                cert.lambda,
+                cert.total_output,
+                cert.pools.len(),
             ),
             RunOutcome::NotWired { reason } => format!("not-wired: {reason}"),
         }
@@ -98,6 +148,27 @@ pub fn run(compiled: &Compiled) -> RunOutcome {
             let cert = CertQp::from_solution(prob, &res, 1e-3);
             let report = cert.check();
             RunOutcome::CertQp { cert, report }
+        }
+        ConvexProgram::Discriminatory { orders, prices } => {
+            let (clearing, cert) = clear_discriminatory(orders, prices, 8000);
+            let report = cert.check();
+            RunOutcome::Discriminatory {
+                cert,
+                report,
+                clearing,
+            }
+        }
+        ConvexProgram::WelfareMax(market) => {
+            let res = solve_proportional_response(market, 20_000);
+            let cert = res.certificate(market, 1e-4);
+            let report = cert.check();
+            RunOutcome::CertEq { cert, report }
+        }
+        ConvexProgram::CfmmRouting(prob) => {
+            let res = solve_waterfill(prob, 100);
+            let cert = res.certificate(prob, 1e-6);
+            let report = cert.check();
+            RunOutcome::CertRoute { cert, report }
         }
         ConvexProgram::StatePriceLp { .. } => RunOutcome::NotWired {
             reason:
@@ -152,5 +223,39 @@ mod tests {
         let out = run(&c);
         assert_eq!(out.certificate_valid(), None);
         assert!(matches!(out, RunOutcome::NotWired { .. }));
+    }
+
+    #[test]
+    fn discriminatory_runs_and_certifies() {
+        let c = compile(&products::discriminatory_clearing()).unwrap();
+        let out = run(&c);
+        assert_eq!(out.certificate_valid(), Some(true), "{}", out.summary());
+        if let RunOutcome::Discriminatory { clearing, .. } = &out {
+            assert!(clearing.volume > 0.0, "an overlapping book must trade");
+            // Pay-as-bid extracts more than uniform-price (auctioneer surplus > 0).
+            assert!(
+                clearing.discriminatory_surplus > 1e-6,
+                "pay-as-bid surplus must be positive: {}",
+                clearing.discriminatory_surplus
+            );
+        } else {
+            panic!("expected discriminatory outcome");
+        }
+    }
+
+    #[test]
+    fn welfare_max_runs_and_certifies() {
+        let c = compile(&products::welfare_max_fisher()).unwrap();
+        let out = run(&c);
+        assert_eq!(out.certificate_valid(), Some(true), "{}", out.summary());
+        assert!(matches!(out, RunOutcome::CertEq { .. }));
+    }
+
+    #[test]
+    fn cfmm_routing_runs_and_certifies() {
+        let c = compile(&products::cfmm_routing()).unwrap();
+        let out = run(&c);
+        assert_eq!(out.certificate_valid(), Some(true), "{}", out.summary());
+        assert!(matches!(out, RunOutcome::CertRoute { .. }));
     }
 }

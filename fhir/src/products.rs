@@ -6,7 +6,7 @@
 //! Each demonstrates the compiler reporting the right tier
 //! (`DREGGFI-PRIVACY-TIERS.md` §3 mapping table).
 
-use crate::ast::{EdgeSpec, MatrixData, OrderSpec, Product, ProductBody};
+use crate::ast::{EdgeSpec, MatrixData, OrderSpec, PoolSpec, Product, ProductBody};
 use crate::tier::Tier;
 
 /// A diagonal-dominant PSD covariance (public structure for the test), n×n.
@@ -164,6 +164,89 @@ pub fn derivative_price_cert() -> Product {
     )
 }
 
+// ---------------------------------------------------------------------------
+// The mechanism FAMILY — three more real clearing mechanisms on the one engine.
+// ---------------------------------------------------------------------------
+
+/// **Discriminatory / pay-as-bid call auction** — Tier 0 DARK, CertF. The SAME
+/// book form as the uniform-price auction, cleared differently: the efficient
+/// fill is a gains-from-trade flow-LP (a linear Cert-F winner-determination) and
+/// each winner settles at its OWN limit. Small book ⇒ inside the FHE envelope ⇒
+/// Dark, with the linear Cert-F certificate.
+pub fn discriminatory_clearing() -> Product {
+    let orders = vec![
+        OrderSpec::bid(100, 8),
+        OrderSpec::bid(60, 7),
+        OrderSpec::ask(90, 2),
+        OrderSpec::ask(50, 3),
+    ];
+    Product::infer(
+        "discriminatory-pay-as-bid-auction",
+        ProductBody::Discriminatory { orders, k: 10 },
+    )
+}
+
+/// **Welfare-max / Fisher-market equilibrium** — Tier 1 SHIELDED, CertEq. The
+/// marquee: the Eisenberg–Gale convex program `max Σ bᵢ log Uᵢ s.t. supply`, the
+/// general competitive clearing. The `log` objective is concave (entropic prox),
+/// outside the FHE v0 affine core, so the honest tier is Shielded — a bilinear
+/// equilibrium certificate `(x, prices)`. Uniform-price is the linear-utility,
+/// single-good special case of THIS.
+pub fn welfare_max_fisher() -> Product {
+    // 4 buyers, 3 goods; buyer i favours good (i mod 3) but values all goods.
+    let n = 4;
+    let g = 3;
+    let mut util = vec![0.0f64; n * g];
+    for i in 0..n {
+        for j in 0..g {
+            let base = 1.0 + ((i + 2 * j) % 5) as f64 * 0.5;
+            let favour = if j == i % g { 3.0 } else { 0.0 };
+            util[i * g + j] = base + favour;
+        }
+    }
+    Product::infer(
+        "welfare-max-fisher-equilibrium",
+        ProductBody::WelfareMax {
+            n_buyers: n,
+            n_goods: g,
+            budgets: (0..n).map(|i| 1.0 + (i % 3) as f64).collect(),
+            supplies: vec![1.0; g],
+            util: MatrixData::public(n, g, util),
+        },
+    )
+}
+
+/// **CFMM optimal routing** — Tier 1 SHIELDED, CertRoute. Split a fixed private
+/// input across PUBLIC constant-product pool curves to maximise output. The
+/// rational-concave output is a nonlinear objective (water-filling on the
+/// marginal price), so the honest tier is Shielded — a KKT routing certificate
+/// `(δ, λ)`. Public pool curves, private routing.
+pub fn cfmm_routing() -> Product {
+    let pools = (0..4)
+        .map(|i| PoolSpec {
+            reserve_in: 1000.0 * (1.0 + i as f64 * 0.5),
+            reserve_out: 1000.0 * (1.0 + ((i + 2) % 4) as f64 * 0.4),
+            fee: 0.997,
+        })
+        .collect();
+    Product::infer(
+        "cfmm-optimal-routing",
+        ProductBody::CfmmRouting {
+            pools,
+            budget: 500.0,
+        },
+    )
+}
+
+/// **REJECTION — welfare-max claiming Tier 0.** The Eisenberg–Gale `log` objective
+/// is concave-nonlinear (entropic prox = exp/log), outside the FHE v0 affine
+/// core. Claiming Dark over-claims privacy → rejected with `EntropicObjective`.
+/// Its honest tier is Shielded (the STARK carries the mirror-descent circuit).
+pub fn welfare_max_claiming_dark() -> Product {
+    let base = welfare_max_fisher();
+    Product::claiming("welfare-max-OVERCLAIM", base.body, Tier::Dark)
+}
+
 /// Every fhIR-0 example, in demo order.
 pub fn all() -> Vec<Product> {
     vec![
@@ -172,7 +255,11 @@ pub fn all() -> Vec<Product> {
         flow_lp_clearing(),
         portfolio_qp_public(),
         derivative_price_cert(),
+        discriminatory_clearing(),
+        welfare_max_fisher(),
+        cfmm_routing(),
         portfolio_qp_private_claiming_dark(),
         all_or_none_claiming_shielded(),
+        welfare_max_claiming_dark(),
     ]
 }

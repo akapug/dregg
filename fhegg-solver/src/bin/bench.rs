@@ -10,7 +10,10 @@
 
 use fhegg_solver::air::ConstraintSystem;
 use fhegg_solver::cert::CertF;
+use fhegg_solver::cfmm::{sample_pools, solve_waterfill, RoutingProblem};
 use fhegg_solver::clearing::{allocate, clear, crossing, scan_curves, Order, Side};
+use fhegg_solver::discriminatory::clear_discriminatory;
+use fhegg_solver::fisher::{sample_market, solve_proportional_response};
 use fhegg_solver::gpu::GpuContext;
 use fhegg_solver::pdhg::{
     cycle_lp, cycle_optimum, restore_feasibility, solve_cpu, solve_cpu_exact, solve_cpu_par, FlowLp,
@@ -387,6 +390,117 @@ fn bench_qp() {
     );
 }
 
+/// The mechanism FAMILY: welfare-max (Fisher / Eisenberg–Gale), discriminatory
+/// (pay-as-bid), and CFMM routing — each a convex program + certificate on the
+/// one engine. Real runs, real latency, honest tier per row.
+fn bench_family() {
+    println!("\n=== THE MECHANISM FAMILY (each a convex program + certificate) ===");
+
+    // --- Welfare-max / Fisher-market equilibrium (Eisenberg–Gale, Tier-1). ---
+    println!("\n  [welfare-max / Fisher-market equilibrium — CertEq, Tier-1 (concave log)]");
+    println!(
+        "  {:>7} {:>7} {:>7} {:>12} {:>12} {:>12} {:>8}",
+        "buyers", "goods", "T", "solve (ms)", "buyer_cs", "clearing_cs", "valid"
+    );
+    for &(n, g) in &[(8usize, 5usize), (32, 16), (128, 32)] {
+        let m = sample_market(n, g);
+        let t = 20_000usize;
+        let solve_s = best_of(3, || {
+            let r = solve_proportional_response(&m, t);
+            std::hint::black_box(r.eg_objective);
+        });
+        let res = solve_proportional_response(&m, t);
+        let cert = res.certificate(&m, 1e-4);
+        let rep = cert.check();
+        println!(
+            "  {:>7} {:>7} {:>7} {:>12.2} {:>12.2e} {:>12.2e} {:>8}",
+            n,
+            g,
+            t,
+            solve_s * 1e3,
+            rep.buyer_cs,
+            rep.clearing_cs,
+            rep.valid
+        );
+    }
+    println!(
+        "    (proportional-response = mirror descent / entropic prox; the bilinear O(n·g)\n     \
+         KKT certificate (βᵢuᵢⱼ, xᵢⱼpⱼ) decides — the *true generalization of fhEgg*.)"
+    );
+
+    // --- Discriminatory / pay-as-bid (winner-determination flow-LP, Cert-F). ---
+    println!("\n  [discriminatory / pay-as-bid — Cert-F winner-determination + own-price settle]");
+    println!(
+        "  {:>8} {:>8} {:>12} {:>10} {:>14} {:>14} {:>7}",
+        "orders", "T", "clear (ms)", "V*", "payg buyer", "unif buyer", "valid"
+    );
+    for &n in &[16usize, 128, 512] {
+        let orders = gen_orders(n, 64, 0xBEEF5 ^ n as u64);
+        let prices: Vec<f64> = (0..64).map(|j| j as f64).collect();
+        let t = 8000usize;
+        let clear_s = best_of(3, || {
+            let (_c, _cert) = clear_discriminatory(&orders, &prices, t);
+        });
+        let (clr, cert) = clear_discriminatory(&orders, &prices, t);
+        println!(
+            "  {:>8} {:>8} {:>12.2} {:>10.0} {:>14.1} {:>14.1} {:>7}",
+            n,
+            t,
+            clear_s * 1e3,
+            clr.volume,
+            clr.payg_buyer_pays,
+            clr.uniform_buyer_pays,
+            cert.check().valid
+        );
+    }
+    println!(
+        "    (same book as uniform-price; winner-determination is the linear Cert-F flow-LP,\n     \
+         then each winner pays its OWN bid — pay-as-bid buyers pay MORE than one clearing price.)"
+    );
+
+    // --- CFMM optimal routing (water-filling KKT, CertRoute, Tier-1). ---
+    println!("\n  [CFMM optimal routing — CertRoute, Tier-1 (rational-concave output)]");
+    println!(
+        "  {:>7} {:>7} {:>12} {:>12} {:>12} {:>12} {:>7}",
+        "pools", "T-bis", "route (µs)", "λ", "output", "routing_cs", "valid"
+    );
+    for &n in &[4usize, 32, 256] {
+        let prob = RoutingProblem {
+            pools: sample_pools(n),
+            budget: 100.0 * n as f64,
+        };
+        let t = 100usize;
+        let route_s = best_of(20, || {
+            let r = solve_waterfill(&prob, t);
+            std::hint::black_box(r.total_output);
+        });
+        let res = solve_waterfill(&prob, t);
+        let cert = res.certificate(&prob, 1e-6);
+        let rep = cert.check();
+        println!(
+            "  {:>7} {:>7} {:>12.2} {:>12.4} {:>12.2} {:>12.2e} {:>7}",
+            n,
+            t,
+            route_s * 1e6,
+            res.lambda,
+            res.total_output,
+            rep.routing_cs,
+            rep.valid
+        );
+    }
+    println!(
+        "    (T-bisection steps on the marginal price λ, closed-form per-pool inverse; the\n     \
+         nonlinear O(N) KKT certificate (g'ᵢ ≤ λ, CS) decides. Public pools, private routing.)"
+    );
+
+    println!(
+        "\n  FAMILY: uniform-price (Aggregation, T0) · circulation (Cert-F, T0/T1) · \
+         discriminatory (Cert-F, T0/T1)\n          welfare-max/Fisher (CertEq, T1) · \
+         CFMM routing (CertRoute, T1) · portfolio QP (CertQp, T1)\n  \
+         — one engine, verify-not-find: each is a convex program checked by ITS certificate."
+    );
+}
+
 fn demonstrate_certificate() {
     println!("\n=== Cert-F CERTIFICATE OUTPUT (bridge to the Lean checker) ===");
     // A known-optimum triangle: caps [5,3,7], w=1 → optimum = 3*3 = 9.
@@ -462,5 +576,6 @@ fn main() {
     bench_frontier(&gpu);
     bench_exactness();
     bench_qp();
+    bench_family();
     demonstrate_certificate();
 }
