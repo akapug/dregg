@@ -31,6 +31,14 @@ dregg-cell = { path = "../cell" }
 # The verified allocator (Schema -> allocate -> CheckedLayout, the RotatedLayout Legal
 # discipline) whose Legal slot/heap layout we consume for the register + collection state.
 dregg-schema = { path = "../dregg-schema" }
+# --- Phase 2: the zk HIDDEN-HAND. ---
+# The Poseidon2 4-ary Merkle primitives (`field::BabyBear`, `poseidon2::hash_4_to_1`,
+# `merkle_types::compute_parent_poseidon2` + `MerkleAir`) — the SAME 4-ary Poseidon2
+# recurrence the real `MerkleMembership` STARK (`turn::executor::membership_verifier`)
+# commits to, so the executor-checked hidden-hand membership tooth lines up with the
+# Phase-3 fold's `MerkleAir`. Already a transitive workspace dep (app-framework); no new
+# heavy compile. Consumed, never modified.
+dregg-circuit = { path = "../circuit" }
 # THE REAL WorldCell — the deployed executor + ledger the game deploys onto.
 spween-dregg = { path = "../spween-dregg" }
 

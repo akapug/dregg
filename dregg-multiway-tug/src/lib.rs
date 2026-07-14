@@ -55,11 +55,16 @@
 //! goes beyond the five archetypes.
 
 pub mod game;
+pub mod hidden_hand;
 pub mod packs;
 pub mod reference;
 pub mod state;
 
 pub use game::MultiwayTug;
+pub use hidden_hand::{
+    BlindPick, BlindPickError, HandMembershipVerifier, HandTree, HiddenHandLedger, PathLevel,
+    PickPhase, PlayProof, check_play, membership_program, membership_registry,
+};
 pub use packs::{
     CardDraw, CardItem, CardRarity, CardVault, Pack, PackError, reverify_pack, roll_pack,
 };
