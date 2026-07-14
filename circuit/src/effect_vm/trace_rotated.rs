@@ -5919,24 +5919,28 @@ pub fn generate_rotated_effect_vm_descriptor_and_trace_wide(
             desc.name, desc.trace_width, row_width
         )
     })?;
-    // THE GENTIAN REFUSE-WELD EXCLUSION. The flag-day welds `REFUSE_WELD_WIDEN` (= 45) gate-internal
-    // aux columns (the per-tag floor-refuse decode witnesses: bit/inv/OR/floor) onto every deployed
-    // BARE cohort member's `trace_width`. Those columns are NOT producer-emitted exposure teeth —
-    // they carry no claim PI, they are the floor-refuse GATE, filled from the zero-resized headroom by
+    // THE GENTIAN REFUSE-WELD EXCLUSION. The flag-day welds the per-tag floor-refuse decode
+    // witnesses (bit/inv/OR/floor) onto every deployed BARE cohort member's `trace_width`. Those
+    // columns are NOT producer-emitted exposure teeth — they carry no claim PI, they are the
+    // floor-refuse GATE, filled from the zero-resized headroom by
     // `bare_floor_refuse_weld::fill_refuse_aux` at prove time (`descriptor_ir2` build, after
     // `fill_chip_lanes`). So they must NOT enter the exposure 1:1 pairing: subtract them from the
-    // teeth-column tail before matching it against the claim-PI tail. (Without this the honest wide
-    // full-turn fails to prove — 2 claim PIs vs 47 teeth cols — while the narrow decode still bites.)
-    // The subtracted count is the WELD FOOTPRINT (`floor_col(last)+1 − base` = 45), NOT the naive
-    // `3·REFUSE_STRIDE` (= 48): the last block's stride tail (3 cols past its floor) is never
-    // allocated. The heterogeneous rework (`5e84c5dd4`) moved the widening from 48 to `base+45` per
-    // member but left this exclusion at the stale 48 — `raw_col_tail` (47) then underflowed 48 and
-    // blocked every wide mint; 45 restores `col_tail = 2 = pi_tail` (the membership teeth pair).
+    // teeth-column tail before matching it against the claim-PI tail.
+    //
+    // The widen is HETEROGENEOUS across the post-GAP-1-6 cohort, so it MUST be derived PER-MEMBER
+    // from the descriptor's own committed floor-refuse gates (`refuse_weld_widen` = `trace_width −
+    // aux_base`), never a fixed constant. The two avail-hardened members (transfer/burn) ride the
+    // refuse block at the very top of the trace → widen 45; the other 34 members carry a 3-column
+    // dead stride-tail above the block → widen 48. A fixed `REFUSE_WELD_WIDEN` (45) is correct only
+    // for the avail members: it underflowed the tail for teeth-less members like IncrementNonce
+    // (raw_col_tail 48 − 45 = 3 ≠ 0 = pi_tail → "tail mismatch"). The per-member widen restores
+    // `col_tail = pi_tail` for every member (48 − 48 = 0 for IncrementNonce; 47 − 45 = 2 for the
+    // Transfer membership-teeth pair).
     let refuse_aux_cols = if desc
         .name
         .contains(bare_floor_refuse_weld::REFUSE_WELD_SUFFIX)
     {
-        bare_floor_refuse_weld::REFUSE_WELD_WIDEN
+        bare_floor_refuse_weld::refuse_weld_widen(&desc)
     } else {
         0
     };

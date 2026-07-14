@@ -494,6 +494,144 @@ fn wide_transfer_membership_leg_mints_through_refuse_weld() {
     );
 }
 
+/// **THE FRESH-FOLD LEAF, BOTH POST-GAP-1-6 TURN BODIES.** The VK-epoch producer reconciliation:
+/// a fresh full-turn leaf MINTS + PROVES + light-client VERIFIES through the FULL wide dispatcher
+/// (the node's `prove_pool` route via `mint_rotated_participant_leg`) for BOTH representative bodies
+/// on the regenerated deployed descriptors —
+///   * **IncrementNonce** (`incrementNonceVmDescriptor2R24`, wide 2655 / 66 PIs, `pi_tail == 0`): the
+///     teeth-less member whose refuse-weld widen is 48 (a 3-column dead stride-tail rides above the
+///     decode block). The stale fixed exclusion (45) left `col_tail = 3 ≠ 0 = pi_tail` → "tail
+///     mismatch"; the per-member `refuse_weld_widen` (= `trace_width − aux_base` = 48) restores
+///     `col_tail = 0 = pi_tail` so the leg dispatches, then proves.
+///   * **Transfer** (avail-hardened `transferVmDescriptor2R24`, wide 2664 / 68 PIs): the member whose
+///     AAFI/avail epoch left the 15-bit borrow-limb range table (wire id 84 = `rangeTidW 15`)
+///     un-declared in `tables`; the IR-v2 realizer now decodes its width from the committed tid and
+///     realizes the byte-limb range relation, so the full prove no longer fails "custom table id 84
+///     has no realized relation".
+/// Together this is the whole make-it-real leaf: a fresh leaf proof exists for a teeth-less body AND
+/// the avail transfer body on the post-flip descriptors.
+#[test]
+fn fresh_fold_leaf_mints_and_proves_both_bodies() {
+    // --- Body 1: IncrementNonce (teeth-less, widen 48). ---
+    {
+        let st = CellState::new(100_000, 0);
+        let effects = vec![Effect::IncrementNonce];
+        let before_cell = producer_cell(100_000, 0);
+        let after_cell = producer_cell(100_000, 1);
+        let mut ledger = Ledger::new();
+        ledger.insert_cell(after_cell.clone()).unwrap();
+        let nr = dregg_circuit::heap_root::empty_heap_root_8();
+        let cr = dregg_circuit::heap_root::empty_heap_root_8();
+        let receipt_log: Vec<[u8; 32]> = vec![[3u8; 32]];
+        let before_w = rw::produce(
+            &before_cell,
+            &ledger,
+            &nr,
+            &cr,
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
+            &receipt_log,
+            &Default::default(),
+        );
+        let after_w = rw::produce(
+            &after_cell,
+            &ledger,
+            &nr,
+            &cr,
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
+            &receipt_log,
+            &Default::default(),
+        );
+        let (desc, trace, dpis, map_heaps, mb) =
+            generate_rotated_effect_vm_descriptor_and_trace_wide(
+                &st,
+                &effects,
+                &bridge(&before_w),
+                &bridge(&after_w),
+                &empty_caveat_manifest(),
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect(
+                "IncrementNonce fresh leaf MUST dispatch (the per-member refuse widen 48 pairs \
+                 raw_col_tail 48 − 48 = 0 = pi_tail; the stale fixed 45 gave 3 ≠ 0)",
+            );
+        assert!(desc.name.contains("incrementNonce"));
+        assert_eq!(desc.trace_width, 2655, "wide incrementNonce width");
+        assert_eq!(desc.public_input_count, 66);
+        assert_eq!(dpis.len(), desc.public_input_count);
+        let proof = prove_vm_descriptor2(&desc, &trace, &dpis, &mb, &map_heaps)
+            .unwrap_or_else(|e| panic!("IncrementNonce fresh leaf must PROVE: {e}"));
+        verify_vm_descriptor2(&desc, &proof, &dpis)
+            .unwrap_or_else(|e| panic!("IncrementNonce fresh leaf must VERIFY: {e}"));
+        eprintln!("FRESH LEAF IncrementNonce: dispatch (widen 48) + PROVE + VERIFY.");
+    }
+
+    // --- Body 2: Transfer (avail-hardened, realizes custom range table 84). ---
+    {
+        let before_balance: i64 = 100_000;
+        let amount: u64 = 50;
+        let st = CellState::new(before_balance as u64, 0);
+        let effects = vec![Effect::Transfer {
+            amount,
+            direction: 1,
+        }];
+        let before_cell = producer_cell(before_balance, 0);
+        let after_cell = producer_cell(before_balance - amount as i64, 1);
+        let mut ledger = Ledger::new();
+        ledger.insert_cell(after_cell.clone()).unwrap();
+        let nr = dregg_circuit::heap_root::empty_heap_root_8();
+        let cr = dregg_circuit::heap_root::empty_heap_root_8();
+        let receipt_log: Vec<[u8; 32]> = vec![[5u8; 32], [6u8; 32]];
+        let before_w = rw::produce(
+            &before_cell,
+            &ledger,
+            &nr,
+            &cr,
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
+            &receipt_log,
+            &Default::default(),
+        );
+        let after_w = rw::produce(
+            &after_cell,
+            &ledger,
+            &nr,
+            &cr,
+            &dregg_turn::rotation_witness::empty_revoked_root_8(),
+            &receipt_log,
+            &Default::default(),
+        );
+        let membership_teeth = (BabyBear::new(0xA11CE), BabyBear::new(0xF00D));
+        let (desc, trace, dpis, map_heaps, mb) =
+            generate_rotated_effect_vm_descriptor_and_trace_wide(
+                &st,
+                &effects,
+                &bridge(&before_w),
+                &bridge(&after_w),
+                &transfer_caveat_manifest(),
+                None,
+                None,
+                None,
+                Some(membership_teeth),
+            )
+            .expect("Transfer avail fresh leaf MUST dispatch (widen 45 + 2 teeth)");
+        assert!(desc.name.contains("transfer-v1-avail"));
+        assert_eq!(desc.trace_width, 2664, "wide avail transfer width");
+        assert_eq!(desc.public_input_count, 68);
+        assert_eq!(dpis.len(), desc.public_input_count);
+        let proof =
+            prove_vm_descriptor2(&desc, &trace, &dpis, &mb, &map_heaps).unwrap_or_else(|e| {
+                panic!("Transfer avail fresh leaf must PROVE (custom range table 84 realized): {e}")
+            });
+        verify_vm_descriptor2(&desc, &proof, &dpis)
+            .unwrap_or_else(|e| panic!("Transfer avail fresh leaf must VERIFY: {e}"));
+        eprintln!(
+            "FRESH LEAF Transfer(avail): dispatch + PROVE + VERIFY (table 84 = 15-bit range)."
+        );
+    }
+}
+
 /// **THE GEOMETRY VERSION BOUNDARY, POSITIVE ARM** — every committed wide member (the bare
 /// wide registry AND the welded registry) rides the LIVE v2 wide-carrier geometry: the
 /// structural detector measures its BEFORE→AFTER commit-carrier block span as 480 (60

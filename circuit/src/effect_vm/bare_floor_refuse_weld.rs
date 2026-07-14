@@ -274,6 +274,23 @@ fn refuse_aux_base(desc: &crate::descriptor_ir2::EffectVmDescriptor2) -> usize {
     }
 }
 
+/// **THE ACTUAL PER-MEMBER REFUSE-WELD WIDEN** — the number of aux columns the gentian flag-day
+/// welded onto THIS member's `trace_width`, recovered from its own committed floor-refuse gates.
+/// Equals `trace_width − aux_base`: the WHOLE span from the recovered refuse-block base up to the
+/// top of the trace — the three decode+refuse blocks PLUS any dead stride-tail the emit left above
+/// them. This span carries no producer exposure teeth (the teeth ride BELOW `aux_base`, appended at
+/// the producer's row width), so it is exactly the count the wide producer's teeth-column exclusion
+/// must subtract from `raw_col_tail` before pairing it 1:1 with the claim-PI tail.
+///
+/// The widen is HETEROGENEOUS across the deployed cohort — the fixed [`REFUSE_WELD_WIDEN`] (= 45,
+/// the block span alone with the last stride-tail unallocated) is correct ONLY for the members whose
+/// refuse block sits at the very top of the trace (the two avail-hardened transfer/burn members);
+/// the other 34 members carry a 3-column dead stride-tail above the block, so their real widen is 48.
+/// Deriving it per-member from `aux_base` lands right for BOTH geometries (and any future one).
+pub fn refuse_weld_widen(desc: &crate::descriptor_ir2::EffectVmDescriptor2) -> usize {
+    desc.trace_width.saturating_sub(refuse_aux_base(desc))
+}
+
 /// Recover the four caveat TYPE-TAG columns the refuse decode reads, from the descriptor's OWN
 /// committed is-zero DEF gates (`b_k + (tag_k − T)·inv_k − 1 == 0`) of block 0. The tag columns
 /// are a function of the member's geometry — the bare cohort reads the fixed

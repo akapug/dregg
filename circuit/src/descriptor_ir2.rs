@@ -258,6 +258,20 @@ pub const TID_UMEMORY: usize = 6;
 /// with their init/final `Option` images).
 pub const TID_UMEM_BOUNDARY: usize = 7;
 
+/// **THE WIDTH-TAGGED CUSTOM RANGE-TABLE WIRE BASE.** The multi-width graduation (Lean
+/// `EffectVmEmitV2.rangeTidW`) lowers every non-30-bit range tooth into a WIDTH-TAGGED custom
+/// range table: `rangeTidW bits = .custom (RANGE_W_TID_BASE + bits)` with `RANGE_W_TID_BASE = 64`,
+/// and a `.custom n` table serializes to wire id `n + TID_CUSTOM_SUBMASK` (SUBMASK = `.custom 0`).
+/// So a `bits`-wide table rides wire id `64 + bits + TID_CUSTOM_SUBMASK`. The deployed
+/// availability-weld descriptors carry the 15-bit borrow-limb table as wire id `64 + 15 + 5 = 84`.
+pub const RANGE_W_TID_WIRE_BASE: usize = 64 + TID_CUSTOM_SUBMASK; // 69
+
+/// The non-`BAL_LIMB_BITS` range widths the wide graduation admits (Lean `WIDE_RANGE_WIDTHS ∖
+/// {BAL_LIMB_BITS}`): the availability weld's 15-bit borrow limbs. A `.custom` range wire id whose
+/// decoded width (`tid − RANGE_W_TID_WIRE_BASE`) is not one of these is NOT a range table — the
+/// caller fails closed on it (an unrealized custom table, exactly as before).
+pub const CUSTOM_RANGE_WIDTHS: [usize; 1] = [15];
+
 /// The nullifier domain's wire code (`DescriptorIR2.domainCode .nullifiers`). The universal
 /// memory table enforces the INSERT-ONLY discipline on this domain in-circuit (a write
 /// installing `none` is refused), which is what turns a `none` read into the proved
@@ -1208,18 +1222,30 @@ impl MainLayout {
     fn build(desc: &EffectVmDescriptor2) -> Result<Self, String> {
         // Resolve a lookup's target table to a declared range width. The shared 30-bit table
         // rides the stable wire id `TID_RANGE`; the MULTI-WIDTH graduation (`graduateV1Wide`,
-        // Lean `rangeTidW b`) declares each non-30-bit width as a width-tagged CUSTOM range
-        // table (e.g. the availability-weld's 15-bit borrow-limb table `.custom 79` = wire
-        // id 84). Any declared table whose row semantics are `Range { bits }` realizes the
-        // SAME byte-limb decomposition at ITS OWN width.
+        // Lean `rangeTidW b`) lowers each non-30-bit width into a width-tagged CUSTOM range
+        // table (the availability-weld's 15-bit borrow-limb table `.custom 79` = wire id 84).
+        // Any declared table whose row semantics are `Range { bits }` realizes the SAME byte-limb
+        // decomposition at ITS OWN width. The deployed avail-weld descriptors carry the 15-bit
+        // borrow table as a LOOKUP without a matching `tables` entry (the Lean `graduateV1Wide`
+        // declares it, but the deployed rows omit the declaration); recover its width from the
+        // committed wire id (`bits = tid − RANGE_W_TID_WIRE_BASE`, the inverse of `rangeTidW`) and
+        // realize the identical byte-limb range relation. The width is PINNED by the committed
+        // tid — a forger cannot loosen the 15-bit bound without changing the descriptor bytes
+        // (⟹ a different VK) — so this is the exact `rangeRows 15` relation, not a laundered gate.
         let range_bits_for = |tid: usize| -> Option<usize> {
-            desc.tables
+            if let Some(bits) = desc
+                .tables
                 .iter()
                 .find(|t| t.id == tid)
                 .and_then(|t| match t.sem {
                     TableSem::Range { bits } => Some(bits),
                     _ => None,
                 })
+            {
+                return Some(bits);
+            }
+            tid.checked_sub(RANGE_W_TID_WIRE_BASE)
+                .filter(|bits| CUSTOM_RANGE_WIDTHS.contains(bits))
         };
         let mut next = desc.trace_width;
         let mut ranges = Vec::new();
