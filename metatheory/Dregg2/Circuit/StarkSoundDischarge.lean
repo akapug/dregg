@@ -25,8 +25,8 @@ open Dregg2.Circuit.FriVerifierBridge
 /-- **`DeployedRefines` DISCHARGED for the reduced `verifyBatch`.** `verifyBatch` acceptance FORCES
 `verifyAlgo` acceptance on the mapped data — because `verifyBatch` IS
 `verifyAlgoUnified … (cfgView pi π) && cfgExtra …`, an `accept` occurs only when `verifyAlgoUnified` returned
-`true`, and `verifyAlgoTB` is a strengthening of `verifyAlgo`
-(`FriTranscriptBind.verifyAlgoTB_imp_verifyAlgo`). Pure unfold + composition; no opaque appeal, no
+`true`, and `verifyAlgoUnified` is a strengthening of `verifyAlgo`
+(`FriChallengerUnified.verifyAlgoUnified_imp_verifyAlgo`). Pure unfold + composition; no opaque appeal, no
 carried hypothesis. -/
 theorem deployedRefines_cfg (R : Registry) :
     DeployedRefines R cfgPerm cfgRATE cfgToNat cfgParams cfgVk cfgChecks cfgInitState cfgLogN cfgView := by
