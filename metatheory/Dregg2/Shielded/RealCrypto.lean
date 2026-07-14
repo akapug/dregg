@@ -34,12 +34,27 @@ honest floors NAMED (not laundered):
     real primitives, each conditioned on its honest floor (DLog binding / Poseidon2 CR).
 
 ## HONEST GRADE
-The conservation ALGEBRA (`commit_hom`/`map_sum`) and the root-binding REDUCTION (CR ⇒ injective)
-are unconditional Lean. The residual crypto is exactly the two named floors — `binding` (DLog) and
-`Poseidon2SpongeCR` (Poseidon2 CR) — carried as `Prop`s, the same primitives the rest of the tree
-stands on. NOT unconditional: a Pedersen commitment's binding IS discrete-log; the tree's
-root-binding IS the sponge CR. The point of this module is that the model now uses the REAL
-Pedersen/Poseidon2 STRUCTURE with those floors named — not a `Nat`-additive / linear-rolling toy.
+The conservation ALGEBRA (`commit_hom`/`map_sum`), the no-wrap range REDUCTION (`twoLeg_noWrap_…`),
+the value-binding CR REDUCTION (§1.3: CR ⇒ injective on `(value, asset)`), and the tree root-binding
+REDUCTION (§2: CR ⇒ injective) are all unconditional Lean.
+
+## §PQ CUTOVER (`docs/deos/PQ-SHIELDED-COMMITMENT.md`, Option A) — the value-binding floor MOVED.
+The AUTHORITATIVE shielded value-binding is no longer the DLog Pedersen: it is the in-AIR Poseidon2
+`value_binding = hash_fact(value, [asset_type, randomness, 0])`, binding `(value, asset_type)` jointly
+under `HashCR` (§1.3, `ValueBindingCommit.binds_value_and_asset` / `mint_forces_collision`) — a
+QUANTUM-SAFE floor. The no-mint (conservation + no-wrap range) is the fully-in-AIR STARK gate
+(`Poseidon2ChipArithSound`, field-conservation `Σ` + the `VALUE_BITS` range gadget refined here by
+`inAir_conservation_refines_pedersen`), also quantum-safe. So the residual crypto for the shielded
+value-side is now exactly `HashCR` (Poseidon2 CR) + STARK soundness — the SAME floors the tree/
+nullifier stand on — NOT discrete-log.
+
+The §1 `pedTwoGen` conservation MODEL (whose `binding` names DLog) is retained as the group-Pedersen
+ALGEBRA the in-AIR field conservation refines; the DLog `binding` carrier is NO LONGER the
+value-binding floor (that is §1.3's `HashCR`), and the off-AIR Pedersen/Schnorr/Bulletproof are
+retired from the value-binding TCB. NAMED RESIDUAL (separate frontier, NOT this cutover): the fhEgg
+homomorphic-fold's PQ-lattice-additive commitment for aggregating independently-produced commitments
+(Option B / the aggregation layer), and the full 64-bit multi-limb in-AIR range widening (the current
+gadget is sound over the BabyBear no-wrap range, `< 2^VALUE_BITS`).
 -/
 import Dregg2.Crypto.Pedersen
 import Dregg2.Circuit.Poseidon2Binding
@@ -220,6 +235,71 @@ theorem inAir_conservation_refines_pedersen [CryptoPrimitives Digest]
     simp only [List.map_cons, List.map_nil, List.sum_cons, List.sum_nil, add_zero]
     exact hbl
 
+/-! ### §1.3 — the PQ VALUE-BINDING: a Poseidon2 HASH COMMITMENT binding (value, asset), under HashCR.
+
+The PQ cutover (`docs/deos/PQ-SHIELDED-COMMITMENT.md`, Option A) retires the DLog Pedersen
+value-commitment as the AUTHORITATIVE shielded value-binding. The authoritative commitment is now the
+in-AIR Poseidon2 `value_binding = hash_fact(value, [asset_type, randomness, 0])` (the spend circuit's
+C7 PI, `circuit-prove/src/shielded/spend_circuit.rs`). Its binding rests on Poseidon2
+collision-resistance (`HashCR`) — a QUANTUM-SAFE floor (Grover only halves CR) — NOT discrete-log.
+
+This section names that floor, exactly as §2 names the Poseidon2 TREE root-binding: an
+injective-under-CR hash commitment. The `binding` carrier here is `HashCR` (Poseidon2 CR), the PQ
+REPLACEMENT for `pedCommit_binding` (DLog). The floor has MOVED from discrete-log to hash CR, so the
+shielded no-mint value-binding now survives Shor. -/
+
+/-- A **Poseidon2 value-binding commitment**: the hash `vbind value asset r` the spend circuit's C7
+publishes (`hash_fact(value, [asset_type, randomness, 0])`), and the SOLE crypto carrier —
+collision-resistance of that hash on the `(value, asset, randomness)` preimage (the `HashCR` floor,
+the SAME Poseidon2 CR the tree root-binding §2 and the nullifier stand on). -/
+structure ValueBindingCommit where
+  /-- The value-binding hash `hash_fact(value, [asset_type, randomness, 0])`. -/
+  vbind  : ℤ → ℤ → ℤ → ℤ
+  /-- The SOLE crypto carrier: the value-binding hash is collision-resistant — injective on its
+  `(value, asset, randomness)` preimage. This is `HashCR` (Poseidon2 CR), named, never `axiom`;
+  quantum-safe. It is the PQ replacement for the DLog `binding` carrier of `pedTwoGen`. -/
+  hashCR : ∀ v a r v' a' r', vbind v a r = vbind v' a' r' → v = v' ∧ a = a' ∧ r = r'
+
+/-- **THE PQ VALUE-BINDING BINDS (value, asset_type) JOINTLY, under HashCR.** Equal value-bindings ⇒
+equal value AND equal asset — the multi-asset binding the retired three-generator Ristretto
+`commit_hidden_asset (value·V + asset·H_asset + r·R)` gave under DLog, now under Poseidon2 CR
+(Shor-safe). This is the PQ replacement for `pedCommit_binding`: the floor moved from DLog to HashCR. -/
+theorem ValueBindingCommit.binds_value_and_asset (C : ValueBindingCommit) {v a r v' a' r' : ℤ}
+    (h : C.vbind v a r = C.vbind v' a' r') : v = v' ∧ a = a' :=
+  have hc := C.hashCR v a r v' a' r' h
+  ⟨hc.1, hc.2.1⟩
+
+/-- **A HIDDEN VALUE-MINT UNDER THE PQ COMMITMENT FORCES A HashCR COLLISION.** If a spender re-opens a
+published value-binding to a DIFFERENT value (a hidden inflation — the exact quantum attack the DLog
+Pedersen admitted), the two openings collide the Poseidon2 hash — impossible under `HashCR`. The
+no-mint value-binding now rests on hash collision-resistance, not discrete-log: it survives Shor. -/
+theorem ValueBindingCommit.mint_forces_collision (C : ValueBindingCommit) {v a r v' a' r' : ℤ}
+    (hmint : v ≠ v') (h : C.vbind v a r = C.vbind v' a' r') : False :=
+  hmint (C.binds_value_and_asset h).1
+
+/-- Non-vacuity: a concrete INJECTIVE value-binding (via `Encodable.encode` on the triple) inhabits
+the `HashCR` carrier, so `binds_value_and_asset` / `mint_forces_collision` are non-vacuous — exactly
+the `refTree` pattern §2.1 uses for the tree CR. -/
+def refValueBinding : ValueBindingCommit where
+  vbind v a r := (Encodable.encode (v, a, r) : ℤ)
+  hashCR := by
+    intro v a r v' a' r' h
+    have hnat : Encodable.encode (v, a, r) = Encodable.encode (v', a', r') := by exact_mod_cast h
+    have htriple : (v, a, r) = (v', a', r') := Encodable.encode_injective hnat
+    have h2 : (a, r) = (a', r') := congrArg Prod.snd htriple
+    exact ⟨congrArg Prod.fst htriple, congrArg Prod.fst h2, congrArg Prod.snd h2⟩
+
+/-- The teeth FIRE on the concrete value-binding: equal bindings ⇒ equal (value, asset). -/
+theorem refValueBinding_binds {v a r v' a' r' : ℤ}
+    (h : refValueBinding.vbind v a r = refValueBinding.vbind v' a' r') : v = v' ∧ a = a' :=
+  refValueBinding.binds_value_and_asset h
+
+/-- A hidden mint is IMPOSSIBLE on the concrete value-binding: distinct values give distinct
+bindings (no collision), so no hidden inflation can re-open one commitment to another value. -/
+theorem refValueBinding_no_mint {v a r a' r' : ℤ} (hmint : v ≠ v + 1) :
+    refValueBinding.vbind v a r ≠ refValueBinding.vbind (v + 1) a' r' := fun h =>
+  refValueBinding.mint_forces_collision hmint h
+
 /-! ## §2 — REAL POSEIDON2 tree (retires `refTreeRoot`).
 
 The note-commitment tree root is the Poseidon2 sponge over the leaf list — `root = sponge leaves`,
@@ -333,6 +413,10 @@ theorem rung3_real_crypto [CryptoPrimitives Digest] (T : Poseidon2Tree)
 #assert_axioms inAir_conservation_refines_pedersen
 #assert_axioms pedCommit_binding
 #assert_axioms pedCommit_mint_refused
+#assert_axioms ValueBindingCommit.binds_value_and_asset
+#assert_axioms ValueBindingCommit.mint_forces_collision
+#assert_axioms refValueBinding_binds
+#assert_axioms refValueBinding_no_mint
 #assert_axioms Poseidon2Tree.root_binds
 #assert_axioms forged_set_forces_collision
 #assert_axioms nonmember_refused

@@ -216,3 +216,27 @@ Poseidon2 hash-commitment + fully-in-AIR STARK conservation (Option A), most of 
 (`value_binding`, the in-AIR conservation gate, the `VALUE_BITS` range gadget); the migration is a cutover
 that deletes the Pedersen/Schnorr/Bulletproof DLog path + a 64-bit in-AIR range widening — **not** the
 Ristretto-EC-in-AIR that entrenches DLog.
+
+---
+
+## 5. Cutover status (LANDED)
+
+| Migration step | Status |
+|---|---|
+| **1. Note commitment: Poseidon2, asset_type-bound** | **DONE.** The authoritative value-commitment is the C7 PI `value_binding = hash_fact(value, [asset_type, randomness, 0])`, binding `(value, asset_type)` jointly under `HashCR` (`spend_circuit.rs::value_binding`, both ring AIRs' in-AIR recompute, `value_commitment.rs::value_link_binding`). Both-polarity: `spend_circuit.rs::value_binding_binds_asset_type`. The Ristretto three-generator `commit_hidden_asset` is retired from the value-binding TCB. |
+| **2. Conservation: fully in-AIR** | **DONE (authoritative).** `Σ value_in = Σ value_out` is the in-AIR field gate (`shielded_ring_clearing_air.rs` clause (c)); a mint / non-conserving ring is UNSAT in-AIR (`nonconserving_ring_is_unsat`). The off-AIR Schnorr excess (`prove_asset_conservation`) is retired from the TCB (redundant DLog aggregate). |
+| **3. Range: in-AIR** | **DONE over the BabyBear no-wrap range** (`VALUE_BITS` bit-decompose + recompose; `wraparound_mint_ring_is_unsat`, `out_of_range_output_is_unsat`). RESIDUAL: the full 64-bit multi-limb widening — the bignum bedrock exists (`caveat_admission_leaf_adapter.rs` limbwise range + `Dregg2.Bignum.legs_noWrap_conservation`), but wiring multi-limb conservation into the ring AIR is the M–L depth item, deliberately NOT rushed (a subtly-wrong range gadget re-opens the mint hole). |
+| **4. Drop DLog crates** | **RETIRED-FROM-TCB, not deleted.** The value-binding TCB no longer rests on `curve25519-dalek`/`bulletproofs`/Schnorr. Full crate REMOVAL is a separate dep-graph sweep: `curve25519-dalek`+`bulletproofs` are pulled by ~15 crates (FFI, wasm, sdk, turn, federation, …). Named, not done here. |
+
+**Lean tie:** `metatheory/Dregg2/Shielded/RealCrypto.lean` §1.3 names the PQ value-binding floor as
+`ValueBindingCommit` — `binds_value_and_asset` (HashCR ⇒ binds `(value, asset)`) and
+`mint_forces_collision` (a hidden mint forces a Poseidon2 collision) — the PQ replacement for
+`pedCommit_binding` (DLog). The floor MOVED from discrete-log to `HashCR`.
+
+**Honest PQ grade (precise):** the shielded value-BINDING is now PQ (Poseidon2 `HashCR`), and the
+no-mint conservation+range is PQ (in-AIR STARK, `Poseidon2ChipArithSound`). NAMED RESIDUALS (NOT PQ /
+NOT this cutover): (i) the fhEgg homomorphic-fold's aggregation-layer commitment (the Option-B
+PQ-lattice-additive commitment for aggregating *independently-produced* commitments — a SEPARATE
+frontier item); (ii) the full 64-bit multi-limb in-AIR range; (iii) the physical `curve25519`/
+`bulletproofs` crate removal. The shielded no-mint value-binding survives Shor; the aggregation-fold
+frontier does not yet — so this is NOT "the whole shielded pool is PQ", precisely.

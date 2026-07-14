@@ -29,9 +29,11 @@
 //!       - FUSION (`LegFused`): `offer_asset[i] == asset[i]` and
 //!         `offer_amount[i] == value[i]` — the matcher clears the NOTE, not a
 //!         `MatchNode` beside it. The bound to the REAL note rides the value-binding:
-//!         the AIR RE-COMPUTES `value_binding[i] = hash_fact(value[i],[randomness[i],
-//!         0,0])` (the SAME Poseidon2 fact-sponge the shielded-spend circuit's C7a
-//!         publishes) and the apex `connect`s it to the leaf's exposed value_binding,
+//!         the AIR RE-COMPUTES `value_binding[i] = hash_fact(value[i],[asset[i],
+//!         randomness[i],0])` (the SAME Poseidon2 fact-sponge the shielded-spend
+//!         circuit's C7a publishes — binding (value, asset) jointly under HashCR, the
+//!         PQ value-commitment) and the apex `connect`s it to the leaf's exposed
+//!         value_binding,
 //!         so `value[i]` is provably the spent note's value under Poseidon2 CR.
 //!       - RING (`CycleValid` 2-cycle edges): `offer_asset[0] == want_asset[1]` and
 //!         `offer_asset[1] == want_asset[0]` (the leg-0-wants-what-leg-1-offers-and-
@@ -385,22 +387,23 @@ pub fn shielded_ring_clear_descriptor() -> EffectVmDescriptor2 {
     }
 
     // --- the value-binding pad cells are constant-zero (so the fact absorbs
-    // [randomness, 0, 0]). ---
+    // [asset, randomness, 0]; vb_pad1 is now vestigial). ---
     for i in 0..RING_LEGS {
         constraints.push(gate(LeanExpr::Var(leg_col(i, lc::VB_PAD0))));
         constraints.push(gate(LeanExpr::Var(leg_col(i, lc::VB_PAD1))));
     }
 
     // --- the value-binding RECOMPUTE (per leg): value_binding[i] ==
-    // hash_fact(value[i], [randomness[i], 0, 0]). The fusion anchor. ---
+    // hash_fact(value[i], [asset[i], randomness[i], 0]). The fusion anchor, now binding
+    // the ASSET too (the PQ HashCR value-commitment binds (value, asset) jointly). ---
     for i in 0..RING_LEGS {
         let site = fact_site_always(
             leg_col(i, lc::VALUE_BINDING),
             &[
                 leg_col(i, lc::VALUE),
+                leg_col(i, lc::ASSET),
                 leg_col(i, lc::RANDOMNESS),
                 leg_col(i, lc::VB_PAD0),
-                leg_col(i, lc::VB_PAD1),
             ],
             alloc_lanes(),
         );

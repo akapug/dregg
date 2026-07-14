@@ -30,10 +30,11 @@
 //!
 //!   * **(b) the RING structure + FUSION**, in-AIR over the N legs' plaintext witness:
 //!       - FUSION (`LegFused`): `offer_asset[i] == asset[i]`, `offer_amount[i] == value[i]`,
-//!         with `value[i]` bound to the spent note through the RE-COMPUTED
-//!         `value_binding[i] = hash_fact(value[i], [randomness[i], 0, 0])` (the SAME
-//!         Poseidon2 fact-sponge the shielded-spend circuit's C7a publishes), `connect`ed to
-//!         the leaf's exposed value_binding under Poseidon2 CR.
+//!         with `value[i]` (and `asset[i]`) bound to the spent note through the
+//!         RE-COMPUTED `value_binding[i] = hash_fact(value[i], [asset[i], randomness[i],
+//!         0])` (the SAME Poseidon2 fact-sponge the shielded-spend circuit's C7a
+//!         publishes — the PQ HashCR value-commitment binding (value, asset) jointly),
+//!         `connect`ed to the leaf's exposed value_binding under Poseidon2 CR.
 //!       - RING (`CycleValid` N-cycle edges): `want_asset[i] == offer_asset[(i+1) mod N]`
 //!         (leg `i` wants what the next leg offers, the variable-length chain closed mod N).
 //!       - **PARTIAL FILL** (`clearing_respects_limits`): `want_min[i] ≤ offer_amount[(i+1)
@@ -425,22 +426,24 @@ pub fn shielded_ring_clear_descriptor(n: usize) -> EffectVmDescriptor2 {
         constraints.push(gate(recompose_body(diff, |b| lo.fill_bit_col(i, b))));
     }
 
-    // --- the value-binding pad cells are constant-zero (fact absorbs [randomness, 0, 0]). ---
+    // --- the value-binding pad cells are constant-zero (fact absorbs [asset, randomness, 0];
+    // vb_pad1 is now vestigial). ---
     for i in 0..n {
         constraints.push(gate(LeanExpr::Var(lo.leg_col(i, lc::VB_PAD0))));
         constraints.push(gate(LeanExpr::Var(lo.leg_col(i, lc::VB_PAD1))));
     }
 
     // --- the value-binding RECOMPUTE (per leg): value_binding[i] == hash_fact(value[i],
-    // [randomness[i], 0, 0]). The fusion anchor. ---
+    // [asset[i], randomness[i], 0]). The fusion anchor, now binding the ASSET too (the PQ
+    // HashCR value-commitment binds (value, asset) jointly). ---
     for i in 0..n {
         let site = fact_site_always(
             lo.leg_col(i, lc::VALUE_BINDING),
             &[
                 lo.leg_col(i, lc::VALUE),
+                lo.leg_col(i, lc::ASSET),
                 lo.leg_col(i, lc::RANDOMNESS),
                 lo.leg_col(i, lc::VB_PAD0),
-                lo.leg_col(i, lc::VB_PAD1),
             ],
             alloc_lanes(),
         );

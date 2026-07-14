@@ -470,6 +470,7 @@ fn leaf_leg_value_link_matches_verifies_mismatch_rejects() {
         value_binding,
         &leg_bytes,
         amount as u64,
+        ASSET,
         randomness,
         &scalar_from_blinding_bytes(&in_blinding),
     )
@@ -489,6 +490,7 @@ fn leaf_leg_value_link_matches_verifies_mismatch_rejects() {
         value_binding,
         &inflated_leg,
         amount as u64,
+        ASSET,
         randomness,
         &scalar_from_blinding_bytes(&in_blinding),
     );
@@ -502,6 +504,7 @@ fn leaf_leg_value_link_matches_verifies_mismatch_rejects() {
         value_binding,
         &inflated_leg,
         inflated,
+        ASSET,
         randomness,
         &scalar_from_blinding_bytes(&in_blinding),
     );

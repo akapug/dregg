@@ -3,8 +3,12 @@
 //! # The residual this closes
 //!
 //! The shielded-spend STARK publishes a Poseidon2 value-binding
-//! `value_binding = hash_fact(felt(value), [randomness, 0, 0])` (PI[VALUE_BINDING]).
-//! The transfer's balance rides a Pedersen leg `leg = value·V + blinding·R`.
+//! `value_binding = hash_fact(felt(value), [asset_type, randomness, 0])`
+//! (PI[VALUE_BINDING]) — the authoritative PQ (HashCR) value-commitment binding
+//! (value, asset_type). This module's Ristretto Pedersen leg `leg = value·V +
+//! blinding·R` and its DLog sigma are the RETIRED aggregate (see
+//! `value_commitment.rs` header); the ZK tie below survives only for legacy
+//! full-disclosure callers still carrying a Pedersen leg.
 //! [`crate::value_commitment::verify_value_link`] ties them — but in FULL
 //! DISCLOSURE: the prover hands the verifier `value` (and `randomness`). That is
 //! fine for a full node, but a LIGHT CLIENT then learns the amount. The privacy
@@ -701,8 +705,9 @@ mod tests {
             positions: vec![],
         };
         let vb_circuit = w.value_binding();
-        // The cell-side re-derivation MUST equal the circuit's published felt.
-        let vb_cell = value_link_binding(value, randomness);
+        // The cell-side re-derivation MUST equal the circuit's published felt (the
+        // witness above uses asset_type = 1).
+        let vb_cell = value_link_binding(value, 1, randomness);
         assert_eq!(
             vb_circuit, vb_cell,
             "cell re-derivation must match the STARK PI"

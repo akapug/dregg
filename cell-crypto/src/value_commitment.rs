@@ -1,5 +1,29 @@
 //! Homomorphic value commitments (Pedersen commitments over Ristretto).
 //!
+//! # ⚠ PQ CUTOVER — this DLog aggregate is RETIRED from the shielded value-binding TCB
+//!
+//! The AUTHORITATIVE shielded value-commitment is now the in-AIR Poseidon2
+//! `value_binding = hash_fact(value, [asset_type, randomness, 0])` (the spend circuit's
+//! C7 PI, `dregg_circuit::shielded::spend_circuit`), binding `(value, asset_type)`
+//! jointly under `HashCR` (Poseidon2 collision-resistance — quantum-safe), and the
+//! authoritative NO-MINT (conservation + no-wraparound range) check is the fully-in-AIR
+//! STARK conservation gate in `circuit-prove/src/shielded_ring_clearing_air.rs`
+//! (`Poseidon2ChipArithSound`, `HidingFriPcs` statistical-ZK). See
+//! `docs/deos/PQ-SHIELDED-COMMITMENT.md` (Option A).
+//!
+//! Everything in THIS module — the Pedersen `commit_hidden_asset` over Ristretto, the
+//! Schnorr `prove/verify_asset_conservation` excess, the `AssetEqualityProof`
+//! Chaum-Pedersen argument, and the `BulletproofRangeProof` — is the classical
+//! discrete-log aggregate that binding rested on BEFORE the cutover. Its binding is
+//! **Shor-broken** (DLog), so it is **retired from the shielded value-binding TCB**: it
+//! is redundant with the in-AIR hash/STARK path, kept here only for the legacy M2-a/M2-b
+//! composed-proof callers and the wasm/FFI byte helpers. `value_link_binding` /
+//! `verify_value_link` below are the mirror of the PQ commitment (check (1)); the
+//! Pedersen-leg tie (check (2)) is part of this retired aggregate. NAMED RESIDUAL:
+//! `curve25519-dalek` + `bulletproofs` are pulled by ~15 crates across the tree (FFI,
+//! wasm, sdk, turn, federation, …), so the full crate removal is a separate dep-graph
+//! sweep, not this cutover.
+//!
 //! # Construction
 //!
 //! A Pedersen commitment hides an amount `v` with blinding factor `r`:
@@ -1562,21 +1586,31 @@ impl std::error::Error for FullConservationError {}
 // linker is the remaining unbuilt piece; the in-circuit binding (the STARK C7 PI +
 // the transcript binding) and this disclosed verifier are the closed half.
 
-/// Re-derive the shielded-spend STARK's value-binding PI from a `(value,
-/// randomness)` opening: `hash_fact(felt(value), [felt(randomness), 0, 0])`.
+/// Re-derive the shielded-spend STARK's value-binding PI from a `(value, asset_type,
+/// randomness)` opening:
+/// `hash_fact(felt(value), [felt(asset_type), felt(randomness), 0])`.
 ///
 /// This MUST match the felt the spend circuit publishes as `pi::VALUE_BINDING`
 /// (`dregg_circuit::shielded::ShieldedSpendWitness::value_binding`). The mapping of
-/// the u64 value / 32-byte randomness into BabyBear felts matches the spend
-/// circuit's witness (the value as a single felt, the randomness as a single felt).
+/// the u64 value / u64 asset_type / randomness into BabyBear felts matches the spend
+/// circuit's witness (each as a single felt).
+///
+/// PQ CUTOVER (Option A): this is the Rust mirror of the AUTHORITATIVE shielded
+/// value-commitment. Its binding on `(value, asset_type)` rests on `HashCR` (Poseidon2
+/// collision-resistance — quantum-safe), retiring the Ristretto three-generator
+/// `commit_hidden_asset` (DLog binding). The asset_type is now absorbed into the
+/// preimage, so the commitment binds `(value, asset_type)` JOINTLY, exactly as the
+/// three-generator Pedersen `value·V + asset·H_asset + r·R` did — now without DLog.
 pub fn value_link_binding(
     value: u64,
+    asset_type: u64,
     randomness: dregg_circuit::field::BabyBear,
 ) -> dregg_circuit::field::BabyBear {
     use dregg_circuit::field::{BABYBEAR_P, BabyBear};
     use dregg_circuit::poseidon2::hash_fact;
     let value_felt = BabyBear::new((value % (BABYBEAR_P as u64)) as u32);
-    hash_fact(value_felt, &[randomness, BabyBear::ZERO, BabyBear::ZERO])
+    let asset_felt = BabyBear::new((asset_type % (BABYBEAR_P as u64)) as u32);
+    hash_fact(value_felt, &[asset_felt, randomness, BabyBear::ZERO])
 }
 
 /// Errors from the leaf↔leg value-link check.
@@ -1611,26 +1645,32 @@ impl core::fmt::Display for ValueLinkError {
 
 impl std::error::Error for ValueLinkError {}
 
-/// Verify the leaf↔leg value link: the STARK's published `value_binding` felt and
-/// the published Pedersen `leg_bytes` open to the SAME `value`.
+/// Verify the leaf↔leg value link against the AUTHORITATIVE PQ value-binding, and
+/// (RETIRED path) the legacy Pedersen leg.
 ///
-/// The prover supplies the opening `(value, randomness, blinding)`. Returns `Ok(())`
-/// iff BOTH (1) `hash_fact(felt(value), [randomness,0,0]) == value_binding` and
-/// (2) `commit(value, blinding) == leg`. See the module section "Leaf↔leg value
-/// link" for the soundness argument and the named ZK residual.
+/// The prover supplies the opening `(value, asset_type, randomness, blinding)`. Check
+/// (1) is the PQ-authoritative one: the opening reproduces the STARK's published
+/// Poseidon2 `value_binding = hash_fact(felt(value), [felt(asset_type), randomness,
+/// 0])`, which binds `(value, asset_type)` under `HashCR` (quantum-safe). Check (2) —
+/// the Ristretto `commit(value, blinding) == leg` tie — is the REDUNDANT DLog aggregate
+/// this PQ cutover retires; it survives only for backward compatibility with callers
+/// still carrying a Pedersen leg and is NOT part of the value-binding TCB. New callers
+/// should bind value+asset via the Poseidon2 `value_binding` alone (check (1)).
 pub fn verify_value_link(
     value_binding: dregg_circuit::field::BabyBear,
     leg_bytes: &[u8; 32],
     value: u64,
+    asset_type: u64,
     randomness: dregg_circuit::field::BabyBear,
     blinding: &Scalar,
 ) -> Result<(), ValueLinkError> {
-    // (1) The opening must reproduce the STARK's published binding (pins `value` to
-    //     the leaf's value, since the spend circuit's C7 binds that felt).
-    if value_link_binding(value, randomness) != value_binding {
+    // (1) PQ-AUTHORITATIVE (HashCR): the opening must reproduce the STARK's published
+    //     Poseidon2 binding, pinning (value, asset_type) to the leaf under Poseidon2 CR.
+    if value_link_binding(value, asset_type, randomness) != value_binding {
         return Err(ValueLinkError::BindingMismatch);
     }
-    // (2) The same `value` must commit to the published Pedersen leg.
+    // (2) RETIRED (DLog Pedersen aggregate — NOT the value-binding TCB): the same
+    //     `value` must commit to the published Pedersen leg.
     let leg = ValueCommitment::from_bytes(&ValueCommitmentBytes(*leg_bytes))
         .ok_or(ValueLinkError::MalformedLeg)?;
     if ValueCommitment::commit(value, blinding) != leg {
