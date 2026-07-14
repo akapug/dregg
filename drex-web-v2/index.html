@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DrEX — the privacy-dial exchange</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div id="root"><div class="boot">loading DrEX…</div></div>
+  <!-- The app is a single self-contained esbuild bundle (Preact + htm + signals
+       + the reused drex-viz, all inlined). No runtime CDN requests. Build it
+       with `npm run build`; the dev server (serve.mjs) serves this + the REAL
+       /clear, /settle, /node/status endpoints. -->
+  <script type="module" src="./dist/app.js"></script>
+</body>
+</html>
