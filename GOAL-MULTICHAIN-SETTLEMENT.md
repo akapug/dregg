@@ -500,3 +500,9 @@ outward decisions.
 - Q5 novel: coefficient-difference-polynomial O(N+K) prefix scan (one plaintext multiply). codex forced ~6 adversarial corrections (real 2nd mind, 497k tokens). brief→codex→curate WORKED 3×.
 - FPGA-accelerator spec firing (affe77ad): F2 = FHE-fold accelerator NOT STARK-prover; verified-HDL split (Coq/Hardcaml core + SpinalHDL bulk); confidential-VM→tee-verify; roadmap→silicon→dark-LLM north star (Constitution Art III/IX-H3/X = the Remainder Floor in silicon).
 - ⚠ HONEST: codex gold = ASSESSED-BUILDABLE proposals, NOT yet discharged — the 2 Lean lanes are discharging them; re-verify myself after.
+
+## ⚡ codex-gold DISCHARGED + full-tree verified (07-14)
+- ⚑ FULL Market BUILD GREEN (3082 jobs, my own run) — the night's Lean COMPOSES: Q1 sound-quantized Tier-0 (MintSafeQuantization + QuantizedConservation + ExactGapNoWrap + AggregateBinding + StreamingCert + PrecisionEnvelope; approx-proposes/exact-disposes, soundness never eps-absorbed) + Q3 ZKOpenRel (guardedTraceClosure_refuted PROOF + traceAdmissible_guarded Tarski replacement + comp/tensor/iterate closure; ZKUnification now INHABITED). No red umbrella.
+- FPGA spec (61bd1a3cc): F2 = FHE-fold accel (~0.15-0.7s/512x64 batch vs 488s M2; ~100-400 dark markets; medium-confidence error bars); verified-HDL split; Constitution Art-X-in-silicon.
+- hbox-FHE (dcfe6cdd6): 24-core = ~1.0-1.6x M2 (NOT 2x; no GPU; radix caps ~8 threads). Real levers = quantized fold + cloud H100. Node undisturbed (minted 12 blocks).
+- ⚑ EMBER CATCH (right): we HAVE a Lean->EffectVmDescriptor2 emitter (all effect_vm circuits, export+byte-twins). cert_f_air.rs HAND-BUILT the Cert-F descriptor + only TESTED agreement — a shortcut, not the frontier I implied. Lane ad719a49 routing Cert-F through the real emitter (Lean certFDescriptor + Satisfied2-iff-valid proof + byte-twin), retiring the hand-write.
