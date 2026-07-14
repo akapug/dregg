@@ -1,0 +1,62 @@
+# `dreggnet-adventure` — THE DESCENT, integrated: the flagship as ONE coherent
+# verifiable RPG loop over the feature systems.
+#
+# `dreggnet-saga` proved the eight feature crates COMPOSE (a synthetic errand
+# threaded through them). This crate goes one level up: it drives the REAL
+# flagship — `dreggnet_offerings::daily_descent::DailyDescentOffering` (the
+# beacon-seeded permadeath run + the persistent hardcore Character + the no-cheat
+# board) — as the game that EXERCISES every system:
+#   * BEFORE  — a party musters, the player equips GEAR + brings a COMPANION as the
+#               run LOADOUT, and a FACTION-gated quest-giver gates the run's start;
+#   * THE RUN — the ACTUAL DailyDescentOffering run plays, and the equipped gear
+#               ability / the level-N companion buff AID it CROSS-CELL (a real
+#               `ObservedFieldEquals`, refused without the loadout, non-vacuous);
+#   * AFTER   — the run's ONE `ugc_dregg::Completion` earns a CHEEVO, sums into the
+#               GUILD, and turns in the QUEST (object-identical: the SAME Completion
+#               into all three); the run's loot forges + trades as the SAME note-cell
+#               (craft -> trade); a season champion enters the dregg-season hall.
+# It CONSUMES the feature crates + the flagship; it modifies NONE of them
+# (reconciliation wants are recorded as NAMED follow-ups in the lib docs). Additive.
+#
+# A workspace MEMBER of the breadstuffs root, but NOT a `default-member`: it depends
+# on `dreggnet-guild`, which pulls the full `starbridge-v2` (gpui) graph. Build/test
+# it explicitly (persvati warm dir):
+#   cargo test -p dreggnet-adventure
+[package]
+name = "dreggnet-adventure"
+version = "0.1.0"
+edition = "2024"
+description = "The Descent integrated: the real DailyDescentOffering driven as one coherent verifiable RPG loop over the feature systems — loadout (gear + companion) in, faction-gated quest around, progression (cheevo + guild + quest turn-in over the SAME Completion) out, loot crafting + trading as the SAME note-cell, with object-identity handoffs on the shared substrate."
+
+[dependencies]
+# ── THE FLAGSHIP the loop is built around (consumed, never modified) ──
+# DailyDescentOffering / DailyRun (the real beacon-seeded permadeath run + the
+# persistent Character), DreggIdentity / Outcome / VerifyReport, the CharacterStore.
+dreggnet-offerings = { path = "../dreggnet-offerings" }
+
+# ── the feature systems the Descent EXERCISES (consumed, never modified) ──
+dreggnet-party = { path = "../dreggnet-party" }        # the seated party roster (loadout: party-up)
+dreggnet-quest = { path = "../dreggnet-quest" }        # the FactionGatedGiverWorld gating the run's start
+dreggnet-gear = { path = "../dreggnet-gear" }          # Loadout::equip — the cross-cell gear ability
+dreggnet-companion = { path = "../dreggnet-companion" } # the level-N companion buff cross-cell
+dreggnet-cheevo = { path = "../dreggnet-cheevo" }      # CheevoLedger::earn over the run's Completion
+dreggnet-guild = { path = "../dreggnet-guild" }        # GuildBoard::record_clear sums the verified clear
+dreggnet-craft = { path = "../dreggnet-craft" }        # the run's loot forged into an item
+dreggnet-trade = { path = "../dreggnet-trade" }        # the crafted note traded (the SAME note-cell)
+dregg-season = { path = "../dregg-season" }            # a season champion -> the hall-of-fame
+
+# ── the reused adapter: ONE canonical player across the crates ──
+# `dreggnet_saga::PlayerIdentity` derives ONE name into the party seat key, the guild
+# member handle, and the asset holder label (gear owner / companion owner / craft holder).
+# Reused verbatim — the same committed identity adapter the saga proved.
+dreggnet-saga = { path = "../dreggnet-saga" }
+
+# ── the shared substrate the handoffs ride ──
+ugc-dregg = { path = "../ugc-dregg" }              # the Completion / Universe run currency + verify_completion
+dreggnet-asset = { path = "../dreggnet-asset" }    # the AssetId item currency (loot -> craft -> trade)
+procgen-dregg = { path = "../procgen-dregg" }      # the CommittedSeed the day + the loot/hatch draws anchor to
+dungeon-on-dregg = { path = "../dungeon-on-dregg" } # loot.rs — the run's fair-drop loot as owned assets
+dregg-epoch = { path = "../dregg-epoch" }          # the EpochManifest a season is pinned to (local_manifest)
+blake3 = "1"                                        # domain-separated loot-seed derivation off the run
+
+# A workspace MEMBER of the breadstuffs root; the root `[workspace]` + `[patch]` apply.

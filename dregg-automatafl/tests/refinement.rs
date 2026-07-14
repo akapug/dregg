@@ -1,0 +1,332 @@
+//! FAST refinement battery (no proving): the AIR accepts the honest
+//! `(old, moves, next)` IFF `next == apply_turn(old, moves)` (translation validation
+//! shadowed by `Builder::air_accepts`), and is NON-VACUOUS — a wrong `next`, an
+//! invalid move, or a forged resolution is REJECTED. Driven against the reference
+//! oracle (which mirrors `Dregg2.Games.Automatafl` and its `#guard`s).
+
+use dregg_automatafl::builder::Builder;
+use dregg_automatafl::reference::{ATT, AUTO, Board, Move, REP, VAC, apply_turn, automaton_step};
+use dregg_automatafl::{build_d1, build_d2, build_d3};
+
+fn mk(n: usize, placed: &[((i32, i32), u8)], auto: (i32, i32)) -> Board {
+    let mut cells = vec![VAC; n * n];
+    for &(c, p) in placed {
+        cells[(c.1 as usize) * n + (c.0 as usize)] = p;
+    }
+    cells[(auto.1 as usize) * n + (auto.0 as usize)] = AUTO;
+    Board {
+        n,
+        cells,
+        auto,
+        col_rule: true,
+    }
+}
+
+/// Flip one non-automaton cell of `b` to produce a definitely-wrong board.
+fn corrupt(b: &Board) -> Board {
+    let mut c = b.clone();
+    for i in 0..c.cells.len() {
+        let coord = ((i % c.n) as i32, (i / c.n) as i32);
+        if coord != c.auto {
+            c.cells[i] = if c.cells[i] == VAC { ATT } else { VAC };
+            return c;
+        }
+    }
+    c
+}
+
+fn assert_failing(b: &Builder, ctx: &str) {
+    let f = b.failing();
+    assert!(
+        !f.is_empty(),
+        "{ctx}: expected the AIR to REJECT, but it accepted"
+    );
+}
+
+// ============================================================================
+// D1 — the automaton-step-only AIR.
+// ============================================================================
+
+fn d1_boards() -> Vec<(&'static str, Board)> {
+    vec![
+        (
+            "demo: attractor north dist2 -> step north",
+            mk(5, &[((2, 4), ATT)], (2, 2)),
+        ),
+        (
+            "repulsor south dist1 -> flee north",
+            mk(5, &[((2, 1), REP)], (2, 2)),
+        ),
+        ("empty -> no move", mk(5, &[], (2, 2))),
+        (
+            "attractor east dist2 -> step east",
+            mk(5, &[((4, 2), ATT)], (2, 2)),
+        ),
+        (
+            "attractor adjacent dist1 -> no room, no move",
+            mk(5, &[((2, 3), ATT)], (2, 2)),
+        ),
+        (
+            "unbalanced pair att north rep south -> north",
+            mk(5, &[((2, 4), ATT), ((2, 0), REP)], (2, 2)),
+        ),
+        (
+            "two attractors, closer wins (E dist2 vs W dist3)",
+            mk(5, &[((4, 2), ATT), ((0, 2), ATT)], (3, 2)),
+        ),
+        (
+            "repulsor pair both axes -> flee",
+            mk(5, &[((2, 0), REP), ((0, 2), REP)], (2, 2)),
+        ),
+        (
+            "auto at edge (0,0), attractor east",
+            mk(5, &[((3, 0), ATT)], (0, 0)),
+        ),
+        (
+            "column rule tie -> prefer Y",
+            mk(5, &[((4, 2), ATT), ((2, 4), ATT)], (2, 2)),
+        ),
+    ]
+}
+
+#[test]
+fn d1_accepts_honest_and_matches_reference() {
+    for (name, old) in d1_boards() {
+        let honest = automaton_step(&old);
+        let b = build_d1(&old, &honest);
+        let f = b.failing();
+        assert!(
+            f.is_empty(),
+            "D1 [{name}]: honest transition must be ACCEPTED; failing constraints = {:?}",
+            f
+        );
+    }
+}
+
+#[test]
+fn d1_rejects_wrong_next() {
+    for (name, old) in d1_boards() {
+        let honest = automaton_step(&old);
+        let wrong = corrupt(&honest);
+        assert_ne!(wrong, honest);
+        let b = build_d1(&old, &wrong);
+        assert_failing(&b, &format!("D1 wrong-next [{name}]"));
+    }
+}
+
+#[test]
+fn d1_rejects_forged_offset() {
+    // demoBoard steps north; forge the witnessed offset oy to 0 (claim it stayed).
+    let old = mk(5, &[((2, 4), ATT)], (2, 2));
+    let honest = automaton_step(&old);
+    let mut b = build_d1(&old, &honest);
+    let oy = b.col_by_name("oy").expect("oy column");
+    b.tamper(oy, 0);
+    assert_failing(&b, "D1 forged offset oy:=0");
+}
+
+#[test]
+fn d1_rejects_forged_moved_bit() {
+    // Empty board: automaton does not move. Forge `moved := 1` and a fake target.
+    let old = mk(5, &[((2, 4), ATT)], (2, 2)); // this one DOES move
+    let honest = automaton_step(&old);
+    let mut b = build_d1(&old, &honest);
+    let m = b.col_by_name("moved").expect("moved column");
+    b.tamper(m, 0); // claim it didn't move
+    assert_failing(&b, "D1 forged moved:=0 on a moving board");
+}
+
+// ============================================================================
+// D2 — single move apply.
+// ============================================================================
+
+#[test]
+fn d2_accepts_honest_and_rejects_wrong_next() {
+    // Move attractor (0,0)->(0,3); automaton parked in corner (4,4) does not move.
+    let old = mk(5, &[((0, 0), ATT)], (4, 4));
+    let m = Move {
+        who: 0,
+        frm: (0, 0),
+        to: (0, 3),
+    };
+    let honest = apply_turn(&old, &[m]);
+    let b = build_d2(&old, &m, &honest);
+    let f = b.failing();
+    assert!(f.is_empty(), "D2 honest must accept; failing = {:?}", f);
+
+    let wrong = corrupt(&honest);
+    let b2 = build_d2(&old, &m, &wrong);
+    assert_failing(&b2, "D2 wrong-next");
+}
+
+#[test]
+fn d2_move_with_automaton_stepping() {
+    // Move an attractor into the automaton's sight so the daemon also steps.
+    // Board: auto (2,2); move attractor (2,0)->... actually place attractor far then
+    // move it two-north-visible. Simpler: attractor at (4,2), auto (2,2): move a
+    // repulsor (0,0)->(0,4) elsewhere; daemon steps east toward the attractor.
+    let old = mk(5, &[((4, 2), ATT), ((0, 0), REP)], (2, 2));
+    let m = Move {
+        who: 0,
+        frm: (0, 0),
+        to: (0, 4),
+    };
+    let honest = apply_turn(&old, &[m]);
+    let b = build_d2(&old, &m, &honest);
+    let f = b.failing();
+    assert!(
+        f.is_empty(),
+        "D2 move+step honest must accept; failing = {:?}",
+        f
+    );
+}
+
+#[test]
+fn d2_rejects_invalid_move() {
+    // An invalid move (not rook-aligned) must be rejected by the validity gates.
+    let old = mk(5, &[((0, 0), ATT)], (4, 4));
+    let bad = Move {
+        who: 0,
+        frm: (0, 0),
+        to: (1, 3),
+    }; // diagonal
+    // apply_turn would DROP it (mid == old); but the AIR asserts submitted moves valid.
+    let honest_next = automaton_step(&old); // since the move is dropped, next == step(old)
+    let b = build_d2(&old, &bad, &honest_next);
+    assert_failing(&b, "D2 invalid (diagonal) move");
+}
+
+#[test]
+fn d2_occluded_move_piece_stays() {
+    // (0,0)->(0,3) blocked by a repulsor at (0,2): the piece stays; next == step(old).
+    let old = mk(5, &[((0, 0), ATT), ((0, 2), REP)], (4, 4));
+    let m = Move {
+        who: 0,
+        frm: (0, 0),
+        to: (0, 3),
+    };
+    let honest = apply_turn(&old, &[m]);
+    // Reference: occluded => piece stays => (0,0) still ATT.
+    assert_eq!(honest.cell_at((0, 0)), ATT);
+    let b = build_d2(&old, &m, &honest);
+    let f = b.failing();
+    assert!(
+        f.is_empty(),
+        "D2 occluded honest must accept; failing = {:?}",
+        f
+    );
+}
+
+// ============================================================================
+// D3 — the n=2 resolution truth table.
+// ============================================================================
+
+#[test]
+fn d3_independent_moves() {
+    // Two disjoint valid moves, both apply.
+    let old = mk(7, &[((0, 0), ATT), ((6, 6), REP)], (3, 3));
+    let a = Move {
+        who: 0,
+        frm: (0, 0),
+        to: (0, 2),
+    };
+    let b = Move {
+        who: 1,
+        frm: (6, 6),
+        to: (6, 4),
+    };
+    let honest = apply_turn(&old, &[a, b]);
+    let prog = build_d3(&old, &a, &b, &honest);
+    let f = prog.failing();
+    assert!(
+        f.is_empty(),
+        "D3 independent honest must accept; failing = {:?}",
+        f
+    );
+    let wrong = corrupt(&honest);
+    assert_failing(&build_d3(&old, &a, &b, &wrong), "D3 independent wrong-next");
+}
+
+#[test]
+fn d3_source_fork_both_dropped() {
+    // Fork: one source, two distinct destinations -> both dropped, piece stays.
+    let old = mk(5, &[((0, 0), ATT)], (4, 4));
+    let a = Move {
+        who: 0,
+        frm: (0, 0),
+        to: (0, 3),
+    };
+    let b = Move {
+        who: 1,
+        frm: (0, 0),
+        to: (3, 0),
+    };
+    let honest = apply_turn(&old, &[a, b]);
+    assert_eq!(honest.cell_at((0, 0)), ATT, "forked piece stays");
+    let prog = build_d3(&old, &a, &b, &honest);
+    let f = prog.failing();
+    assert!(
+        f.is_empty(),
+        "D3 fork honest must accept; failing = {:?}",
+        f
+    );
+    // Forged resolution: claim the piece moved to (0,3) anyway.
+    let mut forged = old.clone();
+    forged.cells[(0) * 5 + 0] = VAC;
+    forged.cells[(3) * 5 + 0] = ATT;
+    let forged_next = automaton_step(&forged);
+    assert_failing(
+        &build_d3(&old, &a, &b, &forged_next),
+        "D3 forged fork survival",
+    );
+}
+
+#[test]
+fn d3_dest_collision_both_dropped() {
+    // Two non-vacuum sources onto one destination -> both dropped.
+    let old = mk(5, &[((0, 2), ATT), ((4, 2), REP)], (2, 4));
+    let a = Move {
+        who: 0,
+        frm: (0, 2),
+        to: (2, 2),
+    };
+    let b = Move {
+        who: 1,
+        frm: (4, 2),
+        to: (2, 2),
+    };
+    let honest = apply_turn(&old, &[a, b]);
+    assert_eq!(honest.cell_at((0, 2)), ATT, "collided A stays");
+    assert_eq!(honest.cell_at((4, 2)), REP, "collided B stays");
+    let prog = build_d3(&old, &a, &b, &honest);
+    let f = prog.failing();
+    assert!(
+        f.is_empty(),
+        "D3 collision honest must accept; failing = {:?}",
+        f
+    );
+}
+
+#[test]
+fn d3_swap_stasis() {
+    // 2-swap (to_a==frm_b AND to_b==frm_a) -> always stasis (both stay).
+    let old = mk(5, &[((0, 0), ATT), ((0, 2), REP)], (4, 4));
+    let a = Move {
+        who: 0,
+        frm: (0, 0),
+        to: (0, 2),
+    };
+    let b = Move {
+        who: 1,
+        frm: (0, 2),
+        to: (0, 0),
+    };
+    let honest = apply_turn(&old, &[a, b]);
+    let prog = build_d3(&old, &a, &b, &honest);
+    let f = prog.failing();
+    assert!(
+        f.is_empty(),
+        "D3 swap-stasis honest must accept; failing = {:?}",
+        f
+    );
+}

@@ -1,0 +1,21 @@
+[package]
+name = "dregg-automatafl"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "Verified automatafl (n=2): a hand-authored Custom-VK board-transition AIR checking new == applyTurn(old, moves), driven by a reference witness generator, proving as a foldable custom leaf that verify_history accepts. Refines Dregg2.Games.Automatafl.applyTurn."
+
+[dependencies]
+dregg-circuit = { path = "../circuit" }
+dregg-circuit-prove = { path = "../circuit-prove" }
+
+[dev-dependencies]
+# SLOW prove/fold path (mirrors game-turn-slice): the custom leaf folds into a
+# real turn chain the light client verify_history accepts.
+dregg-cell = { path = "../cell" }
+dregg-turn = { path = "../turn" }
+dregg-lightclient = { path = "../lightclient" }
