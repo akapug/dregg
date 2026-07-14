@@ -47,6 +47,15 @@ NAMED precisely at the Johnson (`L > 1`) generalization:
 Nothing is faked: no `axiom`, no `sorry`. Each residual is a `Prop`, and each is shown to
 *generalize a proved theorem* (non-vacuous, precisely scoped), not opaque hardness.
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound} throughout.
+
+## ⚑ The `L > 1` correlated-agreement residual (ii) is PROVED by ordered-pair COUNTING.
+`FriCorrelatedAgreementSharp.lean` discharges the `L > 1` proximity-gap primitive at the deployed list
+sizes without GS: `CorrelatedAgreementLine friSetupWrapRate 52 186` (interior radius `dIn = 52`,
+relative `13/16`, GS-non-degenerate) and `WrapCorrelatedAgreementSharp 292` (boundary `dIn = 56`),
+each via the ordered distinct-`Φ` pair injection into `κ × κ`. The GS-IDEAL list `L ≤ 2·|κ| = 128`
+stays BLOCKED for the constant-fold multiset word (`Dregg2/ForMathlib/GuruswamiSudan.lean:20-33`), so
+`186`/`292` is the counting reach, not the GS ideal — security-irrelevant (`L/|F|`, `|F| ≈ 2¹²⁴`). The
+deployed per-fold soundness is `wrap_perFold_soundness_capacity`'s **~112.6** proven bits.
 -/
 
 namespace Dregg2.Circuit.FriLdtJohnson

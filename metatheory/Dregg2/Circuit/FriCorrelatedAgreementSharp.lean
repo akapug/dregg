@@ -54,8 +54,24 @@ proved by the BBHR18 two-point reconstruction (the same Vandermonde solve behind
 disagreement sets, giving common agreement on `≥ |κ| − 2·dIn` fibers with `Ge, Go ∈ C'`. So the
 `∃ ge go, agree ≤ …` SHAPE is inhabited and provable; the SOLE gap to the sharp statement is the
 strengthening of the agreement floor from `|κ| − 2·dIn` (two-point) to `|κ| − dIn` (δ-preserving) —
-which is precisely BCIKS20's correlated-agreement content, and precisely what is left open, named,
-and NOT `sorry`'d.
+which is precisely BCIKS20's correlated-agreement content.
+
+## ⚑ STATUS (2026-07-13) — §§3b/5/6/8 CLOSE the δ-preserving primitive by ORDERED-PAIR COUNTING.
+What §3 leaves "open above" is subsequently PROVED (no `sorry`, no hypothesis) at the deployed list
+sizes via the ordered-pair injection into `κ × κ` (card `4096`):
+* `wrap_correlatedAgreement_sharp_proved : WrapCorrelatedAgreementSharp 292` — boundary radius
+  `dIn = 56` (relative `7/8`), list `L = 292` (§3b/§5).
+* `wrap_correlatedAgreementLine_interior : CorrelatedAgreementLine friSetupWrapRate 52 186` — the
+  **interior** radius `dIn = 52` (relative `13/16`), list `L = 186`, GS-NON-DEGENERATE
+  (`wrap_meets_gs_line_radius`: `t² = 144 > 128 = 2·|κ|`); the deployed analysis prefers this (§6).
+* `wrap_perFold_soundness_capacity : |Good|/babyBearP⁴ < 2⁻¹¹²` — the near-capacity radius
+  `dOut = 125`, field-independent count `|Good| ≤ C(64,2) = 2016`, the deployed **~112.6-bit** proven
+  per-fold soundness over the quartic extension (§8). SOUND against Kambiré's capacity refutation:
+  his `n^C` blow-up needs `n → ∞`, `r > 2`; at fixed `r = 2` his construction caps at `C(n,2)`.
+The **GS-IDEAL list `L ≤ 2·|κ| = 128` is BLOCKED** for the constant-fold multiset word
+(`Dregg2/ForMathlib/GuruswamiSudan.lean:20-33` is the authority — multiplicity/fibre-concentration
+obstruction); `186`/`292` is the sharpest reach of the ordered-pair method, not the GS ideal.
+Security is unaffected — the list term is `L/|F|` with `|F| ≈ 2¹²⁴`.
 
 `#assert_axioms` ⊆ {propext, Classical.choice, Quot.sound}; no `axiom`, no `sorry`.
 -/

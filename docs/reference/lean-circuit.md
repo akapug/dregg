@@ -89,7 +89,16 @@ laundered to `True` or an open hole):
   two precisely-named lemmas — `RSListBound` (RS list-size) and `FriProximityGapChallenges`
   (bounded good folding challenges) — each PROVED at `L=1` and instantiated on the deployed
   rate-`1/64` code (min-distance `127` → singleton at radius `63`); only their `L>1` generalization
-  (the Johnson bound + correlated-agreement theorem) remains open. See `STARK-SOUNDNESS-CENSUS.md`.
+  (the Johnson bound + correlated-agreement theorem) remains open. The `L>1` correlated-agreement
+  primitive is in fact PROVED at deployed-relevant list sizes by the ordered-pair counting method
+  (`FriCorrelatedAgreementSharp.lean`): `L ≤ 186` at the **interior** radius `dIn=52` (relative
+  `13/16`, GS-non-degenerate — `wrap_correlatedAgreementLine_interior`) and `L ≤ 292` at the
+  **boundary** radius `dIn=56` (relative `7/8` — `wrap_correlatedAgreement_sharp_proved`); the
+  deployed analysis prefers the interior. The **GS-ideal `L ≤ 2·|κ| = 128` is BLOCKED** — the
+  Guruswami–Sudan interpolation delivers no bound for the constant-fold *multiset* received word
+  (fibre-concentration; `metatheory/Dregg2/ForMathlib/GuruswamiSudan.lean:20-33` is the authority),
+  so `186`/`292` is the sharpest counting reach, not the GS ideal. Security is unaffected: the list
+  term is `L/|F|` with `|F| ≈ 2^124`, ~`2⁻¹¹⁶` of headroom. See `STARK-SOUNDNESS-CENSUS.md`.
 - **`Poseidon2SpongeCR hash`** + the `CommitSurface` CR fields (`CommitSurface`,
   `CircuitSoundness.lean:113-134`) — the standard Poseidon collision-resistance set
   (`cmbInj`, `compInj`, `compNInj`, `leafInj`, `restFrame`) the full-state root

@@ -32,9 +32,21 @@ cryptographic soundness at only `19` queries does NOT come from the unique-decod
 count — it rests on the JOHNSON list-decoding radius `δ_J = 1 − √ρ = 7/8` (BCIKS20 proximity
 gaps) plus the `16`-bit query PoW. That Johnson-radius FRI proximity soundness at the
 deployed wrap params is the ONE genuine research assumption every STARK shares; it is NAMED
-here as `FriLdtDeployedBound` (a `Prop`, NOT proved — the honest floor), and
+here as `FriLdtDeployedBound` (a `Prop`, the honest floor), and
 `ldt_bound_is_load_bearing` shows it is load-bearing (it delivers the cryptographic target
 `19` queries alone cannot).
+
+**⚑ UPDATE (2026-07-13) — `FriLdtDeployedBound` AS-STATED is now DISCHARGED.**
+`FriLdtJohnson.lean` (`friLdtDeployedBound_discharge`, axiom-clean) proves it: at the Johnson radius
+`δ_J = 7/8` the statement is the trivial counting else-branch (`accept_prob_le_of_farN` at `δ = 7/8`,
+`k = 19`), so `ldt_bound_unconditional` re-derives the payoff with NO hypothesis. Its genuine
+BCIKS20 residual (words INSIDE the `δ_J` ball, past unique decoding) is two precisely-named `Prop`s —
+`RSListBound` + `FriProximityGapChallenges` — each PROVED at `L = 1` on the deployed rate-`1/64` code
+(min-distance `127`); their `L > 1` correlated-agreement generalization is PROVED by ordered-pair
+counting at `L ≤ 186` interior (`dIn = 52`) / `L ≤ 292` boundary (`dIn = 56`) in
+`FriCorrelatedAgreementSharp.lean` (§6/§5), with the GS-ideal `L ≤ 128` BLOCKED for the multiset word
+(`Dregg2/ForMathlib/GuruswamiSudan.lean:20-33`). The deployed per-fold soundness is the **~112.6-bit**
+`wrap_perFold_soundness_capacity` (§8); the FRI capacity conjecture that once quoted `~130` is refuted.
 
 **The reduction (§5, stated).** The deployed extraction bundle
 `AlgoStarkSoundTransferV3.FriLdtExtractV3` ("`verifyAlgo` accepts ⟹ FRI opened a genuine
