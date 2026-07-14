@@ -21,11 +21,20 @@ cd deploy/genesis
 ```
 
 The script will:
-1. Run `cargo run --release -p dregg-node -- genesis`
-2. Generate Ed25519 validator keys (`node-{0,1,2}.key`)
-3. Write validator env files (`node-{0,1,2}.env`)
-4. Write canonical `genesis.json` and `.devnet`
-5. Refuse to overwrite generated files unless `--force` is passed
+1. Run `cargo run --release -p dregg-node -- genesis --validators 4`
+2. Generate per-validator keys (`node-{0..3}.key`) — each seed derives BOTH an
+   ed25519 AND an ML-DSA-65 (FIPS 204) key, so the committee can furnish the
+   HYBRID (ed25519 ∧ ML-DSA-65) finalization quorum the beacon's PQ half needs
+3. Write validator env files (`node-{0..3}.env`)
+4. Publish the PUBLIC `genesis.json` (committee public keys + enrolled ML-DSA
+   roster + threshold) into this tracked directory
+5. Refuse to overwrite unless `--force` is passed
+
+Private keys land in `GENESIS_KEYS_DIR` (default `./secrets`, gitignored; point
+it at an out-of-tree path such as `~/dregg-secrets` to keep keys entirely
+outside the repo). Only the public `genesis.json` is written into the tracked
+tree — never a private key. Committee size / host are env-driven:
+`FED_VALIDATORS` (default 4), `DREGG_DEPLOY_HOST` (default `demo.dregg.net`).
 
 ### Prerequisites
 
@@ -56,9 +65,11 @@ The script will:
 
 ### Constitution
 
-- 3 validators (node-0, node-1, node-2)
-- Threshold: 2 (BFT quorum)
-- Timeout: 10 waves
+- 4 validators (node-0 .. node-3) — n>=4 gives one-fault slack (n=3 is
+  unanimity-fragile: finality needs all three)
+- Threshold: 3 (BFT quorum, 2f+1 for f=1)
+- Each validator enrolls an ed25519 key AND an ML-DSA-65 key; `federation_id`
+  and each `hybrid_id` commit to BOTH halves (the enrolled PQ roster)
 - Epoch length: 100 waves
 - Checkpoint interval: 10 waves
 
@@ -97,12 +108,15 @@ The script will:
 
 After generating:
 
+The deploy host is env-driven (`DREGG_DEPLOY_HOST`, default `demo.dregg.net` —
+the demo/testnet domain; the old `*.fg-goose.online` devnet is retired):
+
 ```bash
-# Copy genesis to the running node
-scp genesis.json devnet.dregg.fg-goose.online:/opt/dregg-data/
+# Copy the PUBLIC genesis manifest to the running node
+scp genesis.json "${DREGG_DEPLOY_HOST:-demo.dregg.net}":/opt/dregg-data/
 
 # Restart the node to load new genesis
-ssh devnet.dregg.fg-goose.online sudo systemctl restart dregg-gateway
+ssh "${DREGG_DEPLOY_HOST:-demo.dregg.net}" sudo systemctl restart dregg-gateway
 ```
 
 Or use the automated deploy:
@@ -113,7 +127,10 @@ Or use the automated deploy:
 
 ## Security Notes
 
-- `node-*.key` files are gitignored and must never be committed
-- The checked-in `genesis.json` is a devnet artifact. Regenerate it before a fresh devnet deployment.
-- Run `generate.sh` to produce canonical Ed25519 validator keys and genesis state
-- These keys are for **devnet only** -- never reuse for production
+- Private keys (`node-*.key`, `*-well.key`, `agent-*.key`) go to
+  `GENESIS_KEYS_DIR` (out-of-tree / gitignored) and must never be committed;
+  `deploy/genesis/*.key` and `deploy/genesis/secrets/` are gitignored as a
+  backstop
+- The checked-in `genesis.json` is the PUBLIC committee manifest (public keys +
+  ML-DSA roster + threshold) only — it carries no private material
+- These keys are for **testnet only** -- never reuse for production
