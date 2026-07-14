@@ -2447,3 +2447,92 @@ export class DescentEngine {
     return { ok: true, tier: "extension", refused: false, published: true, commitment: out.commitment ?? w.commitmentHex() };
   }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════════════
+// THE SPRITE ENGINE — `<dregg-sprite>` (the in-house DETERMINISTIC sprite, painted IN THE TAB).
+// docs/CONTENT-AND-ASSET-SPEC.md; dreggnet-sprite/src/lib.rs; wasm/src/bindings_sprite.rs.
+//
+// The sprite is a PURE, deterministic function of a content-addressed asset id + a kind — no
+// keys, no state, no executor, no trust decision. So unlike the poll/story/descent engines
+// (which own a real wasm world + a signature/verify tier), this engine is trivial: it drives
+// a `SpriteRenderer` (in production the wasm `spriteSvg` / `traitsJson`) and hands back the
+// SVG. The honest guarantee is DETERMINISM: the same asset id ⇒ the byte-identical SVG a
+// stranger re-renders, and a different id ⇒ a different sprite. The `<dregg-sprite>` element
+// paints the returned SVG into a CLOSED shadow root (the page cannot read or rewrite it).
+// ═══════════════════════════════════════════════════════════════════════════════════════
+
+/** The two committed sprite kinds (`dreggnet_sprite::AssetKind`). */
+export type SpriteKind = "gear" | "card";
+
+export type SpritePortRequest =
+  | { op: "renderSprite"; kind: SpriteKind; asset: string }
+  | { op: "spriteTraits"; kind: SpriteKind; asset: string };
+
+export interface SpriteRenderResponse {
+  ok: boolean;
+  kind?: SpriteKind;
+  asset?: string;
+  /** The composed vector SVG string (engine-authored, from the renderer — never the page). */
+  svg?: string;
+  error?: string;
+}
+
+export interface SpriteTraitsResponse {
+  ok: boolean;
+  kind?: SpriteKind;
+  asset?: string;
+  /** The derived trait vector as a JSON string (`{ kind, rarity, fingerprint, axes }`). */
+  traitsJson?: string;
+  error?: string;
+}
+
+export type SpritePortResponse = SpriteRenderResponse | SpriteTraitsResponse;
+
+/** The transport the `<dregg-sprite>` element holds — a channel to the SpriteEngine. */
+export interface SpritePort {
+  request(req: SpritePortRequest): Promise<SpritePortResponse>;
+}
+
+/**
+ * The deterministic renderer the engine drives. In production this is the wasm
+ * `dreggnet-sprite` getter (`spriteSvg` / `traitsJson`, `wasm/src/bindings_sprite.rs`); a
+ * test stands in an equivalent deterministic function (exactly as the descent harness stands
+ * in a `DescentWorld`). Both `spriteSvg` and `traitsJson` are PURE (same input ⇒ same output)
+ * and THROW on a bad kind / non-hex / wrong-length asset id (fail-closed).
+ */
+export interface SpriteRenderer {
+  spriteSvg(kind: string, asset: string): string;
+  traitsJson(kind: string, asset: string): string;
+}
+
+export interface SpriteEngineDeps {
+  renderer: SpriteRenderer;
+}
+
+/**
+ * THE SPRITE ENGINE. A thin driver over a deterministic `SpriteRenderer` — no world state to
+ * own, so a request is a pure call. A renderer throw (bad kind / non-hex / wrong-length id)
+ * fails closed as `{ ok: false, error }` (the element then renders NOTHING).
+ */
+export class SpriteEngine {
+  constructor(private deps: SpriteEngineDeps) {}
+
+  async handle(req: SpritePortRequest): Promise<SpritePortResponse> {
+    try {
+      switch (req.op) {
+        case "renderSprite": {
+          const svg = this.deps.renderer.spriteSvg(req.kind, req.asset);
+          return { ok: true, kind: req.kind, asset: req.asset, svg };
+        }
+        case "spriteTraits": {
+          const traitsJson = this.deps.renderer.traitsJson(req.kind, req.asset);
+          return { ok: true, kind: req.kind, asset: req.asset, traitsJson };
+        }
+        default:
+          return { ok: false, error: "unknown op" };
+      }
+    } catch (e) {
+      return { ok: false, error: String((e as Error)?.message ?? e) };
+    }
+  }
+}

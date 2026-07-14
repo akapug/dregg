@@ -9,6 +9,7 @@ import { registerCompositionElements } from "./elements/dregg-embed";
 import { registerDocElement } from "./elements/dregg-doc";
 import { registerStoryElement } from "./elements/dregg-story";
 import { registerDescentElement } from "./elements/dregg-descent";
+import { registerSpriteElement } from "./elements/dregg-sprite";
 
 // Generate a random nonce for this injection session to prevent event spoofing.
 const SESSION_NONCE = crypto.randomUUID();
@@ -46,6 +47,14 @@ registerStoryElement();
 // opt-in SETTLE/PUBLISH to the node's no-cheat leaderboard, routed through the background
 // DescentEngine; until published the run stays private.
 registerDescentElement();
+
+// The in-house DETERMINISTIC sprite, painted in the tab (docs/CONTENT-AND-ASSET-SPEC.md):
+// register `<dregg-sprite kind="gear|card" asset="<hex>">`. It asks the background SpriteEngine
+// (which drives the wasm `spriteSvg`, wasm/src/bindings_sprite.rs) for the deterministic SVG
+// of a content-addressed asset and paints it into a closed shadow root. Pure function of
+// public data — same asset ⇒ the byte-identical sprite a stranger re-renders; no keys, no
+// custody, no trust decision. A bad kind / non-hex / wrong-length id fails closed (no render).
+registerSpriteElement();
 
 // Methods that any page origin can call without prior approval.
 const UNRESTRICTED_METHODS = new Set<MessageType>([

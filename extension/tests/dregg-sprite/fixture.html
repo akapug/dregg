@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>dregg-sprite fixture</title></head>
+<body>
+  <h1>dregg-sprite fixture — the in-house deterministic sprite, painted in-tab</h1>
+
+  <!-- Two GEAR sprites of the SAME asset id: they must paint the byte-identical SVG
+       (determinism — same asset ⇒ same sprite). -->
+  <p><dregg-sprite id="gearA" kind="gear" asset="1111111111111111111111111111111111111111111111111111111111111111"></dregg-sprite></p>
+  <p><dregg-sprite id="gearAdup" kind="gear" asset="1111111111111111111111111111111111111111111111111111111111111111"></dregg-sprite></p>
+
+  <!-- A GEAR sprite of a DIFFERENT asset id: a different sprite. -->
+  <p><dregg-sprite id="gearB" kind="gear" asset="2222222222222222222222222222222222222222222222222222222222222222"></dregg-sprite></p>
+
+  <!-- A CARD sprite of the SAME asset id as gearA: the two KINDS differ. -->
+  <p><dregg-sprite id="cardA" kind="card" asset="1111111111111111111111111111111111111111111111111111111111111111"></dregg-sprite></p>
+
+  <!-- A malformed asset id: the engine fails closed — no render, [error], no shadow art. -->
+  <p><dregg-sprite id="badSprite" kind="gear" asset="notahex"></dregg-sprite></p>
+
+  <script src="/harness.js"></script>
+</body>
+</html>

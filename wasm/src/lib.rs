@@ -75,6 +75,16 @@ pub mod bindings_story;
 // the persistent cross-day character + no-cheat leaderboard + node settle are the separate
 // publish-a-verified-run leg (`DailyDescentOffering` / `ugc_dregg`), not built here.
 pub mod bindings_descent;
+// The in-house sprite in the tab: `dreggnet-sprite`'s deterministic generative
+// `content-addressed asset → SVG` renderer, exposed as a pair of pure getters
+// (`spriteSvg(kind, assetIdHex)` / `traitsJson(kind, assetIdHex)`). Same asset ⇒
+// byte-identical SVG (anyone re-renders the identical art off the content address);
+// a different AssetId ⇒ a different sprite. No keys, no state, no executor — a pure
+// function of the hex asset id + the kind. `dreggnet-sprite`'s deps are all already
+// in this graph (dreggnet-asset/dregg-dice/blake3), so it is in the shipped wasm32
+// bundle AND the native `cargo test`. The `<dregg-sprite>` element paints this SVG;
+// the deos `Tile{handle}` → sprite resolution is the separate in-surface wire.
+pub mod bindings_sprite;
 
 // ============================================================================
 // Token operations (Macaroon backend)

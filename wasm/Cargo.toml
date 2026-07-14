@@ -130,6 +130,20 @@ spween-dregg = { path = "../spween-dregg" }
 # `dregg-zkoracle-prove` `tlsn`/`tokio` edge is optional + off. So it crosses to the tab exactly
 # like `spween-dregg`, and `bindings_descent` is in the shipped bundle (no target gate).
 dreggnet-offerings = { path = "../dreggnet-offerings" }
+# THE IN-HOUSE SPRITE — `dreggnet-sprite`: the deterministic generative renderer
+# (`content-addressed asset → trait vector → composed vector SVG`), exposed in the tab as
+# `spriteSvg(kind, assetIdHex)` / `traitsJson(kind, assetIdHex)` (`bindings_sprite`). Pure
+# Rust SVG-string (no floats/trig/unordered iteration) — same asset ⇒ byte-identical SVG.
+# Its deps are all already in this graph and wasm32-safe: `dreggnet-asset` (the AssetId
+# content address — its `dregg-schema`/`spween-dregg`/`dregg-cell`/`dregg-app-framework`
+# substrate is a direct wasm dep via `spween-dregg`), `dregg-dice` (the verifiable draw
+# stream — already pulled by `procgen-dregg`), and `blake3`. So it crosses to the tab and
+# `bindings_sprite` is in the shipped bundle (no target gate). Consumed READ-ONLY.
+dreggnet-sprite = { path = "../dreggnet-sprite" }
+# The content-addressed asset identity — `AssetId` (a blake3 content address), the sprite
+# seed `bindings_sprite` decodes a hex id into. Consumed READ-ONLY; already in this graph
+# transitively via `dreggnet-sprite`, declared directly here for the `AssetId` construction.
+dreggnet-asset = { path = "../dreggnet-asset" }
 # THE BEACON → DAILY-SEED WIRE — `procgen-dregg`: `daily_seed`/`CommittedSeed` (fold a committed
 # beacon output into the day's dungeon seed) and `beacon::DailyBeacon` (verify a fetched drand
 # `quicknet` reveal by BLS pairing, in the tab, before it will open a day). Pure `dregg-dice`

@@ -5813,6 +5813,7 @@ name = "dregg-multiway-tug"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "deos-view",
  "dregg-app-framework",
  "dregg-cell",
  "dregg-circuit",
@@ -5821,6 +5822,7 @@ dependencies = [
  "dregg-schema",
  "dregg-turn",
  "dreggnet-asset",
+ "dreggnet-offerings",
  "game-turn-slice",
  "procgen-dregg",
  "spween-dregg",
@@ -6883,6 +6885,35 @@ dependencies = [
  "dungeon-on-dregg",
  "procgen-dregg",
  "spween-dregg",
+ "ugc-dregg",
+]
+
+[[package]]
+name = "dreggnet-sprite"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-dice",
+ "dreggnet-asset",
+ "roxmltree",
+]
+
+[[package]]
+name = "dreggnet-surfaces"
+version = "0.1.0"
+dependencies = [
+ "deos-view",
+ "dregg-app-framework",
+ "dreggnet-asset",
+ "dreggnet-cheevo",
+ "dreggnet-companion",
+ "dreggnet-craft",
+ "dreggnet-guild",
+ "dreggnet-offerings",
+ "dreggnet-party",
+ "dreggnet-trade",
+ "dungeon-on-dregg",
+ "procgen-dregg",
  "ugc-dregg",
 ]
 
@@ -15349,6 +15380,8 @@ dependencies = [
  "blake3",
  "dregg-dice",
  "hex",
+ "reqwest 0.12.28",
+ "serde_json",
 ]
 
 [[package]]
