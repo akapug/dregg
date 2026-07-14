@@ -89,7 +89,16 @@ pub enum DrawError {
     #[error("draw index {index} out of range (draw_count = {draw_count})")]
     IndexOutOfRange { index: u32, draw_count: u32 },
 
-    /// A bounded draw was requested with `n == 0`; `0..0` is empty.
+    /// A bounded draw was requested with `n == 0`; `0..0` is empty. Also raised by
+    /// [`DrawStream::weighted`](crate::DrawStream::weighted) when the committed weight
+    /// table is empty or sums to zero (no tier can be selected).
     #[error("bounded draw requires a non-zero bound")]
     ZeroBound,
+
+    /// A weighted draw's committed weights sum to more than `u64::MAX`, so the total
+    /// cannot be used as a single [`DrawStream::draw_bounded`](crate::DrawStream::draw_bounded)
+    /// bound. Game-scale rarity tables are far below this; it guards against a malformed
+    /// (e.g. overflowing) committed table rather than any legitimate distribution.
+    #[error("weighted draw weights overflow u64")]
+    WeightsOverflow,
 }

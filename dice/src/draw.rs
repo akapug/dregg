@@ -135,6 +135,45 @@ impl DrawStream {
         Ok(self.draw_bounded(index, sides)? + 1)
     }
 
+    /// A **provably-fair weighted selection** over a *committed* weight table: returns
+    /// the index of the tier the draw at `index` falls into, where tier `i` is chosen
+    /// with probability `weights[i] / Σ weights`.
+    ///
+    /// The construction is a CDF over **exactly one** [`Self::draw_bounded`]: a single
+    /// unbiased draw in `0..Σweights` is walked against the cumulative weights, and the
+    /// first tier whose running total exceeds it wins. Like every other draw here it
+    /// consumes exactly one raw draw per `index`, so it stays inside the fixed
+    /// transcript (`draw_count` is unchanged) and the whole selection is re-derivable by
+    /// any verifier from `(seed, index)` and the *same committed weights*.
+    ///
+    /// **The weights must be committed** — a Rust `const` table, or a table hashed into
+    /// the [`RandomnessRequest`](crate::RandomnessRequest) — so they cannot be swapped
+    /// after the seed is fixed. Given the commitment, "I drew the legendary tier" is a
+    /// claim anyone re-derives, not one they must be trusted on: this is the mechanism
+    /// behind provable rarity (a 1/1000 tier is simply a small weight, re-checkable at
+    /// the tail of the CDF without any impractical repeated-slot table).
+    ///
+    /// Returns [`DrawError::ZeroBound`] if `weights` is empty or sums to zero, and
+    /// [`DrawError::WeightsOverflow`] if the weights sum past `u64::MAX`.
+    pub fn weighted(&self, index: u32, weights: &[u64]) -> Result<usize, DrawError> {
+        let total: u128 = weights.iter().map(|&w| w as u128).sum();
+        if total == 0 {
+            return Err(DrawError::ZeroBound);
+        }
+        let n = u64::try_from(total).map_err(|_| DrawError::WeightsOverflow)?;
+        let pick = self.draw_bounded(index, n)? as u128;
+        let mut acc: u128 = 0;
+        for (i, &w) in weights.iter().enumerate() {
+            acc += w as u128;
+            if pick < acc {
+                return Ok(i);
+            }
+        }
+        // `pick < total` always holds (draw_bounded yields `0..n`), so the loop returns
+        // above; the final tier closes the CDF as a total function for the type-checker.
+        Ok(weights.len() - 1)
+    }
+
     /// A commitment over the entire transcript: the seed, the draw count, and
     /// every raw draw `0..draw_count` in order.
     ///
