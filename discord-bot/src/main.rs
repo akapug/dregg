@@ -196,6 +196,8 @@ const REGISTERED_COMMAND_NAMES: &[&str] = &[
     // ─── $DREGG-paid real-AI runs: buy run-credits, check balance ────────────────
     "buy-credits",
     "balance",
+    // ─── the game treasury: two-balance fuel/pile + proven cross-chain holdings ───
+    "treasury",
 ];
 
 #[cfg(test)]
@@ -337,6 +339,7 @@ impl EventHandler for Handler {
             // ─── $DREGG-paid real-AI runs ────────────────────────────────────
             commands::pay::register_buy(),
             commands::pay::register_balance(),
+            commands::pay::register_treasury(),
         ];
         debug_assert_eq!(commands.len(), REGISTERED_COMMAND_NAMES.len());
 
@@ -486,6 +489,7 @@ impl EventHandler for Handler {
                 "doc" => commands::doc::handle(&ctx, &command, &self.state).await,
                 "buy-credits" => commands::pay::handle_buy(&ctx, &command, &self.state).await,
                 "balance" => commands::pay::handle_balance(&ctx, &command, &self.state).await,
+                "treasury" => commands::pay::handle_treasury(&ctx, &command, &self.state).await,
                 _ => {
                     tracing::warn!("Unknown command: {name}");
                 }

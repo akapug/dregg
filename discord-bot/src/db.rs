@@ -592,6 +592,25 @@ impl Database {
         .execute(&pool)
         .await?;
 
+        // ─── The two-balance TREASURY (dregg-pay TreasuryStore backing) ──────
+        // Detected game revenue lands here: a USDC payment fuels `usdc` (the FUEL
+        // tank, burned per real-AI run and fail-closed on empty), a $DREGG payment
+        // grows `dregg` (the illiquid PILE). One durable row so the treasury's
+        // dual-asset accounting survives a process restart, exactly like the credit
+        // ledger. See `pay::SqliteTreasuryStore`.
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS pay_treasury (
+                id    INTEGER PRIMARY KEY CHECK (id = 0),
+                usdc  INTEGER NOT NULL DEFAULT 0,
+                dregg INTEGER NOT NULL DEFAULT 0
+            )",
+        )
+        .execute(&pool)
+        .await?;
+        sqlx::query("INSERT OR IGNORE INTO pay_treasury (id, usdc, dregg) VALUES (0, 0, 0)")
+            .execute(&pool)
+            .await?;
+
         // ─── UGC gallery (commands::gallery GalleryStore backing) ────────────
         // The durable backing of the `/gallery` universe registry: published
         // universes (their reproducible PUBLIC source — never a cached world)
@@ -770,6 +789,52 @@ impl Database {
             .bind(reference)
             .execute(&self.pool)
             .await?;
+        Ok(())
+    }
+
+    // ─── The two-balance treasury (dregg-pay TreasuryStore backing) ─────────
+
+    /// The treasury's persisted USDC balance (the FUEL tank), atomic USDC units.
+    /// The read half of `dregg_pay::TreasuryStore::usdc_balance`.
+    pub async fn pay_treasury_usdc(&self) -> Result<u64, sqlx::Error> {
+        let row: Option<(i64,)> = sqlx::query_as("SELECT usdc FROM pay_treasury WHERE id = 0")
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.map(|(v,)| v.max(0) as u64).unwrap_or(0))
+    }
+
+    /// The treasury's persisted `$DREGG` balance (the PILE), atomic `$DREGG` units.
+    /// The read half of `dregg_pay::TreasuryStore::dregg_balance`.
+    pub async fn pay_treasury_dregg(&self) -> Result<u64, sqlx::Error> {
+        let row: Option<(i64,)> = sqlx::query_as("SELECT dregg FROM pay_treasury WHERE id = 0")
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.map(|(v,)| v.max(0) as u64).unwrap_or(0))
+    }
+
+    /// Set the treasury's USDC balance (the write half of
+    /// `dregg_pay::TreasuryStore::set_usdc_balance`). Upsert of the single row.
+    pub async fn pay_treasury_set_usdc(&self, v: u64) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO pay_treasury (id, usdc, dregg) VALUES (0, ?, 0)
+             ON CONFLICT(id) DO UPDATE SET usdc = excluded.usdc",
+        )
+        .bind(v as i64)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Set the treasury's `$DREGG` balance (the write half of
+    /// `dregg_pay::TreasuryStore::set_dregg_balance`). Upsert of the single row.
+    pub async fn pay_treasury_set_dregg(&self, v: u64) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO pay_treasury (id, usdc, dregg) VALUES (0, 0, ?)
+             ON CONFLICT(id) DO UPDATE SET dregg = excluded.dregg",
+        )
+        .bind(v as i64)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 

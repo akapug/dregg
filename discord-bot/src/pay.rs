@@ -30,8 +30,9 @@ use dregg_narrator::{
     metered_converse,
 };
 use dregg_pay::{
-    CreditLedger, CreditOutcome, CreditStore, DepositAddress, DepositAddressProvider, HdDeposit,
-    Network, PayConfig, PaymentRef, UserId, WatchError, Watcher,
+    ChainId, CreditLedger, CreditOutcome, CreditStore, DepositAddress, DepositAddressProvider,
+    HdDeposit, MultichainHoldings, Network, PayConfig, PaymentRef, ProvenForeignHolding, Treasury,
+    TreasuryError, TreasurySlot, TreasuryStore, TreasuryView, UserId, WatchError, Watcher,
 };
 
 use crate::db::Database;
@@ -83,6 +84,55 @@ impl CreditStore for SqliteCreditStore {
     }
     fn mark_processed(&self, reference: &PaymentRef) {
         let _ = self.block(self.db.pay_mark_processed(&reference.0));
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The sqlite-backed TreasuryStore — dregg-pay's two-balance `TreasuryStore` over the
+// bot's async sqlx `Database`. The FUEL (`usdc`) + PILE (`dregg`) balances persist in
+// `pay_treasury`, so detected game revenue that landed in the treasury survives a
+// restart, exactly like the credit ledger.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A [`TreasuryStore`] persisted in the bot's sqlite database. Same sync↔async bridge as
+/// [`SqliteCreditStore`]: the trait is SYNC (interior mutability) but the `Database` is
+/// async sqlx, so each method drives the query to completion on the current Tokio runtime
+/// via [`tokio::task::block_in_place`]. The two balances live in the single `pay_treasury`
+/// row, so a fresh process re-opening the same DB sees the same fuel + pile.
+pub struct SqliteTreasuryStore {
+    db: Database,
+    handle: tokio::runtime::Handle,
+}
+
+impl SqliteTreasuryStore {
+    /// Wrap a `Database`. `handle` is the fallback runtime when a store method is called
+    /// from OUTSIDE any runtime; inside a runtime worker the current handle is used.
+    pub fn new(db: Database, handle: tokio::runtime::Handle) -> Self {
+        SqliteTreasuryStore { db, handle }
+    }
+
+    /// Drive an async DB future to completion synchronously — the same bridge
+    /// [`SqliteCreditStore::block`] uses.
+    fn block<F: std::future::Future>(&self, fut: F) -> F::Output {
+        match tokio::runtime::Handle::try_current() {
+            Ok(current) => tokio::task::block_in_place(move || current.block_on(fut)),
+            Err(_) => self.handle.block_on(fut),
+        }
+    }
+}
+
+impl TreasuryStore for SqliteTreasuryStore {
+    fn usdc_balance(&self) -> u64 {
+        self.block(self.db.pay_treasury_usdc()).unwrap_or(0)
+    }
+    fn dregg_balance(&self) -> u64 {
+        self.block(self.db.pay_treasury_dregg()).unwrap_or(0)
+    }
+    fn set_usdc_balance(&self, v: u64) {
+        let _ = self.block(self.db.pay_treasury_set_usdc(v));
+    }
+    fn set_dregg_balance(&self, v: u64) {
+        let _ = self.block(self.db.pay_treasury_set_dregg(v));
     }
 }
 
@@ -201,6 +251,19 @@ pub struct PayState {
     pub db: Database,
     /// The real-AI paid narrator, if a hosted backend is configured (else paid runs fall back free).
     pub paid: Option<PaidNarrator>,
+    /// The two-balance TREASURY the detected game revenue lands in: a USDC payment fuels
+    /// the tank ([`Treasury::spend_inference_usd`] draws it down per real-AI run,
+    /// fail-closed on empty), a `$DREGG` payment grows the illiquid pile. Persisted over
+    /// [`SqliteTreasuryStore`] so it survives a restart. [`PayState::poll_and_credit`]
+    /// routes every newly-detected payment through [`Treasury::record_payment`] — this is
+    /// the revenue-landing join, live in the game loop (not just in dregg-pay's tests).
+    pub treasury: Treasury<SqliteTreasuryStore>,
+    /// The NON-CUSTODIAL multichain treasury VIEW: the treasury's declared per-chain
+    /// positions (its own addresses + assets), against which cross-chain proof-of-holdings
+    /// facts are bound and summed. [`PayState::treasury_holdings`] reports the proven
+    /// cross-chain total; only facts binding to a declared position AND backed by a real
+    /// consensus proof are counted (a forged/foreign/unproven fact is refused).
+    pub treasury_view: TreasuryView,
 }
 
 /// The outcome of a gated `/dungeon` narration attempt for one user.
@@ -272,11 +335,66 @@ impl PayState {
     /// **Poll the watcher for this user's deposit address and credit any new payment.** Idempotent
     /// via the payment reference (a re-poll never double-credits). Returns every credit outcome
     /// observed this poll (empty when nothing new landed).
+    ///
+    /// **The revenue-landing join.** Every payment newly processed this poll is also routed
+    /// through the [`Treasury`] ([`Treasury::record_payment`]): a USDC payment fuels the tank,
+    /// a `$DREGG` payment grows the pile — the dual-asset accounting, live in the game loop.
+    /// A re-observed payment (`AlreadyCredited`) is idempotent at the ledger AND here, so the
+    /// treasury never double-counts.
     pub fn poll_and_credit(&self, discord_id: &str) -> Result<Vec<CreditOutcome>, WatchError> {
         let user = UserId::from(discord_id);
         let addr = self.hd.deposit_address(&user);
         let payments = self.watcher.poll(&user, &addr)?;
-        Ok(payments.iter().map(|p| self.ledger.credit(p)).collect())
+        let mut outcomes = Vec::with_capacity(payments.len());
+        for p in &payments {
+            let outcome = self.ledger.credit(p);
+            // Route only NEWLY-received revenue into the treasury. `Credited` /
+            // `BelowOneRun` both mean the ledger processed this reference for the first
+            // time (real money arrived, sub-run dust included); `AlreadyCredited` /
+            // `BalanceOverflow` must NOT touch the treasury (no double-count / not banked).
+            if matches!(
+                outcome,
+                CreditOutcome::Credited { .. } | CreditOutcome::BelowOneRun { .. }
+            ) {
+                self.treasury.record_payment(p.asset, p.amount);
+            }
+            outcomes.push(outcome);
+        }
+        Ok(outcomes)
+    }
+
+    /// The treasury's FUEL balance (atomic USDC) — what the real-AI runs burn.
+    pub fn treasury_fuel(&self) -> u64 {
+        self.treasury.usdc_balance()
+    }
+
+    /// The treasury's PILE balance (atomic `$DREGG`) — the accumulating illiquid holding.
+    pub fn treasury_pile(&self) -> u64 {
+        self.treasury.dregg_balance()
+    }
+
+    /// Draw down the fuel tank for one real-AI run costing `cost_usd` (real USD).
+    /// Fails closed with [`TreasuryError::InsufficientFuel`] when the tank is dry — the
+    /// "must refuel" signal. This is the treasury side of EVERY run regardless of how it
+    /// was paid: a `$DREGG`-paid run still burns USD fuel while only the pile grew.
+    pub fn treasury_spend_inference_usd(&self, cost_usd: f64) -> Result<u64, TreasuryError> {
+        self.treasury.spend_inference_usd(cost_usd)
+    }
+
+    /// **The multichain view seam.** Report the treasury's PROVEN cross-chain holdings by
+    /// binding each supplied [`ProvenForeignHolding`] fact (rendered by the light clients,
+    /// pointed at the treasury's own addresses) to a declared position in
+    /// [`PayState::treasury_view`]. A fact is COUNTED only when it binds to a declared
+    /// (chain, address, asset) position AND carries a real consensus proof; a fact for a
+    /// foreign address, an untracked chain, an unproven RPC echo, or a duplicate is
+    /// refused (fail-closed) and reported in [`MultichainHoldings::rejected`].
+    pub fn treasury_holdings(&self, facts: &[ProvenForeignHolding]) -> MultichainHoldings {
+        self.treasury_view.proven_holdings(facts)
+    }
+
+    /// The treasury's declared per-chain positions (its own addresses + assets).
+    pub fn treasury_slots(&self) -> &[TreasurySlot] {
+        self.treasury_view.slots()
     }
 
     /// **The gate seam.** Try a PAID real-AI run for `discord_id`:
@@ -321,10 +439,15 @@ impl PayState {
     ) -> PayState {
         let config = devnet_mock_config(bot_secret);
         let hd = HdDeposit::new(&config);
-        let store = SqliteCreditStore::new(db.clone(), handle);
+        let store = SqliteCreditStore::new(db.clone(), handle.clone());
         let ledger = CreditLedger::new(store, config.price_per_run.max(1));
         let watcher: Arc<dyn Watcher + Send + Sync> =
             Arc::new(dregg_pay::MockWatcher::new(dregg_pay::MockChain::new()));
+        let treasury = Treasury::new(
+            SqliteTreasuryStore::new(db.clone(), handle),
+            config.usdc_decimals,
+        );
+        let treasury_view = build_treasury_view(&config);
         PayState {
             config,
             hd,
@@ -332,6 +455,8 @@ impl PayState {
             watcher,
             db,
             paid: None,
+            treasury,
+            treasury_view,
         }
     }
 
@@ -351,11 +476,16 @@ impl PayState {
     ) -> PayState {
         let config = PayConfig::from_env().unwrap_or_else(|_| devnet_mock_config(bot_secret));
         let hd = HdDeposit::new(&config);
-        let store = SqliteCreditStore::new(db.clone(), handle);
+        let store = SqliteCreditStore::new(db.clone(), handle.clone());
         let ledger = CreditLedger::new(store, config.price_per_run.max(1));
         let watcher: Arc<dyn Watcher + Send + Sync> =
             Arc::new(dregg_pay::MockWatcher::new(dregg_pay::MockChain::new()));
         let paid = build_bedrock_narrator();
+        let treasury = Treasury::new(
+            SqliteTreasuryStore::new(db.clone(), handle),
+            config.usdc_decimals,
+        );
+        let treasury_view = build_treasury_view(&config);
         PayState {
             config,
             hd,
@@ -363,8 +493,72 @@ impl PayState {
             watcher,
             db,
             paid,
+            treasury,
+            treasury_view,
         }
     }
+}
+
+/// Build the treasury's declared multichain positions from operator config.
+///
+/// Always declares the **Solana** position — the treasury's own Solana address
+/// ([`PayConfig::treasury`]) holding the `$DREGG` mint ([`PayConfig::mint`]) — which the
+/// Solana bridge light client can prove non-custodially. Additional per-chain positions
+/// (USDC on Base, a denom on a Cosmos hub) are OPERATOR-DECLARED via env — each a
+/// base58-encoded 32-byte chain-scoped address + asset (a Solana pubkey, or a
+/// left-zero-padded 20-byte EVM/Cosmos address, the same convention
+/// [`ProvenForeignHolding::holder`] uses):
+///
+/// * `DREGG_TREASURY_BASE_ADDR` + `DREGG_TREASURY_BASE_ASSET` → a USDC-on-Base position;
+/// * `DREGG_TREASURY_COSMOS_ADDR` + `DREGG_TREASURY_COSMOS_ASSET` + `DREGG_TREASURY_COSMOS_CHAIN`
+///   → a position on the named Cosmos hub.
+///
+/// A missing/unparseable pair is simply not declared (the view stays honest — it never
+/// claims a position the operator did not declare). Pointing a proof-of-holdings relayer
+/// at these addresses is a named residual (per-chain revenue landing beyond Solana).
+fn build_treasury_view(config: &PayConfig) -> TreasuryView {
+    let mut slots = vec![TreasurySlot::new(
+        ChainId::Solana,
+        config.treasury.to_bytes(),
+        config.mint,
+        "$DREGG on Solana (treasury)",
+    )];
+    if let Some(slot) = env_slot(
+        ChainId::BASE,
+        "DREGG_TREASURY_BASE_ADDR",
+        "DREGG_TREASURY_BASE_ASSET",
+        "USDC on Base (treasury)",
+    ) {
+        slots.push(slot);
+    }
+    let cosmos_chain = std::env::var("DREGG_TREASURY_COSMOS_CHAIN")
+        .ok()
+        .filter(|s| !s.trim().is_empty());
+    if let Some(chain_id) = cosmos_chain {
+        if let Some(slot) = env_slot(
+            ChainId::cosmos(chain_id.trim()),
+            "DREGG_TREASURY_COSMOS_ADDR",
+            "DREGG_TREASURY_COSMOS_ASSET",
+            "denom on Cosmos (treasury)",
+        ) {
+            slots.push(slot);
+        }
+    }
+    TreasuryView::new(slots)
+}
+
+/// Read one operator-declared cross-chain treasury position from env (a base58 32-byte
+/// address + asset). `None` if either var is absent or does not decode to 32 bytes — a
+/// malformed declaration is skipped, never guessed.
+fn env_slot(
+    chain: ChainId,
+    addr_var: &str,
+    asset_var: &str,
+    label: &'static str,
+) -> Option<TreasurySlot> {
+    let addr = dregg_pay::parse_pubkey_base58(&std::env::var(addr_var).ok()?).ok()?;
+    let asset = dregg_pay::parse_pubkey_base58(&std::env::var(asset_var).ok()?).ok()?;
+    Some(TreasurySlot::new(chain, addr, asset, label))
 }
 
 /// A DEVNET/MOCK [`PayConfig`] with a THROWAWAY seed derived from the bot secret and
@@ -446,7 +640,7 @@ fn now_secs() -> i64 {
 mod tests {
     use super::*;
     use dregg_narrator::{CLAUDE_HAIKU_4_5, ConverseResponse};
-    use dregg_pay::{MockChain, MockWatcher};
+    use dregg_pay::{Asset, MockChain, MockWatcher};
 
     /// A deterministic mock Converse backend — canned narration + fixed token usage. NEVER touches
     /// AWS; the whole paid gate is driven with no spend. Mirrors the shape a real Bedrock call
@@ -487,15 +681,30 @@ mod tests {
         ledger_dir: PathBuf,
         price_per_run: u64,
     ) -> PayState {
+        build_pay_state_for_asset(db, chain, backend, ledger_dir, price_per_run, Asset::Dregg)
+    }
+
+    /// Like [`build_pay_state`] but the mock watcher tags observed payments as `asset`, so a
+    /// driven test can exercise the USDC (fuel) or `$DREGG` (pile) treasury-routing leg.
+    fn build_pay_state_for_asset(
+        db: Database,
+        chain: MockChain,
+        backend: Arc<dyn ConverseBackend + Send + Sync>,
+        ledger_dir: PathBuf,
+        price_per_run: u64,
+        asset: Asset,
+    ) -> PayState {
         // A DEVNET/MOCK config with a throwaway seed — never a real mainnet value.
         let seed = blake3::derive_key("test-pay-seed", &test_bot_secret());
         let mint = [9u8; 32];
-        let treasury = DepositAddress([2u8; 32]);
-        let config = PayConfig::devnet_mock(seed.to_vec(), mint, treasury, price_per_run);
+        let treasury_addr = DepositAddress([2u8; 32]);
+        let config = PayConfig::devnet_mock(seed.to_vec(), mint, treasury_addr, price_per_run);
         let hd = HdDeposit::new(&config);
-        let store = SqliteCreditStore::new(db.clone(), tokio::runtime::Handle::current());
+        let handle = tokio::runtime::Handle::current();
+        let store = SqliteCreditStore::new(db.clone(), handle.clone());
         let ledger = CreditLedger::new(store, price_per_run);
-        let watcher: Arc<dyn Watcher + Send + Sync> = Arc::new(MockWatcher::new(chain));
+        let watcher: Arc<dyn Watcher + Send + Sync> =
+            Arc::new(MockWatcher::for_asset(chain, asset));
         let paid = PaidNarrator::new(
             backend,
             ModelRegistry::builtin(),
@@ -504,6 +713,11 @@ mod tests {
             64,
             ledger_dir,
         );
+        let treasury = Treasury::new(
+            SqliteTreasuryStore::new(db.clone(), handle),
+            config.usdc_decimals,
+        );
+        let treasury_view = build_treasury_view(&config);
         PayState {
             config,
             hd,
@@ -511,6 +725,8 @@ mod tests {
             watcher,
             db,
             paid: Some(paid),
+            treasury,
+            treasury_view,
         }
     }
 
@@ -680,6 +896,234 @@ mod tests {
             pay.balance(user),
             1,
             "a failed paid call did NOT debit the credit"
+        );
+    }
+
+    /// THE REVENUE-LANDING JOIN, DRIVEN in the LIVE PayState loop: a detected payment
+    /// routes through the Treasury (not just in dregg-pay's own tests). A `$DREGG` payment
+    /// lands in the PILE via `poll_and_credit`; a USDC payment lands in the FUEL tank; a
+    /// `$DREGG`-paid run still burns USD fuel while only the pile grew (the dual-asset
+    /// asymmetry); the treasury persists across a fresh store open; a re-poll never
+    /// double-counts.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn treasury_joins_the_live_revenue_loop_dual_asset() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("treasury.db");
+        let db_url = format!("sqlite://{}?mode=rwc", db_path.display());
+        let db = Database::connect(&db_url).await.unwrap();
+
+        let price: u64 = 1_000_000; // 1 $DREGG at 6 decimals
+        let ok_backend: Arc<dyn ConverseBackend + Send + Sync> = Arc::new(MockBackend {
+            reply: "brine".to_string(),
+            input_tokens: 10,
+            output_tokens: 4,
+        });
+
+        // ── (A) a $DREGG payment routes to the PILE through the LIVE poll loop ──
+        let dregg_chain = MockChain::new();
+        let pay = build_pay_state_for_asset(
+            db.clone(),
+            dregg_chain.clone(),
+            ok_backend.clone(),
+            tmp.path().join("runs-dregg"),
+            price,
+            Asset::Dregg,
+        );
+        let user = "700700700700700700";
+        assert_eq!(pay.treasury_pile(), 0);
+        assert_eq!(pay.treasury_fuel(), 0);
+
+        let deposit = pay.deposit_address(user);
+        dregg_chain.credit_onchain(&deposit, 3 * price + 250); // 3 runs + dust
+        let outs = pay.poll_and_credit(user).unwrap();
+        assert_eq!(outs.len(), 1, "one payment observed");
+        assert_eq!(pay.balance(user), 3, "3 run-credits minted");
+        // The FULL received amount (dust included) landed in the pile; the fuel is untouched.
+        assert_eq!(
+            pay.treasury_pile(),
+            3 * price + 250,
+            "$DREGG revenue routed to the pile in the live loop"
+        );
+        assert_eq!(pay.treasury_fuel(), 0, "$DREGG did not touch the fuel tank");
+
+        // A re-poll (no new money) must NOT double-count the treasury.
+        let again = pay.poll_and_credit(user).unwrap();
+        assert!(again.is_empty(), "re-poll sees nothing new");
+        assert_eq!(pay.treasury_pile(), 3 * price + 250, "no double-count");
+
+        // ── (B) the dual-asset asymmetry: a run burns USD fuel, pile only grows ──
+        // Operator refuels the tank; a $DREGG-paid run still costs real USD inference.
+        pay.treasury.deposit_usdc(100_000); // $0.10 of fuel
+        let fuel_before = pay.treasury_fuel();
+        let remaining = pay.treasury_spend_inference_usd(0.01).unwrap(); // ~Bedrock cost
+        assert!(remaining < fuel_before, "the run drew down the fuel");
+        assert_eq!(
+            pay.treasury_pile(),
+            3 * price + 250,
+            "the pile is untouched by inference — it is not fuel"
+        );
+
+        // ── (C) a USDC payment routes to the FUEL tank through the SAME live loop ──
+        let usdc_chain = MockChain::new();
+        let pay_usdc = build_pay_state_for_asset(
+            db.clone(),
+            usdc_chain.clone(),
+            ok_backend,
+            tmp.path().join("runs-usdc"),
+            price,
+            Asset::Usdc,
+        );
+        // Fuel starts where (B) left it (same persistent treasury row) — record the base.
+        let fuel_base = pay_usdc.treasury_fuel();
+        let usdc_user = "800800800800800800";
+        let usdc_deposit = pay_usdc.deposit_address(usdc_user);
+        usdc_chain.credit_onchain(&usdc_deposit, 2 * price);
+        let _ = pay_usdc.poll_and_credit(usdc_user).unwrap();
+        assert_eq!(
+            pay_usdc.treasury_fuel(),
+            fuel_base + 2 * price,
+            "USDC revenue routed to the fuel tank in the live loop"
+        );
+
+        // ── (D) the treasury PERSISTS across a fresh store open (sqlite) ──
+        let pile_now = pay.treasury_pile();
+        let fuel_now = pay_usdc.treasury_fuel();
+        drop(pay);
+        drop(pay_usdc);
+        drop(db);
+        let db2 = Database::connect(&db_url).await.unwrap();
+        assert_eq!(
+            db2.pay_treasury_dregg().await.unwrap(),
+            pile_now,
+            "the pile survived a fresh sqlite open"
+        );
+        assert_eq!(
+            db2.pay_treasury_usdc().await.unwrap(),
+            fuel_now,
+            "the fuel survived a fresh sqlite open"
+        );
+        println!(
+            "[treasury-join] pile={pile_now} fuel={fuel_now} — dual-asset revenue landed + persisted"
+        );
+    }
+
+    /// THE MULTICHAIN VIEW, EXPOSED + DRIVEN through the PayState accessor: the running
+    /// service reports the treasury's proven cross-chain holdings over its declared
+    /// per-chain addresses. An honest fact pointed at the treasury's own address is
+    /// counted; a forged fact (someone else's address), an untracked chain, and an
+    /// unproven RPC echo are each REFUSED, fail-closed.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn multichain_view_reports_proven_cross_chain_holdings() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db_url = format!("sqlite://{}?mode=rwc", tmp.path().join("mc.db").display());
+        let db = Database::connect(&db_url).await.unwrap();
+        let backend: Arc<dyn ConverseBackend + Send + Sync> = Arc::new(MockBackend {
+            reply: "x".into(),
+            input_tokens: 1,
+            output_tokens: 1,
+        });
+        let mut pay = build_pay_state(db, MockChain::new(), backend, tmp.path().join("runs"), 1);
+
+        // The default live view always declares the Solana position (treasury addr + mint).
+        assert!(
+            pay.treasury_slots()
+                .iter()
+                .any(|s| s.chain == ChainId::Solana),
+            "the live view declares the Solana treasury position"
+        );
+
+        // Declare a richer multichain view (throwaway fixture addresses — NEVER mainnet):
+        // USDC on Base + $DREGG on Solana + a denom on a Cosmos hub.
+        const BASE_TREASURY: [u8; 32] = [0x11; 32];
+        const SOLANA_TREASURY: [u8; 32] = [0x22; 32];
+        const COSMOS_TREASURY: [u8; 32] = [0x33; 32];
+        const USDC_ON_BASE: [u8; 32] = [0xAA; 32];
+        const DREGG_ON_SOLANA: [u8; 32] = [0xBB; 32];
+        const DENOM_ON_COSMOS: [u8; 32] = [0xCC; 32];
+        pay.treasury_view = TreasuryView::new(vec![
+            TreasurySlot::new(ChainId::BASE, BASE_TREASURY, USDC_ON_BASE, "USDC on Base"),
+            TreasurySlot::new(
+                ChainId::Solana,
+                SOLANA_TREASURY,
+                DREGG_ON_SOLANA,
+                "$DREGG on Solana",
+            ),
+            TreasurySlot::new(
+                ChainId::cosmos("cosmoshub-4"),
+                COSMOS_TREASURY,
+                DENOM_ON_COSMOS,
+                "ATOM on Cosmos Hub",
+            ),
+        ]);
+
+        let fact = |chain, holder, asset, amount, proven| ProvenForeignHolding {
+            chain,
+            holder,
+            asset,
+            amount,
+            snapshot: 100,
+            consensus_proven: proven,
+        };
+        let attacker = [0xEE; 32];
+        let facts = vec![
+            // honest, our address → counted
+            fact(ChainId::BASE, BASE_TREASURY, USDC_ON_BASE, 5_000_000, true),
+            fact(
+                ChainId::Solana,
+                SOLANA_TREASURY,
+                DREGG_ON_SOLANA,
+                900_000_000,
+                true,
+            ),
+            // forged: someone else's address on a tracked chain → NotOurPosition
+            fact(ChainId::BASE, attacker, USDC_ON_BASE, 9_999_999, true),
+            // untracked chain (Ethereum) → UntrackedChain
+            fact(ChainId::ETHEREUM, BASE_TREASURY, USDC_ON_BASE, 1, true),
+            // our address + asset, but no consensus proof → Unproven (fail closed)
+            fact(
+                ChainId::cosmos("cosmoshub-4"),
+                COSMOS_TREASURY,
+                DENOM_ON_COSMOS,
+                42_000_000,
+                false,
+            ),
+        ];
+
+        let held = pay.treasury_holdings(&facts);
+
+        // Only the two honest facts are counted; the total is exactly their sum.
+        assert_eq!(held.holdings.len(), 2, "two honest holdings counted");
+        assert_eq!(held.chains_proven(), 2);
+        assert_eq!(held.amount_on(ChainId::BASE), 5_000_000);
+        assert_eq!(held.amount_on(ChainId::Solana), 900_000_000);
+        assert_eq!(held.total_amount(), 5_000_000 + 900_000_000);
+
+        // The three bad facts are each refused with a legible, fail-closed reason.
+        assert_eq!(held.rejected.len(), 3);
+        use dregg_pay::HoldingRejection;
+        assert!(
+            held.rejected
+                .iter()
+                .any(|r| r.reason == HoldingRejection::NotOurPosition),
+            "the forged foreign-address fact is refused"
+        );
+        assert!(
+            held.rejected
+                .iter()
+                .any(|r| r.reason == HoldingRejection::UntrackedChain),
+            "the untracked-chain fact is refused"
+        );
+        assert!(
+            held.rejected
+                .iter()
+                .any(|r| r.reason == HoldingRejection::Unproven),
+            "the unproven RPC-echo fact is refused (fail closed)"
+        );
+        println!(
+            "[treasury-view] proven cross-chain total={} over {} chains ({} facts refused)",
+            held.total_amount(),
+            held.chains_proven(),
+            held.rejected.len()
         );
     }
 }

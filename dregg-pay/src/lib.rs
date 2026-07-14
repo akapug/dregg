@@ -97,6 +97,12 @@ pub use multichain::{
     HoldingRejection, MultichainHoldings, ProvenChainHolding, RejectedHolding, TreasurySlot,
     TreasuryView,
 };
+// The cross-chain read primitives the multichain treasury view binds against —
+// re-exported so a consumer (the discord-bot) can declare treasury positions and
+// ingest proof-of-holdings facts through `dregg-pay` alone, without taking a direct
+// `dregg-governance` dependency (the light-client lanes render these; the treasury
+// view points them at the treasury's own addresses).
+pub use dregg_governance::proven_foreign_holding::{ChainId, ProvenForeignHolding};
 pub use otc::{
     OtcError, OtcQuote, OtcSettleError, OtcSettlement, otc_dregg_out, otc_quote, otc_settle,
     otc_settle_message,

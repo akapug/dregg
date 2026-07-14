@@ -16,7 +16,7 @@ use serenity::all::{
 };
 
 use crate::BotState;
-use dregg_pay::{CreditOutcome, Network};
+use dregg_pay::{ChainId, CreditOutcome, Network};
 
 /// The bot-branded purple (matches the dungeon surface).
 const PAY_COLOR: u32 = 0x7B2CBF;
@@ -37,6 +37,24 @@ pub fn register_buy() -> CreateCommand {
 pub fn register_balance() -> CreateCommand {
     CreateCommand::new("balance")
         .description("Show your $DREGG run-credit balance for real-AI dungeon runs")
+}
+
+/// Register `/treasury`.
+pub fn register_treasury() -> CreateCommand {
+    CreateCommand::new("treasury").description(
+        "Report the game treasury: the two-balance fuel/pile + its proven cross-chain holdings",
+    )
+}
+
+/// A human name for a declared position's chain.
+fn chain_label(chain: ChainId) -> String {
+    match chain {
+        ChainId::Solana => "Solana".to_string(),
+        ChainId::ETHEREUM => "Ethereum".to_string(),
+        ChainId::BASE => "Base".to_string(),
+        ChainId::Evm(id) => format!("EVM chain {id}"),
+        ChainId::Cosmos(_) => "Cosmos".to_string(),
+    }
 }
 
 async fn respond_ephemeral(ctx: &Context, command: &CommandInteraction, embed: CreateEmbed) {
@@ -132,6 +150,58 @@ pub async fn handle_balance(ctx: &Context, command: &CommandInteraction, state: 
         .color(PAY_COLOR)
         .footer(CreateEmbedFooter::new(
             "credits persist across restarts (sqlite) · devnet/mock by default",
+        ));
+    respond_ephemeral(ctx, command, embed).await;
+}
+
+/// `/treasury` — report the two-balance treasury (the revenue that landed) and the
+/// treasury's declared cross-chain positions + proven cross-chain holdings.
+///
+/// The fuel/pile are the LIVE revenue-landing accounting: a detected USDC payment fuels the
+/// tank (burned per real-AI run), a `$DREGG` payment grows the pile (see [`crate::pay`]). The
+/// multichain view is the non-custodial cross-chain report: it counts only proof-of-holdings
+/// facts that bind to the treasury's own declared addresses and carry a real consensus proof.
+/// A live proof-of-holdings relayer feed is a named residual — until one is wired the proven
+/// total reflects the facts currently available (none in the interim), while the DECLARED
+/// positions are always shown.
+pub async fn handle_treasury(ctx: &Context, command: &CommandInteraction, state: &BotState) {
+    let pay = &state.pay;
+
+    let fuel = pay.treasury_fuel();
+    let pile = pay.treasury_pile();
+
+    let mut desc = format!(
+        "**The two-balance treasury** — where detected game revenue lands.\n\n• **Fuel (USDC):** `{fuel}` atomic — burned per real-AI run; fails closed (must-refuel) on empty.\n• **Pile ($DREGG):** `{pile}` atomic — the accumulating illiquid holding.\n\nA USDC payment fuels the tank; a $DREGG payment grows the pile. Every run burns USD fuel regardless of how it was paid.\n\n**Declared cross-chain positions** (non-custodial — proven, not held):"
+    );
+
+    let slots = pay.treasury_slots();
+    if slots.is_empty() {
+        desc.push_str("\n_(none declared)_");
+    } else {
+        for s in slots {
+            desc.push_str(&format!("\n• `{}` — {}", chain_label(s.chain), s.label));
+        }
+    }
+
+    // Report proven cross-chain holdings over whatever facts are currently available. With
+    // no live proof-of-holdings relayer wired yet (a named residual), this is the empty set
+    // in the interim; the accessor is the exposed surface a relayer feeds.
+    let held = pay.treasury_holdings(&[]);
+    desc.push_str(&format!(
+        "\n\n**Proven cross-chain holdings:** {} position(s) proven across {} chain(s), total `{}` atomic.\n_Proven holdings require a proof-of-holdings relayer pointed at these addresses (a named residual); the declared positions above are the treasury's non-custodial claim._",
+        held.holdings.len(),
+        held.chains_proven(),
+        held.total_amount(),
+    ));
+
+    let embed = CreateEmbed::new()
+        .title("Game treasury")
+        .description(desc)
+        .color(PAY_COLOR)
+        .field("Fuel (USDC atomic)", format!("{fuel}"), true)
+        .field("Pile ($DREGG atomic)", format!("{pile}"), true)
+        .footer(CreateEmbedFooter::new(
+            "revenue-landing accounting persists across restart (sqlite) · non-custodial cross-chain view · devnet/mock by default",
         ));
     respond_ephemeral(ctx, command, embed).await;
 }
