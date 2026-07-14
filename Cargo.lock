@@ -5585,6 +5585,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dregg-epoch"
+version = "0.1.0"
+dependencies = [
+ "dregg-circuit",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "dregg-exec-lean"
 version = "0.1.0"
 dependencies = [
@@ -20315,10 +20324,12 @@ name = "starbridge-web-surface"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "deos-hermes",
  "dregg-app-framework",
  "dregg-cell",
  "dregg-cell-crypto",
  "dregg-firmament",
+ "dregg-narrator",
  "dregg-query",
  "dregg-turn",
  "dregg-types",
@@ -22527,6 +22538,11 @@ name = "ugc-dregg"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "dregg-cell",
+ "dregg-circuit",
+ "dregg-circuit-prove",
+ "dregg-lightclient",
+ "dregg-turn",
  "dungeon-on-dregg",
  "ed25519-dalek",
  "procgen-dregg",
