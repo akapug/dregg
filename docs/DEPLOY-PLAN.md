@@ -21,11 +21,16 @@ today); the STARK fold (private-strategy, portable proof) is the labeled Phase-3
   (scripts/federation-local.sh). GAP: re-genesis with an ML-DSA roster (ALSO lights up the beacon's PQ finalized-root half —
   today's genesis carries no ML-DSA roster so the federation can't furnish a hybrid quorum yet); n>=4 for fault slack (n=3 is
   unanimity-fragile); multi-host distribution is manual (keys/DNS/cross-host QUIC :9420); repoint off the devnet fg-goose.online.
-- PHASE 3 — PORTABLE STARK PROOFS (the hard upgrade, NOT demo-blocking). Wire the whole-match 45-min fold into a job service
-  (the per-turn async prove_pool exists [node/src/prove_pool.rs, ~0.75s/turn]; the match-fold payload + a standalone proving
-  service don't); GPU the inner apex fold (circuit-prove/gpu_backend, ~2-2.5x today, inner 241s MMCS not yet GPU'd); finish
-  prove-in-browser wasm (the on-device commitment + the full VERIFY-in-browser are landed; the full PROVE isn't). Verify is
-  succinct + K-independent (sub-second) so per-entry server verify is cheap.
+- PHASE 3 — PORTABLE STARK PROOFS (the hard upgrade, NOT demo-blocking). STATUS: the async match-fold PROVING SERVICE is BUILT
+  (dreggnet-prove-service — enqueue -> a worker folds OFF the play path -> status/wait, bounded + metered, the proof correctness-
+  identical to the foreground fold, a forged match rejected). So proving is OFF-PATH now (the UX fix). ⚠ HONEST: the fold is NOT
+  yet GPU-accelerated — it routes through prove_turn_chain_recursive's CPU recursion config (Radix2DitParallel + MerkleTreeMmcs);
+  the GPU recursion variant (GpuDft + GpuFoldValMmcs) EXISTS + is runtime-dispatched but wiring it into the fold's per-layer
+  aggregation is a circuit-prove change (the named ~2x lever; the inner 241s MMCS is the order-of-magnitude piece). So it's still
+  ~45min, just off-path. ALSO: wgpu SIGSEGVs on persvati's headless driver (needs a working-GPU box, e.g. hbox if its driver is
+  sound). NAMED NEXT: the GPU-recursion wire into prove_turn_chain_recursive; finish prove-in-browser wasm (the on-device
+  commitment + the full VERIFY-in-browser landed; the full PROVE isn't); the service->board submit wire (dreggnet-game-board).
+  Verify is succinct + K-independent (sub-second) so per-entry server verify is cheap regardless.
 - PHASE 4 — THE EXTENSION (off critical path — it's the wallet). Store docs all READY; rebuild (./build.sh) + submit; the ~50MB
   wasm is an MV3 size/perf review risk.
 
