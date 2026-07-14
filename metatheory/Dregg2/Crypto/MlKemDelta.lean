@@ -2537,6 +2537,114 @@ theorem coeffBR_prefactor_refutable :
     exact zpow_lt_zpow_right₀ (by norm_num) (by norm_num)
   linarith
 
+/-! ### §17.2 — REDUCING THE PREFACTOR TO A LOCAL (TAIL-ATOM) BOUND: the precise Berry–Esseen residual.
+
+The named `CoeffBahadurRaoPrefactor` bounds the *aggregate* tilted tail expectation. §17.2 reduces it — via the
+refined tail-atom envelope `tiltTailExp_le_tailAtom_geom` (ForMathlib, which needs the level-atom bound ONLY on
+the tail `k ≥ 832`) — to a strictly LOCAL statement: each tilted tail-atom mass at levels `k ≥ 832` is `≤ 2⁻¹⁹`.
+This is the literal *moderate-deviation local limit theorem* for the per-coefficient tilted lattice sum — the
+precise upstream lemma that the char-function Gaussian-decay bound `reCharFn_le_exp` (proved, ForMathlib) feeds
+via Fourier inversion (the one Fourier-inversion identity Mathlib still lacks). The reduction closes because
+`2⁻¹⁹/(1−e^{−3/10}) ≤ 2⁻¹⁶`. -/
+
+/-- `2⁻¹⁹/(1−e^{−3/10}) ≤ 2⁻¹⁶` — the geometric-envelope arithmetic (PROVED). From `e^{3/10} ≥ 13/10`
+(`add_one_le_exp`) we get `e^{−3/10} ≤ 10/13`, hence `1−e^{−3/10} ≥ 3/13`, and `2⁻¹⁹·(13/3) ≤ 2⁻¹⁶`. -/
+theorem prefactor_geom_arith :
+    (2 : ℝ) ^ (-19 : ℤ) / (1 - Real.exp (-(3 / 10 : ℝ))) ≤ (2 : ℝ) ^ (-16 : ℤ) := by
+  have he : Real.exp (-(3 / 10 : ℝ)) ≤ 10 / 13 := by
+    rw [Real.exp_neg, inv_le_comm₀ (Real.exp_pos _) (by norm_num : (0:ℝ) < 10 / 13),
+        show ((10:ℝ) / 13)⁻¹ = 13 / 10 from by norm_num]
+    have := Real.add_one_le_exp (3 / 10 : ℝ); linarith
+  have hden : (3 : ℝ) / 13 ≤ 1 - Real.exp (-(3 / 10 : ℝ)) := by linarith
+  have hdenpos : (0:ℝ) < 1 - Real.exp (-(3 / 10 : ℝ)) := by linarith
+  rw [div_le_iff₀ hdenpos]
+  have hstep : (2:ℝ) ^ (-19 : ℤ) ≤ (2:ℝ) ^ (-16 : ℤ) * (3 / 13) := by
+    rw [show (2:ℝ) ^ (-19 : ℤ) = (2:ℝ) ^ (-16 : ℤ) * (2:ℝ) ^ (-3 : ℤ) from by
+          rw [← zpow_add₀ (by norm_num : (2:ℝ) ≠ 0)]; norm_num]
+    refine mul_le_mul_of_nonneg_left ?_ (by positivity)
+    rw [show (2:ℝ) ^ (-3 : ℤ) = 1 / 8 from by norm_num]; norm_num
+  calc (2:ℝ) ^ (-19 : ℤ)
+      ≤ (2:ℝ) ^ (-16 : ℤ) * (3 / 13) := hstep
+    _ ≤ (2:ℝ) ^ (-16 : ℤ) * (1 - Real.exp (-(3 / 10 : ℝ))) :=
+        mul_le_mul_of_nonneg_left hden (by positivity)
+
+/-- **THE LOCAL (TAIL-ATOM) RESIDUAL — the precise Berry–Esseen input.** For every coefficient (both signs), the
+tilted tail-atom masses at levels `k ≥ 832` are each `≤ 2⁻¹⁹`. This is the moderate-deviation local limit
+theorem for the tilted per-coefficient lattice sum; discharging it (Fourier inversion of the char-function decay
+`reCharFn_le_exp`) closes the prefactor. Satisfiable AND refutable (`coeffTailAtom_satisfiable`/`_refutable`). -/
+def CoeffTailAtomBound {Ω : Type*} [Fintype Ω] (ez : Fin 768 → Ω → ℤ) (pmax : ℝ) : Prop :=
+  ∀ c, (∀ k, (832 : ℤ) ≤ k → atomMass (ez c) (fun ω => (ez c ω : ℝ)) (3/10) k ≤ pmax)
+     ∧ (∀ k, (832 : ℤ) ≤ k →
+          atomMass (fun ω => -(ez c ω)) (fun ω => ((-(ez c ω) : ℤ) : ℝ)) (3/10) k ≤ pmax)
+
+/-- **THE PER-`g` REDUCTION (PROVED).** The tail-atom bound on levels `k ≥ 832` gives the aggregate tilted-tail
+bound `≤ 2⁻¹⁶` via `tiltTailExp_le_tailAtom_geom` and `prefactor_geom_arith`. -/
+theorem coeffTail_reduce {Ω : Type*} [Fintype Ω] [Nonempty Ω] (g : Ω → ℤ)
+    (hg : ∀ k, (832 : ℤ) ≤ k → atomMass g (fun ω => (g ω : ℝ)) (3/10) k ≤ (2:ℝ) ^ (-19 : ℤ)) :
+    tiltTailExp (fun ω => (g ω : ℝ)) (3/10) (832 : ℝ) ≤ (2:ℝ) ^ (-16 : ℤ) := by
+  have h := tiltTailExp_le_tailAtom_geom g (by norm_num : (0:ℝ) < 3/10) 832 (by positivity) hg
+  rw [show (((832 : ℤ)) : ℝ) = (832 : ℝ) from by norm_num] at h
+  exact le_trans h prefactor_geom_arith
+
+/-- **THE PREFACTOR, FROM THE LOCAL TAIL-ATOM BOUND (PROVED).** `CoeffTailAtomBound ez 2⁻¹⁹` implies
+`CoeffBahadurRaoPrefactor ez 2⁻¹⁶`: apply `coeffTail_reduce` to `ez c` and to its negation (rewriting the cast
+`↑(−ez) = −↑ez`). This is the honest reduction of the aggregate prefactor to the local limit theorem. -/
+theorem coeffBR_prefactor_of_tailAtom {Ω : Type*} [Fintype Ω] [Nonempty Ω]
+    (ez : Fin 768 → Ω → ℤ) (hta : CoeffTailAtomBound ez ((2:ℝ) ^ (-19 : ℤ))) :
+    CoeffBahadurRaoPrefactor ez ((2:ℝ) ^ (-16 : ℤ)) := by
+  intro c
+  obtain ⟨h1, h2⟩ := hta c
+  refine ⟨coeffTail_reduce (ez c) h1, ?_⟩
+  have h := coeffTail_reduce (fun ω => -(ez c ω)) h2
+  have hfun : (fun ω => (((-(ez c ω)) : ℤ) : ℝ)) = (fun ω => -((ez c ω : ℝ))) := by
+    funext ω; push_cast; ring
+  rw [hfun] at h
+  exact h
+
+/-- **THE REAL ML-KEM-768 FIPS δ-BOUND VIA THE LOCAL TAIL-ATOM RESIDUAL — `δ ≤ 2⁻¹⁶⁴` (PROVED, kernel-clean,
+conditional on ONLY the local limit theorem).** Composes `coeffBR_prefactor_of_tailAtom` with the real prefactor
+bridge. So the sole remaining input to close FIPS `δ` for the real ML-KEM law is the LOCAL statement
+`CoeffTailAtomBound mlkemZ 2⁻¹⁹` — that the tilted tail-atom masses past `832` are `≤ 2⁻¹⁹` — strictly sharper
+and more local than the aggregate prefactor. -/
+theorem mlkem768_decapsFailure_le_delta_bahadurRao_real_tailAtom
+    (hta : CoeffTailAtomBound mlkemZ ((2:ℝ) ^ (-19 : ℤ))) :
+    winProb (decapsFails mlkemZ) ≤ MlKemCorrect.mlKem768Delta :=
+  mlkem768_decapsFailure_le_delta_bahadurRao_real (coeffBR_prefactor_of_tailAtom mlkemZ hta)
+
+/-- **(TOOTH — the local residual is satisfiable.)** On the zero-noise model every tail-atom fiber `{ω : g ω = k}`
+with `k ≥ 832` is empty (the noise is `0`), so every tail-atom mass is `0 ≤ 2⁻¹⁹`. -/
+theorem coeffTailAtom_satisfiable :
+    CoeffTailAtomBound zeroModel ((2:ℝ) ^ (-19 : ℤ)) := by
+  have hempty : ∀ (hnoise : Unit → ℤ) (X : Unit → ℝ) (k : ℤ), (∀ u, hnoise u = 0) → (832 : ℤ) ≤ k →
+      atomMass hnoise X (3/10) k ≤ (2:ℝ) ^ (-19 : ℤ) := by
+    intro hnoise X k hh hk
+    unfold atomMass
+    rw [Finset.filter_eq_empty_iff.mpr (fun u _ => by rw [hh u]; omega), Finset.sum_empty]
+    positivity
+  intro c
+  exact ⟨fun k hk => hempty _ _ k (fun u => by simp [zeroModel]) hk,
+         fun k hk => hempty _ _ k (fun u => by simp [zeroModel]) hk⟩
+
+/-- **(TOOTH — the local residual is refutable.)** On the boundary point-mass model (noise constant `832`), the
+tail-atom mass at `k = 832` is the entire tilted mass `1 > 2⁻¹⁹`, so `CoeffTailAtomBound` can FAIL. A genuine
+constraint, not a tautology. -/
+theorem coeffTailAtom_refutable :
+    ¬ CoeffTailAtomBound (fun (_ : Fin 768) (_ : Unit) => (832 : ℤ)) ((2:ℝ) ^ (-19 : ℤ)) := by
+  intro h
+  obtain ⟨h1, _⟩ := h 0
+  have hbound := h1 832 (le_refl (832 : ℤ))
+  have hval : ∀ X : Unit → ℝ,
+      atomMass (fun (_ : Unit) => (832:ℤ)) X (3/10) 832 = 1 := by
+    intro X
+    unfold atomMass
+    rw [Finset.filter_true_of_mem (fun u _ => rfl)]
+    exact sum_tiltWeight X (3/10)
+  rw [hval] at hbound
+  have hlt : (2:ℝ) ^ (-19 : ℤ) < 1 := by
+    rw [show (1:ℝ) = (2:ℝ) ^ (0:ℤ) from by norm_num]
+    exact zpow_lt_zpow_right₀ (by norm_num) (by norm_num)
+  linarith
+
 /-! ## AXIOM HYGIENE — every probabilistic theorem is kernel-clean (⊆ {propext, Classical.choice, Quot.sound}). -/
 
 #assert_all_clean [
@@ -2651,6 +2759,11 @@ theorem coeffBR_prefactor_refutable :
   Dregg2.ForMathlib.BerryEsseen.geom_sum_le_inv_one_sub,
   Dregg2.ForMathlib.BerryEsseen.sum_pow_le_inv_one_sub,
   Dregg2.ForMathlib.BerryEsseen.tiltTailExp_strict_lt_one,
+  Dregg2.ForMathlib.BerryEsseen.tiltTailExp_le_tiltTailProb,
+  Dregg2.ForMathlib.BerryEsseen.reCharFn_le_one_sub,
+  Dregg2.ForMathlib.BerryEsseen.reCharFn_le_exp,
+  Dregg2.ForMathlib.BerryEsseen.reCharFn_two_point,
+  Dregg2.ForMathlib.BerryEsseen.tiltTailExp_le_tailAtom_geom,
   mgf_eq_partition_div,
   winProb_ge_eq_tailFrac,
   winProb_ge_le_refined,
@@ -2659,7 +2772,13 @@ theorem coeffBR_prefactor_refutable :
   mlkem768_decapsFailure_le_delta_bahadurRao,
   mlkem768_decapsFailure_le_delta_bahadurRao_real,
   coeffBR_prefactor_satisfiable,
-  coeffBR_prefactor_refutable
+  coeffBR_prefactor_refutable,
+  prefactor_geom_arith,
+  coeffTail_reduce,
+  coeffBR_prefactor_of_tailAtom,
+  mlkem768_decapsFailure_le_delta_bahadurRao_real_tailAtom,
+  coeffTailAtom_satisfiable,
+  coeffTailAtom_refutable
 ]
 
 end Dregg2.Crypto.MlKemDelta

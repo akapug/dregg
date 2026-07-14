@@ -38,6 +38,7 @@ Every theorem here is kernel-clean (`#assert_axioms ⊆ {propext, Classical.choi
 -/
 import Mathlib.Analysis.SpecialFunctions.Log.Basic
 import Mathlib.Analysis.SpecialFunctions.Exponential
+import Mathlib.Analysis.SpecialFunctions.Trigonometric.Bounds
 import Mathlib.Algebra.BigOperators.Field
 import Mathlib.Algebra.Field.GeomSum
 import Mathlib.Algebra.Order.Field.GeomSum
@@ -285,6 +286,162 @@ theorem tiltTailExp_le_atom_geom [Nonempty Ω] (g : Ω → ℤ) {s : ℝ} (hs : 
       ≤ (1 - r)⁻¹ * pmax := mul_le_mul_of_nonneg_right geom_tail hp
     _ = pmax / (1 - r) := by rw [div_eq_mul_inv, mul_comm]
 
+/-! ## The tail-probability envelope (the second half of the elementary min-envelope).
+
+Dropping the weight `e^{−s(X−a)} ≤ 1` on the tail bounds `tiltTailExp` by the *tilted tail probability*
+`P_tilt[X ≥ a]`. Combined with the geometric envelope this gives `tiltTailExp ≤ min(pmax/(1−e^{−s}), P_tilt)`.
+(For the Chernoff application, re-tilting `P_tilt` only reproduces Chernoff at a higher tilt, so this half does
+not by itself sharpen the tail — the genuine Bahadur–Rao gain lives in the *local* atom decay below.) -/
+
+/-- The tilted tail probability `P_tilt[X ≥ a] = ∑_{ω : a ≤ X ω} tiltWeight`. -/
+noncomputable def tiltTailProb (X : Ω → ℝ) (s a : ℝ) : ℝ :=
+  ∑ ω, (if a ≤ X ω then (1 : ℝ) else 0) * tiltWeight X s ω
+
+/-- **THE TAIL-PROBABILITY ENVELOPE (PROVED).** For `s ≥ 0`, `tiltTailExp X s a ≤ tiltTailProb X s a`: on the
+tail the exponential weight `e^{−s(X−a)} ∈ (0,1]`, so dropping it can only increase the sum. -/
+theorem tiltTailExp_le_tiltTailProb (X : Ω → ℝ) {s : ℝ} (hs : 0 ≤ s) (a : ℝ) :
+    tiltTailExp X s a ≤ tiltTailProb X s a := by
+  unfold tiltTailExp tiltTailProb
+  refine Finset.sum_le_sum (fun ω _ => ?_)
+  by_cases h : a ≤ X ω
+  · rw [if_pos h, if_pos h]
+    refine mul_le_mul_of_nonneg_right ?_ (tiltWeight_nonneg X s ω)
+    rw [Real.exp_le_one_iff]
+    have : 0 ≤ s * (X ω - a) := mul_nonneg hs (by linarith)
+    linarith
+  · rw [if_neg h, if_neg h]
+
+/-! ## The characteristic-function Gaussian-decay bound (the char-function half of Esseen's method).
+
+The geometric envelope replaces every tilted tail-atom by the peak mass `pmax`; the SHARP Bahadur–Rao prefactor
+`1/(s·σ*·√{2π})` instead needs the *local* limit theorem — a Gaussian bound on the atom masses themselves. The
+classical (Esseen) route runs through the characteristic function: for the integer lattice,
+`atomMass k = (1/2π)∫_{−π}^{π} e^{−ikt}·φ(t) dt`, and a Gaussian *decay* bound `|φ(t)| ≤ e^{−c·σ²·t²}` on the
+char function controls that inversion integral. This section formalizes the decay bound in the finite model
+(for a symmetric law, where the char function is the real cosine transform). It is the load-bearing analytic
+ingredient of Berry–Esseen; the remaining Fourier-inversion identity is named as the residual below. -/
+
+/-- The real (cosine) characteristic transform of a finite law `w` against observable `X`:
+`reCharFn w X t = ∑_ω w ω · cos(t·X ω)`. For a SYMMETRIC law this equals the full characteristic function
+`E[e^{itX}]` (the odd sine part cancels), and `1 − reCharFn = ∑ w·(1−cos)` is the char-function
+anti-concentration functional. -/
+noncomputable def reCharFn (w X : Ω → ℝ) (t : ℝ) : ℝ := ∑ ω, w ω * Real.cos (t * X ω)
+
+/-- **THE QUADRATIC CHARACTERISTIC-FUNCTION BOUND (PROVED).** For a probability weight `w` and an observable
+`X` with `|t·X ω| ≤ π` on the support, the real char transform is bounded by `1` minus a multiple of the
+second moment:
+
+  `reCharFn w X t ≤ 1 − (2/π²)·t²·E[X²]`.
+
+This is Jordan's cosine inequality `cos θ ≤ 1 − (2/π²)θ²` (`Real.cos_le_one_sub_mul_cos_sq`) integrated against
+`w`. It is the elementary, sharp-order char-function contraction underlying every local CLT / Berry–Esseen
+bound. -/
+theorem reCharFn_le_one_sub (w X : Ω → ℝ) (hw : ∀ ω, 0 ≤ w ω) (hsum : ∑ ω, w ω = 1) (t : ℝ)
+    (ht : ∀ ω, |t * X ω| ≤ Real.pi) :
+    reCharFn w X t ≤ 1 - 2 / Real.pi ^ 2 * t ^ 2 * ∑ ω, w ω * (X ω) ^ 2 := by
+  unfold reCharFn
+  have key : ∀ ω ∈ (Finset.univ : Finset Ω),
+      w ω * Real.cos (t * X ω) ≤ w ω * (1 - 2 / Real.pi ^ 2 * (t * X ω) ^ 2) :=
+    fun ω _ => mul_le_mul_of_nonneg_left (Real.cos_le_one_sub_mul_cos_sq (ht ω)) (hw ω)
+  have hsplit : ∑ ω, w ω * (1 - 2 / Real.pi ^ 2 * (t * X ω) ^ 2)
+      = (∑ ω, w ω) - 2 / Real.pi ^ 2 * t ^ 2 * ∑ ω, w ω * (X ω) ^ 2 := by
+    rw [Finset.mul_sum, ← Finset.sum_sub_distrib]
+    exact Finset.sum_congr rfl (fun ω _ => by ring)
+  calc ∑ ω, w ω * Real.cos (t * X ω)
+      ≤ ∑ ω, w ω * (1 - 2 / Real.pi ^ 2 * (t * X ω) ^ 2) := Finset.sum_le_sum key
+    _ = (∑ ω, w ω) - 2 / Real.pi ^ 2 * t ^ 2 * ∑ ω, w ω * (X ω) ^ 2 := hsplit
+    _ = 1 - 2 / Real.pi ^ 2 * t ^ 2 * ∑ ω, w ω * (X ω) ^ 2 := by rw [hsum]
+
+/-- **THE GAUSSIAN-DECAY CHARACTERISTIC-FUNCTION BOUND (PROVED).** With the same hypotheses,
+
+  `reCharFn w X t ≤ exp(−(2/π²)·t²·E[X²])`.
+
+Composing `reCharFn_le_one_sub` with `1 − y ≤ e^{−y}` (`Real.add_one_le_exp`) turns the quadratic contraction
+into the exponential (sub-Gaussian) decay `|φ(t)| ≤ e^{−c·σ²·t²}` — the characteristic-function input to the
+Esseen smoothing / local-limit bound. Tensorizing over an independent product (`φ_sum = ∏ φ_i`) upgrades `E[X²]`
+to the variance of the sum; that product step and the Fourier inversion are named as the residual below. -/
+theorem reCharFn_le_exp (w X : Ω → ℝ) (hw : ∀ ω, 0 ≤ w ω) (hsum : ∑ ω, w ω = 1) (t : ℝ)
+    (ht : ∀ ω, |t * X ω| ≤ Real.pi) :
+    reCharFn w X t ≤ Real.exp (-(2 / Real.pi ^ 2 * t ^ 2 * ∑ ω, w ω * (X ω) ^ 2)) := by
+  refine le_trans (reCharFn_le_one_sub w X hw hsum t ht) ?_
+  have h := Real.add_one_le_exp (-(2 / Real.pi ^ 2 * t ^ 2 * ∑ ω, w ω * (X ω) ^ 2))
+  linarith
+
+/-! ## The refined tail-atom geometric envelope — only the TAIL atoms need bounding.
+
+`tiltTailExp_le_atom_geom` demands `pmax` bound EVERY tilted atom (including the peak at the tilted mode). But
+the tilted tail expectation `∑_{k≥A} e^{−s(k−A)}·atomMass k` only ever touches atoms with `k ≥ A`. When `A` is
+in the tail (past the tilted mode), those atoms are Gaussian-tail-small — far below the peak `pmax`. This refined
+envelope requires the atom bound ONLY for `k ≥ A`, so the local-limit input is exactly the deep-tail atom mass
+`atomMass(A)` (≪ `pmax`), NOT the peak. This is what actually reaches the sharp Bahadur–Rao constant. -/
+
+/-- **THE TAIL-ATOM GEOMETRIC ENVELOPE (PROVED).** Identical to `tiltTailExp_le_atom_geom`, but the level-atom
+bound `atomMass ≤ pmax` is required ONLY on the tail `A ≤ k`:
+
+  `(∀ k, A ≤ k → atomMass g X s k ≤ pmax)  ⟹  tiltTailExp X s A ≤ pmax/(1−e^{−s})`.
+
+Since the tilted tail expectation only sums atoms at levels `k ≥ A`, the below-threshold atoms are irrelevant.
+For `A` past the tilted mode, `pmax` is the (small) deep-tail atom mass, so this envelope is *sharp* — its input
+is precisely the moderate-deviation local limit theorem for the tilted lattice sum. -/
+theorem tiltTailExp_le_tailAtom_geom [Nonempty Ω] (g : Ω → ℤ) {s : ℝ} (hs : 0 < s) (A : ℤ)
+    {pmax : ℝ} (hp : 0 ≤ pmax) (hatom : ∀ k, A ≤ k → atomMass g (fun ω => (g ω : ℝ)) s k ≤ pmax) :
+    tiltTailExp (fun ω => (g ω : ℝ)) s (A : ℝ) ≤ pmax / (1 - Real.exp (-s)) := by
+  classical
+  set X : Ω → ℝ := fun ω => (g ω : ℝ) with hX
+  set r : ℝ := Real.exp (-s) with hr
+  have hr0 : 0 ≤ r := (Real.exp_pos _).le
+  have hr1 : r < 1 := by rw [hr, Real.exp_lt_one_iff]; linarith
+  have hfib : tiltTailExp X s (A : ℝ)
+      = ∑ k ∈ univ.image g,
+          (if (A : ℝ) ≤ (k : ℝ) then Real.exp (-(s * ((k : ℝ) - A))) else 0) * atomMass g X s k := by
+    unfold tiltTailExp
+    rw [← Finset.sum_fiberwise_of_maps_to (g := g) (t := univ.image g)
+          (fun ω _ => Finset.mem_image_of_mem g (Finset.mem_univ ω))]
+    refine Finset.sum_congr rfl (fun k _ => ?_)
+    rw [atomMass, Finset.mul_sum]
+    refine Finset.sum_congr rfl (fun ω hω => ?_)
+    have hgk : g ω = k := (Finset.mem_filter.mp hω).2
+    simp only [hX, hgk]
+  rw [hfib]
+  have hbound : ∀ k ∈ univ.image g,
+      (if (A : ℝ) ≤ (k : ℝ) then Real.exp (-(s * ((k : ℝ) - A))) else 0) * atomMass g X s k
+        ≤ (if A ≤ k then r ^ (k - A).toNat else 0) * pmax := by
+    intro k _
+    by_cases h : A ≤ k
+    · have hcast : (A : ℝ) ≤ (k : ℝ) := by exact_mod_cast h
+      rw [if_pos hcast, if_pos h]
+      have hpow : Real.exp (-(s * ((k : ℝ) - A))) = r ^ (k - A).toNat := by
+        rw [hr, ← Real.exp_nat_mul]
+        congr 1
+        have hc : ((k - A).toNat : ℝ) = (k : ℝ) - A := by
+          have h0 : ((k - A).toNat : ℤ) = k - A := Int.toNat_of_nonneg (by linarith)
+          calc ((k - A).toNat : ℝ) = (((k - A).toNat : ℤ) : ℝ) := by push_cast; ring
+            _ = ((k - A : ℤ) : ℝ) := by rw [h0]
+            _ = (k : ℝ) - A := by push_cast; ring
+        rw [hc]; ring
+      rw [hpow]
+      exact mul_le_mul_of_nonneg_left (hatom k h) (pow_nonneg hr0 _)
+    · have hcast : ¬ (A : ℝ) ≤ (k : ℝ) := by exact_mod_cast h
+      rw [if_neg hcast, if_neg h, zero_mul, zero_mul]
+  refine le_trans (Finset.sum_le_sum hbound) ?_
+  have geom_tail :
+      (∑ k ∈ univ.image g, if A ≤ k then r ^ (k - A).toNat else 0) ≤ (1 - r)⁻¹ := by
+    rw [← Finset.sum_filter]
+    set T := (univ.image g).filter (fun k => A ≤ k) with hT
+    have hinj : Set.InjOn (fun k => (k - A).toNat) (T : Set ℤ) := by
+      intro k1 hk1 k2 hk2 heq
+      simp only [hT, Finset.coe_filter, Set.mem_setOf_eq] at hk1 hk2
+      have hz : ((k1 - A).toNat : ℤ) = ((k2 - A).toNat : ℤ) := by exact_mod_cast heq
+      rw [Int.toNat_of_nonneg (by linarith [hk1.2] : (0:ℤ) ≤ k1 - A),
+          Int.toNat_of_nonneg (by linarith [hk2.2] : (0:ℤ) ≤ k2 - A)] at hz
+      linarith [hk1.2, hk2.2]
+    rw [← Finset.sum_image hinj]
+    exact sum_pow_le_inv_one_sub hr0 hr1 _
+  rw [← Finset.sum_mul]
+  calc (∑ k ∈ univ.image g, if A ≤ k then r ^ (k - A).toNat else 0) * pmax
+      ≤ (1 - r)⁻¹ * pmax := mul_le_mul_of_nonneg_right geom_tail hp
+    _ = pmax / (1 - r) := by rw [div_eq_mul_inv, mul_comm]
+
 /-! ## Non-vacuity teeth. -/
 
 /-- **(TOOTH — the prefactor genuinely improves Chernoff.)** On the two-point `±1` model at `s = 1, a = 1`, the
@@ -298,5 +455,16 @@ theorem tiltTailExp_strict_lt_one :
     norm_num
   rw [key, div_lt_one (by positivity)]
   linarith [Real.exp_pos (-1 : ℝ)]
+
+/-- **(TOOTH — the char transform is the genuine cosine transform.)** On the two-point `±1` uniform law,
+`reCharFn` is exactly `cos t` — the odd (sine) part cancels, confirming `reCharFn` computes the real
+characteristic function of a symmetric law (so the decay bound `reCharFn_le_exp` is non-vacuous). -/
+theorem reCharFn_two_point (t : ℝ) :
+    reCharFn (Ω := Bool) (fun _ => (1 : ℝ) / 2) (fun b => if b then (1 : ℝ) else -1) t
+      = Real.cos t := by
+  unfold reCharFn
+  simp only [Fintype.sum_bool, Bool.false_eq_true, if_false, if_true, mul_one, mul_neg_one,
+    Real.cos_neg]
+  ring
 
 end Dregg2.ForMathlib.BerryEsseen
