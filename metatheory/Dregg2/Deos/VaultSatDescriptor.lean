@@ -48,6 +48,7 @@ import Dregg2.Circuit.Emit.EffectVmEmitRotationV3
 import Dregg2.Circuit.Emit.EffectVmEmitTransfer
 import Dregg2.Deos.SettleEscrowSatDescriptor
 import Dregg2.Deos.DischargeSatDescriptor
+import Dregg2.Bignum
 
 namespace Dregg2.Deos.VaultSatDescriptor
 
@@ -90,14 +91,23 @@ private theorem modEqZeroBounded {R : ℤ} (h : R ≡ 0 [ZMOD 2013265921])
   omega
 
 /-- A 15-bit × 15-bit limb product lands in `[0, 2^30)` — the deterministic partial-product bound
-that keeps every schoolbook gate residual inside `(−p, p)`. -/
+that keeps every schoolbook gate residual inside `(−p, p)`.
+
+CONSOLIDATED onto the audited bedrock: this is the `[a] × [b]` (single-limb) instance of the unified
+library width bound `Dregg2.Bignum.bignumVal_mul_bound` (whose §5 docstring names exactly this lemma
+as the width case it generalizes). `bignumVal 32768 [a] = a` (the `@[simp]` singleton reduction), and
+the general `< B^(m+n)` bound becomes `< 32768^2 = 2^30`. One audited product-width proof, instantiated
+here — not a second hand-rolled `calc`. -/
 private theorem limbMul_lt {a b : ℤ} (ha : 0 ≤ a ∧ a < 32768) (hb : 0 ≤ b ∧ b < 32768) :
     0 ≤ a * b ∧ a * b < 1073741824 := by
-  refine ⟨mul_nonneg ha.1 hb.1, ?_⟩
-  calc a * b ≤ 32767 * b := by
-        apply mul_le_mul_of_nonneg_right (by omega) hb.1
-    _ ≤ 32767 * 32767 := by apply mul_le_mul_of_nonneg_left (by omega) (by omega)
-    _ < 1073741824 := by norm_num
+  have mk : ∀ x : ℤ, 0 ≤ x ∧ x < 32768 → Dregg2.Circuit.CaveatBignum.Ranged 32768 [x] := by
+    intro x hx z hz
+    rcases List.mem_cons.mp hz with h | h
+    · exact h ▸ hx
+    · simp at h
+  have h := Dregg2.Bignum.bignumVal_mul_bound (B := 32768) (by norm_num) [a] [b] (mk a ha) (mk b hb)
+  norm_num at h
+  exact h
 
 /-! ### Clean-context schoolbook/borrow gate lifts.
 

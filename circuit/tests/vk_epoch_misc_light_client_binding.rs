@@ -35,7 +35,7 @@
 //!
 //!   * **`setFieldDyn` — the dynamic overflow write PROVES (the residual is CLOSED).** The dynamic
 //!     `SetField` (`field_idx > 7`) routes to `setFieldDynVmDescriptor2R24`, a DISTINCT V1Face
-//!     geometry (1598-wide at HEAD) the standard generator could not produce (it panicked on
+//!     geometry (1664-wide at HEAD) the standard generator could not produce (it panicked on
 //!     `field_idx < 8` and laid the 829-wide host). `generate_rotated_set_field_dyn_base` now builds
 //!     it from scratch: the
 //!     Blum write→read pair (`addr = value = col 69`, `prev_value = col 70`, `prev_serial = col 74`,
@@ -143,6 +143,16 @@ fn refused(
 const NULL_ROOT: [u8; 32] = [0u8; 32];
 const COMMIT_ROOT: [u8; 32] = [0u8; 32];
 
+// `rw::produce` takes the nullifier/commitments roots as the faithful 8-felt octets (the wide
+// Faithful8 flip); the all-zero byte roots map to the empty octet via the canonical
+// `from_bytes32` limb split. Currency-only wrappers around the byte consts above.
+fn null_root() -> dregg_circuit::Faithful8 {
+    dregg_circuit::Faithful8::from_bytes32(&NULL_ROOT)
+}
+fn commit_root() -> dregg_circuit::Faithful8 {
+    dregg_circuit::Faithful8::from_bytes32(&COMMIT_ROOT)
+}
+
 fn receipt_log() -> Vec<[u8; 32]> {
     vec![[3u8; 32]]
 }
@@ -203,8 +213,8 @@ fn no_cell_write_audit(effect: Effect, name: &str) -> (bool, bool, bool) {
     let before_w = rw::produce(
         &before_cell,
         &ledger,
-        &NULL_ROOT,
-        &COMMIT_ROOT,
+        &null_root(),
+        &commit_root(),
         &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log(),
         &Default::default(),
@@ -212,8 +222,8 @@ fn no_cell_write_audit(effect: Effect, name: &str) -> (bool, bool, bool) {
     let after_w = rw::produce(
         &after_cell,
         &ledger,
-        &NULL_ROOT,
-        &COMMIT_ROOT,
+        &null_root(),
+        &commit_root(),
         &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log(),
         &Default::default(),
@@ -256,8 +266,8 @@ fn no_cell_write_audit(effect: Effect, name: &str) -> (bool, bool, bool) {
     let forged_after_w = rw::produce(
         &forged_after_cell,
         &forged_ledger,
-        &NULL_ROOT,
-        &COMMIT_ROOT,
+        &null_root(),
+        &commit_root(),
         &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log(),
         &Default::default(),
@@ -411,8 +421,8 @@ fn makesovereign_forced_on_wire_rejects_forged_authority_digest_anchor_disabled(
     let before_w = rw::produce(
         &before_cell,
         &ledger,
-        &NULL_ROOT,
-        &COMMIT_ROOT,
+        &null_root(),
+        &commit_root(),
         &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log(),
         &Default::default(),
@@ -420,8 +430,8 @@ fn makesovereign_forced_on_wire_rejects_forged_authority_digest_anchor_disabled(
     let after_w = rw::produce(
         &after_cell,
         &ledger,
-        &NULL_ROOT,
-        &COMMIT_ROOT,
+        &null_root(),
+        &commit_root(),
         &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log(),
         &Default::default(),
@@ -501,8 +511,8 @@ fn makesovereign_forced_on_wire_rejects_forged_authority_digest_anchor_disabled(
     let forged_after_w = rw::produce(
         &forged_after,
         &forged_ledger,
-        &NULL_ROOT,
-        &COMMIT_ROOT,
+        &null_root(),
+        &commit_root(),
         &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log(),
         &Default::default(),
@@ -594,19 +604,18 @@ fn setfielddyn_dynamic_overflow_proves_against_deployed_descriptor() {
     );
     // The DISTINCT geometry the generator produces from scratch: a V1Face (the v13-geom re-lay), NOT
     // the ungraduated rotated trace — four fewer chip sites (4 × 7 lanes = 28 cols) than the standard
-    // GRAD_ROT_WIDTH (1581) graduated host, so its BASE geometry is 1553. The gentian flag-day refuse
-    // rides that OWN 1553 base (§HETEROGENEOUS GEOMETRY): the three capacity-floor blocks widen it to
-    // 1553 + 45 = 1598 (NOT the fixed 1581-base 1626 that would strand a 28-column dead gap "as if
-    // standard"). The narrow committed setFieldDynVmDescriptor2R24 / customVmDescriptor2R24 are both 1598.
+    // GRAD_ROT_WIDTH (1647) graduated host, so its BASE geometry is 1619. The gentian flag-day refuse
+    // rides that OWN 1619 base (§HETEROGENEOUS GEOMETRY): the capacity-floor blocks widen it to
+    // 1619 + 45 = 1664. The narrow committed setFieldDynVmDescriptor2R24 trace_width is 1664.
     assert_eq!(
-        desc.trace_width, 1598,
-        "setFieldDyn is a DISTINCT V1Face geometry (base 1553 = GRAD_ROT_WIDTH 1581 − four chip \
-         sites·7) refuse-welded over ITS OWN base: 1553 + 45 refuse span = 1598 (matches committed \
-         setFieldDynVmDescriptor2R24 / customVmDescriptor2R24 trace_width — per-member, not fixed-1626)"
+        desc.trace_width, 1664,
+        "setFieldDyn is a DISTINCT V1Face geometry (base 1619 = GRAD_ROT_WIDTH 1647 − four chip \
+         sites·7) refuse-welded over ITS OWN base: 1619 + 45 refuse span = 1664 (matches committed \
+         setFieldDynVmDescriptor2R24 trace_width — per-member, not fixed to the standard graduated host)"
     );
     assert_ne!(
         desc.trace_width, ROT_WIDTH,
-        "setFieldDyn's width (1598) != the ungraduated rotated width (ROT_WIDTH = 685)"
+        "setFieldDyn's width (1664) != the ungraduated rotated width (ROT_WIDTH = 709)"
     );
 
     // The dynamic SetField (field_idx > 7) routes to the dyn descriptor by name.
@@ -631,8 +640,8 @@ fn setfielddyn_dynamic_overflow_proves_against_deployed_descriptor() {
     let before_w = rw::produce(
         &before_cell,
         &ledger,
-        &NULL_ROOT,
-        &COMMIT_ROOT,
+        &null_root(),
+        &commit_root(),
         &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log(),
         &Default::default(),
@@ -640,8 +649,8 @@ fn setfielddyn_dynamic_overflow_proves_against_deployed_descriptor() {
     let after_w = rw::produce(
         &after_cell,
         &ledger,
-        &NULL_ROOT,
-        &COMMIT_ROOT,
+        &null_root(),
+        &commit_root(),
         &dregg_turn::rotation_witness::empty_revoked_root_8(),
         &receipt_log(),
         &Default::default(),
@@ -666,10 +675,10 @@ fn setfielddyn_dynamic_overflow_proves_against_deployed_descriptor() {
     );
 
     // THE PROVABILITY GATE: the honest dynamic-field write PROVES + light-client VERIFIES against the
-    // DEPLOYED 1598-wide descriptor — no catch_unwind. The residual is CLOSED.
+    // DEPLOYED 1664-wide descriptor — no catch_unwind. The residual is CLOSED.
     let proof =
         prove_vm_descriptor2(&desc, &trace, &dpis, &mem_boundary, &[]).unwrap_or_else(|e| {
-            panic!("setFieldDyn must PROVE against its deployed descriptor (1598-wide): {e}")
+            panic!("setFieldDyn must PROVE against its deployed descriptor (1664-wide): {e}")
         });
     verify_vm_descriptor2(&desc, &proof, &dpis)
         .unwrap_or_else(|e| panic!("setFieldDyn proof must light-client VERIFY: {e}"));
@@ -693,7 +702,7 @@ fn setfielddyn_dynamic_overflow_proves_against_deployed_descriptor() {
 
     eprintln!(
         "VK-EPOCH setFieldDyn: the DYNAMIC overflow-field write PROVES + light-client VERIFIES against \
-         the deployed 1598-wide descriptor (the Blum write→read transport over the V1Face geometry), \
+         the deployed 1664-wide descriptor (the Blum write→read transport over the V1Face geometry), \
          and a forged read-back is REJECTED. The missing-generator residual is CLOSED."
     );
 }
