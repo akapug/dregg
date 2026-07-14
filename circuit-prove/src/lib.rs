@@ -49,6 +49,7 @@ pub mod presentation_leaf_adapter;
 pub mod recursive_witness_bundle;
 pub mod shielded;
 pub mod shielded_ring_clearing_air;
+pub mod shielded_ring_clearing_nleg_air;
 pub mod shielded_spend_leaf_adapter;
 pub mod solvency_leaf_adapter;
 pub mod sovereign_leaf_adapter;
