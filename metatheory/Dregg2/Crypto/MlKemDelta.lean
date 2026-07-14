@@ -86,6 +86,7 @@ true. `winProb_biUnion_le` itself both fires (equality-attaining teeth via `Prob
 -/
 import Dregg2.Crypto.MlKemCorrect
 import Dregg2.Crypto.ProbCrypto
+import Dregg2.ForMathlib.BerryEsseen
 import Dregg2.Tactics
 import Mathlib.Probability.Moments.SubGaussian
 import Mathlib.Probability.Distributions.Uniform
@@ -2302,6 +2303,240 @@ theorem exactConvTailBound_satisfiable : ExactConvTailBound cbdCounts (-2) 5 3 4
 tautology. -/
 theorem exactConvTailBound_refutable : ¬ ExactConvTailBound [7] 100 3 1 2 := by decide
 
+/-! ## §17 — THE BAHADUR–RAO PREFACTOR: the exact change-of-measure refinement of the exact-MGF Chernoff bound.
+
+§15 measured that the exact-MGF **Chernoff** route ceilings at `2⁻¹⁴⁸` (per-coefficient `2⁻¹⁵⁸` at `s = 3/10`,
+or a Cramér optimum `≈ 2⁻¹⁶⁵`): the `768`-union then needs a per-coefficient tail of `2⁻¹⁷⁴` to reach FIPS
+`δ = 2⁻¹⁶⁴`, and the gap `2⁻¹⁶⁵ → 2⁻¹⁷⁴` is exactly the **Bahadur–Rao prefactor** `1/(s·σ*·√{2π})` — the
+polynomial correction the large-deviation *rate* `e^{−I}` discards. This section formalizes the ANALYTIC ROUTE
+that recovers it: the exact **exponential-tilt change-of-measure identity**.
+
+The general, measure-free, upstreamable core lives in `Dregg2.ForMathlib.BerryEsseen`:
+
+  `tailFrac X a = (partition X s/|Ω|)·e^{−s·a}·tiltTailExp X s a`     (`BerryEsseen.tailFrac_eq`)
+
+where `tiltTailExp X s a = E_tilt[e^{−s(X−a)}·1_{X≥a}] ∈ (0,1]`. The Chernoff bound is this identity with
+`tiltTailExp ≤ 1` (`BerryEsseen.tiltTailExp_le_one`); the Bahadur–Rao improvement is any bound `tiltTailExp ≤ P`
+with `P < 1`. `BerryEsseen.tiltTailExp_le_atom_geom` further formalizes the elementary anti-concentration
+envelope `tiltTailExp ≤ pmax/(1−e^{−s})` (`pmax` = max tilted level-atom) — the fully-proved *partial* prefactor.
+
+### The reduction (this section, kernel-clean).
+
+`mgf_eq_partition_div` bridges the ForMathlib partition function to Mathlib's `mgf`; `winProb_ge_le_refined`
+turns the identity into the refined one-sided `winProb` tail; `winProb_abs_split` handles the two-sided `|·|`.
+Assembling over the ML-KEM term structure (reusing the exact per-term MGFs of §12 and the tightened arithmetic
+`exactMgf_delta_arith_tight`) gives, kernel-clean:
+
+  **`perCoeffExactMgfTail_bahadurRao`** — IF the per-coefficient tilted tail expectation is `≤ 2⁻¹⁶`
+  (`CoeffBahadurRaoPrefactor`), THEN the per-coefficient tail is `≤ 2⁻¹⁷⁴`, hence (union) FIPS `δ ≤ 2⁻¹⁶⁴`
+  (`mlkem768_decapsFailure_le_delta_bahadurRao`).
+
+### ⚑ THE ONE REMAINING ANALYTIC INPUT (named precisely, not hidden).
+
+`CoeffBahadurRaoPrefactor ez (2⁻¹⁶)` is `∀ c, tiltTailExp (ez c) (3/10) 832 ≤ 2⁻¹⁶` (both signs). The identity
+`tailFrac_eq` makes this a *literal* statement about the true tilted tail expectation — the Bahadur–Rao
+prefactor. It is **satisfiable and refutable** (teeth below), so it is a load-bearing constraint. Discharging it
+for the real ML-KEM law is the sharp local-limit / characteristic-function bound Mathlib lacks: the elementary
+`tiltTailExp_le_atom_geom` envelope recovers only `Θ(pmax) ≈ 2⁻⁵` of the decay (`pmax ≈ 2⁻⁷` for the near-Gaussian
+tilted law, `1−e^{−3/10} ≈ 0.26`), so the geometric envelope alone does NOT reach `2⁻¹⁶`; the sharp
+`1/(s·σ*·√{2π})` constant needs a tilted-Berry–Esseen / local central-limit bound (and, for the true ML-KEM
+variance, the refined uniform-`Δv` compression-error law of §16's residual R2). So `§17` FORMALIZES the entire
+change-of-measure machinery and reduces FIPS `δ` to exactly this one named scalar prefactor — the honest,
+kernel-clean state of the analytic route.
+-/
+
+open Dregg2.ForMathlib.BerryEsseen
+
+/-- **BRIDGE: the uniform-law MGF is the ForMathlib partition function over `|Ω|` (PROVED).**
+`mgf X (unifMeasure Ω) s = partition X s / |Ω|`, via `PMF.integral_eq_sum` on the uniform PMF (same computation
+as `mgf_cbd2_as_sum`). This lets the measure-free `BerryEsseen` identity speak to the `mgf`-based ML-KEM stack. -/
+theorem mgf_eq_partition_div {Ω : Type*} [Fintype Ω] [Nonempty Ω] [MeasurableSpace Ω]
+    [MeasurableSingletonClass Ω] (X : Ω → ℝ) (s : ℝ) :
+    mgf X (unifMeasure Ω) s = partition X s / (Fintype.card Ω : ℝ) := by
+  rw [mgf, unifMeasure, PMF.integral_eq_sum, partition, Finset.sum_div]
+  apply Finset.sum_congr rfl
+  intro ω _
+  rw [PMF.uniformOfFintype_apply, smul_eq_mul, ENNReal.toReal_inv, ENNReal.toReal_natCast,
+      div_eq_inv_mul]
+
+/-- **BRIDGE: the `winProb` one-sided tail IS the ForMathlib tail fraction (PROVED).** -/
+theorem winProb_ge_eq_tailFrac {Ω : Type*} [Fintype Ω] (f : Ω → ℝ) (ε : ℝ) :
+    winProb (fun ω => decide (ε ≤ f ω)) = tailFrac f ε := by
+  classical
+  rw [winProb, tailFrac]
+  have hset : (Finset.univ.filter (fun o => decide (ε ≤ f o) = true))
+      = (Finset.univ.filter (fun ω => ε ≤ f ω)) := by
+    ext ω; simp [decide_eq_true_eq]
+  rw [hset]
+
+/-- **THE REFINED ONE-SIDED `winProb` TAIL (PROVED).** Given a prefactor bound `tiltTailExp f s ε ≤ P`, the
+one-sided `winProb` tail is at most `mgf f s · e^{−s·ε} · P` — the Chernoff bound times the Bahadur–Rao prefactor.
+Assembles `winProb_ge_eq_tailFrac`, `BerryEsseen.tailFrac_le_refined`, and `mgf_eq_partition_div`. -/
+theorem winProb_ge_le_refined {Ω : Type*} [Fintype Ω] [Nonempty Ω] [MeasurableSpace Ω]
+    [MeasurableSingletonClass Ω] (f : Ω → ℝ) (s ε : ℝ) {P : ℝ} (hpref : tiltTailExp f s ε ≤ P) :
+    winProb (fun ω => decide (ε ≤ f ω)) ≤ mgf f (unifMeasure Ω) s * Real.exp (-(s * ε)) * P := by
+  rw [winProb_ge_eq_tailFrac, mgf_eq_partition_div]
+  exact tailFrac_le_refined f s ε hpref
+
+/-- **THE TWO-SIDED SPLIT (PROVED).** `winProb(ε ≤ |Z|) ≤ winProb(ε ≤ Z) + winProb(ε ≤ −Z)` in the counting
+model — the favorable set of `|Z|` escaping is contained in the union of the two one-sided sets. -/
+theorem winProb_abs_split {Ω : Type*} [Fintype Ω] [DecidableEq Ω] (Z : Ω → ℝ) (ε : ℝ) :
+    winProb (fun ω => decide (ε ≤ |Z ω|))
+      ≤ winProb (fun ω => decide (ε ≤ Z ω)) + winProb (fun ω => decide (ε ≤ -(Z ω))) := by
+  classical
+  rw [winProb, winProb, winProb, ← add_div]
+  rcases Nat.eq_zero_or_pos (Fintype.card Ω) with h0 | h0
+  · simp [h0]
+  · gcongr
+    have hsub : (Finset.univ.filter (fun ω : Ω => decide (ε ≤ |Z ω|) = true))
+        ⊆ (Finset.univ.filter (fun ω : Ω => decide (ε ≤ Z ω) = true))
+          ∪ (Finset.univ.filter (fun ω : Ω => decide (ε ≤ -(Z ω)) = true)) := by
+      intro ω hω
+      simp only [Finset.mem_filter, Finset.mem_univ, true_and, decide_eq_true_eq] at hω
+      rw [Finset.mem_union]
+      simp only [Finset.mem_filter, Finset.mem_univ, true_and, decide_eq_true_eq]
+      rcases abs_cases (Z ω) with ⟨h1, _⟩ | ⟨h1, _⟩
+      · exact Or.inl (by rwa [h1] at hω)
+      · exact Or.inr (by rw [h1] at hω; linarith)
+    calc ((Finset.univ.filter (fun ω : Ω => decide (ε ≤ |Z ω|) = true)).card : ℝ)
+        ≤ (((Finset.univ.filter (fun ω : Ω => decide (ε ≤ Z ω) = true))
+            ∪ (Finset.univ.filter (fun ω : Ω => decide (ε ≤ -(Z ω)) = true))).card : ℝ) := by
+          exact_mod_cast Finset.card_le_card hsub
+      _ ≤ ((Finset.univ.filter (fun ω : Ω => decide (ε ≤ Z ω) = true)).card : ℝ)
+            + ((Finset.univ.filter (fun ω : Ω => decide (ε ≤ -(Z ω)) = true)).card : ℝ) := by
+          exact_mod_cast Finset.card_union_le _ _
+
+/-- **THE PER-COEFFICIENT BAHADUR–RAO PREFACTOR (the one named analytic input).** For every coefficient, the
+tilted tail expectation of the centered noise `ez c` (both signs, at the tilt `s = 3/10`, deviation `832`) is
+`≤ P`. By the change-of-measure identity `tailFrac_eq`, this IS the Bahadur–Rao prefactor for the coefficient's
+tail. It is satisfiable AND refutable (`coeffBR_prefactor_satisfiable`/`_refutable`). -/
+def CoeffBahadurRaoPrefactor {Ω : Type*} [Fintype Ω] (ez : Fin 768 → Ω → ℤ) (P : ℝ) : Prop :=
+  ∀ c, tiltTailExp (fun ω => (ez c ω : ℝ)) (3/10) 832 ≤ P
+     ∧ tiltTailExp (fun ω => -((ez c ω : ℝ))) (3/10) 832 ≤ P
+
+/-- **THE PER-COEFFICIENT TAIL, VIA THE BAHADUR–RAO PREFACTOR (PROVED): `≤ 2⁻¹⁷⁴`.** From `CoeffIsExactMgfSum`
+(the exact per-term MGFs assembling to `mlkemExactMgfBound`, §12.6) and the named prefactor bound `≤ 2⁻¹⁶`, the
+per-coefficient two-sided tail is `≤ 2⁻¹⁷⁴`: split `|·|`, bound each one-sided tail by the refined
+`mgf · e^{−s·832} · 2⁻¹⁶ ≤ mlkemExactMgfBound · e^{−(3/10)·832} · 2⁻¹⁶`, sum, and fold in the tightened
+exact-MGF arithmetic `exactMgf_delta_arith_tight` (`2·e^{−(3/10)·832}·mlkemExactMgfBound ≤ 2⁻¹⁵⁸`). This is `16`
+bits below the pure exact-MGF Chernoff per-coefficient tail `2⁻¹⁵⁸` — exactly the prefactor's contribution. -/
+theorem perCoeffExactMgfTail_bahadurRao {Ω : Type*} [Fintype Ω] [Nonempty Ω] [DecidableEq Ω]
+    [MeasurableSpace Ω] [MeasurableSingletonClass Ω] (ez : Fin 768 → Ω → ℤ)
+    (hsum : ∀ c, CoeffIsExactMgfSum ez c)
+    (hpref : CoeffBahadurRaoPrefactor ez ((2 : ℝ) ^ (-16 : ℤ))) :
+    PerCoeffHoeffdingTail ez ((2 : ℝ) ^ (-174 : ℤ)) := by
+  classical
+  intro c
+  obtain ⟨m, T, hZ, hindep, hmeas, hsymm, hprod⟩ := hsum c
+  obtain ⟨hp1, hp2⟩ := hpref c
+  set Zc : Ω → ℝ := fun ω => (ez c ω : ℝ) with hZc
+  -- badCoeff = the two-sided real tail of `Zc`.
+  have hbadeq : badCoeff ez c = fun ω => decide ((832 : ℝ) ≤ |Zc ω|) := by
+    funext ω
+    have hiff : ((832 : ℤ) ≤ |ez c ω|) ↔ ((832 : ℝ) ≤ |Zc ω|) := by
+      rw [hZc, ← Int.cast_abs]; exact_mod_cast Iff.rfl
+    simp only [badCoeff, hiff]
+  -- `mgf Zc = mgf (−Zc) = ∏ mgf (T i) ≤ mlkemExactMgfBound`.
+  have hZeq : Zc = ∑ i, T i := by
+    funext ω; rw [Finset.sum_apply]; simpa [hZc] using hZ ω
+  have hPnn : (0 : ℝ) ≤ (2 : ℝ) ^ (-16 : ℤ) := by positivity
+  have hmgfZ_le : mgf Zc (unifMeasure Ω) (3/10) ≤ mlkemExactMgfBound := by
+    rw [hZeq, hindep.mgf_sum hmeas Finset.univ]; exact hprod
+  have hmgfnegZ_le : mgf (fun ω => -(Zc ω)) (unifMeasure Ω) (3/10) ≤ mlkemExactMgfBound := by
+    have h1 : mgf (fun ω => -(Zc ω)) (unifMeasure Ω) (3/10) = mgf Zc (unifMeasure Ω) (-(3/10)) := by
+      have := mgf_neg (X := Zc) (μ := unifMeasure Ω) (t := (3/10 : ℝ)); simpa [Pi.neg_def] using this
+    rw [h1, hZeq, hindep.mgf_sum hmeas Finset.univ,
+        Finset.prod_congr rfl (fun i _ => hsymm i)]
+    exact hprod
+  rw [hbadeq]
+  refine le_trans (winProb_abs_split Zc 832) ?_
+  -- Each one-sided tail ≤ mlkemExactMgfBound · e^{−(3/10·832)} · 2⁻¹⁶.
+  have hright : winProb (fun ω => decide ((832 : ℝ) ≤ Zc ω))
+      ≤ mlkemExactMgfBound * Real.exp (-(3 / 10 * 832)) * (2 : ℝ) ^ (-16 : ℤ) := by
+    refine le_trans (winProb_ge_le_refined Zc (3/10) 832 hp1) ?_
+    exact mul_le_mul_of_nonneg_right
+      (mul_le_mul_of_nonneg_right hmgfZ_le (Real.exp_pos _).le) hPnn
+  have hleft : winProb (fun ω => decide ((832 : ℝ) ≤ -(Zc ω)))
+      ≤ mlkemExactMgfBound * Real.exp (-(3 / 10 * 832)) * (2 : ℝ) ^ (-16 : ℤ) := by
+    refine le_trans (winProb_ge_le_refined (fun ω => -(Zc ω)) (3/10) 832 hp2) ?_
+    exact mul_le_mul_of_nonneg_right
+      (mul_le_mul_of_nonneg_right hmgfnegZ_le (Real.exp_pos _).le) hPnn
+  refine le_trans (add_le_add hright hleft) ?_
+  -- 2 · mlkemExactMgfBound · e^{−(3/10·832)} · 2⁻¹⁶ ≤ 2⁻¹⁵⁸ · 2⁻¹⁶ = 2⁻¹⁷⁴.
+  rw [show mlkemExactMgfBound * Real.exp (-(3 / 10 * 832)) * (2 : ℝ) ^ (-16 : ℤ)
+        + mlkemExactMgfBound * Real.exp (-(3 / 10 * 832)) * (2 : ℝ) ^ (-16 : ℤ)
+        = (2 * Real.exp (-(3 / 10) * 832) * mlkemExactMgfBound) * (2 : ℝ) ^ (-16 : ℤ)
+      from by rw [neg_mul]; ring]
+  calc (2 * Real.exp (-(3 / 10) * 832) * mlkemExactMgfBound) * (2 : ℝ) ^ (-16 : ℤ)
+      ≤ (2 : ℝ) ^ (-158 : ℤ) * (2 : ℝ) ^ (-16 : ℤ) := by
+        gcongr
+        exact exactMgf_delta_arith_tight
+    _ = (2 : ℝ) ^ (-174 : ℤ) := by
+        rw [← zpow_add₀ (by norm_num : (2 : ℝ) ≠ 0)]; norm_num
+
+/-- **THE ASSEMBLED FIPS δ-BOUND VIA THE BAHADUR–RAO PREFACTOR — `Pr[decaps fails] ≤ δ = 2⁻¹⁶⁴` (PROVED,
+kernel-clean, conditional on the one named prefactor).** Chains `perCoeffExactMgfTail_bahadurRao` (`2⁻¹⁷⁴`)
+through the union bound `mlkem768_decapsFailure_le_delta` (`768 < 2¹⁰`). This is the exact FIPS decryption-failure
+bound, reduced — beyond the fully-formalized exact per-term MGFs and change-of-measure identity — to exactly the
+Bahadur–Rao prefactor input `CoeffBahadurRaoPrefactor ez (2⁻¹⁶)`. -/
+theorem mlkem768_decapsFailure_le_delta_bahadurRao {Ω : Type*} [Fintype Ω] [Nonempty Ω] [DecidableEq Ω]
+    [MeasurableSpace Ω] [MeasurableSingletonClass Ω] (ez : Fin 768 → Ω → ℤ)
+    (hsum : ∀ c, CoeffIsExactMgfSum ez c)
+    (hpref : CoeffBahadurRaoPrefactor ez ((2 : ℝ) ^ (-16 : ℤ))) :
+    winProb (decapsFails ez) ≤ MlKemCorrect.mlKem768Delta :=
+  mlkem768_decapsFailure_le_delta ez (perCoeffExactMgfTail_bahadurRao ez hsum hpref)
+
+/-- **THE REAL ML-KEM-768 FIPS δ-BOUND VIA THE BAHADUR–RAO PREFACTOR — `Pr_r[¬noiseBoundHolds] ≤ δ = 2⁻¹⁶⁴`
+(PROVED, kernel-clean, conditional on ONLY the named prefactor).** Instantiates the reduction on the REAL
+per-coefficient noise `mlkemZ`, whose `CoeffIsExactMgfSum` witness (`mlkem_exactMgfSum`, §12.6) is already
+DISCHARGED. So beyond the fully-formalized exact per-term MGFs, the exact change-of-measure identity, and the
+tightened Chernoff arithmetic, the ONLY remaining input to close FIPS `δ` for the real ML-KEM law is the single
+named scalar `CoeffBahadurRaoPrefactor mlkemZ (2⁻¹⁶)` — the Bahadur–Rao prefactor. -/
+theorem mlkem768_decapsFailure_le_delta_bahadurRao_real
+    (hpref : CoeffBahadurRaoPrefactor mlkemZ ((2 : ℝ) ^ (-16 : ℤ))) :
+    winProb (decapsFails mlkemZ) ≤ MlKemCorrect.mlKem768Delta :=
+  mlkem768_decapsFailure_le_delta_bahadurRao mlkemZ mlkem_exactMgfSum hpref
+
+/-! ### §17.1 — NON-VACUITY: the named prefactor is a load-bearing constraint (satisfiable AND refutable). -/
+
+/-- **(TOOTH — the prefactor is satisfiable.)** On the zero-noise model every coefficient's noise is `0`, so its
+tilted tail expectation at deviation `832` is `0` (the tail `{832 ≤ 0}` is empty) — `≤ 2⁻¹⁶`. So
+`CoeffBahadurRaoPrefactor` holds on a real model; it is not vacuously false. -/
+theorem coeffBR_prefactor_satisfiable :
+    CoeffBahadurRaoPrefactor zeroModel ((2 : ℝ) ^ (-16 : ℤ)) := by
+  intro c
+  have hz : ∀ g : Unit → ℝ, (∀ u, g u = 0) →
+      tiltTailExp g (3/10) 832 ≤ (2 : ℝ) ^ (-16 : ℤ) := by
+    intro g hg
+    unfold tiltTailExp
+    have hterm : ∀ u : Unit, (if (832 : ℝ) ≤ g u then Real.exp (-(3/10 * (g u - 832))) else 0)
+        * tiltWeight g (3/10) u = 0 := by
+      intro u; rw [hg u]; norm_num
+    rw [Finset.sum_congr rfl (fun u _ => hterm u), Finset.sum_const_zero]
+    positivity
+  exact ⟨hz _ (fun _ => by simp [zeroModel]), hz _ (fun _ => by simp [zeroModel])⟩
+
+/-- **(TOOTH — the prefactor is refutable.)** On a point-mass model whose noise is the constant `832` (exactly
+the deviation threshold), the tilted tail expectation is `1`: the entire tilted mass sits at the boundary, where
+`e^{−s(X−832)} = e^0 = 1`. `1 > 2⁻¹⁶`, so the named prefactor is a genuine inequality that can FAIL — a
+load-bearing constraint, not a tautology. (This is the Chernoff-recovery pole `tiltTailExp = 1` of §17's identity.) -/
+theorem coeffBR_prefactor_refutable :
+    ¬ CoeffBahadurRaoPrefactor (fun (_ : Fin 768) (_ : Unit) => (832 : ℤ)) ((2 : ℝ) ^ (-16 : ℤ)) := by
+  intro h
+  obtain ⟨h1, _⟩ := h 0
+  -- On the boundary point-mass the tilted tail expectation is exactly `1`.
+  have hval : tiltTailExp (fun _ : Unit => (((832 : ℤ)) : ℝ)) (3/10) 832 = 1 := by
+    unfold tiltTailExp tiltWeight partition
+    simp only [Fintype.sum_unique]
+    rw [show ((832 : ℤ) : ℝ) = (832 : ℝ) from by norm_num, if_pos (le_refl (832 : ℝ)),
+        show (832 : ℝ) - 832 = 0 from by ring, mul_zero, neg_zero, Real.exp_zero, one_mul]
+    exact div_self (Real.exp_ne_zero _)
+  rw [hval] at h1
+  have hlt : (2 : ℝ) ^ (-16 : ℤ) < 1 := by
+    rw [show (1 : ℝ) = (2 : ℝ) ^ (0 : ℤ) from by norm_num]
+    exact zpow_lt_zpow_right₀ (by norm_num) (by norm_num)
+  linarith
+
 /-! ## AXIOM HYGIENE — every probabilistic theorem is kernel-clean (⊆ {propext, Classical.choice, Quot.sound}). -/
 
 #assert_all_clean [
@@ -2408,7 +2643,23 @@ theorem exactConvTailBound_refutable : ¬ ExactConvTailBound [7] 100 3 1 2 := by
   exactConvTail_reduction_fires,
   convTailNum_prodCounts,
   exactConvTailBound_satisfiable,
-  exactConvTailBound_refutable
+  exactConvTailBound_refutable,
+  Dregg2.ForMathlib.BerryEsseen.tailFrac_eq,
+  Dregg2.ForMathlib.BerryEsseen.tiltTailExp_le_one,
+  Dregg2.ForMathlib.BerryEsseen.tailFrac_le_refined,
+  Dregg2.ForMathlib.BerryEsseen.tiltTailExp_le_atom_geom,
+  Dregg2.ForMathlib.BerryEsseen.geom_sum_le_inv_one_sub,
+  Dregg2.ForMathlib.BerryEsseen.sum_pow_le_inv_one_sub,
+  Dregg2.ForMathlib.BerryEsseen.tiltTailExp_strict_lt_one,
+  mgf_eq_partition_div,
+  winProb_ge_eq_tailFrac,
+  winProb_ge_le_refined,
+  winProb_abs_split,
+  perCoeffExactMgfTail_bahadurRao,
+  mlkem768_decapsFailure_le_delta_bahadurRao,
+  mlkem768_decapsFailure_le_delta_bahadurRao_real,
+  coeffBR_prefactor_satisfiable,
+  coeffBR_prefactor_refutable
 ]
 
 end Dregg2.Crypto.MlKemDelta
