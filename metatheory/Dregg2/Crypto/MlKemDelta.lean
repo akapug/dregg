@@ -2331,18 +2331,34 @@ Assembling over the ML-KEM term structure (reusing the exact per-term MGFs of §
   (`CoeffBahadurRaoPrefactor`), THEN the per-coefficient tail is `≤ 2⁻¹⁷⁴`, hence (union) FIPS `δ ≤ 2⁻¹⁶⁴`
   (`mlkem768_decapsFailure_le_delta_bahadurRao`).
 
-### ⚑ THE ONE REMAINING ANALYTIC INPUT (named precisely, not hidden).
+### ⚑ THE PREFACTOR IS A LOAD-BEARING CONSTRAINT — AND `2⁻¹⁶` IS FALSE FOR THE `mlkemZ` MODEL (measured).
 
 `CoeffBahadurRaoPrefactor ez (2⁻¹⁶)` is `∀ c, tiltTailExp (ez c) (3/10) 832 ≤ 2⁻¹⁶` (both signs). The identity
 `tailFrac_eq` makes this a *literal* statement about the true tilted tail expectation — the Bahadur–Rao
-prefactor. It is **satisfiable and refutable** (teeth below), so it is a load-bearing constraint. Discharging it
-for the real ML-KEM law is the sharp local-limit / characteristic-function bound Mathlib lacks: the elementary
-`tiltTailExp_le_atom_geom` envelope recovers only `Θ(pmax) ≈ 2⁻⁵` of the decay (`pmax ≈ 2⁻⁷` for the near-Gaussian
-tilted law, `1−e^{−3/10} ≈ 0.26`), so the geometric envelope alone does NOT reach `2⁻¹⁶`; the sharp
-`1/(s·σ*·√{2π})` constant needs a tilted-Berry–Esseen / local central-limit bound (and, for the true ML-KEM
-variance, the refined uniform-`Δv` compression-error law of §16's residual R2). So `§17` FORMALIZES the entire
-change-of-measure machinery and reduces FIPS `δ` to exactly this one named scalar prefactor — the honest,
-kernel-clean state of the analytic route.
+prefactor. It is **satisfiable and refutable** (teeth below), so it is a load-bearing constraint.
+
+⚠ **BUT AT THE DEPLOYED `mlkemZ` PARAMETERS, `CoeffBahadurRaoPrefactor mlkemZ (2⁻¹⁶)` IS FALSE** (exact
+convolution of the `mlkemZ` per-term laws, measured). The `s = 3/10` tilt is near the Cramér optimum, i.e. the
+tilted law's mean sits at the threshold: `E_tilt[X] ≈ 829.6 ≈ 832`, with `σ* ≈ 51.5` — the tilted law is
+near-Gaussian and `832` is essentially its MODE, not a deep-tail point. Hence the true tilted tail expectation
+is `tiltTailExp(mlkemZ, 3/10, 832) ≈ 2⁻⁵·⁰⁷`, and the geometric envelope `pmax/(1−e^{−3/10})` with
+`pmax = atomMass(832) ≈ 2⁻⁷·⁰` evaluates to `≈ 2⁻⁵·⁰⁷` — i.e. the envelope is essentially TIGHT here, not
+loose. The Bahadur–Rao prefactor for this model is genuinely `≈ 2⁻⁵` (`1/(s·σ*·√{2π}) ≈ 1/(0.3·51.5·2.5) ≈
+2⁻⁵·²` — the *sharp* constant, which AGREES with the envelope). There is no missing factor of `2¹¹` hiding in a
+"sharp local-limit constant": the sharp constant is also `≈ 2⁻⁵`. So `2⁻¹⁶` is unreachable by any
+characteristic-function / local-limit bound on the `mlkemZ` law — it is false, not merely unproven.
+
+**Consequence for FIPS `δ`.** The `mlkemZ` (`±104`-envelope) model's Chernoff exponent (`≈ 2⁻¹⁵⁸` per coeff at
+`s = 3/10`, `≈ 2⁻¹⁶⁵` at the Cramér optimum) times the true `≈ 2⁻⁵` prefactor times the `768·2` union gives
+`δ ≈ 2⁻¹⁵⁷` — the honest Bahadur–Rao ceiling of THIS model. It does NOT reach FIPS `2⁻¹⁶⁴`. The gap is exactly
+§16's residual **R2**: the `±104` extreme-point envelope for `Δv` (variance `104² = 10816`) is far heavier than
+the true near-uniform compression error, so the `mlkemZ` model's real `δ` is heavier than FIPS. Closing FIPS
+`2⁻¹⁶⁴` therefore requires the refined true-`Δv` exact-convolution route (§16, residuals R1+R2), NOT a Fourier
+inversion / prefactor on this MGF-envelope model. `§17` FORMALIZES the general change-of-measure machinery (the
+`tailFrac_eq` identity, the Chernoff recovery, the geometric envelope — all kernel-clean, upstreamable); the
+reduction theorems below are valid CONDITIONAL implications whose ML-KEM hypotheses (`CoeffBahadurRaoPrefactor
+mlkemZ 2⁻¹⁶`, `CoeffTailAtomBound mlkemZ 2⁻¹⁹`) are FALSE at deployed params — they are recorded here for the
+general machinery, not as a live path to FIPS on `mlkemZ`.
 -/
 
 open Dregg2.ForMathlib.BerryEsseen
@@ -2537,15 +2553,24 @@ theorem coeffBR_prefactor_refutable :
     exact zpow_lt_zpow_right₀ (by norm_num) (by norm_num)
   linarith
 
-/-! ### §17.2 — REDUCING THE PREFACTOR TO A LOCAL (TAIL-ATOM) BOUND: the precise Berry–Esseen residual.
+/-! ### §17.2 — REDUCING THE PREFACTOR TO A LOCAL (TAIL-ATOM) BOUND — and why `2⁻¹⁹` is FALSE for `mlkemZ`.
 
 The named `CoeffBahadurRaoPrefactor` bounds the *aggregate* tilted tail expectation. §17.2 reduces it — via the
 refined tail-atom envelope `tiltTailExp_le_tailAtom_geom` (ForMathlib, which needs the level-atom bound ONLY on
 the tail `k ≥ 832`) — to a strictly LOCAL statement: each tilted tail-atom mass at levels `k ≥ 832` is `≤ 2⁻¹⁹`.
-This is the literal *moderate-deviation local limit theorem* for the per-coefficient tilted lattice sum — the
-precise upstream lemma that the char-function Gaussian-decay bound `reCharFn_le_exp` (proved, ForMathlib) feeds
-via Fourier inversion (the one Fourier-inversion identity Mathlib still lacks). The reduction closes because
-`2⁻¹⁹/(1−e^{−3/10}) ≤ 2⁻¹⁶`. -/
+The reduction `coeffTail_reduce` is VALID (`2⁻¹⁹/(1−e^{−3/10}) ≤ 2⁻¹⁶`, `prefactor_geom_arith`).
+
+⚠ **BUT `CoeffTailAtomBound mlkemZ (2⁻¹⁹)` IS FALSE (measured, exact convolution of the `mlkemZ` per-term
+laws).** The `s = 3/10` tilt puts the tilted mean AT the threshold (`E_tilt[X] ≈ 829.6 ≈ 832`, `σ* ≈ 51.5`), so
+`k = 832` is the MODE of the tilted law, not a deep-tail atom. The *peak* tilted atom is
+`atomMass(mlkemZ, 3/10, 832) ≈ 2⁻⁷·⁰` — and `CoeffTailAtomBound` demands `atomMass(k) ≤ 2⁻¹⁹` for **all**
+`k ≥ 832`, INCLUDING `k = 832`. So it fails at the very first level by `≈ 12` bits. This is NOT a missing
+"moderate-deviation local limit theorem": there is no deep-tail regime at `k = 832` — `832` is the mode. A
+Fourier inversion of `reCharFn_le_exp` would (correctly) reproduce `atomMass(832) ≈ 1/(σ*√{2π}) ≈ 2⁻⁷`,
+CONFIRMING the bound is false, not discharging it. The largest atom bound that IS true is `pmax ≈ 2⁻⁶·⁵`, which
+the envelope turns into `tiltTailExp ≲ 2⁻⁴·⁵` — nowhere near `2⁻¹⁶`. Discharging FIPS `δ = 2⁻¹⁶⁴` needs the
+refined true-`Δv` exact-convolution route (§16 R1+R2), not this route. The theorems below are the general
+change-of-measure machinery + the valid reduction; their `mlkemZ` hypotheses are FALSE at deployed params. -/
 
 /-- `2⁻¹⁹/(1−e^{−3/10}) ≤ 2⁻¹⁶` — the geometric-envelope arithmetic (PROVED). From `e^{3/10} ≥ 13/10`
 (`add_one_le_exp`) we get `e^{−3/10} ≤ 10/13`, hence `1−e^{−3/10} ≥ 3/13`, and `2⁻¹⁹·(13/3) ≤ 2⁻¹⁶`. -/
@@ -2568,10 +2593,12 @@ theorem prefactor_geom_arith :
     _ ≤ (2:ℝ) ^ (-16 : ℤ) * (1 - Real.exp (-(3 / 10 : ℝ))) :=
         mul_le_mul_of_nonneg_left hden (by positivity)
 
-/-- **THE LOCAL (TAIL-ATOM) RESIDUAL — the precise Berry–Esseen input.** For every coefficient (both signs), the
-tilted tail-atom masses at levels `k ≥ 832` are each `≤ 2⁻¹⁹`. This is the moderate-deviation local limit
-theorem for the tilted per-coefficient lattice sum; discharging it (Fourier inversion of the char-function decay
-`reCharFn_le_exp`) closes the prefactor. Satisfiable AND refutable (`coeffTailAtom_satisfiable`/`_refutable`). -/
+/-- **THE LOCAL (TAIL-ATOM) CONSTRAINT.** For every coefficient (both signs), the tilted tail-atom masses at
+levels `k ≥ 832` are each `≤ pmax`. Satisfiable AND refutable (`coeffTailAtom_satisfiable`/`_refutable`), hence
+load-bearing. ⚠ At `pmax = 2⁻¹⁹` and `ez = mlkemZ` this is **FALSE**: the `s = 3/10` tilt makes `832` the MODE
+of the tilted law (`E_tilt ≈ 829.6`, `σ* ≈ 51.5`), so the peak atom `atomMass(mlkemZ, 3/10, 832) ≈ 2⁻⁷·⁰`
+exceeds `2⁻¹⁹` by `≈ 12` bits. It is not a moderate-deviation residual to be discharged by Fourier inversion —
+`832` is not in the deep tail. See the §17.2 header. -/
 def CoeffTailAtomBound {Ω : Type*} [Fintype Ω] (ez : Fin 768 → Ω → ℤ) (pmax : ℝ) : Prop :=
   ∀ c, (∀ k, (832 : ℤ) ≤ k → atomMass (ez c) (fun ω => (ez c ω : ℝ)) (3/10) k ≤ pmax)
      ∧ (∀ k, (832 : ℤ) ≤ k →
@@ -2601,11 +2628,12 @@ theorem coeffBR_prefactor_of_tailAtom {Ω : Type*} [Fintype Ω] [Nonempty Ω]
   rw [hfun] at h
   exact h
 
-/-- **THE REAL ML-KEM-768 FIPS δ-BOUND VIA THE LOCAL TAIL-ATOM RESIDUAL — `δ ≤ 2⁻¹⁶⁴` (PROVED, kernel-clean,
-conditional on ONLY the local limit theorem).** Composes `coeffBR_prefactor_of_tailAtom` with the real prefactor
-bridge. So the sole remaining input to close FIPS `δ` for the real ML-KEM law is the LOCAL statement
-`CoeffTailAtomBound mlkemZ 2⁻¹⁹` — that the tilted tail-atom masses past `832` are `≤ 2⁻¹⁹` — strictly sharper
-and more local than the aggregate prefactor. -/
+/-- **A VALID CONDITIONAL — but with a hypothesis that is FALSE at deployed params.** Composes
+`coeffBR_prefactor_of_tailAtom` with the real prefactor bridge: IF `CoeffTailAtomBound mlkemZ 2⁻¹⁹` held, FIPS
+`δ ≤ 2⁻¹⁶⁴` would follow. ⚠ The hypothesis is FALSE for `mlkemZ` (peak tilted atom `atomMass(832) ≈ 2⁻⁷·⁰`, the
+tilted MODE — see §17.2), so this implication is never dischargeable on the real model and does NOT close FIPS
+`δ`. It is retained as the terminal node of the general change-of-measure reduction; FIPS `2⁻¹⁶⁴` closure is the
+true-`Δv` exact-convolution route of §16 (R1+R2), not this one. -/
 theorem mlkem768_decapsFailure_le_delta_bahadurRao_real_tailAtom
     (hta : CoeffTailAtomBound mlkemZ ((2:ℝ) ^ (-19 : ℤ))) :
     winProb (decapsFails mlkemZ) ≤ MlKemCorrect.mlKem768Delta :=
