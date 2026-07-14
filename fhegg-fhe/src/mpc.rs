@@ -58,7 +58,11 @@
 //!   RLWE→shares partial decryption is native threshold-FHE, not a scheme switch;
 //!   that is the seam this construction DISSOLVES (design doc §4).
 
+use std::time::{Duration, Instant};
+
 use rand::Rng;
+
+use crate::{order_increment, Order, Side};
 
 /// A boolean secret shared additively over GF(2) among `n` parties: the cleartext
 /// bit is `⊕_i share[i]`. Any `n-1` shares are uniform and independent of the
@@ -418,4 +422,363 @@ pub fn simulate<R: Rng>(cross: &Crossing, k: usize, b: usize, rng: &mut R) -> Tr
         tr.revealed_vstar = (0..b).map(|i| ((cross.v_star >> i) & 1) as u8).collect();
     }
     tr
+}
+
+// ===========================================================================
+// PURE-MPC INFORMATION-THEORETIC FOLD — Tier-0 "unconditional no-viewer".
+//
+// The output-boundary construction above folds under BFV (an LWE/RLWE —
+// COMPUTATIONAL — scheme) and only shares at the boundary; below the threshold
+// its no-viewer rests on LWE hardness for the fold. This block removes the
+// computational assumption from the FOLD entirely:
+//
+//   * Each order's per-bucket contribution is additively secret-shared DIRECTLY
+//     over the ring Z_{2^b} (`share_arith`). Any coalition of ≤ n-1 parties sees
+//     shares that are UNIFORM and PERFECTLY (information-theoretically)
+//     independent of the secret — no assumption to break, secure against
+//     UNBOUNDED compute. (Contrast: a BFV ciphertext of the same value is only
+//     COMPUTATIONALLY hiding — an unbounded adversary recovers the plaintext by
+//     breaking LWE.)
+//   * The fold — aggregate demand/supply per bucket — is each party LOCALLY
+//     summing its own shares mod 2^b (`fold_arith`): FREE, no communication, no
+//     crypto, and the result is again a perfect additive sharing of the sum.
+//   * To feed the existing boolean Beaver-triple comparator, the folded
+//     arithmetic shares are converted to boolean shares once at the boundary
+//     (`a2b`, a real MPC subprotocol — a secret-shared ripple-carry sum of the
+//     parties' arithmetic shares). Then the UNCHANGED `mpc_crossing` runs and
+//     reveals ONLY (p*, V*).
+//
+// Threshold (stated honestly): additive (n-of-n) sharing is PERFECTLY HIDING
+// against any ≤ n-1 SEMI-HONEST parties given the (simulated-dealer) Beaver
+// triples — the online phase opens only one-time-padded bits and is itself
+// information-theoretically secure. Robust/malicious security and dealer-free
+// IT triple generation are the classic HONEST-MAJORITY regime (t < n/2, BGW);
+// SPDZ-style MACs push to all-but-one but put a computational assumption back in
+// the (offline) preprocessing. All-collude reconstruction is unavoidable for
+// clearing over hidden data — the theorem, not a gap. This PoC establishes the
+// semi-honest, below-threshold, PERFECT-HIDING fold; §8 of the design doc keeps
+// the malicious-secure + real-preprocessing frontier.
+// ===========================================================================
+
+/// An integer additively secret-shared over the ring `Z_{2^b}`: the cleartext is
+/// `(Σ_i shares[i]) mod 2^b`. Any `n-1` shares are uniform over `Z_{2^b}` and
+/// PERFECTLY independent of the secret (information-theoretic, not computational).
+/// Share ADDITION is LOCAL — this is what makes the fold free and unconditional.
+pub type ArithShare = Vec<u64>;
+
+/// `2^b - 1` (the ring mask), or all-ones for `b ≥ 64`.
+#[inline]
+fn ring_mask(b: usize) -> u64 {
+    if b >= 64 {
+        u64::MAX
+    } else {
+        (1u64 << b) - 1
+    }
+}
+
+/// Additively secret-share `value` over `Z_{2^b}` among `n` parties. The first
+/// `n-1` shares are fresh uniform ring elements; the last absorbs the residue.
+/// Perfect hiding: for EVERY secret, any `n-1` of the shares are uniform and
+/// independent of it — demonstrated exactly by enumeration in the bench.
+pub fn share_arith<R: Rng>(value: u64, b: usize, n: usize, rng: &mut R) -> ArithShare {
+    let m = ring_mask(b);
+    assert!(
+        b >= 64 || value <= m,
+        "value {value} overflows {b}-bit ring"
+    );
+    let mut v = vec![0u64; n];
+    let mut acc = 0u64;
+    for s in v.iter_mut().take(n - 1) {
+        let r = rng.gen::<u64>() & m;
+        *s = r;
+        acc = acc.wrapping_add(r) & m;
+    }
+    v[n - 1] = value.wrapping_sub(acc) & m;
+    v
+}
+
+/// Reconstruct an arithmetic sharing to its cleartext `(Σ shares) mod 2^b`.
+pub fn open_arith(shares: &ArithShare, b: usize) -> u64 {
+    let m = ring_mask(b);
+    shares.iter().fold(0u64, |a, &s| a.wrapping_add(s & m) & m)
+}
+
+/// THE INFORMATION-THEORETIC FOLD — each party LOCALLY sums its own shares of the
+/// per-order contributions mod `2^b`. No communication, no crypto, no LWE: FREE.
+/// The output is again a perfect additive sharing (of the aggregate). This is the
+/// unconditional replacement for `additive::bfv_fold`.
+pub fn fold_arith(order_shares: &[ArithShare], n: usize, b: usize) -> ArithShare {
+    let m = ring_mask(b);
+    let mut acc = vec![0u64; n];
+    for sh in order_shares {
+        for (a, &s) in acc.iter_mut().zip(sh) {
+            *a = a.wrapping_add(s) & m;
+        }
+    }
+    acc
+}
+
+/// Secure ADD of two `b`-bit boolean-shared integers, `(x + y) mod 2^b`, via a
+/// secret-shared ripple-carry adder. `sum_i = x_i ⊕ y_i ⊕ c_i`; the 1-AND carry
+/// `c_{i+1} = c_i ⊕ (x_i ⊕ c_i)·(y_i ⊕ c_i)`. `b-1` AND gates, depth `b`.
+pub fn secure_add(
+    x: &SharedInt,
+    y: &SharedInt,
+    pool: &mut TriplePool,
+    tr: &mut Transcript,
+) -> SharedInt {
+    let bits = x.len();
+    let n = x[0].len();
+    let mut carry = share_const(0, n);
+    let mut out = Vec::with_capacity(bits);
+    for i in 0..bits {
+        out.push(xor(&xor(&x[i], &y[i]), &carry));
+        if i + 1 < bits {
+            let xc = xor(&x[i], &carry);
+            let yc = xor(&y[i], &carry);
+            let t = pool.take().clone();
+            let prod = and_gate(&xc, &yc, &t, tr);
+            carry = xor(&carry, &prod);
+        }
+    }
+    out
+}
+
+/// ARITHMETIC → BOOLEAN share conversion (A2B), the one boundary bridge between
+/// the free arithmetic fold and the boolean comparator. Each party `i` locally
+/// boolean-shares its own arithmetic share `x_i` (it knows it in the clear); the
+/// `n` boolean-shared values are then summed with `secure_add` (a balanced adder
+/// tree in deployment) to yield the boolean sharing of `x = Σ x_i mod 2^b`.
+/// Cost: `(n-1)·(b-1)` AND gates; depth `⌈log₂ n⌉·b`.
+pub fn a2b<R: Rng>(
+    arith: &ArithShare,
+    b: usize,
+    pool: &mut TriplePool,
+    tr: &mut Transcript,
+    rng: &mut R,
+) -> SharedInt {
+    let n = arith.len();
+    let m = ring_mask(b);
+    let mut acc = share_int(arith[0] & m, b, n, rng);
+    for share in arith.iter().skip(1) {
+        let xi = share_int(share & m, b, n, rng);
+        acc = secure_add(&acc, &xi, pool, tr);
+    }
+    acc
+}
+
+/// `⌈log₂ n⌉` — the adder-tree depth for summing `n` party values in A2B.
+fn ceil_log2(n: usize) -> usize {
+    let mut d = 0usize;
+    let mut x = 1usize;
+    while x < n {
+        x <<= 1;
+        d += 1;
+    }
+    d
+}
+
+/// Triples one PURE crossing consumes: `2·K` A2B conversions (demand + supply),
+/// each `(n-1)·(b-1)` ANDs, plus the boolean crossing (`triples_needed`).
+pub fn triples_needed_pure(k: usize, b: usize, n: usize) -> usize {
+    2 * k * (n - 1) * (b - 1) + triples_needed(k, b)
+}
+
+/// The result of one PURE-MPC (information-theoretic-fold) crossing, with the
+/// phase timings that make the "fold is now free" claim measurable.
+pub struct PureRun {
+    pub cross: Crossing,
+    pub transcript: Transcript,
+    /// Wall time of the FOLD (local share addition). Essentially zero — no crypto.
+    pub fold: Duration,
+    /// Wall time of the A2B boundary conversion (the only added MPC vs. the fold).
+    pub a2b: Duration,
+    /// Wall time of the boolean crossing (identical to the BFV-path crossing).
+    pub crossing: Duration,
+    pub triples_used: usize,
+    pub a2b_and_gates: usize,
+    pub crossing_and_gates: usize,
+}
+
+/// THE PURE-MPC CROSSING — no BFV, no LWE anywhere in the fold path. Shares each
+/// order's per-bucket increment directly (`share_arith`), folds LOCALLY
+/// (`fold_arith`, free + information-theoretic), converts the aggregate to boolean
+/// shares (`a2b`), then runs the UNCHANGED `mpc_crossing`, revealing only (p*,V*).
+pub fn cross_book_pure<R: Rng>(
+    orders: &[Order],
+    k: usize,
+    b: usize,
+    n: usize,
+    rng: &mut R,
+) -> PureRun {
+    let mut pool = TriplePool::generate(triples_needed_pure(k, b, n), n, rng);
+
+    // (1) Trader-side: expand each order to its K-bucket unary increment and
+    //     additively secret-share EACH bucket contribution over Z_{2^b}. Demand =
+    //     bids, supply = asks. No party ever holds a plaintext increment.
+    let mut demand_orders: Vec<Vec<ArithShare>> = Vec::new();
+    let mut supply_orders: Vec<Vec<ArithShare>> = Vec::new();
+    for o in orders {
+        let inc = order_increment(o, k);
+        let shared: Vec<ArithShare> = inc
+            .iter()
+            .map(|&q| share_arith(q as u64, b, n, rng))
+            .collect();
+        match o.side {
+            Side::Bid => demand_orders.push(shared),
+            Side::Ask => supply_orders.push(shared),
+        }
+    }
+
+    // (2) THE FOLD — LOCAL per-party sum of shares, per bucket. FREE + UNCONDITIONAL.
+    let fold_one = |orders: &[Vec<ArithShare>]| -> Vec<ArithShare> {
+        (0..k)
+            .map(|p| {
+                let col: Vec<ArithShare> = orders.iter().map(|o| o[p].clone()).collect();
+                if col.is_empty() {
+                    vec![0u64; n]
+                } else {
+                    fold_arith(&col, n, b)
+                }
+            })
+            .collect()
+    };
+    let t0 = Instant::now();
+    let d_arith = fold_one(&demand_orders);
+    let s_arith = fold_one(&supply_orders);
+    let fold_dt = t0.elapsed();
+
+    // (3) A2B — the one boundary bridge to the boolean comparator.
+    let mut tr = Transcript::default();
+    let t0 = Instant::now();
+    let d_shared: Vec<SharedInt> = d_arith
+        .iter()
+        .map(|a| a2b(a, b, &mut pool, &mut tr, rng))
+        .collect();
+    let s_shared: Vec<SharedInt> = s_arith
+        .iter()
+        .map(|a| a2b(a, b, &mut pool, &mut tr, rng))
+        .collect();
+    let a2b_dt = t0.elapsed();
+    let a2b_ands = tr.and_gates;
+    // A2B depth: n party-values summed by a balanced adder tree, buckets parallel.
+    tr.rounds += ceil_log2(n) * b;
+
+    // (4) THE CROSSING — the existing Beaver-triple GEQ crossing, unchanged.
+    let t0 = Instant::now();
+    let cross = mpc_crossing(&d_shared, &s_shared, &mut pool, &mut tr);
+    let crossing_dt = t0.elapsed();
+    let crossing_ands = tr.and_gates - a2b_ands;
+
+    PureRun {
+        cross,
+        transcript: tr,
+        fold: fold_dt,
+        a2b: a2b_dt,
+        crossing: crossing_dt,
+        triples_used: pool.consumed(),
+        a2b_and_gates: a2b_ands,
+        crossing_and_gates: crossing_ands,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The PERFECT-HIDING demonstration — the load-bearing information-theoretic
+// property, shown EXACTLY (by enumeration), not statistically.
+// ---------------------------------------------------------------------------
+
+/// Enumerate the FULL randomness space of `share_arith(secret, b, n)` and return
+/// the exact histogram of what a `coalition` (a set of party indices, size ≤ n-1)
+/// observes. If, for two different secrets, these histograms are IDENTICAL, the
+/// coalition's view is provably independent of the secret — PERFECT (information-
+/// theoretic) hiding, secure against unbounded compute. (For additive sharing the
+/// histogram is in fact the uniform "every tuple exactly once" for any size-`n-1`
+/// coalition and any secret — this function proves it rather than asserting it.)
+///
+/// Randomness = the free shares `(r_0..r_{n-2}) ∈ Z_{2^b}^{n-1}`; the last share is
+/// `secret - Σ r`. Only feasible for small `b·(n-1)`; use `b ≤ 8`, `n ≤ 3`.
+pub fn coalition_view_histogram(
+    secret: u64,
+    b: usize,
+    n: usize,
+    coalition: &[usize],
+) -> std::collections::BTreeMap<Vec<u64>, u64> {
+    let m = ring_mask(b);
+    let size = (m as u128 + 1) as u64; // 2^b
+    let free = n - 1; // number of free shares r_0..r_{n-2}
+    let mut hist: std::collections::BTreeMap<Vec<u64>, u64> = std::collections::BTreeMap::new();
+    // Enumerate all (r_0..r_{free-1}) ∈ [0,2^b)^{free}.
+    let total: u128 = (size as u128).pow(free as u32);
+    for idx in 0..total {
+        let mut shares = vec![0u64; n];
+        let mut rem = idx;
+        let mut acc = 0u64;
+        for s in shares.iter_mut().take(free) {
+            let r = (rem % size as u128) as u64;
+            rem /= size as u128;
+            *s = r;
+            acc = acc.wrapping_add(r) & m;
+        }
+        shares[n - 1] = secret.wrapping_sub(acc) & m;
+        let view: Vec<u64> = coalition.iter().map(|&i| shares[i]).collect();
+        *hist.entry(view).or_insert(0) += 1;
+    }
+    hist
+}
+
+#[cfg(test)]
+mod pure_tests {
+    use super::*;
+    use crate::{reference_clear, Order, Side};
+    use rand::rngs::StdRng;
+    use rand::SeedableRng;
+
+    #[test]
+    fn arith_share_roundtrips_and_folds_locally() {
+        let mut rng = StdRng::seed_from_u64(1);
+        let b = 16;
+        // A perfect additive sharing reconstructs, and LOCAL fold == plaintext sum.
+        let vals = [3u64, 40, 7, 255, 1000];
+        let shares: Vec<ArithShare> = vals
+            .iter()
+            .map(|&v| share_arith(v, b, 4, &mut rng))
+            .collect();
+        for (&v, sh) in vals.iter().zip(&shares) {
+            assert_eq!(open_arith(sh, b), v);
+        }
+        let folded = fold_arith(&shares, 4, b);
+        assert_eq!(open_arith(&folded, b), vals.iter().sum::<u64>());
+    }
+
+    #[test]
+    fn perfect_hiding_is_exact_and_secret_independent() {
+        // Every size-(n-1) coalition sees a view whose EXACT distribution is
+        // identical for different secrets — perfect (information-theoretic) hiding.
+        let (b, n) = (8usize, 3usize);
+        for coal in [vec![0usize, 1], vec![0, 2], vec![1, 2]] {
+            let h0 = coalition_view_histogram(0, b, n, &coal);
+            let h199 = coalition_view_histogram(199, b, n, &coal);
+            assert_eq!(h0, h199, "coalition view depends on the secret");
+            let counts: std::collections::BTreeSet<u64> = h0.values().copied().collect();
+            assert_eq!(counts.len(), 1, "coalition view is not uniform");
+        }
+    }
+
+    #[test]
+    fn pure_crossing_matches_plaintext() {
+        let mut rng = StdRng::seed_from_u64(7);
+        let k = 48;
+        let book: Vec<Order> = (0..64)
+            .map(|i| Order {
+                side: if i % 2 == 0 { Side::Bid } else { Side::Ask },
+                limit: (i * 5) % k,
+                qty: 1 + (i as u16 % 6),
+            })
+            .collect();
+        let reference = reference_clear(&book, k);
+        let run = cross_book_pure(&book, k, 16, 4, &mut rng);
+        assert_eq!(run.cross.p_star, reference.p_star);
+        assert_eq!(run.cross.v_star as u32, reference.v_star);
+        assert!(run.transcript.is_reveal_only(k));
+    }
 }

@@ -1,0 +1,51 @@
+# `dreggnet-prove-service` — THE ASYNC MATCH-FOLD PROVING SERVICE.
+#
+# Deploy-plan Phase 3: the whole-match STARK fold runs OFF the player's critical
+# path. PLAY (fast, local) -> ENQUEUE (returns a JobId immediately) -> the fold
+# grinds on a BACKGROUND WORKER POOL -> the player polls status and, when
+# `Done{proof}`, submits the succinct proof to the proof-carrying board. Nothing
+# in the play path ever waits on the minutes-to-hours fold.
+#
+# This is the PRODUCTION pool: it extends the committed per-turn async pattern
+# (`node/src/prove_pool.rs` — a bounded MPSC + a fixed worker set, off-lock,
+# env-tunable, metric-counted) from the ~0.75s per-TURN attestation to the whole
+# WholeChainProof match fold.
+#
+# CONSUMES (never modifies):
+#   * dreggnet-game-board — the play->fold bridge (`TugMatch`/`AutomataflMatch` ->
+#                           `prove_tug_match`/`prove_automatafl_match` -> ONE
+#                           `MatchProof`), which itself drives the game folds
+#                           (`dregg-multiway-tug::fold` / `dregg-automatafl`) +
+#                           `prove_turn_chain_recursive`.
+#   * dregg-circuit-prove — the prover + `gpu_backend` (the runtime-dispatched GPU
+#                           backend; this crate reports its adapter presence).
+#
+# Additive workspace member. It touches no circuit, no cell, no game.
+[package]
+name = "dreggnet-prove-service"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "The async match-fold proving service: a played match (multiway-tug / automatafl) is enqueued and folded to ONE WholeChainProof on a bounded background worker pool (off the play path, GPU-dispatched where a GPU exists), then submitted to the proof-carrying board."
+
+[lints]
+workspace = true
+
+[dependencies]
+# THE PLAY -> FOLD BRIDGE: a played match -> ONE succinct `MatchProof`.
+dreggnet-game-board = { path = "../dreggnet-game-board" }
+# The prover + the runtime-dispatched GPU backend (adapter-presence probe).
+dregg-circuit-prove = { path = "../circuit-prove" }
+tracing = { workspace = true }
+
+[dev-dependencies]
+# The O(1) light client — independent re-verification of a folded artifact.
+dregg-lightclient = { path = "../lightclient" }
+# Building the driven test matches.
+dregg-multiway-tug = { path = "../dregg-multiway-tug" }
+dregg-automatafl = { path = "../dregg-automatafl" }
+dregg-circuit = { path = "../circuit" }

@@ -28,7 +28,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [{ name = "psycopg", extras = ["binary"], marker = "extra == 'pg'", specifier = ">=3.1" }]
-provides-extras = ["pg"]
+provides-extras = ["kernel", "lean-executor", "pg"]
 
 [package.metadata.requires-dev]
 dev = [

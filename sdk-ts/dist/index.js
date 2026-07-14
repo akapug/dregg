@@ -34,7 +34,9 @@ __export(index_exports, {
   AttestedQuery: () => AttestedQuery,
   AuthorizedTurn: () => AuthorizedTurn,
   ChannelsClient: () => ChannelsClient,
+  DEFAULT_DOMAINS: () => DEFAULT_DOMAINS,
   DEFAULT_LEASE_METHOD: () => DEFAULT_LEASE_METHOD,
+  DREGG_ENDPOINTS: () => DREGG_ENDPOINTS,
   DeployChecker: () => DeployChecker,
   DreggPgError: () => DreggPgError,
   EmptyTurnError: () => EmptyTurnError,
@@ -62,19 +64,25 @@ __export(index_exports, {
   TurnBuilder: () => TurnBuilder,
   TurnProof: () => TurnProof,
   WrongTurnProofError: () => WrongTurnProofError,
+  apiUrl: () => apiUrl,
   base64Decode: () => base64Decode,
   base64Encode: () => base64Encode,
   createSseParser: () => createSseParser,
+  devnetUrl: () => devnetUrl,
+  devnetWssUrl: () => devnetWssUrl,
   explainAction: () => explainAction,
   explainEffect: () => explainEffect,
   explainTurn: () => explainTurn,
   fieldFromU64: () => fieldFromU64,
+  gatewayUrl: () => gatewayUrl,
   hexDecode: () => hexDecode,
   hexEncode: () => hexEncode,
   leaseProgramConstraints: () => leaseProgramConstraints,
+  portalUrl: () => portalUrl,
   profiles: () => profiles_exports,
   program: () => program_exports,
   renderTurn: () => renderTurn,
+  resolveDomains: () => resolveDomains,
   symbol: () => symbol
 });
 module.exports = __toCommonJS(index_exports);
@@ -901,6 +909,62 @@ function loadActive() {
   const name = activeName();
   return name === void 0 ? void 0 : load(name);
 }
+
+// src/endpoints.ts
+var DEFAULT_DOMAINS = Object.freeze({
+  api: "dregg.fg-goose.online",
+  devnet: "devnet.dregg.fg-goose.online",
+  auth: "auth.dregg.fg-goose.online",
+  gateway: "gateway.dregg.fg-goose.online",
+  hosting: "dregg.works",
+  portal: "portal.dregg.studio"
+});
+var ENV_VARS = {
+  api: "DREGG_API_DOMAIN",
+  devnet: "DREGG_DEVNET_DOMAIN",
+  auth: "DREGG_AUTH_DOMAIN",
+  gateway: "DREGG_GATEWAY_DOMAIN",
+  hosting: "DREGG_HOSTING_DOMAIN",
+  portal: "DREGG_PORTAL_DOMAIN"
+};
+function envOverride(field) {
+  const env = globalThis.process?.env;
+  const v = env?.[ENV_VARS[field]];
+  return v && v.trim() ? v.trim() : void 0;
+}
+function browserOverride(field) {
+  const o = globalThis.__DREGG_ENDPOINTS__;
+  const v = o?.[field];
+  return v && v.trim() ? v.trim() : void 0;
+}
+function resolveDomains() {
+  const out = {};
+  for (const key of Object.keys(DEFAULT_DOMAINS)) {
+    out[key] = browserOverride(key) ?? envOverride(key) ?? DEFAULT_DOMAINS[key];
+  }
+  return out;
+}
+function devnetUrl(domains = resolveDomains()) {
+  return `https://${domains.devnet}`;
+}
+function devnetWssUrl(domains = resolveDomains()) {
+  return `wss://${domains.devnet}/ws`;
+}
+function apiUrl(domains = resolveDomains()) {
+  return `https://${domains.api}`;
+}
+function gatewayUrl(domains = resolveDomains()) {
+  return `https://${domains.gateway}`;
+}
+function portalUrl(domains = resolveDomains()) {
+  return `https://${domains.portal}`;
+}
+var DREGG_ENDPOINTS = Object.freeze({
+  /** Default node URL (e.g. `https://devnet.dregg.fg-goose.online`). */
+  defaultNodeUrl: devnetUrl(),
+  /** Default node WSS URL (e.g. `wss://devnet.dregg.fg-goose.online/ws`). */
+  defaultNodeWssUrl: devnetWssUrl()
+});
 
 // src/receipt.ts
 var TurnProof = class {
@@ -2942,7 +3006,9 @@ var DeployChecker = class {
   AttestedQuery,
   AuthorizedTurn,
   ChannelsClient,
+  DEFAULT_DOMAINS,
   DEFAULT_LEASE_METHOD,
+  DREGG_ENDPOINTS,
   DeployChecker,
   DreggPgError,
   EmptyTurnError,
@@ -2970,18 +3036,24 @@ var DeployChecker = class {
   TurnBuilder,
   TurnProof,
   WrongTurnProofError,
+  apiUrl,
   base64Decode,
   base64Encode,
   createSseParser,
+  devnetUrl,
+  devnetWssUrl,
   explainAction,
   explainEffect,
   explainTurn,
   fieldFromU64,
+  gatewayUrl,
   hexDecode,
   hexEncode,
   leaseProgramConstraints,
+  portalUrl,
   profiles,
   program,
   renderTurn,
+  resolveDomains,
   symbol
 });

@@ -1,0 +1,49 @@
+# `dreggnet-game-board` — THE GAMES' FULL-STARK ASYNCHRONOUS LEADERBOARD.
+#
+# A played match of a portfolio game folds to ONE succinct proof; the proof is
+# submitted ASYNCHRONOUSLY to the proof-carrying no-cheat board (`ugc-dregg`),
+# which verifies it in O(1) with the whole-history light client and RANKS it —
+# storing NO moves. So a multiway-tug match ranks with the HAND never revealed,
+# and an automatafl match ranks with the MOVES never posted.
+#
+# CONSUMES (never modifies):
+#   * dregg-multiway-tug — its Phase-3 fold (`fold::LeafBundle` / `fold::fold_match`)
+#                          + the hidden-hand `HandTree`/`PlayProof` membership tooth.
+#   * dregg-automatafl   — its D1 board-transition Custom leaf (`build_d1_honest`).
+#   * ugc-dregg          — the PROOF-CARRYING BOARD (`ProofAnchor` / `ProofCompletion` /
+#                          `Registry::submit_proof` / `verify_proof_completion`).
+#   * dregg-lightclient  — `verify_history_bytes`, the O(1) accept-path.
+#   * game-turn-slice    — the range-gadget compiler for the terminal win/score leaf.
+#
+# Additive workspace member.
+[package]
+name = "dreggnet-game-board"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "The games' full-STARK asynchronous leaderboard: a played match (multiway-tug / automatafl) folds to ONE succinct proof, submitted asynchronously to the proof-carrying board, which verifies it in O(1) and ranks it storing NO moves."
+
+[lints]
+workspace = true
+
+[dependencies]
+# THE GAMES.
+dregg-multiway-tug = { path = "../dregg-multiway-tug" }
+dregg-automatafl = { path = "../dregg-automatafl" }
+# THE PROOF-CARRYING BOARD (the O(1) accept-path + the ranked, moves-less entry).
+ugc-dregg = { path = "../ugc-dregg" }
+# The whole-history light client — the board's verifier, also used prover-side to
+# self-attest a freshly folded match artifact before it is shipped.
+dregg-lightclient = { path = "../lightclient" }
+# The fold's proof types (`WholeChainProof` / `RecursionVk` / `SEG_ANCHOR_WIDTH`).
+dregg-circuit-prove = { path = "../circuit-prove" }
+# `BabyBear` — the field the attested anchors are vectors of.
+dregg-circuit = { path = "../circuit" }
+# The terminal win/score leaf (the range-gadget compiler + `SlotAssignment`).
+game-turn-slice = { path = "../game-turn-slice" }
+# `StateConstraint` / `field_from_u64` — the teeth the win leaf lowers.
+dregg-cell = { path = "../cell" }

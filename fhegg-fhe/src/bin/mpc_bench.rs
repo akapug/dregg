@@ -21,8 +21,8 @@ use rand::{Rng, SeedableRng};
 
 use fhegg_fhe::additive::{bfv_fold, pick_params};
 use fhegg_fhe::mpc::{
-    cross_curves, mpc_crossing, share_int, simulate, triples_needed, SharedInt, Transcript,
-    TriplePool,
+    coalition_view_histogram, cross_book_pure, cross_curves, mpc_crossing, share_arith, share_int,
+    simulate, triples_needed, SharedInt, Transcript, TriplePool,
 };
 use fhegg_fhe::{reference_clear, Order, Side};
 
@@ -49,6 +49,8 @@ fn main() {
 
     correctness_and_latency();
     privacy_demo();
+    pure_mpc_correctness_and_latency();
+    perfect_hiding_demo();
 
     println!("\n=== GATE ===");
     println!(
@@ -56,6 +58,15 @@ fn main() {
     );
     println!("(B) privacy: same-(p*,V*) books -> indistinguishable views; simulator matches — see below.");
     println!("(C) latency: MPC crossing in MILLISECONDS (vs FHE crossing ~12-17 s) — see table.");
+    println!("(D) PURE-MPC: info-theoretic (LWE-free) local fold + A2B + crossing == plaintext,");
+    println!("    fold FREE, benchmarked head-to-head vs the BFV (LWE-computational) fold.");
+    println!("(E) UNCONDITIONAL privacy: below-threshold shares are PERFECTLY HIDING — the exact");
+    println!(
+        "    coalition-view histogram is IDENTICAL across secrets (independent of the secret,"
+    );
+    println!(
+        "    secure vs unbounded compute) — stronger than the BFV path's LWE indistinguishability."
+    );
 }
 
 fn correctness_and_latency() {
@@ -297,5 +308,176 @@ fn privacy_demo() {
         "honest caveat: this is the SEMI-HONEST, below-threshold bound. >= t colluding\n\
          parties reconstruct the shares (t-of-n, not 'all-collude') — the minimum trust\n\
          for clearing over hidden data, and there is NO standing master decryption key."
+    );
+}
+
+/// (D) The PURE-MPC (information-theoretic-fold) path, benchmarked head-to-head
+/// against the BFV (LWE-computational) fold on identical books. The pure path
+/// secret-shares the orders DIRECTLY over Z_{2^b}, folds by LOCAL share addition
+/// (free, unconditional), converts once at the boundary (A2B), and runs the SAME
+/// crossing — correctness checked against the plaintext reference.
+fn pure_mpc_correctness_and_latency() {
+    println!("\n--- (D) PURE-MPC info-theoretic fold: no BFV/LWE in the fold path ---");
+    println!(
+        "fold = LOCAL per-party share sum over Z_2^b (FREE, unconditional) -> A2B boundary\n\
+         bridge -> UNCHANGED Beaver-triple crossing -> reveal ONLY (p*,V*). Contrast: the\n\
+         BFV fold is LWE-COMPUTATIONAL. Threshold: perfect-hiding vs <= n-1 semi-honest.\n"
+    );
+    println!(
+        "{:>4} {:>4} {:>3} | {:>10} | {:>9} {:>9} {:>10} | {:>8} {:>8} {:>7} | {}",
+        "N",
+        "K",
+        "n",
+        "BFV fold",
+        "MPC fold",
+        "A2B",
+        "cross",
+        "a2b ANDs",
+        "cr ANDs",
+        "rounds",
+        "correct"
+    );
+    let mut rng = StdRng::seed_from_u64(0x9E_11_7ED);
+    let mut all_ok = true;
+    for &n_orders in &[32usize, 128, 512] {
+        for &k in &[64usize, 256] {
+            for &n_parties in &[3usize, 4] {
+                let book = random_book(n_orders, k, &mut rng);
+                let reference = reference_clear(&book, k);
+
+                // The BFV (LWE) fold — timed only for the head-to-head contrast.
+                let params = pick_params(20);
+                let (_d, _s, fold_t) = bfv_fold(&book, k, &params);
+
+                // The PURE info-theoretic path on the SAME book.
+                let run = cross_book_pure(&book, k, B, n_parties, &mut rng);
+
+                let ok = run.cross.p_star == reference.p_star
+                    && run.cross.v_star as u32 == reference.v_star
+                    && run.transcript.is_reveal_only(k);
+                all_ok &= ok;
+
+                println!(
+                    "{:>4} {:>4} {:>3} | {:>9.4}s | {:>7.4}ms {:>7.2}ms {:>8.2}ms | {:>8} {:>8} {:>7} | {}",
+                    n_orders,
+                    k,
+                    n_parties,
+                    fold_t.fold.as_secs_f64(),
+                    run.fold.as_secs_f64() * 1e3,
+                    run.a2b.as_secs_f64() * 1e3,
+                    run.crossing.as_secs_f64() * 1e3,
+                    run.a2b_and_gates,
+                    run.crossing_and_gates,
+                    run.transcript.rounds,
+                    if ok {
+                        format!("YES p*={:?} V*={}", run.cross.p_star, run.cross.v_star)
+                    } else {
+                        format!(
+                            "NO mpc={:?}/{} ref={:?}/{}",
+                            run.cross.p_star, run.cross.v_star, reference.p_star, reference.v_star
+                        )
+                    }
+                );
+                let _ = run.triples_used;
+            }
+        }
+    }
+    println!(
+        "\npure-MPC correctness across ALL configs: {}",
+        if all_ok {
+            "ALL MATCH (info-theoretic-fold MPC == plaintext)"
+        } else {
+            "!!! MISMATCH !!!"
+        }
+    );
+    assert!(
+        all_ok,
+        "pure-MPC crossing must equal the plaintext crossing"
+    );
+    println!(
+        "the FOLD is LOCAL share-addition — O(N*K) ring adds, NO communication and NO\n\
+         cryptographic assumption (vs the BFV fold's LWE); its cost tracks the BFV fold's\n\
+         own local arithmetic. The only added MPC vs the BFV path is the one-time A2B boundary\n\
+         bridge; the crossing is byte-identical. Deployment latency = rounds network trips.\n"
+    );
+}
+
+/// (E) The UNCONDITIONAL (perfect-hiding) demonstration — the load-bearing
+/// information-theoretic claim, shown EXACTLY by enumeration. For additive
+/// Z_{2^b} sharing, a coalition of any `n-1` parties observes a view whose EXACT
+/// distribution is IDENTICAL for every secret — so it is independent of the
+/// secret against UNBOUNDED compute (no LWE, no assumption). This is strictly
+/// stronger than the BFV path, whose ciphertext is only COMPUTATIONALLY hiding
+/// (an unbounded adversary breaks LWE and reads the plaintext).
+fn perfect_hiding_demo() {
+    println!("\n--- (E) UNCONDITIONAL privacy: below-threshold shares are PERFECTLY HIDING ---");
+    let b = 8usize; // small ring so we can ENUMERATE the whole randomness space
+    let n = 3usize; // 3 parties; a coalition of n-1 = 2 is below threshold
+    let v0 = 3u64;
+    let v1 = 200u64; // two very different secrets
+    println!(
+        "additive sharing over Z_2^{b} among n={n} parties; enumerate the ENTIRE randomness\n\
+         space (2^{} tuples) and compare the exact view of every 2-party coalition for two\n\
+         very different secrets v0={v0}, v1={v1}:",
+        b * (n - 1)
+    );
+
+    // Every coalition of size n-1 = 2, including the one holding the parity share.
+    let coalitions: [(&str, Vec<usize>); 3] = [
+        ("parties {0,1} (free shares)", vec![0, 1]),
+        ("parties {0,2} (incl. parity)", vec![0, 2]),
+        ("parties {1,2} (incl. parity)", vec![1, 2]),
+    ];
+    let mut all_perfect = true;
+    for (label, coal) in &coalitions {
+        let h0 = coalition_view_histogram(v0, b, n, coal);
+        let h1 = coalition_view_histogram(v1, b, n, coal);
+        let identical = h0 == h1;
+        // Uniform = every observable tuple appears exactly the same number of times.
+        let counts: std::collections::BTreeSet<u64> = h0.values().copied().collect();
+        let uniform = counts.len() == 1;
+        let distinct_tuples = h0.len();
+        all_perfect &= identical && uniform;
+        println!(
+            "  coalition {label:32}: histograms(v0)==histograms(v1): {identical}  |  \
+             uniform: {uniform} ({distinct_tuples} tuples x {}) ",
+            counts.into_iter().next().unwrap_or(0)
+        );
+    }
+    println!(
+        "\nperfect-hiding verdict: {}",
+        if all_perfect {
+            "EXACT — every below-threshold coalition-view distribution is IDENTICAL across\n\
+             secrets AND uniform. The fold's privacy is INFORMATION-THEORETIC (perfect hiding),\n\
+             secure against UNBOUNDED compute — no assumption to break."
+        } else {
+            "!!! a coalition view depends on the secret — perfect-hiding claim FAILS !!!"
+        }
+    );
+    assert!(
+        all_perfect,
+        "below-threshold shares must be perfectly hiding"
+    );
+
+    // A concrete same-secret sanity line: two independent sharings of the SAME
+    // value are DIFFERENT tuples yet both reconstruct to it — the randomness is real.
+    let mut rng = StdRng::seed_from_u64(0xF00D_51);
+    let sh_a = share_arith(v0, B, 4, &mut rng);
+    let sh_b = share_arith(v0, B, 4, &mut rng);
+    println!(
+        "\n(sharing is randomized: two sharings of {v0} differ {} but both open to {v0}: {}/{})",
+        sh_a != sh_b,
+        fhegg_fhe::mpc::open_arith(&sh_a, B),
+        fhegg_fhe::mpc::open_arith(&sh_b, B)
+    );
+
+    println!(
+        "\nCONTRAST with the BFV output-boundary path (A/B/C above): there the FOLD is BFV, so\n\
+         below-threshold no-viewer rests on LWE — an unbounded adversary breaks LWE and reads\n\
+         the curve. Here the fold has NO computational component; the shares are perfectly\n\
+         hiding. Honest threshold: perfect hiding vs any <= n-1 SEMI-HONEST parties (additive\n\
+         n-of-n); robust/malicious + dealer-free IT triples are the honest-majority (t<n/2, BGW)\n\
+         regime; SPDZ MACs reach all-but-one but reintroduce a computational assumption in the\n\
+         offline phase; all-collude reconstruction is unavoidable (the theorem, not a gap)."
     );
 }
