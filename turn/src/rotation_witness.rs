@@ -691,6 +691,101 @@ pub fn mint_rotated_participant_leg(
     })
 }
 
+/// **THE FULL-TURN → WRAP ADAPTER** — convert a REAL finalized node turn into the wrap's IVC
+/// input [`FinalizedTurn`], BOUND to the node's served [`dregg_sdk::FullTurnProof`]'s proven
+/// transition.
+///
+/// ## Why this is a re-prove, not a byte-reuse
+///
+/// The node's `FullTurnProof` (`node::turn_proving`) is a COMPOSED multi-sub-proof STARK proven
+/// under the SDK verify config; its rotated effect-vm leg lives inside a
+/// `dregg_dsl_runtime::ComposedProof` and is FRI-instantiated for `verify_full_turn`, NOT for the
+/// recursion fold. The wrap folds a bare `Ir2BatchProof<DreggRecursionConfig>` minted under
+/// [`ir2_leaf_wrap_config`](dregg_circuit_prove::ivc_turn_chain::ir2_leaf_wrap_config)
+/// (log_blowup 6). The two are DIFFERENT FRI-engine instantiations of the SAME constraint set, so
+/// the composed leg's bytes cannot be dropped into the fold. The SOUND bridge (the same
+/// statement-equality argument [`crate::rotation_witness`]'s leaf wrap already rests on) re-proves
+/// the IDENTICAL rotated descriptor over the IDENTICAL trace + PI vector under the leaf-wrap
+/// config, from the SAME execution context the node marshalled for its `FullTurnProof`.
+///
+/// ## The faithfulness tie (fail-closed)
+///
+/// A re-prove is only a faithful bridge if it attests the SAME state transition the served
+/// `FullTurnProof` proved. The node's `ProvenFinalizedTurn` carries the proof's 8-felt (~124-bit)
+/// `(old_commit, new_commit)` anchors (`node::turn_proving::prove_and_verify_finalized_turn` reads
+/// them off the rotated leg's `wide_commit_anchors`). This adapter takes those anchors and REFUSES
+/// unless the freshly minted wrap leg publishes the SAME wide 8-felt anchors at its PI tail
+/// (`wide_old_root8` / `wide_new_root8`). So the `FinalizedTurn` this returns cannot silently
+/// attest a DIFFERENT transition than the node's served proof — a context that does not match the
+/// `FullTurnProof` fails closed here rather than folding a mismatched turn into the wrap. The
+/// chain's temporal tooth (`new_root[i] == old_root[i+1]`) then binds these SAME anchors across the
+/// fold.
+///
+/// `initial_state` / `effects` / `before_cell` / `after_cell` / `nullifier_root` /
+/// `commitments_root` / `receipt_log` / `turn_id` are exactly the arguments
+/// [`mint_rotated_participant_leg`] consumes (the turn's execution context the node holds at
+/// `blocklace_sync::execute_finalized_turn`). `proven_old_commit` / `proven_new_commit` are the
+/// served `FullTurnProof`'s proven wide anchors (`ProvenFinalizedTurn::{old_commit, new_commit}`).
+#[cfg(feature = "prover")]
+#[allow(clippy::too_many_arguments)]
+pub fn finalized_turn_from_full_turn(
+    initial_state: &dregg_circuit::effect_vm::CellState,
+    effects: &[dregg_circuit::effect_vm::Effect],
+    before_cell: &Cell,
+    after_cell: &Cell,
+    nullifier_root: &dregg_circuit::Faithful8,
+    commitments_root: &dregg_circuit::Faithful8,
+    receipt_log: &[[u8; 32]],
+    turn_id: Option<BabyBear>,
+    proven_old_commit: [BabyBear; 8],
+    proven_new_commit: [BabyBear; 8],
+) -> Result<dregg_circuit_prove::ivc_turn_chain::FinalizedTurn, String> {
+    use dregg_circuit_prove::ivc_turn_chain::FinalizedTurn;
+    use dregg_circuit_prove::joint_turn_aggregation::DescriptorParticipant;
+
+    // 1. Re-prove the rotated leg under the leaf-wrap config (statement-equality: same descriptor,
+    //    same trace, same PI vector as the FullTurnProof's rotated leg). `mint_rotated_participant_leg`
+    //    already self-verifies the minted proof before returning.
+    let leg = mint_rotated_participant_leg(
+        initial_state,
+        effects,
+        before_cell,
+        after_cell,
+        nullifier_root,
+        commitments_root,
+        receipt_log,
+        turn_id,
+    )?;
+
+    // 2. THE FAITHFULNESS TIE (fail-closed): the wrap leg's wide 8-felt anchors must be the SAME
+    //    (~124-bit) commits the node's FullTurnProof proved, else the context does not match the
+    //    served proof and we refuse to fold a mismatched transition into the wrap.
+    let wide_old = leg.wide_old_root8().ok_or_else(|| {
+        "finalized_turn_from_full_turn: minted leg carries no wide 8-felt OLD anchor (a narrow \
+         leg cannot be bound to the FullTurnProof's ~124-bit commit)"
+            .to_string()
+    })?;
+    let wide_new = leg.wide_new_root8().ok_or_else(|| {
+        "finalized_turn_from_full_turn: minted leg carries no wide 8-felt NEW anchor".to_string()
+    })?;
+    if wide_old != proven_old_commit {
+        return Err(format!(
+            "finalized_turn_from_full_turn: minted wrap-leg OLD anchor {wide_old:?} != the \
+             FullTurnProof's proven old_commit {proven_old_commit:?} — the turn context does not \
+             match the served proof (refused, not folded)"
+        ));
+    }
+    if wide_new != proven_new_commit {
+        return Err(format!(
+            "finalized_turn_from_full_turn: minted wrap-leg NEW anchor {wide_new:?} != the \
+             FullTurnProof's proven new_commit {proven_new_commit:?} — the turn context does not \
+             match the served proof (refused, not folded)"
+        ));
+    }
+
+    Ok(FinalizedTurn::new(DescriptorParticipant::rotated(leg)))
+}
+
 /// **THE PRODUCER-SIDE MEMBERSHIP-TEETH FILL** — the honest `(sender_leaf, authorized_root)`
 /// values the committed transfer row's teeth columns carry, derived from the BEFORE cell the leg
 /// mints from (the recipe twin of the SDK attach lane's `retain_sender_membership`, which pins

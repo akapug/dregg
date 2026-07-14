@@ -10029,6 +10029,108 @@ mod tests {
         );
     }
 
+    /// **THE FULL-TURN → WRAP ADAPTER FAITHFULNESS TOOTH.** A REAL value-bearing transfer turn,
+    /// proven the node's way (`prove_turn_self_sovereign_rotated` → a verifying `FullTurnProof`),
+    /// is bridged into the wrap's IVC input by
+    /// [`dregg_turn::rotation_witness::finalized_turn_from_full_turn`]. The adapter re-proves the
+    /// rotated leg under the leaf-wrap config from the SAME turn context, and its fail-closed tie
+    /// REQUIRES the wrap leg's wide 8-felt anchors to equal the `FullTurnProof`'s proven
+    /// `(old_commit, new_commit)` — which are computed by an INDEPENDENT producer path
+    /// (`RotationTurnWitness::wide_commit_anchors`, the transfer-shape family). So this asserts the
+    /// two paths agree on the ~124-bit transition, i.e. the wrap input attests the SAME state
+    /// transition the served proof does.
+    ///
+    /// Both polarities: a real transfer binds (Ok); a leg whose claimed anchor is off by one felt
+    /// is REFUSED (the tie is not vacuous — a mismatched context cannot be laundered into the wrap).
+    #[cfg(feature = "prover")]
+    #[test]
+    fn full_turn_wrap_adapter_binds_real_transfer_and_rejects_mismatch() {
+        // A REAL value-bearing transfer: balance 1000 → 993 (amount 7 leaves the cell).
+        let balance = 1000u64;
+        let amount = 7u64;
+        let nonce = 0u32;
+        let initial = CellState::new(balance, nonce);
+        let effects = vec![VmEffect::Transfer {
+            amount,
+            direction: 1, // outgoing (value moves)
+        }];
+
+        // The REAL before/after actor cells the node holds at the turn's pre/post state (open perms
+        // so the rotated producer admits the actor without auth gating — the audited Bucket-F mint
+        // fixture, mirroring `apex_shrink_bn254_tooth`). The after cell reflects the debit.
+        let open = dregg_cell::Permissions {
+            send: dregg_cell::AuthRequired::None,
+            receive: dregg_cell::AuthRequired::None,
+            set_state: dregg_cell::AuthRequired::None,
+            set_permissions: dregg_cell::AuthRequired::None,
+            set_verification_key: dregg_cell::AuthRequired::None,
+            increment_nonce: dregg_cell::AuthRequired::None,
+            delegate: dregg_cell::AuthRequired::None,
+            access: dregg_cell::AuthRequired::None,
+        };
+        let mut before_cell = dregg_cell::Cell::with_balance([7u8; 32], [0u8; 32], balance as i64);
+        before_cell.permissions = open.clone();
+        let mut after_cell =
+            dregg_cell::Cell::with_balance([7u8; 32], [0u8; 32], (balance - amount) as i64);
+        after_cell.permissions = open;
+        let receipt_log = [[1u8; 32], [2u8; 32]];
+
+        // 1. THE NODE'S PROVEN TRANSITION: the 8-felt (~124-bit) anchors the node's
+        //    `ProvenFinalizedTurn` carries. `node::turn_proving::prove_and_verify_finalized_turn`
+        //    sets `(old_commit, new_commit) = rotation.wide_commit_anchors(...)` for a rotated turn
+        //    (`turn_proving.rs`), so these ARE the transition the served `FullTurnProof` binds —
+        //    sourced by the transfer-shape wide producer family, INDEPENDENT of the adapter's
+        //    dispatcher path, built from the SAME before/after cells.
+        let (old_commit, new_commit) =
+            rotation_witness_for_cells(&before_cell, &after_cell, &receipt_log)
+                .wide_commit_anchors(&initial, &effects, None)
+                .expect("node wide anchors");
+
+        // 2. THE ADAPTER: reconstruct the wrap leg from the SAME context; the fail-closed tie
+        //    passes iff the wrap leg's wide anchors == the FullTurnProof's proven anchors → Ok.
+        let empty = dregg_circuit::heap_root::empty_heap_root_8();
+        let ok = dregg_turn::rotation_witness::finalized_turn_from_full_turn(
+            &initial,
+            &effects,
+            &before_cell,
+            &after_cell,
+            &empty,
+            &empty,
+            &receipt_log,
+            None,
+            old_commit,
+            new_commit,
+        );
+        assert!(
+            ok.is_ok(),
+            "the adapter must bind the REAL transfer FullTurnProof into the wrap leg \
+             (wide anchors must agree across the two independent producer paths): {:?}",
+            ok.err()
+        );
+
+        // 3. ADVERSARIAL (fail-closed): a claimed anchor off by one felt must be REFUSED — the
+        //    adapter never folds a leg that attests a different transition than the served proof.
+        let mut bad_old = old_commit;
+        bad_old[0] += BabyBear::ONE;
+        let refused = dregg_turn::rotation_witness::finalized_turn_from_full_turn(
+            &initial,
+            &effects,
+            &before_cell,
+            &after_cell,
+            &empty,
+            &empty,
+            &receipt_log,
+            None,
+            bad_old,
+            new_commit,
+        );
+        assert!(
+            refused.is_err(),
+            "the adapter must REFUSE a leg whose claimed anchor != the FullTurnProof's proven \
+             commit — the faithfulness tie would be vacuous otherwise"
+        );
+    }
+
     /// Verify that wrong commitments cause rejection.
     #[cfg(feature = "prover")]
     #[test]
