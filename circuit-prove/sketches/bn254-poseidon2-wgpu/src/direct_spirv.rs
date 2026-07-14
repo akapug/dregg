@@ -22,11 +22,11 @@ const GLSL: &str = r#"#version 460
 layout(local_size_x = @WG@, local_size_y = 1, local_size_z = 1) in;
 layout(set = 0, binding = 0, std430) readonly buffer InputBuffer { uint input_data[]; };
 layout(set = 0, binding = 1, std430) writeonly buffer OutputBuffer { uint output_data[]; };
+layout(set = 0, binding = 2, std430) readonly buffer RoundConstantBuffer { uint rc_data[]; };
 
 const uint N0INV = @N0INV@u;
 const uint P[8] = uint[8](@P_WORDS@);
 const uint R2[8] = uint[8](@R2_WORDS@);
-const uint RC[640] = uint[640](@RC_WORDS@);
 
 struct Fp { uint v[8]; };
 
@@ -44,7 +44,7 @@ Fp fp_from_words(const uint words[8]) {
 
 Fp fp_rc(uint index) {
     Fp x;
-    [[unroll]] for (uint i = 0u; i < 8u; ++i) { x.v[i] = RC[index * 8u + i]; }
+    [[unroll]] for (uint i = 0u; i < 8u; ++i) { x.v[i] = rc_data[index * 8u + i]; }
     return x;
 }
 
@@ -80,48 +80,49 @@ Fp fp_add(Fp a, Fp b) {
         r.v[i] = s2;
         carry = c1 | c2;
     }
-    if (carry != 0u || fp_geq_p(r)) { r = fp_sub_p(r); }
+    // P < 2^254, so two canonical operands cannot carry out of 256 bits.
+    if (fp_geq_p(r)) { r = fp_sub_p(r); }
     return r;
 }
 
-// Schoolbook product plus SOS Montgomery reduction.  Every live accumulator
-// term is bounded by (2^32-1)^2 + 2*(2^32-1) = 2^64-1, so uint64_t is exact.
+// Coarsely integrated operand-scanning Montgomery multiplication.  Interleave
+// each eight-limb product row with its reduction row so the live accumulator
+// is ten limbs instead of the SOS multiplier's seventeen.  Every multiply-add
+// is bounded by (2^32-1)^2 + 2*(2^32-1) = 2^64-1.
 Fp mont_mul(Fp a, Fp b) {
-    uint t[17];
-    [[unroll]] for (uint i = 0u; i < 17u; ++i) { t[i] = 0u; }
+    uint t[10];
+    [[unroll]] for (uint i = 0u; i < 10u; ++i) { t[i] = 0u; }
 
-    [[dont_unroll]] for (uint i = 0u; i < 8u; ++i) {
+    [[unroll]] for (uint i = 0u; i < 8u; ++i) {
         uint64_t carry = uint64_t(0);
-        [[dont_unroll]] for (uint j = 0u; j < 8u; ++j) {
-            uint64_t uv = uint64_t(t[i + j])
-                        + uint64_t(a.v[i]) * uint64_t(b.v[j]) + carry;
-            t[i + j] = uint(uv);
+        [[unroll]] for (uint j = 0u; j < 8u; ++j) {
+            uint64_t uv = uint64_t(t[j])
+                        + uint64_t(a.v[j]) * uint64_t(b.v[i]) + carry;
+            t[j] = uint(uv);
             carry = uv >> 32;
         }
-        t[i + 8u] = uint(carry);
-    }
+        uint64_t uv = uint64_t(t[8]) + carry;
+        t[8] = uint(uv);
+        t[9] += uint(uv >> 32);
 
-    [[dont_unroll]] for (uint i = 0u; i < 8u; ++i) {
-        uint m = t[i] * N0INV;
-        uint64_t carry = uint64_t(0);
-        [[dont_unroll]] for (uint j = 0u; j < 8u; ++j) {
-            uint64_t uv = uint64_t(t[i + j])
-                        + uint64_t(m) * uint64_t(P[j]) + carry;
-            t[i + j] = uint(uv);
+        uint m = t[0] * N0INV;
+        carry = uint64_t(0);
+        [[unroll]] for (uint j = 0u; j < 8u; ++j) {
+            uv = uint64_t(t[j]) + uint64_t(m) * uint64_t(P[j]) + carry;
+            if (j != 0u) { t[j - 1u] = uint(uv); }
             carry = uv >> 32;
         }
-        uint k = i + 8u;
-        while (carry != uint64_t(0) && k < 17u) {
-            uint64_t uv = uint64_t(t[k]) + carry;
-            t[k] = uint(uv);
-            carry = uv >> 32;
-            ++k;
-        }
+        uv = uint64_t(t[8]) + carry;
+        t[7] = uint(uv);
+        carry = uv >> 32;
+        uv = uint64_t(t[9]) + carry;
+        t[8] = uint(uv);
+        t[9] = uint(uv >> 32);
     }
 
     Fp r;
-    [[unroll]] for (uint i = 0u; i < 8u; ++i) { r.v[i] = t[i + 8u]; }
-    if (t[16] != 0u || fp_geq_p(r)) { r = fp_sub_p(r); }
+    [[unroll]] for (uint i = 0u; i < 8u; ++i) { r.v[i] = t[i]; }
+    if (t[8] != 0u || fp_geq_p(r)) { r = fp_sub_p(r); }
     return r;
 }
 
@@ -147,7 +148,7 @@ void int_linear(inout Fp s[3]) {
 
 void permute(inout Fp s[3]) {
     ext_linear(s);
-    [[dont_unroll]] for (uint round = 0u; round < 4u; ++round) {
+    [[unroll]] for (uint round = 0u; round < 4u; ++round) {
         [[unroll]] for (uint lane = 0u; lane < 3u; ++lane) {
             s[lane] = fp_add(s[lane], fp_rc(round * 3u + lane));
             s[lane] = sbox(s[lane]);
@@ -159,7 +160,7 @@ void permute(inout Fp s[3]) {
         s[0] = sbox(s[0]);
         int_linear(s);
     }
-    [[dont_unroll]] for (uint round = 0u; round < 4u; ++round) {
+    [[unroll]] for (uint round = 0u; round < 4u; ++round) {
         [[unroll]] for (uint lane = 0u; lane < 3u; ++lane) {
             s[lane] = fp_add(s[lane], fp_rc(68u + round * 3u + lane));
             s[lane] = sbox(s[lane]);
@@ -248,29 +249,11 @@ fn words(xs: &[u32]) -> String {
         .join(", ")
 }
 
-fn source(entry: &str, wg: u32, p: &BigUint, r: &BigUint, r2: &BigUint, n0inv: u32) -> String {
-    let to_monty = |hex: &str| -> BigUint { (biguint_from_hex(hex) * r) % p };
-    let mut round_words = Vec::with_capacity(640);
-    for row in RC3_EXT_INITIAL {
-        for value in row {
-            round_words.extend_from_slice(&limbs8(&to_monty(value)));
-        }
-    }
-    for value in RC3_INTERNAL {
-        round_words.extend_from_slice(&limbs8(&to_monty(value)));
-    }
-    for row in RC3_EXT_TERMINAL {
-        for value in row {
-            round_words.extend_from_slice(&limbs8(&to_monty(value)));
-        }
-    }
-    assert_eq!(round_words.len(), 640);
-
+fn source(entry: &str, wg: u32, p: &BigUint, _r: &BigUint, r2: &BigUint, n0inv: u32) -> String {
     GLSL.replace("@WG@", &wg.to_string())
         .replace("@N0INV@", &format!("0x{n0inv:08x}"))
         .replace("@P_WORDS@", &words(&limbs8(p)))
         .replace("@R2_WORDS@", &words(&limbs8(r2)))
-        .replace("@RC_WORDS@", &words(&round_words))
         .replace(
             "@MAIN@",
             match entry {
@@ -280,6 +263,26 @@ fn source(entry: &str, wg: u32, p: &BigUint, r: &BigUint, r2: &BigUint, n0inv: u
                 _ => panic!("unknown direct-SPIR-V entry {entry}"),
             },
         )
+}
+
+pub fn round_words(p: &BigUint, r: &BigUint) -> Vec<u32> {
+    let to_monty = |hex: &str| -> BigUint { (biguint_from_hex(hex) * r) % p };
+    let mut out = Vec::with_capacity(640);
+    for row in RC3_EXT_INITIAL {
+        for value in row {
+            out.extend_from_slice(&limbs8(&to_monty(value)));
+        }
+    }
+    for value in RC3_INTERNAL {
+        out.extend_from_slice(&limbs8(&to_monty(value)));
+    }
+    for row in RC3_EXT_TERMINAL {
+        for value in row {
+            out.extend_from_slice(&limbs8(&to_monty(value)));
+        }
+    }
+    assert_eq!(out.len(), 640);
+    out
 }
 
 fn artifact_paths(entry: &str, wg: u32) -> (PathBuf, PathBuf) {

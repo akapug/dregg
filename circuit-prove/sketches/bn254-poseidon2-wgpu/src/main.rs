@@ -527,7 +527,7 @@ impl Gpu {
                 })
         };
         // Raw SPIR-V bypasses Naga reflection, so an automatic pipeline layout
-        // would be empty.  Supplying the two SSBO bindings explicitly is
+        // would be empty.  Supplying the three SSBO bindings explicitly is
         // mandatory (and avoids a driver crash in descriptor lowering).
         let bind_group_layout =
             self.device
@@ -549,6 +549,16 @@ impl Gpu {
                             visibility: wgpu::ShaderStages::COMPUTE,
                             ty: wgpu::BindingType::Buffer {
                                 ty: wgpu::BufferBindingType::Storage { read_only: false },
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 2,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Storage { read_only: true },
                                 has_dynamic_offset: false,
                                 min_binding_size: None,
                             },
@@ -581,6 +591,7 @@ impl Gpu {
         input: &[u32],
         out_len: usize,
         groups: u32,
+        rc_words: Option<&[u32]>,
     ) -> (Vec<u32>, f64) {
         let buf_in = self
             .device
@@ -601,7 +612,15 @@ impl Gpu {
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let bind = self.bind(pipeline, &buf_in, &buf_out);
+        let buf_rc = rc_words.map(|words| {
+            self.device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("bn254-poseidon2-round-constants"),
+                    contents: bytemuck::cast_slice(words),
+                    usage: wgpu::BufferUsages::STORAGE,
+                })
+        });
+        let bind = self.bind(pipeline, &buf_in, &buf_out, buf_rc.as_ref());
 
         let t0 = std::time::Instant::now();
         let mut enc = self.device.create_command_encoder(&Default::default());
@@ -609,7 +628,13 @@ impl Gpu {
             let mut pass = enc.begin_compute_pass(&Default::default());
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &bind, &[]);
-            pass.dispatch_workgroups(groups, 1, 1);
+            let repeats = std::env::var("DREGG_BN254_PROFILE_REPEATS")
+                .ok()
+                .and_then(|s| s.parse::<u32>().ok())
+                .unwrap_or(1);
+            for _ in 0..repeats {
+                pass.dispatch_workgroups(groups, 1, 1);
+            }
         }
         queue_submit_wait(&self.device, &self.queue, enc);
         let dt = t0.elapsed().as_secs_f64();
@@ -629,20 +654,28 @@ impl Gpu {
         pipeline: &wgpu::ComputePipeline,
         buf_in: &wgpu::Buffer,
         buf_out: &wgpu::Buffer,
+        buf_rc: Option<&wgpu::Buffer>,
     ) -> wgpu::BindGroup {
+        let mut entries = vec![
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: buf_in.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: buf_out.as_entire_binding(),
+            },
+        ];
+        if let Some(buf_rc) = buf_rc {
+            entries.push(wgpu::BindGroupEntry {
+                binding: 2,
+                resource: buf_rc.as_entire_binding(),
+            });
+        }
         self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &pipeline.get_bind_group_layout(0),
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: buf_in.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: buf_out.as_entire_binding(),
-                },
-            ],
+            entries: &entries,
         })
     }
 }
@@ -690,6 +723,8 @@ fn main() {
         0,
         "-P*P^-1 = -1 mod 2^32"
     );
+    let rc_words = direct_spirv::round_words(&p, &r);
+    let direct_rc = direct_spirv.then_some(rc_words.as_slice());
 
     // --- CPU oracle: pinned p3 Poseidon2Bn254<3> must reproduce the gold KAT ---
     let perm = build_p3_perm();
@@ -711,6 +746,45 @@ fn main() {
     let gpu = Gpu::new(direct_spirv);
     let source = shader_source(256, &p, &r, &r2, n0inv);
 
+    // One representative submit for SQTT/RGP or external counter capture.
+    // This deliberately skips the normal KAT/perf sequence so
+    // MESA_VK_TRACE_PER_SUBMIT produces one compute trace (plus readback).
+    if std::env::var_os("DREGG_BN254_PROFILE_ONLY").is_some() {
+        assert!(direct_spirv, "profile-only mode needs direct SPIR-V");
+        let wg = std::env::var("DREGG_BN254_PROFILE_WG")
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(128);
+        let n = std::env::var("DREGG_BN254_PROFILE_N")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(1 << 20);
+        let mut rng = rand::thread_rng();
+        let mut input: Vec<u32> = (0..n * 24).map(|_| rng.gen::<u32>()).collect();
+        for words in input.chunks_exact_mut(8) {
+            words[7] &= 0x0fff_ffff;
+        }
+        let spirv = direct_spirv::compile_shader("perm", wg, &p, &r, &r2, n0inv);
+        let pipeline = gpu.pipeline_spirv(&spirv);
+        let (_, dt) = gpu.run(
+            &pipeline,
+            &input,
+            input.len(),
+            (n as u32).div_ceil(wg),
+            direct_rc,
+        );
+        let repeats = std::env::var("DREGG_BN254_PROFILE_REPEATS")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(1);
+        println!(
+            "profile submit: wg={wg}, {n} permutations x {repeats}, {:.3} ms, {:.3} Mperm/s",
+            dt * 1e3,
+            (n * repeats) as f64 / dt / 1e6
+        );
+        return;
+    }
+
     if std::env::var_os("DREGG_BN254_SINGLE_MONT").is_some() {
         assert!(
             direct_spirv,
@@ -728,7 +802,7 @@ fn main() {
         }
         let spirv = direct_spirv::compile_shader("single", 64, &p, &r, &r2, n0inv);
         let pipeline = gpu.pipeline_spirv(&spirv);
-        let (output, _) = gpu.run(&pipeline, &input, expected.len() * 8, 16);
+        let (output, _) = gpu.run(&pipeline, &input, expected.len() * 8, 16, direct_rc);
         for (i, want) in expected.iter().enumerate() {
             assert_eq!(
                 limbs_to_biguint(&output[i * 8..i * 8 + 8]),
@@ -772,6 +846,7 @@ fn main() {
         &kat_in,
         kat_in.len(),
         (pairs.len() as u32).div_ceil(64),
+        direct_rc,
     );
     let mut bad = 0;
     for (i, (a, b)) in pairs.iter().enumerate() {
@@ -827,6 +902,7 @@ fn main() {
         &par_in,
         par_in.len(),
         (N_PAR as u32).div_ceil(256),
+        direct_rc,
     );
 
     // gold KAT straight off the GPU
@@ -894,7 +970,7 @@ fn main() {
 
     let mut best_overall = 0.0f64;
     let mut best_wg = 0u32;
-    for wg in [64u32, 128, 256] {
+    for wg in [32u32, 64, 128, 256] {
         let pipe = if direct_spirv {
             let spirv = direct_spirv::compile_shader("perm", wg, &p, &r, &r2, n0inv);
             gpu.pipeline_spirv(&spirv)
@@ -915,7 +991,15 @@ fn main() {
             usage: wgpu::BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
-        let bind = gpu.bind(&pipe, &buf_in, &buf_out);
+        let buf_rc = direct_spirv.then(|| {
+            gpu.device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("bn254-poseidon2-round-constants"),
+                    contents: bytemuck::cast_slice(&rc_words),
+                    usage: wgpu::BufferUsages::STORAGE,
+                })
+        });
+        let bind = gpu.bind(&pipe, &buf_in, &buf_out, buf_rc.as_ref());
         let dispatch = || -> f64 {
             let t0 = std::time::Instant::now();
             let mut enc = gpu.device.create_command_encoder(&Default::default());
