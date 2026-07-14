@@ -8204,7 +8204,7 @@ mod tests {
             .expect("noteSpendVmDescriptor2R24 in V3_STAGED_REGISTRY_TSV");
         let desc = parse_vm_descriptor2(json).expect("deployed noteSpend descriptor parses");
         assert_eq!(
-            desc.public_input_count, 47,
+            desc.public_input_count, 51,
             "deployed noteSpend carries the nullifier-forcing pin"
         );
         // The descriptor genuinely carries the `.absent` freshness map-op (the adjacency-forcing leg).
