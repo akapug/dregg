@@ -154,7 +154,20 @@
         <h2 id="shieldedH">Single-phase shielded clear <span class="pill">fhEgg</span></h2>
         <p class="hint">The same revealed batch, cleared through the <b>real fhEgg engine</b> — a convex trade-circulation clear with a <span class="mono">Cert-F</span> primal-dual certificate the verified AIR gate checks. No TTC reveal round: one fair batch, one certificate. This runs the actual <span class="mono">fhegg-solver</span> (PDHG + Cert-F), not a mirror.</p>
         <button class="primary" id="shieldedBtn" type="button">Clear this batch through fhEgg (shielded engine) →</button>
-        <div id="shieldedCleared" class="empty">The fair-batch + certificate clearing appears here. The STARK-ZK wrap that hides the certificate (the reveal-nothing floor) is <b>named, not run</b> in this demo — see the panel.</div>
+        <div id="shieldedCleared" class="empty">The fair-batch + certificate clearing appears here. Then run the reveal-nothing STARK below to see what the <b>world</b> sees.</div>
+      </section>
+
+      <!-- ── the reveal-nothing STARK: the world-view (what the public sees) ── -->
+      <section class="card" aria-labelledby="worldH">
+        <h2 id="worldH">The world-view — reveal nothing <span class="pill">real STARK</span></h2>
+        <p class="hint">The solver saw every order to clear the batch. Now prove the clearing in a <b>real dregg STARK</b>
+          (BabyBear + FRI) — <span class="mono">cert_f_prove</span> → <span class="mono">from_solution_json → prove_cert_f → verify_cert_f</span>.
+          The witness <b>(f, π, s)</b> — who traded what, the dual prices, the slacks — is consumed into the STARK trace and
+          <b>never leaves the server</b>. What comes back is what the <b>world</b> sees: a proof + the public inputs.
+          Proving costs real time, so this is a <b>separate action</b>, not a click.</p>
+        <button class="primary" id="worldBtn" type="button">Run the reveal-nothing STARK (real proof) →</button>
+        <div id="worldView" class="empty">The public view appears here: a fair batch cleared, per-asset conservation held,
+          cleared volume = wᵀf, the proof verifies — with the per-order flows <b>explicitly redacted</b>.</div>
       </section>
 
       <section class="card" aria-labelledby="fairH">

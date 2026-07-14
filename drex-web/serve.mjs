@@ -318,6 +318,49 @@ function runShieldedClear(ordersJson) {
   });
 }
 
+// How to invoke the REAL reveal-nothing STARK prover (circuit-prove/src/bin/cert_f_prove.rs).
+// It lives in the WORKSPACE target (dregg-circuit-prove is a workspace member), not the
+// standalone fhegg-solver target. Same locate-local-first discipline as the matcher.
+// LOCAL only — if unbuilt, we say how to build it rather than reach off-box.
+function certFProveCmd() {
+  for (const prof of ['release', 'debug']) {
+    const p = path.join(REPO, 'target', prof, 'cert_f_prove');
+    if (fs.existsSync(p)) return { cmd: p, args: [], where: 'local target/' + prof };
+  }
+  return { cmd: null, args: [], where: '(not built)' };
+}
+
+// Run the REAL Cert-F STARK over a solver certificate JSON. The certificate carries the
+// PRIVATE witness (f, π, s); this consumes it into the STARK trace and returns ONLY the
+// world-visible result (verify, proof size, public inputs) — cert_f_prove never prints
+// f/π/s. Proving costs SECONDS (BabyBear + FRI), so this is a SEPARATE action, not the
+// click-latency /clear-shielded path.
+function runCertFProve(certJson) {
+  return new Promise((resolve) => {
+    const { cmd, args } = certFProveCmd();
+    if (!cmd) {
+      return resolve({
+        ok: false,
+        error: 'cert_f_prove not built — run: cargo build --release -p dregg-circuit-prove --bin cert_f_prove',
+      });
+    }
+    const child = spawn(cmd, args, { cwd: REPO });
+    let out = '', err = '';
+    child.stdout.on('data', (d) => (out += d));
+    child.stderr.on('data', (d) => (err += d));
+    child.on('error', (e) => resolve({ ok: false, error: 'spawn failed: ' + e.message }));
+    child.on('close', (code) => {
+      const line = out.trim().split('\n').filter(Boolean).pop() || '';
+      try {
+        resolve(JSON.parse(line));
+      } catch (_e) {
+        resolve({ ok: false, error: 'cert_f_prove produced no JSON (exit ' + code + ')', stderr: err.slice(-600), raw: out.slice(-400) });
+      }
+    });
+    child.stdin.end(certJson);
+  });
+}
+
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -357,6 +400,66 @@ http.createServer(async (req, res) => {
     req.on('end', async () => {
       const result = await runShieldedClear(body);
       send(res, result.error ? 502 : 200, JSON.stringify(result), MIME['.json']);
+    });
+    return;
+  }
+
+  // ── POST /prove-shielded — the REAL reveal-nothing STARK (SEPARATE action) ──
+  // Runs the SAME batch through fhegg_clear to get the SOLVER's plaintext certificate
+  // (which carries the private witness f/π/s), then proves it in the REAL dregg STARK
+  // (cert_f_prove → from_solution_json → prove_cert_f → verify_cert_f). The response the
+  // BROWSER receives carries ONLY what the world may see: verify, proof size, the public
+  // inputs (cleared volume wᵀf + program shape), and honest latency — NEVER f/π/s. The
+  // solver certificate stays SERVER-SIDE; it is not forwarded. Proving costs seconds.
+  if (req.method === 'POST' && url === '/prove-shielded') {
+    let body = '';
+    req.on('data', (c) => { body += c; if (body.length > 1 << 20) req.destroy(); });
+    req.on('end', async () => {
+      // [1] SOLVER view (server-side): clear the batch, obtain the Cert-F certificate.
+      const cleared = await runShieldedClear(body);
+      if (cleared.error || !cleared.solverCert) {
+        return send(res, 502, JSON.stringify({
+          ok: false, stage: 'clear',
+          error: cleared.error || 'fhegg_clear did not emit solverCert (rebuild fhegg_clear)',
+          stderr: cleared.stderr,
+        }), MIME['.json']);
+      }
+      const cert = cleared.solverCert; // holds f, π, s — SERVER-SIDE ONLY, never sent on.
+
+      // [2] PROVE (server-side): pipe the certificate to the real STARK. The witness is
+      // consumed into the trace; cert_f_prove returns only the world-visible object.
+      const prove = await runCertFProve(JSON.stringify(cert));
+      if (!prove.ok) {
+        return send(res, 502, JSON.stringify({ ok: false, stage: 'prove', error: prove.error, stderr: prove.stderr }), MIME['.json']);
+      }
+
+      // [3] WORLD view: build the response from the prover's output + PUBLIC clearing
+      // scalars only. We EXPLICITLY do not spread `cleared` (which contains solverCert /
+      // per-order flows) — the redaction is structural, not cosmetic.
+      const conserves = !!(cleared.certificate && cleared.certificate.conserves);
+      const worldView = {
+        ok: true,
+        // what the world sees:
+        verify: prove.verify,
+        proofBytes: prove.proofBytes,
+        clearedVolume: prove.clearedVolume,   // the public input wᵀf
+        publicInputs: prove.publicInputs,     // the STARK's exposed field elements = [wᵀf]
+        program: { nodes: prove.nNodes, edges: prove.mEdges, epsilon: prove.epsilon, scale: prove.scale },
+        conserves,
+        trace: { width: prove.traceWidth, valueBits: prove.valueBits },
+        descriptor: prove.descriptor,
+        proveMs: prove.proveMs,
+        verifyMs: prove.verifyMs,
+        // what the world does NOT see (named, redacted):
+        hides: prove.hides,
+        redaction: prove.note,
+        // honest scope of what full input-privacy still needs:
+        remaining: {
+          noteCommitmentMatching: 'the demo still takes REVEALED orders as input; matching over HIDDEN NOTE COMMITMENTS (the shielded pool, shielded_ring_clears) is the input-privacy lane',
+          zkFloor: 'reveal-nothing rests on the STARK ZK: the HidingFriPcs statistical-ZK floor (Market/RevealNothing.lean — reveal_law is HidingFriPcs-conditional, like the linking tower is HashCR-conditional)',
+        },
+      };
+      send(res, 200, JSON.stringify(worldView), MIME['.json']);
     });
     return;
   }

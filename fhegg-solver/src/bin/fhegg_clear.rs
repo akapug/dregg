@@ -155,6 +155,14 @@ struct Cleared {
     #[serde(rename = "starkStage")]
     stark_stage: StarkStage,
     tiers: Vec<Tier>,
+    /// The RAW Cert-F certificate `(n_nodes, edges, w, c, f, π, s, ε)` — the exact f64 wire
+    /// shape `circuit-prove/src/cert_f_air.rs::from_solution_json` ingests. This is the
+    /// SOLVER's plaintext view; it carries the private witness `(f, π, s)`, so it is the
+    /// bridge input to the reveal-nothing STARK (`cert_f_prove`) and must NOT be forwarded
+    /// to the world — the STARK's public output replaces it. `serve.mjs` holds it server-side
+    /// and pipes it to the prover; the world sees only the resulting proof + public inputs.
+    #[serde(rename = "solverCert")]
+    solver_cert: CertF,
 }
 
 fn main() {
@@ -324,6 +332,7 @@ fn main() {
                 sees: "only the proof: a fair batch cleared, per-asset conservation held — never who traded what (once the STARK stage is wired)".to_string(),
             },
         ],
+        solver_cert: cert,
     };
 
     match serde_json::to_string(&out) {

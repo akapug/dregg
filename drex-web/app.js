@@ -458,6 +458,87 @@ function renderShieldedCleared(res) {
   $('shieldedCleared').innerHTML = html;
 }
 
+// ── the reveal-nothing STARK: prove the shielded clearing, render the WORLD-view ──
+// POST /prove-shielded runs the SAME batch through fhegg_clear (solver-side, sees f/π/s),
+// then proves the certificate in a REAL dregg STARK (cert_f_prove → from_solution_json →
+// prove_cert_f → verify_cert_f). The response carries ONLY what the world sees; the witness
+// (f, π, s) stays server-side. This panel makes that boundary tangible: the flows the solver
+// saw are shown REDACTED (locked), and the world-column shows only the proof + public inputs.
+async function proveShielded() {
+  const btn = $('worldBtn');
+  btn.disabled = true;
+  const el = $('worldView');
+  el.classList.remove('empty');
+  el.innerHTML = '<div class="fade">proving the clearing in a real STARK (BabyBear + FRI) — this is real work, a moment…</div>';
+  const orders = book.map(o => ({
+    trader: o.trader, offerAsset: o.offerAsset, offerAmount: o.offerAmount,
+    wantAsset: o.wantAsset, wantMin: o.wantMin, priority: o.priority,
+  }));
+  const t0 = performance.now();
+  let r;
+  try {
+    r = await fetch('/prove-shielded', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(orders),
+    }).then(x => x.json());
+  } catch (e) {
+    el.innerHTML = '<div class="no">reveal-nothing prover unreachable: ' + e.message + ' — run via serve.mjs</div>';
+    btn.disabled = false; return;
+  }
+  const wallMs = Math.round(performance.now() - t0);
+  if (!r.ok) {
+    el.innerHTML = '<div class="no">' + (r.error || 'prove failed') + ' (stage: ' + (r.stage || '?') + ')</div>'
+      + (r.stderr ? '<div class="fade mono">' + r.stderr + '</div>' : '')
+      + (r.error && /not built/.test(r.error) ? '<div class="det">build it: <span class="mono">cargo build --release -p dregg-circuit-prove --bin cert_f_prove</span></div>' : '');
+    btn.disabled = false; return;
+  }
+  renderWorldView(r, wallMs);
+  btn.disabled = false;
+}
+
+function renderWorldView(r, wallMs) {
+  const esc = (s) => String(s).replace(/[&<>]/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[m]));
+  const p = r.program || {}, tr = r.trace || {};
+  // The flows the SOLVER saw (from the local book) — shown REDACTED in the world-view, to make
+  // the hiding tangible: the solver knew these; the world does not (they are only in the trace).
+  const flowsRedacted = book.map(o =>
+    `<div class="leg"><span class="who">${esc(o.trader)}</span> <span class="mono" style="filter:blur(4px);user-select:none" aria-hidden="true">${esc(o.offerAsset)}→${esc(o.wantAsset)} · ██ units</span> <span class="chip NOTBATCH">hidden</span></div>`
+  ).join('');
+
+  let html = '';
+  // ── the boundary: solver-sees vs world-sees ──
+  html += '<div class="barwrap card"><div class="fade" style="font-size:11px;margin-bottom:6px">the reveal-nothing boundary — the same clearing, two views</div>';
+  html += `<div class="leg"><b>The solver saw</b> (server-side, plaintext, to clear fast): every order, every flow f, the dual prices π, the slacks s.</div>`;
+  html += `<div class="leg" style="margin-top:6px"><b>The world sees</b> (this response): only the proof + the public inputs below. The witness never left the server.</div>`;
+  html += '</div>';
+
+  // ── the per-order flows, REDACTED for the world ──
+  html += '<div class="barwrap card"><div class="fade" style="font-size:11px;margin-bottom:6px">per-order flows — what the world does NOT get</div>';
+  html += flowsRedacted;
+  html += `<div class="det" style="margin-top:6px">redacted: ${(r.hides || []).map(esc).join(' · ')}. ${esc(r.redaction || '')}</div>`;
+  html += '</div>';
+
+  // ── what the world DOES see: the proof + public inputs ──
+  html += '<div class="barwrap card"><div class="fade" style="font-size:11px;margin-bottom:6px">the public output — a real dregg STARK (BabyBear + FRI) over the Cert-F AIR</div>';
+  html += `<div class="leg">a fair batch cleared · per-asset conservation held <span class="${r.conserves ? 'ok' : 'no'}">${r.conserves ? '✔' : '✗'}</span></div>`;
+  html += `<div class="leg">cleared volume wᵀf = <b>${esc(r.clearedVolume)}</b> (the ONLY witness-derived scalar the STARK exposes; public inputs = [${(r.publicInputs || []).map(esc).join(', ')}])</div>`;
+  html += `<div class="leg">proof verifies <span class="${r.verify ? 'ok' : 'no'}">${r.verify ? '✔ verify_cert_f → true' : '✗ did NOT verify'}</span></div>`;
+  html += `<div class="leg">proof size: <b>${esc(r.proofBytes)}</b> bytes · descriptor <span class="mono">${esc(r.descriptor || 'cert-f')}</span> · trace width ${esc(tr.width)} (${esc(tr.valueBits)}-bit range gadget)</div>`;
+  html += `<div class="leg">public program shape: ${esc(p.nodes)} assets, ${esc(p.edges)} orders, ε=${esc(p.epsilon)} (A, w, c ride as descriptor constants — public)</div>`;
+  html += `<div class="leg">proving latency: <b>${esc(r.proveMs)} ms</b> prove · ${esc(r.verifyMs)} ms verify · ${esc(wallMs)} ms wall (real STARK work — a separate action, not a click)</div>`;
+  html += '</div>';
+
+  // ── honest remaining: what full input-privacy still needs ──
+  const rem = r.remaining || {};
+  html += '<div class="barwrap card"><div class="fade" style="font-size:11px;margin-bottom:6px">honest scope — what full reveal-nothing still needs</div>';
+  html += `<div class="leg"><span class="chip NOTBATCH">named</span> ${esc(rem.noteCommitmentMatching || '')}</div>`;
+  html += `<div class="leg" style="margin-top:6px"><span class="chip NOTBATCH">floor</span> ${esc(rem.zkFloor || '')}</div>`;
+  html += `<div class="det" style="margin-top:6px">Here the flows are hidden from the PUBLIC OUTPUT (this proof). Full input-privacy — hidden bids end-to-end — is the shielded-pool wire, named above, not faked.</div>`;
+  html += '</div>';
+
+  $('worldView').innerHTML = html;
+}
+
 function renderFairness() {
   $('fair').innerHTML = fairnessLedger().map(f => {
     const chips = f.grades.map(g => `<span class="chip ${g === 'NOT-IN-THIS-BATCH' ? 'NOTBATCH' : g}">${g}</span>`).join('');
@@ -479,6 +560,7 @@ const tick = () => new Promise(r => setTimeout(r, 30));
   setStepper(0);
   $('placeBtn').onclick = place;
   $('shieldedBtn').onclick = shieldedClear;
+  $('worldBtn').onclick = proveShielded;
   // probe the live node so the header shows whether settlement will land on-chain
   fetch('/node/status').then((r) => r.json()).then((s) => {
     if (s.up) { $('nodePill').className = 'pill live'; $('nodePill').textContent = 'node: live @ ' + (s.node || '').replace(/^https?:\/\//, ''); }
