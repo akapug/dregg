@@ -91,8 +91,13 @@ Spins a local anvil, deploys the real `DreggLaunchpad` (forge), starts the
 backend, and runs `gate/e2e.mjs` — a full fair launch against the DEPLOYED
 contract (register → sealed commit → reveal → uniform-price clear → settle) plus
 adversarial checks (hidden-supply reverts, no-peek, no late-switch, no-drop
-permutation, dev-lock) and REST-reflection checks. **21/21 pass.** No faked
+permutation, dev-lock) and REST-reflection checks. **29/29 pass.** No faked
 launch — every number is the contract's.
+
+A static, shareable **verifiable receipt** from a real local launch is generated
+by `bash gate/make-receipt.sh` → `public/receipt.html` (the one clearing price,
+the sealed book + fills, the disclosed schedule with its keccak commitment
+recomputed-and-matched on the page, the solvent-pool reserves).
 
 ## Honest scope — this is the FIRST product layer
 

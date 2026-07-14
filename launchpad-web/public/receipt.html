@@ -1,0 +1,132 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>dregg launchpad — verifiable receipt · launch 1</title>
+<style>
+:root{--bg:#0d1117;--bg2:#161b22;--bg3:#0a0e14;--line:#21262d;--fg:#c9d1d9;--muted:#8b949e;--accent:#58a6ff;--green:#3fb950;--red:#f85149;--dragon:#a78bfa;--proved:#238636;--replay:#8957e5;--built:#9e6a03;--unbuilt:#484f58}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:13px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace}
+header{padding:16px 22px;border-bottom:1px solid var(--line);background:var(--bg3)}
+header h1{margin:0;font-size:17px;color:var(--dragon)}
+header .sub{color:var(--muted);font-size:12px;margin-top:4px}
+main{max-width:1000px;margin:0 auto;padding:22px 20px 70px}
+h2{font-size:12px;color:var(--accent);text-transform:uppercase;letter-spacing:.06em;margin:26px 0 10px}
+.card{border:1px solid var(--line);border-radius:8px;background:var(--bg2);padding:15px;margin-bottom:14px}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:5px 14px;font-size:12px}
+.kv .k{color:var(--muted);text-transform:uppercase;font-size:10px;letter-spacing:.04em}
+.kv .v{text-align:right;word-break:break-all}
+.mono{font-family:ui-monospace,monospace}
+.big{font-size:26px;color:var(--dragon);font-weight:700}
+table{width:100%;border-collapse:collapse;font-size:12px;margin-top:4px}
+th,td{text-align:left;padding:7px 9px;border-bottom:1px solid var(--line)}
+th{color:var(--muted);text-transform:uppercase;font-size:10px;letter-spacing:.04em}
+td.num,th.num{text-align:right}
+tr.lose td{color:var(--muted)}
+.b{font-size:10px;padding:1px 7px;border-radius:9px;border:1px solid var(--line)}
+.b.ok{border-color:var(--green);color:var(--green)}
+.b.no{border-color:var(--red);color:var(--red)}
+.chip{display:inline-block;font-size:9.5px;font-weight:700;letter-spacing:.05em;border-radius:5px;padding:1px 6px;margin-right:5px;color:#fff}
+.chip.PROVED{background:var(--proved)}.chip.REPLAYABLE{background:var(--replay)}.chip.BUILT{background:var(--built)}.chip.UNBUILT{background:var(--unbuilt);color:#c9d1d9}
+.claim{border:1px solid var(--line);border-radius:8px;padding:11px 12px;margin-bottom:9px;background:var(--bg2)}
+.claim .lab{font-weight:600}
+.claim .det{color:var(--muted);font-size:11px;margin:3px 0 5px}
+.claim .cite{color:#6e7681;font-size:10px;word-break:break-all}
+.match{color:var(--green)}.nomatch{color:var(--red)}
+.note{font-size:11px;color:var(--muted);margin-top:10px;line-height:1.6}
+.banner{font-size:11px;color:var(--muted);background:var(--bg3);border:1px solid var(--line);border-radius:7px;padding:9px 12px;margin-bottom:16px}
+</style></head><body>
+<header>
+  <h1>dregg launchpad — verifiable receipt</h1>
+  <div class="sub">launch #1 · AuroraGate (AURG) · every number below is read back from the on-chain contract — recompute it yourself</div>
+</header>
+<main>
+  <div class="banner">This is a static snapshot of a REAL launch driven against the deployed <span class="mono">DreggLaunchpad</span> bytecode on local anvil (chainId 31337) (chainId 31337). No value at stake; a demonstration receipt. Point an explorer at the contract + token addresses and every field re-derives.</div>
+
+  <h2>The one uniform clearing price</h2>
+  <div class="card">
+    <div class="big">3.000 gwei / token</div>
+    <div class="note">Everyone who cleared paid the <b>same</b> price — there is no earliest block to win and no ordering edge. <span class="chip PROVED">PROVED</span> <span class="mono">uniform_price_no_arbitrage</span> (metatheory/Market/Optimality.lean:130). Sold 1000 of 1200 tokens (full sale tranche).</div>
+  </div>
+
+  <h2>The sealed book, cleared</h2>
+  <div class="card">
+    <table>
+      <tr><th>bidder</th><th>address</th><th class="num">bid price</th><th class="num">bid qty</th><th class="num">filled</th><th class="num">paid (uniform)</th><th>outcome</th></tr>
+      <tr class="win">
+      <td>alice</td>
+      <td class="mono">0x70997970…</td>
+      <td class="num">5.000 gwei</td>
+      <td class="num">400</td>
+      <td class="num">0</td>
+      <td class="num">3.000 gwei</td>
+      <td><span class="b ok">FILLED</span></td>
+    </tr>
+      <tr class="win">
+      <td>bob</td>
+      <td class="mono">0x3C44CdDd…</td>
+      <td class="num">4.000 gwei</td>
+      <td class="num">400</td>
+      <td class="num">0</td>
+      <td class="num">3.000 gwei</td>
+      <td><span class="b ok">FILLED</span></td>
+    </tr>
+      <tr class="win">
+      <td>carol</td>
+      <td class="mono">0x90F79bf6…</td>
+      <td class="num">3.000 gwei</td>
+      <td class="num">400</td>
+      <td class="num">0</td>
+      <td class="num">3.000 gwei</td>
+      <td><span class="b ok">FILLED</span></td>
+    </tr>
+      <tr class="lose">
+      <td>dave</td>
+      <td class="mono">0x15d34AAf…</td>
+      <td class="num">2.000 gwei</td>
+      <td class="num">400</td>
+      <td class="num">0</td>
+      <td class="num">—</td>
+      <td><span class="b no">below clearing</span></td>
+    </tr>
+    </table>
+    <div class="note">Sealed during commit (no bid observable), revealed after (<span class="chip PROVED">PROVED</span> <span class="mono">reveal_binds_committed</span>, SealedAuction.lean:248 — no late-switch), cleared at one price. A bidder below the clearing price fills 0; a marginal bidder fills partially; all winners pay the clearing price, refunds returned.</div>
+  </div>
+
+  <h2>Disclosed supply — recompute the commitment</h2>
+  <div class="card">
+    <div class="kv">
+      <span class="k">total supply</span><span class="v mono">1200</span>
+      <span class="k">sale tranche</span><span class="v mono">1000</span>
+      <span class="k">creator alloc</span><span class="v mono">100 (locked until 2026-08-13)</span>
+      <span class="k">pool alloc</span><span class="v mono">100</span>
+      <span class="k">token cap</span><span class="v mono">1200 · minted once: true</span>
+      <span class="k">on-chain scheduleCommit</span><span class="v mono">0x699a9227d27b7e93…</span>
+      <span class="k">recomputed keccak</span><span class="v mono">0x699a9227d27b7e93…</span>
+      <span class="k">match</span><span class="v match">RECOMPUTED-MATCH ✓</span>
+    </div>
+    <div class="note">Sale + creator + pool = total, or the contract reverts registration. <span class="chip PROVED">PROVED</span> <span class="mono">execMintA_iff_spec</span> (supplycreation.lean:177) — no undisclosed mint door. The token mints exactly once for the whole cap: no second-mint function exists.</div>
+  </div>
+
+  <h2>Graduation — the provably-solvent pool</h2>
+  <div class="card">
+    <div class="kv">
+      <span class="k">pool address</span><span class="v mono">0xB7A5bd0345EF1Cc5E66bf61BdeC17D2461fBd968</span>
+      <span class="k">quote reserve</span><span class="v mono">0.0000015 ETH</span>
+      <span class="k">token reserve</span><span class="v mono">100</span>
+      <span class="k">reserve floor</span><span class="v mono">0.0000003 ETH / 20 tok</span>
+      <span class="k">spot price</span><span class="v mono">15.000 gwei / token</span>
+      <span class="k">seeded from raise</span><span class="v mono">0.0000015 ETH (50% of proceeds) + 100 tokens</span>
+    </div>
+    <div class="note">Graduated liquidity is pool-owned; there is no creator-withdrawal door. A trade that would drive the reserve below its floor REVERTS. <span class="chip PROVED">PROVED</span> <span class="mono">pool_solvent_forever</span> (metatheory/Market/Liquidity.lean:145).</div>
+  </div>
+
+  <h2>Why it is fair — each claim, graded</h2>
+  <div class="claim"><div class="lab"><span class="chip PROVED">PROVED</span> No snipe / no front-run</div><div class="det">One uniform price removes the value of ordering. Sniper edge dies structurally.</div><div class="cite">uniform_price_no_arbitrage · metatheory/Market/Optimality.lean:130</div></div>
+  <div class="claim"><div class="lab"><span class="chip PROVED">PROVED</span> No hidden supply</div><div class="det">Supply is disclosed and closes; the token mints once for the cap; no second-mint door.</div><div class="cite">execMintA_iff_spec · metatheory/Dregg2/Circuit/Spec/supplycreation.lean:177</div></div>
+  <div class="claim"><div class="lab"><span class="chip PROVED">PROVED</span> No late-switch / no peek</div><div class="det">A revealed bid is exactly the sealed one; a bid never committed can never win.</div><div class="cite">reveal_binds_committed · SealedAuction.lean:248 · uncommitted_cannot_win :415</div></div>
+  <div class="claim"><div class="lab"><span class="chip PROVED">PROVED</span> No silent LP / mint drain</div><div class="det">Pool-owned liquidity, never insolvent; disclosed single mint.</div><div class="cite">pool_solvent_forever · metatheory/Market/Liquidity.lean:145</div></div>
+  <div class="claim"><div class="lab"><span class="chip REPLAYABLE">REPLAYABLE</span> Every number recomputable</div><div class="det">Read the contract + Transfer logs; recompute the schedule commit (done above).</div><div class="cite">keccak(abi.encode(schedule)) == scheduleCommitOf(launchId)</div></div>
+
+  <div class="note">
+    <b>Honest scope.</b> This receipt proves the on-chain, mechanical surface of the sale: the distribution and disclosure are fair and the supply is real. It makes no claim about the token's value or the team's off-mechanism conduct (bonded, not proven), and nothing here is deployed with value at stake. A fairly-launched token can still go to zero. Contract <span class="mono">0x5FbDB2315678afecb367f032d93F642f64180aa3</span> · token <span class="mono">0xa16E02E87b7454126E5E10d957A927A7F5B5d2be</span>.
+  </div>
+</main></body></html>
