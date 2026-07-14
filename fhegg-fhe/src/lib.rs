@@ -40,6 +40,11 @@ use tfhe::{ClientKey, FheUint16};
 /// lever, measured head-to-head against the exact-integer TFHE fold above.
 pub mod additive;
 
+/// The OUTPUT-BOUNDARY MPC crossing (BFV / fhe.rs → additive shares → secret-shared
+/// comparison) — codex Round-4 gold: adversarial no-viewer + the dissolved
+/// scheme-switch seam. See `docs/deos/OUTPUT-BOUNDARY-MPC.md`.
+pub mod mpc;
+
 pub type Qty = u16;
 
 #[derive(Clone, Copy, Debug)]

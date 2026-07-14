@@ -52,6 +52,12 @@ path = "src/bin/pdhg.rs"
 name = "fhe-additive-bench"
 path = "src/bin/additive_bench.rs"
 
+# The OUTPUT-BOUNDARY MPC crossing (codex R4 gold): real BFV fold -> additive
+# shares -> secret-shared Beaver-triple comparison -> reveal only (p*,V*).
+[[bin]]
+name = "fhe-mpc-bench"
+path = "src/bin/mpc_bench.rs"
+
 [profile.release]
 opt-level = 3
 lto = "thin"

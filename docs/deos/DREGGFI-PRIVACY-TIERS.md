@@ -34,11 +34,13 @@ present tense; every ambitious edge names its grade.*
    Each rung a real shippable product, each labeled exactly.
 5. **Surpass at every rung.** Tier 2 is fair-by-proof even in the open; Tier 1 is
    no worse than Penumbra/Aztec on the trust model and strictly better on speed
-   (GPU), verification (`Cert-F`), and PQ; Tier 0 is the **only** no-viewer DEX in
-   existence — nobody else deletes the viewer. **The single sharpest framing:**
+   (GPU), verification (`Cert-F`), and PQ; Tier 0 is the **only DEX whose no-viewer
+   is adversarial** — a `t`-of-`n` threshold cryptographic bound with no standing
+   master decryption key (`OUTPUT-BOUNDARY-MPC.md`), where every competitor's
+   "private" tier rests on a viewer or a policy. **The single sharpest framing:**
    competitors force you to pick one privacy posture and trust their one viewer;
    DrEX makes the viewer a *dial* over one kernel whose can't-be-cheated guarantee
-   never moves.
+   never moves — and at Tier 0 shrinks it to a threshold bound, not a promise.
 
 ---
 
@@ -49,9 +51,9 @@ tiers are three deliberate points on that frontier, not three separate systems.
 
 | | **Tier 0 — DARK** | **Tier 1 — SHIELDED** | **Tier 2 — OPEN** |
 |---|---|---|---|
-| **Privacy posture** | **No viewer.** No solver, committee, or enclave ever sees an order. | **Private-from-the-world.** The proof reveals nothing; the solver/prover sees plaintext. | **Public.** Orders are visible; no privacy. |
-| **Who sees an order** | *Nobody* — inputs stay encrypted; only the public result `p*` opens. | The solver/prover (one computing party), plus whatever the transcript is *proved* to hide from everyone else. | Everyone. |
-| **Crypto carrier** | FHE (lattice/LWE) + threshold-decrypt-only-the-result; PQ by construction. | STARK-ZK (Poseidon2/FRI, statistical-ZK hiding PCS) + PQ hash-commitment (Option A). | STARK of correctness over a public book. |
+| **Privacy posture** | **Adversarial no-viewer.** No solver or enclave ever sees an order; against the parties, a **`t`-of-`n` threshold cryptographic bound** (not a policy claim). | **Private-from-the-world.** The proof reveals nothing; the solver/prover sees plaintext. | **Public.** Orders are visible; no privacy. |
+| **Who sees an order** | *Nobody below the threshold* — inputs stay encrypted; the crossing runs in output-boundary MPC and only `(p*,V*)` opens. `≥ t` colluding parties can reconstruct (the honest caveat). | The solver/prover (one computing party), plus whatever the transcript is *proved* to hide from everyone else. | Everyone. |
+| **Crypto carrier** | Additive RLWE/BFV fold + **output-boundary MPC** among the federation parties revealing only `(p*,V*)`; no standing master decryption key; PQ by construction (lattice/LWE). | STARK-ZK (Poseidon2/FRI, statistical-ZK hiding PCS) + PQ hash-commitment (Option A). | STARK of correctness over a public book. |
 | **Mechanism** | The FHE-tractable core: uniform-price aggregation (fold + one crossing) + the `Cert-F` convex engine, "matrices public, data encrypted." | The same aggregation/convex core, **richer** — the solver sees plaintext, so more products and richer clearing. | The **full** general intent-matcher: multilateral ring/TTC, Johnson cycles, any intent. |
 | **Cost / cadence** | Highest; periodic batch (minute cadence, bounded N per pair). | Fast (GPU), cheap. | Cheapest, near-real-time. |
 | **Generality** | Narrowest (bounded by the FHE envelope). | Broad (the convex-program product factory). | Widest (any intent the matcher expresses). |
@@ -60,34 +62,55 @@ tiers are three deliberate points on that frontier, not three separate systems.
 
 ### Tier 0 — DARK (no-viewer)
 
-The clearing runs **entirely on ciphertexts**. Traders post encrypted orders; a
-public, deterministic FHE circuit computes the crossing price `p*` and each fill
-homomorphically; a threshold committee holds only *decryption-key shares* and
-decrypts **only the public result** `p*` — never an order. No solver, no relayer,
-no enclave, and not even the committee ever holds a plaintext order. This is the
-mechanism the `fhEgg` kernel makes tractable: a uniform-price call auction is an
+The clearing runs **entirely on ciphertexts**. Traders post encrypted orders; the
+additive RLWE/BFV fold aggregates them into an encrypted demand/supply curve; and
+at the **output boundary** the `n` federation parties partial-decrypt only the
+aggregate into additive secret shares and compute the crossing `p* = argmax_j
+min(D[j],S[j])` in a **secret-shared MPC that reveals only `(p*, V*)`** — never an
+order, never a curve coefficient (`OUTPUT-BOUNDARY-MPC.md`). This is the mechanism
+the `fhEgg` kernel makes tractable: a uniform-price call auction is an
 **aggregation, not a matching** (`FHEGG-KERNEL.md §2`) — an `O(N)` bootstrap-free
 homomorphic fold into a price-indexed curve plus an `O(K)` crossing — so private
 clearing lives in the *cheap half* of FHE, and the `Cert-F` convex engine extends
 it to the "matrices public, data encrypted" regime (`PRIVATE-CONVEX-ENGINE.md`).
 
-**Surpass:** no other DEX has *no viewer*. Penumbra's committee decrypts the batch
-aggregate; Renegade's relayer pair holds the secret shares and computes the match;
-Aztec's sequencer sees ordering; CoW's solvers see every signed order. Tier 0 is
-the first design where **no party — operator, committee, or enclave — ever holds a
-plaintext order**, and it is post-quantum by construction (FHE is lattice/LWE).
+**Surpass, stated honestly.** No other DEX makes no-viewer *adversarial*. Penumbra's
+committee decrypts the batch aggregate; Renegade's relayer pair holds the secret
+shares and computes the match; Aztec's sequencer sees ordering; CoW's solvers see
+every signed order. Tier 0's no-viewer is a **`t`-of-`n` threshold cryptographic
+bound**: below the threshold, no coalition of parties learns any order — by the
+math, not by policy — and there is **no standing master decryption key** (the load-
+bearing contrast: a plain threshold-FHE committee holds a key that decrypts *any*
+order ciphertext, so its "no-viewer" is only a policy choice). It is post-quantum by
+construction (FHE is lattice/LWE). The honest caveat is stated with the claim (below).
 
 **Honest bound (no overclaim).** The FHE performance envelope is real and it
 bounds Tier 0. From `DREX-NO-VIEWER-SURPASS.md`: uniform-price FHE clearing is
 tractable at **N ≈ 32–512 orders per pair at minute cadence** on one server today
-(published encrypted sorts land 128 elements in ~22 s CKKS / 64 in ~36 s
-rank-sort); it **breaks** at N in the thousands. Tier 0 is the uniform-price /
-`Cert-F`-convex product — *not* the graph-hard multilateral ring, which is not
-FHE-computable and stays at Tier 1/2. The committee can force a *wrong* `p*` (an
-integrity fault the correctness proof catches) but **still cannot see an order** —
-privacy is unconditional on committee honesty, correctness is not, and the two are
-stated separately. End-to-end PQ additionally requires the `PQ-SHIELDED-COMMITMENT.md`
-DLog→Poseidon2 cutover on the settlement path.
+(the additive BFV fold is sub-10 ms, `ADDITIVE-FOLD-ENVELOPE.md`; the output-boundary
+MPC crossing is ~1–7 ms, `OUTPUT-BOUNDARY-MPC.md §7`); it **breaks** at N in the
+thousands. Tier 0 is the uniform-price / `Cert-F`-convex product — *not* the
+graph-hard multilateral ring, which is not FHE-computable and stays at Tier 1/2.
+
+**The threshold model, stated precisely (no overclaim).** The no-viewer is a
+`t`-of-`n` bound, and correctness and privacy are stated separately:
+
+- *Below the threshold* (`< t` colluding parties): privacy is **cryptographic and
+  unconditional** — no coalition learns any order or curve coefficient, only the
+  revealed `(p*, V*)` (`OUTPUT-BOUNDARY-MPC.md §3`; the PoC demonstrates two books
+  with the same `(p*,V*)` yield indistinguishable party views).
+- *At or above the threshold* (`≥ t` colluding parties): they **can** reconstruct
+  the shares (and, holding the key shares, could partial-decrypt orders). This is
+  the honest ceiling — **"nobody even if all collude" is impossible** for clearing
+  over hidden data. What output-boundary MPC removes is the *standing* liability: no
+  reusable master key against order ciphertexts, and the revealed function is fixed
+  to `(p*,V*)` by the protocol, so the trust is one threshold, one clearing.
+- *Correctness* is a separate axis: a malicious party can force a *wrong* `p*`/`V*`,
+  which the STARK boundary check catches (the comparator is outside the soundness
+  TCB) — an integrity fault, not a privacy break.
+
+End-to-end PQ additionally requires the `PQ-SHIELDED-COMMITMENT.md` DLog→Poseidon2
+cutover on the settlement path.
 
 ### Tier 1 — SHIELDED (private-from-the-world)
 
@@ -253,7 +276,7 @@ is a leap; it is scheduled sharpening on a chosen trajectory.
 |---|---|---|---|---|
 | **Now** | **Tier 2 OPEN** | The general ring/TTC DrEX — fair-by-proof, conserving, no-mint, public book. | `solver.rs` matcher + `Market/*` proofs + settlement live/demonstrated; the current DrEX. | **Shippable now.** |
 | **Soon** | **Tier 1 SHIELDED** | The Stage-1 engine: verified `Cert-F` + GPU solver + STARK-ZK clearing over hidden commitments; the private node. | 2-leg shielded ring AIR folds green with tested teeth; hiding PCS path built; N-leg (M) + partial-fill inequality (M) + accumulator bind (M) + PQ commitment cutover (mostly built) + the reveal-nothing theorem (RESEARCH) remain. | **Building** from today's parts; the reveal-nothing theorem is the crux differentiator. |
-| **Frontier** | **Tier 0 DARK** | No-viewer FHE clearing of the uniform-price / `Cert-F` product + threshold-decrypt-`p*` + correctness proof. | FHE PoC bounding feasibility; rides `uniform_price_optimal` (model-proved, to be ledger-realized) + a threshold-FHE stack + the PQ-commitment cutover. | Non-verifiable proto ~6–12 mo; verifiable-via-re-eval ~1–2 yr; succinct-for-light-clients ~2–4 yr (`DREX-NO-VIEWER-SURPASS.md §6`). |
+| **Frontier** | **Tier 0 DARK** | Adversarial no-viewer clearing of the uniform-price / `Cert-F` product: additive BFV fold + **output-boundary MPC** revealing only `(p*,V*)` + correctness proof. | Fold + MPC crossing PoC built + measured (`fhegg-fhe/`, `OUTPUT-BOUNDARY-MPC.md §7`: BFV fold sub-10 ms, MPC crossing ~1–7 ms, correctness == plaintext, reveal-only-`(p*,V*)` demonstrated); rides `uniform_price_optimal` (model-proved, to be ledger-realized) + the threshold partial-decrypt-into-shares + the PQ-commitment cutover. | PoC now; production partial-decrypt-into-shares + malicious-secure online + ledger-realize ~1–2 yr; succinct-for-light-clients ~2–4 yr. |
 
 **Tie to the make-it-real state.** The private node (Tier 1) is the near build: the
 shielded ring clears with only `[nf, root, vb]` exposed, and the routing tiers
@@ -302,8 +325,9 @@ harder — it is a strictly separate axis.
 
 ## 6. The claim, stated exactly
 
-> **DrEX is one exchange with a privacy dial.** Three tiers — DARK (no viewer),
-> SHIELDED (private from the world, the solver sees), OPEN (public) — sit on one
+> **DrEX is one exchange with a privacy dial.** Three tiers — DARK (adversarial
+> no-viewer: a `t`-of-`n` threshold bound), SHIELDED (private from the world, the
+> solver sees), OPEN (public) — sit on one
 > frontier of privacy vs. generality vs. cost, and the user, the market, or the
 > individual trade picks the point. Underneath, all three run the **same verified
 > soundness kernel**: fair clearing, per-asset conservation, no mint, uniform-price
@@ -316,14 +340,21 @@ Contrast, stated fairly:
 
 - **Penumbra:** one posture, threshold committee decrypts the batch aggregate,
   classical DLog. DrEX Tier 1 matches its trust model and beats it on speed/PQ;
-  DrEX Tier 0 deletes the committee's view of even the aggregate.
+  DrEX Tier 0 keeps even the aggregate curve in shares and opens only `(p*,V*)` —
+  and against a below-threshold coalition that is a cryptographic bound, not a
+  committee's discretion.
 - **Aztec:** the sequencer sees; classical. DrEX has no sighted sequencer at Tier 0.
 - **Renegade:** the relayer pair holds the secret shares and computes the match;
-  classical. DrEX Tier 0 computes on ciphertexts — no collective plaintext exists.
-- **CoW:** solvers see every signed order; not private, no clearing correctness
-  proof. DrEX Tier 2 is the fair-by-proof public tier; Tiers 0/1 are private.
+  classical. DrEX Tier 0 computes on ciphertexts/shares — no collective plaintext
+  exists below the threshold; PQ by construction.
 
-**The honesty guards, everywhere.** Tier 0 is bounded by the real FHE envelope
+**The honesty guards, everywhere.** Tier 0's no-viewer is **`t`-of-`n`**, not
+absolute: below the threshold it is a cryptographic bound (no order or coefficient
+learnable, only `(p*,V*)`), but `≥ t` colluding parties can reconstruct —
+"nobody even if all collude" is impossible for clearing over hidden data, and the
+claim never says otherwise (`OUTPUT-BOUNDARY-MPC.md §3`). What is removed vs. plain
+threshold-FHE is the *standing* liability: no reusable master key decrypts a
+submitted order. Tier 0 is also bounded by the real FHE envelope
 (uniform-price / `Cert-F` product, bounded N, minute cadence; not the graph-hard
 ring; end-to-end PQ needs the DLog cutover). Tier 1's solver-sees-plaintext is
 stated plainly and Tier 1 is never sold as Tier 0; its clearing-level
@@ -341,6 +372,8 @@ because the can't-be-cheated guarantee never changes across the dial.
 - `docs/deos/FHEGG-CODEX-INSIGHTS.md` — `Cert-F`, `ZKOpenRel_R` (targets), the seven framing corrections.
 - `docs/deos/FHEGG-PRODUCT-ORDER-FRONTIER.md` — `fhIR`, the admissibility theorem, `Price-Cert`, the order lattice.
 - `docs/deos/DREX-NO-VIEWER-SURPASS.md` — the FHE envelope and the Tier-0 ladder.
+- `docs/deos/OUTPUT-BOUNDARY-MPC.md` — the adversarial-no-viewer crossing (the
+  `t`-of-`n` threshold bound, the dissolved scheme-switch seam, the built PoC).
 - `docs/deos/PQ-SHIELDED-COMMITMENT.md` — the Option-A DLog→Poseidon2 cutover (the PQ binding).
 - `docs/deos/SHIELDED-DREX-ASSURANCE-ROADMAP.md` — the Tier-1 build map + the reveal-nothing crux (component 3).
 - `docs/deos/DREX-ROUTING.md` — the tier-agnostic ring-of-locks and its honest frontier.

@@ -34,13 +34,17 @@ input ciphertexts is deterministic and therefore publicly re-checkable for free*
    ciphertexts are public commitments, correct *evaluation* needs no expensive verifiable-FHE — any
    observer re-runs the public circuit and checks the output ciphertext. Only the final *threshold
    decryption* of the public clearing price needs a proof. This de-risks the hard part.
-5. **The honest surpass claim.** *"DrEX-FHE is the first DEX where no party — not the operator, not a
-   committee, not an enclave — ever holds a plaintext order: the committee holds only decryption-key
-   shares and decrypts only the public clearing price; clearing correctness is a post-quantum STARK;
-   the committee is optional at the two lower rungs."* True at each rung as stated below, never
-   overclaimed. **Verdict: the FHE thesis survives real numbers, conditioned on switching to the
+5. **The honest surpass claim.** *"DrEX-FHE is the first DEX whose no-viewer is ADVERSARIAL: orders
+   are folded under encryption and the crossing runs in output-boundary MPC among the federation
+   parties, revealing only `(p*,V*)`. Below the `t`-of-`n` threshold no coalition of parties learns
+   any order — a cryptographic bound, not a policy — and there is no standing master decryption key;
+   `≥ t` colluding parties can reconstruct (the honest caveat: 'nobody even if all collude' is
+   impossible for clearing over hidden data). Clearing correctness is a post-quantum STARK."* True at
+   each rung as stated below, never overclaimed (and never underclaimed — it IS cryptographic, not
+   just policy). **Verdict: the FHE thesis survives real numbers, conditioned on switching to the
    uniform-price mechanism and accepting a multi-year ladder — the batch structure is what makes it
-   possible at all.**
+   possible at all, and output-boundary MPC (`OUTPUT-BOUNDARY-MPC.md`) is what makes the no-viewer
+   adversarial rather than a committee's discretion.**
 
 ---
 
@@ -153,17 +157,26 @@ State of the art [Zama TKMS / `zama-ai/threshold-fhe` / NIST-TC submission]:
   BFV**, and a 250+-page technical spec. Current committee ≈ **13 MPC nodes, honest-majority**, with
   a published roadmap to **~100+ nodes** (HSM integration, PQ ZK on the decryption). Testnet live;
   Zama's fhEVM mainnet on Ethereum targeted end-2025.
-- The residual trust is exactly and only: **an honest-majority committee decrypts the correct public
-  scalar** — not the orders. A dishonest majority can produce a *wrong* clearing price (a liveness /
-  integrity fault, caught by the correctness proof in §4), but **still cannot see any order** — FHE
-  hides the inputs regardless of committee honesty. This is a categorically smaller trust surface
-  than Penumbra (committee decrypts the batch aggregate) or Renegade (committee jointly computes on
-  secret-shared orders).
+- **⚠ Correction — plain threshold-FHE is NOT no-viewer against committee collusion.** A plain
+  threshold-FHE committee holds shares of a decryption key that decrypts *any* ciphertext. So a
+  colluding `≥ t` subset can apply the decryption protocol to a submitted **order** ciphertext and
+  read it. Under plain threshold-FHE, "the committee only decrypts `p*`" is a **policy** statement
+  (they choose to), not a cryptographic guarantee — FHE hides inputs from a party *without* the key,
+  but the committee *has* the key. This is the codex Round-4 threshold-trust correction, and it is
+  why the no-viewer posture is delivered by **output-boundary MPC** (`OUTPUT-BOUNDARY-MPC.md`), not
+  by plain threshold decryption: the parties partial-decrypt only the aggregate INTO additive shares
+  for one clearing and open only `(p*,V*)`, with **no standing master key** against order
+  ciphertexts. The bound is then `t`-of-`n` and adversarial: *below* the threshold no coalition
+  learns any order (cryptographic, not policy); `≥ t` colluding parties still can (the honest
+  ceiling — "nobody even if all collude" is impossible for clearing over hidden data). A dishonest
+  subset can also force a *wrong* price (a liveness/integrity fault caught by the correctness proof
+  in §4); privacy (below `t`) and correctness are stated separately.
 - **IND-CPA-D caveat:** threshold decryption leaks a little through decryption noise; the deployed
   params must be the noise-flooded IND-CPA-D-secure set (tfhe-rs default already targets this).
 
-So yes — threshold-FHE shrinks the committee's role to **"decrypt the public clearing price,"** and
-even a fully-corrupt committee never learns an order. That is the crux of the surpass.
+So threshold-FHE shrinks the *decryption* to **"open the public clearing price,"** but the no-viewer
+guarantee against colluding parties is the **`t`-of-`n` output-boundary-MPC bound**, not a property of
+the decryption committee alone. That is the honest crux of the surpass.
 
 ---
 
@@ -228,9 +241,12 @@ ring remains a separate (already no-viewer, already PQ-private) product. Do not 
    `Enc(p*)`, `Enc(fill_i)`. No party sees any input.
 3. **Verify-evaluation (Option A).** Anyone re-runs the identical circuit on the identical public
    input ciphertexts and checks the output ciphertexts match. Free by determinism.
-4. **Decrypt-result (threshold-FHE).** The committee threshold-decrypts **only** `p*` and the public
-   `fill_i` (a uniform-price auction's fills are public outputs) — never an order — and attaches a
-   **threshold-decryption-correctness proof**.
+4. **Cross-at-the-boundary (output-boundary MPC).** Rather than threshold-decrypt the curve, the `n`
+   parties partial-decrypt only the aggregate INTO additive shares and run the crossing in MPC,
+   revealing **only** `(p*, V*)` — never an order, never a curve coefficient, and with **no standing
+   master key** against order ciphertexts (`OUTPUT-BOUNDARY-MPC.md`). This is the adversarial-no-viewer
+   step (a `t`-of-`n` bound, not a policy), and it dissolves the BFV→TFHE scheme-switch seam. (The
+   uniform-price fills are public outputs by design.)
 5. **Settle + prove (dregg STARK).** Fills settle through the verified executor kernel
    (`verified_settle.rs` → `recKExecAsset`), and the clearing carries the **existing dregg STARK
    statement** — conservation + fairness + no-double-spend, the relation `shielded_ring_clears`
@@ -260,7 +276,7 @@ no-viewer claim is stated so it is **true at that rung**.
 | **1. Trusted/bonded solver** (current DrEX) | `solver.rs` ring matcher + `shielded_ring_clearing_air.rs` STARK; `trustless.rs` bonds/batch | Solver sees cleartext book (rung-1); shielded rung already deletes viewer *for the ring* | **Yes** — clearing is a machine-checked STARK (`shielded_ring_clears`) | Proof PQ (Poseidon2/FRI); **binding classical** (PQ hole) | Shippable **now** |
 | **2. TEE-attested solver** | `tee-verify/` (Nitro + SEV-SNP), `attest_data`, `oracle_mark` | **One attested enclave** binary (`measurement`), offline-checkable | Yes (same STARK) + enclave identity | Attestation sigs ECDSA-P384 (classical); order privacy PQ if FHE-inside | **Low** · built; integration weeks–months |
 | **3. Threshold-decrypt / MPC clearing** | `trustless.rs` 7-layer (Shamir/GF(256) threshold-*decrypt* — BUILT); true MPC-*compute* (Renegade-style, no single viewer) — **NEEDED** | Threshold-decrypt: committee sees book after batch close. MPC-compute: no single party (secret-shared) | Yes (STARK on the solve) | Threshold-decrypt classical; can be PQ | **Medium** · decrypt built; MPC-compute ~1–2 yr |
-| **4. Threshold-FHE / FHE clearing** (the surpass) | **RESEARCH** — none built; rides `Market/Optimality.lean` uniform-price (model-proved) + Zama threshold-FHE + PQ-commitment cutover | **Nobody** — committee holds only key shares, decrypts only `p*` | Yes — Option A re-eval + decryption proof + clearing STARK | **Fully PQ** (LWE-FHE + Poseidon2/FRI + hash-commit) | **High** · non-verifiable proto 6–12 mo; verifiable-via-reeval 1–2 yr; succinct verifiable-FHE 2–4 yr |
+| **4. Additive fold + output-boundary MPC** (the surpass) | fold PoC + MPC-crossing PoC BUILT (`fhegg-fhe/`, `OUTPUT-BOUNDARY-MPC.md`); rides `Market/Optimality.lean` uniform-price (model-proved) + threshold partial-decrypt-into-shares + PQ-commitment cutover | **Nobody below `t`** — parties hold only additive shares; only `(p*,V*)` open; no standing master key; `≥ t` collusion reconstructs (honest ceiling) | Yes — Option A re-eval + STARK boundary check (comparator outside TCB) | **Fully PQ** (LWE-FHE + Poseidon2/FRI + hash-commit) | **Med-High** · PoC now; production partial-decrypt-into-shares + malicious-secure online 1–2 yr; succinct 2–4 yr |
 
 **What each rung needs from here:**
 
@@ -270,38 +286,47 @@ no-viewer claim is stated so it is **true at that rung**.
   `trustless.rs` today is threshold-*decrypt*, so the committee still sees the book after close.
   This is the Renegade comparison; it is real work, not a wiring job.
 - **Rung 4:** switch the mechanism to **uniform-price** (ledger-realize `uniform_price_optimal`),
-  integrate a threshold-FHE stack (tfhe-rs + Zama TKMS), ship Options A + C, land the PQ-commitment
-  cutover. The FHE evaluation at N ≤ 128 is feasible *now*; the assurance ladder is the multi-year
-  part.
+  run the fold under the additive BFV carrier and the crossing in **output-boundary MPC** among the
+  federation parties (`OUTPUT-BOUNDARY-MPC.md` — the fold + MPC-crossing PoC is built and measured:
+  sub-10 ms fold, ~1–7 ms crossing, correctness == plaintext, reveal-only-`(p*,V*)` demonstrated),
+  ship Options A + C, land the PQ-commitment cutover. The remaining production work is the threshold
+  partial-decrypt-into-shares + the malicious-secure online phase; the assurance ladder is the
+  multi-year part, but the no-viewer is now an *adversarial threshold bound*, not a policy.
 
 ---
 
 ## 7. The precise surpass claim (true at each rung, never overclaimed)
 
-> **DrEX-FHE (rung 4) is a DEX in which no party — not the operator, not a committee, not an
-> enclave — ever holds a plaintext order. The committee holds only decryption-key shares and
-> threshold-decrypts only the public clearing price; correct clearing is a post-quantum STARK that an
-> observer can check by re-running the deterministic public FHE circuit; and the committee is
-> optional at the two lower rungs.**
+> **DrEX-FHE (rung 4) is a DEX whose no-viewer is ADVERSARIAL, bounded by a `t`-of-`n` threshold.
+> Orders are folded under encryption; the crossing runs in output-boundary MPC among the `n`
+> federation parties, revealing only the clearing price `p*` and cleared volume `V*`. BELOW the
+> threshold `t`, no coalition of parties learns any order or curve coefficient — a cryptographic
+> bound, not a policy — and there is NO standing master decryption key against order ciphertexts. `≥
+> t` colluding parties CAN reconstruct (the honest ceiling). Correct clearing is a post-quantum STARK
+> an observer re-checks; the committee is optional at the two lower rungs.**
 
 Contrast, stated fairly:
 
 - **Penumbra (ZSwap):** classical threshold committee decrypts the batch **aggregate** (individual
   amounts hidden, but a committee decrypts, and the crypto is discrete-log — not PQ). DrEX-FHE keeps
-  even the *aggregate demand curve* encrypted; only the final scalar `p*` is decrypted; PQ.
+  even the *aggregate demand curve* in shares; only `(p*,V*)` open; below threshold that is
+  cryptographic, not committee discretion; PQ.
 - **Renegade:** an MPC committee **jointly computes on secret-shared orders** — collectively holds
-  the orders, interactive, liveness-bound, classical. DrEX-FHE computes on ciphertexts non-
-  interactively; no collective plaintext ever exists; PQ.
+  the orders, interactive, liveness-bound, classical. DrEX-FHE folds under encryption and runs the
+  *crossing only* in MPC over the aggregate (not the orders), opening only `(p*,V*)`; PQ.
 - **Aztec:** the sequencer sees. DrEX-FHE has no sighted sequencer.
 - **CoW / Shutter:** solver / Keyper committee sees. DrEX-FHE has neither.
 
 **Honesty guards on the claim:** (a) it is *rung-4* — rungs 1–3 still have a viewer of decreasing
 size, and the doc says so; (b) it holds for the **uniform-price** mechanism, not the ring/TTC, which
-stays classical-shielded; (c) a dishonest committee majority can force a *wrong* price (an integrity
-fault the STARK/decryption-proof catches) but **still cannot read an order** — the privacy claim is
-unconditional on committee honesty, the correctness claim is not, and both are stated separately;
-(d) IND-CPA-D noise-flooding params are assumed; (e) the PQ claim requires the PQ-commitment cutover
-of `PQ-SHIELDED-COMMITMENT.md` — FHE alone does not close the DLog binding hole.
+stays classical-shielded; (c) **the no-viewer is `t`-of-`n`, not absolute** — below the threshold it
+is a cryptographic bound (no order learnable, only `(p*,V*)`); `≥ t` colluding parties can
+reconstruct, and "nobody even if all collude" is impossible for clearing over hidden data
+(`OUTPUT-BOUNDARY-MPC.md §3`); what is removed vs. plain threshold-FHE is the *standing* key liability;
+a dishonest subset can also force a *wrong* price (an integrity fault the STARK/decryption-proof
+catches), so privacy (below `t`) and correctness are stated separately; (d) IND-CPA-D noise-flooding
+params are assumed; (e) the PQ claim requires the PQ-commitment cutover of `PQ-SHIELDED-COMMITMENT.md`
+— FHE alone does not close the DLog binding hole.
 
 ---
 
@@ -359,4 +384,6 @@ stays the classical-shielded product; and the ladder is honest rungs, not a leap
   oracle_mark,snp}.rs`, `metatheory/Market/ShieldedClearing.lean`, `metatheory/Market/Optimality.lean`,
   `circuit-prove/src/shielded_ring_clearing_air.rs`, `..._nleg_air.rs`,
   `docs/deos/{DREX-DESIGN,SHIELDED-AUCTIONS-DESIGN,SHIELDED-DREX-ASSURANCE-ROADMAP,
-  PQ-SHIELDED-COMMITMENT}.md`.
+  PQ-SHIELDED-COMMITMENT,OUTPUT-BOUNDARY-MPC}.md`,
+  `fhegg-fhe/src/{additive,mpc}.rs`, `fhegg-fhe/{ADDITIVE-FOLD-ENVELOPE,MEASURED-ENVELOPE}.md`,
+  `federation/src/threshold_decrypt.rs`, `intent/src/trustless.rs`.
