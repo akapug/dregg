@@ -23,6 +23,7 @@ namespace Dregg2.Circuit.DescriptorIR2
 
 open Dregg2.Circuit (Assignment)
 open Dregg2.Exec.CircuitEmit (EmittedExpr)
+open Dregg2.Circuit.Emit.EffectVmEmit
 
 /-- The NARROW chip ROW (18-wide): `arity :: padded inputs ++ [hash inputs]` — ONLY out0, no lanes. -/
 def chipRowNarrow (hash : List ℤ → ℤ) (ins : List ℤ) : List ℤ :=
@@ -66,7 +67,37 @@ theorem chip_lookup_sound_narrow (hash : List ℤ → ℤ) (tbl : Table)
     simpa using hblock
   rw [hins]; exact hd
 
--- Soundness core: axiom-clean (only the standard trio — no sorry, no assumed carrier).
+/-- **The SITE-level narrow refinement** (mirrors `siteLookup_replaces_site`, lanes dropped). Against a
+    sound narrow chip table, the narrow lookup of a site `s` enforces EXACTLY the site equation
+    `loc digestCol = hash (resolved inputs)` — the v1 in-row Poseidon2 constraint — carrying no lanes.
+    This is the unit the tuple-narrowing emit routing replaces per single-output site. -/
+theorem siteLookupNarrow_replaces_site (hash : List ℤ → ℤ) (tbl : Table)
+    (hSound : ChipTableSoundNarrow hash tbl) (env : VmRowEnv)
+    (sites : List VmHashSite) (s : VmHashSite) (digs : List ℤ)
+    (hdig : ∀ k, env.loc ((sites.getD k default).digestCol) = digs.getD k 0)
+    (hlen : s.inputs.length ≤ CHIP_RATE)
+    (hmem : (chipLookupTupleNarrow (s.inputs.map (HashInput.toExpr sites)) s.digestCol).map
+              (·.eval env.loc) ∈ tbl) :
+    env.loc s.digestCol = hash (s.resolvedInputs env digs) := by
+  have h := chip_lookup_sound_narrow hash tbl hSound env.loc
+    (s.inputs.map (HashInput.toExpr sites)) s.digestCol
+    (by simpa [List.length_map] using hlen) hmem
+  rw [h]
+  congr 1
+  rw [List.map_map]
+  unfold VmHashSite.resolvedInputs
+  apply List.map_congr_left
+  intro i _
+  cases i with
+  | col c    => rfl
+  | digest k =>
+    have hk := hdig k
+    simp only [List.getD_eq_getElem?_getD] at hk
+    simp [HashInput.toExpr, HashInput.resolve, EmittedExpr.eval, hk]
+  | zero     => rfl
+
+-- Soundness core + site refinement: axiom-clean (only the standard trio — no sorry, no assumed carrier).
 #assert_axioms chip_lookup_sound_narrow
+#assert_axioms siteLookupNarrow_replaces_site
 
 end Dregg2.Circuit.DescriptorIR2
