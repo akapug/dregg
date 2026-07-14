@@ -599,9 +599,13 @@ mod tests {
         let member_floor_col =
             |base: usize, b: usize| base + b * REFUSE_STRIDE + 3 * cav::MAX_CAVEATS;
 
-        use crate::effect_vm::trace_rotated::{BURN_AVAIL_PAD, TRANSFER_AVAIL_PAD};
+        use crate::effect_vm::trace_rotated::{
+            BURN_AVAIL_PAD, CUSTOM_HOST_WIDTH_TEETH, TRANSFER_AVAIL_PAD,
+        };
         // The distinct-geometry V1Face members (setFieldDyn / custom) carry four fewer chip
-        // sites than the standard graduated member.
+        // sites than the standard graduated member. setFieldDyn rides the bare distinct base;
+        // custom additionally carries its 4-felt custom_proof_commitment teeth, so its own base is
+        // `CUSTOM_HOST_WIDTH_TEETH = DISTINCT_BASE(1619) + CUSTOM_COMMIT_TEETH_LEN(4) = 1623`.
         const DISTINCT_BASE: usize = GRAD_ROT_WIDTH - 28; // 1619
 
         let mut cohort_rows = 0usize;
@@ -645,12 +649,16 @@ mod tests {
                 avail_rows += 1;
             } else if base == GRAD_ROT_WIDTH {
                 standard_rows += 1;
-            } else if base == DISTINCT_BASE {
+            } else if base == DISTINCT_BASE || base == CUSTOM_HOST_WIDTH_TEETH {
+                // setFieldDyn rides the bare distinct base (1619); custom rides that base PLUS its
+                // 4-felt custom_proof_commitment teeth (CUSTOM_HOST_WIDTH_TEETH = 1623). Both are
+                // the two distinct-geometry (four-fewer-chip-site) V1Face members.
                 distinct_rows += 1;
             } else {
                 panic!(
                     "cohort row {name} has unexpected welded width {tw} (base {base}; expected \
-                     the standard {GRAD_ROT_WIDTH}, distinct {DISTINCT_BASE}, or avail-padded base)"
+                     the standard {GRAD_ROT_WIDTH}, distinct {DISTINCT_BASE}, custom \
+                     {CUSTOM_HOST_WIDTH_TEETH}, or avail-padded base)"
                 );
             }
             for (b, tag) in [(0, "escrow"), (1, "discharge"), (2, "vault")] {
@@ -664,6 +672,13 @@ mod tests {
             }
         }
         // The whole bare cohort (28 named + 8 setField slots) must be welded — not a subset.
+        // ⚠ KNOWN OPEN (soundness residual, NOT a stale count): the VK-epoch regen `1e12d8886`
+        // dropped `revokeDelegation-v2`'s deployed bare-floor-refuse welded row (36→35) while it
+        // remains a live rostered GRADUATED effect (#30, sibling of the welded refreshDelegation-v2
+        // #29) — so its deployed descriptor lacks the escrow/discharge/vault capacity floor-refuse
+        // its 26 peers carry. This assertion STAYS at 36 (the gap is real; do not launder it to 35):
+        // closure = re-emit `revokeDelegation-v2-…-gentian-deployed-bare-refuse` via
+        // `emit-descriptors.sh` + VK regen (ember-gated). See HORIZONLOG.
         assert_eq!(
             cohort_rows, 36,
             "all 36 deployed bare cohort rows must carry the flag-day refuse weld"

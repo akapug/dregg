@@ -344,12 +344,13 @@ mod tests {
         for k in 0..cav::MAX_CAVEATS {
             assert_eq!(caveat_tag_col(k), CAVEAT_BASE + 1 + k * cav::ENTRY_SIZE);
         }
-        // The concrete bound columns (drift pin at v13 geometry: CAVEAT_BASE = V1_WIDTH(188) +
-        // 2*B_SPAN(227) = 642; ENTRY_SIZE = 7; so caveat_tag_col(0) = 643).
-        assert_eq!(caveat_tag_col(0), 643);
-        assert_eq!(caveat_tag_col(1), 650);
-        assert_eq!(caveat_tag_col(2), 657);
-        assert_eq!(caveat_tag_col(3), 664);
+        // The concrete bound columns (drift pin at the arity-3 IMT geometry: the leaf-arity-3
+        // migration widened each rotated block B_SPAN 227→239, so CAVEAT_BASE = V1_WIDTH(188) +
+        // 2*B_SPAN(239) = 666; ENTRY_SIZE = 7; so caveat_tag_col(0) = 667).
+        assert_eq!(caveat_tag_col(0), 667);
+        assert_eq!(caveat_tag_col(1), 674);
+        assert_eq!(caveat_tag_col(2), 681);
+        assert_eq!(caveat_tag_col(3), 688);
     }
 
     #[test]

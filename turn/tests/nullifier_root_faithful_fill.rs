@@ -1,7 +1,7 @@
 //! **VK-epoch nullifier-root FAITHFUL FILL — the Rust ghost mirrors the canonical Lean.**
 //!
 //! The R=24 rotated circuit binds the nullifier root as a FAITHFUL 8-felt group (limb 26 lane-0 ‖
-//! completion limbs 67..=73). These integration tests prove the Rust producers now fill all 8 lanes
+//! completion limbs 68..=74, post REVOKED-ROOT flag day). These integration tests prove the Rust producers now fill all 8 lanes
 //! from a genuine `CanonicalHeapTree8` node8 root (closing the vacuous zero-fill of 67..73 and the
 //! lossy 1-felt `hash_bytes` at limb 26), that the cell/turn twins agree byte-for-byte, that the
 //! empty default is the NATIVE empty root (not `[0u8; 32]`), and that distinct nullifier frontiers
@@ -21,7 +21,7 @@ use dregg_turn::rotation_witness::{
 };
 
 /// (a)+(b) A non-empty nullifier accumulator root fills ALL 8 rotated lanes — limb 26 = root lane 0,
-/// limbs 67..=73 = root lanes 1..7 (NON-ZERO, closing the vacuous zero-fill) — and the cell twin
+/// limbs 68..=74 = root lanes 1..7 (NON-ZERO, closing the vacuous zero-fill) — and the cell twin
 /// (`compute_rotated_pre_limbs`) and turn twin (`produce`) write those 8 lanes BYTE-IDENTICALLY.
 #[test]
 fn nullifier_root_fills_all_8_lanes_and_twins_agree() {
@@ -47,6 +47,7 @@ fn nullifier_root_fills_all_8_lanes_and_twins_agree() {
         &ledger,
         &nf_root,
         &dregg_turn::rotation_witness::empty_commitments_root_8(),
+        &empty_heap_root_8(),
         &receipts,
         &Default::default(),
     );
@@ -61,7 +62,7 @@ fn nullifier_root_fills_all_8_lanes_and_twins_agree() {
     };
     let pre_cell = compute_rotated_pre_limbs(&cell, &ctx);
 
-    let lanes = [26usize, 67, 68, 69, 70, 71, 72, 73];
+    let lanes = [26usize, 68, 69, 70, 71, 72, 73, 74];
     for (i, &pos) in lanes.iter().enumerate() {
         assert_eq!(
             w.pre_limbs[pos],
@@ -73,10 +74,13 @@ fn nullifier_root_fills_all_8_lanes_and_twins_agree() {
             "producer twins must write nullifier lane {i} (limb {pos}) byte-identically"
         );
     }
-    // (a) The completion lanes 67..73 are NON-ZERO (the vacuity closure).
+    // (a) The completion lanes 68..74 are NON-ZERO (the vacuity closure). Post the REVOKED-ROOT
+    // flag day the nullifier completion shifted 67..73 → 68..74 (limb 67 is now a completion lane
+    // of another root); the write positions track `rotation_witness::produce` /
+    // `commitment::compute_rotated_pre_limbs` at `[26, 68..=74]`.
     assert!(
-        (67..=73).any(|pos| w.pre_limbs[pos] != BabyBear::ZERO),
-        "rotated nullifier completion limbs 67..73 must be NON-ZERO for a non-empty accumulator"
+        (68..=74).any(|pos| w.pre_limbs[pos] != BabyBear::ZERO),
+        "rotated nullifier completion limbs 68..74 must be NON-ZERO for a non-empty accumulator"
     );
 }
 
@@ -100,10 +104,11 @@ fn non_spend_turn_commits_native_empty_not_zero_bytes() {
         &ledger,
         &empty,
         &dregg_turn::rotation_witness::empty_commitments_root_8(),
+        &empty_heap_root_8(),
         &[[1u8; 32]],
         &Default::default(),
     );
-    let lanes = [26usize, 67, 68, 69, 70, 71, 72, 73];
+    let lanes = [26usize, 68, 69, 70, 71, 72, 73, 74];
     for (i, &pos) in lanes.iter().enumerate() {
         assert_eq!(
             w.pre_limbs[pos],
@@ -145,6 +150,7 @@ fn different_nullifier_sets_yield_different_committed_roots() {
             &ledger,
             root,
             &dregg_turn::rotation_witness::empty_commitments_root_8(),
+            &empty_heap_root_8(),
             &receipts,
             &Default::default(),
         );
