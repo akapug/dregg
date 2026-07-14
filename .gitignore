@@ -67,3 +67,9 @@ DEOS-NIGHT-SHIFT.md
 PLANS-BREADCRUMBS.md
 DREGG-COMPUTER.md
 DREGG*-MIGRATION.md
+
+# regenerable artifacts (stitch)
+circuit/descriptors/*staged*.tsv
+demo/run/*.png
+orb/conformance/h2c-host/h2c-host
+*.png.skip
