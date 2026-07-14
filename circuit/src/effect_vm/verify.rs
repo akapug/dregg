@@ -230,6 +230,22 @@ pub fn verify_slot_caveat_manifest(
                         "slot-caveat[{i}] FieldDelta on slot {slot_idx}: expected {old_v:?}+{p0:?}={expected:?}, got {new_v:?}"
                     ));
                 }
+                // RESULT RANGE TOOTH (underflow-wrap MINT closure). `old_v + p0`
+                // is a BabyBear FIELD sum, so an UNAFFORDABLE decrement (delta the
+                // additive inverse `p − k`, old < k) satisfies `new == old + delta`
+                // by committing the WRAP value `p − (k − old) ≈ 2^31` directly —
+                // minting ~2^31 into the slot. Force the result into `[0, 2^N)`
+                // (`FIELD_DELTA_RESULT_BITS`, `< p`): the wrap value has no N-bit
+                // preimage and is refused; the affordable case (small result) holds.
+                // This is the off-AIR re-eval twin of the in-AIR bit-decomposition
+                // range gadget (`circuit_prove::field_delta_range_air`).
+                let range_bits = pi::FIELD_DELTA_RESULT_BITS;
+                if new_v.0 >= (1u32 << range_bits) {
+                    return Err(format!(
+                        "slot-caveat[{i}] FieldDelta on slot {slot_idx}: result {new_v:?} \
+                         out of range [0, 2^{range_bits}) — underflow-wrap mint refused"
+                    ));
+                }
             }
             t if t == pi::SLOT_CAVEAT_TAG_MONOTONIC_SEQUENCE => {
                 // new == old + 1.

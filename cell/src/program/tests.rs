@@ -1008,6 +1008,87 @@ fn field_delta_exact_step() {
     assert!(p.evaluate(&new_s, Some(&old), None).is_err());
 }
 
+/// AUDIT (CRITICAL): the `FieldDelta` underflow-wrap MINT. `new == old + delta` is a
+/// WRAPPING equation, so an UNAFFORDABLE decrement (`old < |delta|`) is satisfiable by
+/// committing the WRAP value directly (`2^64 − k`) — passing `new == old + delta`
+/// while minting ~2^63 into the slot, bypassing the honest `.max(0)` clamp. The result
+/// range tooth (`field_result_in_range`, `[0, 2^30)`) refuses the wrap; the affordable
+/// decrement still commits.
+#[test]
+fn field_delta_underflow_wrap_mint_is_refused() {
+    // A decrement of 50, encoded as the additive inverse in the u64 lane.
+    let neg50 = field_from_u64(0u64.wrapping_sub(50));
+    let p = CellProgram::Predicate(vec![StateConstraint::FieldDelta {
+        index: 0,
+        delta: neg50,
+    }]);
+
+    // AFFORDABLE (old = 120): result 70 is in range ⇒ ADMITTED.
+    let mut old = CellState::new(0);
+    old.fields[0] = field_from_u64(120);
+    let mut affordable = old.clone();
+    affordable.fields[0] = field_from_u64(70);
+    assert!(
+        p.evaluate(&affordable, Some(&old), None).is_ok(),
+        "the affordable decrement (120 − 50 = 70) must still commit"
+    );
+
+    // LAST COIN (old = 50): result 0 is in range ⇒ ADMITTED (exact, not keep-one-coin).
+    let mut broke = CellState::new(0);
+    broke.fields[0] = field_from_u64(50);
+    let mut last_coin = broke.clone();
+    last_coin.fields[0] = field_from_u64(0);
+    assert!(
+        p.evaluate(&last_coin, Some(&broke), None).is_ok(),
+        "spending the last coin (50 − 50 = 0) must commit"
+    );
+
+    // THE MINT (old = 30, cannot afford 50): a malicious post-state commits the WRAP
+    // value `30 + (2^64 − 50) = 2^64 − 20` directly. It SATISFIES `new == old + delta`
+    // (the pre-range gate admitted it) but is `≥ 2^30` ⇒ REFUSED by the range tooth.
+    let mut poor = CellState::new(0);
+    poor.fields[0] = field_from_u64(30);
+    let wrap = field_from_u64(0u64.wrapping_sub(50).wrapping_add(30)); // 2^64 − 20
+    let mut mint = poor.clone();
+    mint.fields[0] = wrap;
+    // The wrap value genuinely equals old + delta (the equation holds) …
+    assert_eq!(
+        mint.fields[0],
+        field_add_test(&poor.fields[0], &neg50),
+        "the mint value is exactly old + delta — the exact-delta gate alone admits it"
+    );
+    // … yet it is REFUSED by the result range tooth.
+    assert!(
+        p.evaluate(&mint, Some(&poor), None).is_err(),
+        "the underflow-wrap mint (2^64 − 20 gold) must be REFUSED by the range tooth"
+    );
+
+    // HIGH-BYTE SMUGGLING: a slot whose pre-state carries a non-zero high byte. The
+    // exact-delta gate (`field_add` copies the old high bytes into the result) admits a
+    // matching post-state, so the EQUALITY check alone passes — but a numeric value must
+    // live entirely in the low u64 lane, so `field_result_in_range` refuses it.
+    let mut hi_old = CellState::new(0);
+    let mut hv = field_from_u64(100);
+    hv[10] = 1; // a non-zero byte well above the u64 lane
+    hi_old.fields[0] = hv;
+    let mut hi_new = hi_old.clone();
+    hi_new.fields[0] = field_add_test(&hv, &neg50); // low lane 100 − 50 = 50, high byte kept
+    assert!(
+        p.evaluate(&hi_new, Some(&hi_old), None).is_err(),
+        "a high-byte-smuggled result (new == old + delta) must be refused by the range tooth"
+    );
+}
+
+/// Test-only mirror of the private `field_add` (u64-lane wrapping add) so the mint
+/// test can assert the wrap value equals `old + delta` without exposing the helper.
+fn field_add_test(a: &FieldElement, b: &FieldElement) -> FieldElement {
+    let av = field_to_u64(a);
+    let bv = field_to_u64(b);
+    let mut out = *a;
+    out[24..32].copy_from_slice(&av.wrapping_add(bv).to_be_bytes());
+    out
+}
+
 #[test]
 fn field_delta_in_range() {
     let p = CellProgram::Predicate(vec![StateConstraint::FieldDeltaInRange {

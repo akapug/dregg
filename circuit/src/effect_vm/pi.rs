@@ -435,6 +435,15 @@ pub const SLOT_CAVEAT_TAG_IMMUTABLE: u32 = 5;
 pub const SLOT_CAVEAT_TAG_MONOTONIC: u32 = 6;
 pub const SLOT_CAVEAT_TAG_STRICT_MONOTONIC: u32 = 7;
 pub const SLOT_CAVEAT_TAG_FIELD_DELTA: u32 = 8;
+/// **The in-range bit-width for a `FieldDelta` / `FieldDeltaInRange` RESULT slot**
+/// (the underflow-wrap MINT closure). `new == old + delta` is a BabyBear FIELD
+/// sum, so an UNAFFORDABLE decrement (delta the additive inverse `p − k`, old < k)
+/// satisfies the gate by committing the WRAP value `≈ 2^31` directly — minting
+/// ~2^31. The verifier re-eval (`verify::verify_slot_caveat_manifest`) and the
+/// in-AIR bit-decomposition gadget (`circuit_prove::field_delta_range_air`) both
+/// force the result into `[0, 2^N)`, `N < p`, so the wrap value has no N-bit
+/// preimage and is refused. Mirrors `dregg_cell::program::eval::FIELD_DELTA_RESULT_BITS`.
+pub const FIELD_DELTA_RESULT_BITS: u32 = 30;
 pub const SLOT_CAVEAT_TAG_MONOTONIC_SEQUENCE: u32 = 9;
 pub const SLOT_CAVEAT_TAG_TEMPORAL_GATE: u32 = 10;
 pub const SLOT_CAVEAT_TAG_SENDER_AUTHORIZED: u32 = 11;

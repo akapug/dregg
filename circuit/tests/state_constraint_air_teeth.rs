@@ -175,6 +175,61 @@ fn field_delta_rejects_wrong_delta() {
     assert!(result.is_err(), "wrong delta must reject");
 }
 
+/// AUDIT (CRITICAL): the underflow-wrap MINT. A decrement encodes `delta` as the
+/// additive inverse (`p − price`). For an UNAFFORDABLE decrement (`old < price`) the
+/// gate `new == old + delta` is satisfiable by committing the WRAP value `p − (price −
+/// old) ≈ 2^31` directly — passing the exact-delta check while MINTING ~2^31 into the
+/// slot. The result range tooth (`new < 2^FIELD_DELTA_RESULT_BITS`) refuses it.
+#[test]
+fn field_delta_rejects_underflow_wrap_mint() {
+    // Decrement of 50: delta = p − 50 (the additive inverse), old = 30 (cannot afford).
+    let price = 50u32;
+    let delta = BabyBear::ZERO - BabyBear::new(price);
+    let entry = SlotCaveatEntry {
+        type_tag: pi::SLOT_CAVEAT_TAG_FIELD_DELTA,
+        slot_index: 1,
+        params: [delta, BabyBear::ZERO, BabyBear::ZERO, BabyBear::ZERO],
+    };
+    let public_inputs = pi_with_manifest(&[entry]);
+    let initial = fields_with(1, 30);
+    // The malicious post-state commits the WRAP value old + delta = 30 + (p − 50) = p − 20.
+    let wrap = BabyBear::new(30) + delta;
+    let final_ = fields_with(1, wrap.as_u32());
+    // Sanity: the exact-delta gate STILL holds (new == old + delta) …
+    assert_eq!(wrap, BabyBear::new(30) + delta);
+    assert!(
+        wrap.as_u32() >= (1u32 << pi::FIELD_DELTA_RESULT_BITS),
+        "the wrap value p − 20 is out of [0, 2^{})",
+        pi::FIELD_DELTA_RESULT_BITS
+    );
+    // … yet the mint is REFUSED by the result range tooth.
+    let result = verify_slot_caveat_manifest(&public_inputs, &initial, &final_, 0);
+    assert!(
+        result.is_err(),
+        "the underflow-wrap mint (result p − 20) must be REFUSED by the range tooth"
+    );
+}
+
+/// The affordable decrement (`old = 120`, `delta = −50`, `new = 70`) still passes: the
+/// additive-inverse encoding is preserved for the affordable case.
+#[test]
+fn field_delta_accepts_affordable_decrement() {
+    let delta = BabyBear::ZERO - BabyBear::new(50);
+    let entry = SlotCaveatEntry {
+        type_tag: pi::SLOT_CAVEAT_TAG_FIELD_DELTA,
+        slot_index: 1,
+        params: [delta, BabyBear::ZERO, BabyBear::ZERO, BabyBear::ZERO],
+    };
+    let public_inputs = pi_with_manifest(&[entry]);
+    let initial = fields_with(1, 120);
+    let final_ = fields_with(1, 70);
+    let result = verify_slot_caveat_manifest(&public_inputs, &initial, &final_, 0);
+    assert!(
+        result.is_ok(),
+        "the affordable decrement (120 − 50 = 70) must pass: {result:?}"
+    );
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // MonotonicSequence
 // ─────────────────────────────────────────────────────────────────────

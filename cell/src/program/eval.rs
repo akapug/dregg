@@ -479,6 +479,21 @@ fn evaluate_constraint_full(
                     if new_state.fields[idx] != expected {
                         return violated(constraint, format!("field[{idx}] != old + delta"));
                     }
+                    // RESULT RANGE TOOTH (underflow-wrap MINT closure). `field_add`
+                    // wraps, so an UNAFFORDABLE decrement satisfies `new == old +
+                    // delta` by committing the wrap value directly (`2^64 − k`),
+                    // minting ~2^63. Force the result into `[0, 2^N)`: the wrap value
+                    // has no N-bit preimage and is refused; the affordable case is
+                    // preserved (result small).
+                    if !field_result_in_range(&new_state.fields[idx]) {
+                        return violated(
+                            constraint,
+                            format!(
+                                "field[{idx}] result out of range [0, 2^{FIELD_DELTA_RESULT_BITS}) \
+                                 — underflow-wrap mint refused"
+                            ),
+                        );
+                    }
                 }
                 None => {
                     if new_state.nonce != 0 {
@@ -508,6 +523,20 @@ fn evaluate_constraint_full(
                         return violated(
                             constraint,
                             format!("field[{idx}] outside [old+min_delta, old+max_delta]"),
+                        );
+                    }
+                    // RESULT RANGE TOOTH: `lower`/`upper` are computed by the same
+                    // WRAPPING `field_add`, so a wrapped bound could admit a wrapped
+                    // result. Range-force the result into `[0, 2^N)` (same tooth as the
+                    // exact `FieldDelta` arm) so a minted wrap value is refused, not
+                    // laundered through a wrapped `[lower, upper]` window.
+                    if !field_result_in_range(&new_state.fields[idx]) {
+                        return violated(
+                            constraint,
+                            format!(
+                                "field[{idx}] result out of range [0, 2^{FIELD_DELTA_RESULT_BITS}) \
+                                 — wrap value refused"
+                            ),
                         );
                     }
                 }
@@ -2825,6 +2854,36 @@ fn field_add(a: &FieldElement, b: &FieldElement) -> FieldElement {
     let mut out = *a;
     out[24..32].copy_from_slice(&s.to_be_bytes());
     out
+}
+
+/// **The in-range bit-width for a `FieldDelta` / `FieldDeltaInRange` RESULT slot.**
+///
+/// The additive-inverse decrement encoding keeps [`field_add`] WRAPPING (an
+/// affordable decrement `120 + (2^64 − 50) == 70` NEEDS the wrap), so the exact
+/// transition gate `new == old + delta` is a *modular* equation. That gate ALONE
+/// is a mint hole: an UNAFFORDABLE decrement (`old < |delta|`) is satisfiable by
+/// committing the WRAP value directly (executor u64 lane `2^64 − k`; the circuit
+/// BabyBear lane `p − k ≈ 2^31`), which equals `old + delta mod 2^64` and so
+/// passes `new == old + delta` while MINTING ~2^63 into the slot — bypassing the
+/// honest executor's `.max(0)` clamp.
+///
+/// Forcing the RESULT into `[0, 2^N)` closes it: the wrap value (`≥ 2^30`) has no
+/// `N`-bit preimage and is REFUSED, while the affordable case (`old ≥ |delta|`,
+/// result small) is preserved. `N = 30` is `< BabyBear p` (so it also refuses the
+/// in-circuit `p − k` wrap) and is the range the in-AIR bit-decomposition gadget
+/// (`circuit_prove::field_delta_range_air`) carries as a STARK constraint.
+pub const FIELD_DELTA_RESULT_BITS: u32 = 30;
+
+/// True iff `f` is a canonical result in `[0, 2^FIELD_DELTA_RESULT_BITS)`: every
+/// byte above the low 8-byte u64 lane is zero AND the u64 lane is
+/// `< 2^FIELD_DELTA_RESULT_BITS`. A wrapped underflow result (`2^64 − k`) fails the
+/// u64-lane bound; a value smuggled into the high bytes fails the high-byte check.
+/// This is the RESULT range tooth that closes the `FieldDelta` underflow-wrap mint.
+pub(crate) fn field_result_in_range(f: &FieldElement) -> bool {
+    if f[..24].iter().any(|&b| b != 0) {
+        return false;
+    }
+    field_to_u64(f) < (1u64 << FIELD_DELTA_RESULT_BITS)
 }
 
 /// Helper: create a FieldElement from a u64 (big-endian in last 8 bytes).
