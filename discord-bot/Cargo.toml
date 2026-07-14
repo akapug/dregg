@@ -209,6 +209,11 @@ procgen-dregg = { path = "../procgen-dregg" }
 # `ServiceExt::oneshot` drives the admin webportal router in tests without
 # binding a socket (already in the lockfile transitively via tower-http).
 tower = { version = "0.5", features = ["util"] }
+# The verifiable-randomness / beacon engine — the daily-reveal cron test builds a SECOND verified
+# beacon (an offline `HashChainBeacon` that passes `verify_beacon_round`) to drive the "a new day
+# rolls a new dungeon" case deterministically without a network. Already in the closure via
+# procgen-dregg; named directly for the test's `dregg_dice::HashChainBeacon`.
+dregg-dice = { path = "../dice" }
 # A self-cleaning temp dir for the sqlite-CreditStore persistence-across-restart test
 # and the per-run narrator budget-ledger files (no /tmp litter). Already in the root lock
 # (narrator dev-deps it); named here for the standalone bot workspace.

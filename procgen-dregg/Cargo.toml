@@ -43,12 +43,26 @@ dregg-dice = { path = "../dice" }
 # Domain-separated hashing for the daily-seed derivation (same blake3 1.x already
 # resolved workspace-wide, the same hash dregg-dice uses internally).
 blake3 = "1"
+# Decode the drand round signature (hex) — both the LIVE fetch's fetched signature
+# and the pinned offline-fallback round vector (`beacon.rs`). Promoted from a
+# dev-dep now the fetch path builds a `DailyBeacon` from a hex signature at runtime.
+hex = "0.4"
+# The LIVE drand HTTP fetch (`beacon::fetch_quicknet_round`): a blocking GET of a
+# `quicknet` round + parse of the tiny `{round,randomness,signature}` JSON. Reuses
+# the workspace's already-locked reqwest + rustls stack (no new registry crates);
+# `blocking` keeps this crate tokio-runtime-free at its API (the caller drives the
+# GET from a `spawn_blocking` on the bot's runtime). The fetched round is BLS-verified
+# through the existing `dregg-dice` pairing check before it can seed a day.
+reqwest = { version = "0.12", default-features = false, features = [
+    "blocking",
+    "rustls-tls",
+] }
+# Parse the drand `public/{round}` JSON body (round + signature). Already resolved
+# workspace-wide; adds nothing new to the closure.
+serde_json = "1"
 
 [dev-dependencies]
 # The real attested-dm DSL parser + validator. Dev-only: the generator emits
 # `.dungeon` TEXT; the tests + example prove that text parses and validates as a
 # first-class attested dungeon through the shipped engine.
 attested-dm = { path = "../attested-dm" }
-# Dev-only: decode the real published drand `quicknet` round vector (pk/sig/randomness
-# hex) the beacon-wire test verifies against — genuine drand interop, not self-consistency.
-hex = "0.4"

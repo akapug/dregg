@@ -62,10 +62,16 @@ pub mod deos_drive;
 // its custodial turn. The on-chain replacement for the `/api/op` HTTP command
 // path — the chain is the message bus, the bot is the reactor.
 pub mod bot_reactor;
+// THE DAILY-REVEAL CRON — the Descent rolls automatically at the UTC-day boundary. A tokio
+// interval task that, when the UTC day strictly advances, FETCHES today's live drand `quicknet`
+// round (BLS-verified), caches it into every `/descent` surface, OPENS today's beacon-seeded world
+// (fail-closed), and announces the day. Replaces the manual `/descent play`-to-open the daily. The
+// reveal core is driven by tests over an in-memory store (a new day rolls a new dungeon).
 mod devnet;
 pub mod discord_caps;
 mod embeds;
 pub mod orchestration;
+pub mod reveal_cron;
 // The sqlite-backed `commands::gallery::GalleryStore` — the durable backing of the
 // `/gallery` universe registry over the bot's async `Database` (the sync↔async bridge
 // mirrors `pay::SqliteCreditStore`). Installed once at boot; the gallery module then
@@ -356,6 +362,11 @@ impl EventHandler for Handler {
         // `/api/op` HTTP command path). The bot is a chain-reactor, not an
         // endpoint the desktop pokes.
         bot_reactor::start(self.state.clone(), ctx.http.clone());
+
+        // Start the daily-reveal cron: at the UTC-day boundary it fetches + verifies today's live
+        // drand round, caches it into every `/descent` surface, opens today's beacon-seeded world,
+        // and announces the day — the Descent rolls automatically (no manual `/descent play`).
+        reveal_cron::start(self.state.clone(), ctx.http.clone());
     }
 
     /// The moment the bot joins (or restarts against) a guild: bootstrap every

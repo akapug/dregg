@@ -95,13 +95,39 @@ const DRAND_QUICKNET_ROUND: u64 = 1_000_000;
 /// The round's threshold-BLS signature (the reveal `DailyBeacon::verify` re-checks by pairing).
 const DRAND_QUICKNET_SIG_HEX: &str = "83ad29e4c409f9470fc2ef02f90214df49e02b441a1a241a82d622d9f608ef98fd8b11a029f1bee9d9e83b45088abe72";
 
-/// **Resolve today's daily beacon** — the pinned, verifiable drand `quicknet` reveal.
+/// The LIVE daily beacon the reveal cron ([`crate::reveal_cron`]) fetched + BLS-verified for the
+/// current UTC day. When present (and matching today), every `/descent` surface serves it — so The
+/// Descent's daily seed is the real, unpredictable-until-revealed live drand round. When absent
+/// (offline, before today's reveal fires, or under test) the pinned published round stands in. BOTH
+/// are BLS-verified reveals, so the day is always genuinely beacon-seeded.
+static LIVE_BEACON: OnceLock<std::sync::Mutex<Option<(u64, DailyBeacon)>>> = OnceLock::new();
+
+fn live_beacon_cell() -> &'static std::sync::Mutex<Option<(u64, DailyBeacon)>> {
+    LIVE_BEACON.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// **Cache the reveal cron's verified live beacon for `utc_day`.** Called by [`crate::reveal_cron`]
+/// after a live drand fetch verifies today's round; [`resolve_todays_beacon`] then serves it for
+/// the current UTC day. First-write-per-day is fine (idempotent — the same day's round is stable).
+pub fn set_live_beacon(utc_day: u64, beacon: DailyBeacon) {
+    *live_beacon_cell().lock().expect("live beacon lock") = Some((utc_day, beacon));
+}
+
+/// **Resolve today's daily beacon** — the LIVE drand `quicknet` reveal when the reveal cron has
+/// fetched + verified today's round, else the pinned published round (the offline/test fallback).
 ///
-/// *The live drand HTTP fetch (advancing the round each real UTC day via
-/// [`procgen_dregg::beacon::quicknet_round_for_utc_day`]) is the NAMED client seam.* Here we return
-/// the committed pinned round: a genuine reveal whose pairing check holds, so `/descent` plays a
-/// real beacon-verified day (a forged reveal is refused by [`DailyDescentOffering::open`]).
+/// The live drand HTTP fetch that advances the round each real UTC day is now WIRED
+/// ([`procgen_dregg::beacon::fetch_todays_beacon`], driven by [`crate::reveal_cron`], which caches
+/// the verified round via [`set_live_beacon`]). Absent a live reveal, the committed pinned round is
+/// served: a genuine reveal whose pairing check holds, so `/descent` always plays a real
+/// beacon-verified day (a forged reveal is refused by [`DailyDescentOffering::open`]).
 pub fn resolve_todays_beacon() -> DailyBeacon {
+    let today = procgen_dregg::beacon::current_utc_day();
+    if let Some((day, beacon)) = live_beacon_cell().lock().expect("live beacon lock").clone() {
+        if day == today {
+            return beacon;
+        }
+    }
     DailyBeacon::quicknet(
         DRAND_QUICKNET_ROUND,
         hex::decode(DRAND_QUICKNET_SIG_HEX).expect("the pinned drand signature decodes"),
