@@ -13,9 +13,29 @@ description = "Verified automatafl (n=2): a hand-authored Custom-VK board-transi
 dregg-circuit = { path = "../circuit" }
 dregg-circuit-prove = { path = "../circuit-prove" }
 
+# --- The PLAYABLE surface (additive; mirrors dregg-multiway-tug's Offering phase). ---
+# The tooth vocabulary (CellProgram / StateConstraint / TransitionCase / TransitionGuard /
+# Effect / symbol / field_from_u64 / CellId / TurnReceipt) the deployed match teeth are built from.
+dregg-app-framework = { path = "../app-framework", default-features = false }
+# HeapAtom (the heap-keyed atoms: Immutable / MemberOf on the 25 board squares).
+dregg-cell = { path = "../cell" }
+# The verified allocator (Schema -> allocate_checked -> Legal CheckedLayout) that resolves the
+# 15 registers + the 25 board heap keys.
+dregg-schema = { path = "../dregg-schema" }
+# THE REAL WorldCell — the deployed executor + ledger the match deploys onto (a play is a turn).
+spween-dregg = { path = "../spween-dregg" }
+# The frontend-agnostic Offering/Session core (`Offering` / `Surface` / `Action` / `Outcome` /
+# `DreggIdentity`): `AutomataflOffering` (`src/surface.rs`) hosts a match as an Offering the web /
+# Discord / Telegram / WeChat frontends all drive. Consumed, never modified.
+dreggnet-offerings = { path = "../dreggnet-offerings" }
+# The deos affordance view-tree — the `CoordGrid`/`CoordCell` BOARD node + `Menu`/`Pill`/`Icon`.
+# `default-features = false` = NO gpui / SpiderMonkey; the surface is pure serializable DATA.
+deos-view = { path = "../deos-view", default-features = false }
+# The move COMMITMENT (the sealed simultaneous move): blake3 over (turn ‖ seat ‖ from ‖ to ‖ nonce).
+blake3 = "1"
+
 [dev-dependencies]
 # SLOW prove/fold path (mirrors game-turn-slice): the custom leaf folds into a
 # real turn chain the light client verify_history accepts.
-dregg-cell = { path = "../cell" }
 dregg-turn = { path = "../turn" }
 dregg-lightclient = { path = "../lightclient" }

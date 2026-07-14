@@ -14,11 +14,23 @@
 //! fast refinement battery; the `#[ignore]` SLOW tests drive the real leaf proof +
 //! recursion fold + light-client accept.
 
+//! ## The playable surface (additive)
+//!
+//! [`game`] deploys the same n=2 match on a REAL [`spween_dregg::WorldCell`] (the commit → reveal →
+//! resolve teeth), and [`surface`] hosts it as a [`dreggnet_offerings::Offering`]
+//! ([`AutomataflOffering`]) whose board is a [`deos_view::ViewNode::CoordGrid`] with rook-line
+//! legal-move highlighting and a per-viewer sealed-move fog — so automatafl plays on the web
+//! catalog (and thereby Discord / Telegram / WeChat, which render the same `Surface`).
+
 pub mod air;
 pub mod builder;
+pub mod game;
 pub mod moves;
 pub mod reference;
+pub mod surface;
 
 pub use air::{build_d1, build_d1_honest, build_d2, build_d2_honest, build_d3, build_d3_honest};
 pub use builder::Builder;
+pub use game::{AutomataflGame, Deployment, MatchState};
 pub use reference::{Board, Move, apply_turn, automaton_step};
+pub use surface::{AutomataflOffering, AutomataflSession, Phase, Seat};

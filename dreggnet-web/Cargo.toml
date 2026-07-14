@@ -33,6 +33,16 @@ dreggnet-offerings = { path = "../dreggnet-offerings" }
 # — the same offerings the Discord bot's generic adapter serves, now on the web surface.
 dreggnet-council = { path = "../dreggnet-council" }
 dreggnet-market = { path = "../dreggnet-market" }
+# THE TWO PORTFOLIO GAMES, registered in the web catalog (fully playable in the browser — and,
+# through the SAME deos `Surface`, on Discord / Telegram / WeChat via the do-once path):
+#  - dregg-multiway-tug: the hidden-hand tug of influence (`TugOffering`), reached through the
+#    seat-claiming `seated::SeatedTug` adapter (a web identity is a derived key, not the game's
+#    canonical seat string — the adapter claims a seat; the game crate is unmodified);
+#  - dregg-automatafl: the verified simultaneous-move board (`AutomataflOffering`) — a `CoordGrid`
+#    board with rook-line legal-move highlighting + the commit/reveal/resolve turns. Claims seats
+#    natively; registered directly. Both are CONSUMED, never modified.
+dregg-multiway-tug = { path = "../dregg-multiway-tug" }
+dregg-automatafl = { path = "../dregg-automatafl" }
 # THE DEOS SURFACE — `ViewNode`/`MenuItem`, the view-tree a Surface wraps. The web
 # renderer WALKS this tree into HTML. `default-features = false` = the gpui-free
 # view-tree model only (no native/gpui/mozjs), matching dreggnet-offerings; the `web`

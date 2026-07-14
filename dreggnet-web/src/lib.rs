@@ -50,6 +50,9 @@
 /// (`GET /descent/leaderboard`) + a run-card that re-executes the recorded run to PASS/FAIL
 /// (`GET /descent/run/{id}`). Additive; see [`descent::descent_router`].
 pub mod descent;
+/// The seat-claiming adapter that makes `dregg-multiway-tug` playable by real frontend users (a web
+/// identity is a derived key, never the game's canonical seat string). See [`seated::SeatedTug`].
+pub mod seated;
 
 pub use descent::{DescentState, descent_router, run_share_path};
 
@@ -67,6 +70,7 @@ use axum::{
 use serde::Deserialize;
 
 use deos_view::{MenuItem, SessionFormBackend, SurfaceBackend, ViewNode};
+use dregg_automatafl::AutomataflOffering;
 use dreggnet_council::{CandidateProposal, CouncilOffering};
 use dreggnet_market::MarketOffering;
 use dreggnet_offerings::dungeon::{DungeonOffering, DungeonSession};
@@ -573,6 +577,16 @@ table.board{width:100%;border-collapse:collapse;margin:1rem 0}\
 table.board th,table.board td{text-align:left;padding:.5rem .6rem;border-bottom:1px solid #244}\
 table.board th{color:#7fd;font-size:.85rem;text-transform:uppercase;letter-spacing:.04em}\
 table.board td a{color:#5f8;text-decoration:none}table.board td a:hover{text-decoration:underline}\
+.coordgrid{display:grid;gap:.25rem;margin:.75rem 0;max-width:22rem}\
+.coordgrid .cell{display:flex;align-items:center;justify-content:center;aspect-ratio:1/1;border:1px solid #244;border-radius:6px;background:#0d1526;color:#9ab;font-size:1.1rem}\
+.coordgrid form.cell{padding:0}\
+.coordgrid form.cell button{width:100%;height:100%;border:0;background:transparent;color:inherit;font-size:1.1rem;cursor:pointer}\
+.coordgrid .cell.highlighted{border-color:#5f8;box-shadow:inset 0 0 0 1px #5f8;color:#dfeaff}\
+.coordgrid .cell.tag-accent{color:#00b4d8;border-color:#00b4d8}\
+.coordgrid .cell.tag-warn{color:#fd6;border-color:#fd6}\
+.coordgrid .cell.tag-good{color:#5f8}\
+.pill{display:inline-block;padding:.15rem .5rem;margin-right:.35rem;border-radius:999px;border:1px solid #244;background:#0d1526;font-size:.8rem}\
+.pill.tag-accent{color:#00b4d8;border-color:#00b4d8}.pill.tag-good{color:#5f8;border-color:#2a5}\
 </style>";
 
 // ═════════════════════════════════════════════════════════════════════════════════════════
@@ -729,6 +743,24 @@ pub fn catalog_default_host() -> OfferingHost {
         "market",
         "DreggNet Market — a sealed-bid auction (list · bid · settle)",
         MarketOffering::new(),
+    );
+
+    // THE TWO PORTFOLIO GAMES — fully playable in the browser (and, through the SAME `Surface`,
+    // on Discord / Telegram / WeChat: the do-once path).
+    //
+    // `tug` is wrapped in the seat-claiming [`SeatedTug`] adapter because `TugOffering` names its
+    // seats by fixed canonical strings while a web user's identity is a derived key — the adapter
+    // claims a seat for the first two identities that act, changing nothing in the game crate.
+    // `automatafl` claims seats natively, so it is registered directly.
+    host.register(
+        "tug",
+        "Multiway-Tug — a hidden-hand tug of influence (seven guilds · eight actions)",
+        seated::SeatedTug::new(),
+    );
+    host.register(
+        "automatafl",
+        "Automatafl — the simultaneous-move board (seal a move · reveal · the automaton steps)",
+        AutomataflOffering,
     );
     host
 }
@@ -966,6 +998,59 @@ fn catalog_node(node: &ViewNode, key: &str, id: &str, out: &mut String) {
                 enabled: true,
             };
             out.push_str(&catalog_form(key, id, &it));
+        }
+        // THE BOARD NODE — a `cols`-wide coordinate grid (automatafl's board, the tug's hand). Each
+        // cell paints its glyph; a cell carrying an affordance (`turn` non-empty) is a real POST
+        // button firing `{turn, arg}` (the target square), so the board is CLICKABLE in the browser;
+        // a highlighted cell (the legal-move set / the selected piece / the automaton) gets the
+        // `highlighted` class. An inert cell is a plain span — never a button.
+        ViewNode::CoordGrid { cols, cells } => {
+            out.push_str(&format!(
+                "<div class=\"coordgrid\" style=\"grid-template-columns:repeat({},1fr)\">",
+                (*cols).max(1)
+            ));
+            for cell in cells {
+                let hl = if cell.highlight { " highlighted" } else { "" };
+                let tag = if cell.tag.is_empty() {
+                    String::new()
+                } else {
+                    format!(" tag-{}", esc(&cell.tag))
+                };
+                if cell.turn.is_empty() {
+                    out.push_str(&format!(
+                        "<span class=\"cell{hl}{tag}\">{glyph}</span>",
+                        glyph = esc(&cell.glyph),
+                    ));
+                } else {
+                    out.push_str(&format!(
+                        "<form class=\"cell{hl}{tag}\" method=\"post\" \
+                         action=\"/offerings/{key}/session/{id}/act\">\
+                         <input type=\"hidden\" name=\"turn\" value=\"{turn}\">\
+                         <input type=\"hidden\" name=\"arg\" value=\"{arg}\">\
+                         <button type=\"submit\">{glyph}</button></form>",
+                        key = esc(key),
+                        id = esc(id),
+                        turn = esc(&cell.turn),
+                        arg = cell.arg,
+                        glyph = esc(&cell.glyph),
+                    ));
+                }
+            }
+            out.push_str("</div>");
+        }
+        ViewNode::Pill { text, tag, .. } => {
+            out.push_str(&format!(
+                "<span class=\"pill tag-{}\">{}</span>",
+                esc(tag),
+                esc(text)
+            ));
+        }
+        ViewNode::Icon { glyph, tag } => {
+            out.push_str(&format!(
+                "<span class=\"icon tag-{}\">{}</span>",
+                esc(tag),
+                esc(glyph)
+            ));
         }
         ViewNode::VStack(cs) | ViewNode::Row(cs) | ViewNode::List(cs) | ViewNode::Table(cs) => {
             for c in cs {

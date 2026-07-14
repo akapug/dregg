@@ -5089,11 +5089,17 @@ dependencies = [
 name = "dregg-automatafl"
 version = "0.1.0"
 dependencies = [
+ "blake3",
+ "deos-view",
+ "dregg-app-framework",
  "dregg-cell",
  "dregg-circuit",
  "dregg-circuit-prove",
  "dregg-lightclient",
+ "dregg-schema",
  "dregg-turn",
+ "dreggnet-offerings",
+ "spween-dregg",
 ]
 
 [[package]]
@@ -6742,6 +6748,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "dreggnet-game-board"
+version = "0.1.0"
+dependencies = [
+ "dregg-automatafl",
+ "dregg-cell",
+ "dregg-circuit",
+ "dregg-circuit-prove",
+ "dregg-lightclient",
+ "dregg-multiway-tug",
+ "game-turn-slice",
+ "ugc-dregg",
+]
+
+[[package]]
 name = "dreggnet-gear"
 version = "0.1.0"
 dependencies = [
@@ -6984,6 +7004,8 @@ dependencies = [
  "axum",
  "blake3",
  "deos-view",
+ "dregg-automatafl",
+ "dregg-multiway-tug",
  "dreggnet-council",
  "dreggnet-market",
  "dreggnet-offerings",
@@ -15379,6 +15401,9 @@ dependencies = [
  "attested-dm",
  "blake3",
  "dregg-dice",
+ "dregg-federation",
+ "dregg-types",
+ "ed25519-dalek",
  "hex",
  "reqwest 0.12.28",
  "serde_json",
