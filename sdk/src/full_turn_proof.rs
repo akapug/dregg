@@ -2654,7 +2654,10 @@ fn wide_umem_weld_vk_hash_by_key(key: &str) -> Result<[u8; 32], SdkError> {
 /// DIFFERENT (821-col) width, so `append_wide_carriers_cap_open`'s `CAP_OPEN_WIDTH` lift does not accept
 /// it; it has no proven wide twin yet (the named TB residual) and stays on the 1-felt route. Membership
 /// is read STRAIGHT off the proven wide registry, so a key is wide iff its Lean wide twin exists.
-#[cfg(feature = "prover")]
+// Light-client VERIFY path: called unconditionally by `verify_effect_vm_rotated_inner`
+// (pure — reads only the always-available `dregg-circuit` `WIDE_REGISTRY_STAGED_TSV`),
+// so it must not be gated behind `prover` or the kernel-free client build (sdk-py light)
+// fails to compile the verifier.
 fn cap_open_key_has_wide_twin(key: &str) -> bool {
     use dregg_circuit::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV;
     // The TB family has no proven wide twin (its host width differs); exclude it explicitly. Every
@@ -4108,7 +4111,9 @@ fn prove_cohort_run_chain(
 /// revokeDelegation (REMOVE), delegate & introduce (INSERT). With the on-the-wire alternative proven, the
 /// AUTHORITY-only cap-open descriptors (`revokeCapOpen` / `grantCapCapOpen` / `introduceCapOpen`) are
 /// light-client-REJECTED — a producer cannot strip the write wrapper to leave the post-cap-root host-trusted.
-#[cfg(feature = "prover")]
+// Light-client VERIFY path (pure `matches!` on descriptor keys): reached transitively from
+// `verify_effect_vm_rotated_inner` via `is_forbidden_plain_cap_descriptor`, so it must compile
+// in the kernel-free client build too (not gated behind `prover`).
 fn is_forbidden_authority_only_cap_write_descriptor(name: &str) -> bool {
     // THE TOOTH IS ON. The WRITE-bearing cap-open wrappers now GENUINELY prove + light-client-verify
     // end-to-end (a wrong post-cap-root is UNSAT — the `map_op` binds the BEFORE→AFTER cap-root write on
@@ -4148,7 +4153,8 @@ fn is_forbidden_authority_only_cap_write_descriptor(name: &str) -> bool {
     )
 }
 
-#[cfg(feature = "prover")]
+// Light-client VERIFY path: the AUTHORITY-FLOOR tooth called unconditionally by
+// `verify_effect_vm_rotated_inner`, so it must not be gated behind `prover` (pure key `matches!`).
 fn is_forbidden_plain_cap_descriptor(name: &str) -> bool {
     is_forbidden_authority_only_cap_write_descriptor(name)
         || matches!(
