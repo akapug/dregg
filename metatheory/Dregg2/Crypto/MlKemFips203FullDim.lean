@@ -92,6 +92,7 @@ import Dregg2.Crypto.MlKemCodecSpec
 import Dregg2.Crypto.MlKemNttFaithful
 import Dregg2.Crypto.MlKemCorrect
 import Dregg2.Crypto.MlKemDelta
+import Dregg2.Crypto.DecapsCoreSpec
 import Dregg2.Crypto.DreggKemRefinement
 
 namespace Dregg2.Crypto.MlKemFips203FullDim
@@ -574,14 +575,26 @@ factors through the NTT algebra. The two REUSABLE legs are proved here:
   left inverse `intt` is a two-sided inverse. This is what turns a stored NTT-domain secret `ŝᵢ` into
   `ntt(intt ŝᵢ)`, so `ntt_computes_negacyclic_mul` applies to the accumulator terms.
 
-REMAINING (each named precisely; a deeper campaign, NOT discharged here):
-1. **`Poly → R_q` coefficient ring hom on the K-PKE matrix–vector algebra** — assemble `intt_addLinear` +
-   `ntt_intt_rightInverse` + `ntt_computes_negacyclic_mul` into `φ(kpkeW dkPke c) = wVal (φ-images)` matching
-   `MlKemCorrect.wVal`/`eTotal`, over `R = (ZMod q)[X]/(X²⁵⁶+1)` (the real negacyclic ring, a `CommRing`).
+STATUS (each named precisely):
+1. **`Poly → R_q` coefficient RING hom + the LITERAL cancellation — DISCHARGED (§8.8).** The `CommRing R_q =
+   AdjoinRoot(X²⁵⁶+1)` carrying `schoolbookMul` as `*` ALREADY EXISTS as `DecapsCoreSpec.Rq_kem` /
+   `toRqKem_schoolbookMul`; `kpkeW_toRqKem` exhibits `toRqKem (kpkeW) = v − Σⱼ sⱼ·uⱼ` over that ring (the honest-key
+   obligation discharged by `ntt_intt_rightInverse`), and `kpkeW_toRqKem_cancellation` composes it with
+   `MlKemCorrect.mlkem_decrypt_cancellation` at `R = Rq_kem` to reach the LITERAL `toRqKem (kpkeW) = μ + e_total`,
+   under the abstract-model identifications of `v, u, s` (the payload of 2/3/4). (`phiCoeff`, §8.4, is only
+   ADDITIVE and does NOT suffice — the multiplicative cancellation needs this genuine ring.)
 2. **byte-codec faithfulness** — `ŝ = ByteDecode₁₂(dk_pke)`, `(u,v) = ctDecode c` after `Decompress_{du}`/
-   `Decompress_{dv}` really are the ring elements `s`, `u = Aᵀr+e1+Δu`, `v = tᵀr+e2+μ+Δv` of `MlKemCorrect`.
-3. **`ExpandA`** — the `SampleNTT`/`XOF` public-matrix expansion `A` matches the abstract `A : Fin k → Fin k → R`.
-4. **CBD samplers** — `SamplePolyCBD(η=2)` for `s,e,r,e1,e2` matches the CBD distribution `MlKemDelta` models. -/
+   `Decompress_{dv}` really are the ring elements `s`, `u = Aᵀr+e1+Δu`, `v = tᵀr+e2+μ+Δv` of `MlKemCorrect`
+   (size/reduced legs closed: `sHatOf_lt`, `uOf_size`; the encrypt-side ring algebra is
+   `EncapsCoreSpec.encrypt_{u,v}_ring_faithful` over this same `Rq_kem`).
+3. **`ExpandA`** — the `SampleNTT`/`XOF` public-matrix expansion `A` matches the abstract `A : Fin k → Fin k → R`
+   (NAMED `ExpandAFaithful`, §8.7). Genuinely blocked on the rejection-sampling FILL (that `SampleNTT` yields
+   exactly 256 accepted `<q` coefficients is NOT a `∀`-theorem — it is the probabilistic fill event; the
+   branching-`forIn` reducedness invariant is not built).
+4. **CBD samplers — structural + bit-extraction faithfulness DISCHARGED (§8.9).** `samplePolyCBD_size` /
+   `samplePolyCBD_lt` / `samplePolyCBD_getElem` prove `SamplePolyCBD(η)` is canonical in `R_q` and its `j`-th
+   coefficient IS the FIPS 203 Alg 8 centered bit-difference `subQ (Σ bit) (Σ bit)`; the sole residual is the
+   DISTRIBUTIONAL tie to the CBD noise `MlKemDelta` models (sibling-owned, `CbdFaithful`, §8.7). -/
 
 /-! ### §8.1 — `intt` preserves the canonical (size-256, reduced) shape (needed for the bijection). -/
 
@@ -916,6 +929,191 @@ faithfulness plus the tie to `MlKemDelta`'s `cbd` law, which is not built. -/
 def CbdFaithful (eta : Nat) (bytes : List UInt8) (cbd : Poly) : Prop :=
   MlKemSample.samplePolyCBD eta bytes = cbd ∧ cbd.size = 256 ∧ (∀ (p : Nat), cbd[p]! < q)
 
+/-! ### §8.8 — ITEM (1) DISCHARGED: the `CommRing R_q` carrying `schoolbookMul` as `*`, and the LITERAL
+cancellation `toRqKem (kpkeW) = μ + e_total`.
+
+The `CommRing R_q` instance item (1) asks for ALREADY EXISTS as `DecapsCoreSpec.Rq_kem = AdjoinRoot (X²⁵⁶+1)`
+(a genuine `CommRing`), and `DecapsCoreSpec.toRqKem_schoolbookMul` proves — for ALL poly pairs — that the coeff
+ring hom `toRqKem : Poly → Rq_kem` carries the executable `MlKemRing.schoolbookMul` to the ring `*`. Reusing it
+(rather than re-deriving a mirror CommRing on `Array Nat`, which would just re-prove negacyclic-convolution
+associativity/distributivity already discharged by `AdjoinRoot`) is the correct assembly. `phiCoeff` (§8.4) is
+only ADDITIVE — it does NOT carry `schoolbookMul` (coefficient-wise product ≠ negacyclic convolution) — so the
+multiplicative cancellation genuinely needs THIS ring, not `Fin 256 → ℤ_q`.
+
+With that `CommRing`, `MlKemCorrect.mlkem_decrypt_cancellation` (abstract `[CommRing R]`) SPECIALIZES at
+`R = Rq_kem`, `k = paramK`. `DecapsCoreSpec.decryptW_eq_spec` already maps the executable decrypted `w` to the
+`wVal` SHAPE `toRqKem v − Σⱼ toRqKem sⱼ · toRqKem uⱼ` in `Rq_kem` — and its honest-key hypothesis
+(`ŝᵢ = NTT(sᵢ)`) is DISCHARGED here by `ntt_intt_rightInverse` (§8.3): the stored NTT-domain secret
+`ŝᵢ = sHatOf` IS `NTT(intt ŝᵢ)`, so `sᵢ := intt ŝᵢ` witnesses it with NO side condition. Composing the two
+turns the SHAPE into the LITERAL `μ + e_total`, under the abstract-model identifications of `v, u, s` — which
+are exactly items (2)/(3)/(4) + the encrypt-side ring algebra (`EncapsCoreSpec.encrypt_{u,v}_ring_faithful`,
+already proved over this same `Rq_kem`). -/
+
+open Dregg2.Crypto.MlKemCodec (dCoeff polyBytes paramK byteDecodeAt ctDecode)
+
+/-- The executable K-PKE decrypt accumulator IS `DecapsCoreSpec.decWFold` (both are the `for i in [0:paramK]`
+fold reading `ŝᵢ = ByteDecode₁₂(dk, i·384)`); the do-block unfolds identically. -/
+theorem kpkeAcc_eq_decWFold (dkPke c : List UInt8) :
+    kpkeAcc dkPke c = DecapsCoreSpec.decWFold dkPke.toArray (ctDecode c).1 := by
+  unfold kpkeAcc DecapsCoreSpec.decWFold
+  simp only [Id.run, Std.Legacy.Range.forIn_eq_forIn_range', bind_pure_comp, map_pure,
+    List.forIn_pure_yield_eq_foldl, Std.Legacy.Range.size, Nat.sub_zero, Nat.add_one_sub_one,
+    Nat.div_one]
+  rfl
+
+/-- Bridge the `List.range' 0 paramK 1` fold-sum `DecapsCoreSpec.decryptW_eq_spec` produces to a
+`Finset.univ` sum over `Fin paramK` (`paramK = 3`), so it lines up with `MlKemCorrect.wVal`'s `∑ j`. -/
+theorem sum_over_paramK {M : Type*} [AddCommMonoid M] (g : Nat → M) :
+    ((List.range' 0 paramK 1).map g).sum = ∑ j : Fin paramK, g (j : Nat) := by
+  show ((List.range' 0 3 1).map g).sum = ∑ j : Fin 3, g (j : Nat)
+  rw [Fin.sum_univ_three]
+  rw [show (List.range' 0 3 1) = [0, 1, 2] from rfl]
+  simp only [List.map_cons, List.map_nil, List.sum_cons, List.sum_nil, Fin.val_zero, Fin.val_one,
+    Fin.val_two]
+  rw [add_zero, add_assoc]
+
+/-- **ITEM (1), the `wVal` SHAPE in the REAL ring `R_q`.** The `toRqKem`-image of the executable decrypted
+`w = v − NTT⁻¹(Σᵢ ŝᵢ ∘ NTT(uᵢ))` is `toRqKem v − Σⱼ toRqKem(intt ŝⱼ) · toRqKem uⱼ` over the negacyclic
+`CommRing R_q = AdjoinRoot(X²⁵⁶+1)` — the genuine RING product, not the additive-only `phiCoeff`. The stored
+NTT-domain secret's honest-key obligation is discharged unconditionally by `ntt_intt_rightInverse`. -/
+theorem kpkeW_toRqKem (dkPke c : List UInt8) :
+    DecapsCoreSpec.toRqKem (kpkeW dkPke c)
+      = DecapsCoreSpec.toRqKem (ctDecode c).2
+        - ∑ j : Fin paramK,
+            DecapsCoreSpec.toRqKem (intt (sHatOf dkPke j)) * DecapsCoreSpec.toRqKem (uOf c j) := by
+  have hkey : ∀ i, i < paramK →
+      byteDecodeAt dCoeff dkPke.toArray (i * polyBytes dCoeff) = ntt (intt (sHatOf dkPke i)) :=
+    fun i _ => (ntt_intt_rightInverse (sHatOf dkPke i) (sHatOf_size dkPke i) (sHatOf_lt dkPke i)).symm
+  have hspec := DecapsCoreSpec.decryptW_eq_spec dkPke c (fun i => intt (sHatOf dkPke i))
+    (fun i _ => intt_size (sHatOf dkPke i) (sHatOf_size dkPke i) (sHatOf_lt dkPke i))
+    (fun i hi => uOf_size c i hi) hkey
+  unfold kpkeW
+  rw [kpkeAcc_eq_decWFold, hspec, sum_over_paramK]
+  rfl
+
+/-- **ITEM (1) DISCHARGED — the LITERAL `toRqKem (kpkeW) = μ + e_total`.** Given the abstract-model
+identifications of the executable's ciphertext ring elements (`sⱼ = toRqKem(intt ŝⱼ)`, `uⱼ = uVec`, `v = vVal`
+— the payload of items (2)/(3)/(4) + the encrypt-side algebra, over this SAME `Rq_kem`), the `toRqKem`-image of
+the executable decrypted `w` equals `μ + e_total` in `R_q`. This is the ONE step the CommRing enables:
+`kpkeW_toRqKem` gives the `wVal` shape over the negacyclic ring product; `MlKemCorrect.mlkem_decrypt_cancellation`
+(`Finset.sum_comm` over `[CommRing R]`, here at `R = Rq_kem`) collapses the double matrix sum, exhibiting the
+literal `e_total`. -/
+theorem kpkeW_toRqKem_cancellation (dkPke c : List UInt8)
+    (A : Fin paramK → Fin paramK → DecapsCoreSpec.Rq_kem)
+    (s e r e1 du : Fin paramK → DecapsCoreSpec.Rq_kem) (e2 μ dv : DecapsCoreSpec.Rq_kem)
+    (hs : ∀ j : Fin paramK, DecapsCoreSpec.toRqKem (intt (sHatOf dkPke j)) = s j)
+    (hu : ∀ j : Fin paramK, DecapsCoreSpec.toRqKem (uOf c j) = MlKemCorrect.uVec A r e1 du j)
+    (hv : DecapsCoreSpec.toRqKem (ctDecode c).2 = MlKemCorrect.vVal A s e r e2 μ dv) :
+    DecapsCoreSpec.toRqKem (kpkeW dkPke c) = μ + MlKemCorrect.eTotal s e r e1 du e2 dv := by
+  rw [kpkeW_toRqKem, hv]
+  rw [Finset.sum_congr rfl (fun j _ => by rw [hs j, hu j])]
+  exact MlKemCorrect.mlkem_decrypt_cancellation A s e r e1 du e2 μ dv
+
+/-- **NON-VACUITY of ITEM (1).** The identification hypotheses of `kpkeW_toRqKem_cancellation` are jointly
+SATISFIABLE: the degenerate abstract model `A = 0`, `r = 0`, `s := toRqKem(intt ŝ)`, `e1 := (fun j ↦ toRqKem uⱼ)`,
+`du = e2 = dv = 0`, `μ := toRqKem v` makes `uVec = e1 = toRqKem u` and `vVal = μ = toRqKem v`. So item (1) is a
+genuine implication, not vacuously true through unsatisfiable hypotheses. -/
+theorem kpkeW_toRqKem_cancellation_satisfiable (dkPke c : List UInt8) :
+    ∃ (A : Fin paramK → Fin paramK → DecapsCoreSpec.Rq_kem)
+      (s e r e1 du : Fin paramK → DecapsCoreSpec.Rq_kem) (e2 μ dv : DecapsCoreSpec.Rq_kem),
+      (∀ j : Fin paramK, DecapsCoreSpec.toRqKem (intt (sHatOf dkPke j)) = s j)
+      ∧ (∀ j : Fin paramK, DecapsCoreSpec.toRqKem (uOf c j) = MlKemCorrect.uVec A r e1 du j)
+      ∧ DecapsCoreSpec.toRqKem (ctDecode c).2 = MlKemCorrect.vVal A s e r e2 μ dv := by
+  refine ⟨fun _ _ => 0, fun j => DecapsCoreSpec.toRqKem (intt (sHatOf dkPke j)),
+    fun _ => 0, fun _ => 0, fun j => DecapsCoreSpec.toRqKem (uOf c j), fun _ => 0, 0,
+    DecapsCoreSpec.toRqKem (ctDecode c).2, 0, fun _ => rfl, ?_, ?_⟩
+  · intro j; simp only [MlKemCorrect.uVec, Finset.sum_const_zero, zero_add, zero_mul, add_zero]
+  · simp only [MlKemCorrect.vVal, MlKemCorrect.tVec, Finset.sum_const_zero, mul_zero, zero_add,
+      add_zero]
+
+/-! ### §8.9 — ITEM (3) closable core: `samplePolyCBD` structural faithfulness + the bit-extraction formula.
+
+`samplePolyCBD η B` writes to `zeroPoly` (size 256) via `set!` a `subQ`-reduced value at each index, so it is
+UNCONDITIONALLY a canonical `R_q` element (size 256, every coefficient `< q`) whose `i`-th coefficient is the
+FIPS 203 Alg 8 centered `(Σ_{j<η} bit[2iη+j]) − (Σ_{j<η} bit[2iη+η+j])` — the bit-extraction faithfulness,
+proved here. The one remaining residual is purely the DISTRIBUTIONAL tie (that this deterministic sampler
+realizes the abstract CBD(η) noise `MlKemDelta` models), which lives in the sibling `MlKemDelta` and is not
+asserted here. -/
+
+/-- The per-index write of `samplePolyCBD` (its inner `for j in [0:eta]` double accumulator, returning
+`subQ x y`), factored out verbatim so the outer `set!`-fold has an opaque value. -/
+def cbdVal (eta : Nat) (arr : Array UInt8) (i : Nat) : Nat := Id.run do
+  let mut x := 0
+  let mut y := 0
+  for j in [0:eta] do
+    x := x + MlKemSample.getBit arr (2 * i * eta + j)
+    y := y + MlKemSample.getBit arr (2 * i * eta + eta + j)
+  return MlKemRing.subQ x y
+
+/-- **The bit-extraction faithfulness**: `cbdVal` IS the FIPS 203 Alg 8 centered coefficient
+`(Σ_{j<η} bit[2iη+j]) − (Σ_{j<η} bit[2iη+η+j])` reduced into `[0,q)`. The two-accumulator inner `for`-loop is
+the pair-fold whose components are the two `Finset.range η` bit-sums (`pairFold_sum`). -/
+theorem cbdVal_eq (eta : Nat) (arr : Array UInt8) (i : Nat) :
+    cbdVal eta arr i =
+      MlKemRing.subQ (∑ j ∈ Finset.range eta, MlKemSample.getBit arr (2 * i * eta + j))
+        (∑ j ∈ Finset.range eta, MlKemSample.getBit arr (2 * i * eta + eta + j)) := by
+  unfold cbdVal
+  simp only [Id.run, Std.Legacy.Range.forIn_eq_forIn_range', bind_pure_comp, map_pure,
+    List.forIn_pure_yield_eq_foldl, Std.Legacy.Range.size, Nat.sub_zero, Nat.add_one_sub_one,
+    Nat.div_one]
+  -- the two-`let mut` inner loop desugars to a fold over `MProd Nat Nat`; each component is a `range η` bit-sum.
+  have hpair : ∀ (n : Nat),
+      List.foldl (fun (b : MProd Nat Nat) (a : Nat) =>
+          (⟨b.fst + MlKemSample.getBit arr (2 * i * eta + a),
+            b.snd + MlKemSample.getBit arr (2 * i * eta + eta + a)⟩ : MProd Nat Nat))
+          (⟨0, 0⟩ : MProd Nat Nat) (List.range' 0 n)
+        = (⟨∑ j ∈ Finset.range n, MlKemSample.getBit arr (2 * i * eta + j),
+            ∑ j ∈ Finset.range n, MlKemSample.getBit arr (2 * i * eta + eta + j)⟩ : MProd Nat Nat) := by
+    intro n
+    induction n with
+    | zero => simp
+    | succ k ih =>
+      rw [List.range'_1_concat, List.foldl_concat, ih, Nat.zero_add, Finset.sum_range_succ,
+        Finset.sum_range_succ]
+  rw [hpair eta]
+  rfl
+
+/-- `samplePolyCBD` unrolled to the indexed-`set!` fold whose per-index write value is `cbdVal`. -/
+theorem samplePolyCBD_fold (eta : Nat) (bytes : List UInt8) :
+    MlKemSample.samplePolyCBD eta bytes =
+      List.foldl (fun (out : Poly) (i : Nat) => out.set! i (cbdVal eta bytes.toArray i)) zeroPoly
+        (List.range' 0 256 1) := by
+  unfold MlKemSample.samplePolyCBD cbdVal
+  simp only [Id.run, Std.Legacy.Range.forIn_eq_forIn_range', bind_pure_comp, map_pure,
+    List.forIn_pure_yield_eq_foldl, Std.Legacy.Range.size, Nat.sub_zero, Nat.add_one_sub_one,
+    Nat.div_one]
+  rfl
+
+theorem samplePolyCBD_size (eta : Nat) (bytes : List UInt8) :
+    (MlKemSample.samplePolyCBD eta bytes).size = 256 := by
+  rw [samplePolyCBD_fold, (idxSetFold_spec (fun i => cbdVal eta bytes.toArray i) 256 zeroPoly).1]
+  simp [zeroPoly]
+
+/-- **The CBD coefficient, byte-faithful.** Coefficient `j` of `samplePolyCBD η B` is exactly the FIPS 203
+Alg 8 centered bit-difference `subQ (Σ bit) (Σ bit)` — the bit-extraction faithfulness at every index. -/
+theorem samplePolyCBD_getElem (eta : Nat) (bytes : List UInt8) (j : Nat) (hj : j < 256) :
+    (MlKemSample.samplePolyCBD eta bytes)[j]!
+      = MlKemRing.subQ (∑ i ∈ Finset.range eta, MlKemSample.getBit bytes.toArray (2 * j * eta + i))
+          (∑ i ∈ Finset.range eta, MlKemSample.getBit bytes.toArray (2 * j * eta + eta + i)) := by
+  rw [samplePolyCBD_fold,
+    (idxSetFold_spec (fun i => cbdVal eta bytes.toArray i) 256 zeroPoly).2 j hj
+      (by simp [zeroPoly]; omega),
+    cbdVal_eq]
+
+theorem samplePolyCBD_lt (eta : Nat) (bytes : List UInt8) : ∀ (p : Nat),
+    (MlKemSample.samplePolyCBD eta bytes)[p]! < q := by
+  intro p
+  by_cases hp : p < 256
+  · rw [samplePolyCBD_getElem eta bytes p hp]; exact MlKemRing.subQ_lt _ _
+  · rw [MlKemRing.getElem!_ge _ p (by rw [samplePolyCBD_size]; omega)]; unfold MlKemRing.q; omega
+
+/-- **`CbdFaithful` is INHABITED** — the CBD sampler's own output is a canonical `R_q` element realized by
+`samplePolyCBD` (reflexively), with the size + reduced + bit-extraction structural faithfulness proved. The
+distributional tie to `MlKemDelta`'s CBD law is the sole remaining (sibling-owned) residual. -/
+theorem cbdFaithful_self (eta : Nat) (bytes : List UInt8) :
+    CbdFaithful eta bytes (MlKemSample.samplePolyCBD eta bytes) :=
+  ⟨rfl, samplePolyCBD_size eta bytes, samplePolyCBD_lt eta bytes⟩
+
 /-! ## AXIOM HYGIENE — every ∀-theorem is kernel-clean (⊆ {propext, Classical.choice, Quot.sound}).
 `realDk_good` / `ekOfDk_realDk` / `emptyDk_not_good` / `roundtrip_fails_le_delta_nonvacuous` (the concrete byte
 checks) are NOT in this list: they carry the `native_decide` residual, and NOTHING above depends on them. -/
@@ -949,7 +1147,18 @@ checks) are NOT in this list: they carry the `native_decide` residual, and NOTHI
   decompressPoly_size,
   ctDecode_fst,
   uOf_size,
-  kpkeW_phi_faithful
+  kpkeW_phi_faithful,
+  kpkeAcc_eq_decWFold,
+  sum_over_paramK,
+  kpkeW_toRqKem,
+  kpkeW_toRqKem_cancellation,
+  kpkeW_toRqKem_cancellation_satisfiable,
+  cbdVal_eq,
+  samplePolyCBD_fold,
+  samplePolyCBD_size,
+  samplePolyCBD_getElem,
+  samplePolyCBD_lt,
+  cbdFaithful_self
 ]
 
 end Dregg2.Crypto.MlKemFips203FullDim
