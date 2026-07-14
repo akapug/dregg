@@ -365,11 +365,21 @@ impl FederationSink for StubNode {
 /// domain topic; the node commits it as a genuine operator turn and returns its own
 /// `turn_hash`, which [`landed`](FederationSink::landed) then checks against the node's
 /// finalized receipt log.
+/// The default per-anchor **computron fee budget** an [`HttpNode`] submit stamps. The node's
+/// executor charges the anchor's `EmitEvent` a real computron cost (≈100) and REFUSES the turn if
+/// the turn's `fee` budget is below it (`computron budget exceeded: limit=0`) — so a `fee: 0` submit
+/// never commits. This default comfortably covers a single-event anchor turn; override per-node with
+/// [`HttpNode::with_fee`]. The operator cell must hold at least this many computrons (fund it once
+/// via the node's faucet at devnet bring-up).
+#[cfg(feature = "http")]
+pub const DEFAULT_ANCHOR_FEE: u64 = 1000;
+
 #[cfg(feature = "http")]
 pub struct HttpNode {
     base_url: String,
     agent: String,
     bearer: Option<String>,
+    fee: u64,
     client: reqwest::blocking::Client,
 }
 
@@ -396,6 +406,7 @@ impl HttpNode {
             base_url: url.into().trim_end_matches('/').to_string(),
             agent: "0".repeat(64),
             bearer,
+            fee: DEFAULT_ANCHOR_FEE,
             client,
         })
     }
@@ -403,6 +414,15 @@ impl HttpNode {
     /// Override the advisory `agent` cell id (hex) the submit reports.
     pub fn with_agent(mut self, agent_hex: impl Into<String>) -> HttpNode {
         self.agent = agent_hex.into();
+        self
+    }
+
+    /// Override the per-anchor computron **fee budget** (default [`DEFAULT_ANCHOR_FEE`]). The node
+    /// charges the anchor turn a real computron cost and refuses it if `fee` is below that cost, so
+    /// this must stay above the executor's per-`EmitEvent` charge (and the operator cell must hold
+    /// at least this many computrons).
+    pub fn with_fee(mut self, fee: u64) -> HttpNode {
+        self.fee = fee;
         self
     }
 
@@ -433,7 +453,7 @@ impl FederationSink for HttpNode {
         let body = serde_json::json!({
             "agent": self.agent,
             "nonce": 0,
-            "fee": 0,
+            "fee": self.fee,
             "actions": [{
                 "method": "federation.land",
                 "effects": [{

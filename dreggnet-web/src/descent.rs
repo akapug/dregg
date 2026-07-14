@@ -42,6 +42,7 @@ use axum::{
 };
 use serde::Deserialize;
 
+use dregg_node_target::{Landed, NodeError, NodeTarget, SubmittedTurn};
 use dreggnet_offerings::daily_descent::{DAILY_DEPLOY_SEED, DailyDescent, HOARD_GOLD, daily_scene};
 use procgen_dregg::CommittedSeed;
 use spween_dregg::{
@@ -115,6 +116,17 @@ pub struct DescentState {
     /// [`submit_run`]: DescentState::submit_run
     /// [`load_from_store`]: DescentState::load_from_store
     store: Option<Arc<dyn DescentRunStore>>,
+    /// **Where a submitted run's winning turn is anchored on a real node.**
+    /// [`NodeTarget::Local`] (the default) keeps everything in-process — [`settle_run`] is a no-op
+    /// (`Ok(None)`, nothing leaves the process), so the committed tests + the node-free demo are
+    /// untouched. A [`NodeTarget::Federation`] (from [`NodeTarget::from_env`], reading
+    /// `DREGG_NODE_URL`) makes [`settle_run`] SUBMIT the run's final committed turn-hash to the
+    /// running devnet node (`POST /turn/submit`) and confirm it landed on the node's finalized log
+    /// (`GET /api/receipts`) — the adventure's turn on the node's ledger, not just in-process.
+    /// This target is used ONLY at settle time; the leaderboard's re-verification stays in-process.
+    ///
+    /// [`settle_run`]: DescentState::settle_run
+    settle_target: NodeTarget,
 }
 
 #[derive(Default)]
@@ -126,22 +138,43 @@ struct Inner {
 }
 
 impl DescentState {
-    /// A fresh surface with no days or runs, and no durable backing (the in-RAM demo path).
+    /// A fresh surface with no days or runs, and no durable backing (the in-RAM demo path). Settles
+    /// [`NodeTarget::Local`] (in-process; opt into a devnet with [`with_node_target`](Self::with_node_target)).
     pub fn new() -> Self {
         DescentState {
             inner: Mutex::new(Inner::default()),
             store: None,
+            settle_target: NodeTarget::Local,
         }
     }
 
     /// A fresh surface backed by a durable [`DescentRunStore`]. [`open_day`](Self::open_day) +
     /// [`submit_run`](Self::submit_run) persist through it; [`load_from_store`](Self::load_from_store)
-    /// reconstructs + re-verifies its rows on boot.
+    /// reconstructs + re-verifies its rows on boot. Settles [`NodeTarget::Local`] by default.
     pub fn with_store(store: Arc<dyn DescentRunStore>) -> Self {
         DescentState {
             inner: Mutex::new(Inner::default()),
             store: Some(store),
+            settle_target: NodeTarget::Local,
         }
+    }
+
+    /// **Opt this leaderboard into anchoring submitted runs on a real devnet node.** By default a
+    /// [`DescentState`] settles `Local` (a no-op; the board is entirely in-process). Pass a
+    /// [`NodeTarget::Federation`] (e.g. [`NodeTarget::from_env`], reading `DREGG_NODE_URL`) to make
+    /// a verify-gated `POST /descent/submit` ALSO [`settle_run`](Self::settle_run) — submitting the
+    /// run's final committed turn-hash to the running node's ledger and confirming it landed. The
+    /// leaderboard's re-verification is unaffected: it stays in-process replay; only the opt-in
+    /// settle touches the node.
+    pub fn with_node_target(mut self, target: NodeTarget) -> Self {
+        self.settle_target = target;
+        self
+    }
+
+    /// Whether a submitted run will actually be anchored on a devnet node (a
+    /// [`NodeTarget::Federation`] was opted in) vs. the in-process `Local` default.
+    pub fn settles_to_a_node(&self) -> bool {
+        self.settle_target.is_federation()
     }
 
     /// **Open (publish) a day's world** under `key`, drawn from `seed` — derive the byte-identical
@@ -221,6 +254,50 @@ impl DescentState {
             });
         }
         Ok(turns)
+    }
+
+    /// **Anchor a ranked run's winning turn on the devnet node** — the opt-in bridge from the
+    /// in-process board to a real committed turn on the running node's ledger. Fail-closed and
+    /// non-vacuous:
+    /// * `Local` (the default): a no-op — returns `Ok(None)`, nothing leaves the process (so the
+    ///   committed tests + the node-free demo are byte-identical).
+    /// * `Federation` (a `DREGG_NODE_URL` node): submit the run's FINAL committed turn-hash to the
+    ///   node (`POST /turn/submit`, an `EmitEvent`-of-commitment under the day's scene topic) AND
+    ///   confirm it landed on the node's finalized log (`GET /api/receipts`). `Ok(Some(Landed))`
+    ///   iff the node accepted + finalized it; `Err` (fail-closed) on a rejected / unreachable /
+    ///   non-landing submit.
+    ///
+    /// This settles only a run that is ALREADY on the board — i.e. one [`submit_run`](Self::submit_run)
+    /// re-executed to the hoard + no-cheat-verified in-process. A forged / losing / illegal run is
+    /// refused by that gate before it can rank, so it never reaches here (the node is never touched
+    /// for a cheat). The commitment is the run's last committed step's `turn_hash` (its
+    /// un-retconnable receipt-chain tip); the topic is the day's stable scene id.
+    ///
+    /// [`submit_run`]: Self::submit_run
+    pub fn settle_run(&self, day_key: &str, run_id: &str) -> Result<Option<Landed>, NodeError> {
+        let submitted = {
+            let inner = self.inner.lock().unwrap();
+            let run = inner
+                .runs
+                .get(run_id)
+                .ok_or_else(|| NodeError::Rejected(format!("no such run to settle: {run_id}")))?;
+            let day = inner.days.get(day_key).ok_or_else(|| {
+                NodeError::Rejected(format!("no such day to settle against: {day_key}"))
+            })?;
+            // The run's fingerprint = the tip of its committed receipt chain (its last landed step,
+            // else genesis). The topic = the day's stable scene id (`daily-descent-{sid}`).
+            let commitment = run
+                .play
+                .steps
+                .last()
+                .map(|s| s.receipt.turn_hash)
+                .unwrap_or(run.play.genesis.turn_hash);
+            let domain = day.scene.meta.id.to_string();
+            SubmittedTurn::new(domain, commitment)
+        };
+        // Route through the opted-in target: Local = Ok(None) no-op; Federation = submit + confirm
+        // landed on the node's finalized log (fail-closed on rejection / unreachable / non-landing).
+        self.settle_target.route(&submitted)
     }
 
     /// Re-record + re-verify a move sequence against the day's published universe, and — only if it
@@ -424,16 +501,45 @@ async fn post_submit(
         body.class,
         &body.moves,
     ) {
-        Ok(turns) => (
-            StatusCode::OK,
-            Json(serde_json::json!({
+        Ok(turns) => {
+            // The run ranks in-process. If a devnet is opted in (`DREGG_NODE_URL`), ALSO anchor its
+            // winning turn on the running node's ledger — a real committed turn on-chain, confirmed
+            // landed. The blocking node submit runs off the async worker via `spawn_blocking`. Local
+            // mode is a no-op (`Ok(None)`), so this branch's shape is unchanged for the demo/tests.
+            let mut resp = serde_json::json!({
                 "ranked": true,
                 "run_id": run_id,
                 "turns": turns,
                 "share": run_share_path(&run_id),
                 "detail": "re-executed + no-cheat-verified; the run now ranks on the board",
-            })),
-        ),
+            });
+            if state.settles_to_a_node() {
+                let st = state.clone();
+                let day2 = day.clone();
+                let rid = run_id.clone();
+                let settled = tokio::task::spawn_blocking(move || st.settle_run(&day2, &rid))
+                    .await
+                    .unwrap_or_else(|e| {
+                        Err(NodeError::Transport(format!("settle task join: {e}")))
+                    });
+                match settled {
+                    Ok(Some(landed)) => {
+                        resp["settled"] = serde_json::json!(true);
+                        resp["node_turn_hash"] = serde_json::json!(hex32(&landed.node_turn_hash));
+                        resp["detail"] = serde_json::json!(
+                            "re-executed + no-cheat-verified; ranked AND anchored on the devnet node's ledger"
+                        );
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        // The run still ranks in-process; the on-chain anchor failed (fail-closed).
+                        resp["settled"] = serde_json::json!(false);
+                        resp["settle_error"] = serde_json::json!(e.to_string());
+                    }
+                }
+            }
+            (StatusCode::OK, Json(resp))
+        }
         // Fail-closed: a forged / losing / illegal run is refused before it can rank.
         Err(why) => (
             StatusCode::BAD_REQUEST,

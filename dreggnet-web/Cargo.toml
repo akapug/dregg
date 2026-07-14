@@ -72,6 +72,17 @@ serde_json = "1"
 # a stable DreggIdentity via blake3) + a deterministic session seed from a session id.
 blake3 = "1"
 
+# THE FEDERATION NODE-TARGET SEAM — `NodeTarget::{Local, Federation}` + `from_env` (reads
+# `DREGG_NODE_URL`) + the real `http` transport (`HttpNode`, POSTs a turn to `/turn/submit` +
+# confirms it landed on `/api/receipts`). Enabled with `features = ["http"]` so the Federation
+# path COMPILES from the web surface and is selectable AT RUNTIME by the `DREGG_NODE_URL` env
+# (unset → `NodeTarget::Local`, the in-process default: the committed tests + demo are untouched).
+# This is what makes the games/adventure RUNNABLE AGAINST A DEVNET: with `DREGG_NODE_URL` set, a
+# settled Descent run submits its winning turn's commitment to the running node and lands on its
+# ledger. `dreggnet-offerings` also depends on this crate (for `DailyDescentOffering::settle`);
+# enabling `http` here unifies the feature across the whole `dreggnet-web` build.
+dregg-node-target = { path = "../node-target", features = ["http"] }
+
 # DURABLE PERSISTENCE for the no-cheat Descent leaderboard (`descent_store`). rusqlite — NOT sqlx —
 # deliberately: `dreggnet-web` is a ROOT-workspace member, and the workspace already links `sqlite3`
 # once (via deos-matrix's `rusqlite 0.37` -> `libsqlite3-sys 0.35`). Cargo permits exactly ONE

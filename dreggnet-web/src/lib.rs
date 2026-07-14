@@ -1274,10 +1274,14 @@ pub fn build_demo_descent(
         first.choice_index = GATE_RECKLESS;
     }
 
-    let state = match store {
-        Some(s) => Arc::new(DescentState::with_store(s)),
-        None => Arc::new(DescentState::new()),
+    let base = match store {
+        Some(s) => DescentState::with_store(s),
+        None => DescentState::new(),
     };
+    // THE DEVNET SWITCH: `DREGG_NODE_URL` set → anchor submitted runs on that running node's ledger
+    // (a real committed turn on-chain); unset → `NodeTarget::Local` (the in-process default — the
+    // committed tests + node-free demo are byte-identical). See [`resolve_node_target`].
+    let state = Arc::new(base.with_node_target(resolve_node_target()));
     // Reconstruct + re-verify anything persisted from a previous run (a no-op with no store).
     state.load_from_store();
     // The demo day + the honest winner (idempotent; verify-gated + persisted with a store).
@@ -1395,6 +1399,32 @@ pub fn resolve_demo_descent() -> Arc<DescentState> {
             }
         },
         _ => demo_descent_state(),
+    }
+}
+
+/// **Resolve the games' node target from the environment** — the devnet switch. With `DREGG_NODE_URL`
+/// set (non-empty), returns a [`NodeTarget::Federation`] over the real HTTP transport at that URL, so
+/// a submitted Descent run is anchored on the running node's ledger (a real committed turn on-chain,
+/// confirmed landed); optionally `DREGG_NODE_BEARER` supplies the node's API bearer token (needed only
+/// when the node has a passphrase set — a loopback devnet needs none). Unset → [`NodeTarget::Local`],
+/// the in-process default (the committed tests + node-free demo are untouched). A malformed value
+/// (e.g. the `http` transport missing) logs + FALLS BACK to Local rather than refusing to boot.
+pub fn resolve_node_target() -> dregg_node_target::NodeTarget {
+    use dregg_node_target::NodeTarget;
+    match NodeTarget::from_env() {
+        Ok(t) => {
+            if t.is_federation() {
+                tracing::info!(
+                    url = %std::env::var(dregg_node_target::NODE_URL_ENV).unwrap_or_default(),
+                    "games node target: Federation — submitted runs anchor on the devnet node"
+                );
+            }
+            t
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "DREGG_NODE_URL set but node target could not be built — falling back to in-process Local");
+            NodeTarget::Local
+        }
     }
 }
 
