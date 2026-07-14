@@ -46,13 +46,31 @@ const PORT = process.env.PORT || 8781;
 // Bind address. Default localhost-only (nothing off-box reaches it). Set
 // DREX_BIND to the hbox LAN IP (192.168.50.39) to let ember reach it from
 // their Mac over the LAN — still PRIVATE: hbox's ufw is default-deny inbound
-// with the LAN allowed, so a LAN bind is reachable-to-ember, not public. We
-// REFUSE 0.0.0.0 / :: (an all-interfaces bind is public) — a LAN dogfood is a
-// specific-interface bind, never the wildcard.
+// with the LAN allowed, so a LAN bind is reachable-to-ember, not public.
+//
+// An all-interfaces bind (0.0.0.0 / ::) is PUBLIC unless a host firewall gates
+// the port, so we REFUSE it by default. But to reach the app from BOTH the hbox
+// LAN (192.168.50.39) AND the tailscale mesh (100.95.240.73 / hbox-dregg) with a
+// single listener, an all-interfaces bind is required — a specific-interface
+// bind can only cover ONE of the two. That is safe ONLY behind a default-deny
+// firewall that allows just the LAN + tailscale0 in front of the port. hbox is
+// exactly that (ufw: default-deny inbound, allow 192.168.50.0/24 + SSH +
+// tailscale0 — so :8781 is reachable over the LAN and the tailnet, never the
+// public internet). Require an explicit opt-in (DREX_ALLOW_WILDCARD=1) so the
+// guard stays meaningful on any box that is NOT firewalled — the same
+// assert-you-vetted-it shape as the node's DREGG_ALLOW_UNVERIFIED_CONSENSUS.
 const HOST = process.env.DREX_BIND || '127.0.0.1';
-if (HOST === '0.0.0.0' || HOST === '::' || HOST === '*') {
-  console.error(`refusing to bind ${HOST} (public/all-interfaces). Set DREX_BIND to 127.0.0.1 or the LAN IP 192.168.50.39.`);
+const WILDCARD = HOST === '0.0.0.0' || HOST === '::' || HOST === '*';
+if (WILDCARD && process.env.DREX_ALLOW_WILDCARD !== '1') {
+  console.error(`refusing to bind ${HOST} (all-interfaces = public UNLESS a host firewall gates :${PORT}).`);
+  console.error(`  LAN-only dogfood: set DREX_BIND to 127.0.0.1 or the LAN IP 192.168.50.39.`);
+  console.error(`  LAN + tailscale reach from a firewalled box (hbox: ufw default-deny + allow`);
+  console.error(`  LAN/SSH/tailscale0): set DREX_ALLOW_WILDCARD=1 — ONLY after confirming`);
+  console.error(`  \`ufw status\` shows no public ALLOW on :${PORT} (LAN + tailscale0 only).`);
   process.exit(1);
+}
+if (WILDCARD) {
+  console.log(`binding ${HOST} (all-interfaces) with DREX_ALLOW_WILDCARD=1 — the host firewall gates :${PORT} to the LAN + tailscale only.`);
 }
 
 // The live dregg node the settlement lands on. Default: a local single-node dev

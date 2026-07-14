@@ -59,12 +59,25 @@ Manage it with [`scripts/private-node.sh`](../../scripts/private-node.sh).
 
 ---
 
-## The clickable DrEX (private LAN dogfood) — for ember
+## The clickable DrEX (private dogfood, LAN + tailscale) — for ember
 
-`drex-web` is stood up on hbox, LAN-bound, pointed at this private node. Open it
-from your Mac (192.168.50.130) over the LAN:
+`drex-web` is stood up on hbox, pointed at this private node, reachable over the
+**LAN and the tailscale mesh**. Open it from **anywhere on the tailnet**:
 
-> **http://192.168.50.39:8781**
+> **http://hbox-dregg:8781**  (tailscale MagicDNS)
+> **http://100.95.240.73:8781**  (hbox's tailscale IP — works even before MagicDNS resolves the name)
+> **http://192.168.50.39:8781**  (from the hbox LAN)
+
+> MagicDNS note: if `hbox-dregg` does not resolve yet on your Mac, use the
+> tailscale IP `http://100.95.240.73:8781` — it always works. The name is a
+> client-side DNS-map refresh (the record exists tailnet-wide); hbox binds all
+> tailscale addresses, so the name resolves to the same live server the instant
+> your tailscaled refreshes.
+
+The **wallet wasm now loads** (the 50 MB `extension/dregg_wasm_bg.wasm` is
+served at `/wasm/dregg_wasm_bg.wasm` with `Content-Type: application/wasm`) — the
+`wallet: wasm load failed` banner is gone and the header reads `wallet: Dragon's
+Egg Cipherclerk · ready`.
 
 What to do: click **Place sealed order** → approve the nonce-bound order card in
 the cipherclerk popup (real wasm sign + solvency/eligibility proofs) → **Advance
@@ -91,30 +104,52 @@ node HEAD — the per-index `setFieldVmDescriptor2` cohort selector binds
 ambiguously and the prover rejects its own proof; settling as value *moved* both
 proves and models the clearing faithfully.)
 
-**Private + safe:** `drex-web` binds `LISTEN 192.168.50.39:8781` — the LAN
-interface, **never `0.0.0.0`** (`serve.mjs` refuses a wildcard/`0.0.0.0` bind).
-hbox's ufw is default-deny inbound with the LAN allowed, so the LAN bind is
-reachable to your Mac but **not public**. This changed no ufw rule, opened no
-public port, and left the node (`127.0.0.1:8420`) and `dreggcloud` (`:8787`)
-untouched.
+**Private + safe:** `drex-web` binds `LISTEN 0.0.0.0:8781` **gated by ufw** — an
+all-interfaces bind is safe here *only because* hbox's firewall fronts it:
+default-deny inbound, ALLOW just `192.168.50.0/24` (LAN) + SSH + `tailscale0`
+(the tailscale mesh). So :8781 is reachable over the **LAN and the tailnet**,
+but the public internet is **denied** (`ufw status`: no public ALLOW on :8781).
+`serve.mjs` still **refuses `0.0.0.0` by default**; the wildcard bind requires an
+explicit `DREX_ALLOW_WILDCARD=1` opt-in (assert-you-vetted-the-firewall, the same
+shape as the node's `DREGG_ALLOW_UNVERIFIED_CONSENSUS`). This changed **no** ufw
+rule, opened **no** public port, and left the node (`127.0.0.1:8420`) and
+`dreggcloud` (`:8787`) untouched.
+
+**The wallet wasm asset (the thing that was missing):** `extension/dregg_wasm_bg.wasm`
+is **50 MB and gitignored** (`*.wasm`), so a git-filtered rsync/`hbuild` of the
+lane does **not** carry it — the lane arrives with `dregg_wasm.js` but no `.wasm`,
+`serve.mjs` 404s `/wasm/dregg_wasm_bg.wasm`, and the app shows `wallet: wasm load
+failed`. Sync it **explicitly** (it is byte-identical to the extension's):
+
+```bash
+# from the Mac — carry the gitignored 50 MB wasm into the hbox lane
+rsync -av extension/dregg_wasm_bg.wasm hbox:~/dregg-build/privnode/extension/
+# confirm it serves: 200 · application/wasm · ~50 MB
+curl -s -o /dev/null -w "%{http_code} %{content_type} %{size_download}\n" \
+  http://100.95.240.73:8781/wasm/dregg_wasm_bg.wasm     # → 200 application/wasm 50256008
+```
 
 **Manage it (on hbox):**
 
 ```bash
-# start (LAN-bound, pointed at the private node) — runs in a detached tmux session
+# start (LAN + tailscale, pointed at the private node) — detached tmux session.
+# DREX_BIND=0.0.0.0 + DREX_ALLOW_WILDCARD=1: all-interfaces, GATED by ufw
+# (default-deny + allow LAN/SSH/tailscale0 → LAN + tailnet only, never public).
 tmux new-session -d -s drexweb \
   "cd ~/dregg-build/privnode && DREGG_NODE=http://127.0.0.1:8420 \
-   DREX_BIND=192.168.50.39 PORT=8781 node drex-web/serve.mjs \
+   DREX_BIND=0.0.0.0 DREX_ALLOW_WILDCARD=1 PORT=8781 node drex-web/serve.mjs \
    2>&1 | tee ~/dregg-priv/drex-web.log"
 
 tmux ls                       # is it running?
-ss -tlnp | grep 8781          # LISTEN 192.168.50.39:8781 (not 0.0.0.0)
+ss -tlnp | grep 8781          # LISTEN 0.0.0.0:8781 (gated by ufw to LAN + tailscale0)
 tail -f ~/dregg-priv/drex-web.log
 tmux kill-session -t drexweb  # stop it
 ```
 
 `serve.mjs` env: `DREX_BIND` (bind address; `127.0.0.1` default, `192.168.50.39`
-for LAN — `0.0.0.0`/`::` refused), `PORT` (8781), `DREGG_NODE`
+for LAN-only, `0.0.0.0` for LAN + tailscale — but `0.0.0.0`/`::` is refused
+unless `DREX_ALLOW_WILDCARD=1`), `DREX_ALLOW_WILDCARD` (opt-in for the
+firewall-gated wildcard bind), `PORT` (8781), `DREGG_NODE`
 (`http://127.0.0.1:8420`). The real matcher runs from the locally-built
 `target/release/drex_clear`.
 
