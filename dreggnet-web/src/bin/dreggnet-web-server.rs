@@ -8,15 +8,18 @@
 //!
 //! ## Configuration
 //! - bind address: `--bind <addr>` flag, else `DREGGNET_WEB_BIND` env, else `127.0.0.1:8787`;
+//! - persistence: `DATABASE_URL` env (a sqlite path / `sqlite:` url) makes the Descent leaderboard
+//!   durable — submitted runs survive a restart, re-verified by replay on boot; unset → in-RAM;
 //! - log level: the standard `RUST_LOG` env (`tracing_subscriber` env-filter), default `info`.
 //!
 //! ## Honest scope (the deploy scout's Phase-0)
 //! DEMO-READY here: the standalone web server — the games, the do-once feature surfaces, and the
-//! no-cheat-by-REPLAY Descent leaderboard + stranger-run verify, all node-free (verification is
-//! in-process re-execution). NAMED, not built here: sqlite persistence (state is in-RAM /
-//! ephemeral — a restart drops sessions + runs); a fronting Caddy for TLS / rate-limit / CORS
-//! (ops, external); an HTTP run-ingest endpoint (the board is seeded in-process); the unsigned
-//! `dregg_user` cookie for identity (auth). See [`dreggnet_web::make_app`].
+//! no-cheat-by-REPLAY Descent leaderboard + stranger-run verify + an HTTP run-ingest
+//! (`POST /descent/submit`), all node-free (verification is in-process re-execution). The Descent
+//! leaderboard is DURABLE over sqlite (`DATABASE_URL`), re-verified on boot. STILL EPHEMERAL: the
+//! live game sessions (a restart drops in-progress sessions). NAMED (ops / ember-gated): a fronting
+//! Caddy for TLS / rate-limit / CORS (external); the unsigned `dregg_user` cookie for identity
+//! (auth). See [`dreggnet_web::make_app`].
 
 use std::net::SocketAddr;
 

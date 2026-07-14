@@ -50,6 +50,10 @@
 /// (`GET /descent/leaderboard`) + a run-card that re-executes the recorded run to PASS/FAIL
 /// (`GET /descent/run/{id}`). Additive; see [`descent::descent_router`].
 pub mod descent;
+/// The durable sqlite (rusqlite) backing for the Descent no-cheat leaderboard: persist a run's
+/// reproducible public input (the day seed + the move sequence), re-verified by REPLAY on boot so
+/// the board survives restart and a tampered row cannot resurrect a cheat. See [`descent_store`].
+pub mod descent_store;
 /// The seat-claiming adapter that makes `dregg-multiway-tug` playable by real frontend users (a web
 /// identity is a derived key, never the game's canonical seat string). See [`seated::SeatedTug`].
 pub mod seated;
@@ -1194,13 +1198,20 @@ fn catalog_missing_offering(key: &str) -> String {
 // Node-free by construction: every surface verifies by REPLAY re-execution in-process (the
 // offering's own `verify`, the Descent's `verify_completion`) — no testnet, no 45-min prover.
 //
-// NAMED (per the deploy scout's Phase-0), deliberately not built here:
-//  * PERSISTENCE — sessions + descent runs are in-RAM (ephemeral): a restart drops them. A
-//    minimal sqlite mirror (the bot's `SqliteGalleryStore` shape) is the next resolution step.
+// NOW BUILT (this crate, additive):
+//  * PERSISTENCE — the Descent leaderboard is durable over sqlite (`descent_store`, rusqlite):
+//    with a `DATABASE_URL` set, submitted runs survive a restart, re-verified by REPLAY on boot
+//    (`DescentState::load_from_store`) so a tampered row is dropped and cannot resurrect a cheat.
+//    Unset → the in-RAM seeded demo (the committed tests' path). STILL EPHEMERAL: the live game
+//    SESSIONS (`WebState` / the catalog `OfferingHost`) — a restart drops in-progress sessions;
+//    what is durable is the leaderboard (the shareable, re-verifiable growth artifact).
+//  * An HTTP run-INGEST endpoint — `POST /descent/submit` (see `descent::post_submit`): a stranger
+//    submits a run's reproducible input (day + player + move sequence); it is re-executed +
+//    no-cheat-verified before it can rank (an honest run ingested + persisted, a forged run 4xx).
+//
+// NAMED (ops / ember-gated), deliberately not built here:
 //  * TLS / rate-limit / CORS — a fronting Caddy (ops, external; `demo.dregg.net` terminates TLS
 //    there and reverse-proxies to this bind).
-//  * An HTTP run-INGEST endpoint — the Descent leaderboard is seeded in-process here (a demo
-//    winner + an excluded forgery); a real deployment POSTs recorded runs to an ingest route.
 //  * AUTH — the web identity is the unsigned `dregg_user` cookie / `?user=` (a derived key, not
 //    a signed credential); a real deployment derives a per-user Ed25519 key as the bot does.
 // ═════════════════════════════════════════════════════════════════════════════════════════
@@ -1223,51 +1234,39 @@ pub fn demo_host() -> OfferingHost {
 /// the forgery's run-card shows FAIL (`GET /descent/run/demo-forgery`). This is the growth artifact
 /// a stranger opens and independently re-verifies — node-free, by replay.
 pub fn demo_descent_state() -> Arc<DescentState> {
+    build_demo_descent(None)
+}
+
+/// **Build the seeded demo Descent state**, optionally over a durable [`DescentRunStore`]. When a
+/// store is given: first [`load_from_store`](DescentState::load_from_store) reconstructs +
+/// re-verifies whatever survived a previous run (so real submitted runs SURVIVE a restart), then the
+/// demo day + honest winner are (idempotently) opened + submitted THROUGH the verify-gate
+/// ([`submit_run`](DescentState::submit_run), which also persists). The forged run is ingested RAW
+/// (in-RAM only, never persisted — it is a teaching artifact whose run-card shows FAIL by
+/// re-execution; it would never survive the verify-gate anyway).
+///
+/// [`DescentRunStore`]: descent_store::DescentRunStore
+pub fn build_demo_descent(
+    store: Option<Arc<dyn descent_store::DescentRunStore>>,
+) -> Arc<DescentState> {
     use dreggnet_offerings::DreggIdentity;
     use dreggnet_offerings::character::InMemoryCharacterStore;
-    use dreggnet_offerings::daily_descent::{
-        CORRIDOR_ON, DailyDescentOffering, DailyRun, GATE_HEAL, GATE_MEASURED, GATE_PRESS,
-        GATE_RECKLESS, HOARD_FORCE, HOARD_SEIZE, KEY_TAKE,
-    };
+    use dreggnet_offerings::daily_descent::{DailyDescentOffering, GATE_RECKLESS};
     use procgen_dregg::daily_seed;
-
-    // Drive a careful winning line to the hoard (works for any beacon-drawn warden HP / depth) —
-    // the same shape `dreggnet-offerings`' own driven board test uses.
-    fn drive_win(off: &DailyDescentOffering<InMemoryCharacterStore>, run: &mut DailyRun) {
-        for _ in 0..64 {
-            let Some(room) = run.current_room() else {
-                break;
-            };
-            let ci = match room.as_str() {
-                "gate" => {
-                    if run.read_var("warden_hp") == 0 {
-                        GATE_PRESS
-                    } else if run.read_var("hp") >= 16 {
-                        GATE_MEASURED
-                    } else {
-                        GATE_HEAL
-                    }
-                }
-                "keyroom" => KEY_TAKE,
-                "hoardgate" => HOARD_FORCE,
-                "hoard" => HOARD_SEIZE,
-                r if r.starts_with("corridor") => CORRIDOR_ON,
-                _ => break,
-            };
-            if !off.advance(run, ci).landed() {
-                break;
-            }
-        }
-    }
 
     // warden HP 45 (no field-dressing needed) -> a replay-clean honest win.
     let seed = daily_seed(&[3; 32]);
+    let (win_moves, win_level, win_class) = demo_win();
     let off = DailyDescentOffering::new(InMemoryCharacterStore::new());
     let mut win = off
         .open_from_seed(DreggIdentity("ember".to_string()), seed)
         .expect("today's descent opens");
-    drive_win(&off, &mut win);
-
+    // Re-drive the recorded winning playthrough (for the forged-run teaching artifact below).
+    for &ci in &win_moves {
+        if !off.advance(&mut win, ci).landed() {
+            break;
+        }
+    }
     // A FORGED run — swap the opening measured blow for a reckless one; the recorded chain no
     // longer replays, so it is excluded from the board and its run-card shows FAIL.
     let mut forged = win.playthrough();
@@ -1275,18 +1274,73 @@ pub fn demo_descent_state() -> Arc<DescentState> {
         first.choice_index = GATE_RECKLESS;
     }
 
-    let state = Arc::new(DescentState::new());
+    let state = match store {
+        Some(s) => Arc::new(DescentState::with_store(s)),
+        None => Arc::new(DescentState::new()),
+    };
+    // Reconstruct + re-verify anything persisted from a previous run (a no-op with no store).
+    state.load_from_store();
+    // The demo day + the honest winner (idempotent; verify-gated + persisted with a store).
     state.open_day("today", seed);
-    state.ingest_run(
+    let _ = state.submit_run(
         "today",
         "demo-ember",
         "ember",
-        win.character().level(),
-        win.character().class(),
-        win.playthrough(),
+        win_level,
+        win_class,
+        &win_moves,
     );
+    // The forged run — ingested RAW (in-RAM only) so its run-card demonstrates FAIL by re-execution.
     state.ingest_run("today", "demo-forgery", "a-forger", 1, 0, forged);
     state
+}
+
+/// **Drive the honest demo winning line** — the choice-index sequence that provably reaches the
+/// hoard on the demo day (`daily_seed(&[3; 32])`), plus the winner's character level + class. The
+/// same careful line `dreggnet-offerings`' own driven board test uses (works for any beacon-drawn
+/// warden HP / depth). Exposed so the demo state and the persistence/ingest tests share ONE source
+/// of the winning moves.
+pub fn demo_win() -> (Vec<usize>, u64, u64) {
+    use dreggnet_offerings::DreggIdentity;
+    use dreggnet_offerings::character::InMemoryCharacterStore;
+    use dreggnet_offerings::daily_descent::{
+        CORRIDOR_ON, DailyDescentOffering, GATE_HEAL, GATE_MEASURED, GATE_PRESS, HOARD_FORCE,
+        HOARD_SEIZE, KEY_TAKE,
+    };
+    use procgen_dregg::daily_seed;
+
+    let seed = daily_seed(&[3; 32]);
+    let off = DailyDescentOffering::new(InMemoryCharacterStore::new());
+    let mut run = off
+        .open_from_seed(DreggIdentity("ember".to_string()), seed)
+        .expect("today's descent opens");
+    let mut moves = Vec::new();
+    for _ in 0..64 {
+        let Some(room) = run.current_room() else {
+            break;
+        };
+        let ci = match room.as_str() {
+            "gate" => {
+                if run.read_var("warden_hp") == 0 {
+                    GATE_PRESS
+                } else if run.read_var("hp") >= 16 {
+                    GATE_MEASURED
+                } else {
+                    GATE_HEAL
+                }
+            }
+            "keyroom" => KEY_TAKE,
+            "hoardgate" => HOARD_FORCE,
+            "hoard" => HOARD_SEIZE,
+            r if r.starts_with("corridor") => CORRIDOR_ON,
+            _ => break,
+        };
+        if !off.advance(&mut run, ci).landed() {
+            break;
+        }
+        moves.push(ci);
+    }
+    (moves, run.character().level(), run.character().class())
 }
 
 /// **Assemble the merged public-demo app** — the ONE `Router<()>` the server bin serves. Merges,
@@ -1299,10 +1353,22 @@ pub fn demo_descent_state() -> Arc<DescentState> {
 ///   (`/descent/leaderboard`, `/descent/run/{id}`).
 ///
 /// Factored out of the bin so it is drivable in tests with no real network (axum `oneshot`).
+///
+/// **Persistence.** The Descent leaderboard is durable when a `DATABASE_URL` is set (a sqlite path
+/// / `sqlite:` url; see [`resolve_demo_descent`]): submitted runs survive a restart, re-verified by
+/// replay on boot. With `DATABASE_URL` unset (the committed tests' path) the board is the in-RAM
+/// seeded demo — nothing persists, so the existing suite is unaffected. To serve a specific
+/// pre-built descent state (e.g. a test's sqlite store), use [`make_app_with_descent`].
 pub fn make_app() -> Router {
+    make_app_with_descent(resolve_demo_descent())
+}
+
+/// [`make_app`] over a caller-supplied [`DescentState`] (the games + catalog + single-offering
+/// surfaces are unchanged). Lets a deployment / a test wire its own — durable or in-RAM — Descent
+/// board while reusing the whole merged app.
+pub fn make_app_with_descent(descent: Arc<DescentState>) -> Router {
     let web = Arc::new(WebState::new());
     let catalog = Arc::new(CatalogState::with_host(demo_host));
-    let descent = demo_descent_state();
 
     Router::new()
         .route("/", get(index))
@@ -1310,6 +1376,26 @@ pub fn make_app() -> Router {
         .merge(router(web))
         .merge(catalog_router(catalog))
         .merge(descent_router(descent))
+}
+
+/// Resolve the demo Descent state from the environment: with `DATABASE_URL` set (non-empty), open a
+/// durable sqlite ([`descent_store::SqliteDescentRunStore`]) board — reconstructed + re-verified on
+/// boot, so submitted runs survive a restart; a bad `DATABASE_URL` FALLS BACK to the in-RAM demo
+/// (logged) rather than failing to boot. Unset → the in-RAM seeded demo (the committed tests' path).
+pub fn resolve_demo_descent() -> Arc<DescentState> {
+    match std::env::var("DATABASE_URL") {
+        Ok(url) if !url.is_empty() => match descent_store::SqliteDescentRunStore::open(&url) {
+            Ok(store) => {
+                tracing::info!(%url, "Descent leaderboard: durable sqlite store");
+                build_demo_descent(Some(Arc::new(store)))
+            }
+            Err(e) => {
+                tracing::warn!(%url, error = %e, "could not open DATABASE_URL — falling back to in-RAM demo board");
+                demo_descent_state()
+            }
+        },
+        _ => demo_descent_state(),
+    }
 }
 
 /// `GET /health` — a liveness probe. 200 `{"status":"ok"}`; the fronting Caddy / an uptime check

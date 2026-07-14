@@ -6875,6 +6875,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "dreggnet-prove-service"
+version = "0.1.0"
+dependencies = [
+ "dregg-automatafl",
+ "dregg-circuit",
+ "dregg-circuit-prove",
+ "dregg-lightclient",
+ "dregg-multiway-tug",
+ "dreggnet-game-board",
+ "tracing",
+]
+
+[[package]]
 name = "dreggnet-quest"
 version = "0.1.0"
 dependencies = [
@@ -7012,6 +7025,7 @@ dependencies = [
  "dreggnet-surfaces",
  "dungeon-on-dregg",
  "procgen-dregg",
+ "rusqlite",
  "serde",
  "serde_json",
  "spween-dregg",

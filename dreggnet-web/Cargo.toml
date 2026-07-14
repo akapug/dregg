@@ -72,6 +72,17 @@ serde_json = "1"
 # a stable DreggIdentity via blake3) + a deterministic session seed from a session id.
 blake3 = "1"
 
+# DURABLE PERSISTENCE for the no-cheat Descent leaderboard (`descent_store`). rusqlite — NOT sqlx —
+# deliberately: `dreggnet-web` is a ROOT-workspace member, and the workspace already links `sqlite3`
+# once (via deos-matrix's `rusqlite 0.37` -> `libsqlite3-sys 0.35`). Cargo permits exactly ONE
+# `links = "sqlite3"` per resolve, so sqlx's own `libsqlite3-sys 0.30` would break the whole-workspace
+# resolution (see the root Cargo.toml note on why discord-bot is an EXCLUDED workspace). Depending on
+# the SAME `rusqlite 0.37` unifies onto the existing linker (zero new `links` packages) and — being
+# synchronous — needs no sync<->async bridge. `bundled` compiles sqlite from source (self-contained,
+# no system libsqlite3 needed). The store persists ONLY reproducible public input (a day seed + a
+# run's move sequence), re-verified by replay on boot — the same shape as the bot's SqliteGalleryStore.
+rusqlite = { version = "0.37", features = ["bundled"] }
+
 # THE SERVER BINARY (`src/bin/dreggnet-web-server.rs`) — the public-demo unblocker. The async
 # runtime for `axum::serve` (`net` = the TcpListener bind, `signal` = ctrl-c graceful shutdown).
 # The library stays runtime-agnostic; only the bin drives the runtime.

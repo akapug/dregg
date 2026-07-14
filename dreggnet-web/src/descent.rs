@@ -34,10 +34,11 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 
 use axum::{
-    Router,
+    Json, Router,
     extract::{Path, Query, State},
+    http::StatusCode,
     response::Html,
-    routing::get,
+    routing::{get, post},
 };
 use serde::Deserialize;
 
@@ -46,8 +47,9 @@ use procgen_dregg::CommittedSeed;
 use spween_dregg::{
     PASSAGE_ENDED, PASSAGE_SLOT, Playthrough, Scene, WorldCell, compile_scene, parse, verify,
 };
-use ugc_dregg::{Completion, Universe, verify_completion};
+use ugc_dregg::{Completion, Universe, record_playthrough, verify_completion};
 
+use crate::descent_store::{DescentRunStore, StoredDay, StoredRun};
 use crate::{STYLE, esc};
 
 /// The author label the day's world is published under (a stable content-address input; the daily
@@ -104,6 +106,15 @@ struct Run {
 /// catalog's [`HostThread`](crate::HostThread) — it lives directly in the `Arc`.
 pub struct DescentState {
     inner: Mutex<Inner>,
+    /// The durable backing (sqlite / in-memory), when a deployment supplies one. `None` = the
+    /// in-RAM demo (the committed tests' path — nothing persists). When present, [`open_day`] +
+    /// [`submit_run`] persist the reproducible public input, and [`load_from_store`] reconstructs +
+    /// re-verifies it on boot.
+    ///
+    /// [`open_day`]: DescentState::open_day
+    /// [`submit_run`]: DescentState::submit_run
+    /// [`load_from_store`]: DescentState::load_from_store
+    store: Option<Arc<dyn DescentRunStore>>,
 }
 
 #[derive(Default)]
@@ -115,47 +126,181 @@ struct Inner {
 }
 
 impl DescentState {
-    /// A fresh surface with no days or runs.
+    /// A fresh surface with no days or runs, and no durable backing (the in-RAM demo path).
     pub fn new() -> Self {
         DescentState {
             inner: Mutex::new(Inner::default()),
+            store: None,
+        }
+    }
+
+    /// A fresh surface backed by a durable [`DescentRunStore`]. [`open_day`](Self::open_day) +
+    /// [`submit_run`](Self::submit_run) persist through it; [`load_from_store`](Self::load_from_store)
+    /// reconstructs + re-verifies its rows on boot.
+    pub fn with_store(store: Arc<dyn DescentRunStore>) -> Self {
+        DescentState {
+            inner: Mutex::new(Inner::default()),
+            store: Some(store),
         }
     }
 
     /// **Open (publish) a day's world** under `key`, drawn from `seed` — derive the byte-identical
     /// daily world everyone else derives, parse + compile its scene, and publish its content-addressed
     /// [`Universe`] (the no-cheat re-verification target). The first day opened becomes the default
-    /// "today". Idempotent per key.
+    /// "today". Idempotent per key: **a day already open is left untouched** (its recorded runs are
+    /// preserved), so a reload-then-reseed ordering never wipes the board. When a durable store is
+    /// present, the day's reproducible descriptor (its committed seed) is persisted.
     pub fn open_day(&self, key: &str, seed: CommittedSeed) {
-        let day = daily_scene(&seed);
-        let scene = parse(&day.source, "daily-descent.scene").expect("the day's scene parses");
-        let var_slots = compile_scene(&scene)
-            .map(|c| c.var_slots)
-            .unwrap_or_default();
-        let universe = day
-            .universe(DAY_AUTHOR)
-            .expect("the day's world publishes as a universe");
-        let mut inner = self.inner.lock().unwrap();
-        inner.days.insert(
-            key.to_string(),
-            Day {
+        {
+            let mut inner = self.inner.lock().unwrap();
+            if inner.days.contains_key(key) {
+                if inner.today.is_none() {
+                    inner.today = Some(key.to_string());
+                }
+                return;
+            }
+            let day = daily_scene(&seed);
+            let scene = parse(&day.source, "daily-descent.scene").expect("the day's scene parses");
+            let var_slots = compile_scene(&scene)
+                .map(|c| c.var_slots)
+                .unwrap_or_default();
+            let universe = day
+                .universe(DAY_AUTHOR)
+                .expect("the day's world publishes as a universe");
+            inner.days.insert(
+                key.to_string(),
+                Day {
+                    key: key.to_string(),
+                    seed,
+                    day,
+                    scene,
+                    universe,
+                    var_slots,
+                    run_ids: Vec::new(),
+                },
+            );
+            if inner.today.is_none() {
+                inner.today = Some(key.to_string());
+            }
+        }
+        if let Some(store) = &self.store {
+            let _ = store.persist_day(&StoredDay {
                 key: key.to_string(),
-                seed,
-                day,
-                scene,
-                universe,
-                var_slots,
-                run_ids: Vec::new(),
-            },
-        );
-        if inner.today.is_none() {
-            inner.today = Some(key.to_string());
+                seed_hex: hex32(seed.as_bytes()),
+            });
+        }
+    }
+
+    /// **Submit a run over its reproducible input** — the verify-gated ingest a stranger's `POST`
+    /// (and the demo seeding) drives. Re-records the `moves` on a fresh copy of the day's published
+    /// universe ([`record_playthrough`]) and re-verifies the result with the no-cheat verifier
+    /// ([`verify_completion`]): an illegal move, a losing / incomplete line, or a forged claim is
+    /// **rejected** (`Err`, fail-closed — nothing ingests or persists). A run that provably reaches
+    /// the hoard is ingested (so it ranks on the board) AND — when a durable store is present —
+    /// persisted as reproducible public input (the move sequence), so it survives a restart.
+    /// Returns the verified turns-to-win on success.
+    pub fn submit_run(
+        &self,
+        day_key: &str,
+        run_id: &str,
+        player: &str,
+        level: u64,
+        class: u64,
+        moves: &[usize],
+    ) -> Result<usize, String> {
+        let turns = self.reverify_and_ingest(day_key, run_id, player, level, class, moves)?;
+        if let Some(store) = &self.store {
+            let moves_json = serde_json::to_string(moves).unwrap_or_else(|_| "[]".to_string());
+            let _ = store.persist_run(&StoredRun {
+                run_id: run_id.to_string(),
+                day_key: day_key.to_string(),
+                player: player.to_string(),
+                level,
+                class,
+                moves_json,
+            });
+        }
+        Ok(turns)
+    }
+
+    /// Re-record + re-verify a move sequence against the day's published universe, and — only if it
+    /// re-executes to the win — ingest it (in-RAM). The verify-gate shared by [`submit_run`] (which
+    /// also persists) and [`load_from_store`] (which does not re-persist). `Err` on any refusal:
+    /// unknown/closed day, an illegal move (executor refusal on replay), or a non-winning /
+    /// tampered line ([`verify_completion`] rejecting it).
+    ///
+    /// [`submit_run`]: Self::submit_run
+    /// [`load_from_store`]: Self::load_from_store
+    fn reverify_and_ingest(
+        &self,
+        day_key: &str,
+        run_id: &str,
+        player: &str,
+        level: u64,
+        class: u64,
+        moves: &[usize],
+    ) -> Result<usize, String> {
+        let universe = {
+            let inner = self.inner.lock().unwrap();
+            let day = inner
+                .days
+                .get(day_key)
+                .ok_or_else(|| format!("no such day: {day_key}"))?;
+            day.universe.clone()
+        };
+        // Re-record the moves on a FRESH identically-seeded world — an illegal move is refused here
+        // by the real executor.
+        let play =
+            record_playthrough(&universe, moves).map_err(|e| format!("illegal move: {e:?}"))?;
+        // THE NO-CHEAT TOOTH: re-execute + require the win + bind the claimed turn count.
+        let completion = Completion {
+            universe: universe.id(),
+            player: player.to_string(),
+            play: play.clone(),
+            claimed_turns: moves.len(),
+        };
+        let turns = verify_completion(&universe, &completion)
+            .map_err(|e| format!("verification failed: {e:?}"))?;
+        // Only a provably-winning run reaches here — record it (the render path re-verifies again).
+        self.ingest_run(day_key, run_id, player, level, class, play);
+        Ok(turns)
+    }
+
+    /// **BOOT REPLAY + RE-VERIFY.** Reconstruct the board from the durable store: regenerate every
+    /// persisted day byte-for-byte from its committed seed ([`open_day`](Self::open_day)), then
+    /// REPLAY every persisted run through the no-cheat verify-gate
+    /// ([`reverify_and_ingest`](Self::reverify_and_ingest)) — re-executing the recorded moves on a
+    /// fresh identically-seeded world and requiring the win. A tampered row (a corrupt seed, an
+    /// edited move line, a losing line, an illegal move) never re-verifies and is silently DROPPED;
+    /// it cannot resurrect a cheat onto the board. A no-op when no store is configured.
+    pub fn load_from_store(&self) {
+        let Some(store) = self.store.clone() else {
+            return;
+        };
+        for d in store.list_days().unwrap_or_default() {
+            if let Some(bytes) = decode_hex32(&d.seed_hex) {
+                self.open_day(&d.key, CommittedSeed::from_bytes(bytes));
+            }
+        }
+        for r in store.list_runs().unwrap_or_default() {
+            let Ok(moves) = serde_json::from_str::<Vec<usize>>(&r.moves_json) else {
+                continue;
+            };
+            // A drop here is silent-and-correct: the row no longer re-verifies.
+            let _ = self
+                .reverify_and_ingest(&r.day_key, &r.run_id, &r.player, r.level, r.class, &moves);
         }
     }
 
     /// Set which opened day `GET /descent/leaderboard` shows by default.
     pub fn set_today(&self, key: &str) {
         self.inner.lock().unwrap().today = Some(key.to_string());
+    }
+
+    /// The day key `GET /descent/leaderboard` / a dayless `POST /descent/submit` default to (the
+    /// first opened day), if any.
+    pub fn today(&self) -> Option<String> {
+        self.inner.lock().unwrap().today.clone()
     }
 
     /// **Ingest a recorded run** for a day — store the (untrusted) playthrough + display metadata
@@ -213,13 +358,110 @@ pub fn run_share_path(run_id: &str) -> String {
 /// **Build the spectator/provenance router** over a shared [`DescentState`]. Additive — mount it on
 /// the same axum app as [`router`](crate::router) / [`catalog_router`](crate::catalog_router).
 ///
-/// - `GET /descent/leaderboard[?day={key}]` — the day's re-verified no-cheat board;
-/// - `GET /descent/run/{id}` — a run-card with the independent-verification panel.
+/// - `GET  /descent/leaderboard[?day={key}]` — the day's re-verified no-cheat board;
+/// - `GET  /descent/run/{id}` — a run-card with the independent-verification panel;
+/// - `POST /descent/submit` — the verify-gated HTTP run-ingest: a stranger submits a run's
+///   reproducible input (day + player + move sequence) and it is re-executed + no-cheat-verified
+///   before it can rank (an honest run ingested + persisted, a forged run rejected 4xx).
 pub fn descent_router(state: Arc<DescentState>) -> Router {
     Router::new()
         .route("/descent/leaderboard", get(get_leaderboard))
         .route("/descent/run/{id}", get(get_run_card))
+        .route("/descent/submit", post(post_submit))
         .with_state(state)
+}
+
+/// The JSON body of `POST /descent/submit` — a run's **reproducible public input**: which day, the
+/// player + display metadata, and the move sequence (choice indices). Nothing else is needed (or
+/// trusted): the server re-executes the moves on a fresh identically-seeded world and re-verifies.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SubmitRun {
+    /// The day key to submit against; absent → the state's designated "today".
+    #[serde(default)]
+    pub day: Option<String>,
+    /// The player label (display).
+    pub player: String,
+    /// The player's character level (display metadata).
+    #[serde(default)]
+    pub level: u64,
+    /// The player's class id (display metadata; `0` = unset).
+    #[serde(default)]
+    pub class: u64,
+    /// The move sequence — the choice index at each passage, in order.
+    pub moves: Vec<usize>,
+}
+
+/// `POST /descent/submit` — **the HTTP run-ingest seam.** Reads a run's reproducible input (day +
+/// player + move sequence) and drives it through the verify-gate ([`DescentState::submit_run`]):
+/// the moves are re-executed on a fresh identically-seeded world and no-cheat-verified BEFORE the
+/// run can rank. A run that provably reaches the hoard is ingested (it then appears on the
+/// leaderboard) and — with a durable store — persisted; a forged / losing / illegal run is
+/// **rejected `400`** (fail-closed — it never ranks). The `run_id` is derived from the content
+/// (`blake3(day ‖ player ‖ moves)`), so a resubmission is idempotent and the response links the
+/// shareable run-card.
+async fn post_submit(
+    State(state): State<Arc<DescentState>>,
+    Json(body): Json<SubmitRun>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let day = match body.day.clone().or_else(|| state.today()) {
+        Some(d) => d,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "ranked": false,
+                    "error": "no day is open",
+                })),
+            );
+        }
+    };
+    let run_id = derive_run_id(&day, &body.player, &body.moves);
+    match state.submit_run(
+        &day,
+        &run_id,
+        &body.player,
+        body.level,
+        body.class,
+        &body.moves,
+    ) {
+        Ok(turns) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "ranked": true,
+                "run_id": run_id,
+                "turns": turns,
+                "share": run_share_path(&run_id),
+                "detail": "re-executed + no-cheat-verified; the run now ranks on the board",
+            })),
+        ),
+        // Fail-closed: a forged / losing / illegal run is refused before it can rank.
+        Err(why) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "ranked": false,
+                "error": why,
+                "detail": "rejected by re-execution — nothing ingested (no-cheat)",
+            })),
+        ),
+    }
+}
+
+/// A content-addressed, shareable run id for a submitted run — `sub-` + short hex of
+/// `blake3(day ‖ player ‖ moves_json)`. Deterministic, so a resubmission of the same run maps to
+/// the same id (idempotent ingest).
+fn derive_run_id(day: &str, player: &str, moves: &[usize]) -> String {
+    let moves_json = serde_json::to_string(moves).unwrap_or_else(|_| "[]".to_string());
+    let mut h = blake3::Hasher::new();
+    h.update(day.as_bytes());
+    h.update(&[0]);
+    h.update(player.as_bytes());
+    h.update(&[0]);
+    h.update(moves_json.as_bytes());
+    let hex: String = h.finalize().as_bytes()[..8]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    format!("sub-{hex}")
 }
 
 /// The `?day=` selector for the leaderboard (absent → the default "today").
@@ -340,6 +582,24 @@ struct Row {
     player: String,
     turns: usize,
     depth: u64,
+}
+
+/// Hex-encode 32 bytes (a committed seed, for durable persistence — the full round-trip encoding).
+fn hex32(bytes: &[u8; 32]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Decode a 64-char hex string back to 32 bytes (`None` on any malformed input — a tampered seed
+/// row is dropped on boot).
+fn decode_hex32(s: &str) -> Option<[u8; 32]> {
+    if s.len() != 64 {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    for (i, byte) in out.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(s.get(2 * i..2 * i + 2)?, 16).ok()?;
+    }
+    Some(out)
 }
 
 /// A short hex provenance tag of a day's seed (first 4 bytes) — the same tag `daily_scene` uses.
