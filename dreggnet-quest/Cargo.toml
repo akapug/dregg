@@ -47,6 +47,11 @@ dungeon-on-dregg = { path = "../dungeon-on-dregg" }
 # The no-cheat completion model: `WinCondition` (a declared win a completion must reach
 # on replay). A quest turn-in is a completion re-executed to this win.
 ugc-dregg = { path = "../ugc-dregg" }
+# THE THIN FACTION HOOK — the giver's faction-gated variant pins its rep bar to
+# faction's REAL standing threshold (`REP_THRESHOLD`), so the quest-giver's start cell
+# opens only on genuine faction standing, not a re-guessed number. Consumed for the
+# constant only (a light crate: spween-dregg / spween / app-framework, all already here).
+dreggnet-faction = { path = "../dreggnet-faction" }
 # The cell crate — `Cell`/`Permissions` for the cross-cell quest-giver (the multicell
 # idiom): the giver cell + the quest-state cell share ONE `EmbeddedExecutor` ledger.
 dregg-cell = { path = "../cell" }

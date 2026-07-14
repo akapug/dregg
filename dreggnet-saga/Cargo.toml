@@ -38,6 +38,13 @@ ugc-dregg = { path = "../ugc-dregg" }
 dreggnet-asset = { path = "../dreggnet-asset" }
 # The stable per-player identity a guild is keyed by.
 dreggnet-offerings = { path = "../dreggnet-offerings" }
+# The ed25519 `Custodian` a party seat's ballot identity is derived from — the identity
+# adapter derives ONE canonical player into the party seat key, the guild member handle,
+# and the asset holder label. Already in the graph (party/quest/faction pull it).
+dungeon-on-dregg = { path = "../dungeon-on-dregg" }
+# The `PublicKey` type the party seat / custodian identity is named by (the adapter proves
+# the seat key derives from the one canonical identity). A foundational crate, already here.
+dregg-types = { path = "../types" }
 # The committed beacon the craft draw is anchored to.
 procgen-dregg = { path = "../procgen-dregg" }
 # The narrative-world driver + `WorldError` the faction gate is driven / refused on.

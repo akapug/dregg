@@ -41,56 +41,56 @@
 //! 7. that item is **traded** to a buyer (`dreggnet-trade`) — an atomic escrow swap; the
 //!    buyer verifies the item's provenance by the SAME AssetId.
 //!
-//! ## Honest scope — what is object-identical vs re-established, and the friction
+//! ## Honest scope — object-identity end-to-end (the reconciliations, applied)
+//!
+//! The saga assessment named four additive reconciliations to tighten the weave from
+//! label-matched to object-identical. Three are now DONE (additive API tweaks, no
+//! redesign); the fourth is a deliberately-named follow-up:
 //!
 //! * **quest -> cheevo -> guild: OBJECT-IDENTICAL.** One `Universe` and one `Completion`,
 //!   passed by reference to both consumers. The cheevo anchors and the guild counts the
-//!   very same run object. This is the strongest handoff in the weave.
-//! * **craft -> trade -> buyer: OBJECT-IDENTICAL AT THE `AssetId`.** The `AssetId` is a
-//!   deterministic content address (`blake3(minter_pubkey ‖ mint_seed)`) — the DESIGNED
-//!   cross-crate / cross-game handle. The saga asserts the crafted output's `AssetId` is
-//!   BYTE-EQUAL to the id the trade lists and the buyer verifies. **Friction (a named
-//!   reconciliation, not done here):** `CraftForge` and `TradeWorld` each encapsulate a
-//!   *private* `AssetWorld`, so the note-cell LEDGER is not shared in-process — the trade
-//!   re-establishes the same-id note in its own world (its provenance length restarts).
-//!   The clean fix is a shared `AssetWorld`: expose `CraftForge::assets_mut()` mirroring
-//!   the existing [`dreggnet_trade::TradeWorld::assets`], so the EXACT crafted note
-//!   deposits into a trade with no re-mint. Object-identity holds at the id (asserted);
-//!   note-ledger identity is the follow-up.
-//! * **party / faction -> the run: control-flow handoff.** The party musters and the
-//!   faction gate opens *before* the run; they gate access, they do not hand a typed
-//!   object into the quest. Notably [`dreggnet_quest::giver`] ALREADY implements the exact
-//!   cross-cell `ObservedFieldEquals` mechanism a tighter bind would use — the named
-//!   reconciliation is to point the giver's gate at the faction rep cell's `ember_quest`
-//!   slot, so the quest-giver's start cell opens only when faction standing clears. Small,
-//!   concrete, uses machinery that already ships.
-//! * **THREE identity representations** meet here and unify only by LABEL/name convention,
-//!   not by a single identity object: `dreggnet-party`'s ed25519 `Custodian` seat keys,
-//!   `dreggnet-guild`'s `DreggIdentity(String)`, and the asset layer's `Holder` key
-//!   (`blake3::derive_key` of a label, shared by craft / trade / cheevo). They compose
-//!   because the same player *name* derives the same asset key across crates — but a real
-//!   deployment wants ONE identity the party seat, the guild member, and the asset holder
-//!   all present. Named reconciliation: a shared identity type the feature crates key on.
-//! * **`dreggnet-tavern` (presence) is a NAMED follow-up, deliberately out of the saga
-//!   crate.** Tavern pulls `dregg-node`/deos-host (mozjs), is async, and needs an
-//!   `_exit(0)` to dodge a SpiderMonkey teardown SIGSEGV — pulling that elephant into the
-//!   saga's synchronous driven test would make the green gate heavy and flaky. Presence is
-//!   proven in `dreggnet-tavern`'s own e2e; the saga runs on the light substrate. The
-//!   tavern's OWN honest-scope note already names the real reconciliation: its inline
-//!   party-roster / market-stall cells should graduate to `dreggnet-party` /
-//!   `dreggnet-trade` (the crates the saga threads).
+//!   very same run object. The strongest handoff in the weave, unchanged.
+//! * **craft -> trade -> buyer: OBJECT-IDENTICAL AT THE NOTE-CELL (reconciliation #1,
+//!   done).** [`dreggnet_craft::CraftForge::into_assets`] (and `assets_mut`) hands the
+//!   forge's live `AssetWorld` to [`dreggnet_trade::TradeWorld::with_assets`], so the trade
+//!   moves the EXACT crafted note with NO re-mint. The crafted output's provenance lineage
+//!   CONTINUES across the trade — mint(craft) -> escrow -> buyer, length growing 1 -> 3 in
+//!   ONE ledger — rather than restarting a same-id look-alike in a second world. The
+//!   `AssetId` byte-identity still holds (a reproducible content address); the note-ledger
+//!   is now shared, so the handoff is object-identical at the note-cell, not just the id.
+//! * **faction -> quest: THE FACTION REP CELL GATES THE QUEST-GIVER (reconciliation #2,
+//!   done).** [`dreggnet_quest::giver::FactionGatedGiverWorld`] points the giver's cross-cell
+//!   `ObservedFieldEquals` at a faction-standing cell's `ember_quest` slot (mirroring
+//!   [`dreggnet_faction`]'s `FieldGte(rep_embers, `[`dreggnet_faction::REP_THRESHOLD`]`)`-gated
+//!   `WriteOnce` unlock, re-homed onto the shared executor ledger). The quest-giver's start
+//!   opens ONLY on real faction standing: a no-rep grant fails closed; earning rep opens it.
+//!   The giver reads the faction cell, not a separate quest flag.
+//! * **ONE IDENTITY across the crates (reconciliation #3, done).** [`PlayerIdentity`] is a
+//!   small adapter deriving ONE canonical player into all three key representations:
+//!   `dreggnet-party`'s ed25519 `Custodian` seat key, `dreggnet-guild`'s `DreggIdentity`
+//!   member handle, and the asset layer's per-label `Holder` key (craft / trade / cheevo).
+//!   One object is a party seat, a guild member, AND an asset holder — present across the
+//!   crates as a single identity, not three look-alikes stitched by name convention.
+//! * **`dreggnet-tavern` graduation is a NAMED follow-up (reconciliation #4, not built).**
+//!   Tavern pulls `dregg-node`/deos-host (mozjs), is async, and needs an `_exit(0)` to dodge
+//!   a SpiderMonkey teardown SIGSEGV — pulling that elephant into the saga's synchronous
+//!   driven test would make the green gate heavy and flaky. Presence is proven in
+//!   `dreggnet-tavern`'s own e2e; the saga runs on the light substrate. The real
+//!   reconciliation the tavern's own honest-scope names: its inline party-roster /
+//!   market-stall cells should GRADUATE to `dreggnet-party` / `dreggnet-trade` (the crates
+//!   the saga threads). Named here, deliberately not pulled into the saga.
 //!
 //! ## Assessment
 //!
-//! They compose EXCELLENTLY along the two currencies the substrate was designed for: the
-//! run (`Completion`) and the item (`AssetId`) both flow object-identically across crate
-//! boundaries with no re-derivation on the run spine and byte-identical ids on the item
-//! spine. The friction is not in the mechanics — every gate is a real executor refusal —
-//! it is in ENCAPSULATION and IDENTITY: each crate owns its own world/ledger and its own
-//! notion of "who a player is", so composition today rides on deterministic content
-//! addresses and shared labels rather than shared objects. The three named reconciliations
-//! (shared `AssetWorld`; the giver's cross-cell gate onto the faction cell; one identity
-//! type) are additive API tweaks, not redesigns — the objects already line up.
+//! They compose EXCELLENTLY and now OBJECT-IDENTICALLY along every spine but the deliberately
+//! deferred one: the run (`Completion`) flows by reference quest -> cheevo -> guild; the item
+//! (the crafted NOTE, not just its `AssetId`) flows in one shared ledger craft -> trade ->
+//! buyer with a continuous provenance lineage; the faction rep cell gates the quest-giver
+//! through a real cross-cell executor predicate; and one `PlayerIdentity` is the party seat,
+//! the guild member, and the asset holder at once. Every gate is a real executor refusal, not
+//! a host `if`. The three applied reconciliations were additive API tweaks — the objects
+//! already lined up. The tavern graduation (which pulls mozjs/async) is the one named,
+//! un-pulled follow-up.
 //!
 //! The driven saga lives in `#[cfg(test)] mod saga`; run it with
 //! `cargo test -p dreggnet-saga`.
@@ -134,6 +134,68 @@ pub fn record_errand_completion(universe: &Universe, player: &str) -> Completion
         player: player.to_string(),
         play,
         claimed_turns: moves.len(),
+    }
+}
+
+// ── ONE IDENTITY — a single canonical player across the three key representations ──
+
+use dregg_types::PublicKey;
+use dreggnet_offerings::DreggIdentity;
+use dungeon_on_dregg::collective::Custodian;
+
+/// **A single canonical player identity** the feature crates all key on — the reconciliation
+/// that unifies the three key representations the saga meets:
+///
+/// * the **party seat**'s ed25519 CUSTODY key ([`dungeon_on_dregg::collective::Custodian`],
+///   its ballot identity in [`dreggnet_party`]);
+/// * the **guild member** handle ([`dreggnet_offerings::DreggIdentity`], what
+///   [`dreggnet_guild`] admits and counts clears for);
+/// * the **asset holder** label ([`dreggnet_asset::AssetWorld`]'s per-label
+///   `blake3::derive_key` holder key, shared by craft / trade / cheevo).
+///
+/// A small adapter, not a redesign: all three already derive from one `name`, so ONE
+/// [`PlayerIdentity`] yields the seat key, the member, AND the holder — the same actor is
+/// present across the crates by a single object, not three look-alikes stitched by
+/// convention. (A production deployment mints the custody secret in the seat's own device —
+/// the demo derivation is deterministic so the saga reproduces stable identities.)
+#[derive(Clone, Debug)]
+pub struct PlayerIdentity {
+    name: String,
+}
+
+impl PlayerIdentity {
+    /// The canonical player named `name` (the single derivation input the three
+    /// representations share).
+    pub fn new(name: impl Into<String>) -> Self {
+        PlayerIdentity { name: name.into() }
+    }
+
+    /// The player's canonical name (the derivation input).
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The **asset-layer holder label** — the key [`dreggnet_asset::AssetWorld`] (and thus
+    /// craft / trade) mints, transfers, and owns notes under.
+    pub fn holder_label(&self) -> &str {
+        &self.name
+    }
+
+    /// The **guild member handle** — what [`dreggnet_guild`] admits and records clears for.
+    pub fn guild_member(&self) -> DreggIdentity {
+        DreggIdentity(self.name.clone())
+    }
+
+    /// The **party seat's custody keypair** — the ed25519 identity a
+    /// [`dreggnet_party`] seat signs its ballots with.
+    pub fn custodian(&self) -> Custodian {
+        Custodian::demo(self.name.as_str())
+    }
+
+    /// The party seat's electorate PUBLIC key (its ballot identity) — the same key
+    /// [`dreggnet_party::Seat::electorate_seat`] carries for a seat of this name.
+    pub fn seat_pk(&self) -> PublicKey {
+        self.custodian().public_key()
     }
 }
 
@@ -327,13 +389,14 @@ mod saga {
         );
     }
 
-    /// HANDOFF B — the SAME `AssetId` flows craft -> trade -> the buyer's provenance-verify.
-    /// The forge mints an output note; its `AssetId` is a deterministic content address, so
-    /// the trade world names the byte-IDENTICAL id and the buyer verifies THAT id's
-    /// provenance after the swap. (Named friction: the two crates hold private asset worlds,
-    /// so the trade re-establishes the same-id note; see the crate docs.)
+    /// HANDOFF B (TIGHTENED — reconciliation #1) — the SAME NOTE-CELL flows craft -> trade ->
+    /// the buyer, object-identical at the NOTE-CELL, not merely at the `AssetId`. The forge
+    /// hands its asset ledger to the trade ([`CraftForge::into_assets`] ->
+    /// [`TradeWorld::with_assets`]), so the trade moves the EXACT crafted note with NO
+    /// re-mint: its provenance lineage CONTINUES (mint(craft) -> escrow -> buyer) in ONE
+    /// ledger, its length growing rather than restarting in a second world.
     #[test]
-    fn asset_id_is_object_identical_craft_to_trade_to_buyer() {
+    fn crafted_note_is_object_identical_craft_to_trade_to_buyer() {
         // ── forge: two owned materials -> one crafted output, inputs spent on-chain ──
         let mut forge = CraftForge::new();
         let recipe = Recipe::new("forge:loremasters-charm", 2);
@@ -344,10 +407,12 @@ mod saga {
         let output = forge
             .craft(HERO, &draw, &recipe)
             .expect("the forge mints the crafted charm");
+        let charm: AssetId = output.asset_id;
 
-        // The output is a real owned note; the inputs are destroyed on-chain (the sink).
+        // The output is a real owned note (its lineage's origin mint); the inputs are
+        // destroyed on-chain (the sink).
         assert!(
-            forge.asset_provenance(output.asset_id).verified,
+            forge.asset_provenance(charm).verified,
             "output is live + owned"
         );
         assert!(
@@ -355,54 +420,157 @@ mod saga {
             "the inputs were spent"
         );
         assert_eq!(
-            forge.owner_of(output.asset_id),
+            forge.owner_of(charm),
             Some(forge.pubkey_of(HERO)),
             "the crafter owns the output"
         );
-
-        // ── the identity handoff: the AssetId is a deterministic content address ──
-        let mut market = TradeWorld::new();
-        // The output id encodes (crafter, recipe+inputs+roll) via the craft commitment; the
-        // trade world re-derives the byte-IDENTICAL id from the SAME public seed + label.
-        let seed = craft_commitment(&draw);
-        let listed: AssetId = market.mint(HERO, &seed);
+        // The AssetId is a deterministic content address (recipe+inputs+roll bound): minting
+        // the same commitment in a SEPARATE world reproduces the byte-identical id.
+        let mut elsewhere = TradeWorld::new();
         assert_eq!(
-            listed.bytes(),
-            output.asset_id.bytes(),
-            "the traded AssetId IS the crafted AssetId (byte-identical content address)"
+            elsewhere.mint(HERO, &craft_commitment(&draw)).bytes(),
+            charm.bytes(),
+            "the crafted note's AssetId is a reproducible content address"
         );
 
-        // ── trade: an atomic escrow swap moves THAT id to the buyer ──
+        // ── THE SHARED-WORLD HANDOFF: the trade ADOPTS the forge's ledger (no re-mint) ──
+        let mut market = TradeWorld::with_assets(forge.into_assets());
+        // The EXACT crafted note is already the trade world's live note, owned by HERO —
+        // object-identity at the note-cell. Its lineage is the craft's origin mint (length 1),
+        // set to CONTINUE (not restart) across the trade.
+        assert_eq!(
+            market.lineage_len(charm),
+            1,
+            "the traded note IS the craft's origin mint — the lineage continues from length 1"
+        );
+        assert_eq!(
+            market.current_owner(charm),
+            Some(market.pubkey_of(HERO)),
+            "the crafted note is the trade world's own live note (no re-mint)"
+        );
+
+        // ── trade: an atomic escrow swap moves THAT note to the buyer ──
         market.fund_dregg(BUYER, 100);
-        let mut trade = market.open_trade(HERO, LegSpec::Asset(listed), BUYER, LegSpec::Dregg(50));
+        let mut trade = market.open_trade(HERO, LegSpec::Asset(charm), BUYER, LegSpec::Dregg(50));
         market
             .deposit(&mut trade, TradeSide::A)
             .expect("the seller deposits the charm");
+        assert_eq!(
+            market.lineage_len(charm),
+            2,
+            "the deposit CONTINUED the craft lineage (mint -> escrow custody)"
+        );
         market
             .deposit(&mut trade, TradeSide::B)
             .expect("the buyer deposits the value");
         let settled = market
             .settle(&mut trade)
             .expect("the swap settles atomically");
-        assert_eq!(settled.a_gave, LegSpec::Asset(listed));
+        assert_eq!(settled.a_gave, LegSpec::Asset(charm));
 
-        // ── the buyer verifies the SAME id's provenance after the swap ──
-        let report = market.verify_provenance(listed);
-        assert!(report.verified, "the traded charm's provenance re-verifies");
+        // ── CONTINUOUS PROVENANCE: mint(craft) -> escrow -> buyer, all in ONE ledger ──
+        let report = market.verify_provenance(charm);
+        assert!(
+            report.verified,
+            "the traded charm's full lineage re-verifies"
+        );
         assert_eq!(
-            market.current_owner(listed),
+            report.length, 3,
+            "the lineage LENGTH continued across craft->trade (mint -> escrow -> buyer), not restarted at 1"
+        );
+        assert_eq!(
+            market.current_owner(charm),
             Some(market.pubkey_of(BUYER)),
-            "the buyer now owns the identical AssetId the forge minted"
+            "the buyer now owns the identical NOTE the forge minted"
         );
 
         // Non-vacuous: a NON-OWNER cannot offer the charm (the scam-proof gate).
         let mut mallory_trade =
-            market.open_trade("Mallory", LegSpec::Asset(listed), BUYER, LegSpec::Dregg(1));
+            market.open_trade("Mallory", LegSpec::Asset(charm), BUYER, LegSpec::Dregg(1));
         let stolen = market.deposit(&mut mallory_trade, TradeSide::A);
         assert!(
             stolen.is_err(),
             "a non-owner cannot deposit the charm, got {stolen:?}"
         );
+    }
+
+    /// RECONCILIATION #2 — the FACTION rep cell gates the QUEST-GIVER. The quest-giver's
+    /// cross-cell `ObservedFieldEquals` reads the faction standing cell's `ember_quest` slot,
+    /// so the quest-start opens ONLY on real faction standing. Both legs driven: a no-rep
+    /// player's start is refused; earning rep (pledge to the threshold + the trial) opens it.
+    #[test]
+    fn the_faction_rep_cell_gates_the_quest_giver() {
+        use dreggnet_quest::giver::{EMBER_QUEST_VALUE, FactionGatedGiverWorld, GRANTED_SLOT};
+
+        // No standing: the quest-giver's start is refused (the faction ember_quest is unset).
+        let world = FactionGatedGiverWorld::deploy();
+        assert!(
+            world.grant_honest().is_err(),
+            "a no-rep player's quest-start is refused by the faction gate"
+        );
+        assert_eq!(
+            world.read(world.giver(), GRANTED_SLOT as usize),
+            0,
+            "anti-ghost: nothing granted"
+        );
+
+        // Earn REAL faction standing, and the SAME quest-giver grant now COMMITS — the start
+        // opened on genuine faction standing (the cross-cell read of ember_quest).
+        world.earn_standing();
+        world
+            .grant_honest()
+            .expect("earning faction rep opens the quest-giver");
+        assert_eq!(
+            world.read(world.giver(), GRANTED_SLOT as usize),
+            EMBER_QUEST_VALUE,
+            "the quest-start is open, matching the faction's committed standing"
+        );
+    }
+
+    /// RECONCILIATION #3 — ONE IDENTITY threads a party seat, a guild member, AND an asset
+    /// holder. A single [`PlayerIdentity`] derives all three key representations the crates
+    /// key on, consistently: the same actor is present across party / guild / asset by one
+    /// object, not three look-alikes matched by name convention.
+    #[test]
+    fn one_identity_is_a_party_seat_a_guild_member_and_an_asset_holder() {
+        // The mustered party seats four canonical identities; take the Tank seat's name.
+        let party = Party::muster();
+        let hero = PlayerIdentity::new(party.seat(0).name());
+
+        // (a) THE PARTY SEAT — the one identity derives the seat's ed25519 ballot key.
+        assert_eq!(
+            hero.seat_pk(),
+            party.seat(0).electorate_seat().pk,
+            "the one identity's custody key IS the party seat's ballot identity"
+        );
+
+        // (b) THE GUILD MEMBER — the SAME identity is admitted and counts a verified clear.
+        let universe = errand_universe(hero.name());
+        let completion = record_errand_completion(&universe, hero.name());
+        let mut guild = Guild::form("The Lantern Circle");
+        guild.admit(&hero.guild_member());
+        assert!(
+            guild.is_member(&hero.guild_member()),
+            "the one identity is a guild member"
+        );
+        let turns = guild
+            .board_mut()
+            .record_clear(&hero.guild_member(), &universe, &completion)
+            .expect("the one identity's clear is counted");
+        assert_eq!(turns, 5);
+
+        // (c) THE ASSET HOLDER — the SAME identity owns a real asset by its holder label.
+        let mut world = TradeWorld::new();
+        let asset = world.mint(hero.holder_label(), b"a-cosmetic");
+        assert_eq!(
+            world.current_owner(asset),
+            Some(world.pubkey_of(hero.holder_label())),
+            "the one identity owns the asset it minted"
+        );
+
+        // Consistency: the three representations are ONE canonical name across the crates.
+        assert_eq!(hero.name(), hero.holder_label());
+        assert_eq!(hero.guild_member().as_str(), hero.name());
     }
 
     // ── the continuous saga: one player, all the way through ──
@@ -412,9 +580,20 @@ mod saga {
     /// with the cross-crate handoffs asserted object-identical and the end state coherent.
     #[test]
     fn the_full_saga_runs_end_to_end() {
+        // ONE canonical identity threads the guild member + the asset holder (reconciliation
+        // #3); the party seats are themselves canonical identities (asserted below).
+        let hero = PlayerIdentity::new(HERO);
+
         // (1) THE PARTY MUSTERS — four seated roles on one shared world.
         let mut party = Party::muster();
         assert_eq!(party.seat_count(), 4);
+        // Each party seat IS a canonical PlayerIdentity — its ed25519 ballot key derives from
+        // the one identity object, not a bespoke seat key.
+        assert_eq!(
+            PlayerIdentity::new(party.seat(0).name()).seat_pk(),
+            party.seat(0).electorate_seat().pk,
+            "the party seat's ballot identity is the one-identity derivation"
+        );
         // The seated co-op is executor-refereed: a seat acts IN role -> commits.
         assert!(
             party.act_in_role(0).committed(),
@@ -462,9 +641,10 @@ mod saga {
             )
             .expect("the verified run earns the speed cheevo");
 
-        // (5) THE GUILD — sums the SAME clear (the identical &universe + &completion).
+        // (5) THE GUILD — sums the SAME clear (the identical &universe + &completion), keyed
+        // by the hero's ONE identity (its guild-member handle).
         let mut guild = Guild::form("The Lantern Circle");
-        let hero_id = DreggIdentity(HERO.to_string());
+        let hero_id = hero.guild_member();
         guild.admit(&hero_id);
         let guild_turns = guild
             .board_mut()
@@ -475,31 +655,44 @@ mod saga {
             "cheevo and guild agree on the one run"
         );
 
-        // (6) THE CRAFT — the errand's material drops forged into one owned item.
+        // (6) THE CRAFT — the errand's material drops forged into one owned item (minted by
+        // the hero's ONE identity's holder label).
         let mut forge = CraftForge::new();
         let recipe = Recipe::new("forge:loremasters-charm", 2);
-        let m1 = forge.mint_material(HERO, b"errand-drop-1");
-        let m2 = forge.mint_material(HERO, b"errand-drop-2");
+        let m1 = forge.mint_material(hero.holder_label(), b"errand-drop-1");
+        let m2 = forge.mint_material(hero.holder_label(), b"errand-drop-2");
         let beacon = CommittedSeed::from_bytes([0x5A; 32]);
         let draw = roll_craft(&beacon, &recipe, &[m1, m2]);
         let output = forge
-            .craft(HERO, &draw, &recipe)
+            .craft(hero.holder_label(), &draw, &recipe)
             .expect("the charm is forged");
+        let charm: AssetId = output.asset_id;
         assert!(
             forge.is_destroyed(m1) && forge.is_destroyed(m2),
             "materials spent"
         );
 
-        // (7) THE TRADE — the SAME AssetId sold to a buyer via an atomic swap.
-        let mut market = TradeWorld::new();
-        let charm: AssetId = market.mint(HERO, &craft_commitment(&draw));
+        // (7) THE TRADE — the EXACT crafted note (reconciliation #1: the trade adopts the
+        // forge's ledger, so no re-mint) sold to a buyer via an atomic swap. Its provenance
+        // lineage CONTINUES (mint(craft) -> escrow -> buyer) in ONE ledger.
+        let mut market = TradeWorld::with_assets(forge.into_assets());
         assert_eq!(
-            charm.bytes(),
-            output.asset_id.bytes(),
-            "the item the market moves IS the item the forge minted"
+            market.lineage_len(charm),
+            1,
+            "the traded note IS the craft's origin mint (the lineage continues from length 1)"
+        );
+        assert_eq!(
+            market.current_owner(charm),
+            Some(market.pubkey_of(hero.holder_label())),
+            "the crafted note is the trade world's own live note (no re-mint)"
         );
         market.fund_dregg(BUYER, 100);
-        let mut trade = market.open_trade(HERO, LegSpec::Asset(charm), BUYER, LegSpec::Dregg(50));
+        let mut trade = market.open_trade(
+            hero.holder_label(),
+            LegSpec::Asset(charm),
+            BUYER,
+            LegSpec::Dregg(50),
+        );
         market
             .deposit(&mut trade, TradeSide::A)
             .expect("seller deposits the charm");
@@ -519,9 +712,16 @@ mod saga {
         cheevos
             .reverify_run(&cheevo, &universe, &completion)
             .expect("the earned cheevo independently re-verifies");
-        // the traded charm is owned by the BUYER, provenance intact;
+        // the traded charm is owned by the BUYER, provenance intact + CONTINUOUS: the one
+        // lineage is mint(craft) -> escrow -> buyer (length 3), the object-identical note-cell
+        // carried end-to-end (not a re-minted look-alike);
         assert_eq!(market.current_owner(charm), Some(market.pubkey_of(BUYER)));
-        assert!(market.verify_provenance(charm).verified);
+        let charm_prov = market.verify_provenance(charm);
+        assert!(charm_prov.verified);
+        assert_eq!(
+            charm_prov.length, 3,
+            "the crafted note's lineage continued through the trade in one ledger"
+        );
         // the guild rank reflects exactly the one verified clear;
         assert_eq!(guild.stats().verified_clears, 1);
         assert_eq!(guild.stats().total_turns, 5);

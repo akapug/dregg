@@ -268,6 +268,19 @@ impl TradeWorld {
         }
     }
 
+    /// **Adopt an EXISTING asset world** — the SHARED-world seam that makes a craft ->
+    /// trade handoff object-identical at the note-cell. Built over an [`AssetWorld`] already
+    /// holding live notes (e.g. [`dreggnet_craft::CraftForge::into_assets`]'s ledger with a
+    /// freshly-crafted output), so the trade moves the EXACT crafted note — its provenance
+    /// lineage continues (mint -> escrow -> buyer) in ONE ledger, with no re-mint. Wallets
+    /// start empty (fund with [`TradeWorld::fund_dregg`]).
+    pub fn with_assets(assets: AssetWorld) -> Self {
+        TradeWorld {
+            assets,
+            wallets: HashMap::new(),
+        }
+    }
+
     /// Access the underlying asset world (mint / transfer / provenance directly).
     pub fn assets(&mut self) -> &mut AssetWorld {
         &mut self.assets

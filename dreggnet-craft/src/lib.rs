@@ -386,6 +386,26 @@ impl CraftForge {
         self.world.pubkey_of(label)
     }
 
+    /// **Access the underlying asset world** (mint / transfer / provenance directly) —
+    /// the SHARED-world seam mirroring [`dreggnet_trade::TradeWorld::assets`]. The forge
+    /// mints its output as a real note in THIS world; exposing it lets the EXACT crafted
+    /// note-cell continue its lineage into a trade with no re-mint (object-identity at the
+    /// note-cell, not merely at the [`AssetId`]).
+    pub fn assets_mut(&mut self) -> &mut AssetWorld {
+        &mut self.world
+    }
+
+    /// **Consume the forge, yielding its asset world** — the live ledger carrying the
+    /// crafted output note (and every destroyed-input tombstone). Hand it to
+    /// [`dreggnet_trade::TradeWorld::with_assets`] so the crafted note deposits into a trade
+    /// in ONE ledger: its provenance lineage CONTINUES (mint -> escrow -> buyer) rather than
+    /// restarting in a second world. The craft-bound facts (recipe / inputs / roll) remain
+    /// re-derivable from the output's content-addressed [`AssetId`] (its mint seed IS the
+    /// [`craft_commitment`]).
+    pub fn into_assets(self) -> AssetWorld {
+        self.world
+    }
+
     /// **Faucet a material asset** owned by `player` — a real owned [`dreggnet_asset`]
     /// note the forge can later consume as a craft input (in the flagship these come
     /// from loot / gathering, already owned assets; here it is the input side of the
