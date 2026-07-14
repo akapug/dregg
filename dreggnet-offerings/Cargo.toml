@@ -55,6 +55,11 @@ dregg-pay = { path = "../dregg-pay" }
 # the daily-descent generator draws the day's world from. Re-exports `dregg_dice` for the
 # hash-chain test beacon.
 procgen-dregg = { path = "../procgen-dregg" }
+# THE FEDERATION SETTLE SEAM — `NodeTarget::{Local, Federation}` + `SubmittedTurn`/`Landed`: the
+# opt-in anchor of a WON run's 32-byte commitment onto the deployed node chain (the EmitEvent-of-
+# commitment submit), via the SAME seam spween-dregg / mud-dregg route turns through. PLAY stays
+# `Local` (private/fast, no node submit); the daily-descent SETTLE is the opt-in Federation anchor.
+dregg-node-target = { path = "../node-target" }
 # THE NO-CHEAT LEADERBOARD substrate: `Universe`/`Registry`/`Completion`/`verify_completion`
 # — a ranked completion provably reaches the win (re-executed against a fresh identically-
 # seeded world), a forged/incomplete run refused. The daily descent publishes its day's world

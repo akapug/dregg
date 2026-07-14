@@ -42,6 +42,7 @@
 //!   This module is the earning core those surfaces render.
 
 use dregg_app_framework::TurnReceipt;
+use dregg_node_target::{Landed, NodeTarget, SubmittedTurn};
 use procgen_dregg::CommittedSeed;
 use procgen_dregg::beacon::DailyBeacon;
 use spween_dregg::{
@@ -416,6 +417,23 @@ impl DailyRun {
             steps: self.steps.clone(),
         }
     }
+
+    /// **The run's final committed fingerprint** — the `turn_hash` of the last landed turn (for a
+    /// won run, the run-ending seize turn), or the genesis hash if no move committed. This is the
+    /// 32-byte commitment [`DailyDescentOffering::settle`] anchors on the deployed node chain: the
+    /// un-retconnable tip of the run's receipt chain.
+    pub fn final_commitment(&self) -> [u8; 32] {
+        self.steps
+            .last()
+            .map(|s| s.receipt.turn_hash)
+            .unwrap_or(self.genesis.turn_hash)
+    }
+
+    /// The world/domain label the run's turns commit under — becomes the node event topic when the
+    /// run is settled (the day's stable `daily-descent-{sid}` scene id).
+    pub fn domain(&self) -> String {
+        self.scene.meta.id.to_string()
+    }
 }
 
 /// **The daily descent offering** — a stateless factory over a [`CharacterStore`]. Each
@@ -425,22 +443,53 @@ impl DailyRun {
 pub struct DailyDescentOffering<S: CharacterStore> {
     store: S,
     hardcore: bool,
+    /// **Where a settled run's commitment is anchored.** [`NodeTarget::Local`] (the default) keeps
+    /// everything in-process — [`settle`](Self::settle) is a local no-op (nothing leaves the
+    /// process). A [`NodeTarget::Federation`] (e.g. from [`NodeTarget::from_env`], reading
+    /// `DREGG_NODE_URL`) makes [`settle`](Self::settle) anchor a won run's 32-byte commitment on
+    /// the deployed node chain. This target is used ONLY at settle time; PLAY ([`advance`](Self::advance))
+    /// is always Local (private / fast) regardless — the world-cell it drives never routes.
+    settle_target: NodeTarget,
 }
 
 impl<S: CharacterStore> DailyDescentOffering<S> {
     /// A hardcore daily-descent offering over `store` (permadeath ON — the flagship default: a
     /// defeat PERISHES the character, un-undoable, so the leaderboard's "I survived" is real).
+    /// The settle target defaults to [`NodeTarget::Local`]: play is private + fast and a settle is
+    /// an in-process no-op until a node is opted in via [`with_node_target`](Self::with_node_target).
     pub fn new(store: S) -> Self {
         DailyDescentOffering {
             store,
             hardcore: true,
+            settle_target: NodeTarget::Local,
         }
     }
 
     /// A daily-descent offering with an explicit hardcore setting (`false` → a defeat ends the run
-    /// but does not perish the character — for a softer ladder).
+    /// but does not perish the character — for a softer ladder). Settle target defaults to Local.
     pub fn with_hardcore(store: S, hardcore: bool) -> Self {
-        DailyDescentOffering { store, hardcore }
+        DailyDescentOffering {
+            store,
+            hardcore,
+            settle_target: NodeTarget::Local,
+        }
+    }
+
+    /// **Opt this offering into verifiable settlement on a chosen [`NodeTarget`].** By default a
+    /// daily-descent offering settles `Local` (a no-op; play is entirely private + in-process). Pass
+    /// a [`NodeTarget::Federation`] (e.g. from [`NodeTarget::from_env`], reading `DREGG_NODE_URL`)
+    /// to make [`settle`](Self::settle) anchor a won run's commitment on the deployed node chain.
+    /// PLAY is unaffected: [`advance`](Self::advance) always runs on a Local world-cell — private,
+    /// fast, no network — and only the opt-in [`settle`](Self::settle) touches the node.
+    pub fn with_node_target(mut self, target: NodeTarget) -> Self {
+        self.settle_target = target;
+        self
+    }
+
+    /// Whether this offering will actually anchor a settle off-process (a [`NodeTarget::Federation`]
+    /// was opted in) vs. the private-only Local default.
+    pub fn settles_to_a_node(&self) -> bool {
+        self.settle_target.is_federation()
     }
 
     /// Borrow the underlying character store (e.g. to check whether a player is returning).
@@ -599,6 +648,99 @@ impl<S: CharacterStore> DailyDescentOffering<S> {
             claimed_turns: play.steps.len(),
             play,
         })
+    }
+
+    /// **SETTLE a finished, won run — anchor its commitment on the deployed node chain.** This is
+    /// the opt-in bridge from private/fast local play to verifiable settlement: a player who
+    /// finishes a run worth keeping SETTLES it, landing the run's 32-byte fingerprint on the node
+    /// (`EmitEvent`-of-commitment) so it becomes explorer-visible + archival-persisted, WITHOUT
+    /// having submitted a single play turn to the node.
+    ///
+    /// Fail-closed, only a REAL win settles:
+    /// 1. The run must have reached the WIN ([`DailyRun::is_won`]) — an unfinished / lost /
+    ///    turned-back run is [`SettleError::NotWon`] and the node is not touched.
+    /// 2. The run's committed chain is RE-VERIFIED by replay before anchoring — a forged / reordered
+    ///    / tampered record is [`SettleError::Unverified`], refused before any anchor.
+    /// 3. The verified win's [`final_commitment`](DailyRun::final_commitment) is routed through the
+    ///    configured [`with_node_target`](Self::with_node_target): `Local` is an in-process no-op
+    ///    ([`Settlement::landed`] is `None` — nothing left the process); [`NodeTarget::Federation`]
+    ///    submits the commitment to the real node AND confirms it landed on the node's finalized
+    ///    log, else [`SettleError::Federation`] (a rejected / unreachable / non-landing anchor).
+    ///
+    /// PLAY is untouched: [`advance`](Self::advance) never routes to the node — this is the sole
+    /// path that anchors, and only on an operator-explicit finished win.
+    pub fn settle(&self, run: &DailyRun) -> Result<Settlement, SettleError> {
+        // 1. Only a REAL finished + WON run settles.
+        if !run.is_won() {
+            return Err(SettleError::NotWon);
+        }
+        // 2. Re-verify the run's committed chain by replay before anchoring (fail-closed).
+        let report = self.verify(run);
+        if !report.verified {
+            return Err(SettleError::Unverified(report.detail));
+        }
+        // 3. The run's fingerprint = the final committed turn_hash (the run-ending seize turn).
+        let commitment = run.final_commitment();
+        // 4. Anchor it via the opted-in target: Local = no-op (Ok(None)); Federation = submit the
+        //    EmitEvent-of-commitment turn + confirm it landed on the node's finalized log.
+        let landed = self
+            .settle_target
+            .route(&SubmittedTurn::new(run.domain(), commitment))
+            .map_err(|e| SettleError::Federation(e.to_string()))?;
+        Ok(Settlement { commitment, landed })
+    }
+}
+
+/// Why a run could not be **settled** (anchored on the node chain). Fail-closed: only a real
+/// finished, replay-verified WIN anchors; anything else leaves the node untouched.
+#[derive(Clone, Debug)]
+pub enum SettleError {
+    /// The run has not reached the WIN (unfinished, lost into the defeat room, or turned back at
+    /// the door) — only a genuine finished win settles. The node is not touched.
+    NotWon,
+    /// The run reached the win state but its committed chain did NOT re-verify by replay (a forged
+    /// / reordered / tampered record) — refused before any anchor. The node is not touched.
+    Unverified(String),
+    /// The run is a verified win but the opted-in [`NodeTarget::Federation`] node refused the anchor
+    /// or could not confirm it landed (rejected / unreachable / non-landing submit). Fail-closed.
+    Federation(String),
+}
+
+impl std::fmt::Display for SettleError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SettleError::NotWon => write!(
+                f,
+                "the run is not a finished win — only a real won run settles"
+            ),
+            SettleError::Unverified(d) => {
+                write!(f, "the run did not re-verify before settling: {d}")
+            }
+            SettleError::Federation(m) => write!(f, "settling to the node failed: {m}"),
+        }
+    }
+}
+
+impl std::error::Error for SettleError {}
+
+/// The **receipt of a settled run** — the run's 32-byte fingerprint and, when a real federation
+/// node anchored it, that node's landed identity for the commitment. On a `Local` settle target
+/// [`landed`](Self::landed) is `None` (the player did not opt a node in; nothing was anchored
+/// off-process — the run's fingerprint stays private).
+#[derive(Clone, Debug)]
+pub struct Settlement {
+    /// The run's anchored 32-byte commitment (its [`DailyRun::final_commitment`]).
+    pub commitment: [u8; 32],
+    /// The node's landed identity for the commitment when it was anchored on a
+    /// [`NodeTarget::Federation`] chain; `None` on a `Local` (private) settle.
+    pub landed: Option<Landed>,
+}
+
+impl Settlement {
+    /// Whether the run's commitment was actually anchored on a node (a Federation settle), vs a
+    /// private Local no-op.
+    pub fn anchored(&self) -> bool {
+        self.landed.is_some()
     }
 }
 
