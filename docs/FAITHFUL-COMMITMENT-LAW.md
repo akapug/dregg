@@ -9,9 +9,11 @@ never a lossy 1-felt projection.**
 The deployed state commitment once carried components folded **32 bytes → ONE
 BabyBear** (`fold_bytes32_to_bb`, a Horner fold). A single BabyBear is ~31 bits,
 so two distinct 32-byte values collide with probability ~`1/p ≈ 2^-31`. That is
-**far below** the system's own ~130-bit FRI/STARK soundness floor: an adversary
-who can grind a 31-bit collision can show a light client a forged committed state
-that the proof still accepts.
+**far below** the system's own **~112.6-bit proven** FRI/STARK soundness floor
+(`wrap_perFold_soundness_capacity`, `FriCorrelatedAgreementSharp.lean` §8; the FRI
+capacity conjecture that once quoted ~130 is refuted — see `FRI-PARAM-FRONTIER.md`):
+an adversary who can grind a 31-bit collision can show a light client a forged
+committed state that the proof still accepts.
 
 The insidious part: **a bare `BabyBear` limb carries no evidence of
 faithful-vs-degraded.** A faithful 8-felt binding and a degraded 1-felt fold are

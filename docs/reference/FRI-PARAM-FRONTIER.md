@@ -2,11 +2,21 @@
 
 **What this is.** A parameterized model mapping FRI knobs
 `(log_blowup, num_queries, max_log_arity, query_pow_bits)` to
-`(proven-bits, conjectured-bits, proof-size, prover-cost, verifier-cost)`, using the
-**actual** soundness formulas and the **measured** IR-v2 cost grid, plus a grid search for
-the leanest config that still hits a 128-bit target. This is a READ-ONLY map — it changes
-**nothing**. The deployed config is ember's to move. The runnable model is
+`(proven-bits, capacity-bits, proof-size, prover-cost, verifier-cost)`, using the
+**actual** soundness formulas and the **measured** IR-v2 cost grid. This is a READ-ONLY map — it
+changes **nothing**. The deployed config is ember's to move. The runnable model is
 [`fri_param_frontier.py`](./fri_param_frontier.py) (reproduces the measured grid to < 0.25 KiB).
+
+**Headline, up front.** The FRI **capacity** conjecture (per-query proximity to `1−ρ`) is
+**REFUTED** — Kambiré (arXiv 2604.09724 + eprint 2025/2046) constructs counterexamples for coset
+Reed–Solomon at `ρ ∈ (0, ½)`, covering our `ρ = 1/64`. So the "capacity-bits" column below is a
+knob-drift *engineering* ledger, **not** an approachable security target. The **proven** floors are
+what we stand behind: the general Johnson (`√ρ`) bound gives `73` bits at the deployed config, and —
+for the deployed **dim-2 constant-fold recursion code specifically** — the field-independent counting
+bound proves **~112.6 bits** (`wrap_perFold_soundness_capacity`,
+`metatheory/Dregg2/Circuit/FriCorrelatedAgreementSharp.lean` §8, `03a6ee758`). **~112.6 is the
+STANDING, ACCEPTED proven posture** (ember, 2026-07-13): a strong, honest, structure-specific
+theorem — no query/PoW bump and no config change are planned.
 
 Deployed IR-v2 config (`circuit/src/descriptor_ir2.rs:5382-5386`): `log_blowup=6`,
 `log_final_poly_len=0`, `max_log_arity=3` (arity 8), `num_queries=19`, `query_pow_bits=16`.
@@ -20,33 +30,44 @@ Deployed v1 config (`circuit/src/plonky3_prover.rs:98-102`): `log_blowup=3`, `q=
 ### 1a. Soundness ledgers (`circuit/tests/fri_params_soundness_budget.rs:45-53`)
 
 ```
-conjectured (capacity)  = num_queries · log_blowup       + pow_bits
-proven      (Johnson)   = num_queries · log_blowup / 2   + pow_bits     (integer floor)
+capacity (REFUTED)      = num_queries · log_blowup       + pow_bits
+proven   (Johnson)      = num_queries · log_blowup / 2   + pow_bits     (integer floor)
 ```
 
-- **Conjectured** = the FRI capacity / list-decoding-to-`(1-ρ)` conjecture: ~`log_blowup`
-  soundness bits per query. This is the field-standard assumption every production STARK quotes
-  (`:11-15`). The enforced floor is `CONJECTURED_FLOOR_BITS = 128` (`:42`).
+- **Capacity** = the FRI capacity / list-decoding-to-`(1-ρ)` conjecture: ~`log_blowup`
+  soundness bits per query. **This conjecture is REFUTED** — Kambiré (arXiv 2604.09724, eprint
+  2025/2046) exhibits coset-RS counterexamples at `ρ ∈ (0, ½)`, which cover our `ρ = 1/64`. It is
+  therefore **not** a live/approachable security assumption; the column survives only as the
+  historical field-standard *arithmetic* every plonky3-ecosystem STARK quoted, and as the
+  knob-drift baseline the budget gate enforces `≥ 128` on as a conservative engineering margin
+  (`fri_params_soundness_budget.rs`, honestly re-labeled).
 - **Proven** = the Johnson bound (list-decoding to `√ρ`, BCIKS20): ~`log_blowup/2` bits per
-  query. This is what is *proven* today (`:16-18`); reported, not floored.
-- **Both are additionally capped** by `min(·, ~124)` — the degree-4 BabyBear challenge
+  query. This is the general proven floor today (`:16-18`), `73` at the deployed config.
+- **Proven, structure-specific (~112.6):** for the deployed **dim-2 constant-fold recursion code**
+  the per-fold proximity error is the FIELD-INDEPENDENT counting bound `|Good| ≤ C(64,2) = 2016`
+  over the deployed quartic-extension challenge field `F = BabyBear⁴` (`|F| ≈ 2^123.6`), giving
+  `2016/|F| < 2⁻¹¹²` — i.e. **~112.6 proven bits** (`wrap_perFold_soundness_capacity`,
+  `FriCorrelatedAgreementSharp.lean` §8). This is SOUND against Kambiré: his `n^C` blow-up needs
+  `n → ∞`, `r > 2`; at our fixed dimension-`2` (`r = 2`) code his own construction caps at exactly
+  `C(n,2)`, and no construction beats a valid counting bound.
+- **All are additionally capped** by `min(·, ~124)` — the degree-4 BabyBear challenge
   extension `2^124` (`circuit/src/plonky3_prover.rs:63`, `type EF = BinomialExtensionField<BabyBear,4>`;
-  comment `:113`) — and by the Poseidon2 commitment hash. So the honest **system** headline is
-  `min(ledger, 124)`.
+  comment `:113`) — and by the Poseidon2 commitment hash. The ~112.6 proven figure already lives
+  under this cap (`123.6 − 11 = 112.6`).
 - **`max_log_arity` and `log_final_poly_len` do NOT enter the soundness formula.** Arity is the
   FRI folding factor; `arity=8` (`max_log_arity=3`) is already measured-optimal (dropping to
   arity 2 costs **+9%** size — PROOF-ECONOMICS §1). `log_final_poly_len` is an early-stop knob
   (~-3% at 2⁴, marginal). Neither is a security lever; leave both pinned.
 
-Deployed reads: conjectured `6·19+16 = 130`, proven `6·19//2+16 = 73`. Effective (field-capped)
-= `min(130,124) = 124`.
+Deployed reads: capacity (refuted) `6·19+16 = 130`, proven-Johnson `6·19//2+16 = 73`,
+**proven ~112.6** for the recursion fold. Effective field cap `~124`.
 
 ### 1b. Cost model, anchored to the measured grid
 
 The measured IR-v2 grid — the same real transfer proven at every size-parity `(lb, q)` point,
 4-bit-nibble range table (`circuit/tests/effect_vm_ir2_size_measure.rs:355-403`):
 
-| (lb, q) | proof | prove | verify | conj / proven |
+| (lb, q) | proof | prove | verify | capacity / proven |
 |---|---:|---:|---:|---:|
 | (3, 38) | 194.1 KiB | 29 ms | 6.9 ms | 130 / 73 |
 | (4, 29) | 159.7 KiB | 20 ms | 6.2 ms | 132 / 74 |
@@ -78,11 +99,11 @@ high-blowup LDE costs milliseconds) — which is why IR-v2 trades blowup UP and 
 
 ## 2. The efficient frontier
 
-### FRONTIER A — conjectured ledger, target 128 (the enforced floor), pow=16
+### FRONTIER A — capacity ledger (refuted; engineering-margin floor 128), pow=16
 
 `min q = ceil((128-16)/lb) = ceil(112/lb)` per blowup:
 
-| lb | q | proof | prove | verify | conj / proven |
+| lb | q | proof | prove | verify | capacity / proven |
 |---:|---:|---:|---:|---:|---:|
 | 3 | 38 | 194.0 KiB | 29 ms | 6.9 ms | 130 / 73 |
 | 4 | 28 | 154.8 KiB | ~14 ms | 5.7 ms | 128 / 72 |
@@ -91,97 +112,106 @@ high-blowup LDE costs milliseconds) — which is why IR-v2 trades blowup UP and 
 | 7 | 16 | 108.3 KiB | ~116 ms | 3.9 ms | 128 / 72 |
 | 8 | 14 | 100.5 KiB | ~232 ms | 3.6 ms | 128 / 72 |
 
-The frontier is a clean **proof-size ↔ prover-time** trade, all at ~128-bit conjectured:
+The frontier is a clean **proof-size ↔ prover-time** trade, all at the 128-bit capacity-margin (the
+capacity number itself is refuted; the frontier is an engineering trade, not a security ranking):
 - **Cheapest prover:** `(4, 28)` — ~14 ms prove (LESS than deployed 58 ms) but 154.8 KiB (larger wire).
 - **Deployed `(6, 19)`** sits ON the frontier — it is the size/prover **knee**.
-- **Smallest proof at 128-conj:** `(8, 14)` — 100.5 KiB (~17% smaller than deployed) but ~4×
+- **Smallest proof at the 128 margin:** `(8, 14)` — 100.5 KiB (~17% smaller than deployed) but ~4×
   the prover cost. `(7, 16)` = 108.3 KiB at ~2× prover is the intermediate.
 
 ### FRONTIER B — PROVEN (Johnson) ledger, target 128, pow=16
 
-`min q = ceil(224/lb)` (needs `q·lb ≥ 224`, double the conjectured requirement):
+`min q = ceil(224/lb)` (needs `q·lb ≥ 224`, double the capacity-ledger requirement):
 
-| lb | q | proof | conj / proven |
+| lb | q | proof | capacity / proven-Johnson |
 |---:|---:|---:|---:|
 | 6 | 38 | 220.7 KiB | 244 / 130 |
 | 7 | 32 | 196.5 KiB | 240 / 128 |
 | 8 | 28 | 180.9 KiB | 240 / 128 |
 | 10 | 23 | 163.0 KiB | 246 / 131 |
 
-Hitting **128 PROVEN roughly doubles proof size and prover cost** vs the conjectured target
-(leanest ≈ 163 KiB at lb=10, with an exploding prover; ≈ 181 KiB at the practical lb=8). This is
-the price of not leaning on the capacity conjecture.
+Hitting the **general Johnson `√ρ` proven bound at 128 roughly doubles proof size and prover cost**
+(leanest ≈ 163 KiB at lb=10, with an exploding prover; ≈ 181 KiB at the practical lb=8). Note the
+deployed config already carries a **~112.6 proven** bound for its recursion fold via the
+structure-specific counting analysis (`FriCorrelatedAgreementSharp.lean` §8) — a stronger proven
+number than the general Johnson `73`, at no cost. Frontier B is only relevant if one wants the
+*general* Johnson bound (any code) pushed to 128.
 
 ---
 
 ## 3. Findings
 
-### The leanest 128-bit config, and where the deployed config already sits
+### Where the deployed config sits, and the proven number we stand behind
 
-**On the conjectured ledger, `(6, 19)` is already minimal at its blowup.** Dropping one query to
-`(6, 18)` gives `6·18+16 = 124` — **below the 128 floor**. The apparent "2 wasted bits" (130 vs
+**On the capacity ledger, `(6, 19)` is minimal at its blowup.** Dropping one query to `(6, 18)`
+gives `6·18+16 = 124` — below the 128 engineering margin. The apparent "2 wasted bits" (130 vs
 128) are *granularity slack*, not reclaimable at lb=6: a query is worth 6 bits there, so you
 either sit at 130 or fall to 124. To trim below `(6,19)` you must move blowup (or PoW, below).
 The deployed config is **not fat** — it is the size/prover knee of Frontier A.
 
-The genuinely leaner 128-conj options are all blowup moves off the knee:
+The engineering-lean options are all blowup moves off the knee:
 - want a **smaller wire**, accept a slower prover → `(7,16)` 108 KiB / ~2× or `(8,14)` 100 KiB / ~4×;
 - want a **faster prover**, accept a bigger wire → `(4,28)` 155 KiB / ~0.25× prove.
 
-### The 128-bit claim rests on the CONJECTURAL ledger
+### The security posture: ~112.6 PROVEN, and the capacity conjecture is REFUTED
 
-The deployed **proven** (Johnson) budget is **73 bits** — well under 128. The headline "128-bit"
-security is the *conjectured* capacity bound (130). This is the field-standard posture (every
-plonky3-ecosystem STARK quotes the same conjecture), and it is honestly labeled as such in the
-budget gate — but it is worth stating plainly: **the deployed 128-bit claim is conjectural, not
-proven.** The proven floor today is 73.
+The "capacity" ledger (130 at deployed) rests on the FRI capacity conjecture (per-query proximity to
+`1−ρ`), and that conjecture is **REFUTED** for coset RS at our rate (Kambiré, arXiv 2604.09724 /
+eprint 2025/2046) — so 130 is **not** a security number, only a knob-drift margin the budget gate
+holds `≥ 128` on. What we stand behind is what is **proven**:
+- the general Johnson (`√ρ`, BCIKS20) floor: **73** at the deployed config, for any code;
+- the structure-specific counting floor for the deployed **dim-2 constant-fold recursion code**:
+  **~112.6** (`wrap_perFold_soundness_capacity`, `FriCorrelatedAgreementSharp.lean` §8) — the
+  field-independent `|Good| ≤ C(64,2) = 2016` over `|F| = babyBearP⁴ ≈ 2^123.6` gives
+  `2016/|F| < 2⁻¹¹²`, i.e. `≥ 112` proven bits (exactly `≈ 2⁻¹¹²·⁶⁵`).
 
-### The ~124-bit field cap is the real ceiling
+**~112.6 is the accepted standing posture (ember, 2026-07-13).** It is a strong, honest,
+structure-specific theorem; there is no "gap to 120/128 to close" here — no query/PoW bump and no
+config change are planned. The counting bound is sound against Kambiré precisely because his blow-up
+needs `n → ∞`, `r > 2`, whereas at our fixed `r = 2`, `n = 64` his own construction caps at `C(64,2)`.
 
-Both ledgers are capped at `min(·, 124)` by the degree-4 challenge extension. So the deployed
-conjectured 130 is *effectively 124*. Two consequences:
-1. A true **128-bit** system is not reachable with this field regardless of FRI knobs — it would
-   need a larger extension (degree-5 BabyBear ≈ `2^155`). The 128 in the budget gate is a floor on
-   the **FRI-query term** (the knob-drift tooth), deliberately set above the 124 field cap for margin.
-2. Against the *field cap* (124) rather than the *query-term floor* (128), `(6, 18)` suffices
-   (conj 124, ~115 KiB) — **1 query / ~5 KiB leaner** than deployed. Taking it means declaring the
-   target as "match the field cap" and dropping below the test's 128 floor: a deliberate,
-   named decision, not this map's call.
+### The ~124-bit field cap
+
+Both the capacity arithmetic and the ~112.6 proven bound sit under the `~124`-bit degree-4 challenge
+extension (`|F| ≈ 2^123.6`). A larger extension (degree-5 BabyBear ≈ `2^155`) would be needed to lift
+the field cap; the deployed choice is fixed. Against the field cap rather than the 128 knob-margin,
+`(6, 18)` is arithmetically 1 query / ~5 KiB leaner — a deliberate, named decision, not this map's
+call.
 
 ### Levers, ranked
 
 - **Query-PoW is the cheapest bits.** Each PoW bit adds directly to both ledgers for ~zero wire
   cost (one witness) and a one-time `2^pow`-hash prover grind. Raising `pow` 16→20 lets q drop
-  19→18 at lb=6 (conj stays ≥128), shaving ~5 KiB for a `2^20`-hash grind (sub-second, one-time).
-  Diminishing (each bit doubles the grind), but real and currently unused.
+  19→18 at lb=6 (capacity margin stays ≥128), shaving ~5 KiB for a `2^20`-hash grind (sub-second,
+  one-time). Diminishing (each bit doubles the grind), but real and currently unused. (No bump is
+  planned — ~112.6 proven is the accepted posture.)
 - **Blowup** is the main size lever (nearly free to the prover until the LDE dominates ~lb≥7).
 - **Queries** dominate the wire but are the security workhorse; they *are* the knob you trim when
   a bound tightens.
 - **Arity / final-poly** — pinned-optimal, not security levers. Leave them.
 
-### What each bound-tightening buys in efficiency
+### Where the proven bits come from (and where they do NOT)
 
-The **list term is not the lever.** The list-decoding soundness error carries an additive `L/|F|`
-term (list size over field), but with `|F| ≈ 2^124` and `L` polynomial, that is ~2^-116 of
-headroom — it barely moves the budget. The recent tightenings (BCIKS20 list-decoding to `δ_J=1-√ρ`
-fully proved; correlated-agreement off the boundary; the interior regime —
-`docs/reference/STARK-SOUNDNESS-CENSUS.md`, `lean-circuit.md:82-92`) matter because they concern
-the **decoding radius**, which sets the *per-query bit rate*:
+The full capacity rate (`lb` bits/query, the `1−ρ` radius) is **not** an available target: the
+capacity conjecture is refuted at our rate (Kambiré), so no general analysis reaches `lb`
+bits/query, and the "73 → 130 proven jump" that an earlier draft of this section imagined is
+foreclosed. What actually delivers the proven number is the **structure** of the deployed recursion
+fold, not a sharper general radius:
 
-- The gap between the **proven** ledger (`lb/2`, the `√ρ` Johnson rate) and the **conjectured**
-  ledger (`lb`, the `1-ρ` capacity rate) IS the gap between the Johnson radius and the capacity
-  radius. Every step the proven analysis moves from `√ρ` toward `1-ρ` (via proven up-to-capacity
-  decoding, or by staying strictly **interior** to the list-decoding radius so per-query rejection
-  approaches the capacity value) raises the proven per-query rate from `lb/2` toward `lb`.
-- **If the proven ledger reached the full `lb` rate:** deployed `(6,19)` proven jumps
-  **73 → 130** with NO config change — the 128 claim becomes *proven*, not conjectured.
-- **Or, holding proven-128 as the target:** the leanest config collapses from Frontier B back onto
-  Frontier A — **~163 KiB → ~95 KiB, ~42% smaller, at the same PROVEN security.** Equivalently, at
-  the deployed proof size you would buy proven-128 instead of proven-73.
+- The general Johnson (`√ρ`) analysis gives `lb/2` bits/query — **73** at deployed, for any code.
+- The deployed dim-2 constant-fold recursion code admits a **field-independent counting** bound
+  (`|Good| ≤ C(64,2) = 2016`), which over the quartic extension gives **~112.6 proven bits** with no
+  config change (`wrap_perFold_soundness_capacity`, `FriCorrelatedAgreementSharp.lean` §8). This is
+  the number we stand behind; the recent proximity-gap work (interior radius `dIn = 52`, list `186`;
+  boundary `dIn = 56`, list `292`; GS-ideal `128` BLOCKED — `STARK-SOUNDNESS-CENSUS.md`,
+  `lean-circuit.md:84-92`) is what makes that counting analysis rigorous.
+- **The list term is not the lever.** The list-decoding error carries an additive `L/|F|` term, but
+  with `|F| ≈ 2^124` and `L` polynomial (`186`/`292`), that is ~`2^-116` of headroom — it barely
+  moves the budget; the security lives in `|Good|/|F|`, not in `L`.
 
-That is the payoff shape: **bound-tightening on the decoding radius is worth ~2× in query·blowup
-— either ~40% off the wire at fixed proven security, or a 73→130 proven jump at fixed cost.** The
-list-size term is not where the bits are.
+The payoff shape, honestly: **the proven ~112.6 for the recursion fold is already banked and
+accepted; the general Johnson 73 is the floor for arbitrary codes.** There is no capacity-rate
+upside to chase — that door is closed by the refutation.
 
 ---
 
