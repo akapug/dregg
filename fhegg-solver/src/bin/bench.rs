@@ -14,6 +14,7 @@ use fhegg_solver::gpu::GpuContext;
 use fhegg_solver::pdhg::{
     cycle_lp, cycle_optimum, restore_feasibility, solve_cpu, solve_cpu_exact, FlowLp,
 };
+use fhegg_solver::qp::{markowitz, solve_admm, CertQp};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use std::time::Instant;
@@ -224,6 +225,71 @@ fn bench_exactness() {
     );
 }
 
+fn gen_covariance(n: usize, seed: u64) -> (Vec<f64>, Vec<f64>) {
+    // A random PSD covariance B Bᵀ + diag, deterministic from seed.
+    let mut rng = StdRng::seed_from_u64(seed);
+    let k = n.min(8);
+    let b: Vec<f64> = (0..n * k).map(|_| rng.gen_range(-1.0..1.0)).collect();
+    let mut cov = vec![0.0f64; n * n];
+    for i in 0..n {
+        for j in 0..n {
+            let mut s = 0.0;
+            for t in 0..k {
+                s += b[i * k + t] * b[j * k + t];
+            }
+            cov[i * n + j] = s;
+        }
+        cov[i * n + i] += 1.0; // ensure PD
+    }
+    let mu: Vec<f64> = (0..n).map(|_| rng.gen_range(0.02..0.15)).collect();
+    (cov, mu)
+}
+
+fn bench_qp() {
+    println!("\n=== QP via ADMM/OSQP (Markowitz portfolio — 2nd convex product) ===");
+    println!(
+        "{:>6} {:>7} {:>12} {:>12} {:>12} {:>10}",
+        "n", "T", "solve (ms)", "prim_res", "dual_res", "valid"
+    );
+    for &n in &[10usize, 50, 100, 200] {
+        let (cov, mu) = gen_covariance(n, 0xA55E7 ^ n as u64);
+        let prob = markowitz(&cov, &mu, 5.0, 2.0 / n as f64);
+        let t = 3000usize;
+        let solve_s = best_of(3, || {
+            let r = solve_admm(&prob, t, 1.0, 1e-6, 1.6);
+            std::hint::black_box(r.objective);
+        });
+        let res = solve_admm(&prob, t, 1.0, 1e-6, 1.6);
+        let cert = CertQp::from_solution(&prob, &res, 1e-3);
+        let rep = cert.check();
+        println!(
+            "{:>6} {:>7} {:>12.2} {:>12.2e} {:>12.2e} {:>10}",
+            n,
+            t,
+            solve_s * 1e3,
+            rep.prim_res,
+            rep.dual_res,
+            rep.valid,
+        );
+    }
+    println!(
+        "  (KKT matrix factored ONCE — public P,A — then division-free ADMM steps;\n   \
+         certificate = KKT residual, the QP analogue of Cert-F.)"
+    );
+
+    // Both polarities on one instance.
+    let (cov, mu) = gen_covariance(20, 0xF10A7);
+    let mv = solve_admm(&markowitz(&cov, &mu, 0.0, 1.0), 5000, 1.0, 1e-6, 1.6);
+    let rs = solve_admm(&markowitz(&cov, &mu, 30.0, 0.25), 8000, 1.0, 1e-6, 1.6);
+    let herf = |x: &[f64]| x.iter().map(|v| v * v).sum::<f64>();
+    println!(
+        "  polarities (n=20): min-variance concentration (Σxᵢ²)={:.3}, \
+         return-seeking={:.3} (higher = more concentrated)",
+        herf(&mv.x),
+        herf(&rs.x)
+    );
+}
+
 fn demonstrate_certificate() {
     println!("\n=== Cert-F CERTIFICATE OUTPUT (bridge to the Lean checker) ===");
     // A known-optimum triangle: caps [5,3,7], w=1 → optimum = 3*3 = 9.
@@ -270,5 +336,6 @@ fn main() {
     bench_clearing(&gpu);
     bench_pdhg(&gpu);
     bench_exactness();
+    bench_qp();
     demonstrate_certificate();
 }

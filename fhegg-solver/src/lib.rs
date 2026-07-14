@@ -27,3 +27,4 @@ pub mod cert;
 pub mod clearing;
 pub mod gpu;
 pub mod pdhg;
+pub mod qp;
