@@ -5256,7 +5256,9 @@ dependencies = [
  "dregg-cell-crypto",
  "dregg-circuit",
  "dregg-turn",
+ "futures-channel",
  "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "itertools 0.14.0",
  "num-bigint",
  "p3-air",
@@ -5658,6 +5660,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "dregg-genesis-snapshot"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-cell",
+ "dregg-circuit",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "dregg-governance"
 version = "0.1.0"
 dependencies = [
@@ -5934,6 +5947,7 @@ dependencies = [
  "bs58",
  "collective-choice",
  "dregg-bridge",
+ "dregg-governance",
  "ed25519-dalek",
  "hmac 0.12.1",
  "serde_json",
@@ -6224,6 +6238,20 @@ dependencies = [
  "tokio",
  "tracing",
  "zeroize",
+]
+
+[[package]]
+name = "dregg-season"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-cell",
+ "dregg-epoch",
+ "dregg-genesis-snapshot",
+ "dungeon-on-dregg",
+ "serde",
+ "serde_json",
+ "ugc-dregg",
 ]
 
 [[package]]
@@ -6568,6 +6596,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "dreggnet-asset"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-app-framework",
+ "dregg-cell",
+ "dregg-schema",
+ "zeroize",
+]
+
+[[package]]
 name = "dreggnet-compute"
 version = "0.1.0"
 dependencies = [
@@ -6664,6 +6703,7 @@ dependencies = [
  "dregg-app-framework",
  "dregg-node-target",
  "dregg-pay",
+ "dreggnet-tournament",
  "dungeon-on-dregg",
  "hex",
  "procgen-dregg",
@@ -6687,6 +6727,16 @@ dependencies = [
  "serde",
  "serde_json",
  "zeroize",
+]
+
+[[package]]
+name = "dreggnet-tournament"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dungeon-on-dregg",
+ "procgen-dregg",
+ "ugc-dregg",
 ]
 
 [[package]]
@@ -6759,6 +6809,8 @@ dependencies = [
  "dregg-turn",
  "dregg-types",
  "dregg-zkoracle-prove",
+ "dreggnet-asset",
+ "procgen-dregg",
  "serde_json",
  "spween",
  "spween-dregg",

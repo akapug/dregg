@@ -1,0 +1,58 @@
+# `dregg-season` — THE SEASON ABSTRACTION: The Descent as SEASONS punctuated by
+# protocol upgrades.
+#
+# A SEASON is one VK-epoch's run: a pinned `EpochManifest` (dregg-epoch) + a
+# content set + a season-scoped no-cheat leaderboard (ugc-dregg). A SEASON
+# BOUNDARY is an upgrade, classified by the drift taxonomy
+# (scripts/classify_descriptor_drift.py, modeled here as `DriftClass`):
+#   * TAIL-APPEND  → the SAME season CONTINUES (epoch tag bumps, board/state persist).
+#   * GEOMETRY-WIDEN → the season ENDS, a NEW season begins; the opt-in legacy
+#     (a HALL-OF-FAME of the prior season's champions + per-identity PRESTIGE) is
+#     carried forward via a `GenesisSnapshot` export→seed (dregg-genesis-snapshot),
+#     while the active leaderboard + characters RESET.
+#
+# CONSUMES (reimplements nothing; never modifies their src):
+#   * dregg-epoch            — the `EpochManifest` a season is pinned to + the
+#                              `check_compatibility` handshake (a registry_fp move
+#                              = a new VK-epoch = a season boundary).
+#   * dregg-genesis-snapshot — the carry-forward: `GenesisSnapshot::export` /
+#                              `seed_genesis` (tamper-refusing cell carry-forward).
+#   * ugc-dregg              — the season-scoped no-cheat leaderboard (Registry).
+#   * dregg-cell             — the `Cell` a carried champion / prestige badge is
+#                              encoded as (the snapshot carries cells).
+#
+# A breadstuffs workspace member; the root `[workspace]`/`[patch]`/`[lints]` apply.
+[package]
+name = "dregg-season"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "The Descent as SEASONS punctuated by protocol upgrades: a season is one VK-epoch's run (a pinned EpochManifest + a content set + a season-scoped no-cheat leaderboard); a season boundary is a drift-classified upgrade — a tail-append CONTINUES the season, a geometry-widen ENDS it into a new season that carries forward an opt-in hall-of-fame + prestige via a tamper-refusing genesis snapshot while the active board resets."
+
+[lints]
+workspace = true
+
+[dependencies]
+# The EpochManifest a season is pinned to + the compatibility handshake.
+dregg-epoch = { path = "../dregg-epoch" }
+# The carry-forward: export an old season's cell-set into a snapshot, seed the new
+# season's genesis from it. Rides its content-address stability + tamper-refusal.
+dregg-genesis-snapshot = { path = "../dregg-genesis-snapshot" }
+# The season-scoped no-cheat leaderboard (its Registry / Entry / UniverseId).
+ugc-dregg = { path = "../ugc-dregg" }
+# The Cell a carried champion / prestige badge is encoded as (the snapshot carries
+# cells) + the FederationId a snapshot binds source/target to.
+dregg-cell = { path = "../cell" }
+# Domain-separated derivations (identity / token / federation id).
+blake3 = "1"
+serde = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+# A real, winnable dungeon world + its winning-move constants — the season "runs"
+# its leaderboard over this so a hall-of-fame carry-forward is driven, not named.
+dungeon-on-dregg = { path = "../dungeon-on-dregg" }
+serde_json = { workspace = true }
