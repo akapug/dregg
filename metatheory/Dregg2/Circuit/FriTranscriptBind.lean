@@ -27,23 +27,27 @@ let zeta  = challenger.sample_algebra_element();   -- ζ, the OOD point         
 FINDING: BOTH ζ and α(=Λ) are transcript-derived in the DEPLOYED verifier. The survey's "Λ appears
 nowhere in verifyAlgo" was true of the MODEL, not the deployment.
 
-## What `deriveOod` models — now the FULL squeeze sequence
+## What `deriveOod` models — the SEQUENCE STRUCTURE, and the fidelity residual (adversarially audited)
 
-`deriveOod` replicates the deployed sequence TERM-FOR-TERM: `observe(trace); observe(public);
-sample α; observe(quotient_chunks); squeeze ζ`. The α RLC-challenge squeeze and the quotient-chunks
-observation between the public values and ζ — previously an abstraction gap — are now MODELED: the
-`quotientCommit` field was added to `BatchProofData` for exactly this, and α's sponge advance is threaded
-(its value discarded, only its effect on the challenger state kept). So `deriveOod` squeezes ζ at the
-SAME challenger state the deployed verifier does; an honest deployed proof (whose `oodPoint` is that
-deployed ζ) PASSES `oodTranscriptCheck`, so the deployed `verifyBatch → verifyAlgoTB` swap is FAITHFUL
-(it does not reject honest proofs), not merely additive.
+`deriveOod` replicates the deployed squeeze SEQUENCE: `observe(trace); observe(public); sample α;
+observe(quotient_chunks); squeeze ζ` (the α advance and the quotient observation are modeled — the
+`quotientCommit` field was added to `BatchProofData` for exactly this). This is a REAL soundness gain:
+ζ is now a checked function of the transcript, no longer a free prover field — `oodTranscriptCheck`
+rejects a prover-chosen ζ (`oodTranscriptCheck_rejects_free_ood`), and the ROM ε-bound (`OodRomBound`)
+rides on the bound ζ.
 
-Residual abstraction, named honestly (the standing model↔deployment correspondence, validated by the KAT
-corpus): (i) the `degree_bits`/`base_degree_bits`/`preprocessed_width` preamble (public constants absorbed
-before the trace); (ii) the base-field vs extension-field representation — the whole model is a base-field
-FRI abstraction of p3's extension-field challenges (α/ζ squeezed as base-field lanes here, matching the
-model's base-field `oodPoint`). The probabilistic half (the squeeze is a uniform draw ⇒ ζ non-exceptional
-except ε ≤ dN/|F|, the verifier's own "Soundness Error: dN/|EF|") is `OodRomBound`, over this ζ.
+HONEST FIDELITY RESIDUAL (an earlier version of this comment OVERCLAIMED that honest deployed proofs pass
+— they are NOT proven to): `deriveOod` does not yet hit the EXACT deployed challenger state, for two
+reasons the model shares with `deriveFri`: (a) it starts from `Challenger.init initState`, OMITTING the
+deployed `observe(degree_bits/base_degree_bits/preprocessed_width)` preamble — those absorbs leave pending
+input-buffer lanes that shift every later duplexing, so `init` does not emulate the post-preamble state;
+(b) `deriveOod` and `deriveFri` (the FRI betas/query indices) are SEPARATE threads each from `init`,
+whereas the deployment runs ONE continued challenger through the whole transcript. So whether
+`deriveOod = ` the deployed ζ (i.e. whether an honest deployed proof passes) is OPEN — the standing
+"model's per-phase challengers vs the deployment's single thread" correspondence, NOT yet closed. The
+faithful fix is unifying the model's challenger into one thread (which would also bind the FRI betas —
+see `FriVerifier.foldConsistent`'s discarded `_betas`). Plus the base-vs-extension-field abstraction
+(α/ζ squeezed as base-field lanes vs p3's ext-field), so the SZ bound is over `|F|`, not `|EF|`.
 -/
 
 namespace Dregg2.Circuit.FriTranscriptBind
