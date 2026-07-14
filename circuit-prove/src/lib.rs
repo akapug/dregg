@@ -24,6 +24,7 @@ pub mod blinded_membership_leaf_adapter;
 pub mod bridge_leaf_adapter;
 pub mod carrier_pin_twin;
 pub mod caveat_admission_leaf_adapter;
+pub mod cert_f_air;
 pub mod custom_leaf_adapter;
 pub mod custom_proof_bind;
 pub mod deco_leaf_adapter;

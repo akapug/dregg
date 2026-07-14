@@ -43,6 +43,9 @@ p3-circuit-prover = { workspace = true }
 postcard = { version = "1", features = ["alloc"] }
 blake3 = "1"
 serde = { version = "1", features = ["derive"] }
+# The fhegg-solver Cert-F JSON bridge (cert_f_air::from_solution_json) parses the
+# solver's f64 certificate wire format into an integer certificate the STARK proves.
+serde_json = { workspace = true }
 tracing = { version = "0.1" }
 itertools = { version = "0.14" }
 rand = { version = "0.10" }

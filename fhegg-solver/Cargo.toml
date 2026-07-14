@@ -29,6 +29,10 @@ serde_json = "1"
 name = "fhegg-bench"
 path = "src/bin/bench.rs"
 
+[[bin]]
+name = "fhegg-e2e"
+path = "src/bin/e2e.rs"
+
 [profile.release]
 opt-level = 3
 lto = "thin"
