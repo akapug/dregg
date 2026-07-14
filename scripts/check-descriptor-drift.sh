@@ -84,7 +84,14 @@ done
 
 if [ "$drift" -eq 0 ]; then
   echo "check-descriptor-drift: PASS — the Lean emission matches the checked-in descriptors."
-  exit 0
+  # ADDITIVE — the DRIFT-TAXONOMY gate. Freshness (Lean<->JSON) is settled above;
+  # now classify the descriptor delta vs the base ref and REFUSE a GEOMETRY-WIDEN
+  # (a re-genesis flag-day) unless DREGG_ALLOW_REGENESIS=1. This answers "does this
+  # upgrade need a wipe?" — a tail-append passes, a geometry-widen is caught.
+  # (Skips cleanly when no base ref is resolvable, e.g. a detached fresh checkout.)
+  echo ""
+  "$ROOT/scripts/check-drift-taxonomy.sh"
+  exit $?
 else
   echo "" >&2
   echo "DESCRIPTOR DRIFT: the emit run changed guarded artifacts despite reporting" >&2

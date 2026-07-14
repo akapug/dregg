@@ -1,0 +1,2 @@
+memberA	dregg-fix-a	{"name":"dregg-fix-a","ir":2,"trace_width":188,"public_input_count":42,"constraints":[{"t":"gate","body":{"t":"var","v":3}},{"t":"pi_binding","row":"first","col":30,"pi_index":20},{"t":"pi_binding","row":"first","col":56,"pi_index":41}],"hash_sites":[],"ranges":[]}
+memberB	dregg-fix-b	{"name":"dregg-fix-b","ir":2,"trace_width":188,"public_input_count":42,"constraints":[{"t":"gate","body":{"t":"var","v":3}},{"t":"pi_binding","row":"first","col":30,"pi_index":20}],"hash_sites":[],"ranges":[]}

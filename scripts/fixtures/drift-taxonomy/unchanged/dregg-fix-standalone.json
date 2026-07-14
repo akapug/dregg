@@ -1,0 +1,23 @@
+{
+ "name": "dregg-fix-standalone",
+ "ir": 2,
+ "trace_width": 96,
+ "public_input_count": 2,
+ "constraints": [
+  {
+   "t": "gate",
+   "body": {
+    "t": "var",
+    "v": 3
+   }
+  },
+  {
+   "t": "pi_binding",
+   "row": "first",
+   "col": 10,
+   "pi_index": 0
+  }
+ ],
+ "hash_sites": [],
+ "ranges": []
+}
