@@ -423,18 +423,28 @@ contract DreggLaunchpad {
 
     /// @notice Settle one bidder after clearing: every winner pays the SAME
     ///         `clearingPrice` for its `filled` tokens (uniform price), receives
-    ///         the tokens, and is refunded `deposit − payment`. A non-winner is
-    ///         fully refunded. Permissionless (anyone can settle any bidder).
+    ///         the tokens, and is refunded `deposit − payment`. A non-winner —
+    ///         revealed-but-unfilled OR committed-but-never-revealed — is fully
+    ///         refunded (`filled == 0 ⇒ payment == 0`). This is the ONLY escrow-exit
+    ///         for a committed bidder once a launch has CLEARED: `reclaimEscrow` is
+    ///         disjointly refused on a cleared launch, so an unrevealed committer
+    ///         MUST recover here (mirrors the stalled-launch reclaim path — an
+    ///         unrevealed committer never forfeits to a dead pot). Permissionless
+    ///         (anyone can settle any bidder).
     function settleBid(uint256 launchId, address bidder) external {
         Launch storage L = _launches[launchId];
         if (L.phase != Phase.Cleared && L.phase != Phase.Finalized) revert NotClearPhase();
 
         Bid storage b = _bids[launchId][bidder];
-        if (!b.revealed || b.settled) revert NothingToSettle();
+        // A committed bidder is settleable exactly once: a winner pays + collects,
+        // a revealed non-winner is refunded, an unrevealed committer (filled == 0,
+        // never in the book, never in `proceeds`) is refunded their whole escrow.
+        if (!b.committed || b.settled) revert NothingToSettle();
         b.settled = true;
 
-        uint256 payment = L.clearingPrice * b.filled;
-        uint256 refund = b.deposit - payment; // deposit >= price*qty >= clearing*filled
+        uint256 payment = L.clearingPrice * b.filled; // filled == 0 for a non-winner
+        uint256 refund = b.deposit - payment; // deposit >= price*qty >= clearing*filled; 0-fill ⇒ full deposit
+        b.deposit = 0; // exit the escrow accounting (belt-and-suspenders vs any refund path)
 
         if (b.filled > 0) {
             L.proceeds += payment;
