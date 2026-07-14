@@ -17,6 +17,7 @@ here is the native one; nothing references the dead operated fabric.
 | [UPGRADE.md](UPGRADE.md) | safe redeploy: `deploy/aws/update-gated.sh` (health gate + rollback) |
 | [PAYMENTS-GO-LIVE.md](PAYMENTS-GO-LIVE.md) | the native `$DREGG`/USDC payment rail — devnet→mainnet go-live, custody contract, treasury refuel, the deferred signer-gated edges |
 | [DISCORD-BOT.md](DISCORD-BOT.md) | running the bot frontend (env, hbox deploy, the paid-run flow, monitor, keys) |
+| [PRIVATE-NODE.md](PRIVATE-NODE.md) | the private-deployment foundation — a single verified `dregg-node` on hbox, bound localhost/LAN (never public), executing real turns; `scripts/private-node.sh` start/stop/check |
 
 Companions elsewhere in the tree:
 
