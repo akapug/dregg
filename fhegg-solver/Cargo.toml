@@ -45,6 +45,10 @@ path = "src/bin/fhegg_clear.rs"
 name = "package-bench"
 path = "src/bin/package_bench.rs"
 
+[[bin]]
+name = "smooth-bench"
+path = "src/bin/smooth_bench.rs"
+
 # The DreggFi offerings wire: thin JSON-in/JSON-out runners (siblings of
 # fhegg_clear) that drive the derivatives desk + the package auction as
 # clickable offerings — same library, same certificates, no benchmark harness.

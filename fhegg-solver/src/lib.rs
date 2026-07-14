@@ -41,6 +41,16 @@
 //!    APPROXIMATION: an untrusted integral packing + a Lagrangian dual bound, with
 //!    the [`package::CertPackage`] certificate proving feasibility (indivisibility
 //!    preserved, `x ∈ {0,1}`) + a near-optimality ratio `W ≤ W* ≤ UB(y)`.
+//! 8. [`smooth`] — smooth-convex / **SGD** certified by a GRADIENT-NORM witness
+//!    ([`smooth::CertGrad`]): an untrusted (S)GD run on a `μ`-strongly-convex
+//!    objective (ridge least-squares / logistic) emits its achieved point `x`;
+//!    the certificate checks `‖∇f(x)‖ ≤ ε` (near-stationarity) and reports the
+//!    convex suboptimality bound `f(x)−f* ≤ ‖∇f‖²/(2μ)`. This is the OTHER
+//!    verify-not-find axis — no dual gap, just the gradient — showing the engine
+//!    is a general verified-(private-)optimization substrate of which LP/clearing
+//!    is one class (Otti's breadth = LP+SDP+SGD; we add privacy + verification;
+//!    the non-convex caveat = stationarity-not-optimality is stated in-module).
+//!    See `docs/deos/VERIFIED-OPTIMIZATION-GENERALIZATION.md`.
 //!
 //! Cert-F/Aggregation certificates are LINEAR (Tier-0/1); CertEq is bilinear and
 //! CertRoute nonlinear in the witness (both `O(size)`, Tier-1). The integer /
@@ -65,3 +75,4 @@ pub mod package;
 pub mod pdhg;
 pub mod pricecert;
 pub mod qp;
+pub mod smooth;
