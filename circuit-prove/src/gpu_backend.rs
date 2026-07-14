@@ -70,6 +70,15 @@
 //!   "LDE device-residency" section below for the binding contract.
 //! - NOT yet wired: the all-BabyBear inner (apex-fold) MMCS.
 
+// On wasm32 the sync-config GPU machinery is intentionally CPU-shelled (wgpu
+// handles are `!Send + !Sync` there), so the native-only imports and the
+// CPU-fallback branches read as dead code / unused imports. That is by design
+// — the on-device GPU path on wasm is the async engine at the file end.
+#![cfg_attr(
+    target_arch = "wasm32",
+    allow(dead_code, unused_imports, unused_variables)
+)]
+
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -183,8 +192,18 @@ struct SharedGpu {
     max_buf_u32s: usize,
 }
 
+// The process-wide device is a `Sync` static ONLY on native: on wasm32 the
+// WebGPU handles are `!Send + !Sync` (they wrap JS objects behind a `RefCell`),
+// so they cannot live in a `static`, and adapter/device acquisition MUST be
+// async (no `pollster::block_on` on the browser main thread). The wasm path
+// therefore acquires the device via `async fn init_gpu()` (see the WASM /
+// WebGPU async engine at the end of this file) and threads it explicitly
+// through the worker-run async prover core, never through a global. The whole
+// blocking-init machinery below is native-only by construction.
+#[cfg(not(target_arch = "wasm32"))]
 static SHARED_GPU: OnceLock<Option<SharedGpu>> = OnceLock::new();
 
+#[cfg(not(target_arch = "wasm32"))]
 fn shared_gpu() -> Option<&'static SharedGpu> {
     SHARED_GPU
         .get_or_init(|| {
@@ -251,37 +270,13 @@ fn shared_gpu() -> Option<&'static SharedGpu> {
 //   on every run.
 // ============================================================================
 
-/// Sampled raw (Montgomery) words checked before a resident buffer is used.
-const LDE_GUARD_SAMPLES: usize = 64;
-/// Registry caps — evicting an entry only costs the fallback upload.
-const LDE_REGISTRY_MAX_ENTRIES: usize = 128;
-const LDE_REGISTRY_MAX_BYTES: u64 = 6 << 30;
-
-struct ResidentLde {
-    buf: wgpu::Buffer,
-    bytes: u64,
-    seq: u64,
-    /// (flat index, raw word) samples of the host copy at registration.
-    guard: Vec<(usize, u32)>,
-}
-
-/// (registering thread, host values ptr, host values len).
-type LdeKey = (std::thread::ThreadId, usize, usize);
-
-#[derive(Default)]
-struct LdeRegistry {
-    map: HashMap<LdeKey, ResidentLde>,
-    bytes: u64,
-    seq: u64,
-}
-
-static LDE_REGISTRY: OnceLock<Mutex<LdeRegistry>> = OnceLock::new();
+// The residency counters are plain atomics — `Sync` on every target — so the
+// public accessor stays available on wasm (it simply reads 0/0 there, since the
+// device-resident LDE hand-off is a native-only optimisation: it parks a
+// `wgpu::Buffer` in a process-wide `Mutex`, and wgpu buffers are `!Send` on
+// wasm, so the registry itself is native-only).
 static LDE_RESIDENT_HITS: AtomicU64 = AtomicU64::new(0);
 static LDE_RESIDENT_MISSES: AtomicU64 = AtomicU64::new(0);
-
-fn lde_registry() -> &'static Mutex<LdeRegistry> {
-    LDE_REGISTRY.get_or_init(|| Mutex::new(LdeRegistry::default()))
-}
 
 /// (hits, misses) of the device-resident LDE hand-off across the process —
 /// a hit is one leaf-arena upload replaced by a device→device blit.
@@ -292,8 +287,52 @@ pub fn lde_residency_counters() -> (u64, u64) {
     )
 }
 
+/// On wasm the resident-LDE registry does not exist (wgpu buffers are `!Send`);
+/// the commit path calls this at the end of the CPU fallback, so it is a no-op.
+#[cfg(target_arch = "wasm32")]
+fn clear_thread_resident_ldes() {}
+
+/// Sampled raw (Montgomery) words checked before a resident buffer is used.
+#[cfg(not(target_arch = "wasm32"))]
+const LDE_GUARD_SAMPLES: usize = 64;
+/// Registry caps — evicting an entry only costs the fallback upload.
+#[cfg(not(target_arch = "wasm32"))]
+const LDE_REGISTRY_MAX_ENTRIES: usize = 128;
+#[cfg(not(target_arch = "wasm32"))]
+const LDE_REGISTRY_MAX_BYTES: u64 = 6 << 30;
+
+#[cfg(not(target_arch = "wasm32"))]
+struct ResidentLde {
+    buf: wgpu::Buffer,
+    bytes: u64,
+    seq: u64,
+    /// (flat index, raw word) samples of the host copy at registration.
+    guard: Vec<(usize, u32)>,
+}
+
+/// (registering thread, host values ptr, host values len).
+#[cfg(not(target_arch = "wasm32"))]
+type LdeKey = (std::thread::ThreadId, usize, usize);
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+struct LdeRegistry {
+    map: HashMap<LdeKey, ResidentLde>,
+    bytes: u64,
+    seq: u64,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+static LDE_REGISTRY: OnceLock<Mutex<LdeRegistry>> = OnceLock::new();
+
+#[cfg(not(target_arch = "wasm32"))]
+fn lde_registry() -> &'static Mutex<LdeRegistry> {
+    LDE_REGISTRY.get_or_init(|| Mutex::new(LdeRegistry::default()))
+}
+
 /// Park a coset-LDE's retained device buffer, keyed by the host allocation
 /// that `TwoAdicFriPcs::commit` will hand to `Mmcs::commit`.
+#[cfg(not(target_arch = "wasm32"))]
 fn register_resident_lde(values: &[BabyBear], buf: wgpu::Buffer) {
     let len = values.len();
     if len == 0 {
@@ -337,6 +376,7 @@ fn register_resident_lde(values: &[BabyBear], buf: wgpu::Buffer) {
 
 /// Take the resident device buffer for a matrix about to be committed, iff
 /// the (thread, ptr, len) key AND the sampled-content guard both match.
+#[cfg(not(target_arch = "wasm32"))]
 fn take_resident_lde<M: Matrix<BabyBear>>(m: &M) -> Option<wgpu::Buffer> {
     let h = m.height();
     let w = m.width();
@@ -367,6 +407,7 @@ fn take_resident_lde<M: Matrix<BabyBear>>(m: &M) -> Option<wgpu::Buffer> {
 /// of every `GpuBn254Mmcs::commit` (in the PCS flow all LDEs of a batch are
 /// consumed by exactly the next commit, so leftovers are dead weight and
 /// clearing them promptly closes the stale-pointer window).
+#[cfg(not(target_arch = "wasm32"))]
 fn clear_thread_resident_ldes() {
     let tid = std::thread::current().id();
     let mut reg = lde_registry().lock().unwrap();
@@ -388,6 +429,7 @@ fn clear_thread_resident_ldes() {
 // re-gated in tests below)
 // ============================================================================
 
+#[cfg(not(target_arch = "wasm32"))]
 const DFT_PRELUDE: &str = r#"
 const P: u32 = 0x78000001u;
 const MU: u32 = 0x88000001u;
@@ -436,6 +478,7 @@ fn subp(a: u32, b: u32) -> u32 {
 "#;
 
 /// Tiled transpose, row-major (H x W, W arbitrary) -> column-contiguous.
+#[cfg(not(target_arch = "wasm32"))]
 const K_TRANS_IN: &str = r#"
 var<workgroup> tile: array<u32, 272>;
 @compute @workgroup_size(16, 16)
@@ -455,6 +498,7 @@ fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) l: v
 
 /// Tiled transpose out with bit-reversed row order (the `Evaluations` inner
 /// layout that makes the PCS's `.bit_reverse_rows().to_row_major_matrix()` free).
+#[cfg(not(target_arch = "wasm32"))]
 const K_TRANS_OUT_BITREV: &str = r#"
 var<workgroup> tile: array<u32, 272>;
 @compute @workgroup_size(16, 16)
@@ -475,6 +519,7 @@ fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) l: v
 
 /// LDE expand: iDFT finalize + coset scale + zero-pad stage-skip + bitrev,
 /// one fused pass (see the sketch doc for the derivation).
+#[cfg(not(target_arch = "wasm32"))]
 const K_EXPAND: &str = r#"
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -488,6 +533,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
 /// 2D-tiled first NTT pass: bit-reversal folded into the load, stages 1..E1
 /// in a shared tile over 2^LB adjacent columns.
+#[cfg(not(target_arch = "wasm32"))]
 const K_FUSED1B: &str = r#"
 var<workgroup> tile: array<u32, $TILE>;
 @compute @workgroup_size($WGSZ)
@@ -530,6 +576,7 @@ fn main(@builtin(local_invocation_id) l: vec3<u32>, @builtin(workgroup_id) wg: v
 "#;
 
 /// Register-tier radix-2^R kernel: R DIT stages unrolled in registers.
+#[cfg(not(target_arch = "wasm32"))]
 fn radix_kernel(n: u32, logn: u32, l: u32, r: u32, wgsz: u32) -> String {
     let m = 1u32 << r;
     let mut s = String::new();
@@ -568,10 +615,12 @@ fn radix_kernel(n: u32, logn: u32, l: u32, r: u32, wgsz: u32) -> String {
     s
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn tw_def(off: u32) -> String {
     format!("fn TW(i: u32) -> u32 {{ return tw[{off}u + i]; }}\n")
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn subst(template: &str, pairs: &[(&str, u32)]) -> String {
     let mut s = template.to_string();
     for (k, v) in pairs {
@@ -581,6 +630,7 @@ fn subst(template: &str, pairs: &[(&str, u32)]) -> String {
 }
 
 /// Split `total` DIT stages into register-radix chunk sizes <= 5.
+#[cfg(not(target_arch = "wasm32"))]
 fn split_stages(total: u32) -> Vec<u32> {
     let mut out = Vec::new();
     let mut rem = total;
@@ -607,6 +657,7 @@ fn split_stages(total: u32) -> Vec<u32> {
     out
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 struct DftBufs {
     a: wgpu::Buffer,
     b: wgpu::Buffer,
@@ -616,6 +667,7 @@ struct DftBufs {
     bg_ba: wgpu::BindGroup,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 struct DftCtx {
     // Buffers/bind groups/pipelines are declared BEFORE the device handle so
     // they drop first (and the device itself is a clone of the 'static
@@ -634,6 +686,7 @@ struct DftCtx {
 }
 
 /// DFT bind group layout: b0 = data (rw), b1 = src (ro), b2 = tw (ro).
+#[cfg(not(target_arch = "wasm32"))]
 fn dft_bgl(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     let entry = |binding: u32, read_only: bool| wgpu::BindGroupLayoutEntry {
         binding,
@@ -651,6 +704,7 @@ fn dft_bgl(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl DftCtx {
     fn new() -> Option<Self> {
         let shared = shared_gpu()?;
@@ -837,6 +891,7 @@ impl DftCtx {
 }
 
 #[derive(Clone, Copy, PartialEq)]
+#[cfg(not(target_arch = "wasm32"))]
 enum Target {
     A,
     B,
@@ -848,6 +903,12 @@ enum Target {
 #[derive(Clone, Default)]
 pub struct GpuDft {
     cpu: Radix2DitParallel<BabyBear>,
+    // The GPU DFT context holds wgpu handles (`!Send + !Sync` on wasm). On
+    // wasm32 `GpuDft` is a CPU-only shell so it stays `Sync` (the `TwoAdicFriPcs`
+    // config bound requires it); the on-device GPU DFT is a next-pass sharpening
+    // (the ~1-2% seam-1 term — the on-device async engine at the file end GPU's
+    // the ~60% MMCS lever first).
+    #[cfg(not(target_arch = "wasm32"))]
     ctx: Arc<OnceLock<Option<Mutex<DftCtx>>>>,
 }
 
@@ -857,6 +918,7 @@ const E1: u32 = 8;
 const LB: u32 = 3;
 
 impl GpuDft {
+    #[cfg(not(target_arch = "wasm32"))]
     fn gpu(&self) -> Option<&Mutex<DftCtx>> {
         self.ctx
             .get_or_init(|| DftCtx::new().map(Mutex::new))
@@ -864,8 +926,17 @@ impl GpuDft {
     }
 
     /// Adapter name if a GPU is available (None = permanent CPU fallback).
+    /// On wasm this shell is always CPU (see `init_gpu` for the on-device path).
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn adapter_name(&self) -> Option<String> {
         self.gpu().map(|m| m.lock().unwrap().adapter_name.clone())
+    }
+
+    /// Adapter name — wasm CPU-shell variant (the on-device GPU is reached via
+    /// `init_gpu()`, not through this sync-config type).
+    #[cfg(target_arch = "wasm32")]
+    pub fn adapter_name(&self) -> Option<String> {
+        None
     }
 
     /// Run the DFT/LDE plan. With `retain`, the final bit-reversed transpose
@@ -873,6 +944,7 @@ impl GpuDft {
     /// target — no extra copy) returned for LDE device-residency; retention
     /// is skipped on the column-chunked path (no single buffer holds the
     /// whole result there).
+    #[cfg(not(target_arch = "wasm32"))]
     fn gpu_flow(
         &self,
         ctx: &mut DftCtx,
@@ -1126,16 +1198,25 @@ impl TwoAdicSubgroupDft<BabyBear> for GpuDft {
     type Evaluations = BitReversedMatrixView<RowMajorMatrix<BabyBear>>;
 
     fn dft_batch(&self, mat: RowMajorMatrix<BabyBear>) -> Self::Evaluations {
-        let h = mat.height();
-        if h < (1 << MIN_GPU_LOG_H) || !h.is_power_of_two() || mat.width() == 0 {
+        // wasm: CPU-shell (the sync-config DFT seam). The on-device GPU DFT is a
+        // next-pass sharpening; the async engine at the file end runs on wasm.
+        #[cfg(target_arch = "wasm32")]
+        {
             return self.cpu.dft_batch(mat);
         }
-        let Some(gm) = self.gpu() else {
-            return self.cpu.dft_batch(mat);
-        };
-        let mut ctx = gm.lock().unwrap();
-        let (out, _) = self.gpu_flow(&mut ctx, &mat, 0, BabyBear::ONE, false, false);
-        RowMajorMatrix::new(u32s_into_bb(out), mat.width()).bit_reverse_rows()
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let h = mat.height();
+            if h < (1 << MIN_GPU_LOG_H) || !h.is_power_of_two() || mat.width() == 0 {
+                return self.cpu.dft_batch(mat);
+            }
+            let Some(gm) = self.gpu() else {
+                return self.cpu.dft_batch(mat);
+            };
+            let mut ctx = gm.lock().unwrap();
+            let (out, _) = self.gpu_flow(&mut ctx, &mat, 0, BabyBear::ONE, false, false);
+            RowMajorMatrix::new(u32s_into_bb(out), mat.width()).bit_reverse_rows()
+        }
     }
 
     fn coset_lde_batch(
@@ -1144,23 +1225,31 @@ impl TwoAdicSubgroupDft<BabyBear> for GpuDft {
         added_bits: usize,
         shift: BabyBear,
     ) -> Self::Evaluations {
-        let h = mat.height();
-        if h < (1 << MIN_GPU_LOG_H) || !h.is_power_of_two() || mat.width() == 0 {
+        #[cfg(target_arch = "wasm32")]
+        {
             return self.cpu.coset_lde_batch(mat, added_bits, shift);
         }
-        let Some(gm) = self.gpu() else {
-            return self.cpu.coset_lde_batch(mat, added_bits, shift);
-        };
-        let mut ctx = gm.lock().unwrap();
-        let (out, retained) = self.gpu_flow(&mut ctx, &mat, added_bits as u32, shift, true, true);
-        drop(ctx);
-        let values = u32s_into_bb(out);
-        // Park the device copy for the commit that follows in the PCS flow
-        // (the returned Vec is the allocation `commit` will receive).
-        if let Some(buf) = retained {
-            register_resident_lde(&values, buf);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let h = mat.height();
+            if h < (1 << MIN_GPU_LOG_H) || !h.is_power_of_two() || mat.width() == 0 {
+                return self.cpu.coset_lde_batch(mat, added_bits, shift);
+            }
+            let Some(gm) = self.gpu() else {
+                return self.cpu.coset_lde_batch(mat, added_bits, shift);
+            };
+            let mut ctx = gm.lock().unwrap();
+            let (out, retained) =
+                self.gpu_flow(&mut ctx, &mat, added_bits as u32, shift, true, true);
+            drop(ctx);
+            let values = u32s_into_bb(out);
+            // Park the device copy for the commit that follows in the PCS flow
+            // (the returned Vec is the allocation `commit` will receive).
+            if let Some(buf) = retained {
+                register_resident_lde(&values, buf);
+            }
+            RowMajorMatrix::new(values, mat.width()).bit_reverse_rows()
         }
-        RowMajorMatrix::new(values, mat.width()).bit_reverse_rows()
     }
 }
 
@@ -1536,6 +1625,7 @@ const HASH_WG: u32 = 64;
 /// Max permutations per dispatch (Metal watchdog headroom at ~1 Mperm/s).
 const HASH_MAX_PERMS_PER_DISPATCH: usize = 1 << 18;
 
+#[cfg(not(target_arch = "wasm32"))]
 struct HashCtx {
     // Pipelines/layouts before the device handle (same drop-order discipline
     // as DftCtx; the device is the 'static SharedGpu one).
@@ -1548,6 +1638,7 @@ struct HashCtx {
     queue: wgpu::Queue,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl HashCtx {
     fn new() -> Option<Self> {
         let shared = shared_gpu()?;
@@ -1775,6 +1866,10 @@ pub enum GpuMmcsProverData<M> {
 pub struct GpuBn254Mmcs {
     cpu: OuterValMmcs,
     cap_height: usize,
+    // wgpu hash context — `!Send + !Sync` on wasm, so the sync-config MMCS is a
+    // CPU-only shell there and stays `Sync`. The on-device GPU BN254 tree build
+    // (the ~60% Amdahl lever) is served by the async engine at the file end.
+    #[cfg(not(target_arch = "wasm32"))]
     ctx: Arc<OnceLock<Option<Mutex<HashCtx>>>>,
 }
 
@@ -1792,10 +1887,12 @@ impl GpuBn254Mmcs {
         Self {
             cpu: OuterValMmcs::new(hash, compress, cap_height),
             cap_height,
+            #[cfg(not(target_arch = "wasm32"))]
             ctx: Arc::new(OnceLock::new()),
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn gpu(&self) -> Option<&Mutex<HashCtx>> {
         self.ctx
             .get_or_init(|| HashCtx::new().map(Mutex::new))
@@ -1803,8 +1900,17 @@ impl GpuBn254Mmcs {
     }
 
     /// Whether a GPU adapter is available (None = permanent CPU fallback).
+    /// On wasm the sync-config MMCS is always CPU (see `init_gpu`).
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn adapter_available(&self) -> bool {
         self.gpu().is_some()
+    }
+
+    /// wasm CPU-shell: the sync-config MMCS never dispatches to the GPU (the
+    /// on-device path is the async engine, reached via `init_gpu()`).
+    #[cfg(target_arch = "wasm32")]
+    pub fn adapter_available(&self) -> bool {
+        false
     }
 
     /// Estimated total permutations for a batch (leaf sponges + compresses).
@@ -1823,6 +1929,7 @@ impl GpuBn254Mmcs {
 
     /// The GPU tree build. Preconditions (checked by the caller): all heights
     /// powers of two, at least one matrix, cap_height == 0, GPU available.
+    #[cfg(not(target_arch = "wasm32"))]
     fn build_gpu_tree<M: Matrix<BabyBear>>(
         &self,
         ctx: &HashCtx,
@@ -1962,6 +2069,10 @@ impl Mmcs<BabyBear> for GpuBn254Mmcs {
                 .iter()
                 .all(|&(h, w)| h.is_power_of_two() && h > 0 && w > 0)
             && Self::estimate_perms(&shapes) >= MIN_GPU_MMCS_PERMS;
+        // The GPU fast-path is native-only (holds wgpu handles). On wasm the
+        // sync-config MMCS is a CPU shell; the on-device GPU BN254 tree lives in
+        // the async engine at the file end (reached via `init_gpu()`).
+        #[cfg(not(target_arch = "wasm32"))]
         if gpu_able && let Some(gm) = self.gpu() {
             let ctx = gm.lock().unwrap();
             // Every height-group arena must fit one storage binding; if any
@@ -2359,6 +2470,7 @@ fn bb_hash_shader_source(wg: u32) -> String {
 /// 16-lane register state — modest pressure; 64 mirrors the BN254 engine.
 const BB_HASH_WG: u32 = 64;
 
+#[cfg(not(target_arch = "wasm32"))]
 struct BbHashCtx {
     bgl: wgpu::BindGroupLayout,
     leaf_pipe: wgpu::ComputePipeline,
@@ -2369,6 +2481,7 @@ struct BbHashCtx {
     queue: wgpu::Queue,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl BbHashCtx {
     fn new() -> Option<Self> {
         let shared = shared_gpu()?;
@@ -2579,6 +2692,9 @@ fn bb8_from_monty(d: &[u32; 8]) -> [BabyBear; 8] {
 pub struct GpuBabyBearMmcs {
     cpu: BbValMmcs,
     cap_height: usize,
+    // wgpu hash context — `!Send + !Sync` on wasm (CPU-only shell there; the
+    // inner all-BabyBear GPU tree is a next-pass on-device sharpening).
+    #[cfg(not(target_arch = "wasm32"))]
     ctx: Arc<OnceLock<Option<Mutex<BbHashCtx>>>>,
 }
 
@@ -2591,10 +2707,12 @@ impl GpuBabyBearMmcs {
         Self {
             cpu: BbValMmcs::new(hash, compress, cap_height),
             cap_height,
+            #[cfg(not(target_arch = "wasm32"))]
             ctx: Arc::new(OnceLock::new()),
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn gpu(&self) -> Option<&Mutex<BbHashCtx>> {
         self.ctx
             .get_or_init(|| BbHashCtx::new().map(Mutex::new))
@@ -2602,8 +2720,15 @@ impl GpuBabyBearMmcs {
     }
 
     /// Whether a GPU adapter is available (None = permanent CPU fallback).
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn adapter_available(&self) -> bool {
         self.gpu().is_some()
+    }
+
+    /// wasm CPU-shell (the on-device path is the async engine via `init_gpu()`).
+    #[cfg(target_arch = "wasm32")]
+    pub fn adapter_available(&self) -> bool {
+        false
     }
 
     /// Estimated total permutations for a batch (leaf sponges + compresses).
@@ -2625,6 +2750,7 @@ impl GpuBabyBearMmcs {
     /// sponge is the BabyBear rate-8 overwrite sponge, digests are 8-u32
     /// Montgomery). Preconditions (checked by the caller): all heights powers
     /// of two, at least one matrix, cap_height == 0, GPU available.
+    #[cfg(not(target_arch = "wasm32"))]
     fn build_gpu_tree<M: Matrix<BabyBear>>(
         &self,
         ctx: &BbHashCtx,
@@ -2731,6 +2857,8 @@ impl Mmcs<BabyBear> for GpuBabyBearMmcs {
                 .iter()
                 .all(|&(h, w)| h.is_power_of_two() && h > 0 && w > 0)
             && Self::estimate_perms(&shapes) >= MIN_GPU_MMCS_PERMS;
+        // Native-only GPU fast-path (wgpu handles); wasm is the CPU shell.
+        #[cfg(not(target_arch = "wasm32"))]
         if gpu_able && let Some(gm) = self.gpu() {
             let ctx = gm.lock().unwrap();
             let mut group_arena: HashMap<usize, usize> = HashMap::new();
@@ -3817,5 +3945,405 @@ mod tests {
             gpu_time, cpu_time
         );
         let _ = gpu_proof.commitments.trace.roots()[0][0].as_canonical_biguint();
+    }
+}
+
+// ============================================================================
+// WASM32 / WebGPU — the on-device async prover substrate
+//
+// The "private AND fast" endgame for the client-side ZK-leaderboard: the proof
+// is minted ON THE DEVICE, in the browser, over WebGPU — moves never leave the
+// device (privacy) and the Amdahl-dominant Merkle build runs on the GPU (speed).
+//
+// This section is the ASYNC substrate the browser path needs, and it is the
+// STRUCTURAL fix for the two wasm blockers the sync backend above cannot cross:
+//
+//   * adapter/device init used `pollster::block_on` — forbidden on the browser
+//     main thread. `init_gpu()` below `.await`s the adapter/device requests
+//     instead (no block_on), and is callable from a Web Worker (WebGPU works in
+//     workers / OffscreenCanvas), so init never blocks the main thread.
+//   * buffer readback spin-waited on `device.poll(Maintain::Wait)`, which cannot
+//     complete on the browser event loop. `map_read_u32s()` below `.await`s the
+//     `map_async` completion via a oneshot channel on wasm — no poll spin.
+//
+// It is compiled on BOTH targets on purpose: on native the same async fns run
+// (driven by `pollster::block_on` in the tests) so the on-device path is
+// exercised + BIT-IDENTITY-GATED against the CPU floor on a real GPU; on wasm
+// the readback/init arms switch to the browser-async form. Only the readback
+// mechanism and the device-request driver differ per target — the kernels, the
+// descriptor protocol, and the field conversion are the SAME bit-exact ones the
+// native `GpuBn254Mmcs` uses.
+//
+// HONEST SCOPE (scheduled sharpenings, not gaps in what is here):
+//   * REAL now: async init + async readback + a worker-runnable async BN254
+//     Poseidon2 Merkle commit that is bit-identical to `OuterValMmcs` for a
+//     single matrix (the native gate below proves it), and COMPILES for wasm32.
+//   * NEXT: the live in-browser run needs a WebGPU device (a browser / headless-
+//     WebGPU harness) — this build + async structure is the substrate it runs
+//     on; multi-matrix injection + the full opening path on device are the DFT-
+//     seam-style extensions; wiring it under the wasm ZK-leaderboard binding
+//     (the sync STARK prover driven from the worker) lands with Lane-D's fold.
+// ============================================================================
+
+/// A WebGPU device acquired ASYNCHRONOUSLY (no `pollster::block_on`), suitable
+/// for the browser main thread OR a Web Worker.
+pub struct OnDeviceGpu {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    adapter_name: String,
+    #[allow(dead_code)]
+    max_buf_u32s: usize,
+}
+
+impl OnDeviceGpu {
+    /// The acquired adapter's name (`"<name> (<backend>)"`).
+    pub fn adapter_name(&self) -> &str {
+        &self.adapter_name
+    }
+}
+
+/// THE wasm init entry point: acquire a WebGPU device with NO
+/// `pollster::block_on` — the adapter and device requests are `.await`ed, so
+/// this never blocks the browser main thread and can run on a Web Worker.
+///
+/// On wasm each call creates the WebGPU instance/adapter/device asynchronously
+/// (the worker owns it). On NATIVE it reuses the process-wide `SHARED_GPU`
+/// device instead of standing up a second `wgpu::Instance` in the same process
+/// — that keeps a single device (the drop-order discipline the `SharedGpu`
+/// comment documents against the wgpu 24.0.5 teardown crash) and still
+/// exercises the async surface (async fn + async readback) on real GPUs, so the
+/// wasm-shaped engine is bit-identity-gated by the native test below.
+#[cfg(target_arch = "wasm32")]
+pub async fn init_gpu() -> Result<OnDeviceGpu, String> {
+    let instance = wgpu::Instance::default();
+    let adapter = instance
+        .request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            ..Default::default()
+        })
+        .await
+        .ok_or_else(|| "init_gpu: no WebGPU adapter available".to_string())?;
+    let info = adapter.get_info();
+    let lims = adapter.limits();
+    let (device, queue) = adapter
+        .request_device(
+            &wgpu::DeviceDescriptor {
+                label: None,
+                required_features: wgpu::Features::empty(),
+                required_limits: lims.clone(),
+                memory_hints: Default::default(),
+            },
+            None,
+        )
+        .await
+        .map_err(|e| format!("init_gpu: request_device failed: {e}"))?;
+    let max_buf_u32s = (lims
+        .max_buffer_size
+        .min(lims.max_storage_buffer_binding_size as u64)
+        .min(1 << 31) as usize)
+        / 4;
+    Ok(OnDeviceGpu {
+        device,
+        queue,
+        adapter_name: format!("{} ({:?})", info.name, info.backend),
+        max_buf_u32s,
+    })
+}
+
+/// Native `init_gpu`: reuse the process-wide device (see the wasm variant's doc
+/// for why we do NOT create a second instance here). Still `async` so the
+/// on-device engine is exercised on native GPUs exactly as it will run on wasm.
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn init_gpu() -> Result<OnDeviceGpu, String> {
+    let shared = shared_gpu().ok_or_else(|| "init_gpu: no GPU adapter available".to_string())?;
+    Ok(OnDeviceGpu {
+        device: shared.device.clone(),
+        queue: shared.queue.clone(),
+        adapter_name: shared.adapter_name.clone(),
+        max_buf_u32s: shared.max_buf_u32s,
+    })
+}
+
+/// Await a buffer readback. ASYNC readback: on wasm the `map_async` completion
+/// is `.await`ed through a oneshot channel (NO `device.poll(Maintain::Wait)`
+/// spin — that never completes on the browser event loop); on native the same
+/// async fn blocks inside via `poll(Wait)` (fine off any render thread), so the
+/// wasm code path is exercised + gated on native GPUs.
+async fn map_read_u32s(device: &wgpu::Device, buffer: &wgpu::Buffer, len_bytes: u64) -> Vec<u32> {
+    let slice = buffer.slice(..len_bytes);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        device.poll(wgpu::Maintain::Wait);
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let (tx, rx) = futures_channel::oneshot::channel();
+        slice.map_async(wgpu::MapMode::Read, move |res| {
+            let _ = tx.send(res);
+        });
+        // The browser drives GPU completion on the event loop; awaiting the
+        // channel yields to it — no `poll(Wait)` spin (which would deadlock).
+        let _ = device;
+        rx.await
+            .expect("map_async sender dropped")
+            .expect("map_async failed");
+    }
+    let data = slice.get_mapped_range();
+    let out = bytemuck::cast_slice::<u8, u32>(&data).to_vec();
+    drop(data);
+    buffer.unmap();
+    out
+}
+
+/// A read-only / read-write storage-buffer bind-group-layout entry.
+fn od_storage_entry(binding: u32, read_only: bool) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only },
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    }
+}
+
+impl OnDeviceGpu {
+    fn od_storage_buffer(&self, label: &str, u32s: usize, dst: bool) -> wgpu::Buffer {
+        let mut usage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC;
+        if dst {
+            usage |= wgpu::BufferUsages::COPY_DST;
+        }
+        self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size: (u32s.max(4) * 4) as u64,
+            usage,
+            mapped_at_creation: false,
+        })
+    }
+
+    /// GPU-build the BN254 Poseidon2 Merkle ROOT of ONE power-of-two-height
+    /// matrix, entirely on the WebGPU device, reading back only the 8-word root
+    /// through the async path. Uses the SAME kernels (`hash_shader_source`), the
+    /// SAME descriptor protocol, and the SAME field conversion as the native
+    /// `GpuBn254Mmcs`, so the root is bit-identical to
+    /// `OuterValMmcs::commit(vec![mat]).0`'s cap root (asserted in
+    /// `ondevice_tests` below, on the native GPU). This is the on-device
+    /// commitment primitive the browser leaderboard proof commits its state
+    /// with; multi-matrix injection + the opening path are next-pass extensions.
+    pub async fn bn254_merkle_root(&self, mat: &RowMajorMatrix<BabyBear>) -> Result<Bn254, String> {
+        let h = mat.height();
+        let w = mat.width();
+        if h == 0 || w == 0 || !h.is_power_of_two() {
+            return Err("bn254_merkle_root: need a non-empty power-of-two-height matrix".into());
+        }
+
+        // Pipelines — identical 3-binding layout + WGSL as `HashCtx`.
+        let bgl = self
+            .device
+            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("od_hash_bgl"),
+                entries: &[
+                    od_storage_entry(0, true),
+                    od_storage_entry(1, true),
+                    od_storage_entry(2, false),
+                ],
+            });
+        let layout = self
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: None,
+                bind_group_layouts: &[&bgl],
+                push_constant_ranges: &[],
+            });
+        let module = self
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("od_bn254_poseidon2_tree"),
+                source: wgpu::ShaderSource::Wgsl(hash_shader_source(HASH_WG).into()),
+            });
+        let mk_pipe = |entry: &str| {
+            self.device
+                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some(entry),
+                    layout: Some(&layout),
+                    module: &module,
+                    entry_point: Some(entry),
+                    compilation_options: Default::default(),
+                    cache: None,
+                })
+        };
+        let leaf_pipe = mk_pipe("leaf_main");
+        let compress_pipe = mk_pipe("compress_main");
+
+        // Arena (Montgomery u32s, row-major — exactly the native staging bytes),
+        // descriptor, and the two ping-pong digest buffers.
+        let arena = self.od_storage_buffer("od_leaf_arena", h * w, true);
+        self.queue
+            .write_buffer(&arena, 0, bytemuck::cast_slice(bb_as_u32s(&mat.values)));
+        let desc_buf = self.od_storage_buffer("od_desc", 6, true);
+        let dig_a = self.od_storage_buffer("od_dig_a", h * 8, true);
+        let dig_b = self.od_storage_buffer("od_dig_b", h * 8, true);
+
+        let bind = |src: &wgpu::Buffer, out: &wgpu::Buffer| {
+            self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &bgl,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: src.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: desc_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: out.as_entire_binding(),
+                    },
+                ],
+            })
+        };
+
+        // Leaf sponge over all rows, watchdog-chunked like `HashCtx::dispatch_leaf`
+        // (chunking is transparent to the result: each thread writes its absolute
+        // row). desc = [n_mats=1, base, rows, 0, off=0, w].
+        let perms_per_row = w.div_ceil(16).max(1);
+        let rows_per_chunk = (HASH_MAX_PERMS_PER_DISPATCH / perms_per_row.max(1))
+            .max(HASH_WG as usize)
+            .next_multiple_of(HASH_WG as usize);
+        let leaf_bg = bind(&arena, &dig_a);
+        let mut base = 0usize;
+        while base < h {
+            let rows = rows_per_chunk.min(h - base);
+            let desc = [1u32, base as u32, rows as u32, 0u32, 0u32, w as u32];
+            self.queue
+                .write_buffer(&desc_buf, 0, bytemuck::cast_slice(&desc));
+            let mut enc = self.device.create_command_encoder(&Default::default());
+            {
+                let mut pass = enc.begin_compute_pass(&Default::default());
+                pass.set_pipeline(&leaf_pipe);
+                pass.set_bind_group(0, &leaf_bg, &[]);
+                pass.dispatch_workgroups((rows as u32).div_ceil(HASH_WG), 1, 1);
+            }
+            self.queue.submit([enc.finish()]);
+            base += rows;
+        }
+
+        // Compress up to the root (single matrix ⇒ no injection). desc = [n_out, 0, 0, 0].
+        let mut cur_len = h;
+        let mut cur_is_a = true;
+        while cur_len > 1 {
+            let next_len = cur_len / 2;
+            let (src, dst) = if cur_is_a {
+                (&dig_a, &dig_b)
+            } else {
+                (&dig_b, &dig_a)
+            };
+            let bg = bind(src, dst);
+            let desc = [next_len as u32, 0u32, 0u32, 0u32];
+            self.queue
+                .write_buffer(&desc_buf, 0, bytemuck::cast_slice(&desc));
+            let mut enc = self.device.create_command_encoder(&Default::default());
+            {
+                let mut pass = enc.begin_compute_pass(&Default::default());
+                pass.set_pipeline(&compress_pipe);
+                pass.set_bind_group(0, &bg, &[]);
+                pass.dispatch_workgroups((next_len as u32).div_ceil(HASH_WG), 1, 1);
+            }
+            self.queue.submit([enc.finish()]);
+            cur_len = next_len;
+            cur_is_a = !cur_is_a;
+        }
+
+        // The root sits in whichever buffer received the last (len-1) write.
+        let root_buf = if cur_is_a { &dig_a } else { &dig_b };
+        let read = self.od_storage_buffer_read("od_root_read", 8);
+        let mut enc = self.device.create_command_encoder(&Default::default());
+        enc.copy_buffer_to_buffer(root_buf, 0, &read, 0, 32);
+        self.queue.submit([enc.finish()]);
+        let words = map_read_u32s(&self.device, &read, 32).await;
+        let limbs: [u32; 8] = words[..8].try_into().expect("8-word root");
+        Ok(bn254_from_canonical_limbs(&limbs))
+    }
+
+    /// A MAP_READ-usable readback buffer.
+    fn od_storage_buffer_read(&self, label: &str, u32s: usize) -> wgpu::Buffer {
+        self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size: (u32s.max(1) * 4) as u64,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        })
+    }
+}
+
+/// The WORKER-RUNNABLE on-device proving core (substrate). A Web Worker driver
+/// (wasm-bindgen glue + WebGPU-in-workers) calls this on the worker thread: it
+/// `.await`s `init_gpu()` (no main-thread block) and GPU-builds the BN254
+/// commitment of the leaderboard state on device — the moves never leave the
+/// device, and the Amdahl-dominant hashing runs on the GPU. Returns the root.
+/// Wiring the full ZK-leaderboard STARK proof (the sync prover driven from the
+/// worker over this substrate) lands with Lane-D's fold + the wasm binding.
+pub async fn prove_leaderboard_commit_on_device(
+    mat: &RowMajorMatrix<BabyBear>,
+) -> Result<Bn254, String> {
+    let gpu = init_gpu().await?;
+    gpu.bn254_merkle_root(mat).await
+}
+
+/// Native gate for the on-device async path: drive the async engine with
+/// `pollster::block_on` on the real GPU and assert its BN254 Merkle root is
+/// bit-identical to the CPU `OuterValMmcs` floor. This proves the wasm-shaped
+/// async engine (async init + async readback + on-device commit) is correct;
+/// only the readback mechanism differs on wasm.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod ondevice_tests {
+    use p3_commit::Mmcs;
+    use p3_field::integers::QuotientMap;
+    use p3_matrix::dense::RowMajorMatrix;
+
+    use super::{BB_P, BabyBear, GpuBn254Mmcs, init_gpu};
+
+    fn rand_matrix(seed: u64, rows: usize, cols: usize) -> RowMajorMatrix<BabyBear> {
+        let mut s = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+        let mut next = move || {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            (s % BB_P as u64) as u32
+        };
+        let values: Vec<BabyBear> = (0..rows * cols)
+            .map(|_| BabyBear::from_int(next()))
+            .collect();
+        RowMajorMatrix::new(values, cols)
+    }
+
+    #[test]
+    fn on_device_async_bn254_root_matches_cpu() {
+        let gpu = match pollster::block_on(init_gpu()) {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!("no WebGPU device ({e}); on-device gate skipped");
+                return;
+            }
+        };
+        eprintln!("on-device async engine adapter: {}", gpu.adapter_name());
+
+        // The CPU floor is the untouched `OuterValMmcs` inside `GpuBn254Mmcs`.
+        let cpu_mmcs = GpuBn254Mmcs::new(0).cpu.clone();
+        for &(log_h, w) in &[(12usize, 8usize), (13, 17), (14, 3)] {
+            let mat = rand_matrix(log_h as u64 * 131 + w as u64, 1 << log_h, w);
+            let got = pollster::block_on(gpu.bn254_merkle_root(&mat)).expect("on-device root");
+            let (cpu_commit, _) = cpu_mmcs.commit(vec![mat]);
+            let want = cpu_commit.roots()[0][0];
+            assert_eq!(
+                got, want,
+                "on-device async BN254 root != CPU floor at 2^{log_h} x {w}"
+            );
+        }
     }
 }

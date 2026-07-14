@@ -1,0 +1,9 @@
+# Workspace cargo config.
+#
+# wasm32-unknown-unknown only: select the `wasm_js` getrandom backend (the
+# standard getrandom-on-web incantation — the feature alone gates code
+# availability, this cfg selects the JS backend). Scoped to the wasm target, so
+# NATIVE builds are entirely unaffected. Added for the on-device (browser)
+# WebGPU prover path (circuit-prove/src/gpu_backend.rs wasm arms).
+[target.wasm32-unknown-unknown]
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"']

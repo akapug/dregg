@@ -60,6 +60,24 @@ rayon = "1"
 # dependency graph via p3-bn254).
 num-bigint = "0.4"
 
+# --- WASM32 / WebGPU path (additive; native is entirely unaffected — these are
+# target-gated) -----------------------------------------------------------------
+# The on-device (browser) prover target. wgpu 24 exposes WebGPU on wasm32, but
+# the whole non-dev dependency closure must compile for wasm32-unknown-unknown.
+# The two blockers here are dependency-level, not gpu_backend-level:
+#   * getrandom (0.3 + the 0.4 pulled transitively through `rand 0.10` under the
+#     `dregg-circuit` verify floor) needs the `wasm_js` backend feature on
+#     wasm32. Enabling it here (target-gated) turns it on for the whole build via
+#     Cargo feature unification, without touching `circuit/`.
+#   * the `getrandom_backend="wasm_js"` cfg is set in `.cargo/config.toml`
+#     (wasm32-only rustflags), the standard getrandom-on-web incantation.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.3", features = ["wasm_js"] }
+getrandom_04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
+# Async plumbing for the wasm readback path: the oneshot channel whose receiver
+# is awaited in place of the native `poll(Wait)` spin.
+futures-channel = { version = "0.3", default-features = false, features = ["alloc"] }
+
 [dev-dependencies]
 dregg-cell = { path = "../cell" }
 dregg-cell-crypto = { path = "../cell-crypto" }
