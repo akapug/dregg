@@ -2627,32 +2627,65 @@ mod tests {
         }
     }
 
+    /// An honest temporal descriptor proof plus the STARK boundary parameters the
+    /// descriptor pinned (`[num_steps, threshold, initial_state_root,
+    /// final_state_root]`, read straight from `generate_dsl_trace`'s public
+    /// inputs). The `TemporalProofWire` verifier reconstructs these PIs from the
+    /// host `TemporalPolicy`, so a matching policy is built via
+    /// [`temporal_policy_from`].
+    struct HonestTemporal {
+        proof: Ir2BatchProof<DreggStarkConfig>,
+        /// PI[0] — the padded step count the trace commits to.
+        num_steps: u32,
+        /// PI[1] — the bound threshold.
+        threshold: u32,
+        /// PI[2] — the first-row state root.
+        initial_state_root: u32,
+        /// PI[3] — the last-row state root.
+        final_state_root: u32,
+    }
+
     /// Build an honest temporal proof: value >= threshold held for N steps.
-    fn honest_temporal(values: &[u32], threshold: u32) -> TemporalPredicateProof {
+    fn honest_temporal(values: &[u32], threshold: u32) -> HonestTemporal {
+        use dregg_circuit::temporal_predicate_dsl::{TemporalPredicateWitness, generate_dsl_trace};
         let vs: Vec<BabyBear> = values.iter().map(|v| BabyBear::new(*v)).collect();
         let roots: Vec<BabyBear> = (0..values.len())
             .map(|i| BabyBear::new(1000 + i as u32))
             .collect();
-        dregg_circuit::temporal_predicate_dsl::prove_temporal_predicate(
-            &vs,
-            &roots,
-            PredicateType::Gte,
-            BabyBear::new(threshold),
-        )
-        .expect("honest temporal predicate should be provable")
+        let witness = TemporalPredicateWitness {
+            values: vs,
+            state_roots: roots,
+            predicate_type: PredicateType::Gte,
+            threshold: BabyBear::new(threshold),
+        };
+        // pis = [padded_len, threshold, initial_state_root, final_state_root] —
+        // the exact quadruple the temporal descriptor pins and the verifier
+        // reconstructs from the host policy.
+        let (trace, pis) = generate_dsl_trace(&witness);
+        let desc = descriptor_by_name(TEMPORAL_PREDICATE_DESCRIPTOR_NAME)
+            .expect("temporal descriptor registered");
+        let proof = prove_vm_descriptor2(&desc, &trace, &pis, &MemBoundaryWitness::default(), &[])
+            .expect("honest temporal predicate should be provable");
+        HonestTemporal {
+            proof,
+            num_steps: pis[0].as_u32(),
+            threshold: pis[1].as_u32(),
+            initial_state_root: pis[2].as_u32(),
+            final_state_root: pis[3].as_u32(),
+        }
     }
 
-    fn temporal_policy_from(proof: &TemporalPredicateProof, min_steps: u64) -> TemporalPolicy {
+    fn temporal_policy_from(proof: &HonestTemporal, min_steps: u64) -> TemporalPolicy {
         TemporalPolicy {
             requirement: TemporalPredicateRequirement {
                 attribute: "balance".into(),
                 predicate_type: PredicateType::Gte,
-                threshold: proof.threshold.as_u32() as u64,
+                threshold: proof.threshold as u64,
                 min_duration_steps: min_steps,
             },
             num_steps: proof.num_steps,
-            initial_state_root: proof.initial_state_root.as_u32(),
-            final_state_root: proof.final_state_root.as_u32(),
+            initial_state_root: proof.initial_state_root,
+            final_state_root: proof.final_state_root,
         }
     }
 
@@ -2663,7 +2696,7 @@ mod tests {
         let policy = temporal_policy_from(&proof, 3);
         let auth = Arc::new(OneTemporalPolicy { commitment, policy });
         let v = TemporalPredicateStarkVerifier::new(auth);
-        let bytes = postcard::to_allocvec(&proof).unwrap();
+        let bytes = postcard::to_allocvec(&TemporalProofWire { proof: proof.proof }).unwrap();
         let dummy = [0u8; 32];
         v.verify(&commitment, &PredicateInput::Sender(&dummy), &bytes)
             .expect("valid temporal proof must verify");
@@ -2676,33 +2709,41 @@ mod tests {
         let dummy = [0u8; 32];
 
         // FORGE: host policy demands a HIGHER threshold than the proof carries.
-        // is_satisfied_by fails (proof.threshold < policy.threshold).
+        // Reconstructed PI[1]=200 mismatches the STARK's bound threshold (50) → reject.
         let mut policy = temporal_policy_from(&proof, 3);
         policy.requirement.threshold = 200; // higher than proof's 50
+
+        // FORGE 2: the host policy claims a DIFFERENT final_state_root than the one
+        // the proof was minted against. The verifier reconstructs PI[3] from the
+        // policy, so it mismatches the STARK's last-row STATE_ROOT boundary
+        // commitment → reject. (In the descriptor design the root is never a
+        // prover-chosen serde field; it is pinned in the trace, so the analogue of
+        // "tamper the proof's final_state_root" is "present it under a policy whose
+        // final root disagrees.")
+        let mut mismatched_policy = temporal_policy_from(&proof, 3);
+        mismatched_policy.final_state_root = 424242;
+
+        // One honest wire, reused: the STARK proof is identical; only the host
+        // policy (and thus the reconstructed PIs) differs per forge.
+        let bytes = postcard::to_allocvec(&TemporalProofWire { proof: proof.proof }).unwrap();
+
         let auth = Arc::new(OneTemporalPolicy { commitment, policy });
         let v = TemporalPredicateStarkVerifier::new(auth);
-        let bytes = postcard::to_allocvec(&proof).unwrap();
         assert!(
             v.verify(&commitment, &PredicateInput::Sender(&dummy), &bytes)
                 .is_err(),
             "proof failing the host threshold floor must reject"
         );
 
-        // FORGE 2: tamper the proof's final_state_root after minting; the STARK
-        // PI (reconstructed from the HONEST policy roots) mismatches → reject.
-        let honest_policy = temporal_policy_from(&proof, 3);
         let auth2 = Arc::new(OneTemporalPolicy {
             commitment,
-            policy: honest_policy,
+            policy: mismatched_policy,
         });
         let v2 = TemporalPredicateStarkVerifier::new(auth2);
-        let mut tampered = proof.clone();
-        tampered.final_state_root = BabyBear::new(424242);
-        let tbytes = postcard::to_allocvec(&tampered).unwrap();
         assert!(
-            v2.verify(&commitment, &PredicateInput::Sender(&dummy), &tbytes)
+            v2.verify(&commitment, &PredicateInput::Sender(&dummy), &bytes)
                 .is_err(),
-            "tampered state root must reject against the policy-derived PI"
+            "a policy with a mismatched final state root must reject against the STARK-bound PI"
         );
 
         // Unknown commitment → fail closed.
@@ -2795,7 +2836,6 @@ mod tests {
     // ─────────────────────────────────────────────────────────────────────
 
     use dregg_circuit::compute_fact_commitment;
-    use dregg_circuit::predicate_air::{PredicateWitness, prove_in_range, prove_predicate};
 
     /// A bridge policy authority that authorizes ONE requirement for ONE commitment.
     struct OneBridgePolicy {
@@ -2814,20 +2854,45 @@ mod tests {
         value: u32,
         op: PredicateType,
         threshold: u32,
-    ) -> ([u8; 32], BabyBear, PredicateProof) {
+    ) -> ([u8; 32], BabyBear, Ir2BatchProof<DreggStarkConfig>) {
+        use dregg_circuit::predicate_arith_witness::predicate_arith_witness;
+        use dregg_circuit::predicate_comparison_witness::{
+            predicate_gt_witness, predicate_le_witness, predicate_lt_witness, predicate_neq_witness,
+        };
         let fact_hash = BabyBear::new(0xFACE);
         let state_root = BabyBear::new(0xB00C);
         let fact_commitment = compute_fact_commitment(fact_hash, state_root);
-        let witness = PredicateWitness {
-            private_value: BabyBear::new(value),
-            threshold: BabyBear::new(threshold),
-            predicate_type: op,
-            fact_commitment,
-            blinding: None,
-            fact_hash: Some(fact_hash),
-            state_root: Some(state_root),
+        let v = value as u64;
+        let t = threshold as u64;
+        // Pick the emitted single-bound descriptor + honest witness for this operator
+        // (mirror of `single_comparison_descriptor` + dregg-bridge's `prove_predicate_for_fact`).
+        let (desc_name, built) = match op {
+            PredicateType::Gte => (
+                PREDICATE_ARITH_NAME,
+                predicate_arith_witness(v, t, fact_commitment, 2),
+            ),
+            PredicateType::Lte => (
+                PREDICATE_ARITH_LE_NAME,
+                predicate_le_witness(v, t, fact_commitment, 2),
+            ),
+            PredicateType::Gt => (
+                PREDICATE_ARITH_GT_NAME,
+                predicate_gt_witness(v, t, fact_commitment, 2),
+            ),
+            PredicateType::Lt => (
+                PREDICATE_ARITH_LT_NAME,
+                predicate_lt_witness(v, t, fact_commitment, 2),
+            ),
+            PredicateType::Neq => (
+                PREDICATE_ARITH_NEQ_NAME,
+                predicate_neq_witness(v, t, fact_commitment, 2),
+            ),
+            other => panic!("honest_bridge_single: unsupported single-bound op {other:?}"),
         };
-        let proof = prove_predicate(witness).expect("honest predicate must be provable");
+        let desc = descriptor_by_name(desc_name).expect("predicate descriptor registered");
+        let (trace, pis) = built.expect("honest predicate witness builds");
+        let proof = prove_vm_descriptor2(&desc, &trace, &pis, &MemBoundaryWitness::default(), &[])
+            .expect("honest predicate proves");
         (
             bridge_predicate_commitment_bytes(fact_commitment),
             fact_commitment,
@@ -2848,7 +2913,7 @@ mod tests {
             },
         });
         let v = BridgePredicateStarkVerifier::new(policy);
-        let bytes = bridge_predicate_proof_bytes(&proof);
+        let bytes = bridge_predicate_proof_bytes(proof);
         let dummy = [0u8; 32];
         v.verify(&commitment, &PredicateInput::Slot(&dummy), &bytes)
             .expect("genuine Gte predicate must verify through the real BridgePredicate verifier");
@@ -2870,7 +2935,7 @@ mod tests {
             },
         });
         let v = BridgePredicateStarkVerifier::new(policy);
-        let bytes = bridge_predicate_proof_bytes(&proof);
+        let bytes = bridge_predicate_proof_bytes(proof);
         let dummy = [0u8; 32];
         assert!(
             v.verify(&commitment, &PredicateInput::Slot(&dummy), &bytes)
@@ -2892,7 +2957,7 @@ mod tests {
             },
         });
         let v = BridgePredicateStarkVerifier::new(policy);
-        let bytes = bridge_predicate_proof_bytes(&proof);
+        let bytes = bridge_predicate_proof_bytes(proof);
         let dummy = [0u8; 32];
         assert!(
             v.verify(&commitment, &PredicateInput::Slot(&dummy), &bytes)
@@ -2917,7 +2982,7 @@ mod tests {
             },
         });
         let v = BridgePredicateStarkVerifier::new(policy);
-        let bytes = bridge_predicate_proof_bytes(&proof);
+        let bytes = bridge_predicate_proof_bytes(proof);
         let dummy = [0u8; 32];
         // Verify against the wrong commitment (the one the policy is keyed on).
         assert!(
@@ -2934,7 +2999,7 @@ mod tests {
     fn bridge_predicate_real_verifier_fails_closed_without_policy() {
         let (commitment, _fc, proof) = honest_bridge_single(500, PredicateType::Gte, 100);
         let v = BridgePredicateStarkVerifier::new(Arc::new(StaticBridgePredicatePolicy::new()));
-        let bytes = bridge_predicate_proof_bytes(&proof);
+        let bytes = bridge_predicate_proof_bytes(proof);
         let dummy = [0u8; 32];
         assert!(
             v.verify(&commitment, &PredicateInput::Slot(&dummy), &bytes)
@@ -2959,15 +3024,34 @@ mod tests {
         let commitment = bridge_predicate_commitment_bytes(fact_commitment);
         let dummy = [0u8; 32];
 
-        // Honest: value=50 in [10, 100].
-        let (low_p, high_p) = prove_in_range(
-            BabyBear::new(50),
-            BabyBear::new(10),
-            BabyBear::new(100),
-            fact_commitment,
+        // Honest: value=50 in [10, 100]. Two single-bound descriptor proofs:
+        // low = `value >= low` (≥ descriptor), high = `value <= high` (≤ descriptor).
+        use dregg_circuit::predicate_arith_witness::predicate_arith_witness;
+        use dregg_circuit::predicate_comparison_witness::predicate_le_witness;
+        let low_desc = descriptor_by_name(PREDICATE_ARITH_NAME).expect("ge descriptor registered");
+        let (low_trace, low_pis) =
+            predicate_arith_witness(50, 10, fact_commitment, 2).expect("honest low bound builds");
+        let low_p = prove_vm_descriptor2(
+            &low_desc,
+            &low_trace,
+            &low_pis,
+            &MemBoundaryWitness::default(),
+            &[],
         )
-        .expect("honest in-range must be provable");
-        let bytes = bridge_predicate_range_proof_bytes(&low_p, &high_p);
+        .expect("honest low-bound proves");
+        let high_desc =
+            descriptor_by_name(PREDICATE_ARITH_LE_NAME).expect("le descriptor registered");
+        let (high_trace, high_pis) =
+            predicate_le_witness(50, 100, fact_commitment, 2).expect("honest high bound builds");
+        let high_p = prove_vm_descriptor2(
+            &high_desc,
+            &high_trace,
+            &high_pis,
+            &MemBoundaryWitness::default(),
+            &[],
+        )
+        .expect("honest high-bound proves");
+        let bytes = bridge_predicate_range_proof_bytes(low_p, high_p);
 
         let ok_policy = Arc::new(OneBridgePolicy {
             commitment,

@@ -637,8 +637,8 @@ fn prove_verify_v3(name: &str, before: Cell, kernel: dregg_turn::Effect, vm_effe
 
     let mut ledger = Ledger::new();
     ledger.insert_cell(after.clone()).unwrap();
-    let null_root = [0u8; 32];
-    let commit_root = [0u8; 32];
+    let null_root = rw::empty_nullifier_root_8();
+    let commit_root = rw::empty_commitments_root_8();
     let receipt_log: Vec<[u8; 32]> = vec![[3u8; 32]];
 
     let before_w = rw::produce(

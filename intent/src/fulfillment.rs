@@ -1764,7 +1764,11 @@ mod tests {
     }
 
     #[test]
-    fn test_fulfill_private_produces_stark_proof() {
+    fn test_fulfill_private_fails_closed_after_stark_retirement() {
+        // The multi-step authorization hand-STARK engine was retired (no descriptor
+        // replacement exists yet), so Private-mode fulfillment now FAILS CLOSED at proof
+        // generation rather than emitting an unverifiable blob. This test pins that
+        // fail-closed contract (was: `..._produces_stark_proof`).
         let intent = test_intent(vec!["read"], None);
         let matched = Match {
             intent_id: intent.id,
@@ -1783,37 +1787,21 @@ mod tests {
             ..Default::default()
         };
 
-        let result = fulfill(&intent, &matched, &token, our_id, &options).unwrap();
-
-        // Private mode: no token data revealed
-        assert!(result.token_data.is_none());
-        assert_eq!(result.mode, VerificationMode::Private);
-
-        // Should have a real STARK proof
-        let proof_bytes = result.proof.as_ref().unwrap();
-        assert!(proof_bytes.len() > 100, "STARK proof should be substantial");
-
-        // Verify the proof starts with the DREG header
-        assert_eq!(
-            &proof_bytes[0..4],
-            b"DREG",
-            "proof should have STARK header"
-        );
-
-        // The proof should be independently verifiable
-        let proof = stark::proof_from_bytes(proof_bytes).unwrap();
-        let conclusion = BabyBear(proof.public_inputs[2]);
-        let acc_hash = BabyBear(proof.public_inputs[4]);
-        assert_eq!(
-            conclusion,
-            BabyBear::ONE,
-            "proof conclusion should be ALLOW"
-        );
-        assert!(verify_authorization_dsl(conclusion, acc_hash, &proof).is_ok());
+        let result = fulfill(&intent, &matched, &token, our_id, &options);
+        match result {
+            Err(FulfillmentError::ProofGenerationFailed(msg)) => {
+                assert!(
+                    msg.contains("unavailable") && msg.contains("fail-closed"),
+                    "expected the fail-closed retirement message, got: {msg}"
+                );
+            }
+            other => panic!("private fulfillment must fail closed, got: {other:?}"),
+        }
     }
 
     #[test]
-    fn test_fulfill_selective_produces_stark_proof() {
+    fn test_fulfill_selective_fails_closed_after_stark_retirement() {
+        // Selective mode rides the same retired multi-step authorization proof → fail-closed.
         let intent = test_intent(vec!["read"], None);
         let matched = Match {
             intent_id: intent.id,
@@ -1832,12 +1820,11 @@ mod tests {
             ..Default::default()
         };
 
-        let result = fulfill(&intent, &matched, &token, our_id, &options).unwrap();
-
-        // Selective: no token data, but has proof
-        assert!(result.token_data.is_none());
-        assert!(result.proof.is_some());
-        assert_eq!(result.mode, VerificationMode::Selective);
+        let result = fulfill(&intent, &matched, &token, our_id, &options);
+        assert!(
+            matches!(result, Err(FulfillmentError::ProofGenerationFailed(_))),
+            "selective fulfillment must fail closed, got: {result:?}"
+        );
     }
 
     #[test]
@@ -2114,31 +2101,29 @@ mod tests {
     }
 
     #[test]
-    fn test_verify_fulfillment_private_stark() {
+    fn test_verify_fulfillment_private_fails_closed() {
+        // A Private-mode fulfillment can no longer be produced (fail-closed at proof gen),
+        // and even a hand-constructed one is rejected at verify: the multi-step
+        // authorization statement has no descriptor verifier, so `verify_fulfillment`
+        // fails closed rather than accept an unverifiable claim.
         let intent = test_intent(vec!["read"], None);
-        let matched = Match {
+
+        // Hand-build a Private fulfillment carrying an arbitrary proof blob (fulfill itself
+        // now fails closed, so we bypass it to exercise the verify-side fail-closed gate).
+        let fulfillment = Fulfillment {
             intent_id: intent.id,
-            satisfier: CommitmentId([0xBB; 32]),
-            proof: None,
+            fulfiller: CommitmentId([0xBB; 32]),
             mode: VerificationMode::Private,
+            token_data: None,
+            proof: Some(vec![0xADu8; 128]),
+            granted_actions: vec!["read".into()],
+            granted_resource: "*".into(),
+            expiry: None,
         };
-        let token = source_token();
-        let our_id = CommitmentId([0xBB; 32]);
-
-        let witness = build_allow_witness_for_intent(&intent);
-
-        let options = FulfillOptions {
-            mode: VerificationMode::Private,
-            stark_witness: Some(witness),
-            ..Default::default()
-        };
-
-        let fulfillment = fulfill(&intent, &matched, &token, our_id, &options).unwrap();
         let result = verify_fulfillment(&fulfillment, &intent, BabyBear::ZERO);
         assert!(
-            result.is_ok(),
-            "private STARK fulfillment should verify: {:?}",
-            result.err()
+            matches!(result, Err(FulfillmentError::ProofVerificationFailed(_))),
+            "private verify must fail closed after the hand-STARK retirement, got: {result:?}"
         );
     }
 
@@ -2182,36 +2167,28 @@ mod tests {
     }
 
     #[test]
-    fn test_verify_fulfillment_rejects_tampered_proof() {
+    fn test_verify_fulfillment_rejects_arbitrary_private_proof() {
+        // With the hand-STARK engine retired, the Private verify path fails closed for
+        // ANY supplied proof (no descriptor verifier exists for the multi-step
+        // authorization statement). A tampered vs untampered blob is indistinguishable —
+        // both are rejected — so we assert the blanket fail-closed rejection (was:
+        // `..._rejects_tampered_proof`).
         let intent = test_intent(vec!["read"], None);
-        let matched = Match {
+        let fulfillment = Fulfillment {
             intent_id: intent.id,
-            satisfier: CommitmentId([0xBB; 32]),
-            proof: None,
+            fulfiller: CommitmentId([0xBB; 32]),
             mode: VerificationMode::Private,
+            token_data: None,
+            proof: Some(vec![0xADu8; 128]),
+            granted_actions: vec!["read".into()],
+            granted_resource: "*".into(),
+            expiry: None,
         };
-        let token = source_token();
-        let our_id = CommitmentId([0xBB; 32]);
-
-        let witness = build_allow_witness_for_intent(&intent);
-        let options = FulfillOptions {
-            mode: VerificationMode::Private,
-            stark_witness: Some(witness),
-            ..Default::default()
-        };
-
-        let mut fulfillment = fulfill(&intent, &matched, &token, our_id, &options).unwrap();
-
-        // Tamper with the proof bytes
-        if let Some(ref mut proof) = fulfillment.proof {
-            // Flip a byte in the trace commitment area (after the 5-byte header)
-            if proof.len() > 10 {
-                proof[5] ^= 0xFF;
-            }
-        }
-
         let result = verify_fulfillment(&fulfillment, &intent, BabyBear::ZERO);
-        assert!(result.is_err(), "tampered proof should fail verification");
+        assert!(
+            matches!(result, Err(FulfillmentError::ProofVerificationFailed(_))),
+            "any private proof must be rejected (fail-closed), got: {result:?}"
+        );
     }
 
     #[test]
@@ -2226,8 +2203,11 @@ mod tests {
     }
 
     #[test]
-    fn test_stark_proof_roundtrip() {
-        // Verify that a STARK proof produced by fulfill can be deserialized and verified
+    fn test_private_proof_generation_unavailable() {
+        // The hand-STARK proof codec (`stark::proof_{to,from}_bytes`) and the multi-step
+        // authorization prover were retired; a Private fulfillment proof can no longer be
+        // produced. Pin that `produce_stark_proof` fails closed (was: a roundtrip test of
+        // the removed codec).
         let intent = test_intent(vec!["read"], None);
         let matched = Match {
             intent_id: intent.id,
@@ -2239,27 +2219,16 @@ mod tests {
         let our_id = CommitmentId([0xBB; 32]);
 
         let witness = build_allow_witness_for_intent(&intent);
-        let conclusion = witness.conclusion();
-        let acc_hash = witness.final_accumulated_hash();
-
         let options = FulfillOptions {
             mode: VerificationMode::Private,
             stark_witness: Some(witness),
             ..Default::default()
         };
 
-        let fulfillment = fulfill(&intent, &matched, &token, our_id, &options).unwrap();
-        let proof_bytes = fulfillment.proof.unwrap();
-
-        // Deserialize
-        let proof = stark::proof_from_bytes(&proof_bytes).unwrap();
-
-        // Verify with known-good public inputs
-        let result = verify_authorization_dsl(conclusion, acc_hash, &proof);
+        let result = fulfill(&intent, &matched, &token, our_id, &options);
         assert!(
-            result.is_ok(),
-            "deserialized proof should verify: {:?}",
-            result.err()
+            matches!(result, Err(FulfillmentError::ProofGenerationFailed(_))),
+            "private proof generation must be unavailable (fail-closed), got: {result:?}"
         );
     }
 
@@ -2269,10 +2238,8 @@ mod tests {
 
     #[test]
     fn test_verify_fulfillment_with_valid_predicate_proofs() {
+        use dregg_bridge::present::prove_predicate_for_fact;
         use dregg_circuit::poseidon2::hash_fact;
-        use dregg_circuit::{
-            PredicateType, PredicateWitness, compute_fact_commitment, prove_predicate,
-        };
 
         // Create an intent with a predicate requirement
         let spec = MatchSpec {
@@ -2295,24 +2262,16 @@ mod tests {
         };
         let pred_intent = Intent::new(IntentKind::Need, spec, CommitmentId([0xAA; 32]), 5000, None);
 
-        // Generate a valid predicate proof (balance = 5000 >= 1000)
+        // Generate a valid descriptor-backed Gte proof (balance = 5000 >= 1000), replacing the
+        // retired hand-STARK `prove_predicate`. `prove_predicate_for_fact` computes the same
+        // `fact_commitment` internally and the proof carries it for the verifier.
         let balance = BabyBear::new(5000);
-        let threshold = BabyBear::new(1000);
         let attr_hash = BabyBear::new(42); // simulated attribute hash
         let fact_hash = hash_fact(attr_hash, &[balance, BabyBear::ZERO, BabyBear::ZERO]);
         let state_root = BabyBear::new(99999);
-        let fact_commitment = compute_fact_commitment(fact_hash, state_root);
-
-        let witness = PredicateWitness {
-            private_value: balance,
-            threshold,
-            predicate_type: PredicateType::Gte,
-            fact_commitment,
-            blinding: None,
-            fact_hash: None,
-            state_root: None,
-        };
-        let predicate_proof = prove_predicate(witness).expect("proof should succeed");
+        let predicate_proof =
+            prove_predicate_for_fact(5000, fact_hash, state_root, &BridgePredicate::Gte(1000))
+                .expect("gte predicate proof should be produced");
 
         // Build a base fulfillment (trusted mode for simplicity)
         let token = source_token();
@@ -2361,10 +2320,8 @@ mod tests {
 
     #[test]
     fn test_verify_fulfillment_rejects_stale_state_root() {
+        use dregg_bridge::present::prove_predicate_for_fact;
         use dregg_circuit::poseidon2::hash_fact;
-        use dregg_circuit::{
-            PredicateType, PredicateWitness, compute_fact_commitment, prove_predicate,
-        };
 
         let spec = MatchSpec {
             actions: vec![ActionPattern {
@@ -2387,22 +2344,15 @@ mod tests {
         let pred_intent = Intent::new(IntentKind::Need, spec, CommitmentId([0xAA; 32]), 5000, None);
 
         let balance = BabyBear::new(5000);
-        let threshold = BabyBear::new(1000);
         let attr_hash = BabyBear::new(42);
         let fact_hash = hash_fact(attr_hash, &[balance, BabyBear::ZERO, BabyBear::ZERO]);
         let state_root = BabyBear::new(99999);
-        let fact_commitment = compute_fact_commitment(fact_hash, state_root);
-
-        let witness = PredicateWitness {
-            private_value: balance,
-            threshold,
-            predicate_type: PredicateType::Gte,
-            fact_commitment,
-            blinding: None,
-            fact_hash: None,
-            state_root: None,
-        };
-        let predicate_proof = prove_predicate(witness).expect("proof should succeed");
+        // Real descriptor-backed Gte proof (balance 5000 >= 1000), replacing the retired
+        // hand-STARK `prove_predicate`. `prove_predicate_for_fact` computes the same
+        // `fact_commitment` internally and the proof carries it for the verifier.
+        let predicate_proof =
+            prove_predicate_for_fact(5000, fact_hash, state_root, &BridgePredicate::Gte(1000))
+                .expect("gte predicate proof should be produced");
 
         let token = source_token();
         let matched = Match {
@@ -2452,10 +2402,8 @@ mod tests {
 
     #[test]
     fn test_verify_fulfillment_rejects_wrong_threshold() {
+        use dregg_bridge::present::prove_predicate_for_fact;
         use dregg_circuit::poseidon2::hash_fact;
-        use dregg_circuit::{
-            PredicateType, PredicateWitness, compute_fact_commitment, prove_predicate,
-        };
 
         let spec = MatchSpec {
             actions: vec![ActionPattern {
@@ -2477,24 +2425,16 @@ mod tests {
         };
         let pred_intent = Intent::new(IntentKind::Need, spec, CommitmentId([0xAA; 32]), 5000, None);
 
-        // Generate a proof for threshold 1000 (not 2000!)
+        // Generate a proof for Gte(1000) — but the requirement demands Gte(2000). The bridge
+        // proof carries its DECLARED predicate, and the verifier rejects the predicate
+        // mismatch (the currency replacement for the retired hand-STARK `prove_predicate`).
         let balance = BabyBear::new(5000);
-        let wrong_threshold = BabyBear::new(1000); // prover used wrong threshold
         let attr_hash = BabyBear::new(42);
         let fact_hash = hash_fact(attr_hash, &[balance, BabyBear::ZERO, BabyBear::ZERO]);
         let state_root = BabyBear::new(99999);
-        let fact_commitment = compute_fact_commitment(fact_hash, state_root);
-
-        let witness = PredicateWitness {
-            private_value: balance,
-            threshold: wrong_threshold,
-            predicate_type: PredicateType::Gte,
-            fact_commitment,
-            blinding: None,
-            fact_hash: None,
-            state_root: None,
-        };
-        let predicate_proof = prove_predicate(witness).expect("proof should succeed");
+        let predicate_proof =
+            prove_predicate_for_fact(5000, fact_hash, state_root, &BridgePredicate::Gte(1000))
+                .expect("gte predicate proof should be produced");
 
         let token = source_token();
         let matched = Match {
@@ -2535,7 +2475,10 @@ mod tests {
         assert!(result.is_err());
         match result.unwrap_err() {
             FulfillmentError::PredicateProofFailed(msg) => {
-                assert!(msg.contains("threshold"));
+                assert!(
+                    msg.contains("does not match"),
+                    "expected a predicate-mismatch rejection, got: {msg}"
+                );
             }
             other => panic!("expected PredicateProofFailed, got {:?}", other),
         }
@@ -2611,10 +2554,8 @@ mod tests {
 
     #[test]
     fn test_verify_fulfillment_multiple_predicates_all_must_pass() {
+        use dregg_bridge::present::prove_predicate_for_fact;
         use dregg_circuit::poseidon2::hash_fact;
-        use dregg_circuit::{
-            PredicateType, PredicateWitness, compute_fact_commitment, prove_predicate,
-        };
 
         let spec = MatchSpec {
             actions: vec![ActionPattern {
@@ -2651,33 +2592,17 @@ mod tests {
         let balance = BabyBear::new(5000);
         let balance_attr = BabyBear::new(42);
         let balance_fact = hash_fact(balance_attr, &[balance, BabyBear::ZERO, BabyBear::ZERO]);
-        let balance_commitment = compute_fact_commitment(balance_fact, state_root);
-        let balance_proof = prove_predicate(PredicateWitness {
-            private_value: balance,
-            threshold: BabyBear::new(1000),
-            predicate_type: PredicateType::Gte,
-            fact_commitment: balance_commitment,
-            blinding: None,
-            fact_hash: None,
-            state_root: None,
-        })
-        .unwrap();
+        let balance_proof =
+            prove_predicate_for_fact(5000, balance_fact, state_root, &BridgePredicate::Gte(1000))
+                .expect("balance gte proof should be produced");
 
         // Generate proof for reputation >= 50 (reputation = 85)
         let reputation = BabyBear::new(85);
         let rep_attr = BabyBear::new(99);
         let rep_fact = hash_fact(rep_attr, &[reputation, BabyBear::ZERO, BabyBear::ZERO]);
-        let rep_commitment = compute_fact_commitment(rep_fact, state_root);
-        let rep_proof = prove_predicate(PredicateWitness {
-            private_value: reputation,
-            threshold: BabyBear::new(50),
-            predicate_type: PredicateType::Gte,
-            fact_commitment: rep_commitment,
-            blinding: None,
-            fact_hash: None,
-            state_root: None,
-        })
-        .unwrap();
+        let rep_proof =
+            prove_predicate_for_fact(85, rep_fact, state_root, &BridgePredicate::Gte(50))
+                .expect("reputation gte proof should be produced");
 
         let token = source_token();
         let matched = Match {

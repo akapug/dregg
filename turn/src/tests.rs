@@ -10739,10 +10739,10 @@ mod binding_proof_executor_tests {
     /// it cannot reconstruct.
     #[test]
     fn burn_binding_without_ledger_snapshot_rejects() {
+        use dregg_circuit::descriptor_ir2::{MemBoundaryWitness, prove_vm_descriptor2};
         use dregg_circuit::effect_action_air::{
-            EffectActionWitness, SCHEMA_BURN, prove_effect_action,
+            EffectActionAir, EffectActionWitness, SCHEMA_BURN, effect_action_to_descriptor2,
         };
-        use dregg_circuit::stark;
 
         let target = CellId::from_bytes([0xB7; 32]);
         let witness = EffectActionWitness {
@@ -10750,10 +10750,14 @@ mod binding_proof_executor_tests {
             fields: vec![*target.as_bytes()],
             amounts: vec![1000, 900, 100, 1],
         };
-        let proof = prove_effect_action(&witness);
+        let (trace, pis) = EffectActionAir::generate_trace(&witness);
+        let desc =
+            effect_action_to_descriptor2(&SCHEMA_BURN).expect("burn schema lowers to descriptor");
+        let proof = prove_vm_descriptor2(&desc, &trace, &pis, &MemBoundaryWitness::default(), &[])
+            .expect("effect-action descriptor proof");
         let pi = witness.public_inputs();
         let pi_u32: Vec<u32> = pi.iter().map(|f| f.0).collect();
-        let proof_bytes = stark::proof_to_bytes(&proof);
+        let proof_bytes = postcard::to_allocvec(&proof).expect("serialize Ir2BatchProof");
 
         let agent = CellId::from_bytes([0x10; 32]);
         let turn = turn_with_burn_binding(agent, target, 100, pi_u32, proof_bytes);
@@ -10778,10 +10782,10 @@ mod binding_proof_executor_tests {
     /// matching loop accepts.
     #[test]
     fn burn_binding_with_honest_ledger_snapshot_verifies() {
+        use dregg_circuit::descriptor_ir2::{MemBoundaryWitness, prove_vm_descriptor2};
         use dregg_circuit::effect_action_air::{
-            EffectActionWitness, SCHEMA_BURN, prove_effect_action,
+            EffectActionAir, EffectActionWitness, SCHEMA_BURN, effect_action_to_descriptor2,
         };
-        use dregg_circuit::stark;
 
         // Build a ledger where the target's balance is exactly the
         // `old_balance` we claim in the binding proof.
@@ -10804,10 +10808,14 @@ mod binding_proof_executor_tests {
                 1,
             ],
         };
-        let proof = prove_effect_action(&witness);
+        let (trace, pis) = EffectActionAir::generate_trace(&witness);
+        let desc =
+            effect_action_to_descriptor2(&SCHEMA_BURN).expect("burn schema lowers to descriptor");
+        let proof = prove_vm_descriptor2(&desc, &trace, &pis, &MemBoundaryWitness::default(), &[])
+            .expect("effect-action descriptor proof");
         let pi = witness.public_inputs();
         let pi_u32: Vec<u32> = pi.iter().map(|f| f.0).collect();
-        let proof_bytes = stark::proof_to_bytes(&proof);
+        let proof_bytes = postcard::to_allocvec(&proof).expect("serialize Ir2BatchProof");
 
         let agent = CellId::from_bytes([0x10; 32]);
         let turn = turn_with_burn_binding(agent, target_id, 100, pi_u32, proof_bytes);
@@ -10826,10 +10834,10 @@ mod binding_proof_executor_tests {
     /// MUST reject. This is the matching loop catching it.
     #[test]
     fn burn_binding_air_pi_lies_about_amount_is_rejected() {
+        use dregg_circuit::descriptor_ir2::{MemBoundaryWitness, prove_vm_descriptor2};
         use dregg_circuit::effect_action_air::{
-            EffectActionWitness, SCHEMA_BURN, prove_effect_action,
+            EffectActionAir, EffectActionWitness, SCHEMA_BURN, effect_action_to_descriptor2,
         };
-        use dregg_circuit::stark;
 
         let target_cell = permissive_cell_with_balance(0xB9, 1000);
         let target_id = target_cell.id();
@@ -10845,10 +10853,14 @@ mod binding_proof_executor_tests {
             fields: vec![*target_id.as_bytes()],
             amounts: vec![1000, 950, 50, 1],
         };
-        let proof = prove_effect_action(&witness);
+        let (trace, pis) = EffectActionAir::generate_trace(&witness);
+        let desc =
+            effect_action_to_descriptor2(&SCHEMA_BURN).expect("burn schema lowers to descriptor");
+        let proof = prove_vm_descriptor2(&desc, &trace, &pis, &MemBoundaryWitness::default(), &[])
+            .expect("effect-action descriptor proof");
         let pi = witness.public_inputs();
         let pi_u32: Vec<u32> = pi.iter().map(|f| f.0).collect();
-        let proof_bytes = stark::proof_to_bytes(&proof);
+        let proof_bytes = postcard::to_allocvec(&proof).expect("serialize Ir2BatchProof");
 
         // The runtime Effect::Burn records amount=100. Executor-side
         // reconstruction: (old=1000, new=1000-100=900, amount=100,
@@ -10877,10 +10889,10 @@ mod binding_proof_executor_tests {
     /// "yes" they shouldn't.
     #[test]
     fn burn_binding_unknown_target_in_ledger_rejects() {
+        use dregg_circuit::descriptor_ir2::{MemBoundaryWitness, prove_vm_descriptor2};
         use dregg_circuit::effect_action_air::{
-            EffectActionWitness, SCHEMA_BURN, prove_effect_action,
+            EffectActionAir, EffectActionWitness, SCHEMA_BURN, effect_action_to_descriptor2,
         };
-        use dregg_circuit::stark;
 
         let target = CellId::from_bytes([0xBA; 32]);
         // Ledger has no cell at `target`.
@@ -10891,10 +10903,14 @@ mod binding_proof_executor_tests {
             fields: vec![*target.as_bytes()],
             amounts: vec![1000, 900, 100, 1],
         };
-        let proof = prove_effect_action(&witness);
+        let (trace, pis) = EffectActionAir::generate_trace(&witness);
+        let desc =
+            effect_action_to_descriptor2(&SCHEMA_BURN).expect("burn schema lowers to descriptor");
+        let proof = prove_vm_descriptor2(&desc, &trace, &pis, &MemBoundaryWitness::default(), &[])
+            .expect("effect-action descriptor proof");
         let pi = witness.public_inputs();
         let pi_u32: Vec<u32> = pi.iter().map(|f| f.0).collect();
-        let proof_bytes = stark::proof_to_bytes(&proof);
+        let proof_bytes = postcard::to_allocvec(&proof).expect("serialize Ir2BatchProof");
 
         let agent = CellId::from_bytes([0x10; 32]);
         let turn = turn_with_burn_binding(agent, target, 100, pi_u32, proof_bytes);
