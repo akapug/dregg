@@ -16,7 +16,7 @@
 //! (`bin/bench.rs`) reports CPU-vs-GPU crossover — GPU wins only past the
 //! dispatch-overhead break-even, which for these workloads is large.
 
-use crate::pdhg::{finalize, preconditioner, FlowLp, PdhgResult};
+use crate::pdhg::{csr, finalize, preconditioner, FlowLp, PdhgResult};
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
@@ -193,7 +193,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let (tau, sigma) = preconditioner(lp, 1.0);
 
         // Public CSR: node -> (incident edges, signs).
-        let (node_off, node_edge, node_sign) = build_csr(lp);
+        let (node_off, node_edge, node_sign) = csr(lp);
 
         let tail: Vec<u32> = lp.edges.iter().map(|&(t, _)| t).collect();
         let head: Vec<u32> = lp.edges.iter().map(|&(_, h)| h).collect();
@@ -358,32 +358,6 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         // Recompute the certificate quantities in f64 from the GPU endpoints.
         finalize(lp, f, y, iters)
     }
-}
-
-/// Build the public CSR: for each node, its incident edges and signs
-/// (`+1` if the node is the edge head, `−1` if the tail).
-fn build_csr(lp: &FlowLp) -> (Vec<u32>, Vec<u32>, Vec<f32>) {
-    let n = lp.n_nodes;
-    let deg = lp.degrees();
-    let mut node_off = vec![0u32; n + 1];
-    for i in 0..n {
-        node_off[i + 1] = node_off[i] + deg[i];
-    }
-    let nnz = node_off[n] as usize;
-    let mut node_edge = vec![0u32; nnz];
-    let mut node_sign = vec![0.0f32; nnz];
-    let mut cursor: Vec<u32> = node_off[..n].to_vec();
-    for (e, &(t, h)) in lp.edges.iter().enumerate() {
-        let ti = cursor[t as usize] as usize;
-        node_edge[ti] = e as u32;
-        node_sign[ti] = -1.0;
-        cursor[t as usize] += 1;
-        let hi = cursor[h as usize] as usize;
-        node_edge[hi] = e as u32;
-        node_sign[hi] = 1.0;
-        cursor[h as usize] += 1;
-    }
-    (node_off, node_edge, node_sign)
 }
 
 fn pdhg_bgl_entries() -> Vec<wgpu::BindGroupLayoutEntry> {

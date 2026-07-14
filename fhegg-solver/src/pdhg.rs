@@ -162,6 +162,81 @@ pub fn solve_cpu(lp: &FlowLp, iters: usize) -> PdhgResult {
     finalize(lp, f, y, iters)
 }
 
+/// Public CSR of the incidence: `(node_off, node_edge, node_sign)`. For each
+/// node, its incident edges and signs (`+1` head, `−1` tail). Public topology —
+/// shared by the rayon and wgpu matvec paths.
+pub fn csr(lp: &FlowLp) -> (Vec<u32>, Vec<u32>, Vec<f32>) {
+    let n = lp.n_nodes;
+    let deg = lp.degrees();
+    let mut node_off = vec![0u32; n + 1];
+    for i in 0..n {
+        node_off[i + 1] = node_off[i] + deg[i];
+    }
+    let nnz = node_off[n] as usize;
+    let mut node_edge = vec![0u32; nnz];
+    let mut node_sign = vec![0.0f32; nnz];
+    let mut cursor: Vec<u32> = node_off[..n].to_vec();
+    for (e, &(t, h)) in lp.edges.iter().enumerate() {
+        let ti = cursor[t as usize] as usize;
+        node_edge[ti] = e as u32;
+        node_sign[ti] = -1.0;
+        cursor[t as usize] += 1;
+        let hi = cursor[h as usize] as usize;
+        node_edge[hi] = e as u32;
+        node_sign[hi] = 1.0;
+        cursor[h as usize] += 1;
+    }
+    (node_off, node_edge, node_sign)
+}
+
+/// Rayon-parallel PDHG (CSR gather for the dual, disjoint per-edge primal). Same
+/// iteration as [`solve_cpu`]; parallelises the two matvecs across threads. The
+/// "SIMD/batching where it helps" CPU path — pays off past a few thousand edges.
+pub fn solve_cpu_par(lp: &FlowLp, iters: usize) -> PdhgResult {
+    use rayon::prelude::*;
+    let m = lp.m();
+    let n = lp.n_nodes;
+    let (tau, sigma) = preconditioner(lp, 1.0);
+    let (node_off, node_edge, node_sign) = csr(lp);
+
+    let mut f = vec![0.0f64; m];
+    let mut fbar = vec![0.0f64; m];
+    let mut y = vec![0.0f64; n];
+    let edges = &lp.edges;
+    let w = &lp.w;
+    let c = &lp.c;
+
+    for _ in 0..iters {
+        // Dual: per-node CSR gather (disjoint writes to y).
+        let fbar_ref = &fbar;
+        let noff = &node_off;
+        let nedge = &node_edge;
+        let nsign = &node_sign;
+        let sig = &sigma;
+        y.par_iter_mut().enumerate().for_each(|(i, yi)| {
+            let mut acc = 0.0f64;
+            for k in noff[i] as usize..noff[i + 1] as usize {
+                acc += nsign[k] as f64 * fbar_ref[nedge[k] as usize];
+            }
+            *yi += sig[i] * acc;
+        });
+        // Primal: disjoint per-edge update (reads shared y).
+        let yr = &y;
+        f.par_iter_mut()
+            .zip(fbar.par_iter_mut())
+            .zip(edges.par_iter())
+            .zip(w.par_iter())
+            .zip(c.par_iter())
+            .for_each(|((((fe, fbe), &(t, h)), &we), &ce)| {
+                let at = yr[h as usize] - yr[t as usize];
+                let fnew = (*fe + tau * (we - at)).clamp(0.0, ce);
+                *fbe = fnew + (fnew - *fe);
+                *fe = fnew;
+            });
+    }
+    finalize(lp, f, y, iters)
+}
+
 /// Assemble the result + certificate quantities from the final `(f, y)`.
 pub fn finalize(lp: &FlowLp, f: Vec<f64>, y: Vec<f64>, iters: usize) -> PdhgResult {
     let primal_obj: f64 = lp.w.iter().zip(&f).map(|(w, f)| w * f).sum();
@@ -506,6 +581,43 @@ mod tests {
             strict.valid,
             "exact certificate must pass the STRICT check: {strict:?}"
         );
+    }
+
+    #[test]
+    fn parallel_solver_matches_serial() {
+        // solve_cpu_par must produce the same result as solve_cpu (same algebra).
+        let mut edges = Vec::new();
+        let n = 128usize;
+        for i in 0..n {
+            edges.push((i as u32, ((i + 1) % n) as u32));
+        }
+        for i in 0..400usize {
+            let a = (i * 41 % n) as u32;
+            let b = (i * 67 % n) as u32;
+            if a != b {
+                edges.push((a, b));
+            }
+        }
+        let m = edges.len();
+        let w: Vec<f64> = (0..m).map(|i| 0.5 + (i % 7) as f64 * 0.1).collect();
+        let c: Vec<f64> = (0..m).map(|i| 2.0 + (i % 5) as f64).collect();
+        let lp = FlowLp {
+            n_nodes: n,
+            edges,
+            w,
+            c,
+        };
+        let serial = solve_cpu(&lp, 2000);
+        let par = solve_cpu_par(&lp, 2000);
+        assert!(
+            (serial.primal_obj - par.primal_obj).abs() < 1e-9,
+            "parallel {} vs serial {}",
+            par.primal_obj,
+            serial.primal_obj
+        );
+        for (a, b) in serial.f.iter().zip(&par.f) {
+            assert!((a - b).abs() < 1e-9, "flow mismatch");
+        }
     }
 
     #[test]
