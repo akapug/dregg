@@ -3176,6 +3176,156 @@ theorem rZ_decapsFailure_le_delta153 :
     _ = (2:ℝ)^((10:ℤ)+(-163:ℤ)) := by rw [← zpow_add₀ (by norm_num:(2:ℝ)≠0)]
     _ = (2:ℝ)^(-153:ℤ) := by norm_num
 
+/-! ## §19 — THE EXACT-PMF FIPS CLOSURE ON THE TRUE LIGHT `Δv` MODEL: reduction + the single named residual.
+
+§18 built the TRUE near-uniform compression-error law `cErr` (support proven `[−104,104]`, `cErrFiber_le_16` the
+exact near-uniformity) and ran it through the exact-MGF **Chernoff** on the fully-independent product model `rΩ`,
+closing `2⁻¹⁶³` per coefficient / `2⁻¹⁵³` assembled — the honest ceiling of the Chernoff *rate* (the `768`-union
+costs `≈10` bits; the Bahadur–Rao *prefactor* the rate discards is the remaining `≈17` bits to the true tail). §16
+built the exact-PMF reduction `exactConvTailFrac_closes_delta`: a per-coefficient exact convolved-tail
+`≤ 2⁻¹⁷⁴` closes FIPS `δ ≤ 2⁻¹⁶⁴` through the same `768`-union. This section FEEDS `rZ` (the true-light model)
+into that reduction, so the FIPS bound reduces to ONE precisely-named exact-PMF tail on the TRUE light law.
+
+### ⚑ PROBE — is the per-coefficient exact convolution kernel-computable? NO (R1, measured, now on the light law).
+
+The per-coefficient error `rZ c` is the sum of `2306` independent bounded-support integer terms: `2304` CBD-product
+cross-terms (law `prodCounts = [2,0,16,32,156,32,16,0,2]`, support `[−4,4]`, `prodCoord_law_center/_edge` PROVE the
+product coordinate's marginal IS `prodCounts`), one CBD `e2` (law `cbdCounts`, `e2Coord_law_center`), and the true
+`cErr` (support `[−104,104]`, ≤`16` per value, `cErrCoord_law_top` PROVES `cErr = 104` has count `9`). Its exact PMF
+is therefore the finite convolution `prodCounts^{⊛2304} ⊛ cbdCounts ⊛ cErrLaw` — the SAME `2304`-fold `cvMul` §16
+measured kernel-infeasible (R1: `256`-fold of a `5`-wide law already exceeds the heartbeat budget; the target is the
+`2304`-fold of a `9`-wide law with `≈18000`-bit entries). Refining `Δv` to `cErr` does NOT shrink this: the light
+`Δv` factor `cErrLaw` is a `209`-wide list (support `[−104,104]`), so the convolution is if anything *larger* than
+the `±104` two-point `dvX` of §12–§15. So the per-coefficient exact convolution is NOT a "few-dozen-term" object —
+it is the full `2304`-fold, astronomically beyond kernel `decide`. `native_decide` is forbidden here (a probabilistic
+δ theorem must not ride `trustCompiler`). R1 remains a MEASURED wall.
+
+### What IS closed (kernel-clean): the reduction on the TRUE light law, R2 discharged.
+
+`rZ_mem_Icc` bounds the per-coefficient value into `[−239824, 239824]` (each of the `2306` terms is `[−104,104]`).
+Feeding `rZ` and this support into `exactConvTailFrac_closes_delta` gives `rZ_lightExactConv_closes_delta`: the
+per-coefficient exact convolved-tail `≤ 2⁻¹⁷⁴` (`LightExactPerCoeffTail`) closes FIPS `δ ≤ 2⁻¹⁶⁴` on the LITERAL
+true-`cErr` model. `lightExact_iff_perCoeffTail` proves the named residual is EXACTLY "the per-coefficient tail of
+the true light law is `≤ 2⁻¹⁷⁴`" (via `winProb_badCoeff_eq_convTail`) — load-bearing, not a wrapper. This DISCHARGES
+§16's residual **R2** in the exact-PMF world: the model is now the literal compression error `cErr`, not the `±104`
+`dvX` envelope (whose exact tail was the heavy `≈2⁻⁴²` that R2 named). The sole remaining residual is **R1**.
+
+### THE SINGLE NAMED RESIDUAL (R1, exact, decidable, TRUE, kernel-infeasible).
+
+`LightExactPerCoeffTail` is decidable (`rΩ` is a `Fintype`; `convCnt` is a `Finset.card`) and its TRUE value is
+`≈ 2⁻¹⁸⁰` per coefficient — comfortably below the `2⁻¹⁷⁴` the reduction needs, so on the light model it GENUINELY
+clears the FIPS bar. What blocks turning `mlkem768_decapsFailure_le_delta_lightExactConv` into an unconditional
+theorem is exactly evaluating that decidable tail — the `2304`-fold `cvMul` (R1), kernel-infeasible. This is a far
+sharper residual than §16's original R1+R2: **R2 is gone** (true law), and R1 is now a single decidable inequality
+about the true light convolution whose true value is known (`≈2⁻¹⁸⁰`) — not a modeling gap, purely a kernel-cost
+wall. (The `≈2⁻¹⁸⁰ → 2⁻¹⁷⁴` margin means even a substantially looser exact-PMF bound would suffice; only the kernel
+evaluation of the astronomical convolution, not the mathematics, remains.) -/
+
+instance : Nonempty rΩ := ⟨fun _ => ((default, default), 0)⟩
+
+/-- Every CBD(η=2) coordinate (integer form) lies in `[−2,2]`. -/
+theorem cbd2Ez_range (f : Fin 768) (p : CbdΩ) : -2 ≤ cbd2Ez f p ∧ cbd2Ez f p ≤ 2 := by
+  obtain ⟨a, b, c, d⟩ := p
+  cases a <;> cases b <;> cases c <;> cases d <;> norm_num [cbd2Ez]
+
+/-- A product of two `[−2,2]` integers lies in `[−4,4]` (exhaustive over the `5×5` integer grid). -/
+theorem prod_int_bound {a b : ℤ} (ha1 : -2 ≤ a) (ha2 : a ≤ 2) (hb1 : -2 ≤ b) (hb2 : b ≤ 2) :
+    -4 ≤ a * b ∧ a * b ≤ 4 := by
+  interval_cases a <;> interval_cases b <;> decide
+
+/-- **Every one of the `2306` per-coefficient terms of the true-light model lies in `[−104,104]`.** The `2304`
+CBD-product cross-terms lie in `[−4,4]` (`prod_int_bound`), the `e2` CBD in `[−2,2]`, and the true compression
+error `cErr` in `[−104,104]` (`cErr_bound`, §18). -/
+theorem rTermZ_bound (i : Fin 2306) (p : RC) : -104 ≤ rTermZ i p ∧ rTermZ i p ≤ 104 := by
+  unfold rTermZ
+  split_ifs with h1 h2
+  · have hA := cbd2Ez_range 0 p.1.1
+    have hB := cbd2Ez_range 0 p.1.2
+    have := prod_int_bound hA.1 hA.2 hB.1 hB.2
+    omega
+  · have := cbd2Ez_range 0 p.1.1; omega
+  · exact cErr_bound p.2
+
+/-- **The true-light per-coefficient error is bounded: `rZ c ω ∈ [−239824, 239824]`.** The support Finset the
+exact-PMF reduction filters the tail out of; `239824 = 2306 · 104`. -/
+theorem rZ_mem_Icc (c : Fin 768) (ω : rΩ) :
+    rZ c ω ∈ Finset.Icc (-239824 : ℤ) 239824 := by
+  rw [Finset.mem_Icc]
+  have hrz : rZ c ω = ∑ i : Fin 2306, rTermZ i (ω i) := rfl
+  have key_lo : ∑ _i : Fin 2306, (-104:ℤ) ≤ ∑ i : Fin 2306, rTermZ i (ω i) :=
+    Finset.sum_le_sum (fun i _ => (rTermZ_bound i (ω i)).1)
+  have key_hi : ∑ i : Fin 2306, rTermZ i (ω i) ≤ ∑ _i : Fin 2306, (104:ℤ) :=
+    Finset.sum_le_sum (fun i _ => (rTermZ_bound i (ω i)).2)
+  simp only [Finset.sum_const, Finset.card_univ, Fintype.card_fin, nsmul_eq_mul] at key_lo key_hi
+  norm_num at key_lo key_hi
+  rw [hrz]; exact ⟨key_lo, key_hi⟩
+
+/-- **THE PRECISELY-NAMED RESIDUAL (R1) — the exact convolved-PMF tail of the TRUE light law.** For every
+coefficient, the exact-PMF tail mass of `rZ c` (the literal `cErr`-based model) over the escaping values
+`832 ≤ |k|` is `≤ 2⁻¹⁷⁴ · |rΩ|`. Decidable (`rΩ` `Fintype`, `convCnt` a `Finset.card`); TRUE value `≈2⁻¹⁸⁰`;
+kernel evaluation is the astronomical `2304`-fold convolution (R1, measured infeasible in §16). -/
+def LightExactPerCoeffTail : Prop :=
+  ∀ c : Fin 768, (∑ k ∈ (Finset.Icc (-239824:ℤ) 239824).filter (fun k => (832 : ℤ) ≤ |k|),
+      (convCnt (rZ c) k : ℝ)) ≤ (2 : ℝ) ^ (-174 : ℤ) * (Fintype.card rΩ : ℝ)
+
+/-- **THE NAMED RESIDUAL IS EXACTLY THE PER-COEFFICIENT TAIL OF THE TRUE LIGHT LAW (PROVED).**
+`LightExactPerCoeffTail ↔ (∀ c, winProb(badCoeff rZ c) ≤ 2⁻¹⁷⁴)` — via `winProb_badCoeff_eq_convTail`, the
+convolved-tail residual IS the per-coefficient decryption-window-escape probability at `2⁻¹⁷⁴` on the literal
+`cErr` model. Not a wrapper: the residual is load-bearing (it is the exact failure probability). -/
+theorem lightExact_iff_perCoeffTail :
+    LightExactPerCoeffTail ↔ PerCoeffHoeffdingTail rZ ((2 : ℝ) ^ (-174 : ℤ)) := by
+  have hcard : (0 : ℝ) < (Fintype.card rΩ : ℝ) := by exact_mod_cast Fintype.card_pos
+  unfold LightExactPerCoeffTail PerCoeffHoeffdingTail
+  constructor
+  · intro h c
+    rw [winProb_badCoeff_eq_convTail rZ c (Finset.Icc (-239824) 239824) (fun ω => rZ_mem_Icc c ω),
+        div_le_iff₀ hcard]
+    exact h c
+  · intro h c
+    have hb := h c
+    rw [winProb_badCoeff_eq_convTail rZ c (Finset.Icc (-239824) 239824) (fun ω => rZ_mem_Icc c ω),
+        div_le_iff₀ hcard] at hb
+    exact hb
+
+/-- **THE EXACT-PMF FIPS REDUCTION ON THE TRUE LIGHT LAW (PROVED): `LightExactPerCoeffTail ⟹ δ ≤ 2⁻¹⁶⁴`.** Feeds
+the literal `cErr`-based model `rZ` and its support (`rZ_mem_Icc`) into §16's `exactConvTailFrac_closes_delta`. The
+FIPS `δ ≤ 2⁻¹⁶⁴` decryption-failure bound follows from the exact per-coefficient convolved tail `≤ 2⁻¹⁷⁴` — with
+R2 discharged (the model is the true compression error, not the `±104` envelope). -/
+theorem rZ_lightExactConv_closes_delta (h : LightExactPerCoeffTail) :
+    winProb (decapsFails rZ) ≤ MlKemCorrect.mlKem768Delta :=
+  exactConvTailFrac_closes_delta rZ (fun _ => Finset.Icc (-239824) 239824)
+    (fun c ω => rZ_mem_Icc c ω) h
+
+/-- **THE CAPSTONE (conditional on R1, the single decidable residual).** FIPS `δ ≤ 2⁻¹⁶⁴` for ML-KEM-768 on the
+TRUE near-uniform compression-error model, GIVEN the exact per-coefficient convolved tail `≤ 2⁻¹⁷⁴`
+(`LightExactPerCoeffTail`, true value `≈2⁻¹⁸⁰`). Same statement as the unconditional Chernoff `2⁻¹⁵³` capstone
+`rZ_decapsFailure_le_delta153`, sharpened `11` bits to the FIPS bar — the sharpening is exactly the exact-PMF tail
+R1 supplies over the Chernoff rate. -/
+theorem mlkem768_decapsFailure_le_delta_lightExactConv (h : LightExactPerCoeffTail) :
+    winProb (decapsFails rZ) ≤ MlKemCorrect.mlKem768Delta :=
+  mlkem768_decapsFailure_le_delta rZ (lightExact_iff_perCoeffTail.mp h)
+
+/-- **(TOOTH — the product coordinate's marginal law IS `prodCounts`, kernel `decide`.)** The center value `0`
+has count `156` — matching `prodCounts = [2,0,16,32,156,32,16,0,2]` at offset `−4`. -/
+theorem prodCoord_law_center :
+    convCnt (fun p : CbdΩ × CbdΩ => cbd2Ez 0 p.1 * cbd2Ez 0 p.2) 0 = 156 := by decide
+
+/-- **(TOOTH — the product coordinate's edge value.)** The extreme value `4` (`= 2·2`) has count `2`, the top
+entry of `prodCounts`. -/
+theorem prodCoord_law_edge :
+    convCnt (fun p : CbdΩ × CbdΩ => cbd2Ez 0 p.1 * cbd2Ez 0 p.2) 4 = 2 := by decide
+
+/-- **(TOOTH — the `e2` coordinate's marginal law IS `cbdCounts`.)** The center value `0` has count `6`, the
+middle entry of `cbdCounts = [1,4,6,4,1]`. -/
+theorem e2Coord_law_center : convCnt (cbd2Ez 0) 0 = 6 := by decide
+
+set_option maxRecDepth 20000 in
+/-- **(TOOTH — the true `Δv` coordinate's exact count at the support edge, kernel `decide` over `Fin 3329`.)** The
+error value `104` is hit by exactly `9` inputs — the exact near-uniformity §18 characterized (`cErr = 104` count
+`9`, `cErr = −104` count `8`), computed here as a concrete `convCnt`. -/
+theorem cErrCoord_law_top : convCnt (fun x : Fin 3329 => cErr x.val) 104 = 9 := by
+  decide
+
 /-! ## AXIOM HYGIENE — every probabilistic theorem is kernel-clean (⊆ {propext, Classical.choice, Quot.sound}). -/
 
 #assert_all_clean [
@@ -3345,7 +3495,18 @@ theorem rZ_decapsFailure_le_delta153 :
   prod_rBoundOf,
   refinedMgf_delta_arith,
   rZ_perCoeffTail,
-  rZ_decapsFailure_le_delta153
+  rZ_decapsFailure_le_delta153,
+  cbd2Ez_range,
+  prod_int_bound,
+  rTermZ_bound,
+  rZ_mem_Icc,
+  lightExact_iff_perCoeffTail,
+  rZ_lightExactConv_closes_delta,
+  mlkem768_decapsFailure_le_delta_lightExactConv,
+  prodCoord_law_center,
+  prodCoord_law_edge,
+  e2Coord_law_center,
+  cErrCoord_law_top
 ]
 
 end Dregg2.Crypto.MlKemDelta
