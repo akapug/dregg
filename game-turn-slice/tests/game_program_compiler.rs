@@ -471,3 +471,218 @@ fn witness_refuses_babybear_aliases_and_missing_slots() {
 // `game_program_full_fold_gated_on_lane_d` stub — which panicked to signal the block — is removed.
 // The met bar HERE stays leaf-level (game_program_leaf_accepts + forged_ordering_rejects); the full
 // fold is exercised in the sibling test file.
+
+// ============================================================================
+// PART 4 — THE Witnessed { MerkleMembership } HIDDEN-HAND TOOTH → A FOLDABLE LEAF
+//
+// Phase 3 of multiway-tug: the executor's hidden-hand membership tooth
+// (`StateConstraint::Witnessed { MerkleMembership }`, checked in the clear by
+// `dregg_multiway_tug::hidden_hand`) lowers to its OWN foldable custom leaf via
+// `lower_witnessed_merkle_membership` — the 4-ary Poseidon2 `merkle_poseidon2_descriptor`,
+// the SAME recurrence the clear-side verifier walks. An honest in-committed-hand play PROVES
+// as a leaf; a fabricated card / tampered path is refused at lowering OR is UNSAT in the leaf.
+// The played cards NEVER enter the PIs (only [leaf, root]) — the hand is private-in-fold.
+// ============================================================================
+
+use dregg_cell::{InputRef, WitnessedPredicate};
+use dregg_circuit::merkle_types::compute_parent_poseidon2;
+use dregg_circuit::poseidon2::hash_4_to_1;
+use game_turn_slice::compiler::{
+    LoweredMembership, MembershipLevel, MerkleMembershipWitness, lower_witnessed_merkle_membership,
+};
+
+/// Encode a root felt as the 32-byte `Witnessed { MerkleMembership }` commitment form (the
+/// exact shape `hidden_hand::root_to_bytes` / the deployed verifier use: canonical u32 in the
+/// low four LE bytes).
+fn root_to_commitment(root: BabyBear) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    out[0..4].copy_from_slice(&root.as_u32().to_le_bytes());
+    out
+}
+
+/// A blinded leaf commitment `Poseidon2(0x6d746c66, card, nonce, 0)` — the SAME construction
+/// `hidden_hand::card_leaf` uses (kept local so this crate does not depend on multiway-tug).
+fn card_leaf(card_id: u64, nonce: u64) -> BabyBear {
+    hash_4_to_1(&[
+        BabyBear::new_canonical(0x6d746c66),
+        BabyBear::new_canonical((card_id % (u32::MAX as u64)) as u32),
+        BabyBear::new_canonical((nonce % (u32::MAX as u64)) as u32),
+        BabyBear::ZERO,
+    ])
+}
+
+/// Build an honest depth-2 (4^2 = 16-leaf) membership witness + the tooth that commits its
+/// root — the exact 4-ary Poseidon2 shape multiway-tug's `HandTree` (HAND_TREE_DEPTH = 2)
+/// produces. Returns `(wp, witness)`.
+fn honest_membership() -> (WitnessedPredicate, MerkleMembershipWitness) {
+    let leaf = card_leaf(7, 4242);
+    let levels = vec![
+        MembershipLevel {
+            position: 1,
+            siblings: [BabyBear::new(11), BabyBear::new(12), BabyBear::new(13)],
+        },
+        MembershipLevel {
+            position: 3,
+            siblings: [BabyBear::new(21), BabyBear::new(22), BabyBear::new(23)],
+        },
+    ];
+    let mut current = leaf;
+    for lvl in &levels {
+        current = compute_parent_poseidon2(current, lvl.position, &lvl.siblings);
+    }
+    let root = current;
+    let wp = WitnessedPredicate::merkle_membership(
+        root_to_commitment(root),
+        InputRef::Witness { index: 0 },
+        1,
+    );
+    (wp, MerkleMembershipWitness { leaf, levels, root })
+}
+
+/// The tooth lowers to a foldable leaf of the right shape (cheap): PIs `[leaf, root]` (no
+/// cards), depth-2 trace, and it passes the REAL custom-leaf adapter (widening by the single
+/// `MerkleHash` site's 7 lane columns: 6 base + 7 = 13).
+#[test]
+fn witnessed_membership_lowers_to_foldable_leaf() {
+    let (wp, witness) = honest_membership();
+    let LoweredMembership {
+        program,
+        num_rows,
+        public_inputs,
+        witness_values,
+    } = lower_witnessed_merkle_membership(&wp, &witness).expect("honest play lowers");
+
+    assert_eq!(num_rows, 2, "depth-2 hand tree ⇒ a 2-row membership trace");
+    assert_eq!(
+        public_inputs,
+        vec![witness.leaf, witness.root],
+        "the PIs are [leaf, root] — the played cards are NOT in the proof (hand private-in-fold)"
+    );
+    assert_eq!(
+        witness_values.get("current").map(|v| v.len()),
+        Some(2),
+        "the trace carries one hash level per row"
+    );
+
+    // The lowered program passes the REAL adapter, widening by the MerkleHash site's lanes.
+    let desc2 = cellprogram_to_descriptor2(&program)
+        .expect("the membership leaf lowers through the real custom-leaf adapter");
+    assert_eq!(desc2.trace_width, 13, "base 6 + 7 MerkleHash lane columns");
+    assert_eq!(desc2.public_input_count, 2);
+    eprintln!(
+        "MEMBERSHIP LEAF: Witnessed{{MerkleMembership}} lowered — PIs=[leaf,root] (no cards), \
+         {} IR-v2 constraints, adapter Ok.",
+        desc2.constraints.len()
+    );
+}
+
+/// The lowering is NON-VACUOUS (cheap): a wrong committed root, a tampered path that no
+/// longer climbs to the root, and a non-MerkleMembership kind are each REFUSED.
+#[test]
+fn witnessed_membership_lowering_is_non_vacuous() {
+    let (wp, witness) = honest_membership();
+
+    // (1) A tooth whose committed root disagrees with the witness root is refused.
+    let mut wrong = witness.clone();
+    wrong.root = wrong.root + BabyBear::ONE;
+    assert!(
+        lower_witnessed_merkle_membership(&wp, &wrong).is_err(),
+        "a committed-root ≠ witness-root mismatch must refuse"
+    );
+
+    // (2) A fabricated play: corrupt a sibling so the path no longer climbs to the committed
+    // root (leaf/root PIs unchanged) — refused (Poseidon2 collision-resistance).
+    let mut tampered = witness.clone();
+    tampered.levels[0].siblings[0] = tampered.levels[0].siblings[0] + BabyBear::ONE;
+    assert!(
+        lower_witnessed_merkle_membership(&wp, &tampered).is_err(),
+        "a tampered path that does not climb to the committed root must refuse"
+    );
+
+    // (3) A non-MerkleMembership predicate is refused.
+    let dfa = WitnessedPredicate::dfa(wp.commitment, InputRef::Witness { index: 0 }, 1);
+    assert!(
+        lower_witnessed_merkle_membership(&dfa, &witness).is_err(),
+        "only MerkleMembership lowers to the Poseidon2 membership leaf"
+    );
+
+    // The honest one still lowers (the negatives are the lie, not collateral).
+    assert!(lower_witnessed_merkle_membership(&wp, &witness).is_ok());
+}
+
+/// THE POSITIVE POLE (SLOW): an honest in-committed-hand play PROVES as a foldable custom
+/// leaf through the REAL `prove_custom_leaf_with_commitment`, and its in-circuit-exposed
+/// commitment binds the `[leaf, root]` PIs (byte-identical to the host binding). The played
+/// cards are not among the PIs — the membership is proven while the hand stays private.
+#[test]
+#[ignore = "SLOW: real membership-leaf prove + in-circuit commitment expose (~minutes); run with --ignored"]
+fn witnessed_membership_proves_as_foldable_leaf() {
+    use dregg_circuit_prove::custom_leaf_adapter::{
+        prove_custom_leaf_with_commitment, read_exposed_pi_commitment,
+    };
+
+    let (wp, witness) = honest_membership();
+    let leaf = lower_witnessed_merkle_membership(&wp, &witness).expect("honest play lowers");
+    let config = ir2_leaf_wrap_config();
+
+    let output = prove_custom_leaf_with_commitment(
+        &leaf.program,
+        &leaf.witness_values,
+        leaf.num_rows,
+        &leaf.public_inputs,
+        &config,
+    )
+    .expect("the honest hidden-hand play must prove as a foldable membership leaf");
+
+    let exposed = read_exposed_pi_commitment(&output).expect("leaf exposes the 8-felt commitment");
+    let host = custom_proof_pi_commitment(&leaf.public_inputs);
+    assert_eq!(
+        exposed, host,
+        "the in-circuit membership commitment must byte-match the host binding over [leaf, root]"
+    );
+    eprintln!(
+        "MEMBERSHIP LEAF ACCEPT: an in-committed-hand play PROVED as a foldable leaf; \
+         PIs=[leaf,root] (no cards), commitment == host binding {:?}",
+        host.map(|f| f.0)
+    );
+}
+
+/// THE NEGATIVE POLE (SLOW): a FABRICATED-card leaf — the honest lowering's trace corrupted
+/// at a sibling AFTER lowering (so the `MerkleHash` chip lookup / the root boundary pin no
+/// longer holds) — has NO satisfying assembly: it does NOT prove. (A fabricated card is
+/// normally refused at lowering; this drives the in-fold soundness bite directly.)
+#[test]
+#[ignore = "SLOW: real forged membership-leaf prove attempt (~minutes); run with --ignored"]
+fn forged_membership_play_does_not_prove() {
+    use dregg_circuit_prove::custom_leaf_adapter::prove_custom_leaf_with_commitment;
+
+    let (wp, witness) = honest_membership();
+    let leaf = lower_witnessed_merkle_membership(&wp, &witness).expect("honest play lowers");
+    let config = ir2_leaf_wrap_config();
+
+    // FORGE: corrupt a sibling in the lowered trace WITHOUT recomputing parents/chain — the
+    // level-0 parent no longer equals hash_4_to_1(forged children), and the PIs still claim
+    // the honest leaf/root, so no witness satisfies the leaf.
+    let mut w = leaf.witness_values.clone();
+    w.get_mut("sib0").unwrap()[0] = w.get("sib0").unwrap()[0] + BabyBear::ONE;
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        prove_custom_leaf_with_commitment(
+            &leaf.program,
+            &w,
+            leaf.num_rows,
+            &leaf.public_inputs,
+            &config,
+        )
+    }));
+    match result {
+        Err(_) | Ok(Err(_)) => {}
+        Ok(Ok(_)) => panic!(
+            "a FABRICATED-card membership play minted a foldable leaf — hidden-hand soundness OPEN"
+        ),
+    }
+    eprintln!(
+        "MEMBERSHIP LEAF REJECT: a fabricated-card play (corrupted sibling) had no satisfying \
+         leaf — the Poseidon2 chip lookup / root pin bit."
+    );
+}

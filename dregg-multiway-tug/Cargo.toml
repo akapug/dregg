@@ -42,6 +42,20 @@ dregg-circuit = { path = "../circuit" }
 # THE REAL WorldCell — the deployed executor + ledger the game deploys onto.
 spween-dregg = { path = "../spween-dregg" }
 
+# --- Phase 3: the STARK FOLD (the hidden-hand tooth lowered into the recursive fold). ---
+# The `Witnessed{MerkleMembership}` → foldable-leaf lowering (`compiler::lower_witnessed_
+# merkle_membership`) — the IMT terminal owns the lowering; multiway-tug consumes it to fold
+# a private match. Also brings the range-gadget compiler (the simple win/score teeth leaf).
+game-turn-slice = { path = "../game-turn-slice" }
+# The custom-leaf adapter (`prove_custom_leaf_with_commitment`), the per-turn recursion fold
+# (`prove_turn_chain_recursive` / `FinalizedTurn` / `CustomWitnessBundle`), and the deployed
+# PI-commitment binding (`custom_proof_pi_commitment`).
+dregg-circuit-prove = { path = "../circuit-prove" }
+# The rotation witness the wide effect-vm leg is generated over.
+dregg-turn = { path = "../turn" }
+# The pure light client — `verify_history` ACCEPTS the folded whole-match proof.
+dregg-lightclient = { path = "../lightclient" }
+
 # --- Phase 1: the COLLECTIBLE layer (cards-as-assets + provably-fair packs). ---
 # THE ASSET LAYER — the owned, transfer-gated, provenance-chained, content-addressed
 # note. Opening a pack MINTS each drawn card as a `dreggnet_asset` note owned by the

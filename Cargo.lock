@@ -5086,6 +5086,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "dregg-automatafl"
+version = "0.1.0"
+dependencies = [
+ "dregg-cell",
+ "dregg-circuit",
+ "dregg-circuit-prove",
+ "dregg-lightclient",
+ "dregg-turn",
+]
+
+[[package]]
 name = "dregg-blocklace"
 version = "0.1.0"
 dependencies = [
@@ -5805,8 +5816,12 @@ dependencies = [
  "dregg-app-framework",
  "dregg-cell",
  "dregg-circuit",
+ "dregg-circuit-prove",
+ "dregg-lightclient",
  "dregg-schema",
+ "dregg-turn",
  "dreggnet-asset",
+ "game-turn-slice",
  "procgen-dregg",
  "spween-dregg",
 ]
@@ -6612,6 +6627,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "dreggnet-adventure"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-epoch",
+ "dregg-season",
+ "dreggnet-asset",
+ "dreggnet-cheevo",
+ "dreggnet-companion",
+ "dreggnet-craft",
+ "dreggnet-gear",
+ "dreggnet-guild",
+ "dreggnet-offerings",
+ "dreggnet-party",
+ "dreggnet-quest",
+ "dreggnet-saga",
+ "dreggnet-trade",
+ "dungeon-on-dregg",
+ "procgen-dregg",
+ "ugc-dregg",
+]
+
+[[package]]
 name = "dreggnet-asset"
 version = "0.1.0"
 dependencies = [
@@ -6633,6 +6671,19 @@ dependencies = [
  "dungeon-on-dregg",
  "spween-dregg",
  "ugc-dregg",
+]
+
+[[package]]
+name = "dreggnet-companion"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-app-framework",
+ "dregg-cell",
+ "dregg-turn",
+ "dreggnet-asset",
+ "dungeon-on-dregg",
+ "procgen-dregg",
 ]
 
 [[package]]
@@ -6685,6 +6736,20 @@ version = "0.1.0"
 dependencies = [
  "dregg-app-framework",
  "spween",
+ "spween-dregg",
+]
+
+[[package]]
+name = "dreggnet-gear"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-app-framework",
+ "dregg-cell",
+ "dregg-schema",
+ "dregg-turn",
+ "dreggnet-asset",
+ "dungeon-on-dregg",
  "spween-dregg",
 ]
 

@@ -69,10 +69,13 @@
 use std::collections::HashMap;
 
 use dregg_cell::program::StateConstraint;
+use dregg_cell::{WitnessedPredicate, WitnessedPredicateKind};
 use dregg_circuit::dsl::circuit::{
     CellProgram, CircuitDescriptor, ColumnDef, ColumnKind, ConstraintExpr, PolyTerm,
 };
+use dregg_circuit::dsl::descriptors::merkle_poseidon2_descriptor;
 use dregg_circuit::field::{BABYBEAR_P, BabyBear};
+use dregg_circuit::merkle_types::compute_parent_poseidon2;
 
 /// A precise refusal: the tooth kind and why it has no faithful local-trace carrier here.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -582,13 +585,24 @@ impl GameProgramCompiler {
                 "a Poseidon2/BLAKE3 preimage exhibit — a hash carrier (the adapter's Hash-site \
                  path), not a pure algebraic gate",
             )),
-            SC::TemporalPredicate { .. } | SC::Witnessed { .. } | SC::Custom { .. } => {
-                Err(blocked(
-                    "witnessed/custom",
-                    "a witness-attached proof verified by a registry verifier / DSL runtime — its \
-                     own circuit, not a local gate",
-                ))
-            }
+            SC::Witnessed { wp } => Err(blocked(
+                "Witnessed",
+                format!(
+                    "a witness-attached predicate ({:?}) is NOT a per-row LOCAL gate — it lowers \
+                     to its OWN foldable leaf, not into this per-turn game gate. MerkleMembership \
+                     lowers via `lower_witnessed_merkle_membership` (the 4-ary Poseidon2 \
+                     membership circuit → a foldable custom leaf, the same recurrence \
+                     `MerkleAir`/the executor verifier checks); the other kinds \
+                     (Temporal/Dfa/BlindedSet/Bridge/Custom) are each their own circuit, out of \
+                     this per-gate slice",
+                    wp.kind
+                ),
+            )),
+            SC::TemporalPredicate { .. } | SC::Custom { .. } => Err(blocked(
+                "temporal-predicate/custom",
+                "a witness-attached proof verified by a registry verifier / DSL runtime — its \
+                 own circuit, not a local gate",
+            )),
             SC::BoundDelta { .. } => Err(blocked(
                 "BoundDelta",
                 "a CROSS-CELL bilateral delta match — spans two cells' traces; the aggregate γ.2 \
@@ -790,4 +804,177 @@ impl SlotAssignment {
         self.old_slots.insert(index, value);
         self
     }
+}
+
+// ===========================================================================
+// The `Witnessed { MerkleMembership }` tooth → a foldable Poseidon2 membership leaf.
+//
+// The hidden-hand tooth (`dregg_multiway_tug::hidden_hand`) proves a play is a member
+// of the committed hand root by a 4-ary Poseidon2 Merkle authentication path, checked
+// IN THE CLEAR by the real cell evaluator + `WitnessedPredicateRegistry`. This is NOT a
+// per-row local gate on the game-state columns — it is a MULTI-ROW circuit with its own
+// trace (a hash level per row), so it lowers to its OWN foldable custom leaf rather than
+// into the per-turn `GameProgramCompiler` gate. The leaf REUSES the deployed circuit-DSL
+// `merkle_poseidon2_descriptor` (the same `MerkleHash` 4-ary recurrence
+// `dregg_circuit::merkle_types::MerkleAir` proves and the executor verifier
+// `compute_parent_poseidon2` walks), so the fold checks the identical relation Phase 2
+// checks in the clear. The played cards NEVER enter the leaf's public inputs — the PIs
+// are only `[leaf_commitment, hand_root]`, so the hand stays private-in-fold (the cards
+// are not in the proof/PIs; the membership hides the rest of the hand).
+// ===========================================================================
+
+/// One Poseidon2 authentication level: the played node's position among its four siblings
+/// (`0..=3`) plus the three sibling node values. Mirrors the executor tooth's `PathLevel`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MembershipLevel {
+    pub position: u8,
+    pub siblings: [BabyBear; 3],
+}
+
+/// A concrete 4-ary Poseidon2 membership witness: the committed leaf, the authentication
+/// path (leaf → root), and the committed root. The `leaf` is the app-side blinded leaf
+/// commitment (e.g. `hidden_hand::card_leaf`); this compiler stays game-agnostic and only
+/// walks the Poseidon2 recurrence.
+#[derive(Clone, Debug)]
+pub struct MerkleMembershipWitness {
+    pub leaf: BabyBear,
+    pub levels: Vec<MembershipLevel>,
+    pub root: BabyBear,
+}
+
+/// The foldable custom leaf a `Witnessed { MerkleMembership }` tooth lowers to: the
+/// circuit-DSL `CellProgram` (`merkle_poseidon2_descriptor`), its per-column trace witness,
+/// the row count (= path depth), and the public inputs `[leaf, root]` (the cards are NOT
+/// among them — the hand is private-in-fold). Feed it to
+/// `dregg_circuit_prove::custom_leaf_adapter::prove_custom_leaf_with_commitment`.
+pub struct LoweredMembership {
+    pub program: CellProgram,
+    pub witness_values: HashMap<String, Vec<BabyBear>>,
+    pub num_rows: usize,
+    pub public_inputs: Vec<BabyBear>,
+}
+
+/// Decode the 32-byte root commitment a `Witnessed { MerkleMembership }` predicate carries
+/// (a canonical BabyBear `u32` in the low four LE bytes — the exact shape
+/// `turn::executor::membership_verifier::root_felt_from_slot` reads and
+/// `hidden_hand::root_to_bytes` writes) into its field element.
+pub fn root_felt_from_commitment(bytes: &[u8; 32]) -> BabyBear {
+    let mut b = [0u8; 4];
+    b.copy_from_slice(&bytes[0..4]);
+    BabyBear::new_canonical(u32::from_le_bytes(b))
+}
+
+/// **LOWER the hidden-hand tooth into the fold.** Given a `Witnessed { MerkleMembership }`
+/// predicate and a concrete membership witness (leaf opening + authentication path + root),
+/// build the foldable [`LoweredMembership`] leaf: the `merkle_poseidon2_descriptor` circuit
+/// (the SAME 4-ary Poseidon2 recurrence the executor tooth checks in the clear) with a trace
+/// that climbs the path to the committed root, and PIs `[leaf, root]`.
+///
+/// The lowering BINDS the tooth to the witness (non-vacuous): it decodes the predicate's
+/// committed root and REFUSES if it disagrees with the witness root, walks the Poseidon2
+/// path with [`compute_parent_poseidon2`] and REFUSES if it does not climb to that root (a
+/// fabricated card / tampered path / wrong opening has no path to the root), and REFUSES a
+/// non-`MerkleMembership` kind or a non-power-of-two depth (the base trace height must be a
+/// power of two). The returned leaf proves iff an honest in-committed-hand play; a forged
+/// one is refused here (before proving) or, if the caller corrupts the trace after lowering,
+/// is UNSAT in the fold (the `MerkleHash` chip lookup / the root boundary pin bites).
+pub fn lower_witnessed_merkle_membership(
+    wp: &WitnessedPredicate,
+    witness: &MerkleMembershipWitness,
+) -> Result<LoweredMembership, Blocker> {
+    if wp.kind != WitnessedPredicateKind::MerkleMembership {
+        return Err(blocked(
+            "Witnessed",
+            format!(
+                "lower_witnessed_merkle_membership called on a {:?} predicate; only \
+                 MerkleMembership lowers to the 4-ary Poseidon2 membership leaf",
+                wp.kind
+            ),
+        ));
+    }
+    // Bind the tooth's committed root to the witness — the leaf proves membership under the
+    // EXACT root the executor tooth carries, not a free one.
+    let committed = root_felt_from_commitment(&wp.commitment);
+    if committed != witness.root {
+        return Err(blocked(
+            "Witnessed",
+            format!(
+                "the tooth's committed root {} does not match the witness root {}",
+                committed.as_u32(),
+                witness.root.as_u32()
+            ),
+        ));
+    }
+    let depth = witness.levels.len();
+    if depth == 0 {
+        return Err(blocked(
+            "Witnessed",
+            "an empty membership path has no foldable leaf".to_string(),
+        ));
+    }
+    if !depth.is_power_of_two() {
+        return Err(blocked(
+            "Witnessed",
+            format!(
+                "membership path depth {depth} is not a power of two; the leaf's base trace \
+                 height must be a power of two"
+            ),
+        ));
+    }
+
+    // Walk the 4-ary Poseidon2 path exactly as `MerkleAir` / the executor verifier does,
+    // materializing the descriptor's per-column trace as we climb.
+    let mut current = witness.leaf;
+    let mut current_col = Vec::with_capacity(depth);
+    let mut sib0 = Vec::with_capacity(depth);
+    let mut sib1 = Vec::with_capacity(depth);
+    let mut sib2 = Vec::with_capacity(depth);
+    let mut position_col = Vec::with_capacity(depth);
+    let mut parent_col = Vec::with_capacity(depth);
+    for lvl in &witness.levels {
+        if lvl.position > 3 {
+            return Err(blocked(
+                "Witnessed",
+                format!(
+                    "membership path position {} out of range 0..=3",
+                    lvl.position
+                ),
+            ));
+        }
+        let parent = compute_parent_poseidon2(current, lvl.position, &lvl.siblings);
+        current_col.push(current);
+        sib0.push(lvl.siblings[0]);
+        sib1.push(lvl.siblings[1]);
+        sib2.push(lvl.siblings[2]);
+        position_col.push(BabyBear::from_u64(lvl.position as u64));
+        parent_col.push(parent);
+        current = parent;
+    }
+    if current != witness.root {
+        return Err(blocked(
+            "Witnessed",
+            format!(
+                "the membership path does not climb to the committed root (fabricated card / \
+                 tampered path / wrong opening): got {}, expected {}",
+                current.as_u32(),
+                witness.root.as_u32()
+            ),
+        ));
+    }
+
+    let mut witness_values = HashMap::new();
+    witness_values.insert("current".to_string(), current_col);
+    witness_values.insert("sib0".to_string(), sib0);
+    witness_values.insert("sib1".to_string(), sib1);
+    witness_values.insert("sib2".to_string(), sib2);
+    witness_values.insert("position".to_string(), position_col);
+    witness_values.insert("parent".to_string(), parent_col);
+
+    Ok(LoweredMembership {
+        program: CellProgram::new(merkle_poseidon2_descriptor(), 1),
+        witness_values,
+        num_rows: depth,
+        // The cards are NOT here — only the (blinded) leaf commitment + the hand root.
+        public_inputs: vec![witness.leaf, witness.root],
+    })
 }

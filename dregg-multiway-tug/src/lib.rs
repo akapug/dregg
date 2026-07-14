@@ -54,6 +54,7 @@
 //! carries the simple state-shape; these hand-rolled `Cases` carry the play validity that
 //! goes beyond the five archetypes.
 
+pub mod fold;
 pub mod game;
 pub mod hidden_hand;
 pub mod packs;
