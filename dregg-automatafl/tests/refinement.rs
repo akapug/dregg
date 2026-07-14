@@ -307,6 +307,94 @@ fn d3_dest_collision_both_dropped() {
     );
 }
 
+// ============================================================================
+// D2/D3 SHARPENED non-vacuity: witnessed-bound reads + in-circuit selection.
+// ============================================================================
+
+#[test]
+fn d2_rejects_forged_source_cell_read() {
+    // The claimed source (0,0) is VACUUM. A prover forges the read source particle
+    // fp := ATT to fake a carrying piece. The witnessed one-hot read pins
+    // fp == old[n*fy+fx] == 0, so the forgery has no satisfying witness.
+    let old = mk(5, &[((2, 2), ATT)], (4, 4));
+    let m = Move {
+        who: 0,
+        frm: (0, 0),
+        to: (0, 3),
+    };
+    let honest = apply_turn(&old, &[m]);
+    let mut b = build_d2(&old, &m, &honest);
+    assert!(b.failing().is_empty(), "sanity: honest D2 must accept");
+    let fp = b.col_by_name("m0_fp_v").expect("m0_fp_v column");
+    b.tamper(fp, 2); // claim the vacuum source holds an attractor
+    assert_failing(&b, "D2 forged source-cell read (vacuum claimed non-vacuum)");
+}
+
+#[test]
+fn d3_rejects_forged_selection_survive() {
+    // Source-fork: a,b share source (0,0), distinct dests -> both dropped, piece stays.
+    // A prover forges `surv := 1` to claim its move survived. The in-circuit truth
+    // table derives fork = [frm_a==frm_b] & ![to_a==to_b] = 1 from the witnessed
+    // coordinates, pinning surv = (1-fork)(1-collide) = 0 — the forgery is rejected.
+    let old = mk(5, &[((0, 0), ATT)], (4, 4));
+    let a = Move {
+        who: 0,
+        frm: (0, 0),
+        to: (0, 3),
+    };
+    let b = Move {
+        who: 1,
+        frm: (0, 0),
+        to: (3, 0),
+    };
+    let honest = apply_turn(&old, &[a, b]);
+    let mut prog = build_d3(&old, &a, &b, &honest);
+    assert!(prog.failing().is_empty(), "sanity: honest fork must accept");
+    let surv = prog.col_by_name("surv").expect("surv column");
+    prog.tamper(surv, 1); // claim the forked move survives
+    assert_failing(&prog, "D3 forged selection (survive a fork)");
+    // Also: forging the fork bit itself is rejected by its own derivation.
+    let mut prog2 = build_d3(&old, &a, &b, &honest);
+    let fork = prog2.col_by_name("fork").expect("fork column");
+    prog2.tamper(fork, 0); // claim it is NOT a fork
+    assert_failing(&prog2, "D3 forged fork:=0 on a genuine fork");
+}
+
+#[test]
+fn d3_flow_through_vacuum_conduit_accepts() {
+    // Vacuum flow-through: A's source (0,0) is VACUUM; a:(0,0)->(0,4), b:(0,2)->(0,0).
+    // B (REP) targets A's vacuum source, then flows THROUGH A's resolved unoccluded
+    // move to A's destination (0,4). The in-circuit dest derivation (ft_b) must place
+    // REP at (0,4) — i.e. the chain endpoint is computed from the pattern bits, not
+    // taken from the reference.
+    let old = mk(5, &[((0, 2), REP)], (4, 4));
+    let a = Move {
+        who: 0,
+        frm: (0, 0),
+        to: (0, 4),
+    };
+    let b = Move {
+        who: 1,
+        frm: (0, 2),
+        to: (0, 0),
+    };
+    let honest = apply_turn(&old, &[a, b]);
+    assert_eq!(honest.cell_at((0, 4)), REP, "B flows through to A's dest");
+    assert_eq!(honest.cell_at((0, 2)), VAC, "B's source cleared");
+    let prog = build_d3(&old, &a, &b, &honest);
+    let f = prog.failing();
+    assert!(
+        f.is_empty(),
+        "D3 flow-through honest must accept (in-circuit chain endpoint); failing = {:?}",
+        f
+    );
+    let wrong = corrupt(&honest);
+    assert_failing(
+        &build_d3(&old, &a, &b, &wrong),
+        "D3 flow-through wrong-next",
+    );
+}
+
 #[test]
 fn d3_swap_stasis() {
     // 2-swap (to_a==frm_b AND to_b==frm_a) -> always stasis (both stay).
