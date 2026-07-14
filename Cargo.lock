@@ -7009,6 +7009,7 @@ dependencies = [
  "dreggnet-council",
  "dreggnet-market",
  "dreggnet-offerings",
+ "dreggnet-surfaces",
  "dungeon-on-dregg",
  "procgen-dregg",
  "serde",
@@ -7016,6 +7017,8 @@ dependencies = [
  "spween-dregg",
  "tokio",
  "tower",
+ "tracing",
+ "tracing-subscriber 0.3.23",
  "ugc-dregg",
 ]
 

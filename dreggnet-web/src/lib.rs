@@ -1181,3 +1181,161 @@ fn catalog_missing_offering(key: &str) -> String {
         style = STYLE,
     )
 }
+
+// ═════════════════════════════════════════════════════════════════════════════════════════
+// THE PUBLIC-DEMO SERVER APP — the merged axum Router the `dreggnet-web-server` bin serves.
+//
+// This is the single blocker to a public demo: the library above is a set of routers over
+// in-process state, but nothing MOUNTS + BINDS them. `make_app` assembles the whole surface —
+// the games + feature offerings catalog, the single-offering session surface, and the seeded
+// no-cheat Descent leaderboard — into ONE `Router<()>`, plus `/` (a landing) and `/health`.
+// The bin (`src/bin/dreggnet-web-server.rs`) wraps it in `axum::serve` on a configurable bind.
+//
+// Node-free by construction: every surface verifies by REPLAY re-execution in-process (the
+// offering's own `verify`, the Descent's `verify_completion`) — no testnet, no 45-min prover.
+//
+// NAMED (per the deploy scout's Phase-0), deliberately not built here:
+//  * PERSISTENCE — sessions + descent runs are in-RAM (ephemeral): a restart drops them. A
+//    minimal sqlite mirror (the bot's `SqliteGalleryStore` shape) is the next resolution step.
+//  * TLS / rate-limit / CORS — a fronting Caddy (ops, external; `demo.dregg.net` terminates TLS
+//    there and reverse-proxies to this bind).
+//  * An HTTP run-INGEST endpoint — the Descent leaderboard is seeded in-process here (a demo
+//    winner + an excluded forgery); a real deployment POSTs recorded runs to an ingest route.
+//  * AUTH — the web identity is the unsigned `dregg_user` cookie / `?user=` (a derived key, not
+//    a signed credential); a real deployment derives a per-user Ed25519 key as the bot does.
+// ═════════════════════════════════════════════════════════════════════════════════════════
+
+/// **The public-demo offering host** — the five games ([`catalog_default_host`]: dungeon, council,
+/// market, tug, automatafl) PLUS the eight do-once feature surfaces
+/// ([`dreggnet_surfaces::register_surfaces`]: trade, inventory, cheevos, guild, craft, companion,
+/// tavern, party). Built on the host's owning thread (so each offering's `!Send` internals stay
+/// confined), it is the registry the demo catalog browses + plays.
+pub fn demo_host() -> OfferingHost {
+    let mut host = catalog_default_host();
+    dreggnet_surfaces::register_surfaces(&mut host);
+    host
+}
+
+/// **The seeded no-cheat Descent leaderboard state** for the demo — opens today's beacon-seeded day
+/// (a fixed seed standing in for the live drand beacon) and ingests a real, driven-to-the-hoard
+/// winning run PLUS a forged one. Both are UNTRUSTED records; the leaderboard re-verifies each on
+/// render, so the honest winner ranks and the forgery is excluded (`GET /descent/leaderboard`), and
+/// the forgery's run-card shows FAIL (`GET /descent/run/demo-forgery`). This is the growth artifact
+/// a stranger opens and independently re-verifies — node-free, by replay.
+pub fn demo_descent_state() -> Arc<DescentState> {
+    use dreggnet_offerings::DreggIdentity;
+    use dreggnet_offerings::character::InMemoryCharacterStore;
+    use dreggnet_offerings::daily_descent::{
+        CORRIDOR_ON, DailyDescentOffering, DailyRun, GATE_HEAL, GATE_MEASURED, GATE_PRESS,
+        GATE_RECKLESS, HOARD_FORCE, HOARD_SEIZE, KEY_TAKE,
+    };
+    use procgen_dregg::daily_seed;
+
+    // Drive a careful winning line to the hoard (works for any beacon-drawn warden HP / depth) —
+    // the same shape `dreggnet-offerings`' own driven board test uses.
+    fn drive_win(off: &DailyDescentOffering<InMemoryCharacterStore>, run: &mut DailyRun) {
+        for _ in 0..64 {
+            let Some(room) = run.current_room() else {
+                break;
+            };
+            let ci = match room.as_str() {
+                "gate" => {
+                    if run.read_var("warden_hp") == 0 {
+                        GATE_PRESS
+                    } else if run.read_var("hp") >= 16 {
+                        GATE_MEASURED
+                    } else {
+                        GATE_HEAL
+                    }
+                }
+                "keyroom" => KEY_TAKE,
+                "hoardgate" => HOARD_FORCE,
+                "hoard" => HOARD_SEIZE,
+                r if r.starts_with("corridor") => CORRIDOR_ON,
+                _ => break,
+            };
+            if !off.advance(run, ci).landed() {
+                break;
+            }
+        }
+    }
+
+    // warden HP 45 (no field-dressing needed) -> a replay-clean honest win.
+    let seed = daily_seed(&[3; 32]);
+    let off = DailyDescentOffering::new(InMemoryCharacterStore::new());
+    let mut win = off
+        .open_from_seed(DreggIdentity("ember".to_string()), seed)
+        .expect("today's descent opens");
+    drive_win(&off, &mut win);
+
+    // A FORGED run — swap the opening measured blow for a reckless one; the recorded chain no
+    // longer replays, so it is excluded from the board and its run-card shows FAIL.
+    let mut forged = win.playthrough();
+    if let Some(first) = forged.steps.first_mut() {
+        first.choice_index = GATE_RECKLESS;
+    }
+
+    let state = Arc::new(DescentState::new());
+    state.open_day("today", seed);
+    state.ingest_run(
+        "today",
+        "demo-ember",
+        "ember",
+        win.character().level(),
+        win.character().class(),
+        win.playthrough(),
+    );
+    state.ingest_run("today", "demo-forgery", "a-forger", 1, 0, forged);
+    state
+}
+
+/// **Assemble the merged public-demo app** — the ONE `Router<()>` the server bin serves. Merges,
+/// with no route overlap:
+/// - `GET /` — a landing page linking the surfaces;
+/// - `GET /health` — a liveness probe (200 `{"status":"ok"}`) for the fronting proxy / uptime check;
+/// - [`router`] — the single-offering session surface (`/session/{id}` …);
+/// - [`catalog_router`] over [`demo_host`] — the games + feature-surface catalog (`/offerings` …);
+/// - [`descent_router`] over [`demo_descent_state`] — the seeded no-cheat Descent leaderboard
+///   (`/descent/leaderboard`, `/descent/run/{id}`).
+///
+/// Factored out of the bin so it is drivable in tests with no real network (axum `oneshot`).
+pub fn make_app() -> Router {
+    let web = Arc::new(WebState::new());
+    let catalog = Arc::new(CatalogState::with_host(demo_host));
+    let descent = demo_descent_state();
+
+    Router::new()
+        .route("/", get(index))
+        .route("/health", get(health))
+        .merge(router(web))
+        .merge(catalog_router(catalog))
+        .merge(descent_router(descent))
+}
+
+/// `GET /health` — a liveness probe. 200 `{"status":"ok"}`; the fronting Caddy / an uptime check
+/// hits it to know the server is up.
+async fn health() -> impl IntoResponse {
+    Json(serde_json::json!({ "status": "ok" }))
+}
+
+/// `GET /` — the demo landing page: what this is + links to the catalog and the no-cheat board.
+async fn index() -> Html<String> {
+    Html(format!(
+        "<!doctype html><html lang=en><head><meta charset=utf-8>\
+         <meta name=viewport content=\"width=device-width, initial-scale=1\">\
+         <title>DreggNet Cloud — play + verify</title>{style}</head><body>\
+         <main class=\"catalog\"><h1>DreggNet Cloud</h1>\
+         <p class=\"prose\">Play verifiable games and browse feature offerings in your browser — \
+         every move is a real executor turn, refereed on the substrate. The no-cheat leaderboard \
+         re-verifies each run by replay: a forged run shows FAIL, not a fake pass. No node, no \
+         testnet — verification is in-process re-execution.</p>\
+         <div class=\"offering-card\"><h2>All offerings</h2>\
+         <p class=\"prose\">The five games + the eight feature surfaces.</p>\
+         <a class=\"play\" href=\"/offerings\">▶ Browse the catalog</a></div>\
+         <div class=\"offering-card\"><h2>The Descent — no-cheat leaderboard</h2>\
+         <p class=\"prose\">Independently re-verified runs of the daily descent.</p>\
+         <a class=\"play\" href=\"/descent/leaderboard\">▶ Open the leaderboard</a></div>\
+         </main></body></html>",
+        style = STYLE,
+    ))
+}

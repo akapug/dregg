@@ -22,6 +22,13 @@ version = "0.1.0"
 edition = "2024"
 description = "The web Frontend over dreggnet-offerings: a WebFrontend affordance-renderer (deos Surface -> HTML fragment) + an axum session surface (GET renders, POST advances one real turn), the third surface over the ONE offering core."
 
+# THE PUBLIC-DEMO SERVER — the ~15-line-core entrypoint that makes `dreggnet-web` a runnable
+# server (not just a library): it assembles the merged axum app (`make_app`) and serves it.
+# `cargo build -p dreggnet-web --bin dreggnet-web-server`.
+[[bin]]
+name = "dreggnet-web-server"
+path = "src/bin/dreggnet-web-server.rs"
+
 [dependencies]
 # THE OFFERING CORE — the frontend-agnostic Offering/Frontend traits + the multi-offering
 # `OfferingHost` (the registry the web catalog drives), DungeonOffering (offering #0),
@@ -43,6 +50,11 @@ dreggnet-market = { path = "../dreggnet-market" }
 #    natively; registered directly. Both are CONSUMED, never modified.
 dregg-multiway-tug = { path = "../dregg-multiway-tug" }
 dregg-automatafl = { path = "../dregg-automatafl" }
+# THE DO-ONCE FEATURE SURFACES — the eight Offerings (`register_surfaces`) the public-demo
+# server mounts into the catalog beside the five games (trade · inventory · cheevos · guild ·
+# craft · companion · tavern · party). Each is a plain `render->ViewNode`, so the web catalog
+# lights them up with the one `register_surfaces(&mut host)` call — the do-once path.
+dreggnet-surfaces = { path = "../dreggnet-surfaces" }
 # THE DEOS SURFACE — `ViewNode`/`MenuItem`, the view-tree a Surface wraps. The web
 # renderer WALKS this tree into HTML. `default-features = false` = the gpui-free
 # view-tree model only (no native/gpui/mozjs), matching dreggnet-offerings; the `web`
@@ -59,6 +71,14 @@ serde_json = "1"
 # Deterministic identity derivation (mirror of the MockFrontend shape: a web user ->
 # a stable DreggIdentity via blake3) + a deterministic session seed from a session id.
 blake3 = "1"
+
+# THE SERVER BINARY (`src/bin/dreggnet-web-server.rs`) — the public-demo unblocker. The async
+# runtime for `axum::serve` (`net` = the TcpListener bind, `signal` = ctrl-c graceful shutdown).
+# The library stays runtime-agnostic; only the bin drives the runtime.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
+# Structured startup / request logging for the server bin.
+tracing = { version = "0.1" }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # THE DESCENT spectator/provenance surface (`descent.rs`) consumes these AS-IS to
 # INDEPENDENTLY re-verify a run on render — it modifies none of them:
