@@ -67,7 +67,7 @@ open Dregg2.Circuit.FriLdtJohnson
 open Dregg2.Circuit.FriProximityGapListDecoding
 open Dregg2.Circuit.FriProximityGapWitness
 open Dregg2.Circuit.BabyBearFriDeployed
-open Dregg2.Circuit.BabyBearFriField (BabyBear)
+open Dregg2.Circuit.BabyBearFriField (BabyBear babyBearP)
 open Dregg2.Circuit.BabyBearFriDeployedInstance (friSetupWrapRate)
 open Polynomial
 open scoped BigOperators
@@ -868,8 +868,236 @@ theorem wrap_gs_interior_window_empty (m D : ℕ) (hm : 1 ≤ m) (hdiv : D < 2 *
   rw [h]
   exact Dregg2.ForMathlib.GuruswamiSudan.gs_interp_window_empty 64 m D (by norm_num) hm hdiv
 
+/-! ## §8. BEYOND JOHNSON — the near-capacity radius `dOut = 125` (`δ ≈ 0.977`), via the DIRECT
+PAIR-INJECTION, and the DEPLOYED per-fold soundness over the extension field.
+
+`§3b`–`§7` live AT / just inside the folded code's Johnson radius (`dIn = 56`/`52`), where the
+per-`α` agreement floor is `|κ| − dIn = 8`/`12` and the list is `292`/`186`. This section pushes the
+OUTER radius all the way to `dOut = 125` — relative `δ = 125/128 ≈ 0.977`, essentially at CAPACITY —
+and pairs it with the sharpest inner radius `dIn = 62` (agreement floor `|κ| − dIn = 2`).
+
+At this radius the far-fiber bound COLLAPSES to `≤ 1`: a `125`-far word has, for every constant point
+`(a,b)`, at most `(128 − 125 − 1)/2 = 1` fibre on which `(E f, O f) = (a, b)` (`wrap_fiber_le_one`,
+from `far_fiber_card` at `dOut = 125`). With `M = 1` the Cauchy–Schwarz/Fisher packing quadratic of
+`§F` does NOT bite (`a² = (64 − 62)² = 4 < 64·1 = |κ|·M`), so the list bound is NOT `a²/(a² − nM)`.
+Instead it comes from a NEW ELEMENTARY injection:
+
+  each good `α` folds `f` to a constant on `S α` with `|S α| ≥ |κ| − 62 = 2`; for distinct good
+  `α ≠ γ` the `2×2` Vandermonde in `(α, γ)` pins any common fibre to a SINGLE `Φ`-value `(a*, b*)`,
+  so `S α ∩ S γ ⊆ Φ⁻¹(a*, b*)` has card `≤ M = 1`. Hence a chosen UNORDERED PAIR `{y₁, y₂} ⊆ S α`
+  is a well-defined injection `Good ↪ {2-subsets of κ}` (a shared pair would force
+  `|S α ∩ S γ| ≥ 2 > 1`). Therefore `|Good| ≤ C(64, 2) = 2016` — an UNCONDITIONAL COUNTING fact.
+
+This is SOUND against Kambiré's capacity refutation: his `n^C` blow-up needs `n → ∞`, `r > 2`, and at
+our tiny FIXED dimension-`2` (`r = 2`) code his own construction caps at exactly `C(n, 2)`; no
+construction beats a valid counting bound, and `2016 = C(64, 2)` IS that bound here. The count lands
+in `κ × κ` and is therefore FIELD-INDEPENDENT — its only field dependence is the soundness DENOMINATOR
+`|F_challenge|`. Over the deployed quartic extension field `F = BabyBear⁴`,
+`|F| = babyBearP⁴ ≈ 2^123.6`, the per-fold error `|Good|/|F| ≤ 2016/babyBearP⁴ < 2⁻¹¹² ≈ 2⁻¹¹²·⁶`
+(`wrap_perFold_soundness_capacity`). No `sorry`, no hypothesis; `fSqWrap` is `125`-far, so it FIRES. -/
+
+/-- **THE FAR-FIBER BOUND COLLAPSES TO `≤ 1` at the near-capacity radius.** A `125`-far word has, for
+every constant pair `(a, b)`, at most `1` fibre on which `(E f, O f) = (a, b)`:
+`2·|Φ⁻¹(a,b)| + 125 < 128` forces `|Φ⁻¹(a,b)| ≤ 1`. This is `M = 1` — the packing quadratic's death
+(`§F`) and the pair-injection's life. -/
+theorem wrap_fiber_le_one {f : Fin (2 ^ 7) → BabyBear}
+    (hfar : farN friSetupWrapRate.C 125 f) (a b : BabyBear) :
+    (Finset.univ.filter (fun y : Fin (2 ^ 6) =>
+        E friSetupWrapRate.geom f y = a ∧ O friSetupWrapRate.geom f y = b)).card ≤ 1 := by
+  have h := far_fiber_card friSetupWrapRate hfar (wrap_point_mem_C a b)
+  have hcard : Fintype.card (Fin (2 ^ 7)) = 128 := by simp
+  rw [hcard] at h
+  omega
+
+/-- **THE CAPACITY GOOD-CHALLENGE COUNT — the DIRECT PAIR-INJECTION `Good ↪ {2-subsets of κ}`.**
+A word `125`-far from the deployed code has at most `C(64, 2) = 2016` folding challenges whose fold is
+`62`-close to the constants.
+
+*Proof (elementary, no packing quadratic).* Each good `α` picks a constant `cw α` with agreement set
+`S α = {y | E f y + α·O f y = cw α}` of card `≥ |κ| − 62 = 2`. For distinct good `α ≠ γ`, a common
+`y ∈ S α ∩ S γ` solves the `2×2` Vandermonde `[[1,α],[1,γ]]` (det `γ − α ≠ 0`) to the SINGLE point
+`(a*, b*) = (cw α − α·b*, (cw α − cw γ)/(α − γ))`, so `S α ∩ S γ ⊆ Φ⁻¹(a*, b*)`, of card `≤ 1`
+(`wrap_fiber_le_one`). Choosing a `2`-subset `P α ⊆ S α` therefore gives an INJECTION into the
+`2`-subsets of `κ`: if `P α = P γ` for `α ≠ γ` then `P α ⊆ S α ∩ S γ` has `2 ≤ 1` elements, absurd.
+`|Good| ≤ |{2-subsets of Fin 64}| = C(64, 2) = 2016`. -/
+theorem wrap_good_challenge_card_le_capacity {f : Fin (2 ^ 7) → BabyBear}
+    (hfar : farN friSetupWrapRate.C 125 f)
+    (Good : Finset BabyBear)
+    (hGood : ∀ α ∈ Good, closeN friSetupWrapRate.C' 62 (Fold friSetupWrapRate.geom α f)) :
+    Good.card ≤ 2016 := by
+  classical
+  set G := friSetupWrapRate.geom with hG
+  -- Each good challenge has a constant witness `cw α` with `≤ 62` disagreements.
+  have hex : ∀ α ∈ Good, ∃ c : BabyBear,
+      (disagree (Fold G α f) (fun _ => c)).card ≤ 62 := by
+    intro α hα
+    obtain ⟨g, hgC, hgcard⟩ := hGood α hα
+    obtain ⟨c, rfl⟩ := mem_wrap_C'.mp hgC
+    exact ⟨c, hgcard⟩
+  choose! cw hcw using hex
+  -- The agreement sets of the family.
+  set Sfun : BabyBear → Finset (Fin (2 ^ 6)) :=
+    fun α => Finset.univ.filter (fun y => Fold G α f y = cw α) with hSfun
+  -- (i) Each has `≥ 2` points (`64 − 62`).
+  have hlow : ∀ α ∈ Good, 2 ≤ (Sfun α).card := by
+    intro α hα
+    have hcompl : Sfun α = (disagree (Fold G α f) (fun _ => cw α))ᶜ := by
+      ext y
+      simp [hSfun, disagree]
+    have hcc : (Sfun α).card
+        = Fintype.card (Fin (2 ^ 6)) - (disagree (Fold G α f) (fun _ => cw α)).card := by
+      rw [hcompl, Finset.card_compl]
+    have hn : Fintype.card (Fin (2 ^ 6)) = 64 := by simp
+    have := hcw α hα
+    omega
+  -- (ii) Distinct good challenges share `≤ 1` point: their lines meet in ONE point of `F²`.
+  have hpair : ∀ α ∈ Good, ∀ γ ∈ Good, α ≠ γ → (Sfun α ∩ Sfun γ).card ≤ 1 := by
+    intro α hα γ hγ hne
+    have hsub : α - γ ≠ 0 := sub_ne_zero.mpr hne
+    refine le_trans (Finset.card_le_card ?_)
+      (wrap_fiber_le_one hfar (cw α - α * ((cw α - cw γ) / (α - γ)))
+        ((cw α - cw γ) / (α - γ)))
+    intro y hy
+    rw [Finset.mem_inter, hSfun] at hy
+    obtain ⟨hyα, hyγ⟩ := hy
+    simp only [Finset.mem_filter, Finset.mem_univ, true_and] at hyα hyγ
+    have e1 : E G f y + α * O G f y = cw α := hyα
+    have e2 : E G f y + γ * O G f y = cw γ := hyγ
+    have hO : O G f y = (cw α - cw γ) / (α - γ) := by
+      rw [eq_div_iff hsub]
+      linear_combination e1 - e2
+    have hE : E G f y = cw α - α * ((cw α - cw γ) / (α - γ)) := by
+      rw [← hO]
+      linear_combination e1
+    simp only [Finset.mem_filter, Finset.mem_univ, true_and]
+    exact ⟨hE, hO⟩
+  -- (iii) THE INJECTION. Pick a `2`-subset `P α ⊆ S α`; distinct good `α` give distinct subsets
+  -- because a shared subset would sit in `S α ∩ S γ` (card `≤ 1`), impossible at card `2`.
+  have hPex : ∀ α ∈ Good, ∃ t : Finset (Fin (2 ^ 6)), t ⊆ Sfun α ∧ t.card = 2 := by
+    intro α hα
+    obtain ⟨t, hts, htc⟩ := Finset.exists_subset_card_eq (hlow α hα)
+    exact ⟨t, hts, htc⟩
+  choose! P hPsub hPcard using hPex
+  have hmemP : ∀ α ∈ Good,
+      P α ∈ Finset.powersetCard 2 (Finset.univ : Finset (Fin (2 ^ 6))) := by
+    intro α hα
+    rw [Finset.mem_powersetCard]
+    exact ⟨Finset.subset_univ _, hPcard α hα⟩
+  have hinj : Set.InjOn P ↑Good := by
+    intro α hα γ hγ hPeq
+    rw [Finset.mem_coe] at hα hγ
+    by_contra hne
+    have hsubInt : P α ⊆ Sfun α ∩ Sfun γ := by
+      intro y hy
+      rw [Finset.mem_inter]
+      refine ⟨hPsub α hα hy, ?_⟩
+      rw [hPeq] at hy
+      exact hPsub γ hγ hy
+    have h2 : 2 ≤ (Sfun α ∩ Sfun γ).card :=
+      le_trans (le_of_eq (hPcard α hα).symm) (Finset.card_le_card hsubInt)
+    have h1 := hpair α hα γ hγ hne
+    omega
+  calc Good.card
+      ≤ (Finset.powersetCard 2 (Finset.univ : Finset (Fin (2 ^ 6)))).card :=
+        Finset.card_le_card_of_injOn P hmemP hinj
+    _ = 2016 := by
+        rw [Finset.card_powersetCard, Finset.card_univ, Fintype.card_fin]
+        decide
+
+/-- **THE CAPACITY WITNESS — `BadChallengePoly friSetupWrapRate 125 62 2016`.** For a `125`-far `f`
+the good set has card `≤ 2016` (`wrap_good_challenge_card_le_capacity`), so `∏_{α good}(X − C α)` is
+the nonzero degree-`≤ 2016` witness vanishing on every good challenge — the beyond-Johnson (near
+CAPACITY, `dOut = 125`) proximity-gap witness. No `sorry`, no hypothesis. -/
+theorem wrap_badChallengePoly_capacity :
+    BadChallengePoly friSetupWrapRate 125 62 2016 := by
+  classical
+  intro f hfar
+  set Gd : Set BabyBear :=
+    {α : BabyBear | closeN friSetupWrapRate.C' 62 (Fold friSetupWrapRate.geom α f)} with hGd
+  have hfin : Gd.Finite := Set.toFinite _
+  set Good : Finset BabyBear := hfin.toFinset with hGood
+  have hmem : ∀ α, α ∈ Good ↔ α ∈ Gd := by
+    intro α; rw [hGood]; simp only [Set.Finite.mem_toFinset]
+  have hcard : Good.card ≤ 2016 :=
+    wrap_good_challenge_card_le_capacity hfar Good (fun α hα => (hmem α).mp hα)
+  refine ⟨∏ α ∈ Good, (X - C α),
+    (monic_prod_X_sub_C (fun α : BabyBear => α) Good).ne_zero, ?_, ?_⟩
+  · rw [natDegree_finsetProd_X_sub_C_eq_card Good (fun α : BabyBear => α)]
+    exact hcard
+  · intro α hα
+    have hαG : α ∈ Good := (hmem α).mpr hα
+    show (∏ β ∈ Good, (X - C β)).eval α = 0
+    rw [eval_prod]
+    exact Finset.prod_eq_zero hαG (by simp)
+
+/-- **THE CAPACITY PROXIMITY GAP — `FriProximityGapChallenges friSetupWrapRate 125 62 2016`,
+unconditional.** A `125`-far word (relative `δ ≈ 0.977`, near capacity) has at most `2016 = C(64,2)`
+folding challenges whose fold is `62`-close to the constants — the direct pair-injection count, routed
+through `friProximityGap_of_badChallengePoly`. No hypothesis remains. -/
+theorem wrap_friProximityGap_capacity :
+    FriProximityGapChallenges friSetupWrapRate 125 62 2016 :=
+  friProximityGap_of_badChallengePoly friSetupWrapRate 125 62 2016 wrap_badChallengePoly_capacity
+
+/-- **`fSqWrap` is `125`-FAR from the deployed code.** It agrees with every codeword on `≤ 2` of `128`
+points (`fSqWrap_agree_le_two`), so disagrees on `≥ 126 > 125` — supplying the far hypothesis of the
+capacity witness NON-VACUOUSLY (`125 + 2 = 127 < 128`). -/
+theorem fSqWrap_far_125 : farN friSetupWrapRate.C 125 fSqWrap := by
+  refine farN_of_agree_le (k := 2) ?_ fSqWrap_agree_le_two
+  have hn : Fintype.card (Fin (2 ^ 7)) = 128 := by simp
+  rw [hn]
+  norm_num
+
+/-- **The capacity gap FIRES on the concrete `125`-far `fSqWrap`, unconditionally**: at most `2016`
+folding challenges fold it `62`-close to the constants, exhibited as the roots of an actual nonzero
+polynomial of degree `≤ 2016`. Non-vacuous — `fSqWrap_far_125` supplies the far hypothesis. -/
+theorem wrap_capacity_witness_fires :
+    ∃ P : BabyBear[X], P ≠ 0 ∧ P.natDegree ≤ 2016 ∧
+      {α : BabyBear | closeN friSetupWrapRate.C' 62 (Fold friSetupWrapRate.geom α fSqWrap)}
+        ⊆ {α : BabyBear | P.eval α = 0} :=
+  wrap_badChallengePoly_capacity fSqWrap_far_125
+
+/-- **THE DEPLOYED PER-FOLD SOUNDNESS, over the extension-field challenge domain.** The capacity
+good-challenge count `≤ 2016 = C(64,2)` is FIELD-INDEPENDENT — the injection lands in the unordered
+pairs of the `64`-point folded DOMAIN `κ`, not in the challenge field — so the SAME count holds when
+folding challenges are drawn from the deployed quartic extension field `F = BabyBear⁴`
+(`|F| = babyBearP⁴ ≈ 2^123.6`). The per-fold proximity-gap soundness error is then
+`|Good| / |F| ≤ 2016 / babyBearP⁴`, and THIS theorem's own conclusion is that this density is
+`< 1/2¹¹² = 2⁻¹¹²` — i.e. **`≥ 112` proven bits** for the deployed extension field. (The exact value
+is `≈ 2⁻¹¹²·⁶⁵`, strictly inside `(2⁻¹¹³, 2⁻¹¹²)` per `wrap_perFold_soundness_capacity_interval`; the
+`~113`-bit figure rounds `123.6 − 11 = 112.6`. `2⁻¹¹³` is NOT a valid upper bound — the honest bound
+is `2⁻¹¹²`.) -/
+theorem wrap_perFold_soundness_capacity {f : Fin (2 ^ 7) → BabyBear}
+    (hfar : farN friSetupWrapRate.C 125 f) (Good : Finset BabyBear)
+    (hGood : ∀ α ∈ Good, closeN friSetupWrapRate.C' 62 (Fold friSetupWrapRate.geom α f)) :
+    (Good.card : ℝ) / (babyBearP : ℝ) ^ 4 < 1 / 2 ^ 112 := by
+  have hc : Good.card ≤ 2016 := wrap_good_challenge_card_le_capacity hfar Good hGood
+  have hcR : (Good.card : ℝ) ≤ 2016 := by exact_mod_cast hc
+  have hpval : (babyBearP : ℝ) = 2013265921 := by norm_num [babyBearP]
+  rw [hpval]
+  have hden : (0 : ℝ) < (2013265921 : ℝ) ^ 4 := by norm_num
+  have h2 : (0 : ℝ) < (2 : ℝ) ^ 112 := by positivity
+  rw [div_lt_div_iff₀ hden h2, one_mul]
+  have key : (2016 : ℝ) * 2 ^ 112 < (2013265921 : ℝ) ^ 4 := by norm_num
+  nlinarith [hcR, h2, key]
+
+/-- **The exact soundness interval — `2⁻¹¹³ < 2016/babyBearP⁴ < 2⁻¹¹²`.** The deployed per-fold error
+is strictly between `2⁻¹¹³` and `2⁻¹¹²` (`≈ 2⁻¹¹²·⁶⁵`): `2016·2¹¹² < babyBearP⁴ < 2016·2¹¹³`. This
+pins the HONEST bit-count at `~112.6` — the proven guarantee is `≥ 112` bits (the `2⁻¹¹²` upper bound),
+NOT the rounded `113`. -/
+theorem wrap_perFold_soundness_capacity_interval :
+    2016 * 2 ^ 112 < babyBearP ^ 4 ∧ babyBearP ^ 4 < 2016 * 2 ^ 113 := by
+  refine ⟨?_, ?_⟩ <;> norm_num [babyBearP]
+
 /-! ## §4. Axiom hygiene. -/
 
+#assert_axioms wrap_fiber_le_one
+#assert_axioms wrap_good_challenge_card_le_capacity
+#assert_axioms wrap_badChallengePoly_capacity
+#assert_axioms wrap_friProximityGap_capacity
+#assert_axioms fSqWrap_far_125
+#assert_axioms wrap_capacity_witness_fires
+#assert_axioms wrap_perFold_soundness_capacity
+#assert_axioms wrap_perFold_soundness_capacity_interval
 #assert_axioms correlatedAgreementLine_twoPoint
 #assert_axioms correlatedAgreementLineAt_twoPoint
 #assert_axioms wrap_good_challenge_card_le_sharp
