@@ -28,9 +28,9 @@ Both runs are cited below.
   real testnet token  →   shielded note in     →   fhEgg engine +      →   wrap-adapter → chain
   locked + LC-attested    the pool, nullifier-     reveal-nothing STARK     OR unshield → release
                           gated, PQ-bound          + no-viewer MPC
-  ── PARTIAL ──            ── EXISTS ──             ── EXISTS (1 seam) ──    ── PARTIAL ──
-  primitives real,        real + Lean-proven       engine+STARK+MPC real,   wrap real, not yet
-  mint-glue MISSING                                note↔order seam MISSING   fed a clearing turn
+  ── PARTIAL ──            ── EXISTS ──             ── EXISTS ──             ── EXISTS (tail) ──
+  primitives real,        real + Lean-proven       engine+STARK+MPC real,   settle-back PoC'd,
+  mint-glue MISSING                                note↔order seam PoC'd     wrap-prove own-tested
 ```
 
 ---
@@ -191,11 +191,27 @@ balance (amount = the note's value, by construction). `InterchainCustody.lean`
 `release` (the redeem: `live_supply -= a`, `currently_locked -= a`, gated on
 availability) reverts the escrow, restoring the locked value with none lost.
 
-**MISSING — the wire.**
-The wrap-adapter is generic over *any* `FullTurnProof` — it has not been fed a
-**shielded-clearing turn** specifically, and the cleared **output notes** are not
-yet routed → `unshieldK` → `release` → the escrow's on-chain release. The settle
-primitives exist; the clearing-turn → settle path is unbuilt.
+**EXISTS (PoC'd, runs green) — the settle-back: output note → unshield → release.**
+`circuit-prove/tests/shielded_settle_back_poc.rs` routes a cleared **output note**
+(a real Poseidon2 `BoundNote`, the fill/change note stage (c) mints) →
+`settle_output_note` = `unshieldK` (consume the nullifier, exit the pool, debit by
+exactly the note's value — `unshieldK_preserves_pool`) → `InterchainCustody.release`
+(release exactly that value, gated on `supply ≤ locked`). The conservation seam
+recomputes: released = note value (`unshield_value_binding`), `supply ≤ locked`
+preserved (`release_backed`), the redeemability gap `locked − supply` invariant
+(`release_gap`), the pool debited by the note's value, the nullifier consumed once.
+Both polarities fire: a valid settle conserves; an OVER-RELEASE (> note value / >
+locked-supply), a RELEASE-BEYOND-LOCKED, a DOUBLE-SETTLE (replayed nullifier), and a
+NON-CLEARED note are each REJECTED. The settle turn's `(old_commit, new_commit)`
+custody anchors are exhibited as the shape the wrap adapter binds to. Run:
+`cargo test -p dregg-circuit-prove --test shielded_settle_back_poc -- --nocapture`.
+
+**MISSING — the wire's tail.**
+The wrap-adapter is generic over *any* `FullTurnProof` — the settle turn's anchor
+SHAPE is wired (above), but it has not been fed a real proven **shielded-clearing /
+settle turn** end-to-end (the full wrap-prove runs under its own tests,
+`ivc_turn_chain_rotated.rs`), and the escrow's actual **on-chain** release awaits the
+deployed vault contract (stage (a)).
 
 ---
 
