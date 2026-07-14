@@ -6,10 +6,16 @@
 //! web/discord/telegram reach).
 
 use deos_view::ViewNode;
-use dreggnet_offerings::{Action, DreggIdentity, Offering, OfferingHost, SessionConfig};
+use dreggnet_offerings::{
+    Action, CollectiveDecision, DreggIdentity, Offering, OfferingHost, SessionConfig, Tally,
+    VoteCount,
+};
 
+use dreggnet_surfaces::companion::TURN_OVERLEVEL;
+use dreggnet_surfaces::party::TURN_MISPLAY;
 use dreggnet_surfaces::{
-    CheevoShowcase, GuildPage, InventoryOffering, TradeOffering, register_surfaces,
+    CheevoShowcase, CompanionOffering, CraftOffering, GuildPage, InventoryOffering, PartyOffering,
+    TavernOffering, TradeOffering, register_surfaces,
 };
 
 // ── ViewNode-walk assertion helpers ──────────────────────────────────────────────────────────
@@ -342,22 +348,277 @@ fn guild_page_renders_roster_and_verified_clears_leaderboard() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════════════════
-// 5. The do-once web/discord/telegram reach — register_surfaces mounts all four on an
+// 5. CraftOffering — a playable forge loop that fires REAL craft turns.
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn craft_renders_valid_viewnode_and_forges_consuming_inputs() {
+    let offering = CraftOffering::new();
+    let mut s = offering.open(SessionConfig::default()).expect("open");
+
+    // The render is a real ViewNode tree with the forge sections.
+    let root_surface = offering.render(&s);
+    let root = root_surface.view();
+    assert!(
+        matches!(root, ViewNode::Section { .. }),
+        "roots at a Section"
+    );
+    let mats = find_section(root, "Materials").expect("a Materials section");
+    let mrows = first_table(mats).expect("Materials holds a Table");
+    assert_eq!(mrows.len(), 6, "header + 5 material rows");
+    assert!(
+        find_section(root, "Recipes").is_some(),
+        "a Recipes menu section"
+    );
+
+    // Three recipes; Greatblade + Relic are craftable (2/2), Masterwork is below floor (1/3).
+    let acts = offering.actions(&s);
+    assert_eq!(acts.len(), 3, "three recipes on the bench");
+    assert!(
+        acts[0].enabled && acts[1].enabled,
+        "the two pair recipes are craftable"
+    );
+    assert!(!acts[2].enabled, "Masterwork is below its 3-input floor");
+
+    // FORGE recipe 0 (Greatblade, inputs 0+1) — a real craft: inputs consumed, output minted.
+    let out = offering.advance(&mut s, act("craft", 0), actor());
+    assert!(out.landed(), "the craft lands a real turn: {out:?}");
+    assert_eq!(s.output_count(), 1, "one output forged");
+    assert_eq!(s.live_material_count(), 3, "two of five materials consumed");
+
+    // The forged output renders in a Forged table.
+    let surface = offering.render(&s);
+    assert!(
+        find_section(surface.view(), "Forged").is_some(),
+        "the forged output renders"
+    );
+
+    // NON-VACUOUS REFUSED — re-crafting recipe 0 is refused (its inputs are consumed), and a
+    // below-floor Masterwork is refused (RecipeUnsatisfied). Neither mints.
+    let reuse = offering.advance(&mut s, act("craft", 0), actor());
+    assert!(
+        !reuse.landed(),
+        "re-crafting consumed inputs is refused: {reuse:?}"
+    );
+    let below = offering.advance(&mut s, act("craft", 2), actor());
+    assert!(!below.landed(), "a below-floor craft is refused: {below:?}");
+    assert_eq!(s.output_count(), 1, "the refused crafts minted nothing");
+
+    // A second real craft (Relic, inputs 2+3) still lands — the refusals were non-vacuous.
+    let out2 = offering.advance(&mut s, act("craft", 1), actor());
+    assert!(out2.landed(), "the Relic craft lands: {out2:?}");
+    assert_eq!(s.output_count(), 2, "two outputs forged");
+
+    // verify() re-verifies every output's provenance off the real substrate.
+    let report = offering.verify(&s);
+    assert!(
+        report.verified,
+        "the forge chain re-verifies: {}",
+        report.detail
+    );
+    assert!(!offering.price(&act("craft", 0)).is_paid(), "the free tier");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+// 6. CompanionOffering — a playable hatch + collection that fires REAL leveling turns.
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn companion_renders_collection_and_hatches_and_raises() {
+    let offering = CompanionOffering::demo();
+    let mut s = offering.open(SessionConfig::default()).expect("open");
+    assert_eq!(s.len(), 1, "the demo seeds one starter companion");
+
+    // The collection renders as a Table (header + 1 companion).
+    let surface = offering.render(&s);
+    let coll = find_section(surface.view(), "Companions").expect("a Companions section");
+    let rows = first_table(coll).expect("the Companions section holds a Table");
+    assert_eq!(rows.len(), 2, "header + 1 companion row");
+    assert!(
+        text_contains(coll, "frostwyrm"),
+        "the starter species renders"
+    );
+
+    // HATCH a new companion — a real mint + its genesis leveling turn (Landed).
+    let out = offering.advance(&mut s, act("hatch", 1), actor());
+    assert!(out.landed(), "a hatch mints + lands a real turn: {out:?}");
+    assert_eq!(s.len(), 2, "the collection grew by one");
+    let new_idx = 1;
+    assert_eq!(
+        s.level_of(new_idx),
+        1,
+        "a fresh hatch enters at level 1 (genesis turn)"
+    );
+
+    // NON-VACUOUS REFUSED — force-leveling the fresh companion (level 1, 0 XP) past its XP floor is
+    // a real gate refusal that commits nothing.
+    let refused = offering.advance(&mut s, act(TURN_OVERLEVEL, new_idx as i64), actor());
+    assert!(
+        !refused.landed(),
+        "an un-earned level-up is refused: {refused:?}"
+    );
+    assert_eq!(s.level_of(new_idx), 1, "anti-ghost: still level 1");
+
+    // The SAME companion RAISEs (earn the floor, then level) — the refusal was non-vacuous.
+    let raised = offering.advance(&mut s, act("raise", new_idx as i64), actor());
+    assert!(raised.landed(), "a real raise lands: {raised:?}");
+    assert_eq!(s.level_of(new_idx), 2, "the companion leveled to 2");
+
+    // verify() re-verifies every companion's owned identity off the substrate.
+    assert!(offering.verify(&s).verified, "the companions re-verify");
+
+    // EMPTY — a fresh roost renders the empty-collection state.
+    let empty = CompanionOffering::new();
+    let es = empty.open(SessionConfig::default()).expect("open");
+    assert!(es.is_empty());
+    let esurf = empty.render(&es);
+    assert!(
+        text_contains(esurf.view(), "No companions yet"),
+        "empty-state text"
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+// 7. TavernOffering — a read-surface posting board (presence + LFG board + party roster).
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn tavern_renders_presence_and_lfg_board_populated_and_empty() {
+    let offering = TavernOffering::demo("The Salted Tankard");
+    let mut s = offering.open(SessionConfig::default()).expect("open");
+    assert_eq!(s.patron_count(), 4, "four patrons");
+    assert_eq!(s.present_count(), 3, "three present");
+
+    let surface = offering.render(&s);
+    let presence = find_section(surface.view(), "Presence").expect("a Presence section");
+    let rows = first_table(presence).expect("Presence holds a Table");
+    assert_eq!(rows.len(), 5, "header + 4 patron rows");
+    assert!(
+        pill_with_text(presence, "present"),
+        "a present pill renders"
+    );
+    let board = find_section(surface.view(), "LFG board").expect("an LFG board section");
+    assert!(text_contains(board, "LFG the Salt Shore"), "a post renders");
+    assert!(
+        find_section(surface.view(), "Party").is_some(),
+        "the party roster renders"
+    );
+
+    // Read-only: advance is a refusal (posts fire on the live tavern node).
+    assert!(
+        offering.actions(&s).is_empty(),
+        "a read-surface has no actions"
+    );
+    assert!(
+        !offering.advance(&mut s, act("post", 0), actor()).landed(),
+        "advance is a read-only refusal"
+    );
+    assert!(offering.verify(&s).verified, "the board is consistent");
+
+    // EMPTY — the empty-hall state.
+    let empty = TavernOffering::new("Empty Hall");
+    let es = empty.open(SessionConfig::default()).expect("open");
+    assert!(es.is_empty());
+    assert!(
+        text_contains(empty.render(&es).view(), "The hall is empty"),
+        "empty-state text"
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+// 8. PartyOffering — a playable roster; seat acts + a quorum-certified collective fork.
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn party_renders_roster_and_acts_and_resolves_a_collective_fork() {
+    let offering = PartyOffering::new();
+    let mut s = offering.open(SessionConfig::default()).expect("open");
+    assert_eq!(s.seat_count(), 4, "a four-seat party");
+
+    let surface = offering.render(&s);
+    let roster = find_section(surface.view(), "Roster").expect("a Roster section");
+    let rows = first_table(roster).expect("Roster holds a Table");
+    assert_eq!(rows.len(), 5, "header + 4 seat rows");
+
+    // A seat acts IN its role — a real committed turn.
+    let out = offering.advance(&mut s, act("act", 0), actor());
+    assert!(out.landed(), "seat 0 acts in role and lands: {out:?}");
+    assert_eq!(s.turns(), 1, "one committed party turn");
+
+    // NON-VACUOUS REFUSED — a cross-role misplay (scout fires the tank's move) is a real cap
+    // refusal; the same seat's own move lands.
+    let misplay = offering.advance(&mut s, act(TURN_MISPLAY, 1), actor());
+    assert!(
+        !misplay.landed(),
+        "a cross-role misplay is refused: {misplay:?}"
+    );
+    assert!(
+        offering.advance(&mut s, act("act", 1), actor()).landed(),
+        "the scout's own move lands (the refusal was non-vacuous)"
+    );
+
+    // THE COLLECTIVE FORK — the crowd decides Left (option 0); advance_collective casts a quorum of
+    // the seats' signed ballots for it and resolves the certified shared move into the world.
+    let electorate = vec![
+        DreggIdentity("Bramwen".into()),
+        DreggIdentity("Corvin".into()),
+    ];
+    let decision = CollectiveDecision::new(
+        electorate,
+        DreggIdentity("Bramwen".into()),
+        Tally::new(vec![VoteCount::new(0, 3), VoteCount::new(1, 1)], 0),
+    );
+    let forked = offering.advance_collective(&mut s, act("fork", 0), decision);
+    assert!(
+        forked.landed(),
+        "the quorum-certified fork resolves: {forked:?}"
+    );
+    if let dreggnet_offerings::Outcome::Landed { receipt, .. } = &forked {
+        assert_ne!(
+            receipt.turn_hash, [0u8; 32],
+            "a genuine committed fork turn hash"
+        );
+    }
+    assert_eq!(
+        s.last_fork(),
+        Some("Left, the sunken stair"),
+        "the party took the crowd's winning path"
+    );
+
+    // A solo fork (no crowd) is refused — a fork needs a collective decision.
+    let solo = offering.advance(&mut s, act("fork", 0), actor());
+    assert!(!solo.landed(), "a solo fork is refused: {solo:?}");
+
+    assert!(offering.verify(&s).verified, "the party world re-verifies");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+// 9. The do-once web/discord/telegram reach — register_surfaces mounts all EIGHT on an
 //    OfferingHost, and each renders its ViewNode surface THROUGH the host seam.
 // ═══════════════════════════════════════════════════════════════════════════════════════════
 
 #[test]
-fn register_surfaces_mounts_the_four_on_an_offering_host() {
+fn register_surfaces_mounts_all_eight_on_an_offering_host() {
     let mut host = OfferingHost::new();
     register_surfaces(&mut host);
 
-    for key in ["trade", "inventory", "cheevos", "guild"] {
+    let keys = [
+        "trade",
+        "inventory",
+        "cheevos",
+        "guild",
+        "craft",
+        "companion",
+        "tavern",
+        "party",
+    ];
+    for key in keys {
         assert!(host.has(key), "`{key}` is registered on the host");
     }
 
     // Drive a render of each through the host — the do-once ViewNode surface reaches the frontend
     // seam identically (the same tree every renderer walks).
-    for key in ["trade", "inventory", "cheevos", "guild"] {
+    for key in keys {
         let id = host.open(key).expect("open a session through the host");
         let surface = host.render(key, &id).expect("the host renders the surface");
         assert!(
@@ -370,13 +631,20 @@ fn register_surfaces_mounts_the_four_on_an_offering_host() {
         );
     }
 
-    // The playable one fires a real turn through the host: list good 0 lands.
-    let id = host.open("trade").expect("open trade");
-    let out = host
-        .advance("trade", &id, act("list", 0), actor())
-        .expect("advance through the host");
-    assert!(
-        out.landed(),
-        "a real trade turn fires through the host seam: {out:?}"
-    );
+    // The playable ones fire a real turn through the host seam.
+    for (key, action) in [
+        ("trade", act("list", 0)),
+        ("craft", act("craft", 0)),
+        ("companion", act("hatch", 1)),
+        ("party", act("act", 0)),
+    ] {
+        let id = host.open(key).expect("open playable");
+        let out = host
+            .advance(key, &id, action, actor())
+            .expect("advance through the host");
+        assert!(
+            out.landed(),
+            "`{key}` fires a real turn through the host: {out:?}"
+        );
+    }
 }

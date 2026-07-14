@@ -50,5 +50,23 @@ dreggnet-guild = { path = "../dreggnet-guild" }
 # THE NO-CHEAT RUN SOURCE — `Universe`/`Completion`/`record_playthrough`/`WinCondition`: seeds the
 # demo cheevo (a real earned achievement) + the demo guild's one verified clear (a real winning run).
 ugc-dregg = { path = "../ugc-dregg" }
-# The built-in winnable dungeon scene + its choice indices, for the demo guild's verified clear.
+# The built-in winnable dungeon scene + its choice indices, for the demo guild's verified clear;
+# ALSO the fair-draw `loot::Rarity` (+ label) the companion collection renders. Consumed.
 dungeon-on-dregg = { path = "../dungeon-on-dregg" }
+# BATCH 2 — the next four feature crates, each surfaced as an Offering (render->ViewNode):
+# THE FORGE (playable) — `CraftForge`/`Recipe`/`roll_craft`/`CraftQuality`: consume material notes
+# (the on-chain sink) + a provably-fair quality draw -> a real owned bound output. Consumed.
+dreggnet-craft = { path = "../dreggnet-craft" }
+# THE ROOST (playable) — `CompanionRoost`/`Companion`/`roll_hatch`: hatch a fair-drawn owned
+# companion + raise it through the real XP-gated leveling turns. Consumed.
+dreggnet-companion = { path = "../dreggnet-companion" }
+# THE PARTY (playable) — `Party`/`PartyMove`/`Role`/`ActOutcome` + the quorum fork ballot: a seated
+# roster whose caps ARE its roles, and a real quorum-certified collective fork. Consumed.
+# (The gpui-free, embedded-executor party world; NOT the heavy mozjs/node tavern crate.)
+dreggnet-party = { path = "../dreggnet-party" }
+# THE FAIRNESS ANCHOR — `CommittedSeed` (the beacon the craft/companion fair draws anchor to).
+procgen-dregg = { path = "../procgen-dregg" }
+# `TurnReceipt` — named to carry the party's genuine committed turn-hash into `Outcome::Landed`
+# (dreggnet-party folds its full receipt to a turn-hash through its public ActOutcome API).
+# default-features=false = gpui-free.
+dregg-app-framework = { path = "../app-framework", default-features = false }

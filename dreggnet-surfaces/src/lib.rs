@@ -21,28 +21,53 @@
 //! * [`guild::GuildPage`] — a **read-surface** over [`dreggnet_guild`]: the roster + the aggregate
 //!   **verified-clears** leaderboard (every clear passed the no-cheat verify).
 //!
+//! ## Batch 2 — the next four feature crates as Offerings
+//!
+//! * [`craft::CraftOffering`] — a **playable forge loop** over [`dreggnet_craft`]: pick a recipe,
+//!   the forge consumes real material notes (the sink) + rolls a provably-fair quality, and mints a
+//!   real owned output — `advance` fires a real craft turn (a below-floor / consumed-input craft is
+//!   a real refusal).
+//! * [`companion::CompanionOffering`] — a **playable hatch + collection** over [`dreggnet_companion`]:
+//!   hatch a companion from a fair draw (a real owned note) + raise it through XP-gated committed
+//!   turns; the collection renders as a `Table` of your companions + their live levels.
+//! * [`tavern::TavernOffering`] — a **read-surface posting board** over the shared hub
+//!   [`dreggnet_tavern`] models: presence + the LFG board + the party roster (render-only — the live
+//!   node/mozjs post path stays off this light layer).
+//! * [`party::PartyOffering`] — a **playable roster + fork ballot** over [`dreggnet_party`]: a seat
+//!   acts in its role (a cross-role misplay is a real cap refusal) and the party resolves a fork via
+//!   `advance_collective` (a real quorum-certified signed ballot into the shared world).
+//!
 //! ## Honest scope
 //!
-//! ONE of the four is a *playable* Offering (trade — its `advance` fires real transfer turns); the
-//! other three are *read-surfaces* (`advance` is a read-only refusal, `render` is the payload). The
-//! do-once reach is real: each `render` is a plain [`ViewNode`] tree, so the web one-line register
-//! ([`register_surfaces`]) AND the discord/telegram/wechat renderers inherit it with no per-surface
-//! code. NAMED NEXT (not built here): the rest of the feature Offerings (craft / companion / tavern /
-//! party); the discord command shells (the generic `/offering` adapter gives discord the four for
-//! free once registered); and the *games'* Offerings (which need `render_for(viewer)` for the hidden
-//! hand + a coordinate-grid ViewNode — Tier C, gated on the game fold lanes).
+//! *Playable* Offerings (their `advance`/`advance_collective` fire real committed turns): trade,
+//! craft, companion, party. *Read-surfaces* (`advance` is a read-only refusal, `render` is the
+//! payload): inventory, cheevo, guild, tavern. The do-once reach is real: each `render` is a plain
+//! [`ViewNode`] tree, so the web one-line register ([`register_surfaces`]) AND the discord/telegram/
+//! wechat renderers inherit all eight with no per-surface code. NAMED NEXT (not built here): the
+//! discord command shells (the generic `/offering` adapter gives discord these for free once
+//! registered); a booted-node tavern post path (the mozjs-weight async surface); and the *games'*
+//! Offerings (which need `render_for(viewer)` for the hidden hand + a coordinate-grid ViewNode —
+//! Tier C, gated on the game fold lanes).
 
 pub mod cheevo;
+pub mod companion;
+pub mod craft;
 pub mod guild;
 pub mod inventory;
+pub mod party;
+pub mod tavern;
 pub mod trade;
 
 use deos_view::{MenuItem, ViewNode};
 use dreggnet_offerings::OfferingHost;
 
 pub use cheevo::CheevoShowcase;
+pub use companion::CompanionOffering;
+pub use craft::CraftOffering;
 pub use guild::GuildPage;
 pub use inventory::{InventoryItem, InventoryOffering};
+pub use party::PartyOffering;
+pub use tavern::TavernOffering;
 pub use trade::TradeOffering;
 
 // ── Shared ViewNode builders — the ONE place these four surfaces compose the vocab, so every
@@ -106,13 +131,14 @@ pub(crate) fn short_hex(bytes: &[u8]) -> String {
     s
 }
 
-/// **Register all four surfaces on an [`OfferingHost`]** — the do-once web/discord/telegram reach.
+/// **Register all eight surfaces on an [`OfferingHost`]** — the do-once web/discord/telegram reach.
 ///
-/// This is the ONE call a frontend makes to mount trade + inventory + cheevo + guild alongside the
-/// market (it avoids editing `dreggnet-web`: the web's `catalog_default_host` calls this after
-/// registering the dungeon/council/market, and the generic `/offering` discord adapter + the
-/// telegram/wechat frontends reach the four the same way — each renders the SAME `render->ViewNode`).
-/// The read-surfaces mount their populated `demo()` state; the trade market opens fresh per session.
+/// This is the ONE call a frontend makes to mount trade + inventory + cheevo + guild + craft +
+/// companion + tavern + party alongside the market (it avoids editing `dreggnet-web`: the web's
+/// `catalog_default_host` calls this after registering the dungeon/council/market, and the generic
+/// `/offering` discord adapter + the telegram/wechat frontends reach them the same way — each
+/// renders the SAME `render->ViewNode`). The read-surfaces mount their populated `demo()` state; the
+/// playable markets open fresh per session.
 pub fn register_surfaces(host: &mut OfferingHost) {
     host.register(
         "trade",
@@ -133,5 +159,25 @@ pub fn register_surfaces(host: &mut OfferingHost) {
         "guild",
         "Guild — the roster + the aggregate verified-clears leaderboard",
         GuildPage::demo("The Iron Wardens"),
+    );
+    host.register(
+        "craft",
+        "Forge — a provably-fair craft loop (consume materials · mint a bound output)",
+        CraftOffering::new(),
+    );
+    host.register(
+        "companion",
+        "Companions — hatch a fair-drawn companion · raise it through XP-gated turns",
+        CompanionOffering::demo(),
+    );
+    host.register(
+        "tavern",
+        "Tavern — the shared hub: presence · the LFG board · the party roster",
+        TavernOffering::demo("The Salted Tankard"),
+    );
+    host.register(
+        "party",
+        "Party — a seated roster + a quorum-certified fork ballot",
+        PartyOffering::new(),
     );
 }

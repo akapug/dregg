@@ -247,7 +247,8 @@ fn bind_plan(tree: &ViewNode, out: &mut Vec<Slot>) {
         | ViewNode::Halo { .. }
         | ViewNode::Slider { .. }
         | ViewNode::Toggle { .. }
-        | ViewNode::Tile { .. } => {}
+        | ViewNode::Tile { .. }
+        | ViewNode::CoordGrid { .. } => {}
     }
 }
 
@@ -1119,6 +1120,27 @@ impl CardPane {
                     .child(Label::new("▦").text_color(cx.theme().muted_foreground))
                     .child(
                         Label::new(format!("‹tile {handle}: host-painted region {w}×{h}›"))
+                            .text_color(cx.theme().muted_foreground),
+                    )
+                    .into_any_element()
+            }
+            ViewNode::CoordGrid { cols, cells } => {
+                let rows = if *cols == 0 {
+                    0
+                } else {
+                    (cells.len() + *cols - 1) / *cols
+                };
+                v_flex()
+                    .gap_1()
+                    .items_center()
+                    .justify_center()
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .rounded(px(4.))
+                    .bg(cx.theme().background)
+                    .child(Label::new("▦").text_color(cx.theme().muted_foreground))
+                    .child(
+                        Label::new(format!("‹coord-grid {cols}×{rows}: {} cells›", cells.len()))
                             .text_color(cx.theme().muted_foreground),
                     )
                     .into_any_element()
