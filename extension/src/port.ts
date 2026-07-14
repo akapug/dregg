@@ -1969,3 +1969,481 @@ export class StoryEngine {
     };
   }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// THE DESCENT ENGINE — `<dregg-descent>` (The Descent, played IN THE TAB, private).
+// docs/GAME-STRATEGY.md; wasm/src/bindings_descent.rs (`DescentWorld`).
+//
+// The action sibling of the STORY engine, with ONE load-bearing difference in the
+// trust split: The Descent PLAYS PRIVATELY. Opening today's beacon-seeded day,
+// rendering the room + its moves, ADVANCING a move (each is a real cap-gated
+// verified turn the in-tab `EmbeddedExecutor` admits iff the scene's installed gate
+// passes), reading the run state, and REPLAY-VERIFYING the whole receipt chain are
+// ALL the free, trustless, in-tab tier — the moves never leave the device. There is
+// NO per-move custody prompt: the "cap-gate" is the scene's own gate inside the wasm
+// executor (an HP floor, a `warden_hp <= 0` stair), and a gated/invalid move FAILS
+// CLOSED in-band (nothing commits, the run does not move) — the permadeath trial's
+// teeth, not a consent refusal.
+//
+// The ONLY custody write is the OPT-IN SETTLE/PUBLISH (`settleDescent`): the private
+// run stays private until the player chooses to publish it to the node's no-cheat
+// leaderboard, which routes through the injected consent + a `signTurnV3`-shaped
+// settle callback. Absent a settle provider it FAILS CLOSED honestly ("publishing is
+// an opt-in named hook") — a named seam, never a fake.
+//
+// The engine owns one real wasm `DescentWorld` per resolved uri (constructed from an
+// already-verified beacon output, or by verifying a fetched drand reveal in-tab); the
+// element reaches it ONLY through the "dregg:descent" message — no wasm, no keys, no
+// scene graph ever leave this context. `defaultResolveDescent` is the stand-in until a
+// descent netlayer fetch of TODAY'S drand round lands; a malformed addr fails closed —
+// mirrors the poll/doc/story engines' `default*` resolvers exactly.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** One move at the current room — its index, text, and whether it is currently
+ *  available (the gate-computed availability the stock runtime derives against the
+ *  committed cell; a gated move is SHOWN but not takeable). */
+export interface DescentMove {
+  index: number;
+  text: string;
+  available: boolean;
+}
+
+/** The run's current committed state (the parsed `stateJson()` — every field reads
+ *  straight off the committed day-cell, the same values a re-executor reproduces). */
+export interface DescentState {
+  room: string;
+  hp: number;
+  wardenHp: number;
+  depth: number;
+  gold: number;
+  alive: boolean;
+  dead: boolean;
+  won: boolean;
+  ended: boolean;
+  turns: number;
+  commitment: string;
+}
+
+/** The `DescentWorld` wasm surface this engine needs (a structural subset of
+ *  `wasm/src/bindings_descent.rs`'s `#[wasm_bindgen]` methods). Every method that
+ *  returns a run fact is a string / JSON / bool so the u64 wasm-boundary getters are
+ *  never touched — the JSON `stateJson()`/`movesJson()` carry the numbers. */
+export interface DescentWorldLike {
+  /** The day's display title (the beacon-drawn theme). */
+  title(): string;
+  /** The committed daily seed (hex) — the day's fingerprint a stranger regenerates. */
+  seedHex(): string;
+  /** The current room ("passage") name — `gate` at the start, empty once ended. */
+  currentRoom(): string;
+  /** The current room's narrative prose to render. Empty once ended. */
+  roomProse(): string;
+  /** The moves at the current room: JSON `[{index, text, available}]`. */
+  movesJson(): string;
+  /** Advance by taking move `index` — ONE verified turn. Returns the full state JSON
+   *  with `ok` set (+ `error?` on a refusal). Fails closed (`ok:false`) on a
+   *  gated/out-of-range/ended move — the boundary does not move. */
+  advance(index: number): string;
+  /** The run's current committed state as JSON (`{room, hp, wardenHp, depth, gold,
+   *  downed, alive, dead, won, ended, turns, commitmentHex}`). */
+  stateJson(): string;
+  /** The day-cell's current committed state commitment (hex) — moves on every advance. */
+  commitmentHex(): string;
+  /** Replay the whole run against a fresh, identically-seeded day (the stranger's check). */
+  verify(): boolean;
+}
+
+/** The `DescentWorld` constructor + static opener the engine drives. `new` takes an
+ *  already-verified beacon output (the committed epoch hex); `fromBeacon` VERIFIES a
+ *  fetched drand `quicknet` reveal in-tab (the BLS pairing check) before opening — a
+ *  forged reveal throws, opening NO world. A fail-closed ctor throws on a bad
+ *  epoch / a scene that will not deploy. */
+export interface DescentWorldCtor {
+  new (epochHex: string): DescentWorldLike;
+  /** Optional: verify a fetched `(round, signature)` drand reveal + open the day.
+   *  Present on the real wasm binding; a stand-in may omit it (then the engine opens
+   *  from the committed epoch hex only). */
+  fromBeacon?(round: number, signatureHex: string): DescentWorldLike;
+}
+
+// ── the descent request/response protocol ────────────────────────────────────
+export type DescentPortRequest =
+  | { op: "openDescent"; uri: string }
+  | { op: "renderDescent"; uri: string }
+  | { op: "advanceMove"; uri: string; index: number }
+  | { op: "verifyDescent"; uri: string }
+  | { op: "settleDescent"; uri: string };
+
+export interface DescentOpenResponse {
+  ok: boolean;
+  verified: boolean;
+  tier: TrustTier;
+  /** The day's public identity (never the scene graph). */
+  object?: { kind: string; addr: string; title: string; seedHex: string };
+  /** The current run state (opens at the gate, genesis committed). */
+  state?: DescentState;
+  commitment?: string;
+  /** Whether an opt-in SETTLE/PUBLISH provider is wired (the named hook). Playing +
+   *  verifying never need it — they are the free, private, in-tab tier. */
+  canSettle?: boolean;
+  error?: string;
+}
+
+export interface DescentRenderResponse {
+  ok: boolean;
+  tier: TrustTier;
+  room?: string;
+  /** The narrative prose for the current room. */
+  prose?: string;
+  /** The moves (each with its gate-computed availability) — a gated one is shown. */
+  moves?: DescentMove[];
+  state?: DescentState;
+  error?: string;
+}
+
+export interface DescentAdvanceResponse {
+  ok: boolean;
+  tier: TrustTier;
+  /** True when the move was refused (gated / out-of-range / ended). Nothing commits;
+   *  the run state still describes the last good, committed state. */
+  refused?: boolean;
+  reason?: string;
+  verified?: boolean;
+  room?: string;
+  moves?: DescentMove[];
+  state?: DescentState;
+  /** The NEW committed state commitment (hex) after the advance. */
+  commitment?: string;
+  error?: string;
+}
+
+export interface DescentVerifyResponse {
+  ok: boolean;
+  tier: TrustTier;
+  verified: boolean;
+  commitment?: string;
+  state?: DescentState;
+  error?: string;
+}
+
+export interface DescentSettleResponse {
+  ok: boolean;
+  tier: TrustTier;
+  /** True when the settle was refused (no provider wired / consent denied / rejected). */
+  refused?: boolean;
+  reason?: string;
+  /** True once the run was published to the node's leaderboard (a real signed turn). */
+  published?: boolean;
+  /** The published run's commitment (hex) — what the leaderboard indexes. */
+  commitment?: string;
+  error?: string;
+}
+
+export type DescentPortResponse =
+  | DescentOpenResponse
+  | DescentRenderResponse
+  | DescentAdvanceResponse
+  | DescentVerifyResponse
+  | DescentSettleResponse;
+
+/** The transport the `<dregg-descent>` element holds — a channel to the DescentEngine. */
+export interface DescentPort {
+  request(req: DescentPortRequest): Promise<DescentPortResponse>;
+}
+
+/** The public descent spec a resolve yields (netlayer / beacon-client stand-in): how
+ *  to open TODAY'S day. Either an already-verified beacon output (the committed epoch
+ *  hex) OR a fetched `(round, signature)` drand reveal the wasm verifies in-tab. */
+export interface DescentSpec {
+  kind: string;
+  addr: string;
+  /** An already-verified beacon output (32-byte committed epoch, hex) — opens via `new`. */
+  epochHex?: string;
+  /** A fetched drand `quicknet` reveal — opens via `fromBeacon` (verified in-tab). */
+  beacon?: { round: number; signatureHex: string };
+}
+/** Resolve a canonical descent uri to a spec, or `null` (fail-closed). May be async. */
+export type ResolveDescentFn = (uri: string) => DescentSpec | null | Promise<DescentSpec | null>;
+
+/** The default (test/stand-in) descent resolver: validate the `dregg://descent/<addr>`
+ *  content-address and derive a DETERMINISTIC committed epoch hex from the addr tail,
+ *  so a well-formed addr opens a STABLE day (byte-identical for everyone who derives
+ *  the same epoch) and a malformed addr fails closed.
+ *
+ *  The REAL beacon-client path fetches TODAY'S drand `quicknet` round `(round,
+ *  signature)` and hands it as `beacon` — the wasm `DescentWorld::fromBeacon` VERIFIES
+ *  the BLS pairing in-tab before opening (a forged reveal opens no day). Fetching the
+ *  round is the browser's client seam; this stand-in stays reproducible without a
+ *  network fetch, exactly as `defaultResolveStory` carries no scene. */
+export function defaultResolveDescent(uri: string): DescentSpec | null {
+  const parsed = parseDreggUri(uri);
+  if (!parsed) return null;
+  if (parsed.kind !== "descent") return null;
+  if (!VALID_ADDR_RE.test(parsed.addr)) return null; // fail-closed on a bad addr
+  // Derive a stable 32-byte epoch hex from the addr tail (FNV-1a expanded to 64 hex
+  // chars). Deterministic ⇒ the day is a pure function of the addr for the fixture.
+  const tail = parsed.addr.slice(3);
+  let h = 0x811c9dc5 >>> 0;
+  let epoch = "";
+  for (let i = 0; i < 32; i++) {
+    h ^= tail.charCodeAt(i % tail.length) ^ (i * 0x9e);
+    h = Math.imul(h, 0x01000193) >>> 0;
+    epoch += ((h >>> 24) & 0xff).toString(16).padStart(2, "0");
+  }
+  return { kind: "descent", addr: parsed.addr, epochHex: epoch };
+}
+
+/** A signed settle turn the engine asks the host to publish (the opt-in named hook).
+ *  The host (background) routes this through `window.dregg.signTurnV3` + the node —
+ *  the private run becomes a public, no-cheat leaderboard entry. */
+export interface DescentSettleRequest {
+  /** The canonical descent uri whose committed run is being published. */
+  uri: string;
+  /** The run's committed commitment (hex) — the leaderboard index key. */
+  commitment: string;
+  /** The daily seed (hex) — proves WHICH day's world this run played. */
+  seedHex: string;
+  origin?: string;
+}
+/** Publish a settled run, or a reason it was refused. Returns the leaderboard-indexed
+ *  commitment on success. `null` ⇒ no provider wired (the free tier stays private). */
+export type DescentSettleFn = (req: DescentSettleRequest) => Promise<{ published: boolean; commitment?: string; reason?: string }>;
+
+export interface DescentEngineDeps {
+  DescentWorld: DescentWorldCtor;
+  /** The netlayer / beacon-client resolve (uri → how to open today's day). */
+  resolveDescent: ResolveDescentFn;
+  /** The OPT-IN settle/publish hook (consent + `signTurnV3` + the node). Absent
+   *  (`null`/omitted) ⇒ the run stays private (playing + verifying stay free). */
+  settle?: DescentSettleFn | null;
+}
+
+/**
+ * THE DESCENT ENGINE. Owns one real wasm `DescentWorld` per resolved uri; every
+ * response is tiered. Runs only in the extension (background) context. Opening,
+ * rendering, ADVANCING (a real cap-gated verified turn the in-tab executor admits iff
+ * the scene gate passes — a gated/invalid move fails closed in-band), reading state,
+ * and REPLAY-VERIFYING are ALL the free, private, in-tab tier (no consent). The ONLY
+ * custody write is the opt-in SETTLE (the named publish hook). Never returns the scene.
+ */
+export class DescentEngine {
+  private worlds = new Map<string, DescentWorldLike>();
+  private specs = new Map<string, DescentSpec>();
+
+  constructor(private deps: DescentEngineDeps) {}
+
+  /** SETTLE is available iff an opt-in publish provider is wired. */
+  private get canSettle(): boolean {
+    return typeof this.deps.settle === "function";
+  }
+
+  async handle(req: DescentPortRequest, origin?: string): Promise<DescentPortResponse> {
+    try {
+      switch (req.op) {
+        case "openDescent":
+          return await this.open(req.uri);
+        case "renderDescent":
+          return this.render(req.uri);
+        case "advanceMove":
+          return this.advance(req.uri, req.index);
+        case "verifyDescent":
+          return this.verify(req.uri);
+        case "settleDescent":
+          return await this.settle(req.uri, origin);
+        default:
+          return { ok: false, tier: "none", verified: false, error: "unknown op" } as DescentOpenResponse;
+      }
+    } catch (e) {
+      return { ok: false, tier: "none", verified: false, error: String((e as Error)?.message ?? e) } as DescentOpenResponse;
+    }
+  }
+
+  private async world(uri: string): Promise<DescentWorldLike | null> {
+    const key = canonicalUri(uri);
+    if (!key) return null;
+    const existing = this.worlds.get(key);
+    if (existing) return existing;
+    const spec = await this.deps.resolveDescent(key);
+    if (!spec) return null;
+    // Open TODAY'S day. A forged beacon reveal (fromBeacon's in-tab pairing check) or
+    // a bad epoch / undeployable scene throws — opening NO world (fail-closed): you
+    // cannot open a forged day, nor grind a favourable one.
+    let w: DescentWorldLike;
+    try {
+      if (spec.beacon && typeof this.deps.DescentWorld.fromBeacon === "function") {
+        w = this.deps.DescentWorld.fromBeacon(spec.beacon.round, spec.beacon.signatureHex);
+      } else if (spec.epochHex) {
+        w = new this.deps.DescentWorld(spec.epochHex);
+      } else {
+        return null;
+      }
+    } catch {
+      return null;
+    }
+    this.worlds.set(key, w);
+    this.specs.set(key, spec);
+    return w;
+  }
+
+  /** Parse the world's `[{index, text, available}]` moves. */
+  private moves(w: DescentWorldLike): DescentMove[] {
+    try {
+      const rows = JSON.parse(w.movesJson());
+      if (!Array.isArray(rows)) return [];
+      return rows.map((r, i) => ({
+        index: Number(r.index ?? i),
+        text: String(r.text ?? ""),
+        available: r.available !== false,
+      }));
+    } catch {
+      return [];
+    }
+  }
+
+  /** Parse the world's `stateJson()` into a typed, numeric state. */
+  private state(w: DescentWorldLike): DescentState {
+    let s: Record<string, unknown> = {};
+    try {
+      s = JSON.parse(w.stateJson()) as Record<string, unknown>;
+    } catch {
+      /* fall through to defaults */
+    }
+    return {
+      room: String(s.room ?? w.currentRoom()),
+      hp: Number(s.hp ?? 0),
+      wardenHp: Number(s.wardenHp ?? 0),
+      depth: Number(s.depth ?? 0),
+      gold: Number(s.gold ?? 0),
+      alive: s.alive !== false && s.dead !== true,
+      dead: s.dead === true,
+      won: s.won === true,
+      ended: s.ended === true,
+      turns: Number(s.turns ?? 0),
+      commitment: String(s.commitmentHex ?? w.commitmentHex()),
+    };
+  }
+
+  private async open(uri: string): Promise<DescentOpenResponse> {
+    const key = canonicalUri(uri);
+    if (!key) return { ok: false, verified: false, tier: "none", error: "not a dregg-thing" };
+    const w = await this.world(key);
+    if (!w) return { ok: false, verified: false, tier: "none", error: "could not open today's descent" };
+    const spec = this.specs.get(key)!;
+    // The stranger's invariant: the run's receipt chain replays against a fresh,
+    // identically-seeded day. A freshly-opened day (genesis only) replays trivially.
+    const verified = w.verify();
+    return {
+      ok: true,
+      verified,
+      tier: verified ? "extension" : "none",
+      object: { kind: spec.kind, addr: spec.addr, title: w.title(), seedHex: w.seedHex() },
+      state: this.state(w),
+      commitment: w.commitmentHex(),
+      canSettle: this.canSettle,
+    };
+  }
+
+  private render(uri: string): DescentRenderResponse {
+    const key = canonicalUri(uri);
+    const w = key ? this.worlds.get(key) : undefined;
+    if (!w) return { ok: false, tier: "none", error: "not opened" };
+    // Never render a run whose receipt chain does not replay (fail-closed).
+    if (!w.verify()) return { ok: false, tier: "none", error: "unverified" };
+    return {
+      ok: true,
+      tier: "extension",
+      room: w.currentRoom(),
+      prose: w.roomProse(),
+      moves: this.moves(w),
+      state: this.state(w),
+    };
+  }
+
+  /** ADVANCE — a move press = ONE real cap-gated verified turn, played IN-TAB and
+   *  PRIVATE (no consent prompt). The in-tab executor admits it iff the scene gate
+   *  passes; a gated / out-of-range / ended move fails closed IN-BAND (nothing
+   *  commits, the run does not move) — the permadeath trial's teeth, surfaced honestly. */
+  private advance(uri: string, index: number): DescentAdvanceResponse {
+    const key = canonicalUri(uri);
+    const w = key ? this.worlds.get(key) : undefined;
+    if (!key || !w) return { ok: false, tier: "none", error: "not opened" };
+
+    let res: { ok?: boolean; error?: string };
+    try {
+      res = JSON.parse(w.advance(index)) as { ok?: boolean; error?: string };
+    } catch (e) {
+      res = { ok: false, error: String((e as Error)?.message ?? e) };
+    }
+
+    const verified = w.verify();
+    if (!res.ok) {
+      // FAIL-CLOSED at the turn — nothing committed; report the gate's refusal, and
+      // re-read the (unchanged) state so the view stays honest.
+      return {
+        ok: true,
+        tier: verified ? "extension" : "none",
+        refused: true,
+        reason: res.error || "move refused by the gate",
+        verified,
+        room: w.currentRoom(),
+        moves: this.moves(w),
+        state: this.state(w),
+        commitment: w.commitmentHex(),
+      };
+    }
+    return {
+      ok: true,
+      tier: "extension",
+      refused: false,
+      verified,
+      room: w.currentRoom(),
+      moves: this.moves(w),
+      state: this.state(w),
+      commitment: w.commitmentHex(),
+    };
+  }
+
+  /** VERIFY — the LIGHT-CLIENT check a stranger runs: re-drive a fresh, identically-
+   *  seeded day through the recorded moves and confirm the exact committed chain
+   *  reproduces. Both a WON run and a LOST run are honest records that re-verify. */
+  private verify(uri: string): DescentVerifyResponse {
+    const key = canonicalUri(uri);
+    const w = key ? this.worlds.get(key) : undefined;
+    if (!w) return { ok: false, tier: "none", verified: false, error: "not opened" };
+    const verified = w.verify();
+    return {
+      ok: true,
+      tier: verified ? "extension" : "none",
+      verified,
+      commitment: w.commitmentHex(),
+      state: this.state(w),
+    };
+  }
+
+  /** SETTLE — THE OPT-IN CUSTODY WRITE (the named publish hook). The private run stays
+   *  private until the player publishes it to the node's no-cheat leaderboard; that
+   *  routes through the injected `settle` provider (consent + `signTurnV3` + the node).
+   *  Absent a provider it FAILS CLOSED honestly — a named seam, never a fake. */
+  private async settle(uri: string, origin?: string): Promise<DescentSettleResponse> {
+    const key = canonicalUri(uri);
+    const w = key ? this.worlds.get(key) : undefined;
+    if (!key || !w) return { ok: false, tier: "none", error: "not opened" };
+    if (!this.canSettle) {
+      return {
+        ok: true,
+        tier: "extension",
+        refused: true,
+        reason: "publishing is an opt-in named hook — connect your cipherclerk to settle this run to the leaderboard",
+      };
+    }
+    let out: { published: boolean; commitment?: string; reason?: string };
+    try {
+      out = await this.deps.settle!({ uri: key, commitment: w.commitmentHex(), seedHex: w.seedHex(), origin });
+    } catch (e) {
+      return { ok: true, tier: "extension", refused: true, reason: String((e as Error)?.message ?? e) };
+    }
+    if (!out.published) {
+      return { ok: true, tier: "extension", refused: true, reason: out.reason || "settle refused" };
+    }
+    return { ok: true, tier: "extension", refused: false, published: true, commitment: out.commitment ?? w.commitmentHex() };
+  }
+}

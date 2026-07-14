@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>dregg-descent fixture</title></head>
+<body>
+  <h1>dregg-descent fixture — The Descent, played in-tab, private, replay-verifiable</h1>
+
+  <!-- Today's Descent, played IN THE TAB: PLAY + VERIFY are free + private (room prose +
+       moves + a replay-verified badge); a move press is a real cap-gated verified turn on
+       the in-tab executor; SETTLE is an opt-in named hook (the run stays private). -->
+  <p id="intro">Today's run: <dregg-descent id="descent" src="dregg://descent/b3_de5ce0"></dregg-descent></p>
+
+  <!-- Malformed addr: the engine fails closed — no render, original link + warning. -->
+  <p id="badintro">A broken one: <dregg-descent id="badDescent" src="dregg://descent/notahash">
+    <a href="https://dregg.net/d/descent/notahash">the descent</a>
+  </dregg-descent></p>
+
+  <script src="/harness.js"></script>
+</body>
+</html>

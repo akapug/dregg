@@ -8,6 +8,7 @@ import { startDetector } from "./detect";
 import { registerCompositionElements } from "./elements/dregg-embed";
 import { registerDocElement } from "./elements/dregg-doc";
 import { registerStoryElement } from "./elements/dregg-story";
+import { registerDescentElement } from "./elements/dregg-descent";
 
 // Generate a random nonce for this injection session to prevent event spoofing.
 const SESSION_NONCE = crypto.randomUUID();
@@ -37,6 +38,14 @@ registerDocElement();
 // replay-verified badge); CHOOSING a passage is a real custody-gated verified turn
 // routed through the background StoryEngine, and a stranger can replay the receipt chain.
 registerStoryElement();
+
+// The Descent, played IN THE TAB (docs/GAME-STRATEGY.md): register `<dregg-descent>`.
+// PLAY + VERIFY are the free, trustless, PRIVATE tier — a move press advances today's
+// beacon-seeded permadeath run as a real cap-gated verified turn on the in-tab executor,
+// and a stranger can replay the whole receipt chain. The ONLY custody write is the
+// opt-in SETTLE/PUBLISH to the node's no-cheat leaderboard, routed through the background
+// DescentEngine; until published the run stays private.
+registerDescentElement();
 
 // Methods that any page origin can call without prior approval.
 const UNRESTRICTED_METHODS = new Set<MessageType>([

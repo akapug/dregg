@@ -180,6 +180,8 @@ export type MessageType =
   | "dregg:doctext"
   // Verifiable choose-your-own-adventure port — <dregg-story> (resolveStory/renderStory/chooseChoice/verifyStory)
   | "dregg:story"
+  // The Descent, played in-tab — <dregg-descent> (openDescent/renderDescent/advanceMove/verifyDescent/settleDescent)
+  | "dregg:descent"
   // Node configuration
   | "dregg:getNodeConfig"
   | "dregg:setNodeConfig"

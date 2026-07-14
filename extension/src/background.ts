@@ -20,11 +20,13 @@ import {
   DocEngine,
   DocTextEngine,
   StoryEngine,
+  DescentEngine,
   MapWebOfCells,
   defaultResolveObject,
   defaultResolveDoc,
   defaultResolveDocText,
   defaultResolveStory,
+  defaultResolveDescent,
   type PollPortRequest,
   type PollWorldCtor,
   type CellPortRequest,
@@ -34,6 +36,8 @@ import {
   type DocTextWorldCtor,
   type StoryPortRequest,
   type StoryWorldCtor,
+  type DescentPortRequest,
+  type DescentWorldCtor,
 } from "./port";
 import {
   Netlayer,
@@ -3353,6 +3357,7 @@ const PAGE_ALLOWED_METHODS = new Set<MessageType>([
   "dregg:doc",   // verifiable-document authoring port: <dregg-doc>
   "dregg:doctext", // free-text authoring port: <dregg-doc editable>
   "dregg:story", // verifiable choose-your-own-adventure port: <dregg-story>
+  "dregg:descent", // The Descent played in-tab: <dregg-descent>
 ]);
 
 const POPUP_ONLY_METHODS = new Set<MessageType>([
@@ -3613,6 +3618,46 @@ function getStoryEngine(): StoryEngine {
   return storyEngine;
 }
 
+// ---------------------------------------------------------------------------
+// The Descent, played IN THE TAB — <dregg-descent>. docs/GAME-STRATEGY.md;
+// wasm/src/bindings_descent.rs (`DescentWorld`).
+//
+// The action sibling of the story engine, with ONE difference in the trust split:
+// The Descent PLAYS PRIVATELY. Opening today's beacon-seeded day, rendering the room +
+// moves, ADVANCING a move (a real cap-gated verified turn the in-tab executor admits iff
+// the scene gate passes — a gated/invalid move fails closed in-band), reading state, and
+// REPLAY-VERIFYING are ALL the free, private, in-tab tier (NO per-move consent). The
+// ONLY custody write is the OPT-IN SETTLE/PUBLISH to the node's no-cheat leaderboard.
+//
+// `defaultResolveDescent` derives a deterministic committed epoch (today's day) from the
+// addr for now; the real beacon-client path fetches TODAY'S drand `quicknet` round and
+// hands it as `beacon` — the wasm `DescentWorld::fromBeacon` VERIFIES the BLS pairing
+// in-tab before opening (a forged reveal opens no day). Fetching the round is the
+// browser's client seam. The settle hook is left UNWIRED (null) — a named seam; the run
+// stays private until the leaderboard-publish leg (signTurnV3 + the node) lands.
+// ---------------------------------------------------------------------------
+
+let descentEngine: DescentEngine | null = null;
+
+function getDescentEngine(): DescentEngine {
+  requireWasm("descent");
+  if (!descentEngine) {
+    const DescentWorld = (wasm as unknown as { DescentWorld?: DescentWorldCtor }).DescentWorld;
+    if (!DescentWorld) throw new Error("DescentWorld unavailable in wasm module");
+    descentEngine = new DescentEngine({
+      DescentWorld,
+      resolveDescent: defaultResolveDescent,
+      // The OPT-IN settle/publish hook is a NAMED SEAM: publishing a private run to the
+      // node's no-cheat leaderboard (consent + signTurnV3 + the node) is not wired here,
+      // so `settleDescent` degrades to the honest "opt-in named hook" note. Play + verify
+      // are fully live (the free, private, in-tab tier). Leaving this `null` keeps the run
+      // PRIVATE until the leaderboard-publish leg lands.
+      settle: null,
+    });
+  }
+  return descentEngine;
+}
+
 async function handleMessage(message: Record<string, unknown>, sender: chrome.runtime.MessageSender): Promise<Record<string, unknown>> {
   // Security: strip _skipDisclosure from page-originated requests.
   if (sender?.tab && message?.request) {
@@ -3720,6 +3765,25 @@ async function handleMessage(message: Record<string, unknown>, sender: chrome.ru
         index: Number(message.index ?? 0),
       } as StoryPortRequest;
       const result = await getStoryEngine().handle(req, origin);
+      return { id: message.id, result };
+    }
+
+    case "dregg:descent": {
+      // <dregg-descent>: openDescent / renderDescent (room prose + moves + state) /
+      // advanceMove (a real cap-gated verified turn on the in-tab executor — fail-closed
+      // in-band on a gated/invalid move, NO consent: the run is private + local) /
+      // verifyDescent (the stranger's replay against a fresh, identically-seeded day) /
+      // settleDescent (the OPT-IN publish hook — a named seam until the leaderboard leg).
+      const origin =
+        (message._origin as string) ||
+        (sender?.tab?.url ? new URL(sender.tab.url).origin : undefined) ||
+        "unknown";
+      const req: DescentPortRequest = {
+        op: message.op as DescentPortRequest["op"],
+        uri: message.uri as string,
+        index: Number(message.index ?? 0),
+      } as DescentPortRequest;
+      const result = await getDescentEngine().handle(req, origin);
       return { id: message.id, result };
     }
 
@@ -4584,7 +4648,8 @@ chrome.runtime.onMessage.addListener((message: Record<string, unknown>, sender: 
     // transient cold start rather than a real verification failure.
     if ((message.type === "dregg:authorize" || message.type === "dregg:poll" ||
          message.type === "dregg:cell" || message.type === "dregg:doc" ||
-         message.type === "dregg:doctext" || message.type === "dregg:story") && !ready) {
+         message.type === "dregg:doctext" || message.type === "dregg:story" ||
+         message.type === "dregg:descent") && !ready) {
       return new Promise((resolve) => {
         pendingQueue.push({ msg: message, sender, resolve });
       });
