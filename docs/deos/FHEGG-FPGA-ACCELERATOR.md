@@ -28,10 +28,15 @@ and an error bar. What-is, present tense; every ambitious edge names its grade.*
    or one ~2×10⁵-order book per minute**, ±3–5× (published-FPGA-PBS-throughput ×
    dregg's measured op-count model). A CKKS-additive fold lifts N off the bill
    entirely (§2.4).
-4. **Confidential-computing tie:** F2 Nitro attestation ([NitroTPM][ntpm]) lets
-   the node prove it runs the trusted binary. One F2 hosts **both** Tier-0 (the
-   FHE clear, no plaintext ever) **and** the Tier-1 solver-enclave, attested — the
-   whole dark pool on one attested node.
+4. **Confidential-computing tie (scoped honestly):** Tier-0 needs **no TEE at
+   all** — the FPGA computes on *ciphertexts*, so FHE *is* the confidentiality
+   (Article X, in silicon), and the unsolved "confidential-VM + FPGA passthrough"
+   problem does not gate it. The TEE requirement is scoped to the **Tier-1
+   plaintext solver + threshold-decrypt key custody**, and there the honest
+   constraint bites: F2 is **Nitro-attestation-only** — SEV-SNP is not exposed on
+   F2 (only M6a/C6a/R6a; [AWS SEV-SNP][snp]) — and a Nitro Enclave **cannot drive
+   the FPGA** (no PCIe/device passthrough). So Tier-1+keys run on a **separate
+   SEV-SNP host**, or on-box behind a **named boundary** (§3).
 5. **Verified-HDL split:** a *verified* core (Kôika/Cava Coq, or Hardcaml's
    formal tie-ins) for the small soundness-critical datapath — the conservation /
    mint-safe gate, Constitution "boundary-is-a-theorem" — and a *productive* HDL
@@ -229,42 +234,114 @@ labeled as one.
 
 ---
 
-## 3. The confidential-computing tie — one attested F2 node runs the whole pool
+## 3. The confidential-computing tie — scoped honestly (Tier-0 needs no TEE; only Tier-1 + keys do)
 
-The F2 rides the **AWS Nitro System**, so it inherits Nitro's confidential-compute
-posture without extra cost: **NitroTPM measured boot + remote attestation**
-([NitroTPM docs][ntpm]) and **Nitro Enclaves** ([Nitro Enclaves][nenc]) let the
-node *cryptographically prove to a remote party that only the trusted binary,
-drivers, and boot chain are running* — an Attestable-AMI PCR quote. This maps
-directly onto the fhEgg privacy tiers (`DREGGFI-PRIVACY-TIERS.md`):
+The load-bearing correction to this section: **do not default to "one attested
+Nitro node hosts everything."** Two facts break that framing. First, under FHE
+the confidentiality is the *encryption*, not the *enclave* — so the Tier-0
+datapath needs no TEE at all. Second, a Nitro Enclave physically **cannot drive
+an FPGA** (no device passthrough), so the "confidential VM co-located with an
+attested FPGA" story is not a shipping capability on F2. Corrected below.
 
-- **Tier 0 — DARK (the FHE, on the FPGA).** The clearing runs *entirely on
-  ciphertexts*; the order plaintext never exists anywhere on the node — not in
-  the CPU, not in the FPGA, not in HBM. This privacy is **unconditional and needs
-  no attestation** (FHE hides inputs regardless of who runs the compute). What
-  attestation *adds* is integrity: a light client can check that the FPGA is
-  running the audited, deterministic clearing bitstream, so the deterministic
-  public re-evaluation of Option A (`DREX-NO-VIEWER-SURPASS.md §4`) is bound to a
-  known circuit.
-- **Tier 1 — SHIELDED (the solver-enclave, on the CPU).** The Tier-1 solver
-  *sees plaintext* (it runs the richer convex product factory in the clear) — so
-  here attestation is **load-bearing**: run the solver inside a **Nitro Enclave**,
-  attested, with the ciphertext/threshold-decrypt key material never leaving the
-  attested boundary, and the enclave `measurement` published. This is dregg's
-  existing `tee-verify/` posture (`DREX-NO-VIEWER-SURPASS.md` rung 2), now
-  co-located on the same physical node as the FPGA.
-- **One node, both tiers.** The single F2 hosts the **FPGA dark clear (Tier 0)**
-  *and* the **attested solver-enclave (Tier 1)** side by side: 8 FPGAs for the
-  no-viewer FHE fold, the 192-vCPU/2-TiB EPYC host for the shielded solver, the
-  threshold-decrypt share, and the STARK — with 100 Gbps for order intake and
-  cross-node settlement. **The whole dark pool is one attested box.**
+### 3.1 Tier-0 (the FHE clear) needs NO TEE for the datapath
 
-Grade it honestly, exactly as the tiers doc requires: Tier-0 privacy is
-`[∀]`-structural (FHE); Tier-1 enclave privacy is **ATTESTED, not PROVED**
-(hardware-vendor root of trust + side-channel residual). Attestation proves the
-*cage* — which binary is running — never the *animal*. That is precisely the
-Constitution's "verify the cage, never the animal," realized as a Nitro PCR quote
-over a known bitstream and enclave measurement.
+The reframe, stated plainly: **the FPGA operates on ciphertexts and never on
+plaintext.** The order plaintext does not exist on the node — not in the CPU, not
+in the FPGA, not in HBM — so there is nothing for a TEE to hide. This is exactly
+Constitution Article X made physical: the interior stays ∀-quantified because the
+ciphertext is **unreadable in silicon — even by the operator, even by the owner
+of the hardware, even by the FPGA computing on it**. You do not have to *trust*
+the FPGA; you hand it ciphertext.
+
+The consequence is strong and clean: **the unsolved "confidential VM + attested
+FPGA passthrough" problem does not gate Tier-0.** That problem is real and
+bleeding-edge (§3.3), but Tier-0 routes around it entirely — FHE needs no
+confidential channel to the accelerator. The only thing attestation would *add*
+at Tier-0 is **integrity, not confidentiality**: a light client that wants
+assurance the FPGA ran the audited, deterministic clearing bitstream can lean on
+the FPGA's own **bitstream attestation**. AMD/Xilinx UltraScale+/Versal carry a
+hardware root of trust — eFuse-held keys, a per-device **Device DNA** identity,
+and an **AES-256-GCM-encrypted, RSA/ECDSA-authenticated** PDI/bitstream load — and
+can attest the loaded image **independent of the host TEE** ([Versal/UltraScale+
+security][versalsec]). That binds the deterministic public re-evaluation of
+Option A (`DREX-NO-VIEWER-SURPASS.md §4`) to a known circuit — optional hardening
+of the *re-evaluation binding*, not a confidentiality requirement.
+
+### 3.2 The TEE requirement is scoped to Tier-1 plaintext + key custody
+
+The TEE requirement does not vanish — it **narrows** to the two places plaintext
+or key material is actually exposed:
+
+- **Tier 1 — SHIELDED solver-enclave.** The Tier-1 convex product factory runs
+  the richer solver *in the clear* — it sees order plaintext (`DREGGFI-PRIVACY-
+  TIERS.md`). That is a genuine plaintext workload and wants an attested,
+  memory-encrypted enclave (dregg's `tee-verify/` posture,
+  `DREX-NO-VIEWER-SURPASS.md` rung 2).
+- **Threshold-decrypt key custody.** The decryption-share holders that turn
+  ciphertext results into a settled clear hold key material; that custody wants
+  the same attested, memory-encrypted boundary.
+
+Everything else — the FHE fold, the NTT/PBS pipelines, the HBM streamers — is
+Tier-0 ciphertext work and takes **no TEE**.
+
+### 3.3 The honest F2 constraint — and why Tier-1 likely runs off-box
+
+Here is where the honest limitation bites, and it is a real one: **a confidential
+Tier-1 enclave co-located on the F2 is not a solved thing today.**
+
+- **F2 is Nitro-attestation-only; SEV-SNP is not exposed on it.** AWS enables AMD
+  SEV-SNP confidential VMs only on **M6a / C6a / R6a** (Milan) families — the FPGA
+  **F2 family is not on the supported list** ([AWS SEV-SNP][snp]). So the
+  strongest CPU-TEE (an SEV-SNP memory-encrypted VM with AMD-rooted attestation)
+  is **unavailable on the F2 itself**; F2 inherits only Nitro's posture (NitroTPM
+  measured boot + Nitro Enclaves).
+- **A Nitro Enclave cannot drive the FPGA.** Nitro Enclaves have **no persistent
+  storage, no external networking (VSOCK to the parent only), and — decisively —
+  no PCIe/device passthrough**; you cannot attach a GPU or FPGA to an enclave, and
+  AWS documents this as a hard limitation with no workaround ([Nitro Enclaves
+  FAQ][nefaq]). The enclave and the FPGA therefore cannot be the *same* trust
+  domain. (For Tier-0 this is a non-issue — Tier-0 wants no enclave. It bites only
+  if you try to force Tier-1 *and* the FPGA into one cage.)
+- **Attested FPGA DMA (TEE-I/O) is bleeding-edge and absent here.** The technology
+  that *would* let a confidential VM securely DMA to/from an attested FPGA is PCIe
+  **TDISP** + **IDE** (PCI-SIG), realized as AMD **SEV-TIO** and Intel **TDX
+  Connect**. It is genuinely emerging, not shipping: SEV-TIO's *initial* Linux
+  enablement (device authentication + PCIe link encryption) lands only in the
+  **6.19** kernel, with more through the 6.20–7.0 cycle ([SEV-TIO whitepaper][tio],
+  [Phoronix — Linux 6.19][tio619]). **None of it is available on EC2 F2.**
+  Treating "confidential VM with a securely-attached FPGA" as a present capability
+  would be an overclaim.
+- **SEV-SNP and Nitro Enclaves are mutually exclusive.** You cannot enable both on
+  one instance ([AWS SEV-SNP][snp], Considerations) — so even the CPU side is an
+  either/or.
+
+**The honest architecture — two options:**
+
+1. **Split the tiers across two hosts (recommended).** Run **Tier-0 FHE on the
+   F2** (no TEE needed — ciphertext only) and run the **Tier-1 solver +
+   threshold-decrypt custody on a separate SEV-SNP-capable instance** (an
+   M6a/C6a/R6a confidential VM with AMD-rooted attestation), wired to the F2 over
+   the datacenter network. Ciphertext flows F2 ↔ SEV-SNP host; plaintext lives
+   only inside the attested SEV-SNP VM. Every workload gets the strongest boundary
+   it can actually get today, at the cost of a network hop and a two-box deploy —
+   and the FPGA node need not be trusted at all.
+2. **Single F2 behind a named boundary.** Keep everything on one F2 and state the
+   assumption explicitly: Tier-0 is unconditionally private (FHE, no trust
+   needed); Tier-1 plaintext + keys sit in a **Nitro Enclave** on the F2's EPYC
+   host (attested via NitroTPM + enclave measurement, memory-isolated from the
+   parent), with the **parent** instance driving the FPGA and handing it
+   ciphertext — the enclave never reaches the FPGA. The named residual: Tier-1's
+   confidentiality rests on **Nitro's hardware-vendor root of trust and the
+   enclave's smaller-but-real attack surface**, not on SEV-SNP memory encryption.
+
+Grade it exactly as the tiers doc requires: **Tier-0 privacy is `[∀]`-structural
+(FHE) and needs no attestation of any kind**; **Tier-1 enclave privacy is
+ATTESTED, not PROVED** (hardware-vendor root of trust + side-channel residual),
+whether it runs in a Nitro Enclave or an off-box SEV-SNP VM. Attestation proves
+the *cage* — which binary is running — never the *animal*. The Constitution's
+"verify the cage, never the animal" applies only where there is plaintext to
+cage — Tier-1 and the keys. **Tier-0 needs no cage, because there is no animal to
+see.**
 
 ---
 
@@ -415,6 +492,22 @@ the ladder to silicon and to a dark mind is the same machine, scaled. `🥚`
   <https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/nitrotpm.html> ·
   Nitro Enclaves <https://aws.amazon.com/ec2/nitro/nitro-enclaves/>
 
+**Confidential compute — the scoped TEE boundary (§3), cited:**
+- AWS AMD SEV-SNP supported instance types — **M6a / C6a / R6a only** (F2 not
+  listed); SEV-SNP and Nitro Enclaves mutually exclusive:
+  <https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/sev-snp.html>
+- AWS Nitro Enclaves FAQ — no persistent storage, no external networking
+  (VSOCK only), **no PCIe/GPU/device passthrough** (hard limit):
+  <https://aws.amazon.com/ec2/nitro/nitro-enclaves/faqs/>
+- AMD SEV-TIO (Trusted I/O over PCIe TDISP+IDE) whitepaper — the tech for a
+  confidential VM to securely DMA to an attested accelerator:
+  <https://www.amd.com/content/dam/amd/en/documents/developer/sev-tio-whitepaper.pdf>
+  · SEV-TIO initial Linux enablement lands in kernel 6.19 (bleeding-edge, not on
+  F2): <https://www.phoronix.com/news/Linux-6.19-PCIe-Link-Encrypt>
+- AMD/Xilinx UltraScale+/Versal hardware root of trust — eFuse keys, Device DNA,
+  AES-256-GCM-encrypted + RSA/ECDSA-authenticated bitstream/PDI, attestable
+  independent of the host TEE: <https://arxiv.org/pdf/2406.18117>
+
 **FHE-on-FPGA throughput anchors (thin, spread across boards — stated as such):**
 - Zama HPU on FPGA (Alveo V80, ~13k PBS/s @ 350 MHz, ~200 W, 7nm, HBM2e;
   open-source SystemVerilog): <https://www.zama.org/post/announcing-hpu-on-fpga-the-first-open-source-hardware-accelerator-for-fhe>
@@ -458,6 +551,11 @@ the ladder to silicon and to a dark mind is the same machine, scaled. `🥚`
 [vantage]: https://instances.vantage.sh/aws/ec2/f2.48xlarge
 [ntpm]: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/nitrotpm.html
 [nenc]: https://aws.amazon.com/ec2/nitro/nitro-enclaves/
+[snp]: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/sev-snp.html
+[nefaq]: https://aws.amazon.com/ec2/nitro/nitro-enclaves/faqs/
+[tio]: https://www.amd.com/content/dam/amd/en/documents/developer/sev-tio-whitepaper.pdf
+[tio619]: https://www.phoronix.com/news/Linux-6.19-PCIe-Link-Encrypt
+[versalsec]: https://arxiv.org/pdf/2406.18117
 [hpu]: https://www.zama.org/post/announcing-hpu-on-fpga-the-first-open-source-hardware-accelerator-for-fhe
 [hpugit]: https://github.com/zama-ai/hpu_fpga
 [fpt]: https://arxiv.org/abs/2211.13696
