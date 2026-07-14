@@ -42,45 +42,14 @@ to be the genuine inverse of the (recomputed) vanishing `Z_H(ζ) = ζ^{2^db} −
 list + alpha and the chunk list + zps respectively — closing all three gaps the
 free-field model left open.
 
-This module is ADDITIVE: it defines a new opening record `SingleAirOpening` and a
-new check `batchTablesCheckUnified`. It does not touch `TableOpening`,
-`batchTablesCheck`, `fullChecks`, or `verifyAlgoUnified`. The wiring residual is
-NAMED at the end of the file.
+The opening record lives at `FriVerifier`'s import boundary so `BatchProofData` can
+carry it without an import cycle.  This module gives that record its faithful
+single-AIR denotation and reject theorems.
 -/
 
 namespace Dregg2.Circuit.BatchTablesSingleAir
 
 open Dregg2.Circuit.FriVerifier
-
-/-- One AIR instance opened at the Fiat-Shamir OOD point `ζ`, carrying the DERIVATION
-INPUTS the deployed single-AIR verifier consumes (not the pre-collapsed scalars the
-free-field model carried):
-
-  * `zeta` — the OOD point `ζ` (`verifier.rs:391`);
-  * `degreeBits`/`expectedDegreeBits` — the trace-domain size `n = 2^degreeBits` and
-    the VK-pinned value it must equal (the `validate_degree_bits` / range-table
-    `LIMB_BITS` pin);
-  * `alpha` — the constraint-RLC challenge sampled AFTER the trace commitment
-    (`verifier.rs:379`);
-  * `constraintEvals` — the per-constraint evaluations `c_i(ζ)` the AIR emits, in
-    `assert_zero` emission order (what `air.eval` folds);
-  * `zps` — the Lagrange chunk-selector coefficients (one per quotient chunk),
-    computed in `recompose_quotient_from_chunks` (`verifier.rs:67-83`);
-  * `quotientChunks` — the OPENED quotient-chunk evaluations `chunk_c(ζ)`;
-  * `vanishing` — the vanishing value `Z_H(ζ) = ζ^{2^degreeBits} − 1`;
-  * `invVanishing` — the verifier-COMPUTED `sels.inv_vanishing = 1/Z_H(ζ)`;
-  * `logupCumSum` — this instance's net contribution to the logup interaction bus. -/
-structure SingleAirOpening (F : Type) where
-  zeta : F
-  degreeBits : Nat
-  expectedDegreeBits : Nat
-  alpha : F
-  constraintEvals : List F
-  zps : List F
-  quotientChunks : List F
-  vanishing : F
-  invVanishing : F
-  logupCumSum : F
 
 /-- **The folded AIR constraint `C(ζ)`**, DERIVED not carried. Mirrors the deployed
 folder accumulator (`folder.rs:215-217`: `accumulator = accumulator * alpha +

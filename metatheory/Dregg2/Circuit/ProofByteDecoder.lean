@@ -41,16 +41,31 @@ BatchProofData.exposedSegment` leg — a real `parse ∘ encode = id` roundtrip 
 vector pinned to the deployed serializer, replacing the docstring-only KAT claim on that
 leg with executable, kernel-checked bytes.
 
-RESIDUAL (named, not axiomatized): the OTHER `BatchProofData` fields — `traceCommit`,
-`preprocessedCommit`, `friCommitments`, `finalPoly`, `queries`, `tableOpenings`,
-`oodPoint`, `powWitness`, `quotientCommit`, `openedEvaluations`, `friLogArities` — are
-NOT on the public-input wire. They live inside the proof's `proof_bytes`, a
-`postcard`-serialized `p3_circuit_prover::BatchStarkProof<DreggRecursionConfig>`
-(`plonky3_recursion_impl.rs:698`, an external-crate `postcard` varint layout). This
-decoder does NOT parse that inner blob; those fields stay carried through the FRI
-`FriChecks` per-query components, exactly as the `BatchProofData` docstring states. So
-`cfgView`'s opacity for the `proof_bytes → {trace/quotient/FRI/table} views` leg is
-UNDISCHARGED here and remains the KAT floor.
+The second half of this file now parses the exact leading `BatchProof` field of the
+postcard-serialized
+`p3_circuit_prover::BatchStarkProof<DreggRecursionConfig>`.  Serde emits struct fields
+in declaration order and postcard emits unsigned integers and sequence lengths in
+base-128 varint form.  The parser follows the deployed nested types all the way through
+`BatchCommitments`, `BatchOpenedValues`, `FriProof`, every `QueryProof`/Merkle opening,
+global lookup data, and `degree_bits`.  It therefore extracts the trace and quotient
+caps, flattened OOD openings, FRI caps, final polynomial, query-PoW witness, and the
+per-query `log_arity` schedule from real proof bytes.
+
+NAMED reconstruction residual (not axiomatized): postcard does NOT serialize query
+indices, FRI betas, fold-domain points, the OOD point ζ, AIR constraint evaluations,
+vanishing inverses, or recomposed table openings.  The native verifier reconstructs
+those from the continued Fiat-Shamir transcript, domains, AIRs, and the parsed opened
+values.  Consequently `decodeInnerProofCorePrefix` fills only literal wire fields;
+`queries`, `oodPoint`, `tableOpenings`, and `singleAirOpenings` stay empty until that
+verifier-side reconstruction is modeled.  The enclosing `BatchStarkProof` metadata
+(`table_packing` through `stark_common`, including its optional preprocessed cap) is
+also the unconsumed suffix, returned explicitly rather than silently accepted.  These
+are the named `InnerProofReconstructionResidual` and `BatchStarkMetadataTailResidual`.
+`readVarNat_encodeVarNat` proves the general postcard scalar/length roundtrip and
+`readBatchProofCore_golden` pins the complete nested cursor.  A whole-core
+encode/decode theorem is the named `CoreProjectionRoundtripResidual`: this decoder
+intentionally consumes but does not retain authentication paths and lookup names, so
+its `BatchProofData` projection is not injective and cannot honestly be re-encoded.
 
 ## Axiom hygiene
 
@@ -320,5 +335,461 @@ Decoding reduces each mod `p` (the deployed `BabyBear::new`):
 -- Non-vacuity: the roundtrip hypotheses are satisfiable (a concrete canonical vector).
 #eval (decodeView (encodeView [7, 11, 2013265920])).map
   (fun r => (r.1.exposedSegment, r.2.segment))
+
+/-! ## §7 — postcard primitives used by the inner `BatchStarkProof` blob.
+
+Postcard 1.1.3 serializes every unsigned integer (including every `Vec` length and
+64-bit-host `usize`) as a little-endian base-128 varint.  Serde tuples/structs add no
+tags; `Option` is one byte (`0`/`1`); arrays have no length prefix.  These executable
+primitives are therefore the deployed codec, not a bespoke sidecar format. -/
+
+/-- Canonical postcard base-128 encoding of a natural number. -/
+def encodeVarNat (n : Nat) : List Nat :=
+  if n < 128 then [n]
+  else (n % 128 + 128) :: encodeVarNat (n / 128)
+termination_by n
+decreasing_by omega
+
+/-- Parse one postcard base-128 unsigned varint.  The recursive result is the
+higher-order tail, so `(low + 128 * high)` exactly mirrors postcard's shift loop.
+Bytes outside `u8` are rejected. -/
+def readVarNat : List Nat → Option (Nat × List Nat)
+  | [] => none
+  | b :: bs =>
+      if b < 128 then some (b, bs)
+      else if b < 256 then
+        match readVarNat bs with
+        | some (hi, rest) => some (b - 128 + 128 * hi, rest)
+        | none => none
+      else none
+
+/-- Postcard varint roundtrip, with an arbitrary following byte suffix preserved. -/
+theorem readVarNat_encodeVarNat (n : Nat) (rest : List Nat) :
+    readVarNat (encodeVarNat n ++ rest) = some (n, rest) := by
+  revert rest
+  induction n using Nat.strong_induction_on with
+  | h n ih =>
+      intro rest
+      by_cases hn : n < 128
+      · simp [encodeVarNat, hn, readVarNat]
+      · have hn128 : 128 ≤ n := by omega
+        have hdiv : n / 128 < n := Nat.div_lt_self (by omega) (by omega)
+        have hmod : n % 128 < 128 := Nat.mod_lt _ (by omega)
+        have hbyte : ¬n % 128 + 128 < 128 := by omega
+        have hbyte256 : n % 128 + 128 < 256 := by omega
+        rw [encodeVarNat]
+        simp only [hn, ↓reduceIte, List.cons_append, readVarNat, hbyte, hbyte256,
+          ih (n / 128) hdiv rest]
+        congr 2
+        have hdecomp := Nat.mod_add_div n 128
+        omega
+
+#assert_axioms readVarNat_encodeVarNat
+
+/-- Postcard's width-bounded varint loop (`varint_max<T>()` iterations). -/
+def readVarNatBounded : Nat → List Nat → Option (Nat × List Nat)
+  | 0, _ => none
+  | _ + 1, [] => none
+  | fuel + 1, b :: bs =>
+      if b < 128 then some (b, bs)
+      else if b < 256 then
+        match readVarNatBounded fuel bs with
+        | some (hi, rest) => some (b - 128 + 128 * hi, rest)
+        | none => none
+      else none
+
+/-- Deployed 64-bit-host `usize`/`u64` postcard decoder: at most ten bytes and the
+decoded value must fit below `2^64`, matching `try_take_varint_u64`. -/
+def readVarU64 : List Nat → Option (Nat × List Nat) := fun bs =>
+  match readVarNatBounded 10 bs with
+  | some (n, rest) => if n < 18446744073709551616 then some (n, rest) else none
+  | none => none
+
+/-- Deployed `u32` postcard decoder: at most five bytes and value below `2^32`. -/
+def readVarU32 : List Nat → Option (Nat × List Nat) := fun bs =>
+  match readVarNatBounded 5 bs with
+  | some (n, rest) => if n < 4294967296 then some (n, rest) else none
+  | none => none
+
+/-- A small state-free parser type: parsed value plus the unconsumed byte suffix. -/
+abbrev ByteParser (α : Type) := List Nat → Option (α × List Nat)
+
+/-- Parse exactly `n` repetitions of `p`. -/
+def readN {α : Type} (p : ByteParser α) : Nat → ByteParser (List α)
+  | 0, bs => some ([], bs)
+  | n + 1, bs =>
+      match p bs with
+      | none => none
+      | some (x, rest) =>
+          match readN p n rest with
+          | none => none
+          | some (xs, rest') => some (x :: xs, rest')
+
+/-- Parse a postcard `Vec<T>`: varint length followed by that many `T`s. -/
+def readVec {α : Type} (p : ByteParser α) : ByteParser (List α) := fun bs =>
+  match readVarU64 bs with
+  | none => none
+  | some (n, rest) => readN p n rest
+
+/-- Parse a raw serde `u8`. -/
+def readByte : ByteParser Nat
+  | [] => none
+  | b :: bs => if b < 256 then some (b, bs) else none
+
+/-- Parse a postcard `Option<T>` (`0 = None`, `1 = Some`; all other tags reject). -/
+def readOption {α : Type} (p : ByteParser α) : ByteParser (Option α) := fun bs =>
+  match readByte bs with
+  | some (0, rest) => some (none, rest)
+  | some (1, rest) =>
+      match p rest with
+      | some (x, rest') => some (some x, rest')
+      | none => none
+  | _ => none
+
+/-! ### BabyBear's proof-wire representation.
+
+The p3 `MontyField31` serde implementation writes its *Montgomery-form* `u32` as a
+postcard varint and rejects values `≥ p` on decode.  `R = 2^32 mod p = 268435454` and
+`R⁻¹ mod p = 943718400`; multiplying by the latter converts the wire word back to the
+canonical field representative consumed by the Lean challenger. -/
+
+def montyRInv : Nat := 943718400
+
+def fromBabyBearMonty (raw : Nat) : Nat := (raw * montyRInv) % babybearP
+
+/-- Parse one deployed p3 BabyBear proof element, rejecting non-canonical Montgomery
+words exactly as `MontyField31::deserialize` does. -/
+def readBabyBear : ByteParser Nat := fun bs =>
+  match readVarU32 bs with
+  | some (raw, rest) =>
+      if raw < babybearP then some (fromBabyBearMonty raw, rest) else none
+  | none => none
+
+/-- Quartic `BinomialExtensionField<BabyBear, 4>`: serde array, exactly four base
+coefficients and no length prefix. -/
+def readExt4 : ByteParser (List Nat) := readN readBabyBear 4
+
+/-- Poseidon2 Merkle digest: exactly eight BabyBear words. -/
+def readDigest8 : ByteParser (List Nat) := readN readBabyBear 8
+
+/-- A deployed cap is `MerkleCap { cap : Vec<[BabyBear; 8]>, phantom }`; the phantom
+emits no bytes.  Flattening is the transcript's elementwise observation order. -/
+def readCap : ByteParser (List Nat) := fun bs =>
+  match readVec readDigest8 bs with
+  | some (ds, rest) => some (ds.flatten, rest)
+  | none => none
+
+/-! ## §8 — exact parser for the serialized `p3_batch_stark::BatchProof` prefix.
+
+The following helpers deliberately parse even the material not retained in
+`BatchProofData` (Merkle authentication paths and lookup names).  That is what makes
+the byte cursor land at the real end of `BatchProof`, instead of guessing offsets. -/
+
+/-- Parse one `OpenedValuesWithLookups<Challenge>` and retain the extension values in
+serde declaration order. -/
+def readOpenedInstance : ByteParser (List Nat) := fun bs =>
+  match readVec readExt4 bs with
+  | none => none
+  | some (traceLocal, bs) =>
+    match readOption (readVec readExt4) bs with
+    | none => none
+    | some (traceNext, bs) =>
+      match readOption (readVec readExt4) bs with
+      | none => none
+      | some (preLocal, bs) =>
+        match readOption (readVec readExt4) bs with
+        | none => none
+        | some (preNext, bs) =>
+          match readVec (readVec readExt4) bs with
+          | none => none
+          | some (quotient, bs) =>
+            match readOption (readVec readExt4) bs with
+            | none => none
+            | some (random, bs) =>
+              match readVec readExt4 bs with
+              | none => none
+              | some (permLocal, bs) =>
+                match readVec readExt4 bs with
+                | none => none
+                | some (permNext, bs) =>
+                  some (traceLocal.flatten ++ (traceNext.getD []).flatten
+                    ++ (preLocal.getD []).flatten ++ (preNext.getD []).flatten
+                    ++ quotient.flatten.flatten ++ (random.getD []).flatten
+                    ++ permLocal.flatten ++ permNext.flatten, bs)
+
+/-- Parse `BatchOpenedValues { instances : Vec<_> }`. -/
+def readBatchOpenedValues : ByteParser (List Nat) := fun bs =>
+  match readVec readOpenedInstance bs with
+  | some (xs, rest) => some (xs.flatten, rest)
+  | none => none
+
+/-- Parse one input-MMCS `BatchOpening`: opened base rows followed by its Merkle path.
+The retained list is the literal base-field opening stream; the authentication path is
+consumed but not confused with opened evaluations. -/
+def readBatchOpening : ByteParser (List Nat) := fun bs =>
+  match readVec (readVec readBabyBear) bs with
+  | none => none
+  | some (opened, bs) =>
+    match readVec readDigest8 bs with
+    | none => none
+    | some (_, bs) => some (opened.flatten, bs)
+
+/-- Parse one FRI commit-phase step and retain its `log_arity` plus sibling extension
+values.  The extension-MMCS opening proof is the underlying vector of 8-word digests. -/
+def readCommitPhaseStep : ByteParser (Nat × List Nat) := fun bs =>
+  match readByte bs with
+  | none => none
+  | some (logArity, bs) =>
+    match readVec readExt4 bs with
+    | none => none
+    | some (siblings, bs) =>
+      match readVec readDigest8 bs with
+      | none => none
+      | some (_, bs) => some ((logArity, siblings.flatten), bs)
+
+/-- The serialized portion of one FRI query that is available without replaying the
+transcript/domain: input opened rows, per-round arities, and sibling values. -/
+structure DecodedQueryWire where
+  inputOpened : List Nat
+  logArities : List Nat
+  siblingValues : List Nat
+  deriving Repr, DecidableEq
+
+def readFriQuery : ByteParser DecodedQueryWire := fun bs =>
+  match readVec readBatchOpening bs with
+  | none => none
+  | some (inputs, bs) =>
+    match readVec readCommitPhaseStep bs with
+    | none => none
+    | some (steps, bs) =>
+      some ({ inputOpened := inputs.flatten,
+              logArities := steps.map Prod.fst,
+              siblingValues := (steps.map Prod.snd).flatten }, bs)
+
+/-- Literal wire projection of the nested `FriProof`. -/
+structure DecodedFriWire where
+  commitments : List (List Nat)
+  commitPowWitnesses : List Nat
+  queries : List DecodedQueryWire
+  finalPoly : List Nat
+  queryPowWitness : Nat
+  deriving Repr, DecidableEq
+
+def readFriProof : ByteParser DecodedFriWire := fun bs =>
+  match readVec readCap bs with
+  | none => none
+  | some (commitments, bs) =>
+    match readVec readBabyBear bs with
+    | none => none
+    | some (commitPowWitnesses, bs) =>
+      match readVec readFriQuery bs with
+      | none => none
+      | some (queries, bs) =>
+        match readVec readExt4 bs with
+        | none => none
+        | some (finalPoly, bs) =>
+          match readBabyBear bs with
+          | none => none
+          | some (queryPowWitness, bs) =>
+            some ({ commitments, commitPowWitnesses, queries,
+                    finalPoly := finalPoly.flatten, queryPowWitness }, bs)
+
+/-- Consume one UTF-8/string byte payload.  UTF-8 validity is not needed to find the
+next postcard field; every byte is nevertheless checked to be a `u8`. -/
+def readRawString : ByteParser Unit := fun bs =>
+  match readVec readByte bs with
+  | some (_, rest) => some ((), rest)
+  | none => none
+
+/-- Consume one `LookupData<Challenge>` (`name`, `aux_column`, `cumulative_sum`). -/
+def readLookupData : ByteParser Unit := fun bs =>
+  match readRawString bs with
+  | none => none
+  | some (_, bs) =>
+    match readVarU64 bs with
+    | none => none
+    | some (_, bs) =>
+      match readExt4 bs with
+      | none => none
+      | some (_, bs) => some ((), bs)
+
+/-- The exact data available in the leading serialized `BatchProof` field. -/
+structure DecodedBatchProofCore where
+  traceCommit : List Nat
+  permutationCommit : Option (List Nat)
+  quotientCommit : List Nat
+  randomCommit : Option (List Nat)
+  openedEvaluations : List Nat
+  fri : DecodedFriWire
+  degreeBits : List Nat
+  deriving Repr, DecidableEq
+
+/-- Parse the complete leading `p3_batch_stark::BatchProof` field of a deployed
+`BatchStarkProof`.  The returned suffix begins exactly at `table_packing`. -/
+def readBatchProofCore : ByteParser DecodedBatchProofCore := fun bs =>
+  match readCap bs with
+  | none => none
+  | some (traceCommit, bs) =>
+    match readOption readCap bs with
+    | none => none
+    | some (permutationCommit, bs) =>
+      match readCap bs with
+      | none => none
+      | some (quotientCommit, bs) =>
+        match readOption readCap bs with
+        | none => none
+        | some (randomCommit, bs) =>
+          match readBatchOpenedValues bs with
+          | none => none
+          | some (openedEvaluations, bs) =>
+            match readFriProof bs with
+            | none => none
+            | some (fri, bs) =>
+              match readVec (readVec readLookupData) bs with
+              | none => none
+              | some (_, bs) =>
+                match readVec readVarU64 bs with
+                | none => none
+                | some (degreeBits, bs) =>
+                  some ({ traceCommit, permutationCommit, quotientCommit, randomCommit,
+                          openedEvaluations, fri, degreeBits }, bs)
+
+/-- Require every serialized query to carry the same deployed FRI arity schedule.
+The empty-query case has the empty schedule; a mismatch rejects instead of selecting a
+prover-favourable query. -/
+def commonLogArities : List DecodedQueryWire → Option (List Nat)
+  | [] => some []
+  | q :: qs => if qs.all (fun r => decide (r.logArities = q.logArities))
+      then some q.logArities else none
+
+/-- Canonical field cast for the parsed proof projection. -/
+private def innerToFieldZ (xs : List Nat) : List ℤ := xs.map (fun n => (n : ℤ))
+
+/-- Map the literal serialized core fields into `BatchProofData`.  The result includes
+the unconsumed `BatchStarkProof` metadata tail.  Fields which do not exist on the wire
+are intentionally empty (the named reconstruction residual in the module header). -/
+def decodeInnerProofCorePrefix (bs : List Nat) :
+    Option (FriVerifier.BatchProofData ℤ × List Nat) :=
+  match readBatchProofCore bs with
+  | none => none
+  | some (core, metadataTail) =>
+    match commonLogArities core.fri.queries with
+    | none => none
+    | some logArities =>
+      some ({ traceCommit := innerToFieldZ core.traceCommit,
+              friCommitments := core.fri.commitments.map innerToFieldZ,
+              finalPoly := innerToFieldZ core.fri.finalPoly,
+              queries := [], exposedSegment := [],
+              powWitness := [(core.fri.queryPowWitness : ℤ)],
+              quotientCommit := innerToFieldZ core.quotientCommit,
+              openedEvaluations := innerToFieldZ core.openedEvaluations,
+              friLogArities := innerToFieldZ logArities }, metadataTail)
+
+/-- `proof_bytes` has the same signed-list carrier as the apex's abstract proof. -/
+def decodeInnerProofCoreFromProof (π : CircuitSoundness.BatchProof) :
+    Option (FriVerifier.BatchProofData ℤ × List Nat) :=
+  decodeInnerProofCorePrefix (π.bytes.map Int.toNat)
+
+/-! ## §9 — inner-proof roundtrip/golden pins.
+
+The general varint roundtrip above covers every unsigned scalar and length in the
+schema.  This compact complete `BatchProof` core fixture exercises every nesting level
+needed to reach the metadata boundary: three caps, one FRI query/commit step, final
+quartic polynomial, PoW witness, lookup outer vector, and degree bits. -/
+
+private def zeroCapWire : List Nat := [1, 0, 0, 0, 0, 0, 0, 0, 0]
+
+private def innerCoreGolden : List Nat :=
+  -- BatchCommitments: main cap, no permutation, quotient cap, no random.
+  zeroCapWire ++ [0] ++ zeroCapWire ++ [0]
+  -- opened_values.instances = [].
+  ++ [0]
+  -- FriProof: one commit cap; no commit-PoW witnesses; one query.
+  ++ [1] ++ zeroCapWire ++ [0] ++ [1]
+  -- query.input_proof = []; one commit step: arity 1, no siblings, empty Merkle path.
+  ++ [0] ++ [1, 1, 0, 0]
+  -- final_poly = one quartic zero; query PoW witness = zero.
+  ++ [1, 0, 0, 0, 0] ++ [0]
+  -- global_lookup_data = []; degree_bits = [3].
+  ++ [0] ++ [1, 3]
+  -- First byte of the enclosing BatchStarkProof.table_packing metadata tail.
+  ++ [99]
+
+private def goldenQueryWire : DecodedQueryWire :=
+  { inputOpened := [], logArities := [1], siblingValues := [] }
+
+private def goldenFriView : DecodedFriWire :=
+  { commitments := [List.replicate 8 0]
+    commitPowWitnesses := []
+    queries := [goldenQueryWire]
+    finalPoly := [0, 0, 0, 0]
+    queryPowWitness := 0 }
+
+private def goldenCoreView : DecodedBatchProofCore :=
+  { traceCommit := List.replicate 8 0, permutationCommit := none,
+    quotientCommit := List.replicate 8 0, randomCommit := none,
+    openedEvaluations := [],
+    fri := goldenFriView,
+    degreeBits := [3] }
+
+/-- Golden parse theorem: the complete core lands exactly at the metadata suffix. -/
+theorem readBatchProofCore_golden :
+    readBatchProofCore innerCoreGolden = some (goldenCoreView, [99]) := by decide
+
+#assert_axioms readBatchProofCore_golden
+
+#guard readVarNat (encodeVarNat 18446744073709551615 ++ [7]) =
+  some (18446744073709551615, [7])
+
+#guard readVarU64 (encodeVarNat 18446744073709551615 ++ [7]) =
+  some (18446744073709551615, [7])
+
+-- The 65-bit value and an eleven-byte continuation are postcard-bad varints.
+#guard readVarU64 (encodeVarNat 18446744073709551616) = none
+#guard readVarU64 [128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 0] = none
+
+#guard readBatchProofCore innerCoreGolden = some (goldenCoreView, [99])
+
+/-- Prefix copied from the committed deployed artifact
+`ugc-dregg/tests/fixtures/whole_history_proof.bin`: after the version-3 envelope,
+64-byte VK fingerprint, and root-blob length, these are the first 80 root-proof bytes.
+This is a real `BatchStarkProof<DreggRecursionConfig>` cap, not the compact schema
+fixture above. -/
+private def deployedRootPrefix : List Nat :=
+  [1, 161, 245, 242, 179, 6, 158, 228, 178, 21, 224, 146, 128, 172, 2,
+   224, 241, 253, 179, 5, 227, 157, 253, 160, 1, 193, 164, 215, 162, 6,
+   231, 161, 222, 152, 2, 213, 199, 216, 237, 4, 1, 1, 175, 246, 213,
+   177, 1, 136, 167, 198, 142, 1, 147, 209, 158, 251, 1, 191, 164, 131,
+   232, 4, 153, 140, 222, 23, 180, 166, 178, 46, 245, 172, 252, 184, 4,
+   139, 218, 191, 197, 5]
+
+-- REAL golden: postcard/Montgomery-decode the committed proof's trace cap.
+#guard
+  (readCap deployedRootPrefix).map Prod.fst = some
+    [137726085, 104795266, 1718352796, 1333018456,
+     659641094, 154649970, 290255892, 1087545141]
+
+-- The projection contains every literal transcript/FRI wire field and preserves the
+-- metadata boundary.  It does not fabricate query indices, ζ, or AIR-derived tables.
+#guard
+  (match decodeInnerProofCorePrefix innerCoreGolden with
+   | some (p, tail) =>
+       p.traceCommit.length = 8
+         && p.quotientCommit.length = 8
+         && p.friCommitments.length = 1
+         && p.finalPoly = ([0, 0, 0, 0] : List ℤ)
+         && p.powWitness = ([0] : List ℤ)
+         && p.friLogArities = ([1] : List ℤ)
+         && p.queries = [] && p.oodPoint = [] && p.tableOpenings = []
+         && tail = [99]
+   | none => false)
+
+-- Malformed/noncanonical Montgomery field words are rejected by the real inner codec.
+#guard readBabyBear (encodeVarNat babybearP) = (none : Option (Nat × List Nat))
+
+-- A mismatched per-query arity schedule is rejected, not silently normalized.
+#guard commonLogArities
+  [{ inputOpened := [], logArities := [1], siblingValues := [] },
+   { inputOpened := [], logArities := [2], siblingValues := [] }] = none
 
 end Dregg2.Circuit.ProofByteDecoder

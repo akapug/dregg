@@ -1,5 +1,6 @@
 import Dregg2.Circuit.FriVerifier
 import Dregg2.Circuit.FriTranscriptBind
+import Dregg2.Circuit.BatchTablesSingleAir
 import Dregg2.Tactics
 
 /-!
@@ -29,18 +30,15 @@ one-thread `params.extDeg`-lane ζ here — ANDing both would leave no accepting
 
 ## Residual (named honestly)
 
-* **qidx is still bound only to the init-seeded thread.** `verifyAlgo` internally derives
-  its query indices from a challenger seeded at `Challenger.init initState` and binds each
-  query's `index` to THAT thread. ANDing an additional post-ζ-thread qidx check here is
-  unsatisfiable additively (it would force two distinct challenger threads to agree ⇒ zero
-  accepting proofs). One-threading the query indices needs editing `verifyAlgo`'s seed —
-  not an additive change. So `deriveTranscript.qidx` is COMPUTED (the faithful one-thread
-  indices) but NOT yet enforced by `verifyAlgoUnified`.
 * **Base-vs-extension representation.** Deployed algebra challenges are quartic extension
   elements; this model represents one as its ordered `params.extDeg = 4` base-lane list.
   `projBeta` is used only by the older scalar `LayerOpening` shell. Replacing that shell
   with an extension-valued fold is the explicitly named `ExtensionFoldWidthResidual`;
   no squeeze or absorb is omitted.
+
+The qidx residual is CLOSED here: `FriVerifier.verifyAlgo` now consumes this same
+continued transcript's `qidx` directly.  The init-seeded query-position tooth was
+removed, not conjoined, so accepting proofs are never required to satisfy two threads.
 -/
 
 namespace Dregg2.Circuit.FriChallengerUnified
@@ -52,22 +50,9 @@ cutover: p3 challenges are extension elements, while the old FRI-opening shell s
 single base element. This proposition is documentary and is never assumed by a theorem. -/
 def ExtensionFoldWidthResidual (params : FriParams) : Prop := params.extDeg ≠ 1
 
-/-- Every challenge and checkpoint produced by the ONE continued deployed transcript.
-The checkpoints make later refinements state-to-state, rather than merely comparing the
-last query indices. -/
-structure DerivedChallenges (F : Type) where
-  constraintAlpha : List F
-  ζ : List F
-  openingAlpha : List F
-  betas : List (List F)
-  powSample : Option Nat
-  qidx : List Nat
-  postPreamble : Challenger F
-  postConstraintAlpha : Challenger F
-  postZeta : Challenger F
-  postOpeningAlpha : Challenger F
-  postFri : Challenger F
-  postPow : Challenger F
+/-- Re-export the base verifier's one-thread challenge record.  There is exactly one
+implementation, and `verifyAlgo` consumes it directly. -/
+abbrev DerivedChallenges (F : Type) := Dregg2.Circuit.FriVerifier.DerivedChallenges F
 
 /-- The three deployed scalar preamble fields have exactly one base-field encoding each. -/
 def preambleShape {F : Type} (proof : BatchProofData F) : Bool :=
@@ -83,21 +68,11 @@ def logAritiesWellFormed {F : Type} (toNat : F → Nat) (params : FriParams)
   decide (proof.friLogArities.length = proof.friCommitments.length)
     && proof.friLogArities.all fun a => decide (0 < toNat a && toNat a ≤ params.maxLogArity)
 
-/-- The deployed `GrindingChallenger::check_witness`: for zero bits it is a literal
-no-op; otherwise absorb the singleton witness and mask a FRESH base squeeze. Malformed
-witness shape returns `none` and leaves the state available only for deterministic
-diagnostics; the verifier rejects it. -/
+/-- Re-export the query-grinding transition consumed by the base verifier. -/
 def deriveQueryPow {F : Type} [Inhabited F]
     (perm : List F → List F) (RATE : Nat) (toNat : F → Nat) (powBits : Nat)
     (witness : List F) (c : Challenger F) : Option Nat × Challenger F :=
-  match witness with
-  | [w] =>
-      if powBits = 0 then (some 0, c)
-      else
-        let c := Challenger.observe perm RATE c w
-        let (masked, c) := Challenger.sampleBits perm RATE toNat powBits c
-        (some masked, c)
-  | _ => (none, c)
+  Dregg2.Circuit.FriVerifier.deriveQueryPow perm RATE toNat powBits witness c
 
 /-- **The one-thread transcript** — ONE continued `Challenger`, in the deployed p3 order:
 `init` → three preamble scalars → trace → optional preprocessed commitment → publics →
@@ -110,30 +85,7 @@ def deriveTranscript {F : Type} [Inhabited F]
     (perm : List F → List F) (RATE : Nat) (toNat : F → Nat) (params : FriParams)
     (initState : List F) (logN : Nat)
     (proof : BatchProofData F) (pub : WrapPublics F) : DerivedChallenges F :=
-  let c := Challenger.init initState
-  let c := Challenger.observeList perm RATE c proof.degreeBitsPreamble
-  let c := Challenger.observeList perm RATE c proof.baseDegreeBitsPreamble
-  let c := Challenger.observeList perm RATE c proof.preprocessedWidthPreamble
-  let postPreamble := c
-  let c := Challenger.observeList perm RATE c proof.traceCommit
-  let c := Challenger.observeList perm RATE c proof.preprocessedCommit
-  let c := Challenger.observeList perm RATE c pub.segment
-  let (constraintAlpha, c) := Challenger.sampleExt perm RATE params.extDeg c
-  let postConstraintAlpha := c
-  let c := Challenger.observeList perm RATE c proof.quotientCommit
-  let (zeta, c) := Challenger.sampleExt perm RATE params.extDeg c
-  let postZeta := c
-  let c := Challenger.observeList perm RATE c proof.openedEvaluations
-  let (openingAlpha, c) := Challenger.sampleExt perm RATE params.extDeg c
-  let postOpeningAlpha := c
-  let (betas, c) := deriveFri perm RATE params proof c
-  let c := Challenger.observeList perm RATE c proof.friLogArities
-  let postFri := c
-  let (powSample, c) := deriveQueryPow perm RATE toNat params.powBits proof.powWitness c
-  let postPow := c
-  let (qidx, _) := deriveQueryIndices perm RATE toNat params logN c
-  { constraintAlpha, ζ := zeta, openingAlpha, betas, powSample, qidx,
-    postPreamble, postConstraintAlpha, postZeta, postOpeningAlpha, postFri, postPow }
+  Dregg2.Circuit.FriVerifier.deriveTranscript perm RATE toNat params initState logN proof pub
 
 /-- Project the base-field beta out of a derived `extDeg`-lane extension squeeze: the first
 basis coefficient (at `extDeg = 1` the ext element IS its single base lane). The
@@ -185,6 +137,77 @@ def verifyAlgoUnified {F : Type} [Inhabited F] [DecidableEq F]
   verifyAlgo perm RATE toNat params vk (fullChecks core A toNat params.powBits)
       initState logN proof pub
     && unifiedTranscriptChecks perm RATE toNat params initState logN proof pub
+
+/-- Bind every scalar single-AIR opening to the first basis lane of the ONE
+continued transcript's constraint-RLC `α` and OOD point `ζ`.  This is exactly the
+scalar (`extDeg = 1`) restriction of the deployed extension-field objects: no scalar
+opening may choose either challenge freely.  Nonemptiness prevents the faithful
+quotient conjunct from passing vacuously on `List.all []`. -/
+def singleAirChallengesBound {F : Type} [Inhabited F] [DecidableEq F]
+    (proof : BatchProofData F) (d : DerivedChallenges F) : Bool :=
+  decide (proof.singleAirOpenings ≠ [])
+    && proof.singleAirOpenings.all fun o =>
+      decide (o.alpha = d.constraintAlpha.headD default)
+        && decide (o.zeta = d.ζ.headD default)
+
+/-- **The faithful verifier consumed by the apex.**  It strengthens the continued-
+thread verifier with the deployed single-AIR quotient identity and binds the
+opening's `α`/`ζ` fields to the same transcript challenges. -/
+def verifyAlgoUnifiedFaithful {F : Type} [Inhabited F] [DecidableEq F]
+    (perm : List F → List F) (RATE : Nat) (toNat : F → Nat) (params : FriParams)
+    (vk : RecursionVk F) (core : FriCore F) (A : FieldArith F)
+    (initState : List F) (logN : Nat)
+    (proof : BatchProofData F) (pub : WrapPublics F) : Bool :=
+  let d := deriveTranscript perm RATE toNat params initState logN proof pub
+  verifyAlgoUnified perm RATE toNat params vk core A initState logN proof pub
+    && Dregg2.Circuit.BatchTablesSingleAir.batchTablesCheckUnified A proof.singleAirOpenings
+    && singleAirChallengesBound proof d
+
+/-- Faithful acceptance is a genuine strengthening of unified acceptance. -/
+theorem verifyAlgoUnifiedFaithful_imp_verifyAlgoUnified
+    {F : Type} [Inhabited F] [DecidableEq F]
+    (perm : List F → List F) (RATE : Nat) (toNat : F → Nat) (params : FriParams)
+    (vk : RecursionVk F) (core : FriCore F) (A : FieldArith F)
+    (initState : List F) (logN : Nat) (proof : BatchProofData F) (pub : WrapPublics F)
+    (hacc : verifyAlgoUnifiedFaithful perm RATE toNat params vk core A initState logN proof pub
+      = true) :
+    verifyAlgoUnified perm RATE toNat params vk core A initState logN proof pub = true := by
+  unfold verifyAlgoUnifiedFaithful at hacc
+  simp only [Bool.and_eq_true] at hacc
+  exact hacc.1.1
+
+#assert_axioms verifyAlgoUnifiedFaithful_imp_verifyAlgoUnified
+
+/-- Faithful acceptance forces the real single-AIR quotient checker. -/
+theorem verifyAlgoUnifiedFaithful_forces_singleAir
+    {F : Type} [Inhabited F] [DecidableEq F]
+    (perm : List F → List F) (RATE : Nat) (toNat : F → Nat) (params : FriParams)
+    (vk : RecursionVk F) (core : FriCore F) (A : FieldArith F)
+    (initState : List F) (logN : Nat) (proof : BatchProofData F) (pub : WrapPublics F)
+    (hacc : verifyAlgoUnifiedFaithful perm RATE toNat params vk core A initState logN proof pub
+      = true) :
+    Dregg2.Circuit.BatchTablesSingleAir.batchTablesCheckUnified A proof.singleAirOpenings = true := by
+  unfold verifyAlgoUnifiedFaithful at hacc
+  simp only [Bool.and_eq_true] at hacc
+  exact hacc.1.2
+
+#assert_axioms verifyAlgoUnifiedFaithful_forces_singleAir
+
+/-- Faithful acceptance forces transcript binding of every opening's scalar `α`/`ζ`. -/
+theorem verifyAlgoUnifiedFaithful_forces_challenges
+    {F : Type} [Inhabited F] [DecidableEq F]
+    (perm : List F → List F) (RATE : Nat) (toNat : F → Nat) (params : FriParams)
+    (vk : RecursionVk F) (core : FriCore F) (A : FieldArith F)
+    (initState : List F) (logN : Nat) (proof : BatchProofData F) (pub : WrapPublics F)
+    (hacc : verifyAlgoUnifiedFaithful perm RATE toNat params vk core A initState logN proof pub
+      = true) :
+    singleAirChallengesBound proof
+      (deriveTranscript perm RATE toNat params initState logN proof pub) = true := by
+  unfold verifyAlgoUnifiedFaithful at hacc
+  simp only [Bool.and_eq_true] at hacc
+  exact hacc.2
+
+#assert_axioms verifyAlgoUnifiedFaithful_forces_challenges
 
 /-- **Strengthening**: whatever `verifyAlgoUnified` accepts, plain `verifyAlgo` (with the
 same concrete `fullChecks`) accepts — so EVERY existing `verifyAlgo`-soundness theorem
@@ -353,11 +376,9 @@ one-thread ζ, PoW witness present (`powBits = 0`). -/
 private def preProof : BatchProofData Nat :=
   { stubProof with finalPoly := [uFinal], oodPoint := uZeta, powWitness := [0] }
 
-/-- The init-seeded query index `verifyAlgo` binds `queries[i].index` to (the residual
-thread — see the module docstring). Depends on `finalPoly`, hence derived AFTER the refold. -/
+/-- The ONE continued-thread query index `verifyAlgo` binds to. -/
 private def uQidx : List Nat :=
-  (deriveQueryIndices uPerm uRATE uToNat uParams uLogN
-    (deriveFri uPerm uRATE uParams preProof (Challenger.init uInit)).2).1
+  (deriveTranscript uPerm uRATE uToNat uParams uInit uLogN preProof uPub).qidx
 
 /-- **The concrete ACCEPTING witness**: honest openings, transcript-derived beta, ζ, and
 query index. -/
@@ -399,6 +420,14 @@ private def noPreambleProof : BatchProofData Nat :=
 #guard verifyAlgo uPerm uRATE uToNat uParams uVk (fullChecks uCore uArith uToNat uParams.powBits)
   uInit uLogN acceptProof uPub = true
 
+private def wrongQidxProof : BatchProofData Nat :=
+  { acceptProof with queries := [{ index := uQidx.headD 0 + 1, layers := [uL0, uL1] }] }
+
+-- The qidx cutover bites through the actual verifier shell: a query at any position
+-- other than the continued-thread draw is rejected.
+#guard verifyAlgo uPerm uRATE uToNat uParams uVk (fullChecks uCore uArith uToNat uParams.powBits)
+  uInit uLogN wrongQidxProof uPub = false
+
 /-! ### The forgery: swap the layer-0 beta and refold. -/
 
 /-- The forged beta: the transcript-derived one, shifted. -/
@@ -413,11 +442,10 @@ private def fFinal : Nat := fNext0 + 2 * 6
 private def fPreProof : BatchProofData Nat :=
   { stubProof with finalPoly := [fFinal], oodPoint := uZeta, powWitness := [0] }
 
-/-- The forger recomputes the (init-thread) query index against the forged `finalPoly` —
-everything needed is public. -/
+/-- The forger recomputes the continued-thread query index against the forged
+`finalPoly` — everything needed is public. -/
 private def fQidx : List Nat :=
-  (deriveQueryIndices uPerm uRATE uToNat uParams uLogN
-    (deriveFri uPerm uRATE uParams fPreProof (Challenger.init uInit)).2).1
+  (deriveTranscript uPerm uRATE uToNat uParams uInit uLogN fPreProof uPub).qidx
 
 /-- **The forgery**: layer-0 beta swapped `uBeta0 → uBeta0 + 1`, fold chain and `finalPoly`
 refolded consistently. Internally self-consistent — only the BETA is not the transcript's. -/
@@ -435,6 +463,64 @@ private def forgeProof : BatchProofData Nat :=
   forgeProof uPub = false
 #guard betasBound forgeProof
   (deriveTranscript uPerm uRATE uToNat uParams uInit uLogN forgeProof uPub).betas = false
+
+/-! ### The faithful single-AIR quotient and α/ζ teeth bite. -/
+
+private def powMod (m : Nat) (b : Nat) : Nat → Nat
+  | 0 => 1 % m
+  | n + 1 => (b * powMod m b n) % m
+
+/-- Genuine arithmetic in the prime field `Fin 17`, represented canonically as
+`Nat` lanes so it composes with the transcript fixture. -/
+private def mod17Arith : FieldArith Nat :=
+  { add := fun a b => (a + b) % 17
+    mul := fun a b => (a * b) % 17
+    pow := powMod 17
+    zero := 0
+    one := 1 }
+
+private def saAlpha : Nat :=
+  (deriveTranscript uPerm uRATE uToNat uParams uInit uLogN acceptProof uPub).constraintAlpha.headD 0
+
+private def saZeta : Nat :=
+  (deriveTranscript uPerm uRATE uToNat uParams uInit uLogN acceptProof uPub).ζ.headD 0
+
+private def saVanishing : Nat := (saZeta % 17 + 16) % 17
+private def saInvVanishing : Nat := powMod 17 saVanishing 15
+
+/-- One honest scalar single-AIR opening: degree one (`degreeBits=0`), a genuine
+field inverse, a one-constraint Horner fold, and one quotient chunk. -/
+private def honestSingleAir : Dregg2.Circuit.BatchTablesSingleAir.SingleAirOpening Nat :=
+  { zeta := saZeta, degreeBits := 0, expectedDegreeBits := 0, alpha := saAlpha
+    constraintEvals := [1], zps := [1], quotientChunks := [saInvVanishing]
+    vanishing := saVanishing, invVanishing := saInvVanishing, logupCumSum := 0 }
+
+private def faithfulProof : BatchProofData Nat :=
+  { acceptProof with singleAirOpenings := [honestSingleAir] }
+
+-- NON-VACUITY: the new apex predicate accepts a concrete honest proof.
+#guard Dregg2.Circuit.BatchTablesSingleAir.batchTablesCheckUnified mod17Arith
+  faithfulProof.singleAirOpenings = true
+#guard verifyAlgoUnifiedFaithful uPerm uRATE uToNat uParams uVk uCore mod17Arith
+  uInit uLogN faithfulProof uPub = true
+
+private def tamperedSingleAir : Dregg2.Circuit.BatchTablesSingleAir.SingleAirOpening Nat :=
+  { honestSingleAir with quotientChunks := [saInvVanishing + 1] }
+
+-- Tampering the opened quotient chunk is rejected through the faithful apex check.
+#guard verifyAlgoUnifiedFaithful uPerm uRATE uToNat uParams uVk uCore mod17Arith
+  uInit uLogN { faithfulProof with singleAirOpenings := [tamperedSingleAir] } uPub = false
+
+private def freeAlphaSingleAir : Dregg2.Circuit.BatchTablesSingleAir.SingleAirOpening Nat :=
+  { honestSingleAir with alpha := saAlpha + 1 }
+
+-- With one emitted constraint the quotient identity itself is independent of α, so
+-- this is the sharp free-α attack: the arithmetic check still passes, while the
+-- transcript-binding tooth rejects it.
+#guard Dregg2.Circuit.BatchTablesSingleAir.batchTablesCheckUnified mod17Arith
+  [freeAlphaSingleAir] = true
+#guard verifyAlgoUnifiedFaithful uPerm uRATE uToNat uParams uVk uCore mod17Arith
+  uInit uLogN { faithfulProof with singleAirOpenings := [freeAlphaSingleAir] } uPub = false
 
 /-! ### Transcript-bound grinding bites.
 
@@ -457,5 +543,6 @@ end NonVacuity
 #assert_axioms betasBound
 #assert_axioms queryPowCheckUnified
 #assert_axioms verifyAlgoUnified
+#assert_axioms verifyAlgoUnifiedFaithful
 
 end Dregg2.Circuit.FriChallengerUnified

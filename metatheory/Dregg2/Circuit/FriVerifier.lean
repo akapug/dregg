@@ -374,6 +374,30 @@ def ir2LeafWrapConfig : FriParams :=
   { logBlowup := 6, numQueries := 19, powBits := 16, maxLogArity := 3,
     logFinalPolyLen := 0, extDeg := 4 }
 
+end Dregg2.Circuit.FriVerifier
+
+namespace Dregg2.Circuit.BatchTablesSingleAir
+
+/-- One deployed single-AIR opening at the Fiat-Shamir OOD point.  The structure
+lives below `FriVerifier`'s import boundary so `BatchProofData` can carry the real
+opening data without creating an import cycle; `BatchTablesSingleAir.lean` supplies
+its executable denotation and reject theorems. -/
+structure SingleAirOpening (F : Type) where
+  zeta : F
+  degreeBits : Nat
+  expectedDegreeBits : Nat
+  alpha : F
+  constraintEvals : List F
+  zps : List F
+  quotientChunks : List F
+  vanishing : F
+  invVanishing : F
+  logupCumSum : F
+
+end Dregg2.Circuit.BatchTablesSingleAir
+
+namespace Dregg2.Circuit.FriVerifier
+
 /-- The flat field-element view of a `BatchStarkProof<DreggRecursionConfig>` root
 the verifier walks (`plonky3_recursion_impl.rs:732`), abstracted to the fields the
 TRANSCRIPT consumes here (fold-layer commitments, final poly) plus the
@@ -430,6 +454,11 @@ structure BatchProofData (F : Type) where
   grinding. The unified verifier checks one entry per FRI commitment and bounds each
   canonical value by `maxLogArity`. -/
   friLogArities : List F := []
+  /-- The deployed single-AIR quotient openings.  Defaulted for source compatibility
+  with legacy proof fixtures; the faithful apex verifier requires this list to be
+  nonempty and checks every opening through `batchTablesCheckUnified`. -/
+  singleAirOpenings :
+    List (Dregg2.Circuit.BatchTablesSingleAir.SingleAirOpening F) := []
 
 /-- The public inputs the wrap carries: `[genesis_root, final_root, num_turns,
 chain_digest…]` (`ivc_turn_chain.rs:1296–1304`). Tooth 3 is `exposedSegment = this`. -/
@@ -482,6 +511,73 @@ def deriveQueryIndices [Inhabited F] (perm : List F → List F) (RATE : Nat) (to
     (params : FriParams) (logN : Nat) (c0 : Challenger F) : List Nat × Challenger F :=
   drawQueries perm RATE toNat logN params.numQueries c0
 
+/-- Every challenge and checkpoint produced by the ONE continued deployed
+transcript.  This is defined in the base verifier module because `verifyAlgo` itself
+must consume the continued-thread query indices; keeping it only in a downstream
+strengthening left the old init-seeded qidx tooth in authority. -/
+structure DerivedChallenges (F : Type) where
+  constraintAlpha : List F
+  ζ : List F
+  openingAlpha : List F
+  betas : List (List F)
+  powSample : Option Nat
+  qidx : List Nat
+  postPreamble : Challenger F
+  postConstraintAlpha : Challenger F
+  postZeta : Challenger F
+  postOpeningAlpha : Challenger F
+  postFri : Challenger F
+  postPow : Challenger F
+
+/-- The deployed query-grinding transition.  Zero bits is a literal no-op;
+otherwise the singleton witness is absorbed and a fresh masked base squeeze is
+checked.  A malformed witness returns `none` without inventing a state transition. -/
+def deriveQueryPow [Inhabited F]
+    (perm : List F → List F) (RATE : Nat) (toNat : F → Nat) (powBits : Nat)
+    (witness : List F) (c : Challenger F) : Option Nat × Challenger F :=
+  match witness with
+  | [w] =>
+      if powBits = 0 then (some 0, c)
+      else
+        let c := Challenger.observe perm RATE c w
+        let (masked, c) := Challenger.sampleBits perm RATE toNat powBits c
+        (some masked, c)
+  | _ => (none, c)
+
+/-- **The deployed one-thread transcript.**  The order is
+`preamble → trace/preprocessed/publics → constraint α → quotient → ζ → opened
+evaluations → PCS α → FRI commits/β → final poly → log arities → query PoW → qidx`.
+`verifyAlgo` consumes `betas` and `qidx` from this value, so the init-seeded query
+thread is no longer part of the verifier shell. -/
+def deriveTranscript [Inhabited F]
+    (perm : List F → List F) (RATE : Nat) (toNat : F → Nat) (params : FriParams)
+    (initState : List F) (logN : Nat)
+    (proof : BatchProofData F) (pub : WrapPublics F) : DerivedChallenges F :=
+  let c := Challenger.init initState
+  let c := Challenger.observeList perm RATE c proof.degreeBitsPreamble
+  let c := Challenger.observeList perm RATE c proof.baseDegreeBitsPreamble
+  let c := Challenger.observeList perm RATE c proof.preprocessedWidthPreamble
+  let postPreamble := c
+  let c := Challenger.observeList perm RATE c proof.traceCommit
+  let c := Challenger.observeList perm RATE c proof.preprocessedCommit
+  let c := Challenger.observeList perm RATE c pub.segment
+  let (constraintAlpha, c) := Challenger.sampleExt perm RATE params.extDeg c
+  let postConstraintAlpha := c
+  let c := Challenger.observeList perm RATE c proof.quotientCommit
+  let (zeta, c) := Challenger.sampleExt perm RATE params.extDeg c
+  let postZeta := c
+  let c := Challenger.observeList perm RATE c proof.openedEvaluations
+  let (openingAlpha, c) := Challenger.sampleExt perm RATE params.extDeg c
+  let postOpeningAlpha := c
+  let (betas, c) := deriveFri perm RATE params proof c
+  let c := Challenger.observeList perm RATE c proof.friLogArities
+  let postFri := c
+  let (powSample, c) := deriveQueryPow perm RATE toNat params.powBits proof.powWitness c
+  let postPow := c
+  let (qidx, _) := deriveQueryIndices perm RATE toNat params logN c
+  { constraintAlpha, ζ := zeta, openingAlpha, betas, powSample, qidx,
+    postPreamble, postConstraintAlpha, postZeta, postOpeningAlpha, postFri, postPow }
+
 /-- The transcript draws exactly `n` query indices. -/
 theorem drawQueries_length [Inhabited F] (perm : List F → List F) (RATE : Nat)
     (toNat : F → Nat) (logN : Nat) :
@@ -500,6 +596,17 @@ theorem deriveQueryIndices_length [Inhabited F] (perm : List F → List F) (RATE
     (toNat : F → Nat) (params : FriParams) (logN : Nat) (c0 : Challenger F) :
     (deriveQueryIndices perm RATE toNat params logN c0).1.length = params.numQueries :=
   drawQueries_length perm RATE toNat logN params.numQueries c0
+
+/-- The continued transcript draws exactly the configured number of query indices. -/
+theorem deriveTranscript_qidx_length [Inhabited F]
+    (perm : List F → List F) (RATE : Nat) (toNat : F → Nat) (params : FriParams)
+    (initState : List F) (logN : Nat) (proof : BatchProofData F) (pub : WrapPublics F) :
+    (deriveTranscript perm RATE toNat params initState logN proof pub).qidx.length
+      = params.numQueries := by
+  unfold deriveTranscript
+  apply deriveQueryIndices_length
+
+#assert_axioms deriveTranscript_qidx_length
 
 /-- The verifier sub-checks, as EXPLICIT Boolean functions of the proof + the DERIVED
 transcript challenges (`betas`, query indices `qidx`). `foldConsistent` and
@@ -591,18 +698,15 @@ def verifyAlgo [Inhabited F] [DecidableEq F]
     (params : FriParams) (vk : RecursionVk F) (checks : FriChecks F)
     (initState : List F) (logN : Nat)
     (proof : BatchProofData F) (pub : WrapPublics F) : Bool :=
-  let c0 := Challenger.init initState
-  -- tooth 2a: commit-phase transcript ⇒ FRI betas + post-commit challenger
-  let betas := (deriveFri perm RATE params proof c0).1
-  let c1 := (deriveFri perm RATE params proof c0).2
-  -- tooth 2a: query-index transcript
-  let qidx := (deriveQueryIndices perm RATE toNat params logN c1).1
+  -- tooth 2a: ONE continued deployed transcript ⇒ FRI betas + query indices.
+  -- This is a shell replacement: the former init-seeded qidx thread is gone.
+  let d := deriveTranscript perm RATE toNat params initState logN proof pub
   -- tooth 1: VK shape pin (blake3 out of band, baked as a constant)
   vk.shapeMatches proof
   -- tooth 2b: the per-query arithmetic checks over the DERIVED challenges
-    && checks.foldConsistent proof betas qidx
-    && checks.merklePaths proof qidx
-    && checks.batchTables proof betas
+    && checks.foldConsistent proof d.betas d.qidx
+    && checks.merklePaths proof d.qidx
+    && checks.batchTables proof d.betas
     && checks.queryPow proof
   -- tooth 3: the segment equality
     && segmentTooth proof pub
@@ -621,12 +725,10 @@ theorem verifyAlgo_concrete_rejects_wrong_query_count [Inhabited F] [DecidableEq
     (hcount : proof.queries.length ≠ params.numQueries) :
     verifyAlgo perm RATE toNat params vk (concreteFriChecks core) initState logN proof pub
       = false := by
-  have hqlen := deriveQueryIndices_length perm RATE toNat params logN
-      (deriveFri perm RATE params proof (Challenger.init initState)).2
+  have hqlen := deriveTranscript_qidx_length perm RATE toNat params initState logN proof pub
   have hfold : (concreteFriChecks core).foldConsistent proof
-      (deriveFri perm RATE params proof (Challenger.init initState)).1
-      (deriveQueryIndices perm RATE toNat params logN
-        (deriveFri perm RATE params proof (Challenger.init initState)).2).1 = false := by
+      (deriveTranscript perm RATE toNat params initState logN proof pub).betas
+      (deriveTranscript perm RATE toNat params initState logN proof pub).qidx = false := by
     apply concreteFriChecks_rejects_query_count core proof _ _ finalConst hfp
     rw [hqlen]; exact hcount
   unfold verifyAlgo
@@ -805,7 +907,7 @@ theorem verifyAlgo_full_rejects_tampered_quotient {F : Type} [Inhabited F] [Deci
     verifyAlgo perm RATE toNat params vk (fullChecks core A toNat params.powBits)
       initState logN proof pub = false := by
   have hbt : (fullChecks core A toNat params.powBits).batchTables proof
-      (deriveFri perm RATE params proof (Challenger.init initState)).1 = false :=
+      (deriveTranscript perm RATE toNat params initState logN proof pub).betas = false :=
     batchTablesCheck_rejects_tampered_quotient A proof ood hood t hmem h
   unfold verifyAlgo
   simp only [hbt, Bool.and_false, Bool.false_and]

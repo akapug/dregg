@@ -46,9 +46,8 @@ theorem verifyAlgo_accept_forces_foldConsistent {F : Type} [Inhabited F] [Decida
     (hacc : verifyAlgo perm RATE toNat params vk (fullChecks core A toNat params.powBits)
       initState logN proof pub = true) :
     (concreteFriChecks core).foldConsistent proof
-      (deriveFri perm RATE params proof (Challenger.init initState)).1
-      (deriveQueryIndices perm RATE toNat params logN
-        (deriveFri perm RATE params proof (Challenger.init initState)).2).1 = true := by
+      (deriveTranscript perm RATE toNat params initState logN proof pub).betas
+      (deriveTranscript perm RATE toNat params initState logN proof pub).qidx = true := by
   unfold verifyAlgo at hacc
   simp only [Bool.and_eq_true] at hacc
   exact hacc.1.1.1.1.2

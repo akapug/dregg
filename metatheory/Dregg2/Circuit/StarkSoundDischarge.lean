@@ -24,21 +24,24 @@ open Dregg2.Circuit.FriVerifierBridge
 
 /-- **`DeployedRefines` DISCHARGED for the reduced `verifyBatch`.** `verifyBatch` acceptance FORCES
 `verifyAlgo` acceptance on the mapped data — because `verifyBatch` IS
-`verifyAlgoUnified … (cfgView pi π) && cfgExtra …`, an `accept` occurs only when `verifyAlgoUnified` returned
-`true`, and `verifyAlgoUnified` is a strengthening of `verifyAlgo`
-(`FriChallengerUnified.verifyAlgoUnified_imp_verifyAlgo`). Pure unfold + composition; no opaque appeal, no
-carried hypothesis. -/
+`verifyAlgoUnifiedFaithful … (cfgView pi π) && cfgExtra …`, an `accept` occurs only when the faithful
+verifier returned `true`.  Faithful acceptance first strengthens to `verifyAlgoUnified`, then to
+`verifyAlgo` (`verifyAlgoUnifiedFaithful_imp_verifyAlgoUnified` followed by
+`verifyAlgoUnified_imp_verifyAlgo`). Pure unfold + composition; no opaque appeal, no carried hypothesis. -/
 theorem deployedRefines_cfg (R : Registry) :
     DeployedRefines R cfgPerm cfgRATE cfgToNat cfgParams cfgVk cfgChecks cfgInitState cfgLogN cfgView := by
   intro pi π hacc
   unfold verifyBatch at hacc
   by_cases h :
-      (Dregg2.Circuit.FriChallengerUnified.verifyAlgoUnified cfgPerm cfgRATE cfgToNat cfgParams cfgVk
+      (Dregg2.Circuit.FriChallengerUnified.verifyAlgoUnifiedFaithful cfgPerm cfgRATE cfgToNat cfgParams cfgVk
           cfgCore cfgA cfgInitState cfgLogN (cfgView pi π).1 (cfgView pi π).2
         && cfgExtra (cfgView pi π).1 (cfgView pi π).2) = true
   · simp only [Bool.and_eq_true] at h
+    have hu := Dregg2.Circuit.FriChallengerUnified.verifyAlgoUnifiedFaithful_imp_verifyAlgoUnified
+      cfgPerm cfgRATE cfgToNat cfgParams cfgVk cfgCore cfgA cfgInitState cfgLogN
+      (cfgView pi π).1 (cfgView pi π).2 h.1
     exact Dregg2.Circuit.FriChallengerUnified.verifyAlgoUnified_imp_verifyAlgo cfgPerm cfgRATE cfgToNat
-      cfgParams cfgVk cfgCore cfgA cfgInitState cfgLogN (cfgView pi π).1 (cfgView pi π).2 h.1
+      cfgParams cfgVk cfgCore cfgA cfgInitState cfgLogN (cfgView pi π).1 (cfgView pi π).2 hu
   · rw [if_neg h] at hacc
     exact absurd hacc (by decide)
 

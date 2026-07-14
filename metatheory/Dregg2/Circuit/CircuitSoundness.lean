@@ -417,11 +417,12 @@ opaque cfgView : BatchPublicInputs → BatchProof → (FriVerifier.BatchProofDat
 /-- Deployed config: the residual non-FRI checks of the deployed verifier. KAT-validated. -/
 opaque cfgExtra : FriVerifier.BatchProofData ℤ → FriVerifier.WrapPublics ℤ → Bool
 
-/-- The batch verifier: `FriVerifier.verifyAlgo` (PROVED structure) at the opaque deployed
-configuration (the KAT floor above). Its behaviour towards the apex is still carried via the
-`StarkSound` class below — exposing the structure adds knowledge, it removes none. -/
+/-- The batch verifier: the continued-thread, transcript-bound verifier strengthened
+with the faithful deployed single-AIR quotient identity.  The apex therefore consumes
+the real RLC/chunk-recomposition/inverse teeth, not merely the legacy free-field table
+shell. -/
 def verifyBatch (_vk : VerifyKey) (pi : BatchPublicInputs) (π : BatchProof) : Verdict :=
-  if Dregg2.Circuit.FriChallengerUnified.verifyAlgoUnified cfgPerm cfgRATE cfgToNat cfgParams cfgVk
+  if Dregg2.Circuit.FriChallengerUnified.verifyAlgoUnifiedFaithful cfgPerm cfgRATE cfgToNat cfgParams cfgVk
         cfgCore cfgA cfgInitState cfgLogN (cfgView pi π).1 (cfgView pi π).2
       && cfgExtra (cfgView pi π).1 (cfgView pi π).2 then Verdict.accept else Verdict.reject
 
