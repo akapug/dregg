@@ -773,6 +773,7 @@ import Dregg2.Circuit.FriExtractNonCircular
 import Dregg2.Circuit.CommitmentReduction
 import Dregg2.Circuit.CollisionReduce
 import Dregg2.Circuit.StateCommitReduce
+import Dregg2.Circuit.CommitFaithfulRegrounded -- BRIDGES the faithful leaf: CH_faithful (= effectVmCommit, the deployed `CellState::compute_commitment` `hash_4_to_1` tree) instantiates the abstract per-cell CH into StateCommitReduce's OrBreak keystone; recStateCommit_binds_kernel_faithful concludes k=k' OR a concrete FaithfulBreak (frame-primitive collision ∨ named LimbDecodeCollision faithfulness gap ∨ concrete Compress4Collision h4) — the leaf DENOTES the Rust and rests on a REDUCTION (bind-or-collision, effectVmCommit_collision_of_ne tree-traces a genuine h4 collision), never the vacuous cellLeafInjective/compress4Injective. ROM floor (OodRomBound.RomUniform) bounds the collision disjunct; FIRE on plus4. #assert_axioms-clean
 import Dregg2.Circuit.Blake3FloorReduce
 import Dregg2.Circuit.DescriptorRefinesReduce
 import Dregg2.Circuit.StarkSoundReduce
