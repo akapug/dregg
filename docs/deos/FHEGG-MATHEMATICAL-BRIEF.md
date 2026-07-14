@@ -154,13 +154,21 @@ hence combinatorial. **Correct framing:**
    subspace* (graph homology `H₁`), with an explicitly computable **public** cycle basis `B`.
 2. **Netting is a coequalizer:** gross flow → net position is the quotient of the gross flow by the
    cycle relations (the boundaries `im ∂ᵀ` are exactly what collapses).
-3. Because `B` is public and only the amounts `f` are private, projecting onto `Z`, computing net
-   positions `net = ∂f`, and verifying conservation `∂f = 0` are **homomorphic linear algebra over a
-   public matrix and committed private amounts** — bootstrap-free, the same cheap primitive as the §2
-   fold (Penumbra's homomorphic scalar sum generalized to a *vector in the cycle space*).
-4. **For exact all-or-nothing intents the optimization vanishes** (T3): clearing exists iff pools
-   balance, and the allocation is pinned. The private ring is then a **free homomorphic conservation
-   check** on the committed offers/wants (T4) — this is `shielded_ring_clears`, proved.
+3. Because the topology is public and only the amounts `f` are private, computing net positions
+   `net = ∂f` and verifying conservation `∂f = 0` are **homomorphic linear algebra over a public matrix
+   and committed private amounts** — bootstrap-free, the same cheap primitive as the §2 fold (Penumbra's
+   homomorphic scalar sum generalized to a *vector*). **Correction (`FHEGG-CODEX-INSIGHTS.md` Q3):** do
+   this on the **incidence matrix `A = ∂` directly, not on an explicit cycle basis `B`** — `A` is sparse
+   and well-conditioned, whereas a fundamental cycle basis can be dense/ill-conditioned and enlarges the
+   fixed-point/modulus bounds of the oblivious solver; the traversal is public with `A` alone.
+4. **For a GIVEN exact all-or-nothing book, verifying the clearing is free** (T3): clearing exists iff
+   pools balance, and the allocation is pinned, so *checking a fixed proposed book* is a **free
+   homomorphic conservation check** on the committed offers/wants (T4) — `shielded_ring_clears`, proved.
+   **Correction (post-brief, `FHEGG-CODEX-INSIGHTS.md` Q3):** this is *verification*, not *selection*.
+   Choosing the max-volume exact **subset** of all-or-nothing orders is
+   `max Σᵢ wᵢ xᵢ s.t. Σᵢ xᵢ aᵢ = 0, xᵢ ∈ {0,1}`, a 0-1 balancing problem that encodes subset-sum /
+   set-packing and is **NP-hard** — a public topology does not remove the integrality. The tractable
+   engine is therefore the **`[0,1]` partial-fill relaxation** below, not exact-subset optimization.
 
 **The residual hard core (named honestly):** when orders admit **partial fills** and the market
 **maximizes total cleared volume** across many candidate cycles with binding box constraints
@@ -278,6 +286,20 @@ privacy and the proof-carrying structure appearing as *functorial* properties (e
 to a category of commitments that is faithful on conservation and trivial on values). State the object,
 the morphisms, what conservation/mint/fairness/privacy each become, and what genuinely new mathematics
 (if any) is required.
+
+> **Post-analysis corrections + the recorded target (`FHEGG-CODEX-INSIGHTS.md` Q2; skeleton captured in
+> `PRIVATE-CONVEX-ENGINE.md §4.1` as `ZKOpenRel_R`).** Two phrasings above are loose:
+> (a) **the crossing is not automatically a Tarski fixpoint** — monotone *curves* are not a monotone
+> *operator*; the fixpoint is of the explicit update `F(j) = j if D(pⱼ)≤S(pⱼ) else min(j+1,K)`, least
+> fixed point *assuming a crossing exists*. (b) **A commitment functor cannot be both "faithful on
+> conservation" AND "trivial on values"** — hiding *intentionally* identifies value-distinct worlds, so
+> nothing is faithful on values while hiding them. Honest split: **computational binding reflects
+> bounded-resource equalities**; **hiding makes same-leakage-class openings indistinguishable**; privacy
+> is a simulator natural transformation `View ≈ Sim∘Q` over a leakage functor `Q`, not "transcript
+> independent of values." The captured answer direction (**decorated cospans + guarded trace + resource
+> grading + convex-cost-by-infimal-convolution + proof/privacy functors**, conservation = the zero-defect
+> `d⁻¹(0)` subcategory) is a **well-posed research target, NOT a discharged proof** — the open theorem is
+> compositionality/closure under feedback + adaptive composition.
 
 ### Q3 — The oblivious private-convex / LP frontier
 The volume-max multilateral partial-fill is a poly-time oblivious LP over the *public* cycle basis

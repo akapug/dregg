@@ -178,9 +178,19 @@ From `FHEGG-KERNEL.md §1.2` plus the FHE-optimization line (numbers current to 
 
 The whole engine's economy: **the matvec (the O(T·n²) or O(T·nnz) work) is bootstrap-free and
 SIMD-packed** (≈ free); **the prox is the only PBS-class work, and it is one bounded nonlinearity per
-iteration**, SIMD-batchable across the coordinate vector into **≈ one bootstrap-round per iteration**.
-So the bill is `≈ T bootstrap-rounds`, *not* `T·n` — the coordinate dimension rides inside one packed
-prox. This is the numerical statement of "homomorphic-linear + small prox."
+iteration**, SIMD-batchable across the coordinate vector toward **≈ one bootstrap-round per iteration**.
+So in the packed regime the bill is `≈ T bootstrap-rounds`, *not* `T·n` — the coordinate dimension
+rides inside one packed prox.
+
+**Correction — "one bootstrap per iteration regardless of `m` and the private caps" is false in
+general** (`FHEGG-CODEX-INSIGHTS.md` Q1). With **heterogeneous private caps** the box-prox is not a
+single fixed LUT: clamping to a *secret* `[0, cₑ]` needs a **compare + mux** against the hidden cap,
+costing **~2–3 PBS-equiv per packed ciphertext**. Only when the coordinates SIMD-pack into `s`-wide
+slots does this amortize to **`2–3⌈m/s⌉`** prox-bootstraps per iteration — so the true per-iteration
+prox cost is `2–3⌈m/s⌉`, and the clean "one bootstrap-round/iter" holds only in the fully-packed,
+homogeneous-or-public-cap case. This is the honest numerical statement of "homomorphic-linear + small
+prox"; the earlier "amortize the one bootstrap" optimism is tempered accordingly (and §5's
+"packability of the prox is the swing factor" is the same fact).
 
 ---
 
@@ -264,6 +274,32 @@ also why the private engine sidesteps the hardest obligation: convergence proofs
 dual gap — still a quadratic-then-linear functional, still cheap; the KKT residual `‖∇f + Aᵀy‖ + …`
 is the alternative certificate and is equally linear-dominated.)
 
+**`Cert-F` — the named certificate IR (GOLD, `FHEGG-CODEX-INSIGHTS.md` headline + Q6#1).** For the
+canonical dregg program, the volume-max circulation LP `max wᵀf s.t. Af=0, 0≤f≤c`, a dual certificate
+`(π, s)` with `s ≥ 0` and `Aᵀπ + s ≥ w` satisfies `wᵀf ≤ cᵀs` for **every** feasible `f`. So the
+hidden proof checks exactly
+
+```
+  Af = 0,   0 ≤ f ≤ c,   s ≥ 0,   Aᵀπ + s ≥ w,   cᵀs − wᵀf ≤ ε
+```
+
+which certifies ε-optimality **independent of how `f, π, s` were found**. This collapses proof
+complexity from `O(T·m)` clamp/range operations (proving `T` iterations) to `O(m + nnz A)` feasibility
+constraints plus the gap inner-products — the concrete size win. It **generalizes to any composite
+convex program** `min g(x) + h(Kx)` via the **Fenchel gap**
+
+```
+  g(x) + h(Kx) + g*(−Kᵀy) + h*(y) ≤ ε
+```
+
+(`g*, h*` the convex conjugates), which is the general-purpose duality-gap witness for the whole
+product suite. **Record: `Cert-F` / the Fenchel-gap certificate is the private-convex compiler's
+principal IR** — every product compiles to *(a public program form + a prox + its `Cert-F`
+inequalities)*, and the engine attests the `Cert-F` linear check, never the iteration trace's
+convergence. Codex reconstructed this independently from the turn-kernel's verify-not-find DNA and
+went deeper than this doc's original §2.3 gap sketch in three ways: the exact flow-LP inequalities,
+the Fenchel generalization to a compiler IR, and the `O(Tm)→O(m+nnz A)` quantification.
+
 ### 2.4 The proof + the privacy
 
 - **Privacy — no viewer.** Same discipline as fhEgg: the matvecs are homomorphic over committed data
@@ -285,6 +321,19 @@ is the alternative certificate and is equally linear-dominated.)
   re-executor re-runs the fixed T-step program on the committed inputs and re-checks the certificate —
   a bounded, oblivious re-computation, not a search.
 
+**The modulus / opening discipline — does the additive homomorphism survive `T` iterations? (GOLD,
+`FHEGG-CODEX-INSIGHTS.md` Q1).** No — not on its own, and this resolves a question the brief left
+implicit. Under a lattice/homomorphic commitment the **opening randomness grows with the fold depth
+`T`**: a `T`-fold accumulates the pre-clamp affine bound `|uₑᵗ| ≤ C + ρW/2 + 2ρ²CT`, so a naive
+`T`-fold of homomorphic commitments would force MSIS parameters sized to the *accumulated* opening
+norm (kilobytes that grow with `T`). **The discipline: commit only the inputs/outputs (endpoints), and
+keep the intermediate iterates under the STARK PCS** — the iterates live as witness values inside the
+proof, not as standalone homomorphic openings, so the opening norm never compounds. Sizing the crypto
+correctly then needs: modulus `q > 2S(M_T + Δ_round + Δ_cert)` and precision
+`s ≥ ⌈log₂(2 C_quant T / ε)⌉` to hold accumulated rounding under `ε/2`. **Record: the homomorphism does
+NOT survive a `T`-fold as free-standing openings; keep the fold inside the STARK and homomorphically
+open only the endpoints.**
+
 ### 2.5 Which method — PDHG default, ADMM for QP, mirror for the simplex
 
 | Program | Engine | Why it is the private-friendliest here |
@@ -299,6 +348,18 @@ Nesterov/FISTA momentum layers onto any of these — momentum is a *linear combi
 the same accuracy, at zero homomorphic cost. Preconditioning (PDLP's diagonal scaling) is a **public**
 transform of **public** A — free under our split — and it is what turns `O(1/ε)` into near-linear
 convergence on well-conditioned finance problems.
+
+**The topology-only preconditioner (GOLD, `FHEGG-CODEX-INSIGHTS.md` Q1).** For the circulation LP,
+the PDHG step sizes can be set **from the public graph structure alone** — no private line search, no
+data-dependent spectral estimation, hence no leakage. Take `τ = (ρ/2) I` and `Σ = ρ D⁻¹`, where `D`
+is the **public vertex-degree matrix** of the trade graph. Then
+`‖Σ^{1/2} A τ^{1/2}‖² ≤ ρ² < 1` because the normalized graph Laplacian `D^{−1/2}(AAᵀ)D^{−1/2}` has
+**spectral radius ≤ 2** — the standard normalized-Laplacian bound — which is exactly the PDHG
+convergence condition. So the oblivious step schedule is a function of *public topology only*. This
+is a specialization of Pock–Chambolle diagonal preconditioning (a novel application in this setting,
+not a new theorem). **⚑ Flag to verify:** the `≤ 2` bound is stated for the normalized Laplacian of
+the *underlying undirected graph*; the map from our *directed* incidence `A` to that form must be
+checked against dregg's actual `A` before the constant is relied on.
 
 ### 2.6 Mapping to dregg's existing pieces
 
@@ -365,6 +426,9 @@ first-order" complexity theory (Arjevani–Shamir). Each is a piece.
    already has this shape; the tuning is to *pick the constraint encoding so every prox is one packed
    LUT*. Where a prox would need high precision, swap it for the **polynomial-penalty barrier**
    (2510.17294) and keep it in the free arithmetic layer — a per-problem PBS-vs-degree trade-off.
+   (Caveat, §1.4: the "one batched bootstrap-round" is only exact for public/homogeneous caps; a
+   *secret heterogeneous* cap forces a compare+mux at `2–3⌈m/s⌉` prox-bootstraps/iter — so prefer
+   public caps or accept the packed-`m/s` cost.)
 2. **A fixed oblivious T from a public accuracy target**, with **momentum** (free) to make T small and
    **public preconditioning** (free, A public) to make the problem well-conditioned — so the whole
    solve is a genuinely small, fixed, data-independent circuit.
@@ -388,6 +452,59 @@ proof) and the control community has encrypted first-order (fast-ish, no proof);
 **recursion/STARK apex and the commitment algebra already built** (fhEgg), so it is uniquely positioned
 to ship the *proof-carrying* oblivious first-order engine. The novel object is the marriage:
 *first-order's untrusted search + convex duality's linear certificate + dregg's fold-STARK.*
+
+### 4.1 The categorical target — `ZKOpenRel_R` (a research target, NOT a theorem)
+
+The whole surface (turn-kernel, auction, ring, convex engine) wants a single categorical home. Codex
+(`FHEGG-CODEX-INSIGHTS.md` Q2) named a **well-posed target** — recorded here as the unification's
+**named research direction, honestly not a proved unification**:
+
+> a **resource-graded, proof-carrying, guarded traced symmetric monoidal category of open relations**,
+> realized by **decorated cospans** (Fong) — `ZKOpenRel_R`, with `R = ℤ^Asset` the typed resource group.
+
+- **Objects** `X` = typed boundary ports + private state `S_X` + public quotient `q_X : S_X → P_X` +
+  resource valuation `ν_X : S_X → R`. **Morphisms** `M : X → Y` = an open topology `X → N ← Y`, a private
+  witness space, a feasibility relation `Γ_M`, a guard/fairness predicate, an optional **convex cost**
+  `φ_M`, a **resource defect** `d_M ∈ R`, a public observation, and a proof relation `Verify_M`.
+- **Composition** = relational/fiber-product; **defects add** under both composition and tensor
+  (`d_{N∘M} = d_M + d_N`), i.e. `d` is a **strong monoidal functor to `(R, +, 0)`** and **conservation
+  is the zero-defect subcategory `d⁻¹(0)`** — the categorical home of `toBal_mul` (T1) and
+  `created_value_conservation` (T4). **Convex costs compose by infimal convolution**
+  `φ_{N∘M}(x,z) = inf_y φ_M(x,y) + φ_N(y,z)` — the Fenchel-respecting composition, which ties back to
+  `Cert-F` / the Fenchel gap (§2.3), a good consistency check.
+- **Ring = guarded trace** (feedback gluing output→input, imposing `Af = 0`) — *guarded* because an
+  ordinary trace/compact-closure does **not** guarantee a feasible witness exists (tracing a relation
+  can yield the empty relation: it wires a cycle, it does not prove the cycle clears — exactly the
+  `shielded_ring_clears` non-vacuity teeth). **Optimization** = partial minimization. **Fairness** = a
+  separate subrelation `Fair_M ↪ Γ_M`, *not* implied by conservation. **Privacy** = a **simulator
+  natural transformation** `View ≈ Sim∘Q` over a **leakage functor `Q`** (statistical for the PCS
+  layer, quantum-computational for nullifier-unlinkability + hash-hiding).
+- **The four objects recover as instances:** turn-kernel = guarded proof-carrying endomorphism
+  `T : S → S`; auction = orders merged by a **commutative Frobenius** `μ^{(N)} : C^{⊗N} → C` then a
+  crossing observer `χ : C → P`; circulation = open-network morphism with witness-flow grade `Af`,
+  zero-grade fiber = `ker A`, ring = trace; convex engine = public-instance-indexed endomorphism
+  `U_θ : Z → Z`, fixed solver `U_θ^T`, semantic target an `Argmin` relation related by a
+  **certificate/refinement 2-cell**.
+
+**⚠ Honesty — this is a target, not a discharged proof.** The individual pieces are known category
+theory (decorated cospans, traced monoidal, resource grading, infimal-convolution cost). The genuinely
+new content is the **compositionality/closure theorem** for the *combined* resource-grade + convex-cost
+decoration + recursive-proof functor + computational-privacy simulator — **especially closure under
+feedback (the trace) and adaptive sequential composition** — and codex did **not** prove it. So
+`ZKOpenRel_R` is a **named research target with the right objects/morphisms/functors identified**, not
+"the unification is done." The feedback + adaptive-composition closure is exactly where categorical
+DeFi models tend to break; treat it as the theorem to discharge, not a banked result.
+
+**Two framing corrections it forced (accepted, `FHEGG-CODEX-INSIGHTS.md` Q2):**
+- **The crossing is not automatically a Tarski fixpoint** — monotone *curves* ≠ a monotone *operator*;
+  the fixpoint is of the explicit update `F(j) = j if D(pⱼ)≤S(pⱼ) else min(j+1,K)`, least fixed point
+  assuming a crossing exists (fixed in `FHEGG-KERNEL.md §1.4/§2.1`).
+- **A commitment functor cannot be both "faithful on conservation" AND "trivial on values"** —
+  hiding *intentionally* identifies value-distinct worlds observationally, so no functor is faithful on
+  values while hiding them. The honest split: **computational binding *reflects* bounded-resource
+  equalities** (equal openings ⇒ equal resources, up to the binding advantage), while **hiding makes
+  same-leakage-class openings indistinguishable**. The privacy functor is `View ≈ Sim∘Q` over the
+  leakage `Q`, not "transcript independent of values." (This corrects the brief's Q2 phrasing.)
 
 ---
 

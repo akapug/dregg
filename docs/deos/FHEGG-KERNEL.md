@@ -32,13 +32,17 @@ ambitious edge names its grade. No incremental ladder — this is the straight-a
    fair oracle → options (strike vs mark), perps (funding off mark), lending (the private
    oracle), structured products — all over **shielded positions**, **proof-settled**.
 5. **The multilateral cross-asset ring is *less hard than it looks*.** Multilateral clearing
-   is a **circulation** (a flow in the cycle space = ker ∂, a linear subspace with a **public**
-   basis); netting is a **coequalizer**/quotient. So the private part is **homomorphic linear
-   algebra over a public matrix** (cheap); for **exact all-or-nothing intents it collapses to a
-   pure homomorphic conservation check with no optimization at all** (`exact_clears_iff`). Only
-   the **volume-maximizing partial-fill** selection is a genuine **oblivious flow-LP** — poly-
-   time, real protocols exist (Aly–Van Vyve secure min-cost circulation; Toft secure simplex),
-   but the scale frontier.
+   is a **circulation** (a flow in the cycle space = ker ∂, a linear subspace); netting is a
+   **coequalizer**/quotient. The private part is **homomorphic linear algebra over the public
+   incidence matrix `A`** (cheap — use `A` directly, *not* a dense cycle basis; §3.3). Two
+   distinct claims, kept separate (correction, `FHEGG-CODEX-INSIGHTS.md` Q3): **verifying** a
+   *given* exact book conserves is a **free homomorphic conservation check** (`exact_clears_iff`,
+   T3) — but **selecting** the max-volume exact subset of all-or-nothing orders is
+   `max Σwᵢxᵢ s.t. Σxᵢaᵢ=0, xᵢ∈{0,1}`, a 0-1 balancing problem that encodes subset-sum /
+   set-packing and is **NP-hard**; a public topology does *not* remove the integrality. The
+   tractability comes specifically from the **`[0,1]` partial-fill RELAXATION**, a genuine
+   **oblivious flow-LP** — poly-time, real protocols exist (Aly–Van Vyve secure min-cost
+   circulation; Toft secure simplex), the scale frontier.
 6. **Honest feasibility:** single-pair uniform-price private clearing is **real-soon / already-
    real** at N≈10³, K≈10²–10³. The frontier is (a) large price resolution K (linear cost),
    (b) marginal pro-rata rationing at the exact clearing price, (c) private volume-maximizing
@@ -143,8 +147,13 @@ The clean structures the research surfaces (and that the fhEgg kernel is built o
   **financial-network clearing** (Eisenberg–Noe; *Clearing Sections of Lattice Liability
   Networks*, arXiv 2503.17836; *Computing Tarski Fixed Points in Financial Networks*, arXiv
   2602.16387). For a **single-pair** uniform-price auction the lattice collapses to a chain (one
-  price axis) and the fixpoint is the **single crossing** — a monotone threshold, the simplest
-  possible case.
+  price axis) and the crossing is a **monotone threshold**, the simplest possible case.
+  **Honest caveat (correction, `FHEGG-CODEX-INSIGHTS.md` Q2):** the crossing is *not* automatically
+  a Tarski fixpoint just because the curves `D, S` are monotone — monotone *curves* are not a
+  monotone *operator*. The fixpoint statement requires the explicit update
+  `F(j) = j if D(pⱼ) ≤ S(pⱼ) else min(j+1, K)`; `F` is monotone on the price-index chain, and `p*`
+  is its **least fixed point, assuming a crossing exists** (`∃ j. D(pⱼ) ≥ S(pⱼ)` — else the book
+  does not clear). With that operator named, Knaster–Tarski applies cleanly.
 - **Curves as commutative-monoid folds / CRDTs.** The aggregate demand/supply curve is the fold
   of per-order increments under an **associative, commutative** ⊕; order-independent mergeable
   increments are exactly the **CRDT / commutative-monoid (G-Counter)** shape — merge does not
@@ -153,7 +162,11 @@ The clean structures the research surfaces (and that the fhEgg kernel is built o
 - **Netting as a coequalizer; circulations as graph homology.** A multilateral net position is
   the **quotient of the gross flow by the cycle relations** — a coequalizer — and the space of
   conserving flows is the **cycle space = ker ∂** of the boundary map, a **linear subspace**
-  (graph homology H₁). This is the structure that de-fangs the multilateral case (§3.3).
+  (graph homology H₁). The homomorphic linear algebra should be carried out on the **public
+  incidence matrix `A`** (= ∂) **directly, not on an explicit cycle basis** (correction,
+  `FHEGG-CODEX-INSIGHTS.md` Q3): `A` is sparser and better-conditioned, a fundamental cycle basis
+  can be dense/ill-conditioned and enlarges the fixed-point bounds, and the traversal stays public
+  either way. This is the structure that de-fangs the multilateral case (§3.3).
 
 These are not decoration: each maps to a concrete dregg primitive that is **already proved**
 (§2.4). The private clearing *falls out* of the algebra the way ZK + coordination fall out of the
@@ -210,8 +223,10 @@ The uniform clearing price is the **crossing** of the two monotone curves:
 ```
 
 Because D is non-increasing in p and S is non-decreasing, `D − S` is monotone and the crossing is
-a **single threshold search over K buckets** — the Tarski fixpoint on the price *chain*. This is
-the **only** place a comparison happens, and it is **O(K)**, *independent of N*. It reveals **only
+a **single threshold search over K buckets** — the least fixed point of the monotone index-update
+`F(j) = j if D(pⱼ) ≤ S(pⱼ) else min(j+1, K)` on the price *chain*, assuming a crossing exists (the
+Tarski fixpoint is of *that operator*, not of the curves themselves — `FHEGG-CODEX-INSIGHTS.md` Q2).
+This is the **only** place a comparison happens, and it is **O(K)**, *independent of N*. It reveals **only
 p\*** (and, if desired, the cleared aggregate volume `V* = S(p*)`); the individual orders and the
 rest of the curve stay sealed.
 
@@ -336,8 +351,12 @@ transition."
 
 The pessimistic framing: multilateral cross-asset clearing (A wants B, B wants C, C wants A — a
 Top-Trading-Cycle) is **graph-matching**, and graph-matching *feels* NP / combinatorial, hence
-"not aggregation, needs its own throwaway machinery." **That framing is wrong**, and the right
-algebra brings the ring substantially into the fhEgg kernel.
+"not aggregation, needs its own throwaway machinery." **That framing is half-wrong**: the
+*conservation and linear-algebra core* is cheap homomorphic algebra over the public incidence `A`,
+and *verifying* a given clearing is free — but choosing the **optimal exact all-or-nothing subset**
+genuinely *is* NP-hard (integer selection; `FHEGG-CODEX-INSIGHTS.md` Q3), so the tractable engine is
+deliberately the continuous `[0,1]` partial-fill relaxation, not exact-subset optimization. With
+that distinction kept sharp, the right algebra brings the ring substantially into the fhEgg kernel.
 
 **The structure.** A multilateral clearing is a **circulation**: a flow `f` on the trade graph
 that **conserves at every node** (`∂f = 0`, in = out for every participant/asset). The space of
@@ -350,23 +369,33 @@ Flow LPs are **poly-time** (NOT NP-hard); network-flow is P.
 
 **Why this is (mostly) FHE-cheap.** The load-bearing facts:
 
-1. **The cycle basis is PUBLIC.** *Who can trade what* (the graph topology) is structural, not
-   secret — only the **flow amounts** on edges are private. So the incidence matrix `∂` and a
-   cycle basis `B` are public constants. Projecting onto `Z`, computing net positions
-   (`net = ∂f`), and verifying conservation (`∂f = 0`) are **homomorphic linear algebra over a
-   public matrix and private (committed) amounts** — i.e. **linear combinations of ciphertexts**,
-   the *bootstrap-free* primitive. Cheap, exactly like the §2 fold. This is Penumbra's homomorphic
-   sum generalized from a scalar to a **vector in the cycle space**.
-2. **For EXACT all-or-nothing intents the optimization vanishes.** dregg's kernel models orders as
-   exact intents (you get precisely your `wanted` or nothing — `ExactBook`). Then
-   **`exact_clears_iff`** proves a clearing exists **iff the pools balance**, and **`exact_alloc_eq`**
-   proves the allocation is **pinned** (everyone gets exactly their wanted). There is **no LP, no
-   search, no optimization** — clearing is a **pure homomorphic conservation check** over the
-   committed offers/wants (`Σ commit = commit Σ`, `= 0`). This is the ring **fully inside** the
-   fhEgg kernel: `shielded_ring_clears` already states it — *the ring clears over shielded notes
-   with nothing decrypted*. The current live path (`solver.rs`: Johnson cycles + Shapley–Scarf TTC)
-   is the **cleartext** finder; the private version is the homomorphic conservation check on the
-   found cycle's commitments.
+1. **The topology is PUBLIC — work on the incidence `A`, not a cycle basis.** *Who can trade what*
+   (the graph topology) is structural, not secret — only the **flow amounts** on edges are private.
+   So the incidence matrix `A = ∂` is a public constant. Computing net positions (`net = ∂f`) and
+   verifying conservation (`∂f = 0`) are **homomorphic linear algebra over a public matrix and
+   private (committed) amounts** — i.e. **linear combinations of ciphertexts**, the *bootstrap-free*
+   primitive. Cheap, exactly like the §2 fold. This is Penumbra's homomorphic sum generalized from a
+   scalar to a **vector**. **Use `A` directly, not an explicit (dense) cycle basis `B`** (correction,
+   `FHEGG-CODEX-INSIGHTS.md` Q3): `A` is sparse and well-conditioned; a fundamental cycle basis can
+   be dense and ill-conditioned, which enlarges the fixed-point/modulus bounds of the oblivious
+   solver — and the traversal is public with `A` alone. The earlier "lean on the public cycle basis"
+   framing is superseded here.
+2. **For a GIVEN exact all-or-nothing book, VERIFYING the clearing is free — but SELECTING the
+   optimal book is NP-hard.** dregg's kernel models orders as exact intents (you get precisely your
+   `wanted` or nothing — `ExactBook`). Then **`exact_clears_iff`** proves a clearing exists **iff the
+   pools balance**, and **`exact_alloc_eq`** proves the allocation is **pinned** (everyone gets
+   exactly their wanted). So *for a fixed proposed book* there is **no LP, no search** — checking
+   that it clears is a **pure homomorphic conservation check** over the committed offers/wants
+   (`Σ commit = commit Σ`, `= 0`). This is what `shielded_ring_clears` states — *a given ring clears
+   over shielded notes with nothing decrypted*. **The honest correction (`FHEGG-CODEX-INSIGHTS.md`
+   Q3):** *choosing* the max-volume exact **subset** of all-or-nothing orders is **not** free — it is
+   `max Σᵢ wᵢ xᵢ s.t. Σᵢ xᵢ aᵢ = 0, xᵢ ∈ {0,1}`, a 0-1 balancing problem that encodes subset-sum /
+   set-packing and is **NP-hard**. A public topology does *not* remove the integrality. So the "exact
+   intents ⇒ optimization vanishes" statement holds only for **verifying a fixed given book**, not
+   for **optimizing which orders to include**. The tractable *engine* is the **`[0,1]` partial-fill
+   relaxation** (below), whose LP is poly-time. The current live path (`solver.rs`: Johnson cycles +
+   Shapley–Scarf TTC) is the **cleartext** finder producing a candidate book; the private version is
+   the homomorphic conservation check on that book's commitments.
 
 **The residual hard core (named honestly).** When orders admit **partial fills** and the market
 **maximizes total volume** across many candidate cycles with binding box constraints, you are back
@@ -383,13 +412,16 @@ frontier:
 - **Interior-point**: **O(√n · log(1/ε))** iterations, each a secure linear solve — smoother
   round-count, fixed-point arithmetic.
 
-So the ring **is not hard the way it looked** — it is a poly-time flow LP whose *linear-algebra and
-conservation core is homomorphically cheap over a public basis*, and which **collapses to a free
-conservation check for exact intents**. The only genuinely-costly residue is **oblivious
-volume-maximizing partial-fill selection**, which is poly-time with real protocols but is the
-scale frontier (worst-case padding = the perf/leakage tax). **Verdict: the multilateral ring folds
-into the fhEgg kernel for exact intents (PROVED, `shielded_ring_clears`); the partial-fill
-volume-max case is a poly-time oblivious-LP frontier, not a combinatorial wall.**
+So the ring **is not hard the way it looked** — its *linear-algebra and conservation core is
+homomorphically cheap over the public incidence `A`*, and **verifying a given exact-intent book is a
+free conservation check** (`shielded_ring_clears`). But two hard cores remain, and they must not be
+conflated (`FHEGG-CODEX-INSIGHTS.md` Q3): (a) **selecting** the optimal exact all-or-nothing subset
+is **NP-hard** (0-1 balancing = subset-sum; integrality is not removed by a public topology); (b)
+the tractable continuous engine is **oblivious volume-maximizing partial-fill** over the `[0,1]`
+relaxation — a poly-time flow-LP with real protocols, but the scale frontier (worst-case padding =
+the perf/leakage tax). **Verdict: verifying an exact-intent ring folds into the fhEgg kernel (PROVED,
+`shielded_ring_clears`); optimal exact-subset selection is integer-hard; the tractable optimizer is
+the `[0,1]` partial-fill oblivious flow-LP — poly-time, the frontier, not a combinatorial wall.**
 
 ---
 
@@ -400,7 +432,8 @@ volume-max case is a poly-time oblivious-LP frontier, not a combinatorial wall.*
 | **Single-pair uniform-price call auction**, N ≈ 10³ orders, K ≈ 10²–10³ price buckets | **Real-soon / already-real.** Cost = O(N·K) bootstrap-free additions + O(K) crossing. | Penumbra runs additive aggregation **per block on mainnet**; Cryptobazaar **128×1024 < 0.5 s**; Zama shipped a live homomorphic clearing-price auction (2025). |
 | **Fine price resolution** (large K) | **Linear cost wall.** K is the true cost driver, not N. | O(N·K) additions + O(K) crossing scale linearly in K; pick K to the asset's tick, use SIMD packing / a coarse→fine two-pass crossing. |
 | **Marginal pro-rata rationing** at the exact clearing bucket | **One extra private step (NEAR).** | The crossing gives p\* and V\* cheaply; splitting the over-subscribed marginal bucket needs a small private division, or reveal only the *marginal-bucket* aggregate. Honest named seam. |
-| **Multilateral ring, exact all-or-nothing intents** | **Tractable, PROVED at spec.** Pure homomorphic conservation check, no LP. | `exact_clears_iff` + `exact_alloc_eq` + `shielded_ring_clears`; conservation on commitments (`created_value_conservation`). |
+| **Multilateral ring, exact all-or-nothing intents — VERIFYING a given book** | **Tractable, PROVED at spec.** Pure homomorphic conservation check, no LP. | `exact_clears_iff` + `exact_alloc_eq` + `shielded_ring_clears`; conservation on commitments (`created_value_conservation`). |
+| **Multilateral ring, exact all-or-nothing — SELECTING the optimal (max-volume) subset** | **NP-hard.** 0-1 balancing `max Σwᵢxᵢ s.t. Σxᵢaᵢ=0, xᵢ∈{0,1}` = subset-sum / set-packing; a public topology does not remove integrality. | Correction, `FHEGG-CODEX-INSIGHTS.md` Q3. The tractable path is the `[0,1]` relaxation (next row), not exact-subset optimization. |
 | **Multilateral ring, partial-fill volume-max, private, at scale** | **RESEARCH frontier — poly-time, not exponential.** | Oblivious flow-LP (Aly–Van Vyve secure MCC; Toft secure simplex O(nm)/pivot; interior-point O(√n log 1/ε)); worst-case pivot padding is the tax. Small rings clear in clear today (`solver.rs`). |
 | **Continuous CLOB** (live matching, cancels, price-time across a live book) | **Out of scope by construction.** | Inherently order-dependent → not an aggregation. DrEX is a **frequent-batch** auction by design (Budish FBA); this is a feature (kills latency-arb), stated plainly. |
 | **Post-quantum aggregate layer** | **Named residual.** | Today's `ValueCommitment` (Pedersen) and Penumbra-style ElGamal are **classical DLog**. A PQ fold needs **lattice-additive** commitments/ciphertexts (BGV/Regev-additive). dregg's *signature* layer is already PQ-hybrid (ed25519 + ML-DSA-65); the *homomorphic* layer is the open PQ upgrade. |
@@ -433,8 +466,11 @@ that reveals only the price). The sharpening the research forced:
    nothing*: conserve on commitments (`Σ commit = commit Σ`), open only p\*. This removes the
    decryption committee that even Penumbra keeps — the field's best privacy, improved.
 3. **The multilateral ring is not a different, harder kernel — it is the same kernel over the
-   cycle space.** Circulation = ker ∂ (linear, public basis); netting = coequalizer; exact intents
-   → free conservation check; only partial-fill volume-max is a poly-time oblivious-LP residue.
+   cycle space.** Circulation = ker ∂ (linear; work on the public incidence `A`, not a dense cycle
+   basis); netting = coequalizer; *verifying* a given exact-intent book is a free conservation
+   check — but *selecting* the optimal exact subset is NP-hard (0-1 balancing), so the tractable
+   optimizer is the `[0,1]` partial-fill relaxation, a poly-time oblivious-LP residue
+   (`FHEGG-CODEX-INSIGHTS.md` Q3).
 
 **Is there a better kernel?** No cleaner one surfaced. The alternatives are strictly worse or
 narrower: general-comparison **FHE sorting** (the O(N log²N)-bootstrap trap the kernel exists to
