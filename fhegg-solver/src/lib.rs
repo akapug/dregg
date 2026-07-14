@@ -23,6 +23,7 @@
 //! checker validates (translation validation for convex optimization). The
 //! solver's job is to produce a small-gap certificate FAST; the checker decides.
 
+pub mod air;
 pub mod cert;
 pub mod clearing;
 pub mod gpu;

@@ -8,6 +8,7 @@
 //!
 //! Usage: `cargo run --release --bin fhegg-bench`
 
+use fhegg_solver::air::ConstraintSystem;
 use fhegg_solver::cert::CertF;
 use fhegg_solver::clearing::{allocate, clear, crossing, scan_curves, Order, Side};
 use fhegg_solver::gpu::GpuContext;
@@ -420,6 +421,33 @@ fn demonstrate_certificate() {
         "  --- Cert-F JSON (head) ---\n{head}\n  ... ({} bytes total)",
         json.len()
     );
+
+    // Milestone 4: emit the check as AIR/circuit constraints (the STARK bridge).
+    let sys = ConstraintSystem::emit(&cert);
+    let air = sys.evaluate(&cert, 1e-7);
+    println!("\n  --- Cert-F as AIR constraints (STARK/Lean bridge) ---");
+    println!(
+        "    emitted {} constraints, {} terms (O(m + nnz A)) over {} witness cells",
+        air.n_constraints, air.n_terms, sys.n_vars
+    );
+    println!("    labels: conservation(==0) · box_lower/upper(≥0) · slack_sign(≥0) · dual_feas(≥0) · duality_gap(≤ε)");
+    println!(
+        "    emitted system accepts the certificate: {}",
+        air.satisfied()
+    );
+    // Show the AIR scales to a larger LP (the O(m+nnz A) count in action).
+    let big = gen_graph(1024, 16384 - 1024, 0xA1F);
+    let (bex, _) = solve_cpu_exact(&big, 4000);
+    let bcert = CertF::from_solution(&big, &bex.f, &bex.y, 0.5);
+    let bsys = ConstraintSystem::emit(&bcert);
+    let bair = bsys.evaluate(&bcert, 1e-6);
+    println!(
+        "    m=16384 LP: {} constraints, {} terms, accepts={} (the STARK ingests THIS,",
+        bair.n_constraints,
+        bair.n_terms,
+        bair.satisfied()
+    );
+    println!("      never the T iterations — untrusted search, checked certificate).");
 }
 
 fn main() {
