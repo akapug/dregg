@@ -81,8 +81,8 @@ jobs:
           set -euo pipefail
           if [ ! -d ../plonky3-recursion/.git ]; then
             git clone --no-checkout https://github.com/emberian/plonky3-recursion ../plonky3-recursion
-            git -C ../plonky3-recursion fetch --depth 1 origin 993efecd724261fff3fd894c06cc2525b5532e28
-            git -C ../plonky3-recursion checkout 993efecd724261fff3fd894c06cc2525b5532e28
+            git -C ../plonky3-recursion fetch --depth 1 origin 0a4a554e144f4e60107555ea7a11cd9969d6208b
+            git -C ../plonky3-recursion checkout 0a4a554e144f4e60107555ea7a11cd9969d6208b
           fi
       - name: Build the WebImage cockpit wasm (starbridge-v2/web, default features)
         run: wasm-pack build starbridge-v2/web --target web --out-dir pkg --release
@@ -113,8 +113,8 @@ jobs:
           set -euo pipefail
           if [ ! -d ../plonky3-recursion/.git ]; then
             git clone --no-checkout https://github.com/emberian/plonky3-recursion ../plonky3-recursion
-            git -C ../plonky3-recursion fetch --depth 1 origin 993efecd724261fff3fd894c06cc2525b5532e28
-            git -C ../plonky3-recursion checkout 993efecd724261fff3fd894c06cc2525b5532e28
+            git -C ../plonky3-recursion fetch --depth 1 origin 0a4a554e144f4e60107555ea7a11cd9969d6208b
+            git -C ../plonky3-recursion checkout 0a4a554e144f4e60107555ea7a11cd9969d6208b
           fi
       - name: Build the full gpui-web cockpit wasm (starbridge-v2/web --features gpui-web)
         run: wasm-pack build starbridge-v2/web --target web --out-dir pkg-gpui --release -- --features gpui-web
@@ -145,8 +145,8 @@ jobs:
           set -euo pipefail
           if [ ! -d ../plonky3-recursion/.git ]; then
             git clone --no-checkout https://github.com/emberian/plonky3-recursion ../plonky3-recursion
-            git -C ../plonky3-recursion fetch --depth 1 origin 993efecd724261fff3fd894c06cc2525b5532e28
-            git -C ../plonky3-recursion checkout 993efecd724261fff3fd894c06cc2525b5532e28
+            git -C ../plonky3-recursion fetch --depth 1 origin 0a4a554e144f4e60107555ea7a11cd9969d6208b
+            git -C ../plonky3-recursion checkout 0a4a554e144f4e60107555ea7a11cd9969d6208b
           fi
       - name: Build the card-world wasm (wasm/) with the light-client stack headroom
         run: RUSTFLAGS="-C link-arg=-zstack-size=33554432" wasm-pack build wasm --target web --out-dir pkg --release
