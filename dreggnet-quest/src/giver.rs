@@ -420,319 +420,217 @@ impl QuestGiverWorld {
     }
 }
 
-// ── The FACTION-gated quest-giver: the giver opens on real FACTION STANDING ─────────
+// ── The FACTION-gated quest-giver: the giver opens on the REAL faction cell ─────────
 //
-// The reconciliation the saga names: point the giver's cross-cell `ObservedFieldEquals`
-// at the FACTION rep cell's `ember_quest` slot, so the quest-giver's start cell opens
-// ONLY when faction standing clears — not on a separate quest flag. The SAME machinery as
-// [`QuestGiverWorld`] (the peer cell + the finalized-root cross-cell gate); only the
-// SOURCE cell changes from the quest-reward cell to a faction-standing cell that mirrors
-// [`dreggnet_faction`]'s `ember_quest` unlock (a `Monotonic` rep ratchet + a
-// `FieldGte(rep_embers, REP_THRESHOLD)`-gated `WriteOnce(ember_quest)`), re-homed onto the
-// shared [`EmbeddedExecutor`] ledger exactly as [`quest_program`] re-homes the quest teeth.
-// The rep bar is faction's REAL [`dreggnet_faction::REP_THRESHOLD`] — the thin faction hook.
+// The reconciliation the saga names: the quest-giver's start opens ONLY when the player's
+// standing with the Embers clears the faction threshold — read off dreggnet-faction's REAL
+// committed faction cell through its CANONICAL SHARED READER
+// ([`dreggnet_faction::standing::read_standing`] / [`FactionStanding::content_available`]),
+// NOT a locally re-authored mirror. The standing is itself kernel-enforced, un-fakeable
+// committed cell state on dreggnet-faction's own [`WorldCell`]: a `Monotonic` `rep_embers`
+// ratchet (standing is never un-earned), a `FieldGte(rep_embers, `[`REP_THRESHOLD`]`)`-gated
+// `WriteOnce(embers_quest)` trial, and a `WriteOnce(embers_betrayed)` betrayal seal. The
+// giver consumes that standing as its gate, with every slot resolved BY NAME
+// (`rep_embers` / `embers_quest` / `embers_betrayed`, via the roster's `rep_var` etc.), so
+// the gate can never be pointed at the wrong slot — the SILENT-INVERSION hazard a hardcoded
+// index carries (alphabetical slot 1 is `embers_quest`, slot 2 `embers_betrayed`, not `rep`)
+// is structurally excluded.
+//
+// ## Honest scope — where the un-fakeability lives
+//
+// dreggnet-faction's [`WorldCell`] encapsulates its own executor, so the giver cannot pin an
+// in-executor cross-cell [`ObservedFieldEquals`](dregg_app_framework::StateConstraint::ObservedFieldEquals)
+// against it (that needs both cells on ONE ledger, which the `WorldCell` boundary precludes).
+// The gate is therefore a HOST read of the real committed faction cell via the canonical
+// reader — but the standing it reads is un-fakeable KERNEL state: you cannot reach
+// `rep_embers >= REP_THRESHOLD` without real `Monotonic`-ratcheted pledge turns the faction
+// executor admits, and a betrayal permanently seals the content. This is exactly the consumer
+// pattern [`dreggnet_faction::standing`] was built for (its doc names `dreggnet-quest` as the
+// gap this closes) — the giver reads GENUINE standing, never a self-reported flag and never a
+// re-guessed slot. The previous cross-cell predicate gated at the kernel but against a
+// FABRICATED faction cell; this gates on the REAL one.
 
-use dreggnet_faction::REP_THRESHOLD;
+use dreggnet_faction::standing::read_standing;
+use dreggnet_faction::{
+    FactionDef, FactionLines, FactionStanding, REP_THRESHOLD, ROOM_HALL as FACTION_HALL, Roster,
+};
+use spween::{Choice, Scene};
+use spween_dregg::WorldCell;
 
-/// The faction-standing cell's `rep_embers` slot — raised by a pledge, `Monotonic` (rep is
-/// never un-earned), exactly [`dreggnet_faction`]'s ratchet.
-const FACTION_REP_SLOT: u8 = 1;
-/// The faction-standing cell's `ember_quest` slot — the standing marker the giver reads
-/// cross-cell. Set to `1` by the Ember trial, gated on committed rep; mirrors
-/// [`dreggnet_faction`]'s `WriteOnce` `ember_quest` unlock.
-pub const FACTION_EMBER_QUEST_SLOT: u8 = 2;
-/// The value the `ember_quest` slot lands at once the trial clears (faction standing earned).
+/// The value the giver's `granted` slot lands at once the quest-start opens — the
+/// content-availability marker (kept as the public marker the composing crates read).
 pub const EMBER_QUEST_VALUE: u64 = 1;
 
-/// A stable faction-standing cell seed (distinct from the quest / quest-giver seeds).
+/// The Embers' stable roster key — the faction whose standing gates the Descent quest-start.
+/// Names the slot family (`rep_embers`, `embers_quest`, `embers_betrayed`) the reader resolves.
+const FACTION_KEY: &str = "embers";
+/// A fixed seed for the deterministic faction world (re-deploy reproduces identity + hashes).
 const FACTION_SEED: u8 = 0x73;
-/// The faction-gated giver cell seed (distinct from the quest-gated giver's).
+/// The giver cell seed (distinct from the quest / quest-giver seeds).
 const FGIVER_SEED: u8 = 0x74;
 
-/// The method a pledge presents (raises `rep_embers`).
-fn faction_pledge_method() -> String {
-    "faction/pledge".to_string()
-}
-/// The method the Ember trial presents (sets `ember_quest`, gated on committed rep).
-fn faction_trial_method() -> String {
-    "faction/trial".to_string()
-}
-
-/// **The faction-standing cell's program** — [`dreggnet_faction`]'s `ember_quest` unlock
-/// teeth, authored directly (the [`quest_program`] re-homing pattern) so the cell can live
-/// on the shared executor ledger alongside the giver: a `Monotonic` pledge on `rep_embers`
-/// and a `FieldGte(rep_embers, `[`REP_THRESHOLD`]`)`-gated `WriteOnce(ember_quest)` trial.
-fn faction_standing_program() -> CellProgram {
-    let pledge = TransitionCase {
-        guard: TransitionGuard::MethodIs {
-            method: symbol(&faction_pledge_method()),
-        },
-        constraints: vec![StateConstraint::Monotonic {
-            index: FACTION_REP_SLOT,
-        }],
-    };
-    let trial_gate = vec![
-        // The REAL faction standing bar — the giver opens only above it.
-        StateConstraint::FieldGte {
-            index: FACTION_REP_SLOT,
-            value: field_from_u64(REP_THRESHOLD),
-        },
-        StateConstraint::WriteOnce {
-            index: FACTION_EMBER_QUEST_SLOT,
-        },
-        StateConstraint::FieldEquals {
-            index: FACTION_EMBER_QUEST_SLOT,
-            value: field_from_u64(EMBER_QUEST_VALUE),
-        },
-    ];
-    let trial = TransitionCase {
-        guard: TransitionGuard::MethodIs {
-            method: symbol(&faction_trial_method()),
-        },
-        constraints: trial_gate.clone(),
-    };
-    // THE SLOT-BOUND STANDING GATE — the tooth that makes the rep bar real.
-    //
-    // The `trial` `MethodIs` case gates only turns that PRESENT the trial method. But the executor
-    // is open: a client can staple `SetField(ember_quest, 1)` onto a legitimate `pledge` turn, where
-    // no `trial` case matches and (`ember_quest` still zero) the standing bar is never checked — the
-    // trial reward lands with `rep == 0`. `SlotChanged{ember_quest}` binds the rep bar to the WRITE.
-    let ember_quest_gate = TransitionCase {
-        guard: TransitionGuard::SlotChanged {
-            index: FACTION_EMBER_QUEST_SLOT,
-        },
-        constraints: trial_gate,
-    };
-    // THE SLOT-BOUND REP GATE — the tooth that makes standing EARNED, not minted.
-    //
-    // The `pledge` case carries only `Monotonic{rep}`, which admits a jump 0 -> REP_THRESHOLD in a
-    // SINGLE pledge (defeating the grind the standing bar assumes), and rep is unbounded on any
-    // other method too. `SlotChanged{rep}` binds a `+1` step to EVERY rep change, so standing can
-    // only be accrued one pledge at a time whoever authored the turn. (`earn_faction_standing`
-    // pledges +1 at a time, so the legitimate path is untouched.)
-    let rep_gate = TransitionCase {
-        guard: TransitionGuard::SlotChanged {
-            index: FACTION_REP_SLOT,
-        },
-        constraints: vec![StateConstraint::FieldDelta {
-            index: FACTION_REP_SLOT,
-            delta: field_from_u64(1),
-        }],
-    };
-    CellProgram::Cases(vec![pledge, trial, ember_quest_gate, rep_gate])
-}
-
-/// Assemble the faction-standing + giver two-cell world on a fresh executor. `grant_root`
-/// installs the giver's cross-cell gate at that finalized faction-standing root; `None`
-/// leaves the giver ungated (the dry-run that computes the root).
-fn assemble_faction_gated(
-    grant_root: Option<[u8; 32]>,
-) -> (EmbeddedExecutor, AppCipherclerk, CellId, CellId) {
+/// Assemble the giver-only executor: one open giver cell whose `granted` write is a real
+/// committed turn (the FACTION gate is the host `content_available()` read, documented above —
+/// the giver cell itself is ungated at the executor, so the standing read is the sole gate).
+fn assemble_giver_only() -> (EmbeddedExecutor, AppCipherclerk, CellId) {
     let cclerk = AppCipherclerk::new(AgentCipherclerk::from_seed(DRIVER_SEED), FEDERATION);
     let exec = EmbeddedExecutor::new(&cclerk, "default");
     let driver = cclerk.cell_id();
 
-    let faction = world_cell(FACTION_SEED, faction_standing_program());
-    let faction_id = faction.id();
-
-    let giver_program = match grant_root {
-        Some(at_root) => CellProgram::Predicate(vec![StateConstraint::ObservedFieldEquals {
-            local_field: GRANTED_SLOT,
-            source_cell: *faction_id.as_bytes(),
-            source_field: FACTION_EMBER_QUEST_SLOT,
-            at_root,
-            proof_witness_index: 0,
-        }]),
-        None => CellProgram::None,
-    };
-    let giver = world_cell(FGIVER_SEED, giver_program);
+    let giver = world_cell(FGIVER_SEED, CellProgram::None);
     let giver_id = giver.id();
-
-    exec.ensure_cell(faction).expect("faction cell inserts");
     exec.ensure_cell(giver).expect("giver cell inserts");
 
     exec.with_ledger_mut(|ledger| {
         if let Some(agent) = ledger.get_mut(&driver) {
-            agent.capabilities.grant(faction_id, AuthRequired::None);
             agent.capabilities.grant(giver_id, AuthRequired::None);
         }
     });
 
-    (exec, cclerk, faction_id, giver_id)
+    (exec, cclerk, giver_id)
 }
 
-/// Drive the faction-standing cell to EARN Ember standing on `exec`: pledge to the
-/// [`REP_THRESHOLD`] (each a `Monotonic` `+1`) then undertake the trial (`ember_quest = 1`,
-/// gated on the committed rep). The exact sequence the dry-run and the real world share, so
-/// the faction cell reaches the byte-identical post-trial commitment in both.
-fn earn_faction_standing(exec: &EmbeddedExecutor, cclerk: &AppCipherclerk, faction: CellId) {
-    for _ in 0..REP_THRESHOLD {
-        let rep = read_slot(exec, faction, FACTION_REP_SLOT as usize);
-        issue(
-            exec,
-            cclerk,
-            faction,
-            &faction_pledge_method(),
-            vec![set_field(
-                faction,
-                FACTION_REP_SLOT as usize,
-                field_from_u64(rep + 1),
-            )],
-            vec![],
-        )
-        .unwrap_or_else(|e| panic!("a faction pledge commits: {e}"));
-    }
-    issue(
-        exec,
-        cclerk,
-        faction,
-        &faction_trial_method(),
-        vec![set_field(
-            faction,
-            FACTION_EMBER_QUEST_SLOT as usize,
-            field_from_u64(EMBER_QUEST_VALUE),
-        )],
-        vec![],
-    )
-    .expect("the Ember trial commits once rep clears the threshold");
-}
-
-/// Compute the faction-standing cell's **post-trial finalized commitment** — the peer root
-/// the giver's cross-cell gate pins. A throwaway world earns standing and reads the
-/// resulting committed state commitment; the real world reaches the byte-identical root
-/// after the same earning sequence.
-fn finalized_standing_root() -> [u8; 32] {
-    let (exec, cclerk, faction, _giver) = assemble_faction_gated(None);
-    earn_faction_standing(&exec, &cclerk, faction);
-    exec.with_ledger_mut(|ledger| {
-        ledger
-            .get(&faction)
-            .expect("faction present after the trial")
-            .state_commitment()
-    })
-}
-
-/// A live two-cell **faction-gated quest-giver** world: the shared executor ledger, a
-/// faction-standing cell + the giver cell, and the finalized standing root the giver's
-/// cross-cell grant pins. The giver's start opens ONLY once real faction standing clears.
+/// A live **faction-gated quest-giver** world: the REAL dreggnet-faction cell (its standing
+/// kernel-enforced) + a giver cell whose grant opens ONLY once the player's Ember standing is
+/// available, read off the real cell via the canonical shared reader (every slot by NAME).
 pub struct FactionGatedGiverWorld {
+    /// The REAL dreggnet-faction cell — `rep_embers` / `embers_quest` / `embers_betrayed` are
+    /// kernel-enforced committed state here; the player earns standing through faction's own
+    /// pledge/trial flow ([`Self::pledge`] / [`Self::undertake_trial`]).
+    faction: WorldCell,
+    /// The canonical Ashenmoor roster (names, threshold, the `rep_var`/`quest_var` slot naming
+    /// the reader resolves by).
+    roster: Roster,
+    /// The generated faction scene — to name a [`Choice`] when driving a real faction turn.
+    scene: Scene,
+    /// The giver cell's executor (its `granted` write is a real committed turn).
     exec: EmbeddedExecutor,
     cclerk: AppCipherclerk,
-    faction: CellId,
     giver: CellId,
-    grant_root: [u8; 32],
 }
 
 impl FactionGatedGiverWorld {
-    /// Deploy the world: the faction-standing cell + the giver, with the giver's cross-cell
-    /// grant pinned at the faction cell's post-trial finalized commitment.
+    /// Deploy the world: the REAL faction cell (deterministic in [`FACTION_SEED`]) + the giver
+    /// cell. The faction begins unaligned (rep 0), so the quest-start is deployed CLOSED.
     pub fn deploy() -> FactionGatedGiverWorld {
-        let grant_root = finalized_standing_root();
-        let (exec, cclerk, faction, giver) = assemble_faction_gated(Some(grant_root));
+        let roster = Roster::ashenmoor();
+        let faction = roster.deploy(FACTION_SEED);
+        let scene = roster.scene();
+        let (exec, cclerk, giver) = assemble_giver_only();
         FactionGatedGiverWorld {
+            faction,
+            roster,
+            scene,
             exec,
             cclerk,
-            faction,
             giver,
-            grant_root,
         }
     }
 
-    /// The faction-standing cell id.
-    pub fn faction(&self) -> CellId {
-        self.faction
+    /// The Embers' [`FactionDef`] (its threshold + slot naming) — the reader's coordinate.
+    fn def(&self) -> &FactionDef {
+        self.roster
+            .faction(FACTION_KEY)
+            .expect("the Embers are in the Ashenmoor roster")
+    }
+    /// The Embers' hall line block (pledge / trial / betray … indices).
+    fn lines(&self) -> FactionLines {
+        self.roster.lines(FACTION_KEY)
+    }
+    /// Name a `Choice` in the faction hall for a direct-executor turn.
+    fn faction_choice(&self, index: usize) -> Choice {
+        dungeon_on_dregg::choice_at(&self.scene, FACTION_HALL, index)
+    }
+
+    /// **The player's REAL Ember standing**, read off the committed faction cell through
+    /// dreggnet-faction's canonical shared reader — every slot resolved BY NAME (`rep_embers`,
+    /// `embers_quest`, `embers_betrayed`). The typed projection the gate reads.
+    pub fn standing(&self) -> FactionStanding {
+        read_standing(&self.faction, self.def())
+    }
+
+    /// The faction cell id.
+    pub fn faction_cell(&self) -> CellId {
+        self.faction.cell_id()
     }
     /// The quest-giver's grant cell id.
     pub fn giver(&self) -> CellId {
         self.giver
     }
-    /// The finalized faction-standing root the giver's cross-cell grant pins.
-    pub fn grant_root(&self) -> [u8; 32] {
-        self.grant_root
-    }
-    /// Read a cell's slot off the committed ledger.
+    /// Read the giver cell's committed slot off the ledger (the composing crates read
+    /// `read(giver(), GRANTED_SLOT)` to observe whether the quest-start has opened).
     pub fn read(&self, cell: CellId, slot: usize) -> u64 {
         read_slot(&self.exec, cell, slot)
     }
-    /// The faction cell's live committed state commitment (its finalized root right now).
-    pub fn faction_root(&self) -> [u8; 32] {
-        self.exec
-            .with_ledger_mut(|l| l.get(&self.faction).map(|c| c.state_commitment()))
-            .unwrap_or([0u8; 32])
+
+    /// Drive ONE real Ember pledge on the faction cell (`rep_embers += 1`, `Monotonic`). Below
+    /// the threshold the content is not yet available — the non-vacuous refusal leg.
+    pub fn pledge(&self) -> Result<(), String> {
+        let ln = self.lines().pledge;
+        self.faction
+            .apply_choice(FACTION_HALL, ln, &self.faction_choice(ln))
+            .map(|_| ())
+            .map_err(|e| e.to_string())
     }
 
-    /// Drive ONE faction pledge (`rep_embers += 1`, `Monotonic`). Below the threshold the
-    /// standing is not yet earned — for the non-vacuous "the giver is refused before standing
-    /// clears" leg.
-    pub fn pledge(&self) -> Result<TurnReceipt, String> {
-        let rep = self.read(self.faction, FACTION_REP_SLOT as usize);
-        issue(
-            &self.exec,
-            &self.cclerk,
-            self.faction,
-            &faction_pledge_method(),
-            vec![set_field(
-                self.faction,
-                FACTION_REP_SLOT as usize,
-                field_from_u64(rep + 1),
-            )],
-            vec![],
-        )
+    /// Attempt the real Ember trial (`embers_quest = 1`) — gated `FieldGte(rep_embers,
+    /// REP_THRESHOLD)` on the faction cell. Refused below the threshold, commits once it clears.
+    pub fn undertake_trial(&self) -> Result<(), String> {
+        let ln = self.lines().trial;
+        self.faction
+            .apply_choice(FACTION_HALL, ln, &self.faction_choice(ln))
+            .map(|_| ())
+            .map_err(|e| e.to_string())
     }
 
-    /// Attempt the Ember trial (`ember_quest = 1`) — gated `FieldGte(rep_embers,
-    /// REP_THRESHOLD)`. Refused below the standing threshold (real committed rep), commits
-    /// once it clears.
-    pub fn undertake_trial(&self) -> Result<TurnReceipt, String> {
-        issue(
-            &self.exec,
-            &self.cclerk,
-            self.faction,
-            &faction_trial_method(),
-            vec![set_field(
-                self.faction,
-                FACTION_EMBER_QUEST_SLOT as usize,
-                field_from_u64(EMBER_QUEST_VALUE),
-            )],
-            vec![],
-        )
+    /// Betray the Embers (`embers_betrayed = 1`, a `WriteOnce` seal on the faction cell) — for
+    /// the anti-inversion leg: a betrayer's standing is NOT available whatever the flag's slot.
+    pub fn betray(&self) -> Result<(), String> {
+        let ln = self.lines().betray;
+        self.faction
+            .apply_choice(FACTION_HALL, ln, &self.faction_choice(ln))
+            .map(|_| ())
+            .map_err(|e| e.to_string())
     }
 
-    /// Earn faction standing all the way to the finalized root (pledge to the threshold, then
-    /// the trial). After this the faction cell is AT [`Self::grant_root`] and the giver can open.
+    /// Earn Ember standing to the threshold on the REAL faction cell: pledge [`REP_THRESHOLD`]
+    /// times (each a `Monotonic` `+1`) then undertake the trial. After this the content is
+    /// available and the giver can open.
     pub fn earn_standing(&self) {
-        earn_faction_standing(&self.exec, &self.cclerk, self.faction);
+        for _ in 0..REP_THRESHOLD {
+            self.pledge().expect("a real Ember pledge commits");
+        }
+        self.undertake_trial()
+            .expect("the Ember trial commits once rep clears the threshold");
     }
 
-    /// Attempt the quest-giver's grant — the CROSS-CELL gated action reading the FACTION
-    /// cell's `ember_quest`. Writes `grant_value` into the giver's `granted` slot, carrying
-    /// the witness iff `with_witness`. The executor admits IFF the faction cell is AT the
-    /// standing root (real standing earned) AND `grant_value == faction.ember_quest` AND the
-    /// witness is present.
-    pub fn grant(
-        &self,
-        grant_value: FieldElement,
-        with_witness: bool,
-    ) -> Result<TurnReceipt, String> {
-        let blobs = if with_witness {
-            vec![peer_finalized_witness(self.grant_root)]
-        } else {
-            vec![]
-        };
+    /// **THE FACTION GATE** — the quest-giver opens the Descent-quest start IFF the player's REAL
+    /// Ember standing is available ([`FactionStanding::content_available`] = `rep_embers >=
+    /// REP_THRESHOLD` AND never betrayed), read off the committed faction cell via the canonical
+    /// reader. When it opens the giver commits a real `granted` write; when it is closed the
+    /// grant fails and nothing commits (anti-ghost).
+    pub fn grant(&self, grant_value: FieldElement) -> Result<TurnReceipt, String> {
+        let standing = self.standing();
+        if !standing.content_available() {
+            return Err(format!(
+                "the quest-start is refused: Ember standing not available (rep {} < {}, betrayed {})",
+                standing.rep, standing.threshold, standing.betrayed
+            ));
+        }
         issue(
             &self.exec,
             &self.cclerk,
             self.giver,
             &grant_method(),
             vec![set_field(self.giver, GRANTED_SLOT as usize, grant_value)],
-            blobs,
+            vec![],
         )
     }
 
-    /// The HONEST grant: value == the faction cell's `ember_quest` (`1`), witness attached —
-    /// what commits once real faction standing is earned.
+    /// The HONEST grant: value == the faction content-availability marker (`1`) — what commits
+    /// once real Ember standing is earned.
     pub fn grant_honest(&self) -> Result<TurnReceipt, String> {
-        self.grant(field_from_u64(EMBER_QUEST_VALUE), true)
+        self.grant(field_from_u64(EMBER_QUEST_VALUE))
     }
 }
 
@@ -870,115 +768,170 @@ mod tests {
         );
     }
 
-    // ── The FACTION-GATED giver: the quest-giver opens on real faction standing ──
+    // ── The FACTION-GATED giver: opens on the REAL, name-resolved Ember standing ──
 
-    /// The faction-gated giver's grant is a REAL cross-cell predicate reading the FACTION
-    /// standing cell's `ember_quest` slot at the finalized standing root — proof the giver
-    /// gates on faction standing, not a self-reported quest flag.
+    /// THE FACTION -> QUEST GATE, threshold both ways (non-vacuous, resolved BY NAME): a player
+    /// BELOW the rep threshold is REFUSED the quest-start; a player who earns REAL Ember rep to
+    /// the threshold — through dreggnet-faction's OWN pledge flow, a `Monotonic`-ratcheted turn
+    /// the faction executor admits — is GRANTED it. The standing is asserted off the real faction
+    /// cell via [`read_standing`], every slot resolved by name (no hardcoded index, no mirror).
     #[test]
-    fn faction_gated_grant_reads_the_faction_ember_quest_slot() {
+    fn faction_gate_opens_only_at_real_rep_threshold() {
         let world = FactionGatedGiverWorld::deploy();
-        let program = world
-            .exec
-            .with_ledger_mut(|l| l.get(&world.giver).map(|c| c.program.clone()))
-            .expect("giver cell present");
-        let CellProgram::Predicate(constraints) = program else {
-            panic!(
-                "the faction-gated giver's program is a Predicate carrying the cross-cell grant"
-            );
-        };
-        let found = constraints.iter().any(|c| {
-            matches!(
-                c,
-                StateConstraint::ObservedFieldEquals { source_cell, source_field, at_root, .. }
-                    if *source_cell == *world.faction.as_bytes()
-                        && *source_field == FACTION_EMBER_QUEST_SLOT
-                        && *at_root == world.grant_root()
-            )
-        });
-        assert!(
-            found,
-            "the giver gates on the FACTION cell's ember_quest at the finalized standing root; got {constraints:?}"
-        );
-        assert_ne!(
-            world.faction(),
-            world.giver(),
-            "two genuinely distinct cells"
-        );
-    }
 
-    /// THE FACTION -> QUEST GATE, refusal leg: a NO-REP player's quest-start is refused. The
-    /// faction cell's `ember_quest` is unset (standing not earned), so its live commitment is
-    /// not the standing root ⇒ the cross-cell authority has no binding ⇒ the giver grant fails
-    /// closed. Non-vacuous strengthener: a SINGLE pledge (below the threshold) leaves the
-    /// trial itself refused, so the giver is STILL closed — it opens only on REAL standing.
-    #[test]
-    fn faction_gated_grant_refused_without_standing() {
-        let world = FactionGatedGiverWorld::deploy();
-        assert_eq!(
-            world.read(world.faction(), FACTION_EMBER_QUEST_SLOT as usize),
-            0,
-            "no standing yet"
-        );
-
-        let refused = world.grant_honest();
+        // Fresh: rep 0 (read off the real cell by name), nothing available.
+        assert_eq!(world.standing().rep, 0, "you arrive unaffiliated");
+        assert!(!world.standing().content_available(), "no standing yet");
         assert!(
-            refused.is_err(),
-            "a no-rep player's quest-start must be refused, got {refused:?}"
+            world.grant_honest().is_err(),
+            "a no-rep player's quest-start is refused"
         );
         assert_eq!(
             world.read(world.giver(), GRANTED_SLOT as usize),
             0,
-            "anti-ghost: the giver granted nothing"
+            "anti-ghost: nothing granted"
         );
 
-        // One pledge is below REP_THRESHOLD: the trial is refused (rep too low), ember_quest
-        // stays 0, and the giver remains closed — genuine standing, not a lone gesture.
-        world.pledge().expect("a first pledge commits");
-        let trial = world.undertake_trial();
-        assert!(
-            trial.is_err(),
-            "the Ember trial is refused below the rep threshold, got {trial:?}"
-        );
+        // One real pledge — rep 1, still BELOW REP_THRESHOLD (2): still refused.
+        world.pledge().expect("a real Ember pledge commits");
         assert_eq!(
-            world.read(world.faction(), FACTION_EMBER_QUEST_SLOT as usize),
-            0,
-            "still no standing"
+            world.standing().rep,
+            1,
+            "rep_embers read by name off the real cell"
         );
         assert!(
             world.grant_honest().is_err(),
-            "the giver is still closed below real standing"
-        );
-    }
-
-    /// THE FACTION -> QUEST GATE, commit leg: EARN faction standing (pledge to the threshold,
-    /// undertake the trial — real committed turns on the faction cell), then the quest-giver's
-    /// grant COMMITS. Its admission read the PEER faction cell's `ember_quest` — the
-    /// quest-start opened on genuine faction standing.
-    #[test]
-    fn faction_gated_grant_commits_once_standing_is_earned() {
-        let world = FactionGatedGiverWorld::deploy();
-        world.earn_standing();
-        assert_eq!(
-            world.read(world.faction(), FACTION_EMBER_QUEST_SLOT as usize),
-            EMBER_QUEST_VALUE,
-            "faction standing earned (ember_quest set)"
+            "still below the threshold — the start stays closed"
         );
         assert_eq!(
-            world.faction_root(),
-            world.grant_root(),
-            "the faction cell is now AT the finalized standing root"
+            world.read(world.giver(), GRANTED_SLOT as usize),
+            0,
+            "anti-ghost: still nothing granted"
         );
 
-        let granted = world
+        // Second real pledge — rep 2 == REP_THRESHOLD: the content is available, the start opens.
+        world.pledge().expect("the second pledge commits");
+        assert_eq!(
+            world.standing().rep,
+            REP_THRESHOLD,
+            "rep at the threshold (by name)"
+        );
+        assert!(
+            world.standing().content_available(),
+            "standing now available"
+        );
+        world
             .grant_honest()
-            .expect("with standing earned + the witness, the quest-giver opens");
+            .expect("the quest-start opens on REAL earned Ember standing");
         assert_eq!(
             world.read(world.giver(), GRANTED_SLOT as usize),
             EMBER_QUEST_VALUE,
-            "the giver opened the quest-start, matching the faction's committed standing"
+            "the Descent-quest is started, matching the faction's committed standing"
         );
-        assert_ne!(granted.turn_hash, [0u8; 32], "a genuine committed grant");
+    }
+
+    /// THE ANTI-INVERSION LEG: a player who BETRAYED the Embers (`embers_betrayed` set) but holds
+    /// LOW rep is REFUSED the quest-start — proving the gate reads the REP slot (`rep_embers`),
+    /// not the betrayal/unlock flag. A naive repoint of the old hardcoded indices at the real cell
+    /// would read `embers_betrayed` (alphabetical slot 2) as the open-signal and OPEN for a
+    /// betrayer; the name-resolved gate (`content_available()` = rep >= threshold AND not betrayed)
+    /// REFUSES. Every slot is read by NAME off the real committed faction cell.
+    #[test]
+    fn faction_gate_refuses_a_betrayer_the_gate_is_not_inverted() {
+        let world = FactionGatedGiverWorld::deploy();
+
+        // Betray with no rep: embers_betrayed = 1 (a WriteOnce seal), rep_embers still 0.
+        world
+            .betray()
+            .expect("betraying the Embers commits a WriteOnce seal on the real cell");
+        let st = world.standing();
+        assert!(
+            st.betrayed,
+            "the betrayal is remembered on the real cell (by name)"
+        );
+        assert_eq!(
+            st.rep, 0,
+            "rep_embers is still zero — the betrayal flag is NOT rep"
+        );
+        assert!(
+            !st.content_available(),
+            "a betrayer's content is not available"
+        );
+        assert!(
+            world.grant_honest().is_err(),
+            "a betrayer's quest-start is REFUSED — the gate is not inverted onto the betrayal flag"
+        );
+        assert_eq!(
+            world.read(world.giver(), GRANTED_SLOT as usize),
+            0,
+            "anti-ghost: the betrayer started nothing"
+        );
+    }
+
+    /// THE BETRAYAL SEAL bites even at QUALIFYING rep: a player who earns rep to the threshold AND
+    /// THEN betrays is STILL refused. The gate is not merely `rep_embers >= threshold` (which now
+    /// holds) — it honours the `WriteOnce` betrayal seal the real faction cell carries. A sharper
+    /// proof the READ is the real cell's `content_available`, not a bare rep read nor an inverted
+    /// flag: the ONLY difference from the granted case is the committed betrayal on the real cell.
+    #[test]
+    fn faction_gate_refuses_a_high_rep_betrayer() {
+        let world = FactionGatedGiverWorld::deploy();
+        world.pledge().expect("pledge 1");
+        world.pledge().expect("pledge 2");
+        assert_eq!(world.standing().rep, REP_THRESHOLD, "rep at the threshold");
+        assert!(
+            world.standing().content_available(),
+            "available BEFORE the betrayal (the non-vacuous baseline)"
+        );
+
+        world.betray().expect("betray the Embers");
+        let st = world.standing();
+        assert!(
+            st.betrayed && st.rep >= st.threshold,
+            "high rep AND betrayed — the seal must still bite"
+        );
+        assert!(
+            !st.content_available(),
+            "the betrayal seal closes the content despite qualifying rep"
+        );
+        assert!(
+            world.grant_honest().is_err(),
+            "a high-rep betrayer's quest-start is still refused"
+        );
+        assert_eq!(
+            world.read(world.giver(), GRANTED_SLOT as usize),
+            0,
+            "anti-ghost: nothing granted"
+        );
+    }
+
+    /// The giver consumes dreggnet-faction's CANONICAL SHARED READER over the REAL faction cell:
+    /// after earning standing through the real pledge + trial flow, [`read_standing`] reports the
+    /// standing (rep at the threshold, trial unlocked, never betrayed) resolved BY NAME, and the
+    /// quest-start is open. Proof the mirror is gone — the standing comes off dreggnet-faction's
+    /// own committed cell, not a re-authored program.
+    #[test]
+    fn earned_standing_opens_the_start_via_the_canonical_reader() {
+        let world = FactionGatedGiverWorld::deploy();
+        world.earn_standing();
+
+        let st = world.standing();
+        assert_eq!(st.rep, REP_THRESHOLD, "rep_embers earned (by name)");
+        assert!(
+            st.unlocked,
+            "embers_quest unlocked by the REAL trial turn (by name)"
+        );
+        assert!(!st.betrayed, "not betrayed");
+        assert!(st.content_available(), "the canonical gate is open");
+
+        world
+            .grant_honest()
+            .expect("earning real Ember standing opens the quest-giver");
+        assert_eq!(
+            world.read(world.giver(), GRANTED_SLOT as usize),
+            EMBER_QUEST_VALUE,
+            "the quest-start is open on genuine, name-resolved faction standing"
+        );
     }
 
     /// THE SLOT-BOUND REWARD TOOTH (the falsifier for a real cell-layer hole): a `reward` write
@@ -1022,76 +975,5 @@ mod tests {
             REWARD_VALUE,
             "a legitimately-completed quest still mints the reward"
         );
-    }
-
-    /// THE SLOT-BOUND STANDING TOOTH (falsifier): an `ember_quest` write STAPLED onto a `pledge`
-    /// turn cannot claim the trial reward below the rep bar.
-    #[test]
-    fn a_stapled_ember_quest_cannot_ride_a_pledge_turn() {
-        let world = FactionGatedGiverWorld::deploy();
-        // Staple the trial reward onto a first pledge (rep 0 -> 1), far below REP_THRESHOLD.
-        let staple = issue(
-            &world.exec,
-            &world.cclerk,
-            world.faction,
-            &faction_pledge_method(),
-            vec![
-                set_field(world.faction, FACTION_REP_SLOT as usize, field_from_u64(1)),
-                set_field(
-                    world.faction,
-                    FACTION_EMBER_QUEST_SLOT as usize,
-                    field_from_u64(EMBER_QUEST_VALUE),
-                ),
-            ],
-            vec![],
-        );
-        assert!(
-            staple.is_err(),
-            "ember_quest stapled onto a pledge must be REFUSED (rep 1 < {REP_THRESHOLD}); got {staple:?}"
-        );
-        assert_eq!(
-            world.read(world.faction(), FACTION_EMBER_QUEST_SLOT as usize),
-            0,
-            "anti-ghost: no forged standing"
-        );
-        // THE GATE IS A BAR, NOT A BAN: real earned standing still clears the trial.
-        world.earn_standing();
-        assert_eq!(
-            world.read(world.faction(), FACTION_EMBER_QUEST_SLOT as usize),
-            EMBER_QUEST_VALUE,
-            "earned standing still clears the trial"
-        );
-    }
-
-    /// THE SLOT-BOUND REP TOOTH (falsifier): a single pledge cannot MINT rep to the threshold —
-    /// standing accrues `+1` at a time. Before the `SlotChanged{rep}` `FieldDelta(+1)` existed, the
-    /// pledge case's lone `Monotonic{rep}` admitted a jump 0 -> REP_THRESHOLD in one turn.
-    #[test]
-    fn a_single_pledge_cannot_mint_rep_to_the_threshold() {
-        let world = FactionGatedGiverWorld::deploy();
-        let jump = issue(
-            &world.exec,
-            &world.cclerk,
-            world.faction,
-            &faction_pledge_method(),
-            vec![set_field(
-                world.faction,
-                FACTION_REP_SLOT as usize,
-                field_from_u64(REP_THRESHOLD),
-            )],
-            vec![],
-        );
-        assert!(
-            jump.is_err(),
-            "a pledge that jumps rep 0 -> {REP_THRESHOLD} must be REFUSED (rep accrues +1); got {jump:?}"
-        );
-        assert_eq!(
-            world.read(world.faction(), FACTION_REP_SLOT as usize),
-            0,
-            "anti-ghost: no minted rep"
-        );
-        // A legitimate +1 pledge still commits.
-        world.pledge().expect("a real +1 pledge commits");
-        assert_eq!(world.read(world.faction(), FACTION_REP_SLOT as usize), 1);
     }
 }
