@@ -188,7 +188,6 @@ pub mod accumulator_types;
 // Backward-compatible shim modules (type definitions + re-exports from DSL).
 // These contain deprecated StarkAir impls superseded by DSL descriptors.
 pub mod arithmetic_predicate_air;
-pub mod block_transition_air;
 pub mod bridge_action_air;
 pub mod compound_predicate_air;
 #[allow(deprecated)]
@@ -202,17 +201,14 @@ pub mod merkle_air;
 pub mod merkle_types;
 #[allow(deprecated)]
 pub mod multi_step_air;
-pub mod native_signature_air;
 #[allow(deprecated)]
 pub mod note_spending_air;
 #[allow(deprecated)]
 pub mod poseidon2_air;
 pub mod predicate_air;
 pub mod relational_predicate_air;
-pub mod schnorr_air;
 #[cfg(feature = "plonky3")]
 pub mod temporal_predicate_air;
-pub mod turn_auth_signature_air;
 
 /// Backward-compatible re-export. Prefer [`constraint_prover`] for new code.
 #[doc(hidden)]
