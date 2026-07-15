@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
+  <title id="title">dregg — a computing system that can’t lie to you</title>
+  <desc id="desc">A warm public proof record with a whole dark egg glowing from within.</desc>
+  <defs>
+    <radialGradient id="shell" cx="36%" cy="26%" r="82%">
+      <stop offset="0" stop-color="#5b7d6f"/>
+      <stop offset=".42" stop-color="#23483d"/>
+      <stop offset="1" stop-color="#091b16"/>
+    </radialGradient>
+    <radialGradient id="life" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#fff0b8" stop-opacity="1"/>
+      <stop offset=".3" stop-color="#e9a54f" stop-opacity=".86"/>
+      <stop offset="1" stop-color="#b85a24" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="glow" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="9"/>
+    </filter>
+    <clipPath id="eggclip"><path d="M944 112c91 0 147 119 147 225 0 113-63 183-147 183s-147-70-147-183c0-106 56-225 147-225z"/></clipPath>
+  </defs>
+
+  <rect width="1200" height="630" fill="#f2ecdf"/>
+  <path d="M0 0h710v630H0z" fill="#173f35"/>
+  <path d="M40 38h1120M40 592h1120" fill="none" stroke="#8d8a82" stroke-width="1"/>
+  <path d="M710 0v630" fill="none" stroke="#b8b3a8" stroke-width="1"/>
+
+  <text x="62" y="77" fill="#a9c2b2" font-family="monospace" font-size="14" font-weight="700" letter-spacing="2">PUBLIC PROOF RECORD  /  DREGG</text>
+  <text x="62" y="146" fill="#e1af67" font-family="monospace" font-size="14" font-weight="700" letter-spacing="2">VERIFIED OPERATING SYSTEM + ECONOMY</text>
+  <text x="62" y="234" fill="#faf7f0" font-family="Georgia, serif" font-size="60">A computing system</text>
+  <text x="62" y="300" fill="#faf7f0" font-family="Georgia, serif" font-size="60">that can’t lie to you.</text>
+
+  <path d="M62 364h584" stroke="#688f7e" stroke-width="1"/>
+  <text x="62" y="409" fill="#f5efdf" font-family="Georgia, serif" font-size="25">Every action leaves a receipt.</text>
+  <text x="62" y="452" fill="#f5efdf" font-family="Georgia, serif" font-size="25">Money always adds up.</text>
+  <text x="62" y="495" fill="#f5efdf" font-family="Georgia, serif" font-size="25">Permissions never silently widen.</text>
+  <text x="62" y="558" fill="#a9c2b2" font-family="monospace" font-size="12" letter-spacing="1">MACHINE-CHECKED CORE  /  NO OUTSIDE AUDIT YET</text>
+
+  <text x="760" y="77" fill="#2e6858" font-family="monospace" font-size="13" font-weight="700" letter-spacing="2">FIG. 01  /  THE EGG</text>
+  <ellipse cx="944" cy="518" rx="126" ry="17" fill="#173f35" opacity=".16"/>
+  <path d="M944 112c91 0 147 119 147 225 0 113-63 183-147 183s-147-70-147-183c0-106 56-225 147-225z" fill="url(#shell)" stroke="#2e6858" stroke-width="2"/>
+  <g clip-path="url(#eggclip)">
+    <ellipse cx="944" cy="350" rx="93" ry="120" fill="url(#life)"/>
+    <path d="M821 292c62-31 187-34 247 0M807 356c75-30 199-30 274 0M829 421c60-24 170-24 230 0M878 135c-24 95-31 253 5 368M944 112c-7 114-7 292 0 408M1010 135c24 95 31 253-5 368" fill="none" stroke="#d6e5d9" stroke-opacity=".13"/>
+  </g>
+  <path d="M944 112c91 0 147 119 147 225 0 113-63 183-147 183s-147-70-147-183c0-106 56-225 147-225z" fill="none" stroke="#ecf1e4" stroke-opacity=".36"/>
+  <circle cx="944" cy="112" r="20" fill="#fff0b8" opacity=".3" filter="url(#glow)"/>
+  <circle cx="944" cy="112" r="4" fill="#fff0b8"/>
+  <g stroke="#c2762b" stroke-linecap="round">
+    <path d="M944 80v20M944 124v20M912 112h20M956 112h20"/>
+    <path d="m923 91 10 10M955 123l10 10M965 91l-10 10M933 123l-10 10" opacity=".45"/>
+  </g>
+  <text x="760" y="570" fill="#6e746e" font-family="monospace" font-size="12">THE SHELL IS WHOLE. SOMETHING ALIVE GLOWS INSIDE.</text>
+</svg>

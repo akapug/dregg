@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Anatomy of a receipt</title>
+  <meta name="description" content="You said every action leaves a receipt. Here is one — a real object from the running system, field by field — and the theorems a machine has checked about it.">
+  <meta property="og:title" content="Anatomy of a receipt">
+  <meta property="og:description" content="A computing system where every action leaves a receipt, money always adds up, and permissions never silently widen.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https:&#x2F;&#x2F;emberian.github.io&#x2F;dregg&#x2F;deep&#x2F;receipt&#x2F;">
+  <meta property="og:image" content="https://emberian.github.io/dregg/deep/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:site" content="@DreggNet">
+  <meta name="twitter:image" content="https://emberian.github.io/dregg/deep/og.png">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='16' fill='%23173f35'/%3E%3Cpath d='M16 6C21 6 24 13 24 19a8 8 0 01-16 0c0-6 3-13 8-13z' fill='none' stroke='%23f2ecdf' stroke-width='1.5'/%3E%3Cellipse cx='16' cy='18' rx='3' ry='4' fill='%23df9b45'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="https://emberian.github.io/dregg/deep/css/site.css">
+</head>
+<body>
+  <a class="skip-link" href="#main-content">Skip to content</a>
+
+  <header class="site-header">
+    <div class="page-frame header-frame">
+      <a class="wordmark" href="https://emberian.github.io/dregg/deep/" aria-label="dregg home">
+        <span class="egg-mark" aria-hidden="true"></span>
+        <span>dregg</span>
+      </a>
+      <p class="header-definition">verified operating system + economy</p>
+      <nav class="site-nav" aria-label="Primary navigation">
+        <a href="https://emberian.github.io/dregg/deep/why/" >why</a>
+        <a href="https://emberian.github.io/dregg/deep/receipt/" aria-current="page">a receipt</a>
+        <a href="https://emberian.github.io/dregg/deep/build/" >build</a>
+        <a href="https://emberian.github.io/dregg/deep/markets/" >markets</a>
+        <a href="https://emberian.github.io/dregg/deep/coin/" >$DREGG</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main-content">
+    
+
+<header class="page-hero">
+  <div class="page-frame page-hero-grid">
+    <div>
+      <p class="folio">Public proof record <span>03 / a receipt</span></p>
+      <p class="eyebrow">What a verified action leaves behind</p>
+      <h1>Anatomy of a receipt.</h1>
+    </div>
+    <div class="page-deck">
+      <p>Every action in dregg leaves a receipt—a small record that pins exactly what happened. Here is what one is made of, and what a machine has proven about it.</p>
+      <p class="deck-note">Nothing below is a mock-up. The receipt is real output from the running system; the field names are the real ones; the theorems are the real statements, checked by machine.</p>
+    </div>
+  </div>
+</header>
+
+<section class="chapter">
+  <div class="page-frame chapter-grid">
+    <header class="chapter-head">
+      <p class="chapter-number">01</p>
+      <p class="eyebrow">One real action</p>
+      <h2>The action, then the receipt.</h2>
+      <p class="section-note">A single turn: set one cell's state field to the number 42, authorized by a hybrid Ed25519 + post-quantum (ML-DSA-65) signature. This is what the system produced.</p>
+    </header>
+    <div class="chapter-body">
+      <div class="code-record receipt-specimen">
+        <div class="code-heading"><span>TurnReceipt</span><span>real output · finality: Final</span></div>
+<pre><code>turn_hash              ef98305e2a8fd373beb4e91b3c58b8dfb9dc5d00c6e754eac5d7b7de4269c9da
+forest_hash            96cdbbd016ad23740f87151c901f866c730f5b7ec66e0101950b3847f51498a1
+pre_state_hash         edbf0739c53d59f46d0ce32d1b3d04e9768b074fdab39d4efc6ebdb95397e012
+post_state_hash        0803a53daf67b2387748167a49f19255bef4f5c8ae13e557ea316f0b1c7bc1a3
+effects_hash           61a7cc5301a13e03f2d77626a75dff9c792e55caa50c69862f5cea183d9942a6
+agent                  4503c7b6ced06c09c2b9ca66afe04869c8f2aa69fa73d835379937e8eb2c507e
+previous_receipt_hash  null            (this is the first receipt in the chain)
+computrons_used        622
+action_count           1
+finality               Final</code></pre>
+      </div>
+      <p class="small-note">A receipt carries more than this—links for capabilities it created, events it emitted, an optional executor signature. These are the load-bearing few.</p>
+    </div>
+  </div>
+</section>
+
+<section class="chapter chapter-tint">
+  <div class="page-frame chapter-grid">
+    <header class="chapter-head">
+      <p class="chapter-number">02</p>
+      <p class="eyebrow">Field by field</p>
+      <h2>What each line means.</h2>
+    </header>
+    <div class="chapter-body evidence-table" role="list">
+      <article class="evidence-row" role="listitem"><div><h3>turn_hash</h3></div><p>A fingerprint of the exact action this receipt answers for. Change what was requested, and this no longer matches.</p></article>
+      <article class="evidence-row" role="listitem"><div><h3>pre_state_hash / post_state_hash</h3></div><p>The world's fingerprint before and after. A receipt is a claim: "I moved the world from here, to there." One 32-byte value fixes every balance, every stored field, every permission, every spent coin.</p></article>
+      <article class="evidence-row" role="listitem"><div><h3>effects_hash</h3></div><p>A fingerprint of every concrete change the turn made—each balance moved, each value written. Nudge one delta and this value moves.</p></article>
+      <article class="evidence-row" role="listitem"><div><h3>agent</h3></div><p>The cell that authorized the turn. Authority here means holding a key that produces an accepted witness—not merely being named in a table.</p></article>
+      <article class="evidence-row" role="listitem"><div><h3>previous_receipt_hash</h3></div><p>The link to the receipt before it. Receipts form an unbroken chain; here it is <code>null</code> because this is the very first one.</p></article>
+      <article class="evidence-row" role="listitem"><div><h3>computrons_used</h3></div><p>The metered work the turn cost—622 here. Work is counted, not estimated.</p></article>
+      <article class="evidence-row" role="listitem"><div><h3>finality</h3></div><p><code>Final</code> means a quorum has committed it; <code>Tentative</code> means it is provable but not yet quorum-final.</p></article>
+    </div>
+  </div>
+</section>
+
+<section class="chapter chapter-dark">
+  <div class="page-frame chapter-grid">
+    <header class="chapter-head">
+      <p class="chapter-number">03</p>
+      <p class="eyebrow">The property that matters</p>
+      <h2>You cannot forge a field.</h2>
+    </header>
+    <div class="chapter-body">
+      <p class="prose-large">Here is what makes a receipt more than a log line. The post-state fingerprint is not written down and trusted—it is <em>bound, inside the proof,</em> to the actual output of the run. Change one field the action did not legitimately write—nudge a balance, mint a coin, widen a permission—and the fingerprint no longer matches what the machine computed.</p>
+      <p class="prose-large">So the proof does not merely fail to be found. It <span class="hl-y">cannot exist</span>. The turn becomes unprovable. Not "a server catches you"—there is no server, and nothing to catch. A ghost leaves no receipt.</p>
+      <p class="inverse-note">In the engine, the claimed post-state is tied to the trace's committed output by the circuit's binding; the state fingerprint folds every balance, field, permission, and spent-coin ledger together, so moving any one of them moves the whole root. A tampered claim makes the proof's constraints unsatisfiable.</p>
+    </div>
+  </div>
+</section>
+
+<section class="chapter">
+  <div class="page-frame chapter-grid">
+    <header class="chapter-head">
+      <p class="chapter-number">04</p>
+      <p class="eyebrow">What is proven about it</p>
+      <h2>The rules are theorems.</h2>
+      <p class="section-note">A receipt is only as good as the rules it must obey. In dregg those rules are theorems—written as mathematics and checked, every build, by the Lean proof checker. Four of them, in the system's own words, each with a plain reading.</p>
+    </header>
+    <div class="chapter-body">
+      <div class="theorem-list">
+      <article class="theorem">
+        <div class="theorem-head"><span class="status status-proven">proven</span><h3>Conservation</h3></div>
+        <pre class="theorem-statement"><code>∀ a : AssetId, recTotalAsset s.kernel a = 0</code></pre>
+        <p class="theorem-gloss">On every state the system can reach, every asset's books sum to exactly zero. Nothing is ever created or destroyed.</p>
+        <p class="theorem-src">metatheory · AssuranceCase.lean · conservation_guarantee</p>
+      </article>
+      <article class="theorem">
+        <div class="theorem-head"><span class="status status-proven">proven</span><h3>No amplification</h3></div>
+        <pre class="theorem-statement"><code>∀ e ∈ forestEdgesG f,
+  capAuthConferred (attenuate e.1 e.2) ⊆ capAuthConferred e.2</code></pre>
+        <p class="theorem-gloss">Every time authority is handed off, it can only narrow. No one can pass on more power than they hold.</p>
+        <p class="theorem-src">metatheory · FullForestAuth.lean · execFullForestG_no_amplify</p>
+      </article>
+      <article class="theorem">
+        <div class="theorem-head"><span class="status status-proven">proven</span><h3>No double-spend</h3></div>
+        <pre class="theorem-statement"><code>interp (noteSpendStmt nf) k = some k' → nf ∉ k.nullifiers</code></pre>
+        <p class="theorem-gloss">If a coin is spent, it was provably unspent before—and spending it a second time simply fails.</p>
+        <p class="theorem-src">metatheory · Argus/Effects/NoteSpend.lean · noteSpendStmt_no_double_spend</p>
+      </article>
+      <article class="theorem">
+        <div class="theorem-head"><span class="status status-proven">proven</span><h3>The circuit is the machine</h3></div>
+        <pre class="theorem-statement"><code>satisfiesConstraints applyEff old new s rest →
+  isVmExecution applyEff old new s rest</code></pre>
+        <p class="theorem-gloss">Any trace that passes the circuit's checks really is a faithful run of the machine—it starts where it claims and ends exactly at the computed result.</p>
+        <p class="theorem-src">metatheory · Circuit/AirSoundness.lean · air_sound</p>
+      </article>
+      </div>
+      <div class="record-caveat" style="margin-top:26px">
+        <strong>One theorem holds them together.</strong> A single statement, <code>deployed_system_secure</code>, composes all of these over one turn—no amplification, conservation, whole-post-state binding, no double-spend, and light-client provability, at once. Assuming standard cryptography—the same collision-resistance every modern system rests on—it holds.
+      </div>
+    </div>
+  </div>
+</section>
+
+<aside class="next-step">
+  <div class="page-frame next-step-inner">
+    <p class="eyebrow">Don't take our word</p>
+    <p>One command re-checks every theorem on your machine: <code>lake build</code> in the proof tree. A faked proof, or a hidden hole, fails the build.</p>
+    <a class="button button-light" href="https://emberian.github.io/dregg/deep/why/">Why proof beats a promise</a>
+  </div>
+</aside>
+
+
+  </main>
+
+  <footer class="site-footer">
+    <div class="page-frame footer-grid">
+      <div>
+        <p class="footer-wordmark"><span class="egg-mark" aria-hidden="true"></span> dregg</p>
+        <p class="footer-line">Proof, spoken aloud.</p>
+      </div>
+      <nav class="footer-links" aria-label="Project links">
+        <a href="https://github.com/emberian/dregg">Source on GitHub</a>
+        <a href="https://emberian.github.io/dregg/">Technical twin</a>
+        <a href="https://portal.dregg.studio">Test network</a>
+        <a href="https://emberian.github.io/dregg/deep/receipt/">A receipt</a>
+        <a href="https://x.com/DreggNet">@DreggNet</a>
+        <a href="https://ember.dev">ember.dev</a>
+      </nav>
+      <aside class="footer-scope" aria-label="Project scope">
+        <p class="eyebrow">Scope note</p>
+        <p>dregg is active research. The Lean soundness spine is machine-checked. The whole system has <strong>not had an independent external audit</strong> and is <strong>not ready for security-critical use</strong>.</p>
+        <p>Status labels reflect tests, proofs, and boot logs as of July 2026. Gaps are named where they matter.</p>
+      </aside>
+    </div>
+    <div class="page-frame colophon">
+      <span class="colophon-org">
+        <img src="https://emberian.github.io/dregg/deep/dregg-mark.png" alt="DreggNet mark" class="colophon-mark" width="30" height="30">
+        DreggNet (dregg.net) is a product of <strong>Lunar Town LLC</strong>. <a href="https://emberian.github.io/dregg/deep/organization/">Organization</a>
+      </span>
+      <a href="https://emberian.github.io/dregg/deep/coin/">$DREGG, briefly</a>
+    </div>
+  </footer>
+</body>
+</html>

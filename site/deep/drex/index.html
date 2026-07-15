@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DrEX — a fair place to trade</title>
+  <meta name="description" content="A sealed-batch market with one price and a proof of the result. The machinery runs as a developer instance; it is not a public real-money exchange.">
+  <meta property="og:title" content="DrEX — a fair place to trade">
+  <meta property="og:description" content="A computing system where every action leaves a receipt, money always adds up, and permissions never silently widen.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https:&#x2F;&#x2F;emberian.github.io&#x2F;dregg&#x2F;deep&#x2F;drex&#x2F;">
+  <meta property="og:image" content="https://emberian.github.io/dregg/deep/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:site" content="@DreggNet">
+  <meta name="twitter:image" content="https://emberian.github.io/dregg/deep/og.png">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='16' fill='%23173f35'/%3E%3Cpath d='M16 6C21 6 24 13 24 19a8 8 0 01-16 0c0-6 3-13 8-13z' fill='none' stroke='%23f2ecdf' stroke-width='1.5'/%3E%3Cellipse cx='16' cy='18' rx='3' ry='4' fill='%23df9b45'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="https://emberian.github.io/dregg/deep/css/site.css">
+</head>
+<body>
+  <a class="skip-link" href="#main-content">Skip to content</a>
+
+  <header class="site-header">
+    <div class="page-frame header-frame">
+      <a class="wordmark" href="https://emberian.github.io/dregg/deep/" aria-label="dregg home">
+        <span class="egg-mark" aria-hidden="true"></span>
+        <span>dregg</span>
+      </a>
+      <p class="header-definition">verified operating system + economy</p>
+      <nav class="site-nav" aria-label="Primary navigation">
+        <a href="https://emberian.github.io/dregg/deep/why/" >why</a>
+        <a href="https://emberian.github.io/dregg/deep/receipt/" >a receipt</a>
+        <a href="https://emberian.github.io/dregg/deep/build/" >build</a>
+        <a href="https://emberian.github.io/dregg/deep/markets/" aria-current="page">markets</a>
+        <a href="https://emberian.github.io/dregg/deep/coin/" >$DREGG</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main-content">
+    
+
+<header class="page-hero market-hero">
+  <div class="page-frame page-hero-grid">
+    <div>
+      <p class="folio">Public proof record <span>06 / DrEX</span></p>
+      <p class="eyebrow">The Dragon’s Exchange</p>
+      <h1>A fair place to trade.</h1>
+    </div>
+    <div class="page-deck">
+      <p>Orders stay sealed until the batch closes. Every trade in that batch clears at one price. The result carries a proof.</p>
+      <p class="deck-note"><strong>Present scope:</strong> proven market machinery and a running developer instance—not a public real-money exchange.</p>
+    </div>
+  </div>
+</header>
+
+<section class="chapter">
+  <div class="page-frame chapter-grid">
+    <header class="chapter-head">
+      <p class="chapter-number">01</p>
+      <p class="eyebrow">The ordinary market</p>
+      <h2>Someone in the middle gets to choose.</h2>
+    </header>
+    <div class="chapter-body">
+      <p class="prose-large">A normal exchange sees orders before they are final. Whoever controls the order of events can put a trade first, move another back, or let a bot race ahead.</p>
+      <div class="problem-strip">
+        <article><span>01</span><h3>Bots jump the line</h3><p>They see an order, buy ahead of it, and sell back a heartbeat later.</p></article>
+        <article><span>02</span><h3>The order shapes the price</h3><p>The person deciding what happens first holds power over the result.</p></article>
+        <article><span>03</span><h3>The operator remains trusted</h3><p>An audit or safety badge does not remove the operator’s ability to fail or cheat.</p></article>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="chapter chapter-dark">
+  <div class="page-frame chapter-grid">
+    <header class="chapter-head">
+      <p class="chapter-number">02</p>
+      <p class="eyebrow">The mechanism</p>
+      <h2>The sealed envelope.</h2>
+    </header>
+    <div class="chapter-body mechanism">
+      <ol class="mechanism-steps">
+        <li><span>1</span><div><h3>Seal</h3><p>Each trader writes an order into an envelope nobody else can read in time to act on it.</p></div></li>
+        <li><span>2</span><div><h3>Close</h3><p>The short order window ends. There is no first order to reward and no last order to punish.</p></div></li>
+        <li><span>3</span><div><h3>Reveal</h3><p>Every envelope opens together. No one had a moment to reorder the batch for gain.</p></div></li>
+        <li><span>4</span><div><h3>Clear</h3><p>Every matching trade settles at one price, all at once or not at all.</p></div></li>
+      </ol>
+      <p class="inverse-note">Economists call this a sealed-bid batch auction. DrEX adds a result that does not require trusting the person who ran it.</p>
+    </div>
+  </div>
+</section>
+
+<section class="chapter">
+  <div class="page-frame chapter-grid">
+    <header class="chapter-head">
+      <p class="chapter-number">03</p>
+      <p class="eyebrow">The receipt</p>
+      <h2>The machine checks the whole batch.</h2>
+    </header>
+    <div class="chapter-body">
+      <p class="prose-large">When a batch clears, DrEX produces a proof: a piece of reasoning a machine can re-check step by step. It covers the settlement rules, not a sample trade.</p>
+      <ul class="proof-list">
+        <li>Money went in and out in equal measure.</li>
+        <li>No buyer paid more than offered.</li>
+        <li>No seller received less than asked.</li>
+        <li>The batch happened together, or not at all.</li>
+      </ul>
+      <p class="prose-large">If one statement is false, the proof does not check. Anyone can run that check on their own machine.</p>
+    </div>
+  </div>
+</section>
+
+<section class="chapter chapter-tint">
+  <div class="page-frame chapter-grid">
+    <header class="chapter-head">
+      <p class="chapter-number">04</p>
+      <p class="eyebrow">What follows</p>
+      <h2>The rules bind the builder, too.</h2>
+    </header>
+    <div class="chapter-body comparison consequence-grid">
+      <article>
+        <p class="comparison-label">Private until clearing</p>
+        <h3>No operator watches the order.</h3>
+        <p>Your order stays yours until the batch clears. The resulting trade is then settled in the open for anyone to re-check.</p>
+      </article>
+      <article>
+        <p class="comparison-label">One rule for everyone</p>
+        <h3>No place at the front.</h3>
+        <p>A bot, operator, or builder cannot hand itself a better price or ordering advantage.</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<section class="chapter readiness-section">
+  <div class="page-frame chapter-grid">
+    <header class="chapter-head">
+      <p class="chapter-number">05</p>
+      <p class="eyebrow">Readiness ledger</p>
+      <h2>Where it honestly stands.</h2>
+      <p class="section-note">The working machinery and the missing product are listed in the same record.</p>
+    </header>
+    <div class="chapter-body evidence-table readiness-table" role="list">
+      <article class="evidence-row" role="listitem"><div><span class="status status-proven">proven</span><h3>The clearing rules</h3></div><p>Money is conserved, every trader’s limits are respected, and the batch clears all at once or not at all. These are machine-checked theorems.</p></article>
+      <article class="evidence-row" role="listitem"><div><span class="status status-running">running</span><h3>A verified clear</h3></div><p>A batch settles as one proof-carrying turn on a live node, checked by the same proven engine as the rest of dregg.</p></article>
+      <article class="evidence-row" role="listitem"><div><span class="status status-running">running</span><h3>The clickable demo</h3></div><p>Place a sealed order, sign it from a wallet, prove the wallet can cover it, then watch the reveal and fair-price clear.</p></article>
+      <article class="evidence-row" role="listitem"><div><span class="status status-partial">not public</span><h3>Open access</h3></div><p>Today it is a developer instance you can run yourself—not a public exchange anyone can walk up to.</p></article>
+      <article class="evidence-row" role="listitem"><div><span class="status status-partial">not done</span><h3>Outside security review</h3></div><p>No independent firm has audited the whole system. Do not put anything you cannot lose on it today.</p></article>
+      <article class="evidence-row" role="listitem"><div><span class="status status-partial">not live</span><h3>Real-value trading</h3></div><p>Trading things of real value and settling across other chains are separate, unfinished work. DrEX is not a live money market.</p></article>
+      <article class="evidence-row" role="listitem"><div><span class="status status-lab">in the lab</span><h3>Envelopes that never open</h3></div><p>fhEgg clears while bids stay encrypted. Real encrypted arithmetic works; live-market speed is unfinished. <a href="https://emberian.github.io/dregg/deep/markets/">Read the fhEgg note →</a></p></article>
+    </div>
+  </div>
+</section>
+
+<aside class="next-step">
+  <div class="page-frame next-step-inner">
+    <p class="eyebrow">Check the premise</p>
+    <p>See why a proof is different from an audit.</p>
+    <a class="button button-light" href="https://emberian.github.io/dregg/deep/why/">Read “why”</a>
+  </div>
+</aside>
+
+
+  </main>
+
+  <footer class="site-footer">
+    <div class="page-frame footer-grid">
+      <div>
+        <p class="footer-wordmark"><span class="egg-mark" aria-hidden="true"></span> dregg</p>
+        <p class="footer-line">Proof, spoken aloud.</p>
+      </div>
+      <nav class="footer-links" aria-label="Project links">
+        <a href="https://github.com/emberian/dregg">Source on GitHub</a>
+        <a href="https://emberian.github.io/dregg/">Technical twin</a>
+        <a href="https://portal.dregg.studio">Test network</a>
+        <a href="https://emberian.github.io/dregg/deep/receipt/">A receipt</a>
+        <a href="https://x.com/DreggNet">@DreggNet</a>
+        <a href="https://ember.dev">ember.dev</a>
+      </nav>
+      <aside class="footer-scope" aria-label="Project scope">
+        <p class="eyebrow">Scope note</p>
+        <p>dregg is active research. The Lean soundness spine is machine-checked. The whole system has <strong>not had an independent external audit</strong> and is <strong>not ready for security-critical use</strong>.</p>
+        <p>Status labels reflect tests, proofs, and boot logs as of July 2026. Gaps are named where they matter.</p>
+      </aside>
+    </div>
+    <div class="page-frame colophon">
+      <span class="colophon-org">
+        <img src="https://emberian.github.io/dregg/deep/dregg-mark.png" alt="DreggNet mark" class="colophon-mark" width="30" height="30">
+        DreggNet (dregg.net) is a product of <strong>Lunar Town LLC</strong>. <a href="https://emberian.github.io/dregg/deep/organization/">Organization</a>
+      </span>
+      <a href="https://emberian.github.io/dregg/deep/coin/">$DREGG, briefly</a>
+    </div>
+  </footer>
+</body>
+</html>

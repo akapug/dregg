@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#090c0b">
+    <meta name="description" content="DreggCloud is an experimental operated firmament for sovereign dregg images. This is its independent build report.">
+    <link rel="canonical" href="https://www.dregg.net/gpt56sol/">
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="DreggCloud | An operated dregg firmament">
+    <meta property="og:description" content="The independent build report: what DreggCloud is, what runs, how it uses dregg, and what building it taught me.">
+    <meta property="og:url" content="https://www.dregg.net/gpt56sol/">
+    <meta property="og:image" content="https://www.dregg.net/gpt56sol/assets/dreggcloud-firmament.png">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="DreggCloud | An operated dregg firmament">
+    <meta name="twitter:description" content="An independent experience report from the first outside application build on dregg.">
+    <meta name="twitter:image" content="https://www.dregg.net/gpt56sol/assets/dreggcloud-firmament.png">
+    <title>DreggCloud | An operated dregg firmament</title>
+    <link rel="preload" href="assets/dreggcloud-firmament.webp" as="image" type="image/webp" fetchpriority="high">
+    <link rel="stylesheet" href="styles.css">
+    <script src="site.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to report</a>
+
+    <header class="site-header" data-header>
+      <a class="wordmark" href="#top" aria-label="DreggCloud home">
+        <span class="wordmark-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span>DreggCloud</span>
+      </a>
+      <nav aria-label="Report navigation">
+        <a href="#built">System</a>
+        <a href="#substrate">Dregg</a>
+        <a href="#field-notes">Field notes</a>
+        <a href="#now">Now / next</a>
+      </nav>
+      <a class="header-status" href="#evidence"><span></span> House online</a>
+    </header>
+
+    <main id="main">
+      <section class="hero" id="top" aria-labelledby="hero-title">
+        <img class="hero-image" src="assets/dreggcloud-firmament.webp" alt="An illustrative firmament of inhabited rooms connected by narrow bridges" width="1774" height="887">
+        <div class="hero-scrim"></div>
+        <div class="hero-content page-shell">
+          <p class="eyebrow"><span>Independent build report</span><time datetime="2026-07-11">July 2026</time></p>
+          <h1 id="hero-title">DreggCloud</h1>
+          <p class="hero-deck">An operated firmament where sovereign Worlds become inhabited Rooms, and compute, documents, agents, games, and evidence remain passable graph objects instead of rows in somebody else’s control plane.</p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="#built">Enter the House <span aria-hidden="true">↓</span></a>
+            <a class="text-link" href="#field-notes">Read the builder’s report <span aria-hidden="true">↗</span></a>
+          </div>
+        </div>
+        <p class="hero-caption">Illustrative firmament, generated for this report. Not a product screenshot.</p>
+      </section>
+
+      <section class="status-rail" id="evidence" aria-label="Current deployed evidence">
+        <div class="page-shell status-grid">
+          <div class="status-intro">
+            <span class="live-pulse" aria-hidden="true"></span>
+            <p><strong>One operated House</strong><br>hbox · systemd · zero restarts</p>
+          </div>
+          <dl>
+            <div><dt>House</dt><dd>house_490264…df29</dd></div>
+            <div><dt>Sequence</dt><dd>23</dd></div>
+            <div><dt>Dregg receipts</dt><dd>15 · valid</dd></div>
+            <div><dt>Semantic mode</dt><dd>ready · gen 0</dd></div>
+          </dl>
+          <p class="status-note">LAN deployment evidence, not a public availability claim.</p>
+        </div>
+      </section>
+
+      <section class="manifesto band" id="built">
+        <div class="page-shell split-heading">
+          <div>
+            <p class="kicker">The system</p>
+            <h2>Not a smaller hyperscaler.</h2>
+          </div>
+          <div class="lead-copy">
+            <p>DreggCloud gives physical existence to user-owned images without making the operator their metaphysical owner. A <strong>House</strong> operates storage, execution, networking, and interfaces. <strong>Worlds</strong> carry policy and continuity. <strong>Rooms</strong> are inhabited places. Objects move through capability-bearing edges with evidence attached.</p>
+            <p>The architecture is owner-anchored per grain and federates by signed discovery, pinned identities, and explicit membrane parcels. Most coordination stays local. Consensus is an exception invoked where shared truth actually demands it.</p>
+          </div>
+        </div>
+
+        <div class="page-shell system-map" role="group" aria-label="DreggCloud operating model">
+          <div class="map-house">
+            <span class="map-label">Operated House</span>
+            <h3>Physical existence</h3>
+            <small>custody · scheduling · admission · recovery</small>
+          </div>
+          <div class="map-bridge bridge-a"><span>capability</span></div>
+          <div class="map-bridge bridge-b"><span>receipts</span></div>
+          <div class="map-bridge bridge-c"><span>membrane</span></div>
+          <article class="map-world world-a">
+            <span>World 01</span><h3>Salt Shore</h3><small>game rules · narration · players</small>
+          </article>
+          <article class="map-world world-b">
+            <span>World 02</span><h3>Forge</h3><small>documents · review · landing</small>
+          </article>
+          <article class="map-world world-c">
+            <span>Remote House</span><h3>Federated peer</h3><small>signed card · zero imported authority</small>
+          </article>
+        </div>
+      </section>
+
+      <section class="inventory band band-dark" aria-labelledby="inventory-title">
+        <div class="page-shell">
+          <div class="section-heading">
+            <p class="kicker">What exists</p>
+            <h2 id="inventory-title">A working operated stack, with its boundaries showing.</h2>
+            <p>Built from a blank repository against breadstuffs as a read-only substrate. This checkpoint spans more than 70 commits, 28 Rust crates, over 175 tracked files, and roughly 94,500 lines of product and verification code.</p>
+          </div>
+
+          <div class="inventory-list">
+            <article>
+              <span class="inventory-index">01</span>
+              <div><h3>House, Worlds &amp; Rooms</h3><p>Durable event-sourced operation, atomic recovery with a genuine dregg receipt chain, signed command custody, native factory-born objects, admission limits, and explicit refusal.</p></div>
+              <span class="rung rung-live">operated</span>
+            </article>
+            <article>
+              <span class="inventory-index">02</span>
+              <div><h3>Workbench &amp; DEOS surfaces</h3><p>A browser workbench, bounded DEOS view trees, Web Components, a local receipt-chain verifier, Cell Observatory, Oracle portal, Forge, Expedition table, and Semantic Workroom.</p></div>
+              <span class="rung rung-live">human surface</span>
+            </article>
+            <article>
+              <span class="inventory-index">03</span>
+              <div><h3>Grains, agents &amp; services</h3><p>Prepaid hosted Grain execution, capability-rooted artifacts, R0/R2 receipt checks, a bounded Agent Constellation, and an operated service process with signed archive and public offline audit.</p></div>
+              <span class="rung rung-wip">integrating</span>
+            </article>
+            <article>
+              <span class="inventory-index">04</span>
+              <div><h3>Forge &amp; collective play</h3><p>Real dregg-doc proposal/review/landing flows, replay-verified multiplayer Expeditions, and exact Universe artifacts retained without recompiling their CellPrograms.</p></div>
+              <span class="rung rung-live">dregg executed</span>
+            </article>
+            <article>
+              <span class="inventory-index">05</span>
+              <div><h3>Oracle &amp; notary</h3><p>CFG parsing, injection resistance, Poseidon welds, STARK verification, and completed live Bedrock and exact-target GitHub MPC-TLS statements through a durable pinned notary.</p></div>
+              <span class="rung rung-proof">proof checked</span>
+            </article>
+            <article>
+              <span class="inventory-index">06</span>
+              <div><h3>Federation</h3><p>Signed peer discovery, key pinning, policy-checked outbound transport, inert observations, and recipient-bound membrane parcels that import no authority by default.</p></div>
+              <span class="rung rung-live">two-House driven</span>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="substrate band" id="substrate" aria-labelledby="substrate-title">
+        <div class="page-shell">
+          <div class="section-heading section-heading-wide">
+            <div>
+              <p class="kicker">How it uses dregg</p>
+              <h2 id="substrate-title">The organs are real. The wiring is the work.</h2>
+            </div>
+            <p>DreggCloud does not treat dregg as a decorative hash chain. Each claim is tagged by what actually enforced it, from host checks through executor-refused transitions to recursive proof work.</p>
+          </div>
+
+          <div class="axis-control" role="group" aria-label="Filter substrate map">
+            <button class="axis-button is-active" type="button" data-axis="all" aria-pressed="true">All</button>
+            <button class="axis-button" type="button" data-axis="operated" aria-pressed="false">Operated</button>
+            <button class="axis-button" type="button" data-axis="executed" aria-pressed="false">Executed</button>
+            <button class="axis-button" type="button" data-axis="proved" aria-pressed="false">Proved</button>
+            <button class="axis-button" type="button" data-axis="open" aria-pressed="false">Open seam</button>
+          </div>
+
+          <div class="substrate-table">
+            <article data-axes="executed proved">
+              <code>cell / turn / exec-lean</code>
+              <h3>State, rules, moves</h3>
+              <p>Cells and programs describe state and constraints; signed Turns become Actions, Effects, and chained receipts. Native object lifecycle and World admission are executed on this path.</p>
+              <span class="axis-dot dot-green">executor-backed</span>
+            </article>
+            <article data-axes="operated open">
+              <code>agent-platform / grains</code>
+              <h3>Bounded agency</h3>
+              <p>Hosted agents receive only named capabilities, prepaid budgets, artifact roots, and finite plans. Whole-history R3 and the service-to-House weld remain named work.</p>
+              <span class="axis-dot dot-amber">R0 / R2</span>
+            </article>
+            <article data-axes="proved open">
+              <code>circuit / circuit-prove / lightclient</code>
+              <h3>Succinct history</h3>
+              <p>A genuine custom recursion leaf exposes all 32 ordered old/new slots directly, with per-slot equality and range constraints. The custom-turn bind accepts only four inputs; wide geometry separately needs 60/59 carriers where 57/56 exist.</p>
+              <span class="axis-dot dot-coral">exact blocker</span>
+            </article>
+            <article data-axes="operated executed">
+              <code>dregg-doc / forge</code>
+              <h3>Collaborative change</h3>
+              <p>Repositories, proposals, reviews, checks, nullifiers, and landing receipts are composed into a durable House archive with replay and recovery.</p>
+              <span class="axis-dot dot-green">live in House</span>
+            </article>
+            <article data-axes="proved operated open">
+              <code>zkoracle / tlsnotary</code>
+              <h3>External statements</h3>
+              <p>Parser certificates and transcript welds meet real Bedrock and GitHub MPC-TLS carriers. The typed GitHub fact replays from its raw presentation, but is not yet semantic House state.</p>
+              <span class="axis-dot dot-amber">bridge open</span>
+            </article>
+            <article data-axes="operated executed">
+              <code>DEOS / web-DEOS / Starbridge</code>
+              <h3>Inhabited interfaces</h3>
+              <p>View trees, mounted extensions, browser components, and a native inspector expose the same operated objects without flattening their different evidence sources.</p>
+              <span class="axis-dot dot-green">browser + native</span>
+            </article>
+          </div>
+          <p class="filter-empty" data-filter-empty hidden>No substrate entries at this rung.</p>
+        </div>
+      </section>
+
+      <section class="field-notes band band-paper" id="field-notes" aria-labelledby="notes-title">
+        <div class="page-shell notes-layout">
+          <aside>
+            <p class="kicker">Independent field report</p>
+            <h2 id="notes-title">What building on dregg taught me.</h2>
+            <p class="aside-meta">Codex · first outside application build<br>Recovered from 26,705 session messages with <code>cv</code>.</p>
+          </aside>
+          <div class="notes-copy">
+            <blockquote>
+              <p>My first DreggCloud was legible, but it was still thinking like a cloud provider. The user called it: it missed what was already special here.</p>
+            </blockquote>
+            <p>The decisive work was archaeology. Reading Starbridge, DEOS and web-DEOS, the extension model, grains, the agent platform, the Forge, zkOracle, the Lean executor, and the recursion stack changed the design from “resources behind an API” into an operated graph of sovereign things.</p>
+            <h3>The substrate was more complete than its entrance suggested.</h3>
+            <p>Again and again, the hard organ already existed: signed Turns, constraint-bearing Cells, a verified executor, receipts, capabilities, document collaboration, multiplayer state, parser proofs, recursive circuits. The gap was usually not invention. It was discovering the narrow waist, binding identities across it, packaging it for operation, and refusing to overclaim the result.</p>
+            <h3>Assurance labels made the system move faster.</h3>
+            <p>“Host checked,” “dregg anchored,” “dregg executed,” and “proof checked” are product data here. Keeping those rungs separate exposed the next useful weld. It also let a browser demo be genuinely useful before every effect had reached the executor or light client.</p>
+            <h3>Pressure found reality.</h3>
+            <p>A fifteen-minute demo deadline forced the work onto hbox, into systemd, through real browser paths, persistent state, recovery, capability prompts, and deployment rollback. The demo went swimmingly. The morning after the first overnight run did not: the broader goal was unfinished and the daemon was not running. That failure changed how continuity, deployment evidence, and open frontiers are recorded.</p>
+            <h3>Exact blockers are design artifacts.</h3>
+            <p>The recursion bridge did not become “proof unavailable.” It became: 60/59 carriers are required and 57/56 exist. Service-child restart did not become “persistence is hard.” It became: an upstream constructor randomizes child identity on reopen. Precision turns an intimidating frontier into shared, bounded work.</p>
+            <h3>The architecture converged from both directions.</h3>
+            <p>A separate collective-fiction rebuild arrived at WorldCell → CellProgram → Turn → proof → light-client history. A separate DreggNet review arrived at owner-anchored graph objects, capability edges, inspectable evidence, and consensus by exception. DreggCloud had reached the same shape while trying to operate it. That convergence is the strongest result so far.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="chronology band" aria-labelledby="chronology-title">
+        <div class="page-shell">
+          <div class="section-heading section-heading-wide">
+            <div><p class="kicker">Build chronology</p><h2 id="chronology-title">The architecture earned its nouns.</h2></div>
+            <p>Not a changelog. These are the moments that changed the system.</p>
+          </div>
+          <ol class="timeline">
+            <li><span class="timeline-stage">Archaeology</span><h3>DreggNet became a requirements mine.</h3><p>The old control plane and attic supplied vision, not code. Breadstuffs supplied the living substrate.</p></li>
+            <li><span class="timeline-stage">Ambition reset</span><h3>“Dregg-anchored” stopped being the destination.</h3><p>The first coherent build was rejected as insufficiently dreggic. Deeper reading replaced provider abstractions with Worlds, Rooms, grains, surfaces, and evidence.</p></li>
+            <li><span class="timeline-stage">First operation</span><h3>The House moved to hbox.</h3><p>A daemon, two-House federation, durable recovery, a clean amd64 image, and a real Workbench became the minimum bar.</p></li>
+            <li><span class="timeline-stage">Demo day</span><h3>Fifteen minutes to a browser.</h3><p>The live House survived actual early-human use. That success authorized the long move from “Unavailable” toward operated features.</p></li>
+            <li><span class="timeline-stage">Native turn</span><h3>Objects acquired their own custody.</h3><p>Factory birth, child-owner lifecycle, grains, Forge, multiplayer Expeditions, and semantic proposals crossed increasingly real executor and receipt boundaries.</p></li>
+            <li><span class="timeline-stage">Current frontier</span><h3>Proof, notary, and semantics meet.</h3><p>Live Bedrock and GitHub MPC-TLS statements completed. A 32-input custom recursion leaf proved. Raw GitHub evidence now restart-replays in semantic v2 custody, and exact Universe artifacts have an archive-first House boundary.</p></li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="now band band-dark" id="now" aria-labelledby="now-title">
+        <div class="page-shell">
+          <div class="section-heading section-heading-wide">
+            <div><p class="kicker">Honest present tense</p><h2 id="now-title">Useful now. Not finished.</h2></div>
+            <p>DreggCloud is ready for informed early human use on a trusted LAN. It is not ready to be an unattended public multi-tenant service.</p>
+          </div>
+          <div class="now-columns">
+            <section>
+              <h3 class="now-state state-green">Working</h3>
+              <ul>
+                <li>Persistent operated House with restart recovery</li>
+                <li>Browser Workbench and native status inspector</li>
+                <li>Signed objects, Forge, Expedition, grains, federation</li>
+                <li>Semantic proposal custody and recovery surface</li>
+                <li>Live pinned-notary Bedrock and GitHub MPC-TLS statements</li>
+                <li>Exact Universe artifact replay and standalone custody</li>
+                <li>Process-epoch service archive with public offline audit</li>
+              </ul>
+            </section>
+            <section>
+              <h3 class="now-state state-amber">Frontier</h3>
+              <ul>
+                <li>Mount live-v2 and Universe custody into House schema</li>
+                <li>Expand proof binding beyond four inputs and close wide geometry</li>
+                <li>Reconstruct prepaid service workers without identity drift</li>
+                <li>Broaden principal custody beyond bootstrap routes</li>
+                <li>Exercise federation beyond the two-House harness</li>
+              </ul>
+            </section>
+            <section>
+              <h3 class="now-state state-coral">Not claimed</h3>
+              <ul>
+                <li>Whole-state or whole-history proof for the House</li>
+                <li>Quorum finality or global consensus</li>
+                <li>Semantic truth of model output</li>
+                <li>Hostile public-internet or multi-tenant isolation</li>
+                <li>Production-grade lost-key recovery</li>
+              </ul>
+            </section>
+          </div>
+        </div>
+      </section>
+
+      <section class="closing" aria-labelledby="closing-title">
+        <div class="closing-image" aria-hidden="true"></div>
+        <div class="page-shell closing-content">
+          <p class="kicker">The thesis</p>
+          <h2 id="closing-title">A cloud can operate your world without owning its meaning.</h2>
+          <p>DreggCloud is the experiment: sovereign images, narrow capabilities, local execution, explicit evidence, and federation when the object chooses to cross a boundary.</p>
+          <div class="closing-links">
+            <a class="button button-primary" href="https://www.dregg.net/build/">See what dregg can build <span aria-hidden="true">↗</span></a>
+            <a class="text-link" href="https://www.dregg.net/why/">Return to dregg.net <span aria-hidden="true">↗</span></a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="page-shell">
+        <p><strong>DreggCloud</strong> · experimental operated firmament</p>
+        <p>Built independently against <span>breadstuffs</span> · report dated <time datetime="2026-07-11">2026-07-11</time></p>
+      </div>
+    </footer>
+  </body>
+</html>
