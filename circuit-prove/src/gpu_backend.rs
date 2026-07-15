@@ -70,7 +70,11 @@
 //!   by structure: the PCS seam (`.to_row_major_matrix()`) and the FRI
 //!   query/fold phases read the committed matrix on the host. See the
 //!   "LDE device-residency" section below for the binding contract.
-//! - NOT yet wired: the all-BabyBear inner (apex-fold) MMCS.
+//! - The all-BabyBear inner (apex-fold) MMCS + DFT are wired through the
+//!   production recursion-layer dispatch below.  Native uses wgpu when an
+//!   adapter is present; native-without-GPU and wasm keep the CPU recursion
+//!   path, while the browser async WGSL engine remains available via
+//!   [`init_gpu`].
 
 // On wasm32 the sync-config GPU machinery is intentionally CPU-shelled (wgpu
 // handles are `!Send + !Sync` there), so the native-only imports and the
@@ -94,8 +98,10 @@ use p3_baby_bear::{
 use p3_batch_stark::ProverData;
 use p3_bn254::Bn254;
 use p3_challenger::DuplexChallenger;
+use p3_circuit::{Circuit, CircuitBuilder};
 use p3_circuit_prover::{
     AirVariant, BatchStarkProof, BatchStarkProver, CircuitProverData, ConstraintProfile,
+    TablePacking,
     common::{NpoAirBuilder, NpoPreprocessor, get_airs_and_degrees_with_prep},
     expose_claim_air_builders, expose_claim_preprocessor, poseidon2_air_builders,
     poseidon2_preprocessor, recompose_air_builders, recompose_preprocessor,
@@ -105,6 +111,7 @@ use p3_dft::{Radix2DitParallel, TwoAdicSubgroupDft};
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing, PrimeField32, TwoAdicField};
 use p3_fri::{FriParameters, TwoAdicFriPcs};
+use p3_lookup::Lookups;
 use p3_lookup::logup::LogUpGadget;
 use p3_matrix::Matrix;
 use p3_matrix::bitrev::{BitReversedMatrixView, BitReversibleMatrix};
@@ -112,8 +119,9 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::{MerkleTreeError, MerkleTreeMmcs};
 use p3_recursion::traits::RecursiveAir;
 use p3_recursion::{
-    BatchOnly, PcsRecursionBackend, ProveNextLayerParams, RecursionInput, RecursionOutput,
-    VerifierCircuitResult, build_next_layer_circuit, ops::Poseidon2Config,
+    AggExposeHook, BatchOnly, NextLayerExposeHook, PcsRecursionBackend, ProveNextLayerParams,
+    RecursionInput, RecursionOutput, VerifierCircuitResult, build_and_prove_next_layer_with_expose,
+    build_next_layer_circuit, build_next_layer_circuit_with_expose, ops::Poseidon2Config,
 };
 use p3_symmetric::{MerkleCap, PaddingFreeSponge, TruncatedPermutation};
 use p3_uni_stark::{StarkConfig, StarkGenericConfig};
@@ -126,7 +134,9 @@ use crate::dregg_outer_config::{
     RC3_EXT_TERMINAL, RC3_INTERNAL, dregg_poseidon2_bn254,
 };
 use crate::ivc_turn_chain::ir2_leaf_wrap_config;
-use crate::plonky3_recursion_impl::recursive::{DreggRecursionConfig, create_recursion_backend};
+use crate::plonky3_recursion_impl::recursive::{
+    DreggRecursionConfig, create_recursion_backend, create_recursion_config,
+};
 
 // ============================================================================
 // Shared BabyBear host helpers (Montgomery <-> canonical, raw casts)
@@ -345,6 +355,32 @@ fn lde_registry() -> &'static Mutex<LdeRegistry> {
     LDE_REGISTRY.get_or_init(|| Mutex::new(LdeRegistry::default()))
 }
 
+/// Runtime escape hatch for isolating/disabling the optional device-resident
+/// DFT->MMCS hand-off. The host-upload path remains the bit-exact baseline.
+#[cfg(not(target_arch = "wasm32"))]
+fn lde_residency_enabled() -> bool {
+    !matches!(
+        std::env::var("DREGG_GPU_LDE_RESIDENCY")
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
+        "off" | "false" | "0" | "host"
+    )
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn gpu_runtime_stage_enabled(var: &str) -> bool {
+    !matches!(
+        std::env::var(var)
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
+        "off" | "false" | "0" | "cpu"
+    )
+}
+
 /// Park a coset-LDE's retained device buffer, keyed by the host allocation
 /// that `TwoAdicFriPcs::commit` will hand to `Mmcs::commit`.
 #[cfg(not(target_arch = "wasm32"))]
@@ -393,6 +429,9 @@ fn register_resident_lde(values: &[BabyBear], buf: wgpu::Buffer) {
 /// the (thread, ptr, len) key AND the sampled-content guard both match.
 #[cfg(not(target_arch = "wasm32"))]
 fn take_resident_lde<M: Matrix<BabyBear>>(m: &M) -> Option<wgpu::Buffer> {
+    if !lde_residency_enabled() {
+        return None;
+    }
     let h = m.height();
     let w = m.width();
     if h == 0 || w == 0 {
@@ -1221,6 +1260,9 @@ impl TwoAdicSubgroupDft<BabyBear> for GpuDft {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
+            if !gpu_runtime_stage_enabled("DREGG_GPU_DFT") {
+                return self.cpu.dft_batch(mat);
+            }
             let h = mat.height();
             if h < (1 << MIN_GPU_LOG_H) || !h.is_power_of_two() || mat.width() == 0 {
                 return self.cpu.dft_batch(mat);
@@ -1246,6 +1288,9 @@ impl TwoAdicSubgroupDft<BabyBear> for GpuDft {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
+            if !gpu_runtime_stage_enabled("DREGG_GPU_DFT") {
+                return self.cpu.coset_lde_batch(mat, added_bits, shift);
+            }
             let h = mat.height();
             if h < (1 << MIN_GPU_LOG_H) || !h.is_power_of_two() || mat.width() == 0 {
                 return self.cpu.coset_lde_batch(mat, added_bits, shift);
@@ -1680,6 +1725,10 @@ fn hash_shader_source(wg: u32) -> String {
 const HASH_WG: u32 = 64;
 /// Max permutations per dispatch (Metal watchdog headroom at ~1 Mperm/s).
 const HASH_MAX_PERMS_PER_DISPATCH: usize = 1 << 18;
+/// The portable 8-limb WGSL kernel is retained for browser/small native
+/// workloads, but oversized BN254 commitments use the exact CPU floor.  The
+/// production Vulkan lane uses the direct-SPIR-V engine and is not capped.
+const HASH_WGSL_MAX_COMMIT_PERMS: usize = HASH_MAX_PERMS_PER_DISPATCH;
 
 /// The direct-SPIR-V kernel was compiled from
 /// `sketches/bn254_poseidon2_int64.comp` with workgroup size 128, then passed
@@ -2051,12 +2100,36 @@ impl HashCtx {
         })
     }
 
+    /// Upload an immutable descriptor for one queued command.  Reusing and
+    /// rewriting one storage buffer across several outstanding dispatches is
+    /// racy on host-visible backends once the GPU falls behind the submitter:
+    /// a command may observe a later chunk's words.  These buffers are tiny;
+    /// the submitted bind group retains each one until its command completes.
+    fn descriptor_buffer(&self, label: &str, words: &[u32]) -> wgpu::Buffer {
+        let buf = self.storage_buffer(label, words.len(), true);
+        self.queue
+            .write_buffer(&buf, 0, bytemuck::cast_slice(words));
+        buf
+    }
+
+    /// `Queue::write_buffer` implementations commonly stage each call in one
+    /// temporary allocation.  Keep production trace uploads below the large
+    /// allocation/driver thresholds (the outer w=300 LDE is ~150 MiB).
+    fn write_u32s_chunked(&self, dst: &wgpu::Buffer, dst_word_offset: usize, words: &[u32]) {
+        const UPLOAD_WORDS: usize = (16 << 20) / 4;
+        for (chunk_index, chunk) in words.chunks(UPLOAD_WORDS).enumerate() {
+            let word_offset = dst_word_offset + chunk_index * UPLOAD_WORDS;
+            self.queue
+                .write_buffer(dst, (word_offset * 4) as u64, bytemuck::cast_slice(chunk));
+        }
+    }
+
     /// Dispatch the leaf sponge over `n_rows` rows in watchdog-safe chunks.
     /// `perms_per_row` sizes the chunks; desc buffer is rewritten per chunk.
     fn dispatch_leaf(
         &self,
         arena: &wgpu::Buffer,
-        desc_buf: &wgpu::Buffer,
+        _desc_buf: &wgpu::Buffer,
         out: &wgpu::Buffer,
         desc_head: &[u32; 4],
         mat_descs: &[u32],
@@ -2068,14 +2141,13 @@ impl HashCtx {
                 let rows_per_chunk = (HASH_MAX_PERMS_PER_DISPATCH / perms_per_row.max(1))
                     .max(HASH_WG as usize)
                     .next_multiple_of(HASH_WG as usize);
-                let bindg = self.bind(bgl, arena, desc_buf, out);
                 let mut base = 0usize;
                 while base < n_rows {
                     let rows = rows_per_chunk.min(n_rows - base);
                     let mut desc = vec![desc_head[0], base as u32, rows as u32, 0];
                     desc.extend_from_slice(mat_descs);
-                    self.queue
-                        .write_buffer(desc_buf, 0, bytemuck::cast_slice(&desc));
+                    let chunk_desc = self.descriptor_buffer("bn254_leaf_desc", &desc);
+                    let bindg = self.bind(bgl, arena, &chunk_desc, out);
                     let mut enc = self.device.create_command_encoder(&Default::default());
                     {
                         let mut pass = enc.begin_compute_pass(&Default::default());
@@ -2116,9 +2188,8 @@ impl HashCtx {
                             permutation_index as u32,
                         ];
                         desc.extend_from_slice(mat_descs);
-                        self.queue
-                            .write_buffer(desc_buf, 0, bytemuck::cast_slice(&desc));
-                        let pack_bg = self.bind(tree_bgl, arena, desc_buf, &state_a);
+                        let pack_desc = self.descriptor_buffer("bn254_leaf_pack_desc", &desc);
+                        let pack_bg = self.bind(tree_bgl, arena, &pack_desc, &state_a);
                         let perm_bg = self.bind(perm_bgl, &state_a, &state_b, round_constants);
                         let mut enc = self.device.create_command_encoder(&Default::default());
                         {
@@ -2137,9 +2208,8 @@ impl HashCtx {
                         std::mem::swap(&mut state_a, &mut state_b);
                     }
                     let desc = [rows as u32, base as u32, 0u32, 0u32];
-                    self.queue
-                        .write_buffer(desc_buf, 0, bytemuck::cast_slice(&desc));
-                    let extract_bg = self.bind(tree_bgl, &state_a, desc_buf, out);
+                    let extract_desc = self.descriptor_buffer("bn254_leaf_extract_desc", &desc);
+                    let extract_bg = self.bind(tree_bgl, &state_a, &extract_desc, out);
                     let mut enc = self.device.create_command_encoder(&Default::default());
                     {
                         let mut pass = enc.begin_compute_pass(&Default::default());
@@ -2160,7 +2230,7 @@ impl HashCtx {
     fn dispatch_level(
         &self,
         src: &wgpu::Buffer,
-        desc_buf: &wgpu::Buffer,
+        _desc_buf: &wgpu::Buffer,
         out: &wgpu::Buffer,
         n: usize,
         combine: bool,
@@ -2174,12 +2244,11 @@ impl HashCtx {
             } => {
                 let pipe = if combine { combine_pipe } else { compress_pipe };
                 let mut base = 0usize;
-                let bindg = self.bind(bgl, src, desc_buf, out);
                 while base < n {
                     let cnt = HASH_MAX_PERMS_PER_DISPATCH.min(n - base);
                     let desc = [cnt as u32, base as u32, 0u32, 0u32];
-                    self.queue
-                        .write_buffer(desc_buf, 0, bytemuck::cast_slice(&desc));
+                    let chunk_desc = self.descriptor_buffer("bn254_level_desc", &desc);
+                    let bindg = self.bind(bgl, src, &chunk_desc, out);
                     let mut enc = self.device.create_command_encoder(&Default::default());
                     {
                         let mut pass = enc.begin_compute_pass(&Default::default());
@@ -2213,9 +2282,8 @@ impl HashCtx {
                         // First lane is the already-compressed parent in
                         // `out`; the second is this height's injected leaf.
                         let desc = [cnt as u32, base as u32, 1u32, 0u32];
-                        self.queue
-                            .write_buffer(desc_buf, 0, bytemuck::cast_slice(&desc));
-                        let lane0_bg = self.bind(tree_bgl, out, desc_buf, &state_in);
+                        let lane0_desc = self.descriptor_buffer("bn254_level_lane0_desc", &desc);
+                        let lane0_bg = self.bind(tree_bgl, out, &lane0_desc, &state_in);
                         let mut enc = self.device.create_command_encoder(&Default::default());
                         {
                             let mut pass = enc.begin_compute_pass(&Default::default());
@@ -2228,9 +2296,8 @@ impl HashCtx {
 
                     let mode = if combine { 2u32 } else { 0u32 };
                     let desc = [cnt as u32, base as u32, mode, 0u32];
-                    self.queue
-                        .write_buffer(desc_buf, 0, bytemuck::cast_slice(&desc));
-                    let pack_bg = self.bind(tree_bgl, src, desc_buf, &state_in);
+                    let pack_desc = self.descriptor_buffer("bn254_level_pack_desc", &desc);
+                    let pack_bg = self.bind(tree_bgl, src, &pack_desc, &state_in);
                     let perm_bg = self.bind(perm_bgl, &state_in, &state_out, round_constants);
                     let mut enc = self.device.create_command_encoder(&Default::default());
                     {
@@ -2248,9 +2315,8 @@ impl HashCtx {
                     self.queue.submit([enc.finish()]);
 
                     let desc = [cnt as u32, base as u32, 0u32, 0u32];
-                    self.queue
-                        .write_buffer(desc_buf, 0, bytemuck::cast_slice(&desc));
-                    let extract_bg = self.bind(tree_bgl, &state_out, desc_buf, out);
+                    let extract_desc = self.descriptor_buffer("bn254_level_extract_desc", &desc);
+                    let extract_bg = self.bind(tree_bgl, &state_out, &extract_desc, out);
                     let mut enc = self.device.create_command_encoder(&Default::default());
                     {
                         let mut pass = enc.begin_compute_pass(&Default::default());
@@ -2413,30 +2479,52 @@ impl GpuBn254Mmcs {
                 let arena = ctx.storage_buffer("leaf_arena", arena_u32s, true);
                 let mut mat_descs: Vec<u32> = Vec::with_capacity(group.len() * 2);
                 let mut blits: Vec<(wgpu::Buffer, usize)> = Vec::new();
-                let mut off = 0usize;
-                for &i in group {
-                    let m = &leaves[i];
-                    let w = m.width();
-                    if let Some(resident) = take_resident_lde(m) {
-                        LDE_RESIDENT_HITS.fetch_add(1, Ordering::Relaxed);
-                        // The key guarantees the buffer holds exactly h*w u32s.
-                        blits.push((resident, off));
-                    } else {
-                        LDE_RESIDENT_MISSES.fetch_add(1, Ordering::Relaxed);
-                        let mut staging = vec![0u32; h * w];
-                        staging.par_chunks_mut(w).enumerate().for_each(|(r, dst)| {
-                            let row = m.row_slice(r).expect("row in range");
-                            dst.copy_from_slice(bb_as_u32s(&row));
+                if group.len() > 1 && matches!(&ctx.engine, HashEngine::Wgsl { .. }) {
+                    // A few native backends miscompile/alias the large
+                    // matrix-major offsets reached by production batches
+                    // (e.g. the second matrix starts ~80 MiB into the tall
+                    // outer trace arena).  Flatten the logical concatenation
+                    // into one row-major stream: this is exactly the iterator
+                    // seen by `hash_iter_slices`, avoids the high-offset
+                    // gather, and is portable WGSL/SPIR-V input.
+                    let mut staging = vec![0u32; arena_u32s];
+                    staging
+                        .par_chunks_mut(total_w)
+                        .enumerate()
+                        .for_each(|(r, dst)| {
+                            let mut c0 = 0usize;
+                            for &i in group {
+                                let m = &leaves[i];
+                                let w = m.width();
+                                let row = m.row_slice(r).expect("row in range");
+                                dst[c0..c0 + w].copy_from_slice(bb_as_u32s(&row));
+                                c0 += w;
+                            }
                         });
-                        ctx.queue.write_buffer(
-                            &arena,
-                            (off * 4) as u64,
-                            bytemuck::cast_slice(&staging),
-                        );
+                    ctx.write_u32s_chunked(&arena, 0, &staging);
+                    LDE_RESIDENT_MISSES.fetch_add(group.len() as u64, Ordering::Relaxed);
+                    mat_descs.extend_from_slice(&[0, total_w as u32]);
+                } else {
+                    let mut off = 0usize;
+                    for &i in group {
+                        let m = &leaves[i];
+                        let w = m.width();
+                        if let Some(resident) = take_resident_lde(m) {
+                            LDE_RESIDENT_HITS.fetch_add(1, Ordering::Relaxed);
+                            // The key guarantees the buffer holds exactly h*w u32s.
+                            blits.push((resident, off));
+                        } else {
+                            LDE_RESIDENT_MISSES.fetch_add(1, Ordering::Relaxed);
+                            let mut staging = vec![0u32; h * w];
+                            staging.par_chunks_mut(w).enumerate().for_each(|(r, dst)| {
+                                let row = m.row_slice(r).expect("row in range");
+                                dst.copy_from_slice(bb_as_u32s(&row));
+                            });
+                            ctx.write_u32s_chunked(&arena, off, &staging);
+                        }
+                        mat_descs.extend_from_slice(&[off as u32, w as u32]);
+                        off += h * w;
                     }
-                    mat_descs.push(off as u32);
-                    mat_descs.push(w as u32);
-                    off += h * w;
                 }
                 if !blits.is_empty() {
                     // One encoder for all resident blits; submitted after the
@@ -2459,7 +2547,7 @@ impl GpuBn254Mmcs {
                     &arena,
                     desc_buf,
                     out,
-                    &[group.len() as u32, 0, 0, 0],
+                    &[(mat_descs.len() / 2) as u32, 0, 0, 0],
                     &mat_descs,
                     h,
                     perms_per_row,
@@ -2516,12 +2604,15 @@ impl Mmcs<BabyBear> for GpuBn254Mmcs {
         inputs: Vec<M>,
     ) -> (Self::Commitment, Self::ProverData<M>) {
         let shapes: Vec<(usize, usize)> = inputs.iter().map(|m| (m.height(), m.width())).collect();
+        let estimated_perms = Self::estimate_perms(&shapes);
         let gpu_able = self.cap_height == 0
             && !inputs.is_empty()
             && shapes
                 .iter()
                 .all(|&(h, w)| h.is_power_of_two() && h > 0 && w > 0)
-            && Self::estimate_perms(&shapes) >= MIN_GPU_MMCS_PERMS;
+            && estimated_perms >= MIN_GPU_MMCS_PERMS;
+        #[cfg(not(target_arch = "wasm32"))]
+        let gpu_able = gpu_able && gpu_runtime_stage_enabled("DREGG_GPU_BN254_MMCS");
         // The GPU fast-path is native-only (holds wgpu handles). On wasm the
         // sync-config MMCS is a CPU shell; the on-device GPU BN254 tree lives in
         // the async engine at the file end (reached via `init_gpu()`).
@@ -2534,7 +2625,9 @@ impl Mmcs<BabyBear> for GpuBn254Mmcs {
             for &(h, w) in &shapes {
                 *group_arena.entry(h).or_default() += h * w;
             }
-            if group_arena.values().all(|&u| u <= ctx.max_binding_u32s) {
+            let portable_size_ok = !matches!(&ctx.engine, HashEngine::Wgsl { .. })
+                || estimated_perms <= HASH_WGSL_MAX_COMMIT_PERMS;
+            if portable_size_ok && group_arena.values().all(|&u| u <= ctx.max_binding_u32s) {
                 let tree = self.build_gpu_tree(&ctx, inputs);
                 let root = tree.digest_layers.last().expect("non-empty tree")[0];
                 let commitment = MerkleCap::new(vec![[bn254_from_canonical_limbs(&root)]]);
@@ -3029,11 +3122,20 @@ impl BbHashCtx {
         })
     }
 
+    /// One immutable descriptor per queued dispatch; see the BN254 twin's
+    /// descriptor-buffer invariant above.
+    fn descriptor_buffer(&self, label: &str, words: &[u32]) -> wgpu::Buffer {
+        let buf = self.storage_buffer(label, words.len(), true);
+        self.queue
+            .write_buffer(&buf, 0, bytemuck::cast_slice(words));
+        buf
+    }
+
     /// Dispatch the leaf sponge over `n_rows` rows in watchdog-safe chunks.
     fn dispatch_leaf(
         &self,
         arena: &wgpu::Buffer,
-        desc_buf: &wgpu::Buffer,
+        _desc_buf: &wgpu::Buffer,
         out: &wgpu::Buffer,
         n_mats: u32,
         mat_descs: &[u32],
@@ -3043,14 +3145,13 @@ impl BbHashCtx {
         let rows_per_chunk = (HASH_MAX_PERMS_PER_DISPATCH / perms_per_row.max(1))
             .max(BB_HASH_WG as usize)
             .next_multiple_of(BB_HASH_WG as usize);
-        let bindg = self.bind(arena, desc_buf, out);
         let mut base = 0usize;
         while base < n_rows {
             let rows = rows_per_chunk.min(n_rows - base);
             let mut desc = vec![n_mats, base as u32, rows as u32, 0];
             desc.extend_from_slice(mat_descs);
-            self.queue
-                .write_buffer(desc_buf, 0, bytemuck::cast_slice(&desc));
+            let chunk_desc = self.descriptor_buffer("bb_leaf_desc", &desc);
+            let bindg = self.bind(arena, &chunk_desc, out);
             let mut enc = self.device.create_command_encoder(&Default::default());
             {
                 let mut pass = enc.begin_compute_pass(&Default::default());
@@ -3068,17 +3169,16 @@ impl BbHashCtx {
         &self,
         pipe: &wgpu::ComputePipeline,
         src: &wgpu::Buffer,
-        desc_buf: &wgpu::Buffer,
+        _desc_buf: &wgpu::Buffer,
         out: &wgpu::Buffer,
         n: usize,
     ) {
         let mut base = 0usize;
-        let bindg = self.bind(src, desc_buf, out);
         while base < n {
             let cnt = HASH_MAX_PERMS_PER_DISPATCH.min(n - base);
             let desc = [cnt as u32, base as u32, 0u32, 0u32];
-            self.queue
-                .write_buffer(desc_buf, 0, bytemuck::cast_slice(&desc));
+            let chunk_desc = self.descriptor_buffer("bb_level_desc", &desc);
+            let bindg = self.bind(src, &chunk_desc, out);
             let mut enc = self.device.create_command_encoder(&Default::default());
             {
                 let mut pass = enc.begin_compute_pass(&Default::default());
@@ -3221,40 +3321,61 @@ impl GpuBabyBearMmcs {
         }
         let max_h = groups[0].0;
 
-        let hash_group = |group: &[usize],
-                          h: usize,
-                          out: &wgpu::Buffer,
-                          desc_buf: &wgpu::Buffer| {
-            let total_w: usize = group.iter().map(|&i| leaves[i].width()).sum();
-            let arena_u32s: usize = h * total_w;
-            let arena = ctx.storage_buffer("bb_leaf_arena", arena_u32s, true);
-            let mut mat_descs: Vec<u32> = Vec::with_capacity(group.len() * 2);
-            let mut off = 0usize;
-            for &i in group {
-                let m = &leaves[i];
-                let w = m.width();
-                let mut staging = vec![0u32; h * w];
-                staging.par_chunks_mut(w).enumerate().for_each(|(r, dst)| {
-                    let row = m.row_slice(r).expect("row in range");
-                    dst.copy_from_slice(bb_as_u32s(&row));
-                });
-                ctx.queue
-                    .write_buffer(&arena, (off * 4) as u64, bytemuck::cast_slice(&staging));
-                mat_descs.push(off as u32);
-                mat_descs.push(w as u32);
-                off += h * w;
-            }
-            let perms_per_row = total_w.div_ceil(8).max(1);
-            ctx.dispatch_leaf(
-                &arena,
-                desc_buf,
-                out,
-                group.len() as u32,
-                &mat_descs,
-                h,
-                perms_per_row,
-            );
-        };
+        let hash_group =
+            |group: &[usize], h: usize, out: &wgpu::Buffer, desc_buf: &wgpu::Buffer| {
+                let total_w: usize = group.iter().map(|&i| leaves[i].width()).sum();
+                let arena_u32s: usize = h * total_w;
+                let arena = ctx.storage_buffer("bb_leaf_arena", arena_u32s, true);
+                let mut mat_descs: Vec<u32> = Vec::with_capacity(group.len() * 2);
+                let mut blits: Vec<(wgpu::Buffer, usize)> = Vec::new();
+                let mut off = 0usize;
+                for &i in group {
+                    let m = &leaves[i];
+                    let w = m.width();
+                    if let Some(resident) = take_resident_lde(m) {
+                        LDE_RESIDENT_HITS.fetch_add(1, Ordering::Relaxed);
+                        blits.push((resident, off));
+                    } else {
+                        LDE_RESIDENT_MISSES.fetch_add(1, Ordering::Relaxed);
+                        let mut staging = vec![0u32; h * w];
+                        staging.par_chunks_mut(w).enumerate().for_each(|(r, dst)| {
+                            let row = m.row_slice(r).expect("row in range");
+                            dst.copy_from_slice(bb_as_u32s(&row));
+                        });
+                        ctx.queue.write_buffer(
+                            &arena,
+                            (off * 4) as u64,
+                            bytemuck::cast_slice(&staging),
+                        );
+                    }
+                    mat_descs.push(off as u32);
+                    mat_descs.push(w as u32);
+                    off += h * w;
+                }
+                if !blits.is_empty() {
+                    let mut enc = ctx.device.create_command_encoder(&Default::default());
+                    for (resident, boff) in &blits {
+                        enc.copy_buffer_to_buffer(
+                            resident,
+                            0,
+                            &arena,
+                            (*boff * 4) as u64,
+                            resident.size(),
+                        );
+                    }
+                    ctx.queue.submit([enc.finish()]);
+                }
+                let perms_per_row = total_w.div_ceil(8).max(1);
+                ctx.dispatch_leaf(
+                    &arena,
+                    desc_buf,
+                    out,
+                    group.len() as u32,
+                    &mat_descs,
+                    h,
+                    perms_per_row,
+                );
+            };
 
         let desc_buf = ctx.storage_buffer("bb_desc", 4 + 2 * leaves.len().max(2), true);
         let dig_a = ctx.storage_buffer("bb_dig_a", max_h * 8, true);
@@ -3322,9 +3443,11 @@ impl Mmcs<BabyBear> for GpuBabyBearMmcs {
                 let tree = self.build_gpu_tree(&ctx, inputs);
                 let root = tree.digest_layers.last().expect("non-empty tree")[0];
                 let commitment = MerkleCap::new(vec![bb8_from_monty(&root)]);
+                clear_thread_resident_ldes();
                 return (commitment, GpuBbMmcsProverData::Gpu(tree));
             }
         }
+        clear_thread_resident_ldes();
         let (c, d) = self.cpu.commit(inputs);
         (c, GpuBbMmcsProverData::Cpu(d))
     }
@@ -3805,12 +3928,113 @@ pub fn create_gpu_recursion_config() -> GpuDreggRecursionConfig {
     }
 }
 
+/// GPU recursion config matching the production rotated fold's
+/// `ir2_leaf_wrap_config`: log_blowup=6, 19 queries, binary FRI folding, and
+/// 16 query-PoW bits.  The CPU and GPU configs differ only in their DFT/MMCS
+/// implementations, so proofs re-tag byte-for-byte between them.
+pub fn create_gpu_ir2_leaf_wrap_config() -> GpuDreggRecursionConfig {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        static GPU_IR2_WRAP_CONFIG: OnceLock<GpuDreggRecursionConfig> = OnceLock::new();
+        GPU_IR2_WRAP_CONFIG
+            .get_or_init(|| create_gpu_recursion_config_with_fri(6, 0, 1, 19, 0, 16))
+            .clone()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        thread_local! {
+            static GPU_IR2_WRAP_CONFIG: GpuDreggRecursionConfig =
+                create_gpu_recursion_config_with_fri(6, 0, 1, 19, 0, 16);
+        }
+        GPU_IR2_WRAP_CONFIG.with(|c| c.clone())
+    }
+}
+
+static GPU_RECURSION_LAYERS: AtomicU64 = AtomicU64::new(0);
+static CPU_RECURSION_LAYERS: AtomicU64 = AtomicU64::new(0);
+static CPU_RECURSION_LEAF_NS: AtomicU64 = AtomicU64::new(0);
+static CPU_RECURSION_AGG_NS: AtomicU64 = AtomicU64::new(0);
+static GPU_RECURSION_LEAF_PREP_NS: AtomicU64 = AtomicU64::new(0);
+static GPU_RECURSION_LEAF_PROVE_NS: AtomicU64 = AtomicU64::new(0);
+static GPU_RECURSION_AGG_PREP_NS: AtomicU64 = AtomicU64::new(0);
+static GPU_RECURSION_AGG_PROVE_NS: AtomicU64 = AtomicU64::new(0);
+
+/// Cumulative production-dispatch timing, in nanoseconds.  Snapshot before
+/// and after a fold to attribute its leaf-wrap vs aggregation time without
+/// adding logging to the production hot path.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RecursionDispatchProfile {
+    pub cpu_leaf_ns: u64,
+    pub cpu_aggregation_ns: u64,
+    pub gpu_leaf_prepare_ns: u64,
+    pub gpu_leaf_prove_ns: u64,
+    pub gpu_aggregation_prepare_ns: u64,
+    pub gpu_aggregation_prove_ns: u64,
+}
+
+pub fn recursion_dispatch_profile() -> RecursionDispatchProfile {
+    RecursionDispatchProfile {
+        cpu_leaf_ns: CPU_RECURSION_LEAF_NS.load(Ordering::Relaxed),
+        cpu_aggregation_ns: CPU_RECURSION_AGG_NS.load(Ordering::Relaxed),
+        gpu_leaf_prepare_ns: GPU_RECURSION_LEAF_PREP_NS.load(Ordering::Relaxed),
+        gpu_leaf_prove_ns: GPU_RECURSION_LEAF_PROVE_NS.load(Ordering::Relaxed),
+        gpu_aggregation_prepare_ns: GPU_RECURSION_AGG_PREP_NS.load(Ordering::Relaxed),
+        gpu_aggregation_prove_ns: GPU_RECURSION_AGG_PROVE_NS.load(Ordering::Relaxed),
+    }
+}
+
+fn seconds_to_ns_saturating(seconds: f64) -> u64 {
+    (seconds.max(0.0) * 1e9).min(u64::MAX as f64) as u64
+}
+
+/// `(gpu_layers, cpu_layers)` dispatched through the production recursion
+/// wrapper.  This is deliberately layer-level telemetry: a GPU-config layer
+/// may still CPU-fallback for individual tiny matrices below the kernel
+/// thresholds without changing proof bytes.
+pub fn recursion_dispatch_counters() -> (u64, u64) {
+    (
+        GPU_RECURSION_LAYERS.load(Ordering::Relaxed),
+        CPU_RECURSION_LAYERS.load(Ordering::Relaxed),
+    )
+}
+
+/// Runtime policy for the production recursion wrapper.
+///
+/// `DREGG_GPU_RECURSION=cpu|off|0` forces the original CPU recursion path;
+/// `gpu|on|1` forces the GPU config (whose kernels still fail safely to CPU if
+/// the adapter disappears); unset/`auto` uses GPU only when the native sync
+/// adapter is available.  wasm always keeps the sync CPU path — browser GPU
+/// proving remains the async WGSL engine reached through [`init_gpu`].
+pub fn production_gpu_recursion_enabled() -> bool {
+    let policy = std::env::var("DREGG_GPU_RECURSION")
+        .unwrap_or_else(|_| "auto".to_string())
+        .to_ascii_lowercase();
+    match policy.as_str() {
+        "cpu" | "off" | "false" | "0" => false,
+        "gpu" | "on" | "true" | "1" => cfg!(not(target_arch = "wasm32")),
+        _ => {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                GpuDft::default().adapter_name().is_some()
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                false
+            }
+        }
+    }
+}
+
 /// A recursion-layer (fold) proof minted under the GPU fold config. Byte-
 /// identical (asserted in tests) to the CPU
 /// `RecursionOutput<DreggRecursionConfig>.0` for the same layer.
 pub struct GpuRecursionLayerProof {
     pub proof: BatchStarkProof<GpuDreggRecursionConfig>,
     pub prover_data: Rc<CircuitProverData<GpuDreggRecursionConfig>>,
+    /// The lookup contexts produced by the exact CPU-config AIR construction
+    /// for this circuit. They are not serialized in `BatchStarkProof`, but a
+    /// parent recursion/shrink circuit consumes their precise expression order.
+    pub cpu_lookups: Vec<Lookups<BabyBear>>,
     /// Wall-clock seconds of the config-independent prepare phase (verifier
     /// circuit build + table-AIR extraction + witness generation — identical
     /// CPU code in the CPU and GPU fold paths).
@@ -3818,6 +4042,41 @@ pub struct GpuRecursionLayerProof {
     /// Wall-clock seconds of the config-dependent phase (preprocessed commit +
     /// `prove_all_tables` — the part the GPU backend accelerates).
     pub prove_seconds: f64,
+}
+
+/// Rebuild only the cheap, non-serialized lookup portion of the CPU common
+/// data from the exact circuit AIRs. Constructing a full CPU `ProverData` here
+/// would also redo the CPU LDE/Merkle preprocessed commitment and erase much of
+/// the GPU win; the commitment and its metadata are already present, bit-exact,
+/// in the serialized GPU proof.
+fn cpu_recursion_lookups_for_circuit(
+    circuit: &Circuit<EF>,
+    packing: &TablePacking,
+    constraint_profile: ConstraintProfile,
+) -> Result<Vec<Lookups<BabyBear>>, String> {
+    let preprocessors: Vec<Box<dyn NpoPreprocessor<BabyBear>>> = vec![
+        poseidon2_preprocessor::<BabyBear>(),
+        recompose_preprocessor::<BabyBear>(false),
+        expose_claim_preprocessor::<BabyBear>(),
+    ];
+    let air_builders: Vec<Box<dyn NpoAirBuilder<DreggRecursionConfig, D>>> = {
+        let mut builders = poseidon2_air_builders::<DreggRecursionConfig, D>();
+        builders.extend(recompose_air_builders::<DreggRecursionConfig, D>(1, false));
+        builders.extend(expose_claim_air_builders::<DreggRecursionConfig, D>());
+        builders
+    };
+    let (airs_degrees, _, _) = get_airs_and_degrees_with_prep::<DreggRecursionConfig, EF, D>(
+        circuit,
+        packing,
+        &preprocessors,
+        &air_builders,
+        constraint_profile,
+    )
+    .map_err(|e| format!("cpu lookup-context AIR extraction failed: {e:?}"))?;
+    Ok(airs_degrees
+        .iter()
+        .map(|(air, _)| Lookups::<BabyBear>::from_air::<EF, _>(air))
+        .collect())
 }
 
 /// Prove ONE recursion layer (the fold's per-step leaf-wrap / aggregation
@@ -3838,6 +4097,24 @@ pub fn prove_recursion_layer_gpu<A>(
 where
     A: RecursiveAir<BabyBear, EF, LogUpGadget>,
 {
+    prove_recursion_layer_gpu_with_expose(input, inner_config, gpu_config, None)
+}
+
+/// [`prove_recursion_layer_gpu`] with the recursion library's exposed-claim
+/// hook.  Production descriptor leaves use this form to carry the ordered
+/// segment (and, for carrier leaves, the backing claim) into the next layer.
+/// The hook changes only the verifier circuit being proved; the GPU/CPU split
+/// remains the same and the emitted proof is still byte-identical to the CPU
+/// recursion library for that circuit.
+pub fn prove_recursion_layer_gpu_with_expose<A>(
+    input: &RecursionInput<'_, DreggRecursionConfig, A>,
+    inner_config: &DreggRecursionConfig,
+    gpu_config: &GpuDreggRecursionConfig,
+    expose: Option<NextLayerExposeHook<'_, EF>>,
+) -> Result<GpuRecursionLayerProof, String>
+where
+    A: RecursiveAir<BabyBear, EF, LogUpGadget>,
+{
     // Match the recursion library's default layer params (TablePacking::new(1,4),
     // Standard profile) — `default_shrink_packing()` IS that packing, so the
     // proof is byte-identical to a `prove_recursive_layer_for_air` layer.
@@ -3846,9 +4123,13 @@ where
     let t_prepare = std::time::Instant::now();
 
     // (1) The layer verifier circuit, built against the INNER (child) config.
-    let (circuit, verifier_result) =
-        build_next_layer_circuit::<DreggRecursionConfig, A, _, D>(input, inner_config, &backend)
-            .map_err(|e| format!("layer verifier circuit build failed: {e:?}"))?;
+    let (circuit, verifier_result) = build_next_layer_circuit_with_expose::<
+        DreggRecursionConfig,
+        A,
+        _,
+        D,
+    >(input, inner_config, &backend, expose)
+    .map_err(|e| format!("layer verifier circuit build failed: {e:?}"))?;
 
     let constraint_profile = ProveNextLayerParams::default().constraint_profile;
 
@@ -3880,6 +4161,7 @@ where
         .map_err(|e| format!("gpu-fold-config table-AIR extraction failed: {e:?}"))?;
     let (airs, degrees): (Vec<_>, Vec<_>) = airs_degrees.into_iter().unzip();
     let ext_degrees: Vec<usize> = degrees.iter().map(|&d| d + gpu_config.is_zk()).collect();
+    let cpu_lookups = cpu_recursion_lookups_for_circuit(&circuit, &packing, constraint_profile)?;
 
     // (3) Witness generation: the FRI private data (the child's BabyBear Merkle
     // siblings) is injected via the INNER config — it describes the proof being
@@ -3930,6 +4212,170 @@ where
     Ok(GpuRecursionLayerProof {
         proof,
         prover_data: Rc::new(circuit_prover_data),
+        cpu_lookups,
+        prepare_seconds,
+        prove_seconds: t_prove.elapsed().as_secs_f64(),
+    })
+}
+
+/// GPU twin of the recursion library's 2-to-1 `BatchOnly` aggregation layer,
+/// including the segment-combine exposed-claim hook used by the production
+/// turn-chain fold.  Both child proofs are verified in one CPU-built circuit;
+/// the output table LDEs and BabyBear Poseidon2 MMCS commits run through the
+/// GPU config.
+pub fn prove_recursion_aggregation_gpu_with_expose(
+    left: &RecursionInput<'_, DreggRecursionConfig, BatchOnly>,
+    right: &RecursionInput<'_, DreggRecursionConfig, BatchOnly>,
+    inner_config: &DreggRecursionConfig,
+    gpu_config: &GpuDreggRecursionConfig,
+    expose: Option<AggExposeHook<'_, EF>>,
+) -> Result<GpuRecursionLayerProof, String> {
+    let packing = default_shrink_packing();
+    let backend = create_recursion_backend();
+    let t_prepare = std::time::Instant::now();
+
+    // Build the same two-child verifier circuit as
+    // `build_and_prove_aggregation_layer_with_expose`.
+    let mut cb = CircuitBuilder::new();
+    <_ as PcsRecursionBackend<DreggRecursionConfig, BatchOnly, D>>::prepare_circuit(
+        &backend,
+        inner_config,
+        &mut cb,
+    )
+    .map_err(|e| format!("left aggregation circuit prepare failed: {e:?}"))?;
+    <_ as PcsRecursionBackend<DreggRecursionConfig, BatchOnly, D>>::prepare_circuit(
+        &backend,
+        inner_config,
+        &mut cb,
+    )
+    .map_err(|e| format!("right aggregation circuit prepare failed: {e:?}"))?;
+    let left_result =
+        <_ as PcsRecursionBackend<DreggRecursionConfig, BatchOnly, D>>::build_verifier_circuit(
+            &backend,
+            left,
+            inner_config,
+            &mut cb,
+        )
+        .map_err(|e| format!("left aggregation verifier build failed: {e:?}"))?;
+    let right_result =
+        <_ as PcsRecursionBackend<DreggRecursionConfig, BatchOnly, D>>::build_verifier_circuit(
+            &backend,
+            right,
+            inner_config,
+            &mut cb,
+        )
+        .map_err(|e| format!("right aggregation verifier build failed: {e:?}"))?;
+    if let Some(expose) = expose {
+        let left_apt =
+            <_ as VerifierCircuitResult<DreggRecursionConfig, BatchOnly>>::air_public_targets(
+                &left_result,
+            );
+        let right_apt =
+            <_ as VerifierCircuitResult<DreggRecursionConfig, BatchOnly>>::air_public_targets(
+                &right_result,
+            );
+        expose(&mut cb, &left_apt, &right_apt);
+    }
+    let circuit = cb
+        .build()
+        .map_err(|e| format!("aggregation circuit finalization failed: {e:?}"))?;
+
+    let constraint_profile = ProveNextLayerParams::default().constraint_profile;
+    let preprocessors: Vec<Box<dyn NpoPreprocessor<BabyBear>>> = vec![
+        poseidon2_preprocessor::<BabyBear>(),
+        recompose_preprocessor::<BabyBear>(false),
+        expose_claim_preprocessor::<BabyBear>(),
+    ];
+    let air_builders: Vec<Box<dyn NpoAirBuilder<GpuDreggRecursionConfig, D>>> = {
+        let mut builders = poseidon2_air_builders::<GpuDreggRecursionConfig, D>();
+        builders.extend(recompose_air_builders::<GpuDreggRecursionConfig, D>(
+            1, false,
+        ));
+        builders.extend(expose_claim_air_builders::<GpuDreggRecursionConfig, D>());
+        builders
+    };
+    let (airs_degrees, primitive_columns, non_primitive_columns) =
+        get_airs_and_degrees_with_prep::<GpuDreggRecursionConfig, EF, D>(
+            &circuit,
+            &packing,
+            &preprocessors,
+            &air_builders,
+            constraint_profile,
+        )
+        .map_err(|e| format!("gpu aggregation table-AIR extraction failed: {e:?}"))?;
+    let (airs, degrees): (Vec<_>, Vec<_>) = airs_degrees.into_iter().unzip();
+    let ext_degrees: Vec<usize> = degrees.iter().map(|&d| d + gpu_config.is_zk()).collect();
+    let cpu_lookups = cpu_recursion_lookups_for_circuit(&circuit, &packing, constraint_profile)?;
+
+    let traces = {
+        let mut public_inputs = left_result
+            .pack_public_inputs(left)
+            .map_err(|e| format!("left aggregation public inputs: {e:?}"))?;
+        public_inputs.extend(
+            right_result
+                .pack_public_inputs(right)
+                .map_err(|e| format!("right aggregation public inputs: {e:?}"))?,
+        );
+        let mut private_inputs = left_result
+            .pack_private_inputs(left)
+            .map_err(|e| format!("left aggregation private inputs: {e:?}"))?;
+        private_inputs.extend(
+            right_result
+                .pack_private_inputs(right)
+                .map_err(|e| format!("right aggregation private inputs: {e:?}"))?,
+        );
+        let mut runner = circuit.runner();
+        runner
+            .set_public_inputs(&public_inputs)
+            .map_err(|e| format!("aggregation runner public inputs: {e:?}"))?;
+        runner
+            .set_private_inputs(&private_inputs)
+            .map_err(|e| format!("aggregation runner private inputs: {e:?}"))?;
+        let left_op_ids =
+            <_ as VerifierCircuitResult<DreggRecursionConfig, BatchOnly>>::op_ids(&left_result);
+        let right_op_ids =
+            <_ as VerifierCircuitResult<DreggRecursionConfig, BatchOnly>>::op_ids(&right_result);
+        <_ as PcsRecursionBackend<DreggRecursionConfig, BatchOnly, D>>::set_private_data(
+            &backend,
+            inner_config,
+            &mut runner,
+            left_op_ids,
+            left,
+        )
+        .map_err(|e| format!("left aggregation FRI private data: {e}"))?;
+        <_ as PcsRecursionBackend<DreggRecursionConfig, BatchOnly, D>>::set_private_data(
+            &backend,
+            inner_config,
+            &mut runner,
+            right_op_ids,
+            right,
+        )
+        .map_err(|e| format!("right aggregation FRI private data: {e}"))?;
+        runner
+            .run()
+            .map_err(|e| format!("aggregation verifier witness generation failed: {e:?}"))?
+    };
+
+    let prepare_seconds = t_prepare.elapsed().as_secs_f64();
+    let t_prove = std::time::Instant::now();
+    let prover_data = ProverData::from_airs_and_degrees(gpu_config, &airs, &ext_degrees);
+    let circuit_prover_data =
+        CircuitProverData::new(prover_data, primitive_columns, non_primitive_columns);
+    let alu_variant = match constraint_profile {
+        ConstraintProfile::Standard => AirVariant::Baseline,
+        ConstraintProfile::RecursionOptimized => AirVariant::Optimized,
+    };
+    let prover = gpu_recursion_prover(gpu_config)
+        .with_table_packing(packing)
+        .with_alu_variant(alu_variant);
+    let proof = prover
+        .prove_all_tables(&traces, &circuit_prover_data)
+        .map_err(|e| format!("gpu aggregation proving failed: {e}"))?;
+
+    Ok(GpuRecursionLayerProof {
+        proof,
+        prover_data: Rc::new(circuit_prover_data),
+        cpu_lookups,
         prepare_seconds,
         prove_seconds: t_prove.elapsed().as_secs_f64(),
     })
@@ -3953,8 +4399,149 @@ pub fn verify_gpu_recursion_layer(
 pub fn gpu_recursion_proof_to_cpu(
     proof: &BatchStarkProof<GpuDreggRecursionConfig>,
 ) -> Result<BatchStarkProof<DreggRecursionConfig>, String> {
+    gpu_recursion_proof_to_cpu_with_config(proof, &create_recursion_config())
+}
+
+/// [`gpu_recursion_proof_to_cpu`] under the output layer's exact CPU FRI
+/// config. Postcard performs the generic config re-tag. The lookup contexts
+/// are intentionally omitted from `BatchStarkProof` serialization, so copy
+/// them directly from the GPU proof: both configs use `BabyBear`, and retaining
+/// their original expression order is required for byte-identical parent-layer
+/// and shrink proofs.
+pub fn gpu_recursion_proof_to_cpu_with_config(
+    proof: &BatchStarkProof<GpuDreggRecursionConfig>,
+    _cpu_config: &DreggRecursionConfig,
+) -> Result<BatchStarkProof<DreggRecursionConfig>, String> {
+    gpu_recursion_proof_to_cpu_with_lookups(proof, &proof.stark_common.lookups)
+}
+
+fn gpu_recursion_proof_to_cpu_with_lookups(
+    proof: &BatchStarkProof<GpuDreggRecursionConfig>,
+    cpu_lookups: &[Lookups<BabyBear>],
+) -> Result<BatchStarkProof<DreggRecursionConfig>, String> {
     let bytes = postcard::to_allocvec(proof).map_err(|e| format!("gpu proof serialize: {e}"))?;
-    postcard::from_bytes(&bytes).map_err(|e| format!("gpu->cpu proof deserialize: {e}"))
+    let mut cpu_proof: BatchStarkProof<DreggRecursionConfig> =
+        postcard::from_bytes(&bytes).map_err(|e| format!("gpu->cpu proof deserialize: {e}"))?;
+    cpu_proof.stark_common.lookups = cpu_lookups.to_vec();
+    Ok(cpu_proof)
+}
+
+/// Production recursion-layer dispatch.  It preserves the original CPU path
+/// as an explicit/runtime fallback and otherwise proves the identical verifier
+/// circuit through `GpuDft + GpuBabyBearMmcs`, re-tagging the bit-exact proof
+/// into the unchanged `DreggRecursionConfig` type consumed by every parent and
+/// CPU verifier.
+///
+/// The prover-only cache is intentionally omitted on the GPU boundary.  A
+/// `RecursionOutput` continuation reads its proof's own `stark_common`; the
+/// optional cache is neither serialized nor consulted by the fold/verify path.
+pub fn prove_recursion_layer_auto_with_expose<A>(
+    input: &RecursionInput<'_, DreggRecursionConfig, A>,
+    inner_config: &DreggRecursionConfig,
+    expose: Option<NextLayerExposeHook<'_, EF>>,
+) -> Result<RecursionOutput<DreggRecursionConfig>, String>
+where
+    A: RecursiveAir<BabyBear, EF, LogUpGadget>,
+{
+    if !production_gpu_recursion_enabled() {
+        CPU_RECURSION_LAYERS.fetch_add(1, Ordering::Relaxed);
+        let backend = create_recursion_backend();
+        let started = std::time::Instant::now();
+        let output = build_and_prove_next_layer_with_expose::<DreggRecursionConfig, A, _, D>(
+            input,
+            inner_config,
+            &backend,
+            &ProveNextLayerParams::default(),
+            expose,
+        )
+        .map_err(|e| format!("CPU recursion layer failed: {e:?}"));
+        CPU_RECURSION_LEAF_NS.fetch_add(
+            started.elapsed().as_nanos().min(u64::MAX as u128) as u64,
+            Ordering::Relaxed,
+        );
+        return output;
+    }
+
+    let gpu_config = create_gpu_ir2_leaf_wrap_config();
+    let gpu = prove_recursion_layer_gpu_with_expose(input, inner_config, &gpu_config, expose)?;
+    let cpu_proof = gpu_recursion_proof_to_cpu_with_lookups(&gpu.proof, &gpu.cpu_lookups)?;
+    GPU_RECURSION_LEAF_PREP_NS.fetch_add(
+        seconds_to_ns_saturating(gpu.prepare_seconds),
+        Ordering::Relaxed,
+    );
+    GPU_RECURSION_LEAF_PROVE_NS.fetch_add(
+        seconds_to_ns_saturating(gpu.prove_seconds),
+        Ordering::Relaxed,
+    );
+    GPU_RECURSION_LAYERS.fetch_add(1, Ordering::Relaxed);
+    Ok(RecursionOutput(cpu_proof, None))
+}
+
+/// [`prove_recursion_layer_auto_with_expose`] without an exposed-claim hook.
+pub fn prove_recursion_layer_auto<A>(
+    input: &RecursionInput<'_, DreggRecursionConfig, A>,
+    inner_config: &DreggRecursionConfig,
+) -> Result<RecursionOutput<DreggRecursionConfig>, String>
+where
+    A: RecursiveAir<BabyBear, EF, LogUpGadget>,
+{
+    prove_recursion_layer_auto_with_expose(input, inner_config, None)
+}
+
+/// Production 2-to-1 aggregation dispatch, the aggregation twin of
+/// [`prove_recursion_layer_auto_with_expose`].
+pub fn prove_recursion_aggregation_auto_with_expose(
+    left: &RecursionInput<'_, DreggRecursionConfig, BatchOnly>,
+    right: &RecursionInput<'_, DreggRecursionConfig, BatchOnly>,
+    inner_config: &DreggRecursionConfig,
+    expose: Option<AggExposeHook<'_, EF>>,
+) -> Result<RecursionOutput<DreggRecursionConfig>, String> {
+    if !production_gpu_recursion_enabled() {
+        CPU_RECURSION_LAYERS.fetch_add(1, Ordering::Relaxed);
+        let backend = create_recursion_backend();
+        let started = std::time::Instant::now();
+        let output = p3_recursion::build_and_prove_aggregation_layer_with_expose::<
+            DreggRecursionConfig,
+            BatchOnly,
+            BatchOnly,
+            _,
+            D,
+        >(
+            left,
+            right,
+            inner_config,
+            &backend,
+            &ProveNextLayerParams::default(),
+            None,
+            expose,
+        )
+        .map_err(|e| format!("CPU recursion aggregation failed: {e:?}"));
+        CPU_RECURSION_AGG_NS.fetch_add(
+            started.elapsed().as_nanos().min(u64::MAX as u128) as u64,
+            Ordering::Relaxed,
+        );
+        return output;
+    }
+
+    let gpu_config = create_gpu_ir2_leaf_wrap_config();
+    let gpu = prove_recursion_aggregation_gpu_with_expose(
+        left,
+        right,
+        inner_config,
+        &gpu_config,
+        expose,
+    )?;
+    let cpu_proof = gpu_recursion_proof_to_cpu_with_lookups(&gpu.proof, &gpu.cpu_lookups)?;
+    GPU_RECURSION_AGG_PREP_NS.fetch_add(
+        seconds_to_ns_saturating(gpu.prepare_seconds),
+        Ordering::Relaxed,
+    );
+    GPU_RECURSION_AGG_PROVE_NS.fetch_add(
+        seconds_to_ns_saturating(gpu.prove_seconds),
+        Ordering::Relaxed,
+    );
+    GPU_RECURSION_LAYERS.fetch_add(1, Ordering::Relaxed);
+    Ok(RecursionOutput(cpu_proof, None))
 }
 
 /// The GPU twin of the recursion backend's non-primitive prover registration —
@@ -4268,6 +4855,42 @@ mod tests {
         }
     }
 
+    #[test]
+    fn gpu_bn254_mmcs_wide_leaf_parity() {
+        let gpu = GpuBn254Mmcs::new(0);
+        assert!(gpu.adapter_available(), "GPU adapter required");
+        let cpu = gpu.cpu.clone();
+
+        // The real outer shrink's main-trace height groups have aggregate
+        // widths 300 and 80 (76+4). The earlier miniature gate topped out at
+        // width 34 and therefore missed wide-row sponge behavior.
+        for (case, mats) in [
+            ("w300", vec![rand_matrix(0x300, 1 << 12, 300)]),
+            ("w300-chunked", vec![rand_matrix(0x301, 1 << 15, 300)]),
+            (
+                "w76+w4",
+                vec![
+                    rand_matrix(0x76, 1 << 12, 76),
+                    rand_matrix(0x04, 1 << 12, 4),
+                ],
+            ),
+            (
+                "production-geometry-small",
+                vec![
+                    rand_matrix(0x900, 1 << 6, 4),
+                    rand_matrix(0x901, 1 << 6, 4),
+                    rand_matrix(0x902, 1 << 12, 76),
+                    rand_matrix(0x903, 1 << 11, 300),
+                    rand_matrix(0x904, 1 << 12, 4),
+                ],
+            ),
+        ] {
+            let (want, _) = cpu.commit(mats.clone());
+            let (got, _) = gpu.commit(mats);
+            assert_eq!(got.roots(), want.roots(), "wide BN254 leaf parity: {case}");
+        }
+    }
+
     /// Resident-LDE entries registered by THIS test thread (the registry is
     /// thread-keyed, so parallel tests don't interfere).
     fn thread_resident_entries() -> usize {
@@ -4378,6 +5001,79 @@ mod tests {
                     BatchOpeningRef::new(&gpu_open.opened_values, &gpu_open.opening_proof),
                 )
                 .expect("resident-tree opening must verify under the CPU verifier");
+        }
+    }
+
+    #[test]
+    fn gpu_babybear_lde_residency_hit_and_root_parity() {
+        let gpu_dft = GpuDft::default();
+        assert!(
+            gpu_dft.adapter_name().is_some(),
+            "no GPU adapter — this gate must run on the GPU lane"
+        );
+        let gpu_mmcs = GpuBabyBearMmcs::new(0);
+        assert!(gpu_mmcs.adapter_available());
+        let cpu_dft = Radix2DitParallel::<BabyBear>::default();
+        let cpu_mmcs = gpu_mmcs.cpu.clone();
+        let shift = BabyBear::GENERATOR;
+
+        let mat = rand_matrix(52, 1 << 12, 24);
+        let entries0 = thread_resident_entries();
+        let lde_gpu = gpu_dft
+            .coset_lde_batch(mat.clone(), 1, shift)
+            .bit_reverse_rows()
+            .to_row_major_matrix();
+        assert_eq!(thread_resident_entries(), entries0 + 1);
+        let lde_copy = RowMajorMatrix::new(lde_gpu.values.clone(), lde_gpu.width());
+        let lde_cpu = cpu_dft
+            .coset_lde_batch(mat, 1, shift)
+            .bit_reverse_rows()
+            .to_row_major_matrix();
+        assert_eq!(lde_gpu.values, lde_cpu.values, "DFT parity precondition");
+
+        let side = rand_matrix(53, 1 << 11, 34);
+        let dims: Vec<Dimensions> = [&lde_gpu, &side]
+            .iter()
+            .map(|m| Dimensions {
+                width: m.width(),
+                height: m.height(),
+            })
+            .collect();
+        let (hits0, _) = lde_residency_counters();
+        let (commit_resident, data_resident) = gpu_mmcs.commit(vec![lde_gpu, side.clone()]);
+        let (hits1, _) = lde_residency_counters();
+        assert!(matches!(data_resident, GpuBbMmcsProverData::Gpu(_)));
+        assert!(
+            hits1 >= hits0 + 1,
+            "BabyBear resident hand-off was not consumed"
+        );
+        assert_eq!(thread_resident_entries(), 0);
+
+        let (commit_copy, _) = gpu_mmcs.commit(vec![lde_copy, side.clone()]);
+        assert_eq!(
+            commit_resident.roots(),
+            commit_copy.roots(),
+            "BabyBear device-resident and host-upload roots diverge"
+        );
+        let (commit_cpu, cpu_data) = cpu_mmcs.commit(vec![lde_cpu, side]);
+        assert_eq!(
+            commit_resident.roots(),
+            commit_cpu.roots(),
+            "BabyBear device-resident root != untouched CPU MMCS root"
+        );
+        for index in [0usize, 999, (1 << 13) - 1] {
+            let gpu_open = gpu_mmcs.open_batch(index, &data_resident);
+            let cpu_open = cpu_mmcs.open_batch(index, &cpu_data);
+            assert_eq!(gpu_open.opened_values, cpu_open.opened_values);
+            assert_eq!(gpu_open.opening_proof, cpu_open.opening_proof);
+            cpu_mmcs
+                .verify_batch(
+                    &commit_cpu,
+                    &dims,
+                    index,
+                    BatchOpeningRef::new(&gpu_open.opened_values, &gpu_open.opening_proof),
+                )
+                .expect("BabyBear resident-tree opening must verify under CPU MMCS");
         }
     }
 

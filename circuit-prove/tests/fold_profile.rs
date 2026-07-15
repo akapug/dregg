@@ -1,4 +1,4 @@
-//! PROFILE THE FOLD: attribute the ~288s of `prove_turn_chain_recursive` (the
+//! PROFILE THE FOLD: attribute the CPU-bound `prove_turn_chain_recursive` (the
 //! rotated 2-turn apex fold) across its prove stages, so the GPU lever is chosen
 //! from MEASURED numbers, not a prior.
 //!
@@ -114,14 +114,14 @@ fn producer_cell(balance: i64, nonce: u64) -> dregg_cell::Cell {
     cell
 }
 
-fn make_turn(balance: u64, nonce: u32, amount: u64) -> Result<FinalizedTurn, String> {
+fn make_turn(balance: u64, nonce: u32) -> Result<FinalizedTurn, String> {
     let state = CellState::new(balance, nonce);
-    let effects = vec![Effect::Transfer {
-        amount,
-        direction: 1,
-    }];
+    // Keep this fixture aligned with `gpu_backend_shrink_e2e`: IncrementNonce
+    // remains available while the transfer descriptor is mid-regeneration, so
+    // a profiling run cannot silently turn into a zero-work SKIP.
+    let effects = vec![Effect::IncrementNonce];
     let before_cell = producer_cell(balance as i64, nonce as u64);
-    let after_cell = producer_cell((balance as i64) - (amount as i64), nonce as u64);
+    let after_cell = producer_cell(balance as i64, nonce as u64);
     let receipt_log: Vec<[u8; 32]> = vec![[1u8; 32], [2u8; 32]];
     let leg = mint_rotated_participant_leg(
         &state,
@@ -137,7 +137,7 @@ fn make_turn(balance: u64, nonce: u32, amount: u64) -> Result<FinalizedTurn, Str
 }
 
 fn the_chain() -> Result<Vec<FinalizedTurn>, String> {
-    Ok(vec![make_turn(1000, 0, 7)?, make_turn(1000 - 7, 1, 7)?])
+    Ok(vec![make_turn(1000, 0)?, make_turn(1000, 1)?])
 }
 
 #[test]
@@ -146,21 +146,16 @@ fn profile_the_fold() {
     let subscriber = tracing_subscriber::registry().with(FlatProfiler);
     let _guard = tracing::subscriber::set_default(subscriber);
 
-    // The rotated-leg leaf fixture depends on the deployed EffectVM rotation
-    // descriptor. If that descriptor is mid-regen in the working tree (a
-    // weld-geometry mismatch at mint), skip cleanly rather than fail — the
-    // profiler itself is descriptor-agnostic.
-    let chain = match the_chain() {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("SKIP profile_the_fold: rotated leaf mint unavailable ({e})");
-            return;
-        }
-    };
+    let chain = the_chain().expect("the fixed IncrementNonce profiling chain mints");
 
+    // Production dispatch is GPU-auto now. This profiler deliberately samples
+    // the original CPU wall so `perf` and the tracing spans explain where the
+    // historical inner-fold bottleneck went before the GPU cutover.
+    unsafe { std::env::set_var("DREGG_GPU_RECURSION", "cpu") };
     let t0 = Instant::now();
     let whole = prove_turn_chain_recursive(&chain).expect("the fixed 2-turn chain folds");
     let wall = t0.elapsed();
+    unsafe { std::env::remove_var("DREGG_GPU_RECURSION") };
     // Flush the driving thread's final charge.
     charge(Instant::now());
     std::hint::black_box(&whole);
@@ -192,18 +187,48 @@ fn profile_the_fold() {
         println!("{name:<34} {:>10.2} {pct:>7.1}% {c:>9}", d.as_secs_f64());
     }
 
-    // Roll the leaf spans up into the GPU-relevant buckets so the lever is
-    // obvious. Names are matched by substring against the printed table.
-    let bucket = |needles: &[&str]| -> Duration {
+    // Roll the child spans up into the GPU-relevant buckets so the lever is
+    // obvious. Use exact names: the Radix2Dit implementation records almost
+    // all of its time under butterfly/bit-reversal children (not under the
+    // parent `coset_lde_batch_with_transform` span), while FRI's opening
+    // reduction uses `reduce matrix quotient`, which must not be confused with
+    // AIR quotient-polynomial evaluation.
+    let bucket = |names: &[&str]| -> Duration {
         rows.iter()
-            .filter(|(n, _, _)| needles.iter().any(|s| n.contains(s)))
+            .filter(|(n, _, _)| names.iter().any(|s| n == s))
             .map(|(_, d, _)| *d)
             .sum()
     };
-    let dft = bucket(&["coset_lde_batch", "dft", "Dft", "idft"]);
-    let merkle = bucket(&["merkle tree", "digest layer"]);
-    let fri = bucket(&["FRI prover", "query phase", "commit phase", "fold"]);
-    let quotient = bucket(&["compute quotient", "constraint degree"]);
+    let dft = bucket(&[
+        "coset_lde_batch_with_transform",
+        "coset_dft_oop",
+        "coset_dft",
+        "first_half_general_oop",
+        "first_half_general",
+        "second_half_general",
+        "first_half",
+        "second_half",
+        "reverse_matrix_index_bits",
+        "idft final poly",
+    ]);
+    let merkle = bucket(&["build merkle tree", "first digest layer"]);
+    let fri = bucket(&[
+        "FRI prover",
+        "query phase",
+        "commit phase",
+        "fold_matrix",
+        "compress mat",
+        "reduce matrix quotient",
+        "columnwise_dot_product",
+        "compute opened values with Lagrange interpolation",
+        "compute_inverse_denominators",
+    ]);
+    let quotient = bucket(&[
+        "compute quotient",
+        "compute quotient polynomial",
+        "infer constraint degree",
+        "evaluate constraints symbolically",
+    ]);
     println!("\n--- GPU-lever buckets (substring roll-up of the above) ---");
     let show = |label: &str, d: Duration| {
         let pct = if total_self.as_secs_f64() > 0.0 {

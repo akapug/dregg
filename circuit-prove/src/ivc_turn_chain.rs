@@ -208,11 +208,13 @@ use p3_baby_bear::BabyBear as P3BabyBear;
 use p3_field::{PrimeCharacteristicRing, PrimeField32};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_recursion::{
-    BatchOnly, ProveNextLayerParams, RecursionInput, RecursionOutput,
-    build_and_prove_aggregation_layer_with_expose, build_and_prove_next_layer,
+    BatchOnly, ProveNextLayerParams, RecursionInput, RecursionOutput, build_and_prove_next_layer,
     build_and_prove_next_layer_with_expose,
 };
 
+use crate::gpu_backend::{
+    prove_recursion_aggregation_auto_with_expose, prove_recursion_layer_auto_with_expose,
+};
 use crate::joint_turn_aggregation::{
     CarrierWitness, DescriptorParticipant, verify_descriptor_participant,
 };
@@ -1396,8 +1398,6 @@ pub fn prove_descriptor_leaf_rotated_with_segment(
             table_public_inputs,
         };
 
-    let backend = create_recursion_backend();
-
     // The expose hook: the main instance (instance 0) carries the descriptor PIs. Build the two
     // 8-felt anchor blocks (genuine wide tail, or replicated single felt for a narrow leg), the
     // per-turn digest seed over them, and expose the 8-wide segment.
@@ -1444,19 +1444,8 @@ pub fn prove_descriptor_leaf_rotated_with_segment(
         cb.expose_as_public_output(&seg);
     };
 
-    build_and_prove_next_layer_with_expose::<
-        DreggRecursionConfig,
-        dregg_circuit::descriptor_ir2::Ir2Air,
-        _,
-        D,
-    >(
-        &input,
-        config,
-        &backend,
-        &ProveNextLayerParams::default(),
-        Some(&expose),
-    )
-    .map_err(|e| format!("rotated native-batch segment leaf-wrap failed: {e:?}"))
+    prove_recursion_layer_auto_with_expose(&input, config, Some(&expose))
+        .map_err(|e| format!("rotated native-batch segment leaf-wrap failed: {e}"))
 }
 
 /// **THE DUAL-EXPOSE CUSTOM LEG LEAF (deployed custom-binding half #1).** Wrap one rotated
@@ -1577,8 +1566,6 @@ pub fn prove_descriptor_leaf_dual_expose_at(
             table_public_inputs,
         };
 
-    let backend = create_recursion_backend();
-
     let expose = move |cb: &mut p3_circuit::CircuitBuilder<RecursionChallenge>,
                        apt: &[Vec<p3_recursion::Target>]| {
         let main = apt
@@ -1621,19 +1608,8 @@ pub fn prove_descriptor_leaf_dual_expose_at(
         cb.expose_as_public_output(&claim);
     };
 
-    build_and_prove_next_layer_with_expose::<
-        DreggRecursionConfig,
-        dregg_circuit::descriptor_ir2::Ir2Air,
-        _,
-        D,
-    >(
-        &input,
-        config,
-        &backend,
-        &ProveNextLayerParams::default(),
-        Some(&expose),
-    )
-    .map_err(|e| format!("rotated dual-expose custom leaf-wrap failed: {e:?}"))
+    prove_recursion_layer_auto_with_expose(&input, config, Some(&expose))
+        .map_err(|e| format!("rotated dual-expose custom leaf-wrap failed: {e}"))
 }
 
 // ============================================================================
@@ -2536,8 +2512,6 @@ pub fn prove_descriptor_leaf_rotated_with_wide_segment(
             table_public_inputs,
         };
 
-    let backend = create_recursion_backend();
-
     let expose = move |cb: &mut p3_circuit::CircuitBuilder<RecursionChallenge>,
                        apt: &[Vec<p3_recursion::Target>]| {
         let main = apt
@@ -2569,19 +2543,8 @@ pub fn prove_descriptor_leaf_rotated_with_wide_segment(
         cb.expose_as_public_output(&seg);
     };
 
-    build_and_prove_next_layer_with_expose::<
-        DreggRecursionConfig,
-        dregg_circuit::descriptor_ir2::Ir2Air,
-        _,
-        D,
-    >(
-        &input,
-        config,
-        &backend,
-        &ProveNextLayerParams::default(),
-        Some(&expose),
-    )
-    .map_err(|e| format!("rotated native-batch WIDE segment leaf-wrap failed: {e:?}"))
+    prove_recursion_layer_auto_with_expose(&input, config, Some(&expose))
+        .map_err(|e| format!("rotated native-batch WIDE segment leaf-wrap failed: {e}"))
 }
 
 /// Fold a vector of WIDE-segment-carrying batch-STARK proofs to ONE via 2-to-1 aggregation
@@ -2590,8 +2553,13 @@ pub fn prove_descriptor_leaf_rotated_with_wide_segment(
 fn aggregate_tree_wide(
     mut proofs: Vec<RecursionOutput<DreggRecursionConfig>>,
     config: &DreggRecursionConfig,
-    backend: &p3_recursion::FriRecursionBackendForExt<D, 16, 8, p3_recursion::ops::Poseidon2Config>,
-    params: &ProveNextLayerParams,
+    _backend: &p3_recursion::FriRecursionBackendForExt<
+        D,
+        16,
+        8,
+        p3_recursion::ops::Poseidon2Config,
+    >,
+    _params: &ProveNextLayerParams,
 ) -> Result<RecursionOutput<DreggRecursionConfig>, TurnChainError> {
     if proofs.is_empty() {
         return Err(TurnChainError::RecursionFailed {
@@ -2658,16 +2626,11 @@ fn aggregate_tree_wide(
                 cb.expose_as_public_output(&parent);
             };
 
-            let out = build_and_prove_aggregation_layer_with_expose::<
-                DreggRecursionConfig,
-                BatchOnly,
-                BatchOnly,
-                _,
-                D,
-            >(&left, &right, config, backend, params, None, Some(&expose))
-            .map_err(|e| TurnChainError::RecursionFailed {
-                reason: format!("wide aggregation layer failed: {e:?}"),
-            })?;
+            let out =
+                prove_recursion_aggregation_auto_with_expose(&left, &right, config, Some(&expose))
+                    .map_err(|e| TurnChainError::RecursionFailed {
+                        reason: format!("wide aggregation layer failed: {e}"),
+                    })?;
             next_level.push(out);
             i += 2;
         }
@@ -3691,8 +3654,13 @@ pub(crate) fn merge_two_segment_proofs(
     left: &p3_circuit_prover::BatchStarkProof<DreggRecursionConfig>,
     right: &p3_circuit_prover::BatchStarkProof<DreggRecursionConfig>,
     config: &DreggRecursionConfig,
-    backend: &p3_recursion::FriRecursionBackendForExt<D, 16, 8, p3_recursion::ops::Poseidon2Config>,
-    params: &ProveNextLayerParams,
+    _backend: &p3_recursion::FriRecursionBackendForExt<
+        D,
+        16,
+        8,
+        p3_recursion::ops::Poseidon2Config,
+    >,
+    _params: &ProveNextLayerParams,
 ) -> Result<RecursionOutput<DreggRecursionConfig>, TurnChainError> {
     let left_idx =
         expose_claim_instance_index(left).ok_or_else(|| TurnChainError::RecursionFailed {
@@ -3735,24 +3703,10 @@ pub(crate) fn merge_two_segment_proofs(
         segment_combine_expose(cb, left_apt, right_apt, left_idx, right_idx);
     };
 
-    build_and_prove_aggregation_layer_with_expose::<
-        DreggRecursionConfig,
-        BatchOnly,
-        BatchOnly,
-        _,
-        D,
-    >(
-        &left_input,
-        &right_input,
-        config,
-        backend,
-        params,
-        None,
-        Some(&expose),
-    )
-    .map_err(|e| TurnChainError::RecursionFailed {
-        reason: format!("aggregation layer failed: {e:?}"),
-    })
+    prove_recursion_aggregation_auto_with_expose(&left_input, &right_input, config, Some(&expose))
+        .map_err(|e| TurnChainError::RecursionFailed {
+            reason: format!("aggregation layer failed: {e}"),
+        })
 }
 
 /// Fold a vector of batch-STARK proofs to ONE via 2-to-1 aggregation layers.
