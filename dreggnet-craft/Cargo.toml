@@ -38,8 +38,30 @@ dreggnet-asset = { path = "../dreggnet-asset" }
 # THE FAIRNESS ANCHOR — procgen's committed-seed -> VERIFIED dregg-dice DrawStream
 # (`verified_stream` + `CommittedSeed`). The craft outcome is one indexed draw off the
 # committed craft seed, so a quality tier is re-derivable by anyone and a claimed
-# legendary is un-fakeable. Consumed as the fair roll; never modified.
+# legendary is un-fakeable. Consumed as the fair roll; never modified. The tiered-recipe
+# quality draw uses the stream's provably-fair `weighted` CDF over a committed weight
+# table (the E2 draw the crate's original quality-tier residual named).
 procgen-dregg = { path = "../procgen-dregg" }
+# THE REAL DUNGEON LOOT LAYER — the forge no longer only faucets demo materials: a craft
+# input can be SOURCED from a real, verified `dungeon_on_dregg::loot` drop. A loot draw is
+# re-verified through the loot layer's own `reverify_drop` tooth (a forged / rewritten drop
+# cannot become a material), and its `Rarity` is the shared rarity schema a companion egg
+# output is granted under. Consumed as the input provenance; never modified.
+dungeon-on-dregg = { path = "../dungeon-on-dregg" }
+# THE REAL GEAR STAT-BLOCK SCHEMA — a crafted gear output is not an opaque note: it carries
+# a real `dreggnet_gear::StatBlock` (rarity / slot / might / ward / guile / rune), whose
+# `traits_root` content-binds the block into the output asset id — the SAME shared schema
+# `dreggnet-gear`'s `Armory` equips. So a forged item is a real, equippable stat block, not
+# a craft-local shadow of one. Consumed as the output schema; never modified.
+dreggnet-gear = { path = "../dreggnet-gear" }
 # Domain-separated hashing for the craft-seed derivation + the output's content
 # commitment (the same blake3 1.x resolved workspace-wide).
 blake3 = "1"
+
+[dev-dependencies]
+# The integration tests (`tests/forge.rs`) drive the forge against real, verified loot
+# drops and the shared gear schema — so they name the sibling layers directly (an
+# integration test crate can only reach a dependency it also lists here).
+dungeon-on-dregg = { path = "../dungeon-on-dregg" }
+dreggnet-gear = { path = "../dreggnet-gear" }
+procgen-dregg = { path = "../procgen-dregg" }
