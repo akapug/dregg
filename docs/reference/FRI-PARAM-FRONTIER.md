@@ -69,10 +69,34 @@ Reading the table honestly, three ways:
   The gate's Johnson floor is now `71`, pinned to that config by name
   (`recursion_config_is_the_weakest_link`), so it cannot be quietly lowered without naming who forced it.
 
-⚑ **Every per-fold number carries the `M = 1` fiber bound as a per-config HYPOTHESIS** (`hΦ`).
-DISCHARGED only at arity 2 / `log_blowup = 6` (§8's `far_fiber_card` + `wrap_fiber_le_one`); OPEN at
-the deployed arity 8 (`Arity8FiberBound`) and at every `log_blowup = 3` config. `#assert_axioms` is
-blind to hypotheses — Lake-green is not hypothesis-free.
+⚑ **The `M = 1` fiber bound is DISCHARGED at every shipped config** (2026-07-15,
+`Dregg2/Circuit/FriArityFiberDischarge.lean`). Every per-fold number rests on it, carried as the
+per-config hypothesis `hΦ` by the arity-generic count (correctly — that count mentions no setup).
+It was discharged only at arity 2 / `log_blowup = 6` (§8's `far_fiber_card` + `wrap_fiber_le_one`)
+and open at the deployed arity 8 and at every `log_blowup = 3` config, for want of the RS setups the
+tree did not build. Those setups are now built parametrically (`friSetupK`: `|L| = 2^(k+b)`,
+`|κ| = 2^b`, dimension `2^k`, rate `2^(−b)`), `far_fiber_card` is generalized to arity `n`
+(`far_fiber_card_arity`: `n·|Φ⁻¹(a)| + dOut < |L|`), and `hΦ` is PROVED from farness at all six
+configs — four `(k, b)` instances of one theorem (`phase_injective_of_far`):
+
+| config | arity | `log_blowup` | `\|L\|` | `dOut` ⟹ `M = 1` | discharge |
+|---|---|---|---|---|---|
+| `ir2_leaf_wrap_config` (**deployed**) | 8 | 6 | 512 | `≥ 496` | `arity8_phase_injective` |
+| rotated `ir2_leaf_wrap_config` | 2 | 6 | 128 | `≥ 124` | `arity2Lb6_phase_injective` |
+| `create_outer_config` (**gnark verifies**) / `create_recursion_config` | 2 | 3 | 16 | `≥ 12` | `arity2Lb3_phase_injective` |
+| v1 `create_config` / `create_zk_config` | 8 | 3 | 64 | `≥ 48` | `arity8Lb3_phase_injective` |
+
+Non-vacuous: `phase_injective_fires` exhibits a concrete far word the discharge fires on at EVERY
+`(k, b)` (at the deployed config, a `503`-far word against the `≥ 496` requirement).
+
+⚠ **Found on the way — the obligation as it had been NAMED was FALSE, not open.** The `Prop`
+`Arity8FiberBound` quantified over EVERY phase map `Φ` with no link to a far word, so the constant
+map `Φ = 0` refutes it (`arity8FiberBoundNaive_false`). It had no consumers anywhere, so nothing was
+contaminated — but it named no obligation, and it stood for a lane before anyone tried to refute it.
+The farness link is the entire content of the claim.
+
+`#assert_axioms` is blind to hypotheses — Lake-green is not hypothesis-free, and the discharge above
+is a theorem, not something the axiom check could report.
 
 Every figure sits far above the general Johnson floor (`71`). No query/PoW bump and no config change
 are planned; re-pointing the posture number is ember's call.

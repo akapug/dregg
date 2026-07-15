@@ -76,20 +76,35 @@ deployed prover does NOT run. At the deployed arity 8 the same method proves **~
 figure is recovered at arity 8 only by STRENGTHENING the inner agreement requirement to `dIn ≤ 60`
 (`s ≥ 4`) — `arity8_at_dIn60_clears_112` — a genuinely weaker statement about fewer challenges.
 
-## ⚑ NAMED OBLIGATION (this file does NOT discharge it, and does not pretend to)
+## ⚑ THE `hΦ` OBLIGATION — MIS-STATED HERE, then DISCHARGED (2026-07-15)
 
 `good_card_le_of_phase_injective` takes the fiber bound `M = 1` as the HYPOTHESIS `hΦ` (the phase map
 `Φ` is injective). In §8 the `m = 2` analogue is DISCHARGED from farness by `far_fiber_card` +
-`wrap_fiber_le_one` over the concrete `friSetupWrapRate`. Discharging it at arity 8 requires the
-arity-8 RS setup that this tree does not build: `|L| = 512`, `|κ| = 64`, RS dimension `8 → 1`
-(the rate-`1/64` arity-8 analogue), where `8·|Φ⁻¹(a)| + dOut < 512` forces `M = 1` for `dOut ≥ 496`.
-That setup + its `far_fiber_card` analogue is the remaining obligation — NAMED here as
-`Arity8FiberBound`, carried as a `Prop` (never an `axiom`), with the arithmetic that makes it
-non-vacuous PROVED (`arity8_fiber_window_nonempty`: the window `496 ≤ dOut ≤ 504` is nonempty —
-`504 = 512 − 8` because RS interpolation through any `8` points forces agreement `≥ 8`).
+`wrap_fiber_le_one` over the concrete `friSetupWrapRate`. This file originally NAMED the arity-8
+analogue as the `Prop` `Arity8FiberBound` and declared it the open residual, saying the discharge
+needed an arity-8 RS setup (`|L| = 512`, `|κ| = 64`, RS dimension `8 → 1`) "that this tree does not
+build".
+
+**Both halves of that were wrong, in opposite directions.**
+
+1. **The named `Prop` was FALSE, not open** (`arity8FiberBoundNaive_false`, §2). It quantified over
+   every phase map `Φ` and never mentioned a far word — the farness link, which is the whole content,
+   was missing — so the constant map `Φ = 0` refutes it. It named no obligation. Nothing consumed it,
+   here or anywhere, so nothing was contaminated; but it was not a residual, it was a mis-statement.
+2. **The real obligation DISCHARGES.** `Dregg2.Circuit.FriArityFiberDischarge` builds the arity-`2^k`
+   rate-`2^(−b)` setup parametrically (so `|L| = 512`, `|κ| = 64`, dimension `8` is one instance of
+   it), generalizes `far_fiber_card` to arity `n` (`far_fiber_card_arity`), and PROVES `hΦ` from
+   farness at every shipped config (`phase_injective_of_far`; at the deployed arity 8,
+   `arity8_phase_injective`, for `dOut ≥ 496`). The discharge fires on a concrete `503`-far word.
+
+`good_card_le_of_phase_injective` and `arity8_good_card_le` below still CARRY `hΦ` — they are
+arity-generic and know nothing of any setup, which is exactly right. The discharge is supplied where
+the setup lives; `FriArityFiberDischarge.arity8_good_card_le_unconditional` is the composite with no
+`hΦ` left.
 
 `#assert_axioms` is blind to HYPOTHESES: the theorems below are kernel-clean, which does NOT mean
-hypothesis-free. `good_card_le_of_phase_injective` carries `hΦ`; that is the honest residual.
+hypothesis-free. The `hΦ` they carry is discharged in `FriArityFiberDischarge`, not by the axiom
+check.
 -/
 
 namespace Dregg2.Circuit.FriArityTransfer
@@ -247,29 +262,63 @@ theorem good_card_le_of_phase_injective
     _ = (m - 1) * Nat.choose (Fintype.card κ) 2 := by
         rw [Finset.card_powersetCard, Finset.card_univ, Nat.mul_comm]
 
-/-! ## §2. The arity-8 fiber bound — the NAMED obligation, and its non-vacuity arithmetic.
+/-! ## §2. The arity-8 fiber bound — the MIS-STATED obligation, its falsifier, and the arithmetic.
 
 `good_card_le_of_phase_injective` takes `M = 1` (phase injectivity) as a hypothesis. At `m = 2` §8
-DISCHARGES the analogue from farness via `far_fiber_card`. At arity 8 the discharge needs the
-rate-`1/64` arity-8 RS setup (`|L| = 512`, `|κ| = 64`, dimension `8 → 1`) that this tree does not
-build. It is NAMED here as a `Prop` — never an `axiom` — with its non-vacuity arithmetic PROVED. -/
+DISCHARGES the analogue from farness via `far_fiber_card`. This section originally NAMED the arity-8
+analogue as an open `Prop`; that `Prop` is FALSE (`arity8FiberBoundNaive_false`) because it omits the
+farness link, and the REAL obligation is now PROVED in `Dregg2.Circuit.FriArityFiberDischarge`
+(`arity8_phase_injective`) over the rate-`1/64` arity-8 setup (`|L| = 512`, `|κ| = 64`, dimension
+`8 → 1`) that this file said the tree does not build — it does now. What survives here is the
+arithmetic of the radius window, which the discharge confirms and sharpens by one. -/
 
-/-- **`Arity8FiberBound`** — the NAMED arity-8 far-fiber obligation, the exact analogue of
-`FriProximityGapWitness.far_fiber_card` + `wrap_fiber_le_one` at `|L| = 512`, dimension `8`. It says:
-on the rate-`1/64` arity-8 setup, a `dOut`-far word's phase map `Φ : κ → F^8` is INJECTIVE, because a
-point of `F^8` lifts to the degree-`< 8` codeword `Σ aᵢXⁱ` and each fibre contributes all `8` of its
-domain points to that codeword's agreement, so `8·|Φ⁻¹(a)| + dOut < 512` forces `|Φ⁻¹(a)| ≤ 1` once
-`dOut ≥ 496`. Carried as a `Prop`: it is the residual this lane does NOT discharge. -/
-def Arity8FiberBound (dOut : ℕ) : Prop :=
+/-- **`Arity8FiberBoundNaive`** — the arity-8 far-fiber obligation AS IT WAS ORIGINALLY NAMED here.
+⚠ **IT IS FALSE** (`arity8FiberBoundNaive_false` below), and it is retained ONLY as the carrier of
+that finding. It is used as a hypothesis by nothing, here or anywhere in the tree.
+
+The intent was: on the rate-`1/64` arity-8 setup, a `dOut`-far word's phase map `Φ : κ → F^8` is
+INJECTIVE, because a point of `F^8` lifts to the degree-`< 8` codeword `Σ aᵢXⁱ` and each fibre
+contributes all `8` of its domain points to that codeword's agreement, so `8·|Φ⁻¹(a)| + dOut < 512`
+forces `|Φ⁻¹(a)| ≤ 1` once `dOut ≥ 496`.
+
+The STATEMENT below does not say that. It quantifies over EVERY `Φ` and never mentions a word, let
+alone a far one — the farness link, which is the entire content of the intended claim, is missing. So
+it asserts that every phase map whatsoever is injective, which the constant map refutes.
+
+⚑ The honest reading: this obligation was not OPEN, it was MIS-STATED. `Dregg2.Circuit.
+FriArityFiberDischarge.Arity8FiberBound` restates it correctly (over the real `|L| = 512` dimension-8
+setup, with the farness hypothesis) and PROVES it — `arity8_phase_injective`. The `hΦ` carried by
+`good_card_le_of_phase_injective` / `arity8_good_card_le` below is therefore DISCHARGED at the
+deployed config; those theorems keep `hΦ` as a hypothesis because they are arity-generic, and the
+discharge is supplied by the setup-specific file. -/
+def Arity8FiberBoundNaive (dOut : ℕ) : Prop :=
   ∀ (Φ : ℕ → Fin (2 ^ 6) → BabyBear), 496 ≤ dOut →
     (∀ y z : Fin (2 ^ 6), y ≠ z → ∃ i < 8, Φ i y ≠ Φ i z)
+
+/-- **THE FALSIFIER — `Arity8FiberBoundNaive` IS FALSE, at its own quoted radius `dOut = 500`.**
+The constant phase map `Φ = fun _ _ => 0` has `Φ i y = Φ i z` for every `i` and every pair, so it is
+not injective; the naive statement claims it is. A `Prop` that is false names no obligation — assume
+it and you may conclude anything.
+
+This is the repo's `toy_dl_not_hard` discipline applied to our own floor: a hypothesis carrier is
+only honest if its negation is a concrete counterexample you have actually looked for. This one's
+negation is a one-line counterexample, and the statement stood for a lane before anyone tried it. -/
+theorem arity8FiberBoundNaive_false : ¬ Arity8FiberBoundNaive 500 := by
+  intro h
+  obtain ⟨i, -, hne⟩ := h (fun _ _ => (0 : BabyBear)) (by norm_num) 0 1 (by decide)
+  exact hne rfl
 
 /-- **THE ARITY-8 FIBER WINDOW IS NON-EMPTY** — `M = 1` needs `dOut ≥ 496` (from
 `8·|Φ⁻¹| + dOut < 512` at `|Φ⁻¹| = 2`), while a word can be at most `504 = 512 − 8`-far from a
 dimension-`8` RS code (interpolation through any `8` points forces agreement `≥ 8`). So the window
 `496 ≤ dOut ≤ 504` where the hypothesis is BOTH forceable AND satisfiable is nonempty — the arity-8
 analogue of §8's `125 + 2 = 127 < 128` non-vacuity check. `dOut = 500` (the exact scaled analogue of
-§8's `125/128`, `500/512 = 125/128`) sits inside it. -/
+§8's `125/128`, `500/512 = 125/128`) sits inside it.
+
+⚑ The `504` upper end is one too generous: `farN` is STRICT (`> dOut` disagreements), so a word with
+agreement exactly `8` is `503`-far, not `504`-far. `FriArityFiberDischarge.
+arity8_fiber_window_realizable` records the REALIZABLE window `496 ≤ dOut ≤ 503`, exhibited by a
+concrete `503`-far word. `dOut = 500` sits inside either way, so no number downstream moves. -/
 theorem arity8_fiber_window_nonempty : 496 ≤ 500 ∧ 500 ≤ 512 - 8 := by norm_num
 
 /-- `500/512 = 125/128` — `dOut = 500` at arity 8 is the EXACT scaled analogue of §8's near-capacity
@@ -368,9 +417,14 @@ theorem arity8_at_dIn60_clears_112 :
 
 Every theorem below is kernel-clean. `#assert_axioms` is BLIND TO HYPOTHESES: kernel-clean does NOT
 mean hypothesis-free. `good_card_le_of_phase_injective` / `arity8_good_card_le` carry the phase-
-injectivity (`M = 1`) hypothesis — the `Arity8FiberBound` obligation named in §2, which this lane does
-NOT discharge. That is the honest residual. -/
+injectivity (`M = 1`) hypothesis `hΦ` — correctly, since they are arity-generic and mention no setup.
+`hΦ` is DISCHARGED from farness at every shipped config in `Dregg2.Circuit.FriArityFiberDischarge`
+(`phase_injective_of_far`; `arity8_phase_injective` at the deployed arity 8), whose
+`arity8_good_card_le_unconditional` is the composite carrying no `hΦ`. The `Prop` this file once
+named as the open residual is FALSE and is retained only as the carrier of that finding
+(`arity8FiberBoundNaive_false`). -/
 
+#assert_axioms arity8FiberBoundNaive_false
 #assert_axioms H_eval
 #assert_axioms H_natDegree_le
 #assert_axioms H_coeff

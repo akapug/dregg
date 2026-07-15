@@ -40,7 +40,8 @@ Read `FriCorrelatedAgreementSharp.lean` §8 and `FriArityTransfer.lean` before t
   (`fri/src/two_adic_pcs.rs`), NOT an affine line. `FriArityTransfer` is where that is established.
 * `foldedDomain |κ| = 2 ^ logBlowup` — the modeled rate-`2^(−logBlowup)` setup folds `m · 2^logBlowup`
   points down to `2^logBlowup` (at `m = 2`, `logBlowup = 6`: `friSetupWrapRate`'s
-  `Fin (2^7) → Fin (2^6)`; at `m = 8`: the `|L| = 512 → |κ| = 64` setup of `Arity8FiberBound`). So
+  `Fin (2^7) → Fin (2^6)`; at `m = 8`: the `|L| = 512 → |κ| = 64` setup built as
+  `FriArityFiberDischarge.friSetupK8Wrap`). So
   `|κ|` and the code dimension are BOTH consequences of `logBlowup` — which is why a `logBlowup` move
   silently restates every per-fold theorem about a different object.
 * `goodCount = (m − 1) · C(|κ|, 2)` — the arity-generic good-challenge count
@@ -57,10 +58,19 @@ Read `FriCorrelatedAgreementSharp.lean` §8 and `FriArityTransfer.lean` before t
 soundness product; the query ledger is the other. The ledger reports the columns separately and never
 multiplies them into a single headline.
 
-⚑ **NAMED HYPOTHESIS.** Every per-fold number carries the `M = 1` fiber bound as a HYPOTHESIS
-(`good_card_le_of_phase_injective`'s `hΦ`; at arity 8, `FriArityTransfer.Arity8FiberBound`). It is
-DISCHARGED at `m = 2` from farness (§8's `far_fiber_card` + `wrap_fiber_le_one`) and OPEN at `m = 8`.
-`#assert_axioms` is blind to hypotheses — kernel-clean does not mean hypothesis-free.
+⚑ **THE `M = 1` FIBER BOUND IS DISCHARGED AT EVERY SHIPPED CONFIG** (2026-07-15). Every per-fold
+number is derived from `good_card_le_of_phase_injective`, which takes the fiber bound as the
+HYPOTHESIS `hΦ` — correctly, since it is arity-generic and mentions no setup. `hΦ` was discharged
+only at `m = 2, logBlowup = 6` (§8's `far_fiber_card` + `wrap_fiber_le_one`) and open at `m = 8` and
+at `logBlowup = 3`. `Dregg2.Circuit.FriArityFiberDischarge` now builds the arity-`2^k` rate-`2^(−b)`
+setups parametrically and PROVES `hΦ` from farness at all six configs
+(`phase_injective_of_far`; at the deployed arity 8, `arity8_phase_injective`, for `dOut ≥ 496`), with
+a concrete far word at every `(k, b)` to keep it non-vacuous. So the numbers below carry no `hΦ` at
+any config the tree ships. (Found on the way: the `Prop` that formerly NAMED the arity-8 obligation
+was FALSE — it omitted the farness link — and had no consumers.)
+
+`#assert_axioms` is blind to hypotheses — kernel-clean does not mean hypothesis-free. The `hΦ`
+discharge is a theorem, not an axiom-check result.
 
 ## Why this module's imports are thin
 

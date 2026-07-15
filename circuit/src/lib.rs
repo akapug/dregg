@@ -67,9 +67,12 @@
 //!   domain has fewer pairs, hence fewer good challenges. The rate is paid for in the QUERY
 //!   ledger below. The columns are independent (`query_ledger_does_not_determine_perFold`):
 //!   never multiply them into one figure.
-//!   ⚑ Every per-fold number carries the `M = 1` fiber bound as a per-config HYPOTHESIS
-//!   (`hΦ`), DISCHARGED only at arity 2 / `log_blowup 6` and OPEN elsewhere
-//!   (`Arity8FiberBound`). `#assert_axioms` is blind to hypotheses.
+//!   ⚑ Every per-fold number rests on the `M = 1` fiber bound, carried as the per-config
+//!   HYPOTHESIS `hΦ` by the arity-generic count. It is now DISCHARGED from farness at ALL
+//!   six shipped configs by `Dregg2.Circuit.FriArityFiberDischarge.phase_injective_of_far`
+//!   (deployed arity 8: `arity8_phase_injective`, `dOut ≥ 496`), which builds the
+//!   arity-`2^k` rate-`2^(−b)` RS setups the tree previously lacked. `#assert_axioms` is
+//!   blind to hypotheses — the discharge is a theorem, not an axiom-check result.
 //! - **Johnson bits — proven for any code.** The list-decoding-to-√rate figure,
 //!   `num_queries × log_blowup / 2 + query_pow_bits`. `73` on six shipped configs; **`71` on
 //!   `create_recursion_config`**, whose `14` query-PoW bits make it the weakest shipped

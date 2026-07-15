@@ -31,11 +31,24 @@
 //!   * `FriLedgerSound.{ledgerP_eq_babyBearP, chooseTwo_eq_choose_two, log2_eq_log_two}` — the pins
 //!     that stop the import-thin exported definition from being a second model.
 //!
-//! ⚑ **NAMED HYPOTHESIS, not fine print.** Every `per_fold_bits` carries the `M = 1` fiber bound as a
-//! per-config HYPOTHESIS (`good_card_le_of_phase_injective`'s `hΦ`). It is DISCHARGED only at arity 2
-//! / `logBlowup = 6` (§8's `far_fiber_card` + `wrap_fiber_le_one`); it is OPEN at the deployed arity 8
-//! (`FriArityTransfer.Arity8FiberBound`) and at every `logBlowup = 3` config. `#assert_axioms` is
-//! blind to hypotheses — the Lean being kernel-clean does not make these numbers unconditional.
+//! ⚑ **THE `M = 1` FIBER BOUND IS NOW DISCHARGED AT EVERY SHIPPED CONFIG** (2026-07-15). Every
+//! `per_fold_bits` is derived from `good_card_le_of_phase_injective`, which takes the fiber bound as
+//! the HYPOTHESIS `hΦ` — correctly, since it is arity-generic and mentions no setup. `hΦ` was
+//! discharged only at arity 2 / `logBlowup = 6` (§8's `far_fiber_card` + `wrap_fiber_le_one`) and
+//! OPEN at the deployed arity 8 and at every `logBlowup = 3` config.
+//!   `Dregg2.Circuit.FriArityFiberDischarge` builds the arity-`2^k` rate-`2^(−b)` RS setups
+//!   PARAMETRICALLY (`friSetupK`: `|L| = 2^(k+b)`, `|κ| = 2^b`, dimension `2^k`), generalizes
+//!   `far_fiber_card` to arity `n` (`far_fiber_card_arity`: `n·|Φ⁻¹(a)| + dOut < |L|`), and PROVES
+//!   `hΦ` from farness at all six configs — four `(k, b)` instances of ONE theorem
+//!   (`phase_injective_of_far`): the deployed arity-8 wrap at `dOut ≥ 496`
+//!   (`arity8_phase_injective`), the rotated arity-2 wrap at `≥ 124`, the `logBlowup = 3` arity-2
+//!   outer/recursion at `≥ 12`, the `logBlowup = 3` arity-8 v1/zk at `≥ 48`. Non-vacuous:
+//!   `phase_injective_fires` exhibits a concrete far word at EVERY `(k, b)`.
+//!   ⚠ Found on the way: the `Prop` that formerly NAMED the arity-8 obligation was **FALSE**, not
+//!   open — it quantified over every phase map with no link to a far word, so the constant map
+//!   refutes it (`FriArityTransfer.arity8FiberBoundNaive_false`). It had no consumers.
+//! `#assert_axioms` is blind to hypotheses — the Lean being kernel-clean is NOT what makes these
+//! numbers unconditional; the discharge theorems are.
 //!
 //! ## ⚑ THE FINDINGS — 7 shipped configs, 7 different postures, 2 corrected claims
 //!

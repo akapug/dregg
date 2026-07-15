@@ -46,17 +46,41 @@ Three jobs, in order:
   rate shows up. The ledger reports the columns SEPARATELY and never multiplies them into a headline;
   any reader who wants "the" soundness of a config must read both columns and the query count.
 
-## ⚑ THE NAMED HYPOTHESIS (this file does not discharge it, and does not pretend to)
+## ⚑ THE `hΦ` HYPOTHESIS — DISCHARGED AT EVERY SHIPPED CONFIG (2026-07-15)
 
 Every per-fold number here carries `hΦ` — the `M = 1` fiber bound — as a HYPOTHESIS, inherited from
-`FriArityTransfer.good_card_le_of_phase_injective`. It is DISCHARGED at `m = 2, logBlowup = 6` from
+`FriArityTransfer.good_card_le_of_phase_injective`. It was DISCHARGED at `m = 2, logBlowup = 6` from
 farness (`FriCorrelatedAgreementSharp` §8's `far_fiber_card` + `wrap_fiber_le_one` over the concrete
-`friSetupWrapRate`) and is OPEN at every other config, including the deployed arity-8 wrap
-(`FriArityTransfer.Arity8FiberBound`) and the `logBlowup = 3` configs (whose analogue needs the
-`|L| = m·8`, `|κ| = 8` setup this tree does not build).
+`friSetupWrapRate`) and OPEN at every other config, including the deployed arity-8 wrap and the
+`logBlowup = 3` configs — for want of the RS setups this tree did not build.
+
+`Dregg2.Circuit.FriArityFiberDischarge` now builds those setups PARAMETRICALLY (`friSetupK` at
+`|L| = 2^(k+b)`, `|κ| = 2^b`, dimension `2^k`, rate `2^(−b)`), generalizes `far_fiber_card` to arity
+`n` (`far_fiber_card_arity`), and PROVES `hΦ` from farness at every one of the six configs below —
+four `(k, b)` instances of ONE theorem (`phase_injective_of_far`):
+
+| config                      | arity | logBlowup | `|L|` | `dOut` ⟹ `M = 1` | discharge |
+|-----------------------------|-------|-----------|-------|-------------------|-----------|
+| `ir2LeafWrapConfig`         | 8     | 6         | 512   | `≥ 496`           | `arity8_phase_injective` |
+| `ir2LeafWrapRotatedConfig`  | 2     | 6         | 128   | `≥ 124`           | `arity2Lb6_phase_injective` |
+| `ethWrapOuterConfig`        | 2     | 3         | 16    | `≥ 12`            | `arity2Lb3_phase_injective` |
+| `recursionConfig`           | 2     | 3         | 16    | `≥ 12`            | (same instance) |
+| `prodV1Config`              | 8     | 3         | 64    | `≥ 48`            | `arity8Lb3_phase_injective` |
+| `zkConfig`                  | 8     | 3         | 64    | `≥ 48`            | (same instance) |
+
+It is not vacuous: `phase_injective_fires` exhibits, at EVERY `(k, b)`, a concrete far word the
+discharge fires on. ⚠ Also found there: the `Prop` that NAMED the arity-8 obligation
+(`FriArityTransfer.Arity8FiberBoundNaive`) was **FALSE**, not open — it omitted the farness link, so
+the constant map refutes it. It had no consumers; nothing here was contaminated.
+
+The theorems below still take `hΦ` as a hypothesis, correctly: they are PARAMETRIC in the config and
+mention no setup, so they cannot discharge it — the discharge is per-setup and lives where the setups
+live. `FriArityFiberDischarge.arity8_good_card_le_unconditional` is the deployed composite with no
+`hΦ` left.
 
 `#assert_axioms` is BLIND TO HYPOTHESES. The theorems below are kernel-clean; that is not the same as
-hypothesis-free, and the `#assert_axioms` block at the bottom must not be read as if it were.
+hypothesis-free, and the `#assert_axioms` block at the bottom must not be read as if it were — the
+`hΦ` discharge is a theorem elsewhere, not something the axiom check could ever have told you.
 -/
 
 namespace Dregg2.Circuit.FriLedgerSound
@@ -427,9 +451,11 @@ before the Rust test ever ran. -/
 
 ⚑ `#assert_axioms` is BLIND TO HYPOTHESES. Every theorem below is kernel-clean; the per-fold results
 (`ledger_good_card_le`, `ledger_perFold_soundness`, and every instance that routes through them) carry
-the `M = 1` phase-injectivity hypothesis `hΦ` — `FriArityTransfer.Arity8FiberBound` at the deployed
-arity, and its unbuilt `logBlowup = 3` analogue at the outer/recursion configs. Kernel-clean is not
-hypothesis-free, and this block does not claim it is. -/
+the `M = 1` phase-injectivity hypothesis `hΦ`, because they are PARAMETRIC in the config and mention
+no setup. `hΦ` is DISCHARGED from farness at every shipped config in
+`Dregg2.Circuit.FriArityFiberDischarge` (`phase_injective_of_far`; `arity8_phase_injective` at the
+deployed arity 8) — a theorem there, not something this block could ever have told you. Kernel-clean
+is not hypothesis-free, and this block does not claim it is. -/
 
 #assert_axioms ledgerP_eq_babyBearP
 #assert_axioms chooseTwo_eq_choose_two
