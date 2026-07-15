@@ -11,7 +11,9 @@
 //!   * a TAMPERED lineage fails the content-address re-derivation;
 //!   * the asset id is STABLE / content-addressed across versions + independent of cells.
 
-use dreggnet_asset::{AssetError, AssetWorld, NoteDesc, ProvenanceBreak, verify_desc_chain};
+use dreggnet_asset::{
+    AssetError, AssetWorld, NoteDesc, ProvenanceBreak, default_trait_root, verify_desc_chain,
+};
 
 #[test]
 fn mint_binds_the_owner_and_a_content_addressed_id() {
@@ -253,10 +255,217 @@ fn a_tampered_lineage_fails_the_re_derivation() {
         owner: [0x5u8; 32],
         prev: [0x0u8; 32], // NOT the digest of the real predecessor
         serial: 3,
+        trait_root: honest[0].trait_root,
+        soulbound: honest[0].soulbound,
     });
     assert_eq!(
         verify_desc_chain(&spliced, id),
         Err(ProvenanceBreak::BrokenLink { index: 2 }),
         "a spliced version with a broken link is caught"
     );
+}
+
+// ============================================================================
+// First-class committed trait_root (E1)
+// ============================================================================
+
+#[test]
+fn a_plain_mint_carries_a_default_committed_trait_root() {
+    let mut w = AssetWorld::new();
+    let id = w.mint("alice", b"trait-target");
+    // The first-class trait_root is populated (E1): a consumer reads it from the committed
+    // asset identity instead of re-deriving from raw AssetId bytes.
+    let root = w
+        .trait_root_of(id)
+        .expect("a minted asset has a committed trait root");
+    assert_eq!(
+        root,
+        default_trait_root(&id),
+        "a plain mint commits the deterministic default trait root"
+    );
+    assert_ne!(
+        root, [0u8; 32],
+        "the committed root is meaningful, not zero"
+    );
+    // The descriptors expose it too, and it is carried unchanged.
+    let descs = w.provenance_descs(id);
+    assert_eq!(descs[0].trait_root, root);
+}
+
+#[test]
+fn mint_with_traits_commits_an_explicit_root_carried_across_the_lineage() {
+    let mut w = AssetWorld::new();
+    let explicit = [0x5Au8; 32]; // e.g. a gear StatBlock digest
+    let id = w.mint_with_traits("smith", b"flamebrand", explicit);
+    assert_eq!(
+        w.trait_root_of(id),
+        Some(explicit),
+        "the explicit content root is the committed trait root"
+    );
+
+    // It rides WriteOnce across a transfer (the visual/stat layer sees the same root on every
+    // version, so provenance and appearance stay bound together).
+    w.transfer(id, "smith", "buyer").expect("transfer lands");
+    let report = w.verify_provenance(id);
+    assert!(report.verified, "lineage verifies: {:?}", report.reasons);
+    for d in w.provenance_descs(id) {
+        assert_eq!(
+            d.trait_root, explicit,
+            "trait root carried across the lineage"
+        );
+    }
+}
+
+#[test]
+fn a_forged_trait_root_in_a_successor_fails_the_re_derivation() {
+    let mut w = AssetWorld::new();
+    let id = w.mint_with_traits("alice", b"heirloom", [0x01u8; 32]);
+    w.transfer(id, "alice", "bob").expect("t1");
+    let mut descs = w.provenance_descs(id);
+    // Rewrite the successor's committed trait root (a re-skin attack) but recompute prev so the
+    // hash link would otherwise pass — the carried-root check still catches it.
+    descs[1].trait_root = [0xEEu8; 32];
+    descs[1].prev = dreggnet_asset::note_digest(&descs[0]);
+    assert_eq!(
+        verify_desc_chain(&descs, id),
+        Err(ProvenanceBreak::Inconsistent {
+            index: 1,
+            reason: "trait_root not carried",
+        }),
+        "a rewritten committed trait root is caught"
+    );
+}
+
+// ============================================================================
+// First-class soulbound (non-transferable) — ISA-enforced
+// ============================================================================
+
+#[test]
+fn a_soulbound_asset_refuses_transfer_at_the_isa_non_vacuously() {
+    let mut w = AssetWorld::new();
+    let alice = w.pubkey_of("alice");
+    let id = w.mint_soulbound("alice", b"achievement-badge");
+    assert!(w.is_soulbound(id), "minted soulbound");
+
+    // The OWNER signs a real, valid transfer — and it is STILL refused, because the note's
+    // transfer case requires FieldEquals(soulbound, 0). This is cryptographic ISA refusal,
+    // not app bookkeeping: the same signer, on a normal note, commits (below).
+    let moved = w.transfer(id, "alice", "bob");
+    assert!(
+        matches!(moved, Err(AssetError::Refused(_))),
+        "a soulbound asset refuses even an owner-signed transfer, got {moved:?}"
+    );
+    assert_eq!(
+        w.current_owner(id),
+        Some(alice),
+        "it stayed bound to the earner"
+    );
+    assert_eq!(w.lineage_len(id), 1, "no successor minted");
+
+    // NON-VACUOUS: the SAME owner minting a NON-soulbound note CAN transfer it.
+    let free = w.mint("alice", b"free-item");
+    assert!(!w.is_soulbound(free));
+    w.transfer(free, "alice", "bob")
+        .expect("a non-soulbound note transfers fine");
+    assert_eq!(w.current_owner(free), w.current_owner(free));
+}
+
+#[test]
+fn a_soulbound_asset_still_verifies_its_provenance() {
+    let mut w = AssetWorld::new();
+    let id = w.mint_soulbound_with_traits("earner", b"platinum", [0x77u8; 32]);
+    let report = w.verify_provenance(id);
+    assert!(
+        report.verified,
+        "a soulbound mint verifies: {:?}",
+        report.reasons
+    );
+    assert_eq!(w.trait_root_of(id), Some([0x77u8; 32]));
+    // The soulbound flag is committed and carried.
+    assert_eq!(w.provenance_descs(id)[0].soulbound, 1);
+}
+
+// ============================================================================
+// Batch mint
+// ============================================================================
+
+#[test]
+fn batch_mint_produces_independent_owned_assets() {
+    let mut w = AssetWorld::new();
+    let alice = w.pubkey_of("alice");
+    let seeds: [&[u8]; 3] = [b"pack-card-1", b"pack-card-2", b"pack-card-3"];
+    let ids = w.mint_batch("alice", &seeds);
+    assert_eq!(ids.len(), 3);
+    // Distinct assets, each a one-version lineage owned by the minter.
+    assert_ne!(ids[0].bytes(), ids[1].bytes());
+    assert_ne!(ids[1].bytes(), ids[2].bytes());
+    for id in &ids {
+        assert_eq!(w.current_owner(*id), Some(alice));
+        assert_eq!(w.lineage_len(*id), 1);
+        assert!(w.verify_provenance(*id).verified);
+    }
+    // A batch id matches the individual mint of the same seed (batch is pure convenience).
+    let solo = AssetWorld::new().mint("alice", b"pack-card-2");
+    assert_eq!(ids[1].bytes(), solo.bytes());
+}
+
+// ============================================================================
+// Revocation — the minter burns a mis-minted, still-held asset
+// ============================================================================
+
+#[test]
+fn a_minter_can_revoke_a_still_held_asset() {
+    let mut w = AssetWorld::new();
+    let _alice = w.pubkey_of("alice");
+    let id = w.mint("alice", b"oops-wrong-stats");
+    assert!(!w.is_revoked(id));
+
+    w.revoke(id, "alice")
+        .expect("the minter revokes a still-held asset");
+    assert!(w.is_revoked(id), "the asset is now revoked");
+    assert_eq!(
+        w.current_owner(id),
+        None,
+        "a revoked asset has no live holder"
+    );
+
+    // A revoked asset cannot be transferred (the origin was burned).
+    assert!(
+        matches!(w.transfer(id, "alice", "bob"), Err(AssetError::Refused(_))),
+        "a revoked asset refuses transfer"
+    );
+    // And its provenance still verifies — as a clean burn (the tail is spent on-chain).
+    let report = w.verify_provenance(id);
+    assert!(report.revoked);
+    assert!(
+        report.verified,
+        "a cleanly revoked asset verifies as a burn: {:?}",
+        report.reasons
+    );
+}
+
+#[test]
+fn a_non_minter_cannot_revoke_and_a_transferred_asset_cannot_be_revoked() {
+    let mut w = AssetWorld::new();
+    let _alice = w.pubkey_of("alice");
+    let bob = w.pubkey_of("bob");
+    let id = w.mint("alice", b"legit-item");
+
+    // A non-minter revoke is refused.
+    assert!(
+        matches!(w.revoke(id, "mallory"), Err(AssetError::Refused(_))),
+        "a non-minter cannot revoke"
+    );
+    assert!(!w.is_revoked(id), "the failed revoke changed nothing");
+    assert_eq!(w.current_owner(id), Some(w.pubkey_of("alice")));
+
+    // Hand it off; now even the minter cannot revoke (they no longer hold it).
+    w.transfer(id, "alice", "bob").expect("transfer");
+    assert_eq!(w.current_owner(id), Some(bob));
+    assert!(
+        matches!(w.revoke(id, "alice"), Err(AssetError::Refused(_))),
+        "the minter cannot revoke an asset they have handed off"
+    );
+    assert!(!w.is_revoked(id));
+    assert_eq!(w.current_owner(id), Some(bob), "the asset is untouched");
 }
