@@ -127,46 +127,82 @@ pub fn authoritative_decision(rust_decision: Decision, wire: Option<&str>) -> De
 mod tests {
     use super::*;
 
-    /// On a fallback build (or with the gate off), the authoritative decision is just the Rust one.
+    /// THE HONEST POLE — when the Lean export is linked, the verified verdict for each well-formed
+    /// tally is the one the Rust coordinator also reaches. Asserted FIRST, because without it the
+    /// override tooth below could pass against a gate that returns a constant.
+    ///
+    /// This pole is deliberately weak ON ITS OWN, and saying so is the point: it is exactly the shape
+    /// that made the old `lean_gate_decides_unanimous_scenarios` vacuous. `authoritative_decision`'s
+    /// `Err` branch returns `rust_decision`, and here every `rust_decision` IS the expected answer — so
+    /// this test is green whether `verified_2pc_decide` works, is broken, returns garbage, or is absent.
+    /// It carries no assurance alone. `lean_verdict_overrides_a_wrong_rust_decision` is the tooth; this
+    /// is only its non-vacuity companion.
     #[test]
-    fn falls_back_to_rust_when_no_wire() {
-        assert_eq!(
-            authoritative_decision(Decision::Commit, None),
-            Decision::Commit
-        );
-        assert_eq!(
-            authoritative_decision(Decision::Abort, None),
-            Decision::Abort
-        );
-        assert_eq!(
-            authoritative_decision(Decision::Pending, None),
-            Decision::Pending
-        );
-    }
-
-    /// THE LIVE 2PC GATE DIFFERENTIAL — when the Lean export is linked, the authoritative verdict for
-    /// a unanimous-yes tally is Commit, for a too-many-no tally is Abort, and they AGREE with the Rust
-    /// coordinator on the well-formed scenarios. Self-skips when the archive lacks the export.
-    #[test]
-    fn lean_gate_decides_unanimous_scenarios() {
-        if !lean_backed() {
-            eprintln!("SKIP: Lean distributed exports not linked (lean_backed()==false)");
+    fn lean_gate_agrees_with_rust_on_wellformed_tallies() {
+        if !dregg_lean_ffi::demand_lean(
+            lean_backed(),
+            "the Lean distributed exports (lean_backed()==false)",
+        ) {
             return;
         }
-        // 3-of-3 all yes ⇒ Commit (the Rust coordinator would also reach Commit here).
-        assert_eq!(
-            authoritative_decision(Decision::Commit, Some("y=3;n=0;N=3;t=3")),
-            Decision::Commit
-        );
-        // 3-of-3, 2 yes 1 no ⇒ Abort (threshold unreachable).
-        assert_eq!(
-            authoritative_decision(Decision::Abort, Some("y=2;n=1;N=3;t=3")),
-            Decision::Abort
-        );
-        // 3-of-3, 2 yes 0 no ⇒ Pending.
-        assert_eq!(
-            authoritative_decision(Decision::Pending, Some("y=2;n=0;N=3;t=3")),
-            Decision::Pending
-        );
+        // 3-of-3 all yes ⇒ Commit; 2 yes 1 no ⇒ Abort (threshold unreachable); 2 yes 0 no ⇒ Pending.
+        for (wire, expected) in [
+            ("y=3;n=0;N=3;t=3", Decision::Commit),
+            ("y=2;n=1;N=3;t=3", Decision::Abort),
+            ("y=2;n=0;N=3;t=3", Decision::Pending),
+        ] {
+            assert_eq!(
+                authoritative_decision(expected.clone(), Some(wire)),
+                expected,
+                "the verified 2PC gate must agree with the Rust coordinator on the well-formed tally \
+                 {wire} — a disagreement is a real bug in one of the two engines"
+            );
+        }
+    }
+
+    /// **THE TOOTH — the VERIFIED verdict OVERRIDES the Rust one.** This module's whole claim is that
+    /// `dregg_coord_2pc_decide`, not `Coordinator::evaluate_votes`, decides commit/abort/pending. The
+    /// only way to witness that is to hand the gate a `rust_decision` that is DELIBERATELY WRONG for
+    /// the tally and require the Lean verdict to win. Every expected value below is one the fallback
+    /// path CANNOT produce, because the fallback returns `rust_decision` verbatim — so a fallback,
+    /// a stuck export, or a deleted `verified_2pc_decide` all turn this test RED.
+    ///
+    /// That is precisely what the deleted `lean_gate_decides_unanimous_scenarios` could not do, and
+    /// what the deleted `falls_back_to_rust_when_no_wire` was not even trying to do: the latter
+    /// asserted `f(x, None) == x` against a body whose second statement is
+    /// `let Some(wire) = wire else { return rust_decision; }` — literally P → P.
+    ///
+    /// On a FALLBACK build this test does not run: `demand_lean` skips it honestly, or PANICS under
+    /// `DREGG_TEST_REQUIRE_LEAN=1`. That the verified gate is unassertable without the archive is the
+    /// finding, not a defect of the test.
+    #[test]
+    fn lean_verdict_overrides_a_wrong_rust_decision() {
+        if !dregg_lean_ffi::demand_lean(
+            lean_backed(),
+            "the Lean distributed exports (lean_backed()==false)",
+        ) {
+            return;
+        }
+        // (tally wire, a WRONG rust_decision, the verified verdict that must override it).
+        for (wire, wrong_rust, verified) in [
+            // Unanimous yes: Lean says Commit though Rust handed us Abort.
+            ("y=3;n=0;N=3;t=3", Decision::Abort, Decision::Commit),
+            ("y=3;n=0;N=3;t=3", Decision::Pending, Decision::Commit),
+            // Threshold unreachable: Lean says Abort though Rust handed us Commit.
+            ("y=2;n=1;N=3;t=3", Decision::Commit, Decision::Abort),
+            // Undecided: Lean says Pending though Rust handed us a TERMINAL verdict — the
+            // safety-relevant direction (a premature Commit must not survive the gate).
+            ("y=2;n=0;N=3;t=3", Decision::Commit, Decision::Pending),
+            ("y=2;n=0;N=3;t=3", Decision::Abort, Decision::Pending),
+        ] {
+            let got = authoritative_decision(wrong_rust.clone(), Some(wire));
+            assert_eq!(
+                got, verified,
+                "the VERIFIED 2PC gate must OVERRIDE the Rust coordinator: on tally {wire} the Rust \
+                 sibling said {wrong_rust:?} and the verified rule says {verified:?}, but the gate \
+                 returned {got:?}. Returning {wrong_rust:?} means the gate FELL BACK — the verified \
+                 rule is not deciding and this module's central claim is false on this build."
+            );
+        }
     }
 }

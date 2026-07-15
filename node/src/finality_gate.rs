@@ -227,73 +227,210 @@ mod tests {
     use dregg_blocklace::finality::{Block, Payload};
     use ed25519_dalek::SigningKey;
 
-    /// Pure admission semantics — `admits` is membership in the finalized `(creator_id, seq)` set,
-    /// keyed by the participant index. No Lean archive needed.
-    #[test]
-    fn admits_semantics() {
-        let p0 = [1u8; 32];
-        let p1 = [2u8; 32];
-        let mut creator_ids: HashMap<[u8; 32], u64> = HashMap::new();
-        creator_ids.insert(p0, 0);
-        creator_ids.insert(p1, 1);
-        let vf = VerifiedFinality {
-            finalized: [(0u64, 0u64), (1u64, 0u64)].into_iter().collect(),
-            creator_ids,
-        };
-        assert!(vf.admits(&p0, 0));
-        assert!(vf.admits(&p1, 0));
-        assert!(!vf.admits(&p0, 1)); // seq 1 not finalized
-        assert!(!vf.admits(&[9u8; 32], 0)); // unknown creator
-        assert_eq!(vf.len(), 2);
-        assert!(!vf.is_empty());
-    }
-
     fn key(seed: u8) -> SigningKey {
         SigningKey::from_bytes(&[seed; 32])
     }
 
-    /// ADVERSARIAL (executor path): the participant projection is keyed by the HYBRID id
-    /// `H(ed25519 ‖ ml_dsa)`. An attacker who keeps an honest node's ed25519 half but SUBSTITUTES its
-    /// own ML-DSA key gets a DIFFERENT hybrid id than the enrolled one (the commitment binds identity
-    /// to BOTH halves — `dregg_types::verify_committed_ml_dsa`). The executor interns only the enrolled
-    /// hybrid participants, so the substituted-key identity is NEVER interned and the gate REFUSES
-    /// every block it creates — a key-substitution participant cannot be admitted on the executor path.
-    #[test]
-    fn attacker_substituted_ml_dsa_key_is_refused_by_gate() {
-        let honest = key(1);
-        let honest_ed: [u8; 32] = honest.verifying_key().to_bytes();
-        // The ENROLLED hybrid id commits to the honest node's from-seed ML-DSA key.
-        let honest_hybrid = Block::hybrid_id(&honest);
+    /// Build a 3-round, fully cross-linked lace over `creators` — each round's blocks reference ALL of
+    /// the previous round, the shape of the Lean `trace3`. Every block carries a Turn payload
+    /// (actionable), matching what the live producer emits.
+    ///
+    /// `receive_block` (ed25519-only) is deliberate: it does NOT filter by enrollment, so a caller can
+    /// put a non-participant's blocks into the lace and let the FINALITY GATE be the thing under test.
+    /// The live wire uses `receive_block_pinned`, which would refuse them one layer earlier.
+    fn cross_linked_lace(creators: &[SigningKey]) -> Blocklace {
+        let mut lace = Blocklace::new(creators[0].clone(), 3);
+        let mut round_prev: Vec<BlockId> = Vec::new();
+        for round in 0u64..=2 {
+            let mut this_round = Vec::new();
+            for (i, k) in creators.iter().enumerate() {
+                let b = Block::new(
+                    k,
+                    round,
+                    Payload::Turn(vec![(round * 10) as u8 + i as u8]),
+                    round_prev.clone(),
+                );
+                this_round.push(b.id());
+                lace.receive_block(b).expect("block insert");
+            }
+            round_prev = this_round;
+        }
+        lace
+    }
 
-        // Attacker keeps the honest ed25519 half but swaps in a DIFFERENT ML-DSA key (from an
-        // unrelated seed). The commitment binds identity to BOTH halves, so the resulting hybrid id
-        // differs from the enrolled one.
-        let attacker_ml = dregg_blocklace::pq::public_from_ed25519_seed(&[42u8; 32]);
-        let attacker_hybrid = Block::hybrid_id_from_parts(&honest_ed, &attacker_ml);
+    /// **THE TOOTH — a REAL lace, a REAL attacker block, and the VERIFIED rule refuses it.**
+    ///
+    /// The adversary is a fourth node with a perfectly valid key that was never enrolled. It creates
+    /// genuinely well-formed, correctly-hybrid-signed blocks at every round, fully cross-linked into
+    /// the honest DAG (so they are causally indistinguishable from honest blocks to anything that does
+    /// not check identity), and the honest nodes reference them back. The block passes
+    /// `receive_block`'s own verification — this is not a malformed-input test.
+    ///
+    /// HONEST SCOPE: on the live wire the node ingests via `receive_block_pinned`, which ALSO refuses
+    /// an unenrolled creator (`BlockError::UnenrolledCreator`) — so this gate is the second layer, not
+    /// the only one. That is why the test is worth having: a defence-in-depth layer nobody exercises
+    /// is a defence-in-depth layer nobody knows is armed. `receive_block` (ed25519-only, used for DAG
+    /// reconstruction) is the correct ingest here precisely because it does NOT filter by enrollment —
+    /// it puts the adversary in front of the gate under test rather than in front of its predecessor.
+    ///
+    /// This is NOT a vacuous "unknown creator" lookup. `build_wire` DOES intern the attacker: its
+    /// `next_extra` counter assigns every non-participant creator its own `AuthorId` past
+    /// `participants.len()`, and the attacker's blocks ARE encoded onto the wire the verified rule
+    /// reads. So `admits(attacker, seq)` resolves to `Some(cid)` and the refusal has to come from the
+    /// verified rule declining to finalize an author outside `P` — not from a `HashMap` miss. If
+    /// `BlocklaceFinality.tauOrder` ever finalized a non-participant's block, this test reddens.
+    ///
+    /// That is exactly what the deleted `admits_semantics` and
+    /// `attacker_substituted_ml_dsa_key_is_refused_by_gate` could not witness: both hand-built a
+    /// `VerifiedFinality` literal and then asserted `HashSet::contains` over it. They tested the
+    /// standard library. Neither ever called `compute()`, so neither could tell a working verified
+    /// rule from an absent one.
+    ///
+    /// Self-skips without the archive (or PANICS under `DREGG_TEST_REQUIRE_LEAN=1`) — the verified
+    /// rule is genuinely unassertable on a fallback build, and reporting `ok` there would be the
+    /// vacuity this test exists to remove.
+    #[test]
+    fn attacker_block_from_unenrolled_creator_is_refused_by_the_verified_rule() {
+        if !dregg_lean_ffi::demand_lean(
+            dregg_lean_ffi::finality_gate_available(),
+            "the Lean finality-gate export (finality_gate_available()==false)",
+        ) {
+            return;
+        }
+
+        let honest_keys = [key(1), key(2), key(3)];
+        let attacker = key(99);
+        let participants: Vec<[u8; 32]> = honest_keys.iter().map(Block::hybrid_id).collect();
+        let attacker_hybrid = Block::hybrid_id(&attacker);
+        assert!(
+            !participants.contains(&attacker_hybrid),
+            "the attacker's hybrid id must not be enrolled — else this test has no adversary"
+        );
+
+        // The lace the gate sees: the 3 honest nodes AND the attacker, all cross-linked. The honest
+        // nodes reference the attacker's blocks (it gossiped them), so they are load-bearing in the
+        // causal past — the gate cannot refuse them by simply ignoring an unreferenced subgraph.
+        let all_creators = [
+            honest_keys[0].clone(),
+            honest_keys[1].clone(),
+            honest_keys[2].clone(),
+            attacker.clone(),
+        ];
+        let lace = cross_linked_lace(&all_creators);
+        let attacker_seqs: Vec<u64> = lace
+            .iter()
+            .filter(|(_, b)| b.creator == attacker_hybrid)
+            .map(|(_, b)| b.seq)
+            .collect();
+        assert_eq!(
+            attacker_seqs.len(),
+            3,
+            "the attacker must actually be in the lace at every round — else there is nothing to refuse"
+        );
+
+        // Run the REAL gate over the REAL lace, with only the 3 honest nodes enrolled.
+        let vf = VerifiedFinality::compute(&lace, &participants)
+            .expect("verified gate ran (archive present + wire non-ERR)");
+
+        // ── HONEST POLE FIRST. The gate must admit the enrolled nodes' finalized blocks. Without
+        //    this, "refuses the attacker" is satisfied by a gate that finalizes NOTHING — the vacuous
+        //    pass, and the one a broken export would produce.
+        assert!(
+            !vf.is_empty(),
+            "the verified rule finalized NOTHING on a clean cross-linked lace — the attacker-refusal \
+             assertion below would then be vacuously true. The gate is broken, not strict."
+        );
+        let mut honest_admitted = 0usize;
+        for (_, b) in lace.iter() {
+            if participants.contains(&b.creator) && vf.admits(&b.creator, b.seq) {
+                honest_admitted += 1;
+            }
+        }
+        assert!(
+            honest_admitted > 0,
+            "no ENROLLED participant's block was admitted — the gate is refusing everyone, so its \
+             refusal of the attacker carries no information about identity"
+        );
+
+        // ── THE REFUSAL. The attacker IS interned (build_wire's next_extra gives it an AuthorId and
+        //    puts its blocks on the wire), so this is the verified rule declining to finalize an
+        //    author outside the enrolled set — not a HashMap miss.
+        assert!(
+            vf.creator_ids.contains_key(&attacker_hybrid),
+            "the attacker must be INTERNED on the wire (build_wire::next_extra) — if it were absent, \
+             `admits` would return false via a HashMap miss and this test would assert nothing about \
+             the verified rule"
+        );
+        for seq in &attacker_seqs {
+            assert!(
+                !vf.admits(&attacker_hybrid, *seq),
+                "the VERIFIED rule FINALIZED a block (seq {seq}) created by an UNENROLLED identity — \
+                 an unenrolled node can inject state transitions into the executor. The gate is OPEN."
+            );
+        }
+        // And no finalized coordinate carries the attacker's AuthorId at all.
+        let attacker_cid = vf.creator_ids[&attacker_hybrid];
+        assert!(
+            !vf.finalized.iter().any(|(c, _)| *c == attacker_cid),
+            "the verified finalized set contains the unenrolled attacker's AuthorId {attacker_cid}"
+        );
+    }
+
+    /// **THE KEY-SUBSTITUTION TOOTH, on a REAL lace.** The participant projection is keyed by the
+    /// HYBRID id `H(ed25519 ‖ ml_dsa)`. An attacker who keeps an honest node's ed25519 half but
+    /// substitutes its own ML-DSA key gets a DIFFERENT hybrid id, so it is not the enrolled identity.
+    ///
+    /// The predecessor test asserted that over a hand-built `VerifiedFinality` literal — i.e. it
+    /// asserted that two hashes differ and that a `HashSet` does not contain a key it was never given.
+    /// Here the honest node's blocks are put through the REAL gate and the substituted identity is
+    /// checked against the REAL finalized set: the enrolled hybrid is admitted, the substituted one
+    /// is not, and the honest pole proves the gate is live rather than empty.
+    #[test]
+    fn substituted_ml_dsa_identity_is_not_admitted_by_the_verified_rule() {
+        if !dregg_lean_ffi::demand_lean(
+            dregg_lean_ffi::finality_gate_available(),
+            "the Lean finality-gate export (finality_gate_available()==false)",
+        ) {
+            return;
+        }
+
+        let keys = [key(1), key(2), key(3)];
+        let participants: Vec<[u8; 32]> = keys.iter().map(Block::hybrid_id).collect();
+
+        // Same ed25519 half as the honest node 0; a FOREIGN ML-DSA half. The commitment binds both,
+        // so the resulting identity is not the enrolled one.
+        let honest_ed: [u8; 32] = keys[0].verifying_key().to_bytes();
+        let foreign_ml = dregg_blocklace::pq::public_from_ed25519_seed(&[42u8; 32]);
+        let substituted = Block::hybrid_id_from_parts(&honest_ed, &foreign_ml);
         assert_ne!(
-            honest_hybrid, attacker_hybrid,
+            substituted, participants[0],
             "substituting the ML-DSA half must change the hybrid id (the commitment binds both halves)"
         );
 
-        // The executor projection interns ONLY the enrolled hybrid participant.
-        let mut creator_ids: HashMap<[u8; 32], u64> = HashMap::new();
-        creator_ids.insert(honest_hybrid, 0);
-        let vf = VerifiedFinality {
-            finalized: [(0u64, 0u64)].into_iter().collect(),
-            creator_ids,
-        };
+        let lace = cross_linked_lace(&keys);
+        let vf = VerifiedFinality::compute(&lace, &participants)
+            .expect("verified gate ran (archive present + wire non-ERR)");
 
-        // The honest hybrid creator at the finalized seq is admitted…
+        // HONEST POLE — the enrolled identity's blocks really are finalized by the verified rule.
+        // Without this the refusal below is satisfied by an empty finalized set.
+        let honest_finalized_seq = lace
+            .iter()
+            .filter(|(_, b)| b.creator == participants[0])
+            .map(|(_, b)| b.seq)
+            .find(|s| vf.admits(&participants[0], *s))
+            .expect(
+                "the enrolled node 0 must have at least one VERIFIED-finalized block on a clean \
+                 3-node lace — else the substitution refusal below is vacuous",
+            );
+
+        // THE REFUSAL — at the SAME seq the enrolled identity is admitted at, the substituted
+        // identity is not. This is the differential that matters: the only thing that changed is the
+        // ML-DSA half of the identity.
         assert!(
-            vf.admits(&honest_hybrid, 0),
-            "the enrolled hybrid participant's finalized block is admitted"
-        );
-        // …but the attacker's substituted-ML-DSA-key identity is REFUSED (never interned): the
-        // executor's who-finalized projection is keyed by the commitment, not the raw ed25519 half.
-        assert!(
-            !vf.admits(&attacker_hybrid, 0),
-            "a key-substitution attacker (honest ed25519, foreign ML-DSA) must be refused on the \
-             executor path — its hybrid id is not an enrolled participant"
+            !vf.admits(&substituted, honest_finalized_seq),
+            "a key-substitution identity (honest ed25519, foreign ML-DSA) was ADMITTED at seq \
+             {honest_finalized_seq}, the same seq the enrolled identity is admitted at — the \
+             executor's who-finalized projection is NOT bound to the hybrid commitment"
         );
     }
 
@@ -305,13 +442,15 @@ mod tests {
     /// rule that gates `poll_finalized_blocks` reproduces the order the Rust `tau` finalizes — so
     /// gating the live commit on it is transparent for honest traces and only bites on divergence.
     ///
-    /// Self-skips when the Lean archive lacks the finality-gate export (a marshal-only / stale build).
+    /// Self-skips when the Lean archive lacks the finality-gate export (a marshal-only / stale
+    /// build) — UNLESS `DREGG_TEST_REQUIRE_LEAN=1`, under which the absent export PANICS instead of
+    /// reporting a hollow `ok` (the scheduled hard-mode lane; see `dregg_lean_ffi::demand_lean`).
     #[test]
     fn verified_gate_agrees_with_rust_tau_three_node() {
-        if !dregg_lean_ffi::finality_gate_available() {
-            eprintln!(
-                "SKIP: Lean finality-gate export not linked (finality_gate_available()==false)"
-            );
+        if !dregg_lean_ffi::demand_lean(
+            dregg_lean_ffi::finality_gate_available(),
+            "the Lean finality-gate export (finality_gate_available()==false)",
+        ) {
             return;
         }
 
@@ -406,11 +545,14 @@ mod tests {
     /// export agree, and the order is a permutation-free superset relationship: every block the
     /// projection finalizes appears in the raw order, IN the verified sequence.
     ///
-    /// Self-skips when the archive lacks the raw-order export (a stale/marshal-only build).
+    /// Self-skips when the archive lacks the raw-order export (a stale/marshal-only build) —
+    /// unless `DREGG_TEST_REQUIRE_LEAN=1`, under which the absent export PANICS.
     #[test]
     fn raw_order_export_agrees_with_projection_three_node() {
-        if !dregg_lean_ffi::tau_order_available() {
-            eprintln!("SKIP: Lean raw tau-order export not linked (tau_order_available()==false)");
+        if !dregg_lean_ffi::demand_lean(
+            dregg_lean_ffi::tau_order_available(),
+            "the Lean raw tau-order export (tau_order_available()==false)",
+        ) {
             return;
         }
 
@@ -498,14 +640,15 @@ mod tests {
     /// finalizer-RULE bug but a degenerate live DAG / the (now-fixed) FFI wedge — i.e. the fix is the
     /// clean cut + the memoization, not a different finalization rule.
     ///
-    /// Self-skips when the archive lacks the raw-order export (a stale/marshal-only build).
+    /// Self-skips when the archive lacks the raw-order export (a stale/marshal-only build) —
+    /// unless `DREGG_TEST_REQUIRE_LEAN=1`, under which the absent export PANICS.
     #[test]
     fn gate_on_super_ratifies_n5_c3_shape() {
-        if !dregg_lean_ffi::tau_order_available() {
-            eprintln!(
-                "SKIP: Lean raw tau-order export not linked (tau_order_available()==false) — \
-                 the gate-ON finalizer cannot be proven; rebuild with the verified archive"
-            );
+        if !dregg_lean_ffi::demand_lean(
+            dregg_lean_ffi::tau_order_available(),
+            "the Lean raw tau-order export (tau_order_available()==false) — the gate-ON finalizer \
+             cannot be proven; rebuild with the verified archive",
+        ) {
             return;
         }
 
@@ -627,11 +770,14 @@ mod tests {
     /// 6-round (30-block) fully cross-linked lace, runs the verified Lean export, and asserts it
     /// completes well under a generous wall-clock bound — a former-exponential computation now linear-ish.
     ///
-    /// Self-skips when the archive lacks the raw-order export (a stale/marshal-only build).
+    /// Self-skips when the archive lacks the raw-order export (a stale/marshal-only build) —
+    /// unless `DREGG_TEST_REQUIRE_LEAN=1`, under which the absent export PANICS.
     #[test]
     fn lean_tau_order_fast_on_cross_linked_n5_dag() {
-        if !dregg_lean_ffi::tau_order_available() {
-            eprintln!("SKIP: Lean raw tau-order export not linked (tau_order_available()==false)");
+        if !dregg_lean_ffi::demand_lean(
+            dregg_lean_ffi::tau_order_available(),
+            "the Lean raw tau-order export (tau_order_available()==false)",
+        ) {
             return;
         }
 

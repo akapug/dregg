@@ -1454,6 +1454,25 @@ fn vm_site_input_state_concrete(
     st
 }
 
+/// The genuine Poseidon2 digest a hash site's `digest_col` must carry: `state[0]` of the last
+/// permutation round over the site's resolved input state. `digests` supplies the EARLIER sites'
+/// digests (for `HashInput::Digest(k)`), so callers walk `desc.hash_sites` in order, pushing each
+/// result.
+///
+/// This is the SAME resolution + extraction [`extend_vm_trace`] performs when it builds the aux
+/// blocks, exposed so a witness builder outside this module can fill the digest cells the extender
+/// deliberately does NOT fill (see [`extend_vm_trace`]'s IMPORTANT note). A descriptor test that
+/// computed digests any other way would be pinning its own arithmetic, not the AIR's.
+pub(crate) fn vm_site_digest_concrete(
+    site: &VmHashSite,
+    row: &[DreggBabyBear],
+    digests: &[DreggBabyBear],
+) -> DreggBabyBear {
+    let input = vm_site_input_state_concrete(site, row, digests);
+    let auxw = poseidon2_permute_aux_witness(input);
+    auxw[auxw.len() - POSEIDON2_WIDTH]
+}
+
 /// The MULTI-ROW Plonky3 AIR that interprets an `EffectVmDescriptor` at `eval`-time.
 ///
 /// Unlike [`LeanDescriptorAir`] (single-row per-gate), this AIR reads the `next` row, the
@@ -1879,6 +1898,7 @@ fn transfer_test_descriptor() -> LeanDescriptor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::refusal::must_refuse_or_unsat_panic;
 
     /// The acceptance gate: a SATISFYING transfer assignment proves+verifies, and
     /// a TAMPERED one (breaking the conservation gate) is rejected. This proves the
@@ -1911,25 +1931,15 @@ mod tests {
         // release it returns a proof that verification rejects. Either path means
         // the forgery is NOT accepted. We catch the panic so the test asserts the
         // soundness outcome uniformly across build profiles.
-        let forged = std::panic::catch_unwind(|| {
-            // prove may panic (debug) — catch it.
-            let p = prove_descriptor(&desc, &bad)?;
-            // if it didn't panic (release), verification must reject.
-            verify_descriptor(&desc, &p)
-        });
-
-        match forged {
-            // Prover panicked on the broken constraint: forgery rejected. Good.
-            Err(_) => {}
-            // Prover produced a proof: verification MUST have errored.
-            Ok(verify_result) => {
-                assert!(
-                    verify_result.is_err(),
-                    "TAMPERED transfer assignment MUST be rejected (conservation gate broken), \
-                     but a proof verified"
-                );
-            }
-        }
+        must_refuse_or_unsat_panic(
+            "TAMPERED transfer assignment MUST be rejected (conservation gate broken),  but a proof verified",
+            || {
+                // prove may panic (debug) — catch it.
+                let p = prove_descriptor(&desc, &bad)?;
+                // if it didn't panic (release), verification must reject.
+                verify_descriptor(&desc, &p)
+            },
+        );
 
         // ---- Tampered assignment: break a bit gate ----
         // bitA = 2 (not 1).  Conservation still holds.
@@ -1937,20 +1947,13 @@ mod tests {
         assert_eq!(bad_bit[2] + bad_bit[3], bad_bit[0] + bad_bit[1]);
         assert_ne!(bad_bit[4], 1);
 
-        let forged_bit = std::panic::catch_unwind(|| {
-            let p = prove_descriptor(&desc, &bad_bit)?;
-            verify_descriptor(&desc, &p)
-        });
-        match forged_bit {
-            Err(_) => {}
-            Ok(verify_result) => {
-                assert!(
-                    verify_result.is_err(),
-                    "TAMPERED bit assignment MUST be rejected (bit gate broken), \
-                     but a proof verified"
-                );
-            }
-        }
+        must_refuse_or_unsat_panic(
+            "TAMPERED bit assignment MUST be rejected (bit gate broken),  but a proof verified",
+            || {
+                let p = prove_descriptor(&desc, &bad_bit)?;
+                verify_descriptor(&desc, &p)
+            },
+        );
     }
 
     /// The EXACT JSON string Lean's `Dregg2.Circuit.Transfer.transferDescriptorJson`
@@ -2025,20 +2028,16 @@ mod tests {
             forged_value[0] + forged_value[1]
         );
 
-        let tampered = std::panic::catch_unwind(|| {
-            // In debug builds the p3 prover panics on the violated constraint; in
-            // release it returns a proof that verification then rejects. Either path
-            // means the forgery is NOT accepted.
-            let p = prove_descriptor(&desc, &forged_value)?;
-            verify_descriptor(&desc, &p)
-        });
-        match tampered {
-            Err(_) => {} // prover panicked on the broken gate: forgery rejected
-            Ok(verify_result) => assert!(
-                verify_result.is_err(),
-                "TAMPERED (value-forging) transfer witness MUST be rejected, but a proof verified"
-            ),
-        }
+        must_refuse_or_unsat_panic(
+            "TAMPERED (value-forging) transfer witness MUST be rejected, but a proof verified",
+            || {
+                // In debug builds the p3 prover panics on the violated constraint; in
+                // release it returns a proof that verification then rejects. Either path
+                // means the forgery is NOT accepted.
+                let p = prove_descriptor(&desc, &forged_value)?;
+                verify_descriptor(&desc, &p)
+            },
+        );
 
         // ---- Tampered witness: drop authorization (authBit != 1) ----
         // A conserving transfer (70/35) but authBit = 0: an unauthorized move. The
@@ -2050,18 +2049,13 @@ mod tests {
         ); // conserves
         assert_ne!(forged_auth[5], 1); // but not authorized
 
-        let tampered_auth = std::panic::catch_unwind(|| {
-            let p = prove_descriptor(&desc, &forged_auth)?;
-            verify_descriptor(&desc, &p)
-        });
-        match tampered_auth {
-            Err(_) => {}
-            Ok(verify_result) => assert!(
-                verify_result.is_err(),
-                "UNAUTHORIZED transfer witness MUST be rejected (authority gate broken), \
-                 but a proof verified"
-            ),
-        }
+        must_refuse_or_unsat_panic(
+            "UNAUTHORIZED transfer witness MUST be rejected (authority gate broken),  but a proof verified",
+            || {
+                let p = prove_descriptor(&desc, &forged_auth)?;
+                verify_descriptor(&desc, &p)
+            },
+        );
     }
 
     /// The EXACT JSON string Lean's `Dregg2.Circuit.Transfer.transferDescriptorRangedJson`
@@ -2156,19 +2150,14 @@ mod tests {
         ); // conservation
         assert!(forged_range[0] >= (1 << 30)); // but srcPre is OUT of [0, 2^30)
 
-        let tampered = std::panic::catch_unwind(|| {
-            // Debug: prover panics on the violated recomposition gate. Release: verify rejects.
-            let p = prove_descriptor(&desc, &forged_range)?;
-            verify_descriptor(&desc, &p)
-        });
-        match tampered {
-            Err(_) => {} // prover panicked on the broken range gate: forgery rejected. Good.
-            Ok(verify_result) => assert!(
-                verify_result.is_err(),
-                "OUT-OF-RANGE balance (>= 2^30) MUST be rejected by the bit-decomposition range \
-                 gate, but a proof verified — the field-soundness hole is OPEN"
-            ),
-        }
+        must_refuse_or_unsat_panic(
+            "OUT-OF-RANGE balance (>= 2^30) MUST be rejected by the bit-decomposition range  gate, but a proof verified — the field",
+            || {
+                // Debug: prover panics on the violated recomposition gate. Release: verify rejects.
+                let p = prove_descriptor(&desc, &forged_range)?;
+                verify_descriptor(&desc, &p)
+            },
+        );
     }
 
     /// The EXACT JSON string Lean's `Dregg2.Circuit.StateCommit.stateDescriptorJson`
@@ -2227,17 +2216,13 @@ mod tests {
         );
         assert_ne!(forged_frame[15], forged_frame[16]);
 
-        let tampered = std::panic::catch_unwind(|| {
-            let p = prove_descriptor(&desc, &forged_frame)?;
-            verify_descriptor(&desc, &p)
-        });
-        match tampered {
-            Err(_) => {}
-            Ok(verify_result) => assert!(
-                verify_result.is_err(),
-                "FRAME-REUSE forgery (frameDigPost != frameDigPre) MUST be rejected"
-            ),
-        }
+        must_refuse_or_unsat_panic(
+            "FRAME-REUSE forgery (frameDigPost != frameDigPre) MUST be rejected",
+            || {
+                let p = prove_descriptor(&desc, &forged_frame)?;
+                verify_descriptor(&desc, &p)
+            },
+        );
     }
 
     /// Range-checked full-state descriptor (balance wires ∈ [0, 2³⁰)).
@@ -2284,17 +2269,13 @@ mod tests {
         assert!(forged_range[0] >= (1 << 30));
         assert_eq!(forged_range[2], forged_range[0] - forged_range[4]);
 
-        let tampered = std::panic::catch_unwind(|| {
-            let p = prove_descriptor(&desc, &forged_range)?;
-            verify_descriptor(&desc, &p)
-        });
-        match tampered {
-            Err(_) => {}
-            Ok(verify_result) => assert!(
-                verify_result.is_err(),
-                "OUT-OF-RANGE balance on full-state circuit MUST be rejected by range gate"
-            ),
-        }
+        must_refuse_or_unsat_panic(
+            "OUT-OF-RANGE balance on full-state circuit MUST be rejected by range gate",
+            || {
+                let p = prove_descriptor(&desc, &forged_range)?;
+                verify_descriptor(&desc, &p)
+            },
+        );
     }
 
     /// Lean-emitted `setFieldA` full-state circuit (`SetFieldCommit.setFieldDescriptorJson`).
@@ -2332,17 +2313,10 @@ mod tests {
         forged[9] = 61;
         assert_ne!(forged[8], forged[9]);
 
-        let tampered = std::panic::catch_unwind(|| {
+        must_refuse_or_unsat_panic("setField FRAME forgery MUST be rejected", || {
             let p = prove_descriptor(&desc, &forged)?;
             verify_descriptor(&desc, &p)
         });
-        match tampered {
-            Err(_) => {}
-            Ok(verify_result) => assert!(
-                verify_result.is_err(),
-                "setField FRAME forgery MUST be rejected"
-            ),
-        }
     }
 
     /// Lean `EffectInstances2.mintDescriptorJson` — the v2 mint effect circuit (4 gates, 72 wires).
@@ -2372,16 +2346,10 @@ mod tests {
         // Log forgery: logPost != logExpected breaks the log gate (70 != 71).
         let mut forged = good;
         forged[71] = 201;
-        let tampered = std::panic::catch_unwind(|| {
+        must_refuse_or_unsat_panic("mint LOG forgery MUST be rejected", || {
             let p = prove_descriptor(&desc, &forged)?;
             verify_descriptor(&desc, &p)
         });
-        match tampered {
-            Err(_) => {}
-            Ok(verify_result) => {
-                assert!(verify_result.is_err(), "mint LOG forgery MUST be rejected")
-            }
-        }
     }
 
     /// Lean `BurnA.burnDescriptorJson` — v2 burn effect circuit (4 gates, 72 wires).
@@ -2410,17 +2378,10 @@ mod tests {
         // Component forgery: compPost != compExpected breaks the bind gate (68 != 69).
         let mut forged = good;
         forged[69] = 101;
-        let tampered = std::panic::catch_unwind(|| {
+        must_refuse_or_unsat_panic("burn COMPONENT forgery MUST be rejected", || {
             let p = prove_descriptor(&desc, &forged)?;
             verify_descriptor(&desc, &p)
         });
-        match tampered {
-            Err(_) => {}
-            Ok(verify_result) => assert!(
-                verify_result.is_err(),
-                "burn COMPONENT forgery MUST be rejected"
-            ),
-        }
     }
 
     /// Lean `Delegate.delegateEmitted` via `emitDescriptorJson` — v2 delegate circuit (4 gates, 72 wires).
@@ -2450,17 +2411,10 @@ mod tests {
         // Rest-frame forgery: restPost != restPre breaks the rest gate (66 != 67).
         let mut forged = good;
         forged[67] = 51;
-        let tampered = std::panic::catch_unwind(|| {
+        must_refuse_or_unsat_panic("delegate REST forgery MUST be rejected", || {
             let p = prove_descriptor(&desc, &forged)?;
             verify_descriptor(&desc, &p)
         });
-        match tampered {
-            Err(_) => {}
-            Ok(verify_result) => assert!(
-                verify_result.is_err(),
-                "delegate REST forgery MUST be rejected"
-            ),
-        }
     }
 
     /// Lean `ExerciseA.exerciseAEmitted` via `emitDescriptorJson` — v1 hold-gate circuit (5 gates, 74 wires).
@@ -2493,17 +2447,10 @@ mod tests {
         // Log forgery: logPost != logExpected breaks the log gate (72 != 73).
         let mut forged = good;
         forged[73] = 201;
-        let tampered = std::panic::catch_unwind(|| {
+        must_refuse_or_unsat_panic("exerciseA LOG forgery MUST be rejected", || {
             let p = prove_descriptor(&desc, &forged)?;
             verify_descriptor(&desc, &p)
         });
-        match tampered {
-            Err(_) => {}
-            Ok(verify_result) => assert!(
-                verify_result.is_err(),
-                "exerciseA LOG forgery MUST be rejected"
-            ),
-        }
     }
 
     /// Lean `CoordinatedTurnEmit.coordinatedTurnDescriptorJson` — bilateral turn circuit (10 gates, 20 wires).
@@ -2550,17 +2497,10 @@ mod tests {
         forged[17] = 91;
         assert_eq!(forged[16], forged[17] - 1);
 
-        let tampered = std::panic::catch_unwind(|| {
+        must_refuse_or_unsat_panic("coordinated-turn FRAME forgery MUST be rejected", || {
             let p = prove_descriptor(&desc, &forged)?;
             verify_descriptor(&desc, &p)
         });
-        match tampered {
-            Err(_) => {}
-            Ok(verify_result) => assert!(
-                verify_result.is_err(),
-                "coordinated-turn FRAME forgery MUST be rejected"
-            ),
-        }
     }
 
     /// Lean `Poseidon2Emit.poseidon2CompressWire` — Wave-4 sponge compress gadget (reuses
@@ -2775,20 +2715,13 @@ mod tests {
             "but the untouched-cell frame digest changed: the minted bystander shows up"
         );
 
-        let tampered = std::panic::catch_unwind(|| {
-            let p = prove_descriptor(&desc, &forged)?;
-            verify_descriptor(&desc, &p)
-        });
-        match tampered {
-            // Prover panicked on the broken frame-reuse gate: forgery rejected (real UNSAT).
-            Err(_) => {}
-            // Prover produced a proof: verification MUST reject it.
-            Ok(verify_result) => assert!(
-                verify_result.is_err(),
-                "THIRD-CELL-MINT forgery (real executor-derived witness) MUST be rejected by \
-                 the frame-reuse gate, but a proof verified — the anti-ghost tooth failed"
-            ),
-        }
+        must_refuse_or_unsat_panic(
+            "THIRD-CELL-MINT forgery (real executor-derived witness) MUST be rejected by  the frame-reuse gate, but a proof verified — the anti-ghost tooth failed",
+            || {
+                let p = prove_descriptor(&desc, &forged)?;
+                verify_descriptor(&desc, &p)
+            },
+        );
     }
 
     // ========================================================================
@@ -2995,20 +2928,13 @@ mod tests {
             "but the step-1 untouched-cell frame digest changed: the minted bystander shows up"
         );
 
-        let tampered = std::panic::catch_unwind(|| {
-            let p = prove_descriptor(&desc, &forged)?;
-            verify_descriptor(&desc, &p)
-        });
-        match tampered {
-            // Prover panicked on the broken step-1 frame-reuse gate: forgery rejected.
-            Err(_) => {}
-            // Prover produced a proof: verification MUST reject it.
-            Ok(verify_result) => assert!(
-                verify_result.is_err(),
-                "WHOLE-TURN final-state third-cell-mint forgery MUST be rejected by the \
-                 step-1 frame-reuse gate, but a proof verified — the anti-ghost tooth failed"
-            ),
-        }
+        must_refuse_or_unsat_panic(
+            "WHOLE-TURN final-state third-cell-mint forgery MUST be rejected by the  step-1 frame-reuse gate, but a proof verified — the anti-ghost tooth failed",
+            || {
+                let p = prove_descriptor(&desc, &forged)?;
+                verify_descriptor(&desc, &p)
+            },
+        );
     }
 
     // ========================================================================
@@ -3051,20 +2977,13 @@ mod tests {
             "the forged witness MUST break the EQ gate {} = {} (the tampered component shows up)",
             broken_lo, broken_hi
         );
-        let tampered = std::panic::catch_unwind(|| {
-            let p = prove_descriptor(&desc, forged)?;
-            verify_descriptor(&desc, &p)
-        });
-        match tampered {
-            // Prover panicked on the broken EQ gate: forgery rejected (real UNSAT).
-            Err(_) => {}
-            // Prover produced a proof: verification MUST reject it.
-            Ok(verify_result) => assert!(
-                verify_result.is_err(),
-                "the v2 forgery (real executor-derived witness) MUST be rejected by the \
-                 broken EQ gate, but a proof verified — the anti-ghost tooth failed"
-            ),
-        }
+        must_refuse_or_unsat_panic(
+            "the v2 forgery (real executor-derived witness) MUST be rejected by the  broken EQ gate, but a proof verified — the anti-ghost tooth failed",
+            || {
+                let p = prove_descriptor(&desc, forged)?;
+                verify_descriptor(&desc, &p)
+            },
+        );
     }
 
     /// `dregg-balanceA-v2`: per-asset value movement (touched = `bal`). The forged
@@ -4902,17 +4821,13 @@ mod tests {
                 forged[*lo], forged[*hi],
                 "forgery [{label}] MUST break the EQ gate {lo} = {hi}"
             );
-            let tampered = std::panic::catch_unwind(|| {
-                let p = prove_descriptor(&desc, forged)?;
-                verify_descriptor(&desc, &p)
-            });
-            match tampered {
-                Err(_) => {} // prover panicked on the broken gate: forgery rejected (real UNSAT)
-                Ok(verify_result) => assert!(
-                    verify_result.is_err(),
-                    "v1 forgery [{label}] MUST be rejected by the broken EQ gate, but a proof verified"
-                ),
-            }
+            must_refuse_or_unsat_panic(
+                "v1 forgery [{label}] MUST be rejected by the broken EQ gate, but a proof verified",
+                || {
+                    let p = prove_descriptor(&desc, forged)?;
+                    verify_descriptor(&desc, &p)
+                },
+            );
         }
     }
 
@@ -6857,17 +6772,13 @@ mod tests {
             forged[68], forged[69],
             "the other four components stay honest (accounts)"
         );
-        let tampered = std::panic::catch_unwind(|| {
-            let p = prove_descriptor(&desc, &forged)?;
-            verify_descriptor(&desc, &p)
-        });
-        match tampered {
-            Err(_) => {} // prover panicked on the broken comp3 gate: forgery rejected (real UNSAT)
-            Ok(verify_result) => assert!(
-                verify_result.is_err(),
-                "spawn quint wrong-child-cap forgery MUST be rejected by the comp3-bind gate"
-            ),
-        }
+        must_refuse_or_unsat_panic(
+            "spawn quint wrong-child-cap forgery MUST be rejected by the comp3-bind gate",
+            || {
+                let p = prove_descriptor(&desc, &forged)?;
+                verify_descriptor(&desc, &p)
+            },
+        );
     }
 
     // ========================================================================
@@ -7643,17 +7554,13 @@ mod tests {
             let honest_commit = forged[last][STATE_AFTER_BASE_T + state_commit_off()];
             forged[last][STATE_AFTER_BASE_T + state_commit_off()] =
                 honest_commit + crate::field::BabyBear::new(1);
-            let rejected = std::panic::catch_unwind(|| {
-                let p = prove_vm_descriptor(&desc, &forged, &pi_window)?;
-                verify_vm_descriptor(&desc, &p, &pi_window)
-            });
-            match rejected {
-                Err(_) => {} // prover panicked on the broken hash-binding gate: rejected
-                Ok(r) => assert!(
-                    r.is_err(),
-                    "FORGED last-row state_commit MUST be rejected by the GROUP-4 hash binding"
-                ),
-            }
+            must_refuse_or_unsat_panic(
+                "FORGED last-row state_commit MUST be rejected by the GROUP-4 hash binding",
+                || {
+                    let p = prove_vm_descriptor(&desc, &forged, &pi_window)?;
+                    verify_vm_descriptor(&desc, &p, &pi_window)
+                },
+            );
         }
 
         // ---- ANTI-GHOST 2: tamper the ACTOR_NONCE public input. The honest base trace's
@@ -7666,17 +7573,13 @@ mod tests {
             bad_pi[evm_pi::ACTOR_NONCE] =
                 bad_pi[evm_pi::ACTOR_NONCE] + crate::field::BabyBear::new(7);
             // The honest trace + tampered PI: the row-0 nonce pin can no longer hold.
-            let rejected = std::panic::catch_unwind(|| {
-                let p = prove_vm_descriptor(&desc, &base_trace, &bad_pi)?;
-                verify_vm_descriptor(&desc, &p, &bad_pi)
-            });
-            match rejected {
-                Err(_) => {}
-                Ok(r) => assert!(
-                    r.is_err(),
-                    "TAMPERED ACTOR_NONCE MUST be rejected by the row-0 boundary pin"
-                ),
-            }
+            must_refuse_or_unsat_panic(
+                "TAMPERED ACTOR_NONCE MUST be rejected by the row-0 boundary pin",
+                || {
+                    let p = prove_vm_descriptor(&desc, &base_trace, &bad_pi)?;
+                    verify_vm_descriptor(&desc, &p, &bad_pi)
+                },
+            );
         }
 
         // ---- ANTI-GHOST 3: forge the row-0 post-balance (state_after.balance_lo) WITHOUT
@@ -7685,17 +7588,13 @@ mod tests {
             let mut forged = base_trace.clone();
             let honest_bal = forged[0][STATE_AFTER_BASE_T + 0]; // balance_lo offset 0
             forged[0][STATE_AFTER_BASE_T + 0] = honest_bal + crate::field::BabyBear::new(11);
-            let rejected = std::panic::catch_unwind(|| {
-                let p = prove_vm_descriptor(&desc, &forged, &pi_window)?;
-                verify_vm_descriptor(&desc, &p, &pi_window)
-            });
-            match rejected {
-                Err(_) => {}
-                Ok(r) => assert!(
-                    r.is_err(),
-                    "FORGED row-0 post-balance MUST be rejected by the debit gate"
-                ),
-            }
+            must_refuse_or_unsat_panic(
+                "FORGED row-0 post-balance MUST be rejected by the debit gate",
+                || {
+                    let p = prove_vm_descriptor(&desc, &forged, &pi_window)?;
+                    verify_vm_descriptor(&desc, &p, &pi_window)
+                },
+            );
         }
     }
 

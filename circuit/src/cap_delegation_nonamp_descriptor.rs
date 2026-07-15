@@ -136,8 +136,10 @@ pub const DELEG_HELD_MASK_RECON_COL: usize = 7;
 /// = 72. The non-amp leg does NOT reach this column — that absence is the module header's ⚠ finding.
 pub const DELEG_HASHED_RIGHTS_COL: usize = 72;
 
-/// The full EffectVM base trace width (Lean `EFFECT_VM_WIDTH`).
-pub const EFFECT_VM_WIDTH: usize = 188;
+/// The full EffectVM base trace width — re-exported from the canonical layout
+/// (`effect_vm::columns`, which Lean `EffectVmEmit` mirrors), NOT re-typed here. A literal `188`
+/// would drift silently the moment the layout moved; this way a layout change is a compile error.
+pub use crate::effect_vm::columns::EFFECT_VM_WIDTH;
 
 /// Parse the genuine-non-amp cap-graph descriptor through the running EffectVM interpreter.
 /// (The same `parse_vm_descriptor` the cutover dispatcher uses; the descriptor drives the verified
@@ -153,16 +155,24 @@ mod tests {
     use crate::lean_descriptor_air::{
         HashInput, LeanExpr, VmConstraint, prove_vm_descriptor, vm_site_digest_concrete,
     };
+    use crate::plonky3_prover::DreggStarkConfig;
+    use crate::refusal::{Outcome, classify, must_accept};
+    use p3_batch_stark::BatchProof;
 
-    // ── The EffectVM base layout (Lean `EffectVmEmit`; these ARE the prover's column indices). ──
-    /// `STATE_BEFORE_BASE = NUM_EFFECTS = 54`.
-    const SB: usize = 54;
-    /// `PARAM_BASE = STATE_BEFORE_BASE + STATE_SIZE = 68`.
-    const PB: usize = 68;
-    /// `STATE_AFTER_BASE = PARAM_BASE + NUM_PARAMS = 76`.
-    const SA: usize = 76;
-    /// `STATE_SIZE = 14`.
-    const STATE_SIZE: usize = 14;
+    // ── The EffectVM base layout, taken from the CANONICAL column module rather than re-typed as
+    //    literals. Lean `EffectVmEmit`'s bases are defined to be these same numbers, and the emitted
+    //    descriptor's `Var` indices ARE prover column indices — so if the layout ever moves, this
+    //    witness builder must move with it, and binding to the constants makes that a compile error
+    //    instead of a silently-wrong trace that reds in some unrelated gate.
+    use crate::effect_vm::columns::{NUM_EFFECTS, PARAM_BASE, STATE_AFTER_BASE, STATE_BEFORE_BASE};
+    /// `STATE_BEFORE_BASE` (= `NUM_EFFECTS` = 54).
+    const SB: usize = STATE_BEFORE_BASE;
+    /// `PARAM_BASE` (= 68).
+    const PB: usize = PARAM_BASE;
+    /// `STATE_AFTER_BASE` (= 76).
+    const SA: usize = STATE_AFTER_BASE;
+    /// The state-block width (`state::SIZE` = 14).
+    const STATE_SIZE: usize = crate::effect_vm::columns::state::SIZE;
     /// The state slot the cap-root accumulator lives in (`state_before[11]` = col 65,
     /// `state_after[11]` = col 87) — one of the only two slots the frame-freeze gates leave free.
     const CAP_ROOT_SLOT: usize = 11;
@@ -271,66 +281,21 @@ mod tests {
         }
     }
 
-    /// Run the prover and classify the outcome, DISTINGUISHING an unsatisfied constraint from a crash.
+    /// Prove `w` under `desc`, classified three ways by the SHARED reject-idiom helper
+    /// (`crate::refusal`, CRATE-EXCELLENCE-PLAN Move 3's "kill the idiom" lane).
     ///
-    /// `prove_vm_descriptor`'s documented refusal mechanism for an unsatisfiable witness is the p3
-    /// debug constraint checker's PANIC (debug_assertions are on under `cargo test`). Per
-    /// CRATE-EXCELLENCE-PLAN S1 a bare "any panic counts" match is the P1b anti-pattern, so this
-    /// returns the panic's MESSAGE for the caller to assert on: a stray `unwrap` in trace assembly
-    /// produces a different message and must not be mistaken for the tooth firing.
-    enum Outcome {
-        Accepted,
-        /// The prover returned `Err` (the stringly boundary — CRATE-EXCELLENCE-PLAN Move 5 types it).
-        Refused(String),
-        /// The p3 debug constraint checker panicked: the witness violates a constraint.
-        ConstraintPanic(String),
-    }
-
-    fn run(desc: &EffectVmDescriptor, w: &DelegWitness) -> Outcome {
-        let hook = std::panic::take_hook();
-        std::panic::set_hook(Box::new(|_| {})); // the forgery panics are expected; keep output readable
-        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            prove_vm_descriptor(desc, &w.rows, &w.pis)
-        }));
-        std::panic::set_hook(hook);
-        match r {
-            Ok(Ok(_)) => Outcome::Accepted,
-            Ok(Err(e)) => Outcome::Refused(e),
-            Err(p) => {
-                let msg = p
-                    .downcast_ref::<String>()
-                    .cloned()
-                    .or_else(|| p.downcast_ref::<&str>().map(|s| (*s).to_string()))
-                    .unwrap_or_else(|| "<non-string panic payload>".to_string());
-                Outcome::ConstraintPanic(msg)
-            }
-        }
-    }
-
-    /// Require a refusal that is an UNSATISFIED CONSTRAINT — never a crash, never an arbitrary `Err`.
-    /// The p3 debug builder's message names the constraint failure; anything else (an `unwrap`, an
-    /// index panic, a shape error) is a BUG in the test or the prover, not the tooth, and reds here.
-    fn assert_constraint_refusal(desc: &EffectVmDescriptor, w: &DelegWitness, what: &str) {
-        match run(desc, w) {
-            Outcome::Accepted => panic!("{what} was ACCEPTED — the gate is OPEN"),
-            Outcome::ConstraintPanic(msg) => {
-                let m = msg.to_ascii_lowercase();
-                assert!(
-                    m.contains("constraint") || m.contains("assert") || m.contains("nonzero"),
-                    "{what} refused, but NOT via an unsatisfied constraint — the panic was {msg:?}. \
-                     A crash is not a refusal: it cannot distinguish `rejected the forgery` from \
-                     `the prover fell over`, which is exactly the P1b anti-pattern this test avoids."
-                );
-            }
-            Outcome::Refused(e) => {
-                let m = e.to_ascii_lowercase();
-                assert!(
-                    m.contains("verify") || m.contains("constraint") || m.contains("oodevaluation"),
-                    "{what} refused, but with an error that does not look like a constraint/verify \
-                     failure: {e:?}. Assert the REASON, not that something went wrong."
-                );
-            }
-        }
+    /// We use `classify` rather than a private catch_unwind for one reason worth stating: it pins the
+    /// EXACT p3 marker strings (`P3_UNSAT_PANIC_MARKERS`) and REDS on any panic that is not the
+    /// documented unsat verdict. A stray `unwrap` in trace assembly, an index panic, a shape
+    /// `assert_eq!` — none of those are the constraint system refusing, and a private helper matching
+    /// on `"constraint"`/`"assert"` substrings (what this module first grew) would have laundered them
+    /// straight back into the P1b anti-pattern the plan exists to kill.
+    fn run(
+        desc: &EffectVmDescriptor,
+        w: &DelegWitness,
+        what: &str,
+    ) -> Outcome<BatchProof<DreggStarkConfig>, String> {
+        classify(what, || prove_vm_descriptor(desc, &w.rows, &w.pis))
     }
 
     /// **THE BEHAVIOURAL NON-AMP TOOTH — an amplifying witness is REFUSED by the running prover.**
@@ -360,17 +325,10 @@ mod tests {
         // ── HONEST POLE FIRST. A genuine submask must PROVE. Without this the per-bit refusals below
         //    are satisfied by a descriptor that refuses everything — the vacuous canary.
         let honest = honest_witness(&d, held, 0b0010_0101);
-        match run(&d, &honest) {
-            Outcome::Accepted => {}
-            Outcome::Refused(e) => panic!(
-                "the HONEST submask witness (granted 0b0010_0101 ⊑ held {held:#010b}) was REFUSED: \
-                 {e}. Every amplification refusal below is vacuous until this passes."
-            ),
-            Outcome::ConstraintPanic(m) => panic!(
-                "the HONEST submask witness (granted 0b0010_0101 ⊑ held {held:#010b}) violated a \
-                 constraint: {m}. Every amplification refusal below is vacuous until this passes."
-            ),
-        }
+        must_accept(
+            "the honest submask witness (granted 0b0010_0101 ⊑ held 0b0110_0111)",
+            || prove_vm_descriptor(&d, &honest.rows, &honest.pis),
+        );
 
         // ── THE FORGERY, one bit at a time. Set granted bit `i` where held bit `i` is CLEAR.
         for i in 0..MASK_BITS {
@@ -410,14 +368,25 @@ mod tests {
                  chain too, and the refusal could not be attributed to the submask gate"
             );
 
-            assert_constraint_refusal(
-                &d,
-                &w,
-                &format!(
-                    "an AMPLIFYING witness (granted bit {i} set, held bit {i} clear — held \
-                     {held:#010b}, granted {granted:#010b})"
-                ),
+            // `must_refuse_or_unsat_panic` semantics, via the shared classifier: an `Ok` is an OPEN
+            // tooth, and a panic that is not the p3 debug prover's DOCUMENTED unsat verdict reds
+            // inside `classify` rather than being laundered as a refusal.
+            let what = format!(
+                "an AMPLIFYING witness (granted bit {i} set, held bit {i} clear — held \
+                 {held:#010b}, granted {granted:#010b})"
             );
+            match run(&d, &w, &what) {
+                Outcome::Accepted(_) => panic!(
+                    "{what} was ACCEPTED — the per-bit non-amp submask gate is OPEN on bit {i}"
+                ),
+                // The refusal we expect: the row violates submask gate `i`, so the p3 debug
+                // constraint checker names it. `classify` has already proved the panic is the
+                // documented unsat marker and not a crash.
+                Outcome::UnsatPanic(_) => {}
+                // Also a genuine fail-closed refusal (prove_vm_descriptor self-verifies before
+                // returning Ok, so a forged witness can surface here instead).
+                Outcome::Err(_) => {}
+            }
         }
     }
 
@@ -446,9 +415,10 @@ mod tests {
         // HONEST POLE — the honest witness proves, so an ACCEPT below means "this forgery slipped
         // through", not "this descriptor accepts anything".
         let honest = honest_witness(&d, held, 0b0000_0001);
-        assert!(
-            matches!(run(&d, &honest), Outcome::Accepted),
-            "the honest witness must prove before this test can say anything about the forgery"
+        must_accept(
+            "the honest delegation witness (granted 0b01 ⊑ held 0b11) — this test cannot say \
+             anything about the forgery below until the honest pole proves",
+            || prove_vm_descriptor(&d, &honest.rows, &honest.pis),
         );
 
         // Structural premise, asserted rather than assumed: the granted-bit recon binds col 4 and the
@@ -477,6 +447,21 @@ mod tests {
             DELEG_GRANTED_MASK_RECON_COL, DELEG_HASHED_RIGHTS_COL,
             "if these are equal the legs DO interlock and this defect pin must be deleted"
         );
+        // And the columns the recon DOES bind are in the effect-SELECTOR block — i.e. the emit is not
+        // merely binding a different rights carrier, it is binding columns that have nothing to do
+        // with rights at all. This is the param-INDEX-as-COLUMN conflation, stated as an assertion.
+        for c in [DELEG_GRANTED_MASK_RECON_COL, DELEG_HELD_MASK_RECON_COL] {
+            assert!(
+                c < NUM_EFFECTS,
+                "col {c} was expected to be inside the effect-selector block (0..{NUM_EFFECTS}) — \
+                 that is what makes this a param-index/column conflation rather than a rights-carrier \
+                 choice. Re-derive this pin against the current emit."
+            );
+        }
+        assert!(
+            DELEG_HASHED_RIGHTS_COL >= PARAM_BASE,
+            "the hashed rights felt must be in the param block — re-derive this pin"
+        );
 
         // THE FORGERY: honest granted BITS (⊑ held), but the hashed `rights` felt confers EVERYTHING.
         let mut w = honest_witness(&d, held, 0b0000_0001);
@@ -488,19 +473,23 @@ mod tests {
         // transition constraints would break and we would be observing the wrong refusal.
         rechain(&d, &mut w);
 
-        match run(&d, &w) {
-            Outcome::Accepted => { /* the expected, defective behaviour — see this test's doc */ }
-            Outcome::Refused(e) => panic!(
-                "the rights-felt tamper was REFUSED ({e}) — the legs INTERLOCK after all. If the Lean \
-                 emit was fixed to bind the granted bits to prmCol(cp.RIGHTS)=\
+        match run(&d, &w, "the rights-felt tamper") {
+            // The expected, DEFECTIVE behaviour — see this test's doc. The tamper slips through
+            // because nothing relates col 72 to the granted bits.
+            Outcome::Accepted(_) => {}
+            Outcome::Err(e) => panic!(
+                "the rights-felt tamper was REFUSED ({e}) — the legs INTERLOCK after all. If the \
+                 Lean emit was fixed to bind the granted bits to prmCol(cp.RIGHTS)=\
                  {DELEG_HASHED_RIGHTS_COL}, DELETE this defect pin and drop the ⚠ section from the \
-                 module header: the tooth is real now."
+                 module header (and from EffectVmEmitCapReshape/EffectVmEmitAttenuateA): the tooth \
+                 is real now."
             ),
-            Outcome::ConstraintPanic(m) => panic!(
+            Outcome::UnsatPanic(m) => panic!(
                 "the rights-felt tamper violated a constraint ({m}) — the legs INTERLOCK after all. \
                  If the Lean emit was fixed to bind the granted bits to prmCol(cp.RIGHTS)=\
                  {DELEG_HASHED_RIGHTS_COL}, DELETE this defect pin and drop the ⚠ section from the \
-                 module header: the tooth is real now."
+                 module header (and from EffectVmEmitCapReshape/EffectVmEmitAttenuateA): the tooth \
+                 is real now."
             ),
         }
     }
@@ -670,5 +659,73 @@ mod tests {
             "advance is hash[edge_leaf, old_cap_root]"
         );
         assert_eq!(adv_site.inputs.len(), 2);
+    }
+    /// **THE FIX, PROVEN TO WORK — rebinding the granted recon to `prmCol(cp.RIGHTS)` CLOSES the gap.**
+    ///
+    /// This is the constructive half of `nonamp_leg_does_not_bind_the_hashed_rights_felt`. That test
+    /// shows the tamper is accepted today; on its own it is only a complaint. Here we patch the parsed
+    /// descriptor's granted-recon gate to read col 72 (the felt the edge leaf hashes) instead of col 4
+    /// — exactly what `prmCol`-wrapping `dcol.GRANTED_MASK` in the Lean emit would produce — and show
+    /// the SAME tamper is then REFUSED.
+    ///
+    /// So the diagnosis is not a guess: the one-token emit change is demonstrated sufficient. The
+    /// mechanism is the interlock the module header originally advertised — the tampered `rights` moves
+    /// the edge leaf, which moves `cap_root`, which moves `state_commit`, so the recon gate can no
+    /// longer be satisfied alongside it.
+    ///
+    /// It also guards the guard: if a future descriptor made this patch a no-op (e.g. the recon already
+    /// binds col 72), the `assert_eq!(patched, 1)` reds and sends a reader to the defect pins.
+    #[test]
+    fn rebinding_granted_recon_to_the_hashed_rights_felt_closes_the_gap() {
+        let mut d = cap_delegation_nonamp_descriptor().expect("descriptor parses");
+
+        // Patch ONLY the granted-mask recon gate: `v4 − Σ granted·2ⁱ`  ⇒  `v72 − Σ granted·2ⁱ`.
+        let mut patched = 0;
+        for c in &mut d.constraints {
+            if let VmConstraint::Gate(LeanExpr::Add(l, _)) = c
+                && matches!(**l, LeanExpr::Var(v) if v == DELEG_GRANTED_MASK_RECON_COL)
+            {
+                **l = LeanExpr::Var(DELEG_HASHED_RIGHTS_COL);
+                patched += 1;
+            }
+        }
+        assert_eq!(
+            patched, 1,
+            "expected exactly one granted-recon gate binding col {DELEG_GRANTED_MASK_RECON_COL}. If \
+             this is 0, the emit may already be fixed — check the defect pins."
+        );
+
+        // HONEST POLE under the PATCHED descriptor: an honest delegation still proves. The recon now
+        // binds col 72, so the honest witness must carry rights == granted there — which
+        // `honest_witness` already does (it lays the granted mask in the rights param). Without this
+        // the refusal below would be satisfied by a patch that simply breaks the descriptor.
+        let held: u32 = 0b0000_0011;
+        let honest = honest_witness(&d, held, 0b0000_0001);
+        must_accept(
+            "the honest witness under the FIXED (col-72-bound) recon — the patch must close the gap, \
+             not merely break the circuit",
+            || prove_vm_descriptor(&d, &honest.rows, &honest.pis),
+        );
+
+        // THE SAME TAMPER the defect pin shows is accepted today: honest granted BITS, amplifying
+        // `rights` felt. Under the fixed recon it must be REFUSED.
+        let mut w = honest_witness(&d, held, 0b0000_0001);
+        for row in &mut w.rows {
+            row[DELEG_HASHED_RIGHTS_COL] = bb(0xFF);
+            fill_digests(&d, row);
+        }
+        rechain(&d, &mut w);
+
+        match run(&d, &w, "the rights-felt tamper under the FIXED recon") {
+            Outcome::Accepted(_) => panic!(
+                "the rights-felt tamper was STILL ACCEPTED after rebinding the granted recon to col \
+                 {DELEG_HASHED_RIGHTS_COL} — so `prmCol`-wrapping `dcol.GRANTED_MASK` is NOT a \
+                 sufficient fix, and the closure lane named in the module header is wrong. \
+                 Re-diagnose before changing the Lean emit."
+            ),
+            // The interlock the header advertises, now real: the tampered rights moves the edge leaf
+            // ⇒ cap_root ⇒ state_commit, and the recon gate cannot be satisfied with it.
+            Outcome::Err(_) | Outcome::UnsatPanic(_) => {}
+        }
     }
 }

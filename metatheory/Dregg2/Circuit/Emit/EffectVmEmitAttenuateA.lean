@@ -827,14 +827,50 @@ theorem attenuateGenuine_op_tamper_refuted :
 edge field — so a tampered `rights` MOVES the root. But binding the root is not yet ENFORCING
 non-amplification: a row may recompute a perfectly-bound root for an edge whose granted `rights` EXCEED
 the delegator's held rights. §G.4 closes that: it appends the SHARED `EffectVmEmitCapReshape`
-delegation non-amp gates (`capDelegNonAmpGates`) — the per-bit submask `granted ⊑ held` whose GRANTED
-mask reconstructs `cp.RIGHTS`, the SAME `rights` felt `siteCapEdgeLeaf` hashes into the recomputed root.
+delegation non-amp gates (`capDelegNonAmpGates`) — the per-bit submask `granted ⊑ held`.
 
-So on the genuine-non-amp descriptor, the two legs INTERLOCK on one `rights` felt: the recompute BINDS
-it into `cap_root` (tamper ⇒ root moves ⇒ `state_commit` moves ⇒ UNSAT), and the non-amp gate BOUNDS it
-by the held mask (over-grant ⇒ submask gate fails ⇒ UNSAT). In-circuit non-amplification now holds on
-EVERY cap-graph effect that uses this descriptor — the ARGUS linchpin, additive + width-neutral (the
-delegation bit carriers are aux columns past the GROUP-4 block, all `< EFFECT_VM_WIDTH = 186`). -/
+### ⚠ THE INTERLOCK PROSE BELOW WAS FALSE — the emit binds the WRONG columns (2026-07-15)
+
+This header used to continue: "…whose GRANTED mask reconstructs `cp.RIGHTS`, the SAME `rights` felt
+`siteCapEdgeLeaf` hashes into the recomputed root. So on the genuine-non-amp descriptor, the two legs
+INTERLOCK on one `rights` felt." **The emitted descriptor falsifies that**, and the emitted JSON is the
+witness — `emitVmJson attenuateVmDescriptorGenuineNonAmp` produces the two mask-recon gates
+
+    v7 − Σ_{i<8} v(120+i)·2ⁱ      (held recon)
+    v4 − Σ_{i<8} v(128+i)·2ⁱ      (granted recon)
+
+so the granted bits reconstruct **column 4** and the held bits **column 7**. The `rights` felt
+`siteCapEdgeLeaf` hashes is **column 72**. Columns 4 and 7 are in the effect-SELECTOR block (`0..54`);
+nothing relates them to the rights param.
+
+**Cause — a param-index/column conflation.** `EffectVmEmitCapReshape.dcol.GRANTED_MASK := cp.RIGHTS`,
+and `cp.RIGHTS = 4` is a param INDEX; the column is `prmCol 4 = PARAM_BASE + 4 = 72`. But `gMaskRecon`
+consumes a raw COLUMN (`gMaskRecon (maskCol : Nat) … := eSub (eCol maskCol) …`), so the emitted gate
+reads `v4`. `dcol.HELD_MASK := 7` has the same shape (intended param 7 = col 75; emitted `v7`). The
+mint-flavour `col.HELD_MASK := cp.RIGHTS` / `col.SLOT := cp.HOLDER` / `col.TARGET := cp.TARGET` in the
+same namespace are built identically, so `capReshapeVmDescriptor` is very likely to carry the same
+defect — NOT yet verified.
+
+**What survives, exactly.** `capDeleg_nonAmp_in_circuit`, `capDeleg_rejects_amplify`,
+`attenuateGenuineNonAmp_in_circuit` and `attenuateGenuineNonAmp_rejects_amplify` are PROVED and TRUE:
+they quantify over `dcol.grantedBit i` / `dcol.heldBit i` — really cols `128+i` / `120+i` — and the
+submask gate really does force `gᵢ ≤ hᵢ` there. Their STATEMENTS never mention `cp.RIGHTS`. Only the
+PROSE claims the link, and prose is not a proof — `#assert_axioms` cannot see a false sentence. The
+doc-comments on `attenuateGenuineNonAmp_in_circuit` and `capDeleg_nonAmp_in_circuit` still assert it
+("Since the granted bits reconstruct `cp.RIGHTS` …"); they are wrong and are marked below.
+
+**The fix (not applied here — it changes the emitted bytes):** `prmCol`-wrap `dcol.GRANTED_MASK` and
+`dcol.HELD_MASK` (and audit the mint-flavour `col.*` twins), re-emit via `scripts/emit-descriptors.sh`,
+re-pin `GENUINE_NONAMP_FP`, re-run `scripts/check-descriptor-drift.sh`. Nothing routes to this
+descriptor at HEAD, so the defect is LATENT, not live. The Rust side pins it behaviourally in
+`circuit/src/cap_delegation_nonamp_descriptor.rs::nonamp_leg_does_not_bind_the_hashed_rights_felt`,
+which PROVES an amplifying `rights` felt is accepted and is designed to RED when this is fixed. A
+second, independent defect on this same descriptor (the state-commit's `Digest k` ordinals were never
+rebased when the two cap-root sites were prepended) is pinned by
+`state_commit_group4_chain_is_misindexed`. Both are in HORIZONLOG.
+
+The ARGUS linchpin is additive + width-neutral (the delegation bit carriers are aux columns past the
+GROUP-4 block, all `< EFFECT_VM_WIDTH`, which is 188 — the `186` this comment used to state was stale). -/
 
 open Dregg2.Circuit.Emit.EffectVmEmitCapReshape
   (capDelegNonAmpGates capDeleg_nonAmp_in_circuit capDeleg_rejects_amplify gDelegSubmaskBit
@@ -860,11 +896,18 @@ theorem attenuateGenuineNonAmp_keeps_recompute :
   show attenuateVmDescriptorGenuine.traceWidth = EFFECT_VM_WIDTH
   rfl
 
-/-- **`attenuateGenuineNonAmp_in_circuit` — THE IN-CIRCUIT NON-AMP TOOTH on the cap-graph family.** Any
+/-- **`attenuateGenuineNonAmp_in_circuit` — the per-bit non-amp tooth on the cap-graph family.** Any
 witness satisfying the genuine-non-amp descriptor's constraints FORCES, per bit, `granted ⊑ held` (the
-granted bit ≤ the held bit). Since the granted bits reconstruct `cp.RIGHTS` — the `rights` the recompute
-binds into `cap_root` — a verifying proof now genuinely means the delegation did NOT amplify. Extracted
-from the shared `capDeleg_nonAmp_in_circuit` (the non-amp gates are a sub-list of the descriptor's). -/
+granted bit ≤ the held bit) over `dcol.grantedBit i` / `dcol.heldBit i` (cols `128+i` / `120+i`).
+Extracted from the shared `capDeleg_nonAmp_in_circuit` (the non-amp gates are a sub-list).
+
+⚠ SCOPE (see §G.4's ⚠ block): this does NOT reach the `rights` felt the recompute binds into `cap_root`.
+This doc-comment used to continue "Since the granted bits reconstruct `cp.RIGHTS` — the `rights` the
+recompute binds into `cap_root` — a verifying proof now genuinely means the delegation did NOT amplify."
+That inference is FALSE as emitted: `gMaskRecon dcol.GRANTED_MASK` reads column 4 (the param INDEX
+`cp.RIGHTS`, used raw) while the edge leaf hashes `prmCol cp.RIGHTS` = column 72. A verifying proof
+means the BIT CARRIERS did not amplify; it says nothing about the conferred rights. The statement below
+is unaffected — it never mentioned `cp.RIGHTS`. -/
 theorem attenuateGenuineNonAmp_in_circuit (env : VmRowEnv)
     (hcon : ∀ c ∈ attenuateVmDescriptorGenuineNonAmp.constraints, c.holdsVm env false false)
     (i : Nat) (hi : i < Dregg2.Circuit.Emit.EffectVmEmitCapReshape.MASK_BITS)
