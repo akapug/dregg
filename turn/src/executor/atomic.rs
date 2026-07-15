@@ -2177,13 +2177,13 @@ mod hardening_tests {
         assert_eq!(sig_bytes.len(), 64);
 
         // Chain verification accepts the receipt under the matching key.
-        crate::verify::verify_receipt_chain_with_keys(&[receipt.clone()], &[pk_bytes])
+        crate::verify::verify_receipt_chain_with_optional_keys(&[receipt.clone()], &[pk_bytes])
             .expect("receipt chain must verify under the executor's public key");
 
         // ...and rejects it under any other key.
         let mut wrong_key = pk_bytes;
         wrong_key[0] ^= 0x80;
-        let err = crate::verify::verify_receipt_chain_with_keys(&[receipt], &[wrong_key])
+        let err = crate::verify::verify_receipt_chain_with_optional_keys(&[receipt], &[wrong_key])
             .expect_err("verification must fail under a foreign key");
         assert!(
             matches!(

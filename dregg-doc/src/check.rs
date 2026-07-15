@@ -62,10 +62,17 @@
 //!   `TurnReceipt::canonical_executor_signed_message()` — so a genuinely
 //!   executor-signed receipt cannot satisfy `TurnExecuted` through
 //!   `resolve_condition` today. [`CheckRequirement::CommittedReceipt`]
-//!   therefore verifies through `verify_receipt_chain_with_keys` (which checks
-//!   the canonical message the executor actually signs); reconciling
-//!   `conditional.rs` to the R-4 message is a dregg-turn fix, out of this
-//!   crate.
+//!   therefore verifies through
+//!   [`dregg_turn::verify_receipt_signature_with_keys`] (which checks the
+//!   canonical message the executor actually signs, and rejects an absent
+//!   signature); reconciling `conditional.rs` to the R-4 message is a
+//!   dregg-turn fix, out of this crate.
+//!
+//!   NOT through the chain verifiers: `verify_receipt_chain_with_optional_keys`
+//!   is lenient (it skips receipts carrying no signature, which for a CI gate
+//!   would admit any fabricated receipt struct), and both chain verifiers treat
+//!   element [0] as a chain genesis, which a check turn posted after a comment
+//!   is not.
 //! - **Condition freshness/nullifiers**: [`RequiredCheck::satisfied_by`] is a
 //!   point verification (height 0, no timeout, fresh nullifier set). Timeout
 //!   heights and cross-land proof-reuse prevention belong to the forge-grain's
@@ -425,7 +432,7 @@ impl RequiredCheck {
                     return Err(CheckRefusal::NotFinal);
                 }
                 // …and be executor-SIGNED. Fail-closed here is load-bearing:
-                // `verify_receipt_chain_with_keys` SKIPS receipts without a
+                // `verify_receipt_chain_with_optional_keys` SKIPS receipts without a
                 // signature (chain-verification semantics), which for a CI
                 // gate would admit any fabricated receipt struct.
                 if receipt.executor_signature.is_none() {

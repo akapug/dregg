@@ -18,13 +18,30 @@
 //! lanes 1..7 (bytes `[4..32]`) now SEPARATE the two states, off-chain, with no
 //! ledger and no STARK to consult.
 //!
-//! Each pinned pair below was found by the `#[ignore]`d birthday generator at the
-//! bottom (the CELL's own producers, folding through `fold_bytes32` /
-//! `cap_ref_to_leaf`, so the collision is faithful to the deployed leaf shape).
-//! Regenerate with:
-//!   cargo test -p dregg-cell --test offchain_root_forge_closed -- --ignored --nocapture
+//! # Each colliding pair is DERIVED, not pinned
+//!
+//! These tests used to carry hand-pasted collision constants, found by an
+//! `#[ignore]`d birthday generator and copied in by hand. That made the crown
+//! jewel's teeth a function of whether someone remembered to re-run a generator:
+//! when `compute_heap_root` / `compute_fields_root` changed underneath them the
+//! pins went stale, the pairs stopped colliding on lane 0, and **2 of these 3
+//! tests failed their own setup precondition** — the heap and fields planes were
+//! providing zero forge protection while the file sat red.
+//!
+//! So there are no constants. Each test runs the birthday search itself, at test
+//! time, against the CELL's own live producers (folding through `fold_bytes32` /
+//! `cap_ref_to_leaf`, so the collision is faithful to the deployed leaf shape),
+//! and derives a pair that collides on lane 0 **of the root function as it
+//! exists right now**. A change to a root function can no longer silently disarm
+//! the regression: the search simply finds a pair against the new function, and
+//! if it cannot, that is a loud failure with a stated meaning (see
+//! [`find_lane0_collision`]) rather than a stale-pin false red.
+//!
+//! The search is cheap and that is not luck — lane 0 is one ~31-bit BabyBear
+//! felt, so the birthday bound is ~2^15.5 ≈ 46k candidates. The budget below is
+//! generous by ~40× against that expectation.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use dregg_cell::state::{compute_fields_root, compute_heap_root};
 use dregg_cell::{
@@ -40,17 +57,77 @@ const CELL_KEY: [u8; 32] = [0x11; 32];
 const CELL_TOKEN: [u8; 32] = [0x22; 32];
 const CAP_TOKEN: [u8; 32] = [0x33; 32];
 
-// ── Pinned lane-0-colliding pairs (found by the generator below). ─────────────
-// HEAP: two heap keys (collection 1) whose WIDE heap roots share lane 0 (bytes
-// [0..4]) but differ in the completion lanes.
-const HEAP_KEY_A: u32 = 2561;
-const HEAP_KEY_B: u32 = 43178;
-// FIELDS: two field keys (>= STATE_SLOTS) whose WIDE fields roots share lane 0.
-const FIELDS_KEY_A: u64 = 29556;
-const FIELDS_KEY_B: u64 = 33693;
-// CAP: two cap-target seeds whose WIDE cap roots share lane 0.
-const CAP_SEED_A: u64 = 19551;
-const CAP_SEED_B: u64 = 41061;
+/// Candidate budget for the birthday search. Lane 0 is one BabyBear felt
+/// (~2^31), so a collision is expected after ~sqrt(π/2 · 2^31) ≈ 46k
+/// candidates. 2M is ~40× that — exhausting it does not mean "unlucky", it
+/// means the root function no longer has a ~31-bit lane 0, which is a
+/// structural change this test must report rather than paper over.
+const SEARCH_BUDGET: usize = 2_000_000;
+
+/// Lane 0 of a wide root: bytes `[0..4]`, the historical projection.
+fn lane0(root: &[u8; 32]) -> u32 {
+    u32::from_le_bytes([root[0], root[1], root[2], root[3]])
+}
+
+/// Derive a pair of DISTINCT keys whose wide roots **collide on lane 0** but
+/// **differ overall** — i.e. exactly the forge the old lane-0 off-chain encoding
+/// admitted and the wide encoding must close. Returns `(key_a, key_b, root_a,
+/// root_b)`.
+///
+/// This replaces the hand-pasted constants. It runs against `root_of` **as it
+/// is today**, so a change to a root function cannot leave a stale pin behind:
+/// there is no pin.
+///
+/// Two keys mapping to the same lane 0 AND the same wide root are not a forge
+/// (they are the same state as far as the wide encoding is concerned), so the
+/// search skips them and keeps looking — the pair must be genuinely separated
+/// by the completion lanes or it proves nothing.
+///
+/// **Panics** (loudly, with the meaning stated) if the budget is exhausted. A
+/// silent skip here would be a green that means the forge regression stopped
+/// running — the precise failure this rewrite exists to make impossible.
+fn find_lane0_collision<K, F>(
+    plane: &str,
+    keys: impl Iterator<Item = K>,
+    root_of: F,
+) -> (K, K, [u8; 32], [u8; 32])
+where
+    K: Copy + std::fmt::Debug,
+    F: Fn(K) -> [u8; 32],
+{
+    let mut seen: HashMap<u32, (K, [u8; 32])> = HashMap::new();
+    let mut tried = 0usize;
+
+    for k in keys.take(SEARCH_BUDGET) {
+        tried += 1;
+        let r = root_of(k);
+        match seen.get(&lane0(&r)) {
+            // Lane 0 collides AND the wide roots differ — the forge pair.
+            Some(&(prev, prev_root)) if prev_root != r => {
+                println!(
+                    "{plane}: derived lane-0 collision after {tried} candidates: \
+                     {prev:?} vs {k:?} (lane0 = {})",
+                    lane0(&r)
+                );
+                return (prev, k, prev_root, r);
+            }
+            // Same lane 0, same wide root: not a separation, keep searching.
+            Some(_) => {}
+            None => {
+                seen.insert(lane0(&r), (k, r));
+            }
+        }
+    }
+
+    panic!(
+        "{plane}: no lane-0 collision in {tried} candidates. Lane 0 is one ~31-bit BabyBear \
+         felt, so the birthday expectation is ~46k — exhausting {SEARCH_BUDGET} means the \
+         root function's lane-0 projection changed shape (it is no longer ~31-bit, or the \
+         key space no longer varies it). This test's premise is that a lane-0 collision \
+         EXISTS and the wide encoding separates it; if the premise is gone, the test must \
+         be re-derived, not silently passed."
+    );
+}
 
 fn heap_map(key: u32) -> BTreeMap<(u32, u32), [u8; 32]> {
     let mut m = BTreeMap::new();
@@ -81,13 +158,23 @@ fn caps(seed: u64) -> CapabilitySet {
 /// `heap_root` AND in the whole-cell state commitment.
 #[test]
 fn heap_root_lane0_forge_closed_offchain() {
-    assert_ne!(
-        HEAP_KEY_A, HEAP_KEY_B,
-        "pinned pair not set — run the generator"
+    // ── HONEST POLE FIRST: the producer is deterministic. If it were not, a
+    // `assert_ne!` between two roots below would be measuring noise, and every
+    // separation claim in this test would be vacuous.
+    assert_eq!(
+        compute_heap_root(&heap_map(7)),
+        compute_heap_root(&heap_map(7)),
+        "honest pole: compute_heap_root must be deterministic — else the separation \
+         assertions below prove nothing"
     );
 
-    let ra = compute_heap_root(&heap_map(HEAP_KEY_A));
-    let rb = compute_heap_root(&heap_map(HEAP_KEY_B));
+    // Derive the colliding pair against the LIVE producer (no pins).
+    let (heap_key_a, heap_key_b, ra, rb) =
+        find_lane0_collision("HEAP", 1u32.., |k| compute_heap_root(&heap_map(k)));
+    assert_ne!(
+        heap_key_a, heap_key_b,
+        "the search must return two genuinely different keys"
+    );
 
     // LANE 0 (bytes [0..4]) COLLIDES: the historical lane-0 encoding was
     // `[lane0 ‖ 24 zero bytes]`, so the OLD off-chain roots were byte-identical
@@ -104,8 +191,8 @@ fn heap_root_lane0_forge_closed_offchain() {
     // different `heap_root` (lane-0 still collides) AND different commitments.
     let mut cell_a = Cell::new(CELL_KEY, CELL_TOKEN);
     let mut cell_b = Cell::new(CELL_KEY, CELL_TOKEN);
-    assert!(cell_a.state.set_heap(1, HEAP_KEY_A, FORGE_VALUE));
-    assert!(cell_b.state.set_heap(1, HEAP_KEY_B, FORGE_VALUE));
+    assert!(cell_a.state.set_heap(1, heap_key_a, FORGE_VALUE));
+    assert!(cell_b.state.set_heap(1, heap_key_b, FORGE_VALUE));
     assert_eq!(
         cell_a.state.heap_root.to_bytes32()[0..4],
         cell_b.state.heap_root.to_bytes32()[0..4],
@@ -125,13 +212,22 @@ fn heap_root_lane0_forge_closed_offchain() {
 /// FIELDS: same closure for the overflow-`fields_root` plane.
 #[test]
 fn fields_root_lane0_forge_closed_offchain() {
-    assert_ne!(
-        FIELDS_KEY_A, FIELDS_KEY_B,
-        "pinned pair not set — run the generator"
+    // ── HONEST POLE FIRST: the producer is deterministic.
+    assert_eq!(
+        compute_fields_root(&fields_map(17)),
+        compute_fields_root(&fields_map(17)),
+        "honest pole: compute_fields_root must be deterministic — else the separation \
+         assertions below prove nothing"
     );
 
-    let ra = compute_fields_root(&fields_map(FIELDS_KEY_A));
-    let rb = compute_fields_root(&fields_map(FIELDS_KEY_B));
+    // Derive the colliding pair against the LIVE producer (no pins). Field keys
+    // must be >= STATE_SLOTS to land in the overflow map.
+    let (fields_key_a, fields_key_b, ra, rb) =
+        find_lane0_collision("FIELDS", 16u64.., |k| compute_fields_root(&fields_map(k)));
+    assert_ne!(
+        fields_key_a, fields_key_b,
+        "the search must return two genuinely different keys"
+    );
     assert_eq!(ra[0..4], rb[0..4], "lane-0 must collide (the closed hole)");
     assert_ne!(
         ra, rb,
@@ -141,8 +237,8 @@ fn fields_root_lane0_forge_closed_offchain() {
 
     let mut cell_a = Cell::new(CELL_KEY, CELL_TOKEN);
     let mut cell_b = Cell::new(CELL_KEY, CELL_TOKEN);
-    assert!(cell_a.state.set_field_ext(FIELDS_KEY_A, FORGE_VALUE));
-    assert!(cell_b.state.set_field_ext(FIELDS_KEY_B, FORGE_VALUE));
+    assert!(cell_a.state.set_field_ext(fields_key_a, FORGE_VALUE));
+    assert!(cell_b.state.set_field_ext(fields_key_b, FORGE_VALUE));
     assert_eq!(
         cell_a.state.fields_root.to_bytes32()[0..4],
         cell_b.state.fields_root.to_bytes32()[0..4],
@@ -165,16 +261,25 @@ fn fields_root_lane0_forge_closed_offchain() {
 /// collided — while the wide encoding separates.
 #[test]
 fn cap_root_lane0_forge_closed_offchain() {
-    assert_ne!(
-        CAP_SEED_A, CAP_SEED_B,
-        "pinned pair not set — run the generator"
+    // ── HONEST POLE FIRST: the producer is deterministic.
+    assert_eq!(
+        compute_canonical_capability_root_wide(&caps(3)),
+        compute_canonical_capability_root_wide(&caps(3)),
+        "honest pole: compute_canonical_capability_root_wide must be deterministic — else \
+         the separation assertions below prove nothing"
     );
 
-    let caps_a = caps(CAP_SEED_A);
-    let caps_b = caps(CAP_SEED_B);
+    // Derive the colliding pair against the LIVE producer (no pins).
+    let (cap_seed_a, cap_seed_b, _wa_derived, _wb_derived) =
+        find_lane0_collision("CAP", 1u64.., |s| {
+            compute_canonical_capability_root_wide(&caps(s))
+        });
+
+    let caps_a = caps(cap_seed_a);
+    let caps_b = caps(cap_seed_b);
     assert_ne!(
-        cap_target(CAP_SEED_A),
-        cap_target(CAP_SEED_B),
+        cap_target(cap_seed_a),
+        cap_target(cap_seed_b),
         "the two c-lists must target genuinely-different cells"
     );
 
@@ -203,10 +308,10 @@ fn cap_root_lane0_forge_closed_offchain() {
     let mut cell_b = Cell::new(CELL_KEY, CELL_TOKEN);
     cell_a
         .capabilities
-        .grant(cap_target(CAP_SEED_A), AuthRequired::Signature);
+        .grant(cap_target(cap_seed_a), AuthRequired::Signature);
     cell_b
         .capabilities
-        .grant(cap_target(CAP_SEED_B), AuthRequired::Signature);
+        .grant(cap_target(cap_seed_b), AuthRequired::Signature);
     assert_ne!(
         compute_canonical_state_commitment(&cell_a),
         compute_canonical_state_commitment(&cell_b),
@@ -214,58 +319,10 @@ fn cap_root_lane0_forge_closed_offchain() {
     );
 }
 
-// ── Birthday generators for the pinned pairs. `#[ignore]`d — they PRODUCE the
-// constants above, they are not CI assertions. Run with `--ignored --nocapture`
-// and paste the printed pairs. ───────────────────────────────────────────────
-
-fn lane0(root: &[u8; 32]) -> u32 {
-    u32::from_le_bytes([root[0], root[1], root[2], root[3]])
-}
-
-#[test]
-#[ignore]
-fn search_lane0_collisions() {
-    use std::collections::HashMap;
-
-    // HEAP.
-    let mut seen: HashMap<u32, u32> = HashMap::new();
-    for key in 1u32..40_000_000 {
-        let r = compute_heap_root(&heap_map(key));
-        let l0 = lane0(&r);
-        if let Some(&prev) = seen.get(&l0) {
-            if compute_heap_root(&heap_map(prev)) != r {
-                println!("HEAP_KEY_A = {prev}; HEAP_KEY_B = {key}; lane0 = {l0}");
-                break;
-            }
-        }
-        seen.insert(l0, key);
-    }
-
-    // FIELDS.
-    let mut seen: HashMap<u32, u64> = HashMap::new();
-    for key in 16u64..40_000_000 {
-        let r = compute_fields_root(&fields_map(key));
-        let l0 = lane0(&r);
-        if let Some(&prev) = seen.get(&l0) {
-            if compute_fields_root(&fields_map(prev)) != r {
-                println!("FIELDS_KEY_A = {prev}; FIELDS_KEY_B = {key}; lane0 = {l0}");
-                break;
-            }
-        }
-        seen.insert(l0, key);
-    }
-
-    // CAP.
-    let mut seen: HashMap<u32, u64> = HashMap::new();
-    for seed in 1u64..40_000_000 {
-        let w = compute_canonical_capability_root_wide(&caps(seed));
-        let l0 = lane0(&w);
-        if let Some(&prev) = seen.get(&l0) {
-            if compute_canonical_capability_root_wide(&caps(prev)) != w {
-                println!("CAP_SEED_A = {prev}; CAP_SEED_B = {seed}; lane0 = {l0}");
-                break;
-            }
-        }
-        seen.insert(l0, seed);
-    }
-}
+// The birthday generator that used to live here is GONE, and its absence is the
+// fix. It was `#[ignore]`d, so nothing ran it; it PRINTED constants a human
+// pasted above; and when a root function changed, the pasted constants silently
+// became a pair that no longer collided — turning the crown jewel red on its own
+// setup while reporting nothing about the forge. The search is now
+// `find_lane0_collision` at the top of this file, called by each test at test
+// time. There is no generator to remember to run, and no constant to go stale.

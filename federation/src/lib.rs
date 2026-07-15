@@ -184,7 +184,7 @@ pub use types::{
     AttestedRoot, ConsensusMessage, HybridQuorumCertificate, HybridVote, LightClientProof,
     NodeIdentity, PublicKey, QuorumCertificate, RevocationBlock, RevocationEvent, RevocationProof,
     Signature, SigningKey, Token, ViewChangeMessage, Vote, generate_keypair, sign, verify,
-    verify_attested_root_with_committee, verify_via_receipt_chain,
+    verify_attested_root_with_committee, verify_via_receipt_chain, verify_via_receipt_chain_strict,
 };
 pub use vrf::{
     SortitionThreshold, SortitionTicket, VrfError, VrfProof, VrfPublicKey, VrfSecretKey,

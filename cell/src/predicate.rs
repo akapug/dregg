@@ -1321,6 +1321,41 @@ impl WitnessProducer for StubProducer {
 // Stub verifiers
 // ─────────────────────────────────────────────────────────────────────
 
+// SOUNDNESS GATE, ENFORCED. `test-stubs` arms `StubVerifier::verify`'s
+// accept path (below). `cell/Cargo.toml` states that production builds
+// never set it — this is what makes that a fact instead of a wish.
+//
+// It was NOT a fact. `tests/Cargo.toml` listed
+// `dregg-cell = { features = ["test-stubs"] }` as a normal
+// `[dependencies]` entry, and `dregg-tests` is in the workspace's
+// `members` AND `default-members`, so a root `cargo build --release`
+// unified the feature into `dregg-node` — the production node binary —
+// with the accept path armed. Verified with
+// `cargo tree -p dregg-node -p dregg-tests -e features,no-dev -i dregg-cell`,
+// which printed `dregg-cell feature "test-stubs"` before the fix (moving
+// the entry to `[dev-dependencies]`, matching turn/intent/exec-lean) and
+// prints nothing after it. `tests/tests/test_stubs_firewall.rs` re-runs
+// that probe as a test so the graph cannot regress silently.
+//
+// This `compile_error!` is the floor under both: a feature that arms a
+// permissive path must be STRUCTURALLY unable to reach a build with
+// `debug_assertions` off, enforced by the compiler rather than by a
+// Cargo.toml comment and a hope. If you are reading this because your
+// build broke, something turned `test-stubs` on in a release profile —
+// find it with the `cargo tree` line above and move it to
+// `[dev-dependencies]`. Do not delete this gate: it is the only thing
+// standing between a feature-unification accident and an
+// accept-anything verifier in a production node.
+#[cfg(all(feature = "test-stubs", not(debug_assertions)))]
+compile_error!(
+    "dregg-cell's `test-stubs` feature is ON in a build with debug_assertions disabled \
+     (a release build). `test-stubs` arms StubVerifier's accept-anything path, which is \
+     fail-closed otherwise — it must never reach a production binary. Some crate enables \
+     `dregg-cell/test-stubs` as a normal [dependencies] entry and the feature has unified \
+     into this build. Find it with `cargo tree -e features,no-dev -i dregg-cell` and move \
+     it to [dev-dependencies] (see turn/intent/exec-lean for the correct shape)."
+);
+
 /// A stub verifier for development / unit tests. Accepts non-empty
 /// proof bytes; rejects empty ones. Does NOT perform real
 /// cryptographic verification.

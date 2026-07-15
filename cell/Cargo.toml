@@ -28,9 +28,26 @@ prover = []
 # otherwise FAILS CLOSED on every proof. Without this feature (and outside
 # `#[cfg(test)]`), `WitnessedPredicateRegistry::with_stubs()` installs verifiers
 # that reject every proof — so a misconfigured host that selects the stub
-# registry can never authorize a forged witness. Downstream *test* crates that
-# rely on the permissive stub behavior enable `dregg-cell/test-stubs` in their
-# `[dev-dependencies]`; production builds never set it.
+# registry can never authorize a forged witness.
+#
+# Downstream *test* crates that rely on the permissive stub behavior enable
+# `dregg-cell/test-stubs` in their `[dev-dependencies]` — NOT `[dependencies]`.
+# That distinction is the whole guarantee and it is not a style preference:
+# under resolver 3 a dev-dependency's features are not unified into a non-test
+# build, while a normal dependency's features unify across the workspace. This
+# crate's dependents that need the stubs (turn, intent, exec-lean, tests) all
+# use `[dev-dependencies]`.
+#
+# HOW THIS IS ENFORCED (a comment is not an enforcement mechanism, and this one
+# was previously FALSE — `tests/Cargo.toml` had the entry under `[dependencies]`
+# and `dregg-tests` is in `default-members`, so a root `cargo build --release`
+# armed the stub accept path inside the `dregg-node` production binary):
+#   1. `predicate.rs` carries a `compile_error!` that fires if `test-stubs` is
+#      on in a build with `debug_assertions` off. A release build with the
+#      feature armed does not compile.
+#   2. `tests/tests/test_stubs_firewall.rs` asserts
+#      `cargo tree -p dregg-node -p dregg-tests -e features,no-dev -i dregg-cell`
+#      does not mention the feature — the exact probe that caught the leak.
 test-stubs = []
 
 [dependencies]

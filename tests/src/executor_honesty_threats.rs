@@ -16,7 +16,7 @@ use dregg_cell::{AuthRequired, Cell, CellId, Ledger, Permissions};
 use dregg_turn::action::{Action, Authorization, BearerCapProof, DelegationProofData, symbol};
 use dregg_turn::{
     CallForest, ComputronCosts, DelegationMode, Effect, Turn, TurnError, TurnExecutor, TurnReceipt,
-    TurnResult, VerifyError, sign_receipt, verify_receipt_chain_with_keys,
+    TurnResult, VerifyError, sign_receipt, verify_receipt_chain_with_optional_keys,
 };
 
 // ---------------------------------------------------------------------------
@@ -406,7 +406,7 @@ fn t7_receipt_signed_by_wrong_key_rejects() {
     let trusted_wrong_executor = dregg_types::SigningKey::from_bytes(&[0x74u8; 32])
         .public_key()
         .0;
-    let err = verify_receipt_chain_with_keys(&[receipt], &[trusted_wrong_executor])
+    let err = verify_receipt_chain_with_optional_keys(&[receipt], &[trusted_wrong_executor])
         .expect_err("receipt signed by an untrusted executor key must reject");
     assert!(matches!(err, VerifyError::ExecutorSignatureInvalid { .. }));
 }
@@ -428,9 +428,9 @@ fn t7_receipt_carries_executor_identity() {
         .public_key()
         .0;
 
-    verify_receipt_chain_with_keys(&[receipt.clone()], &[signer_pk])
+    verify_receipt_chain_with_optional_keys(&[receipt.clone()], &[signer_pk])
         .expect("receipt must verify against the executor key that signed it");
-    let err = verify_receipt_chain_with_keys(&[receipt], &[other_pk])
+    let err = verify_receipt_chain_with_optional_keys(&[receipt], &[other_pk])
         .expect_err("receipt verifier identity is the trusted executor key set");
     assert!(matches!(err, VerifyError::ExecutorSignatureInvalid { .. }));
 }

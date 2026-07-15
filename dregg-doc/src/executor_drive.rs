@@ -174,7 +174,7 @@ impl ExecutorDrivenDoc {
     /// seed): every subsequently COMMITTED receipt carries a genuine
     /// `executor_signature` over [`TurnReceipt::canonical_executor_signed_message`]
     /// (dregg-turn Stage 9 R-4), verifiable via
-    /// [`dregg_turn::verify_receipt_chain_with_keys`]. This is what lets a
+    /// [`dregg_turn::verify_receipt_chain_with_optional_keys`]. This is what lets a
     /// check-turn receipt serve as a NON-FABRICABLE witness (a receipt struct
     /// anyone can populate; a signature over its canonical message they
     /// cannot) — the forge's CI gate ([`crate::check`]) requires it.

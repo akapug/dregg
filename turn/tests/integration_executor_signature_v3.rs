@@ -9,7 +9,7 @@
 //! `previous_receipt_hash`, etc.
 
 use dregg_turn::turn::{Finality, TurnReceipt};
-use dregg_turn::verify::{sign_receipt, verify_receipt_chain_with_keys};
+use dregg_turn::verify::{sign_receipt, verify_receipt_chain_with_optional_keys};
 use dregg_types::CellId;
 use ed25519_dalek::{SigningKey, VerifyingKey};
 
@@ -56,7 +56,8 @@ fn signature_roundtrip_v3_full_receipt_hash() {
     let pubkey = vk.to_bytes();
 
     let r = signed(base_receipt(), &sk);
-    verify_receipt_chain_with_keys(&[r], &[pubkey]).expect("untampered receipt must verify");
+    verify_receipt_chain_with_optional_keys(&[r], &[pubkey])
+        .expect("untampered receipt must verify");
 }
 
 #[test]
@@ -67,12 +68,12 @@ fn signature_rejects_tampered_was_encrypted() {
     let mut r = signed(base_receipt(), &sk);
     // HONEST-ACCEPT FIRST: the un-tampered signed receipt verifies, so the reject
     // below is provably caused by the tamper (not a bad key/signing setup).
-    verify_receipt_chain_with_keys(&[r.clone()], &[pubkey])
+    verify_receipt_chain_with_optional_keys(&[r.clone()], &[pubkey])
         .expect("honest signed receipt must verify before tamper");
     // Tamper a field that v2 did NOT cover but v3 does.
     r.was_encrypted = !r.was_encrypted;
 
-    let err = verify_receipt_chain_with_keys(&[r], &[pubkey]);
+    let err = verify_receipt_chain_with_optional_keys(&[r], &[pubkey]);
     assert!(
         err.is_err(),
         "tampered was_encrypted must invalidate v3 sig"
@@ -85,11 +86,11 @@ fn signature_rejects_tampered_effects_hash() {
     let pubkey = sk.verifying_key().to_bytes();
 
     let mut r = signed(base_receipt(), &sk);
-    verify_receipt_chain_with_keys(&[r.clone()], &[pubkey])
+    verify_receipt_chain_with_optional_keys(&[r.clone()], &[pubkey])
         .expect("honest signed receipt must verify before tamper");
     r.effects_hash = [0xEE; 32];
 
-    let err = verify_receipt_chain_with_keys(&[r], &[pubkey]);
+    let err = verify_receipt_chain_with_optional_keys(&[r], &[pubkey]);
     assert!(err.is_err(), "tampered effects_hash must invalidate v3 sig");
 }
 
@@ -99,11 +100,11 @@ fn signature_rejects_tampered_finality() {
     let pubkey = sk.verifying_key().to_bytes();
 
     let mut r = signed(base_receipt(), &sk);
-    verify_receipt_chain_with_keys(&[r.clone()], &[pubkey])
+    verify_receipt_chain_with_optional_keys(&[r.clone()], &[pubkey])
         .expect("honest signed receipt must verify before tamper");
     r.finality = Finality::Tentative;
 
-    let err = verify_receipt_chain_with_keys(&[r], &[pubkey]);
+    let err = verify_receipt_chain_with_optional_keys(&[r], &[pubkey]);
     assert!(err.is_err(), "tampered finality must invalidate v3 sig");
 }
 
@@ -113,11 +114,11 @@ fn signature_rejects_tampered_computrons() {
     let pubkey = sk.verifying_key().to_bytes();
 
     let mut r = signed(base_receipt(), &sk);
-    verify_receipt_chain_with_keys(&[r.clone()], &[pubkey])
+    verify_receipt_chain_with_optional_keys(&[r.clone()], &[pubkey])
         .expect("honest signed receipt must verify before tamper");
     r.computrons_used = r.computrons_used.wrapping_add(1);
 
-    let err = verify_receipt_chain_with_keys(&[r], &[pubkey]);
+    let err = verify_receipt_chain_with_optional_keys(&[r], &[pubkey]);
     assert!(
         err.is_err(),
         "tampered computrons_used must invalidate v3 sig"
@@ -130,11 +131,11 @@ fn signature_rejects_tampered_previous_receipt_hash() {
     let pubkey = sk.verifying_key().to_bytes();
 
     let mut r = signed(base_receipt(), &sk);
-    verify_receipt_chain_with_keys(&[r.clone()], &[pubkey])
+    verify_receipt_chain_with_optional_keys(&[r.clone()], &[pubkey])
         .expect("honest signed receipt must verify before tamper");
     r.previous_receipt_hash = Some([0xBE; 32]);
 
-    let err = verify_receipt_chain_with_keys(&[r], &[pubkey]);
+    let err = verify_receipt_chain_with_optional_keys(&[r], &[pubkey]);
     assert!(
         err.is_err(),
         "tampered previous_receipt_hash must invalidate v3 sig"

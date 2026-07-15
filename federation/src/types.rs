@@ -447,12 +447,23 @@ pub fn verify_attested_root_with_committee(
 }
 
 /// Verify an agent's state using a receipt chain as an alternative to
-/// Merkle membership proof.
+/// Merkle membership proof — **structure only**.
 ///
-/// This is the "federation exit" path: an agent with a valid receipt chain
-/// can prove their state without the federation vouching for it. The chain
-/// proves that the state was produced by a sequence of valid, executor-checked
-/// turns from genesis.
+/// This is the "federation exit" path: an agent with a valid receipt chain can
+/// prove their state without the federation vouching for it.
+///
+/// ⚠ **What this checks and what it does not.** It checks the chain's
+/// STRUCTURE — genesis, hash-linking, state continuity, agent consistency —
+/// and that the head matches `expected_post_state`. It does **not** check any
+/// executor signature, and it takes no executor keys, so it cannot. Anyone can
+/// fabricate a structurally-perfect chain to any `expected_post_state` they
+/// like: nothing in the structural checks binds the chain to an executor that
+/// actually ran the turns.
+///
+/// Use [`verify_via_receipt_chain_strict`] to decide whether to TRUST a chain a
+/// third party handed you. Use this one only when the executor binding is
+/// established elsewhere (an attested root, a committee QC) and you want the
+/// structural check alone.
 ///
 /// # Arguments
 ///
@@ -461,14 +472,50 @@ pub fn verify_attested_root_with_committee(
 ///
 /// # Returns
 ///
-/// `Ok(())` if the receipt chain is valid and its head matches the expected
-/// state commitment. This is equivalent to a Merkle membership proof for the
-/// purposes of state verification.
+/// `Ok(())` if the receipt chain is structurally valid and its head matches the
+/// expected state commitment.
 pub fn verify_via_receipt_chain(
     receipts: &[dregg_turn::TurnReceipt],
     expected_post_state: Option<[u8; 32]>,
 ) -> Result<(), dregg_turn::VerifyError> {
     let head_state = dregg_turn::verify_receipt_chain_head(receipts)?;
+    check_head(receipts, head_state, expected_post_state)
+}
+
+/// The federation-exit path with the executor binding actually checked: every
+/// receipt must carry an `executor_signature` verifying against one of
+/// `trusted_executor_pubkeys`, AND the chain must be structurally valid, AND
+/// its head must match `expected_post_state`.
+///
+/// This is the one that supports the claim "the state was produced by a
+/// sequence of valid, **executor-checked** turns from genesis."
+/// [`verify_via_receipt_chain`] does not — it has no keys and checks no
+/// signatures, so a fabricated chain to any head state passes it.
+///
+/// Rejects with [`dregg_turn::VerifyError::ExecutorSignatureMissing`] if a
+/// receipt is unsigned (the signature-strip forgery) and
+/// [`dregg_turn::VerifyError::ExecutorSignatureInvalid`] if a signature is
+/// present but does not verify — different events for a caller.
+pub fn verify_via_receipt_chain_strict(
+    receipts: &[dregg_turn::TurnReceipt],
+    expected_post_state: Option<[u8; 32]>,
+    trusted_executor_pubkeys: &[[u8; 32]],
+) -> Result<(), dregg_turn::VerifyError> {
+    dregg_turn::verify_receipt_chain_strict(receipts, trusted_executor_pubkeys)?;
+    // Structure is already verified by the strict call above; take the head.
+    let head_state = receipts
+        .last()
+        .expect("verify_receipt_chain_strict rejects an empty chain")
+        .post_state_hash;
+    check_head(receipts, head_state, expected_post_state)
+}
+
+/// Shared head-binding check for both exit paths.
+fn check_head(
+    receipts: &[dregg_turn::TurnReceipt],
+    head_state: [u8; 32],
+    expected_post_state: Option<[u8; 32]>,
+) -> Result<(), dregg_turn::VerifyError> {
     if let Some(expected) = expected_post_state
         && head_state != expected
     {

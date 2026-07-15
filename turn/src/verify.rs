@@ -67,6 +67,23 @@ pub enum VerifyError {
         /// Index of the receipt with the invalid signature.
         index: usize,
     },
+
+    /// A receipt carries no `executor_signature` at all, under a verifier
+    /// that requires one ([`verify_receipt_chain_strict`]).
+    ///
+    /// **The adversary this stops:** one who takes a valid, executor-signed
+    /// chain and simply *deletes* the signatures. Every structural check —
+    /// genesis, hash-linking, state continuity, agent consistency — still
+    /// passes, because none of them involve the executor. Distinct from
+    /// [`Self::ExecutorSignatureInvalid`] on purpose: a forged signature is
+    /// an attacker who tried and failed, an absent one is an attacker
+    /// exploiting a verifier that treats absence as permission — and for a
+    /// caller, "this peer sent junk" and "this chain was never
+    /// countersigned" are different events.
+    ExecutorSignatureMissing {
+        /// Index of the receipt with no signature.
+        index: usize,
+    },
 }
 
 impl core::fmt::Display for VerifyError {
@@ -94,6 +111,12 @@ impl core::fmt::Display for VerifyError {
             }
             VerifyError::ExecutorSignatureInvalid { index } => {
                 write!(f, "executor signature invalid at receipt index {index}")
+            }
+            VerifyError::ExecutorSignatureMissing { index } => {
+                write!(
+                    f,
+                    "receipt index {index} carries no executor signature, and this verifier requires one"
+                )
             }
         }
     }
@@ -234,47 +257,116 @@ pub fn verify_receipt_extends(
     Ok(())
 }
 
-/// Verify a receipt chain with executor signature verification.
+/// Verify a receipt chain, requiring a valid executor signature on
+/// **every** receipt. **This is the strict variant — the one an exit
+/// path wants.**
 ///
-/// In addition to the structural checks performed by [`verify_receipt_chain`], this
-/// function verifies the Ed25519 executor signature on each receipt that has one.
+/// In addition to the structural checks performed by
+/// [`verify_receipt_chain`], every receipt must carry an
+/// `executor_signature` that verifies against at least one of
+/// `executor_pubkeys`, over the receipt's
+/// [`TurnReceipt::canonical_executor_signed_message`].
 ///
-/// If a receipt has an `executor_signature`, it must verify against at least one
-/// of the provided `executor_pubkeys`. If no signatures are present on any receipt,
-/// this is equivalent to `verify_receipt_chain`.
-pub fn verify_receipt_chain_with_keys(
+/// The two failure modes are distinguished, because they are different
+/// events:
+/// - [`VerifyError::ExecutorSignatureMissing`] — the receipt carries no
+///   signature at all. An attacker stripping signatures from an
+///   otherwise-valid chain produces exactly this, and
+///   [`verify_receipt_chain_with_optional_keys`] **accepts** it.
+/// - [`VerifyError::ExecutorSignatureInvalid`] — a signature is present
+///   but does not verify against any known executor key (forged, wrong
+///   signer, wrong length, or the receipt was tampered with after
+///   signing).
+///
+/// Empty `executor_pubkeys` therefore rejects any signed chain (nothing
+/// to verify against) and any unsigned one — a caller with no trusted
+/// executor keys has nobody to trust, and this says so rather than
+/// waving the chain through.
+pub fn verify_receipt_chain_strict(
     receipts: &[TurnReceipt],
     executor_pubkeys: &[[u8; 32]],
+) -> Result<(), VerifyError> {
+    verify_chain_signatures(
+        receipts,
+        executor_pubkeys,
+        /* require_signature */ true,
+    )
+}
+
+/// Verify a receipt chain, verifying executor signatures **only on the
+/// receipts that happen to carry one**.
+///
+/// ⚠ **This is the lenient variant, and the leniency is the point of the
+/// name.** A receipt with no `executor_signature` is not checked and not
+/// rejected: strip every signature from a valid chain and this function
+/// still returns `Ok(())`. If `executor_pubkeys` is non-empty, that is
+/// almost certainly not what you meant — see
+/// [`verify_receipt_chain_strict`], which requires a signature on every
+/// receipt and names an absent one
+/// ([`VerifyError::ExecutorSignatureMissing`]).
+///
+/// This exists for callers holding a chain whose receipts are
+/// legitimately a mix of signed and unsigned (a local, un-finalized
+/// chain an executor has not countersigned yet), which want the
+/// structural checks of [`verify_receipt_chain`] plus verification of
+/// whatever signatures ARE present. Any caller deciding whether to
+/// **trust** a chain from a third party wants the strict one; leniency
+/// here means an unsigned receipt is indistinguishable from a signed
+/// one.
+pub fn verify_receipt_chain_with_optional_keys(
+    receipts: &[TurnReceipt],
+    executor_pubkeys: &[[u8; 32]],
+) -> Result<(), VerifyError> {
+    verify_chain_signatures(
+        receipts,
+        executor_pubkeys,
+        /* require_signature */ false,
+    )
+}
+
+/// Shared body of [`verify_receipt_chain_strict`] and
+/// [`verify_receipt_chain_with_optional_keys`] — structural checks, then
+/// per-receipt signature verification. `require_signature` is the ONLY
+/// difference between the two, so the strict variant cannot drift from
+/// the lenient one's signature-checking.
+fn verify_chain_signatures(
+    receipts: &[TurnReceipt],
+    executor_pubkeys: &[[u8; 32]],
+    require_signature: bool,
 ) -> Result<(), VerifyError> {
     // First, verify structural integrity.
     verify_receipt_chain(receipts)?;
 
-    // Then verify executor signatures on receipts that have them.
+    // Then verify executor signatures.
     for (i, receipt) in receipts.iter().enumerate() {
-        if let Some(ref sig_bytes) = receipt.executor_signature {
-            if sig_bytes.len() != 64 {
-                return Err(VerifyError::ExecutorSignatureInvalid { index: i });
+        let Some(ref sig_bytes) = receipt.executor_signature else {
+            if require_signature {
+                return Err(VerifyError::ExecutorSignatureMissing { index: i });
             }
-            let sig_array: [u8; 64] = sig_bytes[..64].try_into().unwrap();
-            // Stage 9 R-4: the executor signs the canonical narrow message
-            // (see `TurnReceipt::canonical_executor_signed_message`), not the
-            // full `receipt_hash()`. Verifiers reproduce that message here.
-            let msg = receipt.canonical_executor_signed_message();
-            let signature = ed25519_dalek::Signature::from_bytes(&sig_array);
+            continue;
+        };
+        if sig_bytes.len() != 64 {
+            return Err(VerifyError::ExecutorSignatureInvalid { index: i });
+        }
+        let sig_array: [u8; 64] = sig_bytes[..64].try_into().unwrap();
+        // Stage 9 R-4: the executor signs the canonical narrow message
+        // (see `TurnReceipt::canonical_executor_signed_message`), not the
+        // full `receipt_hash()`. Verifiers reproduce that message here.
+        let msg = receipt.canonical_executor_signed_message();
+        let signature = ed25519_dalek::Signature::from_bytes(&sig_array);
 
-            let mut verified = false;
-            for pubkey_bytes in executor_pubkeys {
-                if let Ok(vk) = ed25519_dalek::VerifyingKey::from_bytes(pubkey_bytes) {
-                    if vk.verify_strict(&msg, &signature).is_ok() {
-                        verified = true;
-                        break;
-                    }
+        let mut verified = false;
+        for pubkey_bytes in executor_pubkeys {
+            if let Ok(vk) = ed25519_dalek::VerifyingKey::from_bytes(pubkey_bytes) {
+                if vk.verify_strict(&msg, &signature).is_ok() {
+                    verified = true;
+                    break;
                 }
             }
+        }
 
-            if !verified {
-                return Err(VerifyError::ExecutorSignatureInvalid { index: i });
-            }
+        if !verified {
+            return Err(VerifyError::ExecutorSignatureInvalid { index: i });
         }
     }
 
@@ -283,7 +375,7 @@ pub fn verify_receipt_chain_with_keys(
 
 /// Verify a receipt's Ed25519 executor signature IN ISOLATION.
 ///
-/// Unlike [`verify_receipt_chain_with_keys`], this performs NO genesis /
+/// Unlike [`verify_receipt_chain_with_optional_keys`], this performs NO genesis /
 /// `previous_receipt_hash` / hash-chain / state-continuity checks. It answers
 /// exactly one question: does this receipt carry a genuine executor signature
 /// over its canonical executor-signed message that verifies against one of
@@ -292,7 +384,7 @@ pub fn verify_receipt_chain_with_keys(
 /// This is the primitive a point-verifier (e.g. the forge's required-check
 /// gate) needs when the receipt is NOT the genesis of a chain — a check turn
 /// that is the second (or later) edit on its document carries
-/// `previous_receipt_hash = Some(..)`, which [`verify_receipt_chain_with_keys`]
+/// `previous_receipt_hash = Some(..)`, which [`verify_receipt_chain_with_optional_keys`]
 /// (treating element [0] as a chain genesis) hard-rejects. Here we ignore the
 /// chain position entirely and only bind the executor's authorship.
 ///
@@ -303,7 +395,7 @@ pub fn verify_receipt_chain_with_keys(
 ///
 /// The signature is checked over [`TurnReceipt::canonical_executor_signed_message`]
 /// — the exact message the executor produces (Stage 9 R-4) and the exact bytes
-/// [`verify_receipt_chain_with_keys`] checks; this reproduces that check WITHOUT
+/// [`verify_receipt_chain_with_optional_keys`] checks; this reproduces that check WITHOUT
 /// the chain constraints.
 pub fn verify_receipt_signature_with_keys(
     receipt: &TurnReceipt,
@@ -574,12 +666,12 @@ mod tests {
         let pk = sk.verifying_key().to_bytes();
 
         // Verifies under the correct key.
-        verify_receipt_chain_with_keys(&[receipt.clone()], &[pk])
+        verify_receipt_chain_with_optional_keys(&[receipt.clone()], &[pk])
             .expect("canonical-message signature must verify under correct key");
 
         // Rejected under a foreign key.
         let bogus = [0x99u8; 32];
-        let err = verify_receipt_chain_with_keys(&[receipt.clone()], &[bogus])
+        let err = verify_receipt_chain_with_optional_keys(&[receipt.clone()], &[bogus])
             .expect_err("foreign key must not verify");
         assert!(matches!(err, VerifyError::ExecutorSignatureInvalid { .. }));
 
@@ -587,15 +679,174 @@ mod tests {
         // mutated (e.g. post_state_hash), the signature stops verifying.
         let mut tampered = receipt.clone();
         tampered.post_state_hash = [0xFF; 32];
-        let err = verify_receipt_chain_with_keys(&[tampered], &[pk])
+        let err = verify_receipt_chain_with_optional_keys(&[tampered], &[pk])
             .expect_err("tampered post_state_hash must invalidate executor signature");
         assert!(matches!(err, VerifyError::ExecutorSignatureInvalid { .. }));
+    }
+
+    /// Build a valid chain of `n` receipts, every one executor-signed under
+    /// `seed`. Returns the chain and the executor's public key.
+    fn build_signed_chain(agent: CellId, n: usize, seed: [u8; 32]) -> (Vec<TurnReceipt>, [u8; 32]) {
+        let mut chain: Vec<TurnReceipt> = Vec::with_capacity(n);
+        let mut state = [1u8; 32];
+
+        for i in 0..n {
+            let pre_state = state;
+            state[0] = (i + 2) as u8;
+            let post_state = state;
+
+            let previous_receipt_hash = if i == 0 {
+                None
+            } else {
+                // Sign BEFORE hashing the predecessor: the signature is part
+                // of the receipt, so the link must be taken over the signed
+                // form or the chain will not verify structurally.
+                Some(chain[i - 1].receipt_hash())
+            };
+
+            let mut r = make_receipt(agent, pre_state, post_state, previous_receipt_hash);
+            r.timestamp = 1000 + i as i64;
+            r.turn_hash = [i as u8; 32];
+            r.executor_signature = Some(sign_receipt(&r, &seed));
+            chain.push(r);
+        }
+
+        let pk = ed25519_dalek::SigningKey::from_bytes(&seed)
+            .verifying_key()
+            .to_bytes();
+        (chain, pk)
+    }
+
+    /// **The signature-strip forgery.** Take a valid, fully executor-signed
+    /// chain and delete one signature. Every structural check still passes —
+    /// genesis, hash-linking, state continuity, agent consistency all hold,
+    /// because none of them involve the executor at all. Only a verifier that
+    /// requires the signature can tell.
+    ///
+    /// This is the exact hole `verify_receipt_chain_with_keys` had: named as
+    /// though it checked keys, it checked signatures only on the receipts that
+    /// had them, so the strip was free.
+    #[test]
+    fn strict_rejects_a_stripped_signature_that_lenient_accepts() {
+        let agent = CellId::from_bytes([1u8; 32]);
+        let (chain, pk) = build_signed_chain(agent, 3, [0x42u8; 32]);
+
+        // ── HONEST POLE FIRST. The unmodified chain must verify under BOTH
+        // verifiers. Without this the reject below would be indistinguishable
+        // from a strict verifier that rejects everything — the canary would be
+        // vacuous.
+        verify_receipt_chain_strict(&chain, &[pk])
+            .expect("honest pole: a fully-signed valid chain must verify STRICT");
+        verify_receipt_chain_with_optional_keys(&chain, &[pk])
+            .expect("honest pole: a fully-signed valid chain must verify LENIENT");
+
+        // ── THE FORGERY: strip the executor signature off the middle receipt.
+        // Nothing else is touched, so the hash links are still exact (the
+        // successor's previous_receipt_hash was computed over the signed form —
+        // which is what makes this interesting: `receipt_hash` covering the
+        // signature would have broken the chain and caught this for free).
+        let mut forged = chain.clone();
+        forged[1].executor_signature = None;
+
+        // Strict names the adversary at the exact index.
+        let err = verify_receipt_chain_strict(&forged, &[pk])
+            .expect_err("strict must REJECT a chain with a stripped signature");
+        assert!(
+            matches!(err, VerifyError::ExecutorSignatureMissing { index: 1 }),
+            "strict must reject with ExecutorSignatureMissing at the stripped index, got {err:?}"
+        );
+
+        // …and the structural verifier is blind to it, which is WHY strict has
+        // to exist: the strip is invisible to every check that is not the
+        // signature check.
+        verify_receipt_chain(&forged)
+            .expect("the strip is structurally invisible — this is the point");
+
+        // The lenient verifier ACCEPTS it. This is its documented behaviour,
+        // pinned here so the name and the semantics cannot drift apart again:
+        // if someone makes this one strict, this assertion reds and they must
+        // come rename it.
+        verify_receipt_chain_with_optional_keys(&forged, &[pk]).expect(
+            "verify_receipt_chain_with_optional_keys is DOCUMENTED lenient: an absent \
+             signature is not checked. If this now rejects, the function is strict and \
+             its name must say so.",
+        );
+
+        // ── Strip them ALL — the fully-unsigned chain, which is what an
+        // attacker who fabricates receipts from nothing produces.
+        let mut all_stripped = chain.clone();
+        for r in &mut all_stripped {
+            r.executor_signature = None;
+        }
+        let err = verify_receipt_chain_strict(&all_stripped, &[pk])
+            .expect_err("strict must reject a wholly unsigned chain");
+        assert!(
+            matches!(err, VerifyError::ExecutorSignatureMissing { index: 0 }),
+            "expected ExecutorSignatureMissing at index 0, got {err:?}"
+        );
+        verify_receipt_chain_with_optional_keys(&all_stripped, &[pk])
+            .expect("lenient accepts a wholly unsigned chain — the fail-open, pinned");
+    }
+
+    /// Strict distinguishes its two rejects: an ABSENT signature is
+    /// `ExecutorSignatureMissing`, a PRESENT-but-bad one is
+    /// `ExecutorSignatureInvalid`. A consumer separating "never countersigned"
+    /// from "this peer sent junk" needs the distinction, and an undiscriminating
+    /// `Err(_)` would not have it.
+    #[test]
+    fn strict_distinguishes_missing_from_invalid() {
+        let agent = CellId::from_bytes([1u8; 32]);
+        let (chain, pk) = build_signed_chain(agent, 2, [0x42u8; 32]);
+
+        // Honest pole first.
+        verify_receipt_chain_strict(&chain, &[pk])
+            .expect("honest pole: the signed chain verifies strict");
+
+        // A forged signature — present, well-formed length, wrong signer.
+        let mut wrong_signer = chain.clone();
+        let other_seed = [0x99u8; 32];
+        wrong_signer[1].executor_signature = Some(sign_receipt(&wrong_signer[1], &other_seed));
+        let err = verify_receipt_chain_strict(&wrong_signer, &[pk])
+            .expect_err("a signature from an unknown executor must not verify");
+        assert!(
+            matches!(err, VerifyError::ExecutorSignatureInvalid { index: 1 }),
+            "a wrong-signer signature is Invalid, not Missing, got {err:?}"
+        );
+
+        // An absent signature on the very same receipt.
+        let mut stripped = chain.clone();
+        stripped[1].executor_signature = None;
+        let err = verify_receipt_chain_strict(&stripped, &[pk]).expect_err("absent must reject");
+        assert!(
+            matches!(err, VerifyError::ExecutorSignatureMissing { index: 1 }),
+            "an absent signature is Missing, not Invalid, got {err:?}"
+        );
+    }
+
+    /// A caller with no trusted executor keys trusts nobody, and strict says so
+    /// rather than waving the chain through on "no signatures to check".
+    #[test]
+    fn strict_with_no_trusted_keys_rejects_a_validly_signed_chain() {
+        let agent = CellId::from_bytes([1u8; 32]);
+        let (chain, pk) = build_signed_chain(agent, 2, [0x42u8; 32]);
+
+        // Honest pole first: with the key, it verifies.
+        verify_receipt_chain_strict(&chain, &[pk])
+            .expect("honest pole: verifies against the real executor key");
+
+        // Without it, the signature verifies against nothing.
+        let err = verify_receipt_chain_strict(&chain, &[])
+            .expect_err("no trusted keys ⇒ nothing to verify against ⇒ reject");
+        assert!(
+            matches!(err, VerifyError::ExecutorSignatureInvalid { index: 0 }),
+            "expected ExecutorSignatureInvalid, got {err:?}"
+        );
     }
 
     /// FIX #2: `verify_receipt_signature_with_keys` verifies a correctly-signed
     /// receipt IN ISOLATION — crucially, one whose `previous_receipt_hash` is
     /// `Some(..)` (a NON-genesis receipt, e.g. a reviewer's approval posted
-    /// after a comment). `verify_receipt_chain_with_keys` rejects that as
+    /// after a comment). `verify_receipt_chain_with_optional_keys` rejects that as
     /// `GenesisHasPrevious`; the isolated signature check must NOT.
     #[test]
     fn test_verify_receipt_signature_non_genesis_isolated() {
@@ -617,7 +868,8 @@ mod tests {
 
         // The chain check would (wrongly, for a point verifier) reject it as
         // GenesisHasPrevious — the exact false negative FIX #2 removes.
-        let chain_err = verify_receipt_chain_with_keys(&[receipt.clone()], &[pk]).unwrap_err();
+        let chain_err =
+            verify_receipt_chain_with_optional_keys(&[receipt.clone()], &[pk]).unwrap_err();
         assert!(matches!(chain_err, VerifyError::GenesisHasPrevious { .. }));
     }
 

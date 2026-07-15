@@ -2499,12 +2499,14 @@ fn viol(constraint: &StateConstraint, description: &str) -> ProgramError {
 ///
 /// `Not` is *not* lifted: it has no corresponding `StateConstraint`
 /// variant and is dispatched directly by
-/// [`evaluate_simple_constraint`], which short-circuits on the inner
-/// constraint's acceptance bit. Calling `lift_simple` on a `Not` is a
-/// programming error and panics — callers must go through
-/// [`evaluate_simple_constraint`] instead.
-fn lift_simple(s: &SimpleStateConstraint) -> StateConstraint {
-    match s {
+/// [`evaluate_simple_constraint`], which peels the negation chain and
+/// only ever hands this function the `Not`-free atom underneath. The
+/// `Not` arm is therefore unreachable from the evaluator — but it is
+/// **total**, not a panic: this function takes a decoded, untrusted
+/// constraint, and a total function cannot be turned into a node-crash
+/// by any caller, present or future.
+fn lift_simple(s: &SimpleStateConstraint) -> Result<StateConstraint, ProgramError> {
+    Ok(match s {
         SimpleStateConstraint::FieldEquals { index, value } => StateConstraint::FieldEquals {
             index: *index,
             value: *value,
@@ -2552,12 +2554,11 @@ fn lift_simple(s: &SimpleStateConstraint) -> StateConstraint {
         SimpleStateConstraint::Not(_) => {
             // The Heyting-fragment Not has no equivalent
             // StateConstraint variant — it is dispatched inline by
-            // evaluate_simple_constraint. lift_simple must not be
-            // called on a Not.
-            panic!(
-                "lift_simple invoked on SimpleStateConstraint::Not; \
-                 route through evaluate_simple_constraint instead"
-            );
+            // evaluate_simple_constraint, which peels every negation
+            // before calling here. Unreachable from the evaluator;
+            // fail-closed rather than panicking if a future caller
+            // reaches it anyway.
+            return Err(ProgramError::NegationNotLiftable);
         }
         SimpleStateConstraint::SenderIs { pk } => StateConstraint::SenderIs { pk: *pk },
         SimpleStateConstraint::SenderInSlot { index } => {
@@ -2595,7 +2596,7 @@ fn lift_simple(s: &SimpleStateConstraint) -> StateConstraint {
         SimpleStateConstraint::BalanceDeltaGte { min } => {
             StateConstraint::BalanceDeltaGte { min: *min }
         }
-    }
+    })
 }
 
 /// Evaluate a `SimpleStateConstraint` directly — handles the Heyting
@@ -2613,6 +2614,16 @@ fn lift_simple(s: &SimpleStateConstraint) -> StateConstraint {
 ///   the same error. This preserves the fail-closed contract: an
 ///   unevaluable predicate is unevaluable under negation, not
 ///   vacuously satisfied.
+///
+/// **Nested negation.** Read those three rules twice and they compose:
+/// `Not(Not(c))` accepts exactly when `c` accepts, rejects exactly when
+/// `c` rejects, and surfaces `c`'s structural error unchanged. So the
+/// chain is peeled **iteratively** here and the `Not`-free atom beneath
+/// it is evaluated under the chain's parity. Iteration, not recursion:
+/// this input is postcard-decoded from the wire, and its nesting depth
+/// is the attacker's choice — it must not become the evaluator's stack
+/// depth. `SimpleStateConstraint::not` keeps anything this crate builds
+/// at depth ≤ 1; this loop is what makes the decode path total anyway.
 fn evaluate_simple_constraint(
     s: &SimpleStateConstraint,
     new_state: &CellState,
@@ -2621,37 +2632,35 @@ fn evaluate_simple_constraint(
     meta: &TransitionMeta,
     witnesses: &WitnessBundle<'_>,
 ) -> Result<(), ProgramError> {
-    match s {
-        SimpleStateConstraint::Not(inner) => {
-            let lifted_inner = lift_simple(inner);
-            match evaluate_constraint_full(
-                &lifted_inner,
-                new_state,
-                old_state,
-                ctx,
-                meta,
-                witnesses,
-            ) {
-                // Inner accepted ⇒ Not rejects.
-                Ok(()) => Err(ProgramError::ConstraintViolated {
-                    constraint: lifted_inner.clone(),
-                    description: format!(
-                        "Not({:?}): inner constraint accepted; negation rejects",
-                        inner
-                    ),
-                }),
-                // Inner rejected on its own terms ⇒ Not accepts.
-                Err(ProgramError::ConstraintViolated { .. }) => Ok(()),
-                // Inner unevaluable (missing ctx, bad index,
-                // transition-needs-old-state, witness/registry
-                // missing, …) ⇒ propagate, do NOT accept. Fail-closed.
-                Err(other) => Err(other),
-            }
-        }
-        other => {
-            let lifted = lift_simple(other);
-            evaluate_constraint_full(&lifted, new_state, old_state, ctx, meta, witnesses)
-        }
+    // Peel the negation chain. `negated` is its parity; `atom` is the
+    // first non-`Not` constraint under it (possibly `s` itself).
+    let mut atom = s;
+    let mut negated = false;
+    while let SimpleStateConstraint::Not(inner) = atom {
+        negated = !negated;
+        atom = inner.as_ref();
+    }
+
+    // `atom` is `Not`-free by the loop's exit condition, so this cannot
+    // hit lift_simple's NegationNotLiftable arm.
+    let lifted = lift_simple(atom)?;
+    let inner = evaluate_constraint_full(&lifted, new_state, old_state, ctx, meta, witnesses);
+
+    if !negated {
+        return inner;
+    }
+    match inner {
+        // Inner accepted ⇒ Not rejects.
+        Ok(()) => Err(ProgramError::ConstraintViolated {
+            constraint: lifted.clone(),
+            description: format!("Not({atom:?}): inner constraint accepted; negation rejects"),
+        }),
+        // Inner rejected on its own terms ⇒ Not accepts.
+        Err(ProgramError::ConstraintViolated { .. }) => Ok(()),
+        // Inner unevaluable (missing ctx, bad index,
+        // transition-needs-old-state, witness/registry missing, …) ⇒
+        // propagate, do NOT accept. Fail-closed.
+        Err(other) => Err(other),
     }
 }
 

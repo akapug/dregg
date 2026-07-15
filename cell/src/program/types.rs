@@ -591,14 +591,27 @@ pub enum SimpleStateConstraint {
     /// `Ok(())` (accept) → `Not` rejects. `inner` evaluates to
     /// `Err(ConstraintViolated)` (reject) → `Not` accepts.
     ///
-    /// **Double-negation:** `Not(Not(c))` is *not* representable
-    /// because the inner is unboxed `SimpleStateConstraint` (and `Not`
-    /// itself is a `SimpleStateConstraint` variant). The plan
-    /// deliberately blocks this; double-negation reduces to the original
-    /// constraint definitionally and offers no expressive power.
-    /// Re-using a wrapper for "obvious tautology" violates the
-    /// short-circuit / fail-closed invariants above, so the type system
-    /// shapes against it.
+    /// **Double-negation:** `Not(Not(c))` **is** representable — the
+    /// inner is `Box<SimpleStateConstraint>` and `Not` is itself a
+    /// `SimpleStateConstraint` variant, so nothing in the type shapes
+    /// against nesting, and a postcard-decoded program off the wire can
+    /// carry any nesting depth. It is *collapsed*, not blocked:
+    /// - [`SimpleStateConstraint::not`] — the smart constructor, and the
+    ///   only path [`Self::implies`] uses — normalizes `not(Not(c))` to
+    ///   `c` at construction, so this crate never *builds* a nested
+    ///   negation.
+    /// - The evaluator collapses whatever it is handed: `Not(Not(c))` is
+    ///   `c` definitionally (inner accepts ⇒ `Not` rejects ⇒ `Not(Not)`
+    ///   accepts, and the structural-error arm propagates through both
+    ///   negations unchanged), so the evaluator peels the negation chain
+    ///   iteratively and evaluates the atom under the chain's parity.
+    ///   Iteratively, not recursively: an attacker-supplied nesting
+    ///   depth must not become evaluator stack depth.
+    ///
+    /// So double-negation has no expressive power and no distinct
+    /// semantics — but the type does not and cannot state that, and a
+    /// comment is not an enforcement mechanism. The enforcement is the
+    /// smart constructor plus the evaluator's collapse.
     Not(Box<SimpleStateConstraint>),
 
     // ─── Turn-context atoms (CELL-PROGRAM-LANGUAGE.md §3) ───
@@ -817,11 +830,40 @@ pub enum SimpleStateConstraint {
 }
 
 impl SimpleStateConstraint {
+    /// Negate — the smart constructor for [`Self::Not`], and the
+    /// normalizing one.
+    ///
+    /// `not(Not(c))` returns `c`, because `Not(Not(c))` **is** `c`:
+    /// inner accepts ⇒ `Not` rejects ⇒ `Not(Not)` accepts; inner rejects
+    /// ⇒ `Not` accepts ⇒ `Not(Not)` rejects; and a structural error
+    /// propagates unchanged through each negation. The collapse is
+    /// definitional, not an approximation, and it keeps every
+    /// constraint this crate builds at negation depth ≤ 1.
+    ///
+    /// Prefer this over the bare `Not(Box::new(..))` variant: the
+    /// variant is public (postcard needs it), so it stays constructible,
+    /// but nothing that goes through this constructor can nest. The
+    /// evaluator collapses nested negation it is *handed* — the
+    /// constructor keeps it from being handed any.
+    pub fn not(inner: SimpleStateConstraint) -> SimpleStateConstraint {
+        match inner {
+            // Not(Not(c)) → c.
+            SimpleStateConstraint::Not(c) => *c,
+            other => SimpleStateConstraint::Not(Box::new(other)),
+        }
+    }
+
     /// Sugar: build `Implies(self, consequent)` as `AnyOf(Not(self),
     /// consequent)`. Per `CROSS-CELL-CATEGORICAL-ANALYSIS.md` §3.1 the
     /// Heyting implication is derived rather than added as a new
     /// variant; this helper yields the canonical encoding so authors
     /// don't open-code it (and so the evaluator stays simple).
+    ///
+    /// The antecedent is negated through [`Self::not`], so
+    /// `Not(x).implies(y)` yields `AnyOf[x, y]` rather than
+    /// `AnyOf[Not(Not(x)), y]` — the same predicate, at negation depth
+    /// 1. A negated antecedent (`¬a ⇒ b`) is an ordinary Heyting
+    /// formula and this accepts it.
     ///
     /// Returns a `StateConstraint::AnyOf { variants }` rather than a
     /// `SimpleStateConstraint` because the conventional flattening
@@ -829,7 +871,7 @@ impl SimpleStateConstraint {
     /// the slot caveat list).
     pub fn implies(self, consequent: SimpleStateConstraint) -> StateConstraint {
         StateConstraint::AnyOf {
-            variants: vec![SimpleStateConstraint::Not(Box::new(self)), consequent],
+            variants: vec![SimpleStateConstraint::not(self), consequent],
         }
     }
 }

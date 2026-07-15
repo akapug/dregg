@@ -63,6 +63,15 @@ pub enum ProgramError {
     /// check against the cap set and binds the declared cap-set-root slot
     /// to the canonical capability root.
     CapabilityUniquenessRequiresExecutor { cap_set_root_slot: u8 },
+    /// A `SimpleStateConstraint::Not` reached the `StateConstraint` lift
+    /// (`lift_simple`), which has no `Not` variant to lift it into.
+    /// Unreachable from `evaluate_simple_constraint`, which peels every
+    /// negation and lifts only the atom beneath it — this variant is the
+    /// fail-closed floor under that argument rather than a `panic!`,
+    /// because the constraint being lifted is decoded from untrusted
+    /// wire bytes and no reachability argument should be load-bearing
+    /// for whether a node stays up.
+    NegationNotLiftable,
 }
 
 impl core::fmt::Display for ProgramError {
@@ -135,6 +144,12 @@ impl core::fmt::Display for ProgramError {
                 write!(
                     f,
                     "CapabilityUniqueness on slot {cap_set_root_slot} requires executor-side cap-set enforcement; the scalar state evaluator cannot verify structural uniqueness and fails closed"
+                )
+            }
+            ProgramError::NegationNotLiftable => {
+                write!(
+                    f,
+                    "SimpleStateConstraint::Not has no StateConstraint lift; evaluate it through evaluate_simple_constraint, which peels the negation chain"
                 )
             }
         }

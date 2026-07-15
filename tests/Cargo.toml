@@ -32,10 +32,7 @@ __wip_tests = ["dep:dregg-bridge"]
 dregg-circuit = { path = "../circuit" }
 dregg-commit = { path = "../commit" }
 dregg-turn = { path = "../turn" }
-# This is the workspace's dedicated test-harness crate, so it arms the
-# fail-closed `StubVerifier` accept path via `test-stubs` for its plumbing
-# tests. Production crates never enable this feature.
-dregg-cell = { path = "../cell", features = ["test-stubs"] }
+dregg-cell = { path = "../cell" }
 dregg-cell-crypto = { path = "../cell-crypto" }
 dregg-sdk = { path = "../sdk" }
 dregg-types = { path = "../types" }
@@ -49,6 +46,28 @@ postcard = { version = "1", features = ["use-std"] }
 proptest = { workspace = true }
 
 [dev-dependencies]
+# `test-stubs` arms the accept path of `StubVerifier`, which otherwise fails
+# closed on every proof. It belongs HERE, in `[dev-dependencies]`, and not in
+# `[dependencies]` — matching turn/intent/exec-lean.
+#
+# WHY IT MATTERS, empirically: this crate is in the workspace's `members` AND
+# `default-members`, so a bare `cargo build --release` at the root builds it.
+# As a normal `[dependencies]` entry the feature UNIFIES across the graph
+# (`cargo tree -p dregg-node -p dregg-tests -e features -i dregg-cell` printed
+# `dregg-cell feature "test-stubs"`), arming the stub accept path inside the
+# production `dregg-node` binary. Under resolver 3 a dev-dependency's features
+# are not unified into a non-test build, so this placement is what makes
+# `cell/Cargo.toml`'s stated guarantee true rather than aspirational.
+#
+# The guarantee is enforced, not asserted: `cell/src/predicate.rs` carries a
+# `compile_error!` that fires if `test-stubs` is on in a `debug_assertions`-off
+# build, and `tests/tests/test_stubs_firewall.rs` re-runs the `cargo tree` probe
+# above as a test.
+#
+# The three modules that call `with_stubs()` (`state_constraint_variants`,
+# `state_constraint_executor`, `witnessed_predicate_kinds`) are all `#[cfg(test)]`
+# in `src/main.rs`, so they still see the feature under `cargo test`.
+dregg-cell = { path = "../cell", features = ["test-stubs"] }
 # GUARD A (`tests/verify_routing_guard.rs`): parse `cargo metadata` JSON to enforce that every workspace
 # binary reaching the ML-DSA verify stack either routes the Lean-verified core or is on the reviewed
 # DELEGATES_VERIFY allowlist. serde_json is already in the workspace lock (no new fetch); a dev-dep so the

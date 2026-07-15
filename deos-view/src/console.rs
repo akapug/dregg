@@ -523,7 +523,7 @@ pub const TURN_VAT_FORK: &str = "vat.fork";
 /// `world_explorer.rs:171`).
 pub const TURN_VAT_EXPLORE: &str = "vat.explore";
 /// Re-witness a vat's receipt chain against YOUR key
-/// (`verify_receipt_chain_with_keys`, turn/src/verify.rs:245 — and the verify MUST
+/// (`verify_receipt_chain_with_optional_keys`, turn/src/verify.rs:245 — and the verify MUST
 /// refuse a deferred receipt via `is_deferred`, collapse.rs:88, before calling it green).
 pub const TURN_VAT_VERIFY: &str = "vat.verify";
 

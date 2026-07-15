@@ -1854,6 +1854,216 @@ fn implies_via_builder_method_equals_static_constructor() {
     assert_eq!(via_method, via_static);
 }
 
+// ── Nested negation: the three probes that found the `lift_simple`
+// panic, kept as regressions ────────────────────────────────────────
+//
+// `Not(Not(c))` used to panic in `lift_simple` (eval.rs), reachable
+// three ways: by direct eval, by a postcard payload off the wire, and
+// from the safe `implies()` builder with no adversary at all. The doc
+// on the `Not` variant asserted the shape was unrepresentable and that
+// belief is exactly why nobody wrote these. `Not(Not(c))` IS `c`, so
+// each probe asserts the honest single-`Not` pole first (else "it
+// didn't panic" would be a green that means nothing), then requires the
+// nested shape to agree with `c` on BOTH poles, with the reject typed.
+
+/// Probe 1 — direct eval. The nested shape must evaluate, not panic,
+/// and must agree with the un-negated atom on both poles.
+#[test]
+fn nested_not_evaluates_as_the_inner_constraint() {
+    let atom = SimpleStateConstraint::FieldEquals {
+        index: 0,
+        value: field_from_u64(7),
+    };
+    let single = |c: SimpleStateConstraint| {
+        CellProgram::Predicate(vec![StateConstraint::AnyOf { variants: vec![c] }])
+    };
+
+    let mut accepting = CellState::new(0);
+    accepting.fields[0] = field_from_u64(7); // atom accepts here
+    let mut rejecting = CellState::new(0);
+    rejecting.fields[0] = field_from_u64(123); // atom rejects here
+
+    // ── Honest pole FIRST: one `Not` works as documented, both ways.
+    // Without this the nested assertions below could pass against an
+    // evaluator that had stopped evaluating anything.
+    let not_atom = SimpleStateConstraint::Not(Box::new(atom.clone()));
+    assert!(
+        single(not_atom.clone())
+            .evaluate(&rejecting, None, None)
+            .is_ok(),
+        "honest pole: Not(atom) must ACCEPT where the atom rejects — else this canary is vacuous"
+    );
+    let err = single(not_atom)
+        .evaluate(&accepting, None, None)
+        .expect_err("honest pole: Not(atom) must REJECT where the atom accepts");
+    assert!(
+        matches!(err, ProgramError::ConstraintViolated { .. }),
+        "honest pole: Not's reject must be ConstraintViolated, got {err:?}"
+    );
+
+    // ── The forged shape: negation nested two deep. `Not(Not(c)) == c`,
+    // so it must accept where the ATOM accepts (the opposite pole from
+    // the single `Not` above) and reject where the atom rejects.
+    let nested =
+        SimpleStateConstraint::Not(Box::new(SimpleStateConstraint::Not(Box::new(atom.clone()))));
+    assert!(
+        single(nested.clone())
+            .evaluate(&accepting, None, None)
+            .is_ok(),
+        "Not(Not(atom)) must accept exactly where the atom accepts"
+    );
+    let err = single(nested)
+        .evaluate(&rejecting, None, None)
+        .expect_err("Not(Not(atom)) must reject exactly where the atom rejects");
+    assert!(
+        matches!(err, ProgramError::ConstraintViolated { .. }),
+        "Not(Not(atom))'s reject must be the atom's own typed ConstraintViolated, got {err:?}"
+    );
+
+    // ── And the collapse is definitional, not approximate: triple
+    // negation is single negation, and the parity keeps holding past
+    // the depth any honest program reaches.
+    let triple = SimpleStateConstraint::Not(Box::new(SimpleStateConstraint::Not(Box::new(
+        SimpleStateConstraint::Not(Box::new(atom)),
+    ))));
+    assert!(
+        single(triple.clone())
+            .evaluate(&rejecting, None, None)
+            .is_ok(),
+        "Not(Not(Not(atom))) must agree with Not(atom)"
+    );
+    assert!(
+        single(triple).evaluate(&accepting, None, None).is_err(),
+        "Not(Not(Not(atom))) must agree with Not(atom)"
+    );
+}
+
+/// Probe 2 — the wire. This is the DoS shape: an attacker-supplied cell
+/// program is postcard bytes, and decode is their entry point. The
+/// payload used to decode clean and panic on evaluation, crashing any
+/// node that evaluated it.
+#[test]
+fn nested_not_from_postcard_bytes_evaluates_and_does_not_crash() {
+    let atom = SimpleStateConstraint::FieldEquals {
+        index: 0,
+        value: field_from_u64(7),
+    };
+    let mut accepting = CellState::new(0);
+    accepting.fields[0] = field_from_u64(7);
+
+    // ── Honest pole FIRST: a single-`Not` payload round-trips and
+    // evaluates. If decode were broken, the nested probe below would be
+    // asserting nothing.
+    let honest = CellProgram::Predicate(vec![StateConstraint::AnyOf {
+        variants: vec![SimpleStateConstraint::Not(Box::new(atom.clone()))],
+    }]);
+    let honest_bytes = postcard::to_allocvec(&honest).expect("serialize honest");
+    let honest_back: CellProgram = postcard::from_bytes(&honest_bytes).expect("decode honest");
+    assert_eq!(
+        honest_back, honest,
+        "honest pole: single-Not must round-trip"
+    );
+    let err = honest_back
+        .evaluate(&accepting, None, None)
+        .expect_err("honest pole: Not(FieldEquals(0,7)) rejects at field[0]==7");
+    assert!(
+        matches!(err, ProgramError::ConstraintViolated { .. }),
+        "honest pole: expected a typed ConstraintViolated, got {err:?}"
+    );
+
+    // ── The constructed forgery: the same payload with the negation
+    // nested. Small, well-formed, and previously a remote node crash.
+    let forged = CellProgram::Predicate(vec![StateConstraint::AnyOf {
+        variants: vec![SimpleStateConstraint::Not(Box::new(
+            SimpleStateConstraint::Not(Box::new(atom)),
+        ))],
+    }]);
+    let forged_bytes = postcard::to_allocvec(&forged).expect("serialize forged");
+    let decoded: CellProgram = postcard::from_bytes(&forged_bytes)
+        .expect("the forged payload decodes clean — it always did");
+    assert_eq!(decoded, forged);
+    // Not(Not(FieldEquals(0,7))) == FieldEquals(0,7), which accepts here.
+    assert!(
+        decoded.evaluate(&accepting, None, None).is_ok(),
+        "a decoded nested negation must evaluate to the inner constraint's verdict"
+    );
+}
+
+/// Probe 3 — no adversary required. `implies()` is a safe public
+/// builder; handed a negated antecedent it used to construct the
+/// panicking shape itself. `¬a ⇒ b` is an ordinary Heyting formula and
+/// the builder must accept it.
+#[test]
+fn implies_on_a_negated_antecedent_normalizes_and_evaluates() {
+    let a = SimpleStateConstraint::FieldEquals {
+        index: 0,
+        value: field_from_u64(7),
+    };
+    let b = SimpleStateConstraint::FieldEquals {
+        index: 1,
+        value: field_from_u64(9),
+    };
+
+    // ── Honest pole FIRST: `a ⇒ b` really is an implication. If this
+    // did not hold, the negated-antecedent assertions would be vacuous.
+    let honest = StateConstraint::implies(a.clone(), b.clone());
+    let mut s = CellState::new(0);
+    s.fields[0] = field_from_u64(7); // a true
+    s.fields[1] = field_from_u64(0); // b false
+    let err = CellProgram::Predicate(vec![honest.clone()])
+        .evaluate(&s, None, None)
+        .expect_err("honest pole: a ⇒ b must reject when a holds and b does not");
+    assert!(
+        matches!(err, ProgramError::ConstraintViolated { .. }),
+        "honest pole: expected typed ConstraintViolated, got {err:?}"
+    );
+    s.fields[1] = field_from_u64(9); // b true
+    assert!(
+        CellProgram::Predicate(vec![honest])
+            .evaluate(&s, None, None)
+            .is_ok(),
+        "honest pole: a ⇒ b must accept when b holds"
+    );
+
+    // ── The shape that needed no adversary: a NEGATED antecedent.
+    let neg_a = SimpleStateConstraint::Not(Box::new(a.clone()));
+    let implication = StateConstraint::implies(neg_a, b.clone());
+
+    // The smart constructor collapsed `Not(Not(a))` back to `a`, so the
+    // built term carries no nested negation at all — structural, not
+    // just behavioural.
+    assert_eq!(
+        implication,
+        StateConstraint::AnyOf {
+            variants: vec![a, b],
+        },
+        "implies() must normalize Not(Not(a)) to a rather than build the nested shape"
+    );
+
+    // And it means ¬a ⇒ b on every pole.
+    let p = CellProgram::Predicate(vec![implication]);
+    let mut s = CellState::new(0);
+    s.fields[0] = field_from_u64(7); // a true ⇒ ¬a false ⇒ vacuously satisfied
+    s.fields[1] = field_from_u64(0);
+    assert!(
+        p.evaluate(&s, None, None).is_ok(),
+        "¬a ⇒ b accepts when a holds (antecedent false)"
+    );
+    s.fields[0] = field_from_u64(123); // a false ⇒ ¬a true ⇒ b is required
+    let err = p
+        .evaluate(&s, None, None)
+        .expect_err("¬a ⇒ b must reject when a fails and b fails");
+    assert!(
+        matches!(err, ProgramError::ConstraintViolated { .. }),
+        "expected typed ConstraintViolated, got {err:?}"
+    );
+    s.fields[1] = field_from_u64(9); // b true ⇒ satisfied
+    assert!(
+        p.evaluate(&s, None, None).is_ok(),
+        "¬a ⇒ b accepts when b holds"
+    );
+}
+
 #[test]
 fn not_round_trips_serde() {
     let s = SimpleStateConstraint::Not(Box::new(SimpleStateConstraint::FieldEquals {

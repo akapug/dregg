@@ -955,7 +955,7 @@ pub struct TurnExecutor {
     ///
     /// `None` reproduces the legacy behavior (receipts ship with
     /// `executor_signature = None`); existing chain-verification code
-    /// (`verify_receipt_chain_with_keys`) treats absent signatures as a
+    /// (`verify_receipt_chain_with_optional_keys`) treats absent signatures as a
     /// best-effort property, so the field is opt-in.
     pub executor_signing_key: Option<[u8; 32]>,
     /// Witnessed-predicate registry (Cav-Codex Block 2 + Block 3.5).
@@ -1261,7 +1261,7 @@ impl TurnExecutor {
     /// carrying fast path and the standard execution path — is signed with
     /// the given key over the receipt's canonical `receipt_hash()`.
     ///
-    /// Verification: `turn::verify::verify_receipt_chain_with_keys` walks the
+    /// Verification: `turn::verify::verify_receipt_chain_with_optional_keys` walks the
     /// chain and accepts a receipt only if its `executor_signature` (when
     /// present) verifies against one of the caller-supplied executor public
     /// keys.
