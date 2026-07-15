@@ -194,57 +194,91 @@ pub fn caster_story() -> CompiledStory {
         ],
     });
 
-    // 2. create — the class must be a valid id (WriteOnce makes it once).
+    // The three effect slots. THE STAPLE-BINDING INVARIANT: every case must
+    // CONSTRAIN each effect slot — either WRITE it (an exact `FieldDelta`) or PIN
+    // it `Immutable`. Otherwise a slot whose only tooth lives under one method's
+    // case is zero/writable on a DIFFERENT method's turn, and `apply_raw` lets a
+    // client STAPLE `SetField(hp, +1000)` onto a legit Fireball (a free heal with
+    // mana_spent 4). Default-deny already restricts a turn to the five known
+    // methods; pinning the effect slots a method does NOT pay for binds every
+    // hp/buff/damage change to the single method whose economics cover it.
+    const EFFECT_SLOTS: [u8; 3] = [HP_SLOT, BUFF_SLOT, DAMAGE_SLOT];
+
+    // 2. create — the class must be a valid id (WriteOnce makes it once). Creation
+    // seeds `class`/`mana_budget`/`hp` and NOTHING else, so it pins every effect
+    // slot it does not seed (`buff`/`damage`) and `mana_spent` Immutable: a staple
+    // of a free buff/damage — or a phantom mana refund — onto the creation turn is
+    // refused. (`hp` IS the creation seed — the caster's starting health, a
+    // by-design one-shot genesis write frozen behind the class WriteOnce; a heal
+    // AFTER creation must go through Mend, below.)
     cases.push(TransitionCase {
         guard: TransitionGuard::MethodIs {
             method: symbol(CREATE_CASTER_METHOD),
         },
-        constraints: vec![StateConstraint::AnyOf {
-            variants: vec![
-                SimpleStateConstraint::FieldEquals {
-                    index: CLASS_SLOT,
-                    value: field_from_u64(WARRIOR),
-                },
-                SimpleStateConstraint::FieldEquals {
-                    index: CLASS_SLOT,
-                    value: field_from_u64(MAGE),
-                },
-                SimpleStateConstraint::FieldEquals {
-                    index: CLASS_SLOT,
-                    value: field_from_u64(ROGUE),
-                },
-            ],
-        }],
+        constraints: vec![
+            StateConstraint::AnyOf {
+                variants: vec![
+                    SimpleStateConstraint::FieldEquals {
+                        index: CLASS_SLOT,
+                        value: field_from_u64(WARRIOR),
+                    },
+                    SimpleStateConstraint::FieldEquals {
+                        index: CLASS_SLOT,
+                        value: field_from_u64(MAGE),
+                    },
+                    SimpleStateConstraint::FieldEquals {
+                        index: CLASS_SLOT,
+                        value: field_from_u64(ROGUE),
+                    },
+                ],
+            },
+            StateConstraint::Immutable { index: BUFF_SLOT },
+            StateConstraint::Immutable { index: DAMAGE_SLOT },
+            StateConstraint::Immutable {
+                index: MANA_SPENT_SLOT,
+            },
+        ],
     });
 
     // 3. each spell — class-locked, mana-gated, with a real effect write.
     for spell in SPELLBOOK {
+        let written = spell.effect.slot();
+        let mut constraints = vec![
+            // THE CLASS-LOCK: only the right class may cast.
+            StateConstraint::FieldEquals {
+                index: CLASS_SLOT,
+                value: field_from_u64(spell.class),
+            },
+            // THE MANA-GATE: cumulative spend never passes the pool.
+            StateConstraint::FieldLteField {
+                left_index: MANA_SPENT_SLOT,
+                right_index: MANA_BUDGET_SLOT,
+            },
+            // Bind the method to its exact economics. A merely monotone effect
+            // would accept a raw Fireball spending 1 mana for 1 damage.
+            StateConstraint::FieldDelta {
+                index: MANA_SPENT_SLOT,
+                delta: field_from_u64(spell.cost),
+            },
+            StateConstraint::FieldDelta {
+                index: written,
+                delta: field_from_u64(spell.effect.amount()),
+            },
+        ];
+        // PIN THE EFFECT SLOTS THIS SPELL DOES NOT WRITE. A Fireball that also
+        // stapled `SetField(hp, +1000)` fails `Immutable{hp}` here; the write it
+        // DOES perform (`damage`) is pinned to +8 by the `FieldDelta` above. So an
+        // hp/buff/damage change can only ride the method whose mana pays for it.
+        for &slot in &EFFECT_SLOTS {
+            if slot != written {
+                constraints.push(StateConstraint::Immutable { index: slot });
+            }
+        }
         cases.push(TransitionCase {
             guard: TransitionGuard::MethodIs {
                 method: symbol(spell.method),
             },
-            constraints: vec![
-                // THE CLASS-LOCK: only the right class may cast.
-                StateConstraint::FieldEquals {
-                    index: CLASS_SLOT,
-                    value: field_from_u64(spell.class),
-                },
-                // THE MANA-GATE: cumulative spend never passes the pool.
-                StateConstraint::FieldLteField {
-                    left_index: MANA_SPENT_SLOT,
-                    right_index: MANA_BUDGET_SLOT,
-                },
-                // Bind the method to its exact economics. A merely monotone effect
-                // would accept a raw Fireball spending 1 mana for 1 damage.
-                StateConstraint::FieldDelta {
-                    index: MANA_SPENT_SLOT,
-                    delta: field_from_u64(spell.cost),
-                },
-                StateConstraint::FieldDelta {
-                    index: spell.effect.slot(),
-                    delta: field_from_u64(spell.effect.amount()),
-                },
-            ],
+            constraints,
         });
     }
 
@@ -544,6 +578,137 @@ mod tests {
             10,
             "anti-ghost: pool unchanged"
         );
+    }
+
+    /// THE STAPLED-HEAL FALSIFIER (a real cell-layer hole, closed): a
+    /// `SetField(hp, +1000)` heal STAPLED onto a legitimate Fireball turn cannot
+    /// ride it. Before the effect slots were pinned per-method, the Fireball case
+    /// constrained only `mana_spent`/`damage`; `hp` was unconstrained on that
+    /// method, so a client could `apply_raw` a Fireball whose effects ALSO wrote
+    /// `hp = 1030` — a free heal (30 → 1030) with mana_spent only 4. Now the
+    /// Fireball case pins `Immutable{hp}`, so the stapled heal is REFUSED and
+    /// nothing commits (anti-ghost). The LEGIT heal (Mend, paid) still lands.
+    #[test]
+    fn a_stapled_heal_cannot_ride_a_fireball() {
+        let world = deploy_caster(40);
+        create_caster(&world, MAGE, 10, 30).expect("create a Mage with hp 30");
+        let cell = world.cell_id();
+
+        // Staple a free heal onto an otherwise-legit Fireball (mana +4, damage +8,
+        // and — the forgery — hp 30 -> 1030).
+        let stapled = world.apply_raw(
+            FIREBALL.method,
+            vec![
+                Effect::SetField {
+                    cell,
+                    index: MANA_SPENT_SLOT as usize,
+                    value: field_from_u64(4),
+                },
+                Effect::SetField {
+                    cell,
+                    index: DAMAGE_SLOT as usize,
+                    value: field_from_u64(8),
+                },
+                Effect::SetField {
+                    cell,
+                    index: HP_SLOT as usize,
+                    value: field_from_u64(1030),
+                },
+            ],
+        );
+        assert!(
+            matches!(stapled, Err(WorldError::Refused(_))),
+            "a heal stapled onto a Fireball must be REFUSED (Immutable{{hp}}); got {stapled:?}"
+        );
+        // Anti-ghost: the refused turn committed NOTHING.
+        assert_eq!(world.read_var("hp"), 30, "anti-ghost: hp not raised");
+        assert_eq!(world.read_var("damage"), 0, "anti-ghost: no damage dealt");
+        assert_eq!(world.read_var("mana_spent"), 0, "anti-ghost: no mana spent");
+
+        // THE PIN IS NOT A BAN ON HEALING: a real, paid Mend still heals, and a
+        // real Fireball still deals damage.
+        cast(&world, FIREBALL).expect("a real Fireball commits");
+        assert_eq!(world.read_var("damage"), 8);
+        assert_eq!(world.read_var("hp"), 30, "Fireball leaves hp untouched");
+        cast(&world, MEND).expect("a real, paid Mend heals");
+        assert_eq!(
+            world.read_var("hp"),
+            36,
+            "Mend raised hp by 6 (paid 3 mana)"
+        );
+        assert_eq!(world.read_var("mana_spent"), 7, "Fireball 4 + Mend 3");
+    }
+
+    /// The staple-binding covers ALL THREE effect slots, not just `hp`: a free
+    /// `buff` stapled onto a Fireball (which does not pay for a buff) and a free
+    /// `damage` stapled onto a Rally (a buff spell) are both REFUSED. Every
+    /// hp/buff/damage change is bound to the one method whose mana covers it.
+    #[test]
+    fn a_stapled_buff_or_damage_cannot_ride_a_foreign_method() {
+        // (a) buff stapled onto a Mage's Fireball — Fireball pins Immutable{buff}.
+        let mage = deploy_caster(41);
+        create_caster(&mage, MAGE, 20, 30).expect("create a Mage");
+        let mcell = mage.cell_id();
+        let buff_staple = mage.apply_raw(
+            FIREBALL.method,
+            vec![
+                Effect::SetField {
+                    cell: mcell,
+                    index: MANA_SPENT_SLOT as usize,
+                    value: field_from_u64(4),
+                },
+                Effect::SetField {
+                    cell: mcell,
+                    index: DAMAGE_SLOT as usize,
+                    value: field_from_u64(8),
+                },
+                Effect::SetField {
+                    cell: mcell,
+                    index: BUFF_SLOT as usize,
+                    value: field_from_u64(9),
+                },
+            ],
+        );
+        assert!(
+            matches!(buff_staple, Err(WorldError::Refused(_))),
+            "a buff stapled onto a Fireball must be REFUSED (Immutable{{buff}}); got {buff_staple:?}"
+        );
+        assert_eq!(mage.read_var("buff"), 0, "anti-ghost: no free buff");
+        assert_eq!(mage.read_var("damage"), 0, "anti-ghost: nothing committed");
+
+        // (b) damage stapled onto a Warrior's Rally — Rally pins Immutable{damage}.
+        let warrior = deploy_caster(42);
+        create_caster(&warrior, WARRIOR, 20, 30).expect("create a Warrior");
+        let wcell = warrior.cell_id();
+        let dmg_staple = warrior.apply_raw(
+            RALLY.method,
+            vec![
+                Effect::SetField {
+                    cell: wcell,
+                    index: MANA_SPENT_SLOT as usize,
+                    value: field_from_u64(2),
+                },
+                Effect::SetField {
+                    cell: wcell,
+                    index: BUFF_SLOT as usize,
+                    value: field_from_u64(1),
+                },
+                Effect::SetField {
+                    cell: wcell,
+                    index: DAMAGE_SLOT as usize,
+                    value: field_from_u64(500),
+                },
+            ],
+        );
+        assert!(
+            matches!(dmg_staple, Err(WorldError::Refused(_))),
+            "damage stapled onto a Rally must be REFUSED (Immutable{{damage}}); got {dmg_staple:?}"
+        );
+        assert_eq!(warrior.read_var("damage"), 0, "anti-ghost: no free damage");
+        assert_eq!(warrior.read_var("buff"), 0, "anti-ghost: nothing committed");
+        // The legit Rally still buffs.
+        cast(&warrior, RALLY).expect("a real Rally buffs");
+        assert_eq!(warrior.read_var("buff"), 1);
     }
 
     /// A full cast arc is a real receipt chain: create → cast → cast link

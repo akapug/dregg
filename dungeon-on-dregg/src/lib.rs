@@ -138,7 +138,7 @@ pub mod overworld;
 pub mod dialogue;
 use dregg_cell::program::HeapAtom;
 use spween::{Choice, PassageContent, Scene};
-use spween_dregg::{CompiledStory, WorldCell, choice_method, compile_scene, parse};
+use spween_dregg::{CompiledStory, GENESIS_METHOD, WorldCell, choice_method, compile_scene, parse};
 
 /// The dungeon, expressed in the spween narrative DSL. Three rooms
 /// (`shore` → `antechamber` → `dark_stair`), one item (the brass lantern), one gated
@@ -428,6 +428,53 @@ fn add_case(program: &mut CellProgram, method: &str, constraints: Vec<StateConst
     });
 }
 
+/// Encode a SIGNED per-turn delta as a `FieldElement` for [`StateConstraint::FieldDelta`]
+/// (`field_add` adds the u64 lane wrapping, so a negative delta is the two's-complement
+/// u64; the evaluator's result-range tooth still refuses a genuine underflow-wrap).
+fn signed_delta(d: i64) -> dregg_app_framework::FieldElement {
+    field_from_u64(d as u64)
+}
+
+/// **Bind a slot's WRITE, not a method** — the staple-closure idiom (proven on
+/// `dialogue`/`progression`). Pushes a NON-dispatching `SlotChanged{slot}` case carrying
+/// `extra`, so ON ANY TRANSITION THAT MOVES `slot` — including a staple onto a different
+/// method's turn OR a re-invoked `genesis`-method turn (whose compiler case is empty) — the
+/// `extra` teeth must hold. `SlotChanged` is not method-dispatching, so default-deny is
+/// unaffected. This is what a per-method (`MethodIs`) gate misses: the `apply_raw`
+/// escape-hatch lets a client present ANY method (the empty-constrained `genesis` case is a
+/// universal write hatch), and only a write-bound guard covers that.
+fn bind_slot_write(program: &mut CellProgram, slot: u8, extra: Vec<StateConstraint>) {
+    let CellProgram::Cases(cases) = program else {
+        panic!("program is Cases");
+    };
+    cases.push(TransitionCase {
+        guard: TransitionGuard::SlotChanged { index: slot },
+        constraints: extra,
+    });
+}
+
+/// Pin `slot` `Immutable` on every `MethodIs`-guarded case whose method is NOT in
+/// `writers` — so the slot can ONLY move on a turn whose method legitimately writes it (each
+/// writer binds the exact amount separately). Used for a slot that IS genesis-seeded (so its
+/// `SlotChanged` gate cannot be a clean `WriteOnce`); the genesis seed itself is bound by a
+/// `WriteOnce` on the `genesis` case (`writers` includes `"genesis"`), and the heap-hatch
+/// case already freezes all registers. Together these cover the genesis write hatch a bare
+/// per-method pin would miss.
+fn pin_immutable_except(program: &mut CellProgram, writers: &[&str], slot: u8) {
+    let writer_syms: Vec<[u8; 32]> = writers.iter().map(|m| symbol(m)).collect();
+    let CellProgram::Cases(cases) = program else {
+        panic!("program is Cases");
+    };
+    for case in cases.iter_mut() {
+        if let TransitionGuard::MethodIs { method } = &case.guard {
+            if !writer_syms.contains(method) {
+                case.constraints
+                    .push(StateConstraint::Immutable { index: slot });
+            }
+        }
+    }
+}
+
 /// **Compile the keep AND augment its program with the richer teeth** (#2–#5). Mechanic
 /// #1 (the HP floor) is already a compiler-emitted `FieldGte` on the trade-blows case;
 /// this adds the transition / cross-slot / heap constraints the v0 compiler cannot
@@ -488,6 +535,37 @@ pub fn keep_compiled() -> CompiledStory {
             key: CROWN_HEAP_KEY,
             atom: HeapAtom::WriteOnce,
         }],
+    );
+
+    // ── STAPLE-CLOSURE (the sweep's residual): bind the WRITES, not the methods ──
+    //
+    // #2 above put `WriteOnce{relic_owner}` ONLY on the two claim cases. But `apply_raw`
+    // presents any method: a `SetField(relic_owner, 2)` STAPLED onto a legit press-on turn
+    // — or onto a re-invoked (empty-constrained) `genesis` turn — landed on a case with no
+    // owner tooth, OVERWRITING an already-claimed crown (first-grabber-wins BROKEN; driven:
+    // it committed owner→2). `SlotChanged{relic_owner} + WriteOnce` binds the once-tooth to
+    // the WRITE: the first claim (0→banner) commits on ANY method, a rival overwrite
+    // (banner→other) is refused on ANY method (genesis included).
+    let gold = keep_slot(&story, "gold");
+    bind_slot_write(
+        &mut story.program,
+        owner,
+        vec![StateConstraint::WriteOnce { index: owner }],
+    );
+    // `gold` had NO tooth anywhere — a staple minted arbitrary gold on any turn. It is
+    // written once (the terminal `~ gold += 500`); bind the WRITE to "from zero, by exactly
+    // +500, once": `SlotChanged{gold} + WriteOnce + FieldDelta{+500}`. A staple of gold=999
+    // fails the delta on any method; the hoard total is provably ≤ 500, gained once.
+    bind_slot_write(
+        &mut story.program,
+        gold,
+        vec![
+            StateConstraint::WriteOnce { index: gold },
+            StateConstraint::FieldDelta {
+                index: gold,
+                delta: field_from_u64(500),
+            },
+        ],
     );
 
     story
@@ -729,6 +807,71 @@ mod keep_tests {
     //! illegal move is a REAL executor refusal that commits NOTHING (anti-ghost).
     use super::*;
     use spween_dregg::{Driver, Value, WorldError, verify, verify_chain_linkage};
+
+    /// THE STAPLE-CLOSURE FALSIFIER (keep, driven). Before `bind_slot_write`, a
+    /// `SetField(relic_owner, 2)` STAPLED onto a legit press-on turn — or onto a re-invoked
+    /// (empty-constrained) `genesis` turn — OVERWROTE an already-claimed crown, and a stapled
+    /// `gold = 999` minted a hoard from nothing (both driven-COMMITTED, owner→2). Now every
+    /// such staple is a REAL executor refusal on ANY method, genesis included (anti-ghost).
+    #[test]
+    fn keep_owner_and_gold_writes_are_bound_not_stapleable() {
+        let story = keep_compiled();
+        let ro = keep_slot(&story, "relic_owner");
+        let gold = keep_slot(&story, "gold");
+        let s = keep_scene();
+        let press_on = choice_method(ROOM_GATEHALL, KP_PRESS_ON);
+
+        // Red legitimately claims the crown (0 → 1), THEN a rival tries to overwrite it by
+        // stapling onto press-on and onto genesis. Both refused; the crown stays Red's.
+        let w = deploy_keep(90);
+        w.apply_choice(
+            ROOM_HALL,
+            KP_CLAIM_RED,
+            &choice_at(&s, ROOM_HALL, KP_CLAIM_RED),
+        )
+        .expect("Red's first claim commits (0 → 1)");
+        let cell = w.cell_id();
+        assert!(
+            matches!(
+                w.apply_raw(&press_on, vec![stash_effect(cell, ro as u64, 2)]),
+                Err(WorldError::Refused(_))
+            ),
+            "relic_owner overwrite stapled onto press-on must be REFUSED"
+        );
+        assert!(
+            matches!(
+                w.apply_raw("genesis", vec![stash_effect(cell, ro as u64, 2)]),
+                Err(WorldError::Refused(_))
+            ),
+            "relic_owner overwrite stapled onto genesis must be REFUSED"
+        );
+        assert_eq!(
+            w.read_var("relic_owner"),
+            1,
+            "anti-ghost: crown still Red's"
+        );
+
+        // gold=999 minted from nothing, via press-on and genesis — both refused, gold stays 0.
+        let w2 = deploy_keep(92);
+        let c2 = w2.cell_id();
+        assert!(
+            matches!(
+                w2.apply_raw(&press_on, vec![stash_effect(c2, gold as u64, 999)]),
+                Err(WorldError::Refused(_))
+            ),
+            "gold=999 stapled onto press-on must be REFUSED (FieldDelta{{+500}})"
+        );
+        assert!(
+            matches!(
+                w2.apply_raw("genesis", vec![stash_effect(c2, gold as u64, 999)]),
+                Err(WorldError::Refused(_))
+            ),
+            "gold=999 stapled onto genesis must be REFUSED"
+        );
+        assert_eq!(w2.read_var("gold"), 0, "anti-ghost: no gold minted");
+        // NOT a ban: the honest terminal seize still lands exactly 500 (covered end-to-end by
+        // `full_keep_playthrough_reverifies`).
+    }
 
     /// #1 — the compiler already lowers the gated attack to a real `FieldGte` tooth:
     /// the trade-blows move `~ hp -= 20` gated `{ hp >= 21 }` lifts to the post-state
@@ -1125,6 +1268,103 @@ pub fn vault_compiled() -> CompiledStory {
         }],
     );
 
+    // ── STAPLE-CLOSURE (the sweep's residual, driven): bind the WRITES, not the methods ──
+    //
+    // As in the Keep, the per-method (`MethodIs`) teeth above miss `apply_raw`'s ability to
+    // present ANY method — including the empty-constrained `genesis` case, a universal write
+    // hatch. Driven: `key_owner` overwrite AND a `hp = 1000` free heal both committed on a
+    // press-on/retreat turn AND on a re-invoked `genesis` turn.
+    let gold = keep_slot(&story, "gold");
+    let hp = keep_slot(&story, "hp");
+    let trade_blow_m = choice_method(ROOM_GALLERY, VLT_TRADE_BLOW);
+    let drink_m = choice_method(ROOM_GALLERY, VLT_DRINK);
+
+    // key_owner: first-grabber-wins bound to the WRITE (rival overwrite refused on any method).
+    bind_slot_write(
+        &mut story.program,
+        key_owner,
+        vec![StateConstraint::WriteOnce { index: key_owner }],
+    );
+    // draughts_held: the heal BUDGET. A staple could set it to 1000 (→ 1000 free heals). A
+    // bare `WriteOnce` is NOT enough — it admits ANY first-write value (0→1000). Pin the
+    // write to EXACTLY the one draught the wreck holds: `WriteOnce + FieldDelta{+1}` — the
+    // budget is provably 0→1, once, on any method.
+    bind_slot_write(
+        &mut story.program,
+        held,
+        vec![
+            StateConstraint::WriteOnce { index: held },
+            StateConstraint::FieldDelta {
+                index: held,
+                delta: field_from_u64(1),
+            },
+        ],
+    );
+    // draughts_drunk: the CONSUMED tally. A staple that RESET it to 0 would refill the budget
+    // (unlimited heals); `SlotChanged{drunk} + Monotonic` forbids any rewind on any method.
+    bind_slot_write(
+        &mut story.program,
+        drunk,
+        vec![StateConstraint::Monotonic { index: drunk }],
+    );
+    // gold: written once (terminal `~ gold += 750`); bind to "from zero, +750, once".
+    bind_slot_write(
+        &mut story.program,
+        gold,
+        vec![
+            StateConstraint::WriteOnce { index: gold },
+            StateConstraint::FieldDelta {
+                index: gold,
+                delta: field_from_u64(750),
+            },
+        ],
+    );
+
+    // hp is GENESIS-SEEDED (`~ hp = 40`) and BIDIRECTIONAL (blow −15, drink +25), so a clean
+    // `SlotChanged{hp}` gate cannot characterize it (the +40 seed, −15 blow and +25 heal are
+    // three deltas, and `AnyOf` branches admit no `FieldDelta` atom). Instead bind hp
+    // PER-WRITER and seal the genesis hatch directly:
+    //   * `WriteOnce{hp}` on the empty `genesis` case — the 0→40 seed commits once; a
+    //     re-invoked genesis with a stapled hp is refused (old 40 ≠ 0, changed);
+    //   * `FieldDelta{hp,−15}` on the blow (an exact blow, un-weakenable) and
+    //     `FieldDelta{hp,+25}` on the drink, coupled to `FieldDelta{drunk,+1}` so a heal
+    //     MUST consume a draught (bounded by `drunk ≤ held ≤ 1`);
+    //   * `Immutable{hp}` on every other method's case (and the heap-hatch already freezes
+    //     registers). Every hp-writing method is now the ONLY one that can move hp, by an
+    //     exact amount — a free heal has no method to ride, genesis included.
+    augment_case(
+        &mut story.program,
+        GENESIS_METHOD,
+        vec![StateConstraint::WriteOnce { index: hp }],
+    );
+    augment_case(
+        &mut story.program,
+        &trade_blow_m,
+        vec![StateConstraint::FieldDelta {
+            index: hp,
+            delta: signed_delta(-15),
+        }],
+    );
+    augment_case(
+        &mut story.program,
+        &drink_m,
+        vec![
+            StateConstraint::FieldDelta {
+                index: hp,
+                delta: field_from_u64(25),
+            },
+            StateConstraint::FieldDelta {
+                index: drunk,
+                delta: field_from_u64(1),
+            },
+        ],
+    );
+    pin_immutable_except(
+        &mut story.program,
+        &[GENESIS_METHOD, &trade_blow_m, &drink_m],
+        hp,
+    );
+
     story
 }
 
@@ -1144,6 +1384,82 @@ mod vault_tests {
         Driver, StepPos, Value, VerifyBreak, WorldError, verify, verify_by_replay,
         verify_chain_linkage,
     };
+
+    /// THE STAPLE-CLOSURE FALSIFIER (vault, driven). Before the write-bound teeth, a
+    /// `key_owner` overwrite, a `hp = 1000` free heal, and a `draughts_held = 1000` budget
+    /// inflation all COMMITTED — on a normal choice turn AND on a re-invoked `genesis` turn
+    /// (the empty-constrained compiler case). Now each is a REAL executor refusal on ANY
+    /// method (anti-ghost). `hp` is bound per-writer + a `WriteOnce{hp}` on the genesis case
+    /// (which alone seeds the 40); the heal budget (`held`) is write-once-bound.
+    #[test]
+    fn vault_hp_owner_and_budget_writes_are_bound_not_stapleable() {
+        let story = vault_compiled();
+        let ko = keep_slot(&story, "key_owner");
+        let hp = keep_slot(&story, "hp");
+        let held = keep_slot(&story, "draughts_held");
+        let s = vault_scene();
+        let swim = choice_method(ROOM_WRECK, VLT_SWIM);
+        let retreat = choice_method(ROOM_GALLERY, VLT_RETREAT);
+
+        // key_owner: Gull claims (0→1), a rival overwrite via swim + genesis is refused.
+        let w = deploy_vault(90);
+        w.apply_choice(
+            ROOM_WRECK,
+            VLT_CLAIM_GULL,
+            &choice_at(&s, ROOM_WRECK, VLT_CLAIM_GULL),
+        )
+        .expect("Gull's first claim commits");
+        let cell = w.cell_id();
+        assert!(matches!(
+            w.apply_raw(&swim, vec![stash_effect(cell, ko as u64, 2)]),
+            Err(WorldError::Refused(_))
+        ));
+        assert!(matches!(
+            w.apply_raw("genesis", vec![stash_effect(cell, ko as u64, 2)]),
+            Err(WorldError::Refused(_))
+        ));
+        assert_eq!(w.read_var("key_owner"), 1, "anti-ghost: key still Gull's");
+
+        // hp = 1000 free heal, via a normal retreat turn AND via genesis — both refused.
+        let mut w2 = deploy_vault(92);
+        w2.seed_var("hp", Value::Int(40));
+        let c2 = w2.cell_id();
+        assert!(
+            matches!(
+                w2.apply_raw(&retreat, vec![stash_effect(c2, hp as u64, 1000)]),
+                Err(WorldError::Refused(_))
+            ),
+            "a hp=1000 heal stapled onto retreat must be REFUSED (Immutable{{hp}})"
+        );
+        assert!(
+            matches!(
+                w2.apply_raw("genesis", vec![stash_effect(c2, hp as u64, 1000)]),
+                Err(WorldError::Refused(_))
+            ),
+            "a hp=1000 heal stapled onto genesis must be REFUSED (WriteOnce{{hp}} on genesis)"
+        );
+        assert_eq!(w2.read_var("hp"), 40, "anti-ghost: hp not raised");
+
+        // draughts_held (the heal budget): a staple to 1000 (→ 1000 free heals) is refused on
+        // any method, so the budget is provably bounded by what you actually pocketed.
+        let w3 = deploy_vault(94);
+        let c3 = w3.cell_id();
+        assert!(matches!(
+            w3.apply_raw(&swim, vec![stash_effect(c3, held as u64, 1000)]),
+            Err(WorldError::Refused(_))
+        ));
+        assert!(matches!(
+            w3.apply_raw("genesis", vec![stash_effect(c3, held as u64, 1000)]),
+            Err(WorldError::Refused(_))
+        ));
+        assert_eq!(
+            w3.read_var("draughts_held"),
+            0,
+            "anti-ghost: no phantom draughts"
+        );
+        // NOT a ban: the honest blow/drink/seize path is covered end-to-end by
+        // `full_vault_playthrough_reverifies` + `healing_draught_consume_requires_holding`.
+    }
 
     /// The inventory rules are REAL kernel predicates: introspect the installed program
     /// and confirm the grate gate is `FieldGte(has_key, 1)`, each pickup carries a
