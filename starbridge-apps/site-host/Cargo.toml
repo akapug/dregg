@@ -1,0 +1,39 @@
+[package]
+name = "starbridge-site-host"
+version = "0.1.0"
+edition = "2024"
+description = "The site-publish control plane: a cap-gated, lease-funded, receipted POST /v1/sites/<name>/publish turn that writes a built static bundle into a SiteRegistry backed by the real sorted-Poseidon2 content commitment. The write half of verified microsite hosting — one turn a CLI and an HTTP gateway both drive, with an x402-style 402 lease-topup hint so an agent client can auto-fund and retry."
+
+# The WRITE control plane for verified microsite hosting. A client POSTs a built
+# static bundle; the turn (1) cap-gates on a `site-host/<name>` dregg credential,
+# (2) funds the publish against a resident `hosted-lease` (fail-closed 402 with an
+# x402 topup hint), and (3) publishes the site as a `SiteCell` whose `content_root`
+# is the kernel's real Poseidon2 heap commitment — locally re-witnessable. Composes
+# with the launchpad (a launch gets a landing page) and IPFS (token metadata/images
+# are content-addressed). See src/lib.rs and README.md.
+
+[lib]
+name = "starbridge_site_host"
+
+[dependencies]
+# The real sorted-Poseidon2 content commitment (BabyBear field + heap root + the
+# 8-felt faithful widening the kernel commits an umem heap with).
+dregg-circuit = { path = "../../circuit" }
+# The dga1_ credential core (Credential/PublicKey/RootKey/Context) the cap-gate verifies.
+dregg-agent = { path = "../../dregg-agent" }
+# The web-edge cap vocabulary: mint_caps / cap_context / subject_of.
+webauth-core = { path = "../../webauth-core" }
+# The funding gate — a resident durable-execution hosting lease, metered + lapsing.
+hosted-lease = { path = "../../hosted-lease" }
+dregg-cell = { path = "../../cell", default-features = false }
+dregg-types = { path = "../../types" }
+# IPFS content-addressing for launch metadata + images (a CID IS the commitment).
+dregg-ipfs = { path = "../../dregg-ipfs" }
+
+serde = { workspace = true, features = ["std"] }
+serde_json = { workspace = true }
+blake3 = "1"
+ed25519-dalek = { version = "2.1", features = ["std"] }
+
+[lints]
+workspace = true
