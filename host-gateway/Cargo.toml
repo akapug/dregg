@@ -1,0 +1,56 @@
+# host-gateway — a fly-compat Machines-API host gateway + cap-scoped /api/* read
+# surfaces, assembled on the resident substrate.
+#
+# One serving block classifies every inbound request:
+#   * the fly.io-compatible machines API  (`/v1/apps/{app}/machines...`)  — route.rs
+#   * the cap-scoped console reads         (`/api/{sites,domains,machines,...}`) — api.rs
+#   * the on-demand-TLS `ask`              (`/ask?domain=<host>`)          — gateway.rs
+#   * the static microsite data plane      (Host `<name>.<apex>` + verified custom domains) — microsite.rs
+#
+# It links the RESIDENT surfaces, not the retired forks: `http-serve` (the hardened
+# HTTP/1.1 serve loop), `starbridge-domains` (the verified custom-domain resolver +
+# on-demand-TLS `is_verified` read), `webauth-core` (offline dga1_ credential
+# verification — the gateway derives the cap-scope subject itself, it does not trust
+# an upstream header), and `dregg-ipfs` (a dregg content commitment IS an IPFS CID —
+# so a launch's landing page, metadata, and image are content-addressed).
+
+[package]
+name = "host-gateway"
+version = { workspace = true }
+edition = { workspace = true }
+publish = false
+description = "A fly-compat Machines-API host gateway + cap-scoped /api/* read surfaces, assembled on http-serve + starbridge-domains + webauth-core + dregg-ipfs"
+
+[lib]
+name = "host_gateway"
+
+[dependencies]
+# The hardened HTTP/1.1 serve loop + the server-independent request/response
+# vocabulary the gateway handler binds to (`ServeRequest` / `WebResponse` /
+# `HttpMethod` / `serve_http`).
+http-serve = { path = "../http-serve" }
+# The verified custom-domain control plane: the `Host -> site` resolver and the
+# `is_verified` read the on-demand-TLS `ask` consults (a cert is minted only for a
+# domain a tenant has proven). The gateway adopts its read side; it re-implements
+# nothing.
+starbridge-domains = { path = "../starbridge-apps/domains" }
+# The dga1_ forward-auth decision core: `decide` / `subject_of` — the gateway
+# verifies a presented credential under a configured root and derives the cap-scope
+# subject from it (verify-don't-trust), rather than trusting a proxy-set header.
+webauth-core = { path = "../webauth-core" }
+# Content addressing: a dregg blake3 content commitment re-encoded as a CIDv1 IS the
+# content's IPFS address. A launch's landing page + token metadata + image are
+# content-addressed (`blob_cid`), and optionally pinned through the injected
+# `IpfsClient` seam (`MockIpfs` in-process, `KuboClient` in prod).
+dregg-ipfs = { path = "../dregg-ipfs" }
+
+serde = { workspace = true, features = ["derive", "std"] }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+# The credential root the cap-scope tests mint sessions under (`RootKey`), verified
+# through `webauth_core::grant::mint_caps` / `webauth_core::decide`.
+dregg-agent = { path = "../dregg-agent" }
+
+[lints.rust]
+unsafe_code = "forbid"
