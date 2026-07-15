@@ -23,12 +23,24 @@
 //!   proxy's `forward_auth` subrequest into a `200`/`401`/`403` over [`decide`],
 //!   plus the `/login` proof-of-possession flow and a `/whoami` session probe.
 //!   The serving binary is `src/bin/webauth-edge.rs`.
+//! - [`ratelimit`] — per-client token-bucket throttling + escalating lockout for
+//!   the sensitive endpoints (brute-force / flood defense).
+//! - [`replay`] — a bounded single-use nonce cache that makes the login
+//!   proof-of-possession challenge genuinely single-use (not just TTL-bounded).
+//! - [`observe`] — per-decision structured audit records + a Prometheus
+//!   `/metrics` exposition.
+//! - [`json`] — a tiny escaping JSON object writer (no `serde_json`) for the
+//!   crate's response bodies and the audit line.
 
 pub mod account_id;
 pub mod challenge;
 pub mod config;
 pub mod credext;
 pub mod grant;
+pub mod json;
+pub mod observe;
+pub mod ratelimit;
+pub mod replay;
 pub mod server;
 
 use config::WebAuthConfig;
@@ -529,7 +541,7 @@ mod tests {
         let tail = token.tail_hex();
         let raw = format!("# revoked tokens\n{tail}, dregg:deadbeef\n  # a comment\n");
         let mut cfg = cfg_for(&root);
-        cfg.revoked = config::parse_revoked(&raw);
+        cfg.revoked = config::parse_revoked(&raw).into();
         assert!(cfg.is_revoked(&tail, None));
         assert!(!admit(&cfg, &token.encode()).admitted());
     }

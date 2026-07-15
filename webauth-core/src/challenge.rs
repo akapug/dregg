@@ -103,6 +103,25 @@ pub fn verify(server_key: &[u8; 32], challenge: &str, now: u64) -> Result<(), Ch
     Ok(())
 }
 
+/// Extract the `(nonce, expiry)` a challenge string commits to, WITHOUT
+/// authenticating it — the caller must have already [`verify`]'d the challenge
+/// (which checks the keyed tag + expiry) before trusting these bytes. Used by the
+/// single-use nonce cache ([`crate::replay`]) to key a consumed challenge on its
+/// 16-byte nonce and prune it at its own expiry. `None` if the challenge is not
+/// the canonical `<base64url(24)>.<tag>` shape.
+pub fn nonce_and_exp(challenge: &str) -> Option<([u8; 16], u64)> {
+    let (b64, _) = challenge.split_once('.')?;
+    let body = URL_SAFE_NO_PAD.decode(b64).ok()?;
+    if body.len() != 24 {
+        return None;
+    }
+    let mut nonce = [0u8; 16];
+    nonce.copy_from_slice(&body[..16]);
+    let mut exp = [0u8; 8];
+    exp.copy_from_slice(&body[16..24]);
+    Some((nonce, u64::from_be_bytes(exp)))
+}
+
 /// The exact bytes a client signs to prove possession: the domain tag followed
 /// by the challenge string. Both server and the cipherclerk extension build the
 /// message this way, so signatures agree.
@@ -160,6 +179,17 @@ mod tests {
         bytes[last] = if bytes[last] == 'a' { 'b' } else { 'a' };
         let tampered: String = bytes.into_iter().collect();
         assert!(verify(&key, &tampered, 1_050).is_err());
+    }
+
+    #[test]
+    fn nonce_and_exp_reads_the_committed_bytes() {
+        let key = [13u8; 32];
+        let c = issue_with(&key, [0xABu8; 16], 1_000, 120);
+        let (nonce, exp) = nonce_and_exp(&c).expect("canonical shape parses");
+        assert_eq!(nonce, [0xABu8; 16]);
+        assert_eq!(exp, 1_120);
+        assert!(nonce_and_exp("garbage").is_none());
+        assert!(nonce_and_exp("no-dot").is_none());
     }
 
     #[test]

@@ -26,6 +26,36 @@ use dregg_agent::cred::{
     CREDENTIAL_PREFIX, Caveat, Context, Credential, KeyError, Pred, PublicKey, Refusal,
 };
 
+/// Why the local read of the credential's canonical wire form failed. The only
+/// way this arises in practice is a `dregg_agent` wire-schema bump (a v2 layout)
+/// that this crate's `BearerWire` mirror no longer parses — in which case the
+/// edge must return a clean `500`, NEVER panic and kill the worker thread. The
+/// clean fix (the parent crate exposing `proof_public()` / a caveat iterator) is
+/// named in the module docs; until then this typed error is the graceful guard.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum WireReadError {
+    #[error("credential wire form did not carry the expected `dga1_` prefix")]
+    BadPrefix,
+    #[error("credential wire body was not valid base64url")]
+    BadBase64,
+    #[error(
+        "credential wire body did not match the known v1 postcard schema \
+         (a dregg-agent schema bump? the edge fails closed rather than panicking)"
+    )]
+    BadSchema,
+}
+
+/// The temporal validity of a credential relative to a clock reading.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Validity {
+    /// Every temporal caveat is satisfied at `now`.
+    Valid,
+    /// A `NotBefore` / `Within.not_before` gate has not yet opened (vesting).
+    NotYetValid,
+    /// A `NotAfter` / `Within.not_after` gate has passed (expired).
+    Expired,
+}
+
 /// The forward-auth reads and PoP verbs over the real [`Credential`].
 pub trait CredentialExt {
     /// Is this credential expired at wall-clock `now`? True iff any
@@ -33,7 +63,20 @@ pub trait CredentialExt {
     /// already past. Used at the auth edge to distinguish an EXPIRED-but-genuine
     /// session (→ 401, re-login) from a genuine session that merely lacks the
     /// surface's cap (→ 403).
+    ///
+    /// Fail-closed: if the credential's wire form cannot be read (a schema bump),
+    /// this returns `true` (treat as expired → denied) rather than panicking. Use
+    /// [`CredentialExt::validity`] when the caller wants to distinguish that case
+    /// (and surface a `500`) from a genuinely-expired token.
     fn is_expired(&self, now: u64) -> bool;
+
+    /// The full temporal [`Validity`] of the credential at `now` — honoring
+    /// `NotBefore` and `Within.not_before` (not-yet-valid) as well as the
+    /// `NotAfter` upper bound. Returns [`WireReadError`] if the wire form cannot
+    /// be read, so the login/whoami gate can answer `500` instead of a misleading
+    /// `401`. The `/auth` core path additionally binds the clock in its context
+    /// meet, so a not-yet-valid token is refused there regardless.
+    fn validity(&self, now: u64) -> Result<Validity, WireReadError>;
 
     /// Verify ONLY the ed25519 signature chain + the proof-of-possession, with
     /// NO caveat evaluation — establishes "this is a genuine, untampered
@@ -50,7 +93,16 @@ pub trait CredentialExt {
     /// [`Credential::attenuate`] would sign the next block under, and the key
     /// a holder proves possession of by signing a login challenge
     /// ([`CredentialExt::sign_challenge`] / [`verify_pop`]).
+    ///
+    /// Fail-closed: on an unreadable wire form this returns the all-zero key,
+    /// which is not the holder's key, so [`verify_pop`] against it can only fail.
+    /// Prefer [`CredentialExt::try_proof_public`] to surface the error as a `500`.
     fn proof_public(&self) -> [u8; 32];
+
+    /// [`CredentialExt::proof_public`], surfacing a wire-read failure instead of
+    /// masking it as an all-zero key. The login PoP path uses this to return a
+    /// clean `500` on a schema bump rather than a confusing PoP failure.
+    fn try_proof_public(&self) -> Result<[u8; 32], WireReadError>;
 
     /// Sign an opaque login challenge with the bearer tail key — the client
     /// side of the proof-of-possession handshake. The verifier checks it with
@@ -60,16 +112,44 @@ pub trait CredentialExt {
 
 impl CredentialExt for Credential {
     fn is_expired(&self, now: u64) -> bool {
-        for caveat in wire_caveats(self) {
+        // Fail-closed: an unreadable wire form is treated as expired (denied),
+        // never a panic. `validity` distinguishes the schema-error case.
+        !matches!(
+            self.validity(now),
+            Ok(Validity::Valid) | Ok(Validity::NotYetValid)
+        )
+    }
+
+    fn validity(&self, now: u64) -> Result<Validity, WireReadError> {
+        // Scan every temporal caveat across all blocks. Expiry dominates a
+        // not-yet-valid verdict (an expired-and-not-yet-valid window is expired),
+        // matching the fail-closed reading the `/auth` context meet gives.
+        let mut not_yet = false;
+        for caveat in wire_caveats(self)? {
             if let Caveat::FirstParty(p) = caveat {
                 match p {
-                    Pred::NotAfter { at } if now > at => return true,
-                    Pred::Within { not_after, .. } if now > not_after => return true,
+                    Pred::NotAfter { at } if now > at => return Ok(Validity::Expired),
+                    Pred::NotBefore { at } if now < at => not_yet = true,
+                    Pred::Within {
+                        not_before,
+                        not_after,
+                    } => {
+                        if now > not_after {
+                            return Ok(Validity::Expired);
+                        }
+                        if now < not_before {
+                            not_yet = true;
+                        }
+                    }
                     _ => {}
                 }
             }
         }
-        false
+        Ok(if not_yet {
+            Validity::NotYetValid
+        } else {
+            Validity::Valid
+        })
     }
 
     fn verify_chain(&self, root: &PublicKey) -> Result<(), Refusal> {
@@ -89,11 +169,20 @@ impl CredentialExt for Credential {
     }
 
     fn proof_public(&self) -> [u8; 32] {
-        bearer_key(self).verifying_key().to_bytes()
+        self.try_proof_public().unwrap_or([0u8; 32])
+    }
+
+    fn try_proof_public(&self) -> Result<[u8; 32], WireReadError> {
+        Ok(bearer_key(self)?.verifying_key().to_bytes())
     }
 
     fn sign_challenge(&self, msg: &[u8]) -> [u8; 64] {
-        bearer_key(self).sign(msg).to_bytes()
+        // Client-side helper (tests / a reference signer): the credential was
+        // just minted locally, so its wire form is by construction the v1 schema.
+        bearer_key(self)
+            .expect("a locally-minted credential encodes to the v1 schema")
+            .sign(msg)
+            .to_bytes()
     }
 }
 
@@ -128,28 +217,31 @@ struct BearerWire {
     proof_seed: [u8; 32],
 }
 
-fn wire(cred: &Credential) -> BearerWire {
+fn wire(cred: &Credential) -> Result<BearerWire, WireReadError> {
     let enc = cred.encode();
+    // Schema guard: each step returns a typed error instead of `.expect()`-ing,
+    // so a `dregg_agent` wire-schema bump degrades to a clean `500` at the edge
+    // rather than panicking mid-request and killing the worker thread.
     let body = enc
         .strip_prefix(CREDENTIAL_PREFIX)
-        .expect("encode always emits the dga1_ prefix");
+        .ok_or(WireReadError::BadPrefix)?;
     let bytes = URL_SAFE_NO_PAD
         .decode(body)
-        .expect("encode always emits base64url");
-    postcard::from_bytes(&bytes).expect("encode always emits the v1 schema")
+        .map_err(|_| WireReadError::BadBase64)?;
+    postcard::from_bytes(&bytes).map_err(|_| WireReadError::BadSchema)
 }
 
-fn bearer_key(cred: &Credential) -> SigningKey {
-    SigningKey::from_bytes(&wire(cred).proof_seed)
+fn bearer_key(cred: &Credential) -> Result<SigningKey, WireReadError> {
+    Ok(SigningKey::from_bytes(&wire(cred)?.proof_seed))
 }
 
 /// Every caveat across all blocks, in block order (the expiry scan).
-fn wire_caveats(cred: &Credential) -> Vec<Caveat> {
-    wire(cred)
+fn wire_caveats(cred: &Credential) -> Result<Vec<Caveat>, WireReadError> {
+    Ok(wire(cred)?
         .blocks
         .into_iter()
         .flat_map(|b| b.caveats)
-        .collect()
+        .collect())
 }
 
 /// Verify a proof-of-possession signature: does `sig` over `msg` verify under
@@ -209,6 +301,29 @@ mod tests {
         // An attenuated tighter expiry also reads (caveats across ALL blocks).
         let tight = cred.attenuate([Caveat::FirstParty(Pred::NotAfter { at: 500 })]);
         assert!(tight.is_expired(501));
+    }
+
+    #[test]
+    fn validity_honors_not_before_and_not_after() {
+        let root = RootKey::from_seed([5u8; 32]);
+        // A vesting window: valid only within [1000, 2000].
+        let cred = root.mint([Caveat::FirstParty(Pred::Within {
+            not_before: 1_000,
+            not_after: 2_000,
+        })]);
+        assert_eq!(cred.validity(999), Ok(Validity::NotYetValid));
+        assert_eq!(cred.validity(1_500), Ok(Validity::Valid));
+        assert_eq!(cred.validity(2_001), Ok(Validity::Expired));
+        // A bare NotBefore is not-yet-valid before it opens, then valid.
+        let vest = root.mint([Caveat::FirstParty(Pred::NotBefore { at: 5_000 })]);
+        assert_eq!(vest.validity(4_999), Ok(Validity::NotYetValid));
+        assert_eq!(vest.validity(5_000), Ok(Validity::Valid));
+        // is_expired treats both Valid and NotYetValid as "not expired" (the
+        // 401-vs-403 probe is about lapse, not vesting — the /auth clock meet
+        // rejects a not-yet-valid token on its own).
+        assert!(!vest.is_expired(4_999));
+        // A NotBefore-only token never lapses (no NotAfter): still not expired.
+        assert!(!vest.is_expired(u64::MAX));
     }
 
     #[test]
