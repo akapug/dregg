@@ -68,6 +68,31 @@ def IsHash2Instance (hash : List ℤ → ℤ) (pre0 pre1 dig : ℤ) : Prop :=
 def ComputesHash2 (hash : List ℤ → ℤ) (t : VmTrace) : Prop :=
   IsHash2Instance hash (t.pub 0) (t.pub 1) (t.pub 2)
 
+/-! `holdsVm` is field-faithful: a public-input binding establishes congruence modulo the BabyBear
+prime.  The deployed trace/public-input representation uses canonical residues; make that carrier
+explicit so the semantic theorem may honestly conclude integer equality. -/
+
+/-- A deployed BabyBear cell/public input is represented by its canonical integer residue. -/
+def Canon (x : ℤ) : Prop := 0 ≤ x ∧ x < 2013265921
+
+/-- Canonical representatives that are congruent modulo BabyBear are equal as integers. -/
+theorem eq_of_modEq_canon {a b : ℤ} (ha : Canon a) (hb : Canon b)
+    (h : a ≡ b [ZMOD 2013265921]) : a = b := by
+  rw [Int.modEq_iff_dvd] at h
+  obtain ⟨k, hk⟩ := h
+  obtain ⟨ha0, ha1⟩ := ha
+  obtain ⟨hb0, hb1⟩ := hb
+  omega
+
+/-- The canonical-residue envelope for the three descriptor IO bindings. -/
+structure Hash2Canon (t : VmTrace) : Prop where
+  in0Cell : Canon ((envAt t 0).loc IN0)
+  in0Pub : Canon (t.pub 0)
+  in1Cell : Canon ((envAt t 0).loc IN1)
+  in1Pub : Canon (t.pub 1)
+  digestCell : Canon ((envAt t 0).loc DIGEST)
+  digestPub : Canon (t.pub 2)
+
 /-! ## §2 — The constraints of `poseidon2HashDesc` we consume are genuinely present. -/
 
 theorem mem_hashLookup : hashLookup ∈ poseidon2HashDesc.constraints := by
@@ -91,7 +116,8 @@ theorem mem_digestPin : digestPin ∈ poseidon2HashDesc.constraints := by
 /-- **`poseidon2Hash_refines_computesHash2` — the Rung-1 functional-correctness refinement.**
 
 A trace `t` that SATISFIES the emitted descriptor `poseidon2HashDesc` (via the deployed acceptance
-predicate `Satisfied2`), is non-empty, and whose Poseidon2 chip table is SOUND (the NAMED carrier
+predicate `Satisfied2`), is non-empty, carries canonical BabyBear representatives at its exposed IO,
+and whose Poseidon2 chip table is SOUND (the NAMED carrier
 `ChipTableSound hash (t.tf .poseidon2)` — the Poseidon2 chip-AIR faithfulness), computes the genuine
 arity-2 hash relation: the published digest `PI[2]` equals `hash [PI[0], PI[1]]`.
 
@@ -101,6 +127,7 @@ pins (preimage/digest columns = the exposed public inputs) on the first row. -/
 theorem poseidon2Hash_refines_computesHash2 {hash : List ℤ → ℤ} {minit : ℤ → ℤ}
     {mfin : ℤ → ℤ × Nat} {maddrs : List ℤ} {t : VmTrace}
     (hSound : ChipTableSound hash (t.tf .poseidon2))
+    (hc : Hash2Canon t)
     (hne : t.rows ≠ [])
     (hsat : Satisfied2 hash poseidon2HashDesc minit mfin maddrs t) :
     ComputesHash2 hash t := by
@@ -116,12 +143,18 @@ theorem poseidon2Hash_refines_computesHash2 {hash : List ℤ → ℤ} {minit : �
   have hin0 := hsat.rowConstraints 0 hpos in0Pin mem_in0Pin
   have hin1 := hsat.rowConstraints 0 hpos in1Pin mem_in1Pin
   have hdg := hsat.rowConstraints 0 hpos digestPin mem_digestPin
-  have e_in0 : (envAt t 0).loc IN0 = (envAt t 0).pub 0 :=
+  have e_in0_mod : (envAt t 0).loc IN0 ≡ (envAt t 0).pub 0 [ZMOD 2013265921] :=
     (holdsVm_piFirst_true (envAt t 0) (0 + 1 == t.rows.length) IN0 0).mp hin0
-  have e_in1 : (envAt t 0).loc IN1 = (envAt t 0).pub 1 :=
+  have e_in1_mod : (envAt t 0).loc IN1 ≡ (envAt t 0).pub 1 [ZMOD 2013265921] :=
     (holdsVm_piFirst_true (envAt t 0) (0 + 1 == t.rows.length) IN1 1).mp hin1
-  have e_dig : (envAt t 0).loc DIGEST = (envAt t 0).pub 2 :=
+  have e_dig_mod : (envAt t 0).loc DIGEST ≡ (envAt t 0).pub 2 [ZMOD 2013265921] :=
     (holdsVm_piFirst_true (envAt t 0) (0 + 1 == t.rows.length) DIGEST 2).mp hdg
+  have e_in0 : (envAt t 0).loc IN0 = (envAt t 0).pub 0 :=
+    eq_of_modEq_canon hc.in0Cell hc.in0Pub e_in0_mod
+  have e_in1 : (envAt t 0).loc IN1 = (envAt t 0).pub 1 :=
+    eq_of_modEq_canon hc.in1Cell hc.in1Pub e_in1_mod
+  have e_dig : (envAt t 0).loc DIGEST = (envAt t 0).pub 2 :=
+    eq_of_modEq_canon hc.digestCell hc.digestPub e_dig_mod
   -- compose: PI[2] = digest = hash [IN0, IN1] = hash [PI[0], PI[1]]
   show t.pub 2 = hash [t.pub 0, t.pub 1]
   have hpub : ∀ k, (envAt t 0).pub k = t.pub k := fun _ => rfl
@@ -177,6 +210,11 @@ theorem witTf_chipSound : ChipTableSound hash0 (witTrace.tf .poseidon2) := by
   subst hr
   exact ⟨[5, 7], List.replicate 7 0, by decide, by decide, by decide⟩
 
+/-- The concrete witness uses canonical BabyBear representatives at every exposed IO cell. -/
+theorem witTrace_canon : Hash2Canon witTrace := by
+  constructor <;>
+    norm_num [Canon, witTrace, envAt, wr0, wpub, rowOf, IN0, IN1, DIGEST, zeroAsg]
+
 /-- **The witness PROVABLY satisfies the emitted descriptor.** On the (single, first) row: the chip
 lookup holds by membership in `witTf`; the three boundary pins hold (`loc = pub` at the pinned
 columns); the memory legs are the empty-log balance. -/
@@ -205,7 +243,7 @@ theorem witTrace_satisfies :
 trace + its sound chip table to `poseidon2Hash_refines_computesHash2` recovers the genuine relation:
 `PI[2] = hash0 [PI[0], PI[1]]`. -/
 theorem witTrace_computesHash2 : ComputesHash2 hash0 witTrace :=
-  poseidon2Hash_refines_computesHash2 witTf_chipSound (by decide) witTrace_satisfies
+  poseidon2Hash_refines_computesHash2 witTf_chipSound witTrace_canon (by decide) witTrace_satisfies
 
 /-- The recovered value is the concrete genuine digest `99` over the read preimage `(5, 7)`. -/
 theorem witness_value :
@@ -251,9 +289,20 @@ theorem hash2_relation_discriminates :
 /-! ## §6 — Axiom tripwires. -/
 
 #assert_axioms poseidon2Hash_refines_computesHash2
+#assert_axioms eq_of_modEq_canon
+#assert_axioms mem_hashLookup
+#assert_axioms mem_in0Pin
+#assert_axioms mem_in1Pin
+#assert_axioms mem_digestPin
+#assert_axioms memOpsOf_p2
+#assert_axioms mapOpsOf_p2
+#assert_axioms memLog_p2
+#assert_axioms mapLog_p2
 #assert_axioms witTf_chipSound
+#assert_axioms witTrace_canon
 #assert_axioms witTrace_satisfies
 #assert_axioms witTrace_computesHash2
+#assert_axioms witness_value
 #assert_axioms badTrace_not_satisfied
 #assert_axioms hash2_relation_discriminates
 

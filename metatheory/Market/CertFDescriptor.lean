@@ -6,9 +6,8 @@
 emits the *equality* part of the certificate check (`certCircuit`, `certCircuit_sound`),
 NAMING the feasibility inequalities as riding "the standard AIR range gadget".
 
-`circuit-prove/src/cert_f_air.rs::cert_f_descriptor` HAND-BUILDS the full production
-`EffectVmDescriptor2` (all five constraint families, including the range gadgets) in Rust
-and only *tests* that it agrees with the native checker. This module closes that gap: it
+The historical `circuit-prove/src/cert_f_air.rs::cert_f_descriptor` hand-built the full
+`EffectVmDescriptor2` in Rust. This module closes that gap: it
 AUTHORS the exact same descriptor in Lean as a total function of the public program, and
 PROVES the emit-SOUNDNESS bridge (`certFDescriptor_emit_sound`, §6):
 
@@ -25,13 +24,10 @@ satisfying trace) is witnessed executably by the byte-identical Rust STARK
 
 The Rust is re-pointed onto this Lean-authored descriptor via the byte-pinned-twin discipline the
 effect_vm family uses: `emitVmJson2 certFDescriptor` is the canonical wire string (committed at
-`circuit/descriptors/dregg-cert-f-ir2.json`); the Rust `cert_f_descriptor(&ring3_cert())` is
-asserted byte-identical to `parse_vm_descriptor2` of that string
-(`cert_f_air.rs::cert_f_descriptor_matches_lean`). This makes Cert-F a genuinely verified-EMITTED
-circuit like the effect_vm family: a Lean-authored descriptor + a proven emit-soundness theorem +
-a Rust twin, retiring the hand-write as the source of truth. (The `@[export]` archive build that
-would let Rust consume the Lean object directly is the deploy step — hbox does that build; this
-byte-twin is the same staged discipline the rotation lanes use.)
+`circuit/descriptors/dregg-cert-f-ir2.json`) and is exact-equality pinned against the literal in
+`Market.CertFGolden`. Rust now `include_str!`s and parses that artifact; it authors no Cert-F
+constraint. A different public `(A,w,c,ε)` program is deliberately fail-closed until its own
+Lean proof, emitted artifact, byte pin, and registry entry exist.
 
 ## The five constraint families (mirroring `cert_f_air.rs` exactly)
 
@@ -53,6 +49,7 @@ The range gadget is `certFValueBits` boolean gates `b(b−1)==0` plus one recomp
 import Dregg2.Circuit.DescriptorIR2
 import Dregg2.Circuit.Emit.EffectVmEmitTransfer
 import Market.CertF
+import Market.CertFGolden
 
 namespace Market.CertFDescriptor
 
@@ -204,6 +201,10 @@ def certFDescriptor : EffectVmDescriptor2 := certFDescriptorOf ring3Prog
 #guard certFDescriptor.tables.length == 0
 #guard certFDescriptor.hashSites.length == 0
 #guard certFDescriptor.ranges.length == 0
+
+/- Exact provenance pin: the committed Rust `include_str!` artifact is this
+literal, and any emitter drift fails the Lean build. -/
+#guard emitVmJson2 certFDescriptor == Market.CertFGolden.CERT_F_RING3_GOLDEN
 
 /-! ## §5 — The RANGE-GADGET soundness lemma (the tooth `Market.CertF` deferred to "the standard
 AIR range gadget"). This is the reusable core: a satisfied range gadget FORCES its target into
@@ -583,3 +584,7 @@ theorem certFDescriptor_emit_sound {hash : List ℤ → ℤ} {a : Assignment}
   Market.CertFDescriptor.certFDescriptor_emit_sound]
 
 end Market.CertFDescriptor
+
+-- Stronger than pinning only the eight public keystones above: audit every theorem in the emitted
+-- descriptor namespace, including all range/membership plumbing used to derive them.
+#assert_namespace_axioms Market.CertFDescriptor

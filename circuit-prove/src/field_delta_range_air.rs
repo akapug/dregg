@@ -58,11 +58,10 @@
 //!     every wrap value.
 
 use dregg_circuit::descriptor_ir2::{
-    EffectVmDescriptor2, MemBoundaryWitness, UMemBoundaryWitness, VmConstraint2,
+    EffectVmDescriptor2, MemBoundaryWitness, UMemBoundaryWitness, parse_vm_descriptor2,
     prove_vm_descriptor2_for_config,
 };
 use dregg_circuit::field::{BABYBEAR_P, BabyBear};
-use dregg_circuit::lean_descriptor_air::{LeanExpr, VmConstraint, VmRow};
 
 use crate::plonky3_recursion_impl::recursive::DreggRecursionConfig;
 
@@ -92,6 +91,7 @@ const WIDTH: usize = BIT_BASE + RESULT_BITS;
 const TRACE_HEIGHT: usize = 8;
 
 /// Public inputs: the exact-delta transition triple `[old, delta, new]`.
+#[cfg_attr(not(test), allow(dead_code))]
 const PI_COUNT: usize = 3;
 
 /// Column of bit `j` of the result decomposition.
@@ -99,69 +99,20 @@ const fn bit_col(j: usize) -> usize {
     BIT_BASE + j
 }
 
-/// `x − y` as a `LeanExpr`.
-fn sub(x: LeanExpr, y: LeanExpr) -> LeanExpr {
-    LeanExpr::add(x, LeanExpr::mul(LeanExpr::Const(-1), y))
-}
+/// Exact IR2 bytes emitted and pinned by
+/// `Dregg2.Circuit.Emit.FieldDeltaRangeEmit`.
+pub const FIELD_DELTA_RANGE_DESCRIPTOR_JSON: &str =
+    include_str!("../../circuit/descriptors/by-name/field-delta-result-range.json");
 
-/// A pure-row vanishing gate.
-fn gate(body: LeanExpr) -> VmConstraint2 {
-    VmConstraint2::Base(VmConstraint::Gate(body))
-}
-
-/// **The FieldDelta-result-range descriptor.** Enforces, per row:
+/// **The FieldDelta-result-range descriptor.** Lean enforces, per row:
 ///   * the exact-delta transition `new − (old + delta) == 0` (the deployed
 ///     `FieldDelta` gate — the WRAPPING modular equation, kept faithful), and
 ///   * the RESULT range gadget: each bit column boolean, and `new` recomposes to
 ///     its `RESULT_BITS`-bit decomposition (so `new ∈ [0, 2^RESULT_BITS)`).
 /// The triple `[old, delta, new]` is pinned to the public inputs on the first row.
 pub fn field_delta_range_descriptor() -> EffectVmDescriptor2 {
-    let mut constraints: Vec<VmConstraint2> = Vec::new();
-
-    // --- the exact-delta transition gate: new == old + delta (WRAPPING, modular). ---
-    // This is the deployed `FieldDelta` equation; it holds for BOTH the affordable
-    // decrement AND the unaffordable wrap-mint (that is precisely why it alone is a
-    // hole). Only the range gadget below distinguishes them.
-    constraints.push(gate(sub(
-        LeanExpr::Var(NEW_COL),
-        LeanExpr::add(LeanExpr::Var(OLD_COL), LeanExpr::Var(DELTA_COL)),
-    )));
-
-    // --- THE RESULT RANGE GADGET: new ∈ [0, 2^RESULT_BITS). ---
-    // Each bit column is boolean: b·(b − 1) == 0.
-    for j in 0..RESULT_BITS {
-        let b = LeanExpr::Var(bit_col(j));
-        constraints.push(gate(LeanExpr::mul(b.clone(), sub(b, LeanExpr::Const(1)))));
-    }
-    // Recompose: new − Σⱼ 2ʲ·bitⱼ == 0. A wrapped result (`p − k`, ≥ 2^30) has no
-    // RESULT_BITS-bit preimage, so this gate is violated ⇒ UNSAT (the mint tooth).
-    let mut acc = LeanExpr::Var(NEW_COL);
-    for j in 0..RESULT_BITS {
-        acc = sub(
-            acc,
-            LeanExpr::mul(LeanExpr::Const(1i64 << j), LeanExpr::Var(bit_col(j))),
-        );
-    }
-    constraints.push(gate(acc));
-
-    // --- the transition triple pinned to the PIs (first row). ---
-    for (pi_index, col) in [OLD_COL, DELTA_COL, NEW_COL].into_iter().enumerate() {
-        constraints.push(VmConstraint2::Base(VmConstraint::PiBinding {
-            row: VmRow::First,
-            col,
-            pi_index,
-        }));
-    }
-
-    EffectVmDescriptor2 {
-        name: "field-delta-result-range".into(),
-        trace_width: WIDTH,
-        public_input_count: PI_COUNT,
-        tables: vec![],
-        constraints,
-        hash_sites: vec![],
-        ranges: vec![],
-    }
+    parse_vm_descriptor2(FIELD_DELTA_RANGE_DESCRIPTOR_JSON)
+        .expect("Lean-emitted FieldDelta range descriptor must parse")
 }
 
 /// One `FieldDelta` transition case: the pre-state slot `old`, the (possibly

@@ -53,15 +53,10 @@
 //! follow-up), not a change here.
 
 use crate::descriptor_ir2::{
-    CHIP_OUT_LANES, CHIP_RATE, CHIP_TUPLE_LEN, EffectVmDescriptor2, LookupSpec, TID_P2,
-    VmConstraint2, WindowExpr, WindowGateSpec, chip_absorb_all_lanes,
+    CHIP_OUT_LANES, EffectVmDescriptor2, chip_absorb_all_lanes, parse_vm_descriptor2,
 };
 use crate::field::BabyBear;
-use crate::lean_descriptor_air::{LeanExpr, VmConstraint, VmRow};
-use crate::membership_descriptor_4ary::{
-    CUR, MEMBERSHIP_4ARY_WIDTH, PAR, membership_witness_4ary, parent_chip_lookup,
-    per_row_gate_bodies,
-};
+use crate::membership_descriptor_4ary::{CUR, MEMBERSHIP_4ARY_WIDTH, membership_witness_4ary};
 
 // ---- Column layout (mirror `BlindedMembershipEmit.lean` §1). ----
 /// Level-0 path element = the member `leaf_hash` (HIDDEN; also the blinding tooth's input 0).
@@ -261,32 +256,6 @@ pub const BLINDED_4ARY_PI_COUNT: usize = 2;
 /// [`crate::membership_descriptor_4ary::MEMBERSHIP_4ARY_NAME_PREFIX`].
 pub const BLINDED_4ARY_NAME_PREFIX: &str = "dregg-blinded-membership-4ary-general-depth";
 
-/// The arity-2 blinding tooth: a `TID_P2` chip lookup absorbing `[cur, blinding]`, binding out0 to
-/// `BLINDED_LEAF_COL_4ARY`, with the 7 permutation lanes witnessed. Built identically to
-/// [`crate::membership_descriptor_4ary`]'s `parent_chip_lookup` but with arity tag `2` and the two
-/// blinding inputs. The row-0 `cur` is the hidden `leaf_hash`, so the published `blinded_leaf` commits
-/// to exactly the member the 4-ary path proves under `root`.
-fn blind_chip_lookup() -> VmConstraint2 {
-    let mut tuple: Vec<LeanExpr> = Vec::with_capacity(CHIP_TUPLE_LEN);
-    tuple.push(LeanExpr::Const(2)); // arity tag
-    let inputs = [CUR, BLINDING_4ARY];
-    for i in 0..CHIP_RATE {
-        tuple.push(match inputs.get(i) {
-            Some(&c) => LeanExpr::Var(c),
-            None => LeanExpr::Const(0),
-        });
-    }
-    tuple.push(LeanExpr::Var(BLINDED_LEAF_COL_4ARY)); // out0 = the blinded leaf
-    for j in 0..(CHIP_OUT_LANES - 1) {
-        tuple.push(LeanExpr::Var(BLIND_LANE_BASE_4ARY + j));
-    }
-    debug_assert_eq!(tuple.len(), CHIP_TUPLE_LEN);
-    VmConstraint2::Lookup(LookupSpec {
-        table: TID_P2,
-        tuple,
-    })
-}
-
 /// **`blinded_membership_descriptor_of_depth_4ary`** — the depth-GENERAL, 4-ary, general-position
 /// blinded ring-membership descriptor. The constraint block is depth-uniform (the depth lives in the
 /// trace height + the `name`); a depth-`d` witness (see [`blinded_membership_witness_4ary`]) hashes
@@ -300,57 +269,19 @@ fn blind_chip_lookup() -> VmConstraint2 {
 /// `metatheory/Dregg2/Circuit/Emit/BlindedMembershipEmit.lean` (cross-checked in the tests against the
 /// byte-pinned goldens).
 pub fn blinded_membership_descriptor_of_depth_4ary(depth: usize) -> EffectVmDescriptor2 {
-    let mut constraints: Vec<VmConstraint2> = Vec::new();
-
-    // -- per-row (transition-domain) block: bit-binary ×2, child-selection ×4 (REUSED). --
-    for body in per_row_gate_bodies() {
-        constraints.push(VmConstraint2::Base(VmConstraint::Gate(body)));
-    }
-    // -- the arity-4 parent chip (REUSED) + the arity-2 blinding tooth. --
-    constraints.push(parent_chip_lookup());
-    constraints.push(blind_chip_lookup());
-
-    // -- cross-row continuity: next.cur == this.par (unrolls the level block across rows). --
-    constraints.push(VmConstraint2::WindowGate(WindowGateSpec {
-        body: WindowExpr::Add(
-            Box::new(WindowExpr::Nxt(CUR)),
-            Box::new(WindowExpr::Mul(
-                Box::new(WindowExpr::Const(-1)),
-                Box::new(WindowExpr::Loc(PAR)),
-            )),
-        ),
-        on_transition: true,
-    }));
-
-    // -- boundary pins: the blinded leaf at row 0 (leaf is HIDDEN — no leaf pin), root at the last row. --
-    constraints.push(VmConstraint2::Base(VmConstraint::PiBinding {
-        row: VmRow::First,
-        col: BLINDED_LEAF_COL_4ARY,
-        pi_index: PI_BLINDED_LEAF_4ARY,
-    }));
-    constraints.push(VmConstraint2::Base(VmConstraint::PiBinding {
-        row: VmRow::Last,
-        col: PAR,
-        pi_index: PI_ROOT_4ARY,
-    }));
-
-    // -- last-row re-lowering of the per-row bit-binary + child-selection bodies (REUSED). --
-    for body in per_row_gate_bodies() {
-        constraints.push(VmConstraint2::Base(VmConstraint::Boundary {
-            row: VmRow::Last,
-            body,
-        }));
-    }
-
-    EffectVmDescriptor2 {
-        name: format!("{BLINDED_4ARY_NAME_PREFIX}{depth}"),
-        trace_width: BLINDED_4ARY_WIDTH,
-        public_input_count: BLINDED_4ARY_PI_COUNT,
-        tables: vec![],
-        constraints,
-        hash_sites: vec![],
-        ranges: vec![],
-    }
+    assert!(
+        depth >= 2 && depth.is_power_of_two(),
+        "blinded-membership depth must be a power of two ≥ 2"
+    );
+    // `BlindedMembershipEmit.lean` proves the constraint block is depth-uniform:
+    // only this dispatch label differs. Rust may select a label, but never authors
+    // or mutates a constraint.
+    let mut desc = parse_vm_descriptor2(include_str!(
+        "../descriptors/by-name/blinded-membership-4ary-depth2.json"
+    ))
+    .expect("Lean-emitted blinded-membership descriptor must parse");
+    desc.name = format!("{BLINDED_4ARY_NAME_PREFIX}{depth}");
+    desc
 }
 
 /// Build the depth-GENERAL, 4-ary, general-position **blinded** ring-membership base trace + public

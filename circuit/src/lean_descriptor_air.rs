@@ -21,7 +21,7 @@
 //!
 //! ## How this differs from the hand-coded AIRs
 //!
-//! `P3MerklePoseidon2Air` (in `plonky3_prover.rs`) hard-codes its Poseidon2 round
+//! The retired Rust-authored Merkle AIR hard-coded its Poseidon2 round
 //! constraints in Rust. `LeanDescriptorAir` instead WALKS the `LeanExpr` AST at
 //! `eval`-time, building the same `AB::Expr` polynomial the descriptor names. The
 //! generic AIR therefore enforces *whatever* constraints Lean emitted — the same
@@ -116,7 +116,7 @@ impl LeanExpr {
 
     /// Evaluate this expression as an `AB::Expr` polynomial over the row columns.
     /// `Var(i)` → `local[i]`, `Const(c)` → field constant, `Add`/`Mul` → field ops.
-    /// Mirrors how `P3MerklePoseidon2Air::eval` reads `local[..]` and combines.
+    /// Mirrors how an ordinary AIR evaluator reads `local[..]` and combines.
     pub(crate) fn eval_expr<AB>(&self, local: &[AB::Var]) -> AB::Expr
     where
         AB: AirBuilder,
@@ -641,7 +641,7 @@ where
 ///
 /// `width()` is the descriptor's `trace_width`; `eval` walks each constraint's
 /// `lhs`/`rhs` ASTs into `AB::Expr` polynomials over the current row and asserts
-/// `lhs - rhs == 0`. This is the data-driven analogue of `P3MerklePoseidon2Air`:
+/// `lhs - rhs == 0`. This is the data-driven analogue of the retired Rust Merkle AIR:
 /// same column-access pattern, but the constraint set comes from Lean, not Rust.
 pub struct LeanDescriptorAir {
     /// The descriptor whose constraints this AIR enforces.

@@ -148,7 +148,7 @@ impl std::error::Error for DslP3Error {}
 /// the single-permutation `hash_fact` sponge (predicate + ≤4 terms, leaf
 /// domain separation); it consumes one Poseidon2 aux block exactly like
 /// `Hash2to1`/`Hash4to1`. `MerkleHash` (position-indexed) routes through
-/// `P3MerklePoseidon2Air`, and `Lookup` requires the LogUp bus
+/// the Lean-emitted IR2 membership descriptor, and `Lookup` requires the LogUp bus
 /// (`lean_lookup_air`); both are surfaced as errors rather than silently
 /// dropped.
 fn check_algebraic(c: &ConstraintExpr, index: usize) -> Result<(), DslP3Error> {
@@ -171,7 +171,7 @@ fn check_algebraic(c: &ConstraintExpr, index: usize) -> Result<(), DslP3Error> {
         | ConstraintExpr::Squared { inner } => check_algebraic(inner, index),
         ConstraintExpr::MerkleHash { .. } => Err(DslP3Error::NonAlgebraicConstraint {
             index,
-            form: "MerkleHash (use P3MerklePoseidon2Air for position-indexed Merkle hashing)",
+            form: "MerkleHash (use the Lean-emitted IR2 descriptor for position-indexed Merkle hashing)",
         }),
         ConstraintExpr::Lookup { .. } => Err(DslP3Error::NonAlgebraicConstraint {
             index,
@@ -897,7 +897,7 @@ fn to_matrix(trace: &[Vec<BabyBear>]) -> RowMajorMatrix<P3BabyBear> {
 //
 // The clean weld: `DslP3Air` already implements `p3_air::Air<AB>` with exactly
 // the bounds (`AB: AirBuilder, AB::F: PrimeField32`) that `crate::stark_zk`'s
-// `P3MerklePoseidon2Air` does, and `prove_zk` runs THAT air through
+// retired Merkle AIR did, and `prove_zk` runs THAT air through
 // `p3_uni_stark::{prove,verify}` over the hiding config. So a `DslP3Air` rides
 // the identical hiding uni-STARK entry points — no AIR change, just the config.
 //
@@ -1314,7 +1314,7 @@ mod tests {
     }
 
     /// `MerkleHash` (position-indexed) is not handled here — it routes to
-    /// `P3MerklePoseidon2Air`. Confirm it is surfaced, not silently dropped.
+    /// the Lean-emitted IR2 membership descriptor. Confirm it is surfaced, not silently dropped.
     #[test]
     fn merklehash_surfaced_not_silently_dropped() {
         let desc = CircuitDescriptor {

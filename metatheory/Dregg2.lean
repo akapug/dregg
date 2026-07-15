@@ -1035,6 +1035,7 @@ import Dregg2.Circuit.Emit.EffectVmEmitSetPermissionsFullState
 import Dregg2.Circuit.Emit.EffectVmEmitSetVKFullState
 import Dregg2.Circuit.Emit.FieldDeltaRangeEmit -- LAW #1: FieldDelta range algebra + whole-descriptor range soundness emitted from Lean, byte-pinned
 import Dregg2.Circuit.Emit.MerkleMembership4aryRefine -- LAW #1: deployed membership algebra emitted from Lean; whole-descriptor SAT ⇒ positional Poseidon2 fold, byte-pinned artifact
+import Dregg2.Circuit.Emit.Poseidon2HashRefine -- LAW #1: standalone Poseidon2 hash descriptor emitted from Lean; SAT ⇒ genuine chip hash, concrete non-vacuity
 -- Dregg2.Circuit.Emit.EmitAllJson / EmitGraduate EXCLUDED: pure `def main` JSON-emitter
 -- executables (zero theorems / zero hygiene pins); their top-level `main` collides with
 -- Dregg2.Apps.AgentOrchestration.main already in root. Nothing to enmesh.

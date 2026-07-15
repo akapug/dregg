@@ -782,7 +782,7 @@ fn build_full_turn_descriptor(components: &TurnProofComponents) -> ComposedCircu
 
     // Membership (c-list Merkle proof).
     if components.has_membership {
-        circuits.push(dregg_circuit::dsl::descriptors::merkle_poseidon2_descriptor());
+        circuits.push(membership_circuit_descriptor());
     }
 
     // Non-revocation (sorted tree non-membership).
@@ -819,6 +819,23 @@ fn effect_vm_circuit_descriptor() -> CircuitDescriptor {
         constraints: vec![], // Constraints live in the rotated IR-v2 batch AIRs
         boundaries: vec![],  // Boundaries live in the rotated IR-v2 batch AIRs
         public_input_count: effect_vm::ROT_PI_COUNT,
+        lookup_tables: vec![],
+    }
+}
+
+/// Structural composition identity for the Lean-emitted membership IR2
+/// descriptor. Algebra lives exclusively in the emitted artifact interpreted
+/// by `descriptor_ir2`; this legacy composition type carries no constraints.
+fn membership_circuit_descriptor() -> CircuitDescriptor {
+    let emitted = dregg_circuit::membership_descriptor_4ary::membership_descriptor_of_depth_4ary(2);
+    CircuitDescriptor {
+        name: emitted.name,
+        trace_width: emitted.trace_width,
+        max_degree: 3,
+        columns: vec![],
+        constraints: vec![],
+        boundaries: vec![],
+        public_input_count: emitted.public_input_count,
         lookup_tables: vec![],
     }
 }
@@ -4579,11 +4596,10 @@ pub fn prove_full_turn(witness: &FullTurnWitness) -> Result<FullTurnProof, SdkEr
     // 3. Membership proof (c-list Merkle)
     // ========================================================================
     if let Some(mem_witness) = &witness.membership {
-        // AUDITED PATH: the c-list Merkle membership is proven through the real
-        // Plonky3 verifier (`p3-batch-stark`) via `prove_membership_p3`, which
-        // reuses the constraint-complete `P3MerklePoseidon2Air` (real in-circuit
-        // Poseidon2, position validity, hash-chain continuity, `[leaf, root]`
-        // boundary) — NOT the bespoke `stark`. A forged root is rejected.
+        // LAW #1 PATH: the c-list membership algebra is the byte-pinned IR2
+        // artifact emitted by `MerkleMembership4aryEmit.lean`. Rust supplies
+        // witness rows and the assured interpreter proves it; no Rust AIR is
+        // instantiated. A forged leaf/root/path is rejected.
         let mem_proof = prove_membership_p3(
             mem_witness.leaf_hash,
             &mem_witness.siblings,
@@ -4608,9 +4624,11 @@ pub fn prove_full_turn(witness: &FullTurnWitness) -> Result<FullTurnProof, SdkEr
             label: "membership".into(),
             proof_bytes: mem_proof_bytes,
             sub_public_inputs: mem_pi,
-            vk_hash: compute_vk_hash_bytes(
-                &dregg_circuit::dsl::descriptors::merkle_poseidon2_descriptor(),
-            ),
+            vk_hash: *blake3::hash(
+                dregg_circuit::membership_descriptor_4ary::MEMBERSHIP_4ARY_DESCRIPTOR_JSON
+                    .as_bytes(),
+            )
+            .as_bytes(),
         });
     }
 

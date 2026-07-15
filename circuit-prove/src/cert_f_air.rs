@@ -23,7 +23,10 @@
 //! ([`CertF::check`](../../../fhegg-solver/src/cert.rs) / `Market.Certified`).
 //! [`cert_f_descriptor`] lowers exactly those rows to an
 //! [`EffectVmDescriptor2`] over the witness columns `(f, π, s)`; the PUBLIC program
-//! `(A, w, c, ε)` rides as descriptor constants. [`prove_cert_f`] proves the AIR in
+//! `(A, w, c, ε)` rides as descriptor constants. Because those constants are
+//! algebra, each public program must be emitted and proved in Lean; Rust refuses
+//! an unregistered program rather than specializing constraints at runtime.
+//! [`prove_cert_f`] proves the AIR in
 //! the production IR-v2 STARK ([`prove_vm_descriptor2`], BabyBear + FRI); the
 //! witness `(f, π, s)` — the private flows/allocations — lives ONLY in the trace
 //! (hidden under the hiding PCS), and the only public value exposed is the cleared
@@ -64,11 +67,10 @@
 
 use dregg_circuit::descriptor_ir2::DreggStarkConfig;
 use dregg_circuit::descriptor_ir2::{
-    EffectVmDescriptor2, Ir2BatchProof, MemBoundaryWitness, VmConstraint2, prove_vm_descriptor2,
-    verify_vm_descriptor2,
+    EffectVmDescriptor2, Ir2BatchProof, MemBoundaryWitness, parse_vm_descriptor2,
+    prove_vm_descriptor2, verify_vm_descriptor2,
 };
 use dregg_circuit::field::{BABYBEAR_P, BabyBear};
-use dregg_circuit::lean_descriptor_air::{LeanExpr, VmConstraint, VmRow};
 
 /// The in-AIR range-gadget bit-width. A range target is bit-decomposed into this
 /// many booleans that recompose to it, forcing it into `[0, 2^VALUE_BITS)`. `28`
@@ -282,16 +284,6 @@ impl CertFWitness {
     }
 }
 
-/// `x − y` as a `LeanExpr`.
-fn sub(x: LeanExpr, y: LeanExpr) -> LeanExpr {
-    LeanExpr::add(x, LeanExpr::mul(LeanExpr::Const(-1), y))
-}
-
-/// A pure per-row vanishing gate `body == 0`.
-fn gate(body: LeanExpr) -> VmConstraint2 {
-    VmConstraint2::Base(VmConstraint::Gate(body))
-}
-
 /// Lift a signed integer to its canonical BabyBear representative.
 fn fe(x: i64) -> BabyBear {
     let p = BABYBEAR_P as i64;
@@ -299,137 +291,37 @@ fn fe(x: i64) -> BabyBear {
     BabyBear::new(r as u32)
 }
 
-/// Build the range gadget for one target column: `VALUE_BITS` boolean gates plus one
-/// recompose gate `col − Σⱼ 2ʲ·bitⱼ == 0`. Proves `col ∈ [0, 2^VALUE_BITS)`.
-fn range_gadget(cs: &mut Vec<VmConstraint2>, col: usize, bit_col: impl Fn(usize) -> usize) {
-    for j in 0..VALUE_BITS {
-        let b = LeanExpr::Var(bit_col(j));
-        cs.push(gate(LeanExpr::mul(b.clone(), sub(b, LeanExpr::Const(1)))));
-    }
-    let mut acc = LeanExpr::Var(col);
-    for j in 0..VALUE_BITS {
-        acc = sub(
-            acc,
-            LeanExpr::mul(LeanExpr::Const(1i64 << j), LeanExpr::Var(bit_col(j))),
-        );
-    }
-    cs.push(gate(acc));
+/// Exact artifact emitted from `Market.CertFDescriptor.certFDescriptor` and
+/// byte-pinned in Lean. The registered public program is the proved unit ring-3.
+pub const CERT_F_RING3_DESCRIPTOR_JSON: &str =
+    include_str!("../../circuit/descriptors/dregg-cert-f-ir2.json");
+
+fn is_registered_ring3_program(cert: &CertFWitness) -> bool {
+    cert.n_nodes == 3
+        && cert.edges == [(0, 1), (1, 2), (2, 0)]
+        && cert.w == [1, 1, 1]
+        && cert.c == [1, 1, 1]
+        && cert.epsilon == 0
 }
 
-/// **Lower the Cert-F check to a dregg IR-v2 AIR** over the witness `(f, π, s)`. The
-/// `n + 4m + 1` Cert-F rows become arithmetic Gates + range gadgets; the cleared
-/// volume `wᵀf` is exposed as the one public input. `w, c, ε` ride as constants.
+/// Resolve a Cert-F public program to a proved Lean-emitted artifact. New
+/// `(A,w,c,epsilon)` programs must first be added to `CertFDescriptor.lean`,
+/// proved, emitted, byte-pinned, and registered here.
+pub fn try_cert_f_descriptor(cert: &CertFWitness) -> Result<EffectVmDescriptor2, String> {
+    if !is_registered_ring3_program(cert) {
+        return Err(
+            "Cert-F public program is not registered as a proved Lean-emitted descriptor; \
+             emit and prove CertFDescriptorOf(program) before proving it"
+                .into(),
+        );
+    }
+    parse_vm_descriptor2(CERT_F_RING3_DESCRIPTOR_JSON)
+        .map_err(|e| format!("Lean-emitted Cert-F descriptor failed to parse: {e}"))
+}
+
+/// Infallible compatibility wrapper for the registered ring-3 program.
 pub fn cert_f_descriptor(cert: &CertFWitness) -> EffectVmDescriptor2 {
-    let m = cert.m();
-
-    // No-wrap soundness for conservation: the max node degree times 2^VALUE_BITS must
-    // stay below p, so a node's signed flow sum is canonical and the field gate == 0
-    // is the integer conservation.
-    let mut deg = vec![0u64; cert.n_nodes];
-    for &(t, h) in &cert.edges {
-        deg[t as usize] += 1;
-        deg[h as usize] += 1;
-    }
-    let max_deg = deg.iter().copied().max().unwrap_or(0);
-    assert!(
-        max_deg * (1u64 << VALUE_BITS) < BABYBEAR_P as u64,
-        "conservation no-wrap broken: node degree {max_deg} · 2^{VALUE_BITS} ≥ p — \
-         lower VALUE_BITS or split high-degree nodes"
-    );
-
-    let mut cs: Vec<VmConstraint2> = Vec::new();
-
-    // 1. conservation: one Gate per node, Σ_{head=i} f_e − Σ_{tail=i} f_e == 0.
-    for i in 0..cert.n_nodes {
-        let mut body = LeanExpr::Const(0);
-        for (e, &(t, h)) in cert.edges.iter().enumerate() {
-            if h as usize == i {
-                body = LeanExpr::add(body, LeanExpr::Var(cert.f_col(e)));
-            }
-            if t as usize == i {
-                body = sub(body, LeanExpr::Var(cert.f_col(e)));
-            }
-        }
-        cs.push(gate(body));
-    }
-
-    // 2. box lower f_e ≥ 0: range gadget on f_e (target index e).
-    for e in 0..m {
-        range_gadget(&mut cs, cert.f_col(e), |j| cert.range_bit_col(e, j));
-    }
-
-    // 3. box upper c_e − f_e ≥ 0: u_e == c_e − f_e (Gate) + range gadget on u_e.
-    for e in 0..m {
-        // u_e − c_e + f_e == 0.
-        cs.push(gate(LeanExpr::add(
-            sub(LeanExpr::Var(cert.u_col(e)), LeanExpr::Const(cert.c[e])),
-            LeanExpr::Var(cert.f_col(e)),
-        )));
-        range_gadget(&mut cs, cert.u_col(e), |j| cert.range_bit_col(m + e, j));
-    }
-
-    // 4. slack sign s_e ≥ 0: range gadget on s_e.
-    for e in 0..m {
-        range_gadget(&mut cs, cert.s_col(e), |j| cert.range_bit_col(2 * m + e, j));
-    }
-
-    // 5. dual feas π_head − π_tail + s_e − w_e ≥ 0: d_e == that (Gate) + range gadget.
-    for (e, &(t, h)) in cert.edges.iter().enumerate() {
-        // d_e − (π_h − π_t + s_e − w_e) == 0.
-        let dual_expr = sub(
-            LeanExpr::add(
-                sub(
-                    LeanExpr::Var(cert.pi_col(h as usize)),
-                    LeanExpr::Var(cert.pi_col(t as usize)),
-                ),
-                LeanExpr::Var(cert.s_col(e)),
-            ),
-            LeanExpr::Const(cert.w[e]),
-        );
-        cs.push(gate(sub(LeanExpr::Var(cert.d_col(e)), dual_expr)));
-        range_gadget(&mut cs, cert.d_col(e), |j| cert.range_bit_col(3 * m + e, j));
-    }
-
-    // 6. gap cᵀs − wᵀf ≤ ε: g == ε − (cᵀs − wᵀf) (Gate) + range gadget on g.
-    // g − ε + Σ c_e s_e − Σ w_e f_e == 0.
-    let mut gap_body = sub(LeanExpr::Var(cert.g_col()), LeanExpr::Const(cert.epsilon));
-    for e in 0..m {
-        gap_body = LeanExpr::add(
-            gap_body,
-            LeanExpr::mul(LeanExpr::Const(cert.c[e]), LeanExpr::Var(cert.s_col(e))),
-        );
-        gap_body = sub(
-            gap_body,
-            LeanExpr::mul(LeanExpr::Const(cert.w[e]), LeanExpr::Var(cert.f_col(e))),
-        );
-    }
-    cs.push(gate(gap_body));
-    range_gadget(&mut cs, cert.g_col(), |j| cert.range_bit_col(4 * m, j));
-
-    // 7. objective obj == wᵀf (Gate) + expose it as the public clearing volume.
-    let mut obj_body = LeanExpr::Var(cert.obj_col());
-    for e in 0..m {
-        obj_body = sub(
-            obj_body,
-            LeanExpr::mul(LeanExpr::Const(cert.w[e]), LeanExpr::Var(cert.f_col(e))),
-        );
-    }
-    cs.push(gate(obj_body));
-    cs.push(VmConstraint2::Base(VmConstraint::PiBinding {
-        row: VmRow::First,
-        col: cert.obj_col(),
-        pi_index: 0,
-    }));
-
-    EffectVmDescriptor2 {
-        name: "cert-f".into(),
-        trace_width: cert.width(),
-        public_input_count: 1,
-        tables: vec![],
-        constraints: cs,
-        hash_sites: vec![],
-        ranges: vec![],
-    }
+    try_cert_f_descriptor(cert).expect("Cert-F descriptor program must be Lean-registered")
 }
 
 /// **Prove a Cert-F certificate in a real dregg STARK.** Lowers the certificate to
@@ -449,7 +341,7 @@ pub fn prove_cert_f(
     ),
     String,
 > {
-    let desc = cert_f_descriptor(cert);
+    let desc = try_cert_f_descriptor(cert)?;
     let pis = cert.public_inputs();
     let base_trace = cert.base_trace();
     let proof = prove_vm_descriptor2(
@@ -627,9 +519,7 @@ mod tests {
             .expect("the Lean-authored Cert-F descriptor JSON must parse");
         assert_eq!(
             rust, lean,
-            "SOURCE-OF-TRUTH DRIFT: the hand-built Rust Cert-F descriptor is NOT byte-identical to the \
-             Lean-authored `certFDescriptorOf ring3Prog` (regenerate the golden with \
-             `emitVmJson2 certFDescriptor` if the Lean descriptor changed)"
+            "the runtime descriptor must be exactly the Lean-emitted `certFDescriptorOf ring3Prog`"
         );
     }
 
@@ -671,19 +561,13 @@ mod tests {
         );
     }
 
-    /// AIR ACCEPTS a larger cycle certificate (n=6, cap=1000) — the emission scales.
+    /// A new public program is refused until it has its own proved Lean artifact.
     #[test]
-    fn air_accepts_cycle6() {
+    fn unregistered_cycle6_is_refused() {
         let cert = cycle_cert(6, 1000);
         assert!(cert.check().valid);
-        let desc = cert_f_descriptor(&cert);
-        let pis: Vec<i64> = cert
-            .public_inputs()
-            .iter()
-            .map(|b| b.as_u32() as i64)
-            .collect();
-        assert!(ir2_eval_accepts_i64(&desc, &i64_trace(&cert), &pis));
-        assert_eq!(cert.objective(), 6000);
+        let err = try_cert_f_descriptor(&cert).expect_err("cycle-6 is not Lean-registered");
+        assert!(err.contains("not registered"));
     }
 
     /// NEGATIVE (conservation): a non-conserving f (leak on one edge) is REJECTED by the
@@ -729,11 +613,8 @@ mod tests {
     /// negative — the range gadget on u_e rejects it.
     #[test]
     fn air_rejects_over_capacity() {
-        let mut cert = cycle_cert(4, 5);
-        cert.f[0] = 6; // > cap 5 ⇒ u_0 = c_0 − f_0 = −1 < 0
-        cert.f[1] = 6;
-        cert.f[2] = 6;
-        cert.f[3] = 6; // keep conservation (all equal) so ONLY the box bites
+        let mut cert = ring3_cert();
+        cert.f = vec![2, 2, 2]; // keep conservation; every f exceeds unit capacity
         assert!(cert.check().conserves);
         assert!(!cert.check().box_ok);
         let desc = cert_f_descriptor(&cert);
@@ -765,15 +646,16 @@ mod tests {
         verify_cert_f(&desc, &proof, &pis).expect("the minted Cert-F STARK proof must verify");
     }
 
-    /// POSITIVE (scales): a larger cycle certificate (n=6, cap=1000) proves + verifies —
-    /// the real STARK ingests the certificate, not the T search iterations.
+    /// The proving surface also fails closed for an unregistered public program.
     #[test]
-    fn stark_proves_and_verifies_cycle6() {
+    fn stark_refuses_unregistered_cycle6() {
         let cert = cycle_cert(6, 1000);
         assert!(cert.check().valid);
-        let (desc, proof, pis) = prove_cert_f(&cert).expect("valid cycle-6 must prove");
-        assert_eq!(pis[0].as_u32(), 6000); // wᵀf = 6 * 1000
-        verify_cert_f(&desc, &proof, &pis).expect("cycle-6 proof must verify");
+        let err = match prove_cert_f(&cert) {
+            Err(e) => e,
+            Ok(_) => panic!("unregistered cycle-6 must fail closed"),
+        };
+        assert!(err.contains("not registered"));
     }
 
     /// NEGATIVE (STARK teeth): a non-conserving certificate has NO satisfying trace —

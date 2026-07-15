@@ -39,11 +39,9 @@
 //! root-preimage (the same forge the binary/adjacency twins close).
 
 use crate::descriptor_ir2::{
-    CHIP_OUT_LANES, CHIP_RATE, CHIP_TUPLE_LEN, EffectVmDescriptor2, LookupSpec, TID_P2,
-    VmConstraint2, WindowExpr, WindowGateSpec, chip_absorb_all_lanes,
+    CHIP_OUT_LANES, EffectVmDescriptor2, chip_absorb_all_lanes, parse_vm_descriptor2,
 };
 use crate::field::BabyBear;
-use crate::lean_descriptor_air::{LeanExpr, VmConstraint, VmRow};
 
 // ---- Column layout (one 4-ary Merkle level per row). ----
 /// Running hash (row 0 = leaf).
@@ -80,195 +78,24 @@ pub const PI_ROOT: usize = 1;
 /// Public-input count.
 pub const MEMBERSHIP_4ARY_PI_COUNT: usize = 2;
 
-// ---- Expression builders. ----
-fn v(i: usize) -> LeanExpr {
-    LeanExpr::Var(i)
-}
-fn k(c: i64) -> LeanExpr {
-    LeanExpr::Const(c)
-}
-fn add(a: LeanExpr, b: LeanExpr) -> LeanExpr {
-    LeanExpr::add(a, b)
-}
-fn mul(a: LeanExpr, b: LeanExpr) -> LeanExpr {
-    LeanExpr::mul(a, b)
-}
-fn neg(e: LeanExpr) -> LeanExpr {
-    mul(k(-1), e)
-}
-/// `a - b`.
-fn sub(a: LeanExpr, b: LeanExpr) -> LeanExpr {
-    add(a, neg(b))
-}
-/// `1 - e`.
-fn one_minus(e: LeanExpr) -> LeanExpr {
-    add(k(1), neg(e))
-}
-
-/// `bit*(bit-1) = bit*bit - bit` — the `bit ∈ {0,1}` gate body.
-fn bit_binary_body(bit: usize) -> LeanExpr {
-    add(mul(v(bit), v(bit)), neg(v(bit)))
-}
-
-// The four Lagrange position indicators, as bit products (each degree 2, integer coefficients):
-//   L0 = (1-b0)(1-b1)   [position 0]
-//   L1 = b0 (1-b1)      [position 1]
-//   L2 = (1-b0) b1      [position 2]
-//   L3 = b0 b1          [position 3]
-fn ind_l0() -> LeanExpr {
-    mul(one_minus(v(B0)), one_minus(v(B1)))
-}
-fn ind_l1() -> LeanExpr {
-    mul(v(B0), one_minus(v(B1)))
-}
-fn ind_l2() -> LeanExpr {
-    mul(one_minus(v(B0)), v(B1))
-}
-fn ind_l3() -> LeanExpr {
-    mul(v(B0), v(B1))
-}
-
-// The four child-selection gate bodies `c_j - selection_j == 0`. `selection_j` is EXACTLY the
-// arrangement production computes (`poseidon2_air.rs`, `child0..child3`), rewritten over bit
-// indicators so it carries integer coefficients:
-//   c0 = cur·L0 + sib0·(1-L0)
-//   c1 = sib0·L0 + cur·L1 + sib1·(L2+L3)
-//   c2 = sib1·(L0+L1) + cur·L2 + sib2·L3
-//   c3 = sib2·(1-L3) + cur·L3
-fn child0_body() -> LeanExpr {
-    // c0 - sib0 - L0·(cur - sib0)
-    sub(sub(v(C0), v(SIB0)), mul(ind_l0(), sub(v(CUR), v(SIB0))))
-}
-fn child1_body() -> LeanExpr {
-    // c1 - (sib0·L0 + cur·L1 + sib1·(L2+L3))
-    sub(
-        v(C1),
-        add(
-            add(mul(v(SIB0), ind_l0()), mul(v(CUR), ind_l1())),
-            mul(v(SIB1), add(ind_l2(), ind_l3())),
-        ),
-    )
-}
-fn child2_body() -> LeanExpr {
-    // c2 - (sib1·(L0+L1) + cur·L2 + sib2·L3)
-    sub(
-        v(C2),
-        add(
-            add(mul(v(SIB1), add(ind_l0(), ind_l1())), mul(v(CUR), ind_l2())),
-            mul(v(SIB2), ind_l3()),
-        ),
-    )
-}
-fn child3_body() -> LeanExpr {
-    // c3 - sib2 - L3·(cur - sib2)
-    sub(sub(v(C3), v(SIB2)), mul(ind_l3(), sub(v(CUR), v(SIB2))))
-}
-
-/// The per-row constraint bodies re-lowered on the last row (bit-binary ×2 + child-selection ×4).
-/// `pub(crate)` so the blinded ring-membership twin ([`crate::blinded_membership_witness`]) reuses the
-/// IDENTICAL 4-ary path gates (same column indices `CUR..PAR`), guaranteeing its path constraints are
-/// byte-for-byte the deployed membership path plus the blinding tooth.
-pub(crate) fn per_row_gate_bodies() -> Vec<LeanExpr> {
-    vec![
-        bit_binary_body(B0),
-        bit_binary_body(B1),
-        child0_body(),
-        child1_body(),
-        child2_body(),
-        child3_body(),
-    ]
-}
-
-/// The single arity-4 `TID_P2` chip lookup: `hash_4_to_1(c0,c1,c2,c3)` → `par` (out0), lanes 1..7
-/// witnessed. Built EXACTLY as the depth-2 4-ary golden's `chipLookupTuple` (arity tag 4,
-/// `CHIP_RATE` zero-padded inputs, then out0 :: 7 lane vars).
-/// `pub(crate)` so the blinded twin reuses the identical parent-hash lookup.
-pub(crate) fn parent_chip_lookup() -> VmConstraint2 {
-    let mut tuple: Vec<LeanExpr> = Vec::with_capacity(CHIP_TUPLE_LEN);
-    tuple.push(k(4)); // arity tag
-    let inputs = [C0, C1, C2, C3];
-    for i in 0..CHIP_RATE {
-        tuple.push(match inputs.get(i) {
-            Some(&c) => v(c),
-            None => k(0),
-        });
-    }
-    tuple.push(v(PAR)); // out0 = the parent digest
-    for j in 0..(CHIP_OUT_LANES - 1) {
-        tuple.push(v(LANE_BASE + j));
-    }
-    debug_assert_eq!(tuple.len(), CHIP_TUPLE_LEN);
-    VmConstraint2::Lookup(LookupSpec {
-        table: TID_P2,
-        tuple,
-    })
-}
-
-/// The prefix of the depth-GENERAL **4-ary** Merkle-membership descriptor name
-/// ([`membership_descriptor_of_depth_4ary`] pins `depth{N}` after it).
+/// Legacy dispatch prefix retained as a wire-level alias. Every supported
+/// depth resolves to the same Lean-emitted, depth-uniform descriptor.
 pub const MEMBERSHIP_4ARY_NAME_PREFIX: &str = "merkle-membership::poseidon2-4ary-general-depth";
 
-/// **`membership_descriptor_of_depth_4ary`** — the depth-GENERAL **4-ary** Poseidon2
-/// Merkle-membership descriptor. One 4-ary Merkle level per trace row, tied by a `WindowGate`
-/// continuity gate; the constraint block is depth-uniform (the depth lives in the trace height),
-/// and the `depth` is pinned into the `name` so distinct-depth families carry distinct VKs. A
-/// depth-`d` witness (see [`membership_witness_4ary`]) genuinely hashes `d` `hash_4_to_1` levels
-/// whose root is byte-equal to the deployed set root.
-///
-/// `depth` must be a power of two ≥ 2 (the trace-height requirement, mirrored by
-/// [`membership_witness_4ary`]).
+/// Exact bytes emitted and byte-pinned by
+/// `Dregg2.Circuit.Emit.MerkleMembership4aryEmit`.
+pub const MEMBERSHIP_4ARY_DESCRIPTOR_JSON: &str =
+    include_str!("../descriptors/by-name/merkle-membership-4ary-general.json");
+
+/// Parse the Lean-authored, depth-uniform membership descriptor.  The depth is
+/// represented by the trace height, so Rust never rewrites the emitted artifact.
 pub fn membership_descriptor_of_depth_4ary(depth: usize) -> EffectVmDescriptor2 {
-    let mut constraints: Vec<VmConstraint2> = Vec::new();
-
-    // -- per-row (transition-domain) block: bit-binary ×2, child-selection ×4, the parent chip. --
-    for body in per_row_gate_bodies() {
-        constraints.push(VmConstraint2::Base(VmConstraint::Gate(body)));
-    }
-    constraints.push(parent_chip_lookup());
-
-    // -- cross-row continuity: next.cur == this.par (unrolls the level block across rows). --
-    constraints.push(VmConstraint2::WindowGate(WindowGateSpec {
-        body: WindowExpr::Add(
-            Box::new(WindowExpr::Nxt(CUR)),
-            Box::new(WindowExpr::Mul(
-                Box::new(WindowExpr::Const(-1)),
-                Box::new(WindowExpr::Loc(PAR)),
-            )),
-        ),
-        on_transition: true,
-    }));
-
-    // -- boundary pins: leaf at row 0, root at the last row. --
-    constraints.push(VmConstraint2::Base(VmConstraint::PiBinding {
-        row: VmRow::First,
-        col: CUR,
-        pi_index: PI_LEAF,
-    }));
-    constraints.push(VmConstraint2::Base(VmConstraint::PiBinding {
-        row: VmRow::Last,
-        col: PAR,
-        pi_index: PI_ROOT,
-    }));
-
-    // -- last-row re-lowering: the transition gates are vacuous on the last row, so re-lower the
-    //    per-row bit-binary + child-selection bodies as Last boundaries (else the top level's
-    //    children are unconstrained). --
-    for body in per_row_gate_bodies() {
-        constraints.push(VmConstraint2::Base(VmConstraint::Boundary {
-            row: VmRow::Last,
-            body,
-        }));
-    }
-
-    EffectVmDescriptor2 {
-        name: format!("{MEMBERSHIP_4ARY_NAME_PREFIX}{depth}"),
-        trace_width: MEMBERSHIP_4ARY_WIDTH,
-        public_input_count: MEMBERSHIP_4ARY_PI_COUNT,
-        tables: vec![],
-        constraints,
-        hash_sites: vec![],
-        ranges: vec![],
-    }
+    assert!(
+        depth >= 2 && depth.is_power_of_two(),
+        "membership depth must be a power of two ≥ 2"
+    );
+    parse_vm_descriptor2(MEMBERSHIP_4ARY_DESCRIPTOR_JSON)
+        .expect("Lean-emitted 4-ary membership descriptor must parse")
 }
 
 /// The arity-4 chip digest of `(c0,c1,c2,c3)` (= `chip_absorb_all_lanes(4, ..)[0]`), the hash the
@@ -373,8 +200,12 @@ pub fn membership_witness_4ary(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::descriptor_ir2::{MemBoundaryWitness, prove_vm_descriptor2, verify_vm_descriptor2};
+    use crate::descriptor_ir2::{
+        CHIP_TUPLE_LEN, LookupSpec, MemBoundaryWitness, TID_P2, VmConstraint2,
+        prove_vm_descriptor2, verify_vm_descriptor2,
+    };
     use crate::dsl::membership::{create_test_witness, generate_merkle_poseidon2_trace};
+    use crate::lean_descriptor_air::LeanExpr;
     use crate::poseidon2::hash_4_to_1;
     use crate::refusal::{Outcome, classify};
     use std::panic::AssertUnwindSafe;
@@ -562,6 +393,6 @@ mod tests {
             .filter(|c| matches!(c, VmConstraint2::WindowGate(_)))
             .count();
         assert_eq!(win, 1, "the single cross-row continuity gate");
-        assert!(d.name.contains("depth8"));
+        assert_eq!(d.name, "dregg-merkle-membership-4ary-general::v1");
     }
 }

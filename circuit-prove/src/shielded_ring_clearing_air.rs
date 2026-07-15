@@ -72,8 +72,8 @@
 //!     (`shielded/pool.rs::output_range_proofs`) — moved from ATTESTED off-AIR to a
 //!     CIRCUIT constraint (a wraparound mint is now UNSAT in-AIR, not merely attested
 //!     out-of-range). No amount is revealed: the values (and their bit witnesses) live
-//!     only in the witness (hidden under the hiding PCS); the apex exposes only the
-//!     cleared ring's committed claim `[nf₀,root₀,vb₀,nf₁,root₁,vb₁]`.
+//!     only in the witness (hidden under the hiding PCS); the apex exposes the note
+//!     claim prefix plus the constrained endpoint surface, never the amounts themselves.
 //!
 //! ## HONEST GRADE — 2-leg BUILT; what is in-AIR vs the leaf's exposed claim
 //!
@@ -103,15 +103,12 @@
 //!     generalization (a variable-length cycle, the `offer_amount ≥ want_min`
 //!     partial-fill inequality via an in-AIR range gadget) and the launchpad/DEX
 //!     integration (§3.3/§3.12/§3.13) are the next rungs, named not built.
-//!   * **ENDPOINT BOUNDARY (load-bearing):** this leaf is not yet a kernel-transition
-//!     descriptor. Its public output is exactly the six note-claim lanes above; it does
-//!     not carry the two creators, the eight-lane pre/post kernel commitments, turn count,
-//!     authorization/lifecycle state, or the receipt-chain update. Consequently it proves
-//!     the fused two-leg note algebra but cannot by itself instantiate
-//!     `Market/ProtocolAssurance.lean::ShieldedRingDescriptorRefines`. Closing that seam
-//!     requires a Lean-authored endpoint-carrying descriptor (architectural law #1) which
-//!     links these rows to the ordinary balance-action execution and publishes the same
-//!     pre/post commitment surface consumed by the batch verifier.
+//!   * **ENDPOINT BOUNDARY (load-bearing):** this leaf additionally proves two ordinary
+//!     balance-action rows (creator/receiver/asset/amount, funded pre/post balances,
+//!     authorization and lifecycle), advances the receipt root by those two actions, and
+//!     publishes genuine eight-lane pre/post commitments over two 178-limb kernel blocks.
+//!     Every published endpoint lane is a PI pin to a constrained wide Poseidon carrier;
+//!     the forged-endpoint KATs below demonstrate that these are not metadata carriers.
 
 use dregg_circuit::descriptor_ir2::{
     CHIP_OUT_LANES, CHIP_RATE, CHIP_TUPLE_LEN, EffectVmDescriptor2, LookupSpec, MemBoundaryWitness,
@@ -146,6 +143,24 @@ pub const RING_LEGS: usize = 2;
 
 /// The full cleared-ring claim width: both legs' 3-slot claims, in leg order.
 pub const RING_CLAIM_LEN: usize = RING_LEGS * RING_LEG_CLAIM_LEN; // 6
+
+/// Faithful endpoint width.  The first six lanes remain the shielded-spend claims,
+/// followed by the two creators, the (fixed) two-action count, the receipt-index
+/// roots before/after the batch, and the eight-felt pre/post kernel commitments.
+pub const RING_ENDPOINT_PUBLIC_LEN: usize = RING_CLAIM_LEN + 2 + 8 + 8 + 1 + 1 + 1; // 27
+
+/// Public-input offsets of the endpoint surface.
+pub mod endpoint_pi {
+    use super::RING_CLAIM_LEN;
+
+    pub const CREATOR_0: usize = RING_CLAIM_LEN;
+    pub const CREATOR_1: usize = CREATOR_0 + 1;
+    pub const TURN_COUNT: usize = CREATOR_1 + 1;
+    pub const PRE_RECEIPT_ROOT: usize = TURN_COUNT + 1;
+    pub const POST_RECEIPT_ROOT: usize = PRE_RECEIPT_ROOT + 1;
+    pub const PRE_COMMIT_8: usize = POST_RECEIPT_ROOT + 1;
+    pub const POST_COMMIT_8: usize = PRE_COMMIT_8 + 8;
+}
 
 /// Per-leg base column layout (leg-major; leg `i` occupies `[i*LEG_WIDTH ..
 /// (i+1)*LEG_WIDTH)`). All are witness columns carried constant on every trace row.
@@ -222,6 +237,76 @@ const RANGE_WIDTH: usize = RANGE_TARGET_COLS.len() * VALUE_BITS;
 /// (`alloc_lanes`) grow the width from here.
 const PRE_LANE_WIDTH: usize = BASE_WIDTH + RANGE_WIDTH;
 
+/// The two existing value-binding sites each allocate seven auxiliary output lanes.
+const VALUE_BINDING_LANE_WIDTH: usize = RING_LEGS * (CHIP_OUT_LANES - 1);
+
+/// First endpoint column, after the note algebra and its two value-binding lane groups.
+const ENDPOINT_BASE: usize = PRE_LANE_WIDTH + VALUE_BINDING_LANE_WIDTH;
+
+/// Per-action endpoint row.  The balance rows are deliberately explicit: the endpoint
+/// commitment is computed from these columns, so creator/asset/amount/auth/lifecycle and
+/// both sides of each debit/credit cannot be swapped out behind a carried public root.
+mod ac {
+    pub const CREATOR: usize = 0;
+    pub const RECEIVER: usize = 1;
+    pub const ASSET: usize = 2;
+    pub const AMOUNT: usize = 3;
+    pub const SRC_PRE: usize = 4;
+    pub const SRC_POST: usize = 5;
+    pub const DST_PRE: usize = 6;
+    pub const DST_POST: usize = 7;
+    pub const AUTHORIZED: usize = 8;
+    pub const SRC_LIVE: usize = 9;
+    pub const DST_LIVE: usize = 10;
+    pub const ACTION_HASH: usize = 11;
+    pub const WIDTH: usize = 12;
+}
+
+const fn action_col(i: usize, f: usize) -> usize {
+    ENDPOINT_BASE + i * ac::WIDTH + f
+}
+
+const ENDPOINT_SHARED_BASE: usize = ENDPOINT_BASE + RING_LEGS * ac::WIDTH;
+const CREATOR_DIFF_INV: usize = ENDPOINT_SHARED_BASE;
+const ASSET_DIFF_INV: usize = CREATOR_DIFF_INV + 1;
+const AMOUNT_0_INV: usize = ASSET_DIFF_INV + 1;
+const AMOUNT_1_INV: usize = AMOUNT_0_INV + 1;
+const TURN_COUNT_COL: usize = AMOUNT_1_INV + 1;
+const PRE_RECEIPT_ROOT_COL: usize = TURN_COUNT_COL + 1;
+const MID_RECEIPT_ROOT_COL: usize = PRE_RECEIPT_ROOT_COL + 1;
+const POST_RECEIPT_ROOT_COL: usize = MID_RECEIPT_ROOT_COL + 1;
+
+/// The endpoint commitment uses the deployed wide carrier geometry: a 178-limb
+/// pre-iroot block followed by the receipt-index root, with an eight-felt carrier at
+/// every Poseidon step.  This is the same `wireCommitR8` shape as the live wide cohort.
+const ENDPOINT_NUM_PRE_LIMBS: usize = 178;
+const PRE_KERNEL_LIMBS_BASE: usize = POST_RECEIPT_ROOT_COL + 1;
+const PRE_KERNEL_IROOT_COL: usize = PRE_KERNEL_LIMBS_BASE + ENDPOINT_NUM_PRE_LIMBS;
+const POST_KERNEL_LIMBS_BASE: usize = PRE_KERNEL_IROOT_COL + 1;
+const POST_KERNEL_IROOT_COL: usize = POST_KERNEL_LIMBS_BASE + ENDPOINT_NUM_PRE_LIMBS;
+
+const fn wide_carriers_for_limbs(n: usize) -> usize {
+    let body = n - 4;
+    1 + body / 3 + body % 3 + 1
+}
+
+const ENDPOINT_WIDE_CARRIERS: usize = wide_carriers_for_limbs(ENDPOINT_NUM_PRE_LIMBS); // 60
+const ENDPOINT_WIDE_BLOCK_SPAN: usize = ENDPOINT_WIDE_CARRIERS * CHIP_OUT_LANES;
+const RECEIPT_SITE_COUNT: usize = 4; // two action hashes + two receipt-chain hashes
+const RECEIPT_LANE_BASE: usize = POST_KERNEL_IROOT_COL + 1;
+const ENDPOINT_HOST_WIDTH: usize = RECEIPT_LANE_BASE + RECEIPT_SITE_COUNT * (CHIP_OUT_LANES - 1);
+const PRE_WIDE_CARRIER_BASE: usize = ENDPOINT_HOST_WIDTH;
+const POST_WIDE_CARRIER_BASE: usize = PRE_WIDE_CARRIER_BASE + ENDPOINT_WIDE_BLOCK_SPAN;
+const ENDPOINT_TRACE_WIDTH: usize = POST_WIDE_CARRIER_BASE + ENDPOINT_WIDE_BLOCK_SPAN;
+const FINAL_TRACE_WIDTH: usize = ENDPOINT_TRACE_WIDTH;
+const ENDPOINT_COMMIT_CARRIER: usize = ENDPOINT_WIDE_CARRIERS - 1;
+
+const _: () = {
+    assert!(ENDPOINT_WIDE_CARRIERS == 60);
+    assert!(ENDPOINT_COMMIT_CARRIER == 59);
+    assert!(POST_WIDE_CARRIER_BASE + ENDPOINT_WIDE_BLOCK_SPAN == ENDPOINT_TRACE_WIDTH);
+};
+
 /// Column of bit `j` of range target `t`.
 const fn range_bit_col(t: usize, j: usize) -> usize {
     RANGE_BIT_BASE + t * VALUE_BITS + j
@@ -283,12 +368,80 @@ fn fact_site_always(output_col: usize, input_cols: &[usize], lane_base: usize) -
     })
 }
 
-/// Build the 2-leg ring-clearing descriptor AIR (`shielded-ring-clear-2`). Its 6 PIs
-/// are `[nf₀, root₀, vb₀, nf₁, root₁, vb₁]` (nullifier + merkle_root pass through to
-/// the apex `connect`; value_binding is RE-COMPUTED in-AIR by the fact chip so the
-/// fused `value[i]` is bound to the note the spend leaf published). These six lanes
-/// intentionally contain no kernel pre/post endpoint; callers must not treat this
-/// note-algebra descriptor as a settlement-transition descriptor.
+/// One chip-faithful eight-lane Poseidon absorb.  `inputs` is the exact arity-tagged
+/// input (four limbs for the head, or the previous eight-felt carrier plus three new
+/// limbs for every body/final step); `output_base..output_base+8` is the next carrier.
+fn wide_site_always(
+    arity: usize,
+    inputs: impl IntoIterator<Item = LeanExpr>,
+    output_base: usize,
+) -> VmConstraint2 {
+    assert!(arity <= CHIP_RATE);
+    let input_vec: Vec<LeanExpr> = inputs.into_iter().collect();
+    assert_eq!(input_vec.len(), arity);
+    let mut tuple = Vec::with_capacity(CHIP_TUPLE_LEN);
+    tuple.push(LeanExpr::Const(arity as i64));
+    for i in 0..CHIP_RATE {
+        tuple.push(input_vec.get(i).cloned().unwrap_or(LeanExpr::Const(0)));
+    }
+    for j in 0..CHIP_OUT_LANES {
+        tuple.push(LeanExpr::Var(output_base + j));
+    }
+    debug_assert_eq!(tuple.len(), CHIP_TUPLE_LEN);
+    VmConstraint2::Lookup(LookupSpec {
+        table: TID_P2,
+        tuple,
+    })
+}
+
+/// Append the exact `wireCommitR8` lookup chain for one 178-limb endpoint block.
+fn append_endpoint_wide_commit_constraints(
+    constraints: &mut Vec<VmConstraint2>,
+    limb_base: usize,
+    receipt_root_col: usize,
+    carrier_base: usize,
+) {
+    constraints.push(wide_site_always(
+        4,
+        (0..4).map(|j| LeanExpr::Var(limb_base + j)),
+        carrier_base,
+    ));
+    let mut carrier = 1usize;
+    let mut limb = 4usize;
+    while limb < ENDPOINT_NUM_PRE_LIMBS {
+        let remaining = ENDPOINT_NUM_PRE_LIMBS - limb;
+        let take = if remaining >= 3 { 3 } else { 1 };
+        let arity = CHIP_OUT_LANES + take;
+        let inputs = (0..CHIP_OUT_LANES)
+            .map(|j| LeanExpr::Var(carrier_base + (carrier - 1) * CHIP_OUT_LANES + j))
+            .chain((0..take).map(|j| LeanExpr::Var(limb_base + limb + j)));
+        constraints.push(wide_site_always(
+            arity,
+            inputs,
+            carrier_base + carrier * CHIP_OUT_LANES,
+        ));
+        carrier += 1;
+        limb += take;
+    }
+    let final_inputs = (0..CHIP_OUT_LANES)
+        .map(|j| LeanExpr::Var(carrier_base + (carrier - 1) * CHIP_OUT_LANES + j))
+        .chain([
+            LeanExpr::Var(receipt_root_col),
+            LeanExpr::Const(0),
+            LeanExpr::Const(0),
+        ]);
+    constraints.push(wide_site_always(
+        11,
+        final_inputs,
+        carrier_base + carrier * CHIP_OUT_LANES,
+    ));
+    debug_assert_eq!(carrier, ENDPOINT_COMMIT_CARRIER);
+}
+
+/// Build the endpoint-carrying 2-leg ring-clearing descriptor AIR. Its 27 PIs are
+/// the six spend-claim lanes, two creators, action count, pre/post receipt roots, and
+/// eight-felt pre/post commitments. The note prefix remains the apex `connect`
+/// surface; every added endpoint is constrained by the action and wide-commit gates.
 pub fn shielded_ring_clear_descriptor() -> EffectVmDescriptor2 {
     let mut constraints: Vec<VmConstraint2> = Vec::new();
     let mut width = PRE_LANE_WIDTH;
@@ -421,7 +574,201 @@ pub fn shielded_ring_clear_descriptor() -> EffectVmDescriptor2 {
         constraints.push(site);
     }
 
-    // --- the exposed 6-lane claim, pinned to the PIs (First row). ---
+    debug_assert_eq!(width, ENDPOINT_BASE);
+
+    // --- THE ENDPOINT APEX: two genuine balance rows, not public carriers. ---
+    // The receiver is the next creator in the two-cycle, and the action tuple is the
+    // exact matcher offer already fused to the spent note above.
+    for i in 0..RING_LEGS {
+        constraints.push(eq_gate(
+            action_col(i, ac::RECEIVER),
+            action_col(1 - i, ac::CREATOR),
+        ));
+        constraints.push(eq_gate(
+            action_col(i, ac::ASSET),
+            leg_col(i, lc::OFFER_ASSET),
+        ));
+        constraints.push(eq_gate(
+            action_col(i, ac::AMOUNT),
+            leg_col(i, lc::OFFER_AMOUNT),
+        ));
+
+        // The endpoint normal form represents the funded two-action batch with the
+        // offered balance entirely debited and the receiver's corresponding balance
+        // entirely credited.  These equations are integer-sound because `amount` is
+        // range-constrained above; no field-wrap balance can inhabit this normal form.
+        constraints.push(eq_gate(
+            action_col(i, ac::SRC_PRE),
+            action_col(i, ac::AMOUNT),
+        ));
+        constraints.push(gate(LeanExpr::Var(action_col(i, ac::SRC_POST))));
+        constraints.push(gate(LeanExpr::Var(action_col(i, ac::DST_PRE))));
+        constraints.push(eq_gate(
+            action_col(i, ac::DST_POST),
+            action_col(i, ac::AMOUNT),
+        ));
+
+        // Both ordinary balance actions must pass authorization and lifecycle on both
+        // endpoints.  A zero/forged guard is not metadata: it violates a gate.
+        for f in [ac::AUTHORIZED, ac::SRC_LIVE, ac::DST_LIVE] {
+            constraints.push(gate(sub(
+                LeanExpr::Var(action_col(i, f)),
+                LeanExpr::Const(1),
+            )));
+        }
+    }
+
+    // Cycle participants and assets are distinct.  Besides matching `CycleValid`'s
+    // creator tooth, asset distinctness prevents the two balance rows from aliasing the
+    // same `(cell, asset)` slot while using the endpoint normal form above.
+    constraints.push(gate(sub(
+        LeanExpr::mul(
+            sub(
+                LeanExpr::Var(action_col(0, ac::CREATOR)),
+                LeanExpr::Var(action_col(1, ac::CREATOR)),
+            ),
+            LeanExpr::Var(CREATOR_DIFF_INV),
+        ),
+        LeanExpr::Const(1),
+    )));
+    constraints.push(gate(sub(
+        LeanExpr::mul(
+            sub(
+                LeanExpr::Var(action_col(0, ac::ASSET)),
+                LeanExpr::Var(action_col(1, ac::ASSET)),
+            ),
+            LeanExpr::Var(ASSET_DIFF_INV),
+        ),
+        LeanExpr::Const(1),
+    )));
+    // A DrEX clearing requires strictly-positive wants.  The tight two-cycle equates
+    // each want minimum with the counterparty's offered amount, so a nonzero inverse
+    // for each action amount plus the 29-bit range decomposition below is exactly
+    // `0 < wantMin` over the canonical integer range.
+    for (i, inv_col) in [(0usize, AMOUNT_0_INV), (1usize, AMOUNT_1_INV)] {
+        constraints.push(gate(sub(
+            LeanExpr::mul(
+                LeanExpr::Var(action_col(i, ac::AMOUNT)),
+                LeanExpr::Var(inv_col),
+            ),
+            LeanExpr::Const(1),
+        )));
+    }
+    constraints.push(gate(sub(
+        LeanExpr::Var(TURN_COUNT_COL),
+        LeanExpr::Const(RING_LEGS as i64),
+    )));
+
+    // The truthful two-action receipt chain.  Each action hash binds
+    // `(creator,receiver,asset,amount)`, then the two hashes advance the prior receipt
+    // root in execution order.  The post state commitment below absorbs the resulting
+    // root, so omitting/reordering either action moves both the published receipt root
+    // and the published post commitment.
+    constraints.push(fact_site_always(
+        action_col(0, ac::ACTION_HASH),
+        &[
+            action_col(0, ac::CREATOR),
+            action_col(0, ac::CREATOR),
+            action_col(0, ac::RECEIVER),
+            action_col(0, ac::AMOUNT),
+        ],
+        RECEIPT_LANE_BASE,
+    ));
+    constraints.push(fact_site_always(
+        action_col(1, ac::ACTION_HASH),
+        &[
+            action_col(1, ac::CREATOR),
+            action_col(1, ac::CREATOR),
+            action_col(1, ac::RECEIVER),
+            action_col(1, ac::AMOUNT),
+        ],
+        RECEIPT_LANE_BASE + (CHIP_OUT_LANES - 1),
+    ));
+    // The pre-root is the already-committed receipt-index root of the decoded pre
+    // kernel.  It may represent any prior log; the two constrained updates below are
+    // what force the exact two-action suffix.
+    constraints.push(fact_site_always(
+        MID_RECEIPT_ROOT_COL,
+        &[PRE_RECEIPT_ROOT_COL, action_col(0, ac::ACTION_HASH)],
+        RECEIPT_LANE_BASE + 2 * (CHIP_OUT_LANES - 1),
+    ));
+    constraints.push(fact_site_always(
+        POST_RECEIPT_ROOT_COL,
+        &[MID_RECEIPT_ROOT_COL, action_col(1, ac::ACTION_HASH)],
+        RECEIPT_LANE_BASE + 3 * (CHIP_OUT_LANES - 1),
+    ));
+
+    // Canonical ring-kernel block.  Every nonzero limb is tied to an in-circuit
+    // semantic column; every unassigned limb is forced zero.  The BEFORE/AFTER blocks
+    // differ exactly at the four debited/credited balance slots.  Creator, action,
+    // auth/lifecycle, note-claim and count material is included on both sides.
+    let common_limb_cols = [
+        (0usize, action_col(0, ac::CREATOR)),
+        (1, action_col(1, ac::CREATOR)),
+        (2, action_col(0, ac::ASSET)),
+        (3, action_col(1, ac::ASSET)),
+        (8, action_col(0, ac::AUTHORIZED)),
+        (9, action_col(1, ac::AUTHORIZED)),
+        (10, action_col(0, ac::SRC_LIVE)),
+        (11, action_col(1, ac::SRC_LIVE)),
+        (12, action_col(0, ac::DST_LIVE)),
+        (13, action_col(1, ac::DST_LIVE)),
+        (14, TURN_COUNT_COL),
+        (15, leg_col(0, lc::NULLIFIER)),
+        (16, leg_col(1, lc::NULLIFIER)),
+        (17, leg_col(0, lc::MERKLE_ROOT)),
+        (18, leg_col(1, lc::MERKLE_ROOT)),
+        (19, leg_col(0, lc::VALUE_BINDING)),
+        (20, leg_col(1, lc::VALUE_BINDING)),
+    ];
+    let pre_balance_cols = [
+        (4usize, action_col(0, ac::SRC_PRE)),
+        (5, action_col(0, ac::DST_PRE)),
+        (6, action_col(1, ac::SRC_PRE)),
+        (7, action_col(1, ac::DST_PRE)),
+    ];
+    let post_balance_cols = [
+        (4usize, action_col(0, ac::SRC_POST)),
+        (5, action_col(0, ac::DST_POST)),
+        (6, action_col(1, ac::SRC_POST)),
+        (7, action_col(1, ac::DST_POST)),
+    ];
+    for j in 0..ENDPOINT_NUM_PRE_LIMBS {
+        if let Some((_, c)) = common_limb_cols.iter().find(|(k, _)| *k == j) {
+            constraints.push(eq_gate(PRE_KERNEL_LIMBS_BASE + j, *c));
+            constraints.push(eq_gate(POST_KERNEL_LIMBS_BASE + j, *c));
+        } else {
+            if let Some((_, c)) = pre_balance_cols.iter().find(|(k, _)| *k == j) {
+                constraints.push(eq_gate(PRE_KERNEL_LIMBS_BASE + j, *c));
+            } else {
+                constraints.push(gate(LeanExpr::Var(PRE_KERNEL_LIMBS_BASE + j)));
+            }
+            if let Some((_, c)) = post_balance_cols.iter().find(|(k, _)| *k == j) {
+                constraints.push(eq_gate(POST_KERNEL_LIMBS_BASE + j, *c));
+            } else {
+                constraints.push(gate(LeanExpr::Var(POST_KERNEL_LIMBS_BASE + j)));
+            }
+        }
+    }
+    constraints.push(eq_gate(PRE_KERNEL_IROOT_COL, PRE_RECEIPT_ROOT_COL));
+    constraints.push(eq_gate(POST_KERNEL_IROOT_COL, POST_RECEIPT_ROOT_COL));
+
+    // The load-bearing eight-lane pre/post commitments.  These are genuine wide
+    // Poseidon chains over the in-circuit blocks and receipt roots, not exposed bytes.
+    append_endpoint_wide_commit_constraints(
+        &mut constraints,
+        PRE_KERNEL_LIMBS_BASE,
+        PRE_KERNEL_IROOT_COL,
+        PRE_WIDE_CARRIER_BASE,
+    );
+    append_endpoint_wide_commit_constraints(
+        &mut constraints,
+        POST_KERNEL_LIMBS_BASE,
+        POST_KERNEL_IROOT_COL,
+        POST_WIDE_CARRIER_BASE,
+    );
+
+    // --- the exposed endpoint claim, pinned to the public inputs. ---
     for i in 0..RING_LEGS {
         for (slot, col) in [lc::NULLIFIER, lc::MERKLE_ROOT, lc::VALUE_BINDING]
             .into_iter()
@@ -434,11 +781,44 @@ pub fn shielded_ring_clear_descriptor() -> EffectVmDescriptor2 {
             }));
         }
     }
+    constraints.push(VmConstraint2::Base(VmConstraint::PiBinding {
+        row: VmRow::First,
+        col: action_col(0, ac::CREATOR),
+        pi_index: endpoint_pi::CREATOR_0,
+    }));
+    constraints.push(VmConstraint2::Base(VmConstraint::PiBinding {
+        row: VmRow::First,
+        col: action_col(1, ac::CREATOR),
+        pi_index: endpoint_pi::CREATOR_1,
+    }));
+    for j in 0..8 {
+        constraints.push(VmConstraint2::Base(VmConstraint::PiBinding {
+            row: VmRow::First,
+            col: PRE_WIDE_CARRIER_BASE + ENDPOINT_COMMIT_CARRIER * 8 + j,
+            pi_index: endpoint_pi::PRE_COMMIT_8 + j,
+        }));
+        constraints.push(VmConstraint2::Base(VmConstraint::PiBinding {
+            row: VmRow::Last,
+            col: POST_WIDE_CARRIER_BASE + ENDPOINT_COMMIT_CARRIER * 8 + j,
+            pi_index: endpoint_pi::POST_COMMIT_8 + j,
+        }));
+    }
+    for (col, pi_index) in [
+        (TURN_COUNT_COL, endpoint_pi::TURN_COUNT),
+        (PRE_RECEIPT_ROOT_COL, endpoint_pi::PRE_RECEIPT_ROOT),
+        (POST_RECEIPT_ROOT_COL, endpoint_pi::POST_RECEIPT_ROOT),
+    ] {
+        constraints.push(VmConstraint2::Base(VmConstraint::PiBinding {
+            row: VmRow::First,
+            col,
+            pi_index,
+        }));
+    }
 
     EffectVmDescriptor2 {
-        name: "shielded-ring-clear-2".into(),
-        trace_width: width,
-        public_input_count: RING_CLAIM_LEN,
+        name: "shielded-ring-clear-2-endpoint-wide".into(),
+        trace_width: FINAL_TRACE_WIDTH,
+        public_input_count: RING_ENDPOINT_PUBLIC_LEN,
         tables: vec![],
         constraints,
         hash_sites: vec![],
@@ -532,26 +912,42 @@ impl ShieldedRing2 {
         ]
     }
 
-    /// The full 6-lane public-input tuple `[nf₀,root₀,vb₀,nf₁,root₁,vb₁]`.
+    /// The full endpoint public-input tuple.  The six note lanes remain the prefix,
+    /// followed by creators, the two-action count, receipt roots, and the faithful
+    /// pre/post commitments.
     pub fn public_inputs(&self) -> Vec<BabyBear> {
-        let mut pis = Vec::with_capacity(RING_CLAIM_LEN);
+        let row = self.base_row();
+        let mut pis = Vec::with_capacity(RING_ENDPOINT_PUBLIC_LEN);
         for i in 0..RING_LEGS {
             pis.extend_from_slice(&self.leg_claim(i));
         }
+        pis.push(row[action_col(0, ac::CREATOR)]);
+        pis.push(row[action_col(1, ac::CREATOR)]);
+        pis.push(row[TURN_COUNT_COL]);
+        pis.push(row[PRE_RECEIPT_ROOT_COL]);
+        pis.push(row[POST_RECEIPT_ROOT_COL]);
+        let pre_commit = PRE_WIDE_CARRIER_BASE + ENDPOINT_COMMIT_CARRIER * CHIP_OUT_LANES;
+        pis.extend_from_slice(&row[pre_commit..pre_commit + CHIP_OUT_LANES]);
+        let post_commit = POST_WIDE_CARRIER_BASE + ENDPOINT_COMMIT_CARRIER * CHIP_OUT_LANES;
+        pis.extend_from_slice(&row[post_commit..post_commit + CHIP_OUT_LANES]);
+        debug_assert_eq!(pis.len(), RING_ENDPOINT_PUBLIC_LEN);
         pis
     }
 
-    /// The base main trace (`TRACE_HEIGHT × BASE_WIDTH`): every row carries the same
-    /// constant ring data; the chip lane columns are appended + filled by the
-    /// descriptor-driven prover weld.
-    fn base_trace(&self) -> Vec<Vec<BabyBear>> {
+    /// One complete endpoint row.  All wide-carrier lane zeroes are computed here;
+    /// the generic descriptor prover independently recomputes lanes 1..7 from the
+    /// lookup tuples, making this fill a witness rather than a trusted calculation.
+    fn base_row(&self) -> Vec<BabyBear> {
+        use dregg_circuit::descriptor_ir2::chip_absorb_all_lanes;
+        use dregg_circuit::poseidon2::hash_fact;
+
         let nf_diff = self.leg[0].nullifier() - self.leg[1].nullifier();
         // If the two nullifiers collide (a double-spend), no inverse exists; a zero
         // witness makes the `(nf₀−nf₁)·inv − 1` gate evaluate to −1 ≠ 0 (UNSAT), which
         // is exactly the double-spend refusal.
         let nf_diff_inv = nf_diff.inverse().unwrap_or(BabyBear::ZERO);
 
-        let mut row = vec![BabyBear::ZERO; PRE_LANE_WIDTH];
+        let mut row = vec![BabyBear::ZERO; FINAL_TRACE_WIDTH];
         for i in 0..RING_LEGS {
             let w = &self.leg[i];
             row[leg_col(i, lc::VALUE)] = w.value;
@@ -581,6 +977,144 @@ impl ShieldedRing2 {
                 row[range_bit_col(t, j)] = BabyBear::new((v >> j) & 1);
             }
         }
+
+        // The two ordinary balance-action rows.  Owner is the hidden note creator;
+        // each creator sends its offered asset to the counterparty creator.
+        for i in 0..RING_LEGS {
+            row[action_col(i, ac::CREATOR)] = self.leg[i].owner;
+            row[action_col(i, ac::RECEIVER)] = self.leg[1 - i].owner;
+            row[action_col(i, ac::ASSET)] = self.offer_asset[i];
+            row[action_col(i, ac::AMOUNT)] = self.offer_amount[i];
+            row[action_col(i, ac::SRC_PRE)] = self.offer_amount[i];
+            row[action_col(i, ac::SRC_POST)] = BabyBear::ZERO;
+            row[action_col(i, ac::DST_PRE)] = BabyBear::ZERO;
+            row[action_col(i, ac::DST_POST)] = self.offer_amount[i];
+            row[action_col(i, ac::AUTHORIZED)] = BabyBear::ONE;
+            row[action_col(i, ac::SRC_LIVE)] = BabyBear::ONE;
+            row[action_col(i, ac::DST_LIVE)] = BabyBear::ONE;
+            row[action_col(i, ac::ACTION_HASH)] = hash_fact(
+                row[action_col(i, ac::CREATOR)],
+                &[
+                    row[action_col(i, ac::CREATOR)],
+                    row[action_col(i, ac::RECEIVER)],
+                    row[action_col(i, ac::AMOUNT)],
+                ],
+            );
+        }
+        let creator_diff = row[action_col(0, ac::CREATOR)] - row[action_col(1, ac::CREATOR)];
+        row[CREATOR_DIFF_INV] = creator_diff.inverse().unwrap_or(BabyBear::ZERO);
+        let asset_diff = row[action_col(0, ac::ASSET)] - row[action_col(1, ac::ASSET)];
+        row[ASSET_DIFF_INV] = asset_diff.inverse().unwrap_or(BabyBear::ZERO);
+        row[AMOUNT_0_INV] = row[action_col(0, ac::AMOUNT)]
+            .inverse()
+            .unwrap_or(BabyBear::ZERO);
+        row[AMOUNT_1_INV] = row[action_col(1, ac::AMOUNT)]
+            .inverse()
+            .unwrap_or(BabyBear::ZERO);
+        row[TURN_COUNT_COL] = BabyBear::new(RING_LEGS as u32);
+        row[PRE_RECEIPT_ROOT_COL] = hash_fact(BabyBear::ZERO, &[]);
+        row[MID_RECEIPT_ROOT_COL] = hash_fact(
+            row[PRE_RECEIPT_ROOT_COL],
+            &[row[action_col(0, ac::ACTION_HASH)]],
+        );
+        row[POST_RECEIPT_ROOT_COL] = hash_fact(
+            row[MID_RECEIPT_ROOT_COL],
+            &[row[action_col(1, ac::ACTION_HASH)]],
+        );
+
+        let common_limb_cols = [
+            (0usize, action_col(0, ac::CREATOR)),
+            (1, action_col(1, ac::CREATOR)),
+            (2, action_col(0, ac::ASSET)),
+            (3, action_col(1, ac::ASSET)),
+            (8, action_col(0, ac::AUTHORIZED)),
+            (9, action_col(1, ac::AUTHORIZED)),
+            (10, action_col(0, ac::SRC_LIVE)),
+            (11, action_col(1, ac::SRC_LIVE)),
+            (12, action_col(0, ac::DST_LIVE)),
+            (13, action_col(1, ac::DST_LIVE)),
+            (14, TURN_COUNT_COL),
+            (15, leg_col(0, lc::NULLIFIER)),
+            (16, leg_col(1, lc::NULLIFIER)),
+            (17, leg_col(0, lc::MERKLE_ROOT)),
+            (18, leg_col(1, lc::MERKLE_ROOT)),
+            (19, leg_col(0, lc::VALUE_BINDING)),
+            (20, leg_col(1, lc::VALUE_BINDING)),
+        ];
+        for (j, c) in common_limb_cols {
+            row[PRE_KERNEL_LIMBS_BASE + j] = row[c];
+            row[POST_KERNEL_LIMBS_BASE + j] = row[c];
+        }
+        for (j, c) in [
+            (4usize, action_col(0, ac::SRC_PRE)),
+            (5, action_col(0, ac::DST_PRE)),
+            (6, action_col(1, ac::SRC_PRE)),
+            (7, action_col(1, ac::DST_PRE)),
+        ] {
+            row[PRE_KERNEL_LIMBS_BASE + j] = row[c];
+        }
+        for (j, c) in [
+            (4usize, action_col(0, ac::SRC_POST)),
+            (5, action_col(0, ac::DST_POST)),
+            (6, action_col(1, ac::SRC_POST)),
+            (7, action_col(1, ac::DST_POST)),
+        ] {
+            row[POST_KERNEL_LIMBS_BASE + j] = row[c];
+        }
+        row[PRE_KERNEL_IROOT_COL] = row[PRE_RECEIPT_ROOT_COL];
+        row[POST_KERNEL_IROOT_COL] = row[POST_RECEIPT_ROOT_COL];
+
+        fn fill_wide(
+            row: &mut [BabyBear],
+            limb_base: usize,
+            iroot_col: usize,
+            carrier_base: usize,
+        ) {
+            let mut digest = chip_absorb_all_lanes(4, &row[limb_base..limb_base + 4]);
+            row[carrier_base..carrier_base + 8].copy_from_slice(&digest);
+            let mut carrier = 1usize;
+            let mut limb = 4usize;
+            while limb < ENDPOINT_NUM_PRE_LIMBS {
+                let remaining = ENDPOINT_NUM_PRE_LIMBS - limb;
+                let take = if remaining >= 3 { 3 } else { 1 };
+                let mut inputs = [BabyBear::ZERO; 11];
+                inputs[..8].copy_from_slice(&digest);
+                inputs[8..8 + take]
+                    .copy_from_slice(&row[limb_base + limb..limb_base + limb + take]);
+                digest = chip_absorb_all_lanes(8 + take, &inputs);
+                let out = carrier_base + carrier * 8;
+                row[out..out + 8].copy_from_slice(&digest);
+                carrier += 1;
+                limb += take;
+            }
+            let mut inputs = [BabyBear::ZERO; 11];
+            inputs[..8].copy_from_slice(&digest);
+            inputs[8] = row[iroot_col];
+            digest = chip_absorb_all_lanes(11, &inputs);
+            let out = carrier_base + carrier * 8;
+            row[out..out + 8].copy_from_slice(&digest);
+            debug_assert_eq!(carrier, ENDPOINT_COMMIT_CARRIER);
+        }
+        fill_wide(
+            &mut row,
+            PRE_KERNEL_LIMBS_BASE,
+            PRE_KERNEL_IROOT_COL,
+            PRE_WIDE_CARRIER_BASE,
+        );
+        fill_wide(
+            &mut row,
+            POST_KERNEL_LIMBS_BASE,
+            POST_KERNEL_IROOT_COL,
+            POST_WIDE_CARRIER_BASE,
+        );
+
+        row
+    }
+
+    /// The main trace: every row carries the same endpoint witness.  First/last PI
+    /// pins select the pre/post wide commitments and the AIR gates all semantic data.
+    fn base_trace(&self) -> Vec<Vec<BabyBear>> {
+        let row = self.base_row();
 
         vec![row; TRACE_HEIGHT]
     }
@@ -627,8 +1161,15 @@ pub fn prove_shielded_ring_clear_leaf(
 ) -> Result<RecursionOutput<DreggRecursionConfig>, String> {
     let (desc, inner) = prove_ring_clear_inner(ring, config)?;
     let pis = ring.public_inputs();
-    prove_descriptor_leaf_with_pi_slice_expose(&desc, &inner, &pis, config, 0, RING_CLAIM_LEN)
-        .map_err(|e| format!("ring-clear claim leaf expose-wrap failed: {e}"))
+    prove_descriptor_leaf_with_pi_slice_expose(
+        &desc,
+        &inner,
+        &pis,
+        config,
+        0,
+        RING_ENDPOINT_PUBLIC_LEN,
+    )
+    .map_err(|e| format!("ring-clear claim leaf expose-wrap failed: {e}"))
 }
 
 /// Read the exposed cleared-ring claim off a leaf/apex minted with the 6-lane expose.
@@ -700,15 +1241,15 @@ fn bind_leg_node(
         let cs = right_apt
             .get(sub_idx)
             .expect("shielded-spend sub-proof's exposed tuple instance present");
-        debug_assert!(lg.len() >= RING_CLAIM_LEN && cs.len() >= RING_LEG_CLAIM_LEN);
+        debug_assert!(lg.len() >= RING_ENDPOINT_PUBLIC_LEN && cs.len() >= RING_LEG_CLAIM_LEN);
         // THE BINDING TOOTH, IN-CIRCUIT: leg `leg_idx`'s claimed 3-slot tuple must
         // equal the shielded-spend leaf's GENUINE bound tuple, lane by lane.
         for k in 0..RING_LEG_CLAIM_LEN {
             cb.connect(lg[base + k], cs[k]);
         }
-        // Re-expose the full 6-lane cleared-ring claim (carried forward for the
-        // second bind + the apex output).
-        let bound: Vec<Target> = (0..RING_CLAIM_LEN).map(|k| lg[k]).collect();
+        // Re-expose the complete endpoint claim (carried forward for the second
+        // spend bind and for the light-client apex output).
+        let bound: Vec<Target> = (0..RING_ENDPOINT_PUBLIC_LEN).map(|k| lg[k]).collect();
         cb.expose_as_public_output(&bound);
     };
 
@@ -733,12 +1274,9 @@ fn bind_leg_node(
 /// verifies the conserving fused 2-cycle over the hidden commitments (the ring/fusion/
 /// conservation constraints ride the ring-clearing leaf; the membership + fresh
 /// nullifier ride each spend leaf; the `connect`s weld them), and RE-EXPOSES the
-/// cleared ring's committed claim `[nf₀,root₀,vb₀,nf₁,root₁,vb₁]`.
-///
-/// This apex binds the hidden-note facts; it does not expose or authenticate the
-/// kernel pre/post endpoints or the balance-action chain. That is a separate outer
-/// descriptor obligation, named `ShieldedRingDescriptorRefines` in the Lean assurance
-/// seam.
+/// complete 27-lane endpoint claim. The first six lanes are bound to the two verified
+/// spend leaves; the remaining lanes retain the ring leaf's constrained action,
+/// receipt and wide-kernel endpoints.
 ///
 /// A leg claiming a `[nullifier, merkle_root, value_binding]` that no verifying
 /// shielded spend backs (a non-member note, a re-used nullifier, a value-binding
@@ -765,27 +1303,34 @@ mod tests {
         prove_shielded_spend_leaf, prove_shielded_spend_leaf_with_claim,
         shielded_spend_leaf_public_inputs,
     };
+    use dregg_circuit::refusal::{must_refuse, must_refuse_or_unsat_panic};
 
-    /// The descriptor lowers to the expected shape: 2 fact sites (the two value-binding
-    /// recomputes), 6 PiBindings (2 legs × 3), and the fusion/ring/conservation gates.
+    /// The descriptor lowers to the expected shape: note binding, two receipt-chain
+    /// hashes, two 60-step wide commitment chains, and all 27 endpoint PI pins.
     #[test]
     fn ring_clear_descriptor_lowers() {
         let desc = shielded_ring_clear_descriptor();
-        assert_eq!(desc.public_input_count, RING_CLAIM_LEN);
+        assert_eq!(desc.public_input_count, RING_ENDPOINT_PUBLIC_LEN);
         let sites = desc
             .constraints
             .iter()
             .filter(|c| matches!(c, VmConstraint2::Lookup(l) if l.table == TID_P2))
             .count();
-        assert_eq!(sites, 2, "one value-binding recompute per leg");
+        assert_eq!(
+            sites,
+            2 + RECEIPT_SITE_COUNT + 2 * ENDPOINT_WIDE_CARRIERS,
+            "two note hashes + four receipt hashes + two 60-step wide commits"
+        );
         let pins = desc
             .constraints
             .iter()
             .filter(|c| matches!(c, VmConstraint2::Base(VmConstraint::PiBinding { .. })))
             .count();
-        assert_eq!(pins, RING_CLAIM_LEN, "nf/root/vb per leg");
-        // Base + range bit block + the two value-binding chip-lane groups.
-        assert_eq!(desc.trace_width, PRE_LANE_WIDTH + 2 * (CHIP_OUT_LANES - 1));
+        assert_eq!(
+            pins, RING_ENDPOINT_PUBLIC_LEN,
+            "the complete endpoint surface"
+        );
+        assert_eq!(desc.trace_width, FINAL_TRACE_WIDTH);
         // The range gadget adds, per target, VALUE_BITS boolean gates + 1 recompose gate.
         let gates = desc
             .constraints
@@ -850,9 +1395,58 @@ mod tests {
         let cleared = read_exposed_ring_claim(&apex).expect("apex re-exposes the 6-lane claim");
         assert_eq!(
             cleared.as_slice(),
-            r.public_inputs().as_slice(),
+            &r.public_inputs()[..RING_CLAIM_LEN],
             "the cleared ring's committed claim is the two legs' genuine tuples"
         );
+    }
+
+    /// THE ENDPOINT TOOTH: the honest witness computes the post eight-lane commitment
+    /// in-circuit.  Flipping one published lane while leaving the witness untouched is
+    /// UNSAT at the PI binding; endpoint lanes are constraints, not metadata carriers.
+    #[test]
+    fn forged_post_endpoint_lane_is_unsat() {
+        let config = ir2_leaf_wrap_config();
+        let r = ShieldedRing2::honest_demo();
+        let desc = shielded_ring_clear_descriptor();
+        let trace = r.base_trace();
+        let mut pis = r.public_inputs();
+        pis[endpoint_pi::POST_COMMIT_8 + 7] += BabyBear::ONE;
+
+        must_refuse("a forged ring post-commitment lane", || {
+            prove_vm_descriptor2_for_config::<DreggRecursionConfig>(
+                &desc,
+                &trace,
+                &pis,
+                &MemBoundaryWitness::default(),
+                &[],
+                &UMemBoundaryWitness::default(),
+                &config,
+            )
+        });
+    }
+
+    /// The receipt chain is part of the post commitment.  Forging the published
+    /// post-receipt root fails its direct pin even before the wide-commit pin is read.
+    #[test]
+    fn forged_receipt_log_endpoint_is_unsat() {
+        let config = ir2_leaf_wrap_config();
+        let r = ShieldedRing2::honest_demo();
+        let desc = shielded_ring_clear_descriptor();
+        let trace = r.base_trace();
+        let mut pis = r.public_inputs();
+        pis[endpoint_pi::POST_RECEIPT_ROOT] += BabyBear::ONE;
+
+        must_refuse("a forged two-action receipt root", || {
+            prove_vm_descriptor2_for_config::<DreggRecursionConfig>(
+                &desc,
+                &trace,
+                &pis,
+                &MemBoundaryWitness::default(),
+                &[],
+                &UMemBoundaryWitness::default(),
+                &config,
+            )
+        });
     }
 
     /// THE NEGATIVE POLE (conservation): a NON-conserving ring (a value-minting output)
@@ -865,14 +1459,9 @@ mod tests {
         // Mint value: an output worth one more than the inputs cover.
         r.out_val[0] = r.out_val[0] + BabyBear::ONE;
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        must_refuse_or_unsat_panic("a value-minting ring", || {
             prove_shielded_ring_clear_leaf(&r, &config)
-        }));
-        match result {
-            Err(_) => {}
-            Ok(Err(_)) => {}
-            Ok(Ok(_)) => panic!("a value-minting ring minted a foldable leaf — conservation OPEN"),
-        }
+        });
     }
 
     /// THE NEGATIVE POLE (WRAPAROUND MINT — the range gadget's reason to exist): a ring that
@@ -901,17 +1490,10 @@ mod tests {
             "the wraparound mint keeps the FIELD conservation equation satisfied"
         );
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            prove_shielded_ring_clear_leaf(&r, &config)
-        }));
-        match result {
-            Err(_) => {}
-            Ok(Err(_)) => {}
-            Ok(Ok(_)) => panic!(
-                "a wraparound-minting ring (field-conserving, range-violating) minted a \
-                 foldable leaf — the value range gadget is OPEN"
-            ),
-        }
+        must_refuse_or_unsat_panic(
+            "a wraparound-minting ring (field-conserving, range-violating) minted a  foldable leaf",
+            || prove_shielded_ring_clear_leaf(&r, &config),
+        );
     }
 
     /// THE NEGATIVE POLE (out-of-range output): an output value ≥ 2^VALUE_BITS (even without
@@ -925,16 +1507,9 @@ mod tests {
         let mut r = ShieldedRing2::honest_demo();
         r.out_val[0] = BabyBear::new(1u32 << VALUE_BITS); // exactly 2^VALUE_BITS: out of range
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        must_refuse_or_unsat_panic("an out-of-range output value", || {
             prove_shielded_ring_clear_leaf(&r, &config)
-        }));
-        match result {
-            Err(_) => {}
-            Ok(Err(_)) => {}
-            Ok(Ok(_)) => panic!(
-                "an out-of-range output value minted a foldable leaf — the range gadget is OPEN"
-            ),
-        }
+        });
     }
 
     /// THE NEGATIVE POLE (double-spend): a ring whose two legs re-use ONE note (the same
@@ -947,14 +1522,9 @@ mod tests {
         // Both legs spend leg 0's note ⇒ identical nullifiers.
         r.leg[1] = r.leg[0].clone();
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        must_refuse_or_unsat_panic("a double-spend ring", || {
             prove_shielded_ring_clear_leaf(&r, &config)
-        }));
-        match result {
-            Err(_) => {}
-            Ok(Err(_)) => {}
-            Ok(Ok(_)) => panic!("a double-spend ring minted a foldable leaf — nullifier OPEN"),
-        }
+        });
     }
 
     /// THE NEGATIVE POLE (mis-fusion): a leg whose matcher offer amount does NOT equal
@@ -970,14 +1540,9 @@ mod tests {
         r.offer_amount[0] = r.offer_amount[0] + BabyBear::ONE;
         r.want_min[1] = r.want_min[1] + BabyBear::ONE; // keep the tight edge intact
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        must_refuse_or_unsat_panic("a mis-fused leg", || {
             prove_shielded_ring_clear_leaf(&r, &config)
-        }));
-        match result {
-            Err(_) => {}
-            Ok(Err(_)) => {}
-            Ok(Ok(_)) => panic!("a mis-fused leg minted a foldable leaf — fusion OPEN"),
-        }
+        });
     }
 
     /// THE BINDING TOOTH (apex): a ring-clearing leaf whose leg claims a tuple that a
@@ -1002,14 +1567,9 @@ mod tests {
         let spend_other = prove_shielded_spend_leaf_with_claim(&other, &pis_other, &config)
             .expect("the mismatched leaf is itself an honest spend of a DIFFERENT note");
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        must_refuse_or_unsat_panic("a leg bound to a non-backing spend", || {
             prove_shielded_ring_clearing_apex(&ring_leaf, &spend0, &spend_other, &config)
-        }));
-        match result {
-            Err(_) => {}
-            Ok(Err(_)) => {}
-            Ok(Ok(_)) => panic!("a leg bound to a non-backing spend — apex binding OPEN"),
-        }
+        });
     }
 
     /// Sanity: the membership tooth still bites AT THE LEAF (a forged spend never even
@@ -1022,13 +1582,8 @@ mod tests {
         let mut pis = shielded_spend_leaf_public_inputs(&w);
         pis[1] = pis[1] + BabyBear::ONE; // forge the merkle_root
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        must_refuse_or_unsat_panic("a forged-membership spend minted a leaf", || {
             prove_shielded_spend_leaf(&w, &pis, &config)
-        }));
-        match result {
-            Err(_) => {}
-            Ok(Err(_)) => {}
-            Ok(Ok(_)) => panic!("a forged-membership spend minted a leaf — clause (a) OPEN"),
-        }
+        });
     }
 }

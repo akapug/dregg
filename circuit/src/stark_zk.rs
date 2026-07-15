@@ -46,7 +46,7 @@ mod zk_plonky3 {
     use rand::rngs::SmallRng;
 
     use crate::field::BabyBear;
-    use crate::plonky3_prover::{P3MerklePoseidon2Air, to_p3};
+    use crate::plonky3_prover::to_p3;
 
     /// The SHIELDED/HIDING lane's FRI knobs ([`create_zk_config`]), exported so
     /// `circuit-prove/tests/fri_params_soundness_budget.rs` can hand them to the VERIFIED Lean ledger
@@ -164,114 +164,5 @@ mod zk_plonky3 {
             .flat_map(|row| row.iter().map(|&v| to_p3(v)))
             .collect();
         RowMajorMatrix::new(values, width)
-    }
-
-    /// Prove a Merkle/Poseidon2 membership statement with **zero knowledge**.
-    ///
-    /// Same AIR and public inputs as `plonky3_prover::prove_plonky3`, but the
-    /// resulting proof is hiding: its FRI/Merkle openings reveal nothing about
-    /// the witness trace beyond what the public inputs already determine.
-    pub fn prove_zk(trace: &[Vec<BabyBear>], public_inputs: &[BabyBear]) -> DreggZkProof {
-        let config = create_zk_config();
-        let air = P3MerklePoseidon2Air;
-        let matrix = trace_to_matrix(trace);
-        let p3_public: Vec<P3BabyBear> = public_inputs.iter().map(|&v| to_p3(v)).collect();
-        prove(&config, &air, matrix, &p3_public)
-    }
-
-    /// Verify a zero-knowledge Plonky3 proof.
-    pub fn verify_zk(proof: &DreggZkProof, public_inputs: &[BabyBear]) -> Result<(), String> {
-        let config = create_zk_config();
-        let air = P3MerklePoseidon2Air;
-        let p3_public: Vec<P3BabyBear> = public_inputs.iter().map(|&v| to_p3(v)).collect();
-        verify(&config, &air, proof, &p3_public)
-            .map_err(|e| format!("ZK Plonky3 verification failed: {:?}", e))
-    }
-}
-
-// ============================================================================
-// Tests
-// ============================================================================
-
-#[cfg(test)]
-mod tests {
-    // Zero-knowledge tests (require the plonky3 feature).
-    #[cfg(feature = "plonky3")]
-    mod zk {
-        use super::super::*;
-        use crate::field::BabyBear;
-        use crate::plonky3_prover::generate_sound_merkle_trace;
-        use crate::poseidon2_air::create_poseidon2_test_witness;
-
-        fn witness_trace(leaf_val: u32) -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
-            let leaf = BabyBear::new(leaf_val);
-            let w = create_poseidon2_test_witness(leaf, 4);
-            let siblings: Vec<[BabyBear; 3]> = w.levels.iter().map(|l| l.siblings).collect();
-            let positions: Vec<u8> = w.levels.iter().map(|l| l.position).collect();
-            generate_sound_merkle_trace(leaf, &siblings, &positions)
-        }
-
-        #[test]
-        fn zk_prove_verify_roundtrip() {
-            let (trace, pis) = witness_trace(42424242);
-            let proof = prove_zk(&trace, &pis);
-            verify_zk(&proof, &pis).expect("ZK proof must verify");
-        }
-
-        #[test]
-        fn zk_proof_rejects_wrong_public_inputs() {
-            let (trace, pis) = witness_trace(123456);
-            let proof = prove_zk(&trace, &pis);
-            let mut bad = pis.clone();
-            bad[0] = bad[0] + BabyBear::ONE;
-            assert!(
-                verify_zk(&proof, &bad).is_err(),
-                "ZK proof must reject altered public inputs"
-            );
-        }
-
-        #[test]
-        fn zk_two_provings_independent_blinding() {
-            // Two ZK proofs of the SAME statement must differ (fresh blinding
-            // each time). If they were byte-identical, the blinding RNG would be
-            // deterministic and the proof would leak via cross-proof comparison.
-            let (trace, pis) = witness_trace(7777777);
-            let p1 = prove_zk(&trace, &pis);
-            let p2 = prove_zk(&trace, &pis);
-            let b1 = bincode_like(&p1);
-            let b2 = bincode_like(&p2);
-            assert_ne!(
-                b1, b2,
-                "two ZK proofs of the same statement must use independent blinding"
-            );
-            // Both still verify.
-            verify_zk(&p1, &pis).unwrap();
-            verify_zk(&p2, &pis).unwrap();
-        }
-
-        #[test]
-        fn zk_distinct_witnesses_same_public_outputs_both_verify() {
-            // Two DIFFERENT witnesses that yield the SAME public inputs (leaf+root)
-            // must each produce a verifying ZK proof, and the proofs must not be
-            // trivially equal — the witness is hidden.
-            //
-            // We construct this by proving the same public statement twice with
-            // freshly-blinded proofs; the hiding PCS guarantees the openings carry
-            // no witness information, so an observer cannot distinguish which
-            // (otherwise-valid) witness was used.
-            let (trace, pis) = witness_trace(31415926);
-            let pa = prove_zk(&trace, &pis);
-            let pb = prove_zk(&trace, &pis);
-            verify_zk(&pa, &pis).unwrap();
-            verify_zk(&pb, &pis).unwrap();
-            assert_ne!(bincode_like(&pa), bincode_like(&pb));
-        }
-
-        // Lightweight structural fingerprint of a proof for inequality testing.
-        // Serializes the full proof (commitments, salted openings, FRI batch)
-        // via postcard; differing bytes => differing blinding.
-        fn bincode_like(p: &DreggZkProof) -> Vec<u8> {
-            postcard::to_allocvec(p).expect("serialize ZK proof")
-        }
     }
 }

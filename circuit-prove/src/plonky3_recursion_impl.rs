@@ -14,10 +14,11 @@
 //!
 //! Any AIR that implements `p3-air::Air<InteractionSymbolicBuilder<F, EF>>`
 //! automatically satisfies the `RecursiveAir` trait via the blanket impl in
-//! `p3-recursion`. `P3MerklePoseidon2Air` (358 columns, degree-7) was the first
-//! AIR proven through this path; `prove_recursive_layer` is now generic so any
-//! `Air`-implementing AIR (e.g., `AggregationAir`, the Effect VM AIR via its
-//! `p3-air` bridge) can be wrapped without code duplication.
+//! `p3-recursion`. The generic uni-STARK helpers remain available for callers
+//! that already own an assured AIR. Merkle membership uses the multi-table IR2
+//! interpreter over the byte-pinned descriptor emitted by
+//! `Dregg2.Circuit.Emit.MerkleMembership4aryEmit`, then enters recursion as a
+//! `NativeBatchStark` leaf.
 //!
 //! ## Configuration
 //!
@@ -56,10 +57,15 @@ pub mod recursive {
     use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
     use p3_uni_stark::{Proof, StarkConfig, StarkGenericConfig, Val, prove, verify};
 
-    use dregg_circuit::field::BabyBear;
-    use dregg_circuit::plonky3_prover::{
-        P3MerklePoseidon2Air, generate_sound_merkle_trace, to_p3, trace_to_matrix,
+    use dregg_circuit::descriptor_ir2::{
+        Ir2Air, MemBoundaryWitness, UMemBoundaryWitness, ir2_airs_and_common_for_config,
+        prove_vm_descriptor2_for_config, verify_vm_descriptor2_with_config,
     };
+    use dregg_circuit::field::BabyBear;
+    use dregg_circuit::membership_descriptor_4ary::{
+        membership_descriptor_of_depth_4ary, membership_witness_4ary,
+    };
+    use dregg_circuit::plonky3_prover::to_p3;
 
     // ========================================================================
     // Type definitions matching the recursion library's expected configuration
@@ -532,29 +538,6 @@ pub mod recursive {
     {
     }
 
-    /// Generate a recursion-compatible inner proof for `P3MerklePoseidon2Air`
-    /// from a pre-built trace.
-    ///
-    /// Kept as a convenience for the Merkle-membership POC; new callers should
-    /// prefer [`prove_inner_for_air`] which accepts any [`RecursableAir`].
-    pub fn prove_for_recursion(
-        trace: &[Vec<BabyBear>],
-        public_inputs: &[BabyBear],
-    ) -> RecursionCompatibleProof {
-        let air = P3MerklePoseidon2Air;
-        let matrix = trace_to_matrix(trace);
-        prove_inner_for_air(&air, matrix, public_inputs)
-    }
-
-    /// Verify a recursion-compatible inner proof for `P3MerklePoseidon2Air`.
-    pub fn verify_for_recursion(
-        proof: &RecursionCompatibleProof,
-        public_inputs: &[BabyBear],
-    ) -> Result<(), String> {
-        let air = P3MerklePoseidon2Air;
-        verify_inner_for_air(&air, proof, public_inputs)
-    }
-
     /// Generic inner proof generator: any AIR satisfying [`RecursableAir`]
     /// can be proven with the recursion-compatible STARK config.
     pub fn prove_inner_for_air<A>(
@@ -616,23 +599,11 @@ pub mod recursive {
             .map_err(|e| format!("Recursion-compatible verification failed: {:?}", e))
     }
 
-    /// Produce a recursive proof that verifies a `P3MerklePoseidon2Air` inner
-    /// proof in-circuit. Kept for backwards-compatibility with the
-    /// Merkle-membership tests; new callers should prefer
-    /// [`prove_recursive_layer_for_air`].
-    pub fn prove_recursive_layer(
-        inner_proof: &RecursionCompatibleProof,
-        public_inputs: &[BabyBear],
-    ) -> Result<RecursionOutput<DreggRecursionConfig>, String> {
-        let air = P3MerklePoseidon2Air;
-        prove_recursive_layer_for_air(&air, inner_proof, public_inputs)
-    }
-
     /// Produce a recursive proof for any `RecursableAir` inner proof.
     ///
-    /// This is the generalized core recursion entry point. The Effect VM AIR
-    /// (via its `p3-air` bridge), the simpler `AggregationAir`, and the
-    /// canonical `P3MerklePoseidon2Air` all flow through this single function.
+    /// This is the generalized core recursion entry point for an assured
+    /// uni-STARK AIR. Descriptor-interpreted statements use the native-batch
+    /// entry point, as [`prove_recursive_membership`] does below.
     pub fn prove_recursive_layer_for_air<A>(
         air: &A,
         inner_proof: &RecursionCompatibleProof,
@@ -838,16 +809,48 @@ pub mod recursive {
         verify_recursive_batch_proof(&proof)
     }
 
-    /// End-to-end: generate an inner Merkle membership proof, then prove it recursively.
+    /// End-to-end: interpret the Lean-emitted Merkle-membership descriptor,
+    /// prove its IR2 batch, then verify that batch inside one recursion layer.
+    ///
+    /// The same emitted JSON and witness builder feed the deployed
+    /// `dregg_circuit::merkle_air::prove_membership_p3` path. The only
+    /// difference here is that the inner batch is minted under the recursion
+    /// config type so `RecursionInput::NativeBatchStark` can consume it.
     pub fn prove_recursive_membership(
         leaf_hash: BabyBear,
         siblings: &[[BabyBear; 3]],
         positions: &[u8],
     ) -> Result<RecursionOutput<DreggRecursionConfig>, String> {
-        let (trace, public_inputs) = generate_sound_merkle_trace(leaf_hash, siblings, positions);
-        let inner_proof = prove_for_recursion(&trace, &public_inputs);
-        verify_for_recursion(&inner_proof, &public_inputs)?;
-        prove_recursive_layer(&inner_proof, &public_inputs)
+        let desc = membership_descriptor_of_depth_4ary(siblings.len());
+        let (trace, public_inputs) = membership_witness_4ary(leaf_hash, siblings, positions)?;
+        let config = create_recursion_config();
+        let inner_proof = prove_vm_descriptor2_for_config::<DreggRecursionConfig>(
+            &desc,
+            &trace,
+            &public_inputs,
+            &MemBoundaryWitness::default(),
+            &[],
+            &UMemBoundaryWitness::default(),
+            &config,
+        )?;
+        verify_vm_descriptor2_with_config(&desc, &inner_proof, &public_inputs, &config)?;
+
+        let (airs, table_public_inputs, common) =
+            ir2_airs_and_common_for_config(&desc, &inner_proof, &public_inputs, &config)?;
+        let input: RecursionInput<'_, DreggRecursionConfig, Ir2Air> =
+            RecursionInput::NativeBatchStark {
+                airs: &airs,
+                proof: &inner_proof,
+                common_data: &common,
+                table_public_inputs,
+            };
+        build_and_prove_next_layer::<DreggRecursionConfig, Ir2Air, _, D>(
+            &input,
+            &config,
+            &create_recursion_backend(),
+            &ProveNextLayerParams::default(),
+        )
+        .map_err(|e| format!("Recursive emitted-membership proof generation failed: {e:?}"))
     }
 
     // ========================================================================
@@ -859,104 +862,8 @@ pub mod recursive {
         use super::*;
         use dregg_circuit::poseidon2_air::create_poseidon2_test_witness;
 
-        #[test]
-        fn inner_proof_recursion_compatible() {
-            let leaf = BabyBear::new(42424242);
-            let witness = create_poseidon2_test_witness(leaf, 4);
-
-            let siblings: Vec<[BabyBear; 3]> = witness.levels.iter().map(|l| l.siblings).collect();
-            let positions: Vec<u8> = witness.levels.iter().map(|l| l.position).collect();
-
-            let (trace, public_inputs) = generate_sound_merkle_trace(leaf, &siblings, &positions);
-            let proof = prove_for_recursion(&trace, &public_inputs);
-            let result = verify_for_recursion(&proof, &public_inputs);
-            assert!(
-                result.is_ok(),
-                "Recursion-compatible inner proof failed: {:?}",
-                result.err()
-            );
-        }
-
-        /// Block 1 (Kimchi survey § 9.1 starter task): demonstrate that the
-        /// recursion path is not bound to `P3MerklePoseidon2Air`. Take the
-        /// smallest other `Air`-implementing AIR in the crate
-        /// (`AggregationAir`, width 4, degree 1, 2 public inputs — the
-        /// minimum-non-trivial shape we have) and run it through the same
-        /// `prove_inner_for_air` / `prove_recursive_layer_for_air`
-        /// machinery. If this passes, the blanket `RecursiveAir` impl in
-        /// `p3-recursion` accepts a column count + constraint set that
-        /// differ from the Merkle POC, which is the *mechanical
-        /// generalization* the survey asked us to measure.
-        ///
-        /// Block 1 outcome: clean acceptance (no fork changes required) —
-        /// the `RecursableAir` trait alias captures exactly the bounds the
-        /// fork's blanket impl needs, and any AIR implementing the standard
-        /// `p3-air::Air<AB>` family flows through unmodified.
-        #[test]
-        fn recursive_aggregation_air_smoke() {
-            use dregg_circuit::plonky3_recursion::AggregationAir;
-            use p3_field::PrimeCharacteristicRing;
-            use p3_matrix::dense::RowMajorMatrix;
-
-            // Build a minimal aggregation trace by hand: 4 rows, width 4.
-            // Row layout: [acc_in, leaf, root, acc_out].
-            //
-            // The AggregationAir constraints are:
-            //   - first row: acc_in == pv[0]
-            //   - last row: acc_out == pv[1]
-            //   - transition: acc_out[i] == acc_in[i+1]
-            //
-            // We pick PI = [0, X] and a hand-rolled chain that satisfies the
-            // transitions. The hash-chain computation is NOT enforced (this
-            // is the recursion-shape smoke test, not the AggregationAir
-            // soundness test — that lives in plonky3_recursion::tests).
-            let pv0 = P3BabyBear::ZERO;
-            let pv1 = P3BabyBear::from_u64(0xC0FFEE);
-            let rows: Vec<[P3BabyBear; 4]> = vec![
-                [
-                    pv0,
-                    P3BabyBear::from_u64(1),
-                    P3BabyBear::from_u64(2),
-                    P3BabyBear::from_u64(10),
-                ],
-                [
-                    P3BabyBear::from_u64(10),
-                    P3BabyBear::from_u64(3),
-                    P3BabyBear::from_u64(4),
-                    P3BabyBear::from_u64(20),
-                ],
-                [
-                    P3BabyBear::from_u64(20),
-                    P3BabyBear::from_u64(5),
-                    P3BabyBear::from_u64(6),
-                    P3BabyBear::from_u64(30),
-                ],
-                [
-                    P3BabyBear::from_u64(30),
-                    P3BabyBear::from_u64(7),
-                    P3BabyBear::from_u64(8),
-                    pv1,
-                ],
-            ];
-            let flat: Vec<P3BabyBear> = rows.iter().flat_map(|r| r.iter().copied()).collect();
-            let matrix = RowMajorMatrix::new(flat, 4);
-
-            let pis_bb = vec![BabyBear::ZERO, BabyBear::new(0xC0FFEE)];
-
-            let air = AggregationAir;
-
-            // Inner proof generation through the generalized path.
-            let inner = prove_inner_for_air(&air, matrix, &pis_bb);
-            verify_inner_for_air(&air, &inner, &pis_bb)
-                .expect("AggregationAir inner proof must verify");
-
-            // Recursive layer through the generalized path.
-            let rec = prove_recursive_layer_for_air(&air, &inner, &pis_bb)
-                .expect("AggregationAir recursive layer must prove");
-            verify_recursive_layer(&rec).expect("AggregationAir recursive layer must verify");
-        }
-
-        /// Core POC: one layer of real in-circuit recursive STARK verification.
+        /// Recursion-shape smoke: one layer verifies the assured emitted
+        /// membership descriptor's real multi-table IR2 proof in-circuit.
         #[test]
         fn recursive_merkle_poc() {
             let leaf = BabyBear::new(42424242);

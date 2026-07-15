@@ -1,5 +1,5 @@
 //! Backward-compatible re-exports for Merkle AIR types, plus the AUDITED
-//! `p3-batch-stark` Merkle-Poseidon2 membership prove/verify path.
+//! Lean-emitted IR2 Merkle-Poseidon2 membership prove/verify path.
 //!
 //! The production DSL implementation lives in [`crate::dsl::membership`]; the
 //! legacy types are in [`crate::merkle_types`].
@@ -12,15 +12,12 @@
 //! tests the trace columns. The full-turn proof's MEMBERSHIP sub-proof leg used
 //! that unaudited verifier.
 //!
-//! This module routes the SAME membership statement through the **audited**
-//! Plonky3 verifier (`p3-batch-stark`, the same prover the EffectVM and DSL p3
-//! AIRs use) over the production [`create_config`]. It reuses the already
-//! constraint-complete [`P3MerklePoseidon2Air`] (real round-by-round inline
-//! Poseidon2, position-validity, hash-chain continuity, and `[leaf, root]`
-//! boundary binding) and [`generate_sound_merkle_trace`] — which mirror
-//! `dsl::membership::generate_merkle_poseidon2_trace` term-for-term (identical
-//! Lagrange child arrangement, arity-4 `hash_4_to_1`, and `[leaf, root]` public
-//! inputs), so the public inputs are byte-identical to the DSL path's.
+//! This module routes the SAME membership statement through the assured IR2
+//! interpreter. Its algebra is emitted by
+//! `Dregg2.Circuit.Emit.MerkleMembership4aryEmit`; Rust only parses that exact
+//! artifact and constructs witness rows. Poseidon2 is enforced by the emitted
+//! chip lookup, with position-validity, child arrangement, hash-chain
+//! continuity, and `[leaf, root]` boundary binding all Lean-authored.
 //!
 //! The proof carries a REAL terminal low-degree test (FRI, via the production
 //! `create_config`: log_blowup=3, 38 queries, 16 PoW) and an anti-ghost tooth: a forged `root`
@@ -35,16 +32,17 @@ pub use crate::merkle_types::{
 pub use membership_p3::*;
 
 mod membership_p3 {
-    use p3_batch_stark::{BatchProof, ProverData, StarkInstance, prove_batch, verify_batch};
-
+    use crate::descriptor_ir2::{
+        DreggStarkConfig, Ir2BatchProof, MemBoundaryWitness, prove_vm_descriptor2,
+        verify_vm_descriptor2,
+    };
     use crate::field::BabyBear;
-    use crate::plonky3_prover::{
-        DreggStarkConfig, P3MerklePoseidon2Air, create_config, generate_sound_merkle_trace,
-        trace_to_matrix,
+    use crate::membership_descriptor_4ary::{
+        membership_descriptor_of_depth_4ary, membership_witness_4ary,
     };
 
-    /// A Merkle-Poseidon2 membership proof on the AUDITED `p3-batch-stark` path.
-    pub type MembershipP3Proof = BatchProof<DreggStarkConfig>;
+    /// A Merkle-Poseidon2 membership proof interpreted from Lean-emitted IR2.
+    pub type MembershipP3Proof = Ir2BatchProof<DreggStarkConfig>;
 
     /// Errors from the audited p3 Merkle-membership path.
     #[derive(Debug, Clone)]
@@ -89,12 +87,13 @@ mod membership_p3 {
                 "siblings/positions length mismatch".into(),
             ));
         }
-        let (_trace, pis) = generate_sound_merkle_trace(leaf, siblings, positions);
+        let (_trace, pis) = membership_witness_4ary(leaf, siblings, positions)
+            .map_err(MembershipP3Error::InvalidWitness)?;
         Ok(pis)
     }
 
-    /// Prove 4-ary Merkle-Poseidon2 membership through the AUDITED Plonky3 prover
-    /// (`p3-batch-stark`).
+    /// Prove 4-ary Merkle-Poseidon2 membership by interpreting the Lean-emitted
+    /// IR2 descriptor through the audited Plonky3 backend.
     ///
     /// Proves that `leaf` is a member of the Poseidon2 Merkle tree whose root is
     /// recomputed from `(siblings, positions)`. The returned proof self-verifies
@@ -116,30 +115,12 @@ mod membership_p3 {
             ));
         }
 
-        let config = create_config();
-        let (trace, pis) = generate_sound_merkle_trace(leaf, siblings, positions);
-        let matrix = trace_to_matrix(&trace);
-        let p3_pis: Vec<_> = pis
-            .iter()
-            .map(|&v| crate::plonky3_prover::to_p3(v))
-            .collect();
-
-        let air = P3MerklePoseidon2Air;
-        let instances = vec![StarkInstance {
-            air: &air,
-            trace: &matrix,
-            public_values: p3_pis.clone(),
-        }];
-        let prover_data = ProverData::from_instances(&config, &instances);
-        let common = &prover_data.common;
-        let proof = prove_batch(&config, &instances, &prover_data);
-
-        // Self-verify: the audited verifier must accept what we just proved.
-        let airs = vec![P3MerklePoseidon2Air];
-        let pvs = vec![p3_pis];
-        verify_batch(&config, &airs, &proof, &pvs, common)
-            .map_err(|e| MembershipP3Error::VerificationFailed(format!("{e:?}")))?;
-        Ok(proof)
+        let depth = siblings.len();
+        let desc = membership_descriptor_of_depth_4ary(depth);
+        let (trace, pis) = membership_witness_4ary(leaf, siblings, positions)
+            .map_err(MembershipP3Error::InvalidWitness)?;
+        prove_vm_descriptor2(&desc, &trace, &pis, &MemBoundaryWitness::default(), &[])
+            .map_err(MembershipP3Error::VerificationFailed)
     }
 
     /// Verify a Merkle-Poseidon2 membership proof on the AUDITED Plonky3 verifier
@@ -151,16 +132,25 @@ mod membership_p3 {
         proof: &MembershipP3Proof,
         public_inputs: &[BabyBear],
     ) -> Result<(), MembershipP3Error> {
-        let config = create_config();
-        let p3_pis: Vec<_> = public_inputs
-            .iter()
-            .map(|&v| crate::plonky3_prover::to_p3(v))
-            .collect();
-        let airs = vec![P3MerklePoseidon2Air];
-        let pvs = vec![p3_pis];
-        let common = ProverData::from_airs_and_degrees(&config, &airs, &proof.degree_bits).common;
-        verify_batch(&config, &airs, proof, &pvs, &common)
-            .map_err(|e| MembershipP3Error::VerificationFailed(format!("{e:?}")))
+        if public_inputs.len() != 2 {
+            return Err(MembershipP3Error::VerificationFailed(
+                "membership public inputs must be [leaf, root]".into(),
+            ));
+        }
+        let desc = membership_descriptor_of_depth_4ary(
+            proof
+                .degree_bits
+                .first()
+                .copied()
+                .and_then(|bits| 1usize.checked_shl(bits as u32))
+                .ok_or_else(|| {
+                    MembershipP3Error::VerificationFailed(
+                        "membership proof has no valid main-trace degree".into(),
+                    )
+                })?,
+        );
+        verify_vm_descriptor2(&desc, proof, public_inputs)
+            .map_err(MembershipP3Error::VerificationFailed)
     }
 
     #[cfg(test)]

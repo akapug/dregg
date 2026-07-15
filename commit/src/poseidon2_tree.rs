@@ -550,9 +550,7 @@ mod tests {
     #[test]
     fn end_to_end_membership_stark_from_real_tree() {
         use dregg_circuit::note_spending_air::NoteSpendingWitness;
-        use dregg_circuit::plonky3_prover::{
-            generate_sound_merkle_trace, prove_plonky3, verify_plonky3,
-        };
+        use dregg_circuit::plonky3_prover::generate_sound_merkle_trace;
         use dregg_circuit::poseidon2::hash_many;
 
         // Step 1: Define a note's field-element preimage
@@ -623,19 +621,11 @@ mod tests {
             "sound Merkle trace must bind the real tree's leaf and root"
         );
 
-        // Step 7: Generate and verify a REAL STARK proof of membership.
-        let stark_proof = prove_plonky3(&trace, &public_inputs);
-        verify_plonky3(&stark_proof, &public_inputs)
-            .expect("end-to-end STARK proof verification failed");
-
-        // Step 8: Wrong leaf / wrong root must be rejected.
-        assert!(
-            verify_plonky3(&stark_proof, &[BabyBear::new(0xBAD), tree_root]).is_err(),
-            "Should reject wrong leaf"
-        );
-        assert!(
-            verify_plonky3(&stark_proof, &[commitment, BabyBear::new(0xBAD)]).is_err(),
-            "Should reject wrong root"
-        );
+        // Steps 7-8 (prove/verify + reject wrong leaf/root) previously drove the hand-authored
+        // Rust-authored Merkle AIR, retired under architectural law #1. The membership algebra is now the
+        // descriptor emitted by `MerkleMembership4aryEmit.lean`, and those teeth live with it:
+        // `dregg_circuit::merkle_air` tests `membership_p3_rejects_forged_root`,
+        // `membership_p3_rejects_forged_leaf`, and `membership_p3_rejects_non_member_leaf`.
+        // What remains uniquely valuable here is Steps 1-6: the sound trace binds the REAL tree.
     }
 }
