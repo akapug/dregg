@@ -434,6 +434,7 @@ pub fn prove_blinded_membership_binding_node_segmented(
 mod tests {
     use super::*;
     use crate::ivc_turn_chain::ir2_leaf_wrap_config;
+    use dregg_circuit::refusal::must_refuse_or_unsat_panic;
 
     /// A distinct-felt honest blinded membership (leftmost-child path, depth 2).
     fn make_input() -> BlindedMembershipInput {
@@ -547,16 +548,9 @@ mod tests {
         assert_ne!(forged_pis, inp.public_inputs().unwrap());
         let config = ir2_leaf_wrap_config();
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        must_refuse_or_unsat_panic("a FORGED blinded-membership PI", || {
             prove_blinded_membership_leaf(&inp, &forged_pis, &config)
-        }));
-        match result {
-            Err(_) => {}
-            Ok(Err(_)) => {}
-            Ok(Ok(_)) => {
-                panic!("a FORGED blinded-membership PI minted a foldable leaf — soundness OPEN")
-            }
-        }
+        });
     }
 
     /// THE FOLD, HONEST: the binding MECHANISM node folds a leg leaf (re-exposing the claim) WITH
@@ -602,15 +596,9 @@ mod tests {
         let leaf = prove_blinded_membership_leaf_with_claim(&honest, &honest_pis, &config)
             .expect("the honest blinded-membership leaf");
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            prove_blinded_membership_binding_node(&leg, &leaf, &config)
-        }));
-        match result {
-            Err(_) => {}
-            Ok(Err(_)) => {}
-            Ok(Ok(_)) => panic!(
-                "a leg claiming a show the leaf does not bind produced a root — binding OPEN"
-            ),
-        }
+        must_refuse_or_unsat_panic(
+            "a leg claiming a show the leaf does not bind produced a root",
+            || prove_blinded_membership_binding_node(&leg, &leaf, &config),
+        );
     }
 }

@@ -23,6 +23,7 @@
 //!   cargo test -p dregg-circuit-prove --test bridge_binding_mechanism -- --ignored --nocapture
 
 use dregg_circuit::bridge_action_air::BridgeActionWitness;
+use dregg_circuit::refusal::must_refuse;
 use dregg_circuit_prove::bridge_leaf_adapter::prove_bridge_leaf_tuple_claim;
 use dregg_circuit_prove::ivc_turn_chain::ir2_leaf_wrap_config;
 use dregg_circuit_prove::joint_turn_recursive::prove_bridge_binding_node;
@@ -72,16 +73,9 @@ fn bridge_binding_forged_rejected() {
     let sub = prove_bridge_leaf_tuple_claim(&sub_w, &sub_pis, &config)
         .expect("the honest sub-proof leaf mints");
 
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        prove_bridge_binding_node(&leg, &sub, &config)
-    }));
-    match result {
-        Err(_) => {}
-        Ok(Err(_)) => {}
-        Ok(Ok(_)) => panic!(
-            "a leg claiming a tuple NO bound bridge-action sub-proof backs folded into a verifying \
-             node — the bridge binding mechanism is OPEN"
-        ),
-    }
+    must_refuse(
+        "a leg claiming a tuple NO bound bridge-action sub-proof backs folded into a verifying  node",
+        || prove_bridge_binding_node(&leg, &sub, &config),
+    );
     eprintln!("BRIDGE binding: forged tuple REJECTED by the fold (connect conflict ⇒ no root).");
 }

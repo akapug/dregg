@@ -51,6 +51,7 @@ use dregg_circuit::effect_vm::trace_rotated::{
 use dregg_circuit::effect_vm::{CellState, Effect};
 use dregg_circuit::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV;
 use dregg_circuit::field::BabyBear;
+use dregg_circuit::refusal::must_refuse;
 use dregg_circuit_prove::carrier_pin_twin::splice_pi_values;
 use dregg_circuit_prove::custom_proof_bind::custom_proof_pi_commitment;
 use dregg_circuit_prove::ivc_turn_chain::{
@@ -423,17 +424,10 @@ fn deployed_dfa_turn_forged_rc_rejected() {
     assert_ne!(forged, real);
     let turns = build_chain(forged);
 
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        prove_turn_chain_recursive(&turns)
-    }));
-    match result {
-        Err(_) => {}
-        Ok(Err(_)) => {}
-        Ok(Ok(_)) => panic!(
-            "a FORGED route-commitment (no verifying DSL sub-proof backs it) folded into a \
-             verifying deployed whole-chain artifact — the deployed dsl binding is OPEN"
-        ),
-    }
+    must_refuse(
+        "a FORGED route-commitment (no verifying DSL sub-proof backs it) folded into a  verifying deployed whole-chain artifact",
+        || prove_turn_chain_recursive(&turns),
+    );
     eprintln!("DEPLOYED dsl binding: forged route-commitment REJECTED by the deployed fold.");
 }
 

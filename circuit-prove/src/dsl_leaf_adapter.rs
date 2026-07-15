@@ -173,6 +173,7 @@ mod tests {
     use dregg_circuit::dsl::circuit::{
         CircuitDescriptor, ColumnDef, ColumnKind, ConstraintExpr, PolyTerm,
     };
+    use dregg_circuit::refusal::must_refuse;
 
     /// A genuine ALGEBRAIC DFA transition predicate (no Poseidon2 / TableFunction), so it reuses the
     /// custom leaf machinery directly. A toy "advance" DFA: `next == state + symbol` per row (the
@@ -353,14 +354,9 @@ mod tests {
         let pis: Vec<BabyBear> = vec![BabyBear::new(0), BabyBear::new(2)];
         let config = ir2_leaf_wrap_config();
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        must_refuse("a FORGED DSL transition", || {
             prove_dsl_leaf_with_commitment(&program, &w, rows, &pis, &config)
-        }));
-        match result {
-            Err(_) => {}     // debug constraint builder panicked on the unsatisfied step gate
-            Ok(Err(_)) => {} // or the inner self-verify returned an error
-            Ok(Ok(_)) => panic!("a FORGED DSL transition minted a foldable leaf — soundness OPEN"),
-        }
+        });
     }
 
     /// THE PRODUCTION DESCRIPTOR FULLY MAPS: `dregg-dfa-routing-v1` uses `Hash4to1` (entry-hash,

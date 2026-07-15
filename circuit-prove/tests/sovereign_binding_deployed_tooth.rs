@@ -40,6 +40,7 @@ use dregg_circuit::effect_vm::trace_rotated::{
 use dregg_circuit::effect_vm::{CellState, Effect};
 use dregg_circuit::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV;
 use dregg_circuit::field::BabyBear;
+use dregg_circuit::refusal::must_refuse;
 use dregg_circuit_prove::carrier_pin_twin::splice_pi_values;
 use dregg_circuit_prove::ivc_turn_chain::{
     FinalizedTurn, SOVEREIGN_KEY_COMMIT_PI_LO, ir2_leaf_wrap_config, prove_turn_chain_recursive,
@@ -311,17 +312,10 @@ fn deployed_sovereign_turn_forged_key_commit_rejected() {
     forged[0] += BabyBear::ONE;
     let turns = build_chain(forged);
 
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        prove_turn_chain_recursive(&turns)
-    }));
-    match result {
-        Err(_) => {}
-        Ok(Err(_)) => {}
-        Ok(Ok(_)) => panic!(
-            "a FORGED sovereign key_commit (no leg teeth back it) folded into a verifying \
-             deployed whole-chain artifact — the deployed sovereign binding is OPEN"
-        ),
-    }
+    must_refuse(
+        "a FORGED sovereign key_commit (no leg teeth back it) folded into a verifying  deployed whole-chain artifact",
+        || prove_turn_chain_recursive(&turns),
+    );
     eprintln!(
         "DEPLOYED sovereign binding: forged key_commit REJECTED by the deployed fold (no root)."
     );

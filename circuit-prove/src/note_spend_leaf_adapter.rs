@@ -861,6 +861,7 @@ mod tests {
     use dregg_circuit::descriptor_ir2::chip_absorb_all_lanes;
     use dregg_circuit::note_spending_air::test_spending_key;
     use dregg_circuit::poseidon2::hash_many;
+    use dregg_circuit::refusal::must_refuse_or_unsat_panic;
 
     /// THE FEASIBILITY KAT: the chip's arity-7 absorb with inputs
     /// `[pred, t0..t3, 0xFACF, 1]` is BYTE-IDENTICAL to `poseidon2::hash_fact` —
@@ -1021,14 +1022,9 @@ mod tests {
         pis[pi::NULLIFIER] += BabyBear::ONE;
         let config = ir2_leaf_wrap_config();
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        must_refuse_or_unsat_panic("a FORGED nullifier", || {
             prove_note_spend_leaf(&w, &pis, &config)
-        }));
-        match result {
-            Err(_) => {}     // debug constraint builder panicked on the unsatisfied pin
-            Ok(Err(_)) => {} // or the inner self-verify rejected
-            Ok(Ok(_)) => panic!("a FORGED nullifier minted a foldable leaf — soundness OPEN"),
-        }
+        });
     }
 
     /// THE MINT-BINDING TOOTH: a forged mint_hash lane (every other PI honest) is
@@ -1042,13 +1038,8 @@ mod tests {
         pis[NOTE_SPEND_MINT_HASH_PI] += BabyBear::ONE;
         let config = ir2_leaf_wrap_config();
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        must_refuse_or_unsat_panic("a FORGED mint_hash", || {
             prove_note_spend_leaf(&w, &pis, &config)
-        }));
-        match result {
-            Err(_) => {}
-            Ok(Err(_)) => {}
-            Ok(Ok(_)) => panic!("a FORGED mint_hash minted a foldable leaf — soundness OPEN"),
-        }
+        });
     }
 }

@@ -693,6 +693,7 @@ mod tests {
     use super::*;
     use crate::ivc_turn_chain::ir2_leaf_wrap_config;
     use crate::shielded::spend_circuit::pi;
+    use dregg_circuit::refusal::must_refuse_or_unsat_panic;
 
     /// A REAL shielded-spend witness (depth-4 Merkle path, a live > 2^0 value). The
     /// forward-chained padding makes the ungated Merkle/leaf/value-binding hashes hold
@@ -804,14 +805,9 @@ mod tests {
         pis[pi::NULLIFIER] += BabyBear::ONE;
         let config = ir2_leaf_wrap_config();
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        must_refuse_or_unsat_panic("a FORGED nullifier", || {
             prove_shielded_spend_leaf(&w, &pis, &config)
-        }));
-        match result {
-            Err(_) => {}     // debug constraint builder panicked on the unsatisfied pin
-            Ok(Err(_)) => {} // or the inner self-verify rejected
-            Ok(Ok(_)) => panic!("a FORGED nullifier minted a foldable leaf — soundness OPEN"),
-        }
+        });
     }
 
     /// THE NEGATIVE POLE (merkle_root): a FORGED merkle_root lane (a note claimed
@@ -824,14 +820,9 @@ mod tests {
         pis[pi::MERKLE_ROOT] += BabyBear::ONE;
         let config = ir2_leaf_wrap_config();
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        must_refuse_or_unsat_panic("a FORGED merkle_root", || {
             prove_shielded_spend_leaf(&w, &pis, &config)
-        }));
-        match result {
-            Err(_) => {}
-            Ok(Err(_)) => {}
-            Ok(Ok(_)) => panic!("a FORGED merkle_root minted a foldable leaf — soundness OPEN"),
-        }
+        });
     }
 
     /// THE NEGATIVE POLE (value-binding): a FORGED value_binding lane (the ATTESTED
@@ -845,14 +836,9 @@ mod tests {
         pis[pi::VALUE_BINDING] += BabyBear::ONE;
         let config = ir2_leaf_wrap_config();
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        must_refuse_or_unsat_panic("a FORGED value_binding", || {
             prove_shielded_spend_leaf(&w, &pis, &config)
-        }));
-        match result {
-            Err(_) => {}
-            Ok(Err(_)) => {}
-            Ok(Ok(_)) => panic!("a FORGED value_binding minted a foldable leaf — soundness OPEN"),
-        }
+        });
     }
 
     /// THE BINDING TOOTH (both polarities), a REAL in-circuit `connect`. A leg leaf and
@@ -894,17 +880,9 @@ mod tests {
         assert_ne!(pis2[pi::NULLIFIER], pis[pi::NULLIFIER], "distinct spends");
         let forged_leg = prove_shielded_spend_leaf_with_claim(&w2, &pis2, &config)
             .expect("the forged leg is itself an honest leaf of a DIFFERENT spend");
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            prove_shielded_spend_binding_node(&forged_leg, &sub, &config)
-        }));
-        match result {
-            Err(_) => {}     // connect conflict panicked the debug builder
-            Ok(Err(_)) => {} // or the aggregation rejected
-            Ok(Ok(_)) => {
-                panic!(
-                    "a leg claiming a tuple no verifying shielded-spend backs BOUND — soundness OPEN"
-                )
-            }
-        }
+        must_refuse_or_unsat_panic(
+            "a leg claiming a tuple no verifying shielded-spend backs BOUND",
+            || prove_shielded_spend_binding_node(&forged_leg, &sub, &config),
+        );
     }
 }

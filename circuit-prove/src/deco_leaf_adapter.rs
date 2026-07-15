@@ -606,6 +606,7 @@ mod tests {
     use super::*;
     use crate::ivc_turn_chain::ir2_leaf_wrap_config;
     use dregg_circuit::descriptor_ir2::{VmConstraint2, chip_absorb_all_lanes};
+    use dregg_circuit::refusal::must_refuse;
 
     fn make_witness(tag: u32) -> DecoLeafWitness {
         DecoLeafWitness {
@@ -737,14 +738,9 @@ mod tests {
         let mut pis = deco_leaf_public_inputs(&w);
         pis[DECO_LEAF_PAYMENT_HASH_PI] += BabyBear::ONE;
         let config = ir2_leaf_wrap_config();
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        must_refuse("a FORGED payment_hash", || {
             prove_deco_leaf(&w, &pis, &config)
-        }));
-        match result {
-            Err(_) => {}
-            Ok(Err(_)) => {}
-            Ok(Ok(_)) => panic!("a FORGED payment_hash minted a foldable leaf — soundness OPEN"),
-        }
+        });
     }
 
     /// THE FACT-BINDING TOOTH: a forged fact lane (tampered amount, payment_hash stale) is
@@ -756,14 +752,7 @@ mod tests {
         let mut pis = deco_leaf_public_inputs(&w);
         pis[COL_AMOUNT] += BabyBear::ONE; // amount changes, payment_hash lane stays
         let config = ir2_leaf_wrap_config();
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            prove_deco_leaf(&w, &pis, &config)
-        }));
-        match result {
-            Err(_) => {}
-            Ok(Err(_)) => {}
-            Ok(Ok(_)) => panic!("a FORGED amount minted a foldable leaf — soundness OPEN"),
-        }
+        must_refuse("a FORGED amount", || prove_deco_leaf(&w, &pis, &config));
     }
 
     /// A "leg" that publishes ONE claimed payment identity at claim position 0 — the DECO leaf
@@ -818,15 +807,9 @@ mod tests {
         let backing =
             prove_deco_leaf_with_claim(&backing_w, &deco_leaf_public_inputs(&backing_w), &config)
                 .expect("backing leaf B proves");
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            prove_deco_binding_node(&leg, &backing, &config)
-        }));
-        match result {
-            Err(_) => {}
-            Ok(Err(_)) => {}
-            Ok(Ok(_)) => panic!(
-                "a leg identity backed by NO matching DECO commitment folded — the connect is OPEN"
-            ),
-        }
+        must_refuse(
+            "a leg identity backed by NO matching DECO commitment folded",
+            || prove_deco_binding_node(&leg, &backing, &config),
+        );
     }
 }

@@ -498,6 +498,7 @@ pub fn prove_membership_binding_node_segmented(
 mod tests {
     use super::*;
     use crate::ivc_turn_chain::ir2_leaf_wrap_config;
+    use dregg_circuit::refusal::must_refuse;
 
     fn make_witness() -> SenderMembershipWitness {
         SenderMembershipWitness {
@@ -579,15 +580,8 @@ mod tests {
         assert_ne!(forged_pis, w.public_inputs());
         let config = ir2_leaf_wrap_config();
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        must_refuse("a FORGED membership tuple", || {
             prove_membership_leaf(&w, &forged_pis, &config)
-        }));
-        match result {
-            Err(_) => {}
-            Ok(Err(_)) => {}
-            Ok(Ok(_)) => {
-                panic!("a FORGED membership tuple minted a foldable leaf — soundness OPEN")
-            }
-        }
+        });
     }
 }

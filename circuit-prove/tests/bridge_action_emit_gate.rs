@@ -42,6 +42,7 @@ use dregg_circuit::descriptor_ir2::{
 use dregg_circuit::field::BabyBear;
 use dregg_circuit::lean_descriptor_air::{VmConstraint, VmRow};
 
+use dregg_circuit::refusal::{Outcome, classify};
 use dregg_circuit_prove::bridge_leaf_adapter::bridge_action_to_descriptor2;
 
 /// The BYTE-IDENTICAL wire string Lean's `emitVmJson2 bridgeActionDesc` emits (pinned by the
@@ -110,14 +111,16 @@ fn fixture() -> BridgeActionWitness {
 /// alone does not check the first-row `PiBinding` against the public inputs — the CONSUMER's
 /// `verify_vm_descriptor2` is the real check (exactly the production posture).
 fn rejects(desc: &EffectVmDescriptor2, trace: &[Vec<BabyBear>], pis: &[BabyBear]) -> bool {
-    let r = std::panic::catch_unwind(AssertUnwindSafe(|| {
+    match classify("rejects", || {
         let proof = prove_vm_descriptor2(desc, trace, pis, &MemBoundaryWitness::default(), &[])?;
         verify_vm_descriptor2(desc, &proof, pis)
-    }));
-    match r {
-        Err(_) => true,      // panicked anywhere → rejected
-        Ok(Err(_)) => true,  // prove OR verify returned Err → rejected
-        Ok(Ok(())) => false, // proved AND verified → ACCEPTED
+    }) {
+        // The p3 debug prover's DOCUMENTED unsat verdict — a real refusal.
+        // `classify` REDs on any other panic (a stray unwrap, a trace-assembly
+        // debug_assert), which used to land here and read as "rejected".
+        Outcome::UnsatPanic(_) => true,
+        Outcome::Err(_) => true,
+        Outcome::Accepted(_) => false,
     }
 }
 

@@ -41,6 +41,7 @@ use dregg_circuit::dsl::derivation::{
 use dregg_circuit::field::BabyBear;
 use dregg_circuit::lean_descriptor_air::{LeanExpr, VmConstraint, VmRow};
 use dregg_circuit::poseidon2::hash_fact;
+use dregg_circuit::refusal::{Outcome, classify};
 
 /// The BYTE-IDENTICAL wire string Lean's `emitVmJson2 derivationDesc` emits (pinned by the `#guard`
 /// in `DerivationEmit.lean`). If Lean's emitter drifts, that `#guard` fails; if this literal drifts,
@@ -502,14 +503,16 @@ fn honest_trace() -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
 /// Prove-THEN-verify is the faithful gate: `prove_vm_descriptor2` self-verifies only under
 /// `debug_assertions`, so in `--release` the consumer's `verify_vm_descriptor2` is the real check.
 fn rejects(desc: &EffectVmDescriptor2, trace: &[Vec<BabyBear>], pis: &[BabyBear]) -> bool {
-    let r = std::panic::catch_unwind(AssertUnwindSafe(|| {
+    match classify("rejects", || {
         let proof = prove_vm_descriptor2(desc, trace, pis, &MemBoundaryWitness::default(), &[])?;
         verify_vm_descriptor2(desc, &proof, pis)
-    }));
-    match r {
-        Err(_) => true,
-        Ok(Err(_)) => true,
-        Ok(Ok(())) => false,
+    }) {
+        // The p3 debug prover's DOCUMENTED unsat verdict — a real refusal.
+        // `classify` REDs on any other panic (a stray unwrap, a trace-assembly
+        // debug_assert), which used to land here and read as "rejected".
+        Outcome::UnsatPanic(_) => true,
+        Outcome::Err(_) => true,
+        Outcome::Accepted(_) => false,
     }
 }
 

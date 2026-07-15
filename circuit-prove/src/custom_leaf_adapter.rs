@@ -1357,6 +1357,7 @@ mod tests {
     use dregg_circuit::dsl::circuit::{
         CircuitDescriptor, ColumnDef, ColumnKind, ConstraintExpr, PolyTerm,
     };
+    use dregg_circuit::refusal::must_refuse_or_unsat_panic;
 
     /// The same minimal-but-REAL custom program the off-AIR engine's tests use: one
     /// boolean column (`dir`) + one conservation polynomial
@@ -1487,16 +1488,9 @@ mod tests {
         let pis: Vec<BabyBear> = vec![BabyBear::new(10), BabyBear::new(16)];
         let config = ir2_leaf_wrap_config();
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        must_refuse_or_unsat_panic("a FORGED custom witness", || {
             prove_custom_leaf(&program, &w, rows, &pis, &config)
-        }));
-        match result {
-            // The debug constraint builder panicked on the unsatisfied gate — rejected.
-            Err(_) => {}
-            // Or the inner self-verify returned an error — rejected.
-            Ok(Err(_)) => {}
-            Ok(Ok(_)) => panic!("a FORGED custom witness minted a foldable leaf — soundness OPEN"),
-        }
+        });
     }
 
     /// An honest witness for an arbitrary credit (dir=0): new = old + amt, constant across rows.
@@ -1731,14 +1725,9 @@ mod tests {
         sib0[1] = sib0[1] + BabyBear::ONE;
         let config = ir2_leaf_wrap_config();
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        must_refuse_or_unsat_panic("a FORGED Merkle path", || {
             prove_custom_leaf(&program, &w, 4, &pis, &config)
-        }));
-        match result {
-            Err(_) => {}     // a debug constraint/chip builder panicked — rejected
-            Ok(Err(_)) => {} // the inner self-verify returned an error — rejected
-            Ok(Ok(_)) => panic!("a FORGED Merkle path minted a foldable leaf — soundness OPEN"),
-        }
+        });
     }
 
     /// A forged path that DOES recompute the chain (so every per-level `MerkleHash`
@@ -1762,15 +1751,10 @@ mod tests {
         );
         let config = ir2_leaf_wrap_config();
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        must_refuse_or_unsat_panic("a root-pin mismatch", || {
             // honest_pis claims the honest root; `w` climbs to other root ⇒ pin fails.
             prove_custom_leaf(&program, &w, 4, &honest_pis, &config)
-        }));
-        match result {
-            Err(_) => {}
-            Ok(Err(_)) => {}
-            Ok(Ok(_)) => panic!("a root-pin mismatch minted a foldable leaf — soundness OPEN"),
-        }
+        });
     }
 
     // ========================================================================
@@ -1867,16 +1851,9 @@ mod tests {
         w.get_mut("running_hash").unwrap()[1] += BabyBear::ONE;
         let config = ir2_leaf_wrap_config();
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        must_refuse_or_unsat_panic("a forged running-hash chain", || {
             prove_custom_leaf(&program, &w, rows, &pis, &config)
-        }));
-        match result {
-            Err(_) => {}
-            Ok(Err(_)) => {}
-            Ok(Ok(_)) => {
-                panic!("a forged running-hash chain minted a foldable leaf — soundness OPEN")
-            }
-        }
+        });
     }
 
     /// THE NEGATIVE POLE (wrong table entry): tampering a `next_state` to an edge the
@@ -1897,14 +1874,9 @@ mod tests {
         w.get_mut("next_state").unwrap()[1] = BabyBear::new(1);
         let config = ir2_leaf_wrap_config();
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        must_refuse_or_unsat_panic("a forbidden table edge", || {
             prove_custom_leaf(&program, &w, rows, &pis, &config)
-        }));
-        match result {
-            Err(_) => {}
-            Ok(Err(_)) => {}
-            Ok(Ok(_)) => panic!("a forbidden table edge minted a foldable leaf — soundness OPEN"),
-        }
+        });
     }
 
     // ========================================================================
@@ -2117,16 +2089,9 @@ mod tests {
         pis[31] += BabyBear::ONE;
         let config = ir2_leaf_wrap_config();
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        must_refuse_or_unsat_panic("a mutated PI with a stale witness minted a leaf", || {
             prove_custom_leaf_with_commitment(&program, &w, rows, &pis, &config)
-        }));
-        match result {
-            Err(_) => {}     // debug constraint builder panicked — rejected
-            Ok(Err(_)) => {} // inner self-verify errored — rejected
-            Ok(Ok(_)) => {
-                panic!("a mutated PI with a stale witness minted a leaf — soundness OPEN")
-            }
-        }
+        });
     }
 
     /// THE NEGATIVE POLE (declared length): passing 31 PIs against a 32-PI
@@ -2140,15 +2105,9 @@ mod tests {
         let short = pis[..31].to_vec();
         let config = ir2_leaf_wrap_config();
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            prove_custom_leaf_with_commitment(&program, &w, rows, &short, &config)
-        }));
-        match result {
-            Err(_) => {}
-            Ok(Err(_)) => {}
-            Ok(Ok(_)) => {
-                panic!("a declared-length mismatch minted a leaf — the length is not bound")
-            }
-        }
+        must_refuse_or_unsat_panic(
+            "a declared-length mismatch minted a leaf — the length is not bound",
+            || prove_custom_leaf_with_commitment(&program, &w, rows, &short, &config),
+        );
     }
 }

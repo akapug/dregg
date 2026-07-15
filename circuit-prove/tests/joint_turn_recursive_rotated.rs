@@ -48,6 +48,7 @@ use dregg_circuit::effect_vm::sel;
 
 // `RecursiveJointTurnProof` is named via the `prove_*` return types only; keep it
 // imported for doc clarity without tripping the unused-import lint.
+use dregg_circuit::refusal::{Outcome, classify};
 #[allow(unused_imports)]
 use dregg_circuit_prove::joint_turn_recursive::RecursiveJointTurnProof as _RecursiveJointTurnProof;
 
@@ -247,13 +248,16 @@ fn ungated_joint_prover_with_forged_cell_commit_cannot_produce_a_root() {
     let forged = FinalizedTurn::new(DescriptorParticipant::rotated(forged_leg));
     let cells = [forged, honest];
 
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        prove_joint_turn_recursive_without_host_gate(&cells, &[sel::TRANSFER, sel::TRANSFER])
-    }));
-    let rejected = match result {
-        Ok(Ok(_)) => false, // a verifying root over a forged cell — soundness hole!
-        Ok(Err(_)) => true,
-        Err(_) => true,
+    let rejected = match classify(
+        "ungated_joint_prover_with_forged_cell_commit_cannot_produce_a_root",
+        || prove_joint_turn_recursive_without_host_gate(&cells, &[sel::TRANSFER, sel::TRANSFER]),
+    ) {
+        // The p3 debug prover's DOCUMENTED unsat verdict — a real refusal.
+        // `classify` REDs on any other panic (a stray unwrap, a trace-assembly
+        // debug_assert), which used to land here and read as "rejected".
+        Outcome::UnsatPanic(_) => true,
+        Outcome::Err(_) => true,
+        Outcome::Accepted(_) => false,
     };
     assert!(
         rejected,

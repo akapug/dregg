@@ -39,6 +39,7 @@ use dregg_circuit::note_spending_air::{
     NOTE_SPENDING_WIDTH, NoteSpendingWitness, merkle_col, pi, test_spending_key,
 };
 use dregg_circuit::poseidon2::{hash_fact, hash_many};
+use dregg_circuit::refusal::{Outcome, classify};
 use dregg_circuit_prove::note_spend_leaf_adapter::{
     note_spend_leaf_public_inputs, note_spend_to_descriptor2,
 };
@@ -119,14 +120,16 @@ fn honest_base_trace(w: &NoteSpendingWitness) -> (Vec<Vec<BabyBear>>, Vec<BabyBe
 /// `true` iff this `(trace, pis)` is REJECTED end-to-end — proving refuses OR the produced proof
 /// fails to VERIFY against `pis`. `false` iff it both proves AND verifies (an accepted spend).
 fn rejects(desc: &EffectVmDescriptor2, trace: &[Vec<BabyBear>], pis: &[BabyBear]) -> bool {
-    let r = std::panic::catch_unwind(AssertUnwindSafe(|| {
+    match classify("rejects", || {
         let proof = prove_vm_descriptor2(desc, trace, pis, &MemBoundaryWitness::default(), &[])?;
         verify_vm_descriptor2(desc, &proof, pis)
-    }));
-    match r {
-        Err(_) => true,      // panicked anywhere → rejected
-        Ok(Err(_)) => true,  // prove OR verify returned Err → rejected
-        Ok(Ok(())) => false, // proved AND verified → ACCEPTED
+    }) {
+        // The p3 debug prover's DOCUMENTED unsat verdict — a real refusal.
+        // `classify` REDs on any other panic (a stray unwrap, a trace-assembly
+        // debug_assert), which used to land here and read as "rejected".
+        Outcome::UnsatPanic(_) => true,
+        Outcome::Err(_) => true,
+        Outcome::Accepted(_) => false,
     }
 }
 

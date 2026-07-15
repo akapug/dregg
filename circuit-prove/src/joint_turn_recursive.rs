@@ -1038,6 +1038,7 @@ mod custom_fold_wire_tests {
     };
     use dregg_circuit::field::BABYBEAR_P;
     use dregg_circuit::lean_descriptor_air::{VmConstraint, VmRow};
+    use dregg_circuit::refusal::must_refuse;
     use std::collections::HashMap;
 
     /// The same minimal-but-REAL custom program the off-AIR engine + custom-leaf adapter tests
@@ -1216,18 +1217,10 @@ mod custom_fold_wire_tests {
             .expect("the custom sub-proof leaf proves");
         let ev_leaf = effectvm_leg_leaf(forged, &config); // internally consistent, but FORGED claim
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            prove_custom_binding_node(&ev_leaf, &custom_leaf, &config)
-        }));
-        match result {
-            // The in-circuit `connect` conflict panicked the constraint/witness builder — rejected.
-            Err(_) => {}
-            // Or the aggregation returned an error — rejected.
-            Ok(Err(_)) => {}
-            Ok(Ok(_)) => panic!(
-                "a FORGED custom_proof_commitment minted a verifying fold node — the binding is OPEN"
-            ),
-        }
+        must_refuse(
+            "a FORGED custom_proof_commitment minted a verifying fold node",
+            || prove_custom_binding_node(&ev_leaf, &custom_leaf, &config),
+        );
     }
 
     /// THE PER-LANE TOOTH (flag-day spec: mutations targeted at EACH of the eight lanes make
@@ -1254,17 +1247,10 @@ mod custom_fold_wire_tests {
             forged[k] = BabyBear::new((real[k].0 + 1) % BABYBEAR_P);
             assert_ne!(forged[k], real[k]);
             let ev_leaf = effectvm_leg_leaf(forged, &config);
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                prove_custom_binding_node(&ev_leaf, &custom_leaf, &config)
-            }));
-            match result {
-                Err(_) => {}
-                Ok(Err(_)) => {}
-                Ok(Ok(_)) => panic!(
-                    "a commitment forged ONLY in lane {k} minted a verifying fold node — \
-                     that lane is NOT bound"
-                ),
-            }
+            must_refuse(
+                "a commitment forged ONLY in lane {k} minted a verifying fold node —  that lane is NOT bound",
+                || prove_custom_binding_node(&ev_leaf, &custom_leaf, &config),
+            );
         }
     }
 }

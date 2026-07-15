@@ -470,6 +470,7 @@ pub fn prove_presentation_binding_node_segmented(
 mod tests {
     use super::*;
     use crate::ivc_turn_chain::ir2_leaf_wrap_config;
+    use dregg_circuit::refusal::must_refuse_or_unsat_panic;
 
     /// A distinct-felt honest bound presentation at the minimal power-of-two height.
     fn make_input() -> BoundPresentationInput {
@@ -549,16 +550,9 @@ mod tests {
         assert_ne!(forged_pis, inp.public_inputs().unwrap());
         let config = ir2_leaf_wrap_config();
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        must_refuse_or_unsat_panic("a FORGED presentation PI", || {
             prove_presentation_leaf(&inp, &forged_pis, &config)
-        }));
-        match result {
-            Err(_) => {}
-            Ok(Err(_)) => {}
-            Ok(Ok(_)) => {
-                panic!("a FORGED presentation PI minted a foldable leaf — soundness OPEN")
-            }
-        }
+        });
     }
 
     /// THE FOLD, HONEST: the presentation-binding MECHANISM node folds a leg leaf (re-exposing
@@ -607,16 +601,9 @@ mod tests {
         let leaf = prove_presentation_leaf_with_claim(&honest, &honest_pis, &config)
             .expect("the honest presentation leaf");
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            prove_presentation_binding_node(&leg, &leaf, &config)
-        }));
-        match result {
-            Err(_) => {}
-            Ok(Err(_)) => {}
-            Ok(Ok(_)) => panic!(
-                "a leg claiming a presentation the leaf does not bind produced a root — \
-                 binding OPEN"
-            ),
-        }
+        must_refuse_or_unsat_panic(
+            "a leg claiming a presentation the leaf does not bind produced a root",
+            || prove_presentation_binding_node(&leg, &leaf, &config),
+        );
     }
 }

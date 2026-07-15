@@ -442,6 +442,7 @@ mod tests {
     use super::*;
     use crate::ivc_turn_chain::ir2_leaf_wrap_config;
     use dregg_circuit::poseidon2::{hash_bytes, hash_many, single_perm_compress};
+    use dregg_circuit::refusal::must_refuse;
     use std::time::Instant;
 
     /// An Anthropic-messages-shaped JSON response body padded to EXACTLY `total`
@@ -649,14 +650,9 @@ mod tests {
         let mut pis = zkoracle_leaf_public_inputs(&w);
         pis[ZKORACLE_LEAF_COMMIT_PI] += BabyBear::ONE;
         let config = ir2_leaf_wrap_config();
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        must_refuse("a FORGED commitment", || {
             prove_zkoracle_leaf(&w, &pis, &config)
-        }));
-        match result {
-            Err(_) => {}
-            Ok(Err(_)) => {}
-            Ok(Ok(_)) => panic!("a FORGED commitment minted a foldable leaf — soundness OPEN"),
-        }
+        });
     }
 
     /// THE LENGTH TOOTH: lying about the body length in the claim (commit lane
@@ -670,14 +666,7 @@ mod tests {
         let mut pis = zkoracle_leaf_public_inputs(&w);
         pis[ZKORACLE_LEAF_LEN_PI] += BabyBear::ONE;
         let config = ir2_leaf_wrap_config();
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            prove_zkoracle_leaf(&w, &pis, &config)
-        }));
-        match result {
-            Err(_) => {}
-            Ok(Err(_)) => {}
-            Ok(Ok(_)) => panic!("a LIED length minted a foldable leaf — soundness OPEN"),
-        }
+        must_refuse("a LIED length", || prove_zkoracle_leaf(&w, &pis, &config));
     }
 
     /// THE BODY-TAMPER TOOTH: flip ONE witnessed body limb while the claim stays the
@@ -691,15 +680,8 @@ mod tests {
         let mut tampered = honest.clone();
         tampered.body_limbs[7] += BabyBear::ONE; // one flipped limb
         let config = ir2_leaf_wrap_config();
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        must_refuse("a TAMPERED body proved under the stale claim", || {
             prove_zkoracle_leaf(&tampered, &pis, &config)
-        }));
-        match result {
-            Err(_) => {}
-            Ok(Err(_)) => {}
-            Ok(Ok(_)) => {
-                panic!("a TAMPERED body proved under the stale claim — soundness OPEN")
-            }
-        }
+        });
     }
 }

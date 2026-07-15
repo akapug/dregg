@@ -25,6 +25,7 @@
 //!   cargo test -p dregg-circuit-prove --test membership_binding_mechanism -- --ignored --nocapture
 
 use dregg_circuit::field::BabyBear;
+use dregg_circuit::refusal::must_refuse;
 use dregg_circuit_prove::ivc_turn_chain::ir2_leaf_wrap_config;
 use dregg_circuit_prove::membership_leaf_adapter::{
     SenderMembershipWitness, prove_membership_binding_node, prove_membership_leaf_with_claim,
@@ -74,17 +75,10 @@ fn membership_binding_forged_rejected() {
     let ms = prove_membership_leaf_with_claim(&ms_w, &ms_pis, &config)
         .expect("the honest membership leaf mints");
 
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        prove_membership_binding_node(&leg, &ms, &config)
-    }));
-    match result {
-        Err(_) => {}
-        Ok(Err(_)) => {}
-        Ok(Ok(_)) => panic!(
-            "a leg claiming a membership tuple NO bound membership leaf backs folded into a \
-             verifying node — the membership binding mechanism is OPEN"
-        ),
-    }
+    must_refuse(
+        "a leg claiming a membership tuple NO bound membership leaf backs folded into a  verifying node",
+        || prove_membership_binding_node(&leg, &ms, &config),
+    );
     eprintln!(
         "MEMBERSHIP binding: out-of-set tuple REJECTED by the fold (connect conflict ⇒ no root)."
     );

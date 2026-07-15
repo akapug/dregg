@@ -28,6 +28,7 @@ use dregg_circuit::dsl::committed_threshold::{
 use dregg_circuit::dsl::dsl_p3_air::{prove_dsl_p3, verify_dsl_p3};
 use dregg_circuit::field::BabyBear;
 use dregg_circuit::poseidon2::{hash_2_to_1, hash_fact};
+use dregg_circuit::refusal::{Outcome, classify};
 
 /// The fact's predicate symbol (arbitrary distinct felt, e.g. a "credit_score" tag).
 const PRED: u32 = 100;
@@ -40,14 +41,16 @@ const BLINDING: u32 = 12_345;
 /// Run the real prover+verifier on a (possibly adversarial) trace; `true` = REJECTED.
 fn rejects(trace: &[Vec<BabyBear>], pis: &[BabyBear]) -> bool {
     let circuit = committed_threshold_welded_circuit();
-    let r = std::panic::catch_unwind(AssertUnwindSafe(|| {
+    match classify("rejects", || {
         let proof = prove_dsl_p3(&circuit, trace, pis)?;
         verify_dsl_p3(&circuit, &proof, pis)
-    }));
-    match r {
-        Err(_) => true,      // panic in prover/verifier
-        Ok(Err(_)) => true,  // returned error (self-verify or verify rejected)
-        Ok(Ok(())) => false, // ACCEPTED
+    }) {
+        // The p3 debug prover's DOCUMENTED unsat verdict — a real refusal.
+        // `classify` REDs on any other panic (a stray unwrap, a trace-assembly
+        // debug_assert), which used to land here and read as "rejected".
+        Outcome::UnsatPanic(_) => true,
+        Outcome::Err(_) => true,
+        Outcome::Accepted(_) => false,
     }
 }
 

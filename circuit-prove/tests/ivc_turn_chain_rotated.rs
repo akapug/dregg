@@ -579,13 +579,16 @@ fn ungated_prover_with_forged_post_commit_cannot_produce_a_root() {
     //     fail, at the in-circuit leaf. The unsatisfiable leaf surfaces as a prover
     //     panic (debug: check_constraints refuses) or an Err (release: self-verify
     //     rejects). Either is "no root".
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        prove_turn_chain_recursive_without_host_gate(&turns, &[sel::TRANSFER, sel::TRANSFER])
-    }));
-    let rejected = match result {
-        Ok(Ok(_)) => false, // a verifying root for a forged turn — soundness hole!
-        Ok(Err(_)) => true,
-        Err(_) => true,
+    let rejected = match classify(
+        "ungated_prover_with_forged_post_commit_cannot_produce_a_root",
+        || prove_turn_chain_recursive_without_host_gate(&turns, &[sel::TRANSFER, sel::TRANSFER]),
+    ) {
+        // The p3 debug prover's DOCUMENTED unsat verdict — a real refusal.
+        // `classify` REDs on any other panic (a stray unwrap, a trace-assembly
+        // debug_assert), which used to land here and read as "rejected".
+        Outcome::UnsatPanic(_) => true,
+        Outcome::Err(_) => true,
+        Outcome::Accepted(_) => false,
     };
     assert!(
         rejected,
@@ -833,6 +836,7 @@ fn to_binding_matrix(rows: &[Vec<BabyBear>]) -> p3_matrix::dense::RowMajorMatrix
     p3_matrix::dense::RowMajorMatrix::new(flat, width)
 }
 
+use dregg_circuit::refusal::{Outcome, classify};
 use p3_baby_bear::BabyBear as P3BabyBear;
 
 /// **CODEX FINDING #2 (digest) — CLOSED.** The in-AIR per-row Poseidon2 binding forces

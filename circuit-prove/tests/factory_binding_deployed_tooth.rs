@@ -46,6 +46,7 @@ use dregg_circuit::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV;
 use dregg_circuit::field::BabyBear;
 use dregg_circuit::heap_root::HeapLeaf;
 use dregg_circuit::lean_descriptor_air::VmRow;
+use dregg_circuit::refusal::must_refuse;
 use dregg_circuit_prove::carrier_pin_twin::{
     TailClaimPin, insert_tail_claim_pins, splice_pi_values,
 };
@@ -339,17 +340,10 @@ fn deployed_factory_turn_forged_child_vk_rejected() {
     forged_vk[0] ^= 0x01;
     let turns = build_chain(backing_bundle(&forged_vk));
 
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        prove_turn_chain_recursive(&turns)
-    }));
-    match result {
-        Err(_) => {}
-        Ok(Err(_)) => {}
-        Ok(Ok(_)) => panic!(
-            "a FORGED child_vk (no committed octet backs it) folded into a verifying deployed \
-             whole-chain artifact — the deployed factory binding is OPEN"
-        ),
-    }
+    must_refuse(
+        "a FORGED child_vk (no committed octet backs it) folded into a verifying deployed  whole-chain artifact",
+        || prove_turn_chain_recursive(&turns),
+    );
     eprintln!("DEPLOYED factory binding: forged child_vk REJECTED by the deployed fold (no root).");
 }
 

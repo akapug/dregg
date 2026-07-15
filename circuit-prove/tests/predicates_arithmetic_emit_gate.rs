@@ -47,6 +47,7 @@ use dregg_circuit::descriptor_ir2::{
 use dregg_circuit::field::BabyBear;
 use dregg_circuit::lean_descriptor_air::{LeanExpr, VmConstraint, VmRow};
 use dregg_circuit::poseidon2::{hash_2_to_1, hash_fact};
+use dregg_circuit::refusal::{Outcome, classify};
 
 /// The fixed fact context the honest witness commits; the honest fact's VALUE is the proven value.
 const FIXED_PRED: u32 = 42;
@@ -244,14 +245,16 @@ fn pis_fc(threshold: u32, fact_commitment: BabyBear) -> Vec<BabyBear> {
 /// `PiBinding` against the public inputs only under `debug_assertions`, so in a `--release` test
 /// the CONSUMER's `verify_vm_descriptor2` is the real PI check (the production posture).
 fn rejects(desc: &EffectVmDescriptor2, trace: &[Vec<BabyBear>], public: &[BabyBear]) -> bool {
-    let r = std::panic::catch_unwind(AssertUnwindSafe(|| {
+    match classify("rejects", || {
         let proof = prove_vm_descriptor2(desc, trace, public, &MemBoundaryWitness::default(), &[])?;
         verify_vm_descriptor2(desc, &proof, public)
-    }));
-    match r {
-        Err(_) => true,      // panicked anywhere → rejected
-        Ok(Err(_)) => true,  // prove OR verify returned Err → rejected
-        Ok(Ok(())) => false, // proved AND verified → ACCEPTED
+    }) {
+        // The p3 debug prover's DOCUMENTED unsat verdict — a real refusal.
+        // `classify` REDs on any other panic (a stray unwrap, a trace-assembly
+        // debug_assert), which used to land here and read as "rejected".
+        Outcome::UnsatPanic(_) => true,
+        Outcome::Err(_) => true,
+        Outcome::Accepted(_) => false,
     }
 }
 

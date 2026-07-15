@@ -561,6 +561,7 @@ mod tests {
     use dregg_circuit::descriptor_ir2::chip_absorb_all_lanes;
     use dregg_circuit::note_spending_air::{NoteSpendingWitness, test_spending_key};
     use dregg_circuit::poseidon2::hash_many;
+    use dregg_circuit::refusal::must_refuse_or_unsat_panic;
 
     /// THE FEASIBILITY KAT: the unconditional fact site's arity-7 absorb reproduces
     /// `hash_fact(R, [salt,0,0,0])` — the seeding equivalence the commitment openings
@@ -696,14 +697,9 @@ mod tests {
         let pis = solvency_leaf_public_inputs(&w);
         let config = ir2_leaf_wrap_config();
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        must_refuse_or_unsat_panic("an INSOLVENT reserve", || {
             prove_solvency_leaf(&w, &pis, &config)
-        }));
-        match result {
-            Err(_) => {}     // debug constraint builder panicked on the range
-            Ok(Err(_)) => {} // or the inner self-verify rejected
-            Ok(Ok(_)) => panic!("an INSOLVENT reserve minted a foldable leaf — soundness OPEN"),
-        }
+        });
     }
 
     /// THE NEGATIVE POLE (leaf, forged commitment): a forged `reserve_commit` PI
@@ -716,16 +712,9 @@ mod tests {
         pis[RESERVE_COMMIT_PI] += BabyBear::ONE;
         let config = ir2_leaf_wrap_config();
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        must_refuse_or_unsat_panic("a FORGED reserve commitment", || {
             prove_solvency_leaf(&w, &pis, &config)
-        }));
-        match result {
-            Err(_) => {}
-            Ok(Err(_)) => {}
-            Ok(Ok(_)) => {
-                panic!("a FORGED reserve commitment minted a foldable leaf — soundness OPEN")
-            }
-        }
+        });
     }
 
     /// THE STRUCTURED PRODUCT (the moat's first real financial fold): fold a REAL

@@ -45,6 +45,7 @@ use dregg_circuit::effect_vm::trace_rotated::{
 };
 use dregg_circuit::effect_vm::{CellState, Effect};
 use dregg_circuit::field::BabyBear;
+use dregg_circuit::refusal::must_refuse;
 use dregg_circuit_prove::custom_leaf_adapter::{
     prove_custom_leaf_with_commitment, read_exposed_pi_commitment,
 };
@@ -232,16 +233,9 @@ fn assert_leaf_refuses(label: &str, witness: &MptHoldingWitness, public_inputs: 
     let program = mpt_holding_program();
     let (wv, rows) = witness.witness_values();
     let config = ir2_leaf_wrap_config();
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    must_refuse(&format!("{label}: a FORGED holding tuple"), || {
         prove_custom_leaf_with_commitment(&program, &wv, rows, public_inputs, &config)
-    }));
-    match result {
-        Err(_) => {}     // debug constraint builder panicked — rejected
-        Ok(Err(_)) => {} // inner self-verify errored — rejected
-        Ok(Ok(_)) => {
-            panic!("{label}: a FORGED holding tuple minted a foldable leaf — soundness OPEN")
-        }
-    }
+    });
     eprintln!("MPT P0 leaf tooth: {label} REFUSED at the leaf (the deployed arm's exact call).");
 }
 
@@ -361,17 +355,10 @@ fn deployed_mpt_holding_turn_forged_commitment_rejected() {
     // build_chain attaches the HONEST bundle; the leg publishes the forged claim.
     let turns = build_chain(forged);
 
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        prove_turn_chain_recursive(&turns)
-    }));
-    match result {
-        Err(_) => {}     // in-circuit connect conflict panicked the builder — rejected
-        Ok(Err(_)) => {} // chain prover returned an error — rejected
-        Ok(Ok(_)) => panic!(
-            "a FORGED holding commitment folded into a verifying deployed whole-chain artifact — \
-             the rung-3 binding is OPEN"
-        ),
-    }
+    must_refuse(
+        "a FORGED holding commitment folded into a verifying deployed whole-chain artifact —  the rung",
+        || prove_turn_chain_recursive(&turns),
+    );
     eprintln!("RUNG-3 P0: forged MPT holding commitment REJECTED by the deployed fold (no root).");
 }
 

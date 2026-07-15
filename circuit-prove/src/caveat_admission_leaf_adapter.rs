@@ -730,6 +730,7 @@ pub fn prove_caveat_admission_binding_node_segmented(
 mod tests {
     use super::*;
     use crate::ivc_turn_chain::ir2_leaf_wrap_config;
+    use dregg_circuit::refusal::must_refuse_or_unsat_panic;
 
     /// A within-caveat trade: time 150 ≤ validUntil 200, height 90 < heightLt 100,
     /// value 40 ≤ budget 100, asset 7 == asset 7. Every atom holds.
@@ -839,17 +840,9 @@ mod tests {
     fn assert_unsat(w: &CaveatAdmissionWitness, label: &str) {
         let pis = w.public_inputs();
         let config = ir2_leaf_wrap_config();
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        must_refuse_or_unsat_panic(&format!("{label}: an OVER-authorized trade"), || {
             prove_caveat_admission_leaf(w, &pis, &config)
-        }));
-        match result {
-            Err(_) => {}
-            Ok(Err(_)) => {}
-            Ok(Ok(_)) => panic!(
-                "{label}: an OVER-authorized trade minted a foldable leaf — the in-circuit \
-                 caveat admission is OPEN"
-            ),
-        }
+        });
     }
 
     /// THE NEGATIVE POLE — PAST EXPIRY: `req_time > validUntil`. The `validUntil` borrow-
@@ -924,15 +917,9 @@ mod tests {
             .expect("leg B tuple leaf folds");
         let adm_a = prove_caveat_admission_leaf_with_claim(&a, &a.public_inputs(), &config)
             .expect("admission A leaf folds");
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            prove_caveat_admission_binding_node(&leg_b, &adm_a, &config)
-        }));
-        match result {
-            Err(_) => {}
-            Ok(Err(_)) => {}
-            Ok(Ok(_)) => panic!(
-                "an admission for trade A bound to a DIFFERENT trade B — the binding tooth is OPEN"
-            ),
-        }
+        must_refuse_or_unsat_panic(
+            "an admission for trade A bound to a DIFFERENT trade B",
+            || prove_caveat_admission_binding_node(&leg_b, &adm_a, &config),
+        );
     }
 }

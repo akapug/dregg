@@ -46,6 +46,7 @@ use dregg_circuit::effect_vm::{CellState, Effect};
 use dregg_circuit::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV;
 use dregg_circuit::field::BabyBear;
 use dregg_circuit::lean_descriptor_air::{VmConstraint, VmRow};
+use dregg_circuit::refusal::must_refuse;
 use dregg_circuit_prove::deco_leaf_adapter::DecoLeafWitness;
 use dregg_circuit_prove::ivc_turn_chain::{
     DECO_PAYMENT_HASH_PI, FinalizedTurn, ir2_leaf_wrap_config, prove_turn_chain_recursive,
@@ -427,17 +428,10 @@ fn deployed_stripe_mint_forged_identity_rejected() {
     let forged_identity = w.payment_hash() + BabyBear::ONE;
     let turns = build_chain(forged_identity, bundle);
 
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        prove_turn_chain_recursive(&turns)
-    }));
-    match result {
-        Err(_) => {}
-        Ok(Err(_)) => {}
-        Ok(Ok(_)) => panic!(
-            "a FORGED payment identity (no verifying DECO commitment backs it) folded into a \
-             verifying deployed whole-chain artifact — the deployed DECO binding is OPEN"
-        ),
-    }
+    must_refuse(
+        "a FORGED payment identity (no verifying DECO commitment backs it) folded into a  verifying deployed whole-chain artifact",
+        || prove_turn_chain_recursive(&turns),
+    );
     eprintln!(
         "DEPLOYED DECO binding: forged payment identity REJECTED by the deployed fold (no root)."
     );

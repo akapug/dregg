@@ -27,6 +27,7 @@ use dregg_circuit::dsl::revocation::{
     non_revocation_dsl_circuit, prove_non_revocation_p3, verify_non_revocation_p3,
 };
 use dregg_circuit::field::BabyBear;
+use dregg_circuit::refusal::{Outcome, classify};
 
 const HALF_P_MINUS_1: u32 = 1_006_632_959;
 const TWO_POW_30: u32 = 1 << 30;
@@ -80,14 +81,16 @@ fn forge(
 
 fn rejects(trace: &[Vec<BabyBear>], pis: &[BabyBear]) -> bool {
     let circuit = non_revocation_dsl_circuit();
-    let r = std::panic::catch_unwind(AssertUnwindSafe(|| {
+    match classify("rejects", || {
         let proof = prove_dsl_p3(&circuit, trace, pis)?;
         verify_dsl_p3(&circuit, &proof, pis)
-    }));
-    match r {
-        Err(_) => true,      // panic in prover/verifier
-        Ok(Err(_)) => true,  // returned error (self-verify or verify rejected)
-        Ok(Ok(())) => false, // ACCEPTED — soundness hole
+    }) {
+        // The p3 debug prover's DOCUMENTED unsat verdict — a real refusal.
+        // `classify` REDs on any other panic (a stray unwrap, a trace-assembly
+        // debug_assert), which used to land here and read as "rejected".
+        Outcome::UnsatPanic(_) => true,
+        Outcome::Err(_) => true,
+        Outcome::Accepted(_) => false,
     }
 }
 

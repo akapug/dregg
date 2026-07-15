@@ -269,6 +269,7 @@ pub fn prove_bridge_leaf_tuple_claim(
 mod tests {
     use super::*;
     use crate::ivc_turn_chain::ir2_leaf_wrap_config;
+    use dregg_circuit::refusal::must_refuse;
 
     /// A typed bridge-action backing (the same shape `bridge_action_air`'s tests
     /// use): distinct 32-byte nullifier/recipient/dest_federation and a full
@@ -365,17 +366,8 @@ mod tests {
         assert_ne!(forged_pis, w.public_inputs());
         let config = ir2_leaf_wrap_config();
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        must_refuse("a FORGED bridge backing", || {
             prove_bridge_leaf(&w, &forged_pis, &config)
-        }));
-        match result {
-            // The debug constraint builder panicked on the unsatisfied PiBinding.
-            Err(_) => {}
-            // Or the inner self-verify returned an error — rejected.
-            Ok(Err(_)) => {}
-            Ok(Ok(_)) => {
-                panic!("a FORGED bridge backing minted a foldable leaf — soundness OPEN")
-            }
-        }
+        });
     }
 }

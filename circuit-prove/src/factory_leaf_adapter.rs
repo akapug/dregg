@@ -408,6 +408,7 @@ mod tests {
     use crate::ivc_turn_chain::{
         SEG_WIDTH, ir2_leaf_wrap_config, prove_descriptor_leaf_with_pi_slice_expose,
     };
+    use dregg_circuit::refusal::must_refuse;
 
     fn make_witness() -> FactoryBackingWitness {
         FactoryBackingWitness {
@@ -473,16 +474,9 @@ mod tests {
         assert_ne!(forged_pis, w.public_inputs());
         let config = ir2_leaf_wrap_config();
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        must_refuse("a FORGED factory backing tuple", || {
             prove_factory_leaf(&w, &forged_pis, &config)
-        }));
-        match result {
-            Err(_) => {}
-            Ok(Err(_)) => {}
-            Ok(Ok(_)) => {
-                panic!("a FORGED factory backing tuple minted a foldable leaf — soundness OPEN")
-            }
-        }
+        });
     }
 
     /// Build a factory `EFFECT_CREATE_CELL` leg leaf that PUBLISHES `[segment ‖ child_vk]` as a
@@ -602,16 +596,9 @@ mod tests {
         forged[0] += BabyBear::new(1);
         let leg_leaf = factory_leg_leaf(&segment, forged, &config);
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            prove_factory_binding_node_segmented(&leg_leaf, &backing_leaf, &config)
-        }));
-        match result {
-            Err(_) => {}
-            Ok(Err(_)) => {}
-            Ok(Ok(_)) => panic!(
-                "a FORGED child_vk (no backing leaf binds it) produced an aggregate root — \
-                 the factory binding tooth does NOT bite, soundness OPEN"
-            ),
-        }
+        must_refuse(
+            "a FORGED child_vk (no backing leaf binds it) produced an aggregate root",
+            || prove_factory_binding_node_segmented(&leg_leaf, &backing_leaf, &config),
+        );
     }
 }

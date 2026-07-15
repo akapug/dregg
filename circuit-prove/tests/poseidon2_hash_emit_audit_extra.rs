@@ -11,6 +11,7 @@ use dregg_circuit::descriptor_ir2::{
 };
 use dregg_circuit::field::BabyBear;
 use dregg_circuit::poseidon2::hash_2_to_1;
+use dregg_circuit::refusal::{Outcome, classify};
 
 const GOLDEN_JSON: &str = r#"{"name":"poseidon2-hash-arity2::poseidon2-v1","ir":2,"trace_width":10,"public_input_count":3,"tables":[],"constraints":[{"t":"lookup","table":1,"tuple":[{"t":"const","v":2},{"t":"var","v":0},{"t":"var","v":1},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"var","v":2},{"t":"var","v":3},{"t":"var","v":4},{"t":"var","v":5},{"t":"var","v":6},{"t":"var","v":7},{"t":"var","v":8},{"t":"var","v":9}]},{"t":"pi_binding","row":"first","col":0,"pi_index":0},{"t":"pi_binding","row":"first","col":1,"pi_index":1},{"t":"pi_binding","row":"first","col":2,"pi_index":2}],"hash_sites":[],"ranges":[]}"#;
 
@@ -20,14 +21,16 @@ const DIGEST: usize = 2;
 const HASH_WIDTH: usize = 10;
 
 fn rejects(desc: &EffectVmDescriptor2, trace: &[Vec<BabyBear>], pis: &[BabyBear]) -> bool {
-    let r = std::panic::catch_unwind(AssertUnwindSafe(|| {
+    match classify("rejects", || {
         let proof = prove_vm_descriptor2(desc, trace, pis, &MemBoundaryWitness::default(), &[])?;
         verify_vm_descriptor2(desc, &proof, pis)
-    }));
-    match r {
-        Err(_) => true,
-        Ok(Err(_)) => true,
-        Ok(Ok(())) => false,
+    }) {
+        // The p3 debug prover's DOCUMENTED unsat verdict — a real refusal.
+        // `classify` REDs on any other panic (a stray unwrap, a trace-assembly
+        // debug_assert), which used to land here and read as "rejected".
+        Outcome::UnsatPanic(_) => true,
+        Outcome::Err(_) => true,
+        Outcome::Accepted(_) => false,
     }
 }
 

@@ -416,6 +416,7 @@ mod tests {
         SEG_WIDTH, ir2_leaf_wrap_config, prove_descriptor_leaf_with_pi_slice_expose,
     };
     use dregg_circuit::field::BABYBEAR_P;
+    use dregg_circuit::refusal::must_refuse;
     use p3_field::PrimeField32;
 
     fn make_witness() -> HatcheryAttestationWitness {
@@ -483,18 +484,9 @@ mod tests {
         assert_ne!(forged_pis, w.public_inputs());
         let config = ir2_leaf_wrap_config();
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        must_refuse("a FORGED hatchery attestation tuple", || {
             prove_hatchery_leaf(&w, &forged_pis, &config)
-        }));
-        match result {
-            Err(_) => {}
-            Ok(Err(_)) => {}
-            Ok(Ok(_)) => {
-                panic!(
-                    "a FORGED hatchery attestation tuple minted a foldable leaf — soundness OPEN"
-                )
-            }
-        }
+        });
     }
 
     /// Build a minimal effect-vm leg leaf that PUBLISHES `segment ++ contract_hash` in IR2 PIs
@@ -609,16 +601,9 @@ mod tests {
             .expect("the attestation leaf folds (it binds the REAL contract_hash)");
         let leg_leaf = hatchery_leg_leaf(&segment, forged, &config); // claims the FORGED hash
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            prove_hatchery_binding_node_segmented(&leg_leaf, &attestation_leaf, &config)
-        }));
-        match result {
-            Err(_) => {}
-            Ok(Err(_)) => {}
-            Ok(Ok(_)) => panic!(
-                "a FORGED contract_hash (no backing attestation) produced a fold root — \
-                 hatchery forever-crown soundness OPEN"
-            ),
-        }
+        must_refuse(
+            "a FORGED contract_hash (no backing attestation) produced a fold root —  hatchery forever",
+            || prove_hatchery_binding_node_segmented(&leg_leaf, &attestation_leaf, &config),
+        );
     }
 }

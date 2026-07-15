@@ -14,6 +14,7 @@ use dregg_circuit::descriptor_ir2::{
 };
 use dregg_circuit::field::BabyBear;
 use dregg_circuit::poseidon2::hash_2_to_1;
+use dregg_circuit::refusal::{Outcome, classify};
 
 const PRIVATE_VALUE: usize = 0;
 const THRESHOLD: usize = 1;
@@ -85,14 +86,16 @@ fn honest_trace(
 }
 
 fn rejects(desc: &EffectVmDescriptor2, trace: &[Vec<BabyBear>], pis: &[BabyBear]) -> bool {
-    let r = std::panic::catch_unwind(AssertUnwindSafe(|| {
+    match classify("rejects", || {
         let proof = prove_vm_descriptor2(desc, trace, pis, &MemBoundaryWitness::default(), &[])?;
         verify_vm_descriptor2(desc, &proof, pis)
-    }));
-    match r {
-        Err(_) => true,
-        Ok(Err(_)) => true,
-        Ok(Ok(())) => false,
+    }) {
+        // The p3 debug prover's DOCUMENTED unsat verdict — a real refusal.
+        // `classify` REDs on any other panic (a stray unwrap, a trace-assembly
+        // debug_assert), which used to land here and read as "rejected".
+        Outcome::UnsatPanic(_) => true,
+        Outcome::Err(_) => true,
+        Outcome::Accepted(_) => false,
     }
 }
 

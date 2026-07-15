@@ -309,6 +309,7 @@ pub fn read_exposed_key_commit(
 mod tests {
     use super::*;
     use crate::ivc_turn_chain::ir2_leaf_wrap_config;
+    use dregg_circuit::refusal::must_refuse;
 
     fn make_witness() -> SovereignAuthorityWitness {
         SovereignAuthorityWitness {
@@ -381,15 +382,8 @@ mod tests {
         assert_ne!(forged_pis, w.public_inputs());
         let config = ir2_leaf_wrap_config();
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        must_refuse("a FORGED sovereign authority tuple", || {
             prove_sovereign_leaf(&w, &forged_pis, &config)
-        }));
-        match result {
-            Err(_) => {}
-            Ok(Err(_)) => {}
-            Ok(Ok(_)) => {
-                panic!("a FORGED sovereign authority tuple minted a foldable leaf — soundness OPEN")
-            }
-        }
+        });
     }
 }

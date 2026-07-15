@@ -30,6 +30,7 @@ use dregg_circuit::dsl::circuit::{
 };
 use dregg_circuit::effect_vm::{CellState, Effect};
 use dregg_circuit::field::{BABYBEAR_P, BabyBear};
+use dregg_circuit::refusal::must_refuse;
 use dregg_circuit_prove::custom_proof_bind::BoundCustomProof;
 use dregg_circuit_prove::ivc_turn_chain::{
     FinalizedTurn, prove_turn_chain_recursive, verify_turn_chain_recursive,
@@ -286,17 +287,10 @@ fn production_custom_turn_forged_rejected() {
 
     let turns = build_chain(forged);
 
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        prove_turn_chain_recursive(&turns)
-    }));
-    match result {
-        Err(_) => {}
-        Ok(Err(_)) => {}
-        Ok(Ok(_)) => panic!(
-            "a FORGED proof_commitment folded into a verifying whole-chain artifact through the \
-             PRODUCTION minter — the production custom binding is OPEN"
-        ),
-    }
+    must_refuse(
+        "a FORGED proof_commitment folded into a verifying whole-chain artifact through the  PRODUCTION minter",
+        || prove_turn_chain_recursive(&turns),
+    );
     eprintln!(
         "PRODUCTION custom binding: forged custom commitment REJECTED by the production-populated \
          fold (no root)."

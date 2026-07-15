@@ -25,6 +25,7 @@
 use dregg_circuit::field::BabyBear;
 use dregg_circuit::note_spending_air::{NoteSpendingWitness, test_spending_key};
 use dregg_circuit::poseidon2::hash_many;
+use dregg_circuit::refusal::must_refuse;
 use dregg_circuit_prove::ivc_turn_chain::ir2_leaf_wrap_config;
 use dregg_circuit_prove::note_spend_leaf_adapter::{
     note_spend_leaf_public_inputs, prove_note_spend_binding_node, prove_note_spend_leaf_with_claim,
@@ -90,14 +91,8 @@ fn note_spend_binding_node_bites() {
 
     // NEGATIVE POLE (THE TOOTH): a leg claiming tuple A folded against a sub-proof
     // backing tuple B is a per-lane `connect` conflict — UNSAT, no root.
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        prove_note_spend_binding_node(&leaf_a, &leaf_b, &config)
-    }));
-    match result {
-        Err(_) => {}     // the circuit builder rejected the conflicting connect
-        Ok(Err(_)) => {} // or the aggregation prover returned an error
-        Ok(Ok(_)) => {
-            panic!("a claim with NO backing note-spend folded through the node — soundness OPEN")
-        }
-    }
+    must_refuse(
+        "a claim with NO backing note-spend folded through the node",
+        || prove_note_spend_binding_node(&leaf_a, &leaf_b, &config),
+    );
 }
