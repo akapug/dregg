@@ -10,9 +10,10 @@
 //! there specify the bucket content commitment, erasure coding, PoR, and
 //! availability). The contract pinned executably by the `prop_*` tests
 //! below — replay conserves the appended record sequence across a crash;
-//! a truncated tail replays as exactly the intact prefix; a corrupted
-//! record is detected by its checksum and dropped without disturbing its
-//! neighbors, never hallucinated — is the statement a future
+//! a truncated tail replays as exactly the intact prefix; and the first
+//! corrupted record STOPS replay (the suffix after a tear is untrustworthy
+//! state and is never replayed — a dropped middle `Dequeue` would otherwise
+//! reconstruct the wrong head) — is the statement a future
 //! `Dregg2/Storage/Wal.lean` should prove.
 
 use std::fs::{self, File, OpenOptions};
@@ -232,14 +233,28 @@ impl WriteAheadLog {
         writer.get_ref().sync_all()
     }
 
-    /// Replay all valid entries from the WAL file.
-    /// Entries with bad checksums (torn writes) are skipped.
+    /// Replay the intact prefix of the WAL file.
+    ///
+    /// Replay STOPS at the first record that fails its checksum (a torn or
+    /// corrupted record) and returns exactly the records before it. A mutation
+    /// log must not skip a corrupt MIDDLE record and keep replaying later ones:
+    /// a dropped `Dequeue` in the middle reconstructs the WRONG state (head
+    /// off-by-one). Stopping at the first torn record is the only sound policy
+    /// — the suffix after a tear is not trustworthy state.
     pub fn replay(&self) -> io::Result<Vec<WalEntry>> {
         Self::replay_from_path(&self.path)
     }
 
     /// Truncate the WAL, removing all entries with sequence < the given value.
     /// This is called after a checkpoint to reclaim space.
+    ///
+    /// The compaction is **atomic and crash-safe**: the retained records are
+    /// written to a sibling temp file, fsync'd, then `rename`d over the live
+    /// WAL (an atomic replace), and finally the directory is fsync'd. A crash
+    /// at any point leaves either the OLD complete WAL or the NEW compacted
+    /// WAL — never a half-rewritten, corrupt log. (The previous in-place
+    /// `truncate(true)` + rewrite could lose the entire WAL on a mid-rewrite
+    /// crash.)
     pub fn truncate_before(&mut self, sequence: u64) -> io::Result<()> {
         // Read all entries, keep only those with sequence >= the given value.
         let entries = self.replay()?;
@@ -248,25 +263,36 @@ impl WriteAheadLog {
             .filter(|e| e.sequence() >= sequence)
             .collect();
 
-        // Close the writer, rewrite the file, reopen.
+        // Close the live writer so the rename can replace the file cleanly.
         self.writer = None;
 
-        let file = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(&self.path)?;
-        let mut writer = BufWriter::new(file);
-
-        for entry in &kept {
-            let serialized = entry.serialize();
-            writer.write_all(&serialized)?;
+        // Write the compacted log to a temp file, fsync it, then atomically
+        // rename it over the live WAL.
+        let tmp = self.path.with_extension("wal.compact.tmp");
+        {
+            let file = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&tmp)?;
+            let mut writer = BufWriter::new(file);
+            for entry in &kept {
+                writer.write_all(&entry.serialize())?;
+            }
+            writer.flush()?;
+            writer.get_ref().sync_all()?;
         }
-        writer.flush()?;
-        writer.get_ref().sync_all()?;
+
+        fs::rename(&tmp, &self.path)?;
+
+        // fsync the containing directory so the rename survives a crash.
+        if let Some(dir) = self.path.parent() {
+            if let Ok(dirf) = File::open(dir) {
+                let _ = dirf.sync_all();
+            }
+        }
 
         // Reopen in append mode.
-        drop(writer);
         let file = OpenOptions::new().append(true).open(&self.path)?;
         self.writer = Some(BufWriter::new(file));
 
@@ -303,11 +329,15 @@ impl WriteAheadLog {
         for line in reader.lines() {
             let line = line?;
             if line.is_empty() {
-                continue;
+                // A blank line is not a valid record; treat it as the end of
+                // the trustworthy prefix and stop.
+                break;
             }
-            // Skip corrupt/torn entries silently (they represent incomplete writes).
-            if let Some(entry) = WalEntry::deserialize(&line) {
-                entries.push(entry);
+            match WalEntry::deserialize(&line) {
+                Some(entry) => entries.push(entry),
+                // First torn/corrupt record: STOP. Everything after a tear is
+                // untrustworthy (see `replay` doc) and must not be replayed.
+                None => break,
             }
         }
 
@@ -698,14 +728,16 @@ mod tests {
         }
     }
 
-    /// A corrupted record is detected by its checksum: flipping one hex
-    /// character in a MIDDLE record — in its payload or in its checksum
-    /// field — drops EXACTLY that record on replay, while every other
-    /// record survives intact. (A payload flip still parses as a
-    /// well-formed record for a different queue_id; only the checksum
-    /// refuses it — that is the tooth being tested.)
+    /// A corrupted MIDDLE record STOPS replay: flipping one hex character in
+    /// record index 2 — in its payload or its checksum field — makes replay
+    /// return EXACTLY the intact prefix (records 0..2) and drop everything
+    /// from the tear onward. This is the sound policy for a MUTATION log: a
+    /// silently-dropped middle `Dequeue` (with later records kept) would
+    /// reconstruct the wrong head. (A payload flip still parses as a
+    /// well-formed record for a different queue_id; only the checksum refuses
+    /// it — that is the tooth being tested.)
     #[test]
-    fn prop_corrupted_record_dropped_others_survive() {
+    fn prop_corrupted_middle_record_stops_replay_at_the_prefix() {
         for target in ["payload", "checksum"] {
             let path = temp_wal_path(&format!("corrupt_{target}"));
             cleanup(&path);
@@ -736,15 +768,12 @@ mod tests {
             lines[2] = String::from_utf8(mutated).unwrap();
             fs::write(&path, format!("{}\n", lines.join("\n"))).unwrap();
 
-            let mut expected = appended.clone();
-            expected.remove(2);
-
             let wal = WriteAheadLog::open(path.clone()).unwrap();
             assert_eq!(
                 wal.replay().unwrap(),
-                expected,
-                "{target} corruption: exactly the corrupted record must be \
-                 dropped; its neighbors must survive"
+                appended[..2],
+                "{target} corruption at index 2: replay must stop at the tear \
+                 and return exactly the intact prefix, not skip-and-continue"
             );
             wal.destroy().unwrap();
         }

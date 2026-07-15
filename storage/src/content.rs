@@ -20,21 +20,43 @@
 //! for the local store lands.
 
 use std::collections::HashMap;
+use std::io;
+use std::path::Path;
+
+use serde::{Deserialize, Serialize};
 
 use crate::quota::SpaceBank;
 use crate::{ComputronRefund, ContentHash, QuotaId, StorageError};
 
-/// Metadata about a stored blob.
-#[derive(Debug, Clone)]
-struct BlobMeta {
-    /// The quota cell that paid for this blob.
-    owner: QuotaId,
-    /// Size in bytes.
-    size: u64,
-    /// Original write cost (computrons charged).
-    write_cost: u64,
-    /// Reference count (for deduplication — same content, multiple owners).
+/// One owner's stake in a blob. Dedup is accounted **per owner**: each
+/// deduplicating writer holds its own reference count and was charged its own
+/// cost, so a second writer can neither be deleted out from under (only its
+/// own references decrement its stake) nor destroy the blob for the others.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OwnerRef {
+    /// How many live references this owner holds (one per successful `write`).
     ref_count: u32,
+    /// The computron cost charged for a single reference — the amount refunded
+    /// to *this* owner when it drops a reference. (Cost is deterministic in
+    /// size, so every reference this owner holds cost the same.)
+    unit_cost: u64,
+}
+
+/// Metadata about a stored blob. The physical bytes exist once; ownership is a
+/// map so N distinct quota cells can independently hold references.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BlobMeta {
+    /// Size in bytes (physical — charged once per owner-reference in quota).
+    size: u64,
+    /// Per-owner reference accounting. Never empty while the blob exists.
+    owners: HashMap<QuotaId, OwnerRef>,
+}
+
+impl BlobMeta {
+    /// Total live references across all owners.
+    fn total_refs(&self) -> u32 {
+        self.owners.values().map(|o| o.ref_count).sum()
+    }
 }
 
 /// Content-addressed store. Nameless writes: data in, hash out.
@@ -46,16 +68,60 @@ pub struct ContentStore {
     meta: HashMap<ContentHash, BlobMeta>,
     /// The space bank governing quota.
     pub bank: SpaceBank,
+    /// Optional hard cap on total *physical* bytes stored (distinct from the
+    /// per-owner quota byte caps). Bounds the in-memory/on-disk map itself so
+    /// an operator's node cannot be OOM'd by unbounded distinct writes.
+    max_total_bytes: Option<u64>,
+    /// Running total of physical bytes stored (one count per distinct blob,
+    /// not per owner-reference). Maintained incrementally.
+    total_stored_bytes: u64,
 }
 
+/// Serializable snapshot of a [`ContentStore`] for crash-safe persistence.
+#[derive(Serialize, Deserialize)]
+struct StoreSnapshot {
+    /// Snapshot format version (for forward migration).
+    version: u32,
+    blobs: Vec<(ContentHash, Vec<u8>)>,
+    meta: Vec<(ContentHash, BlobMeta)>,
+    bank: SpaceBank,
+    max_total_bytes: Option<u64>,
+    total_stored_bytes: u64,
+}
+
+const SNAPSHOT_VERSION: u32 = 1;
+
 impl ContentStore {
-    /// Create a new content store with the given space bank.
+    /// Create a new content store with the given space bank (no store cap).
     pub fn new(bank: SpaceBank) -> Self {
         Self {
             blobs: HashMap::new(),
             meta: HashMap::new(),
             bank,
+            max_total_bytes: None,
+            total_stored_bytes: 0,
         }
+    }
+
+    /// Create a store with a hard cap on total physical bytes.
+    pub fn with_capacity(bank: SpaceBank, max_total_bytes: u64) -> Self {
+        Self {
+            blobs: HashMap::new(),
+            meta: HashMap::new(),
+            bank,
+            max_total_bytes: Some(max_total_bytes),
+            total_stored_bytes: 0,
+        }
+    }
+
+    /// Set (or clear) the global physical-byte cap.
+    pub fn set_capacity(&mut self, max_total_bytes: Option<u64>) {
+        self.max_total_bytes = max_total_bytes;
+    }
+
+    /// Total physical bytes stored (one count per distinct blob).
+    pub fn stored_bytes(&self) -> u64 {
+        self.total_stored_bytes
     }
 
     /// Hash data using blake3.
@@ -66,32 +132,57 @@ impl ContentStore {
 
     /// Write data to the store. Returns the content hash.
     /// The payer's quota is charged for the write.
+    ///
+    /// Deduplication is **per owner**: a second writer of identical content is
+    /// charged independently and gains its own reference; it does not inherit
+    /// or disturb the first writer's stake. The physical bytes are stored once.
     pub fn write(&mut self, data: &[u8], payer: &QuotaId) -> Result<ContentHash, StorageError> {
         let hash = Self::hash(data);
         let size = data.len() as u64;
+        let is_new_blob = !self.meta.contains_key(&hash);
 
-        // If content already exists, handle deduplication.
-        if let Some(meta) = self.meta.get_mut(&hash) {
-            meta.ref_count += 1;
-            // Still charge the payer (they're claiming storage under their quota).
-            self.bank.charge_write(payer, size)?;
-            return Ok(hash);
+        // Enforce the global physical-byte cap BEFORE charging — only new
+        // distinct content consumes physical space; a dedup write does not.
+        if is_new_blob {
+            if let Some(max) = self.max_total_bytes {
+                if self.total_stored_bytes.saturating_add(size) > max {
+                    return Err(StorageError::StoreCapExceeded {
+                        current: self.total_stored_bytes,
+                        max,
+                        attempted: size,
+                    });
+                }
+            }
         }
 
-        // Charge the payer.
+        // Charge the payer (they claim storage under their own quota). Checked
+        // arithmetic inside the bank rejects overflow before any mutation.
         let cost = self.bank.charge_write(payer, size)?;
 
-        // Store the data.
-        self.blobs.insert(hash, data.to_vec());
-        self.meta.insert(
-            hash,
-            BlobMeta {
-                owner: *payer,
-                size,
-                write_cost: cost,
-                ref_count: 1,
-            },
-        );
+        match self.meta.get_mut(&hash) {
+            Some(meta) => {
+                // Existing content: add/increment THIS owner's reference.
+                let entry = meta.owners.entry(*payer).or_insert(OwnerRef {
+                    ref_count: 0,
+                    unit_cost: cost,
+                });
+                entry.ref_count = entry.ref_count.saturating_add(1);
+                entry.unit_cost = cost;
+            }
+            None => {
+                self.blobs.insert(hash, data.to_vec());
+                let mut owners = HashMap::new();
+                owners.insert(
+                    *payer,
+                    OwnerRef {
+                        ref_count: 1,
+                        unit_cost: cost,
+                    },
+                );
+                self.meta.insert(hash, BlobMeta { size, owners });
+                self.total_stored_bytes = self.total_stored_bytes.saturating_add(size);
+            }
+        }
 
         Ok(hash)
     }
@@ -117,15 +208,16 @@ impl ContentStore {
             .ok_or(StorageError::NotFound(*old_hash))?
             .clone();
 
-        // Verify ownership.
+        // Verify ownership: the caller must hold a reference to the old blob.
         let old_meta = self
             .meta
             .get(old_hash)
             .ok_or(StorageError::NotFound(*old_hash))?;
-        if old_meta.owner != *payer {
+        if !old_meta.owners.contains_key(payer) {
+            let some_owner = old_meta.owners.keys().next().copied().unwrap_or(*payer);
             return Err(StorageError::NotOwner {
                 hash: *old_hash,
-                owner: old_meta.owner,
+                owner: some_owner,
                 caller: *payer,
             });
         }
@@ -146,7 +238,11 @@ impl ContentStore {
         self.write(&spliced, payer)
     }
 
-    /// Delete a blob. Only the owner can delete. Returns a computron refund.
+    /// Drop one of `owner`'s references to a blob. Each owner can only drop its
+    /// own references; a caller with no reference is refused with `NotOwner`.
+    /// The physical blob is removed only when the LAST reference across ALL
+    /// owners is dropped, so one owner's delete can never destroy another
+    /// owner's data. Returns a computron refund to `owner`.
     pub fn delete(
         &mut self,
         hash: &ContentHash,
@@ -154,30 +250,49 @@ impl ContentStore {
     ) -> Result<ComputronRefund, StorageError> {
         let meta = self
             .meta
-            .get(hash)
-            .ok_or(StorageError::NotFound(*hash))?
-            .clone();
+            .get_mut(hash)
+            .ok_or(StorageError::NotFound(*hash))?;
 
-        if meta.owner != *owner {
+        let Some(owner_ref) = meta.owners.get_mut(owner) else {
+            let some_owner = meta.owners.keys().next().copied().unwrap_or(*owner);
             return Err(StorageError::NotOwner {
                 hash: *hash,
-                owner: meta.owner,
+                owner: some_owner,
                 caller: *owner,
             });
+        };
+
+        let size = meta.size;
+        let unit_cost = owner_ref.unit_cost;
+
+        owner_ref.ref_count -= 1;
+        if owner_ref.ref_count == 0 {
+            meta.owners.remove(owner);
         }
 
-        // Remove from store.
-        if meta.ref_count <= 1 {
+        // Remove the physical blob only when no owner holds any reference.
+        if meta.owners.is_empty() {
             self.blobs.remove(hash);
             self.meta.remove(hash);
-        } else {
-            if let Some(m) = self.meta.get_mut(hash) {
-                m.ref_count -= 1;
-            }
+            self.total_stored_bytes = self.total_stored_bytes.saturating_sub(size);
         }
 
-        // Process refund through the bank.
-        self.bank.process_refund(owner, meta.write_cost, meta.size)
+        // Refund THIS owner for the single reference it dropped.
+        self.bank.process_refund(owner, unit_cost, size)
+    }
+
+    /// The number of live references `owner` holds to `hash` (0 if none).
+    pub fn owner_ref_count(&self, hash: &ContentHash, owner: &QuotaId) -> u32 {
+        self.meta
+            .get(hash)
+            .and_then(|m| m.owners.get(owner))
+            .map(|o| o.ref_count)
+            .unwrap_or(0)
+    }
+
+    /// Total live references to `hash` across all owners (0 if absent).
+    pub fn total_ref_count(&self, hash: &ContentHash) -> u32 {
+        self.meta.get(hash).map(|m| m.total_refs()).unwrap_or(0)
     }
 
     /// Check if a blob exists.
@@ -198,6 +313,82 @@ impl ContentStore {
     /// Number of blobs stored.
     pub fn blob_count(&self) -> usize {
         self.blobs.len()
+    }
+
+    /// Serialize the full store (blobs, per-owner metadata, quota bank, caps)
+    /// into a versioned snapshot buffer.
+    fn snapshot(&self) -> StoreSnapshot {
+        StoreSnapshot {
+            version: SNAPSHOT_VERSION,
+            blobs: self.blobs.iter().map(|(h, d)| (*h, d.clone())).collect(),
+            meta: self.meta.iter().map(|(h, m)| (*h, m.clone())).collect(),
+            bank: self.bank.clone(),
+            max_total_bytes: self.max_total_bytes,
+            total_stored_bytes: self.total_stored_bytes,
+        }
+    }
+
+    /// Persist the store to `path` **atomically** and durably: the snapshot is
+    /// written to a sibling temp file, fsync'd, then `rename`d over the target
+    /// (an atomic replace on POSIX), and finally the containing directory is
+    /// fsync'd so the rename itself survives a crash. A crash at any point
+    /// leaves either the old complete snapshot or the new complete snapshot —
+    /// never a torn file. This turns the store from demo-grade (all state lost
+    /// on restart) into one that survives process death.
+    pub fn save_to(&self, path: impl AsRef<Path>) -> io::Result<()> {
+        use std::fs::{self, File, OpenOptions};
+        use std::io::Write;
+
+        let path = path.as_ref();
+        let bytes = postcard::to_stdvec(&self.snapshot())
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+        let dir = path.parent().unwrap_or_else(|| Path::new("."));
+        fs::create_dir_all(dir)?;
+        let tmp = path.with_extension("tmp");
+
+        {
+            let mut f = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&tmp)?;
+            f.write_all(&bytes)?;
+            f.flush()?;
+            f.sync_all()?;
+        }
+
+        fs::rename(&tmp, path)?;
+
+        // fsync the directory so the rename is durable across a crash.
+        if let Ok(dirf) = File::open(dir) {
+            let _ = dirf.sync_all();
+        }
+        Ok(())
+    }
+
+    /// Reconstruct a store from a snapshot written by [`save_to`]. Returns an
+    /// error (not a panic) on a missing, truncated, or otherwise corrupt file.
+    pub fn load_from(path: impl AsRef<Path>) -> io::Result<Self> {
+        let bytes = std::fs::read(path)?;
+        let snap: StoreSnapshot = postcard::from_bytes(&bytes)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        if snap.version != SNAPSHOT_VERSION {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "unsupported snapshot version {} (expected {})",
+                    snap.version, SNAPSHOT_VERSION
+                ),
+            ));
+        }
+        Ok(Self {
+            blobs: snap.blobs.into_iter().collect(),
+            meta: snap.meta.into_iter().collect(),
+            bank: snap.bank,
+            max_total_bytes: snap.max_total_bytes,
+            total_stored_bytes: snap.total_stored_bytes,
+        })
     }
 }
 
@@ -327,39 +518,159 @@ mod tests {
         );
     }
 
-    /// Owner-gated delete with dedup conservation: a non-owner delete is
-    /// refused (`NotOwner`) and the blob stays readable — including for a
-    /// deduplicating second writer, who does NOT gain delete rights
-    /// (ownership stays with the first writer). The owner must then
-    /// delete once per reference before the blob disappears.
+    /// Per-owner dedup accounting: a deduplicating second writer is charged
+    /// independently and holds ITS OWN reference. Crucially, the first
+    /// writer's delete cannot destroy the blob out from under the second
+    /// (the physical bytes survive while any owner still holds a reference),
+    /// and a caller who never wrote the content cannot delete it at all.
     #[test]
-    fn prop_delete_is_owner_gated_and_refcount_conserving() {
+    fn prop_dedup_is_per_owner_and_cannot_delete_out_from_under() {
         let (mut s, alice, bob) = store_with_two_cells();
+        // A third cell that never writes this content.
+        let charlie = s.bank.allocate_quota([0xC1; 32], 1_000_000, None);
         let data = b"shared content".to_vec();
-        let h = s.write(&data, &alice).unwrap();
 
-        // bob dedup-writes the same content: same address, no ownership.
-        assert_eq!(s.write(&data, &bob).unwrap(), h);
-        let refused = s.delete(&h, &bob);
+        let h = s.write(&data, &alice).unwrap();
+        assert_eq!(
+            s.write(&data, &bob).unwrap(),
+            h,
+            "dedup addresses identically"
+        );
+        assert_eq!(s.owner_ref_count(&h, &alice), 1);
+        assert_eq!(s.owner_ref_count(&h, &bob), 1);
+        assert_eq!(s.total_ref_count(&h), 2);
+
+        // A non-owner (never wrote it) cannot delete.
+        let refused = s.delete(&h, &charlie);
         assert!(
             matches!(refused, Err(StorageError::NotOwner { .. })),
-            "dedup writer must not gain delete rights, got {refused:?}"
+            "a caller with no reference must be refused, got {refused:?}"
         );
-        assert_eq!(
-            s.read(&h).unwrap(),
-            &data[..],
-            "a refused delete must leave the blob intact"
-        );
+        assert_eq!(s.read(&h).unwrap(), &data[..]);
 
-        // Owner deletes: first delete drops one reference, blob survives.
+        // Alice deletes her reference. THE BLOB MUST SURVIVE for bob — this is
+        // the security property: alice cannot destroy bob's data.
         s.delete(&h, &alice).unwrap();
         assert!(
             s.contains(&h),
-            "with ref_count 2, one delete must conserve the blob"
+            "alice's delete must not destroy the blob out from under bob"
         );
-        // Second delete removes the last reference.
-        s.delete(&h, &alice).unwrap();
-        assert!(!s.contains(&h), "the last delete must remove the blob");
-        assert!(s.read(&h).is_none());
+        assert_eq!(s.owner_ref_count(&h, &alice), 0);
+        assert_eq!(s.owner_ref_count(&h, &bob), 1);
+        assert_eq!(
+            s.read(&h).unwrap(),
+            &data[..],
+            "bob's content must still read back"
+        );
+
+        // Alice can no longer delete (she holds no reference).
+        assert!(matches!(
+            s.delete(&h, &alice),
+            Err(StorageError::NotOwner { .. })
+        ));
+
+        // bob drops his last reference: only now is the physical blob removed.
+        s.delete(&h, &bob).unwrap();
+        assert!(!s.contains(&h), "the last owner's delete removes the blob");
+        assert_eq!(s.total_ref_count(&h), 0);
+    }
+
+    /// Each owner is refunded independently for the reference IT drops — a
+    /// dedup writer's refund goes to its own quota, never the first writer's.
+    #[test]
+    fn prop_dedup_refunds_are_per_owner() {
+        let (mut s, alice, bob) = store_with_two_cells();
+        let data = vec![0x7Eu8; 100]; // 100 bytes, cost_per_byte=1 => 100 each.
+        let h = s.write(&data, &alice).unwrap();
+        s.write(&data, &bob).unwrap();
+
+        let bob_consumed_before = s.bank.get(&bob).unwrap().total_consumed;
+        let alice_consumed_before = s.bank.get(&alice).unwrap().total_consumed;
+
+        // bob deletes his reference; refund_rate 0.5 => 50 back to BOB only.
+        let refund = s.delete(&h, &bob).unwrap();
+        assert_eq!(refund.quota_id, bob);
+        assert_eq!(refund.amount, 50);
+        assert_eq!(
+            s.bank.get(&bob).unwrap().total_consumed,
+            bob_consumed_before - 50,
+            "bob's refund must reduce bob's consumption"
+        );
+        assert_eq!(
+            s.bank.get(&alice).unwrap().total_consumed,
+            alice_consumed_before,
+            "alice's balance must be untouched by bob's delete"
+        );
+    }
+
+    /// The global physical-byte cap bounds the store: distinct writes are
+    /// rejected once the cap would be exceeded, but a DEDUP write of already
+    /// stored content still succeeds (it consumes no new physical space).
+    #[test]
+    fn prop_store_cap_bounds_physical_bytes() {
+        let mut bank = SpaceBank::new(1, 1, 0.5);
+        let alice = bank.allocate_quota([0xA1; 32], 1_000_000, None);
+        let mut s = ContentStore::with_capacity(bank, 20);
+
+        let a = s.write(&[1u8; 10], &alice).unwrap(); // 10 <= 20 ok
+        let _b = s.write(&[2u8; 10], &alice).unwrap(); // 20 <= 20 ok
+        assert_eq!(s.stored_bytes(), 20);
+
+        // A third distinct 10-byte blob would push physical to 30 > 20.
+        let over = s.write(&[3u8; 10], &alice);
+        assert!(
+            matches!(over, Err(StorageError::StoreCapExceeded { .. })),
+            "over-cap distinct write must be rejected, got {over:?}"
+        );
+
+        // A dedup write of already-stored content is fine (no new bytes).
+        assert_eq!(s.write(&[1u8; 10], &alice).unwrap(), a);
+        assert_eq!(s.stored_bytes(), 20);
+    }
+
+    /// Persistence round-trip: a store saved to disk and reloaded reproduces
+    /// every blob, the per-owner reference accounting, and the quota bank —
+    /// the state that was previously lost on process restart.
+    #[test]
+    fn prop_persistence_round_trip() {
+        let dir = std::env::temp_dir().join("dregg_content_persist_test");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join(format!("store-{}.bin", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+
+        let (mut s, alice, bob) = store_with_two_cells();
+        let d1 = b"persist me".to_vec();
+        let d2 = b"and me too, differently".to_vec();
+        let h1 = s.write(&d1, &alice).unwrap();
+        let _ = s.write(&d1, &bob).unwrap(); // shared, per-owner refs
+        let h2 = s.write(&d2, &bob).unwrap();
+        let alice_consumed = s.bank.get(&alice).unwrap().total_consumed;
+
+        s.save_to(&path).unwrap();
+        let loaded = ContentStore::load_from(&path).unwrap();
+
+        assert_eq!(loaded.read(&h1).unwrap(), &d1[..]);
+        assert_eq!(loaded.read(&h2).unwrap(), &d2[..]);
+        assert_eq!(loaded.owner_ref_count(&h1, &alice), 1);
+        assert_eq!(loaded.owner_ref_count(&h1, &bob), 1);
+        assert_eq!(loaded.total_ref_count(&h1), 2);
+        assert_eq!(loaded.stored_bytes(), s.stored_bytes());
+        assert_eq!(
+            loaded.bank.get(&alice).unwrap().total_consumed,
+            alice_consumed
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A corrupt/truncated snapshot loads as an `Err`, never a panic.
+    #[test]
+    fn load_from_rejects_corrupt_snapshot() {
+        let dir = std::env::temp_dir().join("dregg_content_persist_test");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join(format!("corrupt-{}.bin", std::process::id()));
+        std::fs::write(&path, b"not a valid postcard snapshot at all").unwrap();
+        assert!(ContentStore::load_from(&path).is_err());
+        let _ = std::fs::remove_file(&path);
     }
 }

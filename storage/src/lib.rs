@@ -139,6 +139,19 @@ pub enum StorageError {
     InsufficientChunks { have: usize, need: usize },
     /// Relay queue rejected (quota exhausted or invalid).
     RelayRejected(String),
+    /// A cost/accounting computation overflowed `u64`. Attacker-chosen
+    /// sizes/TTLs must never panic the node or wrap to a near-zero charge
+    /// (a wrapped cost is a billing bypass); overflow is rejected instead.
+    CostOverflow {
+        /// Human context for the overflowed computation (e.g. "charge_write").
+        op: &'static str,
+    },
+    /// The content store's global byte capacity would be exceeded.
+    StoreCapExceeded {
+        current: u64,
+        max: u64,
+        attempted: u64,
+    },
 }
 
 #[cfg(test)]
