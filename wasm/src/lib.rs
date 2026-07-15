@@ -85,6 +85,15 @@ pub mod bindings_descent;
 // bundle AND the native `cargo test`. The `<dregg-sprite>` element paints this SVG;
 // the deos `Tile{handle}` → sprite resolution is the separate in-surface wire.
 pub mod bindings_sprite;
+// Multiway-tug, proved in the tab: `dregg-multiway-tug`'s verified card game (the hidden
+// hand committed as a Poseidon2 4-ary Merkle root) generates its per-play membership STARK
+// ON-DEVICE — the "moves never leave the device" endgame. `proveTugPlayOnDevice` mints the
+// base-layer membership `Ir2BatchProof` a played card climbs to the committed hand root (the
+// SAME tooth the Phase-3 fold lowers per turn), self-verified before return and bound to the
+// REAL `HandTree::root`; `foldTugMatchOnDevice` runs the whole recursion fold to one
+// `verify_history`-accepted `WholeChainProof` (compiles for wasm32; the run is the honest
+// heavy-recursion boundary). Consumes `dregg-multiway-tug`'s fold READ-ONLY.
+pub mod bindings_multiway_tug;
 
 // ============================================================================
 // Token operations (Macaroon backend)

@@ -1680,6 +1680,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "dregg-multiway-tug"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "deos-view",
+ "dregg-app-framework",
+ "dregg-cell",
+ "dregg-circuit",
+ "dregg-circuit-prove",
+ "dregg-lightclient",
+ "dregg-schema",
+ "dregg-turn",
+ "dreggnet-asset",
+ "dreggnet-offerings",
+ "game-turn-slice",
+ "procgen-dregg",
+ "spween-dregg",
+]
+
+[[package]]
 name = "dregg-node-target"
 version = "0.1.0"
 
@@ -1951,6 +1971,7 @@ dependencies = [
  "dregg-intent",
  "dregg-lightclient",
  "dregg-macaroon",
+ "dregg-multiway-tug",
  "dregg-observability",
  "dregg-pq",
  "dregg-sdk",
@@ -2374,6 +2395,17 @@ dependencies = [
  "memchr",
  "pin-project-lite",
  "slab",
+]
+
+[[package]]
+name = "game-turn-slice"
+version = "0.1.0"
+dependencies = [
+ "dregg-cell",
+ "dregg-circuit",
+ "dregg-circuit-prove",
+ "dregg-lightclient",
+ "dregg-turn",
 ]
 
 [[package]]

@@ -53,10 +53,8 @@ hex = "0.4"
 # `blocking` keeps this crate tokio-runtime-free at its API (the caller drives the
 # GET from a `spawn_blocking` on the bot's runtime). The fetched round is BLS-verified
 # through the existing `dregg-dice` pairing check before it can seed a day.
-reqwest = { version = "0.12", default-features = false, features = [
-    "blocking",
-    "rustls-tls",
-] }
+# The LIVE drand HTTP fetch (`beacon::http_get`) is NATIVE-ONLY — see the target-gated
+# `reqwest` dependency at the end of this file.
 # Parse the drand `public/{round}` JSON body (round + signature). Already resolved
 # workspace-wide; adds nothing new to the closure.
 serde_json = "1"
@@ -84,3 +82,15 @@ ed25519-dalek = { version = "2", features = ["std"] }
 # `.dungeon` TEXT; the tests + example prove that text parses and validates as a
 # first-class attested dungeon through the shipped engine.
 attested-dm = { path = "../attested-dm" }
+
+# NATIVE-ONLY: the LIVE drand HTTP fetch (`beacon::http_get` → `fetch_quicknet_round`).
+# `reqwest::blocking` is gated out on wasm32 (a browser has no synchronous cross-thread
+# GET), so on wasm `http_get` fails CLOSED and callers fall back to the pinned,
+# BLS-verifiable round; the pure verify core (`verified_beacon_from_body`) stays portable so
+# a browser client fetches the round body in JS and verifies it in-tab. Keeping this off
+# wasm32 is what lets dregg-wasm's descent + multiway-tug on-device bindings compile.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+reqwest = { version = "0.12", default-features = false, features = [
+    "blocking",
+    "rustls-tls",
+] }

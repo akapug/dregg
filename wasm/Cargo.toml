@@ -150,6 +150,16 @@ dreggnet-asset = { path = "../dreggnet-asset" }
 # (blake3 + bls12_381, pure Rust) + blake3; wasm32-safe.
 procgen-dregg = { path = "../procgen-dregg" }
 
+# THE VERIFIED CARD GAME, PROVED IN THE TAB — `dregg-multiway-tug`: the hidden hand
+# committed as a Poseidon2 4-ary Merkle root, its per-play membership STARK + whole-match
+# recursion fold. `bindings_multiway_tug` consumes its fold READ-ONLY: `HandTree`/`card_leaf`
+# (the private hand + blinded leaf), `fold::{membership_leaf_for_play, LeafBundle, fold_match}`
+# (the committed Phase-3 fold). Its deps are all already in this graph and wasm32-safe:
+# `dregg-schema` (app-framework/cell/spween-dregg), `game-turn-slice` (circuit/circuit-prove/
+# cell/turn/lightclient), plus circuit/circuit-prove/lightclient/spween-dregg/dreggnet-*/
+# deos-view/procgen — no new heavy or non-wasm edge. Consumed, never modified.
+dregg-multiway-tug = { path = "../dregg-multiway-tug" }
+
 # Token crate without biscuit (biscuit-auth has complex deps)
 dregg-token = { path = "../token", default-features = false, features = ["macaroon", "rand-deps"] }
 

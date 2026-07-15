@@ -6642,6 +6642,7 @@ dependencies = [
  "blake3",
  "dregg-epoch",
  "dregg-season",
+ "dregg-types",
  "dreggnet-asset",
  "dreggnet-cheevo",
  "dreggnet-companion",
@@ -6651,7 +6652,6 @@ dependencies = [
  "dreggnet-offerings",
  "dreggnet-party",
  "dreggnet-quest",
- "dreggnet-saga",
  "dreggnet-trade",
  "dungeon-on-dregg",
  "procgen-dregg",
@@ -6725,6 +6725,8 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "dreggnet-asset",
+ "dreggnet-gear",
+ "dungeon-on-dregg",
  "procgen-dregg",
 ]
 
@@ -6743,7 +6745,10 @@ dependencies = [
 name = "dreggnet-faction"
 version = "0.1.0"
 dependencies = [
+ "deos-view",
  "dregg-app-framework",
+ "serde",
+ "serde_json",
  "spween",
  "spween-dregg",
 ]
@@ -6767,11 +6772,13 @@ name = "dreggnet-gear"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "deos-view",
  "dregg-app-framework",
  "dregg-cell",
  "dregg-schema",
  "dregg-turn",
  "dreggnet-asset",
+ "dreggnet-offerings",
  "dungeon-on-dregg",
  "spween-dregg",
 ]

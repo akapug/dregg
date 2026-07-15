@@ -275,6 +275,7 @@ pub fn verified_beacon_from_body(
 /// One blocking HTTP GET of a URL, returning the response body text. Blocking (not async): the
 /// caller drives it from a `spawn_blocking` on their own runtime, keeping this crate free of an
 /// ambient tokio dependency at its API.
+#[cfg(not(target_arch = "wasm32"))]
 fn http_get(url: &str) -> Result<String, FetchError> {
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
@@ -292,6 +293,24 @@ fn http_get(url: &str) -> Result<String, FetchError> {
         )));
     }
     resp.text().map_err(|e| FetchError::Http(e.to_string()))
+}
+
+/// wasm32 has no blocking HTTP client (`reqwest::blocking` is gated out on wasm, and a
+/// browser cannot make a synchronous cross-thread GET anyway). On this target the live
+/// fetch fails CLOSED — every caller ([`fetch_quicknet_round`] → [`todays_beacon_or_pinned`]
+/// / [`todays_day_seed_source`]) already treats a fetch error as "no live liveness" and
+/// falls back to the pinned, genuinely BLS-verifiable round. The browser client fetches the
+/// round body itself (via JS `fetch`) and hands it to [`verified_beacon_from_body`], the pure
+/// verify core, so the wasm day is still real-beacon-seeded — the fetch TRANSPORT is the
+/// native-only edge, the VERIFY is portable.
+#[cfg(target_arch = "wasm32")]
+fn http_get(url: &str) -> Result<String, FetchError> {
+    let _ = url;
+    Err(FetchError::Http(
+        "live drand HTTP fetch is native-only (wasm32 has no blocking HTTP client); \
+         fetch the round body in JS and call verified_beacon_from_body, or use the pinned fallback"
+            .to_string(),
+    ))
 }
 
 /// **Fetch + verify a specific `quicknet` round over HTTP.** GET the round from `api_base`, parse
