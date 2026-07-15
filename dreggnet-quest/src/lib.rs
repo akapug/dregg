@@ -90,7 +90,9 @@ pub mod giver;
 
 use std::sync::Arc;
 
-use dregg_app_framework::{CellProgram, StateConstraint, TransitionGuard, field_from_u64, symbol};
+use dregg_app_framework::{
+    CellProgram, StateConstraint, TransitionCase, TransitionGuard, field_from_u64, symbol,
+};
 use spween::Scene;
 use spween_dregg::{
     CompiledStory, PASSAGE_ENDED, PASSAGE_SLOT, Playthrough, VerifyBreak, WorldCell, choice_method,
@@ -289,6 +291,33 @@ pub fn errand_compiled() -> CompiledStory {
             StateConstraint::WriteOnce { index: reward },
         ],
     );
+
+    // THE SLOT-BOUND REWARD GATE — the tooth that makes the steps-done floor real.
+    //
+    // The v0 compiler emits only `MethodIs` choice cases and no `Always`/`SlotChanged` case, so the
+    // turn-in floor (compiled `FieldGte(steps_done, TURN_IN_THRESHOLD)` + the augmented reward teeth)
+    // binds ONLY to the `LN_TURN_IN` method. But the executor is open: a client can staple
+    // `SetField(reward, 1)` onto a permissive `LN_LIGHT_1` turn — where the turn-in floor never runs
+    // and `reward` is still zero — and mint the reward with `steps_done < TURN_IN_THRESHOLD`.
+    // `SlotChanged{reward}` binds the FULL floor (including the steps-done gate, which the compiler
+    // put on the turn-in case, not the augment) to the WRITE. (Driven:
+    // `a_stapled_errand_reward_cannot_ride_a_ward_lighting`.)
+    if let CellProgram::Cases(cases) = &mut story.program {
+        cases.push(TransitionCase {
+            guard: TransitionGuard::SlotChanged { index: reward },
+            constraints: vec![
+                StateConstraint::FieldGte {
+                    index: steps_done,
+                    value: field_from_u64(TURN_IN_THRESHOLD),
+                },
+                StateConstraint::FieldEquals {
+                    index: reward,
+                    value: field_from_u64(REWARD_VALUE),
+                },
+                StateConstraint::WriteOnce { index: reward },
+            ],
+        });
+    }
 
     story
 }
@@ -704,6 +733,63 @@ mod tests {
         assert!(
             matches!(rejected, Err(QuestReject::DidNotWin)),
             "an incomplete quest did not win, got {rejected:?}"
+        );
+    }
+
+    /// THE SLOT-BOUND REWARD TOOTH (the falsifier for a real cell-layer hole): a `reward` write
+    /// STAPLED onto a ward-lighting turn cannot mint the reward below the steps-done floor.
+    ///
+    /// Before the `SlotChanged{reward}` case existed, the turn-in floor lived ONLY on the
+    /// `LN_TURN_IN` case; the `LN_LIGHT_1` case carries no constraint on `reward`, and (no `Always`,
+    /// the flag still zero) a `SetField(reward, 1)` stapled onto a legitimate first ward-lighting
+    /// minted the reward with `steps_done == 1 < TURN_IN_THRESHOLD`.
+    #[test]
+    fn a_stapled_errand_reward_cannot_ride_a_ward_lighting() {
+        use dregg_app_framework::Effect;
+        let story = errand_compiled();
+        let reward = quest_slot(&story, "reward");
+        let step1 = quest_slot(&story, &step_var(1));
+        let steps_done = quest_slot(&story, "steps_done");
+
+        let world = fresh_quest(41);
+        let cell = world.cell_id();
+        let staple = world.apply_raw(
+            &board_method(LN_LIGHT_1),
+            vec![
+                Effect::SetField {
+                    cell,
+                    index: step1 as usize,
+                    value: field_from_u64(1),
+                },
+                Effect::SetField {
+                    cell,
+                    index: steps_done as usize,
+                    value: field_from_u64(1),
+                },
+                Effect::SetField {
+                    cell,
+                    index: reward as usize,
+                    value: field_from_u64(REWARD_VALUE),
+                },
+            ],
+        );
+        assert!(
+            matches!(staple, Err(WorldError::Refused(_))),
+            "a reward stapled onto a ward-lighting turn must be REFUSED (steps_done 1 < {TURN_IN_THRESHOLD}); got {staple:?}"
+        );
+        assert_eq!(world.read_var("reward"), 0, "anti-ghost: no forged reward");
+
+        // THE GATE IS A FLOOR, NOT A BAN: the fully-completed errand still turns in the reward.
+        let s = scene();
+        for ln in [LN_LIGHT_1, LN_LIGHT_2, LN_LIGHT_3, LN_TURN_IN] {
+            world
+                .apply_choice(ROOM_BOARD, ln, &line(&s, ROOM_BOARD, ln))
+                .unwrap_or_else(|e| panic!("legit line {ln} commits: {e}"));
+        }
+        assert_eq!(
+            world.read_var("reward"),
+            REWARD_VALUE,
+            "a legitimately-completed errand still mints the reward"
         );
     }
 }

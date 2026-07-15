@@ -158,11 +158,56 @@ pub fn adventurer_story() -> CompiledStory {
         constraints: vec![StateConstraint::StrictMonotonic { index: CHECKS_SLOT }],
     });
 
+    // 3b. THE OUTCOME BOUND — the recorded check total can never exceed `stat + max die face`.
+    //
+    // `check_total` is the recorded OUTCOME the door-gate reads. The `skill/check` case (3) only
+    // advances the `checks` counter; it does NOT bound `check_total`, so a client could staple
+    // `SetField(check_total, 9999)` onto a check turn and then legitimately open the door — forging
+    // the outcome. Bind the bound to the WRITE: on ANY change to `check_total`, it must not exceed
+    // `stat + SKILL_DIE_SIDES` (the best possible `stat + d20`). The verifiable-roll witness
+    // (`dregg-dice`, checked downstream) pins the EXACT face; this kernel tooth pins the CEILING so
+    // a forged outcome cannot open a door beyond max-roll reach. (Driven:
+    // `a_forged_check_total_cannot_open_the_door`.)
+    cases.push(TransitionCase {
+        guard: TransitionGuard::SlotChanged {
+            index: CHECK_TOTAL_SLOT,
+        },
+        constraints: vec![StateConstraint::FieldLteOther {
+            index: CHECK_TOTAL_SLOT,
+            other: STAT_SLOT,
+            delta: SKILL_DIE_SIDES as i64,
+        }],
+    });
+
     // 4. door/open — THE CHECK-GATE: dc <= check_total (the check passed) + door lands open.
     cases.push(TransitionCase {
         guard: TransitionGuard::MethodIs {
             method: symbol(OPEN_DOOR_METHOD),
         },
+        constraints: vec![
+            StateConstraint::FieldLteField {
+                left_index: DC_SLOT,
+                right_index: CHECK_TOTAL_SLOT,
+            },
+            StateConstraint::FieldEquals {
+                index: DOOR_SLOT,
+                value: field_from_u64(1),
+            },
+        ],
+    });
+
+    // 4b. THE SLOT-BOUND DOOR GATE — the tooth that makes the check-gate real.
+    //
+    // The `MethodIs{door/open}` case (4) gates only turns that PRESENT the open method. But
+    // `apply_raw` is public: a client can staple `SetField(door, 1)` onto ANY other method's turn
+    // (e.g. a legitimate `skill/check`), where no `door/open` case matches and the only
+    // non-dispatching guard on `door` is the global `Always Monotonic{door}` — which admits a
+    // 0 -> 1 open. So the door opens with NO check. (Driven:
+    // `a_stapled_door_write_cannot_ride_another_methods_turn`, which opened the door with no check
+    // before this case existed.) `SlotChanged{door}` binds the check-gate to the WRITE; the
+    // evaluator runs EVERY matching case, so it composes with the authoring method's constraints.
+    cases.push(TransitionCase {
+        guard: TransitionGuard::SlotChanged { index: DOOR_SLOT },
         constraints: vec![
             StateConstraint::FieldLteField {
                 left_index: DC_SLOT,
@@ -649,6 +694,120 @@ mod tests {
             "no check yet ⇒ check_total 0 < DC ⇒ refused, got {refused:?}"
         );
         assert_eq!(world.read_var("door"), 0, "anti-ghost: still locked");
+    }
+
+    /// THE SLOT-BOUND DOOR TOOTH (the falsifier for a real hole): a `door` write STAPLED onto a
+    /// DIFFERENT method's turn cannot open the door without a passed check.
+    ///
+    /// `apply_raw` is public, so a client can append `SetField(door, 1)` to a `skill/check` turn.
+    /// Before the `SlotChanged{door}` case existed, the check-gate lived ONLY on `door/open`, while
+    /// the global `Always Monotonic{door}` admitted a 0 -> 1 open on any method — so the door opened
+    /// with NO check.
+    #[test]
+    fn a_stapled_door_write_cannot_ride_another_methods_turn() {
+        let world = deploy_adventurer(21);
+        create_adventurer(&world, 5, 15).expect("stat 5, DC 15 — no check rolled yet");
+        let cell = world.cell_id();
+
+        // Staple the door open onto a `skill/check` method turn (checks++ satisfies its own tooth).
+        // No check has set `check_total`, so it is still 0 < DC 15.
+        let stapled = world.apply_raw(
+            CHECK_METHOD,
+            vec![
+                Effect::SetField {
+                    cell,
+                    index: CHECKS_SLOT as usize,
+                    value: field_from_u64(1),
+                },
+                Effect::SetField {
+                    cell,
+                    index: DOOR_SLOT as usize,
+                    value: field_from_u64(1),
+                },
+            ],
+        );
+        assert!(
+            matches!(stapled, Err(WorldError::Refused(_))),
+            "a door open stapled onto a check turn must be REFUSED (check_total 0 < DC 15); got {stapled:?}"
+        );
+        assert_eq!(
+            world.read_var("door"),
+            0,
+            "anti-ghost: the door stays locked"
+        );
+
+        // THE GATE IS THE CHECK, NOT A BAN: a real passing check still opens the door.
+        let pass = deploy_adventurer(22);
+        let stat = 5;
+        create_adventurer(&pass, stat, 100).expect("probe DC");
+        let roll = roll_check(&pass, 0).roll;
+        let real = deploy_adventurer(22);
+        create_adventurer(&real, stat, stat + roll).expect("DC exactly the total");
+        make_check(&real, 0).expect("a real check commits");
+        open_door(&real).expect("a door-open after a PASSED check still commits");
+        assert_eq!(real.read_var("door"), 1, "the real door opened");
+    }
+
+    /// THE OUTCOME-BOUND TOOTH (the falsifier for the second vector): a FORGED `check_total` beyond
+    /// `stat + d20` is REFUSED at the kernel, so it cannot self-satisfy the door-gate.
+    ///
+    /// The `skill/check` case only advances the `checks` counter; before the `SlotChanged{check_total}`
+    /// bound existed, a client could staple `SetField(check_total, 9999)` onto a check turn and then
+    /// legitimately open any door (`dc <= 9999`). The bound `check_total <= stat + SKILL_DIE_SIDES`
+    /// refuses the forged outcome.
+    #[test]
+    fn a_forged_check_total_cannot_open_the_door() {
+        let world = deploy_adventurer(23);
+        let stat = 4;
+        create_adventurer(&world, stat, 15).expect("stat 4, DC 15");
+        let cell = world.cell_id();
+
+        let forged = world.apply_raw(
+            CHECK_METHOD,
+            vec![
+                Effect::SetField {
+                    cell,
+                    index: CHECKS_SLOT as usize,
+                    value: field_from_u64(1),
+                },
+                Effect::SetField {
+                    cell,
+                    index: CHECK_TOTAL_SLOT as usize,
+                    value: field_from_u64(9_999),
+                },
+            ],
+        );
+        assert!(
+            matches!(forged, Err(WorldError::Refused(_))),
+            "a forged check_total of 9999 > stat({stat}) + {SKILL_DIE_SIDES} must be REFUSED; got {forged:?}"
+        );
+        assert_eq!(
+            world.read_var("check_total"),
+            0,
+            "anti-ghost: no forged outcome landed"
+        );
+
+        // A HONEST outcome at the ceiling (stat + max face) is admitted — the bound is a ceiling,
+        // not a ban.
+        let ok = world.apply_raw(
+            CHECK_METHOD,
+            vec![
+                Effect::SetField {
+                    cell,
+                    index: CHECKS_SLOT as usize,
+                    value: field_from_u64(1),
+                },
+                Effect::SetField {
+                    cell,
+                    index: CHECK_TOTAL_SLOT as usize,
+                    value: field_from_u64(stat + SKILL_DIE_SIDES),
+                },
+            ],
+        );
+        assert!(
+            ok.is_ok(),
+            "an outcome at the stat+d20 ceiling is admitted, got {ok:?}"
+        );
     }
 
     /// THE FORGED-ROLL TOOTH (non-vacuous): forge a passed check by rewriting the

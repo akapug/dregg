@@ -81,7 +81,9 @@
 
 use std::sync::Arc;
 
-use dregg_app_framework::{CellProgram, StateConstraint, TransitionGuard, field_from_u64, symbol};
+use dregg_app_framework::{
+    CellProgram, StateConstraint, TransitionCase, TransitionGuard, field_from_u64, symbol,
+};
 use spween::{Choice, PassageContent, Scene, Value};
 use spween_dregg::{CompiledStory, WorldCell, choice_method, compile_scene, parse};
 
@@ -371,6 +373,70 @@ pub fn faction_compiled() -> CompiledStory {
             index: embers_betrayed,
         }],
     );
+
+    // THE SLOT-BOUND FACTION GATES — the teeth that make the standing bar + rival cap real.
+    //
+    // The v0 compiler emits only `MethodIs` choice cases and no `Always`/`SlotChanged` case, so each
+    // faction gate binds ONLY to its authoring method. But the executor is open: a client can staple
+    //   * `SetField(ember_quest, 1)` onto a permissive `LN_PLEDGE_EMBERS` turn — the trial's
+    //     `FieldGte(rep_embers, REP_THRESHOLD)` (compiled onto `LN_EMBER_TRIAL`) never runs and the
+    //     unlock lands with `rep_embers == 0`; likewise `tide_region`;
+    //   * `SetField(rep_embers, 9999)` onto ANY non-pledge method — the cross-faction cap
+    //     (`FieldLteOther(rep_embers <= embers_ceiling)`, compiled onto `LN_PLEDGE_EMBERS`) never
+    //     runs and rep blows past the rival ceiling, defeating the whole feud mechanic.
+    // `SlotChanged` binds each gate to the WRITE, whoever authored it. `SlotChanged` is NOT
+    // method-dispatching, so default-deny is unaffected. (Driven:
+    // `a_stapled_faction_unlock_cannot_ride_a_pledge` + `a_rep_write_is_capped_by_the_rival_ceiling`.)
+    if let CellProgram::Cases(cases) = &mut story.program {
+        // The Ember / Tide trial unlocks — the standing bar + betrayal seal, bound to the write.
+        cases.push(TransitionCase {
+            guard: TransitionGuard::SlotChanged { index: ember_quest },
+            constraints: vec![
+                StateConstraint::FieldGte {
+                    index: rep_embers,
+                    value: field_from_u64(REP_THRESHOLD),
+                },
+                StateConstraint::FieldEquals {
+                    index: embers_betrayed,
+                    value: zero,
+                },
+                StateConstraint::WriteOnce { index: ember_quest },
+            ],
+        });
+        cases.push(TransitionCase {
+            guard: TransitionGuard::SlotChanged { index: tide_region },
+            constraints: vec![
+                StateConstraint::FieldGte {
+                    index: rep_tide,
+                    value: field_from_u64(REP_THRESHOLD),
+                },
+                StateConstraint::FieldEquals {
+                    index: tide_betrayed,
+                    value: zero,
+                },
+                StateConstraint::WriteOnce { index: tide_region },
+            ],
+        });
+        // The rep RATCHET, bound to the write: standing can only RISE, whoever authored the change
+        // (the write-down that the pledge/renounce cases already refuse is now refused on ANY
+        // method). NOTE — a full slot-bound RIVAL CAP is deliberately NOT installed here: the
+        // cross-faction ceiling is DYNAMIC (pledging a rival drops your ceiling without lowering the
+        // rep you already earned), so `rep_embers > embers_ceiling` is a REACHABLE legitimate state
+        // and a static `FieldLteOther(rep <= ceiling)` would refuse it. The ceiling is enforced at
+        // PLEDGE time (the compiler's `{ rep < "$ceiling" }` pre-check on `LN_PLEDGE_*`); binding it
+        // to the write would need a method-aware guard. Rep INFLATION via a non-pledge staple past
+        // the ceiling is a NAMED RESIDUAL (see the sweep report) — the trial unlock above already
+        // requires the earned `FieldGte(rep, REP_THRESHOLD)`, so the standing bar is bound to the
+        // reward write regardless.
+        cases.push(TransitionCase {
+            guard: TransitionGuard::SlotChanged { index: rep_embers },
+            constraints: vec![StateConstraint::Monotonic { index: rep_embers }],
+        });
+        cases.push(TransitionCase {
+            guard: TransitionGuard::SlotChanged { index: rep_tide },
+            constraints: vec![StateConstraint::Monotonic { index: rep_tide }],
+        });
+    }
 
     story
 }
@@ -723,6 +789,111 @@ mod tests {
             world.read_var("rep_tide"),
             0,
             "anti-ghost: the rival faction will not have you"
+        );
+    }
+
+    /// THE SLOT-BOUND UNLOCK TOOTH (the falsifier for a real cell-layer hole): an `ember_quest` write
+    /// STAPLED onto a pledge cannot claim the trial reward below the standing bar.
+    ///
+    /// Before the `SlotChanged{ember_quest}` case existed, the trial's `FieldGte(rep_embers, 2)`
+    /// (compiled onto `LN_EMBER_TRIAL`) never ran on a `LN_PLEDGE_EMBERS` turn, and (no `Always`, the
+    /// flag still zero) a stapled `SetField(ember_quest, 1)` unlocked the content with `rep_embers < 2`.
+    #[test]
+    fn a_stapled_faction_unlock_cannot_ride_a_pledge() {
+        use dregg_app_framework::Effect;
+        let story = faction_compiled();
+        let ember_quest = faction_slot(&story, "ember_quest");
+        let rep_embers = faction_slot(&story, "rep_embers");
+
+        let s = feud_scene();
+        let world = deploy_feud(41);
+        let cell = world.cell_id();
+
+        // Staple the unlock onto a first Ember pledge (rep 0 -> 1), below the REP_THRESHOLD (2).
+        let staple = world.apply_raw(
+            &hall_method(LN_PLEDGE_EMBERS),
+            vec![
+                Effect::SetField {
+                    cell,
+                    index: rep_embers as usize,
+                    value: field_from_u64(1),
+                },
+                Effect::SetField {
+                    cell,
+                    index: ember_quest as usize,
+                    value: field_from_u64(1),
+                },
+            ],
+        );
+        assert!(
+            matches!(staple, Err(WorldError::Refused(_))),
+            "ember_quest stapled onto a pledge must be REFUSED (rep 1 < {REP_THRESHOLD}); got {staple:?}"
+        );
+        assert_eq!(
+            world.read_var("ember_quest"),
+            0,
+            "anti-ghost: no forged unlock"
+        );
+
+        // THE GATE IS A BAR, NOT A BAN: real earned standing still clears the trial.
+        commit(&world, &s, LN_PLEDGE_EMBERS);
+        commit(&world, &s, LN_PLEDGE_EMBERS);
+        assert_eq!(
+            world.read_var("rep_embers"),
+            REP_THRESHOLD,
+            "standing earned"
+        );
+        commit(&world, &s, LN_EMBER_TRIAL);
+        assert_eq!(
+            world.read_var("ember_quest"),
+            1,
+            "earned standing still unlocks the trial"
+        );
+    }
+
+    /// THE SLOT-BOUND RATCHET TOOTH (falsifier): a `rep_embers` WRITE-DOWN stapled onto a NON-pledge
+    /// method is refused — earned standing can never be un-earned, whoever authored the change.
+    ///
+    /// The `Monotonic(rep_embers)` ratchet was compiled ONLY onto the pledge/renounce cases, so a
+    /// write-down stapled onto another method (e.g. a betrayal) escaped it; `SlotChanged{rep_embers}`
+    /// binds the ratchet to the write.
+    ///
+    /// (NOTE: a rep RISE past the dynamic rival ceiling via a non-pledge staple is a documented
+    /// residual — the ceiling is enforced at pledge time and cannot be soundly slot-bound because it
+    /// moves; see the sweep report. The trial unlock is nonetheless bound to the earned FieldGte.)
+    #[test]
+    fn a_rep_write_down_cannot_ride_a_nonpledge_method() {
+        use dregg_app_framework::Effect;
+        let story = faction_compiled();
+        let rep_embers = faction_slot(&story, "rep_embers");
+
+        let s = feud_scene();
+        let world = deploy_feud(42);
+        let cell = world.cell_id();
+
+        // Earn standing (two pledges -> rep 2).
+        commit(&world, &s, LN_PLEDGE_EMBERS);
+        commit(&world, &s, LN_PLEDGE_EMBERS);
+        assert_eq!(world.read_var("rep_embers"), 2, "standing earned");
+
+        // Staple a write-DOWN onto a betrayal turn (its case constrains only `embers_betrayed`, not
+        // rep). Without the SlotChanged ratchet this would un-earn the standing.
+        let write_down = world.apply_raw(
+            &hall_method(LN_BETRAY_EMBERS),
+            vec![Effect::SetField {
+                cell,
+                index: rep_embers as usize,
+                value: field_from_u64(0),
+            }],
+        );
+        assert!(
+            matches!(write_down, Err(WorldError::Refused(_))),
+            "a rep write-down (2 -> 0) stapled onto a betrayal must be REFUSED; got {write_down:?}"
+        );
+        assert_eq!(
+            world.read_var("rep_embers"),
+            2,
+            "anti-ghost: the standing stands"
         );
     }
 }

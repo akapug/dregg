@@ -175,7 +175,40 @@ pub fn meta_hero_story() -> CompiledStory {
         ],
     });
 
-    // 3. claim_boon — the unlock, bought with enough ACCRUED echoes and set once.
+    // 3. THE SLOT-BOUND GATE — the tooth that makes the boon PRICE real.
+    //
+    // A `MethodIs` case gates only turns that PRESENT the claim method. But `apply_raw` is public:
+    // a client can staple `SetField(boon, 1)` onto ANY other method's turn (e.g. a legitimate
+    // `meta/grant_echoes`), where no `meta/claim_boon` case matches and the global `Always`
+    // `WriteOnce(boon)` happily permits the FIRST write (`cell/src/program/eval.rs:379-383`,
+    // `old_zero`) — so the boon lands with NO price check. (Driven:
+    // `a_stapled_boon_write_cannot_ride_another_methods_turn`, which committed the unlock at
+    // 15/30 echoes before this case existed.)
+    //
+    // `SlotChanged` binds the price to the WRITE rather than the method: the case fires on ANY
+    // transition that moves the `boon` slot, whoever authored it. The evaluator runs EVERY matching
+    // case (`eval.rs:104-120`), so this gate composes with the authoring method's own constraints
+    // instead of being skipped by it. `SlotChanged` is NOT method-dispatching
+    // (`TransitionGuard::is_method_dispatching`), so default-deny is unaffected.
+    cases.push(TransitionCase {
+        guard: TransitionGuard::SlotChanged { index: BOON_SLOT },
+        constraints: vec![
+            StateConstraint::FieldGte {
+                index: ECHOES_SLOT,
+                value: field_from_u64(BOON_PRICE),
+            },
+            StateConstraint::FieldEquals {
+                index: BOON_SLOT,
+                value: field_from_u64(BOON_VALUE),
+            },
+            StateConstraint::WriteOnce { index: BOON_SLOT },
+        ],
+    });
+
+    // 4. claim_boon — the method a legitimate claim dispatches under. `SlotChanged` is NOT
+    //    method-dispatching, so without this case `meta/claim_boon` would be an unknown symbol and
+    //    default-deny. It carries the same gates (defence in depth; the SlotChanged case above is
+    //    the load-bearing one).
     cases.push(TransitionCase {
         guard: TransitionGuard::MethodIs {
             method: symbol(CLAIM_BOON_METHOD),
@@ -498,6 +531,93 @@ mod meta_tests {
             "an echoes grant without a real death is refused, got {alive_grant:?}"
         );
         assert_eq!(echoes(&world), 0, "anti-ghost: still no echoes");
+    }
+
+    /// THE SLOT-BOUND TOOTH (the falsifier for a real, once-live hole): a `boon` write STAPLED onto
+    /// a DIFFERENT method's legitimate turn is REFUSED.
+    ///
+    /// `apply_raw` is public, so a client can append `SetField(boon, 1)` to any turn it is otherwise
+    /// entitled to make. Before the [`BOON_SLOT`] `SlotChanged` case existed, the price lived ONLY on
+    /// the [`CLAIM_BOON_METHOD`] case, while the global `Always` case's `WriteOnce(boon)` PERMITTED
+    /// the FIRST write (`cell/src/program/eval.rs:379-383`, `old_zero`) — and the evaluator runs
+    /// EVERY matching case (`eval.rs:104-120`), never "only the matching one". So a boon stapled onto
+    /// a legitimate `meta/grant_echoes` met the invariant and faced NO price gate: DRIVEN, it
+    /// committed with 15 echoes against a `BOON_PRICE` of 30 — **the unlock at HALF price**.
+    ///
+    /// The `SlotChanged { index: BOON_SLOT }` case binds the price to THE WRITE rather than to the
+    /// method, so it now fires whoever authored the transition.
+    #[test]
+    fn a_stapled_boon_write_cannot_ride_another_methods_turn() {
+        let world = deploy_meta_hero(38);
+        progression::choose_class(&world, WARRIOR).expect("class");
+        progression::perish(&world).expect("a real death");
+        let cell = world.cell_id();
+
+        // A legitimate grant_echoes payload: dead == 1, echoes 0 -> 15 (a real strict accrual).
+        let echoes_amount = echoes_for_depth(1);
+        assert!(
+            echoes_amount < BOON_PRICE,
+            "the falsifier is only meaningful when the hero CANNOT afford the boon: \
+             {echoes_amount} echoes vs a price of {BOON_PRICE}"
+        );
+
+        let stapled = world.apply_raw(
+            GRANT_ECHOES_METHOD,
+            vec![
+                // The echoes write — entirely legitimate on its own.
+                Effect::SetField {
+                    cell,
+                    index: ECHOES_SLOT as usize,
+                    value: field_from_u64(echoes_amount),
+                },
+                // The stapled-on free unlock.
+                Effect::SetField {
+                    cell,
+                    index: BOON_SLOT as usize,
+                    value: field_from_u64(BOON_VALUE),
+                },
+            ],
+        );
+
+        assert!(
+            matches!(stapled, Err(WorldError::Refused(_))),
+            "a boon write stapled onto a grant_echoes turn must be REFUSED — otherwise the unlock \
+             is bought at {echoes_amount}/{BOON_PRICE} echoes; got {stapled:?}"
+        );
+        assert!(
+            !has_boon(&world),
+            "anti-ghost: no free unlock rode in on another method's turn"
+        );
+        assert_eq!(
+            echoes(&world),
+            0,
+            "anti-ghost: the refusal committed NOTHING — not even the legitimate echoes half"
+        );
+
+        // The AUTHORING method is not the pivot: the same staple under a progression method (itself
+        // perfectly legitimate on this cell) is refused too.
+        let via_xp = world.apply_raw(
+            progression::GAIN_XP_METHOD,
+            vec![Effect::SetField {
+                cell,
+                index: BOON_SLOT as usize,
+                value: field_from_u64(BOON_VALUE),
+            }],
+        );
+        assert!(
+            matches!(via_xp, Err(WorldError::Refused(_))),
+            "a boon staple under a progression method is refused too, got {via_xp:?}"
+        );
+        assert!(!has_boon(&world), "anti-ghost: still no free unlock");
+
+        // THE GATE IS A PRICE, NOT A BAN: once the echoes are truly accrued, the claim commits.
+        grant_echoes(&world, 6).expect("a real deep death funds the echoes");
+        assert!(
+            echoes(&world) >= BOON_PRICE,
+            "the hero can now afford the boon"
+        );
+        claim_boon(&world).expect("a legitimately-funded claim still commits");
+        assert!(has_boon(&world), "the real unlock landed");
     }
 
     /// The existing progression turns stay intact on the meta-augmented cell: choose class, earn XP,

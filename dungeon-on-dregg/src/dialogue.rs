@@ -91,7 +91,9 @@
 //! [`WriteOnce`]: dregg_app_framework::StateConstraint::WriteOnce
 //! [`BoundedBy`]: dregg_app_framework::StateConstraint::BoundedBy
 
-use dregg_app_framework::{CellProgram, StateConstraint, TransitionGuard, field_from_u64, symbol};
+use dregg_app_framework::{
+    CellProgram, StateConstraint, TransitionCase, TransitionGuard, field_from_u64, symbol,
+};
 use spween::Scene;
 use spween_dregg::{CompiledStory, WorldCell, choice_method, compile_scene, parse};
 
@@ -326,6 +328,38 @@ pub fn vigil_compiled() -> CompiledStory {
             StateConstraint::WriteOnce { index: oil_given },
         ],
     );
+
+    // THE SLOT-BOUND GRANT GATE — the tooth that makes the warmth+secret gate real.
+    //
+    // The v0 compiler emits only `MethodIs` choice cases and no `Always`/`SlotChanged` case, so the
+    // grant gate above binds ONLY to the `LN_BEG_LEAVE` method. But the executor is open: a client
+    // can staple `SetField(passage_open, 1)` onto a permissive choice (e.g. `LN_GREET`, whose case
+    // carries no constraint on `passage_open`) — where the grant gate never runs and `passage_open`
+    // is still zero — and then legitimately `LN_CROSS`. `SlotChanged` binds the grant gate to the
+    // WRITE: on ANY transition that moves `passage_open` / `oil_given`, the warmth+secret floor must
+    // hold, whoever authored it. `SlotChanged` is NOT method-dispatching, so default-deny is
+    // unaffected. (Driven: `a_stapled_passage_open_cannot_ride_a_greeting`.)
+    let grant_gate = |flag: u8| {
+        vec![
+            StateConstraint::FieldGte {
+                index: disposition,
+                value: field_from_u64(GRANT_DISPOSITION_FLOOR),
+            },
+            StateConstraint::FieldGte {
+                index: topic_secret,
+                value: field_from_u64(1),
+            },
+            StateConstraint::WriteOnce { index: flag },
+        ]
+    };
+    if let CellProgram::Cases(cases) = &mut story.program {
+        for flag in [passage_open, oil_given] {
+            cases.push(TransitionCase {
+                guard: TransitionGuard::SlotChanged { index: flag },
+                constraints: grant_gate(flag),
+            });
+        }
+    }
 
     story
 }
@@ -858,6 +892,69 @@ mod tests {
                     | Err(VerifyBreak::PassageOutOfOrder { .. })
             ),
             "a forged line (a goad retconned in for a greeting) fails replay, got {out:?}"
+        );
+    }
+
+    /// THE SLOT-BOUND GRANT TOOTH (the falsifier for a real cell-layer hole): a `passage_open` write
+    /// STAPLED onto a permissive greeting cannot open the way below the warmth+secret floor.
+    ///
+    /// Before the `SlotChanged{passage_open}` case existed, the grant gate lived ONLY on the
+    /// `LN_BEG_LEAVE` case; the greeting case carries no constraint on `passage_open`, and (no
+    /// `Always`, the flag still zero) a `SetField(passage_open, 1)` stapled onto a greeting opened
+    /// the way with `disposition == 4 < 5` and no secret learned — then `LN_CROSS` would pass.
+    #[test]
+    fn a_stapled_passage_open_cannot_ride_a_greeting() {
+        use dregg_app_framework::Effect;
+        let story = vigil_compiled();
+        let passage_open = vigil_slot(&story, "passage_open");
+        let disposition = vigil_slot(&story, "disposition");
+
+        let world = wary_keeper(27);
+        let cell = world.cell_id();
+        // Staple the grant onto a legitimate greeting (disposition 3 -> 4); warmth 4 < GRANT floor 5,
+        // and no secret was ever learned.
+        let staple = world.apply_raw(
+            &line_method(LN_GREET),
+            vec![
+                Effect::SetField {
+                    cell,
+                    index: disposition as usize,
+                    value: field_from_u64(4),
+                },
+                Effect::SetField {
+                    cell,
+                    index: passage_open as usize,
+                    value: field_from_u64(1),
+                },
+            ],
+        );
+        assert!(
+            matches!(staple, Err(WorldError::Refused(_))),
+            "passage_open stapled onto a greeting must be REFUSED (disposition 4 < 5, no secret); got {staple:?}"
+        );
+        assert_eq!(
+            world.read_var("passage_open"),
+            0,
+            "anti-ghost: the way is not opened"
+        );
+
+        // THE GATE IS THE EARNED GRANT, NOT A BAN: the real won-over path still opens the way.
+        let s = vigil_scene();
+        for ln in [
+            LN_GREET,
+            LN_ASK_HISTORY,
+            LN_ASK_SECRET,
+            LN_GREET,
+            LN_BEG_LEAVE,
+        ] {
+            world
+                .apply_choice(ROOM_BRIDGE, ln, &line(&s, ln))
+                .unwrap_or_else(|e| panic!("winning line {ln} commits: {e}"));
+        }
+        assert_eq!(
+            world.read_var("passage_open"),
+            1,
+            "the legitimately-earned grant still opens the way"
         );
     }
 }

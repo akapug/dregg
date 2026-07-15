@@ -146,21 +146,35 @@ fn quest_program() -> CellProgram {
             constraints,
         });
     }
+    let reward_gate = vec![
+        StateConstraint::FieldGte {
+            index: STEPS_DONE_SLOT,
+            value: field_from_u64(TURN_IN_THRESHOLD),
+        },
+        StateConstraint::FieldEquals {
+            index: REWARD_SLOT,
+            value: field_from_u64(REWARD_VALUE),
+        },
+        StateConstraint::WriteOnce { index: REWARD_SLOT },
+    ];
+    // THE SLOT-BOUND REWARD GATE — the tooth that makes the steps-done floor real.
+    //
+    // The `turn_in` `MethodIs` case gates only turns that PRESENT the turn-in method. But the
+    // executor is open: a client can staple `SetField(reward, 1)` onto ANY other method's turn (a
+    // legitimate `light_method(k)`), where no `turn_in` case matches, this cell has no `Always`
+    // invariant on `reward`, and `reward` is still zero — so the reward lands with NO steps-done
+    // floor. `SlotChanged{reward}` binds the floor to the WRITE; the evaluator runs EVERY matching
+    // case (`cell/src/program/eval.rs:104-120`), so it composes with the authoring method's
+    // constraints. `SlotChanged` is NOT method-dispatching, so default-deny is unaffected.
+    cases.push(TransitionCase {
+        guard: TransitionGuard::SlotChanged { index: REWARD_SLOT },
+        constraints: reward_gate.clone(),
+    });
     cases.push(TransitionCase {
         guard: TransitionGuard::MethodIs {
             method: symbol(&turn_in_method()),
         },
-        constraints: vec![
-            StateConstraint::FieldGte {
-                index: STEPS_DONE_SLOT,
-                value: field_from_u64(TURN_IN_THRESHOLD),
-            },
-            StateConstraint::FieldEquals {
-                index: REWARD_SLOT,
-                value: field_from_u64(REWARD_VALUE),
-            },
-            StateConstraint::WriteOnce { index: REWARD_SLOT },
-        ],
+        constraints: reward_gate,
     });
     CellProgram::Cases(cases)
 }
@@ -457,26 +471,55 @@ fn faction_standing_program() -> CellProgram {
             index: FACTION_REP_SLOT,
         }],
     };
+    let trial_gate = vec![
+        // The REAL faction standing bar — the giver opens only above it.
+        StateConstraint::FieldGte {
+            index: FACTION_REP_SLOT,
+            value: field_from_u64(REP_THRESHOLD),
+        },
+        StateConstraint::WriteOnce {
+            index: FACTION_EMBER_QUEST_SLOT,
+        },
+        StateConstraint::FieldEquals {
+            index: FACTION_EMBER_QUEST_SLOT,
+            value: field_from_u64(EMBER_QUEST_VALUE),
+        },
+    ];
     let trial = TransitionCase {
         guard: TransitionGuard::MethodIs {
             method: symbol(&faction_trial_method()),
         },
-        constraints: vec![
-            // The REAL faction standing bar — the giver opens only above it.
-            StateConstraint::FieldGte {
-                index: FACTION_REP_SLOT,
-                value: field_from_u64(REP_THRESHOLD),
-            },
-            StateConstraint::WriteOnce {
-                index: FACTION_EMBER_QUEST_SLOT,
-            },
-            StateConstraint::FieldEquals {
-                index: FACTION_EMBER_QUEST_SLOT,
-                value: field_from_u64(EMBER_QUEST_VALUE),
-            },
-        ],
+        constraints: trial_gate.clone(),
     };
-    CellProgram::Cases(vec![pledge, trial])
+    // THE SLOT-BOUND STANDING GATE — the tooth that makes the rep bar real.
+    //
+    // The `trial` `MethodIs` case gates only turns that PRESENT the trial method. But the executor
+    // is open: a client can staple `SetField(ember_quest, 1)` onto a legitimate `pledge` turn, where
+    // no `trial` case matches and (`ember_quest` still zero) the standing bar is never checked — the
+    // trial reward lands with `rep == 0`. `SlotChanged{ember_quest}` binds the rep bar to the WRITE.
+    let ember_quest_gate = TransitionCase {
+        guard: TransitionGuard::SlotChanged {
+            index: FACTION_EMBER_QUEST_SLOT,
+        },
+        constraints: trial_gate,
+    };
+    // THE SLOT-BOUND REP GATE — the tooth that makes standing EARNED, not minted.
+    //
+    // The `pledge` case carries only `Monotonic{rep}`, which admits a jump 0 -> REP_THRESHOLD in a
+    // SINGLE pledge (defeating the grind the standing bar assumes), and rep is unbounded on any
+    // other method too. `SlotChanged{rep}` binds a `+1` step to EVERY rep change, so standing can
+    // only be accrued one pledge at a time whoever authored the turn. (`earn_faction_standing`
+    // pledges +1 at a time, so the legitimate path is untouched.)
+    let rep_gate = TransitionCase {
+        guard: TransitionGuard::SlotChanged {
+            index: FACTION_REP_SLOT,
+        },
+        constraints: vec![StateConstraint::FieldDelta {
+            index: FACTION_REP_SLOT,
+            delta: field_from_u64(1),
+        }],
+    };
+    CellProgram::Cases(vec![pledge, trial, ember_quest_gate, rep_gate])
 }
 
 /// Assemble the faction-standing + giver two-cell world on a fresh executor. `grant_root`
@@ -936,5 +979,119 @@ mod tests {
             "the giver opened the quest-start, matching the faction's committed standing"
         );
         assert_ne!(granted.turn_hash, [0u8; 32], "a genuine committed grant");
+    }
+
+    /// THE SLOT-BOUND REWARD TOOTH (the falsifier for a real cell-layer hole): a `reward` write
+    /// STAPLED onto a DIFFERENT method's turn cannot mint the reward without the steps-done floor.
+    ///
+    /// Before the `SlotChanged{reward}` case existed, the turn-in floor lived ONLY on the `turn_in`
+    /// case, and (no `Always`, `reward` still zero) a `SetField(reward, 1)` stapled onto a
+    /// legitimate `light_method(1)` turn landed the reward with `steps_done == 1 < TURN_IN_THRESHOLD`.
+    #[test]
+    fn a_stapled_reward_cannot_ride_a_ward_lighting_turn() {
+        let world = QuestGiverWorld::deploy();
+        let staple = issue(
+            &world.exec,
+            &world.cclerk,
+            world.quest,
+            &light_method(1),
+            vec![
+                set_field(world.quest, step_slot(1) as usize, field_from_u64(1)),
+                set_field(world.quest, STEPS_DONE_SLOT as usize, field_from_u64(1)),
+                set_field(
+                    world.quest,
+                    REWARD_SLOT as usize,
+                    field_from_u64(REWARD_VALUE),
+                ),
+            ],
+            vec![],
+        );
+        assert!(
+            staple.is_err(),
+            "a reward stapled onto a ward-lighting turn must be REFUSED (steps_done 1 < {TURN_IN_THRESHOLD}); got {staple:?}"
+        );
+        assert_eq!(
+            world.read(world.quest(), REWARD_SLOT as usize),
+            0,
+            "anti-ghost: no forged reward landed"
+        );
+        // THE GATE IS A FLOOR, NOT A BAN: the honest completion still turns in the reward.
+        world.complete_the_quest();
+        assert_eq!(
+            world.read(world.quest(), REWARD_SLOT as usize),
+            REWARD_VALUE,
+            "a legitimately-completed quest still mints the reward"
+        );
+    }
+
+    /// THE SLOT-BOUND STANDING TOOTH (falsifier): an `ember_quest` write STAPLED onto a `pledge`
+    /// turn cannot claim the trial reward below the rep bar.
+    #[test]
+    fn a_stapled_ember_quest_cannot_ride_a_pledge_turn() {
+        let world = FactionGatedGiverWorld::deploy();
+        // Staple the trial reward onto a first pledge (rep 0 -> 1), far below REP_THRESHOLD.
+        let staple = issue(
+            &world.exec,
+            &world.cclerk,
+            world.faction,
+            &faction_pledge_method(),
+            vec![
+                set_field(world.faction, FACTION_REP_SLOT as usize, field_from_u64(1)),
+                set_field(
+                    world.faction,
+                    FACTION_EMBER_QUEST_SLOT as usize,
+                    field_from_u64(EMBER_QUEST_VALUE),
+                ),
+            ],
+            vec![],
+        );
+        assert!(
+            staple.is_err(),
+            "ember_quest stapled onto a pledge must be REFUSED (rep 1 < {REP_THRESHOLD}); got {staple:?}"
+        );
+        assert_eq!(
+            world.read(world.faction(), FACTION_EMBER_QUEST_SLOT as usize),
+            0,
+            "anti-ghost: no forged standing"
+        );
+        // THE GATE IS A BAR, NOT A BAN: real earned standing still clears the trial.
+        world.earn_standing();
+        assert_eq!(
+            world.read(world.faction(), FACTION_EMBER_QUEST_SLOT as usize),
+            EMBER_QUEST_VALUE,
+            "earned standing still clears the trial"
+        );
+    }
+
+    /// THE SLOT-BOUND REP TOOTH (falsifier): a single pledge cannot MINT rep to the threshold —
+    /// standing accrues `+1` at a time. Before the `SlotChanged{rep}` `FieldDelta(+1)` existed, the
+    /// pledge case's lone `Monotonic{rep}` admitted a jump 0 -> REP_THRESHOLD in one turn.
+    #[test]
+    fn a_single_pledge_cannot_mint_rep_to_the_threshold() {
+        let world = FactionGatedGiverWorld::deploy();
+        let jump = issue(
+            &world.exec,
+            &world.cclerk,
+            world.faction,
+            &faction_pledge_method(),
+            vec![set_field(
+                world.faction,
+                FACTION_REP_SLOT as usize,
+                field_from_u64(REP_THRESHOLD),
+            )],
+            vec![],
+        );
+        assert!(
+            jump.is_err(),
+            "a pledge that jumps rep 0 -> {REP_THRESHOLD} must be REFUSED (rep accrues +1); got {jump:?}"
+        );
+        assert_eq!(
+            world.read(world.faction(), FACTION_REP_SLOT as usize),
+            0,
+            "anti-ghost: no minted rep"
+        );
+        // A legitimate +1 pledge still commits.
+        world.pledge().expect("a real +1 pledge commits");
+        assert_eq!(world.read(world.faction(), FACTION_REP_SLOT as usize), 1);
     }
 }

@@ -262,6 +262,55 @@ pub fn hero_story() -> CompiledStory {
         });
     }
 
+    // 4b. THE SLOT-BOUND LEVEL GATE — the tooth that makes the XP floor real.
+    //
+    // The per-level `MethodIs{level_up_to_L}` cases (case 4) gate only turns that PRESENT a
+    // level-up method. But `apply_raw` is public: a client can staple `SetField(level, 5)` onto ANY
+    // other method's turn (e.g. a legitimate `hero/gain_xp`), where no `level_up_to_L` case matches
+    // and the only non-dispatching guard on `level` is the global `Always Monotonic{level}` — which
+    // happily admits a jump 0 -> 5. So a level lands with NO earned-XP floor and NO +1 step.
+    // (Driven: `a_stapled_level_write_cannot_ride_another_methods_turn`, which committed level 5
+    // with 0 XP before this case existed.)
+    //
+    // `SlotChanged{level}` binds the gates to the WRITE. Because the executor runs EVERY matching
+    // case (`cell/src/program/eval.rs:104-120`), these compose with the authoring method's own
+    // constraints. Two teeth:
+    //   * `FieldDelta{level, +1}` — a level moves up EXACTLY one step per turn (no skipping).
+    //   * for each L, the implication `level == L  ->  xp >= xp_threshold(L)`, expressed as
+    //     `AnyOf{ Not(level == L), xp >= t(L) }`. The `AnyOf` variants AND together across L, and
+    //     the new level is a single value V, so only the V-th implication is load-bearing (it forces
+    //     `xp >= t(V)`); every other L is discharged by its `Not(level == L)` branch. This is the
+    //     exact per-level earned-XP floor, now bound to the write instead of the method.
+    // `SlotChanged` is NOT method-dispatching, so default-deny is unaffected.
+    let mut level_gate: Vec<StateConstraint> = vec![
+        StateConstraint::FieldEquals {
+            index: DEAD_SLOT,
+            value: field_from_u64(0),
+        },
+        StateConstraint::FieldDelta {
+            index: LEVEL_SLOT,
+            delta: field_from_u64(1),
+        },
+    ];
+    for level in 1..=MAX_LEVEL {
+        level_gate.push(StateConstraint::AnyOf {
+            variants: vec![
+                SimpleStateConstraint::Not(Box::new(SimpleStateConstraint::FieldEquals {
+                    index: LEVEL_SLOT,
+                    value: field_from_u64(level),
+                })),
+                SimpleStateConstraint::FieldGte {
+                    index: XP_SLOT,
+                    value: field_from_u64(xp_threshold(level)),
+                },
+            ],
+        });
+    }
+    cases.push(TransitionCase {
+        guard: TransitionGuard::SlotChanged { index: LEVEL_SLOT },
+        constraints: level_gate,
+    });
+
     // 5. class-locked abilities — admitted only in the right class.
     for class_id in [WARRIOR, MAGE, ROGUE] {
         cases.push(TransitionCase {
@@ -671,6 +720,78 @@ mod tests {
         // A SECOND perish is idempotent (1→1, WriteOnce admits an unchanged write).
         perish(&world).expect("a re-perish is an idempotent no-op");
         assert!(is_dead(&world));
+    }
+
+    /// THE SLOT-BOUND LEVEL TOOTH (the falsifier for a real hole): a `level` write STAPLED onto a
+    /// DIFFERENT method's legitimate turn cannot buy a level without the earned XP.
+    ///
+    /// `apply_raw` is public, so a client can append `SetField(level, 5)` to a turn it is otherwise
+    /// entitled to make. Before the `SlotChanged{level}` case existed, the per-level XP floor lived
+    /// ONLY on the `level_up_to_L` cases, while the global `Always Monotonic{level}` admitted a jump
+    /// 0 -> 5 on any method. DRIVEN, a `SetField(level, 5)` stapled onto a legitimate `hero/gain_xp`
+    /// committed **level 5 with 0 XP** (`xp_threshold(5) == 700`).
+    #[test]
+    fn a_stapled_level_write_cannot_ride_another_methods_turn() {
+        let world = deploy_hero(41);
+        choose_class(&world, WARRIOR).expect("class");
+        let cell = world.cell_id();
+
+        // A legitimate gain_xp payload (xp 0 -> 1, strictly monotone, alive) plus a stapled jump to
+        // the max level — far short of xp_threshold(5) == 700.
+        let jump = world.apply_raw(
+            GAIN_XP_METHOD,
+            vec![
+                Effect::SetField {
+                    cell,
+                    index: XP_SLOT as usize,
+                    value: field_from_u64(1),
+                },
+                Effect::SetField {
+                    cell,
+                    index: LEVEL_SLOT as usize,
+                    value: field_from_u64(MAX_LEVEL),
+                },
+            ],
+        );
+        assert!(
+            matches!(jump, Err(WorldError::Refused(_))),
+            "a level jump stapled onto gain_xp must be REFUSED (no earned XP, no +1 step); got {jump:?}"
+        );
+        assert_eq!(world.read_var("level"), 0, "anti-ghost: no free level");
+        assert_eq!(
+            world.read_var("xp"),
+            0,
+            "anti-ghost: the refusal committed nothing"
+        );
+
+        // Even a single +1 step is refused when the XP floor for that level is unmet: reach level 1
+        // for free (threshold 0), then try to staple level 2 (needs 100 XP) onto a gain_xp of 1.
+        level_up(&world).expect("free level 1");
+        let step = world.apply_raw(
+            GAIN_XP_METHOD,
+            vec![
+                Effect::SetField {
+                    cell,
+                    index: XP_SLOT as usize,
+                    value: field_from_u64(1),
+                },
+                Effect::SetField {
+                    cell,
+                    index: LEVEL_SLOT as usize,
+                    value: field_from_u64(2),
+                },
+            ],
+        );
+        assert!(
+            matches!(step, Err(WorldError::Refused(_))),
+            "a +1 level step below the XP floor (1 < 100) is refused too, got {step:?}"
+        );
+        assert_eq!(world.read_var("level"), 1, "anti-ghost: still level 1");
+
+        // THE GATE IS AN XP FLOOR, NOT A BAN: with the earned XP the legit level-up commits.
+        gain_xp(&world, 120).expect("earn the XP");
+        level_up(&world).expect("a legitimately-earned level 2 still commits");
+        assert_eq!(world.read_var("level"), 2, "the real level landed");
     }
 
     /// A full progression arc is a real receipt chain: choose class → earn XP → level up

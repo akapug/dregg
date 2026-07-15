@@ -646,7 +646,45 @@ fn build_program(story: &CompiledStory) -> CellProgram {
         }
     }
 
+    // THE SLOT-BOUND EXECUTE GATE — the tooth that makes "only a WEAKENED target can be downed" real.
+    //
+    // The `dn(t)` (defeated) flag's gate lives ONLY on the per-attacker `finish(a, t)` `MethodIs`
+    // cases: `HeapField(hp[t] <= FINISH_THRESHOLD)` (weakened) + `WriteOnce(dn(t))`. But there is NO
+    // `Always` case, and `M_SETUP`/`m_tick` do not mention `dn(t)`, so a client can staple
+    // `SetField(dn(t), 1)` onto a permissive `setup` turn and flag a FULL-HP enemy defeated for free —
+    // bypassing the weaken-then-execute gate entirely. `SlotChanged{dn(t)}` binds the target-side
+    // execute conditions to the WRITE (whoever authored it); the evaluator runs EVERY matching case,
+    // so it composes with the finishing method's own turn-order/stun teeth. `SlotChanged` is NOT
+    // method-dispatching, so default-deny is unaffected.
+    for t in 0..N {
+        cases.push(case_slot_changed(
+            dn(t),
+            vec![
+                // THE WEAKEN GATE: a target can be flagged defeated only at or below the finish HP.
+                StateConstraint::HeapField {
+                    key: hp_key(t),
+                    atom: HeapAtom::Lte {
+                        value: field_from_u64(FINISH_THRESHOLD),
+                    },
+                },
+                // A guarded target cannot be executed (the flag must have been clear before).
+                StateConstraint::UntilEvent { flag_index: gd(t) },
+                // Downed once.
+                StateConstraint::WriteOnce { index: dn(t) },
+            ],
+        ));
+    }
+
     CellProgram::Cases(cases)
+}
+
+/// A [`TransitionGuard::SlotChanged`] case — the constraints bind to ANY transition that moves
+/// `slot`, whoever authored it (not method-dispatching, so default-deny is unaffected).
+fn case_slot_changed(slot: u8, constraints: Vec<StateConstraint>) -> TransitionCase {
+    TransitionCase {
+        guard: TransitionGuard::SlotChanged { index: slot },
+        constraints,
+    }
 }
 
 /// The combat scene: one passage naming every register var (so the compiler assigns
@@ -1662,5 +1700,57 @@ mod tests {
         }
         assert_eq!(arena.outcome(), Outcome::Defeat, "the party is defeated");
         assert!((0..N).filter(|&c| is_hero(c)).all(|c| arena.is_down(c)));
+    }
+
+    /// THE SLOT-BOUND EXECUTE TOOTH (the falsifier for a real hole): a `dn(t)` (defeated) flag
+    /// STAPLED onto a permissive `setup` turn cannot down a FULL-HP enemy.
+    ///
+    /// The finish gate `HeapField(hp[t] <= FINISH_THRESHOLD)` lived ONLY on the `finish(a, t)`
+    /// cases; with no `Always` case and `M_SETUP` carrying empty constraints, a client could staple
+    /// `SetField(dn(t), 1)` onto a setup turn and flag a healthy WARDEN defeated for free — a
+    /// weaken-then-execute bypass. `SlotChanged{dn(t)}` binds the weaken-check to the write.
+    #[test]
+    fn a_stapled_down_flag_cannot_ride_a_setup_turn() {
+        // WARDEN at full enemy HP (16) — far above the finish threshold (8).
+        let arena = Arena::deploy(31);
+        assert!(
+            arena.hp(WARDEN) > FINISH_THRESHOLD,
+            "the WARDEN is healthy: {} > {FINISH_THRESHOLD}",
+            arena.hp(WARDEN)
+        );
+        let cell = arena.world.cell_id();
+        let dn_warden = slot(arena.story(), &dn_name(WARDEN));
+
+        let staple = arena
+            .world
+            .apply_raw(M_SETUP, vec![set_reg(cell, dn_warden, 1)]);
+        assert!(
+            matches!(staple, Err(WorldError::Refused(_))),
+            "downing a FULL-HP enemy via a setup staple must be REFUSED (hp {} > {FINISH_THRESHOLD}); got {staple:?}",
+            arena.hp(WARDEN)
+        );
+        assert!(
+            !arena.is_down(WARDEN),
+            "anti-ghost: the healthy WARDEN is not defeated"
+        );
+
+        // THE GATE IS A WEAKEN-CHECK, NOT A BAN: once the target is genuinely at/below the finish
+        // threshold, the down-flag is admissible (a real finish rides the same target-side tooth).
+        let weak = Arena::deploy_with_hp(32, HERO_HP, FINISH_THRESHOLD);
+        assert_eq!(
+            weak.hp(WARDEN),
+            FINISH_THRESHOLD,
+            "WARDEN staged at the threshold"
+        );
+        let wcell = weak.world.cell_id();
+        let ok = weak.world.apply_raw(
+            M_SETUP,
+            vec![set_reg(wcell, slot(weak.story(), &dn_name(WARDEN)), 1)],
+        );
+        assert!(
+            ok.is_ok(),
+            "a WEAKENED target at the finish threshold satisfies the weaken-check, got {ok:?}"
+        );
+        assert!(weak.is_down(WARDEN), "the weakened WARDEN is downed");
     }
 }
