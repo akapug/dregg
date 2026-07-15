@@ -435,13 +435,22 @@ pub fn run_share_path(run_id: &str) -> String {
 /// **Build the spectator/provenance router** over a shared [`DescentState`]. Additive — mount it on
 /// the same axum app as [`router`](crate::router) / [`catalog_router`](crate::catalog_router).
 ///
-/// - `GET  /descent/leaderboard[?day={key}]` — the day's re-verified no-cheat board;
+/// - `GET  /descent` (and `/descent/`, `/descent/leaderboard`) — the day's re-verified no-cheat
+///   board. `/descent` is the SHORT landing URL (what the landing page + a shared link point at);
+///   `/descent/leaderboard` is the same view under its explicit name (kept for links that name it).
+///   All three render [`get_leaderboard`] — the `?day={key}` selector applies to each.
 /// - `GET  /descent/run/{id}` — a run-card with the independent-verification panel;
 /// - `POST /descent/submit` — the verify-gated HTTP run-ingest: a stranger submits a run's
 ///   reproducible input (day + player + move sequence) and it is re-executed + no-cheat-verified
 ///   before it can rank (an honest run ingested + persisted, a forged run rejected 4xx).
 pub fn descent_router(state: Arc<DescentState>) -> Router {
     Router::new()
+        // The SHORT landing URL for the board — `GET /descent` renders the no-cheat leaderboard
+        // (previously a 404: only `/descent/leaderboard` was mounted, so the bare `/descent` a
+        // stranger types / the landing button points at fell through). The trailing-slash form is
+        // mounted too (axum treats `/descent` and `/descent/` as distinct paths).
+        .route("/descent", get(get_leaderboard))
+        .route("/descent/", get(get_leaderboard))
         .route("/descent/leaderboard", get(get_leaderboard))
         .route("/descent/run/{id}", get(get_run_card))
         .route("/descent/submit", post(post_submit))

@@ -1450,7 +1450,7 @@ async fn index() -> Html<String> {
          <a class=\"play\" href=\"/offerings\">▶ Browse the catalog</a></div>\
          <div class=\"offering-card\"><h2>The Descent — no-cheat leaderboard</h2>\
          <p class=\"prose\">Independently re-verified runs of the daily descent.</p>\
-         <a class=\"play\" href=\"/descent/leaderboard\">▶ Open the leaderboard</a></div>\
+         <a class=\"play\" href=\"/descent\">▶ Open the leaderboard</a></div>\
          </main></body></html>",
         style = STYLE,
     ))
