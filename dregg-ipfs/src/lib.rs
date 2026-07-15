@@ -25,27 +25,54 @@
 //!
 //! ## What is in this crate
 //!
-//! - [`cid`] — the CID alignment: [`Cid`] (CIDv1 encode/decode), [`Cid::raw_blake3`]
-//!   (a blob's CID = its blake3 commitment), [`Cid::from_blake3_digest`] (wrap an
-//!   existing dregg blake3 commitment, no re-hash).
+//! - [`cid`] — the CID alignment: [`Cid`] (CIDv1 encode/decode, plus legacy CIDv0
+//!   `Qm…` parse for interop), [`Cid::raw_blake3`] (a blob's CID = its blake3
+//!   commitment), [`Cid::from_blake3_digest`] (wrap an existing dregg blake3
+//!   commitment, no re-hash). base32 decoding is canonical-strict so CID parsing is
+//!   injective.
 //! - [`client`] — the injected transport seam [`IpfsClient`], the in-process
-//!   [`MockIpfs`], and the real [`KuboClient`] (a pure Kubo-RPC formatter over an
-//!   injected [`HttpPost`]; [`StdHttpPost`] is a std-only local transport).
-//! - [`bridge`] — [`pin_blob`] / [`fetch_verified`] (the trustless fetch) /
-//!   [`delta_cid`].
+//!   [`MockIpfs`], and the real network clients over an injected [`HttpPost`]
+//!   (method-verb + header aware): [`KuboClient`] (Kubo RPC add/block/pin),
+//!   [`GatewayClient`] (a trustless-gateway `?format=raw` block read that composes with
+//!   the verified fetch), and [`PinningServiceClient`] (the IPFS Pinning Service API,
+//!   the durability layer). [`StdHttpPost`] is a std-only local transport with
+//!   timeouts (no TLS).
+//! - [`unixfs`] — **chunked content**: a UnixFS/dag-pb file DAG builder
+//!   ([`build_file_dag`] / [`pin_file`]) and the verified DAG-walk read
+//!   ([`fetch_cat`]) that re-witnesses every block against its own CID. Closes the
+//!   single-block-only hole.
+//! - [`bridge`] — [`pin_blob`] (single-block, size-guarded) / [`fetch_verified`] (the
+//!   trustless flat fetch) / [`fetch_authorized`] (both halves in code: the
+//!   owner-receipt [`ReceiptCheck`] AND content-addressing) / [`delta_cid`].
 //!
 //! ## Real here vs reviewed-go (honest)
 //!
-//! Real + tested in-process: the CID↔commitment bridge, the `IpfsClient` seam, the
-//! `MockIpfs` round-trip + tamper-refusal, and the real Kubo client's RPC formatting
-//! (exercised over a recording transport). Reviewed-go (ops, not code): running a
-//! live IPFS daemon / pinning service, and a public gateway serving — those are a
-//! deployment decision, behind the same injected seam.
+//! Real + tested in-process: the CID↔commitment bridge (incl. strict base32 + CIDv0
+//! parse), the `IpfsClient` seam, the `MockIpfs` round-trip + tamper-refusal, the
+//! UnixFS chunker + verified DAG walk (multi-level round-trip, tamper + missing-block
+//! refusal), the receipt-composed [`fetch_authorized`], and the network clients' RPC
+//! formatting (Kubo add/get/pin/block-put, gateway raw read, pinning-service add) —
+//! each exercised over a recording transport. Reviewed-go (ops, not code): a *live*
+//! round-trip against a running daemon / gateway / pinning provider, TLS (supplied by
+//! an injected reqwest transport), and **byte-exact CID parity** with a live `ipfs
+//! add`'s default chunker/layout (this builder emits a valid, self-consistent,
+//! fully-verifiable blake3 UnixFS DAG that [`fetch_cat`] round-trips; matching
+//! go-ipfs's exact block boundaries is a deployment-time concern behind the same seam).
 
 pub mod bridge;
 pub mod cid;
 pub mod client;
+pub mod unixfs;
 
-pub use bridge::{blob_cid, delta_cid, fetch_verified, pin_blob};
-pub use cid::{BLAKE3_LEN, CODEC_DAG_CBOR, CODEC_DAG_PB, CODEC_RAW, Cid, CidError, MH_BLAKE3};
-pub use client::{HttpPost, IpfsClient, IpfsError, KuboClient, MockIpfs, StdHttpPost};
+pub use bridge::{
+    CommittedCids, MAX_SINGLE_BLOCK, ReceiptCheck, blob_cid, delta_cid, fetch_authorized,
+    fetch_verified, pin_blob,
+};
+pub use cid::{
+    BLAKE3_LEN, CODEC_DAG_CBOR, CODEC_DAG_PB, CODEC_RAW, Cid, CidError, MH_BLAKE3, MH_SHA2_256,
+};
+pub use client::{
+    GatewayClient, HttpPost, HttpRequest, HttpResponse, IpfsClient, IpfsError, KuboClient,
+    MockIpfs, PinStatus, PinningServiceClient, StdHttpPost,
+};
+pub use unixfs::{Block, FileDag, build_file_dag, fetch_cat, pin_file};

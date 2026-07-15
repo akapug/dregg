@@ -54,6 +54,12 @@ pub const CODEC_DAG_CBOR: u64 = 0x71;
 /// become a CID.
 pub const MH_BLAKE3: u64 = 0x1e;
 
+/// The sha2-256 multihash code (`0x12`) — the multihash a legacy **CIDv0** (`Qm…`)
+/// carries. dregg never *mints* sha2 CIDs (the alignment is blake3), but the bridge
+/// parses CIDv0 so it can interoperate with content published by a stock `ipfs add`
+/// (which defaults to sha2-256 / CIDv0).
+pub const MH_SHA2_256: u64 = 0x12;
+
 /// The blake3 digest width the bridge uses (the dregg content-commitment width:
 /// `dregg-merge` ids, the kernel receipt hash, MMR leaves are all 32 bytes).
 pub const BLAKE3_LEN: usize = 32;
@@ -103,6 +109,22 @@ impl Cid {
             && self.digest.len() == BLAKE3_LEN
     }
 
+    /// Whether this CID is a **dag-pb** node (UnixFS: a chunked-file DAG root, or a
+    /// directory). Such a CID cannot be checked by a flat re-hash of the *content* —
+    /// its digest is over the DAG node's serialized links/metadata, not the file
+    /// bytes — so it is read by the verified DAG walk ([`crate::unixfs::fetch_cat`])
+    /// rather than [`crate::fetch_verified`].
+    pub fn is_dag_pb(&self) -> bool {
+        self.version == 1 && self.codec == CODEC_DAG_PB
+    }
+
+    /// Whether the CID's digest is a blake3 multihash the bridge can re-witness a
+    /// *block's own bytes* against (the block-level content-address check that holds
+    /// for every block in a blake3 DAG, raw leaf or dag-pb node alike).
+    pub fn is_blake3(&self) -> bool {
+        self.hash_code == MH_BLAKE3 && self.digest.len() == BLAKE3_LEN
+    }
+
     /// The digest as a fixed 32-byte array, if this is a blake3 CID.
     pub fn blake3_digest(&self) -> Option<[u8; BLAKE3_LEN]> {
         if self.hash_code != MH_BLAKE3 || self.digest.len() != BLAKE3_LEN {
@@ -149,26 +171,66 @@ impl Cid {
         })
     }
 
-    /// The canonical string CID: multibase base32-lower (prefix `b`) of the binary
-    /// CIDv1 — the form `ipfs add --cid-version=1` prints and a gateway URL carries.
+    /// The canonical string CID.
+    ///
+    /// - **CIDv1** (`version == 1`, the form the bridge mints): multibase base32-lower
+    ///   (prefix `b`) of the binary CIDv1 — what `ipfs add --cid-version=1` prints and
+    ///   a gateway URL carries.
+    /// - **CIDv0** (`version == 0`, a parsed legacy `Qm…`): base58btc of the bare
+    ///   sha2-256 multihash, with no multibase prefix — the historical form.
     pub fn to_string_cid(&self) -> String {
+        if self.version == 0 {
+            // CIDv0 is base58btc of the raw multihash (no version/codec framing).
+            let mut mh = Vec::with_capacity(2 + self.digest.len());
+            put_varint(&mut mh, self.hash_code);
+            put_varint(&mut mh, self.digest.len() as u64);
+            mh.extend_from_slice(&self.digest);
+            return base58btc_encode(&mh);
+        }
         let mut s = String::from("b");
         s.push_str(&base32_lower_encode(&self.to_bytes()));
         s
     }
 
-    /// Parse a string CID. Only the base32-lower multibase (`b…`) the bridge emits
-    /// is accepted (other multibases are out of scope for this bridge).
+    /// Parse a string CID.
+    ///
+    /// - A base32-lower multibase (`b…`) is decoded as a binary **CIDv1** — the form
+    ///   the bridge emits.
+    /// - A bare base58btc string beginning `Q` is decoded as a legacy **CIDv0** (a
+    ///   sha2-256 dag-pb node), for interop with content a stock `ipfs add` published.
+    ///
+    /// Other multibases (base16, base64, …) are out of scope for this bridge.
     pub fn parse(s: &str) -> Result<Cid, CidError> {
         let s = s.trim();
         let mut chars = s.chars();
         match chars.next() {
-            Some('b') => {}
-            Some(other) => return Err(CidError::UnsupportedMultibase(other)),
-            None => return Err(CidError::Empty),
+            Some('b') => {
+                let raw = base32_lower_decode(chars.as_str())?;
+                Cid::from_bytes(&raw)
+            }
+            // A bare `Qm…` is a CIDv0 (base58btc of a sha2-256 multihash).
+            Some('Q') => Cid::parse_cidv0(s),
+            Some(other) => Err(CidError::UnsupportedMultibase(other)),
+            None => Err(CidError::Empty),
         }
-        let raw = base32_lower_decode(chars.as_str())?;
-        Cid::from_bytes(&raw)
+    }
+
+    /// Parse a legacy CIDv0 string (`Qm…`): base58btc of a `sha2-256` multihash
+    /// (`0x12 0x20 ‖ 32-byte digest`), implicitly `dag-pb`-codec, version 0.
+    fn parse_cidv0(s: &str) -> Result<Cid, CidError> {
+        let mh = base58btc_decode(s)?;
+        let mut p = 0usize;
+        let hash_code = take_varint(&mh, &mut p)?;
+        let len = take_varint(&mh, &mut p)? as usize;
+        if hash_code != MH_SHA2_256 || len != 32 || mh.len() - p != len {
+            return Err(CidError::BadCidV0);
+        }
+        Ok(Cid {
+            version: 0,
+            codec: CODEC_DAG_PB,
+            hash_code,
+            digest: mh[p..].to_vec(),
+        })
     }
 }
 
@@ -189,6 +251,14 @@ pub enum CidError {
     UnsupportedVersion(u64),
     /// A character outside the base32-lower alphabet.
     BadBase32(char),
+    /// The base32 string's trailing padding bits were non-zero (or a spurious extra
+    /// symbol) — a non-canonical encoding. Distinct strings that decode to the same
+    /// bytes are refused so CID parsing is injective.
+    NonCanonicalBase32,
+    /// A character outside the base58btc alphabet.
+    BadBase58(char),
+    /// A `Qm…` string that is not a well-formed CIDv0 (sha2-256 / 32-byte multihash).
+    BadCidV0,
     /// A varint ran past the end of the buffer.
     TruncatedVarint,
     /// A varint encoded more than 64 bits.
@@ -204,6 +274,11 @@ impl fmt::Display for CidError {
             CidError::UnsupportedMultibase(c) => write!(f, "unsupported multibase prefix `{c}`"),
             CidError::UnsupportedVersion(v) => write!(f, "unsupported CID version {v}"),
             CidError::BadBase32(c) => write!(f, "invalid base32 character `{c}`"),
+            CidError::NonCanonicalBase32 => {
+                write!(f, "non-canonical base32 (nonzero padding bits)")
+            }
+            CidError::BadBase58(c) => write!(f, "invalid base58btc character `{c}`"),
+            CidError::BadCidV0 => write!(f, "malformed CIDv0 (expected a sha2-256 multihash)"),
             CidError::TruncatedVarint => write!(f, "truncated varint"),
             CidError::VarintOverflow => write!(f, "varint exceeds 64 bits"),
             CidError::DigestLength { declared, actual } => {
@@ -293,6 +368,71 @@ fn base32_lower_decode(s: &str) -> Result<Vec<u8>, CidError> {
             out.push((buffer >> bits) as u8);
         }
     }
+    // Canonical, no-pad multibase base32: at most 4 leftover bits (a partial final
+    // symbol group), and those bits MUST be zero. A full leftover symbol (`bits >= 5`)
+    // is a spurious trailing char, and nonzero padding bits mean two distinct strings
+    // would decode to the same bytes — both make CID parsing non-injective, so refuse.
+    if bits >= 5 {
+        return Err(CidError::NonCanonicalBase32);
+    }
+    if bits > 0 && (buffer & ((1u32 << bits) - 1)) != 0 {
+        return Err(CidError::NonCanonicalBase32);
+    }
+    Ok(out)
+}
+
+// -- base58btc (the Bitcoin alphabet) — CIDv0 (`Qm…`) --------------------------
+
+const B58_ALPHABET: &[u8; 58] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+
+fn base58btc_encode(data: &[u8]) -> String {
+    // Count leading zero bytes → leading '1's.
+    let zeros = data.iter().take_while(|&&b| b == 0).count();
+    // Base-256 → base-58 by repeated division (big-endian digit buffer).
+    let mut digits: Vec<u8> = Vec::with_capacity(data.len() * 2);
+    for &byte in data {
+        let mut carry = byte as u32;
+        for d in digits.iter_mut() {
+            carry += (*d as u32) << 8;
+            *d = (carry % 58) as u8;
+            carry /= 58;
+        }
+        while carry > 0 {
+            digits.push((carry % 58) as u8);
+            carry /= 58;
+        }
+    }
+    let mut out = String::with_capacity(zeros + digits.len());
+    for _ in 0..zeros {
+        out.push('1');
+    }
+    for &d in digits.iter().rev() {
+        out.push(B58_ALPHABET[d as usize] as char);
+    }
+    out
+}
+
+fn base58btc_decode(s: &str) -> Result<Vec<u8>, CidError> {
+    let zeros = s.chars().take_while(|&c| c == '1').count();
+    let mut bytes: Vec<u8> = Vec::with_capacity(s.len());
+    for c in s.chars() {
+        let val = B58_ALPHABET
+            .iter()
+            .position(|&a| a as char == c)
+            .ok_or(CidError::BadBase58(c))? as u32;
+        let mut carry = val;
+        for b in bytes.iter_mut() {
+            carry += (*b as u32) * 58;
+            *b = (carry & 0xff) as u8;
+            carry >>= 8;
+        }
+        while carry > 0 {
+            bytes.push((carry & 0xff) as u8);
+            carry >>= 8;
+        }
+    }
+    let mut out = vec![0u8; zeros];
+    out.extend(bytes.iter().rev());
     Ok(out)
 }
 
@@ -381,5 +521,87 @@ mod tests {
             Err(CidError::UnsupportedMultibase('z'))
         ));
         assert!(matches!(Cid::parse("b1810"), Err(CidError::BadBase32('1'))));
+    }
+
+    #[test]
+    fn base32_decode_is_canonical_strict() {
+        // `blake3` raw CID base32 is canonical: 36 binary bytes → 58 symbols with 2
+        // padding bits that MUST be zero. A CID string with a *different* final symbol
+        // (nonzero padding bits) must NOT decode to the same digest — else two strings
+        // alias one CID and parsing is not injective.
+        let cid = Cid::raw_blake3(b"injectivity matters");
+        let s = cid.to_string_cid();
+        // Bump the final symbol to one whose low bits are set: the canonical last
+        // symbol encodes the 2 real payload bits + 3 zero pad bits. Any symbol that
+        // shares the top 2 bits but sets a low bit is a non-canonical alias.
+        let last = s.chars().last().unwrap();
+        let idx = B32_ALPHABET
+            .iter()
+            .position(|&a| a as char == last)
+            .unwrap();
+        // Flip the lowest pad bit (bit 0) — still same decoded bytes under a lax
+        // decoder, but a strict decoder rejects it.
+        let aliased_idx = idx ^ 0b1;
+        if aliased_idx != idx {
+            let mut chars: Vec<char> = s.chars().collect();
+            *chars.last_mut().unwrap() = B32_ALPHABET[aliased_idx] as char;
+            let aliased: String = chars.into_iter().collect();
+            assert!(
+                matches!(Cid::parse(&aliased), Err(CidError::NonCanonicalBase32)),
+                "a non-canonical trailing symbol must be refused, not aliased"
+            );
+        }
+        // A spurious extra symbol (a whole leftover 5-bit group — 15 bits cannot be a
+        // whole number of bytes) is refused too.
+        assert!(matches!(
+            base32_lower_decode("aaa"),
+            Err(CidError::NonCanonicalBase32)
+        ));
+        // `aa` (10 bits → one zero byte + 2 zero pad bits) IS canonical.
+        assert_eq!(base32_lower_decode("aa").unwrap(), vec![0u8]);
+    }
+
+    #[test]
+    fn base58_round_trips_and_handles_leading_zeros() {
+        for v in [
+            vec![],
+            vec![0u8],
+            vec![0, 0, 1, 2, 3],
+            vec![0x12, 0x20, 0xde, 0xad, 0xbe, 0xef],
+            (0u8..40).collect::<Vec<_>>(),
+        ] {
+            let enc = base58btc_encode(&v);
+            assert_eq!(base58btc_decode(&enc).unwrap(), v, "b58 round-trip {v:?}");
+        }
+    }
+
+    #[test]
+    fn cidv0_parses_for_interop() {
+        // Build a real sha2-256 multihash (0x12 0x20 ‖ 32 bytes) and its base58btc
+        // CIDv0 string with our own encoder, then parse it back — proving the CIDv0
+        // decode path (version 0, implicit dag-pb, sha2-256) round-trips.
+        let digest = [0x42u8; 32];
+        let mut mh = vec![MH_SHA2_256 as u8, 32];
+        mh.extend_from_slice(&digest);
+        let s = base58btc_encode(&mh);
+        assert!(s.starts_with("Qm"), "a sha2-256 CIDv0 begins `Qm`, got {s}");
+
+        let cid = Cid::parse(&s).unwrap();
+        assert_eq!(cid.version, 0);
+        assert_eq!(cid.codec, CODEC_DAG_PB);
+        assert_eq!(cid.hash_code, MH_SHA2_256);
+        assert_eq!(cid.digest, digest);
+        // Re-renders back to the exact same CIDv0 string.
+        assert_eq!(cid.to_string_cid(), s);
+        // A CIDv0 is not a flat-verifiable raw blake3 blob.
+        assert!(!cid.is_raw_blake3());
+
+        // A `Qm…`-shaped string whose multihash is the wrong length is refused as a
+        // malformed CIDv0 (34-byte buffer keeps the `Q` leading char, so it routes to
+        // the CIDv0 parser rather than the multibase branch).
+        let mut bad = vec![MH_SHA2_256 as u8, 30];
+        bad.extend_from_slice(&[0u8; 32]); // declares len 30 but carries 32
+        let bad_s = base58btc_encode(&bad);
+        assert!(Cid::parse(&bad_s).is_err());
     }
 }
