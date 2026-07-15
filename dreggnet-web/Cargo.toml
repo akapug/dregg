@@ -55,6 +55,24 @@ dregg-automatafl = { path = "../dregg-automatafl" }
 # craft · companion · tavern · party). Each is a plain `render->ViewNode`, so the web catalog
 # lights them up with the one `register_surfaces(&mut host)` call — the do-once path.
 dreggnet-surfaces = { path = "../dreggnet-surfaces" }
+# THE FIVE NON-GAME OFFERINGS — the full portfolio beside the games + do-once feature surfaces.
+# Each `impl Offering for XOffering`, so the web catalog mounts them with one `host.register(...)`
+# (the SAME generic `OfferingHost` path the games take): a verifiable document store, an
+# identity/name service, a confined compute market, a grain (rate-limited work) offering, and the
+# hermes message relay. CONSUMED, never modified — the catalog is now the WHOLE offering set, not a
+# subset. See `demo_host`.
+dreggnet-doc = { path = "../dreggnet-doc" }
+dreggnet-names = { path = "../dreggnet-names" }
+dreggnet-compute = { path = "../dreggnet-compute" }
+dreggnet-grain = { path = "../dreggnet-grain" }
+dreggnet-hermes = { path = "../dreggnet-hermes" }
+# THE DETERMINISTIC SPRITE ART — `dreggnet-sprite` turns a `dreggnet_asset::AssetId` (a blake3
+# content address) into a byte-identical composed vector SVG (gear / card). The web surface serves
+# this art at `GET /sprite/{kind}/{hex}` and paints a deos `ViewNode::Tile{handle}` (an asset-bearing
+# node) as the inline SVG sprite instead of a text placeholder — the visual layer the catalog was
+# missing. Deterministic: same asset ⇒ same SVG, so the art is itself re-derivable/verifiable.
+dreggnet-sprite = { path = "../dreggnet-sprite" }
+dreggnet-asset = { path = "../dreggnet-asset" }
 # THE DEOS SURFACE — `ViewNode`/`MenuItem`, the view-tree a Surface wraps. The web
 # renderer WALKS this tree into HTML. `default-features = false` = the gpui-free
 # view-tree model only (no native/gpui/mozjs), matching dreggnet-offerings; the `web`

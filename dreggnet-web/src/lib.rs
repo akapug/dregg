@@ -57,6 +57,10 @@ pub mod descent_store;
 /// The seat-claiming adapter that makes `dregg-multiway-tug` playable by real frontend users (a web
 /// identity is a derived key, never the game's canonical seat string). See [`seated::SeatedTug`].
 pub mod seated;
+/// The deterministic generative art surface: a `dreggnet_asset::AssetId` → a byte-identical SVG
+/// sprite (`dreggnet-sprite`), served at `GET /sprite/{kind}/{ref}`, painted onto an asset-bearing
+/// deos `Tile`, and shown in a `GET /gallery`. See [`sprite`].
+pub mod sprite;
 
 pub use descent::{DescentState, descent_router, run_share_path};
 
@@ -580,6 +584,10 @@ body{font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;background:rad
 .verify{margin-top:1rem;font-size:.85rem;color:var(--muted)}\
 .verify.ok strong{color:var(--good)}.verify.refused strong{color:var(--bad)}\
 .catalog{max-width:44rem;margin:0 auto}\
+.catalog-group{margin:1.6rem 0}\
+.catalog-group>.group-h{font-size:1.06rem;color:var(--head);margin:.2rem 0 .35rem;padding-bottom:.35rem;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:.45rem}\
+.catalog-group>.group-h::before{content:\"\";width:.5rem;height:.5rem;border-radius:2px;background:var(--accent);opacity:.85}\
+.catalog-group>.prose{color:var(--muted);font-size:.9rem;margin:.15rem 0 .7rem}\
 .catalog h1,.session h1{font-size:1.5rem;letter-spacing:-.01em;color:var(--head);margin:.2rem 0 1rem}\
 .offering-card{border:1px solid var(--border);border-radius:12px;padding:1.1rem 1.3rem;margin:1rem 0;background:linear-gradient(180deg,#131f38,var(--panel));box-shadow:0 8px 30px -22px #000;transition:border-color .12s,transform .12s}\
 .offering-card:hover{border-color:var(--accent);transform:translateY(-2px)}\
@@ -606,10 +614,37 @@ table.board td a{color:var(--good);text-decoration:none;font-weight:600}table.bo
 .coordgrid .cell.tag-warn{color:var(--warn);border-color:var(--warn);box-shadow:inset 0 0 0 1px var(--warn)}\
 .coordgrid .cell.tag-accent{color:#f2fbff;border-color:var(--accent);background:radial-gradient(circle at 50% 42%,rgba(92,201,255,.34),#0d1830 72%);box-shadow:inset 0 0 0 1px var(--accent),0 0 14px -4px var(--accent)}\
 .coordgrid .cell.tag-muted{color:#4d6187}\
+/* THE GOAL SQUARE — a teal dashed objective ring; distinct from a plain vacant (dim) cell and */\
+/* still legible when the goal is also a lit legal-move target (green). */\
+.coordgrid .cell.goal{border:1px dashed var(--head);color:var(--head);background:radial-gradient(circle at 50% 50%,rgba(127,223,224,.14),#0d1830 70%);box-shadow:inset 0 0 0 1px rgba(127,223,224,.28)}\
+.coordgrid .cell.goal.highlighted,.coordgrid form.cell.goal:hover{border-style:dashed;border-color:var(--good);box-shadow:inset 0 0 0 1px var(--good),0 0 12px -4px var(--good)}\
+/* TABLES / ROWS / LISTS — a Table paints as a bordered, row-divided grid (its Rows are flex */\
+/* columns), so a surface's tabular state reads as a table, not a wall of stacked paragraphs. */\
+.deos-table{border:1px solid var(--border);border-radius:10px;overflow:hidden;margin:.6rem 0;background:#0c1526}\
+.deos-row{display:flex;gap:.6rem;align-items:center;padding:.42rem .7rem}\
+.deos-row>*{flex:1 1 0;min-width:0;margin:0}\
+.deos-row>.pill,.deos-row>.icon{flex:0 0 auto}\
+.deos-table>.deos-row{border-bottom:1px solid var(--border)}\
+.deos-table>.deos-row:last-child{border-bottom:0}\
+.deos-table>.deos-row:hover{background:rgba(92,201,255,.04)}\
+.deos-row.header{background:#0a1326;text-transform:uppercase;letter-spacing:.05em;font-size:.74rem;color:var(--head);font-weight:700}\
+.deos-list{display:flex;flex-direction:column;gap:.3rem;margin:.5rem 0;padding:.5rem .7rem;border:1px solid var(--border);border-radius:10px;background:#0c1526}\
+.deos-list .prose,.deos-row .prose{margin:0}\
 .pill{display:inline-block;padding:.18rem .6rem;margin:.15rem .35rem .15rem 0;border-radius:999px;border:1px solid var(--border);background:#0a1326;font-size:.8rem;font-weight:600;color:var(--muted)}\
 .pill.tag-accent{color:var(--accent);border-color:#2b5f7a}.pill.tag-good{color:var(--good);border-color:#2f6b4d}.pill.tag-warn{color:var(--warn);border-color:#6b5b24}\
 .icon{font-size:1.05rem}.icon.tag-accent{color:var(--accent)}.icon.tag-good{color:var(--good)}.icon.tag-warn{color:var(--warn)}\
 hr{border:0;border-top:1px solid var(--border);margin:1rem 0}\
+/* SPRITE ART — the deterministic SVG tile + gallery. */\
+.sprite-tile{display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--border);border-radius:12px;background:#0a1326;padding:.35rem;overflow:hidden;box-shadow:inset 0 0 0 1px rgba(0,0,0,.35)}\
+.sprite-tile svg{width:100%;height:100%;display:block}\
+.sprite-tile.placeholder{color:var(--muted);font-size:.8rem;padding:.6rem;min-width:4rem;min-height:4rem}\
+.sprite-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(9rem,1fr));gap:1rem;margin:1.25rem 0}\
+.sprite-cell{margin:0;padding:.7rem;border:1px solid var(--border);border-radius:12px;background:linear-gradient(180deg,#131f38,var(--panel));text-align:center;box-shadow:0 8px 30px -22px #000;transition:border-color .12s,transform .12s}\
+.sprite-cell:hover{border-color:var(--accent);transform:translateY(-2px)}\
+.sprite-art{width:100%;aspect-ratio:1/1;display:flex;align-items:center;justify-content:center}\
+.sprite-art svg{width:100%;height:100%;display:block}\
+.sprite-cell figcaption{margin-top:.5rem;font-size:.82rem;color:var(--muted)}\
+.sprite-cell figcaption code{font-size:.72rem}\
 </style>";
 
 // ═════════════════════════════════════════════════════════════════════════════════════════
@@ -786,6 +821,46 @@ pub fn catalog_default_host() -> OfferingHost {
         AutomataflOffering,
     );
     host
+}
+
+/// **Register the five NON-GAME portfolio offerings** into a host — the full offering set beside the
+/// games + the do-once feature surfaces. Each `impl`s the SAME [`Offering`] trait, so the web catalog
+/// drives them through the one generic `open/advance/render/verify` path (unmodified, consumed):
+/// - `doc` — a verifiable document store ([`dreggnet_doc::DocOffering`]);
+/// - `names` — an identity / naming service ([`dreggnet_names::NamesOffering`]);
+/// - `compute` — a confined compute-job market ([`dreggnet_compute::ComputeOffering`]);
+/// - `grain` — a metered / rate-limited work offering ([`dreggnet_grain::GrainOffering`], budget 1000);
+/// - `hermes` — the message relay ([`dreggnet_hermes::HermesOffering`]).
+///
+/// This is what turns the catalog from a subset into the WHOLE portfolio (five games + eight
+/// feature surfaces + these five non-game offerings). Split from [`catalog_default_host`] so the
+/// committed single-offering + games tests keep their smaller host while the demo mounts everything.
+pub fn register_non_game_offerings(host: &mut OfferingHost) {
+    host.register(
+        "doc",
+        "DreggNet Doc — a verifiable document store (author · amend · verify)",
+        dreggnet_doc::DocOffering::new(),
+    );
+    host.register(
+        "names",
+        "DreggNet Names — an identity / naming service (register · transfer · resolve)",
+        dreggnet_names::NamesOffering::new(),
+    );
+    host.register(
+        "compute",
+        "DreggNet Compute — a confined compute-job market (post · claim · settle)",
+        dreggnet_compute::ComputeOffering::new(),
+    );
+    host.register(
+        "grain",
+        "DreggNet Grain — metered work under a spend budget (request · grant)",
+        dreggnet_grain::GrainOffering::new(1000),
+    );
+    host.register(
+        "hermes",
+        "DreggNet Hermes — the message relay (send · deliver · ack)",
+        dreggnet_hermes::HermesOffering::new(),
+    );
 }
 
 /// **Build the multi-offering catalog router** over a shared [`CatalogState`]. Additive to
@@ -1039,14 +1114,25 @@ fn catalog_node(node: &ViewNode, key: &str, id: &str, out: &mut String) {
                 } else {
                     format!(" tag-{}", esc(&cell.tag))
                 };
+                // THE GOAL SQUARE — automatafl's objective squares paint the lowercase glyphs
+                // `a`/`b` (the seat's goal) when vacant; no piece uses those glyphs (pieces are
+                // `R`/`A`/`@`/`·`), so a lowercase `a`/`b` uniquely marks a goal cell. It gets a
+                // distinct `goal` look (a teal dashed objective ring) so a goal no longer reads as
+                // a plain vacant square — even when it is also a legal move target (green) it stays
+                // legible as the objective.
+                let goal = if cell.glyph == "a" || cell.glyph == "b" {
+                    " goal"
+                } else {
+                    ""
+                };
                 if cell.turn.is_empty() {
                     out.push_str(&format!(
-                        "<span class=\"cell{hl}{tag}\">{glyph}</span>",
+                        "<span class=\"cell{hl}{tag}{goal}\">{glyph}</span>",
                         glyph = esc(&cell.glyph),
                     ));
                 } else {
                     out.push_str(&format!(
-                        "<form class=\"cell{hl}{tag}\" method=\"post\" \
+                        "<form class=\"cell{hl}{tag}{goal}\" method=\"post\" \
                          action=\"/offerings/{key}/session/{id}/act\">\
                          <input type=\"hidden\" name=\"turn\" value=\"{turn}\">\
                          <input type=\"hidden\" name=\"arg\" value=\"{arg}\">\
@@ -1075,10 +1161,60 @@ fn catalog_node(node: &ViewNode, key: &str, id: &str, out: &mut String) {
                 esc(glyph)
             ));
         }
-        ViewNode::VStack(cs) | ViewNode::Row(cs) | ViewNode::List(cs) | ViewNode::Table(cs) => {
+        // A vertical stack: just recurse (the page flow IS vertical). No wrapper needed.
+        ViewNode::VStack(cs) => {
             for c in cs {
                 catalog_node(c, key, id, out);
             }
+        }
+        // A ROW → a flex row of columns, so a table's cells sit side-by-side instead of
+        // collapsing into a wall of stacked paragraphs (the pre-polish render). Text cells share
+        // the row evenly; pills/icons keep their natural width.
+        ViewNode::Row(cs) => {
+            out.push_str("<div class=\"deos-row\">");
+            for c in cs {
+                catalog_node(c, key, id, out);
+            }
+            out.push_str("</div>");
+        }
+        // A LIST → a gapped vertical stack in a subtle frame (legible, not a raw dump).
+        ViewNode::List(cs) => {
+            out.push_str("<div class=\"deos-list\">");
+            for c in cs {
+                catalog_node(c, key, id, out);
+            }
+            out.push_str("</div>");
+        }
+        // A TABLE → a bordered, row-divided grid. Its children are [`ViewNode::Row`]s; an
+        // all-text FIRST row (a column-header row, as the trade / inventory surfaces emit) is
+        // painted as a `header` row. A table whose first row already carries data (the tug guild
+        // lanes: a pill in row 0) is NOT given a header — every row reads as data.
+        ViewNode::Table(rows) => {
+            let header_first = rows.len() > 1
+                && matches!(
+                    rows.first(),
+                    Some(ViewNode::Row(cs))
+                        if !cs.is_empty() && cs.iter().all(|c| matches!(c, ViewNode::Text(_)))
+                );
+            out.push_str("<div class=\"deos-table\">");
+            for (i, r) in rows.iter().enumerate() {
+                match r {
+                    ViewNode::Row(cs) => {
+                        let hcls = if header_first && i == 0 {
+                            " header"
+                        } else {
+                            ""
+                        };
+                        out.push_str(&format!("<div class=\"deos-row{hcls}\">"));
+                        for c in cs {
+                            catalog_node(c, key, id, out);
+                        }
+                        out.push_str("</div>");
+                    }
+                    other => catalog_node(other, key, id, out),
+                }
+            }
+            out.push_str("</div>");
         }
         ViewNode::Grid { children, .. } => {
             for c in children {
@@ -1092,6 +1228,17 @@ fn catalog_node(node: &ViewNode, key: &str, id: &str, out: &mut String) {
         }
         ViewNode::Host { view: Some(v), .. } => catalog_node(v, key, id, out),
         ViewNode::Adept(inner) => catalog_node(inner, key, id, out),
+        // A `Tile{handle}` whose handle names an asset paints as the inline deterministic SVG
+        // sprite (dreggnet-sprite); a handle that names no asset falls back to a labelled
+        // placeholder (the gpui-free renderers' behaviour). This is the item→art swap on the
+        // catalog render path.
+        ViewNode::Tile { handle, w, h } => match sprite::tile_html(handle, *w, *h) {
+            Some(html) => out.push_str(&html),
+            None => out.push_str(&format!(
+                "<div class=\"sprite-tile placeholder\">{}</div>",
+                esc(handle)
+            )),
+        },
         ViewNode::Divider => out.push_str("<hr>"),
         _ => {}
     }
@@ -1126,27 +1273,107 @@ fn catalog_form(key: &str, id: &str, it: &MenuItem) -> String {
 
 /// The `GET /offerings` catalog page — a card + "play" link per registered offering.
 fn catalog_page(offerings: &[OfferingInfo]) -> String {
-    let mut cards = String::new();
-    for o in offerings {
-        cards.push_str(&format!(
+    // Group the catalog into coherent shelves so ~18 offerings read as three clear categories,
+    // not one flat wall of look-alike cards: the GAMES (play to win / verify), the RPG FEATURE
+    // surfaces (the do-once render path), and the verifiable SERVICES. Any offering outside the
+    // known sets falls into a catch-all "More" shelf (so a future registration still shows up).
+    const GAMES: &[&str] = &["dungeon", "council", "market", "tug", "automatafl"];
+    const FEATURES: &[&str] = &[
+        "trade",
+        "inventory",
+        "cheevo",
+        "guild",
+        "craft",
+        "companion",
+        "tavern",
+        "party",
+    ];
+    const SERVICES: &[&str] = &["doc", "names", "compute", "grain", "hermes"];
+
+    let card = |o: &OfferingInfo, verb: &str| -> String {
+        format!(
             "<div class=\"offering-card\"><h2>{title}</h2>\
              <p class=\"prose\">key <code>{key}</code> · {n} open session(s)</p>\
-             <a class=\"play\" href=\"/offerings/{key}/session/{key}-web\">▶ Play {key}</a></div>",
+             <a class=\"play\" href=\"/offerings/{key}/session/{key}-web\">▶ {verb} {key}</a></div>",
             title = esc(&o.title),
             key = esc(&o.key),
             n = o.open_sessions,
-        ));
+            verb = verb,
+        )
+    };
+    let group = |heading: &str, blurb: &str, keys: &[&str], verb: &str| -> String {
+        let mut cards = String::new();
+        for o in offerings {
+            if keys.contains(&o.key.as_str()) {
+                cards.push_str(&card(o, verb));
+            }
+        }
+        if cards.is_empty() {
+            return String::new();
+        }
+        format!(
+            "<section class=\"catalog-group\"><h2 class=\"group-h\">{}</h2>\
+             <p class=\"prose\">{}</p>{}</section>",
+            esc(heading),
+            esc(blurb),
+            cards,
+        )
+    };
+
+    // The catch-all shelf for anything not in a known group.
+    let known: Vec<&str> = GAMES
+        .iter()
+        .chain(FEATURES.iter())
+        .chain(SERVICES.iter())
+        .copied()
+        .collect();
+    let mut more = String::new();
+    for o in offerings {
+        if !known.contains(&o.key.as_str()) {
+            more.push_str(&card(o, "Open"));
+        }
     }
+    let more_section = if more.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "<section class=\"catalog-group\"><h2 class=\"group-h\">More</h2>{}</section>",
+            more,
+        )
+    };
+
     format!(
         "<!doctype html><html lang=en><head><meta charset=utf-8>\
          <meta name=viewport content=\"width=device-width, initial-scale=1\">\
          <title>DreggNet Cloud — offerings</title>{style}</head><body>\
          <main class=\"catalog\"><h1>DreggNet Cloud — all offerings, any surface</h1>\
          <p class=\"prose\">Every offering is a confined, verifiable, per-session thing on the real \
-         dregg substrate. Pick one to play it in the browser — each move is a real executor turn.</p>\
-         {cards}</main></body></html>",
+         dregg substrate — pick one to play it in your browser, each move a real executor turn \
+         refereed on the substrate. No node, no testnet: verification is in-process re-execution.</p>\
+         {games}{features}{services}{more}</main></body></html>",
         style = STYLE,
-        cards = cards,
+        games = group(
+            "Games",
+            "Play to win or verify — a board, a market, a hidden-hand tug. Every move commits a real \
+             receipt (or is refused).",
+            GAMES,
+            "Play",
+        ),
+        features = group(
+            "Feature surfaces",
+            "The RPG surfaces — trade, inventory, achievements, guilds, crafting, companions, taverns, \
+             parties. Each is a real render→turn surface on the substrate.",
+            FEATURES,
+            "Open",
+        ),
+        services = group(
+            "Services",
+            "Verifiable infrastructure — a document store, a naming service, a compute market, metered \
+             grain, and a message relay.",
+            SERVICES,
+            "Open",
+        ),
+        more = more_section,
     )
 }
 
@@ -1243,6 +1470,7 @@ fn catalog_missing_offering(key: &str) -> String {
 pub fn demo_host() -> OfferingHost {
     let mut host = catalog_default_host();
     dreggnet_surfaces::register_surfaces(&mut host);
+    register_non_game_offerings(&mut host);
     host
 }
 
@@ -1399,6 +1627,7 @@ pub fn make_app_with_descent(descent: Arc<DescentState>) -> Router {
         .merge(router(web))
         .merge(catalog_router(catalog))
         .merge(descent_router(descent))
+        .merge(sprite::sprite_router())
 }
 
 /// Resolve the demo Descent state from the environment: with `DATABASE_URL` set (non-empty), open a
@@ -1470,6 +1699,10 @@ async fn index() -> Html<String> {
          <div class=\"offering-card\"><h2>The Descent — no-cheat leaderboard</h2>\
          <p class=\"prose\">Independently re-verified runs of the daily descent.</p>\
          <a class=\"play\" href=\"/descent\">▶ Open the leaderboard</a></div>\
+         <div class=\"offering-card\"><h2>Sprite gallery — deterministic art</h2>\
+         <p class=\"prose\">Every asset's SVG sprite is a byte-identical function of its content \
+         address.</p>\
+         <a class=\"play\" href=\"/gallery\">▶ Open the gallery</a></div>\
          </main></body></html>",
         style = STYLE,
     ))
