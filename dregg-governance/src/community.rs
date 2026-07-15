@@ -1,190 +1,153 @@
-//! # Community polls — verifiable, delegatable, uncensorable
+//! # Community polls — verifiable, delegatable, on the verified executor
 //!
-//! The census's community-tools face (§2, face b/d + the design in §2.3). A general
-//! poll anyone can run, on the SAME [`CollectiveChoice`] engine the federation face
-//! uses:
+//! The census's community-tools face (§2, face b/d + the design in §2.3): a
+//! general poll anyone can run, on the SAME engine the federation face uses —
+//! which is now [`collective_choice::CollectiveChoice`], the executor-backed one.
 //!
-//! - **verifiable** — the tally is a light-client-recomputable derivation over the
-//!   ballot log ([`CollectiveChoice::verify_tally`]); a forged/stuffed/censored
-//!   tally is caught;
-//! - **delegatable** — liquid democracy via non-amplifying [`VoteCap`] attenuation:
-//!   a voter hands their weight to a delegate, and the AND-only attenuation lattice
-//!   guarantees the delegate's authority never *exceeds* what was delegated;
-//! - **uncensorable** — ballots are content-addressed blocks in a causal log, so a
-//!   dropped ballot changes the committed [`crate::BallotLog::causal_root`] and any
-//!   peer holding the block re-derives the same count.
+//! - **verifiable** — the executor's stored `Monotonic` tally and the
+//!   light-client replay of the cast log ([`CommunityPolls::light_client_tally`])
+//!   agree; nobody can shrink the board (the `Monotonic` caveat refuses it), and
+//!   an inflated tally slot cannot arm a decision, because `RESOLVED` is guarded
+//!   by the `CountGe` gate over the DISTINCT approver set;
+//! - **one-vote** — the ballot cell's `WriteOnce(VOTE)`, the single per-voter
+//!   factory-born ballot, and the engine's nullifier set;
+//! - **delegatable** — liquid democracy through the **Lean-mirrored**
+//!   [`Mandate::sub_delegate`] (AND-only macaroon attenuation: rights ⊆, budget
+//!   ≤, caveat ⇒). This is the ONE non-amplifying lattice, *reused*.
+//!
+//! ## The delegation lattice is reused, not re-implemented
+//!
+//! This module used to carry its own `VoteCap` / `DelegationLedger`: a
+//! `weight: u64` with an `attenuate` that refused `new_weight > self.weight`, and
+//! a `HashMap<VoterId, u64>` of received weight. That was a host-side re-do of a
+//! lattice that already ships *and is already proven*
+//! ([`dregg_intent::agent_mandate`], mirrored in Lean, with
+//! [`DelegTree::no_amplify`] as its tooth). Two lattices meant two chances to be
+//! wrong; there is now one.
+//!
+//! Delegation here is [`CommunityPolls::delegate`]: the delegate receives a
+//! strictly-attenuated [`Mandate`] over the SAME ballot cell. Amplification is
+//! not "refused by an `if`" — it is *unrepresentable*: `sub_delegate` intersects
+//! rights, takes `min` of budgets, and conjoins caveats, so asking for more
+//! yields less. And because the delegate votes the delegator's one ballot, the
+//! vote still counts exactly ONCE — the nullifier sees the same ballot.
+//!
+//! ## Named residual — `Electorate::Open`
+//!
+//! An executor-backed poll's electorate is the cap-mint set: eligibility IS
+//! holding a ballot cap. A truly open poll ([`crate::Electorate::Open`], where
+//! anyone may cast) therefore has no executor expression — there is no set to
+//! mint from. [`CommunityPolls::open`] takes an explicit enrolled electorate.
+//! An open-enrollment cap mint would have to live in `collective-choice`.
 
-use std::collections::{HashMap, HashSet};
-
-use crate::{
-    BallotLog, CastOutcome, CollectiveChoice, DecisionRule, Electorate, OptionId, PollId, PollSpec,
-    Resolution, Tally, VoteEngine, VoterId,
+use collective_choice::{
+    BallotCap, CollectiveChoice as ExecutorEngine, Decision, PollId, PollSpec, Tally, TurnReceipt,
+    VoteEngine, VoteError,
 };
+use dregg_intent::agent_mandate::{DelegTree, Mandate};
 
-/// A voting capability carrying a weight. Attenuation may only *narrow* the weight
-/// — the non-amplification tooth (the object-capability / macaroon AND-only law the
-/// census points at: `Mandate::attenuate` / macaroon caveats).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct VoteCap {
-    /// The holder this cap authorizes to vote.
-    pub holder: VoterId,
-    /// The voting weight the cap carries.
-    pub weight: u64,
-}
+use crate::VoterId;
 
-/// A cap cannot be widened — attenuation to a larger weight is refused.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct AmplifyRefused;
-
-impl VoteCap {
-    /// A base one-vote cap for `holder`.
-    pub fn base(holder: VoterId) -> Self {
-        VoteCap { holder, weight: 1 }
-    }
-
-    /// Attenuate this cap to a *narrower* weight. Widening is refused
-    /// ([`AmplifyRefused`]) — a delegated vote can never exceed the delegator's.
-    pub fn attenuate(&self, new_weight: u64) -> Result<VoteCap, AmplifyRefused> {
-        if new_weight > self.weight {
-            return Err(AmplifyRefused);
-        }
-        Ok(VoteCap {
-            holder: self.holder,
-            weight: new_weight,
-        })
-    }
-}
-
-/// A liquid-democracy delegation ledger over one poll: who has delegated their
-/// vote away, and how much weight each delegate has received.
-#[derive(Clone, Debug, Default)]
-pub struct DelegationLedger {
-    delegated_away: HashSet<VoterId>,
-    received: HashMap<VoterId, u64>,
-}
-
-impl DelegationLedger {
-    /// A fresh ledger.
-    pub fn new() -> Self {
-        DelegationLedger::default()
-    }
-
-    /// Delegate `from`'s cap to `to`. The delegator's own vote is consumed (they
-    /// may no longer cast directly), and the delegate's effective weight grows by
-    /// the (already-attenuated) cap weight. Returns `false` if `from` already
-    /// delegated (a cap is single-use — no double-delegation).
-    pub fn delegate(&mut self, from: VoteCap, to: VoterId) -> bool {
-        if self.delegated_away.contains(&from.holder) {
-            return false;
-        }
-        self.delegated_away.insert(from.holder);
-        *self.received.entry(to).or_insert(0) += from.weight;
-        true
-    }
-
-    /// The effective weight `voter` casts with: their base `1` (unless they
-    /// delegated it away, in which case `0`) plus any weight delegated to them.
-    pub fn effective_weight(&self, voter: &VoterId) -> u64 {
-        let base = if self.delegated_away.contains(voter) {
-            0
-        } else {
-            1
-        };
-        base + self.received.get(voter).copied().unwrap_or(0)
-    }
-}
-
-/// The community-poll face over the shared [`CollectiveChoice`] engine, with a
-/// per-poll delegation ledger for liquid democracy.
-#[derive(Clone, Debug, Default)]
+/// The community-poll face over the CANONICAL executor-backed engine.
+///
+/// The same object type [`crate::governance::FederationGovernance`] votes on —
+/// governance and community really are one primitive, and now they are one
+/// *substrate* too.
 pub struct CommunityPolls {
-    /// The shared engine — the SAME type the federation face drives.
-    pub engine: CollectiveChoice,
-    ledgers: HashMap<PollId, DelegationLedger>,
+    /// The executor-backed engine every ballot here is a verified turn on.
+    pub engine: ExecutorEngine,
 }
 
 impl CommunityPolls {
-    /// A fresh community-poll host.
-    pub fn new() -> Self {
-        CommunityPolls::default()
+    /// A fresh community-poll host with its own embedded verified executor.
+    /// `community_id` seeds the executor's operator identity.
+    pub fn new(community_id: [u8; 32]) -> Self {
+        CommunityPolls {
+            engine: ExecutorEngine::new(community_id),
+        }
     }
 
-    /// Open a plurality poll over `options`, deciding once `quorum` total ballots
-    /// are in. `electorate` is [`Electorate::Open`] for a fully public poll or
-    /// [`Electorate::Closed`] for a named eligible set.
+    /// Open a plurality poll over `options`, deciding once `quorum` distinct
+    /// voters have cast. `electorate` is the enrolled voter set — the ONLY keys a
+    /// ballot cap will be minted to (see the `Electorate::Open` residual in the
+    /// module docs).
+    ///
+    /// The quorum lands in the poll cell as the in-cell `AffineLe`
+    /// `quorum·RESOLVED − Σ TALLY ≤ 0`, with `CountGe` over the distinct voter
+    /// set guarding `RESOLVED`.
     pub fn open(
         &mut self,
         question: &str,
         options: &[&str],
-        electorate: Electorate,
+        electorate: Vec<VoterId>,
         quorum: u64,
-        nonce: u64,
-    ) -> PollId {
-        let poll = self.engine.open_poll(PollSpec {
+    ) -> Result<PollId, VoteError> {
+        self.engine.open_poll(PollSpec {
             question: question.into(),
             options: options.iter().map(|s| s.to_string()).collect(),
             electorate,
-            rule: DecisionRule::Plurality { quorum },
-            enact_on_pass: false,
-            nonce,
-        });
-        self.ledgers.entry(poll).or_default();
-        poll
+            quorum_m: quorum,
+        })
     }
 
-    /// Delegate `cap` to `to` on `poll` (liquid democracy). Returns `false` for an
-    /// unknown poll or a double-delegation.
-    pub fn delegate(&mut self, poll: PollId, cap: VoteCap, to: VoterId) -> bool {
-        match self.ledgers.get_mut(&poll) {
-            Some(l) => l.delegate(cap, to),
-            None => false,
-        }
+    /// Mint (or return) `voter`'s ballot cap for `poll` — **the eligibility
+    /// gate**. A voter outside the enrolled electorate is
+    /// [`VoteError::Ineligible`]: there is no cap to hold. Idempotent — a voter
+    /// has exactly one ballot cell per poll.
+    pub fn ballot(&mut self, poll: PollId, voter: VoterId) -> Result<BallotCap, VoteError> {
+        self.engine.issue_ballot(poll, voter)
     }
 
-    /// Cast a ballot, using the voter's *effective* delegated weight. A voter who
-    /// delegated their vote away casts with weight 0 — refused as
-    /// [`CastOutcome::RefusedNotEligible`] (their authority now lives with the
-    /// delegate).
-    pub fn cast(&mut self, poll: PollId, voter: VoterId, choice: OptionId) -> CastOutcome {
-        let weight = self
-            .ledgers
-            .get(&poll)
-            .map(|l| l.effective_weight(&voter))
-            .unwrap_or(1);
-        if weight == 0 {
-            return CastOutcome::RefusedNotEligible;
-        }
-        let block = match self.engine.next_block(poll, voter, choice, weight) {
-            Some(b) => b,
-            None => return CastOutcome::RefusedUnknownPoll,
-        };
-        self.engine.cast(poll, block)
+    /// **Liquid democracy** — delegate `cap` to `to`, through the verified,
+    /// Lean-mirrored [`Mandate::sub_delegate`].
+    ///
+    /// The delegate gets a strictly-attenuated mandate over the delegator's SAME
+    /// ballot cell: rights ⊆, budget ≤, caveat ⇒. So the delegate can never
+    /// out-authorize the delegator ([`DelegTree::no_amplify`]), and the
+    /// delegated vote still counts exactly once (same ballot ⇒ same nullifier).
+    /// A re-delegation attenuates again.
+    pub fn delegate(&self, cap: &BallotCap, to: VoterId) -> BallotCap {
+        self.engine.delegate(cap, to)
     }
 
-    /// The current tally.
-    pub fn tally(&self, poll: PollId) -> Option<Tally> {
+    /// The delegation tree `root → delegate` — the object whose
+    /// [`DelegTree::no_amplify`] / [`DelegTree::well_attenuated`] teeth witness
+    /// that a delegated vote can never exceed what was delegated.
+    pub fn delegation_tree(root: &BallotCap, delegate: &BallotCap) -> DelegTree {
+        ExecutorEngine::delegation_tree(root, delegate)
+    }
+
+    /// Cast a ballot as a real turn on the embedded executor. A second cast on
+    /// the same ballot — by the voter OR by a delegate holding an attenuated copy
+    /// — is [`VoteError::DoubleVote`].
+    pub fn cast(
+        &mut self,
+        poll: PollId,
+        cap: &BallotCap,
+        choice: usize,
+    ) -> Result<TurnReceipt, VoteError> {
+        self.engine.cast(poll, cap, choice)
+    }
+
+    /// The executor's stored monotone tally.
+    pub fn tally(&self, poll: PollId) -> Result<Tally, VoteError> {
         self.engine.tally(poll)
     }
 
-    /// The current resolution.
-    pub fn resolve(&self, poll: PollId) -> Resolution {
-        self.engine.resolve(poll)
+    /// The light-client recompute: replay the append-only cast log and sum. When
+    /// this agrees with [`Self::tally`] (the executor's stored slots), the board
+    /// is unforged.
+    pub fn light_client_tally(&self, poll: PollId) -> Result<Tally, VoteError> {
+        self.engine.light_client_tally(poll)
     }
 
-    /// Light-client verification of a claimed tally against a ballot log and the
-    /// independently-known committed root. Returns `false` for a censored
-    /// (dropped-ballot) or stuffed tally. Delegates to
-    /// [`CollectiveChoice::verify_tally`].
-    pub fn verify_tally(
-        &self,
-        poll: PollId,
-        log: &BallotLog,
-        claimed: &Tally,
-        committed_root: [u8; 32],
-    ) -> bool {
-        match self.engine.poll_state(poll) {
-            Some(st) => CollectiveChoice::verify_tally(&st.spec, log, claimed, committed_root),
-            None => false,
-        }
+    /// Attempt the decision-turn. `Ok(None)` below quorum — the in-cell gates
+    /// refused the turn.
+    pub fn resolve(&mut self, poll: PollId) -> Result<Option<Decision>, VoteError> {
+        self.engine.resolve(poll)
     }
 }
+
+/// A voter's mandate over their ballot — re-exported so a caller can name the
+/// verified delegation object without depending on `dregg-intent` directly.
+pub type VoteMandate = Mandate;

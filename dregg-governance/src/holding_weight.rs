@@ -96,7 +96,7 @@ use ed25519_dalek::{Signature, VerifyingKey};
 use dregg_bridge::solana_holdings::ProvenHolding;
 
 use crate::proven_foreign_holding::{ChainId, ProvenForeignHolding};
-use crate::{CastOutcome, CollectiveChoice, OptionId, PollId, VoteEngine, VoterId};
+use crate::{CastOutcome, HostBallotBox, HostVoteEngine, OptionId, PollId, VoterId};
 
 /// Domain separator for the owner→voter binding signature. Committing to a domain keeps
 /// a signature made for this purpose from being replayable as any other Ed25519 message
@@ -789,6 +789,38 @@ pub fn grant_foreign_weight<B: HolderBinding>(
 /// snapshot's consume-once nullifier set. It carries no value and holds no escrow; it
 /// only records `(poll, token_account)` pairs so the same holding cannot be counted
 /// twice in one poll.
+///
+/// # NAMED RESIDUAL — this registry's ballots still land in the host ballot box
+///
+/// Every other governance face in this crate now casts on the verified executor
+/// ([`collective_choice`]); this one does not, and the reason is concrete rather than
+/// neglect.
+///
+/// A holding-weight ballot is **weighted**: a holder with a proven balance of `W` casts
+/// a ballot worth `W`. The executor engine has no such ballot.
+/// `collective_choice::VoteEngine::cast` takes `(poll, &BallotCap, option)` — no weight
+/// argument — and bumps the option's `Monotonic` tally slot by exactly one (`live + 1`).
+/// One cap, one count. Expressing a weight-`W` ballot as a verified turn therefore needs
+/// a weighted cast *inside* `collective-choice` (the tally bump, the `AffineLe`
+/// coefficients, and the `CountGe` distinct-approver witness all have to agree on what a
+/// "weight" is), and this lane consumes that crate read-only.
+///
+/// Casting `W` separate ballots instead is not a substitute — it is exactly the
+/// amplification the delegation lattice exists to forbid.
+///
+/// **What is verified today, and must not regress**: the *verdict*. The weight decision
+/// is rendered by the Lean-proven `grantWeightCore` over the FFI
+/// ([`grant_foreign_weight`]), fail-closed with no Rust reimplementation fallback, after
+/// fail-closed pre-checks (consensus-proof, owner→voter binding, positive amount). The
+/// snapshot pin and the per-`(poll, chain+holder+asset)` nullifier below are host-side
+/// bookkeeping and are honest about it.
+///
+/// **What is not**: the ballot box the granted weight lands in
+/// ([`grant_and_cast`](Self::grant_and_cast) /
+/// [`foreign_grant_and_cast`](Self::foreign_grant_and_cast) take a [`HostBallotBox`]),
+/// whose one-vote and quorum gates are a `HashSet` and a `>=`. Closing this means
+/// teaching `collective-choice` a weighted cast; it is the last front-door flow on the
+/// demoted box.
 #[derive(Clone, Debug, Default)]
 pub struct HoldingWeightRegistry {
     /// The fired nullifiers: present once a holding's weight has been granted into
@@ -937,7 +969,7 @@ impl HoldingWeightRegistry {
     /// End-to-end cross-chain convenience — the foreign analog of
     /// [`grant_and_cast`](Self::grant_and_cast): grant `holding`'s weight into `poll`
     /// (snapshot-pinned, dedup-guarded, whatever chain it was proven on) and cast a
-    /// ballot for `choice` carrying that weight into the [`CollectiveChoice`] engine as
+    /// ballot for `choice` carrying that weight into the [`HostBallotBox`] engine as
     /// the bound voter.
     ///
     /// **The u128 → u64 NARROWING SEAM, fail-closed**: [`ForeignWeightGrant::weight`]
@@ -954,7 +986,7 @@ impl HoldingWeightRegistry {
     /// ([`CastOutcome::RefusedDoubleVote`]).
     pub fn foreign_grant_and_cast<B: HolderBinding>(
         &mut self,
-        engine: &mut CollectiveChoice,
+        engine: &mut HostBallotBox,
         poll: PollId,
         choice: OptionId,
         holding: &ProvenForeignHolding,
@@ -1005,7 +1037,7 @@ impl HoldingWeightRegistry {
     }
 
     /// End-to-end convenience: grant `holding`'s weight into `poll` (dedup-guarded) and
-    /// cast a ballot for `choice` carrying that weight into the [`CollectiveChoice`]
+    /// cast a ballot for `choice` carrying that weight into the [`HostBallotBox`]
     /// engine as the bound voter. The engine applies its OWN one-vote-per-voter rule on
     /// top, so a second holding bound to the same voter is refused there
     /// ([`CastOutcome::RefusedDoubleVote`]) even though it is a distinct token-account
@@ -1015,7 +1047,7 @@ impl HoldingWeightRegistry {
     /// voting twice; the engine's voted-set stops the *same voter* voting twice.
     pub fn grant_and_cast(
         &mut self,
-        engine: &mut CollectiveChoice,
+        engine: &mut HostBallotBox,
         poll: PollId,
         choice: OptionId,
         holding: &ProvenHolding,
@@ -1279,8 +1311,8 @@ mod tests {
         if !lean_verdict_core_or_skip() {
             return;
         }
-        // The weight flows all the way into the real CollectiveChoice tally.
-        let mut engine = CollectiveChoice::new();
+        // The weight flows all the way into the real HostBallotBox tally.
+        let mut engine = HostBallotBox::new();
         let poll = engine.open_poll(PollSpec {
             question: "ship it?".into(),
             options: vec!["no".into(), "yes".into()],
@@ -1345,7 +1377,7 @@ mod tests {
         // MINOR-2: if grant_and_cast targets a poll the engine has no ballot box for,
         // it must NOT consume the (poll, token_account) nullifier — otherwise a correct
         // later attempt (once the poll opens) is permanently DoS'd.
-        let mut engine = CollectiveChoice::new();
+        let mut engine = HostBallotBox::new();
         let owner = owner_key(30);
         let owner_pk = owner.verifying_key().to_bytes();
         let voter: VoterId = [30u8; 32];
@@ -1389,6 +1421,13 @@ mod tests {
         // The audit's exact probe: the SAME Solana holding must not count twice by
         // mixing grant_into_poll (legacy) and grant_foreign_into_poll (generic). They
         // now share ONE (poll, chain+holder+asset) nullifier keyspace.
+        //
+        // Positive-path: the first grant must SUCCEED for the double-count probe to
+        // mean anything, and a successful grant needs the Lean verdict core linked.
+        // Same guard every other positive-path test here carries.
+        if !lean_verdict_core_or_skip() {
+            return;
+        }
         let owner = owner_key(31);
         let owner_pk = owner.verifying_key().to_bytes();
         let voter: VoterId = [31u8; 32];
@@ -1728,7 +1767,7 @@ mod tests {
         // above u64::MAX clears every grant check (it IS a genuine holding) but the
         // ballot cast REFUSES fail-closed at the narrowing seam — no truncated ballot,
         // no tally movement, no nullifier burned.
-        let mut engine = CollectiveChoice::new();
+        let mut engine = HostBallotBox::new();
         let poll = engine.open_poll(PollSpec {
             question: "whale?".into(),
             options: vec!["no".into(), "yes".into()],
@@ -1774,7 +1813,7 @@ mod tests {
         }
         // ACCEPT polarity: a normal (fits-u64) foreign holding casts through
         // foreign_grant_and_cast and its full weight reaches the tally.
-        let mut engine = CollectiveChoice::new();
+        let mut engine = HostBallotBox::new();
         let poll = engine.open_poll(PollSpec {
             question: "cross-chain ship it?".into(),
             options: vec!["no".into(), "yes".into()],

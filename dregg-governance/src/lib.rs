@@ -1,68 +1,61 @@
-//! # dregg-governance — governance and community are ONE primitive
+//! # dregg-governance — governance and community are ONE primitive, on ONE engine
 //!
 //! ember's unifying insight, made concrete: **a federation governing itself, a
 //! community poll, and a story's collective-choice are the SAME thing — a group
-//! verifiably deciding what happens next over shared state.** This crate surfaces
-//! that one primitive, the [`VoteEngine`], for two governance *faces*, and notes
-//! (in code and in a shared-shape test) that it is the *identical* shape a
-//! choose-your-own-adventure branch-vote uses.
+//! verifiably deciding what happens next over shared state.** That one primitive
+//! is [`collective_choice::VoteEngine`], the **executor-backed** engine, and
+//! every face in this crate is driven through it.
 //!
 //! ```text
-//!                         ┌───────────────────────────┐
-//!                         │        VoteEngine          │
-//!                         │  open_poll · cast · tally  │
-//!                         │         · resolve          │
-//!                         └───────────────────────────┘
+//!                  ┌──────────────────────────────────────────┐
+//!                  │   collective_choice::CollectiveChoice     │
+//!                  │   (the VERIFIED EXECUTOR substrate)       │
+//!                  │   WriteOnce(VOTE) ballots · Monotonic     │
+//!                  │   tallies · AffineLe + CountGe quorum ·   │
+//!                  │   Mandate::sub_delegate · nullifiers      │
+//!                  └──────────────────────────────────────────┘
 //!            ┌──────────────────────┼──────────────────────┐
 //!  federation self-governance   community poll         story branch-vote
-//!  (governance.rs)              (community.rs)          (CYOA — same shape;
-//!  committee · 2n/3+1 ·          anyone · verifiable ·   `tests/teeth.rs`)
-//!  auto-enact (reactor.rs)       delegatable · uncensorable
+//!  (governance.rs ≡              (community.rs)         (CYOA — same engine;
+//!   substrate.rs)                anyone · verifiable ·   `spween-dregg`)
+//!  committee · 2n/3+1 ·          delegatable
+//!  auto-enact (reactor.rs)
 //! ```
 //!
-//! ## What each face is
+//! ## Every gate below is an EXECUTOR gate
 //!
-//! - **Federation self-governance** ([`governance`]) — the committee votes on a
-//!   proposal (admit/evict a validator, amend the threshold, amend routes). It
-//!   ties directly to the REAL [`dregg_blocklace::constitution`]: the electorate
-//!   is the constitution's current participant set, the threshold is the
-//!   constitutional `required_votes_for` (the 2n/3+1 supermajority, honoring the
-//!   H-rule), each cast mirrors into the real distinct-voter `VoteTracker`, and a
-//!   [`reactor::GovernanceEnactReactor`] **auto-enacts** the proposal on the real
-//!   `ConstitutionManager` the instant quorum is met. The federation governs
-//!   itself, verifiably and uncensorably.
-//! - **Community polls** ([`community`]) — a general poll anyone can run:
-//!   verifiable (the tally is a light-client-recomputable derivation over the
-//!   ballot log), delegatable (liquid democracy via non-amplifying
-//!   [`community::VoteCap`] attenuation), and uncensorable (votes are content-
-//!   addressed blocks in a causal log, so a dropped ballot changes the committed
-//!   [`BallotLog::causal_root`] and is caught).
+//! - **Federation self-governance** ([`governance::FederationGovernance`], which
+//!   *is* [`substrate::ExecutorGovernance`]) — the committee votes on a proposal
+//!   (admit/evict a validator, amend the threshold). Eligibility is holding a
+//!   ballot cap minted only to a constitutional participant; one-vote is the
+//!   ballot's `WriteOnce(VOTE)` + the engine nullifier; the constitutional
+//!   `required_votes_for` (2n/3+1, honoring the H-rule) is baked in as the
+//!   **in-cell per-option `AffineLe` gate**, and arming `RESOLVED` must
+//!   additionally EXHIBIT `required` distinct approvers through the `CountGe`
+//!   gate. [`reactor::GovernanceEnactReactor`] auto-enacts on the real
+//!   [`dregg_blocklace::constitution::ConstitutionManager`] only when the
+//!   executor's decision-turn commits AND the constitution independently agrees.
+//! - **Community polls** ([`community::CommunityPolls`]) — a general poll on the
+//!   same engine: verifiable (the executor's stored monotone tally and the
+//!   light-client replay agree), delegatable (liquid democracy through the
+//!   **Lean-mirrored** [`dregg_intent::agent_mandate::Mandate::sub_delegate`] —
+//!   the one non-amplifying lattice, reused, not re-implemented).
 //!
-//! ## The unification
+//! ## The demoted host ballot box
 //!
-//! Both faces are the SAME [`CollectiveChoice`] object driven through the SAME
-//! four [`VoteEngine`] methods. A governance proposal is a poll over
-//! `{reject, approve}`; a community poll is a poll over arbitrary options; a CYOA
-//! branch-vote is a poll over the story's available branches. Options differ;
-//! the engine does not. See `tests/teeth.rs::same_vote_engine_drives_all_three_faces`.
+//! [`HostBallotBox`] (below) is **NOT** a governance substrate and no marquee
+//! path runs on it. It is a host-side, in-memory causal-log derivation aid:
+//! content-addressed [`VoteBlock`]s, a [`BallotLog::causal_root`], and the
+//! `derive_tally`/`verify_tally` light-client recompute. It is retained for
+//! exactly two reasons, both named:
 //!
-//! ## `VoteEngine` and the wider `collective-choice` — RECONCILED
+//! 1. the **weighted** holding-weight ballot ([`holding_weight`]) — the executor
+//!    engine's `cast` bumps a tally by exactly one per ballot and takes no weight
+//!    argument, so a weight-`W` ballot has no executor expression yet (see the
+//!    residual note on [`holding_weight::HoldingWeightRegistry::grant_and_cast`]);
+//! 2. out-of-lane consumers that still name the old shape.
 //!
-//! The `collective-choice` crate's **executor-backed engine is the canonical
-//! vote substrate**: every ballot there is a real verified turn (a `WriteOnce`
-//! ballot cell, a `Monotonic` tally, an in-cell `AffineLe` quorum gate, a
-//! nullifier set). The constitution face runs over it via [`substrate`]
-//! ([`substrate::ExecutorGovernance`] + [`substrate::ExecutorEnactReactor`]):
-//! a proposal opens an executor poll whose per-option `AffineLe` gate IS the
-//! constitutional `required_votes_for`, votes are ballot-cap turns, and the
-//! reactor auto-enacts on the real `ConstitutionManager`.
-//!
-//! The [`VoteEngine`] trait and [`CollectiveChoice`] object in THIS file remain
-//! the in-memory causal-log face (defined from the census shape,
-//! `docs/deos/STARBRIDGE-APPS-CENSUS.md` §2): content-addressed `VoteBlock`s,
-//! the light-client-recomputable `derive_tally`/`verify_tally` path, and the
-//! shared-shape demonstration that governance, community polls, and CYOA
-//! branch-votes (`docs/deos/SPWEEN-ON-DREGG.md` §4.2) are one primitive.
+//! Its gates are ordinary Rust bookkeeping. Do not add a governance face to it.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
@@ -132,7 +125,8 @@ impl Electorate {
 
 // ─── Decision rule ──────────────────────────────────────────────────────────
 
-/// How a poll decides — the quorum/threshold gate applied at [`VoteEngine::resolve`].
+/// How a poll decides — the quorum/threshold gate applied at
+/// [`HostVoteEngine::resolve`]. **Host-side Rust comparisons**, not a gate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DecisionRule {
     /// A specific `option` must reach `min` weight of distinct approving voters.
@@ -164,7 +158,7 @@ pub struct PollSpec {
     /// The quorum/threshold gate.
     pub rule: DecisionRule,
     /// Whether a decided poll should auto-enact (governance polls do; a plain
-    /// community opinion poll need not). Read by [`reactor::GovernanceEnactReactor`].
+    /// community opinion poll need not).
     pub enact_on_pass: bool,
     /// Disambiguating nonce folded into the [`PollId`].
     pub nonce: u64,
@@ -320,7 +314,7 @@ pub enum Resolution {
     Decided { winner: OptionId, enact: bool },
 }
 
-/// Why a [`VoteEngine::cast`] was refused (or that it was accepted).
+/// Why a [`HostVoteEngine::cast`] was refused (or that it was accepted).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CastOutcome {
     /// The ballot was recorded.
@@ -336,14 +330,32 @@ pub enum CastOutcome {
     RefusedUnknownOption,
 }
 
-// ─── The VoteEngine trait — the ONE primitive ───────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+//  DEMOTED — the host ballot box. NOT a governance substrate.
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Everything from here down is host-side, in-memory Rust bookkeeping. It used
+// to be the marquee governance engine, which made this crate DUAL-FACED: a real
+// verified weld (`substrate.rs`) sat behind a side door while the front door ran
+// a parallel twin whose quorum / double-vote / threshold gates were Rust `if`s
+// and a `HashSet`. The front door now runs on the verified executor
+// (`collective_choice::CollectiveChoice`); this box is what is left over.
+//
+// What it still legitimately IS: a causal-log derivation aid. `derive_tally` /
+// `verify_tally` over a `BallotLog` is a light-client recompute, and
+// `BallotLog::causal_root` is the digest that catches a censoring operator.
+// Those are real, and they are not a claim about executor enforcement.
+//
+// What it is NOT: an eligibility, one-vote, or quorum gate anyone should rely
+// on. `HostBallotBox::cast`'s refusals are `HashSet::contains` and a `>=`. Do
+// not hang a governance face on it. See the crate docs for the two named
+// reasons it is retained.
 
-/// The collective-choice interface. **One trait, three faces**: a federation
-/// governance proposal, a community poll, and a CYOA story branch-vote are all
-/// driven through these four methods. Defined locally from the census shape
-/// (`STARBRIDGE-APPS-CENSUS.md` §2: `open_poll / cast / tally / resolve`); the
-/// reconciliation point with a shared `collective-choice` crate.
-pub trait VoteEngine {
+/// The host ballot box's interface — **the demoted twin of
+/// [`collective_choice::VoteEngine`]**, kept only for the derivation aid and the
+/// weighted holding-weight ballot. The real one-trait-three-faces primitive is
+/// `collective_choice::VoteEngine`; drive that.
+pub trait HostVoteEngine {
     /// Open a poll; returns its content-addressed id.
     fn open_poll(&mut self, spec: PollSpec) -> PollId;
 
@@ -357,33 +369,45 @@ pub trait VoteEngine {
     fn resolve(&self, poll: PollId) -> Resolution;
 }
 
-// ─── CollectiveChoice — the shared engine ───────────────────────────────────
+// ─── HostBallotBox — the demoted in-memory box ──────────────────────────────
 
-/// The live state of one open poll.
+/// The live state of one open poll on the demoted [`HostBallotBox`].
 #[derive(Clone, Debug)]
 pub struct PollState {
     /// The poll's immutable terms.
     pub spec: PollSpec,
     /// The causal ballot log.
     pub log: BallotLog,
-    /// Distinct voters who have cast (the one-vote-per-voter set — the in-cell
-    /// analogue of the `VoteTracker` `HashSet`).
+    /// Distinct voters who have cast. **Host-side bookkeeping** — a plain
+    /// `HashSet`, not a gate anything should trust. The real one-vote tooth is
+    /// the executor's `WriteOnce(VOTE)` ballot + engine nullifier.
     voted: HashSet<VoterId>,
 }
 
-/// **The one collective-choice engine.** Holds a set of open polls and drives
-/// them through the [`VoteEngine`] interface. The federation self-governance face
-/// and the community-poll face both build on THIS object — that is the whole
-/// point: governance and community (and stories) are one primitive.
+/// **The demoted host ballot box.** An in-memory causal ballot log with a
+/// light-client-recomputable tally.
+///
+/// This is *not* a verified substrate and no marquee governance path runs on it
+/// — see the DEMOTED banner above. The governance front door
+/// ([`governance::FederationGovernance`]) and the community face
+/// ([`community::CommunityPolls`]) both drive
+/// [`collective_choice::CollectiveChoice`], where a double vote dies at a
+/// nullifier and quorum is an in-cell `AffineLe` + `CountGe`, not a `HashSet`
+/// and a `>=`.
+///
+/// What is genuinely useful here: [`Self::derive_tally`] /
+/// [`Self::verify_tally`] over a [`BallotLog`] — the auditor's from-scratch
+/// recompute, and [`BallotLog::causal_root`], the digest that catches a dropped
+/// ballot.
 #[derive(Clone, Debug, Default)]
-pub struct CollectiveChoice {
+pub struct HostBallotBox {
     polls: BTreeMap<PollId, PollState>,
 }
 
-impl CollectiveChoice {
-    /// A fresh engine with no open polls.
+impl HostBallotBox {
+    /// A fresh box with no open polls.
     pub fn new() -> Self {
-        CollectiveChoice::default()
+        HostBallotBox::default()
     }
 
     /// Read a poll's live state.
@@ -459,7 +483,7 @@ impl CollectiveChoice {
     }
 }
 
-impl VoteEngine for CollectiveChoice {
+impl HostVoteEngine for HostBallotBox {
     fn open_poll(&mut self, spec: PollSpec) -> PollId {
         let id = spec.id();
         self.polls.entry(id).or_insert(PollState {
@@ -549,6 +573,23 @@ impl VoteEngine for CollectiveChoice {
     }
 }
 
+// ─── Compatibility aliases for the demoted box ──────────────────────────────
+//
+// The old marquee names. They now point at the DEMOTED host ballot box and exist
+// only so out-of-lane consumers keep compiling. Nothing in this crate's
+// governance or community face uses them; new code should name
+// `collective_choice::{CollectiveChoice, VoteEngine}` (the verified engine) or
+// `HostBallotBox`/`HostVoteEngine` (the derivation aid), never these.
+
+/// The pre-weld name of [`HostBallotBox`]. **Demoted alias** — it does not name
+/// [`collective_choice::CollectiveChoice`], which is the real engine every
+/// governance path in this crate now runs on.
+pub type CollectiveChoice = HostBallotBox;
+
+/// The pre-weld name of [`HostVoteEngine`]. **Demoted alias** — the real
+/// one-primitive trait is [`collective_choice::VoteEngine`].
+pub use self::HostVoteEngine as VoteEngine;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -557,7 +598,7 @@ mod tests {
         [b; 32]
     }
 
-    fn open_community(engine: &mut CollectiveChoice, options: &[&str], quorum: u64) -> PollId {
+    fn open_community(engine: &mut HostBallotBox, options: &[&str], quorum: u64) -> PollId {
         engine.open_poll(PollSpec {
             question: "lunch?".into(),
             options: options.iter().map(|s| s.to_string()).collect(),
@@ -568,7 +609,7 @@ mod tests {
         })
     }
 
-    fn cast(engine: &mut CollectiveChoice, poll: PollId, v: u8, choice: u64) -> CastOutcome {
+    fn cast(engine: &mut HostBallotBox, poll: PollId, v: u8, choice: u64) -> CastOutcome {
         let block = engine
             .next_block(poll, voter(v), OptionId(choice), 1)
             .unwrap();
@@ -577,7 +618,7 @@ mod tests {
 
     #[test]
     fn plurality_poll_tallies_and_resolves() {
-        let mut e = CollectiveChoice::new();
+        let mut e = HostBallotBox::new();
         let poll = open_community(&mut e, &["ramen", "tacos"], 3);
         assert_eq!(cast(&mut e, poll, 1, 0), CastOutcome::Accepted);
         assert_eq!(cast(&mut e, poll, 2, 1), CastOutcome::Accepted);
@@ -595,7 +636,7 @@ mod tests {
 
     #[test]
     fn one_vote_per_voter() {
-        let mut e = CollectiveChoice::new();
+        let mut e = HostBallotBox::new();
         let poll = open_community(&mut e, &["a", "b"], 10);
         assert_eq!(cast(&mut e, poll, 1, 0), CastOutcome::Accepted);
         assert_eq!(cast(&mut e, poll, 1, 1), CastOutcome::RefusedDoubleVote);
@@ -604,7 +645,7 @@ mod tests {
 
     #[test]
     fn unknown_option_and_unknown_poll_refused() {
-        let mut e = CollectiveChoice::new();
+        let mut e = HostBallotBox::new();
         let poll = open_community(&mut e, &["a", "b"], 10);
         assert_eq!(cast(&mut e, poll, 1, 7), CastOutcome::RefusedUnknownOption);
         let bogus = PollId([9u8; 32]);
@@ -621,7 +662,7 @@ mod tests {
     #[test]
     fn each_ballot_references_the_causal_tip() {
         // votes-are-blocks: each block's causal_prev is the previous block's id.
-        let mut e = CollectiveChoice::new();
+        let mut e = HostBallotBox::new();
         let poll = open_community(&mut e, &["a", "b"], 10);
         let b1 = e.next_block(poll, voter(1), OptionId(0), 1).unwrap();
         assert_eq!(b1.causal_prev, None);

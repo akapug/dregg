@@ -3,62 +3,40 @@
 //! The reactive twin of a governance vote, modelled on
 //! `starbridge-apps/governed-namespace/src/reactor.rs` (the `GovernanceCommitReactor`
 //! that auto-fires the route-table swap at quorum). Where a member *drives* a
-//! proposal/vote *in*, this WATCHES a governance poll and, the instant the running
-//! tally crosses the constitutional threshold, REACTS by enacting the proposal on
-//! the real [`dregg_blocklace::constitution::ConstitutionManager`] — vote-and-enact
+//! proposal/vote *in*, this WATCHES a governance poll and, the instant the vote
+//! crosses the constitutional threshold, REACTS by enacting the proposal on the
+//! real [`dregg_blocklace::constitution::ConstitutionManager`] — vote-and-enact
 //! bound as one step.
 //!
-//! Fail-closed below quorum: a poll that has not [`crate::Resolution::Decided`]
-//! produces no reaction, so nothing is enacted.
-
-use crate::governance::FederationGovernance;
-use crate::{PollId, Resolution, VoteEngine};
+//! [`GovernanceEnactReactor`] *is* [`crate::substrate::ExecutorEnactReactor`]:
+//! the name that used to front a reactor reading a host-side `Resolution` now
+//! names the one that fires on a real executor decision-turn.
+//!
+//! **Fail-closed at every step.** Below the constitutional threshold the
+//! executor's in-cell `AffineLe` + `CountGe` gates refuse the decision-turn, so
+//! the reactor produces [`EnactOutcome::NoReaction`] and nothing is enacted. A
+//! decided poll whose winner is not APPROVE never enacts. And the real
+//! constitution's own distinct-voter `has_passed` must independently agree before
+//! `apply_if_passed` fires — so forging one side alone enacts nothing.
 
 /// The result of a reactor step.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EnactOutcome {
-    /// The poll is below quorum (or not `enact_on_pass`) — nothing enacted.
+    /// The executor refused the decision-turn (below the constitutional
+    /// threshold), the winner was not APPROVE, or the real constitution did not
+    /// independently agree — nothing enacted.
     NoReaction,
     /// The proposal was enacted on the real constitution; carries the new
     /// constitution version.
     Enacted { new_version: u64 },
-    /// The poll crossed quorum but the constitution declined to apply it (e.g.
-    /// already applied, or a no-op change).
+    /// Both gates passed but the constitution declined to apply it (e.g. already
+    /// applied, or a no-op change).
     NotApplied,
 }
 
-/// Watches a [`FederationGovernance`]'s poll and auto-enacts the proposal at quorum.
+/// **The governance auto-enact reactor**, on the verified executor.
 ///
-/// The reactive analogue of `governed-namespace`'s `GovernanceCommitReactor`:
-/// it declares WHAT it enacts (the poll's registered proposal block) and reacts
-/// only when the engine resolves the poll as decided-and-enact.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct GovernanceEnactReactor;
-
-impl GovernanceEnactReactor {
-    /// Attempt one reactor step against `poll`.
-    ///
-    /// - Below quorum (or a poll that does not enact-on-pass) → [`EnactOutcome::NoReaction`].
-    /// - At/above quorum → enact on the real constitution via `apply_if_passed`
-    ///   and report the outcome. The enactment is the REAL membership change: a
-    ///   validator is admitted/evicted, the threshold amended, etc.
-    pub fn react(&self, gov: &mut FederationGovernance, poll: PollId) -> EnactOutcome {
-        match gov.engine.resolve(poll) {
-            Resolution::Decided { enact: true, .. } => {
-                let proposal_block = match gov.proposal_block(poll) {
-                    Some(b) => b,
-                    None => return EnactOutcome::NoReaction,
-                };
-                if gov.constitution.apply_if_passed(&proposal_block) {
-                    EnactOutcome::Enacted {
-                        new_version: gov.constitution.version(),
-                    }
-                } else {
-                    EnactOutcome::NotApplied
-                }
-            }
-            // Decided-but-not-enact, or Pending: no reaction, nothing enacted.
-            _ => EnactOutcome::NoReaction,
-        }
-    }
-}
+/// Watches a [`crate::governance::FederationGovernance`] poll and auto-enacts the
+/// proposal at quorum. See [`crate::substrate::ExecutorEnactReactor::react`] for
+/// the two gates it requires.
+pub use crate::substrate::ExecutorEnactReactor as GovernanceEnactReactor;
