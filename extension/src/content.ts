@@ -99,6 +99,12 @@ const RESTRICTED_METHODS = new Set<MessageType>([
   "dregg:evmSignTypedData",
   "dregg:sealedBidCommit",
   "dregg:sealedBidReveal",
+  // The launchpad bidder leg: each turn seals or opens a bid with the wallet's
+  // EVM key and escrows real value, so it is gated exactly like the rest.
+  "dregg:launchpadCommit",
+  "dregg:launchpadReveal",
+  "dregg:launchpadStatus",
+  "dregg:launchpadReclaimTx",
   "dregg:drexPlaceOrder",
 ]);
 

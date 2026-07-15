@@ -160,6 +160,11 @@ export type MessageType =
   | "dregg:evmSignTypedData"
   | "dregg:sealedBidCommit"
   | "dregg:sealedBidReveal"
+  // The DreggLaunchpad bidder leg (the real launch contract's commit → reveal)
+  | "dregg:launchpadCommit"
+  | "dregg:launchpadReveal"
+  | "dregg:launchpadStatus"
+  | "dregg:launchpadReclaimTx"
   | "dregg:drexPlaceOrder"
   // Turn submission
   | "dregg:signTurn"

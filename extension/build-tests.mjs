@@ -10,6 +10,8 @@ await esbuild.build({
     'src/login.ts',
     'src/federation-domain.ts',
     'src/sealedbid.ts',
+    'src/launchpad.ts',
+    'src/evm.ts',
   ],
   outdir: 'test/.build',
   format: 'esm',

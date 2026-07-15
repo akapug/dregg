@@ -34,6 +34,19 @@ import {
   REVEAL_BID_TYPES,
 } from "./sealedbid";
 import {
+  DreggLaunchpadClient,
+  LaunchpadOpeningStore,
+  OpeningLostError,
+  OpeningTamperedError,
+  launchpadFromRequest,
+  txGasFromRequest,
+  signedOrUnsignedTx,
+  REFUND_GRACE_SECONDS,
+  type LaunchpadOpening,
+  type OpeningRef,
+  type TxRequest,
+} from "./launchpad";
+import {
   PollEngine,
   CellEngine,
   DocEngine,
@@ -2417,6 +2430,44 @@ async function loadSealedOpening(auctionId: number): Promise<SealedOpening | nul
   return map[String(auctionId)] || null;
 }
 
+// ---------------------------------------------------------------------------
+// The DreggLaunchpad bidder leg — the real contract's commit → reveal.
+//
+// `sealedbid.ts` derives the seal `chain/contracts/launchpad/DreggLaunchpad.sol`
+// recomputes; `launchpad.ts` is its client (ABI derived from that contract, the
+// opening store, the transaction builder). Here that client meets the wallet: the
+// bidder address is the EVM identity derived from the sealed seed
+// (`requireEvmIdentity`), both turns are gated by the same un-overlayable
+// confirm-intent chrome every other key-touching operation uses, and the openings
+// live in the extension's own local storage.
+//
+// THE OPENING IS THE WHOLE GAME. The launchpad only ever sees
+// `keccak256(price, qty, salt, bidder)`; the `(price, qty, salt)` that opens it
+// exists nowhere else. So the opening is persisted BEFORE the commit transaction
+// is ever handed out — a bid whose opening was never written is a bid that can
+// never be revealed, and no operator, key, or support path can undo that.
+// ---------------------------------------------------------------------------
+
+const LAUNCHPAD_OPENINGS_KEY = "dregg_launchpad_openings";
+
+const launchpadOpenings = new LaunchpadOpeningStore({
+  async get(): Promise<Record<string, LaunchpadOpening>> {
+    const stored = await chrome.storage.local.get(LAUNCHPAD_OPENINGS_KEY);
+    return (stored[LAUNCHPAD_OPENINGS_KEY] as Record<string, LaunchpadOpening>) || {};
+  },
+  async set(map: Record<string, LaunchpadOpening>): Promise<void> {
+    await chrome.storage.local.set({ [LAUNCHPAD_OPENINGS_KEY]: map });
+  },
+});
+
+// The request adapters (`launchpadFromRequest`, `txGasFromRequest`,
+// `signedOrUnsignedTx`) live in `./launchpad` beside the client they configure —
+// so the node suite drives exactly the code this worker runs.
+
+function launchpadRefOf(pad: DreggLaunchpadClient, launchId: string, bidder: string): OpeningRef {
+  return { chainId: pad.chainId, launchpad: pad.address, launchId, bidder };
+}
+
 async function computeIntentId(kind: string, matchSpec: MatchSpec, expiry: number): Promise<string> {
   const intentInput = {
     kind: kind === "need" ? "Need" : kind === "offer" ? "Offer" : "Query",
@@ -3413,6 +3464,8 @@ const PAGE_ALLOWED_METHODS = new Set<MessageType>([
   "dregg:makeCellSovereign", "dregg:peerExchange", "dregg:composeProofs",
   "dregg:evmGetAddress", "dregg:evmPersonalSign", "dregg:evmSignTypedData",
   "dregg:sealedBidCommit", "dregg:sealedBidReveal", "dregg:drexPlaceOrder",
+  "dregg:launchpadCommit", "dregg:launchpadReveal", "dregg:launchpadStatus",
+  "dregg:launchpadReclaimTx",
   "dregg:signTurn", "dregg:signTurnV3", "dregg:queryBalance",
   "dregg:shareCapability", "dregg:acceptCapability", "dregg:createHandoff",
   "dregg:mountService", "dregg:discoverServices", "dregg:resolvePath",
@@ -4845,6 +4898,269 @@ async function handleMessage(message: Record<string, unknown>, sender: chrome.ru
           salt: opening.salt, orderHash: opening.orderHash, commitment: opening.commitment,
           bindsCommitment: check.ok, signature: sig.signature, digest: sig.digest,
           escrow: { domain, primaryType: "RevealBid", message: { auctionId, orderHash: opening.orderHash, salt: opening.salt } },
+        },
+      };
+    }
+
+    // ── The DreggLaunchpad: a sealed bid on the REAL launch contract ──
+    case "dregg:launchpadCommit": {
+      const idr = await requireEvmIdentity();
+      if (!idr.ok) return { id: message.id, error: idr.error };
+      const origin = (message._origin as string) || (sender?.tab?.url && new URL(sender.tab.url).origin) || undefined;
+
+      let pad: DreggLaunchpadClient;
+      let built: ReturnType<DreggLaunchpadClient["commitBid"]>;
+      let launchId: string;
+      try {
+        pad = launchpadFromRequest(message as Record<string, unknown>);
+        launchId = String(message.launchId ?? "");
+        if (!launchId) throw new Error("a launchId is required");
+        // A fresh 32-byte hiding nonce per bid — the thing that makes the seal
+        // hiding, and the thing that is unrecoverable if the opening is lost.
+        const salt = new Uint8Array(32);
+        crypto.getRandomValues(salt);
+        built = pad.commitBid({
+          launchId,
+          price: BigInt(String(message.price ?? "")),
+          qty: BigInt(String(message.qty ?? "")),
+          salt: evmHex0x(salt),
+          bidder: idr.id.address,
+          proof: message.proof ? String(message.proof) : undefined,
+        });
+      } catch (e: unknown) {
+        return { id: message.id, error: `launchpad commit: ${(e as Error).message}` };
+      }
+
+      // Refuse a second commit BEFORE prompting: the launchpad takes one
+      // commitment per address, so a second local opening could only overwrite
+      // the one that opens an already-escrowed bid.
+      const already = await launchpadOpenings.get(launchpadRefOf(pad, launchId, idr.id.address));
+      if (already) {
+        return {
+          id: message.id,
+          error:
+            `launchpad commit: this wallet already has a stored bid on launch ${launchId} `
+            + `(sealed ${already.seal}). The launchpad accepts ONE commitment per address `
+            + `(AlreadyCommitted); reveal the stored bid instead.`,
+        };
+      }
+
+      const deposit = BigInt(built.opening.deposit);
+      const confirmed = await showTurnConfirmation({
+        explanation:
+          `DREGG LAUNCHPAD — SEALED BID COMMIT (launch #${launchId})\n\n`
+          + `bidder: ${idr.id.address}\nlaunchpad: ${pad.address}\nchain: ${pad.chainId}\n\n`
+          + `price: ${built.opening.price} wei per whole token\nquantity: ${built.opening.qty} whole tokens\n`
+          + `ESCROW NOW: ${deposit} wei (price × qty — your maximum payment)\n\n`
+          + `Only the sealed hash ${built.seal.seal} goes on-chain now; nothing about this bid is `
+          + `observable until you reveal it. Every winner pays the SAME uniform clearing price and the `
+          + `rest of the escrow is refunded at settlement.\n\n`
+          + `You MUST reveal during the reveal window or this bid does not clear.`,
+        turnId: `launchpad-commit:${built.seal.seal}`,
+        origin,
+        hasUnknown: false,
+      });
+      if (!confirmed) return { id: message.id, error: "User declined the launchpad commit" };
+
+      // PERSIST THE OPENING FIRST. Before a signature exists, before anything is
+      // returnable, before it could possibly be broadcast — a commit whose
+      // opening was never written is an unrevealable bid.
+      try {
+        await launchpadOpenings.put(built.opening);
+      } catch (e: unknown) {
+        return { id: message.id, error: `launchpad commit: ${(e as Error).message}` };
+      }
+
+      resetLockTimer();
+      return {
+        id: message.id,
+        result: {
+          phase: "commit",
+          launchId,
+          launchpad: pad.address,
+          chainId: pad.chainId,
+          bidder: idr.id.address,
+          seal: built.seal.seal,
+          price: built.opening.price,
+          qty: built.opening.qty,
+          deposit: built.opening.deposit,
+          openingStored: true,
+          ...signedOrUnsignedTx(idr.id.privateKey, built.tx, txGasFromRequest(message as Record<string, unknown>)),
+        },
+      };
+    }
+
+    case "dregg:launchpadReveal": {
+      const idr = await requireEvmIdentity();
+      if (!idr.ok) return { id: message.id, error: idr.error };
+      const origin = (message._origin as string) || (sender?.tab?.url && new URL(sender.tab.url).origin) || undefined;
+
+      let pad: DreggLaunchpadClient;
+      let launchId: string;
+      try {
+        pad = launchpadFromRequest(message as Record<string, unknown>);
+        launchId = String(message.launchId ?? "");
+        if (!launchId) throw new Error("a launchId is required");
+      } catch (e: unknown) {
+        return { id: message.id, error: `launchpad reveal: ${(e as Error).message}` };
+      }
+
+      // The ONLY route to a reveal. A missing opening is unrecoverable by
+      // construction and a corrupt one would earn `BidMismatch` on-chain; both
+      // are reported by name, with the escrow's refund path, and NEITHER is
+      // swallowed into a quiet "nothing to reveal".
+      let opening: LaunchpadOpening;
+      try {
+        opening = await launchpadOpenings.requireForReveal(
+          launchpadRefOf(pad, launchId, idr.id.address),
+        );
+      } catch (e: unknown) {
+        if (e instanceof OpeningLostError || e instanceof OpeningTamperedError) {
+          return { id: message.id, error: `launchpad reveal: ${e.message}` };
+        }
+        return { id: message.id, error: `launchpad reveal: ${(e as Error).message}` };
+      }
+
+      let tx: TxRequest;
+      try {
+        tx = pad.revealBid(opening).tx;
+      } catch (e: unknown) {
+        return { id: message.id, error: `launchpad reveal: ${(e as Error).message}` };
+      }
+
+      const confirmed = await showTurnConfirmation({
+        explanation:
+          `DREGG LAUNCHPAD — REVEAL YOUR SEALED BID (launch #${launchId})\n\n`
+          + `bidder: ${opening.bidder}\nlaunchpad: ${pad.address}\nchain: ${pad.chainId}\n\n`
+          + `price: ${opening.price} wei per whole token\nquantity: ${opening.qty} whole tokens\n`
+          + `escrowed: ${opening.deposit} wei\n\n`
+          + `This opens the commitment ${opening.seal} you escrowed. Your bid becomes public and `
+          + `joins the book that clears at ONE uniform price. The opening has been checked to bind: `
+          + `the launchpad will recompute the same hash.`,
+        turnId: `launchpad-reveal:${opening.seal}`,
+        origin,
+        hasUnknown: false,
+      });
+      if (!confirmed) return { id: message.id, error: "User declined the launchpad reveal" };
+
+      resetLockTimer();
+      return {
+        id: message.id,
+        result: {
+          phase: "reveal",
+          launchId,
+          launchpad: pad.address,
+          chainId: pad.chainId,
+          bidder: opening.bidder,
+          price: opening.price,
+          qty: opening.qty,
+          salt: opening.salt,
+          seal: opening.seal,
+          bindsSeal: true,
+          ...signedOrUnsignedTx(idr.id.privateKey, tx, txGasFromRequest(message as Record<string, unknown>)),
+        },
+      };
+    }
+
+    case "dregg:launchpadStatus": {
+      const idr = await requireEvmIdentity();
+      if (!idr.ok) return { id: message.id, error: idr.error };
+      let pad: DreggLaunchpadClient;
+      try {
+        pad = launchpadFromRequest(message as Record<string, unknown>);
+      } catch (e: unknown) {
+        return { id: message.id, error: `launchpad status: ${(e as Error).message}` };
+      }
+      const launchId = message.launchId !== undefined ? String(message.launchId) : null;
+
+      // The local view of one's own bids: is the opening still here, i.e. is this
+      // bid still revealable at all? On-chain phase/fill state is a read this
+      // background cannot make (no EVM RPC) — the dapp reads that itself.
+      if (launchId === null) {
+        const mine = await launchpadOpenings.list({ chainId: pad.chainId, launchpad: pad.address, bidder: idr.id.address });
+        return {
+          id: message.id,
+          result: {
+            bidder: idr.id.address,
+            launchpad: pad.address,
+            chainId: pad.chainId,
+            // The salt is deliberately NOT listed: it is the hiding nonce, and it
+            // leaves the extension only inside the reveal transaction itself.
+            bids: mine.map(o => ({
+              launchId: o.launchId, seal: o.seal, price: o.price, qty: o.qty,
+              deposit: o.deposit, createdAt: o.createdAt, hasOpening: true, revealable: true,
+            })),
+          },
+        };
+      }
+
+      const ref = launchpadRefOf(pad, launchId, idr.id.address);
+      const opening = await launchpadOpenings.get(ref);
+      if (!opening) {
+        // HONEST: if this wallet did commit, the bid is gone — say exactly that
+        // and point at the escrow's two permissionless exits.
+        const lost = new OpeningLostError(ref);
+        return {
+          id: message.id,
+          result: {
+            launchId, launchpad: pad.address, chainId: pad.chainId, bidder: idr.id.address,
+            hasOpening: false,
+            revealable: false,
+            unrecoverable: true,
+            explanation: lost.message,
+            recovery: { ...lost.recovery, refundGraceSeconds: REFUND_GRACE_SECONDS },
+          },
+        };
+      }
+      return {
+        id: message.id,
+        result: {
+          launchId, launchpad: pad.address, chainId: pad.chainId, bidder: idr.id.address,
+          hasOpening: true, revealable: true,
+          seal: opening.seal, price: opening.price, qty: opening.qty,
+          deposit: opening.deposit, createdAt: opening.createdAt,
+        },
+      };
+    }
+
+    case "dregg:launchpadReclaimTx": {
+      const idr = await requireEvmIdentity();
+      if (!idr.ok) return { id: message.id, error: idr.error };
+      const origin = (message._origin as string) || (sender?.tab?.url && new URL(sender.tab.url).origin) || undefined;
+      let pad: DreggLaunchpadClient;
+      let launchId: string;
+      let tx: TxRequest;
+      try {
+        pad = launchpadFromRequest(message as Record<string, unknown>);
+        launchId = String(message.launchId ?? "");
+        if (!launchId) throw new Error("a launchId is required");
+        tx = pad.reclaimEscrowTx({ launchId, from: idr.id.address });
+      } catch (e: unknown) {
+        return { id: message.id, error: `launchpad reclaim: ${(e as Error).message}` };
+      }
+
+      const confirmed = await showTurnConfirmation({
+        explanation:
+          `DREGG LAUNCHPAD — RECLAIM YOUR ESCROW (launch #${launchId})\n\n`
+          + `bidder: ${idr.id.address}\nlaunchpad: ${pad.address}\nchain: ${pad.chainId}\n\n`
+          + `The stuck-launch backstop: if this launch never cleared, your full escrow is `
+          + `permissionlessly reclaimable once it is past revealEnd + ${REFUND_GRACE_SECONDS}s `
+          + `(REFUND_GRACE). If it is not yet reclaimable the chain refuses this by name `
+          + `(RefundNotYetAvailable); if the launch DID clear, settleBid is the exit instead `
+          + `(LaunchAlreadyCleared).`,
+        turnId: `launchpad-reclaim:${pad.chainId}:${pad.address}:${launchId}`,
+        origin,
+        hasUnknown: false,
+      });
+      if (!confirmed) return { id: message.id, error: "User declined the launchpad escrow reclaim" };
+
+      resetLockTimer();
+      return {
+        id: message.id,
+        result: {
+          phase: "reclaim",
+          launchId, launchpad: pad.address, chainId: pad.chainId, bidder: idr.id.address,
+          ...signedOrUnsignedTx(idr.id.privateKey, tx, txGasFromRequest(message as Record<string, unknown>)),
         },
       };
     }

@@ -218,6 +218,73 @@ export interface DreggAPI {
     }>;
   };
   /**
+   * The `DreggLaunchpad` bidder leg — a sealed bid on the REAL launch contract
+   * (`chain/contracts/launchpad/DreggLaunchpad.sol`), whose ABI the extension
+   * derives from that contract rather than restating.
+   *
+   * `commit` and `reveal` are TWO separate user actions, each through the
+   * extension's confirm-intent consent, because the chain makes them two: a bid
+   * is sealed and escrowed during the commit window, and only opened during the
+   * reveal window. Between them, the extension keeps the OPENING — the
+   * `(price, qty, salt)` that opens the commitment. Nothing else has it: the
+   * launchpad saw only `keccak256(price, qty, salt, bidder)`.
+   *
+   * - `commit(…)` seals `(price, qty)` under a fresh random salt, stores the
+   *   opening BEFORE handing back a transaction, and returns the `commitBid`
+   *   call with `price × qty` wei of escrow attached.
+   * - `reveal(…)` restores that opening, re-checks that it binds, and returns the
+   *   `revealBid` call. A bid whose opening is gone CANNOT be revealed — by
+   *   anyone, ever — and this rejects saying so, naming the escrow's refund
+   *   paths rather than failing quietly.
+   * - `status(…)` reports whether a bid is still revealable (the salt is never
+   *   returned — it leaves only inside a reveal transaction).
+   * - `reclaimTx(…)` builds the stuck-launch backstop: the permissionless full
+   *   refund available once a launch is past `revealEnd + REFUND_GRACE` without
+   *   clearing. This is the exit for an escrow whose opening was lost.
+   *
+   * Each call takes the DEPLOYED `launchpad` address and `chainId` — the
+   * extension pins neither. Passing `tx` (`nonce`/`maxFeePerGas`/
+   * `maxPriorityFeePerGas`/`gasLimit`, all RPC-sourced) returns a signed
+   * `rawTransaction` to broadcast; omitting it returns the unsigned request plus
+   * `unsignedReason`. Signing is the same secp256k1 leg as `dregg.evm` — the key
+   * whose address the seal binds.
+   */
+  launchpad: {
+    commit(params: {
+      launchpad: string; chainId: number; launchId: string | number;
+      /** wei per WHOLE token. */
+      price: string | number;
+      /** whole tokens demanded. */
+      qty: string | number;
+      /** Eligibility evidence for a gated launch (`ILaunchEligibility`). */
+      proof?: string;
+      tx?: { nonce: string | number; maxFeePerGas: string; maxPriorityFeePerGas: string; gasLimit: string | number };
+    }): Promise<{
+      phase: "commit"; launchId: string; launchpad: string; chainId: number; bidder: string;
+      seal: string; price: string; qty: string; deposit: string; openingStored: boolean;
+      tx: { to: string; from?: string; data: string; value: string; chainId: number };
+      signed: boolean; rawTransaction?: string; transactionHash?: string; from?: string; unsignedReason?: string;
+    }>;
+    reveal(params: {
+      launchpad: string; chainId: number; launchId: string | number;
+      tx?: { nonce: string | number; maxFeePerGas: string; maxPriorityFeePerGas: string; gasLimit: string | number };
+    }): Promise<{
+      phase: "reveal"; launchId: string; launchpad: string; chainId: number; bidder: string;
+      price: string; qty: string; salt: string; seal: string; bindsSeal: boolean;
+      tx: { to: string; from?: string; data: string; value: string; chainId: number };
+      signed: boolean; rawTransaction?: string; transactionHash?: string; from?: string; unsignedReason?: string;
+    }>;
+    status(params: { launchpad: string; chainId: number; launchId?: string | number }): Promise<Record<string, unknown>>;
+    reclaimTx(params: {
+      launchpad: string; chainId: number; launchId: string | number;
+      tx?: { nonce: string | number; maxFeePerGas: string; maxPriorityFeePerGas: string; gasLimit: string | number };
+    }): Promise<{
+      phase: "reclaim"; launchId: string; launchpad: string; chainId: number; bidder: string;
+      tx: { to: string; from?: string; data: string; value: string; chainId: number };
+      signed: boolean; rawTransaction?: string; transactionHash?: string; from?: string; unsignedReason?: string;
+    }>;
+  };
+  /**
    * DrEX routed THROUGH the installed extension (not the standalone wasm): signs
    * a dregg-native order-turn with the sealed key, and optionally attaches a REAL
    * Bulletproof solvency proof (`holdings ≥ offer`, bound to the order-turn id)
@@ -395,6 +462,21 @@ const dregg: DreggAPI = {
     },
     reveal(params: { auctionId: number }) {
       return sendMessage("dregg:sealedBidReveal", { ...params }) as Promise<{ phase: "reveal"; auctionId: number; bidder: string; order: Record<string, unknown>; salt: string; orderHash: string; commitment: string; bindsCommitment: boolean; signature: string; digest: string; escrow: { domain: Record<string, unknown>; primaryType: string; message: Record<string, unknown> } }>;
+    },
+  }),
+
+  launchpad: Object.freeze({
+    commit(params: Parameters<DreggAPI["launchpad"]["commit"]>[0]) {
+      return sendMessage("dregg:launchpadCommit", { ...params }) as ReturnType<DreggAPI["launchpad"]["commit"]>;
+    },
+    reveal(params: Parameters<DreggAPI["launchpad"]["reveal"]>[0]) {
+      return sendMessage("dregg:launchpadReveal", { ...params }) as ReturnType<DreggAPI["launchpad"]["reveal"]>;
+    },
+    status(params: Parameters<DreggAPI["launchpad"]["status"]>[0]) {
+      return sendMessage("dregg:launchpadStatus", { ...params }) as ReturnType<DreggAPI["launchpad"]["status"]>;
+    },
+    reclaimTx(params: Parameters<DreggAPI["launchpad"]["reclaimTx"]>[0]) {
+      return sendMessage("dregg:launchpadReclaimTx", { ...params }) as ReturnType<DreggAPI["launchpad"]["reclaimTx"]>;
     },
   }),
 
