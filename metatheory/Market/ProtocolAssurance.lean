@@ -187,7 +187,25 @@ balance effects lowered from `c.nodes`; thus the allocation, not merely its fina
 
 A faithful implementation can discharge this by adding a genuine clearing action whose descriptor
 carries the allocation, or by lifting the apex to the emitted effect list.  At HEAD a public input names
-one `FullActionA`, so this statement is named and not fabricated. -/
+one `FullActionA`, so this statement is named and not fabricated.
+
+TRIAGE (2026-07-15, `assurance-audit`): the fair allocation is NOT trusted — it is CIRCUIT-ENFORCED. The
+deployed `circuit-prove/src/shielded_ring_clearing_air.rs` binds each leg's cleared offer to a spent member
+note by an in-circuit `connect` (forged leg ⇒ UNSAT), enforces the matching descriptor, nullifier
+distinctness, and BOTH coordinate + range-checked INTEGER conservation; and `LedgerRealizationExt.
+shielded_ring_fused_clears` proves the `CycleValid`+`LegFused` ring that settles via `settleRing` is
+conserving + `RingBalanced`-fair + fused. So this residual is NOT a trust hole — it is exactly two named,
+concrete bridges:
+  (1) THE LOWERING — `settleRing k (settlementsOf c.nodes) = some k'` ⟹ `turnSpec ⟨k,…⟩ (clearingActions c)
+      ⟨k',…⟩`. Both are folds over the same `settlementsOf c.nodes`: `settleRing` (`Intent/Ring.lean:94`)
+      folds `recKExecAsset s l.toTurn l.asset`; `turnSpec` folds `fullActionStep`, whose `.balanceA` arm is
+      `BalanceMovementSpec`. So (1) reduces to the CONCRETE per-step lemma
+      `recKExecAsset s l.toTurn l.asset = some s' ⟹ BalanceMovementSpec ⟨s,…⟩ l.toTurn l.asset ⟨s',…⟩`
+      (the non-facet analog of `RotatedKernelRefinementFacet:131`, which does NOT yet exist — the concrete
+      first piece), plus induction on the settlement list and the `RecChainedState` wrapping (balance moves
+      touch only `.kernel`, so the non-kernel fields carry).
+  (2) THE APEX-LIFT — the single-effect dispatch must extract the whole `CycleValid`+`LegFused` ring, not
+      one `FullActionA` (the `shielded_ring_clearing_air` refinement into the Lean ring). -/
 def MarketEffectAllocationIdentity (marketEffect : EffectIdx) : Prop :=
   ∀ (pre post : RecChainedState), dispatchArm marketEffect pre post →
     ∃ c : DrexClearing,
