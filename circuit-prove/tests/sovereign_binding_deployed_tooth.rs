@@ -28,6 +28,9 @@
 //! Both poles are `#[ignore]` (real recursion, minutes). Run with:
 //!   cargo test -p dregg-circuit-prove --test sovereign_binding_deployed_tooth -- --ignored --nocapture
 
+mod binding_tooth;
+use binding_tooth::assert_refused_by_binding_node;
+
 use dregg_cell::{CellMode, Ledger};
 use dregg_circuit::descriptor_ir2::{
     EffectVmDescriptor2, MemBoundaryWitness, UMemBoundaryWitness, parse_vm_descriptor2,
@@ -40,7 +43,7 @@ use dregg_circuit::effect_vm::trace_rotated::{
 use dregg_circuit::effect_vm::{CellState, Effect};
 use dregg_circuit::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV;
 use dregg_circuit::field::BabyBear;
-use dregg_circuit::refusal::must_refuse;
+use dregg_circuit::refusal::{must_accept, must_refuse};
 use dregg_circuit_prove::carrier_pin_twin::splice_pi_values;
 use dregg_circuit_prove::ivc_turn_chain::{
     FinalizedTurn, SOVEREIGN_KEY_COMMIT_PI_LO, ir2_leaf_wrap_config, prove_turn_chain_recursive,
@@ -308,15 +311,24 @@ fn deployed_sovereign_turn_honest_accepts() {
 #[test]
 #[ignore = "SLOW: real deployed sovereign-binding recursion fold (~minutes); run with --ignored"]
 fn deployed_sovereign_turn_forged_key_commit_rejected() {
+    // ── S1 HONEST POLE FIRST, in THIS test. The forged chain below differs from this one by a
+    //    SINGLE FELT, so without an accept here the refusal proves nothing: an arm that refuses
+    //    every chain of this shape would satisfy the assertion below just as well.
+    must_accept("the HONEST sovereign KEY_COMMIT chain", || {
+        prove_turn_chain_recursive(&build_chain(owner_key_commit()))
+    });
+
     let mut forged = owner_key_commit();
     forged[0] += BabyBear::ONE;
     let turns = build_chain(forged);
 
-    must_refuse(
+    let err = must_refuse(
         "a FORGED sovereign key_commit (no leg teeth back it) folded into a verifying  deployed whole-chain artifact",
         || prove_turn_chain_recursive(&turns),
     );
+    assert_refused_by_binding_node(&err, "segmented sovereign-binding node failed");
     eprintln!(
-        "DEPLOYED sovereign binding: forged key_commit REJECTED by the deployed fold (no root)."
+        "DEPLOYED sovereign binding: forged key_commit REJECTED by the deployed fold's binding \
+         connect (WitnessConflict; honest pole accepted the same shape): {err:?}"
     );
 }

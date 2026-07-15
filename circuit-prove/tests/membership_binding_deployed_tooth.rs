@@ -28,19 +28,21 @@
 //! Both poles are `#[ignore]` (real recursion, minutes). Run with:
 //!   cargo test -p dregg-circuit-prove --test membership_binding_deployed_tooth -- --ignored --nocapture
 
+mod binding_tooth;
+use binding_tooth::assert_refused_by_binding_node;
+
 use dregg_cell::Ledger;
 use dregg_circuit::descriptor_ir2::{
-    EffectVmDescriptor2, MemBoundaryWitness, UMemBoundaryWitness, parse_vm_descriptor2,
-    prove_vm_descriptor2_for_config,
+    EffectVmDescriptor2, UMemBoundaryWitness, parse_vm_descriptor2, prove_vm_descriptor2_for_config,
 };
 use dregg_circuit::effect_vm::trace_rotated::{
-    RotatedBlockWitness, generate_rotated_transfer_shape_wide, transfer_caveat_manifest,
+    RotatedBlockWitness, generate_rotated_effect_vm_descriptor_and_trace_wide,
+    transfer_caveat_manifest,
 };
 use dregg_circuit::effect_vm::{CellState, Effect};
 use dregg_circuit::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV;
 use dregg_circuit::field::BabyBear;
-use dregg_circuit::refusal::must_refuse;
-use dregg_circuit_prove::carrier_pin_twin::splice_pi_values;
+use dregg_circuit::refusal::{must_accept, must_refuse};
 use dregg_circuit_prove::ivc_turn_chain::{
     FinalizedTurn, MEMBERSHIP_CLAIM_PI_LO, ir2_leaf_wrap_config, prove_turn_chain_recursive,
     verify_turn_chain_recursive,
@@ -119,7 +121,7 @@ fn deployed_wide_descriptor(wire: &str) -> EffectVmDescriptor2 {
 /// native row and asserts its geometry. (The exposure is the FOLD-edge admission leg only; the
 /// in-AIR compress/fields-read welds stay the named `MembershipAuthRootEdge` seams —
 /// `CarrierComposed` §5 HONEST SCOPE.)
-fn membership_twin() -> (EffectVmDescriptor2, usize, usize) {
+fn membership_twin() -> (EffectVmDescriptor2, usize) {
     let desc = deployed_wide_descriptor("transferVmDescriptor2R24");
     let insert_at = MEMBERSHIP_CLAIM_PI_LO;
     assert_eq!(
@@ -127,16 +129,12 @@ fn membership_twin() -> (EffectVmDescriptor2, usize, usize) {
         insert_at + 2 + 16,
         "the NATIVE transfer row carries the 2 membership claim PIs (50..51) ahead of the 16 anchors"
     );
-    // The two teeth columns ride at the FIXED membership host end (past the wide carriers); the gentian
-    // capacity-floor refuse (transfer is a bare cohort member) appends 48 aux cols PAST the teeth, so
-    // the teeth base is `trace_width − 48 − 2`, NOT `trace_width − 2`.
-    let refuse_w: usize = if desc.name.ends_with("-gentian-deployed-bare-refuse") {
-        48
-    } else {
-        0
-    };
-    let teeth_col = desc.trace_width - refuse_w - 2;
-    (desc, insert_at, teeth_col)
+    // NOTE: the teeth COLUMN is deliberately NOT recomputed here. It is a per-member quantity —
+    // the gentian refuse weld widens the deployed transfer row by `refuse_weld_widen(&desc)` = 45
+    // (`2·REFUSE_STRIDE + 3·MAX_CAVEATS + 1`), NOT by `CAPACITY_TAGS.len()·REFUSE_STRIDE` = 48;
+    // the last block's 3-column stride tail is never allocated. The wide dispatcher reads it off
+    // the descriptor's own committed gates and lays the teeth itself.
+    (desc, insert_at)
 }
 
 /// Mint the membership-edge wide `Transfer` leg (the rotated generator ticks the AFTER nonce: `before=(b,n)` →
@@ -178,43 +176,44 @@ fn mint_membership_leg(
         &Default::default(),
     );
 
-    let (mut trace, dpis) = generate_rotated_transfer_shape_wide(
-        &st,
-        &effects,
-        &bridge(&before_w),
-        &bridge(&after_w),
-        &transfer_caveat_manifest(),
-    )
-    .expect("deployed transfer wide trace generates");
-
-    let (twin, insert_at, teeth_col) = membership_twin();
-    // THE TEETH-COLUMN FILL RIDER: append the two teeth columns carrying the tuple (every row —
-    // the deployed edge holds them constant; the pin reads row 0).
-    for row in trace.iter_mut() {
-        debug_assert_eq!(row.len(), teeth_col);
-        row.push(tuple.sender_leaf);
-        row.push(tuple.authorized_root);
-        // Grow to the full welded width and fill the gentian refuse aux (floor=0 — a plain transfer
-        // declares no capacity), exactly as the deployed prove wrapper does.
-        if twin.trace_width > row.len() {
-            row.resize(twin.trace_width, BabyBear::ZERO);
-            dregg_circuit::effect_vm::bare_floor_refuse_weld::fill_refuse_aux(&twin, row);
-        }
-    }
-    let twin_dpis = splice_pi_values(
-        &dpis,
-        insert_at,
-        &[tuple.sender_leaf, tuple.authorized_root],
-    );
+    // Mint through the PRODUCTION WIDE DISPATCHER, never a hand-rolled twin. The deployed
+    // `transferVmDescriptor2R24` is the AVAILABILITY-HARDENED member
+    // (`dregg-effectvm-transfer-v1-avail-…`, pad 10): its 15-bit weld-witness limbs ride
+    // `[V1_WIDTH, V1_WIDTH + pad)` — wire 188 is `BEF0`, the low 15-bit limb of `before.bal_lo` —
+    // and every rotated appendix base shifts up by the pad. The dispatcher derives that pad from
+    // the descriptor name, lays the two teeth columns carrying the tuple at the member's OWN teeth
+    // column (every row — the deployed edge holds them constant; the pin reads row 0) and splices
+    // their claim PIs at `MEMBERSHIP_CLAIM_PI_LO`.
+    let (twin, trace, twin_dpis, map_heaps, mb) =
+        generate_rotated_effect_vm_descriptor_and_trace_wide(
+            &st,
+            &effects,
+            &bridge(&before_w),
+            &bridge(&after_w),
+            &transfer_caveat_manifest(),
+            None,
+            None,
+            None,
+            Some((tuple.sender_leaf, tuple.authorized_root)),
+        )
+        .expect("deployed transfer wide dispatch (avail-hardened, membership teeth)");
+    // The native row geometry the fold's membership arm reads (claim PIs 50..51 ahead of the 16
+    // anchors) — asserted on the DISPATCHER-resolved row, not a rebuilt twin.
+    let (_, insert_at) = membership_twin();
     assert_eq!(twin_dpis.len(), twin.public_input_count);
+    assert_eq!(
+        &twin_dpis[insert_at..insert_at + 2],
+        &[tuple.sender_leaf, tuple.authorized_root],
+        "the dispatcher publishes the membership teeth at the claim PIs"
+    );
 
     let config = ir2_leaf_wrap_config();
     let proof = prove_vm_descriptor2_for_config(
         &twin,
         &trace,
         &twin_dpis,
-        &MemBoundaryWitness::default(),
-        &[],
+        &mb,
+        &map_heaps,
         &UMemBoundaryWitness::default(),
         &config,
     )
@@ -282,16 +281,25 @@ fn deployed_membership_turn_honest_accepts() {
 #[test]
 #[ignore = "SLOW: real deployed membership-binding recursion fold (~minutes); run with --ignored"]
 fn deployed_membership_turn_forged_root_rejected() {
+    // ── S1 HONEST POLE FIRST, in THIS test. The forged chain below differs from this one by a
+    //    SINGLE FELT, so without an accept here the refusal proves nothing: an arm that refuses
+    //    every chain of this shape would satisfy the assertion below just as well.
+    must_accept(
+        "the HONEST membership (sender_leaf, authorized_root) chain",
+        || prove_turn_chain_recursive(&build_chain(honest_tuple())),
+    );
+
     let mut forged = honest_tuple();
     forged.authorized_root += BabyBear::ONE;
     let turns = build_chain(forged);
 
-    must_refuse(
+    let err = must_refuse(
         "a FORGED authorized_root (no leg teeth back it) folded into a verifying deployed  whole-chain artifact",
         || prove_turn_chain_recursive(&turns),
     );
+    assert_refused_by_binding_node(&err, "segmented membership-binding node failed");
     eprintln!(
-        "DEPLOYED membership binding: forged authorized_root REJECTED by the deployed fold \
-         (no root)."
+        "DEPLOYED membership binding: forged authorized_root REJECTED by the deployed fold's \
+         binding connect (WitnessConflict; honest pole accepted the same shape): {err:?}"
     );
 }

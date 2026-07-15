@@ -34,29 +34,30 @@
 //! deployed path. The folds are real recursion (minutes), so those poles are `#[ignore]`:
 //!   cargo test -p dregg-circuit-prove --test dsl_binding_deployed_tooth -- --ignored --nocapture
 
+mod binding_tooth;
+use binding_tooth::assert_refused_by_binding_node;
+
 use std::collections::HashMap;
 
 use dregg_cell::Ledger;
 use dregg_circuit::descriptor_ir2::{
-    EffectVmDescriptor2, MemBoundaryWitness, UMemBoundaryWitness, parse_vm_descriptor2,
-    prove_vm_descriptor2_for_config,
+    EffectVmDescriptor2, UMemBoundaryWitness, parse_vm_descriptor2, prove_vm_descriptor2_for_config,
 };
 use dregg_circuit::dsl::circuit::{
     CellProgram, CircuitDescriptor, ColumnDef, ColumnKind, ConstraintExpr, PolyTerm,
 };
 use dregg_circuit::effect_vm::trace_rotated::{
     DFA_RC_LEN, RotatedBlockWitness, RotatedCaveatManifest, dfa_route_commitment,
-    generate_rotated_transfer_shape_wide, transfer_caveat_manifest,
+    generate_rotated_effect_vm_descriptor_and_trace_wide, transfer_caveat_manifest,
 };
 use dregg_circuit::effect_vm::{CellState, Effect};
 use dregg_circuit::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV;
 use dregg_circuit::field::BabyBear;
-use dregg_circuit::refusal::must_refuse;
-use dregg_circuit_prove::carrier_pin_twin::splice_pi_values;
+use dregg_circuit::refusal::{must_accept, must_refuse};
 use dregg_circuit_prove::custom_proof_bind::custom_proof_pi_commitment;
 use dregg_circuit_prove::ivc_turn_chain::{
-    FinalizedTurn, MEMBERSHIP_CLAIM_PI_LO, dsl_rc_claim_pi_lo, ir2_leaf_wrap_config,
-    prove_turn_chain_recursive, verify_turn_chain_recursive,
+    FinalizedTurn, dsl_rc_claim_pi_lo, ir2_leaf_wrap_config, prove_turn_chain_recursive,
+    verify_turn_chain_recursive,
 };
 use dregg_circuit_prove::joint_turn_aggregation::{
     CarrierWitness, DescriptorParticipant, DslWitnessBundle, RotatedParticipantLeg,
@@ -262,37 +263,37 @@ fn mint_dfa_leg(
         &Default::default(),
     );
 
-    let (mut trace, dpis) = generate_rotated_transfer_shape_wide(
-        &st,
-        &effects,
-        &bridge(&before_w),
-        &bridge(&after_w),
-        caveat,
-    )
-    .expect("deployed transfer wide trace generates");
-
-    let twin = deployed_wide_descriptor("transferVmDescriptor2R24");
-    // The native row carries the membership teeth (columns trace_width-2.., PIs 50..51) past
-    // the rc; fill them with inert constants — this leg exercises the DSL lane only.
-    let teeth = [BabyBear::new(0x5E4D), BabyBear::new(0xA07)];
-    // The gentian capacity-floor refuse (transfer is a bare cohort member) appends 48 aux cols PAST the
-    // teeth, so the teeth base is `trace_width - 48 - 2`; grow + fill the refuse aux (floor=0) after.
-    let refuse_w: usize = if twin.name.ends_with("-gentian-deployed-bare-refuse") {
-        48
-    } else {
-        0
-    };
-    let teeth_col = twin.trace_width - refuse_w - 2;
-    for row in trace.iter_mut() {
-        debug_assert_eq!(row.len(), teeth_col);
-        row.push(teeth[0]);
-        row.push(teeth[1]);
-        if twin.trace_width > row.len() {
-            row.resize(twin.trace_width, BabyBear::ZERO);
-            dregg_circuit::effect_vm::bare_floor_refuse_weld::fill_refuse_aux(&twin, row);
-        }
-    }
-    let twin_dpis = splice_pi_values(&dpis, MEMBERSHIP_CLAIM_PI_LO, &teeth);
+    // Mint through the PRODUCTION WIDE DISPATCHER, never a hand-rolled twin. The deployed
+    // `transferVmDescriptor2R24` is the AVAILABILITY-HARDENED member
+    // (`dregg-effectvm-transfer-v1-avail-…`, pad 10): its 15-bit weld-witness limbs ride
+    // `[V1_WIDTH, V1_WIDTH + pad)` — wire 188 is `BEF0`, the low 15-bit limb of `before.bal_lo` —
+    // and EVERY rotated appendix base shifts up by the pad. The dispatcher derives that pad from
+    // the descriptor name (`avail_pad_for_descriptor_name`), resolves the committed row from
+    // `WIDE_REGISTRY_STAGED_TSV`, lays the membership teeth at the member's OWN teeth column, and
+    // splices their claim PIs. Rebuilding that geometry here is what broke this leg: the bare
+    // pad-0 producer laid a ~31-bit rotated-appendix felt at wire 188 and the descriptor's 15-bit
+    // range refused it in prover pre-flight ("range wire 188 value 1230416006 >= 2^15"), and the
+    // hand-rolled teeth column assumed a fixed 48-column refuse aux where the deployed transfer
+    // row widens by 45 (`refuse_weld_widen` is PER-MEMBER, read off the committed gates).
+    // The membership teeth are inert constants — this leg exercises the DSL lane only.
+    let teeth = (BabyBear::new(0x5E4D), BabyBear::new(0xA07));
+    let (twin, trace, twin_dpis, map_heaps, mb) =
+        generate_rotated_effect_vm_descriptor_and_trace_wide(
+            &st,
+            &effects,
+            &bridge(&before_w),
+            &bridge(&after_w),
+            caveat,
+            None,
+            None,
+            None,
+            Some(teeth),
+        )
+        .expect("deployed transfer wide dispatch (avail-hardened, teeth-carrying)");
+    assert_eq!(
+        twin.name,
+        "dregg-effectvm-transfer-v1-avail-rot24-v3-staged-gentian-deployed-bare-refuse"
+    );
     assert_eq!(twin_dpis.len(), twin.public_input_count);
 
     let config = ir2_leaf_wrap_config();
@@ -300,8 +301,8 @@ fn mint_dfa_leg(
         &twin,
         &trace,
         &twin_dpis,
-        &MemBoundaryWitness::default(),
-        &[],
+        &mb,
+        &map_heaps,
         &UMemBoundaryWitness::default(),
         &config,
     )
@@ -419,16 +420,28 @@ fn deployed_dfa_turn_honest_accepts() {
 #[ignore = "SLOW: real deployed dsl-binding recursion fold (~minutes); run with --ignored"]
 fn deployed_dfa_turn_forged_rc_rejected() {
     let real = dfa_route_commitment(&dfa_wire_pis());
+
+    // ── S1 HONEST POLE FIRST, in THIS test. The forged chain below differs from this one by a
+    //    SINGLE FELT, so without an accept here the refusal proves nothing: an arm that refuses
+    //    every chain of this shape would satisfy the assertion below just as well.
+    must_accept("the HONEST Dfa-gated route-commitment chain", || {
+        prove_turn_chain_recursive(&build_chain(real))
+    });
+
     let mut forged = real;
     forged[0] += BabyBear::ONE;
     assert_ne!(forged, real);
     let turns = build_chain(forged);
 
-    must_refuse(
+    let err = must_refuse(
         "a FORGED route-commitment (no verifying DSL sub-proof backs it) folded into a  verifying deployed whole-chain artifact",
         || prove_turn_chain_recursive(&turns),
     );
-    eprintln!("DEPLOYED dsl binding: forged route-commitment REJECTED by the deployed fold.");
+    assert_refused_by_binding_node(&err, "segmented dsl-binding node failed");
+    eprintln!(
+        "DEPLOYED dsl binding: forged route-commitment REJECTED by the deployed fold's binding \
+         connect (WitnessConflict; honest pole accepted the same shape): {err:?}"
+    );
 }
 
 /// THE ZERO-SENTINEL POLE — a Dsl witness attached to a NO-Dfa leg (published rc = the zero

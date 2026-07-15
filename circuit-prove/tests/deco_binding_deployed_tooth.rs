@@ -31,6 +31,9 @@
 //! Both slow poles are `#[ignore]` (real recursion, minutes). Run with:
 //!   cargo test -p dregg-circuit-prove --test deco_binding_deployed_tooth -- --ignored --nocapture
 
+mod binding_tooth;
+use binding_tooth::assert_refused_by_binding_node;
+
 use dregg_cell::Ledger;
 use dregg_circuit::descriptor_ir2::{
     EffectVmDescriptor2, MemBoundaryWitness, UMemBoundaryWitness, VmConstraint2,
@@ -39,14 +42,15 @@ use dregg_circuit::descriptor_ir2::{
 use dregg_circuit::dsl::deco_payment::{deco_payment_hash_felt, stripe_payment_facts_felts};
 use dregg_circuit::effect_vm::columns::{PARAM_BASE, param};
 use dregg_circuit::effect_vm::trace_rotated::{
-    ROT_PI_COUNT, RotatedBlockWitness, empty_caveat_manifest, generate_rotated_stripe_mint_wide,
-    generate_rotated_transfer_shape_wide, transfer_caveat_manifest,
+    ROT_PI_COUNT, RotatedBlockWitness, empty_caveat_manifest,
+    generate_rotated_effect_vm_descriptor_and_trace_wide, generate_rotated_stripe_mint_wide,
+    transfer_caveat_manifest,
 };
 use dregg_circuit::effect_vm::{CellState, Effect};
 use dregg_circuit::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV;
 use dregg_circuit::field::BabyBear;
 use dregg_circuit::lean_descriptor_air::{VmConstraint, VmRow};
-use dregg_circuit::refusal::must_refuse;
+use dregg_circuit::refusal::{must_accept, must_refuse};
 use dregg_circuit_prove::deco_leaf_adapter::DecoLeafWitness;
 use dregg_circuit_prove::ivc_turn_chain::{
     DECO_PAYMENT_HASH_PI, FinalizedTurn, ir2_leaf_wrap_config, prove_turn_chain_recursive,
@@ -234,56 +238,34 @@ fn mint_plain_transfer_leg(before_balance: i64, amount: u64, nonce: u64) -> Rota
         &Default::default(),
     );
 
-    let (trace, dpis) = generate_rotated_transfer_shape_wide(
+    // Mint through the PRODUCTION WIDE DISPATCHER, never a hand-rolled twin. The deployed
+    // `transferVmDescriptor2R24` is the AVAILABILITY-HARDENED member
+    // (`dregg-effectvm-transfer-v1-avail-…`, pad 10): its 15-bit weld-witness limbs ride
+    // `[V1_WIDTH, V1_WIDTH + pad)` — wire 188 is `BEF0`, the low 15-bit limb of `before.bal_lo` —
+    // and every rotated appendix base shifts up by the pad. The dispatcher derives that pad from
+    // the descriptor name, lays the membership teeth at the member's own teeth column and splices
+    // their claim PIs (50..51). An un-witnessed transfer publishes ZERO teeth.
+    let (desc, trace, dpis, map_heaps, mb) = generate_rotated_effect_vm_descriptor_and_trace_wide(
         &st,
         &effects,
         &bridge(&before_w),
         &bridge(&after_w),
         &transfer_caveat_manifest(),
+        None,
+        None,
+        None,
+        Some((BabyBear::ZERO, BabyBear::ZERO)),
     )
-    .expect("plain transfer wide trace generates");
-
-    let desc = deployed_wide_descriptor("transferVmDescriptor2R24");
-    // The committed transfer row carries the 2 membership claim PIs (50..51) the bare transfer
-    // producer does not fill; splice zero teeth exactly as the bridge/membership teeth do.
-    let (desc, dpis, trace) = if dpis.len() == desc.public_input_count {
-        (desc, dpis, trace)
-    } else {
-        let mut trace = trace;
-        // The gentian capacity-floor refuse (transfer is a bare cohort member) appends 48 aux cols
-        // PAST the teeth, widening the wide member by 48; derive the teeth base from the
-        // pre-refuse width (`trace_width - 48 - 2`), then grow + fill the refuse aux (floor=0).
-        let refuse_w: usize = if desc.name.ends_with("-gentian-deployed-bare-refuse") {
-            48
-        } else {
-            0
-        };
-        let teeth_col = desc.trace_width - refuse_w - 2;
-        for row in trace.iter_mut() {
-            debug_assert_eq!(row.len(), teeth_col);
-            row.push(BabyBear::ZERO);
-            row.push(BabyBear::ZERO);
-            if desc.trace_width > row.len() {
-                row.resize(desc.trace_width, BabyBear::ZERO);
-                dregg_circuit::effect_vm::bare_floor_refuse_weld::fill_refuse_aux(&desc, row);
-            }
-        }
-        let dpis = dregg_circuit_prove::carrier_pin_twin::splice_pi_values(
-            &dpis,
-            dregg_circuit_prove::ivc_turn_chain::MEMBERSHIP_CLAIM_PI_LO,
-            &[BabyBear::ZERO, BabyBear::ZERO],
-        );
-        assert_eq!(dpis.len(), desc.public_input_count);
-        (desc, dpis, trace)
-    };
+    .expect("plain transfer wide dispatch (avail-hardened, zero-teeth)");
+    assert_eq!(dpis.len(), desc.public_input_count);
 
     let config = ir2_leaf_wrap_config();
     let proof = prove_vm_descriptor2_for_config(
         &desc,
         &trace,
         &dpis,
-        &MemBoundaryWitness::default(),
-        &[],
+        &mb,
+        &map_heaps,
         &UMemBoundaryWitness::default(),
         &config,
     )
@@ -424,15 +406,28 @@ fn deployed_stripe_mint_honest_accepts() {
 #[ignore = "SLOW: real deployed DECO-binding recursion fold (~minutes); run with --ignored"]
 fn deployed_stripe_mint_forged_identity_rejected() {
     let w = stripe_witness(2500, "pi_deco_forged");
+
+    // ── S1 HONEST POLE FIRST, in THIS test. The forged chain below differs from this one by a
+    //    SINGLE FELT, so without an accept here the refusal proves nothing: an arm that refuses
+    //    every chain of this shape would satisfy the assertion below just as well.
+    must_accept("the HONEST Stripe money-in chain", || {
+        prove_turn_chain_recursive(&build_chain(
+            w.payment_hash(),
+            DecoWitnessBundle::from_leaf_witness(&w),
+        ))
+    });
+
     let bundle = DecoWitnessBundle::from_leaf_witness(&w);
     let forged_identity = w.payment_hash() + BabyBear::ONE;
     let turns = build_chain(forged_identity, bundle);
 
-    must_refuse(
+    let err = must_refuse(
         "a FORGED payment identity (no verifying DECO commitment backs it) folded into a  verifying deployed whole-chain artifact",
         || prove_turn_chain_recursive(&turns),
     );
+    assert_refused_by_binding_node(&err, "segmented deco payment-binding node failed");
     eprintln!(
-        "DEPLOYED DECO binding: forged payment identity REJECTED by the deployed fold (no root)."
+        "DEPLOYED DECO binding: forged payment identity REJECTED by the deployed fold's binding \
+         connect (WitnessConflict; honest pole accepted the same shape): {err:?}"
     );
 }

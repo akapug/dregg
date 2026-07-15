@@ -8572,3 +8572,68 @@ effect_vm_umem_real_turn (2), umem_rotation_flip_adversarial_gauntlet}` — besp
 mechanical converter deliberately refused to guess at. Reason-matching
 (`assert!(matches!(e, LeafError::BindingUnsat{..}))`) lands with MOVE 5's typed errors; the
 panic/Err split is done now, as the plan prescribes.
+
+## MOVE 3 (P1b) FINISH: the 8 deployed binding teeth ASSERT THE REASON — and 4 of them are RED
+
+The arm-the-teeth lane armed 8 `*_binding_deployed_tooth.rs` forged poles that were themselves the
+any-Err/any-panic anti-pattern the workstream exists to kill; `bc9e82153` converted them to
+`must_refuse` (panic ≠ refusal), which closed half. The other half — **which** `Err` — is closed now.
+
+All 8 forged poles now (a) re-assert the HONEST POLE first, in the same test (S1: the forged chain
+differs from the honest one by a single felt/bit, so without it a refusal proves nothing), and
+(b) assert the refusal through the shared `circuit-prove/tests/binding_tooth/mod.rs`:
+`TurnChainError::TurnProofInvalid { index: 0, reason }` where `reason` names BOTH the arm
+(`"segmented factory-binding node failed"` &c — pinning which carrier's node refused, not the
+claim-pin admission gate or the backing-leaf mint, which refuse BEFORE the node is built) AND
+`"WitnessConflict"` — the actual mechanism. `p3_circuit`'s `connect` is a union-find merge, not a
+constraint row: the ConnectDsu lowers a connect class onto ONE witness slot, so a forged claim
+surfaces as the second writer disagreeing (`circuit/src/tables/runner.rs:502`). That check is
+**unconditional** — unlike the p3 batch prover's unsat panics it survives `--release`, so
+`must_refuse` (not `must_refuse_or_unsat_panic`) is the correct discriminator at these 8 sites.
+
+VERIFIED MYSELF (`--ignored`, real folds): **custom / factory / hatchery / sovereign PASS.** The
+custom refusal is literally the forged felt meeting the genuine one —
+`WitnessConflict { existing: 29089738, new: 29089737 }`, the +1 the test forged. MUTATION-CANARIED
+by severing the real binding: `joint_turn_recursive.rs:668`'s connect → custom REDs
+`the forgery was ACCEPTED — this tooth is OPEN`; `factory_leaf_adapter.rs:386`'s connect → factory
+REDs the same. Both honest poles stayed green under the mutation, so the canary is specific. A
+stray `panic!("old path must authenticate against root8")` injected into the node path now REDs at
+the honest pole (`the HONEST witness PANICKED`) — under the pre-`bc9e82153` `catch_unwind` +
+`Err(_) => {}` idiom that same panic scored as a *correct refusal*.
+
+⚑ **RED AND NAMED, NOT FAKED: bridge / deco / dsl / membership cannot reach the refusal path.**
+All four die in their OWN pre-existing honest fixtures (untouched by this lane) at
+`debug_assert_eq!(row.len(), teeth_col)` → **2607 vs 2614**: the live transfer-family wide
+generator emits `WIDE_WIDTH` = 2607 columns while the committed `transferVmDescriptor2R24` row
+expects a 2614-column host (trace_width 2664 = 2614 + 48 gentian refuse + 2 teeth). A 7-column gap
+— the mid-big-bang C_SPAN/rot-site drift the factory tooth's own doc names. These 4 teeth are
+S1-shaped in source and will bite the moment the registry row and the generator agree again; they
+are NOT green today and this lane did not pretend otherwise. Rotting invisibly is exactly P1(d):
+`#[ignore]` + no `--ignored` lane = nobody noticed the fixture went stale. **The S2 lane that runs
+these 8 with `--ignored` on the gauntlet box is what would have caught it, and is still owed.**
+
+Also closed, same P2 "name outliving its referent" class the sweep missed:
+`circuit/src/effect_vm/trace_rotated.rs:5471` described the DELETED `verify_proof_bind` as a live
+"SDK-reachable" engine; `sdk/tests/wide_completeness_ledger.rs` CONTRADICTED ITSELF — :1171 claimed
+present-tense that the proof_bind gate "VERIFIES the external STARK sub-proof" and rejects forged
+ones, while :1245 in the same file records that engine dying with stark-kill. `grep -rn 'fn
+verify_proof_bind'` matches nothing; the cited test `custom_proof_bind_honest_verifies_forged_rejected`
+does not exist either. False claims DELETED (not softened), and the :1013 comment block carrying the
+same falsehood went with them. The proof_bind descriptor-pin test is now labelled the structural
+(P1a) canary it actually is, pointing at the fold where the real poles live.
+
+**REPORT — `circuit/tests/fri_params_soundness_budget.rs` is HONEST drift-detection, not a false
+floor.** It gates `capacity = num_queries × log_blowup + query_pow_bits ≥ 128` on both deployed
+configs (v1: 3/38/16, ir2: 6/19/16 → both capacity 130, Johnson 73) plus their (capacity, Johnson)
+parity. The 128 IS a margin on the arithmetic Kambiré refuted — but the file says so itself, in its
+header, at its const, and at the gate: it never claims 128 bits of security, and it names ~112.6
+(structure-specific) / 73 (Johnson) as the real posture. That is S8 working, not a floor hiding its
+resolution. Its non-vacuity gate is an S1 reference implementation (honest pole first; perturbs each
+of 3 knobs × 2 configs from the DEPLOYED values; requires the typed `BelowFloor` naming the right
+config AND number; treats a ParityBreak-instead-of-BelowFloor as a FAILURE — "the floor is blind to
+this knob"). Two real residuals, both already self-named at `:50-59`: (1) `IR2_FRI_MAX_LOG_ARITY`=3
+and `IR2_FRI_LOG_FINAL_POLY_LEN`=0 are gated by NOTHING, and the surviving ~112.6 bound is
+explicitly structure-specific — so the only numeric gate gates the refuted metric and nothing gates
+the structural params the real bound rests on; (2) `proven_bits` is computed and REPORTED but never
+floored — it is pinned only transitively, because capacity and Johnson happen to share the same 3
+knobs. Left at 128 and NOT weakened: retargeting to ~112 is an ember call.

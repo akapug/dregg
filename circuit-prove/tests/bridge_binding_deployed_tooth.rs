@@ -30,6 +30,9 @@
 //! Both slow poles are `#[ignore]` (real recursion, minutes). Run with:
 //!   cargo test -p dregg-circuit-prove --test bridge_binding_deployed_tooth -- --ignored --nocapture
 
+mod binding_tooth;
+use binding_tooth::assert_refused_by_binding_node;
+
 use dregg_cell::Ledger;
 use dregg_circuit::descriptor_ir2::{
     EffectVmDescriptor2, MemBoundaryWitness, UMemBoundaryWitness, VmConstraint2,
@@ -38,7 +41,7 @@ use dregg_circuit::descriptor_ir2::{
 use dregg_circuit::effect_vm::columns::{PARAM_BASE, param};
 use dregg_circuit::effect_vm::trace_rotated::{
     ROT_PI_COUNT, RotatedBlockWitness, empty_caveat_manifest, generate_rotated_bridge_mint_wide,
-    generate_rotated_transfer_shape_wide, transfer_caveat_manifest,
+    generate_rotated_effect_vm_descriptor_and_trace_wide, transfer_caveat_manifest,
 };
 use dregg_circuit::effect_vm::{CellState, Effect};
 use dregg_circuit::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV;
@@ -46,7 +49,7 @@ use dregg_circuit::field::BabyBear;
 use dregg_circuit::lean_descriptor_air::{VmConstraint, VmRow};
 use dregg_circuit::note_spending_air::{NoteSpendingWitness, test_spending_key};
 use dregg_circuit::poseidon2::hash_many;
-use dregg_circuit::refusal::must_refuse;
+use dregg_circuit::refusal::{must_accept, must_refuse};
 use dregg_circuit_prove::ivc_turn_chain::{
     BRIDGE_MINT_HASH_PI, FinalizedTurn, ir2_leaf_wrap_config, prove_turn_chain_recursive,
     verify_turn_chain_recursive,
@@ -252,56 +255,34 @@ fn mint_plain_transfer_leg(before_balance: i64, amount: u64, nonce: u64) -> Rota
         &Default::default(),
     );
 
-    let (trace, dpis) = generate_rotated_transfer_shape_wide(
+    // Mint through the PRODUCTION WIDE DISPATCHER, never a hand-rolled twin. The deployed
+    // `transferVmDescriptor2R24` is the AVAILABILITY-HARDENED member
+    // (`dregg-effectvm-transfer-v1-avail-…`, pad 10): its 15-bit weld-witness limbs ride
+    // `[V1_WIDTH, V1_WIDTH + pad)` — wire 188 is `BEF0`, the low 15-bit limb of `before.bal_lo` —
+    // and every rotated appendix base shifts up by the pad. The dispatcher derives that pad from
+    // the descriptor name, lays the membership teeth at the member's own teeth column and splices
+    // their claim PIs (50..51). An un-witnessed transfer publishes ZERO teeth.
+    let (desc, trace, dpis, map_heaps, mb) = generate_rotated_effect_vm_descriptor_and_trace_wide(
         &st,
         &effects,
         &bridge(&before_w),
         &bridge(&after_w),
         &transfer_caveat_manifest(),
+        None,
+        None,
+        None,
+        Some((BabyBear::ZERO, BabyBear::ZERO)),
     )
-    .expect("plain transfer wide trace generates");
-
-    let desc = deployed_wide_descriptor("transferVmDescriptor2R24");
-    // The committed transfer row carries the 2 membership claim PIs (50..51) the bare
-    // transfer producer does not fill — splice zeros is NOT the shape here; instead prove
-    // under the membership-teeth row exactly as the membership tooth does, with zero teeth.
-    let (desc, dpis, trace) = if dpis.len() == desc.public_input_count {
-        (desc, dpis, trace)
-    } else {
-        // NATIVE membership-teeth transfer row (68 PIs): append the two zero teeth columns +
-        // splice zero claim PIs at 50..51 (an un-witnessed transfer publishes zero teeth).
-        let mut trace = trace;
-        let refuse_w: usize = if desc.name.ends_with("-gentian-deployed-bare-refuse") {
-            48
-        } else {
-            0
-        };
-        let teeth_col = desc.trace_width - refuse_w - 2;
-        for row in trace.iter_mut() {
-            debug_assert_eq!(row.len(), teeth_col);
-            row.push(BabyBear::ZERO);
-            row.push(BabyBear::ZERO);
-            if desc.trace_width > row.len() {
-                row.resize(desc.trace_width, BabyBear::ZERO);
-                dregg_circuit::effect_vm::bare_floor_refuse_weld::fill_refuse_aux(&desc, row);
-            }
-        }
-        let dpis = dregg_circuit_prove::carrier_pin_twin::splice_pi_values(
-            &dpis,
-            dregg_circuit_prove::ivc_turn_chain::MEMBERSHIP_CLAIM_PI_LO,
-            &[BabyBear::ZERO, BabyBear::ZERO],
-        );
-        assert_eq!(dpis.len(), desc.public_input_count);
-        (desc, dpis, trace)
-    };
+    .expect("plain transfer wide dispatch (avail-hardened, zero-teeth)");
+    assert_eq!(dpis.len(), desc.public_input_count);
 
     let config = ir2_leaf_wrap_config();
     let proof = prove_vm_descriptor2_for_config(
         &desc,
         &trace,
         &dpis,
-        &MemBoundaryWitness::default(),
-        &[],
+        &mb,
+        &map_heaps,
         &UMemBoundaryWitness::default(),
         &config,
     )
@@ -440,15 +421,27 @@ fn deployed_bridge_mint_honest_accepts() {
 #[ignore = "SLOW: real deployed bridge-binding recursion fold (~minutes); run with --ignored"]
 fn deployed_bridge_mint_forged_identity_rejected() {
     let w = make_note_spend_witness(0x10);
+
+    // ── S1 HONEST POLE FIRST, in THIS test. The forged chain below differs from this one by a
+    //    SINGLE FELT, so without an accept here the refusal proves nothing: an arm that refuses
+    //    every chain of this shape would satisfy the assertion below just as well.
+    let honest_bundle = BridgeWitnessBundle::from_note_spend_witness(&w);
+    let honest_identity = honest_bundle.public_inputs[NOTE_SPEND_MINT_HASH_PI];
+    must_accept("the HONEST bridge-mint chain", || {
+        prove_turn_chain_recursive(&build_chain(honest_identity, honest_bundle))
+    });
+
     let bundle = BridgeWitnessBundle::from_note_spend_witness(&w);
     let forged_identity = bundle.public_inputs[NOTE_SPEND_MINT_HASH_PI] + BabyBear::ONE;
     let turns = build_chain(forged_identity, bundle);
 
-    must_refuse(
+    let err = must_refuse(
         "a FORGED mint identity (no verifying note-spend backs it) folded into a verifying  deployed whole-chain artifact",
         || prove_turn_chain_recursive(&turns),
     );
+    assert_refused_by_binding_node(&err, "segmented bridge mint-hash binding node failed");
     eprintln!(
-        "DEPLOYED bridge binding: forged mint identity REJECTED by the deployed fold (no root)."
+        "DEPLOYED bridge binding: forged mint identity REJECTED by the deployed fold's binding \
+         connect (WitnessConflict; honest pole accepted the same shape): {err:?}"
     );
 }

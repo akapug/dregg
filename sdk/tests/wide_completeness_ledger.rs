@@ -1010,17 +1010,18 @@ const CAP_OPEN_ROUTE_EFFECTS: &[&str] =
 // transfer-shape producer (816-wide) was UNSAT vs the 789-wide descriptor — that liveness gap is
 // closed.
 //
-// SOUNDNESS (closed earlier, verified end-to-end here): the `proof_bind` gate genuinely VERIFIES the
-// external sub-proof via the deployed, SDK-reachable `dregg_circuit_prove::custom_proof_bind`: resolve the
-// program by the bound 8-felt VK, VERIFY the external STARK under its AIR (the recursion), and require
-// the sub-proof's PI commitment to equal the bound `commit` column. A FORGED sub-proof (non-verifying
-// STARK / mismatched commitment / unknown VK) is REJECTED. The in-AIR `proof_bind` op is a
-// bounds/declaration check (`descriptor_ir2.rs:1270`); the program-correctness recursion is the
-// external engine, threaded onto the wire via `Turn::with_custom_program_proofs` (the
-// `custom_program_proofs` field, bound into `Turn::hash`). The 789-wide custom row carries the bound
-// proof's `(vk, commit)` in cols 68 / 72 — so the wide receipt + the light-client `verify_proof_bind`
-// bind the SAME verifying sub-proof. See `custom_proves_on_deployed_wide_path` (the end-to-end
-// prove-through + sub-proof verify, both poles).
+// SOUNDNESS: the in-AIR `proof_bind` op is a bounds/declaration check (`descriptor_ir2.rs:1270`) —
+// it binds the columns, it does not verify a sub-proof. The off-AIR engine that verified one
+// (`custom_proof_bind::verify_proof_bind`) died with stark-kill; there is no SDK-reachable
+// light-client `verify_proof_bind`. What binds a claimed commitment to a VERIFYING sub-proof for a
+// pure light client is the deployed recursion fold's in-circuit `connect`
+// (`prove_custom_binding_node_segmented`, wired in `prove_chain_core_rotated`): a forged commitment
+// no sub-proof backs is UNSAT ⇒ no root. The sub-proof is threaded onto the wire via
+// `Turn::with_custom_program_proofs` (the `custom_program_proofs` field, bound into `Turn::hash`),
+// and the 789-wide custom row carries the bound proof's `(vk, commit)` in cols 68 / 72 — the lanes
+// the fold connects. The forged/honest poles live in
+// `circuit-prove/tests/custom_binding_deployed_tooth.rs` + `custom_binding_production_path.rs`.
+// What this file covers is the WIDE-RECEIPT pole: see `custom_proves_on_deployed_wide_path`.
 
 /// **THE PROVABILITY SCOREBOARD (the living completeness measure).** Drive EVERY `VmEffect` cohort
 /// lead through the DEPLOYED wide path (`prove_effect_vm_rotated_wide`) and report PROVABLE/UNPROVABLE
@@ -1156,23 +1157,24 @@ fn provability_scoreboard_deployed_wide_path() {
     );
 }
 
-/// **THE custom proof_bind DESCRIPTOR PIN (the columns the genuine engine binds).**
+/// **THE custom proof_bind DESCRIPTOR PIN (the columns the fold binds).**
 /// `custom` is the effect whose receipt rides an EXTERNAL program sub-proof, bound via the
-/// descriptor's `proof_bind` op. The genuine engine that VERIFIES that sub-proof (not a bounds
-/// check) is `dregg_circuit_prove::custom_proof_bind` — exercised end-to-end in
-/// `custom_proof_bind_honest_verifies_forged_rejected` below. This test pins the descriptor columns
-/// that engine binds, so a regression dropping the `proof_bind` op or its column binding FAILS here:
+/// descriptor's `proof_bind` op. This test pins the descriptor columns that binding rides, so a
+/// regression dropping the `proof_bind` op or its column binding FAILS here:
 ///   * the deployed `customVmDescriptor2R24` carries EXACTLY ONE `proof_bind` IR constraint;
 ///   * it is GUARDED on the Custom selector (`sel::CUSTOM` = var 8) — so it fires only on a custom row;
 ///   * it binds the `custom_proof_commitment` column (var 72) and the `custom_program_vk_hash` column
 ///     (var 68) — the two columns the recursion verifier pins to the verifying sub-proof's PI
 ///     commitment + program VK.
 ///
-/// The proof_bind GATE now MEANS "the bound proof verified": `custom_proof_bind::verify_proof_bind`
-/// resolves the program by the bound VK, VERIFIES the external STARK sub-proof under its AIR, and
-/// requires the sub-proof's PI commitment to equal the bound `commit` column. A custom effect with a
-/// FORGED sub-proof (non-verifying STARK / mismatched commitment / unknown VK) is REJECTED — the
-/// bounds-check-only era is closed (see the genuine test below).
+/// What this test does NOT show: that the bound proof VERIFIED. The in-AIR `proof_bind` op is a
+/// declaration — it binds the two columns and does not check a sub-proof. The off-AIR engine that
+/// once did (`custom_proof_bind::verify_proof_bind`) died with stark-kill and no longer exists.
+/// What REJECTS a custom effect carrying a forged sub-proof is the deployed recursion fold's
+/// in-circuit `connect` (`prove_custom_binding_node_segmented`); its poles live in
+/// `circuit-prove/tests/custom_binding_deployed_tooth.rs` +
+/// `custom_binding_production_path.rs`, NOT in this file. This test is a descriptor-shape pin
+/// only — a structural canary (P1a), and it is labelled as one.
 #[test]
 fn custom_descriptor_carries_proof_bind_residual_named() {
     use dregg_circuit::descriptor_ir2::VmConstraint2;

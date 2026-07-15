@@ -30,6 +30,9 @@
 //! The fold is a real recursion (minutes), so both poles are `#[ignore]`. Run with:
 //!   cargo test -p dregg-circuit-prove --test factory_binding_deployed_tooth -- --ignored --nocapture
 
+mod binding_tooth;
+use binding_tooth::assert_refused_by_binding_node;
+
 use dregg_cell::Ledger;
 use dregg_cell::commitment::RotationCarrierMaterial;
 use dregg_circuit::descriptor_ir2::{
@@ -46,7 +49,7 @@ use dregg_circuit::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV;
 use dregg_circuit::field::BabyBear;
 use dregg_circuit::heap_root::HeapLeaf;
 use dregg_circuit::lean_descriptor_air::VmRow;
-use dregg_circuit::refusal::must_refuse;
+use dregg_circuit::refusal::{must_accept, must_refuse};
 use dregg_circuit_prove::carrier_pin_twin::{
     TailClaimPin, insert_tail_claim_pins, splice_pi_values,
 };
@@ -336,15 +339,26 @@ fn deployed_factory_turn_honest_accepts() {
 #[test]
 #[ignore = "SLOW: real deployed factory-binding recursion fold (~minutes); run with --ignored"]
 fn deployed_factory_turn_forged_child_vk_rejected() {
+    // ── S1 HONEST POLE FIRST, in THIS test. The forged chain below differs from this one by a
+    //    SINGLE BIT of the child_vk, so without an accept here the refusal proves nothing: an arm
+    //    that refuses every chain of this shape would satisfy the assertion below just as well.
+    must_accept("the HONEST factory child_vk chain", || {
+        prove_turn_chain_recursive(&build_chain(backing_bundle(&[0x9Au8; 32])))
+    });
+
     let mut forged_vk = [0x9Au8; 32];
     forged_vk[0] ^= 0x01;
     let turns = build_chain(backing_bundle(&forged_vk));
 
-    must_refuse(
+    let err = must_refuse(
         "a FORGED child_vk (no committed octet backs it) folded into a verifying deployed  whole-chain artifact",
         || prove_turn_chain_recursive(&turns),
     );
-    eprintln!("DEPLOYED factory binding: forged child_vk REJECTED by the deployed fold (no root).");
+    assert_refused_by_binding_node(&err, "segmented factory-binding node failed");
+    eprintln!(
+        "DEPLOYED factory binding: forged child_vk REJECTED by the deployed fold's binding \
+         connect (WitnessConflict; honest pole accepted the same shape): {err:?}"
+    );
 }
 
 /// FAIL-CLOSED (fast) — a factory witness attached to a leg whose descriptor does NOT carry the

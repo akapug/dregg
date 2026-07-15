@@ -26,6 +26,9 @@
 //! DEPLOYED path. The fold is a real recursion (minutes), so both poles are `#[ignore]`. Run with:
 //!   cargo test -p dregg-circuit-prove --test custom_binding_deployed_tooth -- --ignored --nocapture
 
+mod binding_tooth;
+use binding_tooth::assert_refused_by_binding_node;
+
 use std::collections::HashMap;
 
 use dregg_cell::Ledger;
@@ -40,7 +43,7 @@ use dregg_circuit::effect_vm::trace_rotated::{
 };
 use dregg_circuit::effect_vm::{CellState, Effect};
 use dregg_circuit::field::{BABYBEAR_P, BabyBear};
-use dregg_circuit::refusal::must_refuse;
+use dregg_circuit::refusal::{must_accept, must_refuse};
 use dregg_circuit_prove::custom_proof_bind::custom_proof_pi_commitment;
 use dregg_circuit_prove::ivc_turn_chain::{
     FinalizedTurn, ir2_leaf_wrap_config, prove_turn_chain_recursive, verify_turn_chain_recursive,
@@ -328,6 +331,15 @@ fn deployed_custom_turn_honest_accepts() {
 #[ignore = "SLOW: real deployed custom-binding recursion fold (~minutes); run with --ignored"]
 fn deployed_custom_turn_forged_rejected() {
     let real = custom_proof_pi_commitment(&custom_pis());
+
+    // ── S1 HONEST POLE FIRST, in THIS test. The forged chain below differs from this one by a
+    //    SINGLE FELT, so without an accept here the refusal proves nothing: an arm that refuses
+    //    every chain of this shape (a drifted descriptor, a mis-shaped bundle) would satisfy the
+    //    assertion below exactly as well as a working binding does.
+    must_accept("the HONEST custom-commitment chain", || {
+        prove_turn_chain_recursive(&build_chain(real))
+    });
+
     // A claim NO verifying sub-proof of `custom_pis()` backs (lane 0 perturbed by +1 mod p). The
     // bundle attached in `build_chain` still proves the HONEST PIs, so the genuine in-circuit
     // commitment is `real` ≠ `forged` — the binding `connect` conflicts.
@@ -335,13 +347,13 @@ fn deployed_custom_turn_forged_rejected() {
     forged[0] = BabyBear::new((real[0].0 + 1) % BABYBEAR_P);
     assert_ne!(forged, real);
 
-    let turns = build_chain(forged);
-
-    must_refuse(
+    let err = must_refuse(
         "a FORGED custom_proof_commitment folded into a verifying deployed whole-chain artifact",
-        || prove_turn_chain_recursive(&turns),
+        || prove_turn_chain_recursive(&build_chain(forged)),
     );
+    assert_refused_by_binding_node(&err, "segmented custom-binding node failed");
     eprintln!(
-        "DEPLOYED custom binding: forged custom commitment REJECTED by the deployed fold (no root)."
+        "DEPLOYED custom binding: forged custom commitment REJECTED by the deployed fold's \
+         binding connect (WitnessConflict; honest pole accepted the same shape): {err:?}"
     );
 }

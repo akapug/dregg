@@ -23,6 +23,9 @@
 //! Both poles are `#[ignore]` (real recursion, minutes). Run with:
 //!   cargo test -p dregg-circuit-prove --test hatchery_binding_deployed_tooth -- --ignored --nocapture
 
+mod binding_tooth;
+use binding_tooth::assert_refused_by_binding_node;
+
 use dregg_cell::Ledger;
 use dregg_cell::commitment::RotationCarrierMaterial;
 use dregg_circuit::descriptor_ir2::{
@@ -39,7 +42,7 @@ use dregg_circuit::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV;
 use dregg_circuit::field::BabyBear;
 use dregg_circuit::heap_root::HeapLeaf;
 use dregg_circuit::lean_descriptor_air::VmRow;
-use dregg_circuit::refusal::must_refuse;
+use dregg_circuit::refusal::{must_accept, must_refuse};
 use dregg_circuit_prove::carrier_pin_twin::{
     TailClaimPin, insert_tail_claim_pins, splice_pi_values,
 };
@@ -318,15 +321,24 @@ fn deployed_hatchery_turn_honest_accepts() {
 #[test]
 #[ignore = "SLOW: real deployed hatchery-binding recursion fold (~minutes); run with --ignored"]
 fn deployed_hatchery_turn_forged_contract_hash_rejected() {
+    // ── S1 HONEST POLE FIRST, in THIS test. The forged chain below differs from this one by a
+    //    SINGLE BIT of the contract_hash, so without an accept here the refusal proves nothing: an
+    //    arm that refuses every chain of this shape would satisfy the assertion below just as well.
+    must_accept("the HONEST hatchery contract_hash chain", || {
+        prove_turn_chain_recursive(&build_chain(attestation_bundle(&[0xC7u8; 32])))
+    });
+
     let mut forged = [0xC7u8; 32];
     forged[0] ^= 0x01;
     let turns = build_chain(attestation_bundle(&forged));
 
-    must_refuse(
+    let err = must_refuse(
         "a FORGED contract_hash (no committed octet backs it) folded into a verifying  deployed whole-chain artifact",
         || prove_turn_chain_recursive(&turns),
     );
+    assert_refused_by_binding_node(&err, "segmented hatchery-binding node failed");
     eprintln!(
-        "DEPLOYED hatchery binding: forged contract_hash REJECTED by the deployed fold (no root)."
+        "DEPLOYED hatchery binding: forged contract_hash REJECTED by the deployed fold's binding \
+         connect (WitnessConflict; honest pole accepted the same shape): {err:?}"
     );
 }
