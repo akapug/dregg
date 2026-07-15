@@ -1,4 +1,4 @@
-//! The 2-leg shielded RING-CLEARING AIR — the circuit realization of DrEX rung-3
+//! The 2-leg shielded RING-CLEARING AIR — the note-level algebra realization of DrEX rung-3
 //! (`Market/ShieldedClearing.lean::shielded_ring_clears`, fused by
 //! `Market/LedgerRealizationExt.lean::shielded_ring_fused_clears`), at the smallest
 //! tractable size (`demoShieldedRing` / `fusedRing` scale, 2 legs, 1 pair).
@@ -103,6 +103,15 @@
 //!     generalization (a variable-length cycle, the `offer_amount ≥ want_min`
 //!     partial-fill inequality via an in-AIR range gadget) and the launchpad/DEX
 //!     integration (§3.3/§3.12/§3.13) are the next rungs, named not built.
+//!   * **ENDPOINT BOUNDARY (load-bearing):** this leaf is not yet a kernel-transition
+//!     descriptor. Its public output is exactly the six note-claim lanes above; it does
+//!     not carry the two creators, the eight-lane pre/post kernel commitments, turn count,
+//!     authorization/lifecycle state, or the receipt-chain update. Consequently it proves
+//!     the fused two-leg note algebra but cannot by itself instantiate
+//!     `Market/ProtocolAssurance.lean::ShieldedRingDescriptorRefines`. Closing that seam
+//!     requires a Lean-authored endpoint-carrying descriptor (architectural law #1) which
+//!     links these rows to the ordinary balance-action execution and publishes the same
+//!     pre/post commitment surface consumed by the batch verifier.
 
 use dregg_circuit::descriptor_ir2::{
     CHIP_OUT_LANES, CHIP_RATE, CHIP_TUPLE_LEN, EffectVmDescriptor2, LookupSpec, MemBoundaryWitness,
@@ -277,7 +286,9 @@ fn fact_site_always(output_col: usize, input_cols: &[usize], lane_base: usize) -
 /// Build the 2-leg ring-clearing descriptor AIR (`shielded-ring-clear-2`). Its 6 PIs
 /// are `[nf₀, root₀, vb₀, nf₁, root₁, vb₁]` (nullifier + merkle_root pass through to
 /// the apex `connect`; value_binding is RE-COMPUTED in-AIR by the fact chip so the
-/// fused `value[i]` is bound to the note the spend leaf published).
+/// fused `value[i]` is bound to the note the spend leaf published). These six lanes
+/// intentionally contain no kernel pre/post endpoint; callers must not treat this
+/// note-algebra descriptor as a settlement-transition descriptor.
 pub fn shielded_ring_clear_descriptor() -> EffectVmDescriptor2 {
     let mut constraints: Vec<VmConstraint2> = Vec::new();
     let mut width = PRE_LANE_WIDTH;
@@ -715,7 +726,7 @@ fn bind_leg_node(
     })
 }
 
-/// **THE 2-LEG SHIELDED RING-CLEARING APEX.** Fold the ring-clearing leaf
+/// **THE 2-LEG SHIELDED RING-CLEARING NOTE APEX.** Fold the ring-clearing leaf
 /// ([`prove_shielded_ring_clear_leaf`]) with the two shielded-spend leaves
 /// ([`crate::shielded_spend_leaf_adapter::prove_shielded_spend_leaf_with_claim`]),
 /// binding each leg's exposed 3-slot claim to its spend leaf in-circuit. The apex
@@ -723,6 +734,11 @@ fn bind_leg_node(
 /// conservation constraints ride the ring-clearing leaf; the membership + fresh
 /// nullifier ride each spend leaf; the `connect`s weld them), and RE-EXPOSES the
 /// cleared ring's committed claim `[nf₀,root₀,vb₀,nf₁,root₁,vb₁]`.
+///
+/// This apex binds the hidden-note facts; it does not expose or authenticate the
+/// kernel pre/post endpoints or the balance-action chain. That is a separate outer
+/// descriptor obligation, named `ShieldedRingDescriptorRefines` in the Lean assurance
+/// seam.
 ///
 /// A leg claiming a `[nullifier, merkle_root, value_binding]` that no verifying
 /// shielded spend backs (a non-member note, a re-used nullifier, a value-binding

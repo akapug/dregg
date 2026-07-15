@@ -19,12 +19,16 @@ honest observable scope:
 * `MpcCrossingDenotation`: the MPC secure-min plus oblivious strict argmax reveals the same encoded
   Lean clearing.
 
-Two scope boundaries remain explicit.  First, Lean quantities are unbounded integers while both Rust
+Three scope boundaries remain explicit.  First, Lean quantities are unbounded integers while both Rust
 aggregate paths use `u32`; correspondence to the unbounded Lean clearing therefore assumes
 `AggregatesFitU32`.  Per-order `Qty = u16` alone does not imply that aggregate bound.  Second, this file
 proves the decrypted/plaintext observable semantics, not correctness of tfhe-rs ciphertext evaluation.
-`FhEggTfheCiphertextRefinementResidual` names the exact missing implementation relation.  No theorem
-below claims that relation.
+The opaque former residual has been reduced by `fhEggTfheCiphertextRefinement_reduced` to the atomic
+tfhe-rs `encrypt/sum/ge/gt/select` correctness laws and direct source correspondence to the modeled
+program; those two implementation facts remain named by `FhEggTfheCiphertextRefinementResidual`.
+Third, the Rust unary encoder must preserve a limit outside the configured bucket domain.  The former
+ask-side `min(k-1)` clamp violated individual rationality; the fixed encoder contributes such an ask to
+no represented bucket, with a Rust regression test and the executable pole below.
 
 `fhe_clear` itself is the single-`ClientKey` benchmark harness.  A holder of that key is omniscient if
 given intermediate ciphertexts; it is not the no-viewer deployment.  The no-viewer claim here is scoped
@@ -149,6 +153,16 @@ def noClearTfheBook : OrderBook :=
 theorem noClearEncodingDenotation :
     leanClearingOutput noClearTfheBook 2 = rustReferenceOutput noClearTfheBook 2 := by decide
 
+/-- An ask above the represented domain is not silently moved down into the final bucket. -/
+def outOfDomainAskBook : OrderBook :=
+  [⟨Side.bid, 9, 2⟩, ⟨Side.ask, 9, 7⟩]
+
+#guard supply outOfDomainAskBook 2 == 0
+#guard rustReferenceOutput outOfDomainAskBook 3 == (⟨none, 0⟩ : ClearingOutput)
+
+theorem outOfDomainAskDoesNotClear :
+    leanClearingOutput outOfDomainAskBook 3 = rustReferenceOutput outOfDomainAskBook 3 := by decide
+
 /-! ## 2. The widened `FheUint32` observable semantics. -/
 
 /-- Every individual order is representable by Rust's public `Qty = u16`. -/
@@ -247,17 +261,298 @@ theorem FhEggTfheNoCrossDenotation :
     rcases ho with rfl | rfl <;> decide
   · decide
 
-/-! ### Honest TFHE boundary. -/
+/-! ### Honest TFHE boundary — the whole program reduced to primitive laws.
 
-/-- An abstract hook for the real encrypted implementation.  Instantiating `Key`, `CipherOutput`,
-`eval`, and `decrypt` with tfhe-rs and proving this predicate is the remaining ciphertext-level task;
-the plaintext theorem `FhEggTfheProgramDenotation` is not that proof. -/
-def FhEggTfheCiphertextRefinementResidual
-    (Key CipherOutput : Type*)
-    (eval : Key → OrderBook → Nat → CipherOutput)
-    (decrypt : Key → CipherOutput → ClearingOutput) : Prop :=
-  ∀ (key : Key) (bk : OrderBook) (k : Nat), 0 < k → k < 4294967296 → OrdersFitU16 bk →
-    decrypt key (eval key bk k) = fheOutput bk k
+The former residual quantified over an opaque `eval` and simply restated the desired final equality.
+That named the boundary but did not expose what tfhe-rs must prove.  The model below follows the actual
+`fhe_clear` dataflow: encrypt unary per-order bucket increments as `FheUint32`, tree-sum each demand and
+supply column, compute encrypted `min` with `ge/select`, and scan with encrypted strict `gt/select` so
+the lowest price wins ties.  Its theorem reduces the whole ciphertext program to the ordinary
+correctness laws of exactly those five tfhe-rs operations plus a source-to-model correspondence for
+the Rust routine. -/
+
+/-- The precise tfhe-rs surface exercised by `fhe_clear`.  The server-key dependency is represented by
+`Key`; encryption and final decryption use the same key parameter in the correctness relation. -/
+structure TfheU32Ops (Key Cipher BoolCipher : Type*) where
+  encrypt : Key → Int → Cipher
+  sum : Key → List Cipher → Cipher
+  ge : Key → Cipher → Cipher → BoolCipher
+  gt : Key → Cipher → Cipher → BoolCipher
+  select : Key → BoolCipher → Cipher → Cipher → Cipher
+  decrypt : Key → Cipher → Int
+  decryptBool : Key → BoolCipher → Bool
+
+/-- The atomic value-semantics obligations for the tfhe-rs operations used by the program.  All
+arithmetic is explicitly modulo `2^32`; comparison and selection operate on those canonical u32
+plaintexts.  Proving these laws for tfhe-rs is a library/API refinement task, not a plaintext
+observable theorem. -/
+structure TfheU32PrimitiveLaws {Key Cipher BoolCipher : Type*}
+    (ops : TfheU32Ops Key Cipher BoolCipher) : Prop where
+  encrypt_correct : ∀ key x,
+    ops.decrypt key (ops.encrypt key x) = u32Residue x
+  sum_correct : ∀ key xs,
+    ops.decrypt key (ops.sum key xs) =
+      u32Residue ((xs.map (ops.decrypt key)).sum)
+  ge_correct : ∀ key x y,
+    ops.decryptBool key (ops.ge key x y) = decide (ops.decrypt key y ≤ ops.decrypt key x)
+  gt_correct : ∀ key x y,
+    ops.decryptBool key (ops.gt key x y) = decide (ops.decrypt key y < ops.decrypt key x)
+  select_correct : ∀ key b x y,
+    ops.decrypt key (ops.select key b x y) =
+      if ops.decryptBool key b then ops.decrypt key x else ops.decrypt key y
+
+/-- The plaintext unary demand column which the Rust encoder encrypts for bucket `p`.  Filtering out
+asks matches the deployed `bid_cts` split exactly. -/
+def tfheDemandTerms : OrderBook → Nat → List Int
+  | [], _ => []
+  | o :: bk, p =>
+      if o.side = Side.bid then
+        (if p ≤ o.limit then o.qty else 0) :: tfheDemandTerms bk p
+      else tfheDemandTerms bk p
+
+/-- The plaintext unary supply column which the fixed Rust encoder encrypts for bucket `p`.
+Out-of-domain asks no longer clamp into the last bucket; for every actually scanned `p < k`, the term
+is exactly `o.limit ≤ p`, as in `supplyIncr`. -/
+def tfheSupplyTerms : OrderBook → Nat → List Int
+  | [], _ => []
+  | o :: bk, p =>
+      if o.side = Side.ask then
+        (if o.limit ≤ p then o.qty else 0) :: tfheSupplyTerms bk p
+      else tfheSupplyTerms bk p
+
+theorem tfheDemandTerms_sum (bk : OrderBook) (p : Nat) :
+    (tfheDemandTerms bk p).sum = demand bk p := by
+  induction bk with
+  | nil => rfl
+  | cons o bk ih =>
+      cases hside : o.side with
+      | bid => simp [tfheDemandTerms, demand, demandIncr, hside, ih]
+      | ask => simp [tfheDemandTerms, demand, demandIncr, hside, ih]
+
+theorem tfheSupplyTerms_sum (bk : OrderBook) (p : Nat) :
+    (tfheSupplyTerms bk p).sum = supply bk p := by
+  induction bk with
+  | nil => rfl
+  | cons o bk ih =>
+      cases hside : o.side with
+      | bid => simp [tfheSupplyTerms, supply, supplyIncr, hside, ih]
+      | ask => simp [tfheSupplyTerms, supply, supplyIncr, hside, ih]
+
+/-- Every unary term is a legal u16 plaintext when the source book is admitted. -/
+theorem tfheDemandTerms_fit_u16 {bk : OrderBook} (hfit : OrdersFitU16 bk) (p : Nat)
+    {x : Int} (hx : x ∈ tfheDemandTerms bk p) : 0 ≤ x ∧ x < 65536 := by
+  induction bk with
+  | nil => simp [tfheDemandTerms] at hx
+  | cons o bk ih =>
+      simp only [tfheDemandTerms] at hx
+      split at hx
+      · simp only [List.mem_cons] at hx
+        rcases hx with rfl | hx
+        · split
+          · exact hfit o (by simp)
+          · decide
+        · exact ih (fun o ho => hfit o (by simp [ho])) hx
+      · exact ih (fun o ho => hfit o (by simp [ho])) hx
+
+theorem tfheSupplyTerms_fit_u16 {bk : OrderBook} (hfit : OrdersFitU16 bk) (p : Nat)
+    {x : Int} (hx : x ∈ tfheSupplyTerms bk p) : 0 ≤ x ∧ x < 65536 := by
+  induction bk with
+  | nil => simp [tfheSupplyTerms] at hx
+  | cons o bk ih =>
+      simp only [tfheSupplyTerms] at hx
+      split at hx
+      · simp only [List.mem_cons] at hx
+        rcases hx with rfl | hx
+        · split
+          · exact hfit o (by simp)
+          · decide
+        · exact ih (fun o ho => hfit o (by simp [ho])) hx
+      · exact ih (fun o ho => hfit o (by simp [ho])) hx
+
+theorem u32Residue_eq_of_u16 {x : Int} (h : 0 ≤ x ∧ x < 65536) : u32Residue x = x := by
+  exact Int.emod_eq_of_lt h.1 (lt_trans h.2 (by decide))
+
+theorem decrypt_encrypt_list_sum {Key Cipher BoolCipher : Type*}
+    (ops : TfheU32Ops Key Cipher BoolCipher) (laws : TfheU32PrimitiveLaws ops)
+    (key : Key) (xs : List Int) (hfit : ∀ x ∈ xs, 0 ≤ x ∧ x < 65536) :
+    ((xs.map (ops.encrypt key)).map (ops.decrypt key)).sum = xs.sum := by
+  induction xs with
+  | nil => rfl
+  | cons x xs ih =>
+      simp only [List.map_cons, List.sum_cons]
+      rw [laws.encrypt_correct, u32Residue_eq_of_u16 (hfit x (by simp))]
+      exact congrArg (x + ·) (ih (fun y hy => hfit y (by simp [hy])))
+
+/-- The deployed unary-encrypt + `FheUint32::sum` demand column. -/
+def tfheDemandCipher {Key Cipher BoolCipher : Type*} (ops : TfheU32Ops Key Cipher BoolCipher)
+    (key : Key) (bk : OrderBook) (p : Nat) : Cipher :=
+  ops.sum key ((tfheDemandTerms bk p).map (ops.encrypt key))
+
+/-- The deployed unary-encrypt + `FheUint32::sum` supply column. -/
+def tfheSupplyCipher {Key Cipher BoolCipher : Type*} (ops : TfheU32Ops Key Cipher BoolCipher)
+    (key : Key) (bk : OrderBook) (p : Nat) : Cipher :=
+  ops.sum key ((tfheSupplyTerms bk p).map (ops.encrypt key))
+
+theorem decrypt_tfheDemandCipher {Key Cipher BoolCipher : Type*}
+    (ops : TfheU32Ops Key Cipher BoolCipher) (laws : TfheU32PrimitiveLaws ops)
+    (key : Key) (bk : OrderBook) (hfit : OrdersFitU16 bk) (p : Nat) :
+    ops.decrypt key (tfheDemandCipher ops key bk p) = fheDemand bk p := by
+  rw [tfheDemandCipher, laws.sum_correct]
+  rw [decrypt_encrypt_list_sum ops laws key (tfheDemandTerms bk p)
+    (fun x hx => tfheDemandTerms_fit_u16 hfit p hx), tfheDemandTerms_sum]
+  rfl
+
+theorem decrypt_tfheSupplyCipher {Key Cipher BoolCipher : Type*}
+    (ops : TfheU32Ops Key Cipher BoolCipher) (laws : TfheU32PrimitiveLaws ops)
+    (key : Key) (bk : OrderBook) (hfit : OrdersFitU16 bk) (p : Nat) :
+    ops.decrypt key (tfheSupplyCipher ops key bk p) = fheSupply bk p := by
+  rw [tfheSupplyCipher, laws.sum_correct]
+  rw [decrypt_encrypt_list_sum ops laws key (tfheSupplyTerms bk p)
+    (fun x hx => tfheSupplyTerms_fit_u16 hfit p hx), tfheSupplyTerms_sum]
+  rfl
+
+/-- Ciphertext `min(D[p],S[p])`, using the same `ge().if_then_else(s,d)` expression as Rust. -/
+def tfheExecCipher {Key Cipher BoolCipher : Type*} (ops : TfheU32Ops Key Cipher BoolCipher)
+    (key : Key) (bk : OrderBook) (p : Nat) : Cipher :=
+  let d := tfheDemandCipher ops key bk p
+  let s := tfheSupplyCipher ops key bk p
+  ops.select key (ops.ge key d s) s d
+
+theorem decrypt_tfheExecCipher {Key Cipher BoolCipher : Type*}
+    (ops : TfheU32Ops Key Cipher BoolCipher) (laws : TfheU32PrimitiveLaws ops)
+    (key : Key) (bk : OrderBook) (hfit : OrdersFitU16 bk) (p : Nat) :
+    ops.decrypt key (tfheExecCipher ops key bk p) = fheExecVol bk p := by
+  rw [tfheExecCipher, laws.select_correct, laws.ge_correct,
+    decrypt_tfheDemandCipher ops laws key bk hfit p,
+    decrypt_tfheSupplyCipher ops laws key bk hfit p]
+  by_cases hle : fheSupply bk p ≤ fheDemand bk p
+  · simp [hle, fheExecVol]
+  · have hds : fheDemand bk p ≤ fheSupply bk p := le_of_lt (lt_of_not_ge hle)
+    simp [hle, fheExecVol, min_eq_left hds]
+
+/-- The actual encrypted strict-argmax scan.  The first component is encrypted `best_p`; the second
+is encrypted `best_v`. -/
+def tfheArgmaxUptoCipher {Key Cipher BoolCipher : Type*}
+    (ops : TfheU32Ops Key Cipher BoolCipher) (key : Key) (curve : Nat → Cipher) :
+    Nat → Cipher × Cipher
+  | 0 => (ops.encrypt key 0, curve 0)
+  | n + 1 =>
+      let best := tfheArgmaxUptoCipher ops key curve n
+      let greater := ops.gt key (curve (n + 1)) best.2
+      (ops.select key greater (ops.encrypt key (n + 1)) best.1,
+       ops.select key greater (curve (n + 1)) best.2)
+
+theorem decrypt_tfheArgmaxUptoCipher {Key Cipher BoolCipher : Type*}
+    (ops : TfheU32Ops Key Cipher BoolCipher) (laws : TfheU32PrimitiveLaws ops)
+    (key : Key) (bk : OrderBook) (hfit : OrdersFitU16 bk) :
+    ∀ n : Nat, n < 4294967296 →
+      let out := tfheArgmaxUptoCipher ops key (tfheExecCipher ops key bk) n
+      ops.decrypt key out.1 = Int.ofNat (fheArgmaxUpto bk n) ∧
+      ops.decrypt key out.2 = fheExecVol bk (fheArgmaxUpto bk n) := by
+  intro n hn
+  induction n with
+  | zero =>
+      simp only [tfheArgmaxUptoCipher, fheArgmaxUpto]
+      constructor
+      · rw [laws.encrypt_correct]
+        decide
+      · exact decrypt_tfheExecCipher ops laws key bk hfit 0
+  | succ n ih =>
+      have ihn := ih (by omega)
+      have hidx : ops.decrypt key (ops.encrypt key ((n : Int) + 1)) = (n : Int) + 1 := by
+        rw [laws.encrypt_correct]
+        apply Int.emod_eq_of_lt
+        · omega
+        · change Int.ofNat (n + 1) < Int.ofNat 4294967296
+          exact Int.ofNat_lt.mpr hn
+      simp only [tfheArgmaxUptoCipher, laws.select_correct, laws.gt_correct, ihn.1, ihn.2,
+        decrypt_tfheExecCipher ops laws key bk hfit (n + 1), hidx, fheArgmaxUpto]
+      by_cases hgt : fheExecVol bk (fheArgmaxUpto bk n) < fheExecVol bk (n + 1)
+      · simp [hgt]
+      · simp [hgt]
+
+/-- The two ciphertexts retained at the real output boundary. -/
+structure TfheCipherOutput (Cipher : Type*) where
+  pStar : Cipher
+  vStar : Cipher
+
+/-- The fully modeled `fhe_clear` ciphertext program, before its final two decryptions. -/
+def tfheEval {Key Cipher BoolCipher : Type*} (ops : TfheU32Ops Key Cipher BoolCipher)
+    (key : Key) (bk : OrderBook) (k : Nat) : TfheCipherOutput Cipher :=
+  let out := tfheArgmaxUptoCipher ops key (tfheExecCipher ops key bk) (k - 1)
+  ⟨out.1, out.2⟩
+
+/-- The public Rust sentinel translated to the existing `Option`-valued observable. -/
+def decryptTfheOutput {Key Cipher BoolCipher : Type*} (ops : TfheU32Ops Key Cipher BoolCipher)
+    (key : Key) (out : TfheCipherOutput Cipher) : ClearingOutput :=
+  let v := ops.decrypt key out.vStar
+  if v = 0 then ⟨none, 0⟩ else ⟨some (ops.decrypt key out.pStar).toNat, v⟩
+
+/-- **Whole-program ciphertext reduction.**  The modeled unary aggregation, encrypted minimum, strict
+argmax, tie convention, and no-clear sentinel all refine `fheOutput`; no opaque whole-program equality
+is assumed. -/
+theorem tfheEval_decrypt_eq_fheOutput {Key Cipher BoolCipher : Type*}
+    (ops : TfheU32Ops Key Cipher BoolCipher) (laws : TfheU32PrimitiveLaws ops)
+    (key : Key) (bk : OrderBook) (k : Nat) (hk : 0 < k) (hk32 : k < 4294967296)
+    (hfit : OrdersFitU16 bk) :
+    decryptTfheOutput ops key (tfheEval ops key bk k) = fheOutput bk k := by
+  have hn : k - 1 < 4294967296 := by omega
+  obtain ⟨hp, hv⟩ := decrypt_tfheArgmaxUptoCipher ops laws key bk hfit (k - 1) hn
+  simp only [decryptTfheOutput, tfheEval, fheOutput]
+  rw [hp, hv]
+  simp
+
+/-- Exact source correspondence still owed of the real tfhe-rs routine: its internal output pair must
+be the `tfheEval` expression above.  This is now a small syntax/API mapping, separate from primitive
+ciphertext correctness. -/
+def FhEggTfheSourceRefinementResidual {Key Cipher BoolCipher : Type*}
+    (ops : TfheU32Ops Key Cipher BoolCipher)
+    (rustEval : Key → OrderBook → Nat → TfheCipherOutput Cipher) : Prop :=
+  ∀ key bk k, 0 < k → k < 4294967296 → OrdersFitU16 bk →
+    rustEval key bk k = tfheEval ops key bk k
+
+/-- **The tightened remaining TFHE residual.**  Unlike the former final-equality restatement, this is
+exactly (1) tfhe-rs correctness for encrypt/sum/ge/gt/select and (2) the deployed Rust routine's direct
+source correspondence to the modeled expression. -/
+def FhEggTfheCiphertextRefinementResidual {Key Cipher BoolCipher : Type*}
+    (ops : TfheU32Ops Key Cipher BoolCipher)
+    (rustEval : Key → OrderBook → Nat → TfheCipherOutput Cipher) : Prop :=
+  TfheU32PrimitiveLaws ops ∧ FhEggTfheSourceRefinementResidual ops rustEval
+
+theorem fhEggTfheCiphertextRefinement_reduced {Key Cipher BoolCipher : Type*}
+    (ops : TfheU32Ops Key Cipher BoolCipher)
+    (rustEval : Key → OrderBook → Nat → TfheCipherOutput Cipher)
+    (h : FhEggTfheCiphertextRefinementResidual ops rustEval) :
+    ∀ key bk k, 0 < k → k < 4294967296 → OrdersFitU16 bk →
+      decryptTfheOutput ops key (rustEval key bk k) = fheOutput bk k := by
+  intro key bk k hk hk32 hfit
+  rw [h.2 key bk k hk hk32 hfit]
+  exact tfheEval_decrypt_eq_fheOutput ops h.1 key bk k hk hk32 hfit
+
+/-! A transparent exact-u32 instance witnesses consistency of the program semantics.  It is only a
+non-vacuity pole; the actual residual above specifically asks for the tfhe-rs instantiation. -/
+
+def transparentTfheOps : TfheU32Ops Unit Int Bool where
+  encrypt _ x := u32Residue x
+  sum _ xs := u32Residue xs.sum
+  ge _ x y := decide (y ≤ x)
+  gt _ x y := decide (y < x)
+  select _ b x y := if b then x else y
+  decrypt _ x := x
+  decryptBool _ b := b
+
+theorem transparentTfhePrimitiveLaws : TfheU32PrimitiveLaws transparentTfheOps := by
+  refine ⟨?_, ?_, ?_, ?_, ?_⟩
+  · intros; rfl
+  · intros; simp [transparentTfheOps]
+  · intros; rfl
+  · intros; rfl
+  · intros; rfl
+
+#guard decryptTfheOutput transparentTfheOps ()
+  (tfheEval transparentTfheOps () workBook 3) == (⟨some 1, 8⟩ : ClearingOutput)
+#guard decryptTfheOutput transparentTfheOps ()
+  (tfheEval transparentTfheOps () noClearTfheBook 2) == (⟨none, 0⟩ : ClearingOutput)
 
 /-! ## 3. The fixed `mpc_crossing`: argmax denotation and reveal-only view. -/
 
@@ -390,11 +685,25 @@ theorem mpcCurveHeightLeakage_refused :
 #assert_axioms workBook_conventions_agree
 #assert_axioms counterWitness_conventions_agree
 #assert_axioms noClearEncodingDenotation
+#assert_axioms outOfDomainAskDoesNotClear
 #assert_axioms fheArgmaxUpto_eq_rustArgmaxUpto
 #assert_axioms fheOutput_eq_rustReferenceOutput
 #assert_axioms FhEggTfheProgramDenotation
 #assert_axioms FhEggTfheWidthDenotation
 #assert_axioms FhEggTfheNoCrossDenotation
+#assert_axioms tfheDemandTerms_sum
+#assert_axioms tfheSupplyTerms_sum
+#assert_axioms tfheDemandTerms_fit_u16
+#assert_axioms tfheSupplyTerms_fit_u16
+#assert_axioms u32Residue_eq_of_u16
+#assert_axioms decrypt_encrypt_list_sum
+#assert_axioms decrypt_tfheDemandCipher
+#assert_axioms decrypt_tfheSupplyCipher
+#assert_axioms decrypt_tfheExecCipher
+#assert_axioms decrypt_tfheArgmaxUptoCipher
+#assert_axioms tfheEval_decrypt_eq_fheOutput
+#assert_axioms fhEggTfheCiphertextRefinement_reduced
+#assert_axioms transparentTfhePrimitiveLaws
 #assert_axioms mpcArgmaxUpto_eq_rustArgmaxUpto
 #assert_axioms mpcOutput_eq_rustReferenceOutput
 #assert_axioms MpcCrossingDenotation

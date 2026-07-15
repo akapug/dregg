@@ -40,9 +40,18 @@ The leaf-binding and chain-ordering legs are no longer trusted — they are DERI
 is strictly `{crypto floor + honest-prover realizer data}`. `#assert_axioms`-clean
 (⊆ {propext, Classical.choice, Quot.sound}; every carrier a Prop/struct hypothesis, no fresh
 axiom, no `sorry`). Standalone: `lake build Dregg2.AssuranceCaseGrounded`.
+
+The file also exports `GroundedAssuranceWithCrypto`: the exact A–E outcome bundled with the existing
+real-dimension ML-KEM, weighted-BLS, DECO-payment, and Hermine CR+Module-SIS reductions. This closes the
+proof-suite composition gap, not the deployed-consumer correspondence: showing one concrete run's
+handshake/certificate/attestation/commit-reveal values instantiate those parameters remains named.
 -/
 import Dregg2.AssuranceCase
 import Dregg2.Circuit.GroundedApex
+import Dregg2.Crypto.MlKemFips203FullDim
+import Dregg2.Crypto.BlsThreshold
+import Dregg2.Crypto.Deco
+import Dregg2.Crypto.HermineHashCRRegrounded
 
 namespace Dregg2.AssuranceCaseGrounded
 
@@ -309,5 +318,116 @@ theorem grounded_capstone_engine_fires_v2
     rfl
 
 #assert_axioms grounded_capstone_engine_fires_v2
+
+/-! ## The broader crypto reduction suite, composed without laundering deployment use.
+
+The historical capstone imported none of the ML-KEM/BLS/DECO/Hermine results, so even their proved
+reductions were invisible at the assurance apex.  `BroaderCryptoReductionSuite` collects their exact
+strongest reusable conclusions: real-dimension FIPS-203 correctness, weighted-quorum extraction,
+authenticated-payment extraction, and the proper collision-resistance + Module-SIS advantage bound.
+It does not claim that every deployed turn invokes all four mechanisms.  The remaining protocol-use
+binding — identifying the concrete handshake/certificate/DECO/commit-reveal values consumed on one run
+with these theorem parameters — stays named separately in the horizon ledger. -/
+
+/-- A single axiom-clean package of the four already-proved crypto reductions.  Each field retains the
+real hypotheses and conclusion of its source theorem; no field is weakened to a Boolean label. -/
+structure BroaderCryptoReductionSuite : Prop where
+  mlkem768 : ∀ (m : List UInt8), m.length = 32 →
+    Dregg2.Crypto.DreggKemRefinement.Fips203Correct
+      (Dregg2.Crypto.MlKemFips203FullDim.fullKemApi m)
+  bls_quorum : ∀ {PK : Type} {C : Dregg2.Crypto.BlsThreshold.Committee PK} {msg : Nat}
+    (cert : Dregg2.Crypto.BlsThreshold.ThresholdCert C msg),
+    cert.accepts → cert.SnarkContract → cert.BlsContract →
+    ∃ S : Finset Nat,
+      S ⊆ C.members ∧
+      C.selectedWeight S ≥ cert.threshold ∧
+      C.selectedWeight S ≤ C.totalWeight ∧
+      (∀ i ∈ S, C.SignedBy i msg)
+  deco_payment : ∀ {Dg Proof : Type}
+    [KD : Dregg2.Crypto.Deco.DecoVerifierKernel Dg Proof]
+    [SK : Dregg2.Crypto.PortalFloor.SignatureKernel Dg Dg Dg]
+    [MK : Dregg2.Crypto.PortalFloor.MacKernelE Dg Dg Dg],
+    KD.sigVerify = SK.sigVerify → KD.macVerify = MK.verifyTag →
+    KD.extractable → SK.unforgeable → MK.unforgeable →
+    ∀ (stmt : Dregg2.Crypto.Deco.Statement Dg) (proof : Proof),
+      KD.verify stmt proof = true →
+      ∃ w : Dregg2.Crypto.Deco.CircuitIR Dg,
+        SK.Signed stmt.serverKey w.sessionKey ∧
+        MK.Tagged w.sessionKey w.transcriptCommit w.tag ∧
+        w.transcriptCommit = KD.compress (KD.encode stmt.facts) w.salt ∧
+        1 ≤ stmt.facts.amountCents
+  hermine_rushing : ∀ {F : Dregg2.Circuit.HashFloorHonesty.KeyedHashFamily} {Solver : Type}
+    (_hCR : Dregg2.Circuit.HashFloorHonesty.CollisionResistant F)
+    (equivocator : Dregg2.Circuit.HashFloorHonesty.CollisionFinder F)
+    (adv : Solver → Dregg2.Crypto.ConcreteSecurity.Ensemble) (solver : Solver),
+    Dregg2.Crypto.ProbCrypto.MSISHardQuant adv →
+    Dregg2.Crypto.ConcreteSecurity.Negl
+      (fun n => Dregg2.Circuit.HashFloorHonesty.collisionAdv F equivocator n + adv solver n)
+
+/-- The wider suite is genuinely assembled from the four reduction theorems, rather than merely
+co-imported. -/
+theorem broader_crypto_reduction_suite : BroaderCryptoReductionSuite where
+  mlkem768 := Dregg2.Crypto.MlKemFips203FullDim.fullKemApi_fips203
+  bls_quorum := Dregg2.Crypto.BlsThreshold.accepting_cert_has_quorum
+  deco_payment := by
+    intro Dg Proof KD SK MK hsig hmac hext hsigFloor hmacFloor stmt proof hacc
+    exact Dregg2.Crypto.Deco.deco_authenticates_payment
+      hsig hmac hext hsigFloor hmacFloor stmt proof hacc
+  hermine_rushing := Dregg2.Crypto.HermineHashCRRegrounded.hermine_concurrent_forgery_advantage_bound
+
+#assert_axioms broader_crypto_reduction_suite
+
+/-- The exact A–E conclusion of the grounded capstone, factored as a named proposition so the wider
+crypto suite can attach to the real system guarantee rather than an arbitrary `Core : Prop`. -/
+def GroundedCoreOutcome
+    (s s' : RecChainedState)
+    (f : FullForestG (Digest := Digest) (Proof := Proof) (Request := Request) (Stmt := Stmt)
+      (Wit := Wit) (CellId := CellId) (Rights := Rights) (Ctx := Ctx) (Gateway := Gateway)
+      (Bytes := Bytes) (Tag := Tag))
+    (b : AssetId) (UC : Dregg2.Exec.UniversalBridge.UCodec)
+    (nf : Nat) (k k' : RecordKernelState)
+    (agg : Aggregate AProof) (g : RecChainedState) (steps : List ChainStep) : Prop :=
+  (∀ e ∈ forestEdgesG f, capAuthConferred (attenuate e.1 e.2) ⊆ capAuthConferred e.2)
+  ∧ recTotalAsset s'.kernel b = recTotalAsset s.kernel b
+  ∧ (∀ p ∈ lowerForestG f, ∃ sa sa',
+      execFullAGated sa p.1 p.2 = some sa' ∧ gatedActionInvG sa p.1 p.2 sa')
+  ∧ MemProgTrans UC s s'
+  ∧ (nf ∉ k.nullifiers ∧ nf ∈ k'.nullifiers ∧ interp (noteSpendStmt nf) k' = none)
+  ∧ AggregateAttests AProof CH RH cmb compress compressN agg g steps
+  ∧ recTotal (lastStateOf g steps).kernel = recTotal g.kernel
+
+/-- The actual grounded A–E assurance outcome together with the four broader crypto reductions.  This
+closes the proof-suite composition gap while deliberately leaving the concrete consumer/value binding
+as a separate deployment residual. -/
+def GroundedAssuranceWithCrypto
+    (s s' : RecChainedState)
+    (f : FullForestG (Digest := Digest) (Proof := Proof) (Request := Request) (Stmt := Stmt)
+      (Wit := Wit) (CellId := CellId) (Rights := Rights) (Ctx := Ctx) (Gateway := Gateway)
+      (Bytes := Bytes) (Tag := Tag))
+    (b : AssetId) (UC : Dregg2.Exec.UniversalBridge.UCodec)
+    (nf : Nat) (k k' : RecordKernelState)
+    (agg : Aggregate AProof) (g : RecChainedState) (steps : List ChainStep) : Prop :=
+  GroundedCoreOutcome (CH := CH) (RH := RH) (cmb := cmb) (compress := compress)
+    (compressN := compressN) s s' f b UC nf k k' agg g steps ∧
+  BroaderCryptoReductionSuite
+
+/-- **Top-level suite fusion.**  Any concrete result of `deployed_system_secure_grounded{,_v2}` can be
+re-read definitionally as `GroundedCoreOutcome`; this theorem attaches all four proved crypto
+reductions without adding a premise or axiom. -/
+theorem grounded_assurance_with_crypto_of_core
+    (s s' : RecChainedState)
+    (f : FullForestG (Digest := Digest) (Proof := Proof) (Request := Request) (Stmt := Stmt)
+      (Wit := Wit) (CellId := CellId) (Rights := Rights) (Ctx := Ctx) (Gateway := Gateway)
+      (Bytes := Bytes) (Tag := Tag))
+    (b : AssetId) (UC : Dregg2.Exec.UniversalBridge.UCodec)
+    (nf : Nat) (k k' : RecordKernelState)
+    (agg : Aggregate AProof) (g : RecChainedState) (steps : List ChainStep)
+    (hcore : GroundedCoreOutcome (CH := CH) (RH := RH) (cmb := cmb) (compress := compress)
+      (compressN := compressN) s s' f b UC nf k k' agg g steps) :
+    GroundedAssuranceWithCrypto (CH := CH) (RH := RH) (cmb := cmb) (compress := compress)
+      (compressN := compressN) s s' f b UC nf k k' agg g steps :=
+  ⟨hcore, broader_crypto_reduction_suite⟩
+
+#assert_axioms grounded_assurance_with_crypto_of_core
 
 end Dregg2.AssuranceCaseGrounded

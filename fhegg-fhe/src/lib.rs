@@ -83,13 +83,21 @@ pub fn order_increment(o: &Order, k: usize) -> Vec<Qty> {
     let mut v = vec![0 as Qty; k];
     match o.side {
         Side::Bid => {
+            if k == 0 {
+                return v;
+            }
             for p in 0..=o.limit.min(k - 1) {
                 v[p] = o.qty;
             }
         }
         Side::Ask => {
-            for p in o.limit.min(k - 1)..k {
-                v[p] = o.qty;
+            // An ask above the represented domain is willing to sell at no
+            // represented bucket. Clamping it to `k - 1` would fabricate
+            // willingness below its limit and could create a false clearing.
+            if o.limit < k {
+                for slot in v.iter_mut().take(k).skip(o.limit) {
+                    *slot = o.qty;
+                }
             }
         }
     }
@@ -169,6 +177,7 @@ pub struct FheTiming {
 ///
 /// The server key must already be installed via `set_server_key` on this thread.
 pub fn fhe_clear(orders: &[Order], k: usize, ck: &ClientKey) -> FheTiming {
+    assert!(k > 0, "fhe_clear requires at least one price bucket");
     let mut t = FheTiming {
         n: orders.len(),
         k,
@@ -201,7 +210,7 @@ pub fn fhe_clear(orders: &[Order], k: usize, ck: &ClientKey) -> FheTiming {
     // (a) AGGREGATION — the cheap, (near-)bootstrap-free part. Fold the
     //     encrypted increments bucket-wise into the encrypted demand/supply
     //     curves: D[p] = Σ_bids row[p], S[p] = Σ_asks row[p]. We use
-    //     `FheUint16::sum`, which is tfhe-rs's `unchecked_sum_ciphertexts_vec_
+    //     `FheUint32::sum`, which is tfhe-rs's `unchecked_sum_ciphertexts_vec_
     //     parallelized`: a parallel tree-reduction with DEFERRED carry
     //     propagation (carries settled once at the end, not per add). This is
     //     the additive primitive the kernel's "aggregation is cheap" thesis
@@ -367,6 +376,31 @@ mod clearing_tests {
         assert_eq!(out.supply, vec![65536]);
         assert_eq!(out.p_star, Some(0));
         assert_eq!(out.v_star, 65536);
+    }
+
+    /// An out-of-domain ask contributes nowhere. The former `min(k - 1)`
+    /// clamp fabricated an ask at the last bucket, below its stated limit.
+    /// Zero buckets are also an empty encoding rather than an unsigned underflow.
+    #[test]
+    fn unary_encoding_does_not_clamp_out_of_range_ask() {
+        let ask = Order {
+            side: Side::Ask,
+            limit: 7,
+            qty: 9,
+        };
+        assert_eq!(order_increment(&ask, 3), vec![0, 0, 0]);
+        assert!(order_increment(&ask, 0).is_empty());
+
+        let bid = Order {
+            side: Side::Bid,
+            limit: 2,
+            qty: 9,
+        };
+        let out = reference_clear(&[bid, ask], 3);
+        assert_eq!(out.demand, vec![9, 9, 9]);
+        assert_eq!(out.supply, vec![0, 0, 0]);
+        assert_eq!(out.p_star, None);
+        assert_eq!(out.v_star, 0);
     }
 }
 

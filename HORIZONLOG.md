@@ -27,18 +27,42 @@ lot: per WE-DO-NOT-NAME-WE-SHIP, anything that sits here across many sessions
 should be either scheduled or explicitly demoted to the Research tier with a
 reason.)*
 
-## 2-leg shielded ring-clearing AIR BUILT → the N-leg + integration rungs (named 2026-07-13, `circuit-prove/src/shielded_ring_clearing_air.rs`)
-Rung-3 `shielded_ring_clears` / `shielded_ring_fused_clears` is now BUILT at 2-leg: the ring-clearing
-descriptor AIR enforces in-AIR FUSION (`offer_asset/amount == note asset/value`, anchored to the leaf's
+## 2-leg shielded ring note-algebra BUILT → endpoint descriptor + N-leg rungs (updated 2026-07-15, `Market/ProtocolAssurance.lean`)
+The note-level part of rung-3 `shielded_ring_clears` / `shielded_ring_fused_clears` is BUILT at 2-leg:
+the ring-clearing descriptor AIR enforces in-AIR FUSION (`offer_asset/amount == note asset/value`, anchored to the leaf's
 value_binding under Poseidon2 CR), the `CycleValid` 2-cycle edges + tight-amount match, distinct
 nullifiers, and Pedersen conservation (`Σ C_in − Σ C_out = 0` over `RealCrypto.pedTwoGen`); the apex folds
 it with two `prove_shielded_spend_leaf_with_claim` leaves (membership + fresh nullifier) and connect-binds
 each leg. Both polarities GREEN (genuine circuit non-sat: nonconserving `#15`, mis-fused `#7`, double-spend
-`#8..`, forged-membership `#2`). NAMED next rungs: (1) **N-leg generalization** — a variable-length cycle
+`#8..`, forged-membership `#2`). The executor lowering beneath this proof is now CLOSED:
+`recKExecAsset_refines_balanceMovement`, `settleRing_refines_turnSpec`, and
+`drexClearing_refines_turnSpec` derive the exact ordinary two-balance-action fold, including destination
+liveness and the reverse-prepended receipt log. NAMED next rungs: (1) **P0 endpoint descriptor** — the
+current Rust-authored leaf exposes only `[nf₀,root₀,vb₀,nf₁,root₁,vb₁]`; it has no creators, eight-lane
+kernel pre/post commitments, turn count, authorization/lifecycle state, or receipt-chain output, and so
+cannot prove `ShieldedRingDescriptorRefines` / `ShieldedRingApexStep`. Per architectural law #1, emit a
+Lean-authored outer descriptor which binds the two note rows to the two ordinary balance actions and the
+batch commitment surface, then register/fold it at the Market apex. (2) **N-leg generalization** — a variable-length cycle
 and the general `offer_amount ≥ want_min` partial-fill inequality (needs an in-AIR range gadget; today the
-demo swap is TIGHT so equality suffices); (2) **launchpad/DEX integration** — carry the apex into the
+demo swap is TIGHT so equality suffices); (3) **launchpad/DEX integration** — carry the endpoint apex into the
 shielded batch (§3.3/§3.12) and DrEX (§3.13). Closure shape: widen the descriptor to a length-parametric
-ring + a range-decomposition site for the `≥` edge, then wire the apex into the shielded-auction app path.
+ring + a range-decomposition site for the `≥` edge, then wire the endpoint apex into the shielded-auction app path.
+
+## fhEgg unary-limit defect FIXED + TFHE whole program REDUCED (2026-07-15, `Market/FhEggRustDenotation.lean`)
+The deployed unary encoder no longer clamps an ask whose limit is above the configured price domain
+into bucket `k-1` (which fabricated willingness below its limit and could manufacture an individually-
+irrational clearing); it contributes to no represented bucket, and `k=0` encodes an empty vector rather
+than underflowing. Rust regression `unary_encoding_does_not_clamp_out_of_range_ask` and Lean executable
+`outOfDomainAskDoesNotClear` pin the repair. The stale FheUint16 docs are corrected to the deployed
+FheUint32 aggregation, and BFV `add_ops` now counts the actual additions from zero accumulators.
+`FhEggTfheCiphertextRefinementResidual` is no longer an opaque final-equality restatement:
+`tfheEval_decrypt_eq_fheOutput` proves the full unary-encrypt → FheUint32 column sums → encrypted
+`ge/select` minima → strict-`gt/select` lowest-tie argmax → two-ciphertext decrypt program from five
+atomic `TfheU32PrimitiveLaws`; `fhEggTfheCiphertextRefinement_reduced` leaves exactly those tfhe-rs API
+laws plus `FhEggTfheSourceRefinementResidual` (direct source-expression correspondence). Closure shape:
+instantiate the laws from tfhe-rs's integer correctness specification and byte/source-pin the internal
+`fhe_clear` expression to `tfheEval`; threshold-key/decryption security remains a deployment theorem,
+not implied by this value-semantics reduction.
 
 ## state-field 32-byte residual — v13 wire+kernel widening (named 2026-07-13, `docs/FINDING-state-field-truncation.md`)
 The acute truncation bug (unrelated turn shreds a pinned 32-byte field) is FIXED
@@ -787,43 +811,37 @@ plane; content-addressed static-site hosting.
   `ExecutorApplyDifferentialPin` remain.
 
   OUTWARD MAP (priority order; each gap either formalized or named):
-  1. **`StarkMarketClaimExtractionResidual` FACTORED through
-     `MarketEffectEndpointExtractionResidual` (P0, OPEN).** `Market.ProtocolAssurance` now composes the
+  1. **`StarkMarketClaimExtractionResidual` FACTORED to the shielded apex (P0, OPEN).** `Market.ProtocolAssurance` composes the
      deployed `lightclient_unfoolable` apex directly: accept supplies `StateDecode` plus the real
      `dispatchArm` step, and `starkMarketClaimExtraction_of_effect_step` derives the historical
      accept-level extractor from only the Market-specific semantic fact.  Consequently
      `lightclient_market_seam` and `accepted_market_settles_on_same_commitment_surface` no longer carry
      an opaque accept-level extractor; commitment binding identifies decoded endpoints with the fair,
      kernel-real clearing, proves per-asset conservation, and advances `settleDrex` across the SAME
-     public roots.  `DrexClearingEffectRefinementResidual` separately names the strictly stronger
-     allocation identity; exact allocation refinement proves the endpoint fragment, but no converse is
-     claimed.  Current PI contains one `(effect,pre,post,turn)` and `dispatchArm` yields one
-     `FullActionA`, while a `DrexClearing` retains an allocation and emits a LIST of settlement effects.
-     Close by registering a genuine
-     clearing action/descriptor carrying that allocation, or lift the apex to the emitted effect list
-     and prove it equals `settlementsOf c.nodes`. `MarketBoundaryBinding` retains its wrong-post tooth
+     public roots. The full allocation lowering is now CLOSED by
+     `recKExecAsset_refines_balanceMovement`, `settleRing_refines_turnSpec`, and
+     `drexClearing_refines_turnSpec`, including derived destination liveness and the exact receipt log.
+     `marketEffectAllocationIdentity_of_apex_lift` reduces allocation identity to the sole remaining
+     `MarketEffectApexLiftResidual`; the direct `lightclient_market_seam_of_shielded_descriptor` exports
+     the exact action list once `ShieldedRingDescriptorRefines` holds. The current six-lane note apex
+     cannot supply creators or kernel endpoints, so close with the Lean-authored endpoint descriptor
+     named in the top-of-ledger shielded-ring entry. `MarketBoundaryBinding` retains its wrong-post tooth
      and concrete nonempty `demoFill` witness.
-  2. **fhEgg deployed denotation (P0, FORMALLY REFUTED).** New `Market.FhEggRustDenotation` proves
-     `FhEggCrossingConventionResidual`: Lean selects least `D≤S`, Rust `reference_clear`/`fhe_clear`/
-     `mpc.rs` select largest `D≥S`; the repository worked book is Lean `(2,6)` vs Rust `(1,8)`.
-     `MpcCrossingDenotationResidual` proves the Lean simulator's `[D≤S]` up-step is the opposite of
-     deployed MPC's `[D≥S]` down-step. Thus the perfect additive-sharing lemma is real, but joined to
-     the wrong clearing semantics.
-  3. **TFHE correctness/privacy (P0, FORMALLY REFUTED).** `FhEggTfheNoCrossResidual`: `fhe_clear`
-     reports the no-cross sentinel but still decrypts bucket-zero `min(D,S)`, unlike `reference_clear`'s
-     zero. `FhEggTfheWidthResidual`: plaintext curves are `u32`, encrypted curves are `FheUint16`; two
-     valid 32768 bids wrap demand 65536→0 and change `(p*,V*)`. `FhEggTfheProgramDenotationResidual`
-     refutes the advertised universal reference=FHE obligation. `FhEggTfheLeakageResidual`: the holder
-     of `ClientKey` decrypts `D[p*]` AND `S[p*]`, so the real view does not factor through `(p*,V*)`;
-     two honest books with the same `(0,8)` expose `(10,8)` vs `(8,8)`. Closing needs one crossing
-     convention, `k>0`, aggregate-width enforcement/wider ciphertexts, ciphertext-level secure min,
-     threshold-key semantics, and a real TFHE program-refinement theorem.
-  4. **`SettlementVerifierRefinementResidual` (P1, OPEN).** `settleDrex` starts with a proof-carrying
-     `DrexClearing` already in hand and models continuity/register update only. The deployed EVM/Cosmos/
-     Solana verifier starts with Groth16 bytes and packed eight-lane roots. `SettlementVerifierRefines`
-     names the exact missing soundness: verifier accept implies existence of a fair kernel-real clearing
-     matching both roots and `numTurns`. The actual Poseidon2-lanes→keccak root encoding/differential is
-     part of this close; `demoRoot` is only a two-balance projection.
+  2. **fhEgg deployed denotation (P0, CLOSED; later repair supersedes the original finding).** Rust,
+     MPC, and Lean now share strict executed-volume argmax with the lowest-price tie; no-clear and
+     FheUint32 aggregation agree. The Task-8 audit also fixed the last unary encoder defect: an
+     out-of-domain ask no longer clamps into the last bucket.
+  3. **TFHE correctness/privacy (P0, REDUCED).** Observable crossing/no-clear/width semantics are
+     closed. `tfheEval_decrypt_eq_fheOutput` proves the complete ciphertext dataflow from five atomic
+     `TfheU32PrimitiveLaws`; `FhEggTfheCiphertextRefinementResidual` retains only their tfhe-rs
+     instantiation plus `FhEggTfheSourceRefinementResidual`. Threshold-key/decryption security remains
+     a deployment theorem; the single-ClientKey benchmark harness does not prove it.
+  4. **`SettlementVerifierRefinementResidual` (P1, OPEN but ABI-TIGHTENED).** The residual now consumes
+     the exact canonical 25-lane statement `genesis8 ++ final8 ++ numTurns ++ chainDigest8`.
+     `packLaneBytes` models Solidity's tight 32-byte big-endian lane encoding and
+     `accepted_settlement_binds_packed_roots` proves lane extraction binds the recorded keccak roots
+     without claiming keccak injectivity. Remaining: Groth16/recursive-STARK accept must extract a
+     fair kernel-real clearing under the faithful eight-lane state codec.
   5. **fhEgg→ledger content binding + shielded apex denotation (P1, OPEN).** No theorem maps an fhEgg
      order book/output `(p*,V*)` into the `MatchNode`/`DrexClearing` that `settleRing` executes. The
      Rust N-leg shielded AIR now exists, contrary to `ShieldedClearing.lean`'s stale “finishing build”
@@ -849,11 +867,14 @@ plane; content-addressed static-site hosting.
      Market extraction. Cert-QP has no production AIR/Lean descriptor and its Lean theorem assumes exact
      rational equality/box KKT with explicit λ±, whereas Rust accepts approximate `f64` primal/dual
      infinity-norm residuals over `l≤Ax≤u`; `CertQpRustDenotationResidual` is therefore open, not merely
-     the documented inexact-stationarity lemma. The wider crypto library contains proper adversary-indexed
-     re-groundings, but `AssuranceCase{,Grounded}` composes only the core Poseidon/STARK floors and never
-     the ML-KEM/BLS/DECO/adaptive-TSUF suite: `AssuranceCryptoCompositionResidual` names that missing
-     protocol-level composition. Ledger realization/fairness and quantized no-wrap/mint-safe algebra
-     themselves have genuine positive/negative teeth; their remaining weakness is Rust/circuit/settlement
+     the documented inexact-stationarity lemma. The proof-suite half of
+     `AssuranceCryptoCompositionResidual` is CLOSED by `BroaderCryptoReductionSuite` and
+     `grounded_assurance_with_crypto_of_core`: the exact grounded A–E outcome is bundled with
+     real-dimension ML-KEM, BLS quorum extraction, DECO payment authentication, and Hermine
+     CR+Module-SIS advantage reductions. OPEN protocol-use half: bind the concrete handshake,
+     certificate, DECO, and commit-reveal values consumed by one deployed run to those parameters;
+     adaptive-TSUF also remains outside this bundle. Ledger realization/fairness and quantized
+     no-wrap/mint-safe algebra have genuine teeth; their remaining weakness is Rust/circuit/settlement
      denotation, not a discovered logical shell.
 - CI-GREEN GRIND (2026-06-26). Drove the workspace toward green after the wide-registry/umem churn. LANDED (committed):
   (1) `circuit/src/dsl/garbled.rs` — the DSL garbled prover/verifier pushed a 16-felt PI vector (`as_slice()` over the

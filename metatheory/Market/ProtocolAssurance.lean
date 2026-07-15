@@ -15,27 +15,27 @@ This module makes the seam explicit without inventing it:
   step extracted for the designated effect are realized by a proof-carrying clearing.  The ordinary
   STARK extraction, witness decode, and commitment binding are no longer hidden in a second accept-level
   hypothesis; the theorems below invoke `lightclient_unfoolable` themselves.
-* `DrexClearingEffectRefinementResidual` names the strictly stronger fact still absent: the clearing's
-  exact allocation lowers to the ordinary balance-action list that the extracted step denotes.  This
-  distinction prevents endpoint equivalence from being mislabeled as trace/allocation identity.
+* The exact clearing-allocation lowering is now proved by `drexClearing_refines_turnSpec`.
+  `DrexClearingEffectRefinementResidual` reduces to the one fact still absent: the apex descriptor must
+  retain/extract the fused ring and its endpoints rather than erase it to one arbitrary action.
 * `starkMarketClaimExtraction_of_effect_step`, `lightclient_market_seam`, and
   `accepted_market_settles_on_same_commitment_surface` prove everything above that exact descriptor
   fact: the decoded STARK transition is the fair, kernel-real clearing; it conserves every asset; and
   the cross-chain register advances from the same pre-commitment to the same post-commitment.
-* `SettlementVerifierRefines` names the second missing theorem.  The current `settleDrex` consumes a
-  pre-proved `DrexClearing` and models only continuity plus register update.  The deployed Groth16
-  verifier consumes bytes.  Its soundness must imply existence of the `DrexClearing` whose roots and
-  turn count it accepted.
+* `SettlementVerifier25Refines` names the second missing theorem over the exact canonical 25-lane ABI.
+  The current `settleDrex` consumes a pre-proved `DrexClearing` and models only continuity plus register
+  update.  Groth16 soundness must imply existence of the clearing whose eight-lane roots and turn count
+  it accepted; the byte packing below is no longer generic prose.
 
 The repaired cross-chain witness is also shown to satisfy `AccountsWF`, the structural invariant
 required by `StateDecode`.  Previously its `cell` function was non-default outside `{1,2}`, so the
 Market demo could not inhabit the light-client boundary at all.
 
 At HEAD the single-effect dispatcher has no `DrexClearing` constructor: a clearing contains at least
-two settlement legs, while `BatchPublicInputs.effect` selects one `FullActionA`.  The operated DrEX
-path lowers a clearing to a list of ordinary effects, but that list/allocation is not part of this
-single-effect apex.  Therefore the final descriptor/whole-turn extraction remains named precisely
-below; it cannot honestly be manufactured from the four public-input fields.
+two settlement legs, while `BatchPublicInputs.effect` selects one `FullActionA`.  The direct ring-
+descriptor route below has the right theorem shape, but the current six-lane note apex omits creators,
+kernel endpoints, turn count, and receipt-chain output.  Therefore only that endpoint-carrying
+descriptor/whole-turn extraction remains named; it cannot be manufactured from the note claim.
 
 Pure.  No axioms; the two missing links remain named propositions.
 -/
@@ -50,9 +50,12 @@ open Dregg2.Exec
 open Dregg2.Intent.Ring
 open Dregg2.Circuit.StateCommit (AccountsWF)
 open Dregg2.Circuit.CircuitSoundness
+open Dregg2.Circuit.DescriptorIR2 (EffectVmDescriptor2 Satisfied2)
 open Dregg2.Circuit.Poseidon2Binding (Poseidon2SpongeCR)
-open Dregg2.Circuit.ActionDispatch (turnSpec)
-open Dregg2.Exec.TurnExecutorFull (FullActionA)
+open Dregg2.Circuit.ActionDispatch (fullActionStep turnSpec)
+open Dregg2.Circuit.Spec.BalanceMovement (BalanceMovementSpec recCexecAsset_iff_spec)
+open Dregg2.Exec.TurnExecutorFull
+  (FullActionA acceptsEffects acceptsEffects_eq_cellLifecycleLive recCexecAsset)
 
 set_option autoImplicit false
 
@@ -84,6 +87,160 @@ theorem settleRing_preserves_accountsWF :
       | some mid =>
           rw [hstep] at hsettle
           exact ih (recKExecAsset_preserves_accountsWF hwf hstep) hsettle
+
+/-! ## 1a. The concrete settlement-list lowering.
+
+There is one important guard distinction at this seam.  `settleRing` folds the kernel-only
+`recKExecAsset`, whereas the ordinary `.balanceA` action uses `recCexecAsset`: the latter additionally
+requires the destination to be Live and prepends the movement receipt to `RecChainedState.log`.
+Consequently the standalone implication from a raw kernel step to `BalanceMovementSpec` is false
+without the destination-liveness premise.  A successfully settled *cycle* supplies that premise:
+every receiver is another leg's sender, and every successfully executing sender is Live.  The lemmas
+below make those two facts explicit and then perform the exact fold, including the receipt log. -/
+
+/-- The receipt-chain suffix produced by executing a ring left-to-right.  Each action prepends its
+receipt, so the final log contains the ring's turns in reverse execution order before the old log. -/
+def ringReceiptLog (r : Ring) (log : List Turn) : List Turn :=
+  (r.map RingLeg.toTurn).reverse ++ log
+
+/-- The ordinary full-action lowering of a kernel ring. -/
+def ringActions (r : Ring) : List FullActionA :=
+  r.map fun l => .balanceA l.toTurn l.asset
+
+/-- A committed raw per-asset step forces its source lifecycle to be Live.  This is the seventh
+conjunct of `recKExecAsset`'s real acceptance guard, retained here because the older public
+`recKExecAsset_committed` projection deliberately exposes only its first six conjuncts. -/
+theorem recKExecAsset_source_live {k k' : RecordKernelState} {t : Turn} {a : AssetId}
+    (h : recKExecAsset k t a = some k') : cellLifecycleLive k t.src = true := by
+  unfold recKExecAsset at h
+  by_cases hg : authorizedB k.caps t = true ∧ 0 ≤ t.amt ∧ t.amt ≤ k.bal t.src a
+      ∧ t.src ≠ t.dst ∧ t.src ∈ k.accounts ∧ t.dst ∈ k.accounts
+      ∧ cellLifecycleLive k t.src = true
+  · exact hg.2.2.2.2.2.2
+  · rw [if_neg hg] at h
+    exact absurd h (by simp)
+
+/-- Every sender appearing in a successfully settled ring was Live in the ring's pre-state.  Prior
+legs change only `bal`, so the lifecycle fact extracted at a later fold state transports back to the
+initial state. -/
+theorem settleRing_sources_live :
+    ∀ {r : Ring} {k k' : RecordKernelState}, settleRing k r = some k' →
+      ∀ l ∈ r, cellLifecycleLive k l.from_ = true := by
+  intro r
+  induction r with
+  | nil =>
+      intro k k' _ l hl
+      simp at hl
+  | cons head rest ih =>
+      intro k k' hsettle l hl
+      rw [settleRing_cons] at hsettle
+      cases hhead : recKExecAsset k head.toTurn head.asset with
+      | none => simp [hhead] at hsettle
+      | some mid =>
+          rw [hhead] at hsettle
+          rcases List.mem_cons.mp hl with rfl | hlrest
+          · exact recKExecAsset_source_live hhead
+          · have hlive := ih hsettle l hlrest
+            rw [recKExecAsset_shape hhead] at hlive
+            exact hlive
+
+/-- In a balanced settled ring, every destination accepts effects in the pre-state.  Cycle closure
+provides a leg sending from the destination, and successful settlement makes that sender Live. -/
+theorem settled_balanced_ring_destinations_live {r : Ring} {k k' : RecordKernelState}
+    (hbalanced : RingBalanced r) (hsettle : settleRing k r = some k') :
+    ∀ l ∈ r, acceptsEffects k l.to_ = true := by
+  intro l hl
+  obtain ⟨sender, hsender, hfrom⟩ := hbalanced.recvImpSend l hl
+  calc
+    acceptsEffects k l.to_ = cellLifecycleLive k l.to_ :=
+      acceptsEffects_eq_cellLifecycleLive k l.to_
+    _ = cellLifecycleLive k sender.from_ := by rw [hfrom]
+    _ = true := settleRing_sources_live hsettle sender hsender
+
+/-- **The concrete per-step lowering.**  A raw `recKExecAsset` commit plus the chained executor's
+destination-liveness guard is exactly a `.balanceA` `BalanceMovementSpec` step.  The post-state pins
+the whole kernel and prepends the truthful movement receipt. -/
+theorem recKExecAsset_refines_balanceMovement {k k' : RecordKernelState} {t : Turn} {a : AssetId}
+    (log : List Turn) (hdst : acceptsEffects k t.dst = true)
+    (h : recKExecAsset k t a = some k') :
+    BalanceMovementSpec ⟨k, log⟩ t a ⟨k', t :: log⟩ := by
+  apply (recCexecAsset_iff_spec ⟨k, log⟩ t a ⟨k', t :: log⟩).mp
+  simp [recCexecAsset, hdst, h]
+
+/-- Concrete witness for why `recKExecAsset_refines_balanceMovement` must mention destination
+liveness: the raw kernel accepts a funded move into sealed cell `2`, while `.balanceA` fails closed. -/
+def rawDstSealedPre : RecordKernelState :=
+  { demoSettlePre with lifecycle := fun c => if c = 2 then 1 else 0 }
+
+def rawDstSealedTurn : Turn := { actor := 1, src := 1, dst := 2, amt := 7 }
+
+#guard (recKExecAsset rawDstSealedPre rawDstSealedTurn 10).isSome
+#guard acceptsEffects rawDstSealedPre rawDstSealedTurn.dst == false
+
+/-- The hostile pole paired with the concrete per-step lowering: no full-action post-state can satisfy
+`BalanceMovementSpec` for the raw move into a sealed destination, even though the raw kernel commits. -/
+theorem rawDstSealed_not_balanceMovement (k' : RecordKernelState) (log : List Turn) :
+    ¬ BalanceMovementSpec ⟨rawDstSealedPre, log⟩ rawDstSealedTurn 10
+      ⟨k', rawDstSealedTurn :: log⟩ := by
+  intro hspec
+  have hdst := hspec.1.2.2.2.2.2.2.2
+  simp [rawDstSealedPre, rawDstSealedTurn, acceptsEffects,
+    Dregg2.Exec.TurnExecutorFull.lcLive] at hdst
+
+/-- Fold the concrete per-step lowering over any settled ring whose destinations are Live. -/
+theorem settleRing_refines_turnSpec_of_destinations_live :
+    ∀ {r : Ring} {k k' : RecordKernelState} (log : List Turn),
+      (∀ l ∈ r, acceptsEffects k l.to_ = true) →
+      settleRing k r = some k' →
+      turnSpec ⟨k, log⟩ (ringActions r) ⟨k', ringReceiptLog r log⟩ := by
+  intro r
+  induction r with
+  | nil =>
+      intro k k' log _ hsettle
+      simp only [settleRing_nil, Option.some.injEq] at hsettle
+      subst k'
+      simp [ringActions, ringReceiptLog, turnSpec]
+  | cons head rest ih =>
+      intro k k' log hdsts hsettle
+      rw [settleRing_cons] at hsettle
+      cases hhead : recKExecAsset k head.toTurn head.asset with
+      | none => simp [hhead] at hsettle
+      | some mid =>
+          rw [hhead] at hsettle
+          have hheadDst : acceptsEffects k head.to_ = true :=
+            hdsts head (by simp)
+          have hstep : fullActionStep ⟨k, log⟩ (.balanceA head.toTurn head.asset)
+              ⟨mid, head.toTurn :: log⟩ :=
+            recKExecAsset_refines_balanceMovement log hheadDst hhead
+          have hrestDst : ∀ l ∈ rest, acceptsEffects mid l.to_ = true := by
+            intro l hl
+            have hpre : acceptsEffects k l.to_ = true := hdsts l (by simp [hl])
+            rw [recKExecAsset_shape hhead]
+            exact hpre
+          have htail := ih (head.toTurn :: log) hrestDst hsettle
+          have hlog : ringReceiptLog rest (head.toTurn :: log) =
+              ringReceiptLog (head :: rest) log := by
+            simp [ringReceiptLog, List.append_assoc]
+          change ∃ st1, fullActionStep ⟨k, log⟩ (.balanceA head.toTurn head.asset) st1 ∧
+            turnSpec st1 (ringActions rest) ⟨k', ringReceiptLog (head :: rest) log⟩
+          exact ⟨⟨mid, head.toTurn :: log⟩, hstep, hlog ▸ htail⟩
+
+/-- **THE LOWERING, closed.**  A balanced kernel ring that settles lowers to the exact ordinary
+`.balanceA` action list under `turnSpec`, with no extra trusted liveness premise: balance + successful
+cycle settlement derive it. -/
+theorem settleRing_refines_turnSpec {r : Ring} {k k' : RecordKernelState} (log : List Turn)
+    (hbalanced : RingBalanced r) (hsettle : settleRing k r = some k') :
+    turnSpec ⟨k, log⟩ (ringActions r) ⟨k', ringReceiptLog r log⟩ :=
+  settleRing_refines_turnSpec_of_destinations_live log
+    (settled_balanced_ring_destinations_live hbalanced hsettle) hsettle
+
+#assert_axioms recKExecAsset_source_live
+#assert_axioms settleRing_sources_live
+#assert_axioms settled_balanced_ring_destinations_live
+#assert_axioms recKExecAsset_refines_balanceMovement
+#assert_axioms rawDstSealed_not_balanceMovement
+#assert_axioms settleRing_refines_turnSpec_of_destinations_live
+#assert_axioms settleRing_refines_turnSpec
 
 /-- The concrete cross-chain Market witness now genuinely satisfies the light-client structural
 boundary invariant (its cells outside the live account set are default). -/
@@ -179,7 +336,94 @@ abbrev MarketEffectEndpointExtractionResidual := MarketEffectStepExtractsClearin
 
 /-- The exact ordinary effect list induced by a clearing allocation. -/
 def clearingActions (c : DrexClearing) : List FullActionA :=
-  (settlementsOf c.nodes).map fun l => .balanceA l.toTurn l.asset
+  ringActions (settlementsOf c.nodes)
+
+/-- **The DrEX allocation lowering, unconditional.**  Every proof-carrying clearing already contains
+the facts needed by `settleRing_refines_turnSpec`: `CycleValid` plus positive wants make its settlement
+ring `RingBalanced`, and `c.settled` is the real kernel fold.  Thus its exact allocation lowers to the
+ordinary action list, including the uniquely determined receipt-chain post-state. -/
+theorem drexClearing_refines_turnSpec (c : DrexClearing) (log : List Turn) :
+    turnSpec ⟨c.pre, log⟩ (clearingActions c)
+      ⟨c.post, ringReceiptLog (settlementsOf c.nodes) log⟩ := by
+  apply settleRing_refines_turnSpec log
+  · exact cycleValid_settlement_balanced c.valid c.wantPos
+  · exact c.settled
+
+/-! ### The one remaining apex object.
+
+The deployed shielded-ring leaf is intended to witness more than an arbitrary `DrexClearing`: its
+hidden-note legs are fused to the matcher rows.  We retain that object explicitly so the remaining
+descriptor theorem cannot discard `LegFused` while claiming the shielded theorem. -/
+
+/-- A two-leg DrEX clearing together with the shielded member-spend ring whose rows it clears. -/
+structure FusedDrexClearing where
+  poolOf : AssetId → CellId
+  ring : ShieldedRing poolOf
+  clearing : DrexClearing
+  nodes_eq : clearing.nodes = matchNodes ring
+  fused : ∀ leg ∈ ring, LegFused leg
+  twoLeg : clearing.nodes.length = 2
+
+/-- The semantic step the shielded-ring apex must extract.  Besides the fused fair clearing and exact
+kernel endpoints, the receipt log is the one forced by lowering that clearing's settlement list. -/
+def ShieldedRingApexStep (pre post : RecChainedState) : Prop :=
+  ∃ f : FusedDrexClearing,
+    f.clearing.pre = pre.kernel ∧
+    f.clearing.post = post.kernel ∧
+    post.log = ringReceiptLog (settlementsOf f.clearing.nodes) pre.log
+
+/-- **The exact remaining descriptor refinement.**  A satisfying shielded-ring descriptor whose
+published endpoints decode to `pre/post` must yield the whole fused clearing above.  This is stronger
+than recognizing six `[nullifier, root, value_binding]` lanes: it binds creators, allocation rows,
+kernel endpoints, and the receipt chain. -/
+def ShieldedRingDescriptorRefines (S : CommitSurface) (hash : List Int → Int)
+    (d : EffectVmDescriptor2) : Prop :=
+  descriptorRefines S hash d ShieldedRingApexStep
+
+abbrev ShieldedRingApexRefinementResidual := ShieldedRingDescriptorRefines
+
+/-- The apex semantic object is inhabited by a genuine fused, funded bilateral swap. -/
+def fusedSettlePre : RecordKernelState where
+  accounts := {1, 2}
+  cell := fun c =>
+    if c ∈ ({1, 2} : Finset CellId) then Value.record [("balance", Value.int 0)] else default
+  caps := fun _ => []
+  bal := fun c a => if c = 1 ∧ a = 0 then 3 else if c = 2 ∧ a = 1 then 4 else 0
+
+def fusedSettlePost : RecordKernelState :=
+  (settleRing fusedSettlePre (settlementsOf fusedCycle)).get (by decide)
+
+theorem fusedSettle_settles :
+    settleRing fusedSettlePre (settlementsOf fusedCycle) = some fusedSettlePost :=
+  (Option.some_get (by decide)).symm
+
+def fusedDrexClearing : DrexClearing where
+  pre := fusedSettlePre
+  post := fusedSettlePost
+  nodes := fusedCycle
+  valid := fusedCycle_valid
+  wantPos := by decide
+  settled := fusedSettle_settles
+
+def fusedDrexWitness : FusedDrexClearing where
+  poolOf := Dregg2.Shielded.poolDemo
+  ring := fusedRing
+  clearing := fusedDrexClearing
+  nodes_eq := by
+    change fusedCycle = matchNodes fusedRing
+    exact fusedRing_nodes.symm
+  fused := fusedRing_all_fused
+  twoLeg := rfl
+
+theorem shieldedRingApexStep_realizable :
+    ShieldedRingApexStep ⟨fusedSettlePre, []⟩
+      ⟨fusedSettlePost, ringReceiptLog (settlementsOf fusedCycle) []⟩ :=
+  ⟨fusedDrexWitness, rfl, rfl, rfl⟩
+
+#guard (settlementsOf fusedDrexWitness.clearing.nodes).length == 2
+#guard fusedDrexWitness.ring.all fun leg => leg.node.offerAmount > 0
+#assert_axioms fusedSettle_settles
+#assert_axioms shieldedRingApexStep_realizable
 
 /-- **`DrexClearingEffectRefinementResidual` (OPEN):** the missing per-effect/whole-turn descriptor
 theorem.  Besides matching kernel endpoints, the extracted step must denote the exact list of ordinary
@@ -194,18 +438,22 @@ deployed `circuit-prove/src/shielded_ring_clearing_air.rs` binds each leg's clea
 note by an in-circuit `connect` (forged leg ⇒ UNSAT), enforces the matching descriptor, nullifier
 distinctness, and BOTH coordinate + range-checked INTEGER conservation; and `LedgerRealizationExt.
 shielded_ring_fused_clears` proves the `CycleValid`+`LegFused` ring that settles via `settleRing` is
-conserving + `RingBalanced`-fair + fused. So this residual is NOT a trust hole — it is exactly two named,
-concrete bridges:
-  (1) THE LOWERING — `settleRing k (settlementsOf c.nodes) = some k'` ⟹ `turnSpec ⟨k,…⟩ (clearingActions c)
-      ⟨k',…⟩`. Both are folds over the same `settlementsOf c.nodes`: `settleRing` (`Intent/Ring.lean:94`)
-      folds `recKExecAsset s l.toTurn l.asset`; `turnSpec` folds `fullActionStep`, whose `.balanceA` arm is
-      `BalanceMovementSpec`. So (1) reduces to the CONCRETE per-step lemma
-      `recKExecAsset s l.toTurn l.asset = some s' ⟹ BalanceMovementSpec ⟨s,…⟩ l.toTurn l.asset ⟨s',…⟩`
-      (the non-facet analog of `RotatedKernelRefinementFacet:131`, which does NOT yet exist — the concrete
-      first piece), plus induction on the settlement list and the `RecChainedState` wrapping (balance moves
-      touch only `.kernel`, so the non-kernel fields carry).
-  (2) THE APEX-LIFT — the single-effect dispatch must extract the whole `CycleValid`+`LegFused` ring, not
-      one `FullActionA` (the `shielded_ring_clearing_air` refinement into the Lean ring). -/
+conserving + `RingBalanced`-fair + fused.
+
+The LOWERING is now CLOSED by `drexClearing_refines_turnSpec`.  The raw per-leg implication originally
+suggested here was slightly too weak: `recKExecAsset` omits the chained destination-liveness gate and
+receipt append.  `recKExecAsset_refines_balanceMovement` states the exact step; cycle closure plus whole-
+ring success derive destination liveness, and `settleRing_refines_turnSpec` performs the fold with the
+exact reverse-prepended receipt log.
+
+The sole remaining bridge is the APEX-LIFT: the verifying descriptor must extract the whole
+`CycleValid`+`LegFused` ring and its kernel endpoints, not one `FullActionA`.  The current Rust-authored
+`shielded-ring-clear-2` leaf cannot discharge that proposition: its public claim is exactly the six
+note lanes `[nf₀,root₀,vb₀,nf₁,root₁,vb₁]`; neither creator, eight-lane kernel pre/post commitments,
+turn count, authorization/lifecycle state, nor receipt-chain output is present.  It proves the hidden-
+note fusion/cycle/conservation algebra, but not an executor transition.  Closure therefore requires a
+Lean-authored endpoint-carrying outer descriptor (architectural law #1), binding these note rows to the
+two ordinary balance actions and the batch's decoded pre/post commitment surface. -/
 def MarketEffectAllocationIdentity (marketEffect : EffectIdx) : Prop :=
   ∀ (pre post : RecChainedState), dispatchArm marketEffect pre post →
     ∃ c : DrexClearing,
@@ -213,6 +461,27 @@ def MarketEffectAllocationIdentity (marketEffect : EffectIdx) : Prop :=
       turnSpec pre (clearingActions c) post
 
 abbrev DrexClearingEffectRefinementResidual := MarketEffectAllocationIdentity
+
+/-- **The dispatch-level apex lift, and now the only residual inside allocation identity.**  The
+designated registry arm must extract the fused two-leg clearing rather than erase it to an arbitrary
+single `FullActionA`.  All settlement-list semantics below this fact are proved. -/
+def MarketEffectExtractsShieldedRing (marketEffect : EffectIdx) : Prop :=
+  ∀ (pre post : RecChainedState), dispatchArm marketEffect pre post →
+    ShieldedRingApexStep pre post
+
+abbrev MarketEffectApexLiftResidual := MarketEffectExtractsShieldedRing
+
+/-- **`DrexClearingEffectRefinementResidual` reduces exactly to the apex lift.**  Once dispatch retains
+the fused clearing and its endpoint/log binding, `drexClearing_refines_turnSpec` supplies the exact
+ordinary action list unconditionally. -/
+theorem marketEffectAllocationIdentity_of_apex_lift (marketEffect : EffectIdx)
+    (h : MarketEffectApexLiftResidual marketEffect) :
+    MarketEffectAllocationIdentity marketEffect := by
+  intro pre post hstep
+  obtain ⟨f, hcpre, hcpost, hlog⟩ := h pre post hstep
+  refine ⟨f.clearing, hcpre, hcpost, ?_⟩
+  have hlower := drexClearing_refines_turnSpec f.clearing pre.log
+  simpa [hcpre, hcpost, ← hlog] using hlower
 
 /-- Exact allocation refinement implies the endpoint fragment used by the current commitment-surface
 composition.  The converse is intentionally absent. -/
@@ -224,6 +493,10 @@ theorem marketEffectStepExtractsClearing_of_allocation_identity
   exact ⟨c, hcpre, hcpost⟩
 
 #guard (clearingActions demoFill).length == 2
+#guard ringReceiptLog (settlementsOf demoFill.nodes) [] ==
+  (settlementsOf demoFill.nodes).reverse.map RingLeg.toTurn
+#assert_axioms drexClearing_refines_turnSpec
+#assert_axioms marketEffectAllocationIdentity_of_apex_lift
 #assert_axioms marketEffectStepExtractsClearing_of_allocation_identity
 
 /-- The historical outward statement: for the registry's designated Market effect, an accepted STARK
@@ -269,6 +542,57 @@ theorem starkMarketClaimExtraction_of_effect_step
       _ = S.commit c.post pi.turn := by rw [hcpost]
 
 #assert_axioms starkMarketClaimExtraction_of_effect_step
+
+/-! ### The direct shielded-descriptor route.
+
+The generic single-action `dispatchArm` is not needed once the market registry entry itself refines to
+`ShieldedRingApexStep`.  This is the faithful apex shape for a ring descriptor: STARK extraction gives
+its satisfying trace, state decode gives the committed endpoints, and the descriptor theorem gives the
+whole fused clearing. -/
+
+/-- A verifying proof of the designated shielded-ring descriptor extracts decoded endpoints and the
+whole fused clearing directly. -/
+theorem shieldedRingApexStep_of_accept
+    (hash : List Int → Int) (S : CommitSurface) (R : Registry) (marketEffect : EffectIdx)
+    (hCR : Poseidon2SpongeCR hash) [StarkSound hash R]
+    (hmarket : ShieldedRingApexRefinementResidual S hash (R marketEffect))
+    (pi : BatchPublicInputs) (π : BatchProof) (heffect : pi.effect = marketEffect)
+    (hwitdec : WitnessDecodes hash R S pi)
+    (hacc : verifyBatch (vkOfRegistry R) pi π = Verdict.accept) :
+    ∃ pre post : RecChainedState,
+      StateDecode S pi.toPublished pre post ∧ ShieldedRingApexStep pre post := by
+  obtain ⟨minit, mfin, maddrs, t, hsat, hpub⟩ :=
+    (inferInstance : StarkSound hash R).extract pi π hacc
+  obtain ⟨pre, post, hdecode⟩ := hwitdec minit mfin maddrs t hsat hpub
+  have hsatMarket : Satisfied2 hash (R marketEffect) minit mfin maddrs t := by
+    simpa only [heffect] using hsat
+  have hapex : ShieldedRingApexStep pre post :=
+    hmarket hCR minit mfin maddrs t pi.toPublished pre post hsatMarket hdecode
+  exact ⟨pre, post, hdecode, hapex⟩
+
+/-- The historical accept-level Market extraction follows from the exact shielded descriptor
+refinement, without an opaque endpoint extractor or the ordinary single-action dispatcher. -/
+theorem starkMarketClaimExtraction_of_shielded_descriptor
+    (hash : List Int → Int) (S : CommitSurface) (R : Registry) (marketEffect : EffectIdx)
+    (hCR : Poseidon2SpongeCR hash) [StarkSound hash R]
+    (hmarket : ShieldedRingApexRefinementResidual S hash (R marketEffect))
+    (hwitdec : ∀ pi : BatchPublicInputs, WitnessDecodes hash R S pi) :
+    StarkMarketClaimExtraction S R marketEffect := by
+  intro pi π heffect hacc
+  obtain ⟨pre, post, hdecode, f, hcpre, hcpost, _hlog⟩ :=
+    shieldedRingApexStep_of_accept hash S R marketEffect hCR hmarket pi π heffect
+      (hwitdec pi) hacc
+  refine ⟨f.clearing, ?_⟩
+  refine ⟨hcpre ▸ hdecode.preWF, ?_, ?_⟩
+  · calc
+      pi.pre = S.commit pre.kernel pi.turn := hdecode.preBinds
+      _ = S.commit f.clearing.pre pi.turn := by rw [hcpre]
+  · calc
+      pi.post = S.commit post.kernel pi.turn := hdecode.postBinds
+      _ = S.commit f.clearing.post pi.turn := by rw [hcpost]
+
+#assert_axioms shieldedRingApexStep_of_accept
+#assert_axioms starkMarketClaimExtraction_of_shielded_descriptor
 
 /-! ## 4. What the two verified towers prove from the narrowed effect-refinement residual. -/
 
@@ -321,6 +645,41 @@ theorem lightclient_market_seam
   rw [hpreEq, hpostEq]
   exact no_minting_drex_clearing c b
 
+/-- **The direct STARK↔Market seam at the correct ring apex.**  Compared with the historical
+`lightclient_market_seam`, this consumes only the exact descriptor refinement, extracts the fused ring
+itself, and exports the proved exact `turnSpec` allocation lowering as part of the conclusion. -/
+theorem lightclient_market_seam_of_shielded_descriptor
+    (hash : List Int → Int) (S : CommitSurface) (R : Registry) (marketEffect : EffectIdx)
+    (hCR : Poseidon2SpongeCR hash) [StarkSound hash R]
+    (hmarket : ShieldedRingApexRefinementResidual S hash (R marketEffect))
+    (pi : BatchPublicInputs) (π : BatchProof)
+    (heffect : pi.effect = marketEffect)
+    (hwitdec : WitnessDecodes hash R S pi)
+    (hacc : verifyBatch (vkOfRegistry R) pi π = Verdict.accept) :
+    ∃ (f : FusedDrexClearing) (pre post : RecChainedState),
+      MarketBoundaryBinding S pi f.clearing ∧
+      StateDecode S pi.toPublished pre post ∧
+      ShieldedRingApexStep pre post ∧
+      turnSpec pre (clearingActions f.clearing) post ∧
+      ∀ b : AssetId, recTotalAsset post.kernel b = recTotalAsset pre.kernel b := by
+  obtain ⟨pre, post, hdecode, f, hcpre, hcpost, hlog⟩ :=
+    shieldedRingApexStep_of_accept hash S R marketEffect hCR hmarket pi π heffect hwitdec hacc
+  have hbound : MarketBoundaryBinding S pi f.clearing := by
+    refine ⟨hcpre ▸ hdecode.preWF, ?_, ?_⟩
+    · calc
+        pi.pre = S.commit pre.kernel pi.turn := hdecode.preBinds
+        _ = S.commit f.clearing.pre pi.turn := by rw [hcpre]
+    · calc
+        pi.post = S.commit post.kernel pi.turn := hdecode.postBinds
+        _ = S.commit f.clearing.post pi.turn := by rw [hcpost]
+  have hlower := drexClearing_refines_turnSpec f.clearing pre.log
+  have hturn : turnSpec pre (clearingActions f.clearing) post := by
+    simpa [hcpre, hcpost, ← hlog] using hlower
+  refine ⟨f, pre, post, hbound, hdecode, ⟨f, hcpre, hcpost, hlog⟩, hturn, ?_⟩
+  intro b
+  rw [← hcpre, ← hcpost]
+  exact no_minting_drex_clearing f.clearing b
+
 /-- **The full outward composition on one commitment surface.**  If a target-chain register is anchored
 at the accepted batch's public pre-root, the extracted Market clearing advances it to exactly the
 accepted public post-root, while that transition is the same decoded STARK transition and conserves
@@ -368,27 +727,139 @@ theorem accepted_market_settles_on_same_commitment_surface
     _ = pi.post := hbound.postRoot.symm
 
 #assert_axioms lightclient_market_seam
+#assert_axioms lightclient_market_seam_of_shielded_descriptor
 #assert_axioms accepted_market_settles_on_same_commitment_surface
 
-/-! ## 5. The deployed settlement-verifier obligation (also open). -/
+/-! ## 5. The deployed 25-lane settlement-verifier obligation (also open).
 
-/-- **`SettlementVerifierRefinementResidual` (OPEN):** the semantic soundness statement required of
-the deployed Groth16 verifier.  Any accepted proof bytes/public roots/turn count must imply existence
-of a fair, kernel-real `DrexClearing` with exactly those roots and count.  `settleDrex` does not prove
-this: it starts after this implication, with `c` already supplied as a structure.
+The old residual used generic scalar `Root` arguments and therefore hid two load-bearing deployed
+facts: Groth16 verifies exactly 25 BabyBear public inputs, and Solidity records a keccak of the tight
+big-endian encoding of each eight-lane root.  The exact codec and accept-path checks are executable
+below; only the cryptographic/extraction implication remains a residual. -/
 
-`Root` is deliberately generic because the EVM/CosmWasm/Solana boundary uses packed eight-lane roots,
-whereas `CommitSurface.commit` is the scalar metatheory surface.  A faithful deployment theorem must
-instantiate `rootOf` with the actual lane packing and hash, not `demoRoot`. -/
-def SettlementVerifierRefines {Root : Type}
-    (verifyProof : List Nat → Root → Root → Nat → Bool)
-    (rootOf : RecordKernelState → Root) : Prop :=
-  ∀ (proofBytes : List Nat) (preRoot postRoot : Root) (numTurns : Nat),
-    verifyProof proofBytes preRoot postRoot numTurns = true →
+/-- One deployed Poseidon/BabyBear digest, with width fixed by the ABI rather than a list-length
+premise. -/
+abbrev Lane8 := Fin 8 → Nat
+
+def babyBearP : Nat := 2013265921
+
+/-- Array order as used by gnark and Solidity. -/
+def lane8List (x : Lane8) : List Nat := List.ofFn x
+
+/-- The Solidity `uint32` tight big-endian byte encoding (`abi.encodePacked(uint32)`). -/
+def u32be (x : Nat) : List Nat :=
+  [x / 16777216 % 256, x / 65536 % 256, x / 256 % 256, x % 256]
+
+/-- The exact 32-byte preimage passed to `keccak256` by `DreggSettlement.packLanes`. -/
+def packLaneBytes (x : Lane8) : List Nat := (lane8List x).flatMap u32be
+
+/-- The public statement of the deployed Groth16 wrapper. -/
+structure SettlementPublics25 where
+  genesisRoot : Lane8
+  finalRoot : Lane8
+  numTurns : Nat
+  chainDigest : Lane8
+
+/-- Pinned gnark/Solidity order:
+`genesis[0..8) ++ final[8..16) ++ numTurns[16] ++ chainDigest[17..25)`. -/
+def SettlementPublics25.toInputs (pub : SettlementPublics25) : List Nat :=
+  lane8List pub.genesisRoot ++ lane8List pub.finalRoot ++ [pub.numTurns] ++
+    lane8List pub.chainDigest
+
+def lane8Canonical (x : Lane8) : Bool :=
+  (lane8List x).all fun v => decide (v < babyBearP)
+
+/-- The canonical-field checks performed by `DreggSettlement.settle` before the pairing call. -/
+def SettlementPublics25.canonical (pub : SettlementPublics25) : Bool :=
+  lane8Canonical pub.genesisRoot && lane8Canonical pub.finalRoot &&
+    decide (pub.numTurns < babyBearP) && lane8Canonical pub.chainDigest
+
+/-- The proof-dependent portion of the deployed accept path: canonical 25-lane public inputs,
+strictly positive turn count, and a successful pairing check.  Continuity against `_provenLanes` is
+the subsequent state-machine gate already modeled by `settleDrex`. -/
+def settlementVerifierAccept
+    (verifyProof : List Nat → List Nat → Bool) (proofBytes : List Nat)
+    (pub : SettlementPublics25) : Bool :=
+  pub.canonical && decide (0 < pub.numTurns) && verifyProof proofBytes pub.toInputs
+
+theorem lane8List_length (x : Lane8) : (lane8List x).length = 8 := by
+  simp [lane8List]
+
+theorem packLaneBytes_length (x : Lane8) : (packLaneBytes x).length = 32 := by
+  simp [packLaneBytes, lane8List, u32be]
+
+theorem settlementPublicInputs_length (pub : SettlementPublics25) : pub.toInputs.length = 25 := by
+  simp [SettlementPublics25.toInputs, lane8List]
+
+theorem settlementVerifierAccept_numTurns_pos
+    (verifyProof : List Nat → List Nat → Bool) (proofBytes : List Nat)
+    (pub : SettlementPublics25) (hacc : settlementVerifierAccept verifyProof proofBytes pub = true) :
+    0 < pub.numTurns := by
+  simp [settlementVerifierAccept] at hacc
+  exact hacc.1.2
+
+/-- **`SettlementVerifierRefinementResidual` (OPEN, tightened):** successful verification of the exact
+25-lane statement must extract a fair, kernel-real `DrexClearing`, whose kernel states encode to the
+published eight-lane roots and whose ring length is the published `numTurns`.  The chain digest is not
+dropped: it is present in `pub.toInputs`, so the same pairing acceptance binds it even though the
+Market conclusion does not consume history here.
+
+This is precisely what `settleDrex` cannot establish: `settleDrex` starts after extraction, with `c`
+already supplied.  Closing it requires the Groth16 knowledge/soundness bridge through the recursive
+STARK wrapper plus the Market shielded-apex extraction above, and a faithful `stateLanes` codec for the
+deployed eight-lane state commitment. -/
+def SettlementVerifier25Refines
+    (verifyProof : List Nat → List Nat → Bool)
+    (stateLanes : RecordKernelState → Lane8) : Prop :=
+  ∀ (proofBytes : List Nat) (pub : SettlementPublics25),
+    settlementVerifierAccept verifyProof proofBytes pub = true →
     ∃ c : DrexClearing,
-      rootOf c.pre = preRoot ∧ rootOf c.post = postRoot ∧ c.nodes.length = numTurns
+      stateLanes c.pre = pub.genesisRoot ∧
+      stateLanes c.post = pub.finalRoot ∧
+      c.nodes.length = pub.numTurns
 
-abbrev SettlementVerifierRefinementResidual {Root : Type} :=
-  SettlementVerifierRefines (Root := Root)
+abbrev SettlementVerifierRefinementResidual := SettlementVerifier25Refines
+
+/-- Solidity's recorded root, parameterized only by the deployed `keccak256` byte hash. -/
+def packedLaneRoot {Root : Type} (keccak : List Nat → Root) (x : Lane8) : Root :=
+  keccak (packLaneBytes x)
+
+/-- **Eight-lane packing reduction.**  Exact lane extraction immediately binds the two roots recorded
+by EVM/CosmWasm/Solana clients; no injectivity of the compressing keccak is fabricated or needed. -/
+theorem accepted_settlement_binds_packed_roots {Root : Type}
+    (verifyProof : List Nat → List Nat → Bool)
+    (stateLanes : RecordKernelState → Lane8)
+    (hverify : SettlementVerifierRefinementResidual verifyProof stateLanes)
+    (keccak : List Nat → Root) (proofBytes : List Nat) (pub : SettlementPublics25)
+    (hacc : settlementVerifierAccept verifyProof proofBytes pub = true) :
+    ∃ c : DrexClearing,
+      packedLaneRoot keccak (stateLanes c.pre) = packedLaneRoot keccak pub.genesisRoot ∧
+      packedLaneRoot keccak (stateLanes c.post) = packedLaneRoot keccak pub.finalRoot ∧
+      c.nodes.length = pub.numTurns := by
+  obtain ⟨c, hpre, hpost, hnum⟩ := hverify proofBytes pub hacc
+  exact ⟨c, by rw [hpre], by rw [hpost], hnum⟩
+
+def demoLanes (a b : Nat) : Lane8 := fun i =>
+  if i = 0 then a else if i = 1 then b else 0
+
+def demoSettlementPublics : SettlementPublics25 where
+  genesisRoot := demoLanes 7 5
+  finalRoot := demoLanes 0 0
+  numTurns := 2
+  chainDigest := demoLanes 11 13
+
+#guard u32be 0x01020304 == [1, 2, 3, 4]
+#guard (packLaneBytes (demoLanes 0x01020304 0x05060708)).take 8 ==
+  [1, 2, 3, 4, 5, 6, 7, 8]
+#guard demoSettlementPublics.toInputs.length == 25
+#guard settlementVerifierAccept (fun _ _ => true) [42] demoSettlementPublics == true
+#guard settlementVerifierAccept (fun _ _ => true) [42]
+  { demoSettlementPublics with numTurns := 0 } == false
+
+#assert_axioms lane8List_length
+#assert_axioms packLaneBytes_length
+#assert_axioms settlementPublicInputs_length
+#assert_axioms settlementVerifierAccept_numTurns_pos
+#assert_axioms accepted_settlement_binds_packed_roots
 
 end Market.ProtocolAssurance

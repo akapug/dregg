@@ -1,7 +1,7 @@
 //! The CARRY-FREE ADDITIVE fold — codex Round-3 Q1's Tier-0 speed lever, MEASURED.
 //!
 //! The exact-integer TFHE clear (`crate::fhe_clear`) folds the per-order unary
-//! price-bucket increments with `FheUint16::sum`, and the MEASURED envelope
+//! price-bucket increments with `FheUint32::sum`, and the MEASURED envelope
 //! (`MEASURED-ENVELOPE.md`, `HBOX-24CORE-ENVELOPE.md`) showed the load-bearing
 //! finding: a multi-block radix add **carry-propagates**, and carry propagation
 //! is PBS-class (~13 ms/element even in the deferred-carry tree-sum), so the
@@ -18,12 +18,13 @@
 //! for the *auction* fold specifically — CKKS is for the T-step PDHG search).
 //!
 //! The SIMD packing is the structural win over TFHE. TFHE packs one integer per
-//! `FheUint16` and must sum each of the K buckets separately: 2·K bucket-sums,
+//! `FheUint32` and must sum each of the K buckets separately: 2·K bucket-sums,
 //! each over ~N/2 carry-propagating adds → O(N·K) PBS-class work. BFV packs the
 //! WHOLE K-bucket increment vector of one order into a SINGLE ciphertext (K ≤ n
-//! slots), so folding N orders is just **N−2 ciphertext additions total** (one
-//! running sum for demand, one for supply), each a carry-free poly add that
-//! updates all K buckets at once. O(N) carry-free adds vs O(N·K) PBS adds.
+//! slots), so folding N orders is just **N ciphertext additions total** from
+//! zero accumulators (one running sum for demand, one for supply), each a
+//! carry-free poly add that updates all K buckets at once. O(N) carry-free adds
+//! vs O(N·K) PBS adds.
 //!
 //! The crossing (`D[p] ≥ S[p]`) is a comparison, and — codex's hard boundary —
 //! "there is no comparison from additive homomorphism alone." So the crossing is
@@ -143,8 +144,8 @@ pub fn bfv_fold(
     // (a) THE ADDITIVE FOLD — the carry-free part under test. D = Σ_bids, S =
     //     Σ_asks, each a running sum of packed ciphertexts. Every `+=` folds all K
     //     buckets at once via native modular poly-add: no carry, no PBS. This is
-    //     N−2 ciphertext adds total, vs TFHE's 2·K deferred-carry bucket-sums over
-    //     N/2 carry-propagating elements each.
+    //     N ciphertext adds total from zero accumulators, vs TFHE's 2·K
+    //     deferred-carry bucket-sums over N/2 carry-propagating elements each.
     let t0 = Instant::now();
     let mut d_ct = Ciphertext::zero(params);
     for ct in &bid_cts {
@@ -155,7 +156,7 @@ pub fn bfv_fold(
         s_ct += ct;
     }
     t.fold = t0.elapsed();
-    t.add_ops = bid_cts.len().saturating_sub(1) + ask_cts.len().saturating_sub(1);
+    t.add_ops = bid_cts.len() + ask_cts.len();
 
     // (b) Decrypt the two aggregate curve ciphertexts (K slots each). In the
     //     no-viewer deployment the curves are NEVER opened — the crossing runs
