@@ -142,6 +142,9 @@ trait OfferingSlot {
     fn close(&mut self, id: &SessionId) -> bool;
     /// The current cap-gated affordances of session `id` (`None` if absent).
     fn actions(&self, id: &SessionId) -> Option<Vec<Action>>;
+    /// The cap-gated affordances of session `id` AS `viewer` sees them (`None` if absent) — threads
+    /// the viewer to [`Offering::actions_for`] across the erasure boundary.
+    fn actions_for(&self, id: &SessionId, viewer: &DreggIdentity) -> Option<Vec<Action>>;
     /// Advance session `id` by one real turn (`None` if absent).
     fn advance(&mut self, id: &SessionId, input: Action, actor: DreggIdentity) -> Option<Outcome>;
     /// Advance session `id` by one real crowd turn (`None` if absent).
@@ -153,6 +156,9 @@ trait OfferingSlot {
     ) -> Option<Outcome>;
     /// Render session `id`'s current surface (`None` if absent).
     fn render(&self, id: &SessionId) -> Option<Surface>;
+    /// Render session `id`'s surface AS `viewer` sees it (`None` if absent) — threads the viewer to
+    /// [`Offering::render_for`] across the erasure boundary (the hidden-hand / fog-of-war projection).
+    fn render_for(&self, id: &SessionId, viewer: &DreggIdentity) -> Option<Surface>;
     /// Re-verify session `id`'s committed chain (`None` if absent).
     fn verify(&self, id: &SessionId) -> Option<VerifyReport>;
     /// What `input` would cost in session `id` (`None` if absent).
@@ -203,6 +209,11 @@ impl<O: Offering> OfferingSlot for Hosted<O> {
         Some(self.offering.actions(s))
     }
 
+    fn actions_for(&self, id: &SessionId, viewer: &DreggIdentity) -> Option<Vec<Action>> {
+        let s = self.sessions.get(id)?;
+        Some(self.offering.actions_for(s, viewer))
+    }
+
     fn advance(&mut self, id: &SessionId, input: Action, actor: DreggIdentity) -> Option<Outcome> {
         let s = self.sessions.get_mut(id)?;
         Some(self.offering.advance(s, input, actor))
@@ -221,6 +232,11 @@ impl<O: Offering> OfferingSlot for Hosted<O> {
     fn render(&self, id: &SessionId) -> Option<Surface> {
         let s = self.sessions.get(id)?;
         Some(self.offering.render(s))
+    }
+
+    fn render_for(&self, id: &SessionId, viewer: &DreggIdentity) -> Option<Surface> {
+        let s = self.sessions.get(id)?;
+        Some(self.offering.render_for(s, viewer))
     }
 
     fn verify(&self, id: &SessionId) -> Option<VerifyReport> {
@@ -412,6 +428,21 @@ impl OfferingHost {
         self.slots.get(key)?.actions(id)
     }
 
+    /// The cap-gated affordances of session `(key, id)` **AS `viewer` sees them** — the per-actor
+    /// projection ([`Offering::actions_for`]) threaded through the erasure boundary. Where
+    /// [`actions`](OfferingHost::actions) paints the anonymous set, this dims/omits affordances the
+    /// viewer lacks the cap for (a document region, a seat). `None` if the offering or session is
+    /// absent. The web/Telegram/WeChat frontends that hold the acting identity call THIS so a viewer
+    /// is offered only what they can fire.
+    pub fn actions_for(
+        &self,
+        key: &str,
+        id: &SessionId,
+        viewer: &DreggIdentity,
+    ) -> Option<Vec<Action>> {
+        self.slots.get(key)?.actions_for(id, viewer)
+    }
+
     /// **Advance session `(key, id)` by one real turn** — resolve `input` on the substrate as ONE
     /// cap-bounded turn attributed to `actor` (a legal move lands a real [`Outcome::Landed`]; an
     /// illegal one is a real [`Outcome::Refused`] that commits nothing). `None` if the offering or
@@ -481,6 +512,15 @@ impl OfferingHost {
     /// Render session `(key, id)`'s current [`Surface`] (`None` if absent).
     pub fn render(&self, key: &str, id: &SessionId) -> Option<Surface> {
         self.slots.get(key)?.render(id)
+    }
+
+    /// Render session `(key, id)`'s current [`Surface`] **AS `viewer` sees it** — the per-viewer
+    /// projection ([`Offering::render_for`]) threaded through the erasure boundary: the viewer's own
+    /// hidden state (a card hand) is revealed while every other player's stays fog. `None` if the
+    /// offering or session is absent. The frontend that knows the acting identity calls THIS (not the
+    /// viewer-blind [`render`](OfferingHost::render)) so the right projection reaches the right person.
+    pub fn render_for(&self, key: &str, id: &SessionId, viewer: &DreggIdentity) -> Option<Surface> {
+        self.slots.get(key)?.render_for(id, viewer)
     }
 
     /// Re-verify session `(key, id)`'s committed chain (`None` if absent).

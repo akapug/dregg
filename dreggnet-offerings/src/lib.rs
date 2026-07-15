@@ -509,6 +509,23 @@ pub trait Offering {
         self.render(session)
     }
 
+    /// **The cap-gated affordances AS `viewer` sees them** — the per-actor projection of
+    /// [`actions`](Offering::actions). Where `actions` paints ONE affordance set for everyone,
+    /// `actions_for` dims/omits the affordances `viewer` lacks the capability to fire (a document
+    /// region they do not hold the edit cap for, a seat that is not theirs). The SAME [`Action`]
+    /// shape a frontend already renders; a [`Frontend`] that knows the acting identity calls
+    /// `actions_for(session, viewer)` so a viewer is never offered an affordance they cannot use.
+    ///
+    /// **Default (additive, non-breaking):** falls back to [`actions`](Offering::actions) — a
+    /// full-information / uniform-affordance offering (the dungeon, a grain) needs no per-viewer
+    /// gating, so it inherits this default and NOTHING changes for it. Only an offering whose
+    /// affordances genuinely differ by actor (a per-region document cap) overrides it. This is the
+    /// affordance analogue of [`render_for`](Offering::render_for): the two agree, one for the
+    /// surface, one for the buttons, both keyed to who is looking.
+    fn actions_for(&self, session: &Self::Session, _viewer: &DreggIdentity) -> Vec<Action> {
+        self.actions(session)
+    }
+
     /// What a paid action costs (run-credits). The free tier is [`RunCost::free`].
     fn price(&self, input: &Action) -> RunCost;
 }

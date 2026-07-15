@@ -1233,6 +1233,8 @@ async fn get_catalog(State(state): State<Arc<CatalogState>>) -> Html<String> {
 async fn get_offering_session(
     State(state): State<Arc<CatalogState>>,
     Path((key, id)): Path<(String, String)>,
+    headers: HeaderMap,
+    Query(query): Query<WebQuery>,
 ) -> Html<String> {
     let sid = SessionId::new(id);
     // Ensure the session is open (deploy on first touch), then render.
@@ -1244,7 +1246,10 @@ async fn get_offering_session(
     if let Err(HostError::UnknownOffering(_)) = opened {
         return Html(catalog_missing_offering(&key));
     }
-    Html(render_offering_page(&state, &key, &sid, None))
+    // The viewer's derived identity (the `dregg_user` cookie / `?user=` param) — the SAME identity a
+    // POST attributes a turn to. A seated player renders their OWN hidden hand; a spectator sees fog.
+    let viewer = web_identity(&web_user(&headers, &query));
+    Html(render_offering_page(&state, &key, &sid, None, &viewer))
 }
 
 /// The `{turn, arg}` POST body of `POST /offerings/{key}/session/{id}/act`.
@@ -1300,8 +1305,11 @@ async fn post_offering_act(
         let sid = sid.clone();
         let turn = form.turn.clone();
         let arg = form.arg;
+        let actor = actor.clone();
         state.host.run(move |h| {
-            let Some(actions) = h.actions(&key, &sid) else {
+            // Validate against the affordances THIS actor sees (`actions_for`) — a viewer is offered
+            // only what their caps allow; the executor remains the sole referee of the typed turn.
+            let Some(actions) = h.actions_for(&key, &sid, &actor) else {
                 return CatalogAct::Missing;
             };
             if !actions.iter().any(|a| a.turn == turn) {
@@ -1334,7 +1342,15 @@ async fn post_offering_act(
         CatalogAct::Missing => "Refused: no such offering session.".to_string(),
     };
 
-    Html(render_offering_page(&state, &key, &sid, Some(&notice)))
+    // Re-render AS the acting user — so the player who just claimed/played a seat sees their own
+    // hidden hand (and their own cap-gated affordances), not the viewer-blind public fog.
+    Html(render_offering_page(
+        &state,
+        &key,
+        &sid,
+        Some(&notice),
+        &actor,
+    ))
 }
 
 /// `GET /offerings/{key}/session/{id}/verify` — re-verify the committed chain by the offering's own
@@ -1365,13 +1381,17 @@ fn render_offering_page(
     key: &str,
     id: &SessionId,
     notice: Option<&str>,
+    viewer: &DreggIdentity,
 ) -> String {
     let rendered = {
         let key = key.to_string();
         let id = id.clone();
+        let viewer = viewer.clone();
+        // Render AS the viewer — the per-player projection (own hidden hand revealed, others fog),
+        // NOT the viewer-blind `render`. This is the host-boundary fix reaching the web surface.
         state
             .host
-            .run(move |h| h.render(&key, &id).zip(h.verify(&key, &id)))
+            .run(move |h| h.render_for(&key, &id, &viewer).zip(h.verify(&key, &id)))
     };
     let Some((surface, verify)) = rendered else {
         return page_missing(id);

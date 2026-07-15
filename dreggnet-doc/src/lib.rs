@@ -991,6 +991,18 @@ impl Offering for DocOffering {
         self.actions_for(session, None)
     }
 
+    /// **The per-VIEWER edit affordances** — the [`Offering::actions_for`] override
+    /// that carries the document's per-actor cap dimming ONTO the live host path.
+    /// Delegates to the inherent [`DocOffering::actions_for`] with `Some(viewer)`, so
+    /// a collaborator without a region's edit cap sees that affordance `disabled`
+    /// where a capped collaborator sees it enabled. Without this override the trait
+    /// default falls back to [`actions`](Offering::actions) (the anonymous, fully-enabled
+    /// set), and the cap dimming would never reach a viewer-aware frontend.
+    fn actions_for(&self, session: &DocSession, viewer: &DreggIdentity) -> Vec<Action> {
+        // Inherent method (takes `Option<&DreggIdentity>`); resolves ahead of this trait method.
+        self.actions_for(session, Some(viewer))
+    }
+
     /// **An EDIT is ONE real turn on the actor's per-agent chain.** The typed
     /// [`Action`] is desugared into a real `dregg_doc::Patch` (its prose read from
     /// [`Action::text`]) and driven through the shared [`MultiEditorDoc`] as the
@@ -1054,6 +1066,16 @@ impl Offering for DocOffering {
     /// the edit affordances as a cap-gated [`ViewNode::Menu`].
     fn render(&self, session: &DocSession) -> Surface {
         self.render_for(session, None)
+    }
+
+    /// **The per-VIEWER document surface** — the [`Offering::render_for`] override that
+    /// carries the per-actor cap-gated menu ONTO the live host path. Delegates to the
+    /// inherent [`DocOffering::render_for`] with `Some(viewer)`, so the surface's edit
+    /// affordances are dimmed for a viewer without the edit cap. Without this override
+    /// the trait default falls back to [`render`](Offering::render) (the anonymous view).
+    fn render_for(&self, session: &DocSession, viewer: &DreggIdentity) -> Surface {
+        // Inherent method (takes `Option<&DreggIdentity>`); resolves ahead of this trait method.
+        self.render_for(session, Some(viewer))
     }
 
     /// A landed edit costs `edit_credits` run-credits; a **resolution is free**

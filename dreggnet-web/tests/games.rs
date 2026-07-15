@@ -137,12 +137,13 @@ async fn a_full_automatafl_turn_plays_through_the_catalog() {
         "the refused move committed nothing — still the commit phase"
     );
 
-    // The legal seal lands.
+    // The legal seal lands. The POST re-renders AS alice (the viewer-aware host boundary), so the
+    // sealer sees HER OWN move revealed — the opponent, not the sealer, is the one kept in the fog.
     let (_, body) = post(&app, &format!("{base}/act"), "commit", idx(1, 4), "alice").await;
     assert!(body.contains("Turn committed"), "the seal lands: {body}");
     assert!(
-        body.contains("move SEALED"),
-        "the sealed move is FOG on the public surface (only the commitment shows)"
+        body.contains("YOUR sealed move"),
+        "the sealer sees THEIR OWN sealed move on their own surface (per-viewer, not viewer-blind fog): {body}"
     );
 
     // ── Seat B (browser user `bob`): select (3,3), seal to (3,0).
@@ -150,6 +151,12 @@ async fn a_full_automatafl_turn_plays_through_the_catalog() {
     assert!(body.contains("Turn committed"), "bob claims seat B: {body}");
     let (_, body) = post(&app, &format!("{base}/act"), "commit", idx(3, 0), "bob").await;
     assert!(body.contains("Turn committed"));
+    // Rendered AS bob now: bob sees HIS own seal, and ALICE's sealed move is FOG to him (only the
+    // commitment shows) — the simultaneous-secret fog, correctly keyed to the OPPONENT's viewpoint.
+    assert!(
+        body.contains("move SEALED"),
+        "the opponent's sealed move is fog to bob (only the commitment shows): {body}"
+    );
     assert!(
         body.contains("REVEAL (both moves sealed"),
         "both seals in → the reveal phase: {body}"
