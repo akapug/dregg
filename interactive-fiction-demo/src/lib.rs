@@ -40,8 +40,6 @@
 //! deterministic `RecordedDm` here; a live provider is the confined-body lane) and the live
 //! MPC-TLS 2PC (behind attested-dm's `tlsn-live` feature). This lane wires the composition.
 
-use std::collections::BTreeSet;
-
 use spween_dregg::{CollectiveChoiceEngine, Driver, WorldCell as StoryWorld, verify};
 
 use mud_dregg::{Command, Dungeon};
@@ -50,9 +48,12 @@ use attested_dm::{
     DmCaps, DmError, DmMove, DungeonMaster, PlayerMessage, WorldCell as DmWorld, WorldEffect,
 };
 
-use dregg_governance::{
-    APPROVE, CastOutcome, Electorate, OptionId, Resolution, community::CommunityPolls,
-};
+use dregg_governance::community::CommunityPolls;
+
+/// The `approve` option index in the federation poll below (options: `["reject", "approve"]`).
+/// The verified `CommunityPolls` takes a plain option index — the executor's ballot cell is
+/// what gates the cast, so there is no wrapper type to carry.
+const APPROVE: usize = 1;
 
 /// The deterministic world seed — the same scene id + seed re-deploys the exact world,
 /// so a crowd-authored playthrough re-verifies bit-for-bit.
@@ -274,29 +275,35 @@ pub fn run() -> Result<Summary, String> {
     // ── 6. THE FEDERATION SELF-GOVERNS THROUGH THE SAME VOTE PRIMITIVE ───────────
     println!("⑤ GOVERNED BY THE SAME VOTE  (dregg-governance)");
     let members = ["mara", "finn", "kestrel", "doran", "isolde"];
-    let electorate: BTreeSet<[u8; 32]> = members.iter().map(|m| vid(m)).collect();
-    let mut fed = CommunityPolls::new();
-    let poll = fed.open(
-        "Canonize the crowd's playthrough as an official timeline?",
-        &["reject", "approve"],
-        Electorate::Closed(electorate),
-        3,
-        0xC0FFEE,
-    );
-    // The same open/cast/tally/resolve shape the story branch-vote used — here it governs.
+    let electorate: Vec<[u8; 32]> = members.iter().map(|m| vid(m)).collect();
+    // The VERIFIED front door: `CommunityPolls` now IS the executor-backed engine — the
+    // quorum/double-vote gates are in-circuit, not host-side bookkeeping.
+    let mut fed = CommunityPolls::new(*b"interactive-fiction-demo::poll32");
+    let poll = fed
+        .open(
+            "Canonize the crowd's playthrough as an official timeline?",
+            &["reject", "approve"],
+            electorate,
+            3,
+        )
+        .expect("open the federation poll");
+    // The same open/ballot/cast/tally/resolve shape the story branch-vote used — here it governs.
+    // A cast needs the voter's BALLOT CAP: eligibility is holding a cap, minted by the executor.
     for m in ["mara", "finn", "kestrel", "doran"] {
-        let out = fed.cast(poll, vid(m), APPROVE);
-        debug_assert_eq!(out, CastOutcome::Accepted, "committee member may cast");
+        let cap = fed
+            .ballot(poll, vid(m))
+            .expect("committee member is enrolled");
+        fed.cast(poll, &cap, APPROVE)
+            .expect("committee member may cast");
     }
-    let _ = fed.cast(poll, vid("isolde"), OptionId(0)); // one dissenter votes reject
-    let federation_approved = matches!(
-        fed.resolve(poll),
-        Resolution::Decided { winner, .. } if winner == APPROVE
-    );
-    if let Some(t) = fed.tally(poll) {
+    if let Ok(cap) = fed.ballot(poll, vid("isolde")) {
+        let _ = fed.cast(poll, &cap, 0); // one dissenter votes reject
+    }
+    let federation_approved = matches!(fed.resolve(poll), Ok(Some(ref d)) if d.winner == APPROVE);
+    if let Ok(t) = fed.tally(poll) {
         println!(
-            "   ▸ federation poll (same VoteEngine primitive): {:?}  distinct voters {}",
-            t.per_option, t.distinct_voters
+            "   ▸ federation poll (the same executor-verified vote primitive): {:?}  total {}",
+            t.per_option, t.total
         );
     }
     println!(
