@@ -301,6 +301,7 @@ impl Offering for DungeonOffering {
                     choice_index,
                     receipt: receipt.clone(),
                     state: session.world.snapshot(),
+                    decision_commitment: None,
                 };
                 session.steps.push(step);
                 session.actors.push(actor);

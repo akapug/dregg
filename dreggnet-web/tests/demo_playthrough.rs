@@ -1,0 +1,336 @@
+//! **THE FULL DEMO, DRIVEN END-TO-END THROUGH THE DEPLOYED APP.**
+//!
+//! `games.rs` drives the two games through `catalog_router`; this drives the WHOLE deployed
+//! surface through [`make_app`] — the exact `Router` the server binds — to prove a clean
+//! play-through of all three games with NO dead action / no non-advancing POST / no confusing
+//! empty state, and to render the POLISHED surfaces (goal squares, the tug guild table, a feature
+//! surface) so they can be eyeballed:
+//!
+//! - **the landing + grouped catalog** render (Games / Feature surfaces / Services shelves);
+//! - **automatafl** plays a full simultaneous turn (`select → commit → reveal → resolve`), the
+//!   board's GOAL squares paint their distinct `goal` look, and an illegal move is refused
+//!   (nothing commits);
+//! - **multiway-tug** opens with its guild lanes as a real `.deos-table` (not a wall of `<p>`) and
+//!   a play lands;
+//! - **The Descent** ingests the honest winning run through `POST /descent/submit` and it then
+//!   ranks on `GET /descent`;
+//! - **a feature surface** (trade) renders its goods as a real table with a header row and a play
+//!   lands.
+//!
+//! It also writes HTML samples of the polished surfaces to `/tmp/demo-samples/` (a side output for
+//! eyeballing; the assertions are the gate).
+
+use axum::body::Body;
+use axum::http::{Request, StatusCode};
+use dreggnet_web::{demo_win, make_app};
+use tower::ServiceExt; // oneshot
+
+async fn get(app: &axum::Router, uri: &str) -> (StatusCode, String) {
+    let resp = app
+        .clone()
+        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let status = resp.status();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (status, String::from_utf8(bytes.to_vec()).unwrap())
+}
+
+/// POST a `{turn, arg}` affordance form as web user `user`.
+async fn post_act(
+    app: &axum::Router,
+    uri: &str,
+    turn: &str,
+    arg: i64,
+    user: &str,
+) -> (StatusCode, String) {
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("cookie", format!("dregg_user={user}"))
+                .body(Body::from(format!("turn={turn}&arg={arg}")))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (status, String::from_utf8(bytes.to_vec()).unwrap())
+}
+
+/// POST a JSON body (the Descent submit seam).
+async fn post_json(app: &axum::Router, uri: &str, body: serde_json::Value) -> (StatusCode, String) {
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (status, String::from_utf8(bytes.to_vec()).unwrap())
+}
+
+/// The 5×5 board index of `(x, y)`.
+fn idx(x: i64, y: i64) -> i64 {
+    y * 5 + x
+}
+
+/// Write an HTML sample for eyeballing (best-effort; never fails the test).
+fn sample(name: &str, html: &str) {
+    let dir = std::path::Path::new("/tmp/demo-samples");
+    let _ = std::fs::create_dir_all(dir);
+    let _ = std::fs::write(dir.join(name), html);
+}
+
+/// **The landing + grouped catalog render** — the two pages a stranger opens first.
+#[tokio::test]
+async fn the_landing_and_grouped_catalog_render() {
+    let app = make_app();
+
+    let (status, body) = get(&app, "/").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("DreggNet Cloud"), "the landing renders");
+    assert!(
+        body.contains("/offerings") && body.contains("/descent"),
+        "the landing links the catalog + the leaderboard"
+    );
+    sample("landing.html", &body);
+
+    let (status, body) = get(&app, "/offerings").await;
+    assert_eq!(status, StatusCode::OK);
+    // The three grouped shelves (the polish: not one flat wall of cards).
+    for shelf in ["Games", "Feature surfaces", "Services"] {
+        assert!(
+            body.contains(shelf),
+            "the catalog groups the offerings into a `{shelf}` shelf"
+        );
+    }
+    assert!(
+        body.contains("group-h"),
+        "the shelves use the grouped-heading style"
+    );
+    // A play link from each category is present.
+    for key in ["automatafl", "tug", "trade", "doc"] {
+        assert!(
+            body.contains(&format!("/offerings/{key}/session/")),
+            "the catalog lists a play link for {key}"
+        );
+    }
+    sample("catalog.html", &body);
+}
+
+/// **Automatafl plays a full turn through the deployed app; the goal squares paint distinctly.**
+#[tokio::test]
+async fn automatafl_full_playthrough_with_goal_squares() {
+    let app = make_app();
+    let base = "/offerings/automatafl/session/pt-auto";
+
+    // Open: the board paints, and the GOAL squares (glyph a/b) carry the distinct `goal` class —
+    // no longer indistinguishable from a plain vacant (tag-muted) cell.
+    let (status, body) = get(&app, base).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("coordgrid"), "the board paints");
+    assert!(
+        body.contains("goal\">a</span>") || body.contains("goal\">a</button>"),
+        "seat A's goal square carries the distinct `goal` look: {}",
+        &body[..body.len().min(400)]
+    );
+    assert!(
+        body.contains("goal\">b</span>") || body.contains("goal\">b</button>"),
+        "seat B's goal square carries the distinct `goal` look"
+    );
+    assert!(
+        body.contains(".coordgrid .cell.goal{"),
+        "the goal-square CSS rule ships on the page"
+    );
+    sample("automatafl-board.html", &body);
+
+    // ── A full simultaneous turn: select → (illegal refused) → commit → reveal → resolve.
+    let (_, body) = post_act(&app, &format!("{base}/act"), "select", idx(1, 1), "alice").await;
+    assert!(body.contains("Turn committed"), "the select lands: {body}");
+    assert!(
+        body.contains("highlighted"),
+        "the selected piece lights its legal moves"
+    );
+
+    // An illegal (diagonal) move is refused — nothing commits (no dead/ghost action).
+    let (_, body) = post_act(&app, &format!("{base}/act"), "commit", idx(3, 3), "alice").await;
+    assert!(
+        body.contains("Refused: illegal move"),
+        "a diagonal is refused by the real referee: {body}"
+    );
+    assert!(
+        body.contains("COMMIT (both seats seal a move)"),
+        "the refused move committed nothing"
+    );
+
+    let (_, body) = post_act(&app, &format!("{base}/act"), "commit", idx(1, 4), "alice").await;
+    assert!(body.contains("Turn committed"), "the legal seal lands");
+    let (_, body) = post_act(&app, &format!("{base}/act"), "select", idx(3, 3), "bob").await;
+    assert!(body.contains("Turn committed"), "bob claims seat B");
+    let (_, body) = post_act(&app, &format!("{base}/act"), "commit", idx(3, 0), "bob").await;
+    assert!(body.contains("Turn committed"));
+    assert!(body.contains("REVEAL (both moves sealed"), "both seals in");
+
+    let (_, _) = post_act(&app, &format!("{base}/act"), "reveal", 0, "alice").await;
+    let (_, body) = post_act(&app, &format!("{base}/act"), "reveal", 0, "bob").await;
+    assert!(body.contains("RESOLVE (both open"), "both open");
+    let (_, body) = post_act(&app, &format!("{base}/act"), "resolve", 0, "alice").await;
+    assert!(body.contains("Turn committed"), "the resolution lands");
+    assert!(
+        body.contains("Automatafl — turn 1"),
+        "the turn counter advanced: {body}"
+    );
+
+    let (status, body) = get(&app, &format!("{base}/verify")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body.contains("\"verified\":true"),
+        "the committed match verifies: {body}"
+    );
+}
+
+/// **Multiway-tug opens with a real guild TABLE and a play lands.**
+#[tokio::test]
+async fn tug_guild_table_renders_and_a_play_lands() {
+    let app = make_app();
+    let base = "/offerings/tug/session/pt-tug";
+
+    let (status, body) = get(&app, base).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("Multiway-Tug"), "the tug surface renders");
+    // The polish: the guild lanes are a real bordered table of flex rows (NOT a wall of <p>).
+    assert!(
+        body.contains("deos-table") && body.contains("deos-row"),
+        "the guild lanes render as a real table"
+    );
+    assert!(
+        body.contains("Guild 0") && body.contains("Guild 6"),
+        "all seven guild lanes paint"
+    );
+    sample("tug-surface.html", &body);
+
+    // Two browser users claim the seats and their scheduled `comp` plays land.
+    let (_, body) = post_act(&app, &format!("{base}/act"), "comp", 3, "alice").await;
+    assert!(
+        body.contains("Turn committed"),
+        "seat A's play lands: {body}"
+    );
+    let (_, body) = post_act(&app, &format!("{base}/act"), "comp", 3, "bob").await;
+    assert!(body.contains("Turn committed"), "seat B's play lands");
+    // The board rendered the OWN-hand once a seat is claimed (a real hidden-hand reveal).
+    sample("tug-after-play.html", &body);
+
+    let (status, body) = get(&app, &format!("{base}/verify")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("\"verified\":true"), "the tug round verifies");
+}
+
+/// **The Descent ingests the honest winning run and it ranks.**
+#[tokio::test]
+async fn descent_submit_ranks_the_honest_run() {
+    let app = make_app();
+
+    // The leaderboard opens (the short URL a stranger types).
+    let (status, board) = get(&app, "/descent").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        board.contains("descent") || board.contains("Descent") || board.contains("leaderboard"),
+        "the leaderboard page renders"
+    );
+    sample("descent-board.html", &board);
+
+    // Submit the honest winning line through the real ingest seam — it re-executes + verifies.
+    let (moves, level, class) = demo_win();
+    let (status, body) = post_json(
+        &app,
+        "/descent/submit",
+        serde_json::json!({
+            "player": "pt-hero",
+            "level": level,
+            "class": class,
+            "moves": moves,
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "a valid run is accepted: {body}");
+    assert!(
+        body.contains("\"ranked\":true"),
+        "the honest run ranks (re-executed + no-cheat-verified): {body}"
+    );
+
+    // It now appears on the board (re-verified on render).
+    let (_, board) = get(&app, "/descent").await;
+    assert!(
+        board.contains("pt-hero"),
+        "the ingested honest run appears on the leaderboard"
+    );
+
+    // A forged / empty run is fail-closed (400) — nothing ranks.
+    let (status, body) = post_json(
+        &app,
+        "/descent/submit",
+        serde_json::json!({ "player": "pt-forger", "moves": [0,0,0] }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "a losing/forged run is refused: {body}"
+    );
+    assert!(body.contains("\"ranked\":false"));
+}
+
+/// **A feature surface (trade) renders as a real table and a play lands** — the do-once surfaces
+/// are legible + coherent, not a raw ViewNode dump.
+#[tokio::test]
+async fn a_feature_surface_renders_and_a_play_lands() {
+    let app = make_app();
+    let base = "/offerings/trade/session/pt-trade";
+
+    let (status, body) = get(&app, base).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("Trade"), "the trade surface renders");
+    // The goods overview is a real table with a header row (the polish).
+    assert!(
+        body.contains("deos-table") && body.contains("deos-row header"),
+        "the goods render as a table with a header row"
+    );
+    assert!(
+        body.contains("Ember Cloak"),
+        "the seeded goods paint in the table"
+    );
+    sample("trade-surface.html", &body);
+
+    // A real play lands: list good #0 into custody (an owner-signed transfer turn).
+    let (_, body) = post_act(&app, &format!("{base}/act"), "list", 0, "seller").await;
+    assert!(
+        body.contains("Turn committed"),
+        "the list play lands a real receipt: {body}"
+    );
+    sample("trade-after-list.html", &body);
+
+    let (status, body) = get(&app, &format!("{base}/verify")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body.contains("\"verified\":true"),
+        "the trade provenance verifies: {body}"
+    );
+}

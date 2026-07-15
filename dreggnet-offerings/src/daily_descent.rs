@@ -568,6 +568,7 @@ impl<S: CharacterStore> DailyDescentOffering<S> {
                     choice_index,
                     receipt: receipt.clone(),
                     state: run.world.snapshot(),
+                    decision_commitment: None,
                 });
                 // Bind real dungeon outcomes to the character (a real gated character turn).
                 self.reward_or_perish(run, &room, choice_index);
