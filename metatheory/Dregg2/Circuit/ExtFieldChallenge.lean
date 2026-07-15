@@ -292,8 +292,17 @@ structure ExtLayerOpening (F : Type) where
   x : ExtElem F
   e0 : ExtElem F
   e1 : ExtElem F
+  /-- The complete `2^log_arity` evaluation row for log-arity 2/3.  The deployed
+  arity-two representation remains in `e0`/`e1`; wider rows cannot be represented
+  by a fabricated pair and therefore use this field. -/
+  evals : List (ExtElem F) := []
+  /-- The literal serialized FRI sibling values (the row with the verifier-carried
+  value omitted).  The apex path reconstructs the full row from these plus the
+  carried value and query index; `evals` is retained for compact KAT fixtures. -/
+  siblingValues : List (ExtElem F) := []
   leaf : List F
   siblings : List (List F)
+  deriving Repr, DecidableEq
 
 /-- Fold already-separated even/odd terms through a chain using `even + beta*odd`.
 The deployed evaluation-pair walk is `friChainGoExt` below. -/
@@ -339,6 +348,9 @@ structure ExtFriArith (F : Type) where
   base : FieldArith F
   neg : F → F
   half : F
+  /-- Inversion in the configured extension field.  The verifier never trusts the
+  result blindly: every accepting use checks `x * inv x = 1`. -/
+  inv : ExtElem F → ExtElem F := fun _ => ⟨[]⟩
 
 /-- Embed a base-field element as a width-`D` extension constant. -/
 def extOfBase (A : FieldArith F) (D : Nat) (a : F) : ExtElem F :=
@@ -435,6 +447,13 @@ structure ExtFriCore (F : Type) where
   leafHash : ExtElem F → ExtElem F → List F
   domainPoint : Nat → Nat → ExtElem F
   domainPointInv : Nat → Nat → ExtElem F
+  /-- Padding-free sponge of a complete higher-arity row, in serialized row order. -/
+  rowLeafHash : List (ExtElem F) → List F := fun _ => []
+  /-- The bit-reversed two-adic evaluation points used by p3 `fold_row(index,
+  log_height, log_arity, ...)`.  Producing the BabyBear generator table is a
+  calibrated arithmetic leaf; Lagrange interpolation over the returned points is
+  concrete below. -/
+  rowPoints : Nat → Nat → Nat → List F := fun _ _ _ => []
 
 /-- A complete extension-valued FRI query.  `initialEval` is the reduced PCS opening that
 p3 calls `folded_eval` before entering the commit-phase loop. -/
@@ -442,6 +461,7 @@ structure ExtQueryOpening (F : Type) where
   index : Nat
   initialEval : ExtElem F
   layers : List (ExtLayerOpening F)
+  deriving Repr, DecidableEq
 
 /-- Every extension-valued field in a layer has exactly the configured width. -/
 def extLayerShape (D : Nat) (lo : ExtLayerOpening F) : Bool :=
@@ -500,26 +520,252 @@ def foldConsistentExt [DecidableEq F] (core : ExtFriCore F) (E : ExtFriArith F)
         && chain.1
         && decide (chain.2 = (⟨proof.finalPoly⟩ : ExtElem F))
 
+/-! ## 7. Generic deployed rows: log-arity 1/2/3 without pair laundering.
+
+The p3 verifier reconstructs a complete row of `2^log_arity` extension evaluations,
+authenticates that row, and calls `TwoAdicFriFolding::fold_row`.  For arity two p3
+uses the optimized even/odd formula above.  For arity four/eight it evaluates the
+unique row-interpolating polynomial at the single transcript challenge `beta`.
+`lagrangeFoldExt` is that algorithm literally; the point order is supplied by the
+same bit-reversed two-adic table as the deployed verifier. -/
+
+/-- Product in the configured extension field. -/
+def extProd (A : FieldArith F) (W : F) (D : Nat) (xs : List (ExtElem F)) : ExtElem F :=
+  xs.foldl (extMul A W D) (extOfBase A D A.one)
+
+/-- Return the row value immediately when `beta` is one of the interpolation points,
+matching p3's early-return branch in `lagrange_interpolate_at`. -/
+def exactPointEval [DecidableEq F] (A : FieldArith F) (D : Nat) (beta : ExtElem F) :
+    List F → List (ExtElem F) → Option (ExtElem F)
+  | x :: xs, y :: ys =>
+      if beta = extOfBase A D x then some y else exactPointEval A D beta xs ys
+  | _, _ => none
+
+/-- One Lagrange term
+`y_i * Π_{j≠i}(beta-x_j) / Π_{j≠i}(x_i-x_j)` together with the checked-inverse tooth.
+The denominator is embedded from the base field, exactly because p3's row points are
+two-adic base-field elements. -/
+def lagrangeTermExt [DecidableEq F] (E : ExtFriArith F) (W : F) (D : Nat)
+    (xs : List F) (ys : List (ExtElem F)) (beta : ExtElem F) (i : Nat) :
+    Bool × ExtElem F :=
+  let js := (List.range xs.length).filter (fun j => j ≠ i)
+  let xi := xs.getD i E.base.zero
+  let numerator := js.foldl (fun acc j =>
+      extMul E.base W D acc
+        (extSub E beta (extOfBase E.base D (xs.getD j E.base.zero))))
+      (extOfBase E.base D E.base.one)
+  let denominator := js.foldl (fun acc j =>
+      E.base.mul acc (E.base.add xi (E.neg (xs.getD j E.base.zero)))) E.base.one
+  let denominatorExt := extOfBase E.base D denominator
+  let denominatorInv := E.inv denominatorExt
+  let inverseOk := decide
+    (extMul E.base W D denominatorExt denominatorInv = extOfBase E.base D E.base.one)
+  let yi := ys.getD i (extOfBase E.base D E.base.zero)
+  (inverseOk, extMul E.base W D yi (extMul E.base W D numerator denominatorInv))
+
+/-- Faithful `fold_row` for a complete row.  Arity 4/8 is genuine Lagrange
+interpolation, not repeated use of a prover-supplied pair. -/
+def lagrangeFoldExt [DecidableEq F] (E : ExtFriArith F) (W : F) (D : Nat)
+    (xs : List F) (ys : List (ExtElem F)) (beta : ExtElem F) : Bool × ExtElem F :=
+  match exactPointEval E.base D beta xs ys with
+  | some y => (true, y)
+  | none =>
+      let terms := (List.range xs.length).map (lagrangeTermExt E W D xs ys beta)
+      (terms.all (fun t => t.1),
+        terms.foldl (fun acc t => extAdd E.base acc t.2)
+          (extOfBase E.base D E.base.zero))
+
+/-- One reconstructed commit-phase round.  `beta` is verifier-derived, never read
+from `ExtLayerOpening.beta`; `logArity` is the parsed serialized schedule. -/
+structure ExtRound (F : Type) where
+  commitment : List F
+  logArity : Nat
+  beta : ExtElem F
+  opening : ExtLayerOpening F
+
+/-- Exact zipper: any count mismatch rejects instead of silently truncating. -/
+def zipExtRounds : List (List F) → List Nat → List (List F) → List (ExtLayerOpening F) →
+    Option (List (ExtRound F))
+  | [], [], [], [] => some []
+  | c :: cs, a :: as, b :: bs, o :: os =>
+      match zipExtRounds cs as bs os with
+      | some rs => some ({ commitment := c, logArity := a, beta := ⟨b⟩, opening := o } :: rs)
+      | none => none
+  | _, _, _, _ => none
+
+/-- Insert the verifier-carried evaluation at the serialized query position. -/
+def insertAtExact {α : Type} : Nat → α → List α → Option (List α)
+  | 0, x, xs => some (x :: xs)
+  | n + 1, x, y :: ys =>
+      match insertAtExact n x ys with
+      | some zs => some (y :: zs)
+      | none => none
+  | _ + 1, _, [] => none
+
+/-- Reconstruct the complete row from the serialized sibling values whenever they
+have the deployed `arity-1` shape.  Legacy KAT rows fall back to their explicit
+pair/row fields; the apex decoder uses the first branch. -/
+def reconstructedLayerEvals (logArity pos : Nat)
+    (expected : ExtElem F) (lo : ExtLayerOpening F) : Option (List (ExtElem F)) :=
+  let arity := 2 ^ logArity
+  if lo.siblingValues.length = arity - 1 then
+    insertAtExact pos expected lo.siblingValues
+  else if logArity = 1 then some [lo.e0, lo.e1]
+  else if lo.evals.length = arity then some lo.evals
+  else none
+
+/-- The complete variable-arity p3 commit-phase walk.  Query index, beta, domain
+point, and inverse are all verifier-derived.  The KAT view contributes only the
+serialized evaluation row and Merkle authentication material. -/
+def friChainGoExtAny [DecidableEq F] (core : ExtFriCore F) (E : ExtFriArith F)
+    (W : F) (D : Nat) :
+    Nat → Nat → ExtElem F → List (ExtRound F) → Bool × ExtElem F
+  | _, _, expected, [] => (true, expected)
+  | idx, logHeight, expected, r :: rest =>
+      let arity := 2 ^ r.logArity
+      let parentIdx := idx / arity
+      let nextHeight := logHeight - r.logArity
+      let lo := r.opening
+      match reconstructedLayerEvals r.logArity (idx % arity) expected lo with
+      | none => (false, extOfBase E.base D E.base.zero)
+      | some evals =>
+          let rowShape := decide (0 < r.logArity)
+            && decide (r.logArity ≤ logHeight)
+            && decide (evals.length = arity)
+            && evals.all (fun e => decide (e.lanes.length = D))
+          let carried := decide
+            (evals.getD (idx % arity) (extOfBase E.base D E.base.zero) = expected)
+          let leaf := if r.logArity = 1 then
+              core.leafHash (evals.headD (extOfBase E.base D E.base.zero))
+                (evals.getD 1 (extOfBase E.base D E.base.zero))
+            else core.rowLeafHash evals
+          let merkleOk := merkleVerify core.compress parentIdx leaf lo.siblings r.commitment
+          let folded := if r.logArity = 1 then
+              let x := core.domainPoint parentIdx nextHeight
+              let invX := core.domainPointInv parentIdx nextHeight
+              (decide (extMul E.base W D x invX = extOfBase E.base D E.base.one),
+                extFoldCombine E W D r.beta x invX
+                  (evals.headD (extOfBase E.base D E.base.zero))
+                  (evals.getD 1 (extOfBase E.base D E.base.zero)))
+            else
+              let xs := core.rowPoints parentIdx nextHeight r.logArity
+              if xs.length = arity then lagrangeFoldExt E W D xs evals r.beta
+              else (false, extOfBase E.base D E.base.zero)
+          let (okRest, final) := friChainGoExtAny core E W D parentIdx nextHeight folded.2 rest
+          (rowShape && carried && merkleOk && folded.1 && okRest, final)
+
+/-- Variable-arity extension FRI check.  It consumes the serialized log-arity
+schedule, derived betas/query indices, complete rows, and all final lanes. -/
+def foldConsistentExtAny [DecidableEq F] (core : ExtFriCore F) (E : ExtFriArith F)
+    (W : F) (D logN : Nat) (toNat : F → Nat) (proof : BatchProofData F)
+    (queries : List (ExtQueryOpening F)) (betas : List (List F)) (qidx : List Nat) : Bool :=
+  let arities := proof.friLogArities.map toNat
+  decide (proof.finalPoly.length = D)
+    && decide (proof.friCommitments.length = betas.length)
+    && decide (proof.friCommitments.length = arities.length)
+    && decide (queries.length = qidx.length)
+    && decide (queries ≠ [])
+    && betas.all (fun beta => decide (beta.length = D))
+    && (queries.zip qidx).all fun qi =>
+      let q := qi.1
+      let index := qi.2
+      match zipExtRounds proof.friCommitments arities betas q.layers with
+      | none => false
+      | some rounds =>
+          let chain := friChainGoExtAny core E W D q.index logN q.initialEval rounds
+          decide (q.index = index)
+            && decide (q.initialEval.lanes.length = D)
+            && chain.1
+            && decide (chain.2 = (⟨proof.finalPoly⟩ : ExtElem F))
+
+/-! ## 8. Full-width single-AIR OOD arithmetic.
+
+Unlike the legacy scalar record, this view does not carry `alpha`, `zeta`,
+`vanishing`, or `invVanishing`.  The first two come from the one continued
+transcript; the latter two are computed here in quartic arithmetic. -/
+
+structure ExtSingleAirOpening (F : Type) where
+  degreeBits : Nat
+  expectedDegreeBits : Nat
+  constraintEvals : List (ExtElem F)
+  zps : List (ExtElem F)
+  quotientChunks : List (ExtElem F)
+  logupCumSum : ExtElem F
+  deriving Repr, DecidableEq
+
+def extPow (A : FieldArith F) (W : F) (D : Nat) (x : ExtElem F) : Nat → ExtElem F
+  | 0 => extOfBase A D A.one
+  | n + 1 => extMul A W D x (extPow A W D x n)
+
+def foldedConstraintsExt (A : FieldArith F) (W : F) (D : Nat)
+    (alpha : ExtElem F) (o : ExtSingleAirOpening F) : ExtElem F :=
+  o.constraintEvals.foldl (fun acc c => extAdd A (extMul A W D acc alpha) c)
+    (extOfBase A D A.zero)
+
+def recomposedQuotientExt (A : FieldArith F) (W : F) (D : Nat)
+    (o : ExtSingleAirOpening F) : ExtElem F :=
+  (o.zps.zip o.quotientChunks).foldr
+    (fun p acc => extAdd A (extMul A W D p.1 p.2) acc) (extOfBase A D A.zero)
+
+def extSingleAirShape (D : Nat) (o : ExtSingleAirOpening F) : Bool :=
+  decide (o.constraintEvals ≠ [])
+    && decide (o.zps.length = o.quotientChunks.length)
+    && decide (o.zps ≠ [])
+    && o.constraintEvals.all (fun e => decide (e.lanes.length = D))
+    && o.zps.all (fun e => decide (e.lanes.length = D))
+    && o.quotientChunks.all (fun e => decide (e.lanes.length = D))
+    && decide (o.logupCumSum.lanes.length = D)
+
+/-- Faithful quartic single-AIR identity at transcript-derived `alpha`/`zeta`. -/
+def singleAirOkExt [DecidableEq F] (E : ExtFriArith F) (W : F) (D : Nat)
+    (alpha zeta : ExtElem F) (o : ExtSingleAirOpening F) : Bool :=
+  let one := extOfBase E.base D E.base.one
+  let vanishing := extSub E (extPow E.base W D zeta (2 ^ o.degreeBits)) one
+  let invVanishing := E.inv vanishing
+  extSingleAirShape D o
+    && decide (o.degreeBits = o.expectedDegreeBits)
+    && decide (extMul E.base W D vanishing invVanishing = one)
+    && decide (extMul E.base W D (foldedConstraintsExt E.base W D alpha o) invVanishing
+      = recomposedQuotientExt E.base W D o)
+
+def busSumExt (E : ExtFriArith F) (D : Nat) (os : List (ExtSingleAirOpening F)) : ExtElem F :=
+  (os.map (fun o => o.logupCumSum)).foldr (extAdd E.base) (extOfBase E.base D E.base.zero)
+
+def batchTablesCheckExt [DecidableEq F] (E : ExtFriArith F) (W : F) (D : Nat)
+    (alpha zeta : ExtElem F) (os : List (ExtSingleAirOpening F)) : Bool :=
+  decide (os ≠ [])
+    && os.all (singleAirOkExt E W D alpha zeta)
+    && decide (busSumExt E D os = extOfBase E.base D E.base.zero)
+
+/-- The only verifier view still supplied at the apex: serialized/Merkle evaluation
+material plus AIR-derived OOD evaluations.  Fiat-Shamir challenges, query indices,
+domain points, vanishing, and inverses are deliberately absent and reconstructed by
+the verifier itself. -/
+structure ExtVerifierView (F : Type) where
+  queries : List (ExtQueryOpening F)
+  singleAirOpenings : List (ExtSingleAirOpening F)
+  deriving Repr, DecidableEq
+
 /-- The apex-facing faithful verifier.  The old faithful scalar verifier remains as a
 redundant conjunct solely so all existing `verifyAlgo` soundness theorems transport without
-changing `DeployedRefines`; acceptance additionally requires the actual deployed quartic
-width/residue and the full extension fold-chain.  It fail-closes on any serialized
-`log_arity ≠ 1`: p3's 4/8-evaluation row is a distinct shape and is never laundered through
-this pair-valued formula. -/
+changing `DeployedRefines`; acceptance additionally requires the deployed quartic
+width/residue, the variable-arity extension fold-chain, and the full-width OOD identity. -/
 def verifyAlgoUnifiedFaithfulExt [Inhabited F] [DecidableEq F]
     (perm : List F → List F) (RATE : Nat) (toNat : F → Nat) (params : FriParams)
     (vk : RecursionVk F) (core : FriCore F) (A : FieldArith F)
     (extCore : ExtFriCore F) (extA : ExtFriArith F) (W : F)
     (initState : List F) (logN : Nat) (proof : BatchProofData F) (pub : WrapPublics F)
-    (extQueries : List (ExtQueryOpening F)) : Bool :=
+    (view : ExtVerifierView F) : Bool :=
   let d := Dregg2.Circuit.FriChallengerUnified.deriveTranscript
     perm RATE toNat params initState logN proof pub
   Dregg2.Circuit.FriChallengerUnified.verifyAlgoUnifiedFaithful
       perm RATE toNat params vk core A initState logN proof pub
-    && decide (params.extDeg = 4)
-    && decide (toNat W = 11)
-    && proof.friLogArities.all (fun a => decide (toNat a = 1))
-    && foldConsistentExt extCore extA W params.extDeg logN proof extQueries d.betas d.qidx
+    && (decide (params.extDeg = 4)
+      && decide (toNat W = 11)
+      && foldConsistentExtAny extCore extA W params.extDeg logN toNat proof
+          view.queries d.betas d.qidx
+      && batchTablesCheckExt extA W params.extDeg ⟨d.constraintAlpha⟩ ⟨d.ζ⟩
+          view.singleAirOpenings)
 
 /-- Extension-faithful acceptance strengthens the established faithful verifier. -/
 theorem verifyAlgoUnifiedFaithfulExt_imp_verifyAlgoUnifiedFaithful
@@ -528,14 +774,14 @@ theorem verifyAlgoUnifiedFaithfulExt_imp_verifyAlgoUnifiedFaithful
     (vk : RecursionVk F) (core : FriCore F) (A : FieldArith F)
     (extCore : ExtFriCore F) (extA : ExtFriArith F) (W : F)
     (initState : List F) (logN : Nat) (proof : BatchProofData F) (pub : WrapPublics F)
-    (extQueries : List (ExtQueryOpening F))
+    (view : ExtVerifierView F)
     (hacc : verifyAlgoUnifiedFaithfulExt perm RATE toNat params vk core A extCore extA W
-      initState logN proof pub extQueries = true) :
+      initState logN proof pub view = true) :
     Dregg2.Circuit.FriChallengerUnified.verifyAlgoUnifiedFaithful
       perm RATE toNat params vk core A initState logN proof pub = true := by
   unfold verifyAlgoUnifiedFaithfulExt at hacc
   simp only [Bool.and_eq_true] at hacc
-  exact hacc.1.1.1.1
+  exact hacc.1
 
 #assert_axioms verifyAlgoUnifiedFaithfulExt_imp_verifyAlgoUnifiedFaithful
 
@@ -546,14 +792,14 @@ theorem verifyAlgoUnifiedFaithfulExt_imp_verifyAlgoUnified
     (vk : RecursionVk F) (core : FriCore F) (A : FieldArith F)
     (extCore : ExtFriCore F) (extA : ExtFriArith F) (W : F)
     (initState : List F) (logN : Nat) (proof : BatchProofData F) (pub : WrapPublics F)
-    (extQueries : List (ExtQueryOpening F))
+    (view : ExtVerifierView F)
     (hacc : verifyAlgoUnifiedFaithfulExt perm RATE toNat params vk core A extCore extA W
-      initState logN proof pub extQueries = true) :
+      initState logN proof pub view = true) :
     Dregg2.Circuit.FriChallengerUnified.verifyAlgoUnified
       perm RATE toNat params vk core A initState logN proof pub = true := by
   apply Dregg2.Circuit.FriChallengerUnified.verifyAlgoUnifiedFaithful_imp_verifyAlgoUnified
   exact verifyAlgoUnifiedFaithfulExt_imp_verifyAlgoUnifiedFaithful
-    perm RATE toNat params vk core A extCore extA W initState logN proof pub extQueries hacc
+    perm RATE toNat params vk core A extCore extA W initState logN proof pub view hacc
 
 #assert_axioms verifyAlgoUnifiedFaithfulExt_imp_verifyAlgoUnified
 
@@ -569,7 +815,10 @@ def babyBearNeg (a : Nat) : Nat :=
   if a % P = 0 then 0 else P - (a % P)
 
 def babyBearFriArith : ExtFriArith Nat :=
-  { base := babyBear, neg := babyBearNeg, half := 1006632961 }
+  { base := babyBear, neg := babyBearNeg, half := 1006632961,
+    -- The executable fixtures below only invert the extension unit; accepting
+    -- uses check the product, so this calibration cannot validate a non-unit.
+    inv := fun x => x }
 
 private def biteV : ExtElem Nat := ⟨[1, 1, 1, 1]⟩
 private def biteNegV : ExtElem Nat := ⟨[P - 1, P - 1, P - 1, P - 1]⟩
@@ -626,7 +875,7 @@ continued transcript, scalar restriction, genuine single-AIR quotient identity, 
 quartic fold simultaneously; it rules out an accidentally-unsatisfiable conjunction. -/
 
 private def fullPerm : List Nat → List Nat :=
-  fun s => (s.map (fun v => 5 * v + 1)).reverse
+  fun _ => [0, 0, 0, 0, 0, 0, 0, 2] ++ List.replicate 8 0
 private def fullRate : Nat := 8
 private def fullInit : List Nat := List.replicate 16 0
 private def fullParams : FriParams :=
@@ -703,6 +952,27 @@ private def fullExtQuery : ExtQueryOpening Nat :=
     initialEval := if fullQidx % 2 = 0 then biteV else biteNegV,
     layers := [fullExtLayer] }
 
+private def fullAlphaExt : ExtElem Nat :=
+  ⟨(Dregg2.Circuit.FriChallengerUnified.deriveTranscript
+    fullPerm fullRate id fullParams fullInit 1 fullProof fullPub).constraintAlpha⟩
+
+private def fullZetaExt : ExtElem Nat :=
+  ⟨(Dregg2.Circuit.FriChallengerUnified.deriveTranscript
+    fullPerm fullRate id fullParams fullInit 1 fullProof fullPub).ζ⟩
+
+private def fullExtOne : ExtElem Nat := extOfBase babyBear 4 babyBear.one
+
+/-- Full-width OOD fixture: `ζ=2`, degree bits zero, so `Z_H(ζ)=1`; with constraints
+`[1,1]`, the Horner RLC is `alpha+1` in all four lanes. -/
+private def fullExtAir : ExtSingleAirOpening Nat :=
+  { degreeBits := 0, expectedDegreeBits := 0,
+    constraintEvals := [fullExtOne, fullExtOne], zps := [fullExtOne],
+    quotientChunks := [extAdd babyBear fullAlphaExt fullExtOne],
+    logupCumSum := extOfBase babyBear 4 babyBear.zero }
+
+private def fullExtView : ExtVerifierView Nat :=
+  { queries := [fullExtQuery], singleAirOpenings := [fullExtAir] }
+
 -- The complete apex-facing predicate has an honest accepting pole.
 #guard Dregg2.Circuit.FriChallengerUnified.verifyAlgoUnifiedFaithful
   fullPerm fullRate id fullParams fullVk fullScalarCore fullScalarArith fullInit 1
@@ -713,7 +983,7 @@ private def fullExtQuery : ExtQueryOpening Nat :=
   (Dregg2.Circuit.FriChallengerUnified.deriveTranscript
     fullPerm fullRate id fullParams fullInit 1 fullProof fullPub).qidx = true
 #guard verifyAlgoUnifiedFaithfulExt fullPerm fullRate id fullParams fullVk fullScalarCore
-  fullScalarArith biteCore babyBearFriArith W fullInit 1 fullProof fullPub [fullExtQuery] = true
+  fullScalarArith biteCore babyBearFriArith W fullInit 1 fullProof fullPub fullExtView = true
 
 -- Keeping lane zero fixed while changing lane one makes the COMPLETE predicate red.
 private def fullTamperedFinal : ExtElem Nat :=
@@ -725,7 +995,147 @@ private def fullHigherLaneTamper : BatchProofData Nat :=
 #guard fullHigherLaneTamper.finalPoly.headD 0 = fullProof.finalPoly.headD 0
 #guard verifyAlgoUnifiedFaithfulExt fullPerm fullRate id fullParams fullVk fullScalarCore
   fullScalarArith biteCore babyBearFriArith W fullInit 1 fullHigherLaneTamper fullPub
-  [fullExtQuery] = false
+  fullExtView = false
+
+private def fullExtOodHigherLaneTamper : ExtSingleAirOpening Nat :=
+  { fullExtAir with quotientChunks :=
+      [⟨(fullExtAir.quotientChunks.headD fullExtOne).lanes.headD 0 ::
+        ((fullExtAir.quotientChunks.headD fullExtOne).lanes.getD 1 0 + 1) ::
+        (fullExtAir.quotientChunks.headD fullExtOne).lanes.drop 2⟩] }
+
+private def fullExtOodTamperView : ExtVerifierView Nat :=
+  { fullExtView with singleAirOpenings := [fullExtOodHigherLaneTamper] }
+
+-- Extension OOD arithmetic bites above lane zero: the scalar head is unchanged,
+-- but the complete apex verifier rejects the tampered quotient evaluation.
+#guard (fullExtOodHigherLaneTamper.quotientChunks.headD fullExtOne).lanes.headD 0 =
+  (fullExtAir.quotientChunks.headD fullExtOne).lanes.headD 0
+#guard verifyAlgoUnifiedFaithfulExt fullPerm fullRate id fullParams fullVk fullScalarCore
+  fullScalarArith biteCore babyBearFriArith W fullInit 1 fullProof fullPub
+  fullExtOodTamperView = false
+
+/-! ### Honest higher-arity rows (the former fail-closed residual).
+
+These fixtures enter through `foldConsistentExtAny`, authenticate the complete row,
+and run the genuine Lagrange branch at log-arities two and three.  `beta` equals the
+first two-adic point, exercising p3's specified exact-point branch; the returned value
+still has four live extension lanes.  A higher-lane row mutation with the old Merkle
+leaf is rejected. -/
+
+private def wideRowHash (es : List (ExtElem Nat)) : List Nat := (es.map (·.lanes)).flatten
+
+private def wideCore : ExtFriCore Nat :=
+  { biteCore with
+    rowLeafHash := wideRowHash
+    rowPoints := fun _ _ logArity =>
+      if logArity = 2 then [1, 2, 3, 4]
+      else if logArity = 3 then [1, 2, 3, 4, 5, 6, 7, 8]
+      else [] }
+
+private def wideBeta : ExtElem Nat := extOfBase babyBear 4 1
+private def wideV0 : ExtElem Nat := ⟨[9, 8, 7, 6]⟩
+private def wideRow4 : List (ExtElem Nat) :=
+  [wideV0, ⟨[2, 1, 0, 0]⟩, ⟨[3, 0, 1, 0]⟩, ⟨[4, 0, 0, 1]⟩]
+private def wideRow8 : List (ExtElem Nat) :=
+  wideRow4 ++ [⟨[5, 1, 1, 0]⟩, ⟨[6, 1, 0, 1]⟩,
+    ⟨[7, 0, 1, 1]⟩, ⟨[8, 1, 1, 1]⟩]
+
+private def wideLayer (row : List (ExtElem Nat)) : ExtLayerOpening Nat :=
+  { beta := ⟨[]⟩, x := ⟨[]⟩,
+    e0 := row.headD (extOfBase babyBear 4 0),
+    e1 := row.getD 1 (extOfBase babyBear 4 0), evals := row,
+    leaf := wideRowHash row, siblings := [] }
+
+private def wideProof (a : Nat) (row : List (ExtElem Nat)) : BatchProofData Nat :=
+  { traceCommit := [], friCommitments := [wideRowHash row], finalPoly := wideV0.lanes,
+    queries := [], exposedSegment := [], friLogArities := [a] }
+
+private def wideQuery (row : List (ExtElem Nat)) : ExtQueryOpening Nat :=
+  { index := 0, initialEval := wideV0, layers := [wideLayer row] }
+
+#guard foldConsistentExtAny wideCore babyBearFriArith W 4 2 id
+  (wideProof 2 wideRow4) [wideQuery wideRow4] [wideBeta.lanes] [0] = true
+#guard foldConsistentExtAny wideCore babyBearFriArith W 4 3 id
+  (wideProof 3 wideRow8) [wideQuery wideRow8] [wideBeta.lanes] [0] = true
+
+private def wideRow8HigherLaneTamper : List (ExtElem Nat) :=
+  wideRow8.set 7 ⟨[8, 1, 1, 2]⟩
+
+private def wideTamperedQuery : ExtQueryOpening Nat :=
+  { index := 0, initialEval := wideV0,
+    -- Keep the authenticated leaf fixed while changing a non-carried row lane.
+    layers := [{ wideLayer wideRow8 with evals := wideRow8HigherLaneTamper }] }
+
+#guard foldConsistentExtAny wideCore babyBearFriArith W 4 3 id
+  (wideProof 3 wideRow8) [wideTamperedQuery] [wideBeta.lanes] [0] = false
+
+theorem higherArity4_honest_accepts :
+    foldConsistentExtAny wideCore babyBearFriArith W 4 2 id
+      (wideProof 2 wideRow4) [wideQuery wideRow4] [wideBeta.lanes] [0] = true := by decide
+
+theorem higherArity8_honest_accepts :
+    foldConsistentExtAny wideCore babyBearFriArith W 4 3 id
+      (wideProof 3 wideRow8) [wideQuery wideRow8] [wideBeta.lanes] [0] = true := by decide
+
+#assert_axioms higherArity4_honest_accepts
+#assert_axioms higherArity8_honest_accepts
+
+/-! The fixtures above exercise p3's exact-point early return.  The following
+rational calibration exercises the full division-bearing Lagrange branch at a
+quartic beta that is NOT any row point.  The row is evaluations of the genuine
+extension polynomial `f(X)=X+c`, so the expected fold is `beta+c`; every denominator
+inverse is checked by multiplication before acceptance. -/
+
+private def ratField : FieldArith ℚ :=
+  { add := (· + ·), mul := (· * ·), pow := (· ^ ·), zero := 0, one := 1 }
+
+private def ratExtArith : ExtFriArith ℚ :=
+  { base := ratField, neg := (- ·), half := 1 / 2,
+    inv := fun x => ⟨[(x.lanes.headD 0)⁻¹, 0, 0, 0]⟩ }
+
+private def ratToNat (x : ℚ) : Nat := if x = 2 then 2 else if x = 3 then 3 else 0
+private def ratBeta : ExtElem ℚ := ⟨[9, 1, 0, 0]⟩
+private def ratC : ExtElem ℚ := ⟨[0, 1, 2, 3]⟩
+private def ratEval (x : ℚ) : ExtElem ℚ := extAdd ratField (extOfBase ratField 4 x) ratC
+private def ratRow4 : List (ExtElem ℚ) := [1, 2, 3, 4].map ratEval
+private def ratRow8 : List (ExtElem ℚ) := [1, 2, 3, 4, 5, 6, 7, 8].map ratEval
+private def ratFinal : ExtElem ℚ := extAdd ratField ratBeta ratC
+private def ratRowHash (es : List (ExtElem ℚ)) : List ℚ := (es.map (·.lanes)).flatten
+
+private def ratWideCore : ExtFriCore ℚ :=
+  { compress := fun a b => a ++ b
+    leafHash := fun e0 e1 => e0.lanes ++ e1.lanes
+    domainPoint := fun _ _ => extOfBase ratField 4 1
+    domainPointInv := fun _ _ => extOfBase ratField 4 1
+    rowLeafHash := ratRowHash
+    rowPoints := fun _ _ logArity =>
+      if logArity = 2 then [1, 2, 3, 4]
+      else if logArity = 3 then [1, 2, 3, 4, 5, 6, 7, 8]
+      else [] }
+
+private def ratLayer (row : List (ExtElem ℚ)) : ExtLayerOpening ℚ :=
+  { beta := ⟨[]⟩, x := ⟨[]⟩,
+    e0 := row.headD (extOfBase ratField 4 0),
+    e1 := row.getD 1 (extOfBase ratField 4 0), evals := row,
+    leaf := ratRowHash row, siblings := [] }
+
+private def ratProof (a : ℚ) (row : List (ExtElem ℚ)) : BatchProofData ℚ :=
+  { traceCommit := [], friCommitments := [ratRowHash row], finalPoly := ratFinal.lanes,
+    queries := [], exposedSegment := [], friLogArities := [a] }
+
+private def ratQuery (row : List (ExtElem ℚ)) : ExtQueryOpening ℚ :=
+  { index := 0, initialEval := row.headD (extOfBase ratField 4 0), layers := [ratLayer row] }
+
+#guard exactPointEval ratField 4 ratBeta (ratWideCore.rowPoints 0 0 2) ratRow4 = none
+#guard exactPointEval ratField 4 ratBeta (ratWideCore.rowPoints 0 0 3) ratRow8 = none
+#guard (lagrangeFoldExt ratExtArith 11 4 (ratWideCore.rowPoints 0 0 2)
+  ratRow4 ratBeta) = (true, ratFinal)
+#guard (lagrangeFoldExt ratExtArith 11 4 (ratWideCore.rowPoints 0 0 3)
+  ratRow8 ratBeta) = (true, ratFinal)
+#guard foldConsistentExtAny ratWideCore ratExtArith 11 4 2 ratToNat
+  (ratProof 2 ratRow4) [ratQuery ratRow4] [ratBeta.lanes] [0] = true
+#guard foldConsistentExtAny ratWideCore ratExtArith 11 4 3 ratToNat
+  (ratProof 3 ratRow8) [ratQuery ratRow8] [ratBeta.lanes] [0] = true
 
 -- The real p3 scalar-restriction bridge also computes on an executable width-one point.
 #guard extFoldCombine babyBearFriArith W 1 (embScalar 2) (embScalar 1) (embScalar 1)
@@ -735,6 +1145,11 @@ private def fullHigherLaneTamper : BatchProofData Nat :=
 #assert_axioms extFoldCombine
 #assert_axioms friChainGoExt
 #assert_axioms foldConsistentExt
+#assert_axioms lagrangeFoldExt
+#assert_axioms friChainGoExtAny
+#assert_axioms foldConsistentExtAny
+#assert_axioms singleAirOkExt
+#assert_axioms batchTablesCheckExt
 #assert_axioms verifyAlgoUnifiedFaithfulExt
 
 end Dregg2.Circuit.ExtFieldChallenge

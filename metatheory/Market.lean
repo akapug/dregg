@@ -44,6 +44,8 @@ import Market.StreamingCert
 import Market.PrecisionEnvelope
 import Market.RevealNothing
 import Market.MpcClearingSecurity
+import Market.FhEggRustDenotation
+import Market.ProtocolAssurance
 import Market.CertQp
 import Market.PriceCert
 import Market.FhIRAdmissible

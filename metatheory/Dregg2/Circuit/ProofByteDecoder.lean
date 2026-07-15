@@ -51,13 +51,15 @@ global lookup data, and `degree_bits`.  It therefore extracts the trace and quot
 caps, flattened OOD openings, FRI caps, final polynomial, query-PoW witness, and the
 per-query `log_arity` schedule from real proof bytes.
 
-NAMED reconstruction residual (not axiomatized): postcard does NOT serialize query
-indices, FRI betas, fold-domain points, the OOD point ζ, AIR constraint evaluations,
-vanishing inverses, or recomposed table openings.  The native verifier reconstructs
-those from the continued Fiat-Shamir transcript, domains, AIRs, and the parsed opened
-values.  Consequently `decodeInnerProofCorePrefix` fills only literal wire fields;
-`queries`, `oodPoint`, `tableOpenings`, and `singleAirOpenings` stay empty until that
-verifier-side reconstruction is modeled.  The enclosing `BatchStarkProof` metadata
+RECONSTRUCTION STATUS: postcard does NOT serialize query indices, FRI betas,
+fold-domain points, the OOD point ζ, AIR constraint evaluations, vanishing inverses,
+or recomposed table openings.  Query indices/betas/ζ and domain points are now derived
+inside `verifyAlgoUnifiedFaithfulExt`, never supplied by `cfgExtView`.  This decoder
+also retains each FRI round's grouped quartic sibling values and Merkle path;
+`reconstructExtQueriesFromWire` inserts the verifier-carried value at the derived query
+position, so complete rows are no longer KAT-reconstructed.  What remains KAT is the
+initial reduced PCS evaluation, AIR constraint/chunk-selector evaluation, and the
+BabyBear generator/hash/arithmetic calibration.  The enclosing `BatchStarkProof` metadata
 (`table_packing` through `stark_common`, including its optional preprocessed cap) is
 also the unconsumed suffix, returned explicitly rather than silently accepted.  These
 are the named `InnerProofReconstructionResidual` and `BatchStarkMetadataTailResidual`.
@@ -534,9 +536,18 @@ def readBatchOpening : ByteParser (List Nat) := fun bs =>
     | none => none
     | some (_, bs) => some (opened.flatten, bs)
 
-/-- Parse one FRI commit-phase step and retain its `log_arity` plus sibling extension
-values.  The extension-MMCS opening proof is the underlying vector of 8-word digests. -/
-def readCommitPhaseStep : ByteParser (Nat × List Nat) := fun bs =>
+/-- Literal wire data for one FRI commit-phase step.  Unlike the old projection, this
+retains extension siblings as separate quartic values and the complete Merkle path,
+so the apex row can be reconstructed rather than supplied by `cfgExtView`. -/
+structure DecodedCommitStepWire where
+  logArity : Nat
+  siblingValues : List (List Nat)
+  openingProof : List (List Nat)
+  deriving Repr, DecidableEq
+
+/-- Parse one FRI commit-phase step and retain its `log_arity`, sibling extension
+values, and extension-MMCS authentication path. -/
+def readCommitPhaseStep : ByteParser DecodedCommitStepWire := fun bs =>
   match readByte bs with
   | none => none
   | some (logArity, bs) =>
@@ -545,7 +556,8 @@ def readCommitPhaseStep : ByteParser (Nat × List Nat) := fun bs =>
     | some (siblings, bs) =>
       match readVec readDigest8 bs with
       | none => none
-      | some (_, bs) => some ((logArity, siblings.flatten), bs)
+      | some (openingProof, bs) =>
+          some ({ logArity, siblingValues := siblings, openingProof }, bs)
 
 /-- The serialized portion of one FRI query that is available without replaying the
 transcript/domain: input opened rows, per-round arities, and sibling values. -/
@@ -553,6 +565,8 @@ structure DecodedQueryWire where
   inputOpened : List Nat
   logArities : List Nat
   siblingValues : List Nat
+  /-- Exact per-round grouping retained for verifier-side row reconstruction. -/
+  commitSteps : List DecodedCommitStepWire := []
   deriving Repr, DecidableEq
 
 def readFriQuery : ByteParser DecodedQueryWire := fun bs =>
@@ -563,8 +577,9 @@ def readFriQuery : ByteParser DecodedQueryWire := fun bs =>
     | none => none
     | some (steps, bs) =>
       some ({ inputOpened := inputs.flatten,
-              logArities := steps.map Prod.fst,
-              siblingValues := (steps.map Prod.snd).flatten }, bs)
+              logArities := steps.map (·.logArity),
+              siblingValues := (steps.map fun s => s.siblingValues.flatten).flatten,
+              commitSteps := steps }, bs)
 
 /-- Literal wire projection of the nested `FriProof`. -/
 structure DecodedFriWire where
@@ -690,6 +705,47 @@ def decodeInnerProofCoreFromProof (π : CircuitSoundness.BatchProof) :
     Option (FriVerifier.BatchProofData ℤ × List Nat) :=
   decodeInnerProofCorePrefix (π.bytes.map Int.toNat)
 
+/-! ## §8.1 — reconstruct the extension query view from literal wire data.
+
+The serialized query omits exactly one evaluation per round: the value already
+carried by the verifier.  We retain the other `2^log_arity-1` values and the Merkle
+path here.  `friChainGoExtAny` inserts the carried value at `qidx % arity`, hashes the
+resulting row, verifies the path, folds it with the transcript beta, and repeats. -/
+
+open Dregg2.Circuit.ExtFieldChallenge
+
+/-- Convert one decoded commit step into the compact apex layer.  No beta, domain
+point, full row, or leaf is fabricated; all four are verifier-derived/reconstructed. -/
+def decodedStepToExtLayer (s : DecodedCommitStepWire) : ExtLayerOpening ℤ :=
+  { beta := ⟨[]⟩, x := ⟨[]⟩, e0 := ⟨[]⟩, e1 := ⟨[]⟩,
+    siblingValues := s.siblingValues.map (fun e => ⟨innerToFieldZ e⟩),
+    leaf := [], siblings := s.openingProof.map innerToFieldZ }
+
+/-- One query needs only its transcript-derived index and the reduced PCS evaluation
+that enters FRI.  Every commit-phase row/path comes literally from postcard bytes. -/
+def decodedQueryToExt (index : Nat) (initialEval : ExtElem ℤ)
+    (q : DecodedQueryWire) : ExtQueryOpening ℤ :=
+  { index, initialEval, layers := q.commitSteps.map decodedStepToExtLayer }
+
+/-- Exact three-way zipper; count mismatch rejects rather than truncating queries. -/
+def reconstructExtQueriesFromWire :
+    List DecodedQueryWire → List Nat → List (ExtElem ℤ) → Option (List (ExtQueryOpening ℤ))
+  | [], [], [] => some []
+  | q :: qs, i :: is, e :: es =>
+      match reconstructExtQueriesFromWire qs is es with
+      | some rest => some (decodedQueryToExt i e q :: rest)
+      | none => none
+  | _, _, _ => none
+
+/-- Assemble the remaining apex extension view.  `qidx` is passed directly from
+`deriveTranscript`; `initialEvals` and AIR openings are the precisely named KAT tail. -/
+def reconstructExtVerifierView (core : DecodedBatchProofCore) (qidx : List Nat)
+    (initialEvals : List (ExtElem ℤ)) (airs : List (ExtSingleAirOpening ℤ)) :
+    Option (ExtVerifierView ℤ) :=
+  match reconstructExtQueriesFromWire core.fri.queries qidx initialEvals with
+  | some queries => some { queries, singleAirOpenings := airs }
+  | none => none
+
 /-! ## §9 — inner-proof roundtrip/golden pins.
 
 The general varint roundtrip above covers every unsigned scalar and length in the
@@ -716,7 +772,8 @@ private def innerCoreGolden : List Nat :=
   ++ [99]
 
 private def goldenQueryWire : DecodedQueryWire :=
-  { inputOpened := [], logArities := [1], siblingValues := [] }
+  { inputOpened := [], logArities := [1], siblingValues := [],
+    commitSteps := [{ logArity := 1, siblingValues := [], openingProof := [] }] }
 
 private def goldenFriView : DecodedFriWire :=
   { commitments := [List.replicate 8 0]
@@ -731,6 +788,34 @@ private def goldenCoreView : DecodedBatchProofCore :=
     openedEvaluations := [],
     fri := goldenFriView,
     degreeBits := [3] }
+
+private def reconstructionEval : ExtElem ℤ := ⟨[11, 12, 13, 14]⟩
+
+private def goldenExtLayer : ExtLayerOpening ℤ :=
+  { beta := ⟨[]⟩, x := ⟨[]⟩, e0 := ⟨[]⟩, e1 := ⟨[]⟩,
+    siblingValues := [], leaf := [], siblings := [] }
+
+private def goldenExtView : ExtVerifierView ℤ :=
+  { queries := [{ index := 7, initialEval := reconstructionEval,
+                  layers := [goldenExtLayer] }],
+    singleAirOpenings := [] }
+
+/-- The literal query grouping reaches the apex view with the transcript-derived
+index and supplied PCS reduction, while beta/x/leaf remain absent as intended. -/
+theorem reconstructExtVerifierView_golden :
+    reconstructExtVerifierView goldenCoreView [7] [reconstructionEval] [] =
+      some goldenExtView := by decide
+
+#assert_axioms reconstructExtVerifierView_golden
+
+private def richStep : DecodedCommitStepWire :=
+  { logArity := 2, siblingValues := [[1,2,3,4], [5,6,7,8], [9,10,11,12]],
+    openingProof := [[21,22,23,24,25,26,27,28]] }
+
+-- Grouping and Merkle authentication material survive decoding into the verifier view.
+#guard (decodedStepToExtLayer richStep).siblingValues.map (·.lanes) =
+  richStep.siblingValues.map innerToFieldZ
+#guard (decodedStepToExtLayer richStep).siblings = richStep.openingProof.map innerToFieldZ
 
 /-- Golden parse theorem: the complete core lands exactly at the metadata suffix. -/
 theorem readBatchProofCore_golden :

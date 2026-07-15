@@ -396,6 +396,9 @@ instance : Inhabited (Dregg2.Circuit.ExtFieldChallenge.ExtFriCore ℤ) :=
   ⟨{ compress := fun _ _ => [], leafHash := fun _ _ => [],
      domainPoint := fun _ _ => ⟨[]⟩, domainPointInv := fun _ _ => ⟨[]⟩ }⟩
 
+instance : Inhabited (Dregg2.Circuit.ExtFieldChallenge.ExtVerifierView ℤ) :=
+  ⟨{ queries := [], singleAirOpenings := [] }⟩
+
 /-- Deployed config: the Poseidon2 permutation the challenger sponges with. KAT-validated. -/
 opaque cfgPerm : List ℤ → List ℤ
 /-- Deployed config: the sponge rate. KAT-validated. -/
@@ -430,12 +433,12 @@ opaque cfgLogN : Nat
 /-- Deployed config: byte-deserialization of `(pi, π)` into the structured proof data and carried
 publics `verifyAlgo` walks. KAT-validated. -/
 opaque cfgView : BatchPublicInputs → BatchProof → (FriVerifier.BatchProofData ℤ × FriVerifier.WrapPublics ℤ)
-/-- Reconstruct the extension-valued commit-phase openings from the same deployed proof.
-This is kept as a sibling of `cfgView` because the legacy scalar view remains the target of
-the established `DeployedRefines` theorem; the apex verifier consumes both, and the full
-extension walk is no longer projected through lane zero. -/
+/-- Reconstruct only the serialized extension-valued rows/Merkle data and the AIR-evaluated
+OOD values from the same deployed proof.  Query indices, betas, α, ζ, domain points,
+vanishing, and inverses are NOT supplied by this KAT view: the concrete verifier derives
+them from the continued transcript/domain arithmetic. -/
 opaque cfgExtView : BatchPublicInputs → BatchProof →
-  List (Dregg2.Circuit.ExtFieldChallenge.ExtQueryOpening Int)
+  Dregg2.Circuit.ExtFieldChallenge.ExtVerifierView Int
 /-- Deployed config: the residual non-FRI checks of the deployed verifier. KAT-validated. -/
 opaque cfgExtra : FriVerifier.BatchProofData ℤ → FriVerifier.WrapPublics ℤ → Bool
 

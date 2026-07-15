@@ -272,7 +272,8 @@ accounts holding exactly the assets the swap moves — cell 1 holds 7 of asset 1
 0. Authorization is self-send (`actor = from_` in every chained leg), so the executor gate passes. -/
 def demoSettlePre : RecordKernelState where
   accounts := {1, 2}
-  cell := fun _ => Value.record [("balance", Value.int 0)]
+  cell := fun c =>
+    if c ∈ ({1, 2} : Finset CellId) then Value.record [("balance", Value.int 0)] else default
   caps := fun _ => []
   bal := fun c a => if c = 1 ∧ a = 10 then 7 else if c = 2 ∧ a = 11 then 5 else 0
 

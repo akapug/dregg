@@ -767,6 +767,78 @@ plane; content-addressed static-site hosting.
   nested cursor golden are proved, but the `BatchProofData` projection deliberately
   discards consumed Merkle paths/lookup names and therefore has no honest inverse;
   (f) **ExecutorApplyDifferentialPin** remains.
+- DEPUTIZED TASK 5 — STARK RESIDUAL CLOSE + OUTWARD ASSURANCE AUDIT (2026-07-14, uncommitted;
+  supervisor gates/commits). STARK: `ExtensionOodWidthResidual` CLOSED — single-AIR OOD RLC,
+  quotient-chunk recomposition, vanishing and bus sums now run in BabyBear[X]/(X^4−11), with α/ζ
+  continued from the one verifier transcript and a same-head/higher-lane quotient tamper rejected by
+  the complete predicate. `HigherArityExtRowResidual` CLOSED — log-arity 2/3 rows reconstruct the
+  serialized 4/8-evaluation row and use exact extension-field Lagrange folding; honest arity-4 and
+  arity-8 rows accept, and a higher-lane row tamper fails its Merkle leaf. `InnerProofReconstructionResidual`
+  NARROWED — `ProofByteDecoder` now preserves each commit step's literal `log_arity`, grouped ext4
+  sibling evaluations, and Merkle path; `reconstructExtQueriesFromWire` rebuilds extension query rows,
+  while qidx/β/α/ζ/domain points/vanishing/inverses are verifier-derived. REMAINING KAT/APEX seam is
+  precise: `cfgExtView` is still opaque rather than definitionally the decoder reconstruction; initial
+  PCS reduced evaluations and AIR-evaluated constraint/quotient-selector values are still supplied by
+  KAT. `ReducedOpeningRollInResidual` is also named: p3 can add reduced PCS openings at intermediate
+  FRI heights (`beta^arity * reducedOpening`) before folding, while the Lean walk currently consumes
+  only the initial reduced evaluation; closing it requires decoding the per-height reduced-opening
+  schedule and folding it into the verifier-derived accumulator. `BatchStarkMetadataTailResidual`,
+  `CoreProjectionRoundtripResidual`, and
+  `ExecutorApplyDifferentialPin` remain.
+
+  OUTWARD MAP (priority order; each gap either formalized or named):
+  1. **`StarkMarketClaimExtractionResidual` (P0, OPEN).** `Dregg2.Circuit.CircuitSoundness` and
+     `Market` were two separate theorem towers. Accepted PI contains only `(effect,pre,post,turn)`;
+     no Market descriptor/extractor yields a `DrexClearing`. New `Market.ProtocolAssurance` defines
+     the exact missing extraction and proves the conditional seam: once supplied, commitment binding
+     identifies the decoded STARK endpoints with the fair/kernel-real clearing, gives per-asset
+     conservation, and advances `settleDrex` from the SAME public pre-root to the SAME public post-root.
+     `MarketBoundaryBinding` has a wrong-post refusal tooth and a concrete nonempty `demoFill` witness.
+  2. **fhEgg deployed denotation (P0, FORMALLY REFUTED).** New `Market.FhEggRustDenotation` proves
+     `FhEggCrossingConventionResidual`: Lean selects least `D≤S`, Rust `reference_clear`/`fhe_clear`/
+     `mpc.rs` select largest `D≥S`; the repository worked book is Lean `(2,6)` vs Rust `(1,8)`.
+     `MpcCrossingDenotationResidual` proves the Lean simulator's `[D≤S]` up-step is the opposite of
+     deployed MPC's `[D≥S]` down-step. Thus the perfect additive-sharing lemma is real, but joined to
+     the wrong clearing semantics.
+  3. **TFHE correctness/privacy (P0, FORMALLY REFUTED).** `FhEggTfheNoCrossResidual`: `fhe_clear`
+     reports the no-cross sentinel but still decrypts bucket-zero `min(D,S)`, unlike `reference_clear`'s
+     zero. `FhEggTfheWidthResidual`: plaintext curves are `u32`, encrypted curves are `FheUint16`; two
+     valid 32768 bids wrap demand 65536→0 and change `(p*,V*)`. `FhEggTfheProgramDenotationResidual`
+     refutes the advertised universal reference=FHE obligation. `FhEggTfheLeakageResidual`: the holder
+     of `ClientKey` decrypts `D[p*]` AND `S[p*]`, so the real view does not factor through `(p*,V*)`;
+     two honest books with the same `(0,8)` expose `(10,8)` vs `(8,8)`. Closing needs one crossing
+     convention, `k>0`, aggregate-width enforcement/wider ciphertexts, ciphertext-level secure min,
+     threshold-key semantics, and a real TFHE program-refinement theorem.
+  4. **`SettlementVerifierRefinementResidual` (P1, OPEN).** `settleDrex` starts with a proof-carrying
+     `DrexClearing` already in hand and models continuity/register update only. The deployed EVM/Cosmos/
+     Solana verifier starts with Groth16 bytes and packed eight-lane roots. `SettlementVerifierRefines`
+     names the exact missing soundness: verifier accept implies existence of a fair kernel-real clearing
+     matching both roots and `numTurns`. The actual Poseidon2-lanes→keccak root encoding/differential is
+     part of this close; `demoRoot` is only a two-balance projection.
+  5. **fhEgg→ledger content binding + shielded apex denotation (P1, OPEN).** No theorem maps an fhEgg
+     order book/output `(p*,V*)` into the `MatchNode`/`DrexClearing` that `settleRing` executes. The
+     Rust N-leg shielded AIR now exists, contrary to `ShieldedClearing.lean`'s stale “finishing build”
+     prose, but no Lean-authored descriptor/refinement proves that satisfying its serialized trace
+     yields `shielded_ring_clears`, nor is it routed into the Market STARK extractor. This is the exact
+     order-book/hidden-note/settled-fill identity theorem still missing.
+  6. **`AggregateBindingScalarFloorResidual` (P1, FORMALLY REFUTED).** Market's scalar BDLOP stand-in
+     used `msisHard_trivial_model` as “non-vacuity,” but its `IsShort` contains only `(0,0)`, so the
+     reduction premise already forces equal openings. At `A=G=1`, the ordinary radius-one short witness
+     `(1,−1)` is an explicit kernel vector; the scalar `MSISHard` floor is false. Close with the actual
+     BDLOP module/matrix distribution and an adversary-indexed negligible-advantage floor (the discipline
+     already developed in `Dregg2.Crypto.CryptoFloorTeeth`), not another existence-refutation.
+  7. **certificate/crypto integration (P2, OPEN).** Cert-F is the strongest deployed Market bridge:
+     Lean authors its descriptor and proves emit soundness, while Rust byte-pins the ring-3 twin; the
+     general solver JSON/fixed-point conversion and live Market settlement still do not feed the STARK↔
+     Market extraction. Cert-QP has no production AIR/Lean descriptor and its Lean theorem assumes exact
+     rational equality/box KKT with explicit λ±, whereas Rust accepts approximate `f64` primal/dual
+     infinity-norm residuals over `l≤Ax≤u`; `CertQpRustDenotationResidual` is therefore open, not merely
+     the documented inexact-stationarity lemma. The wider crypto library contains proper adversary-indexed
+     re-groundings, but `AssuranceCase{,Grounded}` composes only the core Poseidon/STARK floors and never
+     the ML-KEM/BLS/DECO/adaptive-TSUF suite: `AssuranceCryptoCompositionResidual` names that missing
+     protocol-level composition. Ledger realization/fairness and quantized no-wrap/mint-safe algebra
+     themselves have genuine positive/negative teeth; their remaining weakness is Rust/circuit/settlement
+     denotation, not a discovered logical shell.
 - CI-GREEN GRIND (2026-06-26). Drove the workspace toward green after the wide-registry/umem churn. LANDED (committed):
   (1) `circuit/src/dsl/garbled.rs` — the DSL garbled prover/verifier pushed a 16-felt PI vector (`as_slice()` over the
   now-8-felt WideHash ×2) while the descriptor reuses the deprecated 4-felt GarbledEvaluationAir columns + expects 8 PIs;

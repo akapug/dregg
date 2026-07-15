@@ -34,8 +34,13 @@ This is the **reduction STRUCTURE**, not a security proof:
   * PROVEN (reduction): `aggregate_binding_of_msis` — GIVEN `MSISHard`, a radius-bounded collision of
     the aggregate commitment forces equality (binding). The security content is discharged onto the
     hypothesis; the theorem is the reduction, not the hardness.
-  * ASSUMED: `MSISHard A G IsShort` (Module-SIS). Shown SATISFIABLE-in-principle by a concrete model
-    (`msisHard_trivial_model`) so the reduction is not vacuous over a `False` hypothesis.
+  * ASSUMED: `MSISHard A G IsShort` (Module-SIS).  **Audit correction:** the historical
+    `msisHard_trivial_model` below proves only logical consistency by defining the short set to contain
+    `(0,0)` and nothing else.  It is not cryptographic non-vacuity: under that predicate the reduction's
+    own `hshort` premise already forces the two openings equal.  The scalar `[A|G]` model is in fact
+    refuted by the explicit radius-1 kernel witness `(1,-1)` at `A=G=1`
+    (`AggregateBindingScalarFloorResidual`).  A faithful close must replace the scalar stand-in with
+    the deployed matrix/ring distribution and an adversary-indexed Module-SIS advantage ensemble.
 -/
 import Market.MintSafeQuantization
 import Mathlib.Algebra.Ring.Basic
@@ -192,10 +197,10 @@ example :
     (by decide)
     (by simp only [Com]; norm_num)
 
-/-- **`MSISHard` is SATISFIABLE-in-principle** (not definitionally `False`): the model where the ONLY
-short pair is `(0, 0)` admits no short *nonzero* kernel element, so hardness holds for ANY `A, G`.
-This shows the reduction is not vacuous over a `False` hypothesis. The real crypto model has a
-richly-populated short set and its hardness is the genuine Module-SIS ASSUMPTION. -/
+/-- **Logical consistency witness only — NOT cryptographic non-vacuity.**  The model where the ONLY
+short pair is `(0,0)` admits no short nonzero kernel element for any `A,G`.  Because a downstream
+`hshort` in this model already states both opening differences are zero, this witness must not be used
+as evidence that the deployed hardness floor is meaningful. -/
 theorem msisHard_trivial_model (A G : R) :
     MSISHard A G (fun dr dm => dr = 0 ∧ dm = 0) := by
   rintro ⟨dr, dm, hnz, ⟨h0r, h0m⟩, _⟩
@@ -214,7 +219,27 @@ example (A G r m r' m' : R)
   aggregate_binding_of_msis A G (fun dr dm => dr = 0 ∧ dm = 0)
     (msisHard_trivial_model A G) r m r' m' hshort hcol
 
+/-! ## Faithfulness tooth — the scalar hardness stand-in is false for a real short ball. -/
+
+/-- A concrete, populated radius-one short set over `ℤ`. -/
+def radiusOneShort (dr dm : ℤ) : Prop :=
+  -1 ≤ dr ∧ dr ≤ 1 ∧ -1 ≤ dm ∧ dm ≤ 1
+
+/-- **`AggregateBindingScalarFloorResidual` — the present scalar floor is FALSE.**  At `A=G=1`,
+`(dr,dm)=(1,-1)` is nonzero, radius-one short, and lies in the kernel of `[A|G]` because
+`1·1 + 1·(-1)=0`.  Thus the only positive floor witness in this file (`msisHard_trivial_model`) wins by
+excluding this ordinary short vector.  Closing aggregate binding requires the actual BDLOP matrix/ring
+instance and a resource-bounded adversary advantage statement, not this scalar existence-refutation. -/
+theorem AggregateBindingScalarFloorResidual :
+    ¬ MSISHard (1 : ℤ) 1 radiusOneShort := by
+  intro hard
+  exact hard ⟨1, -1, by norm_num, by norm_num [radiusOneShort], by norm_num⟩
+
+#guard decide ((-1 : ℤ) ≤ 1 ∧ (1 : ℤ) ≤ 1 ∧ (-1 : ℤ) ≤ -1 ∧ (-1 : ℤ) ≤ 1)
+#guard Com (1 : ℤ) 1 1 (-1) == 0
+
 #assert_all_clean [Market.collision_yields_msis_witness, Market.aggregate_binding_of_msis,
-  Market.Com_add, Market.combine_radius_is_aggregate, Market.msisHard_trivial_model]
+  Market.Com_add, Market.combine_radius_is_aggregate, Market.msisHard_trivial_model,
+  Market.AggregateBindingScalarFloorResidual]
 
 end Market
