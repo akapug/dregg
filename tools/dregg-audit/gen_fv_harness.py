@@ -14,6 +14,15 @@ over a two-mint sequence, all inputs symbolic, against the REAL compiled bytecod
 For a hard-capped one-shot token (e.g. DreggLaunchToken) Halmos proves it; for an
 uncapped/owner-mintable token (e.g. the MoonRugToken sample) Halmos returns a
 counterexample.
+
+When the token exposes public `balanceOf`+`allowance` it also emits INV-NODRAIN
+(owner-drain/seize, door #5) and INV-REENTRANCY (an ETH-conservation guard, the
+auto best-effort form). When it exposes a public authority accessor (`minter` or
+`owner`) it emits INV-ACCESS-CONTROL (door #1): the mint op is confined to that role
+— a mint missing its access-check yields a counterexample even when the cap holds.
+The deep both-polarity re-entry proof is the hand-written spec
+chain/formal-verification/DreggReentrancyFV.t.sol; the strong access-control /
+no-drain specs are its siblings there.
 """
 import re
 import sys
@@ -133,6 +142,17 @@ def main():
     movers = find_privileged_movers(body)
     gen_drain = has_balanceof and has_allowance
 
+    # INV-ACCESS-CONTROL (taxonomy door #1, owner/admin authority) is generated when
+    # the token exposes a public authority accessor (`minter` or `owner`) so the
+    # antecedent "caller is not the authorized role" and the readback compile. The
+    # check proves the mint door is confined to that role — an UNGUARDED mint (a
+    # missing access-check) yields a counterexample where a non-authority caller moves
+    # the supply, even when the hard cap still holds (so INV-CAP alone would pass).
+    has_minter = bool(re.search(r"public[^;]*\bminter\b|\bminter\b[^;]*public", code))
+    has_owner = bool(re.search(r"public[^;]*\bowner\b|\bowner\b[^;]*public", code))
+    auth_accessor = "minter" if has_minter else ("owner" if has_owner else None)
+    gen_access = auth_accessor is not None
+
     params = parse_ctor_params(code, name)
     # Build symbolic ctor param decls + call args + assumes.
     decls, args, assumes = [], [], []
@@ -184,6 +204,45 @@ def main():
         _drainStep(t, sel, caller, x, y, v);
         assert(t.balanceOf(victim) >= b0); // the no-drain tooth
     }}
+
+    // INV-REENTRANCY (ETH-conservation form): the contract is seeded with ETH held
+    // on others' behalf; NO single external call by an attacker over the dispatched
+    // surface (ERC-20 + any privileged mover) may reduce that ETH. A pure ERC-20 has
+    // no outbound value-call, so it is PROVEN drain-free; a payable value-sending
+    // door yields a COUNTEREXAMPLE. This is the auto-harness's best-effort reentrancy
+    // guard for the common token shape (single call, no callback carrier); the STRONG
+    // both-polarity re-entry proof (CEI-violation vs CEI-correct, with a re-entrant
+    // attacker) is the hand-written spec chain/formal-verification/DreggReentrancyFV.
+    function check_noReentrancyDrain({decl_str}address attacker, uint8 sel, address x, address y, uint256 v) public {{
+{assume_str}
+        {name} t = new {name}({args_str});
+        vm.deal(address(t), 1 ether); // the contract holds ETH on others' behalf
+        uint256 e0 = address(t).balance;
+        _drainStep(t, sel, attacker, x, y, v);
+        assert(address(t).balance >= e0); // no external call drains the contract's ETH
+    }}
+"""
+
+    # ── INV-ACCESS-CONTROL harness (owner/admin authority, taxonomy door #1) ──────
+    access_block = ""
+    if gen_access:
+        access_block = f"""
+    // INV-ACCESS-CONTROL: the privileged mint op is confined to the authorized role
+    // (`{auth_accessor}`). For any caller that is NOT that role, the supply cannot
+    // move — PROVEN on a correctly-gated mint; a COUNTEREXAMPLE on a mint missing its
+    // access check (an unauthorized caller mints the supply), which INV-CAP alone
+    // would miss when the cap+latch still hold. Grep sees the `{auth_accessor}` field
+    // and assumes a guard; THIS proves the guard actually confines the op.
+    function check_privilegedOpsAuthorized({decl_str}address caller, address to, uint256 amount) public {{
+{assume_str}
+        {name} t = new {name}({args_str});
+        address auth = t.{auth_accessor}();
+        vm.assume(caller != auth);
+        uint256 s0 = t.totalSupply();
+        vm.prank(caller);
+        try t.mint(to, amount) {{}} catch {{}}
+        assert(t.totalSupply() == s0); // no unauthorized caller moves the supply
+    }}
 """
 
     harness = f"""// SPDX-License-Identifier: MIT
@@ -222,7 +281,7 @@ contract GenFV is Test {{
         vm.prank(c2); try t.mint(to2, a2) {{}} catch {{}}
         assert(t.totalSupply() <= t.cap());
     }}
-{drain_block}}}
+{drain_block}{access_block}}}
 """
     open(out_path, "w").write(harness)
     print("token-cap")

@@ -33,7 +33,7 @@ fixes, with a **machine proof** where a standard invariant applies.
 | Stage | Tool | Decided by | What it produces |
 |-------|------|-----------|------------------|
 | **A. Rug-forensics** | deterministic `grep` over the rug-door taxonomy | machine | each of 9 rug doors PRESENT / ABSENT with evidence lines |
-| **B. Formal verification** | Halmos symbolic EVM on the real bytecode | machine (proof) | INV-CAP PROVEN / COUNTEREXAMPLE, or scaffold-only |
+| **B. Formal verification** | Halmos symbolic EVM on the real bytecode | machine (proof) | per-invariant PROVEN / COUNTEREXAMPLE (INV-CAP, INV-NODRAIN, INV-REENTRANCY, INV-ACCESS-CONTROL), or scaffold-only |
 | **C. Adversarial audit** | `codex exec --sandbox read-only` hostile pass | LLM | severity-ranked findings, each **TRIAGE-REQUIRED** |
 | **D. Triage + report** | assembler + human verifier | human confirms C | one markdown report + a triage verdict per finding |
 
@@ -48,16 +48,23 @@ checks for and notes).
 
 ### B — formal verification (the proof)
 Auto-generates a Halmos harness for the ERC-20 **supply-cap** shape (a `mint` fn plus
-public `cap`/`totalSupply`) and proves `totalSupply <= cap` over **all inputs** against
-the **real compiled bytecode** — the EVM twin of the Lean supply theorem
-`execMintA_iff_spec` (`metatheory/Dregg2/Verify/KeystoneAuditSupply.lean:124`). A
-hard-capped one-shot token is *proven*; an uncapped/owner-mintable token yields a
-*counterexample* (a concrete witness that the cap is not enforced). Halmos is chosen
-over solc's CHC because CHC is *unsound* on custom-error guards (documented in
+public `cap`/`totalSupply`) and proves — over **all inputs**, against the **real
+compiled bytecode** — a set of anti-rug invariants, each reported PROVEN or
+COUNTEREXAMPLE per-invariant: **INV-CAP** (`totalSupply <= cap`, the EVM twin of the
+Lean supply theorem `execMintA_iff_spec`,
+`metatheory/Dregg2/Verify/KeystoneAuditSupply.lean:124`); and, when the shape exposes
+the needed getters, **INV-NODRAIN** (owner-drain/seize, door #8), **INV-REENTRANCY**
+(an ETH-conservation guard — no external call drains held ETH; the deep both-polarity
+re-entry proof is the hand-written `DreggReentrancyFV` spec) and **INV-ACCESS-CONTROL**
+(mint confined to its `minter`/`owner` role, door #1). A door can pass one invariant
+and fail another — a mint that respects the cap but is missing its access-check passes
+INV-CAP and fails INV-ACCESS-CONTROL (`samples/UnguardedMintToken.sol`). Halmos is
+chosen over solc's CHC because CHC is *unsound* on custom-error guards (documented in
 `chain/formal-verification/README.md`). Non-token shapes (e.g. pool-solvency, which
 needs a contract-specific init sequence) are reported **scaffold-only** with the
-hand-written `chain/formal-verification/` harness as the named next step — FV is
-deliberately not push-button for arbitrary contracts.
+hand-written `chain/formal-verification/` harness (supply-authority, pool-solvency-floor,
+NoDrain, Reentrancy, Access-Control) as the named next step — FV is deliberately not
+push-button for arbitrary contracts.
 
 ### C — adversarial audit (the hunt)
 Runs `codex exec` (GPT-5.6-class, reasoning xhigh, read-only sandbox) with a hostile-

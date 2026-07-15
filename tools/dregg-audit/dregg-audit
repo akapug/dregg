@@ -187,35 +187,76 @@ else
       2>&1 | perl -pe 's/\e\[[0-9;]*m//g' > "$FV_OUT"
     npass="$(grep -cE '^\[PASS\]|  \[PASS\]|\bPASS\b.*check_' "$FV_OUT" 2>/dev/null || echo 0)"
     nfail="$(grep -cE '^\[FAIL\]|  \[FAIL\]|Counterexample' "$FV_OUT" 2>/dev/null || echo 0)"
+
+    # Per-invariant verdict: map each emitted check_ to the taxonomy door it decides.
+    # This is what makes the report HONEST — a counterexample on the access-control
+    # check is NOT a "hard cap violated"; each invariant closes a distinct door.
+    inv_label() {
+      case "$1" in
+        check_cap_singleCall|check_cap_twoMints) echo "INV-CAP — hard cap \`totalSupply<=cap\` (door #2, mintable supply)" ;;
+        check_noUnauthorizedDrain)               echo "INV-NODRAIN — no unauthorized balance drain (door #8, owner-drain/seize)" ;;
+        check_noReentrancyDrain)                 echo "INV-REENTRANCY — no external call drains held ETH (reentrancy, ETH-conservation form)" ;;
+        check_privilegedOpsAuthorized)           echo "INV-ACCESS-CONTROL — privileged op confined to its role (door #1, owner/admin)" ;;
+        *)                                       echo "$1" ;;
+      esac
+    }
     {
       echo "Auto-generated symbolic harness (\`fv-workspace/test/GenFV.t.sol\`) proving the"
-      echo "**hard-cap** invariant (INV-CAP: \`totalSupply <= cap\` after any call, and over a"
-      echo "two-mint sequence) against the real compiled bytecode, all inputs symbolic. This"
-      echo "is the EVM twin of the Lean supply theorem \`execMintA_iff_spec\`"
-      echo "(\`metatheory/Dregg2/Verify/KeystoneAuditSupply.lean:124\`)."
+      echo "standard anti-rug invariants against the real compiled bytecode, all inputs"
+      echo "symbolic: **INV-CAP** (\`totalSupply<=cap\`, EVM twin of the Lean supply theorem"
+      echo "\`execMintA_iff_spec\`, \`metatheory/Dregg2/Verify/KeystoneAuditSupply.lean:124\`),"
+      echo "and — when the shape exposes them — **INV-NODRAIN** (owner-drain/seize),"
+      echo "**INV-REENTRANCY** (ETH-conservation guard) and **INV-ACCESS-CONTROL** (mint"
+      echo "confined to its \`minter\`/\`owner\` role). The deep both-polarity re-entry proof is"
+      echo "the hand-written spec \`chain/formal-verification/DreggReentrancyFV.t.sol\`."
       echo
       echo '```'
       grep -E '\[PASS\]|\[FAIL\]|Counterexample|passed;|failed|Running|check_' "$FV_OUT" | head -40
       echo '```'
       echo
+      echo "| Invariant | Check | Verdict |"
+      echo "|-----------|-------|---------|"
     } >> "$REPORT"
-    if grep -qE 'Counterexample|\[FAIL\]' "$FV_OUT"; then
-      FV_VERDICT="COUNTEREXAMPLE (invariant violated)"
+    # Emit a per-check verdict row (distinct PROVEN vs COUNTEREXAMPLE per invariant).
+    B_COUNTEREX=()
+    B_PROVEN=()
+    while IFS= read -r cname; do
+      [[ -z "$cname" ]] && continue
+      if grep -qE "^\[FAIL\] ${cname}\(" "$FV_OUT"; then
+        v="**COUNTEREXAMPLE**"; B_COUNTEREX+=("$cname")
+      elif grep -qE "^\[PASS\] ${cname}\(" "$FV_OUT"; then
+        v="PROVEN"; B_PROVEN+=("$cname")
+      else
+        continue
+      fi
+      echo "| $(inv_label "$cname") | \`${cname}\` | $v |" >> "$REPORT"
+    done < <(grep -oE '^\[(PASS|FAIL)\] check_[A-Za-z0-9_]+' "$FV_OUT" | sed -E 's/^\[(PASS|FAIL)\] //' | sort -u)
+    echo >> "$REPORT"
+
+    if [[ ${#B_COUNTEREX[@]} -gt 0 ]]; then
+      FV_VERDICT="COUNTEREXAMPLE (${#B_COUNTEREX[@]} invariant(s) violated)"
       {
-        echo "**Result: HALMOS FOUND A COUNTEREXAMPLE — the hard cap is NOT enforced.**"
-        echo "Symbolic execution reached a state where \`totalSupply > cap\`. This is a"
-        echo "machine-proved mintable-supply defect (CONFIRMED-REAL, no human triage needed"
-        echo "— it is a proof, not a heuristic)."
+        echo "**Result: HALMOS FOUND ${#B_COUNTEREX[@]} COUNTEREXAMPLE(S).** The invariant(s)"
+        echo "below are machine-DISPROVEN (CONFIRMED-REAL, no human triage — it is a proof):"
+        for c in "${B_COUNTEREX[@]}"; do echo "- $(inv_label "$c")"; done
+        if [[ ${#B_PROVEN[@]} -gt 0 ]]; then
+          echo
+          echo "Still PROVEN (hold over all inputs, bounded): $(printf '%s ' "${B_PROVEN[@]}")."
+          echo "(A door can pass one invariant and fail another — e.g. a mint that respects"
+          echo "the cap but is missing its access-check passes INV-CAP and fails"
+          echo "INV-ACCESS-CONTROL.)"
+        fi
       } >> "$REPORT"
-      say "Stage B: COUNTEREXAMPLE — hard cap violated"
-    elif grep -qiE 'passed|\[PASS\]' "$FV_OUT"; then
-      FV_VERDICT="PROVEN (hard cap holds, bounded)"
+      say "Stage B: COUNTEREXAMPLE on ${B_COUNTEREX[*]}"
+    elif [[ ${#B_PROVEN[@]} -gt 0 ]]; then
+      FV_VERDICT="PROVEN (all ${#B_PROVEN[@]} invariants hold, bounded)"
       {
-        echo "**Result: PROVEN.** No counterexample — the hard cap holds over all inputs"
-        echo "for the bounded call depth. (Bounded proof; see \`chain/formal-verification/\`"
-        echo "README §The honest gap for the depth/overflow bounds this shares.)"
+        echo "**Result: PROVEN.** No counterexample — all ${#B_PROVEN[@]} emitted invariants"
+        echo "hold over all inputs for the bounded call depth. (Bounded proof; see"
+        echo "\`chain/formal-verification/\` README §The honest gap for the depth/overflow"
+        echo "bounds this shares; reentrancy is additionally re-entry-depth-bounded.)"
       } >> "$REPORT"
-      say "Stage B: PROVEN (hard cap holds)"
+      say "Stage B: PROVEN (${#B_PROVEN[@]} invariants hold)"
     else
       FV_VERDICT="inconclusive"
       echo "**Result: inconclusive** (Halmos did not report PASS/FAIL — see \`$FV_OUT\`)." >> "$REPORT"

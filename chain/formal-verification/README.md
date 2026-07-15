@@ -125,6 +125,61 @@ counterexample / no bug** was found in the two core contracts.
 
 ---
 
+## 3b. Extended anti-rug invariants (owner-drain, reentrancy, access-control)
+
+Three more grep-only rug doors are now decided by PROOF, each with a SAFE (proven)
+and an UNSAFE (counterexample) polarity, mirroring the Token/Pool pattern. Each
+carries a negative-control contract inline (self-contained, like the pool's `_init`)
+so the same run proves the tooth has teeth.
+
+### INV-NODRAIN — owner-drain / seize (taxonomy door #8) · `test/DreggNoDrainFV.t.sol`
+No caller who is neither the holder nor allowance-authorized can reduce a holder's
+balance. PROVEN on `DreggLaunchToken` (single call + 2-call sequence); the inline
+`RuggableToken.seize(from,to,value) onlyOwner` (HypervaultFi shape) yields a
+counterexample.
+
+### INV-REENTRANCY — checks-effects-interactions correctness · `test/DreggReentrancyFV.t.sol`
+A state-changing function's external call cannot be re-entered to drain funds owed to
+others. PROVEN on the inline CEI-correct `SafeVault` AND on the REAL
+`DreggSolventPool.sell` (reserves updated before `_sendEth`, pool source 155-166) under
+an adversarial re-entrant seller; the inline `ReentrantVault` (CEI VIOLATION — send
+before the balance write) yields a re-entrant-drain counterexample.
+
+### INV-ACCESS-CONTROL — privileged-op authority (taxonomy door #1) · `test/DreggAccessControlFV.t.sol`
+A privileged op (mint/pause/config) is callable only by its authorized role — an
+unauthorized caller cannot change privileged state. PROVEN on `DreggLaunchToken.mint`
+(minter-only) and the inline `GuardedAdmin` (owner-only setters); the inline
+`UnguardedAdmin.setConfig` (the missing-`onlyOwner` bug) yields a counterexample.
+
+**The cited runs** (`uvx --from halmos halmos --solver-timeout-assertion 0`, solc 0.8.30):
+
+```
+DreggReentrancyFV:
+  [PASS] check_safeVault_noReentrantDrain    (paths:  5)   # CEI-correct vault, no drain
+  [PASS] check_pool_sellIsReentrancySafe     (paths: 15)   # REAL pool floor survives re-entry
+  [FAIL] check_reentrantVault_isAProvenDrain (paths:  6)   ← Counterexample: CEI-violation re-entrant drain
+  → 2 passed; 1 failed  (the FAIL is the intended negative control)
+
+DreggAccessControlFV:
+  [PASS] check_launchToken_mintIsMinterOnly       (paths:  4)  # mint minter-only
+  [PASS] check_guardedAdmin_privilegedOpsAuthorized (paths: 5) # owner-only setters
+  [PASS] check_guardedAdmin_authorized_seq2       (paths: 10)  # no 2-step escalation
+  [FAIL] check_unguardedAdmin_missingCheckIsCaught (paths: 3)  ← Counterexample: missing onlyOwner
+  → 3 passed; 1 failed  (the FAIL is the intended negative control)
+```
+
+**Non-vacuity (mutation canary).** `check_safeVault_noReentrantDrain` with the assert
+strengthened to `vault.balance >= victimDep + 1` → **FAIL / Counterexample** (paths: 9):
+the attacker really receives its deposit back, so the proof is non-vacuous (reachable
+non-reverting paths exist). Restored to green.
+
+These three plus INV-CAP (Token) and the pool floor make the anti-rug invariant set;
+the auto-harness (`tools/dregg-audit/gen_fv_harness.py`) now emits INV-CAP, INV-NODRAIN,
+INV-REENTRANCY (ETH-conservation form) and INV-ACCESS-CONTROL for the token shape, so
+`dregg-audit` decides those doors by PROOF, not grep.
+
+---
+
 ## 4. The honest gap (proven vs bounded vs remaining)
 
 **PROVEN (symbolic, all-inputs):**
@@ -143,6 +198,12 @@ counterexample / no bug** was found in the two core contracts.
   constant-product (`x·y`) arithmetic tractable for the SMT solver — well above any
   realistic launch, well below the uint256 `x·y` overflow band. Trade amounts within
   that band are fully symbolic.
+- **Reentrancy is re-entry-DEPTH bounded** (INV-REENTRANCY). The inline attacker
+  re-enters a bounded number of times (`reentries < 1`), so Halmos proves "no drain up
+  to that re-entry depth", not the unbounded ∀-depth statement. All amounts are
+  symbolic. The auto-harness's `check_noReentrancyDrain` is the weaker single-call
+  ETH-conservation form (no callback carrier); the hand-written `DreggReentrancyFV`
+  spec is the both-polarity re-entry proof.
 
 **REMAINING (named next steps):**
 - **DreggLaunchpad escrow** (ESC-1..ESC-5): SPEC written

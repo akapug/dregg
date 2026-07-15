@@ -82,23 +82,24 @@ STATEMENT both exist and have been exercised at K=2.** The named gaps are elsewh
 - **C. adversarial** — codex hostile pass, every finding TRIAGE-REQUIRED.
 - **D. triage/report**.
 
-**The load-bearing honest gap: only 2 of the 9 taxonomy doors are PROVEN; the
-other 7 are grep-only.** The Halmos auto-harness (`gen_fv_harness.py`, pre-seed)
-proved exactly **two** invariants, both INV-CAP: `check_cap_singleCall` and
-`check_cap_twoMints` (`totalSupply <= cap`). Two more are proven by *hand-written*
-specs in `chain/formal-verification/` — supply-authority
-(`DreggLaunchTokenFV.t.sol`) and pool-solvency-floor (`DreggSolventPoolFV.t.sol`).
-Everything else — including **owner-drain / seize** (door #5, the single most
-damaging launchpad rug class, HypervaultFi) — is detected by grepping the name
-`seize|sweep|rescue|drain`, which cannot tell a benign `rescue(stuck-ERC20)` from a
-`seize(any-holder)` drain and misses a drain spelled without those names.
+**The honest gap (now narrowed).** Originally only **2 of the 9 taxonomy doors were
+PROVEN** (both INV-CAP); the rest were grep-only. The auto-harness
+(`gen_fv_harness.py`) now proves **five** invariants — INV-CAP × 2 plus **INV-NODRAIN**
+(owner-drain/seize, door #8), **INV-REENTRANCY** (an ETH-conservation guard) and
+**INV-ACCESS-CONTROL** (privileged-op authority, door #1) — and the hand-written
+`chain/formal-verification/` specs prove supply-authority, pool-solvency-floor, and the
+both-polarity NoDrain/Reentrancy/Access-Control specs. So doors #1, #2, #8 and the
+reentrancy class are decided by PROOF, not grep. The remaining doors (proxy-upgrade,
+selfdestruct, honeypot transfer-gate, blacklist, pausable, fee-manip) are still
+Stage-A grep + Stage-C codex — the next invariants on the same trajectory. See §The
+named-next, now DONE below for the two just added.
 
 ### (B) improvement table
 
 | Improvement | What it buys | Classification | Effort |
 |---|---|---|---|
-| **More invariants — turn grep'd doors into PROOFS** | Prove owner-drain-freedom / access-control / conservation, not grep them. Converts door #5 (owner-drain) from heuristic to a symbolic proof over the full external surface. **The audit catches more by proof.** | **BUILDABLE-NOW** ← **SEEDED (see below)** | S–M per invariant |
-| **Reentrancy-freedom invariant** | Prove no external call re-enters a state-mutating path (a Halmos property over a call-then-callback harness). Closes another taxonomy gap by proof. | **BUILDABLE-NOW** | M |
+| **More invariants — turn grep'd doors into PROOFS** | Prove owner-drain-freedom / access-control / conservation, not grep them. Converts door #8 (owner-drain) from heuristic to a symbolic proof over the full external surface. **The audit catches more by proof.** | **BUILDABLE-NOW** ← **DONE (INV-NODRAIN + INV-ACCESS-CONTROL, see below)** | S–M per invariant |
+| **Reentrancy-freedom invariant** | Prove no external call re-enters a state-mutating path (a Halmos property over a call-then-callback harness). Closes another taxonomy gap by proof. | **BUILDABLE-NOW** ← **DONE (INV-REENTRANCY, see below)** | M |
 | **More contract types (pool / launchpad / arbitrary)** | The auto-harness only matches the ERC-20 supply-cap shape; pool-solvency and launchpad shapes are hand-written or scaffold-only. Add auto-templates for the pool + launchpad shapes. | **BUILDABLE-NOW** | M |
 | **Deeper FV — unbounded (Kontrol/KEVM or Certora)** | Halmos is symbolic-**bounded** in call depth. Kontrol/KEVM (bytecode-unbounded, K-framework) or Certora (cloud prover) close the depth caveat. | **RESEARCH** here — Kontrol/KEVM not installed (heavy K setup), Certora needs a cloud key not present (`chain/formal-verification/README.md §1`). Not runnable in this env. | L–XL |
 | **Assisted-fix (propose a fix WITH a proof)** | When a counterexample is found, propose the guarded rewrite AND prove the patched shape safe (assisted, not auto-applied). | **RESEARCH** (auto-repair is a research problem; the tool deliberately audits+proposes, does not auto-rewrite, `DREGG-AUDIT-SERVICE.md:22-25`) | L |
@@ -180,5 +181,64 @@ common owner-mintable shape; where the deployer cannot mint, the check is vacuou
 safe (`b0 = 0`) and the hand-written spec is the strong path — exactly the doc's
 stated division of labor (auto for the common shape, hand-written for the rest). The
 proof is symbolic-**bounded** in call depth like every sibling spec (single call +
-a 2-step sequence), and it does not close the reentrancy / access-control doors —
-those are the named next invariants on the same trajectory.
+a 2-step sequence).
+
+## The named-next, now DONE — INV-REENTRANCY + INV-ACCESS-CONTROL (proven not grep'd)
+
+The seed's named next invariants are now built, both as hand-written both-polarity
+specs and wired into the auto-harness.
+
+**INV-REENTRANCY (reentrancy-freedom)** — `chain/formal-verification/test/DreggReentrancyFV.t.sol`.
+A state-changing function's external call cannot be re-entered to drain funds owed to
+others. PROVEN on the inline CEI-correct `SafeVault` AND on the REAL
+`DreggSolventPool.sell` (reserves updated BEFORE `_sendEth`, pool source 155-166) under
+an adversarial re-entrant seller; the inline `ReentrantVault` (CEI VIOLATION — the ETH
+send precedes the balance write) yields a re-entrant-drain COUNTEREXAMPLE. Reentrancy
+FV is symbolic-**bounded in re-entry depth** (the attacker re-enters once) — the honest
+sibling caveat. Cited runs (Halmos 0.3.3, solc 0.8.30, real bytecode):
+```
+[PASS] check_safeVault_noReentrantDrain    (paths:  5)   # CEI-correct, no drain
+[PASS] check_pool_sellIsReentrancySafe     (paths: 15)   # REAL pool floor survives re-entry
+[FAIL] check_reentrantVault_isAProvenDrain (paths:  6)   ← Counterexample (CEI-violation drain)
+```
+Non-vacuity (mutation canary): strengthening the safe assert to `>= victimDep + 1` →
+Counterexample (paths: 9). Restored to green.
+
+**INV-ACCESS-CONTROL (privileged-op authority)** — `chain/formal-verification/test/DreggAccessControlFV.t.sol`.
+A privileged op (mint/pause/config) is callable only by its authorized role — an
+unauthorized caller cannot change privileged state. PROVEN on `DreggLaunchToken.mint`
+(minter-only) and the inline `GuardedAdmin` (owner-only setters, single + 2-call
+sequence); the inline `UnguardedAdmin.setConfig` (the missing-`onlyOwner` bug) yields a
+COUNTEREXAMPLE. This converts taxonomy door #1 (owner/admin) from a grep that only sees
+the `owner`/`minter` field to a proof the guard actually confines the op. Cited runs:
+```
+[PASS] check_launchToken_mintIsMinterOnly         (paths:  4)
+[PASS] check_guardedAdmin_privilegedOpsAuthorized (paths:  5)
+[PASS] check_guardedAdmin_authorized_seq2         (paths: 10)
+[FAIL] check_unguardedAdmin_missingCheckIsCaught  (paths:  3)  ← Counterexample (missing onlyOwner)
+```
+
+**Pipeline wiring + a new contrast sample.** `tools/dregg-audit/gen_fv_harness.py` now
+emits `check_noReentrancyDrain` (an ETH-conservation guard: no single external call by an
+attacker drains held ETH — the auto best-effort reentrancy form; the deep both-polarity
+proof is the hand-written spec) and `check_privilegedOpsAuthorized` (mint confined to
+`minter`/`owner`) alongside INV-CAP and INV-NODRAIN. A new sample
+`tools/dregg-audit/samples/UnguardedMintToken.sol` is HARD-CAPPED and one-shot (so
+INV-CAP holds) but its `mint` is missing the `minter` guard — the auto-run PROVES INV-CAP
+yet returns an INV-ACCESS-CONTROL **counterexample**, the door INV-CAP alone misses. The
+Stage-B report is now **per-invariant** (a counterexample on access-control is no longer
+mislabelled "hard cap violated").
+
+**The auto-harness cited runs** (`tools/dregg-audit/dregg-audit <c> --no-fv=off`):
+```
+DreggLaunchToken (safe):  5/5 PROVEN  (INV-CAP×2, INV-NODRAIN, INV-REENTRANCY, INV-ACCESS-CONTROL)
+MoonRugToken (unsafe):    INV-CAP + INV-NODRAIN → COUNTEREXAMPLE; INV-ACCESS-CONTROL PROVEN (its mint IS onlyOwner — the rug is uncapped supply)
+UnguardedMintToken:       INV-CAP + INV-NODRAIN + INV-REENTRANCY PROVEN; INV-ACCESS-CONTROL → COUNTEREXAMPLE (missing minter guard)
+```
+
+**The updated count.** The `dregg-audit` auto-harness went from **3 proven invariants**
+(INV-CAP × 2 + INV-NODRAIN) to **5** (adding INV-REENTRANCY + INV-ACCESS-CONTROL). Two
+more grep'd rug doors are now decided by machine proof — door #1 (owner/admin) proven
+correctly-gated (not just grep-present) and the reentrancy class (never in the Stage-A
+grep taxonomy) proven both polarities. Bounds are the sibling ones: symbolic-bounded call
+depth, plus re-entry-depth bounded for reentrancy.
