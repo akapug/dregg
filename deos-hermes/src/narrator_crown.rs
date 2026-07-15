@@ -35,15 +35,28 @@
 //! ## What is REAL at launch vs. the named production wire (honest scope)
 //!
 //! REAL now: the well-formed (JSON CFG) leg and the injection-free leg are the genuine
-//! `dregg-zkoracle-prove` provers, run over the narrator's ACTUAL output every call; the
-//! receipt binding is the same [`attestation_commitment`](crate::attest::attestation_commitment)
-//! a landed R2 turn witnesses; and under `zk-live` the authentic leg rides a real local
-//! MPC-TLS 2PC roundtrip ([`AttestedNarrator::narrate_attested_live`]). The NAMED
-//! operational remainder is a live `api.anthropic.com` session under a deployed pinned
-//! notary — fusing that real tlsn `PresentationOutput` into the authentic leg so it IS the
-//! MPC-TLS presentation, not the modeled carrier. So the launch claim is honest:
-//! *"attested: injection-free + well-formed + bound to verified state"* is true today;
-//! *"provably a real named model over live TLS"* is the named production wire.
+//! `dregg-zkoracle-prove` provers, run over the narrator's ACTUAL output every call — and
+//! the injection leg is now additionally PROVEN IN-CIRCUIT (a real `prove_vm_descriptor2`
+//! STARK of the pinned injection DFA's run, attached on this path and checked fail-closed,
+//! where it used to default to `None` and sit dead). The receipt binding is the same
+//! [`attestation_commitment`](crate::attest::attestation_commitment) a landed R2 turn
+//! witnesses.
+//!
+//! ⚑ **PROVENANCE — the one thing to be precise about.** [`AttestedNarrator::narrate_attested`]
+//! (the default path) attests under a **SELF-SIGNED FIXTURE**: this process builds the
+//! session transcript and signs it with a key it holds itself. So *"attested: injection-free
+//! + well-formed + bound to verified state"* is TRUE today, and *"provably came from a real
+//! model"* is NOT — not on this path. The type says so:
+//! [`dregg_zkoracle_prove::authentic_provenance`] reports
+//! `AuthenticProvenance::SelfSignedFixture`, and a verifier demanding
+//! `AuthenticPolicy::RequireMpcTls` REFUSES it outright.
+//!
+//! Under `zk-live`, [`AttestedNarrator::narrate_attested_live`] fuses a REAL MPC-TLS
+//! presentation into the authentic leg — real *transport* provenance (a separate notary
+//! that saw no plaintext, a genuine `presentation.verify()`), though against a local test
+//! endpoint. Real *model* provenance — the body Claude actually returned over a live
+//! Bedrock session — is [`crate::attest::attest_turn_bedrock`], which needs live network +
+//! AWS credentials and so is wired but not driven in CI.
 
 use dregg_narrator::{Narration, Narrator, NarratorError};
 use dregg_zkoracle_prove::{ProveError, ZkOracleAttestation};
@@ -176,13 +189,18 @@ impl AttestedNarrator {
     /// narration is [`CrownError::Injection`], a malformed-once-embedded one is
     /// [`CrownError::Attest`].
     pub fn attest_narration(&self, narration: Narration) -> Result<AttestedNarration, CrownError> {
-        let (attestation, field) =
-            self.carrier
-                .attest_turn(&narration.text)
-                .map_err(|e| match e {
-                    ProveError::Injection => CrownError::Injection,
-                    other => CrownError::Attest(other),
-                })?;
+        // THE IN-CIRCUIT PROSE TOOTH, LIVE. `attest_turn_with_stark` attaches a real
+        // `prove_vm_descriptor2` of the pinned injection DFA's run over the narration, so
+        // leg 3 is PROVEN in-circuit rather than only re-executed by the host matcher — and
+        // the verifier checks it fail-closed. (The narrator path defaulted `zk_injection:
+        // None`, which left the STARK dead code on every path a narrator actually used.)
+        let (attestation, field) = self
+            .carrier
+            .attest_turn_with_stark(&narration.text)
+            .map_err(|e| match e {
+                ProveError::Injection => CrownError::Injection,
+                other => CrownError::Attest(other),
+            })?;
         let commitment = attestation_commitment(&attestation);
         Ok(AttestedNarration {
             narration,

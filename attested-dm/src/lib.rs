@@ -5,10 +5,36 @@
 //! [`dregg_zkoracle_prove::ZkOracleAttestation`] proving the turn was:
 //!
 //! ```text
-//!   authentic     — from a real model (a genuine `/v1/messages` session), not forged;
+//!   authentic     — the session leg (see PROVENANCE below — the default path is a
+//!                   SELF-SIGNED test double, NOT proof of a real model);
 //!   well-formed   — the response body lies in the JSON context-free language;
-//!   injection-free — the bound narration carries no `{{` handlebars delimiter.
+//!   injection-free — the bound narration carries no `{{` handlebars delimiter (and, on
+//!                   the narrator path, that run is PROVEN in-circuit by a real STARK).
 //! ```
+//!
+//! ## ⚑ PROVENANCE — what "authentic" does and does not buy
+//!
+//! "Authentic" is the one leg to be precise about, because it has three realizations that
+//! are NOT interchangeable. [`authentic_provenance`] reports which one an attestation
+//! actually carries, and [`AuthenticPolicy`] is what a verifier demands of it:
+//!
+//! * **[`DmAttestationCarrier::attest_narration`] (the default) — a SELF-SIGNED FIXTURE.**
+//!   This process builds the session transcript and signs it with a key it holds itself, so
+//!   it could mint any body it liked and every leg would still verify. It proves the
+//!   PRODUCE→VERIFY plumbing and **nothing whatever** about where the narration came from.
+//!   `verify_zkoracle` admits it ([`AuthenticPolicy::AllowFixture`]); a verifier demanding
+//!   [`AuthenticPolicy::RequireMpcTls`] REFUSES it outright.
+//! * **[`DmAttestationCarrier::attest_narration_live`] (`tlsn-live`) — REAL TRANSPORT
+//!   PROVENANCE.** A genuine MPC-TLS 2PC roundtrip whose real presentation IS the authentic
+//!   leg: a separate notary co-derived the session keys, saw no plaintext, and a real
+//!   `presentation.verify()` adjudicates it. The endpoint is a local test server, so the
+//!   2PC is real and the *model* is not.
+//! * **`deos_hermes::attest::attest_turn_bedrock` (`zk-live`) — REAL MODEL PROVENANCE.** A
+//!   live TLS session to Bedrock binding the completion Claude actually returned. Needs
+//!   live network + AWS credentials, so it is wired but not driven in CI.
+//!
+//! So the honest headline: *"un-jailbreakable + well-formed + bound to verified state"* is
+//! true on every path; *"provably came from a real model"* holds only on the Bedrock path.
 //!
 //! ## The killer property — un-jailbreakable
 //!
@@ -56,6 +82,17 @@
 //!   are real here.
 
 use std::collections::{BTreeMap, BTreeSet};
+
+/// **The provenance vocabulary** — what is allowed to vouch for a narration's authentic leg.
+/// [`verify_zkoracle`] admits a SELF-SIGNED fixture ([`AuthenticPolicy::AllowFixture`]),
+/// which proves the PRODUCE→VERIFY plumbing and NOTHING about where the narration came from;
+/// a caller that wants real transport provenance uses
+/// `verify_zkoracle_with_policy(.., AuthenticPolicy::RequireMpcTls)`, which refuses a
+/// fixture-only attestation outright. [`authentic_provenance`] reads which of the two an
+/// attestation actually carries. See [`DmAttestationCarrier::attest_narration_live`].
+pub use dregg_zkoracle_prove::{
+    authentic_provenance, verify_zkoracle_with_policy, AuthenticPolicy, AuthenticProvenance,
+};
 
 mod prompt_template;
 pub use prompt_template::{
@@ -106,8 +143,9 @@ pub use overworld::{
 use dregg_dice::{EvidenceKind, RandomnessEvidence, RandomnessRequest};
 use dregg_node_target::{NodeTarget, SubmittedTurn};
 use dregg_zkoracle_prove::{
-    build_anthropic_fixture, prove_zkoracle, verify_zkoracle, AnthropicConfig, FixtureNotary,
-    ProveError, VerifiedZkOracle, ZkOracleAttestation, ZkOracleError,
+    build_anthropic_fixture, prove_zkoracle, prove_zkoracle_with_stark, verify_zkoracle,
+    AnthropicConfig, FixtureNotary, ProveError, VerifiedZkOracle, ZkOracleAttestation,
+    ZkOracleError,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -115,7 +153,14 @@ use dregg_zkoracle_prove::{
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Domain separator for [`attestation_commitment`] — the DM receipt-id domain.
-const RECEIPT_COMMIT_DOMAIN: &[u8] = b"attested-dm-narration-receipt-v1";
+///
+/// **v2** folds in the two fields v1 left UNBOUND: the REAL MPC-TLS presentation
+/// (`ZkOracleAttestation::tlsn_presentation` — the live authentic leg) and the in-circuit
+/// STARK injection leg (`zk_injection`). Under v1 a live narration's receipt committed only
+/// to the *fixture* carrier, so the real presentation the accept rested on was never
+/// fingerprinted, and a landed turn's "proven in-circuit" claim could be silently stripped
+/// to the host matcher without changing its receipt id.
+const RECEIPT_COMMIT_DOMAIN: &[u8] = b"attested-dm-narration-receipt-v2";
 
 /// Domain separator for the ledger genesis seed — the `prev` of the first entry.
 const LEDGER_GENESIS_DOMAIN: &[u8] = b"attested-dm-ledger-genesis-v1";
@@ -189,17 +234,42 @@ impl DmAttestationCarrier {
         prove_zkoracle(pres, field.to_vec(), self.config())
     }
 
+    /// [`Self::attest_body`] + the REAL in-circuit STARK on the injection leg — a
+    /// `prove_vm_descriptor2` of the pinned injection DFA's run over the field, which the
+    /// verifier then checks FAIL-CLOSED. Where [`Self::attest_body`] leaves
+    /// `zk_injection: None` (leg 3 = the host-side cleartext matcher only), this makes the
+    /// narration's injection-freedom a *proven* claim, not a re-executed one.
+    pub fn attest_body_with_stark(
+        &self,
+        response_body: &str,
+        field: &[u8],
+    ) -> Result<ZkOracleAttestation, ProveError> {
+        let pres = build_anthropic_fixture(&self.notary, response_body, ATTEST_CONNECTION_TIME);
+        prove_zkoracle_with_stark(pres, field.to_vec(), self.config())
+    }
+
     /// ATTEST A NARRATION. Shapes the narration into an Anthropic messages object and
     /// binds that text injection-free — so the attestation certifies the model's ACTUAL
     /// narration this turn (authentic session + well-formed JSON + no `{{` in its own
     /// words). Returns the attestation and the exact field bound (the sanitized text).
+    ///
+    /// The DM narrator path attaches the REAL in-circuit STARK injection leg
+    /// ([`Self::attest_body_with_stark`]), so the un-jailbreakability catch is PROVEN in
+    /// circuit and checked fail-closed — not merely re-executed by the host matcher.
+    ///
+    /// ⚑ **PROVENANCE:** the authentic leg here is the SELF-SIGNED fixture carrier — this
+    /// process builds the transcript and signs it with a key it holds itself, so it proves
+    /// the PRODUCE→VERIFY plumbing and NOTHING about where the narration came from. The
+    /// well-formed and injection-free legs over the prose ARE real. For real transport
+    /// provenance use [`Self::attest_narration_live`], which fuses a genuine MPC-TLS
+    /// presentation into the authentic leg.
     pub fn attest_narration(
         &self,
         narration: &str,
     ) -> Result<(ZkOracleAttestation, Vec<u8>), ProveError> {
         let field = clean_field(narration);
         let body = messages_body(&field);
-        let att = self.attest_body(&body, field.as_bytes())?;
+        let att = self.attest_body_with_stark(&body, field.as_bytes())?;
         Ok((att, field.into_bytes()))
     }
 
@@ -208,9 +278,20 @@ impl DmAttestationCarrier {
     /// real `presentation.verify()`) against an Anthropic-shaped endpoint — so the
     /// certified bytes came from a real 2PC session, not a fixture literal. `narration`
     /// must be JSON-string-safe and injection-free (no `{{`), since it is the field bound
-    /// injection-free. The authentic *leg* is still the modeled ed25519 carrier over the
-    /// (now really-authenticated) body; fusing the real tlsn presentation into that leg
-    /// is the named operational remainder (mirrors `deos_hermes::attest::attest_turn_live`).
+    /// injection-free.
+    ///
+    /// **The real presentation IS the authentic leg**: it is fused into
+    /// [`ZkOracleAttestation::tlsn_presentation`], so
+    /// `verify_zkoracle_with_policy(.., RequireMpcTls)` authenticates the narration by
+    /// genuine `presentation.verify()` and REFUSES a fixture-only attestation. (This path
+    /// previously ran the real 2PC and then THREW THE PRESENTATION AWAY, returning a pure
+    /// fixture attestation — the roundtrip was real but nothing downstream could tell.)
+    ///
+    /// ⚑ **HONEST SCOPE:** this buys real *transport* provenance, not *model* provenance —
+    /// the endpoint is a local test server echoing the `narration` handed to it, so the
+    /// authenticated body is one this process chose. Genuine model provenance (a body
+    /// Claude actually produced over a real Bedrock session) is
+    /// `deos_hermes::attest::attest_turn_bedrock`.
     #[cfg(feature = "tlsn-live")]
     pub fn attest_narration_live(
         &self,
@@ -222,8 +303,12 @@ impl DmAttestationCarrier {
         let roundtrip = run_local_roundtrip_blocking(&exchange).map_err(|e| e.to_string())?;
         let body = String::from_utf8(roundtrip.verified.response_body.clone())
             .map_err(|e| format!("authenticated response body is not utf-8: {e}"))?;
-        self.attest_body(&body, narration.as_bytes())
-            .map_err(|e| e.to_string())
+        let mut att = self
+            .attest_body_with_stark(&body, narration.as_bytes())
+            .map_err(|e| e.to_string())?;
+        // ── THE FUSION ── the authentic leg IS the real MPC-TLS presentation.
+        att.tlsn_presentation = Some(roundtrip.presentation_bytes);
+        Ok(att)
     }
 }
 
@@ -249,6 +334,33 @@ pub fn attestation_commitment(att: &ZkOracleAttestation) -> [u8; 32] {
     h.update(&att.content_commit.as_u32().to_le_bytes());
     h.update(&(att.field_span.offset as u64).to_le_bytes());
     h.update(&(att.field_span.len as u64).to_le_bytes());
+    // THE LIVE AUTHENTIC LEG — the REAL MPC-TLS presentation. On a live narration this,
+    // not the fixture carrier above, is what a `RequireMpcTls` verifier actually consults,
+    // so the receipt id MUST fingerprint it. The domain-separated tag keeps a fixture-only
+    // narration from ever colliding with a live one.
+    match &att.tlsn_presentation {
+        None => h.update(&[0u8]),
+        Some(bytes) => {
+            h.update(&[1u8]);
+            h.update(&(bytes.len() as u64).to_le_bytes());
+            h.update(bytes)
+        }
+    };
+    // THE IN-CIRCUIT STARK INJECTION LEG — so a receipt distinguishes a narration whose
+    // injection-freedom was PROVEN in-circuit from one that only ran the host matcher.
+    match &att.zk_injection {
+        None => h.update(&[0u8]),
+        Some(leg) => {
+            h.update(&[1u8]);
+            h.update(&(leg.proof_bytes.len() as u64).to_le_bytes());
+            h.update(&leg.proof_bytes);
+            h.update(&(leg.public_inputs.len() as u64).to_le_bytes());
+            for pi in &leg.public_inputs {
+                h.update(&pi.as_u32().to_le_bytes());
+            }
+            &mut h
+        }
+    };
     *h.finalize().as_bytes()
 }
 

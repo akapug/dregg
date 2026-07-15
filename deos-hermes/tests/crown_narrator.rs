@@ -236,3 +236,72 @@ fn forged_and_tampered_bindings_are_distinguishable() {
         "a tampered attestation fingerprints differently — the commitment is total",
     );
 }
+
+// ── the in-circuit prose tooth, on the narrator path ─────────────────────────────────────
+
+/// **THE ZK-INJECTION STARK IS LIVE ON THE NARRATOR PATH, NOT DEAD CODE.**
+///
+/// `zkoracle-prove`'s `zk_leg` is the one genuinely in-circuit prose tooth: a real
+/// `prove_vm_descriptor2` of the pinned injection DFA's run over the narration, proven
+/// rather than merely re-executed. It was DEAD on every live path — `prove_zkoracle`
+/// defaulted `zk_injection: None` and neither narrator attached it, so the STARK existed
+/// only in its own unit tests.
+///
+/// Three teeth, because "attached" alone would be decorative:
+///   a. a narration's attestation actually CARRIES the STARK leg;
+///   b. the leg is CONSULTED — a foreign proof (of a genuinely different run) refuses an
+///      otherwise-green attestation, fail-closed;
+///   c. the receipt commitment BINDS it — an attestation that dropped its STARK
+///      fingerprints differently, so "proven in-circuit" cannot be silently stripped from
+///      a landed turn.
+#[test]
+fn narrator_attaches_the_in_circuit_stark_and_it_is_load_bearing() {
+    use dregg_zkoracle_prove::{
+        ZkLegError, ZkOracleAttestation, ZkOracleError, prove_injection_leg,
+    };
+
+    let narr = attested_over("The Warden turns its lantern-eye upon you and does not blink.");
+    let att = narr
+        .narrate_attested("You are the dungeon master.", "I approach the Warden.", 256)
+        .expect("a benign narration is attested");
+
+    // (a) ATTACHED — the narrator path no longer defaults `zk_injection: None`.
+    let leg = att
+        .attestation
+        .zk_injection
+        .as_ref()
+        .expect("the narrator path attaches the in-circuit STARK injection leg");
+    assert!(
+        !leg.proof_bytes.is_empty(),
+        "the leg carries a real descriptor proof"
+    );
+    // The whole attestation still verifies WITH the STARK leg checked.
+    verify_zkoracle(&att.attestation, narr.carrier().config())
+        .expect("the STARK-carrying narration attestation verifies");
+
+    // (b) CONSULTED — a genuine proof of a DIFFERENT run refuses the attestation, though
+    //     every other leg is untouched and green. (The leg proves the run over the field's
+    //     brace-projection, so the foreign field must differ in PROJECTION — `a{b` does.)
+    let foreign = prove_injection_leg(b"a{b").expect("a genuine proof of a different run");
+    let stapled = ZkOracleAttestation {
+        zk_injection: Some(foreign),
+        ..att.attestation.clone()
+    };
+    assert_eq!(
+        verify_zkoracle(&stapled, narr.carrier().config()).unwrap_err(),
+        ZkOracleError::BadZkLeg(ZkLegError::WrongRun),
+        "the STARK leg is checked against THIS narration's run, not merely carried"
+    );
+
+    // (c) BOUND INTO THE RECEIPT — stripping the STARK changes the commitment, so a landed
+    //     turn's "proven in-circuit" claim cannot be quietly downgraded to the host matcher.
+    let stripped = ZkOracleAttestation {
+        zk_injection: None,
+        ..att.attestation.clone()
+    };
+    assert_ne!(
+        attestation_commitment(&stripped),
+        att.commitment,
+        "the receipt commitment fingerprints the in-circuit leg"
+    );
+}

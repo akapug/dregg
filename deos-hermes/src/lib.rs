@@ -156,6 +156,15 @@ pub use dregg_zkoracle_prove::{
     AnthropicConfig, ProveError, VerifiedZkOracle, ZkOracleAttestation, ZkOracleError,
     verify_zkoracle,
 };
+/// **The provenance vocabulary** — what is allowed to vouch for an attestation's authentic
+/// leg. `verify_zkoracle` admits a SELF-SIGNED fixture (`AuthenticPolicy::AllowFixture`),
+/// which proves the plumbing and nothing about where the bytes came from; a caller that
+/// wants real provenance uses `verify_zkoracle_with_policy(.., AuthenticPolicy::RequireMpcTls)`,
+/// which refuses a fixture-only attestation outright. `authentic_provenance` reads which of
+/// the two an attestation actually carries.
+pub use dregg_zkoracle_prove::{
+    AuthenticPolicy, AuthenticProvenance, authentic_provenance, verify_zkoracle_with_policy,
+};
 #[cfg(unix)]
 pub use egress::{EgressGrant, EgressNetGrant, EgressPolicy, provider_host_port};
 pub use grant_registry::{GrantRegistry, MandateKey};

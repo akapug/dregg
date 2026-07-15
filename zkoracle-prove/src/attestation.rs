@@ -108,6 +108,95 @@ pub struct ZkOracleAttestation {
 pub struct VerifiedZkOracle {
     /// The authenticated Anthropic session (server, time, response body).
     pub session: AuthenticSession,
+    /// **WHAT ACTUALLY VOUCHED for the body** — the provenance the authentic leg was
+    /// verified under. A [`VerifiedZkOracle`] carrying [`AuthenticProvenance::SelfSignedFixture`]
+    /// says NOTHING about where the bytes came from; only [`AuthenticProvenance::MpcTls`]
+    /// carries transport provenance. Read it before believing an accept.
+    pub provenance: AuthenticProvenance,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE PROVENANCE GATE — what actually vouches for "these bytes came from the endpoint".
+//
+// The three legs (authentic ∧ well-formed ∧ injection-free) are welded to ONE response by
+// the shared `content_commitment`, but that weld says nothing about the SOURCE of the
+// response: it binds the legs to each other, not to a real endpoint. The source is leg 1's
+// job — and leg 1 has two utterly different realizations that the type system did not
+// previously distinguish:
+//
+//   * `EndpointPresentation` + `FixtureNotary` — a SELF-SIGNED TEST DOUBLE. The prover
+//     CONSTRUCTS the transcript and signs it with a key it holds itself. It can mint any
+//     body it likes, sign it, and every leg goes green. This proves the PRODUCE→VERIFY
+//     plumbing hermetically and NOTHING about provenance.
+//   * `tlsn_presentation` — a REAL MPC-TLS presentation. A separate notary co-derived the
+//     session keys, saw no plaintext, and signed an attestation over a transcript the
+//     prover could not forge; `presentation.verify()` is genuine crypto against a real
+//     cert chain.
+//
+// Before this gate both realizations flowed into the SAME `verify_zkoracle`, which always
+// read the fixture — so every narrator's "provably came from the model" was, on every path
+// it actually used, a self-signed fixture. `AuthenticPolicy::RequireMpcTls` is the tooth:
+// on a live path a fixture-only attestation is REFUSED, fail-closed, before any leg runs.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// **WHAT VOUCHES for an attestation's authentic leg** — the provenance of "these bytes
+/// came from the endpoint". Read it off an attestation with [`authentic_provenance`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AuthenticProvenance {
+    /// ⚑ **A SELF-SIGNED TEST DOUBLE — NO PROVENANCE WHATSOEVER.** The attestation carries
+    /// only the modeled ed25519 [`crate::authentic::FixtureNotary`] carrier: the prover
+    /// built the transcript and signed it with a key it holds itself, so it can mint any
+    /// body it likes and every leg still verifies. Exercises the PRODUCE→VERIFY plumbing
+    /// hermetically; asserts nothing about where the bytes came from. REFUSED by
+    /// [`AuthenticPolicy::RequireMpcTls`].
+    SelfSignedFixture,
+    /// The attestation carries a REAL MPC-TLS presentation ([`ZkOracleAttestation::tlsn_presentation`]):
+    /// a separate notary co-derived the session keys, saw no plaintext, and signed a
+    /// transcript the prover could not forge. Whether that presentation actually VERIFIES
+    /// (and against which cert chain / notary pin) is the live verifier's job — this is the
+    /// structural claim the attestation makes, which the crypto then adjudicates.
+    MpcTls,
+}
+
+/// **Read the provenance an attestation CLAIMS** for its authentic leg — a structural
+/// check (does it carry a real MPC-TLS presentation at all?), available in the light
+/// default build with no tlsn backend. It is the cheap gate that makes a fixture-only
+/// attestation refusable on a live path *before* any crypto runs; the real
+/// `presentation.verify()` then adjudicates whether the claim holds.
+pub fn authentic_provenance(att: &ZkOracleAttestation) -> AuthenticProvenance {
+    match att.tlsn_presentation {
+        Some(_) => AuthenticProvenance::MpcTls,
+        None => AuthenticProvenance::SelfSignedFixture,
+    }
+}
+
+/// **The provenance a verifier DEMANDS of the authentic leg** — the policy that separates a
+/// hermetic plumbing test from a live attestation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AuthenticPolicy {
+    /// ⚑ **TEST DOUBLE ADMITTED.** Leg 1 is verified as the self-signed ed25519 fixture
+    /// carrier ([`ZkOracleAttestation::presentation`]) — *always*, even if the attestation
+    /// also happens to carry a real MPC-TLS presentation. Use ONLY for hermetic tests of
+    /// the PRODUCE→VERIFY plumbing. An accept under this policy is NOT evidence the body
+    /// came from any endpoint: the prover signed its own transcript, so it could have
+    /// minted any body it liked. This is the legacy [`verify_zkoracle`] behaviour,
+    /// preserved verbatim.
+    AllowFixture,
+    /// **LIVE.** Leg 1 MUST be a real MPC-TLS presentation. A fixture-only attestation is
+    /// REFUSED ([`ZkOracleError::FixtureOnLivePath`]) before any leg runs, and the real
+    /// presentation must then pass genuine `presentation.verify()` — so an accept under
+    /// this policy DOES carry transport provenance.
+    RequireMpcTls,
+}
+
+impl AuthenticPolicy {
+    /// Whether this policy admits `provenance` as leg 1.
+    pub fn admits(&self, provenance: AuthenticProvenance) -> bool {
+        match self {
+            AuthenticPolicy::AllowFixture => true,
+            AuthenticPolicy::RequireMpcTls => provenance == AuthenticProvenance::MpcTls,
+        }
+    }
 }
 
 /// Which leg refused the attestation (any ONE failing → the whole attestation is refused).
@@ -131,6 +220,18 @@ pub enum ZkOracleError {
     /// (a tampered/forged presentation, a wrong server pin, or a missing presentation), as
     /// surfaced by [`verify_zkoracle_live`]. Carries the real presentation-verifier message.
     NotAuthenticLive(String),
+    /// **THE PROVENANCE GATE REFUSED — a self-signed fixture was offered on a LIVE path.**
+    /// The attestation's authentic leg is only the modeled ed25519 [`crate::authentic::FixtureNotary`]
+    /// carrier (the prover signed its own transcript), but the verifier demanded
+    /// [`AuthenticPolicy::RequireMpcTls`]. Nothing vouches for where these bytes came from,
+    /// so the attestation is refused before any leg runs. This is the tooth that stops a
+    /// test double being consumed as a live proof of model provenance.
+    FixtureOnLivePath,
+    /// **The live authentic leg cannot be checked in THIS build** — the attestation carries
+    /// a real MPC-TLS presentation, but the crate was built WITHOUT the `tlsn-live` feature,
+    /// so the tlsn backend that would run `presentation.verify()` is not linked. Fail-CLOSED:
+    /// an unverifiable live leg is refused, never waved through onto the fixture.
+    LiveBackendUnavailable,
 }
 
 impl core::fmt::Display for ZkOracleError {
@@ -159,6 +260,21 @@ impl core::fmt::Display for ZkOracleError {
                     "live authentic leg refused (real tlsn presentation): {msg}"
                 )
             }
+            ZkOracleError::FixtureOnLivePath => {
+                write!(
+                    f,
+                    "provenance gate refused: the authentic leg is a SELF-SIGNED FIXTURE \
+                     (the prover signed its own transcript) but this path requires a real \
+                     MPC-TLS presentation — nothing vouches for where these bytes came from"
+                )
+            }
+            ZkOracleError::LiveBackendUnavailable => {
+                write!(
+                    f,
+                    "live authentic leg cannot be checked: built without the `tlsn-live` \
+                     feature, so presentation.verify() is not linked (refusing fail-closed)"
+                )
+            }
         }
     }
 }
@@ -176,14 +292,98 @@ impl std::error::Error for ZkOracleError {}
 ///
 /// Any leg failing → the attestation is REFUSED (the failing leg named). The catch
 /// genuinely discriminates: a benign field passes leg 3, a `{{`-bearing field fails it.
+/// ⚑ **PROVENANCE:** this entry admits a SELF-SIGNED FIXTURE as leg 1
+/// ([`AuthenticPolicy::AllowFixture`]) — an accept proves the three legs compose over ONE
+/// response, NOT that the response came from any endpoint. For a live attestation use
+/// [`verify_zkoracle_with_policy`] with [`AuthenticPolicy::RequireMpcTls`].
 pub fn verify_zkoracle(
     att: &ZkOracleAttestation,
     config: &EndpointConfig,
 ) -> Result<VerifiedZkOracle, ZkOracleError> {
-    // Leg 1 — authentic (modeled ed25519 carrier) → the authenticated response body.
-    let session = verify_endpoint_presentation(&att.presentation, config)
-        .map_err(ZkOracleError::NotAuthentic)?;
-    verify_legs_over_session(att, session)
+    verify_zkoracle_with_policy(att, config, AuthenticPolicy::AllowFixture)
+}
+
+/// **VERIFY a zkOracle attestation UNDER AN EXPLICIT PROVENANCE POLICY** — the entry that
+/// decides *what is allowed to vouch* for the authentic leg.
+///
+/// - [`AuthenticPolicy::AllowFixture`] — leg 1 is the modeled ed25519 carrier (the legacy
+///   [`verify_zkoracle`] behaviour, unchanged). Hermetic plumbing only.
+/// - [`AuthenticPolicy::RequireMpcTls`] — **the live path.** A fixture-only attestation is
+///   REFUSED ([`ZkOracleError::FixtureOnLivePath`]) before any leg runs. A real MPC-TLS
+///   presentation is authenticated by genuine `presentation.verify()` against the pinned
+///   `config.expected_server()`; in a build without the `tlsn-live` backend the leg cannot
+///   be checked at all and is refused fail-closed ([`ZkOracleError::LiveBackendUnavailable`])
+///   — never silently downgraded onto the fixture.
+///
+/// The authenticated body (whichever leg produced it) then drives the SAME cross-leg weld +
+/// well-formed + injection-free + STARK legs, so the splice refusal is identical on both
+/// paths.
+pub fn verify_zkoracle_with_policy(
+    att: &ZkOracleAttestation,
+    config: &EndpointConfig,
+    policy: AuthenticPolicy,
+) -> Result<VerifiedZkOracle, ZkOracleError> {
+    // ── THE PROVENANCE GATE ── refuse a test double on a live path BEFORE any leg runs.
+    if !policy.admits(authentic_provenance(att)) {
+        return Err(ZkOracleError::FixtureOnLivePath);
+    }
+    // THE POLICY selects which leg authenticates — never the attestation's own contents.
+    // Dispatching on the payload would mean a verifier's guarantee silently changed with
+    // the data it was handed (an attestation that happens to carry a real presentation
+    // would get checked differently from one that does not), which is exactly the kind of
+    // implicit switch that let "authentic" mean two different things in the first place.
+    // The policy is the verifier's DECISION about what it is willing to trust; it must
+    // pick the leg deterministically, and the reported provenance is whatever was in fact
+    // verified.
+    match policy {
+        // Leg 1 — the modeled ed25519 carrier → the authenticated response body. Verbatim
+        // legacy behaviour, including on an attestation that also carries a live leg.
+        AuthenticPolicy::AllowFixture => {
+            let session = verify_endpoint_presentation(&att.presentation, config)
+                .map_err(ZkOracleError::NotAuthentic)?;
+            verify_legs_over_session(att, session, AuthenticProvenance::SelfSignedFixture)
+        }
+        // Leg 1 — the REAL MPC-TLS presentation, adjudicated by genuine tlsn crypto.
+        AuthenticPolicy::RequireMpcTls => {
+            let session = verify_mpctls_leg(att, config.expected_server())?;
+            verify_legs_over_session(att, session, AuthenticProvenance::MpcTls)
+        }
+    }
+}
+
+/// Authenticate leg 1 by the REAL `tlsn` `presentation.verify()`. Without the `tlsn-live`
+/// backend linked this cannot be done at all — refuse fail-closed rather than fall back to
+/// the fixture (the fallback WOULD be the laundering this whole gate exists to stop).
+#[cfg(feature = "tlsn-live")]
+fn verify_mpctls_leg(
+    att: &ZkOracleAttestation,
+    expected_server: &str,
+) -> Result<AuthenticSession, ZkOracleError> {
+    let bytes = att
+        .tlsn_presentation
+        .as_ref()
+        .ok_or(ZkOracleError::FixtureOnLivePath)?;
+    let vr = crate::tlsn_live::verify_messages_presentation(bytes, expected_server)
+        .map_err(|e| ZkOracleError::NotAuthenticLive(e.to_string()))?;
+    // The killer property survives the real session: the x-api-key was redacted.
+    if !vr.api_key_hidden() {
+        return Err(ZkOracleError::NotAuthentic(AuthenticError::ApiKeyDisclosed));
+    }
+    Ok(AuthenticSession {
+        server_name: vr.server_name,
+        connection_time: vr.connection_time,
+        response_body: vr.response_body,
+    })
+}
+
+/// Fail-closed stand-in when the `tlsn-live` backend is not linked: a real MPC-TLS leg is
+/// UNCHECKABLE in this build, so it is refused. Never falls back to `att.presentation`.
+#[cfg(not(feature = "tlsn-live"))]
+fn verify_mpctls_leg(
+    _att: &ZkOracleAttestation,
+    _expected_server: &str,
+) -> Result<AuthenticSession, ZkOracleError> {
+    Err(ZkOracleError::LiveBackendUnavailable)
 }
 
 /// **VERIFY a zkOracle attestation with the LIVE authentic leg** (feature `tlsn-live`).
@@ -216,7 +416,7 @@ pub fn verify_zkoracle_live(
         connection_time: vr.connection_time,
         response_body: vr.response_body,
     };
-    verify_legs_over_session(att, session)
+    verify_legs_over_session(att, session, AuthenticProvenance::MpcTls)
 }
 
 /// **VERIFY a zkOracle attestation with the LIVE authentic leg against a REAL host**
@@ -244,7 +444,7 @@ pub fn verify_zkoracle_live_host(
         connection_time: vr.connection_time,
         response_body: vr.response_body,
     };
-    verify_legs_over_session(att, session)
+    verify_legs_over_session(att, session, AuthenticProvenance::MpcTls)
 }
 
 /// The shared legs 2–4 over an already-authenticated session: the cross-leg weld, the
@@ -254,6 +454,7 @@ pub fn verify_zkoracle_live_host(
 fn verify_legs_over_session(
     att: &ZkOracleAttestation,
     session: AuthenticSession,
+    provenance: AuthenticProvenance,
 ) -> Result<VerifiedZkOracle, ZkOracleError> {
     // ── THE CROSS-LEG WELD ──
     // Recompute the shared content commitment over the AUTHENTICATED body and require the
@@ -291,7 +492,10 @@ fn verify_legs_over_session(
         })?;
     }
 
-    Ok(VerifiedZkOracle { session })
+    Ok(VerifiedZkOracle {
+        session,
+        provenance,
+    })
 }
 
 /// **PRODUCE a zkOracle attestation** from a verified presentation + a user field.

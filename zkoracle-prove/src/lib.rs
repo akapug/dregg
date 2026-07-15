@@ -52,8 +52,9 @@ pub mod zk_leg;
 #[cfg(feature = "tlsn-live")]
 pub use attestation::verify_zkoracle_live;
 pub use attestation::{
-    ProveError, VerifiedZkOracle, ZkOracleAttestation, ZkOracleError, prove_zkoracle,
-    prove_zkoracle_with_stark, verify_zkoracle,
+    AuthenticPolicy, AuthenticProvenance, ProveError, VerifiedZkOracle, ZkOracleAttestation,
+    ZkOracleError, authentic_provenance, prove_zkoracle, prove_zkoracle_with_stark,
+    verify_zkoracle, verify_zkoracle_with_policy,
 };
 pub use authentic::{
     AnthropicConfig, AnthropicPresentation, AuthenticError, AuthenticSession, EndpointConfig,
