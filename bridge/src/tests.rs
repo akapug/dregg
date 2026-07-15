@@ -4,7 +4,7 @@
 //! convert to ZK commitments, evaluate authorization, and produce a verified
 //! presentation proof.
 
-use dregg_circuit::fold_air::FoldAir;
+use dregg_circuit::dsl::fold::FoldAir;
 use dregg_circuit::{BabyBear, ConstraintProver, PresentationVerification};
 use dregg_commit::{Fact, FactSet, FieldElement, SymbolTable, TokenState, verify_fold_chain};
 use dregg_token::{Attenuation, AuthRequest, AuthToken, MacaroonToken};

@@ -187,13 +187,10 @@ pub mod accumulator_types;
 
 // Backward-compatible shim modules (type definitions + re-exports from DSL).
 // These contain deprecated StarkAir impls superseded by DSL descriptors.
-pub mod arithmetic_predicate_air;
 pub mod bridge_action_air;
-pub mod compound_predicate_air;
 #[allow(deprecated)]
 pub mod derivation_air;
 pub mod effect_action_air;
-pub mod fold_air;
 pub mod fold_types;
 #[allow(deprecated)]
 pub mod garbled_air;
@@ -205,8 +202,6 @@ pub mod multi_step_air;
 pub mod note_spending_air;
 #[allow(deprecated)]
 pub mod poseidon2_air;
-pub mod predicate_air;
-pub mod relational_predicate_air;
 #[cfg(feature = "plonky3")]
 pub mod temporal_predicate_air;
 
@@ -509,17 +504,18 @@ pub use presentation::{
     PresentationWitness, prove_authorization,
 };
 // Re-export predicate types at crate root for backward compatibility.
-pub use predicate_air::{PredicateAir, PredicateType, PredicateWitness, compute_fact_commitment};
+pub use dsl::predicates::{PredicateAir, PredicateType, PredicateWitness, compute_fact_commitment};
 
 // Re-export arithmetic predicate types at crate root.
-pub use arithmetic_predicate_air::{
+pub use dsl::predicates::{
     ArithExpr, ArithPredicate, ArithmeticPredicateWitness, CompareOp,
     compute_arithmetic_fact_commitment,
 };
 
 // Re-export relational predicate types at crate root.
-pub use relational_predicate_air::{
-    RelationType, RelationalPredicateWitness, RelationalWitness, compute_value_commitment,
+pub use dsl::predicates::{
+    RelationalOp as RelationType, RelationalPredicateWitness, RelationalWitness,
+    compute_value_commitment,
 };
 
 // Re-export multi-step authorization constants.
@@ -527,10 +523,10 @@ pub use multi_step_air::MAX_DELEGATION_DEPTH;
 
 /// Backward-compatible module alias for predicate types.
 pub mod predicate_types {
-    pub use crate::arithmetic_predicate_air::*;
     pub use crate::dsl::predicates::compute_blinded_fact_commitment;
-    pub use crate::predicate_air::*;
-    pub use crate::relational_predicate_air::*;
+    pub use crate::dsl::predicates::*;
+    pub use crate::dsl::predicates::*;
+    pub use crate::dsl::predicates::*;
 }
 
 // Schnorr signature scheme over BabyBear^8 elliptic curve.

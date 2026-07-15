@@ -55,7 +55,7 @@ pub mod p3_temporal {
     pub fn prove_temporal_predicate_p3(
         _values: &[BabyBear],
         _state_roots: &[BabyBear],
-        _predicate_type: crate::predicate_air::PredicateType,
+        _predicate_type: crate::dsl::predicates::PredicateType,
         _threshold: u32,
     ) -> Result<P3TemporalPredicateProof, String> {
         Err("p3_temporal proving not yet migrated to DSL".into())

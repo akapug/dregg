@@ -52,10 +52,10 @@
 
 use std::collections::HashMap;
 
-use crate::compound_predicate_air::{BooleanFormula, MAX_COMPOUND_PREDICATES};
+use crate::dsl::predicates::PredicateType;
+use crate::dsl::predicates::RelationalOp as RelationType;
+use crate::dsl::predicates::{BooleanFormula, MAX_COMPOUND_PREDICATES};
 use crate::field::BabyBear;
-use crate::predicate_air::PredicateType;
-use crate::relational_predicate_air::RelationType;
 
 // =============================================================================
 // Program Representation
@@ -112,9 +112,9 @@ pub enum PredicateExpr {
         /// The attribute names that serve as inputs to the expression.
         inputs: Vec<String>,
         /// The arithmetic expression over the inputs (Var(0), Var(1), etc.).
-        expression: crate::arithmetic_predicate_air::ArithExpr,
+        expression: crate::dsl::predicates::ArithExpr,
         /// The predicate to prove about the expression result.
-        predicate: crate::arithmetic_predicate_air::ArithPredicate,
+        predicate: crate::dsl::predicates::ArithPredicate,
     },
 
     /// Non-membership: `attribute NOT IN property_set`.
@@ -249,8 +249,8 @@ pub enum WitnessSpec {
     /// Arithmetic: needs multiple attribute values + expression + predicate.
     Arithmetic {
         inputs: Vec<String>,
-        expression: crate::arithmetic_predicate_air::ArithExpr,
-        predicate: crate::arithmetic_predicate_air::ArithPredicate,
+        expression: crate::dsl::predicates::ArithExpr,
+        predicate: crate::dsl::predicates::ArithPredicate,
     },
     /// Non-membership: needs element hash + set parameters.
     NonMembership { attribute: String, set_id: BabyBear },
@@ -481,7 +481,7 @@ fn compile_expr(expr: &PredicateExpr) -> Result<CompiledPredicate, CompileError>
         // ─── Negation extensions ───
         PredicateExpr::Neq { attribute, value } => {
             // Compile as ArithmeticPredicateAir with ExprNeq.
-            use crate::arithmetic_predicate_air::{ArithExpr, ArithPredicate};
+            use crate::dsl::predicates::{ArithExpr, ArithPredicate};
             Ok(CompiledPredicate::Single {
                 air_type: AirType::Arithmetic,
                 witness_spec: WitnessSpec::Arithmetic {
@@ -724,9 +724,9 @@ fn flip_predicate(pred: &PredicateExpr) -> PredicateExpr {
                     // NEQ flipped = EQ. Use Arithmetic with ExprEq.
                     return PredicateExpr::Arithmetic {
                         inputs: vec![attribute.clone()],
-                        expression: crate::arithmetic_predicate_air::ArithExpr::Var(0),
-                        predicate: crate::arithmetic_predicate_air::ArithPredicate::ExprEq(
-                            crate::arithmetic_predicate_air::ArithExpr::Var(0),
+                        expression: crate::dsl::predicates::ArithExpr::Var(0),
+                        predicate: crate::dsl::predicates::ArithPredicate::ExprEq(
+                            crate::dsl::predicates::ArithExpr::Var(0),
                             *threshold as u32,
                         ),
                     };
@@ -749,9 +749,9 @@ fn flip_predicate(pred: &PredicateExpr) -> PredicateExpr {
             // NEQ flipped = EQ. Compile as Arithmetic ExprEq.
             PredicateExpr::Arithmetic {
                 inputs: vec![attribute.clone()],
-                expression: crate::arithmetic_predicate_air::ArithExpr::Var(0),
-                predicate: crate::arithmetic_predicate_air::ArithPredicate::ExprEq(
-                    crate::arithmetic_predicate_air::ArithExpr::Var(0),
+                expression: crate::dsl::predicates::ArithExpr::Var(0),
+                predicate: crate::dsl::predicates::ArithPredicate::ExprEq(
+                    crate::dsl::predicates::ArithExpr::Var(0),
                     *value as u32,
                 ),
             }

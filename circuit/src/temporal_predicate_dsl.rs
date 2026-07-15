@@ -18,8 +18,8 @@
 //! the witness (`TemporalPredicateWitness`), the trace generator
 //! (`generate_dsl_trace`), and the `TemporalPredicateRequirement` intent type.
 
+use crate::dsl::predicates::PredicateType;
 use crate::field::BabyBear;
-use crate::predicate_air::PredicateType;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DSL-equivalent core AIR (manual expansion of #[dregg_circuit] output)

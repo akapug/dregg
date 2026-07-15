@@ -5,7 +5,7 @@ use dregg_cell::{
     FieldConstraint, Ledger, Permissions,
 };
 use dregg_circuit::BabyBear;
-use dregg_circuit::fold_air::{FoldWitness, compute_test_checks_commitment};
+use dregg_circuit::dsl::fold::{FoldWitness, compute_test_checks_commitment};
 use dregg_circuit::ivc::{FoldDelta, IvcVerification, prove_ivc, verify_ivc};
 use dregg_turn::builder::ActionBuilder;
 use dregg_turn::{ComputronCosts, DelegationMode, Effect, TurnBuilder, TurnExecutor, TurnResult};

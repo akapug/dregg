@@ -143,7 +143,7 @@ fn check_plonky3_backend() -> Result<(), String> {
 }
 
 fn check_ivc_recursive() -> Result<(), String> {
-    use dregg_circuit::fold_air::{FoldWitness, compute_test_checks_commitment};
+    use dregg_circuit::dsl::fold::{FoldWitness, compute_test_checks_commitment};
     use dregg_circuit::ivc::{FoldDelta, IvcVerification, prove_ivc, verify_ivc};
 
     let initial_root = BabyBear::new(99999);

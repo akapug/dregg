@@ -76,8 +76,8 @@
 
 use dregg_cell::migration::{FederationId, MigrationError as CellMigrationError, MigrationVoucher};
 use dregg_cell::{Cell, CellId};
+use dregg_circuit::dsl::fold::create_test_fold;
 use dregg_circuit::field::{BABYBEAR_P, BabyBear};
-use dregg_circuit::fold_air::create_test_fold;
 use dregg_circuit::ivc::{
     FoldDelta, IvcProof, IvcVerification, MAX_FOLD_DEPTH, prove_ivc, verify_ivc,
 };

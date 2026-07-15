@@ -54,8 +54,8 @@ use dregg_circuit::descriptor_ir2::{
 };
 use dregg_circuit::dsl::circuit::ProgramRegistry;
 use dregg_circuit::dsl::membership::generate_merkle_poseidon2_trace;
+use dregg_circuit::dsl::predicates::PredicateType;
 use dregg_circuit::membership_descriptor_4ary::membership_witness_4ary;
-use dregg_circuit::predicate_air::PredicateType;
 use dregg_circuit::predicate_arith_witness::PREDICATE_ARITH_NAME;
 use dregg_circuit::predicate_comparison_witness::{
     PREDICATE_ARITH_GT_NAME, PREDICATE_ARITH_LE_NAME, PREDICATE_ARITH_LT_NAME,
@@ -1147,7 +1147,7 @@ pub fn single_member_membership_proof(member: &[u8; 32]) -> Vec<u8> {
 
 // ─────────────────────────────────────────────────────────────────────────
 // BridgePredicate — real predicate-AIR STARK verifier
-// (dregg_circuit::predicate_air::verify_predicate / verify_in_range).
+// (dregg_circuit::dsl::predicates::verify_predicate / verify_in_range).
 // ─────────────────────────────────────────────────────────────────────────
 //
 // `WitnessedPredicateKind::BridgePredicate` declares a Gte/Lte/Gt/Lt/Neq/InRange

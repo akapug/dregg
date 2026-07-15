@@ -10,8 +10,8 @@
 //! IVC / fold / presentation soundness checks below exercise the higher-level
 //! circuit witnesses directly.
 
+use dregg_circuit::dsl::fold::{FoldAir, FoldWitness, RemovedFact};
 use dregg_circuit::field::BabyBear;
-use dregg_circuit::fold_air::{FoldAir, FoldWitness, RemovedFact};
 use dregg_circuit::ivc::{FoldDelta, IvcVerification, prove_ivc, verify_ivc};
 use dregg_circuit::mock_prover::MockProver;
 use dregg_circuit::presentation::{

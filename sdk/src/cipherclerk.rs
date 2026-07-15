@@ -2204,7 +2204,9 @@ impl AgentCipherclerk {
                     membership_proof: None,
                 }],
                 num_added_checks: 1,
-                added_checks_commitment: dregg_circuit::fold_air::compute_test_checks_commitment(1),
+                added_checks_commitment: dregg_circuit::dsl::fold::compute_test_checks_commitment(
+                    1,
+                ),
             };
             // Best-effort: if the fold fails (e.g., root mismatch on first step),
             // we still append the receipt but skip IVC extension.

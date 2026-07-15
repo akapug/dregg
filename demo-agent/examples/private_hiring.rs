@@ -35,7 +35,7 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use dregg_circuit::compound_predicate_air::{
+use dregg_circuit::dsl::predicates::{
     BooleanFormula, prove_compound_predicate, verify_compound_predicate,
 };
 use dregg_circuit::{

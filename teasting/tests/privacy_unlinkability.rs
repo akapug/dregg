@@ -8,10 +8,10 @@
 //! 4. No fixed identifier leaks through public inputs.
 
 use dregg_circuit::BabyBear;
-use dregg_circuit::poseidon2::hash_fact;
-use dregg_circuit::predicate_air::{
+use dregg_circuit::dsl::predicates::{
     PredicateType, PredicateWitness, compute_fact_commitment, prove_predicate,
 };
+use dregg_circuit::poseidon2::hash_fact;
 use dregg_sdk::AuthRequest;
 use dregg_teasting::agent::{SimAgent, shared_root_key};
 
@@ -108,7 +108,7 @@ fn test_blinded_predicate_proofs_unlinkable() {
     let proof2 = prove_predicate(witness2).expect("blinded proof 2 should succeed");
 
     // Both verify against their respective (different) fact_commitments.
-    use dregg_circuit::predicate_air::verify_predicate;
+    use dregg_circuit::dsl::predicates::verify_predicate;
     assert!(verify_predicate(&proof1, BabyBear::new(threshold), fc_blinded1).is_ok());
     assert!(verify_predicate(&proof2, BabyBear::new(threshold), fc_blinded2).is_ok());
 }

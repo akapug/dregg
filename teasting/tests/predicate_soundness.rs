@@ -7,11 +7,11 @@
 //! 4. Proof manipulation (bit flips, truncation) causes verification failure.
 
 use dregg_circuit::BabyBear;
-use dregg_circuit::poseidon2::hash_fact;
-use dregg_circuit::predicate_air::{
+use dregg_circuit::dsl::predicates::{
     PredicateProof, PredicateType, PredicateWitness, compute_fact_commitment, prove_in_range,
     prove_predicate, verify_in_range, verify_predicate,
 };
+use dregg_circuit::poseidon2::hash_fact;
 use dregg_teasting::assertions::{assert_predicate_rejects, assert_predicate_verifies};
 
 /// Helper: create a fact commitment for a given value.

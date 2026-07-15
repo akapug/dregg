@@ -2962,7 +2962,7 @@ impl From<dregg_circuit::predicate_program::ProveError> for ProgramProveError {
 ///
 /// ```ignore
 /// use dregg_circuit::predicate_program::{PredicateExpr, PredicateProgram};
-/// use dregg_circuit::predicate_air::PredicateType;
+/// use dregg_circuit::dsl::predicates::PredicateType;
 /// use dregg_circuit::BabyBear;
 /// use std::collections::HashMap;
 ///

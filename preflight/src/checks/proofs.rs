@@ -277,7 +277,7 @@ fn check_effect_vm_proof() -> Result<(), String> {
 
 fn check_ivc_proof() -> Result<(), String> {
     // Generate a 3-step IVC proof and verify it.
-    use dregg_circuit::fold_air::{FoldWitness, compute_test_checks_commitment};
+    use dregg_circuit::dsl::fold::{FoldWitness, compute_test_checks_commitment};
 
     let initial_root = BabyBear::new(12345);
 
@@ -312,7 +312,7 @@ fn check_ivc_proof() -> Result<(), String> {
 
 /// Adversarial: IVC proof verified against WRONG initial root must be rejected.
 fn check_ivc_wrong_initial_root() -> Result<(), String> {
-    use dregg_circuit::fold_air::{FoldWitness, compute_test_checks_commitment};
+    use dregg_circuit::dsl::fold::{FoldWitness, compute_test_checks_commitment};
 
     let real_root = BabyBear::new(55555);
     let wrong_root = BabyBear::new(99999);

@@ -20,8 +20,8 @@
 
 use crate::constraint_prover::{Air, Constraint, ConstraintProof, ConstraintProver};
 use crate::derivation_air::{CircuitRule, DerivationAir, DerivationWitness};
+use crate::dsl::fold::{self, FoldAir, FoldWitness, RemovedFact};
 use crate::field::BabyBear;
-use crate::fold_air::{self, FoldAir, FoldWitness, RemovedFact};
 use crate::ivc::{FoldDelta, IvcPresentationProof, prove_ivc};
 use crate::merkle_air::{MerkleAir, MerkleLevelWitness, MerkleWitness};
 use crate::multi_step_air;
@@ -600,7 +600,7 @@ impl PresentationAir {
             new_root: state_root,
             removed_facts: vec![],
             num_added_checks: 1, // at least one check to satisfy delta_nonempty
-            added_checks_commitment: fold_air::compute_test_checks_commitment(1),
+            added_checks_commitment: crate::dsl::fold::compute_test_checks_commitment(1),
         };
         let deltas = vec![FoldDelta::new(identity_fold)];
         let ivc_proof = prove_ivc(state_root, deltas)?;
@@ -943,7 +943,7 @@ pub fn create_poseidon2_compatible_witness(leaf_hash: BabyBear, depth: usize) ->
 
 /// Helper: Create a complete test presentation witness.
 pub fn create_test_presentation() -> PresentationWitness {
-    use crate::fold_air::build_shared_tree;
+    use crate::dsl::fold::build_shared_tree;
 
     let federation_root = BabyBear::new(1000000);
     let request_pred = crate::binding::compute_action_binding("test-action", "test-resource");
@@ -979,7 +979,7 @@ pub fn create_test_presentation() -> PresentationWitness {
             membership_proof: Some(f1_proofs.into_iter().next().unwrap()),
         }],
         num_added_checks: 1,
-        added_checks_commitment: fold_air::compute_test_checks_commitment(1),
+        added_checks_commitment: crate::dsl::fold::compute_test_checks_commitment(1),
     };
 
     let mut f2_iter = f2_proofs.into_iter();

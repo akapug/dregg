@@ -12,8 +12,8 @@
 //! - `circuit/src/ivc.rs` (IvcBuilder, IvcProof, verify_ivc, FoldDelta)
 //! - `commit/` for Merkle commitment of each state
 
+use dregg_circuit::dsl::fold::{FoldWitness, RemovedFact, build_shared_tree};
 use dregg_circuit::field::BabyBear;
-use dregg_circuit::fold_air::{FoldWitness, RemovedFact, build_shared_tree};
 use dregg_circuit::ivc::{
     FoldDelta, IvcBuilder, IvcVerification, verify_ivc, verify_ivc_with_roots,
 };
@@ -220,7 +220,7 @@ fn main() {
             new_root,
             removed_facts,
             num_added_checks: 1, // Each step adds a restriction check
-            added_checks_commitment: dregg_circuit::fold_air::compute_test_checks_commitment(1),
+            added_checks_commitment: dregg_circuit::dsl::fold::compute_test_checks_commitment(1),
         };
 
         let delta = FoldDelta::new(fold_witness);

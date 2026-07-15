@@ -39,3 +39,13 @@ pub use compound::{
     generate_compound_trace_full, generate_custom_gate_trace, generate_nested_trace,
     generate_threshold_trace,
 };
+
+/// Witness for an arithmetic predicate evaluation.
+///
+/// Homed here (beside `ArithPredicate`) rather than in the former `arithmetic_predicate_air`
+/// re-export shim: the `*_air` name implied a hand-authored AIR, which this never was.
+pub struct ArithmeticPredicateWitness {
+    pub inputs: Vec<u32>,
+    pub predicate: ArithPredicate,
+    pub fact_commitment: crate::field::BabyBear,
+}

@@ -159,7 +159,7 @@ fn check_and_composition() -> Result<(), String> {
 }
 
 fn check_ivc_chain() -> Result<(), String> {
-    use dregg_circuit::fold_air::{FoldWitness, compute_test_checks_commitment};
+    use dregg_circuit::dsl::fold::{FoldWitness, compute_test_checks_commitment};
 
     let initial_root = BabyBear::new(50000);
 

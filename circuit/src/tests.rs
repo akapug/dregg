@@ -9,8 +9,8 @@
 //! 6. Print proof size
 
 use crate::derivation_air::{BodyAtomPattern, CircuitRule, DerivationAir, DerivationWitness};
+use crate::dsl::fold::{FoldAir, FoldWitness, RemovedFact, build_shared_tree};
 use crate::field::BabyBear;
-use crate::fold_air::{FoldAir, FoldWitness, RemovedFact, build_shared_tree};
 use crate::merkle_air::{MerkleAir, create_test_witness};
 use crate::mock_prover::{Air, MockProver};
 use crate::poseidon2::{hash_4_to_1, hash_fact, hash_many};
@@ -94,7 +94,7 @@ fn end_to_end_authorization_proof() {
             membership_proof: Some(fold2_proofs.into_iter().next().unwrap()),
         }],
         num_added_checks: 1,
-        added_checks_commitment: crate::fold_air::compute_test_checks_commitment(1),
+        added_checks_commitment: crate::dsl::fold::compute_test_checks_commitment(1),
     };
 
     println!("\nFold step 2: Remove owns(alice, file2), add check read_only(file2)");
@@ -341,7 +341,7 @@ fn long_attenuation_chain() {
                 membership_proof: Some(proofs.into_iter().next().unwrap()),
             }],
             num_added_checks: num_checks,
-            added_checks_commitment: crate::fold_air::compute_test_checks_commitment(num_checks),
+            added_checks_commitment: crate::dsl::fold::compute_test_checks_commitment(num_checks),
         });
     }
 
@@ -480,22 +480,22 @@ fn fold_rejects_inconsistent_fact_hash() {
     struct BadHashFoldAir;
     impl Air for BadHashFoldAir {
         fn trace_width(&self) -> usize {
-            crate::fold_air::FOLD_AIR_WIDTH
+            crate::dsl::fold::FOLD_AIR_WIDTH
         }
         fn num_public_inputs(&self) -> usize {
             6
         }
         fn constraints(&self) -> Vec<Constraint> {
-            FoldAir::new(crate::fold_air::create_test_fold(1, 1)).constraints()
+            FoldAir::new(crate::dsl::fold::create_test_fold(1, 1)).constraints()
         }
         fn first_row_constraints(&self) -> Vec<Constraint> {
-            FoldAir::new(crate::fold_air::create_test_fold(1, 1)).first_row_constraints()
+            FoldAir::new(crate::dsl::fold::create_test_fold(1, 1)).first_row_constraints()
         }
         fn last_row_constraints(&self) -> Vec<Constraint> {
-            FoldAir::new(crate::fold_air::create_test_fold(1, 1)).last_row_constraints()
+            FoldAir::new(crate::dsl::fold::create_test_fold(1, 1)).last_row_constraints()
         }
         fn generate_trace(&self) -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
-            use crate::fold_air::col;
+            use crate::dsl::fold::col;
 
             let old_root = BabyBear::new(111111);
             let new_root = BabyBear::new(222222);
@@ -504,7 +504,7 @@ fn fold_rejects_inconsistent_fact_hash() {
             let t1 = BabyBear::new(30);
 
             // Construct removal row with WRONG hash
-            let mut row = vec![BabyBear::ZERO; crate::fold_air::FOLD_AIR_WIDTH];
+            let mut row = vec![BabyBear::ZERO; crate::dsl::fold::FOLD_AIR_WIDTH];
             row[col::ROW_TYPE] = BabyBear::ZERO;
             row[col::FACT_HASH] = BabyBear::new(99999); // WRONG! Should be hash_fact(pred, terms)
             row[col::MEMBERSHIP_ROOT] = BabyBear::ONE;
@@ -519,7 +519,7 @@ fn fold_rejects_inconsistent_fact_hash() {
             row[col::HASH_VALID] = BabyBear::ONE;
 
             // Summary row
-            let mut summary = vec![BabyBear::ZERO; crate::fold_air::FOLD_AIR_WIDTH];
+            let mut summary = vec![BabyBear::ZERO; crate::dsl::fold::FOLD_AIR_WIDTH];
             summary[col::ROW_TYPE] = BabyBear::ONE;
             summary[col::MEMBERSHIP_ROOT] = BabyBear::ONE;
             summary[col::OLD_ROOT] = old_root;
@@ -528,8 +528,8 @@ fn fold_rejects_inconsistent_fact_hash() {
             summary[col::CHECK_COUNT] = BabyBear::ONE;
             summary[col::HASH_VALID] = BabyBear::ONE;
 
-            let checks_commitment = crate::fold_air::compute_test_checks_commitment(1);
-            let root_transition = crate::fold_air::compute_root_transition_hash(
+            let checks_commitment = crate::dsl::fold::compute_test_checks_commitment(1);
+            let root_transition = crate::dsl::fold::compute_root_transition_hash(
                 old_root,
                 new_root,
                 &[BabyBear::new(99999)],
@@ -644,7 +644,7 @@ fn ivc_constant_size_proof() {
         ivc_sizes.push((chain_len, ivc_size));
 
         // Sequential path: N separate proofs
-        let folds: Vec<crate::fold_air::FoldWitness> =
+        let folds: Vec<crate::dsl::fold::FoldWitness> =
             deltas.iter().map(|d| d.fold.clone()).collect();
         let seq_size: usize = folds
             .iter()
@@ -742,7 +742,7 @@ fn proof_size_scaling() {
                         membership_proof: Some(proofs.into_iter().next().unwrap()),
                     }],
                     num_added_checks: 1,
-                    added_checks_commitment: crate::fold_air::compute_test_checks_commitment(1),
+                    added_checks_commitment: crate::dsl::fold::compute_test_checks_commitment(1),
                 }
             })
             .collect();

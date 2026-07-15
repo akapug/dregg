@@ -39,8 +39,8 @@
 //! callers.
 
 use crate::constraint_prover::{Air, Constraint, ConstraintProof, ConstraintProver};
+use crate::dsl::fold::{FoldAir, FoldWitness, RemovedFact};
 use crate::field::BabyBear;
-use crate::fold_air::{FoldAir, FoldWitness, RemovedFact};
 use crate::poseidon2::hash_many;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1464,7 +1464,7 @@ pub mod mt_col {
 /// Create a simple test fold chain with N steps.
 /// Each step removes one fact with valid membership proofs.
 pub fn create_test_chain(num_steps: usize) -> (BabyBear, Vec<FoldDelta>) {
-    use crate::fold_air::build_shared_tree;
+    use crate::dsl::fold::build_shared_tree;
     use crate::poseidon2::hash_fact;
 
     if num_steps == 0 {
@@ -1519,7 +1519,7 @@ pub fn create_test_chain(num_steps: usize) -> (BabyBear, Vec<FoldDelta>) {
                     membership_proof: Some(step.membership_proof.clone()),
                 }],
                 num_added_checks: 1,
-                added_checks_commitment: crate::fold_air::compute_test_checks_commitment(1),
+                added_checks_commitment: crate::dsl::fold::compute_test_checks_commitment(1),
             };
             FoldDelta::new(fold)
         })
@@ -1767,7 +1767,7 @@ mod tests {
                 membership_proof: None,
             }],
             num_added_checks: 1,
-            added_checks_commitment: crate::fold_air::compute_test_checks_commitment(1),
+            added_checks_commitment: crate::dsl::fold::compute_test_checks_commitment(1),
         });
         let result = builder.add_fold(bad_delta);
         assert!(result.is_err());

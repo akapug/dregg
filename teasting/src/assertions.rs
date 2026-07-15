@@ -7,7 +7,7 @@ use dregg_bridge::BridgePresentationProof;
 #[allow(deprecated)] // test helpers intentionally use the simpler legacy verification API
 use dregg_bridge::present::verify_presentation;
 use dregg_circuit::BabyBear;
-use dregg_circuit::predicate_air::PredicateProof;
+use dregg_circuit::dsl::predicates::PredicateProof;
 
 /// Assert that a presentation proof is structurally valid (all sub-proofs present and consistent).
 pub fn assert_proof_valid(proof: &BridgePresentationProof) {
@@ -44,7 +44,7 @@ pub fn assert_predicate_verifies(
     threshold: BabyBear,
     fact_commitment: BabyBear,
 ) {
-    use dregg_circuit::predicate_air::verify_predicate;
+    use dregg_circuit::dsl::predicates::verify_predicate;
     assert!(
         verify_predicate(proof, threshold, fact_commitment).is_ok(),
         "Predicate proof failed verification: threshold={:?}, fact_commitment={:?}",
@@ -59,7 +59,7 @@ pub fn assert_predicate_rejects(
     threshold: BabyBear,
     fact_commitment: BabyBear,
 ) {
-    use dregg_circuit::predicate_air::verify_predicate;
+    use dregg_circuit::dsl::predicates::verify_predicate;
     assert!(
         verify_predicate(proof, threshold, fact_commitment).is_err(),
         "Predicate proof SHOULD have been rejected but passed verification",
