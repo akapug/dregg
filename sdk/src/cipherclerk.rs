@@ -5751,6 +5751,22 @@ impl AgentCipherclerk {
                 SdkError::InvalidWitness(format!("wide bridge-mint trace generation: {e}"))
             })?
         } else {
+            // PAD-0 WRAPPER vs PAD-10 FAMILY. The deployed `transferVmDescriptor2R24` is the
+            // `…-v1-avail` member (pad 10); this wrapper is `..._wide_avail(0, …)`. Sound for the
+            // PI use — the vector is pad-INVARIANT (no `pi_binding` reads the pad window; the wide
+            // carriers re-absorb the same limbs at the shifted bases), pinned lane-for-lane by
+            // `circuit/tests/wide_transfer_pi_pad_invariance.rs` — so the anchors read off
+            // `public_inputs` below are the producer's anchors.
+            //
+            // The PROOF does NOT come from this trace: step 7 re-derives a pad-CORRECT trace +
+            // descriptor through the dispatcher (`prove_effect_vm_rotated_wide` →
+            // `generate_rotated_effect_vm_descriptor_and_trace_wide`, which reads the pad off the
+            // resolved descriptor name). ⚠ NAMED RESIDUAL: unlike the executor/full-turn PI sites,
+            // this `trace` is not discarded — it rides out on `ProvenSovereignTurn.trace` into the
+            // receipt's inline witness bundle at the pad-0 SHAPE (10 columns narrower than the
+            // deployed member). It is witness data (hashed into `witness_hash`), never a
+            // verification input against the descriptor, so a consumer that tried to re-prove from
+            // it would hit the base-row-width check and fail closed loudly, never silently accept.
             dregg_circuit::effect_vm::trace_rotated::generate_rotated_transfer_shape_wide(
                 &initial_vm_state,
                 &vm_effects,

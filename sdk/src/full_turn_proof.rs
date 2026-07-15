@@ -483,6 +483,15 @@ impl RotationTurnWitness {
                      explicitly (NAMED residual)"
                     )));
                 } else {
+                    // PAD-0 WRAPPER vs PAD-10 FAMILY — sound, and MEASURED. The deployed
+                    // `transferVmDescriptor2R24` is the `…-v1-avail` member (pad 10); this wrapper
+                    // is `..._wide_avail(0, …)`. Sound because we take only the anchors off `d`
+                    // and DISCARD the trace (`_t`): the PI vector is pad-INVARIANT (no
+                    // `pi_binding` reads the pad window; the wide carriers re-absorb the same
+                    // limbs at the shifted bases). Pinned lane-for-lane by
+                    // `circuit/tests/wide_transfer_pi_pad_invariance.rs`. The anchors below index
+                    // RELATIVE TO THE END, so the dispatcher's 2 spliced membership teeth (absent
+                    // here) do not shift them either.
                     let (_t, d) = generate_rotated_transfer_shape_wide(
                         s_k,
                         run_effects,

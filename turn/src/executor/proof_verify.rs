@@ -888,6 +888,17 @@ impl TurnExecutor {
                 &caveat,
             )
         } else {
+            // PAD-0 WRAPPER vs PAD-10 FAMILY — sound, and MEASURED, not hoped. The deployed
+            // `transferVmDescriptor2R24` is the availability-hardened `…-v1-avail` member, so the
+            // production dispatcher proves it at `TRANSFER_AVAIL_PAD` (10) while this wrapper is
+            // `..._wide_avail(0, …)`. That is fine HERE and only here because we keep the `dpis`
+            // and DISCARD the trace (`_trace` below): the PI vector is pad-INVARIANT — the pad
+            // widens the v1 face and shifts every appendix base, but no `pi_binding` reads the pad
+            // window `[V1_WIDTH, V1_WIDTH + pad)`, and the wide carriers re-absorb the SAME limbs
+            // at the shifted bases. Pinned lane-for-lane (66/66 felts, 9 honest transfers incl.
+            // limb boundaries + both directions) by
+            // `circuit/tests/wide_transfer_pi_pad_invariance.rs`. A pad-0 TRACE against this
+            // family would be a width mismatch and fail closed loudly — never reuse it.
             generate_rotated_transfer_shape_wide(
                 &initial_vm_state,
                 &vm_effects,
