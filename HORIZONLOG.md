@@ -8552,7 +8552,23 @@ Converting the sites exposed two teeth that were green and proving nothing. Neit
    freshness" site): it ran a full `prove_vm_descriptor2_inner` and bound the verdict to `r`, which was
    never read. Removed — `assert_umem_forgery_refused` is the tooth and re-runs the prove itself.
 
-Remaining: 46 of the original 181 idiom sites are unconverted (see the lane report for the exact
-per-file list) — the shapes the mechanical converter deliberately refused to guess at. Reason-matching
-(`assert!(matches!(e, LeafError::BindingUnsat{..}))`) lands with MOVE 5's typed errors; the panic/Err
-split is done now, as the plan prescribes.
+⚑ THE PLAN'S PREMISE NEEDED TWO CORRECTIONS (both verified by reading/measuring, not assumed):
+* **Counts.** The idiom is **82 sites in `circuit` / 99 in `circuit-prove` (181)** — not 36/161
+  (197). The per-crate split was inverted; `circuit` was undercounted ~2.3x.
+* **Mechanism.** The pre-flight replay catches far less than assumed. A forged digest, a forged
+  leaf PI, a forged nullifier all reach `prove_batch` even on the PUBLIC (`check: true`) entry and
+  are refused by the debug prover's unsat panic. So the panic-tolerant variant is correct at many
+  MORE sites than the plan implies. Consequence worth noting: under `--release` those same
+  `prove_*` calls do NOT refuse (the debug checks are gone and `check && cfg!(debug_assertions)`
+  skips the self-verify) — they emit a proof the CONSUMER's verify must reject. Teeth asserting
+  "the prover refuses" are debug-only artifacts; the prove-THEN-verify `rejects()` helpers and
+  `assert_umem_forgery_refused`'s 3-face pattern are the shape that is honest in both profiles.
+
+**Remaining: 17 of 181 (90% converted).** `circuit-prove/src/{cert_f_air (2), field_delta_range_air
+(2), lean_lookup_air, shielded/attest, shielded/spend_circuit}`, `circuit-prove/tests/
+shielded_deposit_bridge_poc`, `circuit/src/{block_conservation, cross_cell_conservation_air}`,
+`circuit/tests/{avail_weld_live_roundtrip (2), cap_open_avail_roundtrip, dsl_rc_emit,
+effect_vm_umem_real_turn (2), umem_rotation_flip_adversarial_gauntlet}` — bespoke shapes the
+mechanical converter deliberately refused to guess at. Reason-matching
+(`assert!(matches!(e, LeafError::BindingUnsat{..}))`) lands with MOVE 5's typed errors; the
+panic/Err split is done now, as the plan prescribes.
