@@ -217,20 +217,23 @@ mod tests {
         CHIP_OUT_LANES, EffectVmDescriptor2, MemBoundaryWitness, chip_absorb_all_lanes,
         prove_vm_descriptor2, verify_vm_descriptor2,
     };
+    use crate::refusal::{Outcome, classify};
     use std::panic::AssertUnwindSafe;
 
     /// `true` iff `(trace, pis)` is REJECTED end-to-end (prove refuses OR the produced proof fails
     /// to verify). Prove-THEN-verify is the faithful consumer-posture gate.
     fn rejects(desc: &EffectVmDescriptor2, trace: &[Vec<BabyBear>], pis: &[BabyBear]) -> bool {
-        let r = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        match classify("rejects", || {
             let proof =
                 prove_vm_descriptor2(desc, trace, pis, &MemBoundaryWitness::default(), &[])?;
             verify_vm_descriptor2(desc, &proof, pis)
-        }));
-        match r {
-            Err(_) => true,
-            Ok(Err(_)) => true,
-            Ok(Ok(())) => false,
+        }) {
+            // The p3 debug prover's DOCUMENTED unsat verdict — a real refusal.
+            // `classify` REDs on any other panic (a stray unwrap, a trace-assembly
+            // debug_assert), which used to land here and read as "rejected".
+            Outcome::UnsatPanic(_) => true,
+            Outcome::Err(_) => true,
+            Outcome::Accepted(_) => false,
         }
     }
 

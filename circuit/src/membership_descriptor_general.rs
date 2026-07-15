@@ -295,6 +295,7 @@ pub fn membership_witness(
 mod tests {
     use super::*;
     use crate::descriptor_ir2::{MemBoundaryWitness, prove_vm_descriptor2, verify_vm_descriptor2};
+    use crate::refusal::{Outcome, classify};
     use std::panic::AssertUnwindSafe;
 
     /// Build a full binary tree over `leaves` (length a power of two) under the arity-2 chip
@@ -344,15 +345,17 @@ mod tests {
     /// fails to verify). `prove_vm_descriptor2` self-verifies only under debug_assertions, so
     /// prove-THEN-verify is the faithful consumer-posture gate.
     fn rejects(desc: &EffectVmDescriptor2, trace: &[Vec<BabyBear>], pis: &[BabyBear]) -> bool {
-        let r = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        match classify("rejects", || {
             let proof =
                 prove_vm_descriptor2(desc, trace, pis, &MemBoundaryWitness::default(), &[])?;
             verify_vm_descriptor2(desc, &proof, pis)
-        }));
-        match r {
-            Err(_) => true,
-            Ok(Err(_)) => true,
-            Ok(Ok(())) => false,
+        }) {
+            // The p3 debug prover's DOCUMENTED unsat verdict — a real refusal.
+            // `classify` REDs on any other panic (a stray unwrap, a trace-assembly
+            // debug_assert), which used to land here and read as "rejected".
+            Outcome::UnsatPanic(_) => true,
+            Outcome::Err(_) => true,
+            Outcome::Accepted(_) => false,
         }
     }
 

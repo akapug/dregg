@@ -473,6 +473,7 @@ mod tests {
     };
     use crate::note_spending_air::{merkle_col, test_spending_key};
     use crate::poseidon2::hash_many;
+    use crate::refusal::{Outcome, classify};
     use std::panic::AssertUnwindSafe;
 
     /// A REAL full-width witness (raw 32-byte fields + a > 2^30 u64 value, so the high limb is live).
@@ -508,15 +509,17 @@ mod tests {
     /// `true` iff `(trace, pis)` is REJECTED end-to-end — proving refuses OR the produced proof fails
     /// to verify against `pis`. Prove-THEN-verify is the faithful consumer-posture gate.
     fn rejects(desc: &EffectVmDescriptor2, trace: &[Vec<BabyBear>], pis: &[BabyBear]) -> bool {
-        let r = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        match classify("rejects", || {
             let proof =
                 prove_vm_descriptor2(desc, trace, pis, &MemBoundaryWitness::default(), &[])?;
             verify_vm_descriptor2(desc, &proof, pis)
-        }));
-        match r {
-            Err(_) => true,
-            Ok(Err(_)) => true,
-            Ok(Ok(())) => false,
+        }) {
+            // The p3 debug prover's DOCUMENTED unsat verdict — a real refusal.
+            // `classify` REDs on any other panic (a stray unwrap, a trace-assembly
+            // debug_assert), which used to land here and read as "rejected".
+            Outcome::UnsatPanic(_) => true,
+            Outcome::Err(_) => true,
+            Outcome::Accepted(_) => false,
         }
     }
 
