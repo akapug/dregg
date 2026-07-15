@@ -1,0 +1,24 @@
+# Real interview run — candidate A "Meridian Grid" (spec-legit.md)
+# Interviewer: Claude Opus 4.8, briefed by interviewer-prompt.md (hard-to-convince).
+# Captured verbatim from the interview subagent's final verdict block.
+
+VERDICT: PASS
+CONFIDENCE: 0.85
+REASONS:
+- Supply is hard-capped at 10,000,000 with no mint function, team allocation
+  vesting-locked (24mo/12mo cliff), and the liquidity pool floor is
+  contract-enforced — no drain vector left open.
+- Real product surface predating the raise: 3 years of commits, an 8-month live
+  testnet settling 4 named Vermont microgrids (14/9/22/6 households) with public
+  monthly reports, plus open ESP32 metering firmware and a published hardware BOM.
+- Accountability substitutes are concrete and stakeable: named co-founders with
+  verifiable prior grid-software employment, a completed third-party
+  settlement-contract audit with published report hash, and a 50 ETH conduct bond
+  slashable on supply-schedule violation.
+- Use of funds is itemized against real cost drivers (BOM×quantity hardware
+  subsidies, two named engineering roles, second pre-mainnet audit, regulatory
+  legal counsel) rather than vague "marketing and development."
+- Tokenomics cohere and survive pressure: the token is the firmware's actual unit
+  of account with a fiat redemption peg, and the team volunteers that no
+  public-market token is strictly required — candor that resists the hype pattern.
+SCAM_SIGNALS_FOUND: NONE

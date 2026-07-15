@@ -1,0 +1,20 @@
+# Standalone workspace (own [workspace] opt-out, like crypto-hermine / fhegg-solver)
+# so it does NOT edit the root Cargo.toml members list. It path-depends on the
+# REAL `dregg-macaroon` crate (../../macaroon) — the attenuable proof-carrying
+# capability primitive it composes. Build/test with:
+#   cd tools/deployer-gate && cargo test
+[workspace]
+
+[package]
+name = "dregg-deployer-gate"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "The dreggic deployer-gate: a deploy capability gated on bond / skeptical-interview / audit, composing the real dregg-macaroon primitive."
+
+[dependencies]
+dregg-macaroon = { path = "../../macaroon" }
+sha2 = "0.10"
+thiserror = "2"
+
+[dev-dependencies]

@@ -1,0 +1,28 @@
+# Real interview run — candidate B "QuantumYield AI" (spec-rug.md)
+# Interviewer: Claude Opus 4.8, briefed by interviewer-prompt.md (hard-to-convince).
+# Captured verbatim from the interview subagent's final verdict block.
+
+VERDICT: FAIL
+CONFIDENCE: 0.99
+REASONS:
+- Uncontrolled supply: the team multisig retains an unrestricted mint function
+  ("we would never — trust the vision"), so the stated 1-trillion cap is not a
+  real cap; dilution is unbounded at insider discretion.
+- Open rug vector: 40% team/advisor allocation unlocked at launch, plus a 90%
+  insider presale discount and no liquidity lock, with an admitted ability to
+  sell at launch — the deployer can drain liquidity immediately.
+- Scam trifecta present: anonymous team with nothing at stake ("reputation IS
+  the bond" — no bond, no audit, no track record) AND no product (website+logo
+  only, "proprietary" unseeable AI, private repo, product perpetually "Q3/Q4/soon").
+- Ponzi-shaped tokenomics: "guaranteed minimum 2% daily" from undisclosed
+  strategies plus a 5% transfer-tax redistribution is unsustainable-by-arithmetic
+  and depends on new-buyer inflows, not a disclosed yield source.
+- Evasive use-of-funds: "marketing, development, community growth" and unnamed
+  "strategic partnerships" with explicit refusal to itemize.
+- Leans on hype ("100x", "LFG", "guaranteed passive income") and FUD-shames the
+  reviewer under pressure instead of answering.
+SCAM_SIGNALS_FOUND: uncontrolled/undisclosed mint (infinite supply), insider
+  concentration 40% unlocked at launch, 90% insider presale discount, no
+  liquidity lock / drainable liquidity, no product (vaporware), anonymous team
+  with no accountability substitute, guaranteed-returns Ponzi yield, evasive
+  use-of-funds, hype-over-specifics, FUD-shaming deflection
