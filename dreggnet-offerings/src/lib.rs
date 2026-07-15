@@ -74,7 +74,9 @@ pub mod resume;
 pub mod session;
 
 pub use host::{HostError, OfferingHost, OfferingInfo, ResumeError};
-pub use resume::{InMemoryResumeStore, LoggedMove, SessionMoveLog, SessionResumeStore};
+pub use resume::{
+    FileResumeStore, InMemoryResumeStore, LoggedMove, SessionMoveLog, SessionResumeStore,
+};
 
 use dregg_app_framework::TurnReceipt;
 

@@ -12,7 +12,9 @@
 //! - the in-memory store round-trips (record open + landed, load, enumerate).
 
 use dreggnet_offerings::dungeon::{DungeonOffering, TURN_CHOOSE};
-use dreggnet_offerings::resume::{InMemoryResumeStore, LoggedMove, SessionMoveLog};
+use dreggnet_offerings::resume::{
+    FileResumeStore, InMemoryResumeStore, LoggedMove, SessionMoveLog,
+};
 use dreggnet_offerings::{
     Action, DreggIdentity, OfferingHost, ResumeError, SessionConfig, SessionId, SessionResumeStore,
 };
@@ -244,6 +246,48 @@ fn a_full_winning_line_survives_restart() {
         "the cleared run reopened to its identical won state",
     );
     assert_eq!(host2.verify("dungeon", &id).unwrap().turns, 5);
+}
+
+/// **The DURABLE store closes the restart seam ACROSS PROCESS INSTANCES.** Boot a host over a
+/// file-backed [`FileResumeStore`], play a mid-run line, then DROP everything (the host AND the store
+/// handle). A brand-new store handle on the same directory (a simulated process restart) boots a
+/// fresh host that reopens the session by REPLAY — to the identical committed state. This is the
+/// durable seam a frontend (telegram / wechat / web) mounts instead of reinventing one.
+#[test]
+fn a_session_survives_restart_through_the_durable_file_store() {
+    let dir = std::env::temp_dir().join(format!("offerings-resume-restart-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let actor = DreggIdentity("web:carol".to_string());
+
+    // ── boot #1: a host over a durable file store; play a mid-run line; then drop it ALL ──
+    let (original_commit, id) = {
+        let store = FileResumeStore::open(&dir).expect("open the durable store");
+        let mut host = OfferingHost::new().with_resume_store(Box::new(store));
+        host.register("dungeon", "The Warden's Keep", DungeonOffering::new());
+        let id = host.open("dungeon").expect("opens");
+        drive_midrun(&mut host, &id, &actor);
+        let commit = host.commitment("dungeon", &id).expect("live");
+        (commit, id)
+        // host #1 AND its store handle are dropped — only the files on disk survive.
+    };
+
+    // ── boot #2 (the RESTART): a NEW store handle on the same dir + a fresh host ──
+    let store2 = FileResumeStore::open(&dir).expect("reopen the durable store");
+    assert_eq!(store2.len(), 1, "the durable store persisted the session");
+    let mut host2 = OfferingHost::new().with_resume_store(Box::new(store2));
+    host2.register("dungeon", "The Warden's Keep", DungeonOffering::new());
+    let results = host2.resume_all();
+    assert_eq!(results.len(), 1, "the one persisted session is resumed");
+    let resumed = results[0].1.as_ref().expect("the durable log reopens");
+    assert_eq!(resumed, &id, "reopened under its recorded id");
+    assert_eq!(
+        host2.commitment("dungeon", &id).expect("resumed live"),
+        original_commit,
+        "the durably-persisted session reopened to its byte-identical committed state",
+    );
+    assert!(host2.verify("dungeon", &id).unwrap().verified);
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// The in-memory store round-trips its records: an open establishes a (seeded) log; landed advances

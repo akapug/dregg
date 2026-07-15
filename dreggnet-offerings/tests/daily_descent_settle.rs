@@ -199,6 +199,74 @@ fn a_rejecting_node_fails_the_settle_fail_closed() {
     assert_eq!(node.len(), 0, "nothing landed — fail-closed");
 }
 
+/// A player's kept runs form a LINKED SETTLEMENT CHAIN on a chain-enforcing node: two won runs
+/// (of two different days) settle in order, the second linking onto the first's commitment, and
+/// the node's finalized log is exactly that chain. A chain-enforcing node REFUSES an anchor whose
+/// `prev` does not extend the head (fail-closed) — non-vacuous.
+#[test]
+fn kept_runs_form_a_linked_settlement_chain_on_a_chain_enforcing_node() {
+    let node = StubNode::linked();
+    let off = DailyDescentOffering::new(InMemoryCharacterStore::new())
+        .with_node_target(NodeTarget::federation(node.clone()));
+
+    // Two DIFFERENT days (distinct beacon epochs → distinct worlds → distinct commitments).
+    let seed_a = procgen_dregg::daily_seed(&[1u8; 32]);
+    let seed_b = procgen_dregg::daily_seed(&[2u8; 32]);
+
+    let mut run_a = off
+        .open_from_seed(player("chainer"), seed_a)
+        .expect("open day A");
+    drive_win(&off, &mut run_a);
+    assert!(run_a.is_won());
+
+    let mut run_b = off
+        .open_from_seed(player("chainer"), seed_b)
+        .expect("open day B");
+    drive_win(&off, &mut run_b);
+    assert!(run_b.is_won());
+    assert_ne!(
+        run_a.final_commitment(),
+        run_b.final_commitment(),
+        "two different days settle two distinct commitments"
+    );
+
+    // The first anchor opens the chain (prev = None); the second LINKS onto it.
+    let s_a = off
+        .settle_linked(&run_a, None)
+        .expect("the first run opens the settlement chain");
+    let s_b = off
+        .settle_linked(&run_b, Some(s_a.commitment))
+        .expect("the second run links onto the first");
+
+    assert!(
+        s_a.anchored() && s_b.anchored(),
+        "both anchored on the node"
+    );
+    assert_eq!(
+        node.chain(),
+        vec![s_a.commitment, s_b.commitment],
+        "the node's finalized log IS the player's linked settlement chain"
+    );
+    node.verify().expect("the finalized chain verifies");
+
+    // FAIL-CLOSED: a fresh won run that tries to anchor with the WRONG prev (not the head) is
+    // refused by the chain-enforcing node — the chain cannot be forked or spliced.
+    let mut run_c = off
+        .open_from_seed(player("chainer"), procgen_dregg::daily_seed(&[3u8; 32]))
+        .expect("open day C");
+    drive_win(&off, &mut run_c);
+    let forked = off.settle_linked(&run_c, Some([0xAB; 32]));
+    assert!(
+        matches!(forked, Err(SettleError::Federation(_))),
+        "a broken prev-link is refused fail-closed, got {forked:?}"
+    );
+    assert_eq!(
+        node.len(),
+        2,
+        "the forked anchor landed nothing — the chain is still just A→B"
+    );
+}
+
 /// The DEFAULT offering (Local, no node opted in): PLAY is private, and SETTLE succeeds as an
 /// in-process no-op — nothing leaves the process (`Settlement::anchored` is false).
 #[test]

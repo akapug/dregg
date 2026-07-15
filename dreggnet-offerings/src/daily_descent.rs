@@ -670,6 +670,27 @@ impl<S: CharacterStore> DailyDescentOffering<S> {
     /// PLAY is untouched: [`advance`](Self::advance) never routes to the node — this is the sole
     /// path that anchors, and only on an operator-explicit finished win.
     pub fn settle(&self, run: &DailyRun) -> Result<Settlement, SettleError> {
+        self.settle_linked(run, None)
+    }
+
+    /// **SETTLE a won run, LINKING it onto a previous settled run's commitment** — the chained
+    /// analogue of [`settle`](Self::settle). A player who settles run after run builds a
+    /// **linked settlement chain** on the node: each anchor names the previous anchor's
+    /// commitment as its `prev`, so the sequence of a player's kept runs is itself un-retconnable
+    /// (a chain-enforcing node — the deployed federation, or [`dregg_node_target::StubNode::linked`]
+    /// in a test — REFUSES an anchor whose `prev` does not extend the head, fail-closed). Pass
+    /// `prev = None` for the first anchor in a chain (identical to [`settle`](Self::settle)); pass
+    /// `Some(previous.commitment)` to link onto the run settled before it.
+    ///
+    /// The same fail-closed gate as [`settle`](Self::settle): only a real finished
+    /// ([`DailyRun::is_won`]), replay-verified win anchors, and the anchor must confirm-land on the
+    /// node (`Local` is the in-process no-op). A broken link is the node's own
+    /// [`SettleError::Federation`] refusal — the chain cannot be forked or spliced.
+    pub fn settle_linked(
+        &self,
+        run: &DailyRun,
+        prev: Option<[u8; 32]>,
+    ) -> Result<Settlement, SettleError> {
         // 1. Only a REAL finished + WON run settles.
         if !run.is_won() {
             return Err(SettleError::NotWon);
@@ -682,10 +703,15 @@ impl<S: CharacterStore> DailyDescentOffering<S> {
         // 3. The run's fingerprint = the final committed turn_hash (the run-ending seize turn).
         let commitment = run.final_commitment();
         // 4. Anchor it via the opted-in target: Local = no-op (Ok(None)); Federation = submit the
-        //    EmitEvent-of-commitment turn + confirm it landed on the node's finalized log.
+        //    EmitEvent-of-commitment turn (linked onto `prev` when chaining) + confirm it landed on
+        //    the node's finalized log.
+        let mut turn = SubmittedTurn::new(run.domain(), commitment);
+        if let Some(prev) = prev {
+            turn = turn.linked(prev);
+        }
         let landed = self
             .settle_target
-            .route(&SubmittedTurn::new(run.domain(), commitment))
+            .route(&turn)
             .map_err(|e| SettleError::Federation(e.to_string()))?;
         Ok(Settlement { commitment, landed })
     }
