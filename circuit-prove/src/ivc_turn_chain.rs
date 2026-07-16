@@ -2814,12 +2814,35 @@ fn prove_chain_core_rotated(
     // get the plain segment leaf. Instead it gets a DUAL-EXPOSE leaf (segment ++ claimed 8-felt
     // `custom_proof_commitment` PI 46..53 — the proof-bind flag-day rotation; a legacy 4-felt
     // leg is version-refused at admission) folded against the RE-PROVEN custom sub-proof leaf
-    // through `prove_custom_binding_node_segmented` — the binding `connect`s the leg's claimed
-    // commitment to the sub-proof's genuine in-circuit commitment IN the recursion tree (so a
-    // forged claim with no backing sub-proof is UNSAT) and re-exposes the SAME segment, so the
-    // node folds into `aggregate_tree` like any segment leaf. This makes the custom binding REAL
-    // for a pure light client (the premise of `CustomBindingFromFold.custom_binding_from_fold` is
-    // now TRUE on the deployed path).
+    // through `prove_custom_binding_node_state_segmented` — the STATE-BINDING node, the deployed
+    // default. It welds TWO things in the recursion tree a pure light client folds:
+    //
+    //   1. the leg's CLAIMED commitment == the sub-proof's GENUINE in-circuit commitment (so a
+    //      forged claim no verifying sub-proof backs is UNSAT), and
+    //   2. the sub-proof's DECLARED `[old8 ‖ new8]` prefix == the leg's REAL descriptor-bound
+    //      rotated roots (the segment anchors), so a sub-proof about a DIFFERENT transition —
+    //      one that verifies, whose commitment is honest — is UNSAT too.
+    //
+    // Tooth 2 is why the leaf is the 24-lane `prove_custom_leaf_with_state_commitment`. The two
+    // teeth answer the two distinct questions a light client must ask: "does a real sub-proof
+    // back this commitment?" AND "is that sub-proof about THIS cell's roots?". The node
+    // re-exposes only the SEGMENT, so it folds into `aggregate_tree` like any segment leaf.
+    //
+    // WHY THE SEGMENT ANCHORS ARE THE RIGHT COMPARAND (the semantics, since two different
+    // 8-felt values in this system are both called "the commitment"): the leg's segment anchors
+    // on a WIDE leg are the last 16 descriptor PIs = the v9 CHIP commit
+    // (`fill_wide_block` / `wire_commit_8_chip` over the 178 rotated limbs + iroot). The
+    // executor writes `stored_old8`/`claimed_new8` into exactly those tail PIs
+    // (`proof_verify.rs`) and enforces the ABI prefix against those SAME values
+    // (`enforce_custom_proof_state_binding`). So this connect enforces in-circuit precisely what
+    // the executor enforces off-AIR — not a cousin of it. (It is NOT
+    // `CellState::compute_commitment_8` / `PI[OLD_COMMIT_BASE..+8]`, the legacy bundle-path
+    // commitment that also rides the wide PI prefix; those two values are different hashes over
+    // different preimages and can never be equal.)
+    //
+    // This makes the custom binding REAL for a pure light client (the premise of
+    // `CustomBindingFromFold.custom_binding_from_fold` is now TRUE on the deployed path), and
+    // closes the `custom_state_binding` "tooth 2" remainder.
     //
     // THE CARRIER ARMS: ALL SEVEN are FOLD-WIRED — custom + the four v12 carriers (factory /
     // hatchery / sovereign / membership) + dsl + bridge. Each mints a dual-expose leaf at its
@@ -2854,25 +2877,36 @@ fn prove_chain_core_rotated(
                     &config,
                 )
                 .map_err(|reason| TurnChainError::TurnProofInvalid { index: i, reason })?;
-                let custom_leaf = crate::custom_leaf_adapter::prove_custom_leaf_with_commitment(
-                    &bundle.program,
-                    &bundle.witness_values,
-                    bundle.num_rows,
-                    &bundle.public_inputs,
-                    &config,
-                )
-                .map_err(|reason| TurnChainError::TurnProofInvalid {
-                    index: i,
-                    reason: format!("custom sub-proof leaf mint failed: {reason}"),
-                })?;
-                crate::joint_turn_recursive::prove_custom_binding_node_segmented(
+                // THE STATE-BINDING LEAF (the deployed default). The 24-lane claim
+                // `[commitment(8) ‖ pis[0..16]]` — NOT the 8-lane commitment-only leaf. A
+                // sub-program that cannot express the `custom_state_binding` ABI prefix
+                // (< 16 PIs) is REFUSED here, fail-closed, never zero-padded into a false
+                // prefix. That refusal is not new reach: the deployed EXECUTOR already
+                // refuses such a turn at `enforce_custom_proof_state_binding`
+                // (`PublicInputsTooShort`), so a chain the old prover happily minted was
+                // one no executor would accept. The prover now agrees with the verifier.
+                let custom_leaf =
+                    crate::custom_leaf_adapter::prove_custom_leaf_with_state_commitment(
+                        &bundle.program,
+                        &bundle.witness_values,
+                        bundle.num_rows,
+                        &bundle.public_inputs,
+                        &config,
+                    )
+                    .map_err(|reason| TurnChainError::TurnProofInvalid {
+                        index: i,
+                        reason: format!(
+                            "custom state-binding sub-proof leaf mint failed: {reason}"
+                        ),
+                    })?;
+                crate::joint_turn_recursive::prove_custom_binding_node_state_segmented(
                     &dual,
                     &custom_leaf,
                     &config,
                 )
                 .map_err(|e| TurnChainError::TurnProofInvalid {
                     index: i,
-                    reason: format!("segmented custom-binding node failed: {e:?}"),
+                    reason: format!("state-binding custom-binding node failed: {e:?}"),
                 })?
             }
             // THE BRIDGE FOLD ARM (the 7th carrier) — the named residual CLOSED by the

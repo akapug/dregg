@@ -24,15 +24,27 @@
 //! A state-binding custom proof's public inputs are, by construction:
 //!
 //! ```text
-//!   pis[0..8]   = the cell's PRE-state  commitment (the EffectVM PI[OLD_COMMIT_BASE..+8])
-//!   pis[8..16]  = the cell's POST-state commitment (the EffectVM PI[NEW_COMMIT_BASE..+8])
+//!   pis[0..8]   = the cell's PRE-state  commitment (the leg's tail PI [n-16..n-8))
+//!   pis[8..16]  = the cell's POST-state commitment (the leg's tail PI [n-8..n))
 //!   pis[16..]   = application-specific (the game's board roots, move seals, …)
 //! ```
 //!
-//! The prefix is the SAME 8-felt Poseidon2 state commitment the EffectVM binds
-//! (`CellState::compute_commitment_8`, ~124-bit collision resistance matching the FRI
-//! floor) — not a re-derived or truncated form. `dregg_cell::commitment::bytes32_to_felt8`
-//! of the stored/claimed 32-byte commitment produces exactly these felts.
+//! **WHICH 8-felt commitment (read this — two different values in this system are both
+//! called "the commitment"):** the prefix is the deployed **v9 CHIP commit** —
+//! `dregg_cell::commitment::bytes32_to_felt8` of the stored/claimed 32-byte commitment,
+//! i.e. `compute_canonical_state_commitment_v9_felt8` = `wire_commit_8_chip` over the
+//! cell's 178 rotated pre-limbs + iroot (the byte-twin of the circuit's `fill_wide_block`).
+//! That is the value the executor holds, the value the WIDE leg publishes in its LAST 16
+//! descriptor PIs, and the value the in-circuit fold connects against.
+//!
+//! It is **NOT** `CellState::compute_commitment_8`, and **NOT** the EffectVM
+//! `PI[OLD_COMMIT_BASE..+8]` / `PI[NEW_COMMIT_BASE..+8]` prefix slots. That legacy
+//! bundle-path commitment is a 5-node `hash_4_to_1` tree over
+//! `balance/nonce/fields[8]/cap_root/record_digest` — a different function over a strict
+//! SUBSET of the limbs, with no cells_root, no map roots, no iroot. The two values are not
+//! two encodings of one commitment and can never be equal; nothing pins them to each other.
+//! (This doc previously named those two — the prose had drifted from the wire. The
+//! executor's comparands, below, are and were the v9 chip commit.)
 //!
 //! ## Why the prefix rides for free
 //!
@@ -51,18 +63,31 @@
 //!    (b) the PI prefix equals the turn's OLD/NEW state commitments. This is what an
 //!    EXECUTOR (and any re-executing validator) enforces.
 //!
-//! 2. **In-circuit, fold (NOT landed — the named remainder):** the dual-expose leg leaf
-//!    already carries the descriptor-bound REAL roots in its exposed segment
+//! 2. **In-circuit, fold (LANDED — and the DEPLOYED DEFAULT):** the dual-expose leg leaf
+//!    carries the descriptor-bound REAL roots in its exposed segment
 //!    (`ivc_turn_chain::SEG_FIRST_OLD` lanes `0..8`, `SEG_LAST_NEW` lanes `8..16`). The
-//!    remaining step is to widen the custom leaf's `expose_claim` from
-//!    `[commitment(8)]` to `[commitment(8) ‖ pis[0..16]]` and `connect` those 16 lanes to
-//!    the leg's segment lanes in `prove_custom_binding_node_segmented`. Until that lands,
-//!    a PURE LIGHT CLIENT (folding only the recursion tree, never re-running the executor)
-//!    witnesses "a sub-proof backs this commitment" but NOT "its PIs are this cell's
-//!    roots". See `docs/design/HOARDLIGHT-LIVING-WORLD.md` (the productization gate).
+//!    custom leaf's `expose_claim` is widened from `[commitment(8)]` to
+//!    `[commitment(8) ‖ pis[0..16]]`
+//!    (`dregg_circuit_prove::custom_leaf_adapter::prove_custom_leaf_with_state_commitment`),
+//!    and `dregg_circuit_prove::joint_turn_recursive::prove_custom_binding_node_state_segmented`
+//!    `connect`s those 16 lanes to the leg's segment lanes. The deployed chain prover
+//!    (`ivc_turn_chain::prove_chain_core_rotated`'s Custom arm) mints THAT pair — so a
+//!    custom sub-proof whose declared roots are not the leg's real rotated roots has no
+//!    satisfying partner: UNSAT, no root, and the light client never receives a verifying
+//!    artifact.
 //!
-//! Tooth 1 alone is a real gate against a host that staples an unrelated proof onto a
-//! turn — the executor refuses it. It does not yet make the light client's fold say it.
+//! A PURE LIGHT CLIENT (folding only the recursion tree, never re-running the executor) now
+//! witnesses BOTH "a sub-proof backs this commitment" AND "its PIs are this cell's roots".
+//!
+//! The two teeth are deliberately kept, and they are not redundant: tooth 1 refuses the
+//! turn at admission (cheap, before any STARK), tooth 2 makes the refusal a property of the
+//! ARTIFACT rather than of the verifier's diligence. Tooth 2 is not a conditional gate —
+//! the state node REQUIRES the 24-lane claim, so a prover cannot dodge it by minting the
+//! narrow leaf.
+//!
+//! **The ABI is now load-bearing on the prover side.** A sub-program publishing fewer than
+//! `CUSTOM_PI_STATE_PREFIX_LEN` PIs is refused by the deployed prover, exactly as it was
+//! already refused by the deployed executor. A custom carrier must publish the prefix.
 
 use crate::field::BabyBear;
 
