@@ -5034,6 +5034,66 @@ async fn execute_finalized_turn(
                             warn!(error = %e, turn_hash = %turn_hash_hex,
                                     "failed to persist full-turn proof");
                         }
+                        // ── FINALIZED-TURN RETENTION (the REAL IVC-compression input) ──
+                        // Mint the wrap-input `FinalizedTurn` from the SAME execution
+                        // context this proof was generated from, bound FAIL-CLOSED to the
+                        // proof's proven wide anchors (`finalized_turn_from_full_turn`'s
+                        // anchor tie), and persist it keyed by turn hash.
+                        // `dregg_compress_history` folds EXACTLY these retained turns
+                        // through `ivc_turn_chain::prove_turn_chain_recursive`. A turn
+                        // that cannot be faithfully minted is NOT retained — never a
+                        // fabricated stand-in — and history compression then refuses it.
+                        match (
+                            full_turn_pre_cell.as_ref(),
+                            s.ledger.get(&signed_turn.turn.agent),
+                        ) {
+                            (Some(before_cell), Some(after_cell)) => {
+                                let receipt_hashes = [receipt.receipt_hash()];
+                                match crate::turn_proving::mint_and_encode_finalized_turn(
+                                    &signed_turn.turn.agent,
+                                    pre_balance,
+                                    pre_nonce,
+                                    &effects,
+                                    before_cell,
+                                    after_cell,
+                                    &receipt_hashes,
+                                    &live_nullifier_root,
+                                    &live_commitments_root,
+                                    proven.old_commit,
+                                    proven.new_commit,
+                                ) {
+                                    Ok(turn_bytes) => {
+                                        let fkey = crate::turn_proving::finalized_turn_config_key(
+                                            &turn_hash_hex,
+                                        );
+                                        match s.store.set_config(&fkey, &turn_bytes) {
+                                            Ok(()) => info!(
+                                                turn_hash = %turn_hash_hex,
+                                                retained_bytes = turn_bytes.len(),
+                                                "finalized turn retained for IVC history \
+                                                 compression (anchor-tied to the served proof)"
+                                            ),
+                                            Err(e) => warn!(
+                                                error = %e, turn_hash = %turn_hash_hex,
+                                                "failed to persist retained finalized turn; \
+                                                 history compression will refuse this turn"
+                                            ),
+                                        }
+                                    }
+                                    Err(e) => warn!(
+                                        turn_hash = %turn_hash_hex,
+                                        error = %e,
+                                        "finalized turn NOT retained for IVC compression \
+                                         (fail-closed; history compression will refuse this turn)"
+                                    ),
+                                }
+                            }
+                            _ => warn!(
+                                turn_hash = %turn_hash_hex,
+                                "finalized turn NOT retained for IVC compression: before/after \
+                                 actor cell context unavailable on this commit path (fail-closed)"
+                            ),
+                        }
                         info!(
                             turn_hash = %turn_hash_hex,
                             block_id = %block_id,

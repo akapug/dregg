@@ -64,10 +64,6 @@ pub(super) async fn tool_compress_history(params: &Value, state: &NodeState) -> 
         Some(h) => h,
         None => return McpToolResult::error("missing required parameter: cell_id"),
     };
-    let initial_root_u32 = match params.get("initial_root").and_then(|v| v.as_u64()) {
-        Some(r) => r as u32,
-        None => return McpToolResult::error("missing required parameter: initial_root"),
-    };
     let turn_count = params.get("turn_count").and_then(|v| v.as_u64());
 
     let _cell_id_bytes = match hex_decode(cell_id_hex) {
@@ -80,46 +76,119 @@ pub(super) async fn tool_compress_history(params: &Value, state: &NodeState) -> 
         return McpToolResult::error("cipherclerk is locked; unlock first");
     }
 
-    // Gather the receipt chain (turn roots) for IVC compression.
+    // The REAL receipt chain, oldest → newest. Select the most recent `turn_count`
+    // receipts but KEEP chain order — the whole-chain fold's temporal tooth
+    // (`new_root[i] == old_root[i+1]`) binds the finalized order.
     let chain = s.cclerk.receipt_chain();
     let limit = turn_count.map(|c| c as usize).unwrap_or(chain.len());
-    let receipts_to_compress: Vec<_> = chain.iter().rev().take(limit).collect();
-
-    if receipts_to_compress.is_empty() {
+    let start = chain.len().saturating_sub(limit);
+    let window = &chain[start..];
+    if window.is_empty() {
         return McpToolResult::error("no turns to compress in receipt chain");
     }
 
-    // IVC compression now runs on the surviving constraint/descriptor-world prover
-    // (`prove_ivc`/`verify_ivc`); the deleted hand-STARK `prove_ivc_stark` is gone. That prover folds
-    // a chain of `FoldDelta`s — each a membership-proof-bearing fact removal with a continuity-checked
-    // root transition — so we lower the requested turn count into a genuine fold chain (capped at
-    // `MAX_FOLD_DEPTH`) and prove+verify it end to end. `initial_root_u32` is advisory: the fold chain
-    // commits to its own initial fact-tree root, echoed back below for output-shape stability.
-    let steps = receipts_to_compress
-        .len()
-        .min(dregg_circuit::MAX_FOLD_DEPTH as usize);
-    let (initial_root, deltas) = dregg_circuit::ivc::create_test_chain(steps);
-
-    let proof = match dregg_circuit::prove_ivc(initial_root, deltas) {
-        Some(p) => p,
-        None => {
-            return McpToolResult::error(
-                "IVC compression failed: could not build a valid fold chain for the requested turns",
-            );
+    // Load the RETAINED wrap-input `FinalizedTurn` for every turn in the window —
+    // minted at commit time from the turn's REAL execution context and anchor-tied
+    // to the served FullTurnProof (`blocklace_sync::execute_finalized_turn`).
+    // FAIL CLOSED on any gap: synthetic data is never substituted.
+    let window_len = window.len();
+    let mut retained: Vec<(String, Vec<u8>)> = Vec::with_capacity(window_len);
+    let mut missing: Vec<String> = Vec::new();
+    for receipt in window {
+        let hash_hex = hex_encode(&receipt.turn_hash);
+        let key = crate::turn_proving::finalized_turn_config_key(&hash_hex);
+        match s.store.get_config(&key) {
+            Ok(Some(bytes)) => retained.push((hash_hex, bytes)),
+            Ok(None) => missing.push(hash_hex),
+            Err(e) => {
+                return McpToolResult::error(format!(
+                    "config store read failed for turn {hash_hex}: {e}"
+                ));
+            }
         }
-    };
-    let verification = dregg_circuit::verify_ivc(&proof, Some(initial_root));
-    let valid = matches!(verification, dregg_circuit::IvcVerification::Valid);
+    }
+    drop(s);
 
-    McpToolResult::json(&serde_json::json!({
-        "compressed": valid,
-        "cell_id": cell_id_hex,
-        "turns_compressed": proof.step_count,
-        "initial_root": initial_root_u32,
-        "fold_chain_initial_root": proof.initial_root.as_u32(),
-        "proof_size_bytes": proof.proof_size_bytes(),
-        "verification": if valid { "valid" } else { "failed" },
-    }))
+    if !missing.is_empty() {
+        return McpToolResult::error(format!(
+            "real IVC compression requires retained finalized turns; {} of {} requested turns \
+             have no retained wrap-input FinalizedTurn (they predate retention, were committed \
+             without full-turn proving enabled, or failed the fail-closed anchor tie at commit \
+             time). First missing turn hashes: [{}]. Nothing was proven — a fabricated stand-in \
+             is never substituted.",
+            missing.len(),
+            window_len,
+            missing
+                .iter()
+                .take(8)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", "),
+        ));
+    }
+    if retained.len() < 2 {
+        return McpToolResult::error(
+            "real IVC compression folds a CHAIN: at least 2 retained finalized turns are \
+             required (the whole-chain recursion has no 1-turn fold)",
+        );
+    }
+
+    // Decode each retained envelope back into the wrap-input `FinalizedTurn`
+    // (descriptor rebuilt fail-closed from its committed WIDE-registry row).
+    let mut turns = Vec::with_capacity(retained.len());
+    for (hash_hex, bytes) in &retained {
+        match crate::turn_proving::decode_retained_finalized_turn(bytes) {
+            Ok(t) => turns.push(t),
+            Err(e) => {
+                return McpToolResult::error(format!(
+                    "retained finalized turn {hash_hex} failed to decode: {e} (fail-closed; \
+                     nothing proven)"
+                ));
+            }
+        }
+    }
+
+    // THE REAL FOLD: `prove_turn_chain_recursive` host-admits every leg (each
+    // rotated proof re-verified standalone, selector-bound), re-proves each leaf
+    // in-circuit, and folds the tree to ONE root; then the byte envelope is
+    // verified with `verify_whole_chain_proof_bytes` — the SAME three teeth a
+    // light client runs, against the recomputed VK fingerprint of this locally
+    // produced fold (the honest-setup anchor mint). Heavy: run off the async core.
+    let turn_total = turns.len();
+    let folded = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, String> {
+        let proof = dregg_circuit_prove::ivc_turn_chain::prove_turn_chain_recursive(&turns)
+            .map_err(|e| format!("whole-chain fold failed: {e:?}"))?;
+        let bytes = proof.to_bytes();
+        let vk = proof.root_vk_fingerprint();
+        dregg_circuit_prove::ivc_turn_chain::verify_whole_chain_proof_bytes(&bytes, &vk)
+            .map_err(|e| format!("whole-chain proof did NOT verify: {e:?}"))?;
+        Ok(serde_json::json!({
+            "turns_compressed": proof.num_turns,
+            "proof_size_bytes": bytes.len(),
+            "genesis_root": proof.genesis_root.iter().map(|f| f.as_u32()).collect::<Vec<_>>(),
+            "final_root": proof.final_root.iter().map(|f| f.as_u32()).collect::<Vec<_>>(),
+            "chain_digest": proof.chain_digest.iter().map(|f| f.as_u32()).collect::<Vec<_>>(),
+            "vk_fingerprint": vk.to_hex(),
+        }))
+    })
+    .await;
+
+    match folded {
+        Ok(Ok(mut summary)) => {
+            if let Some(map) = summary.as_object_mut() {
+                map.insert("compressed".into(), serde_json::json!(true));
+                map.insert("cell_id".into(), serde_json::json!(cell_id_hex));
+                // "valid" is stated ONLY here: the fold succeeded AND the byte
+                // envelope re-verified through the light-client teeth above.
+                map.insert("verification".into(), serde_json::json!("valid"));
+            }
+            McpToolResult::json(&summary)
+        }
+        Ok(Err(e)) => McpToolResult::error(format!(
+            "IVC compression failed for {turn_total} retained turns (fail-closed): {e}"
+        )),
+        Err(e) => McpToolResult::error(format!("IVC compression task did not complete: {e}")),
+    }
 }
 
 // =============================================================================
@@ -412,64 +481,25 @@ pub(super) async fn tool_prove_predicate(params: &Value, state: &NodeState) -> M
 // Proof Composition tool
 // =============================================================================
 
-pub(super) async fn tool_compose_proofs(params: &Value, state: &NodeState) -> McpToolResult {
-    let mode = match params.get("mode").and_then(|v| v.as_str()) {
-        Some(m) => m,
-        None => return McpToolResult::error("missing required parameter: mode"),
-    };
-    let proofs_val = match params.get("proofs").and_then(|v| v.as_array()) {
-        Some(p) => p,
-        None => return McpToolResult::error("missing required parameter: proofs"),
-    };
-
-    let s = state.read().await;
-    if !s.unlocked {
-        return McpToolResult::error("cipherclerk is locked; unlock first");
-    }
-    drop(s);
-
-    if proofs_val.is_empty() {
-        return McpToolResult::error("proofs array cannot be empty");
-    }
-
-    // Decode proof bytes.
-    let mut proof_bytes_list = Vec::new();
-    for proof_hex in proofs_val {
-        let hex_str = match proof_hex.as_str() {
-            Some(h) => h,
-            None => return McpToolResult::error("each proof must be a hex string"),
-        };
-        match hex_decode_var(hex_str) {
-            Ok(b) => proof_bytes_list.push(b),
-            Err(_) => return McpToolResult::error("invalid hex in proofs array"),
-        }
-    }
-
-    // Compose based on mode.
-    // For now, compute a composition hash that binds all proofs together.
-    let mut hasher = blake3::Hasher::new_derive_key("dregg-proof-composition-v1");
-    hasher.update(mode.as_bytes());
-    for proof_bytes in &proof_bytes_list {
-        hasher.update(&(proof_bytes.len() as u64).to_le_bytes());
-        hasher.update(proof_bytes);
-    }
-    let composition_hash: [u8; 32] = *hasher.finalize().as_bytes();
-
-    let valid = match mode {
-        "and" => true,       // All proofs must be individually valid.
-        "or" => true,        // At least one proof must be valid.
-        "chain" => true,     // Proofs form a sequential chain.
-        "aggregate" => true, // Proofs aggregated into one.
-        _ => return McpToolResult::error(format!("unknown composition mode: '{mode}'")),
-    };
-
-    McpToolResult::json(&serde_json::json!({
-        "composed": valid,
-        "mode": mode,
-        "proof_count": proof_bytes_list.len(),
-        "composition_hash": hex_encode(&composition_hash),
-        "total_bytes": proof_bytes_list.iter().map(|p| p.len()).sum::<usize>(),
-    }))
+/// **RETIRED, FAIL-CLOSED.** The old body verified NOTHING: it hex-decoded the
+/// inputs, BLAKE3-hashed them, and answered `composed: true` / `valid` for every
+/// mode unconditionally — a checksum masquerading as proof composition. No real
+/// composition engine exists to wire to (the multi-step composite was deleted in
+/// the stark-kill), so this tool now refuses honestly instead of claiming
+/// validity. Real whole-chain folding lives in `dregg_compress_history`
+/// (`ivc_turn_chain::prove_turn_chain_recursive`).
+pub(super) async fn tool_compose_proofs(params: &Value, _state: &NodeState) -> McpToolResult {
+    let mode = params
+        .get("mode")
+        .and_then(|v| v.as_str())
+        .unwrap_or("<unspecified>");
+    McpToolResult::error(format!(
+        "proof composition is RETIRED (fail-closed): no real composition engine exists — the \
+         former implementation only hashed the supplied bytes and reported '{mode}' composition \
+         as valid without verifying anything. Nothing was composed or verified. For a real \
+         constant-size proof over a turn history, use dregg_compress_history (the whole-chain \
+         recursive fold)."
+    ))
 }
 
 // =============================================================================

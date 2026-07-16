@@ -62,8 +62,9 @@ const BASELINE: &[(&str, usize)] = &[
         // sites are the core simulated engine, still ridden by node MCP handlers.
         ("circuit/src/ivc.rs", 70),
         ("circuit/src/constraint_prover.rs", 17),
-        // ── NEEDS-PLUMBING (provable data not at this layer; must fail closed meanwhile) ──
-        ("node/src/mcp/handlers_verify.rs", 3),      // dregg_compress_history: returns "valid" for create_test_chain synthetic data. WORST — live MCP tool.
+        // node/src/mcp/handlers_verify.rs: PURGED 2026-07-16 — dregg_compress_history now proves via
+        // the REAL prove_turn_chain_recursive over retained FinalizedTurns (plumbed at the node commit
+        // path); dregg_compose_proofs retired fail-closed. 3 -> 0.
         // dregg-genesis-snapshot: PURGED 2026-07-16 — the mock "history proof" field was DROPPED
         // (not renamed): the layer holds no per-turn provable data, and the leg was minterable by
         // any forger. Tamper-refusal rests on the voucher/re-addressing consistency checks, and

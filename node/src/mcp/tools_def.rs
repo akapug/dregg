@@ -606,15 +606,14 @@ pub(super) fn tool_definitions_raw() -> Vec<McpToolDef> {
             title: None,
             output_schema: None,
             annotations: None,
-            description: "IVC-compress a sovereign cell's turn history into a single constant-size proof",
+            description: "Fold the node's RETAINED finalized turns into ONE whole-chain recursive STARK proof (real IVC compression: prove_turn_chain_recursive + light-client byte-envelope verify). Fails closed for any turn with no retained wrap-input FinalizedTurn (e.g. turns committed before retention or without full-turn proving).",
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "cell_id": { "type": "string", "description": "Hex-encoded 32-byte cell ID" },
-                    "initial_root": { "type": "integer", "description": "Initial state root (BabyBear field element as u32)" },
-                    "turn_count": { "type": "integer", "description": "Number of recent turns to compress (default: all)" }
+                    "turn_count": { "type": "integer", "description": "Number of most recent turns to compress, in chain order (default: all; minimum fold is 2)" }
                 },
-                "required": ["cell_id", "initial_root"]
+                "required": ["cell_id"]
             }),
         },
         // ─── Bearer Capabilities ───────────────────────────────────────────────────
@@ -830,7 +829,7 @@ pub(super) fn tool_definitions_raw() -> Vec<McpToolDef> {
             title: None,
             output_schema: None,
             annotations: None,
-            description: "Compose multiple proofs using logical operators (and/or/chain/aggregate)",
+            description: "RETIRED (fail-closed): no real proof-composition engine exists; this tool always returns an error and never claims validity. Use dregg_compress_history for a real whole-chain fold.",
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {

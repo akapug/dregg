@@ -43,6 +43,12 @@ dregg-intent = { path = "../intent" }
 # crate is HTTP-free and pulls only serde + blake3 (already in the graph).
 dregg-query = { path = "../dregg-query" }
 dregg-circuit = { path = "../circuit" }
+# The recursion prove/verify surface for REAL IVC history compression: the commit path retains a
+# wrap-input `FinalizedTurn` per proven turn (turn_proving.rs), and the MCP `dregg_compress_history`
+# tool folds those retained turns through `ivc_turn_chain::prove_turn_chain_recursive` and verifies
+# the byte envelope (`verify_whole_chain_proof_bytes`). Already in the node graph transitively via
+# `dregg-turn/prover`; named directly so the node can hold the fold's types.
+dregg-circuit-prove = { path = "../circuit-prove" }
 dregg-commit = { path = "../commit" }
 dregg-dsl-runtime = { path = "../dregg-dsl-runtime" }
 dregg-coord = { path = "../coord" }

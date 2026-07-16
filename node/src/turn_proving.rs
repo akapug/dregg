@@ -1452,6 +1452,224 @@ pub fn turn_proof_config_key(turn_hash_hex: &str) -> String {
     format!("full_turn_proof:{turn_hash_hex}")
 }
 
+/// Config-store key under which a committed turn's RETAINED wrap-input
+/// [`dregg_circuit_prove::ivc_turn_chain::FinalizedTurn`] is persisted
+/// (postcard of [`RetainedFinalizedTurnBytes`]), keyed by the turn hash (hex) —
+/// the sibling of [`turn_proof_config_key`]. This is the REAL input to IVC
+/// history compression: `dregg_compress_history` loads exactly these and folds
+/// them through `ivc_turn_chain::prove_turn_chain_recursive`. A turn with no
+/// entry here CANNOT be compressed (fail-closed — never a fabricated stand-in).
+pub fn finalized_turn_config_key(turn_hash_hex: &str) -> String {
+    format!("finalized_turn:{turn_hash_hex}")
+}
+
+/// Version tag of [`RetainedFinalizedTurnBytes`]. Bumped on any layout change so
+/// stale bytes are refused (fail-closed), never misread.
+pub const RETAINED_FINALIZED_TURN_V1: u16 = 1;
+
+/// The persisted byte envelope of a minted wrap-input `FinalizedTurn`.
+///
+/// The leg's descriptor ([`dregg_circuit::descriptor_ir2::EffectVmDescriptor2`])
+/// is not serde-encodable, so it rides as its COMMITTED WIDE-REGISTRY KEY
+/// (`WIDE_REGISTRY_STAGED_TSV` field 0): [`encode_finalized_turn`] proves at
+/// persist time that re-parsing that registry row yields a descriptor EQUAL to
+/// the one the leg was minted with, and [`decode_retained_finalized_turn`]
+/// rebuilds it from the same row (fail-closed on a miss/mismatch — a load can
+/// never attest a different AIR than the mint did). The proof and PI vector ride
+/// verbatim; the rebuilt leg is then re-verified standalone by the chain
+/// prover's host admission (`verify_descriptor_participant`) before any fold.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct RetainedFinalizedTurnBytes {
+    /// Envelope version ([`RETAINED_FINALIZED_TURN_V1`]).
+    pub version: u16,
+    /// The WIDE registry key (TSV field 0, e.g. `transferVmDescriptor2R24`) of
+    /// the leg's descriptor.
+    pub descriptor_registry_key: String,
+    /// Postcard bytes of the leg's `Ir2BatchProof<DreggRecursionConfig>`.
+    pub proof: Vec<u8>,
+    /// The leg's PI vector, canonical `u32` lanes.
+    pub public_inputs: Vec<u32>,
+}
+
+/// **THE FINALIZED-TURN RETENTION MINT** (commit path). From the SAME execution
+/// context `blocklace_sync::execute_finalized_turn` proved the turn with, mint
+/// the wrap-input `FinalizedTurn` via
+/// [`dregg_turn::rotation_witness::finalized_turn_from_full_turn`] — which
+/// re-proves the rotated leg under the leaf-wrap config and FAIL-CLOSES unless
+/// the leg's wide 8-felt anchors equal the served `FullTurnProof`'s proven
+/// `(old_commit, new_commit)` — and encode it for persistence.
+///
+/// `initial_vm_state` is seeded the SAME way the prover entry seeds it
+/// (PATH-PRESERVE §4: from the rotation witness's before-block when one builds,
+/// else the synthetic `CellState::new`); any divergence from the served proof's
+/// context is caught by the adapter's anchor tie, so a mismatched state can
+/// never be retained. Errors mean the turn is NOT retained (the caller logs and
+/// persists nothing) and history compression later fails closed for it.
+#[allow(clippy::too_many_arguments)]
+pub fn mint_and_encode_finalized_turn(
+    agent: &CellId,
+    pre_balance: u64,
+    pre_nonce: u64,
+    effects: &[dregg_turn::Effect],
+    before_cell: &dregg_cell::Cell,
+    after_cell: &dregg_cell::Cell,
+    receipt_hashes: &[[u8; 32]],
+    nullifier_root: &dregg_circuit::Faithful8,
+    commitments_root: &dregg_circuit::Faithful8,
+    proven_old_commit: [BabyBear; 8],
+    proven_new_commit: [BabyBear; 8],
+) -> Result<Vec<u8>, String> {
+    let vm_effects = AgentCipherclerk::convert_effects_to_vm(agent, effects);
+    let initial_vm_state = match rotation_witness_for_self_sovereign_impl(
+        pre_balance,
+        pre_nonce,
+        before_cell,
+        after_cell,
+        receipt_hashes,
+        effects,
+        nullifier_root,
+        commitments_root,
+    ) {
+        Some(rot) => rot
+            .before_cell_state()
+            .map_err(|e| format!("finalized-turn retention: before_cell_state: {e}"))?,
+        None => CellState::new(pre_balance, pre_nonce as u32),
+    };
+    let finalized = dregg_turn::rotation_witness::finalized_turn_from_full_turn(
+        &initial_vm_state,
+        &vm_effects,
+        before_cell,
+        after_cell,
+        nullifier_root,
+        commitments_root,
+        receipt_hashes,
+        None,
+        proven_old_commit,
+        proven_new_commit,
+    )?;
+    encode_finalized_turn(&finalized)
+}
+
+/// Encode a minted `FinalizedTurn` into the [`RetainedFinalizedTurnBytes`]
+/// postcard envelope. Fail-closed: a leg whose descriptor has no committed
+/// WIDE-registry row, or whose row re-parses to a DIFFERENT descriptor, is
+/// refused (a load-time rebuild would attest the wrong AIR). A leg carrying a
+/// prover-side carrier witness is refused too (the witness is not persistable;
+/// dropping it silently would change what the fold proves).
+pub fn encode_finalized_turn(
+    turn: &dregg_circuit_prove::ivc_turn_chain::FinalizedTurn,
+) -> Result<Vec<u8>, String> {
+    let leg = &turn.participant.rotated;
+    if leg.carrier_witness.is_some() {
+        return Err(
+            "finalized-turn retention: leg carries a prover-side carrier witness, which is not \
+             persistable — refusing to retain a stripped leg (the fold would prove less than the \
+             mint did)"
+                .to_string(),
+        );
+    }
+    let mut found: Option<(&str, &str)> = None;
+    for line in dregg_circuit::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV.lines() {
+        let mut it = line.splitn(3, '\t');
+        let (Some(key), Some(display), Some(json)) = (it.next(), it.next(), it.next()) else {
+            continue;
+        };
+        if display == leg.descriptor.name {
+            found = Some((key, json));
+            break;
+        }
+    }
+    let (key, json) = found.ok_or_else(|| {
+        format!(
+            "finalized-turn retention: descriptor '{}' has no committed WIDE-registry row — it \
+             cannot be rebuilt at load, so the turn is not retained",
+            leg.descriptor.name
+        )
+    })?;
+    let rebuilt = dregg_circuit::descriptor_ir2::parse_vm_descriptor2(json).map_err(|e| {
+        format!("finalized-turn retention: registry row '{key}' does not parse: {e}")
+    })?;
+    if rebuilt != leg.descriptor {
+        return Err(format!(
+            "finalized-turn retention: registry row '{key}' re-parses to a DIFFERENT descriptor \
+             than the minted leg carries — refusing to retain (a load-time rebuild would attest \
+             the wrong AIR)"
+        ));
+    }
+    let proof = postcard::to_stdvec(&leg.proof)
+        .map_err(|e| format!("finalized-turn retention: proof encode: {e}"))?;
+    let env = RetainedFinalizedTurnBytes {
+        version: RETAINED_FINALIZED_TURN_V1,
+        descriptor_registry_key: key.to_string(),
+        proof,
+        public_inputs: leg.public_inputs.iter().map(|f| f.as_u32()).collect(),
+    };
+    postcard::to_stdvec(&env).map_err(|e| format!("finalized-turn retention: envelope encode: {e}"))
+}
+
+/// Decode a retained [`RetainedFinalizedTurnBytes`] envelope back into the
+/// wrap-input `FinalizedTurn`. Fail-closed on a version mismatch, a registry
+/// key with no committed WIDE-registry row, or bytes that do not decode. The
+/// rebuilt leg carries no carrier witness (none was retained — enforced at
+/// encode); the chain prover's host admission re-verifies its proof against the
+/// rebuilt descriptor before any fold, so a wrong rebuild cannot silently prove.
+pub fn decode_retained_finalized_turn(
+    bytes: &[u8],
+) -> Result<dregg_circuit_prove::ivc_turn_chain::FinalizedTurn, String> {
+    use dregg_circuit_prove::joint_turn_aggregation::{
+        DescriptorParticipant, RotatedParticipantLeg,
+    };
+    let env: RetainedFinalizedTurnBytes = postcard::from_bytes(bytes)
+        .map_err(|e| format!("retained finalized turn does not decode: {e}"))?;
+    if env.version != RETAINED_FINALIZED_TURN_V1 {
+        return Err(format!(
+            "retained finalized turn has version {} (this build reads v{})",
+            env.version, RETAINED_FINALIZED_TURN_V1
+        ));
+    }
+    let json = dregg_circuit::effect_vm_descriptors::WIDE_REGISTRY_STAGED_TSV
+        .lines()
+        .find_map(|line| {
+            let mut it = line.splitn(3, '\t');
+            if it.next() == Some(env.descriptor_registry_key.as_str()) {
+                let _display = it.next();
+                it.next()
+            } else {
+                None
+            }
+        })
+        .ok_or_else(|| {
+            format!(
+                "retained finalized turn names registry key '{}', which has no committed \
+                 WIDE-registry row in this build",
+                env.descriptor_registry_key
+            )
+        })?;
+    let descriptor = dregg_circuit::descriptor_ir2::parse_vm_descriptor2(json).map_err(|e| {
+        format!(
+            "retained finalized turn: registry row '{}' does not parse: {e}",
+            env.descriptor_registry_key
+        )
+    })?;
+    let proof: dregg_circuit::descriptor_ir2::Ir2BatchProof<
+        dregg_circuit_prove::plonky3_recursion_impl::recursive::DreggRecursionConfig,
+    > = postcard::from_bytes(&env.proof)
+        .map_err(|e| format!("retained finalized turn: proof does not decode: {e}"))?;
+    let leg = RotatedParticipantLeg {
+        proof,
+        descriptor,
+        public_inputs: env
+            .public_inputs
+            .iter()
+            .map(|&v| BabyBear::new(v))
+            .collect(),
+        carrier_witness: None,
+    };
+    Ok(dregg_circuit_prove::ivc_turn_chain::FinalizedTurn::new(
+        DescriptorParticipant::rotated(leg),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1514,6 +1732,101 @@ mod tests {
         // Independent re-verification against the carried commitments.
         dregg_sdk::verify_full_turn(&proven.proof, proven.old_commit, proven.new_commit)
             .expect("carried proof must re-verify against carried commitments");
+    }
+
+    /// **RETENTION ROUND-TRIP (the REAL IVC-compression seam).** A committed
+    /// transfer turn is proven exactly the commit path's way; the wrap-input
+    /// `FinalizedTurn` is then minted anchor-tied to that proof
+    /// ([`mint_and_encode_finalized_turn`]), decoded back from its persisted
+    /// envelope, and the rebuilt leg re-verifies STANDALONE through the chain
+    /// prover's host admission (`verify_descriptor_participant`) — the same gate
+    /// `prove_turn_chain_recursive` runs on every retained turn before folding.
+    /// Fail-closed polarity: a forged proven anchor is REFUSED at mint (nothing
+    /// retained — the tool then fails closed for that turn).
+    #[test]
+    fn retained_finalized_turn_round_trips_and_readmits() {
+        let bob = CellId::from_bytes([0xB3; 32]);
+        let pre_balance: u64 = 1000;
+        let pre_nonce: u64 = 0;
+        let before_cell = dregg_cell::Cell::with_balance([0xA7; 32], [0u8; 32], pre_balance as i64);
+        let alice = before_cell.id();
+        let amount: u64 = 25;
+        let mut after_cell = before_cell.clone();
+        after_cell.state.set_balance((pre_balance - amount) as i64);
+        let effects = vec![dregg_turn::Effect::Transfer {
+            from: alice,
+            to: bob,
+            amount,
+        }];
+        let turn_hash = [0x33u8; 32];
+        let receipt_hashes = [[0x11u8; 32]];
+        let nullifier_root = dregg_turn::rotation_witness::empty_nullifier_root_8();
+        let commitments_root = dregg_turn::rotation_witness::empty_commitments_root_8();
+
+        let rotation = rotation_witness_for_self_sovereign_with_root(
+            pre_balance,
+            pre_nonce,
+            &before_cell,
+            &after_cell,
+            &receipt_hashes,
+            &effects,
+            &nullifier_root,
+            &commitments_root,
+        );
+        let proven = prove_and_verify_finalized_turn(
+            &alice,
+            pre_balance,
+            pre_nonce,
+            &effects,
+            turn_hash,
+            rotation,
+        )
+        .expect("finalized turn should prove and self-verify");
+
+        // The commit-path retention mint: anchor-tied to the served proof's commits.
+        let bytes = mint_and_encode_finalized_turn(
+            &alice,
+            pre_balance,
+            pre_nonce,
+            &effects,
+            &before_cell,
+            &after_cell,
+            &receipt_hashes,
+            &nullifier_root,
+            &commitments_root,
+            proven.old_commit,
+            proven.new_commit,
+        )
+        .expect("retention mint must bind the REAL turn context to the served proof's anchors");
+
+        // Round-trip: decode + host-admission re-verify (the fold's per-turn gate).
+        let turn = decode_retained_finalized_turn(&bytes).expect("retained turn decodes");
+        dregg_circuit_prove::joint_turn_aggregation::verify_descriptor_participant(
+            &turn.participant,
+        )
+        .expect("rebuilt leg must re-verify standalone against its rebuilt descriptor");
+
+        // Fail-closed polarity: an anchor that does not match the served proof is
+        // REFUSED at mint — a mismatched context can never be retained.
+        let mut bad_new = proven.new_commit;
+        bad_new[0] = BabyBear::new(bad_new[0].as_u32().wrapping_add(1));
+        assert!(
+            mint_and_encode_finalized_turn(
+                &alice,
+                pre_balance,
+                pre_nonce,
+                &effects,
+                &before_cell,
+                &after_cell,
+                &receipt_hashes,
+                &nullifier_root,
+                &commitments_root,
+                proven.old_commit,
+                bad_new,
+            )
+            .is_err(),
+            "a mint whose anchors do not match the served proof must be REFUSED"
+        );
     }
 
     /// ANTI-GHOST: a turn whose post-state commitment is FORGED (off by one
@@ -2755,18 +3068,19 @@ mod tests {
         (receipt, agent_id, pre_cap_root, effects)
     }
 
-    /// A capability-gated turn whose effect is the actor's OWN outgoing TRANSFER — the shape that
-    /// ROTATES (the transfer R24 descriptor models the nonce tick; SetField's does NOT — see the
-    /// seam note on the builder). The agent gates its OWN `send` at the Signature tier and holds a
+    /// A capability-gated turn whose effect is the actor's OWN outgoing TRANSFER — a shape that
+    /// ROTATES (the transfer R24 descriptor models the nonce tick, as SetField's now does too since
+    /// the nonce-tick seam closed — see the builder note above). The agent gates its OWN `send` at
+    /// the Signature tier and holds a
     /// self-breadstuff-cap (restricted to EXACTLY Transfer) to satisfy it; the action transfers
     /// `amount` to a recipient. The agent's Effect-VM projection (`convert_effects_to_vm(agent, …)`)
     /// is then `[Transfer{direction:1}]` — a NON-EMPTY rotatable cohort transition.
     ///
     /// (The cross-cell fixture `run_breadstuff_gated_turn` — a SetField on a DIFFERENT cell — yields
     /// an EMPTY actor projection, a no-op actor transition the v1 leg proves but the rotated prover
-    /// refuses; and a SELF-SetField would tick the nonce against the broken `setFieldVmDescriptor2-*R24`
-    /// nonce-passthrough gate. So this self-Transfer shape is what faithfully exercises the rotated
-    /// capability leg.)
+    /// refuses; a SELF-SetField now ALSO rotates — its `setFieldVmDescriptor2-*R24` nonce-tick gate is
+    /// closed (see the seam-closed note above) — so a self-Transfer is simply the concrete rotatable
+    /// self-shape this fixture uses to exercise the rotated capability leg.)
     ///
     /// Returns the receipt, agent id, the agent's CANONICAL pre-state cap root, the turn's effects,
     /// and the agent's REAL before/after `Cell` (the `full_turn_pre_cell` analog + the post-exec
