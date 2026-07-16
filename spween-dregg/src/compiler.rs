@@ -8,7 +8,7 @@
 //! choice-turn's post-state, so a client cannot present an ineligible choice as
 //! taken (SPWEEN-ON-DREGG §3, property 3).
 //!
-//! ## The slot layout
+//! ## The slot layout — and the WIDE PLANE past the 16th
 //!
 //! * slot [`PASSAGE_SLOT`] (0): the current passage index (the `RuntimeState`
 //!   control-flow position, made cell state). [`PASSAGE_ENDED`] marks a finished
@@ -16,6 +16,55 @@
 //! * slots `1..`: one per numeric/bool variable named in a condition or effect,
 //!   then one per `category.key` membership atom. Assignment is deterministic
 //!   (sorted names) so a re-compile of the same scene yields the same layout.
+//! * **keys [`SPILL_EXT_BASE`]`..`: the overflow.** The cell has 16 fixed registers
+//!   ([`STATE_SLOTS`]), so slot 0 + 15 named atoms fill it. A scene naming MORE does
+//!   NOT fail — the 16th and every later atom SPILLS to an **ext key**, an unbounded
+//!   `key >= STATE_SLOTS` that `Effect::SetField` routes into the cell's COMMITTED
+//!   `fields_map` (digested into `fields_root`, folded into the cell commitment). The
+//!   spill is a suffix of the same deterministic order, so the first 15 named atoms of
+//!   a wide scene land in exactly the registers they would have had, and a scene that
+//!   fits (`<= 15`) compiles BYTE-IDENTICALLY to before — no ext key, no new tooth.
+//!
+//! ### Resolve BY NAME, never by a guessed index
+//!
+//! [`CompiledStory::var_slots`] / [`CompiledStory::has_slots`] are the name→**key**
+//! mapping: a value `< STATE_SLOTS` is a fixed register, `>= STATE_SLOTS` is an ext
+//! key. Consumers MUST look a var up by name ([`CompiledStory::var_key`]) — a
+//! hardcoded index that happens to be right for a narrow scene points at the WRONG
+//! atom in a wide one (a prior lane found that naively repointing hardcoded indices
+//! INVERTS gates). [`CompiledStory::is_spilled`] answers "which plane is it on".
+//!
+//! ### What the ext plane costs (design against these — they are not hidden)
+//!
+//! * **O(n) per ext write.** `CellState::set_field_ext` rebuilds the ENTIRE
+//!   `fields_root` (sorted-Poseidon2 over every map entry) on every write — there is no
+//!   incremental cache (unlike the heap's `HeapTreeCache`). A register write is O(1).
+//!   This is why the first 15 atoms stay in registers: the fast plane is filled first.
+//! * **~31-bit per-value binding.** Each `fields_root` leaf folds its 32-byte value to
+//!   ONE ~31-bit BabyBear felt. The root is ~124-bit (8 felts) and the `fields_map`
+//!   holds the full 32 bytes the teeth read, but the per-value BINDING in the committed
+//!   root is the known ~31-bit umem boundary. A story var is a small counter, so the
+//!   projection ([`crate::value_to_u64`]) is well inside it — but the boundary is real.
+//! * **Executor-enforced, NOT in-circuit-proven.** The ext-plane atoms
+//!   (`HeapField`/`HeapFieldLteOther`) are evaluated by the host scalar evaluator
+//!   (`cell::program::eval`); the slot-caveat PI vector cannot express a heap key, so
+//!   they carry NO AIR teeth (`turn/src/executor/mod.rs`). A register `FieldGte` DOES
+//!   project into the circuit. Both are re-checked by the real executor on every turn —
+//!   which is exactly what an executor-refereed game needs — but a spilled gate must
+//!   NOT be described as in-circuit-proven.
+//!
+//! ### Same teeth on both planes
+//!
+//! Every gate a register var lowers to has an ext-plane equal, so a var that spills
+//! keeps its bite (`FieldGte`→`HeapField{Gte}`, `FieldLte`→`{Lte}`,
+//! `FieldEquals`→`{Equals}`, the clamp-companion `FieldDelta`→`{DeltaEquals}`,
+//! cross-var `FieldLteOther`→`HeapFieldLteOther`). The ext atoms are STRICTER in one
+//! way: on the heap, **absent ≠ present-zero** — a `HeapField` over an unwritten key
+//! REFUSES. A register is born present-zero, so to keep the two planes'
+//! semantics identical [`crate::WorldCell`] BIRTHS every compiled ext key at
+//! field-zero on deploy (the same setup write `seed_var` uses). Without that, an
+//! unseeded spilled var would refuse gates its register twin admits — a play-vs-replay
+//! split.
 //!
 //! ## The gate lowering (a condition → a post-state predicate)
 //!
@@ -66,7 +115,7 @@ use dregg_app_framework::{
     CellProgram, FieldElement, StateConstraint, TransitionCase, TransitionGuard, field_from_u64,
     symbol,
 };
-use dregg_cell::program::SimpleStateConstraint;
+use dregg_cell::program::{HeapAtom, SimpleStateConstraint};
 use spween::{
     CompareOp, Condition, ConditionClause, ConditionExpr, Effect, PassageContent, Scene, Value,
 };
@@ -83,6 +132,88 @@ pub const PASSAGE_ENDED: u64 = 0xFFFF_FFFF;
 /// The number of cell state slots available (mirrors `dregg_cell::state::STATE_SLOTS`).
 /// A heap-keyed write ([`WorldCell::apply_raw`]) targets an index `>= STATE_SLOTS`.
 pub const STATE_SLOTS: usize = 16;
+
+/// **The base ext key the compiler SPILLS a scene's 16th-and-beyond atom to.** Once
+/// the 16 fixed registers are full, [`compile_scene`] allocates `SPILL_EXT_BASE`,
+/// `SPILL_EXT_BASE + 1`, … — keys `>= STATE_SLOTS`, which `Effect::SetField` routes
+/// into the cell's committed `fields_map` / `fields_root` rather than the register
+/// file. Unbounded, so a scene's variable count is not a compile ceiling.
+///
+/// Keyed at `2^34` — ABOVE both reserved ext keys in play (`REFUSAL_AUDIT_EXT_KEY =
+/// 2^32` in `dregg_cell::state`, [`crate::DECISION_EXT_KEY`] `= 2^33`) and far above
+/// the small `STATE_SLOTS + n` keys an app's own heap collection uses via
+/// [`crate::WorldCell::apply_raw`] — so a spilled story var can never collide with a
+/// reserved key or with an application collection.
+///
+/// (The key is carried as `usize` through [`CompiledStory::var_slots`] and
+/// `Effect::SetField { index: usize }`, so the ext plane — this constant included —
+/// presumes a 64-bit target, exactly as the executor's `SetField` heap lane already
+/// does.)
+pub const SPILL_EXT_BASE: u64 = 0x0000_0004_0000_0000;
+
+/// The deterministic key allocator: fill the fast fixed registers first, then spill
+/// to the ext plane. See the module docs — the order is a SUFFIX split of the same
+/// sorted sequence, so a scene that fits gets exactly its old layout.
+struct KeyAlloc {
+    /// The next free register slot (`PASSAGE_SLOT + 1 ..= STATE_SLOTS`).
+    next_slot: usize,
+    /// How many ext keys have been handed out.
+    spilled: u64,
+}
+
+impl KeyAlloc {
+    fn new() -> Self {
+        KeyAlloc {
+            next_slot: PASSAGE_SLOT + 1,
+            spilled: 0,
+        }
+    }
+
+    /// The next key: a register while any remain, then an ext key.
+    fn take(&mut self) -> usize {
+        if self.next_slot < STATE_SLOTS {
+            let k = self.next_slot;
+            self.next_slot += 1;
+            k
+        } else {
+            let k = SPILL_EXT_BASE + self.spilled;
+            self.spilled += 1;
+            k as usize
+        }
+    }
+}
+
+/// Which plane a compiled key lives on — the one place the register/ext split is
+/// decided, so every lowering below reads it the same way.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Plane {
+    /// A fixed register slot: the fast, in-circuit-projected plane.
+    Slot(u8),
+    /// An ext key in the committed `fields_map`: unbounded, host-evaluated.
+    Ext(u64),
+}
+
+/// The plane a compiled key names (the SAME `< STATE_SLOTS` test the executor's
+/// `apply_set_field` and `CellState::get_field_ext` use to route a key).
+fn plane_of(key: usize) -> Plane {
+    if key < STATE_SLOTS {
+        Plane::Slot(key as u8)
+    } else {
+        Plane::Ext(key as u64)
+    }
+}
+
+impl Plane {
+    /// The uniform u64 key — what `CellState::get_field_ext` takes on EITHER plane
+    /// (`< STATE_SLOTS` resolves to the register file). Lets a cross-plane relation
+    /// (`HeapFieldLteOther`) name a register operand and an ext operand alike.
+    fn key(self) -> u64 {
+        match self {
+            Plane::Slot(i) => i as u64,
+            Plane::Ext(k) => k,
+        }
+    }
+}
 
 /// The dispatch method a choice's turn presents — the key its executor-enforced
 /// gate case is guarded by. Used by BOTH the compiler (to name the case) and the
@@ -128,10 +259,15 @@ pub const HEAP_HATCH_METHOD: &str = "spween/heap";
 pub struct CompiledStory {
     /// The scene id (drives the deterministic world-cell identity).
     pub scene_id: String,
-    /// Variable name → cell slot (numeric/bool projection). Every variable named
-    /// in a condition or a Set/Modify effect gets a slot.
+    /// **Variable name → cell FIELD KEY** (numeric/bool projection). Every variable
+    /// named in a condition or a Set/Modify effect gets a key: a fixed register
+    /// (`< STATE_SLOTS`) while any remain, then an ext key
+    /// (`>= `[`SPILL_EXT_BASE`], the committed `fields_map`). Resolve BY NAME
+    /// ([`Self::var_key`]) — a hardcoded index is wrong the moment a scene widens.
     pub var_slots: BTreeMap<String, usize>,
-    /// `(category, key)` membership atom → cell slot (1 = present, 0 = absent).
+    /// `(category, key)` membership atom → cell FIELD KEY (1 = present, 0 = absent).
+    /// Same two planes as [`Self::var_slots`]; membership is allocated after the vars,
+    /// so it is what spills first.
     pub has_slots: BTreeMap<(String, String), usize>,
     /// Passage name → index (matches `spween::Runtime`'s enumerate order).
     pub passage_index: BTreeMap<String, usize>,
@@ -143,10 +279,66 @@ pub struct CompiledStory {
     pub fully_gated: BTreeMap<String, bool>,
 }
 
+impl CompiledStory {
+    /// **The name→key resolution.** The cell field key holding `name`'s numeric
+    /// projection, or `None` if the scene never named it. THE way to reach a var: a
+    /// guessed index is right only for the layout you guessed against.
+    pub fn var_key(&self, name: &str) -> Option<u64> {
+        self.var_slots.get(name).map(|&k| k as u64)
+    }
+
+    /// The cell field key holding the `category.key` membership atom.
+    pub fn has_key(&self, category: &str, key: &str) -> Option<u64> {
+        self.has_slots
+            .get(&(category.to_string(), key.to_string()))
+            .map(|&k| k as u64)
+    }
+
+    /// Whether `name` SPILLED to the ext plane (the committed `fields_map`) rather
+    /// than a fixed register — i.e. whether its gates are host-evaluated
+    /// `HeapField` atoms and its writes pay the O(n) `fields_root` rebuild. `false`
+    /// for a register var AND for a name the scene never used.
+    pub fn is_spilled(&self, name: &str) -> bool {
+        self.var_key(name).is_some_and(|k| k >= STATE_SLOTS as u64)
+    }
+
+    /// Every ext key this story compiled to (vars + membership), ascending and
+    /// deduplicated. The keys [`crate::WorldCell`] births at field-zero on deploy,
+    /// freezes against the heap hatch, and folds into its replay snapshot. Empty for
+    /// a scene that fits the 16 registers — the whole ext plane is then inert.
+    pub fn ext_keys(&self) -> Vec<u64> {
+        ext_keys_of(&self.var_slots, &self.has_slots)
+    }
+}
+
+/// The ascending, deduplicated ext keys of a layout — the shared body of
+/// [`CompiledStory::ext_keys`] and the hatch-confinement teeth [`compile_scene`]
+/// emits (which needs them before the story exists).
+fn ext_keys_of(
+    var_slots: &BTreeMap<String, usize>,
+    has_slots: &BTreeMap<(String, String), usize>,
+) -> Vec<u64> {
+    let mut keys: Vec<u64> = var_slots
+        .values()
+        .chain(has_slots.values())
+        .filter(|&&k| k >= STATE_SLOTS)
+        .map(|&k| k as u64)
+        .collect();
+    keys.sort_unstable();
+    keys.dedup();
+    keys
+}
+
 /// Why a scene could not be compiled to a world-cell.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CompileError {
     /// The scene needs more variable/membership slots than the cell has.
+    ///
+    /// **No longer produced by [`compile_scene`].** The 16-register budget was never
+    /// the cell's capacity — it is the fast plane's size. A scene past it now SPILLS
+    /// to the ext plane ([`SPILL_EXT_BASE`]) instead of failing, so there is no
+    /// variable-count ceiling to report. The variant is retained so an exhaustive
+    /// match on this public enum keeps compiling.
     TooManySlots { needed: usize, available: usize },
     /// A choice navigates to a passage that does not exist in the scene.
     UnknownTarget { target: String },
@@ -208,24 +400,20 @@ pub fn compile_scene(scene: &Scene) -> Result<CompiledStory, CompileError> {
         }
     }
 
-    // Deterministic slot assignment: passage slot 0, then vars, then membership.
+    // Deterministic key assignment: passage slot 0, then vars, then membership — the
+    // fast fixed registers first, then the ext plane. The `BTreeSet` iteration order
+    // (alphabetical) is LOAD-BEARING: it is what makes a re-compile of the same scene
+    // reproduce the same layout, which the deterministic-world / replay teeth lean on.
+    // The wide plane changes only WHERE the sequence lands past the 15th atom, never
+    // the sequence — so a scene that fits gets byte-identically its old layout.
     let mut var_slots = BTreeMap::new();
     let mut has_slots = BTreeMap::new();
-    let mut next = PASSAGE_SLOT + 1;
-    let total = var_names.len() + has_atoms.len();
-    if next + total > STATE_SLOTS {
-        return Err(CompileError::TooManySlots {
-            needed: next + total,
-            available: STATE_SLOTS,
-        });
-    }
+    let mut alloc = KeyAlloc::new();
     for name in &var_names {
-        var_slots.insert(name.clone(), next);
-        next += 1;
+        var_slots.insert(name.clone(), alloc.take());
     }
     for atom in &has_atoms {
-        has_slots.insert(atom.clone(), next);
-        next += 1;
+        has_slots.insert(atom.clone(), alloc.take());
     }
 
     // One method-guarded case per choice (default-deny requires every choice-turn's
@@ -278,13 +466,34 @@ pub fn compile_scene(scene: &Scene) -> Result<CompiledStory, CompileError> {
     // every register slot, confining the hatch to the committed heap (keys
     // `>= STATE_SLOTS`); see [`HEAP_HATCH_METHOD`] for why this is a reserved `MethodIs`
     // case and not an `Always` / `EffectKindIs` catch-all.
+    let mut hatch: Vec<StateConstraint> = (0..STATE_SLOTS)
+        .map(|index| StateConstraint::Immutable { index: index as u8 })
+        .collect();
+    // ...AND freeze every key the story SPILLED there. The register freeze alone used
+    // to confine the hatch completely, because no story state lived on the heap. With
+    // the wide plane it does: without this, a wide scene's `gold` would be a key the
+    // hatch — a method any capability-holder can present — could overwrite at will,
+    // routing around every gate. That would be a confinement hole OPENED by spilling,
+    // so the confinement widens with the story: the hatch reaches the heap keys the
+    // story does NOT own, exactly as before, and nothing else.
+    //
+    // `HeapAtom::Immutable` is "first write free (absent old), then pinned" — and
+    // `WorldCell` births every compiled ext key at field-zero on deploy, so the old is
+    // always present and the pin always bites. (If a caller reached the evaluator with
+    // no old state at all, the heap atom's absent-old arm would admit — but the
+    // register `Immutable` teeth in this SAME case surface
+    // `TransitionCheckRequiresOldState` there, so the case still fails closed.)
+    for key in ext_keys_of(&var_slots, &has_slots) {
+        hatch.push(StateConstraint::HeapField {
+            key,
+            atom: HeapAtom::Immutable,
+        });
+    }
     cases.push(TransitionCase {
         guard: TransitionGuard::MethodIs {
             method: symbol(HEAP_HATCH_METHOD),
         },
-        constraints: (0..STATE_SLOTS)
-            .map(|index| StateConstraint::Immutable { index: index as u8 })
-            .collect(),
+        constraints: hatch,
     });
 
     Ok(CompiledStory {
@@ -461,35 +670,40 @@ fn lower_clause(
 ) -> Option<Vec<StateConstraint>> {
     match clause {
         ConditionClause::Compare(c) => {
-            let &slot = var_slots.get(c.var.as_str())?;
-            // VAR-OP-VAR (`{ gold >= "$price" }`): compare two cell slots, not a slot to
-            // a literal. Lowers to a cross-slot [`StateConstraint::FieldLteOther`] tooth
-            // the executor re-checks — a real cross-variable gate, not a handler courtesy.
+            let &key = var_slots.get(c.var.as_str())?;
+            let p = plane_of(key);
+            // VAR-OP-VAR (`{ gold >= "$price" }`): compare two cell fields, not a field
+            // to a literal. Lowers to a cross-field tooth the executor re-checks — a
+            // real cross-variable gate, not a handler courtesy.
             if let Some(rname) = var_ref(&c.value) {
-                let &rslot = var_slots.get(rname)?;
-                return cross_var_teeth(
-                    slot as u8,
-                    rslot as u8,
-                    c.op,
-                    effects,
-                    c.var.as_str(),
-                    rname,
-                );
+                let &rkey = var_slots.get(rname)?;
+                return cross_var_teeth(p, plane_of(rkey), c.op, effects, c.var.as_str(), rname);
             }
             let base = numeric_value(&c.value)?;
             let d = match delta_for(effects, c.var.as_str()) {
                 Delta::Add(n) => n,
                 Delta::Overwritten => return None,
             };
-            compare_teeth(slot as u8, c.op, base, d)
+            compare_teeth(p, c.op, base, d)
         }
         ConditionClause::Has(h) => {
-            let &slot = has_slots.get(&(h.category.to_string(), h.key.to_string()))?;
-            // Membership: the slot must read 1 in the post-state (choices do not
-            // mutate membership slots in v0).
-            Some(vec![StateConstraint::FieldEquals {
-                index: slot as u8,
-                value: field_from_u64(1),
+            let &key = has_slots.get(&(h.category.to_string(), h.key.to_string()))?;
+            // Membership: the field must read 1 in the post-state (choices do not
+            // mutate membership fields in v0). On the ext plane the equality is a
+            // `HeapField{Equals}`, which ALSO refuses an absent key — but a compiled
+            // ext key is born at field-zero on deploy, so "absent" never arises and
+            // the tooth is the exact register twin: present-and-1 admits, 0 refuses.
+            Some(vec![match plane_of(key) {
+                Plane::Slot(index) => StateConstraint::FieldEquals {
+                    index,
+                    value: field_from_u64(1),
+                },
+                Plane::Ext(key) => StateConstraint::HeapField {
+                    key,
+                    atom: HeapAtom::Equals {
+                        value: field_from_u64(1),
+                    },
+                },
             }])
         }
         // A negated atom lowers via a single-variant AnyOf wrapping a Simple::Not.
@@ -519,15 +733,29 @@ fn lower_clause(
 /// would underflow lands below the threshold and is caught by the comparison itself)
 /// — no companion, so a case whose delta is overridden at runtime (e.g. dice combat
 /// reusing an `{hp>=21} ~ hp-=20` case with a *rolled* hp delta) is not over-pinned.
-fn compare_teeth(slot: u8, op: CompareOp, base: i64, d: i64) -> Option<Vec<StateConstraint>> {
-    let cmp = compare_constraint(slot, op, base, d)?;
+/// On the EXT plane the companion is `HeapAtom::DeltaEquals { d }` — the exact-delta
+/// twin of `FieldDelta`, and the SAME tooth: it requires `new[key] - old[key] == d` as
+/// a signed delta with BOTH sides present, so the identical clamped underflow
+/// (`{gold>=50} ~ gold-=50` on a purse of 10 landing `post = 0`, `Δ = -10 ≠ -50`) is
+/// REFUSED. It is stricter than the register form in the direction that costs an
+/// attacker nothing honest: an absent key refuses rather than reading zero.
+fn compare_teeth(p: Plane, op: CompareOp, base: i64, d: i64) -> Option<Vec<StateConstraint>> {
+    let cmp = compare_constraint(p, op, base, d)?;
     let mut teeth = vec![cmp];
     if lift_defeated_by_clamp(op, base, d) {
-        teeth.push(StateConstraint::FieldDelta {
-            index: slot,
-            // `d as u64` is the two's-complement additive inverse: `old + (2^64−|d|)
-            // == old − |d|` mod 2^64 under the executor's wrapping `field_add`.
-            delta: field_from_u64(d as u64),
+        teeth.push(match p {
+            Plane::Slot(index) => StateConstraint::FieldDelta {
+                index,
+                // `d as u64` is the two's-complement additive inverse: `old + (2^64−|d|)
+                // == old − |d|` mod 2^64 under the executor's wrapping `field_add`.
+                delta: field_from_u64(d as u64),
+            },
+            // The heap atom takes the SIGNED delta directly (`field_delta_i128`), so no
+            // two's-complement encoding is needed on this plane.
+            Plane::Ext(key) => StateConstraint::HeapField {
+                key,
+                atom: HeapAtom::DeltaEquals { d },
+            },
         });
     }
     Some(teeth)
@@ -586,9 +814,18 @@ fn lift_defeated_by_clamp(op: CompareOp, base: i64, d: i64) -> bool {
 ///
 /// `!=` has no single cross-slot `<=` form and stays handler-only (mirrors the literal
 /// [`compare_constraint`] `Ne` case).
+///
+/// ## Across the planes
+///
+/// When BOTH operands are registers this is [`StateConstraint::FieldLteOther`],
+/// unchanged. When EITHER spilled it is [`StateConstraint::HeapFieldLteOther`] — the
+/// heap-keyed twin, whose operands are read through `CellState::get_field_ext`, which
+/// resolves a key `< STATE_SLOTS` to the register file. So a MIXED pair (a register
+/// `gold` against a spilled `price`) is one tooth, not a lowering gap: the same
+/// `new[a] <= new[b] + delta` relation, over two keys on whichever planes they landed.
 fn cross_var_teeth(
-    gslot: u8,
-    rslot: u8,
+    gp: Plane,
+    rp: Plane,
     op: CompareOp,
     effects: &[Effect],
     gname: &str,
@@ -606,24 +843,32 @@ fn cross_var_teeth(
     if dg < 0 || dr < 0 {
         return None;
     }
-    // `FieldLteOther { index, other, delta }` ⟺ `new[index] <= new[other] + delta`.
-    let lte = |index: u8, other: u8, delta: i64| StateConstraint::FieldLteOther {
-        index,
-        other,
-        delta,
+    // `new[a] <= new[b] + delta` — the cross-REGISTER `FieldLteOther` when both
+    // operands are registers (byte-identical to before), else its cross-KEY heap twin.
+    let lte = |a: Plane, b: Plane, delta: i64| match (a, b) {
+        (Plane::Slot(index), Plane::Slot(other)) => StateConstraint::FieldLteOther {
+            index,
+            other,
+            delta,
+        },
+        _ => StateConstraint::HeapFieldLteOther {
+            key: a.key(),
+            other_key: b.key(),
+            delta,
+        },
     };
     Some(match op {
         // gvar >= rvar  ⟺  new[rvar] <= new[gvar] + (dr − dg)
-        CompareOp::Ge => vec![lte(rslot, gslot, dr - dg)],
+        CompareOp::Ge => vec![lte(rp, gp, dr - dg)],
         // gvar <= rvar  ⟺  new[gvar] <= new[rvar] + (dg − dr)
-        CompareOp::Le => vec![lte(gslot, rslot, dg - dr)],
+        CompareOp::Le => vec![lte(gp, rp, dg - dr)],
         // gvar >  rvar  ⟺  gvar ≥ rvar+1  ⟺  new[rvar] <= new[gvar] + (dr − dg) − 1
-        CompareOp::Gt => vec![lte(rslot, gslot, dr - dg - 1)],
+        CompareOp::Gt => vec![lte(rp, gp, dr - dg - 1)],
         // gvar <  rvar  ⟺  gvar+1 ≤ rvar  ⟺  new[gvar] <= new[rvar] + (dg − dr) − 1
-        CompareOp::Lt => vec![lte(gslot, rslot, dg - dr - 1)],
+        CompareOp::Lt => vec![lte(gp, rp, dg - dr - 1)],
         // gvar == rvar  ⟺  the pair of `<=` bounds (each direction).
-        CompareOp::Eq => vec![lte(gslot, rslot, dg - dr), lte(rslot, gslot, dr - dg)],
-        // `!=` has no single cross-slot `<=` form — leave to the handler gate.
+        CompareOp::Eq => vec![lte(gp, rp, dg - dr), lte(rp, gp, dr - dg)],
+        // `!=` has no single cross-field `<=` form — leave to the handler gate.
         CompareOp::Ne => return None,
     })
 }
@@ -652,7 +897,7 @@ fn simple_of_clause(
     use SimpleStateConstraint as S;
     match clause {
         ConditionClause::Compare(c) => {
-            let &slot = var_slots.get(c.var.as_str())?;
+            let &key = var_slots.get(c.var.as_str())?;
             let base = numeric_value(&c.value)?;
             let d = match delta_for(effects, c.var.as_str()) {
                 Delta::Add(n) => n,
@@ -667,13 +912,25 @@ fn simple_of_clause(
             if lift_defeated_by_clamp(c.op, base, d) {
                 return None;
             }
-            simple_compare(slot as u8, c.op, base, d)
+            simple_compare(plane_of(key), c.op, base, d)
         }
         ConditionClause::Has(h) => {
-            let &slot = has_slots.get(&(h.category.to_string(), h.key.to_string()))?;
-            Some(S::FieldEquals {
-                index: slot as u8,
-                value: field_from_u64(1),
+            let &key = has_slots.get(&(h.category.to_string(), h.key.to_string()))?;
+            // `SimpleStateConstraint::HeapField` is the ext twin INSIDE the simple
+            // fragment (same evaluator arm as the top-level `StateConstraint::HeapField`),
+            // so a spilled membership atom still composes under `AnyOf` / `Not` — the
+            // disjunctive/negated shapes are not a lowering gap on the wide plane.
+            Some(match plane_of(key) {
+                Plane::Slot(index) => S::FieldEquals {
+                    index,
+                    value: field_from_u64(1),
+                },
+                Plane::Ext(key) => S::HeapField {
+                    key,
+                    atom: HeapAtom::Equals {
+                        value: field_from_u64(1),
+                    },
+                },
             })
         }
         ConditionClause::Not(inner) => {
@@ -692,34 +949,83 @@ fn numeric_value(v: &Value) -> Option<i64> {
     }
 }
 
+/// The shifted threshold a lifted comparison bounds against: `base + d`, floored at
+/// zero (the field lane is unsigned). Shared by every emitter below so both planes
+/// bound against the SAME number.
+fn thr(t: i64) -> FieldElement {
+    field_from_u64(t.max(0) as u64)
+}
+
+/// The EXT-plane twin of [`compare_constraint`]'s register arms: `var op base`
+/// (pre-state) lifted to the post-state [`HeapAtom`] over the var's ext key, under the
+/// choice's net delta `d`. Arm-for-arm the same lift, same shifted thresholds — the
+/// only difference is which plane reads the value (`Gte`/`Lte`/`Equals` compare the
+/// same big-endian 32 bytes as `FieldGte`/`FieldLte`/`FieldEquals`). This is the one
+/// place the register→ext gate translation is written, so the two planes cannot drift.
+fn compare_heap_atom(op: CompareOp, base: i64, d: i64) -> Option<HeapAtom> {
+    Some(match op {
+        // pre >= base  ⟺  post >= base + d
+        CompareOp::Ge => HeapAtom::Gte {
+            value: thr(base + d),
+        },
+        // pre >  base  ⟺  pre >= base+1  ⟺  post >= base+1+d
+        CompareOp::Gt => HeapAtom::Gte {
+            value: thr(base + 1 + d),
+        },
+        // pre <= base  ⟺  post <= base + d
+        CompareOp::Le => HeapAtom::Lte {
+            value: thr(base + d),
+        },
+        // pre <  base  ⟺  pre <= base-1  ⟺  post <= base-1+d
+        CompareOp::Lt => HeapAtom::Lte {
+            value: thr(base - 1 + d),
+        },
+        // pre == base  ⟺  post == base + d
+        CompareOp::Eq => HeapAtom::Equals {
+            value: thr(base + d),
+        },
+        // `!=` is not lowered on EITHER plane (mirrors `compare_constraint`).
+        CompareOp::Ne => return None,
+    })
+}
+
 /// `var op base` (pre-state) lifted to a post-state [`StateConstraint`] given the
-/// choice's net delta `d` on the var (`post = pre + d`).
-fn compare_constraint(slot: u8, op: CompareOp, base: i64, d: i64) -> Option<StateConstraint> {
-    let thr = |t: i64| field_from_u64(t.max(0) as u64);
+/// choice's net delta `d` on the var (`post = pre + d`), on whichever plane the var
+/// landed.
+fn compare_constraint(p: Plane, op: CompareOp, base: i64, d: i64) -> Option<StateConstraint> {
+    let index = match p {
+        Plane::Ext(key) => {
+            return Some(StateConstraint::HeapField {
+                key,
+                atom: compare_heap_atom(op, base, d)?,
+            });
+        }
+        Plane::Slot(index) => index,
+    };
     Some(match op {
         // pre >= base  ⟺  post >= base + d
         CompareOp::Ge => StateConstraint::FieldGte {
-            index: slot,
+            index,
             value: thr(base + d),
         },
         // pre >  base  ⟺  pre >= base+1  ⟺  post >= base+1+d
         CompareOp::Gt => StateConstraint::FieldGte {
-            index: slot,
+            index,
             value: thr(base + 1 + d),
         },
         // pre <= base  ⟺  post <= base + d
         CompareOp::Le => StateConstraint::FieldLte {
-            index: slot,
+            index,
             value: thr(base + d),
         },
         // pre <  base  ⟺  pre <= base-1  ⟺  post <= base-1+d
         CompareOp::Lt => StateConstraint::FieldLte {
-            index: slot,
+            index,
             value: thr(base - 1 + d),
         },
         // pre == base  ⟺  post == base + d
         CompareOp::Eq => StateConstraint::FieldEquals {
-            index: slot,
+            index,
             value: thr(base + d),
         },
         // `!=` has no single-atom post-state form here — leave to the handler gate.
@@ -727,28 +1033,36 @@ fn compare_constraint(slot: u8, op: CompareOp, base: i64, d: i64) -> Option<Stat
     })
 }
 
-fn simple_compare(slot: u8, op: CompareOp, base: i64, d: i64) -> Option<SimpleStateConstraint> {
+fn simple_compare(p: Plane, op: CompareOp, base: i64, d: i64) -> Option<SimpleStateConstraint> {
     use SimpleStateConstraint as S;
-    let thr = |t: i64| field_from_u64(t.max(0) as u64);
+    let index = match p {
+        Plane::Ext(key) => {
+            return Some(S::HeapField {
+                key,
+                atom: compare_heap_atom(op, base, d)?,
+            });
+        }
+        Plane::Slot(index) => index,
+    };
     Some(match op {
         CompareOp::Ge => S::FieldGte {
-            index: slot,
+            index,
             value: thr(base + d),
         },
         CompareOp::Gt => S::FieldGte {
-            index: slot,
+            index,
             value: thr(base + 1 + d),
         },
         CompareOp::Le => S::FieldLte {
-            index: slot,
+            index,
             value: thr(base + d),
         },
         CompareOp::Lt => S::FieldLte {
-            index: slot,
+            index,
             value: thr(base - 1 + d),
         },
         CompareOp::Eq => S::FieldEquals {
-            index: slot,
+            index,
             value: thr(base + d),
         },
         CompareOp::Ne => return None,

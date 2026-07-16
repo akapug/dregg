@@ -178,10 +178,26 @@ impl WorldCell {
         let cell = CellId::derive_raw(&owner, &token);
 
         let agent = cclerk.cell_id();
+        let ext_keys = story.ext_keys();
         exec.with_ledger_mut(|ledger| {
             if ledger.get(&cell).is_none() {
                 let world_cell = Cell::new(owner, token);
                 let _ = ledger.insert_cell(world_cell);
+            }
+            // BIRTH the wide plane. A fixed register is born present-at-field-zero; an
+            // ext key is born ABSENT, and every `HeapField` atom fails closed on an
+            // absent key — so an unseeded SPILLED var would REFUSE the very gates its
+            // register twin admits (`{ heals_used <= 0 }` on a never-written var), a
+            // play-vs-replay split. Writing field-zero once at deploy makes the two
+            // planes' initial state identical, so spilling is invisible to a scene's
+            // semantics. Setup, not a turn — exactly how `seed_var` seeds a register.
+            // No-op for a scene that fits the 16 registers (`ext_keys` is empty).
+            if let Some(c) = ledger.get_mut(&cell) {
+                for &key in &ext_keys {
+                    if c.state.get_field_ext(key).is_none() {
+                        c.state.set_field_ext(key, field_from_u64(0));
+                    }
+                }
             }
             if let Some(agent_cell) = ledger.get_mut(&agent) {
                 agent_cell.capabilities.grant(cell, AuthRequired::Signature);
@@ -220,32 +236,29 @@ impl WorldCell {
         &self.story
     }
 
-    /// Seed a variable's pre-play value: write the cell slot directly (setup, not a
+    /// Seed a variable's pre-play value: write the cell field directly (setup, not a
     /// turn — mirrors how flagship apps seed cell config before the game runs) AND
     /// record the true `Value` for the stock-runtime overlay. Panics-free: a var with
-    /// no compiled slot is recorded in the overlay only.
+    /// no compiled key is recorded in the overlay only. `set_field_ext` routes by the
+    /// key, so a SPILLED var seeds through the identical call.
     pub fn seed_var(&mut self, name: &str, value: Value) {
-        if let Some(&slot) = self.story.var_slots.get(name) {
+        if let Some(key) = self.story.var_key(name) {
             let f = value_to_field(&value);
             self.exec.with_ledger_mut(|ledger| {
                 if let Some(c) = ledger.get_mut(&self.cell) {
-                    c.state.set_field(slot, f);
+                    c.state.set_field_ext(key, f);
                 }
             });
         }
         self.seed_vars.insert(name.to_string(), value);
     }
 
-    /// Seed a membership atom (`category.key`) as present: write its slot to 1.
+    /// Seed a membership atom (`category.key`) as present: write its field to 1.
     pub fn seed_membership(&mut self, category: &str, key: &str) {
-        if let Some(&slot) = self
-            .story
-            .has_slots
-            .get(&(category.to_string(), key.to_string()))
-        {
+        if let Some(k) = self.story.has_key(category, key) {
             self.exec.with_ledger_mut(|ledger| {
                 if let Some(c) = ledger.get_mut(&self.cell) {
-                    c.state.set_field(slot, field_from_u64(1));
+                    c.state.set_field_ext(k, field_from_u64(1));
                 }
             });
         }
@@ -254,21 +267,19 @@ impl WorldCell {
     }
 
     /// Read a variable's current numeric projection off the committed cell state.
+    /// Resolves BY NAME through the compiled layout, so it reads a register var and a
+    /// SPILLED one the same way.
     pub fn read_var(&self, name: &str) -> u64 {
-        match self.story.var_slots.get(name) {
-            Some(&slot) => self.read_slot(slot),
+        match self.story.var_key(name) {
+            Some(key) => self.read_key(key),
             None => 0,
         }
     }
 
     /// Read a membership atom off the committed cell state.
     pub fn read_membership(&self, category: &str, key: &str) -> bool {
-        match self
-            .story
-            .has_slots
-            .get(&(category.to_string(), key.to_string()))
-        {
-            Some(&slot) => self.read_slot(slot) != 0,
+        match self.story.has_key(category, key) {
+            Some(k) => self.read_key(k) != 0,
             None => false,
         }
     }
@@ -276,7 +287,7 @@ impl WorldCell {
     /// The current passage index off the committed cell state; `None` if the scene
     /// has ended.
     pub fn read_passage(&self) -> Option<usize> {
-        let p = self.read_slot(PASSAGE_SLOT);
+        let p = self.read_key(PASSAGE_SLOT as u64);
         if p == PASSAGE_ENDED {
             None
         } else {
@@ -284,21 +295,37 @@ impl WorldCell {
         }
     }
 
-    fn read_slot(&self, slot: usize) -> u64 {
+    /// Read one compiled field by its KEY, on either plane — `get_field_ext` resolves
+    /// `< STATE_SLOTS` to the register file and the rest to the committed `fields_map`.
+    /// (Indexing `state.fields[key]` here would panic on a spilled key; the whole read
+    /// path goes through the uniform accessor instead.)
+    fn read_key(&self, key: u64) -> u64 {
         self.exec
             .cell_state(self.cell)
-            .map(|s| field_to_u64(&s.fields[slot]))
+            .and_then(|s| s.get_field_ext(key))
+            .map(|f| field_to_u64(&f))
             .unwrap_or(0)
     }
 
-    /// The full committed slot vector of the world-cell (all state slots) — the
-    /// deterministic fingerprint the replay verifier compares (timestamp-independent,
-    /// unlike a receipt hash).
+    /// The committed state fingerprint of the world-cell — the deterministic value the
+    /// replay verifier compares (timestamp-independent, unlike a receipt hash): all 16
+    /// register slots, then every compiled EXT var's committed value in ascending key
+    /// order.
+    ///
+    /// The ext tail is what keeps replay honest on a wide scene: a spilled var lives in
+    /// `fields_map`, not `fields`, so a registers-only fingerprint would let a >16-var
+    /// playthrough diverge in its spilled state and still "reproduce". A scene that fits
+    /// the registers has no ext keys, so its snapshot is the same 16-element vector as
+    /// before — the `[PASSAGE_SLOT]` index and every existing comparison are unchanged.
     pub fn snapshot(&self) -> Vec<u64> {
-        match self.exec.cell_state(self.cell) {
-            Some(s) => s.fields.iter().map(field_to_u64).collect(),
-            None => Vec::new(),
+        let Some(s) = self.exec.cell_state(self.cell) else {
+            return Vec::new();
+        };
+        let mut out: Vec<u64> = s.fields.iter().map(field_to_u64).collect();
+        for key in self.story.ext_keys() {
+            out.push(s.get_field_ext(key).map(|f| field_to_u64(&f)).unwrap_or(0));
         }
+        out
     }
 
     /// **Apply a chosen `Choice` as ONE cap-bounded turn** — the world-cell binding's
@@ -364,22 +391,23 @@ impl WorldCell {
         let mut effects = Vec::new();
         // A local accumulator so multiple Modify effects on one var compose within
         // the single turn (each reads the running value, not stale committed state).
-        let mut local: BTreeMap<usize, u64> = BTreeMap::new();
+        // Keyed by the compiled KEY, so a spilled var accumulates identically.
+        let mut local: BTreeMap<u64, u64> = BTreeMap::new();
         for e in &choice.effects {
             match e {
                 spween::Effect::Set(s) => {
-                    if let Some(&slot) = self.story.var_slots.get(s.var.as_str()) {
+                    if let Some(key) = self.story.var_key(s.var.as_str()) {
                         let v = value_to_u64(&s.value);
-                        local.insert(slot, v);
-                        effects.push(set_field(self.cell, slot, field_from_u64(v)));
+                        local.insert(key, v);
+                        effects.push(set_field(self.cell, key as usize, field_from_u64(v)));
                     }
                 }
                 spween::Effect::Modify(m) => {
-                    if let Some(&slot) = self.story.var_slots.get(m.var.as_str()) {
-                        let cur = *local.get(&slot).unwrap_or(&self.read_slot(slot));
+                    if let Some(key) = self.story.var_key(m.var.as_str()) {
+                        let cur = *local.get(&key).unwrap_or(&self.read_key(key));
                         let nv = (cur as i64 + m.delta).max(0) as u64;
-                        local.insert(slot, nv);
-                        effects.push(set_field(self.cell, slot, field_from_u64(nv)));
+                        local.insert(key, nv);
+                        effects.push(set_field(self.cell, key as usize, field_from_u64(nv)));
                     }
                 }
                 spween::Effect::Call(c) => {
@@ -431,6 +459,25 @@ impl WorldCell {
             .cell_state(self.cell)
             .and_then(|s| s.get_field_ext(key))
             .map(|f| field_to_u64(&f))
+    }
+
+    /// **The committed root of the WIDE PLANE** — the cell's `fields_root`, the
+    /// sorted-Poseidon2 digest over every ext key in the committed `fields_map`, as
+    /// its canonical 32 wide bytes. This is the value that makes a spilled var real
+    /// state rather than a side note: it is folded into the cell's canonical state
+    /// commitment (v9), so a turn that moves a spilled var moves this root and the
+    /// receipt chain binds it — a retcon of a >16-var scene's overflow state breaks
+    /// the chain exactly as a register retcon does.
+    ///
+    /// Constant while no ext key is written (a scene that fits the 16 registers never
+    /// moves it). Every ext write rebuilds it in FULL — O(n) Poseidon over the whole
+    /// map, no incremental cache (the honest cost of the wide plane; the fast fixed
+    /// registers are filled first precisely because they do not pay it).
+    pub fn fields_root(&self) -> [u8; 32] {
+        self.exec
+            .cell_state(self.cell)
+            .map(|s| s.fields_root.to_bytes32())
+            .unwrap_or([0u8; 32])
     }
 
     /// Build, sign, and submit a turn on the world-cell under `method`.
@@ -510,6 +557,11 @@ impl EffectHandler for CellHandler {
         // admits it on the live turn — a play-vs-replay split that refuses an honest run
         // on `verify_by_replay`. A var with NO compiled slot (never touched by any
         // condition/effect) stays `Null`, as the stock in-memory handler would read it.
+        //
+        // This holds on BOTH planes: a SPILLED var is born at field-zero on deploy
+        // (`from_compiled`), precisely so `Int(0)` stays the value its ext-plane
+        // `HeapField` tooth compares against. An ext key left absent would instead
+        // REFUSE every gate — the same split, from the other side.
         match self.overlay.get(name) {
             Some(v) => v.clone(),
             None if self.story.var_slots.contains_key(name) => Value::Int(0),
@@ -518,10 +570,13 @@ impl EffectHandler for CellHandler {
     }
 
     fn set_var(&mut self, name: &str, value: Value) {
-        // Buffer the cell write (numeric projection) for the turn...
-        if let Some(&slot) = self.story.var_slots.get(name) {
+        // Buffer the cell write (numeric projection) for the turn. `Effect::SetField`
+        // routes on the key itself (`>= STATE_SLOTS` → the committed `fields_map`), so
+        // a SPILLED var is written by the identical effect — the wide plane costs the
+        // write path nothing but the O(n) `fields_root` rebuild the executor does.
+        if let Some(key) = self.story.var_key(name) {
             self.pending
-                .push(set_field(self.cell, slot, value_to_field(&value)));
+                .push(set_field(self.cell, key as usize, value_to_field(&value)));
         }
         // ...and update the read overlay so subsequent reads in this choice see it.
         self.overlay.insert(name.to_string(), value);

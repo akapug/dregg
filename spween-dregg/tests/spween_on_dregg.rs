@@ -4,9 +4,9 @@
 //! resolves a branch.
 
 use spween_dregg::{
-    CompiledStory, Driver, StepPos, StubVoteEngine, Value, VerifyBreak, WorldCell, WorldError,
-    compile_scene, parse, run_collective, value_to_u64, verify, verify_by_replay,
-    verify_chain_linkage,
+    CollectiveRound, CollectiveVerifyBreak, CompiledStory, Driver, StepPos, StubVoteEngine, Value,
+    VerifyBreak, VoteOption, WorldCell, WorldError, compile_scene, parse, run_collective,
+    value_to_u64, verify, verify_by_replay, verify_chain_linkage, verify_collective_certified,
 };
 
 /// A small branching quest exercising a numeric gate (`strength >= 5`), a membership
@@ -304,6 +304,117 @@ fn collective_vote_resolves_each_branch() {
     let playthrough = driver.playthrough();
     verify(deploy_strong(41), &s, &playthrough)
         .expect("the collectively-authored playthrough re-verifies");
+
+    // The certified-winner tooth: every world turn was BOUND to the crowd's certified
+    // winner (the applied choice equals the winner and the committed decision-slot
+    // commits to it).
+    verify_collective_certified(&rounds)
+        .expect("every collective step is bound to its certified winner");
+}
+
+/// **THE VOTE→BRANCH BINDING BITES — an operator who applies a DIFFERENT choice than
+/// the certified winner is CAUGHT.** The audit's #1 leak: with only the receipt chain +
+/// replay, an operator could resolve a poll to winner `W` yet advance the world by a
+/// different choice `X`, and the record still verified. Here the crowd certifies option
+/// 0 ("Force it open") at the gate, but the operator advances the world by option 1
+/// ("Look for a key") through the plain un-bound path. The chain + replay STILL pass (the
+/// recorded choice genuinely committed) — but `verify_collective_certified` catches the
+/// mismatch, so the leak is closed.
+#[test]
+fn applying_a_different_choice_than_the_certified_winner_is_caught() {
+    let s = scene();
+    let world = deploy_strong(43);
+    let mut driver = Driver::start(world, &s).expect("start");
+
+    // THE LEAK: the crowd certified option 0, but the operator advances by option 1 via
+    // the plain (un-bound) path — a legal move the executor admits, but NOT what the
+    // crowd chose. The bound decision-slot is left untouched.
+    let bypass = driver
+        .advance(1)
+        .expect("look-for-a-key is a legal move and commits");
+    assert_eq!(
+        bypass.decision_commitment, None,
+        "the un-bound advance pinned no certified-decision commitment"
+    );
+
+    // The receipt chain + replay STILL pass — the recorded choice really committed, so
+    // this alone never noticed the operator applied a branch the crowd did not certify.
+    verify(deploy_strong(43), &s, &driver.playthrough())
+        .expect("the chain + replay pass (the un-retconnable leak these two teeth miss)");
+
+    // The operator assembles the record CLAIMING the crowd certified option 0.
+    let options = vec![
+        VoteOption {
+            choice_index: 0,
+            label: "Force it open".into(),
+        },
+        VoteOption {
+            choice_index: 1,
+            label: "Look for a key".into(),
+        },
+    ];
+    let mut tally = std::collections::BTreeMap::new();
+    tally.insert("Force it open".to_string(), 3u64);
+    tally.insert("Look for a key".to_string(), 1u64);
+    let forged = CollectiveRound {
+        passage: "gate".into(),
+        options,
+        tally,
+        winning_option: 0,
+        winning_choice: 0,
+        step: bypass,
+    };
+
+    // The certified-winner tooth CATCHES it: applied choice 1 != the certified winner's
+    // choice 0.
+    match verify_collective_certified(&[forged]) {
+        Err(CollectiveVerifyBreak::AppliedChoiceMismatch {
+            round: 0,
+            applied: 1,
+            certified: 0,
+        }) => {}
+        other => panic!("the applied-vs-certified mismatch must be caught, got {other:?}"),
+    }
+}
+
+/// A subtler forge: the operator advances by the certified winner's choice, but STRIPS
+/// the decision binding (records the step as if it were a plain single-player advance —
+/// `decision_commitment = None`). `verify_collective_certified` still refuses: a
+/// collective step MUST carry the committed commitment of its certified winner.
+#[test]
+fn stripping_the_decision_binding_is_caught() {
+    let s = scene();
+    let world = deploy_strong(44);
+    let mut driver = Driver::start(world, &s).expect("start");
+    // Advance by option 0 (the certified winner) but through the plain path, so no
+    // decision commitment is pinned.
+    let stripped = driver.advance(0).expect("force the door commits");
+    assert_eq!(stripped.decision_commitment, None);
+
+    let options = vec![
+        VoteOption {
+            choice_index: 0,
+            label: "Force it open".into(),
+        },
+        VoteOption {
+            choice_index: 1,
+            label: "Look for a key".into(),
+        },
+    ];
+    let mut tally = std::collections::BTreeMap::new();
+    tally.insert("Force it open".to_string(), 3u64);
+    let round = CollectiveRound {
+        passage: "gate".into(),
+        options,
+        tally,
+        winning_option: 0,
+        winning_choice: 0,
+        step: stripped,
+    };
+    match verify_collective_certified(&[round]) {
+        Err(CollectiveVerifyBreak::DecisionBindingBroken { round: 0 }) => {}
+        other => panic!("a stripped decision binding must be caught, got {other:?}"),
+    }
 }
 
 /// The SAME branch loop, driven by the REAL cell-backed engine: every ballot and
@@ -342,6 +453,9 @@ fn collective_vote_resolves_with_the_real_engine() {
     // The crowd-authored (real-engine) playthrough is itself un-retconnable.
     verify(deploy_strong(51), &s, &driver.playthrough())
         .expect("the real-engine playthrough re-verifies");
+    // And every step is bound to the real engine's certified winner.
+    verify_collective_certified(&rounds)
+        .expect("every real-engine collective step is bound to its certified winner");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
