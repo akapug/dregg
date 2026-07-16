@@ -22,6 +22,9 @@ closure printed. All are `sorry`-free with axioms exactly `[propext, Classical.c
 |---|---|---|---|
 | `GgmCandidate.lean` | `ggm_tSdh_sound`, `card_winningPoints_le`, `ggm_bound_lt_one` | exit 0 | `[propext, Classical.choice, Quot.sound]` |
 | `GgmAdaptive.lean` (ADAPTIVE) | `adaptive_ggm_sound`, `runAux_congr_of_agree`, `realWinSet_subset`, `card_rootUnion_le`, `adaptive_generalizes_static` | exit 0 | `[propext, Classical.choice, Quot.sound]` |
+| `GgmRandomEncoding.lean` (QUADRATIC) | `rand_encoding_bound`, `card_pairRootUnion_le_two_mul`, `card_handlePolys_le`, `badSet_subset_pairRootUnion`, `rand_encoding_bound_srs` | exit 0 | `[propext, Classical.choice, Quot.sound]` |
+| `GgmDegreeInvariant.lean` (DEGREE, peer) | `degree_invariant_paired`, `degree_invariant_paired_uniform`, `flat_2D_bound_false`, `degree_invariant`, `degree_invariant_linComb` | exit 0 | `[propext, Classical.choice, Quot.sound]` |
+| `GgmArkLibTransport.lean` (TRANSPORT) | `groupWinSet_eq_realWinSet`, `tSdhCondition_iff_field`, `gpow_val_injective`, `fraction_bound_transports_to_group` | exit 0 | `[propext, Classical.choice, Quot.sound]` |
 | `AlgebraicTSdh.lean` (novel) | `algExperiment_le`, `alg_survives_attack`, `algExperiment_zeroPoly` (canary) | exit 0 | clean |
 | `RepairSurvives.lean` (extraction) | `binding_reduces_to_tSdh`, `repair_survives_attack`, `t_sdh_cond_of_two_valid_openings` | exit 0 | clean |
 | `KzgQDlogVacuity.lean` (qdlog) | `not_qDlogAssumption`, `qDlogExperiment_trapdoorAdversary`, `experiment_discriminates` (canary) | exit 0 | clean |
@@ -94,21 +97,44 @@ and it delivers a real `ε`.
   pairings, and equality tests — and bounds its success by `(fuel·Δ + (D+1))/(p−1)`, sorry-free,
   axioms `[propext, Classical.choice, Quot.sound]`. **The identical-until-bad hybrid is PROVEN by
   induction** (`runAux_congr_of_agree`), not assumed; `fuel = 0` recovers the static number exactly.
-  Two residuals remain (see PAPER §9.2), named not faked: (i) the *classical quadratic*
-  `~(q_G+D)²(D+1)/(p−1)` is Shoup's *random-encoding* model (free equality comparison → bad event over
-  all table pairs); our tighter **linear-in-queries** number is the honest bound for the model where
-  equality costs a query; (ii) the two degree facts enter as hypotheses (the SRS degree invariant,
-  same idiom as the static `degree_le` field), discharged at `fuel = 0` and structurally dischargeable
-  by a group-tagged degree-tracking oracle. The generic-group oracle + simulation lemma that **neither
-  Mathlib nor VCVio had** are now built from scratch in `GgmAdaptive.lean`.
+  Two residuals remain (see PAPER §9.2), named not faked, and **both narrowed** by the three new lemma
+  files: (i) the *classical quadratic* `~(q_G+D)²(D+1)/(p−1)` — Shoup's *random-encoding* model (free
+  equality comparison → bad event over all table pairs) — is now MECHANIZED at the counting level as
+  `GgmRandomEncoding.rand_encoding_bound : ε ≤ (C(n,2)·2D + (D+1))/(p−1)` with `n = fuel+D+4`, the
+  all-table-pairs bad event and the table-size bound both THEOREMS (`badSet_subset_pairRootUnion`,
+  `card_handlePolys_le`), **modulo** the whole-table degree hypothesis `hdeg_handles`; our tighter
+  linear-in-queries number remains the honest bound for the model where equality costs a query; (ii)
+  the degree facts still enter as hypotheses, but the SRS degree invariant is now proved
+  **structurally** — `GgmDegreeInvariant.degree_invariant_paired : 2D` under the two-sorted pairing
+  discipline, with the naive flat `2D` claim REFUTED (`flat_2D_bound_false`, `X⁴` at `D=1`). Crucially
+  that proof is a **PEER model** (`PairedOp`/`buildPaired`) that `GgmAdaptive.runAux` does not import, so
+  it does **not yet discharge** `hdeg_out`/`hdeg_pairs`/`hdeg_handles` — see the interlock verdict below.
+  The generic-group oracle + simulation lemma that **neither Mathlib nor VCVio had** are built from
+  scratch in `GgmAdaptive.lean`.
 
-- **(b) FIELD-LEVEL win predicate, group-faithfulness ARGUED.** The win condition is stated at the
-  field level (`f.eval τ = 1/(τ+c)`), not against ArkLib's actual group-level `tSdhExperiment`.
-  Its equivalence to the group t-SDH win rests on injectivity of `a ↦ g₁^{a.val}` in a
-  prime-order group — standard and cited (ArkLib's own `Algebra.lean` supplies it) but **argued,
-  not mechanized in this file.** `GgmCandidate.lean` is a self-contained model; it is **not wired
-  to ArkLib's `tSdhGame`/`bindingReduction`**. Connecting it is exactly the "reduction transport"
-  frontier.
+- **(b) FIELD-LEVEL win predicate — condition-level transport now MECHANIZED against real ArkLib;
+  `ProbComp` plumbing remains.** The win condition is stated at the field level (`f.eval τ = 1/(τ+c)`).
+  Its equivalence to ArkLib's group-level win is **no longer merely argued**:
+  `GgmArkLibTransport.groupWinSet_eq_realWinSet` / `tSdhCondition_iff_field` import ArkLib's **real**
+  `Groups.tSdhCondition` (restating nothing) and prove — via injectivity of `a ↦ g^{a.val}` in a
+  prime-order group, from ArkLib's own `gpow_div_eq` / `exists_zmod_power_of_generator` — that the
+  generic run's group-level winning-trapdoor set IS `GgmAdaptive.realWinSet`, so the bound transports
+  verbatim to the group side. What remains is the `OptionT ProbComp` / `StateT QueryCache` monad
+  threading (the `Strat → tSdhAdversary` embedding + `sampleNonzeroZMod` sampler `Pr = card/(p−1)`
+  semantics) and the separate re-typing of `bindingReduction`'s adversary as a `Strat` — probability
+  bookkeeping and reduction-plumbing, with the **condition provably identical**.
+
+**Interlock verdict (verified by reading, not taken on trust).** The three files are *designed* to
+interlock — `GgmRandomEncoding`'s `hdeg_handles` ↔ `GgmDegreeInvariant`'s structural `2D` ↔ the pairing
+discipline — but the interlock is **architectural, not mechanized**: `GgmDegreeInvariant` imports only
+`Mathlib`, references no adaptive-experiment object, and nothing imports it; there is no bridge lemma
+`runTable ↔ buildPaired`. So the degree bound is proved in a **peer model**, and the adaptive /
+random-encoding theorems **still carry their degree facts as undischarged hypotheses**. Honest tag: the
+degree invariant is proved *structurally as a peer* and refutes the naive flat claim — but it is **not**
+a discharge of the hypothesis in the experiment. Wiring the discipline into `runAux` (two-sorted handle
+table, or a `runTable ↔ buildPaired` bridge) is the one remaining item on that axis; and because
+`runAux`'s flat `Move.pair` admits nesting, `flat_2D_bound_false` shows `2D` is a genuine restriction the
+oracle must adopt, not a property it already has.
 
 Neither limit makes the bound a dodge — they scope *what class* and *at what level* the real
 number holds.
@@ -129,10 +155,15 @@ number holds.
 - **Adaptive numeric bound (explicit-oracle GGM) → `GgmAdaptive.lean` (MECHANIZED).** The
   generic-group oracle that was absent from Mathlib/VCVio is now built, and the adaptive `q`-query
   bound `(fuel·Δ + (D+1))/(p−1)` is proven sorry-free with the identical-until-bad hybrid mechanized
-  by induction. The classical *quadratic* Shoup (random-encoding) number and the field→group ArkLib
-  wiring are the two named residuals (PAPER §9.2). `AGM` and `qdlog-direct` correctly route their
-  numbers back through exactly this generic-group hardness — which `GgmAdaptive.lean` now discharges
-  for the static-and-adaptive explicit-oracle class.
+  by induction. Three follow-on lemma files (PAPER §9.1) narrow the residuals: `GgmRandomEncoding.lean`
+  mechanizes the classical **quadratic** Shoup random-encoding number `(C(n,2)·2D + (D+1))/(p−1)` at the
+  counting level (all-table-pairs bad event + table size, both THEOREMS; degree still a hypothesis);
+  `GgmDegreeInvariant.lean` proves the `2D` degree invariant **structurally under the pairing discipline**
+  and REFUTES the naive flat claim — but as a **peer model** not yet wired into the oracle, so the degree
+  hypotheses remain undischarged (see the interlock verdict, §2); `GgmArkLibTransport.lean` mechanizes the
+  **condition-level** field→group transport against ArkLib's real `tSdhCondition`, leaving only the
+  `ProbComp` monad threading. `AGM` and `qdlog-direct` correctly route their numbers back through exactly
+  this generic-group hardness.
 
 ---
 
@@ -172,8 +203,13 @@ worth having: it is the first sound, restricted-class numeric hardness statement
 2. **Adopt `GGM-static` as the mechanized numeric floor**, stated *precisely as the static
    fragment*, to discharge the single reduction obligation `extraction` isolates — for the static
    adversary class. Do not let it be read as the full adaptive number.
-3. **Name the full adaptive Shoup GGM as the frontier**, with its concrete missing primitive (the
-   generic-group oracle absent from Mathlib/VCVio), and the field-level→group-level reduction
-   transport as the connecting work.
+3. **Name the narrowed frontier precisely.** The generic-group oracle (once absent from Mathlib/VCVio),
+   the adaptive linear bound, the quadratic random-encoding counting bound, and the condition-level
+   field→group transport are all now MECHANIZED (PAPER §9.1). What remains, scoped: (a) **wire the
+   structural `2D` degree invariant into `runAux`** — it is proved only for a peer model
+   (`GgmDegreeInvariant`, not imported), so the Shoup adaptive/random-encoding theorems still carry the
+   degree facts as hypotheses (interlock verdict, §2); (b) **thread the `ProbComp` monad** to reach the
+   literal `tSdhExperiment` inequality (condition already provably identical); (c) re-type
+   `bindingReduction`'s adversary as a `Strat` so the binding reduction inherits the bound.
 4. **Present the q-DLOG-idiom vacuity and the AGM stub as evidence that the pattern is systemic** —
    the reason a sound restricted adversary class (not a renamed assumption) is the real fix.

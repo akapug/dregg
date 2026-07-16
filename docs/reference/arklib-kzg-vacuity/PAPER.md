@@ -735,44 +735,104 @@ non-vacuous* from *paper argument, frontier*.
   ≤ Δ) enter as explicit hypotheses — the SRS degree invariant, the same idiom as the static adversary's
   `degree_le` field — satisfied structurally by the faithful group-op discipline and discharged
   automatically at `fuel = 0`. Not yet wired to ArkLib's `tSdhExperiment` (§9.2). (`GgmAdaptive.lean`.)
+- **The quadratic random-encoding (Shoup) bound — all-pairs bad event + table-size THEOREM.**
+  `rand_encoding_bound` / `rand_encoding_bound_srs` (with `card_pairRootUnion_le`,
+  `card_pairRootUnion_le_two_mul`, `runAux_pairs_mem_runTable`, `card_handlePolys_le`,
+  `badSet_subset_pairRootUnion`) strengthens the adaptive bound from the per-*query* event to Shoup's
+  **global all-pairs** event `F` — some two formally-distinct handle polynomials collide at `τ`, the
+  free-comparison power the per-query bound omits. The success experiment is
+  `≤ (C(n,2)·2D + (D+1))/(p−1)`, **quadratic** in the handle-set size `n` — exactly Shoup's
+  `~(q_G+D)²·D/p` *random-encoding* shape — with `n = fuel + D + 4` at the SRS seeding
+  (`rand_encoding_bound_srs`). Two facts that were residuals in the prior draft of §9.2 are now
+  THEOREMS: (i) the bad event ranges over *all* handle-table pairs, via
+  `badSet ⊆ pairRootUnion(handlePolys)` (`badSet_subset_pairRootUnion`); (ii) the table size
+  `N ≤ seeds + fuel + 1` is proven by induction (`card_handlePolys_le` over `runTable_length_le`,
+  `runAux_pairs_mem_runTable`), **not assumed**. The all-pairs count is over UNORDERED pairs (re-indexed
+  through `Sym2`, paying `C(n,2)` not `n(n−1)`), and each difference degree is bounded by the MAX of the
+  two handle degrees (`natDegree_sub_le`), so a family of degree-≤2D handles pays `2D` per pair, never
+  `4D`. **Scope (honest):** the whole-table degree invariant enters as an explicit hypothesis
+  `hdeg_handles : ∀ q ∈ handlePolys, q.natDegree ≤ 2D` — it is **NOT discharged here** (see the
+  degree-invariant bullet below, §9.2, and the interlock note §9.4). The honest constant is `n = fuel +
+  D + 4`: seed count `D+3` (G₁: `1,X,…,X^D`; G₂: `1,X`) plus the zero/identity handle. Axioms
+  `[propext, Classical.choice, Quot.sound]`. (`GgmRandomEncoding.lean`.)
+- **The degree invariant, structural — under the pairing discipline; the naive flat claim REFUTED.**
+  `degree_invariant_paired` / `degree_invariant_paired_uniform` (with `degree_invariant_linComb`,
+  `degree_invariant`, `flat_2D_bound_false`) is the honest structural content behind the degree
+  hypotheses `hdeg_out` / `hdeg_pairs` / `hdeg_handles`. Three bounds, none assumed: (a)
+  `degree_invariant_linComb` — `B = D` with no products (the committed output is a G₁ handle; a linear
+  combination degrades to the MAX of its operands, `natDegree_add_le` + `natDegree_C_mul_le`); (b)
+  `degree_invariant` — `B = D·2^(#mul)` for a **flat** table with products, because a product SUMS
+  operand degrees (`natDegree_mul_le`) and can NEST, so each pairing at worst doubles the running bound;
+  (c) `degree_invariant_paired` — `B = 2D` is recovered *once the two-sorted pairing discipline is made
+  structural*: a G₁/Gₜ table where products draw operands from G₁ (degree ≤ D) and land in Gₜ
+  (degree ≤ 2D), never re-paired, so they never nest. **Refutation, PROVEN:** `flat_2D_bound_false`
+  shows the naive "flat table stays ≤ 2D once products are allowed" claim is FALSE —
+  `[seed, mul, mul]` at `D = 1` builds `X⁴` — so `2D` is *not* a property of the flat oracle; it holds
+  only under the discipline. **Scope (honest, load-bearing):** this is proved for a SEPARATE model
+  (`PairedOp` / `buildPaired`), a peer that `GgmAdaptive.runAux` does **not** import; it is **not yet a
+  discharge** of the adaptive experiment's degree hypotheses — see §9.2 and the interlock note §9.4.
+  Axioms `[propext, Classical.choice, Quot.sound]`. (`GgmDegreeInvariant.lean`.)
+- **The ArkLib condition transport — the win condition IS ArkLib's real `tSdhCondition`.**
+  `groupWinSet_eq_realWinSet` (with `gpow_val_injective`, `gpow_val_bijective`, `tSdhCondition_iff_field`,
+  `field_bound_transports_to_group`, `fraction_bound_transports_to_group`) imports ArkLib's **real**
+  `Groups.tSdhCondition` (restates nothing) and proves the field-level win predicate `f(τ) = 1/(τ+c)`
+  that `realWinSet` filters by is EQUIVALENT to the group-level `tSdhCondition (τ, c, g^{(f τ).val})`, via
+  injectivity of `a ↦ g^{a.val}` in a prime-order group (derived from ArkLib's own `gpow_div_eq`,
+  `zmod_eq_zero_of_gpow_eq_one`, `exists_zmod_power_of_generator`). Hence the group-level
+  winning-trapdoor set `groupWinSet g` **is** `GgmAdaptive.realWinSet`, and both the cardinality bound and
+  the `(…)/(p−1)` fraction transport verbatim to the group side. This mechanizes precisely what `Limit (b)`
+  of the prior draft flagged as ARGUED-not-mechanized: the field→group injectivity connecting the
+  self-contained model to ArkLib's condition. **Scope (honest):** the *condition* is proven identical;
+  threading it into the literal `tSdhExperiment` inequality still requires the `OptionT ProbComp` /
+  `StateT QueryCache` monad plumbing (the `Strat → tSdhAdversary` embedding and the `sampleNonzeroZMod`
+  sampler's `Pr = card/(p−1)` semantics) — probability bookkeeping, with no predicate mismatch left (§9.2).
+  Axioms `[propext, Classical.choice, Quot.sound]`. (`GgmArkLibTransport.lean`.)
 - **The vacuity is systemic, not t-SDH-specific.** `not_qDlogAssumption` (`KzgQDlogVacuity.lean`): the
   natural q-DLOG base assumption in ArkLib's own unrestricted-adversary idiom is *equally* false below
   error `1`, by the identical `Classical.choice` extraction (with a discriminating canary,
   `experiment_discriminates`). Confirms §3.6: renaming the assumption does not escape the pattern. Imports
   genuine ArkLib at `d72f8392`; axiom-clean.
 
-### 9.2 What remains: from the mechanized adaptive core to the classical Shoup number
+### 9.2 What remains: the narrowed frontier
 
-The **static** bound is mechanized (§9.1), and the **adaptive** identical-until-bad development of
-Sections 4–7 is now mechanized *for the explicit-equality-oracle (Maurer) model* (`GgmAdaptive.lean`,
-§9.1): the opaque symbolic oracle, the simulation/coupling lemma, and the composed `q`-query bound all
-build sorry-free with a clean axiom closure. What was, in the prior draft of this section, the full
-frontier is now three *named, scoped* residuals — smaller and sharper than "a from-scratch paper-sized
-development":
+The **static** bound is mechanized (§9.1); the **adaptive** identical-until-bad development of
+Sections 4–7 is mechanized for the explicit-equality-oracle (Maurer) model (`GgmAdaptive.lean`); and
+three further lemma files (§9.1) close the counting side of the *quadratic* Shoup number, prove the
+degree invariant *structurally*, and mechanize the *condition-level* field→group transport against
+ArkLib's real `tSdhCondition`. What remains is correspondingly sharper — the three residuals below are
+each narrowed by exactly what closed, and no more:
 
-- **The classical quadratic (Shoup random-encoding) bound.** Our mechanized adaptive bound is
-  `(fuel·Δ + (D+1))/(p−1)`, **linear** in the number of equality queries, because our oracle *charges a
-  query for each equality test* (Maurer abstract-handle model) and the bad event `F` ranges over the
-  ≤ `fuel` *queried* pairs (`runAux_congr_of_agree` is exactly agreement on the queried pairs). Shoup's
-  original **random-encoding** model gives equality *for free* — the adversary compares any two visible
-  encoding strings — so there `F` ranges over all `\binom{N}{2}` same-group table pairs with
-  `N ≤ q_G + D + 4`, yielding the classical `~(q_G+D)²(D+1)/(p−1)`. Reaching that number means: (i) an
-  all-table-pairs bad event (not just queried pairs), and (ii) a whole-table degree invariant to bound
-  every pair's difference degree by `Δ`. Both are additions to the present development, not corrections
-  of it; our tighter linear bound is *sound for the model we state*, and is the honest number for an
-  explicit-equality-oracle GGM.
-- **Structural discharge of the degree invariant.** The two degree facts (`hdeg_out`, `hdeg_pairs`) are
-  supplied as hypotheses — the SRS/group-op degree bounds, the same idiom as the static adversary's
-  `degree_le` field, and discharged automatically at `fuel = 0` (`adaptive_generalizes_static`). Proving
-  them *structurally* for every faithful run (a degree-tracking oracle that tags handles by group `G₁/G₂/Gₜ`
-  and proves `lin` preserves the per-group degree bound and `pair : G₁×G₂→Gₜ` reaches only `D+1`) would
-  remove the hypotheses. This is bookkeeping over the same `runAux`, not new mathematics; it is named, not
-  faked.
-- **The reduction transport (Section 7, unchanged).** `binding_reduces_to_tSdh` *builds* a `tSdhAdversary`
-  from a binding adversary; to inherit the generic-group bound, that construction must be re-typed as a
-  straight-line/symbolic program in the `Strat` class and its field-level win predicate connected to
-  ArkLib's group-level `tSdhExperiment` via prime-order injectivity (`Limit (b)` of `SOUND-FIX-VERDICT`).
-  This is the field→group wiring that both the static and adaptive self-contained models still await.
+- **The classical quadratic (Shoup random-encoding) bound — counting side CLOSED; degree side is a
+  hypothesis.** `rand_encoding_bound` (§9.1) now proves the quadratic `(C(n,2)·2D + (D+1))/(p−1)` — the
+  all-table-pairs global bad event `F` with `n = fuel + D + 4` — so the two counting additions the prior
+  draft named ((i) all-table-pairs bad event, not just queried pairs; (ii) the table size as a bound) are
+  now THEOREMS (`badSet_subset_pairRootUnion`, `card_handlePolys_le`). What is NOT yet discharged is the
+  **whole-table degree invariant** `hdeg_handles : ∀ q ∈ handlePolys, q.natDegree ≤ 2D`, which
+  `rand_encoding_bound` still consumes as a hypothesis. Our tighter linear-in-queries `GgmAdaptive` bound
+  remains the honest number for a model where equality costs a query; the quadratic file is the honest
+  number for the free-comparison random-encoding model — **modulo that one degree hypothesis**.
+- **Structural discharge of the degree invariant — the math EXISTS as a peer model; the WIRING remains.**
+  `GgmDegreeInvariant.degree_invariant_paired` (§9.1) proves the `2D` bound *structurally* — and
+  `flat_2D_bound_false` refutes the naive flat claim — but for a **separate** data model
+  (`PairedOp` / `buildPaired`) that `GgmAdaptive.runAux` does **not** import (§9.4). So `hdeg_out`,
+  `hdeg_pairs`, `hdeg_handles` are **not yet discharged** in the adaptive experiment: they remain
+  hypotheses, satisfied automatically only at `fuel = 0` (`adaptive_generalizes_static`). Closing this
+  requires wiring the discipline INTO the oracle — either (A) re-typing `runAux` as a two-sorted
+  handle table (tag handles `G₁/G₂/Gₜ`; restrict `Move.pair` to `G₁×G₂→Gₜ`) so `degree_invariant_paired`
+  transports to `handlePolys` / `badPolys`, or (B) a bridge lemma `runTable ↔ buildPaired`. This is not
+  pure bookkeeping: `runAux`'s current `Move.pair i j` multiplies *any* two flat-table handles including
+  prior products, so `flat_2D_bound_false` shows a nesting run for which `hdeg_handles ≤ 2D` is literally
+  FALSE — the discipline is a genuine restriction the oracle must adopt, not a lemma it already satisfies.
+- **The reduction transport — condition-level CLOSED against real ArkLib; `ProbComp` plumbing remains.**
+  `GgmArkLibTransport.groupWinSet_eq_realWinSet` (§9.1) mechanizes the field→group step the prior draft
+  flagged as ARGUED: the generic run's group-level winning-trapdoor set IS `realWinSet`, its win
+  condition IS ArkLib's real `Groups.tSdhCondition`, by prime-order injectivity — so the counting bound
+  is provably about precisely the event `tSdhExperiment` scores. What remains is (i) threading VCVio's
+  game monad — the `Strat → tSdhAdversary` embedding into
+  `… → StateT unifSpec.QueryCache ProbComp (Option _)` and the `sampleNonzeroZMod` sampler's
+  `Pr = card/(p−1)` semantics — pure `OptionT ProbComp` bookkeeping with no predicate mismatch left, and
+  (ii) the separate re-typing of `bindingReduction`'s constructed `tSdhAdversary` as a `Strat`-class
+  straight-line program, so the *binding* reduction (not merely a generic `Strat`) inherits the bound.
 
 **On ArkLib's own `AGM/Basic.lean`.** It remains a WIP stub, not a foundation: `Adversary.run` is literally
 `sorry` (line 165), it proves *zero* theorems, it is orphaned, and — decisively — it is **not opaque**: the
@@ -799,6 +859,29 @@ simulator, the per-list degree bounds `D, D, 2D`, the terminal `(D+1)` factor, a
 `τ₁+τ₂+τ_T ≤ q_G+D+3`) directly from the full-version source and reproduced them in Sections 4–6. The
 "ordinary polynomials, not Laurent" point (§4.2) is corroborated by Boneh–Boyen's own construction, in
 which group division sets `F ← F_i − F_j` (negation), never a negative power of `X`.
+
+### 9.4 The three lemma files interlock — architecturally, not (yet) mechanically
+
+The three files of §9.1 are *designed* to interlock: `GgmRandomEncoding`'s degree hypothesis
+`hdeg_handles` (every handle degree ≤ 2D) is exactly what `GgmDegreeInvariant`'s structural bound
+`degree_invariant_paired` establishes, and that bound holds precisely because of the two-sorted
+**pairing discipline** (products draw from G₁, land in Gₜ, never nest). Read as a design, the chain is
+clean: *random-encoding bound ← degree ≤ 2D ← pairing discipline*.
+
+We state its current strength exactly. The interlock is **architectural, not mechanized**. Concretely:
+`GgmDegreeInvariant` imports only `Mathlib`; it references none of `runAux`, `St.table`, `handlePolys`,
+`badPolys`, or `symOutput`, and nothing in the tree imports it. `degree_invariant_paired` is a theorem
+about a **peer construction** (`PairedOp` / `buildPaired`), not about the polynomials the adaptive oracle
+actually builds. There is no bridge lemma (`runTable ↔ buildPaired`, or
+`handlePolys ⊆ (buildPaired …).1 ++ .2`). Therefore **`GgmRandomEncoding.rand_encoding_bound` and
+`GgmAdaptive.adaptive_ggm_sound` still carry their degree facts as undischarged hypotheses** — the
+peer-model proof does not close them. This is the exact "a theorem about a peer model is not a discharge
+of the actual hypothesis" distinction we hold ourselves to elsewhere: the pairing-discipline bound is
+real mathematics and the honest structural *home* of the hypothesis, but until the discipline is wired
+into `runAux` (§9.2, option A or B) the Shoup adaptive/random-encoding theorems are **not**
+hypothesis-free. What genuinely closed is the *counting* side of the quadratic bound and the
+*condition* side of the ArkLib transport; the degree invariant is proved structurally *as a peer*, and
+its wiring into the experiment is the one remaining item on this axis.
 
 ---
 
@@ -875,6 +958,21 @@ Mechanized files (this directory), all against ArkLib `d72f8392`:
 - `candidates/GgmCandidate.lean` — the **static** generic-group numeric survives-attack bound
   `ggm_tSdh_sound : ε ≤ (D+1)/(p−1)` over the whole `GenericAdversary` type, `sorry`-free, axiom-clean.
   (`candidates/AlgebraicTSdh.lean` is the equivalent algebraic-model framing.)
+- `candidates/GgmAdaptive.lean` — the **adaptive** explicit-oracle bound `adaptive_ggm_sound :
+  ε ≤ (fuel·Δ + (D+1))/(p−1)`, with the identical-until-bad hybrid `runAux_congr_of_agree` proven by
+  induction, `sorry`-free, axiom-clean (§9.1).
+- `candidates/GgmRandomEncoding.lean` — the **quadratic random-encoding (Shoup) bound**
+  `rand_encoding_bound : ε ≤ (C(n,2)·2D + (D+1))/(p−1)` at `n = fuel + D + 4`: the all-table-pairs global
+  bad event, with the table size a THEOREM (`card_handlePolys_le`); degree invariant a hypothesis.
+  `sorry`-free, axiom-clean (§9.1).
+- `candidates/GgmDegreeInvariant.lean` — the **structural degree invariant**: `degree_invariant_paired`
+  (`2D` under the two-sorted pairing discipline), `flat_2D_bound_false` (the naive flat `2D` claim
+  REFUTED, `X⁴` at `D=1`), `degree_invariant` (`D·2^#mul` flat). A **peer model** (`PairedOp`/`buildPaired`)
+  not yet imported by the adaptive oracle (§9.4). `sorry`-free, axiom-clean.
+- `candidates/GgmArkLibTransport.lean` — the **condition-level ArkLib transport**
+  `groupWinSet_eq_realWinSet` / `tSdhCondition_iff_field` against ArkLib's **real** `Groups.tSdhCondition`:
+  the generic run's group win set IS `realWinSet` by prime-order injectivity; the `ProbComp` monad
+  threading is the named residual (§9.2). `sorry`-free, axiom-clean.
 - `candidates/KzgQDlogVacuity.lean` — `not_qDlogAssumption`: the q-DLOG idiom is equally vacuous
   (§3.6), `sorry`-free against genuine ArkLib, with a discriminating canary.
 - `candidates/` (`agm-sound`, `extraction`, `ggm`, `qdlog-direct`, `novel`) — the five elaborated
