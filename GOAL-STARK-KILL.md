@@ -1666,3 +1666,27 @@ the shape):
 Hard rules given: verify from CODE not comments (the canonical trap: genesis-snapshot calls the MOCK "the
 real prover/verifier"); an honest fixture is NOT a finding; skip files other lanes hold dirty; never leave
 anything answering "valid" for work it did not do.
+
+### `8258de1c8` — SECURITY FIX from the validation audit: ed25519 non-strict = universal forgery
+The assumption-ledger lane found `token/src/revocation.rs:353` verifying a hybrid revocation's classical
+half with non-strict `vk.verify` (cofactored, accepts small-order pks → `(R=s·B,s)` verifies for EVERY
+message = universal forgery). Every other ed25519 site is `verify_strict`, and the Lean `Ed25519EufCma`
+model closes over the STRICT primitive — so the site was "verified" against a model of a DIFFERENT scheme.
+**THE PUREST PROOF OF EMBER'S FRAME: Lean proved strict-ed25519, code used non-strict, nothing validated the
+artifact matched the model.** Fixed -> verify_strict. Committed surgically (isolated, +13/-2) mid-swarm;
+own gate-run queued behind the swarm build lock (lane reported 23 passed / 6 verify_hybrid teeth).
+
+### Both validation swarms LIVE (206 files in flight) — DO NOT interfere; gate on completion
+`w3bckg8xe` (6-lane validation-power audit) + `ws5jksoc3` (ultracode mocks/mirrors/fakes, sonnet->opus).
+4 TESTQALOG entries so far, each vindicating the frame:
+- Lane 4: `compress_history` (the production whole-history path) had ZERO composition tests — both sides
+  green, real path broken on every real node. Teeth added.
+- mocks/deos-agents: dregg-tui's headline "Verify" tab claimed the REAL plonky3 verifier while calling a
+  RETIRED fn that discards the proof — THEATER that hid by failing in the SAFE direction (always NOT
+  VERIFIED, never a false pass).
+- mocks/harnesses: a Lean faithfulness gate that could not be red — armed; + a NAMED self-referential
+  promotion-gate hash check.
+- Lane 5: the crypto floor's 2 load-bearing constants were prose — rigged as algebraic invariants; + the
+  ed25519 fix above.
+WHEN THEY LAND: gate each lane's fix, separate lanes (206 dirty files = commit surgically per subsystem),
+merge TESTQALOG, re-run srot on the quiet tree.
