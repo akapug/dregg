@@ -90,16 +90,41 @@ impl Default for RelayConfig {
 }
 
 /// Fee policy: which assets are accepted and at what rates.
+///
+/// Computrons are an OPERATOR-LOCAL number: every operator sets its own
+/// acceptance policy and there is deliberately no global peg (see
+/// `docs/deos/COMPUTRON-POLICY.md`). The former single-asset knob
+/// (`accept_external_assets` + `external_rate_micros`) is generalized into a
+/// per-asset table; the fail-closed default (refuse everything) is preserved
+/// as the empty table.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FeePolicy {
     /// Minimum deposit per message (in computrons).
     pub min_deposit_computrons: u64,
     /// Subscription fee (one-time, for creating an inbox).
     pub subscription_fee: u64,
-    /// Whether to accept external assets (USDC, ETH, etc.) via deposit vouchers.
-    pub accept_external_assets: bool,
-    /// Exchange rate: external asset units per computron (fixed-point, 1e6 = 1:1).
-    pub external_rate_micros: u64,
+    /// Per-asset acceptance table for computron refills, keyed by the
+    /// hex-encoded 32-byte `Payable` asset id (an asset IS its issuer cell's
+    /// `token_id` — see `dregg_payable::AssetId`; bridged tokens carry the
+    /// bridge-minted issuer id). FAIL CLOSED: an asset absent from this table
+    /// is refused, and the default table is empty.
+    #[serde(default)]
+    pub external_assets: BTreeMap<String, AssetRatePolicy>,
+}
+
+/// One row of the operator's external-asset acceptance table: the terms under
+/// which THIS operator sells computron refills for one `Payable` asset. Purely
+/// operator-local — another operator may quote any other rate or none.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssetRatePolicy {
+    /// Exchange rate: external asset units per computron (fixed-point,
+    /// [`COMPUTRON_RATE_SCALE`] = 1:1). A rate of 0 is invalid and always
+    /// refuses (it would quote infinite computrons per unit).
+    pub rate_micros: u64,
+    /// Whether the operator currently accepts this asset. A disabled row
+    /// refuses without being deleted, so an operator can pause an asset and
+    /// keep its quoted rate on record.
+    pub enabled: bool,
 }
 
 impl Default for FeePolicy {
@@ -107,10 +132,182 @@ impl Default for FeePolicy {
         Self {
             min_deposit_computrons: 100,
             subscription_fee: 1000,
-            accept_external_assets: false,
-            external_rate_micros: 1_000_000,
+            external_assets: BTreeMap::new(),
         }
     }
+}
+
+impl FeePolicy {
+    /// Declare (or overwrite) an acceptance row for `asset` at `rate_micros`
+    /// external units per computron, enabled.
+    pub fn accept_asset(&mut self, asset: &[u8; 32], rate_micros: u64) {
+        self.external_assets.insert(
+            hex_encode(asset),
+            AssetRatePolicy {
+                rate_micros,
+                enabled: true,
+            },
+        );
+    }
+
+    /// Look up the acceptance row for `asset`. `None` = not in the table =
+    /// refused (fail closed).
+    pub fn asset_policy(&self, asset: &[u8; 32]) -> Option<&AssetRatePolicy> {
+        self.external_assets.get(&hex_encode(asset))
+    }
+}
+
+// ─── Computron refill (operator-local purchase path, rung 1) ─────────────────
+
+/// Fixed-point scale for [`AssetRatePolicy::rate_micros`]: `1_000_000` means
+/// 1 external asset unit per computron.
+pub const COMPUTRON_RATE_SCALE: u64 = 1_000_000;
+
+/// An accepted external-asset payment presented for a computron refill: the
+/// operator observed `external_amount` units of `asset` paid to it (bridge
+/// deposit voucher, `Payable` receipt, …) and now credits `recipient`.
+///
+/// Rung 1 deliberately does NOT verify the external payment here — the voucher
+/// is the operator's own accounting input (the operator is crediting out of
+/// its OWN pre-funded cell, so a false voucher only hurts the operator).
+/// Binding the voucher to a bridge attestation is a named residual in
+/// `docs/deos/COMPUTRON-POLICY.md`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RefillVoucher {
+    /// The `Payable` asset id the payment was denominated in.
+    #[serde(serialize_with = "hex_ser_32", deserialize_with = "hex_de_32")]
+    pub asset: [u8; 32],
+    /// External asset units paid.
+    pub external_amount: u64,
+    /// The cell to credit computrons to.
+    pub recipient: dregg_cell::CellId,
+}
+
+/// Why a computron refill was refused. Every arm is fail-closed: no state
+/// changes on refusal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RefillRefused {
+    /// Asset absent from the operator's acceptance table (the default).
+    AssetNotAccepted,
+    /// Asset row present but disabled by the operator.
+    AssetDisabled,
+    /// Asset row quotes a zero rate (invalid: infinite computrons per unit).
+    ZeroRate,
+    /// The credit does not fit the ledger's signed 64-bit balance domain.
+    CreditOverflow {
+        external_amount: u64,
+        rate_micros: u64,
+    },
+    /// The payment converts to zero computrons (dust below one computron);
+    /// accepting it would take payment and credit nothing.
+    ZeroCredit,
+    /// The operator's pre-funded cell cannot cover the credit. A refill is a
+    /// CONSERVING transfer, never a mint — an underfunded operator refuses.
+    OperatorCellInsufficient { available: i64, required: u64 },
+    /// The ledger refused the transfer for another reason (missing operator
+    /// or recipient cell, overflow at the destination, …).
+    LedgerRejected(String),
+}
+
+impl std::fmt::Display for RefillRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AssetNotAccepted => write!(f, "asset not in the operator acceptance table"),
+            Self::AssetDisabled => write!(f, "asset disabled by the operator"),
+            Self::ZeroRate => write!(f, "asset row quotes a zero rate"),
+            Self::CreditOverflow {
+                external_amount,
+                rate_micros,
+            } => write!(
+                f,
+                "credit overflows the balance domain ({external_amount} units at rate {rate_micros})"
+            ),
+            Self::ZeroCredit => write!(f, "payment converts to zero computrons"),
+            Self::OperatorCellInsufficient {
+                available,
+                required,
+            } => write!(
+                f,
+                "operator cell holds {available}, refill requires {required}"
+            ),
+            Self::LedgerRejected(e) => write!(f, "ledger refused the refill transfer: {e}"),
+        }
+    }
+}
+
+/// Convert an external-asset amount to a computron credit under `policy`.
+/// Pure and fail-closed: unknown asset, disabled row, zero rate, overflow,
+/// and dust-to-zero all refuse.
+pub fn computron_credit(
+    policy: &FeePolicy,
+    asset: &[u8; 32],
+    external_amount: u64,
+) -> Result<u64, RefillRefused> {
+    let row = policy
+        .asset_policy(asset)
+        .ok_or(RefillRefused::AssetNotAccepted)?;
+    if !row.enabled {
+        return Err(RefillRefused::AssetDisabled);
+    }
+    if row.rate_micros == 0 {
+        return Err(RefillRefused::ZeroRate);
+    }
+    // u128 headroom: u64 × 1e6 cannot overflow u128, so the conversion itself
+    // is exact; only the RESULT can leave the balance domain.
+    let credit =
+        (external_amount as u128) * (COMPUTRON_RATE_SCALE as u128) / (row.rate_micros as u128);
+    if credit == 0 {
+        return Err(RefillRefused::ZeroCredit);
+    }
+    // The ledger's balance domain is signed 64-bit; a credit above i64::MAX
+    // could never be applied (and must not wrap or saturate).
+    if credit > i64::MAX as u128 {
+        return Err(RefillRefused::CreditOverflow {
+            external_amount,
+            rate_micros: row.rate_micros,
+        });
+    }
+    Ok(credit as u64)
+}
+
+/// Apply an accepted refill: credit `voucher.recipient` with the computron
+/// value of the payment as a CONSERVING transfer out of `operator_cell`
+/// (mirroring the faucet mechanics in `api.rs::post_faucet` — a transfer,
+/// never a mint). Refused, with no state change, when the operator cell lacks
+/// balance. Returns the computrons credited.
+pub fn apply_computron_refill(
+    ledger: &mut dregg_cell::Ledger,
+    policy: &FeePolicy,
+    operator_cell: dregg_cell::CellId,
+    voucher: &RefillVoucher,
+) -> Result<u64, RefillRefused> {
+    let credit = computron_credit(policy, &voucher.asset, voucher.external_amount)?;
+    // Precise refusal when the operator cell cannot cover the credit. The
+    // transfer below would also refuse (`apply_delta` forbids a source going
+    // below zero), but this surfaces the balances for the operator's log.
+    // `credit ≤ i64::MAX` is guaranteed by `computron_credit`'s domain gate.
+    if let Some(op) = ledger.get(&operator_cell)
+        && op.state.balance() < credit as i64
+    {
+        return Err(RefillRefused::OperatorCellInsufficient {
+            available: op.state.balance(),
+            required: credit,
+        });
+    }
+    // The CONSERVING transfer: `computron_transfers` debits the operator cell
+    // and credits the recipient atomically — the same ordinary-move discipline
+    // the faucet's finalized Transfer turn lands in (`api.rs::post_faucet`).
+    // Nothing is created; a missing operator/recipient cell or a destination
+    // overflow refuses with the ledger untouched.
+    let full = dregg_cell::LedgerDelta {
+        created: Vec::new(),
+        updated: Vec::new(),
+        computron_transfers: vec![(operator_cell, voucher.recipient, credit)],
+    };
+    ledger
+        .apply_delta(&full)
+        .map_err(|e| RefillRefused::LedgerRejected(format!("{e:?}")))?;
+    Ok(credit)
 }
 
 // ─── Service State ────────────────────────────────────────────────────────────
@@ -1709,5 +1906,230 @@ mod tests {
         assert_eq!(drain.messages[0].sender, hex_encode(&[0xBC; 32]));
         assert_eq!(state.read().await.template.total_pending(), 0);
         assert_eq!(state.read().await.messages_delivered, 1);
+    }
+
+    // ─── Computron purchase path, rung 1 (operator-local policy) ──────────
+    //
+    // Adversarial tests, both polarities: every refusal arm bites (disabled
+    // asset, unknown asset, zero rate, overflow, dust, underfunded operator
+    // cell) AND the accepted path conserves exactly (a transfer, never a
+    // mint — total ledger supply invariant across the refill).
+
+    const USDC_TEST_ASSET: [u8; 32] = [0x11; 32];
+    const COMPUTRON_TOKEN: [u8; 32] = [0x0C; 32];
+
+    /// A ledger with an operator pre-funded cell and an empty recipient cell,
+    /// mirroring the faucet's genesis-funded source + provisioned destination.
+    fn refill_test_ledger(
+        operator_balance: i64,
+    ) -> (dregg_cell::Ledger, dregg_cell::CellId, dregg_cell::CellId) {
+        let mut ledger = dregg_cell::Ledger::new();
+        let operator = ledger
+            .insert_cell(dregg_cell::Cell::with_balance(
+                [0xA1; 32],
+                COMPUTRON_TOKEN,
+                operator_balance,
+            ))
+            .expect("insert operator cell");
+        let recipient = ledger
+            .insert_cell(dregg_cell::Cell::with_balance(
+                [0xB2; 32],
+                COMPUTRON_TOKEN,
+                0,
+            ))
+            .expect("insert recipient cell");
+        (ledger, operator, recipient)
+    }
+
+    fn total_supply(ledger: &dregg_cell::Ledger) -> i64 {
+        ledger.iter().map(|(_, cell)| cell.state.balance()).sum()
+    }
+
+    fn refill_policy(rate_micros: u64, enabled: bool) -> FeePolicy {
+        let mut policy = FeePolicy::default();
+        policy.external_assets.insert(
+            hex_encode(&USDC_TEST_ASSET),
+            AssetRatePolicy {
+                rate_micros,
+                enabled,
+            },
+        );
+        policy
+    }
+
+    fn voucher(external_amount: u64, recipient: dregg_cell::CellId) -> RefillVoucher {
+        RefillVoucher {
+            asset: USDC_TEST_ASSET,
+            external_amount,
+            recipient,
+        }
+    }
+
+    /// FAIL CLOSED: the default policy (empty table) refuses every asset, and
+    /// an asset absent from a non-empty table is refused too.
+    #[test]
+    fn computron_refill_unknown_asset_refused_fail_closed() {
+        let (mut ledger, operator, recipient) = refill_test_ledger(10_000);
+        let supply_before = total_supply(&ledger);
+
+        // Empty table (the default): refuse.
+        let empty = FeePolicy::default();
+        assert_eq!(
+            apply_computron_refill(&mut ledger, &empty, operator, &voucher(100, recipient)),
+            Err(RefillRefused::AssetNotAccepted),
+        );
+
+        // Non-empty table, but a DIFFERENT asset than the voucher's: refuse.
+        let mut other_asset_only = FeePolicy::default();
+        other_asset_only.accept_asset(&[0x22; 32], COMPUTRON_RATE_SCALE);
+        assert_eq!(
+            apply_computron_refill(
+                &mut ledger,
+                &other_asset_only,
+                operator,
+                &voucher(100, recipient)
+            ),
+            Err(RefillRefused::AssetNotAccepted),
+        );
+
+        assert_eq!(
+            total_supply(&ledger),
+            supply_before,
+            "refusal changed state"
+        );
+        assert_eq!(ledger.get(&recipient).unwrap().state.balance(), 0);
+    }
+
+    /// A disabled table row refuses even though the rate is on record.
+    #[test]
+    fn computron_refill_disabled_asset_refused() {
+        let (mut ledger, operator, recipient) = refill_test_ledger(10_000);
+        let policy = refill_policy(COMPUTRON_RATE_SCALE, false);
+
+        assert_eq!(
+            apply_computron_refill(&mut ledger, &policy, operator, &voucher(100, recipient)),
+            Err(RefillRefused::AssetDisabled),
+        );
+        assert_eq!(ledger.get(&recipient).unwrap().state.balance(), 0);
+        assert_eq!(ledger.get(&operator).unwrap().state.balance(), 10_000);
+    }
+
+    /// A zero rate is invalid (it quotes infinite computrons per unit) and
+    /// must refuse rather than divide by zero or credit anything.
+    #[test]
+    fn computron_refill_zero_rate_refused() {
+        let (mut ledger, operator, recipient) = refill_test_ledger(10_000);
+        let policy = refill_policy(0, true);
+
+        assert_eq!(
+            apply_computron_refill(&mut ledger, &policy, operator, &voucher(100, recipient)),
+            Err(RefillRefused::ZeroRate),
+        );
+        assert_eq!(ledger.get(&recipient).unwrap().state.balance(), 0);
+    }
+
+    /// A credit exceeding the ledger's signed 64-bit balance domain refuses
+    /// instead of wrapping or saturating.
+    #[test]
+    fn computron_refill_overflow_refused() {
+        let (mut ledger, operator, recipient) = refill_test_ledger(10_000);
+
+        // u64::MAX units at a 1:1 rate → credit u64::MAX > i64::MAX: refuse.
+        let policy = refill_policy(COMPUTRON_RATE_SCALE, true);
+        assert_eq!(
+            apply_computron_refill(
+                &mut ledger,
+                &policy,
+                operator,
+                &voucher(u64::MAX, recipient)
+            ),
+            Err(RefillRefused::CreditOverflow {
+                external_amount: u64::MAX,
+                rate_micros: COMPUTRON_RATE_SCALE,
+            }),
+        );
+
+        // A sub-scale rate multiplies the credit above u64 entirely: refuse.
+        let cheap = refill_policy(1, true);
+        assert_eq!(
+            apply_computron_refill(&mut ledger, &cheap, operator, &voucher(u64::MAX, recipient)),
+            Err(RefillRefused::CreditOverflow {
+                external_amount: u64::MAX,
+                rate_micros: 1,
+            }),
+        );
+        assert_eq!(ledger.get(&recipient).unwrap().state.balance(), 0);
+    }
+
+    /// Dust below one computron refuses: accepting the payment while crediting
+    /// zero would silently take the payer's asset for nothing.
+    #[test]
+    fn computron_refill_dust_zero_credit_refused() {
+        let (mut ledger, operator, recipient) = refill_test_ledger(10_000);
+        // 2 external units per computron; 1 unit converts to 0 computrons.
+        let policy = refill_policy(2 * COMPUTRON_RATE_SCALE, true);
+
+        assert_eq!(
+            apply_computron_refill(&mut ledger, &policy, operator, &voucher(1, recipient)),
+            Err(RefillRefused::ZeroCredit),
+        );
+        assert_eq!(ledger.get(&recipient).unwrap().state.balance(), 0);
+    }
+
+    /// A refill exceeding the operator pre-funded cell is refused with NO
+    /// state change — a refill is a transfer, never a mint, so an underfunded
+    /// operator cannot credit anyone.
+    #[test]
+    fn computron_refill_exceeding_operator_cell_refused() {
+        let (mut ledger, operator, recipient) = refill_test_ledger(100);
+        let policy = refill_policy(COMPUTRON_RATE_SCALE, true);
+
+        // 500 units at 1:1 → 500 computrons > the operator's 100.
+        let refused =
+            apply_computron_refill(&mut ledger, &policy, operator, &voucher(500, recipient));
+        assert_eq!(
+            refused,
+            Err(RefillRefused::OperatorCellInsufficient {
+                available: 100,
+                required: 500,
+            }),
+        );
+        assert_eq!(
+            ledger.get(&operator).unwrap().state.balance(),
+            100,
+            "refused refill debited the operator"
+        );
+        assert_eq!(
+            ledger.get(&recipient).unwrap().state.balance(),
+            0,
+            "refused refill credited the recipient"
+        );
+    }
+
+    /// The accepted path: exact rate conversion, exact conservation. The
+    /// operator is debited precisely what the recipient is credited and the
+    /// total ledger supply is invariant (Σ before = Σ after — a transfer,
+    /// never a mint), with no cells created.
+    #[test]
+    fn computron_refill_accepted_conserves_exactly() {
+        let (mut ledger, operator, recipient) = refill_test_ledger(10_000);
+        // 0.5 external units per computron: 250 units → exactly 500 computrons.
+        let policy = refill_policy(COMPUTRON_RATE_SCALE / 2, true);
+        let supply_before = total_supply(&ledger);
+        let cells_before = ledger.len();
+
+        let credited =
+            apply_computron_refill(&mut ledger, &policy, operator, &voucher(250, recipient))
+                .expect("enabled asset within operator balance must be accepted");
+
+        assert_eq!(credited, 500, "rate conversion must be exact");
+        assert_eq!(ledger.get(&operator).unwrap().state.balance(), 10_000 - 500);
+        assert_eq!(ledger.get(&recipient).unwrap().state.balance(), 500);
+        assert_eq!(
+            total_supply(&ledger),
+            supply_before,
+            "refill must conserve total supply exactly"
+        );
+        assert_eq!(ledger.len(), cells_before, "refill must not create cells");
     }
 }
