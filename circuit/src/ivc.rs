@@ -1019,106 +1019,10 @@ pub fn verify_ivc_with_roots(proof: &IvcProof, intermediate_roots: &[BabyBear]) 
     IvcVerification::Valid
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Integration: IVC-based presentation proof
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// A presentation proof that uses IVC for the fold chain.
-/// This replaces `PresentationProof` when the IVC path is used.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub struct IvcPresentationProof {
-    /// The IVC proof covering the entire fold chain (constant size).
-    pub ivc_proof: IvcProof,
-    /// Proof of the final derivation (authorization from final state).
-    pub derivation_proof: ConstraintProof,
-    /// Proof of issuer membership in federation.
-    pub issuer_membership_proof: ConstraintProof,
-    /// The federation root of trust.
-    pub federation_root: BabyBear,
-    /// The action binding commitment. Collision-exposed (the attacker chooses both
-    /// `(action, resource)` preimages — `crate::binding::compute_action_binding`),
-    /// so it carries the full 8-felt width (`ActionBinding = [BabyBear; 8]`,
-    /// ~248-bit preimage / ~124-bit birthday-collision resistance). A 4-felt width
-    /// would expose a ~2^62 collision, below the FRI soundness floor.
-    pub request_predicate: crate::binding::ActionBinding,
-    /// Timestamp for freshness.
-    pub timestamp: BabyBear,
-    /// Commitment to selectively revealed facts (zero if fully private). The
-    /// adversary controls the hashed preimage, so this is the collision-load-bearing
-    /// 8-felt `WideHash` (~248-bit preimage / ~124-bit birthday-collision resistance).
-    pub revealed_facts_commitment: crate::binding::WideHash,
-}
-
-impl IvcPresentationProof {
-    /// Total proof size in bytes.
-    pub fn total_proof_size_bytes(&self) -> usize {
-        self.ivc_proof.proof_size_bytes()
-            + self.derivation_proof.simulated_proof_size_bytes
-            + self.issuer_membership_proof.simulated_proof_size_bytes
-    }
-
-    /// Human-readable proof size.
-    pub fn proof_size_display(&self) -> String {
-        let bytes = self.total_proof_size_bytes();
-        if bytes < 1024 {
-            format!("{bytes} B")
-        } else if bytes < 1024 * 1024 {
-            format!("{:.1} KiB", bytes as f64 / 1024.0)
-        } else {
-            format!("{:.1} MiB", bytes as f64 / (1024.0 * 1024.0))
-        }
-    }
-
-    /// Verify the IVC presentation proof.
-    pub fn verify(&self) -> IvcPresentationVerification {
-        // 1. Verify the IVC fold chain proof
-        let ivc_result = verify_ivc(&self.ivc_proof, None);
-        if ivc_result != IvcVerification::Valid {
-            return IvcPresentationVerification::InvalidIvc(ivc_result);
-        }
-
-        // 2. Check derivation proof's state root matches final root
-        if self.derivation_proof.public_inputs.is_empty() {
-            return IvcPresentationVerification::InvalidDerivation;
-        }
-        let derivation_state_root = self.derivation_proof.public_inputs[0];
-        if derivation_state_root != self.ivc_proof.final_root {
-            return IvcPresentationVerification::DerivationRootMismatch;
-        }
-
-        // 3. Check issuer membership in federation
-        if self.issuer_membership_proof.public_inputs.len() < 2 {
-            return IvcPresentationVerification::InvalidIssuerProof;
-        }
-        let issuer_federation_root = self.issuer_membership_proof.public_inputs[1];
-        if issuer_federation_root != self.federation_root {
-            return IvcPresentationVerification::IssuerNotInFederation;
-        }
-
-        // 4. Check issuer signed the initial root
-        // In a full implementation, we'd verify that the issuer's signature
-        // covers initial_root. For now, we check federation membership.
-
-        IvcPresentationVerification::Valid
-    }
-}
-
-/// Result of IVC presentation proof verification.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum IvcPresentationVerification {
-    /// The proof is valid.
-    Valid,
-    /// The IVC fold chain proof failed.
-    InvalidIvc(IvcVerification),
-    /// The derivation proof is invalid.
-    InvalidDerivation,
-    /// The derivation's state root doesn't match the IVC final root.
-    DerivationRootMismatch,
-    /// The issuer membership proof is invalid.
-    InvalidIssuerProof,
-    /// The issuer is not in the federation.
-    IssuerNotInFederation,
-}
+// RETIRED 2026-07-16 (mock-proof purge): `IvcPresentationProof` /
+// `IvcPresentationVerification` — the IVC-backed presentation wrapper — are gone.
+// They rode the simulated hash-chain IVC plus trace-digest `ConstraintProof`s and
+// had no production caller (only `PresentationAir::prove_ivc`, retired with them).
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Builder API
@@ -1140,23 +1044,10 @@ pub struct IvcBuilder {
     deltas: Vec<FoldDelta>,
 }
 
-/// Backend to use when finalizing an [`IvcBuilder`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum IvcBackend {
-    /// Fast hash-chain finalization with the standard IVC proof wrapper.
-    HashChain,
-    /// AIR-backed BabyBear STARK proof for the accumulated fold chain.
-    BabyBearStark,
-}
-
-/// Proof produced by [`IvcBuilder::finalize_with_backend`].
-#[derive(Debug)]
-pub enum IvcBackendProof {
-    /// Standard hash-chain IVC proof.
-    HashChain(IvcProof),
-    /// AIR-backed BabyBear STARK IVC proof.
-    BabyBearStark(IvcProof),
-}
+// RETIRED 2026-07-16 (mock-proof purge): the `IvcBackend` selector enum,
+// `IvcBackendProof`, and `IvcBuilder::finalize_with_backend` had no callers
+// outside their own unit test. `finalize`/`finalize_with_air` remain (SDK uses
+// `finalize_with_air`) until the node MCP consumers of the simulated IVC retire.
 
 impl IvcBuilder {
     /// Create a new IVC builder starting from an initial root.
@@ -1203,21 +1094,6 @@ impl IvcBuilder {
             return None;
         }
         prove_ivc(self.initial_root, self.deltas.clone())
-    }
-
-    /// Finalize using an explicitly selected backend.
-    pub fn finalize_with_backend(
-        &self,
-        backend: IvcBackend,
-    ) -> Option<Result<IvcBackendProof, String>> {
-        match backend {
-            IvcBackend::HashChain => self
-                .finalize()
-                .map(|proof| Ok(IvcBackendProof::HashChain(proof))),
-            IvcBackend::BabyBearStark => self
-                .finalize_with_air()
-                .map(|proof| Ok(IvcBackendProof::BabyBearStark(proof))),
-        }
     }
 }
 
@@ -1810,28 +1686,6 @@ mod tests {
     }
 
     #[test]
-    fn ivc_builder_finalize_with_backend_selects_default_paths() {
-        let (initial_root, deltas) = create_test_chain(2);
-
-        let mut builder = IvcBuilder::new(initial_root);
-        for delta in &deltas {
-            builder.add_fold(delta.clone()).unwrap();
-        }
-
-        let hash_proof = builder
-            .finalize_with_backend(IvcBackend::HashChain)
-            .unwrap()
-            .unwrap();
-        assert!(matches!(hash_proof, IvcBackendProof::HashChain(_)));
-
-        let stark_proof = builder
-            .finalize_with_backend(IvcBackend::BabyBearStark)
-            .unwrap()
-            .unwrap();
-        assert!(matches!(stark_proof, IvcBackendProof::BabyBearStark(_)));
-    }
-
-    #[test]
     fn ivc_accumulated_hash_deterministic() {
         let root = BabyBear::new(42);
         let h1 = initial_accumulated_hash(root);
@@ -1859,88 +1713,6 @@ mod tests {
 
         // Different orderings must produce different hashes
         assert_ne!(h_12, h_21);
-    }
-
-    #[test]
-    fn ivc_presentation_proof() {
-        use crate::derivation_air::{CircuitRule, DerivationAir, DerivationWitness};
-        use crate::merkle_air::{MerkleAir, create_test_witness};
-        use crate::poseidon2::hash_fact;
-
-        let (initial_root, deltas) = create_test_chain(3);
-        let final_root = deltas.last().unwrap().fold.new_root;
-
-        // Generate IVC proof
-        let ivc_proof = prove_ivc(initial_root, deltas).unwrap();
-
-        // Create derivation from final state
-        let body_hash = hash_fact(
-            BabyBear::new(777),
-            &[BabyBear::new(888), BabyBear::ZERO, BabyBear::ZERO],
-        );
-        let derivation = DerivationWitness {
-            rule: CircuitRule {
-                id: 1,
-                num_body_atoms: 1,
-                num_variables: 1,
-                head_predicate: BabyBear::new(999),
-                head_terms: [
-                    (true, BabyBear::new(0)),
-                    (false, BabyBear::ZERO),
-                    (false, BabyBear::ZERO),
-                    (false, BabyBear::ZERO),
-                ],
-                body_atoms: vec![],
-                equal_checks: vec![],
-                memberof_checks: vec![],
-                gte_check: None,
-                lt_check: None,
-            },
-            state_root: final_root,
-            body_fact_hashes: vec![body_hash],
-            substitution: vec![BabyBear::new(888)],
-            derived_predicate: BabyBear::new(999),
-            derived_terms: [
-                BabyBear::new(888),
-                BabyBear::ZERO,
-                BabyBear::ZERO,
-                BabyBear::ZERO,
-            ],
-            not_after_height: BabyBear::ZERO,
-            org_id_hash: BabyBear::ZERO,
-            budget_remaining: BabyBear::ZERO,
-        };
-
-        let derivation_air = DerivationAir::new(derivation);
-        let derivation_proof = ConstraintProof::generate(&derivation_air).unwrap();
-
-        // Create issuer membership
-        let issuer_witness = create_test_witness(BabyBear::new(5555), 8);
-        let federation_root = issuer_witness.expected_root;
-        let issuer_air = MerkleAir::new(issuer_witness);
-        let issuer_proof = ConstraintProof::generate(&issuer_air).unwrap();
-
-        // Assemble IVC presentation proof
-        let presentation = IvcPresentationProof {
-            ivc_proof,
-            derivation_proof,
-            issuer_membership_proof: issuer_proof,
-            federation_root,
-            request_predicate: {
-                let mut rp = [BabyBear::ZERO; crate::binding::ACTION_BINDING_WIDTH];
-                rp[0] = BabyBear::new(999);
-                rp
-            },
-            timestamp: BabyBear::new(1716000000),
-            revealed_facts_commitment: crate::binding::WideHash::ZERO,
-        };
-
-        let result = presentation.verify();
-        assert_eq!(result, IvcPresentationVerification::Valid);
-        println!(
-            "IVC presentation proof size: {}",
-            presentation.proof_size_display()
-        );
     }
 
     #[test]

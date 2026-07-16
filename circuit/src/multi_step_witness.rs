@@ -151,15 +151,10 @@ impl crate::constraint_prover::Air for MultiStepDerivationAir {
     }
 }
 
-/// Prove authorization using the constraint prover (non-STARK, for testing).
-///
-/// Returns a `ConstraintProof` if the witness satisfies all constraints, None otherwise.
-pub fn prove_authorization(
-    witness: MultiStepWitness,
-) -> Option<crate::constraint_prover::ConstraintProof> {
-    let air = MultiStepDerivationAir::new(witness);
-    crate::constraint_prover::ConstraintProof::generate(&air)
-}
+// RETIRED 2026-07-16 (mock-proof purge): `prove_authorization` (a trace-digest
+// proof over `MultiStepDerivationAir`, not a cryptographic one) had a single caller —
+// the equally retired `presentation::prove_authorization`. The real derivation
+// proof is the IR-v2 descriptor path (`prove_vm_descriptor2`).
 
 /// Generate the multi-step trace.
 pub fn generate_multi_step_trace(

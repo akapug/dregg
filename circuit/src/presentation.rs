@@ -20,11 +20,9 @@
 
 use crate::constraint_prover::{Air, Constraint, ConstraintProof, ConstraintProver};
 use crate::derivation_air::{CircuitRule, DerivationAir, DerivationWitness};
-use crate::dsl::fold::{self, FoldAir, FoldWitness, RemovedFact};
+use crate::dsl::fold::{FoldAir, FoldWitness, RemovedFact};
 use crate::field::BabyBear;
-use crate::ivc::{FoldDelta, IvcPresentationProof, prove_ivc};
 use crate::merkle_air::{MerkleAir, MerkleLevelWitness, MerkleWitness};
-use crate::multi_step_witness;
 use crate::poseidon2::hash_fact;
 
 use crate::descriptor_by_name::descriptor_by_name;
@@ -538,94 +536,11 @@ impl PresentationAir {
         })
     }
 
-    /// Generate an IVC-based presentation proof (constant-size fold chain proof).
-    ///
-    /// This is the preferred path: instead of N separate fold proofs, the entire
-    /// fold chain is accumulated into a single constant-size IVC proof.
-    /// Returns `None` if any component fails to verify.
-    pub fn prove_ivc(&self) -> Option<IvcPresentationProof> {
-        let w = &self.witness;
-
-        // 1. Generate IVC proof for the fold chain
-        if w.fold_chain.is_empty() {
-            // No folds: create a trivial IVC proof
-            // (the derivation applies directly to the initial state)
-            return self.prove_ivc_no_folds();
-        }
-
-        let initial_root = w.fold_chain[0].old_root;
-        let deltas: Vec<FoldDelta> = w
-            .fold_chain
-            .iter()
-            .map(|f| FoldDelta::new(f.clone()))
-            .collect();
-
-        let ivc_proof = prove_ivc(initial_root, deltas)?;
-
-        // 2. Prove the derivation (DEPRECATED: uses old DerivationAir).
-        // Production STARK proofs use crate::dsl::descriptors::derivation_circuit().
-        let derivation_air = DerivationAir::new(w.derivation.clone());
-        let deriv_result = ConstraintProver::verify(&derivation_air);
-        if !deriv_result.is_valid() {
-            return None;
-        }
-        let derivation_proof = ConstraintProof::generate(&derivation_air)?;
-
-        // 3. Prove issuer membership (unchecked — STARK handles real verification).
-        let issuer_air = MerkleAir::new(w.issuer_membership.clone());
-        let issuer_membership_proof = ConstraintProof::generate_unchecked(&issuer_air);
-
-        Some(IvcPresentationProof {
-            ivc_proof,
-            derivation_proof,
-            issuer_membership_proof,
-            federation_root: w.federation_root,
-            request_predicate: w.request_predicate,
-            timestamp: w.timestamp,
-            revealed_facts_commitment: w.revealed_facts_commitment,
-        })
-    }
-
-    /// Helper for the no-folds case in IVC proving.
-    fn prove_ivc_no_folds(&self) -> Option<IvcPresentationProof> {
-        let w = &self.witness;
-        let state_root = w.derivation.state_root;
-
-        // Create a trivial 1-step "identity" IVC proof
-        // (the chain is: initial_root -> initial_root with no actual attenuation)
-        // For the no-fold case, we still need a valid IvcProof structure.
-        // We create a synthetic single-step fold that is an identity.
-        let identity_fold = FoldWitness {
-            old_root: state_root,
-            new_root: state_root,
-            removed_facts: vec![],
-            num_added_checks: 1, // at least one check to satisfy delta_nonempty
-            added_checks_commitment: crate::dsl::fold::compute_test_checks_commitment(1),
-        };
-        let deltas = vec![FoldDelta::new(identity_fold)];
-        let ivc_proof = prove_ivc(state_root, deltas)?;
-
-        // Derivation
-        let derivation_air = DerivationAir::new(w.derivation.clone());
-        if !ConstraintProver::verify(&derivation_air).is_valid() {
-            return None;
-        }
-        let derivation_proof = ConstraintProof::generate(&derivation_air)?;
-
-        // Issuer membership (unchecked — STARK handles real verification).
-        let issuer_air = MerkleAir::new(w.issuer_membership.clone());
-        let issuer_membership_proof = ConstraintProof::generate_unchecked(&issuer_air);
-
-        Some(IvcPresentationProof {
-            ivc_proof,
-            derivation_proof,
-            issuer_membership_proof,
-            federation_root: w.federation_root,
-            request_predicate: w.request_predicate,
-            timestamp: w.timestamp,
-            revealed_facts_commitment: w.revealed_facts_commitment,
-        })
-    }
+    // RETIRED 2026-07-16 (mock-proof purge): `prove_ivc`/`prove_ivc_no_folds` produced an
+    // `IvcPresentationProof` backed by the SIMULATED hash-chain IVC (`crate::ivc::prove_ivc`)
+    // plus trace-digest constraint proofs — anyone who could call the prover could mint a
+    // passing proof. No production caller existed (only a bench rode it). The real
+    // presentation path is `BridgePresentationBuilder::prove()` (real STARK).
 
     /// Verify the entire presentation (constraint prover, validates all sub-circuits).
     pub fn verify_all(&self) -> PresentationVerification {
@@ -751,69 +666,10 @@ impl Air for PresentationAir {
     }
 }
 
-// ============================================================================
-// Multi-step authorization proof (Datalog derivation chain -> ALLOW)
-// ============================================================================
-
-/// Result of a multi-step authorization proof.
-#[derive(Clone, Debug)]
-pub struct AuthorizationProof {
-    /// The constraint-checked proof of the derivation circuit.
-    pub proof: ConstraintProof,
-    /// The conclusion: true = ALLOW, false = DENY.
-    pub conclusion_is_allow: bool,
-    /// Number of derivation steps in the proof.
-    pub num_steps: usize,
-    /// The initial state root the proof is bound to.
-    pub initial_state_root: BabyBear,
-    /// The final accumulated hash (commitment to the derivation trace).
-    pub final_accumulated_hash: BabyBear,
-}
-
-/// Prove a multi-step authorization derivation.
-///
-/// Takes:
-/// - `initial_state_root`: The committed fact set root (matches the fold chain's final root)
-/// - `request_hash`: Hash of the authorization request
-/// - `derivation_steps`: Sequence of single-step derivation witnesses, where the last
-///   step must derive the "allow" predicate for the conclusion to be ALLOW.
-///
-/// Returns an `AuthorizationProof` that cryptographically proves:
-/// "This Datalog evaluation, starting from the committed state, concluded ALLOW (or DENY)
-///  in N derivation steps, with each step correctly applying a rule."
-///
-/// The full presentation proof now proves:
-/// ```text
-/// prove_membership (issuer in federation)    - Poseidon2 Merkle AIR
-/// + prove_fold (attenuation chain valid)     - FoldAir / IVC
-/// + prove_authorization (Datalog -> ALLOW)   - MultiStepDerivationAir [THIS]
-/// = complete ZK authorization proof
-/// ```
-pub fn prove_authorization(
-    initial_state_root: BabyBear,
-    request_hash: BabyBear,
-    derivation_steps: Vec<DerivationWitness>,
-) -> Option<AuthorizationProof> {
-    let witness = multi_step_witness::build_multi_step_witness(
-        initial_state_root,
-        request_hash,
-        derivation_steps,
-    );
-
-    let conclusion_is_allow = witness.conclusion() == BabyBear::ONE;
-    let num_steps = witness.steps.len();
-    let final_accumulated_hash = witness.final_accumulated_hash();
-
-    let proof = multi_step_witness::prove_authorization(witness)?;
-
-    Some(AuthorizationProof {
-        proof,
-        conclusion_is_allow,
-        num_steps,
-        initial_state_root,
-        final_accumulated_hash,
-    })
-}
+// RETIRED 2026-07-16 (mock-proof purge): the free `prove_authorization` +
+// `AuthorizationProof` (a trace-digest proof over `MultiStepDerivationAir`)
+// had no callers. The production multi-step authorization proof is the rotated IR-v2
+// descriptor path (`descriptor_by_name` + `prove_vm_descriptor2`).
 
 /// Builder for constructing a presentation witness step by step.
 pub struct PresentationBuilder {

@@ -16,12 +16,11 @@
 //!     ├── DerivationBackend (rule application proofs)
 //!     ├── PredicateBackend (arithmetic, relational, temporal, compound)
 //!     ├── AccumulatorBackend (non-membership / non-revocation)
-//!     ├── IvcBackend (fold chain composition into constant-size proof)
 //!     ├── PresentationBackend (full composed authorization statement)
 //!     └── CrossStateBackend (cross-state derivation composition)
 //!
 //! FullProofBackend: ProofBackend + DerivationBackend + PredicateBackend
-//!                 + AccumulatorBackend + IvcBackend + PresentationBackend
+//!                 + AccumulatorBackend + PresentationBackend
 //!                 + CrossStateBackend
 //! ```
 //!
@@ -334,9 +333,9 @@ pub trait AccumulatorBackend: ProofBackend {
     ) -> Result<bool, String>;
 }
 
-// ============================================================================
-// Extended trait: IvcBackend
-// ============================================================================
+// RETIRED 2026-07-16 (mock-proof purge): the `IvcBackend` trait (and its
+// `IvcOutput` type) had zero implementors and zero consumers; its only shape was
+// the simulated hash-chain IVC. `IvcFoldStep` survives as presentation input data.
 
 /// A single fold delta for IVC accumulation.
 #[derive(Clone, Debug)]
@@ -349,55 +348,6 @@ pub struct IvcFoldStep {
     pub removed_fact_hashes: Vec<FieldElement>,
     /// Number of checks added (for checks commitment binding).
     pub num_added_checks: usize,
-}
-
-/// Output of an IVC proof.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub struct IvcOutput {
-    /// The initial root (before any attenuation).
-    pub initial_root: FieldElement,
-    /// The final root (after all attenuations).
-    pub final_root: FieldElement,
-    /// Number of fold steps accumulated.
-    pub step_count: u32,
-    /// The accumulated hash committing to the chain history.
-    /// 4 elements for 124-bit collision resistance.
-    pub accumulated_hash: [FieldElement; 4],
-}
-
-/// Backend capability: IVC chain composition.
-///
-/// Accumulates N fold steps into a single constant-size proof. This is the
-/// recursive proof composition that makes attenuation chains verifiable in O(1).
-///
-/// Without real recursion, backends may implement this as a hash-chain with
-/// constraint checking. With recursion (e.g., Pickles over Pasta), each step
-/// verifies the prior proof inside the circuit.
-pub trait IvcBackend: ProofBackend {
-    /// The IVC proof type (constant size regardless of chain length).
-    type IvcProof: serde::Serialize + for<'de> serde::Deserialize<'de>;
-
-    /// Accumulate a sequence of fold steps into a single IVC proof.
-    ///
-    /// `initial_root` is the state root before any folds. `steps` is the ordered
-    /// sequence of fold deltas. Returns a constant-size proof covering the entire chain.
-    fn prove_ivc(
-        initial_root: FieldElement,
-        steps: &[IvcFoldStep],
-    ) -> Result<Self::IvcProof, String>;
-
-    /// Verify an IVC proof.
-    ///
-    /// Returns the public output (initial_root, final_root, step_count, accumulated_hash)
-    /// on success, allowing the caller to bind the IVC result to other proof components.
-    fn verify_ivc(proof: &Self::IvcProof) -> Result<IvcOutput, String>;
-
-    /// Maximum supported chain depth (backend-specific limit).
-    ///
-    /// Returns the maximum number of fold steps that can be accumulated in a
-    /// single IVC proof. Exceeding this should be handled by the caller
-    /// (e.g., by splitting into segments).
-    fn max_chain_depth() -> u32;
 }
 
 // ============================================================================
@@ -465,7 +415,7 @@ pub struct PresentationOutput {
 /// combines: issuer membership, fold chain (attenuation), derivation (authorization),
 /// and optionally temporal predicates and non-revocation. This is the top-level
 /// proof that a verifier checks.
-pub trait PresentationBackend: ProofBackend + DerivationBackend + IvcBackend {
+pub trait PresentationBackend: ProofBackend + DerivationBackend {
     /// The presentation proof type.
     type PresentationProof: serde::Serialize + for<'de> serde::Deserialize<'de>;
 
@@ -586,7 +536,6 @@ pub trait FullProofBackend:
     + DerivationBackend
     + PredicateBackend
     + AccumulatorBackend
-    + IvcBackend
     + PresentationBackend
     + CrossStateBackend
 {

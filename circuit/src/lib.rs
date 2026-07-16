@@ -560,16 +560,15 @@ pub use effect_vm::{
 };
 pub use field::BabyBear;
 pub use ivc::{
-    FoldDelta, FoldStepWitness, IvcBackend, IvcBackendProof, IvcBuilder, IvcPresentationProof,
-    IvcProof, IvcVerification, MAX_FOLD_DEPTH, StateTransitionAir, prove_ivc, verify_ivc,
+    FoldDelta, FoldStepWitness, IvcBuilder, IvcProof, IvcVerification, MAX_FOLD_DEPTH,
+    StateTransitionAir, prove_ivc, verify_ivc,
 };
 pub use non_membership::{
     NonMembershipCheck, NonMembershipProver, SetIdentifier, compute_set_accumulator,
     derive_alpha_for_set,
 };
 pub use presentation::{
-    AuthorizationProof, PresentationAir, PresentationProof, PresentationVerification,
-    PresentationWitness, prove_authorization,
+    PresentationAir, PresentationProof, PresentationVerification, PresentationWitness,
 };
 // Re-export predicate types at crate root for backward compatibility.
 pub use dsl::predicates::{PredicateAir, PredicateType, PredicateWitness, compute_fact_commitment};

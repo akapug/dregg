@@ -678,39 +678,8 @@ fn ivc_constant_size_proof() {
     println!("  Sequential growth ratio (10-step / 1-step): {seq_ratio:.2}x");
 }
 
-/// Test: IVC integration with full presentation proof.
-#[test]
-fn ivc_presentation_end_to_end() {
-    use crate::ivc::IvcPresentationVerification;
-
-    println!("\n=== IVC Presentation End-to-End ===");
-
-    let mut witness = crate::presentation::create_test_presentation();
-    // Fix federation root to match issuer membership
-    witness.federation_root = witness.issuer_membership.expected_root;
-
-    let air = PresentationAir::new(witness);
-
-    // Generate IVC-based proof
-    let ivc_presentation = air.prove_ivc();
-    assert!(
-        ivc_presentation.is_some(),
-        "IVC presentation proof should succeed"
-    );
-
-    let ivc_pres = ivc_presentation.unwrap();
-    let result = ivc_pres.verify();
-    assert_eq!(result, IvcPresentationVerification::Valid);
-
-    // Compare sizes
-    let sequential_proof = air.prove().unwrap();
-    println!(
-        "  Sequential proof size: {}",
-        sequential_proof.proof_size_display()
-    );
-    println!("  IVC proof size: {}", ivc_pres.proof_size_display());
-    println!("  IVC fold chain steps: {}", ivc_pres.ivc_proof.step_count);
-}
+// RETIRED 2026-07-16 (mock-proof purge): `ivc_presentation_end_to_end` exercised
+// `PresentationAir::prove_ivc` / `IvcPresentationProof`, both deleted.
 
 /// Test: Proof size scaling with chain length.
 #[test]

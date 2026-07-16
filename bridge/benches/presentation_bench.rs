@@ -103,14 +103,8 @@ fn bench_prove_stark(c: &mut Criterion) {
     });
 }
 
-fn bench_prove_ivc(c: &mut Criterion) {
-    c.bench_function("bridge_prove_ivc", |b| {
-        b.iter(|| {
-            let (mut builder, request) = make_builder_and_request();
-            black_box(builder.prove_ivc(&request).unwrap());
-        });
-    });
-}
+// RETIRED 2026-07-16 (mock-proof purge): `bench_prove_ivc` benched the deleted
+// mock IVC presentation path (`BridgePresentationBuilder::prove_ivc`).
 
 fn bench_macaroon_to_factset_bench(c: &mut Criterion) {
     let key = test_key();
@@ -212,7 +206,6 @@ criterion_group!(
     benches,
     bench_prove_fast,
     bench_prove_stark,
-    bench_prove_ivc,
     bench_macaroon_to_factset_bench,
     bench_authorize_with_trace_bench,
     bench_end_to_end_cycle,

@@ -57,7 +57,10 @@ fn count_mock_sites(src: &str) -> usize {
 #[rustfmt::skip]
 const BASELINE: &[(&str, usize)] = &[
         // ── THE MOCK ENGINES themselves (retire once nothing production rides them) ──
-        ("circuit/src/ivc.rs", 79),
+        // 2026-07-16: presentation-IVC surface retired (`IvcPresentationProof` + verify,
+        // `IvcBackend`/`IvcBackendProof`/`finalize_with_backend`): 79 -> 70. The remaining
+        // sites are the core simulated engine, still ridden by node MCP handlers.
+        ("circuit/src/ivc.rs", 70),
         ("circuit/src/constraint_prover.rs", 17),
         // ── NEEDS-PLUMBING (provable data not at this layer; must fail closed meanwhile) ──
         ("node/src/mcp/handlers_verify.rs", 3),      // dregg_compress_history: returns "valid" for create_test_chain synthetic data. WORST — live MCP tool.
@@ -73,11 +76,17 @@ const BASELINE: &[(&str, usize)] = &[
         // (`ivc_turn_chain::prove_turn_chain_recursive` + `verify_whole_chain_proof_bytes`), with
         // forged-chain / tampered-publics / wrong-anchor refusal teeth.
         ("preflight/src/checks/backends.rs", 2),
-        // ── HONEST-RETIRE (dead but ARMED: the mock rides wire types / is_valid honors it) ──
-        ("circuit/src/presentation.rs", 21),
-        ("bridge/src/present.rs", 4),
-        ("circuit/src/multi_step_witness.rs", 3),
-        ("circuit/src/backends/mod.rs", 2),
+        // ── HONEST-RETIRE (dead but ARMED: the mock rode wire types / is_valid honored it) ──
+        // 2026-07-16 the presentation-IVC path was RETIRED: `PresentationAir::prove_ivc`/
+        // `prove_ivc_no_folds`, `BridgePresentationBuilder::prove_ivc`, `IvcPresentationProof`,
+        // and the `ivc_proof` wire field are DELETED; `is_valid()` now rests solely on
+        // `real_stark_proof`. bridge/src/present.rs: 4 -> 0.
+        // circuit/src/multi_step_witness.rs: 3 -> 0 (`prove_authorization` trace-digest leg gone).
+        // circuit/src/backends/mod.rs: 2 -> 0 (unimplemented `IvcBackend` trait gone).
+        // presentation.rs residual 11 = the sequential `prove()` fold-proof path (constraint
+        // proofs inside `PresentationProof`), still exercised by prove()/prove_fast(); retires
+        // with the constraint-prover engine itself.
+        ("circuit/src/presentation.rs", 11),
         // ── incidental ──
         ("circuit/src/lib.rs", 1),
         ("preflight/src/checks/derivation_descriptor.rs", 1),  // the CORRECT template: names the mock only to REFUSE it.
