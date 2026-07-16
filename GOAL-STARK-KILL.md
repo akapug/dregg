@@ -799,3 +799,19 @@ const (the `accumulator_nonrev_emit_gate.rs` pattern); (3) a production witness/
 `non_revocation_witness.rs` / `membership_witness_4ary` analog); (4) cut `prove_turn_chain_recursive_
 without_host_gate` onto `parse_vm_descriptor2`/`prove_vm_descriptor2`, keeping `generate_chain_trace_
 rotated` (trace-gen is legit Rust). Only after (4) is the law satisfied on that path.
+
+### `eeb6ccbe9` — bricks 1-2 DONE: `dregg-turn-chain-binding-v2` emitted + registered
+- **Brick 1** `metatheory/EmitTurnChain.lean` — byte source via `emitVmJson2` (the `EmitRotationV3.lean`
+  mechanism, `lake env lean --run`). Emits 2148 bytes: ir2, width 14, 4 PIs, **6 window_gate** (incl. the
+  `on_transition:true` continuity tooth the base ladder omits) + 4 pi_binding + 3 boundary + 1 lookup.
+- **Brick 2** registered in `descriptor_by_name.rs` STATIC_GOLDENS + `descriptors/by-name/turn-chain-binding.json`.
+- **Verified NOT just "compiles"**: `dispatch_names_decode_and_check` DECODES + `check_descriptor2_wellformed`s
+  every registered golden — 9/9 pass. cargo check green over circuit+bridge+circuit-prove --tests.
+- **Fixed a bug I shipped in `ece829fc2`**: my husk-rename sed'd `bridge_action_air_v1` ->
+  `bridge_action_witness_v1` inside a **WIRE IDENTIFIER** (dispatch key + `air_id`) while the JSON's
+  authoritative `name` still said `_air_v1`. **Lesson: a mechanical rename must NEVER touch protocol
+  strings.** Restored across 5 files. The dispatch gate caught it — that is why the gate exists.
+- **NEXT**: (3) emit-gate byte-pin test (`accumulator_nonrev_emit_gate.rs` GOLDEN_JSON pattern) +
+  production witness builder; (4) cut `prove_turn_chain_recursive_without_host_gate` onto
+  parse/prove_vm_descriptor2, KEEPING `generate_chain_trace_rotated`. Until (4), `grain-verify/r3.rs:139`
+  still runs the hand AIR.
