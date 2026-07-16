@@ -86,6 +86,27 @@ false statement — `Neq(t)` at `value == t` violates the degree-2 nonzero BASE 
 REDs. The bridge's `Option` contract is a debug-build fiction at that pole.
 
 
+## ⚑ FORWARD CAMPAIGN + OPS RUNBOOKS (2026-07-16)
+Four-track campaign designed + committed (`docs/FORWARD-CAMPAIGN-2026-07.md` + the D/A/C track docs; B already
+designed). Then an ops/runbook census (agent) → coverage was partial+scattered; built the four missing
+campaign-critical runbooks (`f0319f1a7`): VK/MPC ceremony (triple-gated DO-NOT-EXECUTE until B-cutover+ember),
+durable hbox node unit+runbook (closes the ledger-loss gap), bare-clone repro-gate script+`repro-gate.yml` (the
+load-bearing falsifier; auto job = default-members spine, full workspace manual), Solana anchor-pin + SnapshotFeed
+runbook (snapshot steps labeled pending). Census corrections: `deploy/aws/` is QUARANTINED-not-lost (→`SUPERSEDED/`
++ current replacement); a live `docs/ops/` suite exists (MONITORING/INCIDENT/DISASTER/KEY-MGMT); descriptor/VK-regen
+is the most mature ops surface.
+- **Defused 2 silent traps** (`deploy/launchpad/RUNBOOK.md`, `docs/ops/OPS-RUNBOOK.md`): both routed go-live through
+  the gateway-Caddy-over-tailnet path that is FALSE at the network layer (two-tailnet split) with no banner. Bannered
+  as a stop-gap, THEN (per ember: edit don't banner) launched a lane to REWRITE the launchpad hosting half onto the
+  verified tailscale-funnel pattern (new `dregg-launchpad-web-funnel.service` + funnel install + runbook rewrite;
+  funnel-port-sharing decision: games holds :443, launchpad → :8443, box-pending).
+- **Register rule reaffirmed**: a runbook must be EXECUTABLE-OR-LABELED-PENDING, never aspirational prose (the repo's
+  disease: the deleted-systemd fabric, the unbannered gateway runbooks). Banner only when no known-good replacement
+  exists AND it points at a live one; otherwise EDIT.
+- OPEN ops gaps (lower priority): fix `deploy/launchpad/deploy-launchpad.sh` topology (in progress), reproducible
+  `dregg-node:n5` image build (TODO-7), stale `deploy/hbox/RUNBOOK.md` + `deploy/gateway-ask/` unverified, dangling
+  `systemctl restart dregg-gateway` pointers in `redteam/` findings docs (historical, low harm).
+
 ## ✅ EXCELLENCE BRAID 1 — ALL 10 LANES LANDED (2026-07-16)
 All committed + verified on the healed tree: bridge holes+live-feed (`72561117d`), verb-registry classify+ratchet
 (`5a6358093`), FRI cutover+extraction docs (`4609a507e`), bond design+paper refs (`c77c5ddd7`), weighted-cast
