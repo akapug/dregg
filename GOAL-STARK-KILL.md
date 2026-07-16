@@ -619,3 +619,62 @@ HONEST TAIL (fail-CLOSED — safe, never fail-open — the remaining emit-forwar
   · Workspace-wide build still blocked by the PARALLEL PQ-lane blocklace/crypto-hermine break (not ours).
 NEXT NORTH STAR (ember's actual pre-quest goal, resumed): governance-as-stories + SPWEEN (verifiable
 collaborative CYOA/MUDs) + substrate-native voting — now on a fast, verified, light-client-sound prover.
+
+## ⚑ GOAL RE-SET (2026-07-16, ember): retire every FIRST-PARTY Rust-authored circuit; emit from Lean
+The engine is dead (07-09). This is the tail ember re-aimed: **first-party circuits still authored in
+Rust**, + the **fictions** that keep re-fooling audits. Rule: **never hand-author a constraint to close a
+gap; if an emitter is missing, NAME it.**
+
+### THE FINDING THAT SETS THE BAR (why lowering ≠ emitting)
+`cellprogram_to_descriptor2` is PROVED faithful (`CustomLeafEncoding.lean::cell_to_descriptor_faithful`,
+`encodeLocal_holdsAt_iff`, `encodeTransition_holdsAt_iff`, mod-p residues). But that proves **"the encoding
+preserves whatever Rust said"** — NOT **"what Rust said is the right circuit."** Nobody proved
+`dsl/revocation.rs`'s 40 constraints enforce non-revocation. **Emission is what buys correctness**:
+`NonRevocationEmit.lean` PROVES the statement and emits the descriptor as a consequence — proof and
+deployed bytes are one artifact. That is why law #1 says EMIT, not LOWER.
+
+### ARCHITECTURE, VERIFIED (4 audits got this wrong — do NOT re-derive)
+| system | authored | interpreter | status |
+|---|---|---|---|
+| Rust DSL (`dsl/circuit.rs` `CircuitDescriptor`/`ConstraintExpr`) | Rust | `dsl_p3_air` | grammar+interpreter LEGIT (host-trusted `ProgramRegistry`, unknown vk_hash fails closed, lowers to IR2 + `verify_vm_descriptor2`); **first-party circuits authored in it = THE violation** |
+| Lean `Exec/CircuitEmit` → `EmittedDescriptor` | Lean (proved) | `LeanDescriptorAir` | **DEAD** — interpreter referenced only in its own file (IR-v1, superseded by IR-v2) |
+| Lean `Circuit/Emit/*.lean` (174 mods) → `EffectVmDescriptor2` | Lean | `descriptor_ir2`/`Ir2Air` | **LIVE + law-compliant** — 110 consumers |
+
+**THREE constraint dialects** — a grep that sees only #1 LIES (this burned 4 audits incl. 2 of mine):
+1. `builder.assert_zero(..)` (greppable) · 2. `Constraint { eval: Box::new(..) }` (closures, invisible)
+· 3. `ConstraintExpr::{..}` struct literals (data, invisible)
+
+### DONE 2026-07-16
+- `9ba02881b` — **the hand Merkle AIR is DEAD.** `P3MerklePoseidon2Air` retired; deployed membership leg
+  proves via `MerkleMembership4aryEmit.lean`'s byte-pinned descriptor. Teeth PASS (forged root/leaf/
+  non-member all rejected). The emitter had EXISTED and the deployed path ignored it — the recurring sin.
+  Also swept 4 pre-existing dangling tests (875 lines) that had never compiled.
+- `f7d09d5f5` — swept 4 dead pre-law AIRs (1080 lines) incl. `schnorr_air`'s 591 lines of UNASSURED hand
+  curve algebra (dead: only reachable via lib.rs's own mod decl).
+- `8cc7ef821` — deleted 5 lying `*_air` re-export shims (`_air` name on a DSL re-export = the fiction that
+  made every audit over-count); repointed ~22 importers to `dsl::{fold,predicates}`.
+- `ece829fc2` — renamed 3 husks to the truth (`note_spending_witness`/`bridge_action_witness`/
+  `multi_step_witness`, 49 files). **Did NOT rename `garbled_air`/`membership_adjacency_air`/
+  `derivation_air` — they have LIVE algebra in dialects 2/3; renaming would have BURIED violations.**
+
+### CURRENT THRUST + NEXT 3
+1. **Non-revocation cutover** — `NonRevocationEmit.lean` exists, byte-pinned in `descriptor_by_name.rs`
+   STATIC_GOLDENS (`dregg-non-revocation-sorted-tree::poseidon2-v1`), emit-gate test — yet
+   `sdk/src/privacy.rs:621,762` + `full_turn_proof.rs:4692,4999` STILL run the hand circuit. Merkle mold.
+2. **Delete dead `dsl/derivation.rs`** (59 sites, NO callers outside `dsl/`, emitted twin `DERIVATION_JSON`
+   already in STATIC_GOLDENS).
+3. **Fix the fictions**: `Claims.lean:383` false-cognate ("algebraic ConstraintExpr circuits emit
+   faithfully" — different grammar + DEAD target); mark `EmittedDescriptor`/`LeanDescriptorAir` retired.
+
+### NAMED RESIDUALS (do NOT hand-author)
+- `ivc_turn_chain.rs` (14 sites): **no emitter covers it** — needs `EffectVmEmitTurnChainBinding.lean`
+  (`dregg-turn-chain-binding-v2`). The existing IVC ladder emits a DIFFERENT circuit and Lean PROVES it
+  too weak (`ivc_anchor_insufficient`: intermediate roots are FREE columns). Rewiring = soundness
+  REGRESSION (would delete the temporal tooth closing CRITICAL HOLES #1/#2/#6). NAMED, not laundered.
+- `ivc.rs::StateTransitionAir`: emitter EXISTS (`dregg-ivc-state-transition-v2`, round-trips in 2 tests)
+  but NO production path consumes it. Merkle mold — tractable.
+- `dsl/cap_membership.rs` (5): emitters cover cap-open only as an in-VM appendix, not a standalone leg.
+- `garbled_air.rs` (16, dialect 2) + `membership_adjacency_air.rs` (10, dialect 3): live violations.
+  `GarbledEvalEmit.lean` exists.
+- First-party DSL sites remaining: derivation 59 (dead) · revocation 40 · note_spending 27 · fold 15 ·
+  committed_threshold 12 · cap_membership 5.
