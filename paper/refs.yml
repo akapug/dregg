@@ -203,6 +203,90 @@ capdl:
   parent:
     type: proceedings
     title: ACM Asia-Pacific Workshop on Systems (APSys)
+ethstark:
+  type: article
+  title: ethSTARK Documentation
+  author:
+  - StarkWare Team
+  date: 2021
+  serial-number: IACR ePrint 2021/582
+  url: https://eprint.iacr.org/2021/582
+bciks20:
+  type: article
+  title: Proximity Gaps for Reed-Solomon Codes
+  author:
+  - Ben-Sasson, Eli
+  - Carmon, Dan
+  - Ishai, Yuval
+  - Kopparty, Swastik
+  - Saraf, Shubhangi
+  date: 2020
+  serial-number: IACR ePrint 2020/654
+  parent:
+    type: proceedings
+    title: IEEE Symposium on Foundations of Computer Science (FOCS)
+bcss25:
+  type: article
+  title: On Proximity Gaps for Reed-Solomon Codes
+  author:
+  - Ben-Sasson, Eli
+  - Carmon, Dan
+  - Haböck, Ulrich
+  - Kopparty, Swastik
+  - Saraf, Shubhangi
+  date: 2025
+  serial-number: IACR ePrint 2025/2055
+ibc:
+  type: article
+  title: 'The Interblockchain Communication Protocol: An Overview'
+  author:
+  - Goes, Christopher
+  date: 2020
+  serial-number: arXiv:2006.15918
+  url: https://arxiv.org/abs/2006.15918
+zkbridge:
+  type: article
+  title: 'zkBridge: Trustless Cross-chain Bridges Made Practical'
+  author:
+  - Xie, Tiancheng
+  - Zhang, Jiaheng
+  - Cheng, Zerui
+  - Zhang, Fan
+  - Zhang, Yupeng
+  - Jia, Yongzheng
+  - Boneh, Dan
+  - Song, Dawn
+  date: 2022
+  serial-number: arXiv:2210.00264
+  parent:
+    type: proceedings
+    title: ACM Conference on Computer and Communications Security (CCS)
+darkforest:
+  type: web
+  title: 'Dark Forest: A Decentralized Real-Time Strategy Game Built on Ethereum
+    with zkSNARKs'
+  author:
+  - Dark Forest Team
+  url: https://zkga.me/
+  date: 2020
+mud:
+  type: web
+  title: 'MUD: A Framework for Onchain Applications and Autonomous Worlds'
+  author:
+  - Lattice
+  url: https://mud.dev/
+  date: 2022
+tlshybrid:
+  type: report
+  title: Post-quantum Hybrid ECDHE-MLKEM Key Agreement for TLSv1.3
+  author:
+  - Kwiatkowski, Kris
+  - Kampanakis, Panos
+  - Westerbaan, Bas
+  - Stebila, Douglas
+  date: 2026-05
+  serial-number: IETF Internet-Draft draft-ietf-tls-ecdhe-mlkem-05
+  url: https://datatracker.ietf.org/doc/draft-ietf-tls-ecdhe-mlkem/
 nitpicker:
   type: article
   title: 'A Nitpicker''s Guide to a Minimal-Complexity Secure GUI'

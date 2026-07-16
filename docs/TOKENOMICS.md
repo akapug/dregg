@@ -81,8 +81,10 @@ bond denominated in the token it polices loses value exactly when misconduct occ
 bonds should be quote-asset-denominated (`docs/deos/FHEGG-CODEX-ROUND4.md`). A $DREGG
 bond/collateral sink via the ordinary Payable rail (bridged $DREGG is already an
 ordinary asset to the service economy, `docs/guide/SERVICE-ECONOMY-SDK.md`) is
-**NAMED** — a natural future sink, not built, and any design must price the
-correlated-devaluation problem the codex analysis identifies.
+**DESIGNED, not built** — `docs/deos/DREGG-BOND-DESIGN.md` (quote-floored
+two-tranche bond: the deterrence floor is quote-asset-covered; $DREGG is a
+junior first-loss tranche that never counts toward the floor), which prices
+exactly the correlated-devaluation problem the codex analysis identifies.
 
 ## What deliberately does not exist
 

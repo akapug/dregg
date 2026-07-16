@@ -42,9 +42,9 @@ executes.
 
 *Bridges, IBC, and zk light clients.* Cross-chain systems answer "did this
 happen on the other chain?" in three ways: a committee attests (Wormhole,
-LayerZero, Hyperlane), each chain runs the counterparty's header verifier (IBC),
-or a succinct proof of the counterparty's consensus replaces the header chain
-(zkBridge, Xie et al.). dregg takes IBC's discipline --- the receiving side
+LayerZero, Hyperlane), each chain runs the counterparty's header verifier
+(IBC @ibc), or a succinct proof of the counterparty's consensus replaces the
+header chain (zkBridge @zkbridge). dregg takes IBC's discipline --- the receiving side
 checks for itself --- and the zk-bridge economy of checking succinctly, and
 removes the vote entirely: outbound, a target chain's contract verifies a
 Groth16 wrap of a dregg state transition directly (`DreggSettlement.sol` on the
@@ -55,11 +55,11 @@ semantics, not headers. The verifiers pass both polarities in test on a
 development trusted setup; none is deployed to a mainnet.
 
 *FRI soundness accounting* @fri. Deployed STARK practice reports soundness from
-a parameter ledger: StarkWare's ethSTARK documentation (IACR ePrint 2021/582)
+a parameter ledger: StarkWare's ethSTARK documentation @ethstark
 composes the commit-phase and query error terms as a minimum, with the
 commit-phase term proved by Ben-Sasson, Carmon, Ishai, Kopparty, and Saraf
-(BCIKS20, proximity gaps for Reed--Solomon codes) and improved from quadratic to
-linear in the domain by its 2025 successor (BCSS25). The field convention of
+(BCIKS20 @bciks20) and improved from quadratic to linear in the domain by its
+2025 successor (BCSS25 @bcss25). The field convention of
 quoting queries $times$ blowup / 2 plus grinding as _the_ soundness number keeps
 only the query column and silently drops the commit-phase term. dregg's ledger
 keeps the two columns separate as a theorem:
@@ -76,9 +76,9 @@ resource, verbs as structural rules). dregg fixes the dual orientation: search i
 untrusted and lives at the edges (solvers, intent matchers); the kernel only
 checks.
 
-*Verifiable game state and autonomous worlds.* Dark Forest demonstrated
-hidden-information play enforced by zero-knowledge proofs, and the MUD line of
-on-chain game frameworks treats a game world as state whose rules the chain
+*Verifiable game state and autonomous worlds.* Dark Forest @darkforest
+demonstrated hidden-information play enforced by zero-knowledge proofs, and the
+MUD @mud line of on-chain game frameworks treats a game world as state whose rules the chain
 itself enforces. dregg takes the ambition --- game state whose rules the
 operator cannot bend --- and moves the guarantee's source: a game is a
 factory-minted cell whose moves are ordinary turns, so authority, conservation,
@@ -126,8 +126,8 @@ right to see is separated from the right to act by construction.
 
 *Hybrid post-quantum migration.* Migration practice pairs a classical and a
 post-quantum scheme and accepts only when both verify --- hybrid key
-establishment in TLS (X25519 with ML-KEM) and dual-signature certificate
-proposals --- on the argument that the pair is at least as strong as its
+establishment in TLS (X25519 with ML-KEM) @tlshybrid and dual-signature
+certificate proposals --- on the argument that the pair is at least as strong as its
 stronger half. dregg takes the pattern and mechanizes the argument: a hybrid
 quorum certificate (an ed25519 vote quorum paired with FIPS 204 ML-DSA-65
 signatures) is unforgeable if either half is
