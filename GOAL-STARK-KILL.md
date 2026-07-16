@@ -1597,3 +1597,25 @@ decision, NAMED not faked.
 ✅ compress_history WIRED (flagship) · ✅ compose_proofs RETIRED fail-closed
 REMAINING: preflight/{proofs,composition,backends} (WIRE-FEASIBLE) · the ENGINES (ivc.rs 70 +
 constraint_prover 17) — retire last, once nothing rides them.
+
+### `61adf7e02` — the SOUNDNESS SUITE was certifying a MOCK (the sharpest find of the purge)
+`tests/src/soundness.rs` — header: *"Proof soundness tests… A sound proof system must never accept a
+[forged] proof"* — its four `ivc_*` tests drive the **SIMULATED** IVC. `verify_ivc` only recomputes a BLAKE3
+digest over the proof's OWN public data, so "Tampered hash must fail" passes TRIVIALLY. **That is
+self-consistency, not soundness**: the real attack is MINTING A CONSISTENT FAKE (anyone who can call
+`prove_ivc` can, for any root walk — `constraint_prover.rs:5-8` admits "nothing here is sound against a
+prover that lies"). A suite named *soundness* was manufacturing soundness evidence for a prover with none,
+and would have passed forever. Scope-corrected in the header; the REAL teeth exist + pass
+(`ivc_turn_chain_rotated.rs`: forged digest/count/order/root/descriptor/public/VK/version/truncation all
+REJECTED, 5/5, byte-pinned to Lean).
+**Honest gap in MY OWN ratchet**: `mock_proof_purge_gate` skips `*/tests/*`, so a mock-riding SOUNDNESS
+suite is invisible to it. Fixtures may legitimately use mocks — the defect is a suite CLAIMING soundness
+while testing a simulation. Caught by reading, not by the gate.
+
+### THE MOCK IVC ENGINE HAS NO PRODUCTION RIDERS LEFT
+After the flagship (`d5ec509e8`), `grep` for `prove_ivc(`/`verify_ivc(`/`create_test_chain(` outside
+`circuit/src/ivc.rs` finds ONLY: `preflight/checks/{composition,backends}.rs` (CONTESTED — another lane
+holds them; `composition.rs:18`'s own comment "the IVC fold-chain check is unaffected — prove_ivc/verify_ivc
+SURVIVED INTACT" is itself the lie: they survived because they are a mock, not because they are sound) and
+`tests/src/soundness.rs` (now scope-corrected). **The engine retires the moment those 3 preflight checks are
+freed and wired** — the last step of the purge.
