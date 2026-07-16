@@ -81,6 +81,53 @@ jobs:
           npm ci || npm install
           npm run build
 
+      # ─── THE RELEASE GATE ───────────────────────────────────────────────
+      #
+      # A publish gated on a suite that never ran is gated on NOTHING. This
+      # workflow used to build, `npm pack --dry-run`, and publish — never once
+      # invoking the tests. That is how three revisions of confident prose
+      # shipped: sdk-ts dropped `CapabilityRef::provenance` (M30), signed
+      # classical-only, and signed `dregg-action-sig-v2` against a `v3`
+      # executor — every signed turn rejected by the node — while the package
+      # said "byte-faithful: yes".
+      #
+      # sdk-ts is STRUCTURALLY prone to this in a way sdk-py is not: sdk-py
+      # depends on dregg-turn/dregg-cell by PATH and encodes with the same
+      # `postcard` the node decodes with, so it cannot mis-encode. sdk-ts must
+      # port the codec to TypeScript, so only a test can catch its drift.
+      # (`publish-sdk-py.yml` gates on `cargo test` for the same reason; this
+      # mirrors it.)
+      #
+      # `npm test` runs BOTH oracles, and neither can go stale:
+      #   * the BYTE differential (`test/wire.test.mjs`) compares TS-encoded
+      #     turns against the freshly-built dregg-wasm — the REAL Rust codec.
+      #     Its `pretest` hook rebuilds `wasm/pkg` (gitignored, so there is no
+      #     frozen artifact to silently bless), and the loader THROWS if the
+      #     oracle is absent rather than skipping.
+      #   * the VOCABULARY gate (`test/protocol-vocabulary.test.mjs`) parses
+      #     `turn/src/action.rs` + `cell/src/capability.rs` at test time and
+      #     fails if any Effect/Authorization variant is unaccounted for, if a
+      #     postcard discriminant index shifted, or if a modeled variant's
+      #     field set changed. That closes what a byte differential cannot see:
+      #     Rust has 34 Effect variants, TS models 7, and a 35th is invisible
+      #     to a comparison over 7 fixtures.
+      #
+      # The v2-vs-v3 signing bug would have failed the byte differential here
+      # and blocked the tag. Do not add `continue-on-error` to this step. If it
+      # is red, the protocol moved and the SDK has not caught up — that is
+      # exactly the publish that must not happen.
+      #
+      # RUSTFLAGS mirrors the wasm build step above: `npm test`'s `pretest` hook
+      # REBUILDS wasm/pkg (that rebuild is the freshness guarantee — it is what
+      # makes the oracle un-staleable), so it must use the same stack-size flag
+      # the release build does, or the oracle under test is not the artifact the
+      # SDK's types were generated against.
+      - name: Test before publishing (THE RELEASE GATE — drift dies here)
+        working-directory: sdk-ts
+        env:
+          RUSTFLAGS: "-C link-arg=-zstack-size=33554432"
+        run: npm test
+
       - name: Verify the package is well-formed (npm pack --dry-run)
         working-directory: sdk-ts
         run: npm pack --dry-run

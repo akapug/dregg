@@ -1,5 +1,83 @@
 # HORIZONLOG — the named-follow-up burn-down
 
+## ⚑ SDK DRIFT KILLED AT THE ROOT — vocabulary oracle + gated publish + wasm CI (2026-07-16, on disk, uncommitted)
+The two SDKs are an accidental CONTROLLED EXPERIMENT, and the experiment's verdict is STRUCTURE, NOT DILIGENCE.
+sdk-py **cannot** mis-encode — it depends on `dregg-turn`/`dregg-cell` by PATH and encodes with the same
+`postcard` the node decodes with, so it never had M30's dropped `provenance` and it got HYBRID PQ SIGNING FOR
+FREE (a Python-signed turn is 10953 B, 97.5% ML-DSA-65, because it rides the real Rust signer). sdk-ts **must**
+port the codec to TypeScript, and drifted three ways. Same team, same week, opposite outcomes.
+
+**The fields were already caught up; the CLASS was not.** Prior lanes fixed `provenance`, moved to `sig-v3`, and
+shipped an ML-DSA-65 hybrid signer. But the codec is still a hand-port, and the byte differential
+(`test/wire.test.mjs`, oracle = freshly-built `dregg-wasm` = the REAL Rust codec) only compares what it thought
+to compare. **Rust's `Effect` has 34 variants; the TS union models 7.** A 35th variant, a renamed field, or a
+reordered one was INVISIBLE. That was the silent channel.
+
+**CHOSE (c)-upgraded, not (a) codegen — with reasons.** (b) is already adopted exactly where it is viable: the
+oracle IS dregg-wasm at build/test time (the "not published to npm" objection binds the RUNTIME signer, not a
+test-time oracle). (a) full codegen from the Rust source is the real endgame but is the SDK OVERHAUL, not a
+patch — the transitive closure of 34 variants drags `CellProgram`, `PortableNoteProof`, `EventualRef`,
+`Box<Action>` recursion and `dregg_cell::Permissions` into generated TS a browser client has no business
+carrying. So: keep the deliberate 7-variant port, and make its SCOPE unable to drift silently.
+
+**`test/protocol-vocabulary.test.mjs` + `test/protocol-source.mjs`** mirror sdk-py's `wire_drift_killer.rs`:
+parse `turn/src/action.rs` + `cell/src/capability.rs` AT TEST TIME (no cached copy, no artifact — missing or
+restructured THROWS) and enforce (1) every `Effect`/`Authorization` variant is MODELED or declared UNMODELED
+**with a reason** — a new variant cannot be absorbed, someone must decide in the tree; (2) every postcard
+discriminant TS writes equals the Rust variant's POSITION, read from BOTH sources (the Rust enum and the literal
+`w.varint(n)` in `wire.ts`) so it is not a third hand-maintained mirror — `action.rs` states the law itself
+("a new variant MUST append, never insert — the durable postcard codec is index-sensitive"); (3) modeled field
+sets, incl. `CapabilityRef`'s eight — the literal M30 site. Division of labour: **the differential proves the
+BYTES; the vocabulary gate proves you are still encoding the RIGHT THINGS.** 99/99 green.
+
+**DRIVEN, not asserted** (each mutation applied to the real tree, observed RED, restored clean): append a
+variant → RED (EXHAUSTIVE) · add a field to `Transfer` → RED (FIELD PIN) · insert a variant at index 1 → RED
+(EXHAUSTIVE + DISCRIMINANT PIN) · drop `provenance` from `writeCapabilityRef` → RED (differential) · revert the
+signing domain to `sig-v2` → RED (differential). **That last one is the shipped `0.3.0` bug: the gate would have
+blocked the publish.** The gate found its own author's error too — the `UNMODELED_AUTH` list, written from
+memory, went red naming `Custom, OneOf, Stealth, Token`.
+
+**GATED THE PUBLISH.** `publish-sdk-ts.yml` built, `npm pack --dry-run`'d, and published while NEVER running
+`npm test` — "a publish gated on a suite that never ran is gated on nothing"; that is how three revisions of
+confident prose shipped. Now gated on `npm test` (both oracles), mirroring the `cargo test` gate on
+`publish-sdk-py.yml`. RUSTFLAGS matches the release wasm build so `pretest`'s rebuild is the same artifact.
+
+**wasm CI JOB** (`ci.yml`, mirrors `solana-lock`). wasm stays a standalone workspace for REAL reasons (its
+`[patch]` path-points plonky3-recursion; it force-enables wasm32-only features unification would push onto
+native) — so it is gated, not folded. Runs the ~78 native `#[test]`s (68 src + 10 tests/), the 8
+`#[wasm_bindgen_test]`s headless-chrome (two files carry `run_in_browser`), and the wasm32 bundle build. ⚠ the
+sibling `plonky3-recursion` clone at rev `0a4a554` is NOT optional — without it cargo cannot even RESOLVE the
+workspace. VERIFIED: `cargo check --tests` in `wasm/` exits 0, so the tests really do build now.
+`wasm/Cargo.lock` gained the dev-dep graph (`wasm-bindgen-test{,-macro,-shared}`, `minicov`, …) — which
+CORROBORATES the prior lane: those crates were never in the dependency graph at all.
+
+### Named residuals (NOT closed)
+- **⚑ sdk-py's receipt chain is a TIME BOMB, and it is NOT sdk-py's to fix alone.** `build_signed_turn` →
+  `make_turn_for` → `make_turn_with_actions_for` sources `previous_receipt_hash` from
+  `self.receipt_chain.last()` (`sdk/src/cipherclerk.rs:3397`) — an in-memory chain sdk-py never appends to (it
+  submits over HTTP and never feeds receipts back), so it is ALWAYS `None`. The executor checks
+  `stored == claimed` exactly (`turn/src/executor/mod.rs:1755`); a fresh executor has `stored = None`, so it
+  passes today ONLY because the node builds one per request. **A PERSISTENT executor rejects every non-first
+  Python turn with `ReceiptChainMismatch`** — sitting exactly where persistent-realm work would light it.
+  NOT fixed here, and deliberately: it needs a NODE change first. The head lives in the executor's
+  `last_receipt_hash` map (`get_last_receipt_hash`, mod.rs:1692), NOT on the cell — and `/api/cell/{id}`
+  (`node/src/api.rs:4273 cell_detail_response`) projects from `s.ledger`, so **the endpoint cannot serve the
+  head today**. Exact plumbing: (1) expose the chain head off the executor (new field on `CellDetailResponse`
+  or a dedicated endpoint); (2) sdk-py gets a `fetch_receipt_head` mirroring `fetch_cell_nonce` — FAIL-LOUD, no
+  `unwrap_or(None)`, same lesson the nonce already paid for; (3) stamp it in `build_signed_turn` BEFORE
+  `clerk.sign_turn` (the turn hash binds it — `turn/src/turn.rs:421`, causal ordering). And it is not
+  sdk-py-specific: the executor's own comment names the class (`AUDIT-wallet.md` P3-6) — `build_authorized_turn`,
+  `allocate_queue`, `enqueue_message`, `dequeue_message`, `atomic_queue_tx` ALL hardcode `None`. sdk-py is one
+  of six. "This check should NOT be relaxed; the cclerk is the side that needs to catch up." Coordinate.
+- **The codec is still a hand-port.** The vocabulary gate guarantees the port's SCOPE/SHAPE cannot silently
+  diverge; it does NOT guarantee a correctly-named field is encoded correctly — that is the byte differential's
+  job, and only for the 7 modeled variants. Option (a) codegen remains the right shape for the overhaul.
+- **A republish (0.4.0) still needs:** ember's overhaul call (EMBER-GATED, unpublished here), the `0.3.0`
+  deprecation (`npm deprecate` — it cannot submit ANY accepted turn), and the `@dregg/sdk/wasm` subpath's
+  unpublished `dregg-wasm` peer. `package.json` deliberately still pins `0.3.0`.
+- **wasm oracle fidelity gap (pre-existing):** `sign_turn_v3` signs at nonce 0 regardless of `turn.nonce`, so
+  signature differentials must ride nonce 0.
+
 ## ⚑ BLINDED WELD — "privacy vs soundness" REFUTED, wasm un-rotted (2026-07-16, on disk, uncommitted)
 A prior lane called the commitment BLINDING and the value↔fact WELD "mutually exclusive", then retracted it.
 The code refutes the claim outright, and the descriptor family now carries BOTH at once.

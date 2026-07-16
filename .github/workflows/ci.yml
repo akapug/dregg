@@ -41,6 +41,15 @@ jobs:
           toolchain: nightly
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --workspace --all-targets
+      # FEATURE-MATRIX GATES (2026-07-16, Lane 2 config-space audit): `dregg-chain`
+      # has NO default features, so the workspace check above compiles NEITHER of
+      # its real configurations. Before this gate, the `mock` config's tests had
+      # never been compiled by any automated step, and the `on-chain` config (the
+      # REAL alloy contract-call verifier) had never been compiled ANYWHERE — a
+      # type error in `real_verify_on_chain` was invisible. Both are cheap:
+      # mock adds no deps; alloy is already in the lockfile.
+      - run: cargo test -p dregg-chain --features mock
+      - run: cargo check -p dregg-chain --features on-chain
 
   # solana-lock is a DELIBERATE standalone workspace (keeps the Solana/SBF dep
   # tree out of the main one — see solana-lock/Cargo.toml). That isolation also
@@ -63,6 +72,80 @@ jobs:
           workspaces: solana-lock
       - run: cargo test
         working-directory: solana-lock
+
+  # wasm/ is a DELIBERATE standalone workspace, for reasons that are still good:
+  # its `[patch]` path-points plonky3-recursion at a sibling checkout, and it
+  # force-enables wasm32-only features (getrandom's `wasm_js`, the `no-lean-link`
+  # platform gate) that feature-unification would push onto every native crate if
+  # it were folded into the root workspace. So it stays standalone — and the
+  # SAME isolation that protects the root workspace kept wasm out of every CI
+  # job: nothing built it, so nothing could tell you it had rotted.
+  #
+  # It had. `wasm-bindgen-test` was a stray key inside `[dependencies.web-sys]`'s
+  # spec with no `[dev-dependencies]` section at all, so the crate's ~78 tests
+  # were UNBUILDABLE — invisible, because no CI job ever compiled them. That
+  # manifest bug is fixed; THIS JOB is what keeps it fixed. Mirrors the
+  # `solana-lock` job above, which exists for the identical reason.
+  #
+  # ⚠ THE SIBLING CHECKOUT IS NOT OPTIONAL. `wasm/Cargo.toml`'s `[patch]`
+  # path-points `../../plonky3-recursion` (cargo forbids re-pointing a git source
+  # to a different rev of the same URL, so the override must be a path patch).
+  # Without the clone, cargo cannot even RESOLVE this workspace — the job fails
+  # before it compiles a line. REV is the pushed `update-plonky3-rev` tip and is
+  # kept in lockstep with wasm/Cargo.toml's comment, pages.yml, extension.yml,
+  # and publish-sdk-ts.yml — they must be the SAME circuit or the VK forks.
+  wasm:
+    name: wasm (standalone workspace)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true   # include_str!'d staged registries live in LFS (.gitattributes)
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: wasm
+      - name: Fetch the plonky3-recursion fork as a sibling (wasm/ patch target)
+        run: |
+          set -euo pipefail
+          REV=0a4a554e144f4e60107555ea7a11cd9969d6208b
+          if [ ! -d ../plonky3-recursion/.git ]; then
+            git clone --no-checkout https://github.com/emberian/plonky3-recursion ../plonky3-recursion
+            git -C ../plonky3-recursion fetch --depth 1 origin "$REV"
+            git -C ../plonky3-recursion checkout "$REV"
+          fi
+
+      # THE GATE. The ~78 `#[test]`s (68 in src/, 10 in tests/) are ordinary
+      # native tests — they are the ones the manifest bug hid, and they run here.
+      - name: cargo test (the ~78 native tests the manifest bug hid)
+        working-directory: wasm
+        run: cargo test
+
+      # The 8 `#[wasm_bindgen_test]`s are a different population: two files carry
+      # `wasm_bindgen_test_configure!(run_in_browser)`, so they need a real
+      # browser, not node. ubuntu-latest ships Chrome; wasm-pack drives it
+      # headless. This is the only place the in-browser surface (the card-in-the-
+      # tab loop, the light-client-in-the-tab) is exercised at all.
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+      - name: wasm-pack test (the in-browser wasm_bindgen_test surface)
+        working-directory: wasm
+        run: wasm-pack test --headless --chrome
+
+      # The browser bundle itself must still BUILD for wasm32 — this is the
+      # artifact pages.yml serves and the one `sdk-ts`'s differential oracle is
+      # built from. A crate whose native tests pass but whose wasm32 build is
+      # broken is still rotted.
+      - name: Build the wasm32 bundle (the oracle + the pages artifact)
+        run: |
+          set -euo pipefail
+          RUSTFLAGS="-C link-arg=-zstack-size=33554432" \
+            wasm-pack build wasm --target web --out-dir pkg --release
+          test -s wasm/pkg/dregg_wasm.d.ts
 
   test:
     name: Test (${{ matrix.os }})
@@ -406,3 +489,13 @@ jobs:
       # exits nonzero. See docs/DESCRIPTOR-EMIT.md.
       - name: Descriptor drift gate
         run: bash scripts/check-descriptor-drift.sh
+
+      # The emit-gate CROSS-LANGUAGE weld: every GOLDEN_JSON literal in
+      # circuit-prove/tests/*_emit_gate.rs must be byte-identical to a Lean
+      # #guard pin or a drift-gated descriptor artifact. Each side's own gate
+      # (the Lean #guard at lake-build time, the Rust assert at cargo-test time)
+      # is blind to the PAIR drifting — this is the check that compares them.
+      # Static (no lake/cargo), <1s. Found 3 committed drifted pairs on arrival
+      # (fold/derivation/garbled-eval, 2026-07-16 — see TESTQALOG.md).
+      - name: Emit-gate weld (Rust golden == Lean pin)
+        run: python3 scripts/check-emit-gate-weld.py
