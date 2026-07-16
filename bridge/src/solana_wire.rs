@@ -327,6 +327,14 @@ pub struct IngestedVote {
     pub voted_slot: u64,
     /// The bank hash voted (the `hash` field of the vote / vote-state update).
     pub voted_bank_hash: [u8; 32],
+    /// The tower **root** this vote carries (`Some(r)` ⟹ the signer has rooted
+    /// slot `r` and every ancestor — i.e. considers them FINALIZED). Present on
+    /// the vote-state-update family (`UpdateVoteState` / `CompactUpdateVoteState`
+    /// / `TowerSync`); `None` on the legacy `Vote` instruction, which carries no
+    /// explicit root. The rooted super-majority tally
+    /// ([`crate::solana_provenance::VerifiedStakeTable::tally_authorized_rooted`])
+    /// counts a vote toward a slot's FINALITY only when `root ≥ that slot`.
+    pub root: Option<u64>,
 }
 
 /// `(vote_account meta index, authority meta index)` for each vote-carrying
@@ -334,24 +342,29 @@ pub struct IngestedVote {
 /// `accounts` array, which in turn indexes the message's account keys.
 fn vote_meta_indices(
     ix: &solana_vote_interface::instruction::VoteInstruction,
-) -> Option<(usize, usize, u64, [u8; 32])> {
+) -> Option<(usize, usize, u64, [u8; 32], Option<u64>)> {
     use solana_vote_interface::instruction::VoteInstruction as VI;
 
-    // Returns (vote_account_meta, authority_meta, voted_slot, bank_hash).
-    let (vote_acct_meta, auth_meta, slot, hash) = match ix {
+    // Returns (vote_account_meta, authority_meta, voted_slot, bank_hash, root).
+    // The legacy `Vote` instruction carries no explicit tower root; the
+    // vote-state-update family (`UpdateVoteState` / `CompactUpdateVoteState` /
+    // `TowerSync`) carries `root: Option<Slot>`.
+    let (vote_acct_meta, auth_meta, slot, hash, root) = match ix {
         // 0: vote account, 1: slot hashes, 2: clock, 3: vote authority
-        VI::Vote(v) => (0, 3, v.last_voted_slot()?, v.hash.to_bytes()),
-        VI::VoteSwitch(v, _) => (0, 3, v.last_voted_slot()?, v.hash.to_bytes()),
+        VI::Vote(v) => (0, 3, v.last_voted_slot()?, v.hash.to_bytes(), None),
+        VI::VoteSwitch(v, _) => (0, 3, v.last_voted_slot()?, v.hash.to_bytes(), None),
         // 0: vote account, 1: vote authority
-        VI::UpdateVoteState(u) => (0, 1, u.last_voted_slot()?, u.hash.to_bytes()),
-        VI::UpdateVoteStateSwitch(u, _) => (0, 1, u.last_voted_slot()?, u.hash.to_bytes()),
-        VI::CompactUpdateVoteState(u) => (0, 1, u.last_voted_slot()?, u.hash.to_bytes()),
-        VI::CompactUpdateVoteStateSwitch(u, _) => (0, 1, u.last_voted_slot()?, u.hash.to_bytes()),
-        VI::TowerSync(t) => (0, 1, t.last_voted_slot()?, t.hash.to_bytes()),
-        VI::TowerSyncSwitch(t, _) => (0, 1, t.last_voted_slot()?, t.hash.to_bytes()),
+        VI::UpdateVoteState(u) => (0, 1, u.last_voted_slot()?, u.hash.to_bytes(), u.root),
+        VI::UpdateVoteStateSwitch(u, _) => (0, 1, u.last_voted_slot()?, u.hash.to_bytes(), u.root),
+        VI::CompactUpdateVoteState(u) => (0, 1, u.last_voted_slot()?, u.hash.to_bytes(), u.root),
+        VI::CompactUpdateVoteStateSwitch(u, _) => {
+            (0, 1, u.last_voted_slot()?, u.hash.to_bytes(), u.root)
+        }
+        VI::TowerSync(t) => (0, 1, t.last_voted_slot()?, t.hash.to_bytes(), t.root),
+        VI::TowerSyncSwitch(t, _) => (0, 1, t.last_voted_slot()?, t.hash.to_bytes(), t.root),
         _ => return None,
     };
-    Some((vote_acct_meta, auth_meta, slot, hash))
+    Some((vote_acct_meta, auth_meta, slot, hash, root))
 }
 
 /// Parse a real Solana vote transaction and verify it.
@@ -396,8 +409,9 @@ pub fn parse_verified_vote_tx(bytes: &[u8]) -> Result<IngestedVote, WireError> {
         let vi: solana_vote_interface::instruction::VoteInstruction =
             bincode::deserialize(&cix.data).map_err(|_| WireError::UndecodableVoteInstruction)?;
 
-        // (4) extract metas + voted (slot, hash).
-        let Some((vote_acct_meta, auth_meta, voted_slot, voted_bank_hash)) = vote_meta_indices(&vi)
+        // (4) extract metas + voted (slot, hash) + tower root.
+        let Some((vote_acct_meta, auth_meta, voted_slot, voted_bank_hash, root)) =
+            vote_meta_indices(&vi)
         else {
             // A Vote-program instruction that carries no vote (Authorize, etc.).
             return Err(WireError::UndecodableVoteInstruction);
@@ -435,6 +449,7 @@ pub fn parse_verified_vote_tx(bytes: &[u8]) -> Result<IngestedVote, WireError> {
             authorized_voter,
             voted_slot,
             voted_bank_hash,
+            root,
         });
     }
 

@@ -73,9 +73,7 @@ use serde::{Deserialize, Serialize};
 use solana_stake_interface::stake_history::{MAX_ENTRIES, StakeHistory, StakeHistoryEntry};
 use solana_stake_interface::state::Delegation as SolDelegation;
 
-use crate::solana_consensus::{
-    BankHashComponents, EpochStakeTable, ValidatorVote, verify_supermajority,
-};
+use crate::solana_consensus::{BankHashComponents, EpochStakeTable, ValidatorVote};
 use crate::solana_wire::{
     AccountsInclusionProof16, parse_verified_vote_tx, solana_account_hash,
     verify_account_inclusion_16ary,
@@ -360,6 +358,21 @@ pub enum ProvenanceError {
     /// The derived stake table is empty (no active delegated stake) — there is no
     /// 2/3 denominator.
     EmptyDerivedTable,
+    /// The supplied stake accounts sum to LESS effective stake than the cluster's
+    /// own [`StakeHistory`] sysvar records for the epoch — i.e. the caller omitted
+    /// stake accounts to shrink the 2/3 denominator. The floor is cross-checked
+    /// against the same proven sysvar the warmup/cooldown curve reads, so a
+    /// minority cannot masquerade as a super-majority by proving only its own
+    /// membership. Only enforced when the sysvar records an effective figure for
+    /// the derivation epoch (the mainnet regime); an empty/epoch-absent history is
+    /// the model regime where there is no cluster figure to check against.
+    StakeBelowHistoryFloor {
+        /// The total effective stake summed from the supplied stake accounts.
+        supplied: u128,
+        /// The cluster-wide effective stake the proven StakeHistory sysvar records
+        /// for the epoch (the completeness floor).
+        floor: u128,
+    },
     /// The derived table's root does not match the weak-subjectivity anchor — the
     /// supplied bank-state accounts do not reconstruct the anchored distribution.
     AnchorRootMismatch {
@@ -406,6 +419,10 @@ impl std::fmt::Display for ProvenanceError {
                 write!(f, "the stake-history sysvar account did not decode")
             }
             Self::EmptyDerivedTable => write!(f, "the derived stake table has no active stake"),
+            Self::StakeBelowHistoryFloor { supplied, floor } => write!(
+                f,
+                "supplied effective stake {supplied} is below the StakeHistory cluster floor {floor} (incomplete stake set)"
+            ),
             Self::AnchorRootMismatch { .. } => {
                 write!(f, "derived stake-table root does not match the anchor")
             }
@@ -508,6 +525,26 @@ pub fn derive_stake_table(
             if active > 0 {
                 *sums.entry(d.voter_pubkey).or_insert(0) += active as u128;
             }
+        }
+    }
+
+    // Completeness floor (red-team BR value-hole HOLE-2): membership of each
+    // supplied stake account in the accounts hash is necessary but NOT sufficient
+    // — omitting stake accounts shrinks the 2/3 denominator so a minority clears
+    // the threshold. The cluster's OWN StakeHistory sysvar (proven into the same
+    // accounts hash above) records the total effective stake for the epoch; the
+    // supplied per-account effective stake must not fall below it. When the sysvar
+    // records no effective figure for `epoch` (an empty/epoch-absent history — the
+    // model regime the epoch-0-warmed fixtures use), there is no cluster figure to
+    // check against and the floor is vacuous.
+    let supplied_total: u128 = sums.values().copied().sum();
+    if let Some(entry) = history.get(epoch) {
+        let floor = entry.effective as u128;
+        if floor > 0 && supplied_total < floor {
+            return Err(ProvenanceError::StakeBelowHistoryFloor {
+                supplied: supplied_total,
+                floor,
+            });
         }
     }
 
@@ -663,6 +700,70 @@ impl VerifiedStakeTable {
             Err((voted, total))
         }
     }
+
+    /// **Rooted-finality tally with authorized-voter binding** (red-team BR
+    /// value-hole HOLE-1). [`Self::tally_authorized`] proves ≥ 2/3 voted a
+    /// *specific bank hash at a specific slot* — but that is Solana
+    /// *optimistic-confirmation* grade: the slot can still be abandoned. Value
+    /// release additionally demands the slot be **rooted (finalized)**: ≥ 2/3 of
+    /// the verified stake must have submitted an authorized-voter-bound vote whose
+    /// tower **root ≥ `slot`** (i.e. the signer has finalized `slot` and every
+    /// ancestor). Under the < 1/3-Byzantine assumption the exact-slot super-
+    /// majority (which bank hash) and the rooted super-majority (the slot is
+    /// final) overlap in > 1/3 honest stake, so the voted bank hash at `slot` is
+    /// itself finalized — no equivocating fork can also be rooted.
+    ///
+    /// A vote counts toward rootedness only when it is witness-backed, its vote
+    /// account matches, its signer is the proven on-chain authorized voter, and
+    /// its ingested tower `root` is `Some(r)` with `r ≥ slot`. (A vote whose own
+    /// last-voted slot IS `slot` can never root `slot` — a tower roots strictly
+    /// below its last vote — so a rooted attestation is necessarily a LATER vote.)
+    ///
+    /// Returns `Ok(rooted_stake)` when ≥ 2/3 of the verified total stake rootedly
+    /// attests `slot`, else `Err((rooted, total))`.
+    pub fn tally_authorized_rooted(
+        &self,
+        slot: u64,
+        votes: &[ValidatorVote],
+    ) -> Result<u128, (u128, u128)> {
+        use std::collections::BTreeSet;
+        let total = self.table.total_stake();
+        let mut counted: BTreeSet<[u8; 32]> = BTreeSet::new();
+        let mut rooted: u128 = 0;
+        for v in votes {
+            let stake = self.table.stake_of(&v.vote_pubkey);
+            if stake == 0 || counted.contains(&v.vote_pubkey) {
+                continue;
+            }
+            let Some(witness) = &v.tx_witness else {
+                continue;
+            };
+            let Ok(ingested) = parse_verified_vote_tx(&witness.tx_bytes) else {
+                continue;
+            };
+            if ingested.vote_account != v.vote_pubkey {
+                continue;
+            }
+            // The tower must root AT OR BEYOND the target slot.
+            match ingested.root {
+                Some(r) if r >= slot => {}
+                _ => continue,
+            }
+            let Some(expected) = self.authorized_voters.get(&v.vote_pubkey) else {
+                continue;
+            };
+            if &ingested.authorized_voter != expected {
+                continue;
+            }
+            counted.insert(v.vote_pubkey);
+            rooted += stake as u128;
+        }
+        if rooted.saturating_mul(3) >= total.saturating_mul(2) && total > 0 {
+            Ok(rooted)
+        } else {
+            Err((rooted, total))
+        }
+    }
 }
 
 /// One epoch-rotation step: the next epoch's bank-state accounts (proving the
@@ -699,10 +800,14 @@ pub struct RotationStep {
 /// by ≥ 2/3 of `current`'s (already-trusted) stake. The newly-trusted table is
 /// returned; the trust chains transitively back to the anchor.
 ///
-/// Note the attestation uses the *plain* [`verify_supermajority`] over the
-/// trusted table (the rotation is anchored by the trusted epoch's stake-weighted
-/// Ed25519, not by an authorized-voter binding for the as-yet-untrusted next
-/// epoch).
+/// The attestation is the **authorized-voter-bound** tally
+/// ([`VerifiedStakeTable::tally_authorized`]) over the *currently-trusted* table:
+/// each counted vote must be a real vote transaction signed by that vote
+/// account's on-chain authorized voter, exactly as the lock/holding consensus
+/// tally requires. (Earlier this leg used the *plain* [`verify_supermajority`],
+/// which counted a witness naming ANY key as its own authority — red-team BR
+/// value-hole HOLE-3, now closed: a rotation witness is bound to the trusted
+/// epoch's authorized voters just like every other counted vote.)
 pub fn rotate(
     current: &VerifiedStakeTable,
     step: &RotationStep,
@@ -720,8 +825,12 @@ pub fn rotate(
     {
         return Err(ProvenanceError::RotationBankHashMismatch);
     }
-    // The bank state must be attested by ≥ 2/3 of the currently-trusted stake.
-    if verify_supermajority(current.table(), step.slot, &step.bank_hash, &step.votes).is_err() {
+    // The bank state must be attested by ≥ 2/3 of the currently-trusted stake,
+    // each counted vote signed by the trusted epoch's on-chain authorized voter.
+    if current
+        .tally_authorized(step.slot, &step.bank_hash, &step.votes)
+        .is_err()
+    {
         return Err(ProvenanceError::RotationNotAttested);
     }
     // Derive the next epoch's table from that (now-attested) bank state.
@@ -874,7 +983,49 @@ pub mod fixtures {
         bank: [u8; 32],
     ) -> ValidatorVote {
         // Build a real legacy vote tx with the authority as sole signer; reuse
-        // the wire ingestion so the produced vote carries a real witness.
+        // the wire ingestion so the produced vote carries a real witness. The
+        // plain TowerSync carries NO root (`root: None`), so it never counts
+        // toward the rooted-finality tally.
+        let ts = TowerSync::from(vec![(slot - 1, 2u32), (slot, 1u32)]);
+        let ts = TowerSync {
+            hash: solana_hash::Hash::new_from_array(bank),
+            ..ts
+        };
+        let vi = VoteInstruction::TowerSync(ts);
+        assemble_signed_tower_sync(authority, vote_account, vi)
+    }
+
+    /// A REAL signed TowerSync vote transaction by `authority` for `vote_account`
+    /// voting `(voted_slot, bank)` and carrying tower **root** `Some(root)` — the
+    /// FINALITY attestation the rooted tally
+    /// ([`VerifiedStakeTable::tally_authorized_rooted`]) counts. A genuine rooted
+    /// attestation of a lock slot `S` is a later vote (`voted_slot > S`) whose
+    /// `root ≥ S`; a tower cannot root its own last-voted slot.
+    pub fn tower_sync_tx_rooted(
+        authority: &SigningKey,
+        vote_account: &[u8; 32],
+        voted_slot: u64,
+        bank: [u8; 32],
+        root: u64,
+    ) -> ValidatorVote {
+        let ts = TowerSync::from(vec![(voted_slot - 1, 2u32), (voted_slot, 1u32)]);
+        let ts = TowerSync {
+            hash: solana_hash::Hash::new_from_array(bank),
+            root: Some(root),
+            ..ts
+        };
+        let vi = VoteInstruction::TowerSync(ts);
+        assemble_signed_tower_sync(authority, vote_account, vi)
+    }
+
+    /// Serialize + sign a vote instruction into a legacy vote transaction with
+    /// `authority` the sole signer and ingest it (shared by [`tower_sync_tx`] and
+    /// [`tower_sync_tx_rooted`]).
+    fn assemble_signed_tower_sync(
+        authority: &SigningKey,
+        vote_account: &[u8; 32],
+        vi: VoteInstruction,
+    ) -> ValidatorVote {
         let auth_pk = authority.verifying_key().to_bytes();
         let vote_program = vote_program_id();
         let account_keys: Vec<[u8; 32]> = vec![
@@ -884,12 +1035,6 @@ pub mod fixtures {
             [0x11u8; 32],
             vote_program,
         ];
-        let ts = TowerSync::from(vec![(slot - 1, 2u32), (slot, 1u32)]);
-        let ts = TowerSync {
-            hash: solana_hash::Hash::new_from_array(bank),
-            ..ts
-        };
-        let vi = VoteInstruction::TowerSync(ts);
         let ix_data = bincode::serialize(&vi).expect("serialize vi");
         let metas: Vec<u8> = vec![1, 0]; // vote account(1), authority(0)
         let mut msg = Vec::new();

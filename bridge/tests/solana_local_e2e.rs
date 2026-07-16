@@ -45,7 +45,12 @@
 
 use dregg_bridge::midnight::EpochKey;
 use dregg_bridge::solana_consensus::{BankHashComponents, ValidatorVote};
+use dregg_bridge::solana_feed::{
+    FeedError, HoldingFeedSource, LocalValidatorFeed, prove_feed_holding, spl_token_program_id,
+};
+use dregg_bridge::solana_holdings::HoldingProofError;
 use dregg_bridge::solana_mirror::{MirrorConfig, MirrorState};
+use dregg_bridge::solana_provenance::ProvenanceError;
 use dregg_bridge::solana_provenance::{
     ProvenAccount, STAKE_HISTORY_SYSVAR_ID, WeakSubjectivityAnchor, decode_authorized_voter,
     derive_stake_table,
@@ -442,5 +447,301 @@ fn local_solana_lock_verifies_and_mints() {
          effective stake {} from real bank state.",
         bs58::encode(spl_mint).into_string(),
         derived.table.total_stake(),
+    );
+}
+
+// ===========================================================================
+// Rung-1 LIVE-FEED leg: prove a REAL holding end to end, no fixture builders
+// ===========================================================================
+
+/// The live-feed test's own ports — distinct from the lock-leg harness's
+/// default 8899/9900, so the two legs never fight over a socket.
+const FEED_RPC_PORT: u16 = 8999;
+const FEED_FAUCET_PORT: u16 = 9913;
+
+fn feed_rpc_url() -> String {
+    format!("http://127.0.0.1:{FEED_RPC_PORT}")
+}
+
+/// Build a `Command` for an Agave/SPL tool with the default local install
+/// location prepended to PATH (the same lookup `scripts/solana-local-harness.sh`
+/// performs), so the test runs wherever the harness runs.
+fn agave_cmd(name: &str) -> std::process::Command {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let path = format!(
+        "{home}/.local/share/solana/install/active_release/bin:{}",
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let mut c = std::process::Command::new(name);
+    c.env("PATH", path);
+    c
+}
+
+/// Run a setup command to completion; panic loudly (with stderr) on failure —
+/// under `SOLANA_LOCAL=1` a missing/broken toolchain is an error, not a skip.
+fn run_ok(mut c: std::process::Command) -> String {
+    let out = c
+        .output()
+        .unwrap_or_else(|e| panic!("spawn {:?}: {e} (is the Agave toolchain installed?)", c));
+    assert!(
+        out.status.success(),
+        "command {:?} failed:\n{}",
+        c,
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// Kill the spawned validator even if the test panics.
+struct ValidatorGuard(std::process::Child);
+impl Drop for ValidatorGuard {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// **The rung-1 live-feed proof-of-holdings e2e** (gated on `SOLANA_LOCAL=1`):
+/// no manifest, no fixture constructors — the test boots a REAL local
+/// `solana-test-validator`, creates a REAL SPL `$DREGG` stand-in holding on it,
+/// then [`LocalValidatorFeed`] ingests the holder's account + the bank-state
+/// provenance accounts over live finalized-commitment JSON-RPC and the
+/// PRODUCTION [`prove_holding_consensus_anchored`] entry (via
+/// [`prove_feed_holding`]) verifies it to `ConsensusVerified` against the
+/// operator's pinned anchor. The same live evidence is then re-verified against
+/// a DIFFERENT pin and must refuse (`AnchorRootMismatch`) — the adversarial
+/// polarity on real bank state.
+///
+/// [`prove_holding_consensus_anchored`]: dregg_bridge::solana_holdings::prove_holding_consensus_anchored
+#[test]
+fn local_feed_proves_a_real_holding_end_to_end() {
+    if !enabled() {
+        eprintln!(
+            "SKIP local_feed_proves_a_real_holding_end_to_end: set SOLANA_LOCAL=1 \
+             (needs the free Agave toolchain: solana-test-validator + spl-token). \
+             Skipping cleanly."
+        );
+        return;
+    }
+
+    let base = std::env::temp_dir().join("dregg-solana-feed-e2e");
+    let ledger = base.join("ledger");
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).expect("create feed e2e scratch dir");
+
+    // ── 1. boot a fresh local validator (free, private, resettable) ─────────
+    let vlog = std::fs::File::create(base.join("validator.log")).expect("validator log");
+    let child = {
+        let mut c = agave_cmd("solana-test-validator");
+        c.args([
+            "--reset",
+            "--quiet",
+            "--ledger",
+            ledger.to_str().unwrap(),
+            "--rpc-port",
+            &FEED_RPC_PORT.to_string(),
+            "--faucet-port",
+            &FEED_FAUCET_PORT.to_string(),
+            "--bind-address",
+            "127.0.0.1",
+        ])
+        .stdout(std::process::Stdio::from(
+            vlog.try_clone().expect("clone log handle"),
+        ))
+        .stderr(std::process::Stdio::from(vlog));
+        c.spawn().unwrap_or_else(|e| {
+            panic!(
+                "SOLANA_LOCAL=1 but solana-test-validator could not start: {e}. \
+                 Install the free Agave toolchain (see scripts/solana-local-harness.sh)."
+            )
+        })
+    };
+    let _guard = ValidatorGuard(child);
+    let url = feed_rpc_url();
+
+    // ── 2. wait for the cluster to produce slots ────────────────────────────
+    let healthy = (0..120).any(|_| {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        let mut c = agave_cmd("solana");
+        c.args(["--url", &url, "epoch-info", "--output", "json"]);
+        c.output().ok().is_some_and(|o| {
+            o.status.success()
+                && serde_json::from_slice::<serde_json::Value>(&o.stdout)
+                    .ok()
+                    .and_then(|v| v["absoluteSlot"].as_u64())
+                    .is_some_and(|s| s > 0)
+        })
+    });
+    assert!(healthy, "local validator never became healthy on {url}");
+
+    // ── 3. a funded payer + a REAL on-chain $DREGG stand-in holding ─────────
+    let payer = base.join("payer.json");
+    let payer_s = payer.to_str().unwrap();
+    let mut kg = agave_cmd("solana-keygen");
+    kg.args([
+        "new",
+        "--no-bip39-passphrase",
+        "--force",
+        "--silent",
+        "--outfile",
+        payer_s,
+    ]);
+    run_ok(kg);
+    let mut kp = agave_cmd("solana-keygen");
+    kp.args(["pubkey", payer_s]);
+    let payer_pk = run_ok(kp).trim().to_string();
+
+    let funded = (0..10).any(|_| {
+        let mut c = agave_cmd("solana");
+        c.args(["--url", &url, "airdrop", "100", &payer_pk]);
+        let ok = c.output().is_ok_and(|o| o.status.success());
+        if !ok {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+        }
+        ok
+    });
+    assert!(funded, "airdrop to the feed payer never succeeded");
+
+    let mut ct = agave_cmd("spl-token");
+    ct.args([
+        "--url",
+        &url,
+        "create-token",
+        "--decimals",
+        "0",
+        "--fee-payer",
+        payer_s,
+        "--mint-authority",
+        &payer_pk,
+        "--output",
+        "json",
+    ]);
+    let mint_json: serde_json::Value =
+        serde_json::from_str(&run_ok(ct)).expect("create-token json");
+    let mint_b58 = mint_json["commandOutput"]["address"]
+        .as_str()
+        .expect("mint address")
+        .to_string();
+
+    let mut ca = agave_cmd("spl-token");
+    ca.args([
+        "--url",
+        &url,
+        "create-account",
+        &mint_b58,
+        "--owner",
+        &payer_pk,
+        "--fee-payer",
+        payer_s,
+    ]);
+    run_ok(ca);
+
+    let mut aa = agave_cmd("spl-token");
+    aa.args([
+        "--url",
+        &url,
+        "address",
+        "--verbose",
+        "--token",
+        &mint_b58,
+        "--owner",
+        &payer_pk,
+        "--output",
+        "json",
+    ]);
+    let ata_json: serde_json::Value =
+        serde_json::from_str(&run_ok(aa)).expect("spl-token address json");
+    let ata_b58 = ata_json["associatedTokenAddress"]
+        .as_str()
+        .expect("associatedTokenAddress")
+        .to_string();
+
+    const HOLDING: u64 = 750;
+    let mut mt = agave_cmd("spl-token");
+    mt.args([
+        "--url",
+        &url,
+        "mint",
+        &mint_b58,
+        &HOLDING.to_string(),
+        &ata_b58,
+        "--mint-authority",
+        payer_s,
+        "--fee-payer",
+        payer_s,
+    ]);
+    run_ok(mt);
+
+    let dregg_mint = b58_32(&mint_b58);
+    let holder_ata = b58_32(&ata_b58);
+    let wallet = b58_32(&payer_pk);
+
+    // ── 4. LIVE INGESTION through the feed seam ──────────────────────────────
+    // The feed reads the ledger dir's real vote/stake keypairs and fetches every
+    // account over live finalized-commitment RPC. Retry only the two
+    // *environmental* conditions (RPC warming up; the ATA not yet FINALIZED —
+    // roots trail the tip by ~32 slots); any other refusal is a real bug.
+    let feed_src = LocalValidatorFeed::from_ledger_dir(feed_rpc_url(), &ledger)
+        .expect("feed from the live ledger dir");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    let feed = loop {
+        match feed_src.ingest_holding(&holder_ata) {
+            Ok(f) => break f,
+            Err(e @ (FeedError::AccountMissing { .. } | FeedError::Rpc(_)))
+                if std::time::Instant::now() < deadline =>
+            {
+                eprintln!("  (waiting for finalized commitment: {e})");
+                std::thread::sleep(std::time::Duration::from_secs(2));
+            }
+            Err(e) => panic!("live ingestion failed: {e}"),
+        }
+    };
+
+    // ── 5. the operator pins the anchor ONCE, out of band ───────────────────
+    // (Here: the test operator inspects the cluster it just booted and pins its
+    // genuine stake distribution — the pin-once bootstrapping step. Verification
+    // below takes the pin from THIS binding, never from the feed.)
+    let pinned = feed.derived_anchor.clone();
+
+    // ── 6. the PRODUCTION anchored verify accepts the REAL holding ──────────
+    let holding = prove_feed_holding(&feed, &dregg_mint, &spl_token_program_id(), &pinned, false)
+        .expect("production anchored verify of the live-ingested holding");
+    assert_eq!(holding.trust, LockProofTrust::ConsensusVerified);
+    assert!(holding.is_consensus_proven());
+    assert_eq!(
+        holding.amount, HOLDING,
+        "the proven balance is the minted one"
+    );
+    assert_eq!(holding.owner, wallet, "the proven wallet is the payer");
+    assert_eq!(holding.mint, dregg_mint);
+    assert_eq!(holding.token_account, holder_ata);
+
+    // ── 7. adversarial polarity on the SAME live evidence ───────────────────
+    // A different governance pin must refuse: the feed cannot self-authorize.
+    let other_pin = WeakSubjectivityAnchor {
+        epoch: pinned.epoch,
+        stake_table_root: [0xEEu8; 32],
+    };
+    let err = prove_feed_holding(
+        &feed,
+        &dregg_mint,
+        &spl_token_program_id(),
+        &other_pin,
+        false,
+    )
+    .expect_err("a mismatched governance pin must refuse the live evidence");
+    assert!(
+        matches!(
+            err,
+            HoldingProofError::Provenance(ProvenanceError::AnchorRootMismatch { .. })
+        ),
+        "want AnchorRootMismatch, got {err:?}"
+    );
+
+    eprintln!(
+        "local_feed e2e OK: REAL holding of {HOLDING} (mint {mint_b58}) at slot {} epoch {} \
+         ingested over live RPC and ConsensusVerified through prove_holding_consensus_anchored; \
+         a mismatched pin refused.",
+        holding.slot, feed.proof.consensus.epoch,
     );
 }

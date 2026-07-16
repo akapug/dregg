@@ -26,7 +26,14 @@
 //!   (binding the accounts hash + PoH tail to what was voted), that the vault
 //!   account's lock record is included in that accounts hash (domain-separated
 //!   sorted Merkle), and — when present — that the PoH tick chain links the
-//!   slot's blockhash to a verified anchor.
+//!   slot's blockhash to a verified anchor. The **value-release** entry
+//!   ([`verify_lock_proof_consensus_anchored`]) additionally requires the lock
+//!   slot to be **rooted (finalized)** — ≥ 2/3 of the derived stake submitting an
+//!   authorized-voter-bound vote whose tower root reaches the slot — so an
+//!   optimistically-confirmed-then-abandoned slot cannot release value. The
+//!   exact-slot super-majority alone is optimistic-confirmation grade and is
+//!   reachable only through the explicitly-named
+//!   [`verify_lock_proof_consensus_anchored_optimistic`].
 //! - **Real (structural, [`LockProofTrust::StructureOnly`]):** [`verify_lock_proof`]
 //!   checks proof structure + binding (well-formedness, the claim fields match
 //!   the mirror config and the included record) and a *claimed-tally* sanity
@@ -71,7 +78,10 @@ use crate::solana_wire::{
 /// accounts hash to the voted hash, and (optionally) the PoH linkage.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConsensusEvidence {
-    /// The Solana slot the lock was finalized in.
+    /// The Solana slot the lock lives in. For **value release** this slot must be
+    /// proven ROOTED (finalized), not merely optimistically confirmed — see
+    /// `votes` and [`verify_lock_proof_consensus_anchored`]. The exact-slot
+    /// super-majority alone is optimistic-confirmation grade.
     pub slot: u64,
     /// The bank hash the super-majority voted (the state commitment for `slot`).
     pub bank_hash: [u8; 32],
@@ -84,8 +94,14 @@ pub struct ConsensusEvidence {
     pub voted_stake: u128,
     /// **Claimed** total stake — a hint, as `voted_stake`.
     pub total_stake: u128,
-    /// The real per-validator Ed25519 votes for `(slot, bank_hash)`. The
-    /// consensus path verifies each signature and stake-weights the valid ones.
+    /// The real per-validator Ed25519 votes. The consensus path verifies each
+    /// signature and stake-weights the valid ones. This set carries BOTH the
+    /// exact-slot votes for `(slot, bank_hash)` (the "which bank hash" super-
+    /// majority) AND, for the value-release path, later votes whose tower **root**
+    /// reaches `slot` (the rooted-finality super-majority — see
+    /// [`crate::solana_provenance::VerifiedStakeTable::tally_authorized_rooted`]).
+    /// Each tally selects its own subset; a rooted vote (a different, later slot)
+    /// is ignored by the exact-slot tally and vice-versa.
     pub votes: Vec<ValidatorVote>,
     /// The components the bank hash commits to (parent hash, accounts hash,
     /// signature count, PoH tail). Recomputed and bound to `bank_hash`.
@@ -289,6 +305,19 @@ pub enum LockProofError {
     /// The PoH segment does not satisfy the bounded-anchor policy (wrong anchor
     /// blockhash, or it exceeds the policy's tick bound).
     PohPolicyViolated,
+    /// The lock slot cleared the exact-slot super-majority (optimistic
+    /// confirmation) but is NOT **rooted** — fewer than 2/3 of the verified stake
+    /// submitted an authorized-voter-bound vote whose tower root reaches the lock
+    /// slot. The value-release path
+    /// ([`verify_lock_proof_consensus_anchored`]) refuses an unrooted lock; the
+    /// explicitly-named [`verify_lock_proof_consensus_anchored_optimistic`] accepts
+    /// the exact-slot grade for non-value observation.
+    SlotNotRooted {
+        /// The authorized-voter-bound stake whose tower roots the lock slot.
+        rooted: u128,
+        /// The verified total stake (the 2/3 denominator).
+        total: u128,
+    },
 }
 
 impl std::fmt::Display for LockProofError {
@@ -339,6 +368,10 @@ impl std::fmt::Display for LockProofError {
             Self::PohPolicyViolated => {
                 write!(f, "PoH segment violates the bounded-anchor policy")
             }
+            Self::SlotNotRooted { rooted, total } => write!(
+                f,
+                "lock slot is not rooted: rooted stake {rooted} does not meet the 2/3 finality threshold of total stake {total} (optimistic confirmation only)"
+            ),
         }
     }
 }
@@ -563,8 +596,8 @@ fn derive_verified_table(
     Ok(table)
 }
 
-/// Verify a Solana lock proof **anchored at a [`WeakSubjectivityAnchor`]** — the
-/// fully trustless check (modulo the anchor). Unlike
+/// Verify a Solana lock proof **anchored at a [`WeakSubjectivityAnchor`]** for
+/// **value release** — the fully trustless check (modulo the anchor). Unlike
 /// [`verify_lock_proof_consensus`], this takes **no trusted stake table**: the
 /// stake distribution + authorized voters are *derived from bank state* via the
 /// proof's [`StakeProvenance`] and trusted only back to the anchor.
@@ -576,18 +609,30 @@ fn derive_verified_table(
 ///    lock epoch);
 /// 3. ≥ 2/3 of that *derived* stake validly voted the `(slot, bank_hash)` with
 ///    each counted vote signed by the vote account's **on-chain authorized
-///    voter** (the [`VerifiedStakeTable::tally_authorized`] binding);
-/// 4. the bank-hash components bind the voted hash + the inclusion accounts hash;
-/// 5. the vault account's lock record includes into that accounts hash;
-/// 6. if `require_poh`, a [`PohAnchorPolicy`] must be supplied and the PoH segment
+///    voter** (the [`VerifiedStakeTable::tally_authorized`] binding — the "which
+///    bank hash" super-majority);
+/// 4. **the lock slot is ROOTED (finalized):** ≥ 2/3 of that derived stake also
+///    submitted an authorized-voter-bound vote whose tower root reaches the lock
+///    slot ([`VerifiedStakeTable::tally_authorized_rooted`]). This is the leg an
+///    optimistic-confirmation attestation (exact-slot super-majority ALONE)
+///    cannot satisfy — the honest upgrade that makes value release safe against a
+///    slot that is optimistically confirmed but later abandoned (red-team BR
+///    value-hole HOLE-1);
+/// 5. the bank-hash components bind the voted hash + the inclusion accounts hash;
+/// 6. the vault account's lock record includes into that accounts hash;
+/// 7. if `require_poh`, a [`PohAnchorPolicy`] must be supplied and the PoH segment
 ///    must chain from its trusted checkpoint blockhash, within bound, to the
 ///    slot's blockhash.
+///
+/// For a NON-value observation that only needs optimistic-confirmation grade
+/// (the exact-slot super-majority, without the rooted-finality leg), use the
+/// explicitly-named [`verify_lock_proof_consensus_anchored_optimistic`].
 ///
 /// **What remains trusted:** only the weak-subjectivity `anchor` itself (and the
 /// named stake-activation-timing / bank-hash-version / lock-record-layout
 /// refinements in `docs/deos/TRUSTLESS-SOLANA-BRIDGE.md`). Everything after the
-/// anchor — the stake weights, the voter authority, the votes, the inclusion,
-/// the PoH — is verified.
+/// anchor — the stake weights, the voter authority, the votes, the rooted
+/// finality, the inclusion, the PoH — is verified.
 pub fn verify_lock_proof_consensus_anchored(
     proof: &SolanaLockProof,
     spl_mint: &[u8; 32],
@@ -596,6 +641,57 @@ pub fn verify_lock_proof_consensus_anchored(
     anchor: &WeakSubjectivityAnchor,
     require_poh: bool,
     poh_policy: Option<&PohAnchorPolicy>,
+) -> Result<LockProofTrust, LockProofError> {
+    verify_lock_proof_consensus_anchored_inner(
+        proof,
+        spl_mint,
+        min_amount,
+        max_amount,
+        anchor,
+        require_poh,
+        poh_policy,
+        /* require_rooted */ true,
+    )
+}
+
+/// **Explicitly-optimistic** anchored verify — the exact-slot authorized-voter
+/// super-majority ("which bank hash at the slot"), WITHOUT the rooted-finality
+/// leg. This is Solana *optimistic-confirmation* grade: the slot cleared 2/3 but
+/// may still be abandoned, so this MUST NOT gate value release. It exists so a
+/// non-value observer (e.g. a UI showing an in-flight lock) can name what it has
+/// honestly instead of over-claiming finality. Value paths call
+/// [`verify_lock_proof_consensus_anchored`] (which adds the rooted leg).
+pub fn verify_lock_proof_consensus_anchored_optimistic(
+    proof: &SolanaLockProof,
+    spl_mint: &[u8; 32],
+    min_amount: u64,
+    max_amount: u64,
+    anchor: &WeakSubjectivityAnchor,
+    require_poh: bool,
+    poh_policy: Option<&PohAnchorPolicy>,
+) -> Result<LockProofTrust, LockProofError> {
+    verify_lock_proof_consensus_anchored_inner(
+        proof,
+        spl_mint,
+        min_amount,
+        max_amount,
+        anchor,
+        require_poh,
+        poh_policy,
+        /* require_rooted */ false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn verify_lock_proof_consensus_anchored_inner(
+    proof: &SolanaLockProof,
+    spl_mint: &[u8; 32],
+    min_amount: u64,
+    max_amount: u64,
+    anchor: &WeakSubjectivityAnchor,
+    require_poh: bool,
+    poh_policy: Option<&PohAnchorPolicy>,
+    require_rooted: bool,
 ) -> Result<LockProofTrust, LockProofError> {
     check_binding(proof, spl_mint, min_amount, max_amount)?;
     let provenance = proof
@@ -609,6 +705,7 @@ pub fn verify_lock_proof_consensus_anchored(
         &verified,
         require_poh,
         poh_policy,
+        require_rooted,
     )?;
     Ok(LockProofTrust::ConsensusVerified)
 }
@@ -753,12 +850,26 @@ fn verify_consensus_anchored(
     verified: &VerifiedStakeTable,
     require_poh: bool,
     poh_policy: Option<&PohAnchorPolicy>,
+    require_rooted: bool,
 ) -> Result<(), LockProofError> {
-    // (3) authorized-voter-bound ≥ 2/3 over the derived stake table.
+    // (3) authorized-voter-bound ≥ 2/3 over the derived stake table (the
+    // exact-slot "which bank hash" super-majority — optimistic-confirmation grade).
     match verified.tally_authorized(consensus.slot, &consensus.bank_hash, &consensus.votes) {
         Ok(_voted) => {}
         Err((voted, total)) => {
             return Err(LockProofError::StakeBelowThreshold { voted, total });
+        }
+    }
+
+    // (3b) VALUE RELEASE: the lock slot must be ROOTED (finalized), not merely
+    // optimistically confirmed — ≥ 2/3 of the derived stake must submit an
+    // authorized-voter-bound vote whose tower root reaches the lock slot
+    // (red-team BR value-hole HOLE-1). The optimistic path skips this leg.
+    if require_rooted {
+        if let Err((rooted, total)) =
+            verified.tally_authorized_rooted(consensus.slot, &consensus.votes)
+        {
+            return Err(LockProofError::SlotNotRooted { rooted, total });
         }
     }
 
@@ -1125,12 +1236,24 @@ pub mod fixtures {
         };
         let bank_hash = bank_components.compute();
 
-        // REAL signed vote transactions by the on-chain authorized voters.
-        let votes = auths
+        // REAL signed vote transactions by the on-chain authorized voters: the
+        // exact-slot votes for `(slot, bank_hash)` (the "which bank hash" super-
+        // majority) AND later votes whose tower root reaches `slot` (the rooted-
+        // finality super-majority the value-release path demands).
+        let mut votes: Vec<ValidatorVote> = auths
             .iter()
             .zip(&vas)
             .map(|(a, va)| prov::tower_sync_tx(a, va, slot, bank_hash))
             .collect();
+        for (a, va) in auths.iter().zip(&vas) {
+            votes.push(prov::tower_sync_tx_rooted(
+                a,
+                va,
+                slot + 64,
+                [0x66u8; 32],
+                slot,
+            ));
+        }
 
         // Bank-state provenance accounts (proofs: 0 = vault, 1..=n votes,
         // n+1..=2n stakes, 2n+1 stake history).
@@ -2018,10 +2141,14 @@ mod tests {
         };
         let bank_hash = bank_components.compute();
 
-        // REAL signed vote transactions by the on-chain authorized voters.
+        // REAL signed vote transactions by the on-chain authorized voters: the
+        // exact-slot votes AND the rooted-finality votes (tower root reaches the
+        // lock slot) the value-release path demands.
         let votes = vec![
             prov::tower_sync_tx(&a1, &va1, slot, bank_hash),
             prov::tower_sync_tx(&a2, &va2, slot, bank_hash),
+            prov::tower_sync_tx_rooted(&a1, &va1, slot + 64, [0x66u8; 32], slot),
+            prov::tower_sync_tx_rooted(&a2, &va2, slot + 64, [0x66u8; 32], slot),
         ];
 
         // Bank-state provenance accounts.

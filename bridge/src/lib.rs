@@ -108,6 +108,15 @@ pub mod solana_provenance;
 /// `docs/deos/TRUSTLESS-SOLANA-BRIDGE.md`.
 pub mod solana_relayer;
 
+/// The **feed-source seam** for non-custodial proof-of-holdings: one
+/// `HoldingFeedSource` trait implemented by the fixture builders, the live
+/// local-`solana-test-validator` RPC feed, and the (designed) mainnet snapshot
+/// pipeline — all funneling into the production
+/// [`solana_holdings::prove_holding_consensus_anchored`] entry against the
+/// CALLER's governance-pinned anchor. See the module doc's honest accounting
+/// and the snapshot design.
+pub mod solana_feed;
+
 /// Full-fidelity bridge-action binding: a thin re-export plus a wrapper for
 /// the new sibling AIR `dregg_circuit::bridge_action_witness` that pins
 /// (nullifier, recipient, destination_federation, amount) at full byte/bit
