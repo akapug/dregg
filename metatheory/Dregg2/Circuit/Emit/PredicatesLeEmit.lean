@@ -24,11 +24,19 @@ The five teeth are the arithmetic-comparison core, carried one-for-one from the 
 
 The range lookup is the LOAD-BEARING tooth: `DIFF = threshold − value ∈ [0, 2^29)` iff
 `value ≤ threshold` with a bounded gap (a `value > threshold` wraps `DIFF` to
-`p − (value − threshold)`, far outside the interval — UNSAT). The Poseidon2 value↔fact weld the
-`≥` descriptor also carries is an ORTHOGONAL hardening (held-forgery #2); it is a uniform follow-up
-across the whole comparison family and is NOT part of the comparison mechanism, so this leaner
-descriptor pins `fact_commitment` as the hand-AIR pass-through public input (C2) exactly as the
-pre-weld `≥` AIR did.
+`p − (value − threshold)`, far outside the interval — UNSAT).
+
+| weld  | `.lookup ⟨poseidon2, …⟩` ×2  (`FACT_COMMITMENT` opens over `INPUT`)   |
+
+**THE VALUE↔FACT WELD (M14).** `value ≤ threshold` alone is a claim about a number the prover chose.
+What makes it a claim about TOKEN STATE is the second conjunct — `fact_commitment =
+hash_2_to_1(hash_fact(pred, [value, t1, t2]), state_root)` — carried by the two Poseidon2 chip
+lookups below, feeding the SAME `INPUT` column the range gadget bounds. Without them col 4
+(`FACT_COMMITMENT`) and col 0 (`INPUT`) sit in DISJOINT constraint sets and a prover satisfies the
+comparison on a value of its choosing while presenting the honest, verifier-expected commitment for
+an UNRELATED value. This descriptor previously deferred the weld as "orthogonal hardening" — it is
+not orthogonal, it is the half that binds the predicate to state. Now welded, geometry identical to
+`≥` (`PredicatesArithmeticEmit`).
 
 ## Axiom hygiene
 Definitional descriptor + byte-pinned `#guard` + non-vacuous per-gate lemmas (`omega`).
@@ -43,13 +51,14 @@ open Dregg2.Exec.CircuitEmit (EmittedExpr)
 open Dregg2.Circuit.Emit.EffectVmEmit (VmConstraint VmRow)
 open Dregg2.Circuit.DescriptorIR2
   (EffectVmDescriptor2 VmConstraint2 Lookup TableId rangeTableDef emitVmJson2 rangeRows
-   range_row_mem_iff)
+   range_row_mem_iff chipLookupTuple CHIP_RATE CHIP_OUT_LANES)
 
 set_option autoImplicit false
 
 /-! ## §1 — trace column layout (one logical row). -/
 
-/-- The private input value being compared. -/
+/-- The private input value being compared. ALSO `terms[0]` of the hashed fact (the weld's leg-1
+input the range gadget bounds). -/
 def INPUT : Nat := 0
 /-- The compiled expression-A result slot; C3 forces `SLOT_A = INPUT`. -/
 def SLOT_A : Nat := 1
@@ -57,11 +66,39 @@ def SLOT_A : Nat := 1
 def THRESHOLD : Nat := 2
 /-- The comparison difference `threshold − value`; range-proved into `[0, 2^29)`. -/
 def DIFF : Nat := 3
-/-- The public fact commitment, PI-bound to `PI_FACT_COMMITMENT`. -/
+/-- The public fact commitment, PI-bound to `PI_FACT_COMMITMENT` AND forced by the weld's leg 2 to
+be `hash_2_to_1(FACT_HASH, STATE_ROOT)`. -/
 def FACT_COMMITMENT : Nat := 4
 
-/-- Base-trace width (the diff limbs are appended by the assembler, not counted here). -/
-def PRED_WIDTH : Nat := 5
+/-! ### The value↔fact WELD columns (held forgery #2): tie `INPUT` to the committed fact.
+
+`fact_commitment` (col 4) was ONLY PI-pinned, with `INPUT` (the compared value) a FREE witness — a
+prover could prove `value ≤ threshold` about a value they do NOT hold, against a `fact_commitment`
+naming a DIFFERENT real fact. The weld opens both hashes IN-CIRCUIT via two Poseidon2 chip lookups
+feeding the SAME `INPUT` column, so a satisfying assignment forces `INPUT` to be the committed
+fact's value (Poseidon2 CR). Identical geometry to `PredicatesArithmeticEmit` (`≥`). -/
+
+/-- The fact's predicate symbol (`hash_fact` `state[0]`). Witness. -/
+def PREDICATE_SYM : Nat := 5
+/-- The fact's `term[1]` (`hash_fact` `state[2]`). Witness. -/
+def TERM1 : Nat := 6
+/-- The fact's `term[2]` (`hash_fact` `state[3]`). Witness. -/
+def TERM2 : Nat := 7
+/-- The token state root the fact commitment covers. Witness. -/
+def STATE_ROOT : Nat := 8
+/-- The recomputed `fact_hash = hash_fact(pred, [INPUT, term1, term2])` = the arity-7 lookup's out0. -/
+def FACT_HASH : Nat := 9
+
+/-- `hash_fact`'s `state[5]` domain marker (`0xFACF = 64207`). -/
+def FACT_MARK : Int := 64207
+/-- The seven out-lanes 1..7 of the arity-7 fact-hash chip lookup (out0 = `FACT_HASH`). -/
+def FACTHASH_LANES : List Nat := [10, 11, 12, 13, 14, 15, 16]
+/-- The seven out-lanes 1..7 of the arity-2 fact-commitment chip lookup (out0 = `FACT_COMMITMENT`). -/
+def FACTCOMMIT_LANES : List Nat := [17, 18, 19, 20, 21, 22, 23]
+
+/-- Base-trace width (the diff limbs are appended by the assembler, not counted here): the 5
+predicate columns + 5 fact witness columns + 2×7 fact chip lanes. -/
+def PRED_WIDTH : Nat := 24
 
 /-- Public-input slot for the threshold. -/
 def PI_THRESHOLD : Nat := 0
@@ -96,20 +133,35 @@ def c5DiffGate : VmConstraint2 := .base (.gate c5Body)
 /-- **C6** — the diff range proof: `DIFF ∈ [0, 2^29)`. -/
 def c6RangeLookup : VmConstraint2 := .lookup ⟨TableId.range, [.var DIFF]⟩
 
-/-- **`predicateLeDesc`** — the arithmetic `LessThanOrEqual(value, threshold)` descriptor. -/
+/-- **THE VALUE↔FACT WELD, leg 1** — arity-7 fact-hash chip lookup binding `FACT_HASH =
+hash_fact(pred, [INPUT, term1, term2])`, feeding the SAME `INPUT` column the range gadget bounds. -/
+def factHashLookup : VmConstraint2 :=
+  .lookup ⟨TableId.poseidon2,
+    chipLookupTuple [.var PREDICATE_SYM, .var INPUT, .var TERM1, .var TERM2,
+                     .const 0, .const FACT_MARK, .const 1] FACT_HASH FACTHASH_LANES⟩
+
+/-- **THE VALUE↔FACT WELD, leg 2** — arity-2 fact-commitment chip lookup binding `FACT_COMMITMENT =
+Poseidon2(fact_hash, state_root)`, tying the PI-pinned commitment to the opened fact hash. -/
+def factCommitLookup : VmConstraint2 :=
+  .lookup ⟨TableId.poseidon2,
+    chipLookupTuple [.var FACT_HASH, .var STATE_ROOT] FACT_COMMITMENT FACTCOMMIT_LANES⟩
+
+/-- **`predicateLeDesc`** — the arithmetic `LessThanOrEqual(value, threshold)` descriptor, carrying
+the Poseidon2 value↔fact weld (the two chip lookups) exactly as `≥`. -/
 def predicateLeDesc : EffectVmDescriptor2 :=
   { name        := "dregg-predicate-arith-le::threshold-v1"
   , traceWidth  := PRED_WIDTH
   , piCount     := 2
   , tables      := [rangeTableDef DIFF_BITS]
-  , constraints := [c1ThresholdPin, c2FactPin, c3SlotGate, c5DiffGate, c6RangeLookup]
+  , constraints := [c1ThresholdPin, c2FactPin, c3SlotGate, c5DiffGate, c6RangeLookup,
+                    factHashLookup, factCommitLookup]
   , hashSites   := []
   , ranges      := [] }
 
 /-! ## §3 — the byte-pinned wire golden. -/
 
 #guard emitVmJson2 predicateLeDesc ==
-  "{\"name\":\"dregg-predicate-arith-le::threshold-v1\",\"ir\":2,\"trace_width\":5,\"public_input_count\":2,\"tables\":[{\"id\":2,\"name\":\"range\",\"arity\":1,\"sem\":\"range\",\"bits\":29}],\"constraints\":[{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":2,\"pi_index\":0},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":4,\"pi_index\":1},{\"t\":\"gate\",\"body\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":1},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"var\",\"v\":0}}}},{\"t\":\"gate\",\"body\":{\"t\":\"add\",\"l\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":3},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"var\",\"v\":2}}},\"r\":{\"t\":\"var\",\"v\":1}}},{\"t\":\"lookup\",\"table\":2,\"tuple\":[{\"t\":\"var\",\"v\":3}]}],\"hash_sites\":[],\"ranges\":[]}"
+  "{\"name\":\"dregg-predicate-arith-le::threshold-v1\",\"ir\":2,\"trace_width\":24,\"public_input_count\":2,\"tables\":[{\"id\":2,\"name\":\"range\",\"arity\":1,\"sem\":\"range\",\"bits\":29}],\"constraints\":[{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":2,\"pi_index\":0},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":4,\"pi_index\":1},{\"t\":\"gate\",\"body\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":1},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"var\",\"v\":0}}}},{\"t\":\"gate\",\"body\":{\"t\":\"add\",\"l\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":3},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"var\",\"v\":2}}},\"r\":{\"t\":\"var\",\"v\":1}}},{\"t\":\"lookup\",\"table\":2,\"tuple\":[{\"t\":\"var\",\"v\":3}]},{\"t\":\"lookup\",\"table\":1,\"tuple\":[{\"t\":\"const\",\"v\":7},{\"t\":\"var\",\"v\":5},{\"t\":\"var\",\"v\":0},{\"t\":\"var\",\"v\":6},{\"t\":\"var\",\"v\":7},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":64207},{\"t\":\"const\",\"v\":1},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"var\",\"v\":9},{\"t\":\"var\",\"v\":10},{\"t\":\"var\",\"v\":11},{\"t\":\"var\",\"v\":12},{\"t\":\"var\",\"v\":13},{\"t\":\"var\",\"v\":14},{\"t\":\"var\",\"v\":15},{\"t\":\"var\",\"v\":16}]},{\"t\":\"lookup\",\"table\":1,\"tuple\":[{\"t\":\"const\",\"v\":2},{\"t\":\"var\",\"v\":9},{\"t\":\"var\",\"v\":8},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"var\",\"v\":4},{\"t\":\"var\",\"v\":17},{\"t\":\"var\",\"v\":18},{\"t\":\"var\",\"v\":19},{\"t\":\"var\",\"v\":20},{\"t\":\"var\",\"v\":21},{\"t\":\"var\",\"v\":22},{\"t\":\"var\",\"v\":23}]}],\"hash_sites\":[],\"ranges\":[]}"
 
 /-! ## §4 — non-vacuous per-gate lemmas. -/
 
@@ -140,8 +192,13 @@ example : ¬ (([2 ^ 29] : List ℤ) ∈ rangeRows DIFF_BITS) := by
 -- Shape pins.
 #guard predicateLeDesc.traceWidth == PRED_WIDTH
 #guard predicateLeDesc.piCount == 2
-#guard predicateLeDesc.constraints.length == 5
+#guard predicateLeDesc.constraints.length == 7
 #guard predicateLeDesc.tables.length == 1
+#guard (chipLookupTuple [.var PREDICATE_SYM, .var INPUT, .var TERM1, .var TERM2,
+                         .const 0, .const FACT_MARK, .const 1] FACT_HASH FACTHASH_LANES).length
+         == CHIP_RATE + 1 + CHIP_OUT_LANES
+#guard (chipLookupTuple [.var FACT_HASH, .var STATE_ROOT] FACT_COMMITMENT FACTCOMMIT_LANES).length
+         == CHIP_RATE + 1 + CHIP_OUT_LANES
 
 #assert_axioms c3_body_zero_iff
 #assert_axioms c5_body_zero_iff

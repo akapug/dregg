@@ -19,6 +19,7 @@ use dregg_circuit::fold_types::{FoldWitness, RemovedFact};
 use dregg_circuit::merkle_air::{MerkleLevelWitness, MerkleWitness};
 use dregg_circuit::merkle_types::compute_parent_poseidon2;
 use dregg_circuit::poseidon2;
+use dregg_circuit::predicate_arith_witness::FactBinding;
 use dregg_circuit::presentation::{
     DescriptorProofWire, build_descriptor_wire, verify_descriptor_wire,
 };
@@ -1034,8 +1035,13 @@ impl BridgePresentationBuilder {
     /// # Arguments
     ///
     /// * `request` - The authorization request to prove.
-    /// * `predicate_facts` - List of (fact_value, fact_hash, predicate) tuples.
-    ///   Each entry generates an independent predicate proof bound to the token state.
+    /// * `predicate_facts` - List of `(fact_value, fact_terms, predicate)` tuples. `fact_terms`
+    ///   carries the fact's IDENTITY (predicate symbol + terms 1..2); the fact hash is DERIVED from
+    ///   it together with `fact_value`, which is the fact's `terms[0]`. It is deliberately not a
+    ///   `fact_hash`: passing the value and its hash separately let a caller pair a value with
+    ///   another value's fact, and for the `≥` predicate that mispairing was provable end-to-end
+    ///   (the circuit did not relate the two). The state root is supplied by this chain, not the
+    ///   caller.
     ///
     /// # Returns
     ///
@@ -1045,7 +1051,7 @@ impl BridgePresentationBuilder {
     pub fn prove_with_disclosure(
         &mut self,
         request: &AuthRequest,
-        predicate_facts: &[(u32, BabyBear, &Predicate)],
+        predicate_facts: &[(u32, FactTerms, &Predicate)],
     ) -> Result<(BridgePresentationProof, Vec<BridgePredicateProof>), AuthError> {
         // Generate the main STARK proof.
         let main_proof = self.prove_real(request)?;
@@ -1055,10 +1061,11 @@ impl BridgePresentationBuilder {
         let state_root_bytes = final_step.state.root_immutable();
         let state_root = bytes_to_babybear(&state_root_bytes);
 
-        // Generate predicate proofs for each specified fact.
+        // Generate predicate proofs for each specified fact. The state root comes from THIS chain's
+        // final step (above), so the caller cannot aim a predicate at a state it does not hold.
         let mut pred_proofs = Vec::with_capacity(predicate_facts.len());
-        for &(value, fact_hash, ref predicate) in predicate_facts {
-            let proof = prove_predicate_for_fact(value, fact_hash, state_root, predicate)
+        for &(value, terms, ref predicate) in predicate_facts {
+            let proof = prove_predicate_for_fact(value, terms.bind(state_root), predicate)
                 .ok_or_else(|| {
                     AuthError::InvalidRequest(format!(
                         "predicate proof generation failed for value {} with {:?}",
@@ -2659,10 +2666,39 @@ pub enum BridgePredicateProofInner {
 ///
 /// `Some(BridgePredicateProof)` if the statement is true and the proof generates
 /// successfully, `None` if the statement is false or proof generation fails.
+/// The caller-facing identity of a fact a predicate speaks about: everything the fact commitment
+/// covers EXCEPT the value (which is `terms[0]`, supplied alongside) and the state root (which the
+/// proving chain supplies, not the caller).
+///
+/// This replaces the old `fact_hash: BabyBear` parameter. A hash is opaque: passing it beside a
+/// value let the two name different facts, and for `≥` the circuit did not relate them, so the
+/// mispairing was a provable forgery rather than a caller mistake. Terms are not opaque — the hash
+/// is derived, so the pairing cannot come apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FactTerms {
+    /// The predicate symbol (`hash_fact`'s first argument).
+    pub predicate_sym: BabyBear,
+    /// The fact's second term (`terms[1]`).
+    pub term1: BabyBear,
+    /// The fact's third term (`terms[2]`).
+    pub term2: BabyBear,
+}
+
+impl FactTerms {
+    /// Bind these terms to a state root, yielding the circuit-level [`FactBinding`].
+    pub fn bind(self, state_root: BabyBear) -> FactBinding {
+        FactBinding {
+            predicate_sym: self.predicate_sym,
+            term1: self.term1,
+            term2: self.term2,
+            state_root,
+        }
+    }
+}
+
 pub fn prove_predicate_for_fact(
     private_value: u32,
-    fact_hash: BabyBear,
-    state_root: BabyBear,
+    fact: FactBinding,
     predicate: &Predicate,
 ) -> Option<BridgePredicateProof> {
     use dregg_circuit::descriptor_by_name::descriptor_by_name;
@@ -2674,8 +2710,13 @@ pub fn prove_predicate_for_fact(
         predicate_neq_witness,
     };
 
-    let fact_commitment = dregg_circuit::compute_fact_commitment(fact_hash, state_root);
     let v = private_value as u64;
+    // The fact commitment is DERIVED from the value being proved about — it is not a caller-supplied
+    // parameter that could name a different value's fact. Every descriptor in the family now ALSO
+    // welds this relation INSIDE the circuit (the two Poseidon2 legs), so the derivation is checked,
+    // not merely performed here: this value is what each builder independently recomputes and what a
+    // verifier derives from trusted token state.
+    let fact_commitment = fact.commitment_of(BabyBear::from_u64(v));
 
     // Prove ONE single-bound witness against `desc_name`; `None` when the witness cannot be built or
     // the comparison is FALSE (prove refuses — the false-statement pole, per-op range / nonzero tooth).
@@ -2695,32 +2736,32 @@ pub fn prove_predicate_for_fact(
     let inner = match predicate {
         Predicate::Gte(t) => BridgePredicateProofInner::Single(prove_one(
             PREDICATE_ARITH_NAME,
-            predicate_arith_witness(v, *t as u64, fact_commitment, 2),
+            predicate_arith_witness(v, *t as u64, fact, 2),
         )?),
         Predicate::Lte(t) => BridgePredicateProofInner::Single(prove_one(
             PREDICATE_ARITH_LE_NAME,
-            predicate_le_witness(v, *t as u64, fact_commitment, 2),
+            predicate_le_witness(v, *t as u64, fact, 2),
         )?),
         Predicate::Gt(t) => BridgePredicateProofInner::Single(prove_one(
             PREDICATE_ARITH_GT_NAME,
-            predicate_gt_witness(v, *t as u64, fact_commitment, 2),
+            predicate_gt_witness(v, *t as u64, fact, 2),
         )?),
         Predicate::Lt(t) => BridgePredicateProofInner::Single(prove_one(
             PREDICATE_ARITH_LT_NAME,
-            predicate_lt_witness(v, *t as u64, fact_commitment, 2),
+            predicate_lt_witness(v, *t as u64, fact, 2),
         )?),
         Predicate::Neq(t) => BridgePredicateProofInner::Single(prove_one(
             PREDICATE_ARITH_NEQ_NAME,
-            predicate_neq_witness(v, *t as u64, fact_commitment, 2),
+            predicate_neq_witness(v, *t as u64, fact, 2),
         )?),
         Predicate::InRange(low, high) => {
             let low_proof = prove_one(
                 PREDICATE_ARITH_NAME,
-                predicate_arith_witness(v, *low as u64, fact_commitment, 2),
+                predicate_arith_witness(v, *low as u64, fact, 2),
             )?;
             let high_proof = prove_one(
                 PREDICATE_ARITH_LE_NAME,
-                predicate_le_witness(v, *high as u64, fact_commitment, 2),
+                predicate_le_witness(v, *high as u64, fact, 2),
             )?;
             BridgePredicateProofInner::Range(low_proof, high_proof)
         }
@@ -4002,9 +4043,13 @@ mod ir2_issuer_wire_roundtrip {
     /// `prove_predicate_for_fact` / `verify_predicate_proof` onto the new descriptors.
     #[test]
     fn comparison_predicates_prove_and_verify_end_to_end() {
-        let fact_hash = BabyBear::new(0xABCD);
+        let terms = FactTerms {
+            predicate_sym: BabyBear::new(0xABCD),
+            term1: BabyBear::new(0x11),
+            term2: BabyBear::new(0x22),
+        };
         let state_root = BabyBear::new(0x1234);
-        let fc = dregg_circuit::compute_fact_commitment(fact_hash, state_root);
+        let binding = terms.bind(state_root);
 
         // (value, predicate, expected-true).
         let cases: &[(u32, Predicate, bool)] = &[
@@ -4024,7 +4069,10 @@ mod ir2_issuer_wire_roundtrip {
         ];
 
         for (value, predicate, expect_true) in cases {
-            let proof = prove_predicate_for_fact(*value, fact_hash, state_root, predicate);
+            // The commitment a verifier derives from token state for THIS value's fact. It is
+            // value-dependent: that dependence is the weld.
+            let fc = binding.commitment_of(BabyBear::from_u64(*value as u64));
+            let proof = prove_predicate_for_fact(*value, binding, predicate);
             if *expect_true {
                 let proof = proof
                     .unwrap_or_else(|| panic!("true statement {value} {predicate:?} must PROVE"));

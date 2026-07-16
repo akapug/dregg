@@ -2861,9 +2861,9 @@ mod tests {
             predicate_gt_witness, predicate_le_witness, predicate_lt_witness, predicate_neq_witness,
         };
         let state_root = BabyBear::new(0xB00C);
-        // The `≥` descriptor is now WELDED: its witness builder takes the fact identity and computes
-        // the commitment from the compared value (cols 5..23 + the two Poseidon2 legs). The siblings
-        // remain unwelded (opaque pass-through commitment).
+        // EVERY descriptor in the family is WELDED: each witness builder takes the fact identity
+        // and COMPUTES the commitment from the compared value (the fact witness cols + the two
+        // Poseidon2 legs), so no builder can pair a value with an unrelated commitment.
         let fact = FactBinding {
             predicate_sym: BabyBear::new(0xFACE),
             term1: BabyBear::ZERO,
@@ -2877,21 +2877,12 @@ mod tests {
         // (mirror of `single_comparison_descriptor` + dregg-bridge's `prove_predicate_for_fact`).
         let (desc_name, built) = match op {
             PredicateType::Gte => (PREDICATE_ARITH_NAME, predicate_arith_witness(v, t, fact, 2)),
-            PredicateType::Lte => (
-                PREDICATE_ARITH_LE_NAME,
-                predicate_le_witness(v, t, fact_commitment, 2),
-            ),
-            PredicateType::Gt => (
-                PREDICATE_ARITH_GT_NAME,
-                predicate_gt_witness(v, t, fact_commitment, 2),
-            ),
-            PredicateType::Lt => (
-                PREDICATE_ARITH_LT_NAME,
-                predicate_lt_witness(v, t, fact_commitment, 2),
-            ),
+            PredicateType::Lte => (PREDICATE_ARITH_LE_NAME, predicate_le_witness(v, t, fact, 2)),
+            PredicateType::Gt => (PREDICATE_ARITH_GT_NAME, predicate_gt_witness(v, t, fact, 2)),
+            PredicateType::Lt => (PREDICATE_ARITH_LT_NAME, predicate_lt_witness(v, t, fact, 2)),
             PredicateType::Neq => (
                 PREDICATE_ARITH_NEQ_NAME,
-                predicate_neq_witness(v, t, fact_commitment, 2),
+                predicate_neq_witness(v, t, fact, 2),
             ),
             other => panic!("honest_bridge_single: unsupported single-bound op {other:?}"),
         };
@@ -3056,7 +3047,7 @@ mod tests {
         let high_desc =
             descriptor_by_name(PREDICATE_ARITH_LE_NAME).expect("le descriptor registered");
         let (high_trace, high_pis) =
-            predicate_le_witness(50, 100, fact_commitment, 2).expect("honest high bound builds");
+            predicate_le_witness(50, 100, fact, 2).expect("honest high bound builds");
         let high_p = prove_vm_descriptor2(
             &high_desc,
             &high_trace,

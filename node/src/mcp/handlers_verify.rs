@@ -289,13 +289,26 @@ pub(super) async fn tool_prove_predicate(params: &Value, state: &NodeState) -> M
     }
     drop(s);
 
-    // Compute the fact commitment binding the predicate to token state (unchanged from the v1 path).
+    // The fact identity the predicate speaks about: the attribute is the predicate symbol, the
+    // compared value is `terms[0]`. The `≥` descriptor is now WELDED — its witness builder computes
+    // the fact commitment FROM the value (`hash_2_to_1(hash_fact(sym, [value, ..]), state_root)`), so
+    // the predicate proof binds to the committed fact in-circuit. The sibling comparisons remain
+    // unwelded (opaque pass-through commitment) pending their own weld follow-up.
     let state_root = dregg_circuit::BabyBear::new(state_root_u32);
-    let fact_hash = dregg_circuit::BabyBear::new(
+    let attr_sym = dregg_circuit::BabyBear::new(
         blake3::hash(attribute.as_bytes()).as_bytes()[0] as u32
             | ((blake3::hash(attribute.as_bytes()).as_bytes()[1] as u32) << 8),
     );
-    let fact_commitment = dregg_circuit::compute_fact_commitment(fact_hash, state_root);
+    let fact = dregg_circuit::predicate_arith_witness::FactBinding {
+        predicate_sym: attr_sym,
+        term1: dregg_circuit::BabyBear::ZERO,
+        term2: dregg_circuit::BabyBear::ZERO,
+        state_root,
+    };
+    // The commitment a verifier derives from token state for this value's fact (the `≥` path uses
+    // the welded builder, which reproduces exactly this; the siblings take it as the pass-through).
+    let fact_commitment =
+        fact.commitment_of(dregg_circuit::BabyBear::from_u64(private_value as u64));
 
     // The retired hand-AIR `prove_predicate` is replaced by the descriptor prover: each comparison
     // operator maps to an emitted, byte-pinned IR-v2 descriptor (dispatched by `descriptor_by_name`)
@@ -319,23 +332,23 @@ pub(super) async fn tool_prove_predicate(params: &Value, state: &NodeState) -> M
     let (air_name, built) = match predicate_type_str {
         "gte" => (
             PREDICATE_ARITH_NAME,
-            predicate_arith_witness(value, thr, fact_commitment, HEIGHT),
+            predicate_arith_witness(value, thr, fact, HEIGHT),
         ),
         "lte" => (
             PREDICATE_ARITH_LE_NAME,
-            predicate_le_witness(value, thr, fact_commitment, HEIGHT),
+            predicate_le_witness(value, thr, fact, HEIGHT),
         ),
         "gt" => (
             PREDICATE_ARITH_GT_NAME,
-            predicate_gt_witness(value, thr, fact_commitment, HEIGHT),
+            predicate_gt_witness(value, thr, fact, HEIGHT),
         ),
         "lt" => (
             PREDICATE_ARITH_LT_NAME,
-            predicate_lt_witness(value, thr, fact_commitment, HEIGHT),
+            predicate_lt_witness(value, thr, fact, HEIGHT),
         ),
         "neq" => (
             PREDICATE_ARITH_NEQ_NAME,
-            predicate_neq_witness(value, thr, fact_commitment, HEIGHT),
+            predicate_neq_witness(value, thr, fact, HEIGHT),
         ),
         other => {
             return McpToolResult::error(format!(

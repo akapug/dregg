@@ -22,7 +22,13 @@ Public inputs are `[lo, hi, fact_commitment]` (three PIs, vs the one-sided ops' 
 | C6hi   | `.lookup ⟨range, [DIFF_HI]⟩`                                      |
 
 Both range lookups are load-bearing: a `value < lo` wraps `DIFF_LO` below zero, a `value > hi` wraps
-`DIFF_HI` below zero — either UNSAT. Fact-commitment is the pass-through PI (C2).
+`DIFF_HI` below zero — either UNSAT.
+
+**THE VALUE↔FACT WELD (M14).** Two Poseidon2 chip lookups force `FACT_COMMITMENT =
+hash_2_to_1(hash_fact(pred, [INPUT, t1, t2]), STATE_ROOT)` over the SAME `INPUT` both bounds speak
+about — col 6 (`FACT_COMMITMENT`) and col 0 (`INPUT`) are no longer in DISJOINT constraint sets.
+Without it a prover proves `lo ≤ value ≤ hi` on a value of its choosing against an unrelated honest
+commitment. The InRange layout carries `LO`/`HI`/`DIFF_LO`/`DIFF_HI`, so the weld cols begin at 7.
 
 `#assert_axioms` ⊆ {} on the gate lemmas. NEW file; imports read-only.
 -/
@@ -35,7 +41,7 @@ open Dregg2.Exec.CircuitEmit (EmittedExpr)
 open Dregg2.Circuit.Emit.EffectVmEmit (VmConstraint VmRow)
 open Dregg2.Circuit.DescriptorIR2
   (EffectVmDescriptor2 VmConstraint2 Lookup TableId rangeTableDef emitVmJson2 rangeRows
-   range_row_mem_iff)
+   range_row_mem_iff chipLookupTuple CHIP_RATE CHIP_OUT_LANES)
 
 set_option autoImplicit false
 
@@ -46,7 +52,17 @@ def HI : Nat := 3
 def DIFF_LO : Nat := 4
 def DIFF_HI : Nat := 5
 def FACT_COMMITMENT : Nat := 6
-def PRED_WIDTH : Nat := 7
+/-! The value↔fact WELD columns (the InRange layout carries `LO`/`HI`/`DIFF_LO`/`DIFF_HI`, so the
+weld cols start at 7): tie `INPUT` to the committed fact. -/
+def PREDICATE_SYM : Nat := 7
+def TERM1 : Nat := 8
+def TERM2 : Nat := 9
+def STATE_ROOT : Nat := 10
+def FACT_HASH : Nat := 11
+def FACT_MARK : Int := 64207
+def FACTHASH_LANES : List Nat := [12, 13, 14, 15, 16, 17, 18]
+def FACTCOMMIT_LANES : List Nat := [19, 20, 21, 22, 23, 24, 25]
+def PRED_WIDTH : Nat := 26
 def PI_LO : Nat := 0
 def PI_HI : Nat := 1
 def PI_FACT_COMMITMENT : Nat := 2
@@ -72,18 +88,30 @@ def c5HiGate : VmConstraint2 := .base (.gate c5HiBody)
 def c6LoRange : VmConstraint2 := .lookup ⟨TableId.range, [.var DIFF_LO]⟩
 def c6HiRange : VmConstraint2 := .lookup ⟨TableId.range, [.var DIFF_HI]⟩
 
-/-- **`predicateInRangeDesc`** — the arithmetic `InRange(lo ≤ value ≤ hi)` descriptor. 3 PIs. -/
+/-- **THE VALUE↔FACT WELD, leg 1** — `FACT_HASH = hash_fact(pred, [INPUT, term1, term2])`. -/
+def factHashLookup : VmConstraint2 :=
+  .lookup ⟨TableId.poseidon2,
+    chipLookupTuple [.var PREDICATE_SYM, .var INPUT, .var TERM1, .var TERM2,
+                     .const 0, .const FACT_MARK, .const 1] FACT_HASH FACTHASH_LANES⟩
+
+/-- **THE VALUE↔FACT WELD, leg 2** — `FACT_COMMITMENT = Poseidon2(fact_hash, state_root)`. -/
+def factCommitLookup : VmConstraint2 :=
+  .lookup ⟨TableId.poseidon2,
+    chipLookupTuple [.var FACT_HASH, .var STATE_ROOT] FACT_COMMITMENT FACTCOMMIT_LANES⟩
+
+/-- **`predicateInRangeDesc`** — the arithmetic `InRange(lo ≤ value ≤ hi)` descriptor, welded. 3 PIs. -/
 def predicateInRangeDesc : EffectVmDescriptor2 :=
   { name        := "dregg-predicate-arith-inrange::bounds-v1"
   , traceWidth  := PRED_WIDTH
   , piCount     := 3
   , tables      := [rangeTableDef DIFF_BITS]
-  , constraints := [c1LoPin, c1HiPin, c2FactPin, c3SlotGate, c5LoGate, c5HiGate, c6LoRange, c6HiRange]
+  , constraints := [c1LoPin, c1HiPin, c2FactPin, c3SlotGate, c5LoGate, c5HiGate, c6LoRange, c6HiRange,
+                    factHashLookup, factCommitLookup]
   , hashSites   := []
   , ranges      := [] }
 
 #guard emitVmJson2 predicateInRangeDesc ==
-  "{\"name\":\"dregg-predicate-arith-inrange::bounds-v1\",\"ir\":2,\"trace_width\":7,\"public_input_count\":3,\"tables\":[{\"id\":2,\"name\":\"range\",\"arity\":1,\"sem\":\"range\",\"bits\":29}],\"constraints\":[{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":2,\"pi_index\":0},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":3,\"pi_index\":1},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":6,\"pi_index\":2},{\"t\":\"gate\",\"body\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":1},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"var\",\"v\":0}}}},{\"t\":\"gate\",\"body\":{\"t\":\"add\",\"l\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":4},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"var\",\"v\":1}}},\"r\":{\"t\":\"var\",\"v\":2}}},{\"t\":\"gate\",\"body\":{\"t\":\"add\",\"l\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":5},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"var\",\"v\":3}}},\"r\":{\"t\":\"var\",\"v\":1}}},{\"t\":\"lookup\",\"table\":2,\"tuple\":[{\"t\":\"var\",\"v\":4}]},{\"t\":\"lookup\",\"table\":2,\"tuple\":[{\"t\":\"var\",\"v\":5}]}],\"hash_sites\":[],\"ranges\":[]}"
+  "{\"name\":\"dregg-predicate-arith-inrange::bounds-v1\",\"ir\":2,\"trace_width\":26,\"public_input_count\":3,\"tables\":[{\"id\":2,\"name\":\"range\",\"arity\":1,\"sem\":\"range\",\"bits\":29}],\"constraints\":[{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":2,\"pi_index\":0},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":3,\"pi_index\":1},{\"t\":\"pi_binding\",\"row\":\"first\",\"col\":6,\"pi_index\":2},{\"t\":\"gate\",\"body\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":1},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"var\",\"v\":0}}}},{\"t\":\"gate\",\"body\":{\"t\":\"add\",\"l\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":4},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"var\",\"v\":1}}},\"r\":{\"t\":\"var\",\"v\":2}}},{\"t\":\"gate\",\"body\":{\"t\":\"add\",\"l\":{\"t\":\"add\",\"l\":{\"t\":\"var\",\"v\":5},\"r\":{\"t\":\"mul\",\"l\":{\"t\":\"const\",\"v\":-1},\"r\":{\"t\":\"var\",\"v\":3}}},\"r\":{\"t\":\"var\",\"v\":1}}},{\"t\":\"lookup\",\"table\":2,\"tuple\":[{\"t\":\"var\",\"v\":4}]},{\"t\":\"lookup\",\"table\":2,\"tuple\":[{\"t\":\"var\",\"v\":5}]},{\"t\":\"lookup\",\"table\":1,\"tuple\":[{\"t\":\"const\",\"v\":7},{\"t\":\"var\",\"v\":7},{\"t\":\"var\",\"v\":0},{\"t\":\"var\",\"v\":8},{\"t\":\"var\",\"v\":9},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":64207},{\"t\":\"const\",\"v\":1},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"var\",\"v\":11},{\"t\":\"var\",\"v\":12},{\"t\":\"var\",\"v\":13},{\"t\":\"var\",\"v\":14},{\"t\":\"var\",\"v\":15},{\"t\":\"var\",\"v\":16},{\"t\":\"var\",\"v\":17},{\"t\":\"var\",\"v\":18}]},{\"t\":\"lookup\",\"table\":1,\"tuple\":[{\"t\":\"const\",\"v\":2},{\"t\":\"var\",\"v\":11},{\"t\":\"var\",\"v\":10},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"const\",\"v\":0},{\"t\":\"var\",\"v\":6},{\"t\":\"var\",\"v\":19},{\"t\":\"var\",\"v\":20},{\"t\":\"var\",\"v\":21},{\"t\":\"var\",\"v\":22},{\"t\":\"var\",\"v\":23},{\"t\":\"var\",\"v\":24},{\"t\":\"var\",\"v\":25}]}],\"hash_sites\":[],\"ranges\":[]}"
 
 theorem c3_body_zero_iff (a : Assignment) :
     c3Body.eval a = 0 ↔ a SLOT_A = a INPUT := by
@@ -113,8 +141,13 @@ example : ¬ (([2 ^ 29] : List ℤ) ∈ rangeRows DIFF_BITS) := by
 
 #guard predicateInRangeDesc.traceWidth == PRED_WIDTH
 #guard predicateInRangeDesc.piCount == 3
-#guard predicateInRangeDesc.constraints.length == 8
+#guard predicateInRangeDesc.constraints.length == 10
 #guard predicateInRangeDesc.tables.length == 1
+#guard (chipLookupTuple [.var PREDICATE_SYM, .var INPUT, .var TERM1, .var TERM2,
+                         .const 0, .const FACT_MARK, .const 1] FACT_HASH FACTHASH_LANES).length
+         == CHIP_RATE + 1 + CHIP_OUT_LANES
+#guard (chipLookupTuple [.var FACT_HASH, .var STATE_ROOT] FACT_COMMITMENT FACTCOMMIT_LANES).length
+         == CHIP_RATE + 1 + CHIP_OUT_LANES
 
 #assert_axioms c3_body_zero_iff
 #assert_axioms c5Lo_body_zero_iff
