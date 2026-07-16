@@ -1176,3 +1176,26 @@ belongs to whoever owns the SDK effect/authorization variants.
 Consequence for this lane: `tests/src/dsl_pipeline.rs` cannot be migrated+verified (cargo builds the whole
 crate's tests), so `DuplicateDslP3AirResidual`'s DELETION stays blocked. The repoint that mattered — the
 differential harness now driving the shipped interpreter — is already landed (`a5f7a0a87`).
+
+### `OrphanedTeastingTestsResidual` — CLOSED. 22 tests resurrected; 2 audit entries were STALE.
+The scar was NOT "dead tests" — it was **live test files held hostage by one stale import each**. A test
+target that does not compile does not report, so they sat silent.
+- `5623b4350` **bridge_four_phase: +8 tests RUN**. It imported `bridge_action_witness::{prove,verify}_
+  bridge_action` — gone (that module exports only `encode_hash`/`encode_amount`; the hand `BridgeActionAir`
+  is trace-gen, "not in the soundness TCB"). Retired the 9 that drove them; teeth live on
+  `bridge_action_emit_gate` (5/5 pass, byte-pinned to `BridgeActionEmit.lean`).
+- `dd9fe7f91` **defi_primitives: +14 tests RUN**. It imported `cross_state_derivation::*` — the module is
+  GONE; `derivation_witness.rs:7-10` records the migration that "flips the last hand-STARK derivation
+  consumer off the hand engine onto the committed, byte-pinned emitted descriptor" `dregg-derivation-v1`.
+  Retired only the 3 that drove it; teeth on `derivation_emit_gate`.
+- **`negation_proofs.rs` DOES NOT EXIST** — stale audit entry.
+- **`privacy_unlinkability.rs` PASSES 2/2** — stale audit entry; it imports `compute_fact_commitment` /
+  `compute_blinded_fact_commitment`, which exist. (The audit claimed it imports the vanished free fns
+  `prove_predicate`/`verify_predicate`. It does not.)
+Also swept the imports my own `GarbledEvaluationAir` deletion orphaned — my mess, cleaned.
+
+**THE DEEPER PATTERN (now seen 4×): a retirement lands, its consumers are not updated, and the breakage is
+INVISIBLE** — because a non-compiling test target is silent, not red. That is how ~39 tests (8+14+17 in
+proof_round_trip's file) stopped running without anyone noticing, and it is exactly how I broke
+`proof_round_trip` myself last night. **A retirement is not done until you have built the crates that
+CONSUME the API — not just the one you edited.**
