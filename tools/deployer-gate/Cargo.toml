@@ -1,9 +1,8 @@
-# Standalone workspace (own [workspace] opt-out, like crypto-hermine / fhegg-solver)
-# so it does NOT edit the root Cargo.toml members list. It path-depends on the
-# REAL `dregg-macaroon` crate (../../macaroon) — the attenuable proof-carrying
-# capability primitive it composes. Build/test with:
-#   cd tools/deployer-gate && cargo test
-[workspace]
+# A workspace MEMBER (added 2026-07-16). This header previously claimed a "Standalone workspace (own
+# [workspace] opt-out, like crypto-hermine / fhegg-solver)" — but there was NO `[workspace]` stanza here
+# and never had been, and crypto-hermine is itself a member. The crate was simply never listed in the root
+# `members`, so cargo ignored it and CI never ran its 14 tests. It path-depends on `dregg-macaroon`, a
+# member, so standalone resolution was duplicating the workspace anyway.
 
 [package]
 name = "dregg-deployer-gate"
