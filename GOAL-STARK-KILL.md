@@ -1199,3 +1199,31 @@ INVISIBLE** — because a non-compiling test target is silent, not red. That is 
 proof_round_trip's file) stopped running without anyone noticing, and it is exactly how I broke
 `proof_round_trip` myself last night. **A retirement is not done until you have built the crates that
 CONSUME the API — not just the one you edited.**
+
+## ⚑ THE COMPLETE SCOPE, CLASSIFIED (2026-07-16) — every circuit the goal named
+Answering the goal's list systematically (3 dialects + reachability past the re-export layer), not reactively:
+
+| circuit | verdict | action |
+|---|---|---|
+| **ivc_turn_chain** | **DEPLOYED violation** (`grain-verify/r3.rs:139`, the renter's whole-history proof) | **EMITTED + CUT OVER** `de0893342`. Hand algebra 0 sites; byte-identical golden; 5/5 tamper tests |
+| **fold** | DEAD — `fold_dsl_circuit`/`_circuit_descriptor` re-exported, NEVER called | **DELETED** `313239116` (15 -> 0 sites); kept live `build_shared_tree` |
+| **committed_threshold** | DEAD — same shape | **DELETED** `313239116` (12 -> 7) |
+| **garbled** | DEAD — `GarbledEvaluationAir` never instantiated | **DELETED** `7e56e5439` (16 closure sites) |
+| **membership_adjacency** | DEAD — `adjacency_circuit()` zero callers | **DELETED** `e9cd79030` (10 data sites); emitted version is STRONGER (internalizes the `idx_upper-idx_lower==1` tooth that lived in a bypassable Rust wrapper) |
+| **merkle (P3MerklePoseidon2Air)** | DEPLOYED violation | **KILLED** `9ba02881b` — emitter existed and the deployed path ignored it |
+| **note_spending** | **NOT a violation — the drift-detector** | LEFT. `note_spend_witness.rs:225-227`: the emitted path DELIBERATELY walks the v1 descriptor as SOURCE — "a drift in the deployed circuit is a build-time refusal here, never a silent divergence" |
+| **derivation** | **NOT a violation — same pattern + test-only AIR** | LEFT. `derivation_witness.rs:41` reuses its trace-gen deliberately; `DerivationAir` runs only in `ivc.rs`'s `#[cfg(test)]` feeding `ConstraintProof::generate` — a VALIDATOR, not a prover. The goal's "delete dead derivation.rs" rests on a FALSE premise |
+| **revocation** | **DEPLOYED**, `prove_non_revocation_p3` -> `sdk/privacy.rs:621` | **BLOCKED, named**: `NonRevocationDepthResidual` — emitter is depth-2/4-leaf vs deployed TREE_DEPTH=4/16-leaf. Cutover would SHRINK the revocation tree. Fix = adjacency(depth-general) ∘ ordering |
+| **ivc.rs::StateTransitionAir** | test-only (14 sites) — `prove_ivc` has ZERO production callers (its only "callers" are doc comments; `bridge`'s `prove_ivc` is `PresentationAir`'s own method) | **LEFT, deliberately.** Its emitter exists BUT `Rung2Full::ivc_anchor_insufficient` PROVES that descriptor's residual is not crypto-dischargeable ("no copy-forward gate, every `old_hash` i>0 is a FREE column"). Cutting a test-only path onto a descriptor Lean proves INSUFFICIENT trades a stronger check for a weaker one. Named, not forced |
+
+**NET: every DEPLOYED first-party Rust-authored circuit is retired.** What remains is (a) one deployed
+circuit blocked by a real regression (revocation/depth), (b) two that are deliberately kept as
+drift-detectors for the emitted path, (c) one test-only AIR whose emitter Lean proves too weak.
+
+### `7d1f34207` — the `*_air` naming, done as a SWEEP
+Classified all 16 `*_air.rs` (all 3 dialects). 6 EMITTED (law working) · 2 legitimate (shape probe, range
+gadget) · 2 with a lone doc-comment hit · **6 with NO algebra**. Fixed the three whose headers actively
+LIED about being AIRs (garbled_air — I deleted its AIR today; shielded_ring_clearing_air — codex emitted it
+away; effect_action_air — it is schemas+limbs). `merkle_air` + `temporal_predicate_air` already told the
+truth. **Did NOT rename the files**: my last mechanical rename sed a WIRE IDENTIFIER and the dispatch gate
+caught it — a truthful header kills the lie with none of that risk.
