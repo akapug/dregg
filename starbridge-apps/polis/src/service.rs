@@ -82,13 +82,13 @@ use starbridge_polis::council::{
 // The cell program the runtime faces install (the canonical council program)
 // =============================================================================
 
-/// The [`CellProgram`] the council SERVICE / REACTOR faces install — the SAME
-/// canonical [`council::council_cell_program`] the factory bakes into every
-/// factory-born proposal cell. Installing it means every invoke()-desugared turn
-/// is re-enforced by the identical lifecycle teeth (the `AllowedTransitions`
-/// machine, the `AffineLe` threshold gate, the `Monotonic` approval bits, the
-/// `WriteOnce` staged hash) — the service face cannot diverge from the
-/// constructor contract.
+/// The [`CellProgram`] the council SERVICE / REACTOR faces install. This RETURNS the
+/// council module's factory-baked cell program verbatim (see the body) — it is not a
+/// re-authored peer of it, so every invoke()-desugared turn is re-enforced by the
+/// identical lifecycle teeth (the `AllowedTransitions` machine, the `AffineLe` threshold
+/// gate, the `Monotonic` approval bits, the `WriteOnce` staged hash) and the service face
+/// cannot diverge from the constructor contract. The equality is asserted (not merely
+/// documented) by `the_service_program_is_the_canonical_council_program`.
 pub fn council_service_program(charter: &CouncilCharter) -> CellProgram {
     council::council_cell_program(charter).expect("the charter validates (caller checked)")
 }
@@ -498,10 +498,13 @@ mod tests {
         assert_eq!(view.auth_required, AuthRequired::None);
     }
 
+    /// THE DRIVEN AGREEMENT CHECK (the anti-mirror canary): the runtime face installs the
+    /// IDENTICAL program the factory bakes into a factory-born proposal cell — because it
+    /// RETURNS it verbatim, not a re-authored copy. Canary: re-author
+    /// `council_service_program` to any divergent program (a dropped or added constraint)
+    /// and this equality goes RED.
     #[test]
     fn the_service_program_is_the_canonical_council_program() {
-        // Non-divergence: the runtime face installs the IDENTICAL program the
-        // factory bakes into a factory-born proposal cell.
         let c = charter_2of3();
         assert_eq!(
             council_service_program(&c),

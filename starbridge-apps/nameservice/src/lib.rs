@@ -864,11 +864,18 @@ pub const METHOD_TRANSFER: &str = "transfer";
 /// The OWNER re-points [`RESOLVE_TARGET_SLOT`] at another reacquirable cell. See [`METHOD_RENEW`].
 pub const METHOD_SET_TARGET: &str = "set_target";
 
-/// The **life-of-cell name invariants** the executor re-enforces on every touching turn —
-/// exactly [`name_cell_program`] (`WriteOnce(NAME_HASH)` · `Monotonic(EXPIRY)` ·
-/// `WriteOnce(REVOKED)`), the same program the factory installs on every born name cell
-/// (the one `tests/factory_birth.rs` proves bites on the executor). Installed by
-/// [`seed_name`] so the gated fires re-enforce it.
+/// The **life-of-cell name invariants** the executor re-enforces on every touching turn.
+/// This RETURNS the deployed name-cell program verbatim (see the body) — it is NOT a
+/// re-authored subset of it, so it carries the FULL constraint set: the life-of-name floor
+/// (`WriteOnce(NAME_HASH)` · `Monotonic(EXPIRY)` · `WriteOnce(REVOKED)`) AND the owner-
+/// authorization caveats F1–F7 ([`owner_authorization_constraints`]) that make an
+/// impostor's owner-slot write a real constraint-layer refusal. It is the same program the
+/// factory installs on every born name cell (the one `tests/factory_birth.rs` proves bites
+/// on the executor), installed by [`seed_name`] so the gated fires re-enforce it.
+///
+/// The equality with the deployed program (and the presence of F1–F7) is asserted, not
+/// merely documented, by `the_name_invariants_program_is_the_deployed_name_cell_program` —
+/// so this alias cannot silently drift into the toothless 3-constraint floor it once named.
 pub fn name_invariants_program() -> CellProgram {
     name_cell_program()
 }
@@ -1516,6 +1523,32 @@ mod tests {
 
     fn test_cell() -> CellId {
         CellId::from_bytes([1u8; 32])
+    }
+
+    /// THE DRIVEN AGREEMENT CHECK (the anti-mirror canary): the service-face
+    /// `name_invariants_program` is the DEPLOYED `name_cell_program`, not a re-authored
+    /// subset — it returns it verbatim, so the two are byte-identical AND it carries the
+    /// owner-authorization caveats F1–F7 (the impostor-write refusal), NOT the toothless
+    /// 3-constraint floor its doc once claimed. Canary: re-author `name_invariants_program`
+    /// to a divergent program (or one dropping F1–F7) and this goes RED.
+    #[test]
+    fn the_name_invariants_program_is_the_deployed_name_cell_program() {
+        assert_eq!(
+            name_invariants_program(),
+            name_cell_program(),
+            "the service face must BE the deployed program, not a re-authored peer"
+        );
+        // It is a strict superset of the toothless floor: F1–F7 are present.
+        let CellProgram::Predicate(cs) = name_invariants_program() else {
+            panic!("the name program is a flat Predicate");
+        };
+        for owner_gate in owner_authorization_constraints() {
+            assert!(
+                cs.contains(&owner_gate),
+                "the deployed/service program must carry the owner-authorization caveat \
+                 {owner_gate:?} (an impostor-write refusal), not the 3-constraint floor"
+            );
+        }
     }
 
     #[test]

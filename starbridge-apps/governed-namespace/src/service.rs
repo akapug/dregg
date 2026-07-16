@@ -65,7 +65,7 @@ use dregg_cell::program::CellProgram;
 
 use crate::{
     DISPUTE_WINDOW_HEIGHT_SLOT, PENDING_PROPOSAL_ROOT_SLOT, ROUTE_TABLE_ROOT_SLOT, VERSION_SLOT,
-    cell_id_field, governance_factory_descriptor,
+    cell_id_field,
 };
 
 // =============================================================================
@@ -97,17 +97,23 @@ pub const METHOD_VIEW: &str = "view";
 // =============================================================================
 
 /// The cell program the governed-namespace SERVICE face installs/assumes — the
-/// FLAT constitutional invariants the [`crate::governance_factory_descriptor`]
-/// bakes into its `state_constraints`, lifted into a [`CellProgram::Predicate`].
+/// FLAT constitutional invariants ([`crate::constitutional_invariants`]), lifted into
+/// a [`CellProgram::Predicate`].
 ///
-/// Reading the descriptor's own field guarantees the service face cannot diverge
-/// from the constructor contract: `WriteOnce` committee-root/threshold, `Monotonic`
-/// version/dispute-window, `Immutable` reserved slots all re-enforce on every
-/// invoke-desugared turn. The full operation-scoped [`crate::governance_program`]
-/// `Cases` (the `SenderAuthorized` + `Authorization::Custom` shape) is the AIR-bound
-/// AX1 program pinned by the child VK; see the module docs.
+/// This is a real, PROVABLE SUBSET of the deployed operation-scoped program: the flat
+/// list is exactly that program's `Always` case (the same single author both call), so
+/// `WriteOnce` committee-root/threshold, `Monotonic` version/dispute-window, and
+/// `Immutable` reserved slots re-enforce on every invoke-desugared turn — and it can
+/// never carry a teeth the deployed program lacks. The per-operation gates the flat
+/// form does NOT express — the `SenderAuthorized` committee-membership check on
+/// propose/vote/commit and the `Authorization::Custom` threshold-signature on the swap
+/// — are the deployed `Cases` program's added teeth, the AIR-bound AX1 program pinned
+/// by the child VK (see the module docs). The runtime faces ride the flat invariants so
+/// they are end-to-end testable without wrestling `SenderAuthorized` Merkle roots; the
+/// subset relation (and the named omitted gates) is asserted by
+/// `the_service_face_is_a_subset_of_the_deployed_governance_program`.
 pub fn governance_service_program() -> CellProgram {
-    CellProgram::Predicate(governance_factory_descriptor().state_constraints)
+    CellProgram::Predicate(crate::constitutional_invariants())
 }
 
 // =============================================================================
@@ -483,6 +489,7 @@ impl std::error::Error for GovernanceServiceError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::governance_factory_descriptor;
     use dregg_app_framework::AgentCipherclerk;
 
     #[test]
@@ -530,6 +537,76 @@ mod tests {
             }
             other => panic!("expected Predicate, got {other:?}"),
         }
+    }
+
+    /// THE DRIVEN SUBSET CHECK (the anti-mirror tooth): the flat SERVICE program is a
+    /// real subset of the DEPLOYED operation-scoped `governance_program` — every teeth
+    /// the service face installs is present in the deployed program's `Always` case, and
+    /// the deployed program carries teeth the flat form OMITS (the `SenderAuthorized`
+    /// committee-membership gate). The service is a deliberately-narrower VIEW pinned to
+    /// the same author, never a re-authored peer free to diverge.
+    ///
+    /// Canary: give `governance_service_program` a constraint the deployed program does
+    /// not have (or drop the `Always` invariants from `governance_program`) and the
+    /// subset assertion goes RED. The omitted-gate assertion guards the other direction:
+    /// if the "flat invariants" ever silently GAINED the committee gate here without the
+    /// deployed program changing, or lost the deployed program's extra teeth, this test
+    /// flags the divergence.
+    #[test]
+    fn the_service_face_is_a_subset_of_the_deployed_governance_program() {
+        use crate::governance_program;
+        use dregg_cell::program::{StateConstraint, TransitionGuard};
+
+        let CellProgram::Predicate(service) = governance_service_program() else {
+            panic!("the service face is a flat Predicate");
+        };
+        let CellProgram::Cases(cases) = governance_program() else {
+            panic!("the deployed governance program is Cases");
+        };
+        // The deployed per-transition invariants: the `Always` case.
+        let always: Vec<_> = cases
+            .iter()
+            .filter(|c| matches!(c.guard, TransitionGuard::Always))
+            .flat_map(|c| c.constraints.clone())
+            .collect();
+
+        // SUBSET: every flat service constraint is enforced by the deployed program.
+        for c in &service {
+            assert!(
+                always.contains(c),
+                "service face installs a constraint the deployed governance program does \
+                 not enforce on every turn (a divergence): {c:?}"
+            );
+        }
+        // And it IS the shared single author, verbatim.
+        assert_eq!(
+            service,
+            crate::constitutional_invariants(),
+            "the service face is the shared constitutional_invariants, not a re-authoring"
+        );
+
+        // NAMED OMITTED GATE: the deployed program enforces committee membership
+        // (`SenderAuthorized`) on the mutators; the flat service face does NOT. This is
+        // the deliberate narrowing — and it must stay a STRICT subset: the deployed
+        // program has teeth the service lacks.
+        let deployed_has_sender_gate = cases.iter().any(|c| {
+            c.constraints
+                .iter()
+                .any(|k| matches!(k, StateConstraint::SenderAuthorized { .. }))
+        });
+        assert!(
+            deployed_has_sender_gate,
+            "the deployed governance_program must carry the SenderAuthorized committee gate \
+             the flat service face omits — otherwise the service is not a strict subset"
+        );
+        let service_has_sender_gate = service
+            .iter()
+            .any(|k| matches!(k, StateConstraint::SenderAuthorized { .. }));
+        assert!(
+            !service_has_sender_gate,
+            "the flat service face is not expected to carry SenderAuthorized (see the module \
+             docs on the descriptor/cell-program split); if it does, re-derive this subset test"
+        );
     }
 
     #[test]

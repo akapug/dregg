@@ -54,13 +54,8 @@ D2-roster:dreggnet-wechat:dreggnet-web:18  # D2/D2-uncited-producer
 D3:dregg-circuit:EffectVmDescriptor:cap_delegation_nonamp_descriptor|parse_vm_descriptor  # D3/D3-tested-twin-is-not-the-deployed-one
 D3:dregg-circuit:EffectVmDescriptor:cap_reshape_descriptor|parse_vm_descriptor  # D3/D3-tested-twin-is-not-the-deployed-one
 D3:dregg-dsl-runtime:ComposedCircuitDescriptor:compose_and|compose_aggregate  # D3/D3-tested-twin-is-not-the-deployed-one
-D3:dreggnet-faction:CompiledStory:faction_compiled|compile  # D3/D3-tested-twin-is-not-the-deployed-one
-D3:dreggnet-faction:WorldCell:deploy_feud|deploy  # D3/D3-tested-twin-is-not-the-deployed-one
 D3:starbridge-agent-orchestration:CellProgram:board_service_program|coordinator_program  # D3/D3-tested-twin-is-not-the-deployed-one
 D3:starbridge-domains:DomainRegistry:with_authority|new  # D3/D3-tested-twin-is-not-the-deployed-one
-D3:starbridge-governed-namespace:CellProgram:governance_service_program|governance_program  # D3/D3-tested-twin-is-not-the-deployed-one
-D3:starbridge-nameservice:CellProgram:name_invariants_program|name_cell_program  # D3/D3-tested-twin-is-not-the-deployed-one
-D3:starbridge-polis:CellProgram:council_service_program|council_cell_program  # D3/D3-tested-twin-is-not-the-deployed-one
 D3:starbridge-subscription:CellProgram:subscription_program|feed_invariants_program  # D3/D3-tested-twin-is-not-the-deployed-one
 D3:starbridge-swarm-orchestration:CellProgram:board_service_program|coordinator_program  # D3/D3-tested-twin-is-not-the-deployed-one
 G1:accumulator_nonrev_golden.json:GOLDEN_JSON  # G1/G1-unpinned-test-golden  [sweep-two §5.1 blind spot — 1 of the 4 tests-local goldens; matches deployed 48==48 today, but single-author so free to drift]

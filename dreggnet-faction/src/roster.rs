@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 use spween::{Scene, Value};
 use spween_dregg::{CompiledStory, WorldCell, choice_method, compile_scene, parse};
 
-use crate::{ROOM_HALL, augment_case, faction_slot};
+use crate::{ROOM_HALL, augment_case, faction_slot, push_slot_bound_faction_gates};
 
 // ── The canonical slot naming (the SHARED contract the reader crates read through) ──────────
 
@@ -307,11 +307,19 @@ impl Roster {
             .expect("the generated scene parses")
     }
 
-    /// **Compile the roster AND augment its program with the faction teeth** — the data-driven
-    /// twin of [`crate::faction_compiled`]. Per faction: `Monotonic` on the pledge + renounce, the
-    /// `FieldEquals(betrayed, 0)` seal + `WriteOnce(quest)` on the trial, and `WriteOnce(betrayed)`
-    /// on the betray + recant. The threshold gate, the region entry, and the cross-slot ceiling cap
-    /// are already compiler-emitted from the generated conditions.
+    /// **Compile the roster AND augment its program with the faction teeth.** Per faction:
+    /// `Monotonic` on the pledge + renounce, the `FieldEquals(betrayed, 0)` seal +
+    /// `WriteOnce(quest)` on the trial, and `WriteOnce(betrayed)` on the betray + recant. The
+    /// threshold gate, the region entry, and the cross-slot ceiling cap are already
+    /// compiler-emitted from the generated conditions.
+    ///
+    /// The slot-bound (write-guarded) teeth — the standing bar, the rep ratchet, and the
+    /// betrayal seal that bind to the WRITE regardless of the authoring method — come from the
+    /// shared [`push_slot_bound_faction_gates`], the SAME single author the inline feud program
+    /// calls. So the generated roster is not a re-authored peer of the feud: it installs the
+    /// identical slot-bound teeth by construction, per the roster's own per-faction `threshold`.
+    /// Driven: `a_stapled_roster_unlock_cannot_ride_a_pledge` +
+    /// `a_roster_rep_write_down_cannot_ride_a_nonpledge_method` in `tests/roster_integration.rs`.
     pub fn compile(&self) -> CompiledStory {
         self.validate().expect("the roster is well-formed");
         let mut story = compile_scene(&self.scene()).expect("the generated roster compiles");
@@ -359,14 +367,21 @@ impl Roster {
                 &choice_method(ROOM_HALL, lines.recant),
                 vec![StateConstraint::WriteOnce { index: betrayed }],
             );
+
+            // THE SLOT-BOUND FACTION TEETH — the write-guarded standing bar, rep ratchet, and
+            // betrayal seal, bound to the WRITE (whoever authored it). The shared single author
+            // the inline feud also calls, so the deployed roster carries the identical teeth
+            // (per this faction's own `threshold`) instead of the method-bound-only shape a
+            // stapled write could slip.
+            push_slot_bound_faction_gates(&mut story.program, rep, quest, betrayed, f.threshold);
         }
 
         story
     }
 
     /// **Deploy the roster as a real world-cell**, the faction teeth installed as executor
-    /// predicates. Deterministic in `seed`. Each faction's ceiling is seeded to its full trust
-    /// (mirrors [`crate::deploy_feud`]); everything else starts at zero — you arrive unaligned.
+    /// predicates. Deterministic in `seed`. Each faction's ceiling is seeded to its full trust;
+    /// everything else starts at zero — you arrive unaligned.
     pub fn deploy(&self, seed: u8) -> WorldCell {
         let mut world =
             WorldCell::deploy_compiled(Arc::new(self.compile()), seed).expect("the roster deploys");

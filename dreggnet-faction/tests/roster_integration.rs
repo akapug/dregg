@@ -4,13 +4,15 @@
 //! the standing surface renders as a `deos_view::ViewNode`.
 
 use deos_view::ViewNode;
-use dregg_app_framework::{StateConstraint, field_from_u64};
+use dregg_app_framework::{Effect, StateConstraint, field_from_u64};
 use dreggnet_faction::roster::{
     FactionDef, LINES_PER_FACTION, betrayed_var, ceiling_var, quest_var, rep_var,
 };
 use dreggnet_faction::standing::{StandingSnapshot, StandingStore, read_standing};
 use dreggnet_faction::surface::{standing_bars, standing_bars_of};
-use dreggnet_faction::{ROOM_HALL, Roster, case_constraints, choice_at, hall_method};
+use dreggnet_faction::{
+    ROOM_HALL, Roster, case_constraints, choice_at, hall_method, slot_case_constraints,
+};
 use spween::Scene;
 use spween_dregg::{WorldCell, WorldError};
 
@@ -149,7 +151,151 @@ fn generated_teeth_are_real_per_faction() {
             "{}: betrayal is WriteOnce(betrayed); got {betray:?}",
             f.key
         );
+
+        // THE SLOT-BOUND TEETH — bound to the WRITE, not the authoring method (the shape a
+        // stapled write would otherwise slip). These come from the SAME shared author the inline
+        // feud calls, so the deployed roster carries them per faction, per this faction's
+        // `threshold` — not `crate::REP_THRESHOLD`.
+        let unlock = slot_case_constraints(&story, quest);
+        assert!(
+            unlock.iter().any(|c| matches!(c,
+                StateConstraint::FieldGte { index, value } if *index == rep && *value == field_from_u64(f.threshold))),
+            "{}: SlotChanged(quest) carries FieldGte(rep, threshold={}); got {unlock:?}",
+            f.key,
+            f.threshold
+        );
+        assert!(
+            unlock
+                .iter()
+                .any(|c| matches!(c, StateConstraint::WriteOnce { index } if *index == quest)),
+            "{}: SlotChanged(quest) is WriteOnce(quest); got {unlock:?}",
+            f.key
+        );
+        let ratchet = slot_case_constraints(&story, rep);
+        assert!(
+            ratchet
+                .iter()
+                .any(|c| matches!(c, StateConstraint::Monotonic { index } if *index == rep)),
+            "{}: SlotChanged(rep) carries Monotonic(rep); got {ratchet:?}",
+            f.key
+        );
+        let seal = slot_case_constraints(&story, betrayed);
+        assert!(
+            seal.iter()
+                .any(|c| matches!(c, StateConstraint::WriteOnce { index } if *index == betrayed)),
+            "{}: SlotChanged(betrayed) is WriteOnce(betrayed); got {seal:?}",
+            f.key
+        );
     }
+}
+
+/// THE DRIVEN FALSIFIER (ported from the inline feud to the DEPLOYED roster): an unlock write
+/// STAPLED onto a pledge cannot claim the trial reward below the standing bar — on the program a
+/// consumer actually deploys via [`Roster::deploy`]. Run against a rivaled faction (embers) and,
+/// via [`tri_roster`], the unaligned (`rival: None`) grove.
+///
+/// Before the shared slot-bound teeth were installed on `Roster::compile`, the trial's
+/// `FieldGte(rep, threshold)` was compiled ONLY onto the trial's `MethodIs` case, so a stapled
+/// `SetField(<key>_quest, 1)` onto a pledge unlocked the content with `rep < threshold` — a live
+/// hole on the deployed roster (the feud's tested twin had the teeth; the roster did not).
+#[test]
+fn a_stapled_roster_unlock_cannot_ride_a_pledge() {
+    fn check(roster: &Roster, key: &str, seed: u8) {
+        let scene = roster.scene();
+        let story = roster.compile();
+        let world = roster.deploy(seed);
+        let cell = world.cell_id();
+        let lines = roster.lines(key);
+        let f = roster.faction(key).unwrap();
+        let rep = *story.var_slots.get(&rep_var(key)).unwrap() as u8;
+        let quest = *story.var_slots.get(&quest_var(key)).unwrap() as u8;
+
+        // Staple the unlock onto a first pledge (rep 0 -> 1), below the threshold.
+        let staple = world.apply_raw(
+            &hall_method(lines.pledge),
+            vec![
+                Effect::SetField {
+                    cell,
+                    index: rep as usize,
+                    value: field_from_u64(1),
+                },
+                Effect::SetField {
+                    cell,
+                    index: quest as usize,
+                    value: field_from_u64(1),
+                },
+            ],
+        );
+        assert!(
+            matches!(staple, Err(WorldError::Refused(_))),
+            "{key}: a stapled unlock on a pledge (rep 1 < threshold {}) must be REFUSED; got {staple:?}",
+            f.threshold
+        );
+        assert_eq!(
+            world.read_var(&quest_var(key)),
+            0,
+            "{key}: anti-ghost — no forged unlock"
+        );
+
+        // THE GATE IS A BAR, NOT A BAN: earned standing still clears the trial.
+        for _ in 0..f.threshold {
+            commit(&world, &scene, lines.pledge);
+        }
+        assert_eq!(
+            world.read_var(&rep_var(key)),
+            f.threshold,
+            "{key}: standing earned"
+        );
+        commit(&world, &scene, lines.trial);
+        assert_eq!(
+            world.read_var(&quest_var(key)),
+            1,
+            "{key}: earned standing still unlocks the trial"
+        );
+    }
+
+    check(&Roster::ashenmoor(), "embers", 41);
+    // The unaligned (rival: None) faction exercises the no-ceiling path.
+    check(&tri_roster(), "grove", 43);
+}
+
+/// THE DRIVEN RATCHET FALSIFIER (ported to the deployed roster): a `rep` write-DOWN stapled onto a
+/// NON-pledge method (a betrayal) is refused — earned standing is never un-earned, whoever authored
+/// the change. Without the shared `SlotChanged(rep)` ratchet on `Roster::compile`, the `Monotonic`
+/// bound only to the pledge/renounce `MethodIs` cases and a stapled write-down escaped it.
+#[test]
+fn a_roster_rep_write_down_cannot_ride_a_nonpledge_method() {
+    let roster = tri_roster();
+    let scene = roster.scene();
+    let story = roster.compile();
+    let world = roster.deploy(42);
+    let cell = world.cell_id();
+    let el = roster.lines("embers");
+    let rep = *story.var_slots.get(&rep_var("embers")).unwrap() as u8;
+
+    // Earn standing (two pledges -> rep 2).
+    commit(&world, &scene, el.pledge);
+    commit(&world, &scene, el.pledge);
+    assert_eq!(world.read_var("rep_embers"), 2, "standing earned");
+
+    // Staple a write-DOWN onto a betrayal turn (its case constrains only the betrayal slot).
+    let write_down = world.apply_raw(
+        &hall_method(el.betray),
+        vec![Effect::SetField {
+            cell,
+            index: rep as usize,
+            value: field_from_u64(0),
+        }],
+    );
+    assert!(
+        matches!(write_down, Err(WorldError::Refused(_))),
+        "a rep write-down (2 -> 0) stapled onto a betrayal must be REFUSED; got {write_down:?}"
+    );
+    assert_eq!(
+        world.read_var("rep_embers"),
+        2,
+        "anti-ghost: the standing stands"
+    );
 }
 
 /// Standing accrues per faction and the canonical reader reflects it; the threshold gate and the

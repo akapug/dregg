@@ -272,6 +272,70 @@ pub(crate) fn augment_case(program: &mut CellProgram, method: &str, extra: Vec<S
     case.constraints.extend(extra);
 }
 
+/// **The slot-bound faction teeth** — the `SlotChanged`-guarded cases that bind each
+/// faction gate to the WRITE (whoever authored it), not to its authoring method. The v0
+/// compiler emits only `MethodIs` choice cases, so a client can staple a reward write onto
+/// a permissive method and slip the method-bound gate; `SlotChanged` closes that whole
+/// class. `SlotChanged` is NOT method-dispatching, so default-deny is unaffected.
+///
+/// The single author of these gates: [`faction_compiled`] (the inline feud) and
+/// [`Roster::compile`](crate::roster::Roster::compile) (the data-driven roster) both call
+/// this, so the generated roster carries the identical teeth by construction — there is no
+/// second, drift-prone authoring. Three cases per faction:
+///
+/// * `SlotChanged{unlock}` → `FieldGte(rep, threshold)` + `FieldEquals(betrayed, 0)` +
+///   `WriteOnce(unlock)` — a trial reward cannot land below the earned standing bar, a
+///   betrayed faction stays sealed, and the unlock is one-shot;
+/// * `SlotChanged{rep}` → `Monotonic(rep)` — standing can only RISE, on any method;
+/// * `SlotChanged{betrayed}` → `WriteOnce(betrayed)` — the betrayal seal cannot be un-set
+///   by a write stapled onto some other method.
+///
+/// A full slot-bound RIVAL CAP is deliberately NOT installed: the cross-faction ceiling is
+/// DYNAMIC (pledging a rival lowers your ceiling without un-earning the rep you already
+/// hold), so `rep > ceiling` is a REACHABLE legitimate state and a static
+/// `FieldLteOther(rep <= ceiling)` would refuse it. The ceiling is enforced at PLEDGE time
+/// (the compiler's `{ rep < "$ceiling" }` pre-check on the pledge line); rep INFLATION via a
+/// non-pledge staple past the ceiling is a NAMED RESIDUAL (see the sweep report). The trial
+/// unlock above still requires the earned `FieldGte(rep, threshold)`, so the standing bar is
+/// bound to the reward write regardless.
+pub(crate) fn push_slot_bound_faction_gates(
+    program: &mut CellProgram,
+    rep: u8,
+    unlock: u8,
+    betrayed: u8,
+    threshold: u64,
+) {
+    let zero = field_from_u64(0);
+    let CellProgram::Cases(cases) = program else {
+        panic!("feud program is Cases");
+    };
+    // The trial unlock — the standing bar + betrayal seal, bound to the reward write.
+    cases.push(TransitionCase {
+        guard: TransitionGuard::SlotChanged { index: unlock },
+        constraints: vec![
+            StateConstraint::FieldGte {
+                index: rep,
+                value: field_from_u64(threshold),
+            },
+            StateConstraint::FieldEquals {
+                index: betrayed,
+                value: zero,
+            },
+            StateConstraint::WriteOnce { index: unlock },
+        ],
+    });
+    // The rep RATCHET, bound to the write: standing rises but is never un-earned, on any method.
+    cases.push(TransitionCase {
+        guard: TransitionGuard::SlotChanged { index: rep },
+        constraints: vec![StateConstraint::Monotonic { index: rep }],
+    });
+    // The betrayal seal, bound to the write: a stapled un-set on some other method is refused.
+    cases.push(TransitionCase {
+        guard: TransitionGuard::SlotChanged { index: betrayed },
+        constraints: vec![StateConstraint::WriteOnce { index: betrayed }],
+    });
+}
+
 /// **Compile the feud AND augment its program with the faction teeth.** The standing
 /// thresholds (`FieldGte(rep, 2)`), the region-entry gates (`FieldGte(unlock, 1)`), and
 /// the cross-faction cap (`FieldLteOther(rep_tide <= tide_ceiling)`) are already
@@ -374,69 +438,26 @@ pub fn faction_compiled() -> CompiledStory {
         }],
     );
 
-    // THE SLOT-BOUND FACTION GATES — the teeth that make the standing bar + rival cap real.
-    //
-    // The v0 compiler emits only `MethodIs` choice cases and no `Always`/`SlotChanged` case, so each
-    // faction gate binds ONLY to its authoring method. But the executor is open: a client can staple
-    //   * `SetField(ember_quest, 1)` onto a permissive `LN_PLEDGE_EMBERS` turn — the trial's
-    //     `FieldGte(rep_embers, REP_THRESHOLD)` (compiled onto `LN_EMBER_TRIAL`) never runs and the
-    //     unlock lands with `rep_embers == 0`; likewise `tide_region`;
-    //   * `SetField(rep_embers, 9999)` onto ANY non-pledge method — the cross-faction cap
-    //     (`FieldLteOther(rep_embers <= embers_ceiling)`, compiled onto `LN_PLEDGE_EMBERS`) never
-    //     runs and rep blows past the rival ceiling, defeating the whole feud mechanic.
-    // `SlotChanged` binds each gate to the WRITE, whoever authored it. `SlotChanged` is NOT
-    // method-dispatching, so default-deny is unaffected. (Driven:
-    // `a_stapled_faction_unlock_cannot_ride_a_pledge` + `a_rep_write_is_capped_by_the_rival_ceiling`.)
-    if let CellProgram::Cases(cases) = &mut story.program {
-        // The Ember / Tide trial unlocks — the standing bar + betrayal seal, bound to the write.
-        cases.push(TransitionCase {
-            guard: TransitionGuard::SlotChanged { index: ember_quest },
-            constraints: vec![
-                StateConstraint::FieldGte {
-                    index: rep_embers,
-                    value: field_from_u64(REP_THRESHOLD),
-                },
-                StateConstraint::FieldEquals {
-                    index: embers_betrayed,
-                    value: zero,
-                },
-                StateConstraint::WriteOnce { index: ember_quest },
-            ],
-        });
-        cases.push(TransitionCase {
-            guard: TransitionGuard::SlotChanged { index: tide_region },
-            constraints: vec![
-                StateConstraint::FieldGte {
-                    index: rep_tide,
-                    value: field_from_u64(REP_THRESHOLD),
-                },
-                StateConstraint::FieldEquals {
-                    index: tide_betrayed,
-                    value: zero,
-                },
-                StateConstraint::WriteOnce { index: tide_region },
-            ],
-        });
-        // The rep RATCHET, bound to the write: standing can only RISE, whoever authored the change
-        // (the write-down that the pledge/renounce cases already refuse is now refused on ANY
-        // method). NOTE — a full slot-bound RIVAL CAP is deliberately NOT installed here: the
-        // cross-faction ceiling is DYNAMIC (pledging a rival drops your ceiling without lowering the
-        // rep you already earned), so `rep_embers > embers_ceiling` is a REACHABLE legitimate state
-        // and a static `FieldLteOther(rep <= ceiling)` would refuse it. The ceiling is enforced at
-        // PLEDGE time (the compiler's `{ rep < "$ceiling" }` pre-check on `LN_PLEDGE_*`); binding it
-        // to the write would need a method-aware guard. Rep INFLATION via a non-pledge staple past
-        // the ceiling is a NAMED RESIDUAL (see the sweep report) — the trial unlock above already
-        // requires the earned `FieldGte(rep, REP_THRESHOLD)`, so the standing bar is bound to the
-        // reward write regardless.
-        cases.push(TransitionCase {
-            guard: TransitionGuard::SlotChanged { index: rep_embers },
-            constraints: vec![StateConstraint::Monotonic { index: rep_embers }],
-        });
-        cases.push(TransitionCase {
-            guard: TransitionGuard::SlotChanged { index: rep_tide },
-            constraints: vec![StateConstraint::Monotonic { index: rep_tide }],
-        });
-    }
+    // THE SLOT-BOUND FACTION GATES — the teeth that bind each faction gate to the WRITE, not to its
+    // authoring method (the v0 compiler emits only `MethodIs` cases, so a client can staple a reward
+    // write onto a permissive method and slip a method-bound gate). Factored into
+    // `push_slot_bound_faction_gates` so the inline feud AND `Roster::compile` install the IDENTICAL
+    // teeth by construction — see that fn for the full rationale and the named rival-cap residual.
+    // (Driven: `a_stapled_faction_unlock_cannot_ride_a_pledge` + `a_rep_write_down_cannot_ride_a_nonpledge_method`.)
+    push_slot_bound_faction_gates(
+        &mut story.program,
+        rep_embers,
+        ember_quest,
+        embers_betrayed,
+        REP_THRESHOLD,
+    );
+    push_slot_bound_faction_gates(
+        &mut story.program,
+        rep_tide,
+        tide_region,
+        tide_betrayed,
+        REP_THRESHOLD,
+    );
 
     story
 }
@@ -467,6 +488,22 @@ pub fn case_constraints(story: &CompiledStory, method: &str) -> Vec<StateConstra
         .find(|c| matches!(&c.guard, TransitionGuard::MethodIs { method: mm } if *mm == m))
         .map(|c| c.constraints.clone())
         .unwrap_or_default()
+}
+
+/// The executor-enforced constraints installed on the `SlotChanged`-guarded case for the
+/// slot at `index` — the write-bound faction teeth [`push_slot_bound_faction_gates`]
+/// installs. [`case_constraints`] reads only `MethodIs` cases (and must stay that way — it
+/// is the method-dispatch view); this is the complementary read of the slot-bound teeth, so
+/// a test can confirm the standing bar / ratchet / seal are bound to the WRITE.
+pub fn slot_case_constraints(story: &CompiledStory, index: u8) -> Vec<StateConstraint> {
+    let CellProgram::Cases(cases) = &story.program else {
+        return Vec::new();
+    };
+    cases
+        .iter()
+        .filter(|c| matches!(&c.guard, TransitionGuard::SlotChanged { index: ii } if *ii == index))
+        .flat_map(|c| c.constraints.clone())
+        .collect()
 }
 
 /// The dispatch method for line `index` in the `hall` (the coordinate a driven line

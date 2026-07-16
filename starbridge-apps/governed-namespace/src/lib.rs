@@ -313,47 +313,67 @@ pub fn register_service_method_symbol() -> [u8; 32] {
 // CellProgram: operation-scoped Cases
 // =============================================================================
 
+/// **The constitutional invariants — the SINGLE author of the flat state-constraint
+/// list.** These bite on EVERY touching turn, regardless of operation:
+///
+/// * committee root + threshold are constitutional — `WriteOnce` (not `Immutable`):
+///   a factory-born governance cell is empty, so they are bound once by the first
+///   `constitute` turn and frozen thereafter — the birth-compatible form;
+/// * version is monotonic across the cell's lifetime;
+/// * the dispute-window height pushes forward only;
+/// * the reserved slots stay frozen until a follow-on factory unlocks them.
+///
+/// Every place that needs this list calls THIS fn — the `Always` case of
+/// [`governance_program`], the `state_constraints` of
+/// [`governance_factory_descriptor`], the flat program the runtime faces install
+/// ([`service::governance_service_program`]), and the committee-board module's
+/// [`committee_board::invariants`]. It was previously typed out by hand in each of
+/// those places, which is exactly how the descriptor and the cell program become free
+/// to drift while every test stays green. One author, no drift — asserted by
+/// `the_service_face_is_a_subset_of_the_deployed_governance_program`.
+pub fn constitutional_invariants() -> Vec<StateConstraint> {
+    vec![
+        StateConstraint::WriteOnce {
+            index: GOVERNANCE_COMMITTEE_ROOT_SLOT,
+        },
+        StateConstraint::WriteOnce {
+            index: THRESHOLD_SLOT,
+        },
+        StateConstraint::Monotonic {
+            index: VERSION_SLOT,
+        },
+        StateConstraint::Monotonic {
+            index: DISPUTE_WINDOW_HEIGHT_SLOT,
+        },
+        StateConstraint::Immutable {
+            index: RESERVED_SLOT_6,
+        },
+        StateConstraint::Immutable {
+            index: RESERVED_SLOT_7,
+        },
+    ]
+}
+
 /// Build the `CellProgram` enforcing the governed-namespace cell's
 /// lifetime invariants and per-operation transitions.
 ///
-/// Five cases: one `Always`-guarded invariants case plus four
-/// `MethodIs`-guarded operation cases. Cases default-deny on unknown
-/// method symbols (per Cav-Codex Block 4 / `subscription_program`'s
-/// shape).
+/// Five cases: one `Always`-guarded invariants case (the shared
+/// [`constitutional_invariants`]) plus four `MethodIs`-guarded operation cases,
+/// which ADD the per-operation teeth the flat list cannot express: the
+/// `SenderAuthorized` committee-membership gate on propose/vote/commit, the
+/// route-table/version freeze while a proposal is open, the exact-`+1`
+/// `MonotonicSequence` on the swap, and the `Authorization::Custom`
+/// threshold-signature on `commit_table_update`. Cases default-deny on unknown
+/// method symbols (per Cav-Codex Block 4 / `subscription_program`'s shape).
 pub fn governance_program() -> CellProgram {
     CellProgram::Cases(vec![
         // ────────────────────────────────────────────────────────────────
-        // Invariants: every transition, regardless of operation.
-        //   - Committee root and threshold are constitutional; never change.
-        //   - Version is monotonic across the cell's lifetime.
-        //   - Dispute window height is monotonic.
+        // Invariants: every transition, regardless of operation. The SHARED
+        // list — see `constitutional_invariants`.
         // ────────────────────────────────────────────────────────────────
         TransitionCase {
             guard: TransitionGuard::Always,
-            constraints: vec![
-                // `WriteOnce` (not `Immutable`): a factory-born governance cell
-                // is empty, so committee + threshold are bound once by the
-                // first `constitute` turn and frozen thereafter — the
-                // birth-compatible form of the constitutional invariant.
-                StateConstraint::WriteOnce {
-                    index: GOVERNANCE_COMMITTEE_ROOT_SLOT,
-                },
-                StateConstraint::WriteOnce {
-                    index: THRESHOLD_SLOT,
-                },
-                StateConstraint::Monotonic {
-                    index: VERSION_SLOT,
-                },
-                StateConstraint::Monotonic {
-                    index: DISPUTE_WINDOW_HEIGHT_SLOT,
-                },
-                StateConstraint::Immutable {
-                    index: RESERVED_SLOT_6,
-                },
-                StateConstraint::Immutable {
-                    index: RESERVED_SLOT_7,
-                },
-            ],
+            constraints: constitutional_invariants(),
         },
         // ────────────────────────────────────────────────────────────────
         // propose_table_update: committee member opens a new proposal.
@@ -564,34 +584,10 @@ pub fn governance_factory_descriptor() -> FactoryDescriptor {
         // constraints, bind committee + threshold with the first turn, frozen
         // thereafter by `WriteOnce`.
         field_constraints: vec![],
-        state_constraints: vec![
-            // Constitutional invariants: committee + threshold are bound ONCE
-            // (`WriteOnce`, from zero on the first turn) and frozen thereafter —
-            // the birth-compatible form of the constitutional `Immutable`.
-            StateConstraint::WriteOnce {
-                index: GOVERNANCE_COMMITTEE_ROOT_SLOT,
-            },
-            StateConstraint::WriteOnce {
-                index: THRESHOLD_SLOT,
-            },
-            // Version is monotonic across the cell's lifetime; per
-            // `commit_table_update` it advances exactly +1.
-            StateConstraint::Monotonic {
-                index: VERSION_SLOT,
-            },
-            // Dispute window pushes forward only.
-            StateConstraint::Monotonic {
-                index: DISPUTE_WINDOW_HEIGHT_SLOT,
-            },
-            // Reserved slots stay frozen until a follow-on factory
-            // unlocks them.
-            StateConstraint::Immutable {
-                index: RESERVED_SLOT_6,
-            },
-            StateConstraint::Immutable {
-                index: RESERVED_SLOT_7,
-            },
-        ],
+        // The SHARED constitutional invariants — the same list the `Always` case of
+        // `governance_program` carries, from the one author, so the descriptor a
+        // factory commits to and the program a host installs cannot drift apart.
+        state_constraints: constitutional_invariants(),
         default_mode: CellMode::Sovereign,
         creation_budget: Some(DEFAULT_CREATION_BUDGET),
     }
@@ -1383,32 +1379,14 @@ pub mod committee_board {
         }
     }
 
-    /// The structural invariants enforced on EVERY transition — the same
-    /// constitutional shape [`governance_program`] carries (committee root +
-    /// threshold `WriteOnce`, version + dispute window `Monotonic`, reserved
-    /// slots frozen). The quorum gate is NOT here — it is the swap-scoped second
-    /// case so a member merely casting a vote runs under the invariants alone.
+    /// The structural invariants enforced on EVERY transition — the crate's shared
+    /// [`constitutional_invariants`](crate::constitutional_invariants) returned
+    /// verbatim, NOT a re-authored copy of them (committee root + threshold
+    /// `WriteOnce`, version + dispute window `Monotonic`, reserved slots frozen).
+    /// The quorum gate is NOT here — it is the swap-scoped second case so a member
+    /// merely casting a vote runs under the invariants alone.
     pub fn invariants() -> Vec<StateConstraint> {
-        vec![
-            StateConstraint::WriteOnce {
-                index: GOVERNANCE_COMMITTEE_ROOT_SLOT,
-            },
-            StateConstraint::WriteOnce {
-                index: THRESHOLD_SLOT,
-            },
-            StateConstraint::Monotonic {
-                index: VERSION_SLOT,
-            },
-            StateConstraint::Monotonic {
-                index: DISPUTE_WINDOW_HEIGHT_SLOT,
-            },
-            StateConstraint::Immutable {
-                index: RESERVED_SLOT_6,
-            },
-            StateConstraint::Immutable {
-                index: RESERVED_SLOT_7,
-            },
-        ]
+        crate::constitutional_invariants()
     }
 
     /// **The distinct-committee governance `CellProgram`: a two-case program.**
