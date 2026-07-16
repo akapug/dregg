@@ -64,29 +64,34 @@ fn derived_fact(value: u32) -> BabyBear {
     hash_2_to_1(fh, BabyBear::new(FIXED_STATE_ROOT))
 }
 
-/// The BYTE-IDENTICAL wire string Lean's `emitVmJson2 predicateGeDesc` emits (pinned by the
-/// `#guard` in `PredicatesArithmeticEmit.lean`). If Lean's emitter drifts, that `#guard` fails; if
-/// this literal drifts, the `decoded == hand_built` assertion fails. Neither can silently diverge.
-const GOLDEN_JSON: &str = r#"{"name":"dregg-predicate-arith-ge::threshold-v1","ir":2,"trace_width":24,"public_input_count":2,"tables":[{"id":2,"name":"range","arity":1,"sem":"range","bits":29}],"constraints":[{"t":"pi_binding","row":"first","col":2,"pi_index":0},{"t":"pi_binding","row":"first","col":4,"pi_index":1},{"t":"gate","body":{"t":"add","l":{"t":"var","v":1},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":0}}}},{"t":"gate","body":{"t":"add","l":{"t":"add","l":{"t":"var","v":3},"r":{"t":"mul","l":{"t":"const","v":-1},"r":{"t":"var","v":1}}},"r":{"t":"var","v":2}}},{"t":"lookup","table":2,"tuple":[{"t":"var","v":3}]},{"t":"lookup","table":1,"tuple":[{"t":"const","v":7},{"t":"var","v":5},{"t":"var","v":0},{"t":"var","v":6},{"t":"var","v":7},{"t":"const","v":0},{"t":"const","v":64207},{"t":"const","v":1},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"var","v":9},{"t":"var","v":10},{"t":"var","v":11},{"t":"var","v":12},{"t":"var","v":13},{"t":"var","v":14},{"t":"var","v":15},{"t":"var","v":16}]},{"t":"lookup","table":1,"tuple":[{"t":"const","v":2},{"t":"var","v":9},{"t":"var","v":8},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"const","v":0},{"t":"var","v":4},{"t":"var","v":17},{"t":"var","v":18},{"t":"var","v":19},{"t":"var","v":20},{"t":"var","v":21},{"t":"var","v":22},{"t":"var","v":23}]}],"hash_sites":[],"ranges":[]}"#;
+/// The DEPLOYED descriptor bytes — the exact file `circuit/src/descriptor_by_name.rs`
+/// `include_str!`s and `descriptor_by_name()` serves to `bridge/` and `wire/` at verify time.
+///
+/// This is an `include_str!`, NOT a literal. It used to be a self-contained `r#"..."#` string, and
+/// the header's claim that "a byte drift on either side breaks this OR the Lean `#guard`" was false
+/// as arithmetic: the literal here and the Lean `#guard` pinned each OTHER, while the deployed file
+/// was a THIRD side pinned by neither. That is precisely how the deployed bytes drifted to a 5-wide
+/// re-authoring with both Poseidon2 weld legs missing while this gate stayed green — exercising
+/// teeth the descriptor production served did not have. The chain is only closed when the string
+/// this test decodes IS the string production loads:
+///
+///   Lean `predicateGeDesc` ==(`#guard`)== Lean golden ==(`scripts/emit-descriptors.sh`)== THIS FILE
+const GOLDEN_JSON: &str = include_str!("../../circuit/descriptors/by-name/predicate-arith.json");
 
-// --- Trace column layout (must match `PredicatesArithmeticEmit.lean` §1). ---
-const INPUT: usize = 0;
-const SLOT_A: usize = 1;
-const THRESHOLD: usize = 2;
-const DIFF: usize = 3;
-const FACT_COMMITMENT: usize = 4;
-// value<->fact weld columns
-const PREDICATE_SYM: usize = 5;
-const TERM1: usize = 6;
-const TERM2: usize = 7;
-const STATE_ROOT: usize = 8;
-const FACT_HASH: usize = 9;
-const FH_LANE_BASE: usize = 10; // fact-hash out-lanes 1..7 at 10..16
-const FC_LANE_BASE: usize = 17; // fact-commitment out-lanes 1..7 at 17..23
-const PRED_WIDTH: usize = 24;
-const DIFF_BITS: usize = 29;
-const PI_THRESHOLD: usize = 0;
-const PI_FACT_COMMITMENT: usize = 1;
+// --- Trace column layout — IMPORTED from the production witness builder, not re-declared here.
+// Re-declaring these is how a test forks the layout and starts checking its own world: the old
+// local `PRED_WIDTH = 24` / `STATE_ROOT = 8` / `FACT_HASH = 9` existed ONLY in this file while the
+// production builder hard-coded `PRED_WIDTH = 5`, and `assert_eq!(decoded.trace_width, PRED_WIDTH)`
+// compared 24 to 24 — green, and blind to the deployed 5-wide bytes.
+use dregg_circuit::predicate_arith_witness::{
+    DIFF, DIFF_BITS, FACT_COMMITMENT, FACT_HASH, INPUT, PI_FACT_COMMITMENT, PI_THRESHOLD,
+    PRED_WIDTH, PREDICATE_SYM, SLOT_A, STATE_ROOT, TERM1, TERM2, THRESHOLD,
+};
+
+/// Fact-hash out-lanes 1..7 (cols 10..16) — the head of `predicate_arith_witness::FACTHASH_LANES`.
+const FH_LANE_BASE: usize = *dregg_circuit::predicate_arith_witness::FACTHASH_LANES.start();
+/// Fact-commitment out-lanes 1..7 (cols 17..23) — the head of `FACTCOMMIT_LANES`.
+const FC_LANE_BASE: usize = *dregg_circuit::predicate_arith_witness::FACTCOMMIT_LANES.start();
 
 /// A generic `TID_P2` chip lookup with arity `inputs.len()` — built EXACTLY as Lean's
 /// `chipLookupTuple ins out_col lanes` (arity tag, `CHIP_RATE` zero-padded input exprs, out0 :: 7

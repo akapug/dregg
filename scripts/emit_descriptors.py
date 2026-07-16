@@ -95,7 +95,27 @@ EMITTERS = [
     "EmitWideUMemWeldRegistryProbe.lean",    # ADDITIVE/STAGED: the WIDE+umem welded registry (covers wide V3)
     "EmitRotationV3SetFieldValue8.lean",     # ADDITIVE/STAGED: the setField VALUE8 epoch (8 written-slot members)
     "EmitLayoutManifest.lean",               # the rotated COLUMN LAYOUT, exported from Lean AS RUST
+    "EmitByName.lean",                       # the by-name/ dispatch surface descriptor_by_name() serves
+    "EmitCertF.lean",                        # the ring-3 Cert-F IR2 descriptor (cert_f_air.rs include_str!s it)
 ]
+
+# The checked-in artifact `circuit-prove/src/cert_f_air.rs:297` include_str!s. It was the ONLY flat
+# descriptor no emitter reproduced (tracked in GOAL-STARK-KILL.md) — include_str!'d into a live AIR
+# yet outside the re-derivation, so the drift gate could not see it move.
+CERT_F_FILE = "dregg-cert-f-ir2.json"
+
+# The by-name descriptors that are checked in WITH a trailing newline. The directory's convention is
+# mixed (21 bare, 5 newline-terminated) and it is purely cosmetic — JSON does not care — but the
+# bytes are FP/VK-pinned, so NORMALIZING the convention would re-key those 5 descriptors for a
+# whitespace change. We reproduce each file's existing convention exactly instead, which keeps the
+# emit a true no-op on a clean tree. Retire this set only as part of a deliberate regen.
+BY_NAME_NEWLINE_TERMINATED = frozenset({
+    "field-delta-result-range.json",
+    "merkle-membership-4ary-general.json",
+    "non-revocation-adjacency.json",
+    "poseidon2-hash-arity2.json",
+    "turn-chain-binding.json",
+})
 
 
 def run(cmd, **kw):
@@ -245,17 +265,21 @@ def require_regen_ack(changed: list[str], what: str) -> dict:
     return {"tree": tree, "dirty": dirty, "head": git_out("rev-parse", "HEAD")}
 
 
-def collect_by_name_hashes() -> dict[str, str]:
-    """The by-name goldens (circuit/descriptors/by-name/*.json) are byte-pinned
-    by Lean #guards + emit-gate tests, not produced by this script; hash them
-    from disk so the stamp covers the WHOLE descriptor surface."""
-    by_name = DESC / "by-name"
-    if not by_name.is_dir():
-        return {}
+def by_name_hashes_of(desc_hashes: dict[str, str]) -> dict[str, str]:
+    """The by-name leg of the provenance stamp, sourced from the EMITTED content (via
+    `desc_hashes`, which `install_and_stamp` computes over `written`) — NOT from disk.
+
+    This used to be `collect_by_name_hashes()`, which read the bytes FROM DISK and stored them as
+    `by_name_sha256`; `verify_provenance` then compared disk against a stamp computed from that same
+    disk. Pure self-consistency, sold under a PASS that claimed Lean agreement — the exact fallacy
+    `check-descriptor-drift.sh`'s own header disowns ("a `sha256(bytes) == committed-FP` rehash
+    proves only that a file matches the hash committed beside it ... Re-deriving from Lean is the
+    whole point"). Now that `EmitByName.lean` genuinely re-derives the by-name surface, the stamp is
+    minted from Lean bytes and the verify leg stops being self-referential."""
     return {
-        p.name: sha256_hex(p.read_bytes())
-        for p in sorted(by_name.iterdir())
-        if p.is_file()
+        name.split("/", 1)[1]: h
+        for name, h in sorted(desc_hashes.items())
+        if name.startswith("by-name/")
     }
 
 
@@ -276,8 +300,13 @@ def build_provenance(mode: str, auth: dict,
         "generated_utc": datetime.datetime.now(datetime.timezone.utc)
             .strftime("%Y-%m-%dT%H:%M:%SZ"),
         "operator": f"{getpass.getuser()}@{socket.gethostname()}",
-        "descriptor_sha256": dict(sorted(desc_hashes.items())),
-        "by_name_sha256": collect_by_name_hashes(),
+        # The stamp keeps the two legs separate (flat basenames each), as it always has; the
+        # SOURCE of the by-name leg is what changed — emitted Lean bytes, not a disk re-hash.
+        "descriptor_sha256": {
+            name: h for name, h in sorted(desc_hashes.items())
+            if not name.startswith("by-name/")
+        },
+        "by_name_sha256": by_name_hashes_of(desc_hashes),
         "fp_file_sha256": dict(sorted(fp_hashes.items())),
     }
 
@@ -317,9 +346,14 @@ def stamp_existing() -> None:
     re-stamp is never silent."""
     auth = require_regen_ack([f"{PROVENANCE_FILE} (stamp of the on-disk set)"],
                              "--stamp-existing")
+    # RECURSES (relative-keyed) so the by-name/ subtree is stamped like everything else;
+    # `build_provenance` splits the `by-name/` keys back out into the `by_name_sha256` leg.
+    # (`stamp-existing` is explicitly a stamp of the ON-DISK set — unlike the emit path it makes
+    # no Lean claim, and `--verify-provenance --strict` is what refuses a stamp minted this way
+    # from an unreviewable tree.)
     desc_hashes = {
-        p.name: sha256_hex(p.read_bytes())
-        for p in sorted(DESC.iterdir())
+        str(p.relative_to(DESC)): sha256_hex(p.read_bytes())
+        for p in sorted(DESC.rglob("*"))
         if p.is_file() and p.name != PROVENANCE_FILE
     }
     fp_hashes = {
@@ -530,6 +564,43 @@ def split_member_tsv(stdout: str, written, filename: str):
     write_file(filename, "\n".join(lines) + "\n", written)
 
 
+def split_by_name(stdout: str, written):
+    """`EmitByName.lean` prints one `<filename>\tjson` line per checked-in by-name descriptor —
+    the surface `circuit/src/descriptor_by_name.rs::descriptor_by_name()` serves to `bridge/` and
+    `wire/` at verify time.
+
+    Routes each to `circuit/descriptors/by-name/<filename>` (the `by-name/` prefix makes the key
+    relative to DESC, so install/FP/provenance all treat these exactly like the main set). This is
+    what deletes the old UNGATED hand-transcription hop between the Lean `#guard` golden and the
+    deployed bytes — the hop `predicate-arith.json` drifted through."""
+    lines = [ln for ln in stdout.splitlines() if ln.strip()]
+    if not lines:
+        sys.exit("emit_descriptors: by-name emitter produced no lines")
+    for ln in lines:
+        if ln.count("\t") != 1:
+            sys.exit(f"emit_descriptors: by-name line malformed (want `file\\tjson`): {ln[:80]!r}")
+        filename, blob = ln.split("\t", 1)
+        if not filename.endswith(".json"):
+            sys.exit(f"emit_descriptors: by-name key is not a .json file: {filename!r}")
+        if not blob.startswith('{"name":"'):
+            sys.exit(
+                f"emit_descriptors: by-name {filename} payload is not a descriptor JSON: {blob[:60]!r}"
+            )
+        # Reproduce the file's checked-in trailing-newline convention (see the frozenset above).
+        if filename in BY_NAME_NEWLINE_TERMINATED:
+            blob += "\n"
+        write_file(f"by-name/{filename}", blob, written)
+
+
+def split_cert_f(stdout: str, written):
+    """`EmitCertF.lean` prints the bare descriptor JSON via `IO.println`. The checked-in artifact
+    carries NO trailing newline, so strip the one `IO.println` adds."""
+    blob = stdout.rstrip("\n")
+    if not blob.startswith('{"name":"cert-f"'):
+        sys.exit(f"emit_descriptors: cert-f emitter produced unexpected output: {blob[:80]!r}")
+    write_file(CERT_F_FILE, blob, written)
+
+
 def split_cross_cell_conservation(stdout: str, written):
     """`EmitCrossCellConservation.lean` emits the bare descriptor JSON via `IO.println`
     (no TSV prefix), so its stdout is the descriptor JSON + one trailing newline — exactly
@@ -694,12 +765,26 @@ def main():
             split_member_tsv(out, written, WIDE_UMEM_WELD_REGISTRY_TSV)
         elif lean.endswith("EmitRotationV3SetFieldValue8.lean"):
             split_member_tsv(out, written, SETFIELD_VALUE8_TSV)
+        elif lean.endswith("EmitByName.lean"):
+            split_by_name(out, written)
+        elif lean.endswith("EmitCertF.lean"):
+            split_cert_f(out, written)
         else:
             sys.exit(f"emit_descriptors: no split routine for {lean}")
 
     # Coverage check: every checked-in descriptor file must have been (re)emitted.
     # (PROVENANCE.json is the regen-control stamp, not an emitted artifact.)
-    on_disk = {p.name for p in DESC.iterdir() if p.is_file()}
+    #
+    # RECURSES (rglob, relative-keyed). It used to be `DESC.iterdir()` filtered on `p.is_file()` —
+    # and `by-name/` is a DIRECTORY, so the entire deployed dispatch surface was silently exempt
+    # from this gate: no by-name file was ever in `written`, nothing was ever reported missing, and
+    # the drift checker's snapshot->emit->diff therefore left by-name byte-identical on both sides
+    # (an unconditional PASS for any content whatsoever). That exemption is how a 5-wide re-authoring
+    # of the 24-wide `predicate-arith` descriptor reached production. A by-name file no emitter
+    # reproduces is now a routing-gap FAILURE, like every other descriptor.
+    on_disk = {
+        str(p.relative_to(DESC)) for p in DESC.rglob("*") if p.is_file()
+    }
     missed = on_disk - set(written) - {PROVENANCE_FILE}
     if missed:
         sys.exit(
