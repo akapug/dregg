@@ -668,8 +668,15 @@ deployed bytes are one artifact. That is why law #1 says EMIT, not LOWER.
    `NonRevocationDepthResidual`** — the emitter must be generalized to depth-4 (or a parameterized depth /
    an iterated path fold) before `sdk/privacy.rs:621,762` + `full_turn_proof.rs:4692,4999` can move.
    Do NOT hand-author the extra levels in Rust.
-2. **Delete dead `dsl/derivation.rs`** (59 sites, NO callers outside `dsl/`, emitted twin `DERIVATION_JSON`
-   already in STATIC_GOLDENS).
+2. ~~Delete dead `dsl/derivation.rs`~~ **CORRECTED — NOT dead; it is a CUTOVER, not a delete.** (A scout
+   lane claimed "no callers outside dsl/" — WRONG, and I nearly deleted a live dep.) `circuit/src/
+   derivation_witness.rs:41` — the EMITTED path's own witness builder — USES
+   `dsl::derivation::generate_derivation_trace_dsl` deliberately ("NOT a reconstruction"), and
+   `dregg-dsl-runtime/src/lib.rs:90-92` re-exports it. The emitted twin IS live (`dregg-derivation-v1`,
+   `DerivationEmit.lean`, proved via `descriptor_by_name` + `prove_vm_descriptor2`). What is SUPERSEDED is
+   only the Rust-authored CIRCUIT (`derivation_circuit_descriptor`/`derivation_dsl_circuit`), still
+   consumed by `derivation_air.rs:372` + `dsl/descriptors.rs:734`. **Unit = point those two at the emitted
+   descriptor; KEEP the trace generator** (trace-gen is legitimate Rust; the constraints are not).
 3. **Fix the fictions**: `Claims.lean:383` false-cognate ("algebraic ConstraintExpr circuits emit
    faithfully" — different grammar + DEAD target); mark `EmittedDescriptor`/`LeanDescriptorAir` retired.
 
