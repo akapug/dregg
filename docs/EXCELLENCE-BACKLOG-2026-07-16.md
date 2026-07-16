@@ -232,3 +232,94 @@ never declared; cosmos-lightclient has no `[[bin]]`.
 - **Ops pre-launch:** every `docs/ops/` runbook grounds on the SUPERSEDED deploy/aws
   systemd topology — an operator mid-incident hits not-found on every command. One
   re-grounding pass onto the real docker-compose edge (LANE).
+
+## GAME-SURFACES SWEEP (2026-07-16 evening) — the public-facing wounds
+Mined by direct reading + live-surface probing (funnel probed healthy; a real
+session opened and inspected) during the game-affordances mapping campaign
+(`docs/GAME-AFFORDANCES-MAP.md`). One meta-finding up front: **the same disease
+appears on both public surfaces independently** (web + discord bot) — session
+growth and identity assertion were each implemented twice, wounded twice.
+
+### G1. Player identity never signs and never gates — the deepest one — LANE ✓verified
+On the offering path, `Offering::advance(session, input, actor: DreggIdentity)`
+treats the actor as attribution metadata: the dungeon offering does
+`session.actors.push(actor)` (`dreggnet-offerings/src/dungeon.rs:307`) and the
+turn commits under the world's cap. `DreggIdentity(pub String)` — no signature is
+ever consumed on this path. Web derives it as `blake3(?user= | dregg_user cookie |
+"anon")` (`dreggnet-web/src/lib.rs:520`): **any legal move can be made AS anyone**,
+and any hidden-hand surface keyed on `render_for(viewer)` would reveal a player's
+fog to whoever guesses their public string. The adapters (discord/telegram/wechat)
+derive REAL ed25519 cipherclerks but custodially (bot_secret → every user's key)
+and use only the pubkey hex for attribution — the key never signs a turn either.
+The ONLY place identity binds cryptographically today is `dreggnet-party` (seat
+custody keypairs + `AuthRequired` caps + signed ballots). The passkey seam is
+already named in code (`Custodian::identity_for`, `dreggnet-offerings/src/session.rs:520`).
+**Move (two rungs):** (1) add the missing consumer — an `advance_signed` seam
+verifying ed25519 over `(SessionId, Action, turn_counter)` against the holder's
+pubkey before the actor log; (2) browser-held keys via cipherclerk-in-wasm (path
+A, cheapest — `dregg-sdk` AgentCipherclerk + the existing `SessionKey` grant
+envelope + `webauth-core::credext` PoP) or WebAuthn→dga1 (path B, standards).
+Copy the party crate's enforcement pattern; keep the session-key paymaster UX.
+
+### G2. Unbounded session minting + zero throttling, twice — CHEAP each ✓verified
+Web: `GET /offerings/{key}/session/{id}` lazily opens a real WorldCell for ANY id
+string (`dreggnet-web/src/lib.rs:30`, `ensure_open` :264) — no cap, TTL, eviction,
+or rate limit; a crawler is a memory-growth attack (and a disk-growth one once the
+durable session store lands). Bot: the offering `Store` and descent-run maps
+(`discord-bot/src/offering.rs:153`, `descent.rs:789`) grow monotonically —
+`close_in` exists but is `#[allow(dead_code)]`; `/descent play`, `/buy-credits`,
+and every `offering:` press have no per-user cooldown (only presence/activity are
+limited). **Move:** per-identity open caps + LRU eviction + boot GC of never-landed
+logs (web); wire `close_in` + idle-TTL sweep + per-user cooldowns (bot). One
+shared design, two small installs.
+
+### G3. `/descent` serves a hardcoded pinned drand round when the cron hasn't fired — CHEAP ✓verified
+`DRAND_QUICKNET_ROUND = 1_000_000` + literal sig hex baked at
+`discord-bot/src/descent.rs:94-96`; `resolve_todays_beacon` (:124) silently
+serves it — a genuine BLS-verified reveal, but the SAME dungeon every day absent
+egress. The daily-freshness claim rides a 5-minute cron + network. **Move:**
+label the fallback in the surface (footer: "pinned round, not today's") or
+fail-closed to yesterday's verified live round; alert when served stale >1 day.
+(The dice-crate side of this — a live round-fetch client — is the same lane.)
+
+### G4. PAYMENTS-GO-LIVE is one line, verbatim — sharpens backlog §2 ✓verified
+Both `PayState` constructors build `MockWatcher` unconditionally; the boot path
+`from_env_or_devnet` does so even when `PayConfig::from_env()` returned a real
+`Network::Mainnet` config (`discord-bot/src/pay.rs:481-482`) — deposit addresses
+are real and watched by nobody. Config, ledger, treasury routing, idempotency,
+paid-narrator debit-after-success are all real and driven. **Move:** select the
+real Solana watcher on `Mainnet` at :481 (keep the mock in
+`devnet_mock_no_backend:444` — that one is correct); split seed custody to a
+sweeper service per §2.
+
+### G5. Generic collective mode is dead code on the live surface — CHEAP ✓verified
+`close_round`/`handle_close`/`open_round`/`with_round` are `#[allow(dead_code)]`
+(`discord-bot/src/offering.rs:495-579`); no generic close subcommand is
+registered, so crowd-play is reachable ONLY through `/dungeon`'s bespoke wiring —
+`/council`/`/market` collective mode is scaffold in production. **Move:** register
+the close affordance on collective offerings; delete the allows.
+
+### G6. Misc, each small — CHEAP
+- `discord-bot/src/cards.rs:64,75` renders explorer links to the dead
+  `devnet.dregg.fg-goose.online` on the live card path → joins the repo-wide
+  fg-goose sweep lane.
+- `sign_legacy` blake3-MAC (`discord-bot/src/cipherclerk.rs:171`) still accepted
+  by old devnet endpoints — flagged for deletion in its own module doc; do it.
+- `FEDERATION_ID` defaults to 64 zeros and only WARNS while every transfer fails
+  at runtime (`discord-bot/src/config.rs:84`, `main.rs:697`) — make solo-node
+  mismatch fail-fast at boot.
+- The bot is mis-homed on the tailnet-exit box from an unreproducible ~2-week-old
+  image (TODO-2/TODO-7 in `deploy/README.md`) — the move to persvati is designed;
+  remember: one token = one bot, stop the edge container first.
+
+### G7. The authoring lane — forge → deployed substrate (the opportunity) — LANE
+Grounded migration map: the `.dungeon` parser + validator (1,839 L,
+`attested-dm/src/dungeon_dsl.rs`) and the roommap visualizer are PURE (zero
+ledger coupling, lift-and-shift); the forge front-end only needs its transport
+repointed; dungeon-on-dregg already replicates combat/status/spells/loot/
+overworld/collective as real teeth. THE one missing artifact is the compiler
+`GameWorld → CellProgram/StateConstraint/dregg-schema` — it converts 13
+hand-written `deploy_*` worlds into forge-authorable content and gives the
+platform UGC-on-the-real-substrate. Five-step path written in
+`docs/GAME-AFFORDANCES-MAP.md` §8 notes; center of gravity = step 2 (the
+compiler); steps 1/3/4 are mechanical.

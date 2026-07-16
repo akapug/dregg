@@ -9155,3 +9155,28 @@ the named node) on `production_custom_turn_forged_rejected` and
 (`catch_unwind` + `Ok(Err(_)) => {}`) is the same shape and is NOT fixed (not owned). Any negative
 pole reached by the Custom arm wants the reason-assertion, or fixing its PI count silently converts
 a real tooth into a tautology.
+
+## 2026-07-16 — game-affordances mapping + closure campaign (collaborator preingest)
+
+Shipped `docs/GAME-AFFORDANCES-MAP.md` (the preingest map for external collaborators:
+substrate, 3 games, feature engine + 9 idioms, surfaces/deploy, governance thread, and a
+CLOSED/IN-FLIGHT/DESIGNED/NAMED closure ledger). De-drifted `docs/TOKENOMICS.md` twice in
+the good direction (verified-engine weighted ballots per bc512214f; 3 Solana suspects
+CLOSED per 72561117d) and de-fossiled `dreggnet-surfaces` header (CoordGrid + render_for
++ games' offerings are BUILT, were labeled Tier-C-not-built).
+
+Investigation wounds → `docs/EXCELLENCE-BACKLOG-2026-07-16.md` §GAME-SURFACES (G1-G7).
+Headliner G1: on the offering path the actor NEVER signs and NEVER gates (attribution
+metadata only; web = blake3 of a self-asserted cookie; adapters = custodial keys,
+attribution-only) — the only crypto-bound player identity is dreggnet-party. Design
+written (advance_signed seam → browser-held keys). G2: unbounded session minting + zero
+throttling implemented-twice-wounded-twice (web lazy GET-open; bot dead-code close_in).
+G7: forge→deployed authoring — parser/validator/roommap PURE, the one missing artifact
+is the GameWorld→CellProgram compiler.
+
+IN-FLIGHT this session: durable web sessions weld (FileResumeStore + host resume seam
+existed unwired; agent finishing gates). HELD: hbox anchoring node (TODO-1) — hbox
+checkout is on a divergent lineage (73c3cb380, doesn't contain local main) + co-tenant
+load 25; needs a repo-sync decision before the swarm-build. Discord-bot deep-read
+grounded: PAYMENTS-GO-LIVE = pay.rs:481 one-line flip; /descent pinned-drand fallback
+(descent.rs:94); collective close dead-code beyond /dungeon.

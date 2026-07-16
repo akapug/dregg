@@ -254,6 +254,16 @@ call; `tests/golden_render.rs` asserts cross-backend invariants. `dreggnet-sprit
 deterministic asset→SVG (same asset ⇒ byte-identical SVG; rarity weights `[1000,420,150,40,6]`),
 served at `/sprite/{kind}/{ref}` + `/gallery`.
 
+**Identity, honestly:** on the offering path `Offering::advance(session, input, actor:
+DreggIdentity)` treats the actor as *attribution metadata* — no signature is consumed; the turn
+commits under the world's cap. Web derives the actor from a self-asserted cookie
+(`blake3(dregg_user)`), the chat adapters derive real ed25519 cipherclerks but custodially (the
+adapter's secret → every user's key) and use only the pubkey for attribution. The one place
+identity binds cryptographically today is `dreggnet-party` (seat custody keys + `AuthRequired`
+caps + signed ballots) — that's the pattern the platform intends to spread; the passkey seam is
+named in code at `dreggnet-offerings/src/session.rs` (`Custodian::identity_for`). The executor
+always referees *legality*; the open work is refereeing *attribution* (see the closure ledger).
+
 **The minimal path to a new playable game surface** (all pieces exist):
 1. Implement `Offering` for your game; build `render` from the shared builders in
    `dreggnet-surfaces/src/lib.rs:88` (`section`, `menu`, `action_menu`, …).
@@ -264,7 +274,8 @@ served at `/sprite/{kind}/{ref}` + `/gallery`.
 4. Ship: `deploy/games/deploy-hbox.sh --funnel` (build → snapshot → install → health-check →
    auto-revert), then the ember-gated `tailscale funnel` flip.
 
-**What runs live today:** `https://hbox-dregg.skunk-emperor.ts.net` — Tailscale Funnel →
+**What runs live today** (probed 2026-07-16: `/health` ok, `/offerings` 200):
+`https://hbox-dregg.skunk-emperor.ts.net` — Tailscale Funnel →
 `dreggnet-web-server` as a lingering systemd user unit on hbox (`deploy/games/
 dregg-web-games-funnel.service`, loopback `:8790`). Catalog at `/offerings` (dungeon, council,
 market, tug, automatafl + feature surfaces); Descent board at `/descent/leaderboard` (durable
@@ -320,39 +331,53 @@ real $DREGG payment has been exercised yet.
 Builder-side (each lands with existing tests as the model):
 1. **A new small game as an Offering** — declare state with `dregg-schema`, rules as teeth, render
    via the shared builders, register in `catalog_default_host`. Smallest full-stack path; copy
-   `dregg-multiway-tug` Phase 0 + `surface.rs`.
-2. **A coordinate-grid ViewNode for the web backend** — automatafl renders a `CoordGrid`; the
-   generic board-grid rendering is a named Tier-C gap in `dreggnet-surfaces/src/lib.rs:55`.
-3. **A new feature crate** following the nine idioms (§4) — e.g. bounties, arenas, housing; the
+   `dregg-multiway-tug` Phase 0 + `surface.rs`. (The board node already exists:
+   `ViewNode::CoordGrid` renders in every backend, styled on web.)
+2. **A new feature crate** following the nine idioms (§4) — e.g. bounties, arenas, housing; the
    saga tests show the handoff discipline to prove.
-4. **Live channel transport** — `dreggnet-telegram`/`-wechat` are driven against `MockTransport`;
-   wiring a real token/transport into the funnel deploy is well-scoped.
-5. **`<dregg-sprite>` wasm custom element** (named E3 in `dreggnet-sprite/src/lib.rs:44`).
+3. **Live channel transport** — `dreggnet-telegram`/`-wechat` are driven against `MockTransport`;
+   a long-poll loop binary + a deploy unit + a real token turns either live (token custody is the
+   only ember-gated step).
+4. **`<dregg-sprite>` wasm custom element** (named E3 in `dreggnet-sprite/src/lib.rs:44`).
+5. **The drand round-fetch HTTP client** — `dice` verifies real drand `quicknet` signatures
+   already; the network fetch is the one missing piece (one small client + the existing
+   `verify_beacon_round`).
 
 Crypto/governance-side:
-6. **Migrate remaining `HostBallotBox` consumers** onto `VerifiedHoldingBallotBox` — the weld just
-   landed; the shim is explicitly marked do-not-point-new-flows-at.
-7. **New `DecisionRule` shapes** — ranked / quadratic tallies over the same `Monotonic` slots +
-   nullifier discipline.
-8. **A game mode that IS a governance mode** — e.g. a faction senate where standing
+6. **New `DecisionRule` shapes** — ranked / quadratic tallies over the same `Monotonic` slots +
+   nullifier discipline in `collective-choice`.
+7. **A game mode that IS a governance mode** — e.g. a faction senate where standing
    (`dreggnet-faction`) grants weighted ballots via `cast_weighted`; every primitive exists.
+8. **Weighted council votes** — `dreggnet-council` opens plain polls today; exposing
+   `open_poll_weighted`/`cast_weighted` through the same Offering makes holdings-weighted
+   governance *playable*.
 
 ---
 
-## 8. Honest gaps (so nobody is surprised)
+## 8. The closure ledger (every known limit, with its status)
 
-- The `:8420` devnet **anchoring node is down** (was hand-run, ephemeral data dir, ledger lost);
-  submitted runs rank in-process but can't anchor — fail-closed. Durable unit is TODO-1 in
-  `deploy/games/RUNBOOK-FUNNEL.md`.
-- **Live demo verifies by replay, not STARK** — the match-fold proving service is scaffold
-  (labeled Phase 3). The fold path itself is real but `#[ignore]` SLOW-gated.
-- No first-class **board-grid rendering** in the generic surfaces yet (Tier C).
-- Discord bot runs as an AWS-edge container, **not co-deployed on hbox**; Telegram/WeChat have no
-  live transport wired.
-- `attested-dm`'s real MPC-TLS leg is feature-gated (`tlsn-live`); default is the labeled modeled
-  carrier. automatafl's Rust-AIR↔Lean `Refines` tie and multiway-tug Phase 4 are open.
-- Live sessions are ephemeral (restart drops in-progress games); only the Descent board is durable.
-- Everything governance RUNS on mock/fixture chains; no live foreign consensus ingested.
+The codebase labels its own inadequacies; this table is the game-lane view of that ledger. Statuses:
+**CLOSED** (landed at HEAD), **IN-FLIGHT** (a lane is actively driving it), **DESIGNED** (the plan
+is written; execution is scheduled), **NAMED** (tracked, not yet designed).
+
+| Limit | Status |
+|---|---|
+| Board-grid rendering | **CLOSED** — `ViewNode::CoordGrid` renders in text/discord/web (styled game board, `deos-view/src/web.rs:1956`); tug + automatafl offerings registered with per-viewer fog |
+| Solana value-path suspects (finality / stake completeness / rotation binding) | **CLOSED** (`72561117d`, red-first both polarities) + rung-1 live-feed ingestion landed (real SPL over live RPC on a local validator) |
+| Ephemeral web sessions | **IN-FLIGHT** — `FileResumeStore` + the host's resume seam already exist in `dreggnet-offerings/src/resume.rs`; the weld into `dreggnet-web` boot (attach store, `resume_all()`, tamper-refuses test) is landing |
+| Custom-VK state binding (the path complex mechanics ride) | **IN-FLIGHT** — executor tooth deployed fail-closed; the state-segmented fold node is routed in the active lane; welded-twin/umem residual + Lean `proofBind` flip remain (coordinate before touching `circuit-prove/`) |
+| Anchoring node down (`:8420`) | **DESIGNED** — a lingering systemd user unit with a persistent `--data-dir` on hbox (`deploy/games/RUNBOOK-FUNNEL.md` TODO-1); one build (`swarm-build cargo build --release -p dregg-node`) + one ember decision (fresh genesis = a new season — honest devnet churn is a feature, and `dregg-epoch`/`dregg-genesis-snapshot` are the boundary tools) |
+| Replay-verify (not STARK) on the live play path | **DESIGNED** — labeled Phase 3: submit enqueues into `dreggnet-prove-service::MatchProveService` (bounded queue, GPU dispatch, bit-exact CPU fallback); the board keeps replay as fast admission and upgrades entries to proof-backed when the `MatchProof` lands + `verify_history_bytes` re-attests |
+| Telegram/WeChat live; Discord off the AWS edge | **DESIGNED** — transports are injected and driven vs mocks; live = token + loop binary + unit (starter #3); the bot's `/offering` adapter carries every surface once moved |
+| Mainnet holdings feed | **DESIGNED** — the `SnapshotFeed` design (what a snapshot provides that RPC structurally cannot) is written in the `dregg-governance` module doc; rung-1 proved the pipeline on a live local validator |
+| Player identity signs nothing (web = self-asserted cookie; adapters = custodial keys, attribution-only) | **DESIGNED** — two rungs: an `advance_signed` seam (verify ed25519 over `(SessionId, Action, counter)` before the actor log), then browser-held keys via cipherclerk-in-wasm + the existing `SessionKey` grant envelope, or WebAuthn→dga1 (`webauth-core` carries the PoP). Copy `dreggnet-party`'s enforcement pattern. Backlog G1 |
+| Unbounded session minting + no throttling (web AND bot — same disease twice) | **DESIGNED** — per-identity open caps, LRU/TTL eviction, boot GC of never-landed logs; bot side wires the existing dead-code `close_in` + per-user cooldowns. Backlog G2 |
+| `/descent` pinned-drand fallback (same dungeon absent egress) | **NAMED** — label staleness in the surface or fail-closed to the last verified live round; alert when stale >1 day. Backlog G3 |
+| Generic collective close (crowd mode beyond `/dungeon`) | **NAMED (CHEAP)** — the machinery is driven, `#[allow(dead_code)]`; register the close affordance. Backlog G5 |
+| Forge/`.dungeon` authoring for the DEPLOYED substrate | **DESIGNED** — parser+validator+roommap are pure lift-and-shift; the one missing artifact is the `GameWorld → CellProgram`/`dregg-schema` compiler (replaces 13 hand-written `deploy_*` worlds with authorable content). Five-step path in backlog G7 |
+| automatafl Rust-AIR↔Lean `Refines`; multiway-tug Phase 4 (Lean refinement) | **NAMED** — the Lean specs exist (`Automatafl.lean` proven no-sorry at spec level; `MultiwayTug.lean`); tying the concrete AIRs to them is the open proof lane |
+| `attested-dm` real MPC-TLS leg (`tlsn-live`) | **NAMED** — the modeled carrier is the labeled default; the real carrier is the standing cross-cutting frontier lane (shared with the whole zkOracle stack, not game-specific) |
+| Discord payments watcher | **NAMED** — the bot's pay path constructs a `MockWatcher` unconditionally (`discord-bot/src/pay.rs:445`); the PAYMENTS-GO-LIVE runbook is written, unfired |
 
 ---
 
