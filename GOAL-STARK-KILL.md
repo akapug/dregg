@@ -684,10 +684,15 @@ deployed bytes are one artifact. That is why law #1 says EMIT, not LOWER.
    build Dregg2 9697 jobs green + cargo check green.
 
 ### NEXT 3 (rolling)
-1. **Derivation cutover** — point `derivation_air.rs:372` + `dsl/descriptors.rs:734` off
-   `dsl::derivation::derivation_circuit_descriptor()` (Rust-authored constraints) onto the emitted
-   `dregg-derivation-v1` (`DerivationEmit.lean`, live via `derivation_witness.rs`). KEEP
-   `generate_derivation_trace_dsl` (trace-gen is legit Rust).
+1. ~~Derivation cutover~~ **DEPRIORITIZED — it is TEST-ONLY scaffolding, not a deployed violation.**
+   `DerivationAir` is instantiated ONLY inside `ivc.rs`'s `#[cfg(test)]` module (`:1866/:1914`; last
+   `#[cfg(test)]` at :1535). PRODUCTION derivation already proves via the EMITTED `dregg-derivation-v1`
+   (`derivation_witness.rs` → `descriptor_by_name` → `prove_vm_descriptor2`). So `derivation.rs`'s 59
+   `ConstraintExpr` sites are test scaffolding + a trace generator the emitted path reuses. Retire the
+   hand `StarkAir` impl with its test when convenient; KEEP the types (`CircuitRule`/`DerivationWitness`,
+   used by `bridge/present.rs`) + `generate_derivation_trace_dsl`. LOW priority — no deployed exposure.
+   (NOTE: `constraint_prover` is a row-by-row constraint VALIDATOR, not a STARK prover — `ivc.rs:41`,
+   `committed_threshold.rs:44` use it in production for validation, which is legitimate.)
 2. **`ivc.rs::StateTransitionAir`** — its emitter (`dregg-ivc-state-transition-v2`) EXISTS and round-trips
    in 2 tests but NO production path consumes it. Pure Merkle-mold cutover.
 3. **`garbled_air.rs`** (16 sites, closure dialect) — `GarbledEvalEmit.lean` exists; check coverage before
