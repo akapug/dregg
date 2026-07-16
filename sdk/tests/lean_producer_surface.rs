@@ -96,8 +96,10 @@ fn single_effect_turn(agent: CellId, target: CellId, nonce: u64, effect: Effect)
 /// vacuously on an ineligible turn.
 #[test]
 fn producer_actually_runs_not_fallback() {
-    if !dregg_lean_ffi::lean_available() {
-        eprintln!("SKIP: Lean archive not linked (lean_available()==false)");
+    if !dregg_lean_ffi::demand_lean(
+        dregg_lean_ffi::lean_available(),
+        "Lean archive (lean_available)",
+    ) {
         return;
     }
 
@@ -168,8 +170,10 @@ fn producer_actually_runs_not_fallback() {
 /// state exactly at the user-facing boundary.
 #[test]
 fn sdk_execute_producer_matches_rust_reference() {
-    if !dregg_lean_ffi::lean_available() {
-        eprintln!("SKIP: Lean archive not linked (lean_available()==false)");
+    if !dregg_lean_ffi::demand_lean(
+        dregg_lean_ffi::lean_available(),
+        "Lean archive (lean_available)",
+    ) {
         return;
     }
 

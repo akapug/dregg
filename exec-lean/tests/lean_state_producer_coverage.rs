@@ -22,7 +22,7 @@
 //! `lean_state_producer_widen.rs` (round-trip families + swap-gap negative teeth), extended to the
 //! WHOLE mappable surface and cross-checked against the public coverage enumerations.
 //!
-//! Requires the linked Lean archive (`lean-shadow` + `lean_available()`); self-skips when absent.
+//! Requires the linked Lean archive (`lean-shadow` + `lean_available()`); self-skips when absent (PANICS under `DREGG_TEST_REQUIRE_LEAN=1`).
 
 use std::collections::HashMap;
 
@@ -220,12 +220,13 @@ fn diff(pre: Ledger, turn: Turn, ids: &[CellId]) -> Result<(), String> {
 }
 
 fn skip_no_lean() -> bool {
-    if !dregg_lean_ffi::lean_available() {
-        eprintln!("SKIP: Lean archive not linked (lean_available()==false)");
-        true
-    } else {
-        false
-    }
+    // Routed through the DREGG_TEST_REQUIRE_LEAN hard mode (dregg-lean-ffi::demand_lean):
+    // unarmed, an archive-less build prints the honest SKIP and returns; ARMED, it PANICS —
+    // so this suite can never report `ok` having asserted nothing on the hard-mode lane.
+    !dregg_lean_ffi::demand_lean(
+        dregg_lean_ffi::lean_available(),
+        "Lean archive (lean_available)",
+    )
 }
 
 fn one_open_cell() -> (Ledger, CellId) {

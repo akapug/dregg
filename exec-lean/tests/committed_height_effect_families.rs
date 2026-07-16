@@ -20,7 +20,7 @@
 //! Transfer's touched cells but not for that family's). The height-0 column is the non-vacuous
 //! control: it proves the family round-trips at all, so a height > 0 failure isolates the stamp.
 //!
-//! Requires the linked Lean archive (`lean-shadow` + `lean_available()`); self-skips when absent.
+//! Requires the linked Lean archive (`lean-shadow` + `lean_available()`); self-skips when absent (PANICS under `DREGG_TEST_REQUIRE_LEAN=1`).
 
 use std::collections::HashMap;
 
@@ -494,12 +494,13 @@ fn families() -> Vec<(&'static str, Fixture)> {
 }
 
 fn skip_no_lean() -> bool {
-    if !dregg_lean_ffi::lean_available() {
-        eprintln!("SKIP: Lean archive not linked (lean_available()==false)");
-        true
-    } else {
-        false
-    }
+    // Routed through the DREGG_TEST_REQUIRE_LEAN hard mode (dregg-lean-ffi::demand_lean):
+    // unarmed, an archive-less build prints the honest SKIP and returns; ARMED, it PANICS —
+    // so this suite can never report `ok` having asserted nothing on the hard-mode lane.
+    !dregg_lean_ffi::demand_lean(
+        dregg_lean_ffi::lean_available(),
+        "Lean archive (lean_available)",
+    )
 }
 
 /// THE GAP-1 RESIDUAL MATRIX. Every cell-touching effect family × {0, 1, 7, 1_048_576}. A family

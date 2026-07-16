@@ -140,8 +140,10 @@ fn run_ffi_verified(n: u8, amount: u64) {
     // Requires the linked Lean archive (finalize_verified routes through the REAL
     // Lean FFI executor); self-skip when absent (CI without libdregg_lean.a),
     // matching the lean_state_producer_* tests + the lean-marshal gate.
-    if !dregg_lean_ffi::lean_available() {
-        eprintln!("SKIP: Lean archive not linked (lean_available()==false)");
+    if !dregg_lean_ffi::demand_lean(
+        dregg_lean_ffi::lean_available(),
+        "Lean archive (lean_available)",
+    ) {
         return;
     }
     ensure_gates();

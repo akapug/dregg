@@ -1,172 +1,120 @@
-//! lean_state_producer_sidetable.rs — THE SWAP state-producer differential for the OFF-LEDGER
-//! HOLDING-STORE families (escrow-create, obligation-create) — now FACTORY-DISSOLVED.
+//! lean_state_producer_sidetable.rs — DISSOLVED-VERB WIRE REFUSAL: the factory-dissolved
+//! holding-store verbs (`cesc`/`cobl` — the old escrow/obligation kernel ops) are gone from the
+//! verified kernel (F1b deleted `RecordKernelState.escrows`; their semantics live in factory-born
+//! cells, `Dregg2/Apps/{EscrowFactory,ObligationFactory}`). The kernel no longer PARSES those wire
+//! actions — so a STALE OR MALICIOUS PEER whose bytes still carry one must be refused LOUDLY at
+//! the wire (`committed == false` or the FFI error sentinel), NEVER silently skipped-and-committed
+//! (a silent accept would install a post-state the sender never authorized — parse-confusion).
 //!
-//! F1b deleted the kernel escrow holding-store (`RecordKernelState.escrows` and the escrow/
-//! obligation kernel ops): the verified kernel no longer PARSES the `cesc`/`cobl` wire actions —
-//! their semantics live in factory-born cells (the Lean contracts in
-//! `Dregg2/Apps/{EscrowFactory,ObligationFactory}`). This file's old round-trip pins are
-//! therefore INVERTED into the transitional-honesty shape (the same move
-//! `lean_state_producer_coverage`'s `*_falls_back_factory_dissolved` tests made): a turn carrying
-//! a CreateEscrow/CreateObligation refuses LOUDLY at the wire (malformed-wire sentinel) and falls
-//! back to the Rust executor — never a silent state install. The Rust executor's commit (the
-//! transitional fallback semantics) is still asserted so the fallback path stays exercised; the
-//! family dies wholesale in the verb lockstep.
+//! HISTORY (2026-07-16 QA census): this file was a ZERO-TEST HUSK — its old round-trip pins were
+//! deleted with the verb lockstep, leaving 173 lines of helpers, a docstring claiming an assertion
+//! that did not exist, and a test target that reported `ok. 0 passed` forever. Two comments in
+//! `rust_lean_divergence_finder.rs` cite a replacement tooth
+//! (`lean_state_producer_coverage::queue_falls_back_factory_dissolved`) that was NEVER WRITTEN.
+//! This file now holds the real tooth those comments promised, for the escrow/obligation family
+//! plus the general unknown-verb pole.
 //!
-//! Requires the linked Lean archive (`lean-shadow` + `lean_available()`); self-skips when absent.
+//! Mechanism: take a conformance-corpus case whose baseline wire COMMITS through
+//! `shadow_exec_full_forest_auth` (so the mutation below is the only difference), swap its
+//! `{"bal":[...]}` action tag for a dissolved (`cesc`/`cobl`) or unknown (`zzzz`) tag, and assert
+//! the verified kernel refuses the mutant. If the kernel ever silently DROPPED the unknown action
+//! and committed the rest of the turn, `committed` would be `true` and this suite goes RED.
+//!
+//! Requires the linked Lean archive; self-skips unarmed and PANICS under
+//! `DREGG_TEST_REQUIRE_LEAN=1` (`demand_lean`) when the archive is absent.
 
-use std::collections::HashMap;
-
-use dregg_cell::permissions::AuthRequired;
-use dregg_cell::{Cell, CellId, Ledger, Permissions};
-use dregg_exec_lean::lean_apply::{self, execute_via_lean};
-use dregg_exec_lean::lean_shadow::ShadowHostCtx;
-use dregg_turn::{
-    Action, Authorization, CallForest, ComputronCosts, DelegationMode, Effect, TurnExecutor,
-    turn::Turn,
+use dregg_lean_ffi::marshal::{conformance_input_corpus, marshal_turn_hosted};
+use dregg_lean_ffi::{
+    decode_shadow_verdict, demand_lean, lean_available, shadow_exec_full_forest_auth,
 };
 
-fn open_permissions() -> Permissions {
-    Permissions {
-        send: AuthRequired::None,
-        receive: AuthRequired::None,
-        set_state: AuthRequired::None,
-        set_permissions: AuthRequired::None,
-        set_verification_key: AuthRequired::None,
-        increment_nonce: AuthRequired::None,
-        delegate: AuthRequired::None,
-        access: AuthRequired::None,
-    }
-}
-
-fn make_open_cell(seed: u8, balance: i64) -> Cell {
-    let mut pk = [0u8; 32];
-    pk[0] = seed;
-    pk[31] = seed.wrapping_mul(37);
-    let mut cell = Cell::with_balance(pk, [0u8; 32], balance);
-    cell.permissions = open_permissions();
-    cell
-}
-
-fn single_effect_turn(agent: CellId, target: CellId, nonce: u64, effect: Effect) -> Turn {
-    let mut forest = CallForest::new();
-    let action = Action {
-        target,
-        method: [0u8; 32],
-        args: vec![],
-        authorization: Authorization::Unchecked,
-        preconditions: Default::default(),
-        effects: vec![effect],
-        may_delegate: DelegationMode::None,
-        commitment_mode: Default::default(),
-        balance_change: None,
-        witness_blobs: vec![],
-    };
-    forest.add_root(action);
-    Turn {
-        agent,
-        nonce,
-        call_forest: forest,
-        fee: 0,
-        memo: None,
-        valid_until: Some(1_000),
-        previous_receipt_hash: None,
-        depends_on: vec![],
-        conservation_proof: None,
-        sovereign_witnesses: HashMap::new(),
-        execution_proof: None,
-        execution_proof_cell: None,
-        execution_proof_new_commitment: None,
-        custom_program_proofs: None,
-        effect_binding_proofs: Vec::new(),
-        cross_effect_dependencies: Vec::new(),
-        effect_witness_index_map: Vec::new(),
-    }
-}
-
-/// Compare two ledgers cell-by-cell (balance + nonce + the 8 state fields + the canonical capability
-/// root) AND on `.root()`. Returns Ok(()) on full agreement or Err(why) on the first divergence.
-fn ledgers_agree(rust: &mut Ledger, lean: &mut Ledger, ids: &[CellId]) -> Result<(), String> {
-    for id in ids {
-        let r = rust
-            .get(id)
-            .ok_or_else(|| format!("cell {id:?} missing from RUST ledger"))?;
-        let l = lean
-            .get(id)
-            .ok_or_else(|| format!("cell {id:?} missing from LEAN ledger"))?;
-        if r.state.balance() != l.state.balance() {
-            return Err(format!(
-                "balance divergence on {id:?}: rust={} lean={}",
-                r.state.balance(),
-                l.state.balance()
-            ));
-        }
-        if r.state.nonce() != l.state.nonce() {
-            return Err(format!(
-                "nonce divergence on {id:?}: rust={} lean={}",
-                r.state.nonce(),
-                l.state.nonce()
-            ));
-        }
-        for slot in 0..dregg_cell::state::STATE_SLOTS {
-            if r.state.fields[slot] != l.state.fields[slot] {
-                return Err(format!(
-                    "field[{slot}] divergence on {id:?}: rust={:?} lean={:?}",
-                    r.state.fields[slot], l.state.fields[slot]
-                ));
-            }
-        }
-        let rc = dregg_cell::compute_canonical_capability_root(&r.capabilities);
-        let lc = dregg_cell::compute_canonical_capability_root(&l.capabilities);
-        if rc != lc {
-            return Err(format!(
-                "cap_root divergence on {id:?}: rust={rc:?} lean={lc:?}"
-            ));
-        }
-    }
-    let rr = rust.root();
-    let lr = lean.root();
-    if rr != lr {
-        return Err(format!("ROOT divergence: rust={rr:?} lean={lr:?}"));
-    }
-    Ok(())
-}
-
-/// Run both producers and return `Ok(())` on full agreement, or `Err(why)` on the first divergence.
-fn diff(pre: Ledger, turn: Turn, ids: &[CellId]) -> Result<(), String> {
-    let executor = TurnExecutor::new(ComputronCosts::zero());
-    let mut rust_ledger = pre.clone();
-    let rust_result = executor.execute(&turn, &mut rust_ledger);
-    if !rust_result.is_committed() {
-        return Err(format!(
-            "legacy Rust executor did not commit: {rust_result:?}"
-        ));
-    }
-
-    let host = ShadowHostCtx::diag();
-    let (mut lean_ledger, lean_committed) = match execute_via_lean(&turn, &pre, &host) {
-        Ok(x) => x,
-        Err(lean_apply::ExtractError::Ineligible) => {
-            return Err("turn was Lean-ineligible (a marshaller GAP — no wire arm)".to_string());
-        }
-        Err(e) => return Err(format!("Lean state-producer path errored: {e}")),
-    };
-    if !lean_committed {
-        return Err("commit-bit divergence: Rust committed, Lean did not".to_string());
-    }
-    ledgers_agree(&mut rust_ledger, &mut lean_ledger, ids)
-}
-
 fn skip_no_lean() -> bool {
-    if !dregg_lean_ffi::lean_available() {
-        eprintln!("SKIP: Lean archive not linked (lean_available()==false)");
-        true
-    } else {
-        false
+    // Routed through the DREGG_TEST_REQUIRE_LEAN hard mode (dregg-lean-ffi::demand_lean):
+    // unarmed, an archive-less build prints the honest SKIP and returns; ARMED, it PANICS —
+    // so this suite can never report `ok` having asserted nothing on the hard-mode lane.
+    !demand_lean(lean_available(), "Lean archive (lean_available)")
+}
+
+/// Run a raw wire string through the verified kernel; `Ok(committed)` on a decodable reply,
+/// `Err` when the FFI itself refuses (also a LOUD outcome).
+fn kernel_commit_bit(wire: &str) -> Result<bool, String> {
+    let out = shadow_exec_full_forest_auth(wire)?;
+    Ok(decode_shadow_verdict(&out)?.committed)
+}
+
+/// Find a corpus case whose marshalled wire (a) contains a `{"bal":[...]}` action to mutate and
+/// (b) COMMITS at baseline — so the dissolved-verb swap is the ONLY difference the kernel sees.
+fn committing_bal_wire() -> String {
+    for (name, host, state, turn) in &conformance_input_corpus() {
+        let wire = match marshal_turn_hosted(host, state, turn) {
+            Ok(w) => w,
+            Err(_) => continue,
+        };
+        if !wire.contains("{\"bal\":[") {
+            continue;
+        }
+        if kernel_commit_bit(&wire) == Ok(true) {
+            eprintln!("baseline corpus case `{name}` commits and carries a bal action");
+            return wire;
+        }
+    }
+    panic!(
+        "no conformance-corpus case both commits and carries a {{\"bal\":[...]}} action — \
+         the corpus lost its committing Balance case (fix the corpus, not this test)"
+    );
+}
+
+/// The tooth: swapping the committing wire's `bal` tag for `verb` must flip the kernel from
+/// COMMIT to a loud refusal — never a silent skip-and-commit.
+fn dissolved_verb_refuses(verb: &str) {
+    if skip_no_lean() {
+        return;
+    }
+    let wire = committing_bal_wire();
+    let mutant = wire.replacen("{\"bal\":[", &format!("{{\"{verb}\":["), 1);
+    assert_ne!(wire, mutant, "mutation must change the wire");
+    match kernel_commit_bit(&mutant) {
+        Ok(committed) => assert!(
+            !committed,
+            "SILENT STATE INSTALL: the verified kernel COMMITTED a turn whose action carried the \
+             dissolved/unknown wire verb `{verb}` — stale-peer bytes must refuse loudly, not be \
+             skipped-and-committed (parse-confusion)"
+        ),
+        Err(e) => eprintln!("loud FFI refusal on `{verb}` (also acceptable): {e}"),
     }
 }
 
-// =====================================================================================
-// FACTORY-DISSOLVED — the holding-store CREATE families refuse LOUDLY at the wire (the
-// verified kernel does not parse them); the Rust executor remains the transitional
-// fallback. No silent state install.
-// =====================================================================================
+/// `cesc` — the dissolved CreateEscrow kernel verb (F1b): stale peer bytes must refuse.
+#[test]
+fn dissolved_escrow_wire_verb_refuses_loudly() {
+    dissolved_verb_refuses("cesc");
+}
+
+/// `cobl` — the dissolved CreateObligation kernel verb (F1b): stale peer bytes must refuse.
+#[test]
+fn dissolved_obligation_wire_verb_refuses_loudly() {
+    dissolved_verb_refuses("cobl");
+}
+
+/// The general pole: a verb the kernel NEVER knew must refuse the same way (pins unknown-tag
+/// handling as fail-closed, so a future "skip unknown actions" convenience can't slip in).
+#[test]
+fn unknown_wire_verb_never_silently_commits() {
+    dissolved_verb_refuses("zzzz");
+}
+
+/// Baseline sanity pole (the tooth's non-vacuity floor): the UNMUTATED wire really commits, so
+/// the three refusal tests above cannot pass vacuously off an already-rejecting baseline.
+#[test]
+fn baseline_bal_wire_commits() {
+    if skip_no_lean() {
+        return;
+    }
+    let wire = committing_bal_wire();
+    assert_eq!(
+        kernel_commit_bit(&wire),
+        Ok(true),
+        "the baseline committing corpus wire stopped committing — the refusal teeth above are \
+         now vacuous; restore a committing Balance corpus case"
+    );
+}

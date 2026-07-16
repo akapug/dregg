@@ -176,8 +176,10 @@ fn turn_stream(senders: &[CellId], b_id: CellId) -> Vec<Turn> {
 /// (a) live path is fast + (b) audit drains and CONFIRMS agreement on all N (zero divergence).
 #[test]
 fn speculative_audit_confirms_agreement_and_measures() {
-    if !dregg_lean_ffi::lean_available() {
-        eprintln!("SKIP: Lean archive not linked (lean_available()==false)");
+    if !dregg_lean_ffi::demand_lean(
+        dregg_lean_ffi::lean_available(),
+        "Lean archive (lean_available)",
+    ) {
         return;
     }
 
@@ -290,8 +292,10 @@ fn speculative_audit_confirms_agreement_and_measures() {
 /// audit MUST catch it (a `DivergenceReport` fires).
 #[test]
 fn speculative_audit_catches_injected_fault() {
-    if !dregg_lean_ffi::lean_available() {
-        eprintln!("SKIP: Lean archive not linked (lean_available()==false)");
+    if !dregg_lean_ffi::demand_lean(
+        dregg_lean_ffi::lean_available(),
+        "Lean archive (lean_available)",
+    ) {
         return;
     }
 
@@ -414,8 +418,10 @@ fn speculative_audit_catches_injected_fault() {
 /// while the live thread keeps executing, with zero divergence on a clean stream.
 #[test]
 fn speculative_audit_background_worker_drains() {
-    if !dregg_lean_ffi::lean_available() {
-        eprintln!("SKIP: Lean archive not linked (lean_available()==false)");
+    if !dregg_lean_ffi::demand_lean(
+        dregg_lean_ffi::lean_available(),
+        "Lean archive (lean_available)",
+    ) {
         return;
     }
 

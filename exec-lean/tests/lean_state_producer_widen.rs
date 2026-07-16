@@ -25,7 +25,7 @@
 //! REJECTION tooth: the unauthorized mutation is rejected by BOTH executors and the field does not
 //! move (the replay never fabricates a payload the kernel did not authorize).
 //!
-//! Requires the linked Lean archive (`lean-shadow` + `lean_available()`); self-skips when absent.
+//! Requires the linked Lean archive (`lean-shadow` + `lean_available()`); self-skips when absent (PANICS under `DREGG_TEST_REQUIRE_LEAN=1`).
 
 use std::collections::HashMap;
 
@@ -191,12 +191,13 @@ fn diff(pre: Ledger, turn: Turn, ids: &[CellId]) -> Result<(), String> {
 }
 
 fn skip_no_lean() -> bool {
-    if !dregg_lean_ffi::lean_available() {
-        eprintln!("SKIP: Lean archive not linked (lean_available()==false)");
-        true
-    } else {
-        false
-    }
+    // Routed through the DREGG_TEST_REQUIRE_LEAN hard mode (dregg-lean-ffi::demand_lean):
+    // unarmed, an archive-less build prints the honest SKIP and returns; ARMED, it PANICS —
+    // so this suite can never report `ok` having asserted nothing on the hard-mode lane.
+    !dregg_lean_ffi::demand_lean(
+        dregg_lean_ffi::lean_available(),
+        "Lean archive (lean_available)",
+    )
 }
 
 // =====================================================================================

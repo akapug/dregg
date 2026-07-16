@@ -16,7 +16,8 @@
 //!
 //! A divergence here is a REAL finding (a marshaller gap or a genuine semantic difference), surfaced
 //! by the assertion — never papered over. Requires the linked Lean archive (`lean-shadow` feature +
-//! `lean_available()`); when the archive is absent the test self-skips (it cannot compare).
+//! `lean_available()`); when the archive is absent the test self-skips unarmed and PANICS under
+//! `DREGG_TEST_REQUIRE_LEAN=1` (`demand_lean`) — it cannot compare without the kernel.
 
 use std::collections::HashMap;
 
@@ -189,8 +190,10 @@ fn run_differential(pre: Ledger, turn: Turn, ids: &[CellId]) {
 
 #[test]
 fn transfer_lean_produced_ledger_agrees_with_rust() {
-    if !dregg_lean_ffi::lean_available() {
-        eprintln!("SKIP: Lean archive not linked (lean_available()==false)");
+    if !dregg_lean_ffi::demand_lean(
+        dregg_lean_ffi::lean_available(),
+        "Lean archive (lean_available)",
+    ) {
         return;
     }
     let (pre, a_id, b_id) = two_cell_ledger();
@@ -210,8 +213,10 @@ fn transfer_lean_produced_ledger_agrees_with_rust() {
 
 #[test]
 fn setfield_lean_produced_ledger_agrees_with_rust() {
-    if !dregg_lean_ffi::lean_available() {
-        eprintln!("SKIP: Lean archive not linked (lean_available()==false)");
+    if !dregg_lean_ffi::demand_lean(
+        dregg_lean_ffi::lean_available(),
+        "Lean archive (lean_available)",
+    ) {
         return;
     }
     let (pre, a_id, b_id) = two_cell_ledger();

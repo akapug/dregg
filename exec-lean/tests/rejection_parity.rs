@@ -23,7 +23,8 @@
 //!
 //! This test is a CHARACTERISATION harness (it prints the table and only HARD-FAILS on the dangerous
 //! `ASYMMETRY-Rust-accepts` direction, since that is a real soundness hole the maintainer must see).
-//! Requires the linked Lean archive; self-skips when absent (it cannot run the verified kernel).
+//! Requires the linked Lean archive; when absent it self-skips unarmed and PANICS under
+//! `DREGG_TEST_REQUIRE_LEAN=1` (`demand_lean`) — it cannot run the verified kernel without it.
 //!
 //! Run: `cargo test -p dregg-exec-lean --test rejection_parity -- --nocapture`
 
@@ -849,10 +850,10 @@ fn build_corpus() -> Vec<Case> {
 
 #[test]
 fn rejection_parity_differential() {
-    if !dregg_lean_ffi::lean_available() {
-        eprintln!(
-            "SKIP: Lean archive not linked (lean_available()==false) — cannot run the verified kernel"
-        );
+    if !dregg_lean_ffi::demand_lean(
+        dregg_lean_ffi::lean_available(),
+        "Lean archive (the verified kernel)",
+    ) {
         return;
     }
 

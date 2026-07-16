@@ -14,7 +14,7 @@
 
 use dregg_lean_ffi::marshal::{conformance_input_corpus, marshal_turn_hosted, WForest, WireTurn};
 use dregg_lean_ffi::{
-    decode_shadow_state, direct_available, lean_available, shadow_exec_direct,
+    decode_shadow_state, demand_lean, direct_available, lean_available, shadow_exec_direct,
     shadow_exec_full_forest_auth, WireTurnHdr,
 };
 
@@ -38,15 +38,14 @@ fn split_turn(t: &WireTurn) -> (WireTurnHdr, &WForest) {
 
 #[test]
 fn direct_path_equals_json_oracle_over_the_whole_corpus() {
-    if !lean_available() {
-        eprintln!("direct_vs_json: libdregg_lean.a not linked — skipped.");
+    if !demand_lean(lean_available(), "Lean archive (libdregg_lean.a)") {
         return;
     }
-    if !direct_available() {
-        eprintln!(
-            "direct_vs_json: dregg_exec_full_forest_auth_direct not exported (stale archive) — \
-             skipped. Rebuild the closure (scripts/rebuild-dregg2-closure.sh)."
-        );
+    if !demand_lean(
+        direct_available(),
+        "dregg_exec_full_forest_auth_direct export (stale archive — rebuild the closure via \
+         scripts/rebuild-dregg2-closure.sh)",
+    ) {
         return;
     }
 

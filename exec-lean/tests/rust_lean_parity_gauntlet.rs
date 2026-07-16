@@ -39,8 +39,8 @@
 //! Plus a non-vacuity floor: the corpus must produce a meaningful number of `BothAcceptStateAgree`
 //! and at least one `BothReject`, so the gauntlet cannot pass by trivially gapping/rejecting.
 //!
-//! Requires the linked Lean archive; self-skips (does not fail) when `lean_available()` is false —
-//! it cannot run the verified kernel without it. The strengthened justification is documented in
+//! Requires the linked Lean archive; when `lean_available()` is false it self-skips UNARMED and
+//! PANICS under `DREGG_TEST_REQUIRE_LEAN=1` (`demand_lean`) — it cannot run the verified kernel without it. The strengthened justification is documented in
 //! `docs/RUST-LEAN-EXECUTOR-PARITY.md`.
 //!
 //! Run: `cargo test -p dregg-exec-lean --test rust_lean_parity_gauntlet -- --nocapture`
@@ -1096,10 +1096,10 @@ fn build_corpus() -> Vec<Case> {
 
 #[test]
 fn rust_lean_parity_gauntlet() {
-    if !dregg_lean_ffi::lean_available() {
-        eprintln!(
-            "SKIP: Lean archive not linked (lean_available()==false) — cannot run the verified kernel"
-        );
+    if !dregg_lean_ffi::demand_lean(
+        dregg_lean_ffi::lean_available(),
+        "Lean archive (the verified kernel)",
+    ) {
         return;
     }
 
