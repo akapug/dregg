@@ -66,9 +66,16 @@ jobs:
         run: cargo build --release -p dregg-node
 
       - name: Load node identity
+        # The key rides an env var, NOT a `run:` interpolation. `${{ secrets.X }}` is
+        # substituted into the script TEXT at render time, so the raw node identity key would
+        # sit in the shell source — visible to `set -x`, to `ps`, and to a crash dump. Log
+        # masking is a backstop, not a boundary. (The `Run federation node` step below already
+        # does it this way; this step was the odd one out.)
+        env:
+          NODE_KEY: ${{ secrets.DREGG_NODE_1_KEY }}
         run: |
           mkdir -p "$STATE_DIR"
-          echo -n "${{ secrets.DREGG_NODE_1_KEY }}" | xxd -r -p > "$STATE_DIR/node.key"
+          printf '%s' "$NODE_KEY" | xxd -r -p > "$STATE_DIR/node.key"
           echo "Node 1 identity loaded"
 
       - name: Resolve peers
