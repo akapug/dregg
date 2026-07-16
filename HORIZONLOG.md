@@ -1,5 +1,74 @@
 # HORIZONLOG — the named-follow-up burn-down
 
+## ⚑ LAUNCH-READINESS AUDIT + workstreams (2026-07-15) — "no mainnet/product yet?" is FAIR; the disease is "green on ember's laptop"
+Inbound "No mainnet or working product yet? @DreggNet" → 4 harsh parallel audits (buildability, VK/pinning,
+deployed-vs-claimed, soundness). ONE disease across all axes: the real system lives in ember's ~/dev layout +
+laptop, not in a frozen/reproducible/deployed artifact. The math is strong; the gap is engineering discipline +
+scope focus. Named workstreams to burn down:
+- **P0 REPRODUCIBLE BUILD** (unblocks ALL CI): drop the `Cargo.toml` `[patch]`-to-sibling-path (its own comment
+  falsely claims "pure git deps"); pin the 4 `p3-*` git revs to ONE pushed commit (`0a4a554`); regen sub-workspace
+  locks (root+sdk-py+discord-bot+dregg-tui+dregg-doc); date-pin the rolling `nightly`; immutable-rev + `git ls-remote`
+  preflight every `emberian/*` fork (one pinned by BRANCH; proof-systems `c5305e63` may be unpushed); publish a
+  Lean-seed release; ADD a **bare-clone-with-empty-`~/dev` CI gate** so "works on my machine" can't regress. (Done
+  this session: pushed the p3 fork, bumped workflow clone revs `993efec→0a4a554`, LFS-tracked the staged tsv → Pages GREEN.)
+- **P1 FREEZE PROTOCOL** (ember's explicit ask): production MPC VK ceremony → pin as a hex KAT constant (kill the
+  self-recompute tautology, `recursive_witness_bundle.rs:180`); ONE `v-final` descriptor registry (retire the
+  7-registry/4-generation churn + the lying `-staged` names); freeze commitment context+width (finish the 1→8-felt
+  flip at v9); **BUILD Control 4** (the non-regression differential, design-only today, `VK-REGEN-CONTROLS.md:92`);
+  deterministic published genesis (`federation_id` non-deterministic today). Do the breaking changes NOW while no
+  community state exists.
+- **P1 CLOSE VALUE-PATH HOLES** (before holding real value): the 3 codex-CONFIRMED Solana-bridge holes — stake-set
+  completeness floor + rotation→`tally_authorized` (`solana_provenance.rs:457,706,724`); enforce rootedness or forbid
+  value-release on unrooted slots (`solana_trustless.rs:74` over-claims "finalized"); MPC + apex-VK-pin for settlement
+  (toxic-waste dev ceremony today); fix `commit_turn` no-rollback double-apply (`CORE-AUDIT.md:58`).
+- **STRATEGIC**: first "launched product" = the **RUNG-1 LAUNCHPAD** (deploy `DreggLaunchpad`→Base-Sepolia + host
+  `launchpad-web` public; rung-1 puts dregg NOT in the loop → sidesteps all unfrozen protocol) — fastest
+  stranger-usable end-to-end off ember's laptop. + a persistent systemd node so the Descent funnel anchors again
+  (its devnet ledger was LOST when hbox was hard-killed).
+
+## ✅ model-provenance #3 CLOSED — the authentic leg now CONSUMES the real MPC-TLS presentation (2026-07-15, on disk, uncommitted)
+The collective-fiction audit's #3 seam: on every path the narrators actually used, "provably came from the
+model" was a SELF-SIGNED FIXTURE — `FixtureNotary` signed a transcript it built itself, and `verify_zkoracle`
+read that. The real MPC-TLS stack was built but dormant (never called by either narrator; its presentation
+never fused into the leg).
+
+**FUSED.** `attestation::{AuthenticProvenance, AuthenticPolicy, authentic_provenance, verify_zkoracle_with_policy}`
++ `ZkOracleError::{FixtureOnLivePath, LiveBackendUnavailable}`. `RequireMpcTls` REFUSES a fixture-only
+attestation before any leg runs, then authenticates leg 1 by genuine `presentation.verify()`; a build without
+the `tlsn-live` backend refuses FAIL-CLOSED rather than falling back onto the self-signed carrier. The POLICY
+selects the leg (never the payload — dispatching on contents would silently change a verifier's guarantee with
+the data it was handed). Both narrators fuse the real presentation; `attested-dm::attest_narration_live`
+previously ran the real 2PC and THREW THE PRESENTATION AWAY.
+
+**DRIVEN against a real MPC-TLS 2PC roundtrip** (real prover + separate notary that sees no plaintext, real
+`presentation.verify()`): `zkoracle-prove/tests/model_provenance_fused.rs` (6), `tests/provenance_gate.rs` (4,
+light build), `attested-dm/tests/dm_model_provenance.rs` (3), + the narrator STARK tooth in
+`deos-hermes/tests/crown_narrator.rs`.
+
+**zk-injection STARK: LIVE, was DEAD.** Both narrators now attach `prove_injection_leg` (`prove_zkoracle`
+defaulted `zk_injection: None`; neither narrator attached it). ⚑ Its boundary, now pinned by test: the leg
+proves the run over the field's PADDED BRACE-PROJECTION, so a proof transfers between brace-free fields in one
+padding block — never across the accept/reject boundary; the field BYTES are bound by the `FieldSpan` weld.
+
+**Receipt commitments → v2** (both `deos-hermes::attest` and `attested-dm`): v1 fingerprinted ONLY the fixture
+carrier, so a live attestation's real presentation was unbound (swap the real session, receipt unchanged) and
+"proven in-circuit" could be stripped from a landed turn without changing its id.
+
+### ⚑ REMAINING (named, not laundered)
+- **The live handshake is UN-DRIVEN here.** What is driven is real *transport* provenance (real 2PC/notary/
+  `presentation.verify()`) against a LOCAL test endpoint — the 2PC is real, the MODEL is not. Real *model*
+  provenance is `deos_hermes::attest::attest_turn_bedrock` (live TLS to `bedrock-runtime.<region>.amazonaws.com`,
+  Mozilla roots, SigV4, separate durable pinned notary, binding the completion Claude actually returned): WIRED
+  end-to-end, not driven — needs live network + AWS creds + a paid call. Drive with:
+  `cargo test -p dregg-zkoracle-prove --features tlsn-live --test bedrock_mpctls_live -- --ignored --nocapture`
+- **Notary hosting** at a stable public address with a PUBLISHED, independently audited pinned key + rotation
+  policy (crypto pinning is identical today; the durable-key path already gives a re-pinnable root).
+- **Default narrator paths remain `AllowFixture`** — deliberately: they are hermetic plumbing tests, now
+  explicitly typed `AuthenticProvenance::SelfSignedFixture` and refused by any `RequireMpcTls` verifier.
+  Crate docs corrected (attested-dm's headline claimed "authentic — from a real model, not forged").
+- Cost noted: the STARK adds ~1.4s/narration in debug (attested-dm lib suite 120 tests ≈ 171s); ~0.36s release.
+
+
 ## ⚑ cap-graph GENUINE-NON-AMP emit is BROKEN — two column/index defects found by the MOVE-3 test lane (named 2026-07-15)
 Writing the behavioural non-amp tooth the plan asked for (CRATE-EXCELLENCE-PLAN §4 MOVE 3(c)) required
 reading the emitted descriptor, and the descriptor falsifies its own module doc. `dregg-effectvm-attenuateA-v1-genuine-nonamp.json`
@@ -5552,7 +5621,7 @@ redeploy point-of-no-return.)*
 - Hosted key custody posture (above).
 - starbridge-apps stub dirs compute-exchange/gallery: build or delete (above).
 - **#103 cap-crown — TWO EffectVM AIRs, the weaker one LIVE on the sovereign path (SOUNDNESS-shaped, not janitorial). ✅ DECIDED 2026-06-13 (ember): shape (i) — GRADUATE the sovereign bespoke path onto the rotated multi-table AIR AT THE FLIP, so in-circuit non-amplification (granted ⊑ held vs the authenticated cap_root) holds EVERYWHERE. This is now a C5/C7 flip TASK: cut `cipherclerk.execute_sovereign_turn_with_proof` + `proof_verify.rs::verify_and_commit_proof` off the bespoke `EffectVmAir` onto the rotated `Ir2BatchProof` path, and retire the `air.rs:1365-1374` legacy cap arm with it.** There are two constraint systems for the EffectVM proof: (a) the AUDITED p3-batch-stark `EffectVmP3Air` (`circuit/src/effect_vm_p3_full_air.rs`), which carries the GRADUATED cap-crown Phase-B gates (sorted-tree membership-open + leaf-update + submask + expiry-monotone, its `attn` module ~`:189-310`; the non-amp gauntlets `circuit/tests/effect_vm_{attenuate,grant,revoke}_non_amp.rs` exercise exactly these); and (b) the BESPOKE FRI `EffectVmAir` (`circuit/src/effect_vm/air.rs`), whose `eval_constraints` still pins AttenuateCapability `cap_root` as the LEGACY nested-digest `new_cap_root = H2(old_cap_root, H2(slot_hash, narrower))` (`air.rs:1365-1374`) — it has NO sorted-open / submask / non-amp tooth (verified: no `cap_root::`/`CAP_TREE_DEPTH`/membership markers in air.rs). The default full-turn path emits + verifies the p3 proof (`prove_full_turn`→`prove_effect_vm_p3`, stored in `FullTurnProof.proof_bytes`; verified live via `dregg_sdk::verify_full_turn`/`verify_full_turn_bound`, `node/src/turn_proving.rs:246/414/532`) — so the graduated AIR gates the default path. BUT the bespoke `EffectVmAir` IS still live on the **sovereign-cell bespoke-STARK path**: `AgentCipherclerk::execute_sovereign_turn_with_proof` produces `stark::prove(&EffectVmAir,…)` bytes into `turn.execution_proof` (`sdk/src/cipherclerk.rs:5160-5166`, also `:6305`), and `TurnExecutor::verify_and_commit_proof` verifies them via `stark::verify(&EffectVmAir,…)` (`turn/src/executor/proof_verify.rs:420-421`), reached when `turn.execution_proof.is_some()` && cell is sovereign (`turn/src/executor/execute.rs:476`). The two species CANNOT silently cross — `stark::proof_from_bytes` requires a `b"DREG"` magic header and fails closed on the postcard p3 blob (`circuit/src/stark.rs`). **Reachability (severity calibration):** `execute_sovereign_turn_with_proof` is a `pub fn` SDK API (not cfg-gated) but its ONLY in-repo callers are `tests/src/sovereign_proof.rs:73/125`; NO service/binary (node/cli/discord-bot/demos/starbridge) drives it — so this is a LATENT public-API-surface gap exercised only by in-repo tests, NOT a shipped-node-flow hole. (The sibling `execute_with_program` `:6278/:6305` is the other bespoke `execution_proof` writer, same API-surface posture.) NET: on the sovereign bespoke path, an `AttenuateCapability` is checked only for the legacy digest-advance shape, NOT for in-circuit non-amplification (`granted ⊑ held` against the authenticated `cap_root`) — so a caller of that API gets the weaker cap guarantee. **Decision shapes:** (i) graduate the sovereign path onto the p3 AIR (cut `cipherclerk.execute_sovereign_turn_with_proof` over to `prove_effect_vm_p3` + `verify_effect_vm_p3`, retire the bespoke `EffectVmAir` cap arm) — the coherent close, lands the same non-amp guarantee everywhere; or (ii) declare the sovereign bespoke-STARK path deprecated/decommissioned (no live caller ships it) and delete it wholesale; or (iii) accept the weaker sovereign cap-binding as an explicit documented scope-limit. NOT deleted: deleting only the `air.rs:1365-1374` cap arm while the sovereign path still verifies through `EffectVmAir` would BREAK that path's cap-root binding (left intact pending this decision). CROSS-REF: the ROTATION FLIP tail above ALREADY plans to "rewrite executor `proof_verify.rs::verify_and_commit_proof` … bespoke `stark::verify` → the rotated Ir2BatchProof" and to DELETE `effect_vm_p3_full_air.rs` — so decision-shape (i)/(ii) has a natural landing AT the flip; the open question is whether the sovereign cap-binding gap is acceptable in the interim (it is live on the bespoke path TODAY, pre-flip) or wants an earlier targeted fix. Named: cap-crown #103 burn-down, 2026-06-13.
-- **#103 cap-crown Phase-D — the 4-ary c-list `membership` leg vs. the sorted `cap-membership` leg (retire-or-keep).** `sdk/src/full_turn_proof.rs` attaches TWO distinct membership sub-proofs to a cap-gated turn, proving DIFFERENT claims: (a) the **4-ary c-list `membership` leg** (`:978-1012`, witness `MembershipWitness` `:177`, `prove_membership_p3` over the generic positions-indexed `P3MerklePoseidon2Air`, PI `[leaf_hash, root]`, vk `merkle_poseidon2_descriptor`) proves "an opaque capability `leaf_hash` is present in A Merkle tree at the witnessed positions" — a GENERIC membership statement; its root is not structurally pinned to the authenticated `cap_root`, and the leaf is an opaque hash (not the typed 7-field cap preimage). (b) the **sorted `cap-membership` leg** ("cap Phase D", `:1075-1100`, witness `CapMembershipWitness` `:212` ← `ConsumedCapWitness`, `prove_cap_membership_p3` over the SORTED `CanonicalCapTree`, directional path, vk `cap_membership_circuit_descriptor`, expectation `CapMembershipExpectation` `:239` pins `pi[CAP_ROOT]` to the trusted root `:248`) proves "the SPECIFIC CONSUMED capability's full 7-field leaf preimage opens against THE holder's real sorted `cap_root` tree" — the authority leg that ties the acting/consumed cap to the authenticated cap-state, with sorted single-leaf-per-slot semantics. **The two are not redundant:** the sorted leg gives the strictly stronger, structurally-pinned, typed-leaf guarantee; the 4-ary leg gives a weaker generic membership over an unpinned root with an opaque leaf. **Retire-vs-keep tradeoff:** for a cap-gated turn the sorted `cap-membership` leg SUBSUMES the authority claim the 4-ary leg makes (consumed-cap-in-the-real-cap_root ⊃ opaque-leaf-in-some-4-ary-tree), so the 4-ary leg is retireable FOR CAP-GATED TURNS on the claim alone. **Live-producer evidence (the deciding fact):** there is currently NO live producer that sets `membership: Some(MembershipWitness{..})` — the only two build sites (`full_turn_proof.rs:2303`, `:2774`) are both inside `#[cfg(test)] mod tests` (`:2107`) using `merkle_test_witness`; the only LIVE membership-leg producer is `cap_membership` (`node/src/turn_proving.rs:518`, `CapMembershipWitness::from_consumed`). So today the 4-ary `membership` leg is dead on the live path — its `Option`/`P3MerklePoseidon2Air`/`merkle_poseidon2_descriptor` plumbing is wired + SDK-tested but unfed. **The keep argument** is therefore forward-looking, not current: the 4-ary leg is the GENERIC credential/c-list membership primitive (opaque leaf, witnessed root, no sorted `cap_root` to open against) that a NON-cap predicate-credential turn-shape WOULD use — retiring it removes that future affordance and the `merkle_poseidon2` descriptor's only full-turn consumer. **Recommendation (ember to ratify):** keep the 4-ary leg as the general-membership primitive but DO NOT couple it to cap-gated turns (the sorted leg is the cap authority leg of record); OR, if no near-term non-cap credential turn-shape is planned, demote the 4-ary leg + its descriptor to a clearly-labelled "general membership, no live producer" status (Research tier) so it stops reading as a live cap-authority alternative. Before any removal, confirm no in-flight feature wires a live `membership: Some(..)`. Named: cap-crown #103 Phase-D map, 2026-06-13. (Left intact — characterization only, per the brief.)
+- **#103 cap-crown Phase-D — the 4-ary c-list `membership` leg vs. the sorted `cap-membership` leg (retire-or-keep).** `sdk/src/full_turn_proof.rs` attaches TWO distinct membership sub-proofs to a cap-gated turn, proving DIFFERENT claims: (a) the **4-ary c-list `membership` leg** (`:978-1012`, witness `MembershipWitness` `:177`, `prove_membership_p3` over the generic positions-indexed `retired Rust-authored Merkle AIR`, PI `[leaf_hash, root]`, vk `merkle_poseidon2_descriptor`) proves "an opaque capability `leaf_hash` is present in A Merkle tree at the witnessed positions" — a GENERIC membership statement; its root is not structurally pinned to the authenticated `cap_root`, and the leaf is an opaque hash (not the typed 7-field cap preimage). (b) the **sorted `cap-membership` leg** ("cap Phase D", `:1075-1100`, witness `CapMembershipWitness` `:212` ← `ConsumedCapWitness`, `prove_cap_membership_p3` over the SORTED `CanonicalCapTree`, directional path, vk `cap_membership_circuit_descriptor`, expectation `CapMembershipExpectation` `:239` pins `pi[CAP_ROOT]` to the trusted root `:248`) proves "the SPECIFIC CONSUMED capability's full 7-field leaf preimage opens against THE holder's real sorted `cap_root` tree" — the authority leg that ties the acting/consumed cap to the authenticated cap-state, with sorted single-leaf-per-slot semantics. **The two are not redundant:** the sorted leg gives the strictly stronger, structurally-pinned, typed-leaf guarantee; the 4-ary leg gives a weaker generic membership over an unpinned root with an opaque leaf. **Retire-vs-keep tradeoff:** for a cap-gated turn the sorted `cap-membership` leg SUBSUMES the authority claim the 4-ary leg makes (consumed-cap-in-the-real-cap_root ⊃ opaque-leaf-in-some-4-ary-tree), so the 4-ary leg is retireable FOR CAP-GATED TURNS on the claim alone. **Live-producer evidence (the deciding fact):** there is currently NO live producer that sets `membership: Some(MembershipWitness{..})` — the only two build sites (`full_turn_proof.rs:2303`, `:2774`) are both inside `#[cfg(test)] mod tests` (`:2107`) using `merkle_test_witness`; the only LIVE membership-leg producer is `cap_membership` (`node/src/turn_proving.rs:518`, `CapMembershipWitness::from_consumed`). So today the 4-ary `membership` leg is dead on the live path — its `Option`/`retired Rust-authored Merkle AIR`/`merkle_poseidon2_descriptor` plumbing is wired + SDK-tested but unfed. **The keep argument** is therefore forward-looking, not current: the 4-ary leg is the GENERIC credential/c-list membership primitive (opaque leaf, witnessed root, no sorted `cap_root` to open against) that a NON-cap predicate-credential turn-shape WOULD use — retiring it removes that future affordance and the `merkle_poseidon2` descriptor's only full-turn consumer. **Recommendation (ember to ratify):** keep the 4-ary leg as the general-membership primitive but DO NOT couple it to cap-gated turns (the sorted leg is the cap authority leg of record); OR, if no near-term non-cap credential turn-shape is planned, demote the 4-ary leg + its descriptor to a clearly-labelled "general membership, no live producer" status (Research tier) so it stops reading as a live cap-authority alternative. Before any removal, confirm no in-flight feature wires a live `membership: Some(..)`. Named: cap-crown #103 Phase-D map, 2026-06-13. (Left intact — characterization only, per the brief.)
 
 ## Research tier (explicitly not scheduled)
 
@@ -8637,3 +8706,88 @@ explicitly structure-specific — so the only numeric gate gates the refuted met
 the structural params the real bound rests on; (2) `proven_bits` is computed and REPORTED but never
 floored — it is pinned only transitively, because capacity and Johnson happen to share the same 3
 knobs. Left at 128 and NOT weakened: retargeting to ~112 is an ember call.
+
+## ✅ wire-188 CLOSED — the teeth were stale, the deployed circuit was never broken (2026-07-15, on disk, uncommitted)
+⚑ **CORRECTS the diagnosis recorded above at "RED AND NAMED, NOT FAKED"** (and in 9b984b75f /
+98af0f260). That entry read the 2607-vs-2614 wall as *"the live transfer-family wide generator emits
+WIDE_WIDTH = 2607 columns while the committed transferVmDescriptor2R24 row expects a 2614-column
+host … the mid-big-bang C_SPAN/rot-site drift … they will bite the moment the registry row and the
+generator agree again."* **That is not what happened. The row and the generator already agree.**
+Nothing in the deployed circuit was drifted, and nothing was waiting on a regen.
+
+**The break was class (c): the four teeth were stale harnesses.** Measured, not inferred:
+
+* `transferVmDescriptor2R24` is the AVAILABILITY-HARDENED member —
+  `dregg-effectvm-transfer-v1-avail-rot24-v3-staged-gentian-deployed-bare-refuse`, `trace_width`
+  2664, 68 PIs, `avail_pad_for_descriptor_name` → **pad 10**.
+* bridge / deco / dsl / membership called `generate_rotated_transfer_shape_wide`, which is *defined*
+  as `generate_rotated_transfer_shape_wide_avail(0, …)` — **pad 0**. The PRODUCTION wide dispatcher
+  (`trace_rotated.rs:5858`) DERIVES the pad from the descriptor name; only the pad-0 convenience
+  wrapper's test callers do not. (The wrapper is not itself wrong — pad 0 is correct for every bare
+  member, and the dispatcher's own supplyMint arm uses it legitimately at `:5848`. The bug is
+  pairing it with a hardened member.)
+* At pad 0 the producer lays a rotated-appendix felt at wire 188 and the descriptor's 15-bit range
+  refuses it in pre-flight (`descriptor_ir2.rs:4129`): **wire 188 = 1230416006**, byte-for-byte the
+  value 9b984b75f reported. At pad 10, **wire 188 = 1696 = 100000 & 0x7fff** = `BEF0`, the low
+  15-bit limb of `before.bal_lo` (`transfer_avail_weld.rs:53`, `AVAIL_BASE = EFFECT_VM_WIDTH = 188`).
+* The 15-bit bound is **CORRECT and load-bearing — it was NOT widened.** `bal_lo` is
+  `BAL_LIMB_BITS = 30` split `(v & 0x7fff, v >> 15)` by the assembly gate `bal_lo = BEF0 + 2^15·BEF1`.
+  A 16-bit `BEF0` would make that split NON-CANONICAL (`BEF0 = 2^15 + x, BEF1 = y` aliases
+  `BEF0 = x, BEF1 = y+1`), and the borrow chain's `no final borrow ⟹ before ≥ amount` conclusion is
+  only sound on the canonical split — widening it would admit an over-debit witness. 15 is the tight
+  bound; the teeth were correctly refusing bad input.
+* The teeth ALSO hard-coded a 48-column refuse aux. `REFUSE_WELD_WIDEN` = **45**
+  (`2·REFUSE_STRIDE + 3·MAX_CAVEATS + 1`) — its own doc names 48 as the wrong number (the last
+  block's 3-column stride tail is never allocated) — and the widen is PER-MEMBER
+  (`refuse_weld_widen(&desc)`, read off the committed gates). That is the 3-column half of the gap:
+  2664 − 45 − 2 = **2617** = the pad-10 producer width. `2607` was pad-0; `2614` was 48-not-45.
+
+**The origin is on the record, not mysterious**: the avail-pad flag-day checklist above already said
+*"③ regen checklist: the Rust membership fold tooth's teeth COLUMNS move 2607→2617 (PIs unchanged)"*.
+**That checklist item was never executed.** `#[ignore]` + no `--ignored` lane is why nobody noticed —
+which is the P1(d) point the arming lane made correctly.
+
+**FIX**: all four teeth now mint through the production dispatcher
+`generate_rotated_effect_vm_descriptor_and_trace_wide(…, membership_teeth)`, which resolves the
+committed row, derives the pad, lays the teeth at the member's own column and splices the claim PIs.
+No hand-rolled twin, so this class cannot silently rot again — the pattern
+`custom_binding_deployed_tooth.rs:208` always used.
+
+**VERIFIED with real folds** (`--ignored --test-threads=1`, ~9min/binary — the HONEST poles too, so
+these are not vacuous refusals):
+
+| binary | before (9b984b75f) | after |
+|---|---|---|
+| bridge | 0 passed / 2 FAILED (1.67s, setup) | **2 / 0** (562s) |
+| custom | 1 / 1 | **2 / 0** (476s) |
+| deco | 0 / 2 (1.75s, setup) | **2 / 0** (550s) |
+| dsl | 0 / 3 (0.12s, setup) | **3 / 0** (625s) |
+| factory | 0 / 2 (wgpu Validation Error) | **2 / 0** (545s) |
+| hatchery | 0 / 2 | **2 / 0** (517s) |
+| membership | 0 / 2 (setup) | **2 / 0** (509s) |
+| sovereign | 0 / 2 | **2 / 0** (511s) |
+
+**17 / 17 GREEN, 8/8 binaries, 0 failures** — from `4 passed / 11 FAILED` at 9b984b75f. Every
+forged pole is now paired with a PASSING honest pole in the same test (98af0f260's S1 re-assert),
+so none of the 8 refusals is vacuous.
+
+The `factory` wgpu Validation Error 9b984b75f saw did NOT reproduce here — it is HOST-dependent (the
+64dbf9ed9 GPU auto-select), not a property of the tooth. The three PoisonError cascades were
+downstream of the setup panic and are gone with it.
+
+**STILL OWED (unchanged)**: the S2 gauntlet lane that runs these 8 with `--ignored`. Nothing here
+needs a regen, a descriptor change, or an ember gate.
+
+### ⚑ NEW, NAMED (found while closing wire-188, NOT verified either way): is the reconstructed PI vector avail-pad-INVARIANT?
+Three call sites still take the pad-0 `generate_rotated_transfer_shape_wide` and pair it with the
+avail-hardened transfer family — but all three use it for **PI reconstruction only** and discard the
+trace, so the wire-188 range never runs on them:
+`turn/src/executor/proof_verify.rs:891` (executor-derived PI reconstruction — the verifier half),
+`sdk/src/full_turn_proof.rs:486` (`wide_commit_anchors`, binds `_t`), `sdk/src/cipherclerk.rs:5752`.
+They are CORRECT iff the emitted PI vector (notably the 16 wide anchors) is identical at pad 0 and
+pad 10. If it is NOT, the executor would reject honest hardened transfers — and the live federation
+suggests it does not, so pad-invariance is the LIKELY truth; that is evidence, not a proof, and I did
+not measure it. The cheap decider: assert `dpis(pad 0) == dpis(pad 10)` for a transfer leg. If it
+holds, the three sites want a comment saying WHY a pad-0 producer is sound for PI-only use (they read
+as the same bug and will be "fixed" wrongly by the next reader); if it does not hold, that is a live
+executor break and a much bigger fish than the teeth.
