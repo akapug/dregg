@@ -1,5 +1,23 @@
 //! Proof soundness tests.
 //!
+//! ⚠ **SCOPE CORRECTION (mock-proof purge, 2026-07-16) — the four `ivc_*` tests below do NOT test
+//! soundness.** They exercise `dregg_circuit::ivc::{prove_ivc, verify_ivc}` — the **SIMULATED** IVC, whose
+//! `verify_ivc` only recomputes a BLAKE3 digest over the proof's OWN public data. Their assertions
+//! ("Tampered hash must fail", "broken root chain must fail") pass TRIVIALLY: mutating a stored field
+//! breaks the digest match. That is self-consistency, not soundness. **The attack a real prover must
+//! withstand is not tampering an existing proof — it is MINTING a consistent fake, and anyone who can call
+//! `prove_ivc` can do exactly that for any root walk** (`circuit/src/constraint_prover.rs:5-8` says it of
+//! itself: "nothing here is sound against a prover that lies"). So these four tests certify a mock and
+//! must not be read as IVC soundness evidence.
+//!
+//! **The REAL whole-chain soundness teeth live at `circuit-prove/tests/ivc_turn_chain_rotated.rs`**
+//! (`k_fold_turn_chain_proves_and_verifies`, `whole_chain_proof_bytes_roundtrip_and_tamper`): a genuine
+//! recursive fold over real `FinalizedTurn`s, with forged-digest / forged-count / broken-order /
+//! root / descriptor / public / VK / version / truncation all REJECTED — 5/5 passing, byte-pinned to
+//! `Emit/EffectVmEmitTurnChainBinding.lean`. These `ivc_*` tests retire with the simulated engine
+//! (their production riders are gone; only the contested `preflight/checks/{composition,backends}.rs`
+//! remain — see `circuit-prove/tests/mock_proof_purge_gate.rs`).
+//!
 //! These tests verify that the circuit proof system rejects forged, tampered,
 //! and inconsistent witnesses. A sound proof system must never accept a proof
 //! for a false statement.
