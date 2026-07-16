@@ -1,13 +1,21 @@
 //! Factory and Sovereign checks: deploy, peer exchange, multi-party atomic, IVC history.
+//!
+//! The IVC-history check runs the REAL whole-chain recursive prover
+//! (`dregg_circuit_prove::ivc_turn_chain`) over genuinely minted rotated turns —
+//! NOT the simulated IVC in `circuit/src/ivc.rs` (a hash-chain a forger can mint
+//! at will; see `circuit-prove/tests/mock_proof_purge_gate.rs`).
 
 use dregg_cell::{
     AuthRequired, Cell, CellId, CellMode, ChildVkStrategy, FactoryDescriptor, FactoryRegistry,
     FieldConstraint, Ledger, Permissions,
 };
-use dregg_circuit::BabyBear;
-use dregg_circuit::dsl::fold::{FoldWitness, compute_test_checks_commitment};
-use dregg_circuit::ivc::{FoldDelta, IvcVerification, prove_ivc, verify_ivc};
+use dregg_circuit_prove::ivc_turn_chain::{
+    FinalizedTurn, RecursionVk, WholeChainProofBytes, prove_turn_chain_recursive,
+    verify_whole_chain_proof_bytes,
+};
+use dregg_circuit_prove::joint_turn_aggregation::DescriptorParticipant;
 use dregg_turn::builder::ActionBuilder;
+use dregg_turn::rotation_witness::mint_rotated_participant_leg;
 use dregg_turn::{ComputronCosts, DelegationMode, Effect, TurnBuilder, TurnExecutor, TurnResult};
 
 use crate::report::{CheckResult, run_check};
@@ -217,48 +225,128 @@ fn check_multi_party_atomic() -> Result<(), String> {
     Ok(())
 }
 
+/// The transfer actor cell at `(balance, nonce)` with open permissions — the
+/// before/after `Cell` the rotated producer-witness path runs over (the same
+/// producer shape `lightclient/src/bin/produce_history_envelope.rs` ships).
+fn ivc_producer_cell(balance: i64, nonce: u64) -> Cell {
+    let mut pk = [0u8; 32];
+    pk[0] = 7;
+    let mut cell = Cell::with_balance(pk, [0u8; 32], balance);
+    cell.permissions = open_permissions();
+    for _ in 0..nonce {
+        let _ = cell.state.increment_nonce();
+    }
+    cell
+}
+
+/// Mint ONE REAL finalized turn on the production descriptor path: the rotated
+/// multi-table batch proof from `dregg_turn::rotation_witness`, self-verified at
+/// mint. This is the SAME producer recipe the light-client history envelope uses
+/// — no fabricated fold deltas, no synthetic chain.
+fn mint_real_turn(balance: u64, nonce: u32, amount: u64) -> Result<FinalizedTurn, String> {
+    use dregg_circuit::effect_vm::{CellState, Effect as VmEffect};
+
+    let state = CellState::new(balance, nonce);
+    let effects = vec![VmEffect::Transfer {
+        amount,
+        direction: 1,
+    }];
+    // The rotated transfer DEBIT: balance decreases by `amount`; the rotated
+    // trace welds the nonce bump from the v1 sub-trace.
+    let before_cell = ivc_producer_cell(balance as i64, nonce as u64);
+    let after_cell = ivc_producer_cell((balance as i64) - (amount as i64), nonce as u64);
+    let nullifier_root = dregg_circuit::heap_root::empty_heap_root_8();
+    let commitments_root = dregg_circuit::heap_root::empty_heap_root_8();
+    let receipt_log: Vec<[u8; 32]> = vec![[1u8; 32], [2u8; 32]];
+    let leg = mint_rotated_participant_leg(
+        &state,
+        &effects,
+        &before_cell,
+        &after_cell,
+        &nullifier_root,
+        &commitments_root,
+        &receipt_log,
+        None,
+    )
+    .map_err(|e| format!("rotated turn leg failed to mint: {e}"))?;
+    Ok(FinalizedTurn::new(DescriptorParticipant::rotated(leg)))
+}
+
+/// IVC history compression through the REAL whole-chain recursive prover.
+///
+/// Mints a continuous 2-turn chain of production rotated turn proofs, folds it
+/// with `prove_turn_chain_recursive` (per-turn execution re-proven IN-CIRCUIT,
+/// temporal continuity bound at the 8-felt anchors), and verifies the wire byte
+/// envelope with `verify_whole_chain_proof_bytes` against the fold's own VK
+/// fingerprint (the honest-setup anchor extraction).
+///
+/// Then three ADVERSARIAL teeth — a gate that only shows honest-accept cannot
+/// tell a real verifier from `Ok(())`:
+///   1. a FORGED chain (turn 2 does not continue turn 1's post-state) must be
+///      REFUSED by the fold;
+///   2. TAMPERED publics (the envelope's claimed final root bumped) must be
+///      REFUSED by the byte verifier;
+///   3. a WRONG trust anchor must be REFUSED (VK-pin tooth).
 fn check_ivc_history_compression() -> Result<(), String> {
-    // IVC: compress N turn state transitions into a single proof.
-    let initial_root = BabyBear::new(77777);
-    let n_turns = 5u32;
+    // A continuous 2-turn chain: turn 1 = (1000, nonce 0) -7-> 993; turn 2
+    // starts exactly at (993, nonce 1) — the rotated trace bumps the nonce by 1
+    // per Transfer row, so both balance and nonce advance per turn and the
+    // rotated state-commit anchors chain (new_root[0] == old_root[1]).
+    let step = 7u64;
+    let turn1 = mint_real_turn(1_000, 0, step)?;
+    let turn2 = mint_real_turn(1_000 - step, 1, step)?;
+    let mut turns = vec![turn1, turn2];
 
-    let deltas: Vec<FoldDelta> = (0..n_turns)
-        .map(|i| {
-            let fold = FoldWitness {
-                old_root: BabyBear::new(77777 + i),
-                new_root: BabyBear::new(77777 + i + 1),
-                removed_facts: vec![],
-                num_added_checks: 1,
-                added_checks_commitment: compute_test_checks_commitment(1),
-            };
-            FoldDelta::new(fold)
-        })
-        .collect();
-
-    let proof = prove_ivc(initial_root, deltas).ok_or("IVC history compression failed")?;
-
-    if proof.step_count != n_turns {
-        return Err(format!(
-            "expected {} steps, got {}",
-            n_turns, proof.step_count
-        ));
+    // THE REAL FOLD: one recursive whole-chain proof over both turns.
+    let proof = prove_turn_chain_recursive(&turns)
+        .map_err(|e| format!("real whole-chain recursive fold failed: {e}"))?;
+    if proof.num_turns != 2 {
+        return Err(format!("expected 2 folded turns, got {}", proof.num_turns));
     }
 
-    // Single proof covers all N turns
-    let verification = verify_ivc(&proof, Some(initial_root));
-    match verification {
-        IvcVerification::Valid => {}
-        other => return Err(format!("IVC history verification failed: {:?}", other)),
+    // Honest-setup anchor extraction: the VK fingerprint of OUR OWN fold.
+    let vk = proof.root_vk_fingerprint();
+
+    // Wire round-trip + REAL verification of the byte envelope.
+    let bytes = proof.to_bytes();
+    verify_whole_chain_proof_bytes(&bytes, &vk)
+        .map_err(|e| format!("verifier rejected an HONEST whole-chain proof: {e}"))?;
+
+    // ── TOOTH 2 (verify side): tampered claimed publics must be refused. ──
+    let mut tampered = WholeChainProofBytes::from_postcard(&bytes)
+        .map_err(|e| format!("envelope re-decode failed: {e}"))?;
+    tampered.final_root[0] ^= 1; // claim a different final state anchor
+    if verify_whole_chain_proof_bytes(&tampered.to_postcard(), &vk).is_ok() {
+        return Err(
+            "MOCK-GRADE verifier: a whole-chain envelope with a TAMPERED final root was \
+             ACCEPTED — the claimed publics are not bound to the proof"
+                .into(),
+        );
     }
 
-    // Final state root should be initial + n_turns
-    let expected_final = BabyBear::new(77777 + n_turns);
-    if proof.final_root != expected_final {
-        return Err(format!(
-            "expected final_root {:?}, got {:?}",
-            expected_final, proof.final_root
-        ));
+    // ── TOOTH 3 (trust anchor): a wrong VK pin must be refused. ──
+    let mut wrong = vk.0;
+    wrong[0] ^= 0xFF;
+    if verify_whole_chain_proof_bytes(&bytes, &RecursionVk(wrong)).is_ok() {
+        return Err(
+            "MOCK-GRADE verifier: a whole-chain proof verified against the WRONG trust \
+             anchor — the VK pin does not bite"
+                .into(),
+        );
     }
 
-    Ok(())
+    // ── TOOTH 1 (prove side): a FORGED chain must be refused by the fold. ──
+    // An alien turn whose pre-state anchor is NOT turn 1's post-state anchor
+    // (different balance/nonce ⇒ different rotated state commitments): a
+    // reordered/spliced history.
+    let alien = mint_real_turn(500_000, 9, step)?;
+    let forged = vec![turns.remove(0), alien];
+    match prove_turn_chain_recursive(&forged) {
+        Err(_) => Ok(()), // the temporal tooth bit: the forged chain is refused
+        Ok(_) => Err(
+            "MOCK-GRADE prover: a FORGED (discontinuous) turn chain folded to a root — \
+             the temporal continuity tooth does not bite"
+                .into(),
+        ),
+    }
 }

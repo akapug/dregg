@@ -61,11 +61,17 @@ const BASELINE: &[(&str, usize)] = &[
         ("circuit/src/constraint_prover.rs", 17),
         // ── NEEDS-PLUMBING (provable data not at this layer; must fail closed meanwhile) ──
         ("node/src/mcp/handlers_verify.rs", 3),      // dregg_compress_history: returns "valid" for create_test_chain synthetic data. WORST — live MCP tool.
-        ("dregg-genesis-snapshot/src/lib.rs", 2),    // cross-epoch "history proof" leg; forger can mint via prove_ivc.
+        // dregg-genesis-snapshot: PURGED 2026-07-16 — the mock "history proof" field was DROPPED
+        // (not renamed): the layer holds no per-turn provable data, and the leg was minterable by
+        // any forger. Tamper-refusal rests on the voucher/re-addressing consistency checks, and
+        // the crate's docs now say exactly what those are NOT.
         // ── WIRE-FEASIBLE (real data trivially available here) ──
         ("preflight/src/checks/proofs.rs", 5),       // promotion gate self-testing the SIMULATION and reporting green.
         ("preflight/src/checks/composition.rs", 2),
-        ("preflight/src/checks/sovereign.rs", 2),
+        // preflight/src/checks/sovereign.rs: PURGED 2026-07-16 — the ivc_history_compression check
+        // now mints REAL rotated turns (rotation_witness) and drives the REAL whole-chain fold
+        // (`ivc_turn_chain::prove_turn_chain_recursive` + `verify_whole_chain_proof_bytes`), with
+        // forged-chain / tampered-publics / wrong-anchor refusal teeth.
         ("preflight/src/checks/backends.rs", 2),
         // ── HONEST-RETIRE (dead but ARMED: the mock rides wire types / is_valid honors it) ──
         ("circuit/src/presentation.rs", 21),

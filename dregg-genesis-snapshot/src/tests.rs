@@ -1,10 +1,12 @@
 //! Driven demonstration of GENESIS-FROM-SNAPSHOT.
 //!
-//! The hard gate: export a cell-set (cells + IVC history proofs + content
-//! addresses + cross-epoch vouchers) → seed a FRESH genesis → the cells survive,
-//! re-address IDENTICALLY, and their history validates; a TAMPERED export
-//! (forged cell / broken proof) is REFUSED; a fresh genesis without the snapshot
-//! is empty (the baseline WIPE).
+//! The hard gate: export a cell-set (cells + content addresses + cross-epoch
+//! vouchers) → seed a FRESH genesis → the cells survive and re-address
+//! IDENTICALLY; a POST-FREEZE-TAMPERED export (forged cell) is REFUSED; a fresh
+//! genesis without the snapshot is empty (the baseline WIPE).
+//!
+//! (No history-proof assertions: the simulated-IVC "history proof" leg was
+//! REMOVED by the mock-proof purge — see lib.rs HONEST SCOPE.)
 
 use super::*;
 use dregg_cell::Cell;
@@ -54,23 +56,15 @@ fn universe_cell() -> Cell {
     cell
 }
 
-/// A couple of modeled prior state commitments (the character's history).
-fn prior_history() -> Vec<[u8; 32]> {
-    vec![[0x33; 32], [0x44; 32], [0x55; 32]]
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[test]
 fn honest_snapshot_survives_readdresses_and_verifies() {
-    let cells = vec![
-        (character_cell(), prior_history()),
-        (universe_cell(), vec![[0x66; 32]]),
-    ];
+    let cells = vec![character_cell(), universe_cell()];
 
     // FREEZE + EXPORT from the old chain, targeting the fresh genesis.
     let snapshot = GenesisSnapshot::export(old_fed(), new_fed(), 4096, &cells)
-        .expect("export builds a snapshot with IVC history proofs");
+        .expect("export builds a snapshot with cross-epoch vouchers");
     assert_eq!(snapshot.entries.len(), 2);
 
     // Remember the exported content-addresses.
@@ -108,13 +102,14 @@ fn honest_snapshot_survives_readdresses_and_verifies() {
     assert_eq!(survived_char.state.balance(), 1337);
     assert_eq!(survived_char.state.fields[0][0], 7);
 
-    // History validates directly too (the IVC proof accepts against old genesis).
+    // Each entry's voucher binds the exact frozen state (the consistency check
+    // seed_genesis re-runs).
     for entry in &snapshot.entries {
         assert_eq!(
-            verify_ivc(&entry.history, None),
-            IvcVerification::Valid,
-            "each carried cell's IVC history-from-old-genesis verifies",
+            entry.voucher.state_commitment,
+            entry.cell.state_commitment()
         );
+        assert_eq!(entry.voucher.cell_id, entry.cell.id());
     }
 }
 
@@ -130,15 +125,14 @@ fn baseline_empty_snapshot_seeds_an_empty_genesis() {
 #[test]
 fn tampered_forged_cell_is_refused_but_honest_imports() {
     // Non-vacuity: the SAME snapshot imports honestly; only the forged copy is refused.
-    let cells = vec![(character_cell(), prior_history())];
+    let cells = vec![character_cell()];
     let snapshot = GenesisSnapshot::export(old_fed(), new_fed(), 4096, &cells).unwrap();
 
     // Honest import succeeds.
     assert!(seed_genesis(&snapshot, new_fed()).is_ok());
 
     // Forge the carried cell: bump the character's level AFTER freeze. This
-    // changes the cell's state_commitment, breaking the voucher binding (and the
-    // IVC final-root binding).
+    // changes the cell's state_commitment, breaking the voucher binding.
     let mut forged = snapshot.clone();
     forged.entries[0].cell.state.fields[0][0] = 99; // level 7 → 99
 
@@ -153,54 +147,8 @@ fn tampered_forged_cell_is_refused_but_honest_imports() {
 }
 
 #[test]
-fn tampered_forged_cell_trips_history_binding_when_voucher_is_also_forged() {
-    // A more determined forger also rewrites the voucher's state_commitment to
-    // match the forged cell (so the voucher check passes) — but the IVC history's
-    // final root still binds the ORIGINAL state, so import is still refused.
-    let cells = vec![(character_cell(), prior_history())];
-    let snapshot = GenesisSnapshot::export(old_fed(), new_fed(), 4096, &cells).unwrap();
-
-    let mut forged = snapshot.clone();
-    forged.entries[0].cell.state.fields[0][0] = 99;
-    // Re-point the voucher's state commitment at the forged cell so check (2) passes.
-    let forged_sc = forged.entries[0].cell.state_commitment();
-    forged.entries[0].voucher.state_commitment = forged_sc;
-
-    let err = seed_genesis(&forged, new_fed()).expect_err("history binding still catches it");
-    match err {
-        ImportError::Entry {
-            index: 0,
-            kind: EntryReject::HistoryStateMismatch,
-        } => {}
-        other => panic!("expected HistoryStateMismatch, got {other:?}"),
-    }
-}
-
-#[test]
-fn tampered_broken_history_proof_is_refused() {
-    let cells = vec![(character_cell(), prior_history())];
-    let snapshot = GenesisSnapshot::export(old_fed(), new_fed(), 4096, &cells).unwrap();
-
-    // Break the IVC history proof: flip the accumulated hash. verify_ivc's digest
-    // binding no longer matches → the entry is refused.
-    let mut forged = snapshot.clone();
-    let acc = forged.entries[0].history.accumulated_hash;
-    forged.entries[0].history.accumulated_hash =
-        dregg_circuit::field::BabyBear::new(acc.0.wrapping_add(1));
-
-    let err = seed_genesis(&forged, new_fed()).expect_err("a broken proof is refused");
-    match err {
-        ImportError::Entry {
-            index: 0,
-            kind: EntryReject::HistoryInvalid(_),
-        } => {}
-        other => panic!("expected HistoryInvalid, got {other:?}"),
-    }
-}
-
-#[test]
 fn snapshot_minted_for_a_different_epoch_is_refused() {
-    let cells = vec![(character_cell(), prior_history())];
+    let cells = vec![character_cell()];
     let snapshot = GenesisSnapshot::export(old_fed(), new_fed(), 4096, &cells).unwrap();
 
     // Seeding a chain whose federation id is NOT the snapshot's target → refused.
@@ -215,13 +163,12 @@ fn snapshot_minted_for_a_different_epoch_is_refused() {
 fn snapshot_round_trips_through_serde() {
     // The snapshot is meant to be written to a file the operator hands to the
     // fresh-genesis boot, so it must serialize and deserialize losslessly.
-    let cells = vec![(character_cell(), prior_history())];
+    let cells = vec![character_cell()];
     let snapshot = GenesisSnapshot::export(old_fed(), new_fed(), 4096, &cells).unwrap();
 
     let json = serde_json::to_string(&snapshot).expect("serialize snapshot");
     let back: GenesisSnapshot = serde_json::from_str(&json).expect("deserialize snapshot");
-    // GenesisSnapshot has no PartialEq (IvcProof lacks it), so compare the
-    // canonical re-serialization instead.
+    // Compare the canonical re-serialization (GenesisSnapshot derives no PartialEq).
     assert_eq!(
         json,
         serde_json::to_string(&back).expect("re-serialize"),

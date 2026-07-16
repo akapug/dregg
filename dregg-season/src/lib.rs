@@ -449,21 +449,21 @@ pub fn advance_season(
             //    season's chain, target = the new season's chain).
             let source_fed = current.federation_id();
             let target_fed = season_federation_id(new_season_id, &new_epoch);
-            let mut cells: Vec<(Cell, Vec<[u8; 32]>)> = Vec::new();
+            let mut cells: Vec<Cell> = Vec::new();
             for c in &champions {
-                cells.push((champion_cell(c), Vec::new()));
+                cells.push(champion_cell(c));
             }
             // Prestige badges carry deterministically (BTreeMap iteration is sorted).
             for p in prestige.values() {
-                cells.push((prestige_cell(p), Vec::new()));
+                cells.push(prestige_cell(p));
             }
 
             let carry = GenesisSnapshot::export(source_fed, target_fed, started_at, &cells)
                 .map_err(SeasonError::Export)?;
 
             // 4. SEED the new genesis from the snapshot — validates every carried cell
-            //    (content-address stability + voucher binding + IVC history). A forged
-            //    carry is refused HERE. The honest legacy seeds cleanly.
+            //    (content-address stability + freeze-state voucher binding). A carry
+            //    forged AFTER freeze is refused HERE. The honest legacy seeds cleanly.
             let seeded = seed_genesis(&carry, target_fed).map_err(SeasonError::Import)?;
             let carried_cells = seeded.cells.len();
 

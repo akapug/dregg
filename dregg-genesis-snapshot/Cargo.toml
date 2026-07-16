@@ -2,9 +2,9 @@
 # EPOCH bump. A devnet re-genesis today WIPES everything (new committee keys →
 # new `federation_id` → a fresh chain; the old data-dir is archived). This crate
 # lets a re-genesis instead SEED the fresh chain with a frozen EXPORT of the old
-# chain's cell-set — each cell carrying an IVC proof of its history-from-old-genesis
-# and (reusing the vat-migration primitive) a cross-epoch MigrationVoucher — so
-# characters / leaderboards / universes SURVIVE a devnet bump.
+# chain's cell-set — each cell carrying (reusing the vat-migration primitive) a
+# cross-epoch MigrationVoucher — so characters / leaderboards / universes SURVIVE
+# a devnet bump.
 #
 # This is the vat-migration `CellExportBundle` primitive (plans/vat-migration-design.md)
 # GENERALIZED from cross-FEDERATION to cross-EPOCH: the "source federation" is the
@@ -13,9 +13,14 @@
 # content-addressed `CellId = derive_raw(public_key, token_id)` is federation- and
 # epoch-independent.
 #
+# NO history proof is carried: the earlier simulated-IVC "history proof" leg was
+# removed by the mock-proof purge (any forger could mint it — it read as a proof
+# and carried no soundness; see circuit-prove/tests/mock_proof_purge_gate.rs and
+# this crate's lib.rs HONEST SCOPE). Import checks are consistency checks
+# (re-addressing + freeze-state voucher binding), not source-chain authentication.
+#
 # Additive workspace member. CONSUMES `dregg-cell` (Cell / CellId / the
-# MigrationVoucher migration primitive) and `dregg-circuit` (the IVC history
-# proof: prove_ivc / verify_ivc / IvcProof). Touches NEITHER circuit/ NOR cell/.
+# MigrationVoucher migration primitive). Touches NEITHER circuit/ NOR cell/.
 [package]
 name = "dregg-genesis-snapshot"
 version.workspace = true
@@ -25,19 +30,14 @@ authors.workspace = true
 license.workspace = true
 homepage.workspace = true
 repository.workspace = true
-description = "Genesis-from-snapshot: export an old chain's cell-set (each cell + an IVC proof of its history-from-old-genesis + a cross-epoch migration voucher) into a snapshot, then import it to SEED a fresh genesis — cells survive a re-genesis, re-address identically via content-addressing, and their history is validated on import; a tampered export is refused."
+description = "Genesis-from-snapshot: export an old chain's cell-set (each cell + a cross-epoch migration voucher) into a snapshot, then import it to SEED a fresh genesis — cells survive a re-genesis, re-address identically via content-addressing, and a post-freeze-tampered export is refused. Carries NO history proof (the mock one was purged)."
 
 [dependencies]
 # The Cell / CellId content-addressed identity AND the vat-migration primitive
 # (`cell::migration::{MigrationVoucher, FederationId}`, `Cell::migration_voucher`)
 # that this crate generalizes from cross-federation to cross-epoch.
 dregg-cell = { path = "../cell" }
-# The IVC history proof: `ivc::{prove_ivc, verify_ivc, IvcProof, FoldDelta}` +
-# `field::BabyBear` + `fold_air::create_test_fold` (a valid single fold whose
-# roots we chain into the cell's history).
-dregg-circuit = { path = "../circuit" }
 serde = { workspace = true }
-blake3 = "1"
 
 [dev-dependencies]
 serde_json = { workspace = true }

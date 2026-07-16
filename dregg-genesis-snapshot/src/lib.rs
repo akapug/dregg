@@ -8,13 +8,13 @@
 //! Every character, leaderboard, and universe minted on the old chain is gone.
 //!
 //! The vat-migration design (`plans/vat-migration-design.md`) already specifies a
-//! `CellExportBundle` — a cell carried FROM one federation TO another with an IVC
-//! proof of its history-from-genesis and a state-commitment binding, so the target
-//! can install it without trusting the source. That primitive is **cross-federation**.
-//! This crate **generalizes it to cross-EPOCH**: the "source federation" is the OLD
-//! chain (committee epoch N), the "destination federation" is the FRESH GENESIS
-//! (epoch N+1). A re-genesis can then SEED the new chain with a frozen EXPORT of the
-//! old cell-set instead of wiping it.
+//! `CellExportBundle` — a cell carried FROM one federation TO another with a
+//! state-commitment binding, so the target can install it without re-executing the
+//! source. That primitive is **cross-federation**. This crate **generalizes it to
+//! cross-EPOCH**: the "source federation" is the OLD chain (committee epoch N),
+//! the "destination federation" is the FRESH GENESIS (epoch N+1). A re-genesis can
+//! then SEED the new chain with a frozen EXPORT of the old cell-set instead of
+//! wiping it.
 //!
 //! ```text
 //!   OLD chain (epoch N)                         FRESH genesis (epoch N+1)
@@ -26,10 +26,8 @@
 //!       · content-address (CellId)                     (verify_id_integrity)
 //!       · cross-epoch MigrationVoucher              · voucher binds this exact state
 //!         (from = old fed, to = new fed)               (from/to + state_commitment)
-//!       · IVC proof of history-from-old-genesis    · IVC history verifies AND its
-//!                                                      final root binds THIS cell
 //!                                                 ⇒ carried-forward cells re-address
-//!                                                    IDENTICALLY, history validated.
+//!                                                    IDENTICALLY, freeze-state bound.
 //! ```
 //!
 //! ## Why the imported cell re-addresses identically
@@ -43,11 +41,8 @@
 //! ## What is refused on import (non-vacuous tamper rejection)
 //!
 //! * A **forged cell** (e.g. a balance bumped after freeze) changes the cell's
-//!   `state_commitment`, which breaks BOTH the migration voucher binding
-//!   ([`EntryReject::VoucherMismatch`]) and the IVC history's final-root binding
-//!   ([`EntryReject::HistoryStateMismatch`]).
-//! * A **broken history proof** (a flipped accumulated hash / trace commitment)
-//!   fails [`dregg_circuit::ivc::verify_ivc`] → [`EntryReject::HistoryInvalid`].
+//!   `state_commitment`, which breaks the migration voucher binding
+//!   ([`EntryReject::VoucherMismatch`]).
 //! * A cell whose **content-address does not recompute** → [`EntryReject::AddressMismatch`]
 //!   / [`EntryReject::IdentityBroken`].
 //! * A snapshot minted for a **different destination epoch** → [`ImportError::WrongDestination`].
@@ -55,20 +50,32 @@
 //! The honest cell in every one of these pairs imports cleanly, so the rejection
 //! is non-vacuous.
 //!
-//! ## HONEST SCOPE
+//! ## HONEST SCOPE — what these checks are, and are NOT
+//!
+//! The import checks are **CONSISTENCY checks over unauthenticated data**: they
+//! bind the carried cell to its own freeze-time voucher and its own content
+//! address, so post-freeze mutation of an entry is caught. They are **NOT a
+//! history proof and NOT source-chain authentication** — a forger who authors an
+//! entire entry (cell + voucher, self-consistent) passes them. Authenticity of a
+//! snapshot therefore rests on the channel that delivers it (the operator hands
+//! the snapshot file to the fresh-genesis boot).
+//!
+//! **THE HISTORY PROOF WAS REMOVED, NOT FAKED** (mock-proof purge, 2026-07-16;
+//! `circuit-prove/tests/mock_proof_purge_gate.rs`). Earlier revisions attached a
+//! per-entry "IVC history proof" minted by the simulated IVC in
+//! `circuit/src/ivc.rs` — a hash-chain over synthetic fold deltas whose verifier
+//! only recomputes a digest of the proof's OWN public data. Anyone who could
+//! author a snapshot entry could mint a passing "history proof" for it, so the
+//! leg added ZERO soundness over the voucher binding while *reading* as a
+//! cryptographic history claim. A REAL history leg needs the per-turn
+//! `FinalizedTurn` data (the rotated whole-turn descriptor proofs) folded by
+//! `dregg_circuit_prove::ivc_turn_chain::prove_turn_chain_recursive` — data this
+//! layer does not hold (the exporter has only the `Cell`); wiring it requires the
+//! node to persist `FinalizedTurn`s at finalization (see the purge-gate module
+//! docs). Until then, this crate carries NO history claim at all.
 //!
 //! * **Real**: the export/import carry-forward, the content-address re-addressing
-//!   stability, and the layered history/state-commitment validation on import.
-//! * **NAMED CAVEAT — the unsound fold.** The IVC history leg is a real
-//!   [`dregg_circuit::ivc::IvcProof`] built with the real prover/verifier over a
-//!   real fold chain — BUT the vat-migration story it generalizes leans on a
-//!   **bridge fold that the project flags UNSOUND** (see memory
-//!   `project-carrier-deployment-architecture` / `project-universal-fold-buff-lightclient`).
-//!   The history proof here models the cell's turn history as a chain of fold
-//!   deltas (a modeled stand-in for the real per-turn state-transition witnesses);
-//!   the *chain structure* (linkage, ordering, endpoint binding) is sound, but the
-//!   soundness of the history leg as a whole inherits that flagged fold. The
-//!   state-commitment voucher binding is an independent, unconditional second check.
+//!   stability, and the freeze-state voucher consistency check on import.
 //! * **Deploy wiring** (NOT built here): threading [`GenesisSnapshot::export`] into a
 //!   node's freeze path and [`seed_genesis`] into `node/src/genesis.rs` /
 //!   `deploy/genesis/generate.sh` so a live re-genesis reads a snapshot file. This
@@ -76,97 +83,13 @@
 
 use dregg_cell::migration::{FederationId, MigrationError as CellMigrationError, MigrationVoucher};
 use dregg_cell::{Cell, CellId};
-use dregg_circuit::dsl::fold::create_test_fold;
-use dregg_circuit::field::{BABYBEAR_P, BabyBear};
-use dregg_circuit::ivc::{
-    FoldDelta, IvcProof, IvcVerification, MAX_FOLD_DEPTH, prove_ivc, verify_ivc,
-};
 use serde::{Deserialize, Serialize};
 
-/// Domain tag for deriving the old chain's IVC genesis root from its federation id.
-const OLD_GENESIS_DOMAIN: &str = "dregg-genesis-snapshot:old-genesis-root v1";
-/// Domain tag for deriving a cell's state-history felt from its state commitment.
-const CELL_STATE_DOMAIN: &str = "dregg-genesis-snapshot:cell-state-root v1";
-
-/// Map a 32-byte commitment to a single BabyBear felt (domain-separated BLAKE3 → mod p).
-///
-/// This is the modeled projection of a 32-byte commitment into the field the IVC
-/// hash chain operates over. It is deterministic, so the exporter's and importer's
-/// derivations agree.
-fn felt_from_bytes(domain: &str, bytes: &[u8; 32]) -> BabyBear {
-    let d = blake3::derive_key(domain, bytes);
-    let v = u32::from_le_bytes([d[0], d[1], d[2], d[3]]);
-    BabyBear::new(v % BABYBEAR_P)
-}
-
-/// The OLD chain's IVC genesis root — the `initial_root` every carried cell's
-/// history proof starts from. Derived from the source federation id so a proof
-/// minted against a different old chain will not verify here.
-fn old_genesis_root(source_federation_id: &FederationId) -> BabyBear {
-    felt_from_bytes(OLD_GENESIS_DOMAIN, source_federation_id)
-}
-
-/// The IVC final root that binds a cell's CURRENT state — the last root in its
-/// history chain. A forged cell (mutated state) yields a different felt, so a
-/// history proof minted for the honest cell will not bind the forged one.
-fn cell_state_root(cell: &Cell) -> BabyBear {
-    felt_from_bytes(CELL_STATE_DOMAIN, &cell.state_commitment())
-}
-
-/// Build the IVC proof of a cell's history from the OLD chain's genesis to its
-/// current state.
-///
-/// `prior_state_commitments` is the (modeled) sequence of the cell's state
-/// commitments at each historical turn, oldest first, EXCLUDING the current
-/// state. The chain walks: `old_genesis_root → felt(prior_0) → … → felt(prior_k)
-/// → cell_state_root(current)`, so the proof's `final_root` binds the cell's
-/// present state and its `initial_root` binds the old genesis.
-///
-/// Each step is a real [`FoldDelta`] (a no-removal fold from
-/// [`create_test_fold`], whose roots we set to walk the history), and the whole
-/// chain is proven by the real [`prove_ivc`].
-fn build_history_proof(
-    source_federation_id: &FederationId,
-    cell: &Cell,
-    prior_state_commitments: &[[u8; 32]],
-) -> Result<IvcProof, SnapshotError> {
-    let genesis = old_genesis_root(source_federation_id);
-
-    // History roots: each prior state's felt, then the CURRENT state felt.
-    let mut roots: Vec<BabyBear> = prior_state_commitments
-        .iter()
-        .map(|s| felt_from_bytes(CELL_STATE_DOMAIN, s))
-        .collect();
-    roots.push(cell_state_root(cell));
-
-    if roots.len() as u32 > MAX_FOLD_DEPTH {
-        return Err(SnapshotError::HistoryTooLong {
-            steps: roots.len(),
-            max: MAX_FOLD_DEPTH as usize,
-        });
-    }
-
-    // Chain the roots into fold deltas: delta[i].old_root == delta[i-1].new_root.
-    let mut deltas = Vec::with_capacity(roots.len());
-    let mut prev = genesis;
-    for r in roots {
-        // A valid single fold (0 removals, 1 check) whose roots we overwrite to
-        // walk this cell's history. The fold's checks-commitment / trace stay
-        // internally consistent because the AIR recomputes them from the roots.
-        let mut w = create_test_fold(0, 1);
-        w.old_root = prev;
-        w.new_root = r;
-        deltas.push(FoldDelta::new(w));
-        prev = r;
-    }
-
-    prove_ivc(genesis, deltas).ok_or(SnapshotError::ProofGeneration)
-}
-
 /// One carried cell in a [`GenesisSnapshot`]: the full cell, its content-address,
-/// a cross-epoch migration voucher, and an IVC proof of its history-from-old-genesis.
+/// and a cross-epoch migration voucher.
 ///
-/// (No `PartialEq`/`Eq`: [`IvcProof`] does not implement them.)
+/// Deliberately **no history field**: see the module's HONEST SCOPE — this layer
+/// holds no provable per-turn data, and a mock "history proof" is worse than none.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SnapshotEntry {
     /// The full cell state carried forward.
@@ -178,16 +101,11 @@ pub struct SnapshotEntry {
     /// ([`Cell::migration_voucher`](dregg_cell::Cell::migration_voucher)) reused
     /// with `from = old federation id`, `to = new (fresh-genesis) federation id`.
     /// It binds the exact pre-freeze `state_commitment`, so a state forged after
-    /// freeze is caught independently of the IVC leg.
+    /// freeze is caught (a consistency check, not source-chain authentication).
     pub voucher: MigrationVoucher,
-    /// IVC proof that this cell's state followed a valid history from the OLD
-    /// chain's genesis to its present state.
-    pub history: IvcProof,
 }
 
 /// A frozen EXPORT of an old chain's cell-set, minted to seed a fresh genesis.
-///
-/// (No `PartialEq`/`Eq`: its entries carry an [`IvcProof`], which has neither.)
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GenesisSnapshot {
     /// The OLD chain's federation id (committee epoch N).
@@ -202,8 +120,8 @@ pub struct GenesisSnapshot {
 }
 
 impl GenesisSnapshot {
-    /// FREEZE + EXPORT: build a snapshot of `cells` (each paired with its prior
-    /// state-commitment history) targeting the fresh-genesis `target_federation_id`.
+    /// FREEZE + EXPORT: build a snapshot of `cells` targeting the fresh-genesis
+    /// `target_federation_id`.
     ///
     /// This models the operator flow of a carry-forward re-genesis: mint the new
     /// committee keys first (→ `target_federation_id`), then freeze the old
@@ -212,10 +130,10 @@ impl GenesisSnapshot {
         source_federation_id: FederationId,
         target_federation_id: FederationId,
         frozen_at_height: u64,
-        cells: &[(Cell, Vec<[u8; 32]>)],
+        cells: &[Cell],
     ) -> Result<Self, SnapshotError> {
         let mut entries = Vec::with_capacity(cells.len());
-        for (cell, prior) in cells {
+        for cell in cells {
             // The vat-migration voucher, generalized cross-epoch: from = old fed,
             // to = fresh-genesis fed, mode preserved, height = freeze height.
             let voucher = cell
@@ -226,11 +144,9 @@ impl GenesisSnapshot {
                     frozen_at_height,
                 )
                 .map_err(SnapshotError::Voucher)?;
-            let history = build_history_proof(&source_federation_id, cell, prior)?;
             entries.push(SnapshotEntry {
                 content_address: cell.id(),
                 voucher,
-                history,
                 cell: cell.clone(),
             });
         }
@@ -260,8 +176,9 @@ pub struct SeededGenesis {
 /// genesis's carried-forward cell-set.
 ///
 /// Refuses (returns `Err`) if the snapshot targets a different destination epoch,
-/// or if ANY entry fails validation (forged cell / broken history / non-stable
-/// address). The honest snapshot seeds cleanly.
+/// or if ANY entry fails validation (post-freeze forged cell / non-stable
+/// address). The honest snapshot seeds cleanly. These are CONSISTENCY checks over
+/// unauthenticated data — see the module's HONEST SCOPE for what they do NOT claim.
 pub fn seed_genesis(
     snapshot: &GenesisSnapshot,
     new_federation_id: FederationId,
@@ -301,7 +218,11 @@ fn validate_entry(snapshot: &GenesisSnapshot, entry: &SnapshotEntry) -> Result<(
     // 2. Cross-epoch migration voucher binding (the vat-migration primitive):
     //    the voucher must bind THIS cell's id + exact state commitment, and the
     //    old→new federation pair. A state forged after freeze changes
-    //    `state_commitment` and is caught here, independent of the IVC leg.
+    //    `state_commitment` and is caught here.
+    //
+    //    (No history leg: the layer holds no per-turn provable data, and the
+    //    simulated-IVC "history proof" that used to sit here was minterable by
+    //    any forger — removed by the mock-proof purge, see the module docs.)
     let state_commitment = entry.cell.state_commitment();
     if entry.voucher.cell_id != entry.cell.id()
         || entry.voucher.state_commitment != state_commitment
@@ -309,17 +230,6 @@ fn validate_entry(snapshot: &GenesisSnapshot, entry: &SnapshotEntry) -> Result<(
         || entry.voucher.to != snapshot.target_federation_id
     {
         return Err(EntryReject::VoucherMismatch);
-    }
-
-    // 3. IVC history-from-old-genesis: verify the proof against the old chain's
-    //    genesis root, AND check its final root binds THIS cell's present state.
-    let genesis = old_genesis_root(&snapshot.source_federation_id);
-    match verify_ivc(&entry.history, Some(genesis)) {
-        IvcVerification::Valid => {}
-        other => return Err(EntryReject::HistoryInvalid(other)),
-    }
-    if entry.history.final_root != cell_state_root(&entry.cell) {
-        return Err(EntryReject::HistoryStateMismatch);
     }
 
     Ok(())
@@ -330,23 +240,12 @@ fn validate_entry(snapshot: &GenesisSnapshot, entry: &SnapshotEntry) -> Result<(
 pub enum SnapshotError {
     /// The underlying vat-migration voucher could not be minted (terminal / broken cell).
     Voucher(CellMigrationError),
-    /// The modeled history exceeds the IVC fold-depth bound.
-    HistoryTooLong { steps: usize, max: usize },
-    /// The IVC prover rejected the history chain (should not happen for a well-formed chain).
-    ProofGeneration,
 }
 
 impl core::fmt::Display for SnapshotError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Voucher(e) => write!(f, "migration voucher mint failed: {e}"),
-            Self::HistoryTooLong { steps, max } => {
-                write!(
-                    f,
-                    "history too long: {steps} steps exceeds fold-depth bound {max}"
-                )
-            }
-            Self::ProofGeneration => f.write_str("IVC history proof generation failed"),
         }
     }
 }
@@ -389,10 +288,6 @@ pub enum EntryReject {
     AddressMismatch,
     /// The migration voucher does not bind this cell's id/state or the old→new federations.
     VoucherMismatch,
-    /// The IVC history proof did not verify against the old chain's genesis.
-    HistoryInvalid(IvcVerification),
-    /// The IVC history's final root does not bind this cell's present state (forged state).
-    HistoryStateMismatch,
 }
 
 impl core::fmt::Display for EntryReject {
@@ -401,10 +296,6 @@ impl core::fmt::Display for EntryReject {
             Self::IdentityBroken => f.write_str("cell does not re-address to its own id"),
             Self::AddressMismatch => f.write_str("declared content-address does not recompute"),
             Self::VoucherMismatch => f.write_str("cross-epoch migration voucher binding broken"),
-            Self::HistoryInvalid(v) => write!(f, "IVC history proof invalid: {v:?}"),
-            Self::HistoryStateMismatch => {
-                f.write_str("IVC history final root does not bind this cell's state (forged)")
-            }
         }
     }
 }
