@@ -1,0 +1,25 @@
+# Documentation reference-integrity check.
+# Runs scripts/check-doc-refs.sh, which fails when docs reference files that
+# no longer exist.
+#
+# MANUAL-ONLY for now: the current tree carries ~468 pre-existing dead refs
+# (mostly churn in the audit/ + SUPERSEDED/ campaign docs), so a pull_request
+# trigger would red every docs PR against drift a given PR did not introduce.
+# Re-enable the pull_request trigger (paths: docs/** site/**
+# scripts/check-doc-refs.sh) once the dead-ref cleanup pass lands and this runs
+# green on main -- then it ratchets from green.
+name: docs-refs
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check-doc-refs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check documentation references
+        run: bash scripts/check-doc-refs.sh

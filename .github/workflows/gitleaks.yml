@@ -1,0 +1,48 @@
+# Secret-scan in CI — the server-side backstop to the local git hooks.
+#
+# Why: .gitleaks.toml + scripts/git-hooks/ make a real secret in a staged/pushed diff BLOCK the
+# operation — but only on a box whose hooks are installed. An un-hooked clone pushes unscanned.
+# This workflow re-runs the SAME curated ruleset (.gitleaks.toml) on every PR and every push to
+# main, so the net exists regardless of who (or what) pushed. Any finding FAILS the check.
+#
+# It installs a pinned gitleaks binary and runs `gitleaks dir` against the checked-out tree, exactly
+# as the config's own "scan the working tree" example does — no third-party action, no license gate.
+name: gitleaks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    name: secret-scan (gitleaks)
+    runs-on: ubuntu-latest
+    env:
+      GITLEAKS_VERSION: 8.21.2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install gitleaks ${{ env.GITLEAKS_VERSION }}
+        run: |
+          set -euo pipefail
+          url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -fsSL "$url" -o /tmp/gitleaks.tar.gz
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          sudo install -m 0755 /tmp/gitleaks "/usr/local/bin/gitleaks"
+          gitleaks version
+
+      - name: Scan working tree with committed config
+        run: |
+          set -euo pipefail
+          gitleaks dir . \
+            --config .gitleaks.toml \
+            --no-banner \
+            --redact \
+            --verbose \
+            --exit-code 1
