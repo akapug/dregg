@@ -1,5 +1,12 @@
 # HORIZONLOG — the named-follow-up burn-down
 
+## ⚑ PAGES DEPLOY BLOCKED ON THE V3 LIGHT-CLIENT ENVELOPE (2026-07-16)
+The paper route is assembled correctly, but the exact reuse-mode Pages build remains red after
+that step: `site/light-client/history.json` carries proof-envelope version 3 while the current
+verifier reads version 4. `REUSE_WASM=1 GPUI=0 scripts/build-pages-dist.sh` refuses it at the
+over-wire recursion check. Closure is to regenerate the pre-folded history with the current
+circuit/VK and retain the fail-closed freshness tooth; do not bypass or soften the gate.
+
 ## ⚑ THIRD-PARTY PREDICATE VERIFICATION — the last fail-closed hole closed (2026-07-16, on disk, uncommitted)
 The predicate stack failed CLOSED for a third party: `verify_disclosure_presentation` refused every
 predicate proof because it had no sound source for the expected `fact_commitment` — the prover chose
