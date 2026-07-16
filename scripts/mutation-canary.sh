@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # mutation-canary.sh — empirical load-bearing/decorative map for the supply/burn proofs.
 #
-# Mutates the burn IMPLEMENTATION (recKBurnAsset in TurnExecutorFull.lean and issuerBurnK in
-# IssuerMove.lean), lake-builds the NARROW supply/burn refinement chain, and reports which targets
+# Mutates the burn IMPLEMENTATION (recKBurnAsset in Exec/TurnExecutorFull/PerAsset.lean and
+# issuerBurnK in IssuerMove.lean), lake-builds the NARROW supply/burn refinement chain, and reports which targets
 # go RED vs stay GREEN. Each mutation is applied, built, then REVERTED (git restore) so mutations
 # are independent. Run from anywhere; paths are repo-relative.
 #
@@ -21,6 +21,10 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 META="$REPO/metatheory"
 IM="$META/Dregg2/Exec/IssuerMove.lean"
 TE="$META/Dregg2/Exec/TurnExecutorFull.lean"
+# `TurnExecutorFull.lean` was SPLIT (be85abd07, byte-identical): the per-asset burn impl
+# (`recKBurnAsset`) and the `fullActionInvA` keystone moved HERE; `$TE` is now a re-export shell.
+# Mutations anchored on that text MUST target `$PA` — see the `subst` guard below.
+PA="$META/Dregg2/Exec/TurnExecutorFull/PerAsset.lean"
 ER="$META/Dregg2/Spec/ExecRefinement.lean"
 EA="$META/Dregg2/Exec/EffectsAuthority.lean"
 
@@ -43,11 +47,13 @@ SNAPDIR="${TMPDIR:-/tmp}/mutation-canary"
 mkdir -p "$SNAPDIR"
 cp "$IM" "$SNAPDIR/IssuerMove.snap"
 cp "$TE" "$SNAPDIR/TurnExecutorFull.snap"
+cp "$PA" "$SNAPDIR/PerAsset.snap"
 cp "$ER" "$SNAPDIR/ExecRefinement.snap"
 cp "$EA" "$SNAPDIR/EffectsAuthority.snap"
 restore() {
   cp "$SNAPDIR/IssuerMove.snap" "$IM"
   cp "$SNAPDIR/TurnExecutorFull.snap" "$TE"
+  cp "$SNAPDIR/PerAsset.snap" "$PA"
   cp "$SNAPDIR/ExecRefinement.snap" "$ER"
   cp "$SNAPDIR/EffectsAuthority.snap" "$EA"
 }
@@ -91,37 +97,72 @@ run_one() {
   echo ""
 }
 
+# ---- the ANTI-DRIFT guard (every mutation MUST route through `subst`) ----
+#
+# WHY THIS EXISTS: a mutation whose anchor has drifted matches NOTHING and is a SILENT NO-OP. The
+# canary then builds UNMUTATED code, sees GREEN, and reports "should-RED stayed GREEN" — i.e. it
+# blames the PROOF for the canary's own blindness. That is not hypothetical: the byte-identical
+# split of TurnExecutorFull.lean (be85abd07) moved every burn/keystone anchor into PerAsset.lean,
+# so each `$TE` mutation silently no-op'd and the nightly gate misreported "a load-bearing proof
+# regressed to decorative" for 3 days. The proof was fine the whole time.
+#
+# `subst` converts that ENTIRE failure class from a silent, misattributed GREEN into a loud, correctly
+# -named FATAL: it applies the perl substitution and hard-fails unless the file's bytes actually
+# changed. A no-op mutation can no longer be mistaken for a live one. `trap restore EXIT` is armed
+# before any mutation runs, so a FATAL still restores the tree from the file-copy snapshots.
+subst() {
+  local name="$1" file="$2" expr="$3"
+  local before after
+  before="$(shasum -a 256 "$file" | cut -d' ' -f1)"
+  perl -0pi -e "$expr" "$file"
+  after="$(shasum -a 256 "$file" | cut -d' ' -f1)"
+  if [[ "$before" == "$after" ]]; then
+    echo "" >&2
+    echo "FATAL: ANCHOR DRIFT — mutation $name matched nothing in ${file#$REPO/}" >&2
+    echo "       the canary is blind, not the proof." >&2
+    echo "       A mutation that matches nothing is a SILENT NO-OP: it builds UNMUTATED code," >&2
+    echo "       goes GREEN, and gets misreported as 'a load-bearing proof regressed to decorative'." >&2
+    echo "       FIX THE CANARY, NOT THE PROOF: re-anchor '$name' in scripts/mutation-canary.sh" >&2
+    echo "       against the CURRENT text of that file (it was refactored out from under us)." >&2
+    exit 1
+  fi
+}
+
 # ---- the mutations (one-line patches to the impl defs) ----
 
 mut_baseline() { :; }
 
-# AUTH-DROP: replace the burn authority condition with `True` in BOTH impl defs.
-# (This worktree predates the Stage-3 split, so the gate is `mintAuthorizedB k.caps actor a = true`,
-#  not the `(actor = cell ∨ …)` disjunction. The mutation is the same idea: anyone can burn.)
+# AUTH-DROP: replace the burn authority condition with `True` in BOTH impl defs — anyone can burn.
+# The gate is now the Stage-3 SPLIT disjunction `(actor = cell ∨ mintAuthorizedB k.caps actor a = true)`
+# (permissionless holder self-redeem ∨ issuer authority). Dropping the WHOLE disjunction — not just the
+# `mintAuthorizedB` disjunct — is the strongest form of the same idea: burn authority is unconstrained.
 mut_auth_drop() {
-  perl -0pi -e 's/if mintAuthorizedB k\.caps actor a = true \xe2\x88\xa7 0 \xe2\x89\xa4 amt \xe2\x88\xa7 amt \xe2\x89\xa4 k\.bal cell a/if True \xe2\x88\xa7 0 \xe2\x89\xa4 amt \xe2\x88\xa7 amt \xe2\x89\xa4 k.bal cell a/' "$TE"
-  perl -0pi -e 's/if mintAuthorizedB k\.caps actor \(issuerOf a\) = true \xe2\x88\xa7 0 \xe2\x89\xa4 amt \xe2\x88\xa7 amt \xe2\x89\xa4 k\.bal src a/if True \xe2\x88\xa7 0 \xe2\x89\xa4 amt \xe2\x88\xa7 amt \xe2\x89\xa4 k.bal src a/' "$IM"
+  subst AUTH-DROP "$PA" 's/if \(actor = cell \xe2\x88\xa8 mintAuthorizedB k\.caps actor a = true\) \xe2\x88\xa7 0 \xe2\x89\xa4 amt \xe2\x88\xa7 amt \xe2\x89\xa4 k\.bal cell a/if True \xe2\x88\xa7 0 \xe2\x89\xa4 amt \xe2\x88\xa7 amt \xe2\x89\xa4 k.bal cell a/'
+  subst AUTH-DROP "$IM" 's/if \(actor = src \xe2\x88\xa8 mintAuthorizedB k\.caps actor \(issuerOf a\) = true\) \xe2\x88\xa7 0 \xe2\x89\xa4 amt \xe2\x88\xa7 amt \xe2\x89\xa4 k\.bal src a/if True \xe2\x88\xa7 0 \xe2\x89\xa4 amt \xe2\x88\xa7 amt \xe2\x89\xa4 k.bal src a/'
 }
 
 # CONSERVATION-BREAK: debit the holder but DON'T credit the well (recBalCredit -amt, not the
 # conserving recTransferBal). This breaks Sigma=0.
 mut_conservation_break() {
-  perl -0pi -e 's/some \{ k with bal := recTransferBal k\.bal cell a a amt \}/some { k with bal := recBalCredit k.bal cell a (-amt) }/' "$TE"
-  perl -0pi -e 's/some \{ k with bal := recTransferBal k\.bal src \(issuerOf a\) a amt \}/some { k with bal := recBalCredit k.bal src a (-amt) }/' "$IM"
+  subst CONSERVATION-BREAK "$PA" 's/some \{ k with bal := recTransferBal k\.bal cell a a amt \}/some { k with bal := recBalCredit k.bal cell a (-amt) }/'
+  subst CONSERVATION-BREAK "$IM" 's/some \{ k with bal := recTransferBal k\.bal src \(issuerOf a\) a amt \}/some { k with bal := recBalCredit k.bal src a (-amt) }/'
 }
 
 # AVAILABILITY-DROP: drop the `amt <= k.bal cell a` (resp. src a) precondition (allow over-burn)
 # from the LIVE burn def only. Anchored on the multi-line LIVE shape (the `… k.bal cell a\n  ∧ cell ∈`
 # wrap) so the single-line LEGACY def at recKBurnAssetLegacy is NOT touched.
 mut_availability_drop() {
-  perl -0pi -e 's/\xe2\x88\xa7 0 \xe2\x89\xa4 amt \xe2\x88\xa7 amt \xe2\x89\xa4 k\.bal cell a\n      \xe2\x88\xa7 cell \xe2\x88\x88 k\.accounts \xe2\x88\xa7 a/\xe2\x88\xa7 0 \xe2\x89\xa4 amt\n      \xe2\x88\xa7 cell \xe2\x88\x88 k.accounts \xe2\x88\xa7 a/' "$TE"
-  perl -0pi -e 's/\xe2\x88\xa7 0 \xe2\x89\xa4 amt \xe2\x88\xa7 amt \xe2\x89\xa4 k\.bal src a\n      \xe2\x88\xa7 src \xe2\x88\x88 k\.accounts/\xe2\x88\xa7 0 \xe2\x89\xa4 amt\n      \xe2\x88\xa7 src \xe2\x88\x88 k.accounts/' "$IM"
+  # NO /g: the FIRST match is the LIVE def (PerAsset.lean:117). The same multi-line shape recurs on
+  # the downstream `by_cases hg` proof lines; rewriting those TOO would weaken the mutation (a def and
+  # its by_cases mutated CONSISTENTLY can still close the proof, masking the bite). Mutate the def only.
+  subst AVAILABILITY-DROP "$PA" 's/\xe2\x88\xa7 0 \xe2\x89\xa4 amt \xe2\x88\xa7 amt \xe2\x89\xa4 k\.bal cell a\n      \xe2\x88\xa7 cell \xe2\x88\x88 k\.accounts \xe2\x88\xa7 a/\xe2\x88\xa7 0 \xe2\x89\xa4 amt\n      \xe2\x88\xa7 cell \xe2\x88\x88 k.accounts \xe2\x88\xa7 a/'
+  subst AVAILABILITY-DROP "$IM" 's/\xe2\x88\xa7 0 \xe2\x89\xa4 amt \xe2\x88\xa7 amt \xe2\x89\xa4 k\.bal src a\n      \xe2\x88\xa7 src \xe2\x88\x88 k\.accounts/\xe2\x88\xa7 0 \xe2\x89\xa4 amt\n      \xe2\x88\xa7 src \xe2\x88\x88 k.accounts/'
 }
 
 # DISTINCTNESS-DROP: drop `cell != a` (resp. `src != issuerOf a`).
 mut_distinctness_drop() {
-  perl -0pi -e 's/\xe2\x88\xa7 cell \xe2\x89\xa0 a\n      \xe2\x88\xa7 cellLifecycleLive k a = true then/\xe2\x88\xa7 cellLifecycleLive k a = true then/' "$TE"
-  perl -0pi -e 's/\xe2\x88\xa7 src \xe2\x89\xa0 issuerOf a\n      \xe2\x88\xa7 cellLifecycleLive k \(issuerOf a\) = true then/\xe2\x88\xa7 cellLifecycleLive k (issuerOf a) = true then/' "$IM"
+  subst DISTINCTNESS-DROP "$PA" 's/\xe2\x88\xa7 cell \xe2\x89\xa0 a\n      \xe2\x88\xa7 cellLifecycleLive k a = true then/\xe2\x88\xa7 cellLifecycleLive k a = true then/'
+  subst DISTINCTNESS-DROP "$IM" 's/\xe2\x88\xa7 src \xe2\x89\xa0 issuerOf a\n      \xe2\x88\xa7 cellLifecycleLive k \(issuerOf a\) = true then/\xe2\x88\xa7 cellLifecycleLive k (issuerOf a) = true then/'
 }
 
 # AUTH-GRAPH-DROP: trivialize the INDEPENDENT authority-connectivity spec `authConnects`
@@ -132,7 +173,7 @@ mut_distinctness_drop() {
 # severed authority-graph leg is empirically load-bearing, not decorative. If it stays GREEN, the
 # `execGraph`-defeq sever did not produce a constraining reference.
 mut_auth_graph_drop() {
-  perl -0pi -e 's/(def authConnects \(caps : Caps\) \(h : Label\) \(c : Spec\.Cap Label ExecRights\) : Prop :=\n)  \xe2\x88\x83 cap, cap \xe2\x88\x88 caps h \xe2\x88\xa7 authConnectsCap c\.target cap/${1}  True  -- AUTH-GRAPH-DROP mutation/' "$ER"
+  subst AUTH-GRAPH-DROP "$ER" 's/(def authConnects \(caps : Caps\) \(h : Label\) \(c : Spec\.Cap Label ExecRights\) : Prop :=\n)  \xe2\x88\x83 cap, cap \xe2\x88\x88 caps h \xe2\x88\xa7 authConnectsCap c\.target cap/${1}  True  -- AUTH-GRAPH-DROP mutation/'
 }
 
 # LEDGER-SPEC-DROP: trivialize the per-action ATTESTATION CONTENT of `fullActionInvA` by replacing its
@@ -144,7 +185,7 @@ mut_auth_graph_drop() {
 # verdict on those two specs FAILS — confirming the retargeted value leg is load-bearing, not decorative.
 # If it stays GREEN, the `fullActionInvA` attestation content is empirically vacuous.
 mut_ledger_spec_drop() {
-  perl -0pi -e "s/\\(s\\.log\\.length < s'\\.log\\.length\\) \\xe2\\x88\\xa7/(True) \\xe2\\x88\\xa7  -- LEDGER-SPEC-DROP mutation/" "$TE"
+  subst LEDGER-SPEC-DROP "$PA" "s/\\(s\\.log\\.length < s'\\.log\\.length\\) \\xe2\\x88\\xa7/(True) \\xe2\\x88\\xa7  -- LEDGER-SPEC-DROP mutation/"
 }
 
 # NONAMP-WEAKEN: trivialize the AUTHORITY non-amplification predicate `IsNonAmplifying` (the headline of
@@ -157,7 +198,7 @@ mut_ledger_spec_drop() {
 # Anchored on the `def IsNonAmplifying … : Prop :=\n  capAuthConferred granted ⊆ capAuthConferred held`
 # body (EffectsAuthority.lean), leaving the signature intact.
 mut_nonamp_weaken() {
-  perl -0pi -e 's/(def IsNonAmplifying \(held granted : ECap\) : Prop :=\n)  capAuthConferred granted \xe2\x8a\x86 capAuthConferred held/${1}  True  -- NONAMP-WEAKEN mutation/' "$EA"
+  subst NONAMP-WEAKEN "$EA" 's/(def IsNonAmplifying \(held granted : ECap\) : Prop :=\n)  capAuthConferred granted \xe2\x8a\x86 capAuthConferred held/${1}  True  -- NONAMP-WEAKEN mutation/'
 }
 
 trap restore EXIT
@@ -257,9 +298,12 @@ run_auth_graph() {
 # GATE: the CI regression gate (nightly). Builds the C-c1 keystone modules UNMUTATED (baseline must
 # be GREEN), then applies the two HEAD-targeting proof-integrity mutations and requires BOTH to go
 # RED. A should-RED-stays-GREEN means a load-bearing proof (the C-c1 authority leg `authConnects` or
-# the value leg `fullActionInvA`) regressed to decorative — exits nonzero. (The original supply
-# mutations AUTH-DROP/CONSERVATION-BREAK/… target the PRE-Stage-3 burn gate text and need a regex
-# refresh before they can gate on HEAD; the two C-c1 mutations target the current repaired specs.)
+# the value leg `fullActionInvA`) regressed to decorative — exits nonzero.
+#
+# NOTE: a should-RED-stays-GREEN can no longer be caused by a drifted anchor — `subst` FATALs on a
+# no-op mutation before any build runs, so a GREEN here is a real verdict about the proof, not the
+# canary silently patching text that moved. (The legacy supply mutations AUTH-DROP/CONSERVATION-BREAK/…
+# are re-anchored on HEAD and run under `ALL`; whether to add them to this gate is a separate call.)
 run_gate() {
   local fail=0
   echo "=================================================================="
