@@ -1434,3 +1434,32 @@ PLAN: wire the feasible ones to the real prover; for needs-plumbing, thread/reta
 name exactly what must be, honest-fail meanwhile — NEVER a mock that says "valid"); retire the mock engines
 (ivc.rs simulated, constraint_prover) once nothing production rides them; add a ratchet so no new mock-proof
 surface returns "valid".
+
+### `0efabddbf` — MOCK-PROOF PURGE RATCHET (enforced before ripping — shrink-only)
+`circuit-prove/tests/mock_proof_purge_gate.rs`: FAILS if any NEW production file rides a mock prover, or a
+listed one GROWS. Baseline: **14 production files / ~140 mock sites**, each carrying its purge verdict.
+VERIFIED IT BITES (planted a `prove_ivc(` in cell/src -> "MOCK-PROOF PURGE VIOLATED"; removed -> green).
+It also caught MY baseline bug first: `grep -c` counts LINES, the gate counts OCCURRENCES (presentation.rs
+18 vs the true 21) — the gate corrected me before I committed a wrong number.
+Failure message forbids the cheat: "Do NOT add yourself to the baseline — wire it to
+`ivc_turn_chain::prove_turn_chain_recursive` / `prove_vm_descriptor2`, or FAIL CLOSED."
+
+### THE PURGE WORKLIST (from map `wh0frxr57`) — verdict per surface
+| surface | verdict | note |
+|---|---|---|
+| `node/mcp/handlers_verify.rs::dregg_compress_history` | **NEEDS-PLUMBING** | WORST: LIVE MCP tool returns "valid" for `create_test_chain` SYNTHETIC data. **CONTESTED** (predicate-weld lane) |
+| `node/mcp/handlers_verify.rs::dregg_compose_proofs` | **HONEST-RETIRE** | verifies NOTHING — `valid = true` unconditionally for every mode. **CONTESTED** |
+| `dregg-genesis-snapshot` history leg | NEEDS-PLUMBING / RETIRE | a forger mints it himself via prove_ivc. **Fable working** |
+| `preflight/checks/sovereign.rs` | **WIRE-FEASIBLE** | promotion gate certifying the lie is healthy. **Fable working** |
+| `preflight/checks/{proofs,composition,backends}.rs` | WIRE-FEASIBLE | same. **CONTESTED** |
+| `circuit/presentation.rs`(21) + `bridge/present.rs` + `multi_step_witness` + `backends/mod.rs` | HONEST-RETIRE | dead but ARMED: mock rides the wire type, `is_valid` honors it. **CONTESTED** (bridge side) |
+| `circuit/ivc.rs`(79) + `constraint_prover.rs`(17) | RETIRE LAST | the engines — once nothing production rides them |
+
+**THE FLAGSHIP FIX'S PLUMBING ALREADY EXISTS AND IS UNCALLED**: `turn/src/rotation_witness.rs:731
+finalized_turn_from_full_turn` re-proves the rotated leg and FAIL-CLOSES unless the leg's wide anchors
+equal the served FullTurnProof's proven commits — returning a REAL `FinalizedTurn`. Its required context
+exists exactly once: `node/src/blocklace_sync.rs::execute_finalized_turn` (:4287), which today persists
+ONLY the FullTurnProof (:5031-5035). **Persist the FinalizedTurn there (postcard, keyed by turn hash) and
+`dregg_compress_history` can load the real chain and call `prove_turn_chain_recursive`.** That is the whole
+unlock — for the MCP tool AND the genesis-snapshot history leg.
+BLOCKER: `turn/` + `node/mcp` + `bridge/present` are held by the predicate-weld lane (FactBinding).
