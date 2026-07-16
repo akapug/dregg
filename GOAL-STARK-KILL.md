@@ -1643,3 +1643,26 @@ guard with no test that TRIPS it — an unexercised guard is an untested claim) 
 tested alone but never end-to-end with REAL artifacts) · 5 **the assumption ledger** (every Lean hypothesis
 / named residual / prose invariant — is it rigged to flag RED?) · 6 verification↔validation gap + test rot
 (Lean modules with no Rust pin; gates comparing two stale copies validate nothing).
+
+### ⚡ ULTRACODE: the mocks/mirrors/fakes hunt (`ws5jksoc3`) — sonnets hunt, opuses operate
+ember: *"what other mocks and mirrors and fakes do we have? maybe we could send an ultracode mostly made of
+sonnets out there, and then validate/cleanup/delete&rewire with some opuses?"* — exactly the right shape.
+**Pipelined** (no barrier): 9 SONNET scouts, one per repo slice (circuit-core · turn-cell · node-net ·
+sdk-bridge · market-drex · deos-agents · harnesses · **lean-mirrors** · misc-crates), each read-only and
+returning STRUCTURED findings → each slice's HIGH/production findings flow straight into an **OPUS surgeon**
+that ADVERSARIALLY REFUTES first (scouts over-report), then rewires-to-real > deletes-if-dead >
+honest-fail-closed, and appends to TESTQALOG.md.
+
+**The taxonomy — five species of lie** (each with a canonical example we already caught, so the scouts know
+the shape):
+1. **MOCK** — a fake standing in for the real (prove_ivc: anyone who can call it mints a passing proof).
+2. **MIRROR** — a SHADOW REIMPLEMENTATION that drifts (the duplicate `DslP3Air`: same struct name, weaker,
+   and the DIFFERENTIAL HARNESS drove the shadow — skipping coverage for a limit only the shadow had). A
+   Lean docstring "mirroring" deleted Rust is the same species.
+3. **FAKE/STUB** — returns a canned value (`compose_proofs`: `valid = true` unconditionally).
+4. **SIMULATION** — a shape/estimate where the real thing is required (`simulated_proof_size_bytes`).
+5. **THEATER** — looks like verification, verifies nothing (a suite named `soundness` testing the mock; a
+   "byte-identity gate" comparing two CHECKED-IN copies instead of re-emitting fresh).
+Hard rules given: verify from CODE not comments (the canonical trap: genesis-snapshot calls the MOCK "the
+real prover/verifier"); an honest fixture is NOT a finding; skip files other lanes hold dirty; never leave
+anything answering "valid" for work it did not do.
