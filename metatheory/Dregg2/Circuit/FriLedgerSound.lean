@@ -622,10 +622,14 @@ theorem ledger_epsC_soundness (cfg : FriParams) (logD0 bciksM : ℕ)
 
 /-! ## §6c. THE DEPLOYED COMMIT COLUMN — the numbers, reported unmassaged.
 
-⚑ Every number here is quoted at `logD0 = 12` — the FRI domain of the MEASURED COST FIXTURE (a
-`2^6`-row trace at blowup `2^6`), which is smaller than a production turn. **Nobody has measured
-dregg's deployed trace-height distribution**, and it is the single input that moves this column
-most. These are the fixture's numbers, not the deployment's, and they are labelled as such. -/
+⚑ The numbers immediately below are quoted at `logD0 = 12` — the FRI domain of the MEASURED COST
+FIXTURE, which is a **1-effect turn** and is smaller than a production turn. They are the fixture's
+numbers, not the deployment's, and they are labelled as such.
+
+⚑ The DEPLOYED heights ARE measured — `circuit-prove/tests/fri_trace_height_measure.rs` reads them
+off real verified proofs — and `ledger_commitBits_at_measured_heights` reports the column at each
+config's own. **The deployed worst case is `61`** (the recursion wrap at `|D⁽⁰⁾| = 2^19`), not the
+fixture's `71`. -/
 
 /-- The `commitBits` analogue of `perFoldBits_eq_of_bracket` — so the per-config numbers below are
 kernel `Nat` arithmetic, NOT `native_decide`. `native_decide` would put `Lean.ofReduceBool` (and the
@@ -659,25 +663,61 @@ theorem commit_column_is_not_trace_invariant :
 
 /-- **⚑ THE COLUMN AT THE MEASURED TRACE HEIGHTS — the honest deployed numbers.**
 
-The `71` above is the FIXTURE's number. A concurrent measurement lane established the real ones: the
-recursion wrap ships `|D⁽⁰⁾| = 2^19` **on every fold**, and the apex is `2^22`. At those heights this
-column reads **`57`** and **`51`**, not `71`.
+The `71` above is the FIXTURE's number, and the fixture is a **1-effect turn**. The real heights are
+MEASURED — off real verified proofs' `BatchProof::degree_bits`, not off a witness — in
+`circuit-prove/tests/fri_trace_height_measure.rs`. Each config is paired with **its own** measured
+`|D⁽⁰⁾|`, because pairing a config with another config's height is exactly the error a parametric
+ledger exists to prevent:
 
-⚑ **This is the whole point of making `ε_C` a parametric column instead of a scratch-script
-footnote.** The fixture flattered us by ~14 bits, and no FRI knob would have revealed it: `perFoldBits`
-and `johnsonBits` read exactly the same at every height. The proven posture is a function of the
-STATEMENT being proved.
+| config (its `logBlowup`)          | measured `|D⁽⁰⁾|` | source                                    | `commitBits` |
+|-----------------------------------|-------------------|-------------------------------------------|--------------|
+| `prodV1Config` (3)                | `2^9`             | `2^6` main table + blowup                 | **81** |
+| `ir2LeafWrapConfig` (6)           | `2^14`            | `2^8` chip table at 64 effects + blowup   | **67** |
+| `ethWrapOuterConfig` (3)          | `2^18`            | the measured `2^15` shrink tables + blowup| **63** |
+| `recursionConfig` (3)             | `2^19`            | `WRAP_LOG_CEIL = 2^16`, FORCED every fold | **61** |
 
-⚠ The heights are the measurement lane's, not this file's — this file is parametric in `logD0`
-precisely so that it consumes a measurement rather than asserting one. -/
-theorem wrap_ledger_commitBits_at_measured_heights :
-    (friCommitLedger ir2LeafWrapConfig 19 7).commitBits = 57 ∧
-      (friCommitLedger ir2LeafWrapConfig 22 7).commitBits = 51 := by
-  constructor
-  · refine commitBits_eq_of_bracket _ _ _ 57 ?_ ?_ <;>
+**⚑ `61` is the deployed posture** — the recursion wrap's `2^16`-row ceiling is applied to every
+running-proof table on every fold, so the system's worst case is paid unconditionally, and the
+recursion is ALSO the named weakest link on the query column (`pow = 14`). Not `71`, and not the
+`73` the Johnson column reads.
+
+⚑ **This is the whole point of making `ε_C` a parametric column rather than a scratch-script
+footnote.** The fixture flattered us by 10 bits, and no FRI knob could have revealed it: `perFoldBits`
+and `johnsonBits` read exactly the same at every one of these heights. The proven posture is a
+function of the STATEMENT being proved, and only a column that takes the height as an input can say so.
+
+⚠ The heights are the measurement lane's, not this file's. This file is parametric in `logD0`
+precisely so that it CONSUMES a measurement rather than asserting one; re-read it at the new
+`|D⁽⁰⁾|` if a bigger turn family ships (a 128-effect turn measures `2^15`, a 512-effect turn `2^17`). -/
+theorem ledger_commitBits_at_measured_heights :
+    (friCommitLedger prodV1Config 9 7).commitBits = 81 ∧
+      (friCommitLedger ir2LeafWrapConfig 14 7).commitBits = 67 ∧
+      (friCommitLedger ethWrapOuterConfig 18 7).commitBits = 63 ∧
+      (friCommitLedger recursionConfig 19 7).commitBits = 61 := by
+  refine ⟨?_, ?_, ?_, ?_⟩
+  · refine commitBits_eq_of_bracket _ _ _ 81 ?_ ?_ <;>
+      norm_num [friCommitLedger, ceilDiv, ledgerP, prodV1Config]
+  · refine commitBits_eq_of_bracket _ _ _ 67 ?_ ?_ <;>
       norm_num [friCommitLedger, ceilDiv, ledgerP, ir2LeafWrapConfig]
-  · refine commitBits_eq_of_bracket _ _ _ 51 ?_ ?_ <;>
-      norm_num [friCommitLedger, ceilDiv, ledgerP, ir2LeafWrapConfig]
+  · refine commitBits_eq_of_bracket _ _ _ 63 ?_ ?_ <;>
+      norm_num [friCommitLedger, ceilDiv, ledgerP, ethWrapOuterConfig]
+  · refine commitBits_eq_of_bracket _ _ _ 61 ?_ ?_ <;>
+      norm_num [friCommitLedger, ceilDiv, ledgerP, recursionConfig]
+
+/-- **⚑ THE DEPLOYED WORST CASE IS THE RECURSION WRAP, AND IT IS THE WEAKEST ON BOTH COLUMNS.**
+`recursionConfig` is already the tree's named weakest link on the query ledger (`johnsonBits = 71`
+at `pow = 14`); at its MEASURED `|D⁽⁰⁾| = 2^19` it is also the weakest on the commit column (`61`).
+⚑ And the two weakest-link facts are independent: on the FIXTURE height the commit column's weakest
+configs are the `logBlowup = 6` ones (`71`), because `ε_C` carries `1/(2ρ^{3/2})` — a bigger blowup
+HURTS `ε_C` while helping every query ledger. "The weakest config" is a property of a COLUMN, not of
+the system. -/
+theorem recursion_is_weakest_on_the_commit_column_too :
+    (friLedger recursionConfig).johnsonBits = 71 ∧
+      (friCommitLedger recursionConfig 19 7).commitBits = 61 ∧
+      (friCommitLedger ir2LeafWrapConfig 12 7).commitBits = 71 := by
+  refine ⟨recursion_ledger_johnsonBits, ?_, wrap_ledger_commitBits⟩
+  refine commitBits_eq_of_bracket _ _ _ 61 ?_ ?_ <;>
+    norm_num [friCommitLedger, ceilDiv, ledgerP, recursionConfig]
 
 /-- **⚑ THE CEILING — no `numQueries` and no `powBits` can pass `ε_C`.** `q = 200` and `pow = 27`
 (plonky3's practical maximum) balloon the query columns to `627`/`1227` and leave the commit column
@@ -686,7 +726,14 @@ is `extDeg`, worth exactly `log₂ p ≈ 30.91` bits per degree (`ε_C ∝ 1/p^e
 
 ⚑ **This is what withdraws "proven Johnson 128 at ext-degree 4".** The query ledger's monotone
 `q·lb/2` reading is what made `128` look purchasable; under the term BCIKS20 actually carries, no
-`(q, pow)` at ext-degree `4` reaches it. -/
+`(q, pow)` at ext-degree `4` reaches it.
+
+⚠ **Scope, exactly as stated.** This theorem is about `numQueries` and `powBits` — the two knobs
+`FriParams` carries. plonky3 has a THIRD: `commit_proof_of_work_bits` (`fri/src/config.rs:18`),
+ground per fold round BEFORE `β` (`prover.rs:224`), i.e. against exactly the commit phase `ε_C`
+bounds, and absent from plonky3's own `conjectured_soundness_bits`. Every dregg config sets it to
+`0`, so the ceiling holds for what ships; it is not a theorem about the protocol, and this statement
+does not claim to be one. -/
 theorem query_and_pow_cannot_pass_epsC :
     (friCommitLedger ir2LeafWrapConfig 12 7).commitBits
         = (friCommitLedger { ir2LeafWrapConfig with numQueries := 200, powBits := 27 } 12 7).commitBits
@@ -726,9 +773,11 @@ reads the proved numbers, and a wire-format edit that dropped a column would go 
 before the Rust test ever ran. -/
 
 -- ⚑ The wire now carries EIGHT inputs (the six knobs + `logD0` + BCIKS20's `m`) and SEVEN columns
--- (the six + `commitBits`). `logD0 = 12` is the MEASURED FIXTURE's FRI domain (a 2^6-row trace at
--- blowup 2^6) — NOT a measurement of a production turn, which nobody has taken. `m = 7` is the
--- proximity parameter that happens to optimise the deployed composite; it is an input, not a fact.
+-- (the six + `commitBits`). `logD0 = 12` is the COST FIXTURE's FRI domain — a 1-effect turn — and is
+-- used below only to exercise the wire against a known reading. It is NOT the deployed height: those
+-- are measured in `circuit-prove/tests/fri_trace_height_measure.rs` and read out per config by
+-- `ledger_commitBits_at_measured_heights` (the recursion wrap's 2^19 gives 61, not 71). `m = 7` is
+-- the proximity parameter that happens to optimise the deployed composite; it is an input, not a fact.
 
 -- The deployed IR-v2 wrap: arity 8, |κ| = 64, |Good| ≤ 14112, 109 per-fold, 73 Johnson, 130 capacity,
 -- and commit-phase 71 — the term the 73 drops.
@@ -813,7 +862,8 @@ is not hypothesis-free, and this block does not claim it is. -/
 #assert_axioms ledger_commitBits_sound
 #assert_axioms ledger_epsC_soundness
 #assert_axioms wrap_ledger_commitBits
-#assert_axioms wrap_ledger_commitBits_at_measured_heights
+#assert_axioms ledger_commitBits_at_measured_heights
+#assert_axioms recursion_is_weakest_on_the_commit_column_too
 #assert_axioms commit_column_is_not_trace_invariant
 #assert_axioms query_and_pow_cannot_pass_epsC
 #assert_axioms three_columns_three_dependencies

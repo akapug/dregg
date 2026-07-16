@@ -18,7 +18,7 @@
 //! ## What Lean exports, and what it cannot
 //!
 //! **A soundness bound is a `Prop`; a `Prop` cannot be exported.** What is exported is the COMPUTABLE
-//! LEDGER — six `Nat` columns per config. The theorems are what justify them:
+//! LEDGER — seven `Nat` columns per config. The theorems are what justify them:
 //!
 //!   * `FriLedgerSound.ledger_perFold_soundness` — ONE PARAMETRIC theorem: at ANY config, a word whose
 //!     phase map is injective has at most `goodCount` good folding challenges, of density
@@ -74,6 +74,35 @@
 //!      ledger. The columns are reported separately and never multiplied into a headline; that
 //!      independence is itself a theorem (`query_ledger_does_not_determine_perFold`).
 //!
+//! ## ⚑ THE COMMIT-PHASE COLUMN `ε_C` (2026-07-15) — the term the Johnson column DROPS
+//!
+//! `johnson_bits` is the `m → ∞` IDEALISATION of BCIKS20 (eprint 2020/654) Thm 8.3, whose actual
+//! bound is `ε_FRI = ε_C + α^s` with `α = √ρ·(1 + 1/2m)`, `m ≥ 3`. The seventh column reports the
+//! dropped `ε_C` as `⌊−log₂ ε_C⌋` (`FriLedger.friCommitLedger`). Three findings:
+//!
+//!   6. **The deployed wrap's `73` is not its FRI soundness.** Its `ε_C` reads **71** at the fixture
+//!      height, and ethSTARK (eprint 2021/582) eq. (20) composes them as
+//!      `λ ≥ min{−log₂ ε_C, ζ − s·log₂ α} − 1` ⇒ **~70**. The commit column BINDS below the query
+//!      column at the config that matters most. Numbers going DOWN is what this column was for.
+//!   7. **The commit column's weakest link is a DIFFERENT config from the query columns'.**
+//!      `create_recursion_config` is weakest on Johnson/capacity but reads a comfortable `75`; the
+//!      commit floor is forced by the two `logBlowup = 6` configs (`71`), the deployed wrap among
+//!      them — because `ε_C` carries `1/(2ρ^{3/2})`, so a bigger blowup HURTS it while helping every
+//!      query ledger. "The weakest shipped config" is a property of the COLUMN, not of the system.
+//!   8. **`ε_C` is a CEILING and it is NOT trace-invariant.** It contains no `numQueries` and no
+//!      `powBits`, so no query/PoW bump can pass it (`no_query_or_pow_bump_moves_the_eps_c_ceiling`);
+//!      and it is `∝ |D⁽⁰⁾|²`, falling ~2 bits per trace DOUBLING (`71` at `2^12`, `55` at `2^20`).
+//!   9. ⚑⚑ **THE FIXTURE IS NOT THE DEPLOYED HEIGHT, AND THE DEPLOYED HEIGHT IS MEASURED.** This gate
+//!      runs at `log_d0 = 12` — the repo's cost grid, which is a **1-effect** turn. The sibling
+//!      `fri_trace_height_measure.rs` measures real heights off real verified proofs:
+//!      `LEAF_ENVELOPE_LOG_D0 = 14` (64-effect turn) and `DEPLOYED_WORST_LOG_D0 = 19` (the recursion
+//!      wrap's FORCED `2^16` rows + blowup 3). Lean reads **71** at the fixture, **67** at the
+//!      measured leaf, and **61** at the deployed worst case. So `COMMIT_FLOOR_BITS = 71` is a floor
+//!      AT A FIXTURE and **not** a claim about dregg; the deployed commit posture is **~61 bits**.
+//!      `the_measured_deployed_heights_read_below_the_fixture_floor` gates that gap so the convenient
+//!      number cannot be quoted for the system. Closing it is a posture decision (shrink the traces,
+//!      or raise `FIXTURE_LOG_D0` and lower the floor to what Lean then says) — ember's, not a test's.
+//!
 //! ⚑ **NAME COLLISION.** Lean's `FriVerifier.ir2LeafWrapConfig` (`maxLogArity = 3`) models the Rust
 //! `dregg_circuit::descriptor_ir2::ir2_config`. The Rust fn actually *named*
 //! `ivc_turn_chain::ir2_leaf_wrap_config()` is a DIFFERENT knob set (arity 1, via
@@ -93,6 +122,12 @@
 //!      move IMPROVES every numeric floor and still breaks the model. Only the pin sees it.
 //!   5. `the_export_is_consulted_not_shadowed` — proves the numbers TRACK Lean rather than being a
 //!      leftover Rust constant: it moves a knob and requires Lean's answer to move with it.
+//!   6. `eps_c_column_is_not_trace_invariant` — the MUTATION CANARY for the commit column: the same
+//!      deployed knobs must read STRICTLY FEWER commit bits at a taller trace, the knob columns must
+//!      NOT move with it, and the fixture-height floor must genuinely RED at `log_d0 = 20`. A
+//!      height-blind (shadowed, or constant) column fails all three.
+//!   7. `no_query_or_pow_bump_moves_the_eps_c_ceiling` — `q: 19 → 200`, `pow: 16 → 27` moves the
+//!      commit column by EXACTLY ZERO while both query ledgers soar. The ceiling, exhibited.
 //!
 //! Run: `cargo test -p dregg-circuit-prove --test fri_params_soundness_budget -- --nocapture`.
 
@@ -108,6 +143,7 @@ use dregg_circuit::stark_zk::{
     ZK_EXT_DEGREE, ZK_FRI_LOG_BLOWUP, ZK_FRI_LOG_FINAL_POLY_LEN, ZK_FRI_MAX_LOG_ARITY,
     ZK_FRI_NUM_QUERIES, ZK_FRI_QUERY_POW_BITS,
 };
+use dregg_circuit_prove::accumulator::WRAP_LOG_CEIL;
 use dregg_circuit_prove::dregg_outer_config::{
     OUTER_EXT_DEGREE, OUTER_FRI_LOG_BLOWUP, OUTER_FRI_LOG_FINAL_POLY_LEN, OUTER_FRI_MAX_LOG_ARITY,
     OUTER_FRI_NUM_QUERIES, OUTER_FRI_QUERY_POW_BITS,
@@ -127,9 +163,25 @@ use dregg_lean_ffi::{FriKnobs, FriLedger, fri_ledger, fri_ledger_available};
 /// The conservative knob-drift MARGIN on the CAPACITY arithmetic.
 ///
 /// NOTE: `128` is an engineering drift-detection margin, NOT a proven or conjecturally-safe security
-/// level — the capacity conjecture is REFUTED for coset Reed–Solomon at our rates (Kambiré, eprint
-/// 2025/2046). It is kept, unchanged, as the labeled drift canary it honestly is. Retargeting the
-/// numeric gate off the capacity metric is an ember decision, not this test's to make.
+/// level — the capacity conjecture is REFUTED. It is kept, unchanged, as the labeled drift canary it
+/// honestly is. Retargeting the numeric gate off the capacity metric is an ember decision, not this
+/// test's to make.
+///
+/// ⚑ **THE CITATION, CORRECTED (2026-07-15).** This file carried *"(Kambiré, eprint 2025/2046)"* as
+/// one work. It is TWO papers by different authors:
+///
+///   * **eprint 2025/2046 is Crites–Stewart** — Elizabeth Crites & Alistair Stewart (Web3
+///     Foundation), *On Reed–Solomon Proximity Gaps Conjectures* — who disprove the BCIKS
+///     up-to-capacity correlated-agreement conjecture (and WHIR's mutual-CA conjecture).
+///   * **Kambiré is arXiv 2604.09724** — *Proximity Gaps Conjecture Fails Near Capacity over Prime
+///     Fields*. His counterexample picks the prime AS A FUNCTION OF the block length (`p < n^A` with
+///     `p ≡ 1 mod n`, via a quantitative Linnik theorem), so `p` GROWS with `n`; dregg runs a FIXED
+///     31-bit prime, so it does **not** instantiate at BabyBear.
+///
+/// Both refute; attribute them correctly. ⚑ **And the posture does NOT rest on that escape.** A
+/// conjecture refuted in general cannot be a security basis for anyone, whatever the
+/// field-cardinality technicality — do not "defend" capacity with "no counterexample reaches
+/// BabyBear". It is true, and it is not a defence. Capacity stays a drift canary either way.
 const CAPACITY_DRIFT_MARGIN_BITS: usize = 128;
 
 /// The floor on the PROVEN (Johnson / list-decoding-to-`√rate`) query ledger — the column that is
@@ -151,6 +203,99 @@ const JOHNSON_FLOOR_BITS: usize = 71;
 /// quoted for years. Flooring at `112` would red the deployed config instantly; that is the finding,
 /// not a reason to pick a prettier number.
 const PER_FOLD_FLOOR_BITS: usize = 109;
+
+/// The floor on the BCIKS20 COMMIT-PHASE column `ε_C` (`commit_bits`), **AT `FIXTURE_LOG_D0`**.
+///
+/// **Derivation — READ OFF LEAN, not chosen (2026-07-15).** Running the gate at
+/// `log_d0 = 12, bciks_m = 7` and reading what Lean reports for all 7 shipped configs:
+///
+/// ```text
+///   ir2_config (DEPLOYED wrap, lb=6, arity 8) ... 71   ← WEAKEST
+///   ir2_leaf_wrap_config (rotated, lb=6, arity 2) 71   ← WEAKEST
+///   v1 create_config          (lb=3, arity 8) ... 75
+///   create_zk_config          (lb=3, arity 8) ... 75
+///   create_outer_config       (lb=3, arity 2) ... 75
+///   create_recursion_config   (lb=3, arity 2) ... 75
+///   create_gpu_outer_config   (lb=3, arity 2) ... 75
+/// ```
+///
+/// So `71` is the honest observed minimum, and it is NOT a round number anybody would have picked.
+///
+/// ⚑ **FINDING 1 — the commit column's weakest link is a DIFFERENT config from the query columns'.**
+/// `create_recursion_config` is weakest on Johnson and capacity (`recursion_config_is_the_weakest_link`)
+/// but reads a comfortable `75` here. The commit floor is forced by the `logBlowup = 6` configs —
+/// **including `ir2_config`, the DEPLOYED wrap.** `ε_C`'s first term carries `1/(2ρ^{3/2}) = 2^(3·lb/2 − 1)`,
+/// so a BIGGER blowup — which improves both query ledgers — makes `ε_C` WORSE. The two `lb = 6` configs
+/// pay ~4 bits for it. "The weakest shipped config" is not a property of the system; it is a property
+/// of the column, which is exactly why these columns stay separate.
+///
+/// ⚑ **FINDING 2 — at the deployed wrap the commit column BINDS BELOW the Johnson column.** Johnson
+/// reads `73`; `ε_C` reads `71`. ethSTARK (eprint 2021/582) eq. (20) composes them as
+/// `λ ≥ min{−log₂ ε_C, ζ − s·log₂ α} − 1`, so the deployed wrap's FRI posture is **~70, not 73** — the
+/// `73` is the `m → ∞` idealisation that DROPS this term. The number going DOWN is the correct outcome
+/// of adding this column; it is what the column was added to reveal.
+///
+/// ⚑ **THIS FLOOR IS ONLY VALID AT `FIXTURE_LOG_D0`, AND THE FIXTURE IS NOT THE DEPLOYED HEIGHT.**
+/// `ε_C` is not trace-invariant, so `71` is not a standing claim about dregg — it is a claim at a
+/// 1-effect turn's height. The tree's OWN measured heights
+/// (`fri_trace_height_measure.rs`) read **67** at the 64-effect leaf (`2^14`) and **61** at the
+/// deployed worst case (`2^19`, the recursion wrap's forced `2^16` rows + blowup) — i.e. the real
+/// deployed commit posture is ~10 bits BELOW this floor.
+///
+/// ⚑ **FINDING 3 — so this floor does not gate the deployed height; it gates the fixture.** That is
+/// stated, not smuggled: `the_measured_deployed_heights_read_below_the_fixture_floor` asserts the gap
+/// as a standing fact, and `eps_c_column_is_not_trace_invariant` proves the floor genuinely REDS at a
+/// taller trace. Raising `FIXTURE_LOG_D0` to a measured height REQUIRES lowering this floor to
+/// whatever Lean then reports — a real posture change to be argued (is ~61 bits acceptable? does the
+/// wrap's forced `2^16` need to shrink? does `extDeg` need to rise?), never a number to massage.
+const COMMIT_FLOOR_BITS: usize = 71;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// THE ε_C INPUTS. Neither is an FRI knob, and neither is a measurement of production. They are the
+// two extra fields the ledger wire carries so `commit_bits` can be reported at all.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// **`|D⁽⁰⁾| = 2 ^ 12` — A FIXTURE HEIGHT, NOT A MEASUREMENT OF PRODUCTION.**
+///
+/// `log_d0` is the FRI domain size = trace height × blowup. `12` is the repo's MEASURED COST GRID:
+/// a `2^6`-row trace (`dregg-circuit`'s `effect_vm_ir2_size_measure::ir2_fri_grid`, degree_bits
+/// `[6, 3, 4]`) at the wrap's `2^6` blowup ⇒ `2^12`.
+///
+/// ⚑ **A `2^6`-row trace is SMALLER than a production turn, and `commit_bits` is NOT trace-invariant**
+/// (`ε_C ∝ |D⁽⁰⁾|²`, so it falls ~2 bits per trace DOUBLING — Lean reads `71` here, `55` at
+/// `log_d0 = 20`). So every `commit_bits` number this gate reports is the fixture's number, and the
+/// honest figure for a real turn is whatever `log_d0` THAT turn has.
+///
+/// ⚑⚑ **AND THE DEPLOYED HEIGHTS *HAVE* BEEN MEASURED — THIS FIXTURE IS NOT THEM.**
+/// `circuit-prove/tests/fri_trace_height_measure.rs` reads real heights off real verified proofs and
+/// pins `LEAF_ENVELOPE_LOG_D0 = 14` (a 64-effect turn — **4× this fixture**) and
+/// `DEPLOYED_WORST_LOG_D0 = WRAP_LOG_CEIL + RECURSION_FRI_LOG_BLOWUP = 19` (the recursion wrap, whose
+/// `2^16`-row floor is FORCED on every running fold). Lean's readings there:
+///
+/// ```text
+///   log_d0 = 12  (this fixture, a 1-effect turn) ... 71 bits  ← what COMMIT_FLOOR_BITS gates
+///   log_d0 = 14  (MEASURED 64-effect leaf) ......... 67 bits
+///   log_d0 = 19  (MEASURED deployed WORST) ......... 61 bits  ← the real deployed posture
+/// ```
+///
+/// This const is kept at `12` because it is the height the repo's cost grid actually measured and the
+/// height the `71` floor is honest about — **not** because `12` describes production. It does not.
+/// `the_measured_deployed_heights_read_below_the_fixture_floor` gates that gap as a standing FINDING
+/// so the convenient `71` cannot be quoted as the system's commit posture, and
+/// `eps_c_column_is_not_trace_invariant` keeps the column from rotting into a height-blind constant.
+const FIXTURE_LOG_D0: usize = 12;
+
+/// **BCIKS20's proximity parameter `m` — a parameter of the ANALYSIS, not of the prover.**
+///
+/// Nothing in the deployed prover reads `m`; it selects which member of BCIKS20 Thm 8.3's family of
+/// bounds we instantiate. `ε_FRI = ε_C + α^s` with `α = √ρ·(1 + 1/2m)` trades the two terms against
+/// each other: a LARGER `m` shrinks `α` (better query term) and inflates `ε_C ∝ (m+½)⁷` (worse commit
+/// term). `7` is the `m` that happens to OPTIMISE the deployed composite — it is a choice about how
+/// sharply we read the paper, not a property of anything we ship.
+///
+/// Lean REFUSES `m < 3` (Thm 8.3's own hypothesis — below it the formula is not the paper's), which
+/// `the_ledger_fails_closed_outside_the_modeled_window` gates.
+const BCIKS_M: usize = 7;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // THE SHIPPED CONFIGS. Rust's job here is to MARSHAL — name each config, read its deployed consts,
@@ -189,6 +334,8 @@ fn shipped() -> Vec<ShippedConfig> {
                 max_log_arity: IR2_FRI_MAX_LOG_ARITY,
                 log_final_poly_len: IR2_FRI_LOG_FINAL_POLY_LEN,
                 ext_deg: IR2_EXT_DEGREE,
+                log_d0: FIXTURE_LOG_D0,
+                bciks_m: BCIKS_M,
             },
             modeled: FriKnobs {
                 log_blowup: 6,
@@ -197,6 +344,8 @@ fn shipped() -> Vec<ShippedConfig> {
                 max_log_arity: 3,
                 log_final_poly_len: 0,
                 ext_deg: 4,
+                log_d0: FIXTURE_LOG_D0,
+                bciks_m: BCIKS_M,
             },
         },
         ShippedConfig {
@@ -209,6 +358,8 @@ fn shipped() -> Vec<ShippedConfig> {
                 max_log_arity: PROD_FRI_MAX_LOG_ARITY,
                 log_final_poly_len: PROD_FRI_LOG_FINAL_POLY_LEN,
                 ext_deg: PROD_EXT_DEGREE,
+                log_d0: FIXTURE_LOG_D0,
+                bciks_m: BCIKS_M,
             },
             modeled: FriKnobs {
                 log_blowup: 3,
@@ -217,6 +368,8 @@ fn shipped() -> Vec<ShippedConfig> {
                 max_log_arity: 3,
                 log_final_poly_len: 0,
                 ext_deg: 4,
+                log_d0: FIXTURE_LOG_D0,
+                bciks_m: BCIKS_M,
             },
         },
         ShippedConfig {
@@ -229,6 +382,8 @@ fn shipped() -> Vec<ShippedConfig> {
                 max_log_arity: ZK_FRI_MAX_LOG_ARITY,
                 log_final_poly_len: ZK_FRI_LOG_FINAL_POLY_LEN,
                 ext_deg: ZK_EXT_DEGREE,
+                log_d0: FIXTURE_LOG_D0,
+                bciks_m: BCIKS_M,
             },
             modeled: FriKnobs {
                 log_blowup: 3,
@@ -237,6 +392,8 @@ fn shipped() -> Vec<ShippedConfig> {
                 max_log_arity: 3,
                 log_final_poly_len: 0,
                 ext_deg: 4,
+                log_d0: FIXTURE_LOG_D0,
+                bciks_m: BCIKS_M,
             },
         },
         ShippedConfig {
@@ -249,6 +406,8 @@ fn shipped() -> Vec<ShippedConfig> {
                 max_log_arity: OUTER_FRI_MAX_LOG_ARITY,
                 log_final_poly_len: OUTER_FRI_LOG_FINAL_POLY_LEN,
                 ext_deg: OUTER_EXT_DEGREE,
+                log_d0: FIXTURE_LOG_D0,
+                bciks_m: BCIKS_M,
             },
             modeled: FriKnobs {
                 log_blowup: 3,
@@ -257,6 +416,8 @@ fn shipped() -> Vec<ShippedConfig> {
                 max_log_arity: 1,
                 log_final_poly_len: 0,
                 ext_deg: 4,
+                log_d0: FIXTURE_LOG_D0,
+                bciks_m: BCIKS_M,
             },
         },
         ShippedConfig {
@@ -269,6 +430,8 @@ fn shipped() -> Vec<ShippedConfig> {
                 max_log_arity: RECURSION_FRI_MAX_LOG_ARITY,
                 log_final_poly_len: RECURSION_FRI_LOG_FINAL_POLY_LEN,
                 ext_deg: RECURSION_EXT_DEGREE,
+                log_d0: FIXTURE_LOG_D0,
+                bciks_m: BCIKS_M,
             },
             modeled: FriKnobs {
                 log_blowup: 3,
@@ -277,6 +440,8 @@ fn shipped() -> Vec<ShippedConfig> {
                 max_log_arity: 1,
                 log_final_poly_len: 0,
                 ext_deg: 4,
+                log_d0: FIXTURE_LOG_D0,
+                bciks_m: BCIKS_M,
             },
         },
         ShippedConfig {
@@ -292,6 +457,8 @@ fn shipped() -> Vec<ShippedConfig> {
                 max_log_arity: INNER_FRI_MAX_LOG_ARITY,
                 log_final_poly_len: IR2_FRI_LOG_FINAL_POLY_LEN,
                 ext_deg: RECURSION_EXT_DEGREE,
+                log_d0: FIXTURE_LOG_D0,
+                bciks_m: BCIKS_M,
             },
             modeled: FriKnobs {
                 log_blowup: 6,
@@ -300,6 +467,8 @@ fn shipped() -> Vec<ShippedConfig> {
                 max_log_arity: 1,
                 log_final_poly_len: 0,
                 ext_deg: 4,
+                log_d0: FIXTURE_LOG_D0,
+                bciks_m: BCIKS_M,
             },
         },
         ShippedConfig {
@@ -316,6 +485,8 @@ fn shipped() -> Vec<ShippedConfig> {
                 max_log_arity: OUTER_FRI_MAX_LOG_ARITY,
                 log_final_poly_len: OUTER_FRI_LOG_FINAL_POLY_LEN,
                 ext_deg: OUTER_EXT_DEGREE,
+                log_d0: FIXTURE_LOG_D0,
+                bciks_m: BCIKS_M,
             },
             modeled: FriKnobs {
                 log_blowup: 3,
@@ -324,6 +495,8 @@ fn shipped() -> Vec<ShippedConfig> {
                 max_log_arity: 1,
                 log_final_poly_len: 0,
                 ext_deg: 4,
+                log_d0: FIXTURE_LOG_D0,
+                bciks_m: BCIKS_M,
             },
         },
     ]
@@ -373,6 +546,18 @@ enum Refusal {
         name: &'static str,
         got: usize,
         floor: usize,
+    },
+    /// The BCIKS20 COMMIT-PHASE column `ε_C` fell under its floor — the term the Johnson column drops
+    /// (BCIKS20 eprint 2020/654, Lemma 8.2 / Thm 8.3, pp. 40–41).
+    ///
+    /// ⚑ This refusal is a CEILING, not another query gate: `ε_C` contains no `num_queries` and no
+    /// `query_pow_bits`, so no amount of queries or PoW can clear it (`no_query_or_pow_bump_moves_the_eps_c_ceiling`).
+    /// It carries `log_d0` because the number is meaningless without the height it was read at.
+    CommitBelowFloor {
+        name: &'static str,
+        got: usize,
+        floor: usize,
+        log_d0: usize,
     },
     /// A knob drifted off the Lean-MODELED config its theorems are stated about. Carries the knob NAME
     /// so a canary can assert the right tooth fired.
@@ -471,6 +656,18 @@ fn check_config(cfg: &ShippedConfig) -> Result<FriLedger, Refusal> {
             floor: PER_FOLD_FLOOR_BITS,
         });
     }
+    // THE COMMIT-PHASE FLOOR. `ε_C` — the term the Johnson column drops. Kept SEPARATE from it: the
+    // two are never multiplied or `min`-ed here (the `min` of ethSTARK eq. (20) is a reading a CALLER
+    // may take; this gate reports and floors the terms). At the deployed wrap this column reads 71
+    // while Johnson reads 73 — i.e. THIS is the binding one, and no query/PoW bump can move it.
+    if ledger.commit_bits < COMMIT_FLOOR_BITS {
+        return Err(Refusal::CommitBelowFloor {
+            name: cfg.name,
+            got: ledger.commit_bits,
+            floor: COMMIT_FLOOR_BITS,
+            log_d0: d.log_d0,
+        });
+    }
     Ok(ledger)
 }
 
@@ -500,9 +697,11 @@ fn every_shipped_config_reports_its_ledger_from_lean() {
         match check_config(&cfg) {
             Ok(l) => eprintln!(
                 "[{}]\n    knobs  log_blowup={} queries={} query_pow={} max_log_arity={} \
-                 log_final_poly_len={} ext_deg={}\n    LEAN   arity={} |κ|={} |Good|≤{} → per-fold \
-                 {} bits (PROVEN, carries the M=1 fiber hypothesis) · Johnson {} bits (PROVEN, any \
-                 code) · capacity {} bits (REFUTED conjecture — drift baseline only)\n    model  {}",
+                 log_final_poly_len={} ext_deg={}\n    ε_C in log_d0={} (FIXTURE height, NOT \
+                 production) bciks_m={}\n    LEAN   arity={} |κ|={} |Good|≤{} → per-fold \
+                 {} bits (PROVEN, at the near-capacity radius) · Johnson {} bits (the m→∞ \
+                 idealisation — DROPS ε_C) · capacity {} bits (REFUTED conjecture — drift baseline \
+                 only) · commit {} bits (ε_C, BCIKS20 Thm 8.3 — at THIS fixture height)\n    model  {}",
                 cfg.name,
                 cfg.deployed.log_blowup,
                 cfg.deployed.num_queries,
@@ -510,12 +709,15 @@ fn every_shipped_config_reports_its_ledger_from_lean() {
                 cfg.deployed.max_log_arity,
                 cfg.deployed.log_final_poly_len,
                 cfg.deployed.ext_deg,
+                cfg.deployed.log_d0,
+                cfg.deployed.bciks_m,
                 l.arity,
                 l.folded_domain,
                 l.good_count,
                 l.per_fold_bits,
                 l.johnson_bits,
                 l.capacity_bits,
+                l.commit_bits,
                 cfg.lean_model,
             ),
             Err(e) => panic!(
@@ -935,6 +1137,232 @@ fn recursion_config_is_the_weakest_link() {
     }
 }
 
+/// **⚑ THE MUTATION CANARY FOR `commit_bits`: ε_C IS *NOT* TRACE-INVARIANT, AND THE FLOOR BITES.**
+///
+/// This is the test that makes the new column REAL and LOAD-BEARING rather than a seventh number
+/// nobody reads. Every other column in this ledger is a function of the FRI knobs alone; `ε_C` is not
+/// — it is `∝ |D⁽⁰⁾|²/|F|`, and `|D⁽⁰⁾|` is the trace height × blowup, a property of the STATEMENT
+/// being proved. So:
+///
+///   1. the same DEPLOYED knobs give DIFFERENT commit postures at different trace heights, and
+///   2. a floor read at one height genuinely REDS at another.
+///
+/// If either half ever stops holding, the column has been shadowed by something height-blind (a
+/// constant, or a `log_d0` that stopped reaching Lean) and every `commit_bits` in this file is a
+/// decoration. Both readings come from Lean; Rust states no formula.
+#[test]
+fn eps_c_column_is_not_trace_invariant() {
+    require_ledger();
+    let wrap = shipped()[0].deployed;
+    assert_eq!(
+        wrap.log_d0, FIXTURE_LOG_D0,
+        "row 0 must ride the fixture height"
+    );
+
+    let at_fixture = fri_ledger(wrap).expect("ledger");
+    let at_prod = fri_ledger(FriKnobs { log_d0: 20, ..wrap }).expect("ledger");
+
+    // (1) The KNOB columns must NOT move — log_d0 is not a knob, and if it moved them the wire is
+    //     crosstalking and every other number in this file is suspect.
+    assert_eq!(
+        (
+            at_prod.arity,
+            at_prod.good_count,
+            at_prod.per_fold_bits,
+            at_prod.johnson_bits,
+            at_prod.capacity_bits
+        ),
+        (
+            at_fixture.arity,
+            at_fixture.good_count,
+            at_fixture.per_fold_bits,
+            at_fixture.johnson_bits,
+            at_fixture.capacity_bits
+        ),
+        "log_d0 is NOT an FRI knob: it must move ONLY the commit column. per-fold is trace-INVARIANT \
+         and the query ledgers do not mention the height. Lean read {at_prod:?} vs {at_fixture:?}"
+    );
+
+    // (2) The COMMIT column MUST move, and STRICTLY DOWN — `ε_C ∝ |D⁽⁰⁾|²` ⇒ ~2 bits per doubling.
+    assert!(
+        at_fixture.commit_bits > at_prod.commit_bits,
+        "ε_C must WORSEN as the trace grows (it is ∝ |D⁽⁰⁾|²): Lean read {} bits at log_d0 = {} but \
+         {} bits at log_d0 = 20. If these are EQUAL, the column is height-blind — the export is being \
+         shadowed and the whole commit posture in this file is decorative.",
+        at_fixture.commit_bits,
+        FIXTURE_LOG_D0,
+        at_prod.commit_bits
+    );
+
+    // (3) THE FLOOR ACTUALLY BITES. A floor read at the fixture height REDS at a production-scale
+    //     one — this is not a hypothetical, it is the gate refusing.
+    assert!(
+        at_prod.commit_bits < COMMIT_FLOOR_BITS,
+        "the floor read at the FIXTURE height ({COMMIT_FLOOR_BITS}) must RED at log_d0 = 20 (Lean \
+         read {}), or it is not a floor — it is a number that happens to be true everywhere and \
+         gates nothing.",
+        at_prod.commit_bits
+    );
+    let tall = ShippedConfig {
+        name: shipped()[0].name,
+        lean_model: shipped()[0].lean_model,
+        deployed: FriKnobs { log_d0: 20, ..wrap },
+        modeled: shipped()[0].modeled,
+    };
+    match check_config(&tall) {
+        Err(Refusal::CommitBelowFloor {
+            got, floor, log_d0, ..
+        }) => {
+            assert_eq!((floor, log_d0), (COMMIT_FLOOR_BITS, 20));
+            assert!(got < COMMIT_FLOOR_BITS);
+        }
+        other => panic!(
+            "the DEPLOYED knobs at a 2^20 FRI domain must trip the COMMIT floor — the knobs are \
+             untouched, so no other tooth can see this. Got {other:?}. ⚑ Note what this means: the \
+             deployed wrap's commit posture DEPENDS on a trace height nobody has measured, and this \
+             gate only claims {COMMIT_FLOOR_BITS} bits AT log_d0 = {FIXTURE_LOG_D0}."
+        ),
+    }
+}
+
+/// **⚑⚑ THE FINDING: THE TREE HAS *ALREADY MEASURED* THE DEPLOYED HEIGHTS, AND THEY READ FAR BELOW
+/// THIS GATE'S FIXTURE FLOOR.**
+///
+/// `FIXTURE_LOG_D0 = 12` is a **1-effect turn's** cost grid. The sibling gate
+/// `circuit-prove/tests/fri_trace_height_measure.rs` MEASURES real deployed heights off real proofs
+/// (`BatchProof::degree_bits`, proof verified before it is measured) and pins two of them:
+///
+///   * `LEAF_ENVELOPE_LOG_D0 = 14` — a 64-effect turn's leaf `|D⁽⁰⁾|`, **4× the fixture**;
+///   * `DEPLOYED_WORST_LOG_D0 = WRAP_LOG_CEIL + RECURSION_FRI_LOG_BLOWUP = 16 + 3 = 19` — the
+///     recursion wrap, whose `2^16`-row floor is **FORCED on every running fold**.
+///
+/// So "nobody has measured dregg's trace heights" is FALSE, and this test exists so that the
+/// convenient reading (the fixture's `71`) cannot be quoted as the system's commit posture. It
+/// reconstructs the worst case from the SAME lib consts the deployed prover uses — not from a literal
+/// — and reports what Lean says there.
+///
+/// ⚑ **This test asserts the deployed heights read BELOW `COMMIT_FLOOR_BITS`. That is the FINDING,
+/// deliberately gated as a fact, not a failure of the gate.** `check_config` floors at the fixture
+/// height because that is the height the cost grid measured; this test is the standing record that the
+/// fixture is NOT the deployed height and that the honest deployed commit posture is lower. Closing
+/// the gap is a real posture decision (raise `FIXTURE_LOG_D0` to the measured height and lower the
+/// floor to whatever Lean then reports, or shrink the traces) — never a number to massage.
+#[test]
+fn the_measured_deployed_heights_read_below_the_fixture_floor() {
+    require_ledger();
+    let cfgs = shipped();
+    let wrap = cfgs[0].deployed;
+    // The recursion config is what the WRAP_LOG_CEIL fold runs under (log_blowup = 3).
+    let recursion = cfgs[4].deployed;
+    assert_eq!(cfgs[4].lean_model, "FriLedgerSound.recursionConfig");
+
+    // Rebuilt from the deployed lib consts, exactly as `fri_trace_height_measure.rs` does — so a
+    // change to the forced wrap height reaches this reading instead of rotting a literal.
+    const DEPLOYED_WORST_LOG_D0: usize = WRAP_LOG_CEIL + RECURSION_FRI_LOG_BLOWUP;
+    // MEASURED in `fri_trace_height_measure.rs` (a 64-effect turn's leaf, off a real proof). It is a
+    // const in a sibling TEST binary, so it cannot be imported; repin it THERE and here together.
+    const MEASURED_LEAF_LOG_D0: usize = 14;
+
+    let fixture = fri_ledger(wrap).expect("ledger");
+    let leaf = fri_ledger(FriKnobs {
+        log_d0: MEASURED_LEAF_LOG_D0,
+        ..wrap
+    })
+    .expect("ledger");
+    let worst = fri_ledger(FriKnobs {
+        log_d0: DEPLOYED_WORST_LOG_D0,
+        ..recursion
+    })
+    .expect("ledger");
+
+    eprintln!(
+        "⚑ ε_C AT THE TREE'S OWN MEASURED HEIGHTS (all numbers from Lean):\n    \
+         fixture  log_d0={:2} (1-effect cost grid, ir2_config) ... commit {} bits  ← the gate's floor\n    \
+         leaf     log_d0={:2} (64-effect turn, MEASURED)        ... commit {} bits\n    \
+         WORST    log_d0={:2} (recursion wrap, 2^16 FORCED)     ... commit {} bits  ← the deployed posture",
+        fixture_log_d0_of(&wrap),
+        fixture.commit_bits,
+        MEASURED_LEAF_LOG_D0,
+        leaf.commit_bits,
+        DEPLOYED_WORST_LOG_D0,
+        worst.commit_bits,
+    );
+
+    assert!(
+        leaf.commit_bits < fixture.commit_bits,
+        "the MEASURED 64-effect leaf height (2^{MEASURED_LEAF_LOG_D0}) must read fewer commit bits \
+         than the 1-effect fixture (2^{FIXTURE_LOG_D0}) — Lean read {} vs {}. If these agree, the \
+         height stopped reaching ε_C.",
+        leaf.commit_bits,
+        fixture.commit_bits
+    );
+    assert!(
+        worst.commit_bits < COMMIT_FLOOR_BITS,
+        "⚑ THE FINDING HAS EVAPORATED (or the wrap shrank): the deployed WORST height \
+         (2^{DEPLOYED_WORST_LOG_D0}) now reads {} commit bits, at or above the fixture floor \
+         {COMMIT_FLOOR_BITS}. If the traces genuinely shrank, this is good news — retire this test \
+         and raise FIXTURE_LOG_D0 to the measured height. Do NOT silence it.",
+        worst.commit_bits
+    );
+}
+
+/// Reads the fixture height back off the knobs rather than the const, so the printout above cannot
+/// disagree with what was actually sent to Lean.
+fn fixture_log_d0_of(k: &FriKnobs) -> usize {
+    k.log_d0
+}
+
+/// **⚑ `ε_C` IS A CEILING: NO QUERY OR PoW BUMP CAN PASS IT.**
+///
+/// BCIKS20's `ε_C` contains no `numQueries` and no `powBits` — it is entirely a commit-phase quantity.
+/// So the reflex that answers every soundness shortfall ("buy more queries, add PoW bits") moves this
+/// column by EXACTLY ZERO. That is the structural reason this column had to exist separately: the
+/// Johnson column can be bought up without bound, and the composite still cannot exceed `−log₂ ε_C`.
+///
+/// The witness is deliberately absurd (`q = 200`, `pow = 27` — an order of magnitude past anything
+/// shipped): if even that does not move it, no realistic bump does.
+#[test]
+fn no_query_or_pow_bump_moves_the_eps_c_ceiling() {
+    require_ledger();
+    let wrap = shipped()[0].deployed;
+    let deployed = fri_ledger(wrap).expect("ledger");
+    let bought = fri_ledger(FriKnobs {
+        num_queries: 200,
+        query_pow_bits: 27,
+        ..wrap
+    })
+    .expect("ledger");
+
+    assert_eq!(
+        bought.commit_bits, deployed.commit_bits,
+        "buying queries (19 → 200) and PoW (16 → 27) must move the commit column by EXACTLY ZERO — \
+         `ε_C` mentions neither. Lean read {} vs the deployed {}. If this ever moves, the exported \
+         formula is no longer BCIKS20 Thm 8.3's and the citation in COMMIT_FLOOR_BITS is wrong.",
+        bought.commit_bits, deployed.commit_bits
+    );
+    // NON-VACUITY: the bump must genuinely be a bump — it has to move the columns it CAN move, or
+    // this test is asserting that two identical calls agree.
+    assert!(
+        bought.johnson_bits > deployed.johnson_bits
+            && bought.capacity_bits > deployed.capacity_bits,
+        "the witness must actually BUY something on the query ledgers (Johnson {} vs {}, capacity {} \
+         vs {}), or 'the ceiling did not move' is vacuous",
+        bought.johnson_bits,
+        deployed.johnson_bits,
+        bought.capacity_bits,
+        deployed.capacity_bits
+    );
+    // ⚑ And the ceiling BINDS: the bought config's Johnson column soars past its commit column, so
+    //   the composite (ethSTARK eq. (20)'s min) is pinned by ε_C no matter what was bought.
+    assert!(
+        bought.johnson_bits > bought.commit_bits,
+        "with 200 queries the Johnson column ({}) must exceed the commit ceiling ({}) — that is what \
+         makes ε_C the binding term, and what a query-only reading of FRI soundness misses",
+        bought.johnson_bits,
+        bought.commit_bits
+    );
+}
+
 /// **THE FLOORS ARE LOAD-BEARING, NOT SHADOWED BY EACH OTHER.**
 ///
 /// A floor that only ever fires when a louder floor has already fired is decorative. Each of the three
@@ -948,6 +1376,13 @@ fn each_floor_is_independently_load_bearing() {
     // JOHNSON is not implied by CAPACITY: at pow = 16, capacity ≥ 128 only forces q·lb ≥ 112, i.e.
     // Johnson ≥ 72. So (lb, q) = (8, 14) clears capacity and lands Johnson at 72 — under the old 73
     // floor, though above today's 71. Lean adjudicates.
+    //
+    // ⚑ The literal `73` below is the Johnson column's reading at the deployed wrap, and the
+    //   ARITHMETIC of it is correct (19·6/2 + 16). But `73` is the `m → ∞` IDEALISATION of BCIKS20
+    //   Thm 8.3 — it is NOT a proven FRI soundness bound, because it DROPS ε_C. The deployed wrap's
+    //   ε_C reads 71 bits at FIXTURE_LOG_D0 (see COMMIT_FLOOR_BITS), and ethSTARK eq. (20) composes
+    //   the two as `λ ≥ min{−log₂ ε_C, ζ − s·log₂ α} − 1` ⇒ ~70. So `73` is used here ONLY as the
+    //   query-column threshold this witness must land under; do not read it as "the wrap's bits".
     let w = fri_ledger(FriKnobs {
         log_blowup: 8,
         num_queries: 14,
@@ -1018,6 +1453,18 @@ fn the_ledger_fails_closed_outside_the_modeled_window() {
                 max_log_arity: 20,
                 ..base
             },
+        ),
+        // ⚑ `m ≥ 3` is BCIKS20 Thm 8.3's OWN hypothesis, not a wire guard we invented. Below it the
+        //   ε_C formula is not the paper's, so Lean must refuse rather than return a number no
+        //   theorem backs — a caller asking for m = 2 would otherwise get a bigger, unbacked
+        //   commit_bits (ε_C ∝ (m+½)⁷ shrinks as m falls) and quote it as an improvement.
+        (
+            "bciks_m below BCIKS20 Thm 8.3's own m ≥ 3 hypothesis",
+            FriKnobs { bciks_m: 2, ..base },
+        ),
+        (
+            "log_d0 below log_blowup — |D⁽⁰⁾| cannot be smaller than the folded domain",
+            FriKnobs { log_d0: 2, ..base },
         ),
     ] {
         assert!(

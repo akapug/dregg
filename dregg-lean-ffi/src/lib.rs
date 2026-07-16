@@ -638,10 +638,16 @@ pub fn shadow_interchain_reached_consensus(wire: &str) -> Result<String, String>
 }
 
 /// One shipped FRI knob set, as the [`fri_ledger`] wire carries it. The five deployed knobs plus the
-/// extension degree that fixes the challenge-field size `|F| = babyBearP ^ ext_deg`.
+/// extension degree that fixes the challenge-field size `|F| = babyBearP ^ ext_deg` — and the two
+/// ε_C inputs that are NOT knobs at all (see [`FriKnobs::log_d0`] / [`FriKnobs::bciks_m`]).
 ///
 /// This struct is a MARSHALLER, not a model: it computes nothing. Every soundness number for a knob
 /// set comes back from Lean's `friLedger` (see [`fri_ledger`]).
+///
+/// ⚑ **No `Default`, and no defaulting inside `to_wire`.** `log_d0` and `bciks_m` change the reported
+/// `commit_bits` (a `log_d0` move is worth ~2 bits per trace doubling), so a silent default here
+/// would be this crate quietly choosing a soundness number on a caller's behalf. Callers name both
+/// explicitly, at the call site, with a comment saying where the value came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FriKnobs {
     pub log_blowup: usize,
@@ -653,19 +659,33 @@ pub struct FriKnobs {
     /// (`BinomialExtensionField<P3BabyBear, 4>`) or a private `const D`, never as an exported `usize`
     /// — so a caller supplies it explicitly and the pin against the Lean model names it.
     pub ext_deg: usize,
+    /// **NOT AN FRI KNOB.** `|D⁽⁰⁾| = 2 ^ log_d0` — the FRI domain size, i.e. trace height × blowup.
+    /// It is a property of the STATEMENT being proved, not of the prover config: two turns run the
+    /// same knobs at different trace heights and get different `commit_bits`. It rides this struct
+    /// only because it rides the same wire; the model pin in the FRI gate does not pin it, because
+    /// there is no Lean literal for "the height dregg's turns have".
+    pub log_d0: usize,
+    /// **NOT AN FRI KNOB.** BCIKS20's proximity parameter `m ≥ 3` (Thm 8.3) — a parameter of the
+    /// ANALYSIS, not of the deployed prover. Nothing in the prover reads it; it selects which of a
+    /// family of bounds the paper's theorem is instantiated at. Lean REFUSES `m < 3` (the paper's own
+    /// hypothesis), so a caller cannot ask for a number no theorem backs.
+    pub bciks_m: usize,
 }
 
 impl FriKnobs {
-    /// The six-field wire the Lean export reads.
+    /// The eight-field wire the Lean export reads: the six knob fields, then the two ε_C inputs
+    /// (`logD0 bciksM`) that are not knobs. Lean's `friLedgerFFI` refuses any other arity.
     pub fn to_wire(self) -> String {
         format!(
-            "{} {} {} {} {} {}",
+            "{} {} {} {} {} {} {} {}",
             self.log_blowup,
             self.num_queries,
             self.query_pow_bits,
             self.max_log_arity,
             self.log_final_poly_len,
-            self.ext_deg
+            self.ext_deg,
+            self.log_d0,
+            self.bciks_m
         )
     }
 }
@@ -687,10 +707,57 @@ pub struct FriLedger {
     /// HYPOTHESIS — discharged only at arity 2, `log_blowup = 6` in this tree.
     pub per_fold_bits: usize,
     /// `num_queries · log_blowup / 2 + query_pow_bits` — the Johnson query ledger, proven for any code.
+    ///
+    /// ⚑ **This is the `m → ∞` IDEALISATION of BCIKS20 Thm 8.3, and it DROPS ε_C.** `log_blowup/2` is
+    /// `−log₂ α` in the limit of `α = √ρ·(1 + 1/2m)`; the paper's bound is `ε_FRI = ε_C + α^s`. The
+    /// dropped term is [`FriLedger::commit_bits`], and at the deployed wrap it BINDS: this column
+    /// reads `73`, but ethSTARK (eprint 2021/582) eq. (20) composes the two as
+    /// `λ ≥ min{−log₂ ε_C, ζ − s·log₂ α} − 1` ⇒ **~70**. Read this as the query ledger it is, never as
+    /// "the proven FRI soundness".
     pub johnson_bits: usize,
     /// `num_queries · log_blowup + query_pow_bits` — the capacity query ledger. The conjecture beneath
-    /// it is REFUTED (Kambiré); a drift baseline, NOT a security number.
+    /// it is REFUTED; a drift baseline, NOT a security number.
+    ///
+    /// ⚑ **THE CITATION, CORRECTED (2026-07-15).** This tree carried *"REFUTED (Kambiré, eprint
+    /// 2025/2046)"*. That conflated two papers by different authors:
+    ///
+    ///   * **eprint 2025/2046 is Crites–Stewart** — Elizabeth Crites & Alistair Stewart (Web3
+    ///     Foundation), *On Reed–Solomon Proximity Gaps Conjectures*. They disprove the BCIKS
+    ///     up-to-capacity correlated-agreement conjecture (and WHIR's mutual-CA conjecture).
+    ///   * **Kambiré is arXiv 2604.09724** — *Proximity Gaps Conjecture Fails Near Capacity over Prime
+    ///     Fields*. His counterexample chooses the prime AS A FUNCTION OF the block length (`p < n^A`
+    ///     with `p ≡ 1 mod n`, via a quantitative Linnik theorem), so `p` must GROW with `n` — it does
+    ///     **not** instantiate at BabyBear's FIXED 31-bit prime.
+    ///
+    /// Both refute; attribute them correctly. ⚑ **The posture does NOT rest on that escape.** A
+    /// conjecture refuted in general cannot be a security basis for anyone, whatever the
+    /// field-cardinality technicality — "no counterexample reaches BabyBear" is true and is NOT a
+    /// defence. This column stays a drift canary either way, and every claim stands on
+    /// [`FriLedger::johnson_bits`] / [`FriLedger::commit_bits`].
     pub capacity_bits: usize,
+    /// **The BCIKS20 COMMIT-PHASE error `ε_C`, as `⌊−log₂ ε_C⌋`** — the term [`FriLedger::johnson_bits`]
+    /// drops. From **BCIKS20 (eprint 2020/654), Lemma 8.2 / Theorem 8.3, printed pp. 40–41**:
+    ///
+    /// ```text
+    /// ε_FRI = ε_C + α^s ,   α = √ρ·(1 + 1/2m) ,   m ≥ 3
+    /// ε_C   = (m+½)⁷·|D⁽⁰⁾|² / (2ρ^{3/2}|F|)  +  (2m+1)(|D⁽⁰⁾|+1)/√ρ · (Σᵢ l⁽ⁱ⁾)/|F|
+    /// ```
+    ///
+    /// A LOWER bound on `−log₂ ε_C`: Lean's `friCommitLedger` over-estimates `ε_C` at every rounding,
+    /// so this column rounds DOWN, never up.
+    ///
+    /// ⚑ **It is NOT trace-invariant.** `ε_C ∝ |D⁽⁰⁾|²/|F|`, and `|D⁽⁰⁾|` is the trace height × blowup
+    /// — not an FRI knob. At the deployed wrap it reads `71` at `log_d0 = 12`, `69` at `13`, `55` at
+    /// `20`: ~2 bits per trace DOUBLING. So there is no single "dregg's commit-phase bits"; there is
+    /// one per trace height, and nobody has measured dregg's deployed trace-height distribution.
+    ///
+    /// ⚑ **It is a CEILING no knob can buy past.** `ε_C` contains no `num_queries` and no
+    /// `query_pow_bits`, so raising queries or PoW moves this column by exactly ZERO. The only lever
+    /// is `ext_deg`, worth `log₂ p ≈ 30.91` bits per degree (`ε_C ∝ 1/|F| = 1/p^ext_deg`).
+    ///
+    /// ⚑ **Kept SEPARATE.** This is never multiplied or `min`-ed into `johnson_bits` here. The `min`
+    /// of ethSTARK eq. (20) is a reading a CALLER may take; the ledger reports the terms.
+    pub commit_bits: usize,
 }
 
 /// Whether the linked archive exports the FRI soundness ledger (`dregg_fri_ledger`, the C-ABI entry
@@ -713,12 +780,14 @@ pub fn fri_ledger_available() -> bool {
 /// agreement a check. A re-derivation agrees with itself by construction; a call cannot.
 ///
 /// Returns `Err` if the archive lacks the export, or if the wire came back malformed / fail-closed
-/// (an out-of-window knob set — see `FriLedger.knobsInWindow`).
+/// (an out-of-window knob set — see `FriLedger.knobsInWindow`, or ε_C inputs outside
+/// `FriLedger.epsCInWindow`, notably `bciks_m < 3`, which is BCIKS20 Thm 8.3's OWN hypothesis: below
+/// it the formula is not the paper's, so Lean refuses rather than return a number no theorem backs).
 pub fn fri_ledger(knobs: FriKnobs) -> Result<FriLedger, String> {
     ensure_lean_init()?;
     let out = ffi::lean_fri_ledger(&knobs.to_wire())?;
     let cols: Vec<&str> = out.split_whitespace().collect();
-    if cols.len() != 6 {
+    if cols.len() != 7 {
         return Err(format!(
             "dregg_fri_ledger refused {:?} (fail-closed) or returned a malformed ledger: {out:?}",
             knobs.to_wire()
@@ -736,6 +805,7 @@ pub fn fri_ledger(knobs: FriKnobs) -> Result<FriLedger, String> {
         per_fold_bits: n(3)?,
         johnson_bits: n(4)?,
         capacity_bits: n(5)?,
+        commit_bits: n(6)?,
     })
 }
 

@@ -222,17 +222,67 @@ HEIGHT, which is not an FRI knob at all. So:
 
 * the proven posture is **NOT trace-invariant**: at the deployed wrap `commitBits` reads `71` at
   `|D⁽⁰⁾| = 2^12` and `55` at `2^20` — ~2 bits per trace doubling;
-* `ε_C` contains **no `numQueries` and no `powBits`**, so buying queries or PoW cannot pass it. This
-  is the CEILING: at ext-degree `4` the best any `(q, pow)` can reach is `min` over `m ≥ 3` of the
-  two columns, and `commitBits` at `m = 3` caps it (`78` at `|D⁽⁰⁾| = 2^12`). The only lever that
-  moves the ceiling is `extDeg`, worth exactly `log₂ p ≈ 30.91` bits per degree, because
-  `ε_C ∝ 1/|F| = 1/p^extDeg`.
+* `ε_C` contains **no `numQueries` and no `powBits`**, so buying queries or the QUERY proof-of-work
+  cannot pass it. This is the CEILING: at ext-degree `4` the best any `(q, pow)` can reach is `min`
+  over `m ≥ 3` of the two columns, and `commitBits` at `m = 3` caps it (`78` at `|D⁽⁰⁾| = 2^12`).
+  The lever that moves the ceiling is `extDeg`, worth exactly `log₂ p ≈ 30.91` bits per degree,
+  because `ε_C ∝ 1/|F| = 1/p^extDeg`.
 
-**Parametric, never a fixture's height.** `logD0` is an INPUT. dregg's measured cost grid is a
-`2^6`-row trace (`|D⁽⁰⁾| = 2^12`), which is smaller than a production turn; the honest number for a
-real turn is whatever `logD0` that turn has, and nobody has measured the deployed trace-height
-distribution. This column is what makes that measurement pay off instead of living in a scratch
-script.
+  ⚠ **THE CEILING IS A FACT ABOUT WHAT SHIPS, NOT A THEOREM ABOUT THE PROTOCOL.** plonky3 has a
+  SECOND proof-of-work knob that this ledger does not model and `FriParams` does not carry:
+  `commit_proof_of_work_bits` (`fri/src/config.rs:18`, distinct from the `query_proof_of_work_bits`
+  at `:20`), ground **per fold round, before `β` is drawn** (`fri/src/prover.rs:224`) — i.e. against
+  exactly the commit-phase the `ε_C` term bounds. It is omitted from plonky3's own
+  `conjectured_soundness_bits` too (`:42-44`). **Every dregg config sets it to `0`**, so the ceiling
+  holds for every config we ship — but it is unpriced, and `query_and_pow_cannot_pass_epsC` is
+  scoped exactly to what it says: `numQueries` and `powBits`. A named residual, not a swept one.
+
+**Parametric, never a fixture's height.** `logD0` is an INPUT, and that is the point: `ε_C` depends
+on the STATEMENT being proved, so a ledger that took only `FriParams` could not express it. The
+deployed heights ARE measured — `circuit-prove/tests/fri_trace_height_measure.rs` reads them off real
+verified proofs' `BatchProof::degree_bits` — and `FriLedgerSound.ledger_commitBits_at_measured_heights`
+reports the column at each config's own: the recursion wrap's `|D⁽⁰⁾| = 2^19` (`WRAP_LOG_CEIL = 2^16`,
+FORCED on every fold) gives **`61`**, where the cost grid's 1-effect fixture (`2^12`) gives `71`.
+**`61` is the deployed posture.**
+
+## ⚑ WHICH THEOREM THIS COLUMN RESTS ON, AND WHY NOT THE NEWER ONE
+
+**This column is BCIKS20's `ε_C`, and that choice is deliberate.**
+
+**BCSS25** (= BCHKS25 — ECCC TR25-169 and eprint 2025/2055 are the SAME paper, verified: same title,
+same authors Ben-Sasson/Carmon/Haböck/Kopparty/Saraf, Nov 2025) improves the Johnson-radius proximity
+gap from `O(n²)` to `O(n)` exceptional `z`'s. That attacks exactly the `|D⁽⁰⁾|²` that makes `ε_C`
+bind, and it is worth **+17 to +31 bits** at our heights. Its Thm 1.5 carries **no restriction on the
+evaluation domain** — a 2-smooth multiplicative coset is a legal `D` — and the "the constants are
+brutal at `ρ = 1/64`" worry is **false**: BCIKS20 and BCSS25 carry the SAME `ρ^{-3/2}`, so it cancels
+in the ratio and the gain is rate-independent. So the ingredient genuinely fits.
+
+**It is still not our number, for a reason that has nothing to do with the rate:**
+
+* **BCSS25 states no FRI soundness theorem at all.** There is no `ε_FRI` in it. It explicitly DEFERS:
+  its error bound *"replaces the O(n²)-bound from [BCI⁺20], used in any round-by-round analysis of FRI
+  in the list-decoding regime ([BCI⁺20], see also [HLP24] or [Sta25])"* (§4.2, printed p. 27–28). It
+  asserts the consequence; it does not perform the composition.
+* **The theorems FRI actually consumes are sketches resting on unreadable sources.** BCIKS20's Lemma
+  8.2 applies its Thm 7.2 (weighted correlated agreement over CURVES) once per round. BCSS25's
+  curve/weighted versions live in §4, and Thm 4.3's entire proof is *"obtained by plugging in the
+  improved bounds in the proof of [Sta25, Theorem 22]"* — and **[Sta25] is a PERSONAL COMMUNICATION**
+  (S-two whitepaper), as is **[Hab25]**, which Thm 4.6 rests on. Neither is public.
+* **plonky3 does not do it for FRI either.** `p3-whir/src/parameters/soundness.rs:99-123` does
+  transcribe BCSS25 verbatim — but it composes it WHIR-style (per-round OOD, sumcheck folding), not
+  through FRI's round structure, and its Johnson branch's stated assumption is *mutual* correlated
+  agreement (Thm 4.6, the [Hab25] sketch), which Thm 1.5 does not discharge. `p3-fri` still cites
+  BCIKS20 (`fri/src/prover.rs:25-26`). And `p3-whir` is **not a dependency of this repo**.
+
+Composing BCSS25's gap into BCIKS20's round structure would be an assembly that is OURS, resting on
+a citation we cannot read. **That is the named-carrier pattern this tree refuses**, so the column
+reports the bound of the paper that actually proves an `ε_FRI`, and the number is the smaller one.
+
+⚑ **The upgrade is a real theorem to prove, not a citation to copy.** The interface matches exactly
+(BCSS25's Cor 4.4 is a drop-in for the object BCIKS20's Thm 7.2 supplies), and routing through
+BCSS25's Thm 4.2 — curves, unweighted, derived from the fully-proved §3 — would avoid the [Sta25]
+dependency IF the round analysis can be made to accept unweighted curve agreement. Until that is
+proved it is not a security number. When it is, it belongs BESIDE this column, not instead of it.
 
 ⚑ **The columns stay SEPARATE.** `commitBits` is NOT multiplied or `min`-ed into `johnsonBits` here.
 The `min` of eq. (20) is a reading a CALLER may take; the ledger reports the terms. -/
