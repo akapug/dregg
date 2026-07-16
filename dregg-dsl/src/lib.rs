@@ -22,6 +22,17 @@
 //! `gen_sp1` are STRING emitters validated by lint only (their proof systems need
 //! external toolchains); they cast no agreement vote.
 //!
+//! ⚠ CURRENT RESOLUTION of the `gen_plonky3` vote: `dregg-dsl-differential`'s
+//! `plonky3_runner` hand-builds its own `CircuitDescriptor` from the IR and
+//! round-trips THAT through prove/verify. It never instantiates the
+//! macro-emitted `{Name}P3Air`. So the differential harness agrees with a
+//! re-derived mirror of the predicate, NOT with the columns this backend
+//! actually binds — which is why the `find_p3_col` column-0 fallback (a
+//! constraint lowered against the wrong column) survived undetected until the
+//! `gen_plonky3::tests::falsifier_*` tests. Those tests check the emitted
+//! token structure directly; driving the emitted `{Name}P3Air` itself through
+//! prove/verify remains the open seam.
+//!
 //! ## Range-check soundness
 //!
 //! `<=`, `>=` and `in_range!` compile to a genuine bit-decomposition range check
@@ -79,7 +90,12 @@ pub fn dregg_caveat(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let datalog = gen_datalog::generate_datalog(&ir);
     let kimchi = gen_kimchi::generate_kimchi(&ir);
     let midnight = gen_midnight::generate_midnight(&ir);
-    let plonky3 = gen_plonky3::generate_plonky3(&ir);
+    // An operand the native Plonky3 backend cannot bind to a real AIR column is
+    // a hard expansion error — never a silent lowering against column 0.
+    let plonky3 = match gen_plonky3::generate_plonky3(&ir) {
+        Ok(ts) => ts,
+        Err(e) => return e.to_compile_error().into(),
+    };
     let sp1 = gen_sp1::generate_sp1(&ir);
 
     let output = quote! {
@@ -140,7 +156,11 @@ pub fn dregg_effect(attr: TokenStream, item: TokenStream) -> TokenStream {
     let kimchi = gen_kimchi::generate_kimchi(&ir);
     let effect_desc = gen_rust::generate_effect_descriptor(&ir);
     let midnight = gen_midnight::generate_midnight(&ir);
-    let plonky3 = gen_plonky3::generate_plonky3(&ir);
+    // See `dregg_caveat`: an unbindable operand fails loud, never column 0.
+    let plonky3 = match gen_plonky3::generate_plonky3(&ir) {
+        Ok(ts) => ts,
+        Err(e) => return e.to_compile_error().into(),
+    };
     let sp1 = gen_sp1::generate_sp1(&ir);
 
     let output = quote! {

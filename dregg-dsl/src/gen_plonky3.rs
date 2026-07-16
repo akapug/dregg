@@ -36,6 +36,10 @@
 ///
 /// ## Limitations
 ///
+/// - Every operand must be a bare parameter identifier (modulo transparent
+///   `*`/`&`/paren wrappers). A literal, arithmetic expression, field access or
+///   cast has no trace column to read, so it is REFUSED at macro expansion —
+///   see [`resolve_p3_col`]. Pass such a value in as a parameter instead.
 /// - Membership constraints are NOT supported (would require Poseidon2 gadget).
 /// - Match arms with >2 variants use multi-selector columns (not yet optimal).
 /// - The generated code requires `p3_air`, `p3_field`, `p3_matrix` in scope.
@@ -81,10 +85,16 @@ fn has_membership(statements: &[Statement]) -> bool {
     false
 }
 
-pub fn generate_plonky3(ir: &ConstraintIr) -> TokenStream {
+/// Emit the native Plonky3 `Air` impl for `ir`.
+///
+/// Returns `Err` when an operand cannot be bound to a real AIR column (see
+/// [`resolve_p3_col`]). The caller turns that into a `compile_error!`, so an
+/// unrepresentable caveat fails LOUDLY at macro expansion rather than
+/// silently lowering against the wrong column.
+pub fn generate_plonky3(ir: &ConstraintIr) -> Result<TokenStream, syn::Error> {
     // Cannot generate native Plonky3 Air for membership constraints.
     if has_membership(&ir.statements) {
-        return TokenStream::new();
+        return Ok(TokenStream::new());
     }
 
     let struct_name = format_ident!("{}P3Air", to_pascal_case(&ir.name.to_string()));
@@ -106,9 +116,9 @@ pub fn generate_plonky3(ir: &ConstraintIr) -> TokenStream {
         .sum();
 
     // Generate constraint body
-    let constraint_body = emit_p3_constraints(ir, &layout);
+    let constraint_body = emit_p3_constraints(ir, &layout)?;
 
-    quote! {
+    Ok(quote! {
         /// Native Plonky3 Air implementation for this constraint.
         ///
         /// Use with `p3_uni_stark::prove` / `p3_uni_stark::verify` for
@@ -139,7 +149,7 @@ pub fn generate_plonky3(ir: &ConstraintIr) -> TokenStream {
                 #constraint_body
             }
         }
-    }
+    })
 }
 
 // ============================================================================
@@ -242,15 +252,22 @@ fn count_p3_aux(statements: &[Statement], width: &mut usize) {
 // Constraint code emission
 // ============================================================================
 
-fn emit_p3_constraints(ir: &ConstraintIr, layout: &P3Layout) -> TokenStream {
+fn emit_p3_constraints(ir: &ConstraintIr, layout: &P3Layout) -> Result<TokenStream, syn::Error> {
     let mut assertions = Vec::new();
     let mut aux_idx: usize = 0;
 
-    emit_p3_statements(&ir.statements, layout, &mut assertions, &mut aux_idx, None);
+    emit_p3_statements(
+        &ir.statements,
+        layout,
+        &mut assertions,
+        &mut aux_idx,
+        None,
+        ir,
+    )?;
 
-    quote! {
+    Ok(quote! {
         #(#assertions)*
-    }
+    })
 }
 
 fn emit_p3_statements(
@@ -259,11 +276,12 @@ fn emit_p3_statements(
     out: &mut Vec<TokenStream>,
     aux_idx: &mut usize,
     selector: Option<TokenStream>,
-) {
+    ir: &ConstraintIr,
+) -> Result<(), syn::Error> {
     for stmt in statements {
         match stmt {
             Statement::Require(req) => {
-                for expr in emit_p3_requirement(&req.kind, layout, aux_idx) {
+                for expr in emit_p3_requirement(&req.kind, layout, aux_idx)? {
                     let constrained = if let Some(ref sel) = selector {
                         quote! { builder.assert_zero(#sel * (#expr)); }
                     } else {
@@ -273,7 +291,7 @@ fn emit_p3_statements(
                 }
             }
             Statement::Mutate(mutation) => {
-                let expr = emit_p3_mutation(mutation, layout);
+                let expr = emit_p3_mutation(mutation, layout, ir)?;
                 let constrained = if let Some(ref sel) = selector {
                     quote! { builder.assert_zero(#sel * (#expr)); }
                 } else {
@@ -296,18 +314,26 @@ fn emit_p3_statements(
                     let gate0 = quote! { (AB::Expr::ONE - sel.clone()) };
                     let gate1 = quote! { sel.clone() };
 
-                    emit_p3_statements(&arms[0].body, layout, out, aux_idx, Some(gate0));
-                    emit_p3_statements(&arms[1].body, layout, out, aux_idx, Some(gate1));
+                    emit_p3_statements(&arms[0].body, layout, out, aux_idx, Some(gate0), ir)?;
+                    emit_p3_statements(&arms[1].body, layout, out, aux_idx, Some(gate1), ir)?;
                 } else {
                     // General case: all arms gated by selector
                     let gate = quote! { sel.clone() };
                     for arm in arms {
-                        emit_p3_statements(&arm.body, layout, out, aux_idx, Some(gate.clone()));
+                        emit_p3_statements(
+                            &arm.body,
+                            layout,
+                            out,
+                            aux_idx,
+                            Some(gate.clone()),
+                            ir,
+                        )?;
                     }
                 }
             }
         }
     }
+    Ok(())
 }
 
 /// Emit the INDEPENDENT sub-constraints of one requirement for the native
@@ -319,12 +345,12 @@ fn emit_p3_requirement(
     kind: &RequirementKind,
     layout: &P3Layout,
     aux_idx: &mut usize,
-) -> Vec<TokenStream> {
-    match kind {
+) -> Result<Vec<TokenStream>, syn::Error> {
+    Ok(match kind {
         RequirementKind::LessEqual { left, right } => {
             // right - left >= 0, proven via a genuine bit decomposition.
-            let left_col = find_p3_col(layout, &quote::quote!(#left).to_string());
-            let right_col = find_p3_col(layout, &quote::quote!(#right).to_string());
+            let left_col = resolve_p3_col(layout, left)?;
+            let right_col = resolve_p3_col(layout, right)?;
             let diff_col = layout.aux_start + *aux_idx;
             let bits_start = layout.aux_start + *aux_idx + 1;
             *aux_idx += 1 + RANGE_CHECK_BITS;
@@ -344,8 +370,8 @@ fn emit_p3_requirement(
         }
         RequirementKind::GreaterEqual { left, right } => {
             // left - right >= 0, proven via a genuine bit decomposition.
-            let left_col = find_p3_col(layout, &quote::quote!(#left).to_string());
-            let right_col = find_p3_col(layout, &quote::quote!(#right).to_string());
+            let left_col = resolve_p3_col(layout, left)?;
+            let right_col = resolve_p3_col(layout, right)?;
             let diff_col = layout.aux_start + *aux_idx;
             let bits_start = layout.aux_start + *aux_idx + 1;
             *aux_idx += 1 + RANGE_CHECK_BITS;
@@ -363,8 +389,8 @@ fn emit_p3_requirement(
             out
         }
         RequirementKind::Equal { left, right } => {
-            let left_col = find_p3_col(layout, &quote::quote!(#left).to_string());
-            let right_col = find_p3_col(layout, &quote::quote!(#right).to_string());
+            let left_col = resolve_p3_col(layout, left)?;
+            let right_col = resolve_p3_col(layout, right)?;
 
             vec![quote! {
                 {
@@ -375,8 +401,8 @@ fn emit_p3_requirement(
             }]
         }
         RequirementKind::NotEqual { left, right } => {
-            let left_col = find_p3_col(layout, &quote::quote!(#left).to_string());
-            let right_col = find_p3_col(layout, &quote::quote!(#right).to_string());
+            let left_col = resolve_p3_col(layout, left)?;
+            let right_col = resolve_p3_col(layout, right)?;
             let inv_col = layout.aux_start + *aux_idx;
             *aux_idx += 1;
 
@@ -398,7 +424,7 @@ fn emit_p3_requirement(
             // in_range!(value, N): decompose into RANGE_CHECK_BITS bits, bind the
             // reconstruction, and force every bit at index >= N to zero. Each
             // sub-constraint is independent.
-            let value_col = find_p3_col(layout, &quote::quote!(#value).to_string());
+            let value_col = resolve_p3_col(layout, value)?;
             let diff_col = layout.aux_start + *aux_idx;
             let bits_start = layout.aux_start + *aux_idx + 1;
             *aux_idx += 1 + RANGE_CHECK_BITS;
@@ -449,9 +475,9 @@ fn emit_p3_requirement(
             // This is a strict superset of the previous `AB::Expr::ZERO` stub,
             // which proved nothing. The gap is documented here and in the
             // CHANGELOG-equivalent commit message.
-            let root_col = find_p3_col(layout, &quote::quote!(#root).to_string());
-            let leaf_col = find_p3_col(layout, &quote::quote!(#leaf).to_string());
-            let pos_col = find_p3_col(layout, &quote::quote!(#position).to_string());
+            let root_col = resolve_p3_col(layout, root)?;
+            let leaf_col = resolve_p3_col(layout, leaf)?;
+            let pos_col = resolve_p3_col(layout, position)?;
             let d = *depth as usize;
             let chain_start = layout.aux_start + *aux_idx; // d+1 cols
             let bits_start = chain_start + d + 1; // d cols
@@ -546,7 +572,7 @@ fn emit_p3_requirement(
             // Callers needing full Poseidon2 soundness should use the
             // SP1 backend, which runs Poseidon2 in the RISC-V guest where
             // the zkVM trace proves execution.
-            let out_col = find_p3_col(layout, &quote::quote!(#output).to_string());
+            let out_col = resolve_p3_col(layout, output)?;
             let arity = inputs.len();
             let absorb_start = layout.aux_start + *aux_idx;
             // Layout: absorb cols [0..arity.max(1)), then claimed-output col.
@@ -556,7 +582,7 @@ fn emit_p3_requirement(
             // Bind each absorbed column to its input param.
             let mut binding_terms: Vec<TokenStream> = Vec::new();
             for (i, inp) in inputs.iter().enumerate() {
-                let inp_col = find_p3_col(layout, &quote::quote!(#inp).to_string());
+                let inp_col = resolve_p3_col(layout, inp)?;
                 let abs_col = absorb_start + i;
                 binding_terms.push(quote! {
                     {
@@ -582,7 +608,7 @@ fn emit_p3_requirement(
                 }
             }]
         }
-    }
+    })
 }
 
 /// Emit the independent range-check sub-constraints for the native Plonky3
@@ -688,19 +714,42 @@ fn emit_p3_operand_range_checks(
     out
 }
 
-fn emit_p3_mutation(mutation: &crate::ir::Mutation, layout: &P3Layout) -> TokenStream {
+fn emit_p3_mutation(
+    mutation: &crate::ir::Mutation,
+    layout: &P3Layout,
+    ir: &ConstraintIr,
+) -> Result<TokenStream, syn::Error> {
+    let params = available_params(layout);
     let target_col = layout
         .param_cols
         .iter()
         .find(|p| p.name == mutation.target)
-        .expect("mutation target not found");
+        .ok_or_else(|| {
+            syn::Error::new(
+                ir.name.span(),
+                format!(
+                    "dregg native Plonky3 backend: mutation target `{}` does not name a \
+                     parameter of this constraint. Available params: {params}",
+                    mutation.target
+                ),
+            )
+        })?;
 
-    assert!(target_col.is_mutable);
+    if !target_col.is_mutable {
+        return Err(syn::Error::new(
+            ir.name.span(),
+            format!(
+                "dregg native Plonky3 backend: mutation target `{}` is not a `&mut` parameter, \
+                 so it has no old/new column pair to constrain",
+                mutation.target
+            ),
+        ));
+    }
     let old_col = target_col.start_col;
     let new_col = target_col.start_col + 1;
-    let operand_col = find_p3_col(layout, &mutation.operand);
+    let operand_col = resolve_p3_col_by_name(layout, &mutation.operand, ir)?;
 
-    match mutation.op {
+    Ok(match mutation.op {
         MutateOp::SubAssign => {
             // new = old - operand → new - old + operand == 0
             quote! {
@@ -733,25 +782,141 @@ fn emit_p3_mutation(mutation: &crate::ir::Mutation, layout: &P3Layout) -> TokenS
                 }
             }
         }
+    })
+}
+
+/// The list of param names available to an operand, for error messages.
+fn available_params(layout: &P3Layout) -> String {
+    if layout.param_cols.is_empty() {
+        return "(none)".to_string();
+    }
+    layout
+        .param_cols
+        .iter()
+        .map(|p| p.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Structurally strip the wrappers that are transparent for column resolution:
+/// `*x`, `&x`, `&mut x`, `(x)`, and invisible token groups. Everything else is
+/// returned as-is, to be rejected by [`resolve_p3_col`] if it is not a bare
+/// parameter path.
+fn strip_operand_wrappers(expr: &syn::Expr) -> &syn::Expr {
+    match expr {
+        syn::Expr::Unary(syn::ExprUnary {
+            op: syn::UnOp::Deref(_),
+            expr: inner,
+            ..
+        }) => strip_operand_wrappers(inner),
+        syn::Expr::Reference(syn::ExprReference { expr: inner, .. }) => {
+            strip_operand_wrappers(inner)
+        }
+        syn::Expr::Paren(syn::ExprParen { expr: inner, .. }) => strip_operand_wrappers(inner),
+        syn::Expr::Group(syn::ExprGroup { expr: inner, .. }) => strip_operand_wrappers(inner),
+        other => other,
     }
 }
 
-/// Find the column index for a parameter name.
-fn find_p3_col(layout: &P3Layout, expr_str: &str) -> usize {
-    let clean = expr_str
-        .trim()
-        .trim_start_matches('*')
-        .trim()
-        .trim_start_matches("& ")
-        .trim_start_matches('&')
-        .trim();
+/// Resolve an operand expression to the AIR column that holds its value.
+///
+/// ## Why structural, and why this HARD-ERRORS
+///
+/// This used to match the operand's SOURCE TEXT against the param names and
+/// return column 0 on no-match. That was a live soundness hazard: an operand
+/// that is perfectly valid Rust but is not a bare param identifier — a literal
+/// (`require!(amount <= 1000)`), an arithmetic expression
+/// (`require!(a + b <= c)`), a field access, a cast — matches no param name, so
+/// the emitted constraint silently bound column 0 (an unrelated param) instead.
+/// The AIR compiled, looked correct, and gated something the caveat never said:
+/// `require!(amount <= 1000)` lowered to `amount <= other`, with the bound
+/// `1000` absent from the circuit entirely. A gate that exists and does not
+/// gate. See the `falsifier_*` tests below.
+///
+/// The resolution is now STRUCTURAL: the operand must be a bare path to a
+/// declared parameter (modulo transparent `*`/`&`/paren wrappers), matched on
+/// the parameter's identifier — not on a rendering of its tokens. This makes
+/// the whole no-match class (literals, expressions, field accesses, typos)
+/// unrepresentable rather than mis-lowered.
+///
+/// Anything the native backend cannot bind to a real column is a hard
+/// macro-expansion error, following the `Lookup` / `NonAlgebraicConstraint`
+/// precedent in the native backend: refuse loudly rather than emit a
+/// well-formed constraint over the wrong column.
+fn resolve_p3_col(layout: &P3Layout, expr: &syn::Expr) -> Result<usize, syn::Error> {
+    let stripped = strip_operand_wrappers(expr);
+
+    let rendered = quote::quote!(#expr).to_string();
+    let params = available_params(layout);
+
+    let syn::Expr::Path(path_expr) = stripped else {
+        return Err(syn::Error::new_spanned(
+            expr,
+            format!(
+                "dregg native Plonky3 backend: operand `{rendered}` is not a parameter, so it \
+                 cannot be bound to an AIR column. This backend can only constrain bare \
+                 parameter identifiers — a literal, arithmetic expression, field access or cast \
+                 has no column to read. Pass the value in as a parameter instead \
+                 (e.g. `fn c(bound: u64, amount: u64) {{ require!(amount <= bound); }}`). \
+                 Available params: {params}"
+            ),
+        ));
+    };
+
+    if path_expr.qself.is_some() || path_expr.path.segments.len() != 1 {
+        return Err(syn::Error::new_spanned(
+            expr,
+            format!(
+                "dregg native Plonky3 backend: operand `{rendered}` is a qualified/multi-segment \
+                 path, not a parameter of this constraint, so it cannot be bound to an AIR \
+                 column. Available params: {params}"
+            ),
+        ));
+    }
+
+    let ident = &path_expr.path.segments[0].ident;
 
     for p in &layout.param_cols {
-        if p.name == clean {
-            return p.start_col;
+        if ident == p.name.as_str() {
+            return Ok(p.start_col);
         }
     }
-    0
+
+    Err(syn::Error::new_spanned(
+        expr,
+        format!(
+            "dregg native Plonky3 backend: operand `{rendered}` does not name a parameter of \
+             this constraint, so it cannot be bound to an AIR column. Available params: {params}"
+        ),
+    ))
+}
+
+/// Resolve a mutation operand, which the IR stores as an already-rendered
+/// name string (see `ir::Mutation`), to its AIR column.
+///
+/// Unlike [`resolve_p3_col`] this is still a NAME match, because the IR has
+/// discarded the operand's AST by this point (`parse::expr_to_ident_string`).
+/// The soundness-critical half is the same: a name that does not resolve to a
+/// declared param is a HARD ERROR, never column 0.
+fn resolve_p3_col_by_name(
+    layout: &P3Layout,
+    name: &str,
+    ir: &ConstraintIr,
+) -> Result<usize, syn::Error> {
+    for p in &layout.param_cols {
+        if p.name == name {
+            return Ok(p.start_col);
+        }
+    }
+    let params = available_params(layout);
+    Err(syn::Error::new(
+        ir.name.span(),
+        format!(
+            "dregg native Plonky3 backend: mutation operand `{name}` does not name a parameter \
+             of this constraint, so it cannot be bound to an AIR column. This backend can only \
+             constrain mutations whose operand is a bare parameter. Available params: {params}"
+        ),
+    ))
 }
 
 /// Convert snake_case to PascalCase.
@@ -765,4 +930,209 @@ fn to_pascal_case(s: &str) -> String {
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parse::parse_caveat;
+
+    fn ir_of(src: &str) -> ConstraintIr {
+        let f: syn::ItemFn = syn::parse_str(src).expect("valid fn");
+        parse_caveat(&f).expect("parses as a caveat")
+    }
+
+    /// The emitted AIR for a caveat that MUST lower cleanly.
+    fn p3_of(src: &str) -> String {
+        generate_plonky3(&ir_of(src))
+            .expect("this caveat must lower to a native Plonky3 AIR")
+            .to_string()
+    }
+
+    /// The expansion error for a caveat that MUST be refused.
+    fn p3_err(src: &str) -> String {
+        match generate_plonky3(&ir_of(src)) {
+            Ok(ts) => panic!(
+                "expected a HARD ERROR for an operand with no AIR column, but the backend \
+                 silently emitted a constraint. THE COLUMN-0 HAZARD IS OPEN. Emitted:\n{ts}"
+            ),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    /// Strip all whitespace so we can fingerprint emitted token structure
+    /// without depending on `quote`'s spacing.
+    fn squash(s: &str) -> String {
+        s.chars().filter(|c| !c.is_whitespace()).collect()
+    }
+
+    /// THE FALSIFIER (now the regression guard).
+    ///
+    /// `require!(amount <= 1000)` is valid Rust and compiles in every other
+    /// backend. Before the fix, the native Plonky3 backend resolved operands by
+    /// matching SOURCE TEXT against param names; the literal `1000` matched no
+    /// param, so `find_p3_col` returned its `_ => 0` fallback — column 0, which
+    /// here belongs to the UNRELATED param `other`. The emitted AIR constrained
+    /// `other - amount >= 0` (i.e. `amount <= other`), NOT `amount <= 1000`, and
+    /// the bound the caveat NAMES was absent from the circuit entirely.
+    /// A gate that exists and does not gate.
+    ///
+    /// DRIVEN EVIDENCE (pre-fix, on persvati) — the emitted AIR contained
+    /// `let r = local[0usize]; let l = local[1usize]; r - l` and the string
+    /// "1000" appeared NOWHERE in it.
+    ///
+    /// The operand must now be REFUSED at macro expansion.
+    #[test]
+    fn falsifier_literal_bound_is_refused_not_lowered_to_column_zero() {
+        let err = p3_err(
+            r#"
+            fn spend_cap(other: u64, amount: u64) {
+                require!(amount <= 1000);
+            }
+            "#,
+        );
+        assert!(
+            err.contains("1000"),
+            "the error must name the unresolvable operand; got: {err}"
+        );
+        assert!(
+            err.contains("other") && err.contains("amount"),
+            "the error must list the available params; got: {err}"
+        );
+    }
+
+    /// Same class: an arithmetic operand `a + b` is valid Rust, compiles in
+    /// gen_rust, and text-matches no param. Pre-fix it lowered to column 0
+    /// (`a`), so `require!(a + b <= c)` emitted `c - a >= 0` — the `+ b` term
+    /// silently dropped from the circuit. Must now be refused.
+    #[test]
+    fn falsifier_arith_operand_is_refused_not_lowered_to_column_zero() {
+        let err = p3_err(
+            r#"
+            fn sum_cap(a: u64, b: u64, c: u64) {
+                require!(a + b <= c);
+            }
+            "#,
+        );
+        assert!(
+            err.contains("is not a parameter"),
+            "expected the not-a-parameter diagnostic; got: {err}"
+        );
+    }
+
+    /// An operand naming a binding that is not a param (a typo, or a `let`
+    /// shadow the parser discards) must be refused rather than bound to col 0.
+    #[test]
+    fn falsifier_unknown_identifier_is_refused() {
+        let err = p3_err(
+            r#"
+            fn confine_org(allowed_org: u64, request_org: u64) {
+                require!(allowed_org == request_orgg);
+            }
+            "#,
+        );
+        assert!(
+            err.contains("request_orgg") && err.contains("does not name a parameter"),
+            "expected the unknown-operand diagnostic; got: {err}"
+        );
+    }
+
+    /// A mutation operand with no column must be refused too (effects path).
+    #[test]
+    fn falsifier_mutation_operand_literal_is_refused() {
+        let f: syn::ItemFn = syn::parse_str(
+            r#"
+            fn topup(balance: &mut u64, amount: u64) {
+                *balance = *balance + 5;
+            }
+            "#,
+        )
+        .expect("valid fn");
+        let ir = crate::parse::parse_effect(&f, None).expect("parses as an effect");
+        match generate_plonky3(&ir) {
+            Ok(ts) => panic!("mutation operand `5` has no column but was lowered anyway:\n{ts}"),
+            Err(e) => {
+                let err = e.to_string();
+                assert!(
+                    err.contains('5') && err.contains("mutation operand"),
+                    "expected the mutation-operand diagnostic; got: {err}"
+                );
+            }
+        }
+    }
+
+    // ========================================================================
+    // The honest users must keep working — and keep constraining what they say.
+    // ========================================================================
+
+    /// The canonical caveat shape still lowers, and binds the RIGHT columns:
+    /// `require!(current_time <= token_expiry)` must emit
+    /// `r = local[token_expiry], l = local[current_time], r - l`.
+    #[test]
+    fn legitimate_caveat_binds_the_columns_it_names() {
+        let emitted = p3_of(
+            r#"
+            fn not_after(token_expiry: u64, current_time: u64) {
+                require!(current_time <= token_expiry);
+            }
+            "#,
+        );
+        let sq = squash(&emitted);
+        // token_expiry = col 0 (right), current_time = col 1 (left).
+        assert!(
+            sq.contains(
+                "letr:AB::Expr=local[0usize].into();letl:AB::Expr=local[1usize].into();r-l"
+            ),
+            "expected diff over the named columns; emitted:\n{emitted}"
+        );
+    }
+
+    /// Distinct params must resolve to DISTINCT columns — the property the
+    /// column-0 fallback destroyed. If `budget`'s two operands collapsed onto
+    /// one column the constraint would be vacuous.
+    #[test]
+    fn distinct_params_resolve_to_distinct_columns() {
+        let emitted = p3_of(
+            r#"
+            fn confine_org(allowed_org: u64, request_org: u64) {
+                require!(allowed_org == request_org);
+            }
+            "#,
+        );
+        let sq = squash(&emitted);
+        assert!(
+            sq.contains(
+                "letleft_val:AB::Expr=local[0usize].into();letright_val:AB::Expr=local[1usize].into();left_val-right_val"
+            ),
+            "equality must compare two DIFFERENT columns, else it is vacuous; emitted:\n{emitted}"
+        );
+    }
+
+    /// `*balance >= amount` inside an effect: the deref wrapper is transparent
+    /// and must still resolve structurally to `balance`'s column.
+    #[test]
+    fn deref_operand_resolves_structurally() {
+        let f: syn::ItemFn = syn::parse_str(
+            r#"
+            fn transfer(balance: &mut u64, amount: u64) {
+                require!(*balance >= amount);
+                *balance = *balance - amount;
+            }
+            "#,
+        )
+        .expect("valid fn");
+        let ir = crate::parse::parse_effect(&f, None).expect("parses as an effect");
+        let emitted = generate_plonky3(&ir)
+            .expect("`*balance >= amount` must still lower")
+            .to_string();
+        let sq = squash(&emitted);
+        // balance is mutable => cols 0 (old) + 1 (new); amount => col 2.
+        // GreaterEqual diff is `l = local[left]; r = local[right]; l - r`.
+        assert!(
+            sq.contains(
+                "letl:AB::Expr=local[0usize].into();letr:AB::Expr=local[2usize].into();l-r"
+            ),
+            "expected `*balance` to resolve to balance's old column; emitted:\n{emitted}"
+        );
+    }
 }
