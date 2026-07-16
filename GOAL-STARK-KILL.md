@@ -1619,3 +1619,27 @@ holds them; `composition.rs:18`'s own comment "the IVC fold-chain check is unaff
 SURVIVED INTACT" is itself the lie: they survived because they are a mock, not because they are sound) and
 `tests/src/soundness.rs` (now scope-corrected). **The engine retires the moment those 3 preflight checks are
 freed and wired** — the last step of the purge.
+
+## ⚡ NEW THRUST (ember, 2026-07-16 pm): THE VALIDATION-POWER AUDIT
+ember's frame, which reorients everything: **"testing is about VALIDATION, not verification."** The Lean
+proves the MODEL is coherent — it says nothing about whether the artifact matches the model or the model
+matches reality. His years at O(1) Labs on the OCaml integration frameworks: "a scientific method of
+validating our correctness assumptions, and rigging things up so that it flags RED if we break them — the
+only way a protocol that complex was able to be scaled." **Dragon's Egg is MORE complex; AI does not reduce
+the testing burden; formal methods do not absolve us.**
+His honest baseline: *"the repo hasn't seen coordinated testing attention from me in several weeks — all
+this stuff is old and extremely underpowered to have confidence in what we have built."*
+**DO NOT BE DECEIVED BY SCALE.** Today proved it 3×: a suite named `soundness` certifying a MOCK; the
+promotion gate certifying the lie; ratchets that couldn't compile so never flagged red; and `ci.yml`'s
+correct gate that never runs (no GitHub remote in this clone).
+
+`TESTQALOG.md` seeded at the repo root — **APPEND-ONLY** (swarm-safe, ember's explicit instruction), carrying
+the frame + the questions that matter (assumption red-flag coverage, config space, scenario, composition,
+verification↔validation gap, vacuity).
+Swarm `w3bckg8xe` — 6 Fable lanes, each EMPOWERED to make local/mid-scope fixes (never weaken a test, never
+add one that can't fail): 1 power-census (taxonomy + what break would each family catch) · 2 config-space
+(features/env/depths never even BUILT — the `zkvm` silent-ignore class) · 3 scenario/adversarial (every
+guard with no test that TRIPS it — an unexercised guard is an untested claim) · 4 composition/seams (what's
+tested alone but never end-to-end with REAL artifacts) · 5 **the assumption ledger** (every Lean hypothesis
+/ named residual / prose invariant — is it rigged to flag RED?) · 6 verification↔validation gap + test rot
+(Lean modules with no Rust pin; gates comparing two stale copies validate nothing).
