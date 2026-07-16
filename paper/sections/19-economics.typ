@@ -77,7 +77,7 @@ in code; the binding is an operator environment decision.
     [services rail], [metered service runs paid in stablecoin or token,
       dual-asset treasury], [runs against mock chains; mainnet flip unfired],
     [governance weight], [non-custodial proof of holdings at a pinned slot],
-      [runs in test; no live feed ingested],
+      [live local-validator feed; no mainnet snapshot feed],
     [vault mirror], [lock #sym.arrow mirror #sym.arrow burn #sym.arrow
       release], [built; release oracle-custodial on every path],
     [bond sink], [none], [deliberately absent],
@@ -109,8 +109,9 @@ is rendered by the extracted Lean core with no Rust fallback
 pinned slot, with a consume-once nullifier per (poll, holder, asset); the
 snapshot semantics are what defeat borrowed-balance weight and
 vote-sell-revote. The path runs in test, including rejection of a forged
-one-key stake table; no live Solana feed has been ingested, so no real
-mainnet holding has been proven end to end, and holding-weighted ballots land
+one-key stake table. A live `solana-test-validator` RPC feed has proven a real
+local SPL holding end to end; the mainnet snapshot/geyser source is unbuilt, so
+no real mainnet holding has been proven, and holding-weighted ballots land
 in a host-side ballot box rather than the verified vote engine.
 
 *The vault mirror.* Spending the token inside dregg requires locking it into
@@ -122,9 +123,10 @@ stake tables, an authorized-voter-bound tally, a weak-subjectivity anchor ---
 is built and green against fixture clusters
 (`bridge/tests/solana_lock_trustless.rs`) and has not verified real mainnet
 consensus. Release is oracle-custodial on every path; there is no trustless
-outbound. Three open soundness questions on the consensus-verified slice
-(finality strength, stake-set completeness, rotation signer binding) are
-logged in the horizon record, and the leg holds no real value today.
+outbound. The reviewed defects in rooted finality, stake-set completeness, and
+rotation signer binding are closed and pinned by
+`bridge/tests/solana_value_path_holes.rs`; the missing mainnet evidence source
+and the custodial release leg still keep real value off this path.
 
 *The absent bond sink.* The bonded subsystems that exist are denominated in
 other units: relay-operator bonds and slashing run on computrons

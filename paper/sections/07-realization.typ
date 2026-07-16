@@ -163,19 +163,18 @@ and the constitution manager independently agrees. The threshold rule is
 therefore enforced by the same executor as any other cell program, and a
 governance outcome carries the same receipt as a transfer.
 
-== What runs
+== Executed artifacts and recorded deployments
 
-The deployment status, in one statement. The verified executor commits turns on
-the node's production path, and each node reports its per-effect producer
-coverage at `GET /api/node/producer`. A four-node federation spanning two
-machines stream-finalizes attested turns (`docs/STAGE5-N4-RESULT.md`); with the
-verified finality gate on, the two machines commit byte-identical state across
-operating systems and build profiles, and the open seam is a finality-poll
-recomputation cost --- a performance property, not a correctness one
-(`docs/CROSS-MACHINE-FINALITY-FINDING.md`). The game portfolio is served
-publicly from one host's service units (`deploy/games/`). Every descriptor
-install appends an operator-stamped row to an append-only regeneration log
-whose tamper-evidence is git history (`docs/VK-REGEN-LOG.md`).
+The verified executor commits turns on the node path, and each node reports
+per-effect producer coverage at `GET /api/node/producer`. A recorded four-node,
+two-machine experiment stream-finalized attested turns and committed
+byte-identical state across operating systems and build profiles
+(`docs/STAGE5-N4-RESULT.md`); it is evidence about the implementation, not a
+claim that a durable public federation is presently operated. The game surface
+has been served from one host through the units in `deploy/games/`, with replay
+verification and a currently non-durable receipt-anchoring node
+(@sec-games). Every descriptor install appends an operator-stamped row to the
+regeneration log (`docs/VK-REGEN-LOG.md`), whose tamper evidence is git history.
 
 == The client surface
 

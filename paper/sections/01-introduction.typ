@@ -5,26 +5,25 @@
 #import "../defs.typ": lean
 = Introduction <sec-intro>
 
-A distributed object-capability substrate has one hard problem: a party who was
-not present when a transition happened must be able to trust that it happened
-correctly. dregg answers it by making the proof witness the protocol's *correct
-evolution*. A verifier holding one aggregate root --- a new node, an auditor, a
-phone --- learns that every state transition in the system's history was
-authorized, conserved value exactly, and was committed faithfully. It
-re-executes nothing and trusts no executor. Every other design decision derives
-from this requirement, and its negation names what the design rules out: a
-light client cannot be fooled by a server that ran the protocol wrong.
+A distributed object-capability substrate has one hard problem: a party absent
+from a transition must still be able to verify that it happened correctly.
+dregg makes the proof witness the protocol's *correct evolution*. Subject to
+the assumption floor stated in @sec-assurance, a new node, auditor, or phone can
+check one aggregate root and learn that the attested history was authorized,
+conserved value, and was faithfully committed. It re-executes nothing and need
+not trust the executor. The design follows from the adversarial form of this
+requirement: a server that ran the protocol incorrectly must not be able to
+convince a light client otherwise.
 
-Concretely, every finalized turn carries a per-turn proof, and that proof is
-built to be unfoolable along three axes at once. It is *non-malleable*: it
-binds every guarantee-relevant field of the transition, so it cannot be
-re-pointed at a different state or receipt. It *omits no precondition*:
-authority, availability, freshness, and non-amplification are in-circuit
-conjuncts, not side conditions a prover may skip. And it *refines the
-protocol*: the property it attests is the kernel's own semantics, not a lossy
-re-encoding. A history that verifies but never happened --- the *pale ghost*
---- would need a proof with none of these holes, and the section on the proof
-architecture shows that the circuit admits no such proof.
+Each proof-carrying turn is designed along three axes. It is
+*non-malleable*: every guarantee-relevant field is bound, so the proof cannot
+be re-pointed at a different state or receipt. It is *precondition-complete*:
+authority, availability, freshness, and non-amplification are circuit
+conjuncts, not side checks a prover may omit. And it *refines the protocol*:
+the attested relation is the kernel's semantics, not a lossy re-encoding.
+Together these properties exclude the central failure mode --- a history that
+verifies although the kernel could not have produced it --- conditional on the
+proof-system carrier made explicit in @sec-proofs.
 
 == The sentence
 
@@ -68,9 +67,11 @@ sum across a turn is exactly zero. Authority is *produced under
 non-forgeability*: it grows only by authorized, receipt-disclosed construction
 from connectivity already held, and narrows freely along one edge. Evidence is
 *monotone*: once known, never unknown. State is *guarded-mutable*: it changes
-only under a predicate, only by its owner. The kernel's signature is *eight
-verbs*, each the structural rule of one substance's discipline; the section on
-the model states the roster and proves it minimal.
+only under a predicate, only by its owner. The kernel's signature is seven
+constructors, with `shield` and `unshield` as the two directions of one evidence
+operation. Each is assigned a structural role in a substance discipline; the
+section on the model states the roster and the exact, signature-level
+independence property proved about that assignment.
 
 The authority discipline is the one most often gotten wrong. A model in which
 every step only narrows --- a monotone descent down a lattice --- forbids the
@@ -138,9 +139,11 @@ each guarantee it assembles the keystone theorems that discharge it, and it
 axiom set is exactly the kernel triple
 ${"propext", "Classical.choice", "Quot.sound"}$. Everything else enters as an
 explicit floor of eight cryptographic and liveness carriers, stated as
-hypotheses rather than axioms. There is no trusted executor, no out-of-band
-"this was authorized" premise, and no field of the post-state left
-uncommitted.
+hypotheses rather than axioms. On the verified entry there is no
+trusted-executor premise, no out-of-band "this was authorized" premise, and no
+guarantee-relevant field of the post-state omitted from the commitment.
+@sec-limitations states where host execution and deployment state remain
+outside that claim.
 
 == Applications inherit theorems
 

@@ -229,15 +229,17 @@ the security level of the composed artifact. A garbled-evaluation proof is
 checked by the same engine as every other proof in the system, and the engine's
 quantified posture bounds what acceptance is worth. At the deployed recursion
 apex (logarithmic blowup 6, 19 queries, 16 bits of proof-of-work grinding,
-tables floored at $2^(16)$ rows), the analysis of record prices the apex at
-about 58 bits under the BCIKS20 accounting and about 71 bits under BCSS25
+tables floored at $2^(16)$ rows), the analysis of record evaluates the apex at
+57.98 bits under the BCIKS20 accounting and about 71 bits under BCSS25
 (`docs/reference/FRI-BOTH-WIN-LEVERS.md`). Those figures are analytic bounds on
 a supplied proof; the mechanized ledger carries no adversary or grinding model.
-The composed posture is therefore the minimum across layers: about 58 bits of
-engine soundness at deployed parameters, about 62 bits of enforced commitment
-binding, and 124 bits of garbling privacy. The engine posture and the
-commitment prefix, not the garbling function, set the composed level; both have
-identified, costed levers in the same analysis.
+Those figures do not establish an adversarial engine-soundness level, so they
+cannot be combined with the commitment and privacy figures as a minimum. What
+can be compared directly is narrower: the enforced commitment prefix is priced
+at roughly 62 bits and the garbling privacy argument at 124 bits, while the
+accepting STARK still relies on the explicit extraction carrier of
+@sec-assurance. The commitment prefix and that carrier, not the garbling
+function, are the limiting obligations of the composed artifact.
 
 == Why Poseidon2 (not AES, not SHA-256) <app-cost>
 

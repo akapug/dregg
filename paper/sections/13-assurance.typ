@@ -139,20 +139,21 @@ as axioms; nothing else is load-bearing anywhere in the case.
     known.],
 )
 
-The FRI/STARK row is the one carrier the case prices in bits, because it is not
+The FRI/STARK row is the one carrier for which the repository records a bit
+calculation, because it is not
 at parity with the other six cryptographic rows and presenting it unqualified
 beside ed25519 EUF-CMA would suggest otherwise. The deployed recursion apex ---
 the proof a light client actually checks --- runs at extension degree 4 over
 BabyBear, log-blowup 6, 19 queries, and 16 grinding bits, with running tables
 floored at $2^16$ rows, so the initial evaluation domain is $2^22$. Composing
 the batched-FRI theorem of Ben-Sasson--Carmon--Ishai--Kopparty--Saraf (2020)
-through the ethSTARK min rule yields *57.98 bits* for that configuration; under
+through the ethSTARK min rule yields a *57.98-bit density calculation* for that configuration; under
 the same authors' 2025 successor bound, whose exception count is linear rather
 than quadratic in the domain, the figure is *$approx 70.9$ bits*, but the
 composition of that bound into a FRI soundness statement is not published ---
 the calculation is this project's. Both figures bound the acceptance
 probability of a supplied proof and omit the DEEP/ALI terms, so they are
-optimistic upper bounds on a density claim; extraction --- that an accepting
+optimistic arithmetic bounds on a density claim; extraction --- that an accepting
 proof yields a witness --- is the carrier itself, not a consequence of these
 numbers. The two-column structure of the bound is mechanized:
 #lean("FriLedgerSound.query_ledger_does_not_determine_perFold") proves that the

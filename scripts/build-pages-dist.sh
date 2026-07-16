@@ -22,6 +22,7 @@
 #                        (the browser twin of the pg-dregg cap-gated RLS cookbook).
 #   /light-client/     — verify a whole finalized history in ONE recursive proof, in-tab,
 #                        re-witnessing nothing. wasm: reuses /cards/pkg/dregg_wasm.js.
+#   /paper/            — the paper landing + a PDF compiled from paper/main.typ in this build.
 #   /transclusion/     — Xanadu made honest: transclude a span (a verified dregg://
 #                        finalized read), amend the source (live follows, snapshot pins),
 #                        forge (REFUSED), receipt-pinned backlinks. wasm: reuses
@@ -69,6 +70,13 @@ cp "$ROOT/site/root/index.html" "$DIST/index.html"
 # the dense technical index — the developer/operator/prover/machine hub, linked
 # from the landing's nav; deploys at /technical.html (it does NOT replace the landing).
 cp "$ROOT/site/root/technical.html" "$DIST/technical.html"
+# The paper is a first-class build artifact, not a checked-in binary. Its landing
+# is source-controlled; the PDF is compiled from paper/main.typ on every assembly.
+mkdir -p "$DIST/paper"
+cp "$ROOT/site/root/paper.html" "$DIST/paper/index.html"
+typst compile "$ROOT/paper/main.typ" "$DIST/paper/dregg.pdf"
+test -s "$DIST/paper/dregg.pdf"
+test "$(head -c 5 "$DIST/paper/dregg.pdf")" = '%PDF-'
 # the cloud & userspace subsite — the grain economy (the cloud) + the ~30 starbridge
 # apps (the userspace of the kernel) + trustless serving; deploys at /cloud/.
 cp -R "$ROOT/site/cloud" "$DIST/cloud"
@@ -97,6 +105,8 @@ cp -R "$ROOT/site/deos-viewer" "$DIST/deos-viewer"
 cp -R "$ROOT/site/deep" "$DIST/deep"
 test -f "$DIST/explorer/index.html"
 test -f "$DIST/light-client/index.html"
+test -f "$DIST/paper/index.html"
+test -s "$DIST/paper/dregg.pdf"
 test -f "$DIST/dregg-works/index.html"
 test -f "$DIST/dregg-works/verify-badge.js"
 test -f "$DIST/dregg-works/transclude.js"

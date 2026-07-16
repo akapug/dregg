@@ -80,15 +80,19 @@ sub-supermajority tally, a wrong mint, an unauthorized voter, a tampered
 accounts hash, and an attacker-supplied one-key table are each refused
 (`bridge/tests/solana_holdings.rs`).
 
-Three residuals bound the current resolution. Every consensus fixture to date
-is test-constructed from the real constructors; no live Solana feed has been
-ingested, so no mainnet holding has been proven end-to-end. The weighted
-ballots land in a host-side ballot box whose one-vote and quorum gates are a
-hash set and a comparison; the verified vote engine has no weighted cast yet,
-so what is verified is the weight verdict, not the box it lands in. And the
-consensus verification is off-circuit --- re-executing-verifier grade, not
-folded into an AIR --- so a succinct attestation of the holding proof is future
-work, not present fact.
+Three boundaries define the current resolution. A live-feed rung now ingests a
+real SPL holding, stake and vote accounts, and the StakeHistory sysvar over RPC
+from `solana-test-validator`, then proves the holding end to end through the
+same anchored verifier (`bridge/src/solana_feed.rs`,
+`bridge/tests/solana_local_e2e.rs`). This is live transport against a local
+validator, not mainnet provenance: the mainnet snapshot/geyser source and its
+operator-pinned anchor remain unbuilt. Weighted ballots still land in a
+host-side ballot box whose one-vote and quorum gates are a hash set and a
+comparison; the verified vote engine has no landed weighted-cast path, so the
+proved object is the weight verdict, not the box it enters. Finally, consensus
+verification is off-circuit --- re-executing-verifier grade, not folded into an
+AIR --- so a succinct attestation of the holding proof is future work, not a
+present claim.
 
 == Custody has three modes
 
@@ -134,18 +138,17 @@ narrower than lock verification on every path: unlocking on Solana always
 requires an M-of-N Ed25519 oracle attestation, so the outbound leg of the
 vault is oracle-custodial even where the inbound leg is trustless.
 
-Three soundness suspects in the trustless leg are open, flagged by an external
-review on 2026-07-15 and unfixed at the time of writing. The anchored verify
-proves an exact-slot supermajority --- optimistic-confirmation grade --- while
-the evidence structure's documentation says "finalized"; rooted finality is not
-verified. The stake-table derivation proves each supplied account's membership
-in the accounts hash but not the completeness of the set, so omitting stake
-accounts shrinks the denominator in later epochs. And epoch rotation tallies
-with the plain supermajority check rather than the authorized-voter-bound one,
-an asymmetry the code itself documents
-(`bridge/src/solana_provenance.rs`). Each is plausible at the code level and
-none is confirmed exploitable; together they gate the vault from holding real
-value.
+The three value-path defects found in review are closed in the verifier. Value
+release now additionally requires a stake-weighted, authorized-voter-bound
+rooted attestation; an exact-slot vote without a tower root yields
+`SlotNotRooted`. Stake derivation compares supplied effective stake with the
+cluster floor carried by the proven StakeHistory sysvar, so omitting stake
+accounts cannot shrink the denominator below that floor. Epoch rotation uses
+the same `tally_authorized` binding as ordinary votes. The acceptance and
+refusal polarities are pinned together in
+`bridge/tests/solana_value_path_holes.rs`. This closes the three arithmetic and
+authorization defects; it does not supply the missing mainnet snapshot/geyser
+feed or remove the oracle-custodial release path.
 
 == Outbound: settlement
 
@@ -222,8 +225,7 @@ distinction a theorem rather than a convention
 
 Nothing on this surface custodies real value today. The lock program has no
 recorded deployment and its tests sit in a workspace-excluded crate outside CI;
-the trustless verifies have accepted only synthetic fixtures; release is
-oracle-custodial in both trust modes; and the three vault suspects are open.
-The mechanism is built and adversarially tested; deployment behind a production
-ceremony and an external audit is the remaining step, and it is stated here
-once.
+the trustless vault verifier has accepted synthetic evidence but no mainnet
+snapshot/geyser feed; and release is oracle-custodial in both trust modes. The
+mechanism is built and adversarially tested. A production evidence source,
+ceremony, deployment, and external audit remain before it can hold value.

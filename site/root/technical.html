@@ -99,6 +99,7 @@
 </p>
 
 <nav class="toc">
+  <a href="./paper/">paper</a> ·
   <a href="#model">model</a> ·
   <a href="#guarantees">guarantees</a> ·
   <a href="#llms">for LLMs</a> ·
@@ -123,11 +124,12 @@
   <li><b>evidence</b> — monotone nullifier / commitment / epoch ledgers. <i>Birth</i> and <i>retirement</i> bracket the cell lifecycle.</li>
 </ul>
 <p class="dim" style="font-size:.9rem">
-  The kernel is <b>eight verbs</b> — <code>create · write · move · grant · revoke · shield/unshield ·
-  lifecycle · exercise</code> — with machine-checked <b>minimality</b> (each verb irreplaceable) and
-  <b>completeness</b> (they cover every effect) theorems. The catalog is generated from
+  The kernel signature has seven constructors, with <code>shield</code> and <code>unshield</code> as
+  two directions of one evidence operation. The registry gives a total classification of the wire
+  effects and proves its hand-assigned <code>(substance, polarity)</code> labels injective. That is a
+  signature-level non-redundancy check, not a semantic lower bound over all possible kernels. The catalog lives in
   <a href="https://github.com/emberian/dregg/blob/main/metatheory/Dregg2/Substrate/VerbRegistry.lean">VerbRegistry.lean</a>;
-  nothing in it is hand-asserted. Queues, escrows, auctions, namespaces, councils, bridges, channels
+  queues, escrows, auctions, namespaces, councils, bridges, and channels
   are cell-program <i>patterns</i> over these verbs, not kernel primitives. A <b>turn</b> is an atomic,
   capability-gated transition across one or more cells — a forest of effects with delegation edges;
   delegation only attenuates (<code>granted ≤ held</code>). All four guard polarities — caveat, program,
@@ -286,9 +288,10 @@
   design → refinement proofs. Build: <code>cd metatheory &amp;&amp; lake build</code>.
 </p>
 <ul class="idx">
+  <li><a href="./paper/"><b>The paper</b></a> — the end-to-end argument, compiled from <a href="https://github.com/emberian/dregg/tree/main/paper">paper/</a> by the Pages workflow.</li>
   <li><a href="https://github.com/emberian/dregg/blob/main/metatheory/Dregg2/AssuranceCase.lean"><b>AssuranceCase.lean</b></a> — the apex by guarantee (the table above) · <a href="https://github.com/emberian/dregg/blob/main/metatheory/Dregg2/Claims.lean">Claims.lean</a> — the build-enforced pin-net · <a href="https://github.com/emberian/dregg/blob/main/metatheory/CLAIMS.md">CLAIMS.md</a> — the skeptic-facing ledger.</li>
   <li><a href="https://github.com/emberian/dregg/blob/main/metatheory/Dregg2/Tactics.lean"><b>Dregg2/Tactics.lean</b></a> — <code>#assert_axioms</code> / <code>#assert_all_clean</code>: elaborates to an error unless the declaration&rsquo;s axiom set is exactly the three standard kernel axioms · <a href="https://github.com/emberian/dregg/blob/main/metatheory/docs/AXIOM-HYGIENE.md">metatheory/docs/AXIOM-HYGIENE.md</a> — the hygiene discipline.</li>
-  <li><a href="https://github.com/emberian/dregg/blob/main/metatheory/Dregg2/Substrate/VerbRegistry.lean"><b>Substrate/VerbRegistry.lean</b></a> — the verb catalog source of truth (minimality + completeness are theorems, not prose).</li>
+  <li><a href="https://github.com/emberian/dregg/blob/main/metatheory/Dregg2/Substrate/VerbRegistry.lean"><b>Substrate/VerbRegistry.lean</b></a> — the verb catalog source of truth: an exhaustive effect classification plus the signature-level label-injectivity theorem described above.</li>
   <li><a href="https://github.com/emberian/dregg/blob/main/metatheory/Dregg2/Spec/ExecRefinement.lean"><b>Spec/ExecRefinement.lean</b></a> — Exec ⊑ Abstract: the abstract state is witness-free; the symbolic/full witness-mode split (<a href="https://github.com/emberian/dregg/blob/main/turn/src/collapse.rs">turn/src/collapse.rs</a>) is exactly what the refinement throws away.</li>
   <li><a href="https://github.com/emberian/dregg/tree/main/metatheory/Dregg2/Circuit"><b>Dregg2/Circuit/</b></a> — the circuit IR + descriptor emission: constraints generated from proved Lean modules as byte-pinned, SHA-256-fingerprinted artifacts; the Rust prover (<a href="https://github.com/emberian/dregg/tree/main/circuit">circuit/</a>) interprets them and authors zero constraint semantics.</li>
   <li><a href="https://github.com/emberian/dregg/blob/main/metatheory/Metatheory/KeyLeak.lean"><b>Metatheory/KeyLeak.lean</b></a> — a leaked key is a compromised principal: blast radius bounded to the attenuation-closure of the leaked c-list; the named open construction is Settlement Soundness.</li>
@@ -387,6 +390,7 @@
   <a href="https://github.com/emberian/dregg">source</a> ·
   <a href="https://github.com/emberian/dregg/blob/main/readme.md">human README</a> ·
   <a href="https://github.com/emberian/dregg/blob/main/README-LLMs.md">machine README</a> ·
+  <a href="./paper/">paper</a> ·
   <a href="https://discord.gg/eSTsv7DWcR">Discord</a> ·
   <a href="https://www.dregg.net">dregg.net</a>
 </footer>

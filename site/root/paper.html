@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>dregg — paper</title>
+  <meta name="description" content="The paper for dregg, a verified distributed object-capability substrate: its model, implementation, assurance case, and explicit assumption floor.">
+  <meta property="og:type" content="article">
+  <meta property="og:title" content="dregg: A Verified Distributed Object-Capability Substrate">
+  <meta property="og:description" content="The model, implementation, assurance case, and explicit assumption floor.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230a0f0d'/%3E%3Ctext x='16' y='22' font-size='16' text-anchor='middle' fill='%235b8a5a' font-family='monospace'%3E%CF%80%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<nav class="nav">
+  <span class="nav__mark">&pi;</span>
+  <span class="nav__name"><code>dregg</code> / paper</span>
+  <span class="nav__tag">model &middot; realization &middot; assurance</span>
+  <div class="nav__links">
+    <a class="nav__link" href="../">Home</a>
+    <a class="nav__link" href="../technical.html">Technical index</a>
+    <a class="nav__link nav__link--active" href="./dregg.pdf">PDF</a>
+    <a class="nav__link" href="https://github.com/emberian/dregg/tree/main/paper">Source</a>
+  </div>
+</nav>
+
+<main class="wrap">
+  <header class="page-header">
+    <p class="section__label">paper of record</p>
+    <h1>dregg: A Verified Distributed Object-Capability Substrate</h1>
+    <p>Ember Arlynx</p>
+  </header>
+
+  <section aria-labelledby="abstract-heading">
+    <h2 id="abstract-heading" class="section__title">Abstract</h2>
+    <p class="paper-abstract">
+      dregg is a distributed object-capability substrate designed so that an absent party can verify a
+      history without re-executing it or trusting its executor. Atomic turns leave receipts; in full-turn
+      proving mode, recursive aggregation reduces a history to one root. The paper develops the cell and
+      capability model, the Lean executor and emitted-circuit path, the light-client argument, and the
+      cryptographic and deployment assumptions that bound the claim.
+    </p>
+    <a class="paper-download" href="./dregg.pdf">Read the paper (PDF)</a>
+  </section>
+
+  <section class="paper-refs" aria-labelledby="companion-heading">
+    <h2 id="companion-heading" class="section__title">Companions</h2>
+    <ul>
+      <li><strong>Claims ledger.</strong> <a href="https://github.com/emberian/dregg/blob/main/metatheory/CLAIMS.md">The exact mechanized claim inventory and its assumption labels.</a></li>
+      <li><strong>Assurance case.</strong> <a href="https://github.com/emberian/dregg/blob/main/metatheory/Dregg2/AssuranceCase.lean">The Lean apex organized by guarantee.</a></li>
+      <li><strong>Paper source.</strong> <a href="https://github.com/emberian/dregg/tree/main/paper">Typst sources, figures, references, and build instructions.</a></li>
+    </ul>
+  </section>
+</main>
+
+<footer class="site-foot">
+  <div class="site-foot__inner">
+    <span class="site-foot__left"><code>dregg</code> &mdash; a verified distributed object-capability substrate. AGPL-3.0-or-later.</span>
+    <div class="site-foot__links">
+      <a href="../">Home</a>
+      <a href="../technical.html">Technical index</a>
+      <a href="./dregg.pdf">PDF</a>
+      <a href="https://github.com/emberian/dregg">GitHub</a>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>

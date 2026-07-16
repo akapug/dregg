@@ -109,14 +109,17 @@ moved asset's total is exactly invariant
 are pointwise unchanged (#lean("RecordKernel.recTransferBal_untouched")) ---
 no cross-asset leakage.
 
-== The eight verbs
+== The kernel signature
 
 The kernel signature is eight verbs --- seven constructors, with `shield` and
 `unshield` the two directions of one evidence verb. Each is the structural
-rule of one substance's discipline. The assignment of (substance, polarity) to
-verbs is injective, so minimality is a theorem
-(#lean("VerbRegistry.minimality"), #lean("VerbRegistry.each_verb_irreplaceable")):
-drop any verb and the behavior it provides has no other provider.
+rule of one substance's discipline. The registry assigns each constructor a
+(substance, polarity) label and proves that assignment injective
+(#lean("VerbRegistry.minimality"), #lean("VerbRegistry.each_verb_irreplaceable")).
+Thus no two constructors occupy the same labeled role. This is a
+signature-level non-redundancy check; it is not a semantic lower bound proving
+that no alternative kernel or composition could express the same behavior with
+fewer primitives.
 
 #figure(
   table(
@@ -145,14 +148,16 @@ prologue; pipelining is composition); or a *factory pattern* --- a cell
 program built from the surviving verbs only. On the live enum the factory
 bucket is provably empty (#lean("VerbRegistry.no_live_factory_tags")): the
 families the factories replaced were deleted from the wire, not reclassified.
-The exhaustiveness check is the compiler's --- a tag added to the roster
-without a classification does not compile. Faithfulness of the roster to the
-wire enum, however, is established by reification, not by the compiler, and at
-present it is behind: the registry classifies the twenty-seven variants of the
-verb-lockstep enum, and `turn/src/action.rs` has since grown by six --- a
-program write (`SetProgram`), a capability-gated supply entry (`Mint`), a
-shielded transfer (`ShieldedTransfer`), and the promise / notify / react
-coordination triple. The registry does not yet classify these six.
+The exhaustiveness check is the Lean compiler's --- a tag added to the roster
+without a classification does not compile. A cross-language cover gate
+(`turn/tests/verb_registry_cover_gate.rs`) parses the 34-variant Rust `Effect`
+enum and the Lean `EffectTag` roster as sets and requires exact equality. A new
+wire variant therefore fails either the Rust--Lean parity gate (no reified tag)
+or the Lean build (an unclassified tag). The seven post-lockstep additions are
+classified at their substance boundary: `SetProgram` and `Custom` as guarded
+state writes, `Mint` as the issuer side of `move`, and `ShieldedTransfer`,
+`Promise`, `Notify`, and `React` under the evidence discipline, with `React`
+explicitly pinned to the same classification as a note spend.
 
 == Turns
 
@@ -165,9 +170,10 @@ A turn is a forest of actions executed as a transaction: every action admits
 and every effect lands, or the state is exactly what it was. Each action
 carries a demand $tack.l$ supply pair (the cell demands a predicate, the
 action supplies a witnessed authorization; @sec-authority), the guards in
-scope, the proposed effects, and a signed binding to the canonical message ---
-the federation, the action, and its effects --- so an inference cannot be
-replayed into a context it was not proved for. Multi-party turns are the same shape under
+scope, the proposed effects, and a signed binding to the canonical v3 message
+--- the federation, turn nonce, action, and effects --- so a signature cannot
+be re-pointed to another action body or replayed after the nonce advances.
+Multi-party turns are the same shape under
 one commitment, each participant contributing its own authorization.
 Conditional and pipelined turns are composition structure, where `hole(Pred)`
 is a typed hole a counterparty's fulfillment discharges.

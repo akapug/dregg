@@ -29,6 +29,7 @@ The web presence is deliberately two sites:
 |------|------|
 | `root/index.html` | The sober landing, deployed at `/`. Static HTML on the shared green stylesheet, with a small inline script (quickstart tabs); no framework, no build step. Every link is verified against a real on-disk file. |
 | `root/technical.html` | The dense technical hub, deployed at `/technical.html`. Audience-organized (LLMs / developers / operators / provers); every `blob/main` link verified against disk. |
+| `root/paper.html` | The paper landing, deployed at `/paper/`; the build compiles `paper/main.typ` beside it as `/paper/dregg.pdf`. |
 | `assets/style.css` | The shared green stylesheet used by the landing, the hub, and the demo pages. |
 | `cloud/` | The cloud & userspace subsite, deployed at `/cloud/`: the grain economy plus the ~30 starbridge apps and trustless serving. |
 | `deep/` | The full dense product site (prebuilt zola output from `~/dev/dregg-site`, base-url `…/deep`), deployed at `/deep/`; dregg.net carries the accessible layer and links here per-page. |
@@ -51,6 +52,9 @@ card gallery, baked from `wasm/` + deos-view examples), `/cockpit-gpui/`
 
 ## Build
 
+The assembler requires Typst 0.15.0 for the paper; the Pages workflow installs
+that version explicitly.
+
 ```sh
 scripts/build-pages-dist.sh              # full build: all wasm + bake + assemble into site/dist
 GPUI=0  scripts/build-pages-dist.sh      # skip the heavy gpui-web cockpit build
@@ -61,7 +65,9 @@ REUSE_WASM=1 scripts/build-pages-dist.sh # reuse already-built wasm pkgs (fast l
 The script:
 
 1. copies the static pages (`root/index.html` → `/`,
-   `root/technical.html` → `/technical.html`, plus `assets/`, `cloud/`,
+   `root/technical.html` → `/technical.html`, and `root/paper.html` →
+   `/paper/`), compiles `paper/main.typ` → `/paper/dregg.pdf`, then copies
+   `assets/`, `cloud/`,
    `explorer/`, `light-client/`, `dregg-works/`, `transclusion/`,
    `deos-viewer/`, and `deep/` — with `test -f` teeth on
    `deep/index.html` and `deep/egg/index.html`);
@@ -88,7 +94,8 @@ gh workflow run "Deploy deos to GitHub Pages" --ref main
 ```
 
 The workflow checks out with `lfs: true` so the atlas's LFS-tracked images
-materialize, fetches the pinned `plonky3-recursion` fork rev (so the wasm
+materialize, installs Typst 0.15.0 for the paper, fetches the pinned
+`plonky3-recursion` fork rev (so the wasm
 circuit matches a fresh cargo resolve), and fails the deploy on any broken
 wasm crate rather than shipping a stale artifact.
 

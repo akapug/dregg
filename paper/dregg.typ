@@ -73,52 +73,42 @@
 
 #heading(level: 1, numbering: none)[Abstract]
 
-dregg is a distributed object-capability substrate whose proofs witness the
-protocol's evolution. A verifier holding one aggregate root learns that every
-state transition in the system's history was authorized, conservative, and
-correctly committed. It re-executes nothing and trusts no executor.
+dregg is a distributed object-capability substrate designed so that an absent
+party can verify a history without re-executing it or trusting its executor. An
+atomic turn exercises attenuable authority over owned state and leaves a
+receipt. For histories produced with full-turn proving enabled, recursive
+aggregation reduces those receipts to one root. Subject to an explicit
+cryptographic and liveness floor, checking that root establishes that the
+attested history preserves authorization, value conservation, and faithful
+state commitment.
 
-State lives in cells. A turn is the exercise of an attenuable, proof-carrying
-token over owned state, and it leaves a verifiable receipt. The kernel governs
-four substances, each under its own discipline of use: value is linear,
-authority is produced under non-forgeability, evidence is monotone, state is
-guarded-mutable. The kernel signature is eight verbs, one structural rule per
-discipline. Minimality of the signature is a theorem
-(#lean("VerbRegistry.minimality")), not an aesthetic.
+The model divides a cell into four substances with different disciplines:
+linear value, guarded-mutable state, constructively produced authority, and
+monotone evidence. Holding a capability means being able to exhibit the witness
+required for an act; delegation may attenuate authority, while new authority
+must be constructed from connectivity already held and disclosed by a receipt.
+One predicate algebra expresses caveats, cell programs, turn preconditions, and
+intent demands, and makes their coordination and disclosure costs explicit.
 
-Authority is constructive: to hold a capability is to be able to exhibit a
-witness that authorizes an act. Authority grows through introduction,
-amplification, and minting, but only by authorized, receipt-disclosed
-construction from connectivity already held. Every constraint on a turn is one
-predicate algebra at four polarities, priced by a coordination dial and a
-disclosure dial.
+The Lean 4 kernel defines these transition semantics and is also the executor
+the node invokes through FFI. The same verified modules emit byte-pinned circuit
+descriptors. Rust interprets those descriptors but does not author their
+constraint algebra, and the descriptor prover is the production proving path.
+The assurance case then connects the running entry to five guarantees---
+authority, conservation, integrity, freshness, and light-client
+unfoolability---while pinning each theorem's axiom set and exposing every
+cryptographic or liveness hypothesis.
 
-The semantics are a Lean 4 kernel that is also the deployed executor, reached
-by FFI from the node. The STARK circuit is emitted from that kernel: no
-deployed first-party circuit is authored in Rust, and a build gate fails any
-constraint algebra added there. One proving path exists, the descriptor
-prover; the hand-written engine is deleted. At the deployed recursion apex the
-FRI carrier calculates to 57.98 bits of soundness under the proximity-gaps
-bound the prover cites --- a bound on a supplied proof, not an extraction
-theorem --- while a configuration at extension degree eight clears 120. The
-assurance case is itself a Lean artifact: each guarantee's keystone is pinned
-to the kernel's three axioms plus an explicit cryptographic and liveness
-floor.
-
-The capability is one abstraction across a distance parameter: a local
-microkernel object and a distributed cell are the same attenuable reference.
-On seL4 the verified executor runs inside a protection domain and commits a
-turn with the same accepted receipt the host produces; the microkernel's
-capability graph isolates the domains while dregg's mediates the cells within.
-The circuit shape rotates under proof of equivalent enforcement, and every
-finalized turn remains verifiable across shapes, so a light client's one check
-covers the whole history.
-
-Applications are factory-minted cells whose rules are predicate programs
-enforced by the same executor, so their contracts are inherited from kernel
-theorems rather than re-established per app; a deployed portfolio of verified
-games, holding-weighted governance, and cross-chain settlement each exercise
-the same receipt object.
+Those hypotheses matter. The deployed FRI parameters yield a 57.98-bit density
+calculation under the cited proximity bound; this is not an adversarial
+soundness theorem over supplied proofs, and extraction remains an explicit
+carrier. A costed extension-degree-eight configuration exceeds 120 bits under
+the same calculation but is not deployed. The paper therefore separates the
+mechanized transition argument, the proof-system floor, and deployment
+correspondence instead of collapsing them into one claim. The same kernel spans
+distributed cells and local seL4 protection domains, and factory-minted
+applications reuse its receipt and theorem boundary rather than introducing a
+second execution model.
 
 #v(1em)
 

@@ -19,13 +19,14 @@ at `GET /api/node/producer` (`node/src/api.rs`). For turns the host arm
 produces, the host implementation is in the trust base, and the running-entry
 guarantee is stated over the verified entry, not over the host arms.
 
-*The proof-system soundness carrier is quantified, and the deployed apex
-evaluates near 58 bits.* The circuit layer's one recursion assumption is
+*The proof-system carrier is explicit; its parameter ledger evaluates to
+57.98 bits but does not prove adversarial soundness.* The circuit layer's one recursion assumption is
 #lean("RecursiveAggregation.EngineSound.recursive_sound"). Beneath it, the
 mechanized reduction takes #lean("FriLdtExtractV3") --- everything FRI delivers
 on an accepting run --- as a hypothesis, and the Lean development contains no
 adversary or grinding model, so the figures that follow are evaluations of a
-published bound at the deployed parameters, not an extraction theorem. At the
+published bound at the deployed parameters, not an extraction theorem or a
+bound against a prover strategy. At the
 recursion apex, the artifact a light client verifies (log-blowup 6, 19 queries,
 16 grinding bits, tables floored at $2^16$ rows, hence a $2^22$ evaluation
 domain), the batched-FRI bound of Ben-Sasson, Carmon, Ishai, Kopparty, and
