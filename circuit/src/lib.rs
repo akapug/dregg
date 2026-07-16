@@ -463,6 +463,11 @@ pub mod note_spend_witness;
 /// two adjacent committed sorted leaves (hence NOT revoked). See module docs.
 pub mod non_revocation_witness;
 
+/// Rust witness builder for the Lean-emitted whole-history turn-chain binding descriptor
+/// (`dregg-turn-chain-binding-v2`). It builds the 14-column shared-Poseidon2-chip trace and the
+/// four scalar public inputs, including the continuing-hash padding rows used by the deployed fold.
+pub mod turn_chain_witness;
+
 /// Rust witness builder for the emitted arithmetic-threshold descriptor
 /// (`dregg-predicate-arith-ge::threshold-v1`) — the analog of `membership_witness_4ary` /
 /// `adjacency_witness`, so consumers of `descriptor_by_name` can prove/verify a

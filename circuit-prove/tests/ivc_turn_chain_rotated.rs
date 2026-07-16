@@ -276,6 +276,7 @@ fn k_fold_turn_chain_proves_and_verifies() {
 /// the wire against its honest anchor — re-witnessing nothing, never touching the
 /// prover-only `root.1`. Then the tampered polarities are REFUSED:
 ///   - a corrupted root-proof byte fails the recursion verify;
+///   - a corrupted Lean-emitted binding-proof byte fails descriptor verification;
 ///   - a relabeled carried public (in the envelope) fails the claimed-publics tooth;
 ///   - a wrong anchor fails the VK pin;
 ///   - a bumped envelope version / truncated blob fails the decode (fail-closed).
@@ -352,7 +353,23 @@ fn whole_chain_proof_bytes_roundtrip_and_tamper() {
         }
     }
 
-    // (C) REFUSES: a relabeled carried public in the ENVELOPE (a post-fold splice).
+    // (C) REFUSES: a corrupted Lean-emitted binding-descriptor proof byte. If the postcard
+    // structure survives the bit flip, the descriptor verifier itself must refuse it.
+    {
+        let mut bad = env.clone();
+        let mid = bad.binding_proof.len() / 2;
+        bad.binding_proof[mid] ^= 0xFF;
+        let bad_bytes = bad.to_postcard();
+        match verify_whole_chain_proof_bytes(&bad_bytes, &vk) {
+            Err(
+                TurnChainError::ClaimedPublicsUnattested { .. }
+                | TurnChainError::EnvelopeDecode { .. },
+            ) => {}
+            other => panic!("a corrupted binding descriptor proof must be refused; got {other:?}"),
+        }
+    }
+
+    // (D) REFUSES: a relabeled carried public in the ENVELOPE (a post-fold splice).
     // The claimed-publics tooth reads the publics against the binding proof.
     {
         let mut bad = env.clone();
@@ -364,7 +381,7 @@ fn whole_chain_proof_bytes_roundtrip_and_tamper() {
         }
     }
 
-    // (D) REFUSES: a wrong anchor (a different circuit) — the VK pin fires.
+    // (E) REFUSES: a wrong anchor (a different circuit) — the VK pin fires.
     {
         let mut wrong = vk;
         wrong.0[0] ^= 0xFF;
@@ -374,7 +391,7 @@ fn whole_chain_proof_bytes_roundtrip_and_tamper() {
         }
     }
 
-    // (E) REFUSES (fail-closed decode): a bumped version, a truncated body, empty.
+    // (F) REFUSES (fail-closed decode): a bumped version, a truncated body, empty.
     {
         let mut bad = env.clone();
         bad.version = 999;
@@ -771,96 +788,60 @@ fn carried_binding_proof_unlinked_to_root_is_rejected() {
 }
 
 // ============================================================================
-// CODEX FINDING #2 — CLOSED. The binding AIR now enforces the per-row Poseidon2
-// digest hash + num_turns = real-row count IN-CIRCUIT, so a forged digest or a
-// forged num_turns is UNSAT. These two teeth pin the verify→REJECT flip.
-//
-// They build the GENUINE wide binding trace by hand (mirroring the lib-private
-// `binding_row`: 7 scalar cols `[old, new, acc_in, acc_out, idx, is_real,
-// real_count]` + the 352-col Poseidon2 aux block), prove it (honest control
-// passes), then TAMPER one field and assert the inner verify REJECTS. A single
-// inner uni-STARK (no recursion fold) — CI-runnable.
+// CODEX FINDING #2 — CLOSED on the Lean-emitted descriptor. Its shared-chip lookup
+// forces the per-row Poseidon2 digest and its last-row PI pin forces num_turns to the
+// real-row count. These two teeth pin the descriptor prove→verify→REJECT flip.
 // ============================================================================
 
-/// Build the GENUINE binding trace for a 2-real-row chain `genesis -> mid -> final`
-/// (padded_len == 2, so no padding rows). Returns `(matrix, pis)` ready for the inner
-/// prover. The Poseidon2 aux block is the real `poseidon2_permute_aux_witness`, so the
-/// in-circuit hash constraint (`acc_out == poseidon2([acc_in, old, new, idx], 4)[0]`)
-/// is satisfied — the honest control. A caller tampers `matrix`/`pis` to forge.
+/// Build the descriptor's production 14-column chip-lane witness for a two-turn chain.
 fn honest_binding_2row(
     genesis: BabyBear,
     mid: BabyBear,
     final_root: BabyBear,
 ) -> (Vec<Vec<BabyBear>>, Vec<BabyBear>) {
-    use dregg_circuit::plonky3_prover::{POSEIDON2_WIDTH, poseidon2_permute_aux_witness};
-    use dregg_circuit::poseidon2::hash_4_to_1;
-
-    const HASH_ARITY_TAG: u32 = 4;
-    let row =
-        |old: BabyBear, new: BabyBear, acc_in: BabyBear, idx: BabyBear, real_count: BabyBear| {
-            let acc_out = hash_4_to_1(&[acc_in, old, new, idx]);
-            let mut st = [BabyBear::ZERO; POSEIDON2_WIDTH];
-            st[0] = acc_in;
-            st[1] = old;
-            st[2] = new;
-            st[3] = idx;
-            st[4] = BabyBear::new(HASH_ARITY_TAG);
-            let aux = poseidon2_permute_aux_witness(st);
-            let mut r = vec![
-                old,
-                new,
-                acc_in,
-                acc_out,
-                idx,
-                BabyBear::ONE, // is_real (both rows real for a 2-turn chain)
-                real_count,
-            ];
-            r.extend_from_slice(&aux);
-            (acc_out, r)
-        };
-
-    let (h0, r0) = row(genesis, mid, BabyBear::ZERO, BabyBear::ZERO, BabyBear::ONE);
-    let (h1, r1) = row(mid, final_root, h0, BabyBear::ONE, BabyBear::new(2));
-    let chain_digest = h1;
-    let pis = vec![genesis, final_root, BabyBear::new(2), chain_digest];
-    (vec![r0, r1], pis)
+    dregg_circuit::turn_chain_witness::turn_chain_binding_witness(&[
+        (genesis, mid),
+        (mid, final_root),
+    ])
+    .expect("two continuous turns build a binding witness")
 }
 
-fn to_binding_matrix(rows: &[Vec<BabyBear>]) -> p3_matrix::dense::RowMajorMatrix<P3BabyBear> {
-    use p3_field::PrimeCharacteristicRing;
-    let width = rows[0].len();
-    let flat: Vec<P3BabyBear> = rows
-        .iter()
-        .flat_map(|r| r.iter().map(|&v| P3BabyBear::from_u64(v.0 as u64)))
-        .collect();
-    p3_matrix::dense::RowMajorMatrix::new(flat, width)
+fn binding_descriptor_rejects(rows: &[Vec<BabyBear>], pis: &[BabyBear]) -> bool {
+    use dregg_circuit::descriptor_by_name::descriptor_by_name;
+    use dregg_circuit::descriptor_ir2::{
+        MemBoundaryWitness, prove_vm_descriptor2, verify_vm_descriptor2,
+    };
+    use dregg_circuit::turn_chain_witness::TURN_CHAIN_BINDING_NAME;
+
+    let desc =
+        descriptor_by_name(TURN_CHAIN_BINDING_NAME).expect("turn-chain descriptor dispatches");
+    match classify("binding descriptor rejection", || {
+        let proof = prove_vm_descriptor2(&desc, rows, pis, &MemBoundaryWitness::default(), &[])?;
+        verify_vm_descriptor2(&desc, &proof, pis)
+    }) {
+        Outcome::UnsatPanic(_) | Outcome::Err(_) => true,
+        Outcome::Accepted(_) => false,
+    }
 }
 
 use dregg_circuit::refusal::{Outcome, classify};
-use p3_baby_bear::BabyBear as P3BabyBear;
 
 /// **CODEX FINDING #2 (digest) — CLOSED.** The in-AIR per-row Poseidon2 binding forces
 /// `acc_out == hash_4_to_1([acc_in, old, new, idx])`, so a forged `chain_digest` (a
 /// tampered last-row `acc_out` + public) has NO satisfying witness. Honest control
 /// passes; the forgery is REJECTED.
 #[test]
-fn binding_air_forged_digest_unsat() {
-    use dregg_circuit_prove::ivc_turn_chain::{TurnChainBindingAir, ir2_leaf_wrap_config};
-    use dregg_circuit_prove::plonky3_recursion_impl::recursive::{
-        prove_inner_for_air_with_config, verify_inner_for_air_with_config,
-    };
-
+fn binding_descriptor_forged_digest_unsat() {
     let genesis = BabyBear::new(111);
     let mid = BabyBear::new(222);
     let final_root = BabyBear::new(333);
-    let cfg = ir2_leaf_wrap_config();
-    let air = TurnChainBindingAir;
 
     // HONEST CONTROL: the genuine trace proves + verifies.
     let (rows, pis) = honest_binding_2row(genesis, mid, final_root);
-    let honest = prove_inner_for_air_with_config(&air, to_binding_matrix(&rows), &pis, &cfg);
-    verify_inner_for_air_with_config(&air, &honest, &pis, &cfg)
-        .expect("the honest wide binding trace must verify (control)");
+    assert!(
+        !binding_descriptor_rejects(&rows, &pis),
+        "the honest emitted-descriptor witness must verify (control)"
+    );
 
     // FORGERY: claim a different chain_digest than the real hash chain. We move the
     // public AND the last-row acc_out to the forged value (so the carry chain still
@@ -873,27 +854,9 @@ fn binding_air_forged_digest_unsat() {
     let mut forged_pis = pis.clone();
     forged_pis[3] = forged_digest; // chain_digest public
 
-    // A forged trace cannot satisfy the constraints. In DEBUG the prover's
-    // `check_constraints` panics on the unsatisfied row; in RELEASE the prover emits a
-    // proof that VERIFY rejects. Either way the prove→verify pipeline must NOT SUCCEED.
-    let forged_rows2 = forged_rows.clone();
-    let forged_pis2 = forged_pis.clone();
-    let cfg2 = cfg.clone();
-    let succeeded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let air = TurnChainBindingAir;
-        let p = prove_inner_for_air_with_config(
-            &air,
-            to_binding_matrix(&forged_rows2),
-            &forged_pis2,
-            &cfg2,
-        );
-        verify_inner_for_air_with_config(&air, &p, &forged_pis2, &cfg2).is_ok()
-    }))
-    .unwrap_or(false); // a panic (debug constraint failure) == rejected
     assert!(
-        !succeeded,
-        "FINDING #2 CLOSED: a forged chain_digest must be REJECTED by the in-AIR \
-         Poseidon2 binding (acc_out is forced to the genuine hash), but the pipeline accepted it"
+        binding_descriptor_rejects(&forged_rows, &forged_pis),
+        "FINDING #2 CLOSED: the Lean-emitted descriptor must REJECT a forged chain_digest"
     );
 }
 
@@ -901,42 +864,25 @@ fn binding_air_forged_digest_unsat() {
 /// `real_count[last]`, the cumulative count of `is_real` rows. A forged `num_turns`
 /// (≠ the genuine 2) mismatches the real-row count and is UNSAT.
 #[test]
-fn binding_air_forged_num_turns_unsat() {
-    use dregg_circuit_prove::ivc_turn_chain::{TurnChainBindingAir, ir2_leaf_wrap_config};
-    use dregg_circuit_prove::plonky3_recursion_impl::recursive::{
-        prove_inner_for_air_with_config, verify_inner_for_air_with_config,
-    };
-
+fn binding_descriptor_forged_num_turns_unsat() {
     let genesis = BabyBear::new(444);
     let mid = BabyBear::new(555);
     let final_root = BabyBear::new(666);
-    let cfg = ir2_leaf_wrap_config();
-    let air = TurnChainBindingAir;
 
     let (rows, pis) = honest_binding_2row(genesis, mid, final_root);
     // HONEST CONTROL.
-    let honest = prove_inner_for_air_with_config(&air, to_binding_matrix(&rows), &pis, &cfg);
-    verify_inner_for_air_with_config(&air, &honest, &pis, &cfg)
-        .expect("the honest wide binding trace must verify (control)");
+    assert!(
+        !binding_descriptor_rejects(&rows, &pis),
+        "the honest emitted-descriptor witness must verify (control)"
+    );
 
     // FORGERY: claim num_turns = 99 while the genuine real-row count is 2. Only pv[2]
     // changes; the trace (real_count[last] == 2) cannot satisfy `real_count == num_turns`.
     let mut forged_pis = pis.clone();
     forged_pis[2] = BabyBear::new(99);
-    let rows2 = rows.clone();
-    let forged_pis2 = forged_pis.clone();
-    let cfg2 = cfg.clone();
-    let succeeded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let air = TurnChainBindingAir;
-        let p =
-            prove_inner_for_air_with_config(&air, to_binding_matrix(&rows2), &forged_pis2, &cfg2);
-        verify_inner_for_air_with_config(&air, &p, &forged_pis2, &cfg2).is_ok()
-    }))
-    .unwrap_or(false);
     assert!(
-        !succeeded,
-        "FINDING #2 CLOSED: a forged num_turns (99 != real count 2) must be REJECTED by \
-         the real_count[last] == num_turns binding, but the pipeline accepted it"
+        binding_descriptor_rejects(&rows, &forged_pis),
+        "FINDING #2 CLOSED: the Lean-emitted descriptor must REJECT num_turns != real_count[last]"
     );
 }
 
@@ -1047,15 +993,19 @@ fn expose_claim_idx(
 // A/B are deliberate emphasis in the test name (root A forging a claim of B's endpoints).
 #[allow(non_snake_case)]
 fn mixed_root_forgery_executes_A_claims_B() {
-    use dregg_circuit_prove::ivc_turn_chain::TurnChainBindingAir;
+    use dregg_circuit::descriptor_by_name::descriptor_by_name;
+    use dregg_circuit::descriptor_ir2::{
+        MemBoundaryWitness, prove_vm_descriptor2, verify_vm_descriptor2,
+    };
+    use dregg_circuit::turn_chain_witness::TURN_CHAIN_BINDING_NAME;
     use dregg_circuit_prove::ivc_turn_chain::{
         SEG_ANCHOR_WIDTH, SEG_COUNT, SEG_DIGEST_FIRST, SEG_DIGEST_WIDTH, SEG_FIRST_OLD,
-        SEG_LAST_NEW, SEG_WIDTH, ir2_leaf_wrap_config, prove_descriptor_leaf_rotated_with_segment,
-        seg_poseidon_commit, verify_turn_chain_recursive_from_parts,
+        SEG_LAST_NEW, SEG_WIDTH, TurnChainBindingProof, ir2_leaf_wrap_config,
+        prove_descriptor_leaf_rotated_with_segment, seg_poseidon_commit,
+        verify_turn_chain_recursive_from_parts,
     };
     use dregg_circuit_prove::plonky3_recursion_impl::recursive::{
-        DreggRecursionConfig, create_recursion_backend, prove_inner_for_air_with_config,
-        recursion_vk_fingerprint, verify_inner_for_air_with_config,
+        DreggRecursionConfig, create_recursion_backend, recursion_vk_fingerprint,
     };
     use p3_recursion::{
         BatchOnly, ProveNextLayerParams, RecursionOutput,
@@ -1091,14 +1041,22 @@ fn mixed_root_forgery_executes_A_claims_B() {
     assert_eq!(b_genesis, gb);
     assert_eq!(b_final, fb);
     let (b_rows, b_pis) = honest_binding_2row(b_genesis, b_mid, b_final);
-    let b_binding_inner = prove_inner_for_air_with_config(
-        &TurnChainBindingAir,
-        to_binding_matrix(&b_rows),
+    let b_desc =
+        descriptor_by_name(TURN_CHAIN_BINDING_NAME).expect("binding descriptor dispatches");
+    let b_binding_batch = prove_vm_descriptor2(
+        &b_desc,
+        &b_rows,
         &b_pis,
-        &config,
-    );
-    verify_inner_for_air_with_config(&TurnChainBindingAir, &b_binding_inner, &b_pis, &config)
-        .expect("B's binding leaf proves + self-verifies");
+        &MemBoundaryWitness::default(),
+        &[],
+    )
+    .expect("B's emitted binding descriptor proves");
+    verify_vm_descriptor2(&b_desc, &b_binding_batch, &b_pis)
+        .expect("B's emitted binding descriptor self-verifies");
+    let b_binding_inner = TurnChainBindingProof {
+        proof: b_binding_batch,
+        public_inputs: core::array::from_fn(|i| b_pis[i].as_u32()),
+    };
     let b_genesis_root = b_pis[0];
     let b_final_root = b_pis[1];
     let b_num_turns = 2usize;
@@ -1388,8 +1346,8 @@ fn pinned_leaf_identity_rejects_foreign_child_in_band() {
 // `ungated_prover_with_stub_leaf_cannot_produce_a_root`, and
 // `recursive_layer_rejects_forged_leaf_public_inputs` are NOT re-expressed here.
 // They depended on lib-internal items that are NOT publicly exported for an
-// integration test — `generate_chain_trace_unchecked` / `TurnChainBindingAir` /
-// `trace_to_matrix` / `verify_inner_for_air` (the in-circuit binding-trace tooth), and
+// integration test — the deleted v1 `generate_chain_trace_unchecked` /
+// `trace_to_matrix` / `verify_inner_for_air` internals, and
 // the v1 `prove_descriptor_leaf` + `RecursionInput::UniStark` + `EffectVmDescriptorAir`
 // wrap (which the rotated cutover DELETED — the v1 leaf no longer exists). The
 // surviving forged-PI tooth (`ungated_prover_with_forged_post_commit_cannot_produce_a_root`,

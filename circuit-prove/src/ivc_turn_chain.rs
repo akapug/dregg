@@ -24,10 +24,11 @@
 //!
 //! ## The two pieces
 //!
-//! 1. **[`TurnChainBindingAir`]** (one row per folded position): binds the
-//!    sequential chain AND the running ordered-history digest. Each row carries
-//!    `[old_root, new_root, acc_in, acc_out, idx, is_real, real_count]` plus the
-//!    per-row Poseidon2 permutation aux block, with constraints:
+//! 1. **Lean-emitted `dregg-turn-chain-binding-v2` descriptor** (one row per folded
+//!    position): binds the sequential chain AND the running ordered-history digest.
+//!    Each row carries `[old_root, new_root, acc_in, acc_out, idx, is_real,
+//!    real_count]`; its Poseidon2 relation is served by the shared chip lookup, with
+//!    constraints emitted by Lean for:
 //!      - chain continuity: `new_root[i] == old_root[i+1]` (the temporal tooth);
 //!      - first row `old_root == genesis_root` (public input);
 //!      - last row `new_root == final_root` (public input);
@@ -40,10 +41,10 @@
 //!      - `num_turns` (public) is pinned to `real_count[last]`, the cumulative
 //!        count of the non-padding (`is_real`) rows.
 //!
-//!    A trace whose turns are reordered, or that drops/inserts a turn, breaks
-//!    continuity and is UNSAT; a forged `chain_digest` has no satisfying Poseidon2
-//!    witness; a forged `num_turns` mismatches the real-row count — those are the
-//!    load-bearing rejections.
+//!    Rust builds only the chip-lane witness and interprets that descriptor. A trace
+//!    whose turns are reordered, or that drops/inserts a turn, breaks continuity and
+//!    is UNSAT; a forged `chain_digest` has no satisfying Poseidon2 witness; a forged
+//!    `num_turns` mismatches the real-row count — those are the load-bearing rejections.
 //!
 //! 2. **The recursion tree (Gold) — REAL leaves.** Each finalized turn's leaf
 //!    is the **ROTATED multi-table `Ir2BatchProof`** (`transferVmDescriptor2R24` &c) carried on
@@ -53,11 +54,11 @@
 //!    params are retargeted to match it, and the leaf-wrap OUTPUT is a standard recursion-config
 //!    log_blowup 3 / 38-query proof). The retired v1 `prove_descriptor_leaf` (the 186-column
 //!    `EffectVmDescriptorAir` uni-STARK over a `FinalizedTurn::base_trace`) is DELETED —
-//!    `FinalizedTurn` no longer carries that trace. The chain-binding leaf is
-//!    wrapped too, and all batch leaves are pairwise aggregated up a binary tree
-//!    (`build_and_prove_aggregation_layer`, chained via [`BatchOnly`]) to ONE
-//!    root batch-STARK proof. The verifier checks ONLY the root; its cost is
-//!    independent of K.
+//!    `FinalizedTurn` no longer carries that trace. All batch leaves are pairwise
+//!    aggregated up a binary tree (`build_and_prove_aggregation_layer`, chained via
+//!    [`BatchOnly`]) to ONE root batch-STARK proof. The Lean-emitted turn-chain proof
+//!    is carried alongside and verified directly; the root's ordered segment remains
+//!    the in-circuit link to the executed leaves. Verification cost is independent of K.
 //!
 //! ## What the leaf wrap proves (the statement-equality argument)
 //!
@@ -96,12 +97,11 @@
 //!      collision resistance + MMCS binding, the accepted root is a valid
 //!      batch-STARK of the SAME root verifier-circuit structure the anchor
 //!      was extracted from.)
-//!   2. **Claimed-publics attestation** — the carried `genesis_root` /
-//!      `final_root` / `num_turns` / `chain_digest` must verify as the public
-//!      inputs of the carried chain-binding uni-STARK
-//!      (`WholeChainProof::binding_proof`, the same statement the fold wraps
-//!      in-circuit). Fiat–Shamir binds all four PIs into that proof, so
-//!      relabeling any carried field is refused outright.
+//!   2. **Lean-descriptor attestation** — the carried turn-chain descriptor proof
+//!      (`WholeChainProof::binding_proof`) is verified against its exact four PIs. Its scalar
+//!      genesis/final/count must match the head-lane projection of the carried wide claim; its own
+//!      sequential digest remains bound by the descriptor. The distinct wide ordered-segment digest
+//!      is attested by tooth 4 below.
 //!   3. **The root** — `verify_recursive_batch_proof` on the single root.
 //!
 //! ## CRITICAL HOLES #1/#2/#6 — CLOSED by the ordered SEGMENT ACCUMULATOR (2026-06-24)
@@ -109,7 +109,7 @@
 //! A cross-model adversarial review (`docs/CODEX-IVC-SOUNDNESS-REVIEW.md` +
 //! `CODEX-IVC-REVIEW-2.md`) found a forged whole-chain claim the verifier ACCEPTS: a
 //! root that EXECUTED history A paired with a whole-chain CLAIM for a different history
-//! B. The root cause was that the chain claim came from a SEPARATE `TurnChainBindingAir`
+//! B. The root cause was that the chain claim came from a separate hand-authored binding AIR
 //! leaf attesting a hash-chain over CLAIMED roots — never tied in-circuit to the
 //! descriptor leaves' ACTUAL roots — so the binding leaf (and its claim) could be swapped
 //! or built for a different history than the one the descriptor leaves executed.
@@ -138,7 +138,8 @@
 //! (`circuit-prove/tests/ivc_turn_chain_rotated.rs`) asserts the forgery is REJECTED
 //! (`is_err`) — the close. The out-of-band swap witness
 //! `carried_binding_proof_unlinked_to_root_is_rejected` and the #2 digest/num_turns forge
-//! teeth (`binding_air_forged_digest_unsat` / `binding_air_forged_num_turns_unsat`) all
+//! teeth (`binding_descriptor_forged_digest_unsat` /
+//! `binding_descriptor_forged_num_turns_unsat`) all
 //! still reject. The whole fix is dregg-side — it reuses the EXISTING recursion-fork
 //! `expose_claim` channel + the aggregation expose hook (which exposes the
 //! `air_public_targets` AND lets the combine add cross-child constraints) + the in-circuit
@@ -203,10 +204,8 @@
 //! (`running ∘ next_turn -> new_running`); see its docs for what the unbounded
 //! driver still needs.
 
-use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_baby_bear::BabyBear as P3BabyBear;
 use p3_field::{PrimeCharacteristicRing, PrimeField32};
-use p3_matrix::dense::RowMajorMatrix;
 use p3_recursion::{
     BatchOnly, ProveNextLayerParams, RecursionInput, RecursionOutput, build_and_prove_next_layer,
     build_and_prove_next_layer_with_expose,
@@ -219,15 +218,16 @@ use crate::joint_turn_aggregation::{
     CarrierWitness, DescriptorParticipant, verify_descriptor_participant,
 };
 use crate::plonky3_recursion_impl::recursive::{
-    DreggRecursionConfig, RecursionCompatibleProof, create_recursion_backend,
-    recursion_vk_fingerprint, verify_recursive_batch_proof_with_config,
+    DreggRecursionConfig, create_recursion_backend, recursion_vk_fingerprint,
+    verify_recursive_batch_proof_with_config,
 };
-use dregg_circuit::descriptor_ir2::Ir2BatchProof;
+use dregg_circuit::descriptor_by_name::descriptor_by_name;
+use dregg_circuit::descriptor_ir2::{
+    DreggStarkConfig, Ir2BatchProof, MemBoundaryWitness, prove_vm_descriptor2,
+    verify_vm_descriptor2,
+};
 use dregg_circuit::field::BabyBear;
-use dregg_circuit::plonky3_prover::{
-    POSEIDON2_PERM_AUX_COLS, POSEIDON2_WIDTH, poseidon2_permute_aux_witness, poseidon2_permute_expr,
-};
-use dregg_circuit::poseidon2::hash_4_to_1;
+use dregg_circuit::turn_chain_witness::{TURN_CHAIN_BINDING_NAME, turn_chain_binding_witness};
 
 // Re-exported so chain consumers (the light client) name the trust-anchor type
 // from the module that defines the verification discipline around it.
@@ -608,10 +608,9 @@ pub enum TurnChainError {
         /// The fingerprint the presented root actually has (hex).
         found: String,
     },
-    /// **The claimed chain publics are unattested.** The carried
-    /// `genesis_root`/`final_root`/`num_turns`/`chain_digest` failed to
-    /// verify as the public inputs of the carried chain-binding proof —
-    /// a relabeled (spliced) public claim.
+    /// **The claimed chain publics are unattested.** Either the Lean-emitted binding descriptor
+    /// proof failed, its scalar endpoint/count PIs disagreed with the carried wide claim, or the
+    /// recursion root's exposed wide segment disagreed with that claim — a relabeled splice.
     ClaimedPublicsUnattested {
         /// The underlying verification error.
         reason: String,
@@ -678,211 +677,23 @@ impl core::fmt::Display for TurnChainError {
 impl std::error::Error for TurnChainError {}
 
 // ============================================================================
-// TurnChainBindingAir: the sequential (temporal) chain binding.
-// ============================================================================
-
-// Column layout of the chain-binding trace (one row per folded position).
-//
-// SOUNDNESS NOTE (#2 fix): the running digest `acc_out` is NO LONGER a free
-// witness column. Each row carries the FULL in-circuit Poseidon2 permutation aux
-// block, and `acc_out` is forced to be `poseidon2([acc_in, old_root, new_root,
-// idx, 4, 0..])[0]` — exactly the `hash_4_to_1` the trace generator computes.
-// A forged `chain_digest` (a tampered `acc_out` on the last row) therefore has
-// no satisfying witness, and a forged `num_turns` is rejected by the real-row
-// counter binding (`real_count[last] == num_turns`).
-pub(crate) const COL_OLD_ROOT: usize = 0;
-pub(crate) const COL_NEW_ROOT: usize = 1;
-const COL_ACC_IN: usize = 2;
-pub(crate) const COL_ACC_OUT: usize = 3;
-const COL_IDX: usize = 4;
-const COL_IS_REAL: usize = 5;
-const COL_REAL_COUNT: usize = 6;
-/// First column of the per-row Poseidon2 permutation aux block.
-const BINDING_AUX0: usize = 7;
-/// Total binding-AIR trace width: 7 scalar columns + the Poseidon2 aux block.
-const BINDING_WIDTH: usize = BINDING_AUX0 + POSEIDON2_PERM_AUX_COLS;
-/// The arity domain-separation tag `hash_4_to_1` seeds at state position 4.
-const HASH_ARITY_TAG: u32 = 4;
-
-/// AIR binding the finalized turn order AND the running ordered-history digest.
-/// One row per folded position: `[old_root, new_root, acc_in, acc_out, idx,
-/// is_real, real_count, <Poseidon2 aux block>]`.
-///
-/// Public inputs `[genesis_root, final_root, num_turns, chain_digest]`.
-///
-/// Constraints:
-///   1. chain continuity (transition): `new_root[i] == old_root[i+1]` — the
-///      temporal tooth. A reordered/dropped/inserted turn breaks this and is
-///      UNSAT.
-///   2. first row `old_root == genesis_root`.
-///   3. last row `new_root == final_root`.
-///   4. running digest continuity: `acc_out[i] == acc_in[i+1]`; first row
-///      `acc_in == 0`; last row `acc_out == chain_digest`.
-///   5. **per-row hash binding (THE #2 fix):** `acc_out == poseidon2([acc_in,
-///      old_root, new_root, idx], arity=4)[0]`, the genuine in-circuit Poseidon2
-///      (the SAME arithmetization `P3MerklePoseidon2Air` uses, via
-///      [`poseidon2_permute_expr`]). `acc_out` is no longer free — a forged
-///      `chain_digest` has no satisfying witness.
-///   6. **idx counter:** `idx == 0` on the first row, `idx[i+1] == idx[i] + 1`
-///      on transitions — the hash is POSITIONALLY bound (rows cannot be
-///      permuted without breaking the digest).
-///   7. **num_turns binding:** `is_real` is boolean and monotone non-increasing
-///      (real rows first, then padding); `real_count` runs the cumulative count
-///      of real rows; the last row pins `real_count == num_turns`. A forged
-///      `num_turns` (≠ the real folded count) is UNSAT.
-///
-/// The digest commits to the ordered (old_root, new_root, idx) triples, so two
-/// distinct finalized histories with the same endpoints still yield distinct
-/// digests, and a reordering moves `idx` and so the digest.
-pub struct TurnChainBindingAir;
-
-impl<F: PrimeCharacteristicRing + Sync> BaseAir<F> for TurnChainBindingAir {
-    fn width(&self) -> usize {
-        BINDING_WIDTH
-    }
-
-    fn num_public_values(&self) -> usize {
-        4 // [genesis_root, final_root, num_turns, chain_digest]
-    }
-
-    fn main_next_row_columns(&self) -> Vec<usize> {
-        // Next-row reads: old_root (continuity), acc_in (digest chain), idx
-        // (counter), is_real (monotonicity), real_count (cumulative count).
-        vec![
-            COL_OLD_ROOT,
-            COL_ACC_IN,
-            COL_IDX,
-            COL_IS_REAL,
-            COL_REAL_COUNT,
-        ]
-    }
-}
-
-impl<AB: AirBuilder> Air<AB> for TurnChainBindingAir
-where
-    AB::F: PrimeField32,
-{
-    fn eval(&self, builder: &mut AB) {
-        let main = builder.main();
-        let local = main.current_slice();
-        let next = main.next_slice();
-
-        let old_root: AB::Expr = local[COL_OLD_ROOT].into();
-        let new_root: AB::Expr = local[COL_NEW_ROOT].into();
-        let acc_in: AB::Expr = local[COL_ACC_IN].into();
-        let acc_out: AB::Expr = local[COL_ACC_OUT].into();
-        let idx: AB::Expr = local[COL_IDX].into();
-        let is_real: AB::Expr = local[COL_IS_REAL].into();
-        let real_count: AB::Expr = local[COL_REAL_COUNT].into();
-        let next_old_root: AB::Expr = next[COL_OLD_ROOT].into();
-        let next_acc_in: AB::Expr = next[COL_ACC_IN].into();
-        let next_idx: AB::Expr = next[COL_IDX].into();
-        let next_is_real: AB::Expr = next[COL_IS_REAL].into();
-        let next_real_count: AB::Expr = next[COL_REAL_COUNT].into();
-
-        let public_values = builder.public_values();
-        let genesis_root: AB::Expr = public_values[0].into();
-        let final_root: AB::Expr = public_values[1].into();
-        let num_turns: AB::Expr = public_values[2].into();
-        let chain_digest: AB::Expr = public_values[3].into();
-
-        // Constraint 1 (THE temporal tooth): chain continuity. Each turn's
-        // new_root must be the next turn's old_root.
-        builder
-            .when_transition()
-            .assert_zero(new_root.clone() - next_old_root);
-
-        // Constraint 2: first row old_root == genesis_root.
-        builder
-            .when_first_row()
-            .assert_zero(old_root.clone() - genesis_root);
-
-        // Constraint 3: last row new_root == final_root.
-        builder
-            .when_last_row()
-            .assert_zero(new_root.clone() - final_root);
-
-        // Constraint 4: running digest chain.
-        builder.when_first_row().assert_zero(acc_in.clone());
-        builder
-            .when_transition()
-            .assert_zero(acc_out.clone() - next_acc_in);
-        builder
-            .when_last_row()
-            .assert_zero(acc_out.clone() - chain_digest);
-
-        // Constraint 5 (THE #2 FIX): per-row hash binding. The running digest is
-        // FORCED to be the genuine Poseidon2 of `[acc_in, old_root, new_root,
-        // idx]` with the arity-4 domain tag — byte-identical to the trace
-        // generator's `hash_4_to_1`. `acc_out` is no longer a free column.
-        let aux: &[AB::Var] = &local[BINDING_AUX0..BINDING_AUX0 + POSEIDON2_PERM_AUX_COLS];
-        let arity_tag = AB::F::from_u32(HASH_ARITY_TAG);
-        let input_state: [AB::Expr; POSEIDON2_WIDTH] = core::array::from_fn(|i| match i {
-            0 => acc_in.clone(),
-            1 => old_root.clone(),
-            2 => new_root.clone(),
-            3 => idx.clone(),
-            4 => AB::Expr::from(arity_tag),
-            _ => AB::Expr::ZERO,
-        });
-        let digest = poseidon2_permute_expr(builder, input_state, aux);
-        builder.assert_zero(acc_out - digest);
-
-        // Constraint 6: idx is a positional counter (0, 1, 2, ...).
-        builder.when_first_row().assert_zero(idx.clone());
-        builder
-            .when_transition()
-            .assert_zero(next_idx - (idx + AB::Expr::ONE));
-
-        // Constraint 7: num_turns is the count of REAL (non-padding) rows.
-        //   - is_real is boolean;
-        //   - is_real is monotone non-increasing (real rows first, then padding):
-        //     a 0->1 transition is forbidden, so `next_is_real * (1 - is_real) == 0`;
-        //   - real_count starts at is_real[0] and accumulates is_real;
-        //   - the last row pins real_count == num_turns.
-        builder.assert_bool(is_real.clone());
-        builder
-            .when_transition()
-            .assert_zero(next_is_real.clone() * (AB::Expr::ONE - is_real.clone()));
-        builder
-            .when_first_row()
-            .assert_zero(real_count.clone() - is_real);
-        builder
-            .when_transition()
-            .assert_zero(next_real_count - (real_count.clone() + next_is_real));
-        builder.when_last_row().assert_zero(real_count - num_turns);
-    }
-}
-
-// ============================================================================
 // Trace generation for the chain binding.
 // ============================================================================
 //
 // Bucket-F (PATH-PRESERVE Phase 5a): the v1 `generate_chain_trace` /
 // `generate_chain_trace_unchecked` (which read v1 OLD/NEW_COMMIT at PI 0/4) are DELETED.
-// The rotated fold builds its binding trace via `generate_chain_trace_rotated` (reading the
-// ROTATED commitments at PI 34/35).
+// The rotated fold builds its binding trace via `generate_chain_trace_rotated`, using PI 34/35
+// for narrow legs and the deployed wide anchor's head lane when those scalar PIs are retired.
 
-pub(crate) fn trace_to_matrix(trace: &[Vec<BabyBear>]) -> RowMajorMatrix<P3BabyBear> {
-    debug_assert!(
-        trace.iter().all(|row| row.len() == BINDING_WIDTH),
-        "binding trace rows must all be {BINDING_WIDTH} wide"
-    );
-    let values: Vec<P3BabyBear> = trace
-        .iter()
-        .flat_map(|row| row.iter().map(|&v| to_p3(v)))
-        .collect();
-    RowMajorMatrix::new(values, BINDING_WIDTH)
-}
-
-/// Read a finalized turn's chain roots from its mandatory ROTATED leg (PI 34/35).
+/// The scalar endpoint projection consumed by the turn-chain descriptor.
 ///
-/// Bucket-F (PATH-PRESERVE Phase 5a): the rotated leg is MANDATORY — `FinalizedTurn` carries
-/// exactly one [`crate::joint_turn_aggregation::RotatedParticipantLeg`], so reading its roots is
-/// infallible (no v1 fallback leg, no `Option`).
-fn rotated_roots(t: &FinalizedTurn) -> (BabyBear, BabyBear) {
-    let leg = &t.participant.rotated;
-    (leg.old_root(), leg.new_root())
+/// Narrow legs publish their scalar ROTATED roots at PI 34/35. Wide legs deliberately retire those
+/// PIs to zero and publish genuine 8-felt anchors instead, so the descriptor consumes lane 0 of the
+/// same [`turn_anchors8`] values the recursion segment binds. This keeps the scalar descriptor
+/// meaningful on the deployed wide path without changing its Lean-authored constraints.
+fn binding_roots(t: &FinalizedTurn) -> (BabyBear, BabyBear) {
+    let (old8, new8) = turn_anchors8(t);
+    (old8[0], new8[0])
 }
 
 /// The host-side mirror of one descriptor leaf / aggregation node's ORDERED SEGMENT
@@ -1006,9 +817,10 @@ fn compute_root_segment(turns: &[&FinalizedTurn]) -> HostSeg {
     level[0]
 }
 
-/// [`generate_chain_trace`] reading the ROTATED chain roots (PI 34/35) instead of the v1
-/// OLD/NEW_COMMIT (PI 0/4). The binding leaf the rotated fold wraps therefore commits to the
-/// rotated v9 commitments.
+/// Build the Lean-emitted turn-chain descriptor witness from the scalar projection returned by
+/// [`binding_roots`], rather than the retired v1 OLD/NEW_COMMIT slots (PI 0/4). Trace generation is
+/// legitimate Rust; every constraint interpreted over it comes from
+/// `dregg-turn-chain-binding-v2`.
 fn generate_chain_trace_rotated(
     turns: &[&FinalizedTurn],
 ) -> Result<(Vec<Vec<BabyBear>>, Vec<BabyBear>, BabyBear), TurnChainError> {
@@ -1016,8 +828,8 @@ fn generate_chain_trace_rotated(
         return Err(TurnChainError::TooFewTurns { count: turns.len() });
     }
     for i in 1..turns.len() {
-        let (_, prev_new) = rotated_roots(turns[i - 1]);
-        let (this_old, _) = rotated_roots(turns[i]);
+        let (_, prev_new) = binding_roots(turns[i - 1]);
+        let (this_old, _) = binding_roots(turns[i]);
         if prev_new != this_old {
             return Err(TurnChainError::ChainBreak {
                 index: i,
@@ -1026,87 +838,12 @@ fn generate_chain_trace_rotated(
             });
         }
     }
-    let n = turns.len();
-    let padded_len = n.next_power_of_two().max(2);
-    let mut trace: Vec<Vec<BabyBear>> = Vec::with_capacity(padded_len);
-    let mut acc = BabyBear::ZERO;
-    let mut real_count = BabyBear::ZERO;
-    for (i, t) in turns.iter().enumerate() {
-        let (old_root, new_root) = rotated_roots(t);
-        let idx = BabyBear::new(i as u32);
-        real_count += BabyBear::ONE;
-        let (acc_out, row) = binding_row(
-            old_root, new_root, acc, idx, /* is_real */ true, real_count,
-        );
-        trace.push(row);
-        acc = acc_out;
-    }
-    let final_root = trace.last().unwrap()[COL_NEW_ROOT];
-    for i in n..padded_len {
-        let idx = BabyBear::new(i as u32);
-        // Padding rows carry is_real = 0 (real_count frozen at n) and continue the
-        // genuine hash chain over the (final_root, final_root, idx) triple.
-        let (acc_out, row) = binding_row(
-            final_root, final_root, acc, idx, /* is_real */ false, real_count,
-        );
-        trace.push(row);
-        acc = acc_out;
-    }
-    let genesis_root = trace[0][COL_OLD_ROOT];
-    let chain_digest = trace.last().unwrap()[COL_ACC_OUT];
-    let pis = vec![
-        genesis_root,
-        final_root,
-        BabyBear::new(n as u32),
-        chain_digest,
-    ];
+    let root_pairs: Vec<(BabyBear, BabyBear)> =
+        turns.iter().map(|turn| binding_roots(turn)).collect();
+    let (trace, pis) = turn_chain_binding_witness(&root_pairs)
+        .map_err(|reason| TurnChainError::RecursionFailed { reason })?;
     let digest = pis[3];
     Ok((trace, pis, digest))
-}
-
-/// Build one wide binding-trace row and return `(acc_out, row)`.
-///
-/// `acc_out = hash_4_to_1([acc_in, old_root, new_root, idx])` — the SAME digest the
-/// in-circuit constraint forces — and the Poseidon2 aux block is the genuine
-/// intermediate-state witness [`poseidon2_permute_expr`] checks round-by-round,
-/// seeded from `[acc_in, old_root, new_root, idx, 4, 0..]` (the `hash_4_to_1`
-/// state).
-pub(crate) fn binding_row(
-    old_root: BabyBear,
-    new_root: BabyBear,
-    acc_in: BabyBear,
-    idx: BabyBear,
-    is_real: bool,
-    real_count: BabyBear,
-) -> (BabyBear, Vec<BabyBear>) {
-    let acc_out = hash_4_to_1(&[acc_in, old_root, new_root, idx]);
-
-    let mut input_state = [BabyBear::ZERO; POSEIDON2_WIDTH];
-    input_state[0] = acc_in;
-    input_state[1] = old_root;
-    input_state[2] = new_root;
-    input_state[3] = idx;
-    input_state[4] = BabyBear::new(HASH_ARITY_TAG);
-    let aux = poseidon2_permute_aux_witness(input_state);
-    debug_assert_eq!(aux.len(), POSEIDON2_PERM_AUX_COLS);
-    // The aux block's final state[0] IS the digest (the gadget returns state[0]).
-    debug_assert_eq!(aux[POSEIDON2_PERM_AUX_COLS - POSEIDON2_WIDTH], acc_out);
-
-    let mut row = Vec::with_capacity(BINDING_WIDTH);
-    row.push(old_root); // COL_OLD_ROOT
-    row.push(new_root); // COL_NEW_ROOT
-    row.push(acc_in); // COL_ACC_IN
-    row.push(acc_out); // COL_ACC_OUT
-    row.push(idx); // COL_IDX
-    row.push(if is_real {
-        BabyBear::ONE
-    } else {
-        BabyBear::ZERO
-    }); // COL_IS_REAL
-    row.push(real_count); // COL_REAL_COUNT
-    row.extend_from_slice(&aux); // BINDING_AUX0..
-    debug_assert_eq!(row.len(), BINDING_WIDTH);
-    (acc_out, row)
 }
 
 // ============================================================================
@@ -1616,19 +1353,40 @@ pub fn prove_descriptor_leaf_dual_expose_at(
 // The whole-chain IVC artifact (K-fold).
 // ============================================================================
 
-/// The Gold whole-chain artifact: ONE succinct recursive proof attesting that
-/// **all** K finalized-turn leaves AND the sequential chain-binding leaf
-/// verified in-circuit. The verifier checks only the root; cost is independent
-/// of K.
+/// The Lean-emitted turn-chain descriptor proof together with the exact public-input vector it
+/// was minted against.
+///
+/// `Ir2BatchProof` verification takes public inputs separately, so the four canonical `u32` lanes
+/// travel in the same serialized component as the proof. This prevents the byte verifier from
+/// extracting or inventing proof-described inputs. The fourth lane is the descriptor's sequential
+/// scalar digest; it is intentionally distinct from [`WholeChainProof::chain_digest`], the 8-felt
+/// ordered segment digest exposed by the recursive root.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(bound = "")]
+pub struct TurnChainBindingProof {
+    /// Batch STARK under the production IR-v2 descriptor config.
+    pub proof: Ir2BatchProof<DreggStarkConfig>,
+    /// `[genesis_root, final_root, num_turns, sequential_chain_digest]` as canonical BabyBear lanes.
+    pub public_inputs: [u32; 4],
+}
+
+impl TurnChainBindingProof {
+    fn pis(&self) -> [BabyBear; 4] {
+        self.public_inputs.map(BabyBear::new)
+    }
+}
+
+/// The Gold whole-chain artifact: ONE succinct recursive proof attesting to all K finalized-turn
+/// leaves, plus the directly verified Lean-emitted sequential chain-binding descriptor proof. The
+/// recursion root's exposed segment links the carried claim to the executed leaves; verifier cost
+/// is independent of K.
 pub struct WholeChainProof {
     /// The single root batch-STARK proof (the whole tree folded to one).
     pub root: RecursionOutput<DreggRecursionConfig>,
-    /// The chain-binding uni-STARK (the SAME statement the fold wraps
-    /// in-circuit as the binding leaf), carried so the verifier can check the
-    /// claimed publics below AGAINST A PROOF instead of trusting bare fields:
-    /// Fiat–Shamir binds `[genesis_root, final_root, num_turns, chain_digest]`
-    /// into this proof, so relabeling any of them is refused at verify time.
-    pub binding_proof: RecursionCompatibleProof,
+    /// The Lean-emitted chain-binding descriptor proof plus its exact four public inputs. The
+    /// byte verifier re-parses `dregg-turn-chain-binding-v2` and runs `verify_vm_descriptor2`;
+    /// no Rust-authored turn-chain algebra remains on this path.
+    pub binding_proof: TurnChainBindingProof,
     /// The 8-felt (~124-bit faithful) genesis state anchor the chain starts from. A WIDE leg
     /// sources it genuinely; a narrow leg broadcasts its single rotated commit felt across the
     /// eight lanes (FAITHFUL-FLOOR lift — `docs/deos/COMMITMENT-WAIST-CENSUS.md` #1).
@@ -1667,7 +1425,7 @@ impl WholeChainProof {
     /// (`Rc<CircuitProverData>`) is prover-chaining data with no serde and no
     /// verifier use. The envelope therefore carries only what
     /// [`verify_turn_chain_recursive_from_parts`] reads — the root
-    /// [`BatchStarkProof`] (`root.0`), the chain-binding `Proof`, and the four
+    /// [`BatchStarkProof`] (`root.0`), the chain-binding descriptor proof, and the four
     /// public scalars — as a self-describing, version-tagged blob. The producer
     /// (a node/relayer that ran the history) ships this; the consumer (a wasm tab,
     /// a pg-dregg SRF) calls [`verify_whole_chain_proof_bytes`] on it.
@@ -1704,8 +1462,9 @@ pub struct WholeChainProofBytes {
     /// Postcard bytes of `WholeChainProof.root.0` — the root [`BatchStarkProof`].
     /// Teeth 1 (VK pin) and 3 (root batch verify) read exactly this.
     pub root_proof: Vec<u8>,
-    /// Postcard bytes of `WholeChainProof.binding_proof` — the chain-binding
-    /// uni-STARK `Proof`. Tooth 2 verifies the four publics AS its public inputs.
+    /// Postcard bytes of `WholeChainProof.binding_proof` — the Lean-emitted IR-v2 descriptor
+    /// proof together with its exact four public inputs. Tooth 2 verifies it with
+    /// `verify_vm_descriptor2`.
     pub binding_proof: Vec<u8>,
     /// The 8-felt genesis state anchor ([`SEG_ANCHOR_WIDTH`] canonical `BabyBear` lanes as `u32`).
     /// FAITHFUL-FLOOR lift: widened from a single felt; the envelope version was bumped to
@@ -1728,7 +1487,10 @@ pub struct WholeChainProofBytes {
 /// `[u32; SEG_DIGEST_WIDTH]` — the multi-felt Poseidon2 commitment.
 /// **v3** (FAITHFUL-FLOOR lift): the state endpoints `genesis_root`/`final_root` widened from one
 /// `u32` to `[u32; SEG_ANCHOR_WIDTH]` (8-felt anchors), and `SEG_DIGEST_WIDTH` widened 4→8.
-pub const WHOLE_CHAIN_PROOF_ENVELOPE_V1: u16 = 3;
+/// **v4** (law-#1 turn-chain cutover): `binding_proof` changed from the hand-authored
+/// turn-chain uni-STARK to the Lean-emitted IR-v2 descriptor proof plus its exact four
+/// public inputs.
+pub const WHOLE_CHAIN_PROOF_ENVELOPE_V1: u16 = 4;
 
 impl WholeChainProofBytes {
     /// Project a [`WholeChainProof`] to its verify-sufficient byte envelope.
@@ -1795,7 +1557,7 @@ impl WholeChainProofBytes {
     ) -> Result<
         (
             p3_circuit_prover::BatchStarkProof<DreggRecursionConfig>,
-            RecursionCompatibleProof,
+            TurnChainBindingProof,
         ),
         TurnChainError,
     > {
@@ -1812,9 +1574,9 @@ impl WholeChainProofBytes {
             .map_err(|e| TurnChainError::EnvelopeDecode {
                 reason: format!("root BatchStarkProof failed structural validation: {e:?}"),
             })?;
-        let binding_proof: RecursionCompatibleProof = postcard::from_bytes(&self.binding_proof)
+        let binding_proof: TurnChainBindingProof = postcard::from_bytes(&self.binding_proof)
             .map_err(|e| TurnChainError::EnvelopeDecode {
-                reason: format!("binding Proof does not decode: {e}"),
+                reason: format!("binding descriptor proof does not decode: {e}"),
             })?;
         Ok((root_proof, binding_proof))
     }
@@ -1855,7 +1617,7 @@ pub fn verify_whole_chain_proof_bytes(
 /// depend on `p3-circuit-prover`) plugs into.
 ///
 /// `root_blob` is the postcard of the root [`BatchStarkProof`] (`WholeChainProof.
-/// root.0`) and `binding_blob` the postcard of the chain-binding `Proof`
+/// root.0`) and `binding_blob` the postcard of the chain-binding descriptor proof
 /// (`WholeChainProof.binding_proof`) — exactly the two blobs a transport
 /// (`pg-dregg`'s `SerializedWholeChainProof`, or the circuit's
 /// [`WholeChainProofBytes`]) carries. This decodes them inside the circuit crate
@@ -1909,9 +1671,9 @@ pub fn verify_turn_chain_recursive_from_blobs(
         .map_err(|e| TurnChainError::EnvelopeDecode {
             reason: format!("root BatchStarkProof failed structural validation: {e:?}"),
         })?;
-    let binding_proof: RecursionCompatibleProof =
+    let binding_proof: TurnChainBindingProof =
         postcard::from_bytes(binding_blob).map_err(|e| TurnChainError::EnvelopeDecode {
-            reason: format!("binding Proof blob does not decode: {e}"),
+            reason: format!("binding descriptor proof blob does not decode: {e}"),
         })?;
     verify_turn_chain_recursive_from_parts(
         &root_proof,
@@ -1928,8 +1690,8 @@ pub fn verify_turn_chain_recursive_from_blobs(
 ///
 /// `turns` must be in the node's **finalized order** (the `tau`/blocklace order
 /// from `node::blocklace_sync::poll_finalized_blocks`). Each turn's `new_root`
-/// must be the next turn's `old_root` — the temporal binding the chain leaf
-/// enforces both host-side and in-circuit.
+/// must be the next turn's `old_root` — the temporal binding the recursive segment enforces
+/// in-circuit, with a matching host pre-check.
 ///
 /// Steps:
 ///   1. host admission: every turn's production descriptor proof verifies
@@ -1937,10 +1699,9 @@ pub fn verify_turn_chain_recursive_from_blobs(
 ///      ([`verify_descriptor_participant`]) — this also determines each turn's
 ///      descriptor selector;
 ///   2. host-side: >= 2 turns, sequential continuity;
-///   3. prove the chain-binding leaf (rejects a broken order in-circuit too);
-///   4. re-prove each turn's REAL descriptor AIR over its OWN execution trace
-///      as a recursion-compatible uni-STARK ([`prove_descriptor_leaf`]);
-///   5. wrap every leaf in its own IN-CIRCUIT verifier layer (uni->batch) —
+///   3. prove the Lean-emitted turn-chain descriptor over the projected endpoint sequence;
+///   4. re-prove each turn's REAL rotated descriptor batch over its OWN execution trace;
+///   5. wrap every turn leaf in its own IN-CIRCUIT verifier layer —
 ///      per-turn execution soundness is verified inside the recursion, not
 ///      merely at the host gate;
 ///   6. pairwise-aggregate all batch leaves up a binary tree to ONE root.
@@ -1993,15 +1754,14 @@ pub fn prove_turn_chain_recursive_without_host_gate(
 /// Identical in shape to [`prove_turn_chain_recursive`], but every per-turn leaf is the
 /// rotated multi-table `Ir2BatchProof` (carried on `participant.rotated`), minted in-circuit
 /// via [`prove_descriptor_leaf_rotated_with_config`] at [`ir2_leaf_wrap_config`] — NOT the v1
-/// uni-STARK `EffectVmDescriptorAir` wrap. The whole tree (binding leaf + aggregation) runs at
-/// the ONE wrap config, exactly as the aggregation gate
+/// uni-STARK `EffectVmDescriptorAir` wrap. The turn-leaf aggregation tree runs at the ONE wrap
+/// config, exactly as the aggregation gate
 /// (`rotation_batchstark_leaf_smoke::two_rotated_leaves_aggregate_at_wrap_config`) proves it
 /// folds. Every turn MUST carry a rotated leg (`participant.rotated == Some`); a missing leg
 /// fails closed.
 ///
-/// The temporal binding is read from the ROTATED commitments (PI 34/35 — the rotated trace's
-/// before/after `state_commit` carriers), so the chain continuity tooth
-/// (`prev.new_root == next.old_root`) binds the rotated v9 commitment.
+/// The temporal binding is read from the genuine 8-felt anchors; the separate Lean descriptor
+/// binds their scalar head-lane projection (which equals ROTATED PI 34/35 on narrow legs).
 pub fn prove_turn_chain_recursive_rotated(
     turns: &[FinalizedTurn],
 ) -> Result<WholeChainProof, TurnChainError> {
@@ -2296,7 +2056,7 @@ pub fn prove_welded_umem_turn_chain_recursive_staged(
 
     // The carried binding proof (defense-in-depth host witness; NOT folded into the root — the
     // segment tooth over the root's exposed segment binds the claim).
-    let (binding_inner, _binding_pis) = prove_chain_binding_leaf_rotated(&refs)?;
+    let binding_inner = prove_chain_binding_descriptor_rotated(&refs)?;
 
     let mut batch_leaves: Vec<RecursionOutput<DreggRecursionConfig>> =
         Vec::with_capacity(turns.len());
@@ -2648,9 +2408,9 @@ fn aggregate_tree_wide(
 /// real wide welded descriptor leaves and combined up the tree with 8-felt continuity. The
 /// verifier checks only the root; cost is independent of the number of folded turns.
 ///
-/// There is no carried binding leaf (the single-felt `TurnChainBindingAir` binds PI 34/35,
-/// which the wide form retires to zero) — the wide segment tooth over the root's exposed
-/// segment is the sole binding, exactly as the codex ordered-segment-accumulator close intends.
+/// There is no carried scalar binding descriptor here (the wide form retires scalar PI 34/35 to
+/// zero) — the wide segment tooth over the root's exposed segment is the sole binding, exactly as
+/// the codex ordered-segment-accumulator close intends.
 pub struct WideWholeChainProof {
     /// The single root batch-STARK proof (the whole wide tree folded to one).
     pub root: RecursionOutput<DreggRecursionConfig>,
@@ -3038,7 +2798,7 @@ fn prove_chain_core_rotated(
     // host-side defense-in-depth witness of the ordered chain — but it is NO LONGER a soundness
     // dependency of `verify_turn_chain_recursive` (see its tooth list: the segment tooth (4) over
     // the root's exposed segment is what binds the claim now). It is NOT folded into the root.
-    let (binding_inner, _binding_pis) = prove_chain_binding_leaf_rotated(turns)?;
+    let binding_inner = prove_chain_binding_descriptor_rotated(turns)?;
 
     let mut batch_leaves: Vec<RecursionOutput<DreggRecursionConfig>> =
         Vec::with_capacity(turns.len());
@@ -3530,27 +3290,47 @@ fn generate_chain_trace_rotated_continuity(turns: &[&FinalizedTurn]) -> Result<(
     Ok(())
 }
 
-/// Build the chain-binding leaf reading the ROTATED chain roots (PI 34/35), at the wrap config.
-///
-/// **Bucket-F fix:** the binding-leaf inner proof MUST be minted at [`ir2_leaf_wrap_config`]
-/// (log_blowup 6), the SAME FRI engine the whole rotated tree runs at — it is wrapped and
-/// aggregated with the rotated descriptor leaves at that config, so proving it at the default
-/// `create_recursion_config` (log_blowup 3) and then wrapping at the wrap config raises
-/// `InvalidProofShape("Fewer siblings in proof than op_ids provided")` in-circuit.
-fn prove_chain_binding_leaf_rotated(
+/// Prove and self-verify one witness against the registered Lean-emitted turn-chain descriptor.
+/// The resulting IR-v2 batch proof is carried alongside the recursion root and verified directly;
+/// it is not wrapped into the recursive tree.
+fn prove_turn_chain_binding_trace(
+    trace: &[Vec<BabyBear>],
+    pis: &[BabyBear],
+) -> Result<TurnChainBindingProof, String> {
+    let desc = descriptor_by_name(TURN_CHAIN_BINDING_NAME).ok_or_else(|| {
+        format!("Lean-emitted descriptor {TURN_CHAIN_BINDING_NAME:?} is not registered")
+    })?;
+    let proof = prove_vm_descriptor2(&desc, trace, pis, &MemBoundaryWitness::default(), &[])?;
+    verify_vm_descriptor2(&desc, &proof, pis)?;
+    let public_inputs: [u32; 4] = pis
+        .iter()
+        .map(|v| v.as_u32())
+        .collect::<Vec<_>>()
+        .try_into()
+        .map_err(|v: Vec<u32>| format!("turn-chain descriptor needs 4 PIs, got {}", v.len()))?;
+    Ok(TurnChainBindingProof {
+        proof,
+        public_inputs,
+    })
+}
+
+/// Prove the Lean-emitted turn-chain binding descriptor from scalar endpoint pairs. Shared by the
+/// finite K-fold and the online accumulator so both deployed producers use one descriptor path.
+pub(crate) fn prove_turn_chain_binding_for_roots(
+    root_pairs: &[(BabyBear, BabyBear)],
+) -> Result<TurnChainBindingProof, String> {
+    let (trace, pis) = turn_chain_binding_witness(root_pairs)?;
+    prove_turn_chain_binding_trace(&trace, &pis)
+}
+
+fn prove_chain_binding_descriptor_rotated(
     turns: &[&FinalizedTurn],
-) -> Result<(RecursionCompatibleProof, Vec<BabyBear>), TurnChainError> {
-    use crate::plonky3_recursion_impl::recursive::{
-        prove_inner_for_air_with_config, verify_inner_for_air_with_config,
-    };
+) -> Result<TurnChainBindingProof, TurnChainError> {
+    // Keep the production turn-consuming trace generator: it validates and projects the mandatory
+    // rotated legs, then delegates row construction to the chip-lane witness builder.
     let (trace, pis, _digest) = generate_chain_trace_rotated(turns)?;
-    let matrix = trace_to_matrix(&trace);
-    let air = TurnChainBindingAir;
-    let wrap_config = ir2_leaf_wrap_config();
-    let proof = prove_inner_for_air_with_config(&air, matrix, &pis, &wrap_config);
-    verify_inner_for_air_with_config(&air, &proof, &pis, &wrap_config)
-        .map_err(|reason| TurnChainError::RecursionFailed { reason })?;
-    Ok((proof, pis))
+    prove_turn_chain_binding_trace(&trace, &pis)
+        .map_err(|reason| TurnChainError::RecursionFailed { reason })
 }
 
 /// The runtime preprocessed-commitment value type for the recursion config — a child proof's
@@ -3806,18 +3586,13 @@ pub fn verify_turn_chain_recursive(
 #[allow(clippy::too_many_arguments)]
 pub fn verify_turn_chain_recursive_from_parts(
     root_proof: &p3_circuit_prover::BatchStarkProof<DreggRecursionConfig>,
-    binding_proof: &RecursionCompatibleProof,
+    binding_proof: &TurnChainBindingProof,
     genesis_root: [BabyBear; SEG_ANCHOR_WIDTH],
     final_root: [BabyBear; SEG_ANCHOR_WIDTH],
     chain_digest: [BabyBear; SEG_DIGEST_WIDTH],
     num_turns: usize,
     expected_vk: &RecursionVk,
 ) -> Result<(), TurnChainError> {
-    // The carried binding proof is NO LONGER a soundness dependency (the SEGMENT tooth below
-    // binds the claim to the real descriptor leaves). It is retained in the artifact for byte
-    // API compatibility and host-side defense-in-depth only; deliberately not re-verified here.
-    let _ = binding_proof;
-
     // (1) VK pin.
     let found = recursion_vk_fingerprint(root_proof);
     if found != *expected_vk {
@@ -3827,7 +3602,41 @@ pub fn verify_turn_chain_recursive_from_parts(
         });
     }
 
-    // (2) The root. The root batch proof is produced by `aggregate_tree` at the rotated
+    // (2) The Lean-emitted scalar turn-chain descriptor. The exact four PIs were serialized with
+    // the proof because `verify_vm_descriptor2` takes them separately; the verifier neither
+    // reconstructs a digest it cannot see nor trusts values extracted from the proof. The scalar
+    // endpoints/count must agree with the corresponding carried wide claims. The fourth PI is this
+    // descriptor's own sequential hash-chain digest; the batch proof binds it directly. The root's
+    // distinct 8-felt ordered-segment digest is checked by tooth (4) below.
+    let binding_pis = binding_proof.pis();
+    let expected_scalar = [
+        genesis_root[0],
+        final_root[0],
+        BabyBear::new(num_turns as u32),
+    ];
+    if binding_pis[..3] != expected_scalar {
+        return Err(TurnChainError::ClaimedPublicsUnattested {
+            reason: format!(
+                "binding descriptor publics {:?} do not match carried scalar genesis/final/count {:?}",
+                &binding_pis[..3],
+                expected_scalar
+            ),
+        });
+    }
+    let binding_desc = descriptor_by_name(TURN_CHAIN_BINDING_NAME).ok_or_else(|| {
+        TurnChainError::ClaimedPublicsUnattested {
+            reason: format!(
+                "Lean-emitted descriptor {TURN_CHAIN_BINDING_NAME:?} is not registered"
+            ),
+        }
+    })?;
+    verify_vm_descriptor2(&binding_desc, &binding_proof.proof, &binding_pis).map_err(|reason| {
+        TurnChainError::ClaimedPublicsUnattested {
+            reason: format!("Lean-emitted turn-chain descriptor proof failed: {reason}"),
+        }
+    })?;
+
+    // (3) The root. The root batch proof is produced by `aggregate_tree` at the rotated
     // leaf-wrap config (`ir2_leaf_wrap_config`, log_blowup 6 / 19 queries — the SAME FRI engine
     // the whole rotated tree runs at), NOT the default `create_recursion_config` (log_blowup 3 /
     // 38 queries). It MUST be verified under that same config, else FRI reconstruction expects
@@ -3835,7 +3644,7 @@ pub fn verify_turn_chain_recursive_from_parts(
     verify_recursive_batch_proof_with_config(root_proof, &ir2_leaf_wrap_config())
         .map_err(|reason| TurnChainError::RecursionFailed { reason })?;
 
-    // (3) THE SEGMENT TOOTH (the close of the IVC mixed-root hole). The root proof carries an
+    // (4) THE SEGMENT TOOTH (the close of the IVC mixed-root hole). The root proof carries an
     // `expose_claim` non-primitive table whose `public_values` are the root's ORDERED SEGMENT
     // `[first_old, last_new, count, acc]`. That segment is built BY CONSTRUCTION from the real
     // descriptor leaves: each leaf's `first_old`/`last_new` are bound in-circuit to its
@@ -3886,9 +3695,10 @@ pub fn verify_turn_chain_recursive_from_parts(
 /// ## What this IS
 ///
 /// A genuine 2-to-1 recursive fold over real in-circuit-verified leaves, with
-/// the temporal binding (`prev.new_root == next.old_root`) enforced by the
-/// chain-binding leaf over the 2-turn window. Iterating it left-to-right over a
-/// finalized stream reproduces [`prove_turn_chain_recursive`]'s result.
+/// the temporal binding (`prev.new_root == next.old_root`) enforced by the root's
+/// ordered segment over the 2-turn window. Iterating it left-to-right over a
+/// finalized stream reproduces [`prove_turn_chain_recursive`]'s result. The artifact also carries
+/// a directly verified Lean-emitted binding descriptor proof.
 ///
 /// ## What the UNBOUNDED driver still needs (named open)
 ///
@@ -3900,8 +3710,8 @@ pub fn verify_turn_chain_recursive_from_parts(
 /// [`aggregate_tree`] uses internally). The open work is the *driver*: a
 /// persistent accumulator struct that (a) holds the single running
 /// `RecursionOutput`, (b) on each `poll_finalized_blocks` tick builds the next
-/// turn leaf + a 2-row chain-binding leaf binding `running.final_root ->
-/// new_root`, and (c) re-aggregates `running ∘ {turn, binding}` into the new
+/// turn leaf + a 2-row Lean-emitted binding descriptor proof for
+/// `running.final_root -> new_root`, and (c) re-aggregates `running ∘ turn` into the new
 /// running output. The cryptographic machinery is all present and exercised
 /// here; what remains is wiring it to the node's live finality stream and
 /// persisting the running output across restarts.

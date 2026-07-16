@@ -158,8 +158,8 @@ const NON_REVOCATION_JSON: &str = include_str!("../descriptors/by-name/non-revoc
 /// The **turn-chain binding** family (`dregg-turn-chain-binding-v2`), authored in
 /// `metatheory/Dregg2/Circuit/Emit/EffectVmEmitTurnChainBinding.lean` (proved there, with refutation
 /// teeth for forged continuity / idx-step / real_count). Byte source: `metatheory/EmitTurnChain.lean`.
-/// This is the Lean authorship of what `circuit-prove/src/ivc_turn_chain.rs::TurnChainBindingAir`
-/// hand-authors — the deployed whole-history chain proof (`grain-verify/src/r3.rs`).
+/// This is the sole constraint authorship of the deployed whole-history chain proof
+/// (`grain-verify/src/r3.rs`); Rust supplies only the witness and descriptor interpreter.
 const TURN_CHAIN_BINDING_JSON: &str =
     include_str!("../descriptors/by-name/turn-chain-binding.json");
 const ACCUMULATOR_NONREV_JSON: &str =

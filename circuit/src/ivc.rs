@@ -2349,10 +2349,10 @@ mod tests {
     // link, tampered endpoint/accumulator, inconsistent turn, reorder, empty
     // chain, chain-too-long, genesis-link) died with the engine. The
     // chain-structure teeth now live on the recursion path:
-    // circuit-prove/src/ivc_turn_chain.rs (TurnChainBindingAir + the
-    // whole-chain recursive fold), which enforces continuity, positional
-    // digest binding and endpoint pinning in-circuit over REAL per-turn
-    // leaves. What survives HERE are the hash primitives the summaries are
+    // circuit-prove/src/ivc_turn_chain.rs (the Lean-emitted turn-chain
+    // descriptor + whole-chain recursive fold), which enforces continuity,
+    // positional digest binding and endpoint pinning over REAL per-turn leaves.
+    // What survives HERE are the hash primitives the summaries are
     // built from; their teeth stay bitten below.
     // ─────────────────────────────────────────────────────────────────────────
 

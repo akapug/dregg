@@ -54,10 +54,10 @@
 //!   - **finalize** ([`Accumulator::finalize`]): the running proof IS the root; its exposed
 //!     segment `[genesis_root, head_root, num_turns, chain_digest]` is the whole-chain claim
 //!     derived from the REAL descriptor leaves. `verify_turn_chain_recursive`'s SEGMENT tooth
-//!     checks the carried claim against it, fail-closed. The `TurnChainBindingAir` leaf is
-//!     STILL produced for the carried `binding_proof` field (byte-API / defense-in-depth) but
-//!     is NO LONGER a soundness dependency and is NOT folded into the root — exactly as the
-//!     K-fold path now carries (not folds) its binding proof.
+//!     checks the carried claim against it, fail-closed. The Lean-emitted turn-chain descriptor
+//!     proof is STILL produced for the carried `binding_proof` field (byte-API /
+//!     defense-in-depth) but is NO LONGER a soundness dependency and is NOT folded into the root
+//!     — exactly as the K-fold path now carries (not folds) its binding proof.
 //!
 //! So a same-endpoint mixed-root forgery against the online whole-chain proof is REJECTED by
 //! the same construction the K-fold uses (witness: `online_mixed_root_forgery_rejected`).
@@ -175,16 +175,14 @@ type RecursionCommit = <<DreggRecursionConfig as StarkGenericConfig>::Pcs as Pcs
 >>::Commitment;
 
 use crate::ivc_turn_chain::{
-    FinalizedTurn, HostSeg, RecursionVk, SEG_ANCHOR_WIDTH, SEG_DIGEST_WIDTH, TurnChainBindingAir,
+    FinalizedTurn, HostSeg, RecursionVk, SEG_ANCHOR_WIDTH, SEG_DIGEST_WIDTH, TurnChainBindingProof,
     WholeChainProof, combine_seg, expose_claim_instance_index, ir2_leaf_wrap_config, leaf_seg,
     prove_descriptor_leaf_rotated_with_config, prove_descriptor_leaf_rotated_with_segment,
-    segment_combine_expose, turn_anchors8, verify_turn_chain_recursive,
+    prove_turn_chain_binding_for_roots, segment_combine_expose, turn_anchors8,
+    verify_turn_chain_recursive,
 };
 use crate::joint_turn_aggregation::verify_descriptor_participant;
-use crate::plonky3_recursion_impl::recursive::{
-    DreggRecursionConfig, RecursionCompatibleProof, create_recursion_backend,
-    prove_inner_for_air_with_config, verify_inner_for_air_with_config,
-};
+use crate::plonky3_recursion_impl::recursive::{DreggRecursionConfig, create_recursion_backend};
 use dregg_circuit::field::BabyBear;
 
 const D: usize = 4;
@@ -278,7 +276,7 @@ pub enum AccError {
         /// The underlying reason.
         reason: String,
     },
-    /// A recursion layer (leaf wrap, binding leaf, or the running aggregation) failed.
+    /// A recursion layer, turn-chain descriptor proof, or running aggregation failed.
     RecursionFailed {
         /// What failed.
         reason: String,
@@ -332,8 +330,8 @@ impl core::fmt::Display for AccError {
 impl std::error::Error for AccError {}
 
 /// The O(1)-memory running summary of the accumulated chain (the four scalar commitments the
-/// `WholeChainProof` exposes, advanced incrementally). Kept between fold steps so the binding leaf
-/// can be regenerated WITHOUT retaining the consumed turns.
+/// `WholeChainProof` exposes, advanced incrementally). Kept between fold steps so the binding
+/// descriptor proof can be regenerated WITHOUT retaining the consumed turns.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ChainSummary {
     /// The genesis state anchor the chain started from (the first turn's `first_old8`); the
@@ -379,9 +377,9 @@ impl ChainSummary {
 ///
 /// **The memory profile (honest).** The dominant cost — the running RECURSION PROOF — is O(1): one
 /// `RecursionOutput` is held regardless of chain length. The residual `seam_pairs` (two field
-/// elements per folded turn) is the binding-leaf's reconstruction witness: it lets `finalize` rebuild
-/// the per-turn `TurnChainBindingAir` leaf so its last-row digest reproduces `summary.chain_digest`
-/// EXACTLY (the AIR's `acc_out == chain_digest` constraint). This is precisely the component prereq
+/// elements per folded turn) is the binding descriptor's reconstruction witness: it lets `finalize`
+/// rebuild the per-turn Lean-emitted descriptor trace and its distinct scalar sequential digest.
+/// This is precisely the component prereq
 /// (b) — in-circuit re-exposure of the running digest as a CHECKED public — would eliminate: with (b),
 /// the binding could bind against the running root's exposed digest in-circuit and `seam_pairs` would
 /// vanish. Until then it is a small (2-felt/turn) scalar witness, NOT a retained proof; the proof
@@ -392,7 +390,7 @@ pub struct Accumulator {
     running: Option<RecursionOutput<DreggRecursionConfig>>,
     /// The running chain summary (`None` before the first turn).
     summary: Option<ChainSummary>,
-    /// The ordered `(old_root, new_root)` seam pairs of the folded turns — the binding-leaf
+    /// The ordered `(old_root, new_root)` seam pairs of the folded turns — the binding-descriptor
     /// reconstruction witness (see the struct note: O(num_turns) SCALARS, not proofs; eliminated by
     /// prereq (b)).
     seam_pairs: Vec<(BabyBear, BabyBear)>,
@@ -625,9 +623,6 @@ impl Accumulator {
         verify_descriptor_participant(&turn.participant)
             .map_err(|reason| AccError::TurnProofInvalid { index: idx, reason })?;
 
-        let old_root = turn.old_root();
-        let new_root = turn.new_root();
-
         // The turn's GENUINE 8-felt state anchors — sourced the SAME way the K-fold tree and the
         // in-circuit descriptor leaf source them ([`turn_anchors8`]): a WIDE / wide-welded leg
         // publishes the genuine ~124-bit `wide_old_root8`/`wide_new_root8`; a narrow leg replicates
@@ -844,7 +839,11 @@ impl Accumulator {
 
         self.running = Some(new_running);
         self.summary = Some(new_summary);
-        self.seam_pairs.push((old_root, new_root));
+        // The Lean-emitted scalar turn-chain descriptor binds the head-lane projection of the SAME
+        // anchors. On wide legs PI 34/35 are retired to zero, so sourcing the seam from
+        // `turn.old_root()`/`new_root()` would make the carried descriptor vacuous and disagree with
+        // the deployed wide claim.
+        self.seam_pairs.push((this_old8[0], this_new8[0]));
         Ok(())
     }
 
@@ -860,12 +859,12 @@ impl Accumulator {
     ///
     /// `finalize` consumes the accumulator (the running proof is moved into the artifact).
     ///
-    /// NOTE (the carried binding proof): the [`TurnChainBindingAir`] leaf is regenerated from the
-    /// `seam_pairs` witness (a host-side defense-in-depth witness of the ordered chain) and carried
-    /// in the `binding_proof` field for byte-API/struct compatibility, but it is NO LONGER a
-    /// soundness dependency and is NOT folded into the root — the SEGMENT tooth over the running
-    /// proof's exposed segment binds the claim, exactly as the K-fold path carries (not folds) its
-    /// binding proof.
+    /// NOTE (the carried binding proof): the Lean-emitted turn-chain descriptor proof is
+    /// regenerated from the `seam_pairs` witness (a host-side defense-in-depth witness of the
+    /// ordered chain) and carried in the `binding_proof` field for byte-API/struct compatibility,
+    /// but it is NO LONGER a soundness dependency and is NOT folded into the root — the SEGMENT
+    /// tooth over the running proof's exposed segment binds the claim, exactly as the K-fold path
+    /// carries (not folds) its binding proof.
     pub fn finalize(self) -> Result<WholeChainProof, AccError> {
         let summary = self.summary.ok_or(AccError::Empty)?;
         let running = self.running.ok_or(AccError::Empty)?;
@@ -907,7 +906,7 @@ impl Accumulator {
         // rebuilt from the O(1) summary + `seam_pairs`. RETAINED for the `WholeChainProof`
         // byte-API/struct compatibility but NO LONGER a soundness dependency and NOT folded into
         // the root — exactly as the K-fold path carries (not folds) its binding proof.
-        let (binding_inner, _binding_pis) = finalize_binding_leaf(&summary, &self.seam_pairs)
+        let binding_inner = finalize_binding_leaf(&summary, &self.seam_pairs)
             .map_err(|reason| AccError::RecursionFailed { reason })?;
 
         Ok(WholeChainProof {
@@ -937,75 +936,44 @@ impl Accumulator {
     }
 }
 
-/// Build the per-turn chain-binding leaf from the running summary + the ordered `seam_pairs`.
+/// Build the per-turn Lean-emitted chain-binding descriptor proof from the running summary + the
+/// ordered `seam_pairs`.
 ///
 /// One row per folded turn `[old_root, new_root, acc_in, acc_out]` with `acc_out =
-/// hash_4_to_1([acc_in, old, new, idx])` (the SAME fold `accumulate` ran into `summary.chain_digest`),
-/// padded to a power of two with head fixed-point rows — byte-for-byte the trace
+/// hash_4_to_1([acc_in, old, new, idx])` (a scalar sequential digest distinct from the running
+/// root's 8-felt ordered-segment digest), padded to a power of two with head fixed-point rows —
+/// byte-for-byte the trace
 /// `generate_chain_trace_rotated` produces for the same chain. Public inputs `[genesis_root,
 /// head_root, num_turns, chain_digest]`. The first/last-row + continuity constraints hold by
-/// construction; the last-row `acc_out == chain_digest` reproduces the running digest exactly. Tooth 2
-/// of `verify_turn_chain_recursive` verifies these four publics AS this proof's public inputs.
+/// construction; the last-row `acc_out == chain_digest` binds the descriptor's fourth PI. Tooth 2
+/// of `verify_turn_chain_recursive` verifies all four exact PIs and checks the endpoint/count prefix
+/// against the carried wide claim.
 fn finalize_binding_leaf(
     summary: &ChainSummary,
     seam_pairs: &[(BabyBear, BabyBear)],
-) -> Result<(RecursionCompatibleProof, Vec<BabyBear>), String> {
+) -> Result<TurnChainBindingProof, String> {
     if seam_pairs.is_empty() {
         return Err("cannot build a binding leaf with no seam pairs".to_string());
     }
-    let n = seam_pairs.len();
-    let padded_len = n.next_power_of_two().max(2);
-    // Build the GENUINE WIDE binding trace (7 scalar cols + the Poseidon2 aux
-    // block) via the shared `binding_row`, mirroring `generate_chain_trace_rotated`.
-    // `TurnChainBindingAir` enforces the per-row Poseidon2 hash binding
-    // (constraint 5, codex finding #2), so the narrow 4-column trace this used to
-    // build is UNSAT against the current AIR — the row must carry the aux witness.
-    let mut trace: Vec<Vec<BabyBear>> = Vec::with_capacity(padded_len);
-    let mut acc = BabyBear::ZERO;
-    let mut real_count = BabyBear::ZERO;
-    for (i, &(old_root, new_root)) in seam_pairs.iter().enumerate() {
-        let idx = BabyBear::new(i as u32);
-        real_count += BabyBear::ONE;
-        let (acc_out, row) = crate::ivc_turn_chain::binding_row(
-            old_root, new_root, acc, idx, /* is_real */ true, real_count,
-        );
-        trace.push(row);
-        acc = acc_out;
+    if seam_pairs.len() != summary.num_turns {
+        return Err(format!(
+            "binding seam count {} != running summary count {}",
+            seam_pairs.len(),
+            summary.num_turns
+        ));
     }
-    let final_root = trace.last().unwrap()[crate::ivc_turn_chain::COL_NEW_ROOT];
-    for i in n..padded_len {
-        let idx = BabyBear::new(i as u32);
-        // Padding rows: is_real = 0, real_count frozen, continuing the genuine
-        // hash chain over (final_root, final_root, idx).
-        let (acc_out, row) = crate::ivc_turn_chain::binding_row(
-            final_root, final_root, acc, idx, /* is_real */ false, real_count,
-        );
-        trace.push(row);
-        acc = acc_out;
+    let first = seam_pairs[0].0;
+    let last = seam_pairs[seam_pairs.len() - 1].1;
+    if first != summary.genesis_root[0] || last != summary.head_root[0] {
+        return Err(format!(
+            "binding scalar endpoints ({}, {}) != running wide-anchor heads ({}, {})",
+            first.as_u32(),
+            last.as_u32(),
+            summary.genesis_root[0].as_u32(),
+            summary.head_root[0].as_u32()
+        ));
     }
-    let chain_digest = trace.last().unwrap()[crate::ivc_turn_chain::COL_ACC_OUT];
-    let matrix = crate::ivc_turn_chain::trace_to_matrix(&trace);
-    // The binding leaf's `[genesis_root, final_root, …]` PIs come from the SINGLE-felt seam-pair
-    // trace (PI 34/35), NOT the now-8-felt `summary` endpoints: `TurnChainBindingAir` constrains
-    // first-row `old_root == PI[0]` and last-real-row `new_root == PI[1]` against this single-felt
-    // trace, so the binding proof must stay self-consistent with the seam pairs it is built from.
-    // (The binding proof is host-side defense-in-depth, NOT a soundness dependency — the genuine
-    // 8-felt endpoints are bound by the segment tooth over the running proof's exposed segment.)
-    let binding_genesis = seam_pairs
-        .first()
-        .expect("seam_pairs non-empty (checked above)")
-        .0;
-    let pis = vec![
-        binding_genesis,
-        final_root,
-        BabyBear::new(summary.num_turns as u32),
-        chain_digest,
-    ];
-    let air = TurnChainBindingAir;
-    let wrap_config = ir2_leaf_wrap_config();
-    let proof = prove_inner_for_air_with_config(&air, matrix, &pis, &wrap_config);
-    verify_inner_for_air_with_config(&air, &proof, &pis, &wrap_config)?;
-    Ok((proof, pis))
+    prove_turn_chain_binding_for_roots(seam_pairs)
 }
 
 #[cfg(test)]
