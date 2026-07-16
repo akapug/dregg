@@ -321,7 +321,8 @@ fn classify(error: &TurnError) -> (GuardKind, Vec<CellId>) {
         | CustomProgramNotFound { .. }
         | CustomProgramVerificationFailed { .. }
         | TooManyCustomProofs { .. }
-        | CustomProofCountMismatch { .. } => (GuardKind::Proof, vec![]),
+        | CustomProofCountMismatch { .. }
+        | CustomProofStateBindingMismatch { .. } => (GuardKind::Proof, vec![]),
         SovereignWitnessRequired { cell }
         | SovereignCommitmentMismatch { cell, .. }
         | ProofCarryingRequiresSovereign { cell }
