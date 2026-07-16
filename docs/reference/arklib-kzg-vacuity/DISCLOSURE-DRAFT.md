@@ -20,7 +20,10 @@ rather than write it up anywhere else first.
 **Summary:** `Groups.tSdhAssumption` is false for every `error < 1`, and trivially true
 for `error ≥ 1`. Since `KZG.CommitmentScheme.binding` takes it as a hypothesis and
 concludes a bound at the same `error`, `binding` carries no information at any parameter.
-Everything below is `sorry`-free and depends only on `propext, Classical.choice, Quot.sound`.
+The sibling assumption `Groups.arsdhAssumption` — hypothesis of `KZG.function_binding` —
+has the identical shape and falls the identical way; both regimes of both assumptions are
+mechanized. Everything below is `sorry`-free and depends only on
+`propext, Classical.choice, Quot.sound`.
 
 To be clear up front about what this is not: **this is not a break of KZG or of t-SDH.**
 The scheme is fine, the assumption as normally stated is fine, and the reduction in
@@ -92,16 +95,41 @@ theorem binding_hypotheses_unsatisfiable
 ```
 
 So `binding`'s hypotheses are jointly unsatisfiable for `tSdhError < 1`; and for
-`tSdhError ≥ 1` its conclusion is already trivial, because a probability is `≤ 1`. Either
-the premise is false or the conclusion is free.
+`tSdhError ≥ 1` its conclusion is already trivial, because a probability is `≤ 1`
+(`tSdhAssumption_trivial_of_one_le`, one line via `probEvent_le_one`). Either the premise
+is false or the conclusion is free — mechanized at both ends, so there is no parameter left
+at which `binding` says anything.
 
 We also included a canary, since a probability-1 theorem is worth distrusting:
 `tSdhExperiment_givingUpAdversary` proves an adversary that returns `none` has experiment
 `0`, so the experiment does discriminate and the result above isn't an artifact of the
 `probEvent` machinery.
 
-`arsdhAssumption` has the same shape and we'd expect it to be refutable identically, but we
-have not mechanized that and aren't claiming it.
+### `arsdhAssumption` falls the same way
+
+`arsdhAssumption` (Definition 9.6 in CGKY25, the hypothesis of `KZG.function_binding`) has
+the identical unrestricted quantifier, and we have now mechanized the same refutation:
+
+```lean
+theorem not_arsdhAssumption (hg₁ : g₁ ≠ 1) (hg₂ : g₂ ≠ 1) (D : ℕ) (hpD : D + 2 ≤ p)
+    (error : ℝ≥0) (herr : (error : ℝ≥0∞) < 1) :
+    ¬ Groups.arsdhAssumption … D error
+
+theorem arsdhAssumption_trivial_of_one_le (D : ℕ) (error : ℝ≥0)
+    (herr : (1 : ℝ≥0∞) ≤ (error : ℝ≥0∞)) :
+    Groups.arsdhAssumption … D error
+```
+
+The ARSDH winning condition asks for a set `S` of size `D+1` with `Z_S(τ) ≠ 0` where
+`Z_S = ∏_{s∈S}(X - C s)`, plus `h₁ ≠ 1` and `h₂ = h₁^(1/Z_S(τ))`. The same
+`Classical.choice` adversary recovers `τ` from `g₂^τ`, then picks any size-`D+1` set
+avoiding `τ` (so `Z_S(τ) ≠ 0` by ArkLib's own `prod_x_sub_c_eval_ne_zero`) and returns
+`(S, g₁, g₁^(1/Z_S(τ)))`. Such a set exists precisely when `p ≥ D + 2` — which is exactly
+the `hp : p ≥ n + 2` hypothesis `function_binding` already carries. So `function_binding` is
+vacuous for the identical reason as `binding`: `arsdh_binding_hypotheses_unsatisfiable`
+discharges the `< 1` regime from `function_binding`'s own `hpair`/`hp`, and the `≥ 1` regime
+is again the free `probability ≤ 1`. A giving-up canary (`arsdhExperiment_givingUpAdversary
+= 0`) confirms the experiment discriminates here too.
 
 ### Suggested fix
 
@@ -138,7 +166,10 @@ Attached: `KzgVacuity.lean`. Drop into `ArkLib/Scratch/`, then:
 lake build ArkLib.Scratch.KzgVacuity
 # green, no sorry
 # #print axioms ArkLibVacuity.not_tSdhAssumption
-#   → [propext, Classical.choice, Quot.sound]
+# #print axioms ArkLibVacuity.tSdhAssumption_trivial_of_one_le
+# #print axioms ArkLibVacuity.not_arsdhAssumption
+# #print axioms ArkLibVacuity.arsdhAssumption_trivial_of_one_le
+#   → all [propext, Classical.choice, Quot.sound]
 ```
 
 Thanks for ArkLib — the reduction in `Binding.lean` is careful work and the algebra is
