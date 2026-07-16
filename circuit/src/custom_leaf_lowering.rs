@@ -16,8 +16,8 @@
 
 use crate::cap_root::CAP_FACT_MARK;
 use crate::descriptor_ir2::{
-    CHIP_OUT_LANES, CHIP_RATE, CHIP_TUPLE_LEN, EffectVmDescriptor2, LookupSpec, TID_P2,
-    VmConstraint2, WindowExpr, WindowGateSpec,
+    CHIP_NODE8_ARITY, CHIP_OUT_LANES, CHIP_RATE, CHIP_TUPLE_LEN, EffectVmDescriptor2, LookupSpec,
+    TID_P2, VmConstraint2, WindowExpr, WindowGateSpec,
 };
 use crate::dsl::circuit::{BoundaryDef, BoundaryRow, CellProgram, ConstraintExpr};
 use crate::field::{BABYBEAR_P, BabyBear};
@@ -145,48 +145,90 @@ fn kind_name(expr: &ConstraintExpr) -> &'static str {
 // Poseidon2 lane-witnessing (the shared MerkleHash / TID_P2 extension).
 //
 // A `CellProgram` Poseidon2 hash site (`Hash2to1` / `Hash4to1` / `Hash3Cap` /
-// `MerkleHash`) is ONE Poseidon2 permutation. The faithful IR-v2 carrier is a
-// `Lookup` into the declared chip table `TID_P2`, whose row is the 20-wide tuple
-// `[arity, in0..in10 (CHIP_RATE), out0, lane1..lane7]`. The chip-table AIR enforces
+// `MerkleHash` / `MerkleHash8`) is ONE Poseidon2 permutation. The faithful IR-v2 carrier
+// is a `Lookup` into the declared chip table `TID_P2`, whose row is the `CHIP_TUPLE_LEN`
+// (= 25) wide tuple `[arity, in0..in15 (CHIP_RATE), out0..out7]`. The chip-table AIR enforces
 // `out[i] == perm(ins)[i]` for ALL 8 output lanes, so a forged digest OR a forged
 // intermediate lane is UNSAT (`ir2_forged_output_lane_refuses`). The lookup balances
 // (LogUp) the main-side send against that genuine chip row, so the recompute is
 // witnessed by a pure light client folding the leaf — exactly the cap_root/heap_root
 // in-circuit Merkle-open pattern (a witnessed sibling path, constrained recompute).
 //
-// `out0` is the site's own DIGEST column (the `CellProgram` already fills it via
-// `generate_trace`); the 7 lane columns (lanes 1..7) are ALLOCATED past the base
-// trace width and filled descriptor-side by `fill_chip_lanes` (the
-// `trace_with_chip_lanes` weld inside `prove_vm_descriptor2_for_config`). A Merkle
-// PATH is many such sites chained: each level's parent (`out0`) feeds the next level's
-// `current` via a `Transition`, and the leaf/root are pinned to PIs by the boundary
-// `PiBinding`s — so a wrong sibling no longer reaches the root PI and the leaf is UNSAT.
+// The two site SHAPES differ only in who owns the 8 output columns (see `ChipOut`).
+// SINGLE-output sites squeeze lane 0: `out0` is the site's own DIGEST column (the
+// `CellProgram` already fills it via `generate_trace`) and the 7 lane columns (lanes
+// 1..7) are ALLOCATED past the base trace width and filled descriptor-side by
+// `fill_chip_lanes` (the `trace_with_chip_lanes` weld inside
+// `prove_vm_descriptor2_for_config`) — the program never reads them, they exist only to
+// pin the permutation. MULTI-output sites (`MerkleHash8`) hand ALL 8 lanes to
+// program-owned columns, so they allocate NOTHING and bind the full 8-felt (~124-bit)
+// digest instead of lane 0's ~31 bits. Both ride the SAME tuple and the SAME AIR
+// equalities.
+//
+// A Merkle PATH is many such sites chained: each level's parent (the site's output —
+// `out0` for a single-output site, the whole 8-felt group for a node8 site) feeds the
+// next level's `current` via a `Transition`, and the leaf/root are pinned to PIs by the
+// boundary `PiBinding`s — so a wrong sibling no longer reaches the root PI and the leaf
+// is UNSAT.
 // ============================================================================
+
+/// How a chip site's 8 Poseidon2 output lanes are carried by the `TID_P2` tuple.
+///
+/// The chip tuple has ALWAYS been 8-output on the wire (`CHIP_TUPLE_LEN = 1 + CHIP_RATE + 8`)
+/// and the chip-table AIR has ALWAYS equality-bound every one of `out0..out7` to the genuine
+/// `perm(ins)[0..8]`. What differs between site kinds is only WHO OWNS the 8 output columns.
+enum ChipOut<'a> {
+    /// **Single-output site** (`Hash2to1` / `Hash4to1` / `Hash3Cap` / `MerkleHash`): the
+    /// program squeezes ONE digest. Lane 0 is the site's own output column (filled by the
+    /// program's `generate_trace`); lanes 1..7 are 7 FRESHLY-ALLOCATED witness columns at
+    /// `lane_base..lane_base+6`, filled descriptor-side by `fill_chip_lanes`. The program
+    /// never reads lanes 1..7 — they exist only so the AIR's `out[i] == perm(ins)[i]`
+    /// equalities pin the permutation rather than leaving it free.
+    Single { out0_col: usize, lane_base: usize },
+    /// **Multi-output site** (`MerkleHash8`): the program consumes ALL 8 genuine lanes as a
+    /// native 8-felt digest, so every lane is a PROGRAM-OWNED column already filled by
+    /// `generate_trace`. NO lane columns are allocated — a multi-output site costs ZERO
+    /// extra trace width, because the outputs it needs are exactly the outputs the chip
+    /// tuple was always carrying.
+    Lanes8(&'a [usize; CHIP_OUT_LANES]),
+}
 
 /// Build one `TID_P2` chip lookup for a single Poseidon2 permutation site.
 ///
 /// `arity` selects the chip's state seeding (2 = `hash_2_to_1`, 3 = `cap_node`
-/// `[FACT_MARK,l,r]`, 4 = `hash_4_to_1`), `ins` are the absorb input expressions
-/// (zero-padded to `CHIP_RATE`), `out0_col` is the digest column the program fills,
-/// and `lane_base..lane_base+6` are the 7 freshly-allocated lane columns (lanes 1..7).
-/// The resulting 20-wide tuple matches the chip-row shape `MainLayout::build` validates.
-fn chip_lookup_site(
-    arity: u32,
-    ins: &[LeanExpr],
-    out0_col: usize,
-    lane_base: usize,
-) -> VmConstraint2 {
+/// `[FACT_MARK,l,r]`, 4 = `hash_4_to_1`, 16 = [`CHIP_NODE8_ARITY`], the full-width `cap_node8`
+/// compression that seeds all 16 lanes with genuine inputs). `ins` are the absorb input
+/// expressions (zero-padded to `CHIP_RATE`), and `out` says who owns the 8 output lanes
+/// (see [`ChipOut`]). The resulting `CHIP_TUPLE_LEN`-wide tuple matches the chip-row shape
+/// `MainLayout::build` validates.
+fn chip_lookup_site(arity: u32, ins: &[LeanExpr], out: ChipOut<'_>) -> VmConstraint2 {
     let mut tuple: Vec<LeanExpr> = Vec::with_capacity(CHIP_TUPLE_LEN);
     tuple.push(LeanExpr::Const(arity as i64));
     for i in 0..CHIP_RATE {
         tuple.push(ins.get(i).cloned().unwrap_or(LeanExpr::Const(0)));
     }
-    // out0 = the digest (lane 0); the AIR binds it to `perm(ins)[0]`.
-    tuple.push(LeanExpr::Var(out0_col));
-    // lanes 1..7 — the genuine distinct permutation lanes, witnessed columns the AIR
-    // EQUALITY-binds to `perm(ins)[i]` (a forged lane is UNSAT). `fill_chip_lanes` writes them.
-    for j in 0..(CHIP_OUT_LANES - 1) {
-        tuple.push(LeanExpr::Var(lane_base + j));
+    match out {
+        ChipOut::Single {
+            out0_col,
+            lane_base,
+        } => {
+            // out0 = the digest (lane 0); the AIR binds it to `perm(ins)[0]`.
+            tuple.push(LeanExpr::Var(out0_col));
+            // lanes 1..7 — the genuine distinct permutation lanes, witnessed columns the AIR
+            // EQUALITY-binds to `perm(ins)[i]` (a forged lane is UNSAT). `fill_chip_lanes` writes them.
+            for j in 0..(CHIP_OUT_LANES - 1) {
+                tuple.push(LeanExpr::Var(lane_base + j));
+            }
+        }
+        ChipOut::Lanes8(out_cols) => {
+            // All 8 lanes are program-owned digest columns. The AIR's `out[i] == perm(ins)[i]`
+            // equalities are the SAME constraints the single-output path relies on — here they
+            // pin the program's own 8-felt digest instead of anonymous lane witnesses, so the
+            // per-site collision floor is the full 8-felt width, not lane 0's ~31 bits.
+            for &c in out_cols.iter() {
+                tuple.push(LeanExpr::Var(c));
+            }
+        }
     }
     debug_assert_eq!(tuple.len(), CHIP_TUPLE_LEN);
     VmConstraint2::Lookup(LookupSpec {
@@ -567,8 +609,10 @@ pub fn lower_cellprogram(program: &CellProgram) -> Result<Lowered, String> {
                 chip_lookup_site(
                     2,
                     &[LeanExpr::Var(*input_col_a), LeanExpr::Var(*input_col_b)],
-                    *output_col,
-                    lane_base,
+                    ChipOut::Single {
+                        out0_col: *output_col,
+                        lane_base,
+                    },
                 )
             }
             ConstraintExpr::Hash4to1 {
@@ -582,8 +626,10 @@ pub fn lower_cellprogram(program: &CellProgram) -> Result<Lowered, String> {
                         .iter()
                         .map(|&c| LeanExpr::Var(c))
                         .collect::<Vec<_>>(),
-                    *output_col,
-                    lane_base,
+                    ChipOut::Single {
+                        out0_col: *output_col,
+                        lane_base,
+                    },
                 )
             }
             ConstraintExpr::Hash3Cap {
@@ -601,8 +647,10 @@ pub fn lower_cellprogram(program: &CellProgram) -> Result<Lowered, String> {
                         LeanExpr::Var(*left_col),
                         LeanExpr::Var(*right_col),
                     ],
-                    *output_col,
-                    lane_base,
+                    ChipOut::Single {
+                        out0_col: *output_col,
+                        lane_base,
+                    },
                 )
             }
             ConstraintExpr::MerkleHash {
@@ -615,21 +663,47 @@ pub fn lower_cellprogram(program: &CellProgram) -> Result<Lowered, String> {
                 // chip-input polynomials, then an arity-4 absorb (== `hash_4_to_1`).
                 let lane_base = alloc_lanes(&mut width);
                 let children = merkle_children_exprs(*current_col, sib_cols, *position_col);
-                chip_lookup_site(4, &children, *output_col, lane_base)
+                chip_lookup_site(
+                    4,
+                    &children,
+                    ChipOut::Single {
+                        out0_col: *output_col,
+                        lane_base,
+                    },
+                )
             }
-            // The native 8-felt cap-tree node8 compression is a MULTI-output (8-lane)
-            // Poseidon2 site arithmetized only by the DSL batch-stark AIR (`dsl_p3_air`,
-            // via `poseidon2_permute_expr_lanes`). This IR-v2 chip adapter carries
-            // single-output (out0) chip sites, so it has no faithful carrier for the
-            // 8-output node8 — a precise blocker, never a lane-0 downgrade.
-            ConstraintExpr::MerkleHash8 { .. } => {
-                return Err(
-                    "constraint kind MerkleHash8 (native 8-felt cap_node8, arity-16 compression) \
-                     is an 8-OUTPUT Poseidon2 site; this IR-v2 chip adapter carries single-output \
-                     (out0) chip sites only. It is arithmetized by the DSL batch-stark AIR \
-                     (dsl_p3_air, 8-lane exposure), not folded here"
-                        .to_string(),
-                );
+            // The native 8-felt cap-tree node8 compression: the MULTI-OUTPUT (8-lane)
+            // Poseidon2 site. `cap_node8(L8, R8)` is DEFINED as
+            // `chip_absorb_all_lanes(CHIP_NODE8_ARITY, L8 ‖ R8)` (`cap_root.rs`), i.e. it is
+            // LITERALLY one arity-16 chip absorb — so the faithful IR-v2 carrier is one
+            // `TID_P2` lookup, exactly like every narrow site. The chip tuple was ALWAYS
+            // 8-output on the wire (`CHIP_TUPLE_LEN = 1 + CHIP_RATE + 8`) and the chip AIR
+            // ALWAYS equality-bound `out0..out7` to the genuine `perm(ins)[0..8]`; arity 16 is
+            // already in the chip's arity set `{0,2,3,4,7,11,16}`, already seeds all 16 lanes
+            // from genuine inputs (`st[i] = in_i` for `i` in `7..16`, with `in11..in15` pinned
+            // to 0 on every other arity), and the chip table already mints node8 rows. The
+            // ONLY thing that ever blocked this was `chip_lookup_site` hard-coding "lane 0 is
+            // the output, lanes 1..7 are anonymous witnesses" — so the refusal was an adapter
+            // limitation, not a soundness boundary.
+            //
+            // Because all 8 lanes are PROGRAM-OWNED columns, this site allocates NO lane
+            // columns: a multi-output site costs ZERO extra trace width while binding the full
+            // 8-felt (~124-bit) digest, where the single-output squeeze binds lane 0 alone
+            // (~31 bits) and pays 7 witness columns to do it.
+            ConstraintExpr::MerkleHash8 {
+                output_cols,
+                left_cols,
+                right_cols,
+            } => {
+                // ins = L8 ‖ R8, seeding all 16 permutation lanes (arity 16 == CHIP_RATE, so
+                // there is no padding and no arity tag lane — byte-identical to `cap_node8`).
+                let ins: Vec<LeanExpr> = left_cols
+                    .iter()
+                    .chain(right_cols.iter())
+                    .map(|&c| LeanExpr::Var(c))
+                    .collect();
+                debug_assert_eq!(ins.len(), CHIP_NODE8_ARITY);
+                chip_lookup_site(CHIP_NODE8_ARITY as u32, &ins, ChipOut::Lanes8(output_cols))
             }
             // ---- the remaining hash / lookup / table-function kinds: no faithful
             //      single-permutation chip carrier in this extension — precise blockers. ----
@@ -696,8 +770,10 @@ pub fn lower_cellprogram(program: &CellProgram) -> Result<Lowered, String> {
                 chip_lookup_site(
                     2,
                     &[LeanExpr::Var(acc_col), LeanExpr::Var(*input_next_col)],
-                    *output_next_col,
-                    lane_base,
+                    ChipOut::Single {
+                        out0_col: *output_next_col,
+                        lane_base,
+                    },
                 )
             }
             // A `SeedHash2to1` that reaches here is NOT consumed by a chain (no chain
