@@ -37,6 +37,7 @@ pub mod api;
 pub mod cipherclerk;
 pub mod host;
 pub mod render;
+pub mod seated;
 pub mod transport;
 
 use std::collections::HashMap;

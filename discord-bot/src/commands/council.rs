@@ -167,7 +167,7 @@ pub async fn handle(ctx: &Context, command: &CommandInteraction, state: &BotStat
             };
             handle_open(ctx, command, state, &opts).await
         }
-        "status" => offering::handle_status::<CouncilOffering>(ctx, command).await,
+        "status" => offering::handle_status::<CouncilOffering>(ctx, command, state).await,
         "verify" => offering::handle_verify::<CouncilOffering>(ctx, command).await,
         _ => {}
     }

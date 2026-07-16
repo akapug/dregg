@@ -45,6 +45,20 @@ dreggnet-offerings = { path = "../dreggnet-offerings" }
 # logic reimplemented (the WeChat layer only maps the shared `Surface` → the OA numbered reply).
 dreggnet-council = { path = "../dreggnet-council" }
 dreggnet-market = { path = "../dreggnet-market" }
+# THE FULL PORTFOLIO — the same offering crates the web catalog (`dreggnet_web::demo_host`) + the
+# Telegram host dep, so WeChat registers the SAME 18 offerings: the two portfolio games (automatafl +
+# multiway-tug), the eight do-once RPG feature surfaces (`dreggnet-surfaces::register_surfaces`), and
+# the four remaining non-game offerings (doc · names · compute · grain — hermes/council/market above).
+# Consumed as `Offering`s; no offering logic reimplemented (the seat-claiming tug adapter is
+# `src/seated.rs`, the byte-peer of the web `seated` module).
+dregg-automatafl = { path = "../dregg-automatafl" }
+dregg-multiway-tug = { path = "../dregg-multiway-tug" }
+dreggnet-surfaces = { path = "../dreggnet-surfaces" }
+dreggnet-doc = { path = "../dreggnet-doc" }
+dreggnet-names = { path = "../dreggnet-names" }
+dreggnet-compute = { path = "../dreggnet-compute" }
+dreggnet-grain = { path = "../dreggnet-grain" }
+dreggnet-hermes = { path = "../dreggnet-hermes" }
 # THE DEOS SURFACE — `ViewNode`, the serializable affordance view-tree an offering's
 # `render` produces, AND the SHARED `WeChatBackend` that projects it. `default-features = false`
 # = the gpui-free view-tree model.

@@ -83,6 +83,10 @@ pub mod doc;
 pub mod grain;
 pub mod hermes;
 pub mod offering;
+// `/play <offering>` — the FULL-PORTFOLIO reach: the twelve offerings that had no bespoke slash
+// command (the two games automatafl + tug, names + compute, and the eight RPG feature surfaces),
+// mounted through the SAME generic `offering` adapter, so Discord reaches web offering parity.
+pub mod portfolio;
 // `/buy-credits` + `/balance` — the $DREGG earning surface: issue the caller's deterministic
 // deposit address + price, and show their persisted run-credit balance. A paid /dungeon run
 // spends one credit for a real-AI (Bedrock) narration. See `crate::pay`.

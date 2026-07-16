@@ -190,6 +190,17 @@ dreggnet-market = { path = "../dreggnet-market" }
 dreggnet-hermes = { path = "../dreggnet-hermes" }
 dreggnet-grain = { path = "../dreggnet-grain" }
 dreggnet-doc = { path = "../dreggnet-doc" }
+# THE FULL-PORTFOLIO CLOSURE (`src/commands/portfolio.rs`) — the SAME offering crates the web catalog
+# (`dreggnet_web::demo_host`) and the Telegram/WeChat hosts dep, so Discord reaches offering parity
+# via the SAME generic `DiscordOffering` adapter: the two portfolio games (automatafl + multiway-tug),
+# the two remaining non-game offerings (names + compute), and the eight do-once RPG feature surfaces
+# (`dreggnet-surfaces`). Root workspace members, consumed (never modified); the seat-claiming tug
+# adapter is `portfolio::SeatedTug`, the byte-peer of the web `seated` module.
+dregg-automatafl = { path = "../dregg-automatafl" }
+dregg-multiway-tug = { path = "../dregg-multiway-tug" }
+dreggnet-names = { path = "../dreggnet-names" }
+dreggnet-compute = { path = "../dreggnet-compute" }
+dreggnet-surfaces = { path = "../dreggnet-surfaces" }
 # THE UGC REGISTRY behind `/gallery` — the real `Registry` (publish a content-addressed
 # `Universe`, submit a `Completion`) and its NO-CHEAT leaderboard: a completion is ranked
 # ONLY if its recorded receipt chain re-verifies to the declared WIN on a stranger's

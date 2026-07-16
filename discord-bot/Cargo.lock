@@ -1837,6 +1837,7 @@ dependencies = [
  "blake3",
  "dregg-cell",
  "dregg-firmament",
+ "dregg-narrator",
  "dregg-sdk",
  "dregg-tee-verify",
  "dregg-turn",
@@ -2046,6 +2047,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "dregg-automatafl"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "deos-view",
+ "dregg-app-framework",
+ "dregg-cell",
+ "dregg-circuit",
+ "dregg-circuit-prove",
+ "dregg-schema",
+ "dreggnet-offerings",
+ "spween-dregg",
+]
+
+[[package]]
 name = "dregg-blocklace"
 version = "0.1.0"
 dependencies = [
@@ -2187,7 +2203,9 @@ dependencies = [
  "blake3",
  "bytemuck",
  "dregg-circuit",
+ "futures-channel",
  "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "itertools 0.14.0",
  "num-bigint",
  "p3-air",
@@ -2215,6 +2233,7 @@ dependencies = [
  "rayon",
  "rmp-serde",
  "serde",
+ "serde_json",
  "tracing",
  "wgpu",
 ]
@@ -2308,26 +2327,34 @@ dependencies = [
  "chacha20poly1305",
  "deos-view",
  "dregg-app-framework",
+ "dregg-automatafl",
  "dregg-captp",
  "dregg-cell",
  "dregg-circuit",
  "dregg-dfa",
+ "dregg-dice",
+ "dregg-multiway-tug",
  "dregg-narrator",
  "dregg-pay",
  "dregg-sdk",
  "dregg-storage",
  "dregg-turn",
  "dregg-types",
+ "dreggnet-compute",
  "dreggnet-council",
  "dreggnet-doc",
  "dreggnet-grain",
  "dreggnet-hermes",
  "dreggnet-market",
+ "dreggnet-names",
  "dreggnet-offerings",
+ "dreggnet-surfaces",
  "dungeon-on-dregg",
+ "ed25519-dalek",
  "futures-util",
  "hex",
  "postcard",
+ "procgen-dregg",
  "reqwest",
  "serde",
  "serde_json",
@@ -2408,6 +2435,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "dregg-epoch"
+version = "0.1.0"
+dependencies = [
+ "dregg-circuit",
+ "serde",
+]
+
+[[package]]
 name = "dregg-exec-lean"
 version = "0.1.0"
 dependencies = [
@@ -2415,6 +2450,7 @@ dependencies = [
  "dregg-captp",
  "dregg-cell",
  "dregg-cell-crypto",
+ "dregg-circuit",
  "dregg-coord",
  "dregg-federation",
  "dregg-intent",
@@ -2467,6 +2503,33 @@ dependencies = [
  "landlock",
  "libc",
  "seccompiler",
+]
+
+[[package]]
+name = "dregg-genesis-snapshot"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-cell",
+ "dregg-circuit",
+ "serde",
+]
+
+[[package]]
+name = "dregg-governance"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "collective-choice",
+ "dregg-blocklace",
+ "dregg-bridge",
+ "dregg-intent",
+ "dregg-lean-ffi",
+ "ed25519-dalek",
+ "k256",
+ "ripemd",
+ "sha2 0.10.9",
+ "sha3",
 ]
 
 [[package]]
@@ -2554,6 +2617,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "dregg-multiway-tug"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "deos-view",
+ "dregg-app-framework",
+ "dregg-cell",
+ "dregg-circuit",
+ "dregg-circuit-prove",
+ "dregg-lightclient",
+ "dregg-schema",
+ "dregg-turn",
+ "dreggnet-asset",
+ "dreggnet-offerings",
+ "game-turn-slice",
+ "procgen-dregg",
+ "spween-dregg",
+]
+
+[[package]]
 name = "dregg-narrator"
 version = "0.1.0"
 dependencies = [
@@ -2580,7 +2663,9 @@ dependencies = [
  "blake3",
  "bs58",
  "collective-choice",
+ "curve25519-dalek",
  "dregg-bridge",
+ "dregg-governance",
  "ed25519-dalek",
  "hmac 0.12.1",
  "serde_json",
@@ -2641,6 +2726,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "dregg-schema"
+version = "0.1.0"
+dependencies = [
+ "dregg-app-framework",
+ "dregg-cell",
+ "spween-dregg",
+]
+
+[[package]]
 name = "dregg-sdk"
 version = "0.1.0"
 dependencies = [
@@ -2690,6 +2784,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "dregg-season"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-cell",
+ "dregg-epoch",
+ "dregg-genesis-snapshot",
+ "serde",
+ "ugc-dregg",
+]
+
+[[package]]
 name = "dregg-secrets"
 version = "0.1.0"
 dependencies = [
@@ -2732,6 +2838,7 @@ dependencies = [
  "ciborium",
  "dregg-cell",
  "p384",
+ "rsa",
  "serde",
  "serde_bytes",
  "sha2 0.10.9",
@@ -2837,6 +2944,53 @@ dependencies = [
 ]
 
 [[package]]
+name = "dreggnet-asset"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-app-framework",
+ "dregg-cell",
+ "dregg-schema",
+ "zeroize",
+]
+
+[[package]]
+name = "dreggnet-cheevo"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-season",
+ "dreggnet-asset",
+ "spween-dregg",
+ "ugc-dregg",
+]
+
+[[package]]
+name = "dreggnet-companion"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-app-framework",
+ "dregg-cell",
+ "dregg-turn",
+ "dreggnet-asset",
+ "dungeon-on-dregg",
+ "procgen-dregg",
+]
+
+[[package]]
+name = "dreggnet-compute"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "deos-view",
+ "dregg-app-framework",
+ "dregg-types",
+ "dreggnet-offerings",
+ "starbridge-compute-exchange",
+]
+
+[[package]]
 name = "dreggnet-council"
 version = "0.1.0"
 dependencies = [
@@ -2846,6 +3000,17 @@ dependencies = [
  "dregg-app-framework",
  "dregg-cell",
  "dreggnet-offerings",
+]
+
+[[package]]
+name = "dreggnet-craft"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dreggnet-asset",
+ "dreggnet-gear",
+ "dungeon-on-dregg",
+ "procgen-dregg",
 ]
 
 [[package]]
@@ -2859,6 +3024,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "dreggnet-gear"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "deos-view",
+ "dregg-app-framework",
+ "dregg-cell",
+ "dregg-schema",
+ "dregg-turn",
+ "dreggnet-asset",
+ "dreggnet-offerings",
+ "dungeon-on-dregg",
+ "spween-dregg",
+]
+
+[[package]]
 name = "dreggnet-grain"
 version = "0.1.0"
 dependencies = [
@@ -2869,6 +3050,21 @@ dependencies = [
  "dregg-sdk",
  "dreggnet-offerings",
  "grain-turn",
+]
+
+[[package]]
+name = "dreggnet-guild"
+version = "0.1.0"
+dependencies = [
+ "collective-choice",
+ "dregg-cell",
+ "dregg-turn",
+ "dregg-types",
+ "dreggnet-offerings",
+ "dungeon-on-dregg",
+ "starbridge-escrow-market",
+ "starbridge-v2",
+ "ugc-dregg",
 ]
 
 [[package]]
@@ -2898,15 +3094,85 @@ dependencies = [
 ]
 
 [[package]]
+name = "dreggnet-names"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "deos-view",
+ "dregg-app-framework",
+ "dregg-cell",
+ "dregg-sdk",
+ "dregg-types",
+ "dreggnet-offerings",
+ "starbridge-nameservice",
+]
+
+[[package]]
 name = "dreggnet-offerings"
 version = "0.1.0"
 dependencies = [
  "blake3",
  "deos-view",
  "dregg-app-framework",
+ "dregg-node-target",
+ "dregg-pay",
+ "dreggnet-tournament",
  "dungeon-on-dregg",
+ "procgen-dregg",
  "spween",
  "spween-dregg",
+ "ugc-dregg",
+]
+
+[[package]]
+name = "dreggnet-party"
+version = "0.1.0"
+dependencies = [
+ "collective-choice",
+ "dregg-app-framework",
+ "dregg-cell",
+ "dregg-turn",
+ "dregg-types",
+ "dungeon-on-dregg",
+ "starbridge-v2",
+]
+
+[[package]]
+name = "dreggnet-surfaces"
+version = "0.1.0"
+dependencies = [
+ "deos-view",
+ "dregg-app-framework",
+ "dreggnet-asset",
+ "dreggnet-cheevo",
+ "dreggnet-companion",
+ "dreggnet-craft",
+ "dreggnet-guild",
+ "dreggnet-offerings",
+ "dreggnet-party",
+ "dreggnet-trade",
+ "dungeon-on-dregg",
+ "procgen-dregg",
+ "ugc-dregg",
+]
+
+[[package]]
+name = "dreggnet-tournament"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "ugc-dregg",
+]
+
+[[package]]
+name = "dreggnet-trade"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-cell",
+ "dregg-types",
+ "dreggnet-asset",
+ "starbridge-escrow-market",
 ]
 
 [[package]]
@@ -2927,6 +3193,8 @@ dependencies = [
  "dregg-turn",
  "dregg-types",
  "dregg-zkoracle-prove",
+ "dreggnet-asset",
+ "procgen-dregg",
  "spween",
  "spween-dregg",
  "starbridge-v2",
@@ -3187,6 +3455,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "059c31d7d36c43fe39d89e55711858b4da8be7eb6dabac23c7289b1a19489406"
 
 [[package]]
+name = "fixedbitset"
+version = "0.5.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d674e81391d1e1ab681a28d99df07927c6d4aa5b027d7da16ba32d1d21ecd99"
+
+[[package]]
 name = "flate2"
 version = "1.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3379,6 +3653,17 @@ dependencies = [
  "memchr",
  "pin-project-lite",
  "slab",
+]
+
+[[package]]
+name = "game-turn-slice"
+version = "0.1.0"
+dependencies = [
+ "dregg-cell",
+ "dregg-circuit",
+ "dregg-circuit-prove",
+ "dregg-lightclient",
+ "dregg-turn",
 ]
 
 [[package]]
@@ -4235,6 +4520,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "k256"
+version = "0.13.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f6e3919bbaa2945715f0bb6d3934a173d1e9a59ac23767fbaaef277265a7411b"
+dependencies = [
+ "cfg-if",
+ "ecdsa",
+ "elliptic-curve",
+ "once_cell",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "keccak"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4595,6 +4893,7 @@ dependencies = [
  "hexf-parse",
  "indexmap 2.14.0",
  "log",
+ "petgraph",
  "rustc-hash 1.1.0",
  "spirv",
  "strum 0.26.3",
@@ -5448,6 +5747,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
+name = "petgraph"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3672b37090dbd86368a4145bc067582552b29c27377cad4e0a306c97f9bd7772"
+dependencies = [
+ "fixedbitset",
+ "indexmap 2.14.0",
+]
+
+[[package]]
 name = "pin-project-lite"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5654,6 +5963,11 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "dregg-dice",
+ "dregg-federation",
+ "dregg-types",
+ "hex",
+ "reqwest",
+ "serde_json",
 ]
 
 [[package]]
@@ -6014,6 +6328,7 @@ checksum = "eddd3ca559203180a307f12d114c268abf583f59b03cb906fd0b3ff8646c1147"
 dependencies = [
  "base64 0.22.1",
  "bytes",
+ "futures-channel",
  "futures-core",
  "futures-util",
  "http 1.4.2",
@@ -6070,6 +6385,15 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "ripemd"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bd124222d17ad93a644ed9d011a40f4fb64aa54275c08cc216524a9ea82fb09f"
+dependencies = [
+ "digest 0.10.7",
 ]
 
 [[package]]
@@ -7235,6 +7559,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "starbridge-compute-exchange"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-app-framework",
+ "dregg-cell",
+ "dregg-types",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "starbridge-escrow-market"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "dregg-app-framework",
+ "dregg-cell",
+ "dregg-turn",
+ "dregg-types",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "starbridge-governed-namespace"
 version = "0.1.0"
 dependencies = [
@@ -7965,7 +8314,11 @@ name = "ugc-dregg"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "dregg-circuit",
+ "dregg-circuit-prove",
+ "dregg-lightclient",
  "dungeon-on-dregg",
+ "ed25519-dalek",
  "procgen-dregg",
  "spween-dregg",
 ]
@@ -8293,6 +8646,7 @@ dependencies = [
  "arrayvec",
  "bit-vec",
  "bitflags 2.13.0",
+ "bytemuck",
  "cfg_aliases",
  "document-features",
  "indexmap 2.14.0",

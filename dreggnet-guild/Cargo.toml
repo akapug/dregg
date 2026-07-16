@@ -71,7 +71,13 @@ starbridge-escrow-market = { path = "../starbridge-apps/escrow-market" }
 # substrate `mud.rs` uses): `make_open_cell` + `genesis_install` (a member cell holds
 # the guild cap), `set_field` (a guild-state write), `commit_turn` (the executor
 # re-checks the cap — a non-member is `CapabilityNotHeld`).
-starbridge-v2 = { path = "../starbridge-v2" }
+# `embedded-executor` only (matching `dreggnet-party`, `dungeon-on-dregg`, and every other
+# `world::*` consumer): the guild cell needs `world::{World, make_open_cell, set_field,
+# CommitOutcome}` and NOTHING from the `desktop`/`dev-surfaces` default, which would drag in
+# `deos-matrix` → `matrix-sdk-sqlite` (`libsqlite3-sys 0.35`) and collide (`links = "sqlite3"`)
+# with a co-resident `sqlx` in any binary that has one (e.g. the Discord bot). Default features
+# here were an over-broad accident — this data crate never wanted the self-hosting desktop surface.
+starbridge-v2 = { path = "../starbridge-v2", default-features = false, features = ["embedded-executor"] }
 # `CellId`/`Cell`/`AuthRequired` for the guild cell + the escrow wallet cells, and
 # `dregg_turn::action::Effect` the guild turn carries.
 dregg-cell = { path = "../cell" }

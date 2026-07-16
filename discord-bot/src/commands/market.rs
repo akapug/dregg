@@ -118,7 +118,7 @@ pub async fn handle(ctx: &Context, command: &CommandInteraction, state: &BotStat
     };
     match sub.name.as_str() {
         "open" => handle_open(ctx, command, state).await,
-        "status" => offering::handle_status::<MarketOffering>(ctx, command).await,
+        "status" => offering::handle_status::<MarketOffering>(ctx, command, state).await,
         "verify" => offering::handle_verify::<MarketOffering>(ctx, command).await,
         _ => {}
     }

@@ -47,12 +47,18 @@ use std::collections::HashMap;
 use std::sync::mpsc::{SyncSender, sync_channel};
 
 use deos_view::ViewNode;
+use dregg_automatafl::AutomataflOffering;
+use dreggnet_compute::ComputeOffering;
 use dreggnet_council::{CandidateProposal, CouncilOffering};
+use dreggnet_doc::DocOffering;
+use dreggnet_grain::GrainOffering;
+use dreggnet_hermes::HermesOffering;
 use dreggnet_market::MarketOffering;
+use dreggnet_names::NamesOffering;
 use dreggnet_offerings::dungeon::DungeonOffering;
 use dreggnet_offerings::{
-    Action, Frontend, HostError, OfferingHost, OfferingInfo, Outcome, SessionId, Surface,
-    VerifyReport,
+    Action, DreggIdentity, Frontend, HostError, OfferingHost, OfferingInfo, Outcome, SessionId,
+    Surface, VerifyReport,
 };
 
 use crate::cipherclerk::TelegramCipherclerk;
@@ -247,42 +253,54 @@ impl<T: Transport> TelegramHost<T> {
 
     /// **Open an offering session for `(key, chat)`** — ensure a host session is live under the
     /// chat-scoped [`SessionId`] (seeded deterministically from it) and present the offering's
-    /// current [`Surface`] as the chat's inline keyboard. Errors if `key` is unregistered. Returns
-    /// the chat-scoped session id.
+    /// current [`Surface`] as the chat's inline keyboard, projected FOR the opening user `uid` (the
+    /// per-viewer surface — a hidden-hand / cap-dimmed offering paints the opener's own view, not the
+    /// viewer-blind one). Errors if `key` is unregistered. Returns the chat-scoped session id.
     pub fn open(
         &mut self,
         key: &str,
         chat_id: ChatId,
         topic: Option<i64>,
+        uid: TelegramUserId,
     ) -> Result<SessionId, HostError> {
         let sid = TelegramFrontend::<T>::session_id(chat_id, topic);
-        self.open_into(key, &sid)?;
+        let viewer = self.frontend.identity(uid);
+        self.open_into(key, &sid, &viewer)?;
         Ok(sid)
     }
 
     /// Ensure a host session is live under `sid` (seeded from it) and present the offering's current
-    /// surface as the chat's keyboard, recording it active. The shared opener behind
-    /// [`open`](Self::open) and a menu-open press.
-    fn open_into(&mut self, key: &str, sid: &SessionId) -> Result<(), HostError> {
+    /// surface as the chat's keyboard, recording it active. The surface is projected FOR `viewer`
+    /// (the acting Telegram user). The shared opener behind [`open`](Self::open) and a menu-open press.
+    fn open_into(
+        &mut self,
+        key: &str,
+        sid: &SessionId,
+        viewer: &DreggIdentity,
+    ) -> Result<(), HostError> {
         {
             let k = key.to_string();
             let s = sid.clone();
             self.host.run(move |h| h.ensure_open(&k, &s))?;
         }
         self.frontend.spin_session(sid.clone());
-        self.present_offering(key, sid);
+        self.present_offering(key, sid, viewer);
         Ok(())
     }
 
-    /// Re-derive `(key, sid)`'s current surface + actions from the live host session and present
-    /// them (keeping the chat's affordance surface current for the next press), recording the
-    /// offering as active in the chat.
-    fn present_offering(&mut self, key: &str, sid: &SessionId) {
+    /// Re-derive `(key, sid)`'s current surface + actions from the live host session **AS `viewer`
+    /// sees them** and present them (keeping the chat's affordance surface current for the next
+    /// press), recording the offering as active in the chat. Uses the viewer-aware
+    /// [`OfferingHost::render_for`] / [`OfferingHost::actions_for`] so a per-viewer offering (a
+    /// hidden-hand tug, a per-region document cap) paints the surface for the specific Telegram user
+    /// who is looking — not the viewer-blind projection everyone otherwise shared.
+    fn present_offering(&mut self, key: &str, sid: &SessionId, viewer: &DreggIdentity) {
         let (surface, actions) = {
             let k = key.to_string();
             let s = sid.clone();
+            let v = viewer.clone();
             self.host
-                .run(move |h| (h.render(&k, &s), h.actions(&k, &s)))
+                .run(move |h| (h.render_for(&k, &s, &v), h.actions_for(&k, &s, &v)))
         };
         if let (Some(surface), Some(actions)) = (surface, actions) {
             self.frontend.present(sid, &surface, &actions);
@@ -309,6 +327,10 @@ impl<T: Transport> TelegramHost<T> {
         let Some(active) = self.active.get(&sid).cloned() else {
             return HostPress::NoSession;
         };
+        // The acting Telegram user's derived identity — the viewer every re-present is projected FOR
+        // (the same identity the play turn is attributed to), so a per-viewer offering paints the
+        // presser their own surface.
+        let viewer = self.frontend.identity(ev.from_user_id);
         // Decode the pressed button + confirm the turn is on the chat's current surface (offered).
         let Some((turn, arg)) = crate::api::decode_callback(&ev.data) else {
             return HostPress::NotOffered;
@@ -332,8 +354,9 @@ impl<T: Transport> TelegramHost<T> {
                 return HostPress::NotOffered;
             };
             let key = info.key.clone();
-            // Open the offering's host session (seeded from the chat) + present its surface.
-            if self.open_into(&key, &sid).is_err() {
+            // Open the offering's host session (seeded from the chat) + present its surface, projected
+            // for the pressing user.
+            if self.open_into(&key, &sid, &viewer).is_err() {
                 return HostPress::NotOffered;
             }
             return HostPress::Opened(key);
@@ -342,7 +365,7 @@ impl<T: Transport> TelegramHost<T> {
         // A play press: the CORE resolves the typed action on the real substrate — one turn.
         // Label + enabled are decoration; the executor resolves the typed (turn, arg).
         let key = active;
-        let actor = self.frontend.identity(ev.from_user_id);
+        let actor = viewer.clone();
         let action = Action::new(turn.clone(), turn, arg, true);
         let outcome = {
             let k = key.clone();
@@ -352,8 +375,8 @@ impl<T: Transport> TelegramHost<T> {
         match outcome {
             Some(outcome) => {
                 // Re-present the (possibly-advanced) committed state so the next press resolves
-                // against the current surface.
-                self.present_offering(&key, &sid);
+                // against the current surface, projected for the pressing user.
+                self.present_offering(&key, &sid, &viewer);
                 HostPress::Advanced { key, outcome }
             }
             // The host had no such session (should not happen: `active` implies a live session).
@@ -375,13 +398,25 @@ impl<T: Transport> TelegramHost<T> {
     }
 }
 
-/// **The default Telegram catalog host** — registers the three heterogeneous offerings the catalog
-/// plays: the dungeon (a game), the council (governance), the market (commerce). Built on the host's
-/// owning thread, so each offering's `!Send` internals stay confined. `council_members` is the
-/// electorate (member public keys — a Telegram user whose derived identity is one of these can
-/// vote); pass the [`TelegramHost::council_member_pubkey`] of each voter's Telegram id.
+/// **The default Telegram catalog host** — registers the FULL portfolio the web catalog
+/// ([`dreggnet_web::demo_host`]) does, so Telegram reaches offering parity with the browser: the
+/// five games (dungeon · council · market · multiway-tug · automatafl), the eight do-once RPG
+/// feature surfaces ([`dreggnet_surfaces::register_surfaces`]: trade · inventory · cheevos · guild ·
+/// craft · companion · tavern · party), and the five non-game offerings (doc · names · compute ·
+/// grain · hermes). Built on the host's owning thread, so each offering's `!Send` internals stay
+/// confined.
+///
+/// `tug` is wrapped in the seat-claiming [`crate::seated::SeatedTug`] adapter (the byte-peer of the
+/// web `seated` module) because `TugOffering` names its seats by fixed canonical strings while a
+/// Telegram user's identity is a derived key — the adapter claims a seat for the first two identities
+/// that act, changing nothing in the game crate. `automatafl` claims seats natively, so it registers
+/// directly. `council_members` is the electorate (member public keys — a Telegram user whose derived
+/// identity is one of these can vote); pass the [`TelegramHost::council_member_pubkey`] of each
+/// voter's Telegram id.
 pub fn telegram_default_host(council_members: Vec<[u8; 32]>) -> OfferingHost {
     let mut host = OfferingHost::new();
+
+    // ── The five portfolio games ────────────────────────────────────────────────────────────────
     host.register(
         "dungeon",
         "The Warden's Keep — a verifiable dungeon (offering #0)",
@@ -404,5 +439,47 @@ pub fn telegram_default_host(council_members: Vec<[u8; 32]>) -> OfferingHost {
         "DreggNet Market — a sealed-bid auction (list · bid · settle)",
         MarketOffering::new(),
     );
+    host.register(
+        "tug",
+        "Multiway-Tug — a hidden-hand tug of influence (seven guilds · eight actions)",
+        crate::seated::SeatedTug::new(),
+    );
+    host.register(
+        "automatafl",
+        "Automatafl — the simultaneous-move board (seal a move · reveal · the automaton steps)",
+        AutomataflOffering,
+    );
+
+    // ── The eight do-once RPG feature surfaces (trade · inventory · cheevos · guild · craft ·
+    //    companion · tavern · party) — the ONE call web makes, reused verbatim. ────────────────────
+    dreggnet_surfaces::register_surfaces(&mut host);
+
+    // ── The five non-game offerings (mirrors web's `register_non_game_offerings`). ────────────────
+    host.register(
+        "doc",
+        "DreggNet Doc — a verifiable document store (author · amend · verify)",
+        DocOffering::new(),
+    );
+    host.register(
+        "names",
+        "DreggNet Names — an identity / naming service (register · transfer · resolve)",
+        NamesOffering::new(),
+    );
+    host.register(
+        "compute",
+        "DreggNet Compute — a confined compute-job market (post · claim · settle)",
+        ComputeOffering::new(),
+    );
+    host.register(
+        "grain",
+        "DreggNet Grain — metered work under a spend budget (request · grant)",
+        GrainOffering::new(1000),
+    );
+    host.register(
+        "hermes",
+        "DreggNet Hermes — the message relay (send · deliver · ack)",
+        HermesOffering::new(),
+    );
+
     host
 }

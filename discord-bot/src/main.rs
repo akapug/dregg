@@ -199,6 +199,10 @@ const REGISTERED_COMMAND_NAMES: &[&str] = &[
     "hermes",
     "grain",
     "doc",
+    // ─── the FULL-PORTFOLIO reach: `/play <offering>` opens any of the twelve remaining offerings
+    //     (the games automatafl + tug, names + compute, and the eight RPG feature surfaces) through
+    //     the SAME generic adapter — Discord reaches web offering parity (`commands::portfolio`) ─
+    "play",
     // ─── $DREGG-paid real-AI runs: buy run-credits, check balance ────────────────
     "buy-credits",
     "balance",
@@ -342,6 +346,7 @@ impl EventHandler for Handler {
             commands::hermes::register(),
             commands::grain::register(),
             commands::doc::register(),
+            commands::portfolio::register(),
             // ─── $DREGG-paid real-AI runs ────────────────────────────────────
             commands::pay::register_buy(),
             commands::pay::register_balance(),
@@ -498,6 +503,7 @@ impl EventHandler for Handler {
                 "hermes" => commands::hermes::handle(&ctx, &command, &self.state).await,
                 "grain" => commands::grain::handle(&ctx, &command, &self.state).await,
                 "doc" => commands::doc::handle(&ctx, &command, &self.state).await,
+                "play" => commands::portfolio::handle(&ctx, &command, &self.state).await,
                 "buy-credits" => commands::pay::handle_buy(&ctx, &command, &self.state).await,
                 "balance" => commands::pay::handle_balance(&ctx, &command, &self.state).await,
                 "treasury" => commands::pay::handle_treasury(&ctx, &command, &self.state).await,

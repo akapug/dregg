@@ -784,6 +784,38 @@ pub fn surface_of<O: DiscordOffering>(live: &Live<O>) -> (CreateEmbed, Vec<Creat
     (embed_of(live), action_rows::<O>(&actions))
 }
 
+/// The session's embed rendered **AS `viewer` sees it** — the viewer-aware
+/// [`Offering::render_for`] projection (a multiway-tug seat's own hidden hand revealed, a document's
+/// per-region cap surfaced), where [`embed_of`] paints the one viewer-blind surface everyone shared.
+/// A full-information offering inherits `render_for`'s default (== `render`), so nothing changes for
+/// it; only an offering with genuinely per-viewer state paints differently here.
+pub fn embed_for<O: DiscordOffering>(live: &Live<O>, viewer: &DreggIdentity) -> CreateEmbed {
+    let surface: Surface = live.offering.render_for(&live.session, viewer);
+    let card = deos_view::discord::render_card(O::TITLE, surface.view(), &[]);
+    card.embed
+        .color(O::COLOR)
+        .footer(CreateEmbedFooter::new(truncate(
+            &format!(
+                "{} · {}",
+                live.offering.status_line(&live.session),
+                O::TAGLINE
+            ),
+            2040,
+        )))
+}
+
+/// The full surface of a channel's live session **AS `viewer` sees it** — the viewer-aware embed
+/// ([`embed_for`]) + the viewer-aware affordances ([`Offering::actions_for`], so an actor is never
+/// offered a cap they lack). This is the render the live press path takes (it holds the presser's
+/// derived dregg identity), so the tug hidden hand + the doc cap-dimming reach the Discord surface.
+pub fn surface_for<O: DiscordOffering>(
+    live: &Live<O>,
+    viewer: &DreggIdentity,
+) -> (CreateEmbed, Vec<CreateActionRow>) {
+    let actions = live.offering.actions_for(&live.session, viewer);
+    (embed_for(live, viewer), action_rows::<O>(&actions))
+}
+
 /// The modal that collects a value-taking affordance's typed arg.
 pub fn value_modal<O: DiscordOffering>(turn: &str, prompt: ValuePrompt) -> CreateModal {
     CreateModal::new(submit_id(O::KEY, turn), prompt.title).components(vec![
@@ -968,10 +1000,18 @@ pub fn verify_live<O: DiscordOffering>(channel: u64) -> Option<VerifyReport> {
 // The async Discord handlers — thin wrappers over the sync core.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Post the channel's live surface (embed + affordance buttons) as the command response.
-pub async fn handle_status<O: DiscordOffering>(ctx: &Context, command: &CommandInteraction) {
+/// Post the channel's live surface (embed + affordance buttons) as the command response, projected
+/// **AS the requesting user sees it** — their derived dregg identity is threaded to [`surface_for`],
+/// so a seated tug player's `/tug status` shows their own hidden hand (and a document's per-region
+/// cap dimming reaches the read path), not the viewer-blind public projection.
+pub async fn handle_status<O: DiscordOffering>(
+    ctx: &Context,
+    command: &CommandInteraction,
+    state: &BotState,
+) {
     let channel = command.channel_id.get();
-    let rendered = with_live::<O, _>(channel, |live| surface_of::<O>(live));
+    let viewer = identity_of(state, command.user.id.get());
+    let rendered = with_live::<O, _>(channel, move |live| surface_for::<O>(live, &viewer));
     match rendered {
         Some((embed, rows)) => {
             let msg = CreateInteractionResponseMessage::new()
@@ -1024,7 +1064,7 @@ pub async fn handle_component<O: DiscordOffering>(
         return;
     }
 
-    match drive::<O>(channel, &component.data.custom_id, actor) {
+    match drive::<O>(channel, &component.data.custom_id, actor.clone()) {
         Driven::NeedsValue { turn, prompt } => {
             let _ = component
                 .create_response(
@@ -1042,7 +1082,7 @@ pub async fn handle_component<O: DiscordOffering>(
                 .await;
         }
         Driven::Fired(outcome) => {
-            update_surface::<O>(ctx, component, channel, &outcome_note(&outcome)).await;
+            update_surface::<O>(ctx, component, channel, &actor, &outcome_note(&outcome)).await;
         }
         Driven::NoSession => {
             component_ephemeral(ctx, component, &no_session_text::<O>()).await;
@@ -1069,8 +1109,8 @@ pub async fn handle_modal<O: DiscordOffering>(
         if key != O::KEY {
             return;
         }
-        let driven = drive_text::<O>(channel, &turn, arg, raw.trim(), actor);
-        finish_modal::<O>(ctx, modal, channel, driven).await;
+        let driven = drive_text::<O>(channel, &turn, arg, raw.trim(), actor.clone());
+        finish_modal::<O>(ctx, modal, channel, &actor, driven).await;
         return;
     }
 
@@ -1094,8 +1134,8 @@ pub async fn handle_modal<O: DiscordOffering>(
             .await;
         return;
     };
-    let driven = drive_value::<O>(channel, &turn, value, actor);
-    finish_modal::<O>(ctx, modal, channel, driven).await;
+    let driven = drive_value::<O>(channel, &turn, value, actor.clone());
+    finish_modal::<O>(ctx, modal, channel, &actor, driven).await;
 }
 
 /// The shared tail of a modal submit: post the move's honest outcome + the re-rendered surface (a
@@ -1104,12 +1144,14 @@ async fn finish_modal<O: DiscordOffering>(
     ctx: &Context,
     modal: &ModalInteraction,
     channel: u64,
+    viewer: &DreggIdentity,
     driven: Driven,
 ) {
     match driven {
         Driven::Fired(outcome) => {
             let note = outcome_note(&outcome);
-            let rendered = with_live::<O, _>(channel, |live| surface_of::<O>(live));
+            let viewer = viewer.clone();
+            let rendered = with_live::<O, _>(channel, move |live| surface_for::<O>(live, &viewer));
             let msg = match rendered {
                 Some((embed, rows)) => CreateInteractionResponseMessage::new()
                     .content(note)
@@ -1174,14 +1216,19 @@ pub async fn handle_close<O: DiscordOffering>(ctx: &Context, command: &CommandIn
     }
 }
 
-/// Re-render the channel's surface into the pressed message, with the move's honest outcome.
+/// Re-render the channel's surface into the pressed message **AS the presser sees it**, with the
+/// move's honest outcome. The presser's derived identity (`viewer`) is threaded to
+/// [`surface_for`] so the re-render after a seat-claiming tug play shows the presser THEIR OWN hidden
+/// hand (and their own cap-gated affordances), not the viewer-blind public fog.
 async fn update_surface<O: DiscordOffering>(
     ctx: &Context,
     component: &ComponentInteraction,
     channel: u64,
+    viewer: &DreggIdentity,
     note: &str,
 ) {
-    let rendered = with_live::<O, _>(channel, |live| surface_of::<O>(live));
+    let viewer = viewer.clone();
+    let rendered = with_live::<O, _>(channel, move |live| surface_for::<O>(live, &viewer));
     let Some((embed, rows)) = rendered else {
         component_ephemeral(ctx, component, &no_session_text::<O>()).await;
         return;
@@ -1282,6 +1329,44 @@ pub async fn route_component(ctx: &Context, component: &ComponentInteraction, st
         k if k == <dreggnet_doc::DocOffering as DiscordOffering>::KEY => {
             handle_component::<dreggnet_doc::DocOffering>(ctx, component, state).await
         }
+        // ── The full-portfolio offerings (`commands::portfolio`): the two games + names/compute +
+        //    the eight RPG feature surfaces, reaching web parity through the SAME generic adapter. ──
+        k if k == <crate::commands::portfolio::SeatedTug as DiscordOffering>::KEY => {
+            handle_component::<crate::commands::portfolio::SeatedTug>(ctx, component, state).await
+        }
+        k if k == <dregg_automatafl::AutomataflOffering as DiscordOffering>::KEY => {
+            handle_component::<dregg_automatafl::AutomataflOffering>(ctx, component, state).await
+        }
+        k if k == <dreggnet_names::NamesOffering as DiscordOffering>::KEY => {
+            handle_component::<dreggnet_names::NamesOffering>(ctx, component, state).await
+        }
+        k if k == <dreggnet_compute::ComputeOffering as DiscordOffering>::KEY => {
+            handle_component::<dreggnet_compute::ComputeOffering>(ctx, component, state).await
+        }
+        k if k == <dreggnet_surfaces::TradeOffering as DiscordOffering>::KEY => {
+            handle_component::<dreggnet_surfaces::TradeOffering>(ctx, component, state).await
+        }
+        k if k == <dreggnet_surfaces::InventoryOffering as DiscordOffering>::KEY => {
+            handle_component::<dreggnet_surfaces::InventoryOffering>(ctx, component, state).await
+        }
+        k if k == <dreggnet_surfaces::CheevoShowcase as DiscordOffering>::KEY => {
+            handle_component::<dreggnet_surfaces::CheevoShowcase>(ctx, component, state).await
+        }
+        k if k == <dreggnet_surfaces::GuildPage as DiscordOffering>::KEY => {
+            handle_component::<dreggnet_surfaces::GuildPage>(ctx, component, state).await
+        }
+        k if k == <dreggnet_surfaces::CraftOffering as DiscordOffering>::KEY => {
+            handle_component::<dreggnet_surfaces::CraftOffering>(ctx, component, state).await
+        }
+        k if k == <dreggnet_surfaces::CompanionOffering as DiscordOffering>::KEY => {
+            handle_component::<dreggnet_surfaces::CompanionOffering>(ctx, component, state).await
+        }
+        k if k == <dreggnet_surfaces::TavernOffering as DiscordOffering>::KEY => {
+            handle_component::<dreggnet_surfaces::TavernOffering>(ctx, component, state).await
+        }
+        k if k == <dreggnet_surfaces::PartyOffering as DiscordOffering>::KEY => {
+            handle_component::<dreggnet_surfaces::PartyOffering>(ctx, component, state).await
+        }
         _ => {}
     }
 }
@@ -1303,6 +1388,33 @@ pub async fn route_modal(ctx: &Context, modal: &ModalInteraction, state: &BotSta
         }
         k if k == <dreggnet_doc::DocOffering as DiscordOffering>::KEY => {
             handle_modal::<dreggnet_doc::DocOffering>(ctx, modal, state).await
+        }
+        // ── The full-portfolio offerings that take a typed value/text modal (`commands::portfolio`).
+        //    Offerings whose affordances are all fixed-arg buttons never mint a modal, so their arms
+        //    here are inert — but present for uniformity + future value-taking turns. ──
+        k if k == <dregg_automatafl::AutomataflOffering as DiscordOffering>::KEY => {
+            handle_modal::<dregg_automatafl::AutomataflOffering>(ctx, modal, state).await
+        }
+        k if k == <dreggnet_names::NamesOffering as DiscordOffering>::KEY => {
+            handle_modal::<dreggnet_names::NamesOffering>(ctx, modal, state).await
+        }
+        k if k == <dreggnet_compute::ComputeOffering as DiscordOffering>::KEY => {
+            handle_modal::<dreggnet_compute::ComputeOffering>(ctx, modal, state).await
+        }
+        k if k == <dreggnet_surfaces::TradeOffering as DiscordOffering>::KEY => {
+            handle_modal::<dreggnet_surfaces::TradeOffering>(ctx, modal, state).await
+        }
+        k if k == <dreggnet_surfaces::InventoryOffering as DiscordOffering>::KEY => {
+            handle_modal::<dreggnet_surfaces::InventoryOffering>(ctx, modal, state).await
+        }
+        k if k == <dreggnet_surfaces::CraftOffering as DiscordOffering>::KEY => {
+            handle_modal::<dreggnet_surfaces::CraftOffering>(ctx, modal, state).await
+        }
+        k if k == <dreggnet_surfaces::TavernOffering as DiscordOffering>::KEY => {
+            handle_modal::<dreggnet_surfaces::TavernOffering>(ctx, modal, state).await
+        }
+        k if k == <dreggnet_surfaces::PartyOffering as DiscordOffering>::KEY => {
+            handle_modal::<dreggnet_surfaces::PartyOffering>(ctx, modal, state).await
         }
         _ => {}
     }

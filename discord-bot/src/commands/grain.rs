@@ -89,7 +89,7 @@ pub async fn handle(ctx: &Context, command: &CommandInteraction, state: &BotStat
     };
     match sub.name.as_str() {
         "open" => handle_open(ctx, command, state).await,
-        "status" => offering::handle_status::<GrainOffering>(ctx, command).await,
+        "status" => offering::handle_status::<GrainOffering>(ctx, command, state).await,
         "verify" => offering::handle_verify::<GrainOffering>(ctx, command).await,
         _ => {}
     }

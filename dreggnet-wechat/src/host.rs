@@ -69,8 +69,14 @@ use std::collections::HashMap;
 use std::sync::mpsc::{SyncSender, sync_channel};
 
 use deos_view::{MenuItem, ViewNode};
+use dregg_automatafl::AutomataflOffering;
+use dreggnet_compute::ComputeOffering;
 use dreggnet_council::{CandidateProposal, CouncilOffering};
+use dreggnet_doc::DocOffering;
+use dreggnet_grain::GrainOffering;
+use dreggnet_hermes::HermesOffering;
 use dreggnet_market::MarketOffering;
+use dreggnet_names::NamesOffering;
 use dreggnet_offerings::dungeon::DungeonOffering;
 use dreggnet_offerings::{
     Action, DreggIdentity, Frontend, HostError, OfferingHost, OfferingInfo, Outcome, SessionId,
@@ -359,15 +365,25 @@ impl<T: Transport> WeChatHost<T> {
         Ok(())
     }
 
-    /// Re-derive `(key, room)`'s current surface + actions from the live host session and present
-    /// them to the participant surface `psid` (keeping that conversation's affordance surface current
-    /// for the next reply), recording the offering + room active for the participant.
+    /// Re-derive `(key, room)`'s current surface + actions from the live host session **AS the
+    /// participant `psid` sees them** and present them (keeping that conversation's affordance surface
+    /// current for the next reply), recording the offering + room active for the participant.
+    ///
+    /// The participant's identity is recovered from the psid (`wx:<openid>` → the SAME derived
+    /// identity a reply is attributed to) and passed to the viewer-aware
+    /// [`OfferingHost::render_for`] / [`OfferingHost::actions_for`], so a per-viewer offering (a
+    /// hidden-hand tug where each seat sees only its own hand, a per-region document cap) paints the
+    /// surface for the specific WeChat user who is looking — not the viewer-blind projection everyone
+    /// otherwise shared. A psid this frontend did not mint falls back to the public projection.
     fn present_room(&mut self, key: &str, room: &SessionId, psid: &SessionId) {
+        let viewer = WeChatFrontend::<T>::openid_of(psid).map(|oid| self.frontend.identity(oid));
         let (surface, actions) = {
             let k = key.to_string();
             let r = room.clone();
-            self.host
-                .run(move |h| (h.render(&k, &r), h.actions(&k, &r)))
+            self.host.run(move |h| match viewer {
+                Some(v) => (h.render_for(&k, &r, &v), h.actions_for(&k, &r, &v)),
+                None => (h.render(&k, &r), h.actions(&k, &r)),
+            })
         };
         if let (Some(surface), Some(actions)) = (surface, actions) {
             self.frontend.spin_session(psid.clone());
@@ -458,15 +474,23 @@ impl<T: Transport> WeChatHost<T> {
     }
 }
 
-/// **The default WeChat catalog host** — registers the three heterogeneous offerings the catalog
-/// plays: the dungeon (a game), the council (governance), the market (commerce). Built on the host's
-/// owning thread, so each offering's `!Send` internals stay confined. Mirrors
-/// [`dreggnet_telegram::host::telegram_default_host`] exactly (same keys, titles, catalog, quorum) —
-/// only the surface differs. `council_members` is the electorate (member public keys — a WeChat user
-/// whose derived identity is one of these can vote); pass the
-/// [`WeChatHost::council_member_pubkey`] of each voter's OpenID.
+/// **The default WeChat catalog host** — registers the FULL portfolio the web catalog
+/// ([`dreggnet_web::demo_host`]) and [`dreggnet_telegram::host::telegram_default_host`] do, so WeChat
+/// reaches offering parity: the five games (dungeon · council · market · multiway-tug · automatafl),
+/// the eight do-once RPG feature surfaces ([`dreggnet_surfaces::register_surfaces`]: trade ·
+/// inventory · cheevos · guild · craft · companion · tavern · party), and the five non-game
+/// offerings (doc · names · compute · grain · hermes). Built on the host's owning thread, so each
+/// offering's `!Send` internals stay confined — only the surface (the OA numbered reply) differs.
+///
+/// `tug` is wrapped in the seat-claiming [`crate::seated::SeatedTug`] adapter (the byte-peer of the
+/// web `seated` module) because `TugOffering` names its seats by fixed canonical strings while a
+/// WeChat user's identity is a derived key; `automatafl` claims seats natively. `council_members` is
+/// the electorate (member public keys — a WeChat user whose derived identity is one of these can
+/// vote); pass the [`WeChatHost::council_member_pubkey`] of each voter's OpenID.
 pub fn wechat_default_host(council_members: Vec<[u8; 32]>) -> OfferingHost {
     let mut host = OfferingHost::new();
+
+    // ── The five portfolio games ────────────────────────────────────────────────────────────────
     host.register(
         "dungeon",
         "The Warden's Keep — a verifiable dungeon (offering #0)",
@@ -489,5 +513,47 @@ pub fn wechat_default_host(council_members: Vec<[u8; 32]>) -> OfferingHost {
         "DreggNet Market — a sealed-bid auction (list · bid · settle)",
         MarketOffering::new(),
     );
+    host.register(
+        "tug",
+        "Multiway-Tug — a hidden-hand tug of influence (seven guilds · eight actions)",
+        crate::seated::SeatedTug::new(),
+    );
+    host.register(
+        "automatafl",
+        "Automatafl — the simultaneous-move board (seal a move · reveal · the automaton steps)",
+        AutomataflOffering,
+    );
+
+    // ── The eight do-once RPG feature surfaces (trade · inventory · cheevos · guild · craft ·
+    //    companion · tavern · party) — the ONE call web makes, reused verbatim. ────────────────────
+    dreggnet_surfaces::register_surfaces(&mut host);
+
+    // ── The five non-game offerings (mirrors web's `register_non_game_offerings`). ────────────────
+    host.register(
+        "doc",
+        "DreggNet Doc — a verifiable document store (author · amend · verify)",
+        DocOffering::new(),
+    );
+    host.register(
+        "names",
+        "DreggNet Names — an identity / naming service (register · transfer · resolve)",
+        NamesOffering::new(),
+    );
+    host.register(
+        "compute",
+        "DreggNet Compute — a confined compute-job market (post · claim · settle)",
+        ComputeOffering::new(),
+    );
+    host.register(
+        "grain",
+        "DreggNet Grain — metered work under a spend budget (request · grant)",
+        GrainOffering::new(1000),
+    );
+    host.register(
+        "hermes",
+        "DreggNet Hermes — the message relay (send · deliver · ack)",
+        HermesOffering::new(),
+    );
+
     host
 }

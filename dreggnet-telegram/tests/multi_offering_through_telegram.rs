@@ -106,7 +106,9 @@ fn the_host_lists_at_least_three_offerings_and_the_menu_opens_one() {
 fn a_winning_dungeon_line_plays_through_the_telegram_host() {
     let mut h = host();
     let chat: i64 = 42; // a positive chat id → single-player DM.
-    let sid = h.open("dungeon", chat, None).expect("the dungeon opens");
+    let sid = h
+        .open("dungeon", chat, None, ALICE)
+        .expect("the dungeon opens");
     assert_eq!(h.active_offering(&sid), Some("dungeon"));
 
     for arg in [KP_PRESS_ON, KP_CLAIM_RED, KP_DESCEND, KP_SEIZE] {
@@ -138,7 +140,9 @@ fn a_winning_dungeon_line_plays_through_the_telegram_host() {
 fn a_council_propose_vote_enact_plays_through_the_telegram_host() {
     let mut h = host();
     let chat: i64 = -1001; // a negative chat id → a group collective.
-    let sid = h.open("council", chat, None).expect("the council opens");
+    let sid = h
+        .open("council", chat, None, ALICE)
+        .expect("the council opens");
 
     // ALICE proposes catalog item 0 ("Fund the archive").
     assert_landed(h.press(CallbackQuery::press(
@@ -196,7 +200,9 @@ fn a_council_propose_vote_enact_plays_through_the_telegram_host() {
 fn a_market_list_bid_settle_plays_through_the_telegram_host() {
     let mut h = host();
     let chat: i64 = -2002;
-    let sid = h.open("market", chat, None).expect("the market opens");
+    let sid = h
+        .open("market", chat, None, ALICE)
+        .expect("the market opens");
 
     // ALICE lists an item with reserve 100.
     assert_landed(h.press(CallbackQuery::press(
@@ -244,7 +250,8 @@ fn a_market_list_bid_settle_plays_through_the_telegram_host() {
 fn an_unoffered_turn_is_refused_before_the_substrate() {
     let mut h = host();
     let chat: i64 = 77;
-    h.open("dungeon", chat, None).expect("the dungeon opens");
+    h.open("dungeon", chat, None, ALICE)
+        .expect("the dungeon opens");
 
     // A turn the dungeon surface never offers → refused before the substrate.
     match h.press(CallbackQuery::press(
