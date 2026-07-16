@@ -37,6 +37,7 @@ starbridge-governed-namespace = { path = "../starbridge-apps/governed-namespace"
 starbridge-compartment-workflow-mandate = { path = "../starbridge-apps/compartment-workflow-mandate" }
 starbridge-storage-gateway-mandate = { path = "../starbridge-apps/storage-gateway-mandate" }
 dregg-dfa = { path = "../dfa" }
+dregg-dfa-federation = { path = "../dfa-federation" }
 dregg-macaroon = { workspace = true, features = ["crypto"] }
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
