@@ -1,30 +1,22 @@
-> # ⚠ STALE TOPOLOGY — THE GO-LIVE PATH BELOW CANNOT BE EXECUTED AS WRITTEN
->
-> **The hosting flip is impossible at the network layer** (verified 2026-07-15,
-> `deploy/README.md`). This runbook fronts `launchpad-web` on hbox with "the AWS
-> gateway's Caddy over Tailscale" — the SAME gateway↔tailnet↔hbox pattern that is
-> **false at the network layer**: the AWS edge is on `100.64.0.x` and hbox is on
-> `skunk-emperor.ts.net` — they are on **different tailnets and cannot reach each
-> other**, and there is **no Caddy on the edge**. Following steps (0)/(d) will fail
-> silently at the gateway↔hbox hop.
->
-> **The only verified public path is `tailscale funnel`** (see
-> `deploy/games/RUNBOOK-FUNNEL.md`, the pattern that actually runs). This runbook's
-> **contract-deploy half** (`chain/script/DeployLaunchpad.s.sol`, `npm ci`, unit/dry-run)
-> is sound and executable; only the **hosting topology** is stale and needs rebasing
-> onto the funnel pattern before go-live. Do not treat the hosting flip as "small and
-> safe" until that rebase lands.
+# Launchpad deploy runbook — the revenue rehearsal, public via Tailscale Funnel
 
-# Launchpad deploy runbook — the revenue rehearsal, public at launchpad.dregg.fg-goose.online
+The ordered go-live for the **dregg launchpad product layer** — the revenue rehearsal.
+Two pieces: (1) the **launchpad-web** product surface (create / bid / token-page /
+replayable-discovery, `launchpad-web/server.mjs`) served **publicly directly from hbox**
+with `tailscale funnel` — **no AWS gateway, no gateway↔tailnet join, no DNS, no Caddy**
+(the same pattern the games deploy verified live, `deploy/games/RUNBOOK-FUNNEL.md`); and
+(2) the on-chain **DreggLaunchpad** contract deployed to a public testnet (Base-Sepolia
+84532 or Robinhood Chain 46630) via `chain/script/DeployLaunchpad.s.sol`. This makes the
+go-live a **small, safe flip** — `npm ci` → install → reload → health → the single
+`tailscale funnel` command — not a new build.
 
-The ordered go-live for the **dregg launchpad product layer** on a **public testnet**
-— the revenue rehearsal. Two pieces: (1) the **launchpad-web** product surface (create /
-bid / token-page / replayable-discovery, `launchpad-web/server.mjs`) on hbox, fronted by
-the **AWS gateway's Caddy** over **Tailscale** — the SAME gateway↔Tailscale↔hbox pattern
-the games deploy established (`deploy/games/RUNBOOK.md`); and (2) the on-chain
-**DreggLaunchpad** contract deployed to a public testnet (Base-Sepolia 84532 or Robinhood
-Chain 46630) via `chain/script/DeployLaunchpad.s.sol`. This makes the go-live a **small,
-safe flip** — `npm ci` → install → reload → health — not a new build.
+> **Why funnel, not the gateway?** The earlier draft of this runbook fronted hbox with
+> "the AWS gateway's Caddy over Tailscale". That topology is **false at the network layer**
+> (verified 2026-07-15, `deploy/README.md`): the AWS edge is on `100.64.0.x` and hbox is on
+> `skunk-emperor.ts.net` — **two tailnets that cannot reach each other** — and there is **no
+> Caddy on the edge**. The only verified public path is `tailscale funnel` on hbox
+> (`deploy/games/RUNBOOK-FUNNEL.md`, "THIS IS WHAT RUNS"). This runbook is now rebased onto
+> it. The **contract-deploy half** (step c) was always sound and is unchanged.
 
 **rung-1 needs ZERO dregg.** The launch runs OPEN / REPLAYABLE (attestor = `address(0)`,
 permissionless on-chain finalize): the contract clears itself from the public revealed
@@ -33,98 +25,146 @@ required. The launchpad-web + the on-chain contracts are the **whole thing** for
 (`docs/deos/PRIVATE-DREGG-PUBLIC-LAUNCHPAD-ARCHITECTURE.md` §2.3). This is the shortest
 path to real (testnet) revenue.
 
-**Honest scope.** AUTOMATED by `deploy-launchpad.sh` (run on hbox): `npm ci`, snapshot a
-rollback point, install the one user systemd unit, reload, health-check `/api/config`,
-auto-revert on a failed gate; plus a **keyless** `contract-dryrun` that SIMULATES the
-testnet deploy (no `--broadcast`). **EMBER-GATED** (this runbook's manual steps, never
-touched by the script): add the gateway to the tailnet, DNS, the env (`LAUNCHPAD_ADDRESS`),
-the **funded-key contract broadcast**, adding the launchpad site block to the **gateway**
-Caddy, and the go-live decision. This is **PREP + validate only** — nothing here
+**Two sources, one host.** The funnel unit serves `launchpad-web` bound to **loopback**
+(`127.0.0.1:8785`); its data source is **env-selected**:
+- **node-driven (default here)** — `DREGG_NODE=http://127.0.0.1:8420` reads launches as a
+  real turn stream from the durable hbox solo node (`deploy/node/dregg-node.service`, the
+  just-landed persistent-data-dir unit). Zero external dependency; the hbox-local rung.
+- **EVM rung-1 contract** — `DREGG_NODE=` empty + `LAUNCHPAD_ADDRESS` + `LAUNCHPAD_RPC`
+  points discovery at the on-chain contract from step (c). The browser drives that contract
+  with the user's own wallet regardless; this only chooses what the discovery API indexes.
+
+**Honest scope.** AUTOMATED by `deploy-launchpad.sh --funnel` (run on hbox): `npm ci`,
+snapshot a rollback point, install the one user systemd unit (loopback:8785) + enable-linger,
+reload, health-check `http://127.0.0.1:8785/api/config`, auto-revert on a failed gate; plus a
+**keyless** `contract-dryrun` that SIMULATES the testnet deploy (no `--broadcast`). It **skips
+the gateway/Caddy leg entirely** and, on a passing gate, **prints** the ember-gated
+`tailscale funnel` flip — it does **not** run it. **EMBER-GATED** (this runbook's manual
+steps): the durable node bring-up (or the funded-key contract broadcast), the env file, and
+**the `tailscale funnel` command itself** (the public-exposure decision). Nothing here
 broadcasts, exposes a surface, or places a secret.
 
 ---
 
-## Topology (the real live one — the games pattern, `docs/deos/DEVNET-DEPLOYMENT-REALITY.md`)
+## What is executable-on-hbox-today vs box-pending
 
-Caddy lives on the **AWS gateway**, not hbox. The gateway is the sole public surface; it
-reaches hbox over **Tailscale**. hbox opens **no** public port. The launchpad is a **NEW,
-SEPARATE** domain + site-block NEXT TO the existing games + devnet blocks — it does not
-edit them.
+| Step | Status |
+|---|---|
+| (a) durable `:8420` node up (node-driven source) | **executable on hbox today** (`deploy/node/RUNBOOK.md`) |
+| (b) place `~/.config/dregg/launchpad-funnel.env` (loopback bind) | **executable on hbox today** |
+| (c) contract dry-run (keyless sim) | **executable today** (anywhere); **broadcast** = ember + funded key |
+| (d) `deploy-launchpad.sh --funnel` (npm ci + install unit + loopback health) | **executable on hbox today** |
+| (e) **the `tailscale funnel --https=8443` public flip** | **box-pending** — needs hbox to confirm :8443 is free + Funnel allows a second port on this tailnet plan (see Topology) |
+| (f) smoke test the public URL / take-down | **box-pending** (after the flip; on hbox) |
+
+Every command below is run **on hbox** (`ssh hbox`) as the login user unless marked
+otherwise.
+
+---
+
+## Topology (funnel — no gateway, no Caddy, no DNS)
+
+> `<tailnet>` here is **`skunk-emperor.ts.net`** (Funnel is enabled on it; the games
+> funnel + `nextop` already funnel), and `hbox-dregg` is `100.95.240.73`.
 
 ```
-  launchpad.dregg.fg-goose.online  (DNS -> the AWS gateway)
-        │  :443 TLS (Let's Encrypt, on the gateway)
-  ┌──────▼───────── AWS GATEWAY (public) ─────────┐
-  │  Caddy — serves *.dregg.fg-goose.online:      │
-  │    • devnet.dregg.fg-goose.online   (existing)│
-  │    • games.dregg.fg-goose.online    (games)   │  ← deploy/games/caddy/Caddyfile.games
-  │    • launchpad.dregg.fg-goose.online (NEW)     │  ← deploy/launchpad/caddy/Caddyfile.launchpad
-  │         │  reverse_proxy over TAILSCALE        │
-  └─────────┼─────────────────────────────────────┘
-            │  100.95.240.73:8785   (tailnet node: hbox-dregg)
-  ┌─────────▼──────────── hbox (private, tailnet) ─────────┐
-  │  dregg-launchpad-web (user unit)  100.95.240.73:8785   │  ← create / bid / token / discovery / API
-  └────────────────────────────────────────────────────────┘
-            │ browser drives the REAL DreggLaunchpad with the USER's own wallet
-            ▼
-  ┌──────── public testnet (Base-Sepolia 84532 / Robinhood Chain 46630) ────────┐
-  │  DreggLaunchpad.sol  (escrow + hard-capped token + never-drainable pool)     │
-  └──────────────────────────────────────────────────────────────────────────────┘
+  https://hbox-dregg.<tailnet>.ts.net:8443     ← Tailscale Funnel (public, auto-TLS)
+        │  Funnel proxies the PUBLIC :8443 → the LOCAL :8785
+  ┌─────▼───────────────── hbox (tailnet node hbox-dregg, 100.95.240.73) ─────────┐
+  │  tailscale funnel --https=8443 8785  ── public edge (TLS + hostname), no Caddy   │
+  │  dregg-launchpad-web-funnel (user unit)  127.0.0.1:8785  ← create/bid/token/API  │
+  │        │  DREGG_NODE=http://127.0.0.1:8420  (node-driven source, default)        │
+  │  dregg-node (solo devnet)  127.0.0.1:8420  ← launches as a real turn stream       │
+  └────────────────────────────────────────────────────────────────────────────────┘
+        (EVM lane, in parallel:) browser drives the REAL DreggLaunchpad on a public
+        testnet with the USER's own wallet — see step (c). DREGG_NODE= empty selects it.
 ```
 
-- **The gateway's Caddy** terminates TLS and `reverse_proxy`s to `100.95.240.73:8785` over
-  Tailscale — the same site-block + strip-upstream-CORS pattern as the games block. The
-  launchpad block is `deploy/launchpad/caddy/Caddyfile.launchpad`, ADDED to the gateway
-  config next to the games block (its own snippet name `strip_upstream_cors_launchpad`, so
-  the two coexist).
-- **hbox** runs the one user unit. launchpad-web binds the **Tailscale interface**
-  (`100.95.240.73:8785`, port 8785 is FREE — 8790/8781/8787 are the games web / drex-web /
-  dreggcloud) via `LAUNCHPAD_HOST`, so only tailnet peers (the gateway) can reach it.
-  **Never** `0.0.0.0`.
-- **The private channel is Tailscale.** ⚠ The gateway is the **SAME shared prerequisite**
-  as games (step 0): once it is a tailnet node, BOTH the games (:8790) and the launchpad
-  (:8785) upstreams are reachable with no inbound port opened on hbox.
+- The web server binds **loopback** (`127.0.0.1:8785`) — Funnel serves a **local** port,
+  reaching into localhost. (Contrast the gateway variant's tailnet-iface bind
+  `100.95.240.73:8785`, which a separate gateway Caddy would reverse-proxy.) `8785` is FREE
+  on hbox (`8790`/`8781`/`8787` are the games web / drex-web / dreggcloud).
+- **Tailscale Funnel is the public edge** — it terminates TLS and owns the public hostname.
+  No Caddy, no cert management, no DNS.
+
+### ⚠ THE ONE PORT DECISION — launchpad takes the SECOND funnel port (:8443)
+
+Tailscale Funnel exposes **only** the public ports `443` / `8443` / `10000`, and the **games
+funnel already holds public :443** (`tailscale funnel 8790`). So the launchpad **cannot also
+take :443** the same way. This runbook picks:
+
+**(A) — rung-1, chosen: launchpad on the second funnel port `:8443`.**
+```bash
+tailscale funnel --bg --https=8443 8785     # → https://hbox-dregg.<tailnet>.ts.net:8443
+```
+One command, no new component, no disruption to the games funnel on :443. The cost is an
+**ugly port in the URL** (`:8443`). This is the minimal rung.
+
+**(B) — later consolidation: one local reverse-proxy path-splitting a single `:443`.**
+A single loopback reverse-proxy (Caddy/nginx on hbox) that routes `/ → games:8790` and
+`/launchpad → :8785`, fronted by ONE `tailscale funnel :443`. Cleaner URL (no port, path
+prefix), but it **adds a proxy component** and **touches the games funnel** (the games unit
+must move off its own `:443` funnel behind the proxy). Deferred — not needed for the rehearsal.
+
+> **⚠ BOX-PENDING (confirm on hbox before the flip):** whether **`:8443`** (or `:10000`) is
+> actually free on `hbox-dregg` and whether **Funnel permits a second public port** on this
+> tailnet's plan. `tailscale funnel status` shows what is already served; if `--https=8443`
+> is rejected, fall back to `--https=10000`, or adopt option (B). This is the single fact
+> that cannot be verified off-box.
 
 ---
 
 ## Ordered go-live
 
-### (0) PREREQUISITE — add the AWS gateway to the tailnet  ⟨EMBER⟩  ⟨SHARED with games⟩
-The gateway must be a tailnet node to reach `100.95.240.73:8785`. This is the **same** join
-as the games deploy (`deploy/games/RUNBOOK.md` step 0) — if games is already up, this is
-done. Confirm:
+Mark: ⟨EMBER⟩ = a human does it (includes every public-exposure step);
+⟨SCRIPT⟩ = `deploy-launchpad.sh --funnel` does it.
+
+### (a) SOURCE BRING-UP — the durable hbox `:8420` node (node-driven default)  ⟨EMBER⟩
+
+The node-driven source reads launches as real turns from the durable solo node. Stand it up
+per [`deploy/node/RUNBOOK.md`](../node/RUNBOOK.md) (a systemd **user** unit with a
+**persistent** data dir + linger — the fix for the incident that lost the last ledger).
+Confirm it is up on loopback:
 ```bash
-# on the gateway, after joining the tailnet:
-tailscale status | grep hbox-dregg              # hbox-dregg 100.95.240.73 ... active
-curl -fsS http://100.95.240.73:8785/api/config  # once the hbox launchpad unit is up (step d)
+# on hbox:
+curl -fsS http://127.0.0.1:8420/status | jq '{healthy, federation_mode, state_producer}'
+ss -tlnp | grep 8420    # LISTEN 127.0.0.1:8420 — NEVER 0.0.0.0
 ```
+> **EVM-lane alternative:** if you are running the on-chain rung-1 rehearsal instead of the
+> node-driven source, this step is the **contract deploy** in (c); leave `DREGG_NODE=` empty
+> in the env file (b) and set `LAUNCHPAD_ADDRESS`. The two sources are mutually exclusive per
+> unit — the env file selects one.
 
-### (a) DNS — point launchpad.dregg.fg-goose.online -> the gateway  ⟨EMBER⟩
-Add an A/AAAA record `launchpad.dregg.fg-goose.online` -> the AWS gateway's public IP (the
-same gateway that already serves `devnet.` / `games.`). Let's Encrypt (on the gateway) needs
-this resolving + :80/:443 reachable BEFORE Caddy can issue the cert.
-
-### (b) Place the env on hbox  ⟨EMBER⟩
+### (b) Place the funnel env on hbox  ⟨EMBER⟩
 ```bash
 # on hbox:
 mkdir -p ~/.config/dregg ~/.local/state/dregg-launchpad
-cp ~/dev/breadstuffs/deploy/launchpad/.env.example ~/.config/dregg/launchpad.env
-$EDITOR ~/.config/dregg/launchpad.env    # LAUNCHPAD_ADDRESS (from step c), LAUNCHPAD_RPC,
-                                          # LAUNCHPAD_HOST=100.95.240.73, PORT=8785
-chmod 600 ~/.config/dregg/launchpad.env
+cp ~/dev/breadstuffs/deploy/launchpad/.env.example ~/.config/dregg/launchpad-funnel.env
+$EDITOR ~/.config/dregg/launchpad-funnel.env
+#   LAUNCHPAD_HOST=127.0.0.1        ← LOOPBACK (Funnel serves the local port). NEVER the
+#                                     tailnet iface here — that is the gateway variant's bind.
+#   PORT=8785
+#   # node-driven (default): read launches from the durable :8420 node
+#   DREGG_NODE=http://127.0.0.1:8420
+#   # OR the EVM lane instead: leave DREGG_NODE empty and set:
+#   #   DREGG_NODE=
+#   #   LAUNCHPAD_ADDRESS=0x<from step c>
+#   #   LAUNCHPAD_RPC=https://sepolia.base.org
+chmod 600 ~/.config/dregg/launchpad-funnel.env
 ```
-**No prod key is ever committed or placed by an agent** — and for rung-1 the launchpad-web
-process holds **no key at all**: the browser drives the contract with the USER's wallet; the
-backend only READS the chain over `LAUNCHPAD_RPC`. The `DREGG_LAUNCHPAD_DOMAIN` /
-`DREGG_LAUNCHPAD_UPSTREAM` vars in that file are read by the **gateway** Caddy, not hbox.
+This is a **separate** env file from the gateway variant's `launchpad.env`, so the two
+topologies never share a bind line (a stale tailnet-iface bind would break Funnel). No prod
+key is ever committed or placed by an agent — the launchpad-web holds **no key**: the browser
+drives the contract with the user's own wallet; the backend only READS.
 
-### (c) Deploy the contract to the testnet  ⟨DRY-RUN automated / BROADCAST ember⟩
-First rehearse keylessly (no key, no tx — compiles, deploys in-sim, runs a full fair-launch
-demo, asserts the uniform clearing):
+### (c) Deploy the contract to the testnet (the EVM lane)  ⟨DRY-RUN automated / BROADCAST ember⟩
+
+Unchanged and sound. First rehearse keylessly (no key, no tx — compiles, deploys in-sim, runs
+a full fair-launch demo, asserts the uniform clearing):
 ```bash
 cd ~/dev/breadstuffs/deploy/launchpad
-./deploy-launchpad.sh contract-dryrun                    # pure local simulation
-DEPLOY_RPC=base_sepolia ./deploy-launchpad.sh contract-dryrun   # READ-ONLY vs the real RPC
+./deploy-launchpad.sh contract-dryrun                          # pure local simulation
+DEPLOY_RPC=base_sepolia ./deploy-launchpad.sh contract-dryrun  # READ-ONLY vs the real RPC
 ```
 Then the **ember-only** broadcast (a real tx; needs a funded testnet key):
 ```bash
@@ -138,68 +178,67 @@ forge script script/DeployLaunchpad.s.sol:DeployLaunchpad --rpc-url base_sepolia
 export ROBINHOOD_TESTNET_RPC_URL=https://rpc.testnet.chain.robinhood.com
 forge script script/DeployLaunchpad.s.sol:DeployLaunchpad --rpc-url robinhood_testnet --broadcast -vvv
 ```
-The broadcast deploys **one** contract (the launchpad) and it is ready for real launches
-immediately — registration is permissionless. Put the printed `DreggLaunchpad :` address
-into `~/.config/dregg/launchpad.env` as `LAUNCHPAD_ADDRESS` (step b).
+The broadcast deploys **one** contract (the launchpad); registration is permissionless. Put
+the printed `DreggLaunchpad :` address into `~/.config/dregg/launchpad-funnel.env` as
+`LAUNCHPAD_ADDRESS` (and set `DREGG_NODE=` empty) **only if** you are surfacing the EVM lane
+through the funnel host; the node-driven default (a) does not need this.
 
-### (d) Run the deploy — hbox side, then the gateway side  ⟨AUTOMATED hbox / EMBER gateway⟩
-**On hbox** (`npm ci` + install the one user unit; no Caddy — SKIP_CADDY=1 default):
+### (d) Run the deploy — build + install the web unit on LOOPBACK  ⟨SCRIPT⟩
 ```bash
 ssh hbox
 cd ~/dev/breadstuffs/deploy/launchpad
-./deploy-launchpad.sh --dry-run     # rehearse — prints every step, no side effects
-./deploy-launchpad.sh               # npm ci -> snapshot -> install -> reload -> health (+auto-revert)
+./deploy-launchpad.sh --funnel --dry-run   # rehearse — prints every step, no side effects
+./deploy-launchpad.sh --funnel             # npm ci -> snapshot -> install -> reload -> health
 ```
-The health gate polls `http://100.95.240.73:8785/api/config` (the tailnet iface the unit
-binds — NOT localhost). Knobs: `AUTO_REVERT=0`, `HEALTH_TIMEOUT=180`.
+`--funnel` runs `npm ci` for `launchpad-web`, installs the **funnel** user unit
+(`dregg-launchpad-web-funnel.service`, bound `127.0.0.1:8785`) with `loginctl enable-linger`
+so it survives logout AND reboot, and **skips the gateway/Caddy leg entirely**. Its health
+gate polls `http://127.0.0.1:8785/api/config`. On a passing gate it **prints** the ember-gated
+`tailscale funnel` flip — it does **not** run it. Knobs: `AUTO_REVERT=0`, `HEALTH_TIMEOUT=180`.
 
-**On the AWS gateway** (add the launchpad site block to the gateway Caddy + reload THERE —
-after step 0, NEXT TO the games block, without editing it):
-```bash
-# on the gateway (a checkout with deploy/launchpad/caddy/Caddyfile.launchpad available):
-./deploy-launchpad.sh gateway       # validates the block + prints the ember-gated append+reload
-# then, as printed:
-sudo sh -c 'cat deploy/launchpad/caddy/Caddyfile.launchpad >> /etc/caddy/Caddyfile'   # or paste it in
-sudo caddy validate --adapter caddyfile --config /etc/caddy/Caddyfile                  # whole merged config
-sudo systemctl reload caddy
-```
+### (e) Health-check localhost, then ⚠ THE PUBLIC-EXPOSURE FLIP  ⟨(d) SCRIPT gate · flip EMBER⟩
 
-### (e) Health-check + smoke test  ⟨AUTOMATED gate, then MANUAL smoke⟩
+The script's gate already confirmed loopback health. By hand (still private):
 ```bash
-curl -fsS http://100.95.240.73:8785/api/config              # from the gateway (over Tailscale)
-curl -fsS https://launchpad.dregg.fg-goose.online/api/config # 200 through the gateway Caddy/TLS
-```
-- Open `https://launchpad.dregg.fg-goose.online/` — the discovery page + catalog load.
-- **Connect a wallet** (`window.ethereum`, on the testnet chain).
-- **Run a rung-1 OPEN launch end-to-end on the testnet**: `create.html` register a launch
-  with a disclosed schedule → sealed `commitBid` → `revealBid` → permissionless
-  `finalizeClearing` (uniform price) → `settleBid` → token page shows the one clearing price
-  everyone paid + the holder distribution. Every number is checkable on-chain; no attestor,
-  no dregg node.
-
-### (f) Rollback  ⟨AUTOMATED⟩
-A failed health gate **auto-reverts** (restores the prior unit / stops it). Manual:
-```bash
-./deploy-launchpad.sh releases            # list snapshots
-./deploy-launchpad.sh rollback            # restore the unit from the newest snapshot + restart
-```
-Take it fully offline instantly:
-```bash
-systemctl --user stop dregg-launchpad-web            # hbox: stop the unit
-# gateway: ember removes the launchpad.dregg.fg-goose.online block (or reloads without it)
+curl -fsS http://127.0.0.1:8785/api/config     # 200 JSON {rpc,address,abi,source,...} — loopback, NOT public
 ```
 
-### (g) Firewall / ports  ⟨EMBER⟩
-Because the server binds the **Tailscale iface** (`100.95.240.73:8785`), the public internet
-can never reach it directly; the gateway holds :443. Open **no** public port on hbox for the
-launchpad; allow only `tailscale0` + ssh (same posture as `deploy/games/RUNBOOK.md` step g).
+**⚠ EMBER-GATED PUBLIC-EXPOSURE FLIP** — this single command makes the demo public
+(**box-pending**: confirm `:8443` is free + Funnel allows a second port, see Topology):
 ```bash
-sudo ss -tlnp | grep 8785    # verify: LISTEN 100.95.240.73:8785, NOT 0.0.0.0
+tailscale funnel --bg --https=8443 8785        # serve 127.0.0.1:8785 publicly (public 8443 -> local 8785)
 ```
+Confirm the public URL:
+```bash
+tailscale funnel status                        # shows https://hbox-dregg.<tailnet>.ts.net:8443 -> 127.0.0.1:8785
+curl -fsS https://hbox-dregg.<tailnet>.ts.net:8443/api/config   # 200 through Funnel's TLS
+```
+If `--https=8443` is rejected on this tailnet plan, try `--https=10000`, or adopt option (B)
+in Topology. Nothing is public until this runs; running it **is** the go-live decision.
 
-### (go-live) The flip  ⟨EMBER⟩
-With (0)–(g) green and the health gate passed, the revenue rehearsal is live on the testnet.
-The go-live decision is ember's.
+### (f) Smoke test  ⟨EMBER⟩  ⟨box-pending⟩
+Against the public URL `https://hbox-dregg.<tailnet>.ts.net:8443`:
+- Open `/` — the discovery page + catalog load.
+- **Connect a wallet** (`window.ethereum`, on the testnet chain — EVM lane) or observe the
+  node-driven launch stream (default).
+- **Run a launch end-to-end**: `create.html` register a launch with a disclosed schedule →
+  sealed `commitBid` → `revealBid` → permissionless `finalizeClearing` (uniform price) →
+  `settleBid` → token page shows the one clearing price everyone paid + the holder
+  distribution. Every number is checkable (on-chain for the EVM lane; on the node's ledger
+  for the node-driven source — `curl -fsS http://127.0.0.1:8420/api/receipts | jq '.[-3:]'`).
+
+### (g) Take-down  ⟨EMBER⟩
+Remove the public surface instantly (the loopback unit keeps running):
+```bash
+tailscale funnel --https=8443 off              # public URL gone; 127.0.0.1:8785 still serves locally
+tailscale funnel status                         # confirm no launchpad funnel (games :443 unaffected)
+```
+Stop the web unit entirely / roll back:
+```bash
+systemctl --user stop dregg-launchpad-web-funnel
+./deploy-launchpad.sh releases                  # list rollback snapshots
+./deploy-launchpad.sh --funnel rollback         # restore the prior unit + restart
+```
 
 ---
 
@@ -207,34 +246,33 @@ The go-live decision is ember's.
 
 | Step | Who |
 |---|---|
-| `npm ci` the launchpad-web deps (on hbox) | **script** |
+| `npm ci` the launchpad-web deps (on hbox) | **script** (`--funnel`) |
 | snapshot a rollback point (unit + git rev) | **script** |
-| install the user systemd unit + enable-linger | **script** |
-| health-check `100.95.240.73:8785/api/config` + auto-revert | **script** |
+| install the funnel user unit (loopback:8785) + enable-linger | **script** |
+| health-check `127.0.0.1:8785/api/config` + auto-revert on failure | **script** |
 | **keyless** contract deploy DRY-RUN (`contract-dryrun`) | **script** |
-| validate the gateway Caddy block (`./deploy-launchpad.sh gateway`) | **script** |
-| **(0)** add the AWS gateway to the tailnet (shared with games) | ember |
-| DNS `launchpad.dregg.fg-goose.online` -> the gateway | ember |
-| place `~/.config/dregg/launchpad.env` + chmod 600 | ember |
-| the **contract testnet BROADCAST** (funded key + `--broadcast`) | ember |
-| append the launchpad block to the gateway Caddy + reload | ember |
-| the go-live decision | ember |
+| **(a)** durable `:8420` node up (node-driven source) | ember |
+| place `~/.config/dregg/launchpad-funnel.env` (loopback bind) + chmod 600 | ember |
+| **(c)** the contract testnet BROADCAST (funded key + `--broadcast`) — EVM lane | ember |
+| **⚠ `tailscale funnel --https=8443 8785`** — the PUBLIC-EXPOSURE flip | ember |
+| smoke test the public URL / take-down | ember |
 
 ## Caveats (named, once)
-- **rung-1 only, needs ZERO dregg.** This rehearsal runs OPEN / REPLAYABLE launches
-  (`attestor = address(0)`, permissionless on-chain finalize). rung-2 (a real Groth16
-  clearing attestor) and rung-3 (shielded, private-dregg clearing) are the named upgrades
-  (`PRIVATE-DREGG-PUBLIC-LAUNCHPAD-ARCHITECTURE.md` §3) — NOT part of this rehearsal.
-- **Caddy is on the gateway, not hbox.** `SKIP_CADDY=1` is the default; the launchpad block
-  is a NEW block ADDED to the gateway's Caddy (next to games + devnet) and reloaded THERE.
-  It does not edit the games block — distinct domain + distinct snippet name.
-- **Tailscale, not the public internet.** The gateway↔hbox channel is Tailscale; the gateway
-  must be a tailnet node (step 0, shared with games) before it can reach `100.95.240.73:8785`.
+- **Funnel serves LOOPBACK.** The unit binds `127.0.0.1:8785`; Funnel proxies the local port.
+  Never bind `0.0.0.0` / the tailnet iface for the funnel variant.
+- **Public port is `:8443`, not `:443`.** Funnel supports only `443`/`8443`/`10000`; games
+  holds `:443`, so the launchpad takes `:8443` (option A) — an ugly port in the URL. Whether
+  `:8443` is free + a second funnel port is allowed on this tailnet plan is **box-pending**;
+  option (B) (one path-splitting reverse-proxy on `:443`) is the later, prettier consolidation.
+- **rung-1 only, needs ZERO dregg.** OPEN / REPLAYABLE launches (`attestor = address(0)`,
+  permissionless finalize). rung-2 (a real Groth16 clearing attestor) and rung-3 (shielded,
+  private-dregg clearing) are the named upgrades (`PRIVATE-DREGG-PUBLIC-LAUNCHPAD-ARCHITECTURE.md`
+  §3) — NOT part of this rehearsal.
 - **The launchpad-web holds no key.** The browser drives the contract with the user's own
-  wallet; the backend only READS the chain. The funded deployer key (step c) is ember's, used
-  once for the contract broadcast, never placed on hbox.
-- **Rate limiting** is NOT in Caddy core — it needs the `caddy-ratelimit` plugin in a custom
-  `xcaddy` build on the GATEWAY (named in `caddy/Caddyfile.launchpad`). Until then, per-IP
-  rate limiting is an ember-gated go-live item; the body-size cap (2 MB) is active in the block.
+  wallet; the backend only READS. The funded deployer key (step c) is ember's, used once for
+  the contract broadcast, never placed on hbox.
+- **Two sources, env-selected.** node-driven (`DREGG_NODE=:8420`, the default here) OR the EVM
+  contract (`DREGG_NODE=` empty + `LAUNCHPAD_ADDRESS`). One unit serves one source; the env
+  file picks. The unit lists `EnvironmentFile=` LAST so the env file overrides the fallbacks.
 - **Testnet, dev ceremony.** This is a public *testnet* rehearsal (no mainnet, no real value).
   A concrete attestor + the production MPC VK ceremony are ember-gated future steps.

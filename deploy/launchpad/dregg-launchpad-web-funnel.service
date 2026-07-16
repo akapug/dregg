@@ -1,0 +1,97 @@
+# dregg launchpad web — FUNNEL VARIANT (Tailscale-Funnel public exposure).
+#
+# Same `launchpad-web/server.mjs` as dregg-launchpad-web.service, but wired for the
+# TAILSCALE-FUNNEL topology instead of the (impossible-on-this-tailnet) AWS-gateway
+# topology. This is the pattern that ACTUALLY RUNS on hbox — the exact shape the
+# co-resident dregg-web-games-funnel.service uses and that survived a hard reboot
+# (deploy/games/RUNBOOK-FUNNEL.md, deploy/PRACTICES.md §2).
+#
+#   • BIND 127.0.0.1:8785 (LOOPBACK, NOT the tailnet iface). Tailscale Funnel proxies
+#     a LOCAL port: `tailscale funnel --https=8443 8785` serves 127.0.0.1:8785 publicly
+#     at https://hbox-dregg.<tailnet>.ts.net:8443 with auto-TLS. Funnel reaches into
+#     localhost, so the server binds loopback — contrast the gateway variant, which
+#     binds the tailscale iface (100.95.240.73:8785) so a SEPARATE gateway Caddy can
+#     reverse-proxy over the tailnet. Here there is NO gateway and NO Caddy: Funnel IS
+#     the public edge (TLS + the public hostname). NEVER 0.0.0.0.
+#
+#   • WHY :8443 (not :443)? Funnel exposes only ports 443 / 8443 / 10000, and the games
+#     funnel already holds public :443 (`tailscale funnel 8790`). The launchpad takes the
+#     SECOND funnel port, :8443. See deploy/launchpad/RUNBOOK.md "Topology" — option (A).
+#
+#   • DREGG_NODE=http://127.0.0.1:8420 — the durable hbox solo devnet node
+#     (deploy/node/dregg-node.service, the just-landed persistent-data-dir unit). With
+#     DREGG_NODE set, server.mjs reads launches as a real turn stream from that node
+#     (NodeLaunchIndexer) — the node-driven source, the hbox-local default here. The
+#     on-chain EVM rung-1 contract lane (LAUNCHPAD_RPC + LAUNCHPAD_ADDRESS, DREGG_NODE
+#     unset) is still deployable+documented (RUNBOOK.md step (c)); to surface THAT
+#     through this unit instead, set DREGG_NODE= empty + LAUNCHPAD_ADDRESS in the env
+#     file (see the ordering note below — the env file overrides these fallbacks).
+#
+# hbox discipline (deploy/hbox/RUNBOOK.md, mirrors dregg-web-games-funnel.service):
+# a USER unit under ~/.config/systemd/user/ , `loginctl enable-linger hbox` so it
+# survives logout AND reboot, `%h`-relative paths, WantedBy=default.target.
+#
+# ⚠ THE PUBLIC-EXPOSURE FLIP IS NOT HERE. This unit only binds loopback. Nothing is
+# public until `tailscale funnel --bg --https=8443 8785` is run — the single
+# ember-gated public-exposure decision (deploy/launchpad/RUNBOOK.md step d).
+[Unit]
+Description=dregg launchpad web (launchpad-web/server.mjs, funnel variant, loopback:8785)
+After=network-online.target
+Wants=network-online.target
+# Restart-storm brake (same discipline as dregg-web-games-funnel.service). A hard crash
+# loop stops the unit instead of pegging the box. `systemctl --user reset-failed
+# dregg-launchpad-web-funnel` re-arms it after a fix.
+StartLimitIntervalSec=600
+StartLimitBurst=10
+
+[Service]
+Type=simple
+# Funnel-variant fallbacks. NOTE THE ORDERING: EnvironmentFile= is listed LAST, so the
+# env file OVERRIDES these Environment= lines (true fallback semantics — a value here
+# applies only when the env file omits it). This diverges deliberately from the games
+# funnel unit's ordering so the one launchpad-funnel.env can select the source mode
+# (node-driven default vs the EVM contract lane) without a unit edit.
+Environment=NODE_ENV=production
+# Bind LOOPBACK — Funnel proxies the local port; the server never binds a public iface.
+# ⚠ The funnel topology REQUIRES loopback. Keep LAUNCHPAD_HOST loopback in the env file;
+# NEVER the tailnet iface (100.95.240.73) here — that is the gateway variant's bind and
+# Funnel could not reach it. NEVER 0.0.0.0.
+Environment=LAUNCHPAD_HOST=127.0.0.1
+Environment=PORT=8785
+# Node-driven default: read launches as real turns from the durable hbox solo node on
+# loopback :8420 (deploy/node/dregg-node.service). Set DREGG_NODE= empty in the env file
+# to instead run the EVM rung-1 contract lane (then set LAUNCHPAD_ADDRESS + LAUNCHPAD_RPC).
+Environment=DREGG_NODE=http://127.0.0.1:8420
+# Funnel-variant env file (LAUNCHPAD_HOST, PORT, DREGG_NODE or LAUNCHPAD_RPC/ADDRESS).
+# SEPARATE from the gateway variant's launchpad.env so the two topologies never share a
+# bind line (a stale tailnet-iface bind would break Funnel). Placed by ember, chmod 600.
+# Listed LAST so it overrides the fallbacks above.
+EnvironmentFile=%h/.config/dregg/launchpad-funnel.env
+WorkingDirectory=%h/dev/breadstuffs/launchpad-web
+# node_modules (ethers) is installed by deploy-launchpad.sh --funnel (npm ci) into the
+# working dir; server.mjs serves the vendored ethers UMD from there. `node` from PATH.
+ExecStart=/usr/bin/env node server.mjs
+Restart=on-failure
+RestartSec=5
+
+# Security hardening (user-unit-safe subset — no ProtectHome; the source + node_modules
+# both live under $HOME).
+NoNewPrivileges=true
+ProtectSystem=strict
+# The process writes nothing durable (no db); a scratch state dir is granted for
+# parity/future use and PrivateTmp for temp.
+ReadWritePaths=%h/.local/state/dregg-launchpad
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+# Resource limits — a thin in-process node read/serve app; bound it well below hbox
+# capacity so it can never starve the co-resident :8420 node / builds / prover.
+LimitNOFILE=65536
+MemoryHigh=768M
+MemoryMax=1G
+TasksMax=512
+
+[Install]
+WantedBy=default.target

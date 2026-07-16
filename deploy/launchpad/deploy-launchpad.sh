@@ -2,7 +2,7 @@
 # deploy-launchpad.sh — one-command deploy of the dregg LAUNCHPAD web layer onto hbox,
 # + a keyless testnet-deploy DRY-RUN for the launchpad contract.
 #
-# MIRRORS deploy/games/deploy-hbox.sh (the other-claude's games pattern) — SAME shape:
+# MIRRORS deploy/games/deploy-hbox.sh (the games pattern) — SAME shape:
 # BUILD -> SNAPSHOT -> INSTALL (user systemd unit) -> RELOAD -> HEALTH -> auto-revert.
 # The launchpad web layer is `launchpad-web/server.mjs` (a Node app, so BUILD = `npm ci`,
 # NOT cargo). It serves the create / bid / token-page / replayable-discovery product over
@@ -10,6 +10,15 @@
 # real contract with the USER's own wallet. rung-1 (attestor=0, permissionless finalize)
 # needs ZERO dregg — the launchpad-web + the on-chain contracts are the whole thing.
 #
+# ⚠⚠ USE `--funnel`. THE DEFAULT (GATEWAY) PATH TARGETS A TOPOLOGY THAT DOES NOT EXIST.
+# Verified 2026-07-15 (deploy/README.md): the AWS edge (100.64.0.x) and hbox-dregg
+# (100.95.240.73 on skunk-emperor) are on DIFFERENT TAILNETS that cannot reach each
+# other, and there is NO Caddy on the edge — so the gateway path below has nothing to
+# install into. What ACTUALLY runs is `--funnel` -> dregg-launchpad-web-funnel.service
+# (loopback:8785) + `tailscale funnel --https=8443` -> https://hbox-dregg.<tailnet>.ts.net:8443.
+# See deploy/launchpad/RUNBOOK.md and deploy/games/RUNBOOK-FUNNEL.md.
+#
+# STALE (kept for the hbox-side shape, which is sound):
 # Real topology (docs/deos/DEVNET-DEPLOYMENT-REALITY.md — the SAME channel games uses):
 # DNS -> AWS GATEWAY (public, its OWN Caddy for *.dregg.fg-goose.online) -> TAILSCALE ->
 # hbox (tailnet node hbox-dregg, 100.95.240.73). Caddy lives on the GATEWAY, not hbox.
@@ -30,21 +39,26 @@
 #   - the go-live decision.
 #
 # Usage (on hbox unless noted):
-#   ./deploy-launchpad.sh                  # npm ci -> install -> reload -> health (+auto-revert)
+#   ./deploy-launchpad.sh                  # GATEWAY variant (stale topology): npm ci -> install -> health
+#   ./deploy-launchpad.sh --funnel         # TAILSCALE-FUNNEL variant: NO gateway leg. npm ci + install
+#                                          #   the web unit bound 127.0.0.1:8785 (DREGG_NODE=:8420),
+#                                          #   health-check localhost:8785, then PRINT the ember-gated
+#                                          #   `tailscale funnel --https=8443 8785` public-exposure flip
+#                                          #   (never run). See deploy/launchpad/RUNBOOK.md.
 #   ./deploy-launchpad.sh --dry-run        # print every step; NO side effects (safe anywhere)
 #   ./deploy-launchpad.sh contract-dryrun  # keyless forge SIMULATION of the testnet deploy
-#   ./deploy-launchpad.sh gateway          # ON THE GATEWAY: validate launchpad Caddy block + banner
+#   ./deploy-launchpad.sh gateway          # ON THE GATEWAY (stale): validate launchpad Caddy block + banner
 #   ./deploy-launchpad.sh health           # just run the health gate
 #   ./deploy-launchpad.sh releases         # list rollback snapshots
 #   ./deploy-launchpad.sh rollback [S]     # restore the unit from snapshot S + restart
 #
 # Knobs (env):
 #   LP_REPO_DIR      repo checkout on hbox        (default $HOME/dev/breadstuffs)
-#   LP_ENV           the stack env file           (default $HOME/.config/dregg/launchpad.env)
+#   LP_ENV           the stack env file           (gateway: launchpad.env; --funnel: launchpad-funnel.env)
 #   STATE_DIR        scratch state + snapshots     (default $HOME/.local/state/dregg-launchpad)
 #   USER_UNIT_DIR    user systemd unit dir         (default $HOME/.config/systemd/user)
-#   HEALTH_URL       liveness probe                (default http://100.95.240.73:8785/api/config)
-#                    (the tailnet iface — the server binds hbox-dregg, not localhost)
+#   HEALTH_URL       liveness probe                (gateway: http://100.95.240.73:8785/api/config;
+#                    --funnel: http://127.0.0.1:8785/api/config — Funnel serves the loopback port)
 #   HEALTH_TIMEOUT   gate timeout, seconds         (default 120)
 #   KEEP             snapshots retained            (default 5)
 #   AUTO_REVERT      0 disables the auto-revert    (default 1)
@@ -57,22 +71,20 @@ set -euo pipefail
 
 # ── flags + config ───────────────────────────────────────────────────────────
 DRY_RUN=0
+FUNNEL=0
 ARGS=()
 for a in "$@"; do
   case "$a" in
     --dry-run) DRY_RUN=1 ;;
+    --funnel)  FUNNEL=1 ;;
     *) ARGS+=("$a") ;;
   esac
 done
 set -- "${ARGS[@]:-up}"
 
 LP_REPO_DIR="${LP_REPO_DIR:-$HOME/dev/breadstuffs}"
-LP_ENV="${LP_ENV:-$HOME/.config/dregg/launchpad.env}"
 STATE_DIR="${STATE_DIR:-$HOME/.local/state/dregg-launchpad}"
 USER_UNIT_DIR="${USER_UNIT_DIR:-$HOME/.config/systemd/user}"
-# The web server binds the Tailscale iface (hbox-dregg 100.95.240.73:8785), NOT
-# localhost — so the on-hbox health probe must hit the tailnet IP, not 127.0.0.1.
-HEALTH_URL="${HEALTH_URL:-http://100.95.240.73:8785/api/config}"
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-120}"
 KEEP="${KEEP:-5}"
 AUTO_REVERT="${AUTO_REVERT:-1}"
@@ -81,11 +93,35 @@ LP_BLOCK="${LP_BLOCK:-}"
 SKIP_CADDY="${SKIP_CADDY:-1}"
 DEPLOY_RPC="${DEPLOY_RPC:-}"
 
+# ── topology fork: FUNNEL vs the default GATEWAY topology ─────────────────────
+# FUNNEL=1 (--funnel): Tailscale-Funnel variant — the pattern that ACTUALLY RUNS. The
+#   web server binds LOOPBACK (127.0.0.1:8785 — Funnel proxies the local port), reads
+#   launches node-driven off the durable hbox :8420 node, and there is NO gateway/Caddy
+#   leg at all. The public-exposure flip is `tailscale funnel --https=8443 8785`, printed
+#   as an ember-gated banner (never run). See deploy/launchpad/RUNBOOK.md.
+# FUNNEL=0 (default): the STALE gateway topology (the tailnets cannot reach each other;
+#   deploy/README.md). The web server binds the tailnet iface (100.95.240.73:8785) so the
+#   AWS gateway's Caddy could reverse-proxy over Tailscale — but that gateway is not on
+#   hbox's tailnet, so this path cannot go public. Kept for the sound hbox-side shape.
+if [[ "$FUNNEL" == "1" ]]; then
+  UNIT="dregg-launchpad-web-funnel.service"
+  LP_ENV="${LP_ENV:-$HOME/.config/dregg/launchpad-funnel.env}"
+  # Funnel serves a LOCAL port — the on-hbox health probe hits loopback.
+  HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:8785/api/config}"
+else
+  UNIT="dregg-launchpad-web.service"
+  LP_ENV="${LP_ENV:-$HOME/.config/dregg/launchpad.env}"
+  # The web server binds the Tailscale iface (hbox-dregg 100.95.240.73:8785), NOT
+  # localhost — so the on-hbox health probe must hit the tailnet IP, not 127.0.0.1.
+  HEALTH_URL="${HEALTH_URL:-http://100.95.240.73:8785/api/config}"
+fi
+
 RELEASES_DIR="$STATE_DIR/releases"
 SRC_DIR="$LP_REPO_DIR/deploy/launchpad"
 WEB_DIR="$LP_REPO_DIR/launchpad-web"
 CHAIN_DIR="$LP_REPO_DIR/chain"
-UNIT="dregg-launchpad-web.service"
+# The web unit's basename minus .service — for `journalctl --user -u <unit>`.
+UNIT_NAME="${UNIT%.service}"
 
 log()  { echo "[deploy-launchpad] $*"; }
 warn() { echo "[deploy-launchpad] ⚠ $*" >&2; }
@@ -120,6 +156,38 @@ gated_banner() {
 BANNER
 }
 
+# ── the FUNNEL-variant ember-gated banner (--funnel) ─────────────────────────
+funnel_gated_banner() {
+  cat <<'BANNER'
+[deploy-launchpad] ═══════════════════════════════════════════════════════════════
+[deploy-launchpad]  FUNNEL VARIANT (--funnel): NO gateway, NO Caddy, NO DNS.
+[deploy-launchpad]  EMBER-GATED steps this script does NOT perform (see
+[deploy-launchpad]  deploy/launchpad/RUNBOOK.md):
+[deploy-launchpad]    (a) the durable hbox node :8420 must be UP (deploy/node/RUNBOOK.md)
+[deploy-launchpad]        — node-driven launches read from it; OR run the EVM contract
+[deploy-launchpad]        lane (step c) with DREGG_NODE= empty + LAUNCHPAD_ADDRESS set
+[deploy-launchpad]    (b) place ~/.config/dregg/launchpad-funnel.env (loopback bind) + chmod 600
+[deploy-launchpad]    (d) PUBLIC-EXPOSURE FLIP: `tailscale funnel --https=8443 8785`  ← the
+[deploy-launchpad]        single decision that makes the demo public at
+[deploy-launchpad]        https://hbox-dregg.<tailnet>.ts.net:8443 (printed after health passes)
+[deploy-launchpad] ═══════════════════════════════════════════════════════════════
+BANNER
+}
+
+# print_funnel_flip(): after a passing health gate, print the exact (ember-gated)
+# `tailscale funnel` command that flips the demo public. NEVER executed here. Games
+# holds public :443 (`tailscale funnel 8790`); the launchpad takes the SECOND funnel
+# port :8443 (Funnel supports 443/8443/10000). See RUNBOOK.md "Topology" option (A).
+print_funnel_flip() {
+  echo "[deploy-launchpad]"
+  echo "[deploy-launchpad]  ── EMBER-GATED PUBLIC-EXPOSURE FLIP (run by hand when ready) ──"
+  echo "[deploy-launchpad]    tailscale funnel --bg --https=8443 8785   # serve 127.0.0.1:8785 publicly (8443->8785)"
+  echo "[deploy-launchpad]    tailscale funnel status                   # confirm https://hbox-dregg.<tailnet>.ts.net:8443"
+  echo "[deploy-launchpad]  Take it down:"
+  echo "[deploy-launchpad]    tailscale funnel --https=8443 off"
+  echo "[deploy-launchpad]  (deploy/launchpad/RUNBOOK.md steps d–f)"
+}
+
 # ── preflight ────────────────────────────────────────────────────────────────
 preflight() {
   log "preflight"
@@ -127,8 +195,14 @@ preflight() {
   [[ -d "$SRC_DIR" ]] || die "deploy/launchpad not found under $LP_REPO_DIR — right checkout/branch?"
   [[ -d "$WEB_DIR" ]] || die "launchpad-web not found under $LP_REPO_DIR"
   if [[ ! -f "$LP_ENV" ]]; then
-    warn "env file $LP_ENV MISSING — ember must place it (LAUNCHPAD_ADDRESS, bind, RPC)."
-    gated "place $LP_ENV from deploy/launchpad/.env.example, then chmod 600"
+    warn "env file $LP_ENV MISSING — ember must place it (bind + source)."
+    if [[ "$FUNNEL" == "1" ]]; then
+      gated "place $LP_ENV from deploy/launchpad/.env.example with LAUNCHPAD_HOST=127.0.0.1"
+      gated "  (LOOPBACK — Funnel serves the local port) + DREGG_NODE=http://127.0.0.1:8420"
+      gated "  (node-driven) or DREGG_NODE= empty + LAUNCHPAD_ADDRESS (EVM lane); then chmod 600"
+    else
+      gated "place $LP_ENV from deploy/launchpad/.env.example, then chmod 600"
+    fi
     [[ "$DRY_RUN" == "1" ]] || die "cannot start the unit without $LP_ENV; place it and re-run"
   fi
   run mkdir -p "$STATE_DIR" "$USER_UNIT_DIR" "$RELEASES_DIR"
@@ -206,6 +280,13 @@ install_unit() {
 }
 
 install_caddy() {
+  # Funnel variant: there is NO Caddy leg at all — Tailscale Funnel is the public edge
+  # (TLS + hostname). Skip unconditionally.
+  if [[ "$FUNNEL" == "1" ]]; then
+    log "FUNNEL variant — no Caddy / no gateway leg; Tailscale Funnel is the edge."
+    log '  public-exposure flip is `tailscale funnel --https=8443 8785` (ember-gated; printed after health).'
+    return 0
+  fi
   if [[ "$SKIP_CADDY" == "1" ]]; then
     log "SKIP_CADDY=1 (default) — no Caddy on hbox; the gateway holds Caddy."
     log "  add the launchpad block ON THE GATEWAY: ./deploy-launchpad.sh gateway (RUNBOOK step d)"
@@ -286,13 +367,17 @@ health_gate() {
     sleep 5
   done
   log "health gate FAILED after ${HEALTH_TIMEOUT}s; recent log:"
-  journalctl --user -u dregg-launchpad-web --no-pager -n 30 2>/dev/null || true
+  journalctl --user -u "$UNIT_NAME" --no-pager -n 30 2>/dev/null || true
   return 1
 }
 
 # ── the gated deploy ─────────────────────────────────────────────────────────
 deploy_up() {
-  gated_banner
+  if [[ "$FUNNEL" == "1" ]]; then
+    funnel_gated_banner
+  else
+    gated_banner
+  fi
   preflight
   local snap
   snap="$(record_release | tail -1)"
@@ -302,8 +387,15 @@ deploy_up() {
   run systemctl --user enable --now "$UNIT"
   if health_gate; then
     log "launchpad web HEALTHY on the new release ($snap was the rollback point)"
-    log "smoke test next (deploy/launchpad/RUNBOOK.md step e): open the URL, connect a"
-    log "wallet, run a rung-1 OPEN launch end-to-end on the testnet."
+    if [[ "$FUNNEL" == "1" ]]; then
+      log "the web unit is up on 127.0.0.1:8785 (loopback) — NOT yet public."
+      print_funnel_flip
+      log "smoke test after the flip (deploy/launchpad/RUNBOOK.md step e): open the public"
+      log "URL, connect a wallet, run a launch end-to-end (node-driven off :8420, or the EVM lane)."
+    else
+      log "smoke test next (deploy/launchpad/RUNBOOK.md step e): open the URL, connect a"
+      log "wallet, run a rung-1 OPEN launch end-to-end on the testnet."
+    fi
     return 0
   fi
   if [[ "$AUTO_REVERT" == "1" ]]; then
