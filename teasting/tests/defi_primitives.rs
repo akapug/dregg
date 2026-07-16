@@ -7,9 +7,14 @@
 //! 3. Value commitments: commit values, prove conservation homomorphically
 //! 4. Cross-state derivation: derive authorization from facts in two state roots
 
-use dregg_circuit::cross_state_derivation::{
-    CombiningRule, SourceInput, prove_cross_state_derivation, verify_cross_state_derivation,
-};
+// RETIRED (2026-07-16): `dregg_circuit::cross_state_derivation` NO LONGER EXISTS. Per
+// `circuit/src/derivation_witness.rs:7-10`, the StarkProof->descriptor migration "flips the last hand-STARK
+// derivation consumer (`cross_state_derivation.rs`) off the hand engine onto the committed, byte-pinned
+// emitted descriptor" `dregg-derivation-v1` (authored in `Emit/DerivationEmit.lean`). The tests that drove
+// the vanished module are retired; their teeth live on that rail
+// (`circuit-prove/tests/derivation_emit_gate.rs`: forged_derived_hash_column_refuses /
+// forged_conclusion_pi_refuses / forged_state_root_pi_refuses). This ONE stale import had kept the whole
+// 17-test file out of the build.
 use dregg_circuit::derivation_air::{BodyAtomPattern, CircuitRule, DerivationWitness};
 use dregg_circuit::field::BabyBear;
 use dregg_circuit::poseidon2::hash_fact;
@@ -565,171 +570,4 @@ fn make_source_witness(
         org_id_hash: BabyBear::ZERO,
         budget_remaining: BabyBear::ZERO,
     }
-}
-
-/// Happy path: derive authorization from facts in two different state roots.
-#[test]
-fn test_cross_state_derivation_two_sources() {
-    // Source 1: Org A's state has "has_role(alice, admin)".
-    let root_a = BabyBear::new(11111);
-    let alice = BabyBear::new(1000);
-    let admin = BabyBear::new(2000);
-    let has_role_pred = BabyBear::new(100);
-    let org_a_cleared_pred = BabyBear::new(200);
-
-    let witness_a = make_source_witness(root_a, 1, org_a_cleared_pred, has_role_pred, alice, admin);
-
-    // Source 2: Org B's state has "resource_available(alice, file)".
-    let root_b = BabyBear::new(22222);
-    let file = BabyBear::new(3000);
-    let resource_pred = BabyBear::new(300);
-    let org_b_grants_pred = BabyBear::new(400);
-
-    let witness_b = make_source_witness(root_b, 2, org_b_grants_pred, resource_pred, alice, file);
-
-    let sources = vec![
-        SourceInput {
-            source_root: root_a,
-            witness: witness_a,
-            membership_proofs: vec![],
-        },
-        SourceInput {
-            source_root: root_b,
-            witness: witness_b,
-            membership_proofs: vec![],
-        },
-    ];
-
-    // Combining rule: derive cross_authorized(alice, admin) from both.
-    let cross_auth_pred = BabyBear::new(500);
-    let combining_rule = CombiningRule {
-        rule_id: 99,
-        head_predicate: cross_auth_pred,
-        head_terms: [
-            (true, BabyBear::new(0)),
-            (true, BabyBear::new(1)),
-            (false, BabyBear::ZERO),
-            (false, BabyBear::ZERO),
-        ],
-        substitution: vec![alice, admin],
-        derived_terms: [alice, admin, BabyBear::ZERO, BabyBear::ZERO],
-    };
-
-    let proof = prove_cross_state_derivation(&sources, &combining_rule);
-
-    // Verify.
-    let expected_final_hash = hash_fact(
-        cross_auth_pred,
-        &[alice, admin, BabyBear::ZERO, BabyBear::ZERO],
-    );
-    let result = verify_cross_state_derivation(&proof, &[root_a, root_b], expected_final_hash);
-    assert!(
-        result.is_ok(),
-        "Cross-state derivation should verify: {:?}",
-        result.err()
-    );
-}
-
-/// Adversarial: wrong expected source root → rejected.
-#[test]
-fn test_cross_state_derivation_wrong_root_rejected() {
-    let root_a = BabyBear::new(11111);
-    let root_b = BabyBear::new(22222);
-    let alice = BabyBear::new(1000);
-    let val = BabyBear::new(2000);
-
-    let pred_a = BabyBear::new(100);
-    let pred_b = BabyBear::new(200);
-    let derived_a = BabyBear::new(101);
-    let derived_b = BabyBear::new(201);
-
-    let witness_a = make_source_witness(root_a, 1, derived_a, pred_a, alice, val);
-    let witness_b = make_source_witness(root_b, 2, derived_b, pred_b, alice, val);
-
-    let sources = vec![
-        SourceInput {
-            source_root: root_a,
-            witness: witness_a,
-            membership_proofs: vec![],
-        },
-        SourceInput {
-            source_root: root_b,
-            witness: witness_b,
-            membership_proofs: vec![],
-        },
-    ];
-
-    let final_pred = BabyBear::new(999);
-    let combining_rule = CombiningRule {
-        rule_id: 50,
-        head_predicate: final_pred,
-        head_terms: [
-            (true, BabyBear::new(0)),
-            (false, BabyBear::ZERO),
-            (false, BabyBear::ZERO),
-            (false, BabyBear::ZERO),
-        ],
-        substitution: vec![alice],
-        derived_terms: [alice, BabyBear::ZERO, BabyBear::ZERO, BabyBear::ZERO],
-    };
-
-    let proof = prove_cross_state_derivation(&sources, &combining_rule);
-    let expected_final = hash_fact(
-        final_pred,
-        &[alice, BabyBear::ZERO, BabyBear::ZERO, BabyBear::ZERO],
-    );
-
-    // Verify with a WRONG source root.
-    let result = verify_cross_state_derivation(
-        &proof,
-        &[BabyBear::new(99999), root_b], // wrong root_a
-        expected_final,
-    );
-    assert!(result.is_err(), "Wrong source root should be rejected");
-    assert!(result.unwrap_err().contains("Source root 0 mismatch"));
-}
-
-/// Adversarial: tampered STARK proof → verification fails.
-#[test]
-fn test_cross_state_derivation_tampered_proof_rejected() {
-    let root_a = BabyBear::new(11111);
-    let alice = BabyBear::new(1000);
-    let val = BabyBear::new(2000);
-    let pred_a = BabyBear::new(100);
-    let derived_a = BabyBear::new(101);
-
-    let witness_a = make_source_witness(root_a, 1, derived_a, pred_a, alice, val);
-
-    let sources = vec![SourceInput {
-        source_root: root_a,
-        witness: witness_a,
-        membership_proofs: vec![],
-    }];
-
-    let final_pred = BabyBear::new(999);
-    let combining_rule = CombiningRule {
-        rule_id: 50,
-        head_predicate: final_pred,
-        head_terms: [
-            (true, BabyBear::new(0)),
-            (false, BabyBear::ZERO),
-            (false, BabyBear::ZERO),
-            (false, BabyBear::ZERO),
-        ],
-        substitution: vec![alice],
-        derived_terms: [alice, BabyBear::ZERO, BabyBear::ZERO, BabyBear::ZERO],
-    };
-
-    let mut proof = prove_cross_state_derivation(&sources, &combining_rule);
-    let expected_final = hash_fact(
-        final_pred,
-        &[alice, BabyBear::ZERO, BabyBear::ZERO, BabyBear::ZERO],
-    );
-
-    // Tamper with the source descriptor proof blob.
-    proof.source_derivations[0].proof.blob[0] ^= 0xFF;
-
-    let result = verify_cross_state_derivation(&proof, &[root_a], expected_final);
-    assert!(result.is_err(), "Tampered STARK should be rejected");
-    assert!(result.unwrap_err().contains("STARK verification failed"));
 }
