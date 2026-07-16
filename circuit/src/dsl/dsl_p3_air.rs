@@ -98,10 +98,18 @@ pub struct DslP3Air {
 }
 
 impl DslP3Air {
-    /// Build a p3 AIR from a `DslCircuit`. Fails if the descriptor carries an
-    /// unsupported form (`Hash` sponge / `MerkleHash` / `Lookup`); algebraic
-    /// forms and `Hash2to1`/`Hash4to1` (via the real Poseidon2 gadget) are
-    /// supported (see module docs).
+    /// Build a p3 AIR from a `DslCircuit`. Fails ONLY on `MerkleHash` (use the Lean-emitted IR2
+    /// descriptor for position-indexed Merkle hashing) and `Lookup` (route through the LogUp bus /
+    /// `lean_lookup_air`). Everything else is supported: the algebraic forms AND the Poseidon2 hash
+    /// forms — `Hash` (sponge), `Hash2to1`, `Hash4to1`, `Hash3Cap`, `MerkleHash8` — via the real
+    /// in-circuit gadget. See `check_algebraic` below, which is the authority.
+    ///
+    /// (Corrected 2026-07-16: this previously listed "`Hash` sponge" as UNSUPPORTED, contradicting
+    /// `check_algebraic`, which returns `Ok(())` for it. The stale claim mattered: it is the same
+    /// story `dregg-dsl-runtime/src/dsl_plonky3.rs`'s duplicate `DslP3Air` tells about ITSELF — where
+    /// it is TRUE — and it is why the differential harness skips membership coverage citing "DslP3Air
+    /// cannot inline Poseidon2". The DSL membership circuit uses `ConstraintExpr::Hash`
+    /// (`dsl/membership.rs:17`), which THIS interpreter accepts.)
     pub fn try_from_dsl(dsl: &DslCircuit) -> Result<Self, DslP3Error> {
         for (i, c) in dsl.descriptor.constraints.iter().enumerate() {
             check_algebraic(c, i)?;
