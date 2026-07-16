@@ -32,10 +32,10 @@
 //! regen (`scripts/emit-descriptors.sh` over the welded `v3RegistryCapOpenDep`) has LANDED them into the
 //! committed cohort. Every one of the 36 `rotation-v3-staged-registry.tsv` cohort rows carries the
 //! `-gentian-deployed-bare-refuse` suffix and the three per-tag `floor == 0`-refuse gates over ITS OWN
-//! base (§HETEROGENEOUS GEOMETRY): the 34 standard graduated members base at `GRAD_ROT_WIDTH = 1581`
-//! (widen to `trace_width` 1626, floor cols 1593/1609/1625 — the `bit_col`/`floor_col` constants here);
-//! the two DISTINCT V1Face members (`setFieldDyn` / `custom`, base 1553) base at 1553 (widen to 1598,
-//! floor cols 1565/1581/1597) so the block never strands a 28-column dead gap. The prove-side
+//! base (§HETEROGENEOUS GEOMETRY): the 34 standard graduated members base at `GRAD_ROT_WIDTH = 1647`
+//! (widen to `trace_width` 1692, floor cols 1659/1675/1691 — the `bit_col`/`floor_col` constants here);
+//! the two DISTINCT V1Face members (`setFieldDyn` / `custom`, base 1619) base at 1619 (widen to 1664,
+//! floor cols 1631/1647/1663) so the block never strands a 28-column dead gap. The prove-side
 //! [`fill_refuse_aux`] recovers each member's aux base from its OWN committed floor gates
 //! ([`refuse_aux_base`]), so it lands right regardless of geometry. Witnessed on the DEPLOYED bytes by
 //! `deployed_cohort_bytes_carry_the_refuse` below. The apex `Rfix` re-keys over the SAME
@@ -577,10 +577,10 @@ mod tests {
     /// every one of the 36 deployed cohort rows in the committed `rotation-v3-staged-registry.tsv`
     /// carries the flag-day weld — the `-gentian-deployed-bare-refuse` name suffix, the per-member
     /// widened `trace_width`, and the three pure `floor_col(b) == 0`-refuse gates over ITS OWN base.
-    /// §HETEROGENEOUS GEOMETRY: a standard graduated member (base `GRAD_ROT_WIDTH = 1581`) widens to
-    /// `1626` with floor cols `1593/1609/1625`; the two DISTINCT V1Face members (setFieldDyn / custom,
-    /// base `1553` — four fewer chip sites) widen to `1598` with floor cols `1565/1581/1597` over THEIR
-    /// own 1553 base (NOT the fixed 1581 that would strand a 28-column dead gap). Both derive from the
+    /// §HETEROGENEOUS GEOMETRY: a standard graduated member (base `GRAD_ROT_WIDTH = 1647`) widens to
+    /// `1692` with floor cols `1659/1675/1691`; the two DISTINCT V1Face members (setFieldDyn / custom,
+    /// base `1619` — four fewer chip sites) widen to `1664` with floor cols `1631/1647/1663` over THEIR
+    /// own 1619 base (NOT the fixed 1647 that would strand a 28-column dead gap). Both derive from the
     /// per-member aux base = `trace_width − (3·REFUSE_STRIDE − 3)`; the refuse block spans `base..base+44`.
     /// A light client that verifies any of these deployed descriptors REFUSES a declared-capacity dodge
     /// (Lean `declared_capacity_unsat_deployed`), because the refuse block is in the COMMITTED VK bytes,

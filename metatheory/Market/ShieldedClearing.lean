@@ -57,23 +57,29 @@ them:
     over-debiting/wrong-asset matching never FORMS (`Market.overdebit_refused` / `wrongAsset_refused`,
     reused), and a value-minting output makes the commitment excess NON-zero (`#guard`).
 
-**HONEST GRADE — Lean SPEC + note-level circuit, endpoint fold NAMED.** This lands the
+**HONEST GRADE — Lean SPEC + note-level circuit, endpoint descriptor BUILT.** This lands the
 *specification* of DrEX rung 3: the private-matching clearing is a machine-checked theorem composing
 the shielded-spend leaf + the ring + the nullifier freshness.  The deployed Rust AIR now also realizes
-the two-leg and N-leg note-algebra layer.  Two scope edges are named, not hidden:
+the two-leg and N-leg note-algebra layer.  The matching and endpoint layers below are both built;
+they converge on ONE remaining residual — the serialized-trace descriptor refinement:
 
   * The **matching layer (`MatchNode`) and the shielded-spend claim are fused in the deployed ring
     AIR**, which constrains `offerAsset`/`offerAmount` to the spent note's `asset`/`value`; the Lean
     theorem `LedgerRealizationExt.shielded_ring_fused_clears` states the corresponding `LegFused`
     composition.  What remains is not this note-algebra weld but a Lean-authored descriptor refinement
     from the serialized AIR trace to that semantic object.
-  * The **endpoint circuit realization** remains named: the two-leg and N-leg Rust AIRs fold real
-    shielded-spend leaves and enforce fusion/cycle/conservation, but publish only note-level claims.
-    They do not publish or constrain creators, the faithful eight-lane kernel pre/post endpoints,
-    action count, lifecycle/authorization state, or the receipt-log transition required by
-    `Market.ProtocolAssurance.ShieldedRingDescriptorRefines`.  Closing this requires a Lean-authored
-    endpoint-carrying outer descriptor and recursive binding to the two ordinary balance-action
-    traces.  This module does not claim that absent endpoint theorem.
+  * The **endpoint circuit realization** is now BUILT in `Market.ShieldedRingEndpointDescriptor`.
+    The two-leg and N-leg Rust AIRs fold real shielded-spend leaves and enforce
+    fusion/cycle/conservation; the Lean-authored endpoint-carrying host `shieldedRingEndpointDescriptor`
+    (name `"shielded-ring-clear-2-endpoint-wide"`) mirrors that deployed AIR and now publishes and
+    constrains the faithful eight-lane kernel pre/post endpoints (`ringCommit8_pre_binds_kernel` /
+    `ringCommit8_post_binds_kernel`), the endpoint action pins, and the receipt-log transition
+    (`receiptRoot_endpointPostLog`, `RingEndpointAccepted.receipt_transition`); its acceptance object
+    forces the ring clearing and the kernel endpoints (`RingEndpointAccepted.clearing_nodes` /
+    `.kernel_endpoints`).  What is still residual is the full
+    `Market.ProtocolAssurance.ShieldedRingDescriptorRefines` — the refinement binding a `Satisfied2`
+    proof over the SERIALIZED AIR trace to that semantic apex step (the same serialized-trace residual
+    the matching-layer edge above names).
 
 ## THE PAYOFF — this deletes the `intent/src/trustless.rs` DECRYPT committee.
 
