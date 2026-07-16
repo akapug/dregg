@@ -137,16 +137,16 @@ the commitment-only node while the built, both-polarity-tested state-binding nod
 is satisfiable; wire the state-binding node into the fold; flip proofBind
 True→boundAt at the next VK epoch. **This is the path complex game mechanics ride.**
 
-### 4. Solana bridge — the 3 P1 suspects, now with verbatim locations — LANE (relabel = CHEAP)
-Sharpens the known P1 close-value-holes: (1) `rotate()` admits the next epoch's
-stake table via `verify_supermajority` *without* the `tally_authorized` voter
-binding (`solana_provenance.rs:697-726`, its own doc admits it); (2)
-`derive_stake_table` proves inclusion of supplied accounts only, no completeness
-floor, so an omitted-stake rotation shrinks the ≥2/3 denominator (`:457-527`); (3)
-`ConsensusEvidence.slot` is doc-labeled "finalized" while the verified relation is
-exact-slot optimistic confirmation — a fossil over-claim in code
-(`solana_trustless.rs:69-75`).
-**Move:** named adversarial-test lane per suspect; relabel the field-doc now (cheap).
+### 4. Solana bridge value-holes — CLOSED (corrected 2026-07-16)
+⚠ This item is STALE: the three P1 value-holes are **closed at HEAD** (commit
+`72561117d`), which the design-census verifier caught. `rotate()` now tallies
+through `tally_authorized` (HOLE-3 closed, `solana_provenance.rs:811,831`);
+`derive_stake_table` enforces a `StakeBelowHistoryFloor` completeness floor
+(HOLE-2, `:530-548`); value release requires the slot proven *rooted* via
+`tally_authorized_rooted` (HOLE-1, `solana_trustless.rs:81-104`). The
+launch-readiness memory's "3 exploitable Solana holes" is likewise superseded.
+**Move:** the only standing lane is a red-team pass that tries to RE-OPEN them
+under the new gates (verify the closures bite), not new fixes.
 
 ### 5. EVM value contracts — slasher drain + placeholder tree + mock selector — LANE
 Sharpens rung-1 launchpad (critical path): `DreggDeployerGate.slash()` lets an
