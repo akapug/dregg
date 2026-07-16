@@ -1,0 +1,10 @@
+{
+  "name": "oracle-stale",
+  "version": "0.0.0",
+  "private": true,
+  "devDependencies": { "canary-wasm": "file:./pkg" },
+  "scripts": {
+    "build": "tsup src/index.ts",
+    "test": "npm run build && node --test test/*.test.mjs"
+  }
+}

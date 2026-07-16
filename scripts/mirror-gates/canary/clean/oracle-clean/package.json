@@ -1,0 +1,11 @@
+{
+  "name": "oracle-clean",
+  "version": "0.0.0",
+  "private": true,
+  "devDependencies": { "canary-wasm": "file:./pkg" },
+  "scripts": {
+    "build:oracle": "wasm-pack build . --target nodejs --out-dir pkg",
+    "pretest": "npm run build:oracle",
+    "test": "node --test test/*.test.mjs"
+  }
+}

@@ -1,0 +1,5 @@
+[package]
+name = "canary-quest"
+version = "0.1.0"
+[dependencies]
+canary-faction = { path = "../faction" }

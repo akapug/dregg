@@ -1,0 +1,59 @@
+name: Mirror gates
+
+# THE GATE THAT KEEPS `docs/audit/RE-AUTHORED-MIRROR-MAP.md` FROM REGROWING.
+#
+# The map swept 13 subsystems and found 21 instances of one failure mode — a re-authored mirror
+# standing in for the real thing, the tests green BECAUSE they test the mirror — and closed with:
+#
+#   "Fixing 21 and shipping no gate returns this map to its current length within two quarters."
+#
+# WHY THIS IS A PULL_REQUEST JOB AND NOT A SCHEDULE. There is prior art in this tree for the trap:
+# `armed-teeth.yml` is `schedule`-only for a defensible reason (its folds take minutes), and a
+# schedule is the honest home for a lane whose cost is real. This gate's cost is NOT real — it is a
+# ~20s static scan with no cargo build — so a schedule would buy nothing and cost everything: a new
+# mirror would land on main and be reported the next morning, to nobody. A mirror is cheapest to stop
+# at write time, which is exactly when a PR check runs.
+#
+# WHY THE CANARY RUNS FIRST. The map's mechanism (4) is "verification apparatus is exempt from the
+# verification standard — nobody audits the auditor, so the auditor drifts furthest." M14 IS that: a
+# drift gate whose header states the self-consistency fallacy correctly and whose by-name leg commits
+# it. A silent mirror-gate would be the same bug one level up, and it would look exactly like
+# success. So CI reintroduces a known mirror per gate and requires each to go RED before it is
+# willing to believe any GREEN.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  mirror-gates:
+    name: No new re-authored mirrors
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        # No `lfs: true`: the gates read Rust source and the JSON/TSV descriptor artifacts. The
+        # LFS-tracked staged TSVs are not parsed for identity (only `.json` carries a `name`), so an
+        # LFS pointer stub cannot make this gate lie — it simply has no `name` to collide on.
+
+      - name: Gate the gate, then gate the tree
+        run: ./scripts/check-mirror-gates.sh --report
+
+      # The advisory D3 inversion table is a standing worklist, not a verdict, so it is published as a
+      # summary rather than a failure. `--report` above already printed it to the log; this puts the
+      # count where a reviewer sees it without opening the job.
+      - name: Summarise
+        if: always()
+        run: |
+          {
+            echo '### Mirror gates'
+            echo
+            python3 scripts/mirror-gates/mirror_gates.py 2>&1 | head -3
+            echo
+            echo 'Ratchet: `scripts/mirror-gates/baseline.txt` — known findings from the mirror map.'
+            echo 'A NEW mirror fails this job. A FIXED one must leave the baseline, or this job fails'
+            echo 'as stale — so the file can only shrink.'
+          } >> "$GITHUB_STEP_SUMMARY"

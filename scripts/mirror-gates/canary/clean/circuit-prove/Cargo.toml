@@ -1,0 +1,5 @@
+[package]
+name = "canary-circuit-prove"
+version = "0.1.0"
+[dependencies]
+canary-circuit = { path = "../circuit" }

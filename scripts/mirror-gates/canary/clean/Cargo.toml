@@ -1,0 +1,3 @@
+# Canary fixture workspace — NOT part of the real build. See canary.sh.
+[workspace]
+members = ["circuit", "circuit-prove", "faction", "quest"]
