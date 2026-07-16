@@ -6,10 +6,6 @@ description = "Correctness-first REFERENCE implementation of a post-quantum, has
 license = "AGPL-3.0-only"
 publish = false
 
-# Standalone: opt OUT of the breadstuffs root workspace (staged reference work,
-# deliberately NOT a member — builds in its own dir with its own target/lock,
-# exactly like crypto-hermine).
-[workspace]
 
 [dependencies]
 # Collision-resistant hash (the Merkle binding that gives UNIQUENESS) AND the PRG

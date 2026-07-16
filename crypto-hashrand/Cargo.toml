@@ -6,9 +6,6 @@ description = "Spec-faithful REFERENCE implementation of a HashRand-style POST-Q
 license = "AGPL-3.0-only"
 publish = false
 
-# Standalone: opt out of the breadstuffs root workspace (staged reference
-# work — deliberately NOT a member; builds in its own dir, like crypto-hermine).
-[workspace]
 
 [dependencies]
 # The collision-resistant, programmable-QROM-modelled hash carrier — the

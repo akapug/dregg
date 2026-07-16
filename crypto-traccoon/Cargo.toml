@@ -6,10 +6,6 @@ description = "Correctness-first REFERENCE implementation of Threshold Raccoon (
 license = "AGPL-3.0-only"
 publish = false
 
-# Standalone: opt out of the breadstuffs root workspace (a pre-audit reference
-# crate, deliberately NOT a member; builds in its own dir — mirrors
-# crypto-hermine and crypto-tanuki).
-[workspace]
 
 [dependencies]
 # The only external dependency: a real hash. blake3 realizes the random oracles
