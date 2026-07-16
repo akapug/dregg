@@ -32,6 +32,13 @@ Four findings, in descending order of how much they should change what we do.
    **~70**, not 73. Worse, ε_C ∝ |D⁽⁰⁾|²/|F| means the proven posture is **not trace-invariant** — at a
    2^20-row trace the same config falls to **~62**. This is a *measurement* gap in our ledger, not a
    break: the number was never load-bearing against an attack, and BCHKS25 (below) buys most of it back.
+   ⚑ **UPDATE 2026-07-15 (§3.2a): the heights are now MEASURED, and ~70 was the FIXTURE's number.** The
+   deployed worst case is `|D⁽⁰⁾| = 2^19` — the `WRAP_LOG_CEIL = 16` recursion ceiling, forced on every
+   fold, already shipping — which proves **~64**, i.e. **~7 bits BELOW the gate's own
+   `JOHNSON_FLOOR_BITS = 71`**. The `2^6`-row "fixture" turns out to be `MIN_TRACE_HEIGHT`, the system's
+   *smallest* real trace. **This does not become a break** (same reason as above — the column is not what
+   stands between us and an attacker; the per-fold and Johnson columns are), but the honest deployed
+   proven number is ~64, and **the pow lever cannot reach 71 at that height** (item 8, refuted).
 
 3. **⚑ There is a CEILING at ~78 proven bits at ext-degree 4, and no query or PoW bump can pass it.**
    Because ε_C ∝ 1/|F| and grows as m⁷, the `min` in ethSTARK eq. (20) saturates: q = 25 and q = 200
@@ -352,11 +359,53 @@ BCHKS25 ceiling.** That is the single most valuable missing number in this doc.
 | 2^14 rows | 2^20 | **61.98** |
 
 The measured cost grid is a **2^6-row trace** (`degree_bits [6,3,4]`, PROOF-ECONOMICS §2b) — smaller
-than a production turn. **Nobody has measured dregg's real deployed trace-height distribution**, and it
-is the single input that moves the proven number most. ⚑ This *reconciles the two analyses*: the tree's
+than a production turn. ⚑ This *reconciles the two analyses*: the tree's
 own counting bound also degrades ~2 bits/doubling once evaluated at the **first** fold rather than the
 terminal one (§4.2) — the two agree on the shape. Under BCHKS25's O(n) the sensitivity halves to
 ~1 bit/doubling, which is a second reason to re-point the citation.
+
+#### 3.2a ⚑ MEASURED 2026-07-15 — item 6 is CLOSED, and the real worst case is 2^19, not 2^12
+
+The distribution above was **assumed**. It is now measured, off real proofs' `BatchProof::degree_bits`
+(`circuit-prove/tests/fri_trace_height_measure.rs`, the non-rotting gate). Three of this section's
+premises were wrong, and **all three in the same direction**:
+
+1. **The tall trace is not hypothetical — it is DEPLOYED, on every fold, by construction.**
+   `accumulator.rs:238` pins `WRAP_LOG_CEIL = 16` and `wrap_params()` applies it as a
+   `min_trace_height` FLOOR (live, ON BY DEFAULT — `accumulator.rs:660`, `:427`) so the running fold's
+   FRI shape is depth-invariant. At `log_blowup = 3` that is **|D⁽⁰⁾| = 2^19 on every fold** — the
+   worst case is also the *typical* case. Measured natural fold heights are `degree_bits
+   [9,9,15,14,15]` (re-measured via `apex_shrink_trace_anatomy`; recorded at `accumulator.rs:227`), so
+   the ceiling pads 2^15 → 2^16. **The VK-depth-invariance knob is silently buying its constancy with
+   ~7 proven bits.** Nobody priced that trade, because the ledger cannot see height.
+2. **The leaf height is not the effect-VM trace — it is the Poseidon2 CHIP table, and it overtakes.**
+   `MIN_TRACE_HEIGHT = 64` (`trace.rs:508`) floors the MAIN table at 2^6 (whence `[6,3,4]`), but FRI
+   batches all five IR-v2 tables onto the largest domain, and the chip table runs ~4 rows/transfer —
+   passing the main table at **32 effects**. Measured: 1 effect → `[6,3,4]` = 2^12; 32 → `[6,7,4]` =
+   2^13; 64 → `[6,8,4]` = 2^14; 128 → `[7,9,4]` = 2^15; 512 → `[9,11,4]` = 2^17. A gate reading the
+   *witness* height reports 2^6 for the 32-effect turn and is wrong by ~2 proven bits.
+3. **Nothing caps effects-per-turn**, so the leaf |D⁽⁰⁾| is **unbounded above** (no `MAX_EFFECTS`-class
+   bound exists in `turn/`, `intent/`, or `circuit/src/effect_vm/`). Small in practice — a real
+   multi-verb turn measures `[3,4,3,3]` = 2^4 — but structurally open.
+
+**The honest proven table at MEASURED heights** (this doc's own ε_C arithmetic, independently
+reproduced a 4th time — 70.11 @ m=7 and 61.98 @ 2^20 both reproduce exactly):
+
+| config | measured \|D⁽⁰⁾\| | proven | ledger asserts |
+|---|---:|---:|---:|
+| leaf ir2, 1-16 effects (**the fixture**) | 2^12 | 70.11 | 73 |
+| leaf ir2, 64 effects | 2^14 | 69.39 | 73 |
+| leaf ir2, 512 effects | 2^17 | 67.77 | 73 |
+| outer/gnark shrink (2^15 tables) | 2^18 | 65.91 | 73 |
+| **recursion WRAP (every fold)** | **2^19** | **63.91** | **71** |
+
+⚑ **The deployed proven posture is ~64 bits, not ~70 and not 73** — the ~70 is the *fixture's* number,
+and the fixture is the system's *smallest* real trace. The gate's `JOHNSON_FLOOR_BITS = 71` is
+**~7 bits above** what the weakest config actually proves once ε_C is priced at its real |D⁽⁰⁾|. Note
+`create_recursion_config` is now the weakest link on **both** columns at once (pow 14 *and* the tallest
+trace), and the query ledger can see only the first. ⚠ These remain **optimistic upper bounds** — they
+omit ethSTARK eq. (20)'s DEEP/ALI top row, as everything else in this doc does. BCHKS25's O(n) would
+halve the trace sensitivity, which raises the stakes on re-pointing the citation (§2.2).
 
 ### 3.3 Why arity is not a security lever in either direction
 
@@ -560,16 +609,26 @@ surprises. The single highest-value item is a **measurement**, not a knob.
 
 ### Tier 1 — cheap engineering, high value
 
-6. **⚑ MEASURE the deployed trace-height distribution.** ε_C ∝ |D⁽⁰⁾|² means the proven number is
-   **not trace-invariant** (70.11 at 2^12 → 61.98 at 2^20, §3.2). Our whole cost grid is a **2^6-row**
-   fixture. **This is the single input that moves the proven posture most and nobody has measured it.**
+6. ~~**⚑ MEASURE the deployed trace-height distribution.**~~ **DONE 2026-07-15 — see §3.2a.** The
+   answer is worse than this item assumed: the deployed worst case is **|D⁽⁰⁾| = 2^19** (the
+   `WRAP_LOG_CEIL = 16` recursion ceiling, forced on every fold), not the 2^12 fixture — so the real
+   proven posture is **~64 bits**, ~7 below the gate's own `JOHNSON_FLOOR_BITS = 71`. Gated
+   non-rottingly by `circuit-prove/tests/fri_trace_height_measure.rs`.
 7. **⚑ Mechanize ε_C as a real column in `Dregg2.Circuit.FriLedger.friLedger`**, beside the naive
    `q·lb/2 + pow`, so the gate reports it rather than a scratch script. Three independent
    implementations agreeing at ~70 (§2.1) is exactly the point at which this should stop living in Python.
 8. **`pow 16 → 20` on every shipped config.** **+3.29 proven bits, 0 wire, 0 verify**, 16× a
-   microsecond grind. It also fixes `create_recursion_config` — our named weakest link at pow 14, the
-   one config whose gate floor (71) my recomputation actually threatens (lane 2 computes 70.49 for it).
+   microsecond grind.
    ⚠ Unlike the earlier lane claim, **the grind is per-proof** — so stop at 20 (or measure before 24).
+   ⚑ **REFUTED as a FIX for `create_recursion_config`, by §3.2a's measurement.** This item claimed pow
+   20 "fixes" the weakest link. At that config's **measured** |D⁽⁰⁾| = 2^19 it does not: pow 14 → 63.91,
+   pow 16 → 65.54, pow 20 → **67.55**, and the lever then **saturates** — pow 24 → 68.48, pow 27 →
+   68.48, *the same number*. **No pow value reaches the gate's own 71 floor at the real height**, because
+   ε_C's commit column binds and the `min` in eq. (20) stops moving (§3.1's ceiling, now biting a shipped
+   config rather than a hypothetical). The +3.29 is real and still worth taking (0 wire), but it is a
+   *mitigation*, not a fix. Reaching 71 at the recursion needs the **height** (lower `WRAP_LOG_CEIL`, at
+   the cost of the depth-invariant VK — see §3.2a) or **BCHKS25**'s O(n) (§2.2), not the pow knob.
+   The lane 2 figure of 70.49 for this config is a **2^12-height** reading; at 2^19 it is 63.91.
 9. **Instantiate BCHKS25 Thm 1.5 in Lean at the 7 shipped configs** and compute **the BCHKS25 ceiling**
    (§3.1) — the most valuable missing number here. Likely a larger win at ρ = 1/8 (`ρ^{-3/2} = 22.6`)
    than at ρ = 1/64 (512).
@@ -648,8 +707,14 @@ TR25-169** (Kopparty's faculty page), **BCIKS20** and **Haböck 2022/1216** and 
   (they follow from ε_C's m⁷ and 1/|F| structure). Lanes 2 and 4 got 70.47 and 70.11 by independent
   implementations; my lb=7/lb=8 constants (76.48/74.98) differ from lane 4's (74.48/70.98) — **the
   turnover shape is robust, the constants are not.**
-- **|D⁽⁰⁾| is assumed**, not measured (2^12 from the `degree_bits [6,3,4]` fixture; 2^20 as a tall-trace
-  anchor). This is item 6 and it dominates everything.
+- ~~**|D⁽⁰⁾| is assumed**, not measured~~ — **now MEASURED (§3.2a)**, off real proofs' `degree_bits`.
+  The assumed anchors were both wrong: the 2^12 "fixture" is the system's *smallest* real trace (it is
+  `MIN_TRACE_HEIGHT`, not a fixture), and the 2^20 "tall anchor" was hypothetical while the **real**
+  deployed worst case — 2^19, the `WRAP_LOG_CEIL` recursion ceiling — was already shipping on every
+  fold. The ε_C *formula* is now also verified verbatim against BCIKS20 Lemma 8.2/Thm 8.3 and the
+  composition against ethSTARK eq. (20), and this doc's arithmetic reproduced a 4th time (70.11 @ m=7,
+  61.98 @ 2^20, both exact). What remains ours-not-the-papers' is unchanged: the DEEP/ALI omission
+  (so every figure stays an **optimistic upper bound**) and the unmechanized arithmetic (item 7).
 - Lane 1's Kambiré instantiation (ρ=1/64, C=1 → p ∈ [2^1024, 2^1536]) and BCHKS25 Thm 1.5 constant
   (≈2^-86 at ρ=1/64) follow the papers' formulas but **appear in neither paper**; the 2^-86 vs 2^-83.6
   comparison uses a **naive** O(n²) incumbent without BCIKS20's actual constant, so **the net-gain
