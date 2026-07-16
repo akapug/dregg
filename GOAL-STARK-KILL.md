@@ -1128,3 +1128,35 @@ another lane's in-flight edits (`turn/src/error.rs`, `turn/src/executor/proof_ve
 concurrent lane's mid-edit state and named it as a finding.** Lesson for a shared tree with 3 live codex
 procs: a build error in a DIRTY file is not evidence until the tree is quiet. `dsl_pipeline` migration
 (which unblocks deleting the duplicate `DslP3Air`) stays blocked on that lane, NOT on the proc-macro.
+
+### `af2c56bf8` — `CratesOutsideCIResidual` CLOSED: every orphan decided + recorded (69 tests reachable)
+Evidence split them rather than one blanket answer:
+- **FOLDED IN**: `tools/deployer-gate` (14 tests). Its header claimed a "Standalone workspace (own
+  [workspace] opt-out, like crypto-hermine / fhegg-solver)" — **there is NO `[workspace]` stanza in it and
+  never was.** Never opted out; just never listed in `members`. It path-depends on `dregg-macaroon` (a
+  member), so standalone resolution duplicated the workspace anyway.
+- **EXCLUDED, REASON RECORDED**: `cosmos-lock` (12) + `cosmos-settlement` (5) — `cosmwasm-std 2.2` +
+  `cw-storage-plus` pull a dep tree existing NOWHERE else (verified across every manifest) and target
+  wasm32 contracts, not the host workspace: the same reason `solana-*` are excluded. Now explicit.
+- With `67395c5fb` (4 crypto crates, 55 tests): **69 previously-invisible tests reachable by CI**; the 2
+  that stay out are a decision, not drift.
+
+### THE PATTERN OF THIS CODEBASE'S SCARS (three independent instances tonight)
+**Every "reason to stay out of the workspace" cited `crypto-hermine` — which is itself a MEMBER.**
+crypto-tanuki ("mirrors crypto-hermine"), crypto-traccoon ("mirrors crypto-hermine and crypto-tanuki"),
+crypto-hashrand ("like crypto-hermine"), crypto-xmvrf ("exactly like crypto-hermine"), deployer-gate
+("like crypto-hermine / fhegg-solver" — while having no `[workspace]` at all). The rationale was
+**cargo-culted from crate to crate**; the model graduated into the workspace and nobody updated its
+imitators. Same disease as `Claims.lean:383`'s false cognate and `dsl_p3_air.rs:102`'s self-contradiction:
+**the scars here are load-bearing LIES IN PROSE, and they propagate by copying.** A comment is not
+evidence — grep the premise.
+
+### derivation_air — LEFT ALONE, deliberately (the goal's "delete dead derivation.rs" rests on a false premise)
+The goal says "delete dead derivation.rs". **It is not dead** (`circuit/src/derivation_witness.rs:41` — the
+EMITTED path's own witness builder — uses its `generate_derivation_trace_dsl` deliberately, "NOT a
+reconstruction"; `dregg-dsl-runtime` re-exports its types). And the hand `DerivationAir` is instantiated
+ONLY in `ivc.rs`'s `#[cfg(test)]`, where it feeds `ConstraintProof::generate` — the row-by-row VALIDATOR,
+not a STARK prover. So it is test scaffolding, NOT a deployed law-#1 violation: deleting it means rewriting
+an IVC test for ZERO assurance gain. Production derivation already proves via the emitted
+`dregg-derivation-v1`, whose teeth exist and pass (`forged_derived_hash_column_refuses`,
+`forged_conclusion_pi_refuses`, `forged_state_root_pi_refuses`). Not deleting it is the correct call.
