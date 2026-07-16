@@ -29,8 +29,8 @@ use spween::{Choice, EffectHandler, Runtime, RuntimeState, Scene, Value};
 use zeroize::Zeroizing;
 
 use crate::compiler::{
-    CompileError, CompiledStory, GENESIS_METHOD, PASSAGE_ENDED, PASSAGE_SLOT, choice_method,
-    compile_scene,
+    CompileError, CompiledStory, GENESIS_DONE_EXT_KEY, GENESIS_METHOD, PASSAGE_ENDED, PASSAGE_SLOT,
+    choice_method, compile_scene, program_requires_genesis_sentinel,
 };
 use crate::encoding::{field_to_u64, value_to_field, value_to_u64};
 
@@ -137,6 +137,13 @@ pub struct WorldCell {
     /// this in-process executor; [`NodeTarget::Federation`] additionally submits each to
     /// a real `DREGG_NODE_URL` node + confirms it landed.
     node_target: NodeTarget,
+    /// Whether the INSTALLED program carries the one-shot genesis teeth (i.e. it came from
+    /// [`compile_scene`]), so this world must birth [`GENESIS_DONE_EXT_KEY`] at deploy and
+    /// write it `0 → 1` on the genesis turn. `false` for a HAND-BUILT story that installs
+    /// its own genesis case (`dregg-multiway-tug`, the dungeon keep, test fixtures) —
+    /// those worlds stay byte-identical to before. Computed once from the program, never
+    /// from the method name (several consumers spell their own method `"genesis"` too).
+    genesis_sentinel: bool,
 }
 
 impl WorldCell {
@@ -179,6 +186,9 @@ impl WorldCell {
 
         let agent = cclerk.cell_id();
         let ext_keys = story.ext_keys();
+        // Does the INSTALLED program actually ask for the one-shot genesis sentinel? A
+        // hand-built story installing its own genesis case does not — leave it untouched.
+        let genesis_sentinel = program_requires_genesis_sentinel(&story.program);
         exec.with_ledger_mut(|ledger| {
             if ledger.get(&cell).is_none() {
                 let world_cell = Cell::new(owner, token);
@@ -198,6 +208,18 @@ impl WorldCell {
                         c.state.set_field_ext(key, field_from_u64(0));
                     }
                 }
+                // BIRTH the genesis-done sentinel at field-zero — ONLY for a program that
+                // carries the one-shot teeth. They (`Equals{1} ∧ DeltaEquals{1}`) and the
+                // per-case `Immutable` freeze read a PRESENT pre-state — `DeltaEquals`
+                // fails closed on an absent old — so the sentinel must exist at zero
+                // before the first genesis turn writes it `0 → 1`. Setup, not a turn
+                // (exactly how the ext keys above are born); the sentinel is NOT in
+                // `snapshot()` (not a story var), so replay/state fingerprints are
+                // unchanged.
+                if genesis_sentinel && c.state.get_field_ext(GENESIS_DONE_EXT_KEY).is_none() {
+                    c.state
+                        .set_field_ext(GENESIS_DONE_EXT_KEY, field_from_u64(0));
+                }
             }
             if let Some(agent_cell) = ledger.get_mut(&agent) {
                 agent_cell.capabilities.grant(cell, AuthRequired::Signature);
@@ -213,6 +235,7 @@ impl WorldCell {
             seed_vars: BTreeMap::new(),
             seed_has: BTreeSet::new(),
             node_target: NodeTarget::Local,
+            genesis_sentinel,
         })
     }
 
@@ -481,7 +504,24 @@ impl WorldCell {
     }
 
     /// Build, sign, and submit a turn on the world-cell under `method`.
-    fn commit(&self, method: &str, effects: Vec<Effect>) -> Result<TurnReceipt, WorldError> {
+    fn commit(&self, method: &str, mut effects: Vec<Effect>) -> Result<TurnReceipt, WorldError> {
+        // The genesis turn WRITES the genesis-done sentinel `0 → 1` — the LEGIT
+        // one-time deploy/seed the one-shot genesis case (`Equals{1} ∧ DeltaEquals{1}`
+        // on `GENESIS_DONE_EXT_KEY`) admits. Injected at this single chokepoint so every
+        // genesis commit path (today only `Driver::start`) flips it; a post-deploy
+        // genesis staple re-hits `old == 1`, where the two teeth are jointly
+        // unsatisfiable, and is REFUSED (the universal write-hatch, closed at the root).
+        //
+        // Gated on the INSTALLED PROGRAM, not the method name: a hand-built story that
+        // spells its own dispatch method `"genesis"` (`dregg-multiway-tug`, the dungeon
+        // keep) installs no sentinel teeth and gets no injected write — byte-identical.
+        if method == GENESIS_METHOD && self.genesis_sentinel {
+            effects.push(set_field(
+                self.cell,
+                GENESIS_DONE_EXT_KEY as usize,
+                field_from_u64(1),
+            ));
+        }
         let action = self.cclerk.make_action(self.cell, method, effects);
         let receipt = self.exec.submit_action(&self.cclerk, action)?;
         // FEDERATION SEAM: in `Local` mode this is a no-op; in `Federation` mode the

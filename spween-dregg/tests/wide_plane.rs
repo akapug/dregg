@@ -36,8 +36,8 @@ use dregg_app_framework::{
 };
 use dregg_cell::program::HeapAtom;
 use spween_dregg::{
-    CompiledStory, Driver, HEAP_HATCH_METHOD, SPILL_EXT_BASE, STATE_SLOTS, Value, WorldCell,
-    WorldError, choice_method, compile_scene, parse, verify,
+    CompiledStory, Driver, GENESIS_DONE_EXT_KEY, HEAP_HATCH_METHOD, SPILL_EXT_BASE, STATE_SLOTS,
+    Value, WorldCell, WorldError, choice_method, compile_scene, parse, verify,
 };
 
 /// **A scene far wider than the register file.** 15 `r*` vars sort before every `z_*`
@@ -722,19 +722,34 @@ fn the_narrow_path_is_unchanged() {
         "the register gate lifts to FieldGte(strength, 3); got {force:?}"
     );
 
-    // NOT ONE ext-plane tooth anywhere in a narrow scene's program — including the heap
-    // hatch case, whose confinement is the register freeze alone when nothing spilled.
+    // NOT ONE ext-plane tooth over STORY STATE anywhere in a narrow scene's program —
+    // including the heap hatch case, whose confinement is the register freeze alone when
+    // nothing spilled. This is the SPILL invariant: nothing spilled ⇒ no story var/
+    // membership atom is reached through the heap.
+    //
+    // The reserved `GENESIS_DONE_EXT_KEY` sentinel is EXCLUDED: it is not story state and
+    // not a spill — it is the protocol key that makes `genesis` ONE-SHOT (the `0 → 1`
+    // tooth on the genesis case + the `Immutable` freeze on every other case), present on
+    // EVERY compiled scene, narrow or wide, and it is what closes the universal
+    // post-deploy genesis write-hatch. It costs a narrow scene no REGISTER, does not
+    // spill any var (`ext_keys()` stays empty, asserted above), and does not widen
+    // `snapshot()` (asserted below) — the wide plane itself remains inert for a narrow
+    // scene, which is what this test is about. There is no free register to host the
+    // sentinel (a wide scene fills all 16), so the reserved ext key is the one uniform
+    // home for it.
     let CellProgram::Cases(cases) = &story.program else {
         panic!("Cases")
     };
     for case in cases {
         for c in &case.constraints {
+            let story_ext_tooth = match c {
+                StateConstraint::HeapField { key, .. } => *key != GENESIS_DONE_EXT_KEY,
+                StateConstraint::HeapFieldLteOther { .. } => true,
+                _ => false,
+            };
             assert!(
-                !matches!(
-                    c,
-                    StateConstraint::HeapField { .. } | StateConstraint::HeapFieldLteOther { .. }
-                ),
-                "a narrow scene emits NO ext-plane constraint; got {c:?}"
+                !story_ext_tooth,
+                "a narrow scene emits NO ext-plane constraint over story state; got {c:?}"
             );
         }
     }

@@ -226,6 +226,44 @@ pub fn choice_method(passage: &str, choice_index: usize) -> String {
 /// initial passage-slot bind) presents.
 pub const GENESIS_METHOD: &str = "genesis";
 
+/// **The reserved genesis-done sentinel key — the tooth that makes `genesis`
+/// ONE-SHOT.**
+///
+/// ## The hole this closes (the root, not a per-slot patch)
+///
+/// [`compile_scene`] must emit a `MethodIs { genesis }` case (the executor's
+/// dispatch is method-default-deny, so the genesis turn needs a case to land on).
+/// Before this key that case carried EMPTY constraints and [`crate::WorldCell::apply_raw`]
+/// re-dispatches ANY method with no one-shot guard — so a POST-DEPLOY
+/// `apply_raw("genesis", [SetField(slot, V)])` re-hit the permissive genesis case
+/// and committed arbitrary writes to ANY slot, routing around every choice gate. That
+/// is a UNIVERSAL WRITE-HATCH on every compiled scene (dungeon/story/quest/dialogue),
+/// closed per-slot ~14 times; this closes it at the ROOT for every slot at once.
+///
+/// ## The mechanism (a `0 → 1` transition, admissible exactly once)
+///
+/// The genesis case's teeth become the CONJUNCTION
+/// `HeapField{Equals 1} ∧ HeapField{DeltaEquals 1}` over THIS key, which holds iff
+/// `old == 0 ∧ new == 1` — the sentinel goes `0 → 1`. [`crate::WorldCell`] births it
+/// at field-zero on deploy and the genesis turn writes it to `1` (injected in
+/// `WorldCell::commit` for the `genesis` method), so the LEGIT one-time deploy/seed
+/// passes. Every LATER genesis turn reads `old == 1`, where `new == 1` (Equals) forces
+/// `Δ == 0 ≠ 1` (DeltaEquals) and `new == 2` (Δ == 1) forces `new ≠ 1` (Equals) — the
+/// two teeth are jointly unsatisfiable, so genesis is REFUSED regardless of which
+/// slot a stapled `SetField` targets, with NO per-slot `SlotChanged` dependence.
+///
+/// Every NON-genesis case (each choice case + the [`HEAP_HATCH_METHOD`] case) additionally
+/// freezes this key with `HeapField{Immutable}`, so no other method — not an ungated
+/// choice with permissive teeth, not the heap hatch — can RESET the sentinel to `0` and
+/// re-open genesis. The genesis case itself carries no `Immutable` (it must perform the
+/// `0 → 1` write).
+///
+/// Keyed at `2^33 + 1` — distinct from [`crate::DECISION_EXT_KEY`] (`2^33`), above
+/// `REFUSAL_AUDIT_EXT_KEY` (`2^32`) and far below [`SPILL_EXT_BASE`] (`2^34`), so it can
+/// never collide with a spilled story var, a reserved key, or a small `STATE_SLOTS + n`
+/// application-collection key.
+pub const GENESIS_DONE_EXT_KEY: u64 = 0x0000_0002_0000_0001;
+
 /// The reserved dispatch method a raw HEAP-hatch turn ([`WorldCell::apply_raw`] with
 /// heap-keyed effects) presents.
 ///
@@ -417,12 +455,16 @@ pub fn compile_scene(scene: &Scene) -> Result<CompiledStory, CompileError> {
     }
 
     // One method-guarded case per choice (default-deny requires every choice-turn's
-    // method to match a case), plus a permissive genesis case.
+    // method to match a case), plus the ONE-SHOT genesis case. The genesis case's teeth
+    // are the `0 → 1` transition on [`GENESIS_DONE_EXT_KEY`] (see its docs): admissible
+    // exactly once (at deploy, when the sentinel is still field-zero), REFUSED for every
+    // post-deploy genesis turn regardless of which slot a stapled `SetField` targets —
+    // closing the universal genesis write-hatch at the root, no per-slot dependence.
     let mut cases = vec![TransitionCase {
         guard: TransitionGuard::MethodIs {
             method: symbol(GENESIS_METHOD),
         },
-        constraints: vec![],
+        constraints: genesis_oneshot_teeth(),
     }];
     let mut fully_gated = BTreeMap::new();
 
@@ -441,7 +483,7 @@ pub fn compile_scene(scene: &Scene) -> Result<CompiledStory, CompileError> {
                 }
             }
             let method = choice_method(&passage.name, choice_idx);
-            let (constraints, full) = lower_gate(
+            let (mut constraints, full) = lower_gate(
                 choice.condition.as_ref(),
                 &choice.effects,
                 &var_slots,
@@ -450,6 +492,14 @@ pub fn compile_scene(scene: &Scene) -> Result<CompiledStory, CompileError> {
             if choice.condition.is_some() {
                 fully_gated.insert(method.clone(), full);
             }
+            // FREEZE the genesis-done sentinel on every choice turn: a choice never
+            // touches it (its effects write only compiled var keys / the passage slot),
+            // so `Immutable` admits the unchanged key — but a stapled
+            // `apply_raw("c/…", [SetField(GENESIS_DONE, 0)])` that tried to RESET it (to
+            // re-open the one-shot genesis) is REFUSED even when the choice is ungated
+            // (empty gate teeth). This is what keeps the genesis one-shot from depending
+            // on any per-choice gate.
+            constraints.push(genesis_sentinel_freeze());
             cases.push(TransitionCase {
                 guard: TransitionGuard::MethodIs {
                     method: symbol(&method),
@@ -489,6 +539,9 @@ pub fn compile_scene(scene: &Scene) -> Result<CompiledStory, CompileError> {
             atom: HeapAtom::Immutable,
         });
     }
+    // ...AND freeze the genesis-done sentinel here too, so the heap hatch (a method any
+    // capability-holder can present) cannot RESET it to re-open the one-shot genesis.
+    hatch.push(genesis_sentinel_freeze());
     cases.push(TransitionCase {
         guard: TransitionGuard::MethodIs {
             method: symbol(HEAP_HATCH_METHOD),
@@ -503,6 +556,61 @@ pub fn compile_scene(scene: &Scene) -> Result<CompiledStory, CompileError> {
         passage_index,
         program: CellProgram::Cases(cases),
         fully_gated,
+    })
+}
+
+/// The ONE-SHOT genesis teeth: the `0 → 1` transition on [`GENESIS_DONE_EXT_KEY`].
+/// `Equals{1} ∧ DeltaEquals{1}` holds iff `old == 0 ∧ new == 1` — admissible exactly
+/// once (at deploy, sentinel still field-zero), jointly UNSATISFIABLE for every
+/// post-deploy genesis turn (`old == 1` forces `Δ == 0`, and `Δ == 1` forces `new == 2`).
+/// The genesis case carries NO `Immutable` — it must perform the `0 → 1` write itself.
+fn genesis_oneshot_teeth() -> Vec<StateConstraint> {
+    vec![
+        StateConstraint::HeapField {
+            key: GENESIS_DONE_EXT_KEY,
+            atom: HeapAtom::Equals {
+                value: field_from_u64(1),
+            },
+        },
+        StateConstraint::HeapField {
+            key: GENESIS_DONE_EXT_KEY,
+            atom: HeapAtom::DeltaEquals { d: 1 },
+        },
+    ]
+}
+
+/// Freeze the genesis-done sentinel on a NON-genesis case: `HeapField{Immutable}` admits
+/// the unchanged key (no case but genesis ever writes it) but REFUSES any write —
+/// so no other method can reset the sentinel to re-open the one-shot genesis.
+fn genesis_sentinel_freeze() -> StateConstraint {
+    StateConstraint::HeapField {
+        key: GENESIS_DONE_EXT_KEY,
+        atom: HeapAtom::Immutable,
+    }
+}
+
+/// **Does `program`'s genesis case carry the one-shot sentinel teeth?** — i.e. did it come
+/// from [`compile_scene`], and therefore REQUIRE its genesis turn to write
+/// [`GENESIS_DONE_EXT_KEY`] `0 → 1`?
+///
+/// The sentinel machinery keys off the INSTALLED PROGRAM, never off the method NAME.
+/// Several consumers spell their own dispatch method `"genesis"` while hand-building
+/// their `CompiledStory` and installing their OWN genesis case (`dregg-multiway-tug`'s
+/// board, the dungeon keep, test fixtures) — those programs never mention the sentinel,
+/// so [`crate::WorldCell`] must leave them BYTE-IDENTICAL to before: no sentinel born at
+/// deploy, no sentinel write injected into their genesis turns, no `fields_root` moved.
+/// Keying off the method string would silently write a reserved ext key into every such
+/// world. So: teeth present ⇒ the world maintains the sentinel; teeth absent ⇒ untouched.
+pub(crate) fn program_requires_genesis_sentinel(program: &CellProgram) -> bool {
+    let CellProgram::Cases(cases) = program else {
+        return false;
+    };
+    let genesis = symbol(GENESIS_METHOD);
+    cases.iter().any(|case| {
+        matches!(case.guard, TransitionGuard::MethodIs { method } if method == genesis)
+            && case.constraints.iter().any(|c| {
+                matches!(c, StateConstraint::HeapField { key, .. } if *key == GENESIS_DONE_EXT_KEY)
+            })
     })
 }
 
