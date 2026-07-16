@@ -23,6 +23,7 @@ task D (the embedding) is the one genuinely-hard piece.
    laundering into the socket) — fires when A,B,C,D land. Then re-cut the two-pager.
 
 ## Done-log
+- **task A DONE** (`f71c50f70`): linear-oracle refactor — Move.pair removed (never load-bearing), degree≤D structural, rand_encoding_bound_D added; 5 files green/sorry-free/axiom-clean. B now unblocked.
 - vacuity finding mechanized (`KzgVacuity`, sorry-free, 3-way confirmed vs real ArkLib @ d72f8392)
 - de-vacuation repair (`binding_reduces_to_tSdh` + `repair_survives_attack`) — DONE
 - systemic finding (q-DLOG idiom + AGM stub vacuous too) mechanized
