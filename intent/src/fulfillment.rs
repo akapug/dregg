@@ -25,7 +25,7 @@ use dregg_cell::Ledger;
 use dregg_circuit::BabyBear;
 use dregg_circuit::PredicateType;
 use dregg_circuit::compute_action_binding_narrow;
-use dregg_circuit::multi_step_air::MultiStepWitness;
+use dregg_circuit::multi_step_witness::MultiStepWitness;
 // The retired hand-STARK proof types (`PredicateProof`, `verify_predicate`,
 // `prove_authorization_stark`, `verify_authorization_dsl`, the `stark` codec) are gone.
 // Predicate fulfillment now rides the bridge's descriptor-backed `BridgePredicateProof`
@@ -1633,7 +1633,7 @@ mod tests {
     use super::*;
     use crate::{ActionPattern, CommitmentId, Intent, IntentKind, MatchSpec, VerificationMode};
     use dregg_circuit::derivation_air::{BodyAtomPattern, CircuitRule, DerivationWitness};
-    use dregg_circuit::multi_step_air::{ALLOW_PREDICATE, build_multi_step_witness};
+    use dregg_circuit::multi_step_witness::{ALLOW_PREDICATE, build_multi_step_witness};
     use dregg_circuit::poseidon2::hash_fact;
 
     fn source_token() -> HeldCapability {

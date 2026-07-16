@@ -699,7 +699,7 @@ fn generate_proof(
             // Without revealing T or anything else about the cclerk contents.
             //
             // For now, produce a commitment (the real circuit integration comes
-            // when the multi_step_air is wired up to this matcher).
+            // when the multi_step_witness is wired up to this matcher).
             let mut hasher = blake3::Hasher::new_derive_key("dregg-private-match-v1");
             hasher.update(&intent.id);
             hasher.update(token.token_id.as_bytes());
