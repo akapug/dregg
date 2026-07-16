@@ -58,8 +58,10 @@ end Dlog
 
 section Refutation
 
+-- `PrimeOrderWith G₁ p` is deliberately absent: the t-SDH solution the adversary returns
+-- lives in `G₁` as a bare group element, so nothing in this section needs `G₁` prime-order.
 variable {p : ℕ} [Fact (Nat.Prime p)]
-  {G₁ : Type} [Group G₁] [PrimeOrderWith G₁ p] {g₁ : G₁}
+  {G₁ : Type} [Group G₁] {g₁ : G₁}
   {G₂ : Type} [Group G₂] [PrimeOrderWith G₂ p] {g₂ : G₂}
   [∀ i, SampleableType (unifSpec.Range i)]
 
@@ -109,6 +111,7 @@ theorem not_tSdhAssumption (hg₂ : g₂ ≠ 1) (D : ℕ) (error : ℝ≥0) (her
   rw [tSdhExperiment_tauExtractingAdversary (g₁ := g₁) hg₂ D] at hle
   exact absurd (lt_of_le_of_lt hle herr) (lt_irrefl 1)
 
+omit [PrimeOrderWith G₂ p] in
 /-- **The other regime.** For any error bound `≥ 1`, `tSdhAssumption` holds *trivially*: a
 success probability is always `≤ 1`. Combined with `not_tSdhAssumption` (false for `error < 1`),
 this shows `tSdhAssumption` has NO content at ANY parameter — it is either false or vacuously
@@ -131,6 +134,7 @@ statement about the exhibited adversary and not an artifact of the probability m
 def givingUpAdversary (D : ℕ) : Groups.tSdhAdversary (G₁ := G₁) (G₂ := G₂) (p := p) D :=
   fun _ => pure none
 
+omit [PrimeOrderWith G₂ p] in
 /-- CANARY: giving up loses with probability `1`, so `tSdhExperiment` discriminates. -/
 theorem tSdhExperiment_givingUpAdversary (D : ℕ) :
     Groups.tSdhExperiment (g₁ := g₁) (g₂ := g₂) D
@@ -164,6 +168,7 @@ variable {p : ℕ} [Fact (Nat.Prime p)]
   [Module (ZMod p) (Additive Gₜ)]
   [∀ i, SampleableType (unifSpec.Range i)]
 
+omit [∀ i, SampleableType (unifSpec.Range i)] in
 /-- `binding`'s own pairing hypothesis forces the G₂ generator to be nontrivial,
 because the pairing is `ZMod p`-bilinear and therefore kills the identity. -/
 lemma g₂_ne_one_of_pairing_ne_zero
@@ -200,10 +205,9 @@ section ArsdhRefutation
 
 open CompPoly CompPoly.CPolynomial
 
+-- The combinatorial helpers below are group-free — they need only `ZMod p`. The group and
+-- sampling instances enter with the second `variable` block, just before the adversary.
 variable {p : ℕ} [Fact (Nat.Prime p)]
-  {G₁ : Type} [Group G₁] [PrimeOrderWith G₁ p] {g₁ : G₁}
-  {G₂ : Type} [Group G₂] [PrimeOrderWith G₂ p] {g₂ : G₂}
-  [∀ i, SampleableType (unifSpec.Range i)]
 
 /-- When `p ≥ D + 2` there is a size-`D+1` subset of `ZMod p` avoiding any given `τ`.
 Not an algorithm — `Finset.exists_subset_card_eq` on `univ.erase τ`. -/
@@ -228,6 +232,10 @@ lemma chosenFinset_not_mem (D : ℕ) (hpD : D + 2 ≤ p) (τ : ZMod p) :
     τ ∉ chosenFinset (p := p) D hpD τ :=
   (exists_finset_card_avoiding (p := p) D hpD τ).choose_spec.2
 
+variable {G₁ : Type} [Group G₁] [PrimeOrderWith G₁ p] {g₁ : G₁}
+  {G₂ : Type} [Group G₂] [PrimeOrderWith G₂ p] {g₂ : G₂}
+  [∀ i, SampleableType (unifSpec.Range i)]
+
 /-- The winning ARSDH adversary. As with `t`-SDH it recovers `τ` from `g₂ ^ τ` in the verifier
 leg of the SRS by `Classical.choice`, then returns the ARSDH solution: a size-`D+1` set `S`
 avoiding `τ`, the nontrivial element `g₁`, and `g₁ ^ (1 / Z_S(τ))`. ZERO oracle queries. -/
@@ -240,6 +248,7 @@ noncomputable def arsdhExtractingAdversary (hg₂ : g₂ ≠ 1) (D : ℕ) (hpD :
         g₁ ^ (1 / (∏ s ∈ chosenFinset (p := p) D hpD (dlogOf (p := p) hg₂ srs.2[1]),
           (X - C s : CPolynomial (ZMod p))).eval (dlogOf (p := p) hg₂ srs.2[1])).val))
 
+omit [PrimeOrderWith G₁ p] in
 /-- The ARSDH game with the exhibited adversary collapses to a single `map` over the trapdoor
 sampler: the adversary has already recovered `τ`, so `S`, `h₁`, `h₂` are functions of `τ`. -/
 lemma arsdh_game_run_eq (hg₂ : g₂ ≠ 1) (D : ℕ) (hpD : D + 2 ≤ p) :
@@ -283,6 +292,7 @@ theorem not_arsdhAssumption (hg₁ : g₁ ≠ 1) (hg₂ : g₂ ≠ 1) (D : ℕ) 
   rw [arsdhExperiment_arsdhExtractingAdversary (g₁ := g₁) hg₁ hg₂ D hpD] at hle
   exact absurd (lt_of_le_of_lt hle herr) (lt_irrefl 1)
 
+omit [PrimeOrderWith G₂ p] in
 /-- **The other regime, for ARSDH.** For any error bound `≥ 1`, `arsdhAssumption` holds
 trivially. So — exactly as with `t`-SDH — `arsdhAssumption` has NO content at ANY parameter. -/
 theorem arsdhAssumption_trivial_of_one_le (D : ℕ) (error : ℝ≥0)
@@ -299,6 +309,7 @@ artifact of the machinery. -/
 def arsdhGivingUpAdversary (D : ℕ) : Groups.arsdhAdversary (G₁ := G₁) (G₂ := G₂) (p := p) D :=
   fun _ => pure none
 
+omit [PrimeOrderWith G₂ p] in
 theorem arsdhExperiment_givingUpAdversary (D : ℕ) :
     Groups.arsdhExperiment (g₁ := g₁) (g₂ := g₂) D
       (arsdhGivingUpAdversary (G₁ := G₁) (G₂ := G₂) (p := p) D) = 0 := by

@@ -68,8 +68,10 @@ end Dlog
 
 section Refutation
 
+-- `PrimeOrderWith G₁ p` is deliberately absent: the t-SDH solution lives in `G₁` as a bare
+-- group element, so nothing in this section needs `G₁` prime-order.
 variable {p : ℕ} [Fact (Nat.Prime p)]
-  {G₁ : Type} [Group G₁] [PrimeOrderWith G₁ p] {g₁ : G₁}
+  {G₁ : Type} [Group G₁] {g₁ : G₁}
   {G₂ : Type} [Group G₂] [PrimeOrderWith G₂ p] {g₂ : G₂}
   [∀ i, SampleableType (unifSpec.Range i)]
 
@@ -117,7 +119,7 @@ end Refutation
 section RepairSurvives
 
 variable {p : ℕ} [Fact (Nat.Prime p)]
-  {G₁ : Type} [Group G₁] [PrimeOrderWith G₁ p] [DecidableEq G₁] {g₁ : G₁}
+  {G₁ : Type} [Group G₁] [PrimeOrderWith G₁ p] {g₁ : G₁}
   {G₂ : Type} [Group G₂] [PrimeOrderWith G₂ p] {g₂ : G₂}
   {Gₜ : Type} [Group Gₜ] [PrimeOrderWith Gₜ p] [DecidableEq Gₜ]
   [Module (ZMod p) (Additive G₁)] [Module (ZMod p) (Additive G₂)]
@@ -136,6 +138,7 @@ local instance bindingOracleInterface : OracleInterface (Fin (n + 1) → ZMod p)
   toOC.spec := ZMod p →ₒ ZMod p
   toOC.impl z := do return (CPolynomial.ofFn (← read)).eval z
 
+omit [DecidableEq Gₜ] in
 /-- `binding`'s pairing hypothesis forces `g₂ ≠ 1` (bilinear pairing kills the identity). -/
 lemma g₂_ne_one_of_pairing_ne_zero
     (pairing : (Additive G₁) →ₗ[ZMod p] (Additive G₂) →ₗ[ZMod p] (Additive Gₜ))
