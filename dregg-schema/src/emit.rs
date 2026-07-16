@@ -11,13 +11,18 @@ use dregg_app_framework::{
     CellProgram, StateConstraint, TransitionCase, TransitionGuard, field_from_u64, symbol,
 };
 use dregg_cell::program::HeapAtom;
+use spween_dregg::GENESIS_DONE_EXT_KEY;
 
 use crate::layout::{Assignment, CheckedLayout, Slot};
 use crate::schema::Archetype;
 
-/// The dispatch method a seeding (genesis) turn presents. Its case is permissive so an
-/// author can seed the initial state (owner key, starting hp) without the move teeth
-/// (WriteOnce would otherwise reject setting an unset identity twice, etc.).
+/// The dispatch method a seeding (genesis) turn presents. Seeding needs its OWN case
+/// (the executor's `Cases` dispatch is method-default-deny) that does NOT carry the move
+/// teeth (`WriteOnce` would reject seeding an identity, a `Monotonic` resource cannot be
+/// set from an absent baseline, etc.). But an EMPTY genesis case is a universal
+/// write-hatch: `apply_raw("genesis", [SetField(slot, V)])` POST-DEPLOY re-hits the
+/// permissive case and commits ARBITRARY writes to ANY slot, routing around every move
+/// tooth. So the genesis case is instead made ONE-SHOT — see [`genesis_oneshot_teeth`].
 pub const GENESIS_METHOD: &str = "genesis";
 
 /// The dispatch method a gameplay move presents. Its case carries every component's
@@ -118,20 +123,46 @@ pub fn teeth_for(
     })
 }
 
-/// Lower a checked layout to a `CellProgram::Cases`: a permissive genesis case + a
-/// `move` case whose constraints are the conjunction of every component's teeth.
+/// Lower a checked layout to a `CellProgram::Cases`: a ONE-SHOT genesis case + a `move`
+/// case whose constraints are the conjunction of every component's teeth, plus the
+/// genesis-sentinel freeze.
+///
+/// ## The genesis write-hatch, closed at the root (ported from `spween-dregg`)
+///
+/// The genesis case cannot carry the move teeth (seeding an identity/resource from a
+/// blank baseline must be free), so before this it carried EMPTY constraints — and
+/// `WorldCell::apply_raw` re-dispatches ANY method with no one-shot guard. A POST-DEPLOY
+/// `seed()` / `apply_raw("genesis", [SetField(slot, V)])` re-hit the permissive case and
+/// committed arbitrary writes to ANY slot (e.g. `hp` past its `Stat` cap), routing around
+/// every `move` tooth — a universal write-hatch on every deployed schema.
+///
+/// The fix makes the genesis case a `0 → 1` transition on [`GENESIS_DONE_EXT_KEY`]
+/// (`Equals{1} ∧ DeltaEquals{1}`): admissible EXACTLY once (at the first seed, sentinel
+/// still field-zero), jointly UNSATISFIABLE for every later genesis turn regardless of
+/// which slot a stapled `SetField` targets — no per-slot dependence. The `move` case
+/// freezes the sentinel (`Immutable`) so no move can reset it to re-open genesis.
+///
+/// This reuses spween's `WorldCell` machinery verbatim: `program_requires_genesis_sentinel`
+/// keys off the INSTALLED PROGRAM (a genesis case carrying a `HeapField` over
+/// [`GENESIS_DONE_EXT_KEY`]), so `deploy_compiled` births the sentinel at field-zero and
+/// `commit` injects the `0 → 1` write on the `"genesis"` method automatically — no
+/// change needed on the world side, because a schema game IS a `spween_dregg::WorldCell`.
 pub fn emit_program(layout: &CheckedLayout) -> Result<CellProgram, EmitError> {
     let mut move_teeth: Vec<StateConstraint> = Vec::new();
     for a in layout.assignments() {
         move_teeth.extend(teeth_for(a, layout)?);
     }
+    // FREEZE the genesis-done sentinel on the move case: a move never touches it, so
+    // `Immutable` admits the unchanged key — but a stapled `move` that tried to RESET
+    // the sentinel to re-open the one-shot genesis is REFUSED.
+    move_teeth.push(genesis_sentinel_freeze());
 
     let cases = vec![
         TransitionCase {
             guard: TransitionGuard::MethodIs {
                 method: symbol(GENESIS_METHOD),
             },
-            constraints: vec![],
+            constraints: genesis_oneshot_teeth(),
         },
         TransitionCase {
             guard: TransitionGuard::MethodIs {
@@ -141,4 +172,35 @@ pub fn emit_program(layout: &CheckedLayout) -> Result<CellProgram, EmitError> {
         },
     ];
     Ok(CellProgram::Cases(cases))
+}
+
+/// The ONE-SHOT genesis teeth: the `0 → 1` transition on [`GENESIS_DONE_EXT_KEY`].
+/// `Equals{1} ∧ DeltaEquals{1}` holds iff `old == 0 ∧ new == 1` — admissible exactly
+/// once (at the first seed, sentinel still field-zero), jointly UNSATISFIABLE for every
+/// post-deploy genesis turn (`old == 1` forces `Δ == 0 ≠ 1`, and `Δ == 1` forces
+/// `new == 2 ≠ 1`). The genesis case carries NO `Immutable` — it must perform the
+/// `0 → 1` write itself (`WorldCell::commit` injects it on the `"genesis"` method).
+pub fn genesis_oneshot_teeth() -> Vec<StateConstraint> {
+    vec![
+        StateConstraint::HeapField {
+            key: GENESIS_DONE_EXT_KEY,
+            atom: HeapAtom::Equals {
+                value: field_from_u64(1),
+            },
+        },
+        StateConstraint::HeapField {
+            key: GENESIS_DONE_EXT_KEY,
+            atom: HeapAtom::DeltaEquals { d: 1 },
+        },
+    ]
+}
+
+/// Freeze the genesis-done sentinel on a NON-genesis case: `HeapField{Immutable}` admits
+/// the unchanged key (no case but genesis ever writes it) but REFUSES any write — so no
+/// other method can reset the sentinel to re-open the one-shot genesis.
+pub fn genesis_sentinel_freeze() -> StateConstraint {
+    StateConstraint::HeapField {
+        key: GENESIS_DONE_EXT_KEY,
+        atom: HeapAtom::Immutable,
+    }
 }

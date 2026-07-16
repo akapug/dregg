@@ -74,34 +74,8 @@ impl SchemaGame {
     /// re-deploy reproduces the same cell identity and committed state hashes (the
     /// replay-verification property).
     pub fn deploy(schema: Schema, seed: u8) -> Result<Self, GameError> {
-        let raw = allocate(&schema)?;
-        // The Legal check is the gate: an ill-aligned layout is unconstructable here.
-        let layout = CheckedLayout::new(raw).map_err(|e| {
-            // Surface a Legal failure honestly (the allocator should never produce one).
-            GameError::Layout(LayoutError::DuplicateComponent {
-                name: format!("illegal-layout: {e}"),
-            })
-        })?;
-        let program = emit_program(&layout)?;
-
-        // Register components become the `CompiledStory` var_slots (so the WorldCell's
-        // own typed accessors resolve them too); collections read through the heap.
-        let mut var_slots = BTreeMap::new();
-        for a in layout.assignments() {
-            if let Slot::Register(r) = a.slot {
-                var_slots.insert(a.component.clone(), r as usize);
-            }
-        }
-
-        let story = CompiledStory {
-            scene_id: schema.name.clone(),
-            var_slots,
-            has_slots: BTreeMap::new(),
-            passage_index: BTreeMap::new(),
-            program,
-            fully_gated: BTreeMap::new(),
-        };
-
+        let layout = check_layout(&schema)?;
+        let story = compiled_story(&schema, &layout)?;
         let world = WorldCell::deploy_compiled(Arc::new(story), seed).map_err(GameError::World)?;
 
         Ok(SchemaGame {
@@ -164,6 +138,45 @@ impl SchemaGame {
     pub fn snapshot(&self) -> Vec<u64> {
         self.world.snapshot()
     }
+}
+
+/// Allocate + Legal-check a schema — the gate every deploy passes.
+pub fn check_layout(schema: &Schema) -> Result<CheckedLayout, GameError> {
+    let raw = allocate(schema)?;
+    // The Legal check is the gate: an ill-aligned layout is unconstructable here.
+    CheckedLayout::new(raw).map_err(|e| {
+        // Surface a Legal failure honestly (the allocator should never produce one).
+        GameError::Layout(LayoutError::DuplicateComponent {
+            name: format!("illegal-layout: {e}"),
+        })
+    })
+}
+
+/// **Build the deployable [`CompiledStory`] from a checked layout** — the emitted
+/// one-shot-genesis + move program plus the register→var-slot map. Split out of
+/// [`SchemaGame::deploy`] so a caller (the genesis-one-shot CANARY) can deploy a variant
+/// program (e.g. genesis teeth emptied) on a raw `spween_dregg::WorldCell` and prove the
+/// emitted guard is load-bearing.
+pub fn compiled_story(schema: &Schema, layout: &CheckedLayout) -> Result<CompiledStory, GameError> {
+    let program = emit_program(layout)?;
+
+    // Register components become the `CompiledStory` var_slots (so the WorldCell's own
+    // typed accessors resolve them too); collections read through the heap.
+    let mut var_slots = BTreeMap::new();
+    for a in layout.assignments() {
+        if let Slot::Register(r) = a.slot {
+            var_slots.insert(a.component.clone(), r as usize);
+        }
+    }
+
+    Ok(CompiledStory {
+        scene_id: schema.name.clone(),
+        var_slots,
+        has_slots: BTreeMap::new(),
+        passage_index: BTreeMap::new(),
+        program,
+        fully_gated: BTreeMap::new(),
+    })
 }
 
 /// A staged turn: a set of typed component writes committed as ONE cap-bounded turn.

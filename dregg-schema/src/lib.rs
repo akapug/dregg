@@ -45,8 +45,11 @@ pub mod game;
 pub mod layout;
 pub mod schema;
 
-pub use emit::{EmitError, GENESIS_METHOD, MOVE_METHOD, emit_program, teeth_for};
-pub use game::{GameError, SchemaGame, Turn};
+pub use emit::{
+    EmitError, GENESIS_METHOD, MOVE_METHOD, emit_program, genesis_oneshot_teeth,
+    genesis_sentinel_freeze, teeth_for,
+};
+pub use game::{GameError, SchemaGame, Turn, check_layout, compiled_story};
 pub use layout::{
     Assignment, CheckedLayout, Layout, LayoutError, LegalError, STATE_SLOTS, Slot, allocate,
     allocate_checked,
