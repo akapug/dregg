@@ -17,7 +17,7 @@ coordinates FACTORISES as the product of the marginals (the independent-uniform 
 `winProb (fun p => f p.1 && g p.2) = winProb f * winProb g`. So `hybridForgerAdv = classicalForgerAdv ·
 pqForgerAdv` (an EQUALITY, `hybridForgerAdv_eq_mul`), which — each marginal being a probability `≤ 1` —
 dominates BOTH marginals (`hybridForgerAdv_le_classical`/`_le_pq`). `hybrid_forger_negl_under_floors_indep`
-re-proves `Negl hybridForgerAdv` under `DLHardQuant ∨ MSISHardQuant` with the two legs' challenges genuinely
+re-proves `Negl hybridForgerAdv` under `DLHardQuantShape ∨ MSISHardQuantShape` with the two legs' challenges genuinely
 INDEPENDENT — the shared-challenge assumption is gone. Teeth: one secure component ⇒ `hybridForgerAdv ≡ 0`;
 BOTH broken (each `2/5`) ⇒ `hybridForgerAdv ≡ 4/25 = (2/5)·(2/5)` (the independent PRODUCT, not `2/5`) — NOT
 Negl, so the "either" is load-bearing AND the factorisation is exhibited numerically.
@@ -234,7 +234,7 @@ theorem hybridForgerAdv_le_pq (H : IndepHybridForkingFamily) (l : ℕ) :
 
 end IndepHybridForkingFamily
 
-/-- **THE INDEPENDENT-CHALLENGE HYBRID COMBINER — `Negl hybridForgerAdv` under `DLHardQuant ∨ MSISHardQuant`.**
+/-- **THE INDEPENDENT-CHALLENGE HYBRID COMBINER — `Negl hybridForgerAdv` under `DLHardQuantShape ∨ MSISHardQuantShape`.**
 Identical guarantee to `HybridThresholdQuant.hybrid_forger_negl_under_floors`, but with the two components'
 challenge spaces (and prefix worlds) genuinely INDEPENDENT — the shared-challenge modelling assumption is
 removed. Case-split the disjunction: whichever floor holds discharges its component's forger advantage, and the
@@ -245,7 +245,7 @@ theorem hybrid_forger_negl_under_floors_indep (H : IndepHybridForkingFamily)
     (dlSolverOf : Sc → Ensemble) (sc : Sc) (hsc : dlSolverOf sc = (H.classical).solverAdv)
     (msisSolverOf : Sp → Ensemble) (sp : Sp) (hsp : msisSolverOf sp = (H.pq).solverAdv)
     (hCnegC : Negl (H.classical).invChal) (hCnegP : Negl (H.pq).invChal)
-    (hfloor : DLHardQuant dlSolverOf ∨ MSISHardQuant msisSolverOf) :
+    (hfloor : DLHardQuantShape dlSolverOf ∨ MSISHardQuantShape msisSolverOf) :
     Negl H.hybridForgerAdv := by
   rcases hfloor with hdl | hmsis
   · have hc : Negl (H.classical).forgerAdv :=
@@ -333,7 +333,7 @@ theorem bothBrokenHybridI_forgerAdv : bothBrokenHybridI.hybridForgerAdv = fun _ 
   rw [hc, hp]; norm_num
 
 /-- **THE LOAD-BEARING TOOTH — both broken ⇒ NON-negligible independent-hybrid advantage.** `4/25` is a
-positive constant, NOT negligible; so `DLHardQuant ∨ MSISHardQuant` is load-bearing even with independent
+positive constant, NOT negligible; so `DLHardQuantShape ∨ MSISHardQuantShape` is load-bearing even with independent
 challenges. -/
 theorem bothBrokenHybridI_not_negl : ¬ Negl bothBrokenHybridI.hybridForgerAdv := by
   rw [bothBrokenHybridI_forgerAdv]

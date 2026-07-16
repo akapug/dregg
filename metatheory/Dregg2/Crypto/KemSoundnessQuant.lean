@@ -5,13 +5,13 @@ The 07-13 floor-fix proved the Boolean lattice floors VACUOUS: `Lattice.MLWESear
 EXISTENCE-refutation (`¬ ∃ short (s,e), t = A·s + e`), FALSE at every genuine public key — the witnessing
 short `(s,e)` IS the secret key (`CryptoFloorTeeth.not_mlweSearchHard_of_sample`). Every theorem conditioned
 on it is discharged by a vacuous hypothesis. The PROPER floor is the adversary-indexed
-`ProbCrypto.MLWEHardQuant (adv : S → Ensemble) := ∀ s, Negl (adv s)` — a real λ-decaying advantage ensemble,
+`ProbCrypto.MLWEHardQuantShape (adv : S → Ensemble) := ∀ s, Negl (adv s)` — a real λ-decaying advantage ensemble,
 satisfiable-but-not-provable (a `1/2^λ` guessing family satisfies it, a constant `2/5` refutes it).
 
 The SIGNATURE side of the sweep is re-grounded (`CryptoFloorTeeth.dregg_pq_game_forger_negl_under_comp_floor`,
 `ProtocolSoundnessQuant`'s DL/MSIS/HashCR anchors, `ModelBridge`). The KEM / decisional-MLWE side — the
 DEPLOYED `dregg-kem` X-Wing hybrid and the ML-KEM IND-CCA reduction it rests on — was NOT: no consumer of
-`MLWEHardQuant` existed, even though `Dregg2.Tactics.ThreadAdvantageBound` wired the MLWE floor leaf. This
+`MLWEHardQuantShape` existed, even though `Dregg2.Tactics.ThreadAdvantageBound` wired the MLWE floor leaf. This
 module closes that gap: the advantage-bounded siblings of the Boolean `MLWESearchHard` consumers in
 `MlKemIndCca` / `Fips203Kem` / `DreggKemRefinement`, discharged by `thread_advantage_bound`.
 
@@ -22,7 +22,7 @@ Each `MLWESearchHard`-conditioned reduction becomes an ADVANTAGE ensemble over t
   * **key recovery / IND-CPA** (`MlKemIndCca.pke_key_recovery_reduces_to_mlwe`,
     `MlKemIndCca.ind_cpa_reduces_to_mlwe`): a total-break / distinguishing adversary IS an MLWE
     search / decisional-MLWE solver, so its advantage IS `mlweSolverOf s` — a BARE floor leaf,
-    `Negl (mlweSolverOf s)` under `MLWEHardQuant mlweSolverOf` (`mlwe_primitive_advantage_negl`).
+    `Negl (mlweSolverOf s)` under `MLWEHardQuantShape mlweSolverOf` (`mlwe_primitive_advantage_negl`).
   * **ML-KEM IND-CCA in the QROM** (`MlKemIndCca.ml_kem_ind_cca_reduces_to_mlwe`): the FO transform's
     IND-CCA advantage is the IND-CPA (decisional-MLWE) leg PLUS the `H(m)` random-oracle guessing term. Here
     the opaque `QROMInjective` idealisation becomes an EXPLICIT `1/2^λ` decay leg, and the composite
@@ -30,8 +30,8 @@ Each `MLWESearchHard`-conditioned reduction becomes an ADVANTAGE ensemble over t
     QROM leg, the floor leaf on the lattice leg) — `ml_kem_ind_cca_advantage_negl`.
   * **the DEPLOYED X-Wing hybrid** (`DreggKemRefinement.dregg_kem_ind_cca_if_either`,
     `MlKemIndCca.hybrid_kem_ind_cca_grounded_in_mlwe`): IND-CCA through EITHER channel. Its PQ leg is the
-    ML-KEM composite under `MLWEHardQuant` (`dregg_kem_pq_leg_advantage_negl`); its classical (X25519) leg is
-    the same composite under `DLHardQuant` (`dregg_kem_classical_leg_advantage_negl`). The dual-PRF `KDF` is an
+    ML-KEM composite under `MLWEHardQuantShape` (`dregg_kem_pq_leg_advantage_negl`); its classical (X25519) leg is
+    the same composite under `DLHardQuantShape` (`dregg_kem_classical_leg_advantage_negl`). The dual-PRF `KDF` is an
     unconditional structural fact (`DreggKemRefinement.DreggKemKdfIsDualPRF`), so it adds no crypto term — the
     channel advantage IS the underlying KEM's IND-CCA advantage, exactly as each Boolean leg shares
     `hybrid_kem_ind_cca_if_either`.
@@ -40,7 +40,7 @@ Each `MLWESearchHard`-conditioned reduction becomes an ADVANTAGE ensemble over t
 
 The QROM leg is a GENUINE additive term with real content: `kem_ind_cca_advantage_load_bearing` shows the
 `1/2^λ` guessing term does NOT rescue a broken lattice floor — with `mlweSolverOf s` a constant `2/5`, the
-composite `2/5 + 1/2^λ` is bounded below by `2/5` and is NOT negligible. So the `MLWEHardQuant` hypothesis is
+composite `2/5 + 1/2^λ` is bounded below by `2/5` and is NOT negligible. So the `MLWEHardQuantShape` hypothesis is
 load-bearing THROUGH the composite. The floor itself is a genuine assumption: `mlwe_floor_load_bearing`
 refutes it with a constant-`1` solver (`not_negl_one`), `mlwe_floor_satisfiable` satisfies it with a decaying
 `1/2^λ` (`negl_two_pow`). And the tactic is a real discharger: `fail_if_success` witnesses it REFUSING the
@@ -62,17 +62,17 @@ set_option autoImplicit false
 `MlKemIndCca.pke_key_recovery_reduces_to_mlwe` reads a recovered short secret key BACK as an MLWE preimage of
 the public key, and `MlKemIndCca.ind_cpa_reduces_to_mlwe` reads an IND-CPA distinguisher BACK as a
 decisional-MLWE distinguisher on the masking sample. In both, the KEM adversary IS an MLWE solver of the SAME
-advantage — so the concrete-security restatement is a BARE floor leaf: under the proper `MLWEHardQuant` floor
+advantage — so the concrete-security restatement is a BARE floor leaf: under the proper `MLWEHardQuantShape` floor
 the adversary's advantage is negligible. -/
 
 /-- **THE MLWE PRIMITIVE LEAF (KEM key-recovery / IND-CPA).** The advantage-bounded sibling of
 `MlKemIndCca.pke_key_recovery_reduces_to_mlwe` and `MlKemIndCca.ind_cpa_reduces_to_mlwe`: a KEM total-break
 (search-MLWE) or IND-CPA (decisional-MLWE) adversary at solver index `s` has negligible advantage under the
-proper `MLWEHardQuant mlweSolverOf` floor — the recovered key / distinguisher IS an MLWE solver, so its
-advantage is exactly the floor leaf `mlweSolverOf s`. Proof: `thread_advantage_bound` (the `MLWEHardQuant`
+proper `MLWEHardQuantShape mlweSolverOf` floor — the recovered key / distinguisher IS an MLWE solver, so its
+advantage is exactly the floor leaf `mlweSolverOf s`. Proof: `thread_advantage_bound` (the `MLWEHardQuantShape`
 leaf). Replaces the vacuous existence-refutation `Lattice.MLWESearchHard`. -/
 theorem mlwe_primitive_advantage_negl {S : Type*} (mlweSolverOf : S → Ensemble) (s : S)
-    (hfloor : MLWEHardQuant mlweSolverOf) : Negl (mlweSolverOf s) := by
+    (hfloor : MLWEHardQuantShape mlweSolverOf) : Negl (mlweSolverOf s) := by
   thread_advantage_bound
 
 /-! ## §2 — The FO/QROM composite: ML-KEM IND-CCA reduces to decisional-MLWE.
@@ -97,13 +97,13 @@ theorem kemIndCca_negl_of_cpa_negl (cpaAdv : Ensemble) (hcpa : Negl cpaAdv) :
   thread_advantage_bound
 
 /-- **ML-KEM IND-CCA, RE-GROUNDED** (the advantage-bounded sibling of
-`MlKemIndCca.ml_kem_ind_cca_reduces_to_mlwe`). Under the proper `MLWEHardQuant mlweSolverOf` floor, the FO/QROM
+`MlKemIndCca.ml_kem_ind_cca_reduces_to_mlwe`). Under the proper `MLWEHardQuantShape mlweSolverOf` floor, the FO/QROM
 ML-KEM IND-CCA advantage `mlweSolverOf s + 1/2^λ` is negligible — the lattice leg through the floor leaf, the
 QROM leg through `negl_two_pow`. "ML-KEM IND-CCA reduces to decisional Module-LWE in the QROM" on the genuine
 decaying-advantage floor, replacing the vacuous Boolean `MLWESearchHard` + opaque `QROMInjective`. Proof:
-`thread_advantage_bound` (`negl_add`; the `MLWEHardQuant` leaf; `negl_two_pow`). -/
+`thread_advantage_bound` (`negl_add`; the `MLWEHardQuantShape` leaf; `negl_two_pow`). -/
 theorem ml_kem_ind_cca_advantage_negl {S : Type*} (mlweSolverOf : S → Ensemble) (s : S)
-    (hfloor : MLWEHardQuant mlweSolverOf) : Negl (kemIndCcaAdv (mlweSolverOf s)) := by
+    (hfloor : MLWEHardQuantShape mlweSolverOf) : Negl (kemIndCcaAdv (mlweSolverOf s)) := by
   unfold kemIndCcaAdv
   thread_advantage_bound
 
@@ -112,47 +112,47 @@ theorem ml_kem_ind_cca_advantage_negl {S : Type*} (mlweSolverOf : S → Ensemble
 `DreggKemRefinement.dregg_kem_ind_cca_if_either` is the SHIPPED hybrid KEM: under the HKDF dual-PRF, the
 session key is IND-CCA through whichever channel is secure. The dual-PRF `combine` is an unconditional
 structural fact (`DreggKemKdfIsDualPRF`), so the channel advantage IS the underlying KEM's IND-CCA advantage.
-Each channel gets its own floor: the PQ (ML-KEM) leg on `MLWEHardQuant`, the classical (X25519) leg on
-`DLHardQuant`. These are the concrete-security shadows of `hybrid_secure_under_msis_alone` /
+Each channel gets its own floor: the PQ (ML-KEM) leg on `MLWEHardQuantShape`, the classical (X25519) leg on
+`DLHardQuantShape`. These are the concrete-security shadows of `hybrid_secure_under_msis_alone` /
 `hybrid_secure_under_dl_alone` for the KEM, mirroring the signature side. -/
 
 /-- **THE DEPLOYED `dregg-kem` PQ CHANNEL, RE-GROUNDED.** The PQ (ML-KEM) leg of
 `DreggKemRefinement.dregg_kem_ind_cca_if_either` — its session-key advantage through the ML-KEM channel is the
-FO/QROM IND-CCA composite, negligible under the proper `MLWEHardQuant` floor. No classical model needed: the
+FO/QROM IND-CCA composite, negligible under the proper `MLWEHardQuantShape` floor. No classical model needed: the
 deployed post-quantum KEM claim standing on the lattice floor alone. -/
 theorem dregg_kem_pq_leg_advantage_negl {S : Type*} (mlweSolverOf : S → Ensemble) (s : S)
-    (hfloor : MLWEHardQuant mlweSolverOf) : Negl (kemIndCcaAdv (mlweSolverOf s)) :=
+    (hfloor : MLWEHardQuantShape mlweSolverOf) : Negl (kemIndCcaAdv (mlweSolverOf s)) :=
   ml_kem_ind_cca_advantage_negl mlweSolverOf s hfloor
 
 /-- **THE DEPLOYED `dregg-kem` CLASSICAL CHANNEL, RE-GROUNDED.** The classical (X25519) leg of
 `DreggKemRefinement.dregg_kem_ind_cca_if_either` — its session-key advantage through the X25519 channel is the
-same FO/QROM IND-CCA composite, negligible under the proper `DLHardQuant` floor (the field-scalar discrete-log
+same FO/QROM IND-CCA composite, negligible under the proper `DLHardQuantShape` floor (the field-scalar discrete-log
 assumption). The symmetric partner of the PQ leg; together they are "hybrid KEM, secure if EITHER channel
-is". Proof: `thread_advantage_bound` (`negl_add`; the `DLHardQuant` leaf; `negl_two_pow`). -/
+is". Proof: `thread_advantage_bound` (`negl_add`; the `DLHardQuantShape` leaf; `negl_two_pow`). -/
 theorem dregg_kem_classical_leg_advantage_negl {S : Type*} (dlSolverOf : S → Ensemble) (s : S)
-    (hfloor : DLHardQuant dlSolverOf) : Negl (kemIndCcaAdv (dlSolverOf s)) := by
+    (hfloor : DLHardQuantShape dlSolverOf) : Negl (kemIndCcaAdv (dlSolverOf s)) := by
   unfold kemIndCcaAdv
   thread_advantage_bound
 
 /-! ## §4 — Non-vacuity: the floor is genuine and load-bearing THROUGH the composite. -/
 
 /-- **THE FLOOR IS SATISFIABLE (non-vacuous).** A minimal `1/2^λ`-decaying MLWE solver family satisfies
-`MLWEHardQuant` — the floor holds for reasons of RATE, not because the advantage is trivially `0`
+`MLWEHardQuantShape` — the floor holds for reasons of RATE, not because the advantage is trivially `0`
 (`negl_two_pow`). -/
 theorem mlwe_floor_satisfiable :
-    MLWEHardQuant (fun _ : Unit => (fun l => 1 / (2 : ℝ) ^ l : Ensemble)) :=
+    MLWEHardQuantShape (fun _ : Unit => (fun l => 1 / (2 : ℝ) ^ l : Ensemble)) :=
   fun _ => negl_two_pow
 
-/-- **THE FLOOR IS REFUTABLE (non-trivial).** A constant-`1` MLWE solver refutes `MLWEHardQuant`
+/-- **THE FLOOR IS REFUTABLE (non-trivial).** A constant-`1` MLWE solver refutes `MLWEHardQuantShape`
 (`not_negl_one`) — so the floor is a GENUINE assumption, satisfiable AND refutable, not a theorem. -/
 theorem mlwe_floor_load_bearing :
-    ¬ MLWEHardQuant (fun _ : Unit => (fun _ => (1 : ℝ) : Ensemble)) :=
+    ¬ MLWEHardQuantShape (fun _ : Unit => (fun _ => (1 : ℝ) : Ensemble)) :=
   fun h => not_negl_one (h ())
 
 /-- **THE QROM LEG DOES NOT RESCUE A BROKEN LATTICE FLOOR — the composite is LOAD-BEARING.** With the IND-CPA
 (decisional-MLWE) advantage a constant `2/5` (a broken lattice floor), the ML-KEM IND-CCA composite
 `2/5 + 1/2^λ` is bounded below by `2/5` and is NOT negligible — the additive `1/2^λ` QROM term cannot vanish
-it. So `ml_kem_ind_cca_advantage_negl`'s `MLWEHardQuant` hypothesis is genuinely consumed: strip the lattice
+it. So `ml_kem_ind_cca_advantage_negl`'s `MLWEHardQuantShape` hypothesis is genuinely consumed: strip the lattice
 floor and the IND-CCA advantage stays constant. This is the anti-laundering tooth — the composite is a real
 advantage that CAN be non-negligible, not a relabelled floor leaf. -/
 theorem kem_ind_cca_advantage_load_bearing :

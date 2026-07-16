@@ -84,7 +84,7 @@ open Dregg2.Crypto.HermineHintMLWE
 open Dregg2.Crypto.HermineTSUF
 open Dregg2.Crypto.AdaptiveTSUF
 open Dregg2.Crypto.ConcreteSecurity (Negl Ensemble)
-open Dregg2.Crypto.ProbCrypto (DecisionMLWEHardQuant)
+open Dregg2.Crypto.ProbCrypto (DecisionMLWEHardQuantShape)
 
 /-! ## PART 1 — the deployed Hermine threshold-signer API surface, as a Lean contract.
 
@@ -271,7 +271,7 @@ theorem threshold_signer_adaptive_ts_uf_lossfree (api : ThresholdSignerApi Rq M 
 Specializes `AdaptiveTSUF.adaptive_transcript_nonleaking_under_decision_floor` to the deployed API's public
 matrix `api.A`. The Round-1/Round-2 masking of the deployed Raccoon signer (`sample_wide_mask`, the
 uniform-smudging that hides each share on adaptive corruption) is a DECISIONAL guarantee: the sampled masked
-transcript is INDISTINGUISHABLE from real. Under the proper decisional floor `DecisionMLWEHardQuant advSim`
+transcript is INDISTINGUISHABLE from real. Under the proper decisional floor `DecisionMLWEHardQuantShape advSim`
 (the transcript distinguisher's LWE-vs-uniform advantage ENSEMBLE negligible), the deployed signer's on-demand
 share reveal is NON-LEAKING: the simulated transcript `simTranscriptCommit` is (a) algebraically
 erasure-consistent with the ENTIRE realized corrupt set — PROVED — AND (b) computationally indistinguishable
@@ -281,7 +281,7 @@ forgery/secret-recovery leg remains SEARCH (handled by the search-quant threshol
 theorem threshold_signer_transcript_nonleaking (api : ThresholdSignerApi Rq M N Idx Cm)
     {Msg : Type*} {Fld : Type*} [DecidableEq Fld] (trace : List (AdaptiveStep Fld Msg))
     (memberKey : Fld → N) (chal : Fld → Rq) (resp : Fld → M)
-    {S : Type*} (advSim : S → Ensemble) (s : S) (hfloor : DecisionMLWEHardQuant advSim) :
+    {S : Type*} (advSim : S → Ensemble) (s : S) (hfloor : DecisionMLWEHardQuantShape advSim) :
     AdaptiveErasure api.A trace memberKey chal resp (simTranscriptCommit api.A memberKey chal resp)
     ∧ Negl (advSim s) :=
   adaptive_transcript_nonleaking_under_decision_floor api.A trace memberKey chal resp advSim s hfloor
@@ -466,7 +466,7 @@ theorem deployed_transcript_nonleaking_fires :
 (advantage `1`) refutes it, so the deployed masking indistinguishability is a genuine decisional hardness
 assumption. -/
 theorem deployed_decision_floor_load_bearing :
-    ¬ DecisionMLWEHardQuant (fun _ : Unit => ProbCrypto.perfectDist.adv) :=
+    ¬ DecisionMLWEHardQuantShape (fun _ : Unit => ProbCrypto.perfectDist.adv) :=
   ProbCrypto.decisionMLWEHardQuant_perfect_refuted
 
 end Teeth

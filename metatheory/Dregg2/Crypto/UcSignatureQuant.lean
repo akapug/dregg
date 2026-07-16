@@ -13,7 +13,7 @@ but its two INPUTS were carried as ASSUMED fields of `ComputationalUC`:
 
 `ProbCrypto.lean` (Track B step 1) now provides the missing substrate — a genuine finite counting-probability
 `winProb`, the `ForkingFamily` with its PROVED forking bound `ε·(ε − 1/|C|) ≤ solverAdv`, the quantitative
-floors `MSISHardQuant`/`DLHardQuant`, and the reduction `forking_reduces_to_MSISHardQuant`. This module
+floors `MSISHardQuantShape`/`DLHardQuantShape`, and the reduction `forking_reduces_to_MSISHardQuant`. This module
 discharges G1 and G2 as PROVED facts and assembles `computational_uc_realizes`.
 
 ## What is proved (§-by-§)
@@ -38,10 +38,10 @@ discharges G1 and G2 as PROVED facts and assembles `computational_uc_realizes`.
 
   **§4 — G2 from the quantitative floor.** `ucForger_negl_of_msis` / `_of_dl` : the forger advantage
   `F.forgerAdv` is negligible whenever the derived solver's advantage is quantitatively hard
-  (`MSISHardQuant`/`DLHardQuant`) and the challenge-collision term `Negl F.invChal` — reusing
+  (`MSISHardQuantShape`/`DLHardQuantShape`) and the challenge-collision term `Negl F.invChal` — reusing
   `ProbCrypto.forking_reduces_against_floor`. This closes G2: `Negl εₛ` from a genuine quantitative floor.
 
-  **§5 — `computational_uc_realizes` (the payoff).** `MSISHardQuant … ⟹ Negl (ucDistAdv F)`, via
+  **§5 — `computational_uc_realizes` (the payoff).** `MSISHardQuantShape … ⟹ Negl (ucDistAdv F)`, via
   `uc_advantage_transfer` fed the now-PROVED G1 (`ucDistAdv_eq_forgerAdv`) and G2 (`ucForger_negl_of_msis`).
   `ucRealizesWitness` fills a `UcSignature.ComputationalUC` whose G1/G2 fields are now PROVED terms, not
   assumptions — the §7.6 structure inhabited from the substrate.
@@ -175,34 +175,34 @@ theorem ucDistAdv_nonneg (F : ForkingFamily) (l : ℕ) : 0 ≤ ucDistAdv F l := 
 /-! ## §4 — G2 from the quantitative floor: the forger advantage is negligible. -/
 
 /-- **G2 CLOSED (MSIS leg) — `Negl εₛ` from the QUANTITATIVE MSIS floor.** If the derived forking solver `s`
-is one the quantitative floor `MSISHardQuant` quantifies over (its advantage IS `F.solverAdv`) and the
+is one the quantitative floor `MSISHardQuantShape` quantifies over (its advantage IS `F.solverAdv`) and the
 challenge-collision term is negligible, then the forger advantage `F.forgerAdv` is negligible — reusing
 `ProbCrypto.forking_reduces_against_floor`. This is G2 discharged from a genuine quantitative floor, not the
 tree's Boolean `MSISHard`. -/
 theorem ucForger_negl_of_msis {Sv : Type*} (F : ForkingFamily)
     (solverAdvOf : Sv → Ensemble) (s : Sv) (hs : solverAdvOf s = F.solverAdv)
-    (hfloor : MSISHardQuant solverAdvOf) (hCneg : Negl F.invChal) : Negl F.forgerAdv :=
+    (hfloor : MSISHardQuantShape solverAdvOf) (hCneg : Negl F.invChal) : Negl F.forgerAdv :=
   forking_reduces_against_floor F solverAdvOf s hs hfloor hCneg
 
 /-- **G2 CLOSED (DL leg) — `Negl εₛ` from the QUANTITATIVE DL floor.** The classical Schnorr forking family
-has the identical `ε·(ε − 1/|C|) ≤ solverAdv` bound; `DLHardQuant` on the derived DL solver discharges
+has the identical `ε·(ε − 1/|C|) ≤ solverAdv` bound; `DLHardQuantShape` on the derived DL solver discharges
 `Negl F.solverAdv` (defeq to the MSIS-shaped floor). Either hardness leg of the hybrid closes G2. -/
 theorem ucForger_negl_of_dl {Sv : Type*} (F : ForkingFamily)
     (solverAdvOf : Sv → Ensemble) (s : Sv) (hs : solverAdvOf s = F.solverAdv)
-    (hfloor : DLHardQuant solverAdvOf) (hCneg : Negl F.invChal) : Negl F.forgerAdv :=
+    (hfloor : DLHardQuantShape solverAdvOf) (hCneg : Negl F.invChal) : Negl F.forgerAdv :=
   forking_reduces_against_floor F solverAdvOf s hs hfloor hCneg
 
-/-! ## §5 — `computational_uc_realizes`: `MSISHardQuant ⟹ Negl advₑ`, via the PROVED G1 + G2. -/
+/-! ## §5 — `computational_uc_realizes`: `MSISHardQuantShape ⟹ Negl advₑ`, via the PROVED G1 + G2. -/
 
 /-- **THE PAYOFF — GENUINE COMPUTATIONAL UC ON THE QUANTITATIVE SUBSTRATE.** The environment's distinguishing
 advantage `ucDistAdv F` is NEGLIGIBLE whenever the derived forking solver is quantitatively hard
-(`MSISHardQuant`) and the challenge space grows (`Negl F.invChal`). Assembled by `uc_advantage_transfer`
+(`MSISHardQuantShape`) and the challenge space grows (`Negl F.invChal`). Assembled by `uc_advantage_transfer`
 applied to the now-PROVED inputs: G1 `ucDistAdv F = F.forgerAdv` (`ucDistAdv_eq_forgerAdv`, the equality gives
 `advₑ ≤ εₛ`) and G2 `Negl F.forgerAdv` (`ucForger_negl_of_msis`). Neither is assumed — both are theorems of
 the probabilistic substrate. This is `UcSignature`'s "TRUE-MODULO-(G1,G2)" made TRUE. -/
 theorem computational_uc_realizes {Sv : Type*} (F : ForkingFamily)
     (solverAdvOf : Sv → Ensemble) (s : Sv) (hs : solverAdvOf s = F.solverAdv)
-    (hfloor : MSISHardQuant solverAdvOf) (hCneg : Negl F.invChal) : Negl (ucDistAdv F) := by
+    (hfloor : MSISHardQuantShape solverAdvOf) (hCneg : Negl F.invChal) : Negl (ucDistAdv F) := by
   have hG1 : ucDistAdv F = F.forgerAdv := ucDistAdv_eq_forgerAdv F
   have hG2 : Negl F.forgerAdv := ucForger_negl_of_msis F solverAdvOf s hs hfloor hCneg
   refine uc_advantage_transfer (ucDistAdv_nonneg F) ?_ hG2
@@ -214,7 +214,7 @@ witness for `advₑ = ucDistAdv F`, `εₛ = F.forgerAdv`, whose two former ASSU
 So the genuine computational-UC obligation of §7.6 is INHABITED without re-assuming G1 or G2. -/
 def ucRealizesWitness {Sv : Type*} (F : ForkingFamily)
     (solverAdvOf : Sv → Ensemble) (s : Sv) (hs : solverAdvOf s = F.solverAdv)
-    (hfloor : MSISHardQuant solverAdvOf) (hCneg : Negl F.invChal) :
+    (hfloor : MSISHardQuantShape solverAdvOf) (hCneg : Negl F.invChal) :
     UcSignature.ComputationalUC (ucDistAdv F) F.forgerAdv where
   adv_nonneg := ucDistAdv_nonneg F
   reduction_bound :=
@@ -224,7 +224,7 @@ def ucRealizesWitness {Sv : Type*} (F : ForkingFamily)
 /-- The witness's realization IS `computational_uc_realizes` — `Negl advₑ` from the filled structure. -/
 theorem ucRealizesWitness_realizes {Sv : Type*} (F : ForkingFamily)
     (solverAdvOf : Sv → Ensemble) (s : Sv) (hs : solverAdvOf s = F.solverAdv)
-    (hfloor : MSISHardQuant solverAdvOf) (hCneg : Negl F.invChal) : Negl (ucDistAdv F) :=
+    (hfloor : MSISHardQuantShape solverAdvOf) (hCneg : Negl F.invChal) : Negl (ucDistAdv F) :=
   (ucRealizesWitness F solverAdvOf s hs hfloor hCneg).realizes
 
 /-! ## §6 — Non-vacuity, the full spectrum: realized, and load-bearingly broken. -/
@@ -244,7 +244,7 @@ theorem const25_ucDistAdv_not_negl : ¬ Negl (ucDistAdv const25Family) := by
   exact not_negl_const_pos (by norm_num)
 
 /-- **THE FLOOR IS LOAD-BEARING.** The constant-`2/5` distinguisher's derived MSIS solver advantage is at
-least `2/25`, NON-negligible (`const25_forger_breaks_floor`) — so no `MSISHardQuant` floor can hold for it, and
+least `2/25`, NON-negligible (`const25_forger_breaks_floor`) — so no `MSISHardQuantShape` floor can hold for it, and
 `computational_uc_realizes` genuinely could not fire. Realization is exactly what the quantitative floor buys. -/
 theorem const25_breaks_quant_floor : ¬ Negl const25Family.solverAdv := const25_forger_breaks_floor
 

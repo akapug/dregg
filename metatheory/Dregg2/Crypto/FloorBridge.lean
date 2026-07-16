@@ -2,7 +2,7 @@
 # `Dregg2.Crypto.FloorBridge` — LINK the quantitative floors to the Boolean floors (ONE foundation).
 
 Seam 2 of the crypto-honesty goal. Track B (`ProbCrypto`) added a QUANTITATIVE floor family
-(`MSISHardQuant`/`DLHardQuant`/`HashCRHardQuant` := `∀ s, Negl (adv s)`) ALONGSIDE the tree's original
+(`MSISHardQuantShape`/`DLHardQuantShape`/`HashCRHardQuantShape` := `∀ s, Negl (adv s)`) ALONGSIDE the tree's original
 BOOLEAN floors (`Lattice.MSISHard := ¬ ∃ z, IsMSISSolution`, `SchnorrCurveField.SchnorrDLHard := ¬ DLSolver`,
 `HermineHintMLWE.HashCR := ∀ i w w', H i w = H i w' → w = w'`). Two parallel foundations. This module
 WELDS them into one: it proves the quantitative floor IMPLIES the Boolean floor, so the whole Boolean tree
@@ -16,9 +16,9 @@ DETERMINISTIC adversary that WINS ITS GAME WITH CERTAINTY. Its winning predicate
 parameter — the advantage ensemble `boolWinAdv = fun _ => 1`, which is NOT negligible (`not_negl_one`).
 
 So embed the Boolean solvers as the CANONICAL solver family `{z // IsMSISSolution …}` with advantage
-`fun _ => boolWinAdv`. The quantitative floor `MSISHardQuant` says every solver's advantage is negligible;
+`fun _ => boolWinAdv`. The quantitative floor `MSISHardQuantShape` says every solver's advantage is negligible;
 a Boolean solver would sit in that family with advantage `1`, contradiction. Contrapositive:
-`MSISHardQuant (canonical adv) → ¬ ∃ solver = MSISHard`. Same for DL and HashCR.
+`MSISHardQuantShape (canonical adv) → ¬ ∃ solver = MSISHard`. Same for DL and HashCR.
 
 ## What holds, and what does NOT.
 
@@ -35,7 +35,7 @@ a Boolean solver would sit in that family with advantage `1`, contradiction. Con
 
 `turnauth_forces_authorization_quant` is `TurnAuthSignature.turnauth_forces_authorization` (a Boolean
 consumer: `SchnorrDLHard → (verified ⟹ authorized)`) re-derived from the QUANTITATIVE floor
-`DLHardQuant` via the DL bridge — the Boolean soundness theorem as a COROLLARY of the quantitative floor.
+`DLHardQuantShape` via the DL bridge — the Boolean soundness theorem as a COROLLARY of the quantitative floor.
 Every `_under_floor` consumer migrates by exactly this two-line plumb: `consumer hext (bridge hquant) hver`.
 
 ## No named-carrier laundering.
@@ -75,7 +75,7 @@ with the quantitative floor. -/
 theorem not_negl_boolWinAdv : ¬ Negl boolWinAdv := by
   rw [boolWinAdv_eq_one]; exact not_negl_one
 
-/-! ## §1 — The MSIS bridge: `MSISHardQuant (canonical) → Lattice.MSISHard`. -/
+/-! ## §1 — The MSIS bridge: `MSISHardQuantShape (canonical) → Lattice.MSISHard`. -/
 
 section MSIS
 
@@ -93,35 +93,35 @@ short kernel vector). -/
 noncomputable def msisSolverAdv (A : M →ₗ[Rq] N) (β : ℕ) : msisSolverFam A β → Ensemble :=
   fun _ => boolWinAdv
 
-/-- **THE MSIS BRIDGE — `MSISHardQuant (msisSolverAdv A β) → Lattice.MSISHard A β`.** If every canonical
+/-- **THE MSIS BRIDGE — `MSISHardQuantShape (msisSolverAdv A β) → Lattice.MSISHard A β`.** If every canonical
 solver's advantage is negligible, then no Boolean MSIS solution exists: a solution `z` would be a solver
 of advantage `1` (`boolWinAdv`), which the floor forbids (`not_negl_boolWinAdv`). The quantitative floor
 delivers the Boolean floor. -/
 theorem msisHard_of_msisHardQuant {A : M →ₗ[Rq] N} {β : ℕ}
-    (h : MSISHardQuant (msisSolverAdv A β)) : Lattice.MSISHard A β := by
+    (h : MSISHardQuantShape (msisSolverAdv A β)) : Lattice.MSISHard A β := by
   rintro ⟨z, hz⟩
   exact not_negl_boolWinAdv (h ⟨z, hz⟩)
 
 /-- **(TOOTH — the quantitative floor is REFUTABLE.)** If a Boolean MSIS solution exists, the canonical
-quantitative floor FAILS — that solver has advantage `1`. So `MSISHardQuant (msisSolverAdv …)` is genuinely
+quantitative floor FAILS — that solver has advantage `1`. So `MSISHardQuantShape (msisSolverAdv …)` is genuinely
 load-bearing (false exactly when a solver exists), not a vacuous relabel. -/
 theorem msisHardQuant_refutable {A : M →ₗ[Rq] N} {β : ℕ}
-    (hsol : ∃ z, Lattice.IsMSISSolution A β z) : ¬ MSISHardQuant (msisSolverAdv A β) := by
+    (hsol : ∃ z, Lattice.IsMSISSolution A β z) : ¬ MSISHardQuantShape (msisSolverAdv A β) := by
   obtain ⟨z, hz⟩ := hsol
   intro h
   exact not_negl_boolWinAdv (h ⟨z, hz⟩)
 
-/-- **(REVERSE — VACUOUS, disclosed.)** `MSISHard → MSISHardQuant (canonical)` holds, but ONLY because
+/-- **(REVERSE — VACUOUS, disclosed.)** `MSISHard → MSISHardQuantShape (canonical)` holds, but ONLY because
 when `MSISHard` the canonical solver family is EMPTY, so `∀ s, Negl …` is vacuously true. It carries no
 negligibility-rate content; for a NON-canonical advantage family the reverse is FALSE. Kept to make the
 degeneracy of the reverse explicit — the load-bearing direction is `msisHard_of_msisHardQuant`. -/
 theorem msisHardQuant_of_msisHard {A : M →ₗ[Rq] N} {β : ℕ}
-    (h : Lattice.MSISHard A β) : MSISHardQuant (msisSolverAdv A β) :=
+    (h : Lattice.MSISHard A β) : MSISHardQuantShape (msisSolverAdv A β) :=
   fun s => absurd ⟨s.1, s.2⟩ h
 
 end MSIS
 
-/-! ## §2 — The DL bridge: `DLHardQuant (canonical) → SchnorrCurveField.SchnorrDLHard`. -/
+/-! ## §2 — The DL bridge: `DLHardQuantShape (canonical) → SchnorrCurveField.SchnorrDLHard`. -/
 
 /-- **The canonical DL solver family** — discrete-log solvers for `(C, G)`: functions returning, for every
 `sk`, the scalar of `sk·G`. Inhabitedness IS `DLSolver C G`, the negation of the Boolean DL floor. -/
@@ -132,19 +132,19 @@ abbrev dlSolverFam (C : SchnorrCurveField.CurveGroup) (G : C.Pt) : Type _ :=
 noncomputable def dlSolverAdv (C : SchnorrCurveField.CurveGroup) (G : C.Pt) :
     dlSolverFam C G → Ensemble := fun _ => boolWinAdv
 
-/-- **THE DL BRIDGE — `DLHardQuant (dlSolverAdv C G) → SchnorrCurveField.SchnorrDLHard C G`.** If every
+/-- **THE DL BRIDGE — `DLHardQuantShape (dlSolverAdv C G) → SchnorrCurveField.SchnorrDLHard C G`.** If every
 canonical DL solver's advantage is negligible, no `DLSolver` exists: a solver would have advantage `1`,
 forbidden by the floor. The quantitative DL floor delivers the Boolean DL floor. -/
 theorem schnorrDLHard_of_DLHardQuant {C : SchnorrCurveField.CurveGroup} {G : C.Pt}
-    (h : DLHardQuant (dlSolverAdv C G)) : SchnorrCurveField.SchnorrDLHard C G := by
+    (h : DLHardQuantShape (dlSolverAdv C G)) : SchnorrCurveField.SchnorrDLHard C G := by
   rintro ⟨solve, hsolve⟩
   exact not_negl_boolWinAdv (h ⟨solve, hsolve⟩)
 
 /-- **(TOOTH — the quantitative DL floor is REFUTED on the toy curve.)** On `toyCurve` (`ℤ`, `s • 1 = s`)
 discrete log is EASY: `Int.toNat` recovers every scalar, a canonical solver of advantage `1`. So
-`DLHardQuant (dlSolverAdv toyCurve 1)` is FALSE — the concrete-security floor genuinely discriminates,
+`DLHardQuantShape (dlSolverAdv toyCurve 1)` is FALSE — the concrete-security floor genuinely discriminates,
 exactly as its Boolean twin `SchnorrCurveField.toy_dl_not_hard` does. -/
-theorem dlHardQuant_toy_refuted : ¬ DLHardQuant (dlSolverAdv SchnorrCurveField.toyCurve (1 : ℤ)) := by
+theorem dlHardQuant_toy_refuted : ¬ DLHardQuantShape (dlSolverAdv SchnorrCurveField.toyCurve (1 : ℤ)) := by
   intro h
   have hsolve : ∀ sk : ℕ, (fun x : ℤ => x.toNat) (SchnorrCurveField.toyCurve.smul sk (1 : ℤ)) = sk := by
     intro sk
@@ -152,7 +152,7 @@ theorem dlHardQuant_toy_refuted : ¬ DLHardQuant (dlSolverAdv SchnorrCurveField.
     simp
   exact not_negl_boolWinAdv (h ⟨fun x => x.toNat, hsolve⟩)
 
-/-! ## §3 — The HashCR bridge: `HashCRHardQuant (canonical) → HermineHintMLWE.HashCR`. -/
+/-! ## §3 — The HashCR bridge: `HashCRHardQuantShape (canonical) → HermineHintMLWE.HashCR`. -/
 
 /-- **The canonical hash-collision family** — triples `(i, w, w')` with `H i w = H i w'` but `w ≠ w'`: a
 collision. Inhabitedness IS the negation of `HashCR` (injectivity on the committed domain). -/
@@ -164,12 +164,12 @@ collision). -/
 noncomputable def hashCollisionAdv {Idx W C : Type*} (cr : HermineHintMLWE.CommitReveal Idx W C) :
     hashCollisionFam cr → Ensemble := fun _ => boolWinAdv
 
-/-- **THE HASHCR BRIDGE — `HashCRHardQuant (hashCollisionAdv cr) → HermineHintMLWE.HashCR cr`.** If every
+/-- **THE HASHCR BRIDGE — `HashCRHardQuantShape (hashCollisionAdv cr) → HermineHintMLWE.HashCR cr`.** If every
 canonical collision-finder's advantage is negligible, `H` is injective on the committed domain: a collision
 `w ≠ w'` with `H i w = H i w'` would be a finder of advantage `1`, forbidden by the floor. The quantitative
 collision-resistance floor delivers the Boolean injectivity floor. -/
 theorem hashCR_of_HashCRHardQuant {Idx W C : Type*} (cr : HermineHintMLWE.CommitReveal Idx W C)
-    (h : HashCRHardQuant (hashCollisionAdv cr)) : HermineHintMLWE.HashCR cr := by
+    (h : HashCRHardQuantShape (hashCollisionAdv cr)) : HermineHintMLWE.HashCR cr := by
   intro i w w' heq
   by_contra hne
   exact not_negl_boolWinAdv (h ⟨(i, w, w'), heq, hne⟩)
@@ -182,12 +182,12 @@ is bridged from the quantitative one. Every `_under_floor` consumer migrates by 
 
 /-- **`turnauth_forces_authorization_quant`** — the Boolean soundness rung `TurnAuthSignature`.
 `turnauth_forces_authorization` (`SchnorrDLHard ⟹ verified turn-auth ⟹ authorized`) DERIVED as a
-COROLLARY of the QUANTITATIVE floor `DLHardQuant`, via the DL bridge `schnorrDLHard_of_DLHardQuant`. The
+COROLLARY of the QUANTITATIVE floor `DLHardQuantShape`, via the DL bridge `schnorrDLHard_of_DLHardQuant`. The
 tree runs on ONE (quantitative) foundation, with the Boolean consumer theorem as a derived corollary — the
 template for migrating every other `_under_floor` consumer. -/
 theorem turnauth_forces_authorization_quant {C : SchnorrCurveField.CurveGroup} {G : C.Pt}
     (hext : TurnAuthSignature.ForkingExtractor C G)
-    (hdl : DLHardQuant (dlSolverAdv C G))
+    (hdl : DLHardQuantShape (dlSolverAdv C G))
     {agentPk : C.Pt} {turnHash : ℕ} {chal : C.Pt → C.Pt → ℕ → ℕ} {R : C.Pt} {s : ℕ}
     (hver : TurnAuthSignature.TurnAuthVerified C G agentPk turnHash chal R s) :
     TurnAuthSignature.Authorized C agentPk turnHash :=

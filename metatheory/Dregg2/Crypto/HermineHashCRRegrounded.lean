@@ -30,8 +30,8 @@ COMMIT-REVEAL side.
 * **`hermine_concurrent_forgery_advantage_bound`** — the advantage-bounded sibling of the composition
   `concurrent_forgery_breaks_hashcr_or_msis` / `concurrent_unforgeable_reduces`: a concurrent rushing
   forger either EQUIVOCATES (a commit-hash collision, the `collisionAdv` leg) or is BOUND and yields an
-  MSIS solution (the `MSISHardQuant` leg); its total forgery advantage is the SUM, `Negl` under the two
-  proper floors (`CollisionResistant` ∧ `MSISHardQuant`). The Boolean dichotomy `¬HashCR ∨ MSIS-solution`
+  MSIS solution (the `MSISHardQuantShape` leg); its total forgery advantage is the SUM, `Negl` under the two
+  proper floors (`CollisionResistant` ∧ `MSISHardQuantShape`). The Boolean dichotomy `¬HashCR ∨ MSIS-solution`
   becomes the additive negligible advantage. Discharged by `thread_advantage_bound` (`negl_add`, a floor
   leaf on each leg).
 
@@ -57,7 +57,7 @@ import Dregg2.Crypto.HermineHintMLWE
 namespace Dregg2.Crypto.HermineHashCRRegrounded
 
 open Dregg2.Crypto.ConcreteSecurity (Negl Ensemble negl_zero not_negl_one)
-open Dregg2.Crypto.ProbCrypto (winProb winProb_top MSISHardQuant)
+open Dregg2.Crypto.ProbCrypto (winProb winProb_top MSISHardQuantShape)
 open Dregg2.Circuit.HashFloorHonesty
   (KeyedHashFamily CollisionFinder CollisionResistant collisionAdv injective_family_CR)
 open Dregg2.Crypto.HermineHintMLWE (CommitReveal HashCR badCR exCR exCR_hashcr)
@@ -111,14 +111,14 @@ theorem hermine_commitment_binding_advantage_bound {F : KeyedHashFamily}
 `concurrent_unforgeable_reduces`.** A concurrent rushing forger opens a common commitment and outputs two
 accepting SelfTargetMSIS solutions with `c ≠ c'`; it either EQUIVOCATED (an opening collision — the
 `collisionAdv F equivocator` leg) or was BOUND to one commitment and thereby handed a nonzero short MSIS
-solution (the `MSISHardQuant adv` leg at solver index `s`). Its TOTAL forgery advantage is the SUM of the
-two, negligible under the proper floors `CollisionResistant F ∧ MSISHardQuant adv`. The Boolean dichotomy
+solution (the `MSISHardQuantShape adv` leg at solver index `s`). Its TOTAL forgery advantage is the SUM of the
+two, negligible under the proper floors `CollisionResistant F ∧ MSISHardQuantShape adv`. The Boolean dichotomy
 `¬HashCR ∨ MSIS-solution` becomes the additive negligible advantage — the whole rushing composition on the
 honest floor. Proof: `thread_advantage_bound` (`negl_add`; the `CollisionResistant` leaf, the
-`MSISHardQuant` leaf). -/
+`MSISHardQuantShape` leaf). -/
 theorem hermine_concurrent_forgery_advantage_bound {F : KeyedHashFamily} {S : Type*}
     (hCR : CollisionResistant F) (equivocator : CollisionFinder F)
-    (adv : S → Ensemble) (s : S) (hmsis : MSISHardQuant adv) :
+    (adv : S → Ensemble) (s : S) (hmsis : MSISHardQuantShape adv) :
     Negl (fun n => collisionAdv F equivocator n + adv s n) := by
   thread_advantage_bound
 

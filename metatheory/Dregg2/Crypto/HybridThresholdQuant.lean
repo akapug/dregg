@@ -4,7 +4,7 @@
 
 Track B step 3. Steps 1–2 built the concrete-security substrate — `winProb` games, the `ForkingFamily`
 with its PROVED forking bound `ε·(ε − 1/|C|) ≤ solverAdv`, the quantitative floors
-`MSISHardQuant`/`DLHardQuant`, and the reduction `forking_reduces_against_floor` — and closed the two UC
+`MSISHardQuantShape`/`DLHardQuantShape`, and the reduction `forking_reduces_against_floor` — and closed the two UC
 gaps (`UcSignatureQuant`). This module re-threads the remaining three Boolean reductions AS GENUINE
 ADVANTAGE-INEQUALITIES, never relabelling a Boolean fact as quantitative.
 
@@ -21,23 +21,23 @@ ADVANTAGE-INEQUALITIES, never relabelling a Boolean fact as quantitative.
   CONJUNCTION (the hybrid accepts iff both do). The combiner property is now the POINTWISE implication
   `accC ω c ∧ accP ω c ⟹ accC ω c` (resp. `accP`), which lifts to `hybridForgerAdv ≤ classicalForgerAdv`
   AND `≤ pqForgerAdv` (`winProb_le_of_imp` + the §1 bridge). Hence `hybrid_forger_negl_under_floors`:
-  `Negl hybridForgerAdv` under `DLHardQuant ∨ MSISHardQuant` — a non-negligible hybrid advantage would force
+  `Negl hybridForgerAdv` under `DLHardQuantShape ∨ MSISHardQuantShape` — a non-negligible hybrid advantage would force
   a non-negligible advantage in WHICHEVER component's floor holds, contradicting it (each leg discharged by
   `ucForger_negl_of_dl`/`_of_msis`). Teeth: ONE secure component ⇒ `hybridForgerAdv ≡ 0` (Negl); BOTH broken
   ⇒ `hybridForgerAdv ≡ 2/5` (NOT Negl) — the "either" is load-bearing on real advantages.
 
   **§2 — THRESHOLD (concurrent/adaptive), quantitative.** The `ForkingFamily`'s `forgerAdv` IS the concurrent
   TS-UF-0 forger's advantage in `HermineTSUF`'s finite counting-probability model (`§ProbForking`). So
-  `threshold_forger_negl_of_msis` packages `Negl thresholdForgerAdv` under `MSISHardQuant`, reusing
+  `threshold_forger_negl_of_msis` packages `Negl thresholdForgerAdv` under `MSISHardQuantShape`, reusing
   `forking_reduces_against_floor` — the concurrent threshold forger's forking→MSIS reduction, over real
   advantages. `adaptive_threshold_negl_of_msis` carries the adaptive/erasure statistical term as an ADDITIVE
   `Negl` summand (`negl_add`): an adaptive advantage `≤ forgerAdv + erasureTerm` with both negligible is
   negligible. Teeth: fires (base ≡ 0, negligible erasure); the const-`2/5` threshold forger breaks the floor.
 
   **§3 — UC DISJUNCTIVE BUNDLING (finishing UC's "grounded in one floor" residual).** `UcSignatureQuant`'s
-  `computational_uc_realizes` grounded `advₑ` in a SINGLE floor (`MSISHardQuant`). `uc_realizes_disjunctive`
+  `computational_uc_realizes` grounded `advₑ` in a SINGLE floor (`MSISHardQuantShape`). `uc_realizes_disjunctive`
   carries TWO forking families `Fc` (DL leg) + `Fp` (MSIS leg) with `advₑ ≤` each, concluding `Negl advₑ`
-  under `DLHardQuant ∨ MSISHardQuant` — case-split the disjunction, each leg discharged by
+  under `DLHardQuantShape ∨ MSISHardQuantShape` — case-split the disjunction, each leg discharged by
   `ucForger_negl_of_{dl,msis}` and dominated. Teeth: fires (advₑ ≡ 0 under either floor); the const-`2/5`
   advantage is NOT negligible (the disjunction is load-bearing — no floor ⇒ no realization).
 
@@ -66,27 +66,11 @@ open Dregg2.Crypto.Lattice (ShortNorm)
 
 /-! ## §0 — Two monotonicity combinators. -/
 
-/-- **`winProb` is monotone in the win predicate.** If every outcome that wins `f` also wins `g`, then
-`winProb f ≤ winProb g` — the favorable set of `f` is a subset of `g`'s, and the outcome count is shared. The
-probability-level lift of an event implication (`hybrid forge ⟹ component forge`). -/
-theorem winProb_le_of_imp {Ω : Type*} [Fintype Ω] {f g : Ω → Bool}
-    (h : ∀ o, f o = true → g o = true) : winProb f ≤ winProb g := by
-  unfold winProb
-  have hsub : (Finset.univ.filter (fun o => f o = true))
-      ⊆ (Finset.univ.filter (fun o => g o = true)) := by
-    intro o ho
-    simp only [Finset.mem_filter, Finset.mem_univ, true_and] at ho ⊢
-    exact h o ho
-  gcongr
-
-/-- **DOMINATION for negligibility.** A NONNEGATIVE ensemble `f` dominated pointwise by an ensemble `g` that
-is negligible is itself negligible. The squeeze the advantage-inequality reductions use to conclude
-`Negl (small advantage)` from `Negl (component advantage)`. -/
-theorem negl_of_le {f g : ℕ → ℝ} (hfn : ∀ n, 0 ≤ f n) (hle : ∀ n, f n ≤ g n)
-    (hg : Negl g) : Negl f := by
-  refine negl_of_eventually_le (Filter.Eventually.of_forall (fun n => ?_)) hg
-  rw [abs_of_nonneg (hfn n)]
-  exact le_trans (hle n) (le_abs_self _)
+/-! The two monotonicity combinators every lift below uses — `winProb_le_of_imp` (a `winProb` is monotone
+in its win predicate) and `negl_of_le` (a nonnegative ensemble dominated by a negligible one is
+negligible) — live next to `winProb` itself in `ProbCrypto` and arrive through the `open` above. They were
+stated here first; `FloorGames` needs them too, so they moved to the layer that owns `winProb` rather than
+being duplicated. -/
 
 /-! ## §1 — The HYBRID combiner, quantitative: "secure-if-either" over real advantages. -/
 
@@ -195,7 +179,7 @@ theorem hybridForgerAdv_le_pq (H : HybridForkingFamily) (l : ℕ) :
 
 end HybridForkingFamily
 
-/-- **THE HYBRID COMBINER, QUANTITATIVE — `Negl hybridForgerAdv` under `DLHardQuant ∨ MSISHardQuant`.** If
+/-- **THE HYBRID COMBINER, QUANTITATIVE — `Negl hybridForgerAdv` under `DLHardQuantShape ∨ MSISHardQuantShape`.** If
 EITHER the classical DL floor OR the pq MSIS floor holds (quantitatively), the hybrid forger's advantage is
 negligible. Case-split the disjunction: whichever floor holds discharges its component's forger advantage
 (`ucForger_negl_of_dl`/`_of_msis`), and the hybrid advantage — bounded ABOVE by that component's advantage
@@ -207,7 +191,7 @@ theorem hybrid_forger_negl_under_floors (H : HybridForkingFamily)
     (dlSolverOf : Sc → Ensemble) (sc : Sc) (hsc : dlSolverOf sc = (H.classical).solverAdv)
     (msisSolverOf : Sp → Ensemble) (sp : Sp) (hsp : msisSolverOf sp = (H.pq).solverAdv)
     (hCnegC : Negl (H.classical).invChal) (hCnegP : Negl (H.pq).invChal)
-    (hfloor : DLHardQuant dlSolverOf ∨ MSISHardQuant msisSolverOf) :
+    (hfloor : DLHardQuantShape dlSolverOf ∨ MSISHardQuantShape msisSolverOf) :
     Negl H.hybridForgerAdv := by
   rcases hfloor with hdl | hmsis
   · have hc : Negl (H.classical).forgerAdv :=
@@ -272,7 +256,7 @@ theorem bothBrokenHybrid_forgerAdv : bothBrokenHybrid.hybridForgerAdv = fun _ =>
   norm_num
 
 /-- **THE LOAD-BEARING TOOTH — both broken ⇒ NON-negligible hybrid advantage.** With BOTH components broken
-(`2/5` each), the hybrid advantage is the constant `2/5`, NOT negligible. So the `DLHardQuant ∨ MSISHardQuant`
+(`2/5` each), the hybrid advantage is the constant `2/5`, NOT negligible. So the `DLHardQuantShape ∨ MSISHardQuantShape`
 hypothesis of `hybrid_forger_negl_under_floors` is load-bearing: with neither floor holding the hybrid genuinely
 fails. The real-advantage mirror of `HybridCombiner.hybrid_broken_not_euf`. -/
 theorem bothBrokenHybrid_not_negl : ¬ Negl bothBrokenHybrid.hybridForgerAdv := by
@@ -288,14 +272,14 @@ its derived MSIS-solver advantage `solverAdv` the objects the forking bound gove
 advantage as the threshold forger's. -/
 noncomputable def thresholdForgerAdv (F : ForkingFamily) : ℕ → ℝ := F.forgerAdv
 
-/-- **THE THRESHOLD REDUCTION, QUANTITATIVE — `Negl thresholdForgerAdv` under `MSISHardQuant`.** The
+/-- **THE THRESHOLD REDUCTION, QUANTITATIVE — `Negl thresholdForgerAdv` under `MSISHardQuantShape`.** The
 concurrent TS-UF-0 forger's advantage is negligible whenever its derived forking solver is quantitatively
 MSIS-hard and the challenge space grows — packaging `ProbCrypto.forking_reduces_against_floor` at the threshold
 forger. This is `HermineTSUF.concurrent_ts_uf_0_reduces` (forking→MSIS) lifted from a Boolean implication to a
 genuine advantage-inequality against the quantitative floor. -/
 theorem threshold_forger_negl_of_msis {Sv : Type*} (F : ForkingFamily)
     (solverAdvOf : Sv → Ensemble) (s : Sv) (hs : solverAdvOf s = F.solverAdv)
-    (hfloor : MSISHardQuant solverAdvOf) (hCneg : Negl F.invChal) :
+    (hfloor : MSISHardQuantShape solverAdvOf) (hCneg : Negl F.invChal) :
     Negl (thresholdForgerAdv F) :=
   forking_reduces_against_floor F solverAdvOf s hs hfloor hCneg
 
@@ -311,7 +295,7 @@ theorem adaptive_threshold_negl_of_msis {Sv : Type*} (F : ForkingFamily)
     (hbound : ∀ n, adaptiveAdv n ≤ F.forgerAdv n + erasureTerm n)
     (herasure : Negl erasureTerm)
     (solverAdvOf : Sv → Ensemble) (s : Sv) (hs : solverAdvOf s = F.solverAdv)
-    (hfloor : MSISHardQuant solverAdvOf) (hCneg : Negl F.invChal) :
+    (hfloor : MSISHardQuantShape solverAdvOf) (hCneg : Negl F.invChal) :
     Negl adaptiveAdv := by
   have hbase : Negl F.forgerAdv := forking_reduces_against_floor F solverAdvOf s hs hfloor hCneg
   have hsum : Negl (fun n => F.forgerAdv n + erasureTerm n) := negl_add hbase herasure
@@ -342,16 +326,16 @@ theorem adaptive_threshold_fires :
   linarith [h0, hle]
 
 /-- **THE FLOOR IS LOAD-BEARING** — the const-`2/5` threshold forger's derived MSIS solver advantage is
-`≥ 2/25`, NON-negligible (`const25_forger_breaks_floor`). So no `MSISHardQuant` floor can hold for it, and
+`≥ 2/25`, NON-negligible (`const25_forger_breaks_floor`). So no `MSISHardQuantShape` floor can hold for it, and
 `threshold_forger_negl_of_msis` genuinely could not fire — the quantitative floor is exactly what buys the
 threshold reduction. -/
 theorem const25_threshold_breaks_floor : ¬ Negl const25Family.solverAdv := const25_forger_breaks_floor
 
-/-! ## §3 — UC DISJUNCTIVE BUNDLING: `Negl advₑ` under `DLHardQuant ∨ MSISHardQuant`. -/
+/-! ## §3 — UC DISJUNCTIVE BUNDLING: `Negl advₑ` under `DLHardQuantShape ∨ MSISHardQuantShape`. -/
 
 /-- **UC REALIZATION UNDER EITHER FLOOR — the "grounded in one floor" residual, closed.** The environment's
 distinguishing advantage `advₑ` is negligible whenever it is bounded ABOVE by BOTH a DL-leg forger family
-`Fc` and an MSIS-leg forger family `Fp`, and EITHER floor holds (`DLHardQuant dlSolverOf ∨ MSISHardQuant
+`Fc` and an MSIS-leg forger family `Fp`, and EITHER floor holds (`DLHardQuantShape dlSolverOf ∨ MSISHardQuantShape
 msisSolverOf`). Case-split the disjunction: each leg discharges its family's forger advantage
 (`ucForger_negl_of_dl`/`_of_msis`), and `advₑ` — dominated by it — is negligible. This extends
 `UcSignatureQuant.computational_uc_realizes` (single MSIS floor) to the hybrid disjunction: the UC realization
@@ -363,7 +347,7 @@ theorem uc_realizes_disjunctive (advE : Ensemble) (Fc Fp : ForkingFamily)
     (dlSolverOf : Sc → Ensemble) (sc : Sc) (hsc : dlSolverOf sc = Fc.solverAdv)
     (msisSolverOf : Sp → Ensemble) (sp : Sp) (hsp : msisSolverOf sp = Fp.solverAdv)
     (hCnegC : Negl Fc.invChal) (hCnegP : Negl Fp.invChal)
-    (hfloor : DLHardQuant dlSolverOf ∨ MSISHardQuant msisSolverOf) :
+    (hfloor : DLHardQuantShape dlSolverOf ∨ MSISHardQuantShape msisSolverOf) :
     Negl advE := by
   rcases hfloor with hdl | hmsis
   · have hc : Negl Fc.forgerAdv := ucForger_negl_of_dl Fc dlSolverOf sc hsc hdl hCnegC

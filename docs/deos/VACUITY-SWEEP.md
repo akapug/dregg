@@ -105,16 +105,106 @@ short.
 `HashFloorHonesty`'s header says it best about its own predecessor: *"the pre-existing non-vacuity witnesses
 give FALSE COMFORT"*. The same sentence applies here, to the successor.
 
-**REPAIR (named, not applied — beyond this lane).** Index `adv` by a genuine **resource-bounded adversary
-against the actual problem relation**, so that `MSISHardQuant adv` is neither the Boolean floor (horn A) nor
-problem-free (horn B). Concretely: `HashFloorHonesty.CollisionResistant` is the *correct* pattern already in
-the tree — a keyed family whose `wins` predicate is definitionally a genuine collision of the real function,
-so the advantage cannot be satisfied by an unrelated `adv`. The lattice floors need the `CollisionResistant`
-treatment: an `MSISSolverFamily` whose `wins n k` is definitionally `IsMSISSolution A β (find n k)`, λ-indexed
-so it does not collapse to `∃ solution` by hardcoding. **Consumer impact:** the six consumers above must then
-be re-proved with an actual reduction (their names already claim one — `lattice_vrf_uniqueness_reduces_to_msis`
-exists and is real; it is simply not in the statement). This is the difference between citing a reduction and
-carrying it.
+**REPAIR — APPLIED 2026-07-16, and it did not go where this section said it would.**
+`metatheory/Dregg2/Crypto/FloorGames.lean` (lake-green, `sorry`-free, 18 keystones `#assert_all_clean`).
+The five floors are restated as the standard cryptographic games. The paragraph this replaces prescribed
+*"the `CollisionResistant` treatment"*; the first thing the repair did was try to prove that floor false,
+and **it succeeded** — see the sub-finding below. So the repair is the game shape, with the adversary class
+as an explicit parameter, and the residual is named rather than dressed.
+
+**What was built.** One schema, five problems. A `Game` carries a λ-indexed finite instance space, an
+answer space, and a **win relation**; `Hard G Eff := ∀ A, Eff A → Negl (gameAdv G A)` where `gameAdv` is
+`ProbCrypto.winProb` of the win event. The five floors are `Hard` at five different games:
+
+| floor | `wins` is, definitionally | tooth |
+|---|---|---|
+| `MSISHardQuant F Eff` | `Lattice.IsMSISSolution (F.A l i) (F.β l) z` | `msisGame_wins_iff` (`Iff.rfl`) |
+| `MLWEHardQuant F Eff` | `s = F.secret l i`, with `mlweFamily_isSample` proving every instance IS a `Lattice.IsMLWESample` | `mlweFamily_isSample` |
+| `DLHardQuant F Eff` | `(F.C l).smul x (F.gen l) = F.chal l i` | — |
+| `HashCRHardQuant F Eff` | `p.1 ≠ p.2 ∧ F.H l k p.1 = F.H l k p.2` | `hashGame_wins_iff` (`Iff.rfl`) |
+| `DecisionMLWEHardQuant F Eff` | `|Pr[D(A·s+e)] − Pr[D(uniform)]|`, ONE `D` on both worlds | `distAdv_mem_unit` |
+
+The old content-free predicates are KEPT, renamed `ProbCrypto.MSISHardQuantShape` &c. and doc-marked
+BROKEN — §1–§4 of this finding are stated about them and must keep compiling. The rename is not cosmetic:
+every consumer still riding the shape now says so in its own signature.
+
+**⚑ THE GATE — the sweep's sharpest tooth, retired, and canaried.** `the_vrf_keystone_accepts_the_hash_floor`
+(passing a `HashCRHardQuant` proof into `lattice_vrf_uniqueness_advantage_bound`'s `MSISHardQuant` slot)
+**no longer elaborates**: the slot is `Hard (msisGame (vrfMsisFamily F)) Eff` and a hash floor is `Hard` at
+a different game. `HardQuantVacuity` §6 pins the refusal permanently with `fail_if_success` (the tree's
+negative-test idiom — there is no `#guard_msgs` anywhere in `Dregg2`), four horns: the hash floor, the
+decisional floor, `SheepCountingHardQuant`, and `MSISHardQuantShape` itself. Plus the positive pole
+(`the_repaired_keystone_fires_on_the_right_floor`) — a gate that refuses everything is a broken keystone,
+not a fixed one. **Canaried:** feeding the gate the RIGHT floor makes `fail_if_success` fail, so the test
+discriminates rather than always passing.
+
+**⚑ SUB-FINDING — `HashFloorHonesty.CollisionResistant` IS FALSE AT DEPLOYED PARAMETERS.** The pattern this
+section prescribed as *"the correct pattern already in the tree"* has the identical defect it was built to
+cure. `collisionResistant_iff_hashCRHardQuant_top` proves `CollisionResistant F ↔ HashCRHardQuant F ⊤`, and
+`collisionResistant_false_of_compressing` proves that FALSE whenever the family is compressing (a collision
+at every key — the defining property of a hash, forced by pigeonhole). The `Classical.choice` finder that
+outputs a collision at every key IS a `CollisionFinder`: that structure bounds nothing. `mod2Family_not_CR`
+fires it on `HashFloorHonesty`'s **own** compressing example — the same file whose `mod2_dumb_negligible`
+shows one DUMB finder has advantage `0`, which is true and says nothing about a `∀`-quantified floor. The
+file's satisfiability witness `idFamily_CR` is the identity hash. **Toy witness satisfiable, real hash
+false** — its own header's diagnosis of its own predecessor, for the third time in a row. Keying does not
+fix it. This is why the lattice floors did not get "the `CollisionResistant` treatment".
+
+**⚑ THE DILEMMA: NOT ESCAPED — GENERALIZED, then LOCALIZED. This is the load-bearing result.**
+`hard_top_iff_solvableFrac_negl` proves, for **any game whatsoever**:
+
+    Hard G (fun _ => True)  ↔  Negl (solvableFrac G)
+
+At the unrestricted adversary class a game floor **IS** the probabilistic existence floor. So Horn A was
+never about `msisSolverAdv` and never about the old shape — it is a theorem about **every**
+unrestricted-adversary formulation, the repaired one included. §4's "there is no third instantiation **in
+the current shape**" understates it: **no restatement of the win relation can escape, because the `↔` is an
+`↔`.** `Classical.choice` is the adversary and the win relation cannot see it coming
+(`msisHardQuant_top_false_of_compressing`; `mlweHardQuant_top_false` and `dlHardQuant_top_false`
+unconditionally — the MLWE secret and the DL exponent are *fields of the family*).
+
+**The escape is `Eff`, and only `Eff`** — the standard form's "for every EFFICIENT adversary". And here is
+the honest answer this lane owes: **this tree cannot state it.** There is no cost model. `Eff := Computable`
+does not restrict anything (`solvableIsAFiniteSearch`: every answer space is a `Fintype`, so brute force is
+a total computable function — what disqualifies it is that the search is astronomically large, and "large"
+is a statement about COST); Mathlib has no polynomial-time model over an arbitrary carrier; stating one
+needs a deep embedding of the adversary (SSProve/EasyCrypt/FCF each carry one, this tree does not).
+Inventing a shallow imitation would have been the fourth costume.
+
+So `Eff` is a **parameter**, with both poles PROVED beside it — `⊤` makes every floor false at deployed
+parameters, `⊥` makes it vacuous (`hard_bot_vacuous`) — so a reader can price any instantiation exactly.
+**Named residual: a cost model.** That is now the whole gap between these floors and cryptographic
+assumptions, and it is one object instead of five names and a docstring.
+
+**What the repair buys, stated exactly** (it is not nothing, and it is not a floor):
+1. the problem is IN the statement (`msisGame_wins_iff` unfolds `wins` to `IsMSISSolution` by `Iff.rfl`);
+2. the five floors are pairwise non-interchangeable — at the TYPE level, pinned by the §6 gate;
+3. consumers must EXHIBIT a reduction, not cite one;
+4. the dilemma is localized to one named object with both poles proved.
+
+**Consumers — 1 of 6 routed through a real reduction; the other 5 named honestly.**
+`VrfRegrounded.lattice_vrf_uniqueness_advantage_bound` is re-grounded for real: `vrfUniqGame` makes the
+uniqueness-breaker a first-class adversary, `uniqBreakToMsisSolver` IS the extractor
+`(z₁ − z₂, −(y₁ − y₂))` as a function, `uniqBreak_reduces_to_msis` is
+`VRF.lattice_vrf_uniqueness_reduces_to_msis` **applied** (win-preservation), and
+`uniqBreak_adv_le_msis_adv` is the advantage inequality by `winProb_le_of_imp`. The reduction is the only
+bridge between hypothesis and conclusion, and a canary in the file proves the keystone does NOT follow from
+the floor alone — a tooth that was impossible to write before, when hypothesis and conclusion were the same
+`Negl (adv s)`. Its one carried side condition, `hEff` ("the extracted solver is in the class"), is the
+standard "the reduction is efficient", is undischarged, and is in the open at the use site.
+
+The other four (`ThreadAdvantageBound.forger_advantage_bound_under_msis`,
+`forger_advantage_with_challenge_bound`, `decision_distinguisher_advantage_bound`, `lossy_id_advantage_bound`)
+plus `lattice_vrf_uniqueness_with_guessing_bound`'s shape-era twin **have no reduction in the tree** and are
+NOT re-grounded. They are retained, TRUE, and doc-marked ⚠ with their obligations named:
+  * the two forking legs have a REAL partial leg (`ProbCrypto.ForkingFamily.bound` is proved;
+    `HermineTSUF.prob_forger_forkProb_yields_msis` genuinely extracts an `IsMSISSolution`) but nothing
+    connects `forkProb` to the advantage of an adversary against an `MSISFamily`. **Undischarged
+    obligation: `forkProb ≤ msisAdv (extracted solver)`.**
+  * the two decisional legs have no reduction at all. **Undischarged obligation: the game hop.**
+
+That is an honest undischarged obligation, not a costume — and it is the answer to "which consumers have
+real reductions": one did, and the sweep said so.
 
 ---
 

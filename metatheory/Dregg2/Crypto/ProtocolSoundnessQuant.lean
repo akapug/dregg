@@ -3,7 +3,7 @@
 
 Track B step 4 (final). Steps 1–3 built the concrete-security substrate (`ProbCrypto`, `UcSignatureQuant`,
 `HybridThresholdQuant`): a genuine finite counting-probability `winProb`, the `ForkingFamily`/`HybridForkingFamily`
-with their PROVED forking bounds, the quantitative floors `MSISHardQuant`/`DLHardQuant`/`HashCRHardQuant`, and
+with their PROVED forking bounds, the quantitative floors `MSISHardQuantShape`/`DLHardQuantShape`/`HashCRHardQuantShape`, and
 the reductions `forking_reduces_against_floor` / `hybrid_forger_negl_under_floors` / `ucForger_negl_of_dl`. This
 module carries the PROTOCOL soundness consumers off the Boolean `¬∃solver` floors onto that substrate — ADDITIVELY.
 
@@ -18,11 +18,11 @@ discharges its `EufCma` obligation through the SAME anchor `HybridCombiner.hybri
 the SAME disjunctive floor `SchnorrDLHard ∨ MSISHard`. So their quantitative siblings collapse to ONE keystone:
 the quantitative sibling of that anchor is `HybridThresholdQuant.hybrid_forger_negl_under_floors`, and each
 consumer's break-advantage is bounded ABOVE by the hybrid forger advantage, hence negligible under
-`DLHardQuant ∨ MSISHardQuant`. That collapse is a FINDING, not a shortcut — the Boolean twins collapse the same way.
+`DLHardQuantShape ∨ MSISHardQuantShape`. That collapse is a FINDING, not a shortcut — the Boolean twins collapse the same way.
 
 Three genuine floor-classes remain, so three anchors:
 
-  **§1 — the HYBRID anchor** (`DLHardQuant ∨ MSISHardQuant`). Covers the seven signature-grounded consumers
+  **§1 — the HYBRID anchor** (`DLHardQuantShape ∨ MSISHardQuantShape`). Covers the seven signature-grounded consumers
   above. A consumer break is the event "the adversary forges the `ed25519 ∧ ML-DSA` hybrid signature AND
   thereby drives the consumer's bad outcome" — `hybridBreakAdv H bad`, the `winProb` of the CONJUNCTION of the
   hybrid-forgery event with the consumer's structural predicate `bad`. Since the conjunction implies the hybrid
@@ -30,14 +30,14 @@ Three genuine floor-classes remain, so three anchors:
   negligible under either floor. This is exactly "a chain/turn/vote/block break IS a hybrid forgery" at the
   PROBABILITY level — the quantitative shadow of each consumer's Boolean projection.
 
-  **§2 — the DL anchor** (`DLHardQuant`). The pure discrete-log consumers `TurnAuthSignature.turnauth_forces_authorization`
+  **§2 — the DL anchor** (`DLHardQuantShape`). The pure discrete-log consumers `TurnAuthSignature.turnauth_forces_authorization`
   and `DualSchemeAuthority.dualscheme_proven_forces_authorization`: a turn-auth break is a Schnorr forgery, its
-  advantage bounded by the `ForkingFamily.forgerAdv`, negligible under `DLHardQuant` via `ucForger_negl_of_dl`.
+  advantage bounded by the `ForkingFamily.forgerAdv`, negligible under `DLHardQuantShape` via `ucForger_negl_of_dl`.
 
-  **§3 — the HashCR anchor** (`HashCRHardQuant`). The collision-resistance legs — `RevocationSoundness`'s
+  **§3 — the HashCR anchor** (`HashCRHardQuantShape`). The collision-resistance legs — `RevocationSoundness`'s
   Merkle non-membership binding and `LightClientSoundness.no_long_range` — reduce a break to a hash COLLISION
   (not a forking argument). The break advantage is bounded by the collision-finding advantage, negligible under
-  `HashCRHardQuant` directly (`negl_of_le`).
+  `HashCRHardQuantShape` directly (`negl_of_le`).
 
 ## What is STRUCTURAL (honestly no floor needed)
 
@@ -123,7 +123,7 @@ theorem hybridBreakAdv_le_hybrid (H : HybridForkingFamily)
   rw [Bool.and_eq_true] at hp
   exact hp.1
 
-/-- **THE HYBRID PROTOCOL ANCHOR — `Negl (hybridBreakAdv H bad)` under `DLHardQuant ∨ MSISHardQuant`.** Every
+/-- **THE HYBRID PROTOCOL ANCHOR — `Negl (hybridBreakAdv H bad)` under `DLHardQuantShape ∨ MSISHardQuantShape`.** Every
 signature-grounded protocol consumer (chain / turn / downgrade / light-client / revocation / consensus-safety /
 block non-forgery) routes here: its break advantage — bounded above by the hybrid forger advantage
 (`hybridBreakAdv_le_hybrid`) — is negligible whenever EITHER the classical DL floor OR the pq MSIS floor holds
@@ -136,7 +136,7 @@ theorem hybrid_consumer_forge_negl (H : HybridForkingFamily)
     (dlSolverOf : Sc → Ensemble) (sc : Sc) (hsc : dlSolverOf sc = (H.classical).solverAdv)
     (msisSolverOf : Sp → Ensemble) (sp : Sp) (hsp : msisSolverOf sp = (H.pq).solverAdv)
     (hCnegC : Negl (H.classical).invChal) (hCnegP : Negl (H.pq).invChal)
-    (hfloor : DLHardQuant dlSolverOf ∨ MSISHardQuant msisSolverOf) :
+    (hfloor : DLHardQuantShape dlSolverOf ∨ MSISHardQuantShape msisSolverOf) :
     Negl (hybridBreakAdv H bad) := by
   have hhyb : Negl H.hybridForgerAdv :=
     hybrid_forger_negl_under_floors H dlSolverOf sc hsc msisSolverOf sp hsp hCnegC hCnegP hfloor
@@ -158,7 +158,7 @@ theorem turn_authority_unforgeable_quant (H : HybridForkingFamily)
     (dlSolverOf : Sc → Ensemble) (sc : Sc) (hsc : dlSolverOf sc = (H.classical).solverAdv)
     (msisSolverOf : Sp → Ensemble) (sp : Sp) (hsp : msisSolverOf sp = (H.pq).solverAdv)
     (hCnegC : Negl (H.classical).invChal) (hCnegP : Negl (H.pq).invChal)
-    (hfloor : DLHardQuant dlSolverOf ∨ MSISHardQuant msisSolverOf) :
+    (hfloor : DLHardQuantShape dlSolverOf ∨ MSISHardQuantShape msisSolverOf) :
     Negl (hybridBreakAdv H turnValid) :=
   hybrid_consumer_forge_negl H turnValid dlSolverOf sc hsc msisSolverOf sp hsp hCnegC hCnegP hfloor
 
@@ -171,7 +171,7 @@ theorem chain_unforgeable_quant (H : HybridForkingFamily)
     (dlSolverOf : Sc → Ensemble) (sc : Sc) (hsc : dlSolverOf sc = (H.classical).solverAdv)
     (msisSolverOf : Sp → Ensemble) (sp : Sp) (hsp : msisSolverOf sp = (H.pq).solverAdv)
     (hCnegC : Negl (H.classical).invChal) (hCnegP : Negl (H.pq).invChal)
-    (hfloor : DLHardQuant dlSolverOf ∨ MSISHardQuant msisSolverOf) :
+    (hfloor : DLHardQuantShape dlSolverOf ∨ MSISHardQuantShape msisSolverOf) :
     Negl (hybridBreakAdv H chainAccepts) :=
   hybrid_consumer_forge_negl H chainAccepts dlSolverOf sc hsc msisSolverOf sp hsp hCnegC hCnegP hfloor
 
@@ -184,7 +184,7 @@ theorem downgrade_resistance_quant (H : HybridForkingFamily)
     (dlSolverOf : Sc → Ensemble) (sc : Sc) (hsc : dlSolverOf sc = (H.classical).solverAdv)
     (msisSolverOf : Sp → Ensemble) (sp : Sp) (hsp : msisSolverOf sp = (H.pq).solverAdv)
     (hCnegC : Negl (H.classical).invChal) (hCnegP : Negl (H.pq).invChal)
-    (hfloor : DLHardQuant dlSolverOf ∨ MSISHardQuant msisSolverOf) :
+    (hfloor : DLHardQuantShape dlSolverOf ∨ MSISHardQuantShape msisSolverOf) :
     Negl (hybridBreakAdv H downgraded) :=
   hybrid_consumer_forge_negl H downgraded dlSolverOf sc hsc msisSolverOf sp hsp hCnegC hCnegP hfloor
 
@@ -197,7 +197,7 @@ theorem lightclient_forge_negl_quant (H : HybridForkingFamily)
     (dlSolverOf : Sc → Ensemble) (sc : Sc) (hsc : dlSolverOf sc = (H.classical).solverAdv)
     (msisSolverOf : Sp → Ensemble) (sp : Sp) (hsp : msisSolverOf sp = (H.pq).solverAdv)
     (hCnegC : Negl (H.classical).invChal) (hCnegP : Negl (H.pq).invChal)
-    (hfloor : DLHardQuant dlSolverOf ∨ MSISHardQuant msisSolverOf) :
+    (hfloor : DLHardQuantShape dlSolverOf ∨ MSISHardQuantShape msisSolverOf) :
     Negl (hybridBreakAdv H forgedVote) :=
   hybrid_consumer_forge_negl H forgedVote dlSolverOf sc hsc msisSolverOf sp hsp hCnegC hCnegP hfloor
 
@@ -210,7 +210,7 @@ theorem settlement_finality_quant (H : HybridForkingFamily)
     (dlSolverOf : Sc → Ensemble) (sc : Sc) (hsc : dlSolverOf sc = (H.classical).solverAdv)
     (msisSolverOf : Sp → Ensemble) (sp : Sp) (hsp : msisSolverOf sp = (H.pq).solverAdv)
     (hCnegC : Negl (H.classical).invChal) (hCnegP : Negl (H.pq).invChal)
-    (hfloor : DLHardQuant dlSolverOf ∨ MSISHardQuant msisSolverOf) :
+    (hfloor : DLHardQuantShape dlSolverOf ∨ MSISHardQuantShape msisSolverOf) :
     Negl (hybridBreakAdv H forgedQuorum) :=
   hybrid_consumer_forge_negl H forgedQuorum dlSolverOf sc hsc msisSolverOf sp hsp hCnegC hCnegP hfloor
 
@@ -223,20 +223,20 @@ theorem no_forged_block_quant (H : HybridForkingFamily)
     (dlSolverOf : Sc → Ensemble) (sc : Sc) (hsc : dlSolverOf sc = (H.classical).solverAdv)
     (msisSolverOf : Sp → Ensemble) (sp : Sp) (hsp : msisSolverOf sp = (H.pq).solverAdv)
     (hCnegC : Negl (H.classical).invChal) (hCnegP : Negl (H.pq).invChal)
-    (hfloor : DLHardQuant dlSolverOf ∨ MSISHardQuant msisSolverOf) :
+    (hfloor : DLHardQuantShape dlSolverOf ∨ MSISHardQuantShape msisSolverOf) :
     Negl (hybridBreakAdv H forgedBlock) :=
   hybrid_consumer_forge_negl H forgedBlock dlSolverOf sc hsc msisSolverOf sp hsp hCnegC hCnegP hfloor
 
 /-- **`revocation_forge_negl_quant`** (sibling of `RevocationSoundness.revocation_sound_under_floor`, signature
 leg). The advantage that a forged authority attestation binds a stale revocation root is negligible. `bad` =
-"the attested epoch-root was never signed by the authority". (The MERKLE-binding leg is §3, `HashCRHardQuant`.) -/
+"the attested epoch-root was never signed by the authority". (The MERKLE-binding leg is §3, `HashCRHardQuantShape`.) -/
 theorem revocation_forge_negl_quant (H : HybridForkingFamily)
     (forgedAttest : ∀ l, H.World l → H.Chal l → Bool)
     {Sc Sp : Type*}
     (dlSolverOf : Sc → Ensemble) (sc : Sc) (hsc : dlSolverOf sc = (H.classical).solverAdv)
     (msisSolverOf : Sp → Ensemble) (sp : Sp) (hsp : msisSolverOf sp = (H.pq).solverAdv)
     (hCnegC : Negl (H.classical).invChal) (hCnegP : Negl (H.pq).invChal)
-    (hfloor : DLHardQuant dlSolverOf ∨ MSISHardQuant msisSolverOf) :
+    (hfloor : DLHardQuantShape dlSolverOf ∨ MSISHardQuantShape msisSolverOf) :
     Negl (hybridBreakAdv H forgedAttest) :=
   hybrid_consumer_forge_negl H forgedAttest dlSolverOf sc hsc msisSolverOf sp hsp hCnegC hCnegP hfloor
 
@@ -244,7 +244,7 @@ theorem revocation_forge_negl_quant (H : HybridForkingFamily)
 
 /-- **(BITES — a break advantage that FORCES the floor.)** With BOTH signature components broken
 (`bothBrokenHybrid`, `2/5` each) and the structural predicate always firing (`bad ≡ true`), the consumer break
-advantage is the constant `2/5`, NOT negligible. So the `DLHardQuant ∨ MSISHardQuant` hypothesis of
+advantage is the constant `2/5`, NOT negligible. So the `DLHardQuantShape ∨ MSISHardQuantShape` hypothesis of
 `hybrid_consumer_forge_negl` is load-bearing: with neither floor holding, the protocol genuinely breaks with
 constant probability. -/
 theorem hybridBreak_bothBroken_not_negl :
@@ -278,7 +278,7 @@ theorem hybridBreak_secureLeft_negl :
 
 `TurnAuthSignature.turnauth_forces_authorization` / `DualSchemeAuthority.dualscheme_proven_forces_authorization`
 rest on `SchnorrDLHard` (via a `ForkingExtractor`), NOT the hybrid. Their break is a Schnorr forgery; the
-advantage routes through the SINGLE `DLHardQuant` floor via `ucForger_negl_of_dl`. -/
+advantage routes through the SINGLE `DLHardQuantShape` floor via `ucForger_negl_of_dl`. -/
 
 /-- **THE CONSUMER BREAK ADVANTAGE (DL).** For a `ForkingFamily F` (the Schnorr forking family) and a
 structural predicate `bad`, the `winProb` of the joint event "the turn-auth descriptor verifies (`F.acc`) AND
@@ -313,7 +313,7 @@ theorem dlBreakAdv_le_forger (F : ForkingFamily)
   rw [Bool.and_eq_true] at hp
   exact hp.1
 
-/-- **THE DL PROTOCOL ANCHOR — `Negl (dlBreakAdv F bad)` under `DLHardQuant`.** `TurnAuthSignature` /
+/-- **THE DL PROTOCOL ANCHOR — `Negl (dlBreakAdv F bad)` under `DLHardQuantShape`.** `TurnAuthSignature` /
 `DualSchemeAuthority` route here: the turn-auth break advantage — bounded above by the Schnorr forger advantage
 (`dlBreakAdv_le_forger`) — is negligible whenever the derived DL solver is quantitatively hard
 (`ucForger_negl_of_dl`) and the challenge space grows. The concrete-security sibling of
@@ -321,34 +321,34 @@ theorem dlBreakAdv_le_forger (F : ForkingFamily)
 theorem dl_consumer_forge_negl {Sv : Type*} (F : ForkingFamily)
     (bad : ∀ l, F.World l → F.Chal l → Bool)
     (solverAdvOf : Sv → Ensemble) (s : Sv) (hs : solverAdvOf s = F.solverAdv)
-    (hfloor : DLHardQuant solverAdvOf) (hCneg : Negl F.invChal) :
+    (hfloor : DLHardQuantShape solverAdvOf) (hCneg : Negl F.invChal) :
     Negl (dlBreakAdv F bad) := by
   have hf : Negl F.forgerAdv := ucForger_negl_of_dl F solverAdvOf s hs hfloor hCneg
   exact negl_of_le (dlBreakAdv_nonneg F bad) (dlBreakAdv_le_forger F bad) hf
 
 /-- **`turnauth_authorization_quant`** (sibling of `TurnAuthSignature.turnauth_forces_authorization`). The
 advantage that a verifying turn-auth descriptor exists for a turn the rightful agent never authorized is
-negligible under `DLHardQuant`. -/
+negligible under `DLHardQuantShape`. -/
 theorem turnauth_authorization_quant {Sv : Type*} (F : ForkingFamily)
     (unauthorized : ∀ l, F.World l → F.Chal l → Bool)
     (solverAdvOf : Sv → Ensemble) (s : Sv) (hs : solverAdvOf s = F.solverAdv)
-    (hfloor : DLHardQuant solverAdvOf) (hCneg : Negl F.invChal) :
+    (hfloor : DLHardQuantShape solverAdvOf) (hCneg : Negl F.invChal) :
     Negl (dlBreakAdv F unauthorized) :=
   dl_consumer_forge_negl F unauthorized solverAdvOf s hs hfloor hCneg
 
 /-- **`dualscheme_authorization_quant`** (sibling of `DualSchemeAuthority.dualscheme_proven_forces_authorization`).
-The advantage of a dual-scheme authorization break on the curve leg is negligible under `DLHardQuant`. -/
+The advantage of a dual-scheme authorization break on the curve leg is negligible under `DLHardQuantShape`. -/
 theorem dualscheme_authorization_quant {Sv : Type*} (F : ForkingFamily)
     (dualBreak : ∀ l, F.World l → F.Chal l → Bool)
     (solverAdvOf : Sv → Ensemble) (s : Sv) (hs : solverAdvOf s = F.solverAdv)
-    (hfloor : DLHardQuant solverAdvOf) (hCneg : Negl F.invChal) :
+    (hfloor : DLHardQuantShape solverAdvOf) (hCneg : Negl F.invChal) :
     Negl (dlBreakAdv F dualBreak) :=
   dl_consumer_forge_negl F dualBreak solverAdvOf s hs hfloor hCneg
 
 /-! ### Non-vacuity (DL) — the pure-DL break advantage is load-bearing. -/
 
 /-- **(BITES — DL break advantage forces the floor.)** The const-`2/5` `const25Family` with `bad ≡ true` has DL
-break advantage the constant `2/5`, NOT negligible. So `DLHardQuant` is load-bearing: an easy DL breaks turn-auth
+break advantage the constant `2/5`, NOT negligible. So `DLHardQuantShape` is load-bearing: an easy DL breaks turn-auth
 with constant probability. -/
 theorem dlBreak_const25_not_negl :
     ¬ Negl (dlBreakAdv const25Family (fun _ _ _ => true)) := by
@@ -374,9 +374,9 @@ theorem dlBreak_zero_negl :
 
 `RevocationSoundness`'s Merkle non-membership binding and `LightClientSoundness.no_long_range` reduce a break to
 a hash COLLISION (not a forking argument). The break advantage is bounded by the collision-finding advantage,
-negligible under `HashCRHardQuant` directly — no forking, just domination. -/
+negligible under `HashCRHardQuantShape` directly — no forking, just domination. -/
 
-/-- **THE HashCR PROTOCOL ANCHOR — `Negl breakAdv` under `HashCRHardQuant`.** A nonnegative break advantage
+/-- **THE HashCR PROTOCOL ANCHOR — `Negl breakAdv` under `HashCRHardQuantShape`.** A nonnegative break advantage
 `breakAdv` bounded pointwise by the collision-finding advantage `collAdv` of a collision solver `s` the floor
 quantifies over is negligible. Covers `revoked_cannot_prove_absence` (a false absence proof is a Merkle
 collision) and `no_long_range` (an alternate history at the committed root is a frame collision). The advantage
@@ -384,40 +384,40 @@ inequality `breakAdv ≤ collAdv` is the collision-resistance reduction at the p
 theorem hashcr_consumer_break_negl {S : Type*} (breakAdv collAdv : Ensemble)
     (hnn : ∀ n, 0 ≤ breakAdv n) (hle : ∀ n, breakAdv n ≤ collAdv n)
     (collSolverOf : S → Ensemble) (s : S) (hs : collSolverOf s = collAdv)
-    (hfloor : HashCRHardQuant collSolverOf) : Negl breakAdv :=
+    (hfloor : HashCRHardQuantShape collSolverOf) : Negl breakAdv :=
   negl_of_le hnn hle (hs ▸ hfloor s)
 
 /-- **`revocation_nonrevocation_quant`** (sibling of `RevocationSoundness.revoked_cannot_prove_absence`). The
-advantage that a revoked id proves absence — a Merkle collision — is negligible under `HashCRHardQuant`. -/
+advantage that a revoked id proves absence — a Merkle collision — is negligible under `HashCRHardQuantShape`. -/
 theorem revocation_nonrevocation_quant {S : Type*} (breakAdv collAdv : Ensemble)
     (hnn : ∀ n, 0 ≤ breakAdv n) (hle : ∀ n, breakAdv n ≤ collAdv n)
     (collSolverOf : S → Ensemble) (s : S) (hs : collSolverOf s = collAdv)
-    (hfloor : HashCRHardQuant collSolverOf) : Negl breakAdv :=
+    (hfloor : HashCRHardQuantShape collSolverOf) : Negl breakAdv :=
   hashcr_consumer_break_negl breakAdv collAdv hnn hle collSolverOf s hs hfloor
 
 /-- **`lightclient_no_long_range_quant`** (sibling of `LightClientSoundness.no_long_range` /
 `accepting_long_range_breaks_hashcr`). The advantage that a light client accepts an alternate long-range history
-at the committed frame root — a frame collision — is negligible under `HashCRHardQuant`. -/
+at the committed frame root — a frame collision — is negligible under `HashCRHardQuantShape`. -/
 theorem lightclient_no_long_range_quant {S : Type*} (breakAdv collAdv : Ensemble)
     (hnn : ∀ n, 0 ≤ breakAdv n) (hle : ∀ n, breakAdv n ≤ collAdv n)
     (collSolverOf : S → Ensemble) (s : S) (hs : collSolverOf s = collAdv)
-    (hfloor : HashCRHardQuant collSolverOf) : Negl breakAdv :=
+    (hfloor : HashCRHardQuantShape collSolverOf) : Negl breakAdv :=
   hashcr_consumer_break_negl breakAdv collAdv hnn hle collSolverOf s hs hfloor
 
 /-! ### Non-vacuity (HashCR) — the collision floor is load-bearing. -/
 
 /-- **(FIRES — HashCR break vanishes under the floor.)** A break advantage `≡ 0` bounded by a collision advantage
-`≡ 0`, with the trivial `HashCRHardQuant` floor: negligible, the reduction runs. -/
+`≡ 0`, with the trivial `HashCRHardQuantShape` floor: negligible, the reduction runs. -/
 theorem hashcr_break_zero_negl :
     Negl (fun _ : ℕ => (0 : ℝ)) :=
   hashcr_consumer_break_negl (fun _ => 0) (fun _ => 0) (fun _ => le_refl 0) (fun _ => le_refl 0)
     (fun _ : Unit => (fun _ => (0 : ℝ))) () rfl (fun _ => negl_zero)
 
 /-- **(BITES — the collision floor is load-bearing.)** A collision solver of constant-`1` advantage refutes
-`HashCRHardQuant` (`not_negl_one`), so no floor holds for it — exactly as a broken hash lets a revoked id prove
+`HashCRHardQuantShape` (`not_negl_one`), so no floor holds for it — exactly as a broken hash lets a revoked id prove
 absence with certainty. The quantitative collision floor is what buys the Merkle/long-range guarantees. -/
 theorem hashcr_floor_load_bearing :
-    ¬ HashCRHardQuant (fun _ : Unit => (fun _ => (1 : ℝ) : Ensemble)) :=
+    ¬ HashCRHardQuantShape (fun _ : Unit => (fun _ => (1 : ℝ) : Ensemble)) :=
   fun h => not_negl_one (h ())
 
 /-! ## Kernel-clean keystones. -/

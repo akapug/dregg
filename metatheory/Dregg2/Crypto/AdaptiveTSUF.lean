@@ -88,7 +88,7 @@ open Dregg2.Crypto.HermineSelfTargetMSIS
 open Dregg2.Crypto.HermineHintMLWE
 open Dregg2.Crypto.HermineTSUF
 open Dregg2.Crypto.ConcreteSecurity (Negl Ensemble)
-open Dregg2.Crypto.ProbCrypto (DecisionMLWEHardQuant)
+open Dregg2.Crypto.ProbCrypto (DecisionMLWEHardQuantShape)
 
 /-! ## `section AdaptiveGame` — the interleaved corruption/signing transcript, the adaptive oracle, the budget. -/
 
@@ -358,7 +358,7 @@ DECISIONAL fact: the sampled masked response `z_i` is computationally INDISTINGU
 response — the transcript distinguisher's LWE-vs-uniform advantage is negligible. The tree grounds that in
 `HermineHintMLWE.HintTranscriptSimulatable` (the uniform-smudging TV bound) reduced to the SEARCH floor
 `MLWESearchHard` (`hint_mlwe_reduces_to_mlwe`). Here it is re-grounded on the PROPER DECISIONAL floor
-`ProbCrypto.DecisionMLWEHardQuant` (the distinguishing-advantage ENSEMBLE `|Pr[D(real)] − Pr[D(sim)]|`
+`ProbCrypto.DecisionMLWEHardQuantShape` (the distinguishing-advantage ENSEMBLE `|Pr[D(real)] − Pr[D(sim)]|`
 negligible), the honest shape for an indistinguishability statement — a difference of probabilities, not a
 single win/search probability.
 
@@ -368,7 +368,7 @@ secret), not decisional, and is re-grounded separately on the search-quant floor
 masking-indistinguishability leg re-grounds here. -/
 
 /-- **`adaptive_transcript_nonleaking_under_decision_floor` — the decisional re-grounding.** Under the proper
-decisional floor `DecisionMLWEHardQuant advSim` (`advSim s` the transcript-distinguisher's LWE-vs-uniform
+decisional floor `DecisionMLWEHardQuantShape advSim` (`advSim s` the transcript-distinguisher's LWE-vs-uniform
 advantage ENSEMBLE), the adaptive on-demand reveal is NON-LEAKING: the simulated transcript
 `simTranscriptCommit` is (a) ALGEBRAICALLY erasure-consistent with the ENTIRE realized corrupt set — PROVED
 outright by `adaptive_erasure_from_simulation`, no hypothesis — AND (b) COMPUTATIONALLY indistinguishable
@@ -377,7 +377,7 @@ Together: the reveal is consistent by construction and hides the secret, on a ge
 theorem adaptive_transcript_nonleaking_under_decision_floor {S : Type*}
     (A : M →ₗ[Rq] N) (trace : List (AdaptiveStep Fld Msg))
     (memberKey : Fld → N) (chal : Fld → Rq) (resp : Fld → M)
-    (advSim : S → Ensemble) (s : S) (hfloor : DecisionMLWEHardQuant advSim) :
+    (advSim : S → Ensemble) (s : S) (hfloor : DecisionMLWEHardQuantShape advSim) :
     AdaptiveErasure A trace memberKey chal resp (simTranscriptCommit A memberKey chal resp)
     ∧ Negl (advSim s) :=
   ⟨adaptive_erasure_from_simulation A trace memberKey chal resp, hfloor s⟩
@@ -589,7 +589,7 @@ theorem exAdaptiveNonleaking :
 it, so the masking indistinguishability the reveal relies on is a genuine decisional hardness assumption, not
 a Boolean flag. -/
 theorem exAdaptive_decision_floor_load_bearing :
-    ¬ DecisionMLWEHardQuant (fun _ : Unit => ProbCrypto.perfectDist.adv) :=
+    ¬ DecisionMLWEHardQuantShape (fun _ : Unit => ProbCrypto.perfectDist.adv) :=
   ProbCrypto.decisionMLWEHardQuant_perfect_refuted
 
 end Teeth

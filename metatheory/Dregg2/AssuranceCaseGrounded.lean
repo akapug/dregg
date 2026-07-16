@@ -360,7 +360,7 @@ structure BroaderCryptoReductionSuite : Prop where
     (_hCR : Dregg2.Circuit.HashFloorHonesty.CollisionResistant F)
     (equivocator : Dregg2.Circuit.HashFloorHonesty.CollisionFinder F)
     (adv : Solver → Dregg2.Crypto.ConcreteSecurity.Ensemble) (solver : Solver),
-    Dregg2.Crypto.ProbCrypto.MSISHardQuant adv →
+    Dregg2.Crypto.ProbCrypto.MSISHardQuantShape adv →
     Dregg2.Crypto.ConcreteSecurity.Negl
       (fun n => Dregg2.Circuit.HashFloorHonesty.collisionAdv F equivocator n + adv solver n)
 

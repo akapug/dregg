@@ -8,7 +8,7 @@ The 07-13 floor-fix (`Dregg2/Circuit/HashFloorHonesty.lean` + `Dregg2/Crypto/Cry
 proved the OLD floors — `HashCR` / `Poseidon2SpongeCR` / `compressNInjective` / `MSISHard` — stated as
 INJECTIVITY / existence-refutation, VACUOUS at real parameters, and defined the PROPER computational
 replacements: `CollisionResistant` (a keyed hash family: every collision-finder's advantage `Negl`) and
-the adversary-indexed `MSISHardQuant`/`HashCRHardQuant` (`∀ s, Negl (adv s)`). That left ~180 downstream
+the adversary-indexed `MSISHardQuantShape`/`HashCRHardQuantShape` (`∀ s, Negl (adv s)`). That left ~180 downstream
 consumers to re-thread. The threading is UNIFORM: each old-floor use — a Boolean "two openings ⟹ equal"
 — becomes an ADDITIVE negligible advantage term, and the resulting `Negl` obligation is discharged by the
 negligibility-closure algebra of `Dregg2/Crypto/ConcreteSecurity.lean`
@@ -24,7 +24,7 @@ pulling the proper floor from the local context at the leaves:
   * `Negl (collisionAdv F A)`                ↦ the floor `hCR : CollisionResistant F` applied to `A`
                                                 (the single-use equivocation leaf — an equivocating opener
                                                  IS a collision finder, so its success is the floor's bound)
-  * `Negl (adv s)`                           ↦ the floor `hfloor : MSISHardQuant adv` (etc.) applied to `s`
+  * `Negl (adv s)`                           ↦ the floor `hfloor : MSISHardQuantShape adv` (etc.) applied to `s`
   * `Negl (fun n => f n + g n)`              ↦ `negl_add`, recurse on both      (two independent hash legs)
   * `Negl (fun n => a * f n)`                ↦ `negl_const_mul`, recurse         (a query-count / RLC factor)
   * `Negl (fun n => nᵏ * f n)`               ↦ `negl_mul_monomial`, recurse      (a polynomial factor)
@@ -69,7 +69,7 @@ namespace Dregg2.Tactics.ThreadAdvantageBound
 open Dregg2.Crypto.ConcreteSecurity
   (Negl negl_zero negl_two_pow negl_add negl_const_mul negl_mul_monomial negl_finset_sum Ensemble)
 open Dregg2.Crypto.ProbCrypto
-  (MSISHardQuant MLWEHardQuant DLHardQuant HashCRHardQuant DecisionMLWEHardQuant)
+  (MSISHardQuantShape MLWEHardQuantShape DLHardQuantShape HashCRHardQuantShape DecisionMLWEHardQuantShape)
 open Dregg2.Circuit.HashFloorHonesty
   (KeyedHashFamily CollisionFinder CollisionResistant collisionAdv)
 
@@ -78,7 +78,7 @@ set_option autoImplicit false
 /-! ## The floor LEAF — close `Negl (collisionAdv F A)` / `Negl (adv s)` from the proper floor in context.
 
 The proper floors are `∀`-statements (`CollisionResistant F := ∀ A, Negl (collisionAdv F A)`,
-`MSISHardQuant adv := ∀ s, Negl (adv s)`), so a floor leaf is the floor hypothesis APPLIED to the
+`MSISHardQuantShape adv := ∀ s, Negl (adv s)`), so a floor leaf is the floor hypothesis APPLIED to the
 adversary/index the goal names. `‹CollisionResistant _›` finds the floor in context; `_` is the
 adversary, unified from the goal. `assumption` catches a bare `Negl _` hypothesis. -/
 syntax "advantage_floor_leaf" : tactic
@@ -86,11 +86,11 @@ macro_rules
   | `(tactic| advantage_floor_leaf) =>
     `(tactic| first
         | exact ‹CollisionResistant _› _
-        | exact ‹HashCRHardQuant _› _
-        | exact ‹MSISHardQuant _› _
-        | exact ‹MLWEHardQuant _› _
-        | exact ‹DecisionMLWEHardQuant _› _
-        | exact ‹DLHardQuant _› _
+        | exact ‹HashCRHardQuantShape _› _
+        | exact ‹MSISHardQuantShape _› _
+        | exact ‹MLWEHardQuantShape _› _
+        | exact ‹DecisionMLWEHardQuantShape _› _
+        | exact ‹DLHardQuantShape _› _
         | assumption)
 
 /-! ## `thread_advantage_bound` — the recursive closure-algebra discharger.
@@ -164,50 +164,74 @@ theorem stark_sound_tower_advantage_bound {F : KeyedHashFamily}
         + (∑ r ∈ rounds, collisionAdv F (finder r) n) + 0) := by
   thread_advantage_bound
 
-/-! ## §4 — PROTOTYPE on the ADVERSARY-INDEXED floor (the crypto/lattice leg).
+/-! ## §4 — the `*HardQuantShape` leg. ⚠ **NO PROBLEM CONTENT — UNDISCHARGED OBLIGATIONS, NOT KEYSTONES.**
 
-The `CryptoFloorTeeth` re-grounding replaces the Boolean `MSISHard` with the adversary-indexed
-`MSISHardQuant adv := ∀ s, Negl (adv s)`. A forger's advantage at a fixed solver index threads directly
-through the floor leaf — the same tactic covers the lattice side of the sweep. -/
+⚑ **Read this before the four theorems below.** The 07-16 vacuity sweep proved that
+`MSISHardQuantShape adv := ∀ s, Negl (adv s)` mentions no lattice and is `Iff.rfl`-equal to the hash-CR and
+discrete-log floors, so `(adv) (s) (hfloor : MSISHardQuantShape adv) : Negl (adv s)` is `hfloor s` — a
+`P → P` instantiation that transports no hardness (`HardQuantVacuity` §2). The floors were renamed to
+`*Shape` in the 07-16 repair precisely so these signatures would stop claiming otherwise: the hypothesis
+now says, in its own name, that it is a shape and not a problem.
 
-/-- **ADVERSARY-INDEXED restatement.** Under `MSISHardQuant adv` (the proper resource-bounded floor), the
-advantage of any fixed solver index `s` is negligible — the leaf that re-threads every `MSISHard`
-consumer. Proof: `thread_advantage_bound` (the `MSISHardQuant` floor leaf). -/
+**These four are RETAINED and are NOT re-grounded.** `VrfRegrounded.lattice_vrf_uniqueness_advantage_bound`
+was re-grounded because its reduction (`VRF.lattice_vrf_uniqueness_reduces_to_msis`) exists in the tree and
+could be put into the statement. These four have no such reduction available:
+
+  * the two forking legs (`forger_advantage_bound_under_msis`, `forger_advantage_with_challenge_bound`) have
+    a REAL partial leg — `ProbCrypto.ForkingFamily.bound` is a proved inequality and
+    `HermineTSUF.prob_forger_forkProb_yields_msis` genuinely extracts an `IsMSISSolution` — but nothing in
+    the tree connects `forkProb` to the advantage of an adversary against an `FloorGames.MSISFamily`. That
+    connection is the honest remaining work, and inventing it in a docstring is what this whole sweep is
+    about. **Named obligation: `forkProb ≤ msisAdv (extracted solver)`, undischarged.**
+  * the two decisional legs (`decision_distinguisher_advantage_bound`, `lossy_id_advantage_bound`) have NO
+    reduction in the tree at all — nothing relates the lossy-keygen switch or the HVZK simulation term to
+    `FloorGames.DecisionMLWEHardQuant`'s LWE-vs-uniform game. **Named obligation: the game hop itself,
+    undischarged.**
+
+They are kept because they are TRUE and because the tactic prototypes are real; they are labelled because
+they are `P → P`. Do not cite them as MSIS/decision-MLWE grounding. -/
+
+/-- ⚠ **NO MSIS CONTENT — `hfloor s`.** Under `MSISHardQuantShape adv` — a predicate that mentions no
+lattice — the advantage at index `s` is negligible. The name says `under_msis`; the statement does not.
+Retained as the tactic prototype and as an undischarged obligation (§4 header). The honest floor is
+`FloorGames.MSISHardQuant`; the missing leg is `forkProb ≤ msisAdv (extracted solver)`. -/
 theorem forger_advantage_bound_under_msis {S : Type*} (adv : S → Ensemble) (s : S)
-    (hfloor : MSISHardQuant adv) :
+    (hfloor : MSISHardQuantShape adv) :
     Negl (adv s) := by
   thread_advantage_bound
 
-/-- A mixed lattice bound: a decaying challenge-space term `1/2ⁿ` PLUS the solver's advantage, negligible
-under the floor — `negl_two_pow` on the challenge leg, the floor leaf on the solver leg. -/
+/-- ⚠ **NO MSIS CONTENT** (§4 header). A mixed bound: a decaying challenge-space term `1/2ⁿ` PLUS the
+advantage at `s`. The `1/2ⁿ` leg is negligible on its own (`negl_two_pow`, no floor needed) and the other
+leg is `hfloor s`, so the decoration adds nothing the floor did not already hand back. -/
 theorem forger_advantage_with_challenge_bound {S : Type*} (adv : S → Ensemble) (s : S)
-    (hfloor : MSISHardQuant adv) :
+    (hfloor : MSISHardQuantShape adv) :
     Negl (fun n => (1 / (2 : ℝ) ^ n) + adv s n) := by
   thread_advantage_bound
 
 /-! ## §4b — PROTOTYPE on the DECISIONAL floor (the LWE-vs-uniform distinguishing leg).
 
 The decisional consumers (`LossyIdentification`'s lossy-keygen switch, the HVZK transcript-indistinguishability
-leg of `AdaptiveTSUF`/`ThresholdSignerRefinement`) rest on `DecisionMLWEHardQuant adv := ∀ s, Negl (adv s)`,
+leg of `AdaptiveTSUF`/`ThresholdSignerRefinement`) rest on `DecisionMLWEHardQuantShape adv := ∀ s, Negl (adv s)`,
 where `adv s` is a distinguisher's LWE-vs-uniform advantage ENSEMBLE (`ProbCrypto.distinguishAdv`, a
 DIFFERENCE of two acceptance probabilities — not a single `winProb`). The new floor leaf threads it exactly
 like the search floors. -/
 
-/-- **DECISIONAL restatement.** Under `DecisionMLWEHardQuant adv` (the proper distinguishing floor), the
-advantage of any fixed distinguisher index `s` is negligible — the leaf that re-threads every decision-MLWE
-consumer. Proof: `thread_advantage_bound` (the `DecisionMLWEHardQuant` floor leaf). -/
+/-- ⚠ **NO DECISION-MLWE CONTENT — `hfloor s`** (§4 header). `DecisionMLWEHardQuantShape adv` is the same
+content-free `Prop` as the MSIS shape; nothing in it is a distinguishing game. The honest floor is
+`FloorGames.DecisionMLWEHardQuant`, whose real world is a PROVED `Lattice.IsMLWESample`; the missing leg is
+the game hop that would connect this consumer to it. -/
 theorem decision_distinguisher_advantage_bound {S : Type*} (adv : S → Ensemble) (s : S)
-    (hfloor : DecisionMLWEHardQuant adv) :
+    (hfloor : DecisionMLWEHardQuantShape adv) :
     Negl (adv s) := by
   thread_advantage_bound
 
-/-- **MIXED decisional tower (the lossy-ID game-hop shape).** The tight-EUF-CMA advantage decomposes as the
+/-- ⚠ **NO DECISION-MLWE CONTENT** (§4 header). The lossy-ID game-hop SHAPE: the tight-EUF-CMA advantage decomposes as the
 decision-MLWE key-switch term (`adv s`, a distinguishing floor leaf) PLUS the statistical lossy-soundness
 term PLUS the HVZK simulation term (both given negligible) — negligible by additive threading. Proof:
-`thread_advantage_bound` (`negl_add` down to the `DecisionMLWEHardQuant` leaf and the two `assumption`
+`thread_advantage_bound` (`negl_add` down to the `DecisionMLWEHardQuantShape` leaf and the two `assumption`
 legs). -/
 theorem lossy_id_advantage_bound {S : Type*} (adv : S → Ensemble) (s : S) (lossyBound simTerm : Ensemble)
-    (hfloor : DecisionMLWEHardQuant adv) (hlossy : Negl lossyBound) (hsim : Negl simTerm) :
+    (hfloor : DecisionMLWEHardQuantShape adv) (hlossy : Negl lossyBound) (hsim : Negl simTerm) :
     Negl (fun n => adv s n + lossyBound n + simTerm n) := by
   thread_advantage_bound
 

@@ -105,7 +105,7 @@ negligibility).** Every bounded key distinguisher's advantage against the real (
 distributions is `≤ adv` for a FIXED real `adv`. This states the correct DECISIONAL shape (`|E_wr D − E_wl D|`,
 the LWE-vs-uniform gap) but is NOT an asymptotic hardness assumption: held at `adv = 1` it is trivially
 satisfied (every advantage is `≤ 1`), so it carries no rate content — it cannot force the EUF-CMA advantage to
-DECAY. The honest floor is the ENSEMBLE-indexed `ProbCrypto.DecisionMLWEHardQuant` (`∀ s, Negl (adv s)`, §5),
+DECAY. The honest floor is the ENSEMBLE-indexed `ProbCrypto.DecisionMLWEHardQuantShape` (`∀ s, Negl (adv s)`, §5),
 on which the tight bound is re-grounded as a genuine NEGLIGIBILITY theorem. Kept for the definitional
 `key_switch_is_decision_mlwe` identity; superseded as a floor. -/
 def DecisionMLWEHard (wr wl : N → ℝ) (adv : ℝ) : Prop :=
@@ -335,7 +335,7 @@ end Reduction
 
 `DecisionMLWEHard` (§1) is a per-instance advantage BOUND (`≤ adv` for a FIXED real), not a hardness floor —
 trivially satisfied at `adv = 1`, so it cannot force the EUF-CMA advantage to DECAY. The honest floor is
-`ProbCrypto.DecisionMLWEHardQuant dmlweAdv := ∀ s, Negl (dmlweAdv s)`, the distinguishing-advantage ENSEMBLE
+`ProbCrypto.DecisionMLWEHardQuantShape dmlweAdv := ∀ s, Negl (dmlweAdv s)`, the distinguishing-advantage ENSEMBLE
 (`ProbCrypto.distinguishAdv`, `|Pr[D(real)] − Pr[D(uniform)]|`) negligible. Here the AFLT/KLS tight bound is
 re-grounded on it: the key-switch cost is a decision-MLWE distinguisher's advantage (a floor leaf), and the
 whole real-key EUF-CMA advantage ensemble is NEGLIGIBLE. This is the decisional analog of
@@ -344,14 +344,14 @@ whole real-key EUF-CMA advantage ensemble is NEGLIGIBLE. This is the decisional 
 section DecisionRegrounded
 
 open Dregg2.Crypto.ConcreteSecurity
-open Dregg2.Crypto.ProbCrypto (DecisionMLWEHardQuant)
+open Dregg2.Crypto.ProbCrypto (DecisionMLWEHardQuantShape)
 
 /-- **`eufcma_tight_negl_under_decision_floor` — THE RE-GROUNDED TIGHT BOUND (negligibility form).** The
 real-key EUF-CMA advantage ENSEMBLE `eufcmaReal` is negligible, given: (a) it is a genuine nonneg advantage;
 (b) the key-switch cost at every parameter is bounded by a decision-MLWE distinguisher's advantage
 `dmlweAdv s` (§2, `key_switch_is_decision_mlwe`, coefficient 1 — no `√`, no `ε²`, no `q_H`); (c) the lossy
 key game bounds EUF-CMA-lossy by the statistical lossy-soundness ensemble `lossyBound` plus the HVZK
-simulation ensemble `simTerm`, both negligible. Under the proper `DecisionMLWEHardQuant dmlweAdv` floor the
+simulation ensemble `simTerm`, both negligible. Under the proper `DecisionMLWEHardQuantShape dmlweAdv` floor the
 key-switch term is negligible (`hfloor s`), the tight composition `eufcmaReal ≤ dmlweAdv s + lossyBound +
 simTerm` (triangle inequality of §4's game hops) dominates `eufcmaReal`, so `Negl eufcmaReal` by domination.
 The decisional floor is LOAD-BEARING: strip it (`dmlweAdv` non-negligible) and the domination fails. This
@@ -361,7 +361,7 @@ theorem eufcma_tight_negl_under_decision_floor {S : Type*}
     (hnn : ∀ n, 0 ≤ eufcmaReal n)
     (hswitch : ∀ n, |eufcmaReal n - eufcmaLossy n| ≤ dmlweAdv s n)
     (hlossy : ∀ n, eufcmaLossy n ≤ lossyBound n + simTerm n)
-    (hfloor : DecisionMLWEHardQuant dmlweAdv) (hlB : Negl lossyBound) (hsT : Negl simTerm) :
+    (hfloor : DecisionMLWEHardQuantShape dmlweAdv) (hlB : Negl lossyBound) (hsT : Negl simTerm) :
     Negl eufcmaReal := by
   have hsum : Negl (fun n => dmlweAdv s n + lossyBound n + simTerm n) :=
     negl_add (negl_add (hfloor s) hlB) hsT
@@ -390,7 +390,7 @@ theorem tooth_eufcma_tight_negl_fires :
 key-switch term the tight reduction consumes is genuinely a decisional hardness assumption, not a Boolean
 flag. Strip the floor and `eufcma_tight_negl_under_decision_floor`'s domination fails. -/
 theorem tooth_decision_floor_load_bearing :
-    ¬ DecisionMLWEHardQuant (fun _ : Unit => ProbCrypto.perfectDist.adv) :=
+    ¬ DecisionMLWEHardQuantShape (fun _ : Unit => ProbCrypto.perfectDist.adv) :=
   ProbCrypto.decisionMLWEHardQuant_perfect_refuted
 
 end DecisionRegrounded

@@ -16,7 +16,7 @@ exactly here: the SIS witness extracted from a binding break is
 The first section records only the generic additive algebra.  The security floor below it is no
 longer scalar: it uses the repository's genuine ML-DSA-65 negacyclic ring and module dimensions,
 the existing Hermine product norm and augmented map, and the existing adversary-indexed
-`ProbCrypto.MSISHardQuant` floor.  A finite parameter distribution samples `(A,G,β)` for each security
+`ProbCrypto.MSISHardQuantShape` floor.  A finite parameter distribution samples `(A,G,β)` for each security
 parameter; a resource model identifies uniform efficient adversaries and proves that subtraction
 preserves efficiency.  The concrete production sampler and its parameter estimate remain explicit
 crypto-build inputs, not theorems manufactured here.
@@ -140,7 +140,7 @@ theorem combine_radius_is_aggregate (A G : R) (IsShort : R → R → Prop)
 The scalar `[A | G] : R² → R` model ends here.  The construction below reuses the exact
 `HermineSelfTargetMSIS.augmented` map and `Lattice.IsMSISSolution` relation over ML-DSA-65's genuine
 negacyclic ring `R_q = Z_q[X]/(X^256+1)`.  Binding is computational: every resource-bounded binding
-adversary has negligible advantage under the existing adversary-indexed `ProbCrypto.MSISHardQuant`
+adversary has negligible advantage under the existing adversary-indexed `ProbCrypto.MSISHardQuantShape`
 floor.  No second Module-SIS definition is introduced.
 -/
 
@@ -390,7 +390,7 @@ structure ResourceModel (D : ParameterDistribution) where
 /-- The existing adversary-indexed quantitative Module-SIS floor, specialized to the efficient
 solvers for this real instance. -/
 abbrev MSISHard (D : ParameterDistribution) (M : ResourceModel D) : Prop :=
-  MSISHardQuant (fun S : {S : MSISSolver D // M.msisEfficient S} => msisAdv D S.1)
+  MSISHardQuantShape (fun S : {S : MSISSolver D // M.msisEfficient S} => msisAdv D S.1)
 
 /-- Computational aggregate binding: every efficient binding adversary has negligible advantage. -/
 def AggregateBinding (D : ParameterDistribution) (M : ResourceModel D) : Prop :=

@@ -28,15 +28,15 @@ module adds that quantitative layer ALONGSIDE the Boolean floors — it does not
   in the query-bounded ROM is the standard tractable model (no PPT Turing machine needed). Its
   `romAdvantage` is the `winProb` over the uniformly-sampled answer space.
 
-  **§3 — QUANTITATIVE HARDNESS FLOORS (ADDITIVE).** `MSISHardQuant (adv) := ∀ s, Negl (adv s)` — every
+  **§3 — QUANTITATIVE HARDNESS FLOORS (ADDITIVE).** `MSISHardQuantShape (adv) := ∀ s, Negl (adv s)` — every
   solver's MSIS-solving advantage is negligible. This is the concrete-security analog of the Boolean
-  `Lattice.MSISHard`; the Boolean floor is UNTOUCHED. `MLWEHardQuant` / `DLHardQuant` / `HashCRHardQuant`
+  `Lattice.MSISHard`; the Boolean floor is UNTOUCHED. `MLWEHardQuantShape` / `DLHardQuantShape` / `HashCRHardQuantShape`
   are the same shape. BOTH TEETH: the all-zero advantage floor holds; a constant-`1` solver refutes it.
 
   **§4 — THE RE-THREADED FORKING → MSIS REDUCTION (concrete-security form).** The keystone. `negl_of_negl_sq`
   (`Negl ε² → Negl ε` for `ε ≥ 0`, a genuine non-trivial squeeze) plus `negl_of_forking_bound` turn the
   finite forking inequality `forkProb ≥ ε·(ε − 1/|C|)` into an ADVANTAGE-INEQUALITY REDUCTION against the
-  QUANTITATIVE floor: `forking_reduces_to_MSISHardQuant` proves `MSISHardQuant ⟹ Negl (forger advantage)`.
+  QUANTITATIVE floor: `forking_reduces_to_MSISHardQuant` proves `MSISHardQuantShape ⟹ Negl (forger advantage)`.
   A forger with non-negligible advantage yields an MSIS solver with related non-negligible advantage,
   contradicting the quantitative floor — the concrete-security content the tree previously stated only
   Boolean-ly. The reduction BITES: a constant-`2/5`-advantage forger family forces solver advantage
@@ -100,6 +100,29 @@ theorem winProb_bot {Ω : Type*} [Fintype Ω] :
   unfold winProb
   simp
 
+/-- **`winProb` is monotone in the win predicate.** If every outcome that wins `f` also wins `g`, then
+`winProb f ≤ winProb g` — the favorable set of `f` is a subset of `g`'s, and the outcome count is shared.
+The probability-level lift of an event implication ("a break IS a forgery", "an adversary only wins where
+a win exists"). -/
+theorem winProb_le_of_imp {Ω : Type*} [Fintype Ω] {f g : Ω → Bool}
+    (h : ∀ o, f o = true → g o = true) : winProb f ≤ winProb g := by
+  unfold winProb
+  have hsub : (Finset.univ.filter (fun o => f o = true))
+      ⊆ (Finset.univ.filter (fun o => g o = true)) := by
+    intro o ho
+    simp only [Finset.mem_filter, Finset.mem_univ, true_and] at ho ⊢
+    exact h o ho
+  gcongr
+
+/-- **DOMINATION for negligibility.** A NONNEGATIVE ensemble `f` dominated pointwise by an ensemble `g`
+that is negligible is itself negligible. The squeeze every advantage-inequality reduction uses to conclude
+`Negl (small advantage)` from `Negl (component advantage)`. -/
+theorem negl_of_le {f g : ℕ → ℝ} (hfn : ∀ n, 0 ≤ f n) (hle : ∀ n, f n ≤ g n)
+    (hg : Negl g) : Negl f := by
+  refine negl_of_eventually_le (Filter.Eventually.of_forall (fun n => ?_)) hg
+  rw [abs_of_nonneg (hfn n)]
+  exact le_trans (hle n) (le_abs_self _)
+
 /-! ## §2 — Query-bounded-ROM adversaries.
 
 Concrete security in the query-bounded random-oracle model: the adversary makes at most `qH` oracle
@@ -133,30 +156,45 @@ theorem romAdvantage_mem_unit {qH : ℕ} {Ans Out : Type*} [Fintype Ans]
 sibling: parametrized by a family of solvers `S` and each solver's success-probability ENSEMBLE
 `adv : S → Ensemble`, the quantitative floor says every solver's advantage is negligible. -/
 
-/-- **`MSISHardQuant adv` — the QUANTITATIVE MSIS floor.** Every solver `s`'s MSIS-solving advantage
-(`adv s : Ensemble`, a real success probability indexed by the security parameter) is negligible. This is
-the concrete-security analog of the Boolean `Lattice.MSISHard`; it is a NEW definition alongside it, never
-a relabelling — the advantage is a genuine `ℝ`-valued ensemble that CAN be non-negligible. -/
-def MSISHardQuant {S : Type*} (adv : S → Ensemble) : Prop := ∀ s, Negl (adv s)
+/-- ⚠ **BROKEN AS A FLOOR — NO PROBLEM CONTENT. RETAINED AS THE CARRIER OF ITS OWN DEFECT.**
 
-/-- **`MLWEHardQuant`** — same shape for Module-LWE (sketch of the floor family). -/
-def MLWEHardQuant {S : Type*} (adv : S → Ensemble) : Prop := ∀ s, Negl (adv s)
+`MSISHardQuantShape adv := ∀ s, Negl (adv s)` says nothing about MSIS. It mentions no lattice, no `A`, no
+`β`, no `IsMSISSolution` — and it is `Iff.rfl`-equal to the four siblings below, so a proof "under the MSIS
+floor" IS a proof "under the hash-CR floor" (`HardQuantVacuity.the_five_floors_are_one_prop`). The problem
+lived entirely in the NAME, which is why this def is now named after its shape rather than after a problem
+it never constrained. `HardQuantVacuity.sheep_floor_is_msisHardQuantShape` proves a floor named after
+COUNTING SHEEP is definitionally this one.
 
-/-- **`DLHardQuant`** — same shape for discrete-log / Schnorr. -/
-def DLHardQuant {S : Type*} (adv : S → Ensemble) : Prop := ∀ s, Negl (adv s)
+Consumers of it get their hypothesis back: `(adv) (s) (hfloor : MSISHardQuantShape adv) : Negl (adv s)` is
+`hfloor s`, a `P → P` instantiation.
 
-/-- **`HashCRHardQuant`** — same shape for hash collision-resistance. -/
-def HashCRHardQuant {S : Type*} (adv : S → Ensemble) : Prop := ∀ s, Negl (adv s)
+**The honest floor is `FloorGames.MSISHardQuant`** — the standard Module-SIS game, with `IsMSISSolution` IN
+the statement and the adversary class an explicit parameter. KEPT here, doc-marked, because
+`HardQuantVacuity`'s teeth are stated about it and are the regression: they must keep compiling. Do not add
+new consumers. -/
+def MSISHardQuantShape {S : Type*} (adv : S → Ensemble) : Prop := ∀ s, Negl (adv s)
+
+/-- ⚠ **BROKEN — the same content-free `Prop` as `MSISHardQuantShape`, under a different name.** See there;
+the honest floor is `FloorGames.MLWEHardQuant`. -/
+def MLWEHardQuantShape {S : Type*} (adv : S → Ensemble) : Prop := ∀ s, Negl (adv s)
+
+/-- ⚠ **BROKEN — the same content-free `Prop` as `MSISHardQuantShape`, under a different name.** See there;
+the honest floor is `FloorGames.DLHardQuant`. -/
+def DLHardQuantShape {S : Type*} (adv : S → Ensemble) : Prop := ∀ s, Negl (adv s)
+
+/-- ⚠ **BROKEN — the same content-free `Prop` as `MSISHardQuantShape`, under a different name.** See there;
+the honest floor is `FloorGames.HashCRHardQuant`. -/
+def HashCRHardQuantShape {S : Type*} (adv : S → Ensemble) : Prop := ∀ s, Negl (adv s)
 
 /-- **(TOOTH — the floor holds.)** If every solver has the all-zero advantage, the quantitative floor
 holds (`negl_zero`). The positive pole. -/
 theorem msisHardQuant_zero {S : Type*} :
-    MSISHardQuant (fun _ : S => (fun _ => 0 : Ensemble)) := fun _ => negl_zero
+    MSISHardQuantShape (fun _ : S => (fun _ => 0 : Ensemble)) := fun _ => negl_zero
 
 /-- **(TOOTH — the floor is refutable.)** If some solver has constant-`1` advantage, the quantitative
-floor FAILS (`not_negl_one`). The negative pole — `MSISHardQuant` is load-bearing, not vacuous. -/
+floor FAILS (`not_negl_one`). The negative pole — `MSISHardQuantShape` is load-bearing, not vacuous. -/
 theorem msisHardQuant_broken {S : Type*} (s0 : S) :
-    ¬ MSISHardQuant (fun _ : S => (fun _ => (1 : ℝ) : Ensemble)) :=
+    ¬ MSISHardQuantShape (fun _ : S => (fun _ => (1 : ℝ) : Ensemble)) :=
   fun h => not_negl_one (h s0)
 
 /-! ## §4 — The re-threaded forking → MSIS reduction (concrete-security form).
@@ -326,7 +364,7 @@ theorem bound (F : ForkingFamily) (l : ℕ) :
 
 end ForkingFamily
 
-/-- **THE CONCRETE-SECURITY REDUCTION — `MSISHardQuant ⟹ Negl (forger advantage)`.** If the derived MSIS
+/-- **THE CONCRETE-SECURITY REDUCTION — `MSISHardQuantShape ⟹ Negl (forger advantage)`.** If the derived MSIS
 solver's advantage is negligible (the QUANTITATIVE floor, applied to the reduction's output solver) and the
 challenge-collision term `1/|C|` is negligible (the challenge space grows), then the forger's advantage is
 negligible. This is the advantage-inequality form of the reduction the tree previously stated only
@@ -337,12 +375,12 @@ theorem forking_reduces_to_MSISHardQuant (F : ForkingFamily)
     F.bound hmsis hCneg
 
 /-- **THE REDUCTION AGAINST THE FLOOR OBJECT.** The derived solver `s` is one of the solvers the
-quantitative floor `MSISHardQuant` quantifies over, and its advantage IS `F.solverAdv`. So the floor
+quantitative floor `MSISHardQuantShape` quantifies over, and its advantage IS `F.solverAdv`. So the floor
 directly discharges `Negl F.solverAdv`, and the forger advantage is negligible. This exhibits the genuine
 "non-negligible forger ⟹ non-negligible solver ⟹ contradicts the floor" reduction over real advantages. -/
 theorem forking_reduces_against_floor {S : Type*} (F : ForkingFamily)
     (solverAdvOf : S → Ensemble) (s : S) (hs : solverAdvOf s = F.solverAdv)
-    (hfloor : MSISHardQuant solverAdvOf) (hCneg : Negl F.invChal) : Negl F.forgerAdv :=
+    (hfloor : MSISHardQuantShape solverAdvOf) (hCneg : Negl F.invChal) : Negl F.forgerAdv :=
   forking_reduces_to_MSISHardQuant F hCneg (hs ▸ hfloor s)
 
 /-! ### NON-VACUITY — the advantage is a genuine real that CAN be non-negligible, and the reduction BITES. -/
@@ -393,7 +431,7 @@ theorem const25_forgerAdv : const25Family.forgerAdv = fun _ => (2 / 5 : ℝ) := 
 constant-`2/5` forger has advantage bounded below (through `ForkingFamily.bound`) by
 `(2/5)·(2/5 − 1/5) = 2/25`, so its derived MSIS solver advantage is at least the constant `2/25`, which is
 NOT negligible (`not_negl_const_pos`). Hence a forger of non-negligible advantage forces a non-negligible
-MSIS solver — exactly the contradiction with `MSISHardQuant` that the concrete-security reduction delivers.
+MSIS solver — exactly the contradiction with `MSISHardQuantShape` that the concrete-security reduction delivers.
 The forger's advantage genuinely appears; it is not a Boolean flag. -/
 theorem const25_forger_breaks_floor : ¬ Negl const25Family.solverAdv := by
   intro h
@@ -458,7 +496,7 @@ theorem zeroFamily_invChal_negl : Negl zeroFamily.invChal := by
       abs_of_nonneg (by positivity : (0:ℝ) ≤ 1 / (2:ℝ)^n)]
   exact hle
 
-/-- **THE REDUCTION FIRES.** For the never-accepting super-polynomial-challenge family, `MSISHardQuant`
+/-- **THE REDUCTION FIRES.** For the never-accepting super-polynomial-challenge family, `MSISHardQuantShape`
 (trivially, solver advantage `≡ 0`) and the negligible challenge term give `Negl forgerAdv` — the pipeline
 runs end-to-end and concludes negligibility of a genuine real-valued advantage. -/
 theorem zeroFamily_forger_negl : Negl zeroFamily.forgerAdv :=
@@ -485,7 +523,7 @@ theorem negl_of_negl_sq_fires : Negl (fun n : ℕ => 1 / (2 : ℝ) ^ n) := by
 
 /-! ## §5 — THE DECISIONAL FLOOR: a distinguishing-advantage substrate (LWE-vs-uniform).
 
-The §3 floors (`MSISHardQuant`/`MLWEHardQuant`/…) are SEARCH floors: `adv s` is one solver's success
+The §3 floors (`MSISHardQuantShape`/`MLWEHardQuantShape`/…) are SEARCH floors: `adv s` is one solver's success
 probability (a single `winProb`), and the reduction bounds a forger's advantage through the forking
 inequality. That shape does NOT fit the DECISIONAL consumers (`LossyIdentification`'s lossy-keygen switch,
 the HVZK/masking transcript-indistinguishability leg of `AdaptiveTSUF`/`ThresholdSignerRefinement`), whose
@@ -519,13 +557,14 @@ theorem distinguishAdv_le_one {ΩR ΩU : Type*} [Fintype ΩR] [Fintype ΩU]
   have hu0 := winProb_nonneg accUnif; have hu1 := winProb_le_one accUnif
   constructor <;> linarith
 
-/-- **`DecisionMLWEHardQuant adv` — the DECISIONAL Module-LWE floor.** Every distinguisher `s`'s
-LWE-vs-uniform distinguishing-advantage ENSEMBLE (`adv s`, a real gap indexed by the security parameter) is
-negligible: `∀ bounded D, Negl (|Pr[D(real)=1] − Pr[D(uniform)=1]|)`. A NEW def alongside the SEARCH
-`MLWEHardQuant` — the decisional (distinguishing) shape does not reduce to the search (finding) one, so it
-carries its own floor. The intended `adv` is a `DecisionFamily.adv`, a real distinguishing advantage that
-CAN be non-negligible (`decisionMLWEHardQuant_perfect_refuted`). -/
-def DecisionMLWEHardQuant {S : Type*} (adv : S → Ensemble) : Prop := ∀ s, Negl (adv s)
+/-- ⚠ **BROKEN — the same content-free `Prop` as `MSISHardQuantShape`.** Its own docstring used to say
+*"The INTENDED `adv` is a `DecisionFamily.adv`"* — intended, never enforced, which is exactly the defect
+the sweep names: a constraint stated in prose is not a constraint. Worse, `DecisionFamily` itself carries
+two ARBITRARY worlds and two ARBITRARY accept predicates, so even the intended instantiation pins nothing
+to LWE. The honest floor is `FloorGames.DecisionMLWEHardQuant`, whose real world is a PROVED
+`Lattice.IsMLWESample` and whose distinguisher is ONE function applied to both worlds. Retained for
+`HardQuantVacuity`'s teeth. -/
+def DecisionMLWEHardQuantShape {S : Type*} (adv : S → Ensemble) : Prop := ∀ s, Negl (adv s)
 
 /-- **A λ-indexed decisional DISTINGUISHER family.** At each security parameter `l`: a finite real-LWE
 experiment space `RealWorld l`, a finite uniform experiment space `UnifWorld l`, and the distinguisher's
@@ -610,7 +649,7 @@ theorem decayDist_adv : decayDist.adv = fun l => 1 / (2 : ℝ) ^ l := by
 advantage `1/2^l` is negligible (`negl_two_pow`), so the decisional floor HOLDS on it — satisfiable for
 reasons of RATE, not because the advantage is trivially `0`. -/
 theorem decisionMLWEHardQuant_decay_holds :
-    DecisionMLWEHardQuant (fun _ : Unit => decayDist.adv) := by
+    DecisionMLWEHardQuantShape (fun _ : Unit => decayDist.adv) := by
   intro _; rw [decayDist_adv]; exact negl_two_pow
 
 /-- **(TOOTH — the floor is REFUTABLE by a perfect distinguisher.)** The perfect distinguisher's advantage
@@ -618,13 +657,13 @@ is the constant `1`, NOT negligible (`not_negl_one`), so the decisional floor FA
 `decisionMLWEHardQuant_decay_holds` this pins the floor strictly between "vacuously true" and "trivially
 false" — a genuine assumption, on a real distinguishing advantage. -/
 theorem decisionMLWEHardQuant_perfect_refuted :
-    ¬ DecisionMLWEHardQuant (fun _ : Unit => perfectDist.adv) := by
+    ¬ DecisionMLWEHardQuantShape (fun _ : Unit => perfectDist.adv) := by
   intro h; have hp := h (); rw [perfectDist_adv_one] at hp; exact not_negl_one hp
 
 /-- **(TOOTH — the all-zero decisional floor holds.)** A distinguisher with zero advantage everywhere
 satisfies the floor (`negl_zero`) — the indistinguishable pole. -/
 theorem decisionMLWEHardQuant_zero {S : Type*} :
-    DecisionMLWEHardQuant (fun _ : S => (fun _ => 0 : Ensemble)) := fun _ => negl_zero
+    DecisionMLWEHardQuantShape (fun _ : S => (fun _ => 0 : Ensemble)) := fun _ => negl_zero
 
 /-! ## Kernel-clean keystones. -/
 

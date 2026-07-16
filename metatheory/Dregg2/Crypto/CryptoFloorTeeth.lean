@@ -39,9 +39,9 @@ load-bearing spec true AND false" discipline.
 
 `FloorBridge.msisSolverAdv A β` indexes the quantitative floor by the family of SOLUTIONS
 `{z // IsMSISSolution A β z}` (each "solver" outputs its own `z`, advantage `1`). So
-`MSISHardQuant (msisSolverAdv A β)` holds IFF that family is empty IFF no solution exists — literally
+`MSISHardQuantShape (msisSolverAdv A β)` holds IFF that family is empty IFF no solution exists — literally
 `MSISHard A β` (`msisHardQuant_solverAdv_iff_msisHard`). It inherits the §1 vacuity verbatim
-(`msisHardQuant_solverAdv_augmented_id_false`). The `MSISHardQuant` SHAPE is fine; the SOLUTION-indexed
+(`msisHardQuant_solverAdv_augmented_id_false`). The `MSISHardQuantShape` SHAPE is fine; the SOLUTION-indexed
 instantiation is the bug.
 
 ## §5 — THE PROPER FLOOR: quantified over BOUNDED ADVERSARIES, not solutions.
@@ -50,7 +50,7 @@ The honest floor quantifies over an ADVERSARY (a resource-bounded algorithm) and
 ADVANTAGE — a genuine real ENSEMBLE indexed by the security parameter — to be negligible. A single-instance
 "∃ efficient adversary" collapses to "∃ solution" (a non-uniform adversary can HARDCODE the answer at zero
 cost), so the floor must range over a λ-INDEXED, GROWING instance family — exactly `ProbCrypto.ForkingFamily`
-/ `MSISHardQuant (adv : S → Ensemble)` with `adv s` a real advantage ensemble. It is DEMONSTRABLY
+/ `MSISHardQuantShape (adv : S → Ensemble)` with `adv s` a real advantage ensemble. It is DEMONSTRABLY
 non-vacuous AND non-trivial: `ProbCrypto.zeroFamily_forger_negl` SATISFIES it with a genuinely λ-decaying
 advantage, and `ProbCrypto.const25_forger_breaks_floor` REFUTES it with a constant `2/5`. Here we exhibit a
 minimal decaying-advantage guessing family (`guessAdv`, advantage `1/2^λ`) satisfying the floor and its
@@ -61,7 +61,7 @@ constant-`1` twin refuting it — a floor that is neither identically `0` (vacuo
 `ForkingDischarge.pq_advantage_bounded_under_msis` and `dregg_pq_is_eufcma_under_msis_discharged` rest on the
 BOOLEAN `MSISHard (augmented A t) γ`, refuted at compressing params by §1
 (`deployed_boolean_floor_refuted`). The honest keystone is the ENSEMBLE statement
-`ForkingDischarge.game_forger_negl_under_msis_quant`: under `MSISHardQuant solverAdvOf` for a GENUINE
+`ForkingDischarge.game_forger_negl_under_msis_quant`: under `MSISHardQuantShape solverAdvOf` for a GENUINE
 adversary-advantage family (the forking extractor's real solving advantage — NOT `msisSolverAdv`), the game
 forger's advantage ensemble is negligible. `dregg_pq_game_forger_negl_under_comp_floor` states it for the
 DEPLOYED `dreggPqSigScheme`; it FIRES (`regrounded_keystone_fires`) and its floor is LOAD-BEARING
@@ -199,31 +199,31 @@ variable {Rq : Type*} [CommRing Rq] [Module Rq M]
 variable {N : Type*} [AddCommGroup N] [Module Rq N]
 
 /-- **THE QUANTITATIVE FLOOR, AS INSTANTIATED IN `FloorBridge`, IS EXACTLY THE BOOLEAN FLOOR.**
-`MSISHardQuant (msisSolverAdv A β) ↔ Lattice.MSISHard A β`. The canonical solver family is the family of
+`MSISHardQuantShape (msisSolverAdv A β) ↔ Lattice.MSISHard A β`. The canonical solver family is the family of
 SOLUTIONS `{z // IsMSISSolution A β z}`; each has constant advantage `1` (`boolWinAdv`). So "every solver's
 advantage is negligible" holds iff that family is EMPTY iff no solution exists — the Boolean floor verbatim.
 The probabilistic dress adds no hardness content; it inherits §1's vacuity. -/
 theorem msisHardQuant_solverAdv_iff_msisHard (A : M →ₗ[Rq] N) (β : ℕ) :
-    MSISHardQuant (msisSolverAdv A β) ↔ Lattice.MSISHard A β :=
+    MSISHardQuantShape (msisSolverAdv A β) ↔ Lattice.MSISHard A β :=
   ⟨msisHard_of_msisHardQuant, msisHardQuant_of_msisHard⟩
 
 end QuantVacuity
 
 /-- **THE SOLUTION-INDEXED QUANT FLOOR IS FALSE at the deployed compressing instance.** Because it equals the
 Boolean floor (`msisHardQuant_solverAdv_iff_msisHard`) which §1 refutes on `[id | 1]`, the FloorBridge
-instantiation `MSISHardQuant (msisSolverAdv (augmented id 1) 0)` is FALSE — the "quantitative" bridge, as
+instantiation `MSISHardQuantShape (msisSolverAdv (augmented id 1) 0)` is FALSE — the "quantitative" bridge, as
 wired, is vacuous at deployment. -/
 theorem msisHardQuant_solverAdv_augmented_id_false :
-    ¬ MSISHardQuant (msisSolverAdv (augmented (LinearMap.id : ZMod 5 →ₗ[ZMod 5] ZMod 5) (1 : ZMod 5)) (0 + 0)) :=
+    ¬ MSISHardQuantShape (msisSolverAdv (augmented (LinearMap.id : ZMod 5 →ₗ[ZMod 5] ZMod 5) (1 : ZMod 5)) (0 + 0)) :=
   fun h => not_msisHard_augmented_id ((msisHardQuant_solverAdv_iff_msisHard _ _).mp h)
 
 /-! ## §5 — THE PROPER FLOOR: a bounded-ADVERSARY advantage floor, non-vacuous AND non-trivial.
 
-The proper floor keeps the `MSISHardQuant` SHAPE (`∀ s, Negl (adv s)`) but re-instantiates `adv` over a
+The proper floor keeps the `MSISHardQuantShape` SHAPE (`∀ s, Negl (adv s)`) but re-instantiates `adv` over a
 GENUINE resource-bounded adversary family whose advantage is a real ENSEMBLE indexed by the security
 parameter — NOT the solution family. To be non-vacuous the advantage must be a real that DECAYS with `λ`
 (a single-instance "∃ efficient adversary" collapses to "∃ solution" via non-uniform hardcoding — which is
-why the tree's `ForkingFamily` / `MSISHardQuant` are λ-indexed). We exhibit a minimal such floor. -/
+why the tree's `ForkingFamily` / `MSISHardQuantShape` are λ-indexed). We exhibit a minimal such floor. -/
 
 /-- A minimal λ-indexed GUESSING adversary advantage: at parameter `λ` the adversary guesses uniformly in a
 space of size `2^λ` with a single winning guess, so its advantage is `1/2^λ`. A genuine real ensemble,
@@ -233,7 +233,7 @@ noncomputable def guessAdv : Ensemble := fun l => 1 / (2 : ℝ) ^ l
 /-- **NON-VACUITY (satisfiable by a genuinely DECAYING advantage).** The guessing floor holds: `1/2^λ` is
 negligible (`negl_two_pow`). This is a real, non-degenerate advantage that vanishes as the challenge space
 grows — the floor is satisfiable for reasons of RATE, not because the advantage is trivially `0`. -/
-theorem msisHardQuant_guess_holds : MSISHardQuant (fun _ : Unit => guessAdv) :=
+theorem msisHardQuant_guess_holds : MSISHardQuantShape (fun _ : Unit => guessAdv) :=
   fun _ => negl_two_pow
 
 /-- **NON-TRIVIALITY (refutable by a constant advantage).** A solver family that WINS with constant
@@ -241,7 +241,7 @@ probability `1` refutes the floor (`not_negl_one`). So the floor is a GENUINE as
 refutable — not a theorem. Together with `msisHardQuant_guess_holds` this pins the floor strictly between
 "vacuously true" and "trivially false". -/
 theorem msisHardQuant_const_one_refuted :
-    ¬ MSISHardQuant (fun _ : Unit => (fun _ => (1 : ℝ) : Ensemble)) :=
+    ¬ MSISHardQuantShape (fun _ : Unit => (fun _ => (1 : ℝ) : Ensemble)) :=
   fun h => not_negl_one (h ())
 
 /-- **THE CONTRAST, MADE PRECISE.** The solution-indexed floor collapses to the Boolean one and is FALSE at
@@ -250,22 +250,22 @@ advantage (`msisHardQuant_guess_holds`) and refutable by a constant one (`msisHa
 The λ-DECAY of the advantage is the content the solution-indexing threw away — each "solver" there had a
 FROZEN advantage `1`, so the quantifier degenerated into a plain existence check. -/
 theorem proper_floor_is_genuine :
-    MSISHardQuant (fun _ : Unit => guessAdv) ∧
-      ¬ MSISHardQuant (fun _ : Unit => (fun _ => (1 : ℝ) : Ensemble)) :=
+    MSISHardQuantShape (fun _ : Unit => guessAdv) ∧
+      ¬ MSISHardQuantShape (fun _ : Unit => (fun _ => (1 : ℝ) : Ensemble)) :=
   ⟨msisHardQuant_guess_holds, msisHardQuant_const_one_refuted⟩
 
 /-! ## §6 — THE DEPLOYED KEYSTONE, RE-GROUNDED on the adversary-indexed floor.
 
 `ForkingDischarge.pq_advantage_bounded_under_msis` / `dregg_pq_is_eufcma_under_msis_discharged` rest on the
 BOOLEAN `MSISHard (augmented A t) γ` — refuted at compressing params by §1. The honest keystone rides
-`ForkingDischarge.game_forger_negl_under_msis_quant`: under `MSISHardQuant solverAdvOf` for a GENUINE
+`ForkingDischarge.game_forger_negl_under_msis_quant`: under `MSISHardQuantShape solverAdvOf` for a GENUINE
 adversary-advantage family, the game forger's advantage ENSEMBLE is negligible. -/
 
 section Regrounded
 variable {SK PK Msg Sig : Type*}
 
 /-- **THE DEPLOYED-SCHEME KEYSTONE, RE-GROUNDED.** For the SHIPPED `dreggPqSigScheme` presented as a
-`GameForkingFamily`, under the quantitative Module-SIS floor `MSISHardQuant solverAdvOf` — where
+`GameForkingFamily`, under the quantitative Module-SIS floor `MSISHardQuantShape solverAdvOf` — where
 `solverAdvOf` is a GENUINE resource-bounded adversary-advantage family (the forking extractor's real solving
 advantage as an ENSEMBLE; `hs` says the derived solver IS one such adversary), NOT the solution-indexed
 `msisSolverAdv` of §4 — and a super-polynomially growing challenge space, the game forger's advantage
@@ -278,7 +278,7 @@ theorem dregg_pq_game_forger_negl_under_comp_floor
     (GF : GameForkingFamily (Dregg2.Crypto.DreggPqRefinement.dreggPqSigScheme api) pk Q)
     {SolverIdx : Type*} (solverAdvOf : SolverIdx → Ensemble) (s : SolverIdx)
     (hs : solverAdvOf s = GF.fam.solverAdv)
-    (hfloor : MSISHardQuant solverAdvOf) (hCneg : Negl GF.fam.invChal) :
+    (hfloor : MSISHardQuantShape solverAdvOf) (hCneg : Negl GF.fam.invChal) :
     Negl GF.fam.forgerAdv :=
   game_forger_negl_under_msis_quant GF solverAdvOf s hs hfloor hCneg
 
