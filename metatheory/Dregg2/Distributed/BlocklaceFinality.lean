@@ -148,7 +148,9 @@ def causalPastIncl (B : Lace) (h : BlockId) : List BlockId :=
 /-! ## 4. Equivocation-in-past, approval, ratification, super-ratification (`ordering.rs:120..278`). -/
 
 /-- **`hasEquivInPast`** — a creator has two DISTINCT blocks at the SAME round, both in the
-observer's causal past (`ordering.rs::has_equivocation_in_past`). The exact equivocation guard the
+observer's causal past (`ordering.rs::EquivocationIndex::equivocates_in_past` — renamed from
+`has_equivocation_in_past` when the equivocator scan was memoized into a precomputed index; the
+per-observer predicate is unchanged. Corrected 2026-07-16). The exact equivocation guard the
 node's `approves`/`tau` consult to repel a forking creator. -/
 def hasEquivInPast (B : Lace) (observer : BlockId) (creator : AuthorId) : Bool :=
   let past := causalPastIncl B observer

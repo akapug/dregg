@@ -6,7 +6,9 @@ This module is the **authority-edit cluster** of the 52-effect catalog, the sibl
 Where `EffectTransfer` drives the `Transfer` effect (which moves `balance` and leaves `caps`
 untouched), the effects here move the OTHER way: they EDIT the capability graph (`caps`) and leave
 the conserved `balance` total (`recTotal`) FIXED. They are the executable shadow of dregg1's
-authority-mutating `Effect`s (`turn/src/action.rs`'s `Effect` enum), EXCLUDING `GrantCapability`/
+authority-mutating `Effect`s (`turn/src/action.rs`'s `Effect` enum — two of the eight, `DropRef`
+and `ValidateHandoff`, are since RETIRED from that enum; see their entries. Corrected 2026-07-16),
+EXCLUDING `GrantCapability`/
 `Introduce`-as-delegate and `RevokeCapability` — those are already fully characterized as the
 `delegate`/`revoke` kinds of `Exec/TurnExecutorFull.lean` (`execFull_delegate_addEdge` /
 `execFull_revoke_removeEdge`).
@@ -22,17 +24,24 @@ authority-mutating `Effect`s (`turn/src/action.rs`'s `Effect` enum), EXCLUDING `
   3. `AttenuateCapability`  (`action.rs::AttenuateCapability`)  — monotonically NARROW an existing
                             cap in the actor's c-list (`attenuate_in_place`; widening is rejected).
                             The headline non-amplification: the narrowed cap confers a SUBSET.
-  4. `DropRef`             (`action.rs::DropRef`)               — a CapTP GC decrement: the holder
+  4. `DropRef`             (RETIRED — dropped from `action.rs`'s `Effect` enum with the CapTP verb
+                            set; caps-in-slots replaced it, cf. the retirement notes in `action.rs`.
+                            Corrected 2026-07-16)                — a CapTP GC decrement: the holder
                             drops its reference (an edge to the target). Authority strictly shrinks.
+                            §4's theorems model this RETIRED verb: structural content (a pure edge
+                            drop) — they certify nothing deployed.
   5. `ExerciseViaCapability`(`action.rs::ExerciseViaCapability`)— exercise a HELD cap (act through a
                             c-list slot). Confers NO new authority: the graph is unchanged, and the
                             exercise is authorized by the held edge ("only connectivity begets
                             connectivity").
-  6. `ValidateHandoff`     (`action.rs::ValidateHandoff`)       — accept a two-signature CapTP
+  6. `ValidateHandoff`     (RETIRED — dropped from `action.rs`'s `Effect` enum with the CapTP verb
+                            set; caps-in-slots replaced it, cf. the retirement notes in `action.rs`.
+                            Corrected 2026-07-16)                — accepted a two-signature CapTP
                             handoff certificate. The handoff IS a Granovetter `Introduce`
                             (`Spec.handoff_is_introduce`), so the conferred cap is non-amplifying
                             (`Spec.handoff_non_amplifying`). The two-signature crypto is a §8
-                            `Prop`-carrier portal.
+                            `Prop`-carrier portal. §6's theorems model this RETIRED verb —
+                            structural content only, nothing deployed.
   7. `RefreshDelegation`   (`action.rs::RefreshDelegation`)     — a child re-snapshots its parent's
                             c-list (self-refresh). Modelled as an idempotent narrowing of an existing
                             edge (re-deriving the same target — narrower-or-equal). Conservation-
@@ -362,9 +371,10 @@ theorem attenuate_metadata (s : RecChainedState) (actor : Label) (idx : Nat) (ke
     ∧ (attenuateStep s actor idx keep).log = authReceipt actor :: s.log :=
   ⟨fun l hl => attenuate_authorized s actor idx keep l hl, rfl⟩
 
-/-! ## §4 — `DropRef`: a CapTP GC decrement (drops a held edge).
+/-! ## §4 — `DropRef`: a CapTP GC decrement (drops a held edge). RETIRED VERB (2026-07-16 note):
+`DropRef` is no longer in `action.rs`'s `Effect` enum — these theorems are structural, not deployed.
 
-dregg1's `Effect::DropRef { ref_id }` decrements a remote reference's refcount; at zero the holder's
+dregg1's `Effect::DropRef { ref_id }` decremented a remote reference's refcount; at zero the holder's
 edge is dropped. We model the edge-drop with `recKRevokeTarget` (the holder drops its edge to the
 target). Like `RevokeDelegation` it can only REMOVE — authority strictly shrinks. (We re-found it as
 its own effect rather than aliasing RevokeDelegation: the dregg1 semantics differ — DropRef is the
@@ -498,9 +508,10 @@ theorem exercise_unheld_fails (s : RecChainedState) (actor target : Label)
     exerciseStep s actor target = none := by
   unfold exerciseStep; rw [if_neg]; rw [h]; simp
 
-/-! ## §6 — `ValidateHandoff`: a CapTP handoff IS a Granovetter introduce.
+/-! ## §6 — `ValidateHandoff`: a CapTP handoff IS a Granovetter introduce. RETIRED VERB (2026-07-16
+note): `ValidateHandoff` is no longer in `action.rs`'s `Effect` enum — structural, not deployed.
 
-dregg1's `Effect::ValidateHandoff { … }` accepts a two-signature CapTP handoff certificate. The
+dregg1's `Effect::ValidateHandoff { … }` accepted a two-signature CapTP handoff certificate. The
 crypto (two signatures + cert/target binding) is the §8 `Prop`-carrier portal (`attested`). The
 SOUNDNESS content reuses `Exec.CapTP` verbatim: a valid handoff IS a Granovetter `Introduce`
 (`handoff_is_introduce`), so the conferred cap is non-amplifying (`handoff_non_amplifying`). We carry

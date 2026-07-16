@@ -7,14 +7,17 @@
 wire string the running prover's descriptor interpreter ingests
 (`circuit/src/lean_descriptor_air.rs::parse_vm_descriptor`, the wire-decode half of the EffectVM
 swap; the registry `circuit/src/effect_vm_descriptors.rs` embeds those exact bytes keyed by selector).
-Today that Lean→Rust seam is guarded ONLY by a SHA-256 fingerprint
-(`effect_vm_descriptors.rs::all_descriptors_parse_and_match_fingerprint`): the test re-hashes the
-embedded bytes and re-parses them, so a *drift* (a re-emit that silently changes a gate, or a stale
-committed JSON) fails CI. But a fingerprint is a black box — it does NOT establish that `emitVmJson`
-SERIALIZES the descriptor it claims: that the rendered bytes can be parsed back into the SAME
+Today that Lean→Rust seam is guarded by the GENERATE-FRESH drift gate
+`scripts/check-descriptor-drift.sh` (re-emits the descriptors from the built Lean corpus and diffs
+the checked-in cache, so a re-emit that silently changes a gate, or a stale committed JSON, fails
+CI) plus `effect_vm_descriptors.rs::all_descriptors_parse` (the embedded bytes re-parse into the
+structure the prover consumes; the old self-consistent fingerprint-rehash test
+`all_descriptors_parse_and_match_fingerprint` was purged as theater — corrected 2026-07-16). But
+freshness + parseability are black boxes — they do NOT establish that `emitVmJson` SERIALIZES the
+descriptor it claims: that the rendered bytes can be parsed back into the SAME
 descriptor, with no field silently dropped, merged, or aliased. If `emitVmJson` lost a field (say it
-rendered two distinct descriptors to the same bytes), the fingerprint would happily certify the lossy
-bytes; the soundness teeth (`satisfiedVm`, the per-effect faithfulness/anti-ghost theorems) are stated
+rendered two distinct descriptors to the same bytes), the drift gate would happily certify the lossy
+bytes as fresh; the soundness teeth (`satisfiedVm`, the per-effect faithfulness/anti-ghost theorems) are stated
 about the in-Lean `EffectVmDescriptor`, so a lossy serialization would mean the BYTES the prover runs
 need not carry the proved content.
 

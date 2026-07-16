@@ -304,7 +304,8 @@ impl Block {
 /// The equivocation is *attributable* (both blocks name `creator`) and
 /// *detectable* (the pair is retained in the lace, not overwritten). This is
 /// the strand-layer analogue of `finality.rs::EquivocationProof`, and it is the
-/// representation `ordering.rs::has_equivocation_in_past` consumes when it
+/// representation `ordering.rs::EquivocationIndex::equivocates_in_past` (renamed
+/// from `has_equivocation_in_past`; corrected 2026-07-16) consumes when it
 /// scans for two same-creator blocks at one round.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EquivocationProof {
@@ -531,8 +532,9 @@ impl Blocklace {
         // (4) Equivocation: a distinct block already present at this
         // (creator, sequence) is a fork. Scan the creator's stored blocks for a
         // same-sequence, different-id block. (Same-creator blocks are sparse;
-        // this is the strand-level dual of `ordering.rs::has_equivocation_in_past`,
-        // which groups same-creator blocks by round and flags `len > 1`.)
+        // this is the strand-level dual of `ordering.rs::EquivocationIndex::
+        // equivocates_in_past` (renamed from `has_equivocation_in_past`; corrected
+        // 2026-07-16), which groups same-creator blocks by round and flags `len > 1`.)
         if let Some(existing_id) = self.find_conflict(&block, block_id) {
             // Retain the conflicting block as DETECTABLE EVIDENCE — do NOT
             // overwrite the tip (the old bug silently replaced tips[creator]).
@@ -1087,7 +1089,8 @@ mod tests {
         }
 
         // BOTH forked blocks are retained (evidence is never lost) — this is
-        // exactly what `ordering.rs::has_equivocation_in_past` scans for.
+        // exactly what `ordering.rs::EquivocationIndex::equivocates_in_past`
+        // (renamed from `has_equivocation_in_past`; corrected 2026-07-16) scans for.
         assert!(lace.contains(&f1_id), "first fork retained");
         assert!(
             lace.contains(&f2_id),

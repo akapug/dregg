@@ -1,7 +1,13 @@
 /-
 # Dregg2.Crypto.Dfa — §8 discharge: DFA structural-match acceptance.
 
-Discharges `WitnessedPredicateKind::Dfa` (`dfa_lookup_descriptor`, `circuit.rs:1746`): a trace of
+Discharges `WitnessedPredicateKind::Dfa`. Deployed carrier (corrected 2026-07-16): the
+`dfa-routing-toggle-2state::poseidon2-v1` descriptor — dispatched at
+`circuit/src/descriptor_by_name.rs` (`PredicateKind::Dfa`), DSL builder
+`circuit/src/dsl/dfa_routing.rs`, Lean emit `Circuit/Emit/DfaRoutingEmit.lean`. The originally
+cited `dsl/circuit.rs` builder `dfa_lookup_descriptor` was DELETED with the hand-STARK engine;
+this module models that retired builder's simple form — the structural core the deployed routing
+descriptor extends with a rolling Poseidon2 route commitment. The statement: a trace of
 automaton states threaded by a transition relation `δ` starts in the initial state and ends in an
 accepting state. Per-step `Lookup` membership, `Transition` chaining, and boundary `PiBinding`s.
 
@@ -27,8 +33,9 @@ universe u
 
 We model the automaton over abstract `State`/`Sym` carriers. A step is a `(state, sym, next)` triple;
 the transition relation `δ : State → Sym → State → Prop` is the membership predicate of the real
-`Lookup` transition table (`dfa_lookup_table`, `circuit.rs:1724` — the table's entries ARE the `δ`
-graph). A run is a list of steps; it ACCEPTS iff each step is a valid `δ` transition, consecutive
+`Lookup` transition table (the retired builder's `dfa_lookup_table` — deleted with the hand-STARK
+engine; the table's entries ARE the `δ` graph, which the deployed routing descriptor enforces via
+its transition-interpolant gate). A run is a list of steps; it ACCEPTS iff each step is a valid `δ` transition, consecutive
 steps chain (`next` of one is `state` of the following), the first `state` is the initial state `q₀`,
 and the final `next` is accepting (`accept : State → Prop`). This is exactly the `Lookup` + `Transition`
 + boundary `PiBinding`s the AIR enforces. -/
@@ -36,7 +43,7 @@ and the final `next` is accepting (`accept : State → Prop`). This is exactly t
 variable {State Sym : Type u}
 
 /-- A single DFA step: the current `state`, the input `sym`bol read, and the `next` state. Mirrors a
-trace row `[state, byte, next_state]` (`dfa_lookup_descriptor`, `circuit.rs:1746`). -/
+trace row `[state, byte, next_state]` (the retired `dfa_lookup_descriptor` builder's row shape). -/
 structure Step (State Sym : Type u) where
   /-- The state entering this step (trace column `state`). -/
   state : State
@@ -75,7 +82,8 @@ def DfaAccepts (δ : State → Sym → State → Prop) (q₀ : State) (accept : 
 
 /-! ## `CircuitIR` — the DFA AIR (per-step `Lookup` + `Transition` + boundary), no primitive seam.
 
-Mirrors `dfa_lookup_descriptor` (`circuit.rs:1746`): the trace is the row list, each row a `Step`. The
+Mirrors the retired `dfa_lookup_descriptor` builder (deleted with the hand-STARK engine; see the
+header note): the trace is the row list, each row a `Step`. The
 constraints: `Lookup` (each row's `(state, sym, next)` is a transition-table member, i.e. `δ`-valid),
 `Transition` (chaining), and the two boundary `PiBinding`s (first state = `q₀`, final next accepts).
 NO `compress`/hash here — the DFA gadget is pure structural matching, so NO primitive seam. We carry
@@ -92,7 +100,7 @@ structure CircuitIR (State Sym : Type u) where
 /-- **`Satisfies δ q₀ accept circuit`** — the full DFA AIR check: the trace is non-empty, every row's
 `(state, sym, next)` is a valid `δ` transition (the `Lookup` membership), the rows chain (the
 `Transition` constraint), and the two boundaries hold (first state = `q₀`, final next accepts). This
-is the conjunction `dfa_lookup_descriptor` enforces — IDENTICAL in shape to `DfaAccepts` (the IR and
+is the conjunction the retired `dfa_lookup_descriptor` enforced — IDENTICAL in shape to `DfaAccepts` (the IR and
 the statement coincide; the bridge below is then largely an unfolding, which is honest: the DFA AIR's
 satisfiability IS acceptance, with the `Lookup` abstracted as `δ`). -/
 def Satisfies (δ : State → Sym → State → Prop) (q₀ : State) (accept : State → Prop)
@@ -309,8 +317,8 @@ end Wiring
 
 /-! ## `Reference` — a concrete kernel + non-vacuity witnesses over `ℕ`/`ℕ`.
 
-A concrete automaton recognizing `a⁺b` (one-or-more `a` then a `b`), the `dfa_lookup_table` of
-`circuit.rs:1724`: states `{0,1,2,3}`, bytes `{0x61='a', 0x62='b'}`. The transition relation `δ` is the
+A concrete automaton recognizing `a⁺b` (one-or-more `a` then a `b`), in the retired builder's
+`dfa_lookup_table` shape: states `{0,1,2,3}`, bytes `{0x61='a', 0x62='b'}`. The transition relation `δ` is the
 table's membership predicate; the run for `"aab"` is `0 →a 1 →a 1 →b 2`, ending in the accept state `2`.
 
 To build an HONEST reference kernel (`verify` checks the proof against the statement),
@@ -323,7 +331,7 @@ carrier is what makes it opaque in production). NOT real crypto. -/
 
 namespace Reference
 
-/-- The transition relation of the `a⁺b` DFA (`dfa_lookup_table`, `circuit.rs:1724`): the five table
+/-- The transition relation of the `a⁺b` DFA (the retired `dfa_lookup_table` shape): the five table
 entries as a `δ` predicate over `ℕ` states / `ℕ` (byte) symbols. Decidable (a disjunction of `ℕ`
 equalities). -/
 def δ : Nat → Nat → Nat → Prop := fun s b n =>

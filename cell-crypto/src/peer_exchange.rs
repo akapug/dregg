@@ -44,12 +44,12 @@ pub struct PeerStateTransition {
     /// Ed25519 signature over (old, new, effects_hash, timestamp, sequence).
     #[serde(with = "sig_serde")]
     pub signature: [u8; 64],
-    /// Optional STARK proof of the state transition.
-    ///
-    /// When present, the verifier deserializes this and verifies via
-    /// `EffectVmAir`, providing proof-carrying P2P exchange
-    /// (not just signature-based). The proof binds old_commitment ->
-    /// new_commitment + effects_hash + cell_id.
+    /// Optional STARK proof of the state transition — a RETIRED path
+    /// (corrected 2026-07-16): the v1 hand-AIR (`EffectVmAir`) verify no longer
+    /// exists. Under the `zkvm` feature, `verify_transition` REJECTS any `Some`
+    /// value (fails closed); without the feature the proof is ignored and the
+    /// exchange is signature-only. The rotated proof-carrying turn is the
+    /// transition attestation path.
     ///
     /// NB: `skip_serializing_if` is intentionally NOT used here even though
     /// the field is logically optional. Binary serde formats like postcard
@@ -252,7 +252,12 @@ impl PeerExchange {
     /// 2. `old_commitment` matches our `last_known_commitment` for this peer
     /// 3. `sequence == last_sequence + 1` (monotonic, no skips)
     /// 4. `timestamp >= last_updated` (no going back in time)
-    /// 5. If `transition_proof` is Some, verify the STARK proof via `EffectVmAir`
+    /// 5. If `transition_proof` is Some: under the `zkvm` feature the transition is
+    ///    REJECTED — the v1 hand-AIR (`EffectVmAir`) STARK verify is RETIRED and this
+    ///    step fails closed, so callers must NOT expect a proof-carrying transition to
+    ///    be accepted. Without the feature the proof is IGNORED (signature-only path).
+    ///    The rotated proof-carrying turn carries transition attestation.
+    ///    (Corrected 2026-07-16.)
     ///
     /// If all pass, updates `peer_views` with the new state.
     pub fn verify_transition(

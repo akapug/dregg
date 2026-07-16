@@ -15,8 +15,9 @@
 //!
 //! # Why this descriptor (and not the generic DFA lookup)
 //!
-//! `dsl::circuit`'s test `dfa_lookup_descriptor` (one `Lookup` constraint) proves
-//! only "every row is a valid transition" — it leaves the Lean model's GAP-B open:
+//! `dsl::circuit`'s retired test builder `dfa_lookup_descriptor` (one `Lookup`
+//! constraint; deleted with the hand-STARK engine — corrected 2026-07-16) proved
+//! only "every row is a valid transition" — it left the Lean model's GAP-B open:
 //! there is no rolling commitment tying the trace to the table commitment and the
 //! claimed final state, so nothing distinguishes one accepted route from another
 //! and nothing pins the route to a public commitment. This descriptor closes
