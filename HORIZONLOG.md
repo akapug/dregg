@@ -1,5 +1,33 @@
 # HORIZONLOG — the named-follow-up burn-down
 
+## ⚑ EXCELLENCE BRAID 1 — named residuals → closures (2026-07-16, landing)
+The "have excellence, not honesty" pass. Committed so far: bridge value-path holes + rung-1 live-feed
+(`72561117d`), FRI cutover + extraction-floor design docs (`4609a507e`), bond design + paper refs (`c77c5ddd7`).
+- **✅ 3 Solana value-path holes CLOSED** (the P1 that gated "holding real value"): rooted-finality leg on
+  value-release (optimistic!=finalized), stake-completeness floor vs StakeHistory sysvar, rotation bound to
+  `tally_authorized`. Red-first canaries, 9/9 both polarities. Residual: production relayer/geyser feed must now
+  ALSO supply rooted attestations (exact-slot builders will correctly hit `SlotNotRooted`) — named live-wiring gap.
+- **✅ Live-feed rung 1**: `HoldingFeedSource` trait; a REAL solana-test-validator holding proven end-to-end over
+  live RPC (no fixtures). Residual: mainnet SnapshotFeed (designed in module doc, not built) + operator anchor pin.
+- **⚑ NONCE REPLAY — real value-drain found + fixed, SDK rollout in a dedicated lane.** Full-commitment
+  `compute_signing_message` did NOT bind `turn_nonce` (every other path does); a captured signed Transfer was
+  replayable onto the advanced (nonce, receipt-head) pair by anyone able to submit as the open-perms agent —
+  draining the *victim* signer twice. Fix = bind `turn_nonce` (domain `dregg-action-sig-v3:`), proven by
+  `turn/tests/nonce_replay_full_commitment.rs`. It is a signing-protocol flag-day (core SDK primitives
+  `sign_action_classical`/`hybrid`/`remote::sign_action` must take the nonce + thread from turn-construction), so
+  it runs as its OWN single-concern lane (`nonce-binding-rollout`), NOT hand-threaded during churn — a
+  commitment-layer change gets thought, per [[be-thoughtful-not-trigger-happy]]. Blocks build of exec-lean →
+  collective-choice/dregg-governance/dregg-node until it lands.
+- **⏳ Blocked on the nonce heal** (verified-green in isolation, commit after tree compiles): effect-classify
+  (VerbRegistry.lean +1 = 34 variants incl. the fresh `Custom` VK-door; gate ratchet; both Lean files build green
+  standalone), weighted-cast (MultisigVote.lean weight-conservation theorems green + canary bit; Rust engine +
+  HostBallotBox retirement — needs `cargo test -p collective-choice`/`dregg-governance`), computron-policy
+  (per-asset operator table + conserving refill, 7/7 red-first; `COMPUTRON-POLICY.md` + DrEX rung-2 sketch —
+  needs `cargo test -p dregg-node`).
+- Index note for the audit record: Effect enum is now **34** variants (`Custom` is fresh/uncommitted from another
+  lane), not the 33 the earlier census counted — registry + gate pin 34.
+
+
 ## TOKENOMICS grounding sweep → docs/TOKENOMICS.md canonical + paper swarm (2026-07-16)
 7-lane grounding sweep (dreggfi/fhegg/vault/computrons/launchpad/games/holdings) + full paper census; canonical
 statement now `docs/TOKENOMICS.md`. Follow-ups minted:
