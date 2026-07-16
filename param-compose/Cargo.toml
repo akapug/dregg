@@ -1,0 +1,24 @@
+[package]
+name = "dregg-param-compose"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+description = "The GENERAL bounded parameter-composition Custom-VK AIR: N typed subjects (identity + role tag + a bounded param vector) composed by a VERSIONED, PUBLICLY-COMMITTED ruleset (sparse linear terms + signed pairwise KNOTS — the nonlinear part the StateConstraint vocabulary cannot express) into a committed outcome. Canonical subject ordering + duplicate rejection are enforced IN-CIRCUIT. No game content: a new game is a new ruleset root, not an AIR edit."
+
+[dependencies]
+# The DSL AIR vocabulary (CircuitDescriptor / ConstraintExpr / ColumnKind), the BabyBear
+# field, the Poseidon2 host twin, and the Custom-VK door's state-binding ABI.
+dregg-circuit = { path = "../circuit" }
+
+[dev-dependencies]
+# SLOW prove path: the composition AIR proves as a commitment-exposing foldable custom leaf.
+dregg-circuit-prove = { path = "../circuit-prove" }
+# THE DOOR: a real turn carrying `Effect::Custom` reaching the executor + the state weld.
+dregg-turn = { path = "../turn" }
+dregg-cell = { path = "../cell" }
+blake3 = "1"
+postcard = { version = "1", features = ["alloc"] }
