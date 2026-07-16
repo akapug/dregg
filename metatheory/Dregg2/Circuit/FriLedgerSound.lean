@@ -425,6 +425,299 @@ theorem query_ledger_does_not_determine_perFold :
   refine ⟨rfl, ?_⟩
   rw [wrap_ledger_perFoldBits, prodV1_ledger_perFoldBits]; norm_num
 
+/-! ## §6b. ⚑ THE COMMIT-PHASE COLUMN — `commitBits` IS a bound on BCIKS20's `ε_C`.
+
+`johnsonBits` is `numQueries·logBlowup/2 + powBits`. That is `−s·log₂ α + powBits` for BCIKS20's
+`α = √ρ(1 + 1/2m)` **in the limit `m → ∞`** — the bottom row of Thm 8.3 with the commit-phase term
+`ε_C` DROPPED. This section proves that `friCommitLedger`'s `commitBits` really is a lower bound on
+`−log₂ ε_C` for `ε_C` as the paper defines it, so the number the C-ABI returns is the paper's term
+and not an arithmetic expression that resembles it.
+
+**Transcribed from BCIKS20 (eprint 2020/654), Lemma 8.2 / Theorem 8.3, printed pp. 40–41:**
+
+```
+ε_C = (m+½)⁷·|D⁽⁰⁾|² / (2ρ^{3/2}|F|)  +  (2m+1)(|D⁽⁰⁾|+1)/√ρ · (Σᵢ l⁽ⁱ⁾)/|F|
+```
+
+⚑ The bound goes ONE WAY on purpose: `epsCNum` OVER-estimates `ε_C`, so `commitBits`
+UNDER-estimates `−log₂ ε_C`. A ledger that rounded the other way would report bits it has not got. -/
+
+/-- BCIKS20's rate `ρ = 2^(−logBlowup)`. -/
+noncomputable def rate (lb : ℕ) : ℝ := 1 / 2 ^ lb
+
+theorem rate_pos (lb : ℕ) : 0 < rate lb := by unfold rate; positivity
+
+/-- **FAITHFULNESS — `ρ · √ρ` IS the paper's `ρ^{3/2}`.** `epsC` writes the denominator as
+`2·(ρ·√ρ)·|F|`; the paper writes `2ρ^{3/2}|F|`. This is the check that they are the same number and
+not a convenient re-spelling. -/
+theorem rate_rpow_three_halves (lb : ℕ) :
+    (rate lb) ^ ((3 : ℝ) / 2) = rate lb * Real.sqrt (rate lb) := by
+  have hpos := rate_pos lb
+  rw [Real.sqrt_eq_rpow, ← Real.rpow_one_add' (le_of_lt hpos) (by norm_num)]
+  norm_num
+
+/-- **BCIKS20 Lemma 8.2's `ε_C`, transcribed** — `|F| = ledgerP ^ extDeg`, `|D⁽⁰⁾| = d0`,
+`Σᵢ l⁽ⁱ⁾ = sumL`, `m = bciksM`. -/
+noncomputable def epsC (lb d0 bciksM sumL extDeg : ℕ) : ℝ :=
+  ((bciksM : ℝ) + 1 / 2) ^ 7 * (d0 : ℝ) ^ 2
+      / (2 * (rate lb * Real.sqrt (rate lb)) * (ledgerP : ℝ) ^ extDeg)
+    + (2 * (bciksM : ℝ) + 1) * ((d0 : ℝ) + 1) / Real.sqrt (rate lb) * (sumL : ℝ)
+      / (ledgerP : ℝ) ^ extDeg
+
+/-- **THE ROUNDING PIN** — `⌈3·lb/2⌉ = lb + ⌈lb/2⌉`. The ledger writes the first; the proof needs the
+second (so `ρ^{3/2} = ρ·√ρ` factors as `2^(−lb)·2^(−⌈lb/2⌉)`). Equal at every `lb`, so the ledger's
+exponent is exactly the one the bound below earns — no slack is being hidden in the spelling. -/
+theorem ceilDiv_two (a : ℕ) : ceilDiv a 2 = (a + 1) / 2 := by
+  simp only [ceilDiv]
+  norm_num
+
+theorem ceilDiv_three_mul_two (lb : ℕ) : ceilDiv (3 * lb) 2 = lb + ceilDiv lb 2 := by
+  rw [ceilDiv_two, ceilDiv_two]
+  omega
+
+/-- **`√ρ ≥ 2^(−⌈lb/2⌉)`** — the one inequality the whole column rests on. `√ρ` sits in a
+DENOMINATOR, so a LOWER bound on it is what upper-bounds `ε_C`. At even `lb` it is an equality
+(`√2^(−6) = 2^(−3)` exactly, the deployed case); at odd `lb` the `⌈·⌉` is the conservative side. -/
+theorem sqrt_rate_ge (lb : ℕ) : (1 : ℝ) / 2 ^ (ceilDiv lb 2) ≤ Real.sqrt (rate lb) := by
+  have hle : lb ≤ ceilDiv lb 2 * 2 := by rw [ceilDiv_two]; omega
+  refine Real.le_sqrt' (by positivity) |>.mpr ?_
+  rw [rate, div_pow, one_pow, ← pow_mul]
+  refine div_le_div_of_nonneg_left (by norm_num) (by positivity) ?_
+  exact pow_le_pow_right₀ (by norm_num) hle
+
+/-- `1/√ρ ≤ 2^⌈lb/2⌉` — the second `ε_C` term's factor. -/
+theorem one_div_sqrt_rate_le (lb : ℕ) : 1 / Real.sqrt (rate lb) ≤ 2 ^ (ceilDiv lb 2) := by
+  have h := sqrt_rate_ge lb
+  have hpos : (0 : ℝ) < 1 / 2 ^ (ceilDiv lb 2) := by positivity
+  have hs : (0 : ℝ) < Real.sqrt (rate lb) := lt_of_lt_of_le hpos h
+  rw [div_le_iff₀ hs]
+  calc (1 : ℝ) = 2 ^ (ceilDiv lb 2) * (1 / 2 ^ (ceilDiv lb 2)) := by field_simp
+    _ ≤ 2 ^ (ceilDiv lb 2) * Real.sqrt (rate lb) := by
+        exact mul_le_mul_of_nonneg_left h (by positivity)
+
+/-- `1/(ρ·√ρ) ≤ 2^(lb + ⌈lb/2⌉) = 2^⌈3lb/2⌉` — the first `ε_C` term's factor. -/
+theorem one_div_rate_three_halves_le (lb : ℕ) :
+    1 / (rate lb * Real.sqrt (rate lb)) ≤ 2 ^ (ceilDiv (3 * lb) 2) := by
+  have hs : (0 : ℝ) < Real.sqrt (rate lb) :=
+    lt_of_lt_of_le (by positivity) (sqrt_rate_ge lb)
+  rw [ceilDiv_three_mul_two, pow_add, one_div, mul_inv, rate]
+  refine mul_le_mul ?_ ?_ (by positivity) (by positivity)
+  · rw [one_div, inv_inv]
+  · rw [← one_div]; exact one_div_sqrt_rate_le lb
+
+/-- **⚑ THE COLUMN IS THE PAPER'S TERM — `ε_C ≤ epsCNum / (2^8·|F|)`.**
+
+*Proof.* `(m+½)⁷ = (2m+1)⁷/2⁷`, so term₁ `= (2m+1)⁷·d0²·(1/(ρ√ρ))/(2⁸·|F|) ≤ A₁/(2⁸·|F|)` by
+`one_div_rate_three_halves_le`; term₂ `= (2m+1)(d0+1)·(1/√ρ)·Σl/|F| ≤ A₂/|F| = 2⁸·A₂/(2⁸·|F|)` by
+`one_div_sqrt_rate_le`. Sum. ∎ -/
+theorem ledger_epsC_le (cfg : FriParams) (logD0 bciksM : ℕ) :
+    epsC cfg.logBlowup (2 ^ logD0) bciksM (friCommitLedger cfg logD0 bciksM).sumArities cfg.extDeg
+      ≤ ((friCommitLedger cfg logD0 bciksM).epsCNum : ℝ)
+          / (2 ^ 8 * (ledgerP : ℝ) ^ cfg.extDeg) := by
+  have hPp : (0 : ℝ) < (ledgerP : ℝ) := by norm_num [ledgerP]
+  have hP : (0 : ℝ) < (ledgerP : ℝ) ^ cfg.extDeg := by positivity
+  have hs : (0 : ℝ) < Real.sqrt (rate cfg.logBlowup) :=
+    lt_of_lt_of_le (by positivity) (sqrt_rate_ge cfg.logBlowup)
+  have hrs : (0 : ℝ) < rate cfg.logBlowup * Real.sqrt (rate cfg.logBlowup) :=
+    mul_pos (rate_pos _) hs
+  -- The ledger's numerator, in ℝ.
+  have hnum : ((friCommitLedger cfg logD0 bciksM).epsCNum : ℝ)
+      = (2 * (bciksM : ℝ) + 1) ^ 7 * ((2 : ℝ) ^ logD0 * (2 : ℝ) ^ logD0)
+          * 2 ^ (ceilDiv (3 * cfg.logBlowup) 2)
+        + 2 ^ 8 * ((2 * (bciksM : ℝ) + 1) * ((2 : ℝ) ^ logD0 + 1)
+          * ((friCommitLedger cfg logD0 bciksM).sumArities : ℝ)
+          * 2 ^ (ceilDiv cfg.logBlowup 2)) := by
+    simp only [friCommitLedger]
+    push_cast
+    ring
+  rw [epsC]
+  push_cast
+  rw [hnum, add_div]
+  refine add_le_add ?_ ?_
+  · -- TERM 1: `(m+½)⁷ = (2m+1)⁷/2⁷`, then the only content is `1/(ρ√ρ) ≤ 2^⌈3lb/2⌉`.
+    have hC : (0 : ℝ) ≤ (2 * (bciksM : ℝ) + 1) ^ 7
+        * ((2 : ℝ) ^ logD0 * (2 : ℝ) ^ logD0) / (2 ^ 8 * (ledgerP : ℝ) ^ cfg.extDeg) := by
+      positivity
+    have key := mul_le_mul_of_nonneg_left (one_div_rate_three_halves_le cfg.logBlowup) hC
+    calc ((bciksM : ℝ) + 1 / 2) ^ 7 * ((2 : ℝ) ^ logD0) ^ 2
+            / (2 * (rate cfg.logBlowup * Real.sqrt (rate cfg.logBlowup))
+                * (ledgerP : ℝ) ^ cfg.extDeg)
+        = (2 * (bciksM : ℝ) + 1) ^ 7 * ((2 : ℝ) ^ logD0 * (2 : ℝ) ^ logD0)
+            / (2 ^ 8 * (ledgerP : ℝ) ^ cfg.extDeg)
+            * (1 / (rate cfg.logBlowup * Real.sqrt (rate cfg.logBlowup))) := by
+          field_simp
+      _ ≤ (2 * (bciksM : ℝ) + 1) ^ 7 * ((2 : ℝ) ^ logD0 * (2 : ℝ) ^ logD0)
+            / (2 ^ 8 * (ledgerP : ℝ) ^ cfg.extDeg)
+            * 2 ^ (ceilDiv (3 * cfg.logBlowup) 2) := key
+      _ = (2 * (bciksM : ℝ) + 1) ^ 7 * ((2 : ℝ) ^ logD0 * (2 : ℝ) ^ logD0)
+            * 2 ^ (ceilDiv (3 * cfg.logBlowup) 2) / (2 ^ 8 * (ledgerP : ℝ) ^ cfg.extDeg) := by
+          ring
+  · -- TERM 2: the only content is `1/√ρ ≤ 2^⌈lb/2⌉`; the `2^8` cancels exactly.
+    have hD : (0 : ℝ) ≤ (2 * (bciksM : ℝ) + 1) * ((2 : ℝ) ^ logD0 + 1)
+        * ((friCommitLedger cfg logD0 bciksM).sumArities : ℝ)
+        / (ledgerP : ℝ) ^ cfg.extDeg := by positivity
+    have key := mul_le_mul_of_nonneg_left (one_div_sqrt_rate_le cfg.logBlowup) hD
+    calc (2 * (bciksM : ℝ) + 1) * ((2 : ℝ) ^ logD0 + 1) / Real.sqrt (rate cfg.logBlowup)
+            * ((friCommitLedger cfg logD0 bciksM).sumArities : ℝ)
+            / (ledgerP : ℝ) ^ cfg.extDeg
+        = (2 * (bciksM : ℝ) + 1) * ((2 : ℝ) ^ logD0 + 1)
+            * ((friCommitLedger cfg logD0 bciksM).sumArities : ℝ)
+            / (ledgerP : ℝ) ^ cfg.extDeg * (1 / Real.sqrt (rate cfg.logBlowup)) := by
+          field_simp
+      _ ≤ (2 * (bciksM : ℝ) + 1) * ((2 : ℝ) ^ logD0 + 1)
+            * ((friCommitLedger cfg logD0 bciksM).sumArities : ℝ)
+            / (ledgerP : ℝ) ^ cfg.extDeg * 2 ^ (ceilDiv cfg.logBlowup 2) := key
+      _ = 2 ^ 8 * ((2 * (bciksM : ℝ) + 1) * ((2 : ℝ) ^ logD0 + 1)
+            * ((friCommitLedger cfg logD0 bciksM).sumArities : ℝ)
+            * 2 ^ (ceilDiv cfg.logBlowup 2)) / (2 ^ 8 * (ledgerP : ℝ) ^ cfg.extDeg) := by
+          field_simp
+
+/-- **`commitBits` IS A SOUND EXPONENT** — `epsCNum · 2^commitBits < 2^8·|F|`, the same reading
+`ledger_perFoldBits_sound` establishes for `perFoldBits`, at the same `Nat.log2` shape. -/
+theorem ledger_commitBits_sound (cfg : FriParams) (logD0 bciksM : ℕ)
+    (hg : 0 < (friCommitLedger cfg logD0 bciksM).epsCNum)
+    (hlt : (friCommitLedger cfg logD0 bciksM).epsCNum < 2 ^ 8 * ledgerP ^ cfg.extDeg) :
+    (friCommitLedger cfg logD0 bciksM).epsCNum * 2 ^ (friCommitLedger cfg logD0 bciksM).commitBits
+      < 2 ^ 8 * ledgerP ^ cfg.extDeg := by
+  set g := (friCommitLedger cfg logD0 bciksM).epsCNum with hgdef
+  set N := 2 ^ 8 * ledgerP ^ cfg.extDeg with hNdef
+  have hbits : (friCommitLedger cfg logD0 bciksM).commitBits = Nat.log 2 ((N - 1) / g) := by
+    rw [hgdef, hNdef]; simp only [friCommitLedger]; rw [log2_eq_log_two]
+  rw [hbits]
+  have hgN : g ≤ N - 1 := by omega
+  have hq : (N - 1) / g ≠ 0 := by
+    have := Nat.one_le_div_iff hg |>.mpr hgN
+    omega
+  have hpow : 2 ^ Nat.log 2 ((N - 1) / g) ≤ (N - 1) / g := Nat.pow_log_le_self 2 hq
+  have hmul : g * ((N - 1) / g) ≤ N - 1 := by
+    rw [Nat.mul_comm]; exact Nat.div_mul_le_self (N - 1) g
+  calc g * 2 ^ Nat.log 2 ((N - 1) / g)
+      ≤ g * ((N - 1) / g) := Nat.mul_le_mul_left g hpow
+    _ ≤ N - 1 := hmul
+    _ < N := by omega
+
+/-- **⚑ THE COMMIT-PHASE APEX — `ε_C ≤ 2^(−commitBits)`, for BCIKS20's `ε_C`.**
+
+This is the theorem that makes `commitBits` a soundness number rather than an arithmetic
+expression: the paper's `ε_C` (`epsC`, transcribed from Lemma 8.2) is bounded by two to the minus
+the column the C-ABI returns. Compose `ledger_epsC_le` (the column over-estimates `ε_C`) with
+`ledger_commitBits_sound` (the `Nat.log2` reading is a real exponent). -/
+theorem ledger_epsC_soundness (cfg : FriParams) (logD0 bciksM : ℕ)
+    (hg : 0 < (friCommitLedger cfg logD0 bciksM).epsCNum)
+    (hlt : (friCommitLedger cfg logD0 bciksM).epsCNum < 2 ^ 8 * ledgerP ^ cfg.extDeg) :
+    epsC cfg.logBlowup (2 ^ logD0) bciksM (friCommitLedger cfg logD0 bciksM).sumArities cfg.extDeg
+      < 1 / 2 ^ (friCommitLedger cfg logD0 bciksM).commitBits := by
+  have hle := ledger_epsC_le cfg logD0 bciksM
+  have hnat := ledger_commitBits_sound cfg logD0 bciksM hg hlt
+  have hPp : (0 : ℝ) < (ledgerP : ℝ) := by norm_num [ledgerP]
+  have hP : (0 : ℝ) < 2 ^ 8 * (ledgerP : ℝ) ^ cfg.extDeg := by positivity
+  have h2 : (0 : ℝ) < (2 : ℝ) ^ (friCommitLedger cfg logD0 bciksM).commitBits := by positivity
+  refine lt_of_le_of_lt hle ?_
+  rw [div_lt_div_iff₀ hP h2, one_mul]
+  have hcast : (((friCommitLedger cfg logD0 bciksM).epsCNum : ℝ)
+      * 2 ^ (friCommitLedger cfg logD0 bciksM).commitBits)
+      < ((2 : ℝ) ^ 8 * (ledgerP : ℝ) ^ cfg.extDeg) := by
+    exact_mod_cast hnat
+  nlinarith [hcast, h2]
+
+/-! ## §6c. THE DEPLOYED COMMIT COLUMN — the numbers, reported unmassaged.
+
+⚑ Every number here is quoted at `logD0 = 12` — the FRI domain of the MEASURED COST FIXTURE (a
+`2^6`-row trace at blowup `2^6`), which is smaller than a production turn. **Nobody has measured
+dregg's deployed trace-height distribution**, and it is the single input that moves this column
+most. These are the fixture's numbers, not the deployment's, and they are labelled as such. -/
+
+/-- The `commitBits` analogue of `perFoldBits_eq_of_bracket` — so the per-config numbers below are
+kernel `Nat` arithmetic, NOT `native_decide`. `native_decide` would put `Lean.ofReduceBool` (and the
+compiler) in the trust base of a soundness column; a ledger is exactly the wrong place for that. -/
+private theorem commitBits_eq_of_bracket (cfg : FriParams) (logD0 bciksM b : ℕ)
+    (h₁ : 2 ^ b ≤ (2 ^ 8 * ledgerP ^ cfg.extDeg - 1) / (friCommitLedger cfg logD0 bciksM).epsCNum)
+    (h₂ : (2 ^ 8 * ledgerP ^ cfg.extDeg - 1) / (friCommitLedger cfg logD0 bciksM).epsCNum
+        < 2 ^ (b + 1)) :
+    (friCommitLedger cfg logD0 bciksM).commitBits = b := by
+  show Nat.log2 _ = b
+  rw [log2_eq_log_two]
+  exact Nat.log_eq_of_pow_le_of_lt_pow h₁ h₂
+
+/-- **THE DEPLOYED COMMIT COLUMN READS `71`** at the fixture height and `m = 7`. -/
+theorem wrap_ledger_commitBits : (friCommitLedger ir2LeafWrapConfig 12 7).commitBits = 71 := by
+  refine commitBits_eq_of_bracket _ _ _ 71 ?_ ?_ <;>
+    norm_num [friCommitLedger, ceilDiv, ledgerP, ir2LeafWrapConfig]
+
+/-- **⚑ THE COMMIT COLUMN IS NOT TRACE-INVARIANT — and this is why it is a REAL column.**
+Same config, an `8×`-taller trace: the commit column falls `71 → 55`, ~2 bits per doubling, because
+`ε_C ∝ |D⁽⁰⁾|²`. Neither `perFoldBits` nor `johnsonBits` moves at all — they cannot see the trace.
+So the proven posture is a function of the STATEMENT being proved, not of the FRI knobs alone. -/
+theorem commit_column_is_not_trace_invariant :
+    (friCommitLedger ir2LeafWrapConfig 12 7).commitBits = 71 ∧
+      (friCommitLedger ir2LeafWrapConfig 20 7).commitBits = 55 ∧
+      (friLedger ir2LeafWrapConfig).perFoldBits = (friLedger ir2LeafWrapConfig).perFoldBits ∧
+      (friLedger ir2LeafWrapConfig).johnsonBits = 73 := by
+  refine ⟨wrap_ledger_commitBits, ?_, rfl, wrap_ledger_johnsonBits⟩
+  refine commitBits_eq_of_bracket _ _ _ 55 ?_ ?_ <;>
+    norm_num [friCommitLedger, ceilDiv, ledgerP, ir2LeafWrapConfig]
+
+/-- **⚑ THE COLUMN AT THE MEASURED TRACE HEIGHTS — the honest deployed numbers.**
+
+The `71` above is the FIXTURE's number. A concurrent measurement lane established the real ones: the
+recursion wrap ships `|D⁽⁰⁾| = 2^19` **on every fold**, and the apex is `2^22`. At those heights this
+column reads **`57`** and **`51`**, not `71`.
+
+⚑ **This is the whole point of making `ε_C` a parametric column instead of a scratch-script
+footnote.** The fixture flattered us by ~14 bits, and no FRI knob would have revealed it: `perFoldBits`
+and `johnsonBits` read exactly the same at every height. The proven posture is a function of the
+STATEMENT being proved.
+
+⚠ The heights are the measurement lane's, not this file's — this file is parametric in `logD0`
+precisely so that it consumes a measurement rather than asserting one. -/
+theorem wrap_ledger_commitBits_at_measured_heights :
+    (friCommitLedger ir2LeafWrapConfig 19 7).commitBits = 57 ∧
+      (friCommitLedger ir2LeafWrapConfig 22 7).commitBits = 51 := by
+  constructor
+  · refine commitBits_eq_of_bracket _ _ _ 57 ?_ ?_ <;>
+      norm_num [friCommitLedger, ceilDiv, ledgerP, ir2LeafWrapConfig]
+  · refine commitBits_eq_of_bracket _ _ _ 51 ?_ ?_ <;>
+      norm_num [friCommitLedger, ceilDiv, ledgerP, ir2LeafWrapConfig]
+
+/-- **⚑ THE CEILING — no `numQueries` and no `powBits` can pass `ε_C`.** `q = 200` and `pow = 27`
+(plonky3's practical maximum) balloon the query columns to `627`/`1227` and leave the commit column
+exactly where `q = 19`, `pow = 16` left it. `ε_C`'s formula contains neither knob. The only lever
+is `extDeg`, worth exactly `log₂ p ≈ 30.91` bits per degree (`ε_C ∝ 1/p^extDeg`).
+
+⚑ **This is what withdraws "proven Johnson 128 at ext-degree 4".** The query ledger's monotone
+`q·lb/2` reading is what made `128` look purchasable; under the term BCIKS20 actually carries, no
+`(q, pow)` at ext-degree `4` reaches it. -/
+theorem query_and_pow_cannot_pass_epsC :
+    (friCommitLedger ir2LeafWrapConfig 12 7).commitBits
+        = (friCommitLedger { ir2LeafWrapConfig with numQueries := 200, powBits := 27 } 12 7).commitBits
+      ∧ (friLedger { ir2LeafWrapConfig with numQueries := 200, powBits := 27 }).johnsonBits = 627 := by
+  refine ⟨?_, by norm_num [friLedger, ir2LeafWrapConfig]⟩
+  -- `epsCNum` does not mention `numQueries` or `powBits`, so the two terms are literally equal.
+  rfl
+
+/-- **⚑ THE TWO-COLUMN LAW, QUANTITATIVELY VINDICATED.** `query_ledger_does_not_determine_perFold`
+already showed the query and per-fold columns are independent. The commit column makes the point
+sharper: it moves under a parameter (`logD0`) that BOTH other columns are blind to, and does not
+move under the parameters (`numQueries`, `powBits`) that drive the query column. Three columns, three
+different dependencies — no single product could track them, and any headline that multiplied them
+would be tracking none. -/
+theorem three_columns_three_dependencies :
+    -- the trace moves `commitBits` and NOTHING else
+    (friCommitLedger ir2LeafWrapConfig 12 7).commitBits
+        ≠ (friCommitLedger ir2LeafWrapConfig 20 7).commitBits ∧
+    -- the queries move `johnsonBits` and NOT `commitBits`
+    (friLedger ir2LeafWrapConfig).johnsonBits
+        ≠ (friLedger { ir2LeafWrapConfig with numQueries := 200, powBits := 27 }).johnsonBits ∧
+    (friCommitLedger ir2LeafWrapConfig 12 7).commitBits
+        = (friCommitLedger { ir2LeafWrapConfig with numQueries := 200, powBits := 27 } 12 7).commitBits := by
+  refine ⟨?_, ?_, rfl⟩
+  · rw [wrap_ledger_commitBits]
+    rw [show (friCommitLedger ir2LeafWrapConfig 20 7).commitBits = 55 from by
+      refine commitBits_eq_of_bracket _ _ _ 55 ?_ ?_ <;>
+        norm_num [friCommitLedger, ceilDiv, ledgerP, ir2LeafWrapConfig]]
+    norm_num
+  · norm_num [friLedger, ir2LeafWrapConfig]
+
 /-! ## §7. THE EXPORT IS THE LEDGER — the `@[export]`ed wire is not a separate path.
 
 `friLedgerFFI` is the C-ABI entry the Rust gate calls. These `#guard`s check it renders the SAME
@@ -432,18 +725,42 @@ theorem query_ledger_does_not_determine_perFold :
 reads the proved numbers, and a wire-format edit that dropped a column would go red HERE, in Lean,
 before the Rust test ever ran. -/
 
--- The deployed IR-v2 wrap: arity 8, |κ| = 64, |Good| ≤ 14112, 109 per-fold bits, 73 Johnson, 130 capacity.
-#guard friLedgerFFI "6 19 16 3 0 4" == "8 64 14112 109 73 130"
+-- ⚑ The wire now carries EIGHT inputs (the six knobs + `logD0` + BCIKS20's `m`) and SEVEN columns
+-- (the six + `commitBits`). `logD0 = 12` is the MEASURED FIXTURE's FRI domain (a 2^6-row trace at
+-- blowup 2^6) — NOT a measurement of a production turn, which nobody has taken. `m = 7` is the
+-- proximity parameter that happens to optimise the deployed composite; it is an input, not a fact.
+
+-- The deployed IR-v2 wrap: arity 8, |κ| = 64, |Good| ≤ 14112, 109 per-fold, 73 Johnson, 130 capacity,
+-- and commit-phase 71 — the term the 73 drops.
+#guard friLedgerFFI "6 19 16 3 0 4 12 7" == "8 64 14112 109 73 130 71"
 -- The rotated leaf wrap (arity 2 at logBlowup 6) — the one config the ~112.6 describes.
-#guard friLedgerFFI "6 19 16 1 0 4" == "2 64 2016 112 73 130"
+#guard friLedgerFFI "6 19 16 1 0 4 12 7" == "2 64 2016 112 73 130 71"
 -- The gnark ETH-wrap's outer shrink: arity 2 at logBlowup 3 ⇒ |κ| = 8, |Good| ≤ 28, 118 bits.
-#guard friLedgerFFI "3 38 16 1 0 4" == "2 8 28 118 73 130"
+#guard friLedgerFFI "3 38 16 1 0 4 12 7" == "2 8 28 118 73 130 75"
 -- v1 production: arity 8 at logBlowup 3.
-#guard friLedgerFFI "3 38 16 3 0 4" == "8 8 196 116 73 130"
+#guard friLedgerFFI "3 38 16 3 0 4 12 7" == "8 8 196 116 73 130 75"
 -- The recursion default: powBits 14 ⇒ capacity exactly 128.
-#guard friLedgerFFI "3 38 14 1 0 4" == "2 8 28 118 71 128"
--- FAIL-CLOSED: a malformed wire and an out-of-window knob set both refuse.
+#guard friLedgerFFI "3 38 14 1 0 4 12 7" == "2 8 28 118 71 128 75"
+
+-- ⚑ THE COMMIT COLUMN IS NOT TRACE-INVARIANT — the mutation canary, on the wire. Same config, a
+-- 2^20 FRI domain instead of 2^12: the per-fold and query columns do not move at all, and the
+-- commit column falls 71 → 55 (~2 bits per trace doubling, because ε_C ∝ |D⁽⁰⁾|²).
+#guard friLedgerFFI "6 19 16 3 0 4 20 7" == "8 64 14112 109 73 130 55"
+#guard friLedgerFFI "6 19 16 3 0 4 13 7" == "8 64 14112 109 73 130 69"
+
+-- ⚑ THE CEILING, AND THE SHARPEST READING IN THIS FILE. `ε_C` contains no `numQueries` and no
+-- `powBits`. Buy queries to `200` and PoW to the practical maximum `27` and the query columns
+-- balloon — Johnson `73 → 627`, capacity `130 → 1227` — while the commit column does not move one
+-- bit off `71`. The query ledger's monotone `q·lb/2` reading is what makes "proven 128" look
+-- purchasable; ε_C is what says it is not. No `(q, pow)` passes this. Only `extDeg` moves it, at
+-- log₂ p ≈ 30.91 bits per degree, because `ε_C ∝ 1/|F| = 1/p^extDeg`.
+#guard friLedgerFFI "6 200 27 3 0 4 12 7" == "8 64 14112 109 627 1227 71"
+
+-- FAIL-CLOSED: a malformed wire, the OLD six-field wire, and `m < 3` (BCIKS20 Thm 8.3's own
+-- hypothesis — outside it the formula is not the paper's) all refuse rather than answer.
 #guard friLedgerFFI "6 19 16" == ""
+#guard friLedgerFFI "6 19 16 3 0 4" == ""
+#guard friLedgerFFI "6 19 16 3 0 4 12 2" == ""
 #guard friLedgerFFI "not a config" == ""
 #guard friLedgerFFI "6 19 16 3 0 64" == ""
 
@@ -485,5 +802,20 @@ is not hypothesis-free, and this block does not claim it is. -/
 #assert_axioms wrap_ledger_capacityBits
 #assert_axioms wrap_ledger_johnsonBits
 #assert_axioms query_ledger_does_not_determine_perFold
+#assert_axioms rate_pos
+#assert_axioms rate_rpow_three_halves
+#assert_axioms ceilDiv_two
+#assert_axioms ceilDiv_three_mul_two
+#assert_axioms sqrt_rate_ge
+#assert_axioms one_div_sqrt_rate_le
+#assert_axioms one_div_rate_three_halves_le
+#assert_axioms ledger_epsC_le
+#assert_axioms ledger_commitBits_sound
+#assert_axioms ledger_epsC_soundness
+#assert_axioms wrap_ledger_commitBits
+#assert_axioms wrap_ledger_commitBits_at_measured_heights
+#assert_axioms commit_column_is_not_trace_invariant
+#assert_axioms query_and_pow_cannot_pass_epsC
+#assert_axioms three_columns_three_dependencies
 
 end Dregg2.Circuit.FriLedgerSound

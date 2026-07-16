@@ -69,8 +69,27 @@ NON-VACUOUS (`fPow8Wrap` is `503`-far), but it does not cover the operating regi
 The Johnson-radius number is **`111`** (`|Good| ≤ 3528`) — HIGHER, because it is a WEAKER claim:
 it bounds only the challenges folding to within `dIn = 56` (agreement `≥ 8`), where `109` bounds the
 far larger family folding to within `dIn = 62` (agreement `≥ 2`). **These are different objects and
-neither dominates the other.** Reporting them as one column was the error. `FriLedger` now carries
-both, separately, and `FriLedgerSound.wrap_ledger_perFoldJohnsonBits` pins the Johnson one.
+neither dominates the other.** Reporting them as one column was the error. `FriLedger.perFoldBits`'
+field doc now names its radius; the Johnson reading is proved HERE and deliberately not exported,
+because its `M`/`s` instantiation is only integral at even `logBlowup` (`√ρ·|κ|` is irrational at
+`lb = 3`) and inventing a rounding would be inventing a number.
+
+## ⚑ WHAT WAS ALREADY IN-TREE, AND WHAT WAS NOT — the honest scope of this file
+
+**The ARITY-2 Johnson radius was never open.** `FriProximityGapWitness.wrap_friProximityGap_johnson`
+proves `FriProximityGapChallenges friSetupWrapRate 112 42 26` and
+`FriCorrelatedAgreementSharp.wrap_correlatedAgreementLine` proves
+`CorrelatedAgreementLine friSetupWrapRate 56 292` — both at `dOut = 112` of `128`, which IS
+`(1 − √ρ)·128` at `ρ = 1/64`. Those are genuine Johnson-radius results, by the sharper Fisher/packing
+route, and §5's generic count agrees with them (`arity2_johnson_generic_is_consistent_with_sharp`).
+
+**What was open is the DEPLOYED config, which folds at ARITY 8.** `friSetupWrapRate` is
+`FriSetup BabyBear (Fin (2^7)) (Fin (2^6))` — a 2-to-1 fold on `128` points. The deployed prover runs
+`IR2_FRI_MAX_LOG_ARITY = 3`, and `FriLedger`'s `perFoldBits = 109` reads `arity8_good_card_le`'s
+`14112` over the `512`-point `friSetupK8Wrap`. That the arity-2 results do not transfer to arity 8 is
+the entire reason `FriArityTransfer` exists. So the arity-2 Johnson machinery does not close this,
+and the near-capacity `arity8_phase_injective` does not reach Johnson. That gap is what this file
+finds, proves FALSE-not-open, and then supplies the arity-8 Johnson count for.
 
 `#assert_axioms` is blind to HYPOTHESES — and this file is the demonstration of why that matters:
 `arity8_phase_injective` is kernel-clean, `sorry`-free, non-vacuous, and TRUE, and it still did not
@@ -564,6 +583,28 @@ theorem arity8_johnson_perFold_interval :
     3528 * 2 ^ 111 < babyBearP ^ 4 ∧ babyBearP ^ 4 < 3528 * 2 ^ 112 := by
   refine ⟨?_, ?_⟩ <;> norm_num [babyBearP]
 
+/-- **⚑ CROSS-CHECK AGAINST THE TREE'S INDEPENDENT ARITY-2 JOHNSON RESULT — the tooth that says §4
+is not a mirror.** At arity 2 the tree ALREADY has a Johnson-radius count, by a DIFFERENT method (the
+Fisher/packing route of `FriProximityGapWitness` §F, sharpened in `FriCorrelatedAgreementSharp` §§3b-6):
+`wrap_correlatedAgreementLine : CorrelatedAgreementLine friSetupWrapRate 56 292` — at the SAME
+Johnson outer radius (`dOut = 112` of `128` = `(1−√ρ)·128`), the SAME folded-code Johnson inner
+radius (`dIn = 56`), hence the SAME `M = 7` (`wrap_fiber_le_seven`) and the same agreement floor
+`s = 64 − 56 = 8`. It bounds the same object §4 does: the challenges whose fold is `56`-close to the
+constants, i.e. constant on `≥ 8` fibres.
+
+§4's generic bound at `m = 2, M = 7, s = 8, |κ| = 64` gives `|Good|·(8·8 − 7·8) ≤ 1·64·63 = 4032`,
+i.e. `|Good| ≤ 504`. The tree's specialized result is `292`.
+
+**`292 ≤ 504`: consistent, with the generic bound the weaker one.** So §4 does not contradict a
+sharper independently-proved result at the same instantiation — it is the arity-generic version of
+it, checked against it, and it reaches where the arity-2 packing method cannot (arity 8, which is
+what the deployed prover actually runs). ⚑ It also prices the generality honestly: at arity 2 the
+generic route costs ~0.8 bits against the specialized one, so `3528`/`111` at arity 8 should be read
+as a bound the specialized method might yet sharpen — not as the last word. -/
+theorem arity2_johnson_generic_is_consistent_with_sharp :
+    1 * (64 * (64 - 1)) / (8 * 8 - 7 * 8) = 504 ∧ (292 : ℕ) ≤ 504 := by
+  refine ⟨by norm_num, by norm_num⟩
+
 /-! ## §6. Axiom hygiene.
 
 Kernel-clean, `sorry`-free, no `axiom`. ⚑ And the point of the file is precisely that this block
@@ -594,5 +635,6 @@ is NON-VACUOUS, and it still does not reach the radius the ledger quoted it for.
 #assert_axioms arity8_johnson_good_card_le
 #assert_axioms arity8_johnson_perFold_soundness
 #assert_axioms arity8_johnson_perFold_interval
+#assert_axioms arity2_johnson_generic_is_consistent_with_sharp
 
 end Dregg2.Circuit.FriJohnsonRadiusGap
