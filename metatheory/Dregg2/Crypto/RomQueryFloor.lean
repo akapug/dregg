@@ -78,6 +78,26 @@ this shape, and the whole point is that they hold against a computationally UNBO
 adversary — but it is not a cost model, and it does not restrict a lattice adversary at all, which
 makes no oracle calls. The general PPT `Eff` remains open, and it remains a parameter.
 
+⚑ **A CORRECTION TO `FloorGames` §8, which says Mathlib has "no `PPT`, no machine model".** It has
+both. `Mathlib.Computability.TuringMachine.Computable` defines
+`Turing.TM2ComputableInPolyTime ea eb f` — a bundled TM2 machine, tape-alphabet equivalences, a
+`time : Polynomial ℕ`, and a proof the machine outputs `f` within `time.eval (ea a).length` steps.
+§8's operative qualifier — "over an ARBITRARY CARRIER" — is what survives, and it is the whole
+story. Three facts about that definition, each checked against the pinned revision:
+
+  1. **It is a DEEP EMBEDDING.** `Eff A` would have to exhibit a Turing machine and ENCODINGS
+     `ea : Inst l → List αΓ`, `eb : Ans l → List βΓ` into finite tape alphabets. A `Game`'s `Inst`
+     and `Ans` are arbitrary `ℕ → Type` with no encoding, so there is nothing to hand it.
+  2. **Its only witness is the identity.** `idComputableInPolyTime` is the sole inhabitant; no
+     nontrivial function in Mathlib is proved polynomial-time computable.
+  3. **Composition is `proof_wanted`.** `TM2ComputableInPolyTime.comp` is stated and NOT proved.
+     Every cryptographic reduction composes adversaries, so a PPT `Eff` built on this could not
+     transport through a single reduction.
+
+That is the honest measure of what a general PPT `Eff` would cost, taken from the state of the only
+Lean machine model there is. `QueryBounded` needs none of it: no encoding, no machine, and no
+composition theorem, because it is a property of the adversary's own syntax.
+
 ## Axiom hygiene
 
 `#assert_all_clean` ⊆ {propext, Classical.choice, Quot.sound}; no `sorry`, no fresh `axiom`, no
