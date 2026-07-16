@@ -849,3 +849,25 @@ IR-v1, marked], `effect_vm_p3_air` 9 [self-disclaiming shape probe], `bilateral_
 [emitted], `lean_lookup_air` 3 [proven range gadget]). The ONE remaining hand-authored circuit on a
 DEPLOYED path is `ivc_turn_chain` — its emitter now exists + is registered (bricks 1-2); the cutover
 (bricks 3-4) is in flight with codex.
+
+### `NonRevocationDepthResidual` — DIAGNOSED precisely (2026-07-16). The fix is a KNOWN pattern.
+Ran down WHY the emitter is depth-2 and what would close it. The two witness builders are structurally
+different, and that is the whole gap:
+- **Membership (depth-GENERAL, the pattern that works)**: `membership_witness_4ary`
+  (`circuit/src/membership_descriptor_4ary.rs:150`) does `for (sibs, &pos) in siblings.iter().zip(
+  positions.iter())` — **ONE TRACE ROW PER MERKLE LEVEL**, so `depth == trace height`. The descriptor is
+  named `merkle-membership-depth2-4ary` but serves ARBITRARY power-of-two depth, because its constraints
+  are per-row + transition and the co-path folds ACROSS ROWS. `descriptor_by_name.rs:25` records it:
+  "`merkle-membership-depth2-4ary::poseidon2-v1` + the depth-GENERAL builder".
+- **Non-revocation (depth-2 ONLY)**: `non_revocation_witness_with_height`
+  (`circuit/src/non_revocation_witness.rs:163`) does `(0..height).map(|_| row.clone())` — it **CLONES ONE
+  ACTIVE ROW**; `height` is only trace PADDING, not a co-path fold. The circuit takes a single
+  `level1_sibling` and computes `root = hash_2_to_1(hash_2_to_1(L,R), sib1)`. `NonRevocationEmit.lean:44`
+  calls this "the depth-2 tree's BOTTOM SIBLINGS sharing the path to the root", :51 "a representative
+  shape — exactly the depth/shape fixing `MerkleMembershipEmit` does for membership".
+**THE FIX (named, not forced):** restructure the non-rev descriptor to the MEMBERSHIP pattern — one row per
+level with the co-path folded by a transition/windowGate, instead of one active row with a single sibling.
+Then the same descriptor serves the deployed `TREE_DEPTH = 4` (16 leaves) and the builder becomes
+depth-general. This is Lean work in `NonRevocationEmit.lean` (+ its witness builder), NOT a Rust patch.
+Until then `sdk/privacy.rs:621,762` + `full_turn_proof.rs:4692,4999` correctly stay on the hand circuit —
+cutting over would SHRINK the revocation tree 16 -> 4 leaves.
