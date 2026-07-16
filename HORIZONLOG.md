@@ -18,7 +18,17 @@ The "have excellence, not honesty" pass. Committed so far: bridge value-path hol
   it runs as its OWN single-concern lane (`nonce-binding-rollout`), NOT hand-threaded during churn — a
   commitment-layer change gets thought, per [[be-thoughtful-not-trigger-happy]]. Blocks build of exec-lean →
   collective-choice/dregg-governance/dregg-node until it lands.
-- **⏳ Blocked on the nonce heal** (verified-green in isolation, commit after tree compiles): effect-classify
+- **NONCE ROLLOUT done-on-disk, verification-blocked by a FOREIGN migration.** The dedicated lane threaded
+  `turn_nonce` through all 13 call sites (exec-lean keystone confirmed fixed; added a clean
+  `cclerk.next_turn_nonce()` so signers bind the nonce they submit under) then died on a 529 at the FINAL
+  verify. Cannot run the test suite because a **concurrent terminal's in-flight crypto migration** —
+  fact-commitment `hash_2_to_1` → `hash_4_to_1([fact_hash,state_root,blinding,0])` for hiding — left
+  `circuit/src/predicate_comparison_witness.rs` half-applied (doc says 2-to-1, `:170` uses new
+  `commitment_of`, `:154`/`:539` still 2-arg → E0061 in dregg-circuit → whole tree red). NOT MINE to finish
+  (active mid-save, KAT-pinned chip). Monitor `verify-when-healed.sh` polls `cargo check -p dregg-circuit`
+  and runs nonce-replay + collective-choice + dregg-governance + dregg-node + SDK checks when it goes green.
+  DO NOT commit nonce/weighted-cast/computron-policy until that verify is green.
+- **⏳ Also blocked on the same heal** (verified-green in isolation, commit after tree compiles): effect-classify DONE+COMMITTED (5a6358093); still pending =
   (VerbRegistry.lean +1 = 34 variants incl. the fresh `Custom` VK-door; gate ratchet; both Lean files build green
   standalone), weighted-cast (MultisigVote.lean weight-conservation theorems green + canary bit; Rust engine +
   HostBallotBox retirement — needs `cargo test -p collective-choice`/`dregg-governance`), computron-policy
