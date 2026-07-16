@@ -187,3 +187,57 @@ jobs:
           DREGG_TEST_REQUIRE_LEAN: "1"
           DREGG_REQUIRE_LEAN: "1"
         run: cargo test -p dregg-node --release --test consensus_under_failure -- --ignored --nocapture
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # The missing half of this lane. Everything above ALREADY runs, faithfully, every
+  # night — and tells nobody. This workflow is `schedule` + `workflow_dispatch` only,
+  # and scheduled workflows are NOT PR checks, so a red tooth here does not block a
+  # merge and never appears on the checkmark anyone actually reads. Measured 2026-07-15:
+  # 4 passed / 11 FAILED of the 17 armed teeth (8/8 binaries red, root-caused to the
+  # `generate_rotated_transfer_shape_wide` ↔ `transferVmDescriptor2R24` producer/descriptor
+  # drift) — while ci.yml stayed green through all of it. The honesty was in the header
+  # and the logs; the signal people read is a checkmark. This job closes that gap.
+  #
+  # It does NOT gate anything (arming stays diagnostic, per the header above) — it just
+  # makes a red tooth reach a human. A standing issue is refreshed rather than spammed:
+  # one issue per outage, a comment per subsequent red run.
+  page-on-red:
+    name: Page a human when a tooth is red
+    needs: [binding-teeth, lean-hard-mode]
+    # `always()` so this still runs after the teeth job fails; fire only on a real
+    # failure (never on cancelled/skipped — lean-hard-mode is dispatch-gated and is
+    # `skipped` on every scheduled run).
+    if: >-
+      ${{ always() && (needs.binding-teeth.result == 'failure'
+          || needs.lean-hard-mode.result == 'failure') }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Open or refresh the standing red-teeth issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TEETH: ${{ needs.binding-teeth.result }}
+          LEAN: ${{ needs.lean-hard-mode.result }}
+        run: |
+          set -euo pipefail
+          TITLE='armed-teeth: a deployed binding tooth is RED'
+          {
+            printf '%s\n\n' "The nightly **Armed teeth** lane failed: ${RUN_URL}"
+            printf '%s\n' "- \`binding-teeth\`: **${TEETH}**"
+            printf '%s\n\n' "- \`lean-hard-mode\`: **${LEAN}** (dispatch-gated; \`skipped\` on scheduled runs)"
+            printf '%s\n' 'These are the DEPLOYED light-client binding teeth. This lane is `schedule` +'
+            printf '%s\n' '`workflow_dispatch` only, so it is **not** a PR check — a red tooth here blocks'
+            printf '%s\n' 'nothing and is invisible on the checkmark. That is exactly why this issue exists:'
+            printf '%s\n\n' 'the tests already ran and already knew; the signal just never reached anyone.'
+            printf '%s\n' 'Triage the run, then either fix the tooth or record in the workflow header why it'
+            printf '%s\n' 'is expected-red (the header is already scrupulous about this — keep it that way).'
+          } > /tmp/body.md
+          EXISTING="$(gh issue list --state open --search "${TITLE} in:title" --json number --jq '.[0].number // empty')"
+          if [ -n "${EXISTING}" ]; then
+            gh issue comment "${EXISTING}" --body-file /tmp/body.md
+            echo "refreshed existing issue #${EXISTING}"
+          else
+            gh issue create --title "${TITLE}" --body-file /tmp/body.md
+          fi
