@@ -985,3 +985,93 @@ retarget-or-retire decision. NOT swept blind — I already learned that lesson.
    generate_chain_trace` (~400 LOC) resolve outside the crate only to DOC COMMENTS; every executable ref
    is its own `#[cfg(test)]`. Only `compose_aggregate` has a real consumer (`sdk/full_turn_proof.rs:67`).
    May be aspirational IVC scaffolding — **killing `compose_chain` is a product decision, not cleanup.**
+
+### Bricks 3-4 DONE in the working tree (2026-07-16, codex stark-kill; supervisor must gate/commit)
+
+**The deployed whole-history binding proof is now the Lean-emitted descriptor.**
+
+- Added `circuit/src/turn_chain_witness.rs`: the production 14-column chip-lane witness for
+  `dregg-turn-chain-binding-v2`. It fills the shared Poseidon2 lookup lanes and preserves the verified
+  padding contract: `(final,final)`, continuing `idx`, frozen `real_count`, `is_real=0`, and a genuinely
+  continued hash chain. This is witness generation only; it authors zero constraints.
+- `prove_chain_core_rotated` (therefore `prove_turn_chain_recursive_without_host_gate`) and the online
+  `Accumulator::finalize` now call one shared `descriptor_by_name` + `prove_vm_descriptor2` path. The
+  byte verifier decodes `TurnChainBindingProof { proof, public_inputs }` and calls
+  `verify_vm_descriptor2` against the registered descriptor; the wire envelope was fail-closed bumped
+  from v3 to v4 for the proof-type change.
+- The real end-to-end test caught one deployed-wide integration fact: wide turns intentionally retire
+  scalar PI 34/35 to zero. The binding witness now consumes lane 0 of `turn_anchors8` (identical to
+  PI 34/35 for narrow legs), so the Lean descriptor proves a meaningful scalar projection of the same
+  genuine wide anchors the recursion segment binds. The verifier checks descriptor genesis/final/count
+  against the carried wide claim's head lanes; the descriptor's scalar sequential digest remains
+  distinct from the root's 8-felt ordered-segment digest.
+- Deleted the entire Rust-authored `TurnChainBindingAir` algebra, its 359-column inline Poseidon2 aux
+  trace, row builder, and direct uni-STARK proving path. `rg`/`sg` over Rust now finds zero
+  `TurnChainBindingAir` symbols.
+- Added `circuit-prove/tests/turn_chain_emit_gate.rs`: exact Lean JSON pin + parse/dispatch/shape gate +
+  real prove/verify + forged continuity, idx, count, final-root, and digest rejections. Ported the old
+  direct digest/count teeth to the emitted descriptor and added binding-proof-byte corruption to the
+  deployed wire test.
+- Deployed call evidence: `grain-verify/src/r3.rs:139` calls
+  `prove_turn_chain_recursive_without_host_gate`; that calls `prove_chain_core_rotated`, which proves the
+  registered descriptor, and `r3.rs:145` calls `verify_whole_chain_proof_bytes`, which now runs
+  `verify_vm_descriptor2` before the recursive root/segment teeth.
+
+**Gate evidence (verbatim result lines):**
+
+- Lean emitter payload after stripping its routing prefix: `cmp` green; both files `2148` bytes.
+- Emit gate: `Summary [   0.054s] 3 tests run: 3 passed, 0 skipped`.
+- Focused descriptor + order rejection: `Summary [ 176.699s] 3 tests run: 3 passed (1 slow, 1 leaky), 10 skipped`.
+- DEPLOYED wire proof, honest + tamper polarities:
+  `PASS [ 379.484s] ... whole_chain_proof_bytes_roundtrip_and_tamper` and
+  `Summary [ 379.484s] 1 test run: 1 passed (1 slow), 12 skipped`.
+- `cargo check --tests -p dregg-circuit-prove -p grain-verify -p grain-turn -p dregg-lightclient`:
+  `Finished dev profile [unoptimized + debuginfo] target(s) in 17.02s` (the terminal rendered `dev`
+  with code ticks).
+- `lake build Dregg2` was green on this cutover snapshot:
+  `Build completed successfully (9702 jobs).`
+
+**No turn-chain expressiveness residual.** The Lean descriptor expresses every hand-AIR tooth and the
+deployed proof/verify + forged-history rejection path is green. Two **shared dirty-tree blockers** remain
+outside this lane and were not patched:
+
+- **`SharedTreeRefusalGauntletResidual`** — the full default nextest run reached 135 passes, then the
+  parallel dirty refusal-policy work made
+  `shielded_ring_clearing_air::tests::forged_post_endpoint_lane_is_unsat` classify the debug prover's
+  UNSAT panic as a crash; a separate caveat test timed out at 180s. Verbatim:
+  `Summary [ 180.172s] 137/490 tests run: 135 passed (9 slow), 1 failed, 1 timed out, 87 skipped`.
+  `circuit/src/refusal.rs` is explicitly another lane's off-limits dirty file.
+- **`SharedTreeMarketAggregateBindingResidual`** — after the 9702-job green, the parallel lane changed
+  metatheory and a final replay failed in `Market/AggregateBinding.lean`: `Unknown identifier
+  MSISHardQuant`, followed by `sorryAx` axiom-hygiene failures. This is unrelated to the byte-identical,
+  already-built turn-chain emitter and outside stark-kill ownership.
+
+No commit made, per supervisor instruction.
+
+## ⚑⚑⚑ `de0893342` — THE LAST DEPLOYED HAND-AUTHORED CIRCUIT IS DEAD (2026-07-16)
+`TurnChainBindingAir`'s algebra is GONE (0 sites, all 3 dialects). `circuit-prove/src/ivc_turn_chain.rs`
+drives `descriptor_by_name("dregg-turn-chain-binding-v2")` + `prove/verify_vm_descriptor2` — the assured
+IR2 interpreter over constraints AUTHORED AND PROVED in `Emit/EffectVmEmitTurnChainBinding.lean`.
+This was the one genuine law-#1 violation on a deployed path: `grain-verify/r3.rs:139`'s whole-history
+chain proof — **what a renter trusts**.
+INDEPENDENTLY VERIFIED (not on report): emit gate 3/3 · **the descriptor Lean emits RIGHT NOW is
+BYTE-IDENTICAL to the committed golden** (2148 bytes — the proof and the deployed bytes are ONE artifact,
+which is the entire point of emitting vs lowering) · deployed `ivc_turn_chain_rotated` 5/5 in 177s (honest
+prove+verify AND tamper rejection: forged digest/count, broken order, root/descriptor/public/VK/version/
+truncation) · `lake build Dregg2` 9703 jobs green. NO expressiveness residual — the census's "every family
+fits IR2, zero extensions" held.
+
+### THE GOAL'S ORIGINAL PREMISE IS NOW FALSIFIED (honestly, with evidence)
+ember set this goal because "a hand-written Rust circuit means no model of its semantics and no proof of
+correctness — that's pretty bad." TRUE when set. Tonight's sweep found: the deployed surface was ALREADY
+mostly migrated (this lane killed `stark.rs` on 07-09), and every remaining candidate was scaffolding —
+EXCEPT ivc_turn_chain, which is now emitted. **Every deployed circuit path we can find is now Lean-authored
+or a legitimate interpreter.** The residuals that remain are NOT missing semantics; they are:
+`NonRevocationDepthResidual` (emitter depth-2 vs deployed depth-4 — fix is adjacency∘ordering composition),
+`DuplicateDslP3AirResidual`, `CratesOutsideCIResidual` (95 tests never run), the orphaned teasting tests.
+
+### SHARED-TREE BLOCKERS (other lanes' in-flight work — NOT this lane's, NOT fixed here)
+- `SharedTreeMarketAggregateBindingResidual`: a parallel metatheory edit left `Unknown identifier
+  MSISHardQuant` + **sorryAx hygiene failures** in `Market/AggregateBinding.lean` — Market does not replay.
+- `SharedTreeRefusalGauntletResidual`: broad nextest stops at 135 passes on concurrent dirty `refusal.rs`.
+Flagged, not touched: 3 codex processes are live and the tree is a mix.
