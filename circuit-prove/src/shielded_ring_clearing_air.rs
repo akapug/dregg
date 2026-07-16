@@ -1,4 +1,8 @@
-//! The 2-leg shielded RING-CLEARING AIR — the note-level algebra realization of DrEX rung-3
+//! Shielded ring-clearing **layout constants + witness types** (2-leg) — NOT an AIR (name is historical).
+//!
+//! ⚠ Renamed-in-place by docstring (2026-07-16 sweep): this file holds `RING_LEGS`, `RING_CLAIM_LEN` and
+//! friends. It authors NO constraints in any of the three dialects (`builder.assert_*`, `Constraint{eval}`
+//! closures, `ConstraintExpr` data). The 2-leg shielded ring-clearing algebra of DrEX rung-3
 //! (`Market/ShieldedClearing.lean::shielded_ring_clears`, fused by
 //! `Market/LedgerRealizationExt.lean::shielded_ring_fused_clears`), at the smallest
 //! tractable size (`demoShieldedRing` / `fusedRing` scale, 2 legs, 1 pair).

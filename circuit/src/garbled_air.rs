@@ -1,4 +1,12 @@
-//! STARK AIR for proving correct garbled circuit evaluation.
+//! Garbled-circuit evaluation **layout constants** (`GARBLED_EVAL_AIR_WIDTH`, `col`) — NOT an AIR.
+//!
+//! ⚠ The name lies for historical reasons (2026-07-16 sweep). The `GarbledEvaluationAir` this file was
+//! named for — 16 hand-authored `Constraint { eval: Box::new(..) }` closures — was DELETED under
+//! architectural law #1: it was never instantiated outside its own tests, and `circuit/src/garbled.rs:453`
+//! records that the hand AIRs "are retired. The production path is [DSL]". The garbled algebra is
+//! Lean-authored: `metatheory/Dregg2/Circuit/Emit/GarbledEvalEmit.lean`, byte-pinned by
+//! `circuit-prove/tests/garbled_eval_emit_gate.rs` (forged commitment/table-entry/gate-index/selector/
+//! wire-chaining/gate-type all refused). What remains here is the column layout `dsl/garbled.rs` imports.
 //!
 //! The prover generates a STARK proof that they correctly evaluated a Poseidon2-garbled
 //! circuit gate-by-gate. Each gate evaluation is one Poseidon2 call, which maps

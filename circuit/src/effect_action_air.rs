@@ -1,4 +1,8 @@
-//! Generalized effect-action binding AIR.
+//! Generalized effect-action binding **schemas + layout constants** (`EffectActionSchema`, `HASH_LIMBS`,
+//! `AMOUNT_LIMBS`) — NOT an AIR (the name is historical; 2026-07-16 sweep).
+//!
+//! This file authors NO constraints in any of the three dialects. The effect-action constraints are built
+//! by `effect_action_to_descriptor2` and ride the assured IR2 interpreter.
 //!
 //! Sibling AIR to `bridge_action_witness`. The bridge AIR established the pattern:
 //! a 32-byte field becomes 8 BabyBear limbs (4 bytes each), a u64 amount
