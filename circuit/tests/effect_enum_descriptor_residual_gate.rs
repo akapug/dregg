@@ -78,6 +78,18 @@ circuit_witness_ledger! {
         "in-enum CIRCUIT WITNESS follow-up (turn/src/action.rs): the program write is not bound \
          into the turn commitment; VK-affecting, ember-gated",
     ),
+    // Custom (added 2026-07-16): the turn lane's "THE DOOR" commit made `Effect::Custom` REACHABLE and
+    // welded it — before it, `dregg_turn::action::Effect` had NO Custom variant, so
+    // `convert_turn_effects_to_vm` could never emit a `VmEffect::Custom` row and
+    // `enforce_custom_proof_count_committed` computed committed=0 for EVERY turn (any turn carrying
+    // custom_program_proofs was rejected `CustomProofCountMismatch{wire:n,committed:0}`). The carrier was
+    // real and general but had no door. It is a DESCRIPTOR, not a residual: the Custom row publishes
+    // `custom_proof_pi_commitment(public_inputs)` and the per-turn fold binds it to the sub-proof leaf —
+    // a lie there is caught by the fold (no backing sub-proof => no aggregate root) or by the sub-proof's
+    // own registry verify; a custom transition with no proof/weld/store is REFUSED
+    // (`RequiresProofCarryingTurn`), never a silent no-op. Deployed as `dregg-effectvm-custom-v1`
+    // (`descriptor_by_name.rs:144`).
+    Custom                => Witness::Descriptor("customVmDescriptor2R24"),
     NoteSpend             => Witness::Descriptor("noteSpendVmDescriptor2R24"),
     NoteCreate            => Witness::Descriptor("noteCreateVmDescriptor2R24"),
     SpawnWithDelegation   => Witness::Descriptor("spawnVmDescriptor2R24"),
