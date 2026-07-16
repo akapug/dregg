@@ -955,3 +955,33 @@ re-landing means porting to `BridgePresentationProof` + `verify_presentation_ful
 tree-wide defs (`bridge_four_phase.rs:532`, `defi_primitives.rs:10`, `negation_proofs.rs:8`,
 `privacy_unlinkability.rs:11`). Unlike proof_round_trip these look genuinely never-compiled; each needs a
 retarget-or-retire decision. NOT swept blind — I already learned that lesson.
+
+### NEXT UNITS (from the scar audit) — ranked, all evidence-backed
+1. **`DuplicateDslP3AirResidual` (HIGH)** — `dregg-dsl-runtime/src/dsl_plonky3.rs:41`'s 868-line
+   name-colliding `DslP3Air` (p3-uni-stark; cannot do `Hash`; enforces `BoundaryRow::Index(n>0)` on row 0
+   ONLY — a soundness-shaped limit). Zero non-test consumers. The differential harness
+   (`plonky3_runner.rs:42`) drives IT and skips membership at `:77` for a limit FALSE of production.
+   **Unit**: repoint `plonky3_runner.rs` + `tests/src/dsl_pipeline.rs:507,511,642` at
+   `dsl_p3_air::{prove_dsl_p3, verify_dsl_p3}`; delete `dsl_plonky3.rs`, the 12 `p3-*` optional deps
+   (`dregg-dsl-runtime/Cargo.toml:14-26`), and the re-export (`lib.rs:46-51`); THEN re-land the membership
+   case (needs a membership circuit built in the harness — its own step, do not claim it for free).
+2. **`CratesOutsideCIResidual` (HIGH)** — 7 crates have their own `[workspace]`, are in neither `members`
+   NOR `exclude`, are named in zero CI workflows, and have zero dependents: `crypto-tanuki` (1496 LOC/22
+   tests), `crypto-traccoon` (1426/17), `crypto-hashrand` (803/8), `crypto-xmvrf` (642/17),
+   `cosmos-settlement` (809/5), `cosmos-lock` (541/12), `tools/deployer-gate` (710/14). **~6,400 LOC and
+   95 tests that have NEVER run in CI — 64 of them on crypto code.** Drift, not intent: `exclude` lists
+   `solana-lock`/`solana-settlement` but not their `cosmos-*` siblings, and every other exclude entry
+   carries a reason; these have none. **Unit**: decide + RECORD — fold in as `members`-not-
+   `default-members` (the pattern already used for 60 heavy crates), or `exclude` WITH the one-line reason.
+   Neither-nor is the only wrong answer. Start with the four `crypto-*`.
+3. **`OrphanedTeastingTestsResidual` (MED)** — 4 teasting tests import symbols with zero tree-wide defs
+   (`bridge_four_phase.rs:532`, `defi_primitives.rs:10` [module gone -> `derivation_witness.rs`],
+   `negation_proofs.rs:8`, `privacy_unlinkability.rs:11`). Each needs retarget-or-retire. NOT swept blind.
+4. **`PresentationRoundTripResidual` (MED)** — re-land the retired presentation round-trip test against
+   `BridgePresentationProof` + `verify_presentation_full`; it guarded `DeserializeUnexpectedEnd`.
+5. **LOW** — `dregg-cert-f-ir2.json` is `include_str!`d but is the only flat descriptor missing from
+   `PROVENANCE.json`'s 74 sha256 pins (manifest itself cut dirty: `"source_dirty": true`).
+6. **Flagged, not asserted** — `composition.rs`'s `compose_or/and/chain` + `generate_and_trace/
+   generate_chain_trace` (~400 LOC) resolve outside the crate only to DOC COMMENTS; every executable ref
+   is its own `#[cfg(test)]`. Only `compose_aggregate` has a real consumer (`sdk/full_turn_proof.rs:67`).
+   May be aspirational IVC scaffolding — **killing `compose_chain` is a product decision, not cleanup.**
